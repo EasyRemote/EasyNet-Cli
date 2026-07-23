@@ -18,9 +18,10 @@
 //
 // Usage Contract
 // --------------
-// Callers provide a managed-signing provider, source user URA, managed key id,
-// target realm, and issuance timestamp. The state machine preserves existing
-// user-facing error strings for invalid authority and realm conditions.
+// Callers provide a narrow managed-signing issuer provider, source user URA,
+// managed key id, target realm, and issuance timestamp. The state machine
+// preserves existing user-facing error strings for invalid authority and realm
+// conditions.
 //
 // Architectural Position
 // ----------------------
@@ -30,7 +31,7 @@
 
 use anyhow::{anyhow, Result};
 
-use super::managed_signing_provider::ManagedSigningProvider;
+use super::managed_signing_provider::ManagedSigningIssuerProvider;
 use super::user_binding_chain::{
     canonical_user_binding_bytes, UserBindingToken, ED25519_PUBKEY_LEN, USER_BINDING_NONCE_LEN,
 };
@@ -65,13 +66,13 @@ impl UserBindingIssueRequest {
     }
 }
 
-pub struct UserBindingIssueStateMachine<'a> {
-    provider: &'a dyn ManagedSigningProvider,
+pub struct UserBindingIssueStateMachine<'a, P: ManagedSigningIssuerProvider + ?Sized> {
+    provider: &'a P,
     request: UserBindingIssueRequest,
 }
 
-impl<'a> UserBindingIssueStateMachine<'a> {
-    pub fn new(provider: &'a dyn ManagedSigningProvider, request: UserBindingIssueRequest) -> Self {
+impl<'a, P: ManagedSigningIssuerProvider + ?Sized> UserBindingIssueStateMachine<'a, P> {
+    pub fn new(provider: &'a P, request: UserBindingIssueRequest) -> Self {
         Self { provider, request }
     }
 
@@ -157,7 +158,7 @@ fn generate_nonce() -> [u8; USER_BINDING_NONCE_LEN] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::daemon::keyring::{ManagedPeer, ManagedSigningKeyProjection, ED25519_SEED_LEN};
+    use crate::daemon::keyring::{ManagedSigningKeyProjection, ED25519_SEED_LEN};
     use ed25519_dalek::SigningKey;
 
     struct TestProvider {
@@ -187,23 +188,7 @@ mod tests {
         }
     }
 
-    impl ManagedSigningProvider for TestProvider {
-        fn create(
-            &self,
-            _purpose: String,
-            _bound_subject: Option<String>,
-        ) -> Result<ManagedSigningKeyProjection> {
-            unreachable!("issuer state machine does not create keys")
-        }
-
-        fn list(
-            &self,
-            _purpose: Option<String>,
-            _status: Option<ManagedSigningStatus>,
-        ) -> Result<Vec<ManagedSigningKeyProjection>> {
-            unreachable!("issuer state machine does not list keys")
-        }
-
+    impl ManagedSigningIssuerProvider for TestProvider {
         fn public_key(&self, _key_id: &str) -> Result<ManagedSigningKeyProjection> {
             Ok(self.projection.clone())
         }
@@ -211,35 +196,6 @@ mod tests {
         fn sign(&self, _key_id: &str, canonical_bytes: &[u8]) -> Result<ed25519_dalek::Signature> {
             use ed25519_dalek::Signer;
             Ok(self.key.sign(canonical_bytes))
-        }
-
-        fn rotate(&self, _key_id: &str) -> Result<ManagedSigningKeyProjection> {
-            unreachable!("issuer state machine does not rotate keys")
-        }
-
-        fn revoke(&self, _key_id: &str) -> Result<i64> {
-            unreachable!("issuer state machine does not revoke keys")
-        }
-
-        fn set_expiry(&self, _key_id: &str, _expires_unix_ms: i64) -> Result<()> {
-            unreachable!("issuer state machine does not set expiry")
-        }
-
-        fn bind_subject(&self, _key_id: &str, _subject_ura: &str) -> Result<()> {
-            unreachable!("issuer state machine does not bind subjects")
-        }
-
-        fn peer_add(
-            &self,
-            _peer_ura: &str,
-            _public_key_b64: &str,
-            _via_hub: Option<String>,
-        ) -> Result<bool> {
-            unreachable!("issuer state machine does not add peers")
-        }
-
-        fn peer_list(&self) -> Result<Vec<ManagedPeer>> {
-            unreachable!("issuer state machine does not list peers")
         }
     }
 

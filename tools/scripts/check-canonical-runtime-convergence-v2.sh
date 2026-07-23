@@ -4286,7 +4286,9 @@ if "pub mod managed_signing_provider;" not in keyring_mod:
     raise SystemExit("user_binding_issue_state_machine:provider_module_not_exported")
 
 for required in (
+    "pub trait ManagedSigningIssuerProvider",
     "pub trait ManagedSigningProvider",
+    "impl<T: ManagedSigningProvider + ?Sized> ManagedSigningIssuerProvider for T",
     "impl<T: ManagedSigningProvider + ?Sized> ManagedSigningProvider for Arc<T>",
     "impl ManagedSigningProvider for KeyringClient",
 ):
@@ -4303,8 +4305,9 @@ if "pub use crate::daemon::keyring::managed_signing_provider::ManagedSigningProv
 
 for required in (
     "pub struct UserBindingIssueRequest",
-    "pub struct UserBindingIssueStateMachine",
+    "pub struct UserBindingIssueStateMachine<'a, P: ManagedSigningIssuerProvider + ?Sized>",
     "pub fn execute(self) -> Result<UserBindingToken>",
+    "impl<'a, P: ManagedSigningIssuerProvider + ?Sized> UserBindingIssueStateMachine<'a, P>",
     "fn ensure_signing_authority(",
     "fn source_realm(&self) -> Result<String>",
     "fn ensure_cross_realm_target(&self, source_realm: &str) -> Result<()>",
@@ -4316,9 +4319,22 @@ for required in (
     "issue_state_machine_returns_signed_token",
     "issue_state_machine_rejects_self_target_realm",
     "issue_state_machine_rejects_unbound_signing_key",
+    "impl ManagedSigningIssuerProvider for TestProvider",
 ):
     if required not in issue:
         raise SystemExit(f"user_binding_issue_state_machine:missing:{required}")
+for retired in (
+    "use super::managed_signing_provider::ManagedSigningProvider;",
+    "impl ManagedSigningProvider for TestProvider",
+    "unreachable!(\"issuer state machine",
+    "fn create(",
+    "fn rotate(",
+    "fn revoke(",
+    "fn peer_add(",
+    "fn peer_list(",
+):
+    if retired in issue:
+        raise SystemExit(f"user_binding_issue_state_machine:broad_provider_coupling:{retired}")
 
 handler_start = abilities.find("pub fn handle_federate_user_identity_token(")
 handler_end = abilities.find("\n/// **PR-N4 commit 3/N**", handler_start)
@@ -12312,19 +12328,22 @@ pub mod managed_signing_provider;
 pub mod user_binding_issue;
 EOF
   cat >"$tmp/user-binding-issue-inline-legacy/src/daemon/keyring/managed_signing_provider.rs" <<'EOF'
+pub trait ManagedSigningIssuerProvider {}
 pub trait ManagedSigningProvider {}
+impl<T: ManagedSigningProvider + ?Sized> ManagedSigningIssuerProvider for T {}
 impl<T: ManagedSigningProvider + ?Sized> ManagedSigningProvider for Arc<T> {}
 impl ManagedSigningProvider for KeyringClient {}
 EOF
   cat >"$tmp/user-binding-issue-inline-legacy/src/daemon/keyring/user_binding_issue.rs" <<'EOF'
 pub struct UserBindingIssueRequest;
-pub struct UserBindingIssueStateMachine;
-impl UserBindingIssueStateMachine {
+pub struct UserBindingIssueStateMachine<'a, P: ManagedSigningIssuerProvider + ?Sized>;
+impl<'a, P: ManagedSigningIssuerProvider + ?Sized> UserBindingIssueStateMachine<'a, P> {
   pub fn execute(self) -> Result<UserBindingToken> {}
   fn ensure_signing_authority(&self, entry: &ManagedSigningKeyProjection) -> Result<()> {}
   fn source_realm(&self) -> Result<String> {}
   fn ensure_cross_realm_target(&self, source_realm: &str) -> Result<()> {}
 }
+impl ManagedSigningIssuerProvider for TestProvider {}
 fn decode_source_user_pubkey(public_key_b64: &str) {}
 fn generate_nonce() -> [u8; USER_BINDING_NONCE_LEN] {}
 fn issue_state_machine_returns_signed_token() {}

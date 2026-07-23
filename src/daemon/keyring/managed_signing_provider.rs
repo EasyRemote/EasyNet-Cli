@@ -6,21 +6,24 @@
 //
 // Protocol Responsibility
 // -----------------------
-// Define the provider seam used by keyring runtime state machines and ability
+// Define provider seams used by keyring runtime state machines and ability
 // adapters. Production is backed by the daemon-local key-service endpoint;
-// tests can use the same Vault lifecycle implementation in memory.
+// tests can use the narrow seam required by the state machine under test.
 //
 // Implementation Approach
 // -----------------------
-// The trait exposes managed-signing inventory and peer operations without
-// owning public response projection or ability registration. `Arc<T>` delegates
-// transparently so handlers and state machines can share provider instances.
+// `ManagedSigningProvider` exposes managed-signing inventory and peer
+// operations without owning public response projection or ability registration.
+// `ManagedSigningIssuerProvider` is the minimal read/sign seam required by
+// token issuance state machines. `Arc<T>` delegates transparently so handlers
+// and state machines can share provider instances.
 //
 // Usage Contract
 // --------------
-// Runtime state machines depend on this module rather than on `abilities.rs`.
-// Ability handlers may re-export the trait for existing call sites, but they do
-// not own the provider abstraction.
+// Runtime state machines depend on narrow traits in this module rather than on
+// `abilities.rs` or the full administration provider. Ability handlers may
+// re-export the full trait for existing call sites, but they do not own the
+// provider abstraction.
 //
 // Architectural Position
 // ----------------------
@@ -33,6 +36,11 @@ use std::sync::Arc;
 
 use super::{ManagedPeer, ManagedSigningKeyProjection, ManagedSigningStatus};
 use crate::daemon::identity::self_identity::KeyringClient;
+
+pub trait ManagedSigningIssuerProvider: Send + Sync {
+    fn public_key(&self, key_id: &str) -> Result<ManagedSigningKeyProjection>;
+    fn sign(&self, key_id: &str, canonical_bytes: &[u8]) -> Result<ed25519_dalek::Signature>;
+}
 
 pub trait ManagedSigningProvider: Send + Sync {
     fn create(
@@ -58,6 +66,16 @@ pub trait ManagedSigningProvider: Send + Sync {
         via_hub: Option<String>,
     ) -> Result<bool>;
     fn peer_list(&self) -> Result<Vec<ManagedPeer>>;
+}
+
+impl<T: ManagedSigningProvider + ?Sized> ManagedSigningIssuerProvider for T {
+    fn public_key(&self, key_id: &str) -> Result<ManagedSigningKeyProjection> {
+        ManagedSigningProvider::public_key(self, key_id)
+    }
+
+    fn sign(&self, key_id: &str, canonical_bytes: &[u8]) -> Result<ed25519_dalek::Signature> {
+        ManagedSigningProvider::sign(self, key_id, canonical_bytes)
+    }
 }
 
 impl<T: ManagedSigningProvider + ?Sized> ManagedSigningProvider for Arc<T> {
