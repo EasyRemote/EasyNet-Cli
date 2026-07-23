@@ -4653,7 +4653,7 @@ PY
 
 check_retired_federation_directory_v1_stream_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
-  "$PYTHON_BIN" - "$cli_root/src" "$cli_root/tests" <<'PY'
+  "$PYTHON_BIN" - "$cli_root/src" "$cli_root/tests" "$cli_root/ability-descriptors/system/federation" <<'PY'
 import re
 import sys
 from pathlib import Path
@@ -4670,9 +4670,15 @@ retired_symbol_patterns = {
 for root in roots:
     if not root.exists():
         continue
-    for path in root.rglob("*.rs"):
-        if "target" in path.parts:
+    for path in list(root.rglob("*.rs")) + list(root.rglob("*.toml")):
+        if "target" in path.relative_to(root).parts:
             continue
+        if path.name == "federation.subscribe_directory_v2.ability.toml":
+            continue
+        if path.name == "federation.subscribe_directory.ability.toml":
+            raise SystemExit(
+                f"federation_directory_v1_stream_retired:retired_v1_descriptor:{path}:1"
+            )
         text = path.read_text(encoding="utf-8")
         for pattern, label in retired_symbol_patterns.items():
             match = re.search(pattern, text)
@@ -8881,6 +8887,12 @@ EOF
     > "$tmp/cli-browser-mock/tools/scripts/check-browser-session-service-boundary.sh"
   if ( CLI_ROOT="$tmp/cli-browser-mock"; check_retired_browser_mock_surface_contract ) >/dev/null 2>&1; then
     fail "self-test expected retired browser placeholder ability gate to fail"
+  fi
+  mkdir -p "$tmp/cli-federation-directory-v1-descriptor/ability-descriptors/system/federation"
+  printf 'name = "federation.subscribe_directory"\ndescription = "Subscribe to legacy federation directory snapshots and deltas."\ncall_mode = "stream"\ncapability_state = "cutover_ready"\n' \
+    > "$tmp/cli-federation-directory-v1-descriptor/ability-descriptors/system/federation/federation.subscribe_directory.ability.toml"
+  if ( CLI_ROOT="$tmp/cli-federation-directory-v1-descriptor"; check_retired_federation_directory_v1_stream_contract ) >/dev/null 2>&1; then
+    fail "self-test expected retired federation directory v1 descriptor gate to fail"
   fi
   mkdir -p "$tmp/cli-ability-deploy-product/src/daemon/ability/builtins/device_control/ability_management"
   printf 'fn deploy() { /* EasyRemote writes namespace here */ }\n' \

@@ -8645,6 +8645,34 @@ if descriptor_dir.exists():
                     "active system descriptors must not advertise retired browser mock surface",
                 )
 
+federation_descriptor_dir = cli_root / "ability-descriptors/system/federation"
+if federation_descriptor_dir.exists():
+    retired_v1 = federation_descriptor_dir / "federation.subscribe_directory.ability.toml"
+    if retired_v1.exists():
+        add(
+            "R95C_RETIRED_FEDERATION_DIRECTORY_V1_DESCRIPTOR",
+            retired_v1,
+            1,
+            "retired federation.subscribe_directory v1 descriptor must not remain in active system inventory",
+        )
+    for descriptor in sorted(federation_descriptor_dir.glob("*.ability.toml")):
+        if descriptor.name == "federation.subscribe_directory_v2.ability.toml":
+            continue
+        descriptor_text = descriptor.read_text(encoding="utf-8", errors="replace")
+        for token in (
+            "federation.subscribe_directory",
+            "legacy federation directory snapshots",
+            "PresenceEventDelta",
+            "SubscribeDirectoryInitial",
+        ):
+            if token in descriptor_text:
+                add(
+                    "R95C_RETIRED_FEDERATION_DIRECTORY_V1_DESCRIPTOR",
+                    descriptor,
+                    line_number(descriptor_text, descriptor_text.find(token)),
+                    "active federation descriptors must not advertise retired v1 directory stream",
+                )
+
 
 # Rule 96: Authorized runtime history reads must bind the authority-bearing
 # call tuple while keeping receipt filters as post-admission ledger predicates.

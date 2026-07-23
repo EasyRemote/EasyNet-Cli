@@ -152,6 +152,15 @@ fn test_request_issuer(realm: &str) -> FederatedDirectorySubscriptionIssuer {
     FederatedDirectorySubscriptionIssuer::new(signer).expect("test request issuer")
 }
 
+fn upstream_invocation_attempt_ledger_path(realm: &str, trusted_peer_realm: &str) -> PathBuf {
+    let home = PathBuf::from(std::env::var_os("HOME").expect("isolated test HOME"));
+    let dir = home.join(".easynet").join("invocation-attempt-ledgers");
+    std::fs::create_dir_all(&dir).expect("create upstream invocation attempt ledger directory");
+    dir.join(format!(
+        "cross-realm-directory-stream-{realm}-{trusted_peer_realm}.jsonl"
+    ))
+}
+
 async fn upstream_daemon(
     realm: &str,
     trusted_peer_realm: &str,
@@ -254,7 +263,12 @@ async fn upstream_daemon(
     let service = DaemonInvocationService::new(presence, admission)
         .with_session_realm(realm)
         .with_local_ability_catalog(catalog)
-        .with_daemon_runtime(runtime_assembly);
+        .with_daemon_runtime(runtime_assembly)
+        .with_invocation_attempt_ledger_path(upstream_invocation_attempt_ledger_path(
+            realm,
+            trusted_peer_realm,
+        ))
+        .expect("open upstream invocation attempt audit ledger");
     service
         .register_daemon_stream_routes(&owner_ura)
         .await
