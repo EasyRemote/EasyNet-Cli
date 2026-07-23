@@ -3285,6 +3285,8 @@ pub fn refresh_agents_description() -> &'static str {
 mod tests {
     use super::*;
 
+    const TEST_DEVICE_URA: &str = "easynet:///r/test/device/local";
+
     /// Test fixture: route `~/.easynet/` at a fresh tempdir for the
     /// duration of `f`. Uses the canonical `test_support::HomeGuard`
     /// — same fixture as registry::agents tests and the dispatch suite
@@ -3719,7 +3721,7 @@ mod tests {
 
     #[test]
     fn registration_makes_lifecycle_abilities_dispatchable() {
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = AxonAbilityCatalog::new_test_metadata_for_device_authority(TEST_DEVICE_URA);
         register(&mut reg, Arc::new(ready_hot_registrar()));
         assert!(reg.get_rpc(ABILITY_START_AGENT).is_some());
         assert!(reg.get_rpc(ABILITY_STOP_AGENT).is_some());
