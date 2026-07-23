@@ -809,6 +809,51 @@ for required_test in (
 PY
 }
 
+check_local_runtime_state_read_subject_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local local_invoke="$cli_root/src/support/platform/local_invoke.rs"
+  [[ -f "$local_invoke" ]] || fail "local invoke support source is missing: $local_invoke"
+
+  "$PYTHON_BIN" - "$local_invoke" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+
+start = text.find("pub struct LocalRuntimeStateReadIssuer")
+end = text.find("/// Invoke a canonical local target with public-ingress tuple facts.", start)
+if start < 0 or end < 0:
+    raise SystemExit("local_runtime_state_read_subject:issuer_section_missing")
+body = text[start:end]
+
+for required in (
+    "struct LocalRuntimeStateReadSubject",
+    "const RESOURCE_PATH: &'static str = \"runtime-state/read\"",
+    "crate::daemon::persistence::config::load_credentials()",
+    "crate::core::ura::resource_dot_ura(realm, &owner, Self::RESOURCE_PATH)",
+    "runtime_state_read_subject_uses_user_owned_resource_not_daemon_identity",
+    "runtime_state_read_subject_rejects_missing_user_id_before_device_fallback",
+):
+    if required not in text:
+        raise SystemExit(f"local_runtime_state_read_subject:missing:{required}")
+
+if not re.search(r"\bcredentials\s*\.\s*user_id\s*\(\s*\)", body):
+    raise SystemExit("local_runtime_state_read_subject:missing:credentials.user_id()")
+
+for retired in (
+    "local_daemon_ura()",
+    "local_device_ura()",
+    "control_discovery_daemon_ura()",
+    "UNPAIRED_LOCAL_REALM",
+    "UNPAIRED_LOCAL_DEVICE_ID",
+    "resource/user.00000000-0000-0000-0000-000000000000",
+):
+    if retired in body:
+        raise SystemExit(f"local_runtime_state_read_subject:retired_subject_fallback:{retired}")
+PY
+}
+
 check_sdk_history_authority_subject_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local go="$cli_root/sdk/go/authorized_runtime_session.go"
@@ -7609,6 +7654,24 @@ EOF
   if ( check_cli_invocation_history_read_model_contract "$tmp/cli-invocation-history-read-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected CLI invocation history read-model gate to fail"
   fi
+  mkdir -p "$tmp/local-runtime-state-read-subject-legacy/src/support/platform"
+  cat >"$tmp/local-runtime-state-read-subject-legacy/src/support/platform/local_invoke.rs" <<'EOF'
+pub struct LocalRuntimeStateReadIssuer;
+
+impl LocalRuntimeStateReadIssuer {
+    fn subject_ura() -> anyhow::Result<String> {
+        crate::daemon::identity::local_invocation::local_daemon_ura()
+    }
+}
+
+fn runtime_state_read_subject_uses_user_owned_resource_not_daemon_identity() {}
+fn runtime_state_read_subject_rejects_missing_user_id_before_device_fallback() {}
+
+/// Invoke a canonical local target with public-ingress tuple facts.
+EOF
+  if ( check_local_runtime_state_read_subject_contract "$tmp/local-runtime-state-read-subject-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected local runtime-state read subject gate to fail"
+  fi
   mkdir -p "$tmp/sdk-history-authority-legacy/sdk/go" \
     "$tmp/sdk-history-authority-legacy/sdk/python/easynet_sdk" \
     "$tmp/sdk-history-authority-legacy/sdk/python/tests"
@@ -8671,6 +8734,7 @@ EOF
   check_resolve_key_request_dto_contract
   check_invocation_history_filter_scope_contract
   check_cli_invocation_history_read_model_contract
+  check_local_runtime_state_read_subject_contract
   check_sdk_history_authority_subject_contract
   check_sdk_descriptor_resolution_error_vocabulary_contract
   check_sdk_ability_descriptor_not_found_vocabulary_contract
@@ -8781,6 +8845,7 @@ check_core_ura_realm_projection_contract
 check_resolve_key_request_dto_contract
 check_invocation_history_filter_scope_contract
 check_cli_invocation_history_read_model_contract
+check_local_runtime_state_read_subject_contract
 check_sdk_history_authority_subject_contract
 check_sdk_descriptor_resolution_error_vocabulary_contract
 check_sdk_ability_descriptor_not_found_vocabulary_contract

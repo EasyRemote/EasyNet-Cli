@@ -445,8 +445,52 @@ impl LocalRuntimeStateReadIssuer {
     }
 
     fn subject_ura() -> anyhow::Result<String> {
-        crate::daemon::identity::local_invocation::local_daemon_ura()
-            .map_err(|error| anyhow::anyhow!("runtime-state read subject unavailable: {error}"))
+        LocalRuntimeStateReadSubject::from_credentials_file().map(|subject| subject.into_ura())
+    }
+}
+
+/// Canonical subject for daemon-local runtime-state read projections.
+///
+/// Runtime-state reads are user-owned resource observations over the running
+/// daemon, not actions performed as the daemon/device identity itself. Binding
+/// them to a user-owned Resource URA lets the existing session-authority
+/// admission rule prove ownership without reintroducing a device-subject
+/// fallback.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LocalRuntimeStateReadSubject {
+    ura: String,
+}
+
+impl LocalRuntimeStateReadSubject {
+    const RESOURCE_PATH: &'static str = "runtime-state/read";
+
+    fn from_credentials_file() -> anyhow::Result<Self> {
+        let credentials = crate::daemon::persistence::config::load_credentials()
+            .map_err(|error| anyhow::anyhow!("runtime-state read subject unavailable: {error}"))?;
+        Self::from_credentials(&credentials)
+    }
+
+    fn from_credentials(
+        credentials: &crate::daemon::persistence::config::Credentials,
+    ) -> anyhow::Result<Self> {
+        let realm = credentials.realm_str().trim();
+        if realm.is_empty() {
+            anyhow::bail!(
+                "runtime-state read subject unavailable: credentials file is missing realm"
+            );
+        }
+        let user_id = credentials
+            .user_id()
+            .map_err(|error| anyhow::anyhow!("runtime-state read subject unavailable: {error}"))?;
+        let owner = format!("user.{user_id}");
+        let ura = crate::core::ura::resource_dot_ura(realm, &owner, Self::RESOURCE_PATH);
+        crate::core::ura::parse_ura(&ura)
+            .map_err(|error| anyhow::anyhow!("runtime-state read subject is invalid: {error}"))?;
+        Ok(Self { ura })
+    }
+
+    fn into_ura(self) -> String {
+        self.ura
     }
 }
 
@@ -907,18 +951,82 @@ mod tests {
     }
 
     #[test]
-    fn runtime_state_read_subject_requires_control_discovery_identity() {
+    fn runtime_state_read_subject_uses_user_owned_resource_not_daemon_identity() {
         let _g = crate::cli::commands::test_support::HomeGuard::new();
-        let error = LocalRuntimeStateReadIssuer::subject_ura()
-            .expect_err("runtime-state reads must not synthesize daemon identity");
+        crate::daemon::persistence::config::save_credentials(
+            &crate::daemon::persistence::config::Credentials {
+                node_id: "dev-a".to_string(),
+                credential_token: "token".to_string(),
+                hub_endpoint: "axon://hub.example:50051".to_string(),
+                realm: "acme".to_string(),
+                deploy_signature: String::new(),
+                hub_api_base: None,
+                username: Some("alice".to_string()),
+                user_id: Some("user-alice".to_string()),
+                hub_pubkey_b64: None,
+                hub_tls_ca_pem_b64: None,
+                join_receipt_hash: None,
+            },
+        )
+        .expect("write paired credentials");
+        crate::daemon::control::discovery::write(
+            &crate::daemon::control::discovery::default_path(),
+            &crate::daemon::control::discovery::ControlDiscovery {
+                socket_path: Some(std::path::PathBuf::from("/tmp/daemon.sock")),
+                pipe_name: None,
+                invocation_endpoint: Some(std::path::PathBuf::from("/tmp/daemon.sock")),
+                daemon_identity: Some(crate::daemon::control::discovery::DaemonIdentity {
+                    mode: "device".to_string(),
+                    realm: "acme".to_string(),
+                    node_id: Some("dev-a".to_string()),
+                }),
+                pid: 42,
+                daemon_version: "test".to_string(),
+                supported_ipc_versions: crate::daemon::control::discovery::IpcVersionRange::single(
+                    crate::daemon::control::discovery::IPC_VERSION_V1,
+                ),
+                capability_flags: vec![],
+                pages_port: None,
+            },
+        )
+        .expect("write control discovery");
+
+        let subject = LocalRuntimeStateReadIssuer::subject_ura()
+            .expect("runtime-state read subject from credentials");
+
+        assert_eq!(
+            subject,
+            "easynet:///r/acme/resource/user.user-alice/runtime-state/read"
+        );
+        assert_ne!(subject, crate::core::ura::device_ura("acme", "dev-a"));
+    }
+
+    #[test]
+    fn runtime_state_read_subject_rejects_missing_user_id_before_device_fallback() {
+        let credentials = crate::daemon::persistence::config::Credentials {
+            node_id: "dev-a".to_string(),
+            credential_token: "token".to_string(),
+            hub_endpoint: "axon://hub.example:50051".to_string(),
+            realm: "acme".to_string(),
+            deploy_signature: String::new(),
+            hub_api_base: None,
+            username: Some("alice".to_string()),
+            user_id: None,
+            hub_pubkey_b64: None,
+            hub_tls_ca_pem_b64: None,
+            join_receipt_hash: None,
+        };
+
+        let error = LocalRuntimeStateReadSubject::from_credentials(&credentials)
+            .expect_err("missing user_id must fail before any device subject fallback");
         let message = format!("{error:#}");
         assert!(
             message.contains("runtime-state read subject unavailable"),
             "wrong readiness error: {message}"
         );
         assert!(
-            message.contains("control discovery does not publish a daemon identity"),
-            "runtime-state read must fail before default/device fallback: {message}"
+            message.contains("missing user_id"),
+            "runtime-state read must fail on user custody, not derive a device subject: {message}"
         );
     }
 }
