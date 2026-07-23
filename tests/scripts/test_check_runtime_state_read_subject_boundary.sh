@@ -129,6 +129,42 @@ fn chat() -> anyhow::Result<serde_json::Value> {
 }
 RS
 
+cat >"$SB/src/cli/commands/skill.rs" <<'RS'
+use crate::support::platform::local_invoke::{invoke_local_ability, LocalRuntimeStateReadIssuer};
+
+fn install() -> anyhow::Result<serde_json::Value> {
+    invoke_local_ability("skill.install", serde_json::json!({}))
+}
+
+fn list() -> anyhow::Result<serde_json::Value> {
+    LocalRuntimeStateReadIssuer::invoke("skill.list", serde_json::json!({}))
+}
+
+fn upgrade() -> anyhow::Result<serde_json::Value> {
+    invoke_local_ability("skill.upgrade", serde_json::json!({}))
+}
+
+fn remove() -> anyhow::Result<serde_json::Value> {
+    invoke_local_ability("skill.remove", serde_json::json!({}))
+}
+RS
+
+cat >"$SB/src/cli/commands/api_key_cli.rs" <<'RS'
+use crate::support::platform::local_invoke::{invoke_local_ability, LocalRuntimeStateReadIssuer};
+
+fn create(ability: String, args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+    invoke_local_ability(&ability, args)
+}
+
+fn list(ability: String) -> anyhow::Result<serde_json::Value> {
+    LocalRuntimeStateReadIssuer::invoke(&ability, serde_json::json!({}))
+}
+
+fn revoke(ability: String) -> anyhow::Result<serde_json::Value> {
+    invoke_local_ability(&ability, serde_json::json!({ "id_prefix": "key" }))
+}
+RS
+
 (
   cd "$SB"
   bash tools/scripts/check-runtime-state-read-subject-boundary.sh
@@ -178,5 +214,35 @@ set +e
 rc=$?
 set -e
 [[ "$rc" == "1" ]] || fail "llm-api model read regression should exit 1 (got $rc)"
+
+perl -0pi -e 's/\Qinvoke_local_ability("openai.list_models"\E/LocalRuntimeStateReadIssuer::invoke("openai.list_models"/' \
+  "$SB/src/cli/commands/llm_api.rs"
+
+perl -0pi -e 's/\QLocalRuntimeStateReadIssuer::invoke("skill.list"\E/invoke_local_ability("skill.list"/' \
+  "$SB/src/cli/commands/skill.rs"
+
+set +e
+(
+  cd "$SB"
+  bash tools/scripts/check-runtime-state-read-subject-boundary.sh
+) >/tmp/check-runtime-state-read-subject-boundary-skill.out 2>&1
+rc=$?
+set -e
+[[ "$rc" == "1" ]] || fail "skill.list read regression should exit 1 (got $rc)"
+
+perl -0pi -e 's/\Qinvoke_local_ability("skill.list"\E/LocalRuntimeStateReadIssuer::invoke("skill.list"/' \
+  "$SB/src/cli/commands/skill.rs"
+
+perl -0pi -e 's/\QLocalRuntimeStateReadIssuer::invoke(&ability, serde_json::json!({})\E/invoke_local_ability(&ability, serde_json::json!({})/' \
+  "$SB/src/cli/commands/api_key_cli.rs"
+
+set +e
+(
+  cd "$SB"
+  bash tools/scripts/check-runtime-state-read-subject-boundary.sh
+) >/tmp/check-runtime-state-read-subject-boundary-api-key.out 2>&1
+rc=$?
+set -e
+[[ "$rc" == "1" ]] || fail "api-key list read regression should exit 1 (got $rc)"
 
 echo "test_check_runtime_state_read_subject_boundary.sh: all cases passed"

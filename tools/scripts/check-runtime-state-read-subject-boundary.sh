@@ -72,11 +72,15 @@ AGENT_GATEWAY="src/cli/daemon_client/agent_gateway.rs"
 AGENT_VIEW="src/cli/daemon_client/agent_view.rs"
 AGENT_PUBLISH="src/cli/commands/agent/publish.rs"
 LLM_API="src/cli/commands/llm_api.rs"
+SKILL_CLI="src/cli/commands/skill.rs"
+API_KEY_CLI="src/cli/commands/api_key_cli.rs"
 
 [[ -f "$AGENT_GATEWAY" ]] || fail "missing $AGENT_GATEWAY"
 [[ -f "$AGENT_VIEW" ]] || fail "missing $AGENT_VIEW"
 [[ -f "$AGENT_PUBLISH" ]] || fail "missing $AGENT_PUBLISH"
 [[ -f "$LLM_API" ]] || fail "missing $LLM_API"
+[[ -f "$SKILL_CLI" ]] || fail "missing $SKILL_CLI"
+[[ -f "$API_KEY_CLI" ]] || fail "missing $API_KEY_CLI"
 
 if ! rg -n 'trait AgentStateReadGateway' "$AGENT_GATEWAY" >/dev/null; then
   fail "agent.list must have a dedicated AgentStateReadGateway"
@@ -108,6 +112,36 @@ fi
 
 if ! rg -n '\binvoke_local_ability\s*\(\s*"openai\.chat_completions"' "$LLM_API" >/dev/null; then
   fail "llm-api chat completions must remain on the action invoke path"
+fi
+
+if ! rg -n -U 'LocalRuntimeStateReadIssuer::invoke\(\s*"skill\.list"' "$SKILL_CLI" >/dev/null; then
+  fail "skill.list must use LocalRuntimeStateReadIssuer"
+fi
+
+if rg -n -U '\binvoke_local_ability\s*\(\s*"skill\.list"' "$SKILL_CLI"; then
+  fail "skill.list must not use generic invoke_local_ability"
+fi
+
+for action in skill.install skill.upgrade skill.remove; do
+  if ! rg -n -U "\\binvoke_local_ability\\s*\\(\\s*\"$action\"" "$SKILL_CLI" >/dev/null; then
+    fail "$action must remain on the action invoke path"
+  fi
+done
+
+if ! rg -n -U 'LocalRuntimeStateReadIssuer::invoke\(&ability,\s*(serde_json::)?json!\(\{\}\)' "$API_KEY_CLI" >/dev/null; then
+  fail "api-key list must use LocalRuntimeStateReadIssuer"
+fi
+
+if rg -n -U '\binvoke_local_ability\s*\(&ability,\s*(serde_json::)?json!\(\{\}\)' "$API_KEY_CLI"; then
+  fail "api-key list must not use generic invoke_local_ability"
+fi
+
+if ! rg -n -U '\binvoke_local_ability\s*\(&ability,\s*args\)' "$API_KEY_CLI" >/dev/null; then
+  fail "api-key create must remain on the action invoke path"
+fi
+
+if ! rg -n -U '\binvoke_local_ability\s*\(&ability,\s*(serde_json::)?json!\(\{\s*"id_prefix"' "$API_KEY_CLI" >/dev/null; then
+  fail "api-key revoke must remain on the action invoke path"
 fi
 
 echo "check-runtime-state-read-subject-boundary: ok"

@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::daemon::resources::skills::store::{format_bytes, InstallRecord};
+use crate::support::platform::local_invoke::{invoke_local_ability, LocalRuntimeStateReadIssuer};
 use crate::support::platform::output;
 
 #[derive(Debug, Args)]
@@ -116,7 +117,7 @@ fn run_install(args: InstallArgs) -> anyhow::Result<()> {
 }
 
 fn invoke_daemon_skill_install(args: &InstallArgs) -> anyhow::Result<InstallRecord> {
-    let response = crate::support::platform::local_invoke::invoke_local_ability(
+    let response = invoke_local_ability(
         "skill.install",
         json!({
             "source": args.source,
@@ -169,7 +170,7 @@ struct SkillListResponse {
 }
 
 fn invoke_daemon_skill_list(args: &ListArgs) -> anyhow::Result<Vec<InstallRecord>> {
-    let response = crate::support::platform::local_invoke::invoke_local_ability(
+    let response = LocalRuntimeStateReadIssuer::invoke(
         "skill.list",
         json!({
             "owner_agent_id": args.agent,
@@ -188,7 +189,7 @@ fn run_upgrade(args: UpgradeArgs) -> anyhow::Result<()> {
 }
 
 fn invoke_daemon_skill_upgrade(args: &UpgradeArgs) -> anyhow::Result<InstallRecord> {
-    let response = crate::support::platform::local_invoke::invoke_local_ability(
+    let response = invoke_local_ability(
         "skill.upgrade",
         json!({
             "name": args.name,
@@ -200,7 +201,7 @@ fn invoke_daemon_skill_upgrade(args: &UpgradeArgs) -> anyhow::Result<InstallReco
 }
 
 fn run_remove(args: RemoveArgs) -> anyhow::Result<()> {
-    crate::support::platform::local_invoke::invoke_local_ability(
+    invoke_local_ability(
         "skill.remove",
         json!({
             "name": args.name,

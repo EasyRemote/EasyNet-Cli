@@ -19,7 +19,7 @@ use clap::{Args, Subcommand};
 use serde_json::{json, Value};
 
 use crate::daemon::ability::builtins::governance::api_key;
-use crate::support::platform::local_invoke::invoke_local_ability;
+use crate::support::platform::local_invoke::{invoke_local_ability, LocalRuntimeStateReadIssuer};
 
 #[derive(Debug, Args)]
 pub struct ApiKeyArgs {
@@ -127,7 +127,7 @@ fn run_create(a: CreateArgs) -> anyhow::Result<()> {
 fn run_list(a: ListArgs) -> anyhow::Result<()> {
     let user = current_user()?;
     let ability = format!("{user}.api_key.list");
-    let result = invoke_local_ability(&ability, json!({}))?;
+    let result = LocalRuntimeStateReadIssuer::invoke(&ability, json!({}))?;
     if a.json {
         println!("{}", serde_json::to_string_pretty(&result)?);
         return Ok(());
