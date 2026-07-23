@@ -8511,15 +8511,20 @@ PY
 check_runtime_owner_signer_custody_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local self_identity="$cli_root/src/daemon/identity/self_identity.rs"
+  local managed_user="$cli_root/src/daemon/identity/self_identity/managed_user_signing.rs"
   [[ -f "$self_identity" ]] || return 0
 
-  "$PYTHON_BIN" - "$self_identity" <<'PY'
+  "$PYTHON_BIN" - "$self_identity" "$managed_user" <<'PY'
 import re
 import sys
 from pathlib import Path
 
 text = Path(sys.argv[1]).read_text()
+managed_path = Path(sys.argv[2])
+managed = managed_path.read_text() if managed_path.exists() else ""
 for token in (
+    "mod managed_user_signing;",
+    "pub use managed_user_signing::{",
     "fn validate_runtime_owner_signing_ura(owner_ura: &str)",
     "runtime-owner signing identity does not manage User URAs; use managed user signing custody",
     "runtime_owner_signing_identity_rejects_user_before_keyring_lookup",
@@ -8539,6 +8544,23 @@ guard = body.find("validate_runtime_owner_signing_ura(owner_ura)?")
 lookup = body.find("provider.public_key(owner_ura)?")
 if guard < 0 or lookup < 0 or guard > lookup:
     raise SystemExit("runtime_owner_signer_lookup_before_custody_classification")
+for forbidden in (
+    "struct ManagedRuntimeSigningIdentity",
+    "fn active_user_runtime_signing_identity(",
+    "fn validate_user_runtime_signing_projection(",
+):
+    if forbidden in text:
+        raise SystemExit(f"runtime_owner_signer_managed_user_custody_embedded:{forbidden}")
+for token in (
+    "pub const USER_SIGNING_CLI_PURPOSE",
+    "pub struct EnsuredUserRuntimeSigningIdentity",
+    "pub(super) struct ManagedRuntimeSigningIdentity",
+    "fn active_user_runtime_signing_identity(",
+    "fn validate_user_runtime_signing_projection(",
+    "managed user signing identity requires a User URA",
+):
+    if token not in managed:
+        raise SystemExit(f"managed_user_signer_custody_missing:{token}")
 PY
 }
 
@@ -11205,6 +11227,47 @@ EOF
     > "$tmp/runtime-owner-signer-legacy/src/daemon/identity/self_identity.rs"
   if ( CLI_ROOT="$tmp/runtime-owner-signer-legacy"; check_runtime_owner_signer_custody_contract ) >/dev/null 2>&1; then
     fail "self-test expected runtime-owner signer User custody gate to fail"
+  fi
+  mkdir -p "$tmp/managed-user-signer-embedded-legacy/src/daemon/identity"
+  cat >"$tmp/managed-user-signer-embedded-legacy/src/daemon/identity/self_identity.rs" <<'EOF'
+mod managed_user_signing;
+pub use managed_user_signing::{
+    ensure_user_runtime_signing_identity, EnsuredUserRuntimeSigningIdentity,
+    USER_SIGNING_CLI_PURPOSE,
+};
+pub struct RuntimeSigningIdentity;
+impl RuntimeSigningIdentity {
+  pub fn load(owner_ura: impl Into<String>, provider: Arc<dyn SelfIdentity>) -> Result<Self, SelfIdentityError> {
+    let owner_ura = owner_ura.into();
+    let owner_ura = owner_ura.trim();
+    if owner_ura.is_empty() { return Err(SelfIdentityError::InvalidOwner); }
+    validate_runtime_owner_signing_ura(owner_ura)?;
+    let public_key = provider.public_key(owner_ura)?;
+    Ok(Self::from_public_projection(owner_ura, public_key, provider))
+  }
+}
+fn validate_runtime_owner_signing_ura(owner_ura: &str) -> Result<(), SelfIdentityError> {
+    let _ = "runtime-owner signing identity does not manage User URAs; use managed user signing custody";
+    Ok(())
+}
+struct ManagedRuntimeSigningIdentity;
+fn active_user_runtime_signing_identity() {}
+fn validate_user_runtime_signing_projection() {}
+#[cfg(test)]
+fn runtime_owner_signing_identity_rejects_user_before_keyring_lookup() {}
+#[async_trait::async_trait]
+impl CanonicalSigner for RuntimeSigningIdentity {}
+EOF
+  cat >"$tmp/managed-user-signer-embedded-legacy/src/daemon/identity/managed_user_signing.rs" <<'EOF'
+pub const USER_SIGNING_CLI_PURPOSE: &str = "user_signing.cli";
+pub struct EnsuredUserRuntimeSigningIdentity;
+pub(super) struct ManagedRuntimeSigningIdentity;
+fn active_user_runtime_signing_identity() {}
+fn validate_user_runtime_signing_projection() {}
+fn f() { let _ = "managed user signing identity requires a User URA"; }
+EOF
+  if ( CLI_ROOT="$tmp/managed-user-signer-embedded-legacy"; check_runtime_owner_signer_custody_contract ) >/dev/null 2>&1; then
+    fail "self-test expected embedded managed-user signer custody gate to fail"
   fi
   mkdir -p "$tmp/remote-invocation-signer-first-legacy/src/daemon/invocation/routing"
   cat >"$tmp/remote-invocation-signer-first-legacy/src/daemon/invocation/routing/remote_invoke.rs" <<'EOF'
