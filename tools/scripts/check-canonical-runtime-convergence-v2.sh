@@ -988,6 +988,51 @@ for required in (
 PY
 }
 
+check_daemon_config_mode_required_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local config_rs="$cli_root/src/daemon/persistence/daemon_config.rs"
+  [[ -f "$config_rs" ]] || fail "daemon config source is missing: $config_rs"
+
+  "$PYTHON_BIN" - "$config_rs" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+sync = re.search(
+    r"fn sync_existing_device_config_toml\([^)]*\)\s*->\s*anyhow::Result<String>\s*\{(?P<body>.*?)\n\}",
+    text,
+    re.S,
+)
+if sync is None:
+    raise SystemExit("daemon_config_mode_required:sync_function_missing")
+body = sync.group("body")
+for retired in (
+    '.unwrap_or("device")',
+    '.unwrap_or_else(|| "device"',
+    '.entry("daemon")',
+    "or_insert_with",
+):
+    if retired in body:
+        raise SystemExit(f"daemon_config_mode_required:retired_read_repair:{retired}")
+for required in (
+    '.get_mut("daemon")',
+    "[daemon] is required in existing daemon-config.toml",
+    "[daemon].mode is required in existing daemon-config.toml; refusing to infer device mode",
+    "DaemonMode::parse_config_value(mode_raw)",
+    "[daemon].mode has unsupported value",
+):
+    if required not in body:
+        raise SystemExit(f"daemon_config_mode_required:missing:{required}")
+for required_test in (
+    "ensure_minimal_device_config_rejects_existing_config_without_explicit_mode",
+    "ensure_minimal_device_config_rejects_existing_config_with_unknown_mode",
+):
+    if required_test not in text:
+        raise SystemExit(f"daemon_config_mode_required:missing_test:{required_test}")
+PY
+}
+
 check_sdk_history_authority_subject_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local go="$cli_root/sdk/go/authorized_runtime_session.go"
@@ -9806,6 +9851,34 @@ EOF
   if ( CLI_ROOT="$tmp/cli-discover-candidate-legacy"; check_cli_discover_candidate_projection_contract ) >/dev/null 2>&1; then
     fail "self-test expected CLI discover candidate projection fallback gate to fail"
   fi
+  mkdir -p "$tmp/daemon-config-mode-default-legacy/src/daemon/persistence"
+  cat >"$tmp/daemon-config-mode-default-legacy/src/daemon/persistence/daemon_config.rs" <<'EOF'
+fn sync_existing_device_config_toml(raw: &str, creds: &Credentials) -> anyhow::Result<String> {
+    use toml_edit::{value, DocumentMut, Item, Table};
+    let mut doc: DocumentMut = raw.parse()?;
+    let daemon_item = doc
+        .as_table_mut()
+        .entry("daemon")
+        .or_insert_with(|| Item::Table(Table::new()));
+    let daemon_table = daemon_item.as_table_mut().unwrap();
+    let mode = daemon_table
+        .get("mode")
+        .and_then(|item| item.as_str())
+        .unwrap_or("device");
+    if mode != "device" {
+        return Ok(raw.to_string());
+    }
+    Ok(raw.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    fn ensure_minimal_device_config_writes_default_file_and_syncs_device_fields() {}
+}
+EOF
+  if ( CLI_ROOT="$tmp/daemon-config-mode-default-legacy"; check_daemon_config_mode_required_contract ) >/dev/null 2>&1; then
+    fail "self-test expected daemon config mode default gate to fail"
+  fi
   mkdir -p "$tmp/remote-subject-provenance-legacy/src/daemon/invocation/routing" \
     "$tmp/remote-subject-provenance-legacy/src/ffi/invocation"
   cat >"$tmp/remote-subject-provenance-legacy/src/daemon/invocation/routing/remote_invoke.rs" <<'EOF'
@@ -9911,6 +9984,7 @@ EOF
   check_cli_invocation_history_read_model_contract
   check_local_runtime_state_read_subject_contract
   check_runtime_state_kind_required_contract
+  check_daemon_config_mode_required_contract
   check_sdk_history_authority_subject_contract
   check_sdk_descriptor_resolution_error_vocabulary_contract
   check_sdk_ability_descriptor_not_found_vocabulary_contract

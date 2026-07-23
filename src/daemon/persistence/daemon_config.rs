@@ -291,22 +291,27 @@ fn sync_existing_device_config_toml(
     creds: &crate::daemon::persistence::config::Credentials,
 ) -> anyhow::Result<String> {
     use anyhow::Context as _;
-    use toml_edit::{value, DocumentMut, Item, Table};
+    use toml_edit::{value, DocumentMut};
 
     let mut doc: DocumentMut = raw.parse().context("parse daemon-config.toml")?;
-    let daemon_item = doc
+    let daemon_table = doc
         .as_table_mut()
-        .entry("daemon")
-        .or_insert_with(|| Item::Table(Table::new()));
-    let daemon_table = daemon_item
+        .get_mut("daemon")
+        .ok_or_else(|| anyhow::anyhow!("[daemon] is required in existing daemon-config.toml"))?
         .as_table_mut()
         .ok_or_else(|| anyhow::anyhow!("[daemon] is not a TOML table"))?;
 
-    let mode = daemon_table
+    let mode_raw = daemon_table
         .get("mode")
         .and_then(|item| item.as_str())
-        .unwrap_or("device");
-    if mode != "device" {
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "[daemon].mode is required in existing daemon-config.toml; refusing to infer device mode"
+            )
+        })?;
+    let mode = DaemonMode::parse_config_value(mode_raw)
+        .ok_or_else(|| anyhow::anyhow!("[daemon].mode has unsupported value {mode_raw:?}"))?;
+    if mode != DaemonMode::Device {
         return Ok(raw.to_string());
     }
 
@@ -367,6 +372,15 @@ impl DaemonMode {
             DaemonMode::Device => "device",
             DaemonMode::Hub => "hub",
             DaemonMode::Both => "both",
+        }
+    }
+
+    fn parse_config_value(raw: &str) -> Option<Self> {
+        match raw.trim() {
+            "device" => Some(DaemonMode::Device),
+            "hub" => Some(DaemonMode::Hub),
+            "both" => Some(DaemonMode::Both),
+            _ => None,
         }
     }
 }
@@ -1254,6 +1268,77 @@ tls_key_pem = "/tmp/key.pem"
 
         ensure_minimal_device_config(&creds).expect("hub mode left alone");
         let unchanged = std::fs::read_to_string(&path).expect("read hub config");
+        assert_eq!(unchanged, raw);
+    }
+
+    #[test]
+    fn ensure_minimal_device_config_rejects_existing_config_without_explicit_mode() {
+        let _g = HomeGuard::new();
+        let creds = crate::daemon::persistence::config::Credentials {
+            node_id: "node-1".into(),
+            credential_token: "token".into(),
+            hub_endpoint: "https://127.0.0.1:50443".into(),
+            realm: "tenant-a".into(),
+            deploy_signature: String::new(),
+            hub_api_base: None,
+            username: Some("alice".into()),
+            user_id: Some("user-alice".into()),
+            hub_pubkey_b64: None,
+            hub_tls_ca_pem_b64: None,
+            join_receipt_hash: None,
+        };
+        let path = default_config_path();
+        std::fs::create_dir_all(path.parent().expect("config parent")).expect("mkdir");
+        let raw = r#"[daemon]
+realm = "old-tenant"
+hub_endpoint = "https://hub:50443"
+"#;
+        std::fs::write(&path, raw).expect("write malformed config");
+
+        let error = ensure_minimal_device_config(&creds)
+            .expect_err("existing config without mode must fail closed");
+        assert!(
+            error.to_string().contains("[daemon].mode is required"),
+            "unexpected error: {error:#}"
+        );
+        let unchanged = std::fs::read_to_string(&path).expect("read config");
+        assert_eq!(unchanged, raw);
+    }
+
+    #[test]
+    fn ensure_minimal_device_config_rejects_existing_config_with_unknown_mode() {
+        let _g = HomeGuard::new();
+        let creds = crate::daemon::persistence::config::Credentials {
+            node_id: "node-1".into(),
+            credential_token: "token".into(),
+            hub_endpoint: "https://127.0.0.1:50443".into(),
+            realm: "tenant-a".into(),
+            deploy_signature: String::new(),
+            hub_api_base: None,
+            username: Some("alice".into()),
+            user_id: Some("user-alice".into()),
+            hub_pubkey_b64: None,
+            hub_tls_ca_pem_b64: None,
+            join_receipt_hash: None,
+        };
+        let path = default_config_path();
+        std::fs::create_dir_all(path.parent().expect("config parent")).expect("mkdir");
+        let raw = r#"[daemon]
+mode = "controller"
+realm = "old-tenant"
+hub_endpoint = "https://hub:50443"
+"#;
+        std::fs::write(&path, raw).expect("write malformed config");
+
+        let error = ensure_minimal_device_config(&creds)
+            .expect_err("existing config with unknown mode must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("[daemon].mode has unsupported value"),
+            "unexpected error: {error:#}"
+        );
+        let unchanged = std::fs::read_to_string(&path).expect("read config");
         assert_eq!(unchanged, raw);
     }
 
