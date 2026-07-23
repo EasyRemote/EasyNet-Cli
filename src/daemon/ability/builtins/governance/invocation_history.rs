@@ -1071,12 +1071,9 @@ mod tests {
     use super::*;
 
     fn invocation_history_test_catalog() -> AxonAbilityCatalog {
-        let authority_context =
-            crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root(
-                "easynet:///r/test/device/invocation-history",
-            )
-            .expect("explicit invocation-history test Device authority must be canonical");
-        AxonAbilityCatalog::new_metadata_only_with_authority_context(authority_context)
+        AxonAbilityCatalog::new_test_metadata_for_device_authority(
+            "easynet:///r/test/device/invocation-history",
+        )
     }
 
     #[test]

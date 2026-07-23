@@ -803,23 +803,12 @@ mod tests {
         registry
     }
 
-    fn metadata_test_authority_context(
-        device_ura: &str,
-    ) -> crate::daemon::ability::dispatch::AbilityAuthorityContext {
-        crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root(
-            device_ura,
-        )
-        .expect("explicit metadata-test Device authority must be canonical")
-    }
-
     fn metadata_test_catalog() -> AxonAbilityCatalog {
         metadata_test_catalog_for_device("easynet:///r/test/device/01DEV")
     }
 
     fn metadata_test_catalog_for_device(device_ura: &str) -> AxonAbilityCatalog {
-        AxonAbilityCatalog::new_metadata_only_with_authority_context(
-            metadata_test_authority_context(device_ura),
-        )
+        AxonAbilityCatalog::new_test_metadata_for_device_authority(device_ura)
     }
 
     fn runtime_metadata_test_catalog(

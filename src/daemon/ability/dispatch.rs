@@ -3621,6 +3621,14 @@ impl AxonAbilityCatalog {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn new_test_metadata_for_device_authority(device_ura: &str) -> Self {
+        Self::new_metadata_only_with_authority_context(
+            AbilityAuthorityContext::for_device_authority_root(device_ura)
+                .expect("explicit test Device authority root must be canonical"),
+        )
+    }
+
     /// Build a registry whose registration APIs write through to
     /// the daemon-hosted Axon runtime. This keeps the existing
     /// module-level `register(&mut reg)` call sites intact while
