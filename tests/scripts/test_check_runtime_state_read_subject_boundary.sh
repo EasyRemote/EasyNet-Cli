@@ -16,6 +16,7 @@ mkdir -p \
   "$SB/tools/scripts" \
   "$SB/src/support/platform" \
   "$SB/src/cli/commands/groups" \
+  "$SB/src/cli/commands" \
   "$SB/src/cli/daemon_client"
 cp "$SCRIPT" "$SB/tools/scripts/check-runtime-state-read-subject-boundary.sh"
 
@@ -116,6 +117,18 @@ fn publish_view(gateway: &dyn AgentStateReadGateway) -> anyhow::Result<serde_jso
 }
 RS
 
+cat >"$SB/src/cli/commands/llm_api.rs" <<'RS'
+use crate::support::platform::local_invoke::{invoke_local_ability, LocalRuntimeStateReadIssuer};
+
+fn pick_model() -> anyhow::Result<serde_json::Value> {
+    LocalRuntimeStateReadIssuer::invoke("openai.list_models", serde_json::json!({}))
+}
+
+fn chat() -> anyhow::Result<serde_json::Value> {
+    invoke_local_ability("openai.chat_completions", serde_json::json!({}))
+}
+RS
+
 (
   cd "$SB"
   bash tools/scripts/check-runtime-state-read-subject-boundary.sh
@@ -136,6 +149,9 @@ rc=$?
 set -e
 [[ "$rc" == "1" ]] || fail "generic runtime-state read should exit 1 (got $rc)"
 
+perl -0pi -e 's/\nfn legacy_read\(\) \{\n    let _ = invoke_local_ability\("invocation\.history\.list", serde_json::json!\(\{\}\)\);\n\}\n//' \
+  "$SB/src/cli/commands/groups/invocation.rs"
+
 perl -0pi -e 's/\Qgateway.invoke_read("agent.list"\E/gateway.invoke("agent.list"/' \
   "$SB/src/cli/daemon_client/agent_view.rs"
 
@@ -147,5 +163,20 @@ set +e
 rc=$?
 set -e
 [[ "$rc" == "1" ]] || fail "agent.list command-gateway regression should exit 1 (got $rc)"
+
+perl -0pi -e 's/\Qgateway.invoke("agent.list"\E/gateway.invoke_read("agent.list"/' \
+  "$SB/src/cli/daemon_client/agent_view.rs"
+
+perl -0pi -e 's/\QLocalRuntimeStateReadIssuer::invoke("openai.list_models"\E/invoke_local_ability("openai.list_models"/' \
+  "$SB/src/cli/commands/llm_api.rs"
+
+set +e
+(
+  cd "$SB"
+  bash tools/scripts/check-runtime-state-read-subject-boundary.sh
+) >/tmp/check-runtime-state-read-subject-boundary-llm.out 2>&1
+rc=$?
+set -e
+[[ "$rc" == "1" ]] || fail "llm-api model read regression should exit 1 (got $rc)"
 
 echo "test_check_runtime_state_read_subject_boundary.sh: all cases passed"

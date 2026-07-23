@@ -71,10 +71,12 @@ done
 AGENT_GATEWAY="src/cli/daemon_client/agent_gateway.rs"
 AGENT_VIEW="src/cli/daemon_client/agent_view.rs"
 AGENT_PUBLISH="src/cli/commands/agent/publish.rs"
+LLM_API="src/cli/commands/llm_api.rs"
 
 [[ -f "$AGENT_GATEWAY" ]] || fail "missing $AGENT_GATEWAY"
 [[ -f "$AGENT_VIEW" ]] || fail "missing $AGENT_VIEW"
 [[ -f "$AGENT_PUBLISH" ]] || fail "missing $AGENT_PUBLISH"
+[[ -f "$LLM_API" ]] || fail "missing $LLM_API"
 
 if ! rg -n 'trait AgentStateReadGateway' "$AGENT_GATEWAY" >/dev/null; then
   fail "agent.list must have a dedicated AgentStateReadGateway"
@@ -94,6 +96,18 @@ fi
 
 if rg -n '\.invoke\s*\(\s*"(agent\.list|meta\.list_abilities)"' "$AGENT_PUBLISH"; then
   fail "agent publish read projections must not use the command gateway"
+fi
+
+if ! rg -n 'LocalRuntimeStateReadIssuer::invoke\("openai\.list_models"' "$LLM_API" >/dev/null; then
+  fail "llm-api model catalogue discovery must use LocalRuntimeStateReadIssuer"
+fi
+
+if rg -n '\binvoke_local_ability\s*\(\s*"openai\.list_models"' "$LLM_API"; then
+  fail "llm-api model catalogue discovery must not use generic invoke_local_ability"
+fi
+
+if ! rg -n '\binvoke_local_ability\s*\(\s*"openai\.chat_completions"' "$LLM_API" >/dev/null; then
+  fail "llm-api chat completions must remain on the action invoke path"
 fi
 
 echo "check-runtime-state-read-subject-boundary: ok"
