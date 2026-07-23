@@ -140,6 +140,7 @@ const SUPPORTED_SCHEMA_VERSIONS: &[&str] = &["1"];
 ///   — otherwise unrelated patches show up as diffs in a
 ///   project-local agent root under git.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AgentSpec {
     /// Self-describing schema version. Kept as `Option<String>` only so the
     /// validator can report a precise error for retired pre-stamp files that
@@ -612,24 +613,22 @@ mod tests {
     }
 
     #[test]
-    fn unknown_top_level_keys_are_ignored_for_forward_compat() {
-        // TOML allows extra keys; the serde derive drops them by
-        // default. We DO want that permissive behavior: a
-        // newer version of the binary that adds a field must not
-        // break when an operator later downgrades and reads
-        // their own file. Pin the contract so a future
-        // `#[serde(deny_unknown_fields)]` flip is a deliberate
-        // decision, not an accident.
+    fn unknown_top_level_keys_fail_closed() {
+        // agent.toml is durable lifecycle state. Unknown fields are usually
+        // misspelled runtime/lifecycle knobs, so accepting them would collapse
+        // an operator's intent into a consumer default.
         let src = r#"
             schema_version = "1"
             name = "alice"
             runtime = "claude-code"
-            future_field = "from-next-release"
+            runtmie = "typo"
         "#;
-        let s = AgentSpec::from_toml_str(src)
-            .expect("unknown keys must be tolerated for forward compat");
-        assert_eq!(s.name, "alice");
-        assert_eq!(s.runtime, RuntimeKind::ClaudeCode);
+        let err =
+            AgentSpec::from_toml_str(src).expect_err("unknown agent.toml fields must fail closed");
+        assert!(
+            err.to_string().contains("unknown field `runtmie`"),
+            "unknown field should be reported explicitly: {err}"
+        );
     }
 
     #[test]

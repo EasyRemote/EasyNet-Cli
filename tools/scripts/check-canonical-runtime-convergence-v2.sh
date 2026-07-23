@@ -1262,6 +1262,64 @@ for required in (
 PY
 }
 
+check_agent_spec_schema_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local spec="$cli_root/src/core/agent/spec.rs"
+  [[ -f "$spec" ]] || fail "agent spec source is missing: $spec"
+
+  "$PYTHON_BIN" - "$spec" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+
+match = re.search(
+    r"(?P<attrs>(?:#\[[^\n]+\]\n)*)pub struct AgentSpec \{(?P<body>.*?)\n\}",
+    text,
+    re.S,
+)
+if match is None:
+    raise SystemExit("agent_spec_schema:AgentSpec:missing")
+attrs = match.group("attrs")
+body = match.group("body")
+if "#[serde(deny_unknown_fields)]" not in attrs:
+    raise SystemExit("agent_spec_schema:AgentSpec:missing_deny_unknown_fields")
+for field in (
+    "pub schema_version: Option<String>",
+    "pub name: String",
+    "pub runtime: RuntimeKind",
+    "pub model: Option<String>",
+    "pub mode: Option<String>",
+    "pub system_prompt: Option<String>",
+    "pub allowed_tools: Option<Vec<String>>",
+    "pub description: Option<String>",
+    "pub owner: Option<String>",
+    "pub timeout_secs: Option<u64>",
+    "pub env: BTreeMap<String, String>",
+):
+    if field not in body:
+        raise SystemExit(f"agent_spec_schema:AgentSpec:missing_field:{field}")
+for retired in (
+    "unknown_top_level_keys_are_ignored_for_forward_compat",
+    "unknown keys must be tolerated for forward compat",
+    "forward compat",
+    "operator later downgrades",
+):
+    if retired in text:
+        raise SystemExit(f"agent_spec_schema:retired_compat:{retired}")
+for required in (
+    "unknown_top_level_keys_fail_closed",
+    "unknown agent.toml fields must fail closed",
+    "unknown field `runtmie`",
+    "schema_version_absent_is_rejected",
+    "schema_version_unknown_value_is_rejected",
+):
+    if required not in text:
+        raise SystemExit(f"agent_spec_schema:missing:{required}")
+PY
+}
+
 check_sdk_history_authority_subject_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local go="$cli_root/sdk/go/authorized_runtime_session.go"
@@ -10206,6 +10264,45 @@ EOF
   if ( CLI_ROOT="$tmp/resources-schema-legacy"; check_resources_schema_contract ) >/dev/null 2>&1; then
     fail "self-test expected resources schema compatibility gate to fail"
   fi
+  mkdir -p "$tmp/agent-spec-schema-legacy/src/core/agent"
+  cat >"$tmp/agent-spec-schema-legacy/src/core/agent/spec.rs" <<'EOF'
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentSpec {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema_version: Option<String>,
+    pub name: String,
+    pub runtime: RuntimeKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_prompt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allowed_tools: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_secs: Option<u64>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub env: BTreeMap<String, String>,
+}
+
+#[cfg(test)]
+mod tests {
+    fn unknown_top_level_keys_are_ignored_for_forward_compat() {
+        AgentSpec::from_toml_str(src).expect("unknown keys must be tolerated for forward compat");
+    }
+
+    fn schema_version_absent_is_rejected() {}
+    fn schema_version_unknown_value_is_rejected() {}
+}
+EOF
+  if ( CLI_ROOT="$tmp/agent-spec-schema-legacy"; check_agent_spec_schema_contract ) >/dev/null 2>&1; then
+    fail "self-test expected agent spec schema compatibility gate to fail"
+  fi
   mkdir -p "$tmp/remote-subject-provenance-legacy/src/daemon/invocation/routing" \
     "$tmp/remote-subject-provenance-legacy/src/ffi/invocation"
   cat >"$tmp/remote-subject-provenance-legacy/src/daemon/invocation/routing/remote_invoke.rs" <<'EOF'
@@ -10348,6 +10445,7 @@ EOF
   check_chat_session_index_schema_contract
   check_local_agents_schema_contract
   check_resources_schema_contract
+  check_agent_spec_schema_contract
   check_sdk_history_authority_subject_contract
   check_sdk_descriptor_resolution_error_vocabulary_contract
   check_sdk_ability_descriptor_not_found_vocabulary_contract
@@ -10476,6 +10574,7 @@ check_cli_invocation_history_read_model_contract
 check_local_runtime_state_read_subject_contract
 check_runtime_state_kind_required_contract
 check_resources_schema_contract
+check_agent_spec_schema_contract
 check_sdk_history_authority_subject_contract
 check_sdk_descriptor_resolution_error_vocabulary_contract
 check_sdk_ability_descriptor_not_found_vocabulary_contract
