@@ -61,8 +61,8 @@ use serde_json::{json, Value};
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 use crate::daemon::persistence::agent_aggregate::{AgentAggregateRepository, AgentSkillLayout};
 use crate::daemon::resources::skills::projection::{
-    SkillPublishReceipt, SkillReadFileResponse, SkillTreeResponse, SkillUnpublishReceipt,
-    SkillWriteFileReceipt,
+    SkillPublishReceipt, SkillReadFileResponse, SkillTreeEntry, SkillTreeResponse,
+    SkillUnpublishReceipt, SkillWriteFileReceipt,
 };
 
 use super::list;
@@ -315,13 +315,8 @@ fn tree_handler(args: Value) -> anyhow::Result<Value> {
     let resource_ura = package_resource_ura_from_args(&args, "skill.tree", &skill_name)?;
     let skill_dir = resolve_readable_skill_dir(&owner_id, &skill_name, "skill.tree")?;
     let mut entries = Vec::new();
-    collect_skill_tree_entries(&skill_dir, &skill_dir, &mut entries)?;
-    annotate_skill_file_resource_uras(&resource_ura, &mut entries);
-    entries.sort_by(|a, b| {
-        let ap = a["path"].as_str().unwrap_or("");
-        let bp = b["path"].as_str().unwrap_or("");
-        ap.cmp(bp)
-    });
+    collect_skill_tree_entries(&skill_dir, &skill_dir, &resource_ura, &mut entries)?;
+    entries.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(serde_json::to_value(SkillTreeResponse::success(
         owner_id,
         skill_name,
@@ -515,24 +510,6 @@ fn skill_file_resource_ura(package_ura: &str, rel_path: &str) -> String {
         return base.to_string();
     };
     crate::core::ura::resource_dot_ura(&parsed.realm, owner_id, &child_path)
-}
-
-fn annotate_skill_file_resource_uras(package_ura: &str, entries: &mut [Value]) {
-    for entry in entries {
-        let Some(path) = entry
-            .get("path")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-        else {
-            continue;
-        };
-        if let Some(obj) = entry.as_object_mut() {
-            obj.insert(
-                "resource_ura".to_string(),
-                json!(skill_file_resource_ura(package_ura, &path)),
-            );
-        }
-    }
 }
 
 fn parse_unpublish_args(args: &Value) -> anyhow::Result<(String, String)> {
@@ -791,7 +768,12 @@ fn ensure_resolved_inside(root: &Path, path: &Path, verb: &str) -> anyhow::Resul
     Ok(())
 }
 
-fn collect_skill_tree_entries(root: &Path, dir: &Path, out: &mut Vec<Value>) -> anyhow::Result<()> {
+fn collect_skill_tree_entries(
+    root: &Path,
+    dir: &Path,
+    package_ura: &str,
+    out: &mut Vec<SkillTreeEntry>,
+) -> anyhow::Result<()> {
     let mut children: Vec<_> = std::fs::read_dir(dir)
         .map_err(|e| anyhow::anyhow!("skill.tree: read_dir {}: {e}", dir.display()))?
         .flatten()
@@ -824,18 +806,17 @@ fn collect_skill_tree_entries(root: &Path, dir: &Path, out: &mut Vec<Value>) -> 
             }
         };
         if meta.is_dir() {
-            out.push(json!({
-                "path": rel_str,
-                "type": "dir",
-                "size_bytes": 0,
-            }));
-            collect_skill_tree_entries(root, &path, out)?;
+            out.push(SkillTreeEntry::directory(
+                rel_str.to_string(),
+                skill_file_resource_ura(package_ura, &rel_str),
+            ));
+            collect_skill_tree_entries(root, &path, package_ura, out)?;
         } else if meta.is_file() {
-            out.push(json!({
-                "path": rel_str,
-                "type": "file",
-                "size_bytes": meta.len(),
-            }));
+            out.push(SkillTreeEntry::file(
+                rel_str.to_string(),
+                meta.len(),
+                skill_file_resource_ura(package_ura, &rel_str),
+            ));
         }
     }
     Ok(())

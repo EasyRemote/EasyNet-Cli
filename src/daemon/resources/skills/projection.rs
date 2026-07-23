@@ -25,7 +25,6 @@
 //   product lifecycle abstraction.
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 use super::store::{InstallRecord, SkillSource};
 
@@ -158,6 +157,36 @@ impl SkillUnpublishReceipt {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct SkillTreeEntry {
+    pub path: String,
+    #[serde(rename = "type")]
+    pub entry_type: String,
+    pub size_bytes: u64,
+    pub resource_ura: String,
+}
+
+impl SkillTreeEntry {
+    pub fn directory(path: impl Into<String>, resource_ura: impl Into<String>) -> Self {
+        Self {
+            path: path.into(),
+            entry_type: "dir".to_string(),
+            size_bytes: 0,
+            resource_ura: resource_ura.into(),
+        }
+    }
+
+    pub fn file(path: impl Into<String>, size_bytes: u64, resource_ura: impl Into<String>) -> Self {
+        Self {
+            path: path.into(),
+            entry_type: "file".to_string(),
+            size_bytes,
+            resource_ura: resource_ura.into(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SkillTreeResponse {
@@ -165,7 +194,7 @@ pub struct SkillTreeResponse {
     pub owner_agent_id: String,
     pub skill_name: String,
     pub root: String,
-    pub files: Vec<Value>,
+    pub files: Vec<SkillTreeEntry>,
     pub resource_ura: String,
 }
 
@@ -174,7 +203,7 @@ impl SkillTreeResponse {
         owner_agent_id: impl Into<String>,
         skill_name: impl Into<String>,
         root: impl Into<String>,
-        files: Vec<Value>,
+        files: Vec<SkillTreeEntry>,
         resource_ura: impl Into<String>,
     ) -> Self {
         Self {
@@ -422,11 +451,14 @@ mod tests {
             "alice",
             "alpha",
             "/tmp/alpha",
-            vec![serde_json::json!({"path": "SKILL.md", "kind": "file"})],
+            vec![SkillTreeEntry::file("SKILL.md", 4, resource)],
             resource,
         );
         let tree_wire = serde_json::to_value(&tree).expect("tree response");
         assert_eq!(tree_wire["files"][0]["path"], "SKILL.md");
+        assert_eq!(tree_wire["files"][0]["type"], "file");
+        assert_eq!(tree_wire["files"][0]["size_bytes"], 4);
+        assert_eq!(tree_wire["files"][0]["resource_ura"], resource);
         assert_eq!(tree_wire["resource_ura"], resource);
 
         let read =
@@ -441,5 +473,35 @@ mod tests {
         let write_wire = serde_json::to_value(&write).expect("write receipt");
         assert_eq!(write_wire["content_hash"], "sha256:def");
         assert_eq!(write_wire["resource_ura"], resource);
+    }
+
+    #[test]
+    fn skill_tree_entry_preserves_public_shape_and_rejects_unknown_fields() {
+        let entry = SkillTreeEntry::directory(
+            "docs",
+            "easynet:///r/acme/resource/agent.u.alice/skill/alpha/docs",
+        );
+        let wire = serde_json::to_value(&entry).expect("entry serializes");
+
+        assert_eq!(wire["path"], "docs");
+        assert_eq!(wire["type"], "dir");
+        assert_eq!(wire["size_bytes"], 0);
+        assert_eq!(
+            wire["resource_ura"],
+            "easynet:///r/acme/resource/agent.u.alice/skill/alpha/docs"
+        );
+
+        let error = serde_json::from_value::<SkillTreeEntry>(serde_json::json!({
+            "path": "docs",
+            "type": "dir",
+            "size_bytes": 0,
+            "resource_ura": "easynet:///r/acme/resource/agent.u.alice/skill/alpha/docs",
+            "legacy_kind": "directory"
+        }))
+        .expect_err("unknown tree entry fields must fail closed");
+        assert!(
+            error.to_string().contains("legacy_kind"),
+            "strict tree entry error should name unknown field: {error}"
+        );
     }
 }

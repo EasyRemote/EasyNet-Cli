@@ -1353,6 +1353,10 @@ for required in (
     "pub struct SkillPublishReceipt",
     "pub struct SkillUnpublishReceipt",
     "pub struct SkillTreeResponse",
+    "pub struct SkillTreeEntry",
+    "pub files: Vec<SkillTreeEntry>",
+    "pub fn directory(",
+    "pub fn file(",
     "pub struct SkillReadFileResponse",
     "pub struct SkillWriteFileReceipt",
     "pub fn success(",
@@ -1363,6 +1367,7 @@ for required in (
     "skill_remove_receipt_preserves_public_shape_and_rejects_unknown_fields",
     "skill_publish_and_unpublish_receipts_preserve_public_shapes",
     "skill_file_operation_responses_preserve_public_shapes",
+    "skill_tree_entry_preserves_public_shape_and_rejects_unknown_fields",
 ):
     if required not in projection:
         raise SystemExit(f"skill_record_projection_boundary:projection_missing:{required}")
@@ -1384,6 +1389,9 @@ for retired in (
     'Ok(json!({',
     "let mut receipt = json!({",
     'receipt["resource_ura"]',
+    "annotate_skill_file_resource_uras",
+    "out.push(json!({",
+    "out: &mut Vec<Value>",
 ):
     if retired in publish:
         raise SystemExit(f"skill_record_projection_boundary:publish_retired:{retired}")
@@ -1408,8 +1416,12 @@ for required in (
     "SkillPublishReceipt::success(",
     "SkillUnpublishReceipt::success(",
     "SkillTreeResponse::success(",
+    "SkillTreeEntry::directory(",
+    "SkillTreeEntry::file(",
     "SkillReadFileResponse::success(",
     "SkillWriteFileReceipt::success(",
+    "out: &mut Vec<SkillTreeEntry>",
+    "entries.sort_by(|a, b| a.path.cmp(&b.path))",
 ):
     if required not in publish:
         raise SystemExit(f"skill_record_projection_boundary:publish_missing:{required}")
