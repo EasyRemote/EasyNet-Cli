@@ -581,6 +581,12 @@ pub fn description() -> &'static str {
 mod tests {
     use super::*;
 
+    const TEST_DEVICE_URA: &str = "easynet:///r/test/device/file-transfer";
+
+    fn metadata_test_catalog() -> AxonAbilityCatalog {
+        AxonAbilityCatalog::new_test_metadata_for_device_authority(TEST_DEVICE_URA)
+    }
+
     /// Drain frames from the handler-emit channel up to `max`
     /// frames or `timeout`, whichever comes first. Mirrors the
     /// helper in pty_attach_ability tests.
@@ -635,7 +641,7 @@ mod tests {
 
     #[test]
     fn registration_mounts_bidi_handler() {
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = metadata_test_catalog();
         register(&mut reg);
         assert!(reg.get_bidi(ABILITY_FILE_TRANSFER).is_some());
     }
