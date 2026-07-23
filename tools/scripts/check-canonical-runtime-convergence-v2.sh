@@ -1738,6 +1738,62 @@ for required in (
 PY
 }
 
+check_pages_fetch_response_projection_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local projection="$cli_root/src/daemon/resources/projection.rs"
+  local fetch="$cli_root/src/daemon/ability/builtins/resources/pages/fetch.rs"
+  [[ -f "$projection" ]] || fail "daemon resource projection source is missing: $projection"
+  [[ -f "$fetch" ]] || fail "pages fetch source is missing: $fetch"
+
+  "$PYTHON_BIN" - "$projection" "$fetch" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+projection, fetch = [Path(arg).read_text(encoding="utf-8") for arg in sys.argv[1:]]
+
+struct = re.search(
+    r"(?P<attrs>(?:#\[[^\n]+\]\n)*)pub struct PagesFetchResponse \{(?P<body>.*?)\n\}",
+    projection,
+    re.S,
+)
+if struct is None:
+    raise SystemExit("pages_fetch_response_projection:struct_missing")
+if "#[serde(deny_unknown_fields)]" not in struct.group("attrs"):
+    raise SystemExit("pages_fetch_response_projection:struct_not_strict")
+
+for required in (
+    "pub struct PagesFetchResponse",
+    "pub bytes_b64: String",
+    "pub content_type: String",
+    "pub size_bytes: usize",
+    "pub force_attachment: bool",
+    "pub sha256: String",
+    "PagesFetchResponse::success(",
+    "pages_fetch_response_preserves_public_shape",
+    "pages_fetch_response_rejects_unknown_fields",
+):
+    if required not in projection:
+        raise SystemExit(f"pages_fetch_response_projection:projection_missing:{required}")
+
+for retired in (
+    'Ok(json!({',
+    '"bytes_b64":        b64',
+    '"force_attachment": mime.force_attachment',
+):
+    if retired in fetch:
+        raise SystemExit(f"pages_fetch_response_projection:handler_retired:{retired}")
+
+for required in (
+    "PagesFetchResponse::success(",
+    "serde_json::to_value(PagesFetchResponse::success(",
+    "handle_fetch_returns_typed_payload_projection_shape",
+):
+    if required not in fetch:
+        raise SystemExit(f"pages_fetch_response_projection:handler_missing:{required}")
+PY
+}
+
 check_local_agents_schema_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local local_agents="$cli_root/src/daemon/persistence/local_agents.rs"
@@ -12516,6 +12572,27 @@ EOF
   if ( CLI_ROOT="$tmp/pages-health-response-projection-legacy"; check_pages_health_response_projection_contract ) >/dev/null 2>&1; then
     fail "self-test expected pages health response projection gate to fail"
   fi
+  mkdir -p "$tmp/pages-fetch-response-projection-legacy/src/daemon/resources"
+  mkdir -p "$tmp/pages-fetch-response-projection-legacy/src/daemon/ability/builtins/resources/pages"
+  cat >"$tmp/pages-fetch-response-projection-legacy/src/daemon/resources/projection.rs" <<'EOF'
+pub struct PagesFetchResponse {
+    pub payload: serde_json::Value,
+}
+EOF
+  cat >"$tmp/pages-fetch-response-projection-legacy/src/daemon/ability/builtins/resources/pages/fetch.rs" <<'EOF'
+fn handle_fetch() -> Value {
+    Ok(json!({
+        "bytes_b64":        b64,
+        "content_type":     mime.content_type,
+        "size_bytes":       bytes.len(),
+        "force_attachment": mime.force_attachment,
+        "sha256":           sha,
+    }))
+}
+EOF
+  if ( CLI_ROOT="$tmp/pages-fetch-response-projection-legacy"; check_pages_fetch_response_projection_contract ) >/dev/null 2>&1; then
+    fail "self-test expected pages fetch response projection gate to fail"
+  fi
   mkdir -p "$tmp/local-agents-schema-legacy/src/daemon/persistence"
   cat >"$tmp/local-agents-schema-legacy/src/daemon/persistence/local_agents.rs" <<'EOF'
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
@@ -12960,6 +13037,7 @@ EOF
   check_files_store_response_projection_contract
   check_pages_management_response_projection_contract
   check_pages_health_response_projection_contract
+  check_pages_fetch_response_projection_contract
   check_local_agents_schema_contract
   check_profile_store_schema_contract
   check_auth_session_owner_fact_contract
@@ -13113,6 +13191,7 @@ check_resource_list_projection_boundary_contract
 check_files_store_response_projection_contract
 check_pages_management_response_projection_contract
 check_pages_health_response_projection_contract
+check_pages_fetch_response_projection_contract
 check_profile_store_schema_contract
 check_auth_session_owner_fact_contract
 check_resources_schema_contract

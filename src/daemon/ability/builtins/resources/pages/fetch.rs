@@ -25,6 +25,7 @@ use sha2::{Digest, Sha256};
 
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, OwnerKind};
 use crate::daemon::ability::AuthorityScope;
+use crate::daemon::resources::projection::PagesFetchResponse;
 
 use super::mime::mime_from_path;
 use super::sandbox::{open_beneath, validate_regular};
@@ -78,13 +79,13 @@ pub fn handle_fetch(user: &str, project_id: &str, args: Value) -> anyhow::Result
 
     let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
 
-    Ok(json!({
-        "bytes_b64":        b64,
-        "content_type":     mime.content_type,
-        "size_bytes":       bytes.len(),
-        "force_attachment": mime.force_attachment,
-        "sha256":           sha,
-    }))
+    Ok(serde_json::to_value(PagesFetchResponse::success(
+        b64,
+        mime.content_type,
+        bytes.len(),
+        mime.force_attachment,
+        sha,
+    ))?)
 }
 
 pub(crate) fn fetch_ability_name(user: &str, project_id: &str) -> String {
@@ -128,4 +129,63 @@ pub fn register_fetch_ability(
         fetch_ability_manifest(),
         Arc::new(move |args| handle_fetch(&user, &project_id, args)),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::sync::Arc;
+    use std::time::SystemTime;
+
+    fn publish_fetch_test_project(
+        user: &str,
+        project_id: &str,
+    ) -> (tempfile::TempDir, (String, String)) {
+        let root = tempfile::tempdir().expect("temp pages fetch root");
+        let canonical_root = std::fs::canonicalize(root.path()).expect("canonical pages root");
+        let folder_handle =
+            crate::daemon::ability::builtins::resources::pages::sandbox::open_directory(
+                &canonical_root,
+            )
+            .expect("open pages fetch test root");
+        let key = (user.to_string(), project_id.to_string());
+        PUBLISHED_PROJECTS.insert(
+            key.clone(),
+            Arc::new(super::super::state::ProjectHandle {
+                user: user.to_string(),
+                project_id: project_id.to_string(),
+                folder_handle,
+                canonical_root,
+                visibility: super::super::state::PageVisibility::Public,
+                file_size_cap: super::super::state::DEFAULT_FILE_SIZE_CAP,
+                started_at: SystemTime::UNIX_EPOCH,
+            }),
+        );
+        (root, key)
+    }
+
+    #[test]
+    fn handle_fetch_returns_typed_payload_projection_shape() {
+        let user = "pages-fetch-projection-user";
+        let project_id = "docs-fetch";
+        let (root, key) = publish_fetch_test_project(user, project_id);
+        std::fs::write(root.path().join("index.html"), "<h1>Hello</h1>").expect("write test page");
+
+        let fetched = handle_fetch(user, project_id, json!({"path": "/index.html"})).unwrap();
+        PUBLISHED_PROJECTS.remove(&key);
+
+        assert_eq!(fetched["content_type"], "text/html; charset=utf-8");
+        assert_eq!(fetched["size_bytes"], 14);
+        assert_eq!(fetched["force_attachment"], false);
+        assert_eq!(
+            fetched["sha256"],
+            "e2c6c0ea7c7900c31f953e48d30d5e839801ab90630d751e7c8426ed5859da47"
+        );
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(fetched["bytes_b64"].as_str().expect("bytes_b64 string"))
+            .expect("decode response bytes");
+        assert_eq!(decoded, b"<h1>Hello</h1>");
+        assert!(fetched.get("local_path").is_none());
+    }
 }

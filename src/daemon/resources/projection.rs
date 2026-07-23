@@ -358,6 +358,34 @@ impl PagesHealthResponse {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PagesFetchResponse {
+    pub bytes_b64: String,
+    pub content_type: String,
+    pub size_bytes: usize,
+    pub force_attachment: bool,
+    pub sha256: String,
+}
+
+impl PagesFetchResponse {
+    pub fn success(
+        bytes_b64: impl Into<String>,
+        content_type: impl Into<String>,
+        size_bytes: usize,
+        force_attachment: bool,
+        sha256: impl Into<String>,
+    ) -> Self {
+        Self {
+            bytes_b64: bytes_b64.into(),
+            content_type: content_type.into(),
+            size_bytes,
+            force_attachment,
+            sha256: sha256.into(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -720,6 +748,42 @@ mod tests {
         assert!(
             response_error.to_string().contains("legacy_checks"),
             "strict pages health response error should name unknown field: {response_error}"
+        );
+    }
+
+    #[test]
+    fn pages_fetch_response_preserves_public_shape() {
+        let response = PagesFetchResponse::success(
+            "PGgxPkhlbGxvPC9oMT4=",
+            "text/html; charset=utf-8",
+            14,
+            false,
+            "abc123",
+        );
+        let wire = serde_json::to_value(&response).expect("pages fetch response serializes");
+
+        assert_eq!(wire["bytes_b64"], "PGgxPkhlbGxvPC9oMT4=");
+        assert_eq!(wire["content_type"], "text/html; charset=utf-8");
+        assert_eq!(wire["size_bytes"], 14);
+        assert_eq!(wire["force_attachment"], false);
+        assert_eq!(wire["sha256"], "abc123");
+    }
+
+    #[test]
+    fn pages_fetch_response_rejects_unknown_fields() {
+        let error = serde_json::from_value::<PagesFetchResponse>(json!({
+            "bytes_b64": "PGgxPkhlbGxvPC9oMT4=",
+            "content_type": "text/html; charset=utf-8",
+            "size_bytes": 14,
+            "force_attachment": false,
+            "sha256": "abc123",
+            "local_path": "/tmp/index.html"
+        }))
+        .expect_err("pages fetch response must reject local path leaks");
+
+        assert!(
+            error.to_string().contains("local_path"),
+            "strict pages fetch response error should name unknown field: {error}"
         );
     }
 }
