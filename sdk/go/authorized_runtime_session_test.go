@@ -89,6 +89,40 @@ func TestAuthorizedRuntimeSessionRejectsMissingCallerSignerBeforeSubmit(t *testi
 	}
 }
 
+func TestAuthorizedRuntimeDescriptorResolutionRequiresDescriptorVocabulary(t *testing.T) {
+	canonical := descriptorResolutionFromError(&SDKError{
+		Code:      ErrDescriptorNotFound,
+		Stage:     "descriptor",
+		Retry:     RetryNever,
+		Retryable: false,
+		Message:   "descriptor missing",
+	})
+	if canonical.State != DescriptorNotFound {
+		t.Fatalf("DESCRIPTOR_NOT_FOUND state = %s, want %s", canonical.State, DescriptorNotFound)
+	}
+
+	for _, tc := range []struct {
+		name string
+		code ErrorCode
+	}{
+		{name: "legacy ability not found", code: ErrAbilityNotFound},
+		{name: "generic not found", code: ErrNotFound},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resolution := descriptorResolutionFromError(&SDKError{
+				Code:      tc.code,
+				Stage:     "descriptor",
+				Retry:     RetryNever,
+				Retryable: false,
+				Message:   "legacy provider not found",
+			})
+			if resolution.State != DescriptorUnavailable {
+				t.Fatalf("%s state = %s, want %s", tc.code, resolution.State, DescriptorUnavailable)
+			}
+		})
+	}
+}
+
 func TestAuthorizedRuntimeSessionHistoryRejectsAuthoritySubjectMismatchBeforeReceiptProvider(t *testing.T) {
 	session := newAuthorizedRuntimeSessionFixture(t)
 	request := ReceiptListRequest{

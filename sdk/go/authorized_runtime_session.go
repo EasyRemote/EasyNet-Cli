@@ -1023,7 +1023,7 @@ func descriptorFingerprint(ref string) string {
 
 func descriptorResolutionFromError(err error) DescriptorResolution {
 	var sdkErr *SDKError
-	if !IsCode(err, ErrAbilityNotFound) && !IsCode(err, ErrNotFound) &&
+	if !IsCode(err, ErrDescriptorNotFound) &&
 		!IsCode(err, ErrRouteUnavailable) && !IsCode(err, ErrRuntimeRouteUnavailable) &&
 		!IsCode(err, ErrDescriptorOwnerOffline) && !IsCode(err, ErrDescriptorModeUnsupported) &&
 		!IsCode(err, ErrDescriptorStale) {
@@ -1037,7 +1037,7 @@ func descriptorResolutionFromError(err error) DescriptorResolution {
 	if IsCode(err, ErrRouteUnavailable) || IsCode(err, ErrRuntimeRouteUnavailable) {
 		return DescriptorResolution{State: DescriptorUnavailable, Reason: fmt.Sprint(err)}
 	}
-	if IsCode(err, ErrAbilityNotFound) || IsCode(err, ErrNotFound) {
+	if IsCode(err, ErrDescriptorNotFound) {
 		return DescriptorResolution{State: DescriptorNotFound, Reason: fmt.Sprint(err)}
 	}
 	if errors.As(err, &sdkErr) && sdkErr.Code == ErrDescriptorModeUnsupported {

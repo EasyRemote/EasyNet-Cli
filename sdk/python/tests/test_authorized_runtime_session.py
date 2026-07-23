@@ -29,6 +29,7 @@ from easynet_sdk import (
     SubjectRef,
     is_code,
 )
+from easynet_sdk.authorized_runtime_session import _descriptor_resolution_from_error
 
 
 class AuthorizedRuntimeSessionTests(unittest.TestCase):
@@ -91,6 +92,34 @@ class AuthorizedRuntimeSessionTests(unittest.TestCase):
         self.assertTrue(is_code(caught.exception, ErrorCode.CALLER_SIGNER_UNAVAILABLE))
         self.assertEqual(fixture.runtime.prepare_calls, 1)
         self.assertEqual(fixture.runtime.submit_calls, 0)
+
+    def test_descriptor_resolution_requires_descriptor_vocabulary(self) -> None:
+        canonical = _descriptor_resolution_from_error(
+            SDKError(
+                code=ErrorCode.DESCRIPTOR_NOT_FOUND,
+                stage="descriptor",
+                retry=RetryHint.NEVER,
+                retryable=False,
+                message="descriptor missing",
+            )
+        )
+        self.assertEqual(canonical.state, DescriptorResolutionState.NOT_FOUND)
+
+        for legacy_code in (ErrorCode.ABILITY_NOT_FOUND, ErrorCode.NOT_FOUND):
+            with self.subTest(code=legacy_code):
+                resolution = _descriptor_resolution_from_error(
+                    SDKError(
+                        code=legacy_code,
+                        stage="descriptor",
+                        retry=RetryHint.NEVER,
+                        retryable=False,
+                        message="legacy provider not found",
+                    )
+                )
+                self.assertEqual(
+                    resolution.state,
+                    DescriptorResolutionState.UNAVAILABLE,
+                )
 
     def test_history_rejects_authority_subject_mismatch_before_receipt_provider(self) -> None:
         fixture = _SessionFixture()

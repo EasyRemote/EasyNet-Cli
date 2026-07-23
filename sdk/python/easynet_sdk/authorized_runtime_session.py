@@ -1111,7 +1111,7 @@ def _descriptor_resolution_from_error(error: BaseException) -> DescriptorResolut
             return DescriptorResolution(DescriptorResolutionState.OWNER_OFFLINE, reason=text)
         if error.code == ErrorCode.DESCRIPTOR_MODE_UNSUPPORTED:
             return DescriptorResolution(DescriptorResolutionState.MODE_UNSUPPORTED, reason=text)
-        if error.code in {ErrorCode.ABILITY_NOT_FOUND, ErrorCode.NOT_FOUND, ErrorCode.DESCRIPTOR_NOT_FOUND}:
+        if error.code == ErrorCode.DESCRIPTOR_NOT_FOUND:
             return DescriptorResolution(DescriptorResolutionState.NOT_FOUND, reason=text)
         if error.code == ErrorCode.DESCRIPTOR_STALE:
             return DescriptorResolution(DescriptorResolutionState.STALE, reason=text)
