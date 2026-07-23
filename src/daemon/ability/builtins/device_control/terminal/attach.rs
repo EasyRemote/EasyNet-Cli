@@ -425,8 +425,14 @@ mod tests {
     use super::*;
     use crate::daemon::execution::pty::PtyCreateSpec;
 
+    const TEST_DEVICE_URA: &str = "easynet:///r/test/device/terminal-attach";
+
     fn fresh_service() -> Arc<PtyService> {
         Arc::new(PtyService::new())
+    }
+
+    fn metadata_test_catalog() -> AxonAbilityCatalog {
+        AxonAbilityCatalog::new_test_metadata_for_device_authority(TEST_DEVICE_URA)
     }
 
     fn shell_command() -> String {
@@ -485,7 +491,7 @@ mod tests {
 
     #[tokio::test]
     async fn registration_makes_attach_dispatchable() {
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = metadata_test_catalog();
         register(&mut reg, fresh_service());
         assert!(
             reg.resolve_bidi_with_env(ABILITY_PTY_SESSION_ATTACH)
