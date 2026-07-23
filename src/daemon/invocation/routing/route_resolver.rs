@@ -759,10 +759,7 @@ impl<'a> DaemonRouteResolver<'a> {
                 );
             }
 
-            let is_hub_owner = crate::core::ura::parse_ura(&selector.owner_ura)
-                .ok()
-                .is_some_and(|parsed| parsed.kind == crate::core::ura::URAKind::Authority);
-            if is_hub_owner
+            if selector.owner_kind == RouteOwnerKind::Authority
                 && device_local
                     .resolve_owner_ability(&selector.owner_ura, &selector.public_name)
                     .is_some()
@@ -776,7 +773,9 @@ impl<'a> DaemonRouteResolver<'a> {
                 );
             }
 
-            if let Some(host_node_id) = self.local_host_node_id_for_agent(&selector, device_local) {
+            if let Some(host_node_id) =
+                self.local_host_node_id_for_agent(&selector, device_local)?
+            {
                 return self.resolve_route_from_local_runtime(
                     &selector,
                     device_local,
@@ -786,10 +785,7 @@ impl<'a> DaemonRouteResolver<'a> {
                 );
             }
 
-            let is_agent_owner = crate::core::ura::parse_ura(&selector.owner_ura)
-                .ok()
-                .is_some_and(|parsed| parsed.kind == crate::core::ura::URAKind::Agent);
-            if is_agent_owner
+            if selector.owner_kind == RouteOwnerKind::Agent
                 && device_local
                     .resolve_owner_ability(&selector.owner_ura, &selector.public_name)
                     .is_some()
@@ -876,17 +872,23 @@ impl<'a> DaemonRouteResolver<'a> {
         &self,
         selector: &RouteSelector,
         device_local: &LocalNamespaceAuthoritySource,
-    ) -> Option<Option<String>> {
-        let parsed = crate::core::ura::parse_ura(&selector.owner_ura).ok()?;
-        if parsed.kind != crate::core::ura::URAKind::Agent {
-            return None;
+    ) -> Result<Option<Option<String>>, ResolveRouteFailure> {
+        if selector.owner_kind != RouteOwnerKind::Agent {
+            return Ok(None);
         }
+        let parsed = crate::core::ura::parse_ura(&selector.owner_ura).map_err(|err| {
+            ResolveRouteFailure {
+                query_name: selector.query_name.clone(),
+                reason: NegativeReason::Refused,
+                detail: format!("selector owner URA is invalid: {err}"),
+            }
+        })?;
 
         if let Some(placement) = device_local
             .hosted_agents
             .local_host_for(&selector.owner_ura, &device_local.local_authority_ura)
         {
-            return Some(placement.host_node_id.clone());
+            return Ok(Some(placement.host_node_id.clone()));
         }
 
         let hosted_by_this_device = parsed
@@ -896,7 +898,8 @@ impl<'a> DaemonRouteResolver<'a> {
                     .filter(|self_id| self_id.as_str() == device_id)
             })
             .is_some();
-        hosted_by_this_device.then(|| device_id_from_device_ura(&device_local.local_authority_ura))
+        Ok(hosted_by_this_device
+            .then(|| device_id_from_device_ura(&device_local.local_authority_ura)))
     }
 
     /// Resolve a route for an owner from the resolver's directory: live
@@ -1081,9 +1084,7 @@ impl<'a> DaemonRouteResolver<'a> {
                 }
             })?,
         };
-        let owner_is_agent = crate::core::ura::parse_ura(&selector.owner_ura)
-            .map(|parsed| parsed.kind == crate::core::ura::URAKind::Agent)
-            .unwrap_or(false);
+        let owner_is_agent = selector.owner_kind == RouteOwnerKind::Agent;
         if selector.owner_ura != target_ura && !owner_is_agent {
             return Err(ResolveRouteFailure {
                 query_name: selector.query_name,
@@ -1188,8 +1189,12 @@ impl<'a> DaemonRouteResolver<'a> {
         let mut records = Vec::new();
         for agent in &directory.agents {
             records.push(id_record(&agent.ura, self.now_unix_ms));
-            if let Some(record) = hosted_by_record_for_agent(agent, self.now_unix_ms) {
-                records.push(record);
+            match hosted_by_record_for_agent(agent, self.now_unix_ms) {
+                Ok(Some(record)) => records.push(record),
+                Ok(None) => {}
+                Err(detail) => {
+                    return negative_answer_json(query_name, NegativeReason::Refused, Some(&detail))
+                }
             }
             for summary in &agent.abilities {
                 let Some(ability_record) = ability_record_from_summary(summary, self.now_unix_ms)
@@ -1319,8 +1324,48 @@ fn next_directory_cursor(records: &mut Vec<Value>, requested_limit: usize) -> Op
 struct RouteSelector {
     query_name: String,
     owner_ura: String,
+    owner_kind: RouteOwnerKind,
     ability_ura: String,
     public_name: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RouteOwnerKind {
+    Device,
+    Authority,
+    Agent,
+}
+
+impl RouteOwnerKind {
+    fn from_ability_selector(
+        selector: &crate::core::ura::AbilitySelector,
+        query_name: &str,
+    ) -> Result<Self, ResolveRouteFailure> {
+        match selector.owner_kind() {
+            "device" => Ok(Self::Device),
+            "hub" => Ok(Self::Authority),
+            "agent" => Ok(Self::Agent),
+            other => Err(ResolveRouteFailure {
+                query_name: query_name.to_string(),
+                reason: NegativeReason::Refused,
+                detail: format!("ability selector owner kind `{other}` is not routable"),
+            }),
+        }
+    }
+}
+
+fn route_selector_from_ability_selector(
+    query_name: String,
+    selector: crate::core::ura::AbilitySelector,
+) -> Result<RouteSelector, ResolveRouteFailure> {
+    let owner_kind = RouteOwnerKind::from_ability_selector(&selector, &query_name)?;
+    Ok(RouteSelector {
+        query_name,
+        owner_ura: selector.owner_ura().to_string(),
+        owner_kind,
+        ability_ura: selector.ability_ura().to_string(),
+        public_name: selector.public_name().to_string(),
+    })
 }
 
 fn route_selector_from_query(
@@ -1330,12 +1375,11 @@ fn route_selector_from_query(
     if ability_name.trim().is_empty() {
         if looks_like_descriptor_ref(query_name) {
             let selector = ability_selector_from_descriptor_ref(query_name)?;
-            return Ok(Some(RouteSelector {
-                query_name: selector.ability_ura().to_string(),
-                owner_ura: selector.owner_ura().to_string(),
-                ability_ura: selector.ability_ura().to_string(),
-                public_name: selector.public_name().to_string(),
-            }));
+            return route_selector_from_ability_selector(
+                selector.ability_ura().to_string(),
+                selector,
+            )
+            .map(Some);
         }
         if is_ability_ura(query_name) {
             let selector =
@@ -1346,12 +1390,8 @@ fn route_selector_from_query(
                         detail: format!("ability URA selector parse failed: {error}"),
                     }
                 })?;
-            return Ok(Some(RouteSelector {
-                query_name: query_name.to_string(),
-                owner_ura: selector.owner_ura().to_string(),
-                ability_ura: selector.ability_ura().to_string(),
-                public_name: selector.public_name().to_string(),
-            }));
+            return route_selector_from_ability_selector(query_name.to_string(), selector)
+                .map(Some);
         }
     }
     let owner_ura = query_name.trim();
@@ -1373,12 +1413,8 @@ fn route_selector_from_query(
         if selector.owner_ura() != owner_ura {
             return Ok(None);
         }
-        return Ok(Some(RouteSelector {
-            query_name: selector.ability_ura().to_string(),
-            owner_ura: selector.owner_ura().to_string(),
-            ability_ura: selector.ability_ura().to_string(),
-            public_name: selector.public_name().to_string(),
-        }));
+        return route_selector_from_ability_selector(selector.ability_ura().to_string(), selector)
+            .map(Some);
     }
     let public_name = crate::core::ura::owner_local_ability_name(owner_ura, ability_name);
     let ability_ura =
@@ -1389,12 +1425,14 @@ fn route_selector_from_query(
                 detail: "owner-local ability URA build failed".to_string(),
             }
         })?;
-    Ok(Some(RouteSelector {
-        query_name: format!("{owner_ura}#{public_name}"),
-        owner_ura: owner_ura.to_string(),
-        ability_ura,
-        public_name,
-    }))
+    let selector = crate::core::ura::AbilitySelector::parse(&ability_ura).map_err(|error| {
+        ResolveRouteFailure {
+            query_name: format!("{owner_ura}#{public_name}"),
+            reason: NegativeReason::Refused,
+            detail: format!("owner-local ability selector parse failed: {error}"),
+        }
+    })?;
+    route_selector_from_ability_selector(format!("{owner_ura}#{public_name}"), selector).map(Some)
 }
 
 fn route_selector_from_descriptor_ref(
@@ -1413,12 +1451,7 @@ fn route_selector_from_descriptor_ref(
         });
     }
     let public_name = selector.public_name().to_string();
-    Ok(RouteSelector {
-        query_name: format!("{owner_ura}#{public_name}"),
-        owner_ura: owner_ura.to_string(),
-        ability_ura: selector.ability_ura().to_string(),
-        public_name,
-    })
+    route_selector_from_ability_selector(format!("{owner_ura}#{public_name}"), selector)
 }
 
 fn ability_selector_from_descriptor_ref(
@@ -1645,22 +1678,31 @@ fn id_record(name: &str, now_unix_ms: i64) -> Value {
     })
 }
 
-fn hosted_by_record_for_agent(agent: &ResolveAgentSummary, now_unix_ms: i64) -> Option<Value> {
-    let host_node_id = agent.host_node_id.as_deref()?.trim();
+fn hosted_by_record_for_agent(
+    agent: &ResolveAgentSummary,
+    now_unix_ms: i64,
+) -> Result<Option<Value>, String> {
+    let Some(host_node_id) = agent.host_node_id.as_deref().map(str::trim) else {
+        return Ok(None);
+    };
     if host_node_id.is_empty() {
-        return None;
+        return Ok(None);
     }
-    let parsed = crate::core::ura::parse_ura(&agent.ura).ok()?;
+    let parsed = crate::core::ura::parse_ura(&agent.ura)
+        .map_err(|err| format!("directory agent URA is invalid: {err}"))?;
     if parsed.kind != crate::core::ura::URAKind::Agent {
-        return None;
+        return Err(format!(
+            "directory hosted_by record requires Agent owner, got {}",
+            parsed.kind
+        ));
     }
     let host_ura = crate::core::ura::device_ura(&parsed.realm, host_node_id);
-    Some(hosted_by_record(
+    Ok(Some(hosted_by_record(
         &agent.ura,
         &host_ura,
         host_node_id,
         now_unix_ms,
-    ))
+    )))
 }
 
 fn hosted_by_record(
@@ -2285,6 +2327,33 @@ mod tests {
         assert_eq!(route.owner_ura, owner_ura);
         assert_eq!(route.ability_ura, ability_ura);
         assert_eq!(route.dispatch_name, "agent.list");
+    }
+
+    #[test]
+    fn route_selector_carries_owner_kind_from_ability_selector() {
+        let device_ura = device_owner_ura();
+        let device_ability =
+            crate::core::ura::owner_ability_ura(&device_ura, "agent.list").expect("device ability");
+        let device_selector = route_selector_from_query(&device_ability, "")
+            .expect("device selector")
+            .expect("device selector present");
+        assert_eq!(device_selector.owner_kind, RouteOwnerKind::Device);
+
+        let hub_ura = crate::core::ura::hub_ura("test-realm");
+        let hub_ability = crate::core::ura::owner_ability_ura(&hub_ura, "meta.list_abilities")
+            .expect("hub ability");
+        let hub_selector = route_selector_from_query(&hub_ability, "")
+            .expect("hub selector")
+            .expect("hub selector present");
+        assert_eq!(hub_selector.owner_kind, RouteOwnerKind::Authority);
+
+        let agent_ura = crate::core::ura::agent_ura("test-realm", "alice", "worker");
+        let agent_ability = crate::core::ura::owner_ability_ura(&agent_ura, "browser.open_session")
+            .expect("agent ability");
+        let agent_selector = route_selector_from_query(&agent_ura, &agent_ability)
+            .expect("agent selector")
+            .expect("agent selector present");
+        assert_eq!(agent_selector.owner_kind, RouteOwnerKind::Agent);
     }
 
     #[test]

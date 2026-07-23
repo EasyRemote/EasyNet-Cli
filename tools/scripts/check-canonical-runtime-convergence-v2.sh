@@ -3533,6 +3533,14 @@ descriptor_signature, descriptor_body = function_slice(
 
 if "Result<Option<RouteSelector>, ResolveRouteFailure>" not in route_signature:
     raise SystemExit("route_resolver:descriptor_ref_selector:route_selector_not_fallible")
+for required_selector_state in (
+    "owner_kind: RouteOwnerKind",
+    "enum RouteOwnerKind",
+    "fn route_selector_from_ability_selector(",
+    "RouteOwnerKind::from_ability_selector",
+):
+    if required_selector_state not in production:
+        raise SystemExit(f"route_resolver:descriptor_ref_selector:owner_kind_state_missing:{required_selector_state}")
 if "ability_selector_from_descriptor_ref(query_name)?" not in route_body:
     raise SystemExit("route_resolver:descriptor_ref_selector:query_parse_not_propagated")
 if "route_selector_from_descriptor_ref(owner_ura, ability_name).map(Some)" not in route_body:
@@ -3551,9 +3559,18 @@ for pattern, label in legacy_patterns.items():
     if re.sub(r"\s+", "", pattern) in compact_descriptor:
         raise SystemExit(f"route_resolver:descriptor_ref_selector:{label}")
 
+compact_production = re.sub(r"\s+", "", production)
+for pattern, label in {
+    "parse_ura(&selector.owner_ura).ok()": "selector_owner_parse_none",
+    "parse_ura(&selector.owner_ura).map(|parsed| parsed.kind == crate::core::ura::URAKind::Agent).unwrap_or(false)": "selector_owner_kind_default_false",
+}.items():
+    if re.sub(r"\s+", "", pattern) in compact_production:
+        raise SystemExit(f"route_resolver:descriptor_ref_selector:{label}")
+
 for required_test in (
     "malformed_descriptor_ref_does_not_fall_through_as_public_name",
     "descriptor_ref_owner_mismatch_fails_before_route_lookup",
+    "route_selector_carries_owner_kind_from_ability_selector",
 ):
     if required_test not in text:
         raise SystemExit(f"route_resolver:descriptor_ref_selector:missing_test:{required_test}")
