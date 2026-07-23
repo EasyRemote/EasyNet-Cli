@@ -523,9 +523,25 @@ mod tests {
         register_with_backend(reg, Arc::new(SyntheticMicBackend));
     }
 
+    const TEST_DEVICE_URA: &str = "easynet:///r/test/device/mic-subscribe";
+
+    fn metadata_test_catalog() -> AxonAbilityCatalog {
+        AxonAbilityCatalog::new_test_metadata_for_device_authority(TEST_DEVICE_URA)
+    }
+
+    fn runtime_test_catalog() -> AxonAbilityCatalog {
+        AxonAbilityCatalog::new_test_runtime_for_device_authority(
+            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+                crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+                None,
+            ),
+            TEST_DEVICE_URA,
+        )
+    }
+
     #[test]
     fn registration_publishes_mic_descriptor_to_catalog_snapshot() {
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = metadata_test_catalog();
         register_synthetic(&mut reg);
         let rows = reg.authority_ability_catalog_snapshot();
         let descriptor = rows
@@ -550,12 +566,7 @@ mod tests {
         let mut file = ResourcesFile::default();
         let ura = seed_mic(&mut file, "h-mic-e2e");
         resources::save(&file).unwrap();
-        let mut reg = AxonAbilityCatalog::new_with_runtime(
-            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
-                crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
-                None,
-            ),
-        );
+        let mut reg = runtime_test_catalog();
         register_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
         let target = crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
@@ -625,12 +636,7 @@ mod tests {
         )
         .expect("seed wrong-type camera resource");
         resources::save(&file).unwrap();
-        let mut reg = AxonAbilityCatalog::new_with_runtime(
-            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
-                crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
-                None,
-            ),
-        );
+        let mut reg = runtime_test_catalog();
         register_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
         let target = crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
@@ -646,12 +652,7 @@ mod tests {
     #[test]
     fn handler_rejects_subject_in_args() {
         let _g = crate::cli::commands::test_support::HomeGuard::new();
-        let mut reg = AxonAbilityCatalog::new_with_runtime(
-            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
-                crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
-                None,
-            ),
-        );
+        let mut reg = runtime_test_catalog();
         register_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
         let target = crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
@@ -672,12 +673,7 @@ mod tests {
             .expect("create state dir");
         std::fs::write(&path, b"{not-json").expect("write corrupt resources table");
 
-        let mut reg = AxonAbilityCatalog::new_with_runtime(
-            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
-                crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
-                None,
-            ),
-        );
+        let mut reg = runtime_test_catalog();
         register_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
         let target = crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
