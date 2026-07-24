@@ -712,3 +712,57 @@ architecture rather than add feature surface.
   - `tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
   - `tools/scripts/check-architecture-convergence.sh`
   - `git diff --check`
+
+## Iteration 18 candidate policy
+
+- Focus on Mission dispatch terminal artifact persistence. codegraph confirmed
+  `RunDir::write_response` and `RunDir::write_meta` are owned by the Mission
+  dispatch path; rg found that both failures are still warning-only
+  (`response_write_failed`, `meta_write_failed`) after Iteration 17 made run
+  directory creation, prompt persistence, and Timeline writes required.
+- The root abstraction problem is a half-audited terminal state. A dispatch can
+  currently run the adapter and emit a terminal Timeline event even when
+  `response.md` or `meta.json` cannot be written, leaving operators with an
+  incomplete run directory while public response semantics still look
+  successful.
+- The intended cutover is to make terminal artifacts part of the dispatch
+  terminal decision:
+  - successful runtime output requires `response.md` persistence;
+  - every runtime outcome requires `meta.json` persistence;
+  - terminal artifact persistence failure converts the dispatch terminal event
+    to `failed` before any terminal event is emitted;
+  - the returned result is not successful when terminal artifacts are
+    incomplete;
+  - runtime errors and artifact errors are combined instead of one silently
+    shadowing the other.
+- Verification must prove a response artifact write failure turns an otherwise
+  successful adapter output into a failed terminal artifact outcome, and SPEC v2
+  must reject reintroducing warning-only response/meta write fallbacks.
+
+## Iteration 18 decision log
+
+- Refactored Mission dispatch terminal artifact handling into
+  `persist_terminal_run_artifacts`, keeping response/meta persistence decisions
+  out of the main adapter invocation flow.
+- Removed warning-only `response_write_failed` and `meta_write_failed` handling
+  from the dispatch terminal path. A missing `response.md` or `meta.json`
+  projection now participates in the terminal decision.
+- Added `terminal_dispatch_error_message` so runtime errors and terminal
+  artifact persistence errors are combined rather than one silently shadowing
+  the other.
+- Changed successful adapter output with incomplete terminal artifacts into a
+  failed terminal Timeline event before any terminal event is emitted.
+- Added focused coverage proving response artifact write failure turns an
+  otherwise successful adapter output into a failed terminal artifact outcome
+  and records the artifact failure in `meta.json`.
+- Strengthened SPEC v2 `check_mission_dispatch_audit_authority_contract` to
+  reject warning-only response/meta write fallbacks and require the terminal
+  artifact helper/test.
+- Verification passed:
+  - `cargo test -q daemon::execution::mission::dispatch::tests`
+  - `cargo check -q`
+  - `cargo fmt --check`
+  - `tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - `tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  - `tools/scripts/check-architecture-convergence.sh`
+  - `git diff --check`

@@ -6795,6 +6795,8 @@ for retired in (
     "run_dir.as_ref().map",
     "timeline_admitted_emit_failed",
     "timeline_terminal_emit_failed",
+    "response_write_failed",
+    "meta_write_failed",
 ):
     if retired in dispatch:
         raise SystemExit(f"mission_dispatch_audit_authority:retired:{retired}")
@@ -6804,7 +6806,12 @@ for required in (
     "agent dispatch requires prompt persistence",
     "agent dispatch requires admitted timeline event",
     "agent dispatch requires terminal timeline event",
+    "agent dispatch requires response persistence",
+    "agent dispatch requires meta persistence",
+    "persist_terminal_run_artifacts(",
+    "terminal_dispatch_error_message(",
     "dispatch_rejects_run_store_creation_failure_before_adapter_spawn",
+    "terminal_artifact_response_failure_turns_success_into_failed_outcome",
     "run_dir: Some(run_dir.path().to_path_buf())",
 ):
     if required not in dispatch:
@@ -15781,6 +15788,12 @@ fn send_to_agent_with_depth_and_progress(root: &Path) {
     }
     if let Err(_) = session.writer().emit("completed", None) {
         op_event!(kind = timeline_terminal_emit_failed, fallback = "run_dir_meta_is_authoritative");
+    }
+    if let Err(_) = run_dir.write_response("response") {
+        op_event!(kind = response_write_failed);
+    }
+    if let Err(_) = run_dir.write_meta(&meta) {
+        op_event!(kind = meta_write_failed);
     }
     let _ = run_dir.as_ref().map(|d| d.path().to_path_buf());
 }

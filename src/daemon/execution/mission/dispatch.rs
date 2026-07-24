@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::daemon::persistence::agent_registry::AgentEntry;
 
-use super::adapter::InvokeOpts;
+use super::adapter::{AdapterOutput, InvokeOpts};
 use super::context::{self, DispatchContext};
 use super::drivers::adapter_for;
 use super::run_store::{RunDir, RunMeta};
@@ -591,67 +591,21 @@ pub fn send_to_agent_with_depth_and_progress(
         },
     );
 
-    // Write meta.json regardless of success/failure so failed runs are still
-    // inspectable.
+    // Persist terminal artifacts before emitting the terminal Timeline event.
+    // Artifact persistence participates in the terminal decision: a completed
+    // adapter run with an incomplete run directory is a failed dispatch, not a
+    // successful invocation with missing audit files.
     let duration_ms = start.elapsed().as_millis() as u64;
-    let (exit_status, error, content_for_meta, usage_for_meta) = match &run_result {
-        Ok(out) => (
-            "ok".to_string(),
-            None,
-            Some(out.content.as_str()),
-            out.usage.clone(),
-        ),
-        Err(e) => ("error".to_string(), Some(e.to_string()), None, None),
-    };
-    if let Some(text) = content_for_meta {
-        if let Err(e) = run_dir.write_response(text) {
-            let path_display = format!("{}", run_dir.path().display());
-            let err_msg = format!("{e}");
-            crate::op_event!(
-                component = dispatch,
-                kind = response_write_failed,
-                level = "warn",
-                run_path = path_display,
-                error = err_msg,
-            );
-        }
-    }
-    let u = usage_for_meta.unwrap_or_default();
-    let meta = RunMeta {
-        agent: agent_name.to_string(),
-        agent_type: entry.agent_type.to_string(),
-        // Record the model actually dispatched, which is
-        // spec-resolved above. A stale entry.model on the
-        // registry row must not shadow the spec's choice in
-        // the audit trail.
-        model: effective_model.clone(),
-        // Cross-reference key to the PersistentLog event log.
-        // Operators grepping for this id under
-        // `$AXON_INVOCATION_LOG_DIR/<id>.jsonl` find the
-        // P1-P6-compliant stream of events for this run.
-        invocation_id: session.invocation_id().to_string(),
+    let artifact_error = persist_terminal_run_artifacts(TerminalRunArtifacts {
+        run_dir: run_dir.as_ref(),
+        agent_name,
+        entry,
+        effective_model: effective_model.clone(),
+        invocation_id: session.invocation_id(),
         started_at,
         duration_ms,
-        exit_status,
-        error,
-        input_tokens: u.input_tokens,
-        output_tokens: u.output_tokens,
-        cache_read_tokens: u.cache_read_tokens,
-        cache_creation_tokens: u.cache_creation_tokens,
-        num_turns: u.num_turns,
-        total_cost_usd: u.total_cost_usd,
-    };
-    if let Err(e) = run_dir.write_meta(&meta) {
-        let path_display = format!("{}", run_dir.path().display());
-        let err_msg = format!("{e}");
-        crate::op_event!(
-            component = dispatch,
-            kind = meta_write_failed,
-            level = "warn",
-            run_path = path_display,
-            error = err_msg,
-        );
-    }
+        run_result: &run_result,
+    });
 
     // Terminal timeline event. One of `completed` / `failed`
     // matches the INVOCATION_STATE_MACHINE.md §2 event kinds.
@@ -667,8 +621,10 @@ pub fn send_to_agent_with_depth_and_progress(
     // The fsync on this emit is what gives the log its P4 terminal
     // idempotence: a reader opening the log after we exit finds
     // the terminal state durably recorded.
-    let (terminal_type, terminal_payload) = match &run_result {
-        Ok(out) => (
+    let final_error_message =
+        terminal_dispatch_error_message(&run_result, artifact_error.as_deref());
+    let (terminal_type, terminal_payload) = match (&run_result, final_error_message.as_deref()) {
+        (Ok(out), None) => (
             "completed",
             serde_json::json!({
                 "content_len": out.content.len(),
@@ -677,9 +633,14 @@ pub fn send_to_agent_with_depth_and_progress(
                 "tool_call_count": out.tool_calls.len(),
             }),
         ),
-        Err(e) => (
+        _ => (
             "failed",
-            dispatch_terminal_failure_payload(&e.to_string(), duration_ms),
+            dispatch_terminal_failure_payload(
+                final_error_message
+                    .as_deref()
+                    .unwrap_or("agent dispatch failed"),
+                duration_ms,
+            ),
         ),
     };
     session
@@ -687,6 +648,9 @@ pub fn send_to_agent_with_depth_and_progress(
         .emit(terminal_type, Some(terminal_payload))
         .map_err(|e| anyhow::anyhow!("agent dispatch requires terminal timeline event: {e}"))?;
 
+    if let Some(error) = final_error_message {
+        anyhow::bail!("{error}");
+    }
     let output = run_result?;
 
     Ok(AgentResponse {
@@ -702,6 +666,97 @@ pub fn send_to_agent_with_depth_and_progress(
         tool_calls: output.tool_calls,
         thread_id: output.thread_id,
     })
+}
+
+struct TerminalRunArtifacts<'a> {
+    run_dir: &'a RunDir,
+    agent_name: &'a str,
+    entry: &'a AgentEntry,
+    effective_model: Option<String>,
+    invocation_id: &'a str,
+    started_at: String,
+    duration_ms: u64,
+    run_result: &'a anyhow::Result<AdapterOutput>,
+}
+
+fn persist_terminal_run_artifacts(artifacts: TerminalRunArtifacts<'_>) -> Option<String> {
+    let TerminalRunArtifacts {
+        run_dir,
+        agent_name,
+        entry,
+        effective_model,
+        invocation_id,
+        started_at,
+        duration_ms,
+        run_result,
+    } = artifacts;
+
+    let mut artifact_errors = Vec::new();
+    if let Ok(output) = run_result {
+        if let Err(error) = run_dir.write_response(&output.content) {
+            artifact_errors.push(format!(
+                "agent dispatch requires response persistence at {}: {error}",
+                run_dir.path().display()
+            ));
+        }
+    }
+
+    let runtime_error = run_result.as_ref().err().map(|error| error.to_string());
+    let terminal_error = artifact_errors
+        .first()
+        .cloned()
+        .or_else(|| runtime_error.clone());
+    let usage = run_result
+        .as_ref()
+        .ok()
+        .and_then(|output| output.usage.clone())
+        .unwrap_or_default();
+    let meta = RunMeta {
+        agent: agent_name.to_string(),
+        agent_type: entry.agent_type.to_string(),
+        model: effective_model,
+        invocation_id: invocation_id.to_string(),
+        started_at,
+        duration_ms,
+        exit_status: if terminal_error.is_some() {
+            "error".to_string()
+        } else {
+            "ok".to_string()
+        },
+        error: terminal_error,
+        input_tokens: usage.input_tokens,
+        output_tokens: usage.output_tokens,
+        cache_read_tokens: usage.cache_read_tokens,
+        cache_creation_tokens: usage.cache_creation_tokens,
+        num_turns: usage.num_turns,
+        total_cost_usd: usage.total_cost_usd,
+    };
+    if let Err(error) = run_dir.write_meta(&meta) {
+        artifact_errors.push(format!(
+            "agent dispatch requires meta persistence at {}: {error}",
+            run_dir.path().display()
+        ));
+    }
+
+    if artifact_errors.is_empty() {
+        None
+    } else {
+        Some(artifact_errors.join("; "))
+    }
+}
+
+fn terminal_dispatch_error_message(
+    run_result: &anyhow::Result<AdapterOutput>,
+    artifact_error: Option<&str>,
+) -> Option<String> {
+    match (run_result, artifact_error) {
+        (Ok(_), None) => None,
+        (Ok(_), Some(artifact)) => Some(artifact.to_string()),
+        (Err(runtime), None) => Some(runtime.to_string()),
+        (Err(runtime), Some(artifact)) => Some(format!(
+            "agent dispatch failed and terminal artifact persistence failed: runtime={runtime}; artifact={artifact}"
+        )),
+    }
 }
 
 fn dispatch_terminal_failure_payload(message: &str, duration_ms: u64) -> serde_json::Value {
@@ -1735,6 +1790,62 @@ mod tests {
             "SECURITY_CLASS_TRANSPORT"
         );
         assert_eq!(payload["failure"]["retryable"], true);
+    }
+
+    #[test]
+    fn terminal_artifact_response_failure_turns_success_into_failed_outcome() {
+        let root = tempfile::tempdir().unwrap();
+        let run_dir = RunDir {
+            path: root.path().to_path_buf(),
+        };
+        std::fs::create_dir(run_dir.path().join("response.md")).unwrap();
+        let entry = dummy_entry();
+        let run_result = Ok(AdapterOutput {
+            content: "synthetic response".to_string(),
+            usage: Some(AgentUsage {
+                input_tokens: 1,
+                output_tokens: 2,
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+
+        let artifact_error = persist_terminal_run_artifacts(TerminalRunArtifacts {
+            run_dir: &run_dir,
+            agent_name: "alice",
+            entry: &entry,
+            effective_model: Some("model-x".to_string()),
+            invocation_id: "cli-test",
+            started_at: "2026-07-24T00:00:00+08:00".to_string(),
+            duration_ms: 7,
+            run_result: &run_result,
+        })
+        .expect("response artifact failure must be reported");
+
+        assert!(
+            artifact_error.contains("requires response persistence"),
+            "expected response persistence error, got: {artifact_error}"
+        );
+        let final_error =
+            terminal_dispatch_error_message(&run_result, Some(&artifact_error)).unwrap();
+        assert!(
+            final_error.contains("requires response persistence"),
+            "artifact failure must become terminal dispatch error, got: {final_error}"
+        );
+        let meta: RunMeta = serde_json::from_str(
+            &std::fs::read_to_string(run_dir.path().join("meta.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(meta.exit_status, "error");
+        assert_eq!(meta.invocation_id, "cli-test");
+        assert!(
+            meta.error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("requires response persistence"),
+            "meta must record the artifact failure, got {:?}",
+            meta.error
+        );
     }
 
     #[test]
