@@ -24,7 +24,10 @@ from easynet_sdk._cabi import (
     _project_cabi_ordered_event,
     _resolve_descriptor_ref_from_diagnostics,
 )
-from easynet_sdk.providers.easynet.lifecycle import DaemonMode, StartConfig
+from easynet_sdk.providers.runtime.lifecycle import (
+    RuntimeHostMode,
+    RuntimeHostStartConfig,
+)
 
 from test_runtime import canonical_runtime_receipt_pair, complete_draft
 
@@ -678,7 +681,10 @@ class CABITransportTests(unittest.TestCase):
         raw = FakeRawCABI()
         lifecycle = CABIRuntimeLifecycleTransport(CLILibrary(raw))
         handle = RuntimeLifecycle(lifecycle).start(
-            StartConfig(mode=DaemonMode.DEVICE, device_id="dev-a")
+            RuntimeHostStartConfig(
+                mode=RuntimeHostMode.EDGE,
+                runtime_instance_id="dev-a",
+            )
         )
         runtime = handle.open_runtime(ConnectOptions())
 
@@ -692,7 +698,10 @@ class CABITransportTests(unittest.TestCase):
         raw = FakeRawCABI()
         lifecycle = CABIRuntimeLifecycleTransport(CLILibrary(raw))
         handle = RuntimeLifecycle(lifecycle).start(
-            StartConfig(mode=DaemonMode.DEVICE, device_id="dev-a")
+            RuntimeHostStartConfig(
+                mode=RuntimeHostMode.EDGE,
+                runtime_instance_id="dev-a",
+            )
         )
 
         self.assertFalse(hasattr(handle, "identity"))

@@ -104,9 +104,9 @@ class RuntimeInvocationTransport:
         library_path: str | None = None,
         options: ConnectOptions = ConnectOptions(),
     ) -> "RuntimeInvocationTransport":
-        """REQ-LANG-5 delegate to the explicit EasyNet C ABI provider."""
+        """REQ-LANG-5 delegate to the explicit runtime C ABI provider."""
 
-        from .providers.easynet.transport import connect_invocation_transport
+        from .providers.runtime.transport import connect_invocation_transport
 
         return connect_invocation_transport(
             control_path=control_path,
@@ -123,9 +123,9 @@ class RuntimeInvocationTransport:
         options: ConnectOptions = ConnectOptions(),
         identity: Any | None = None,
     ) -> "RuntimeInvocationTransport":
-        """REQ-LANG-5 delegate to the explicit EasyNet direct provider."""
+        """REQ-LANG-5 delegate to the explicit runtime direct provider."""
 
-        from .providers.easynet.transport import connect_direct_invocation_transport
+        from .providers.runtime.transport import connect_direct_invocation_transport
 
         return connect_direct_invocation_transport(
             control_path=control_path,

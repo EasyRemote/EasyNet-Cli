@@ -54,12 +54,12 @@ func TestGoSDKLiveDaemonSmoke(t *testing.T) {
 	logPath := filepath.Join(home, ".easynet", "go-sdk-smoke-daemon.log")
 	handle, err := control.StartRuntime(ctx, testRuntimeHostStartRequest{
 		payload: map[string]any{
-			"mode":        "device",
-			"realm":       realm,
-			"device_id":   deviceID,
-			"daemon_bin":  daemonBin,
-			"working_dir": repoRoot,
-			"log_path":    logPath,
+			"mode":                "device",
+			"realm":               realm,
+			"runtime_instance_id": deviceID,
+			"runtime_bin":         daemonBin,
+			"working_dir":         repoRoot,
+			"log_path":            logPath,
 			"env": map[string]string{
 				"HOME":                     home,
 				"EASYNET_REALM_TRUST_PATH": trustPath,

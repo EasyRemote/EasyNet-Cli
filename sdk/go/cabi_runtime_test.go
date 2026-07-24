@@ -224,12 +224,12 @@ func TestProjectCABIOrderedEventDoesNotSynthesizeKindFromLegacyEvent(t *testing.
 	}
 }
 
-func TestCABIDaemonStartConfigProjectsFacadeShape(t *testing.T) {
+func TestCABIRuntimeHostStartConfigProjectsFacadeShape(t *testing.T) {
 	raw, err := runtimeHostStartConfigForCABI([]byte(`{
 		"mode":"device",
 		"realm":"lab",
-		"device_id":"device-a",
-		"daemon_bin":"/usr/local/bin/easynet",
+		"runtime_instance_id":"runtime-a",
+		"runtime_bin":"/usr/local/bin/runtime-host",
 		"working_dir":"/srv/easynet",
 		"log_path":"/tmp/easynet.log",
 		"detached":true,
@@ -243,10 +243,10 @@ func TestCABIDaemonStartConfigProjectsFacadeShape(t *testing.T) {
 		t.Fatalf("decode projected config: %v", err)
 	}
 
-	if projected["device_id"] != "device-a" {
-		t.Fatalf("device_id = %v, want device-a", projected["device_id"])
+	if projected["runtime_instance_id"] != "runtime-a" {
+		t.Fatalf("runtime_instance_id = %v, want runtime-a", projected["runtime_instance_id"])
 	}
-	if projected["node_id"] != nil || projected["detach"] != nil {
+	if projected["device_id"] != nil || projected["node_id"] != nil || projected["daemon_bin"] != nil || projected["detach"] != nil {
 		t.Fatalf("projected config leaked legacy keys: %v", projected)
 	}
 	if projected["detached"] != true {
@@ -256,11 +256,11 @@ func TestCABIDaemonStartConfigProjectsFacadeShape(t *testing.T) {
 		t.Fatalf("working_dir = %v, want /srv/easynet", projected["working_dir"])
 	}
 	if projected["mode"] != "device" || projected["realm"] != "lab" {
-		t.Fatalf("projected config lost daemon fields: %v", projected)
+		t.Fatalf("projected config lost runtime host fields: %v", projected)
 	}
 }
 
-func TestCABIDaemonStartConfigRejectsUnsupportedTransportFields(t *testing.T) {
+func TestCABIRuntimeHostStartConfigRejectsUnsupportedTransportFields(t *testing.T) {
 	_, err := runtimeHostStartConfigForCABI([]byte(`{
 		"mode":"hub",
 		"uds_path":"/tmp/easynet.sock",
@@ -857,8 +857,8 @@ func openFakeCABIRuntime(t *testing.T) *RuntimeClient {
 	}
 	handle, err := control.StartRuntime(context.Background(), testRuntimeHostStartRequest{
 		payload: map[string]any{
-			"mode":      "device",
-			"device_id": "dev-a",
+			"mode":                "device",
+			"runtime_instance_id": "dev-a",
 		},
 	})
 	if err != nil {

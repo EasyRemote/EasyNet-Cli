@@ -15,7 +15,10 @@ from easynet_sdk import (
     RuntimeSessionListRequest,
     SDKError,
 )
-from easynet_sdk.providers.easynet.lifecycle import DaemonMode, StartConfig
+from easynet_sdk.providers.runtime.lifecycle import (
+    RuntimeHostMode,
+    RuntimeHostStartConfig,
+)
 from easynet_sdk._runtime_admin_routes import (
     _PROFILE as _RUNTIME_ADMIN_PROFILE,
     _RUNTIME_ADMIN_ROUTE_MANIFEST_SHA256,
@@ -137,7 +140,7 @@ def test_runtime_admin_readiness_composes_lifecycle_and_health() -> None:
         HealthClient(MemoryHealthTransport()),
     )
 
-    handle = admin.start(StartConfig(mode=DaemonMode.HUB))
+    handle = admin.start(RuntimeHostStartConfig(mode=RuntimeHostMode.AUTHORITY))
     readiness = admin.readiness(handle)
 
     assert isinstance(handle, RuntimeHandle)

@@ -1542,7 +1542,7 @@ def _runtime_start_config_for_cabi(config_json: bytes) -> bytes:
             "listen_tcp",
             "tls_cert_path",
             "tls_key_path",
-            "hub_endpoint",
+            "authority_endpoint",
             "trust_path",
         )
         if config.get(field_name)
@@ -1561,8 +1561,9 @@ def _runtime_start_config_for_cabi(config_json: bytes) -> bytes:
     for field_name in (
         "mode",
         "realm",
-        "device_id",
-        "daemon_bin",
+        "runtime_instance_id",
+        "runtime_bin",
+        "working_dir",
         "log_path",
         "env",
     ):

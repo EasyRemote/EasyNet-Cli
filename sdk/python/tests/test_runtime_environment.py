@@ -3,7 +3,6 @@ import json
 import pytest
 
 import easynet_sdk
-from easynet_sdk.providers.easynet import read_daemon_runtime_identity_projection
 
 
 def test_runtime_identity_projection_reads_credentials(tmp_path):
@@ -48,55 +47,3 @@ def test_runtime_identity_projection_rejects_missing_runtime_instance_id():
         easynet_sdk.runtime_identity_projection_from_json('{"realm":"acme"}')
     assert exc_info.value.code == easynet_sdk.ErrorCode.INVALID_ARGUMENT
     assert exc_info.value.stage == "runtime_environment"
-
-
-def test_easynet_provider_maps_daemon_credentials_to_canonical_projection(tmp_path):
-    credentials = tmp_path / "credentials.json"
-    credentials.write_text(
-        json.dumps(
-            {
-                "realm": "acme",
-                "device_id": "dev-a",
-                "username": "alice",
-                "hub_endpoint": "hub:443",
-            }
-        )
-    )
-
-    projection = read_daemon_runtime_identity_projection(credentials)
-
-    assert projection.realm == "acme"
-    assert projection.runtime_instance_id == "dev-a"
-    assert projection.principal == "alice"
-    assert projection.control_plane_endpoint == "hub:443"
-
-
-def test_easynet_provider_rejects_retired_daemon_node_id_alias(tmp_path):
-    credentials = tmp_path / "credentials.json"
-    credentials.write_text(
-        json.dumps(
-            {
-                "realm": "acme",
-                "node_id": "dev-a",
-                "username": "alice",
-                "hub_endpoint": "hub:443",
-            }
-        )
-    )
-
-    with pytest.raises(ValueError) as exc_info:
-        read_daemon_runtime_identity_projection(credentials)
-
-    assert "retired node_id identity alias" in str(exc_info.value)
-
-
-def test_easynet_provider_rejects_node_id_even_when_device_id_is_present(tmp_path):
-    credentials = tmp_path / "credentials.json"
-    credentials.write_text(
-        json.dumps({"realm": "acme", "device_id": "dev-a", "node_id": "dev-b"})
-    )
-
-    with pytest.raises(ValueError) as exc_info:
-        read_daemon_runtime_identity_projection(credentials)
-
-    assert "retired node_id identity alias" in str(exc_info.value)

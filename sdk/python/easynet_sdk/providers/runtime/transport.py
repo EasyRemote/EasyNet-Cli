@@ -1,4 +1,4 @@
-"""EasyNet connection lowering into canonical Invocation transport objects."""
+"""Runtime provider connection lowering into canonical Invocation transport objects."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ def connect_invocation_transport(
     library_path: str | None = None,
     options: ConnectOptions = ConnectOptions(),
 ) -> canonical_transport.RuntimeInvocationTransport:
-    """Connect through the explicit easynet-daemon C ABI provider."""
+    """Connect through the explicit local runtime C ABI provider."""
 
     resolved_control_path = options.control_path or control_path
     connection = RuntimeConnection(
@@ -42,7 +42,7 @@ def connect_direct_invocation_transport(
     options: ConnectOptions = ConnectOptions(),
     identity: Any | None = None,
 ) -> canonical_transport.RuntimeInvocationTransport:
-    """Connect to easynet-daemon's direct Axon gRPC-over-UDS endpoint."""
+    """Connect to the local runtime direct Axon gRPC-over-UDS endpoint."""
 
     if identity is None:
         raise SDKError(

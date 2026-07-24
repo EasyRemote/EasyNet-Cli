@@ -6,22 +6,28 @@ from pathlib import Path
 import easynet_sdk
 from easynet_sdk import runtime_lifecycle as canonical_lifecycle
 from easynet_sdk import transport
-import easynet_sdk.providers.easynet as easynet_provider
-from easynet_sdk.providers.easynet import lifecycle as provider_lifecycle
+from easynet_sdk.providers.runtime import lifecycle as provider_lifecycle
 from easynet_sdk.providers.runtime import keyring as provider_keyring
 from easynet_sdk.providers.runtime import plugin_exec as provider_plugin_exec
 
 
-def test_easynet_lifecycle_exports_are_provider_scoped() -> None:
-    assert provider_lifecycle.StartConfig.__module__.endswith("providers.easynet.lifecycle")
-    assert provider_lifecycle.DiscoverOptions.__module__.endswith(
-        "providers.easynet.lifecycle"
+def test_runtime_lifecycle_provider_exports_are_provider_scoped() -> None:
+    assert provider_lifecycle.RuntimeHostStartConfig.__module__.endswith(
+        "providers.runtime.lifecycle"
     )
-    assert provider_lifecycle.DaemonMode.__module__.endswith("providers.easynet.lifecycle")
+    assert provider_lifecycle.RuntimeHostDiscoverConfig.__module__.endswith(
+        "providers.runtime.lifecycle"
+    )
+    assert provider_lifecycle.RuntimeHostMode.__module__.endswith(
+        "providers.runtime.lifecycle"
+    )
     for name in (
         "StartConfig",
         "DiscoverOptions",
         "DaemonMode",
+        "RuntimeHostStartConfig",
+        "RuntimeHostDiscoverConfig",
+        "RuntimeHostMode",
         "start_daemon",
         "discover_daemon",
         "attach_daemon",
@@ -47,10 +53,6 @@ def test_keyring_provider_is_not_reexported_as_canonical_root() -> None:
     assert provider_keyring.RuntimeKeyringSignatureProvider.__module__.endswith(
         "providers.runtime.keyring"
     )
-    assert not hasattr(easynet_provider, "DaemonKeyringSignatureProvider")
-    assert not hasattr(easynet_provider, "RuntimeSigningIdentity")
-    assert not hasattr(easynet_provider, "ensure_runtime_signing_identity")
-    assert not hasattr(easynet_provider, "load_runtime_signing_identity")
     assert not hasattr(easynet_sdk, "DaemonKeyringSignatureProvider")
     assert not hasattr(easynet_sdk, "RuntimeKeyringSignatureProvider")
     assert not hasattr(easynet_sdk, "RuntimeSigningIdentity")
@@ -83,6 +85,11 @@ def test_canonical_lifecycle_does_not_import_product_provider() -> None:
     assert ".providers" not in body
     assert "DaemonMode" not in body
     assert "StartConfig" not in body
+
+
+def test_python_easynet_provider_package_is_retired() -> None:
+    provider_root = Path(easynet_sdk.__file__).resolve().parent / "providers" / "easynet"
+    assert not provider_root.exists()
 
 
 def test_provider_connection_lowering_is_absent_from_canonical_transport() -> None:

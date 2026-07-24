@@ -43,15 +43,15 @@ use crate::ffi::strings::{alloc_output_cstring, read_cstr, StringError};
 /// client session returned by `runtime_init`.
 pub type RuntimeHostHandle = u64;
 
-/// Start or attach to `easynet-daemon`.
+/// Start or attach to the local runtime host.
 ///
 /// `config_json` must be a UTF-8 JSON object with this shape:
 ///
 /// ```text
 /// {
 ///   "mode": "device" | "hub",
-///   "device_id": "dev-a",            // required for device
-///   "daemon_bin": "/path/to/bin",    // optional
+///   "runtime_instance_id": "dev-a",  // required for edge host mode
+///   "runtime_bin": "/path/to/bin",   // optional
 ///   "log_path": "/path/to/log",      // optional
 ///   "detached": true,                // optional
 ///   "env": {"KEY": "VALUE"}          // optional string map
@@ -530,9 +530,9 @@ fn remove_host_handle(handle: RuntimeHostHandle) -> Option<Arc<ActiveDaemonHandl
 #[derive(Debug)]
 struct DaemonStartConfigJson {
     mode: DaemonStartMode,
-    device_id: Option<String>,
+    runtime_instance_id: Option<String>,
     realm: Option<String>,
-    daemon_bin: Option<String>,
+    runtime_bin: Option<String>,
     working_dir: Option<String>,
     log_path: Option<String>,
     detached: Option<bool>,
@@ -547,9 +547,9 @@ impl DaemonStartConfigJson {
             .ok_or(DaemonStartConfigError::ExpectedObject)?;
         Ok(Self {
             mode: DaemonStartMode::parse(required_string(obj, "mode")?)?,
-            device_id: optional_string(obj, "device_id")?,
+            runtime_instance_id: optional_string(obj, "runtime_instance_id")?,
             realm: optional_string(obj, "realm")?,
-            daemon_bin: optional_string(obj, "daemon_bin")?,
+            runtime_bin: optional_string(obj, "runtime_bin")?,
             working_dir: optional_string(obj, "working_dir")?,
             log_path: optional_string(obj, "log_path")?,
             detached: optional_bool(obj, "detached")?,
@@ -560,17 +560,17 @@ impl DaemonStartConfigJson {
     fn build(self) -> Result<DaemonStartConfig, DaemonStartConfigError> {
         let mut config = match self.mode {
             DaemonStartMode::Device => {
-                let device_id = self
-                    .device_id
-                    .ok_or(DaemonStartConfigError::MissingField("device_id"))?;
-                DaemonStartConfig::device(device_id)?
+                let runtime_instance_id = self
+                    .runtime_instance_id
+                    .ok_or(DaemonStartConfigError::MissingField("runtime_instance_id"))?;
+                DaemonStartConfig::device(runtime_instance_id)?
             }
             DaemonStartMode::Hub => DaemonStartConfig::hub(),
         };
         if let Some(realm) = self.realm {
             config = config.with_realm(realm);
         }
-        if let Some(path) = self.daemon_bin {
+        if let Some(path) = self.runtime_bin {
             config = config.with_daemon_bin(path)?;
         }
         if let Some(path) = self.working_dir {
@@ -744,8 +744,8 @@ mod tests {
         let config = DaemonStartConfigJson::parse(
             r#"{
                 "mode": "device",
-                "device_id": "dev-a",
-                "daemon_bin": "/tmp/easynet-daemon",
+                "runtime_instance_id": "dev-a",
+                "runtime_bin": "/tmp/runtime-host",
                 "log_path": "/tmp/easynet.log",
                 "detached": false,
                 "env": {"EASYNET_TEST": "1"}
@@ -759,14 +759,14 @@ mod tests {
     }
 
     #[test]
-    fn parse_start_config_rejects_device_without_device_id() {
+    fn parse_start_config_rejects_device_without_runtime_instance_id() {
         let err = DaemonStartConfigJson::parse(r#"{"mode":"device"}"#)
             .unwrap()
             .build()
             .unwrap_err();
         assert!(
-            err.to_string().contains("device_id"),
-            "missing device_id must be reported: {err}"
+            err.to_string().contains("runtime_instance_id"),
+            "missing runtime_instance_id must be reported: {err}"
         );
     }
 

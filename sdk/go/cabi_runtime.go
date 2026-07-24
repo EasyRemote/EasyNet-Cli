@@ -1679,7 +1679,7 @@ func runtimeHostStartConfigForCABI(configJSON []byte) ([]byte, error) {
 		return nil, invalidRuntimePayload(fmt.Sprintf("decode runtime host start config: %v", err), err)
 	}
 	unsupported := []string{}
-	for _, key := range []string{"uds_path", "listen_tcp", "tls_cert_path", "tls_key_path", "hub_endpoint", "trust_path"} {
+	for _, key := range []string{"uds_path", "listen_tcp", "tls_cert_path", "tls_key_path", "authority_endpoint", "trust_path"} {
 		if !emptyCABIConfigValue(config[key]) {
 			unsupported = append(unsupported, key)
 		}
@@ -1694,7 +1694,7 @@ func runtimeHostStartConfigForCABI(configJSON []byte) ([]byte, error) {
 		}
 	}
 	projected := map[string]any{}
-	for _, key := range []string{"mode", "realm", "device_id", "daemon_bin", "working_dir", "log_path", "env"} {
+	for _, key := range []string{"mode", "realm", "runtime_instance_id", "runtime_bin", "working_dir", "log_path", "env"} {
 		if !emptyCABIConfigValue(config[key]) {
 			projected[key] = config[key]
 		}

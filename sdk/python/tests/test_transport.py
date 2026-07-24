@@ -413,7 +413,7 @@ class RuntimeInvocationTransportTests(unittest.TestCase):
                 return_value=object(),
             ),
             patch(
-                "easynet_sdk.providers.easynet.transport.RuntimeConnection",
+                "easynet_sdk.providers.runtime.transport.RuntimeConnection",
                 return_value=connection,
             ),
             self.assertRaises(RuntimeError) as caught,
@@ -434,7 +434,7 @@ class RuntimeInvocationTransportTests(unittest.TestCase):
                 return_value=object(),
             ),
             patch(
-                "easynet_sdk.providers.easynet.transport.RuntimeConnection",
+                "easynet_sdk.providers.runtime.transport.RuntimeConnection",
                 return_value=connection,
             ),
             self.assertRaises(RuntimeError) as caught,

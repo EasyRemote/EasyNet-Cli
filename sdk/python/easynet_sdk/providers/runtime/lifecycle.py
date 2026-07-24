@@ -1,4 +1,4 @@
-"""EasyNet provider lifecycle policy and stable daemon DTOs."""
+"""Runtime provider lifecycle policy and stable host DTOs."""
 
 from __future__ import annotations
 
@@ -10,23 +10,23 @@ from typing import Mapping
 from ...errors import ErrorCode, RetryHint, SDKError
 
 
-class DaemonMode(StrEnum):
-    """easynet-daemon deployment role."""
+class RuntimeHostMode(StrEnum):
+    """Runtime host deployment role understood by the local host provider."""
 
-    DEVICE = "device"
-    HUB = "hub"
-    BOTH = "both"
+    EDGE = "device"
+    AUTHORITY = "hub"
+    COMBINED = "both"
 
 
 @dataclass(frozen=True)
-class StartConfig:
-    """easynet-daemon process start policy."""
+class RuntimeHostStartConfig:
+    """Runtime host process start policy."""
 
-    mode: DaemonMode
+    mode: RuntimeHostMode
     realm: str = ""
-    device_id: str = ""
+    runtime_instance_id: str = ""
     home_dir: str = ""
-    daemon_bin: str = ""
+    runtime_bin: str = ""
     log_path: str = ""
     detached: bool = False
     env: Mapping[str, str] = field(default_factory=dict)
@@ -34,16 +34,16 @@ class StartConfig:
     listen_tcp: str = ""
     tls_cert_path: str = ""
     tls_key_path: str = ""
-    hub_endpoint: str = ""
+    authority_endpoint: str = ""
     trust_path: str = ""
 
     def validate(self) -> None:
-        if self.mode == DaemonMode.DEVICE and self.listen_tcp.strip():
+        if self.mode == RuntimeHostMode.EDGE and self.listen_tcp.strip():
             raise _invalid_lifecycle(
-                "device mode must not accept a public TCP listener"
+                "edge runtime host mode must not accept a public TCP listener"
             )
         if (
-            self.mode in {DaemonMode.HUB, DaemonMode.BOTH}
+            self.mode in {RuntimeHostMode.AUTHORITY, RuntimeHostMode.COMBINED}
             and self.listen_tcp.strip()
             and (not self.tls_cert_path.strip() or not self.tls_key_path.strip())
         ):
@@ -53,15 +53,15 @@ class StartConfig:
         value: dict[str, object] = {"mode": self.mode.value}
         for key in (
             "realm",
-            "device_id",
+            "runtime_instance_id",
             "home_dir",
-            "daemon_bin",
+            "runtime_bin",
             "log_path",
             "uds_path",
             "listen_tcp",
             "tls_cert_path",
             "tls_key_path",
-            "hub_endpoint",
+            "authority_endpoint",
             "trust_path",
         ):
             item = getattr(self, key)
@@ -80,8 +80,8 @@ class StartConfig:
 
 
 @dataclass(frozen=True)
-class DiscoverOptions:
-    """easynet-daemon discovery policy, including its product HOME root."""
+class RuntimeHostDiscoverConfig:
+    """Runtime host provider discovery policy, including the host state root."""
 
     control_endpoint: str = ""
     control_path: str = ""

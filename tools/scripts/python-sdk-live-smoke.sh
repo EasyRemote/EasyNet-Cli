@@ -117,7 +117,10 @@ from easynet_sdk import (
 )
 from easynet_sdk._cabi import CABIRuntimeLifecycleTransport, CLILibrary
 from easynet_sdk.errors import SDKError
-from easynet_sdk.providers.easynet.lifecycle import DaemonMode, StartConfig
+from easynet_sdk.providers.runtime.lifecycle import (
+    RuntimeHostMode,
+    RuntimeHostStartConfig,
+)
 
 
 def wait_until(label, predicate, timeout_s=8.0):
@@ -213,11 +216,11 @@ handle = None
 runtime = None
 try:
     handle = control.start(
-        StartConfig(
-            mode=DaemonMode.DEVICE,
+        RuntimeHostStartConfig(
+            mode=RuntimeHostMode.EDGE,
             realm=realm,
-            device_id=device_id,
-            daemon_bin=os.environ["DAEMON_BIN"],
+            runtime_instance_id=device_id,
+            runtime_bin=os.environ["DAEMON_BIN"],
             log_path=str(Path(smoke_home) / ".easynet" / "python-sdk-smoke-daemon.log"),
             env={
                 "HOME": smoke_home,

@@ -341,6 +341,7 @@ if rg -n 'easynet.run/cli/sdk/go/provider/easynet' sdk/go \
 fi
 
 for retired in \
+  sdk/python/easynet_sdk/providers/easynet \
   sdk/python/easynet_sdk/providers/easynet/plugin_exec.py \
   sdk/python/easynet_sdk/providers/easynet/key_service.py \
   sdk/python/easynet_sdk/providers/easynet/keyring.py \
