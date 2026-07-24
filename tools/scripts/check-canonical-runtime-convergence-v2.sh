@@ -1464,6 +1464,66 @@ for rel, text in hits:
 PY
 }
 
+check_rust_all_zero_principal_guard_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+
+  "$PYTHON_BIN" - "$cli_root" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+core = root / "src/core/identity/mod.rs"
+ffi = root / "src/ffi/invocation/mod.rs"
+auth = root / "src/cli/commands/auth.rs"
+config = root / "src/daemon/persistence/config.rs"
+authority = root / "src/daemon/invocation/admission/authority_metadata.rs"
+for path in (core, ffi, auth, config, authority):
+    if not path.exists():
+        raise SystemExit(f"rust_all_zero_principal_guard:missing:{path.relative_to(root).as_posix()}")
+
+core_text = core.read_text(encoding="utf-8")
+required_core = (
+    'pub const ALL_ZERO_PRINCIPAL_ID: &str = "00000000-0000-0000-0000-000000000000";',
+    "pub fn is_all_zero_principal_id(value: &str) -> bool",
+    "pub fn contains_all_zero_principal_placeholder(value: &str) -> bool",
+    "exact_all_zero_principal_id_trims_and_ignores_case",
+    "embedded_all_zero_principal_placeholder_detects_ura_fields",
+)
+for token in required_core:
+    if token not in core_text:
+        raise SystemExit(f"rust_all_zero_principal_guard:core_missing:{token}")
+
+required_callers = {
+    "src/ffi/invocation/mod.rs": "crate::core::identity::contains_all_zero_principal_placeholder(value)",
+    "src/cli/commands/auth.rs": "crate::core::identity::is_all_zero_principal_id(&self.user_id)",
+    "src/daemon/persistence/config.rs": "crate::core::identity::is_all_zero_principal_id(user_id)",
+    "src/daemon/invocation/admission/authority_metadata.rs": "crate::core::identity::contains_all_zero_principal_placeholder(value)",
+}
+for rel, token in required_callers.items():
+    text = (root / rel).read_text(encoding="utf-8")
+    if token not in text:
+        raise SystemExit(f"rust_all_zero_principal_guard:caller_missing:{rel}:{token}")
+
+duplicate_constants = []
+production_literal_hits = []
+sentinel = "00000000-0000-0000-0000-000000000000"
+for path in root.joinpath("src").rglob("*.rs"):
+    rel = path.relative_to(root).as_posix()
+    text = path.read_text(encoding="utf-8")
+    production = re.split(r"\n#\[cfg\((?:test|all\(test\b|any\(test\b)", text, maxsplit=1)[0]
+    if rel != "src/core/identity/mod.rs" and "ALL_ZERO_PRINCIPAL_ID" in production:
+        duplicate_constants.append(rel)
+    if rel != "src/core/identity/mod.rs" and sentinel in production:
+        production_literal_hits.append(rel)
+
+if duplicate_constants:
+    raise SystemExit("rust_all_zero_principal_guard:duplicate_constant:" + ",".join(sorted(duplicate_constants)))
+if production_literal_hits:
+    raise SystemExit("rust_all_zero_principal_guard:production_literal:" + ",".join(sorted(production_literal_hits)))
+PY
+}
+
 check_runtime_state_kind_required_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local config_rs="$cli_root/src/daemon/persistence/config.rs"
@@ -2654,7 +2714,7 @@ if "let auth: RefreshResp" not in refresh_fn.group("body"):
 for required in (
     "fn validated(self) -> anyhow::Result<Self>",
     "validate_non_blank(\"user_id\", &self.user_id)?",
-    "ALL_ZERO_PRINCIPAL_ID",
+    "crate::core::identity::is_all_zero_principal_id(&self.user_id)",
     "auth session carries all-zero user_id",
     "validate_non_blank(\"username\", &self.username)?",
     "validate auth session before save",
@@ -16549,6 +16609,49 @@ EOF
   if ( check_invocation_history_placeholder_negative_only_contract "$tmp/history-placeholder-positive" ) >/dev/null 2>&1; then
     fail "self-test expected invocation history placeholder positive fixture gate to fail"
   fi
+  mkdir -p "$tmp/rust-all-zero-duplicate/src/core/identity" \
+    "$tmp/rust-all-zero-duplicate/src/ffi/invocation" \
+    "$tmp/rust-all-zero-duplicate/src/cli/commands" \
+    "$tmp/rust-all-zero-duplicate/src/daemon/persistence" \
+    "$tmp/rust-all-zero-duplicate/src/daemon/invocation/admission"
+  cat >"$tmp/rust-all-zero-duplicate/src/core/identity/mod.rs" <<'EOF'
+pub const ALL_ZERO_PRINCIPAL_ID: &str = "00000000-0000-0000-0000-000000000000";
+pub fn is_all_zero_principal_id(value: &str) -> bool {
+    value.trim().eq_ignore_ascii_case(ALL_ZERO_PRINCIPAL_ID)
+}
+pub fn contains_all_zero_principal_placeholder(value: &str) -> bool {
+    value.trim().to_ascii_lowercase().contains(ALL_ZERO_PRINCIPAL_ID)
+}
+#[cfg(test)]
+mod tests {
+    fn exact_all_zero_principal_id_trims_and_ignores_case() {}
+    fn embedded_all_zero_principal_placeholder_detects_ura_fields() {}
+}
+EOF
+  cat >"$tmp/rust-all-zero-duplicate/src/ffi/invocation/mod.rs" <<'EOF'
+fn validate_public_tuple_ura(value: &str) {
+    crate::core::identity::contains_all_zero_principal_placeholder(value);
+}
+EOF
+  cat >"$tmp/rust-all-zero-duplicate/src/cli/commands/auth.rs" <<'EOF'
+fn validated(&self) {
+    crate::core::identity::is_all_zero_principal_id(&self.user_id);
+}
+EOF
+  cat >"$tmp/rust-all-zero-duplicate/src/daemon/persistence/config.rs" <<'EOF'
+const ALL_ZERO_PRINCIPAL_ID: &str = "00000000-0000-0000-0000-000000000000";
+fn user_id(user_id: &str) {
+    crate::core::identity::is_all_zero_principal_id(user_id);
+}
+EOF
+  cat >"$tmp/rust-all-zero-duplicate/src/daemon/invocation/admission/authority_metadata.rs" <<'EOF'
+fn reject(value: &str) {
+    crate::core::identity::contains_all_zero_principal_placeholder(value);
+}
+EOF
+  if ( check_rust_all_zero_principal_guard_contract "$tmp/rust-all-zero-duplicate" ) >/dev/null 2>&1; then
+    fail "self-test expected Rust all-zero principal duplicate sentinel gate to fail"
+  fi
   mkdir -p "$tmp/agent-purge-publication-state-legacy/src/daemon/ability/builtins/agents"
   cat >"$tmp/agent-purge-publication-state-legacy/src/daemon/ability/builtins/agents/lifecycle.rs" <<'EOF'
 fn attach_publication_state(object: &mut serde_json::Map<String, serde_json::Value>) {
@@ -20425,6 +20528,7 @@ EOF
   check_invocation_history_filter_scope_contract
   check_cli_invocation_history_read_model_contract
   check_invocation_history_placeholder_negative_only_contract
+  check_rust_all_zero_principal_guard_contract
   check_agent_purge_publication_state_contract
   check_local_runtime_state_read_subject_contract
   check_shared_node_state_projection_contract
@@ -20635,6 +20739,7 @@ check_join_authority_wiring_required_contract
 check_invocation_history_filter_scope_contract
 check_cli_invocation_history_read_model_contract
 check_invocation_history_placeholder_negative_only_contract
+check_rust_all_zero_principal_guard_contract
 check_agent_purge_publication_state_contract
 check_local_runtime_state_read_subject_contract
 check_shared_node_state_projection_contract

@@ -8105,14 +8105,16 @@ if authority_metadata.exists():
             add("R78_AUTHORITY_METADATA_CLOCK_FAIL_CLOSED", authority_metadata, 1, detail)
 
     # Rule 90: Daemon authority metadata must reject all-zero principal
-    # placeholders itself. SDK guards are not sufficient because product
-    # ingress can still submit raw metadata to the daemon admission gate.
+    # placeholders through the core identity guard. SDK guards are not
+    # sufficient because product ingress can still submit raw metadata to the
+    # daemon admission gate, but the sentinel ownership belongs in core
+    # identity rather than a daemon-local duplicate.
     if authority_metadata.exists():
         text = source(authority_metadata)
         for token, detail in (
             (
-                "ALL_ZERO_PRINCIPAL_ID",
-                "authority metadata must name the all-zero principal placeholder",
+                "crate::core::identity::contains_all_zero_principal_placeholder(value)",
+                "authority metadata must use the core all-zero principal guard",
             ),
             (
                 "fn reject_all_zero_authority_fields",

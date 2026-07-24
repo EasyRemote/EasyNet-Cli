@@ -5824,9 +5824,6 @@ fn parse_metadata(
 }
 
 #[cfg(feature = "axon-pb")]
-const ALL_ZERO_PRINCIPAL_ID: &str = "00000000-0000-0000-0000-000000000000";
-
-#[cfg(feature = "axon-pb")]
 fn validate_public_invocation_tuple(
     caller_ura: &str,
     callee_ura: &str,
@@ -5841,11 +5838,7 @@ fn validate_public_invocation_tuple(
 
 #[cfg(feature = "axon-pb")]
 fn validate_public_tuple_ura(field: &'static str, value: &str) -> Result<(), InvocationJsonError> {
-    if value
-        .trim()
-        .to_ascii_lowercase()
-        .contains(ALL_ZERO_PRINCIPAL_ID)
-    {
+    if crate::core::identity::contains_all_zero_principal_placeholder(value) {
         return Err(InvocationJsonError::AllZeroPrincipal(field));
     }
     crate::core::ura::parse_ura(value.trim())

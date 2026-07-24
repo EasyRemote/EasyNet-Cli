@@ -29,8 +29,6 @@ pub(crate) const REASON_AUTHORITY_FORMAT_INVALID: &str = "AUTHORITY_FORMAT_INVAL
 pub(crate) const REASON_AUTHORITY_EXPIRED: &str = "AUTHORITY_EXPIRED";
 pub(crate) const REASON_AUTHORITY_CLOCK_UNAVAILABLE: &str = "AUTHORITY_CLOCK_UNAVAILABLE";
 
-const ALL_ZERO_PRINCIPAL_ID: &str = "00000000-0000-0000-0000-000000000000";
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AuthorityMetadataError {
     reason: &'static str,
@@ -361,11 +359,7 @@ fn reject_all_zero_authority_fields(
     fields: &[(&str, &str)],
 ) -> Result<(), AuthorityMetadataError> {
     for (field, value) in fields {
-        if value
-            .trim()
-            .to_ascii_lowercase()
-            .contains(ALL_ZERO_PRINCIPAL_ID)
-        {
+        if crate::core::identity::contains_all_zero_principal_placeholder(value) {
             return Err(AuthorityMetadataError::new(
                 REASON_AUTHORITY_FORMAT_INVALID,
                 format!("{label} {field} must not be all-zero"),

@@ -371,8 +371,6 @@ impl RuntimeState {
 
 // ─── Device Credentials ────────────────────────────────────────────────────
 
-const ALL_ZERO_PRINCIPAL_ID: &str = "00000000-0000-0000-0000-000000000000";
-
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Credentials {
@@ -474,7 +472,7 @@ impl Credentials {
                     "credentials file is missing user_id — run `easynet join <token>` to re-pair"
                 )
             })?;
-        if user_id.eq_ignore_ascii_case(ALL_ZERO_PRINCIPAL_ID) {
+        if crate::core::identity::is_all_zero_principal_id(user_id) {
             anyhow::bail!(
                 "credentials file carries all-zero user_id — run `easynet join <token>` to re-pair"
             );

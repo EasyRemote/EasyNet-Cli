@@ -45,7 +45,6 @@ use crate::support::platform::output;
 
 pub const DEFAULT_HUB_URL: &str = "http://127.0.0.1:8080";
 const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
-const ALL_ZERO_PRINCIPAL_ID: &str = "00000000-0000-0000-0000-000000000000";
 
 /// Persisted auth session. Lives at `~/.easynet/auth.json` mode 0600.
 /// Every auth-aware CLI command reads this to find the JWT bearer
@@ -82,11 +81,7 @@ impl AuthSession {
         validate_non_blank("hub_url", &self.hub_url)?;
         validate_non_blank("email", &self.email)?;
         validate_non_blank("user_id", &self.user_id)?;
-        if self
-            .user_id
-            .trim()
-            .eq_ignore_ascii_case(ALL_ZERO_PRINCIPAL_ID)
-        {
+        if crate::core::identity::is_all_zero_principal_id(&self.user_id) {
             bail!("auth session carries all-zero user_id — run `easynet login <user>@<realm>`");
         }
         validate_non_blank("username", &self.username)?;
