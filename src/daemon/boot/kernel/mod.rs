@@ -72,11 +72,11 @@ pub struct Kernel {
 
 impl Kernel {
     /// Construct a Kernel backed by fresh sub-services. Uses the
-    /// AllowAllBroker permission default
-    /// — every Kernel::invoke admission auto-allows. Daemons that
-    /// want interactive approval should use
-    /// `new_with_subscriber_broker` instead so a Client subscribed
-    /// to consent.subscribe sees pending requests.
+    /// headless permission policy, so Kernel admission does not
+    /// block when no operator channel exists. Daemons that want
+    /// interactive approval should use `new_interactive` instead
+    /// so a Client subscribed to consent.subscribe sees pending
+    /// requests.
     pub fn new() -> Self {
         Self {
             session: Arc::new(SessionService::new()),
@@ -94,17 +94,18 @@ impl Kernel {
     /// broker's broadcast channel, then blocks waiting for the
     /// matching `consent.decide` decision.
     ///
-    /// When no subscriber is connected the broker auto-allows
+    /// When no subscriber is connected the broker uses the
+    /// unobserved permission policy
     /// (per docs/rfc/permission-broker-v1.md §4 cross-machine
     /// advisory downgrade and §6 "no observer means no human in
     /// the loop"). The default `new()` should be preferred for
     /// tests and for daemons running without a Client; the
     /// daemon bin uses this constructor so the Permission tab
     /// in the GUI sees real pending requests.
-    pub fn new_with_subscriber_broker() -> Self {
+    pub fn new_interactive() -> Self {
         Self {
             session: Arc::new(SessionService::new()),
-            permission: Arc::new(PermissionService::with_subscriber_broker()),
+            permission: Arc::new(PermissionService::interactive()),
             discuss: Arc::new(DiscussService::new()),
             schedule: Arc::new(ScheduleService::new()),
             loop_svc: Arc::new(LoopService::new()),
@@ -161,7 +162,7 @@ impl Kernel {
     /// admission. A denial returns before runtime admission and therefore
     /// cannot produce a receipt or invocation session.
     ///
-    /// AllowAllBroker returns immediately. SubscriberBroker
+    /// Headless policy returns immediately. SubscriberBroker
     /// publishes a PermissionRequest on its broadcast channel
     /// (which a Client connected to consent.subscribe
     /// receives live) and blocks `ask` until a matching
@@ -748,9 +749,9 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn invoke_with_subscriber_broker_publishes_pending_request_and_blocks_until_decision() {
+    async fn invoke_with_interactive_broker_publishes_pending_request_and_blocks_until_decision() {
         let _g = crate::cli::commands::test_support::HomeGuard::new();
-        let k = Arc::new(Kernel::new_with_subscriber_broker());
+        let k = Arc::new(Kernel::new_interactive());
         let device_ura = crate::core::ura::device_ura("localhost", "a");
         install_echo_runtime(&k, &device_ura, "ghost-agent.chat");
         let request = k
@@ -765,7 +766,7 @@ mod tests {
         let perm_svc = k.permission_service();
         let sub = perm_svc
             .subscriber()
-            .expect("with-subscriber-broker variant")
+            .expect("interactive broker variant")
             .clone();
         let mut pending_rx = sub.subscribe();
 

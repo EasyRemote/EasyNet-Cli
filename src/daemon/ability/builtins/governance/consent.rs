@@ -71,8 +71,8 @@ pub fn register(reg: &mut AxonAbilityCatalog, perms: Arc<PermissionService>) {
 /// Returns a SnapshotThenLive stream when the SubscriberBroker is
 /// installed: snapshot of currently-pending requests first, then a
 /// broadcast::Receiver tailing every new pending request. When no
-/// SubscriberBroker is installed (i.e. AllowAllBroker default),
-/// returns an empty Snapshot — the queue is structurally empty.
+/// SubscriberBroker is installed, headless policy has no pending
+/// queue and returns an empty Snapshot.
 fn subscribe_handler(svc: &PermissionService, _args: Value) -> anyhow::Result<StreamSource> {
     let snapshot: Vec<Value> = svc
         .pending()?
@@ -215,7 +215,7 @@ mod tests {
     use super::*;
 
     fn fresh() -> Arc<PermissionService> {
-        Arc::new(PermissionService::with_subscriber_broker())
+        Arc::new(PermissionService::interactive())
     }
 
     #[test]

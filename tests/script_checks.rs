@@ -530,3 +530,11 @@ fn sdk_doc_product_vocabulary_script_holds() {
     // described.
     run_bash_script("tests/scripts/test_check_sdk_doc_product_vocabulary.sh");
 }
+
+#[test]
+fn permission_broker_headless_policy_script_holds() {
+    // Pins permission admission to explicit headless/interactive operator
+    // states. Headless operation must not be modeled as a legacy allow-all
+    // compatibility broker.
+    run_bash_script("tests/scripts/test_check_permission_broker_headless_policy.sh");
+}

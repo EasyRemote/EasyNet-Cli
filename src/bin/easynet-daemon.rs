@@ -221,16 +221,15 @@ async fn main() -> anyhow::Result<()> {
     // preserves that terminal transition across all early-return boot paths.
     let _key_service_shutdown = KeyServiceShutdownGuard;
 
-    // The daemon installs the SubscriberBroker-backed Kernel for loop,
-    // permission, and session services.
-    // SubscriberBroker permission variant so a Client UI
-    // connected to consent.subscribe sees real pending
-    // requests when an agent dispatch is gated. (When no Client
-    // is subscribed the broker auto-allows — a daemon running
-    // headless does not freeze on permission gates.)
+    // The daemon installs the interactive Kernel for loop,
+    // permission, and session services. A Client UI connected to
+    // consent.subscribe sees real pending requests when an agent
+    // dispatch is gated. When no Client is subscribed, the broker
+    // uses the explicit headless policy so unattended daemon work
+    // does not freeze on permission gates.
     let boot_bus = BootBus::new();
     boot_bus.emit_started("kernel");
-    let kernel = Arc::new(Kernel::new_with_subscriber_broker());
+    let kernel = Arc::new(Kernel::new_interactive());
     boot_bus.emit_ok("kernel");
 
     boot_bus.emit_started("daemon-config");
