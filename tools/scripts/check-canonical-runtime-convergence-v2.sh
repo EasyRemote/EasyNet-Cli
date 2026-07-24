@@ -8374,6 +8374,33 @@ check_ability_deploy_product_neutrality_contract() {
   fi
 }
 
+check_invocation_outcome_terminal_result_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local dispatch_client="$cli_root/src/daemon/invocation/dispatch/client.rs"
+  [[ -f "$dispatch_client" ]] || fail "daemon invocation dispatch client source is missing: ${dispatch_client#$cli_root/}"
+
+  "$PYTHON_BIN" - "$dispatch_client" <<'PY'
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+production = text.split("#[cfg(test)]", 1)[0]
+for retired in (
+    "source-compatible terminal result DTO",
+    "source-compatible result DTO",
+):
+    if retired in production:
+        raise SystemExit(f"invocation_outcome_terminal_result:retired_result_vocabulary:{retired}")
+for required in (
+    "Read the canonical terminal-result projection.",
+    "return its canonical terminal-result projection",
+    "This aggregate owns the two-checkpoint receipt model.",
+):
+    if required not in production:
+        raise SystemExit(f"invocation_outcome_terminal_result:canonical_doc_missing:{required}")
+PY
+}
+
 check_ability_manifest_exec_absence_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local manifest="$cli_root/src/daemon/ability/manifest.rs"
@@ -16084,6 +16111,7 @@ check_cli_device_directory_projection_contract
 check_plugin_sidecar_helper_matrix_contract
 check_retired_browser_mock_surface_contract
 check_ability_deploy_product_neutrality_contract
+check_invocation_outcome_terminal_result_contract
 check_ability_manifest_exec_absence_contract
 check_runtime_wire_target_state_contract
 check_invocation_wire_callee_target_contract

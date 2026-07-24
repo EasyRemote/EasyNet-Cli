@@ -586,7 +586,7 @@ impl InvocationOutcome {
         Self { result, stages }
     }
 
-    /// Read the source-compatible terminal result DTO.
+    /// Read the canonical terminal-result projection.
     pub fn result(&self) -> &InvocationResult {
         &self.result
     }
@@ -596,7 +596,7 @@ impl InvocationOutcome {
         &self.stages
     }
 
-    /// Consume the outcome and return the source-compatible result DTO.
+    /// Consume the outcome and return its canonical terminal-result projection.
     pub fn into_result(self) -> InvocationResult {
         self.result
     }

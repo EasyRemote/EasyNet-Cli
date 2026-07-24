@@ -854,6 +854,45 @@ for path, pattern in unary_result_alias_patterns:
             "unary InvocationResult must use terminal_receipt instead of the retired receipt alias",
         )
 
+dispatch_client = cli_root / "src/daemon/invocation/dispatch/client.rs"
+if dispatch_client.exists():
+    raw_text = dispatch_client.read_text(encoding="utf-8", errors="replace")
+    raw_production_text = raw_text.split("#[cfg(test)]", 1)[0]
+    for retired, detail in (
+        (
+            "source-compatible terminal result DTO",
+            "InvocationOutcome::result must be documented as canonical terminal projection",
+        ),
+        (
+            "source-compatible result DTO",
+            "InvocationOutcome::into_result must be documented as canonical terminal projection",
+        ),
+    ):
+        if retired in raw_text:
+            add(
+                "R7B_INVOCATION_OUTCOME_TERMINAL_RESULT_MODEL",
+                dispatch_client,
+                line_number(raw_text, raw_text.index(retired)),
+                detail,
+            )
+    for required, detail in (
+        (
+            "Read the canonical terminal-result projection.",
+            "InvocationOutcome::result canonical terminal projection doc is missing",
+        ),
+        (
+            "return its canonical terminal-result projection",
+            "InvocationOutcome::into_result canonical terminal projection doc is missing",
+        ),
+    ):
+        if required not in raw_production_text:
+            add(
+                "R7B_INVOCATION_OUTCOME_TERMINAL_RESULT_MODEL",
+                dispatch_client,
+                1,
+                detail,
+            )
+
 
 # Rule 7b: FFI complete-invocation ingress validates public tuple authority
 # semantics before daemon I/O. The FFI may not rely on late daemon admission to
