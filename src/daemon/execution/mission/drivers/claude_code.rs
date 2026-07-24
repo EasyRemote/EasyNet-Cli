@@ -30,6 +30,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 
+use crate::daemon::execution::mission::adapter::DriverCommand;
 use crate::daemon::execution::mission::dispatch::ToolCall;
 use crate::daemon::execution::mission::drivers::invocation_trace::{
     apply_tool_result_meta, parse_invocation_trace_metadata, text_to_json_value,
@@ -101,14 +102,10 @@ pub struct ClaudeOptions {
     /// progress to its broadcast channel; without it the
     /// stream surface was effectively snapshot+done.
     pub progress_tx: Option<Arc<dyn Fn(serde_json::Value) + Send + Sync>>,
-    /// Binary to spawn. Empty string means "use the driver
-    /// default" (`DEFAULT_CLAUDE_BINARY`). Dispatch fills this
-    /// from `AgentEntry::command` so operators who have a
-    /// custom install path (or a test that wires a fake binary
-    /// through `dummy_entry`) see their override honored. The
-    /// fallback mirrors the pre-refactor default so existing
-    /// registry rows with an empty `command` field keep working.
-    pub command: String,
+    /// Binary state to spawn. Dispatch converts
+    /// `AgentEntry::command` into a typed default-or-explicit
+    /// state before the driver sees it.
+    pub command: DriverCommand,
     /// When `Some(<UUID>)`, the driver continues an existing
     /// claude-code session via `--resume <id>` instead of starting
     /// a fresh one. The session is the same on-disk transcript
@@ -127,7 +124,8 @@ pub struct ClaudeOptions {
     pub fresh_session_id: Option<String>,
 }
 
-/// Default binary name when `ClaudeOptions::command` is empty.
+/// Default binary name when `ClaudeOptions::command` is
+/// `DriverCommand::Default`.
 /// Exposed as a constant so tests and adapters can name it
 /// without re-hardcoding the string.
 pub const DEFAULT_CLAUDE_BINARY: &str = "claude";
@@ -142,7 +140,7 @@ impl Default for ClaudeOptions {
             cwd: None,
             timeline: None,
             progress_tx: None,
-            command: String::new(),
+            command: DriverCommand::Default,
             resume_thread_id: None,
             fresh_session_id: None,
         }
@@ -150,17 +148,11 @@ impl Default for ClaudeOptions {
 }
 
 impl ClaudeOptions {
-    /// Resolve the binary the driver should spawn. Empty
-    /// `command` yields the default; anything else is returned
-    /// verbatim. Kept as a small helper so both the main
-    /// streaming path and the doctor / follow-up invocations
-    /// share one rule.
+    /// Resolve the binary the driver should spawn. Kept as a
+    /// small helper so both the main streaming path and the
+    /// doctor / follow-up invocations share one rule.
     pub fn resolved_command(&self) -> &str {
-        if self.command.is_empty() {
-            DEFAULT_CLAUDE_BINARY
-        } else {
-            self.command.as_str()
-        }
+        self.command.resolve(DEFAULT_CLAUDE_BINARY)
     }
 }
 
@@ -684,10 +676,9 @@ impl AgentAdapter for ClaudeCodeAdapter {
                 cwd: Some(opts.cwd),
                 timeline: opts.timeline,
                 progress_tx: opts.progress_tx,
-                // Honor `InvokeOpts::command` — dispatch filled
-                // it from `AgentEntry::command`. Empty string
-                // falls through to the driver default inside
-                // `ClaudeOptions::resolved_command`.
+                // Honor `InvokeOpts::command` — dispatch converted
+                // the persisted registry value into typed runtime
+                // command state.
                 command: opts.command,
                 resume_thread_id: opts.resume_thread_id,
                 // The fresh-session-id bind path is currently

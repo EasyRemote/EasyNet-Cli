@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::daemon::persistence::agent_registry::AgentEntry;
 
-use super::adapter::{AdapterOutput, InvokeOpts};
+use super::adapter::{AdapterOutput, DriverCommand, InvokeOpts};
 use super::context::{self, DispatchContext};
 use super::drivers::adapter_for;
 use super::run_store::{RunDir, RunMeta};
@@ -574,15 +574,12 @@ pub fn send_to_agent_with_depth_and_progress(
             // sequence order.
             timeline: Some(session.writer_arc()),
             progress_tx: progress_tx.clone(),
-            // Honor the operator-supplied binary override. Each
-            // driver substitutes its own default when this is
-            // empty (see `ClaudeOptions::resolved_command` and
-            // `CodexOptions::resolved_command`). Plumbing it here
-            // is what makes `dummy_entry`'s bogus command in
-            // tests actually take effect and what lets operators
-            // with a custom install path route through without
-            // editing driver source.
-            command: entry.command.clone(),
+            // Honor the operator-supplied binary override. The
+            // persisted registry string is converted once into a
+            // typed command state; built-in drivers own their
+            // default binary names, while external drivers require
+            // an explicit executable.
+            command: DriverCommand::from_registry_value(&entry.command),
             // Conversation resume: `None` is fresh, `Some(id)` tells
             // a resume-capable driver (codex) to continue under that
             // thread id. Sourced from the chat ability's caller via
@@ -1312,7 +1309,7 @@ mod tests {
             cwd: std::path::PathBuf::from("."),
             timeline: None,
             progress_tx: None,
-            command: String::new(),
+            command: DriverCommand::Default,
             resume_thread_id: None,
         };
         let out = adapter
@@ -1343,7 +1340,7 @@ mod tests {
             cwd: std::path::PathBuf::from("."),
             timeline: None,
             progress_tx: None,
-            command: String::new(),
+            command: DriverCommand::Default,
             resume_thread_id: None,
         };
         let out = adapter.invoke(&entry, "p", opts).unwrap();
@@ -1383,7 +1380,7 @@ mod tests {
             cwd: std::path::PathBuf::from("."),
             timeline: None,
             progress_tx: None,
-            command: String::new(),
+            command: DriverCommand::Default,
             resume_thread_id: None,
         };
         let out = adapter.invoke(&entry, "p", opts).unwrap();

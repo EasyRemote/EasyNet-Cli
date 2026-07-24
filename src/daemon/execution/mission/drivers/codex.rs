@@ -35,6 +35,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 
+use crate::daemon::execution::mission::adapter::DriverCommand;
 use crate::daemon::execution::mission::dispatch::ToolCall;
 use crate::daemon::execution::mission::drivers::invocation_trace::{
     apply_tool_result_meta, parse_invocation_trace_metadata, text_to_json_value, EASYNET_MCP_SERVER,
@@ -107,11 +108,10 @@ pub struct CodexOptions {
     /// caught in the audit conversation right after the
     /// claude streaming was fixed.
     pub progress_tx: Option<Arc<dyn Fn(serde_json::Value) + Send + Sync>>,
-    /// Binary to spawn. Empty string means "use the driver
-    /// default" (`DEFAULT_CODEX_BINARY`). Mirrors the behaviour
-    /// of `ClaudeOptions::command`; see that field's rustdoc
-    /// for the motivation.
-    pub command: String,
+    /// Binary state to spawn. Dispatch converts
+    /// `AgentEntry::command` into a typed default-or-explicit
+    /// state before the driver sees it.
+    pub command: DriverCommand,
     /// When `Some(<UUIDv7>)`, the driver invokes
     /// `codex exec resume <thread_id> <prompt>` instead of
     /// `codex exec <prompt>`, continuing the codex-side
@@ -132,7 +132,8 @@ pub struct CodexOptions {
     pub resume_thread_id: Option<String>,
 }
 
-/// Default binary name when `CodexOptions::command` is empty.
+/// Default binary name when `CodexOptions::command` is
+/// `DriverCommand::Default`.
 pub const DEFAULT_CODEX_BINARY: &str = "codex";
 
 impl Default for CodexOptions {
@@ -146,22 +147,16 @@ impl Default for CodexOptions {
             cwd: None,
             timeline: None,
             progress_tx: None,
-            command: String::new(),
+            command: DriverCommand::Default,
             resume_thread_id: None,
         }
     }
 }
 
 impl CodexOptions {
-    /// Resolve the binary the driver should spawn. Empty
-    /// `command` yields the default; anything else is returned
-    /// verbatim.
+    /// Resolve the binary the driver should spawn.
     pub fn resolved_command(&self) -> &str {
-        if self.command.is_empty() {
-            DEFAULT_CODEX_BINARY
-        } else {
-            self.command.as_str()
-        }
+        self.command.resolve(DEFAULT_CODEX_BINARY)
     }
 }
 
@@ -1190,8 +1185,8 @@ impl AgentAdapter for CodexExecAdapter {
                 cwd: Some(opts.cwd),
                 timeline: opts.timeline,
                 progress_tx: opts.progress_tx,
-                // Honor the operator-supplied binary; empty
-                // falls back to `DEFAULT_CODEX_BINARY`.
+                // Honor the operator-supplied binary through the
+                // typed runtime command state.
                 command: opts.command,
                 resume_thread_id: opts.resume_thread_id,
             },
@@ -1244,8 +1239,8 @@ impl AgentAdapter for CodexAppServerAdapter {
                 cwd: Some(opts.cwd),
                 timeline: opts.timeline,
                 progress_tx: opts.progress_tx,
-                // Honor the operator-supplied binary; empty
-                // falls back to `DEFAULT_CODEX_BINARY`.
+                // Honor the operator-supplied binary through the
+                // typed runtime command state.
                 command: opts.command,
                 // app-server adapter does not yet plumb resume; the
                 // app-server protocol has its own conversation-id

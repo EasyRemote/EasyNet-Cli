@@ -45,6 +45,51 @@ use super::dispatch::{AgentResponse, AgentUsage};
 use super::timeline::TimelineWriter;
 use crate::daemon::persistence::agent_registry::AgentEntry;
 
+/// Runtime command state resolved at the dispatch/driver seam.
+///
+/// Persisted `AgentEntry::command` is still a string because that is
+/// the durable registry shape. The runtime seam converts it into
+/// this enum exactly once so drivers never infer behavior from an
+/// empty-string sentinel.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DriverCommand {
+    /// Use the driver-owned canonical executable.
+    Default,
+    /// Spawn the operator-provided executable.
+    Explicit(String),
+}
+
+impl DriverCommand {
+    pub fn from_registry_value(value: &str) -> Self {
+        let value = value.trim();
+        if value.is_empty() {
+            Self::Default
+        } else {
+            Self::Explicit(value.to_string())
+        }
+    }
+
+    pub fn resolve<'a>(&'a self, default_command: &'a str) -> &'a str {
+        match self {
+            Self::Default => default_command,
+            Self::Explicit(command) => command.as_str(),
+        }
+    }
+
+    pub fn explicit(&self) -> Option<&str> {
+        match self {
+            Self::Default => None,
+            Self::Explicit(command) => Some(command.as_str()),
+        }
+    }
+}
+
+impl Default for DriverCommand {
+    fn default() -> Self {
+        Self::Default
+    }
+}
+
 /// Per-invocation knobs the dispatch layer has already resolved
 /// from the `AgentEntry` + request. An adapter receives these
 /// verbatim; it does not re-read registry state.
@@ -86,16 +131,14 @@ pub struct InvokeOpts {
     /// to be \"streaming\" but in practice was a snapshot +
     /// terminal frame. Real-world audit caught it.
     pub progress_tx: Option<Arc<dyn Fn(serde_json::Value) + Send + Sync>>,
-    /// Binary to spawn for this agent's runtime. Resolved at
-    /// dispatch time from `AgentEntry::command`, with an empty
-    /// string signalling "take the driver default" (claude /
-    /// codex / …). Load-bearing: without this field the drivers
-    /// hardcoded the binary name, which silently ignored any
-    /// operator override and made test-mode fake commands
-    /// impossible. See `runtime/drivers/claude_code.rs` and
-    /// `runtime/drivers/codex.rs` for the empty-string fallback
-    /// rule.
-    pub command: String,
+    /// Binary state to spawn for this agent's runtime. Resolved at
+    /// dispatch time from `AgentEntry::command` into an explicit
+    /// enum so drivers do not infer behavior from string shape.
+    ///
+    /// Load-bearing: without this field the drivers hardcoded the
+    /// binary name, which silently ignored operator overrides and
+    /// made test-mode fake commands impossible.
+    pub command: DriverCommand,
     /// When `Some(<id>)`, the driver should resume an existing
     /// conversation (codex: `codex exec resume <id>`) instead of
     /// starting a fresh one. Drivers that do not support resume
@@ -203,5 +246,48 @@ pub(super) fn finalize_response(
         run_dir: run_dir_path,
         tool_calls: Vec::new(),
         thread_id: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn driver_command_from_registry_empty_is_default_state() {
+        assert_eq!(
+            DriverCommand::from_registry_value(""),
+            DriverCommand::Default
+        );
+        assert_eq!(
+            DriverCommand::from_registry_value("   "),
+            DriverCommand::Default
+        );
+    }
+
+    #[test]
+    fn driver_command_from_registry_explicit_trims_edge_whitespace() {
+        assert_eq!(
+            DriverCommand::from_registry_value(" /opt/bin/claude "),
+            DriverCommand::Explicit("/opt/bin/claude".to_string())
+        );
+    }
+
+    #[test]
+    fn driver_command_resolves_default_and_explicit_without_string_sentinel() {
+        assert_eq!(DriverCommand::Default.resolve("claude"), "claude");
+        assert_eq!(
+            DriverCommand::Explicit("custom-claude".to_string()).resolve("claude"),
+            "custom-claude"
+        );
+    }
+
+    #[test]
+    fn driver_command_explicit_exposes_only_operator_command() {
+        assert_eq!(DriverCommand::Default.explicit(), None);
+        assert_eq!(
+            DriverCommand::Explicit("custom".to_string()).explicit(),
+            Some("custom")
+        );
     }
 }

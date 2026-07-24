@@ -538,3 +538,10 @@ fn permission_broker_headless_policy_script_holds() {
     // compatibility broker.
     run_bash_script("tests/scripts/test_check_permission_broker_headless_policy.sh");
 }
+
+#[test]
+fn driver_command_state_boundary_script_holds() {
+    // Pins mission driver command resolution to a typed default/explicit state.
+    // Runtime drivers must not infer default binaries from empty strings.
+    run_bash_script("tests/scripts/test_check_driver_command_state_boundary.sh");
+}
