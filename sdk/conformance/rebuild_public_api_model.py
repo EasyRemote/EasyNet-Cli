@@ -651,8 +651,8 @@ def main() -> int:
         (
             "python",
             "direct_runtime_provider",
-            "sdk/python/easynet_sdk/",
-            "sdk/python/easynet_sdk/direct_runtime.py",
+            "sdk/python/easynet_sdk/providers/runtime/",
+            "sdk/python/easynet_sdk/providers/runtime/direct.py",
             "RuntimeConnector",
             "sdk/python/easynet_sdk/connection.py",
             runtime_provider_capabilities,

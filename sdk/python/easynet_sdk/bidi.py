@@ -13,6 +13,7 @@ from .errors import ErrorCode, RetryHint, SDKError
 
 
 MAX_BIDI_BUFFERED_FRAMES = 1024
+BIDI_RUNTIME_ID_FIELD = "session_id"
 
 
 class BidiState(StrEnum):

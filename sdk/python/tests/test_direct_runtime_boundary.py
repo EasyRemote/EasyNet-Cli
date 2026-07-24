@@ -1,7 +1,7 @@
 import ast
 import inspect
 
-import easynet_sdk.direct_runtime as direct_runtime
+import easynet_sdk.providers.runtime.direct as direct_runtime
 
 
 _TUPLE_WIRE_CONSTRUCTORS = {

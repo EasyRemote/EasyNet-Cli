@@ -221,7 +221,7 @@ class SdkEnvironment:
         """Open a direct Axon runtime connection with canonical Addressing."""
 
         self._require_open()
-        from .direct_runtime import DirectRuntimeConnector
+        from .providers.runtime.direct import DirectRuntimeConnector
 
         addressing = _canonical_addressing_client()
         connector = DirectRuntimeConnector(

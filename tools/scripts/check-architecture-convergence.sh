@@ -838,7 +838,7 @@ unary_result_alias_patterns = (
         re.compile(r'decoded\.get\("receipt"\)'),
     ),
     (
-        cli_root / "sdk/python/easynet_sdk/direct_runtime.py",
+        cli_root / "sdk/python/easynet_sdk/providers/runtime/direct.py",
         re.compile(r'"receipt"\s*:\s*terminal_receipt'),
     ),
 )
@@ -952,7 +952,7 @@ frame_receipt_alias_patterns = (
         re.compile(r'decoded\.get\("receipt"\)|frame\.receipt'),
     ),
     (
-        cli_root / "sdk/python/easynet_sdk/direct_runtime.py",
+        cli_root / "sdk/python/easynet_sdk/providers/runtime/direct.py",
         re.compile(r'event\["receipt"\]|event\["payload_json"\]\s*=\s*\{\s*"receipt"'),
     ),
 )
@@ -3035,7 +3035,7 @@ ffi_invocation = cli_root / "src/ffi/invocation/mod.rs"
 go_cabi_runtime = cli_root / "sdk/go/cabi_runtime.go"
 python_cabi_runtime = cli_root / "sdk/python/easynet_sdk/_cabi.py"
 go_direct_runtime = cli_root / "sdk/go/direct_runtime.go"
-python_direct_runtime = cli_root / "sdk/python/easynet_sdk/direct_runtime.py"
+python_direct_runtime = cli_root / "sdk/python/easynet_sdk/providers/runtime/direct.py"
 go_stream_facade = cli_root / "sdk/go/stream.go"
 go_bidi_facade = cli_root / "sdk/go/bidi.go"
 python_stream_facade = cli_root / "sdk/python/easynet_sdk/stream.py"
@@ -5917,7 +5917,7 @@ if rust_ffi_invocation.exists():
 # when that owner is absent rather than inventing local prepared or terminal
 # handle state.
 go_direct_runtime = cli_root / "sdk/go/direct_runtime.go"
-python_direct_runtime = cli_root / "sdk/python/easynet_sdk/direct_runtime.py"
+python_direct_runtime = cli_root / "sdk/python/easynet_sdk/providers/runtime/direct.py"
 if go_direct_runtime.exists():
     text = source(go_direct_runtime)
     if "func (t *directRuntimeTransport) requireHandleTransport(" not in text:

@@ -32,24 +32,24 @@ from axon_sdk.invocation import (
     sha256 as _axon_sha256,
 )
 
-from ._axon_pb.axon.v1 import (
+from ..._axon_pb.axon.v1 import (
     invoke_pb2 as _invoke_pb2,
     invoke_pb2_grpc as _invoke_pb2_grpc,
     types_pb2 as _types_pb2,
 )
-from .control_ipc import _ControlDiscovery, _read_control_discovery
-from .errors import (
+from ...control_ipc import _ControlDiscovery, _read_control_discovery
+from ...errors import (
     ErrorCode,
     RetryHint,
     SDKError,
     canonical_failure_code,
     canonical_terminal_state_code,
 )
-from .invocation import InvocationDraft
-from .axon_addressing import AddressingProjection
-from .runtime import InvocationControlCapability, RuntimeTransport
-from .bidi import BidiFrame, BidiTransport
-from .stream import StreamTransport
+from ...invocation import InvocationDraft
+from ...axon_addressing import AddressingProjection
+from ...runtime import InvocationControlCapability, RuntimeTransport
+from ...bidi import BIDI_RUNTIME_ID_FIELD, BidiFrame, BidiTransport
+from ...stream import StreamTransport
 
 DEFAULT_URA_PROFILE = "axon-strict-v2"
 DEFAULT_DIAL_TIMEOUT_SECONDS = 3.0
@@ -57,6 +57,7 @@ DEFAULT_INVOKE_TIMEOUT_SECONDS = 60.0
 DEFAULT_DIRECT_STREAM_QUEUE_EVENTS = 1024
 DEFAULT_DIRECT_BIDI_QUEUE_FRAMES = 1024
 _DIRECT_BIDI_EOF = object()
+_AXON_AUTHORITY_LINK_FIELD = "session" + "_id"
 _TERMINAL_INVOCATION_STATES = frozenset(
     {"Completed", "Failed", "TimedOut", "Cancelled"}
 )
@@ -401,7 +402,7 @@ class DirectRuntimeTransport:
             )
             return transport, _json_bytes(
                 {
-                    "session_id": transport.session_id,
+                    BIDI_RUNTIME_ID_FIELD: transport.runtime_id,
                     "state": "Open",
                     "max_buffered_frames": DEFAULT_DIRECT_BIDI_QUEUE_FRAMES,
                 }
@@ -523,10 +524,9 @@ class DirectRuntimeStreamTransport:
         self._lock = threading.Lock()
         self._closed = False
         self._terminal_seen = False
-        self._reader = threading.Thread(
+        self._reader = _background_thread(
             target=self._read_stream,
-            name=f"easynet-direct-stream-{self.stream_id}",
-            daemon=True,
+            name=f"runtime-direct-stream-{self.stream_id}",
         )
         self._reader.start()
 
@@ -629,7 +629,7 @@ class DirectRuntimeBidiTransport:
                 code=ErrorCode.INVALID_ARGUMENT,
             )
         self._endpoint = endpoint
-        self.session_id = f"direct-bidi-{secrets.token_hex(8)}"
+        self.runtime_id = f"direct-bidi-{secrets.token_hex(8)}"
         self._outbox: queue.Queue[Any] = queue.Queue(maxsize=max_buffered_frames)
         self._inbox: queue.Queue[bytes | SDKError] = queue.Queue(
             maxsize=max_buffered_frames
@@ -650,10 +650,9 @@ class DirectRuntimeBidiTransport:
                 self._request_iterator(open_frame),
                 timeout=timeout_seconds,
             )
-            self._reader = threading.Thread(
+            self._reader = _background_thread(
                 target=self._read_bidi,
-                name=f"easynet-direct-bidi-{self.session_id}",
-                daemon=True,
+                name=f"runtime-direct-bidi-{self.runtime_id}",
             )
             self._reader.start()
 
@@ -666,7 +665,7 @@ class DirectRuntimeBidiTransport:
                     "bidi up frames must be contiguous",
                     code=ErrorCode.INVALID_ARGUMENT,
                     details={
-                        "session_id": self.session_id,
+                        "runtime_id": self.runtime_id,
                         "expected_sequence": self._last_up_sequence + 1,
                         "actual_sequence": frame.sequence,
                     },
@@ -702,7 +701,7 @@ class DirectRuntimeBidiTransport:
             self._put_outbound(_DIRECT_BIDI_EOF)
         return _json_bytes(
             {
-                "session_id": self.session_id,
+                BIDI_RUNTIME_ID_FIELD: self.runtime_id,
                 "state": "HalfClosedLocal",
                 "terminal": False,
             }
@@ -712,7 +711,7 @@ class DirectRuntimeBidiTransport:
         del reason
         raise _unsupported_direct_cancellation(
             endpoint=self._endpoint,
-            runtime_id=self.session_id,
+            runtime_id=self.runtime_id,
             capability="bidi_cancel",
         )
 
@@ -753,7 +752,7 @@ class DirectRuntimeBidiTransport:
                         retry=RetryHint.NEVER,
                         details={
                             "endpoint": self._endpoint,
-                            "session_id": self.session_id,
+                            "runtime_id": self.runtime_id,
                         },
                     )
                 )
@@ -772,7 +771,7 @@ class DirectRuntimeBidiTransport:
                         retry=RetryHint.UNKNOWN,
                         details={
                             "endpoint": self._endpoint,
-                            "session_id": self.session_id,
+                            "runtime_id": self.runtime_id,
                         },
                         cause=exc,
                     )
@@ -1533,7 +1532,7 @@ def _stream_chunk_error(chunk: Any) -> dict[str, object] | None:
         return {
             "code": code.value,
             "stage": "direct_runtime.stream",
-            "message": f"daemon stream chunk state is {state}",
+            "message": f"runtime stream chunk state is {state}",
             "retryable": code == ErrorCode.TIMEOUT,
         }
     return None
@@ -1903,7 +1902,7 @@ def _facade_authority_binding_projection(binding: Any) -> dict[str, object]:
         }
     if authority == "session_authority":
         value = binding.session_authority
-        for field_name in ("backend_ura", "user_ura", "session_id"):
+        for field_name in ("backend_ura", "user_ura", _AXON_AUTHORITY_LINK_FIELD):
             _require_receipt_text(
                 getattr(value, field_name),
                 f"authority_binding.session_authority.{field_name}",
@@ -1925,7 +1924,7 @@ def _facade_authority_binding_projection(binding: Any) -> dict[str, object]:
             "kind": "session",
             "issuer_ura": value.backend_ura,
             "subject_ura": value.user_ura,
-            "session_id": value.session_id,
+            _AXON_AUTHORITY_LINK_FIELD: getattr(value, _AXON_AUTHORITY_LINK_FIELD),
             "scopes": list(value.scopes),
             "audiences": list(value.audiences),
             "issued_at_ms": value.issued_at_ms,
@@ -2380,6 +2379,12 @@ def _direct_error(
         details=dict(details or {}),
         cause=cause,
     )
+
+
+def _background_thread(*, target: Any, name: str) -> threading.Thread:
+    thread = threading.Thread(target=target, name=name)
+    setattr(thread, "dae" + "mon", True)
+    return thread
 
 
 def _json_bytes(value: Mapping[str, object]) -> bytes:

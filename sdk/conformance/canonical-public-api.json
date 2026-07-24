@@ -14163,9 +14163,9 @@
       "python": {
         "implementation": {
           "identity": "direct_runtime_provider",
-          "owner_path": "sdk/python/easynet_sdk/",
-          "path": "sdk/python/easynet_sdk/direct_runtime.py",
-          "sha256": "49a08364c6191b9d39c80b196627f466b6b1d7e8efb323f1d228e50594c655b7",
+          "owner_path": "sdk/python/easynet_sdk/providers/runtime/",
+          "path": "sdk/python/easynet_sdk/providers/runtime/direct.py",
+          "sha256": "f47d5bda9348cd23bc722e86988e2935350bf77e82eb35c6b8ea7bfba873d26b",
           "interface": "RuntimeConnector",
           "revision": "dd9152570d83d1f6f382d6a464898316600a31a3"
         },
@@ -14259,9 +14259,9 @@
       "python": {
         "implementation": {
           "identity": "direct_runtime_provider",
-          "owner_path": "sdk/python/easynet_sdk/",
-          "path": "sdk/python/easynet_sdk/direct_runtime.py",
-          "sha256": "49a08364c6191b9d39c80b196627f466b6b1d7e8efb323f1d228e50594c655b7",
+          "owner_path": "sdk/python/easynet_sdk/providers/runtime/",
+          "path": "sdk/python/easynet_sdk/providers/runtime/direct.py",
+          "sha256": "f47d5bda9348cd23bc722e86988e2935350bf77e82eb35c6b8ea7bfba873d26b",
           "interface": "RuntimeConnector",
           "revision": "dd9152570d83d1f6f382d6a464898316600a31a3"
         },
@@ -14355,9 +14355,9 @@
       "python": {
         "implementation": {
           "identity": "direct_runtime_provider",
-          "owner_path": "sdk/python/easynet_sdk/",
-          "path": "sdk/python/easynet_sdk/direct_runtime.py",
-          "sha256": "49a08364c6191b9d39c80b196627f466b6b1d7e8efb323f1d228e50594c655b7",
+          "owner_path": "sdk/python/easynet_sdk/providers/runtime/",
+          "path": "sdk/python/easynet_sdk/providers/runtime/direct.py",
+          "sha256": "f47d5bda9348cd23bc722e86988e2935350bf77e82eb35c6b8ea7bfba873d26b",
           "interface": "RuntimeConnector",
           "revision": "dd9152570d83d1f6f382d6a464898316600a31a3"
         },
@@ -14486,9 +14486,9 @@
       "python": {
         "implementation": {
           "identity": "direct_runtime_provider",
-          "owner_path": "sdk/python/easynet_sdk/",
-          "path": "sdk/python/easynet_sdk/direct_runtime.py",
-          "sha256": "49a08364c6191b9d39c80b196627f466b6b1d7e8efb323f1d228e50594c655b7",
+          "owner_path": "sdk/python/easynet_sdk/providers/runtime/",
+          "path": "sdk/python/easynet_sdk/providers/runtime/direct.py",
+          "sha256": "f47d5bda9348cd23bc722e86988e2935350bf77e82eb35c6b8ea7bfba873d26b",
           "interface": "RuntimeConnector",
           "revision": "dd9152570d83d1f6f382d6a464898316600a31a3"
         },
@@ -14838,9 +14838,9 @@
       "python": {
         "implementation": {
           "identity": "direct_runtime_provider",
-          "owner_path": "sdk/python/easynet_sdk/",
-          "path": "sdk/python/easynet_sdk/direct_runtime.py",
-          "sha256": "49a08364c6191b9d39c80b196627f466b6b1d7e8efb323f1d228e50594c655b7",
+          "owner_path": "sdk/python/easynet_sdk/providers/runtime/",
+          "path": "sdk/python/easynet_sdk/providers/runtime/direct.py",
+          "sha256": "f47d5bda9348cd23bc722e86988e2935350bf77e82eb35c6b8ea7bfba873d26b",
           "interface": "RuntimeConnector",
           "revision": "dd9152570d83d1f6f382d6a464898316600a31a3"
         },
@@ -15461,9 +15461,9 @@
       "python": {
         "implementation": {
           "identity": "direct_runtime_provider",
-          "owner_path": "sdk/python/easynet_sdk/",
-          "path": "sdk/python/easynet_sdk/direct_runtime.py",
-          "sha256": "49a08364c6191b9d39c80b196627f466b6b1d7e8efb323f1d228e50594c655b7",
+          "owner_path": "sdk/python/easynet_sdk/providers/runtime/",
+          "path": "sdk/python/easynet_sdk/providers/runtime/direct.py",
+          "sha256": "f47d5bda9348cd23bc722e86988e2935350bf77e82eb35c6b8ea7bfba873d26b",
           "interface": "RuntimeConnector",
           "revision": "dd9152570d83d1f6f382d6a464898316600a31a3"
         },
@@ -20024,7 +20024,7 @@
       "SDKError.source_ref": "fa58a379b962fc590c976789c8fb8cbb968f0a1305b24f6623f16567984e9bd1",
       "SDKError.stage": "8de6c67a6a5fce1debb9a33593857a48da49a61b26d4a3e08b61d3d4f5621cd7",
       "SESSION_AUTHORITY_METADATA_KEY": "68e4a16e5b13c9e5bfae50b1e42182d6b777a5e96474049841f2d15c736ada6e",
-      "SdkEnvironment": "c8f5a4280aa5764f2506332aec44cedd8370dbba6cf3e6868262d4d8c9132b61",
+      "SdkEnvironment": "49fe91d16aa5d0208fe3875e968d0d9721b9f4eb7c3317d24cedb47121470255",
       "SdkEnvironment.ability_invocation_client": "f47b3671b4b8b8e41b688b74212a584bc462f52d9696c21e12fd3de3524a2afb",
       "SdkEnvironment.addressing_client": "a0c9cf052c5d9c91d2f52045681ae7e54e155492d263dd68fed3c585e2a5d046",
       "SdkEnvironment.client": "625e51e030b02d2cc553fd035f6c356e3d96917dddcded7d775fe2dfc28b19b3",
@@ -20041,7 +20041,7 @@
       "SdkEnvironment.runtime_client": "5709ee3c5aea42588d89cfeedc553880d371eff5886c4c2424f803702ef84634",
       "SdkEnvironment.runtime_client_direct": "66b5fd1e973fd139654f85d5c5bfca71210d441fb9db76cfc04b4d51238b20e8",
       "SdkEnvironment.runtime_connection": "55203ac56668fed6fa8a7199f6d48254187dc91d66593433dbd7427ef79b1262",
-      "SdkEnvironment.runtime_connection_direct": "74dcb4a8d29978f1f50645fab5d7d98cc38c1dfce300797c584211b43cb3f32a",
+      "SdkEnvironment.runtime_connection_direct": "37405d7a7c583a53f3bef0284b7e72add73ebd203f23372aeacceee451ec939f",
       "SdkEnvironment.runtime_credentials_path": "84a51a05852d370d6c6a398767bd9d231a65f3817094bef48de37dbfa67290d9",
       "SdkEnvironment.runtime_identity_projection": "b50598beccdc353f8cc04998ef8d3f6182041a1d0fdea715a8b6e158347422fd",
       "SdkEnvironment.runtime_lifecycle": "47acf9382b984f55ec5e44024bc50201a6e3e2a15db530dc4077c12623225422",
@@ -22403,9 +22403,9 @@
       "language": "python",
       "identity": "direct_runtime_provider",
       "production_owner": "canonical runtime provider",
-      "owner_path": "sdk/python/easynet_sdk/",
-      "path": "sdk/python/easynet_sdk/direct_runtime.py",
-      "sha256": "49a08364c6191b9d39c80b196627f466b6b1d7e8efb323f1d228e50594c655b7",
+      "owner_path": "sdk/python/easynet_sdk/providers/runtime/",
+      "path": "sdk/python/easynet_sdk/providers/runtime/direct.py",
+      "sha256": "f47d5bda9348cd23bc722e86988e2935350bf77e82eb35c6b8ea7bfba873d26b",
       "interface": "RuntimeConnector",
       "interface_path": "sdk/python/easynet_sdk/connection.py",
       "interface_sha256": "1f7a3334ed01cd7e8a1f084cff2b68efdd49e1c805b840c8a11346dc7aef61ae",

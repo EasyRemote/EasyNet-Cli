@@ -6,7 +6,7 @@ import tempfile
 import unittest
 
 import easynet_sdk
-import easynet_sdk.direct_runtime as direct_runtime
+import easynet_sdk.providers.runtime.direct as direct_runtime
 from easynet_sdk.consumer_boundary import audit_consumer_boundary
 
 
@@ -18,7 +18,7 @@ class ImportBoundaryTests(unittest.TestCase):
         private_cabi = root / "_cabi.py"
         provider_root = root / "providers"
         axon_addressing = root / "axon_addressing.py"
-        direct_runtime_path = root / "direct_runtime.py"
+        direct_runtime_path = root / "providers" / "runtime" / "direct.py"
         directory = root / "directory.py"
         receipt = root / "receipt.py"
         runtime = root / "runtime.py"
@@ -70,6 +70,7 @@ class ImportBoundaryTests(unittest.TestCase):
         self.assertIn("from axon_sdk.invocation import", direct_runtime_body)
         self.assertIn("_AxonDescriptorBoundEnvelope", direct_runtime_body)
         self.assertIn("_AxonDescriptorBoundInvocationRequest", direct_runtime_body)
+        self.assertFalse((root / "direct_runtime.py").exists())
 
     def test_raw_cabi_is_confined_to_private_transport_adapter(self) -> None:
         root = Path(__file__).resolve().parents[1] / "easynet_sdk"
@@ -111,7 +112,7 @@ class ImportBoundaryTests(unittest.TestCase):
 import json
 import easynet_sdk
 exported = set(getattr(easynet_sdk, "__all__", ()))
-allowed_metadata = {"annotations", "direct_runtime", "providers"}
+allowed_metadata = {"annotations", "providers"}
 leaked = sorted(
     name
     for name in dir(easynet_sdk)
@@ -148,7 +149,7 @@ sys.meta_path.insert(0, BlockGrpc())
 import easynet_sdk
 print(json.dumps({
     "has_runtime_client": hasattr(easynet_sdk, "RuntimeClient"),
-    "direct_runtime_loaded": "easynet_sdk.direct_runtime" in sys.modules,
+    "direct_runtime_loaded": "easynet_sdk.providers.runtime.direct" in sys.modules,
 }))
 '''
         completed = subprocess.run(
@@ -174,6 +175,7 @@ print(json.dumps({
         self.assertNotIn("DirectRuntimeTransport", exported)
         self.assertFalse(hasattr(easynet_sdk, "DirectRuntimeConnector"))
         self.assertFalse(hasattr(easynet_sdk, "DirectRuntimeTransport"))
+        self.assertFalse(hasattr(easynet_sdk, "direct_runtime"))
 
     def test_direct_runtime_does_not_export_axon_protobuf_modules(self) -> None:
         self.assertFalse(hasattr(direct_runtime, "invoke_pb2"))

@@ -58,7 +58,7 @@ def connect_direct_invocation_transport(
 
     resolved_control_path = options.control_path or control_path
     _ = library_path
-    from ...direct_runtime import DirectRuntimeConnector
+    from .direct import DirectRuntimeConnector
 
     connection = RuntimeConnection(
         DirectRuntimeConnector(

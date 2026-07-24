@@ -4331,7 +4331,7 @@ check_sdk_runtime_failure_code_contract() {
   local go_errors_test="$cli_root/sdk/go/errors_test.go"
   local go_direct_test="$cli_root/sdk/go/direct_runtime_codec_test.go"
   local py_errors="$cli_root/sdk/python/easynet_sdk/errors.py"
-  local py_direct="$cli_root/sdk/python/easynet_sdk/direct_runtime.py"
+  local py_direct="$cli_root/sdk/python/easynet_sdk/providers/runtime/direct.py"
   local py_errors_test="$cli_root/sdk/python/tests/test_errors.py"
   local py_direct_test="$cli_root/sdk/python/tests/test_direct_runtime.py"
 
@@ -4423,7 +4423,7 @@ check_sdk_direct_runtime_state_projection_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local go_direct="$cli_root/sdk/go/direct_runtime.go"
   local go_direct_test="$cli_root/sdk/go/direct_runtime_codec_test.go"
-  local py_direct="$cli_root/sdk/python/easynet_sdk/direct_runtime.py"
+  local py_direct="$cli_root/sdk/python/easynet_sdk/providers/runtime/direct.py"
   local py_direct_test="$cli_root/sdk/python/tests/test_direct_runtime.py"
 
   "$PYTHON_BIN" - "$go_direct" "$go_direct_test" "$py_direct" "$py_direct_test" <<'PY'
@@ -4512,7 +4512,7 @@ check_sdk_causal_context_dag_alias_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local go_signing="$cli_root/sdk/go/runtime_signing.go"
   local go_test="$cli_root/sdk/go/runtime_signing_test.go"
-  local py_direct="$cli_root/sdk/python/easynet_sdk/direct_runtime.py"
+  local py_direct="$cli_root/sdk/python/easynet_sdk/providers/runtime/direct.py"
   local py_test="$cli_root/sdk/python/tests/test_direct_runtime.py"
 
   "$PYTHON_BIN" - "$go_signing" "$go_test" "$py_direct" "$py_test" <<'PY'
@@ -4571,7 +4571,7 @@ check_sdk_direct_runtime_descriptor_not_found_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local go_direct="$cli_root/sdk/go/direct_runtime.go"
   local go_direct_test="$cli_root/sdk/go/direct_runtime_test.go"
-  local py_direct="$cli_root/sdk/python/easynet_sdk/direct_runtime.py"
+  local py_direct="$cli_root/sdk/python/easynet_sdk/providers/runtime/direct.py"
   local py_direct_test="$cli_root/sdk/python/tests/test_direct_runtime.py"
 
   "$PYTHON_BIN" - \
@@ -13654,7 +13654,7 @@ check_sdk_session_authority_binding_facade_contract() {
   local go_direct="$cli_root/sdk/go/direct_runtime.go"
   local go_tests="$cli_root/sdk/go/runtime_test.go"
   local py_runtime="$cli_root/sdk/python/easynet_sdk/runtime.py"
-  local py_direct="$cli_root/sdk/python/easynet_sdk/direct_runtime.py"
+  local py_direct="$cli_root/sdk/python/easynet_sdk/providers/runtime/direct.py"
   local py_tests="$cli_root/sdk/python/tests/test_runtime.py"
   local py_direct_tests="$cli_root/sdk/python/tests/test_direct_runtime.py"
   local node_runtime="$cli_root/sdk/node/index.js"
@@ -18684,6 +18684,7 @@ EOF
   fi
   mkdir -p "$tmp/sdk-runtime-failure-legacy/sdk/go" \
     "$tmp/sdk-runtime-failure-legacy/sdk/python/easynet_sdk" \
+    "$tmp/sdk-runtime-failure-legacy/sdk/python/easynet_sdk/providers/runtime" \
     "$tmp/sdk-runtime-failure-legacy/sdk/python/tests"
   printf '%s\n' \
     'func runtimeFailureCode(code string, fallback ErrorCode) ErrorCode {' \
@@ -18714,7 +18715,7 @@ EOF
     '    return ErrorCode.ADMISSION_DENIED' \
     '' \
     'def _failure_code_value(code): pass' \
-    > "$tmp/sdk-runtime-failure-legacy/sdk/python/easynet_sdk/direct_runtime.py"
+    > "$tmp/sdk-runtime-failure-legacy/sdk/python/easynet_sdk/providers/runtime/direct.py"
   touch "$tmp/sdk-runtime-failure-legacy/sdk/go/errors_test.go" \
     "$tmp/sdk-runtime-failure-legacy/sdk/go/direct_runtime_codec_test.go" \
     "$tmp/sdk-runtime-failure-legacy/sdk/python/tests/test_errors.py" \
@@ -18724,6 +18725,7 @@ EOF
   fi
   mkdir -p "$tmp/sdk-direct-runtime-state-fallback/sdk/go" \
     "$tmp/sdk-direct-runtime-state-fallback/sdk/python/easynet_sdk" \
+    "$tmp/sdk-direct-runtime-state-fallback/sdk/python/easynet_sdk/providers/runtime" \
     "$tmp/sdk-direct-runtime-state-fallback/sdk/python/tests"
   printf '%s\n' \
     'func directStateName(state axonpb.InvocationState) string {' \
@@ -18752,7 +18754,7 @@ EOF
     '' \
     'def _canonical_receipt_projection(receipt):' \
     '    return {"state": _state_name(receipt.state)}' \
-    > "$tmp/sdk-direct-runtime-state-fallback/sdk/python/easynet_sdk/direct_runtime.py"
+    > "$tmp/sdk-direct-runtime-state-fallback/sdk/python/easynet_sdk/providers/runtime/direct.py"
   printf 'def test_direct_runtime_projects_unspecified_invocation_state(): pass\n' \
     > "$tmp/sdk-direct-runtime-state-fallback/sdk/python/tests/test_direct_runtime.py"
   if ( check_sdk_direct_runtime_state_projection_contract "$tmp/sdk-direct-runtime-state-fallback" ) >/dev/null 2>&1; then
@@ -18760,6 +18762,7 @@ EOF
   fi
   mkdir -p "$tmp/sdk-causal-context-dag-alias/sdk/go" \
     "$tmp/sdk-causal-context-dag-alias/sdk/python/easynet_sdk" \
+    "$tmp/sdk-causal-context-dag-alias/sdk/python/easynet_sdk/providers/runtime" \
     "$tmp/sdk-causal-context-dag-alias/sdk/python/tests"
   printf '%s\n' \
     'func causalContextForInvocationDraft(value map[string]any) (CausalContext, error) {' \
@@ -18777,7 +18780,7 @@ EOF
     'def _axon_causal_context(value):' \
     '    if "dag_proof_ura" in value:' \
     '        return {"form": "merkle", "proof_ura": value["dag_proof_ura"]}' \
-    > "$tmp/sdk-causal-context-dag-alias/sdk/python/easynet_sdk/direct_runtime.py"
+    > "$tmp/sdk-causal-context-dag-alias/sdk/python/easynet_sdk/providers/runtime/direct.py"
   printf 'def test_direct_runtime_causal_context_accepts_retired_dag_proof_alias(): pass\n' \
     > "$tmp/sdk-causal-context-dag-alias/sdk/python/tests/test_direct_runtime.py"
   if ( check_sdk_causal_context_dag_alias_contract "$tmp/sdk-causal-context-dag-alias" ) >/dev/null 2>&1; then
@@ -18785,6 +18788,7 @@ EOF
   fi
   mkdir -p "$tmp/sdk-runtime-stage-fallback/sdk/go" \
     "$tmp/sdk-runtime-stage-fallback/sdk/python/easynet_sdk" \
+    "$tmp/sdk-runtime-stage-fallback/sdk/python/easynet_sdk/providers/runtime" \
     "$tmp/sdk-runtime-stage-fallback/sdk/python/tests"
   printf '%s\n' \
     'func runtimeFailureCode(code string) ErrorCode {' \
@@ -18825,7 +18829,7 @@ EOF
     '    return canonical_failure_code(code)' \
     '' \
     'def _failure_code_value(code): pass' \
-    > "$tmp/sdk-runtime-stage-fallback/sdk/python/easynet_sdk/direct_runtime.py"
+    > "$tmp/sdk-runtime-stage-fallback/sdk/python/easynet_sdk/providers/runtime/direct.py"
   printf '%s\n' \
     'def test_runtime_failure_code_preserves_domain_codes_and_rejects_legacy_aliases(): pass' \
     '"   ": ErrorCode.PROTOCOL_MISMATCH' \
@@ -18838,6 +18842,7 @@ EOF
   fi
   mkdir -p "$tmp/sdk-direct-runtime-not-found-legacy/sdk/go" \
     "$tmp/sdk-direct-runtime-not-found-legacy/sdk/python/easynet_sdk" \
+    "$tmp/sdk-direct-runtime-not-found-legacy/sdk/python/easynet_sdk/providers/runtime" \
     "$tmp/sdk-direct-runtime-not-found-legacy/sdk/python/tests"
   printf '%s\n' \
     'func directRuntimeGRPCError() error {' \
@@ -18859,7 +18864,7 @@ EOF
     '    return mapping' \
     '' \
     'def _direct_error(): pass' \
-    > "$tmp/sdk-direct-runtime-not-found-legacy/sdk/python/easynet_sdk/direct_runtime.py"
+    > "$tmp/sdk-direct-runtime-not-found-legacy/sdk/python/easynet_sdk/providers/runtime/direct.py"
   printf 'def test_direct_runtime_grpc_not_found_projects_descriptor_not_found(): pass\n' \
     > "$tmp/sdk-direct-runtime-not-found-legacy/sdk/python/tests/test_direct_runtime.py"
   if ( check_sdk_direct_runtime_descriptor_not_found_contract "$tmp/sdk-direct-runtime-not-found-legacy" ) >/dev/null 2>&1; then

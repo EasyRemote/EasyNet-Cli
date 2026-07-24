@@ -34,7 +34,7 @@ from easynet_sdk._axon_pb.axon.v1 import (
     types_pb2 as _types_pb2,
 )
 from easynet_sdk.control_ipc import _ControlDiscovery, _IpcVersionRange
-from easynet_sdk.direct_runtime import (
+from easynet_sdk.providers.runtime.direct import (
     DirectRuntimeBidiTransport,
     DirectRuntimeConnector,
     DirectRuntimeTransport,
