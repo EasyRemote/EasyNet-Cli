@@ -306,13 +306,12 @@ pub enum PermissionLifetime {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct PermissionRequest {
     pub request_id: String,
-    #[serde(default)]
     pub owner_user_id: String,
     pub caller_ura: String,
     pub principal_kind: PrincipalKind,
-    #[serde(default)]
     pub principal_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token_id: Option<String>,
@@ -442,7 +441,8 @@ pub struct AdmissionExplainResult {
 
 #[cfg(test)]
 mod tests {
-    use super::SignatureDecisionReason;
+    use super::*;
+    use serde_json::json;
 
     #[test]
     fn signature_reason_parser_preserves_specific_legacy_detail() {
@@ -465,6 +465,60 @@ mod tests {
         assert_eq!(
             SignatureDecisionReason::from_admission_detail("CALLER_UNKNOWN: caller not trusted"),
             SignatureDecisionReason::CallerKeyNotFound
+        );
+    }
+
+    fn permission_request_json() -> serde_json::Value {
+        json!({
+            "request_id": "req-1",
+            "owner_user_id": "alice",
+            "caller_ura": "easynet:///r/test/user/alice",
+            "principal_kind": "token",
+            "principal_id": "token-principal",
+            "token_id": "token-1",
+            "token_class": "hub_link",
+            "callee_ura": "easynet:///r/test/device/dev",
+            "subject_ura": "easynet:///r/test/resource/user.alice/session/s1",
+            "ability_ura": "terminal.attach",
+            "action": "stream",
+            "nonce": "nonce-1",
+            "requested_lifetimes": ["session"],
+            "status": "pending",
+            "created_at": "2026-07-09T00:00:00Z",
+            "expires_at": "2026-07-09T00:05:00Z"
+        })
+    }
+
+    #[test]
+    fn permission_request_deserialization_rejects_unknown_fields() {
+        let mut raw = permission_request_json();
+        raw["legacy_subject"] = json!("compat-carrier");
+        let error = serde_json::from_value::<PermissionRequest>(raw)
+            .expect_err("PermissionRequest must reject unknown fields");
+        assert!(
+            error.to_string().contains("unknown field `legacy_subject`"),
+            "error should name the noncanonical request field: {error}"
+        );
+    }
+
+    #[test]
+    fn permission_request_deserialization_requires_identity_fields() {
+        let mut raw = permission_request_json();
+        raw.as_object_mut().expect("object").remove("owner_user_id");
+        let error = serde_json::from_value::<PermissionRequest>(raw)
+            .expect_err("PermissionRequest must require owner_user_id");
+        assert!(
+            error.to_string().contains("missing field `owner_user_id`"),
+            "error should name missing owner identity: {error}"
+        );
+
+        let mut raw = permission_request_json();
+        raw.as_object_mut().expect("object").remove("principal_id");
+        let error = serde_json::from_value::<PermissionRequest>(raw)
+            .expect_err("PermissionRequest must require principal_id");
+        assert!(
+            error.to_string().contains("missing field `principal_id`"),
+            "error should name missing principal identity: {error}"
         );
     }
 }

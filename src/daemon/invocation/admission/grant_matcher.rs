@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use super::decision::{AccessAction, PrincipalKind, TokenClass};
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct PermissionConstraints {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub args_schema_filter: Option<serde_json::Value>,
@@ -55,12 +56,11 @@ pub enum PermissionGrantState {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct PermissionGrant {
     pub grant_id: String,
-    #[serde(default)]
     pub owner_user_id: String,
     pub principal_kind: PrincipalKind,
-    #[serde(default)]
     pub principal_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token_id: Option<String>,
@@ -316,6 +316,7 @@ fn pattern_match(pattern: Option<&str>, value: &str) -> Option<PatternMatch> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     fn grant(id: &str, effect: PermissionEffect, subject: &str, ability: &str) -> PermissionGrant {
         PermissionGrant {
@@ -343,6 +344,78 @@ mod tests {
             revoked_at: None,
             reason: None,
         }
+    }
+
+    fn grant_json() -> serde_json::Value {
+        json!({
+            "grant_id": "grant-1",
+            "owner_user_id": "alice",
+            "principal_kind": "token",
+            "principal_id": "token-principal",
+            "token_id": "token-1",
+            "token_class": "hub_link",
+            "callee_ura": "easynet:///r/test/device/dev",
+            "subject_ura_pattern": "easynet:///r/test/resource/user.alice/session/s1",
+            "ability_ura_pattern": "terminal.attach",
+            "actions": ["read"],
+            "constraints": {
+                "resource_types": [],
+                "network_scope": "local"
+            },
+            "effect": "allow",
+            "lifetime": "permanent",
+            "state": "active",
+            "created_by": "easynet:///r/test/user/alice",
+            "created_at": "2026-07-09T00:00:00Z"
+        })
+    }
+
+    #[test]
+    fn permission_grant_deserialization_rejects_unknown_fields() {
+        let mut raw = grant_json();
+        raw["legacy_scope"] = json!("compat-carrier");
+        let error = serde_json::from_value::<PermissionGrant>(raw)
+            .expect_err("PermissionGrant must reject unknown fields");
+        assert!(
+            error.to_string().contains("unknown field `legacy_scope`"),
+            "error should name the noncanonical grant field: {error}"
+        );
+    }
+
+    #[test]
+    fn permission_grant_deserialization_requires_identity_fields() {
+        let mut raw = grant_json();
+        raw.as_object_mut().expect("object").remove("owner_user_id");
+        let error = serde_json::from_value::<PermissionGrant>(raw)
+            .expect_err("PermissionGrant must require owner_user_id");
+        assert!(
+            error.to_string().contains("missing field `owner_user_id`"),
+            "error should name missing owner identity: {error}"
+        );
+
+        let mut raw = grant_json();
+        raw.as_object_mut().expect("object").remove("principal_id");
+        let error = serde_json::from_value::<PermissionGrant>(raw)
+            .expect_err("PermissionGrant must require principal_id");
+        assert!(
+            error.to_string().contains("missing field `principal_id`"),
+            "error should name missing principal identity: {error}"
+        );
+    }
+
+    #[test]
+    fn permission_constraints_deserialization_rejects_unknown_fields() {
+        let raw = json!({
+            "resource_types": [],
+            "network_scope": "local",
+            "legacy_filter": {"allow": true}
+        });
+        let error = serde_json::from_value::<PermissionConstraints>(raw)
+            .expect_err("PermissionConstraints must reject unknown fields");
+        assert!(
+            error.to_string().contains("unknown field `legacy_filter`"),
+            "error should name noncanonical constraint field: {error}"
+        );
     }
 
     #[test]

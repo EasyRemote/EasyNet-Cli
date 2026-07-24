@@ -2718,6 +2718,79 @@ if facade_duplicate in facade:
 PY
 }
 
+check_access_control_policy_schema_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local grant_matcher="$cli_root/src/daemon/invocation/admission/grant_matcher.rs"
+  local decision="$cli_root/src/daemon/invocation/admission/decision.rs"
+  [[ -f "$grant_matcher" ]] || fail "grant matcher source is missing: ${grant_matcher#$cli_root/}"
+  [[ -f "$decision" ]] || fail "admission decision source is missing: ${decision#$cli_root/}"
+
+  "$PYTHON_BIN" - "$grant_matcher" "$decision" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+grant_text = Path(sys.argv[1]).read_text(encoding="utf-8")
+decision_text = Path(sys.argv[2]).read_text(encoding="utf-8")
+
+def struct_with_attrs(text: str, name: str) -> tuple[str, str]:
+    match = re.search(
+        r"(?P<attrs>(?:#\[[^\n]+\]\n)*)pub struct " + re.escape(name) + r" \{(?P<body>.*?)\n\}",
+        text,
+        re.S,
+    )
+    if match is None:
+        raise SystemExit(f"access_control_policy_schema:{name}:missing")
+    return match.group("attrs"), match.group("body")
+
+constraints_attrs, _constraints_body = struct_with_attrs(grant_text, "PermissionConstraints")
+grant_attrs, grant_body = struct_with_attrs(grant_text, "PermissionGrant")
+request_attrs, request_body = struct_with_attrs(decision_text, "PermissionRequest")
+
+for name, attrs in (
+    ("PermissionConstraints", constraints_attrs),
+    ("PermissionGrant", grant_attrs),
+    ("PermissionRequest", request_attrs),
+):
+    if "#[serde(deny_unknown_fields)]" not in attrs:
+        raise SystemExit(f"access_control_policy_schema:{name}:missing_deny_unknown_fields")
+
+for name, body in (
+    ("PermissionGrant", grant_body),
+    ("PermissionRequest", request_body),
+):
+    for field in ("owner_user_id", "principal_id"):
+        field_offset = body.find(f"pub {field}: String")
+        if field_offset < 0:
+            raise SystemExit(f"access_control_policy_schema:{name}:missing_identity_field:{field}")
+        prefix = body[max(0, field_offset - 80):field_offset]
+        if "#[serde(default)]" in prefix:
+            raise SystemExit(f"access_control_policy_schema:{name}:identity_default_retired:{field}")
+
+for required in (
+    "permission_grant_deserialization_rejects_unknown_fields",
+    "permission_grant_deserialization_requires_identity_fields",
+    "permission_constraints_deserialization_rejects_unknown_fields",
+    "unknown field `legacy_scope`",
+    "unknown field `legacy_filter`",
+    "missing field `owner_user_id`",
+    "missing field `principal_id`",
+):
+    if required not in grant_text:
+        raise SystemExit(f"access_control_policy_schema:grant_test_missing:{required}")
+
+for required in (
+    "permission_request_deserialization_rejects_unknown_fields",
+    "permission_request_deserialization_requires_identity_fields",
+    "unknown field `legacy_subject`",
+    "missing field `owner_user_id`",
+    "missing field `principal_id`",
+):
+    if required not in decision_text:
+        raise SystemExit(f"access_control_policy_schema:request_test_missing:{required}")
+PY
+}
+
 check_resources_schema_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local resources="$cli_root/src/daemon/persistence/resources.rs"
@@ -18175,6 +18248,56 @@ EOF
   if ( CLI_ROOT="$tmp/authority-proof-route-binding-child-legacy"; check_authority_proof_session_fact_contract ) >/dev/null 2>&1; then
     fail "self-test expected authority proof route binding child duplication gate to fail"
   fi
+  mkdir -p "$tmp/access-control-policy-schema-legacy/src/daemon/invocation/admission"
+  cat >"$tmp/access-control-policy-schema-legacy/src/daemon/invocation/admission/grant_matcher.rs" <<'EOF'
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct PermissionConstraints {
+    #[serde(default)]
+    pub resource_types: Vec<String>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct PermissionGrant {
+    pub grant_id: String,
+    #[serde(default)]
+    pub owner_user_id: String,
+    pub principal_kind: PrincipalKind,
+    #[serde(default)]
+    pub principal_id: String,
+}
+#[cfg(test)]
+mod tests {
+    fn permission_grant_deserialization_rejects_unknown_fields() {}
+    fn permission_grant_deserialization_requires_identity_fields() {}
+    fn permission_constraints_deserialization_rejects_unknown_fields() {
+        assert!("unknown field `legacy_filter`".len() > 0);
+    }
+}
+EOF
+  cat >"$tmp/access-control-policy-schema-legacy/src/daemon/invocation/admission/decision.rs" <<'EOF'
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct PermissionRequest {
+    pub request_id: String,
+    #[serde(default)]
+    pub owner_user_id: String,
+    pub caller_ura: String,
+    pub principal_kind: PrincipalKind,
+    #[serde(default)]
+    pub principal_id: String,
+}
+#[cfg(test)]
+mod tests {
+    fn permission_request_deserialization_rejects_unknown_fields() {
+        assert!("unknown field `legacy_subject`".len() > 0);
+    }
+    fn permission_request_deserialization_requires_identity_fields() {
+        assert!("missing field `owner_user_id`".len() > 0);
+        assert!("missing field `principal_id`".len() > 0);
+    }
+}
+EOF
+  if ( CLI_ROOT="$tmp/access-control-policy-schema-legacy"; check_access_control_policy_schema_contract ) >/dev/null 2>&1; then
+    fail "self-test expected access-control policy schema compatibility gate to fail"
+  fi
   mkdir -p "$tmp/resources-schema-legacy/src/daemon/persistence"
   cat >"$tmp/resources-schema-legacy/src/daemon/persistence/resources.rs" <<'EOF'
 /// Resource type taxonomy — RFC-005 v3.2. The wire form is a
@@ -18689,6 +18812,7 @@ EOF
   check_profile_store_schema_contract
   check_auth_session_owner_fact_contract
   check_authority_proof_session_fact_contract
+  check_access_control_policy_schema_contract
   check_resources_schema_contract
   check_agent_spec_schema_contract
   check_control_discovery_schema_contract
@@ -18881,6 +19005,7 @@ check_pages_api_response_projection_contract
 check_profile_store_schema_contract
 check_auth_session_owner_fact_contract
 check_authority_proof_session_fact_contract
+check_access_control_policy_schema_contract
 check_resources_schema_contract
 check_agent_spec_schema_contract
 check_control_discovery_schema_contract

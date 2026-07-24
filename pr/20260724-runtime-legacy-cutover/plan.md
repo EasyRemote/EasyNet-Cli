@@ -1455,3 +1455,42 @@ architecture rather than add feature surface.
   - `tools/scripts/check-architecture-convergence.sh`
   - `cargo fmt --check`
   - `git diff --check`
+
+## Iteration 34 candidate policy
+
+- Continue closing the same admission/proof custody chain. After
+  `AuthorityProof` became strict, the adjacent access-control models still had
+  wider serde ingress: `PermissionGrant`, `PermissionRequest`, and
+  `PermissionConstraints` accepted unknown fields, and grant/request identity
+  facts defaulted when omitted.
+- The root abstraction problem is that access-control replay and admission
+  request storage could accept legacy or partial policy records and only reject
+  them later through validation. For policy custody, schema authority should
+  fail at parse time.
+- The selected cutover is to make policy request/grant schemas exact and to
+  require owner/principal identity facts explicitly.
+
+## Iteration 34 decision log
+
+- `PermissionGrant`, `PermissionRequest`, and `PermissionConstraints` now use
+  `#[serde(deny_unknown_fields)]`.
+- Removed serde defaults from `PermissionGrant.owner_user_id`,
+  `PermissionGrant.principal_id`, `PermissionRequest.owner_user_id`, and
+  `PermissionRequest.principal_id`.
+- Added negative deserialization tests for unknown grant/request/constraint
+  fields and missing owner/principal identity fields.
+- SPEC v2 now includes `check_access_control_policy_schema_contract`, with a
+  self-test fixture that preserves the retired defaults and missing
+  deny-unknown attributes.
+- Verification passed:
+  - `/Users/macbook.silan.tech/.local/bin/codegraph explore "PermissionRequest PermissionGrant access-control legacy compatibility unknown fields authority proof admission persistence"`
+  - `cargo test -q permission_grant_deserialization`
+  - `cargo test -q permission_constraints_deserialization`
+  - `cargo test -q permission_request_deserialization`
+  - `cargo test -q access_control`
+  - `bash -n tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - `tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  - `tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - `tools/scripts/check-architecture-convergence.sh`
+  - `cargo fmt --check`
+  - `git diff --check`
