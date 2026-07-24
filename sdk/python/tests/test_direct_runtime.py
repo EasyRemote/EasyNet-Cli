@@ -33,7 +33,7 @@ from easynet_sdk._axon_pb.axon.v1 import (
     invoke_pb2_grpc as _invoke_pb2_grpc,
     types_pb2 as _types_pb2,
 )
-from easynet_sdk.control_ipc import _ControlDiscovery, _IpcVersionRange
+from easynet_sdk.providers.runtime.control import _ControlDiscovery, _IpcVersionRange
 from easynet_sdk.providers.runtime.direct import (
     DirectRuntimeBidiTransport,
     DirectRuntimeConnector,
@@ -335,7 +335,7 @@ class DirectRuntimeTests(unittest.TestCase):
             discovery_reader=lambda path: _ControlDiscovery(
                 socket_path="/tmp/control.sock",
                 invocation_endpoint="/tmp/invoke.sock",
-                daemon_version="1.2.3",
+                runtime_host_version="1.2.3",
                 supported_ipc_versions=_IpcVersionRange(1, 1),
                 capability_flags=("runtime.invoke", "direct.grpc"),
             ),

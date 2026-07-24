@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Callable, Mapping, Protocol, runtime_checkable
 
-from .control_ipc import _ControlDiscovery, _read_control_discovery
+from .providers.runtime.control import _ControlDiscovery, _read_control_discovery
 from .errors import ErrorCode, RetryHint, SDKError
 from .runtime import RuntimeClient, RuntimeTransport
 
@@ -27,7 +27,7 @@ class ConnectionState(StrEnum):
 
 @dataclass(frozen=True)
 class ConnectOptions:
-    """Daemon Runtime Core connection knobs."""
+    """Runtime Core connection knobs."""
 
     endpoint: str = ""
     control_path: str = ""
@@ -107,7 +107,7 @@ class RuntimeConnector(Protocol):
 
 @dataclass
 class _ControlDiscoveryRuntimeConnector:
-    """Resolve Runtime Core endpoints from daemon control discovery.
+    """Resolve Runtime Core endpoints from runtime-host control discovery.
 
     The connector owns only discovery-to-endpoint projection. Handshake,
     transport lifetime, and Invocation protocol behavior stay delegated to the

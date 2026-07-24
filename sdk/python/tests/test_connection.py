@@ -10,7 +10,7 @@ from easynet_sdk import (
     is_code,
 )
 from easynet_sdk.connection import _ControlDiscoveryRuntimeConnector
-from easynet_sdk.control_ipc import _ControlDiscovery, _IpcVersionRange
+from easynet_sdk.providers.runtime.control import _ControlDiscovery, _IpcVersionRange
 
 
 class MemoryRuntimeConnector:
@@ -191,7 +191,7 @@ class _ControlDiscoveryRuntimeConnectorTests(unittest.TestCase):
         return _ControlDiscovery(
             socket_path="/tmp/control.sock",
             invocation_endpoint="unix:///tmp/invocation.sock",
-            daemon_version="1.2.3",
+            runtime_host_version="1.2.3",
             supported_ipc_versions=_IpcVersionRange(1, 1),
             capability_flags=("runtime",),
         )

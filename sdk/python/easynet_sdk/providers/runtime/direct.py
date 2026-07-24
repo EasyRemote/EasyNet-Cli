@@ -37,7 +37,7 @@ from ..._axon_pb.axon.v1 import (
     invoke_pb2_grpc as _invoke_pb2_grpc,
     types_pb2 as _types_pb2,
 )
-from ...control_ipc import _ControlDiscovery, _read_control_discovery
+from .control import _ControlDiscovery, _read_control_discovery
 from ...errors import (
     ErrorCode,
     RetryHint,

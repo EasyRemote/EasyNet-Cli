@@ -14,7 +14,7 @@ from .connection import (
     _ControlDiscoveryRuntimeConnector,
     RuntimeConnection,
 )
-from .control_ipc import _ControlIpcClient, _default_control_path
+from .providers.runtime.control import _ControlIpcClient, _default_control_path
 from .runtime_lifecycle import RuntimeLifecycle
 from .errors import ErrorCode, RetryHint, SDKError
 from .health import HealthClient
@@ -323,7 +323,7 @@ class SdkEnvironment:
         return self._track(_canonical_addressing_client())
 
     def close(self) -> None:
-        """Close SDK-owned resources without stopping daemon processes."""
+        """Close SDK-owned resources without stopping runtime-host processes."""
 
         if self._closed:
             return

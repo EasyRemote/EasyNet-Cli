@@ -12,7 +12,7 @@ from easynet_sdk import (
     SdkEnvironment,
     is_code,
 )
-from easynet_sdk.control_ipc import (
+from easynet_sdk.providers.runtime.control import (
     _CONTROL_IPC_VERSION,
     _ControlDiscovery,
     _ControlIpcClient,

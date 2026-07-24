@@ -1,7 +1,7 @@
 """Local runtime environment projection.
 
 The SDK owns the local runtime state-root and paired identity projection so
-downstream products do not parse daemon credentials independently.
+downstream products do not parse runtime-host credentials independently.
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
 
-from .control_ipc import _default_control_path
+from .providers.runtime.control import _default_control_path
 from .errors import ErrorCode, RetryHint, SDKError
 
 _CREDENTIALS_FILENAME = "credentials.json"

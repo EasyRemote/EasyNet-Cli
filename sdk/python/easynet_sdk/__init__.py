@@ -706,7 +706,6 @@ _ROOT_MODULE_EXPORTS = (
     "bidi",
     "client",
     "connection",
-    "control_ipc",
     "core",
     "directory",
     "environment",

@@ -3229,7 +3229,7 @@ check_sdk_control_discovery_strict_wire_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local go_src="$cli_root/sdk/go/control_discovery.go"
   local go_test="$cli_root/sdk/go/control_discovery_test.go"
-  local py_src="$cli_root/sdk/python/easynet_sdk/control_ipc.py"
+  local py_src="$cli_root/sdk/python/easynet_sdk/providers/runtime/control.py"
   local py_test="$cli_root/sdk/python/tests/test_control_ipc.py"
 
   "$PYTHON_BIN" - "$go_src" "$go_test" "$py_src" "$py_test" <<'PY'
@@ -20170,7 +20170,7 @@ EOF
     fail "self-test expected control discovery schema compatibility gate to fail"
   fi
   mkdir -p "$tmp/sdk-control-discovery-loose/sdk/go" \
-    "$tmp/sdk-control-discovery-loose/sdk/python/easynet_sdk" \
+    "$tmp/sdk-control-discovery-loose/sdk/python/easynet_sdk/providers/runtime" \
     "$tmp/sdk-control-discovery-loose/sdk/python/tests"
   cat >"$tmp/sdk-control-discovery-loose/sdk/go/control_discovery.go" <<'EOF'
 package easynet
@@ -20198,7 +20198,7 @@ func TestFileControlDiscoveryReaderRejectsLooseControlJSON() {
     _ = `"pages_port":0`
 }
 EOF
-  cat >"$tmp/sdk-control-discovery-loose/sdk/python/easynet_sdk/control_ipc.py" <<'EOF'
+  cat >"$tmp/sdk-control-discovery-loose/sdk/python/easynet_sdk/providers/runtime/control.py" <<'EOF'
 def from_json(decoded):
     flags = decoded.get("capability_flags", [])
     pages_port = _optional_non_negative_int(decoded.get("pages_port"), "pages_port")

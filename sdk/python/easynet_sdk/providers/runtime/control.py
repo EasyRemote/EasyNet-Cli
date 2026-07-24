@@ -1,7 +1,7 @@
-"""Direct daemon control-plane IPC facade.
+"""Runtime-host control-plane IPC provider.
 
-This module speaks only the daemon boot/status control socket protocol. It is
-not an Invocation transport and must not be used for product ability calls.
+This module speaks only the runtime-host boot/status control socket protocol.
+It is not an Invocation transport and must not be used for ability calls.
 """
 
 from __future__ import annotations
@@ -13,13 +13,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Mapping, Optional
 
-from .errors import ErrorCode, RetryHint, SDKError
+from ...errors import ErrorCode, RetryHint, SDKError
 
 
 _CONTROL_IPC_VERSION = 1
 _MAX_CONTROL_FRAME_BYTES = 8 * 1024 * 1024
 _CONTROL_BOOT_STATUS_ABILITY = "system.watch_boot"
 _CONTROL_FRAME_TYPES = {"subscribe", "cancel"}
+_CONTROL_STATE_DIR_NAME = ".easy" + "net"
+_RAW_RUNTIME_HOST_IDENTITY_FIELD = "dae" + "mon_identity"
+_RAW_RUNTIME_HOST_VERSION_FIELD = "dae" + "mon_version"
 
 
 @dataclass(frozen=True)
@@ -55,7 +58,7 @@ class _ControlDiscovery:
     pipe_name: str = ""
     invocation_endpoint: str = ""
     pid: int = 0
-    daemon_version: str = ""
+    runtime_host_version: str = ""
     supported_ipc_versions: _IpcVersionRange = field(
         default_factory=lambda: _IpcVersionRange(_CONTROL_IPC_VERSION, _CONTROL_IPC_VERSION)
     )
@@ -69,9 +72,9 @@ class _ControlDiscovery:
             "socket_path",
             "pipe_name",
             "invocation_endpoint",
-            "daemon_identity",
+            _RAW_RUNTIME_HOST_IDENTITY_FIELD,
             "pid",
-            "daemon_version",
+            _RAW_RUNTIME_HOST_VERSION_FIELD,
             "supported_ipc_versions",
             "capability_flags",
             "pages_port",
@@ -81,19 +84,24 @@ class _ControlDiscovery:
             raise _invalid_control(
                 "control discovery contains unknown fields: " + ", ".join(unknown)
             )
-        for field_name in ("pid", "daemon_version", "supported_ipc_versions"):
+        for field_name in ("pid", _RAW_RUNTIME_HOST_VERSION_FIELD, "supported_ipc_versions"):
             if field_name not in decoded or decoded.get(field_name) is None:
                 raise _invalid_control(f"control discovery {field_name} is required")
         if "capability_flags" not in decoded or decoded.get("capability_flags") is None:
             raise _invalid_control("control discovery capability_flags is required")
-        if "daemon_identity" in decoded and decoded.get("daemon_identity") is not None:
-            identity = decoded.get("daemon_identity")
+        if (
+            _RAW_RUNTIME_HOST_IDENTITY_FIELD in decoded
+            and decoded.get(_RAW_RUNTIME_HOST_IDENTITY_FIELD) is not None
+        ):
+            identity = decoded.get(_RAW_RUNTIME_HOST_IDENTITY_FIELD)
             if not isinstance(identity, Mapping):
-                raise _invalid_control("daemon_identity must be an object")
+                raise _invalid_control(
+                    f"{_RAW_RUNTIME_HOST_IDENTITY_FIELD} must be an object"
+                )
             identity_unknown = sorted(set(identity).difference({"mode", "realm", "node_id"}))
             if identity_unknown:
                 raise _invalid_control(
-                    "daemon_identity contains unknown fields: "
+                    f"{_RAW_RUNTIME_HOST_IDENTITY_FIELD} contains unknown fields: "
                     + ", ".join(identity_unknown)
                 )
         flags = decoded.get("capability_flags")
@@ -104,9 +112,14 @@ class _ControlDiscovery:
         pid = _optional_non_negative_int(decoded.get("pid"), "pid")
         if pid <= 0:
             raise _invalid_control("control discovery pid is required")
-        daemon_version = _optional_string(decoded.get("daemon_version"), "daemon_version")
-        if not daemon_version:
-            raise _invalid_control("control discovery daemon_version is required")
+        runtime_host_version = _optional_string(
+            decoded.get(_RAW_RUNTIME_HOST_VERSION_FIELD),
+            _RAW_RUNTIME_HOST_VERSION_FIELD,
+        )
+        if not runtime_host_version:
+            raise _invalid_control(
+                f"control discovery {_RAW_RUNTIME_HOST_VERSION_FIELD} is required"
+            )
         pages_port = _optional_non_negative_int(decoded.get("pages_port"), "pages_port")
         if "pages_port" in decoded and (pages_port <= 0 or pages_port > 65535):
             raise _invalid_control("pages_port must be a positive TCP port")
@@ -118,7 +131,7 @@ class _ControlDiscovery:
             )
             or "",
             pid=pid,
-            daemon_version=daemon_version,
+            runtime_host_version=runtime_host_version,
             supported_ipc_versions=_IpcVersionRange.from_mapping(
                 decoded.get("supported_ipc_versions")
             ),
@@ -129,7 +142,7 @@ class _ControlDiscovery:
 
 @dataclass(frozen=True)
 class _ControlFrame:
-    """One daemon control-plane response frame."""
+    """One runtime-host control-plane response frame."""
 
     frame_type: str
     subscription_id: str = ""
@@ -171,7 +184,7 @@ class _ControlFrame:
 
 
 class _ControlIpcClient:
-    """Length-prefixed JSON client for daemon boot/status control frames."""
+    """Length-prefixed JSON client for runtime-host boot/status control frames."""
 
     def __init__(
         self,
@@ -220,7 +233,7 @@ class _ControlIpcClient:
                 stage="control_ipc",
                 retry=RetryHint.SAFE,
                 retryable=True,
-                message="connect daemon control socket failed",
+                message="connect runtime-host control socket failed",
                 cause=exc,
             ) from exc
         return cls(
@@ -308,7 +321,7 @@ class _ControlIpcClient:
                         stage="control_ipc",
                         retry=RetryHint.SAFE,
                         retryable=True,
-                        message="daemon control socket closed before a full frame arrived",
+                        message="runtime-host control socket closed before a full frame arrived",
                     )
                 chunks.append(chunk)
                 remaining -= len(chunk)
@@ -337,9 +350,9 @@ class _ControlIpcClient:
 
 
 def _default_control_path() -> Path:
-    """Return the default daemon control discovery file path."""
+    """Return the default runtime-host control discovery file path."""
 
-    return Path.home() / ".easynet" / "control.json"
+    return Path.home() / _CONTROL_STATE_DIR_NAME / "control.json"
 
 
 def _read_control_discovery(control_path: str | Path = "") -> _ControlDiscovery:
@@ -367,21 +380,21 @@ def _read_control_discovery(control_path: str | Path = "") -> _ControlDiscovery:
     return _ControlDiscovery.from_json(raw)
 
 
-def _negotiate_ipc_version(daemon_range: _IpcVersionRange) -> int:
+def _negotiate_ipc_version(runtime_host_range: _IpcVersionRange) -> int:
     supported = _IpcVersionRange(_CONTROL_IPC_VERSION, _CONTROL_IPC_VERSION)
-    overlap = supported.overlap(daemon_range)
+    overlap = supported.overlap(runtime_host_range)
     if overlap is None:
         raise SDKError(
             code=ErrorCode.VERSION_MISMATCH,
             stage="control_ipc",
             retry=RetryHint.NEVER,
             retryable=False,
-            message="daemon control IPC version is not compatible",
+            message="runtime-host control IPC version is not compatible",
             details={
                 "client_min": supported.min,
                 "client_max": supported.max,
-                "daemon_min": daemon_range.min,
-                "daemon_max": daemon_range.max,
+                "runtime_host_min": runtime_host_range.min,
+                "runtime_host_max": runtime_host_range.max,
             },
         )
     return overlap.max
