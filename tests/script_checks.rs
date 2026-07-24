@@ -310,6 +310,13 @@ fn eal_interpreter_flat_call_boundary_script_holds() {
 }
 
 #[test]
+fn managed_signing_provider_owner_boundary_script_holds() {
+    // Pins managed-signing provider trait ownership to the keyring provider
+    // module. Ability handlers consume it but must not re-export it.
+    run_bash_script("tests/scripts/test_check_managed_signing_provider_owner_boundary.sh");
+}
+
+#[test]
 fn discover_scope_boundary_script_holds() {
     // Pins <agent>.discover to current scope literals only. The
     // retired easynet alias must stay absent from parser and schema.

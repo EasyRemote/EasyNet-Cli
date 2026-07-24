@@ -39,7 +39,7 @@ use crate::daemon::keyring::managed_signing_projection::{
     ManagedSigningPeerAddResponse, ManagedSigningPeerListResponse, ManagedSigningPublicResponse,
     ManagedSigningRevokeResponse, ManagedSigningRotateResponse,
 };
-pub use crate::daemon::keyring::managed_signing_provider::ManagedSigningProvider;
+use crate::daemon::keyring::managed_signing_provider::ManagedSigningProvider;
 
 fn b64_encode(bytes: &[u8]) -> String {
     use base64::engine::general_purpose::STANDARD;
@@ -768,7 +768,10 @@ mod tests {
             }),
         )
         .expect_err("must reject malformed managed-signing subject");
-        assert!(err.to_string().contains("canonical"));
+        assert!(
+            err.to_string().contains("admissible runtime URA"),
+            "rejection must explain runtime identity URA policy; got: {err}"
+        );
     }
 
     #[test]

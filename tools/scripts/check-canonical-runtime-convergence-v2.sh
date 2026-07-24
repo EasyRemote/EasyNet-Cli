@@ -5822,11 +5822,12 @@ for required in (
 for retired in (
     "pub trait ManagedSigningProvider",
     "impl ManagedSigningProvider for KeyringClient",
+    "pub use crate::daemon::keyring::managed_signing_provider::ManagedSigningProvider;",
 ):
     if retired in abilities:
         raise SystemExit(f"user_binding_issue_state_machine:abilities_owns_provider:{retired}")
-if "pub use crate::daemon::keyring::managed_signing_provider::ManagedSigningProvider;" not in abilities:
-    raise SystemExit("user_binding_issue_state_machine:abilities_missing_provider_reexport")
+if "use crate::daemon::keyring::managed_signing_provider::ManagedSigningProvider;" not in abilities:
+    raise SystemExit("user_binding_issue_state_machine:abilities_missing_provider_import")
 
 for required in (
     "pub struct UserBindingIssueRequest",
@@ -18052,7 +18053,7 @@ fn evidence() {
 }
 EOF
   cat >"$tmp/user-binding-issue-inline-legacy/src/daemon/keyring/abilities.rs" <<'EOF'
-pub use crate::daemon::keyring::managed_signing_provider::ManagedSigningProvider;
+use crate::daemon::keyring::managed_signing_provider::ManagedSigningProvider;
 pub fn handle_federate_user_identity_token(provider: &dyn ManagedSigningProvider, args: Value) -> Result<Value> {
     let target_realm = require_str(&args, "target_realm")?.to_string();
     let managed_key_id = require_str(&args, "managed_key_id")?;

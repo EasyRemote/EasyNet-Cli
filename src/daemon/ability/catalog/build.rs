@@ -1303,7 +1303,7 @@ fn declare_daemon_native_agent_authorities(
 /// service unavailable; assembly never falls back to a local store or omits
 /// the capability.
 fn key_service_for_daemon(
-) -> std::sync::Arc<dyn crate::daemon::keyring::abilities::ManagedSigningProvider> {
+) -> std::sync::Arc<dyn crate::daemon::keyring::managed_signing_provider::ManagedSigningProvider> {
     std::sync::Arc::new(crate::daemon::identity::self_identity::KeyringClient::default_path())
 }
 

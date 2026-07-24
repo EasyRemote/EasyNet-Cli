@@ -21,9 +21,8 @@
 // Usage Contract
 // --------------
 // Runtime state machines depend on narrow traits in this module rather than on
-// `abilities.rs` or the full administration provider. Ability handlers may
-// re-export the full trait for existing call sites, but they do not own the
-// provider abstraction.
+// `abilities.rs` or the full administration provider. Ability handlers consume
+// these traits directly; this module remains the provider abstraction owner.
 //
 // Architectural Position
 // ----------------------

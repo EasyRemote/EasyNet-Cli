@@ -45,9 +45,9 @@ use serde_json::{json, Value};
 use easynet_cli::daemon::identity::self_identity::KeyringClient;
 use easynet_cli::daemon::keyring::abilities::{
     handle_consume_federate_user_token, handle_create, handle_federate_user_identity_token,
-    ManagedSigningProvider,
 };
 use easynet_cli::daemon::keyring::federated_bindings::FederatedBindingsStore;
+use easynet_cli::daemon::keyring::managed_signing_provider::ManagedSigningProvider;
 use easynet_cli::daemon::keyring::resolver::{FederatedUserOutcome, FederatedUserResolver};
 
 static TEST_KEY_SERVICE_SERIAL: Mutex<()> = Mutex::new(());
