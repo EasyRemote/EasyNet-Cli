@@ -8205,6 +8205,105 @@ for required_test in (
 PY
 }
 
+check_federation_list_user_devices_exact_tuple_ingress_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local wire="$cli_root/src/daemon/federation/wire_contract.rs"
+  local wrappers="$cli_root/src/daemon/invocation/dispatch/federation_wrappers.rs"
+  local dispatcher="$cli_root/src/daemon/invocation/dispatch/unary_dispatcher.rs"
+  local contracts="$cli_root/src/daemon/ability/catalog/daemon_invocation_contracts.rs"
+  local tests="$cli_root/src/daemon/invocation/dispatch/daemon_invocation_service_tests/unary.rs"
+  [[ -f "$wire" ]] || fail "federation wire contract source is missing: $wire"
+  [[ -f "$wrappers" ]] || fail "federation wrappers source is missing: $wrappers"
+  [[ -f "$dispatcher" ]] || fail "unary dispatcher source is missing: $dispatcher"
+  [[ -f "$contracts" ]] || fail "daemon invocation contracts source is missing: $contracts"
+  [[ -f "$tests" ]] || fail "daemon invocation service unary tests are missing: $tests"
+
+  "$PYTHON_BIN" - "$wire" "$wrappers" "$dispatcher" "$contracts" "$tests" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+wire_path, wrappers_path, dispatcher_path, contracts_path, tests_path = map(Path, sys.argv[1:])
+wire = wire_path.read_text(encoding="utf-8")
+wrappers = wrappers_path.read_text(encoding="utf-8")
+dispatcher = dispatcher_path.read_text(encoding="utf-8")
+contracts = contracts_path.read_text(encoding="utf-8")
+tests = tests_path.read_text(encoding="utf-8")
+wire_production = wire.split("\n#[cfg(test)]", 1)[0]
+wrappers_production = wrappers.split("\n#[cfg(test)]\nmod tests", 1)[0]
+dispatcher_production = dispatcher.split("\n#[cfg(test)]\nmod tests", 1)[0]
+contracts_production = contracts.split("\n#[cfg(test)]\nmod tests", 1)[0]
+
+peer_match = re.search(r"pub struct ListUserDevicesRequest\s*\{(?P<body>.*?)\n\}", wire_production, re.S)
+if not peer_match:
+    raise SystemExit("federation_list_user_devices_exact_tuple:peer_request_missing")
+peer_body = peer_match.group("body")
+if not re.search(r"pub\s+realm\s*:\s*String", peer_body):
+    raise SystemExit("federation_list_user_devices_exact_tuple:peer_realm_missing")
+if "serde(default" in peer_body:
+    raise SystemExit("federation_list_user_devices_exact_tuple:peer_realm_defaulted")
+for retired in ("user_ura", "tenant_id", "peers", "peer_hub_urls"):
+    if retired in peer_body:
+        raise SystemExit(f"federation_list_user_devices_exact_tuple:peer_retired_field:{retired}")
+
+proxy_match = re.search(r"pub struct ProxyListUserDevicesRequest\s*\{(?P<body>.*?)\n\}", wrappers_production, re.S)
+if not proxy_match:
+    raise SystemExit("federation_list_user_devices_exact_tuple:proxy_request_missing")
+proxy_body = proxy_match.group("body")
+realm_match = re.search(r"(?:#\[[^\n]*\]\n\s*)*pub\s+realm\s*:\s*String", proxy_body, re.S)
+if not realm_match:
+    raise SystemExit("federation_list_user_devices_exact_tuple:proxy_realm_missing")
+if "serde(default" in realm_match.group(0):
+    raise SystemExit("federation_list_user_devices_exact_tuple:proxy_realm_defaulted")
+if not re.search(r"#\[serde\(default\)\]\s*pub\s+peer_hub_urls\s*:\s*Vec<String>", proxy_body):
+    raise SystemExit("federation_list_user_devices_exact_tuple:proxy_peer_hub_urls_default_missing")
+for retired in ("user_ura", "tenant_id", "peers"):
+    if retired in proxy_body:
+        raise SystemExit(f"federation_list_user_devices_exact_tuple:proxy_retired_field:{retired}")
+
+if '"federation.proxy_list_user_devices: realm is required"' not in dispatcher_production:
+    raise SystemExit("federation_list_user_devices_exact_tuple:proxy_realm_runtime_guard_missing")
+if '"federation.proxy_list_user_devices: federation client is required when peer_hub_urls are selected"' not in dispatcher_production:
+    raise SystemExit("federation_list_user_devices_exact_tuple:proxy_selected_peer_guard_missing")
+if '"federation.list_user_devices: realm is required"' not in wrappers_production:
+    raise SystemExit("federation_list_user_devices_exact_tuple:peer_realm_runtime_guard_missing")
+
+peer_schema_split = contracts_production.split("ABILITY_FEDERATION_LIST_USER_DEVICES => object_schema(", 1)
+if len(peer_schema_split) != 2:
+    raise SystemExit("federation_list_user_devices_exact_tuple:peer_schema_case_missing")
+peer_schema_body = peer_schema_split[1].split("ABILITY_FEDERATION_PROXY_LIST_USER_DEVICES => object_schema(", 1)[0]
+if '"realm"' not in peer_schema_body:
+    raise SystemExit("federation_list_user_devices_exact_tuple:peer_schema_realm_missing")
+compact_peer_schema = re.sub(r"\s+", "", peer_schema_body)
+if '&["realm"]' not in compact_peer_schema:
+    raise SystemExit("federation_list_user_devices_exact_tuple:peer_schema_required_realm_missing")
+for retired in ('"user_ura"', '"peers"', '"peer_hub_urls"', '"tenant_id"'):
+    if retired in peer_schema_body:
+        raise SystemExit(f"federation_list_user_devices_exact_tuple:peer_schema_retired_field:{retired}")
+
+proxy_schema_split = contracts_production.split("ABILITY_FEDERATION_PROXY_LIST_USER_DEVICES => object_schema(", 1)
+if len(proxy_schema_split) != 2:
+    raise SystemExit("federation_list_user_devices_exact_tuple:proxy_schema_case_missing")
+proxy_schema_body = proxy_schema_split[1].split("ABILITY_FEDERATION_REVOKE => object_schema(", 1)[0]
+if '"realm"' not in proxy_schema_body or '"peer_hub_urls"' not in proxy_schema_body:
+    raise SystemExit("federation_list_user_devices_exact_tuple:proxy_schema_exact_fields_missing")
+compact_proxy_schema = re.sub(r"\s+", "", proxy_schema_body)
+if '&["realm"]' not in compact_proxy_schema:
+    raise SystemExit("federation_list_user_devices_exact_tuple:proxy_schema_required_realm_missing")
+for retired in ('"user_ura"', '"peers"', '"tenant_id"'):
+    if retired in proxy_schema_body:
+        raise SystemExit(f"federation_list_user_devices_exact_tuple:proxy_schema_retired_field:{retired}")
+
+for required_test in (
+    "list_user_devices_schemas_match_dispatcher_tuples_without_retired_fields",
+    "invoke_federation_proxy_list_user_devices_rejects_missing_required_realm",
+    "list_user_devices_requests_reject_retired_product_directory_fields",
+):
+    if required_test not in tests and required_test not in contracts and required_test not in wrappers:
+        raise SystemExit(f"federation_list_user_devices_exact_tuple:missing_test:{required_test}")
+PY
+}
+
 check_daemon_invocation_service_descriptor_ref_route_projection_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local service="$cli_root/src/daemon/invocation/dispatch/daemon_invocation_service.rs"
@@ -18191,6 +18290,7 @@ EOF
   check_route_resolver_descriptor_ref_selector_contract
   check_namespace_resolver_authority_projection_contract
   check_namespace_proxy_resolve_exact_tuple_ingress_contract
+  check_federation_list_user_devices_exact_tuple_ingress_contract
   check_daemon_invocation_service_descriptor_ref_route_projection_contract
   check_ffi_descriptor_runtime_owner_contract
   check_ffi_descriptor_probe_not_found_vocabulary_contract
@@ -18383,6 +18483,7 @@ check_retired_federation_directory_v1_stream_contract
 check_route_resolver_descriptor_ref_selector_contract
 check_namespace_resolver_authority_projection_contract
 check_namespace_proxy_resolve_exact_tuple_ingress_contract
+check_federation_list_user_devices_exact_tuple_ingress_contract
 check_daemon_invocation_service_descriptor_ref_route_projection_contract
 check_ffi_descriptor_runtime_owner_contract
 check_ffi_descriptor_probe_not_found_vocabulary_contract

@@ -1800,6 +1800,28 @@ async fn invoke_federation_proxy_list_user_devices_rejects_selected_peers_withou
 }
 
 #[tokio::test]
+async fn invoke_federation_proxy_list_user_devices_rejects_missing_required_realm() {
+    let svc = make_service();
+
+    let error = expect_canonical_in_band_failure(
+        svc.invoke(invoke_request(
+            ABILITY_FEDERATION_PROXY_LIST_USER_DEVICES,
+            r#"{
+                "peer_hub_urls":["https://peer-hub.example:50443"]
+            }"#,
+        ))
+        .await,
+        axon_sdk::invocation::ErrorCode::RequestPayloadInvalid,
+        "proxy list user devices must reject missing realm instead of defaulting to an empty directory",
+    );
+    assert!(
+        error.message.contains("realm"),
+        "rejection must name the missing canonical realm tuple; got: {}",
+        error.message
+    );
+}
+
+#[tokio::test]
 async fn invoke_federation_proxy_list_user_devices_rejects_malformed_peer_directory_response() {
     use crate::daemon::trust::anchor::{TrustedAgent, TrustedAgentRole};
 

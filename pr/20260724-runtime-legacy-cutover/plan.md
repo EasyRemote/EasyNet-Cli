@@ -1089,3 +1089,51 @@ architecture rather than add feature surface.
   - `tools/scripts/check-architecture-convergence.sh`
   - `tools/scripts/check-canonical-runtime-convergence-v2.sh`
   - `git diff --check`
+
+## Iteration 25 candidate policy
+
+- Focus on federation user-device listing descriptor drift. codegraph/rg found
+  that the actual runtime tuples are:
+  - `federation.list_user_devices`: peer-hub internal `{ realm }`;
+  - `federation.proxy_list_user_devices`: daemon proxy `{ realm, peer_hub_urls }`.
+- The descriptor contract still advertised a shared older product projection
+  with `user_ura`, optional `realm`, and `peers`. That lets product clients build
+  requests from the wrong catalogue shape even though the dispatcher already
+  rejects unknown fields.
+- The root abstraction problem is descriptor ownership drift: the canonical
+  ability catalogue was describing an old product directory model rather than
+  the exact daemon Invocation tuple accepted by the runtime route.
+- The intended cutover is:
+  - split peer and proxy list-user-devices descriptor schemas;
+  - require `realm` in both schemas;
+  - expose only `peer_hub_urls` as the proxy fanout selector;
+  - remove retired `user_ura`, `peers`, and `tenant_id` vocabulary from the
+    active request/schema contract;
+  - make SPEC v2 reject future schema/request drift.
+
+## Iteration 25 decision log
+
+- Split `daemon_invocation_contracts::input_schema_for` so
+  `federation.list_user_devices` and `federation.proxy_list_user_devices` no
+  longer share one descriptor schema.
+- `federation.list_user_devices` now publishes the exact peer-hub tuple:
+  required `realm`, closed schema, no product user filter fields.
+- `federation.proxy_list_user_devices` now publishes the exact daemon proxy
+  tuple: required `realm`, optional `peer_hub_urls`, closed schema, no retired
+  `peers` alias.
+- Tightened regression tests:
+  - catalog schema tests verify both schemas match dispatcher tuples;
+  - dispatcher tests verify proxy requests missing `realm` fail instead of
+    becoming empty successful directory results;
+  - request DTO tests verify retired product directory fields are rejected.
+- Added SPEC v2 gate
+  `check_federation_list_user_devices_exact_tuple_ingress_contract` covering
+  DTOs, dispatcher guards, descriptor schemas, and regression test presence.
+- Verification passed:
+  - `cargo fmt --check`
+  - `cargo test -q daemon::ability::catalog::daemon_invocation_contracts`
+  - `cargo test -q list_user_devices_requests_reject_retired_product_directory_fields`
+  - `cargo test -q invoke_federation_proxy_list_user_devices_rejects_missing_required_realm`
+  - `tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - `tools/scripts/check-architecture-convergence.sh`
+  - `git diff --check`

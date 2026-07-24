@@ -367,21 +367,25 @@ pub(crate) fn input_schema_for(name: &str) -> Option<Value> {
             &[],
             false,
         ),
-        ABILITY_FEDERATION_LIST_USER_DEVICES | ABILITY_FEDERATION_PROXY_LIST_USER_DEVICES => {
-            object_schema(
-                json!({
-                    "user_ura": string_prop("User URA whose live devices should be listed."),
-                    "realm": string_prop("Optional realm filter."),
-                    "peers": {
-                        "type": "array",
-                        "description": "Optional peer hubs selected for proxy fanout.",
-                        "items": { "type": "string" }
-                    }
-                }),
-                &[],
-                false,
-            )
-        }
+        ABILITY_FEDERATION_LIST_USER_DEVICES => object_schema(
+            json!({
+                "realm": string_prop("Realm whose live devices should be listed by the peer hub.")
+            }),
+            &["realm"],
+            false,
+        ),
+        ABILITY_FEDERATION_PROXY_LIST_USER_DEVICES => object_schema(
+            json!({
+                "realm": string_prop("Realm whose live devices should be listed across selected peer hubs."),
+                "peer_hub_urls": {
+                    "type": "array",
+                    "description": "Selected trusted peer hub endpoints for daemon-owned fanout.",
+                    "items": { "type": "string" }
+                }
+            }),
+            &["realm"],
+            false,
+        ),
         ABILITY_FEDERATION_REVOKE => object_schema(
             json!({
                 "agent_ura": string_prop("Agent or Device URA to revoke."),
@@ -552,5 +556,46 @@ mod tests {
             "proxy schema must not retain retired namespace.resolve/legacy peer fields: {schema}"
         );
         assert_eq!(schema["additionalProperties"], false);
+    }
+
+    #[test]
+    fn list_user_devices_schemas_match_dispatcher_tuples_without_retired_fields() {
+        let peer_schema =
+            input_schema_for(ABILITY_FEDERATION_LIST_USER_DEVICES).expect("peer list schema");
+        assert_schema_requires_only(&peer_schema, &["realm"]);
+        let peer_properties = peer_schema["properties"].as_object().expect("properties");
+        assert!(peer_properties.contains_key("realm"));
+        assert!(
+            !peer_properties.contains_key("user_ura")
+                && !peer_properties.contains_key("peers")
+                && !peer_properties.contains_key("peer_hub_urls"),
+            "federation.list_user_devices schema must expose only the peer-hub realm tuple: {peer_schema}"
+        );
+        assert_eq!(peer_schema["additionalProperties"], false);
+
+        let proxy_schema = input_schema_for(ABILITY_FEDERATION_PROXY_LIST_USER_DEVICES)
+            .expect("proxy list schema");
+        assert_schema_requires_only(&proxy_schema, &["realm"]);
+        let proxy_properties = proxy_schema["properties"].as_object().expect("properties");
+        assert!(proxy_properties.contains_key("realm"));
+        assert!(proxy_properties.contains_key("peer_hub_urls"));
+        assert!(
+            !proxy_properties.contains_key("user_ura") && !proxy_properties.contains_key("peers"),
+            "federation.proxy_list_user_devices schema must not retain retired product/peer aliases: {proxy_schema}"
+        );
+        assert_eq!(proxy_schema["additionalProperties"], false);
+    }
+
+    fn assert_schema_requires_only(schema: &Value, expected: &[&str]) {
+        let mut actual: Vec<_> = schema["required"]
+            .as_array()
+            .expect("required array")
+            .iter()
+            .map(|value| value.as_str().expect("required field"))
+            .collect();
+        actual.sort_unstable();
+        let mut expected = expected.to_vec();
+        expected.sort_unstable();
+        assert_eq!(actual, expected, "schema required fields drifted: {schema}");
     }
 }

@@ -1018,9 +1018,9 @@ pub fn handle_discover_with_user_filter(
 // ─── federation.list_user_devices (PR-N3 N3-5) ────────────────────
 
 /// Request payload for `federation.proxy_list_user_devices`.
-/// `realm` is the user-owned device realm to enumerate on each
-/// peer; `peer_hub_urls` are the exact peer TLS listener
-/// URLs the backend selected from its `user_peer_hubs` table.
+/// `realm` is the device realm to enumerate on each selected
+/// peer; `peer_hub_urls` are the exact peer TLS listener URLs
+/// selected by the caller's directory/read-model policy.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProxyListUserDevicesRequest {
@@ -2900,17 +2900,33 @@ mod tests {
     }
 
     #[test]
-    fn list_user_devices_requests_reject_retired_tenant_id_field() {
+    fn list_user_devices_requests_reject_retired_product_directory_fields() {
         let list = serde_json::from_value::<ListUserDevicesRequest>(serde_json::json!({
             "tenant_id": "tenant-a",
         }));
         assert!(list.is_err(), "peer request must require `realm`");
+        let list = serde_json::from_value::<ListUserDevicesRequest>(serde_json::json!({
+            "realm": "tenant-a",
+            "user_ura": "easynet:///r/tenant-a/user/alice",
+        }));
+        assert!(
+            list.is_err(),
+            "peer request must reject retired user_ura filter"
+        );
 
         let proxy = serde_json::from_value::<ProxyListUserDevicesRequest>(serde_json::json!({
             "tenant_id": "tenant-a",
             "peer_hub_urls": ["https://peer.example:50443"],
         }));
         assert!(proxy.is_err(), "proxy request must require `realm`");
+        let proxy = serde_json::from_value::<ProxyListUserDevicesRequest>(serde_json::json!({
+            "realm": "tenant-a",
+            "peers": ["https://peer.example:50443"],
+        }));
+        assert!(
+            proxy.is_err(),
+            "proxy request must reject retired peers alias"
+        );
     }
 
     #[test]
