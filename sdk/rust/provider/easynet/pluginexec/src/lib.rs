@@ -30,6 +30,7 @@ impl SidecarInvocation {
     /// Project a daemon sidecar frame into a typed invocation.
     pub fn from_frame(frame: Value) -> Result<Self, SidecarProtocolError> {
         let mut object = expect_object(frame, "sidecar request frame")?;
+        reject_unknown_request_fields(&object)?;
         let frame_type = take_required_string(&mut object, "type")?;
         if frame_type != "invoke" {
             return Err(SidecarProtocolError::new(format!(
@@ -222,6 +223,17 @@ fn reject_unknown_invocation_fields(
         ) {
             return Err(SidecarProtocolError::new(format!(
                 "sidecar frame field {field:?} is not part of the canonical invocation frame"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn reject_unknown_request_fields(object: &Map<String, Value>) -> Result<(), SidecarProtocolError> {
+    for field in object.keys() {
+        if !matches!(field.as_str(), "type" | "call_id" | "invocation") {
+            return Err(SidecarProtocolError::new(format!(
+                "sidecar request frame field {field:?} is not part of the canonical request frame"
             )));
         }
     }

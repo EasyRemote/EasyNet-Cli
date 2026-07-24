@@ -109,6 +109,15 @@ class PluginExecTests(unittest.TestCase):
         ):
             SidecarInvocation.from_frame(frame)
 
+    def test_plugin_invocation_rejects_unknown_request_fields(self) -> None:
+        frame = _frame()
+        frame["legacy_mode"] = "json"
+
+        with self.assertRaisesRegex(
+            SidecarProtocolError, "canonical request frame"
+        ):
+            SidecarInvocation.from_frame(frame)
+
 
 if __name__ == "__main__":
     unittest.main()

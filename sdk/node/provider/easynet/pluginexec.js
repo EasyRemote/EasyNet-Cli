@@ -38,6 +38,7 @@ export class SidecarInvocation {
 
   static fromFrame(frame) {
     const value = optionalObject(frame, "sidecar request frame", { required: true });
+    rejectUnknownRequestFields(value);
     const frameType = requireString(value.type, "type");
     if (frameType !== "invoke") {
       throw new SidecarProtocolError(
@@ -137,6 +138,17 @@ function rejectUnknownInvocationFields(value) {
     if (!allowed.has(field)) {
       throw new SidecarProtocolError(
         `sidecar frame field ${JSON.stringify(field)} is not part of the canonical invocation frame`,
+      );
+    }
+  }
+}
+
+function rejectUnknownRequestFields(value) {
+  const allowed = new Set(["type", "call_id", "invocation"]);
+  for (const field of Object.keys(value)) {
+    if (!allowed.has(field)) {
+      throw new SidecarProtocolError(
+        `sidecar request frame field ${JSON.stringify(field)} is not part of the canonical request frame`,
       );
     }
   }

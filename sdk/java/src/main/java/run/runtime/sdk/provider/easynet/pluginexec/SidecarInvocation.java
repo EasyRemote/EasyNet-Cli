@@ -43,6 +43,7 @@ public final class SidecarInvocation {
 
   public static SidecarInvocation fromFrame(Map<String, Object> frame) {
     Objects.requireNonNull(frame, "frame");
+    rejectUnknownRequestFields(frame);
     String frameType = requiredString(frame, "type");
     if (!"invoke".equals(frameType)) {
       throw new SidecarProtocolError("exec sidecar expected invoke frame, got " + frameType);
@@ -168,6 +169,18 @@ public final class SidecarInvocation {
             "sidecar frame field \""
                 + field
                 + "\" is not part of the canonical invocation frame");
+      }
+    }
+  }
+
+  private static void rejectUnknownRequestFields(Map<String, Object> object) {
+    Set<String> allowed = Set.of("type", "call_id", "invocation");
+    for (String field : object.keySet()) {
+      if (!allowed.contains(field)) {
+        throw new SidecarProtocolError(
+            "sidecar request frame field \""
+                + field
+                + "\" is not part of the canonical request frame");
       }
     }
   }

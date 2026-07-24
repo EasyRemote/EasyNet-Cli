@@ -125,3 +125,13 @@ test("SidecarInvocation rejects unknown invocation fields", () => {
     /canonical invocation frame/,
   );
 });
+
+test("SidecarInvocation rejects unknown request fields", () => {
+  const frame = requestFrame();
+  frame.legacy_mode = "json";
+
+  assert.throws(
+    () => SidecarInvocation.fromFrame(frame),
+    /canonical request frame/,
+  );
+});

@@ -129,6 +129,13 @@ func readRequestFrame(input io.Reader) (requestFrame, error) {
 	if len(line) == 0 {
 		return requestFrame{}, protocolError("missing sidecar request frame")
 	}
+	fields, err := decodeRequestFields(line)
+	if err != nil {
+		return requestFrame{}, err
+	}
+	if err := rejectUnknownRequestFields(fields); err != nil {
+		return requestFrame{}, err
+	}
 	var frame requestFrame
 	if err := json.Unmarshal(line, &frame); err != nil {
 		return requestFrame{}, protocolError("invalid sidecar request JSON: %v", err)
@@ -137,6 +144,28 @@ func readRequestFrame(input io.Reader) (requestFrame, error) {
 		return requestFrame{}, protocolError("sidecar frame field \"call_id\" must be a string")
 	}
 	return frame, nil
+}
+
+func decodeRequestFields(raw []byte) (map[string]json.RawMessage, error) {
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &object); err != nil {
+		return nil, protocolError("sidecar request frame must be an object")
+	}
+	return object, nil
+}
+
+func rejectUnknownRequestFields(object map[string]json.RawMessage) error {
+	allowed := map[string]struct{}{
+		"type":       {},
+		"call_id":    {},
+		"invocation": {},
+	}
+	for field := range object {
+		if _, ok := allowed[field]; !ok {
+			return protocolError("sidecar request frame field %q is not part of the canonical request frame", field)
+		}
+	}
+	return nil
 }
 
 func (f requestFrame) projectInvocation() (SidecarInvocation, error) {

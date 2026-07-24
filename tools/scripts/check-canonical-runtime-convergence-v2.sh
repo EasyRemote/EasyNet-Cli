@@ -9727,7 +9727,9 @@ required_helper_tokens = {
         "pub caller_ura: String",
         "reject_legacy_tuple_aliases(&invocation)?",
         "reject_unknown_invocation_fields(&invocation)?",
+        "reject_unknown_request_fields(&object)?",
         "fn reject_unknown_invocation_fields(",
+        "fn reject_unknown_request_fields(",
         'take_required_string(&mut invocation, "caller_ura")?',
         'take_required_string(&mut invocation, "callee_ura")?',
         'take_required_string(&mut invocation, "ability_ura")?',
@@ -9737,7 +9739,9 @@ required_helper_tokens = {
         "CallerURA",
         "rejectLegacyTupleAliases(fields)",
         "rejectUnknownInvocationFields(fields)",
+        "rejectUnknownRequestFields(fields)",
         "func rejectUnknownInvocationFields(",
+        "func rejectUnknownRequestFields(",
         '`json:"caller_ura"`',
         '`json:"callee_ura"`',
         '`json:"ability_ura"`',
@@ -9747,7 +9751,9 @@ required_helper_tokens = {
         "caller_ura: str",
         "_reject_legacy_tuple_aliases(invocation)",
         "_reject_unknown_invocation_fields(invocation)",
+        "_reject_unknown_request_fields(frame)",
         "def _reject_unknown_invocation_fields(",
+        "def _reject_unknown_request_fields(",
         '_required_string(invocation, "caller_ura")',
         '_required_string(invocation, "callee_ura")',
         '_required_string(invocation, "ability_ura")',
@@ -9757,7 +9763,9 @@ required_helper_tokens = {
         "callerURA",
         "rejectLegacyTupleAliases(invocation)",
         "rejectUnknownInvocationFields(invocation)",
+        "rejectUnknownRequestFields(value)",
         "function rejectUnknownInvocationFields(",
+        "function rejectUnknownRequestFields(",
         "invocation.caller_ura",
         "invocation.callee_ura",
         "invocation.ability_ura",
@@ -9767,7 +9775,9 @@ required_helper_tokens = {
         "String callerURA",
         "rejectLegacyTupleAliases(invocation)",
         "rejectUnknownInvocationFields(invocation)",
+        "rejectUnknownRequestFields(frame)",
         "private static void rejectUnknownInvocationFields(",
+        "private static void rejectUnknownRequestFields(",
         'requiredString(invocation, "caller_ura")',
         'requiredString(invocation, "callee_ura")',
         'requiredString(invocation, "ability_ura")',
@@ -9781,15 +9791,31 @@ for language, tokens in required_helper_tokens.items():
             raise SystemExit(f"plugin_sidecar_helper_tuple_missing:{language}:{token}")
 
 required_helper_tests = {
-    "rust": "sidecar_invocation_rejects_unknown_invocation_fields",
-    "go": "TestServeIORejectsUnknownInvocationFields",
-    "python": "test_plugin_invocation_rejects_unknown_invocation_fields",
-    "node": "SidecarInvocation rejects unknown invocation fields",
-    "java": "sidecarInvocationRejectsUnknownInvocationFields",
+    "rust": [
+        "sidecar_invocation_rejects_unknown_invocation_fields",
+        "sidecar_invocation_rejects_unknown_request_fields",
+    ],
+    "go": [
+        "TestServeIORejectsUnknownInvocationFields",
+        "TestServeIORejectsUnknownRequestFields",
+    ],
+    "python": [
+        "test_plugin_invocation_rejects_unknown_invocation_fields",
+        "test_plugin_invocation_rejects_unknown_request_fields",
+    ],
+    "node": [
+        "SidecarInvocation rejects unknown invocation fields",
+        "SidecarInvocation rejects unknown request fields",
+    ],
+    "java": [
+        "sidecarInvocationRejectsUnknownInvocationFields",
+        "sidecarInvocationRejectsUnknownRequestFields",
+    ],
 }
-for language, test_name in required_helper_tests.items():
-    if test_name not in helper_sources[language]:
-        raise SystemExit(f"plugin_sidecar_helper_unknown_field_test_missing:{language}")
+for language, test_names in required_helper_tests.items():
+    for test_name in test_names:
+        if test_name not in helper_sources[language]:
+            raise SystemExit(f"plugin_sidecar_helper_unknown_field_test_missing:{language}:{test_name}")
 
 legacy_public_field_patterns = {
     "daemon_frame": [
@@ -14342,6 +14368,32 @@ EOF
     "$tmp/cli-sidecar-unknown-field/sdk/python/easynet_sdk/providers/easynet/plugin_exec.py"
   if ( CLI_ROOT="$tmp/cli-sidecar-unknown-field"; check_plugin_sidecar_helper_matrix_contract ) >/dev/null 2>&1; then
     fail "self-test expected sidecar unknown invocation field gate to fail"
+  fi
+  for rel in \
+    src/cli/commands/groups/plugin_template.rs \
+    src/daemon/plugins/sidecar/frame.rs \
+    src/daemon/plugins/sidecar.rs \
+    src/daemon/plugins/host_api.rs \
+    sdk/python/easynet_sdk/providers/easynet/plugin_exec.py \
+    sdk/python/tests/test_plugin_exec.py \
+    sdk/go/provider/easynet/pluginexec/pluginexec.go \
+    sdk/go/provider/easynet/pluginexec/pluginexec_test.go \
+    sdk/rust/provider/easynet/pluginexec/Cargo.toml \
+    sdk/rust/provider/easynet/pluginexec/src/lib.rs \
+    sdk/rust/provider/easynet/pluginexec/tests/pluginexec.rs \
+    sdk/java/src/main/java/run/runtime/sdk/provider/easynet/pluginexec/SidecarRuntime.java \
+    sdk/java/src/main/java/run/runtime/sdk/provider/easynet/pluginexec/SidecarInvocation.java \
+    sdk/java/src/test/java/run/runtime/sdk/provider/easynet/pluginexec/SidecarRuntimeTest.java \
+    sdk/node/provider/easynet/pluginexec.js \
+    sdk/node/provider/easynet/pluginexec.d.ts \
+    sdk/node/test/pluginexec.test.mjs; do
+    mkdir -p "$(dirname "$tmp/cli-sidecar-request-field/$rel")"
+    cp "$ROOT/$rel" "$tmp/cli-sidecar-request-field/$rel"
+  done
+  perl -0pi -e 's/_reject_unknown_request_fields/_accept_unknown_request_fields/g' \
+    "$tmp/cli-sidecar-request-field/sdk/python/easynet_sdk/providers/easynet/plugin_exec.py"
+  if ( CLI_ROOT="$tmp/cli-sidecar-request-field"; check_plugin_sidecar_helper_matrix_contract ) >/dev/null 2>&1; then
+    fail "self-test expected sidecar unknown request field gate to fail"
   fi
   mkdir -p "$tmp/cli-browser-mock/src/daemon/ability/builtins/device_control" \
     "$tmp/cli-browser-mock/ability-descriptors/system/device_control" \

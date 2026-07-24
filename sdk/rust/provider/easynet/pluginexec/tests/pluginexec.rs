@@ -132,3 +132,23 @@ fn sidecar_invocation_rejects_unknown_invocation_fields() {
     let error = SidecarInvocation::from_frame(frame).expect_err("unknown field");
     assert!(error.to_string().contains("canonical invocation frame"));
 }
+
+#[test]
+fn sidecar_invocation_rejects_unknown_request_fields() {
+    let frame = json!({
+        "type": "invoke",
+        "call_id": "call-1",
+        "legacy_mode": "json",
+        "invocation": {
+            "caller_ura": "easynet:///r/hub/user/alice",
+            "callee_ura": "easynet:///r/hub/device/provider",
+            "ability_ura": "demo.echo",
+            "subject_ura": "easynet:///r/hub/resource/demo",
+            "invocation_nonce": [1, 2, 3, 4],
+            "args": {}
+        }
+    });
+
+    let error = SidecarInvocation::from_frame(frame).expect_err("unknown field");
+    assert!(error.to_string().contains("canonical request frame"));
+}

@@ -29,6 +29,7 @@ _CANONICAL_INVOCATION_FIELDS = frozenset(
         "args",
     }
 )
+_CANONICAL_REQUEST_FIELDS = frozenset({"type", "call_id", "invocation"})
 
 
 @dataclass(frozen=True)
@@ -49,6 +50,7 @@ class SidecarInvocation:
     def from_frame(cls, frame: Mapping[str, Any]) -> "SidecarInvocation":
         """Project a daemon sidecar frame into a handler-facing invocation."""
 
+        _reject_unknown_request_fields(frame)
         frame_type = _required_string(frame, "type")
         if frame_type != "invoke":
             raise SidecarProtocolError(
@@ -152,6 +154,14 @@ def _reject_unknown_invocation_fields(frame: Mapping[str, Any]) -> None:
         if field not in _CANONICAL_INVOCATION_FIELDS:
             raise SidecarProtocolError(
                 f"sidecar frame field {field!r} is not part of the canonical invocation frame"
+            )
+
+
+def _reject_unknown_request_fields(frame: Mapping[str, Any]) -> None:
+    for field in frame:
+        if field not in _CANONICAL_REQUEST_FIELDS:
+            raise SidecarProtocolError(
+                f"sidecar request frame field {field!r} is not part of the canonical request frame"
             )
 
 

@@ -14,6 +14,7 @@ public final class SidecarRuntimeTest {
     sidecarInvocationRejectsNonInvokeFrame();
     sidecarInvocationRejectsRetiredTupleAliases();
     sidecarInvocationRejectsUnknownInvocationFields();
+    sidecarInvocationRejectsUnknownRequestFields();
   }
 
   static void sidecarInvocationProjectsDaemonFrame() {
@@ -111,6 +112,26 @@ public final class SidecarRuntimeTest {
       throw new AssertionError("unknown invocation fields must fail");
     } catch (SidecarProtocolError expected) {
       check(expected.getMessage().contains("canonical invocation frame"), "unknown field error");
+    }
+  }
+
+  static void sidecarInvocationRejectsUnknownRequestFields() {
+    java.util.Map<String, Object> invocation = new java.util.LinkedHashMap<>();
+    invocation.put("caller_ura", "easynet:///r/hub/user/alice");
+    invocation.put("callee_ura", "easynet:///r/hub/device/provider");
+    invocation.put("ability_ura", "demo.echo");
+    invocation.put("subject_ura", "easynet:///r/hub/resource/demo");
+    invocation.put("invocation_nonce", java.util.List.of(1, 2, 3, 4));
+    java.util.Map<String, Object> frame = new java.util.LinkedHashMap<>();
+    frame.put("type", "invoke");
+    frame.put("call_id", "call-1");
+    frame.put("legacy_mode", "json");
+    frame.put("invocation", invocation);
+    try {
+      SidecarInvocation.fromFrame(frame);
+      throw new AssertionError("unknown request fields must fail");
+    } catch (SidecarProtocolError expected) {
+      check(expected.getMessage().contains("canonical request frame"), "unknown request field error");
     }
   }
 

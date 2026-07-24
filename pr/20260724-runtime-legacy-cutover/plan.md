@@ -1379,3 +1379,43 @@ architecture rather than add feature surface.
   - `tools/scripts/check-architecture-convergence.sh`
   - `cargo fmt --check`
   - `git diff --check`
+
+## Iteration 32 candidate policy
+
+- Continue the sidecar helper convergence one level up: after Iteration 31 made
+  the nested `invocation` object exact, the top-level request frame still had
+  open-ended parsing in provider helpers.
+- The daemon's authoritative `SidecarRequestFrame` already uses
+  `deny_unknown_fields`; helper parsers must not be wider than the daemon
+  contract because that creates a product-facing compatibility seam.
+- The root abstraction problem is split protocol authority: daemon frame parsing
+  was exact while helper frame parsing could silently accept extra request
+  metadata such as `legacy_mode`, encouraging plugins to depend on non-canonical
+  carriers.
+- The selected cutover is to make the provider sidecar request frame exact
+  across Go, Python, Node, Java, and Rust. For exec invoke helpers, only
+  `type`, `call_id`, and `invocation` are accepted at the request-frame top
+  level.
+
+## Iteration 32 decision log
+
+- Go, Python, Node, Java, and Rust provider helpers now reject unknown top-level
+  sidecar request fields before reading `type`, `call_id`, or `invocation`.
+- Cross-language negative tests now include `legacy_mode` at the request-frame
+  top level and assert the plugin handler is not reached.
+- SPEC v2 now gates top-level sidecar request exactness with production helper
+  tokens, per-language tests, and a negative self-test that breaks the Python
+  request-field guard.
+- Verification passed:
+  - `/Users/macbook.silan.tech/.local/bin/codegraph explore "compatibility fallback legacy unknown fields sidecar request frame invocation route descriptor signer authority"`
+  - `cd sdk/go && go test ./provider/easynet/pluginexec`
+  - `PYTHONPATH=/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/python:/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli/sdk/python python3 sdk/python/tests/test_plugin_exec.py`
+  - `node --test sdk/node/test/pluginexec.test.mjs`
+  - `cargo test -q --manifest-path sdk/rust/provider/easynet/pluginexec/Cargo.toml`
+  - `mvn -q -f sdk/java/pom.xml test -Dtest=run.runtime.sdk.provider.easynet.pluginexec.SidecarRuntimeTest`
+  - `bash -n tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - `tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  - `tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - `tools/scripts/check-architecture-convergence.sh`
+  - `cargo fmt --check`
+  - `git diff --check`
