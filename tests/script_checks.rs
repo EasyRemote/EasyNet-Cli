@@ -289,6 +289,13 @@ fn cli_timeout_policy_boundary_script_holds() {
 }
 
 #[test]
+fn core_agent_module_boundary_script_holds() {
+    // Pins core agent ontology ownership to core::agent::{id,spec}; retired
+    // pre-structure core::agent_id/core::agent_spec module aliases stay deleted.
+    run_bash_script("tests/scripts/test_check_core_agent_module_boundary.sh");
+}
+
+#[test]
 fn discover_scope_boundary_script_holds() {
     // Pins <agent>.discover to current scope literals only. The
     // retired easynet alias must stay absent from parser and schema.

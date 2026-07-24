@@ -47,7 +47,7 @@
 //
 // Layering rule
 // -------------
-// `core::agent_spec` must not import any other `crate::` module
+// `core::agent::spec` must not import any other `crate::` module
 // and must not pull in external crates beyond `serde` + `toml`.
 // Violations will be caught at review — the whole point of core/
 // is that lower layers can import it without pulling in the

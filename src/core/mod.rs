@@ -37,15 +37,3 @@ pub mod agent;
 pub mod domain;
 pub mod identity;
 pub mod ura;
-
-pub use agent::id as agent_id;
-pub use agent::spec as agent_spec;
-
-// Public module aliases preserve the pre-structure Rust API paths
-// (`core::agent_id`, `core::agent_spec`) while the source owner remains the
-// semantic directory underneath `core::agent`. Daemon persistence/import
-// schemas live under `daemon::ability::manifest`; they are intentionally not
-// part of the dependency-free ontology layer. Do not glob-reexport the
-// contents here:
-// callers should still import concrete types from the semantic owner
-// when writing new code.

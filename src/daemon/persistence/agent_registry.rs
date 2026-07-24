@@ -727,7 +727,7 @@ mod tests {
 
     /// Cross-module parity: every rule in
     /// `registry::agents::validate_agent_name` must also be enforced
-    /// by `core::agent_spec::AgentSpec::validate`. If the two drift
+    /// by `core::agent::spec::AgentSpec::validate`. If the two drift
     /// (e.g. someone tightens this side but not the core side), a
     /// user can write an `agent.toml` whose name parses locally but
     /// gets rejected at registry insertion — a confusing half-state.
