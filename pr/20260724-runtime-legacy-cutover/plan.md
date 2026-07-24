@@ -127,3 +127,33 @@ architecture rather than add feature surface.
   user / that user's agent, and rejects path-substring impostors.
 - This keeps the public Java API unchanged while converging Java onto the same
   SDK authority model as Go/Python.
+
+## Iteration 4 candidate policy
+
+- Focus on public ingress tuple construction and route facades.
+- Prefer removal of CLI/product-facing code that still:
+  1. accepts partial invocation tuples and repairs them through defaults,
+  2. preserves non-canonical "not wired" / feature-disabled invoke paths,
+  3. translates legacy target fields into descriptor-bound invocation state,
+  4. keeps product-specific route discovery outside LocalRuntime.
+- The first audit target is `src/cli/commands/invoke.rs` plus
+  `src/cli/commands/invocation_tuple.rs`, because these are direct public
+  ingress surfaces for product smoke tests and operator reproduction.
+- Verification must prove the public CLI can only construct descriptor-bound
+  canonical tuples, and axon-pb disabled builds fail with canonical unsupported
+  errors rather than legacy invoke wording.
+
+## Iteration 4 decision log
+
+- codegraph and targeted search found a production-facing compatibility remnant
+  in `ability invoke`: the axon-pb-disabled branch and its tests still described
+  the public remote path as a legacy/not-wired message.
+- `ability invoke`, `ability stream`, and `ability bidi` also duplicated their
+  remote-transport disabled messages. That duplication makes it easy for one
+  public ingress surface to drift back into product-specific or legacy wording.
+- The refactor adds a shared public-ingress helper,
+  `remote_invocation_transport_unsupported`, in `invocation_tuple.rs` and routes
+  all three CLI surfaces through it.
+- The invoke test now asserts that retired `not wired` / `legacy` wording is not
+  accepted, and the SPEC v2 gate rejects reintroducing the old text or bypassing
+  the shared helper.

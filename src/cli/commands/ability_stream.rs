@@ -15,6 +15,8 @@ use anyhow::Context;
 use clap::{Args, ValueEnum};
 use serde_json::{json, Value};
 
+#[cfg(not(feature = "axon-pb"))]
+use crate::cli::commands::invocation_tuple::remote_invocation_transport_unsupported;
 use crate::cli::commands::invocation_tuple::{
     require_causal_root, required_nonce_hex, required_subject, AbilityInvocationRef,
 };
@@ -91,11 +93,9 @@ pub fn run(args: StreamArgs) -> anyhow::Result<()> {
             #[cfg(not(feature = "axon-pb"))]
             {
                 let _ = node;
-                anyhow::bail!(
-                    "remote stream pinning via --node requires the `axon-pb` feature, \
-                     which is not enabled in this build. Re-build with \
-                     `--features axon-pb` and try again."
-                )
+                return Err(remote_invocation_transport_unsupported(
+                    "remote ability stream with --node",
+                ));
             }
         }
     };
@@ -137,7 +137,7 @@ pub fn run(args: StreamArgs) -> anyhow::Result<()> {
             )?
         }
         #[cfg(not(feature = "axon-pb"))]
-        Some(_) => unreachable!("--node bail handled above when axon-pb is off"),
+        Some(_) => unreachable!("--node unsupported return handled before dispatch"),
         None => {
             if ability_ref.is_descriptor_ref() {
                 anyhow::bail!(

@@ -8013,6 +8013,46 @@ for required_test in (
 PY
 }
 
+check_cli_public_invocation_transport_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local tuple="$cli_root/src/cli/commands/invocation_tuple.rs"
+  local invoke="$cli_root/src/cli/commands/invoke.rs"
+  local stream="$cli_root/src/cli/commands/ability_stream.rs"
+  local bidi="$cli_root/src/cli/commands/ability_bidi.rs"
+  [[ -f "$tuple" ]] || fail "CLI invocation tuple source is missing: ${tuple#$cli_root/}"
+  [[ -f "$invoke" ]] || fail "CLI invoke source is missing: ${invoke#$cli_root/}"
+  [[ -f "$stream" ]] || fail "CLI stream source is missing: ${stream#$cli_root/}"
+  [[ -f "$bidi" ]] || fail "CLI bidi source is missing: ${bidi#$cli_root/}"
+
+  "$PYTHON_BIN" - "$tuple" "$invoke" "$stream" "$bidi" <<'PY'
+import sys
+from pathlib import Path
+
+tuple_src, invoke, stream, bidi = [Path(path).read_text(encoding="utf-8") for path in sys.argv[1:]]
+invoke_production = invoke.split("\n#[cfg(test)]", 1)[0]
+stream_production = stream.split("\n#[cfg(test)]", 1)[0]
+bidi_production = bidi.split("\n#[cfg(test)]", 1)[0]
+
+if "pub(crate) fn remote_invocation_transport_unsupported(surface: &str) -> anyhow::Error" not in tuple_src:
+    raise SystemExit("cli_public_invocation_transport:shared_unsupported_helper_missing")
+if "canonical remote invocation transport is disabled" not in tuple_src:
+    raise SystemExit("cli_public_invocation_transport:canonical_disabled_message_missing")
+for name, body in {"invoke": invoke_production, "stream": stream_production, "bidi": bidi_production}.items():
+    if "remote_invocation_transport_unsupported(" not in body:
+        raise SystemExit(f"cli_public_invocation_transport:{name}:shared_helper_not_used")
+    for retired in (
+        "legacy message",
+        "not wired",
+        "production builds always do",
+        "--node bail handled above when axon-pb is off",
+    ):
+        if retired in body:
+            raise SystemExit(f"cli_public_invocation_transport:{name}:retired_wording:{retired}")
+if 'msg.contains("not wired")' not in invoke or 'msg.contains("legacy")' not in invoke:
+    raise SystemExit("cli_public_invocation_transport:invoke_negative_wording_test_missing")
+PY
+}
+
 check_ffi_last_error_typed_tls_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local ffi_errors="$cli_root/src/ffi/errors/mod.rs"
@@ -16845,6 +16885,7 @@ check_ffi_descriptor_runtime_owner_contract
 check_ffi_descriptor_probe_not_found_vocabulary_contract
 check_cli_discover_candidate_projection_contract
 check_ffi_invocation_json_projection_contract
+check_cli_public_invocation_transport_contract
 check_ffi_callback_terminal_projection_contract
 check_ffi_last_error_typed_tls_contract
 check_canonical_ability_catalog_projection_contract

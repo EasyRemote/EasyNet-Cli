@@ -42,6 +42,8 @@ use anyhow::{bail, Context};
 use clap::Args;
 use serde_json::Value;
 
+#[cfg(not(feature = "axon-pb"))]
+use crate::cli::commands::invocation_tuple::remote_invocation_transport_unsupported;
 use crate::cli::commands::invocation_tuple::{
     require_causal_root, required_nonce_hex, required_subject, AbilityInvocationRef,
 };
@@ -61,9 +63,8 @@ pub struct InvokeArgs {
     /// (`easynet:///r/<realm>/device/<node_id>`) or Hub URA
     /// (`easynet:///r/<realm>/authority`). The call routes through the
     /// local daemon's canonical `Invocation::Invoke` RPC — the
-    /// cross-device main channel. Requires the `axon-pb` feature
-    /// (production builds always enable it); minimal builds reject
-    /// the flag with a re-build hint. Omit to dispatch locally.
+    /// cross-device main channel. Builds without canonical remote invocation
+    /// transport reject the flag with a re-build hint. Omit to dispatch locally.
     #[arg(long, short = 'n', value_name = "URA")]
     pub node: Option<String>,
     /// JSON object passed to the ability as its arguments — for
@@ -112,11 +113,10 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
     let ability_ref = AbilityInvocationRef::parse(&invoke_args.ability_ura)?;
     let ability_selector = ability_ref.selector();
 
-    // PR-N1 commit 8/N: `--node` is now wired against the local
-    // daemon's canonical `Invocation::Invoke` RPC via the
-    // `daemon::invocation::routing::remote_invoke` helper. The path requires the
-    // `axon-pb` feature (production builds) — minimal builds still
-    // bail with the legacy message.
+    // `--node` is wired against the local daemon's canonical
+    // `Invocation::Invoke` RPC via the descriptor-bound remote invoke helper.
+    // Builds without `axon-pb` fail with the same canonical unsupported
+    // transport error used by stream and bidi ingress.
     let node_ura: Option<String> = match invoke_args.node.as_deref().map(str::trim) {
         None => None,
         Some("") => bail!(
@@ -131,12 +131,9 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
             #[cfg(not(feature = "axon-pb"))]
             {
                 let _ = node;
-                bail!(
-                    "remote pinning via --node requires the `axon-pb` feature, \
-                     which is not enabled in this build. Re-build with \
-                     `--features axon-pb` (production builds always do) \
-                     and try again."
-                )
+                return Err(remote_invocation_transport_unsupported(
+                    "remote ability invoke with --node",
+                ));
             }
         }
     };
@@ -185,10 +182,10 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
                 crate::daemon::invocation::routing::remote_invoke::invoke_remote_target(request)?;
             (value, format!("canonical Invoke target={target}"))
         }
-        // The `not(axon-pb)` arm of `--node` already bailed above;
+        // The `not(axon-pb)` arm of `--node` already returned above;
         // this match is reachable only via `node_ura == None`.
         #[cfg(not(feature = "axon-pb"))]
-        Some(_) => unreachable!("--node bail handled above when axon-pb is off"),
+        Some(_) => unreachable!("--node unsupported return handled before dispatch"),
         None => {
             if ability_ref.is_descriptor_ref() {
                 bail!(
@@ -320,12 +317,17 @@ mod tests {
         let err = res.expect_err("must reject non-canonical --node");
         let msg = format!("{err}");
         // axon-pb on: parse_node_ura error mentions canonical URA
-        // shape. axon-pb off: the legacy "not wired" message still
-        // mentions `--node`. Either is acceptable as an operator-
-        // actionable error.
+        // shape. axon-pb off: the canonical unsupported transport error
+        // mentions `--node`. Both are operator-actionable and neither
+        // preserves the retired not-wired path.
         assert!(
-            msg.contains("--node") || msg.contains("canonical") || msg.contains("axon-pb"),
-            "error must surface a --node-related message, got: {msg}"
+            (msg.contains("--node") && msg.contains("unsupported"))
+                || msg.contains("canonical Axon Device or Hub URA"),
+            "error must surface a canonical --node error, got: {msg}"
+        );
+        assert!(
+            !msg.contains("not wired") && !msg.contains("legacy"),
+            "error must not preserve retired invoke wording: {msg}"
         );
     }
 

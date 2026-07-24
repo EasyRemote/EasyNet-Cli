@@ -105,6 +105,14 @@ pub(crate) fn require_causal_root(value: bool, surface: &str) -> anyhow::Result<
     Ok(())
 }
 
+#[cfg(not(feature = "axon-pb"))]
+pub(crate) fn remote_invocation_transport_unsupported(surface: &str) -> anyhow::Error {
+    anyhow::anyhow!(
+        "{surface} is unsupported in this build: canonical remote invocation transport is disabled; \
+         rebuild with `--features axon-pb` and retry"
+    )
+}
+
 pub(crate) fn parse_invocation_nonce_hex(raw: &str) -> anyhow::Result<[u8; 16]> {
     let decoded = hex::decode(raw.trim())
         .with_context(|| "parse --nonce-hex as 16-byte hex invocation nonce")?;
