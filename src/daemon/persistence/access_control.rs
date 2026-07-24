@@ -57,6 +57,7 @@ const SCHEMA_VERSION: u64 = 1;
 const ZERO_HASH: &str = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AccessControlStoreManifest {
     pub policy_store: PolicyStoreSection,
     pub canonicalization: CanonicalizationSection,
@@ -64,6 +65,7 @@ pub struct AccessControlStoreManifest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PolicyStoreSection {
     pub format: String,
     pub schema_version: u64,
@@ -74,12 +76,14 @@ pub struct PolicyStoreSection {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CanonicalizationSection {
     pub record_profile: String,
     pub hash_algorithm: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PolicyStoreFiles {
     pub grants: String,
     pub permission_requests: String,
@@ -88,6 +92,7 @@ pub struct PolicyStoreFiles {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct GrantAuditRecord {
     pub audit_record_id: String,
     pub grant_id: String,
@@ -120,6 +125,7 @@ pub enum GrantMutation {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AuthorityBindingGrantResult {
     pub grant: PermissionGrant,
     pub idempotent_replay: bool,
@@ -127,6 +133,7 @@ pub struct AuthorityBindingGrantResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PermissionRequestResolutionResult {
     pub request: PermissionRequest,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -137,6 +144,7 @@ pub struct PermissionRequestResolutionResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AccessControlCompactionPolicy {
     pub grant_mutation_audit_retention_days: i64,
     pub prompt_audit_retention_days: i64,
@@ -158,6 +166,7 @@ impl Default for AccessControlCompactionPolicy {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AccessControlCompactionResult {
     pub checkpoint_id: String,
     pub compacted_at: String,
@@ -171,6 +180,7 @@ pub struct AccessControlCompactionResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct CompactionCheckpoint {
     checkpoint_id: String,
     compacted_at: String,
@@ -184,6 +194,7 @@ struct CompactionCheckpoint {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct JournalRecord {
     record_kind: RecordKind,
     schema_version: u64,
@@ -1614,6 +1625,145 @@ mod tests {
             revoked_at: None,
             reason: None,
         }
+    }
+
+    fn sample_manifest() -> AccessControlStoreManifest {
+        AccessControlStoreManifest {
+            policy_store: PolicyStoreSection {
+                format: STORE_FORMAT.to_string(),
+                schema_version: SCHEMA_VERSION,
+                owner_user_id: "alice".to_string(),
+                created_at: "2026-07-09T00:00:00Z".to_string(),
+                last_compacted_at: "2026-07-09T00:00:00Z".to_string(),
+                head_hash: ZERO_HASH.to_string(),
+            },
+            canonicalization: CanonicalizationSection {
+                record_profile: RECORD_PROFILE.to_string(),
+                hash_algorithm: "sha256".to_string(),
+            },
+            files: PolicyStoreFiles {
+                grants: GRANTS_FILE.to_string(),
+                permission_requests: REQUESTS_FILE.to_string(),
+                authority_proofs: PROOFS_FILE.to_string(),
+                audit: AUDIT_FILE.to_string(),
+            },
+        }
+    }
+
+    fn sample_journal_record(kind: RecordKind, payload: Value) -> JournalRecord {
+        let mut record = JournalRecord {
+            record_kind: kind,
+            schema_version: SCHEMA_VERSION,
+            sequence: 1,
+            owner_user_id: "alice".to_string(),
+            record_id: "record-1".to_string(),
+            operation: RecordOperation::Created,
+            payload,
+            previous_record_hash: ZERO_HASH.to_string(),
+            record_hash: String::new(),
+            created_at: "2026-07-09T00:00:00Z".to_string(),
+            actor_ura: "easynet:///r/test/user/alice".to_string(),
+        };
+        record.record_hash = compute_record_hash(&record).expect("hash");
+        record
+    }
+
+    #[test]
+    fn access_control_manifest_rejects_unknown_fields() {
+        let mut manifest = toml::Value::try_from(sample_manifest()).expect("manifest toml");
+        manifest
+            .as_table_mut()
+            .expect("manifest object")
+            .insert("legacy_manifest".to_string(), toml::Value::Boolean(true));
+        let error = manifest
+            .try_into::<AccessControlStoreManifest>()
+            .expect_err("manifest must reject unknown top-level fields");
+        assert!(
+            error
+                .to_string()
+                .contains("unknown field `legacy_manifest`"),
+            "error should name noncanonical manifest field: {error}"
+        );
+
+        let mut manifest = toml::Value::try_from(sample_manifest()).expect("manifest toml");
+        manifest
+            .get_mut("policy_store")
+            .and_then(toml::Value::as_table_mut)
+            .expect("policy_store")
+            .insert(
+                "legacy_owner".to_string(),
+                toml::Value::String("alice".into()),
+            );
+        let error = manifest
+            .try_into::<AccessControlStoreManifest>()
+            .expect_err("manifest section must reject unknown fields");
+        assert!(
+            error.to_string().contains("unknown field `legacy_owner`"),
+            "error should name noncanonical section field: {error}"
+        );
+    }
+
+    #[test]
+    fn policy_journal_record_rejects_unknown_fields() {
+        let mut raw = serde_json::to_value(sample_journal_record(
+            RecordKind::PermissionGrant,
+            json!({}),
+        ))
+        .expect("journal");
+        raw["legacy_sequence"] = json!(1);
+        let error = serde_json::from_value::<JournalRecord>(raw)
+            .expect_err("journal record must reject unknown fields");
+        assert!(
+            error
+                .to_string()
+                .contains("unknown field `legacy_sequence`"),
+            "error should name noncanonical journal field: {error}"
+        );
+    }
+
+    #[test]
+    fn grant_audit_record_rejects_unknown_fields() {
+        let grant = sample_grant("grant-1");
+        let audit = audit_record(
+            &grant,
+            GrantMutation::Created,
+            "easynet:///r/test/user/alice",
+            ZERO_HASH,
+            &grant_hash(&grant).expect("grant hash"),
+        )
+        .expect("audit");
+        let mut raw = serde_json::to_value(audit).expect("audit json");
+        raw["legacy_actor"] = json!("alice");
+        let error = serde_json::from_value::<GrantAuditRecord>(raw)
+            .expect_err("audit record must reject unknown fields");
+        assert!(
+            error.to_string().contains("unknown field `legacy_actor`"),
+            "error should name noncanonical audit field: {error}"
+        );
+    }
+
+    #[test]
+    fn compaction_checkpoint_rejects_unknown_fields() {
+        let mut raw = json!({
+            "checkpoint_id": "checkpoint-1",
+            "compacted_at": "2026-07-09T00:00:00Z",
+            "last_source_sequence": 1,
+            "last_source_record_hash": ZERO_HASH,
+            "retained_active_grant_hashes": [],
+            "retained_pending_request_ids": [],
+            "retained_unexpired_proof_ids": [],
+            "retained_audit_record_ids": [],
+            "retention_floor": AccessControlCompactionPolicy::default(),
+            "legacy_retention": "compat-carrier"
+        });
+        let error = serde_json::from_value::<CompactionCheckpoint>(raw.take())
+            .expect_err("checkpoint must reject unknown fields");
+        assert!(
+            error
+                .to_string()
+                .contains("unknown field `legacy_retention`"),
+            "error should name noncanonical checkpoint field: {error}"
+        );
     }
 
     #[test]

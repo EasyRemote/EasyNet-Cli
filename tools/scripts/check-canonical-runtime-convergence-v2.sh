@@ -2791,6 +2791,60 @@ for required in (
 PY
 }
 
+check_access_control_store_schema_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local access_control="$cli_root/src/daemon/persistence/access_control.rs"
+  [[ -f "$access_control" ]] || fail "access-control persistence source is missing: ${access_control#$cli_root/}"
+
+  "$PYTHON_BIN" - "$access_control" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+
+def struct_attrs(name: str) -> str:
+    match = re.search(
+        r"(?P<attrs>(?:#\[[^\n]+\]\n)*)(?:pub\s+)?struct " + re.escape(name) + r" \{",
+        text,
+        re.S,
+    )
+    if match is None:
+        raise SystemExit(f"access_control_store_schema:{name}:missing")
+    return match.group("attrs")
+
+for name in (
+    "AccessControlStoreManifest",
+    "PolicyStoreSection",
+    "CanonicalizationSection",
+    "PolicyStoreFiles",
+    "GrantAuditRecord",
+    "AuthorityBindingGrantResult",
+    "PermissionRequestResolutionResult",
+    "AccessControlCompactionPolicy",
+    "AccessControlCompactionResult",
+    "CompactionCheckpoint",
+    "JournalRecord",
+):
+    if "#[serde(deny_unknown_fields)]" not in struct_attrs(name):
+        raise SystemExit(f"access_control_store_schema:{name}:missing_deny_unknown_fields")
+
+for required in (
+    "access_control_manifest_rejects_unknown_fields",
+    "unknown field `legacy_manifest`",
+    "unknown field `legacy_owner`",
+    "policy_journal_record_rejects_unknown_fields",
+    "unknown field `legacy_sequence`",
+    "grant_audit_record_rejects_unknown_fields",
+    "unknown field `legacy_actor`",
+    "compaction_checkpoint_rejects_unknown_fields",
+    "unknown field `legacy_retention`",
+):
+    if required not in text:
+        raise SystemExit(f"access_control_store_schema:test_missing:{required}")
+PY
+}
+
 check_resources_schema_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local resources="$cli_root/src/daemon/persistence/resources.rs"
@@ -18298,6 +18352,50 @@ EOF
   if ( CLI_ROOT="$tmp/access-control-policy-schema-legacy"; check_access_control_policy_schema_contract ) >/dev/null 2>&1; then
     fail "self-test expected access-control policy schema compatibility gate to fail"
   fi
+  mkdir -p "$tmp/access-control-store-schema-legacy/src/daemon/persistence"
+  cat >"$tmp/access-control-store-schema-legacy/src/daemon/persistence/access_control.rs" <<'EOF'
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AccessControlStoreManifest { pub policy_store: PolicyStoreSection }
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PolicyStoreSection { pub owner_user_id: String }
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CanonicalizationSection { pub record_profile: String }
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PolicyStoreFiles { pub grants: String }
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GrantAuditRecord { pub audit_record_id: String }
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AuthorityBindingGrantResult { pub idempotent_replay: bool }
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PermissionRequestResolutionResult { pub idempotent_replay: bool }
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AccessControlCompactionPolicy { pub grant_mutation_audit_retention_days: i64 }
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AccessControlCompactionResult { pub checkpoint_id: String }
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct CompactionCheckpoint { checkpoint_id: String }
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct JournalRecord { record_id: String }
+#[cfg(test)]
+mod tests {
+    fn access_control_manifest_rejects_unknown_fields() {
+        let _ = "unknown field `legacy_manifest`";
+        let _ = "unknown field `legacy_owner`";
+    }
+    fn policy_journal_record_rejects_unknown_fields() {
+        let _ = "unknown field `legacy_sequence`";
+    }
+    fn grant_audit_record_rejects_unknown_fields() {
+        let _ = "unknown field `legacy_actor`";
+    }
+    fn compaction_checkpoint_rejects_unknown_fields() {
+        let _ = "unknown field `legacy_retention`";
+    }
+}
+EOF
+  if ( CLI_ROOT="$tmp/access-control-store-schema-legacy"; check_access_control_store_schema_contract ) >/dev/null 2>&1; then
+    fail "self-test expected access-control store schema compatibility gate to fail"
+  fi
   mkdir -p "$tmp/resources-schema-legacy/src/daemon/persistence"
   cat >"$tmp/resources-schema-legacy/src/daemon/persistence/resources.rs" <<'EOF'
 /// Resource type taxonomy — RFC-005 v3.2. The wire form is a
@@ -18813,6 +18911,7 @@ EOF
   check_auth_session_owner_fact_contract
   check_authority_proof_session_fact_contract
   check_access_control_policy_schema_contract
+  check_access_control_store_schema_contract
   check_resources_schema_contract
   check_agent_spec_schema_contract
   check_control_discovery_schema_contract
@@ -19006,6 +19105,7 @@ check_profile_store_schema_contract
 check_auth_session_owner_fact_contract
 check_authority_proof_session_fact_contract
 check_access_control_policy_schema_contract
+check_access_control_store_schema_contract
 check_resources_schema_contract
 check_agent_spec_schema_contract
 check_control_discovery_schema_contract

@@ -1494,3 +1494,43 @@ architecture rather than add feature surface.
   - `tools/scripts/check-architecture-convergence.sh`
   - `cargo fmt --check`
   - `git diff --check`
+
+## Iteration 35 candidate policy
+
+- Continue from policy payload exactness to access-control store envelope
+  exactness. Manifest, journal, audit, and compaction checkpoint records are
+  replay-facing authority state, so they must not accept legacy metadata outside
+  the canonical policy schema.
+- codegraph highlighted `AccessControlStoreManifest`, `GrantAuditRecord`,
+  `CompactionCheckpoint`, and `JournalRecord` as shared persistence models
+  around policy replay and audit custody.
+- The root abstraction problem is strict policy payloads inside wider
+  persistence envelopes: a legacy field could survive at the replay/audit layer
+  even after the grant/request payload became exact.
+- The selected cutover is to make access-control store manifest sections,
+  journal records, audit records, compaction policy/result records, and
+  checkpoint records fail closed on unknown fields.
+
+## Iteration 35 decision log
+
+- `AccessControlStoreManifest`, `PolicyStoreSection`,
+  `CanonicalizationSection`, `PolicyStoreFiles`, `GrantAuditRecord`,
+  `AuthorityBindingGrantResult`, `PermissionRequestResolutionResult`,
+  `AccessControlCompactionPolicy`, `AccessControlCompactionResult`,
+  `CompactionCheckpoint`, and `JournalRecord` now use
+  `#[serde(deny_unknown_fields)]`.
+- Added negative deserialization tests for legacy manifest metadata, legacy
+  policy-store owner metadata, legacy journal sequencing metadata, legacy audit
+  actor metadata, and legacy compaction retention metadata.
+- SPEC v2 now includes `check_access_control_store_schema_contract`, with a
+  negative self-test fixture that proves the gate fails when store envelopes are
+  not exact.
+- Verification passed:
+  - `/Users/macbook.silan.tech/.local/bin/codegraph explore "AccessControlStoreManifest GrantAuditRecord CompactionCheckpoint JournalRecord legacy unknown fields access-control replay audit authority"`
+  - `cargo test -q access_control`
+  - `bash -n tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - `tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  - `tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - `tools/scripts/check-architecture-convergence.sh`
+  - `cargo fmt --check`
+  - `git diff --check`
