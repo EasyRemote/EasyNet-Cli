@@ -2703,7 +2703,7 @@ async fn invoke_runtime_bootstrap_self_identity_is_not_cli_shadow_acked() {
         make_service_with_test_runtime(rt.clone()).with_session_realm("test-realm".to_string());
     let hub_ura = crate::core::ura::hub_ura("test-realm");
     let args = r#"{
-        "tenant_id":"tenant-a",
+        "realm":"tenant-a",
         "node_id":"node-a",
         "owner_id":"node-a",
         "public_key_b64":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
@@ -2789,7 +2789,7 @@ async fn invoke_runtime_bootstrap_self_identity_succeeds_when_sdk_admin_installe
 
     let key = SigningKey::from_bytes(&[0x55; 32]);
     let args = serde_json::json!({
-        "tenant_id": "tenant-a",
+        "realm": "tenant-a",
         "node_id": "node-a",
         "owner_id": "node-a",
         "public_key_b64": BASE64_STANDARD.encode(key.verifying_key().to_bytes()),

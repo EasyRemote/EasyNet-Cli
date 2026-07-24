@@ -1295,3 +1295,44 @@ architecture rather than add feature surface.
   - `tools/scripts/check-canonical-runtime-convergence-v2.sh`
   - `tools/scripts/check-architecture-convergence.sh`
   - `git diff --check`
+
+## Iteration 30 candidate policy
+
+- Focus on runtime-admin bootstrap ingress because product/device start depends
+  on this path to establish caller-key custody before steady-state signed
+  invocation.
+- codegraph and targeted search found
+  `runtime.bootstrap_self_identity` marked `cutover_ready` while its descriptor
+  required `tenant_id` and described it as a compatibility field carrying realm.
+  The handler also accepted an undocumented `display_name` field and lacked
+  `deny_unknown_fields`.
+- The root abstraction problem is a canonical runtime-admin ability whose public
+  schema and private DTO still model realm as a tenant alias. That makes SDK and
+  product callers infer an obsolete bootstrap shape from the canonical catalog.
+- The selected cutover is to make bootstrap identity ingress strict and
+  realm-named: descriptor, DTO, state naming, bootstrap alias construction, and
+  dispatcher tests all use `realm`; retired `tenant_id` and `display_name`
+  fields are rejected.
+
+## Iteration 30 decision log
+
+- `runtime.bootstrap_self_identity` now requires `realm`, `node_id`,
+  `owner_id`, and `public_key_b64`.
+- The Axon runtime-admin bridge uses `#[serde(deny_unknown_fields)]` for
+  `BootstrapSelfIdentityArgs`, removes the undocumented `display_name` carrier,
+  and renames `tenant_by_node` to `realm_by_node`.
+- Runtime-admin bootstrap diagnostics now report
+  `node_id_already_bootstrapped_for_realm` instead of tenant vocabulary.
+- SPEC v2 now rejects reintroduced bootstrap `tenant_id`, `display_name`, and
+  compatibility wording across descriptor, handler DTO, and dispatcher payloads,
+  with a negative self-test fixture.
+- Verification passed:
+  - `/Users/macbook.silan.tech/.local/bin/codegraph explore "runtime.bootstrap_self_identity compatibility field realm descriptor bootstrap self identity"`
+  - `cargo test -q bootstrap_args_reject_retired_tenant_id_alias_and_display_name`
+  - `cargo test -q invoke_runtime_bootstrap_self_identity`
+  - `cargo fmt --check`
+  - `bash -n tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - `tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  - `tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - `tools/scripts/check-architecture-convergence.sh`
+  - `git diff --check`

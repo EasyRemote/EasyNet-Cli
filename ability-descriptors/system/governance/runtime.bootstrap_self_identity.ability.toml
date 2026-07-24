@@ -17,7 +17,7 @@ receipt_semantics = "operational"
 
 [input_schema]
 type = "object"
-required = ["tenant_id", "node_id", "owner_id", "public_key_b64"]
+required = ["realm", "node_id", "owner_id", "public_key_b64"]
 additionalProperties = false
 
 [input_schema.properties.node_id]
@@ -32,6 +32,6 @@ description = "Owner identifier associated with the bootstrapped runtime identit
 type = "string"
 description = "Base64-encoded Ed25519 verifying key to bind to the runtime identity."
 
-[input_schema.properties.tenant_id]
+[input_schema.properties.realm]
 type = "string"
-description = "Compatibility field carrying the realm for the bootstrapping runtime."
+description = "Realm for the bootstrapping runtime identity."

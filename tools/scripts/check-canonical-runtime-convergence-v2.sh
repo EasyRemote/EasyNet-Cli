@@ -6644,6 +6644,98 @@ for retired in (
 PY
 }
 
+check_runtime_bootstrap_self_identity_ingress_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local descriptor="$cli_root/ability-descriptors/system/governance/runtime.bootstrap_self_identity.ability.toml"
+  local runtime_admin="$cli_root/src/daemon/axon_bridge/runtime_admin.rs"
+  local unary_tests="$cli_root/src/daemon/invocation/dispatch/daemon_invocation_service_tests/unary.rs"
+  [[ -f "$descriptor" ]] || fail "runtime.bootstrap_self_identity descriptor is missing: ${descriptor#$cli_root/}"
+  [[ -f "$runtime_admin" ]] || fail "runtime admin bridge is missing: ${runtime_admin#$cli_root/}"
+  [[ -f "$unary_tests" ]] || fail "unary dispatcher tests are missing: ${unary_tests#$cli_root/}"
+
+  "$PYTHON_BIN" - "$descriptor" "$runtime_admin" "$unary_tests" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+descriptor = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+runtime_admin = Path(sys.argv[2]).read_text(encoding="utf-8", errors="replace")
+unary = Path(sys.argv[3]).read_text(encoding="utf-8", errors="replace")
+
+for required in (
+    'name = "runtime.bootstrap_self_identity"',
+    'capability_state = "cutover_ready"',
+    'required = ["realm", "node_id", "owner_id", "public_key_b64"]',
+    '[input_schema.properties.realm]',
+    'description = "Realm for the bootstrapping runtime identity."',
+    'additionalProperties = false',
+):
+    if required not in descriptor:
+        raise SystemExit(f"runtime_bootstrap_self_identity_ingress:descriptor_missing:{required}")
+for retired in (
+    'required = ["tenant_id"',
+    '[input_schema.properties.tenant_id]',
+    "Compatibility field carrying the realm",
+):
+    if retired in descriptor:
+        raise SystemExit(f"runtime_bootstrap_self_identity_ingress:descriptor_retired:{retired}")
+
+match = re.search(r"(?P<prefix>(?:#\[[^\n]*\]\n)*)struct BootstrapSelfIdentityArgs \{(?P<body>.*?)\n\}", runtime_admin, re.S)
+if match is None:
+    raise SystemExit("runtime_bootstrap_self_identity_ingress:args_missing")
+if "deny_unknown_fields" not in match.group("prefix"):
+    raise SystemExit("runtime_bootstrap_self_identity_ingress:args_open_shape")
+args_body = match.group("body")
+for required in (
+    "realm: String",
+    "node_id: String",
+    "owner_id: String",
+    "public_key_b64: String",
+):
+    if required not in args_body:
+        raise SystemExit(f"runtime_bootstrap_self_identity_ingress:args_field_missing:{required}")
+for retired in (
+    "tenant_id",
+    "display_name",
+):
+    if retired in args_body:
+        raise SystemExit(f"runtime_bootstrap_self_identity_ingress:args_retired:{retired}")
+
+for required in (
+    "realm_by_node: HashMap<String, String>",
+    'validate_non_empty(&args.realm, "realm")?',
+    "node_id_already_bootstrapped_for_realm",
+    "state.realm_by_node",
+    "bootstrap_aliases(&args.realm, &args.node_id, &args.owner_id)",
+    "fn bootstrap_aliases(realm: &str, node_id: &str, owner_id: &str)",
+    "bootstrap_args_reject_retired_tenant_id_alias_and_display_name",
+):
+    if required not in runtime_admin:
+        raise SystemExit(f"runtime_bootstrap_self_identity_ingress:runtime_missing:{required}")
+for retired in (
+    "tenant_by_node",
+    "node_id_already_bootstrapped_for_tenant",
+):
+    if retired in runtime_admin:
+        raise SystemExit(f"runtime_bootstrap_self_identity_ingress:runtime_retired:{retired}")
+
+for test_name in (
+    "invoke_runtime_bootstrap_self_identity_is_not_cli_shadow_acked",
+    "invoke_runtime_bootstrap_self_identity_succeeds_when_sdk_admin_installed",
+):
+    start = unary.find(f"async fn {test_name}")
+    if start < 0:
+        raise SystemExit(f"runtime_bootstrap_self_identity_ingress:unary_test_missing:{test_name}")
+    end = unary.find("\n#[", start + 1)
+    body = unary[start : end if end >= 0 else len(unary)]
+    if '"realm"' not in body:
+        raise SystemExit(f"runtime_bootstrap_self_identity_ingress:unary_payload_missing_realm:{test_name}")
+    for retired in ('"tenant_id"', '"display_name"'):
+        if retired in body:
+            raise SystemExit(f"runtime_bootstrap_self_identity_ingress:unary_payload_retired:{test_name}:{retired}")
+PY
+}
+
 check_federation_receipt_facts_strict_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local client="$cli_root/src/daemon/federation/client/ability_contract.rs"
@@ -18405,6 +18497,43 @@ EOF
   if ( CLI_ROOT="$tmp/federation-join-legacy-token"; check_federation_join_ingress_strict_contract ) >/dev/null 2>&1; then
     fail "self-test expected federation.join legacy pairing_secret gate to fail"
   fi
+  mkdir -p "$tmp/runtime-bootstrap-legacy-tenant/ability-descriptors/system/governance" \
+    "$tmp/runtime-bootstrap-legacy-tenant/src/daemon/axon_bridge" \
+    "$tmp/runtime-bootstrap-legacy-tenant/src/daemon/invocation/dispatch/daemon_invocation_service_tests"
+  cat >"$tmp/runtime-bootstrap-legacy-tenant/ability-descriptors/system/governance/runtime.bootstrap_self_identity.ability.toml" <<'EOF'
+name = "runtime.bootstrap_self_identity"
+capability_state = "cutover_ready"
+required = ["tenant_id", "node_id", "owner_id", "public_key_b64"]
+additionalProperties = false
+[input_schema.properties.tenant_id]
+description = "Compatibility field carrying the realm for the bootstrapping runtime."
+EOF
+  cat >"$tmp/runtime-bootstrap-legacy-tenant/src/daemon/axon_bridge/runtime_admin.rs" <<'EOF'
+struct BootstrapSelfIdentityArgs {
+    tenant_id: String,
+    node_id: String,
+    owner_id: String,
+    display_name: String,
+    public_key_b64: String,
+}
+struct BootstrapIdentityState {
+    tenant_by_node: HashMap<String, String>,
+}
+fn bootstrap_aliases(tenant_id: &str, node_id: &str, owner_id: &str) {}
+fn bootstrap_args_reject_retired_tenant_id_alias_and_display_name() {}
+EOF
+  cat >"$tmp/runtime-bootstrap-legacy-tenant/src/daemon/invocation/dispatch/daemon_invocation_service_tests/unary.rs" <<'EOF'
+async fn invoke_runtime_bootstrap_self_identity_is_not_cli_shadow_acked() {
+    let args = r#"{"tenant_id":"tenant-a","node_id":"node-a","owner_id":"node-a","public_key_b64":"k"}"#;
+}
+#[tokio::test]
+async fn invoke_runtime_bootstrap_self_identity_succeeds_when_sdk_admin_installed() {
+    let args = serde_json::json!({"tenant_id":"tenant-a","node_id":"node-a","owner_id":"node-a","public_key_b64":"k"});
+}
+EOF
+  if ( CLI_ROOT="$tmp/runtime-bootstrap-legacy-tenant"; check_runtime_bootstrap_self_identity_ingress_contract ) >/dev/null 2>&1; then
+    fail "self-test expected runtime bootstrap tenant/display_name gate to fail"
+  fi
   check_mcp_reflection_async_bridge_contract
   check_runtime_session_projection_accessor_contract
   check_ffi_runtime_sizing_policy_contract
@@ -18506,6 +18635,7 @@ EOF
   check_session_prelude_receipt_contract
   check_federation_heartbeat_ingress_strict_contract
   check_federation_join_ingress_strict_contract
+  check_runtime_bootstrap_self_identity_ingress_contract
   check_federation_receipt_facts_strict_contract
   check_federation_revoke_ingress_strict_contract
   check_device_settings_loader_contract
@@ -18699,6 +18829,7 @@ check_start_attach_user_signer_readiness_contract
 check_session_prelude_receipt_contract
 check_federation_heartbeat_ingress_strict_contract
 check_federation_join_ingress_strict_contract
+check_runtime_bootstrap_self_identity_ingress_contract
 check_federation_receipt_facts_strict_contract
 check_federation_revoke_ingress_strict_contract
 check_device_settings_loader_contract

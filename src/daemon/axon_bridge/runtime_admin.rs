@@ -1,8 +1,8 @@
 //! CLI-owned runtime bootstrap identity ability and key providers.
 //!
-//! `runtime.bootstrap_self_identity` is product behavior. The Axon SDK owns
+//! `runtime.bootstrap_self_identity` is daemon runtime bootstrap behavior. The Axon SDK owns
 //! descriptor-bound admission and execution, while this module owns the
-//! EasyNet bootstrap request, its bounded identity state, and the handler
+//! daemon bootstrap request, its bounded identity state, and the handler
 //! registered into the canonical runtime.
 
 use std::collections::HashMap;
@@ -24,12 +24,11 @@ use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 const MAX_BOOTSTRAP_KEYS_PER_NODE: usize = 8;
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct BootstrapSelfIdentityArgs {
-    tenant_id: String,
+    realm: String,
     node_id: String,
     owner_id: String,
-    #[serde(default)]
-    display_name: String,
     public_key_b64: String,
 }
 
@@ -43,11 +42,11 @@ struct BootstrapSelfIdentityReceipt {
 struct BootstrapIdentityState {
     keys_by_ura: HashMap<String, Vec<VerifyingKey>>,
     keys_by_node: HashMap<String, Vec<VerifyingKey>>,
-    tenant_by_node: HashMap<String, String>,
+    realm_by_node: HashMap<String, String>,
     owner_by_node: HashMap<String, String>,
 }
 
-/// Product-owned key state installed by `runtime.bootstrap_self_identity`.
+/// Daemon-owned key state installed by `runtime.bootstrap_self_identity`.
 ///
 /// The provider is shared by the ability handler and
 /// [`CanonicalAdmissionKeyResolver`](crate::daemon::identity::local_invocation::CanonicalAdmissionKeyResolver).
@@ -64,21 +63,20 @@ impl RuntimeBootstrapIdentityProvider {
         &self,
         args: BootstrapSelfIdentityArgs,
     ) -> Result<BootstrapSelfIdentityReceipt, AxonError> {
-        validate_non_empty(&args.tenant_id, "tenant_id")?;
+        validate_non_empty(&args.realm, "realm")?;
         validate_non_empty(&args.node_id, "node_id")?;
         validate_non_empty(&args.owner_id, "owner_id")?;
         validate_non_empty(&args.public_key_b64, "public_key_b64")?;
-        let _ = args.display_name;
 
         let key = decode_public_key_b64(&args.public_key_b64)?;
         let mut state = self
             .state
             .write()
             .map_err(|_| AxonError::internal("bootstrap_identity_lock_poisoned"))?;
-        if let Some(existing_tenant) = state.tenant_by_node.get(&args.node_id) {
-            if existing_tenant != &args.tenant_id {
+        if let Some(existing_realm) = state.realm_by_node.get(&args.node_id) {
+            if existing_realm != &args.realm {
                 return Err(AxonError::invalid_argument(format!(
-                    "node_id_already_bootstrapped_for_tenant:{existing_tenant}"
+                    "node_id_already_bootstrapped_for_realm:{existing_realm}"
                 )));
             }
         }
@@ -102,13 +100,13 @@ impl RuntimeBootstrapIdentityProvider {
         }
         if !replaced_prior {
             state
-                .tenant_by_node
-                .insert(args.node_id.clone(), args.tenant_id.clone());
+                .realm_by_node
+                .insert(args.node_id.clone(), args.realm.clone());
             state
                 .owner_by_node
                 .insert(args.node_id.clone(), args.owner_id.clone());
         }
-        for ura in bootstrap_aliases(&args.tenant_id, &args.node_id, &args.owner_id) {
+        for ura in bootstrap_aliases(&args.realm, &args.node_id, &args.owner_id) {
             insert_unique_key(state.keys_by_ura.entry(ura).or_default(), key);
         }
 
@@ -363,10 +361,10 @@ fn decode_public_key_b64(public_key_b64: &str) -> Result<VerifyingKey, AxonError
         .map_err(|error| AxonError::invalid_argument(format!("public_key_parse_failed:{error}")))
 }
 
-fn bootstrap_aliases(tenant_id: &str, node_id: &str, owner_id: &str) -> [String; 2] {
+fn bootstrap_aliases(realm: &str, node_id: &str, owner_id: &str) -> [String; 2] {
     [
-        crate::core::ura::device_ura(tenant_id, node_id),
-        crate::core::ura::agent_ura(tenant_id, owner_id, node_id),
+        crate::core::ura::device_ura(realm, node_id),
+        crate::core::ura::agent_ura(realm, owner_id, node_id),
     ]
 }
 
@@ -386,16 +384,15 @@ mod tests {
     use ed25519_dalek::SigningKey;
 
     fn args_for(
-        tenant_id: &str,
+        realm: &str,
         node_id: &str,
         owner_id: &str,
         signing_key: &SigningKey,
     ) -> BootstrapSelfIdentityArgs {
         BootstrapSelfIdentityArgs {
-            tenant_id: tenant_id.to_string(),
+            realm: realm.to_string(),
             node_id: node_id.to_string(),
             owner_id: owner_id.to_string(),
-            display_name: String::new(),
             public_key_b64: BASE64_STANDARD.encode(signing_key.verifying_key().to_bytes()),
         }
     }
@@ -426,6 +423,30 @@ mod tests {
         assert!(provider
             .resolve(&crate::core::ura::hub_ura("realm"))
             .is_err());
+    }
+
+    #[test]
+    fn bootstrap_args_reject_retired_tenant_id_alias_and_display_name() {
+        let key = SigningKey::from_bytes(&[9; 32]);
+        for retired_field in ["tenant_id", "display_name"] {
+            let mut body = serde_json::json!({
+                "realm": "realm",
+                "node_id": "node",
+                "owner_id": "owner",
+                "public_key_b64": BASE64_STANDARD.encode(key.verifying_key().to_bytes()),
+            });
+            body.as_object_mut()
+                .expect("bootstrap args object")
+                .insert(retired_field.to_string(), serde_json::json!("retired"));
+
+            let error = serde_json::from_value::<BootstrapSelfIdentityArgs>(body)
+                .expect_err("retired bootstrap args must fail closed");
+
+            assert!(
+                error.to_string().contains(retired_field),
+                "retired field {retired_field:?} must be named in parse error: {error}"
+            );
+        }
     }
 
     #[test]
