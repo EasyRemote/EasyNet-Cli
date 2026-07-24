@@ -42,7 +42,7 @@ pub(crate) fn invoke_remote_device_system_ability(
     } else {
         action_label.to_string()
     };
-    Err(crate::support::platform::local_invoke::federation_not_wired_error(&label))
+    Err(crate::support::platform::local_invoke::federation_capability_unsupported_error(&label))
 }
 
 #[cfg(feature = "axon-pb")]

@@ -8089,6 +8089,58 @@ if 'msg.contains("not wired")' not in invoke or 'msg.contains("legacy")' not in 
 PY
 }
 
+check_cli_federation_feature_off_capability_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local support="$cli_root/src/support/platform/local_invoke.rs"
+  local remote_system="$cli_root/src/cli/daemon_client/remote_system_ability.rs"
+  local reset="$cli_root/src/cli/commands/reset.rs"
+  local devices="$cli_root/src/cli/commands/devices.rs"
+  local device_group="$cli_root/src/cli/commands/groups/device.rs"
+  local join="$cli_root/src/cli/commands/join.rs"
+  for path in "$support" "$remote_system" "$reset" "$devices" "$device_group" "$join"; do
+    [[ -f "$path" ]] || fail "CLI federation feature-off source is missing: ${path#$cli_root/}"
+  done
+
+  "$PYTHON_BIN" - "$support" "$remote_system" "$reset" "$devices" "$device_group" "$join" <<'PY'
+import sys
+from pathlib import Path
+
+support, remote_system, reset, devices, device_group, join = [
+    Path(path).read_text(encoding="utf-8", errors="replace")
+    for path in sys.argv[1:]
+]
+all_sources = "\n".join((support, remote_system, reset, devices, device_group, join))
+
+for required, code in (
+    ("pub fn federation_capability_unsupported_error(action: &str) -> anyhow::Error", "helper_missing"),
+    ("capability_state=unsupported", "unsupported_state_missing"),
+    ("federation transport provider is unavailable", "provider_unavailable_diagnostic_missing"),
+):
+    if required not in support:
+        raise SystemExit(f"cli_federation_feature_off_capability:{code}")
+
+for name, body in {
+    "remote_system": remote_system,
+    "reset": reset,
+    "devices": devices,
+    "device_group": device_group,
+    "join": join,
+}.items():
+    if "federation_capability_unsupported_error(" not in body:
+        raise SystemExit(f"cli_federation_feature_off_capability:{name}:helper_not_used")
+
+for retired in (
+    "federation_not_wired_error",
+    "requires the `axon-pb` feature",
+    "production builds always do",
+    "follow-up trust auto-wire",
+    "not wired",
+):
+    if retired in all_sources:
+        raise SystemExit(f"cli_federation_feature_off_capability:retired_vocabulary:{retired}")
+PY
+}
+
 check_invocation_attempt_audit_feature_boundary_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local dispatch_mod="$cli_root/src/daemon/invocation/dispatch/mod.rs"
@@ -16823,6 +16875,26 @@ EOF
   if ( CLI_ROOT="$tmp/ffi-init-connect-error-legacy"; check_ffi_init_typed_connect_error_contract ) >/dev/null 2>&1; then
     fail "self-test expected FFI init typed connect error gate to fail"
   fi
+  mkdir -p "$tmp/cli-federation-feature-off-legacy/src/support/platform" \
+    "$tmp/cli-federation-feature-off-legacy/src/cli/daemon_client" \
+    "$tmp/cli-federation-feature-off-legacy/src/cli/commands/groups" \
+    "$tmp/cli-federation-feature-off-legacy/src/cli/commands"
+  cat >"$tmp/cli-federation-feature-off-legacy/src/support/platform/local_invoke.rs" <<'EOF'
+pub fn federation_not_wired_error(action: &str) -> anyhow::Error {
+    anyhow::anyhow!("{action} requires the `axon-pb` feature; production builds always do")
+}
+EOF
+  for fixture in \
+    "$tmp/cli-federation-feature-off-legacy/src/cli/daemon_client/remote_system_ability.rs" \
+    "$tmp/cli-federation-feature-off-legacy/src/cli/commands/reset.rs" \
+    "$tmp/cli-federation-feature-off-legacy/src/cli/commands/devices.rs" \
+    "$tmp/cli-federation-feature-off-legacy/src/cli/commands/groups/device.rs" \
+    "$tmp/cli-federation-feature-off-legacy/src/cli/commands/join.rs"; do
+    printf 'fn call() { federation_not_wired_error("remote federation"); }\n' >"$fixture"
+  done
+  if ( CLI_ROOT="$tmp/cli-federation-feature-off-legacy"; check_cli_federation_feature_off_capability_contract ) >/dev/null 2>&1; then
+    fail "self-test expected CLI federation feature-off legacy gate to fail"
+  fi
   check_mcp_reflection_async_bridge_contract
   check_runtime_session_projection_accessor_contract
   check_ffi_runtime_sizing_policy_contract
@@ -17132,6 +17204,7 @@ check_ffi_descriptor_probe_not_found_vocabulary_contract
 check_cli_discover_candidate_projection_contract
 check_ffi_invocation_json_projection_contract
 check_cli_public_invocation_transport_contract
+check_cli_federation_feature_off_capability_contract
 check_invocation_attempt_audit_feature_boundary_contract
 check_ffi_callback_terminal_projection_contract
 check_ffi_last_error_typed_tls_contract

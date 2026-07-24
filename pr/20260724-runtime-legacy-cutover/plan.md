@@ -387,3 +387,44 @@ architecture rather than add feature surface.
   - `tools/scripts/check-canonical-runtime-convergence-v2.sh`
   - `tools/scripts/check-architecture-convergence.sh`
   - `git diff --check`
+
+## Iteration 11 candidate policy
+
+- Focus on CLI/support federation feature-off paths. codegraph found
+  `support::platform::local_invoke::federation_not_wired_error` with six CLI
+  callers and diagnostics that describe missing `axon-pb` build wiring.
+- The root abstraction problem is capability-state leakage: a CLI action that
+  requires federation reach should fail as an Unsupported canonical runtime
+  capability state when the federation transport provider is unavailable, not
+  as a production-build feature wiring problem.
+- The intended cutover is to replace the support-layer helper with a
+  product-neutral `federation_capability_unsupported_error`, migrate every
+  feature-off caller to it, and gate against reintroducing `not wired`,
+  `production builds always do`, or `federation_not_wired_error`.
+- This preserves public CLI shape while removing the compatibility-era
+  implementation narrative from the error boundary.
+
+## Iteration 11 decision log
+
+- Replaced `federation_not_wired_error` with
+  `federation_capability_unsupported_error` in the support-layer federation
+  feature-off boundary.
+- Migrated every feature-off CLI federation caller (`devices`, `device` group,
+  `reset`, `join`, and remote system ability forwarding) to the new canonical
+  Unsupported helper.
+- Feature-off federation diagnostics now report
+  `capability_state=unsupported` because the federation transport provider is
+  unavailable under the current runtime capability matrix.
+- Removed production-build feature wiring vocabulary from the user-facing
+  boundary and replaced a `follow-up trust auto-wire` implementation note with
+  trust synchronization terminology.
+- SPEC v2 now rejects the retired helper name, `axon-pb` feature wiring
+  diagnostic, `production builds always do`, and related retired vocabulary
+  across the support helper plus all six CLI caller files.
+- Verification passed:
+  - `cargo check --no-default-features --lib -q`
+  - `cargo test -q non_canonical_node_ura_returns_actionable_error`
+  - `cargo fmt --check`
+  - `tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - `tools/scripts/check-architecture-convergence.sh`
+  - `git diff --check`

@@ -713,30 +713,14 @@ pub fn invoke_local_ability_target_with_hosted_agent_delegation(
     )
 }
 
-/// Standard error message for any CLI surface that semantically
-/// requires the federation tier (cross-node enumeration, remote
-/// dispatch, voice/video signaling). The federation Invoke surface
-/// that would back these calls was removed by AXON-RFC-001 P1.5
-/// and ships as a follow-up; until then, every command that
-/// genuinely needs cross-node reach surfaces this exact message.
-///
-/// Centralised so:
-///   * the wording stays byte-identical across surfaces (a script
-///     can grep one substring),
-///   * the operator sees one consistent name for the missing
-///     subsystem instead of 8 variations of "federation gone",
-///   * the day federation Invoke lands, deletion of this string
-///     plus its callers is one PR rather than scavenger-hunt.
-///
-/// `action` is a short verb-phrase describing what the user was
-/// trying to do (e.g. `"list remote devices"`, `"deploy ability to a
-/// remote node"`); it is splice into the message so the operator
-/// sees the verb that failed in front of the same explanation.
+/// Standard error for CLI/support surfaces that require a federation
+/// transport provider while the current runtime capability matrix marks that
+/// transport Unsupported.
 #[cfg(not(feature = "axon-pb"))]
-pub fn federation_not_wired_error(action: &str) -> anyhow::Error {
+pub fn federation_capability_unsupported_error(action: &str) -> anyhow::Error {
     anyhow::Error::new(LocalInvokeFailure::DaemonOffline(format!(
-        "{action} requires the `axon-pb` feature; rebuild with \
-         `cargo build --features axon-pb` (production builds always do)."
+        "{action} is unsupported by the canonical runtime capability matrix: \
+         federation transport provider is unavailable; capability_state=unsupported"
     )))
 }
 

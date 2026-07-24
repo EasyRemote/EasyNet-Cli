@@ -292,7 +292,7 @@ fn invoke_revoke(target_ura: &str, reason: &str, caller_ura: &str) -> anyhow::Re
 #[cfg(not(feature = "axon-pb"))]
 fn invoke_revoke(target_ura: &str, _reason: &str, _caller_ura: &str) -> anyhow::Result<()> {
     Err(
-        crate::support::platform::local_invoke::federation_not_wired_error(&format!(
+        crate::support::platform::local_invoke::federation_capability_unsupported_error(&format!(
             "revoking {target_ura:?}"
         )),
     )

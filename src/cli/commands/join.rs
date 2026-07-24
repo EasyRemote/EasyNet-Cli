@@ -804,7 +804,11 @@ fn do_federation_join_and_resolve_hub_key(
         crate::daemon::federation::client::ability_contract::PrincipalEnrollmentProof,
     >,
 ) -> anyhow::Result<UraJoinResult> {
-    Err(crate::support::platform::local_invoke::federation_not_wired_error("joining hub by URA"))
+    Err(
+        crate::support::platform::local_invoke::federation_capability_unsupported_error(
+            "joining hub by URA",
+        ),
+    )
 }
 
 #[cfg(feature = "axon-pb")]
@@ -1586,11 +1590,10 @@ fn validate_pairing_token(
             preflight.realm
         );
     }
-    // Cross-machine cold-start fix: stash the hub's signing and
-    // TLS trust material from preflight onto the in-memory +
-    // on-disk credentials so the follow-up trust auto-wire can
-    // populate `realm-trust.toml` plus any local pinned CA file
-    // without needing on-host access to hub-local files.
+    // Cross-machine cold-start: persist the hub's signing and TLS trust
+    // material from preflight onto the in-memory and on-disk credentials so
+    // trust synchronization can populate `realm-trust.toml` plus any local
+    // pinned CA file without needing on-host access to hub-local files.
     let mut creds = credentials_from_pairing_contract(envelope);
     if !preflight.hub_public_key_b64.trim().is_empty() {
         creds.hub_pubkey_b64 = Some(preflight.hub_public_key_b64.trim().to_string());
@@ -1660,7 +1663,7 @@ fn invoke_federation_revoke_for_rejoin(device_ura: &str) -> anyhow::Result<()> {
 #[cfg(not(feature = "axon-pb"))]
 fn invoke_federation_revoke_for_rejoin(_device_ura: &str) -> anyhow::Result<()> {
     Err(
-        crate::support::platform::local_invoke::federation_not_wired_error(
+        crate::support::platform::local_invoke::federation_capability_unsupported_error(
             "deregistering the old device on re-pair",
         ),
     )

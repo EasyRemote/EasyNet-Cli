@@ -213,7 +213,7 @@ fn invoke_federation_revoke_for_reset(device_ura: &str) -> anyhow::Result<()> {
 #[cfg(not(feature = "axon-pb"))]
 fn invoke_federation_revoke_for_reset(_device_ura: &str) -> anyhow::Result<()> {
     Err(
-        crate::support::platform::local_invoke::federation_not_wired_error(
+        crate::support::platform::local_invoke::federation_capability_unsupported_error(
             "deregistering this device on reset",
         ),
     )

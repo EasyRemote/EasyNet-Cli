@@ -152,7 +152,7 @@ fn fetch_directory_entries(current_user_id: &str) -> anyhow::Result<Vec<Value>> 
 #[cfg(not(feature = "axon-pb"))]
 fn fetch_directory_entries(_current_user_id: &str) -> anyhow::Result<Vec<Value>> {
     Err(
-        crate::support::platform::local_invoke::federation_not_wired_error(
+        crate::support::platform::local_invoke::federation_capability_unsupported_error(
             "listing devices via federation.discover",
         ),
     )
