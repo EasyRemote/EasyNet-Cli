@@ -825,3 +825,56 @@ architecture rather than add feature surface.
   - `tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
   - `tools/scripts/check-architecture-convergence.sh`
   - `git diff --check`
+
+## Iteration 20 candidate policy
+
+- Focus on Pages restore route authority. The publish/unpublish paths already
+  fail closed on snapshot persistence, but daemon boot restore still calls
+  `register_restored_project_abilities` after `restore_published_projects` and
+  only logs `restore_project_abilities_failed` when a restored project cannot
+  hot-register its fetch/API abilities.
+- The root abstraction problem is a split restored-state authority: the
+  persisted Pages project map can say a project exists while the daemon-hosted
+  LocalRuntime catalog lacks the corresponding project ability routes. This is
+  the same class of route/catalog inconsistency that surfaces as "route not
+  visible" product failures.
+- The intended cutover is:
+  - `pages::register` becomes fallible and participates in registry assembly;
+  - restore snapshot parse/cleanup failures propagate through registry build;
+  - restored project ability registration failures abort assembly instead of
+    warning and leaving a partial route catalog;
+  - management ability registration remains unchanged; only restored dynamic
+    project route replay becomes fail-closed.
+- Verification must prove the boot path no longer contains
+  `restore_project_abilities_failed` warning-only fallback and SPEC v2 rejects
+  reintroducing non-fallible Pages registration.
+
+## Iteration 20 decision log
+
+- Made `pages::register` fallible so Pages restored-state authority participates
+  in daemon ability registry assembly instead of being a side-effect-only boot
+  hook.
+- Changed persisted Pages project restore failures to propagate with
+  `restore published Pages projects` context. A daemon no longer starts with an
+  unknown persisted Pages map state.
+- Changed restored project route replay to return
+  `anyhow::Result<usize>`. Each restored project ability registration now
+  fails closed with `register restored Pages project {user}/{project_id}`
+  context instead of logging `restore_project_abilities_failed` and leaving a
+  partial catalog.
+- Updated registry assembly to propagate `pages::register` with
+  `register Pages reference system` context.
+- Updated external Pages unit fixture callers to acknowledge the fallible
+  registration contract explicitly.
+- Added SPEC v2 gate `check_pages_restore_route_authority_contract` plus a
+  negative self-test fixture rejecting warning-only restored route replay and
+  non-fallible Pages registration.
+- Verification passed:
+  - `cargo test -q daemon::ability::builtins::resources::pages`
+  - `cargo test -q daemon::ability::catalog::assembly_tests::pages_management_is_user_owned_and_runs_on_the_declared_pages_agent`
+  - `cargo check -q`
+  - `cargo fmt --check`
+  - `tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  - `tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - `tools/scripts/check-architecture-convergence.sh`
+  - `git diff --check`

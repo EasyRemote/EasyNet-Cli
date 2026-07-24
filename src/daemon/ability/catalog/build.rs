@@ -864,7 +864,8 @@ fn build_registry_with_services_result_inner(
                     listener_port,
                 },
                 Arc::clone(&local_registry_handle),
-            );
+            )
+            .context("register Pages reference system")?;
             // Files reference system: content-addressed blob store
             // serving `/v1/files{,/<id>/content}` + chat-multimodal
             // URA dereferences. Same `<user>` identity as pages so

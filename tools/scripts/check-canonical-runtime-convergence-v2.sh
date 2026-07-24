@@ -2175,6 +2175,52 @@ for required in (
 PY
 }
 
+check_pages_restore_route_authority_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local pages_mod="$cli_root/src/daemon/ability/builtins/resources/pages/mod.rs"
+  local build="$cli_root/src/daemon/ability/catalog/build.rs"
+  [[ -f "$pages_mod" ]] || fail "pages module source is missing: ${pages_mod#$cli_root/}"
+  [[ -f "$build" ]] || fail "ability catalog build source is missing: ${build#$cli_root/}"
+
+  "$PYTHON_BIN" - "$pages_mod" "$build" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+pages_mod = Path(sys.argv[1]).read_text(encoding="utf-8")
+build = Path(sys.argv[2]).read_text(encoding="utf-8")
+
+signature = re.search(r"pub fn register\([^)]*dispatch_handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,\s*\)\s*->\s*anyhow::Result<\(\)>", pages_mod, re.S)
+if signature is None:
+    raise SystemExit("pages_restore_route_authority:register_not_fallible")
+
+for retired in (
+    "kind = restore_failed",
+    "kind = restore_project_abilities_failed",
+    "if let Err(error) = register_project_abilities",
+    "fn register_restored_project_abilities(reg: &AxonAbilityCatalog, realm: &str, user: &str) {",
+):
+    if retired in pages_mod:
+        raise SystemExit(f"pages_restore_route_authority:retired:{retired}")
+
+for required in (
+    "restore published Pages projects",
+    "register restored Pages project abilities",
+    "register restored Pages project {user}/{project_id}",
+    "-> anyhow::Result<usize>",
+):
+    if required not in pages_mod:
+        raise SystemExit(f"pages_restore_route_authority:missing:{required}")
+
+for required in (
+    ".context(\"register Pages reference system\")?",
+    "pages::register(",
+):
+    if required not in build:
+        raise SystemExit(f"pages_restore_route_authority:build_missing:{required}")
+PY
+}
+
 check_pages_api_response_projection_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local projection="$cli_root/src/daemon/resources/projection.rs"
@@ -16725,6 +16771,32 @@ EOF
   if ( CLI_ROOT="$tmp/pages-publish-response-projection-legacy"; check_pages_publish_response_projection_contract ) >/dev/null 2>&1; then
     fail "self-test expected pages publish response projection gate to fail"
   fi
+  mkdir -p "$tmp/pages-restore-route-authority-legacy/src/daemon/ability/builtins/resources/pages" \
+    "$tmp/pages-restore-route-authority-legacy/src/daemon/ability/catalog"
+  cat >"$tmp/pages-restore-route-authority-legacy/src/daemon/ability/builtins/resources/pages/mod.rs" <<'EOF'
+pub fn register(
+    reg: &mut AxonAbilityCatalog,
+    config: PagesConfig,
+    dispatch_handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
+) {
+    match state::restore_published_projects(&config.user) {
+        Err(err) => op_event!(kind = restore_failed),
+        _ => {}
+    }
+    register_restored_project_abilities(reg, &config.realm, &config.user);
+}
+
+fn register_restored_project_abilities(reg: &AxonAbilityCatalog, realm: &str, user: &str) {
+    if let Err(error) = register_project_abilities(reg, realm, user, &project_id) {
+        op_event!(kind = restore_project_abilities_failed);
+    }
+}
+EOF
+  printf 'fn build() { pages::register(&mut reg, config, handle); }\n' \
+    > "$tmp/pages-restore-route-authority-legacy/src/daemon/ability/catalog/build.rs"
+  if ( CLI_ROOT="$tmp/pages-restore-route-authority-legacy"; check_pages_restore_route_authority_contract ) >/dev/null 2>&1; then
+    fail "self-test expected pages restore route authority gate to fail"
+  fi
   mkdir -p "$tmp/pages-api-response-projection-legacy/src/daemon/resources"
   mkdir -p "$tmp/pages-api-response-projection-legacy/src/daemon/ability/builtins/resources/pages"
   cat >"$tmp/pages-api-response-projection-legacy/src/daemon/resources/projection.rs" <<'EOF'
@@ -17472,6 +17544,7 @@ EOF
   check_pages_health_response_projection_contract
   check_pages_fetch_response_projection_contract
   check_pages_publish_response_projection_contract
+  check_pages_restore_route_authority_contract
   check_pages_api_response_projection_contract
   check_local_agents_schema_contract
   check_profile_store_schema_contract
@@ -17657,6 +17730,7 @@ check_pages_management_response_projection_contract
 check_pages_health_response_projection_contract
 check_pages_fetch_response_projection_contract
 check_pages_publish_response_projection_contract
+check_pages_restore_route_authority_contract
 check_pages_api_response_projection_contract
 check_profile_store_schema_contract
 check_auth_session_owner_fact_contract

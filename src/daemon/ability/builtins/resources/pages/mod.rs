@@ -29,6 +29,8 @@ pub mod state;
 
 use std::sync::Arc;
 
+use anyhow::Context;
+
 use crate::daemon::ability::authority::AuthorityScope;
 use crate::daemon::ability::dispatch::{
     AxonAbilityCatalog, ControlPlaneImplementation, LocalRpcHandler, OwnerKind,
@@ -95,7 +97,7 @@ pub fn register(
     reg: &mut AxonAbilityCatalog,
     config: PagesConfig,
     dispatch_handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
-) {
+) -> anyhow::Result<()> {
     api::set_dispatch_handle(Arc::clone(&dispatch_handle));
     register_management_abilities(reg, &config, Arc::clone(&dispatch_handle));
 
@@ -114,19 +116,11 @@ pub fn register(
             );
         }
         Ok(_) => {}
-        Err(err) => {
-            let user_field = config.user.as_str();
-            let err_msg = format!("{err}");
-            crate::op_event!(
-                component = pages,
-                kind = restore_failed,
-                level = "warn",
-                user = user_field,
-                error = err_msg,
-            );
-        }
+        Err(err) => return Err(err).context("restore published Pages projects"),
     }
-    register_restored_project_abilities(reg, &config.realm, &config.user);
+    register_restored_project_abilities(reg, &config.realm, &config.user)
+        .context("register restored Pages project abilities")?;
+    Ok(())
 }
 
 fn register_management_abilities(
@@ -420,7 +414,11 @@ pub(crate) fn unregister_project_abilities(
     Ok(())
 }
 
-fn register_restored_project_abilities(reg: &AxonAbilityCatalog, realm: &str, user: &str) {
+fn register_restored_project_abilities(
+    reg: &AxonAbilityCatalog,
+    realm: &str,
+    user: &str,
+) -> anyhow::Result<usize> {
     let mut project_ids: Vec<String> = state::PUBLISHED_PROJECTS
         .iter()
         .filter_map(|entry| {
@@ -429,18 +427,12 @@ fn register_restored_project_abilities(reg: &AxonAbilityCatalog, realm: &str, us
         })
         .collect();
     project_ids.sort();
+    let mut registered = 0;
     for project_id in project_ids {
-        if let Err(error) = register_project_abilities(reg, realm, user, &project_id) {
-            let error_message = error.to_string();
-            crate::op_event!(
-                component = pages,
-                kind = restore_project_abilities_failed,
-                user = user,
-                project_id = project_id.as_str(),
-                error = error_message.as_str(),
-            );
-        }
+        registered += register_project_abilities(reg, realm, user, &project_id)
+            .with_context(|| format!("register restored Pages project {user}/{project_id}"))?;
     }
+    Ok(registered)
 }
 
 #[cfg(test)]

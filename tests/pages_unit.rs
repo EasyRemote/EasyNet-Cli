@@ -611,7 +611,8 @@ fn u14_pages_management_abilities_are_in_local_runtime() {
             listener_port: 8787,
         },
         Arc::clone(&handle),
-    );
+    )
+    .expect("register Pages reference system");
     let reg = Arc::new(reg);
     assert!(handle.set(Arc::clone(&reg)).is_ok());
 
