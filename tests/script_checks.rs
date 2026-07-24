@@ -367,6 +367,14 @@ fn hosted_receipt_axon_boundary_script_holds() {
 }
 
 #[test]
+fn companion_status_package_version_boundary_script_holds() {
+    // Pins Desktop companion status projection to the canonical package_version
+    // field. The optional runtime version observation must not repair package
+    // identity.
+    run_bash_script("tests/scripts/test_check_companion_status_package_version_boundary.sh");
+}
+
+#[test]
 fn workspace_agent_directory_boundary_script_holds() {
     // Pins runtime workspace projection to AgentDirectory input.
     // Dispatch must reject invalid registry roots instead of rebuilding

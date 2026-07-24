@@ -98,8 +98,7 @@ pub(crate) fn project_status(input: &Value) -> Result<Value, CompanionProjection
     let payload = projection_payload(input);
     let obj = object(payload, "DesktopCompanionStatus")?;
     let package_id = required_string(obj, "package_id")?;
-    let package_version =
-        required_string(obj, "package_version").or_else(|_| required_string(obj, "version"))?;
+    let package_version = required_string(obj, "package_version")?;
     let display_name = required_string(obj, "display_name")?;
     let platform = required_enum(obj, "platform", PLATFORMS)?;
     let desired_state = required_enum(obj, "desired_state", DESIRED_STATES)?;
@@ -328,14 +327,17 @@ mod tests {
     }
 
     #[test]
-    fn project_status_accepts_version_alias_for_package_version() {
+    fn project_status_rejects_version_alias_for_package_version() {
         let mut input = status_input();
         let obj = input.as_object_mut().unwrap();
         obj.remove("package_version");
 
-        let status = project_status(&input).unwrap();
+        let error = project_status(&input).unwrap_err();
 
-        assert_eq!(status["package_version"], "0.1.0");
+        assert_eq!(
+            error,
+            CompanionProjectionError::MissingField("package_version")
+        );
     }
 
     #[test]
