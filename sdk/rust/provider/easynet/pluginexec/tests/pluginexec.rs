@@ -13,7 +13,7 @@ fn request_frame() -> String {
             "ability_ura": "demo.echo",
             "subject_ura": "easynet:///r/hub/resource/demo",
             "invocation_nonce": [1, 2, 3, 4],
-            "causal_context": {"root": true},
+            "causal_context": {"form": "none"},
             "args": {"message": "hello"}
         }
     })
@@ -32,7 +32,7 @@ fn sidecar_invocation_projects_daemon_frame() {
     assert_eq!(invocation.ability_ura, "demo.echo");
     assert_eq!(invocation.subject_ura, "easynet:///r/hub/resource/demo");
     assert_eq!(invocation.invocation_nonce, vec![1, 2, 3, 4]);
-    assert_eq!(invocation.causal_context, json!({"root": true}));
+    assert_eq!(invocation.causal_context, json!({"form": "none"}));
     assert_eq!(invocation.args["message"], json!("hello"));
 }
 

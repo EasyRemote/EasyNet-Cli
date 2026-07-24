@@ -21,7 +21,7 @@ def _frame() -> dict[str, object]:
             "ability_ura": "demo.echo",
             "subject_ura": "easynet:///r/hub/resource/demo",
             "invocation_nonce": [1, 2, 3, 4],
-            "causal_context": {"root": True},
+            "causal_context": {"form": "none"},
             "args": {"message": "hello"},
         },
     }
@@ -37,7 +37,7 @@ class PluginExecTests(unittest.TestCase):
         self.assertEqual(invocation.ability_ura, "demo.echo")
         self.assertEqual(invocation.subject_ura, "easynet:///r/hub/resource/demo")
         self.assertEqual(invocation.invocation_nonce, (1, 2, 3, 4))
-        self.assertEqual(invocation.causal_context, {"root": True})
+        self.assertEqual(invocation.causal_context, {"form": "none"})
         self.assertEqual(invocation.args, {"message": "hello"})
 
     def test_exec_plugin_helper_writes_result_frame(self) -> None:

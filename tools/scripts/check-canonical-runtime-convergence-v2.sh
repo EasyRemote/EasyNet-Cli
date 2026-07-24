@@ -10195,6 +10195,7 @@ expected_daemon_sidecar_files = [
     "src/daemon/plugins/sidecar/frame.rs",
     "src/daemon/plugins/sidecar.rs",
     "src/daemon/plugins/host_api.rs",
+    "src/daemon/plugins/sidecar/tests.rs",
 ]
 for language, helper in expected_helpers.items():
     row = rows[(language, "ExecInvoke")]
@@ -10217,6 +10218,7 @@ def read_rel(rel_path: str) -> str:
 sidecar_frame = read_rel("src/daemon/plugins/sidecar/frame.rs")
 sidecar_projection = read_rel("src/daemon/plugins/sidecar.rs")
 host_api = read_rel("src/daemon/plugins/host_api.rs")
+sidecar_tests = read_rel("src/daemon/plugins/sidecar/tests.rs")
 helper_sources = {
     language: "\n".join(read_rel(rel_path) for rel_path in files)
     for language, files in expected_helper_files.items()
@@ -10243,6 +10245,39 @@ if "ability_ura: ability_ura.to_string()" not in sidecar_projection:
 for getter in ("env.caller().to_string()", "env.callee().to_string()", "env.subject().to_string()"):
     if getter not in sidecar_projection:
         raise SystemExit(f"plugin_sidecar_projection_missing_context_getter:{getter}")
+envelope = re.search(
+    r"pub struct SidecarInvocationEnvelope\s*\{(?P<body>.*?)\n\}",
+    sidecar_frame,
+    re.S,
+)
+if not envelope:
+    raise SystemExit("plugin_sidecar_daemon_envelope_missing")
+envelope_body = envelope.group("body")
+for field in ("causal_context", "args"):
+    field_match = re.search(rf"(?P<attrs>(?:\s*#\[[^\n]+\]\n)*)\s*pub\s+{field}\s*:", envelope_body)
+    if not field_match:
+        raise SystemExit(f"plugin_sidecar_daemon_envelope_missing:{field}")
+    if "serde(default)" in field_match.group("attrs"):
+        raise SystemExit(f"plugin_sidecar_daemon_envelope_defaulting:{field}")
+    if 'deserialize_with = "required_object_value"' not in field_match.group("attrs"):
+        raise SystemExit(f"plugin_sidecar_daemon_envelope_object_guard_missing:{field}")
+if "fn required_object_value" not in sidecar_frame or "must be an object" not in sidecar_frame:
+    raise SystemExit("plugin_sidecar_daemon_object_guard_missing")
+if "sidecar_invocation_envelope_rejects_missing_canonical_tuple_objects" not in sidecar_tests:
+    raise SystemExit("plugin_sidecar_daemon_missing_tuple_object_test_missing")
+if "sidecar envelope must reject null canonical tuple objects" not in sidecar_tests:
+    raise SystemExit("plugin_sidecar_daemon_null_tuple_object_test_missing")
+for legacy_causal in (
+    '"causal_context": {}',
+    '"causal_context": {"root"',
+    '"causal_context": { root',
+    'causal_context: json!({"trace_id"',
+    '"trace_id"',
+    '"root": true',
+    '"root":true',
+):
+    if legacy_causal in sidecar_tests or any(legacy_causal in source for source in helper_sources.values()):
+        raise SystemExit(f"plugin_sidecar_legacy_causal_context_fixture:{legacy_causal}")
 
 required_helper_tokens = {
     "rust": [
@@ -15310,6 +15345,7 @@ EOF
     src/daemon/plugins/sidecar/frame.rs \
     src/daemon/plugins/sidecar.rs \
     src/daemon/plugins/host_api.rs \
+    src/daemon/plugins/sidecar/tests.rs \
     sdk/python/easynet_sdk/providers/easynet/plugin_exec.py \
     sdk/python/tests/test_plugin_exec.py \
     sdk/go/provider/easynet/pluginexec/pluginexec.go \
@@ -15336,6 +15372,7 @@ EOF
     src/daemon/plugins/sidecar/frame.rs \
     src/daemon/plugins/sidecar.rs \
     src/daemon/plugins/host_api.rs \
+    src/daemon/plugins/sidecar/tests.rs \
     sdk/python/easynet_sdk/providers/easynet/plugin_exec.py \
     sdk/python/tests/test_plugin_exec.py \
     sdk/go/provider/easynet/pluginexec/pluginexec.go \
@@ -15362,6 +15399,7 @@ EOF
     src/daemon/plugins/sidecar/frame.rs \
     src/daemon/plugins/sidecar.rs \
     src/daemon/plugins/host_api.rs \
+    src/daemon/plugins/sidecar/tests.rs \
     sdk/python/easynet_sdk/providers/easynet/plugin_exec.py \
     sdk/python/tests/test_plugin_exec.py \
     sdk/go/provider/easynet/pluginexec/pluginexec.go \
@@ -15388,6 +15426,7 @@ EOF
     src/daemon/plugins/sidecar/frame.rs \
     src/daemon/plugins/sidecar.rs \
     src/daemon/plugins/host_api.rs \
+    src/daemon/plugins/sidecar/tests.rs \
     sdk/python/easynet_sdk/providers/easynet/plugin_exec.py \
     sdk/python/tests/test_plugin_exec.py \
     sdk/go/provider/easynet/pluginexec/pluginexec.go \
@@ -15413,6 +15452,33 @@ def _optional_mapping(value, field, *, required=False):
 EOF
   if ( CLI_ROOT="$tmp/cli-sidecar-tuple-defaulting"; check_plugin_sidecar_helper_matrix_contract ) >/dev/null 2>&1; then
     fail "self-test expected sidecar tuple defaulting gate to fail"
+  fi
+  for rel in \
+    src/cli/commands/groups/plugin_template.rs \
+    src/daemon/plugins/sidecar/frame.rs \
+    src/daemon/plugins/sidecar.rs \
+    src/daemon/plugins/host_api.rs \
+    src/daemon/plugins/sidecar/tests.rs \
+    sdk/python/easynet_sdk/providers/easynet/plugin_exec.py \
+    sdk/python/tests/test_plugin_exec.py \
+    sdk/go/provider/easynet/pluginexec/pluginexec.go \
+    sdk/go/provider/easynet/pluginexec/pluginexec_test.go \
+    sdk/rust/provider/easynet/pluginexec/Cargo.toml \
+    sdk/rust/provider/easynet/pluginexec/src/lib.rs \
+    sdk/rust/provider/easynet/pluginexec/tests/pluginexec.rs \
+    sdk/java/src/main/java/run/runtime/sdk/provider/easynet/pluginexec/SidecarRuntime.java \
+    sdk/java/src/main/java/run/runtime/sdk/provider/easynet/pluginexec/SidecarInvocation.java \
+    sdk/java/src/test/java/run/runtime/sdk/provider/easynet/pluginexec/SidecarRuntimeTest.java \
+    sdk/node/provider/easynet/pluginexec.js \
+    sdk/node/provider/easynet/pluginexec.d.ts \
+    sdk/node/test/pluginexec.test.mjs; do
+    mkdir -p "$(dirname "$tmp/cli-sidecar-daemon-defaulting/$rel")"
+    cp "$ROOT/$rel" "$tmp/cli-sidecar-daemon-defaulting/$rel"
+  done
+  perl -0pi -e 's/(pub causal_context: Value,)/#[serde(default)]\n    $1/' \
+    "$tmp/cli-sidecar-daemon-defaulting/src/daemon/plugins/sidecar/frame.rs"
+  if ( CLI_ROOT="$tmp/cli-sidecar-daemon-defaulting"; check_plugin_sidecar_helper_matrix_contract ) >/dev/null 2>&1; then
+    fail "self-test expected daemon sidecar tuple defaulting gate to fail"
   fi
   mkdir -p "$tmp/cli-remote-desktop-contract-alias/tools/scripts" \
     "$tmp/cli-remote-desktop-contract-alias/plugins/remote-desktop/src"

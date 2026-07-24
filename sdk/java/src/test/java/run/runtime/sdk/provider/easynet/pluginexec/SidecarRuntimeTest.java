@@ -186,14 +186,14 @@ public final class SidecarRuntimeTest {
             "invocation_nonce",
             java.util.List.of(1, 2, 3, 4),
             "causal_context",
-            Map.of("root", true),
+            Map.of("form", "none"),
             "args",
             Map.of("message", "hello")));
   }
 
   private static String frameJSON() {
     return """
-        {"type":"invoke","call_id":"call-1","invocation":{"caller_ura":"easynet:///r/hub/user/alice","callee_ura":"easynet:///r/hub/device/provider","ability_ura":"demo.echo","subject_ura":"easynet:///r/hub/resource/demo","invocation_nonce":[1,2,3,4],"causal_context":{"root":true},"args":{"message":"hello"}}}
+        {"type":"invoke","call_id":"call-1","invocation":{"caller_ura":"easynet:///r/hub/user/alice","callee_ura":"easynet:///r/hub/device/provider","ability_ura":"demo.echo","subject_ura":"easynet:///r/hub/resource/demo","invocation_nonce":[1,2,3,4],"causal_context":{"form":"none"},"args":{"message":"hello"}}}
         """;
   }
 

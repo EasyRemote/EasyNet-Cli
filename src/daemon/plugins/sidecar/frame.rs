@@ -4,7 +4,7 @@
 // File: src/daemon/plugins/sidecar/frame.rs
 // Description: Protocol values exchanged across the sidecar process boundary.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
 /// Daemon-owned invocation envelope sent to a sidecar process.
@@ -30,11 +30,23 @@ pub struct SidecarInvocationEnvelope {
     pub invocation_nonce: Vec<u8>,
     /// Caller-declared causal placement. Canonical interpretation remains in
     /// Axon admission/receipt code; the sidecar receives the value for context.
-    #[serde(default)]
+    #[serde(deserialize_with = "required_object_value")]
     pub causal_context: Value,
     /// Ability-specific schema-conformant payload.
-    #[serde(default)]
+    #[serde(deserialize_with = "required_object_value")]
     pub args: Value,
+}
+
+fn required_object_value<'de, D>(deserializer: D) -> Result<Value, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Value::deserialize(deserializer)?;
+    if value.is_object() {
+        Ok(value)
+    } else {
+        Err(serde::de::Error::custom("must be an object"))
+    }
 }
 
 /// Host-to-sidecar request frame.

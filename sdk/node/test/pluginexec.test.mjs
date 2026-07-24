@@ -18,7 +18,7 @@ function requestFrame() {
       ability_ura: "demo.echo",
       subject_ura: "easynet:///r/hub/resource/demo",
       invocation_nonce: [1, 2, 3, 4],
-      causal_context: { root: true },
+      causal_context: { form: "none" },
       args: { message: "hello" },
     },
   };
@@ -53,7 +53,7 @@ test("SidecarInvocation projects daemon frame", () => {
   assert.equal(invocation.abilityURA, "demo.echo");
   assert.equal(invocation.subjectURA, "easynet:///r/hub/resource/demo");
   assert.deepEqual(invocation.invocationNonce, [1, 2, 3, 4]);
-  assert.deepEqual(invocation.causalContext, { root: true });
+  assert.deepEqual(invocation.causalContext, { form: "none" });
   assert.deepEqual(invocation.args, { message: "hello" });
 });
 
