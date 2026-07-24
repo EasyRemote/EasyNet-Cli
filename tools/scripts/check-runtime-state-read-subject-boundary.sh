@@ -154,8 +154,16 @@ if rg -n '\binvoke_local_ability\s*\(\s*"openai\.list_models"' "$LLM_API"; then
   fail "llm-api model catalogue discovery must not use generic invoke_local_ability"
 fi
 
-if ! rg -n '\binvoke_local_ability\s*\(\s*"openai\.chat_completions"' "$LLM_API" >/dev/null; then
-  fail "llm-api chat completions must remain on the action invoke path"
+if rg -n '\binvoke_local_ability\s*\(' "$LLM_API"; then
+  fail "llm-api must not use generic invoke_local_ability"
+fi
+
+if ! rg -n 'LocalDaemonSystemAbilityIssuer::invoke_root_for_subject' "$LLM_API" >/dev/null; then
+  fail "llm-api chat completions must use explicit local daemon system issuer subject"
+fi
+
+if ! rg -n -F 'invoke_openai_chat_completions(adapter_args)' "$LLM_API" >/dev/null; then
+  fail "llm-api chat completions must remain on the explicit action issuer path"
 fi
 
 if ! rg -n -U 'LocalRuntimeStateReadIssuer::invoke\(\s*"skill\.list"' "$SKILL_CLI" >/dev/null; then

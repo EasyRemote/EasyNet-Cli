@@ -23,11 +23,14 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+use anyhow::Context;
 use clap::Args;
 use serde_json::{json, Value};
 
 use crate::daemon::ability::builtins::governance::api_key;
-use crate::support::platform::local_invoke::{invoke_local_ability, LocalRuntimeStateReadIssuer};
+use crate::support::platform::local_invoke::{
+    LocalDaemonSystemAbilityIssuer, LocalRuntimeStateReadIssuer,
+};
 
 #[derive(Debug, Args)]
 pub struct LlmApiArgs {
@@ -99,20 +102,11 @@ pub fn run(args: LlmApiArgs) -> anyhow::Result<()> {
     }
     messages.push(json!({ "role": "user", "content": args.prompt }));
 
-    let request = json!({
-        "model":    model,
-        "messages": messages,
-        "stream":   false,
-    });
-
-    let mut adapter_args = json!({ "request": request });
-    if let Some(t) = token {
-        adapter_args["auth_token"] = json!(t);
-    }
+    let adapter_args = chat_completions_payload(&model, messages, token.as_deref());
 
     eprintln!("[llm-api] model={model}");
 
-    let result = invoke_local_ability("openai.chat_completions", adapter_args)
+    let result = invoke_openai_chat_completions(adapter_args)
         .map_err(|e| anyhow::anyhow!("chat_completions failed: {e}"))?;
 
     if args.json {
@@ -131,6 +125,31 @@ pub fn run(args: LlmApiArgs) -> anyhow::Result<()> {
         .unwrap_or("(no content)");
     println!("{text}");
     Ok(())
+}
+
+fn chat_completions_payload(model: &str, messages: Vec<Value>, token: Option<&str>) -> Value {
+    let request = json!({
+        "model":    model,
+        "messages": messages,
+        "stream":   false,
+    });
+
+    let mut adapter_args = json!({ "request": request });
+    if let Some(t) = token {
+        adapter_args["auth_token"] = json!(t);
+    }
+    adapter_args
+}
+
+fn invoke_openai_chat_completions(args: Value) -> anyhow::Result<Value> {
+    let subject_ura = LocalDaemonSystemAbilityIssuer::local_daemon_identity_subject_ura()
+        .context("resolve local openai.chat_completions subject")?;
+    LocalDaemonSystemAbilityIssuer::invoke_root_for_subject(
+        "openai.chat_completions",
+        args,
+        &subject_ura,
+    )
+    .context("invoke openai.chat_completions")
 }
 
 #[cfg(test)]
@@ -162,6 +181,35 @@ mod tests {
         assert!(
             format!("{err}").contains("canonical Ability URA"),
             "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn chat_completions_payload_preserves_openai_wire_shape() {
+        let messages = vec![
+            json!({"role": "system", "content": "be brief"}),
+            json!({"role": "user", "content": "hello"}),
+        ];
+
+        let payload = chat_completions_payload(
+            "easynet:///r/easynet.run/ability/alice.codex.chat",
+            messages,
+            Some("tok"),
+        );
+
+        assert_eq!(
+            payload,
+            json!({
+                "request": {
+                    "model": "easynet:///r/easynet.run/ability/alice.codex.chat",
+                    "messages": [
+                        {"role": "system", "content": "be brief"},
+                        {"role": "user", "content": "hello"},
+                    ],
+                    "stream": false,
+                },
+                "auth_token": "tok",
+            })
         );
     }
 }
