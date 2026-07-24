@@ -383,6 +383,14 @@ fn hosted_receipt_axon_boundary_script_holds() {
 }
 
 #[test]
+fn cross_hub_trust_source_boundary_script_holds() {
+    // Pins cross-hub federation dialing to the live SharedTrustAnchor source.
+    // Boot-time RealmTrustAnchor snapshots must not return as a second trust
+    // lifecycle.
+    run_bash_script("tests/scripts/test_check_cross_hub_trust_source_boundary.sh");
+}
+
+#[test]
 fn companion_status_package_version_boundary_script_holds() {
     // Pins Desktop companion status projection to the canonical package_version
     // field. The optional runtime version observation must not repair package

@@ -55,72 +55,20 @@ use async_trait::async_trait;
 use dashmap::DashMap;
 use tonic::transport::{Channel, Endpoint};
 
+#[cfg(test)]
 use crate::daemon::trust::anchor::RealmTrustAnchor;
 use crate::daemon::trust::cell::SharedTrustAnchor;
 use axon_sdk::pb::axon::v1::invocation_client::InvocationClient;
 use axon_sdk::pb::axon::v1::{InvokeRequest, InvokeResponse, InvokeServerStreamRequest};
 
-/// PR-N1 commit 9/N: how the dialer reads the trust anchor on
-/// every dial. Two flavours:
-///
-/// - `Snapshot(Arc<RealmTrustAnchor>)` — the legacy boot-time
-///   snapshot wired by commits 2/N–6/N. SIGHUP-triggered
-///   reloads to `realm-trust.toml` do NOT propagate; operators
-///   must restart the daemon for the dialer to pick up new
-///   federation peer entries. Tests under `cross_hub_dial::tests`
-///   construct the dialer with this flavour.
-///
-/// - `Live(SharedTrustAnchor)` — the SIGHUP-aware cell PR-7's
-///   `register_device_pubkey` already wires for the admission
-///   facade. `lookup_peer_hub` snapshots the cell on every dial,
-///   so a cell `replace` (driven by SIGHUP reload or pairing
-///   flow) is visible to the next federation dispatch within
-///   the cell's per-RPC snapshot cost (~50ms per
-///   `perf-notes/PR-N1-commit-6-perf-cross-pass-by-xiaowen.md`).
-///   Production `start_daemon_invocation_transport` wires this flavour.
-///
-/// PR-N1 user-flow review (round 4) catch: the boot-time
-/// snapshot pinned the daemon's federation-peer view at boot,
-/// blocking the operator's iterate-config-without-restart
-/// cadence. The architect ratified ship-now of this enum so the
-/// same `Arc<dyn FederationClient>` surface stays — only the
-/// read-source changes.
-#[derive(Clone)]
-enum TrustSource {
-    Snapshot(Arc<RealmTrustAnchor>),
-    Live(SharedTrustAnchor),
-}
-
-impl TrustSource {
-    /// Take a stable view of the trust anchor for one dial. For
-    /// the snapshot flavour this is a `Arc::clone` (cheap); for
-    /// the live flavour this acquires the cell's `RwLock::read()`,
-    /// clones the inner `Arc`, and releases the lock before the
-    /// caller's lookup runs (mirrors the admission gate's
-    /// per-call pattern).
-    fn snapshot(&self) -> Arc<RealmTrustAnchor> {
-        match self {
-            TrustSource::Snapshot(anchor) => Arc::clone(anchor),
-            TrustSource::Live(cell) => cell.snapshot(),
-        }
-    }
-
-    /// DEC-N5 §5 cert-anchor generation counter. The legacy
-    /// `Snapshot` flavour is fixed at generation 0 (no reload
-    /// possible by construction); the `Live` flavour reads the
-    /// cell's atomic counter, which bumps on every `replace`.
-    /// `CrossHubDialer` keys its channel cache by
-    /// `(hub_endpoint, generation)` so a SIGHUP-triggered swap of the
-    /// CA pinned for a peer invalidates cached channels for the
-    /// next dial — without disturbing in-flight calls on the old
-    /// channel.
-    fn cert_anchor_generation(&self) -> u64 {
-        match self {
-            TrustSource::Snapshot(_) => 0,
-            TrustSource::Live(cell) => cell.cert_anchor_generation(),
-        }
-    }
-}
+// Cross-hub peer trust source:
+//
+// The dialer reads from `SharedTrustAnchor` on every dial. This keeps
+// federation dispatch aligned with the admission facade and makes SIGHUP or
+// pairing-driven trust-anchor replacement visible without reconstructing the
+// dialer. A boot-time `Arc<RealmTrustAnchor>` snapshot is not a supported
+// production mode: it would fork the peer-trust lifecycle and strand operators
+// on stale federation config until restart.
 
 /// Default per-call timeout for `invoke`. Spec §commit 4/N:
 /// 30s. The end-to-end caller (the hub-side admission gate) has its
@@ -334,14 +282,10 @@ pub type DirectoryEventStream = std::pin::Pin<
 >;
 
 /// tonic-backed concrete implementation. Holds:
-/// - `trust_source` — how the peer trust gate reads the
-///   `RealmTrustAnchor`. PR-N1 commit 9/N: either a boot-time
-///   snapshot (legacy / test fixtures) or a live `SharedTrustAnchor`
-///   cell (production), via the `TrustSource` enum above. The
-///   peer trust gate (`lookup_peer_hub`) calls
-///   `trust_source.snapshot()` on every dial so a SIGHUP-driven
-///   reload of `realm-trust.toml` is visible to the next
-///   federation dispatch without requiring a daemon restart.
+/// - `trust_anchor` — the live shared trust cell used by the peer
+///   trust gate. The gate snapshots this cell on every dial so a
+///   SIGHUP-driven reload of `realm-trust.toml` is visible to the
+///   next federation dispatch without requiring a daemon restart.
 /// - `channels` — `Arc<DashMap<HubEndpoint, Channel>>` peer-channel
 ///   cache (PR-N1 spec INV-5). Lock-free — the hot path reads the
 ///   map on every cross-hub call so `RwLock<HashMap>` would be a
@@ -352,7 +296,7 @@ pub type DirectoryEventStream = std::pin::Pin<
 /// cheaply into per-RPC dispatch tasks.
 #[derive(Clone)]
 pub struct CrossHubDialer {
-    trust_source: TrustSource,
+    trust_anchor: SharedTrustAnchor,
     /// DEC-N5 §5 cert-rotation pool — keyed by `(hub_endpoint,
     /// cert_anchor_generation)`. A SIGHUP-driven anchor swap bumps
     /// the generation on the trust cell; the next dial keys at
@@ -400,23 +344,6 @@ impl std::fmt::Debug for CrossHubDialer {
 }
 
 impl CrossHubDialer {
-    /// Construct a dialer holding a boot-time `Arc<RealmTrustAnchor>`
-    /// snapshot. SIGHUP-triggered trust-anchor reloads do NOT
-    /// propagate; this constructor is the legacy / test-fixture
-    /// flavour. Production daemons use [`with_trust_anchor_cell`]
-    /// (PR-N1 commit 9/N) instead so the hot-reload cadence
-    /// the operator iterate-config cadence reviewed during PR-N1
-    /// actually works.
-    ///
-    /// PR-N1 commit 4/N adds breaker + timeout fields; their
-    /// defaults match the PR-N1 spec (`30s` per-call timeout, `3`
-    /// consecutive failures opens the breaker, `60s` open window).
-    /// Tests override via the `with_*` builders below.
-    #[must_use]
-    pub fn new(trust_anchor: Arc<RealmTrustAnchor>) -> Self {
-        Self::from_trust_source(TrustSource::Snapshot(trust_anchor))
-    }
-
     /// **PR-N1 commit 9/N**. Construct a dialer whose peer trust
     /// gate snapshots the supplied `SharedTrustAnchor` cell on
     /// every dial. SIGHUP-driven `realm-trust.toml` reloads are
@@ -432,12 +359,8 @@ impl CrossHubDialer {
     /// invoke loss.
     #[must_use]
     pub fn with_trust_anchor_cell(cell: SharedTrustAnchor) -> Self {
-        Self::from_trust_source(TrustSource::Live(cell))
-    }
-
-    fn from_trust_source(trust_source: TrustSource) -> Self {
         Self {
-            trust_source,
+            trust_anchor: cell,
             channels: Arc::new(DashMap::new()),
             breaker_state: Arc::new(DashMap::new()),
             invoke_timeout: DEFAULT_INVOKE_TIMEOUT,
@@ -687,15 +610,11 @@ impl FederationClient for CrossHubDialer {
         // `tls_ca_pem_path.is_some()` since DEC-N1 forbids the
         // dialer from falling back to system CAs.
         //
-        // PR-N1 commit 9/N: snapshot the trust source per-dial
-        // so a SIGHUP-driven `realm-trust.toml` reload (PR-7
-        // mechanism) is visible to the next dispatch without a
-        // daemon restart. The snapshot is one `Arc::clone`
-        // (legacy `Snapshot` source) or one `RwLock::read()` +
-        // `Arc::clone` (production `Live` source) — both cheap
-        // enough that hot-path latency stays inside the budget
-        // ratified by the perf review.
-        let trust_snapshot = self.trust_source.snapshot();
+        // Snapshot the live trust cell per dial so a SIGHUP-driven
+        // `realm-trust.toml` reload is visible to the next dispatch without a
+        // daemon restart. The snapshot is one `RwLock::read()` + `Arc::clone`,
+        // matching the admission facade's per-call pattern.
+        let trust_snapshot = self.trust_anchor.snapshot();
         let entry = trust_snapshot
             .lookup_peer_hub(target_hub_endpoint)
             .ok_or_else(|| FederationClientError::PeerNotTrusted(target_hub_endpoint.clone()))?;
@@ -718,7 +637,7 @@ impl FederationClient for CrossHubDialer {
         // pinned CA) invalidates cached channels for the next dial.
         // The generation snapshot is per-call — the call sees a
         // consistent (anchor, generation) pair.
-        let generation = self.trust_source.cert_anchor_generation();
+        let generation = self.trust_anchor.cert_anchor_generation();
         let channel = match self.resolve_peer_channel(target_hub_endpoint, ca_path, generation) {
             Ok(channel) => channel,
             Err(err) => {
@@ -787,7 +706,7 @@ impl FederationClient for CrossHubDialer {
         request: InvokeServerStreamRequest,
     ) -> Result<DirectoryEventStream, FederationClientError> {
         // ── 1. Trust gate (same as invoke). ─────────
-        let trust_snapshot = self.trust_source.snapshot();
+        let trust_snapshot = self.trust_anchor.snapshot();
         let entry = trust_snapshot
             .lookup_peer_hub(target_hub_endpoint)
             .ok_or_else(|| FederationClientError::PeerNotTrusted(target_hub_endpoint.clone()))?;
@@ -805,7 +724,7 @@ impl FederationClient for CrossHubDialer {
         self.check_and_advance_breaker(target_hub_endpoint, BreakerScope::SubscribeDirectoryV2)?;
 
         // ── 3. Channel resolve (same cache as invoke). ─
-        let generation = self.trust_source.cert_anchor_generation();
+        let generation = self.trust_anchor.cert_anchor_generation();
         let channel = match self.resolve_peer_channel(target_hub_endpoint, ca_path, generation) {
             Ok(channel) => channel,
             Err(err) => {
@@ -1009,6 +928,10 @@ mod tests {
         Arc::new(RealmTrustAnchor::default())
     }
 
+    fn dialer_with_anchor(anchor: Arc<RealmTrustAnchor>) -> CrossHubDialer {
+        CrossHubDialer::with_trust_anchor_cell(SharedTrustAnchor::new(anchor))
+    }
+
     fn sample_request(function_name: &str) -> InvokeRequest {
         InvokeRequest {
             target: Some(
@@ -1059,7 +982,7 @@ mod tests {
         // reject with PeerNotTrusted, never reach the dial
         // primitive. Empty anchor is the most common operator
         // mis-configuration on a fresh hub-mode daemon.
-        let dialer = CrossHubDialer::new(empty_anchor());
+        let dialer = dialer_with_anchor(empty_anchor());
         let target = "https://peer-hub.example:50443".to_string();
         let err = dialer
             .invoke(&target, sample_request("test.echo"))
@@ -1084,7 +1007,7 @@ mod tests {
         entry.role = TrustedAgentRole::Backend;
         let anchor = anchor_with(entry);
 
-        let dialer = CrossHubDialer::new(anchor);
+        let dialer = dialer_with_anchor(anchor);
         let err = dialer
             .invoke(&target, sample_request("test.echo"))
             .await
@@ -1103,7 +1026,7 @@ mod tests {
         entry.origin_realm = None;
         let anchor = anchor_with(entry);
 
-        let dialer = CrossHubDialer::new(anchor);
+        let dialer = dialer_with_anchor(anchor);
         let err = dialer
             .invoke(&target, sample_request("test.echo"))
             .await
@@ -1122,7 +1045,7 @@ mod tests {
         entry.tls_ca_pem_path = None;
         let anchor = anchor_with(entry);
 
-        let dialer = CrossHubDialer::new(anchor);
+        let dialer = dialer_with_anchor(anchor);
         let err = dialer
             .invoke(&target, sample_request("test.echo"))
             .await
@@ -1141,7 +1064,7 @@ mod tests {
         let entry = fed_peer_entry(&target, bogus.clone());
         let anchor = anchor_with(entry);
 
-        let dialer = CrossHubDialer::new(anchor);
+        let dialer = dialer_with_anchor(anchor);
         let err = dialer
             .invoke(&target, sample_request("test.echo"))
             .await
@@ -1177,7 +1100,7 @@ mod tests {
         let entry = fed_peer_entry(&target, ca_path);
         let anchor = anchor_with(entry);
 
-        let dialer = CrossHubDialer::new(anchor);
+        let dialer = dialer_with_anchor(anchor);
         // The first call may surface DialFailed (handshake) or
         // InnerInvokeFailed (channel constructed but RPC dispatch
         // fails) depending on tonic's connect_lazy behaviour. We
@@ -1214,7 +1137,7 @@ mod tests {
         let entry = fed_peer_entry(&target, ca_path);
         let anchor = anchor_with(entry);
 
-        let dialer = CrossHubDialer::new(anchor).with_invoke_timeout(Duration::from_millis(50));
+        let dialer = dialer_with_anchor(anchor).with_invoke_timeout(Duration::from_millis(50));
         let err = dialer
             .invoke(&target, sample_request("test.echo"))
             .await
@@ -1251,7 +1174,7 @@ mod tests {
         let entry = fed_peer_entry(&target, ca_path);
         let anchor = anchor_with(entry);
 
-        let dialer = CrossHubDialer::new(anchor)
+        let dialer = dialer_with_anchor(anchor)
             .with_invoke_timeout(Duration::from_millis(50))
             .with_breaker_failure_threshold(1)
             .with_breaker_reset_window(Duration::from_secs(60));
@@ -1300,7 +1223,7 @@ mod tests {
         let entry = fed_peer_entry(&target, ca_path);
         let anchor = anchor_with(entry);
 
-        let dialer = CrossHubDialer::new(anchor)
+        let dialer = dialer_with_anchor(anchor)
             .with_invoke_timeout(Duration::from_millis(50))
             .with_breaker_failure_threshold(1)
             .with_breaker_reset_window(Duration::from_millis(50));
@@ -1414,46 +1337,13 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn boot_time_snapshot_does_not_pick_up_anchor_replace() {
-        // Reverse-direction pin: the legacy `CrossHubDialer::new`
-        // constructor takes an `Arc<RealmTrustAnchor>` snapshot
-        // and is intentionally NOT cell-aware. A test fixture
-        // that mutates the original anchor (impossible — it's
-        // captured by-value) cannot affect the snapshot. This
-        // test documents that contract so a future refactor of
-        // `CrossHubDialer::new` to accept a live source has to
-        // update the test (and the operator-facing constructor
-        // doc) deliberately.
-
-        let target = "https://peer-hub.example:50443".to_string();
-        let empty_anchor = Arc::new(RealmTrustAnchor::default());
-        let dialer =
-            CrossHubDialer::new(empty_anchor).with_invoke_timeout(Duration::from_millis(50));
-
-        let err = dialer
-            .invoke(&target, sample_request("test.echo"))
-            .await
-            .expect_err("snapshot must reject indefinitely");
-        assert!(matches!(err, FederationClientError::PeerNotTrusted(_)));
-
-        // No cell to mutate — the snapshot constructor's signature
-        // makes hot-reload impossible by construction. Call again
-        // and assert the same outcome to pin the contract.
-        let err2 = dialer
-            .invoke(&target, sample_request("test.echo"))
-            .await
-            .expect_err("snapshot must reject indefinitely");
-        assert!(matches!(err2, FederationClientError::PeerNotTrusted(_)));
-    }
-
     // ── C2a / DEC-N5 §5: cert_anchor_generation pool tests ──
 
     #[tokio::test]
     async fn cert_anchor_generation_starts_at_zero_and_bumps_on_replace() {
         // Direct cell-level pin: a fresh `SharedTrustAnchor` is
         // generation 0; every `replace` bumps it by 1. The dialer
-        // observes the same monotonic counter via TrustSource::Live.
+        // observes the same monotonic counter through its SharedTrustAnchor.
         let cell = SharedTrustAnchor::new(Arc::new(RealmTrustAnchor::default()));
         assert_eq!(cell.cert_anchor_generation(), 0);
         cell.replace(Arc::new(RealmTrustAnchor::default()));
@@ -1522,32 +1412,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn snapshot_constructor_pins_generation_at_zero() {
-        // Reverse-direction pin: the legacy snapshot-flavour
-        // constructor (`CrossHubDialer::new`) cannot observe
-        // generation bumps because it has no cell to read.
-        // Repeated dials must always key at generation 0.
-        let target = "https://127.0.0.1:1".to_string();
-        let dir = tempfile::tempdir().expect("tempdir");
-        let ca_path = dir.path().join("ca.pem");
-        std::fs::write(&ca_path, SELF_SIGNED_CA_PEM).expect("seed ca");
-
-        let entry = fed_peer_entry(&target, ca_path);
-        let anchor = anchor_with(entry);
-
-        let dialer = CrossHubDialer::new(anchor).with_invoke_timeout(Duration::from_millis(50));
-        let _ = dialer.invoke(&target, sample_request("test.echo")).await;
-        let _ = dialer.invoke(&target, sample_request("test.echo")).await;
-        assert_eq!(dialer.cached_peer_count(), 1);
-        let entry = dialer.channels.iter().next().expect("one entry remains");
-        let (_, cached_gen) = entry.key();
-        assert_eq!(
-            *cached_gen, 0,
-            "snapshot constructor pins generation at 0 forever"
-        );
-    }
-
-    #[tokio::test]
     async fn breaker_success_resets_failure_counter() {
         // Drive the counter to threshold-1 = 1 failure (threshold
         // = 2 ⇒ 2 consecutive fails open). Then simulate a
@@ -1562,7 +1426,7 @@ mod tests {
         let entry = fed_peer_entry(&target, ca_path);
         let anchor = anchor_with(entry);
 
-        let dialer = CrossHubDialer::new(anchor).with_breaker_failure_threshold(2);
+        let dialer = dialer_with_anchor(anchor).with_breaker_failure_threshold(2);
 
         dialer.record_breaker_failure(&target, BreakerScope::Invoke);
         // Counter at 1 — still Closed.
@@ -1624,7 +1488,7 @@ mod tests {
         let entry = fed_peer_entry(&target, ca_path);
         let anchor = anchor_with(entry);
 
-        let dialer = CrossHubDialer::new(anchor).with_breaker_failure_threshold(1);
+        let dialer = dialer_with_anchor(anchor).with_breaker_failure_threshold(1);
         dialer.record_breaker_failure_for_status(
             &target,
             BreakerScope::Invoke,
@@ -1653,7 +1517,7 @@ mod tests {
         let entry = fed_peer_entry(&target, ca_path);
         let anchor = anchor_with(entry);
 
-        let dialer = CrossHubDialer::new(anchor).with_breaker_failure_threshold(2);
+        let dialer = dialer_with_anchor(anchor).with_breaker_failure_threshold(2);
 
         dialer.record_breaker_failure(&target, BreakerScope::SubscribeDirectoryV2);
         dialer.record_breaker_failure(&target, BreakerScope::SubscribeDirectoryV2);
@@ -1682,7 +1546,7 @@ mod tests {
         let entry = fed_peer_entry(&target, ca_path);
         let anchor = anchor_with(entry);
 
-        let dialer = CrossHubDialer::new(anchor).with_breaker_failure_threshold(2);
+        let dialer = dialer_with_anchor(anchor).with_breaker_failure_threshold(2);
 
         dialer.record_breaker_failure(&target, BreakerScope::SubscribeDirectoryV2);
         dialer.record_breaker_failure(&target, BreakerScope::SubscribeDirectoryV2);
@@ -1730,7 +1594,7 @@ SxYwtVK19IHR+6r7EBBCBg5D0fpPsH/xFsEWhdKVscezZ/W6m2iSQASUsCqSuQ22
 
     #[test]
     fn dialer_starts_with_zero_cached_peer_channels() {
-        let dialer = CrossHubDialer::new(empty_anchor());
+        let dialer = dialer_with_anchor(empty_anchor());
         assert_eq!(dialer.cached_peer_count(), 0);
     }
 
@@ -1741,7 +1605,7 @@ SxYwtVK19IHR+6r7EBBCBg5D0fpPsH/xFsEWhdKVscezZ/W6m2iSQASUsCqSuQ22
         // backing DashMap so the eventual commit 2/N TLS-pinned
         // channel inserted on one clone is visible to admission
         // RPCs holding a different clone.
-        let dialer_a = CrossHubDialer::new(empty_anchor());
+        let dialer_a = dialer_with_anchor(empty_anchor());
         let dialer_b = dialer_a.clone();
         // We can't insert a real `Channel` here without a tonic
         // endpoint, but we can check the Arc identity by
