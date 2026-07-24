@@ -40,6 +40,7 @@ public final class RuntimeCoreSeamTest {
           "retryHintsPreserveRetryability",
           "canonicalSigningMaterialComesFromPrepare",
           "preparedInvocationRequiresExplicitDescriptorRef",
+          "preparedInvocationRejectsRequestIDOnlyAlias",
           "completeTupleRejectsMissingCaller",
           "completeTupleRejectsAllZeroPrincipals",
           "preparedInvocationCannotBeSubmitted",
@@ -100,6 +101,8 @@ public final class RuntimeCoreSeamTest {
       case "canonicalSigningMaterialComesFromPrepare" -> canonicalSigningMaterialComesFromPrepare();
       case "preparedInvocationRequiresExplicitDescriptorRef" ->
           preparedInvocationRequiresExplicitDescriptorRef();
+      case "preparedInvocationRejectsRequestIDOnlyAlias" ->
+          preparedInvocationRejectsRequestIDOnlyAlias();
       case "completeTupleRejectsMissingCaller" -> completeTupleRejectsMissingCaller();
       case "completeTupleRejectsAllZeroPrincipals" -> completeTupleRejectsAllZeroPrincipals();
       case "preparedInvocationCannotBeSubmitted" -> preparedInvocationCannotBeSubmitted();
@@ -809,6 +812,46 @@ public final class RuntimeCoreSeamTest {
 
   private static void preparedInvocationRequiresExplicitDescriptorRef() {
     RuntimeClient runtime = new RuntimeClient(new MemoryRuntimeTransport());
+    Map<String, Object> prepared = preparedInvocationWire(runtime);
+    prepared.remove("descriptor_ref");
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        () -> PreparedInvocation.fromJSON(JsonValueWriter.object(prepared)));
+  }
+
+  private static void preparedInvocationRejectsRequestIDOnlyAlias() {
+    RuntimeClient runtime = new RuntimeClient(new MemoryRuntimeTransport());
+    Map<String, Object> prepared = preparedInvocationWire(runtime);
+    prepared.remove("prepared_id");
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        "prepared_id is required",
+        () -> PreparedInvocation.fromJSON(JsonValueWriter.object(prepared)));
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        "prepared_id is required",
+        () ->
+            new PreparedInvocation(
+                "",
+                "request-1",
+                completeDraft(runtime),
+                SigningMaterial.fromObject(
+                    Map.of(
+                        "algorithm", "ed25519",
+                        "canonical_bytes_base64", "Y2Fub25pY2Fs",
+                        "args_digest_hex",
+                            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                        "descriptor_ref", DESCRIPTOR,
+                        "expires_at_unix_ms", 4102444800000L)),
+                DESCRIPTOR,
+                "",
+                "",
+                "",
+                4102444800000L,
+                false));
+  }
+
+  private static Map<String, Object> preparedInvocationWire(RuntimeClient runtime) {
     Map<String, Object> material =
         Map.of(
             "algorithm", "ed25519",
@@ -826,9 +869,7 @@ public final class RuntimeCoreSeamTest {
     prepared.put("canonical_hash_hex", "");
     prepared.put("expires_at_unix_ms", 4102444800000L);
     prepared.put("submit_ready", false);
-    expectSDKError(
-        ErrorCode.INVALID_ARGUMENT,
-        () -> PreparedInvocation.fromJSON(JsonValueWriter.object(prepared)));
+    return prepared;
   }
 
   private static void completeTupleRejectsMissingCaller() {

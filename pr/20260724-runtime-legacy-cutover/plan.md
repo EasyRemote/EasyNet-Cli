@@ -1719,3 +1719,50 @@ architecture rather than add feature surface.
   - `tools/scripts/check-sdk-canonical-public-api.sh`
   - `tools/scripts/check-architecture-convergence.sh`
   - `git diff --check`
+
+## Iteration 40 candidate policy
+
+- Continue RF-3/RF-4 convergence by removing the last observed
+  `PreparedInvocation` identity alias across language SDKs.
+- codegraph and source inspection showed that Go/Python already required the
+  provider-issued `prepared_id`, while Node, Java, and Swift still allowed
+  `request_id` to stand in as a prepared identity. Swift also still allowed a
+  missing top-level `descriptor_ref` to be reconstructed from signing material.
+- The root abstraction problem is mixed identity ownership: `prepared_id` is
+  the provider/native prepared handle, while `request_id` is only request
+  correlation metadata. Treating them as substitutes preserves a hidden legacy
+  path and weakens descriptor-bound proof custody.
+- The selected cutover is to require explicit `prepared_id` and explicit
+  top-level `descriptor_ref` at every prepared invocation decode/constructor
+  boundary, with request IDs remaining observation/correlation metadata only.
+
+## Iteration 40 decision log
+
+- Node `PreparedInvocation` now rejects request-id-only payloads with
+  `prepared_id is required`.
+- Java `PreparedInvocation` now rejects request-id-only payloads and direct
+  constructor calls instead of accepting `request_id` as a legacy prepared
+  handle alias.
+- Swift `PreparedInvocation` now rejects request-id-only payloads and direct
+  constructor calls, and no longer backfills missing top-level
+  `descriptor_ref` from signing material.
+- Added Node/Java/Swift negative tests for request-id-only prepared invocation
+  payloads, plus a Swift negative test for missing explicit top-level
+  `descriptor_ref`.
+- Extended SPEC v2 `check_sdk_prepared_descriptor_ref_required_contract` to
+  cover Node/Java/Swift prepared identity semantics and Swift descriptor-ref
+  explicitness.
+- Added negative self-test fixtures proving the gate rejects descriptor-ref
+  fallback and prepared-id alias regressions.
+- Verification passed:
+  - `/Users/macbook.silan.tech/.local/bin/codegraph explore "PreparedInvocation prepared_id request_id descriptor_ref fallback alias Java Swift Go Python SDK canonical runtime"`
+  - `cd sdk/node && npm test`
+  - `cd sdk/swift && swift test`
+  - `cd sdk/java && mvn -q test`
+  - `bash -n tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - `tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  - `tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - `tools/scripts/check-sdk-canonical-public-api.sh`
+  - `tools/scripts/check-architecture-convergence.sh`
+  - `cargo fmt --check`
+  - `git diff --check`

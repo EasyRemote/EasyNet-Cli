@@ -1245,8 +1245,8 @@ export class PreparedInvocation {
     }
     this.preparedId = optionalRuntimeString(value.prepared_id, "prepared_id") ?? "";
     this.requestId = optionalRuntimeString(value.request_id, "request_id") ?? "";
-    if (!this.preparedId && !this.requestId) {
-      throw invalidRuntime("prepared_id or request_id is required");
+    if (!this.preparedId) {
+      throw invalidRuntime("prepared_id is required");
     }
     this.descriptorRef = requiredRuntimeString(value.descriptor_ref, "descriptor_ref");
     if (this.descriptorRef !== this.signingMaterial.descriptorRef) {

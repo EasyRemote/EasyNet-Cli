@@ -3445,8 +3445,10 @@ check_sdk_prepared_descriptor_ref_required_contract() {
   local node_test="$cli_root/sdk/node/test/runtime-core.test.mjs"
   local java_src="$cli_root/sdk/java/src/main/java/run/runtime/sdk/PreparedInvocation.java"
   local java_test="$cli_root/sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
+  local swift_src="$cli_root/sdk/swift/Sources/RuntimeSDK/Invocation.swift"
+  local swift_test="$cli_root/sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift"
 
-  "$PYTHON_BIN" - "$go_src" "$go_test" "$py_src" "$py_test" "$node_src" "$node_test" "$java_src" "$java_test" <<'PY'
+  "$PYTHON_BIN" - "$go_src" "$go_test" "$py_src" "$py_test" "$node_src" "$node_test" "$java_src" "$java_test" "$swift_src" "$swift_test" <<'PY'
 import sys
 from pathlib import Path
 
@@ -3464,6 +3466,8 @@ for path in paths:
     node_test,
     java_src,
     java_test,
+    swift_src,
+    swift_test,
 ) = [path.read_text(encoding="utf-8") for path in paths]
 
 for language, text, retired in (
@@ -3471,15 +3475,20 @@ for language, text, retired in (
     ("python", py_src, "or material.descriptor_ref"),
     ("node", node_src, "?? this.signingMaterial.descriptorRef"),
     ("java", java_src, "? signingMaterial.descriptorRef()"),
+    ("swift", swift_src, "descriptorRef?.isEmpty == false ? descriptorRef! : signingMaterial.descriptorRef"),
+    ("node", node_src, "prepared_id or request_id is required"),
+    ("java", java_src, "prepared_id or request_id is required"),
+    ("swift", swift_src, "prepared_id or request_id is required"),
 ):
     if retired in text:
         raise SystemExit(f"sdk_prepared_descriptor_ref_required:{language}:fallback_present")
 
 required_source = {
-    "go": (go_src, 'descriptorRef:    optionalPreparedString(fields, "descriptor_ref")', 'if prepared.descriptorRef == "" {\n\t\treturn PreparedInvocation{}, invalidInvocation("descriptor_ref is required", nil)\n\t}'),
+    "go": (go_src, 'descriptorRef:    optionalPreparedString(fields, "descriptor_ref")', 'if prepared.descriptorRef == "" {', 'invalidInvocation("descriptor_ref is required", nil)'),
     "python": (py_src, 'descriptor_ref = _required_string(decoded, "descriptor_ref")', 'if descriptor_ref != material.descriptor_ref:'),
-    "node": (node_src, 'this.descriptorRef = requiredRuntimeString(value.descriptor_ref, "descriptor_ref");', 'if (this.descriptorRef !== this.signingMaterial.descriptorRef)'),
-    "java": (java_src, 'this.descriptorRef = required(descriptorRef, "descriptor_ref");', 'draft.inspectTuple().descriptor().equals(signingMaterial.descriptorRef())'),
+    "node": (node_src, 'this.descriptorRef = requiredRuntimeString(value.descriptor_ref, "descriptor_ref");', 'if (this.descriptorRef !== this.signingMaterial.descriptorRef)', 'throw invalidRuntime("prepared_id is required");'),
+    "java": (java_src, 'this.descriptorRef = required(descriptorRef, "descriptor_ref");', 'draft.inspectTuple().descriptor().equals(signingMaterial.descriptorRef())', '"prepared_id is required"'),
+    "swift": (swift_src, 'descriptorRef: requiredString(object, "descriptor_ref", "prepared_invocation")', 'draft.inspectTuple().descriptorRef == signingMaterial.descriptorRef', '"prepared_id is required"', '"descriptor_ref is required"'),
 }
 for language, entries in required_source.items():
     text, *tokens = entries
@@ -3490,8 +3499,9 @@ for language, entries in required_source.items():
 required_tests = {
     "go": (go_test, "TestPreparedInvocationRejectsMissingPreparedDescriptorRef", "synthesized missing descriptor_ref", "descriptor_ref is required"),
     "python": (py_test, "test_prepared_invocation_rejects_missing_prepared_descriptor_ref", "descriptor_ref is required"),
-    "node": (node_test, "prepared invocation requires explicit top-level descriptor ref", "delete value.descriptor_ref"),
-    "java": (java_test, "preparedInvocationRequiresExplicitDescriptorRef", "PreparedInvocation.fromJSON(JsonValueWriter.object(prepared))"),
+    "node": (node_test, "prepared invocation requires explicit top-level descriptor ref", "delete value.descriptor_ref", "prepared invocation rejects request-id-only alias", "delete value.prepared_id", "prepared_id is required"),
+    "java": (java_test, "preparedInvocationRequiresExplicitDescriptorRef", "PreparedInvocation.fromJSON(JsonValueWriter.object(prepared))", "preparedInvocationRejectsRequestIDOnlyAlias", 'prepared.remove("prepared_id")', "prepared_id is required"),
+    "swift": (swift_test, "testPreparedInvocationRequiresExplicitDescriptorRef", 'prepared.removeValue(forKey: "descriptor_ref")', "descriptor_ref is required", "testPreparedInvocationRejectsRequestIDOnlyAlias", 'prepared.removeValue(forKey: "prepared_id")', "prepared_id is required"),
 }
 for language, entries in required_tests.items():
     text, *tokens = entries
@@ -15736,7 +15746,9 @@ EOF
     "$tmp/sdk-prepared-descriptor-fallback/sdk/python/tests" \
     "$tmp/sdk-prepared-descriptor-fallback/sdk/node/test" \
     "$tmp/sdk-prepared-descriptor-fallback/sdk/java/src/main/java/run/runtime/sdk" \
-    "$tmp/sdk-prepared-descriptor-fallback/sdk/java/src/test/java/run/runtime/sdk"
+    "$tmp/sdk-prepared-descriptor-fallback/sdk/java/src/test/java/run/runtime/sdk" \
+    "$tmp/sdk-prepared-descriptor-fallback/sdk/swift/Sources/RuntimeSDK" \
+    "$tmp/sdk-prepared-descriptor-fallback/sdk/swift/Tests/RuntimeSDKTests"
   printf '%s\n' \
     'func decodePreparedInvocation() error {' \
     '  prepared := PreparedInvocation{descriptorRef: optionalPreparedString(fields, "descriptor_ref")}' \
@@ -15788,10 +15800,132 @@ EOF
     '  void preparedInvocationRequiresExplicitDescriptorRef() {' \
     '    PreparedInvocation.fromJSON(JsonValueWriter.object(prepared));' \
     '  }' \
+    '  void preparedInvocationRejectsRequestIDOnlyAlias() {' \
+    '    prepared.remove("prepared_id");' \
+    '    _ = "prepared_id is required";' \
+    '  }' \
     '}' \
     > "$tmp/sdk-prepared-descriptor-fallback/sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
+  printf '%s\n' \
+    'final class PreparedInvocation {' \
+    '  init() throws {' \
+    '    _ = "prepared_id is required"' \
+    '    _ = "descriptor_ref is required"' \
+    '    descriptorRef: requiredString(object, "descriptor_ref", "prepared_invocation")' \
+    '    draft.inspectTuple().descriptorRef == signingMaterial.descriptorRef' \
+    '  }' \
+    '}' \
+    > "$tmp/sdk-prepared-descriptor-fallback/sdk/swift/Sources/RuntimeSDK/Invocation.swift"
+  printf '%s\n' \
+    'final class RuntimeCoreSeamTests {' \
+    '  func testPreparedInvocationRequiresExplicitDescriptorRef() {' \
+    '    prepared.removeValue(forKey: "descriptor_ref")' \
+    '    _ = "descriptor_ref is required"' \
+    '  }' \
+    '  func testPreparedInvocationRejectsRequestIDOnlyAlias() {' \
+    '    prepared.removeValue(forKey: "prepared_id")' \
+    '    _ = "prepared_id is required"' \
+    '  }' \
+    '}' \
+    > "$tmp/sdk-prepared-descriptor-fallback/sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift"
   if ( check_sdk_prepared_descriptor_ref_required_contract "$tmp/sdk-prepared-descriptor-fallback" ) >/dev/null 2>&1; then
     fail "self-test expected SDK prepared descriptor_ref fallback gate to fail"
+  fi
+  mkdir -p "$tmp/sdk-prepared-id-alias/sdk/go" \
+    "$tmp/sdk-prepared-id-alias/sdk/python/easynet_sdk" \
+    "$tmp/sdk-prepared-id-alias/sdk/python/tests" \
+    "$tmp/sdk-prepared-id-alias/sdk/node/test" \
+    "$tmp/sdk-prepared-id-alias/sdk/java/src/main/java/run/runtime/sdk" \
+    "$tmp/sdk-prepared-id-alias/sdk/java/src/test/java/run/runtime/sdk" \
+    "$tmp/sdk-prepared-id-alias/sdk/swift/Sources/RuntimeSDK" \
+    "$tmp/sdk-prepared-id-alias/sdk/swift/Tests/RuntimeSDKTests"
+  printf '%s\n' \
+    'func decodePreparedInvocation() error {' \
+    '  prepared := PreparedInvocation{descriptorRef: optionalPreparedString(fields, "descriptor_ref")}' \
+    '  if prepared.descriptorRef == "" {' \
+    '    return PreparedInvocation{}, invalidInvocation("descriptor_ref is required", nil)' \
+    '  }' \
+    '  return nil' \
+    '}' \
+    > "$tmp/sdk-prepared-id-alias/sdk/go/signing.go"
+  printf '%s\n' \
+    'func TestPreparedInvocationRejectsMissingPreparedDescriptorRef(t *testing.T) {' \
+    '  t.Fatal("synthesized missing descriptor_ref")' \
+    '  _ = "descriptor_ref is required"' \
+    '}' \
+    > "$tmp/sdk-prepared-id-alias/sdk/go/signing_test.go"
+  printf '%s\n' \
+    'def _prepared_invocation_from_json(decoded):' \
+    '    descriptor_ref = _required_string(decoded, "descriptor_ref")' \
+    '    if descriptor_ref != material.descriptor_ref:' \
+    '        pass' \
+    > "$tmp/sdk-prepared-id-alias/sdk/python/easynet_sdk/signing.py"
+  printf '%s\n' \
+    'def test_prepared_invocation_rejects_missing_prepared_descriptor_ref():' \
+    '    assert "descriptor_ref is required"' \
+    > "$tmp/sdk-prepared-id-alias/sdk/python/tests/test_signing.py"
+  printf '%s\n' \
+    'class PreparedInvocation {' \
+    '  constructor(value) {' \
+    '    this.descriptorRef = requiredRuntimeString(value.descriptor_ref, "descriptor_ref");' \
+    '    if (this.descriptorRef !== this.signingMaterial.descriptorRef) {}' \
+    '    throw invalidRuntime("prepared_id or request_id is required");' \
+    '  }' \
+    '}' \
+    > "$tmp/sdk-prepared-id-alias/sdk/node/index.js"
+  printf '%s\n' \
+    'test("prepared invocation requires explicit top-level descriptor ref", () => {' \
+    '  delete value.descriptor_ref' \
+    '});' \
+    'test("prepared invocation rejects request-id-only alias", () => {' \
+    '  delete value.prepared_id' \
+    '  _ = "prepared_id is required"' \
+    '});' \
+    > "$tmp/sdk-prepared-id-alias/sdk/node/test/runtime-core.test.mjs"
+  printf '%s\n' \
+    'final class PreparedInvocation {' \
+    '  void bind() {' \
+    '    this.descriptorRef = required(descriptorRef, "descriptor_ref");' \
+    '    draft.inspectTuple().descriptor().equals(signingMaterial.descriptorRef());' \
+    '    _ = "prepared_id is required";' \
+    '  }' \
+    '}' \
+    > "$tmp/sdk-prepared-id-alias/sdk/java/src/main/java/run/runtime/sdk/PreparedInvocation.java"
+  printf '%s\n' \
+    'class RuntimeCoreSeamTest {' \
+    '  void preparedInvocationRequiresExplicitDescriptorRef() {' \
+    '    PreparedInvocation.fromJSON(JsonValueWriter.object(prepared));' \
+    '  }' \
+    '  void preparedInvocationRejectsRequestIDOnlyAlias() {' \
+    '    prepared.remove("prepared_id");' \
+    '    _ = "prepared_id is required";' \
+    '  }' \
+    '}' \
+    > "$tmp/sdk-prepared-id-alias/sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
+  printf '%s\n' \
+    'final class PreparedInvocation {' \
+    '  init() throws {' \
+    '    _ = "prepared_id is required"' \
+    '    _ = "descriptor_ref is required"' \
+    '    descriptorRef: requiredString(object, "descriptor_ref", "prepared_invocation")' \
+    '    draft.inspectTuple().descriptorRef == signingMaterial.descriptorRef' \
+    '  }' \
+    '}' \
+    > "$tmp/sdk-prepared-id-alias/sdk/swift/Sources/RuntimeSDK/Invocation.swift"
+  printf '%s\n' \
+    'final class RuntimeCoreSeamTests {' \
+    '  func testPreparedInvocationRequiresExplicitDescriptorRef() {' \
+    '    prepared.removeValue(forKey: "descriptor_ref")' \
+    '    _ = "descriptor_ref is required"' \
+    '  }' \
+    '  func testPreparedInvocationRejectsRequestIDOnlyAlias() {' \
+    '    prepared.removeValue(forKey: "prepared_id")' \
+    '    _ = "prepared_id is required"' \
+    '  }' \
+    '}' \
+    > "$tmp/sdk-prepared-id-alias/sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift"
+  if ( check_sdk_prepared_descriptor_ref_required_contract "$tmp/sdk-prepared-id-alias" ) >/dev/null 2>&1; then
+    fail "self-test expected SDK prepared_id alias gate to fail"
   fi
   mkdir -p "$tmp/sdk-go-authority-subject-helper-embedded-legacy/sdk/go" \
     "$tmp/sdk-go-authority-subject-helper-embedded-legacy/sdk/python/easynet_sdk" \

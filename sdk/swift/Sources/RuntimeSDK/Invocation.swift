@@ -212,11 +212,13 @@ public final class PreparedInvocation: @unchecked Sendable {
         guard !submitReady else {
             throw SDKError.validation("prepared_invocation", "PreparedInvocation must not be submit-ready")
         }
-        guard !preparedId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
-            !requestId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            throw SDKError.validation("prepared_invocation", "prepared_id or request_id is required")
+        guard !preparedId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw SDKError.validation("prepared_invocation", "prepared_id is required")
         }
-        let boundDescriptor = descriptorRef?.isEmpty == false ? descriptorRef! : signingMaterial.descriptorRef
+        guard let boundDescriptor = descriptorRef,
+              !boundDescriptor.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw SDKError.validation("prepared_invocation", "descriptor_ref is required")
+        }
         guard boundDescriptor == signingMaterial.descriptorRef,
               draft.inspectTuple().descriptorRef == signingMaterial.descriptorRef else {
             throw SDKError.validation(
@@ -260,7 +262,7 @@ public final class PreparedInvocation: @unchecked Sendable {
             requestId: optionalString(object, "request_id", "prepared_invocation") ?? "",
             draft: InvocationDraft.fromWireObject(requiredObject(object, "tuple", "prepared_invocation")),
             signingMaterial: material,
-            descriptorRef: optionalString(object, "descriptor_ref", "prepared_invocation"),
+            descriptorRef: requiredString(object, "descriptor_ref", "prepared_invocation"),
             descriptorHashHex: optionalString(object, "descriptor_hash_hex", "prepared_invocation") ?? "",
             schemaHashHex: optionalString(object, "schema_hash_hex", "prepared_invocation") ?? "",
             canonicalHashHex: optionalString(object, "canonical_hash_hex", "prepared_invocation") ?? "",

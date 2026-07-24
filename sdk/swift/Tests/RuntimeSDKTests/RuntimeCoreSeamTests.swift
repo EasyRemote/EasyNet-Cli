@@ -643,6 +643,38 @@ final class RuntimeCoreSeamTests: XCTestCase {
         XCTAssertEqual(Data(base64Encoded: prepared.signingMaterial.canonicalBytesBase64), Data("canonical".utf8))
     }
 
+    func testPreparedInvocationRequiresExplicitDescriptorRef() throws {
+        var prepared = try preparedInvocationWire()
+        prepared.removeValue(forKey: "descriptor_ref")
+        expectSyncSDKError(.invalidArgument, "descriptor_ref is required") {
+            _ = try PreparedInvocation.fromJSON(jsonData(prepared))
+        }
+    }
+
+    func testPreparedInvocationRejectsRequestIDOnlyAlias() throws {
+        var prepared = try preparedInvocationWire()
+        prepared.removeValue(forKey: "prepared_id")
+        expectSyncSDKError(.invalidArgument, "prepared_id is required") {
+            _ = try PreparedInvocation.fromJSON(jsonData(prepared))
+        }
+        expectSyncSDKError(.invalidArgument, "prepared_id is required") {
+            _ = try PreparedInvocation(
+                preparedId: "",
+                requestId: "request-1",
+                draft: completeBuilder().build(),
+                signingMaterial: SigningMaterial(
+                    algorithm: "ed25519",
+                    canonicalBytesBase64: "Y2Fub25pY2Fs",
+                    argsDigestHex: String(repeating: "a", count: 64),
+                    descriptorRef: descriptor,
+                    expiresAtUnixMS: 4_102_444_800_000
+                ),
+                descriptorRef: descriptor,
+                expiresAtUnixMS: 4_102_444_800_000
+            )
+        }
+    }
+
     func testCompleteTupleRejectsMissingCaller() {
         expectSyncSDKError(.invalidArgument) {
             _ = try InvocationBuilder()
@@ -761,6 +793,27 @@ final class RuntimeCoreSeamTests: XCTestCase {
             options: [.sortedKeys]
         )
         return data.base64EncodedString()
+    }
+
+    private func preparedInvocationWire() throws -> [String: Any] {
+        [
+            "prepared_id": "prepared-1",
+            "request_id": "request-1",
+            "tuple": try completeBuilder().build().inspectTuple().wireObject(),
+            "signing_material": [
+                "algorithm": "ed25519",
+                "canonical_bytes_base64": "Y2Fub25pY2Fs",
+                "args_digest_hex": String(repeating: "a", count: 64),
+                "descriptor_ref": descriptor,
+                "expires_at_unix_ms": 4_102_444_800_000,
+            ],
+            "descriptor_ref": descriptor,
+            "descriptor_hash_hex": "",
+            "schema_hash_hex": "",
+            "canonical_hash_hex": "",
+            "expires_at_unix_ms": 4_102_444_800_000,
+            "submit_ready": false,
+        ]
     }
 }
 

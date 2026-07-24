@@ -31,8 +31,8 @@ public final class PreparedInvocation {
     }
     this.preparedId = preparedId == null ? "" : preparedId;
     this.requestId = requestId == null ? "" : requestId;
-    if (this.preparedId.isBlank() && this.requestId.isBlank()) {
-      throw SDKError.validation("prepared_invocation", "prepared_id or request_id is required");
+    if (this.preparedId.isBlank()) {
+      throw SDKError.validation("prepared_invocation", "prepared_id is required");
     }
     this.draft = java.util.Objects.requireNonNull(draft, "draft");
     this.signingMaterial = java.util.Objects.requireNonNull(signingMaterial, "signingMaterial");

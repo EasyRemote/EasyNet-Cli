@@ -722,6 +722,19 @@ test("prepared invocation requires explicit top-level descriptor ref", () => {
   );
 });
 
+test("prepared invocation rejects request-id-only alias", () => {
+  const value = JSON.parse(preparedJSON(completeDraft().toJSON()));
+  delete value.prepared_id;
+
+  assert.throws(
+    () => sdk.PreparedInvocation.fromJSON(JSON.stringify(value)),
+    (error) =>
+      error instanceof sdk.SDKError &&
+      error.code === sdk.ErrorCode.INVALID_ARGUMENT &&
+      error.message.includes("prepared_id is required"),
+  );
+});
+
 test("authority metadata is typed, delegated, and mutually exclusive", async () => {
   const delegation = delegationValue();
   const session = sessionValue();
