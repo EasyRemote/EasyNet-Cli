@@ -259,7 +259,6 @@ pub(crate) fn input_schema_for(name: &str) -> Option<Value> {
                 "membership_ura": string_prop("Device URA to admit into the realm."),
                 "realm": string_prop("Realm the joining device claims."),
                 "public_key_hex": string_prop("Hex-encoded 32-byte Ed25519 verifying key."),
-                "pairing_secret": string_prop("Optional pairing secret carried by legacy join flows."),
                 "principal_enrollment": {
                     "type": "object",
                     "description": "Optional product-neutral principal enrollment proof."

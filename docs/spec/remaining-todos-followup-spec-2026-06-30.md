@@ -226,8 +226,10 @@ value → existing HTTP flow (kept until Phase 3).
 ### Exact edits (Phase 1)
 
 - **`src/daemon/federation/client/ability_contract.rs`**: `JoinArgs` already gained
-  `membership_ura` (done). Keep `realm`, `public_key_hex`, `pairing_secret`
-  (hub discards the latter, harmless).
+  `membership_ura` (done). Keep only canonical runtime facts:
+  `realm`, `membership_ura`, `public_key_hex`, and optional product-neutral
+  `principal_enrollment`. Retired product token carriers such as
+  `pairing_secret` must fail closed instead of being accepted and ignored.
 - **`src/cli/join.rs`**:
   - `parse_hub_ura(&str) -> Result<(realm, port: Option<u16>)>` wrapping
     `crate::ura::parse_ura`, asserting `kind == Hub`.

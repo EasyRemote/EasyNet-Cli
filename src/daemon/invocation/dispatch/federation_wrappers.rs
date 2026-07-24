@@ -247,12 +247,11 @@ pub fn handle_status() -> serde_json::Value {
 
 /// Request payload for `federation.join`.
 ///
-/// Wire shape mirrors the JSON encoding of axon-runtime's
-/// `JoinFederationRequest` proto. Only the deterministic fields are
-/// captured here; production-only ergonomic fields (e.g. `node_label`)
-/// are tolerated and ignored via `#[serde(default)]` on optional
-/// fields.
+/// Wire shape is the canonical runtime join contract. Product pairing tokens
+/// and ergonomic labels belong outside this descriptor-bound ability; unknown
+/// fields fail closed instead of being ignored as compatibility data.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct JoinRequest {
     /// Caller-claimed canonical URA (must match envelope signer per
     /// admission gate, verified in the dispatcher before this
@@ -273,12 +272,14 @@ pub struct JoinRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct PrincipalEnrollmentProof {
     pub principal_ura: String,
     pub proof: PrincipalProofRef,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct PrincipalProofRef {
     pub kind: String,
     pub reference: String,
@@ -1596,6 +1597,28 @@ mod tests {
             vec!["device.".to_string()]
         );
         assert!(resp.advertise_contract.allows_hosted_agents);
+    }
+
+    #[test]
+    fn join_request_rejects_retired_pairing_secret_field() {
+        let args = serde_json::json!({
+            "membership_ura": "easynet:///r/realm/device/n1",
+            "realm": "realm",
+            "public_key_hex": hex::encode(
+                ed25519_dalek::SigningKey::from_bytes(&[0x42; 32])
+                    .verifying_key()
+                    .to_bytes()
+            ),
+            "pairing_secret": "retired-token-carrier"
+        });
+
+        let err = serde_json::from_value::<JoinRequest>(args)
+            .expect_err("retired pairing_secret must fail closed at the join parser");
+
+        assert!(
+            err.to_string().contains("unknown field `pairing_secret`"),
+            "join parser must name the retired field: {err}"
+        );
     }
 
     #[test]

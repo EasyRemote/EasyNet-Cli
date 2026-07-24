@@ -839,7 +839,6 @@ async fn do_federation_join_and_resolve_hub_key_async(
         realm: target.realm.clone(),
         membership_ura: membership_ura.to_string(),
         public_key_hex: public_key_hex.to_string(),
-        pairing_secret: None,
         principal_enrollment,
     };
     let join_arguments =

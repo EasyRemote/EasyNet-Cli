@@ -72,10 +72,6 @@ pub struct JoinArgs {
     /// just generated. The hub binds this key to the canonical URA
     /// in its receipt.
     pub public_key_hex: String,
-    /// Optional pairing-secret carrier; the P3 hub does not yet
-    /// validate but accepts the field for forward compatibility.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub pairing_secret: Option<String>,
     /// Optional product-neutral PrincipalLifecycle proof. When present, the
     /// hub validates it against daemon-owned PrincipalLifecycle state before
     /// binding the joined Device URA to the Principal URA in RuntimeTrust.
@@ -278,7 +274,6 @@ mod tests {
             realm: "acme".into(),
             membership_ura: "easynet:///r/acme/device/dev-a".into(),
             public_key_hex: "deadbeef".into(),
-            pairing_secret: None,
             principal_enrollment: None,
         };
         let v: Value = serde_json::from_slice(&args_to_bytes(&args)).unwrap();
@@ -287,21 +282,23 @@ mod tests {
         assert_eq!(v["public_key_hex"], "deadbeef");
         assert!(
             v.get("pairing_secret").is_none(),
-            "absent pairing_secret must NOT be emitted to keep the hub's parser strict",
+            "retired pairing_secret must NOT be emitted to keep the hub parser strict",
         );
     }
 
     #[test]
-    fn join_args_includes_pairing_secret_when_set() {
+    fn join_args_does_not_emit_retired_pairing_secret() {
         let args = JoinArgs {
             realm: "acme".into(),
             membership_ura: "easynet:///r/acme/device/dev-a".into(),
             public_key_hex: "00".into(),
-            pairing_secret: Some("token-xyz".into()),
             principal_enrollment: None,
         };
         let v: Value = serde_json::from_slice(&args_to_bytes(&args)).unwrap();
-        assert_eq!(v["pairing_secret"], "token-xyz");
+        assert!(
+            v.get("pairing_secret").is_none(),
+            "pairing_secret is a retired product token carrier, not a runtime join fact",
+        );
     }
 
     #[test]
@@ -310,7 +307,6 @@ mod tests {
             realm: "acme".into(),
             membership_ura: "easynet:///r/acme/device/dev-a".into(),
             public_key_hex: "00".into(),
-            pairing_secret: None,
             principal_enrollment: Some(PrincipalEnrollmentProof {
                 principal_ura: "easynet:///r/acme/user/alice".into(),
                 proof: PrincipalProofRef {
