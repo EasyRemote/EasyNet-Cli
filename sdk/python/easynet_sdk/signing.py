@@ -183,6 +183,7 @@ class SignedInvocation:
                 "canonical_bytes_base64": (
                     self.prepared.signing_material.canonical_bytes_base64
                 ),
+                "tuple": self.prepared.tuple.to_json_dict(),
             },
             "signature": self.signature.to_json_dict(),
         }

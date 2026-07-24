@@ -1429,6 +1429,48 @@ architecture rather than add feature surface.
   - `cargo fmt --check`
   - `git diff --check`
 
+## Iteration 41 candidate policy
+
+- Continue RF-4/RF-8 convergence by ensuring signed invocation submission keeps
+  the complete tuple at the public SDK-to-runtime boundary.
+- codegraph showed Go, Node, Java, and Swift signed envelopes include
+  `prepared.tuple`, but Python `SignedInvocation.to_json_dict()` only emitted
+  prepared metadata and canonical bytes.
+- The root abstraction problem is split tuple authority: if a signed
+  submission omits the complete Invocation tuple, the downstream runtime or
+  daemon transport must recover caller/callee/subject/descriptor facts from
+  adjacent state, reintroducing the same class of subject/descriptor mismatch
+  seen in product invocation history failures.
+- The selected cutover is to make Python signed submission serialize the same
+  canonical prepared tuple as the other language SDKs, without changing the
+  public object model.
+
+## Iteration 41 decision log
+
+- Python `SignedInvocation.to_json_dict()` now includes
+  `prepared.tuple.to_json_dict()` under the signed `prepared` envelope.
+- Python runtime tests now assert that `RuntimeClient.submit_signed()` forwards
+  signed envelopes with both caller and descriptor facts inside
+  `prepared.tuple`.
+- Added SPEC v2
+  `check_python_sdk_signed_submission_complete_tuple_contract`, including a
+  negative self-test fixture that rejects the retired Python signed submission
+  shape without `prepared.tuple`.
+- Rebuilt `sdk/conformance/canonical-public-api.json` and
+  `sdk/conformance/sdk-parity-matrix.json` after the Python SDK signed
+  envelope source change.
+- Verification passed:
+  - `/Users/macbook.silan.tech/.local/bin/codegraph explore "SignedInvocation to_json toObject prepared tuple canonical_hash descriptor_ref prepared_id cross-language SDK Go Python Node Java Swift"`
+  - `PYTHONPATH=/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli/sdk/python:/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/python python3 -m pytest sdk/python/tests/test_runtime.py sdk/python/tests/test_signing.py`
+  - `python3 sdk/conformance/rebuild_public_api_model.py --write`
+  - `bash -n tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - `tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  - `tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - `tools/scripts/check-sdk-canonical-public-api.sh`
+  - `tools/scripts/check-architecture-convergence.sh`
+  - `cargo fmt --check`
+  - `git diff --check`
+
 ## Iteration 36 candidate policy
 
 - Move the same proof-custody convergence into the Java SDK receipt validator.

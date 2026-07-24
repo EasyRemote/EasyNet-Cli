@@ -1384,6 +1384,14 @@ class RuntimeTests(unittest.TestCase):
             transport.seen_signed["signature"]["signature_base64"],
             "c2lnbmF0dXJl",
         )
+        self.assertEqual(
+            transport.seen_signed["prepared"]["tuple"]["caller_ura"],
+            "easynet:///r/example/agent/alice.sdk",
+        )
+        self.assertEqual(
+            transport.seen_signed["prepared"]["tuple"]["descriptor_ref"],
+            "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+        )
 
     def test_public_handle_json_does_not_grant_control_authority(self) -> None:
         transport = MemoryRuntimeTransport()

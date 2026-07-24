@@ -3511,6 +3511,53 @@ for language, entries in required_tests.items():
 PY
 }
 
+check_python_sdk_signed_submission_complete_tuple_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local signing="$cli_root/sdk/python/easynet_sdk/signing.py"
+  local runtime_test="$cli_root/sdk/python/tests/test_runtime.py"
+
+  "$PYTHON_BIN" - "$signing" "$runtime_test" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+signing_path, runtime_test_path = map(Path, sys.argv[1:])
+for path in (signing_path, runtime_test_path):
+    if not path.exists():
+        raise SystemExit(f"python_signed_submission_complete_tuple:missing:{path}")
+
+signing = signing_path.read_text(encoding="utf-8")
+runtime_test = runtime_test_path.read_text(encoding="utf-8")
+
+match = re.search(
+    r"class SignedInvocation:.*?def to_json_dict\(self\) -> dict\[str, object\]:"
+    r"(?P<body>.*?)\n    def to_json\(self\)",
+    signing,
+    re.S,
+)
+if not match:
+    raise SystemExit("python_signed_submission_complete_tuple:serializer_missing")
+body = match.group("body")
+for token in (
+    '"prepared": {',
+    '"prepared_id": self.prepared.prepared_id',
+    '"descriptor_ref": self.prepared.descriptor_ref',
+    '"canonical_bytes_base64":',
+    '"tuple": self.prepared.tuple.to_json_dict(),',
+):
+    if token not in body:
+        raise SystemExit(f"python_signed_submission_complete_tuple:source_missing:{token}")
+
+for token in (
+    'transport.seen_signed["prepared"]["tuple"]["caller_ura"]',
+    'transport.seen_signed["prepared"]["tuple"]["descriptor_ref"]',
+    "test_submit_signed_preserves_signature",
+):
+    if token not in runtime_test:
+        raise SystemExit(f"python_signed_submission_complete_tuple:test_missing:{token}")
+PY
+}
+
 check_sdk_descriptor_resolution_error_vocabulary_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local go="$cli_root/sdk/go/authorized_runtime_session.go"
@@ -15927,6 +15974,30 @@ EOF
   if ( check_sdk_prepared_descriptor_ref_required_contract "$tmp/sdk-prepared-id-alias" ) >/dev/null 2>&1; then
     fail "self-test expected SDK prepared_id alias gate to fail"
   fi
+  mkdir -p "$tmp/python-signed-submission-tuple-legacy/sdk/python/easynet_sdk" \
+    "$tmp/python-signed-submission-tuple-legacy/sdk/python/tests"
+  printf '%s\n' \
+    'class SignedInvocation:' \
+    '    def to_json_dict(self) -> dict[str, object]:' \
+    '        return {' \
+    '            "signer_id": self.signer_id,' \
+    '            "prepared": {' \
+    '                "prepared_id": self.prepared.prepared_id,' \
+    '                "descriptor_ref": self.prepared.descriptor_ref,' \
+    '                "canonical_bytes_base64": self.prepared.signing_material.canonical_bytes_base64,' \
+    '            },' \
+    '            "signature": self.signature.to_json_dict(),' \
+    '        }' \
+    '    def to_json(self) -> str:' \
+    '        return "{}"' \
+    > "$tmp/python-signed-submission-tuple-legacy/sdk/python/easynet_sdk/signing.py"
+  printf '%s\n' \
+    'def test_submit_signed_preserves_signature():' \
+    '    assert transport.seen_signed["signature"]["signature_base64"]' \
+    > "$tmp/python-signed-submission-tuple-legacy/sdk/python/tests/test_runtime.py"
+  if ( check_python_sdk_signed_submission_complete_tuple_contract "$tmp/python-signed-submission-tuple-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected Python signed submission tuple gate to fail"
+  fi
   mkdir -p "$tmp/sdk-go-authority-subject-helper-embedded-legacy/sdk/go" \
     "$tmp/sdk-go-authority-subject-helper-embedded-legacy/sdk/python/easynet_sdk" \
     "$tmp/sdk-go-authority-subject-helper-embedded-legacy/sdk/python/tests"
@@ -19476,6 +19547,7 @@ EOF
   check_java_sdk_invocation_authority_binding_contract
   check_java_swift_runtime_state_subject_parity_contract
   check_swift_sdk_invocation_authority_binding_contract
+  check_python_sdk_signed_submission_complete_tuple_contract
   check_java_sdk_runtime_receipt_projection_contract
   check_go_sdk_runtime_receipt_projection_contract
   check_python_sdk_runtime_receipt_projection_contract
@@ -19686,6 +19758,7 @@ check_receipt_proof_fact_contract
 check_java_sdk_invocation_authority_binding_contract
 check_java_swift_runtime_state_subject_parity_contract
 check_swift_sdk_invocation_authority_binding_contract
+check_python_sdk_signed_submission_complete_tuple_contract
 check_java_sdk_runtime_receipt_projection_contract
 check_go_sdk_runtime_receipt_projection_contract
 check_python_sdk_runtime_receipt_projection_contract
