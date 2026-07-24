@@ -34,14 +34,14 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "missing PagesAbilityVerb should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
-perl -0pi -e 's/let ability = PagesAbility::for_user\(&user, PagesAbilityVerb::Publish\)\?;/let ability = format!("{user}.pages.publish");/' "$SB/src/cli/commands/pages.rs"
+perl -0pi -e 's/let ability = PagesAbility::for_user\(&identity\.user, PagesAbilityVerb::Publish\)\?;/let ability = format!("{}.pages.publish", identity.user);/' "$SB/src/cli/commands/pages.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "scattered format construction should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
-perl -0pi -e 's/&target,\n        args,/&ability.local_registry_ability(),\n        args,/' "$SB/src/cli/commands/pages.rs"
+perl -0pi -e 's/SystemInvocationTargetIssuer::local_target_root\(&target, args, CallMode::Rpc\)\?/SystemInvocationTargetIssuer::local_target_root(&ability.local_registry_ability(), args, CallMode::Rpc)?/' "$SB/src/cli/commands/pages.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
