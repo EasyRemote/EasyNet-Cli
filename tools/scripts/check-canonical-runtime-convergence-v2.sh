@@ -8401,6 +8401,28 @@ for retired in (
     if retired in manifest:
         raise SystemExit(f"ability_manifest_exec_absence:retired_manifest_model:{retired}")
 
+manifest_production = manifest.split("#[cfg(test)]", 1)[0]
+chat_production = chat.split("#[cfg(test)]", 1)[0]
+default_chat_body = manifest_production.split("pub fn default_chat_manifest() -> AbilityManifest", 1)
+if len(default_chat_body) != 2:
+    raise SystemExit("ability_manifest_exec_absence:default_chat_manifest_missing")
+default_chat_body = default_chat_body[1]
+for retired in (
+    "legacy caller",
+    "pre-refactor",
+    "backward-compatible",
+    "historically the chat ability",
+    "legacy single-string",
+):
+    if retired in default_chat_body:
+        raise SystemExit(f"ability_manifest_exec_absence:chat_manifest_legacy_catalog_vocabulary:{retired}")
+for retired in (
+    "RPC: the legacy synchronous one-shot path",
+    "every legacy session",
+):
+    if retired in chat_production:
+        raise SystemExit(f"ability_manifest_exec_absence:chat_runtime_legacy_vocabulary:{retired}")
+
 required = (
     (manifest, "discovery-only metadata and has no executable runtime binding", "manifest_doc_missing"),
     (authoring, "no executable binding and cannot enter the live capability catalog", "authoring_reject_missing"),

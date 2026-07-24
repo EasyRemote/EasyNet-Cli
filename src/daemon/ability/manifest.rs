@@ -1337,11 +1337,9 @@ impl McpExec {
 /// fail loud.
 pub fn default_chat_manifest() -> AbilityManifest {
     // The schema below is the wire contract for the chat ability. It
-    // is intentionally backward-compatible: only `prompt` is required;
-    // every newer field is optional, so a legacy caller sending only
-    // `{ "prompt": "...", "context": "..." }` still validates and runs
-    // identically to the pre-refactor behaviour. The new fields exist
-    // so the chat handler can: (1) resume a multi-turn session via
+    // keeps `prompt` as the only required request field while the
+    // optional fields model the current canonical chat runtime:
+    // (1) resume a multi-turn session via
     // `session_id`, (2) decide which other abilities of the same agent
     // to expose to the LLM as tools (`skills`), (3) decide which
     // context loaders to run before invoking the LLM
@@ -1504,12 +1502,10 @@ pub fn default_chat_manifest() -> AbilityManifest {
         "additionalProperties": false,
     });
 
-    // Output schema documents what an RPC invocation returns. It is
-    // optional in AbilityManifest and historically the chat ability
-    // omitted it (chat replies were "opaque text"). With the refactor
-    // we publish a typed shape so the EasyNet frontend's ability
-    // detail card can render structured output, and so an agent
-    // composing other abilities can introspect what to expect.
+    // Output schema documents what an RPC invocation returns. `reply`
+    // is the primary assistant text, and the surrounding fields expose
+    // session, tool, context, usage, and latency facts for structured
+    // composition and UI rendering.
     //
     // Most fields are required because they appear on every RPC reply
     // — `usage` is the exception (LLM driver may not surface token
@@ -1524,9 +1520,7 @@ pub fn default_chat_manifest() -> AbilityManifest {
             },
             "reply": {
                 "type": "string",
-                "description": "The LLM's final reply text. The legacy single-string return \
-                                value lives here; pre-refactor callers can read just this \
-                                field and ignore everything else."
+                "description": "The assistant's final reply text for this chat turn."
             },
             "skills_loaded": {
                 "type": "array",
@@ -1861,8 +1855,8 @@ tool_name = "legacy-provider-field"
                 props.keys().collect::<Vec<_>>()
             );
         }
-        // `reply` is the legacy single-string return value; pre-
-        // refactor callers reading just this field must still work.
+        // `reply` is the canonical primary assistant text and remains
+        // required so callers can depend on a compact success field.
         assert_eq!(
             props
                 .get("reply")

@@ -190,8 +190,8 @@ pub fn register_for_agent(
     let ability = format!("{agent_name}.{ABILITY_VERB}");
     let owner = OwnerKind::Agent(agent_name.clone());
 
-    // RPC: the legacy synchronous one-shot path. Registered with
-    // the canonical chat manifest so the Frontend
+    // RPC: the synchronous one-shot path. Registered with the
+    // canonical chat manifest so the Frontend
     // `InvokeAbilityDialog` renders a SchemaForm (prompt /
     // context / session_id / skills / context_loaders / driver /
     // stream / attachments) instead of a free-text JSON box.
@@ -1847,11 +1847,11 @@ fn string_array(value: Option<&Value>, field: &str) -> anyhow::Result<Vec<String
 /// any shape that matches that form regardless of the version nibble
 /// — accepting a UUIDv4 the operator fabricated for a test or replay
 /// is harmless; codex itself does the strict validation when we hand
-/// the id to `exec resume`. Strings that match our local `uuid_like`
-/// fallback (`<32-hex>-<16-hex>`) are intentionally NOT accepted —
-/// those are the chat ability's own minted ids that no resume-capable
-/// driver knows about; passing them through would force the driver
-/// into a UUID-parse failure on every legacy session.
+/// the id to `exec resume`. Strings that match the chat ability's
+/// locally minted id shape (`<32-hex>-<16-hex>`) are intentionally NOT
+/// accepted — no resume-capable driver owns those ids, so forwarding
+/// them would turn a local session token into a driver UUID parse
+/// failure.
 fn looks_like_thread_id(s: &str) -> bool {
     let bytes = s.as_bytes();
     if bytes.len() != 36 {
