@@ -13,10 +13,11 @@ pub(crate) fn status_from_remote_failure(
     raw_error: &str,
     failure: Option<&SessionFailure>,
 ) -> Status {
-    let detail = failure
+    let raw_detail = failure
         .map(SessionFailure::status_detail)
         .filter(|detail| !detail.trim().is_empty())
         .unwrap_or_else(|| raw_error.trim().to_string());
+    let detail = canonical_remote_failure_detail(&raw_detail);
     let code = failure
         .map(|failure| status_code_for_failure(&failure.code, &detail))
         .unwrap_or_else(|| status_code_for_failure("", &detail));
@@ -109,6 +110,37 @@ fn is_caller_signer_unavailable_message(code: &str, detail: &str) -> bool {
         || detail.contains("SELF-IDENTITY:")
 }
 
+fn canonical_remote_failure_detail(detail: &str) -> String {
+    let detail = detail.trim();
+    if is_caller_signer_unavailable_message("", detail) {
+        return canonical_caller_signer_unavailable_detail(detail);
+    }
+    detail.to_string()
+}
+
+fn canonical_caller_signer_unavailable_detail(detail: &str) -> String {
+    match caller_ura_from_signer_detail(detail) {
+        Some(caller_ura) => format!(
+            "CALLER_SIGNER_UNAVAILABLE: remote invocation requires a caller signer for \
+             `{caller_ura}`; load or provision that identity in the local key service"
+        ),
+        None => "CALLER_SIGNER_UNAVAILABLE: remote invocation requires a caller signer; \
+             load or provision that identity in the local key service"
+            .to_string(),
+    }
+}
+
+fn caller_ura_from_signer_detail(detail: &str) -> Option<&str> {
+    let (_, tail) = detail.split_once("for `")?;
+    let (caller_ura, _) = tail.split_once('`')?;
+    let caller_ura = caller_ura.trim();
+    if caller_ura.is_empty() {
+        None
+    } else {
+        Some(caller_ura)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -181,7 +213,17 @@ mod tests {
         let status = status_from_remote_failure("remote Invoke", "ignored", Some(&failure));
 
         assert_eq!(status.code(), Code::PermissionDenied);
+        assert!(status.message().contains("CALLER_SIGNER_UNAVAILABLE"));
         assert!(status.message().contains("requires a caller signer"));
-        assert!(status.message().contains("keyring entry not found"));
+        assert!(status
+            .message()
+            .contains("easynet:///r/localhost/user/alice"));
+        assert!(
+            !status.message().contains("keyring entry not found")
+                && !status.message().contains("keyring rejected request")
+                && !status.message().contains("self-identity:"),
+            "remote failure must not expose keyring implementation detail: {}",
+            status.message()
+        );
     }
 }

@@ -10443,6 +10443,57 @@ for required_test in (
 PY
 }
 
+check_remote_failure_caller_signer_projection_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local remote_failure="$cli_root/src/daemon/invocation/dispatch/remote_failure.rs"
+  [[ -f "$remote_failure" ]] || fail "remote failure projection source is missing: ${remote_failure#$cli_root/}"
+
+  "$PYTHON_BIN" - "$remote_failure" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+production = text.split("\n#[cfg(test)]", 1)[0]
+
+for required in (
+    "fn canonical_remote_failure_detail(",
+    "fn canonical_caller_signer_unavailable_detail(",
+    "fn caller_ura_from_signer_detail(",
+    "CALLER_SIGNER_UNAVAILABLE: remote invocation requires a caller signer",
+):
+    if required not in production:
+        raise SystemExit(f"remote_failure_caller_signer_projection:missing:{required}")
+
+status = re.search(
+    r"pub\(crate\) fn status_from_remote_failure\([^)]*\) -> Status \{(?P<body>.*?)\n\}",
+    production,
+    re.S,
+)
+if status is None:
+    raise SystemExit("remote_failure_caller_signer_projection:status_function_missing")
+body = status.group("body")
+if "let raw_detail =" not in body or "let detail = canonical_remote_failure_detail(&raw_detail);" not in body:
+    raise SystemExit("remote_failure_caller_signer_projection:status_does_not_sanitize_detail")
+if "format!(\"{context}: {raw_detail}\")" in body or "format!(\"{context}: {detail}\"" not in body:
+    raise SystemExit("remote_failure_caller_signer_projection:status_uses_unsanitized_detail")
+
+test = text.split("\n#[cfg(test)]", 1)[1] if "\n#[cfg(test)]" in text else ""
+for required_test in (
+    "caller_signer_readiness_is_not_downgraded_to_ability_absent",
+    "status.message().contains(\"CALLER_SIGNER_UNAVAILABLE\")",
+    "!status.message().contains(\"keyring entry not found\")",
+    "!status.message().contains(\"keyring rejected request\")",
+    "!status.message().contains(\"self-identity:\")",
+):
+    if required_test not in test:
+        raise SystemExit(f"remote_failure_caller_signer_projection:missing_test:{required_test}")
+
+if "assert!(status.message().contains(\"keyring entry not found\"))" in text:
+    raise SystemExit("remote_failure_caller_signer_projection:retired_keyring_positive_assertion")
+PY
+}
+
 check_daemon_runtime_identity_vocabulary_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local identity="$cli_root/src/daemon/identity/local_invocation.rs"
@@ -13840,6 +13891,35 @@ fn checked_remote_invocation_ura() {}
 EOF
   if ( CLI_ROOT="$tmp/remote-invocation-signer-first-legacy"; check_remote_invocation_signer_first_contract ) >/dev/null 2>&1; then
     fail "self-test expected remote invocation signer-first gate to fail"
+  fi
+  mkdir -p "$tmp/remote-failure-caller-signer-projection-legacy/src/daemon/invocation/dispatch"
+  cat >"$tmp/remote-failure-caller-signer-projection-legacy/src/daemon/invocation/dispatch/remote_failure.rs" <<'EOF'
+pub(crate) fn status_from_remote_failure(context: &str, raw_error: &str, failure: Option<&SessionFailure>) -> Status {
+    let detail = failure
+        .map(SessionFailure::status_detail)
+        .filter(|detail| !detail.trim().is_empty())
+        .unwrap_or_else(|| raw_error.trim().to_string());
+    Status::new(Code::PermissionDenied, format!("{context}: {detail}"))
+}
+
+fn is_caller_signer_unavailable_message(code: &str, detail: &str) -> bool {
+    let detail = detail.to_ascii_uppercase();
+    code == "CALLER_SIGNER_UNAVAILABLE"
+        || detail.contains("REQUIRES A CALLER SIGNER")
+        || detail.contains("KEYRING ENTRY NOT FOUND")
+        || detail.contains("SELF-IDENTITY:")
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn caller_signer_readiness_is_not_downgraded_to_ability_absent() {
+        assert!(status.message().contains("keyring entry not found"));
+    }
+}
+EOF
+  if ( CLI_ROOT="$tmp/remote-failure-caller-signer-projection-legacy"; check_remote_failure_caller_signer_projection_contract ) >/dev/null 2>&1; then
+    fail "self-test expected remote failure caller signer projection gate to fail"
   fi
   mkdir -p "$tmp/runtime-identity-vocabulary-legacy/src/daemon/identity" \
     "$tmp/runtime-identity-vocabulary-legacy/src/daemon/ability/authority"
@@ -17747,6 +17827,7 @@ EOF
   check_sdk_principal_projection_fail_closed_contract
   check_runtime_owner_signer_custody_contract
   check_remote_invocation_signer_first_contract
+  check_remote_failure_caller_signer_projection_contract
   check_daemon_runtime_identity_vocabulary_contract
   check_key_custody_boundary_contract
   check_daemon_mission_eal_boundary_contract
@@ -17944,6 +18025,7 @@ check_sdk_runtime_recovery_report_fail_closed_contract
 check_sdk_principal_projection_fail_closed_contract
 check_runtime_owner_signer_custody_contract
 check_remote_invocation_signer_first_contract
+check_remote_failure_caller_signer_projection_contract
 check_daemon_runtime_identity_vocabulary_contract
 check_key_custody_boundary_contract
 check_daemon_mission_eal_boundary_contract

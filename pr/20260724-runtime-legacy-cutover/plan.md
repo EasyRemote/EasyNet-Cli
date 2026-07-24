@@ -929,3 +929,51 @@ architecture rather than add feature surface.
   - `tools/scripts/check-canonical-runtime-convergence-v2.sh`
   - `tools/scripts/check-architecture-convergence.sh`
   - `git diff --check`
+
+## Iteration 22 candidate policy
+
+- Focus on remote caller-signer failure projection. codegraph/rg found that
+  `remote_failure.rs` still classified legacy typed details containing
+  `self-identity:` / `keyring entry not found` and the unit test required those
+  keyring details to remain in the returned gRPC message.
+- The root abstraction problem is an error-boundary leak: remote descriptor
+  resolve / invoke should expose the canonical runtime state
+  `CALLER_SIGNER_UNAVAILABLE`, not the daemon key-service storage failure that
+  happened to prove signer custody is absent.
+- The intended cutover is:
+  - keep recognizing old raw details for classification so no security
+    downgrade occurs;
+  - sanitize caller-signer-unavailable details before constructing transport
+    status;
+  - preserve caller URA when it is present because it identifies the missing
+    canonical runtime principal;
+  - reject any future production path that emits `self-identity:` or keyring
+    storage vocabulary through remote failure status.
+- Verification must prove the remote failure status maps to
+  `PermissionDenied`, contains `CALLER_SIGNER_UNAVAILABLE`, and omits keyring
+  implementation details.
+
+## Iteration 22 decision log
+
+- Added `canonical_remote_failure_detail` as the single projection boundary
+  before remote failure details become gRPC transport status messages.
+- Added caller-signer-unavailable canonicalization that preserves the missing
+  caller URA when present, while replacing `self-identity:` / keyring storage
+  detail with `CALLER_SIGNER_UNAVAILABLE`.
+- Kept legacy raw-detail recognition in `is_caller_signer_unavailable_message`
+  so old upstream failure text is still classified as `PermissionDenied` rather
+  than downgraded to `NotFound`.
+- Updated the remote failure test to require the canonical code and to reject
+  `keyring entry not found`, `keyring rejected request`, and `self-identity:`
+  in the returned status message.
+- Added SPEC v2 gate
+  `check_remote_failure_caller_signer_projection_contract` plus a negative
+  self-test fixture rejecting unsanitized caller-signer failure projection.
+- Verification passed:
+  - `cargo test -q daemon::invocation::dispatch::remote_failure`
+  - `cargo check -q`
+  - `cargo fmt --check`
+  - `tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  - `tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - `tools/scripts/check-architecture-convergence.sh`
+  - `git diff --check`
