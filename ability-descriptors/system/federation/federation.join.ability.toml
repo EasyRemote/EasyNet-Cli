@@ -24,10 +24,6 @@ additionalProperties = false
 type = "string"
 description = "Device URA to admit into the realm."
 
-[input_schema.properties.pairing_secret]
-type = "string"
-description = "Optional pairing secret carried by legacy join flows."
-
 [input_schema.properties.principal_enrollment]
 type = "object"
 description = "Optional product-neutral principal enrollment proof."

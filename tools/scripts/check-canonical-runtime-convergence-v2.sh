@@ -6563,6 +6563,87 @@ if 'serde_json::json!({' in heartbeat and '"since_abilities_revision"' in heartb
 PY
 }
 
+check_federation_join_ingress_strict_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local descriptor="$cli_root/ability-descriptors/system/federation/federation.join.ability.toml"
+  local contracts="$cli_root/src/daemon/ability/catalog/daemon_invocation_contracts.rs"
+  local client="$cli_root/src/daemon/federation/client/ability_contract.rs"
+  [[ -f "$descriptor" ]] || fail "federation.join descriptor is missing: ${descriptor#$cli_root/}"
+  [[ -f "$contracts" ]] || fail "daemon invocation contracts are missing: ${contracts#$cli_root/}"
+  [[ -f "$client" ]] || fail "federation client ability contract is missing: ${client#$cli_root/}"
+
+  "$PYTHON_BIN" - "$descriptor" "$contracts" "$client" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+descriptor = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+contracts = Path(sys.argv[2]).read_text(encoding="utf-8", errors="replace")
+client = Path(sys.argv[3]).read_text(encoding="utf-8", errors="replace")
+
+for required in (
+    'name = "federation.join"',
+    'capability_state = "cutover_ready"',
+    'required = ["membership_ura", "realm", "public_key_hex"]',
+    '[input_schema.properties.membership_ura]',
+    '[input_schema.properties.realm]',
+    '[input_schema.properties.public_key_hex]',
+    '[input_schema.properties.principal_enrollment]',
+    'additionalProperties = false',
+):
+    if required not in descriptor:
+        raise SystemExit(f"federation_join_ingress:descriptor_missing:{required}")
+for retired in (
+    "pairing_secret",
+    "legacy join flows",
+    "Optional pairing secret",
+):
+    if retired in descriptor:
+        raise SystemExit(f"federation_join_ingress:descriptor_retired:{retired}")
+
+schema_case = contracts.split("ABILITY_FEDERATION_JOIN => object_schema(", 1)
+if len(schema_case) != 2:
+    raise SystemExit("federation_join_ingress:schema_case_missing")
+schema_body = schema_case[1].split("ABILITY_FEDERATION_ADVERTISE_AGENT => object_schema(", 1)[0]
+for required in (
+    '"membership_ura"',
+    '"realm"',
+    '"public_key_hex"',
+    '"principal_enrollment"',
+    '&["membership_ura", "realm", "public_key_hex"]',
+    "false",
+):
+    if required not in schema_body:
+        raise SystemExit(f"federation_join_ingress:schema_missing:{required}")
+for retired in ('"pairing_secret"', '"token"', "legacy join flows"):
+    if retired in schema_body:
+        raise SystemExit(f"federation_join_ingress:schema_retired:{retired}")
+
+args_match = re.search(r"pub struct JoinArgs \{(?P<body>.*?)\n\}", client, re.S)
+if not args_match:
+    raise SystemExit("federation_join_ingress:client_args_missing")
+args_body = args_match.group("body")
+for required in (
+    "pub realm: String",
+    "pub membership_ura: String",
+    "pub public_key_hex: String",
+    "pub principal_enrollment: Option<PrincipalEnrollmentProof>",
+    "join_args_does_not_emit_retired_pairing_secret",
+    "join_args_can_carry_product_neutral_principal_enrollment_proof",
+    "principal_enrollment_proof_rejects_product_account_aliases",
+):
+    if required not in client:
+        raise SystemExit(f"federation_join_ingress:client_missing:{required}")
+for retired in (
+    "pub pairing_secret",
+    "pairing_secret: Option",
+    "pub token",
+):
+    if retired in args_body:
+        raise SystemExit(f"federation_join_ingress:client_retired:{retired}")
+PY
+}
+
 check_federation_receipt_facts_strict_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local client="$cli_root/src/daemon/federation/client/ability_contract.rs"
@@ -18280,6 +18361,50 @@ EOF
   if ( CLI_ROOT="$tmp/cli-federation-feature-off-legacy"; check_cli_federation_feature_off_capability_contract ) >/dev/null 2>&1; then
     fail "self-test expected CLI federation feature-off legacy gate to fail"
   fi
+  mkdir -p "$tmp/federation-join-legacy-token/ability-descriptors/system/federation" \
+    "$tmp/federation-join-legacy-token/src/daemon/ability/catalog" \
+    "$tmp/federation-join-legacy-token/src/daemon/federation/client"
+  cat >"$tmp/federation-join-legacy-token/ability-descriptors/system/federation/federation.join.ability.toml" <<'EOF'
+name = "federation.join"
+capability_state = "cutover_ready"
+required = ["membership_ura", "realm", "public_key_hex"]
+additionalProperties = false
+[input_schema.properties.membership_ura]
+[input_schema.properties.realm]
+[input_schema.properties.public_key_hex]
+[input_schema.properties.principal_enrollment]
+[input_schema.properties.pairing_secret]
+description = "Optional pairing secret carried by legacy join flows."
+EOF
+  cat >"$tmp/federation-join-legacy-token/src/daemon/ability/catalog/daemon_invocation_contracts.rs" <<'EOF'
+fn input_schema_for(name: &str) -> Option<Value> {
+  Some(match name {
+    ABILITY_FEDERATION_JOIN => object_schema(json!({
+      "membership_ura": {},
+      "realm": {},
+      "public_key_hex": {},
+      "principal_enrollment": {},
+      "pairing_secret": {}
+    }), &["membership_ura", "realm", "public_key_hex"], false),
+    ABILITY_FEDERATION_ADVERTISE_AGENT => object_schema(json!({}), &[], true),
+  })
+}
+EOF
+  cat >"$tmp/federation-join-legacy-token/src/daemon/federation/client/ability_contract.rs" <<'EOF'
+pub struct JoinArgs {
+  pub realm: String,
+  pub membership_ura: String,
+  pub public_key_hex: String,
+  pub principal_enrollment: Option<PrincipalEnrollmentProof>,
+  pub pairing_secret: Option<String>,
+}
+fn join_args_does_not_emit_retired_pairing_secret() {}
+fn join_args_can_carry_product_neutral_principal_enrollment_proof() {}
+fn principal_enrollment_proof_rejects_product_account_aliases() {}
+EOF
+  if ( CLI_ROOT="$tmp/federation-join-legacy-token"; check_federation_join_ingress_strict_contract ) >/dev/null 2>&1; then
+    fail "self-test expected federation.join legacy pairing_secret gate to fail"
+  fi
   check_mcp_reflection_async_bridge_contract
   check_runtime_session_projection_accessor_contract
   check_ffi_runtime_sizing_policy_contract
@@ -18380,6 +18505,7 @@ EOF
   check_session_prelude_credentials_contract
   check_session_prelude_receipt_contract
   check_federation_heartbeat_ingress_strict_contract
+  check_federation_join_ingress_strict_contract
   check_federation_receipt_facts_strict_contract
   check_federation_revoke_ingress_strict_contract
   check_device_settings_loader_contract
@@ -18572,6 +18698,7 @@ check_session_prelude_credentials_contract
 check_start_attach_user_signer_readiness_contract
 check_session_prelude_receipt_contract
 check_federation_heartbeat_ingress_strict_contract
+check_federation_join_ingress_strict_contract
 check_federation_receipt_facts_strict_contract
 check_federation_revoke_ingress_strict_contract
 check_device_settings_loader_contract

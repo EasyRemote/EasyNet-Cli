@@ -1257,3 +1257,41 @@ architecture rather than add feature surface.
   - `tools/scripts/check-canonical-runtime-convergence-v2.sh`
   - `tools/scripts/check-architecture-convergence.sh`
   - `git diff --check`
+
+## Iteration 29 candidate policy
+
+- Focus on cutover-ready descriptor ingress. Once a runtime ability is marked
+  `cutover_ready`, its public schema must describe only canonical runtime facts;
+  product pairing or old bootstrap carriers must stay outside the ability tuple.
+- codegraph and targeted descriptor inspection found `federation.join` still
+  publishing `pairing_secret` as an optional input with explicit "legacy join
+  flows" wording, while the production `JoinArgs` DTO already emits only
+  `realm`, `membership_ura`, `public_key_hex`, and optional
+  `principal_enrollment`.
+- The root abstraction problem is schema authority drift: products and SDKs read
+  the descriptor/catalog as the public runtime contract, so a legacy descriptor
+  field remains active even when the Rust client no longer sends it.
+- The selected cutover is to remove `pairing_secret` from the canonical
+  descriptor and add SPEC v2 coverage that keeps descriptor, generated catalog
+  schema, and client DTO aligned.
+
+## Iteration 29 decision log
+
+- Product pairing tokens remain valid only in the CLI preflight path that
+  reserves/validates a pairing session before runtime join. They are not a
+  canonical `federation.join` ability argument.
+- `federation.join` now exposes a product-neutral runtime request:
+  `realm`, `membership_ura`, `public_key_hex`, and optional
+  `principal_enrollment`.
+- SPEC v2 now rejects any reintroduction of `pairing_secret`, generic `token`,
+  or "legacy join flows" wording in the cutover-ready join descriptor/catalog
+  contract, and includes a negative self-test fixture.
+- Verification passed:
+  - `/Users/macbook.silan.tech/.local/bin/codegraph explore "federation.join token legacy join pairing secret descriptor"`
+  - `cargo test -q join_args_does_not_emit_retired_pairing_secret`
+  - `cargo fmt --check`
+  - `bash -n tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - `tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  - `tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - `tools/scripts/check-architecture-convergence.sh`
+  - `git diff --check`
