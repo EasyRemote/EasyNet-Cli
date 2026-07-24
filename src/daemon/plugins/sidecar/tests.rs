@@ -24,10 +24,10 @@ fn sidecar_open_frame_carries_daemon_invocation_envelope() {
     let frame = SidecarRequestFrame::Invoke {
         call_id: "call-1".to_string(),
         invocation: SidecarInvocationEnvelope {
-            caller: "easynet:///r/acme/user/alice".to_string(),
-            callee: "easynet:///r/acme/device/mac".to_string(),
-            ability: "device.test.echo".to_string(),
-            subject: "easynet:///r/acme/resource/display.primary".to_string(),
+            caller_ura: "easynet:///r/acme/user/alice".to_string(),
+            callee_ura: "easynet:///r/acme/device/mac".to_string(),
+            ability_ura: "device.test.echo".to_string(),
+            subject_ura: "easynet:///r/acme/resource/display.primary".to_string(),
             invocation_nonce: vec![7; 16],
             causal_context: json!({"trace_id": "trace-1"}),
             args: json!({"message": "hello"}),
@@ -38,15 +38,15 @@ fn sidecar_open_frame_carries_daemon_invocation_envelope() {
     assert_eq!(encoded["type"], json!("invoke"));
     assert_eq!(encoded["call_id"], json!("call-1"));
     assert_eq!(
-        encoded["invocation"]["caller"],
+        encoded["invocation"]["caller_ura"],
         json!("easynet:///r/acme/user/alice")
     );
     assert_eq!(
-        encoded["invocation"]["callee"],
+        encoded["invocation"]["callee_ura"],
         json!("easynet:///r/acme/device/mac")
     );
     assert_eq!(
-        encoded["invocation"]["subject"],
+        encoded["invocation"]["subject_ura"],
         json!("easynet:///r/acme/resource/display.primary")
     );
     assert_eq!(
@@ -57,7 +57,7 @@ fn sidecar_open_frame_carries_daemon_invocation_envelope() {
         encoded["invocation"]["causal_context"],
         json!({"trace_id": "trace-1"})
     );
-    assert!(encoded.get("ability").is_none());
+    assert!(encoded.get("ability_ura").is_none());
     assert!(encoded.get("args").is_none());
 }
 
@@ -67,10 +67,10 @@ fn sidecar_request_frame_rejects_unknown_variant_fields() {
         "type": "invoke",
         "call_id": "call-1",
         "invocation": {
-            "caller": "easynet:///r/acme/user/alice",
-            "callee": "easynet:///r/acme/device/mac",
-            "ability": "device.test.echo",
-            "subject": "easynet:///r/acme/resource/display.primary",
+            "caller_ura": "easynet:///r/acme/user/alice",
+            "callee_ura": "easynet:///r/acme/device/mac",
+            "ability_ura": "device.test.echo",
+            "subject_ura": "easynet:///r/acme/resource/display.primary",
             "invocation_nonce": vec![7; 16],
             "causal_context": {},
             "args": {}
@@ -89,10 +89,10 @@ fn sidecar_request_frame_rejects_unknown_variant_fields() {
 #[test]
 fn sidecar_invocation_envelope_rejects_unknown_identity_fields() {
     let raw = json!({
-        "caller": "easynet:///r/acme/user/alice",
-        "callee": "easynet:///r/acme/device/mac",
-        "ability": "device.test.echo",
-        "subject": "easynet:///r/acme/resource/display.primary",
+        "caller_ura": "easynet:///r/acme/user/alice",
+        "callee_ura": "easynet:///r/acme/device/mac",
+        "ability_ura": "device.test.echo",
+        "subject_ura": "easynet:///r/acme/resource/display.primary",
         "invocation_nonce": vec![7; 16],
         "causal_context": {},
         "args": {},
@@ -159,10 +159,10 @@ printf '%s\n' '{{"type":"result","call_id":"call-1","value":{{"ok":true}}}}'
         .invoke_rpc(
             "call-1",
             SidecarInvocationEnvelope {
-                caller: "easynet:///r/acme/user/alice".to_string(),
-                callee: "easynet:///r/acme/device/mac".to_string(),
-                ability: "device.test.echo".to_string(),
-                subject: "easynet:///r/acme/resource/display.primary".to_string(),
+                caller_ura: "easynet:///r/acme/user/alice".to_string(),
+                callee_ura: "easynet:///r/acme/device/mac".to_string(),
+                ability_ura: "device.test.echo".to_string(),
+                subject_ura: "easynet:///r/acme/resource/display.primary".to_string(),
                 invocation_nonce: vec![9; 16],
                 causal_context: json!({"trace_id": "trace-2"}),
                 args: json!({"message": "hello"}),
@@ -175,15 +175,15 @@ printf '%s\n' '{{"type":"result","call_id":"call-1","value":{{"ok":true}}}}'
         serde_json::from_str(&fs::read_to_string(captured).expect("captured request"))
             .expect("captured request json");
     assert_eq!(
-        captured["invocation"]["caller"],
+        captured["invocation"]["caller_ura"],
         json!("easynet:///r/acme/user/alice")
     );
     assert_eq!(
-        captured["invocation"]["callee"],
+        captured["invocation"]["callee_ura"],
         json!("easynet:///r/acme/device/mac")
     );
     assert_eq!(
-        captured["invocation"]["subject"],
+        captured["invocation"]["subject_ura"],
         json!("easynet:///r/acme/resource/display.primary")
     );
     assert_eq!(
@@ -520,10 +520,10 @@ printf '%s\n' '{"type":"terminal","call_id":"call-1","reason":"second"}'
 
 fn test_invocation() -> SidecarInvocationEnvelope {
     SidecarInvocationEnvelope {
-        caller: "easynet:///r/acme/user/alice".to_string(),
-        callee: "easynet:///r/acme/device/mac".to_string(),
-        ability: "device.test.stream".to_string(),
-        subject: "easynet:///r/acme/resource/display.primary".to_string(),
+        caller_ura: "easynet:///r/acme/user/alice".to_string(),
+        callee_ura: "easynet:///r/acme/device/mac".to_string(),
+        ability_ura: "device.test.stream".to_string(),
+        subject_ura: "easynet:///r/acme/resource/display.primary".to_string(),
         invocation_nonce: vec![1; 16],
         causal_context: json!({"trace_id": "trace-stream"}),
         args: json!({"watch": true}),

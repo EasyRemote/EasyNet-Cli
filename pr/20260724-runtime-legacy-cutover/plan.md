@@ -977,3 +977,66 @@ architecture rather than add feature surface.
   - `tools/scripts/check-canonical-runtime-convergence-v2.sh`
   - `tools/scripts/check-architecture-convergence.sh`
   - `git diff --check`
+
+## Iteration 23 candidate policy
+
+- Focus on pluginexec sidecar invocation tuple naming. codegraph found the daemon
+  sidecar frame and all language provider helpers still expose `caller`,
+  `callee`, `subject`, and `ability` even though the canonical runtime model and
+  SDK public APIs use `caller_ura`, `callee_ura`, `subject_ura`, and
+  `ability_ura`.
+- The root abstraction problem is a provider sidecar schema that teaches plugin
+  authors a non-canonical tuple vocabulary at the exact boundary where product
+  code first handles daemon-admitted invocations.
+- The intended cutover is:
+  - daemon sidecar frames serialize canonical `*_ura` tuple fields;
+  - provider helpers in Go, Python, Node, Java, and Rust expose matching
+    canonical field/property names;
+  - old sidecar identity aliases are rejected by strict frame decoding rather
+    than accepted as compatibility fields;
+  - SPEC v2 rejects reintroducing bare `caller/callee/subject/ability` sidecar
+    tuple fields in production provider helpers.
+- Verification must prove daemon sidecar tests and provider helper tests pass,
+  and SPEC v2 must reject legacy sidecar tuple vocabulary.
+
+## Iteration 23 decision log
+
+- codegraph confirmed `SidecarInvocationEnvelope` is the daemon-owned sidecar
+  frame consumed by RPC, stream, and bidi sidecar hosts, and that Go, Python,
+  Rust, Java, and Node provider helpers are the public plugin-author projection
+  of the same frame.
+- The cutover renamed the daemon frame fields from `caller`, `callee`,
+  `ability`, and `subject` to `caller_ura`, `callee_ura`, `ability_ura`, and
+  `subject_ura`.
+- The daemon projection now uses the already-admitted `EnvelopeContext` for
+  caller/callee/subject and the selected sidecar ability URA parameter for
+  `ability_ura`; this removes the prior unused ability parameter and prevents
+  provider-local ability reinterpretation.
+- The MCP exec invocation observation context was migrated to the same
+  canonical `*_ura` tuple vocabulary so sidecar-like provider execution does not
+  retain a second tuple schema.
+- Go, Python, Rust, Java, and Node provider helpers now expose canonical tuple
+  names. Language facades keep idiomatic casing where appropriate
+  (`CallerURA` / `callerURA`) while the sidecar wire schema remains
+  snake-case `*_ura`.
+- Provider helpers now reject retired tuple aliases even when canonical fields
+  are present, preventing a hidden compatibility path where old
+  `caller/callee/ability/subject` keys are silently ignored.
+- SPEC v2 `check_plugin_sidecar_helper_matrix_contract` now requires canonical
+  daemon/provider tuple fields and alias rejection, and includes a negative
+  fixture for legacy sidecar tuple vocabulary.
+- Verification passed:
+  - `bash -n tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - `cargo fmt --check`
+  - `cargo test -q daemon::plugins::sidecar`
+  - `cargo test -q --manifest-path sdk/rust/provider/easynet/pluginexec/Cargo.toml`
+  - `(cd sdk/go && go test ./provider/easynet/pluginexec)`
+  - `PYTHONPATH=/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli/sdk/python:/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/python python3 -m unittest sdk/python/tests/test_plugin_exec.py`
+  - `node --test sdk/node/test/pluginexec.test.mjs`
+  - `(cd sdk/java && mvn -q -Dtest=run.runtime.sdk.provider.easynet.pluginexec.SidecarRuntimeTest test)`
+  - an equivalent positive/negative tuple audit for the new SPEC v2 rule.
+- Full `tools/scripts/check-canonical-runtime-convergence-v2.sh` and
+  `--self-test` were attempted in this environment but were killed with exit
+  `137` before emitting a SPEC failure. This is not counted as passed; the next
+  iteration must still re-run the full gate in an environment that can complete
+  it.

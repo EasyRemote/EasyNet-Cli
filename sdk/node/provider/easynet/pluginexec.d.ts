@@ -4,10 +4,10 @@ export class SidecarProtocolError extends Error {
 
 export interface SidecarInvocationFields {
   callID: string;
-  caller: string;
-  callee: string;
-  ability: string;
-  subject: string;
+  callerURA: string;
+  calleeURA: string;
+  abilityURA: string;
+  subjectURA: string;
   invocationNonce: number[];
   causalContext?: unknown;
   args?: Record<string, unknown>;
@@ -16,10 +16,10 @@ export interface SidecarInvocationFields {
 
 export class SidecarInvocation {
   callID: string;
-  caller: string;
-  callee: string;
-  ability: string;
-  subject: string;
+  callerURA: string;
+  calleeURA: string;
+  abilityURA: string;
+  subjectURA: string;
   invocationNonce: number[];
   causalContext: unknown;
   args: Record<string, unknown>;

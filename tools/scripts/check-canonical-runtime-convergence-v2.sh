@@ -9180,6 +9180,11 @@ expected_helper_files = {
         "sdk/node/test/pluginexec.test.mjs",
     ],
 }
+expected_daemon_sidecar_files = [
+    "src/daemon/plugins/sidecar/frame.rs",
+    "src/daemon/plugins/sidecar.rs",
+    "src/daemon/plugins/host_api.rs",
+]
 for language, helper in expected_helpers.items():
     row = rows[(language, "ExecInvoke")]
     if row["state"] not in {"ProviderBacked", "CutoverReady"}:
@@ -9191,6 +9196,158 @@ for language, helper in expected_helpers.items():
     for rel_path in expected_helper_files[language]:
         if not (cli_root / rel_path).is_file():
             raise SystemExit(f"plugin_template_helper_source_missing:{language}:{rel_path}")
+for rel_path in expected_daemon_sidecar_files:
+    if not (cli_root / rel_path).is_file():
+        raise SystemExit(f"plugin_sidecar_daemon_source_missing:{rel_path}")
+
+def read_rel(rel_path: str) -> str:
+    return (cli_root / rel_path).read_text(encoding="utf-8")
+
+sidecar_frame = read_rel("src/daemon/plugins/sidecar/frame.rs")
+sidecar_projection = read_rel("src/daemon/plugins/sidecar.rs")
+host_api = read_rel("src/daemon/plugins/host_api.rs")
+helper_sources = {
+    language: "\n".join(read_rel(rel_path) for rel_path in files)
+    for language, files in expected_helper_files.items()
+}
+all_sidecar_sources = {
+    "daemon_frame": sidecar_frame,
+    "daemon_projection": sidecar_projection,
+    "daemon_host_api": host_api,
+    **helper_sources,
+}
+
+required_tuple_keys = ("caller_ura", "callee_ura", "ability_ura", "subject_ura")
+for key in required_tuple_keys:
+    if f"pub {key}: String" not in sidecar_frame:
+        raise SystemExit(f"plugin_sidecar_daemon_frame_missing:{key}")
+    if f'"{key}"' not in host_api:
+        raise SystemExit(f"plugin_sidecar_host_api_context_missing:{key}")
+if "ability_ura: ability_ura.to_string()" not in sidecar_projection:
+    raise SystemExit("plugin_sidecar_projection_ignores_selected_ability_ura")
+for getter in ("env.caller().to_string()", "env.callee().to_string()", "env.subject().to_string()"):
+    if getter not in sidecar_projection:
+        raise SystemExit(f"plugin_sidecar_projection_missing_context_getter:{getter}")
+
+required_helper_tokens = {
+    "rust": [
+        "pub caller_ura: String",
+        "reject_legacy_tuple_aliases(&invocation)?",
+        'take_required_string(&mut invocation, "caller_ura")?',
+        'take_required_string(&mut invocation, "callee_ura")?',
+        'take_required_string(&mut invocation, "ability_ura")?',
+        'take_required_string(&mut invocation, "subject_ura")?',
+    ],
+    "go": [
+        "CallerURA",
+        "rejectLegacyTupleAliases(f.Invocation)",
+        '`json:"caller_ura"`',
+        '`json:"callee_ura"`',
+        '`json:"ability_ura"`',
+        '`json:"subject_ura"`',
+    ],
+    "python": [
+        "caller_ura: str",
+        "_reject_legacy_tuple_aliases(invocation)",
+        '_required_string(invocation, "caller_ura")',
+        '_required_string(invocation, "callee_ura")',
+        '_required_string(invocation, "ability_ura")',
+        '_required_string(invocation, "subject_ura")',
+    ],
+    "node": [
+        "callerURA",
+        "rejectLegacyTupleAliases(invocation)",
+        "invocation.caller_ura",
+        "invocation.callee_ura",
+        "invocation.ability_ura",
+        "invocation.subject_ura",
+    ],
+    "java": [
+        "String callerURA",
+        "rejectLegacyTupleAliases(invocation)",
+        'requiredString(invocation, "caller_ura")',
+        'requiredString(invocation, "callee_ura")',
+        'requiredString(invocation, "ability_ura")',
+        'requiredString(invocation, "subject_ura")',
+    ],
+}
+for language, tokens in required_helper_tokens.items():
+    source = helper_sources[language]
+    for token in tokens:
+        if token not in source:
+            raise SystemExit(f"plugin_sidecar_helper_tuple_missing:{language}:{token}")
+
+legacy_public_field_patterns = {
+    "daemon_frame": [
+        r"\bpub\s+caller\s*:",
+        r"\bpub\s+callee\s*:",
+        r"\bpub\s+ability\s*:",
+        r"\bpub\s+subject\s*:",
+    ],
+    "rust": [
+        r"\bpub\s+caller\s*:",
+        r"\bpub\s+callee\s*:",
+        r"\bpub\s+ability\s*:",
+        r"\bpub\s+subject\s*:",
+        r'take_required_string\(&mut invocation,\s*"caller"\)',
+        r'take_required_string\(&mut invocation,\s*"callee"\)',
+        r'take_required_string\(&mut invocation,\s*"ability"\)',
+        r'take_required_string\(&mut invocation,\s*"subject"\)',
+    ],
+    "go": [
+        r"\bCaller\s+string\b",
+        r"\bCallee\s+string\b",
+        r"\bAbility\s+string\b",
+        r"\bSubject\s+string\b",
+        r'`json:"caller"`',
+        r'`json:"callee"`',
+        r'`json:"ability"`',
+        r'`json:"subject"`',
+    ],
+    "python": [
+        r"^\s+caller:\s*str\b",
+        r"^\s+callee:\s*str\b",
+        r"^\s+ability:\s*str\b",
+        r"^\s+subject:\s*str\b",
+        r'_required_string\(invocation,\s*"caller"\)',
+        r'_required_string\(invocation,\s*"callee"\)',
+        r'_required_string\(invocation,\s*"ability"\)',
+        r'_required_string\(invocation,\s*"subject"\)',
+    ],
+    "node": [
+        r"\bcaller:\s*string\b",
+        r"\bcallee:\s*string\b",
+        r"\bability:\s*string\b",
+        r"\bsubject:\s*string\b",
+        r"\bthis\.caller\s*=",
+        r"\bthis\.callee\s*=",
+        r"\bthis\.ability\s*=",
+        r"\bthis\.subject\s*=",
+        r"\binvocation\.caller\b",
+        r"\binvocation\.callee\b",
+        r"\binvocation\.ability\b",
+        r"\binvocation\.subject\b",
+    ],
+    "java": [
+        r"\bString\s+caller\b",
+        r"\bString\s+callee\b",
+        r"\bString\s+ability\b",
+        r"\bString\s+subject\b",
+        r"\bcaller\(\)",
+        r"\bcallee\(\)",
+        r"\bability\(\)",
+        r"\bsubject\(\)",
+        r'requiredString\(invocation,\s*"caller"\)',
+        r'requiredString\(invocation,\s*"callee"\)',
+        r'requiredString\(invocation,\s*"ability"\)',
+        r'requiredString\(invocation,\s*"subject"\)',
+    ],
+}
+for label, patterns in legacy_public_field_patterns.items():
+    source = all_sidecar_sources[label]
+    for pattern in patterns:
+        if re.search(pattern, source, re.M):
+            raise SystemExit(f"plugin_sidecar_legacy_tuple_public_field:{label}:{pattern}")
 
 for language in sorted(required_languages - set(expected_helpers)):
     row = rows[(language, "ExecInvoke")]
@@ -13549,6 +13706,32 @@ EOF
     "$tmp/cli-sidecar-template/src/cli/commands/groups/plugin_template.rs"
   if ( CLI_ROOT="$tmp/cli-sidecar-template"; check_plugin_sidecar_helper_matrix_contract ) >/dev/null 2>&1; then
     fail "self-test expected naked sidecar frame template gate to fail"
+  fi
+  for rel in \
+    src/cli/commands/groups/plugin_template.rs \
+    src/daemon/plugins/sidecar/frame.rs \
+    src/daemon/plugins/sidecar.rs \
+    src/daemon/plugins/host_api.rs \
+    sdk/python/easynet_sdk/providers/easynet/plugin_exec.py \
+    sdk/python/tests/test_plugin_exec.py \
+    sdk/go/provider/easynet/pluginexec/pluginexec.go \
+    sdk/go/provider/easynet/pluginexec/pluginexec_test.go \
+    sdk/rust/provider/easynet/pluginexec/Cargo.toml \
+    sdk/rust/provider/easynet/pluginexec/src/lib.rs \
+    sdk/rust/provider/easynet/pluginexec/tests/pluginexec.rs \
+    sdk/java/src/main/java/run/runtime/sdk/provider/easynet/pluginexec/SidecarRuntime.java \
+    sdk/java/src/main/java/run/runtime/sdk/provider/easynet/pluginexec/SidecarInvocation.java \
+    sdk/java/src/test/java/run/runtime/sdk/provider/easynet/pluginexec/SidecarRuntimeTest.java \
+    sdk/node/provider/easynet/pluginexec.js \
+    sdk/node/provider/easynet/pluginexec.d.ts \
+    sdk/node/test/pluginexec.test.mjs; do
+    mkdir -p "$(dirname "$tmp/cli-sidecar-tuple/$rel")"
+    cp "$ROOT/$rel" "$tmp/cli-sidecar-tuple/$rel"
+  done
+  perl -0pi -e 's/"caller_ura"/"caller"/' \
+    "$tmp/cli-sidecar-tuple/sdk/python/easynet_sdk/providers/easynet/plugin_exec.py"
+  if ( CLI_ROOT="$tmp/cli-sidecar-tuple"; check_plugin_sidecar_helper_matrix_contract ) >/dev/null 2>&1; then
+    fail "self-test expected legacy sidecar tuple key gate to fail"
   fi
   mkdir -p "$tmp/cli-browser-mock/src/daemon/ability/builtins/device_control" \
     "$tmp/cli-browser-mock/ability-descriptors/system/device_control" \

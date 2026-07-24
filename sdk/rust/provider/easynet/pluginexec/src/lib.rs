@@ -16,10 +16,10 @@ use serde_json::{Map, Value};
 #[derive(Debug, Clone, PartialEq)]
 pub struct SidecarInvocation {
     pub call_id: String,
-    pub caller: String,
-    pub callee: String,
-    pub ability: String,
-    pub subject: String,
+    pub caller_ura: String,
+    pub callee_ura: String,
+    pub ability_ura: String,
+    pub subject_ura: String,
     pub invocation_nonce: Vec<u8>,
     pub causal_context: Value,
     pub args: Map<String, Value>,
@@ -41,6 +41,7 @@ impl SidecarInvocation {
             SidecarProtocolError::new("sidecar frame field \"invocation\" must be an object")
         })?;
         let mut invocation = expect_object(invocation, "invocation")?;
+        reject_legacy_tuple_aliases(&invocation)?;
         let nonce = take_required_nonce(&mut invocation, "invocation_nonce")?;
         let args = match invocation.remove("args") {
             Some(value) => expect_object(value, "args")?,
@@ -48,10 +49,10 @@ impl SidecarInvocation {
         };
         Ok(Self {
             call_id,
-            caller: take_required_string(&mut invocation, "caller")?,
-            callee: take_required_string(&mut invocation, "callee")?,
-            ability: take_required_string(&mut invocation, "ability")?,
-            subject: take_required_string(&mut invocation, "subject")?,
+            caller_ura: take_required_string(&mut invocation, "caller_ura")?,
+            callee_ura: take_required_string(&mut invocation, "callee_ura")?,
+            ability_ura: take_required_string(&mut invocation, "ability_ura")?,
+            subject_ura: take_required_string(&mut invocation, "subject_ura")?,
             invocation_nonce: nonce,
             causal_context: invocation
                 .remove("causal_context")
@@ -186,6 +187,24 @@ fn expect_object(value: Value, field: &str) -> Result<Map<String, Value>, Sideca
             "sidecar frame field {field:?} must be an object"
         ))),
     }
+}
+
+fn reject_legacy_tuple_aliases(
+    object: &Map<String, Value>,
+) -> Result<(), SidecarProtocolError> {
+    for (legacy, canonical) in [
+        ("caller", "caller_ura"),
+        ("callee", "callee_ura"),
+        ("ability", "ability_ura"),
+        ("subject", "subject_ura"),
+    ] {
+        if object.contains_key(legacy) {
+            return Err(SidecarProtocolError::new(format!(
+                "sidecar frame field {legacy:?} is retired; use {canonical:?}"
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn take_required_string(

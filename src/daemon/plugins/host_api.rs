@@ -483,10 +483,10 @@ fn mcp_rpc_handler(spec: McpExec) -> LocalRpcHandlerWithEnvelope {
 
 fn invocation_observation_from_envelope(env: &EnvelopeContext) -> Value {
     serde_json::json!({
-        "caller": env.caller(),
-        "callee": env.callee(),
-        "ability": env.ability(),
-        "subject": env.subject(),
+        "caller_ura": env.caller(),
+        "callee_ura": env.callee(),
+        "ability_ura": env.ability(),
+        "subject_ura": env.subject(),
         "invocation_nonce": env.invocation_nonce(),
         "causal_context": env.causal_context(),
     })

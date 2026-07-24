@@ -12,16 +12,17 @@ public final class SidecarRuntimeTest {
     serveWritesResultFrame();
     serveWritesErrorFrameForHandlerFailure();
     sidecarInvocationRejectsNonInvokeFrame();
+    sidecarInvocationRejectsRetiredTupleAliases();
   }
 
   static void sidecarInvocationProjectsDaemonFrame() {
     SidecarInvocation invocation = SidecarInvocation.fromFrame(frame());
 
     check("call-1".equals(invocation.callId()), "call id");
-    check("easynet:///r/hub/user/alice".equals(invocation.caller()), "caller");
-    check("easynet:///r/hub/device/provider".equals(invocation.callee()), "callee");
-    check("demo.echo".equals(invocation.ability()), "ability");
-    check("easynet:///r/hub/resource/demo".equals(invocation.subject()), "subject");
+    check("easynet:///r/hub/user/alice".equals(invocation.callerURA()), "caller_ura");
+    check("easynet:///r/hub/device/provider".equals(invocation.calleeURA()), "callee_ura");
+    check("demo.echo".equals(invocation.abilityURA()), "ability_ura");
+    check("easynet:///r/hub/resource/demo".equals(invocation.subjectURA()), "subject_ura");
     check(invocation.invocationNonce().equals(java.util.List.of(1, 2, 3, 4)), "nonce");
     check("hello".equals(invocation.args().get("message")), "args");
   }
@@ -72,6 +73,26 @@ public final class SidecarRuntimeTest {
     }
   }
 
+  static void sidecarInvocationRejectsRetiredTupleAliases() {
+    java.util.Map<String, Object> invocation = new java.util.LinkedHashMap<>();
+    invocation.put("caller_ura", "easynet:///r/hub/user/alice");
+    invocation.put("caller", "easynet:///r/hub/user/bob");
+    invocation.put("callee_ura", "easynet:///r/hub/device/provider");
+    invocation.put("ability_ura", "demo.echo");
+    invocation.put("subject_ura", "easynet:///r/hub/resource/demo");
+    invocation.put("invocation_nonce", java.util.List.of(1, 2, 3, 4));
+    java.util.Map<String, Object> frame = new java.util.LinkedHashMap<>();
+    frame.put("type", "invoke");
+    frame.put("call_id", "call-1");
+    frame.put("invocation", invocation);
+    try {
+      SidecarInvocation.fromFrame(frame);
+      throw new AssertionError("retired tuple aliases must fail");
+    } catch (SidecarProtocolError expected) {
+      check(expected.getMessage().contains("retired"), "retired alias error");
+    }
+  }
+
   private static Map<String, Object> frame() {
     return Map.of(
         "type",
@@ -80,13 +101,13 @@ public final class SidecarRuntimeTest {
         "call-1",
         "invocation",
         Map.of(
-            "caller",
+            "caller_ura",
             "easynet:///r/hub/user/alice",
-            "callee",
+            "callee_ura",
             "easynet:///r/hub/device/provider",
-            "ability",
+            "ability_ura",
             "demo.echo",
-            "subject",
+            "subject_ura",
             "easynet:///r/hub/resource/demo",
             "invocation_nonce",
             java.util.List.of(1, 2, 3, 4),
@@ -98,7 +119,7 @@ public final class SidecarRuntimeTest {
 
   private static String frameJSON() {
     return """
-        {"type":"invoke","call_id":"call-1","invocation":{"caller":"easynet:///r/hub/user/alice","callee":"easynet:///r/hub/device/provider","ability":"demo.echo","subject":"easynet:///r/hub/resource/demo","invocation_nonce":[1,2,3,4],"causal_context":{"root":true},"args":{"message":"hello"}}}
+        {"type":"invoke","call_id":"call-1","invocation":{"caller_ura":"easynet:///r/hub/user/alice","callee_ura":"easynet:///r/hub/device/provider","ability_ura":"demo.echo","subject_ura":"easynet:///r/hub/resource/demo","invocation_nonce":[1,2,3,4],"causal_context":{"root":true},"args":{"message":"hello"}}}
         """;
   }
 

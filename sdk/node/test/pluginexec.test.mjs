@@ -13,10 +13,10 @@ function requestFrame() {
     type: "invoke",
     call_id: "call-1",
     invocation: {
-      caller: "easynet:///r/hub/user/alice",
-      callee: "easynet:///r/hub/device/provider",
-      ability: "demo.echo",
-      subject: "easynet:///r/hub/resource/demo",
+      caller_ura: "easynet:///r/hub/user/alice",
+      callee_ura: "easynet:///r/hub/device/provider",
+      ability_ura: "demo.echo",
+      subject_ura: "easynet:///r/hub/resource/demo",
       invocation_nonce: [1, 2, 3, 4],
       causal_context: { root: true },
       args: { message: "hello" },
@@ -48,10 +48,10 @@ test("SidecarInvocation projects daemon frame", () => {
   const invocation = SidecarInvocation.fromFrame(requestFrame());
 
   assert.equal(invocation.callID, "call-1");
-  assert.equal(invocation.caller, "easynet:///r/hub/user/alice");
-  assert.equal(invocation.callee, "easynet:///r/hub/device/provider");
-  assert.equal(invocation.ability, "demo.echo");
-  assert.equal(invocation.subject, "easynet:///r/hub/resource/demo");
+  assert.equal(invocation.callerURA, "easynet:///r/hub/user/alice");
+  assert.equal(invocation.calleeURA, "easynet:///r/hub/device/provider");
+  assert.equal(invocation.abilityURA, "demo.echo");
+  assert.equal(invocation.subjectURA, "easynet:///r/hub/resource/demo");
   assert.deepEqual(invocation.invocationNonce, [1, 2, 3, 4]);
   assert.deepEqual(invocation.causalContext, { root: true });
   assert.deepEqual(invocation.args, { message: "hello" });
@@ -104,4 +104,14 @@ test("SidecarInvocation rejects non-invoke frames", () => {
   frame.type = "stream_open";
 
   assert.throws(() => SidecarInvocation.fromFrame(frame), SidecarProtocolError);
+});
+
+test("SidecarInvocation rejects retired tuple aliases", () => {
+  const frame = requestFrame();
+  frame.invocation.caller = "easynet:///r/hub/user/bob";
+
+  assert.throws(
+    () => SidecarInvocation.fromFrame(frame),
+    /retired/,
+  );
 });

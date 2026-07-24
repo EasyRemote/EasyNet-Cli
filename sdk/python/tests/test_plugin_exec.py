@@ -16,10 +16,10 @@ def _frame() -> dict[str, object]:
         "type": "invoke",
         "call_id": "call-1",
         "invocation": {
-            "caller": "easynet:///r/hub/user/alice",
-            "callee": "easynet:///r/hub/device/provider",
-            "ability": "demo.echo",
-            "subject": "easynet:///r/hub/resource/demo",
+            "caller_ura": "easynet:///r/hub/user/alice",
+            "callee_ura": "easynet:///r/hub/device/provider",
+            "ability_ura": "demo.echo",
+            "subject_ura": "easynet:///r/hub/resource/demo",
             "invocation_nonce": [1, 2, 3, 4],
             "causal_context": {"root": True},
             "args": {"message": "hello"},
@@ -32,10 +32,10 @@ class PluginExecTests(unittest.TestCase):
         invocation = SidecarInvocation.from_frame(_frame())
 
         self.assertEqual(invocation.call_id, "call-1")
-        self.assertEqual(invocation.caller, "easynet:///r/hub/user/alice")
-        self.assertEqual(invocation.callee, "easynet:///r/hub/device/provider")
-        self.assertEqual(invocation.ability, "demo.echo")
-        self.assertEqual(invocation.subject, "easynet:///r/hub/resource/demo")
+        self.assertEqual(invocation.caller_ura, "easynet:///r/hub/user/alice")
+        self.assertEqual(invocation.callee_ura, "easynet:///r/hub/device/provider")
+        self.assertEqual(invocation.ability_ura, "demo.echo")
+        self.assertEqual(invocation.subject_ura, "easynet:///r/hub/resource/demo")
         self.assertEqual(invocation.invocation_nonce, (1, 2, 3, 4))
         self.assertEqual(invocation.causal_context, {"root": True})
         self.assertEqual(invocation.args, {"message": "hello"})
@@ -87,6 +87,15 @@ class PluginExecTests(unittest.TestCase):
         frame["type"] = "stream_open"
 
         with self.assertRaises(SidecarProtocolError):
+            SidecarInvocation.from_frame(frame)
+
+    def test_plugin_invocation_rejects_retired_tuple_aliases(self) -> None:
+        frame = _frame()
+        invocation = frame["invocation"]
+        assert isinstance(invocation, dict)
+        invocation["caller"] = "easynet:///r/hub/user/bob"
+
+        with self.assertRaisesRegex(SidecarProtocolError, "retired"):
             SidecarInvocation.from_frame(frame)
 
 

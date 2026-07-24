@@ -17,13 +17,13 @@ use serde_json::Value;
 #[serde(deny_unknown_fields)]
 pub struct SidecarInvocationEnvelope {
     /// Agent identity that initiated and signs the call.
-    pub caller: String,
+    pub caller_ura: String,
     /// Agent identity that exposes the selected ability.
-    pub callee: String,
+    pub callee_ura: String,
     /// Public callable contract selected on `callee`.
-    pub ability: String,
+    pub ability_ura: String,
     /// URA of the entity being acted on.
-    pub subject: String,
+    pub subject_ura: String,
     /// Caller-provided freshness material. The current daemon admission path
     /// expects 16 bytes, but this wire model stores bytes rather than a display
     /// string so no sidecar invents its own nonce encoding.

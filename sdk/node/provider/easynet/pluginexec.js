@@ -16,20 +16,20 @@ export class SidecarProtocolError extends Error {
 export class SidecarInvocation {
   constructor({
     callID,
-    caller,
-    callee,
-    ability,
-    subject,
+    callerURA,
+    calleeURA,
+    abilityURA,
+    subjectURA,
     invocationNonce,
     causalContext,
     args,
     frameType = "invoke",
   }) {
     this.callID = requireString(callID, "call_id");
-    this.caller = requireString(caller, "caller");
-    this.callee = requireString(callee, "callee");
-    this.ability = requireString(ability, "ability");
-    this.subject = requireString(subject, "subject");
+    this.callerURA = requireString(callerURA, "caller_ura");
+    this.calleeURA = requireString(calleeURA, "callee_ura");
+    this.abilityURA = requireString(abilityURA, "ability_ura");
+    this.subjectURA = requireString(subjectURA, "subject_ura");
     this.invocationNonce = requireNonce(invocationNonce, "invocation_nonce");
     this.causalContext = causalContext ?? {};
     this.args = optionalObject(args, "args");
@@ -46,12 +46,13 @@ export class SidecarInvocation {
     }
     const callID = requireString(value.call_id, "call_id");
     const invocation = optionalObject(value.invocation, "invocation", { required: true });
+    rejectLegacyTupleAliases(invocation);
     return new SidecarInvocation({
       callID,
-      caller: invocation.caller,
-      callee: invocation.callee,
-      ability: invocation.ability,
-      subject: invocation.subject,
+      callerURA: invocation.caller_ura,
+      calleeURA: invocation.callee_ura,
+      abilityURA: invocation.ability_ura,
+      subjectURA: invocation.subject_ura,
       invocationNonce: invocation.invocation_nonce,
       causalContext: invocation.causal_context,
       args: invocation.args,
@@ -103,6 +104,21 @@ async function readFrame(input) {
     throw new SidecarProtocolError("missing sidecar request frame");
   } finally {
     reader.close();
+  }
+}
+
+function rejectLegacyTupleAliases(value) {
+  for (const [legacy, canonical] of [
+    ["caller", "caller_ura"],
+    ["callee", "callee_ura"],
+    ["ability", "ability_ura"],
+    ["subject", "subject_ura"],
+  ]) {
+    if (Object.hasOwn(value, legacy)) {
+      throw new SidecarProtocolError(
+        `sidecar frame field ${JSON.stringify(legacy)} is retired; use ${JSON.stringify(canonical)}`,
+      );
+    }
   }
 }
 

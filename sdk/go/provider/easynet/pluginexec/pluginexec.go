@@ -19,10 +19,10 @@ import (
 // SidecarInvocation is the handler-facing view of one daemon-admitted sidecar call.
 type SidecarInvocation struct {
 	CallID          string
-	Caller          string
-	Callee          string
-	Ability         string
-	Subject         string
+	CallerURA       string
+	CalleeURA       string
+	AbilityURA      string
+	SubjectURA      string
 	InvocationNonce []int
 	CausalContext   map[string]any
 	Args            map[string]any
@@ -70,7 +70,7 @@ func ServeIO(ctx context.Context, input io.Reader, output io.Writer, handler Han
 			Message: err.Error(),
 		})
 	}
-	invocation, err := frame.Invocation.project(frame.Type, frame.CallID)
+	invocation, err := frame.projectInvocation()
 	if err != nil {
 		return writeResponseFrame(output, responseFrame{
 			Type:    "error",
@@ -99,16 +99,16 @@ func IsProtocolError(err error) bool {
 }
 
 type requestFrame struct {
-	Type       string                 `json:"type"`
-	CallID     string                 `json:"call_id"`
-	Invocation sidecarInvocationFrame `json:"invocation"`
+	Type       string          `json:"type"`
+	CallID     string          `json:"call_id"`
+	Invocation json.RawMessage `json:"invocation"`
 }
 
 type sidecarInvocationFrame struct {
-	Caller          string         `json:"caller"`
-	Callee          string         `json:"callee"`
-	Ability         string         `json:"ability"`
-	Subject         string         `json:"subject"`
+	CallerURA       string         `json:"caller_ura"`
+	CalleeURA       string         `json:"callee_ura"`
+	AbilityURA      string         `json:"ability_ura"`
+	SubjectURA      string         `json:"subject_ura"`
 	InvocationNonce []int          `json:"invocation_nonce"`
 	CausalContext   map[string]any `json:"causal_context"`
 	Args            map[string]any `json:"args"`
@@ -139,15 +139,47 @@ func readRequestFrame(input io.Reader) (requestFrame, error) {
 	return frame, nil
 }
 
+func (f requestFrame) projectInvocation() (SidecarInvocation, error) {
+	if len(f.Invocation) == 0 {
+		return SidecarInvocation{}, protocolError("sidecar frame field \"invocation\" must be an object")
+	}
+	if err := rejectLegacyTupleAliases(f.Invocation); err != nil {
+		return SidecarInvocation{}, err
+	}
+	var invocation sidecarInvocationFrame
+	if err := json.Unmarshal(f.Invocation, &invocation); err != nil {
+		return SidecarInvocation{}, protocolError("sidecar frame field \"invocation\" must be an object")
+	}
+	return invocation.project(f.Type, f.CallID)
+}
+
+func rejectLegacyTupleAliases(raw json.RawMessage) error {
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &object); err != nil {
+		return protocolError("sidecar frame field \"invocation\" must be an object")
+	}
+	for legacy, canonical := range map[string]string{
+		"caller":  "caller_ura",
+		"callee":  "callee_ura",
+		"ability": "ability_ura",
+		"subject": "subject_ura",
+	} {
+		if _, ok := object[legacy]; ok {
+			return protocolError("sidecar frame field %q is retired; use %q", legacy, canonical)
+		}
+	}
+	return nil
+}
+
 func (f sidecarInvocationFrame) project(frameType string, callID string) (SidecarInvocation, error) {
 	if frameType != "invoke" {
 		return SidecarInvocation{}, protocolError("exec sidecar expected invoke frame, got %q", frameType)
 	}
 	for field, value := range map[string]string{
-		"caller":  f.Caller,
-		"callee":  f.Callee,
-		"ability": f.Ability,
-		"subject": f.Subject,
+		"caller_ura":  f.CallerURA,
+		"callee_ura":  f.CalleeURA,
+		"ability_ura": f.AbilityURA,
+		"subject_ura": f.SubjectURA,
 	} {
 		if value == "" {
 			return SidecarInvocation{}, protocolError("sidecar frame field %q must be a string", field)
@@ -171,10 +203,10 @@ func (f sidecarInvocationFrame) project(frameType string, callID string) (Sideca
 	}
 	return SidecarInvocation{
 		CallID:          callID,
-		Caller:          f.Caller,
-		Callee:          f.Callee,
-		Ability:         f.Ability,
-		Subject:         f.Subject,
+		CallerURA:       f.CallerURA,
+		CalleeURA:       f.CalleeURA,
+		AbilityURA:      f.AbilityURA,
+		SubjectURA:      f.SubjectURA,
 		InvocationNonce: append([]int(nil), f.InvocationNonce...),
 		CausalContext:   causalContext,
 		Args:            args,

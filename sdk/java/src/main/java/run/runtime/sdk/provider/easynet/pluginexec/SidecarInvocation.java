@@ -10,10 +10,10 @@ import java.util.Objects;
 /** Handler-facing view of one daemon-admitted declarative exec sidecar call. */
 public final class SidecarInvocation {
   private final String callId;
-  private final String caller;
-  private final String callee;
-  private final String ability;
-  private final String subject;
+  private final String callerURA;
+  private final String calleeURA;
+  private final String abilityURA;
+  private final String subjectURA;
   private final List<Integer> invocationNonce;
   private final Object causalContext;
   private final Map<String, Object> args;
@@ -21,19 +21,19 @@ public final class SidecarInvocation {
 
   private SidecarInvocation(
       String callId,
-      String caller,
-      String callee,
-      String ability,
-      String subject,
+      String callerURA,
+      String calleeURA,
+      String abilityURA,
+      String subjectURA,
       List<Integer> invocationNonce,
       Object causalContext,
       Map<String, Object> args,
       String frameType) {
     this.callId = requireText(callId, "call_id");
-    this.caller = requireText(caller, "caller");
-    this.callee = requireText(callee, "callee");
-    this.ability = requireText(ability, "ability");
-    this.subject = requireText(subject, "subject");
+    this.callerURA = requireText(callerURA, "caller_ura");
+    this.calleeURA = requireText(calleeURA, "callee_ura");
+    this.abilityURA = requireText(abilityURA, "ability_ura");
+    this.subjectURA = requireText(subjectURA, "subject_ura");
     this.invocationNonce = List.copyOf(invocationNonce);
     this.causalContext = causalContext == null ? Map.of() : causalContext;
     this.args = Collections.unmodifiableMap(new LinkedHashMap<>(args));
@@ -48,12 +48,13 @@ public final class SidecarInvocation {
     }
     String callId = requiredString(frame, "call_id");
     Map<String, Object> invocation = requiredObject(frame, "invocation");
+    rejectLegacyTupleAliases(invocation);
     return new SidecarInvocation(
         callId,
-        requiredString(invocation, "caller"),
-        requiredString(invocation, "callee"),
-        requiredString(invocation, "ability"),
-        requiredString(invocation, "subject"),
+        requiredString(invocation, "caller_ura"),
+        requiredString(invocation, "callee_ura"),
+        requiredString(invocation, "ability_ura"),
+        requiredString(invocation, "subject_ura"),
         requiredNonce(invocation, "invocation_nonce"),
         invocation.get("causal_context"),
         optionalObject(invocation, "args"),
@@ -64,20 +65,20 @@ public final class SidecarInvocation {
     return callId;
   }
 
-  public String caller() {
-    return caller;
+  public String callerURA() {
+    return callerURA;
   }
 
-  public String callee() {
-    return callee;
+  public String calleeURA() {
+    return calleeURA;
   }
 
-  public String ability() {
-    return ability;
+  public String abilityURA() {
+    return abilityURA;
   }
 
-  public String subject() {
-    return subject;
+  public String subjectURA() {
+    return subjectURA;
   }
 
   public List<Integer> invocationNonce() {
@@ -128,6 +129,25 @@ public final class SidecarInvocation {
       throw new SidecarProtocolError("sidecar frame field \"" + field + "\" must be an object");
     }
     return stringObject(raw, field);
+  }
+
+  private static void rejectLegacyTupleAliases(Map<String, Object> object) {
+    for (Map.Entry<String, String> entry :
+        Map.of(
+                "caller", "caller_ura",
+                "callee", "callee_ura",
+                "ability", "ability_ura",
+                "subject", "subject_ura")
+            .entrySet()) {
+      if (object.containsKey(entry.getKey())) {
+        throw new SidecarProtocolError(
+            "sidecar frame field \""
+                + entry.getKey()
+                + "\" is retired; use \""
+                + entry.getValue()
+                + "\"");
+      }
+    }
   }
 
   private static Map<String, Object> stringObject(Map<?, ?> raw, String field) {

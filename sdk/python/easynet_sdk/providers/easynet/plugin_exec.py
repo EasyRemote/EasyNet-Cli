@@ -23,10 +23,10 @@ class SidecarInvocation:
     """Typed view of one daemon-admitted plugin invocation."""
 
     call_id: str
-    caller: str
-    callee: str
-    ability: str
-    subject: str
+    caller_ura: str
+    callee_ura: str
+    ability_ura: str
+    subject_ura: str
     invocation_nonce: tuple[int, ...]
     causal_context: Any
     args: Mapping[str, Any]
@@ -43,14 +43,15 @@ class SidecarInvocation:
             )
         call_id = _required_string(frame, "call_id")
         invocation = _required_mapping(frame, "invocation")
+        _reject_legacy_tuple_aliases(invocation)
         nonce = _required_nonce(invocation, "invocation_nonce")
         args = _optional_mapping(invocation.get("args"), "args")
         return cls(
             call_id=call_id,
-            caller=_required_string(invocation, "caller"),
-            callee=_required_string(invocation, "callee"),
-            ability=_required_string(invocation, "ability"),
-            subject=_required_string(invocation, "subject"),
+            caller_ura=_required_string(invocation, "caller_ura"),
+            callee_ura=_required_string(invocation, "callee_ura"),
+            ability_ura=_required_string(invocation, "ability_ura"),
+            subject_ura=_required_string(invocation, "subject_ura"),
             invocation_nonce=nonce,
             causal_context=invocation.get("causal_context"),
             args=args,
@@ -117,6 +118,19 @@ def _required_string(frame: Mapping[str, Any], field: str) -> str:
     if not isinstance(value, str) or not value:
         raise SidecarProtocolError(f"sidecar frame field {field!r} must be a string")
     return value
+
+
+def _reject_legacy_tuple_aliases(frame: Mapping[str, Any]) -> None:
+    for legacy, canonical in (
+        ("caller", "caller_ura"),
+        ("callee", "callee_ura"),
+        ("ability", "ability_ura"),
+        ("subject", "subject_ura"),
+    ):
+        if legacy in frame:
+            raise SidecarProtocolError(
+                f"sidecar frame field {legacy!r} is retired; use {canonical!r}"
+            )
 
 
 def _required_mapping(frame: Mapping[str, Any], field: str) -> Mapping[str, Any]:

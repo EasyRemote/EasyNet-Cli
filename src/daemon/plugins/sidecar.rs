@@ -29,15 +29,14 @@ pub use process::{SidecarRuntimeHost, SidecarRuntimeLimits};
 /// missing caller, callee, subject, or nonce is therefore a host boundary error.
 pub fn sidecar_invocation_from_context(
     env: EnvelopeContext,
-    ability: &str,
+    ability_ura: &str,
     args: Value,
 ) -> Result<SidecarInvocationEnvelope> {
-    let _ = ability;
     Ok(SidecarInvocationEnvelope {
-        caller: env.caller().to_string(),
-        callee: env.callee().to_string(),
-        ability: env.ability().to_string(),
-        subject: env.subject().to_string(),
+        caller_ura: env.caller().to_string(),
+        callee_ura: env.callee().to_string(),
+        ability_ura: ability_ura.to_string(),
+        subject_ura: env.subject().to_string(),
         invocation_nonce: env.invocation_nonce().to_vec(),
         causal_context: env.causal_context().clone(),
         args,
