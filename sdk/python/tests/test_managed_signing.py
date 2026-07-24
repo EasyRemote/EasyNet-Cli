@@ -344,7 +344,7 @@ class ManagedSigningTests(unittest.TestCase):
                 key_id=key_id,
                 algorithm="ed25519",
                 policy={
-                    "mode": "local_daemon_signing",
+                    "mode": "provider_managed_signing",
                     "usage": "invocation.sign",
                     "signer_id": "signer-managed-key-provider",
                     "policy_ref": policy_ref,
@@ -352,7 +352,7 @@ class ManagedSigningTests(unittest.TestCase):
                     "key_state": "active",
                 },
                 metadata={
-                    "source": "daemon_key_inventory",
+                    "source": "provider_key_inventory",
                     "policy_ref": policy_ref,
                     "public_key_base64": _b64(public_key),
                 },
@@ -363,7 +363,7 @@ class ManagedSigningTests(unittest.TestCase):
                 expires_at_unix_ms=1700000001000,
                 algorithm="ed25519",
                 signer_policy=SignerPolicy(
-                    mode="local_daemon_signing",
+                    mode="provider_managed_signing",
                     signer_id=handle.signer_id,
                     policy_ref=str(policy_ref),
                 ),

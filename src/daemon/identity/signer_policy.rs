@@ -1,4 +1,4 @@
-// EasyNet CLI - daemon identity signer policy binding
+// EasyNet CLI - provider identity signer policy binding
 // ===================================================
 //
 // File: src/daemon/identity/signer_policy.rs
@@ -6,7 +6,7 @@
 
 use sha2::{Digest, Sha256};
 
-/// Bind a daemon identity signer policy to its owner, key identity, and public
+/// Bind a provider identity signer policy to its owner, key identity, and public
 /// key material. The length-delimited input prevents ambiguous concatenation.
 pub(crate) fn signer_policy_ref(owner_ura: &str, key_id: &str, public_key_base64: &str) -> String {
     let mut hasher = Sha256::new();
@@ -16,7 +16,10 @@ pub(crate) fn signer_policy_ref(owner_ura: &str, key_id: &str, public_key_base64
     hasher.update(b"\0");
     hasher.update(public_key_base64.as_bytes());
     let digest = hasher.finalize();
-    format!("daemon-key-inventory:sha256:{}", hex::encode(&digest[..16]))
+    format!(
+        "provider-key-inventory:sha256:{}",
+        hex::encode(&digest[..16])
+    )
 }
 
 #[cfg(test)]

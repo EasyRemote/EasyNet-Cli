@@ -328,19 +328,19 @@ func TestCABIPreparedAndSignedEnvelopeKeys(t *testing.T) {
 	if string(fields.signatureJSON) != `{"algorithm":"ed25519","signature_base64":"abc"}` {
 		t.Fatalf("signature JSON = %s", fields.signatureJSON)
 	}
-	if fields.localDaemonSigning {
-		t.Fatalf("localDaemonSigning = true, want false")
+	if fields.providerManagedSigning {
+		t.Fatalf("providerManagedSigning = true, want false")
 	}
 
-	localFields, err := signedInvocationCABIFields([]byte(`{
-		"prepared":{"prepared_id":"prep-local","request_id":"req-local"},
-		"policy":{"mode":"local_daemon_signing","signer_id":"signer-alice-key-1"}
+	providerFields, err := signedInvocationCABIFields([]byte(`{
+		"prepared":{"prepared_id":"prep-provider","request_id":"req-local"},
+		"policy":{"mode":"provider_managed_signing","signer_id":"signer-alice-key-1"}
 	}`))
 	if err != nil {
 		t.Fatalf("signedInvocationCABIFields local failed: %v", err)
 	}
-	if localFields.key != "prep-local" || !localFields.localDaemonSigning || len(localFields.signatureJSON) != 0 {
-		t.Fatalf("local fields = %#v", localFields)
+	if providerFields.key != "prep-provider" || !providerFields.providerManagedSigning || len(providerFields.signatureJSON) != 0 {
+		t.Fatalf("local fields = %#v", providerFields)
 	}
 
 	if _, err := signedInvocationCABIFields([]byte(`{

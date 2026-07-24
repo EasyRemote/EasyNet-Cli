@@ -51,15 +51,9 @@ def signer_handle_provenance_error(handle: SignerHandle) -> str:
     if mode is None and not handle.policy and not handle.metadata:
         return ""
     source = handle.metadata.get("source")
-    if source not in {
-        "daemon_keyring",
-        "daemon_key_inventory",
-        "identity.list_user_pubkeys",
-        "identity.signer",
-        "daemon.identity.signer",
-    }:
-        return "signer handle source must be daemon key inventory"
-    if mode != "local_daemon_signing":
+    if source != "provider_key_inventory":
+        return "signer handle source must be provider key inventory"
+    if mode != "provider_managed_signing":
         return "signer handle policy mode is not supported"
     if handle.policy.get("usage") != "invocation.sign":
         return "signer handle policy usage is not supported"

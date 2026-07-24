@@ -75,8 +75,8 @@
     },
     {
       "language": "c_abi",
-      "case_id": "invocation/local_daemon_signing_boundary",
-      "selector": "invocation_sign_prepared_local_uses_default_daemon_keyring",
+      "case_id": "invocation/provider_managed_signing_boundary",
+      "selector": "invocation_sign_prepared_local_uses_default_provider_key_inventory",
       "evidence": [
         "src/ffi/invocation/mod.rs"
       ]
@@ -323,7 +323,7 @@
     },
     {
       "language": "go",
-      "case_id": "invocation/local_daemon_signing_boundary",
+      "case_id": "invocation/provider_managed_signing_boundary",
       "selector": "TestPreparedInvocationDecodesSigningMaterialFixture",
       "evidence": [
         "sdk/go/signing_test.go"
@@ -1011,7 +1011,7 @@
     },
     {
       "language": "python",
-      "case_id": "invocation/local_daemon_signing_boundary",
+      "case_id": "invocation/provider_managed_signing_boundary",
       "selector": "test_signer_provider_signs_with_daemon_authorized_handle",
       "evidence": [
         "sdk/python/tests/test_signing.py"
@@ -1339,8 +1339,8 @@
     },
     {
       "language": "rust",
-      "case_id": "invocation/local_daemon_signing_boundary",
-      "selector": "sdk_local_daemon_signer_uses_keyring_inventory",
+      "case_id": "invocation/provider_managed_signing_boundary",
+      "selector": "sdk_provider_managed_signer_uses_provider_inventory",
       "evidence": [
         "src/daemon/invocation/dispatch/request.rs"
       ]

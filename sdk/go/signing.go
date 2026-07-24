@@ -603,11 +603,11 @@ func validateSignerHandle(handle SignerHandle) error {
 	if strings.ToLower(strings.TrimSpace(handle.Algorithm)) != "ed25519" {
 		return invalidInvocation("signer handle algorithm must be ed25519", nil)
 	}
-	if !isDaemonSignerSource(handle.Metadata["source"]) {
-		return invalidInvocation("signer handle source must be daemon key inventory", nil)
+	if !isProviderManagedSignerSource(handle.Metadata["source"]) {
+		return invalidInvocation("signer handle source must be provider key inventory", nil)
 	}
 	mode, ok := handle.Policy["mode"].(string)
-	if !ok || !isDaemonSignerMode(mode) {
+	if !ok || !isProviderManagedSignerMode(mode) {
 		return invalidInvocation("signer handle policy mode is not supported", nil)
 	}
 	usageString, ok := handle.Policy["usage"].(string)
@@ -638,22 +638,22 @@ func validateSignerHandle(handle SignerHandle) error {
 	return nil
 }
 
-func isDaemonSignerSource(value any) bool {
+func isProviderManagedSignerSource(value any) bool {
 	source, ok := value.(string)
 	if !ok {
 		return false
 	}
 	switch strings.TrimSpace(source) {
-	case "daemon_keyring", "daemon_key_inventory", "identity.list_user_pubkeys", "identity.signer", "daemon.identity.signer":
+	case "provider_key_inventory":
 		return true
 	default:
 		return false
 	}
 }
 
-func isDaemonSignerMode(value string) bool {
+func isProviderManagedSignerMode(value string) bool {
 	switch strings.TrimSpace(value) {
-	case "local_daemon_signing":
+	case "provider_managed_signing":
 		return true
 	default:
 		return false

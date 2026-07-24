@@ -483,7 +483,7 @@ func TestSignerRejectsForgedHandleProvenance(t *testing.T) {
 	}
 
 	handle = signerHandle("")
-	handle.Policy = map[string]any{"mode": "local_daemon_signing"}
+	handle.Policy = map[string]any{"mode": "provider_managed_signing"}
 	if _, err := NewSigner(handle, provider); err == nil || !IsCode(err, ErrInvalidArgument) {
 		t.Fatalf("NewSigner missing usage error = %v, want InvalidArgument", err)
 	}
@@ -495,7 +495,7 @@ func TestSignerRejectsForgedHandleProvenance(t *testing.T) {
 	}
 
 	handle = signerHandle("")
-	handle.Metadata["policy_ref"] = "daemon-key-inventory:sha256:other-policy"
+	handle.Metadata["policy_ref"] = "provider-key-inventory:sha256:other-policy"
 	if _, err := NewSigner(handle, provider); err == nil || !IsCode(err, ErrInvalidArgument) {
 		t.Fatalf("NewSigner policy_ref mismatch error = %v, want InvalidArgument", err)
 	}
@@ -545,7 +545,7 @@ func TestSignerRejectsPolicyAndKeyHintMismatch(t *testing.T) {
 		t.Fatalf("NewPreparedInvocationFromJSON: %v", err)
 	}
 	prepared.signingMaterial.signerPolicy = &SignerPolicy{
-		mode:     "local_daemon_signing",
+		mode:     "provider_managed_signing",
 		signerID: "other-signer",
 	}
 	signer, err := NewSignerFromSignature(
@@ -587,8 +587,8 @@ func TestPreparedInvocationRejectsEmptySignature(t *testing.T) {
 }
 
 func signerHandle(publicKeyBase64 string) SignerHandle {
-	policyRef := "daemon-key-inventory:sha256:test-policy"
-	metadata := map[string]any{"source": "daemon_keyring", "policy_ref": policyRef}
+	policyRef := "provider-key-inventory:sha256:test-policy"
+	metadata := map[string]any{"source": "provider_key_inventory", "policy_ref": policyRef}
 	if publicKeyBase64 != "" {
 		metadata["public_key_base64"] = publicKeyBase64
 	}
@@ -599,7 +599,7 @@ func signerHandle(publicKeyBase64 string) SignerHandle {
 		KeyID:     "alice-key-1",
 		Algorithm: "ed25519",
 		Policy: map[string]any{
-			"mode":                "local_daemon_signing",
+			"mode":                "provider_managed_signing",
 			"usage":               "invocation.sign",
 			"signer_id":           "signer-alice-key-1",
 			"policy_ref":          policyRef,

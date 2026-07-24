@@ -522,6 +522,10 @@ def main() -> int:
             for item, shape in found["shapes"].items()
         }
 
+    for projection in model["capabilities"].values():
+        if isinstance(projection.get("case_ids"), list):
+            projection["case_ids"] = sorted(set(projection["case_ids"]))
+
     for capability in model["capabilities"]:
         model["capability_inventory"][capability] = {
             language: {"symbols": [], "members": []} for language in LANGUAGES
@@ -564,6 +568,8 @@ def main() -> int:
                         item
                     )
     for projection in model["capability_inventory"].values():
+        if isinstance(projection.get("case_ids"), list):
+            projection["case_ids"] = sorted(set(projection["case_ids"]))
         for language in LANGUAGES:
             projection[language]["symbols"].sort()
             projection[language]["members"].sort()

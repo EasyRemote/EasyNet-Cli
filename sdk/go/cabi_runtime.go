@@ -858,7 +858,7 @@ func (t *cabiRuntimeTransport) SubmitSigned(ctx context.Context, signedJSON []by
 	var signedID C.uint64_t
 	var ignored *C.char
 	var code int32
-	if fields.localDaemonSigning {
+	if fields.providerManagedSigning {
 		code = int32(C.runtime_cabi_call_sign_prepared_local(t.symbols.signPreparedLocal, C.uint64_t(preparedID), &signedID, &ignored))
 	} else {
 		code = int32(cabiWithCString(fields.signatureJSON, func(cSignature *C.char) C.int32_t {
@@ -1805,9 +1805,9 @@ func preparedKeyFromJSON(raw []byte) (string, error) {
 }
 
 type cabiSignedInvocationFields struct {
-	key                string
-	signatureJSON      []byte
-	localDaemonSigning bool
+	key                    string
+	signatureJSON          []byte
+	providerManagedSigning bool
 }
 
 func signedInvocationCABIFields(raw []byte) (cabiSignedInvocationFields, error) {
@@ -1823,12 +1823,12 @@ func signedInvocationCABIFields(raw []byte) (cabiSignedInvocationFields, error) 
 	if err != nil {
 		return cabiSignedInvocationFields{}, err
 	}
-	localSigning, err := signedInvocationUsesLocalDaemonSigning(decoded)
+	providerManagedSigning, err := signedInvocationUsesProviderManagedSigning(decoded)
 	if err != nil {
 		return cabiSignedInvocationFields{}, err
 	}
-	if localSigning {
-		return cabiSignedInvocationFields{key: key, localDaemonSigning: true}, nil
+	if providerManagedSigning {
+		return cabiSignedInvocationFields{key: key, providerManagedSigning: true}, nil
 	}
 	signature, ok := decoded["signature"].(map[string]any)
 	if !ok {
@@ -1841,7 +1841,7 @@ func signedInvocationCABIFields(raw []byte) (cabiSignedInvocationFields, error) 
 	return cabiSignedInvocationFields{key: key, signatureJSON: signatureJSON}, nil
 }
 
-func signedInvocationUsesLocalDaemonSigning(decoded map[string]any) (bool, error) {
+func signedInvocationUsesProviderManagedSigning(decoded map[string]any) (bool, error) {
 	value, ok := decoded["policy"]
 	if !ok || value == nil {
 		return false, nil
@@ -1858,7 +1858,7 @@ func signedInvocationUsesLocalDaemonSigning(decoded map[string]any) (bool, error
 	if !ok {
 		return false, invalidRuntimePayload("signed invocation policy mode must be a string", nil)
 	}
-	return modeString == "local_daemon_signing", nil
+	return modeString == "provider_managed_signing", nil
 }
 
 func mergeBidiStreamsForCABI(draftJSON []byte, streamsJSON []byte) ([]byte, error) {

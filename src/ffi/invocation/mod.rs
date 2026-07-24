@@ -2691,8 +2691,8 @@ fn sign_prepared_local_with_axon_pb(
             );
         }
     };
-    let signer = crate::daemon::KeyServiceLocalDaemonInvocationSigner::at_default_endpoint();
-    let signed = match prepared.sign_with_local_daemon_signer(&signer) {
+    let signer = crate::daemon::KeyServiceProviderManagedInvocationSigner::at_default_endpoint();
+    let signed = match prepared.sign_with_provider_managed_signer(&signer) {
         Ok(signed) => signed,
         Err(err) => {
             return record_invocation_error(
@@ -5369,7 +5369,7 @@ struct PrepareOptionsJson {
     expires_in_ms: Option<u64>,
     signer_id: Option<String>,
     policy_ref: Option<String>,
-    local_daemon_signing: bool,
+    provider_managed_signing: bool,
     material_only: bool,
 }
 
@@ -5395,11 +5395,11 @@ impl PrepareOptionsJson {
                     .ok_or(InvocationJsonError::InvalidPositiveU64("expires_in_ms"))?,
             ),
         };
-        let local_daemon_signing = match obj.get("local_daemon_signing") {
+        let provider_managed_signing = match obj.get("provider_managed_signing") {
             None | Some(serde_json::Value::Null) => false,
             Some(value) => value
                 .as_bool()
-                .ok_or(InvocationJsonError::InvalidBool("local_daemon_signing"))?,
+                .ok_or(InvocationJsonError::InvalidBool("provider_managed_signing"))?,
         };
         let material_only = match obj.get("material_only") {
             None | Some(serde_json::Value::Null) => false,
@@ -5411,7 +5411,7 @@ impl PrepareOptionsJson {
             expires_in_ms,
             signer_id: optional_string(obj, "signer_id")?,
             policy_ref: optional_string(obj, "policy_ref")?,
-            local_daemon_signing,
+            provider_managed_signing,
             material_only,
         })
     }
@@ -5421,7 +5421,7 @@ impl PrepareOptionsJson {
             expires_in: std::time::Duration::from_millis(self.expires_in_ms.unwrap_or(300_000)),
             signer_id: self.signer_id,
             policy_ref: self.policy_ref,
-            local_daemon_signing: self.local_daemon_signing,
+            provider_managed_signing: self.provider_managed_signing,
         }
     }
 }
@@ -7801,7 +7801,7 @@ mod tests {
                 "expires_in_ms": 60_000,
                 "signer_id": "browser-key",
                 "policy_ref": "policy/local",
-                "local_daemon_signing": false
+                "provider_managed_signing": false
             })
             .to_string(),
         )
@@ -7909,7 +7909,7 @@ mod tests {
         let options = CString::new(
             serde_json::json!({
                 "expires_in_ms": 60_000,
-                "local_daemon_signing": false
+                "provider_managed_signing": false
             })
             .to_string(),
         )
@@ -8073,7 +8073,7 @@ mod tests {
 
     #[test]
     #[cfg(unix)]
-    fn invocation_sign_prepared_local_uses_default_daemon_keyring() {
+    fn invocation_sign_prepared_local_uses_default_provider_key_inventory() {
         with_test_key_service(2, |entry| {
             let caller = "easynet:///r/acme/device/dev-a";
             let signer_id = format!("signer-{}", entry.key_id);
@@ -8090,7 +8090,7 @@ mod tests {
                     "expires_in_ms": 60_000,
                     "signer_id": signer_id,
                     "policy_ref": policy_ref,
-                    "local_daemon_signing": true
+                    "provider_managed_signing": true
                 })
                 .to_string(),
             )
@@ -8123,7 +8123,7 @@ mod tests {
             assert_eq!(
                 sign_code,
                 RUNTIME_OK,
-                "local daemon sign error: {}",
+                "provider-managed sign error: {}",
                 read_last_error_json()
             );
             assert_ne!(signed_id, 0);
@@ -8133,7 +8133,7 @@ mod tests {
                 serde_json::from_str(CStr::from_ptr(signed_json_ptr).to_str().unwrap()).unwrap()
             };
             unsafe { crate::ffi::strings::runtime_string_free(signed_json_ptr) };
-            assert_eq!(signed_json["policy"]["mode"], "local_daemon_signing");
+            assert_eq!(signed_json["policy"]["mode"], "provider_managed_signing");
             assert_eq!(signed_json["policy"]["signer_id"], signer_id);
             assert_eq!(signed_json["policy"]["policy_ref"], policy_ref);
             assert_eq!(signed_json["signature"]["algorithm"], "ed25519");
@@ -8163,8 +8163,8 @@ mod tests {
                 serde_json::json!({
                     "expires_in_ms": 60_000,
                     "signer_id": signer_id,
-                    "policy_ref": "daemon-key-inventory:sha256:wrong",
-                    "local_daemon_signing": true
+                    "policy_ref": "provider-key-inventory:sha256:wrong",
+                    "provider_managed_signing": true
                 })
                 .to_string(),
             )

@@ -10924,6 +10924,54 @@ for language, (tests, markers) in required_tests.items():
 PY
 }
 
+check_sdk_provider_managed_signing_custody_contract() {
+  python3 - "$ROOT" <<'PY'
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+targets = [
+    "src/daemon/identity/signer_policy.rs",
+    "src/daemon/invocation/dispatch/request.rs",
+    "src/ffi/invocation/mod.rs",
+    "sdk/go/cabi_runtime.go",
+    "sdk/go/signing.go",
+    "sdk/go/runtime_identity.go",
+    "sdk/python/easynet_sdk/_cabi.py",
+    "sdk/python/easynet_sdk/providers/easynet/keyring.py",
+    "sdk/python/easynet_sdk/signer_handle.py",
+    "sdk/schemas/authority.schema.json",
+    "sdk/conformance/canonical-public-api.json",
+    "sdk/conformance/sdk-parity-matrix.json",
+]
+forbidden = [
+    ("local_daemon_signing", "legacy_local_daemon_signing_mode"),
+    ("daemon_key_inventory", "legacy_daemon_key_inventory_source"),
+    ("daemon_keyring", "legacy_daemon_keyring_source"),
+    ("daemon-key-inventory", "legacy_daemon_key_inventory_policy_ref"),
+]
+required = [
+    ("provider_managed_signing", "provider_managed_signing_mode_missing"),
+    ("provider_key_inventory", "provider_key_inventory_source_missing"),
+    ("provider-key-inventory", "provider_key_inventory_policy_ref_missing"),
+]
+combined = []
+for rel in targets:
+    path = root / rel
+    if not path.exists():
+        raise SystemExit(f"sdk_provider_managed_signing_custody:missing:{rel}")
+    text = path.read_text(encoding="utf-8", errors="replace")
+    combined.append(text)
+    for token, code in forbidden:
+        if token in text:
+            raise SystemExit(f"sdk_provider_managed_signing_custody:{code}:{rel}")
+all_text = "\n".join(combined)
+for token, code in required:
+    if token not in all_text:
+        raise SystemExit(f"sdk_provider_managed_signing_custody:{code}")
+PY
+}
+
 check_sdk_runtime_receipt_type_state_binding_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local go_runtime="$cli_root/sdk/go/runtime.go"
@@ -16274,6 +16322,7 @@ EOF
   check_swift_sdk_runtime_receipt_projection_contract
   check_sdk_receipt_profile_convergence_contract
   check_sdk_session_authority_binding_facade_contract
+  check_sdk_provider_managed_signing_custody_contract
   check_sdk_runtime_receipt_type_state_binding_contract
   check_start_attach_user_signer_readiness_contract
   echo "canonical-runtime-convergence-v2 self-test ok"
@@ -16451,5 +16500,6 @@ check_node_sdk_runtime_receipt_projection_contract
 check_swift_sdk_runtime_receipt_projection_contract
 check_sdk_receipt_profile_convergence_contract
 check_sdk_session_authority_binding_facade_contract
+check_sdk_provider_managed_signing_custody_contract
 check_sdk_runtime_receipt_type_state_binding_contract
 echo "canonical-runtime-convergence-v2: OK"

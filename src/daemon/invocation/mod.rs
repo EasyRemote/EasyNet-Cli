@@ -104,7 +104,8 @@ pub use dispatch::invocation_wire::{
 #[cfg(feature = "axon-pb")]
 pub use dispatch::{
     CallerSignatureMaterial, DaemonInvocation, DaemonInvocationBuilder, InvocationArgsSet,
-    InvocationArgsUnset, InvocationDraft, InvocationTuple, KeyServiceLocalDaemonInvocationSigner,
-    LocalDaemonInvocationSigner, PrepareOptions, PreparedInvocation, SignedInvocation,
-    SignerPolicy, SignerPolicyMode, SigningMaterial,
+    InvocationArgsUnset, InvocationDraft, InvocationTuple,
+    KeyServiceProviderManagedInvocationSigner, PrepareOptions, PreparedInvocation,
+    ProviderManagedInvocationSigner, SignedInvocation, SignerPolicy, SignerPolicyMode,
+    SigningMaterial,
 };

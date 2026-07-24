@@ -158,7 +158,7 @@ func TestManagedSigningClientConformsToDaemonKeyServiceProtocol(t *testing.T) {
 	select {
 	case <-done:
 	case <-time.After(time.Second):
-		t.Fatal("fake daemon key service did not receive the complete managed-signing operation sequence")
+		t.Fatal("fake provider key service did not receive the complete managed-signing operation sequence")
 	}
 }
 
@@ -432,7 +432,7 @@ func TestManagedSigningProjectionValidatesCanonicalPolicyAndPeerFingerprint(t *t
 	publicKey := ed25519.NewKeyFromSeed(bytesOf(20, ed25519.SeedSize)).Public().(ed25519.PublicKey)
 	t.Run("signer policy reference", func(t *testing.T) {
 		entry := managedSigningKeyFixture("key-1", publicKey, "active", 0, "", "easynet:///r/acme/agent/signer")
-		entry["signer_policy_ref"] = "daemon-key-inventory:sha256:00000000000000000000000000000000"
+		entry["signer_policy_ref"] = "provider-key-inventory:sha256:00000000000000000000000000000000"
 		socketPath := startRuntimeKeyringTestServer(t, func(map[string]any) map[string]any {
 			return map[string]any{"result": "inventory_key", "entry": entry}
 		})

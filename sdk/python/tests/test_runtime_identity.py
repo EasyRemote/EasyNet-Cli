@@ -31,7 +31,7 @@ class RuntimeIdentityTests(unittest.TestCase):
                 self.assertEqual(caught.exception.code, ErrorCode.INVALID_ARGUMENT)
                 self.assertEqual(caught.exception.stage, "key_service")
 
-    def test_load_and_sign_use_daemon_keyring_protocol(self) -> None:
+    def test_load_and_sign_use_provider_key_inventory_protocol(self) -> None:
         private_key = Ed25519PrivateKey.from_private_bytes(bytes(range(32)))
         public_key = private_key.public_key().public_bytes(
             encoding=serialization.Encoding.Raw,
@@ -70,7 +70,7 @@ class RuntimeIdentityTests(unittest.TestCase):
         self.assertEqual(requests[1]["public_key_b64"], public_key_b64)
         self.assertEqual(
             requests[1]["signer_policy_ref"],
-            f"daemon-key-inventory:sha256:{expected_policy}",
+            f"provider-key-inventory:sha256:{expected_policy}",
         )
         self.assertNotIn("private_key_seed", requests[1])
         self.assertNotIn("vault_path", requests[1])

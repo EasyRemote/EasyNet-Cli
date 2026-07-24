@@ -1,24 +1,24 @@
-id: invocation/local_daemon_signing_boundary
+id: invocation/provider_managed_signing_boundary
 profile: runtime_core
 required_for:
   - rust
   - c_abi
   - go
   - python
-description: Local daemon signing still creates a SignedInvocation before submission.
+description: Provider-managed signing still creates a SignedInvocation before submission.
 steps:
   - action: prepare
     fixture: invocation.complete.v4.json
-  - action: local_daemon_sign
+  - action: provider_managed_sign
 expect:
   result: ok
   public_object: SignedInvocation
   signer_handle_profile: signing
-  signer_handle_policy_mode: local_daemon_signing
+  signer_handle_policy_mode: provider_managed_signing
   signer_handle_policy_usage: invocation.sign
   signer_handle_policy_ref_required: true
   signer_handle_inventory_owner_bound: true
   signer_handle_key_state: active
-  signer_handle_source: daemon_key_inventory
+  signer_handle_source: provider_key_inventory
   forged_signer_handle_rejected: true
   signer_workflow_acquisition_provider_bound: true

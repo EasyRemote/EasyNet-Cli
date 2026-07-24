@@ -992,7 +992,7 @@ class CABIRuntimeTransport:
         key = _prepared_key(prepared)
         prepared_c_id = self._prepared_handles.claim_for_signing(key)
         try:
-            if _signed_invocation_uses_local_daemon_signing(signed):
+            if _signed_invocation_uses_provider_managed_signing(signed):
                 signed_c_id, _ = self.lib.invocation_sign_prepared_local(prepared_c_id)
             else:
                 signature_json = json.dumps(
@@ -1859,7 +1859,7 @@ def _prepared_key(decoded: dict[str, object]) -> str:
     )
 
 
-def _signed_invocation_uses_local_daemon_signing(
+def _signed_invocation_uses_provider_managed_signing(
     decoded: dict[str, object],
 ) -> bool:
     policy = decoded.get("policy")
@@ -1882,7 +1882,7 @@ def _signed_invocation_uses_local_daemon_signing(
             retry=RetryHint.NEVER,
             message="policy.mode must be a string",
         )
-    return mode == "local_daemon_signing"
+    return mode == "provider_managed_signing"
 
 
 def _profile_stream_protocol_error(message: str, details: object) -> SDKError:

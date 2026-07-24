@@ -212,7 +212,7 @@
       "profile": "runtime_core"
     },
     {
-      "case_id": "invocation/local_daemon_signing_boundary",
+      "case_id": "invocation/provider_managed_signing_boundary",
       "evidence": [
         {
           "kind": "python_test",

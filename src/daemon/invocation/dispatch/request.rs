@@ -520,8 +520,8 @@ impl InvocationDraft {
         let args_digest_hex = hex::encode(descriptor_bound.envelope().args_digest);
         let expires_at_unix_ms = unix_ms_after(options.expires_in);
         let signer_policy = SignerPolicy {
-            mode: if options.local_daemon_signing {
-                SignerPolicyMode::LocalDaemonSigning
+            mode: if options.provider_managed_signing {
+                SignerPolicyMode::ProviderManagedSigning
             } else {
                 SignerPolicyMode::CallerSigning
             },
@@ -610,7 +610,7 @@ pub struct PrepareOptions {
     pub expires_in: Duration,
     pub signer_id: Option<String>,
     pub policy_ref: Option<String>,
-    pub local_daemon_signing: bool,
+    pub provider_managed_signing: bool,
 }
 
 #[cfg(feature = "axon-pb")]
@@ -620,7 +620,7 @@ impl Default for PrepareOptions {
             expires_in: Duration::from_secs(300),
             signer_id: None,
             policy_ref: None,
-            local_daemon_signing: false,
+            provider_managed_signing: false,
         }
     }
 }
@@ -704,29 +704,30 @@ impl PreparedInvocation {
         })
     }
 
-    /// Ask a daemon-owned local signer to attach signature material
-    /// under the prepared local-daemon signing policy.
-    pub fn sign_with_local_daemon_signer<S>(self, signer: &S) -> Result<SignedInvocation>
+    /// Ask a provider-managed signer to attach signature material
+    /// under the prepared provider-managed signing policy.
+    pub fn sign_with_provider_managed_signer<S>(self, signer: &S) -> Result<SignedInvocation>
     where
-        S: LocalDaemonInvocationSigner + ?Sized,
+        S: ProviderManagedInvocationSigner + ?Sized,
     {
         let policy = self.signing_material.signer_policy();
-        if policy.mode != SignerPolicyMode::LocalDaemonSigning {
+        if policy.mode != SignerPolicyMode::ProviderManagedSigning {
             return Err(DaemonError::InvalidInvocation(
-                "local daemon signing requires signer policy mode local_daemon_signing".to_string(),
+                "provider-managed signing requires signer policy mode provider_managed_signing"
+                    .to_string(),
             ));
         }
         if policy.signer_id.trim().is_empty() {
             return Err(DaemonError::InvalidInvocation(
-                "local daemon signing requires signer policy signer_id".to_string(),
+                "provider-managed signing requires signer policy signer_id".to_string(),
             ));
         }
         if policy.policy_ref.trim().is_empty() {
             return Err(DaemonError::InvalidInvocation(
-                "local daemon signing requires signer policy policy_ref".to_string(),
+                "provider-managed signing requires signer policy policy_ref".to_string(),
             ));
         }
-        let signature = signer.sign_local_daemon_invocation(&self)?;
+        let signature = signer.sign_provider_managed_invocation(&self)?;
         self.sign_with_caller_signature(signature)
     }
 
@@ -760,11 +761,11 @@ impl PreparedInvocation {
     }
 }
 
-/// Daemon-owned signer seam for the `Prepared -> Signed`
-/// local-daemon transition.
+/// Provider-managed signer seam for the `Prepared -> Signed`
+/// provider-managed transition.
 #[cfg(feature = "axon-pb")]
-pub trait LocalDaemonInvocationSigner {
-    fn sign_local_daemon_invocation(
+pub trait ProviderManagedInvocationSigner {
+    fn sign_provider_managed_invocation(
         &self,
         prepared: &PreparedInvocation,
     ) -> Result<CallerSignatureMaterial>;
@@ -824,12 +825,12 @@ impl ManagedSigningKeyService for crate::daemon::identity::self_identity::Keyrin
 /// This object deliberately owns no vault path, master key, seed, or inventory
 /// record. The UDS service is the only private-key custody boundary.
 #[cfg(feature = "axon-pb")]
-pub struct KeyServiceLocalDaemonInvocationSigner {
+pub struct KeyServiceProviderManagedInvocationSigner {
     key_service: std::sync::Arc<dyn ManagedSigningKeyService>,
 }
 
 #[cfg(feature = "axon-pb")]
-impl KeyServiceLocalDaemonInvocationSigner {
+impl KeyServiceProviderManagedInvocationSigner {
     pub fn new(key_service: std::sync::Arc<dyn ManagedSigningKeyService>) -> Self {
         Self { key_service }
     }
@@ -842,36 +843,36 @@ impl KeyServiceLocalDaemonInvocationSigner {
 }
 
 #[cfg(feature = "axon-pb")]
-impl LocalDaemonInvocationSigner for KeyServiceLocalDaemonInvocationSigner {
-    fn sign_local_daemon_invocation(
+impl ProviderManagedInvocationSigner for KeyServiceProviderManagedInvocationSigner {
+    fn sign_provider_managed_invocation(
         &self,
         prepared: &PreparedInvocation,
     ) -> Result<CallerSignatureMaterial> {
         let policy = prepared.signing_material().signer_policy();
         let key_id = policy.signer_id.strip_prefix("signer-").ok_or_else(|| {
             DaemonError::InvalidInvocation(
-                "local daemon signer_id must use signer-{key_id}".to_string(),
+                "provider-managed signer_id must use signer-{key_id}".to_string(),
             )
         })?;
         let tuple = prepared.tuple();
         let entry = self.key_service.public_key(key_id).map_err(|err| {
             DaemonError::InvalidInvocation(format!(
-                "local daemon signer key service could not resolve managed key: {err}"
+                "provider-managed signer key service could not resolve managed key: {err}"
             ))
         })?;
         if entry.status != crate::daemon::keyring::ManagedSigningStatus::Active {
             return Err(DaemonError::InvalidInvocation(
-                "local daemon signer key must be active".to_string(),
+                "provider-managed signer key must be active".to_string(),
             ));
         }
         if entry.bound_subject.as_deref() != Some(tuple.caller_ura.as_str()) {
             return Err(DaemonError::InvalidInvocation(
-                "local daemon signer key owner does not match invocation caller".to_string(),
+                "provider-managed signer key owner does not match invocation caller".to_string(),
             ));
         }
         if entry.signer_policy_ref.as_deref() != Some(policy.policy_ref.as_str()) {
             return Err(DaemonError::InvalidInvocation(
-                "local daemon signer policy_ref does not match daemon-issued key policy"
+                "provider-managed signer policy_ref does not match provider-issued key policy"
                     .to_string(),
             ));
         }
@@ -879,7 +880,7 @@ impl LocalDaemonInvocationSigner for KeyServiceLocalDaemonInvocationSigner {
             .key_service
             .sign(&entry, prepared.signing_material().canonical_bytes())
             .map_err(|err| {
-                DaemonError::InvalidInvocation(format!("local daemon signing failed: {err}"))
+                DaemonError::InvalidInvocation(format!("provider-managed signing failed: {err}"))
             })?;
         Ok(CallerSignatureMaterial::new(
             "ed25519",
@@ -942,7 +943,7 @@ pub struct SignerPolicy {
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum SignerPolicyMode {
     CallerSigning,
-    LocalDaemonSigning,
+    ProviderManagedSigning,
 }
 
 #[cfg(feature = "axon-pb")]
@@ -950,7 +951,7 @@ impl SignerPolicyMode {
     pub fn as_str(self) -> &'static str {
         match self {
             SignerPolicyMode::CallerSigning => "caller_signing",
-            SignerPolicyMode::LocalDaemonSigning => "local_daemon_signing",
+            SignerPolicyMode::ProviderManagedSigning => "provider_managed_signing",
         }
     }
 }
@@ -1064,7 +1065,7 @@ impl SignedInvocation {
             expires_in: Duration::from_secs(60),
             signer_id: Some(target.caller_ura),
             policy_ref: Some("invocation.cancel.caller".to_string()),
-            local_daemon_signing: false,
+            provider_managed_signing: false,
         })
     }
 }
@@ -1631,7 +1632,7 @@ mod tests {
                 expires_in: Duration::from_secs(60),
                 signer_id: Some("browser-key".to_string()),
                 policy_ref: Some("policy/local".to_string()),
-                local_daemon_signing: false,
+                provider_managed_signing: false,
             })
             .unwrap();
 
@@ -1754,8 +1755,8 @@ mod tests {
         .prepare(PrepareOptions {
             expires_in: Duration::from_secs(60),
             signer_id: Some("signer-alice-key-1".to_string()),
-            policy_ref: Some("daemon-key-inventory:sha256:test-policy".to_string()),
-            local_daemon_signing: true,
+            policy_ref: Some("provider-key-inventory:sha256:test-policy".to_string()),
+            provider_managed_signing: true,
         })
         .unwrap();
 
@@ -1768,10 +1769,10 @@ mod tests {
             .unwrap();
 
         assert_eq!(signed.signer_id(), "signer-alice-key-1");
-        assert_eq!(signed.policy().mode.as_str(), "local_daemon_signing");
+        assert_eq!(signed.policy().mode.as_str(), "provider_managed_signing");
         assert_eq!(
             signed.policy().policy_ref,
-            "daemon-key-inventory:sha256:test-policy"
+            "provider-key-inventory:sha256:test-policy"
         );
         assert!(signed.policy().expires_at_unix_ms > 0);
     }
@@ -1803,7 +1804,7 @@ mod tests {
     }
 
     #[test]
-    fn sdk_local_daemon_signer_uses_keyring_inventory() {
+    fn sdk_provider_managed_signer_uses_provider_inventory() {
         let caller = "easynet:///r/acme/device/dev-a";
         let (key_service, entry) = test_managed_key_service(caller);
         let signer_id = format!("signer-{}", entry.key_id);
@@ -1826,23 +1827,23 @@ mod tests {
             expires_in: Duration::from_secs(60),
             signer_id: Some(signer_id.clone()),
             policy_ref: Some(policy_ref.clone()),
-            local_daemon_signing: true,
+            provider_managed_signing: true,
         })
         .unwrap();
 
-        let signer = KeyServiceLocalDaemonInvocationSigner::new(key_service);
-        let signed = prepared.sign_with_local_daemon_signer(&signer).unwrap();
+        let signer = KeyServiceProviderManagedInvocationSigner::new(key_service);
+        let signed = prepared.sign_with_provider_managed_signer(&signer).unwrap();
 
         assert_eq!(signed.signer_id(), signer_id);
         assert_eq!(signed.signature().algorithm, "ed25519");
         assert_eq!(signed.signature().signature.len(), 64);
         assert_eq!(signed.signature().key_id_hint, signer_id);
         assert_eq!(signed.policy().policy_ref, policy_ref);
-        assert_eq!(signed.policy().mode.as_str(), "local_daemon_signing");
+        assert_eq!(signed.policy().mode.as_str(), "provider_managed_signing");
     }
 
     #[test]
-    fn sdk_local_daemon_signer_rejects_policy_ref_mismatch() {
+    fn sdk_provider_managed_signer_rejects_policy_ref_mismatch() {
         let caller = "easynet:///r/acme/device/dev-a";
         let (key_service, entry) = test_managed_key_service(caller);
         let hub = crate::core::ura::hub_ura("acme");
@@ -1862,13 +1863,15 @@ mod tests {
         .prepare(PrepareOptions {
             expires_in: Duration::from_secs(60),
             signer_id: Some(format!("signer-{}", entry.key_id)),
-            policy_ref: Some("daemon-key-inventory:sha256:wrong".to_string()),
-            local_daemon_signing: true,
+            policy_ref: Some("provider-key-inventory:sha256:wrong".to_string()),
+            provider_managed_signing: true,
         })
         .unwrap();
 
-        let signer = KeyServiceLocalDaemonInvocationSigner::new(key_service);
-        let err = prepared.sign_with_local_daemon_signer(&signer).unwrap_err();
+        let signer = KeyServiceProviderManagedInvocationSigner::new(key_service);
+        let err = prepared
+            .sign_with_provider_managed_signer(&signer)
+            .unwrap_err();
 
         assert!(format!("{err}").contains("policy_ref"));
     }

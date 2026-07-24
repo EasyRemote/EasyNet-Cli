@@ -429,7 +429,7 @@ class SigningTests(unittest.TestCase):
             owner_ura=handle.owner_ura,
             key_id=handle.key_id,
             algorithm=handle.algorithm,
-            policy={"mode": "local_daemon_signing"},
+            policy={"mode": "provider_managed_signing"},
             metadata=handle.metadata,
         )
 
@@ -444,7 +444,7 @@ class SigningTests(unittest.TestCase):
             key_id=handle.key_id,
             algorithm=handle.algorithm,
             policy={
-                "mode": "local_daemon_signing",
+                "mode": "provider_managed_signing",
                 "usage": "invocation.sign",
                 "signer_id": "other-signer",
             },
@@ -466,7 +466,7 @@ class SigningTests(unittest.TestCase):
             policy=handle.policy,
             metadata={
                 **dict(handle.metadata),
-                "policy_ref": "daemon-key-inventory:sha256:other-policy",
+                "policy_ref": "provider-key-inventory:sha256:other-policy",
             },
         )
 
@@ -520,7 +520,7 @@ class SigningTests(unittest.TestCase):
                     "descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
                     "expires_at_unix_ms": 1783000000000,
                     "signer_policy": {
-                        "mode": "local_daemon_signing",
+                        "mode": "provider_managed_signing",
                         "signer_id": "other-signer"
                     }
                 }
@@ -566,8 +566,8 @@ class SigningTests(unittest.TestCase):
 
 
 def signer_handle(public_key_base64: str = "") -> SignerHandle:
-    policy_ref = "daemon-key-inventory:sha256:test-policy"
-    metadata = {"source": "daemon_keyring", "policy_ref": policy_ref}
+    policy_ref = "provider-key-inventory:sha256:test-policy"
+    metadata = {"source": "provider_key_inventory", "policy_ref": policy_ref}
     if public_key_base64:
         metadata["public_key_base64"] = public_key_base64
     return SignerHandle(
@@ -577,7 +577,7 @@ def signer_handle(public_key_base64: str = "") -> SignerHandle:
         key_id="alice-key-1",
         algorithm="ed25519",
         policy={
-            "mode": "local_daemon_signing",
+            "mode": "provider_managed_signing",
             "usage": "invocation.sign",
             "signer_id": "signer-alice-key-1",
             "policy_ref": policy_ref,

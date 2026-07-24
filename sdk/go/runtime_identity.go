@@ -18,7 +18,7 @@ func identitySignerPolicyRef(ownerURA string, keyID string, publicKeyBase64 stri
 	hasher.Write([]byte(keyID))
 	hasher.Write([]byte{0})
 	hasher.Write([]byte(publicKeyBase64))
-	return "daemon-key-inventory:sha256:" + hex.EncodeToString(hasher.Sum(nil)[:16])
+	return "provider-key-inventory:sha256:" + hex.EncodeToString(hasher.Sum(nil)[:16])
 }
 
 // RuntimeSigningIdentity is an opaque provider-owned signing capability. It
@@ -185,10 +185,10 @@ func (c runtimeKeyringClient) sign(ownerURA string, publicKey ed25519.PublicKey,
 	}
 	signature, err := decodeCanonicalDaemonKeyServiceBase64(encoded, ed25519.SignatureSize, "Ed25519 signature")
 	if err != nil {
-		return nil, invalidDaemonKeyServicePayload("daemon key service returned an invalid Ed25519 signature", err)
+		return nil, invalidDaemonKeyServicePayload("provider key service returned an invalid Ed25519 signature", err)
 	}
 	if !ed25519.Verify(publicKey, canonicalBytes, signature) {
-		return nil, invalidDaemonKeyServicePayload("daemon key service returned a signature that does not verify against the bound runtime identity", nil)
+		return nil, invalidDaemonKeyServicePayload("provider key service returned a signature that does not verify against the bound runtime identity", nil)
 	}
 	return signature, nil
 }
@@ -222,7 +222,7 @@ func runtimeKeyringPublicKey(response map[string]json.RawMessage) (ed25519.Publi
 	}
 	publicKey, err := decodeCanonicalDaemonKeyServiceBase64(encoded, ed25519.PublicKeySize, "Ed25519 public key")
 	if err != nil {
-		return nil, invalidDaemonKeyServicePayload("daemon key service returned an invalid Ed25519 public key", err)
+		return nil, invalidDaemonKeyServicePayload("provider key service returned an invalid Ed25519 public key", err)
 	}
 	return ed25519.PublicKey(publicKey), nil
 }

@@ -71,7 +71,7 @@ class RuntimeSigningIdentity:
                 )
             except (ValueError, InvalidSignature) as error:
                 raise invalid_key_service_payload(
-                    "daemon key service returned a signature that does not verify "
+                    "provider key service returned a signature that does not verify "
                     "against the bound runtime identity",
                     error,
                 ) from error
@@ -184,7 +184,7 @@ def _runtime_signer_policy_ref(owner_ura: str, public_key_b64: str) -> str:
         + b"\0"
         + public_key_b64.encode("ascii")
     ).hexdigest()[:32]
-    return f"daemon-key-inventory:sha256:{digest}"
+    return f"provider-key-inventory:sha256:{digest}"
 
 
 def _runtime_identity_operation(operation: Callable[[], _T]) -> _T:
