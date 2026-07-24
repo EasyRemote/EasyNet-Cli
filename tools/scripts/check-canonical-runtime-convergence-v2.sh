@@ -12540,6 +12540,51 @@ for required_test in (
 PY
 }
 
+check_python_sdk_runtime_receipt_projection_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local runtime="$cli_root/sdk/python/easynet_sdk/runtime.py"
+  local tests="$cli_root/sdk/python/tests/test_runtime.py"
+  [[ -f "$runtime" ]] || fail "Python Runtime source is missing: ${runtime#$cli_root/}"
+  [[ -f "$tests" ]] || fail "Python runtime tests are missing: ${tests#$cli_root/}"
+
+  "$PYTHON_BIN" - "$runtime" "$tests" <<'PY'
+import sys
+from pathlib import Path
+
+runtime, tests = [Path(path).read_text(encoding="utf-8") for path in sys.argv[1:]]
+
+for fragment, label in {
+    "_validate_runtime_receipt_raw_proof_shape": "raw_proof_shape_validator_missing",
+    "_validate_runtime_receipt_authority_binding_shape": "authority_binding_shape_validator_missing",
+    "_require_runtime_receipt_exact_keys": "exact_object_schema_validator_missing",
+    "contains noncanonical field": "noncanonical_field_error_missing",
+    'if "proof_payload_base64" not in proof': "proof_payload_presence_check_missing",
+    '"runtime receipt summary is missing authority_proof.proof_payload_base64"': "proof_payload_presence_error_missing",
+}.items():
+    if fragment not in runtime:
+        raise SystemExit(f"python_runtime_receipt_projection:{label}")
+
+for forbidden, label in {
+    'self.assertIn("issuer_ura", raised.exception.message)': "retired_session_field_missing_only_test",
+}.items():
+    if forbidden in tests:
+        raise SystemExit(f"python_runtime_receipt_projection:{label}")
+
+for required_test in (
+    "legacy_authority",
+    "authority_binding contains noncanonical field legacy_authority",
+    "legacy_proof_fact",
+    "authority_proof contains noncanonical field legacy_proof_fact",
+    'proof.pop("proof_payload_base64")',
+    "legacy_profile",
+    "authority_proof.issuer contains noncanonical field legacy_profile",
+    "authority_binding contains noncanonical field",
+):
+    if required_test not in tests:
+        raise SystemExit(f"python_runtime_receipt_projection:missing_test:{required_test}")
+PY
+}
+
 check_node_sdk_runtime_receipt_projection_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local runtime="$cli_root/sdk/node/index.js"
@@ -12928,7 +12973,7 @@ required_tests = {
         [
             "test_runtime_receipt_session_authority_facade_uses_generic_fields",
             "inv-retired-session-authority",
-            'self.assertIn("issuer_ura"',
+            "authority_binding contains noncanonical field",
         ],
     ),
     "python-direct": (
@@ -13401,6 +13446,17 @@ EOF
     "$tmp/cli-go-receipt-proof-shape-legacy/sdk/go/runtime.go"
   if ( CLI_ROOT="$tmp/cli-go-receipt-proof-shape-legacy"; check_go_sdk_runtime_receipt_projection_contract ) >/dev/null 2>&1; then
     fail "self-test expected Go SDK receipt proof-fact exact-shape gate to fail"
+  fi
+  mkdir -p "$tmp/cli-python-receipt-proof-shape-legacy/sdk/python/easynet_sdk" \
+    "$tmp/cli-python-receipt-proof-shape-legacy/sdk/python/tests"
+  cp "$ROOT/sdk/python/easynet_sdk/runtime.py" \
+    "$tmp/cli-python-receipt-proof-shape-legacy/sdk/python/easynet_sdk/runtime.py"
+  cp "$ROOT/sdk/python/tests/test_runtime.py" \
+    "$tmp/cli-python-receipt-proof-shape-legacy/sdk/python/tests/test_runtime.py"
+  perl -0pi -e 's/_require_runtime_receipt_exact_keys/_require_runtime_receipt_wide_keys/g' \
+    "$tmp/cli-python-receipt-proof-shape-legacy/sdk/python/easynet_sdk/runtime.py"
+  if ( CLI_ROOT="$tmp/cli-python-receipt-proof-shape-legacy"; check_python_sdk_runtime_receipt_projection_contract ) >/dev/null 2>&1; then
+    fail "self-test expected Python SDK receipt proof-fact exact-shape gate to fail"
   fi
   mkdir -p "$tmp/cli-node-receipt-legacy/sdk/node/test"
   cat >"$tmp/cli-node-receipt-legacy/sdk/node/index.js" <<'EOF'
@@ -19125,6 +19181,7 @@ EOF
   check_receipt_proof_fact_contract
   check_java_sdk_runtime_receipt_projection_contract
   check_go_sdk_runtime_receipt_projection_contract
+  check_python_sdk_runtime_receipt_projection_contract
   check_node_sdk_runtime_receipt_projection_contract
   check_swift_sdk_runtime_receipt_projection_contract
   check_sdk_receipt_profile_convergence_contract
@@ -19332,6 +19389,7 @@ check_receipt_proof_fact_contract
 check_java_sdk_invocation_authority_binding_contract
 check_java_sdk_runtime_receipt_projection_contract
 check_go_sdk_runtime_receipt_projection_contract
+check_python_sdk_runtime_receipt_projection_contract
 check_node_sdk_runtime_receipt_projection_contract
 check_swift_sdk_runtime_receipt_projection_contract
 check_sdk_receipt_profile_convergence_contract

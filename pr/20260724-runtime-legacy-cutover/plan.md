@@ -1380,6 +1380,55 @@ architecture rather than add feature surface.
   - `cargo fmt --check`
   - `git diff --check`
 
+## Iteration 38 candidate policy
+
+- Converge the Python SDK to the same receipt proof-fact exactness now enforced
+  in Java and Go. Python `RuntimeReceipt` kept the raw receipt object, but
+  nested proof/binding structures were still accepted as wide mappings before
+  canonical proof facts were built.
+- codegraph confirmed the same split schema authority in Python receipt
+  validation: required canonical facts were checked, while unknown legacy
+  metadata in authority bindings, authority proofs, issuer refs, signatures,
+  causal bindings, and receipt refs could still survive the raw JSON boundary.
+- The root abstraction problem is identical across SDKs: proof-fact
+  canonicalization cannot be the first authority boundary if raw proof objects
+  are not exact.
+- The selected cutover is to validate Python receipt proof-fact object shapes
+  before constructing canonical Axon proof facts, preserving public SDK
+  behavior while making the internal receipt model fail closed.
+
+## Iteration 38 decision log
+
+- Python `RuntimeReceipt.validate_proof_facts` now calls
+  `_validate_runtime_receipt_raw_proof_shape` before canonical proof-fact
+  construction.
+- Python receipt validation now rejects unknown fields in authority bindings,
+  authority proofs, issuer/entity refs, signatures, causal bindings, and receipt
+  refs.
+- `authority_proof.proof_payload_base64` is now explicit in Python receipt JSON:
+  it may be empty for binding-hash proofs, but it may not be omitted.
+- Added Python negative tests for legacy authority binding metadata, legacy
+  authority proof metadata, missing proof payload fields, and legacy issuer
+  profile metadata.
+- SPEC v2 now gates Python receipt proof-fact exactness with a negative
+  self-test that removes the exact-shape validator, and the session authority
+  facade gate now expects exact-schema rejection for retired Python session
+  fields.
+- Rebuilt `sdk/conformance/canonical-public-api.json` and
+  `sdk/conformance/sdk-parity-matrix.json` after Python SDK source changes.
+- Verification passed:
+  - `/Users/macbook.silan.tech/.local/bin/codegraph explore "Go Python runtime receipt authority_binding authority_proof proof facts unknown fields legacy metadata canonicalizer"`
+  - `PYTHONPATH=/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/python:/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli/sdk/python python3 -m pytest -q sdk/python/tests/test_runtime.py`
+  - `PYTHONPATH=/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/python:/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli/sdk/python python3 -m pytest -q sdk/python/tests`
+  - `python3 sdk/conformance/rebuild_public_api_model.py --write`
+  - `bash -n tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - `tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  - `tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - `tools/scripts/check-sdk-canonical-public-api.sh`
+  - `tools/scripts/check-architecture-convergence.sh`
+  - `cargo fmt --check`
+  - `git diff --check`
+
 ## Iteration 36 candidate policy
 
 - Move the same proof-custody convergence into the Java SDK receipt validator.

@@ -629,6 +629,52 @@ class RuntimeTests(unittest.TestCase):
             RuntimeReceipt.from_mapping(receipt)
 
         receipt = canonical_runtime_receipt("inv-1", "completed", "Completed", 1)
+        authority = receipt["authority_binding"]
+        assert isinstance(authority, dict)
+        authority["legacy_authority"] = "compat-carrier"
+        proof = receipt["authority_proof"]
+        assert isinstance(proof, dict)
+        proof["binding"] = dict(authority)
+        with self.assertRaises(SDKError) as raised:
+            RuntimeReceipt.from_mapping(receipt)
+        self.assertIn(
+            "authority_binding contains noncanonical field legacy_authority",
+            raised.exception.message,
+        )
+
+        receipt = canonical_runtime_receipt("inv-1", "completed", "Completed", 1)
+        proof = receipt["authority_proof"]
+        assert isinstance(proof, dict)
+        proof["legacy_proof_fact"] = "compat-carrier"
+        with self.assertRaises(SDKError) as raised:
+            RuntimeReceipt.from_mapping(receipt)
+        self.assertIn(
+            "authority_proof contains noncanonical field legacy_proof_fact",
+            raised.exception.message,
+        )
+
+        receipt = canonical_runtime_receipt("inv-1", "completed", "Completed", 1)
+        proof = receipt["authority_proof"]
+        assert isinstance(proof, dict)
+        proof.pop("proof_payload_base64")
+        with self.assertRaises(SDKError) as raised:
+            RuntimeReceipt.from_mapping(receipt)
+        self.assertIn("proof_payload_base64", raised.exception.message)
+
+        receipt = canonical_runtime_receipt("inv-1", "completed", "Completed", 1)
+        proof = receipt["authority_proof"]
+        assert isinstance(proof, dict)
+        issuer = proof["issuer"]
+        assert isinstance(issuer, dict)
+        proof["issuer"] = {**issuer, "legacy_profile": "opaque"}
+        with self.assertRaises(SDKError) as raised:
+            RuntimeReceipt.from_mapping(receipt)
+        self.assertIn(
+            "authority_proof.issuer contains noncanonical field legacy_profile",
+            raised.exception.message,
+        )
+
+        receipt = canonical_runtime_receipt("inv-1", "completed", "Completed", 1)
         proof = receipt["authority_proof"]
         assert isinstance(proof, dict)
         proof["binding_kind"] = "delegation"
@@ -1034,7 +1080,10 @@ class RuntimeTests(unittest.TestCase):
         with self.assertRaises(SDKError) as raised:
             RuntimeReceipt.from_mapping(retired)
         self.assertTrue(is_code(raised.exception, ErrorCode.INVALID_ARGUMENT))
-        self.assertIn("issuer_ura", raised.exception.message)
+        self.assertIn(
+            "authority_binding contains noncanonical field",
+            raised.exception.message,
+        )
 
     def test_runtime_receipt_required_summary_rejects_malformed_hash(self) -> None:
         malformed = canonical_runtime_receipt("inv-1", "completed", "completed", 1)

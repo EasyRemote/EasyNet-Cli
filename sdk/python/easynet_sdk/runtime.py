@@ -608,6 +608,7 @@ class RuntimeReceipt:
             raise _invalid_runtime("runtime receipt summary is missing authority_proof")
         if "parent_receipts" not in self.raw:
             raise _invalid_runtime("runtime receipt summary is missing parent_receipts")
+        _validate_runtime_receipt_raw_proof_shape(self.raw)
         _validate_runtime_receipt_canonical_proof_facts(self)
 
     def to_json_dict(self) -> dict[str, object]:
@@ -1553,6 +1554,12 @@ def _validate_runtime_receipt_ref(
     decoded = _receipt_mapping(value, field_name)
     if decoded is None:
         raise _invalid_runtime(f"{field_name} must be an object")
+    _require_runtime_receipt_exact_keys(
+        decoded,
+        field_name,
+        "receipt_hash_hex",
+        "receipt_ura",
+    )
     _runtime_receipt_hash(
         decoded.get("receipt_hash_hex"),
         f"{field_name}.receipt_hash_hex",
@@ -1573,14 +1580,27 @@ def _validate_runtime_receipt_causal_binding(
             "runtime receipt causal_binding form does not match causal_binding_kind"
         )
     if form == "none":
+        _require_runtime_receipt_exact_keys(binding, "causal_binding", "form")
         return
     if form == "scalar":
+        _require_runtime_receipt_exact_keys(
+            binding,
+            "causal_binding",
+            "form",
+            "receipt",
+        )
         _validate_runtime_receipt_ref(
             binding.get("receipt"),
             "causal_binding.receipt",
         )
         return
     if form == "list":
+        _require_runtime_receipt_exact_keys(
+            binding,
+            "causal_binding",
+            "form",
+            "prior",
+        )
         prior = binding.get("prior")
         if not isinstance(prior, list) or not prior:
             raise _invalid_runtime("causal_binding.prior must be a non-empty array")
@@ -1588,9 +1608,16 @@ def _validate_runtime_receipt_causal_binding(
             _validate_runtime_receipt_ref(
                 receipt,
                 f"causal_binding.prior[{index}]",
-            )
+        )
         return
     if form == "merkle":
+        _require_runtime_receipt_exact_keys(
+            binding,
+            "causal_binding",
+            "form",
+            "root_hex",
+            "proof_ura",
+        )
         _runtime_receipt_hash(
             binding.get("root_hex"),
             "causal_binding.root_hex",
@@ -1623,6 +1650,179 @@ def _validate_runtime_receipt_signing_model(receipt: RuntimeReceipt) -> None:
         "host_attestation_base64",
         expected_length=64,
     )
+
+
+def _validate_runtime_receipt_raw_proof_shape(raw: Mapping[str, object]) -> None:
+    for field_name in (
+        "caller_binding",
+        "callee_binding",
+        "subject_binding",
+        "signer_binding",
+    ):
+        _require_runtime_receipt_exact_keys(
+            _runtime_receipt_raw_mapping(raw.get(field_name), field_name),
+            field_name,
+            "ura",
+            "profile",
+        )
+
+    _require_runtime_receipt_exact_keys(
+        _runtime_receipt_raw_mapping(raw.get("subject_ref"), "subject_ref"),
+        "subject_ref",
+        "kind",
+        "ura",
+        "profile",
+    )
+    _require_runtime_receipt_exact_keys(
+        _runtime_receipt_raw_mapping(raw.get("callee_signature"), "callee_signature"),
+        "callee_signature",
+        "algorithm",
+        "signature_base64",
+        "key_id_hint",
+    )
+
+    authority = _runtime_receipt_raw_mapping(
+        raw.get("authority_binding"),
+        "authority_binding",
+    )
+    _validate_runtime_receipt_authority_binding_shape(
+        authority,
+        "authority_binding",
+    )
+
+    proof = _runtime_receipt_raw_mapping(raw.get("authority_proof"), "authority_proof")
+    _require_runtime_receipt_exact_keys(
+        proof,
+        "authority_proof",
+        "proof_type",
+        "binding_kind",
+        "binding",
+        "proof_payload_base64",
+        "proof_hash_hex",
+        "issuer",
+        "signature",
+        "admission_hook",
+    )
+    if "proof_payload_base64" not in proof:
+        raise _invalid_runtime(
+            "runtime receipt summary is missing authority_proof.proof_payload_base64"
+        )
+    _validate_runtime_receipt_authority_binding_shape(
+        _runtime_receipt_raw_mapping(
+            proof.get("binding"),
+            "authority_proof.binding",
+        ),
+        "authority_proof.binding",
+    )
+    _require_runtime_receipt_exact_keys(
+        _runtime_receipt_raw_mapping(
+            proof.get("issuer"),
+            "authority_proof.issuer",
+        ),
+        "authority_proof.issuer",
+        "ura",
+        "profile",
+    )
+    if proof.get("signature") is not None:
+        _require_runtime_receipt_exact_keys(
+            _runtime_receipt_raw_mapping(
+                proof.get("signature"),
+                "authority_proof.signature",
+            ),
+            "authority_proof.signature",
+            "algorithm",
+            "signature_base64",
+            "key_id_hint",
+        )
+
+    parents = raw.get("parent_receipts")
+    if not isinstance(parents, list):
+        raise _invalid_runtime("parent_receipts must be an array")
+    for index, parent in enumerate(parents):
+        field_name = f"parent_receipts[{index}]"
+        _require_runtime_receipt_exact_keys(
+            _runtime_receipt_raw_mapping(parent, field_name),
+            field_name,
+            "receipt_hash_hex",
+            "receipt_ura",
+        )
+
+
+def _validate_runtime_receipt_authority_binding_shape(
+    value: Mapping[str, object],
+    field_name: str,
+) -> None:
+    kind = _required_receipt_text(value.get("kind"), f"{field_name}.kind")
+    if kind == "self":
+        _require_runtime_receipt_exact_keys(value, field_name, "kind", "principal_ura")
+        return
+    if kind == "delegation":
+        _require_runtime_receipt_exact_keys(
+            value,
+            field_name,
+            "kind",
+            "issuer_ura",
+            "subject_ura",
+            "caller_ura",
+            "audience",
+            "scopes",
+            "issued_at_ms",
+            "expires_at_ms",
+            "signature_base64",
+        )
+        return
+    if kind == "capability":
+        _require_runtime_receipt_exact_keys(value, field_name, "kind", "capability_ura")
+        return
+    if kind == "policy":
+        _require_runtime_receipt_exact_keys(value, field_name, "kind", "policy_ura")
+        return
+    if kind == "session":
+        _require_runtime_receipt_exact_keys(
+            value,
+            field_name,
+            "kind",
+            "issuer_ura",
+            "subject_ura",
+            "session_id",
+            "scopes",
+            "audiences",
+            "issued_at_ms",
+            "expires_at_ms",
+            "signature_base64",
+        )
+        return
+    if kind == "bootstrap":
+        _require_runtime_receipt_exact_keys(
+            value,
+            field_name,
+            "kind",
+            "principal_ura",
+            "realm",
+            "ability",
+        )
+        return
+    raise _invalid_runtime(f"{field_name}.kind is not canonical: {kind!r}")
+
+
+def _runtime_receipt_raw_mapping(
+    value: object,
+    field_name: str,
+) -> Mapping[str, object]:
+    if not isinstance(value, Mapping):
+        raise _invalid_runtime(f"{field_name} must be an object")
+    return value
+
+
+def _require_runtime_receipt_exact_keys(
+    value: Mapping[str, object],
+    field_name: str,
+    *allowed_keys: str,
+) -> None:
+    allowed = set(allowed_keys)
+    for key in value:
+        if key not in allowed:
+            raise _invalid_runtime(f"{field_name} contains noncanonical field {key}")
 
 
 def _validate_runtime_receipt_canonical_proof_facts(
