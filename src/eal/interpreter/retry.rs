@@ -36,9 +36,9 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use super::trace::{CapturedResult, RetryRecord, StepOutcome, StepTrace};
-use super::{millis_u64, IrStep, RunContext, StepDispatchOutcome, StepDispatcher, StepExecResult};
+use super::{millis_u64, RunContext, StepDispatchOutcome, StepDispatcher, StepExecResult};
 use crate::eal::diagnostics::EalError;
-use crate::eal::runtime::ir::IrFailurePolicy;
+use crate::eal::runtime::ir::{IrCall, IrFailurePolicy};
 use crate::support::platform::output;
 
 pub(super) const RETRY_BASE_MS: u64 = 1000;
@@ -98,7 +98,7 @@ pub(super) fn verify_output_done(bytes: &[u8]) -> VerifyDone {
 pub(super) fn execute_step_with_retry(
     dispatcher: &dyn StepDispatcher,
     run: RunContext<'_>,
-    step: &IrStep,
+    step: &IrCall,
     arguments: &Value,
     dependency_receipts: &[
         crate::daemon::execution::child_invocation::ChildInvocationReceiptAnchor
@@ -307,7 +307,7 @@ impl std::fmt::Display for ResolveError {
 }
 
 pub(super) fn resolve_arguments(
-    step: &IrStep,
+    step: &IrCall,
     results: &HashMap<String, CapturedResult>,
     skipped_bindings: &std::collections::HashSet<String>,
 ) -> Result<Value, ResolveError> {
@@ -364,7 +364,7 @@ pub(super) fn resolve_arguments(
 /// `result_bytes` is Some only on success — used for data flow capture.
 #[allow(clippy::cast_precision_loss)] // elapsed_ms display — sub-ms precision not needed
 pub(super) fn process_step_result(
-    step: &IrStep,
+    step: &IrCall,
     result: StepExecResult,
     global_step: usize,
     total: usize,

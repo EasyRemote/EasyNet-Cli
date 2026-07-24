@@ -6,7 +6,7 @@ use super::retry::{
 };
 use super::trace::{CappedTraceBuffer, CapturedResult, TRACE_CAP_HEAD, TRACE_CAP_TAIL};
 use super::*;
-use crate::eal::runtime::ir::IrFailurePolicy;
+use crate::eal::runtime::ir::{IrCall, IrFailurePolicy};
 use std::collections::BTreeMap;
 
 #[cfg(test)]
@@ -1067,7 +1067,7 @@ mod cases {
         let mut input_refs = BTreeMap::new();
         input_refs.insert("input".to_string(), "upstream".to_string());
 
-        let step = IrStep {
+        let step = IrCall {
             step_id: "consumer".to_string(),
             step_name: "consumer".to_string(),
             ability: AbilityName::parse("review").unwrap(),
@@ -1133,7 +1133,7 @@ mod cases {
         let mut input_refs = BTreeMap::new();
         input_refs.insert("input".to_string(), "producer".to_string());
 
-        let step = IrStep {
+        let step = IrCall {
             step_id: "consumer".to_string(),
             step_name: "consumer".to_string(),
             ability: AbilityName::parse("review").unwrap(),
@@ -1175,7 +1175,7 @@ mod cases {
         let mut input_refs = BTreeMap::new();
         input_refs.insert("input".to_string(), "upstream".to_string());
 
-        let step = IrStep {
+        let step = IrCall {
             step_id: "consumer".to_string(),
             step_name: "consumer".to_string(),
             ability: AbilityName::parse("review").unwrap(),

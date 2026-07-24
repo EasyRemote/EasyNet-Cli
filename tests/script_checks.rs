@@ -303,6 +303,13 @@ fn local_daemon_socket_resolver_boundary_script_holds() {
 }
 
 #[test]
+fn eal_interpreter_flat_call_boundary_script_holds() {
+    // Pins EAL interpreter per-call execution helpers to explicit IrCall
+    // inputs. Runtime block planning keeps the canonical IrStep enum owner.
+    run_bash_script("tests/scripts/test_check_eal_interpreter_flat_call_boundary.sh");
+}
+
+#[test]
 fn discover_scope_boundary_script_holds() {
     // Pins <agent>.discover to current scope literals only. The
     // retired easynet alias must stay absent from parser and schema.

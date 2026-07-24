@@ -41,7 +41,7 @@ use super::retry::{
 };
 use super::trace::{CappedTraceBuffer, CapturedResult};
 use super::*;
-use crate::eal::runtime::ir::{IrFailurePolicy, IrLoop, IrStep as RealIrStep};
+use crate::eal::runtime::ir::{IrCall, IrFailurePolicy, IrLoop, IrStep as RealIrStep};
 
 pub(super) struct PhaseRunState<'a> {
     pub global_step: &'a mut usize,
@@ -59,7 +59,7 @@ pub(super) struct PhaseRunState<'a> {
 struct BatchDispatchRequest<'a> {
     dispatcher: &'a dyn StepDispatcher,
     run: RunContext<'a>,
-    steps: &'a [IrStep],
+    steps: &'a [IrCall],
     indices: &'a [usize],
     captured: &'a HashMap<String, CapturedResult>,
     receipt_graph: &'a [Value],
@@ -140,7 +140,7 @@ const RECEIPT_GRAPH_SENTINEL: &str = "__runner_receipt_graph__";
 /// Collect verified dependency receipt anchors for one step from the
 /// producers named in its `input_refs`.
 fn dependency_receipts_from_captured(
-    step: &IrStep,
+    step: &IrCall,
     captured: &HashMap<String, CapturedResult>,
 ) -> Vec<crate::daemon::execution::child_invocation::ChildInvocationReceiptAnchor> {
     let mut seen = std::collections::HashSet::new();
@@ -349,7 +349,7 @@ fn dispatch_batch(request: BatchDispatchRequest<'_>) -> Vec<(usize, StepExecResu
 }
 
 /// Process a batch of dispatch results: update counters, capture outputs, build traces.
-fn process_batch(steps: &[IrStep], request: BatchProcessRequest, state: &mut PhaseRunState<'_>) {
+fn process_batch(steps: &[IrCall], request: BatchProcessRequest, state: &mut PhaseRunState<'_>) {
     let BatchProcessRequest { phase_idx, results } = request;
 
     for (local_idx, exec_result) in results {

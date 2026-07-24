@@ -68,16 +68,7 @@ fn millis_u64(d: Duration) -> u64 {
 use crate::core::agent::id::AbilityName;
 use crate::eal::diagnostics::EalError;
 use crate::eal::runtime::ir::IrTarget;
-use crate::eal::runtime::ir::{IrCall, IrEmit, IrEmitValue, MissionIr};
-
-/// Interpreter-local alias. The per-step execution machinery —
-/// retries, dispatch, resolve_arguments, process_step_result — works
-/// on flat `IrCall`s. Block variants of `RealIrStep` are expanded by
-/// `execute_with_dispatcher` into batches of `IrCall`s (or iterated
-/// sequentially in the `IrStep::Loop` case) before reaching any
-/// per-step helper. The alias keeps those helpers signature-
-/// compatible with the pre-PR-10 code without a churn-only rename.
-type IrStep = IrCall;
+use crate::eal::runtime::ir::{IrEmit, IrEmitValue, MissionIr};
 
 // ── PR-10 Stage 3: per-variant IrStep dispatch ───────────────────────────
 //
