@@ -70,3 +70,32 @@ architecture rather than add feature surface.
   authority from local credentials. The helper now injects an explicit test
   device URA so runtime-admission tests do not depend on developer machine
   pairing state.
+
+## Iteration 2 candidate policy
+
+- Continue scanning for production legacy/compat paths after the runtime
+  admission terminology cutover.
+- Prefer paths that:
+  1. preserve product-specific naming inside runtime core,
+  2. retain fallback route/authority/defaulting behavior,
+  3. weaken receipt/admission/descriptor proof provenance,
+  4. make tests depend on local developer state.
+- Reject candidates that are only negative tests, generated compatibility
+  comments, or product-boundary features intentionally outside canonical SDK.
+
+## Iteration 2 decision log
+
+- codegraph and targeted searches found a production descriptor compatibility
+  path in `AbilityDescriptor::with_hints`: advisory
+  `hints.streaming_only` / `hints.bidi_only` still selected canonical
+  `call_mode`.
+- This violates the canonical runtime model because routing, descriptor hashing,
+  and descriptor refs are governed by `call_mode`; presentation hints must not
+  become a second transport authority.
+- The cutover target is therefore the descriptor construction state machine:
+  `call_mode` remains explicit and synchronizes presentation hints outward,
+  while `with_hints` only records advisory UI facts and rejects contradictory
+  transport hints at the wire boundary.
+- Verification must prove that hints cannot change call mode or descriptor refs,
+  and that wire payloads with contradictory hints fail closed instead of being
+  interpreted through a legacy transport selector.

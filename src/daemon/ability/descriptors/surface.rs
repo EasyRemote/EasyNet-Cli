@@ -358,19 +358,14 @@ pub struct AbilityHints {
     pub bidi_only: bool,
 }
 
-fn call_mode_from_hints(hints: &AbilityHints) -> CallMode {
-    if hints.bidi_only {
-        CallMode::Bidi
-    } else if hints.streaming_only {
-        CallMode::Stream
-    } else {
-        CallMode::Rpc
-    }
-}
-
 fn synchronize_transport_hints(hints: &mut AbilityHints, call_mode: CallMode) {
     hints.streaming_only = call_mode == CallMode::Stream;
     hints.bidi_only = call_mode == CallMode::Bidi;
+}
+
+fn transport_hints_match_call_mode(hints: &AbilityHints, call_mode: CallMode) -> bool {
+    hints.streaming_only == (call_mode == CallMode::Stream)
+        && hints.bidi_only == (call_mode == CallMode::Bidi)
 }
 
 /// Canonical locator for an ability descriptor.
@@ -638,11 +633,10 @@ impl AbilityDescriptorWire {
         if normalized_denied_agents != self.denied_agents {
             return Err("wire denied_agents must be sorted, deduplicated, and non-empty".into());
         }
-        let hinted_call_mode = call_mode_from_hints(&self.hints);
-        if hinted_call_mode != self.call_mode {
+        if !transport_hints_match_call_mode(&self.hints, self.call_mode) {
             return Err(format!(
-                "wire call_mode {:?} conflicts with transport hints (which imply {:?})",
-                self.call_mode, hinted_call_mode
+                "wire transport hints conflict with canonical call_mode {:?}",
+                self.call_mode
             ));
         }
 
@@ -927,13 +921,14 @@ impl AbilityDescriptor {
         self
     }
 
-    /// Attach advisory hints and normalize their transport projection into
-    /// the canonical [`CallMode`]. Existing metadata producers may still
-    /// provide `streaming_only` / `bidi_only`; after construction, routing and
-    /// hashing read only [`Self::call_mode`].
+    /// Attach advisory hints without allowing them to select transport.
+    ///
+    /// `call_mode` is the sole routing and descriptor-hash authority. Transport
+    /// hints are synchronized from the existing canonical call mode so callers
+    /// cannot treat advisory UI fields as a second transport selector.
     pub fn with_hints(mut self, hints: AbilityHints) -> Self {
-        self.call_mode = call_mode_from_hints(&hints);
         self.hints = hints;
+        synchronize_transport_hints(&mut self.hints, self.call_mode);
         self
     }
 
@@ -1784,7 +1779,7 @@ mod tests {
     }
 
     #[test]
-    fn call_mode_is_canonicalized_from_transport_hints() {
+    fn transport_hints_do_not_select_call_mode() {
         let rpc = must(
             "agent.list",
             "easynet:///r/acme/device/dev-1",
@@ -1792,18 +1787,16 @@ mod tests {
         );
         assert_eq!(rpc.call_mode(), CallMode::Rpc);
 
-        let stream = rpc.clone().with_hints(AbilityHints {
-            streaming_only: true,
-            ..Default::default()
-        });
-        assert_eq!(stream.call_mode(), CallMode::Stream);
-
-        let bidi = rpc.with_hints(AbilityHints {
+        let hinted = rpc.clone().with_hints(AbilityHints {
+            read_only: true,
             streaming_only: true,
             bidi_only: true,
             ..Default::default()
         });
-        assert_eq!(bidi.call_mode(), CallMode::Bidi);
+        assert_eq!(hinted.call_mode(), CallMode::Rpc);
+        assert!(hinted.hints.read_only);
+        assert!(!hinted.hints.streaming_only);
+        assert!(!hinted.hints.bidi_only);
     }
 
     #[test]
@@ -1943,6 +1936,21 @@ mod tests {
     }
 
     #[test]
+    fn descriptor_wire_rejects_transport_hint_call_mode_conflicts() {
+        let descriptor = must("fs.read", DEVICE_OWNER, Visibility::Scoped);
+        let mut json = serde_json::to_value(descriptor).unwrap();
+        json["hints"]["streaming_only"] = serde_json::json!(true);
+
+        let err = serde_json::from_value::<AbilityDescriptor>(json).unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("transport hints conflict with canonical call_mode"),
+            "{err}"
+        );
+    }
+
+    #[test]
     fn descriptor_wire_rejects_non_canonical_owner_even_without_identity_fields() {
         let descriptor = must("fs.read", DEVICE_OWNER, Visibility::Scoped);
         let mut json = serde_json::to_value(descriptor).unwrap();
@@ -2060,10 +2068,7 @@ mod tests {
             "easynet:///r/acme/agent/alice.claude",
             Visibility::Scoped,
         )
-        .with_hints(AbilityHints {
-            streaming_only: true,
-            ..Default::default()
-        });
+        .with_call_mode(CallMode::Stream);
         let json = serde_json::to_value(&d).unwrap();
         assert_eq!(json["call_mode"], serde_json::json!("stream"));
         assert_eq!(json["receipt_semantics"]["kind"], "operational");
@@ -2073,14 +2078,8 @@ mod tests {
     #[test]
     fn bidi_descriptor_hash_uses_bidi_call_mode() {
         let owner = "easynet:///r/acme/agent/alice.claude";
-        let stream = must("chat", owner, Visibility::Scoped).with_hints(AbilityHints {
-            streaming_only: true,
-            ..Default::default()
-        });
-        let bidi = must("chat", owner, Visibility::Scoped).with_hints(AbilityHints {
-            bidi_only: true,
-            ..Default::default()
-        });
+        let stream = must("chat", owner, Visibility::Scoped).with_call_mode(CallMode::Stream);
+        let bidi = must("chat", owner, Visibility::Scoped).with_call_mode(CallMode::Bidi);
 
         assert_eq!(bidi.call_mode(), CallMode::Bidi);
         assert_eq!(serde_json::to_value(&bidi).unwrap()["call_mode"], "bidi");
@@ -2096,11 +2095,13 @@ mod tests {
         let owner = "easynet:///r/acme/device/dev-1";
         let descriptor = must("agent.list", owner, Visibility::Scoped)
             .with_hints(AbilityHints {
+                read_only: true,
                 streaming_only: true,
                 ..Default::default()
             })
             .with_call_mode(CallMode::Bidi);
         assert_eq!(descriptor.call_mode(), CallMode::Bidi);
+        assert!(descriptor.hints.read_only);
         assert!(!descriptor.hints.streaming_only);
         assert!(descriptor.hints.bidi_only);
     }
