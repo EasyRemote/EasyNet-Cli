@@ -143,6 +143,32 @@ func canonicalDirectRuntimeReceiptPair(invocationID string) (*axonpb.InvocationR
 	return admission, terminal
 }
 
+func TestDirectAuthorityBindingProjectsSessionAuthorityToGenericFacadeFields(t *testing.T) {
+	projected := directAuthorityBinding(&axonpb.AuthorityBinding{
+		Authority: &axonpb.AuthorityBinding_SessionAuthority{
+			SessionAuthority: &axonpb.SessionAuthority{
+				BackendUra:  "easynet:///r/example/agent/backend",
+				UserUra:     "easynet:///r/example/agent/alice",
+				SessionId:   "session-1",
+				Scopes:      []string{"invoke"},
+				Audiences:   []string{runtimeTestDescriptorRef},
+				IssuedAtMs:  1,
+				ExpiresAtMs: 2,
+				Signature:   bytes.Repeat([]byte{0x73}, 64),
+			},
+		},
+	})
+	if projected["issuer_ura"] != "easynet:///r/example/agent/backend" || projected["subject_ura"] != "easynet:///r/example/agent/alice" {
+		t.Fatalf("session authority projection did not expose generic facade fields: %#v", projected)
+	}
+	if _, ok := projected["backend_ura"]; ok {
+		t.Fatalf("session authority projection leaked generated backend_ura field: %#v", projected)
+	}
+	if _, ok := projected["user_ura"]; ok {
+		t.Fatalf("session authority projection leaked generated user_ura field: %#v", projected)
+	}
+}
+
 func (d *directRuntimeFakeDaemon) configureInvokeTiming(delay time.Duration) <-chan struct{} {
 	d.timingMu.Lock()
 	defer d.timingMu.Unlock()

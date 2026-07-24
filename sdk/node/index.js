@@ -2136,8 +2136,8 @@ function requireRuntimeReceiptAuthorityBinding(value, field) {
   if (kind === "session") {
     return {
       kind,
-      backend_ura: requiredRuntimeText(binding.backend_ura, `${field}.backend_ura`),
-      user_ura: requiredRuntimeText(binding.user_ura, `${field}.user_ura`),
+      issuer_ura: requiredRuntimeText(binding.issuer_ura, `${field}.issuer_ura`),
+      subject_ura: requiredRuntimeText(binding.subject_ura, `${field}.subject_ura`),
       session_id: requiredRuntimeText(binding.session_id, `${field}.session_id`),
       scopes: requiredRuntimeStringList(binding.scopes, `${field}.scopes`),
       audiences: requiredRuntimeStringList(binding.audiences, `${field}.audiences`),
@@ -2199,8 +2199,8 @@ function canonicalRuntimeAuthorityBytes(binding, field) {
   } else if (binding.kind === "session") {
     chunks.push(
       Buffer.from([0x05]),
-      runtimeLengthPrefixedText(binding.backend_ura),
-      runtimeLengthPrefixedText(binding.user_ura),
+      runtimeLengthPrefixedText(binding.issuer_ura),
+      runtimeLengthPrefixedText(binding.subject_ura),
       runtimeLengthPrefixedText(binding.session_id),
       runtimeU32(binding.scopes.length),
       ...binding.scopes.map(runtimeLengthPrefixedText),

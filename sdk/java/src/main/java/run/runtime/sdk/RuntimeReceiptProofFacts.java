@@ -175,8 +175,8 @@ final class RuntimeReceiptProofFacts {
       }
       case "session" -> {
         out.write(0x05);
-        putString(out, requiredString(binding, "backend_ura"));
-        putString(out, requiredString(binding, "user_ura"));
+        putString(out, requiredString(binding, "issuer_ura"));
+        putString(out, requiredString(binding, "subject_ura"));
         putString(out, requiredString(binding, "session_id"));
         List<String> scopes = requiredStringList(binding.get("scopes"), field + ".scopes");
         putU32(out, scopes.size());

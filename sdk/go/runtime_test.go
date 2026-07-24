@@ -578,6 +578,67 @@ func TestRuntimeReceiptAcceptsBindingHashProofWithoutPayloadOrSignature(t *testi
 	}
 }
 
+func TestRuntimeReceiptSessionAuthorityFacadeUsesGenericFields(t *testing.T) {
+	sessionBinding := map[string]any{
+		"kind":             "session",
+		"issuer_ura":       "easynet:///r/example/agent/backend",
+		"subject_ura":      "easynet:///r/example/agent/alice",
+		"session_id":       "session-1",
+		"scopes":           []any{"invoke"},
+		"audiences":        []any{runtimeTestDescriptorRef},
+		"issued_at_ms":     int64(1),
+		"expires_at_ms":    int64(2),
+		"signature_base64": base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x73}, 64)),
+	}
+	fixture := canonicalRuntimeReceiptFixture("inv-session-authority", "completed", "Completed", 1)
+	fixture["authority_binding_kind"] = "session"
+	fixture["authority_binding"] = sessionBinding
+	proof := fixture["authority_proof"].(map[string]any)
+	proof["proof_type"] = "session"
+	proof["binding_kind"] = "session"
+	proof["binding"] = sessionBinding
+	proof["proof_payload_base64"] = ""
+	proofHash := axoninv.AuthorityBindingProofHash(axoninv.SessionAuthority(axoninv.SessionAuthorityBody{
+		BackendURA:  "easynet:///r/example/agent/backend",
+		UserURA:     "easynet:///r/example/agent/alice",
+		SessionID:   "session-1",
+		Scopes:      []string{"invoke"},
+		Audiences:   []string{runtimeTestDescriptorRef},
+		IssuedAtMs:  1,
+		ExpiresAtMs: 2,
+		Signature:   bytes.Repeat([]byte{0x73}, 64),
+	}))
+	proof["proof_hash_hex"] = hex.EncodeToString(proofHash[:])
+	delete(proof, "signature")
+
+	if _, err := NewRuntimeReceiptFromJSON(mustJSON(fixture)); err != nil {
+		t.Fatalf("NewRuntimeReceiptFromJSON accepted generic session authority fields: %v", err)
+	}
+
+	retiredBinding := map[string]any{
+		"kind":             "session",
+		"backend_ura":      "easynet:///r/example/agent/backend",
+		"user_ura":         "easynet:///r/example/agent/alice",
+		"session_id":       "session-1",
+		"scopes":           []any{"invoke"},
+		"audiences":        []any{runtimeTestDescriptorRef},
+		"issued_at_ms":     int64(1),
+		"expires_at_ms":    int64(2),
+		"signature_base64": base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x73}, 64)),
+	}
+	retired := canonicalRuntimeReceiptFixture("inv-retired-session-authority", "completed", "Completed", 1)
+	retired["authority_binding_kind"] = "session"
+	retired["authority_binding"] = retiredBinding
+	retiredProof := retired["authority_proof"].(map[string]any)
+	retiredProof["proof_type"] = "session"
+	retiredProof["binding_kind"] = "session"
+	retiredProof["binding"] = retiredBinding
+	retiredProof["proof_payload_base64"] = ""
+	if _, err := NewRuntimeReceiptFromJSON(mustJSON(retired)); !IsCode(err, ErrInvalidArgument) || !strings.Contains(err.Error(), "issuer_ura") {
+		t.Fatalf("NewRuntimeReceiptFromJSON retired session fields error = %v, want issuer_ura invalid argument", err)
+	}
+}
+
 func TestRuntimeClientPrepareBuilderConsumesOnlyAfterSuccess(t *testing.T) {
 	transportPrepareCalls := 0
 	client, err := NewRuntimeClient(RuntimeTransportFunc{

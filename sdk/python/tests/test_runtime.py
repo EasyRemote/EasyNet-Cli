@@ -287,6 +287,38 @@ def canonical_runtime_receipt(
     }
 
 
+def _runtime_u32(value: int) -> bytes:
+    return value.to_bytes(4, byteorder="big", signed=False)
+
+
+def _runtime_length_prefixed_text(value: str) -> bytes:
+    encoded = value.encode()
+    return _runtime_u32(len(encoded)) + encoded
+
+
+def session_authority_binding_hash(binding: dict[str, object]) -> str:
+    scopes = list(binding["scopes"])
+    audiences = list(binding["audiences"])
+    signature = base64.b64decode(str(binding["signature_base64"]))
+    canonical = b"".join(
+        [
+            bytes([0x05]),
+            _runtime_length_prefixed_text(str(binding["issuer_ura"])),
+            _runtime_length_prefixed_text(str(binding["subject_ura"])),
+            _runtime_length_prefixed_text(str(binding["session_id"])),
+            _runtime_u32(len(scopes)),
+            *( _runtime_length_prefixed_text(str(scope)) for scope in scopes ),
+            _runtime_u32(len(audiences)),
+            *( _runtime_length_prefixed_text(str(audience)) for audience in audiences ),
+            int(binding["issued_at_ms"]).to_bytes(8, byteorder="big", signed=True),
+            int(binding["expires_at_ms"]).to_bytes(8, byteorder="big", signed=True),
+            _runtime_u32(len(signature)),
+            signature,
+        ]
+    )
+    return hashlib.sha256(canonical).hexdigest()
+
+
 def canonical_runtime_receipt_pair(
     invocation_id: str,
     terminal_state: str = "Completed",
@@ -942,6 +974,67 @@ class RuntimeTests(unittest.TestCase):
         assert receipt.authority_proof is not None
         self.assertEqual(receipt.authority_proof.proof_payload_base64, "")
         self.assertIsNone(receipt.authority_proof.signature)
+
+    def test_runtime_receipt_session_authority_facade_uses_generic_fields(
+        self,
+    ) -> None:
+        session_binding: dict[str, object] = {
+            "kind": "session",
+            "issuer_ura": "easynet:///r/example/agent/backend",
+            "subject_ura": "easynet:///r/example/agent/alice",
+            "session_id": "session-1",
+            "scopes": ["invoke"],
+            "audiences": [
+                "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"
+            ],
+            "issued_at_ms": 1,
+            "expires_at_ms": 2,
+            "signature_base64": base64.b64encode(bytes([0x73]) * 64).decode(),
+        }
+        receipt = canonical_runtime_receipt(
+            "inv-session-authority", "completed", "Completed", 1
+        )
+        receipt["authority_binding_kind"] = "session"
+        receipt["authority_binding"] = session_binding
+        proof = receipt["authority_proof"]
+        assert isinstance(proof, dict)
+        proof["proof_type"] = "session"
+        proof["binding_kind"] = "session"
+        proof["binding"] = session_binding
+        proof["proof_payload_base64"] = ""
+        proof["proof_hash_hex"] = session_authority_binding_hash(session_binding)
+        proof.pop("signature")
+
+        RuntimeReceipt.from_mapping(receipt)
+
+        retired_binding: dict[str, object] = {
+            "kind": "session",
+            "backend_ura": "easynet:///r/example/agent/backend",
+            "user_ura": "easynet:///r/example/agent/alice",
+            "session_id": "session-1",
+            "scopes": ["invoke"],
+            "audiences": [
+                "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"
+            ],
+            "issued_at_ms": 1,
+            "expires_at_ms": 2,
+            "signature_base64": base64.b64encode(bytes([0x73]) * 64).decode(),
+        }
+        retired = canonical_runtime_receipt(
+            "inv-retired-session-authority", "completed", "Completed", 1
+        )
+        retired["authority_binding_kind"] = "session"
+        retired["authority_binding"] = retired_binding
+        retired_proof = retired["authority_proof"]
+        assert isinstance(retired_proof, dict)
+        retired_proof["proof_type"] = "session"
+        retired_proof["binding_kind"] = "session"
+        retired_proof["binding"] = retired_binding
+        retired_proof["proof_payload_base64"] = ""
+        with self.assertRaises(SDKError) as raised:
+            RuntimeReceipt.from_mapping(retired)
+        self.assertTrue(is_code(raised.exception, ErrorCode.INVALID_ARGUMENT))
+        self.assertIn("issuer_ura", raised.exception.message)
 
     def test_runtime_receipt_required_summary_rejects_malformed_hash(self) -> None:
         malformed = canonical_runtime_receipt("inv-1", "completed", "completed", 1)

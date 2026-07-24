@@ -1349,6 +1349,20 @@ class DirectRuntimeTests(unittest.TestCase):
                 projection = _canonical_receipt_projection(receipt)
 
                 self.assertEqual(projection["authority_binding_kind"], kind)
+                if kind == "session":
+                    binding_projection = cast(
+                        dict[str, object], projection["authority_binding"]
+                    )
+                    self.assertEqual(
+                        binding_projection["issuer_ura"],
+                        "easynet:///r/example/agent/backend",
+                    )
+                    self.assertEqual(
+                        binding_projection["subject_ura"],
+                        "easynet:///r/example/agent/alice",
+                    )
+                    self.assertNotIn("backend_ura", binding_projection)
+                    self.assertNotIn("user_ura", binding_projection)
                 proof = cast(dict[str, object], projection["authority_proof"])
                 self.assertEqual(proof["binding_kind"], kind)
 

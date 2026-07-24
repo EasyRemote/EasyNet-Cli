@@ -10699,6 +10699,231 @@ for language, (tests, markers) in required_tests.items():
 PY
 }
 
+check_sdk_session_authority_binding_facade_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local go_runtime="$cli_root/sdk/go/runtime.go"
+  local go_direct="$cli_root/sdk/go/direct_runtime.go"
+  local go_tests="$cli_root/sdk/go/runtime_test.go"
+  local py_runtime="$cli_root/sdk/python/easynet_sdk/runtime.py"
+  local py_direct="$cli_root/sdk/python/easynet_sdk/direct_runtime.py"
+  local py_tests="$cli_root/sdk/python/tests/test_runtime.py"
+  local py_direct_tests="$cli_root/sdk/python/tests/test_direct_runtime.py"
+  local node_runtime="$cli_root/sdk/node/index.js"
+  local node_tests="$cli_root/sdk/node/test/runtime-core.test.mjs"
+  local java_proof="$cli_root/sdk/java/src/main/java/run/runtime/sdk/RuntimeReceiptProofFacts.java"
+  local java_tests="$cli_root/sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
+  local swift_runtime="$cli_root/sdk/swift/Sources/RuntimeSDK/Runtime.swift"
+  local swift_tests="$cli_root/sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift"
+  for path in "$go_runtime" "$go_direct" "$go_tests" "$py_runtime" "$py_direct" "$py_tests" \
+    "$py_direct_tests" "$node_runtime" "$node_tests" "$java_proof" "$java_tests" \
+    "$swift_runtime" "$swift_tests"; do
+    [[ -f "$path" ]] || fail "SDK session authority binding facade file is missing: ${path#$cli_root/}"
+  done
+
+  "$PYTHON_BIN" - "$go_runtime" "$go_direct" "$go_tests" "$py_runtime" "$py_direct" \
+    "$py_tests" "$py_direct_tests" "$node_runtime" "$node_tests" "$java_proof" \
+    "$java_tests" "$swift_runtime" "$swift_tests" <<'PY'
+import sys
+from pathlib import Path
+
+(
+    go_runtime,
+    go_direct,
+    go_tests,
+    py_runtime,
+    py_direct,
+    py_tests,
+    py_direct_tests,
+    node_runtime,
+    node_tests,
+    java_proof,
+    java_tests,
+    swift_runtime,
+    swift_tests,
+) = [Path(path).read_text(encoding="utf-8") for path in sys.argv[1:]]
+
+for language, source, forbidden in [
+    (
+        "go",
+        go_runtime,
+        [
+            'requiredRuntimeReceiptObjectText(value, "backend_ura"',
+            'requiredRuntimeReceiptObjectText(value, "user_ura"',
+            'field+".backend_ura"',
+            'field+".user_ura"',
+        ],
+    ),
+    (
+        "python",
+        py_runtime,
+        [
+            'value.get("backend_ura")',
+            'value.get("user_ura")',
+            'f"{field_name}.backend_ura"',
+            'f"{field_name}.user_ura"',
+        ],
+    ),
+    (
+        "node",
+        node_runtime,
+        [
+            "binding.backend_ura",
+            "binding.user_ura",
+            "`${field}.backend_ura`",
+            "`${field}.user_ura`",
+        ],
+    ),
+    (
+        "java",
+        java_proof,
+        [
+            'requiredString(binding, "backend_ura")',
+            'requiredString(binding, "user_ura")',
+        ],
+    ),
+    (
+        "swift",
+        swift_runtime,
+        [
+            'runtimeRequiredText(object, "backend_ura"',
+            'runtimeRequiredText(object, "user_ura"',
+        ],
+    ),
+]:
+    for fragment in forbidden:
+        if fragment in source:
+            raise SystemExit(
+                f"sdk_session_authority_binding_facade:{language}:retired_facade_field:{fragment}"
+            )
+
+required_runtime_fragments = {
+    "go": (
+        go_runtime,
+        [
+            'requiredRuntimeReceiptObjectText(value, "issuer_ura", field+".issuer_ura")',
+            'requiredRuntimeReceiptObjectText(value, "subject_ura", field+".subject_ura")',
+        ],
+    ),
+    "python": (
+        py_runtime,
+        [
+            'value.get("issuer_ura")',
+            'value.get("subject_ura")',
+        ],
+    ),
+    "node": (
+        node_runtime,
+        [
+            "binding.issuer_ura",
+            "binding.subject_ura",
+        ],
+    ),
+    "java": (
+        java_proof,
+        [
+            'requiredString(binding, "issuer_ura")',
+            'requiredString(binding, "subject_ura")',
+        ],
+    ),
+    "swift": (
+        swift_runtime,
+        [
+            'runtimeRequiredText(object, "issuer_ura"',
+            'runtimeRequiredText(object, "subject_ura"',
+        ],
+    ),
+}
+for language, (source, fragments) in required_runtime_fragments.items():
+    for fragment in fragments:
+        if fragment not in source:
+            raise SystemExit(
+                f"sdk_session_authority_binding_facade:{language}:generic_field_missing:{fragment}"
+            )
+
+for language, source, required, forbidden in [
+    (
+        "go-direct",
+        go_direct,
+        ['"issuer_ura":       value.GetBackendUra()', '"subject_ura":      value.GetUserUra()'],
+        ['"backend_ura":      value.GetBackendUra()', '"user_ura":         value.GetUserUra()'],
+    ),
+    (
+        "python-direct",
+        py_direct,
+        ['"issuer_ura": value.backend_ura', '"subject_ura": value.user_ura'],
+        ['"backend_ura": value.backend_ura', '"user_ura": value.user_ura'],
+    ),
+]:
+    for fragment in required:
+        if fragment not in source:
+            raise SystemExit(
+                f"sdk_session_authority_binding_facade:{language}:projection_mapping_missing:{fragment}"
+            )
+    for fragment in forbidden:
+        if fragment in source:
+            raise SystemExit(
+                f"sdk_session_authority_binding_facade:{language}:projection_leaks_generated_field:{fragment}"
+            )
+
+required_tests = {
+    "go": (
+        go_tests,
+        [
+            "TestRuntimeReceiptSessionAuthorityFacadeUsesGenericFields",
+            "inv-retired-session-authority",
+            "issuer_ura invalid argument",
+        ],
+    ),
+    "python": (
+        py_tests,
+        [
+            "test_runtime_receipt_session_authority_facade_uses_generic_fields",
+            "inv-retired-session-authority",
+            'self.assertIn("issuer_ura"',
+        ],
+    ),
+    "python-direct": (
+        py_direct_tests,
+        [
+            'binding_projection["issuer_ura"]',
+            'self.assertNotIn("backend_ura"',
+            'self.assertNotIn("user_ura"',
+        ],
+    ),
+    "node": (
+        node_tests,
+        [
+            "runtime receipt session authority facade uses generic fields",
+            "inv-retired-session-authority",
+            'error.message.includes("issuer_ura")',
+        ],
+    ),
+    "java": (
+        java_tests,
+        [
+            "inv-retired-session-authority",
+            "authorityBindingProofHashSession",
+            '"issuer_ura"',
+        ],
+    ),
+    "swift": (
+        swift_tests,
+        [
+            "authorityBindingProofHashSession",
+            "retiredSessionBinding",
+            'expectSyncSDKError(.invalidArgument, "issuer_ura")',
+        ],
+    ),
+}
+for language, (tests, markers) in required_tests.items():
+    for marker in markers:
+        if marker not in tests:
+            raise SystemExit(
+                f"sdk_session_authority_binding_facade:{language}:test_marker_missing:{marker}"
+            )
+PY
+}
+
 check_sdk_runtime_receipt_type_state_binding_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local go_runtime="$cli_root/sdk/go/runtime.go"
@@ -16048,6 +16273,7 @@ EOF
   check_node_sdk_runtime_receipt_projection_contract
   check_swift_sdk_runtime_receipt_projection_contract
   check_sdk_receipt_profile_convergence_contract
+  check_sdk_session_authority_binding_facade_contract
   check_sdk_runtime_receipt_type_state_binding_contract
   check_start_attach_user_signer_readiness_contract
   echo "canonical-runtime-convergence-v2 self-test ok"
@@ -16224,5 +16450,6 @@ check_java_sdk_runtime_receipt_projection_contract
 check_node_sdk_runtime_receipt_projection_contract
 check_swift_sdk_runtime_receipt_projection_contract
 check_sdk_receipt_profile_convergence_contract
+check_sdk_session_authority_binding_facade_contract
 check_sdk_runtime_receipt_type_state_binding_contract
 echo "canonical-runtime-convergence-v2: OK"

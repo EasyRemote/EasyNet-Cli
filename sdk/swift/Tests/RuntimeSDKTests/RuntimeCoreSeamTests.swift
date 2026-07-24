@@ -215,6 +215,67 @@ final class RuntimeCoreSeamTests: XCTestCase {
         )
         XCTAssertEqual(bindingHash.terminalReceipt["invocation_id"], "inv-result")
 
+        let sessionBinding: [String: Any] = [
+            "kind": "session",
+            "issuer_ura": "easynet:///r/example/agent/backend",
+            "subject_ura": "easynet:///r/example/agent/alice",
+            "session_id": "session-1",
+            "scopes": ["invoke"],
+            "audiences": [descriptor],
+            "issued_at_ms": 1,
+            "expires_at_ms": 2,
+            "signature_base64": Data(repeating: 0x73, count: 64).base64EncodedString(),
+        ]
+        var sessionReceipt = terminal
+        sessionReceipt["authority_binding_kind"] = "session"
+        sessionReceipt["authority_binding"] = sessionBinding
+        var sessionProof = sessionReceipt["authority_proof"] as! [String: Any]
+        sessionProof["proof_type"] = "session"
+        sessionProof["binding_kind"] = "session"
+        sessionProof["binding"] = sessionBinding
+        sessionProof["proof_payload_base64"] = ""
+        sessionProof["proof_hash_hex"] = authorityBindingProofHashSession(sessionBinding)
+        sessionProof.removeValue(forKey: "signature")
+        sessionReceipt["authority_proof"] = sessionProof
+        let sessionResult = try InvocationResult.fromJSON(
+            jsonData([
+                "ok": true,
+                "terminal_state": "Completed",
+                "terminal_receipt": sessionReceipt,
+            ])
+        )
+        XCTAssertEqual(sessionResult.terminalReceipt["authority_binding_kind"], "session")
+
+        let retiredSessionBinding: [String: Any] = [
+            "kind": "session",
+            "backend_ura": "easynet:///r/example/agent/backend",
+            "user_ura": "easynet:///r/example/agent/alice",
+            "session_id": "session-1",
+            "scopes": ["invoke"],
+            "audiences": [descriptor],
+            "issued_at_ms": 1,
+            "expires_at_ms": 2,
+            "signature_base64": Data(repeating: 0x73, count: 64).base64EncodedString(),
+        ]
+        var retiredSessionReceipt = terminal
+        retiredSessionReceipt["authority_binding_kind"] = "session"
+        retiredSessionReceipt["authority_binding"] = retiredSessionBinding
+        var retiredSessionProof = retiredSessionReceipt["authority_proof"] as! [String: Any]
+        retiredSessionProof["proof_type"] = "session"
+        retiredSessionProof["binding_kind"] = "session"
+        retiredSessionProof["binding"] = retiredSessionBinding
+        retiredSessionProof["proof_payload_base64"] = ""
+        retiredSessionReceipt["authority_proof"] = retiredSessionProof
+        expectSyncSDKError(.invalidArgument, "issuer_ura") {
+            _ = try InvocationResult.fromJSON(
+                jsonData([
+                    "ok": true,
+                    "terminal_state": "Completed",
+                    "terminal_receipt": retiredSessionReceipt,
+                ])
+            )
+        }
+
         var wrongIssuer = terminal
         var wrongIssuerProof = wrongIssuer["authority_proof"] as! [String: Any]
         wrongIssuerProof["issuer"] = [
@@ -1013,15 +1074,48 @@ private func authorityBindingProofHashSelf(_ principalURA: String) -> String {
     return sha256Hex(canonical)
 }
 
+private func authorityBindingProofHashSession(_ binding: [String: Any]) -> String {
+    var canonical = Data()
+    canonical.append(0x05)
+    canonical.appendLengthPrefixed(Data((binding["issuer_ura"] as! String).utf8))
+    canonical.appendLengthPrefixed(Data((binding["subject_ura"] as! String).utf8))
+    canonical.appendLengthPrefixed(Data((binding["session_id"] as! String).utf8))
+    let scopes = binding["scopes"] as! [String]
+    canonical.appendUInt32(UInt32(scopes.count))
+    for scope in scopes {
+        canonical.appendLengthPrefixed(Data(scope.utf8))
+    }
+    let audiences = binding["audiences"] as! [String]
+    canonical.appendUInt32(UInt32(audiences.count))
+    for audience in audiences {
+        canonical.appendLengthPrefixed(Data(audience.utf8))
+    }
+    canonical.appendInt64(Int64(binding["issued_at_ms"] as! Int))
+    canonical.appendInt64(Int64(binding["expires_at_ms"] as! Int))
+    let signature = Data(base64Encoded: binding["signature_base64"] as! String)!
+    canonical.appendUInt32(UInt32(signature.count))
+    canonical.append(signature)
+    return sha256Hex(canonical)
+}
+
 private func sha256Hex(_ data: Data) -> String {
     SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
 }
 
 private extension Data {
     mutating func appendLengthPrefixed(_ data: Data) {
-        var count = UInt32(data.count).bigEndian
-        Swift.withUnsafeBytes(of: &count) { append(contentsOf: $0) }
+        appendUInt32(UInt32(data.count))
         append(data)
+    }
+
+    mutating func appendUInt32(_ value: UInt32) {
+        var encoded = value.bigEndian
+        Swift.withUnsafeBytes(of: &encoded) { append(contentsOf: $0) }
+    }
+
+    mutating func appendInt64(_ value: Int64) {
+        var encoded = value.bigEndian
+        Swift.withUnsafeBytes(of: &encoded) { append(contentsOf: $0) }
     }
 }
 

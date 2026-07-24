@@ -14075,7 +14075,7 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/go/",
           "path": "sdk/go/direct_runtime.go",
-          "sha256": "d2a2f2a717cb31f0bffb6146a6be5b08cc74c9b04f9e901614de4077a9860ab5",
+          "sha256": "82e91959531868ab981d8f01b7ae59d23b39434d40b4719f87cf194d23393fc9",
           "interface": "RuntimeConnector",
           "revision": "dd9152570d83d1f6f382d6a464898316600a31a3"
         },
@@ -14127,7 +14127,7 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/python/easynet_sdk/",
           "path": "sdk/python/easynet_sdk/direct_runtime.py",
-          "sha256": "34c91b96f173ce83cb84c5fd7e08b8535f0b21684270605fbe926e4655091ef7",
+          "sha256": "49a08364c6191b9d39c80b196627f466b6b1d7e8efb323f1d228e50594c655b7",
           "interface": "RuntimeConnector",
           "revision": "dd9152570d83d1f6f382d6a464898316600a31a3"
         },
@@ -14181,7 +14181,7 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/go/",
           "path": "sdk/go/direct_runtime.go",
-          "sha256": "d2a2f2a717cb31f0bffb6146a6be5b08cc74c9b04f9e901614de4077a9860ab5",
+          "sha256": "82e91959531868ab981d8f01b7ae59d23b39434d40b4719f87cf194d23393fc9",
           "interface": "RuntimeConnector",
           "revision": "dd9152570d83d1f6f382d6a464898316600a31a3"
         },
@@ -14223,7 +14223,7 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/python/easynet_sdk/",
           "path": "sdk/python/easynet_sdk/direct_runtime.py",
-          "sha256": "34c91b96f173ce83cb84c5fd7e08b8535f0b21684270605fbe926e4655091ef7",
+          "sha256": "49a08364c6191b9d39c80b196627f466b6b1d7e8efb323f1d228e50594c655b7",
           "interface": "RuntimeConnector",
           "revision": "dd9152570d83d1f6f382d6a464898316600a31a3"
         },
@@ -14267,7 +14267,7 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/go/",
           "path": "sdk/go/direct_runtime.go",
-          "sha256": "d2a2f2a717cb31f0bffb6146a6be5b08cc74c9b04f9e901614de4077a9860ab5",
+          "sha256": "82e91959531868ab981d8f01b7ae59d23b39434d40b4719f87cf194d23393fc9",
           "interface": "RuntimeConnector",
           "revision": "dd9152570d83d1f6f382d6a464898316600a31a3"
         },
@@ -14319,7 +14319,7 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/python/easynet_sdk/",
           "path": "sdk/python/easynet_sdk/direct_runtime.py",
-          "sha256": "34c91b96f173ce83cb84c5fd7e08b8535f0b21684270605fbe926e4655091ef7",
+          "sha256": "49a08364c6191b9d39c80b196627f466b6b1d7e8efb323f1d228e50594c655b7",
           "interface": "RuntimeConnector",
           "revision": "dd9152570d83d1f6f382d6a464898316600a31a3"
         },
@@ -14373,7 +14373,7 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/go/",
           "path": "sdk/go/direct_runtime.go",
-          "sha256": "d2a2f2a717cb31f0bffb6146a6be5b08cc74c9b04f9e901614de4077a9860ab5",
+          "sha256": "82e91959531868ab981d8f01b7ae59d23b39434d40b4719f87cf194d23393fc9",
           "interface": "RuntimeConnector",
           "revision": "dd9152570d83d1f6f382d6a464898316600a31a3"
         },
@@ -14450,7 +14450,7 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/python/easynet_sdk/",
           "path": "sdk/python/easynet_sdk/direct_runtime.py",
-          "sha256": "34c91b96f173ce83cb84c5fd7e08b8535f0b21684270605fbe926e4655091ef7",
+          "sha256": "49a08364c6191b9d39c80b196627f466b6b1d7e8efb323f1d228e50594c655b7",
           "interface": "RuntimeConnector",
           "revision": "dd9152570d83d1f6f382d6a464898316600a31a3"
         },
@@ -14725,7 +14725,7 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/go/",
           "path": "sdk/go/direct_runtime.go",
-          "sha256": "d2a2f2a717cb31f0bffb6146a6be5b08cc74c9b04f9e901614de4077a9860ab5",
+          "sha256": "82e91959531868ab981d8f01b7ae59d23b39434d40b4719f87cf194d23393fc9",
           "interface": "RuntimeConnector",
           "revision": "dd9152570d83d1f6f382d6a464898316600a31a3"
         },
@@ -14802,7 +14802,7 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/python/easynet_sdk/",
           "path": "sdk/python/easynet_sdk/direct_runtime.py",
-          "sha256": "34c91b96f173ce83cb84c5fd7e08b8535f0b21684270605fbe926e4655091ef7",
+          "sha256": "49a08364c6191b9d39c80b196627f466b6b1d7e8efb323f1d228e50594c655b7",
           "interface": "RuntimeConnector",
           "revision": "dd9152570d83d1f6f382d6a464898316600a31a3"
         },
@@ -15383,7 +15383,7 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/go/",
           "path": "sdk/go/direct_runtime.go",
-          "sha256": "d2a2f2a717cb31f0bffb6146a6be5b08cc74c9b04f9e901614de4077a9860ab5",
+          "sha256": "82e91959531868ab981d8f01b7ae59d23b39434d40b4719f87cf194d23393fc9",
           "interface": "RuntimeConnector",
           "revision": "dd9152570d83d1f6f382d6a464898316600a31a3"
         },
@@ -15425,7 +15425,7 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/python/easynet_sdk/",
           "path": "sdk/python/easynet_sdk/direct_runtime.py",
-          "sha256": "34c91b96f173ce83cb84c5fd7e08b8535f0b21684270605fbe926e4655091ef7",
+          "sha256": "49a08364c6191b9d39c80b196627f466b6b1d7e8efb323f1d228e50594c655b7",
           "interface": "RuntimeConnector",
           "revision": "dd9152570d83d1f6f382d6a464898316600a31a3"
         },
@@ -22326,7 +22326,7 @@
       "production_owner": "canonical runtime provider",
       "owner_path": "sdk/go/",
       "path": "sdk/go/direct_runtime.go",
-      "sha256": "d2a2f2a717cb31f0bffb6146a6be5b08cc74c9b04f9e901614de4077a9860ab5",
+      "sha256": "82e91959531868ab981d8f01b7ae59d23b39434d40b4719f87cf194d23393fc9",
       "interface": "RuntimeConnector",
       "interface_path": "sdk/go/connection.go",
       "interface_sha256": "4cc5fe02a425d3a6da0652557f7db968ddd87573c4516dc9a34fb420d3aa9a40",
@@ -22346,7 +22346,7 @@
       "production_owner": "canonical runtime provider",
       "owner_path": "sdk/python/easynet_sdk/",
       "path": "sdk/python/easynet_sdk/direct_runtime.py",
-      "sha256": "34c91b96f173ce83cb84c5fd7e08b8535f0b21684270605fbe926e4655091ef7",
+      "sha256": "49a08364c6191b9d39c80b196627f466b6b1d7e8efb323f1d228e50594c655b7",
       "interface": "RuntimeConnector",
       "interface_path": "sdk/python/easynet_sdk/connection.py",
       "interface_sha256": "1f7a3334ed01cd7e8a1f084cff2b68efdd49e1c805b840c8a11346dc7aef61ae",
@@ -22369,7 +22369,7 @@
       "sha256": "358217cdd5b322a85b9d0dd6239cc8a13e2ba84038ce33db9609dc8baf71847e",
       "interface": "RuntimeTransport",
       "interface_path": "sdk/go/runtime.go",
-      "interface_sha256": "633918ef3354188a80355d0582b80bb2ac4c6beb2a914f3dba54314f9d30cac2",
+      "interface_sha256": "2731eb131128979fa399f08b96db97f5f88f113bbb56da5f7d875412244a3587",
       "capability_ids": [
         "stream",
         "bidi"

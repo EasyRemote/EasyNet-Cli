@@ -1565,11 +1565,11 @@ func runtimeReceiptAuthorityBinding(value map[string]any, field string) (axoninv
 		}
 		return axoninv.PolicyAuthority(policy), nil
 	case "session":
-		backend, err := requiredRuntimeReceiptObjectText(value, "backend_ura", field+".backend_ura")
+		issuer, err := requiredRuntimeReceiptObjectText(value, "issuer_ura", field+".issuer_ura")
 		if err != nil {
 			return axoninv.AuthorityBinding{}, err
 		}
-		user, err := requiredRuntimeReceiptObjectText(value, "user_ura", field+".user_ura")
+		subject, err := requiredRuntimeReceiptObjectText(value, "subject_ura", field+".subject_ura")
 		if err != nil {
 			return axoninv.AuthorityBinding{}, err
 		}
@@ -1602,8 +1602,8 @@ func runtimeReceiptAuthorityBinding(value map[string]any, field string) (axoninv
 			return axoninv.AuthorityBinding{}, err
 		}
 		return axoninv.SessionAuthority(axoninv.SessionAuthorityBody{
-			BackendURA:  backend,
-			UserURA:     user,
+			BackendURA:  issuer,
+			UserURA:     subject,
 			SessionID:   sessionID,
 			Scopes:      scopes,
 			Audiences:   audiences,

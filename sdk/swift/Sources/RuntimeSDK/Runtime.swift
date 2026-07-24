@@ -586,8 +586,8 @@ private struct RuntimeAuthorityBinding {
             bytes.appendLengthPrefixed(try runtimeRequiredText(object, "policy_ura", "runtime_receipt"))
         case "session":
             bytes.append(0x05)
-            bytes.appendLengthPrefixed(try runtimeRequiredText(object, "backend_ura", "runtime_receipt"))
-            bytes.appendLengthPrefixed(try runtimeRequiredText(object, "user_ura", "runtime_receipt"))
+            bytes.appendLengthPrefixed(try runtimeRequiredText(object, "issuer_ura", "runtime_receipt"))
+            bytes.appendLengthPrefixed(try runtimeRequiredText(object, "subject_ura", "runtime_receipt"))
             bytes.appendLengthPrefixed(try runtimeRequiredText(object, "session_id", "runtime_receipt"))
             let scopes = try runtimeStringList(object["scopes"], "\(field).scopes")
             bytes.appendUInt32(UInt32(scopes.count))

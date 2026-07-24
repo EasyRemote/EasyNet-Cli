@@ -1923,8 +1923,8 @@ def _facade_authority_binding_projection(binding: Any) -> dict[str, object]:
         )
         return {
             "kind": "session",
-            "backend_ura": value.backend_ura,
-            "user_ura": value.user_ura,
+            "issuer_ura": value.backend_ura,
+            "subject_ura": value.user_ura,
             "session_id": value.session_id,
             "scopes": list(value.scopes),
             "audiences": list(value.audiences),
@@ -1957,6 +1957,9 @@ def _canonical_authority_binding_projection(binding: Any) -> dict[str, object]:
         "self": "self_",
         "delegation": "delegated",
     }.get(kind, kind)
+    if kind == "session":
+        projection["backend_ura"] = projection.pop("issuer_ura")
+        projection["user_ura"] = projection.pop("subject_ura")
     if "issued_at_ms" in projection:
         projection["issued_at_ms"] = str(projection["issued_at_ms"])
     if "expires_at_ms" in projection:

@@ -1869,12 +1869,12 @@ def _runtime_receipt_authority_binding(
         return _AxonAuthorityBinding.session(
             _AxonSessionAuthorityBody(
                 backend_ura=_required_receipt_text(
-                    value.get("backend_ura"),
-                    f"{field_name}.backend_ura",
+                    value.get("issuer_ura"),
+                    f"{field_name}.issuer_ura",
                 ),
                 user_ura=_required_receipt_text(
-                    value.get("user_ura"),
-                    f"{field_name}.user_ura",
+                    value.get("subject_ura"),
+                    f"{field_name}.subject_ura",
                 ),
                 session_id=_required_receipt_text(
                     value.get("session_id"),

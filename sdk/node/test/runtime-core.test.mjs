@@ -240,6 +240,36 @@ const authorityBindingProofHashSelf = (principalURA) => {
   return createHash("sha256").update(canonical).digest("hex");
 };
 
+const runtimeLengthPrefixedText = (value) => {
+  const encoded = Buffer.from(value, "utf8");
+  return Buffer.concat([runtimeU32(encoded.length), encoded]);
+};
+
+const runtimeI64 = (value) => {
+  const out = Buffer.alloc(8);
+  out.writeBigInt64BE(BigInt(value));
+  return out;
+};
+
+const authorityBindingProofHashSession = (binding) => {
+  const signature = Buffer.from(binding.signature_base64, "base64");
+  const canonical = Buffer.concat([
+    Buffer.from([0x05]),
+    runtimeLengthPrefixedText(binding.issuer_ura),
+    runtimeLengthPrefixedText(binding.subject_ura),
+    runtimeLengthPrefixedText(binding.session_id),
+    runtimeU32(binding.scopes.length),
+    ...binding.scopes.map(runtimeLengthPrefixedText),
+    runtimeU32(binding.audiences.length),
+    ...binding.audiences.map(runtimeLengthPrefixedText),
+    runtimeI64(binding.issued_at_ms),
+    runtimeI64(binding.expires_at_ms),
+    runtimeU32(signature.length),
+    signature,
+  ]);
+  return createHash("sha256").update(canonical).digest("hex");
+};
+
 const runtimeU32 = (value) => {
   const out = Buffer.alloc(4);
   out.writeUInt32BE(value);
@@ -552,6 +582,58 @@ test("runtime receipt proof facts are mandatory", () => {
       error instanceof sdk.SDKError
       && error.code === sdk.ErrorCode.INVALID_ARGUMENT
       && error.message.includes("self-signed runtime receipt must not carry host_attestation_base64"),
+  );
+});
+
+test("runtime receipt session authority facade uses generic fields", () => {
+  const sessionBinding = {
+    kind: "session",
+    issuer_ura: "easynet:///r/example/agent/backend",
+    subject_ura: "easynet:///r/example/agent/alice",
+    session_id: "session-1",
+    scopes: ["invoke"],
+    audiences: [descriptor],
+    issued_at_ms: 1,
+    expires_at_ms: 2,
+    signature_base64: Buffer.alloc(64, 0x73).toString("base64"),
+  };
+  const complete = canonicalRuntimeReceipt("inv-session-authority", "completed", "Completed", 1);
+  complete.authority_binding_kind = "session";
+  complete.authority_binding = sessionBinding;
+  const proof = mutableAuthorityProof(complete);
+  proof.proof_type = "session";
+  proof.binding_kind = "session";
+  proof.binding = { ...sessionBinding };
+  proof.proof_payload_base64 = "";
+  proof.proof_hash_hex = authorityBindingProofHashSession(sessionBinding);
+  delete proof.signature;
+  assert.equal(sdk.RuntimeReceipt.fromObject(complete).lifecycleState(), "COMPLETED");
+
+  const retiredBinding = {
+    kind: "session",
+    backend_ura: "easynet:///r/example/agent/backend",
+    user_ura: "easynet:///r/example/agent/alice",
+    session_id: "session-1",
+    scopes: ["invoke"],
+    audiences: [descriptor],
+    issued_at_ms: 1,
+    expires_at_ms: 2,
+    signature_base64: Buffer.alloc(64, 0x73).toString("base64"),
+  };
+  const retired = canonicalRuntimeReceipt("inv-retired-session-authority", "completed", "Completed", 1);
+  retired.authority_binding_kind = "session";
+  retired.authority_binding = retiredBinding;
+  const retiredProof = mutableAuthorityProof(retired);
+  retiredProof.proof_type = "session";
+  retiredProof.binding_kind = "session";
+  retiredProof.binding = { ...retiredBinding };
+  retiredProof.proof_payload_base64 = "";
+  assert.throws(
+    () => sdk.RuntimeReceipt.fromObject(retired),
+    (error) =>
+      error instanceof sdk.SDKError
+      && error.code === sdk.ErrorCode.INVALID_ARGUMENT
+      && error.message.includes("issuer_ura"),
   );
 });
 
