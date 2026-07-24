@@ -6,7 +6,7 @@ import {
   SidecarInvocation,
   SidecarProtocolError,
   serveExecPlugin,
-} from "../provider/easynet/pluginexec.js";
+} from "../provider/runtime/pluginexec.js";
 
 function requestFrame() {
   return {

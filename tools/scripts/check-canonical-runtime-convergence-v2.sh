@@ -10332,56 +10332,86 @@ for language in required_languages:
             raise SystemExit(f"plugin_sidecar_helper_matrix_missing_cell:{language}:{call_mode}")
 
 expected_helpers = {
-    "python": "easynet_sdk.providers.easynet.plugin_exec",
-    "go": "easynet.run/cli/sdk/go/provider/easynet/pluginexec",
-    "rust": "easynet-provider-pluginexec",
-    "java": "run.runtime.sdk.provider.easynet.pluginexec",
-    "node": "@runtime/sdk/provider/easynet/pluginexec",
+    "python": "easynet_sdk.providers.runtime.plugin_exec",
+    "go": "easynet.run/cli/sdk/go/provider/runtime/pluginexec",
+    "rust": "runtime-provider-pluginexec",
+    "java": "run.runtime.sdk.provider.runtime.pluginexec",
+    "node": "@runtime/sdk/provider/runtime/pluginexec",
 }
 expected_helper_files = {
     "python": [
-        "sdk/python/easynet_sdk/providers/easynet/plugin_exec.py",
+        "sdk/python/easynet_sdk/providers/runtime/plugin_exec.py",
         "sdk/python/tests/test_plugin_exec.py",
     ],
     "go": [
-        "sdk/go/provider/easynet/pluginexec/pluginexec.go",
-        "sdk/go/provider/easynet/pluginexec/pluginexec_test.go",
+        "sdk/go/provider/runtime/pluginexec/pluginexec.go",
+        "sdk/go/provider/runtime/pluginexec/pluginexec_test.go",
     ],
     "rust": [
-        "sdk/rust/provider/easynet/pluginexec/Cargo.toml",
-        "sdk/rust/provider/easynet/pluginexec/src/lib.rs",
-        "sdk/rust/provider/easynet/pluginexec/tests/pluginexec.rs",
+        "sdk/rust/provider/runtime/pluginexec/Cargo.toml",
+        "sdk/rust/provider/runtime/pluginexec/src/lib.rs",
+        "sdk/rust/provider/runtime/pluginexec/tests/pluginexec.rs",
     ],
     "java": [
-        "sdk/java/src/main/java/run/runtime/sdk/provider/easynet/pluginexec/SidecarRuntime.java",
-        "sdk/java/src/main/java/run/runtime/sdk/provider/easynet/pluginexec/SidecarInvocation.java",
-        "sdk/java/src/test/java/run/runtime/sdk/provider/easynet/pluginexec/SidecarRuntimeTest.java",
+        "sdk/java/src/main/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarRuntime.java",
+        "sdk/java/src/main/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarInvocation.java",
+        "sdk/java/src/test/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarRuntimeTest.java",
     ],
     "node": [
-        "sdk/node/provider/easynet/pluginexec.js",
-        "sdk/node/provider/easynet/pluginexec.d.ts",
+        "sdk/node/provider/runtime/pluginexec.js",
+        "sdk/node/provider/runtime/pluginexec.d.ts",
         "sdk/node/test/pluginexec.test.mjs",
     ],
 }
 expected_helper_production_files = {
     "python": [
-        "sdk/python/easynet_sdk/providers/easynet/plugin_exec.py",
+        "sdk/python/easynet_sdk/providers/runtime/plugin_exec.py",
     ],
     "go": [
-        "sdk/go/provider/easynet/pluginexec/pluginexec.go",
+        "sdk/go/provider/runtime/pluginexec/pluginexec.go",
     ],
     "rust": [
-        "sdk/rust/provider/easynet/pluginexec/src/lib.rs",
+        "sdk/rust/provider/runtime/pluginexec/src/lib.rs",
     ],
     "java": [
-        "sdk/java/src/main/java/run/runtime/sdk/provider/easynet/pluginexec/SidecarRuntime.java",
-        "sdk/java/src/main/java/run/runtime/sdk/provider/easynet/pluginexec/SidecarInvocation.java",
+        "sdk/java/src/main/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarRuntime.java",
+        "sdk/java/src/main/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarInvocation.java",
     ],
     "node": [
-        "sdk/node/provider/easynet/pluginexec.js",
-        "sdk/node/provider/easynet/pluginexec.d.ts",
+        "sdk/node/provider/runtime/pluginexec.js",
+        "sdk/node/provider/runtime/pluginexec.d.ts",
     ],
 }
+def read_rel(rel_path: str) -> str:
+    return (cli_root / rel_path).read_text(encoding="utf-8")
+
+for retired_path in (
+    "sdk/python/easynet_sdk/providers/easynet/plugin_exec.py",
+    "sdk/go/provider/easynet/pluginexec",
+    "sdk/rust/provider/easynet/pluginexec",
+    "sdk/java/src/main/java/run/runtime/sdk/provider/easynet/pluginexec",
+    "sdk/java/src/test/java/run/runtime/sdk/provider/easynet/pluginexec",
+    "sdk/node/provider/easynet/pluginexec.js",
+    "sdk/node/provider/easynet/pluginexec.d.ts",
+):
+    if (cli_root / retired_path).exists():
+        raise SystemExit(f"plugin_sidecar_helper_retired_product_path:{retired_path}")
+retired_tokens = (
+    "easynet_sdk.providers.easynet.plugin_exec",
+    "easynet.run/cli/sdk/go/provider/easynet/pluginexec",
+    "sdk/rust/provider/easynet/pluginexec",
+    "run.runtime.sdk.provider.easynet.pluginexec",
+    "@runtime/sdk/provider/easynet/pluginexec",
+)
+for rel_path in (
+    "src/cli/commands/groups/plugin_template.rs",
+    "sdk/python/tests/test_plugin_exec.py",
+    "sdk/node/test/pluginexec.test.mjs",
+):
+    rel_text = read_rel(rel_path)
+    for token in retired_tokens:
+        if token in rel_text:
+            raise SystemExit(f"plugin_sidecar_helper_retired_product_token:{rel_path}:{token}")
 expected_daemon_sidecar_files = [
     "src/daemon/plugins/sidecar/frame.rs",
     "src/daemon/plugins/sidecar.rs",
@@ -10402,9 +10432,6 @@ for language, helper in expected_helpers.items():
 for rel_path in expected_daemon_sidecar_files:
     if not (cli_root / rel_path).is_file():
         raise SystemExit(f"plugin_sidecar_daemon_source_missing:{rel_path}")
-
-def read_rel(rel_path: str) -> str:
-    return (cli_root / rel_path).read_text(encoding="utf-8")
 
 sidecar_frame = read_rel("src/daemon/plugins/sidecar/frame.rs")
 sidecar_projection = read_rel("src/daemon/plugins/sidecar.rs")
@@ -10753,9 +10780,9 @@ if "serve_exec_plugin(handle)" not in text:
     raise SystemExit("plugin_python_template_missing_provider_helper")
 if "pluginexec.MustServe" not in text:
     raise SystemExit("plugin_go_template_missing_provider_helper")
-if "serve_exec_plugin" not in text or "easynet_provider_pluginexec" not in text:
+if "serve_exec_plugin" not in text or "runtime_provider_pluginexec" not in text:
     raise SystemExit("plugin_rust_template_missing_provider_helper")
-if "SidecarRuntime.serve" not in text or "run.runtime.sdk.provider.easynet.pluginexec" not in text:
+if "SidecarRuntime.serve" not in text or "run.runtime.sdk.provider.runtime.pluginexec" not in text:
     raise SystemExit("plugin_java_template_missing_provider_helper")
 if "serveExecPlugin" not in text:
     raise SystemExit("plugin_node_template_missing_provider_helper")
@@ -15638,24 +15665,24 @@ EOF
     src/daemon/plugins/sidecar.rs \
     src/daemon/plugins/host_api.rs \
     src/daemon/plugins/sidecar/tests.rs \
-    sdk/python/easynet_sdk/providers/easynet/plugin_exec.py \
+    sdk/python/easynet_sdk/providers/runtime/plugin_exec.py \
     sdk/python/tests/test_plugin_exec.py \
-    sdk/go/provider/easynet/pluginexec/pluginexec.go \
-    sdk/go/provider/easynet/pluginexec/pluginexec_test.go \
-    sdk/rust/provider/easynet/pluginexec/Cargo.toml \
-    sdk/rust/provider/easynet/pluginexec/src/lib.rs \
-    sdk/rust/provider/easynet/pluginexec/tests/pluginexec.rs \
-    sdk/java/src/main/java/run/runtime/sdk/provider/easynet/pluginexec/SidecarRuntime.java \
-    sdk/java/src/main/java/run/runtime/sdk/provider/easynet/pluginexec/SidecarInvocation.java \
-    sdk/java/src/test/java/run/runtime/sdk/provider/easynet/pluginexec/SidecarRuntimeTest.java \
-    sdk/node/provider/easynet/pluginexec.js \
-    sdk/node/provider/easynet/pluginexec.d.ts \
+    sdk/go/provider/runtime/pluginexec/pluginexec.go \
+    sdk/go/provider/runtime/pluginexec/pluginexec_test.go \
+    sdk/rust/provider/runtime/pluginexec/Cargo.toml \
+    sdk/rust/provider/runtime/pluginexec/src/lib.rs \
+    sdk/rust/provider/runtime/pluginexec/tests/pluginexec.rs \
+    sdk/java/src/main/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarRuntime.java \
+    sdk/java/src/main/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarInvocation.java \
+    sdk/java/src/test/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarRuntimeTest.java \
+    sdk/node/provider/runtime/pluginexec.js \
+    sdk/node/provider/runtime/pluginexec.d.ts \
     sdk/node/test/pluginexec.test.mjs; do
     mkdir -p "$(dirname "$tmp/cli-sidecar-tuple/$rel")"
     cp "$ROOT/$rel" "$tmp/cli-sidecar-tuple/$rel"
   done
   perl -0pi -e 's/\n\s*_reject_legacy_tuple_aliases\(invocation\)//' \
-    "$tmp/cli-sidecar-tuple/sdk/python/easynet_sdk/providers/easynet/plugin_exec.py"
+    "$tmp/cli-sidecar-tuple/sdk/python/easynet_sdk/providers/runtime/plugin_exec.py"
   if ( CLI_ROOT="$tmp/cli-sidecar-tuple"; check_plugin_sidecar_helper_matrix_contract ) >/dev/null 2>&1; then
     fail "self-test expected legacy sidecar tuple key gate to fail"
   fi
@@ -15665,24 +15692,24 @@ EOF
     src/daemon/plugins/sidecar.rs \
     src/daemon/plugins/host_api.rs \
     src/daemon/plugins/sidecar/tests.rs \
-    sdk/python/easynet_sdk/providers/easynet/plugin_exec.py \
+    sdk/python/easynet_sdk/providers/runtime/plugin_exec.py \
     sdk/python/tests/test_plugin_exec.py \
-    sdk/go/provider/easynet/pluginexec/pluginexec.go \
-    sdk/go/provider/easynet/pluginexec/pluginexec_test.go \
-    sdk/rust/provider/easynet/pluginexec/Cargo.toml \
-    sdk/rust/provider/easynet/pluginexec/src/lib.rs \
-    sdk/rust/provider/easynet/pluginexec/tests/pluginexec.rs \
-    sdk/java/src/main/java/run/runtime/sdk/provider/easynet/pluginexec/SidecarRuntime.java \
-    sdk/java/src/main/java/run/runtime/sdk/provider/easynet/pluginexec/SidecarInvocation.java \
-    sdk/java/src/test/java/run/runtime/sdk/provider/easynet/pluginexec/SidecarRuntimeTest.java \
-    sdk/node/provider/easynet/pluginexec.js \
-    sdk/node/provider/easynet/pluginexec.d.ts \
+    sdk/go/provider/runtime/pluginexec/pluginexec.go \
+    sdk/go/provider/runtime/pluginexec/pluginexec_test.go \
+    sdk/rust/provider/runtime/pluginexec/Cargo.toml \
+    sdk/rust/provider/runtime/pluginexec/src/lib.rs \
+    sdk/rust/provider/runtime/pluginexec/tests/pluginexec.rs \
+    sdk/java/src/main/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarRuntime.java \
+    sdk/java/src/main/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarInvocation.java \
+    sdk/java/src/test/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarRuntimeTest.java \
+    sdk/node/provider/runtime/pluginexec.js \
+    sdk/node/provider/runtime/pluginexec.d.ts \
     sdk/node/test/pluginexec.test.mjs; do
     mkdir -p "$(dirname "$tmp/cli-sidecar-unknown-field/$rel")"
     cp "$ROOT/$rel" "$tmp/cli-sidecar-unknown-field/$rel"
   done
   perl -0pi -e 's/_reject_unknown_invocation_fields/_accept_unknown_invocation_fields/g' \
-    "$tmp/cli-sidecar-unknown-field/sdk/python/easynet_sdk/providers/easynet/plugin_exec.py"
+    "$tmp/cli-sidecar-unknown-field/sdk/python/easynet_sdk/providers/runtime/plugin_exec.py"
   if ( CLI_ROOT="$tmp/cli-sidecar-unknown-field"; check_plugin_sidecar_helper_matrix_contract ) >/dev/null 2>&1; then
     fail "self-test expected sidecar unknown invocation field gate to fail"
   fi
@@ -15692,24 +15719,24 @@ EOF
     src/daemon/plugins/sidecar.rs \
     src/daemon/plugins/host_api.rs \
     src/daemon/plugins/sidecar/tests.rs \
-    sdk/python/easynet_sdk/providers/easynet/plugin_exec.py \
+    sdk/python/easynet_sdk/providers/runtime/plugin_exec.py \
     sdk/python/tests/test_plugin_exec.py \
-    sdk/go/provider/easynet/pluginexec/pluginexec.go \
-    sdk/go/provider/easynet/pluginexec/pluginexec_test.go \
-    sdk/rust/provider/easynet/pluginexec/Cargo.toml \
-    sdk/rust/provider/easynet/pluginexec/src/lib.rs \
-    sdk/rust/provider/easynet/pluginexec/tests/pluginexec.rs \
-    sdk/java/src/main/java/run/runtime/sdk/provider/easynet/pluginexec/SidecarRuntime.java \
-    sdk/java/src/main/java/run/runtime/sdk/provider/easynet/pluginexec/SidecarInvocation.java \
-    sdk/java/src/test/java/run/runtime/sdk/provider/easynet/pluginexec/SidecarRuntimeTest.java \
-    sdk/node/provider/easynet/pluginexec.js \
-    sdk/node/provider/easynet/pluginexec.d.ts \
+    sdk/go/provider/runtime/pluginexec/pluginexec.go \
+    sdk/go/provider/runtime/pluginexec/pluginexec_test.go \
+    sdk/rust/provider/runtime/pluginexec/Cargo.toml \
+    sdk/rust/provider/runtime/pluginexec/src/lib.rs \
+    sdk/rust/provider/runtime/pluginexec/tests/pluginexec.rs \
+    sdk/java/src/main/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarRuntime.java \
+    sdk/java/src/main/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarInvocation.java \
+    sdk/java/src/test/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarRuntimeTest.java \
+    sdk/node/provider/runtime/pluginexec.js \
+    sdk/node/provider/runtime/pluginexec.d.ts \
     sdk/node/test/pluginexec.test.mjs; do
     mkdir -p "$(dirname "$tmp/cli-sidecar-request-field/$rel")"
     cp "$ROOT/$rel" "$tmp/cli-sidecar-request-field/$rel"
   done
   perl -0pi -e 's/_reject_unknown_request_fields/_accept_unknown_request_fields/g' \
-    "$tmp/cli-sidecar-request-field/sdk/python/easynet_sdk/providers/easynet/plugin_exec.py"
+    "$tmp/cli-sidecar-request-field/sdk/python/easynet_sdk/providers/runtime/plugin_exec.py"
   if ( CLI_ROOT="$tmp/cli-sidecar-request-field"; check_plugin_sidecar_helper_matrix_contract ) >/dev/null 2>&1; then
     fail "self-test expected sidecar unknown request field gate to fail"
   fi
@@ -15719,23 +15746,23 @@ EOF
     src/daemon/plugins/sidecar.rs \
     src/daemon/plugins/host_api.rs \
     src/daemon/plugins/sidecar/tests.rs \
-    sdk/python/easynet_sdk/providers/easynet/plugin_exec.py \
+    sdk/python/easynet_sdk/providers/runtime/plugin_exec.py \
     sdk/python/tests/test_plugin_exec.py \
-    sdk/go/provider/easynet/pluginexec/pluginexec.go \
-    sdk/go/provider/easynet/pluginexec/pluginexec_test.go \
-    sdk/rust/provider/easynet/pluginexec/Cargo.toml \
-    sdk/rust/provider/easynet/pluginexec/src/lib.rs \
-    sdk/rust/provider/easynet/pluginexec/tests/pluginexec.rs \
-    sdk/java/src/main/java/run/runtime/sdk/provider/easynet/pluginexec/SidecarRuntime.java \
-    sdk/java/src/main/java/run/runtime/sdk/provider/easynet/pluginexec/SidecarInvocation.java \
-    sdk/java/src/test/java/run/runtime/sdk/provider/easynet/pluginexec/SidecarRuntimeTest.java \
-    sdk/node/provider/easynet/pluginexec.js \
-    sdk/node/provider/easynet/pluginexec.d.ts \
+    sdk/go/provider/runtime/pluginexec/pluginexec.go \
+    sdk/go/provider/runtime/pluginexec/pluginexec_test.go \
+    sdk/rust/provider/runtime/pluginexec/Cargo.toml \
+    sdk/rust/provider/runtime/pluginexec/src/lib.rs \
+    sdk/rust/provider/runtime/pluginexec/tests/pluginexec.rs \
+    sdk/java/src/main/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarRuntime.java \
+    sdk/java/src/main/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarInvocation.java \
+    sdk/java/src/test/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarRuntimeTest.java \
+    sdk/node/provider/runtime/pluginexec.js \
+    sdk/node/provider/runtime/pluginexec.d.ts \
     sdk/node/test/pluginexec.test.mjs; do
     mkdir -p "$(dirname "$tmp/cli-sidecar-tuple-defaulting/$rel")"
     cp "$ROOT/$rel" "$tmp/cli-sidecar-tuple-defaulting/$rel"
   done
-  cat >>"$tmp/cli-sidecar-tuple-defaulting/sdk/python/easynet_sdk/providers/easynet/plugin_exec.py" <<'EOF'
+  cat >>"$tmp/cli-sidecar-tuple-defaulting/sdk/python/easynet_sdk/providers/runtime/plugin_exec.py" <<'EOF'
 
 def _optional_mapping(value, field, *, required=False):
     if value is None and not required:
@@ -15751,18 +15778,18 @@ EOF
     src/daemon/plugins/sidecar.rs \
     src/daemon/plugins/host_api.rs \
     src/daemon/plugins/sidecar/tests.rs \
-    sdk/python/easynet_sdk/providers/easynet/plugin_exec.py \
+    sdk/python/easynet_sdk/providers/runtime/plugin_exec.py \
     sdk/python/tests/test_plugin_exec.py \
-    sdk/go/provider/easynet/pluginexec/pluginexec.go \
-    sdk/go/provider/easynet/pluginexec/pluginexec_test.go \
-    sdk/rust/provider/easynet/pluginexec/Cargo.toml \
-    sdk/rust/provider/easynet/pluginexec/src/lib.rs \
-    sdk/rust/provider/easynet/pluginexec/tests/pluginexec.rs \
-    sdk/java/src/main/java/run/runtime/sdk/provider/easynet/pluginexec/SidecarRuntime.java \
-    sdk/java/src/main/java/run/runtime/sdk/provider/easynet/pluginexec/SidecarInvocation.java \
-    sdk/java/src/test/java/run/runtime/sdk/provider/easynet/pluginexec/SidecarRuntimeTest.java \
-    sdk/node/provider/easynet/pluginexec.js \
-    sdk/node/provider/easynet/pluginexec.d.ts \
+    sdk/go/provider/runtime/pluginexec/pluginexec.go \
+    sdk/go/provider/runtime/pluginexec/pluginexec_test.go \
+    sdk/rust/provider/runtime/pluginexec/Cargo.toml \
+    sdk/rust/provider/runtime/pluginexec/src/lib.rs \
+    sdk/rust/provider/runtime/pluginexec/tests/pluginexec.rs \
+    sdk/java/src/main/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarRuntime.java \
+    sdk/java/src/main/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarInvocation.java \
+    sdk/java/src/test/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarRuntimeTest.java \
+    sdk/node/provider/runtime/pluginexec.js \
+    sdk/node/provider/runtime/pluginexec.d.ts \
     sdk/node/test/pluginexec.test.mjs; do
     mkdir -p "$(dirname "$tmp/cli-sidecar-daemon-defaulting/$rel")"
     cp "$ROOT/$rel" "$tmp/cli-sidecar-daemon-defaulting/$rel"

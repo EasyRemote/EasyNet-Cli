@@ -1,7 +1,7 @@
-// Package pluginexec owns the EasyNet provider sidecar frame facade.
+// Package pluginexec owns the runtime provider sidecar frame facade.
 //
 // It is intentionally provider-scoped: the canonical SDK root must not expose
-// EasyNet-Cli daemon sidecar execution concepts. Process-backed plugins should
+// sidecar execution protocol details. Process-backed plugins should
 // implement handlers over SidecarInvocation instead of hand-writing stdin/stdout
 // JSON frames.
 package pluginexec
@@ -16,7 +16,7 @@ import (
 	"os"
 )
 
-// SidecarInvocation is the handler-facing view of one daemon-admitted sidecar call.
+// SidecarInvocation is the handler-facing view of one runtime-admitted sidecar call.
 type SidecarInvocation struct {
 	CallID          string
 	CallerURA       string
@@ -32,7 +32,7 @@ type SidecarInvocation struct {
 // Handler implements one sidecar invocation.
 type Handler func(context.Context, SidecarInvocation) (any, error)
 
-// ProtocolError reports malformed daemon sidecar frames.
+// ProtocolError reports malformed runtime sidecar frames.
 type ProtocolError struct {
 	message string
 }

@@ -1,6 +1,6 @@
-"""Provider-scoped helper for EasyNet-Cli declarative exec plugins.
+"""Provider-scoped helper for runtime declarative exec plugins.
 
-This module owns the JSON frame details used between `easynet-daemon` and a
+This module owns the JSON frame details used between the runtime host and a
 process-backed plugin. Plugin authors should implement a handler over
 `SidecarInvocation`; they should not hand-write sidecar protocol frames.
 """
@@ -15,7 +15,7 @@ from typing import Any, TextIO
 
 
 class SidecarProtocolError(ValueError):
-    """Raised when a daemon/plugin sidecar frame is structurally invalid."""
+    """Raised when a runtime/plugin sidecar frame is structurally invalid."""
 
 
 _CANONICAL_INVOCATION_FIELDS = frozenset(
@@ -34,7 +34,7 @@ _CANONICAL_REQUEST_FIELDS = frozenset({"type", "call_id", "invocation"})
 
 @dataclass(frozen=True)
 class SidecarInvocation:
-    """Typed view of one daemon-admitted plugin invocation."""
+    """Typed view of one runtime-admitted plugin invocation."""
 
     call_id: str
     caller_ura: str
@@ -48,7 +48,7 @@ class SidecarInvocation:
 
     @classmethod
     def from_frame(cls, frame: Mapping[str, Any]) -> "SidecarInvocation":
-        """Project a daemon sidecar frame into a handler-facing invocation."""
+        """Project a runtime sidecar frame into a handler-facing invocation."""
 
         _reject_unknown_request_fields(frame)
         frame_type = _required_string(frame, "type")
@@ -88,8 +88,8 @@ def serve_exec_plugin(
 ) -> None:
     """Run one declarative exec plugin invocation.
 
-    The daemon writes one request frame to stdin and expects exactly one
-    response frame on stdout. Handler exceptions are converted into daemon
+    The runtime host writes one request frame to stdin and expects exactly one
+    response frame on stdout. Handler exceptions are converted into runtime
     protocol `error` frames so tracebacks never corrupt stdout framing.
     """
 

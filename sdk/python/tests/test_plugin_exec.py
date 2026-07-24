@@ -4,7 +4,7 @@ from io import StringIO
 import json
 import unittest
 
-from easynet_sdk.providers.easynet.plugin_exec import (
+from easynet_sdk.providers.runtime.plugin_exec import (
     SidecarInvocation,
     SidecarProtocolError,
     serve_exec_plugin,

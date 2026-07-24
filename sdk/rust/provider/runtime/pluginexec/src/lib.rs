@@ -1,9 +1,9 @@
-//! EasyNet provider-scoped declarative exec plugin helper.
+//! Runtime provider-scoped declarative exec plugin helper.
 //!
-//! This crate owns the JSON frame details used between `easynet-daemon` and a
+//! This crate owns the JSON frame details used between the runtime host and a
 //! process-backed declarative exec plugin. It is intentionally not part of a
-//! canonical runtime SDK root: plugin sidecar execution is an EasyNet-Cli
-//! provider boundary. Plugin authors implement handlers over
+//! canonical runtime SDK root: plugin sidecar execution is a runtime provider
+//! boundary. Plugin authors implement handlers over
 //! [`SidecarInvocation`] instead of hand-writing stdin/stdout protocol frames.
 
 use std::fmt;
@@ -12,7 +12,7 @@ use std::io::{self, BufRead, Write};
 use serde::Serialize;
 use serde_json::{Map, Value};
 
-/// Handler-facing view of one daemon-admitted sidecar invocation.
+/// Handler-facing view of one runtime-admitted sidecar invocation.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SidecarInvocation {
     pub call_id: String,
@@ -27,7 +27,7 @@ pub struct SidecarInvocation {
 }
 
 impl SidecarInvocation {
-    /// Project a daemon sidecar frame into a typed invocation.
+    /// Project a runtime sidecar frame into a typed invocation.
     pub fn from_frame(frame: Value) -> Result<Self, SidecarProtocolError> {
         let mut object = expect_object(frame, "sidecar request frame")?;
         reject_unknown_request_fields(&object)?;
@@ -62,7 +62,7 @@ impl SidecarInvocation {
     }
 }
 
-/// Malformed daemon/plugin sidecar frame.
+/// Malformed runtime/plugin sidecar frame.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SidecarProtocolError {
     message: String,

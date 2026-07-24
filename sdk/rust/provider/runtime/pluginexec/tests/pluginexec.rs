@@ -1,6 +1,6 @@
 use std::io::Cursor;
 
-use easynet_provider_pluginexec::{serve_exec_plugin_io, SidecarInvocation};
+use runtime_provider_pluginexec::{serve_exec_plugin_io, SidecarInvocation};
 use serde_json::{json, Value};
 
 fn request_frame() -> String {
@@ -22,7 +22,7 @@ fn request_frame() -> String {
 }
 
 #[test]
-fn sidecar_invocation_projects_daemon_frame() {
+fn sidecar_invocation_projects_runtime_frame() {
     let frame: Value = serde_json::from_str(&request_frame()).expect("frame");
     let invocation = SidecarInvocation::from_frame(frame).expect("invocation");
 

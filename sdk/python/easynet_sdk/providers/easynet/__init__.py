@@ -12,12 +12,6 @@ from .lifecycle import (
     DiscoverOptions,
     StartConfig,
 )
-from .plugin_exec import (
-    SidecarHandler,
-    SidecarInvocation,
-    SidecarProtocolError,
-    serve_exec_plugin,
-)
 from .transport import (
     connect_direct_invocation_transport,
     connect_invocation_transport,
@@ -28,14 +22,10 @@ __all__ = [
     "DaemonMode",
     "DiscoverOptions",
     "RuntimeSigningIdentity",
-    "SidecarHandler",
-    "SidecarInvocation",
-    "SidecarProtocolError",
     "StartConfig",
     "connect_direct_invocation_transport",
     "connect_invocation_transport",
     "ensure_runtime_signing_identity",
     "load_runtime_signing_identity",
     "read_daemon_runtime_identity_projection",
-    "serve_exec_plugin",
 ]

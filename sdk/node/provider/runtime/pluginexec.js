@@ -1,6 +1,6 @@
-// Provider-scoped helper for EasyNet-Cli declarative exec plugins.
+// Provider-scoped helper for runtime declarative exec plugins.
 //
-// This module owns the JSON frame details used between `easynet-daemon` and a
+// This module owns the JSON frame details used between the runtime host and a
 // process-backed plugin. Plugin authors should implement handlers over
 // SidecarInvocation instead of hand-writing stdin/stdout protocol frames.
 

@@ -340,6 +340,19 @@ if rg -n 'easynet.run/cli/sdk/go/provider/easynet' sdk/go \
   fail "canonical Go implementation imports the EasyNet provider facade"
 fi
 
+for retired in \
+  sdk/python/easynet_sdk/providers/easynet/plugin_exec.py \
+  sdk/go/provider/easynet/pluginexec \
+  sdk/rust/provider/easynet/pluginexec \
+  sdk/java/src/main/java/run/runtime/sdk/provider/easynet/pluginexec \
+  sdk/java/src/test/java/run/runtime/sdk/provider/easynet/pluginexec \
+  sdk/node/provider/easynet/pluginexec.js \
+  sdk/node/provider/easynet/pluginexec.d.ts; do
+  if [[ -e "$retired" ]]; then
+    fail "plugin execution helper must live under product-neutral runtime provider path: $retired"
+  fi
+done
+
 canonical_core_sources=()
 for root in "${canonical_roots[@]}"; do
   if [[ "$root" == sdk/go/* ]]; then

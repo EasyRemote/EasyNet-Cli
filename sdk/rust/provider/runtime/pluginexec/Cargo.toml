@@ -1,14 +1,14 @@
 [package]
-name = "easynet-provider-pluginexec"
+name = "runtime-provider-pluginexec"
 version = "0.1.0"
 edition = "2021"
-description = "Provider-scoped EasyNet-Cli declarative exec plugin sidecar helper"
+description = "Provider-scoped runtime declarative exec plugin sidecar helper"
 license = "Apache-2.0"
 
 [workspace]
 
 [lib]
-name = "easynet_provider_pluginexec"
+name = "runtime_provider_pluginexec"
 path = "src/lib.rs"
 
 [dependencies]

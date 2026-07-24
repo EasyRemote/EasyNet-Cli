@@ -55,35 +55,35 @@ pub const PROVIDER_SIDECAR_HELPER_CAPABILITY_MATRIX: &[ProviderSidecarHelperCapa
         call_mode: ProviderSidecarCallMode::ExecInvoke,
         state: ProviderSidecarHelperState::CutoverReady,
         template_available: true,
-        helper_package: Some("easynet_sdk.providers.easynet.plugin_exec"),
+        helper_package: Some("easynet_sdk.providers.runtime.plugin_exec"),
     },
     ProviderSidecarHelperCapability {
         language: "go",
         call_mode: ProviderSidecarCallMode::ExecInvoke,
         state: ProviderSidecarHelperState::CutoverReady,
         template_available: true,
-        helper_package: Some("easynet.run/cli/sdk/go/provider/easynet/pluginexec"),
+        helper_package: Some("easynet.run/cli/sdk/go/provider/runtime/pluginexec"),
     },
     ProviderSidecarHelperCapability {
         language: "rust",
         call_mode: ProviderSidecarCallMode::ExecInvoke,
         state: ProviderSidecarHelperState::CutoverReady,
         template_available: true,
-        helper_package: Some("easynet-provider-pluginexec"),
+        helper_package: Some("runtime-provider-pluginexec"),
     },
     ProviderSidecarHelperCapability {
         language: "node",
         call_mode: ProviderSidecarCallMode::ExecInvoke,
         state: ProviderSidecarHelperState::CutoverReady,
         template_available: true,
-        helper_package: Some("@runtime/sdk/provider/easynet/pluginexec"),
+        helper_package: Some("@runtime/sdk/provider/runtime/pluginexec"),
     },
     ProviderSidecarHelperCapability {
         language: "java",
         call_mode: ProviderSidecarCallMode::ExecInvoke,
         state: ProviderSidecarHelperState::CutoverReady,
         template_available: true,
-        helper_package: Some("run.runtime.sdk.provider.easynet.pluginexec"),
+        helper_package: Some("run.runtime.sdk.provider.runtime.pluginexec"),
     },
     ProviderSidecarHelperCapability {
         language: "c/c++",
@@ -411,7 +411,7 @@ type = "string"
                 r#"This template uses the Python CLI SDK provider helper:
 
 ```python
-from easynet_sdk.providers.easynet.plugin_exec import SidecarInvocation, serve_exec_plugin
+from easynet_sdk.providers.runtime.plugin_exec import SidecarInvocation, serve_exec_plugin
 ```
 
 It is installable immediately when the runtime environment can import
@@ -422,7 +422,7 @@ It is installable immediately when the runtime environment can import
                 r#"This template uses the Go CLI SDK provider helper:
 
 ```go
-import "easynet.run/cli/sdk/go/provider/easynet/pluginexec"
+import "easynet.run/cli/sdk/go/provider/runtime/pluginexec"
 ```
 
 Build the executable before install:
@@ -439,7 +439,7 @@ The daemon runs `bin/exec-plugin`; it does not run `go run` at invocation time.
                 r#"This template uses the Rust CLI SDK provider helper:
 
 ```rust
-use easynet_provider_pluginexec::{serve_exec_plugin, SidecarInvocation};
+use runtime_provider_pluginexec::{serve_exec_plugin, SidecarInvocation};
 ```
 
 Build the executable before install:
@@ -456,8 +456,8 @@ The daemon runs `bin/exec-plugin`; it does not run `cargo run` at invocation tim
                 r#"This template uses the Java CLI SDK provider helper:
 
 ```java
-import run.runtime.sdk.provider.easynet.pluginexec.SidecarRuntime;
-import run.runtime.sdk.provider.easynet.pluginexec.SidecarInvocation;
+import run.runtime.sdk.provider.runtime.pluginexec.SidecarRuntime;
+import run.runtime.sdk.provider.runtime.pluginexec.SidecarInvocation;
 ```
 
 Build the executable wrapper target before install:
@@ -474,7 +474,7 @@ The daemon runs `bin/exec-plugin`; it does not run Maven at invocation time.
                 r#"This template uses the Node CLI SDK provider helper:
 
 ```js
-import { serveExecPlugin } from "@runtime/sdk/provider/easynet/pluginexec.js";
+import { serveExecPlugin } from "@runtime/sdk/provider/runtime/pluginexec.js";
 ```
 
 Install dependencies before install:
@@ -600,7 +600,7 @@ name = "exec-plugin"
 path = "src/main.rs"
 
 [dependencies]
-easynet-provider-pluginexec = {{ path = "{sdk_path}" }}
+runtime-provider-pluginexec = {{ path = "{sdk_path}" }}
 serde_json = "1"
 "#,
             package_name = self.package_id.replace('.', "-"),
@@ -671,7 +671,7 @@ exec java -cp "$(dirname "$0")/exec-plugin.jar:{sdk_jar}" ExecPlugin
 }
 
 const PYTHON_EXEC_PLUGIN: &str = r#"#!/usr/bin/env python3
-from easynet_sdk.providers.easynet.plugin_exec import SidecarInvocation, serve_exec_plugin
+from easynet_sdk.providers.runtime.plugin_exec import SidecarInvocation, serve_exec_plugin
 
 
 def handle(invocation: SidecarInvocation) -> dict[str, object]:
@@ -679,10 +679,10 @@ def handle(invocation: SidecarInvocation) -> dict[str, object]:
         "ok": True,
         "source": "hello-plugin",
         "message": invocation.args.get("message"),
-        "caller": invocation.caller,
-        "callee": invocation.callee,
-        "subject": invocation.subject,
-        "ability": invocation.ability,
+        "caller_ura": invocation.caller_ura,
+        "callee_ura": invocation.callee_ura,
+        "subject_ura": invocation.subject_ura,
+        "ability_ura": invocation.ability_ura,
         "invocation_nonce_len": len(invocation.invocation_nonce),
     }
 
@@ -696,7 +696,7 @@ const GO_EXEC_PLUGIN: &str = r#"package main
 import (
 	"context"
 
-	"easynet.run/cli/sdk/go/provider/easynet/pluginexec"
+	"easynet.run/cli/sdk/go/provider/runtime/pluginexec"
 )
 
 func main() {
@@ -705,10 +705,10 @@ func main() {
 			"ok":                   true,
 			"source":               "hello-plugin",
 			"message":              invocation.Args["message"],
-			"caller":               invocation.Caller,
-			"callee":               invocation.Callee,
-			"subject":              invocation.Subject,
-			"ability":              invocation.Ability,
+			"caller_ura":           invocation.CallerURA,
+			"callee_ura":           invocation.CalleeURA,
+			"subject_ura":          invocation.SubjectURA,
+			"ability_ura":          invocation.AbilityURA,
 			"invocation_nonce_len": len(invocation.InvocationNonce),
 		}, nil
 	})
@@ -721,7 +721,7 @@ build:
 	go build -o bin/exec-plugin ./cmd/exec-plugin
 "#;
 
-const RUST_EXEC_PLUGIN: &str = r#"use easynet_provider_pluginexec::{serve_exec_plugin, SidecarInvocation};
+const RUST_EXEC_PLUGIN: &str = r#"use runtime_provider_pluginexec::{serve_exec_plugin, SidecarInvocation};
 use serde_json::{json, Value};
 
 fn main() -> std::io::Result<()> {
@@ -730,10 +730,10 @@ fn main() -> std::io::Result<()> {
             "ok": true,
             "source": "hello-plugin",
             "message": invocation.args.get("message").cloned().unwrap_or(Value::Null),
-            "caller": invocation.caller,
-            "callee": invocation.callee,
-            "subject": invocation.subject,
-            "ability": invocation.ability,
+            "caller_ura": invocation.caller_ura,
+            "callee_ura": invocation.callee_ura,
+            "subject_ura": invocation.subject_ura,
+            "ability_ura": invocation.ability_ura,
             "invocation_nonce_len": invocation.invocation_nonce.len(),
         }))
     })
@@ -748,8 +748,8 @@ build:
 "#;
 
 const JAVA_EXEC_PLUGIN: &str = r#"import java.util.Map;
-import run.runtime.sdk.provider.easynet.pluginexec.SidecarRuntime;
-import run.runtime.sdk.provider.easynet.pluginexec.SidecarInvocation;
+import run.runtime.sdk.provider.runtime.pluginexec.SidecarRuntime;
+import run.runtime.sdk.provider.runtime.pluginexec.SidecarInvocation;
 
 public final class ExecPlugin {
     private ExecPlugin() {}
@@ -763,10 +763,10 @@ public final class ExecPlugin {
             "ok", true,
             "source", "hello-plugin",
             "message", invocation.args().get("message"),
-            "caller", invocation.caller(),
-            "callee", invocation.callee(),
-            "subject", invocation.subject(),
-            "ability", invocation.ability(),
+            "caller_ura", invocation.callerURA(),
+            "callee_ura", invocation.calleeURA(),
+            "subject_ura", invocation.subjectURA(),
+            "ability_ura", invocation.abilityURA(),
             "invocation_nonce_len", invocation.invocationNonce().size()
         );
     }
@@ -778,16 +778,16 @@ set -eu
 exec node "$(dirname "$0")/exec-plugin.mjs"
 "#;
 
-const NODE_EXEC_PLUGIN: &str = r#"import { serveExecPlugin } from "@runtime/sdk/provider/easynet/pluginexec.js";
+const NODE_EXEC_PLUGIN: &str = r#"import { serveExecPlugin } from "@runtime/sdk/provider/runtime/pluginexec.js";
 
 await serveExecPlugin((invocation) => ({
   ok: true,
   source: "hello-plugin",
   message: invocation.args.message,
-  caller: invocation.caller,
-  callee: invocation.callee,
-  subject: invocation.subject,
-  ability: invocation.ability,
+  caller_ura: invocation.callerURA,
+  callee_ura: invocation.calleeURA,
+  subject_ura: invocation.subjectURA,
+  ability_ura: invocation.abilityURA,
   invocation_nonce_len: invocation.invocationNonce.length,
 }));
 "#;
@@ -801,7 +801,7 @@ fn default_node_sdk_file_path() -> PathBuf {
 }
 
 fn default_rust_pluginexec_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("sdk/rust/provider/easynet/pluginexec")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("sdk/rust/provider/runtime/pluginexec")
 }
 
 fn default_java_sdk_pom_path() -> PathBuf {
@@ -1106,12 +1106,12 @@ mod tests {
         assert!(main_body.contains("SidecarInvocation"));
         assert!(!main_body.contains("serde_json::from_str"));
         let cargo_toml = fs::read_to_string(target.join("Cargo.toml")).expect("cargo toml");
-        assert!(cargo_toml.contains("easynet-provider-pluginexec = { path = \""));
-        assert!(cargo_toml.contains("/sdk/rust/provider/easynet/pluginexec"));
+        assert!(cargo_toml.contains("runtime-provider-pluginexec = { path = \""));
+        assert!(cargo_toml.contains("/sdk/rust/provider/runtime/pluginexec"));
         let readme = fs::read_to_string(target.join("README.md")).expect("readme");
         assert!(readme.contains("Build the executable before install"));
         assert!(readme.contains("make build"));
-        assert!(readme.contains("easynet_provider_pluginexec"));
+        assert!(readme.contains("runtime_provider_pluginexec"));
     }
 
     #[test]
@@ -1150,7 +1150,7 @@ mod tests {
         assert!(pom.contains("/sdk/java/target/canonical-runtime-sdk-0.0.0-seam.jar"));
         let readme = fs::read_to_string(target.join("README.md")).expect("readme");
         assert!(readme.contains("Build the executable wrapper target before install"));
-        assert!(readme.contains("run.runtime.sdk.provider.easynet.pluginexec.SidecarRuntime"));
+        assert!(readme.contains("run.runtime.sdk.provider.runtime.pluginexec.SidecarRuntime"));
     }
 
     #[test]
@@ -1181,7 +1181,7 @@ mod tests {
         assert!(package_json.contains("/sdk/node"));
         let readme = fs::read_to_string(target.join("README.md")).expect("readme");
         assert!(readme.contains("npm install"));
-        assert!(readme.contains("@runtime/sdk/provider/easynet/pluginexec.js"));
+        assert!(readme.contains("@runtime/sdk/provider/runtime/pluginexec.js"));
     }
 
     #[test]

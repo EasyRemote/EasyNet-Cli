@@ -1,4 +1,4 @@
-package run.runtime.sdk.provider.easynet.pluginexec;
+package run.runtime.sdk.provider.runtime.pluginexec;
 
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
@@ -9,7 +9,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-/** Provider-scoped runtime helper for EasyNet-Cli declarative exec sidecars. */
+/** Provider-scoped runtime helper for runtime declarative exec sidecars. */
 public final class SidecarRuntime {
   private SidecarRuntime() {}
 

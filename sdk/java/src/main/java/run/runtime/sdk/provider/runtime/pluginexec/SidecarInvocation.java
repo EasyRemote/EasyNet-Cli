@@ -1,4 +1,4 @@
-package run.runtime.sdk.provider.easynet.pluginexec;
+package run.runtime.sdk.provider.runtime.pluginexec;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -8,7 +8,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 
-/** Handler-facing view of one daemon-admitted declarative exec sidecar call. */
+/** Handler-facing view of one runtime-admitted declarative exec sidecar call. */
 public final class SidecarInvocation {
   private final String callId;
   private final String callerURA;

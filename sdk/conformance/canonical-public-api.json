@@ -51,8 +51,8 @@
         "category": "easynet_provider"
       },
       {
-        "path": "sdk/go/provider/easynet/pluginexec",
-        "category": "easynet_provider"
+        "path": "sdk/go/provider/runtime/pluginexec",
+        "category": "provider_neutral_core"
       },
       {
         "path": "sdk/go/runtimeevents",
@@ -87,6 +87,10 @@
       {
         "path": "sdk/python/easynet_sdk/providers/easynet",
         "category": "easynet_provider"
+      },
+      {
+        "path": "sdk/python/easynet_sdk/providers/runtime",
+        "category": "provider_neutral_core"
       }
     ],
     "node": [

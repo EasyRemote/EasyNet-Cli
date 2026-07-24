@@ -8,7 +8,7 @@ from easynet_sdk import runtime_lifecycle as canonical_lifecycle
 from easynet_sdk import transport
 from easynet_sdk.providers.easynet import keyring as provider_keyring
 from easynet_sdk.providers.easynet import lifecycle as provider_lifecycle
-from easynet_sdk.providers.easynet import plugin_exec as provider_plugin_exec
+from easynet_sdk.providers.runtime import plugin_exec as provider_plugin_exec
 
 
 def test_easynet_lifecycle_exports_are_provider_scoped() -> None:
@@ -49,7 +49,7 @@ def test_keyring_provider_is_not_reexported_as_canonical_root() -> None:
 
 def test_plugin_exec_provider_is_not_reexported_as_canonical_root() -> None:
     assert provider_plugin_exec.SidecarInvocation.__module__.endswith(
-        "providers.easynet.plugin_exec"
+        "providers.runtime.plugin_exec"
     )
     assert not hasattr(easynet_sdk, "PluginInvocation")
     assert not hasattr(easynet_sdk, "SidecarInvocation")

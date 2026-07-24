@@ -1,4 +1,4 @@
-package run.runtime.sdk.provider.easynet.pluginexec;
+package run.runtime.sdk.provider.runtime.pluginexec;
 
 /** Implements one declarative exec sidecar invocation. */
 @FunctionalInterface

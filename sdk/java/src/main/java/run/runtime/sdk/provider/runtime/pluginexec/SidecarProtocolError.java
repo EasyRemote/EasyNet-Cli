@@ -1,6 +1,6 @@
-package run.runtime.sdk.provider.easynet.pluginexec;
+package run.runtime.sdk.provider.runtime.pluginexec;
 
-/** Malformed daemon/plugin sidecar frame. */
+/** Malformed runtime/plugin sidecar frame. */
 public final class SidecarProtocolError extends RuntimeException {
   private static final long serialVersionUID = 1L;
 
