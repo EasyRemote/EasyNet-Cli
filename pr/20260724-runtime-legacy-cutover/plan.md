@@ -1137,3 +1137,41 @@ architecture rather than add feature surface.
   - `tools/scripts/check-canonical-runtime-convergence-v2.sh`
   - `tools/scripts/check-architecture-convergence.sh`
   - `git diff --check`
+
+## Iteration 26 candidate policy
+
+- Focus on federation directory stream vocabulary. codegraph/rg confirmed the
+  active route is `federation.subscribe_directory_v2`; the retired
+  `federation.subscribe_directory` v1 descriptor and DTOs are already gated
+  out.
+- Active source comments still used bare `subscribe_directory` and one stale
+  comment claimed a legacy v1 directory-stream projection still existed. That
+  does not change runtime behavior, but it preserves the wrong architecture
+  story in the files that own the presence/read-model FSM.
+- The root abstraction problem is boundary documentation drift: active runtime
+  code was still naming a retired stream lifecycle, making future patches more
+  likely to reintroduce a second directory stream model.
+- The intended cutover is:
+  - active source may refer to `subscribe_directory_v2` only;
+  - no bare `subscribe_directory` v1 lifecycle vocabulary remains in runtime
+    source, tests, or active federation descriptors;
+  - SPEC v2 rejects the retired bare stream name, not only the fully-qualified
+    `federation.subscribe_directory` ability.
+
+## Iteration 26 decision log
+
+- Replaced active source comments in federation directory, presence, dispatch
+  deps, daemon invocation service, and federation wrappers so they name
+  `subscribe_directory_v2` explicitly.
+- Removed the stale comment claiming a legacy v1 directory-stream projection
+  remained active in `federation_wrappers`.
+- Tightened SPEC v2
+  `check_retired_federation_directory_v1_stream_contract` to reject bare
+  `subscribe_directory` when it is not suffixed with `_v2`.
+- Verification passed:
+  - `rg --pcre2 -n '\\bsubscribe_directory\\b(?!_v2)' src tests ability-descriptors/system/federation -S`
+  - `cargo fmt --check`
+  - `bash -n tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - `tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - `tools/scripts/check-architecture-convergence.sh`
+  - `git diff --check`

@@ -1265,7 +1265,7 @@ mod tests {
         assert!(parsed["last_seen_unix_ms"].is_null());
     }
 
-    // ── N3-2 DirectoryEvent + subscribe_directory FSM ────────────
+    // ── N3-2 DirectoryEvent + subscribe_directory_v2 FSM ─────────
 
     fn sample_entry() -> DirectoryEntry {
         DirectoryEntry {

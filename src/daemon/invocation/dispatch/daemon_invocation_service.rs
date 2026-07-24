@@ -427,7 +427,7 @@ use axon_sdk::pb::axon::v1::{
 ///
 /// - `presence` — the `PresenceRegistry` consulted by federation
 ///   wrappers (resolve / canonical_invoke / revoke / heartbeat /
-///   subscribe_directory) and owned for `session.open` lifecycle mutation by
+///   subscribe_directory_v2) and owned for `session.open` lifecycle mutation by
 ///   the registered Hub provider
 /// - `admission_plane` — canonical runtime admission verifier shared by
 ///   descriptor-bound exact routes, route resolution, and remaining generic

@@ -71,7 +71,7 @@ pub(crate) struct DirectoryPlane {
     /// closed when this dependency is absent; only explicit operator/audit
     /// requests omit the user id and read the unfiltered directory.
     pub(crate) federated_bindings: Option<Arc<FederatedBindingsStore>>,
-    /// Heartbeat cadence (ms) for the v2 subscribe_directory server
+    /// Heartbeat cadence (ms) for the subscribe_directory_v2 server
     /// stream. Spec §2.3 pins 30 000ms in production; tests override
     /// to drive the keepalive path in real time. Always nonzero.
     pub(crate) subscribe_v2_heartbeat_interval_ms: u64,

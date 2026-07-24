@@ -7894,6 +7894,7 @@ roots = [Path(arg) for arg in sys.argv[1:]]
 retired_symbol_patterns = {
     r"\bABILITY_FEDERATION_SUBSCRIBE_DIRECTORY\b(?!_V2)": "retired_v1_ability_constant",
     r"\bfederation\.subscribe_directory\b(?!_v2)": "retired_v1_ability_name",
+    r"\bsubscribe_directory\b(?!_v2)": "retired_v1_stream_name",
     r"\bSubscribeDirectoryInitial\b": "retired_v1_snapshot_dto",
     r"\bPresenceEventDelta\b": "retired_v1_delta_dto",
     r"\bbuild_subscribe_directory_initial\b": "retired_v1_snapshot_builder",

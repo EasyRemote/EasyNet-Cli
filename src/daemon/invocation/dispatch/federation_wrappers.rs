@@ -558,8 +558,6 @@ pub(crate) fn handle_heartbeat(
 
 // ─── federation.resolve ────────────────────────────────────────────
 
-/// Legacy v1 directory-stream projection. Kept separate from
-/// `ResolveAgentSummary` because `subscribe_directory` still speaks
 /// Handle a `federation.resolve` invocation.
 ///
 /// `catalog` is the mandatory owner projection read model the daemon

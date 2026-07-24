@@ -234,7 +234,7 @@ impl std::fmt::Display for OfflineReason {
 }
 
 /// Event emitted on the broadcast channel whenever a session goes
-/// online or offline. Subscribers (subscribe_directory pumps, audit
+/// online or offline. Subscribers (subscribe_directory_v2 pumps, audit
 /// log writers) drive their state from this stream.
 #[derive(Debug, Clone)]
 pub enum PresenceEvent {
@@ -407,7 +407,7 @@ impl PresenceRegistry {
     /// Emits `PresenceEvent::Offline { reason: StreamClosed }` for
     /// any displaced prior sender, then `PresenceEvent::Online`
     /// for the newcomer. The invariant ordering (Offline-before-
-    /// Online) means a subscribe_directory pump that observes both
+    /// Online) means a subscribe_directory_v2 pump that observes both
     /// events sees a clean transition rather than a duplicated URA.
     ///
     /// Returns the displaced sender if any so the caller can observe
