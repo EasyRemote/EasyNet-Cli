@@ -483,3 +483,11 @@ fn local_daemon_subject_owner_boundary_script_holds() {
     // a second authority-subject helper.
     run_bash_script("tests/scripts/test_check_local_daemon_subject_owner_boundary.sh");
 }
+
+#[test]
+fn go_sdk_lifecycle_fixture_neutrality_script_holds() {
+    // Pins Go SDK runtime-host lifecycle fixtures to canonical runtime
+    // lifecycle concepts. Product companion lifecycle rows must not return as
+    // test-only SDK model evidence.
+    run_bash_script("tests/scripts/test_check_go_sdk_lifecycle_fixture_neutrality.sh");
+}

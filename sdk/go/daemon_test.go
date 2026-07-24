@@ -31,7 +31,6 @@ type memoryDaemonTransport struct {
 	detachCalls    int
 	openCalls      int
 	openErr        error
-	companionCalls []string
 	seenStart      map[string]any
 	seenOptions    map[string]any
 }
@@ -77,36 +76,6 @@ func (m *memoryDaemonTransport) OpenRuntime(ctx context.Context, handleID string
 	}, []byte(`{"ready":true}`), nil
 }
 
-func (m *memoryDaemonTransport) CompanionList(ctx context.Context, handleID string) ([]byte, error) {
-	return []byte(`{"kind":"desktop_companion_list","companions":[` + companionStatusJSON("easynet.desktop.menubar", "0.1.0") + `]}`), nil
-}
-
-func (m *memoryDaemonTransport) CompanionStatus(ctx context.Context, handleID string, packageID string, packageVersion string) ([]byte, error) {
-	m.companionCalls = append(m.companionCalls, "status:"+packageID+"@"+packageVersion)
-	return []byte(companionStatusJSON(packageID, packageVersion)), nil
-}
-
-func (m *memoryDaemonTransport) CompanionEnable(ctx context.Context, handleID string, packageID string, packageVersion string) ([]byte, error) {
-	return m.companionAction("enable", packageID, packageVersion), nil
-}
-
-func (m *memoryDaemonTransport) CompanionDisable(ctx context.Context, handleID string, packageID string, packageVersion string) ([]byte, error) {
-	return m.companionAction("disable", packageID, packageVersion), nil
-}
-
-func (m *memoryDaemonTransport) CompanionStart(ctx context.Context, handleID string, packageID string, packageVersion string) ([]byte, error) {
-	return m.companionAction("start", packageID, packageVersion), nil
-}
-
-func (m *memoryDaemonTransport) CompanionStop(ctx context.Context, handleID string, packageID string, packageVersion string) ([]byte, error) {
-	return m.companionAction("stop", packageID, packageVersion), nil
-}
-
-func (m *memoryDaemonTransport) companionAction(action string, packageID string, packageVersion string) []byte {
-	m.companionCalls = append(m.companionCalls, action+":"+packageID+"@"+packageVersion)
-	return []byte(`{"profile":"desktop_companion","kind":"desktop_companion_action_result","package_id":"` + packageID + `","action":"` + action + `","changed":true,"status_before":null,"status_after":` + companionStatusJSON(packageID, packageVersion) + `,"error":null,"metadata":{}}`)
-}
-
 func (m *memoryDaemonTransport) Stop(ctx context.Context, handleID string, optionsJSON []byte) ([]byte, error) {
 	m.stopCalls++
 	return []byte(m.stopJSON), nil
@@ -119,13 +88,6 @@ func (m *memoryDaemonTransport) Detach(ctx context.Context, handleID string) err
 
 func readyDaemonStatus() string {
 	return `{"handle_id":"daemon-1","state":"Running","mode":"hub","pid":42,"endpoints":{"control_endpoint":"unix:///tmp/control.sock","invocation_endpoint":"unix:///tmp/daemon.sock","public_endpoint":"https://hub.example"}}`
-}
-
-func companionStatusJSON(packageID string, packageVersion string) string {
-	if packageVersion == "" {
-		packageVersion = "0.1.0"
-	}
-	return `{"profile":"desktop_companion","kind":"desktop_companion_status","package_id":"` + packageID + `","package_version":"` + packageVersion + `","display_name":"EasyNet Menu Bar","platform":"macos","desired_state":"enabled","supervisor_state":"installed_enabled","observed_state":"running","projected_state":"running","boot_policy":"ensure_running_after_daemon_ready","stop_policy":"keep_running","health":"status_file","pid":123,"version":"0.1.0","last_seen_unix_ms":1783411200000,"launch_method":"launch_agent","error":null,"metadata":{}}`
 }
 
 func TestRuntimeHostStartReturnsRuntimeReadyHandle(t *testing.T) {

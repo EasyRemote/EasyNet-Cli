@@ -683,6 +683,14 @@ check_go_sdk_runtime_lifecycle_neutrality_contract() {
   done
 }
 
+check_go_sdk_lifecycle_fixture_neutrality_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local script="$ROOT/tools/scripts/check-go-sdk-lifecycle-fixture-neutrality.sh"
+  [[ -f "$script" ]] || fail "Go SDK lifecycle fixture neutrality script is missing: ${script#$ROOT/}"
+
+  CHECK_GO_SDK_LIFECYCLE_FIXTURE_NEUTRALITY_ROOT="$cli_root" bash "$script" >/dev/null
+}
+
 check_go_sdk_public_ura_alias_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local go_sdk="$cli_root/sdk/go"
@@ -20620,6 +20628,7 @@ EOF
   check_sdk_root_runtime_description_contract
   check_go_sdk_public_ura_alias_contract
   check_go_sdk_runtime_lifecycle_neutrality_contract
+  check_go_sdk_lifecycle_fixture_neutrality_contract
   check_go_sdk_runtime_resource_namespace_contract
   check_python_sdk_runtime_addressing_kind_contract
   check_advertise_agent_ingress_contract
@@ -20833,6 +20842,7 @@ check_active_source_contract
 check_sdk_root_runtime_description_contract
 check_go_sdk_public_ura_alias_contract
 check_go_sdk_runtime_lifecycle_neutrality_contract
+check_go_sdk_lifecycle_fixture_neutrality_contract
 check_go_sdk_runtime_resource_namespace_contract
 check_python_sdk_runtime_addressing_kind_contract
 check_advertise_agent_ingress_contract
