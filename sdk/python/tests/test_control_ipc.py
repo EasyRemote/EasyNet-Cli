@@ -14,6 +14,7 @@ from easynet_sdk import (
 )
 from easynet_sdk.providers.runtime.control import (
     _CONTROL_IPC_VERSION,
+    _ControlDaemonIdentity,
     _ControlDiscovery,
     _ControlIpcClient,
     _IpcVersionRange,
@@ -30,6 +31,11 @@ class ControlIpcTests(unittest.TestCase):
                     {
                         "socket_path": f"{tmp}/control.sock",
                         "invocation_endpoint": f"{tmp}/daemon.sock",
+                        "daemon_identity": {
+                            "mode": "device",
+                            "realm": "localhost",
+                            "node_id": "node-1",
+                        },
                         "pid": 123,
                         "daemon_version": "test",
                         "supported_ipc_versions": {"min": 1, "max": 1},
@@ -42,6 +48,14 @@ class ControlIpcTests(unittest.TestCase):
 
         self.assertEqual(discovery.socket_path, f"{tmp}/control.sock")
         self.assertEqual(discovery.invocation_endpoint, f"{tmp}/daemon.sock")
+        self.assertEqual(
+            discovery.daemon_identity,
+            _ControlDaemonIdentity(
+                mode="device",
+                realm="localhost",
+                node_id="node-1",
+            ),
+        )
         self.assertEqual(discovery.supported_ipc_versions, _IpcVersionRange(1, 1))
         self.assertEqual(discovery.capability_flags, ("boot_status",))
 
@@ -77,6 +91,19 @@ class ControlIpcTests(unittest.TestCase):
                 "supported_ipc_versions": {"min": 1, "max": 1},
                 "capability_flags": ["boot_status"],
                 "pages_port": 0,
+            },
+            {
+                "socket_path": "/tmp/control.sock",
+                "invocation_endpoint": "/tmp/daemon.sock",
+                "daemon_identity": {
+                    "mode": "device",
+                    "realm": "localhost",
+                    "legacy_role": "agent",
+                },
+                "pid": 123,
+                "daemon_version": "test",
+                "supported_ipc_versions": {"min": 1, "max": 1},
+                "capability_flags": ["boot_status"],
             },
         ]
         for value in cases:

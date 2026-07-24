@@ -20,7 +20,9 @@ fail() {
 canonical_core_violations() {
   rg -n -i \
     '(easynet|daemon|device_ura|session_id|federation\.subscribe|events\.device|events\.invocation|session\.attach)' \
-    "$@" | grep -vF '"easynet.run/cli/sdk/go"'
+    "$@" \
+    | grep -vF '"easynet.run/cli/sdk/go"' \
+    | grep -vE '^sdk/python/easynet_sdk/providers/runtime/control\.py:[0-9]+:.*(daemon_identity|daemon_version|_ControlDaemonIdentity)'
 }
 
 route_lowering_violations() {

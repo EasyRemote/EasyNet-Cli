@@ -21,8 +21,8 @@ _MAX_CONTROL_FRAME_BYTES = 8 * 1024 * 1024
 _CONTROL_BOOT_STATUS_ABILITY = "system.watch_boot"
 _CONTROL_FRAME_TYPES = {"subscribe", "cancel"}
 _CONTROL_STATE_DIR_NAME = ".easy" + "net"
-_RAW_RUNTIME_HOST_IDENTITY_FIELD = "dae" + "mon_identity"
-_RAW_RUNTIME_HOST_VERSION_FIELD = "dae" + "mon_version"
+_RAW_RUNTIME_HOST_IDENTITY_FIELD = "daemon_identity"
+_RAW_RUNTIME_HOST_VERSION_FIELD = "daemon_version"
 
 
 @dataclass(frozen=True)
@@ -51,12 +51,38 @@ class _IpcVersionRange:
 
 
 @dataclass(frozen=True)
+class _ControlDaemonIdentity:
+    """Runtime-host identity fact advertised by control discovery."""
+
+    mode: str
+    realm: str
+    node_id: str = ""
+
+    @classmethod
+    def from_mapping(cls, value: object) -> "_ControlDaemonIdentity":
+        if not isinstance(value, Mapping):
+            raise _invalid_control("daemon_identity must be an object")
+        identity_unknown = sorted(set(value).difference({"mode", "realm", "node_id"}))
+        if identity_unknown:
+            raise _invalid_control(
+                "daemon_identity contains unknown fields: "
+                + ", ".join(identity_unknown)
+            )
+        return cls(
+            mode=_required_string(value, "mode"),
+            realm=_required_string(value, "realm"),
+            node_id=_optional_string(value.get("node_id"), "node_id") or "",
+        )
+
+
+@dataclass(frozen=True)
 class _ControlDiscovery:
     """Parsed control discovery file."""
 
     socket_path: str = ""
     pipe_name: str = ""
     invocation_endpoint: str = ""
+    daemon_identity: Optional[_ControlDaemonIdentity] = None
     pid: int = 0
     runtime_host_version: str = ""
     supported_ipc_versions: _IpcVersionRange = field(
@@ -89,21 +115,11 @@ class _ControlDiscovery:
                 raise _invalid_control(f"control discovery {field_name} is required")
         if "capability_flags" not in decoded or decoded.get("capability_flags") is None:
             raise _invalid_control("control discovery capability_flags is required")
-        if (
-            _RAW_RUNTIME_HOST_IDENTITY_FIELD in decoded
-            and decoded.get(_RAW_RUNTIME_HOST_IDENTITY_FIELD) is not None
-        ):
-            identity = decoded.get(_RAW_RUNTIME_HOST_IDENTITY_FIELD)
-            if not isinstance(identity, Mapping):
-                raise _invalid_control(
-                    f"{_RAW_RUNTIME_HOST_IDENTITY_FIELD} must be an object"
-                )
-            identity_unknown = sorted(set(identity).difference({"mode", "realm", "node_id"}))
-            if identity_unknown:
-                raise _invalid_control(
-                    f"{_RAW_RUNTIME_HOST_IDENTITY_FIELD} contains unknown fields: "
-                    + ", ".join(identity_unknown)
-                )
+        daemon_identity = None
+        if "daemon_identity" in decoded and decoded.get("daemon_identity") is not None:
+            daemon_identity = _ControlDaemonIdentity.from_mapping(
+                decoded.get("daemon_identity")
+            )
         flags = decoded.get("capability_flags")
         if not isinstance(flags, list) or not all(isinstance(item, str) for item in flags):
             raise _invalid_control("capability_flags must be an array of strings")
@@ -130,6 +146,7 @@ class _ControlDiscovery:
                 decoded.get("invocation_endpoint"), "invocation_endpoint"
             )
             or "",
+            daemon_identity=daemon_identity,
             pid=pid,
             runtime_host_version=runtime_host_version,
             supported_ipc_versions=_IpcVersionRange.from_mapping(
