@@ -12494,6 +12494,52 @@ for required_test in (
 PY
 }
 
+check_go_sdk_runtime_receipt_projection_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local runtime="$cli_root/sdk/go/runtime.go"
+  local tests="$cli_root/sdk/go/runtime_test.go"
+  [[ -f "$runtime" ]] || fail "Go Runtime source is missing: ${runtime#$cli_root/}"
+  [[ -f "$tests" ]] || fail "Go runtime tests are missing: ${tests#$cli_root/}"
+
+  "$PYTHON_BIN" - "$runtime" "$tests" <<'PY'
+import sys
+from pathlib import Path
+
+runtime, tests = [Path(path).read_text(encoding="utf-8") for path in sys.argv[1:]]
+
+for fragment, label in {
+    "validateRuntimeReceiptRawProofShape": "raw_proof_shape_validator_missing",
+    "validateRuntimeReceiptAuthorityBindingShape": "authority_binding_shape_validator_missing",
+    "requireRuntimeReceiptExactKeys": "exact_object_schema_validator_missing",
+    "contains noncanonical field": "noncanonical_field_error_missing",
+    'proof["proof_payload_base64"]': "proof_payload_presence_check_missing",
+    '"runtime receipt summary is missing authority_proof.proof_payload_base64"': "proof_payload_presence_error_missing",
+}.items():
+    if fragment not in runtime:
+        raise SystemExit(f"go_runtime_receipt_projection:{label}")
+
+for forbidden, label in {
+    'strings.Contains(err.Error(), "issuer_ura")': "retired_session_field_missing_only_test",
+    'want issuer_ura invalid argument': "retired_session_missing_field_expectation",
+}.items():
+    if forbidden in tests:
+        raise SystemExit(f"go_runtime_receipt_projection:{label}")
+
+for required_test in (
+    "legacy authority binding metadata",
+    "legacy_authority",
+    "legacy authority proof metadata",
+    "legacy_proof_fact",
+    "missing proof payload field",
+    "legacy proof issuer metadata",
+    "legacy_profile",
+    "authority_binding contains noncanonical field",
+):
+    if required_test not in tests:
+        raise SystemExit(f"go_runtime_receipt_projection:missing_test:{required_test}")
+PY
+}
+
 check_node_sdk_runtime_receipt_projection_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local runtime="$cli_root/sdk/node/index.js"
@@ -12874,7 +12920,7 @@ required_tests = {
         [
             "TestRuntimeReceiptSessionAuthorityFacadeUsesGenericFields",
             "inv-retired-session-authority",
-            "issuer_ura invalid argument",
+            "authority_binding contains noncanonical field",
         ],
     ),
     "python": (
@@ -13347,6 +13393,14 @@ EOF
     "$tmp/cli-java-receipt-proof-shape-legacy/sdk/java/src/main/java/run/runtime/sdk/RuntimeReceiptProofFacts.java"
   if ( CLI_ROOT="$tmp/cli-java-receipt-proof-shape-legacy"; check_java_sdk_runtime_receipt_projection_contract ) >/dev/null 2>&1; then
     fail "self-test expected Java SDK receipt proof-fact exact-shape gate to fail"
+  fi
+  mkdir -p "$tmp/cli-go-receipt-proof-shape-legacy/sdk/go"
+  cp "$ROOT/sdk/go/runtime.go" "$tmp/cli-go-receipt-proof-shape-legacy/sdk/go/runtime.go"
+  cp "$ROOT/sdk/go/runtime_test.go" "$tmp/cli-go-receipt-proof-shape-legacy/sdk/go/runtime_test.go"
+  perl -0pi -e 's/requireRuntimeReceiptExactKeys/requireRuntimeReceiptWideKeys/g' \
+    "$tmp/cli-go-receipt-proof-shape-legacy/sdk/go/runtime.go"
+  if ( CLI_ROOT="$tmp/cli-go-receipt-proof-shape-legacy"; check_go_sdk_runtime_receipt_projection_contract ) >/dev/null 2>&1; then
+    fail "self-test expected Go SDK receipt proof-fact exact-shape gate to fail"
   fi
   mkdir -p "$tmp/cli-node-receipt-legacy/sdk/node/test"
   cat >"$tmp/cli-node-receipt-legacy/sdk/node/index.js" <<'EOF'
@@ -19070,6 +19124,7 @@ EOF
   check_cli_signed_submission_boundary_contract
   check_receipt_proof_fact_contract
   check_java_sdk_runtime_receipt_projection_contract
+  check_go_sdk_runtime_receipt_projection_contract
   check_node_sdk_runtime_receipt_projection_contract
   check_swift_sdk_runtime_receipt_projection_contract
   check_sdk_receipt_profile_convergence_contract
@@ -19276,6 +19331,7 @@ check_cli_signed_submission_boundary_contract
 check_receipt_proof_fact_contract
 check_java_sdk_invocation_authority_binding_contract
 check_java_sdk_runtime_receipt_projection_contract
+check_go_sdk_runtime_receipt_projection_contract
 check_node_sdk_runtime_receipt_projection_contract
 check_swift_sdk_runtime_receipt_projection_contract
 check_sdk_receipt_profile_convergence_contract

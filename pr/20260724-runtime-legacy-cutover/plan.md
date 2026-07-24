@@ -1572,3 +1572,49 @@ architecture rather than add feature surface.
   - `tools/scripts/check-architecture-convergence.sh`
   - `cargo fmt --check`
   - `git diff --check`
+
+## Iteration 37 candidate policy
+
+- Converge the Go SDK to the same receipt proof-fact exactness introduced for
+  Java in Iteration 36. The Go `RuntimeReceipt` projection kept the original
+  raw JSON, but nested typed structs and map-based authority binding parsing
+  could still ignore unknown proof metadata.
+- codegraph highlighted Go/Python receipt proof-fact paths after the Java
+  cutover. Go was selected first because its conformance attestation directly
+  detects SDK source hash changes and the runtime receipt tests already cover
+  proof facts.
+- The root abstraction problem is split schema authority: typed receipt
+  projection validated required canonical facts while raw nested proof objects
+  remained wide enough to carry legacy metadata.
+- The selected cutover is to validate Go receipt proof-fact object shapes from
+  the raw JSON boundary before constructing canonical Axon proof facts.
+
+## Iteration 37 decision log
+
+- Go `RuntimeReceipt.ValidateProofFacts` now calls
+  `validateRuntimeReceiptRawProofShape` before canonical proof-fact
+  construction.
+- Go receipt parsing now rejects unknown fields in authority bindings,
+  authority proofs, issuer/agent/entity refs, signatures, causal bindings, and
+  receipt refs.
+- `authority_proof.proof_payload_base64` is now explicit in Go receipt JSON:
+  it may be empty for binding-hash proofs, but it may not be omitted.
+- Added Go negative tests for legacy authority binding metadata, legacy
+  authority proof metadata, missing proof payload fields, and legacy issuer
+  profile metadata.
+- SPEC v2 now gates Go receipt proof-fact exactness with a negative self-test
+  that removes the exact-shape validator, and the session authority facade gate
+  now expects exact-schema rejection for retired Go session fields.
+- Rebuilt `sdk/conformance/canonical-public-api.json` and
+  `sdk/conformance/sdk-parity-matrix.json` after Go SDK source changes.
+- Verification passed:
+  - `/Users/macbook.silan.tech/.local/bin/codegraph explore "Go Python runtime receipt authority_binding authority_proof proof facts unknown fields legacy metadata canonicalizer"`
+  - `cd sdk/go && go test -count=1 -run 'TestRuntimeReceipt' .`
+  - `cd sdk/go && go test ./...`
+  - `python3 sdk/conformance/rebuild_public_api_model.py --write`
+  - `bash -n tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - `tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  - `tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - `tools/scripts/check-architecture-convergence.sh`
+  - `cargo fmt --check`
+  - `git diff --check`

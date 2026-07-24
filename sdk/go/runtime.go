@@ -1118,6 +1118,9 @@ func (r RuntimeReceipt) ValidateProofFacts() error {
 	if _, ok := rawParents.([]any); !ok {
 		return invalidRuntimePayload("parent_receipts must be an array", nil)
 	}
+	if err := validateRuntimeReceiptRawProofShape(r.Raw); err != nil {
+		return err
+	}
 	return validateRuntimeReceiptCanonicalProofFacts(r)
 }
 
@@ -1236,6 +1239,9 @@ func validateRuntimeReceiptRef(value any, field string) error {
 	if !ok {
 		return invalidRuntimePayload(field+" must be an object", nil)
 	}
+	if err := requireRuntimeReceiptExactKeys(decoded, field, "receipt_hash_hex", "receipt_ura"); err != nil {
+		return err
+	}
 	hash, ok := decoded["receipt_hash_hex"].(string)
 	if !ok {
 		return invalidRuntimePayload(field+".receipt_hash_hex is required", nil)
@@ -1263,10 +1269,19 @@ func validateRuntimeReceiptCausalBinding(kind string, binding map[string]any) er
 	}
 	switch form {
 	case "none":
+		if err := requireRuntimeReceiptExactKeys(binding, "causal_binding", "form"); err != nil {
+			return err
+		}
 		return nil
 	case "scalar":
+		if err := requireRuntimeReceiptExactKeys(binding, "causal_binding", "form", "receipt"); err != nil {
+			return err
+		}
 		return validateRuntimeReceiptRef(binding["receipt"], "causal_binding.receipt")
 	case "list":
+		if err := requireRuntimeReceiptExactKeys(binding, "causal_binding", "form", "prior"); err != nil {
+			return err
+		}
 		prior, ok := binding["prior"].([]any)
 		if !ok || len(prior) == 0 {
 			return invalidRuntimePayload("causal_binding.prior must be a non-empty array", nil)
@@ -1281,6 +1296,9 @@ func validateRuntimeReceiptCausalBinding(kind string, binding map[string]any) er
 		}
 		return nil
 	case "merkle":
+		if err := requireRuntimeReceiptExactKeys(binding, "causal_binding", "form", "root_hex", "proof_ura"); err != nil {
+			return err
+		}
 		root, ok := binding["root_hex"].(string)
 		if !ok {
 			return invalidRuntimePayload("causal_binding.root_hex is required", nil)
@@ -1296,6 +1314,171 @@ func validateRuntimeReceiptCausalBinding(kind string, binding map[string]any) er
 	default:
 		return invalidRuntimePayload("unsupported causal_binding form "+form, nil)
 	}
+}
+
+func validateRuntimeReceiptRawProofShape(raw map[string]any) error {
+	for _, field := range []string{
+		"caller_binding",
+		"callee_binding",
+		"subject_binding",
+		"signer_binding",
+	} {
+		binding, err := runtimeReceiptRawObject(raw[field], field)
+		if err != nil {
+			return err
+		}
+		if err := requireRuntimeReceiptExactKeys(binding, field, "ura", "profile"); err != nil {
+			return err
+		}
+	}
+	subjectRef, err := runtimeReceiptRawObject(raw["subject_ref"], "subject_ref")
+	if err != nil {
+		return err
+	}
+	if err := requireRuntimeReceiptExactKeys(subjectRef, "subject_ref", "kind", "ura", "profile"); err != nil {
+		return err
+	}
+	calleeSignature, err := runtimeReceiptRawObject(raw["callee_signature"], "callee_signature")
+	if err != nil {
+		return err
+	}
+	if err := requireRuntimeReceiptExactKeys(calleeSignature, "callee_signature", "algorithm", "signature_base64", "key_id_hint"); err != nil {
+		return err
+	}
+	authority, err := runtimeReceiptRawObject(raw["authority_binding"], "authority_binding")
+	if err != nil {
+		return err
+	}
+	if err := validateRuntimeReceiptAuthorityBindingShape(authority, "authority_binding"); err != nil {
+		return err
+	}
+	proof, err := runtimeReceiptRawObject(raw["authority_proof"], "authority_proof")
+	if err != nil {
+		return err
+	}
+	if err := requireRuntimeReceiptExactKeys(
+		proof,
+		"authority_proof",
+		"proof_type",
+		"binding_kind",
+		"binding",
+		"proof_payload_base64",
+		"proof_hash_hex",
+		"issuer",
+		"signature",
+		"admission_hook",
+	); err != nil {
+		return err
+	}
+	if _, ok := proof["proof_payload_base64"]; !ok {
+		return invalidRuntimePayload("runtime receipt summary is missing authority_proof.proof_payload_base64", nil)
+	}
+	proofBinding, err := runtimeReceiptRawObject(proof["binding"], "authority_proof.binding")
+	if err != nil {
+		return err
+	}
+	if err := validateRuntimeReceiptAuthorityBindingShape(proofBinding, "authority_proof.binding"); err != nil {
+		return err
+	}
+	issuer, err := runtimeReceiptRawObject(proof["issuer"], "authority_proof.issuer")
+	if err != nil {
+		return err
+	}
+	if err := requireRuntimeReceiptExactKeys(issuer, "authority_proof.issuer", "ura", "profile"); err != nil {
+		return err
+	}
+	if signatureValue, ok := proof["signature"]; ok && signatureValue != nil {
+		signature, err := runtimeReceiptRawObject(signatureValue, "authority_proof.signature")
+		if err != nil {
+			return err
+		}
+		if err := requireRuntimeReceiptExactKeys(signature, "authority_proof.signature", "algorithm", "signature_base64", "key_id_hint"); err != nil {
+			return err
+		}
+	}
+	parents, ok := raw["parent_receipts"].([]any)
+	if !ok {
+		return invalidRuntimePayload("parent_receipts must be an array", nil)
+	}
+	for index, parent := range parents {
+		field := fmt.Sprintf("parent_receipts[%d]", index)
+		parentRef, err := runtimeReceiptRawObject(parent, field)
+		if err != nil {
+			return err
+		}
+		if err := requireRuntimeReceiptExactKeys(parentRef, field, "receipt_hash_hex", "receipt_ura"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateRuntimeReceiptAuthorityBindingShape(binding map[string]any, field string) error {
+	kind, err := requiredRuntimeReceiptObjectText(binding, "kind", field+".kind")
+	if err != nil {
+		return err
+	}
+	switch kind {
+	case "self":
+		return requireRuntimeReceiptExactKeys(binding, field, "kind", "principal_ura")
+	case "delegation":
+		return requireRuntimeReceiptExactKeys(
+			binding,
+			field,
+			"kind",
+			"issuer_ura",
+			"subject_ura",
+			"caller_ura",
+			"audience",
+			"scopes",
+			"issued_at_ms",
+			"expires_at_ms",
+			"signature_base64",
+		)
+	case "capability":
+		return requireRuntimeReceiptExactKeys(binding, field, "kind", "capability_ura")
+	case "policy":
+		return requireRuntimeReceiptExactKeys(binding, field, "kind", "policy_ura")
+	case "session":
+		return requireRuntimeReceiptExactKeys(
+			binding,
+			field,
+			"kind",
+			"issuer_ura",
+			"subject_ura",
+			"session_id",
+			"scopes",
+			"audiences",
+			"issued_at_ms",
+			"expires_at_ms",
+			"signature_base64",
+		)
+	case "bootstrap":
+		return requireRuntimeReceiptExactKeys(binding, field, "kind", "principal_ura", "realm", "ability")
+	default:
+		return invalidRuntimePayload(fmt.Sprintf("%s is not canonical: %q", field+".kind", kind), nil)
+	}
+}
+
+func runtimeReceiptRawObject(value any, field string) (map[string]any, error) {
+	object, ok := value.(map[string]any)
+	if !ok {
+		return nil, invalidRuntimePayload(field+" must be an object", nil)
+	}
+	return object, nil
+}
+
+func requireRuntimeReceiptExactKeys(object map[string]any, field string, keys ...string) error {
+	allowed := make(map[string]struct{}, len(keys))
+	for _, key := range keys {
+		allowed[key] = struct{}{}
+	}
+	for key := range object {
+		if _, ok := allowed[key]; !ok {
+			return invalidRuntimePayload(field+" contains noncanonical field "+key, nil)
+		}
+	}
+	return nil
 }
 
 func validateRuntimeReceiptCanonicalProofFacts(r RuntimeReceipt) error {

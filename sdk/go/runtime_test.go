@@ -116,6 +116,14 @@ func canonicalRuntimeReceiptPairFixture(invocationID, terminalState string) (map
 	return admission, terminal
 }
 
+func cloneRuntimeTestMap(value map[string]any) map[string]any {
+	cloned := make(map[string]any, len(value))
+	for key, item := range value {
+		cloned[key] = item
+	}
+	return cloned
+}
+
 func signedForRuntimeTest(t *testing.T) SignedInvocation {
 	t.Helper()
 	prepared, err := NewPreparedInvocationFromJSON([]byte(preparedFixture))
@@ -490,6 +498,26 @@ func TestRuntimeReceiptRejectsMalformedCanonicalProofFacts(t *testing.T) {
 			proof := receipt["authority_proof"].(map[string]any)
 			proof["proof_hash_hex"] = strings.Repeat("ff", 32)
 		},
+		"legacy authority binding metadata": func(receipt map[string]any) {
+			authority := receipt["authority_binding"].(map[string]any)
+			authority["legacy_authority"] = "compat-carrier"
+			proof := receipt["authority_proof"].(map[string]any)
+			proof["binding"] = cloneRuntimeTestMap(authority)
+		},
+		"legacy authority proof metadata": func(receipt map[string]any) {
+			proof := receipt["authority_proof"].(map[string]any)
+			proof["legacy_proof_fact"] = "compat-carrier"
+		},
+		"missing proof payload field": func(receipt map[string]any) {
+			proof := receipt["authority_proof"].(map[string]any)
+			delete(proof, "proof_payload_base64")
+		},
+		"legacy proof issuer metadata": func(receipt map[string]any) {
+			proof := receipt["authority_proof"].(map[string]any)
+			issuer := cloneRuntimeTestMap(proof["issuer"].(map[string]any))
+			issuer["legacy_profile"] = "opaque"
+			proof["issuer"] = issuer
+		},
 		"mismatched authority kind": func(receipt map[string]any) {
 			proof := receipt["authority_proof"].(map[string]any)
 			proof["binding_kind"] = "delegation"
@@ -634,8 +662,8 @@ func TestRuntimeReceiptSessionAuthorityFacadeUsesGenericFields(t *testing.T) {
 	retiredProof["binding_kind"] = "session"
 	retiredProof["binding"] = retiredBinding
 	retiredProof["proof_payload_base64"] = ""
-	if _, err := NewRuntimeReceiptFromJSON(mustJSON(retired)); !IsCode(err, ErrInvalidArgument) || !strings.Contains(err.Error(), "issuer_ura") {
-		t.Fatalf("NewRuntimeReceiptFromJSON retired session fields error = %v, want issuer_ura invalid argument", err)
+	if _, err := NewRuntimeReceiptFromJSON(mustJSON(retired)); !IsCode(err, ErrInvalidArgument) || !strings.Contains(err.Error(), "authority_binding contains noncanonical field") {
+		t.Fatalf("NewRuntimeReceiptFromJSON retired session fields error = %v, want noncanonical authority binding invalid argument", err)
 	}
 }
 
