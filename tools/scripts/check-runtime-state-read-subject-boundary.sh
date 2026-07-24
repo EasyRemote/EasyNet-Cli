@@ -167,10 +167,18 @@ if rg -n -U '\binvoke_local_ability\s*\(\s*"skill\.list"' "$SKILL_CLI"; then
 fi
 
 for action in skill.install skill.upgrade skill.remove; do
-  if ! rg -n -U "\\binvoke_local_ability\\s*\\(\\s*\"$action\"" "$SKILL_CLI" >/dev/null; then
-    fail "$action must remain on the action invoke path"
+  if ! rg -n -U "invoke_daemon_skill_mutation\\s*\\(\\s*\"$action\"" "$SKILL_CLI" >/dev/null; then
+    fail "$action must remain on the explicit action issuer path"
   fi
 done
+
+if rg -n -U '\binvoke_local_ability\s*\(' "$SKILL_CLI"; then
+  fail "skill CLI must not use generic invoke_local_ability"
+fi
+
+if ! rg -n -U 'LocalDaemonSystemAbilityIssuer::invoke_root_for_subject\(\s*ability,\s*args,\s*&subject_ura' "$SKILL_CLI" >/dev/null; then
+  fail "skill mutations must use explicit local daemon system issuer subject"
+fi
 
 if ! rg -n -U 'LocalRuntimeStateReadIssuer::invoke\(&ability,\s*(serde_json::)?json!\(\{\}\)' "$API_KEY_CLI" >/dev/null; then
   fail "api-key list must use LocalRuntimeStateReadIssuer"

@@ -9,16 +9,19 @@
 // filesystem package-store implementation lives in
 // `daemon::resources::skills::store`, which is what the daemon abilities call.
 
+use anyhow::Context;
 use clap::{Args, Subcommand};
 use console::style;
 use serde::Serialize;
-use serde_json::json;
+use serde_json::{json, Value};
 
 use crate::daemon::resources::skills::projection::{
     InstalledSkillProjection, SkillListResponse, SkillRecordResponse, SkillRemoveReceipt,
 };
 use crate::daemon::resources::skills::store::format_bytes;
-use crate::support::platform::local_invoke::{invoke_local_ability, LocalRuntimeStateReadIssuer};
+use crate::support::platform::local_invoke::{
+    LocalDaemonSystemAbilityIssuer, LocalRuntimeStateReadIssuer,
+};
 use crate::support::platform::output;
 
 #[derive(Debug, Args)]
@@ -120,14 +123,7 @@ fn run_install(args: InstallArgs) -> anyhow::Result<()> {
 }
 
 fn invoke_daemon_skill_install(args: &InstallArgs) -> anyhow::Result<InstalledSkillProjection> {
-    let response = invoke_local_ability(
-        "skill.install",
-        json!({
-            "source": args.source,
-            "agent": args.agent,
-            "pin": args.pin,
-        }),
-    )?;
+    let response = invoke_daemon_skill_mutation("skill.install", skill_install_payload(args))?;
     decode_skill_record_response(response, "skill.install")
 }
 
@@ -186,25 +182,12 @@ fn run_upgrade(args: UpgradeArgs) -> anyhow::Result<()> {
 }
 
 fn invoke_daemon_skill_upgrade(args: &UpgradeArgs) -> anyhow::Result<InstalledSkillProjection> {
-    let response = invoke_local_ability(
-        "skill.upgrade",
-        json!({
-            "name": args.name,
-            "agent": args.agent,
-            "to": args.to,
-        }),
-    )?;
+    let response = invoke_daemon_skill_mutation("skill.upgrade", skill_upgrade_payload(args))?;
     decode_skill_record_response(response, "skill.upgrade")
 }
 
 fn run_remove(args: RemoveArgs) -> anyhow::Result<()> {
-    let response = invoke_local_ability(
-        "skill.remove",
-        json!({
-            "name": args.name,
-            "agent": args.agent,
-        }),
-    )?;
+    let response = invoke_daemon_skill_mutation("skill.remove", skill_remove_payload(&args))?;
     let receipt: SkillRemoveReceipt = serde_json::from_value(response)
         .map_err(|err| anyhow::anyhow!("skill.remove returned invalid receipt: {err}"))?;
     if !receipt.ok {
@@ -215,6 +198,36 @@ fn run_remove(args: RemoveArgs) -> anyhow::Result<()> {
         receipt.name, receipt.agent
     ));
     Ok(())
+}
+
+fn invoke_daemon_skill_mutation(ability: &str, args: Value) -> anyhow::Result<Value> {
+    let subject_ura = LocalDaemonSystemAbilityIssuer::local_daemon_identity_subject_ura()
+        .with_context(|| format!("resolve local skill mutation subject for {ability}"))?;
+    LocalDaemonSystemAbilityIssuer::invoke_root_for_subject(ability, args, &subject_ura)
+        .with_context(|| format!("invoke {ability}"))
+}
+
+fn skill_install_payload(args: &InstallArgs) -> Value {
+    json!({
+        "source": args.source,
+        "agent": args.agent,
+        "pin": args.pin,
+    })
+}
+
+fn skill_upgrade_payload(args: &UpgradeArgs) -> Value {
+    json!({
+        "name": args.name,
+        "agent": args.agent,
+        "to": args.to,
+    })
+}
+
+fn skill_remove_payload(args: &RemoveArgs) -> Value {
+    json!({
+        "name": args.name,
+        "agent": args.agent,
+    })
 }
 
 fn decode_skill_record_response(
@@ -275,4 +288,63 @@ fn emit_upgrade_result(args: &UpgradeArgs, rec: &InstalledSkillProjection) -> an
         output::detail("hash", &rec.skill_tree_hash);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn skill_install_payload_preserves_public_wire_shape() {
+        let payload = skill_install_payload(&InstallArgs {
+            source: "github:owner/repo@v1:skills/demo".to_string(),
+            agent: "codex".to_string(),
+            pin: Some("abc123".to_string()),
+            json: false,
+        });
+
+        assert_eq!(
+            payload,
+            json!({
+                "source": "github:owner/repo@v1:skills/demo",
+                "agent": "codex",
+                "pin": "abc123",
+            })
+        );
+    }
+
+    #[test]
+    fn skill_upgrade_payload_preserves_public_wire_shape() {
+        let payload = skill_upgrade_payload(&UpgradeArgs {
+            name: "demo".to_string(),
+            agent: "codex".to_string(),
+            to: Some("v2".to_string()),
+            json: true,
+        });
+
+        assert_eq!(
+            payload,
+            json!({
+                "name": "demo",
+                "agent": "codex",
+                "to": "v2",
+            })
+        );
+    }
+
+    #[test]
+    fn skill_remove_payload_preserves_public_wire_shape() {
+        let payload = skill_remove_payload(&RemoveArgs {
+            name: "demo".to_string(),
+            agent: "codex".to_string(),
+        });
+
+        assert_eq!(
+            payload,
+            json!({
+                "name": "demo",
+                "agent": "codex",
+            })
+        );
+    }
 }
