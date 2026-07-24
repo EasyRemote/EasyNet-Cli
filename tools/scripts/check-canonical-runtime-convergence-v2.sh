@@ -2718,6 +2718,52 @@ if facade_duplicate in facade:
 PY
 }
 
+check_child_invocation_route_ref_traceability_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local child="$cli_root/src/daemon/invocation/admission/child_invocation_builder.rs"
+  [[ -f "$child" ]] || fail "child invocation builder source is missing: ${child#$cli_root/}"
+
+  "$PYTHON_BIN" - "$child" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+production = text.split("\n#[cfg(test)]", 1)[0]
+
+shape = re.search(
+    r"fn validate_route_shape\([^)]*\)\s*->\s*Result<\(\), ChildInvocationBuildFailure>\s*\{(?P<body>.*?)\n\}",
+    production,
+    re.S,
+)
+if shape is None:
+    raise SystemExit("child_invocation_route_ref_traceability:shape_function_missing")
+body = shape.group("body")
+for required in (
+    "route.route_ref.trim().is_empty()",
+    "ChildInvocationBuildFailureCode::DescriptorBindingMissing",
+    "selected route lacks route ref",
+    "SignatureDecisionReason::SignedDescriptorRefMissing",
+):
+    if required not in body:
+        raise SystemExit(f"child_invocation_route_ref_traceability:shape_missing:{required}")
+
+if re.search(r"assert_eq!\s*\(\s*err\.code\s*,\s*err\.code\s*,", text):
+    raise SystemExit("child_invocation_route_ref_traceability:self_comparing_failure_code_assertion")
+
+for required_test in (
+    "child_route_requires_selected_route_ref",
+    "selected.route_ref.clear()",
+    "child invocation without selected route ref must fail closed",
+    "ChildInvocationBuildFailureCode::DescriptorBindingMissing",
+    "err.reason.contains(\"route ref\")",
+    "assert!(err.route_ref.is_none())",
+):
+    if required_test not in text:
+        raise SystemExit(f"child_invocation_route_ref_traceability:missing_test:{required_test}")
+PY
+}
+
 check_access_control_policy_schema_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local grant_matcher="$cli_root/src/daemon/invocation/admission/grant_matcher.rs"
@@ -19250,6 +19296,41 @@ EOF
   if ( CLI_ROOT="$tmp/authority-proof-route-binding-child-legacy"; check_authority_proof_session_fact_contract ) >/dev/null 2>&1; then
     fail "self-test expected authority proof route binding child duplication gate to fail"
   fi
+  mkdir -p "$tmp/child-route-ref-traceability-legacy/src/daemon/invocation/admission"
+  cat >"$tmp/child-route-ref-traceability-legacy/src/daemon/invocation/admission/child_invocation_builder.rs" <<'EOF'
+fn validate_route_shape(route: &SelectedChildRoute) -> Result<(), ChildInvocationBuildFailure> {
+    if route.selected_callee_ura.trim().is_empty()
+        || route.public_ability.trim().is_empty()
+        || route.dispatch_key.trim().is_empty()
+        || route.descriptor_version.trim().is_empty()
+        || route.selected_descriptor_ref.trim().is_empty()
+    {
+        return Err(failure(
+            route,
+            TraceStage::SignatureDenied,
+            ChildInvocationBuildFailureCode::DescriptorBindingMissing,
+            "selected route lacks callee, descriptor ref, version, public ability, or dispatch key",
+            Some(SignatureDecisionReason::SignedDescriptorRefMissing),
+            None,
+        ));
+    }
+    Ok(())
+}
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn externally_signed_child_rejects_route_mutation() {
+        assert_eq!(
+            err.code,
+            err.code,
+            ChildInvocationBuildFailureCode::SignedEnvelopeRouteMutation
+        );
+    }
+}
+EOF
+  if ( CLI_ROOT="$tmp/child-route-ref-traceability-legacy"; check_child_invocation_route_ref_traceability_contract ) >/dev/null 2>&1; then
+    fail "self-test expected child route-ref traceability gate to fail"
+  fi
   mkdir -p "$tmp/access-control-policy-schema-legacy/src/daemon/invocation/admission"
   cat >"$tmp/access-control-policy-schema-legacy/src/daemon/invocation/admission/grant_matcher.rs" <<'EOF'
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -19858,6 +19939,7 @@ EOF
   check_profile_store_schema_contract
   check_auth_session_owner_fact_contract
   check_authority_proof_session_fact_contract
+  check_child_invocation_route_ref_traceability_contract
   check_access_control_policy_schema_contract
   check_access_control_store_schema_contract
   check_resources_schema_contract
@@ -20061,6 +20143,7 @@ check_pages_api_response_projection_contract
 check_profile_store_schema_contract
 check_auth_session_owner_fact_contract
 check_authority_proof_session_fact_contract
+check_child_invocation_route_ref_traceability_contract
 check_access_control_policy_schema_contract
 check_access_control_store_schema_contract
 check_resources_schema_contract

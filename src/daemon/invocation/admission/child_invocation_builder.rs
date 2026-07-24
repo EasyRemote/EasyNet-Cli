@@ -265,7 +265,8 @@ impl ChildInvocationBuilder {
 }
 
 fn validate_route_shape(route: &SelectedChildRoute) -> Result<(), ChildInvocationBuildFailure> {
-    if route.selected_callee_ura.trim().is_empty()
+    if route.route_ref.trim().is_empty()
+        || route.selected_callee_ura.trim().is_empty()
         || route.public_ability.trim().is_empty()
         || route.dispatch_key.trim().is_empty()
         || route.descriptor_version.trim().is_empty()
@@ -275,7 +276,7 @@ fn validate_route_shape(route: &SelectedChildRoute) -> Result<(), ChildInvocatio
             route,
             TraceStage::SignatureDenied,
             ChildInvocationBuildFailureCode::DescriptorBindingMissing,
-            "selected route lacks callee, descriptor ref, version, public ability, or dispatch key",
+            "selected route lacks route ref, callee, descriptor ref, version, public ability, or dispatch key",
             Some(SignatureDecisionReason::SignedDescriptorRefMissing),
             None,
         ));
@@ -519,6 +520,35 @@ mod tests {
             err.signature_reason,
             Some(SignatureDecisionReason::SignedDescriptorRefMismatch)
         );
+    }
+
+    #[test]
+    fn child_route_requires_selected_route_ref() {
+        let mut selected = route();
+        selected.route_ref.clear();
+
+        let err = ChildInvocationBuilder::build(ChildInvocationBuildInput {
+            route: selected,
+            child_subject_ura: "easynet:///r/test/device/dev-a".to_string(),
+            args: b"{}".to_vec(),
+            authority: ChildInvocationAuthority::DaemonInternalSystem,
+        })
+        .expect_err("child invocation without selected route ref must fail closed");
+
+        assert_eq!(
+            err.code,
+            ChildInvocationBuildFailureCode::DescriptorBindingMissing
+        );
+        assert_eq!(
+            err.signature_reason,
+            Some(SignatureDecisionReason::SignedDescriptorRefMissing)
+        );
+        assert!(
+            err.reason.contains("route ref"),
+            "route-shape failure must name missing route ref: {}",
+            err.reason
+        );
+        assert!(err.route_ref.is_none());
     }
 
     #[test]
