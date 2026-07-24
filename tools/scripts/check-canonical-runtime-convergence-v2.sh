@@ -7070,6 +7070,68 @@ for required_test in (
 PY
 }
 
+check_daemon_credentials_identity_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local identity="$cli_root/src/daemon/boot/invocation/identity.rs"
+  local boot_mod="$cli_root/src/daemon/boot/invocation/mod.rs"
+  [[ -f "$identity" ]] || fail "daemon boot identity source is missing: $identity"
+  [[ -f "$boot_mod" ]] || fail "daemon boot invocation tests are missing: $boot_mod"
+
+  "$PYTHON_BIN" - "$identity" "$boot_mod" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+identity = Path(sys.argv[1]).read_text(encoding="utf-8")
+boot_mod = Path(sys.argv[2]).read_text(encoding="utf-8")
+
+for retired in (
+    "pub(super) agent_ura: Option<String>",
+    "stored.agent_ura",
+):
+    if retired in identity:
+        raise SystemExit(f"daemon_credentials_identity:retired_agent_ura_projection:{retired}")
+
+for retired_test in (
+    "canonical_caller_ura_accepts_matching_agent_ura_checksum",
+    "canonical_caller_ura_rejects_mismatched_agent_ura_checksum",
+):
+    if retired_test in boot_mod:
+        raise SystemExit(f"daemon_credentials_identity:retired_agent_ura_test:{retired_test}")
+
+for required in (
+    'pub(super) _retired_agent_ura: Option<RejectedAgentUra>',
+    'serde(default, rename = "agent_ura")',
+    "pub(super) struct RejectedAgentUra",
+    "credentials.json carries retired `agent_ura`",
+):
+    if required not in identity:
+        raise SystemExit(f"daemon_credentials_identity:retired_agent_ura_rejector_missing:{required}")
+
+match = re.search(
+    r"pub\(super\) fn canonical_caller_ura_from_stored_identity\([^)]*\) -> Option<String> \{(?P<body>.*?)\n\}",
+    identity,
+    re.DOTALL,
+)
+if match is None:
+    raise SystemExit("daemon_credentials_identity:canonical_projection_missing")
+body = match.group("body")
+if "device_ura(realm, node_id)" not in body:
+    raise SystemExit("daemon_credentials_identity:realm_node_projection_missing")
+for retired in ("agent_ura", "_retired_agent_ura", "expected ="):
+    if retired in body:
+        raise SystemExit(f"daemon_credentials_identity:canonical_projection_reads_retired_field:{retired}")
+
+for required_test in (
+    "daemon_identity_rejects_retired_agent_ura_credentials",
+    "daemon_identity_from_stored_accepts_realm_only_credentials",
+    "daemon_identity_from_stored_rejects_missing_realm_node_identity",
+):
+    if required_test not in boot_mod:
+        raise SystemExit(f"daemon_credentials_identity:missing_test:{required_test}")
+PY
+}
+
 check_filesystem_resource_owner_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local files="$cli_root/src/daemon/resources/files/mod.rs"
@@ -16919,6 +16981,35 @@ EOF
   if ( check_daemon_local_device_identity_contract "$tmp/local-device-identity-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected local device identity default/local fallback gate to fail"
   fi
+  mkdir -p "$tmp/daemon-credentials-agent-ura-legacy/src/daemon/boot/invocation"
+  cat >"$tmp/daemon-credentials-agent-ura-legacy/src/daemon/boot/invocation/identity.rs" <<'EOF'
+pub(super) struct StoredDeviceIdentity {
+    pub(super) agent_ura: Option<String>,
+    pub(super) realm: Option<String>,
+    pub(super) node_id: Option<String>,
+}
+
+pub(super) fn canonical_caller_ura_from_stored_identity(
+    stored: &StoredDeviceIdentity,
+) -> Option<String> {
+    let realm = stored.realm.as_deref()?;
+    let node_id = stored.node_id.as_deref()?;
+    let expected = crate::core::ura::device_ura(realm, node_id);
+    if let Some(agent_ura) = stored.agent_ura.as_deref() {
+        if agent_ura != expected {
+            return None;
+        }
+    }
+    Some(expected)
+}
+EOF
+  cat >"$tmp/daemon-credentials-agent-ura-legacy/src/daemon/boot/invocation/mod.rs" <<'EOF'
+fn canonical_caller_ura_accepts_matching_agent_ura_checksum() {}
+fn daemon_identity_from_stored_accepts_realm_only_credentials() {}
+EOF
+  if ( check_daemon_credentials_identity_contract "$tmp/daemon-credentials-agent-ura-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected daemon credentials retired agent_ura gate to fail"
+  fi
   mkdir -p "$tmp/filesystem-resource-owner-legacy/src/daemon/resources/files"
   cat >"$tmp/filesystem-resource-owner-legacy/src/daemon/resources/files/mod.rs" <<'EOF'
 fn resource_ref_value() -> Value {
@@ -18305,6 +18396,7 @@ EOF
   check_remote_invocation_subject_provenance_contract
   check_daemon_runtime_route_inventory_contract
   check_daemon_local_device_identity_contract
+  check_daemon_credentials_identity_contract
   check_filesystem_resource_owner_contract
   check_federation_probe_local_identity_contract
   check_ready_capability_proof_contract
@@ -18496,6 +18588,7 @@ check_daemon_tuple_route_contract
 check_remote_invocation_subject_provenance_contract
 check_daemon_runtime_route_inventory_contract
 check_daemon_local_device_identity_contract
+check_daemon_credentials_identity_contract
 check_filesystem_resource_owner_contract
 check_media_resource_subject_projection_contract
 check_federation_probe_local_identity_contract

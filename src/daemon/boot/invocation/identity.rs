@@ -53,16 +53,22 @@ impl DaemonIdentity {
 /// REMOVED. This is a projection, not a schema gate: tolerate unknown
 /// fields and read only what we own.
 ///
-/// One field IS still rejected: `tenant_id`. It is the retired alias
-/// for `realm` (URA v4.1.4) — a credentials.json carrying it predates
-/// the rename and would derive a daemon URA under the wrong namespace.
-/// We reject it explicitly via a typed sentinel field rather than a
-/// blanket `deny_unknown_fields`, so retirement enforcement survives
-/// without re-introducing the field-drift regression above.
+/// Two fields ARE still rejected:
+///
+/// * `tenant_id` is the retired alias for `realm` (URA v4.1.4);
+/// * `agent_ura` is the retired pre-canonical daemon identity fact.
+///
+/// A credentials.json carrying either field predates the canonical
+/// device identity model. Reject them explicitly via typed sentinel
+/// fields rather than a blanket `deny_unknown_fields`, so retirement
+/// enforcement survives without re-introducing the field-drift
+/// regression above.
 #[derive(Debug, serde::Deserialize)]
 pub(super) struct StoredDeviceIdentity {
-    #[serde(default)]
-    pub(super) agent_ura: Option<String>,
+    /// Retired pre-canonical daemon identity fact. Present only in old
+    /// files; its presence is a hard parse error.
+    #[serde(default, rename = "agent_ura")]
+    pub(super) _retired_agent_ura: Option<RejectedAgentUra>,
     #[serde(default)]
     pub(super) realm: Option<String>,
     #[serde(default)]
@@ -88,6 +94,25 @@ impl<'de> serde::Deserialize<'de> for RejectedTenantId {
         Err(serde::de::Error::custom(
             "credentials.json carries retired `tenant_id`; it was renamed to `realm` in URA \
              v4.1.4 — re-pair with `easynet join <token>` to rewrite the file",
+        ))
+    }
+}
+
+/// Zero-sized marker whose `Deserialize` always errors, naming the
+/// retired field. Used as the type of `StoredDeviceIdentity::agent_ura`
+/// so old credentials stop before daemon identity projection instead
+/// of being treated as a checksum or fallback identity source.
+#[derive(Debug)]
+pub(super) struct RejectedAgentUra;
+
+impl<'de> serde::Deserialize<'de> for RejectedAgentUra {
+    fn deserialize<D>(_deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        Err(serde::de::Error::custom(
+            "credentials.json carries retired `agent_ura`; daemon identity is now derived from \
+             canonical `realm` + `node_id` — re-pair with `easynet join <token>` to rewrite the file",
         ))
     }
 }
@@ -153,17 +178,5 @@ pub(super) fn canonical_caller_ura_from_stored_identity(
         return None;
     };
 
-    let expected = crate::core::ura::device_ura(realm, node_id);
-    if let Some(agent_ura) = stored
-        .agent_ura
-        .as_deref()
-        .map(str::trim)
-        .filter(|ura| !ura.is_empty())
-    {
-        if agent_ura != expected {
-            return None;
-        }
-    }
-
-    Some(expected)
+    Some(crate::core::ura::device_ura(realm, node_id))
 }

@@ -1840,31 +1840,6 @@ mod tests {
     }
 
     #[test]
-    fn canonical_caller_ura_accepts_matching_agent_ura_checksum() {
-        let stored = StoredDeviceIdentity {
-            agent_ura: Some(crate::core::ura::device_ura("realm-a", "device-123")),
-            realm: Some("realm-a".to_string()),
-            node_id: Some("device-123".to_string()),
-            _retired_tenant_id: None,
-        };
-        assert_eq!(
-            canonical_caller_ura_from_stored_identity(&stored).as_deref(),
-            Some("easynet:///r/realm-a/device/device-123"),
-        );
-    }
-
-    #[test]
-    fn canonical_caller_ura_rejects_mismatched_agent_ura_checksum() {
-        let stored = StoredDeviceIdentity {
-            agent_ura: Some("easynet:///r/legacy/agent/old-node".to_string()),
-            realm: Some("realm-a".to_string()),
-            node_id: Some("device-123".to_string()),
-            _retired_tenant_id: None,
-        };
-        assert_eq!(canonical_caller_ura_from_stored_identity(&stored), None);
-    }
-
-    #[test]
     fn daemon_identity_rejects_retired_tenant_id_credentials() {
         let raw = r#"{
   "realm": "realm-a",
@@ -1875,6 +1850,21 @@ mod tests {
             .expect_err("retired tenant_id must fail schema parse");
         assert!(
             err.to_string().contains("tenant_id"),
+            "error must name retired field: {err}"
+        );
+    }
+
+    #[test]
+    fn daemon_identity_rejects_retired_agent_ura_credentials() {
+        let raw = r#"{
+  "realm": "realm-a",
+  "node_id": "device-123",
+  "agent_ura": "easynet:///r/realm-a/device/device-123"
+}"#;
+        let err = serde_json::from_str::<StoredDeviceIdentity>(raw)
+            .expect_err("retired agent_ura must fail schema parse");
+        assert!(
+            err.to_string().contains("agent_ura"),
             "error must name retired field: {err}"
         );
     }
@@ -1939,7 +1929,7 @@ mod tests {
     #[test]
     fn daemon_identity_from_stored_accepts_realm_only_credentials() {
         let stored = StoredDeviceIdentity {
-            agent_ura: None,
+            _retired_agent_ura: None,
             realm: Some("realm-a".to_string()),
             node_id: Some("device-123".to_string()),
             _retired_tenant_id: None,
@@ -2002,16 +1992,16 @@ mod tests {
     }
 
     #[test]
-    fn daemon_identity_from_stored_rejects_agent_ura_fallback_when_fields_missing() {
+    fn daemon_identity_from_stored_rejects_missing_realm_node_identity() {
         let stored = StoredDeviceIdentity {
-            agent_ura: Some("easynet:///r/realm-a/agent/legacy-node".to_string()),
+            _retired_agent_ura: None,
             realm: None,
             node_id: None,
             _retired_tenant_id: None,
         };
         assert!(
             canonical_caller_ura_from_stored_identity(&stored).is_none(),
-            "agent_ura is no longer a fallback daemon identity"
+            "realm and node_id are required for daemon device identity"
         );
     }
 

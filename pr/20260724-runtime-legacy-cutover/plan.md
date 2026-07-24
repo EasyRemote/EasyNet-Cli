@@ -1219,3 +1219,41 @@ architecture rather than add feature surface.
   - `tools/scripts/check-canonical-runtime-convergence-v2.sh`
   - `tools/scripts/check-architecture-convergence.sh`
   - `git diff --check`
+
+## Iteration 28 candidate policy
+
+- Focus on daemon credentials identity projection. codegraph/rg found
+  `StoredDeviceIdentity` still deserialized old `agent_ura` credentials and
+  accepted them when they matched the canonical `realm + node_id` device URA.
+- The root abstraction problem is credentials read-model compatibility leaking
+  into daemon identity selection. `agent_ura` was no longer a fallback, but it
+  still acted as an accepted checksum field, keeping a retired identity fact
+  alive in the boot path.
+- The intended cutover is:
+  - derive daemon device caller URA only from canonical `realm` and `node_id`;
+  - reject credentials carrying retired `agent_ura` at parse time, just like
+    retired `tenant_id`;
+  - tolerate unrelated modern credentials fields so the projection remains a
+    narrow read model, not a full file-schema owner;
+  - make SPEC v2 reject any return of `agent_ura` checksum/fallback parsing.
+
+## Iteration 28 decision log
+
+- Replaced `StoredDeviceIdentity.agent_ura: Option<String>` with a typed
+  `RejectedAgentUra` sentinel field renamed to `agent_ura`.
+- Removed `agent_ura` comparison from
+  `canonical_caller_ura_from_stored_identity`; the canonical device identity
+  now derives only from `realm` and `node_id`.
+- Replaced compatibility tests that accepted/mismatched `agent_ura` with a
+  parse-level rejection test for credentials carrying retired `agent_ura`.
+- Added SPEC v2 `check_daemon_credentials_identity_contract` plus a negative
+  self-test fixture for the old checksum/compatibility implementation.
+- Verification passed:
+  - `/Users/macbook.silan.tech/.local/bin/codegraph explore daemon_identity_from_stored agent_ura tenant_id`
+  - `cargo fmt --check`
+  - `cargo test -q daemon_identity`
+  - `bash -n tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - `tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  - `tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - `tools/scripts/check-architecture-convergence.sh`
+  - `git diff --check`
