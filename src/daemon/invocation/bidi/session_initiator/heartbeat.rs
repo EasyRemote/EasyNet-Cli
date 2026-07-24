@@ -7,6 +7,7 @@ use tonic::transport::Channel;
 use super::prelude::{invoke_prelude_unary, signed_prelude_request};
 use super::tasks::AbortOnDrop;
 use super::{SessionUpSender, SESSION_UP_HEARTBEAT_INTERVAL};
+use crate::daemon::federation::client::ability_contract::HeartbeatArgs;
 use crate::daemon::federation::read_model::hub_published_abilities::HubPublishedAbilityStore;
 use crate::daemon::identity::self_identity::CanonicalSigner;
 
@@ -125,11 +126,11 @@ async fn send_federation_heartbeat(
 ) -> Result<(), tonic::Status> {
     let caller_ura = signer.owner_ura();
     let refresh_owner_uras = heartbeat_refresh_owner_uras_for_caller(caller_ura)?;
-    let body = serde_json::json!({
-        "since_abilities_revision": hub_published_abilities.revision(),
-        "refresh_owner_uras": refresh_owner_uras,
-    });
-    let arguments = serde_json::to_vec(&body)
+    let args = HeartbeatArgs {
+        since_abilities_revision: hub_published_abilities.revision(),
+        refresh_owner_uras,
+    };
+    let arguments = serde_json::to_vec(&args)
         .map_err(|e| tonic::Status::internal(format!("federation.heartbeat serialize: {e}")))?;
     let request =
         signed_prelude_request(signer, caller_ura, "federation.heartbeat", arguments).await?;

@@ -476,13 +476,14 @@ async fn invoke_dispatches_federation_heartbeat() {
     let resp = svc
         .invoke(invoke_request(
             ABILITY_FEDERATION_HEARTBEAT,
-            r#"{"agent_ura":"easynet:///r/realm/device/n1"}"#,
+            r#"{"since_abilities_revision":7,"refresh_owner_uras":[]}"#,
         ))
         .await
         .expect("dispatch returns Ok");
     let body: federation_wrappers::HeartbeatResponse = parse_response_body(resp);
     assert_eq!(body.membership_status, "active");
     assert_eq!(body.realm_directory_size, 0);
+    assert_eq!(body.hub_abilities_diff.revision, 7);
 }
 
 #[tokio::test]

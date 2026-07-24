@@ -99,19 +99,15 @@ pub struct PrincipalProofRef {
 // re-exported from `daemon::federation::receipt_contract` so hub producers and
 // device consumers bind to one required-facts receipt shape.
 
-/// Heartbeat outbound args. v4.1.7 carries the device's last-seen
-/// hub-abilities revision so the hub can answer with an
-/// incremental diff. v4.1.6 hubs ignore the field; v4.1.7 hubs
-/// treat absent/zero as "fully out of date" and return the full
-/// snapshot in the diff's `added`.
-#[derive(Debug, Clone, Default, Serialize)]
+/// Heartbeat outbound args. The request is the same canonical shape the hub
+/// dispatch wrapper accepts: the caller revision plus the explicit owner
+/// projection leases to refresh. Caller identity comes from the signed
+/// invocation envelope, not from a request `agent_ura` alias.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct HeartbeatArgs {
-    #[serde(default, skip_serializing_if = "is_zero_u64")]
     pub since_abilities_revision: u64,
-}
-
-fn is_zero_u64(v: &u64) -> bool {
-    *v == 0
+    pub refresh_owner_uras: Vec<String>,
 }
 
 /// Arguments for `federation.advertise_agent`. The hosting
@@ -369,6 +365,26 @@ mod tests {
             "easynet:///r/acme/device/01DEV"
         );
         assert_eq!(v["generation"], 7);
+    }
+
+    #[test]
+    fn heartbeat_args_are_closed_canonical_request_shape() {
+        let args = HeartbeatArgs {
+            since_abilities_revision: 7,
+            refresh_owner_uras: vec!["easynet:///r/acme/device/01DEV".into()],
+        };
+        let v: Value = serde_json::from_slice(&args_to_bytes(&args)).unwrap();
+        assert_eq!(v["since_abilities_revision"], 7);
+        assert_eq!(v["refresh_owner_uras"][0], "easynet:///r/acme/device/01DEV");
+        assert!(v.get("agent_ura").is_none());
+        let mut retired = v.as_object().expect("object").clone();
+        retired.insert(
+            "agent_ura".into(),
+            Value::String("easynet:///r/acme/device/01DEV".into()),
+        );
+        let error = serde_json::from_value::<HeartbeatArgs>(Value::Object(retired))
+            .expect_err("retired heartbeat agent_ura must fail closed");
+        assert!(error.to_string().contains("agent_ura"));
     }
 
     #[test]

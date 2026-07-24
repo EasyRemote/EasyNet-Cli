@@ -6179,6 +6179,106 @@ for test in (
 PY
 }
 
+check_federation_heartbeat_ingress_strict_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local wrappers="$cli_root/src/daemon/invocation/dispatch/federation_wrappers.rs"
+  local contracts="$cli_root/src/daemon/ability/catalog/daemon_invocation_contracts.rs"
+  local client="$cli_root/src/daemon/federation/client/ability_contract.rs"
+  local heartbeat="$cli_root/src/daemon/invocation/bidi/session_initiator/heartbeat.rs"
+  [[ -f "$wrappers" ]] || fail "federation wrappers are missing: ${wrappers#$cli_root/}"
+  [[ -f "$contracts" ]] || fail "daemon invocation contracts are missing: ${contracts#$cli_root/}"
+  [[ -f "$client" ]] || fail "federation client ability contract is missing: ${client#$cli_root/}"
+  [[ -f "$heartbeat" ]] || fail "session heartbeat source is missing: ${heartbeat#$cli_root/}"
+
+  "$PYTHON_BIN" - "$wrappers" "$contracts" "$client" "$heartbeat" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+wrappers = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+contracts = Path(sys.argv[2]).read_text(encoding="utf-8", errors="replace")
+client = Path(sys.argv[3]).read_text(encoding="utf-8", errors="replace")
+heartbeat = Path(sys.argv[4]).read_text(encoding="utf-8", errors="replace")
+
+request_match = re.search(r"pub struct HeartbeatRequest \{(?P<body>.*?)\n\}", wrappers, re.S)
+if not request_match:
+    raise SystemExit("federation_heartbeat_ingress:request_missing")
+request_body = request_match.group("body")
+request_prefix = wrappers[:request_match.start()]
+if "#[serde(deny_unknown_fields)]" not in request_prefix[-160:]:
+    raise SystemExit("federation_heartbeat_ingress:deny_unknown_missing")
+for required in (
+    "pub since_abilities_revision: u64",
+    "pub refresh_owner_uras: Vec<String>",
+):
+    if required not in request_body:
+        raise SystemExit(f"federation_heartbeat_ingress:request_field_missing:{required}")
+for retired in (
+    "pub agent_ura:",
+    "pub node_id:",
+    "pub owner_ura:",
+    "pub generation:",
+):
+    if retired in request_body:
+        raise SystemExit(f"federation_heartbeat_ingress:retired_request_shape:{retired}")
+for retired in (
+    "heartbeat_request_deserializes_device_payload_without_agent_ura",
+    "agent_ura is a valid heartbeat",
+):
+    if retired in wrappers:
+        raise SystemExit(f"federation_heartbeat_ingress:retired_wrapper_shape:{retired}")
+if "HubAbilitiesDiff::empty_at(request.since_abilities_revision)" not in wrappers:
+    raise SystemExit("federation_heartbeat_ingress:response_revision_not_bound_to_request")
+for test in (
+    "heartbeat_request_accepts_canonical_revision_and_refresh_batch",
+    "heartbeat_request_rejects_retired_identity_fields",
+):
+    if test not in wrappers:
+        raise SystemExit(f"federation_heartbeat_ingress:missing_wrapper_test:{test}")
+
+schema_case = contracts.split("ABILITY_FEDERATION_HEARTBEAT => object_schema(", 1)
+if len(schema_case) != 2:
+    raise SystemExit("federation_heartbeat_ingress:schema_case_missing")
+schema_body = schema_case[1].split("ABILITY_FEDERATION_RESOLVE => object_schema(", 1)[0]
+for required in (
+    '"since_abilities_revision"',
+    '"refresh_owner_uras"',
+    '&["since_abilities_revision", "refresh_owner_uras"]',
+    "false",
+):
+    if required not in schema_body:
+        raise SystemExit(f"federation_heartbeat_ingress:schema_missing:{required}")
+for retired in ('"node_id"', '"agent_ura"', '"owner_ura"', '"generation"', "true"):
+    if retired in schema_body:
+        raise SystemExit(f"federation_heartbeat_ingress:schema_retired:{retired}")
+
+args_match = re.search(r"pub struct HeartbeatArgs \{(?P<body>.*?)\n\}", client, re.S)
+if not args_match:
+    raise SystemExit("federation_heartbeat_ingress:client_args_missing")
+args_body = args_match.group("body")
+args_prefix = client[:args_match.start()]
+if "#[serde(deny_unknown_fields)]" not in args_prefix[-200:]:
+    raise SystemExit("federation_heartbeat_ingress:client_args_open")
+for required in (
+    "pub since_abilities_revision: u64",
+    "pub refresh_owner_uras: Vec<String>",
+    "heartbeat_args_are_closed_canonical_request_shape",
+):
+    if required not in client:
+        raise SystemExit(f"federation_heartbeat_ingress:client_missing:{required}")
+for retired in ("skip_serializing_if", "pub agent_ura:"):
+    if retired in args_body:
+        raise SystemExit(f"federation_heartbeat_ingress:client_retired:{retired}")
+if "is_zero_u64" in client:
+    raise SystemExit("federation_heartbeat_ingress:client_retired:is_zero_u64")
+
+if "HeartbeatArgs {" not in heartbeat:
+    raise SystemExit("federation_heartbeat_ingress:producer_not_typed")
+if 'serde_json::json!({' in heartbeat and '"since_abilities_revision"' in heartbeat:
+    raise SystemExit("federation_heartbeat_ingress:producer_handwrites_heartbeat_json")
+PY
+}
+
 check_federation_receipt_facts_strict_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local client="$cli_root/src/daemon/federation/client/ability_contract.rs"
@@ -6265,7 +6365,7 @@ for required in (
     "hub_published_abilities: Vec::new()",
     "hub_abilities_revision: 0",
     "advertise_contract: AdvertiseContract::device_default()",
-    "hub_abilities_diff: HubAbilitiesDiff::empty_at(0)",
+    "hub_abilities_diff: HubAbilitiesDiff::empty_at(request.since_abilities_revision)",
 ):
     if required not in wrappers:
         raise SystemExit(f"federation_receipt_facts:wrapper_required_missing:{required}")
@@ -16519,6 +16619,7 @@ EOF
   check_local_ability_target_subject_policy_contract
   check_session_prelude_credentials_contract
   check_session_prelude_receipt_contract
+  check_federation_heartbeat_ingress_strict_contract
   check_federation_receipt_facts_strict_contract
   check_federation_revoke_ingress_strict_contract
   check_device_settings_loader_contract
@@ -16694,6 +16795,7 @@ check_local_ability_target_subject_policy_contract
 check_session_prelude_credentials_contract
 check_start_attach_user_signer_readiness_contract
 check_session_prelude_receipt_contract
+check_federation_heartbeat_ingress_strict_contract
 check_federation_receipt_facts_strict_contract
 check_federation_revoke_ingress_strict_contract
 check_device_settings_loader_contract

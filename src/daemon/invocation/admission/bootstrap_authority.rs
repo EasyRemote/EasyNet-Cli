@@ -532,6 +532,7 @@ mod tests {
     #[test]
     fn paired_device_can_refresh_own_heartbeat_projection() {
         let args = serde_json::to_vec(&serde_json::json!({
+            "since_abilities_revision": 0,
             "refresh_owner_uras": ["easynet:///r/test/device/dev-1"],
         }))
         .expect("args");
@@ -556,6 +557,7 @@ mod tests {
     #[test]
     fn paired_device_cannot_refresh_other_heartbeat_projection() {
         let args = serde_json::to_vec(&serde_json::json!({
+            "since_abilities_revision": 0,
             "refresh_owner_uras": ["easynet:///r/test/agent/alice.worker"],
         }))
         .expect("args");

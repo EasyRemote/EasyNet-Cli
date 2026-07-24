@@ -293,13 +293,15 @@ pub(crate) fn input_schema_for(name: &str) -> Option<Value> {
         ),
         ABILITY_FEDERATION_HEARTBEAT => object_schema(
             json!({
-                "node_id": string_prop("Heartbeat node id or device id."),
-                "agent_ura": string_prop("Optional advertised Agent URA whose lease is renewed."),
-                "owner_ura": string_prop("Optional owner projection whose ability lease is renewed."),
-                "generation": integer_prop("Observed advertisement generation.")
+                "since_abilities_revision": integer_prop("Device's last observed hub-published ability revision."),
+                "refresh_owner_uras": {
+                    "type": "array",
+                    "description": "Owner URAs whose published ability projection leases should be renewed.",
+                    "items": { "type": "string" }
+                }
             }),
-            &[],
-            true,
+            &["since_abilities_revision", "refresh_owner_uras"],
+            false,
         ),
         ABILITY_FEDERATION_RESOLVE => object_schema(
             json!({

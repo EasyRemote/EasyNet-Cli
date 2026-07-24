@@ -489,18 +489,15 @@ pub(crate) fn handle_advertise_abilities(
 
 /// Request payload for `federation.heartbeat`.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct HeartbeatRequest {
-    /// URA of the agent reporting in. Used only for log context now;
-    /// liveness comes from the registry's stream membership. The device's
-    /// heartbeat payload (see `daemon/federation/advertise.rs`) does not send this
-    /// field, so it must deserialize as optional — a missing `agent_ura`
-    /// is a valid heartbeat, not a wire error.
-    #[serde(default)]
-    pub agent_ura: String,
+    /// Device's last observed hub-published ability revision. Until the hub
+    /// has a provider-backed diff source, the response explicitly echoes this
+    /// revision with an empty diff instead of silently ignoring the field.
+    pub since_abilities_revision: u64,
     /// Owner URAs whose ability projection leases this heartbeat renews.
     /// The device batches its own owners (device + hosted agents) here so
     /// the hub keeps their projections live without a full re-advertise.
-    #[serde(default)]
     pub refresh_owner_uras: Vec<String>,
 }
 
@@ -554,7 +551,7 @@ pub(crate) fn handle_heartbeat(
         membership_status: "active".to_string(),
         realm_directory_size: registry.online_count(),
         refreshed_owner_count,
-        hub_abilities_diff: HubAbilitiesDiff::empty_at(0),
+        hub_abilities_diff: HubAbilitiesDiff::empty_at(request.since_abilities_revision),
     }
 }
 
@@ -1763,7 +1760,7 @@ mod tests {
             make_dispatch_sender(),
         );
         let req = HeartbeatRequest {
-            agent_ura: "easynet:///r/realm/device/a".to_string(),
+            since_abilities_revision: 9,
             refresh_owner_uras: Vec::new(),
         };
         let catalog =
@@ -1772,7 +1769,7 @@ mod tests {
         assert_eq!(resp.membership_status, "active");
         assert_eq!(resp.realm_directory_size, 2);
         assert_eq!(resp.refreshed_owner_count, 0);
-        assert_eq!(resp.hub_abilities_diff.revision, 0);
+        assert_eq!(resp.hub_abilities_diff.revision, 9);
         assert!(resp.hub_abilities_diff.added.is_empty());
         assert!(resp.hub_abilities_diff.removed.is_empty());
     }
@@ -1829,11 +1826,12 @@ mod tests {
 
         // A heartbeat at that moment renews the lease...
         let req = HeartbeatRequest {
-            agent_ura: owner_ura.to_string(),
+            since_abilities_revision: 11,
             refresh_owner_uras: vec![owner_ura.to_string()],
         };
         let resp = handle_heartbeat(&req, &registry, &catalog, after_expiry);
         assert_eq!(resp.refreshed_owner_count, 1);
+        assert_eq!(resp.hub_abilities_diff.revision, 11);
 
         // ...and the device-owned ability is resolvable again, with its
         // contents and revision unchanged (lease-only refresh).
@@ -1853,7 +1851,7 @@ mod tests {
         let catalog =
             crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore::new();
         let req = HeartbeatRequest {
-            agent_ura: "easynet:///r/realm/device/a".to_string(),
+            since_abilities_revision: 0,
             refresh_owner_uras: vec!["easynet:///r/realm/device/never-published".to_string()],
         };
         let resp = handle_heartbeat(&req, &registry, &catalog, 5_000);
@@ -1861,19 +1859,46 @@ mod tests {
     }
 
     #[test]
-    fn heartbeat_request_deserializes_device_payload_without_agent_ura() {
-        // The device's actual heartbeat payload (daemon/federation/advertise.rs) sends
-        // `since_abilities_revision` + `refresh_owner_uras` and NO
-        // `agent_ura`. The wrapper request must accept it — a missing
-        // `agent_ura` is a valid heartbeat, not a deserialization error.
+    fn heartbeat_request_accepts_canonical_revision_and_refresh_batch() {
         let payload = serde_json::json!({
             "since_abilities_revision": 7,
             "refresh_owner_uras": ["easynet:///r/realm/device/a"],
         });
         let req: HeartbeatRequest =
             serde_json::from_value(payload).expect("device heartbeat payload must deserialize");
-        assert!(req.agent_ura.is_empty());
+        assert_eq!(req.since_abilities_revision, 7);
         assert_eq!(req.refresh_owner_uras, vec!["easynet:///r/realm/device/a"]);
+    }
+
+    #[test]
+    fn heartbeat_request_rejects_retired_identity_fields() {
+        for (field, value) in [
+            (
+                "agent_ura",
+                serde_json::json!("easynet:///r/realm/device/a"),
+            ),
+            ("node_id", serde_json::json!("device-a")),
+            (
+                "owner_ura",
+                serde_json::json!("easynet:///r/realm/device/a"),
+            ),
+            ("generation", serde_json::json!(7)),
+        ] {
+            let mut payload = serde_json::json!({
+                "since_abilities_revision": 7,
+                "refresh_owner_uras": ["easynet:///r/realm/device/a"],
+            });
+            payload
+                .as_object_mut()
+                .expect("object")
+                .insert(field.to_string(), value);
+            let error = serde_json::from_value::<HeartbeatRequest>(payload)
+                .expect_err("retired heartbeat field must fail closed");
+            assert!(
+                error.to_string().contains(field),
+                "retired field {field} must be named in error: {error}"
+            );
+        }
     }
 
     #[test]
