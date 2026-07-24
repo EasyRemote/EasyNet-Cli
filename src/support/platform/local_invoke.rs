@@ -2,8 +2,7 @@
 // ==============================================
 //
 // File: src/support/local_invoke.rs
-// Description: One function — `invoke_local_ability(name, args)` —
-//              that every CLI subcommand uses to dispatch through
+// Description: Support-layer issuers for CLI/product dispatch through
 //              the local daemon's Axon Invocation gRPC surface
 //              (~/.easynet/daemon.sock).
 //
@@ -14,15 +13,14 @@
 // CLI means each subcommand should be a thin wrapper that:
 //
 //   1. Maps the user's CLI args into a JSON args object.
-//   2. Calls the appropriate ability via this helper.
+//   2. Calls the appropriate ability via a named issuer.
 //   3. Prints the result.
 //
-// Any subcommand that bypasses this — calling a transport
-// directly, or constructing its own IPC client — is a layering
-// violation: it ties the CLI to a specific transport (the
-// federation bridge in pre-P1.5 code; an alternate IPC in some
-// future variant) instead of to the ability surface. One helper
-// here means one point to swap when the transport evolves.
+// Any subcommand that bypasses these issuers — calling a transport
+// directly, constructing its own IPC client, or silently defaulting
+// tuple fields — is a layering violation. The named issuers make the
+// subject policy visible before the request crosses the local runtime
+// boundary.
 //
 // Routing model
 // -------------
@@ -337,6 +335,10 @@ pub fn invoke_local_ability(ability: &str, args: Value) -> anyhow::Result<Value>
 pub struct LocalDaemonSystemAbilityIssuer;
 
 impl LocalDaemonSystemAbilityIssuer {
+    pub fn local_daemon_identity_subject_ura() -> anyhow::Result<String> {
+        crate::support::platform::local_daemon_grpc::local_daemon_identity_subject_ura()
+    }
+
     pub fn invoke_root_for_subject(
         ability: &str,
         args: Value,

@@ -28,7 +28,7 @@ use clap::Args;
 use serde_json::{json, Value};
 
 use crate::cli::daemon_client::remote_system_ability::invoke_remote_device_system_ability;
-use crate::support::platform::local_invoke::invoke_local_ability;
+use crate::support::platform::local_invoke::LocalDaemonSystemAbilityIssuer;
 use crate::support::platform::{output, timeouts};
 
 #[derive(Debug, Args)]
@@ -61,7 +61,7 @@ pub fn run(args: ExecArgs) -> anyhow::Result<()> {
         "timeout_ms": timeout_ms,
     });
     let result = if is_local_exec_target(&args.node) {
-        invoke_local_ability("process.exec", payload).context("invoke process.exec")?
+        invoke_local_process_exec(payload)?
     } else {
         invoke_remote_process_exec(&args.node, payload)?
     };
@@ -109,6 +109,13 @@ fn decode_exec_stream(result: &Value, field: &str) -> Vec<u8> {
     let raw = result.get(field).and_then(Value::as_str).unwrap_or("");
     B64.decode(raw.as_bytes())
         .unwrap_or_else(|_| raw.as_bytes().to_vec())
+}
+
+fn invoke_local_process_exec(payload: Value) -> anyhow::Result<Value> {
+    let subject_ura = LocalDaemonSystemAbilityIssuer::local_daemon_identity_subject_ura()
+        .context("resolve local process.exec subject")?;
+    LocalDaemonSystemAbilityIssuer::invoke_root_for_subject("process.exec", payload, &subject_ura)
+        .context("invoke process.exec")
 }
 
 fn invoke_remote_process_exec(node: &str, payload: Value) -> anyhow::Result<Value> {

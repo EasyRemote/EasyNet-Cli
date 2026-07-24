@@ -403,10 +403,31 @@ fn local_daemon_connect_error(
 }
 
 #[cfg(feature = "axon-pb")]
+fn local_daemon_offline_error(socket_path: &std::path::Path) -> anyhow::Error {
+    anyhow::Error::new(
+        crate::support::platform::local_invoke::LocalInvokeFailure::DaemonOffline(format!(
+            "daemon not running (local Axon gRPC listener unreachable at {}). \
+             Start it with `easynet runtime start`.",
+            socket_path.display()
+        )),
+    )
+}
+
+#[cfg(feature = "axon-pb")]
+fn ensure_local_daemon_accepting() -> anyhow::Result<std::path::PathBuf> {
+    let socket_path = resolve_socket_path();
+    if !probe_accepting(&socket_path) {
+        return Err(local_daemon_offline_error(&socket_path));
+    }
+    Ok(socket_path)
+}
+
+#[cfg(feature = "axon-pb")]
 pub(crate) fn invoke_local_daemon_ability(
     function_name: &str,
     payload_json: serde_json::Value,
 ) -> anyhow::Result<serde_json::Value> {
+    ensure_local_daemon_accepting()?;
     let subject_ura = local_daemon_identity_ura()?;
     let tuple_plan = LocalDaemonLoopbackTuplePlan::local_root_for_subject(
         function_name,
@@ -572,16 +593,7 @@ fn invoke_local_daemon_ability_stream_with_tuple_plan(
     use anyhow::Context;
     let timeout = tuple_plan.timeout;
 
-    let socket_path = resolve_socket_path();
-    if !probe_accepting(&socket_path) {
-        return Err(anyhow::Error::new(
-            crate::support::platform::local_invoke::LocalInvokeFailure::DaemonOffline(format!(
-                "daemon not running (local Axon gRPC listener unreachable at {}). \
-                 Start it with `easynet runtime start`.",
-                socket_path.display()
-            )),
-        ));
-    }
+    let socket_path = ensure_local_daemon_accepting()?;
 
     let invocation = local_daemon_loopback_invocation_from_tuple_plan(tuple_plan)?;
     let function_name = invocation.function_name().to_string();
@@ -648,16 +660,7 @@ fn invoke_local_daemon_ability_bidi_json_frames_with_tuple_plan(
     use tokio_stream::wrappers::ReceiverStream;
     let timeout = tuple_plan.timeout;
 
-    let socket_path = resolve_socket_path();
-    if !probe_accepting(&socket_path) {
-        return Err(anyhow::Error::new(
-            crate::support::platform::local_invoke::LocalInvokeFailure::DaemonOffline(format!(
-                "daemon not running (local Axon gRPC listener unreachable at {}). \
-                 Start it with `easynet runtime start`.",
-                socket_path.display()
-            )),
-        ));
-    }
+    let socket_path = ensure_local_daemon_accepting()?;
 
     let invocation = local_daemon_loopback_invocation_from_tuple_plan(tuple_plan)?;
     let function_name = invocation.function_name().to_string();
@@ -812,16 +815,7 @@ fn invoke_local_daemon_ability_with_tuple_plan(
     use anyhow::Context;
     let timeout = tuple_plan.timeout;
 
-    let socket_path = resolve_socket_path();
-    if !probe_accepting(&socket_path) {
-        return Err(anyhow::Error::new(
-            crate::support::platform::local_invoke::LocalInvokeFailure::DaemonOffline(format!(
-                "daemon not running (local Axon gRPC listener unreachable at {}). \
-                 Start it with `easynet runtime start`.",
-                socket_path.display()
-            )),
-        ));
-    }
+    let socket_path = ensure_local_daemon_accepting()?;
 
     let invocation = local_daemon_loopback_invocation_from_tuple_plan(tuple_plan)?;
     let function_name = invocation.function_name().to_string();
@@ -1497,14 +1491,7 @@ fn invoke_local_daemon_ability_with_invocation_meta_inner(
         bail!("function_name must not be empty");
     }
 
-    let socket_path = resolve_socket_path();
-    if !probe_accepting(&socket_path) {
-        bail!(
-            "daemon not running (local Axon gRPC listener unreachable at {}). \
-             Start it with `easynet runtime start`.",
-            socket_path.display()
-        );
-    }
+    let socket_path = ensure_local_daemon_accepting()?;
 
     let receipt_refs = verified_receipt_refs_from_causal_parents(causal_parents)?;
     let mut refs = receipt_refs;
@@ -1721,6 +1708,14 @@ pub(crate) fn invoke_local_daemon_ability(
 }
 
 #[cfg(not(feature = "axon-pb"))]
+pub(crate) fn local_daemon_identity_subject_ura() -> anyhow::Result<String> {
+    anyhow::bail!(
+        "resolving the local daemon identity subject requires the `axon-pb` feature; \
+         rebuild with `cargo build --features axon-pb`"
+    )
+}
+
+#[cfg(not(feature = "axon-pb"))]
 pub(crate) fn invoke_local_daemon_system_ability_root_for_subject_timeout(
     function_name: &str,
     _payload_json: serde_json::Value,
@@ -1776,6 +1771,11 @@ fn local_daemon_loopback_caller_ura() -> anyhow::Result<String> {
 #[cfg(feature = "axon-pb")]
 fn local_daemon_identity_ura() -> anyhow::Result<String> {
     crate::daemon::identity::local_invocation::local_daemon_ura()
+}
+
+#[cfg(feature = "axon-pb")]
+pub(crate) fn local_daemon_identity_subject_ura() -> anyhow::Result<String> {
+    local_daemon_identity_ura()
 }
 
 #[cfg(all(test, feature = "axon-pb"))]
