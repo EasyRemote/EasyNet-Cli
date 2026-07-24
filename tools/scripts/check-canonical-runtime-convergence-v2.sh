@@ -670,15 +670,18 @@ check_python_sdk_runtime_addressing_kind_contract() {
 check_advertise_agent_ingress_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local wrappers="$cli_root/src/daemon/invocation/dispatch/federation_wrappers.rs"
+  local client_contract="$cli_root/src/daemon/federation/client/ability_contract.rs"
   [[ -f "$wrappers" ]] || return 0
+  [[ -f "$client_contract" ]] || return 0
 
-  "$PYTHON_BIN" - "$wrappers" <<'PY'
+  "$PYTHON_BIN" - "$wrappers" "$client_contract" <<'PY'
 import re
 import sys
 from pathlib import Path
 
-path = Path(sys.argv[1])
-text = path.read_text()
+wrappers_path, client_contract_path = map(Path, sys.argv[1:])
+text = wrappers_path.read_text()
+client_contract = client_contract_path.read_text()
 match = re.search(
     r"#\[derive\([^\]]*Deserialize[^\]]*\)\]\s*"
     r"#\[serde\(deny_unknown_fields\)\]\s*"
@@ -695,11 +698,30 @@ if "host_ura: Option" in body or re.search(r"\bpub\s+host_ura\b", body):
     raise SystemExit("advertise_agent_retired_host_ura_field")
 if "self.host_ura" in text:
     raise SystemExit("advertise_agent_host_ura_fallback")
+response = re.search(r"pub struct AdvertiseAgentResponse\s*\{(?P<body>.*?)\n\}", text, re.DOTALL)
+if response is None:
+    raise SystemExit("advertise_agent_response_missing")
+response_body = response.group("body")
+if "pub ack: bool" not in response_body:
+    raise SystemExit("advertise_agent_response_ack_missing")
+if "replaced_prior" in response_body:
+    raise SystemExit("advertise_agent_response_retired_replaced_prior")
+receipt = re.search(r"pub struct AdvertiseAgentReceipt\s*\{(?P<body>.*?)\n\}", client_contract, re.DOTALL)
+if receipt is None:
+    raise SystemExit("advertise_agent_receipt_missing")
+receipt_body = receipt.group("body")
+if "pub ack: bool" not in receipt_body:
+    raise SystemExit("advertise_agent_receipt_ack_missing")
+if "replaced_prior" in receipt_body:
+    raise SystemExit("advertise_agent_receipt_retired_replaced_prior")
+if '"replaced_prior"' not in client_contract:
+    raise SystemExit("advertise_agent_receipt_missing_retired_replaced_prior_negative_test")
 for test in (
     "advertise_agent_request_rejects_retired_top_level_host_ura",
     "advertise_agent_request_requires_signing_authority",
+    "advertise_agent_receipt_rejects_retired_fields",
 ):
-    if test not in text:
+    if test not in text and test not in client_contract:
         raise SystemExit(f"missing_advertise_agent_negative_test:{test}")
 PY
 }
@@ -14537,15 +14559,21 @@ EOF
   if ( check_python_sdk_runtime_addressing_kind_contract "$tmp/python-sdk-product-addressing" ) >/dev/null 2>&1; then
     fail "self-test expected Python SDK product addressing-kind gate to fail"
   fi
-  mkdir -p "$tmp/advertise-agent-legacy/src/daemon/invocation/dispatch"
+  mkdir -p "$tmp/advertise-agent-legacy/src/daemon/invocation/dispatch" \
+    "$tmp/advertise-agent-legacy/src/daemon/federation/client"
   printf '%s\n' \
     '#[derive(Debug, Clone, Deserialize)]' \
     'pub struct AdvertiseAgentRequest {' \
     '  pub signing_authority: Option<AdvertiseSigningAuthorityRequest>,' \
     '  pub host_ura: Option<String>,' \
     '}' \
+    'pub struct AdvertiseAgentResponse { pub ack: bool, pub replaced_prior: bool }' \
     'impl AdvertiseAgentRequest { fn host_ura(&self) -> Option<&str> { self.host_ura.as_deref() } }' \
     > "$tmp/advertise-agent-legacy/src/daemon/invocation/dispatch/federation_wrappers.rs"
+  printf '%s\n' \
+    'pub struct AdvertiseAgentReceipt { pub ack: bool, pub replaced_prior: bool }' \
+    'fn advertise_agent_receipt_rejects_retired_fields() {}' \
+    > "$tmp/advertise-agent-legacy/src/daemon/federation/client/ability_contract.rs"
   if ( check_advertise_agent_ingress_contract "$tmp/advertise-agent-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected advertise_agent retired host_ura ingress gate to fail"
   fi

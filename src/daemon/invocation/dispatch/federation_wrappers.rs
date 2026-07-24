@@ -418,10 +418,6 @@ pub struct AdvertiseAgentResponse {
     /// Always `true` when this wrapper returns; rejection paths run
     /// in the admission gate before this function is called.
     pub ack: bool,
-    /// Always `false` in the new architecture: directory entries are
-    /// not replaced, they are stream-presence-driven. Kept in the
-    /// shape for wire compat.
-    pub replaced_prior: bool,
 }
 
 /// Handle a `federation.advertise_agent` invocation. Presence still
@@ -435,10 +431,7 @@ pub fn handle_advertise_agent(
     if let Some(store) = store {
         store.upsert(request.to_record());
     }
-    Ok(AdvertiseAgentResponse {
-        ack: true,
-        replaced_prior: false,
-    })
+    Ok(AdvertiseAgentResponse { ack: true })
 }
 
 // ─── federation.advertise_abilities ────────────────────────────────
@@ -1634,7 +1627,6 @@ mod tests {
         };
         let resp = handle_advertise_agent(&req, Some(&store)).expect("advertise agent succeeds");
         assert!(resp.ack);
-        assert!(!resp.replaced_prior);
         let stored = store
             .get("easynet:///r/realm/agent/user.n1")
             .expect("advertised agent must be stored");

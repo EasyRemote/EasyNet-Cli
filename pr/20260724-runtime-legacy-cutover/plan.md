@@ -1175,3 +1175,47 @@ architecture rather than add feature surface.
   - `tools/scripts/check-canonical-runtime-convergence-v2.sh`
   - `tools/scripts/check-architecture-convergence.sh`
   - `git diff --check`
+
+## Iteration 27 candidate policy
+
+- Focus on `federation.advertise_agent` acknowledgement and receipt shape.
+  codegraph found `AdvertiseAgentResponse` has a narrow impact radius in the
+  daemon wrapper/test path, while `AdvertiseAgentReceipt` is owned by the
+  federation client parser. The old field `replaced_prior` was explicitly
+  documented as an always-false wire-compat field in the advertise response.
+- The root abstraction problem is lifecycle vocabulary leaking into an ACK
+  contract that does not own lifecycle replacement. Real replacement semantics
+  belong to agent lifecycle and directory stream events; an advertise ACK should
+  only acknowledge admission/commit success.
+- The intended cutover is:
+  - keep directory and hosted-agent lifecycle `replaced_prior` semantics where
+    they describe real state transitions;
+  - remove `replaced_prior` from `AdvertiseAgentResponse`;
+  - remove `replaced_prior` from `AdvertiseAgentReceipt`;
+  - make the receipt parser reject retired `replaced_prior` instead of silently
+    accepting it;
+  - make SPEC v2 reject reintroduced advertise response/receipt compat fields.
+
+## Iteration 27 decision log
+
+- Removed the always-false `replaced_prior` field from
+  `AdvertiseAgentResponse` and from the daemon dispatcher test expectation.
+- Removed `replaced_prior` from `AdvertiseAgentReceipt` and renamed/extended
+  the retired-field negative test so receipt parsing rejects the old field.
+- Preserved real replacement state in agent lifecycle and directory event code;
+  those paths continue to model actual prior-row/replacement transitions rather
+  than advertise ACK compatibility.
+- Tightened SPEC v2 `check_advertise_agent_ingress_contract` so it now covers
+  both daemon response and federation client receipt shapes, and includes a
+  negative self-test fixture for reintroduced `replaced_prior`.
+- Verification passed:
+  - `/Users/macbook.silan.tech/.local/bin/codegraph sync .`
+  - `/Users/macbook.silan.tech/.local/bin/codegraph impact AdvertiseAgentResponse`
+  - `/Users/macbook.silan.tech/.local/bin/codegraph impact AdvertiseAgentReceipt`
+  - `cargo fmt --check`
+  - `cargo test -q advertise_agent`
+  - `bash -n tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - `tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  - `tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - `tools/scripts/check-architecture-convergence.sh`
+  - `git diff --check`

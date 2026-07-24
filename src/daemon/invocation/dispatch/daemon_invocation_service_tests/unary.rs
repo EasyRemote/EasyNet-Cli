@@ -467,7 +467,6 @@ async fn invoke_dispatches_federation_advertise_agent() {
     let resp = svc.invoke(request).await.expect("dispatch returns Ok");
     let body: federation_wrappers::AdvertiseAgentResponse = parse_response_body(resp);
     assert!(body.ack);
-    assert!(!body.replaced_prior);
 }
 
 #[tokio::test]

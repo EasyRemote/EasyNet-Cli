@@ -146,7 +146,6 @@ pub enum AdvertisedSigningAuthority {
 #[serde(deny_unknown_fields)]
 pub struct AdvertiseAgentReceipt {
     pub ack: bool,
-    pub replaced_prior: bool,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq)]
@@ -455,11 +454,10 @@ mod tests {
     }
 
     #[test]
-    fn advertise_agent_receipt_rejects_retired_status_aliases() {
-        for field in ["status", "agent_ura"] {
+    fn advertise_agent_receipt_rejects_retired_fields() {
+        for field in ["status", "agent_ura", "replaced_prior"] {
             let mut body = serde_json::Map::new();
             body.insert("ack".to_string(), json!(true));
-            body.insert("replaced_prior".to_string(), json!(false));
             body.insert(field.to_string(), json!("retired"));
 
             let err = parse_receipt_value::<AdvertiseAgentReceipt>(&Value::Object(body))
