@@ -81,7 +81,8 @@ pub fn handle_put(user: &str, realm: &str, root: &Path, args: Value) -> anyhow::
     hasher.update(&bytes);
     let sha256_hex = hex::encode(hasher.finalize());
 
-    state::ensure_root(root).ok();
+    state::ensure_root(root)
+        .map_err(|e| anyhow::anyhow!("files.put: ensure store root {root:?}: {e}"))?;
     let path = state::blob_path(root, &sha256_hex)
         .map_err(|e| anyhow::anyhow!("files.put: resolve blob path: {e}"))?;
     let metadata = BlobMetadata::new(
@@ -90,7 +91,7 @@ pub fn handle_put(user: &str, realm: &str, root: &Path, args: Value) -> anyhow::
         content_type.clone(),
         bytes.len(),
     );
-    ensure_metadata_compatible(root, &metadata)?;
+    ensure_existing_blob_metadata_matches(root, &metadata)?;
     if !path.exists() {
         let mut f = std::fs::File::create(&path)
             .map_err(|e| anyhow::anyhow!("files.put: create {path:?}: {e}"))?;
@@ -146,24 +147,28 @@ pub fn handle_get(root: &Path, args: Value) -> anyhow::Result<Value> {
 
 /// `files.list` — enumerate blobs in the store.
 pub fn handle_list(user: &str, realm: &str, root: &Path, _args: Value) -> anyhow::Result<Value> {
-    state::ensure_root(root).ok();
+    state::ensure_root(root)
+        .map_err(|e| anyhow::anyhow!("files.list: ensure store root {root:?}: {e}"))?;
     let mut items = Vec::new();
-    if let Ok(rd) = std::fs::read_dir(root) {
-        for entry in rd.flatten() {
-            let name = entry.file_name();
-            let Some(name) = name.to_str() else { continue };
-            if name.len() != 64 || !name.chars().all(|c| c.is_ascii_hexdigit()) {
-                continue;
-            }
-            let metadata = read_metadata(root, name)?;
-            items.push(FilesListItem::new(
-                name,
-                metadata.size,
-                metadata.filename,
-                metadata.content_type,
-                state::blob_ura(realm, user, name),
-            ));
+    let rd = std::fs::read_dir(root)
+        .map_err(|e| anyhow::anyhow!("files.list: read store root {root:?}: {e}"))?;
+    for entry in rd {
+        let entry = entry.map_err(|e| anyhow::anyhow!("files.list: read directory entry: {e}"))?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if name.len() != 64 || !name.chars().all(|c| c.is_ascii_hexdigit()) {
+            continue;
         }
+        let metadata = read_metadata(root, name)?;
+        items.push(FilesListItem::new(
+            name,
+            metadata.size,
+            metadata.filename,
+            metadata.content_type,
+            state::blob_ura(realm, user, name),
+        ));
     }
     Ok(serde_json::to_value(FilesListResponse::from_items(items))?)
 }
@@ -188,7 +193,7 @@ pub(crate) fn sha256_from_ura(ura: &str) -> anyhow::Result<String> {
     Ok(path.to_string())
 }
 
-fn ensure_metadata_compatible(root: &Path, next: &BlobMetadata) -> anyhow::Result<()> {
+fn ensure_existing_blob_metadata_matches(root: &Path, next: &BlobMetadata) -> anyhow::Result<()> {
     let metadata_path = state::metadata_path(root, &next.sha256)
         .map_err(|e| anyhow::anyhow!("files.put: resolve metadata path: {e}"))?;
     if !metadata_path.exists() {
@@ -412,6 +417,38 @@ mod tests {
         assert_eq!(items.len(), 2);
         assert!(items.iter().all(|item| item.get("filename").is_some()));
         assert!(items.iter().all(|item| item.get("content_type").is_some()));
+    }
+
+    #[test]
+    fn put_rejects_non_directory_store_root() {
+        let root = fresh_root();
+        let store_root = root.path().join("files-root-is-a-file");
+        std::fs::write(&store_root, b"not a directory").unwrap();
+
+        let error = handle_put(
+            "alice",
+            "test.local",
+            &store_root,
+            json!({
+                "filename": "a",
+                "bytes_b64": STANDARD.encode(b"a"),
+                "content_type": "application/octet-stream",
+            }),
+        )
+        .unwrap_err();
+
+        assert!(format!("{error:#}").contains("files.put: ensure store root"));
+    }
+
+    #[test]
+    fn list_rejects_non_directory_store_root() {
+        let root = fresh_root();
+        let store_root = root.path().join("files-root-is-a-file");
+        std::fs::write(&store_root, b"not a directory").unwrap();
+
+        let error = handle_list("alice", "test.local", &store_root, json!({})).unwrap_err();
+
+        assert!(format!("{error:#}").contains("files.list: ensure store root"));
     }
 
     #[test]

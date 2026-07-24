@@ -605,3 +605,55 @@ architecture rather than add feature surface.
   - `tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
   - `tools/scripts/check-architecture-convergence.sh`
   - `git diff --check`
+
+## Iteration 16 candidate policy
+
+- Focus on files resource store persistence authority. codegraph found
+  `files_store::handle_list` as the canonical list handler; rg found that
+  `files.put` and `files.list` currently call `state::ensure_root(root).ok()`,
+  while `files.list` also wraps `read_dir(root)` in `if let Ok(...)` and
+  flattens directory entry errors.
+- The root abstraction problem is a hidden persistence fallback inside a
+  resource handler. A missing/unusable files store root is an operational
+  failure of the resource authority, not proof that the resource inventory is
+  empty and not a condition that should let writes continue into a partially
+  resolved path.
+- The intended cutover is fail-closed files store admission at the storage
+  boundary: root creation, directory enumeration, and directory-entry reads
+  return typed handler errors. The handler may still ignore non-blob filenames,
+  but it must not suppress persistence errors.
+- The naming cleanup is to replace the misleading
+  `ensure_metadata_compatible` helper with
+  `ensure_existing_blob_metadata_matches`, because the rule enforces immutable
+  producer metadata for an existing content-addressed blob rather than a
+  compatibility layer.
+- Verification must prove `files.put` and `files.list` reject a non-directory
+  store root, and SPEC v2 must reject reintroducing the silent
+  `ensure_root(...).ok()`, `if let Ok(read_dir)`, or `flatten()` fallback in the
+  files store handler.
+
+## Iteration 16 decision log
+
+- Refactored `files.put` to fail closed when the files store root cannot be
+  created or is not a directory, instead of suppressing the root authority error
+  and continuing toward blob path resolution.
+- Refactored `files.list` to fail closed on store root creation, directory
+  enumeration, and directory-entry read errors. Non-blob filenames remain
+  ignored by schema, but persistence failures are no longer converted into an
+  empty inventory.
+- Renamed `ensure_metadata_compatible` to
+  `ensure_existing_blob_metadata_matches`, making the helper describe the
+  immutable metadata invariant instead of implying a compatibility layer.
+- Added focused tests proving `files.put` and `files.list` reject a
+  non-directory store root.
+- Added SPEC v2 gate `check_files_store_persistence_cutover_contract` and a
+  negative self-test fixture that fails if silent `ensure_root(...).ok()`,
+  `if let Ok(read_dir)`, `flatten()`, or the retired helper name return.
+- Verification passed:
+  - `cargo test -q daemon::ability::builtins::resources::files_store::handlers::tests`
+  - `cargo check -q`
+  - `cargo fmt --check`
+  - `tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - `tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  - `tools/scripts/check-architecture-convergence.sh`
+  - `git diff --check`

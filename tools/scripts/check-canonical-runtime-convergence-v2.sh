@@ -1879,6 +1879,40 @@ for required in (
 PY
 }
 
+check_files_store_persistence_cutover_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local handlers="$cli_root/src/daemon/ability/builtins/resources/files_store/handlers.rs"
+  [[ -f "$handlers" ]] || fail "files_store handlers source is missing: $handlers"
+
+  "$PYTHON_BIN" - "$handlers" <<'PY'
+import sys
+from pathlib import Path
+
+handlers = Path(sys.argv[1]).read_text(encoding="utf-8")
+
+for retired in (
+    "state::ensure_root(root).ok()",
+    "if let Ok(rd) = std::fs::read_dir(root)",
+    "for entry in rd.flatten()",
+    "ensure_metadata_compatible(",
+):
+    if retired in handlers:
+        raise SystemExit(f"files_store_persistence_cutover:retired_pattern:{retired}")
+
+for required in (
+    "files.put: ensure store root",
+    "files.list: ensure store root",
+    "files.list: read store root",
+    "entry.map_err",
+    "ensure_existing_blob_metadata_matches(",
+    "put_rejects_non_directory_store_root",
+    "list_rejects_non_directory_store_root",
+):
+    if required not in handlers:
+        raise SystemExit(f"files_store_persistence_cutover:missing:{required}")
+PY
+}
+
 check_pages_management_response_projection_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local projection="$cli_root/src/daemon/resources/projection.rs"
@@ -16386,6 +16420,25 @@ EOF
   if ( CLI_ROOT="$tmp/files-store-response-projection-legacy"; check_files_store_response_projection_contract ) >/dev/null 2>&1; then
     fail "self-test expected files-store response projection gate to fail"
   fi
+  mkdir -p "$tmp/files-store-persistence-fallback-legacy/src/daemon/ability/builtins/resources/files_store"
+  cat >"$tmp/files-store-persistence-fallback-legacy/src/daemon/ability/builtins/resources/files_store/handlers.rs" <<'EOF'
+fn handle_put(root: &Path) {
+    state::ensure_root(root).ok();
+    ensure_metadata_compatible(root, &metadata).unwrap();
+}
+
+fn handle_list(root: &Path) {
+    state::ensure_root(root).ok();
+    if let Ok(rd) = std::fs::read_dir(root) {
+        for entry in rd.flatten() {
+            let _ = entry;
+        }
+    }
+}
+EOF
+  if ( CLI_ROOT="$tmp/files-store-persistence-fallback-legacy"; check_files_store_persistence_cutover_contract ) >/dev/null 2>&1; then
+    fail "self-test expected files-store persistence cutover gate to fail"
+  fi
   mkdir -p "$tmp/pages-management-response-projection-legacy/src/daemon/resources"
   mkdir -p "$tmp/pages-management-response-projection-legacy/src/daemon/ability/builtins/resources/pages"
   cat >"$tmp/pages-management-response-projection-legacy/src/daemon/resources/projection.rs" <<'EOF'
@@ -17261,6 +17314,7 @@ EOF
   check_managed_skill_directory_projection_contract
   check_resource_list_projection_boundary_contract
   check_files_store_response_projection_contract
+  check_files_store_persistence_cutover_contract
   check_pages_management_response_projection_contract
   check_pages_health_response_projection_contract
   check_pages_fetch_response_projection_contract
@@ -17443,6 +17497,7 @@ check_skill_record_projection_boundary_contract
 check_managed_skill_directory_projection_contract
 check_resource_list_projection_boundary_contract
 check_files_store_response_projection_contract
+check_files_store_persistence_cutover_contract
 check_pages_management_response_projection_contract
 check_pages_health_response_projection_contract
 check_pages_fetch_response_projection_contract
