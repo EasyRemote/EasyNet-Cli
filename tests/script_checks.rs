@@ -161,16 +161,16 @@ fn kernel_boundary_script_contract_holds() {
 }
 
 #[test]
-fn ffi_abi_v5_exact_surface_script_contract_holds() {
+fn ffi_abi_v6_exact_surface_script_contract_holds() {
     // Pins the generic binding boundary: exact header/source/dylib allowlist,
     // error code table, daemon lifecycle, and complete Invocation lifecycle.
-    run_bash_script("tests/scripts/test_check_ffi_abi_v5_header.sh");
+    run_bash_script("tests/scripts/test_check_ffi_abi_v6_header.sh");
 }
 
 #[test]
 fn release_package_contract_script_holds() {
     // Pins the release shape consumed by install.sh: runtime binaries,
-    // dendrite bridge, and ABI v5 binding artefacts must be packaged
+    // dendrite bridge, and ABI v6 binding artefacts must be packaged
     // and installed together.
     run_bash_script("tests/scripts/test_check_release_package_contract.sh");
 }
