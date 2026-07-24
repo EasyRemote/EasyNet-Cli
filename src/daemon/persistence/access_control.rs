@@ -36,7 +36,7 @@ use sha2::{Digest, Sha256};
 
 use crate::daemon::invocation::admission::authority_proof::AuthorityProof;
 use crate::daemon::invocation::admission::decision::{
-    AccessAction, PermissionRequest, PermissionRequestStatus,
+    AccessAction, PermissionRequest, PermissionRequestStatus, PrincipalKind,
 };
 use crate::daemon::invocation::admission::grant_matcher::{
     PermissionConstraints, PermissionEffect, PermissionGrant, PermissionGrantLifetime,
@@ -350,6 +350,7 @@ impl AccessControlStore {
     ) -> anyhow::Result<Self> {
         let root = root.into();
         let owner_user_id = owner_user_id.into();
+        validate_nonzero_user_id(&owner_user_id, "policy store owner_user_id")?;
         fs::create_dir_all(&root)?;
         ensure_owner_private_dir(&root)?;
 
@@ -809,6 +810,7 @@ impl AccessControlStore {
         if request.status != PermissionRequestStatus::Approved {
             anyhow::bail!("proof-backed PermissionRequest resolution requires approved status");
         }
+        validate_authority_proof_identity(&proof)?;
         validate_proof_resolves_request(&proof, &request)?;
         if request.created_grant_id.is_some() {
             anyhow::bail!(
@@ -864,6 +866,7 @@ impl AccessControlStore {
         proof: AuthorityProof,
         actor_ura: &str,
     ) -> anyhow::Result<AuthorityProof> {
+        validate_authority_proof_identity(&proof)?;
         if self.proofs.contains_key(&proof.proof_id) {
             anyhow::bail!("authority proof `{}` already exists", proof.proof_id);
         }
@@ -920,6 +923,11 @@ impl AccessControlStore {
             if !seen_sequences.insert(record.sequence) {
                 anyhow::bail!("duplicate policy journal sequence {}", record.sequence);
             }
+            validate_nonzero_user_id(&record.owner_user_id, "policy journal owner_user_id")?;
+            if record.owner_user_id != self.manifest.policy_store.owner_user_id {
+                anyhow::bail!("policy journal owner does not match store manifest");
+            }
+            validate_runtime_identity_ura(&record.actor_ura, "policy journal actor_ura")?;
             verify_record_hash(&record)?;
             if record.previous_record_hash != self.head_hash {
                 anyhow::bail!(
@@ -962,6 +970,7 @@ impl AccessControlStore {
         match record.record_kind {
             RecordKind::PermissionGrant => {
                 let grant: PermissionGrant = serde_json::from_value(record.payload)?;
+                validate_grant(&grant)?;
                 if self.grants.get(&grant.grant_id).is_some_and(|existing| {
                     existing.state == PermissionGrantState::Revoked
                         && grant.state == PermissionGrantState::Active
@@ -978,6 +987,7 @@ impl AccessControlStore {
             }
             RecordKind::AuthorityProof => {
                 let proof: AuthorityProof = serde_json::from_value(record.payload)?;
+                validate_authority_proof_identity(&proof)?;
                 match record.operation {
                     RecordOperation::Consumed => {
                         if !self.proofs.contains_key(&proof.proof_id) {
@@ -1007,6 +1017,13 @@ impl AccessControlStore {
             }
             RecordKind::Audit => {
                 let audit: GrantAuditRecord = serde_json::from_value(record.payload)?;
+                validate_nonzero_user_id(&audit.owner_user_id, "policy audit owner_user_id")?;
+                if crate::core::identity::is_all_zero_principal_id(&audit.principal_id) {
+                    anyhow::bail!(
+                        "policy audit principal_id must not be the all-zero principal placeholder"
+                    );
+                }
+                validate_runtime_identity_ura(&audit.actor_ura, "policy audit actor_ura")?;
                 self.audit.insert(audit.audit_record_id.clone(), audit);
             }
             RecordKind::Checkpoint => {
@@ -1033,6 +1050,7 @@ impl AccessControlStore {
         payload: Value,
         actor_ura: &str,
     ) -> anyhow::Result<()> {
+        validate_runtime_identity_ura(actor_ura, "policy journal actor_ura")?;
         self.last_sequence += 1;
         let mut record = JournalRecord {
             record_kind,
@@ -1144,6 +1162,11 @@ fn validate_manifest(
     manifest: &AccessControlStoreManifest,
     owner_user_id: &str,
 ) -> anyhow::Result<()> {
+    validate_nonzero_user_id(owner_user_id, "requested policy store owner_user_id")?;
+    validate_nonzero_user_id(
+        &manifest.policy_store.owner_user_id,
+        "manifest policy store owner_user_id",
+    )?;
     if manifest.policy_store.format != STORE_FORMAT
         || manifest.policy_store.schema_version != SCHEMA_VERSION
         || manifest.canonicalization.record_profile != RECORD_PROFILE
@@ -1170,6 +1193,22 @@ fn validate_grant(grant: &PermissionGrant) -> anyhow::Result<()> {
         || grant.created_at.trim().is_empty()
     {
         anyhow::bail!("PermissionGrant requires grant_id, owner_user_id, principal_id, actions, created_by, and created_at");
+    }
+    validate_nonzero_user_id(&grant.owner_user_id, "PermissionGrant owner_user_id")?;
+    if grant.principal_kind == PrincipalKind::User {
+        validate_nonzero_user_id(&grant.principal_id, "PermissionGrant principal_id")?;
+    }
+    validate_runtime_identity_ura(&grant.created_by, "PermissionGrant created_by")?;
+    for (field, value) in [
+        ("PermissionGrant callee_ura", grant.callee_ura.as_deref()),
+        (
+            "PermissionGrant subject_ura_pattern",
+            grant.subject_ura_pattern.as_deref(),
+        ),
+    ] {
+        if value.is_some_and(crate::core::identity::contains_all_zero_principal_placeholder) {
+            anyhow::bail!("{field} must not contain the all-zero principal placeholder");
+        }
     }
     reject_broad_pattern(grant.ability_ura_pattern.as_deref())?;
     reject_unenforceable_constraints(grant.constraints.as_ref())?;
@@ -1298,6 +1337,13 @@ fn validate_request_transition(
     {
         anyhow::bail!("PermissionRequest identity fields must not be empty");
     }
+    validate_nonzero_user_id(&next.owner_user_id, "PermissionRequest owner_user_id")?;
+    if next.principal_kind == PrincipalKind::User {
+        validate_nonzero_user_id(&next.principal_id, "PermissionRequest principal_id")?;
+    }
+    validate_runtime_identity_ura(&next.caller_ura, "PermissionRequest caller_ura")?;
+    validate_runtime_identity_ura(&next.callee_ura, "PermissionRequest callee_ura")?;
+    validate_runtime_identity_ura(&next.subject_ura, "PermissionRequest subject_ura")?;
     if next.requested_lifetimes.is_empty() {
         anyhow::bail!("PermissionRequest requested_lifetimes must not be empty");
     }
@@ -1347,6 +1393,31 @@ fn validate_request_transition(
                 .is_none())
     {
         anyhow::bail!("terminal PermissionRequest requires resolver_ura and resolved_at");
+    }
+    Ok(())
+}
+
+fn validate_authority_proof_identity(proof: &AuthorityProof) -> anyhow::Result<()> {
+    proof
+        .validate_identity_contract()
+        .map_err(|field| anyhow::anyhow!("AuthorityProof contains inadmissible {field}"))
+}
+
+fn validate_nonzero_user_id(value: &str, field: &str) -> anyhow::Result<()> {
+    if value.trim().is_empty() {
+        anyhow::bail!("{field} must not be empty");
+    }
+    if crate::core::identity::is_all_zero_principal_id(value) {
+        anyhow::bail!("{field} must not be the all-zero principal placeholder");
+    }
+    Ok(())
+}
+
+fn validate_runtime_identity_ura(value: &str, field: &str) -> anyhow::Result<()> {
+    let identity = crate::core::identity::RuntimeIdentityUra::parse(value)
+        .map_err(|error| anyhow::anyhow!("{field} is not admissible: {error}"))?;
+    if identity.as_str() != value {
+        anyhow::bail!("{field} must not contain surrounding whitespace");
     }
     Ok(())
 }
@@ -1701,6 +1772,22 @@ mod tests {
             error.to_string().contains("unknown field `legacy_owner`"),
             "error should name noncanonical section field: {error}"
         );
+    }
+
+    #[test]
+    fn policy_store_and_records_reject_all_zero_user_identities() {
+        let dir = tempfile::tempdir().unwrap();
+        let zero = crate::core::identity::ALL_ZERO_PRINCIPAL_ID;
+        assert!(AccessControlStore::open_or_create_at(dir.path().join("zero"), zero).is_err());
+        assert!(!dir.path().join("zero").exists());
+
+        let mut grant = sample_grant("grant-zero-user");
+        grant.owner_user_id = zero.to_string();
+        assert!(validate_grant(&grant).is_err());
+
+        let mut request = pending_request();
+        request.owner_user_id = zero.to_string();
+        assert!(validate_request_transition(None, &request).is_err());
     }
 
     #[test]

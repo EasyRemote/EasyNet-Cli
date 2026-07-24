@@ -687,14 +687,14 @@ fn join_principal_enrollment_proof(
             "--principal-ura, --principal-proof-kind and --principal-proof-ref must not be empty"
         );
     }
-    let parsed = crate::core::ura::parse_ura(principal_ura)
+    let identity = crate::core::identity::RuntimeIdentityUra::parse(principal_ura)
         .map_err(|err| anyhow::anyhow!("invalid --principal-ura `{principal_ura}`: {err}"))?;
-    if parsed.kind != crate::core::ura::URAKind::User {
+    if identity.kind() != crate::core::ura::URAKind::User {
         anyhow::bail!("--principal-ura must identify a User URA");
     }
     Ok(Some(
         crate::daemon::federation::client::ability_contract::PrincipalEnrollmentProof {
-            principal_ura: principal_ura.to_string(),
+            principal_ura: identity.into_string(),
             proof: crate::daemon::federation::client::ability_contract::PrincipalProofRef {
                 kind: kind.to_string(),
                 reference: reference.to_string(),
@@ -1355,14 +1355,14 @@ fn validate_pairing_response(
     {
         anyhow::bail!("pairing response missing username");
     }
-    if envelope
+    let user_id = envelope
         .user_id
         .as_deref()
         .map(str::trim)
         .filter(|v| !v.is_empty())
-        .is_none()
-    {
-        anyhow::bail!("pairing response missing user_id");
+        .ok_or_else(|| anyhow::anyhow!("pairing response missing user_id"))?;
+    if crate::core::identity::is_all_zero_principal_id(user_id) {
+        anyhow::bail!("pairing response carries all-zero user_id");
     }
     Ok(envelope)
 }
@@ -1876,6 +1876,23 @@ mod tests {
     }
 
     #[test]
+    fn validate_pairing_response_rejects_all_zero_user_before_credentials_projection() {
+        let envelope = PairingCredentialEnvelope {
+            node_id: "node".into(),
+            credential_token: "cred".into(),
+            hub_endpoint: "axon://easynet.run:50051".into(),
+            realm: "tenant".into(),
+            deploy_signature: "sig".into(),
+            username: Some("alice".into()),
+            user_id: Some("00000000-0000-0000-0000-000000000000".into()),
+            ..Default::default()
+        };
+        let err =
+            validate_pairing_response(envelope).expect_err("all-zero user_id must fail at pairing");
+        assert!(err.to_string().contains("all-zero user_id"));
+    }
+
+    #[test]
     fn pick_validate_base_prefers_hub_api_when_set() {
         let chosen = pick_validate_base("https://easynet.run", Some("http://localhost:18080"));
         assert_eq!(chosen, "http://localhost:18080");
@@ -2064,6 +2081,19 @@ mod tests {
         )
         .expect_err("partial proof must fail");
         assert!(err.to_string().contains("must be supplied together"));
+    }
+
+    #[test]
+    fn join_principal_enrollment_rejects_all_zero_user() {
+        let error = join_principal_enrollment_from_args(
+            Some("easynet:///r/tenant/user/00000000-0000-0000-0000-000000000000"),
+            Some("enrollment-1"),
+            None,
+            None,
+        )
+        .expect_err("all-zero User enrollment must reject");
+
+        assert!(error.to_string().contains("all-zero principal"));
     }
 
     #[test]

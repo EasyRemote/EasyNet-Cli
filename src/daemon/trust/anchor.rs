@@ -339,7 +339,7 @@ fn canonical_ura_for_role(
     agent_ura: &str,
     role: TrustedAgentRole,
 ) -> Result<String, RealmTrustError> {
-    let parsed = crate::core::ura::parse_ura(agent_ura).map_err(|err| {
+    let identity = crate::core::identity::RuntimeIdentityUra::parse(agent_ura).map_err(|err| {
         RealmTrustError::InvalidUraForRole {
             agent_ura: agent_ura.to_string(),
             role: role_label(role).to_string(),
@@ -347,13 +347,13 @@ fn canonical_ura_for_role(
         }
     })?;
 
-    match (role, parsed.kind) {
+    match (role, identity.kind()) {
         (TrustedAgentRole::Device, crate::core::ura::URAKind::Device)
         | (
             TrustedAgentRole::Backend | TrustedAgentRole::Hub,
             crate::core::ura::URAKind::Authority,
         )
-        | (TrustedAgentRole::User, crate::core::ura::URAKind::User) => Ok(agent_ura.to_string()),
+        | (TrustedAgentRole::User, crate::core::ura::URAKind::User) => Ok(identity.into_string()),
         (_, kind) => Err(RealmTrustError::InvalidUraForRole {
             agent_ura: agent_ura.to_string(),
             role: role_label(role).to_string(),
@@ -410,17 +410,17 @@ fn canonicalize_principal_owner(
 }
 
 fn canonical_ura_for_runtime_principal(agent_ura: &str) -> Result<String, RealmTrustError> {
-    let parsed = crate::core::ura::parse_ura(agent_ura).map_err(|err| {
+    let identity = crate::core::identity::RuntimeIdentityUra::parse(agent_ura).map_err(|err| {
         RealmTrustError::InvalidPrincipalOwner {
             principal_ura: agent_ura.to_string(),
             detail: err.to_string(),
         }
     })?;
-    match parsed.kind {
+    match identity.kind() {
         crate::core::ura::URAKind::Agent
         | crate::core::ura::URAKind::Device
         | crate::core::ura::URAKind::Authority
-        | crate::core::ura::URAKind::User => Ok(agent_ura.to_string()),
+        | crate::core::ura::URAKind::User => Ok(identity.into_string()),
         kind => Err(RealmTrustError::InvalidPrincipalOwner {
             principal_ura: agent_ura.to_string(),
             detail: format!("expected agent, device, hub, or user URA, got {kind:?}"),
@@ -1595,6 +1595,29 @@ added_at_unix_ms = 1714492800000
                 assert_eq!(role, "user");
             }
             other => panic!("expected InvalidUraForRole for user role, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn user_role_rejects_all_zero_principal_before_trust_projection() {
+        let bad = TrustedAgent {
+            agent_ura: "easynet:///r/realm/user/00000000-0000-0000-0000-000000000000".to_string(),
+            public_key_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
+            role: TrustedAgentRole::User,
+            added_at_unix_ms: 1_714_492_800_000,
+            origin_realm: None,
+            hub_endpoint: None,
+            tls_ca_pem_path: None,
+        };
+        match RealmTrustAnchor::from_entries(vec![bad]) {
+            Err(RealmTrustError::InvalidUraForRole { role, detail, .. }) => {
+                assert_eq!(role, "user");
+                assert!(
+                    detail.contains("all-zero principal placeholder"),
+                    "wrong trust projection error: {detail}"
+                );
+            }
+            other => panic!("expected InvalidUraForRole for all-zero User, got {other:?}"),
         }
     }
 

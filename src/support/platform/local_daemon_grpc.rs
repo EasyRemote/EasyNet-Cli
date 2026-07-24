@@ -362,13 +362,9 @@ impl LocalDaemonLoopbackTuplePlan {
 
 #[cfg(feature = "axon-pb")]
 fn normalized_local_daemon_ura(value: &str, field: &str) -> anyhow::Result<String> {
-    let value = value.trim();
-    if value.is_empty() {
-        anyhow::bail!("{field} must not be empty");
-    }
-    crate::core::ura::parse_ura(value)
-        .map_err(|err| anyhow::anyhow!("{field} is not a valid URA: {err}"))?;
-    Ok(value.to_string())
+    crate::core::identity::RuntimeIdentityUra::parse(value)
+        .map(crate::core::identity::RuntimeIdentityUra::into_string)
+        .map_err(|error| anyhow::anyhow!("{field} {error}"))
 }
 
 #[cfg(feature = "axon-pb")]
@@ -1900,6 +1896,39 @@ mod tests {
             Duration::from_secs(5),
         )
         .is_err());
+    }
+
+    #[test]
+    fn loopback_tuple_plan_rejects_all_zero_principal_before_transport() {
+        let placeholder = "00000000-0000-0000-0000-000000000000";
+        let subject = "easynet:///r/acme/resource/user.jobs/job-1";
+
+        for (field, callee, candidate_subject) in [
+            (
+                "callee_ura",
+                format!("easynet:///r/acme/user/{placeholder}"),
+                subject.to_string(),
+            ),
+            (
+                "subject_ura",
+                "easynet:///r/acme/device/edge-1".to_string(),
+                format!("easynet:///r/acme/resource/user.{placeholder}/job-1"),
+            ),
+        ] {
+            let error = LocalDaemonLoopbackTuplePlan::targeted_root_for_subject(
+                "job.run",
+                serde_json::json!({"job": 1}),
+                &callee,
+                &candidate_subject,
+                Duration::from_secs(5),
+            )
+            .expect_err("all-zero principal must fail before local loopback transport");
+            let message = error.to_string();
+            assert!(
+                message.contains(field) && message.contains("all-zero principal placeholder"),
+                "wrong {field} error: {message}"
+            );
+        }
     }
 
     #[test]

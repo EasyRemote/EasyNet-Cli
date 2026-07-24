@@ -238,23 +238,31 @@ fn admitted_join_principal_owner(
         return Ok(None);
     };
     let principal_ura = principal_enrollment.principal_ura.trim();
-    let parsed_principal = crate::core::ura::parse_ura(principal_ura).map_err(|err| {
-        Status::invalid_argument(format!(
-            "federation.join: principal_enrollment.principal_ura is not canonical: {err}"
-        ))
-    })?;
-    if parsed_principal.kind != crate::core::ura::URAKind::User {
+    let principal_identity = crate::core::identity::RuntimeIdentityUra::parse(principal_ura)
+        .map_err(|err| {
+            Status::invalid_argument(format!(
+                "federation.join: principal_enrollment.principal_ura is not admissible: {err}"
+            ))
+        })?;
+    if principal_identity.kind() != crate::core::ura::URAKind::User {
         return Err(Status::invalid_argument(
             "federation.join: principal_enrollment.principal_ura must identify a User URA"
                 .to_string(),
         ));
     }
-    if parsed_principal.realm != request.realm.trim() {
+    if principal_identity.realm() != request.realm.trim() {
         return Err(Status::permission_denied(format!(
             "federation.join: principal realm `{}` must match join realm `{}`",
-            parsed_principal.realm, request.realm
+            principal_identity.realm(),
+            request.realm
         )));
     }
+    let parsed_principal =
+        crate::core::ura::parse_ura(principal_identity.as_str()).map_err(|err| {
+            Status::invalid_argument(format!(
+                "federation.join: principal_enrollment.principal_ura is not canonical: {err}"
+            ))
+        })?;
     let Some(owner_user_id) = parsed_principal.user_id().map(str::to_string) else {
         return Err(Status::invalid_argument(
             "federation.join: principal_enrollment.principal_ura missing user id",
@@ -274,7 +282,7 @@ fn admitted_join_principal_owner(
         principal_ura: request.membership_ura.trim().to_string(),
         owner_username: Some(owner_user_id.clone()),
         owner_user_id,
-        owner_ura: principal_ura.to_string(),
+        owner_ura: principal_identity.into_string(),
         added_at_unix_ms: crate::daemon::invocation::admission::runtime_trust::now_unix_ms(),
     }))
 }

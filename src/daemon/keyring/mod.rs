@@ -302,6 +302,7 @@ impl ManagedSigningInventory {
     /// collapsed. The persisted representation remains a compact vector while
     /// every lookup and page walk uses binary-search/range semantics.
     fn normalize(&mut self) -> Result<(), VaultError> {
+        self.validate_persisted_identity_contract()?;
         self.keys
             .sort_by(|left, right| left.key_id.cmp(&right.key_id));
         if self
@@ -323,6 +324,29 @@ impl ManagedSigningInventory {
             return Err(VaultError::Corrupt(
                 "managed peer inventory contains duplicate URAs".into(),
             ));
+        }
+        Ok(())
+    }
+
+    /// Rehydration is an admission boundary: encrypted legacy state must not
+    /// regain signer or peer authority merely because it predates the current
+    /// mutation guards.
+    fn validate_persisted_identity_contract(&self) -> Result<(), VaultError> {
+        for key in &self.keys {
+            if let Some(subject_ura) = key.bound_subject.as_deref() {
+                validate_persisted_ura(subject_ura, "managed signing subject")?;
+            }
+        }
+        for peer in &self.peers {
+            validate_persisted_ura(&peer.peer_ura, "managed peer URA")?;
+            if let Some(via_hub) = peer.via_hub.as_deref() {
+                let via_hub = parse_persisted_ura(via_hub, "managed peer hub URA")?;
+                if via_hub.kind() != crate::core::ura::URAKind::Authority {
+                    return Err(VaultError::Corrupt(
+                        "managed peer hub URA must be an Authority URA".into(),
+                    ));
+                }
+            }
         }
         Ok(())
     }
@@ -494,6 +518,9 @@ impl Vault {
         let plaintext_entries = plaintext.entries;
         let mut managed_signing = plaintext.managed_signing;
 
+        for entry in &plaintext_entries {
+            validate_persisted_ura(&entry.primary_self, "runtime signing owner")?;
+        }
         let expected_entry_count = plaintext_entries.len();
         let entries = plaintext_entries
             .into_iter()
@@ -1344,9 +1371,33 @@ fn validate_managed_page_limit(limit: Option<usize>) -> Result<usize, VaultError
 
 fn validate_managed_ura(value: &str, field: &str) -> Result<String, VaultError> {
     let value = validate_managed_text(value, field, MAX_MANAGED_SIGNING_URA_BYTES)?;
-    crate::core::ura::parse_ura(&value)
-        .map_err(|error| VaultError::Policy(format!("{field} is not a canonical URA: {error}")))?;
-    Ok(value)
+    crate::core::identity::RuntimeIdentityUra::parse(value)
+        .map(crate::core::identity::RuntimeIdentityUra::into_string)
+        .map_err(|error| {
+            VaultError::Policy(format!("{field} is not an admissible runtime URA: {error}"))
+        })
+}
+
+fn parse_persisted_ura(
+    value: &str,
+    field: &str,
+) -> Result<crate::core::identity::RuntimeIdentityUra, VaultError> {
+    if value.len() > MAX_MANAGED_SIGNING_URA_BYTES {
+        return Err(VaultError::Corrupt(format!(
+            "{field} exceeds {MAX_MANAGED_SIGNING_URA_BYTES} bytes"
+        )));
+    }
+    if value.trim() != value {
+        return Err(VaultError::Corrupt(format!(
+            "{field} contains surrounding whitespace"
+        )));
+    }
+    crate::core::identity::RuntimeIdentityUra::parse(value)
+        .map_err(|error| VaultError::Corrupt(format!("{field} is not admissible: {error}")))
+}
+
+fn validate_persisted_ura(value: &str, field: &str) -> Result<(), VaultError> {
+    parse_persisted_ura(value, field).map(|_| ())
 }
 
 fn validate_hub_ura(value: &str, field: &str) -> Result<String, VaultError> {
@@ -1760,6 +1811,19 @@ mod tests {
         assert_ne!(
             vault.derive_pubkey(&device_ura).unwrap().to_bytes(),
             vault.derive_pubkey(&hub_ura).unwrap().to_bytes()
+        );
+    }
+
+    #[test]
+    fn managed_keyring_subject_rejects_all_zero_user_before_persistence() {
+        let error = validate_managed_ura(
+            "easynet:///r/localhost/user/00000000-0000-0000-0000-000000000000",
+            "managed signing subject",
+        )
+        .expect_err("all-zero User must not become a managed keyring subject");
+        assert!(
+            error.to_string().contains("all-zero principal placeholder"),
+            "wrong keyring validation error: {error}"
         );
     }
 
@@ -2297,6 +2361,24 @@ mod tests {
 
         write_encrypted_shape(
             br#"{"entries":[],"managed_signing":{"keys":[],"peers":[]},"legacy":true}"#,
+            KeyringFile::CURRENT_VERSION,
+        );
+        assert!(matches!(
+            Vault::open(&path, &source),
+            Err(VaultError::Corrupt(_))
+        ));
+
+        write_encrypted_shape(
+            br#"{"entries":[{"primary_self":"easynet:///r/example/user/00000000-0000-0000-0000-000000000000","seed_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}],"managed_signing":{"keys":[],"peers":[]}}"#,
+            KeyringFile::CURRENT_VERSION,
+        );
+        assert!(matches!(
+            Vault::open(&path, &source),
+            Err(VaultError::Corrupt(_))
+        ));
+
+        write_encrypted_shape(
+            br#"{"entries":[],"managed_signing":{"keys":[],"peers":[{"peer_ura":"easynet:///r/example/user/00000000-0000-0000-0000-000000000000","fingerprint_b64":"fingerprint","public_key_b64":"public","via_hub":null,"added_unix_ms":1,"last_seen_unix_ms":1}]}}"#,
             KeyringFile::CURRENT_VERSION,
         );
         assert!(matches!(

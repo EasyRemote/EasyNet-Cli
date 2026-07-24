@@ -2455,51 +2455,58 @@ fn scope_matches(pattern: &str, ability: &str) -> bool {
 /// or empty. Shared by every entrypoint so the wire-level
 /// "caller URA required" message is identical across surfaces.
 fn caller_ura_required(envelope: &Envelope) -> Result<&str, Status> {
-    envelope
-        .caller
-        .as_ref()
-        .map(|c| c.ura.trim())
-        .filter(|u| !u.is_empty())
-        .ok_or_else(|| {
-            Status::invalid_argument(format!(
-                "{REASON_ENVELOPE_INCOMPLETE}: envelope.caller.ura is required \
-                 (Invariant 1: caller URA required)"
-            ))
-        })
+    required_envelope_identity_ura(
+        envelope.caller.as_ref().map(|caller| caller.ura.as_str()),
+        "caller",
+        "caller URA required",
+    )
 }
 
 /// Extract `callee.ura` and reject as `invalid_argument` if absent
 /// or empty. Authority verification must not synthesize an audience
 /// from an incomplete canonical tuple.
 fn callee_ura_required(envelope: &Envelope) -> Result<&str, Status> {
-    envelope
-        .callee
-        .as_ref()
-        .map(|c| c.ura.trim())
-        .filter(|u| !u.is_empty())
-        .ok_or_else(|| {
-            Status::invalid_argument(format!(
-                "{REASON_ENVELOPE_INCOMPLETE}: envelope.callee.ura is required \
-                 (Invariant 1: callee URA required)"
-            ))
-        })
+    required_envelope_identity_ura(
+        envelope.callee.as_ref().map(|callee| callee.ura.as_str()),
+        "callee",
+        "callee URA required",
+    )
 }
 
 /// Extract `subject.ura` and reject as `invalid_argument` if absent
 /// or empty. Authority verification must compare explicit subject
 /// facts rather than treating a missing subject as an empty owner.
 fn subject_ura_required(envelope: &Envelope) -> Result<&str, Status> {
-    envelope
-        .subject
-        .as_ref()
-        .map(|s| s.ura.trim())
-        .filter(|u| !u.is_empty())
+    required_envelope_identity_ura(
+        envelope
+            .subject
+            .as_ref()
+            .map(|subject| subject.ura.as_str()),
+        "subject",
+        "subject URA required",
+    )
+}
+
+fn required_envelope_identity_ura<'a>(
+    value: Option<&'a str>,
+    field: &str,
+    invariant: &str,
+) -> Result<&'a str, Status> {
+    let value = value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
         .ok_or_else(|| {
             Status::invalid_argument(format!(
-                "{REASON_ENVELOPE_INCOMPLETE}: envelope.subject.ura is required \
-                 (Invariant 1: subject URA required)"
+                "{REASON_ENVELOPE_INCOMPLETE}: envelope.{field}.ura is required \
+             (Invariant 1: {invariant})"
             ))
-        })
+        })?;
+    crate::core::identity::RuntimeIdentityUra::parse(value).map_err(|error| {
+        Status::invalid_argument(format!(
+            "{REASON_ENVELOPE_INCOMPLETE}: envelope.{field}.ura {error}"
+        ))
+    })?;
+    Ok(value)
 }
 
 fn current_unix_ms() -> i64 {
@@ -2903,6 +2910,56 @@ mod tests {
             !err.message().contains(REASON_AUTHORITY_AUDIENCE_VIOLATION),
             "missing callee must not be reported as audience violation: {err}"
         );
+    }
+
+    #[test]
+    fn raw_envelope_tuple_rejects_all_zero_principal_identities() {
+        let placeholder = "00000000-0000-0000-0000-000000000000";
+        let caller = "easynet:///r/policy/agent/alice.delegate";
+        let callee = "easynet:///r/policy/agent/service.worker";
+        let subject = "easynet:///r/policy/resource/user.alice/document/report";
+
+        for (field, envelope, validate) in [
+            (
+                "caller",
+                authority_wire_envelope(
+                    Some(&format!("easynet:///r/policy/user/{placeholder}")),
+                    Some(callee),
+                    Some(subject),
+                ),
+                caller_ura_required as fn(&Envelope) -> Result<&str, Status>,
+            ),
+            (
+                "callee",
+                authority_wire_envelope(
+                    Some(caller),
+                    Some(&format!("easynet:///r/policy/user/{placeholder}")),
+                    Some(subject),
+                ),
+                callee_ura_required as fn(&Envelope) -> Result<&str, Status>,
+            ),
+            (
+                "subject",
+                authority_wire_envelope(
+                    Some(caller),
+                    Some(callee),
+                    Some(&format!(
+                        "easynet:///r/policy/resource/user.{placeholder}/document/report"
+                    )),
+                ),
+                subject_ura_required as fn(&Envelope) -> Result<&str, Status>,
+            ),
+        ] {
+            let error = validate(&envelope)
+                .expect_err("raw all-zero identity must fail before authority verification");
+            assert_eq!(error.code(), Code::InvalidArgument);
+            assert!(
+                error.message().contains(REASON_ENVELOPE_INCOMPLETE)
+                    && error.message().contains(&format!("envelope.{field}.ura"))
+                    && error.message().contains("all-zero principal placeholder"),
+                "wrong {field} error: {error}"
+            );
+        }
     }
 
     struct RejectingFederationClient;

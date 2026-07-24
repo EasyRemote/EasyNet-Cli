@@ -33,7 +33,7 @@ use std::{sync::Arc, time::Duration};
 use anyhow::{anyhow, bail, Context};
 use serde_json::{json, Value};
 
-use crate::core::ura::{parse_ura, URAKind};
+use crate::core::ura::URAKind;
 use crate::daemon::ability::CallMode;
 use crate::daemon::invocation::routing::target::InvocationCausalContext;
 use crate::daemon::invocation::{
@@ -106,7 +106,7 @@ impl std::error::Error for RemoteInvocationFailure {}
 /// whose canonical protocol identity is `easynet:///r/<realm>/authority`.
 pub fn parse_node_ura(node: &str) -> anyhow::Result<String> {
     let trimmed = node.trim();
-    let parsed = parse_ura(trimmed).map_err(|err| {
+    let identity = crate::core::identity::RuntimeIdentityUra::parse(trimmed).map_err(|err| {
         anyhow::anyhow!(
             "--node `{trimmed}` is not a canonical Axon Device or Hub URA: {err}. \
              A bare hostname or `https://...` URL is not accepted. \
@@ -114,9 +114,9 @@ pub fn parse_node_ura(node: &str) -> anyhow::Result<String> {
         )
     })?;
 
-    match parsed.kind {
-        URAKind::Device => Ok(trimmed.to_string()),
-        URAKind::Authority => Ok(trimmed.to_string()),
+    match identity.kind() {
+        URAKind::Device => Ok(identity.into_string()),
+        URAKind::Authority => Ok(identity.into_string()),
         other => bail!(
             "--node `{trimmed}` is a canonical Axon URA, but not a Device or Hub target. \
              Got kind={other}. \
@@ -1028,13 +1028,9 @@ pub(crate) fn invoke_remote_target_bidi_json_frames(
 }
 
 fn checked_remote_invocation_ura(value: String, field: &str) -> anyhow::Result<String> {
-    let value = value.trim();
-    if value.is_empty() {
-        bail!("remote invocation {field} URA must not be empty");
-    }
-    crate::core::ura::parse_ura(value)
-        .map_err(|err| anyhow!("remote invocation {field} URA `{value}` is invalid: {err}"))?;
-    Ok(value.to_string())
+    crate::core::identity::RuntimeIdentityUra::parse(value)
+        .map(crate::core::identity::RuntimeIdentityUra::into_string)
+        .map_err(|error| anyhow!("remote invocation {field} URA {error}"))
 }
 
 pub(crate) fn ensure_completed_invoke_response(
@@ -1138,28 +1134,29 @@ fn validate_remote_execution_target(
     execution_target_ura: &str,
     selector: &crate::core::ura::AbilitySelector,
 ) -> anyhow::Result<()> {
-    let target = parse_ura(execution_target_ura)
+    let target = crate::core::identity::RuntimeIdentityUra::parse(execution_target_ura)
         .map_err(|err| anyhow!("invalid target URA `{execution_target_ura}`: {err}"))?;
-    let owner = parse_ura(selector.owner_ura()).map_err(|err| {
-        anyhow!(
-            "invalid ability owner URA `{}`: {err}",
-            selector.owner_ura()
-        )
-    })?;
-    if owner.realm != target.realm {
+    let owner =
+        crate::core::identity::RuntimeIdentityUra::parse(selector.owner_ura()).map_err(|err| {
+            anyhow!(
+                "invalid ability owner URA `{}`: {err}",
+                selector.owner_ura()
+            )
+        })?;
+    if owner.realm() != target.realm() {
         bail!(
             "ability URA `{}` belongs to realm `{}`, but execution target `{}` belongs to realm `{}`",
             selector.ability_ura(),
-            owner.realm,
+            owner.realm(),
             execution_target_ura,
-            target.realm
+            target.realm()
         );
     }
 
-    match (target.kind, selector.owner_kind()) {
+    match (target.kind(), selector.owner_kind()) {
         (URAKind::Device, "agent") => Ok(()),
         (URAKind::Device, "device") => {
-            if selector.owner_ura() == execution_target_ura.trim() {
+            if selector.owner_ura() == target.as_str() {
                 Ok(())
             } else {
                 bail!(
@@ -1171,7 +1168,7 @@ fn validate_remote_execution_target(
             }
         }
         (URAKind::Authority, "hub") => {
-            if selector.owner_ura() == execution_target_ura.trim() {
+            if selector.owner_ura() == target.as_str() {
                 Ok(())
             } else {
                 bail!(
@@ -1205,9 +1202,9 @@ fn validate_remote_execution_target(
 }
 
 fn validate_remote_target_ura(target_ura: &str) -> anyhow::Result<()> {
-    let parsed = parse_ura(target_ura)
+    let identity = crate::core::identity::RuntimeIdentityUra::parse(target_ura)
         .map_err(|err| anyhow::anyhow!("invalid target URA `{target_ura}`: {err}"))?;
-    match parsed.kind {
+    match identity.kind() {
         URAKind::Device => Ok(()),
         URAKind::Authority => Ok(()),
         other => bail!("target URA `{target_ura}` must identify a Device or Hub, got kind={other}"),
@@ -1234,6 +1231,9 @@ pub fn invoke_federation_discover_for_user(
 ) -> anyhow::Result<Vec<Value>> {
     if local_user_id_filter.trim().is_empty() {
         anyhow::bail!("federation.discover user filter requires a non-empty local_user_id");
+    }
+    if crate::core::identity::is_all_zero_principal_id(local_user_id_filter) {
+        anyhow::bail!("federation.discover user filter rejects the all-zero principal placeholder");
     }
     invoke_federation_discover_with_user_filter(agent_ura_filter, Some(local_user_id_filter))
 }
@@ -1664,6 +1664,54 @@ mod tests {
             Duration::ZERO,
         );
         assert!(zero_timeout.is_err());
+    }
+
+    #[test]
+    fn remote_tuple_rejects_all_zero_principals_before_signer_or_transport() {
+        let descriptor = "easynet:///r/realm/ability/device.node-a.echo@2.4.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke";
+        let target = RemoteAbilityInvocationTarget::from_descriptor_ref(
+            "easynet:///r/realm/device/node-a",
+            descriptor,
+        )
+        .expect("target");
+        let placeholder = "00000000-0000-0000-0000-000000000000";
+
+        for (field, caller, subject) in [
+            (
+                "caller",
+                format!("easynet:///r/realm/user/{placeholder}"),
+                target.callee_ura().to_string(),
+            ),
+            (
+                "caller-declared subject",
+                "easynet:///r/realm/device/caller".to_string(),
+                format!("easynet:///r/realm/resource/user.{placeholder}/task/read"),
+            ),
+        ] {
+            let error = RemoteInvocationTuplePlan::public_explicit(
+                &target,
+                caller,
+                subject,
+                [0x54; 16],
+                CausalContext::None,
+                Value::Null,
+                Duration::from_secs(7),
+            )
+            .expect_err("all-zero principal must fail at remote tuple construction");
+            let message = error.to_string();
+            assert!(
+                message.contains(field) && message.contains("all-zero principal placeholder"),
+                "wrong {field} error: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn federation_discover_rejects_all_zero_user_filter_before_daemon_io() {
+        let error =
+            invoke_federation_discover_for_user(None, crate::core::identity::ALL_ZERO_PRINCIPAL_ID)
+                .expect_err("all-zero user filter must reject before local daemon transport");
+        assert!(error.to_string().contains("all-zero principal"));
     }
 
     #[test]

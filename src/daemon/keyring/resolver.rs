@@ -23,8 +23,6 @@
 
 use std::sync::Arc;
 
-use crate::core::ura::user_realm_from_ura;
-
 /// Resolver for "is this cross-realm URA bound to a known local user?"
 ///
 /// This is a directory-visibility resolver, not a cryptographic key resolver.
@@ -89,9 +87,13 @@ impl FederatedUserResolver {
     /// Resolve a URA to a federated-binding outcome.
     #[must_use]
     pub fn resolve_user(&self, user_ura: &str) -> FederatedUserOutcome {
-        let Some(realm) = user_realm_from_ura(user_ura) else {
+        let Ok(identity) = crate::core::identity::RuntimeIdentityUra::parse(user_ura) else {
             return FederatedUserOutcome::Malformed;
         };
+        if identity.kind() != crate::core::ura::URAKind::User {
+            return FederatedUserOutcome::Malformed;
+        }
+        let realm = identity.realm().to_string();
         if realm == self.local_realm {
             return FederatedUserOutcome::Local;
         }
@@ -154,6 +156,15 @@ mod tests {
         let bindings = Arc::new(FederatedBindingsStore::in_memory());
         let resolver = FederatedUserResolver::new("realm-b", bindings);
         let outcome = resolver.resolve_user("not-a-canonical-ura");
+        assert_eq!(outcome, FederatedUserOutcome::Malformed);
+    }
+
+    #[test]
+    fn federated_user_resolver_all_zero_user_returns_malformed() {
+        let bindings = Arc::new(FederatedBindingsStore::in_memory());
+        let resolver = FederatedUserResolver::new("realm-b", bindings);
+        let outcome =
+            resolver.resolve_user("easynet:///r/realm-b/user/00000000-0000-0000-0000-000000000000");
         assert_eq!(outcome, FederatedUserOutcome::Malformed);
     }
 

@@ -70,19 +70,25 @@ fn active_user_runtime_signing_identity(
 }
 
 fn validate_user_ura(user_ura: &str) -> Result<(), SelfIdentityError> {
-    let user_ura = user_ura.trim();
-    if user_ura.is_empty() {
-        return Err(SelfIdentityError::InvalidOwner);
-    }
-    let parsed =
-        crate::core::ura::parse_ura(user_ura).map_err(|error| SelfIdentityError::Rejected {
-            kind: "invalid_argument".into(),
-            message: format!("managed user signing identity User URA is invalid: {error}"),
-        })?;
-    if parsed.kind != crate::core::ura::URAKind::User {
+    let identity =
+        crate::core::identity::RuntimeIdentityUra::parse(user_ura).map_err(
+            |error| match error {
+                crate::core::identity::RuntimeIdentityUraError::Empty => {
+                    SelfIdentityError::InvalidOwner
+                }
+                error => SelfIdentityError::Rejected {
+                    kind: "invalid_argument".into(),
+                    message: format!("managed user signing identity User URA is invalid: {error}"),
+                },
+            },
+        )?;
+    if identity.kind() != crate::core::ura::URAKind::User {
         return Err(SelfIdentityError::Rejected {
             kind: "invalid_argument".into(),
-            message: format!("managed user signing identity requires a User URA, got `{user_ura}`"),
+            message: format!(
+                "managed user signing identity requires a User URA, got `{}`",
+                identity.as_str()
+            ),
         });
     }
     Ok(())

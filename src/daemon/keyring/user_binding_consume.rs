@@ -59,6 +59,24 @@ impl UserBindingConsumeRequest {
         if local_user_id.is_empty() {
             return Err(anyhow!("local_user_id must be non-empty"));
         }
+        if crate::core::identity::is_all_zero_principal_id(&local_user_id) {
+            return Err(anyhow!(
+                "local_user_id must not be the all-zero principal placeholder"
+            ));
+        }
+        let source_user = crate::core::identity::RuntimeIdentityUra::parse(&token.source_user_ura)
+            .map_err(|error| anyhow!("source_user_ura is not admissible: {error}"))?;
+        if source_user.as_str() != token.source_user_ura {
+            return Err(anyhow!(
+                "source_user_ura must not contain surrounding whitespace"
+            ));
+        }
+        if source_user.kind() != crate::core::ura::URAKind::User {
+            return Err(anyhow!("source_user_ura must be a User URA"));
+        }
+        if source_user.realm() != token.source_realm {
+            return Err(anyhow!("source_user_ura realm does not match source_realm"));
+        }
         Ok(Self {
             token,
             self_realm,
@@ -222,6 +240,32 @@ mod tests {
                 .find_local_user("realm-a", "easynet:///r/realm-a/user/user-c")
                 .as_deref(),
             Some("user-c-on-realm-b")
+        );
+    }
+
+    #[test]
+    fn consume_request_rejects_all_zero_local_or_source_user() {
+        assert!(UserBindingConsumeRequest::new(
+            signed_token("realm-b", 1_714_500_000_000),
+            "realm-b",
+            crate::core::identity::ALL_ZERO_PRINCIPAL_ID,
+            1_714_500_001_000,
+        )
+        .is_err());
+
+        let signing = SigningKey::from_bytes(&[0x42; 32]);
+        let mut token = UserBindingToken::new_unsigned(
+            "realm-a",
+            "easynet:///r/realm-a/user/00000000-0000-0000-0000-000000000000",
+            signing.verifying_key().to_bytes(),
+            "realm-b",
+            1_714_500_000_000,
+            [0xAA; USER_BINDING_NONCE_LEN],
+        );
+        sign_user_binding_token(&mut token, &signing);
+        assert!(
+            UserBindingConsumeRequest::new(token, "realm-b", "local-user", 1_714_500_001_000,)
+                .is_err()
         );
     }
 

@@ -47,6 +47,29 @@ pub struct AuthorityProof {
 }
 
 impl AuthorityProof {
+    pub(crate) fn validate_identity_contract(&self) -> Result<(), &'static str> {
+        validate_nonzero_user_id(&self.owner_user_id, "owner_user_id")?;
+        if self.principal_kind == PrincipalKind::User {
+            validate_nonzero_user_id(&self.principal_id, "principal_id")?;
+        }
+        if let Some(session_owner_user_id) = self.session_owner_user_id.as_deref() {
+            validate_nonzero_user_id(session_owner_user_id, "session_owner_user_id")?;
+        }
+        for (field, value) in [
+            ("callee_ura", self.callee_ura.as_str()),
+            ("subject_ura", self.subject_ura.as_str()),
+            ("issuer_ura", self.issuer_ura.as_str()),
+            ("audience_ura", self.audience_ura.as_str()),
+        ] {
+            let identity =
+                crate::core::identity::RuntimeIdentityUra::parse(value).map_err(|_| field)?;
+            if identity.as_str() != value {
+                return Err(field);
+            }
+        }
+        Ok(())
+    }
+
     #[must_use]
     pub fn canonical_material(&self) -> Value {
         let abilities = normalized_followup_abilities(&self.allowed_followup_abilities);
@@ -174,6 +197,10 @@ impl AuthorityProofVerifier {
         resolver: &dyn AuthorityProofIssuerResolver,
     ) -> Result<(), AuthorityProofDenyReason> {
         let proof = proof.ok_or(AuthorityProofDenyReason::AuthorityProofMissing)?;
+        proof
+            .validate_identity_contract()
+            .map_err(|_| AuthorityProofDenyReason::AuthorityProofMismatch)?;
+        validate_verification_context_identity(context)?;
         verify_not_expired(proof, context.now)?;
         verify_invocation_binding(proof, context)?;
         verify_signature(proof, resolver)?;
@@ -185,6 +212,40 @@ impl AuthorityProofVerifier {
         }
         Ok(())
     }
+}
+
+fn validate_verification_context_identity(
+    context: &AuthorityProofVerificationContext<'_>,
+) -> Result<(), AuthorityProofDenyReason> {
+    validate_nonzero_user_id(context.owner_user_id, "owner_user_id")
+        .map_err(|_| AuthorityProofDenyReason::AuthorityProofMismatch)?;
+    if context.principal_kind == PrincipalKind::User {
+        validate_nonzero_user_id(context.principal_id, "principal_id")
+            .map_err(|_| AuthorityProofDenyReason::AuthorityProofMismatch)?;
+    }
+    if let Some(session_owner_user_id) = context.session_owner_user_id {
+        validate_nonzero_user_id(session_owner_user_id, "session_owner_user_id")
+            .map_err(|_| AuthorityProofDenyReason::AuthorityProofMismatch)?;
+    }
+    for value in [
+        context.callee_ura,
+        context.subject_ura,
+        context.audience_ura,
+    ] {
+        let identity = crate::core::identity::RuntimeIdentityUra::parse(value)
+            .map_err(|_| AuthorityProofDenyReason::AuthorityProofMismatch)?;
+        if identity.as_str() != value {
+            return Err(AuthorityProofDenyReason::AuthorityProofMismatch);
+        }
+    }
+    Ok(())
+}
+
+fn validate_nonzero_user_id(value: &str, field: &'static str) -> Result<(), &'static str> {
+    if value.trim().is_empty() || crate::core::identity::is_all_zero_principal_id(value) {
+        return Err(field);
+    }
+    Ok(())
 }
 
 fn verify_not_expired(
@@ -545,6 +606,26 @@ mod tests {
         let err = AuthorityProofVerifier::verify(Some(&proof), &context, &resolver)
             .expect_err("principal kind mismatch");
         assert_eq!(err, AuthorityProofDenyReason::AuthorityProofMismatch);
+    }
+
+    #[test]
+    fn verifier_rejects_all_zero_owner_and_session_identity_facts() {
+        let (mut proof, _resolver) = signed_proof();
+        proof.owner_user_id = crate::core::identity::ALL_ZERO_PRINCIPAL_ID.to_string();
+        let resolver = resign(&mut proof);
+        assert_eq!(
+            AuthorityProofVerifier::verify(Some(&proof), &context(), &resolver),
+            Err(AuthorityProofDenyReason::AuthorityProofMismatch)
+        );
+
+        let (mut proof, _resolver) = signed_proof();
+        proof.session_owner_user_id =
+            Some(crate::core::identity::ALL_ZERO_PRINCIPAL_ID.to_string());
+        let resolver = resign(&mut proof);
+        assert_eq!(
+            AuthorityProofVerifier::verify(Some(&proof), &context(), &resolver),
+            Err(AuthorityProofDenyReason::AuthorityProofMismatch)
+        );
     }
 
     #[test]

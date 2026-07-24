@@ -311,17 +311,18 @@ enum RuntimeCallerCustody {
 
 impl RuntimeCallerCustody {
     fn classify(owner_ura: &str) -> Result<Self, SelfIdentityError> {
-        let owner_ura = owner_ura.trim();
-        if owner_ura.is_empty() {
-            return Err(SelfIdentityError::InvalidOwner);
-        }
-        let parsed = crate::core::ura::parse_ura(owner_ura).map_err(|error| {
-            SelfIdentityError::Rejected {
-                kind: "invalid_argument".into(),
-                message: format!("runtime caller signer owner URA is invalid: {error}"),
-            }
-        })?;
-        match parsed.kind {
+        let identity = crate::core::identity::RuntimeIdentityUra::parse(owner_ura).map_err(
+            |error| match error {
+                crate::core::identity::RuntimeIdentityUraError::Empty => {
+                    SelfIdentityError::InvalidOwner
+                }
+                error => SelfIdentityError::Rejected {
+                    kind: "invalid_argument".into(),
+                    message: format!("runtime caller signer owner URA is invalid: {error}"),
+                },
+            },
+        )?;
+        match identity.kind() {
             crate::core::ura::URAKind::User => Ok(Self::ManagedUser),
             crate::core::ura::URAKind::Agent
             | crate::core::ura::URAKind::Device
@@ -1410,6 +1411,12 @@ mod tests {
         );
         assert!(matches!(
             RuntimeCallerCustody::classify("not-a-ura"),
+            Err(SelfIdentityError::Rejected { kind, .. }) if kind == "invalid_argument"
+        ));
+        assert!(matches!(
+            RuntimeCallerCustody::classify(
+                "easynet:///r/acme/user/00000000-0000-0000-0000-000000000000"
+            ),
             Err(SelfIdentityError::Rejected { kind, .. }) if kind == "invalid_argument"
         ));
         assert!(matches!(

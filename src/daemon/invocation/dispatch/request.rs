@@ -1133,16 +1133,9 @@ fn validate_bidi_streams(streams: &[axon_sdk::pb::axon::v1::StreamDescriptor]) -
 
 #[cfg(feature = "axon-pb")]
 fn checked_ura(value: String, field: &str) -> Result<String> {
-    let value = value.trim().to_string();
-    if value.is_empty() {
-        return Err(DaemonError::InvalidInvocation(format!(
-            "{field} must not be empty"
-        )));
-    }
-    crate::core::ura::parse_ura(&value).map_err(|err| {
-        DaemonError::InvalidInvocation(format!("{field} is not a valid URA: {err}"))
-    })?;
-    Ok(value)
+    crate::core::identity::RuntimeIdentityUra::parse(value)
+        .map(crate::core::identity::RuntimeIdentityUra::into_string)
+        .map_err(|error| DaemonError::InvalidInvocation(format!("{field} {error}")))
 }
 
 #[cfg(feature = "axon-pb")]
@@ -1573,6 +1566,50 @@ mod tests {
         )
         .unwrap_err();
         assert!(format!("{err}").contains("caller_ura"));
+    }
+
+    #[test]
+    fn invocation_builder_rejects_all_zero_principal_in_every_tuple_identity() {
+        let caller = "easynet:///r/acme/device/dev-a";
+        let hub = crate::core::ura::hub_ura("acme");
+        let subject = "easynet:///r/acme/resource/user.alice/runtime-state/read";
+        let observe_ref = descriptor_ref(&hub, "observe.health", "2.4.0");
+        let placeholder = "00000000-0000-0000-0000-000000000000";
+
+        for (field, candidate_caller, candidate_callee, candidate_subject) in [
+            (
+                "caller_ura",
+                format!("easynet:///r/acme/user/{placeholder}"),
+                hub.clone(),
+                subject.to_string(),
+            ),
+            (
+                "callee_ura",
+                caller.to_string(),
+                format!("easynet:///r/acme/user/{placeholder}"),
+                subject.to_string(),
+            ),
+            (
+                "subject_ura",
+                caller.to_string(),
+                hub.clone(),
+                format!("easynet:///r/acme/resource/user.{placeholder}/runtime-state/read"),
+            ),
+        ] {
+            let error = DaemonInvocation::builder(
+                candidate_caller,
+                candidate_callee,
+                &observe_ref,
+                candidate_subject,
+                axon_sdk::invocation::InvocationDerivationPolicy::FreshRoot,
+            )
+            .expect_err("all-zero principal must fail before tuple construction");
+            let message = error.to_string();
+            assert!(
+                message.contains(field) && message.contains("all-zero principal placeholder"),
+                "wrong {field} error: {message}"
+            );
+        }
     }
 
     #[test]

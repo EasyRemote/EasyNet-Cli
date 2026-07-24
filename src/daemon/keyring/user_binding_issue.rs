@@ -36,7 +36,6 @@ use super::user_binding_chain::{
     canonical_user_binding_bytes, UserBindingToken, ED25519_PUBKEY_LEN, USER_BINDING_NONCE_LEN,
 };
 use super::ManagedSigningStatus;
-use crate::core::ura::user_realm_from_ura;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UserBindingIssueRequest {
@@ -53,12 +52,18 @@ impl UserBindingIssueRequest {
         target_realm: impl Into<String>,
         issued_at_unix_ms: u64,
     ) -> Result<Self> {
+        let source_user_ura =
+            crate::core::identity::RuntimeIdentityUra::parse(source_user_ura.into())
+                .map_err(|error| anyhow!("source_user_ura is not admissible: {error}"))?;
+        if source_user_ura.kind() != crate::core::ura::URAKind::User {
+            return Err(anyhow!("source_user_ura must be a User URA"));
+        }
         let target_realm = target_realm.into();
         if target_realm.is_empty() {
             return Err(anyhow!("target_realm must be non-empty"));
         }
         Ok(Self {
-            source_user_ura: source_user_ura.into(),
+            source_user_ura: source_user_ura.into_string(),
             managed_key_id: managed_key_id.into(),
             target_realm,
             issued_at_unix_ms,
@@ -113,13 +118,9 @@ impl<'a, P: ManagedSigningIssuerProvider + ?Sized> UserBindingIssueStateMachine<
     }
 
     fn source_realm(&self) -> Result<String> {
-        user_realm_from_ura(&self.request.source_user_ura).ok_or_else(|| {
-            anyhow!(
-                "device-subject {:?} is not a canonical \
-                 easynet:///r/<realm>/user/<id> URA",
-                self.request.source_user_ura
-            )
-        })
+        crate::core::identity::RuntimeIdentityUra::parse(&self.request.source_user_ura)
+            .map(|identity| identity.realm().to_string())
+            .map_err(|error| anyhow!("source_user_ura is not admissible: {error}"))
     }
 
     fn ensure_cross_realm_target(&self, source_realm: &str) -> Result<()> {
@@ -247,6 +248,17 @@ mod tests {
             .expect_err("unbound signing key rejects");
 
         assert!(error.to_string().contains("does not bind"));
+    }
+
+    #[test]
+    fn issue_request_rejects_all_zero_source_user() {
+        assert!(UserBindingIssueRequest::new(
+            "easynet:///r/realm-a/user/00000000-0000-0000-0000-000000000000",
+            "key-1",
+            "realm-b",
+            1_714_500_000_000,
+        )
+        .is_err());
     }
 
     fn encode_b64(bytes: &[u8]) -> String {

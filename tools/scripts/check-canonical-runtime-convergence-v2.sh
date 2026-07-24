@@ -960,11 +960,11 @@ check_core_ura_realm_projection_contract() {
   if rg -n 'duplicated rather than re-exported|federated fallback' "$keyring_abilities" "$keyring_issue" "$keyring_resolver"; then
     fail "keyring preserves retired duplicated/fallback URA projection vocabulary"
   fi
-  if ! rg -q 'user_realm_from_ura\(' "$keyring_issue"; then
-    fail "keyring federated token issuance state machine must consume core::ura::user_realm_from_ura"
+  if ! rg -q 'RuntimeIdentityUra::parse' "$keyring_issue"; then
+    fail "keyring federated token issuance state machine must consume the admissible runtime identity value object"
   fi
-  if ! rg -q 'user_realm_from_ura\(' "$keyring_resolver"; then
-    fail "keyring federated user resolver must consume core::ura::user_realm_from_ura"
+  if ! rg -q 'RuntimeIdentityUra::parse' "$keyring_resolver"; then
+    fail "keyring federated user resolver must consume the admissible runtime identity value object"
   fi
   if rg -n 'pub\(crate\)\s+fn\s+parse_realm_from_ura' "$runtime_trust" "$register_pubkey"; then
     fail "admission modules must not expose generic parse_realm_from_ura parser shims"
@@ -1478,7 +1478,31 @@ ffi = root / "src/ffi/invocation/mod.rs"
 auth = root / "src/cli/commands/auth.rs"
 config = root / "src/daemon/persistence/config.rs"
 authority = root / "src/daemon/invocation/admission/authority_metadata.rs"
-for path in (core, ffi, auth, config, authority):
+request = root / "src/daemon/invocation/dispatch/request.rs"
+invocation_wire = root / "src/daemon/invocation/dispatch/invocation_wire.rs"
+remote_invoke = root / "src/daemon/invocation/routing/remote_invoke.rs"
+local_grpc = root / "src/support/platform/local_daemon_grpc.rs"
+local_invoke = root / "src/support/platform/local_invoke.rs"
+keyring = root / "src/daemon/keyring/mod.rs"
+federated_bindings = root / "src/daemon/keyring/federated_bindings.rs"
+policy_store = root / "src/daemon/persistence/access_control.rs"
+authority_proof = root / "src/daemon/invocation/admission/authority_proof.rs"
+for path in (
+    core,
+    ffi,
+    auth,
+    config,
+    authority,
+    request,
+    invocation_wire,
+    remote_invoke,
+    local_grpc,
+    local_invoke,
+    keyring,
+    federated_bindings,
+    policy_store,
+    authority_proof,
+):
     if not path.exists():
         raise SystemExit(f"rust_all_zero_principal_guard:missing:{path.relative_to(root).as_posix()}")
 
@@ -1487,8 +1511,11 @@ required_core = (
     'pub const ALL_ZERO_PRINCIPAL_ID: &str = "00000000-0000-0000-0000-000000000000";',
     "pub fn is_all_zero_principal_id(value: &str) -> bool",
     "pub fn contains_all_zero_principal_placeholder(value: &str) -> bool",
+    "pub struct RuntimeIdentityUra",
+    "pub fn parse(value: impl AsRef<str>) -> Result<Self, RuntimeIdentityUraError>",
     "exact_all_zero_principal_id_trims_and_ignores_case",
     "embedded_all_zero_principal_placeholder_detects_ura_fields",
+    "runtime_identity_ura_normalizes_and_rejects_placeholder_principals",
 )
 for token in required_core:
     if token not in core_text:
@@ -1499,11 +1526,34 @@ required_callers = {
     "src/cli/commands/auth.rs": "crate::core::identity::is_all_zero_principal_id(&self.user_id)",
     "src/daemon/persistence/config.rs": "crate::core::identity::is_all_zero_principal_id(user_id)",
     "src/daemon/invocation/admission/authority_metadata.rs": "crate::core::identity::contains_all_zero_principal_placeholder(value)",
+    "src/daemon/invocation/dispatch/request.rs": "crate::core::identity::RuntimeIdentityUra::parse(value)",
+    "src/daemon/invocation/dispatch/invocation_wire.rs": "crate::core::identity::RuntimeIdentityUra::parse(ura)",
+    "src/daemon/invocation/routing/remote_invoke.rs": "crate::core::identity::RuntimeIdentityUra::parse(value)",
+    "src/support/platform/local_daemon_grpc.rs": "crate::core::identity::RuntimeIdentityUra::parse(value)",
+    "src/support/platform/local_invoke.rs": "crate::core::identity::RuntimeIdentityUra::parse(subject_ura.into())",
+    "src/daemon/keyring/mod.rs": "fn validate_persisted_ura(value: &str, field: &str)",
+    "src/daemon/keyring/federated_bindings.rs": "fn validate_binding_identity(binding: &FederatedUserBinding)",
+    "src/daemon/persistence/access_control.rs": "fn validate_nonzero_user_id(value: &str, field: &str)",
+    "src/daemon/invocation/admission/authority_proof.rs": "pub(crate) fn validate_identity_contract(&self)",
 }
 for rel, token in required_callers.items():
     text = (root / rel).read_text(encoding="utf-8")
     if token not in text:
         raise SystemExit(f"rust_all_zero_principal_guard:caller_missing:{rel}:{token}")
+
+required_tests = {
+    "src/daemon/invocation/dispatch/request.rs": "invocation_builder_rejects_all_zero_principal_in_every_tuple_identity",
+    "src/support/platform/local_daemon_grpc.rs": "loopback_tuple_plan_rejects_all_zero_principal_before_transport",
+    "src/support/platform/local_invoke.rs": "all-zero User subject must fail before issuer construction",
+    "src/daemon/keyring/mod.rs": "vault_open_rejects_legacy_v1_and_noncanonical_plaintext_shapes",
+    "src/daemon/keyring/federated_bindings.rs": "open_or_create_rejects_persisted_all_zero_user_binding",
+    "src/daemon/persistence/access_control.rs": "policy_store_and_records_reject_all_zero_user_identities",
+    "src/daemon/invocation/admission/authority_proof.rs": "verifier_rejects_all_zero_owner_and_session_identity_facts",
+}
+for rel, token in required_tests.items():
+    text = (root / rel).read_text(encoding="utf-8")
+    if token not in text:
+        raise SystemExit(f"rust_all_zero_principal_guard:test_missing:{rel}:{token}")
 
 duplicate_constants = []
 production_literal_hits = []
@@ -16629,7 +16679,9 @@ EOF
     "$tmp/rust-all-zero-duplicate/src/ffi/invocation" \
     "$tmp/rust-all-zero-duplicate/src/cli/commands" \
     "$tmp/rust-all-zero-duplicate/src/daemon/persistence" \
-    "$tmp/rust-all-zero-duplicate/src/daemon/invocation/admission"
+    "$tmp/rust-all-zero-duplicate/src/daemon/invocation/admission" \
+    "$tmp/rust-all-zero-duplicate/src/daemon/invocation/dispatch" \
+    "$tmp/rust-all-zero-duplicate/src/support/platform"
   cat >"$tmp/rust-all-zero-duplicate/src/core/identity/mod.rs" <<'EOF'
 pub const ALL_ZERO_PRINCIPAL_ID: &str = "00000000-0000-0000-0000-000000000000";
 pub fn is_all_zero_principal_id(value: &str) -> bool {
@@ -16663,6 +16715,26 @@ EOF
   cat >"$tmp/rust-all-zero-duplicate/src/daemon/invocation/admission/authority_metadata.rs" <<'EOF'
 fn reject(value: &str) {
     crate::core::identity::contains_all_zero_principal_placeholder(value);
+}
+EOF
+  cat >"$tmp/rust-all-zero-duplicate/src/daemon/invocation/dispatch/request.rs" <<'EOF'
+fn checked_ura(value: String) {
+    crate::core::identity::contains_all_zero_principal_placeholder(&value);
+}
+fn invocation_builder_rejects_all_zero_principal_in_every_tuple_identity() {}
+EOF
+  cat >"$tmp/rust-all-zero-duplicate/src/support/platform/local_daemon_grpc.rs" <<'EOF'
+fn normalized_local_daemon_ura(value: &str) {
+    crate::core::identity::contains_all_zero_principal_placeholder(value);
+}
+fn loopback_tuple_plan_rejects_all_zero_principal_before_transport() {}
+EOF
+  cat >"$tmp/rust-all-zero-duplicate/src/support/platform/local_invoke.rs" <<'EOF'
+fn context(subject_ura: &str) {
+    crate::core::identity::contains_all_zero_principal_placeholder(subject_ura);
+}
+fn test() {
+    let _ = "all-zero User subject must fail before issuer construction";
 }
 EOF
   if ( check_rust_all_zero_principal_guard_contract "$tmp/rust-all-zero-duplicate" ) >/dev/null 2>&1; then

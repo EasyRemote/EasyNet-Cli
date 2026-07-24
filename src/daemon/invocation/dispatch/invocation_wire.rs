@@ -646,13 +646,9 @@ pub(crate) fn descriptor_ref_from_invocation_target(
 }
 
 fn checked_ura(ura: String, field: &str) -> anyhow::Result<String> {
-    let ura = ura.trim().to_string();
-    if ura.is_empty() {
-        anyhow::bail!("{field} must not be empty");
-    }
-    crate::core::ura::parse_ura(&ura)
-        .map_err(|e| anyhow::anyhow!("{field} is not a valid URA: {e}"))?;
-    Ok(ura)
+    crate::core::identity::RuntimeIdentityUra::parse(ura)
+        .map(crate::core::identity::RuntimeIdentityUra::into_string)
+        .map_err(|error| anyhow::anyhow!("{field} {error}"))
 }
 
 fn checked_provisional_ura(ura: String) -> anyhow::Result<String> {

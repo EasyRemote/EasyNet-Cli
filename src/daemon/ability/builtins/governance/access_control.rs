@@ -26,7 +26,8 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::sync::{Arc, OnceLock};
 
-use crate::core::ura::{parse_ura, URAKind};
+use crate::core::identity::RuntimeIdentityUra;
+use crate::core::ura::URAKind;
 use crate::daemon::ability::catalog::system_manifest::registry_manifest;
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, LocalRpcHandler, OwnerKind};
 use crate::daemon::invocation::admission::decision::{
@@ -424,12 +425,14 @@ fn owner_user_id_from_boundary(owner_ura: Option<&str>) -> anyhow::Result<String
     let Some(owner_ura) = owner_ura.map(str::trim).filter(|value| !value.is_empty()) else {
         anyhow::bail!("owner_ura is required");
     };
-    let parsed = parse_ura(owner_ura)
-        .map_err(|err| anyhow::anyhow!("owner_ura must be a canonical User URA: {err}"))?;
-    if parsed.kind != URAKind::User {
+    let parsed = RuntimeIdentityUra::parse(owner_ura)
+        .map_err(|err| anyhow::anyhow!("owner_ura must be an admissible User URA: {err}"))?;
+    if parsed.kind() != URAKind::User {
         anyhow::bail!("owner_ura must be a canonical User URA");
     }
-    let derived = parsed
+    let parsed_ura = crate::core::ura::parse_ura(parsed.as_str())
+        .map_err(|err| anyhow::anyhow!("owner_ura must be a canonical User URA: {err}"))?;
+    let derived = parsed_ura
         .user_id()
         .ok_or_else(|| anyhow::anyhow!("owner_ura must include a user id"))?;
     Ok(derived.to_string())
@@ -448,8 +451,9 @@ fn require_actor_ura(actor_ura: Option<&str>) -> anyhow::Result<&str> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| anyhow::anyhow!("actor_ura is required for an audited mutation"))?;
-    parse_ura(actor_ura)
-        .map_err(|err| anyhow::anyhow!("actor_ura must be a canonical URA: {err}"))?;
+    RuntimeIdentityUra::parse(actor_ura).map_err(|err| {
+        anyhow::anyhow!("actor_ura must be a canonical URA and admissible runtime identity: {err}")
+    })?;
     Ok(actor_ura)
 }
 
@@ -471,14 +475,15 @@ fn principal_id_from_boundary(
             None => Ok(None),
         };
     };
-    let parsed = parse_ura(principal_ura)
-        .map_err(|err| anyhow::anyhow!("principal_ura must be canonical: {err}"))?;
+    let parsed = RuntimeIdentityUra::parse(principal_ura)
+        .map_err(|err| anyhow::anyhow!("principal_ura must be admissible: {err}"))?;
     let canonical = match kind {
         Some(crate::daemon::invocation::admission::decision::PrincipalKind::User) => {
-            if parsed.kind != URAKind::User {
+            if parsed.kind() != URAKind::User {
                 anyhow::bail!("principal_ura for user principal must be a User URA");
             }
-            parsed
+            crate::core::ura::parse_ura(parsed.as_str())
+                .map_err(|err| anyhow::anyhow!("principal_ura must be canonical: {err}"))?
                 .user_id()
                 .ok_or_else(|| anyhow::anyhow!("principal_ura must include a user id"))?
                 .to_string()
@@ -488,7 +493,7 @@ fn principal_id_from_boundary(
                 .map(|value| Ok(Some(value.to_string())))
                 .unwrap_or_else(|| anyhow::bail!("token_id is required for token principals"));
         }
-        _ => principal_ura.to_string(),
+        _ => parsed.into_string(),
     };
     Ok(Some(canonical))
 }
@@ -1682,6 +1687,19 @@ mod tests {
                 || request_error.to_string().contains("principal_id"),
             "{request_error}"
         );
+    }
+
+    #[test]
+    fn policy_boundaries_reject_all_zero_user_uras() {
+        let all_zero_user = "easynet:///r/example/user/00000000-0000-0000-0000-000000000000";
+        assert!(owner_user_id_from_boundary(Some(all_zero_user)).is_err());
+        assert!(principal_id_from_boundary(
+            Some(crate::daemon::invocation::admission::decision::PrincipalKind::User),
+            Some(all_zero_user),
+            None,
+        )
+        .is_err());
+        assert!(require_actor_ura(Some(all_zero_user)).is_err());
     }
 
     #[test]

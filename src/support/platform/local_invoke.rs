@@ -671,14 +671,9 @@ impl<'a> LocalSystemInvocationContext<'a> {
         step_timeout: std::time::Duration,
         trace_id: Option<&'a str>,
     ) -> anyhow::Result<Self> {
-        let subject_ura = subject_ura.into();
-        let subject_ura = subject_ura.trim();
-        if subject_ura.is_empty() {
-            anyhow::bail!("local system invocation subject_ura must not be empty");
-        }
-        crate::core::ura::parse_ura(subject_ura).map_err(|error| {
-            anyhow::anyhow!("local system invocation subject_ura is invalid: {error}")
-        })?;
+        let subject_ura = crate::core::identity::RuntimeIdentityUra::parse(subject_ura.into())
+            .map_err(|error| anyhow::anyhow!("local system invocation subject_ura {error}"))?
+            .into_string();
         if invocation_nonce == [0; 16] {
             anyhow::bail!("local system invocation nonce must not be all-zero");
         }
@@ -689,7 +684,7 @@ impl<'a> LocalSystemInvocationContext<'a> {
             anyhow::bail!("local system invocation trace_id must not be empty when supplied");
         }
         Ok(Self {
-            subject_ura: subject_ura.to_string(),
+            subject_ura,
             invocation_nonce,
             causal_parents,
             step_timeout,
@@ -885,6 +880,17 @@ mod tests {
             None,
         )
         .is_err());
+        let placeholder_error = LocalSystemInvocationContext::new(
+            "easynet:///r/acme/resource/user.00000000-0000-0000-0000-000000000000/runtime-state/read",
+            [0x33; 16],
+            &[],
+            std::time::Duration::from_secs(5),
+            None,
+        )
+        .expect_err("all-zero User subject must fail before issuer construction");
+        assert!(placeholder_error
+            .to_string()
+            .contains("all-zero principal placeholder"));
         assert!(LocalSystemInvocationContext::new(
             "easynet:///r/acme/resource/device.local/probe/alive",
             [0; 16],
