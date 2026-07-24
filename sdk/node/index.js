@@ -2512,8 +2512,8 @@ export function profileErrorDetails(profile, details = {}) {
 }
 
 export function runtimeStateReadSubjectURA(realm, userID) {
-  const cleanRealm = runtimeStateSubjectString(realm, "realm");
-  const cleanUserID = runtimeStateSubjectString(userID, "user_id");
+  const cleanRealm = runtimeStateSubjectSegment(realm, "realm");
+  const cleanUserID = runtimeStateSubjectSegment(userID, "user_id");
   if (containsAllZeroPrincipal(cleanUserID)) {
     throw invalidInvocation("runtime-state read subject user_id must not be all-zero");
   }
@@ -2527,6 +2527,14 @@ function runtimeStateSubjectString(value, field) {
     throw invalidInvocation(`runtime-state read subject ${field} is required`);
   }
   return value.trim();
+}
+
+function runtimeStateSubjectSegment(value, field) {
+  const clean = runtimeStateSubjectString(value, field);
+  if (clean.includes("/") || clean.includes("?") || clean.includes("#")) {
+    throw invalidInvocation(`runtime-state read subject ${field} is not canonical`);
+  }
+  return clean;
 }
 
 function detailString(details, key) {

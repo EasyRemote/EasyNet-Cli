@@ -1148,6 +1148,25 @@ test("runtime-state read subject helper rejects all-zero user before device fall
   );
 });
 
+test("runtime-state read subject helper rejects non-canonical realm and user segments", () => {
+  assert.throws(
+    () => sdk.runtimeStateReadSubjectURA("example/tenant", "alice"),
+    /realm is not canonical/,
+  );
+  assert.throws(
+    () => sdk.runtimeStateReadSubjectURA("example", "alice/sdk"),
+    /user_id is not canonical/,
+  );
+  assert.throws(
+    () => sdk.runtimeStateReadSubjectURA("example?tenant", "alice"),
+    /realm is not canonical/,
+  );
+  assert.throws(
+    () => sdk.runtimeStateReadSubjectURA("example", "alice#sdk"),
+    /user_id is not canonical/,
+  );
+});
+
 test("stream and bidi state machines retain bounded history", async () => {
   let streamSequence = 0;
   const stream = new sdk.StreamHandle(

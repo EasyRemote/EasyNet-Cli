@@ -3629,6 +3629,8 @@ if node:
         "sessionAuthorityAdmitsSubject(authority, subjectURA)",
         "export function runtimeStateReadSubjectURA(",
         "const RUNTIME_STATE_READ_SUBJECT_PATH = \"runtime-state/read\"",
+        "runtimeStateSubjectSegment(realm, \"realm\")",
+        "runtimeStateSubjectSegment(userID, \"user_id\")",
         "containsAllZeroPrincipal(cleanUserID)",
         "session authority subject does not admit receipt query subject_ura",
         "receipt filter caller_ura does not match receipt query caller_ura",
@@ -3656,7 +3658,10 @@ if node:
         "session history keeps subject filters as ledger predicates",
         "runtime-state read subject helper builds user-owned resource subject",
         "runtime-state read subject helper rejects all-zero user before device fallback",
+        "runtime-state read subject helper rejects non-canonical realm and user segments",
         'sdk.runtimeStateReadSubjectURA("example", "alice")',
+        'sdk.runtimeStateReadSubjectURA("example/tenant", "alice")',
+        'sdk.runtimeStateReadSubjectURA("example", "alice/sdk")',
         "providerCalls, 0",
     ):
         if token not in node_test:
