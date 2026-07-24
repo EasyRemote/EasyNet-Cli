@@ -60,7 +60,7 @@ impl RemoteDesktopSessionState {
 #[serde(rename_all = "snake_case")]
 pub(super) enum RemoteDesktopTransportKind {
     Unspecified,
-    #[serde(rename = "webrtc", alias = "web_rtc")]
+    #[serde(rename = "webrtc")]
     WebRtc,
     ExternalRtp,
     InvokeBidi,
@@ -264,7 +264,10 @@ pub(super) enum RemoteDesktopContractError {
 
 #[cfg(test)]
 mod tests {
-    use super::RemoteDesktopSessionState;
+    use super::{
+        RemoteDesktopMediaBackendContract, RemoteDesktopSessionState, RemoteDesktopTransportKind,
+    };
+    use serde_json::json;
 
     #[test]
     fn public_state_projection_remains_stable() {
@@ -278,5 +281,58 @@ mod tests {
         );
         assert!(RemoteDesktopSessionState::Closed.is_terminal());
         assert!(RemoteDesktopSessionState::Failed.is_terminal());
+    }
+
+    #[test]
+    fn media_backend_contract_accepts_only_canonical_webrtc_transport_name() {
+        let decoded: RemoteDesktopMediaBackendContract = serde_json::from_value(json!({
+            "backend_id": "builtin.xcap.openh264.webrtc.v1",
+            "sdk_id": "easynet.remote_desktop.media.v1",
+            "kind": "screen_capture",
+            "status": "available",
+            "transport": "webrtc",
+            "capture_api": "xcap",
+            "encoder": "openh264",
+            "max_capture_fps": 30,
+            "max_encode_fps": 30,
+            "hardware_accelerated": false,
+            "stale_frame_drop": true,
+            "external_binary_required": false,
+            "production_ready": true,
+            "transport_ready": true,
+            "supported_subjects": ["display"],
+            "unavailable_reason": null
+        }))
+        .expect("canonical webrtc transport must decode");
+
+        assert_eq!(decoded.transport, RemoteDesktopTransportKind::WebRtc);
+    }
+
+    #[test]
+    fn media_backend_contract_rejects_retired_web_rtc_transport_alias() {
+        let error = serde_json::from_value::<RemoteDesktopMediaBackendContract>(json!({
+            "backend_id": "builtin.xcap.openh264.webrtc.v1",
+            "sdk_id": "easynet.remote_desktop.media.v1",
+            "kind": "screen_capture",
+            "status": "available",
+            "transport": "web_rtc",
+            "capture_api": "xcap",
+            "encoder": "openh264",
+            "max_capture_fps": 30,
+            "max_encode_fps": 30,
+            "hardware_accelerated": false,
+            "stale_frame_drop": true,
+            "external_binary_required": false,
+            "production_ready": true,
+            "transport_ready": true,
+            "supported_subjects": ["display"],
+            "unavailable_reason": null
+        }))
+        .expect_err("retired web_rtc transport alias must fail closed");
+
+        assert!(
+            error.to_string().contains("web_rtc"),
+            "error must name retired input: {error}"
+        );
     }
 }

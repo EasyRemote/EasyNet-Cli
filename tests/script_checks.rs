@@ -175,6 +175,13 @@ fn system_ability_retired_alias_script_contract_holds() {
 }
 
 #[test]
+fn remote_desktop_contract_boundary_script_holds() {
+    // Pins the product remote-desktop contract to canonical wire names.
+    // Retired transport spelling aliases must fail during typed parse.
+    run_bash_script("tests/scripts/test_check_remote_desktop_contract_boundary.sh");
+}
+
+#[test]
 fn auth_exec_canonical_tool_script_contract_holds() {
     // Pins the CLI exec path to canonical advertised tool names. The
     // retired shell.run/process.exec bare aliases must stay rejected.

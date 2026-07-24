@@ -1604,6 +1604,40 @@ architecture rather than add feature surface.
   - `cargo fmt --check`
   - `git diff --check`
 
+## Iteration 45 candidate policy
+
+- Continue product boundary cleanup after the runtime-state read issuer cutover.
+  The next concrete legacy path found by codegraph was in the remote-desktop
+  product contract: `RemoteDesktopTransportKind::WebRtc` still accepted
+  `web_rtc` as a serde alias for the canonical `webrtc` wire value.
+- The root abstraction problem is product-contract drift: once a product
+  provider retains old spellings at a typed parse boundary, downstream UI and
+  tests can keep sending retired vocabulary while the runtime model appears
+  canonical.
+- The selected cutover is to make the product contract exact: `webrtc` is the
+  only accepted wire spelling, and `web_rtc` is retained only as a negative
+  regression vector.
+
+## Iteration 45 decision log
+
+- Removed the `web_rtc` serde alias from
+  `RemoteDesktopTransportKind::WebRtc`.
+- Added remote-desktop contract tests proving canonical `webrtc` decodes and
+  retired `web_rtc` fails during typed parse.
+- Added `check-remote-desktop-contract-boundary.sh` plus a self-test fixture,
+  and wired it into `tests/script_checks.rs`, so the product contract cannot
+  reintroduce transport aliases silently.
+- Verification passed:
+  - `/Users/macbook.silan.tech/.local/bin/codegraph explore "remote-desktop contract serde alias web_rtc webrtc transport session contract compatibility"`
+  - `cargo test remote_desktop::contract --features axon-pb`
+  - `tools/scripts/check-remote-desktop-contract-boundary.sh`
+  - `tests/scripts/test_check_remote_desktop_contract_boundary.sh`
+  - `cargo test remote_desktop_contract_boundary_script_holds`
+  - `tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - `tools/scripts/check-architecture-convergence.sh`
+  - `cargo fmt --check`
+  - `git diff --check`
+
 ## Iteration 36 candidate policy
 
 - Move the same proof-custody convergence into the Java SDK receipt validator.
