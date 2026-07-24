@@ -151,9 +151,9 @@ pub const SUPPORTED_SCHEMA_VERSIONS: &[&str] = &["1", "2"];
 ///
 /// Fields
 /// ------
-/// * `schema_version` — on-disk schema version; `None` on read is
-///   treated as the implicit v1 shape (written by a tool that
-///   predated the stamping rule). Writer always stamps explicitly.
+/// * `schema_version` — required on-disk schema version. Writer always
+///   stamps explicitly; readers reject absent or unsupported versions
+///   instead of inferring an implicit migration state.
 /// * `descriptor_version` — governed interface version; this is the
 ///   version hashed into descriptor proofs and propagated into authority /
 ///   implementation bindings. Absence means [`DEFAULT_DESCRIPTOR_VERSION`].
@@ -202,8 +202,7 @@ pub const SUPPORTED_SCHEMA_VERSIONS: &[&str] = &["1", "2"];
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AbilityManifest {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    schema_version: Option<String>,
+    schema_version: String,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     descriptor_version: Option<String>,
     /// Authorization action committed into the governed descriptor. Absence
@@ -768,7 +767,7 @@ impl AbilityManifest {
         input_schema: Value,
     ) -> anyhow::Result<Self> {
         let m = Self {
-            schema_version: Some(CURRENT_SCHEMA_VERSION.to_string()),
+            schema_version: CURRENT_SCHEMA_VERSION.to_string(),
             descriptor_version: None,
             admission_action: None,
             name: name.into(),
@@ -906,12 +905,11 @@ impl AbilityManifest {
     }
 
     /// Serialize to TOML. The writer always stamps the current
-    /// schema version — even when the loaded manifest came in
-    /// without one — so the round-tripped file is always
-    /// forward-self-describing.
+    /// schema version so the round-tripped file is always
+    /// self-describing.
     pub fn to_toml_string(&self) -> anyhow::Result<String> {
         let mut stamped = self.clone();
-        stamped.schema_version = Some(CURRENT_SCHEMA_VERSION.to_string());
+        stamped.schema_version = CURRENT_SCHEMA_VERSION.to_string();
         ::toml::to_string_pretty(&stamped)
             .map_err(|e| anyhow::anyhow!("failed to serialize ability.toml: {e}"))
     }
@@ -981,14 +979,12 @@ impl AbilityManifest {
 
     /// Validate the invariants every consumer relies on.
     fn validate(&self) -> anyhow::Result<()> {
-        if let Some(v) = &self.schema_version {
-            if !SUPPORTED_SCHEMA_VERSIONS.contains(&v.as_str()) {
-                anyhow::bail!(
-                    "ability.toml schema_version = {:?} is not supported (known: {:?})",
-                    v,
-                    SUPPORTED_SCHEMA_VERSIONS
-                );
-            }
+        if !SUPPORTED_SCHEMA_VERSIONS.contains(&self.schema_version.as_str()) {
+            anyhow::bail!(
+                "ability.toml schema_version = {:?} is not supported (known: {:?})",
+                self.schema_version,
+                SUPPORTED_SCHEMA_VERSIONS
+            );
         }
         if let Some(version) = &self.descriptor_version {
             if version.trim().is_empty() {
@@ -1913,12 +1909,8 @@ tool_name = "legacy-provider-field"
 
     #[test]
     fn to_toml_string_always_stamps_current_schema_version() {
-        // Even if the in-memory manifest has schema_version=None
-        // (shape a legacy file might produce), the writer stamps
-        // the current version. Downstream readers rely on this
-        // for forward self-description.
         let mut m = AbilityManifest::new("chat", "x", object_schema()).unwrap();
-        m.schema_version = None;
+        m.schema_version = "1".to_string();
         let toml = m.to_toml_string().unwrap();
         assert!(
             toml.contains(&format!("schema_version = \"{CURRENT_SCHEMA_VERSION}\"")),
@@ -1927,18 +1919,14 @@ tool_name = "legacy-provider-field"
     }
 
     #[test]
-    fn from_toml_str_accepts_missing_schema_version_as_v1_shape() {
-        // A manifest written before the stamping rule landed has
-        // no schema_version. We read it as implicit v1 and do not
-        // fail — otherwise every pre-existing dev install would
-        // break on upgrade.
+    fn from_toml_str_rejects_missing_schema_version() {
         let toml = "name = \"chat\"\n\
              description = \"x\"\n\
              [input_schema]\n\
              type = \"object\"\n"
             .to_string();
-        let m = AbilityManifest::from_toml_str(&toml).unwrap();
-        assert_eq!(m.name(), "chat");
+        let err = AbilityManifest::from_toml_str(&toml).unwrap_err();
+        assert!(format!("{err}").contains("schema_version"), "{err}");
     }
 
     #[test]

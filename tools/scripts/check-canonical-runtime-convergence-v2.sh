@@ -8462,6 +8462,53 @@ for text, token, code in required:
 PY
 }
 
+check_ability_manifest_schema_version_strict_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local manifest="$cli_root/src/daemon/ability/manifest.rs"
+  [[ -f "$manifest" ]] || fail "ability manifest schema contract source is missing: ${manifest#$cli_root/}"
+
+  "$PYTHON_BIN" - "$manifest" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+production = text.split("#[cfg(test)]", 1)[0]
+
+match = re.search(
+    r"#\[derive\([^\n]+Serialize,\s*Deserialize[^\n]*\)\]\n"
+    r"#\[serde\(deny_unknown_fields\)\]\n"
+    r"pub struct AbilityManifest \{(?P<body>.*?)\n\}",
+    production,
+    re.S,
+)
+if match is None:
+    raise SystemExit("ability_manifest_schema_version:struct_missing_or_not_deny_unknown")
+body = match.group("body")
+if "schema_version: String" not in body:
+    raise SystemExit("ability_manifest_schema_version:required_field_missing")
+for retired in (
+    "schema_version: Option<String>",
+    'skip_serializing_if = "Option::is_none"]\n    schema_version',
+    "if let Some(v) = &self.schema_version",
+    "implicit v1",
+    "pre-existing dev install",
+    "missing schema_version as v1",
+):
+    if retired in text:
+        raise SystemExit(f"ability_manifest_schema_version:retired_compat:{retired}")
+for required in (
+    "schema_version: CURRENT_SCHEMA_VERSION.to_string()",
+    "stamped.schema_version = CURRENT_SCHEMA_VERSION.to_string()",
+    "!SUPPORTED_SCHEMA_VERSIONS.contains(&self.schema_version.as_str())",
+    "from_toml_str_rejects_missing_schema_version",
+    "from_toml_str_rejects_unknown_schema_version",
+):
+    if required not in text:
+        raise SystemExit(f"ability_manifest_schema_version:missing:{required}")
+PY
+}
+
 check_sdk_directory_projection_fail_closed_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local go_directory="$cli_root/sdk/go/directory.go"
@@ -16465,6 +16512,7 @@ check_retired_browser_mock_surface_contract
 check_ability_deploy_product_neutrality_contract
 check_invocation_outcome_terminal_result_contract
 check_ability_manifest_exec_absence_contract
+check_ability_manifest_schema_version_strict_contract
 check_runtime_wire_target_state_contract
 check_invocation_wire_callee_target_contract
 check_local_session_descriptor_ref_test_authority_contract
