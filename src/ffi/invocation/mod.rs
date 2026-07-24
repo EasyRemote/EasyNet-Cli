@@ -112,6 +112,8 @@ const STREAM_CALLBACK_QUEUE_CAPACITY: usize = 64;
 const BIDI_CALLBACK_QUEUE_CAPACITY: usize = 64;
 #[cfg(feature = "axon-pb")]
 const PROVIDER_CANCEL_REASON: &str = "consumer_request";
+#[cfg(feature = "axon-pb")]
+const CALLER_SIGNER_UNAVAILABLE_CODE: &str = "CALLER_SIGNER_UNAVAILABLE";
 
 fn record_invocation_error(code: i32, message: impl Into<String>) -> i32 {
     set_last_error_code(code, message);
@@ -126,6 +128,19 @@ fn record_invocation_projected_error(
 ) -> i32 {
     set_last_error_projection(abi_code, projection, message);
     abi_code
+}
+
+#[cfg(feature = "axon-pb")]
+fn record_caller_signer_unavailable_error(message: impl Into<String>) -> i32 {
+    record_invocation_projected_error(
+        ERR_PERMISSION_DENIED,
+        ErrorProjection {
+            code: CALLER_SIGNER_UNAVAILABLE_CODE,
+            stage: "caller_identity",
+            retry: "never",
+        },
+        message,
+    )
 }
 
 #[cfg(not(feature = "axon-pb"))]
@@ -1770,19 +1785,22 @@ impl<'a> SessionInvocationAuthority<'a> {
             crate::daemon::identity::self_identity::RuntimeSigningIdentity::load_default(
                 signer_owner_ura.clone(),
             )
-            .map_err(|error| {
-                crate::daemon::DaemonError::InvalidInvocation(format!(
-                    "bind daemon KeyService signer for session owner `{signer_owner_ura}`: {error}"
-                ))
-            })
+            .map_err(|_error| Self::caller_signer_unavailable_error(&signer_owner_ura))
         })
         .await
         .map_err(|error| {
             crate::daemon::DaemonError::InvalidInvocation(format!(
-                "bind daemon KeyService signer task failed: {error}"
+                "native runtime caller signer task failed: {error}"
             ))
         })??;
         Ok(Arc::new(signer))
+    }
+
+    fn caller_signer_unavailable_error(owner_ura: &str) -> crate::daemon::DaemonError {
+        crate::daemon::DaemonError::InvalidInvocation(format!(
+            "{CALLER_SIGNER_UNAVAILABLE_CODE}: native runtime invocation requires a caller signer \
+             for `{owner_ura}`; load or provision that identity in the local key service"
+        ))
     }
 
     async fn owner_signer(
@@ -4785,7 +4803,11 @@ fn remove_bidi_for_handle(
 #[cfg(feature = "axon-pb")]
 fn ffi_daemon_error(context: &str, err: crate::daemon::DaemonError) -> i32 {
     let code = ffi_code_for_daemon_error(&err);
-    record_invocation_error(code, format!("{context}: {err}"))
+    let message = format!("{context}: {err}");
+    if is_caller_signer_unavailable_daemon_error(&err) {
+        return record_caller_signer_unavailable_error(message);
+    }
+    record_invocation_error(code, message)
 }
 
 #[cfg(feature = "axon-pb")]
@@ -4799,10 +4821,29 @@ fn ffi_code_for_daemon_error(err: &crate::daemon::DaemonError) -> i32 {
         | crate::daemon::DaemonError::InvokeBidiStatus { code, .. } => {
             ffi_status_code_to_error(*code)
         }
+        crate::daemon::DaemonError::InvalidInvocation(message)
+            if is_caller_signer_unavailable_message(message) =>
+        {
+            ERR_PERMISSION_DENIED
+        }
         crate::daemon::DaemonError::InvalidInvocation(_) => ERR_INVALID_ARG,
         crate::daemon::DaemonError::InvokeBidiClosed { .. } => ERR_CANCELLED,
         _ => ERR_GENERIC,
     }
+}
+
+#[cfg(feature = "axon-pb")]
+fn is_caller_signer_unavailable_daemon_error(err: &crate::daemon::DaemonError) -> bool {
+    matches!(
+        err,
+        crate::daemon::DaemonError::InvalidInvocation(message)
+            if is_caller_signer_unavailable_message(message)
+    )
+}
+
+#[cfg(feature = "axon-pb")]
+fn is_caller_signer_unavailable_message(message: &str) -> bool {
+    message.contains(CALLER_SIGNER_UNAVAILABLE_CODE)
 }
 
 #[cfg(feature = "axon-pb")]
@@ -10295,6 +10336,42 @@ mod tests {
         assert_eq!(error["retry"], "never");
         assert_eq!(error["details"]["abi_code"], ERR_PERMISSION_DENIED);
         assert_eq!(error["details"]["abi_symbol"], "ERR_PERMISSION_DENIED");
+    }
+
+    #[test]
+    fn native_runtime_signer_error_records_caller_signer_projection() {
+        let err = SessionInvocationAuthority::caller_signer_unavailable_error(
+            "easynet:///r/localhost/device/dev-a",
+        );
+        let message = err.to_string();
+        assert!(message.contains("CALLER_SIGNER_UNAVAILABLE"));
+        assert!(message.contains("requires a caller signer"));
+        assert!(
+            !message.contains("keyring entry not found")
+                && !message.contains("keyring rejected request")
+                && !message.contains("self-identity:")
+                && !message.contains("KeyService signer"),
+            "native signer error must not expose custody implementation details: {message}"
+        );
+
+        let code = ffi_daemon_error("runtime_invocation_invoke", err);
+
+        assert_eq!(code, ERR_PERMISSION_DENIED);
+        let error = read_last_error_json();
+        assert_eq!(error["code"], "CALLER_SIGNER_UNAVAILABLE");
+        assert_eq!(error["stage"], "caller_identity");
+        assert_eq!(error["retry"], "never");
+        assert_eq!(error["details"]["abi_code"], ERR_PERMISSION_DENIED);
+        assert_eq!(error["details"]["abi_symbol"], "ERR_PERMISSION_DENIED");
+        let projected_message = error["message"].as_str().unwrap_or_default();
+        assert!(projected_message.contains("CALLER_SIGNER_UNAVAILABLE"));
+        assert!(
+            !projected_message.contains("keyring entry not found")
+                && !projected_message.contains("keyring rejected request")
+                && !projected_message.contains("self-identity:")
+                && !projected_message.contains("KeyService signer"),
+            "typed last-error must not expose custody implementation details: {projected_message}"
+        );
     }
 
     #[test]

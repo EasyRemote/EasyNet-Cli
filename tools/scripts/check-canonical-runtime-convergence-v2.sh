@@ -6212,7 +6212,7 @@ import sys
 from pathlib import Path
 
 text = Path(sys.argv[1]).read_text(encoding="utf-8")
-production = text.split("\n#[cfg(test)]", 1)[0]
+production = text.split("\nmod tests {", 1)[0]
 
 for retired in (
     "Back-compat diagnostics",
@@ -11599,6 +11599,66 @@ if "assert!(status.message().contains(\"keyring entry not found\"))" in text:
 PY
 }
 
+check_ffi_native_runtime_signer_projection_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local ffi_invocation="$cli_root/src/ffi/invocation/mod.rs"
+  [[ -f "$ffi_invocation" ]] || fail "FFI invocation source is missing: ${ffi_invocation#$cli_root/}"
+
+  "$PYTHON_BIN" - "$ffi_invocation" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+production = text.split("\nmod tests {", 1)[0]
+for required in (
+    'const CALLER_SIGNER_UNAVAILABLE_CODE: &str = "CALLER_SIGNER_UNAVAILABLE"',
+    "fn record_caller_signer_unavailable_error(",
+    'code: CALLER_SIGNER_UNAVAILABLE_CODE',
+    'stage: "caller_identity"',
+    "fn caller_signer_unavailable_error(owner_ura: &str)",
+    "fn is_caller_signer_unavailable_daemon_error(",
+    "fn is_caller_signer_unavailable_message(message: &str)",
+):
+    if required not in production:
+        raise SystemExit(f"ffi_native_runtime_signer_projection:missing:{required}")
+
+load_start = production.find("async fn load_owner_signer(")
+load_end = production.find("\n    fn caller_signer_unavailable_error(", load_start)
+if load_start < 0 or load_end < 0:
+    raise SystemExit("ffi_native_runtime_signer_projection:load_owner_signer_missing")
+body = production[load_start:load_end]
+if "RuntimeSigningIdentity::load_default" not in body:
+    raise SystemExit("ffi_native_runtime_signer_projection:owner_signer_loader_missing")
+if "Self::caller_signer_unavailable_error(&signer_owner_ura)" not in body:
+    raise SystemExit("ffi_native_runtime_signer_projection:sanitized_error_helper_not_used")
+if "bind daemon KeyService signer for session owner" in body:
+    raise SystemExit("ffi_native_runtime_signer_projection:raw_keyservice_error_interpolated")
+if "KeyService signer" in production:
+    raise SystemExit("ffi_native_runtime_signer_projection:keyservice_vocabulary_in_production")
+
+ffi_error = re.search(
+    r"fn ffi_daemon_error\([^)]*\) -> i32 \{(?P<body>.*?)\n\}",
+    production,
+    re.S,
+)
+if ffi_error is None:
+    raise SystemExit("ffi_native_runtime_signer_projection:ffi_daemon_error_missing")
+if "is_caller_signer_unavailable_daemon_error(&err)" not in ffi_error.group("body"):
+    raise SystemExit("ffi_native_runtime_signer_projection:ffi_daemon_error_projection_missing")
+
+for required_test in (
+    "native_runtime_signer_error_records_caller_signer_projection",
+    'assert_eq!(error["code"], "CALLER_SIGNER_UNAVAILABLE")',
+    'assert_eq!(error["stage"], "caller_identity")',
+    '!message.contains("keyring entry not found")',
+    '!projected_message.contains("keyring entry not found")',
+):
+    if required_test not in text:
+        raise SystemExit(f"ffi_native_runtime_signer_projection:missing_test:{required_test}")
+PY
+}
+
 check_daemon_runtime_identity_vocabulary_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local identity="$cli_root/src/daemon/identity/local_invocation.rs"
@@ -15489,6 +15549,45 @@ mod tests {
 EOF
   if ( CLI_ROOT="$tmp/remote-failure-caller-signer-projection-legacy"; check_remote_failure_caller_signer_projection_contract ) >/dev/null 2>&1; then
     fail "self-test expected remote failure caller signer projection gate to fail"
+  fi
+  mkdir -p "$tmp/ffi-native-runtime-signer-projection-legacy/src/ffi/invocation"
+  cat >"$tmp/ffi-native-runtime-signer-projection-legacy/src/ffi/invocation/mod.rs" <<'EOF'
+fn record_invocation_projected_error() {}
+struct SessionInvocationAuthority;
+impl SessionInvocationAuthority {
+    async fn load_owner_signer(
+        owner_ura: String,
+    ) -> crate::daemon::Result<Arc<dyn crate::daemon::identity::self_identity::CanonicalSigner>>
+    {
+        let signer_owner_ura = owner_ura.clone();
+        let signer = tokio::task::spawn_blocking(move || {
+            crate::daemon::identity::self_identity::RuntimeSigningIdentity::load_default(
+                signer_owner_ura.clone(),
+            )
+            .map_err(|error| {
+                crate::daemon::DaemonError::InvalidInvocation(format!(
+                    "bind daemon KeyService signer for session owner `{signer_owner_ura}`: {error}"
+                ))
+            })
+        });
+        todo!()
+    }
+}
+fn ffi_daemon_error(context: &str, err: crate::daemon::DaemonError) -> i32 {
+    let code = ffi_code_for_daemon_error(&err);
+    record_invocation_error(code, format!("{context}: {err}"))
+}
+fn ffi_code_for_daemon_error(err: &crate::daemon::DaemonError) -> i32 { ERR_INVALID_ARG }
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn native_runtime_signer_error_records_caller_signer_projection() {
+        assert!(message.contains("keyring entry not found"));
+    }
+}
+EOF
+  if ( CLI_ROOT="$tmp/ffi-native-runtime-signer-projection-legacy"; check_ffi_native_runtime_signer_projection_contract ) >/dev/null 2>&1; then
+    fail "self-test expected FFI native runtime signer projection gate to fail"
   fi
   mkdir -p "$tmp/runtime-identity-vocabulary-legacy/src/daemon/identity" \
     "$tmp/runtime-identity-vocabulary-legacy/src/daemon/ability/authority"
@@ -20089,6 +20188,7 @@ check_sdk_principal_projection_fail_closed_contract
 check_runtime_owner_signer_custody_contract
 check_remote_invocation_signer_first_contract
 check_remote_failure_caller_signer_projection_contract
+check_ffi_native_runtime_signer_projection_contract
 check_daemon_runtime_identity_vocabulary_contract
 check_key_custody_boundary_contract
 check_daemon_mission_eal_boundary_contract
