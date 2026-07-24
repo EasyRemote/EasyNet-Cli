@@ -9374,6 +9374,47 @@ for index, text in enumerate(callers, start=1):
 PY
 }
 
+check_local_session_runtime_assembly_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local session_dispatcher="$cli_root/src/daemon/invocation/dispatch/local_session_dispatcher.rs"
+
+  [[ -f "$session_dispatcher" ]] || fail "local session dispatcher source is missing: ${session_dispatcher#$cli_root/}"
+
+  "$PYTHON_BIN" - "$session_dispatcher" <<'PY'
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+
+for retired in (
+    "not wired",
+    "LocalRuntime is not wired",
+    "DeviceTrustSync is not wired",
+    "destination runtime admission graph is not wired",
+):
+    if retired in text:
+        raise SystemExit(f"local_session_runtime_assembly:retired_optional_runtime_wording:{retired}")
+
+for required, code in (
+    ("fn canonical_runtime_assembly_unavailable(", "assembly_diagnostic_helper_missing"),
+    ("fn require_local_runtime(", "local_runtime_requirement_helper_missing"),
+    ("requires canonical destination runtime assembly", "assembly_diagnostic_missing"),
+    ("requires canonical runtime admission graph", "admission_graph_requirement_missing"),
+    ("not published for session.open carrier-v1", "bidi_publication_requirement_missing"),
+):
+    if required not in text:
+        raise SystemExit(f"local_session_runtime_assembly:{code}")
+
+for token, code in (
+    ("self.local_runtime.clone().ok_or_else", "local_runtime_option_handling_not_centralized"),
+    ("let Some(runtime) = self.local_runtime.clone() else", "dispatch_runtime_manual_optional_branch"),
+    ("let Some(runtime) = self.local_runtime.as_ref() else", "bidi_runtime_manual_optional_branch"),
+):
+    if token in text:
+        raise SystemExit(f"local_session_runtime_assembly:{code}")
+PY
+}
+
 check_local_session_descriptor_ref_test_authority_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local session_dispatcher="$cli_root/src/daemon/invocation/dispatch/local_session_dispatcher.rs"
@@ -16773,6 +16814,7 @@ EOF
   check_ability_manifest_exec_absence_contract
   check_runtime_wire_target_state_contract
   check_invocation_wire_callee_target_contract
+  check_local_session_runtime_assembly_contract
   check_local_session_descriptor_ref_test_authority_contract
   check_local_daemon_loopback_explicit_subject_contract
   check_sdk_directory_projection_fail_closed_contract
@@ -16956,6 +16998,7 @@ check_ability_manifest_exec_absence_contract
 check_ability_manifest_schema_version_strict_contract
 check_runtime_wire_target_state_contract
 check_invocation_wire_callee_target_contract
+check_local_session_runtime_assembly_contract
 check_local_session_descriptor_ref_test_authority_contract
 check_local_daemon_loopback_explicit_subject_contract
 check_sdk_directory_projection_fail_closed_contract

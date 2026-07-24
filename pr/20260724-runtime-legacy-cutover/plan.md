@@ -227,3 +227,36 @@ architecture rather than add feature surface.
   - `tools/scripts/check-canonical-runtime-convergence-v2.sh`
   - `tools/scripts/check-architecture-convergence.sh`
   - `git diff --check`
+
+## Iteration 7 candidate policy
+
+- Focus on carrier-v1 destination dispatch. codegraph found production-facing
+  `not wired` branches in `local_session_dispatcher.rs` for LocalRuntime,
+  admission graph, trust sync, and bidi ability publication.
+- The root abstraction problem is not the wording alone. A canonical dispatcher
+  should express missing runtime assembly as one typed precondition, not as
+  scattered compatibility-era strings that imply an optional second path.
+- The intended cutover is to centralize LocalRuntime/admission/trust precondition
+  projection and make failures say the canonical assembly is unavailable or the
+  requested ability is not published for the negotiated carrier.
+- Verification must cover local session dispatcher tests and SPEC v2 must reject
+  reintroducing production `not wired` wording in this file.
+
+## Iteration 7 decision log
+
+- `LocalAxonSessionDispatcher` now uses one `require_local_runtime` helper and
+  one canonical assembly diagnostic for carrier-v1 RPC and stream dispatch.
+- Device trust sync absence now reports a missing canonical runtime assembly
+  component instead of an optional wiring hole.
+- Remote bidi missing ability publication now reports a carrier-v1 publication
+  failure; it no longer describes a product route as "not wired".
+- Destination runtime admission absence now reports a required canonical
+  admission graph, not a compatibility-era optional graph.
+- SPEC v2 now rejects production `not wired` wording and manual LocalRuntime
+  optional branches in `local_session_dispatcher.rs`.
+- Verification passed:
+  - `cargo test -q local_session_dispatcher::tests::carrier_v1`
+  - `cargo fmt --check`
+  - `tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - `tools/scripts/check-architecture-convergence.sh`
+  - `git diff --check`

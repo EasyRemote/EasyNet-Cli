@@ -96,6 +96,12 @@ pub struct LocalAxonSessionDispatcher {
 
 type LocalBidiWireKind = crate::daemon::ability::wire::AbilityBidiWireKind;
 
+fn canonical_runtime_assembly_unavailable(context: &str, missing: &str) -> SessionDispatchError {
+    SessionDispatchError::Other(format!(
+        "{context} requires canonical destination runtime assembly: missing {missing}"
+    ))
+}
+
 fn receipt_to_session_wire(
     receipt: &axon_sdk::invocation::SignedInvocationReceipt,
 ) -> Result<axon_sdk::pb::axon::v1::InvocationReceipt, SessionDispatchError> {
@@ -252,11 +258,7 @@ impl LocalAxonSessionDispatcher {
                 "carrier-v1 DispatchCall request missing envelope".to_string(),
             ));
         };
-        let Some(runtime) = self.local_runtime.clone() else {
-            return Err(SessionDispatchError::Other(
-                "carrier-v1 dispatch: Axon LocalRuntime is not wired".to_string(),
-            ));
-        };
+        let runtime = self.require_local_runtime("carrier-v1 dispatch")?;
         let target_ura = callee_ura_from_envelope(Some(&envelope), "carrier-v1 DispatchCall")
             .map_err(|status| SessionDispatchError::Other(status.message().to_string()))?;
         self.sync_external_signed_caller_key(&envelope).await?;
@@ -362,11 +364,7 @@ impl LocalAxonSessionDispatcher {
         >,
         outbound: &SessionUpSender,
     ) -> Result<(), SessionDispatchError> {
-        let Some(runtime) = self.local_runtime.clone() else {
-            return Err(SessionDispatchError::Other(
-                "carrier-v1 stream: Axon LocalRuntime is not wired".to_string(),
-            ));
-        };
+        let runtime = self.require_local_runtime("carrier-v1 stream")?;
         let lifecycle_envelope = wire.envelope.clone();
         let handle =
             match crate::daemon::axon_bridge::dispatch_shim::open_stream_admitted(&runtime, wire)
@@ -757,9 +755,10 @@ impl LocalAxonSessionDispatcher {
             return Ok(());
         }
         let Some(sync) = self.device_trust_sync.as_ref() else {
-            return Err(SessionDispatchError::Other(format!(
-                "carrier-v1 external signed caller `{caller_ura}` cannot warm trust anchor: DeviceTrustSync is not wired"
-            )));
+            return Err(canonical_runtime_assembly_unavailable(
+                &format!("carrier-v1 external signed caller `{caller_ura}` trust sync"),
+                "DeviceTrustSync",
+            ));
         };
         let presented_pubkey_b64 = envelope
             .caller_signature
@@ -820,6 +819,15 @@ impl LocalAxonSessionDispatcher {
         self
     }
 
+    fn require_local_runtime(
+        &self,
+        context: &str,
+    ) -> Result<Arc<axon_sdk::invocation::LocalRuntime>, SessionDispatchError> {
+        self.local_runtime
+            .clone()
+            .ok_or_else(|| canonical_runtime_assembly_unavailable(context, "LocalRuntime"))
+    }
+
     fn stage_runtime_admission(
         &self,
         wire: &crate::daemon::axon_bridge::dispatch_shim::WireDispatch,
@@ -847,7 +855,8 @@ impl LocalAxonSessionDispatcher {
                     return Ok(None);
                 }
                 Err(SessionDispatchError::Other(
-                    "carrier-v1 destination runtime admission graph is not wired".to_string(),
+                    "carrier-v1 destination dispatch requires canonical runtime admission graph"
+                        .to_string(),
                 ))
             }
         }
@@ -1030,7 +1039,9 @@ impl LocalAxonSessionDispatcher {
                 outbound,
                 call_id,
                 "ABILITY_BIDI_NOT_SUPPORTED",
-                format!("remote bidi ability `{ability}` is not wired on session.open"),
+                format!(
+                    "remote bidi ability `{ability}` is not published for session.open carrier-v1"
+                ),
             )
             .await;
         }
@@ -1043,14 +1054,17 @@ impl LocalAxonSessionDispatcher {
             )
             .await;
         };
-        let Some(runtime) = self.local_runtime.as_ref() else {
-            return Self::send_bidi_control_failure(
-                outbound,
-                call_id,
-                "RUNTIME_UNAVAILABLE",
-                "session.open: LocalRuntime is not wired for remote bidi",
-            )
-            .await;
+        let runtime = match self.require_local_runtime("session.open remote bidi") {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                return Self::send_bidi_control_failure(
+                    outbound,
+                    call_id,
+                    "RUNTIME_UNAVAILABLE",
+                    error.to_string(),
+                )
+                .await;
+            }
         };
         let target_ura = match callee_ura_from_envelope(Some(&envelope), "carrier-v1 BidiOpen") {
             Ok(target_ura) => target_ura,
@@ -1075,7 +1089,7 @@ impl LocalAxonSessionDispatcher {
         }
         let bound_ability = match RuntimeBoundAbility::from_wire_target(
             "carrier-v1 BidiOpen",
-            runtime,
+            &runtime,
             &target_ura,
             &ability,
         )
@@ -1143,22 +1157,21 @@ impl LocalAxonSessionDispatcher {
             }
         };
         let lifecycle_envelope = wire.envelope.clone();
-        let handle = match crate::daemon::axon_bridge::dispatch_shim::open_bidi_admitted(
-            runtime, wire,
-        )
-        .await
-        {
-            Ok(handle) => handle,
-            Err(err) => {
-                return Self::send_bidi_control_failure(
-                    outbound,
-                    call_id,
-                    "BIDI_OPEN_REJECTED",
-                    format!("session.open: remote bidi open failed: {err}"),
-                )
-                .await;
-            }
-        };
+        let handle =
+            match crate::daemon::axon_bridge::dispatch_shim::open_bidi_admitted(&runtime, wire)
+                .await
+            {
+                Ok(handle) => handle,
+                Err(err) => {
+                    return Self::send_bidi_control_failure(
+                        outbound,
+                        call_id,
+                        "BIDI_OPEN_REJECTED",
+                        format!("session.open: remote bidi open failed: {err}"),
+                    )
+                    .await;
+                }
+            };
         if let Err(err) = Self::commit_runtime_admission(runtime_admission) {
             return Self::cancel_opened_bidi(
                 outbound,
@@ -2246,7 +2259,7 @@ mod tests {
                 assert!(r.terminal_receipt.is_none());
                 let failure = r.failure.expect("typed failure");
                 assert!(
-                    failure.message.contains("not wired"),
+                    failure.message.contains("not published"),
                     "unexpected failure: {}",
                     failure.message
                 );
