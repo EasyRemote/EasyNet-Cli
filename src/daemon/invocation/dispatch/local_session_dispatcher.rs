@@ -72,9 +72,9 @@ pub struct LocalAxonSessionDispatcher {
     /// as `local_runtime`. Production wiring sets the runtime, coordinator, and
     /// policy facade atomically so a destination carrier cannot enter Axon
     /// without the daemon policy stage paired with that runtime.
-    product_policy: Option<
+    runtime_admission: Option<
         Arc<
-            crate::daemon::invocation::admission::admission_facade::DaemonProductAdmissionCoordinator,
+            crate::daemon::invocation::admission::admission_facade::DaemonRuntimeAdmissionCoordinator,
         >,
     >,
     /// Daemon-owned wire profile registry for local bidi abilities. Plugin
@@ -292,7 +292,7 @@ impl LocalAxonSessionDispatcher {
         .map_err(|err| {
             SessionDispatchError::Other(format!("build carrier-v1 signed dispatch: {err}"))
         })?;
-        let product_admission = self.stage_product_admission(&wire, &function_name, call_mode)?;
+        let runtime_admission = self.stage_runtime_admission(&wire, &function_name, call_mode)?;
 
         // ── step-3c: server-stream over carrier ──────────────────────
         // A stream-mode ability (modes.stream && !modes.rpc) emits many
@@ -304,7 +304,7 @@ impl LocalAxonSessionDispatcher {
         // signature.
         if carrier_v1_stream {
             return self
-                .handle_carrier_v1_stream_open(call_id, wire, product_admission, outbound)
+                .handle_carrier_v1_stream_open(call_id, wire, runtime_admission, outbound)
                 .await;
         }
 
@@ -315,7 +315,7 @@ impl LocalAxonSessionDispatcher {
         )
         .await;
         if outcome.invocation_id.is_some() {
-            Self::commit_product_admission(product_admission)?;
+            Self::commit_runtime_admission(runtime_admission)?;
         }
 
         let failure = outcome
@@ -357,8 +357,8 @@ impl LocalAxonSessionDispatcher {
         &self,
         call_id: u64,
         wire: crate::daemon::axon_bridge::dispatch_shim::WireDispatch,
-        product_admission: Option<
-            crate::daemon::invocation::admission::admission_facade::DaemonProductAdmissionLease,
+        runtime_admission: Option<
+            crate::daemon::invocation::admission::admission_facade::DaemonRuntimeAdmissionLease,
         >,
         outbound: &SessionUpSender,
     ) -> Result<(), SessionDispatchError> {
@@ -410,9 +410,9 @@ impl LocalAxonSessionDispatcher {
                 return Ok(());
             }
         };
-        if let Err(error) = Self::commit_product_admission(product_admission) {
+        if let Err(error) = Self::commit_runtime_admission(runtime_admission) {
             let _ = lifecycle
-                .cancel_and_finalize("product admission commit failed")
+                .cancel_and_finalize("runtime admission commit failed")
                 .await;
             return Err(error);
         }
@@ -702,7 +702,7 @@ impl LocalAxonSessionDispatcher {
             remote_stream_sessions: Arc::new(Mutex::new(HashMap::new())),
             lifecycle_cancellations: Default::default(),
             local_runtime: None,
-            product_policy: None,
+            runtime_admission: None,
             ability_wire: Arc::new(crate::daemon::ability::wire::AbilityWireRegistry::core()),
             device_trust_sync: None,
             admission: None,
@@ -805,13 +805,13 @@ impl LocalAxonSessionDispatcher {
         admission: AdmissionFacade,
     ) -> Self {
         self.local_runtime = Some(assembly.runtime());
-        self.product_policy = Some(assembly.admission_graph().product_policy());
+        self.runtime_admission = Some(assembly.admission_graph().runtime_admission());
         self.admission = Some(admission);
         self
     }
 
     /// Explicit canonical-only runtime seam for unit tests that exercise Axon
-    /// carrier mechanics independently of daemon product policy.
+    /// carrier mechanics independently of daemon runtime admission.
     #[cfg(test)]
     #[must_use]
     pub fn with_local_runtime(mut self, runtime: Arc<axon_sdk::invocation::LocalRuntime>) -> Self {
@@ -820,29 +820,29 @@ impl LocalAxonSessionDispatcher {
         self
     }
 
-    fn stage_product_admission(
+    fn stage_runtime_admission(
         &self,
         wire: &crate::daemon::axon_bridge::dispatch_shim::WireDispatch,
         ability: &str,
         call_mode: axon_sdk::invocation::CallMode,
     ) -> Result<
-        Option<crate::daemon::invocation::admission::admission_facade::DaemonProductAdmissionLease>,
+        Option<crate::daemon::invocation::admission::admission_facade::DaemonRuntimeAdmissionLease>,
         SessionDispatchError,
     > {
-        match (&self.admission, &self.product_policy) {
-            (Some(admission), Some(product_policy)) => product_policy
+        match (&self.admission, &self.runtime_admission) {
+            (Some(admission), Some(runtime_admission)) => runtime_admission
                 .stage(admission, wire, ability, call_mode)
                 .map(Some)
                 .map_err(|status| {
                     SessionDispatchError::Other(format!(
-                        "carrier-v1 destination product admission staging failed: {status}"
+                        "carrier-v1 destination runtime admission staging failed: {status}"
                     ))
                 }),
             _ => {
                 #[cfg(test)]
                 if self.canonical_only_test_runtime
                     && self.admission.is_none()
-                    && self.product_policy.is_none()
+                    && self.runtime_admission.is_none()
                 {
                     return Ok(None);
                 }
@@ -853,9 +853,9 @@ impl LocalAxonSessionDispatcher {
         }
     }
 
-    fn commit_product_admission(
+    fn commit_runtime_admission(
         admission: Option<
-            crate::daemon::invocation::admission::admission_facade::DaemonProductAdmissionLease,
+            crate::daemon::invocation::admission::admission_facade::DaemonRuntimeAdmissionLease,
         >,
     ) -> Result<(), SessionDispatchError> {
         let Some(admission) = admission else {
@@ -863,7 +863,7 @@ impl LocalAxonSessionDispatcher {
         };
         admission.commit().map(|_| ()).map_err(|status| {
             SessionDispatchError::Other(format!(
-                "carrier-v1 destination product admission commit failed: {status}"
+                "carrier-v1 destination runtime admission commit failed: {status}"
             ))
         })
     }
@@ -1126,7 +1126,7 @@ impl LocalAxonSessionDispatcher {
                 .await;
             }
         };
-        let product_admission = match self.stage_product_admission(
+        let runtime_admission = match self.stage_runtime_admission(
             &wire,
             &ability,
             axon_sdk::invocation::CallMode::Bidi,
@@ -1159,12 +1159,12 @@ impl LocalAxonSessionDispatcher {
                 .await;
             }
         };
-        if let Err(err) = Self::commit_product_admission(product_admission) {
+        if let Err(err) = Self::commit_runtime_admission(runtime_admission) {
             return Self::cancel_opened_bidi(
                 outbound,
                 call_id,
                 handle,
-                format!("product admission commit failed: {err}"),
+                format!("runtime admission commit failed: {err}"),
             )
             .await;
         }

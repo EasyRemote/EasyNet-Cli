@@ -45,9 +45,9 @@
 //
 // What it does NOT own
 // --------------------
-// This module is not a second Axon runtime and not a product policy
+// This module is not a second Axon runtime and not a runtime admission
 // singleton. It embeds Axon protocol/runtime primitives inside
-// `easynet-daemon`, while EasyNet product policy remains daemon-owned
+// `easynet-daemon`, while EasyNet runtime admission remains daemon-owned
 // and Axon protocol semantics remain Axon-owned.
 //
 // Why feature-gated

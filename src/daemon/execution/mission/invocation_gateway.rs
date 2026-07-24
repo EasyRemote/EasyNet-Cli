@@ -51,7 +51,7 @@ pub(crate) enum MissionInvocationTarget {
 /// Downstream policy capability applied to a runtime-derived Mission child.
 ///
 /// Axon remains the sole owner of canonical admission, lifecycle, and
-/// receipts. Implementations stage only product policy that cannot be encoded
+/// receipts. Implementations stage only runtime admission that cannot be encoded
 /// in the canonical descriptor-bound envelope.
 pub(crate) trait MissionChildAdmissionProvider: Send + Sync {
     fn stage_child(
@@ -105,7 +105,7 @@ impl MissionChildAdmissionProvider
 
 #[cfg(feature = "axon-pb")]
 impl PendingMissionChildAdmission
-    for crate::daemon::invocation::admission::admission_facade::DaemonProductAdmissionLease
+    for crate::daemon::invocation::admission::admission_facade::DaemonRuntimeAdmissionLease
 {
     fn commit(self: Box<Self>) -> anyhow::Result<()> {
         (*self)
@@ -307,7 +307,7 @@ impl DaemonMissionInvocationGateway {
         })?;
         let child_admission = envelope.derived_invocation_admission().ok_or_else(|| {
             anyhow::anyhow!(
-                "Mission child dispatch requires the admitting daemon product-policy capability"
+                "Mission child dispatch requires the admitting daemon runtime-admission capability"
             )
         })?;
         Self::from_runtime_context(
@@ -335,7 +335,7 @@ impl DaemonMissionInvocationGateway {
         }
         let child_admission = envelope.derived_invocation_admission().ok_or_else(|| {
             anyhow::anyhow!(
-                "Mission child dispatch requires the admitting daemon product-policy capability"
+                "Mission child dispatch requires the admitting daemon runtime-admission capability"
             )
         })?;
         Self::from_runtime_context(
@@ -466,7 +466,7 @@ impl DaemonMissionInvocationGateway {
                 )
                 .await?
             } else {
-                let product_admission = match &self.child_admission {
+                let runtime_admission = match &self.child_admission {
                     MissionChildAdmission::Daemon(admission) => Some(
                         admission
                             .stage_child(
@@ -480,7 +480,7 @@ impl DaemonMissionInvocationGateway {
                             )
                             .map_err(|error| {
                                 anyhow::anyhow!(
-                                    "stage Mission child {ability} product admission: {error}"
+                                    "stage Mission child {ability} runtime admission: {error}"
                                 )
                             })?,
                     ),
@@ -492,9 +492,9 @@ impl DaemonMissionInvocationGateway {
                     .invoke_descriptor_bound_request_async(descriptor_request)
                     .await
                     .map_err(|error| anyhow::anyhow!("admit Mission child {ability}: {error}"))?;
-                if let Some(product_admission) = product_admission {
-                    product_admission.commit().map_err(|error| {
-                        anyhow::anyhow!("commit Mission child {ability} product admission: {error}")
+                if let Some(runtime_admission) = runtime_admission {
+                    runtime_admission.commit().map_err(|error| {
+                        anyhow::anyhow!("commit Mission child {ability} runtime admission: {error}")
                     })?;
                 }
                 let finalized = handle.finalized().await.map_err(|error| {

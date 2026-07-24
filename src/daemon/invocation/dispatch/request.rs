@@ -1425,7 +1425,7 @@ mod tests {
         let hub = crate::core::ura::hub_ura("acme");
         let observe_ref = descriptor_ref(&hub, "observe.health", "2.4.0");
         let mut metadata = HashMap::new();
-        metadata.insert("x-product-policy".to_string(), "value".to_string());
+        metadata.insert("x-runtime-admission".to_string(), "value".to_string());
         let request = DaemonInvocation::builder(
             "easynet:///r/acme/device/dev-a",
             &hub,
@@ -1442,7 +1442,7 @@ mod tests {
         .into_request()
         .expect("non-canonical metadata must remain transport-only");
 
-        assert_eq!(request.metadata["x-product-policy"], "value");
+        assert_eq!(request.metadata["x-runtime-admission"], "value");
         assert_eq!(
             crate::daemon::invocation::dispatch::invocation_wire::descriptor_ref_from_invocation_target(
                 "test unary request",

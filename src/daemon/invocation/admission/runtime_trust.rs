@@ -12,7 +12,7 @@
 // This module does not define Axon protocol semantics. URA parsing remains
 // delegated to `crate::core::ura`; Invocation admission, receipts, signatures,
 // stream, and bidi semantics remain Axon-owned. This aggregate owns the
-// EasyNet daemon product policy for which trust rows may enter or leave the
+// EasyNet daemon runtime admission for which trust rows may enter or leave the
 // runtime trust anchor.
 //
 // Implementation Approach

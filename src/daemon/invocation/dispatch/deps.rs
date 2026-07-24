@@ -192,35 +192,35 @@ impl RuntimePlane {
         }
     }
 
-    pub(crate) fn product_policy(
+    pub(crate) fn runtime_admission(
         &self,
     ) -> Result<
         Arc<
-            crate::daemon::invocation::admission::admission_facade::DaemonProductAdmissionCoordinator,
+            crate::daemon::invocation::admission::admission_facade::DaemonRuntimeAdmissionCoordinator,
         >,
         tonic::Status,
     >{
         self.daemon_admission_graph()
             .as_ref()
-            .map(|graph| graph.product_policy())
+            .map(|graph| graph.runtime_admission())
             .ok_or_else(|| {
                 tonic::Status::failed_precondition(
-                    "daemon LocalRuntime product admission graph is not wired",
+                    "daemon LocalRuntime runtime admission graph is not wired",
                 )
             })
     }
 
-    pub(crate) fn stage_product_admission(
+    pub(crate) fn stage_runtime_admission(
         &self,
         facade: &crate::daemon::invocation::admission::admission_facade::AdmissionFacade,
         wire: &crate::daemon::axon_bridge::dispatch_shim::WireDispatch,
         ability: &str,
         call_mode: axon_sdk::invocation::CallMode,
     ) -> Result<
-        crate::daemon::invocation::admission::admission_facade::DaemonProductAdmissionLease,
+        crate::daemon::invocation::admission::admission_facade::DaemonRuntimeAdmissionLease,
         tonic::Status,
     > {
-        self.product_policy()?
+        self.runtime_admission()?
             .stage(facade, wire, ability, call_mode)
     }
 }

@@ -301,7 +301,7 @@ impl CanonicalReceiptProvider for KeyServiceReceiptAuthorityProvider {
         // it with the CLI product-admission coordinator, which is the sole
         // producer of receipt-bound admission policy.
         Err(AxonError::internal(
-            "daemon_product_admission_coordinator_required",
+            "daemon_runtime_admission_coordinator_required",
         ))
     }
 

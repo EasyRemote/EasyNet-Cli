@@ -4,7 +4,7 @@
 // File: src/daemon/invocation/state/usage_quota.rs
 //
 // Per-(consumer-URA, ability) invocation quota for unary invokes. The
-// provider-backed product policy reserves capacity after Axon signature and
+// provider-backed runtime admission reserves capacity after Axon signature and
 // nonce reservation, then commits only after canonical runtime admission.
 // Policy rejection or any later launch failure drops the reservation and
 // restores the slot. Quota is governance policy, not authentication or replay

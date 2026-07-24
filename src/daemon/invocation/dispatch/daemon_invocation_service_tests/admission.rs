@@ -133,7 +133,7 @@ async fn invoke_staged_wire(
         .expect("RF7 test service LocalRuntime");
     let lease = service
         .runtime
-        .stage_product_admission(
+        .stage_runtime_admission(
             service.admission_plane.verifier_ref(),
             &wire,
             geometry.ability,
@@ -218,7 +218,7 @@ fn local_system_wire(
 }
 
 #[tokio::test]
-async fn canonical_signature_and_product_policy_precede_handler_mutation_for_all_geometries() {
+async fn canonical_signature_and_runtime_admission_precede_handler_mutation_for_all_geometries() {
     let (service, geometries) = generic_geometry_fixture().await;
 
     for geometry in &geometries {
@@ -239,7 +239,7 @@ async fn canonical_signature_and_product_policy_precede_handler_mutation_for_all
 
         let policy_error = invoke_staged_wire(&service, geometry, external_wire(geometry, false))
             .await
-            .expect_err("daemon product policy must reject unresolved owner authority");
+            .expect_err("daemon runtime admission must reject unresolved owner authority");
         assert!(
             policy_error.reason.contains("POLICY_DENIED"),
             "{} policy denial must come from the provider-backed admission seam: {policy_error}",
@@ -248,7 +248,7 @@ async fn canonical_signature_and_product_policy_precede_handler_mutation_for_all
         assert_eq!(
             geometry.mutations.load(Ordering::SeqCst),
             0,
-            "{} product policy must run before handler mutation",
+            "{} runtime admission must run before handler mutation",
             geometry.ability
         );
     }

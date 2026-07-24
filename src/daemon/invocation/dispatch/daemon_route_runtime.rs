@@ -66,8 +66,8 @@ pub(crate) struct DaemonRouteRuntimeAdapter {
     runtime: Arc<LocalRuntime>,
     cancellations: InvocationCancellationRegistry,
     admission: crate::daemon::invocation::admission::admission_facade::AdmissionFacade,
-    product_policy: Arc<
-        crate::daemon::invocation::admission::admission_facade::DaemonProductAdmissionCoordinator,
+    runtime_admission: Arc<
+        crate::daemon::invocation::admission::admission_facade::DaemonRuntimeAdmissionCoordinator,
     >,
 }
 
@@ -194,15 +194,15 @@ impl DaemonRouteRuntimeAdapter {
         runtime: Arc<LocalRuntime>,
         cancellations: InvocationCancellationRegistry,
         admission: crate::daemon::invocation::admission::admission_facade::AdmissionFacade,
-        product_policy: Arc<
-            crate::daemon::invocation::admission::admission_facade::DaemonProductAdmissionCoordinator,
+        runtime_admission: Arc<
+            crate::daemon::invocation::admission::admission_facade::DaemonRuntimeAdmissionCoordinator,
         >,
     ) -> Self {
         Self {
             runtime,
             cancellations,
             admission,
-            product_policy,
+            runtime_admission,
         }
     }
 
@@ -391,8 +391,8 @@ impl DaemonRouteRuntimeAdapter {
             }
         }
         .map_err(|error| status_from_axon_invoke_error("Invoke", route.name(), *error))?;
-        let product_admission =
-            self.product_policy
+        let runtime_admission =
+            self.runtime_admission
                 .stage(&self.admission, &wire, route.name(), CallMode::Rpc)?;
 
         let outcome = crate::daemon::axon_bridge::dispatch_shim::dispatch_rpc_admitted(
@@ -402,7 +402,7 @@ impl DaemonRouteRuntimeAdapter {
         )
         .await;
         if outcome.invocation_id.is_some() {
-            product_admission.commit()?;
+            runtime_admission.commit()?;
         }
         daemon_route_outcome_response(outcome)
     }
@@ -480,8 +480,8 @@ impl DaemonRouteRuntimeAdapter {
         }
         .map_err(|error| status_from_axon_invoke_error("InvokeStream", route.name(), *error))?;
         let lifecycle_envelope = wire.envelope.clone();
-        let product_admission =
-            self.product_policy
+        let runtime_admission =
+            self.runtime_admission
                 .stage(&self.admission, &wire, route.name(), CallMode::Stream)?;
 
         let handle =
@@ -503,9 +503,9 @@ impl DaemonRouteRuntimeAdapter {
                 )));
             }
         };
-        if let Err(error) = product_admission.commit() {
+        if let Err(error) = runtime_admission.commit() {
             let _ = lifecycle
-                .cancel_and_finalize("stream product admission commit failed")
+                .cancel_and_finalize("stream runtime admission commit failed")
                 .await;
             return Err(error);
         }
@@ -589,8 +589,8 @@ impl DaemonRouteRuntimeAdapter {
         }
         .map_err(|error| status_from_axon_invoke_error("InvokeBidi", route.name(), *error))?;
         let lifecycle_envelope = wire.envelope.clone();
-        let product_admission =
-            self.product_policy
+        let runtime_admission =
+            self.runtime_admission
                 .stage(&self.admission, &wire, route.name(), CallMode::Bidi)?;
         let handle = crate::daemon::axon_bridge::dispatch_shim::open_bidi_external_signed(
             &self.runtime,
@@ -616,9 +616,9 @@ impl DaemonRouteRuntimeAdapter {
                 )));
             }
         };
-        if let Err(error) = product_admission.commit() {
+        if let Err(error) = runtime_admission.commit() {
             let _ = lifecycle
-                .cancel_and_finalize("bidi product admission commit failed")
+                .cancel_and_finalize("bidi runtime admission commit failed")
                 .await;
             return Err(error);
         }
@@ -959,7 +959,7 @@ fn daemon_route_outcome_response(
     rpc_dispatch_outcome_response(outcome).0
 }
 
-pub(crate) fn product_status_to_axon_error(status: Status) -> AxonError {
+pub(crate) fn runtime_status_to_axon_error(status: Status) -> AxonError {
     let code = status.code();
     let message = status.message().to_string();
     let error = match code {
@@ -1011,7 +1011,7 @@ mod product_status_projection_tests {
 
     #[test]
     fn not_found_preserves_the_canonical_resource_condition() {
-        let error = product_status_to_axon_error(Status::not_found("principal is not registered"));
+        let error = runtime_status_to_axon_error(Status::not_found("principal is not registered"));
 
         assert_eq!(error.kind, AxonErrorKind::InvalidArgument);
         assert_eq!(error.code, ErrorCode::NotFound);

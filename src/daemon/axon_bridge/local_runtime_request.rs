@@ -25,7 +25,7 @@
 //!
 //! Architectural Position:
 //! - EasyNet-Cli daemon/Axon bridge. Axon SDK remains the protocol source of
-//!   truth; CLI owns only product policy and request plumbing.
+//!   truth; CLI owns only runtime admission and request plumbing.
 
 use std::collections::HashMap;
 

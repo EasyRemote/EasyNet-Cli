@@ -370,7 +370,7 @@ impl EnvelopeContext {
             .map(|capability| Arc::clone(&capability.runtime))
     }
 
-    /// Return the daemon product-policy capability bound to the exact runtime
+    /// Return the daemon runtime-admission capability bound to the exact runtime
     /// host that admitted this invocation.
     pub(crate) fn derived_invocation_admission(
         &self,

@@ -121,7 +121,7 @@ fn dispatch_from_wire_parts(
 /// Reassemble an externally signed wire envelope into the canonical
 /// descriptor-bound dispatch object.
 ///
-/// The caller signature is mandatory. Daemon product policy may reject or
+/// The caller signature is mandatory. Daemon runtime admission may reject or
 /// authorize a route before this point, but Axon admission still owns
 /// signature structure, crypto verification, nonce replay, and receipt proof
 /// normalization.

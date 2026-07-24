@@ -59,7 +59,7 @@ use crate::daemon::invocation::dispatch::daemon_invocation_service::{
     DaemonBidiRoute, DAEMON_INVOCATION_BIDI_ROUTES,
 };
 use crate::daemon::invocation::dispatch::daemon_route_runtime::{
-    product_status_to_axon_error, SESSION_OPEN_EXT_METADATA_KEY,
+    runtime_status_to_axon_error, SESSION_OPEN_EXT_METADATA_KEY,
 };
 use crate::daemon::invocation::dispatch::deps::{
     DirectoryPlane, IdentityPlane, RuntimePlane, SessionPlane,
@@ -153,7 +153,7 @@ struct SessionOpenProvider {
     session_requests: BidiDispatcher,
 }
 
-/// Reload-aware product policy for admitting one Device presence into a Hub.
+/// Reload-aware runtime admission for admitting one Device presence into a Hub.
 ///
 /// The narrow snapshot source keeps transport admission machinery out of the
 /// provider while preserving trust-anchor reload visibility for every open.
@@ -240,7 +240,7 @@ impl SessionOpenPolicy {
             self.session_realm.as_deref(),
             trust_anchor.as_ref(),
         )
-        .map_err(product_status_to_axon_error)
+        .map_err(runtime_status_to_axon_error)
     }
 }
 
@@ -456,7 +456,7 @@ impl BidiDispatcher {
             runtime,
             self.runtime.cancellations.clone(),
             self.admission.clone(),
-            self.runtime.product_policy()?,
+            self.runtime.runtime_admission()?,
         )
         .open_bidi(route, envelope_open, up)
         .await
@@ -1230,7 +1230,7 @@ impl BidiDispatcher {
         }
         .map_err(|err| status_from_axon_invoke_error("InvokeBidi", &dispatch_ability, *err))?;
         let lifecycle_envelope = wire.envelope.clone();
-        let product_admission = self.runtime.stage_product_admission(
+        let runtime_admission = self.runtime.stage_runtime_admission(
             &self.admission,
             &wire,
             &dispatch_ability,
@@ -1259,9 +1259,9 @@ impl BidiDispatcher {
                 )));
             }
         };
-        if let Err(error) = product_admission.commit() {
+        if let Err(error) = runtime_admission.commit() {
             let _ = lifecycle
-                .cancel_and_finalize("bidi product admission commit failed")
+                .cancel_and_finalize("bidi runtime admission commit failed")
                 .await;
             return Err(error);
         }
@@ -1550,7 +1550,7 @@ async fn emit_session_provider_frame(
     context: &AbilityContext,
     frame: Result<InvokeBidiDown, Status>,
 ) -> Result<(), AxonError> {
-    let frame = frame.map_err(product_status_to_axon_error)?;
+    let frame = frame.map_err(runtime_status_to_axon_error)?;
     context
         .emit_progress(frame.encode_to_vec(), SESSION_RUNTIME_FRAME_CONTENT_TYPE)
         .await
@@ -1657,7 +1657,7 @@ fn session_contract_from_runtime_metadata(
     metadata: &std::collections::HashMap<String, String>,
 ) -> Result<SessionContract, AxonError> {
     let encoded = metadata.get(SESSION_OPEN_EXT_METADATA_KEY).ok_or_else(|| {
-        product_status_to_axon_error(Status::failed_precondition(
+        runtime_status_to_axon_error(Status::failed_precondition(
             "CANONICAL_CARRIER_REQUIRED: session.open runtime context is missing carrier negotiation",
         ))
     })?;
@@ -1672,7 +1672,7 @@ fn session_contract_from_runtime_metadata(
                 "session.open runtime carrier negotiation cannot be decoded: {error}"
             ))
         })?;
-    session_contract_from_ext(Some(&extension)).map_err(product_status_to_axon_error)
+    session_contract_from_ext(Some(&extension)).map_err(runtime_status_to_axon_error)
 }
 
 /// Frame-0 down is a typed session-control acknowledgement. Session

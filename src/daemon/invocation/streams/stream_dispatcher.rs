@@ -121,7 +121,7 @@ impl StreamDispatcher {
                 runtime,
                 self.runtime.cancellations.clone(),
                 self.admission.clone(),
-                self.runtime.product_policy()?,
+                self.runtime.runtime_admission()?,
             )
             .open_stream(route, request, local_system_ingress)
             .await?;
@@ -300,7 +300,7 @@ impl StreamDispatcher {
         }
         .map_err(|err| status_from_axon_invoke_error("InvokeStream", ability, *err))?;
         let lifecycle_envelope = wire.envelope.clone();
-        let product_admission = self.runtime.stage_product_admission(
+        let runtime_admission = self.runtime.stage_runtime_admission(
             &self.admission,
             &wire,
             ability,
@@ -324,9 +324,9 @@ impl StreamDispatcher {
                 )));
             }
         };
-        if let Err(error) = product_admission.commit() {
+        if let Err(error) = runtime_admission.commit() {
             let _ = lifecycle
-                .cancel_and_finalize("stream product admission commit failed")
+                .cancel_and_finalize("stream runtime admission commit failed")
                 .await;
             return Err(error);
         }

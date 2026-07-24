@@ -27,7 +27,7 @@
 // Architectural Position
 // ----------------------
 // Transport boundary -> attempt audit -> Axon runtime. This module does not
-// own product policy, route selection, or receipt verification.
+// own runtime admission, route selection, or receipt verification.
 
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};

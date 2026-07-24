@@ -69,7 +69,7 @@ use crate::daemon::invocation::bidi::session_wire::{
 };
 use crate::daemon::invocation::bidi::state::pending_dispatch::DispatchResult;
 use crate::daemon::invocation::dispatch::daemon_invocation_service::DaemonUnaryRoute;
-use crate::daemon::invocation::dispatch::daemon_route_runtime::product_status_to_axon_error;
+use crate::daemon::invocation::dispatch::daemon_route_runtime::runtime_status_to_axon_error;
 use crate::daemon::invocation::dispatch::deps::{
     DirectoryPlane, FederationDial, IdentityPlane, RuntimePlane, SessionPlane,
 };
@@ -403,7 +403,7 @@ impl DaemonUnaryRouteProvider {
                 .dispatcher
                 .dispatch_principal_lifecycle(principal_route.name(), arguments),
         }
-        .map_err(product_status_to_axon_error)
+        .map_err(runtime_status_to_axon_error)
     }
 }
 
@@ -462,7 +462,7 @@ impl UnaryDispatcher {
             runtime,
             self.runtime.cancellations.clone(),
             self.admission.clone(),
-            self.runtime.product_policy()?,
+            self.runtime.runtime_admission()?,
         )
         .dispatch(route, request, ingress)
         .await
@@ -868,7 +868,7 @@ impl UnaryDispatcher {
                 );
             }
         };
-        let product_admission = match self.runtime.stage_product_admission(
+        let runtime_admission = match self.runtime.stage_runtime_admission(
             &self.admission,
             &wire,
             ability,
@@ -885,7 +885,7 @@ impl UnaryDispatcher {
         .await;
         let runtime_started = outcome.invocation_id.is_some();
         if runtime_started {
-            if let Err(status) = product_admission.commit() {
+            if let Err(status) = runtime_admission.commit() {
                 return (Err(status), true);
             }
         }

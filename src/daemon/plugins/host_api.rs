@@ -533,11 +533,12 @@ mod tests {
     };
 
     fn executable_test_catalog() -> AxonAbilityCatalog {
-        AxonAbilityCatalog::new_with_runtime(
+        AxonAbilityCatalog::new_test_runtime_for_device_authority(
             crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
                 crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
                 None,
             ),
+            "easynet:///r/acme/device/test-plugin-host",
         )
     }
 
@@ -674,7 +675,7 @@ mod tests {
     }
 
     #[test]
-    fn plugin_eal_gateway_rejects_child_dispatch_without_daemon_product_policy() {
+    fn plugin_eal_gateway_rejects_child_dispatch_without_daemon_runtime_admission() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
         let mut catalog = executable_test_catalog();
         catalog.register_rpc_with_envelope_and_owner(
@@ -701,11 +702,11 @@ mod tests {
                 CallMode::Rpc,
                 "easynet:///r/acme/resource/test",
             ))
-            .expect_err("canonical-only runtime must not synthesize daemon product policy");
+            .expect_err("canonical-only runtime must not synthesize daemon runtime admission");
         let msg = format!("{err:#}");
         assert!(
             msg.contains(
-                "Mission child dispatch requires the admitting daemon product-policy capability"
+                "Mission child dispatch requires the admitting daemon runtime-admission capability"
             ),
             "wrong error: {msg}"
         );

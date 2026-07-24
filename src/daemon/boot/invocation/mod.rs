@@ -123,7 +123,7 @@ use trust::{
 };
 
 /// One provider graph shared by Axon's canonical caller authentication,
-/// daemon product policy, cross-hub routing, and SIGHUP reload.
+/// daemon runtime admission, cross-hub routing, and SIGHUP reload.
 ///
 /// The resolver graph is shared before `LocalRuntime` is constructed. The
 /// PrincipalLifecycle read model is then installed into that same resolver
@@ -553,7 +553,7 @@ pub fn start_daemon_invocation_transport(
     let federated_key_cache = federation_runtime.cache();
     daemon_runtime
         .bind_derived_invocation_admission(local_ability_catalog.as_ref(), admission.clone())
-        .context("bind daemon-derived Invocation product admission before transport publication")?;
+        .context("bind daemon-derived Invocation runtime admission before transport publication")?;
     // **Unified SIGHUP reload coordinator** (replaces the
     // previous independent tasks). One task, one signal
     // listener, processes trust-anchor reload + federated_peers

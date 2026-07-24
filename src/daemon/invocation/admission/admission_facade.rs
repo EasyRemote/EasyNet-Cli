@@ -1,4 +1,4 @@
-// EasyNet CLI - daemon product admission policy
+// EasyNet CLI - daemon runtime admission policy
 // ==============================================
 //
 // File: src/daemon/invocation/admission_facade.rs
@@ -100,7 +100,7 @@ const REASON_AUTHORITY_ISSUER_KEY_NOT_FOUND: &str = "AUTHORITY_ISSUER_KEY_NOT_FO
 const REASON_HOSTED_AGENT_DELEGATION_LOCAL_ONLY: &str = "HOSTED_AGENT_DELEGATION_LOCAL_ONLY";
 const REASON_CALLER_UNKNOWN: &str = "CALLER_UNKNOWN";
 
-/// Per-RPC transport/product policy gate consulted by
+/// Per-RPC transport/runtime admission gate consulted by
 /// `DaemonInvocationService` before routing into a federation wrapper or
 /// fallthrough handler.
 ///
@@ -188,14 +188,14 @@ struct VerifiedSignedAuthority<T> {
 }
 
 #[derive(Clone)]
-struct VerifiedProductAuthority {
+struct VerifiedRuntimeAuthority {
     authority_id: Option<String>,
     binding: AuthorityBinding,
     proof_type: &'static str,
     proof_payload: Vec<u8>,
 }
 
-impl VerifiedProductAuthority {
+impl VerifiedRuntimeAuthority {
     fn self_authority(principal_ura: impl Into<String>) -> Self {
         Self {
             authority_id: None,
@@ -333,7 +333,7 @@ impl VerifiedProductAuthority {
             [0u8; 32],
             Some(envelope.envelope().callee.clone()),
             None,
-            "easynet-cli.product_admission.v1",
+            "runtime.admission.v1",
         );
         proof.proof_hash = authority_proof_expected_hash(&proof);
         proof
@@ -348,75 +348,75 @@ impl VerifiedProductAuthority {
     }
 }
 
-const MAX_PENDING_PRODUCT_ADMISSIONS: usize = 4_096;
+const MAX_PENDING_RUNTIME_ADMISSIONS: usize = 4_096;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ProductAdmissionIngress {
+enum RuntimeAdmissionIngress {
     CallerSigned,
     ProvisionalBootstrap,
     TrustedLocalSystem,
 }
 
 #[derive(Clone)]
-struct ProductAdmissionInput {
+struct RuntimeAdmissionInput {
     facade: AdmissionFacade,
     envelope: Envelope,
     ability: String,
     arguments: Vec<u8>,
     metadata: HashMap<String, String>,
     call_mode: AxonCallMode,
-    ingress: ProductAdmissionIngress,
+    ingress: RuntimeAdmissionIngress,
 }
 
-struct ProductAdmissionReservation {
+struct RuntimeAdmissionReservation {
     quota: Option<QuotaReservation>,
 }
 
-struct ProductAdmissionDecision {
-    reservation: ProductAdmissionReservation,
+struct RuntimeAdmissionDecision {
+    reservation: RuntimeAdmissionReservation,
     policy: VerifiedAdmissionPolicy,
 }
 
-enum ProductAdmissionState {
+enum RuntimeAdmissionState {
     Pending,
     Evaluating,
-    Verified(ProductAdmissionReservation),
+    Verified(RuntimeAdmissionReservation),
     Denied,
 }
 
-struct PendingProductAdmission {
+struct PendingRuntimeAdmission {
     id: u64,
-    input: ProductAdmissionInput,
-    state: ProductAdmissionState,
+    input: RuntimeAdmissionInput,
+    state: RuntimeAdmissionState,
 }
 
 #[derive(Default)]
-struct ProductAdmissionRegistry {
-    by_envelope: HashMap<[u8; 32], VecDeque<PendingProductAdmission>>,
+struct RuntimeAdmissionRegistry {
+    by_envelope: HashMap<[u8; 32], VecDeque<PendingRuntimeAdmission>>,
     len: usize,
 }
 
 /// Request-scoped bridge from daemon transport context to Axon's synchronous
 /// canonical receipt-provider admission seam.
 ///
-/// The registry carries product-only facts that are not part of the canonical
+/// The registry carries runtime-only facts that are not part of the canonical
 /// descriptor-bound envelope, such as request metadata and quota policy. It
 /// never verifies signatures and never stores nonce/replay state. Axon remains
 /// the sole owner of both decisions.
 #[derive(Default)]
-pub(crate) struct DaemonProductAdmissionCoordinator {
-    registry: Mutex<ProductAdmissionRegistry>,
+pub(crate) struct DaemonRuntimeAdmissionCoordinator {
+    registry: Mutex<RuntimeAdmissionRegistry>,
     next_id: AtomicU64,
 }
 
-impl DaemonProductAdmissionCoordinator {
+impl DaemonRuntimeAdmissionCoordinator {
     pub(crate) fn stage(
         self: &Arc<Self>,
         facade: &AdmissionFacade,
         wire: &crate::daemon::axon_bridge::dispatch_shim::WireDispatch,
         ability: &str,
         call_mode: AxonCallMode,
-    ) -> Result<DaemonProductAdmissionLease, Status> {
+    ) -> Result<DaemonRuntimeAdmissionLease, Status> {
         let caller_signature = match &wire.ingress {
             crate::daemon::axon_bridge::dispatch_shim::WireDispatchIngress::ExternalSigned(_) => {
                 Some(wire_caller_signature(wire)?)
@@ -430,13 +430,13 @@ impl DaemonProductAdmissionCoordinator {
         };
         let ingress = match &wire.ingress {
             crate::daemon::axon_bridge::dispatch_shim::WireDispatchIngress::ExternalSigned(_) => {
-                ProductAdmissionIngress::CallerSigned
+                RuntimeAdmissionIngress::CallerSigned
             }
             crate::daemon::axon_bridge::dispatch_shim::WireDispatchIngress::ProvisionalBootstrap(
                 _,
-            ) => ProductAdmissionIngress::ProvisionalBootstrap,
+            ) => RuntimeAdmissionIngress::ProvisionalBootstrap,
             crate::daemon::axon_bridge::dispatch_shim::WireDispatchIngress::LocalSystem => {
-                ProductAdmissionIngress::TrustedLocalSystem
+                RuntimeAdmissionIngress::TrustedLocalSystem
             }
         };
         self.stage_canonical(
@@ -462,28 +462,28 @@ impl DaemonProductAdmissionCoordinator {
         request_id: String,
         ability: &str,
         call_mode: AxonCallMode,
-        ingress: ProductAdmissionIngress,
-    ) -> Result<DaemonProductAdmissionLease, Status> {
+        ingress: RuntimeAdmissionIngress,
+    ) -> Result<DaemonRuntimeAdmissionLease, Status> {
         let envelope_key =
             axon_sdk::invocation::sha256(&descriptor_bound_canonical_bytes(&descriptor_bound));
         let envelope =
-            product_policy_envelope(descriptor_bound.envelope(), caller_signature, request_id)?;
+            runtime_admission_envelope(descriptor_bound.envelope(), caller_signature, request_id)?;
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let mut registry = self.registry.lock().map_err(|_| {
-            Status::internal("daemon product admission registry lock poisoned while staging")
+            Status::internal("daemon runtime admission registry lock poisoned while staging")
         })?;
-        if registry.len >= MAX_PENDING_PRODUCT_ADMISSIONS {
+        if registry.len >= MAX_PENDING_RUNTIME_ADMISSIONS {
             return Err(Status::resource_exhausted(
-                "daemon product admission registry is saturated",
+                "daemon runtime admission registry is saturated",
             ));
         }
         registry
             .by_envelope
             .entry(envelope_key)
             .or_default()
-            .push_back(PendingProductAdmission {
+            .push_back(PendingRuntimeAdmission {
                 id,
-                input: ProductAdmissionInput {
+                input: RuntimeAdmissionInput {
                     facade: facade.clone(),
                     envelope,
                     ability: ability.to_string(),
@@ -492,10 +492,10 @@ impl DaemonProductAdmissionCoordinator {
                     call_mode,
                     ingress,
                 },
-                state: ProductAdmissionState::Pending,
+                state: RuntimeAdmissionState::Pending,
             });
         registry.len += 1;
-        Ok(DaemonProductAdmissionLease {
+        Ok(DaemonRuntimeAdmissionLease {
             coordinator: Arc::clone(self),
             envelope_key,
             id: Some(id),
@@ -512,18 +512,18 @@ impl DaemonProductAdmissionCoordinator {
         request_id: String,
         ability: &str,
         call_mode: AxonCallMode,
-    ) -> Result<DaemonProductAdmissionLease, Status> {
+    ) -> Result<DaemonRuntimeAdmissionLease, Status> {
         let signed_descriptor_bound =
             DescriptorBoundEnvelope::new(signed_envelope.envelope.clone()).map_err(|error| {
                 Status::invalid_argument(format!(
-                    "derived product admission signed envelope is not descriptor-bound: {error}"
+                    "derived runtime admission signed envelope is not descriptor-bound: {error}"
                 ))
             })?;
         if descriptor_bound_canonical_bytes(&descriptor_bound)
             != descriptor_bound_canonical_bytes(&signed_descriptor_bound)
         {
             return Err(Status::invalid_argument(
-                "derived product admission signed envelope does not match descriptor-bound request",
+                "derived runtime admission signed envelope does not match descriptor-bound request",
             ));
         }
         self.stage_canonical(
@@ -535,7 +535,7 @@ impl DaemonProductAdmissionCoordinator {
             request_id,
             ability,
             call_mode,
-            ProductAdmissionIngress::CallerSigned,
+            RuntimeAdmissionIngress::CallerSigned,
         )
     }
 
@@ -548,55 +548,55 @@ impl DaemonProductAdmissionCoordinator {
         let selected = {
             let mut registry = self.registry.lock().map_err(|_| {
                 InvocationError::internal(
-                    "daemon_product_admission_registry_lock_poisoned_while_verifying",
+                    "daemon_runtime_admission_registry_lock_poisoned_while_verifying",
                 )
             })?;
             let Some(queue) = registry.by_envelope.get_mut(&envelope_key) else {
                 return Err(InvocationError::permission_denied(
-                    "daemon_product_admission_context_missing",
+                    "daemon_runtime_admission_context_missing",
                 ));
             };
             let pending = queue
                 .iter_mut()
-                .find(|pending| matches!(pending.state, ProductAdmissionState::Pending))
+                .find(|pending| matches!(pending.state, RuntimeAdmissionState::Pending))
                 .ok_or_else(|| {
                     InvocationError::permission_denied(
-                        "daemon_product_admission_context_not_pending",
+                        "daemon_runtime_admission_context_not_pending",
                     )
                 })?;
-            pending.state = ProductAdmissionState::Evaluating;
+            pending.state = RuntimeAdmissionState::Evaluating;
             (pending.id, pending.input.clone())
         };
 
         let (id, input) = selected;
         let result = input
             .facade
-            .reserve_product_admission(&input, envelope)
-            .map_err(product_admission_status_to_axon);
+            .reserve_runtime_admission(&input, envelope)
+            .map_err(runtime_admission_status_to_axon);
 
         let mut registry = self.registry.lock().map_err(|_| {
             InvocationError::internal(
-                "daemon_product_admission_registry_lock_poisoned_after_verification",
+                "daemon_runtime_admission_registry_lock_poisoned_after_verification",
             )
         })?;
         let queue = registry.by_envelope.get_mut(&envelope_key).ok_or_else(|| {
-            InvocationError::internal("daemon_product_admission_context_removed_while_verifying")
+            InvocationError::internal("daemon_runtime_admission_context_removed_while_verifying")
         })?;
         let pending = queue
             .iter_mut()
             .find(|pending| pending.id == id)
             .ok_or_else(|| {
                 InvocationError::internal(
-                    "daemon_product_admission_context_id_removed_while_verifying",
+                    "daemon_runtime_admission_context_id_removed_while_verifying",
                 )
             })?;
         match result {
             Ok(decision) => {
-                pending.state = ProductAdmissionState::Verified(decision.reservation);
+                pending.state = RuntimeAdmissionState::Verified(decision.reservation);
                 Ok(decision.policy)
             }
             Err(error) => {
-                pending.state = ProductAdmissionState::Denied;
+                pending.state = RuntimeAdmissionState::Denied;
                 Err(error)
             }
         }
@@ -605,21 +605,21 @@ impl DaemonProductAdmissionCoordinator {
     fn finish(&self, envelope_key: [u8; 32], id: u64, commit: bool) -> Result<(), Status> {
         let state = {
             let mut registry = self.registry.lock().map_err(|_| {
-                Status::internal("daemon product admission registry lock poisoned while finishing")
+                Status::internal("daemon runtime admission registry lock poisoned while finishing")
             })?;
             let (state, remove_key) = {
                 let queue = registry.by_envelope.get_mut(&envelope_key).ok_or_else(|| {
-                    Status::internal("daemon product admission lease has no staged context")
+                    Status::internal("daemon runtime admission lease has no staged context")
                 })?;
                 let offset = queue
                     .iter()
                     .position(|pending| pending.id == id)
                     .ok_or_else(|| {
-                        Status::internal("daemon product admission lease id is not staged")
+                        Status::internal("daemon runtime admission lease id is not staged")
                     })?;
                 let pending = queue
                     .remove(offset)
-                    .expect("located daemon product admission must remain in queue");
+                    .expect("located daemon runtime admission must remain in queue");
                 (pending.state, queue.is_empty())
             };
             registry.len = registry.len.saturating_sub(1);
@@ -630,44 +630,44 @@ impl DaemonProductAdmissionCoordinator {
         };
 
         match (commit, state) {
-            (true, ProductAdmissionState::Verified(reservation)) => {
+            (true, RuntimeAdmissionState::Verified(reservation)) => {
                 if let Some(quota) = reservation.quota {
                     quota.commit();
                 }
                 Ok(())
             }
             (false, _) => Ok(()),
-            (true, ProductAdmissionState::Denied) => Err(Status::permission_denied(
-                "daemon product admission was denied before runtime launch",
+            (true, RuntimeAdmissionState::Denied) => Err(Status::permission_denied(
+                "daemon runtime admission was denied before runtime launch",
             )),
-            (true, ProductAdmissionState::Pending | ProductAdmissionState::Evaluating) => {
+            (true, RuntimeAdmissionState::Pending | RuntimeAdmissionState::Evaluating) => {
                 Err(Status::internal(
-                    "daemon product admission did not reach a terminal policy decision",
+                    "daemon runtime admission did not reach a terminal policy decision",
                 ))
             }
         }
     }
 }
 
-/// Owns one staged product-policy transaction until LocalRuntime either
+/// Owns one staged runtime-admission transaction until LocalRuntime either
 /// returns an admitted handle or rejects before handler execution.
-pub(crate) struct DaemonProductAdmissionLease {
-    coordinator: Arc<DaemonProductAdmissionCoordinator>,
+pub(crate) struct DaemonRuntimeAdmissionLease {
+    coordinator: Arc<DaemonRuntimeAdmissionCoordinator>,
     envelope_key: [u8; 32],
     id: Option<u64>,
 }
 
-impl DaemonProductAdmissionLease {
+impl DaemonRuntimeAdmissionLease {
     pub(crate) fn commit(mut self) -> Result<(), Status> {
         let id = self
             .id
             .take()
-            .ok_or_else(|| Status::internal("daemon product admission lease already finished"))?;
+            .ok_or_else(|| Status::internal("daemon runtime admission lease already finished"))?;
         self.coordinator.finish(self.envelope_key, id, true)
     }
 }
 
-impl Drop for DaemonProductAdmissionLease {
+impl Drop for DaemonRuntimeAdmissionLease {
     fn drop(&mut self) {
         if let Some(id) = self.id.take() {
             let _ = self.coordinator.finish(self.envelope_key, id, false);
@@ -749,7 +749,7 @@ impl AdmissionFacade {
         }
     }
 
-    /// Bind product admission to the same policy-store registry used by the
+    /// Bind runtime admission to the same policy-store registry used by the
     /// governance ability catalog.
     #[must_use]
     pub fn with_access_control_stores(mut self, stores: Arc<AccessControlStoreRegistry>) -> Self {
@@ -970,11 +970,11 @@ impl AdmissionFacade {
         self
     }
 
-    fn reserve_product_admission(
+    fn reserve_runtime_admission(
         &self,
-        input: &ProductAdmissionInput,
+        input: &RuntimeAdmissionInput,
         admitted_envelope: &DescriptorBoundEnvelope,
-    ) -> Result<ProductAdmissionDecision, Status> {
+    ) -> Result<RuntimeAdmissionDecision, Status> {
         let descriptor_ref = admitted_envelope.envelope().ability.as_str();
         ensure_signed_descriptor_ref_matches_route(&input.envelope, &input.ability, descriptor_ref)
             .map_err(|status| {
@@ -1006,19 +1006,19 @@ impl AdmissionFacade {
         let caller_ura = caller_ura_required(&input.envelope)?;
 
         match input.ingress {
-            ProductAdmissionIngress::TrustedLocalSystem => {
+            RuntimeAdmissionIngress::TrustedLocalSystem => {
                 if caller_ura != crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA {
                     return Err(Status::permission_denied(
                         "trusted local-system admission requires exact `_system.local` caller",
                     ));
                 }
-                return product_admission_decision(
+                return runtime_admission_decision(
                     admitted_envelope,
-                    VerifiedProductAuthority::self_authority(caller_ura),
-                    ProductAdmissionReservation { quota: None },
+                    VerifiedRuntimeAuthority::self_authority(caller_ura),
+                    RuntimeAdmissionReservation { quota: None },
                 );
             }
-            ProductAdmissionIngress::ProvisionalBootstrap => {
+            RuntimeAdmissionIngress::ProvisionalBootstrap => {
                 Self::verify_provisional_federation_join(
                     &input.envelope,
                     &input.ability,
@@ -1035,13 +1035,13 @@ impl AdmissionFacade {
                         )),
                     ));
                 }
-                return product_admission_decision(
+                return runtime_admission_decision(
                     admitted_envelope,
-                    VerifiedProductAuthority::bootstrap(admitted_envelope.envelope(), None)?,
-                    ProductAdmissionReservation { quota: None },
+                    VerifiedRuntimeAuthority::bootstrap(admitted_envelope.envelope(), None)?,
+                    RuntimeAdmissionReservation { quota: None },
                 );
             }
-            ProductAdmissionIngress::CallerSigned => {}
+            RuntimeAdmissionIngress::CallerSigned => {}
         }
 
         let trust_anchor = self.trust_anchor.snapshot();
@@ -1068,20 +1068,20 @@ impl AdmissionFacade {
                 &input.ability,
             )
         {
-            return product_admission_decision(
+            return runtime_admission_decision(
                 admitted_envelope,
                 authority,
-                ProductAdmissionReservation { quota: None },
+                RuntimeAdmissionReservation { quota: None },
             );
         }
         let Some(quota) = self
             .quota
             .reserve(caller_ura, &input.ability, current_unix_ms())
         else {
-            return product_admission_decision(
+            return runtime_admission_decision(
                 admitted_envelope,
                 authority,
-                ProductAdmissionReservation { quota: None },
+                RuntimeAdmissionReservation { quota: None },
             );
         };
         let decision = quota.decision();
@@ -1090,10 +1090,10 @@ impl AdmissionFacade {
             drop(quota);
             return Err(status);
         }
-        product_admission_decision(
+        runtime_admission_decision(
             admitted_envelope,
             authority,
-            ProductAdmissionReservation { quota: Some(quota) },
+            RuntimeAdmissionReservation { quota: Some(quota) },
         )
     }
 
@@ -1173,11 +1173,11 @@ impl AdmissionFacade {
         action: AccessAction,
         safe_read: bool,
         descriptor_bound: &WireDescriptorBoundEnvelope,
-    ) -> Result<VerifiedProductAuthority, Status> {
+    ) -> Result<VerifiedRuntimeAuthority, Status> {
         self.enforce_principal_lifecycle_admission(envelope, ability, trusted_role)
             .map_err(|status| self.authority_denied_status(envelope, ability, status))?;
         if bootstrap_authority_ability(ability) {
-            return VerifiedProductAuthority::bootstrap(descriptor_bound.envelope.envelope(), None);
+            return VerifiedRuntimeAuthority::bootstrap(descriptor_bound.envelope.envelope(), None);
         }
         let metadata_authority = verify_delegation_metadata(
             envelope,
@@ -1240,11 +1240,11 @@ impl AdmissionFacade {
             .map_err(|status| self.authority_denied_status(envelope, ability, status))?;
         let verified_authority_id = authority_proof_authority
             .as_ref()
-            .and_then(VerifiedProductAuthority::authority_id)
+            .and_then(VerifiedRuntimeAuthority::authority_id)
             .or_else(|| {
                 metadata_authority
                     .as_ref()
-                    .and_then(VerifiedProductAuthority::authority_id)
+                    .and_then(VerifiedRuntimeAuthority::authority_id)
             })
             .or(bootstrap_authority_id.as_deref())
             .or(hosted_agent_publication_authority_id.as_deref())
@@ -1280,12 +1280,12 @@ impl AdmissionFacade {
         }
         if let Some(authority_id) = bootstrap_authority_id.or(hosted_agent_publication_authority_id)
         {
-            return VerifiedProductAuthority::bootstrap(
+            return VerifiedRuntimeAuthority::bootstrap(
                 descriptor_bound.envelope.envelope(),
                 Some(authority_id),
             );
         }
-        Ok(VerifiedProductAuthority::self_authority(
+        Ok(VerifiedRuntimeAuthority::self_authority(
             descriptor_bound.envelope.envelope().caller.ura.clone(),
         ))
     }
@@ -1519,7 +1519,7 @@ impl AdmissionFacade {
     fn verify_authority_proof_metadata(
         &self,
         input: AuthorityProofMetadataInput<'_>,
-    ) -> Result<Option<VerifiedProductAuthority>, Status> {
+    ) -> Result<Option<VerifiedRuntimeAuthority>, Status> {
         let AuthorityProofMetadataInput {
             envelope,
             ability,
@@ -1589,26 +1589,26 @@ impl AdmissionFacade {
                     proof.owner_user_id
                 ))
             })??;
-        VerifiedProductAuthority::from_authority_proof(envelope, &proof).map(Some)
+        VerifiedRuntimeAuthority::from_authority_proof(envelope, &proof).map(Some)
     }
 }
 
-/// Daemon-owned capability for applying the exact same product-policy
+/// Daemon-owned capability for applying the exact same runtime-admission
 /// transaction to a runtime-derived child as to a carrier-delivered request.
 ///
 /// Axon owns child derivation, signatures, replay, lifecycle, and receipts.
-/// This object contributes only the downstream product policy and quota
+/// This object contributes only the downstream runtime admission and quota
 /// context that cannot be encoded in the canonical descriptor-bound envelope.
 #[derive(Clone)]
 pub(crate) struct DaemonDerivedInvocationAdmission {
     facade: AdmissionFacade,
-    coordinator: Arc<DaemonProductAdmissionCoordinator>,
+    coordinator: Arc<DaemonRuntimeAdmissionCoordinator>,
 }
 
 impl DaemonDerivedInvocationAdmission {
     pub(crate) fn new(
         facade: AdmissionFacade,
-        coordinator: Arc<DaemonProductAdmissionCoordinator>,
+        coordinator: Arc<DaemonRuntimeAdmissionCoordinator>,
     ) -> Self {
         Self {
             facade,
@@ -1625,7 +1625,7 @@ impl DaemonDerivedInvocationAdmission {
         request_id: String,
         ability: &str,
         call_mode: AxonCallMode,
-    ) -> Result<DaemonProductAdmissionLease, Status> {
+    ) -> Result<DaemonRuntimeAdmissionLease, Status> {
         self.coordinator.stage_derived(
             &self.facade,
             descriptor_bound,
@@ -1650,21 +1650,21 @@ fn default_access_control_stores() -> Arc<AccessControlStoreRegistry> {
     }
 }
 
-fn product_admission_decision(
+fn runtime_admission_decision(
     envelope: &DescriptorBoundEnvelope,
-    authority: VerifiedProductAuthority,
-    reservation: ProductAdmissionReservation,
-) -> Result<ProductAdmissionDecision, Status> {
+    authority: VerifiedRuntimeAuthority,
+    reservation: RuntimeAdmissionReservation,
+) -> Result<RuntimeAdmissionDecision, Status> {
     let policy = authority
         .into_policy(envelope)
         .map_err(axon_error_to_status)?;
-    Ok(ProductAdmissionDecision {
+    Ok(RuntimeAdmissionDecision {
         reservation,
         policy,
     })
 }
 
-fn product_policy_envelope(
+fn runtime_admission_envelope(
     admitted: &axon_sdk::invocation::InvocationEnvelope,
     caller_signature: Option<axon_sdk::invocation::CallerSignature>,
     request_id: String,
@@ -1679,7 +1679,7 @@ fn product_policy_envelope(
     )
     .map_err(|error| {
         Status::internal(format!(
-            "project admitted canonical envelope for product policy: {error}"
+            "project admitted canonical envelope for runtime admission: {error}"
         ))
     })
 }
@@ -1728,7 +1728,7 @@ fn quota_denied_status(
     }
 }
 
-fn product_admission_status_to_axon(status: Status) -> InvocationError {
+fn runtime_admission_status_to_axon(status: Status) -> InvocationError {
     let detail = status.message().to_string();
     match status.code() {
         Code::Cancelled => InvocationError::cancelled(detail),
@@ -2021,7 +2021,7 @@ fn verify_delegation_metadata(
     metadata: Option<&HashMap<String, String>>,
     trust_anchor: &RealmTrustAnchor,
     now_ms: i64,
-) -> Result<Option<VerifiedProductAuthority>, Status> {
+) -> Result<Option<VerifiedRuntimeAuthority>, Status> {
     let raw_delegation = metadata.and_then(|m| {
         m.get(DELEGATION_METADATA_KEY)
             .map(String::as_str)
@@ -2042,13 +2042,13 @@ fn verify_delegation_metadata(
             let verified =
                 parse_and_verify_delegation_proof(raw_proof, trust_anchor, now_ms)?;
             verify_delegation_bindings(&verified.payload, envelope, ability)?;
-            VerifiedProductAuthority::delegated(verified).map(Some)
+            VerifiedRuntimeAuthority::delegated(verified).map(Some)
         }
         (None, Some(raw_session)) => {
             let verified =
                 parse_and_verify_session_authority(raw_session, trust_anchor, now_ms)?;
             verify_session_authority_bindings(&verified.payload, envelope, ability, action)?;
-            VerifiedProductAuthority::session(verified).map(Some)
+            VerifiedRuntimeAuthority::session(verified).map(Some)
         }
         (None, None) => {
             if envelope_requires_authority(envelope) {
@@ -2748,7 +2748,7 @@ mod tests {
     }
 
     fn assert_complete_non_self_policy(
-        authority: VerifiedProductAuthority,
+        authority: VerifiedRuntimeAuthority,
         envelope: &DescriptorBoundEnvelope,
         expected_form: &str,
     ) {
@@ -2782,7 +2782,7 @@ mod tests {
         };
         let canonical_payload =
             authority_metadata::canonical_authority_payload_bytes(&payload).expect("payload");
-        let authority = VerifiedProductAuthority::delegated(VerifiedSignedAuthority {
+        let authority = VerifiedRuntimeAuthority::delegated(VerifiedSignedAuthority {
             payload,
             canonical_payload,
             signature: vec![0x31; ed25519_dalek::SIGNATURE_LENGTH],
@@ -2814,7 +2814,7 @@ mod tests {
         };
         let canonical_payload =
             authority_metadata::canonical_authority_payload_bytes(&payload).expect("payload");
-        let authority = VerifiedProductAuthority::session(VerifiedSignedAuthority {
+        let authority = VerifiedRuntimeAuthority::session(VerifiedSignedAuthority {
             payload,
             canonical_payload,
             signature: vec![0x52; ed25519_dalek::SIGNATURE_LENGTH],

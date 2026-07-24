@@ -1025,22 +1025,22 @@ async fn external_signed_bidi_file_transfer_download_emits_business_frames() {
     let admission =
         AdmissionFacade::with_trust_anchor_cell(trust, Some(TEST_DAEMON_URA.to_string()))
             .with_ability_catalog(Arc::new(catalog));
-    let product_admission = runtime_assembly
+    let runtime_admission = runtime_assembly
         .admission_graph()
-        .product_policy()
+        .runtime_admission()
         .stage(
             &admission,
             &wire,
             crate::daemon::ability::builtins::device_control::file_transfer::ABILITY_FILE_TRANSFER,
             axon_sdk::invocation::CallMode::Bidi,
         )
-        .expect("stage daemon product admission");
+        .expect("stage daemon runtime admission");
     let handle = crate::daemon::axon_bridge::dispatch_shim::open_bidi_external_signed(&rt, wire)
         .await
         .expect("open external-signed bidi");
-    product_admission
+    runtime_admission
         .commit()
-        .expect("commit daemon product admission");
+        .expect("commit daemon runtime admission");
     let (input, mut output) = handle.split();
 
     input

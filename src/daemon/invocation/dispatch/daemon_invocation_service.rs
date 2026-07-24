@@ -780,15 +780,15 @@ impl DaemonInvocationService {
                     "daemon unary route registration requires live ability catalog".to_string()
                 })?;
                 let unary = self.unary_dispatcher();
-                let product_policy = self
+                let runtime_admission = self
                     .runtime
-                    .product_policy()
+                    .runtime_admission()
                     .map_err(|status| status.to_string())?;
                 crate::daemon::invocation::dispatch::daemon_route_runtime::DaemonRouteRuntimeAdapter::new(
                     runtime,
                     self.runtime.cancellations.clone(),
                     self.admission_plane.verifier(),
-                    product_policy,
+                    runtime_admission,
                 )
                 .register_for_owners(
                     &owner_uras,
@@ -835,15 +835,15 @@ impl DaemonInvocationService {
                     "daemon stream route registration requires live ability catalog".to_string()
                 })?;
                 let streams = self.stream_dispatcher();
-                let product_policy = self
+                let runtime_admission = self
                     .runtime
-                    .product_policy()
+                    .runtime_admission()
                     .map_err(|status| status.to_string())?;
                 crate::daemon::invocation::dispatch::daemon_route_runtime::DaemonRouteRuntimeAdapter::new(
                     runtime,
                     self.runtime.cancellations.clone(),
                     self.admission_plane.verifier(),
-                    product_policy,
+                    runtime_admission,
                 )
                 .register_streams(owner_ura, catalog.as_ref(), streams.daemon_route_provider())
                 .await
@@ -891,15 +891,15 @@ impl DaemonInvocationService {
                     "daemon bidi route registration requires live ability catalog".to_string()
                 })?;
                 let bidi = self.bidi_dispatcher();
-                let product_policy = self
+                let runtime_admission = self
                     .runtime
-                    .product_policy()
+                    .runtime_admission()
                     .map_err(|status| status.to_string())?;
                 crate::daemon::invocation::dispatch::daemon_route_runtime::DaemonRouteRuntimeAdapter::new(
                     runtime,
                     self.runtime.cancellations.clone(),
                     self.admission_plane.verifier(),
-                    product_policy,
+                    runtime_admission,
                 )
                 .register_bidis(owner_ura, catalog.as_ref(), bidi.daemon_route_provider())
                 .await

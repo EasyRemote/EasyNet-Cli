@@ -14,7 +14,7 @@ runtime path.
   `causal_context` before dispatch.
 - Root causal placement is represented by an explicit CLI declaration
   (`--causal-root`) and materialized through `declared_root_causal_context`.
-- Fresh nonce generation remains only in named product-policy and
+- Fresh nonce generation remains only in named runtime-admission and
   daemon-system paths, not the public remote ingress constructor.
 
 ## Refactoring
@@ -30,7 +30,7 @@ runtime path.
 
 - Local loopback support helpers still need the same explicit-public vs
   named-system issuer split.
-- Product bridges that mint fresh product-policy nonces still need migration
+- Runtime bridges that mint fresh runtime-admission nonces still need migration
   to child invocation or an explicit `ProductInvocationPolicy` owner.
 - Full RF-7/RF-8 closure still requires live daemon inventory and the
   two-node EasyRemote CLI E2E.

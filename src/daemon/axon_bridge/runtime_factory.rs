@@ -44,8 +44,8 @@ pub use crate::daemon::identity::receipt_signing::ProductionReceiptAuthorityConf
 #[cfg(feature = "axon-pb")]
 pub struct DaemonRuntimeAdmissionGraph {
     key_resolver: Arc<CanonicalAdmissionKeyResolver>,
-    product_policy: Arc<
-        crate::daemon::invocation::admission::admission_facade::DaemonProductAdmissionCoordinator,
+    runtime_admission: Arc<
+        crate::daemon::invocation::admission::admission_facade::DaemonRuntimeAdmissionCoordinator,
     >,
 }
 
@@ -53,13 +53,13 @@ pub struct DaemonRuntimeAdmissionGraph {
 impl DaemonRuntimeAdmissionGraph {
     fn new(
         key_resolver: Arc<CanonicalAdmissionKeyResolver>,
-        product_policy: Arc<
-            crate::daemon::invocation::admission::admission_facade::DaemonProductAdmissionCoordinator,
+        runtime_admission: Arc<
+            crate::daemon::invocation::admission::admission_facade::DaemonRuntimeAdmissionCoordinator,
         >,
     ) -> Self {
         Self {
             key_resolver,
-            product_policy,
+            runtime_admission,
         }
     }
 
@@ -75,12 +75,12 @@ impl DaemonRuntimeAdmissionGraph {
         self.key_resolver.provisional_bootstrap_provider()
     }
 
-    pub(crate) fn product_policy(
+    pub(crate) fn runtime_admission(
         &self,
     ) -> Arc<
-        crate::daemon::invocation::admission::admission_facade::DaemonProductAdmissionCoordinator,
+        crate::daemon::invocation::admission::admission_facade::DaemonRuntimeAdmissionCoordinator,
     > {
-        Arc::clone(&self.product_policy)
+        Arc::clone(&self.runtime_admission)
     }
 }
 
@@ -96,21 +96,21 @@ impl KeyResolver for DaemonRuntimeAdmissionGraph {
 }
 
 #[cfg(feature = "axon-pb")]
-struct ProductPolicyCanonicalReceiptProvider {
+struct RuntimeAdmissionCanonicalReceiptProvider {
     receipt_authority: Arc<dyn CanonicalReceiptProvider>,
-    product_policy: Arc<
-        crate::daemon::invocation::admission::admission_facade::DaemonProductAdmissionCoordinator,
+    runtime_admission: Arc<
+        crate::daemon::invocation::admission::admission_facade::DaemonRuntimeAdmissionCoordinator,
     >,
 }
 
 #[async_trait::async_trait]
 #[cfg(feature = "axon-pb")]
-impl CanonicalReceiptProvider for ProductPolicyCanonicalReceiptProvider {
+impl CanonicalReceiptProvider for RuntimeAdmissionCanonicalReceiptProvider {
     fn verify_admission_policy(
         &self,
         envelope: &axon_sdk::invocation::DescriptorBoundEnvelope,
     ) -> Result<axon_sdk::invocation::VerifiedAdmissionPolicy, AxonError> {
-        self.product_policy.verify_provider_policy(envelope)
+        self.runtime_admission.verify_provider_policy(envelope)
     }
 
     async fn resolve_signing_authority(
@@ -152,7 +152,7 @@ impl DaemonRuntimeAssembly {
         Arc::clone(&self.admission_graph)
     }
 
-    /// Bind the daemon's completed product policy facade to the handlers
+    /// Bind the daemon's completed runtime admission facade to the handlers
     /// already installed in this exact runtime.
     ///
     /// Catalog assembly must precede facade assembly because admission
@@ -167,7 +167,7 @@ impl DaemonRuntimeAssembly {
         catalog.bind_derived_invocation_admission(Arc::new(
             crate::daemon::invocation::admission::admission_facade::DaemonDerivedInvocationAdmission::new(
                 facade,
-                self.admission_graph.product_policy(),
+                self.admission_graph.runtime_admission(),
             ),
         ))
     }
@@ -216,13 +216,13 @@ fn assemble_daemon_runtime(
     >,
     ledger: Option<Arc<InvocationLedger>>,
 ) -> DaemonRuntimeAssembly {
-    let product_policy = Arc::new(
-        crate::daemon::invocation::admission::admission_facade::DaemonProductAdmissionCoordinator::default(),
+    let runtime_admission = Arc::new(
+        crate::daemon::invocation::admission::admission_facade::DaemonRuntimeAdmissionCoordinator::default(),
     );
     let receipt_provider: Arc<dyn CanonicalReceiptProvider> =
-        Arc::new(ProductPolicyCanonicalReceiptProvider {
+        Arc::new(RuntimeAdmissionCanonicalReceiptProvider {
             receipt_authority: canonical_receipt_provider,
-            product_policy: Arc::clone(&product_policy),
+            runtime_admission: Arc::clone(&runtime_admission),
         });
     let bootstrap_identities = Arc::new(
         crate::daemon::axon_bridge::runtime_admin::RuntimeBootstrapIdentityProvider::default(),
@@ -238,7 +238,7 @@ fn assemble_daemon_runtime(
     ));
     let admission_graph = Arc::new(DaemonRuntimeAdmissionGraph::new(
         admission_key_resolver,
-        product_policy,
+        runtime_admission,
     ));
     let runtime_resolver: Arc<dyn KeyResolver> = admission_graph.clone();
     let runtime = LocalRuntime::new_with_authority_providers(
@@ -287,7 +287,7 @@ pub fn build_local_runtime_with_receipt_provider(
 ///   terminal invocation persists into `<ledger_dir>/invocations.redb`
 ///   without the dispatch arm needing to manually build a record).
 ///
-/// This fixture intentionally has no daemon product-policy coordinator. Tests
+/// This fixture intentionally has no daemon runtime-admission coordinator. Tests
 /// for daemon transport admission must use
 /// [`build_test_daemon_runtime_assembly`]. Production boot must use
 /// [`build_production_local_runtime`].
@@ -306,7 +306,7 @@ pub fn build_local_runtime(
 #[cfg(all(test, feature = "axon-pb"))]
 #[must_use]
 /// Construct the complete downstream daemon admission assembly for transport
-/// tests that stage product policy before entering the canonical runtime.
+/// tests that stage runtime admission before entering the canonical runtime.
 pub(crate) fn build_test_daemon_runtime_assembly(
     key_resolver: Arc<dyn KeyResolver>,
     ledger: Option<Arc<InvocationLedger>>,
