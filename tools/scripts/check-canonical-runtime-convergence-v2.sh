@@ -4473,6 +4473,80 @@ if "test_direct_runtime_grpc_not_found_projects_descriptor_not_found" not in py_
 PY
 }
 
+check_sdk_cabi_descriptor_error_projection_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local go_cabi="$cli_root/sdk/go/cabi_runtime.go"
+  local go_cabi_errors="$cli_root/sdk/go/cabi_errors.go"
+  local go_cabi_test="$cli_root/sdk/go/cabi_runtime_test.go"
+  local py_cabi="$cli_root/sdk/python/easynet_sdk/_cabi.py"
+  local py_cabi_test="$cli_root/sdk/python/tests/test_cabi.py"
+
+  "$PYTHON_BIN" - \
+    "$go_cabi" \
+    "$go_cabi_errors" \
+    "$go_cabi_test" \
+    "$py_cabi" \
+    "$py_cabi_test" <<'PY'
+import sys
+from pathlib import Path
+
+go_cabi_path, go_cabi_errors_path, go_cabi_test_path, py_cabi_path, py_cabi_test_path = map(Path, sys.argv[1:])
+
+def read(path: Path) -> str:
+    if not path.exists():
+        raise SystemExit(f"sdk_cabi_descriptor_error_projection_source_missing:{path}")
+    return path.read_text(encoding="utf-8")
+
+go_cabi = read(go_cabi_path)
+go_cabi_errors = read(go_cabi_errors_path)
+go_cabi_test = read(go_cabi_test_path)
+py_cabi = read(py_cabi_path)
+py_cabi_test = read(py_cabi_test_path)
+
+for token in (
+    "func cabiErrorFromLastErrorJSON(",
+    "decodeRuntimeErrorJSON(raw)",
+):
+    if token not in go_cabi_errors:
+        raise SystemExit(f"sdk_go_cabi_error_projection_missing:{token}")
+if "return cabiErrorFromLastErrorJSON(raw, true, code, operation)" not in go_cabi:
+    raise SystemExit("sdk_go_cabi_last_error_json_not_authoritative")
+
+go_test_start = go_cabi_test.find("func TestCABIRuntimeProviderProjectsDescriptorResolverLastError")
+if go_test_start < 0:
+    raise SystemExit("sdk_go_cabi_descriptor_error_test_missing")
+go_test_body = go_cabi_test[go_test_start:]
+for required in (
+    "ErrDescriptorNotFound",
+    'sdkErr.Stage != "routing"',
+    "DESCRIPTOR_NOT_FOUND",
+    "descriptor_ref not found in runtime realm catalog",
+    "missing.descriptor",
+):
+    if required not in go_test_body:
+        raise SystemExit(f"sdk_go_cabi_descriptor_error_test_missing:{required}")
+for retired in ("ErrAbilityNotFound", "ErrNotFound"):
+    if retired in go_test_body:
+        raise SystemExit(f"sdk_go_cabi_descriptor_error_legacy_projection:{retired}")
+
+for required in (
+    "def _runtime_resolve_descriptor_ref(",
+    '"code":"DESCRIPTOR_NOT_FOUND"',
+    '"stage":"routing"',
+    "test_descriptor_diagnostics_owner_mismatch_is_descriptor_not_found",
+    "test_descriptor_resolution_projects_native_last_error",
+    "ErrorCode.DESCRIPTOR_NOT_FOUND",
+):
+    if required not in py_cabi + "\n" + py_cabi_test:
+        raise SystemExit(f"sdk_python_cabi_descriptor_error_contract_missing:{required}")
+py_resolver_start = py_cabi_test.find("def _runtime_resolve_descriptor_ref(")
+py_resolver_end = py_cabi_test.find("def _invocation_invoke(", py_resolver_start)
+py_resolver = py_cabi_test[py_resolver_start:py_resolver_end if py_resolver_end >= 0 else len(py_cabi_test)]
+if '"code":"NOT_FOUND"' in py_resolver or '"stage":"cabi"' in py_resolver:
+    raise SystemExit("sdk_python_cabi_descriptor_error_legacy_projection")
+PY
+}
+
 check_principal_lifecycle_cli_schema_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local principal="$cli_root/src/cli/commands/groups/principal.rs"
@@ -18032,6 +18106,32 @@ EOF
   if ( check_sdk_direct_runtime_descriptor_not_found_contract "$tmp/sdk-direct-runtime-not-found-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected SDK direct runtime NOT_FOUND ability projection gate to fail"
   fi
+  mkdir -p "$tmp/sdk-cabi-descriptor-error-generic/sdk/go" \
+    "$tmp/sdk-cabi-descriptor-error-generic/sdk/python/easynet_sdk" \
+    "$tmp/sdk-cabi-descriptor-error-generic/sdk/python/tests"
+  printf '%s\n' \
+    'func cabiRuntimeLastErrorOrCode() error {' \
+    '  return cabiErrorFromLastErrorJSON(nil, false, 4, "C ABI runtime descriptor_ref resolver failed")' \
+    '}' \
+    > "$tmp/sdk-cabi-descriptor-error-generic/sdk/go/cabi_runtime.go"
+  printf '%s\n' \
+    'func cabiErrorFromLastErrorJSON(raw []byte, ok bool, code int32, operation string) error {' \
+    '  return &SDKError{Code: ErrGeneric}' \
+    '}' \
+    > "$tmp/sdk-cabi-descriptor-error-generic/sdk/go/cabi_errors.go"
+  printf 'func TestCABIRuntimeProviderResolvesDescriptorRefThroughNativeProvider(t *testing.T) {}\n' \
+    > "$tmp/sdk-cabi-descriptor-error-generic/sdk/go/cabi_runtime_test.go"
+  printf '%s\n' \
+    'def _runtime_resolve_descriptor_ref(self, handle, request_json, out_ptr):' \
+    '    self.last_error_json = b'\''{"code":"NOT_FOUND"}'\''' \
+    > "$tmp/sdk-cabi-descriptor-error-generic/sdk/python/easynet_sdk/_cabi.py"
+  printf '%s\n' \
+    'def test_descriptor_diagnostics_owner_mismatch_is_descriptor_not_found():' \
+    '    assert ErrorCode.DESCRIPTOR_NOT_FOUND' \
+    > "$tmp/sdk-cabi-descriptor-error-generic/sdk/python/tests/test_cabi.py"
+  if ( check_sdk_cabi_descriptor_error_projection_contract "$tmp/sdk-cabi-descriptor-error-generic" ) >/dev/null 2>&1; then
+    fail "self-test expected SDK C ABI descriptor error projection gate to fail"
+  fi
   mkdir -p "$tmp/sdk-root-product-named/sdk/go" \
     "$tmp/sdk-root-product-named/sdk/python/easynet_sdk"
   printf '// Package easynet provides the Go binding for the canonical EasyNet runtime SDK.\npackage easynet\n' \
@@ -19679,6 +19779,7 @@ EOF
   check_sdk_direct_runtime_state_projection_contract
   check_sdk_causal_context_dag_alias_contract
   check_sdk_direct_runtime_descriptor_not_found_contract
+  check_sdk_cabi_descriptor_error_projection_contract
   check_principal_lifecycle_cli_schema_contract
   check_principal_lifecycle_store_idempotency_schema_contract
   check_auth_agents_backend_shape_contract
@@ -19882,6 +19983,7 @@ check_sdk_runtime_failure_code_contract
 check_sdk_direct_runtime_state_projection_contract
 check_sdk_causal_context_dag_alias_contract
 check_sdk_direct_runtime_descriptor_not_found_contract
+check_sdk_cabi_descriptor_error_projection_contract
 check_principal_lifecycle_cli_schema_contract
 check_principal_lifecycle_store_idempotency_schema_contract
 check_auth_agents_backend_shape_contract

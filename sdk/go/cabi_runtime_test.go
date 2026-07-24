@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -898,6 +899,33 @@ func TestCABIRuntimeProviderResolvesDescriptorRefThroughNativeProvider(t *testin
 	}
 }
 
+func TestCABIRuntimeProviderProjectsDescriptorResolverLastError(t *testing.T) {
+	client := openFakeCABIRuntime(t)
+
+	_, err := client.ResolveDescriptorRef(context.Background(), RuntimeDescriptorRefRequest{
+		CalleeURA: "easynet:///r/example/device/dev-a",
+		Ability:   "missing.descriptor",
+		CallMode:  "rpc",
+	})
+
+	if err == nil {
+		t.Fatal("ResolveDescriptorRef succeeded for missing descriptor")
+	}
+	if !IsCode(err, ErrDescriptorNotFound) {
+		t.Fatalf("descriptor resolver error = %v, want %s", err, ErrDescriptorNotFound)
+	}
+	var sdkErr *SDKError
+	if !errors.As(err, &sdkErr) {
+		t.Fatalf("descriptor resolver error is not SDKError: %T", err)
+	}
+	if sdkErr.Stage != "routing" {
+		t.Fatalf("descriptor resolver stage = %q, want routing", sdkErr.Stage)
+	}
+	if sdkErr.Message == "" || sdkErr.Message == "C ABI runtime descriptor_ref resolver failed with code 4" {
+		t.Fatalf("descriptor resolver kept generic C ABI failure message: %#v", sdkErr)
+	}
+}
+
 func cabiDraftWithMetadata(t *testing.T, metadata map[string]any) InvocationDraft {
 	t.Helper()
 	raw, err := json.Marshal(completeDraftForRuntimeTest(t))
@@ -982,6 +1010,7 @@ static int active_stream_cancel_calls = 0;
 static bidi_callback_t active_bidi_callback = 0;
 static void *active_bidi_user_data = 0;
 static int active_bidi_cancel_calls = 0;
+static const char *last_error_json = "{\"code\":\"INVALID_ARGUMENT\",\"stage\":\"fake\",\"message\":\"invalid fake C ABI request\",\"retry\":\"never\",\"details\":{}}";
 
 static char *dup_json(const char *s) {
 	size_t n = strlen(s);
@@ -994,7 +1023,7 @@ static char *dup_json(const char *s) {
 uint32_t runtime_abi_version(void) { return 6u; }
 void runtime_string_free(char *s) { free(s); }
 int32_t runtime_last_error_json(char **out_error_json) {
-	*out_error_json = dup_json("{\"code\":\"INVALID_ARGUMENT\",\"stage\":\"fake\",\"message\":\"invalid fake C ABI request\",\"retry\":\"never\",\"details\":{}}");
+	*out_error_json = dup_json(last_error_json);
 	return 0;
 }
 
@@ -1037,7 +1066,11 @@ int32_t runtime_diagnostics(uint64_t handle, char **out_diagnostics_json) {
 	return 0;
 }
 int32_t runtime_resolve_descriptor_ref(uint64_t handle, const char *request_json, char **out_descriptor_json) {
-	(void)handle; (void)request_json;
+	(void)handle;
+	if (strstr(request_json, "missing.descriptor") != 0) {
+		last_error_json = "{\"code\":\"DESCRIPTOR_NOT_FOUND\",\"stage\":\"routing\",\"message\":\"descriptor_ref not found in runtime realm catalog\",\"retry\":\"never\",\"details\":{\"source\":\"fake_native_provider\"}}";
+		return 4;
+	}
 	*out_descriptor_json = dup_json("{\"descriptor_ref\":\"easynet:///r/example/ability/device.dev-a.meta.list_resources@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read\",\"ability_ura\":\"easynet:///r/example/ability/device.dev-a.meta.list_resources\",\"owner_ura\":\"easynet:///r/example/device/dev-a\",\"name\":\"meta.list_resources\",\"call_mode\":\"rpc\",\"source\":\"fake_native_provider\"}");
 	return 0;
 }

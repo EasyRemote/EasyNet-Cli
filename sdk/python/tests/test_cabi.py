@@ -406,7 +406,7 @@ class FakeRawCABI:
     def _runtime_resolve_descriptor_ref(self, handle, request_json, out_ptr) -> int:
         _ = handle, request_json, out_ptr
         self.last_error_json = (
-            b'{"code":"NOT_FOUND","stage":"cabi","message":'
+            b'{"code":"DESCRIPTOR_NOT_FOUND","stage":"routing","message":'
             b'"descriptor_ref not found","retry":"never","details":{}}'
         )
         return 1
@@ -767,6 +767,26 @@ class CABITransportTests(unittest.TestCase):
         self.assertFalse(
             any(kind == "diagnostics" or kind == "invoke" for kind, _ in raw.runtime_requests)
         )
+
+    def test_descriptor_resolution_projects_native_last_error(self) -> None:
+        transport = CABIRuntimeTransport(CLILibrary(FakeRawCABI()), 42, owns_handle=False)
+
+        with self.assertRaises(SDKError) as raised:
+            transport.resolve_descriptor_ref(
+                json.dumps(
+                    {
+                        "callee_ura": "easynet:///r/acme/device/provider",
+                        "ability": "missing.descriptor",
+                        "call_mode": "rpc",
+                    },
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ).encode("utf-8")
+            )
+
+        self.assertEqual(raised.exception.code, ErrorCode.DESCRIPTOR_NOT_FOUND)
+        self.assertEqual(raised.exception.stage, "routing")
+        self.assertNotIn("C ABI", raised.exception.message)
 
     def test_prepare_uses_opaque_c_handle_when_request_id_repeats(self) -> None:
         raw = FakeRawCABI()
