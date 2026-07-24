@@ -1667,3 +1667,55 @@ architecture rather than add feature surface.
   - `tools/scripts/check-architecture-convergence.sh`
   - `cargo fmt --check`
   - `git diff --check`
+
+## Iteration 39 candidate policy
+
+- Continue RF-4/RF-3 convergence from the runtime-state read subject failure
+  mode observed in product usage. Go, Python, and Node already exposed a
+  canonical runtime-state subject helper and shared session-authority subject
+  admission predicate, but Java and Swift were not aligned.
+- codegraph and source inspection showed the immediate root abstraction problem
+  in Swift: `InvocationBuilder.inspect()` validated only authority metadata
+  shape, then returned an invocation draft without proving that a
+  `DelegationProof` or `SessionAuthority` admitted the tuple's
+  caller/callee/subject/ability.
+- Java already had tuple-bound authority validation, but lacked the public
+  runtime-state read subject constructor, which encourages product facades to
+  hand-assemble `resource/user...` subjects.
+- The selected cutover is to make Java/Swift consume the same canonical
+  runtime-state subject model and to make Swift invocation authority binding
+  fail closed at the draft boundary.
+
+## Iteration 39 decision log
+
+- Added Java `RuntimeSubjects.runtimeStateReadSubjectURA(realm, userID)` backed
+  by `AuthoritySupport.runtimeStateReadSubjectURA`, with all-zero and canonical
+  resource-subject guards.
+- Added Swift `runtimeStateReadSubjectURA(realm:userID:)` using the same
+  `runtime-state/read` Resource URA projection.
+- Refactored Swift invocation authority validation into
+  `validateInvocationAuthorityBinding(_:)` and
+  `InvocationAuthorityBindingValidator`, mirroring the Java tuple-bound
+  delegation/session checks.
+- Swift `InvocationBuilder.inspect()` now constructs the tuple once, validates
+  authority metadata against that tuple, and only then returns the draft.
+- Added Swift negative tests for delegation subject mismatch and session
+  subject path-substring/nested-resource regressions, plus Java/Swift
+  runtime-state subject helper tests.
+- SPEC v2 now gates Java/Swift runtime-state subject parity and Swift
+  tuple-bound authority validation, each with negative self-test fixtures.
+- Rebuilt `sdk/conformance/canonical-public-api.json` and
+  `sdk/conformance/sdk-parity-matrix.json` after Java/Swift public surface
+  changes.
+- Verification passed:
+  - `/Users/macbook.silan.tech/.local/bin/codegraph explore "compatibility aliases node_id device_id stream kind event content-type request_id prepared_id runtime SDK"`
+  - `/Users/macbook.silan.tech/.local/bin/codegraph explore "RuntimeEnvironment device_id node_id serde alias stream kind event prepared_id request_id content_type alias legacy SDK Go Python CABI"`
+  - `cd sdk/java && mvn -q test`
+  - `cd sdk/swift && swift test`
+  - `python3 sdk/conformance/rebuild_public_api_model.py --write`
+  - `bash -n tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - `tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  - `tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - `tools/scripts/check-sdk-canonical-public-api.sh`
+  - `tools/scripts/check-architecture-convergence.sh`
+  - `git diff --check`

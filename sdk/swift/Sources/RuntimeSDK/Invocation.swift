@@ -493,19 +493,18 @@ public final class InvocationBuilder {
     }
 
     public func inspect() throws -> InvocationDraft {
-        try validateAuthorityMetadata(metadata)
-        return InvocationDraft(
-            tuple: try InvocationTuple(
-                caller: caller,
-                callee: callee,
-                descriptorRef: descriptorRef,
-                subject: subject,
-                nonce: nonce,
-                causalContext: causalContext,
-                argsJSON: argsJSON,
-                metadata: metadata
-            )
+        let tuple = try InvocationTuple(
+            caller: caller,
+            callee: callee,
+            descriptorRef: descriptorRef,
+            subject: subject,
+            nonce: nonce,
+            causalContext: causalContext,
+            argsJSON: argsJSON,
+            metadata: metadata
         )
+        try validateInvocationAuthorityBinding(tuple)
+        return InvocationDraft(tuple: tuple)
     }
 
     public func build() throws -> InvocationDraft {

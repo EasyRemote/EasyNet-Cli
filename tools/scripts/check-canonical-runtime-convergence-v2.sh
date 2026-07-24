@@ -12414,6 +12414,133 @@ for needle, label in required_tests.items():
 PY
 }
 
+check_java_swift_runtime_state_subject_parity_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local java_support="$cli_root/sdk/java/src/main/java/run/runtime/sdk/AuthoritySupport.java"
+  local java_subjects="$cli_root/sdk/java/src/main/java/run/runtime/sdk/RuntimeSubjects.java"
+  local java_tests="$cli_root/sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
+  local swift_authority="$cli_root/sdk/swift/Sources/RuntimeSDK/Authority.swift"
+  local swift_tests="$cli_root/sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift"
+  for path in "$java_support" "$java_subjects" "$java_tests" "$swift_authority" "$swift_tests"; do
+    [[ -f "$path" ]] || fail "runtime-state subject parity source is missing: ${path#$cli_root/}"
+  done
+
+  "$PYTHON_BIN" - "$java_support" "$java_subjects" "$java_tests" "$swift_authority" "$swift_tests" <<'PY'
+import sys
+from pathlib import Path
+
+java_support, java_subjects, java_tests, swift_authority, swift_tests = [
+    Path(path).read_text(encoding="utf-8") for path in sys.argv[1:]
+]
+
+for token, label in {
+    'static final String RUNTIME_STATE_READ_SUBJECT_PATH = "runtime-state/read"': "java_path_missing",
+    "static String runtimeStateReadSubjectURA": "java_support_helper_missing",
+    "requiredPrincipalID(userID, \"user_id\")": "java_user_guard_missing",
+    "containsAllZeroPrincipal": "java_all_zero_guard_missing",
+    "canonicalResourceSubject(subject) == null": "java_canonical_resource_guard_missing",
+}.items():
+    if token not in java_support:
+        raise SystemExit(f"runtime_state_subject_parity:{label}")
+for token, label in {
+    "public final class RuntimeSubjects": "java_public_subjects_class_missing",
+    "public static String runtimeStateReadSubjectURA": "java_public_helper_missing",
+    "AuthoritySupport.runtimeStateReadSubjectURA(realm, userID)": "java_public_delegation_missing",
+}.items():
+    if token not in java_subjects:
+        raise SystemExit(f"runtime_state_subject_parity:{label}")
+for token, label in {
+    "runtimeStateReadSubjectHelperBuildsUserOwnedResourceSubject": "java_test_selector_missing",
+    'RuntimeSubjects.runtimeStateReadSubjectURA("example", "alice")': "java_success_vector_missing",
+    '"easynet:///r/example/resource/user.alice/runtime-state/read"': "java_subject_vector_missing",
+    '"user_id must not be all-zero"': "java_all_zero_test_missing",
+}.items():
+    if token not in java_tests:
+        raise SystemExit(f"runtime_state_subject_parity:{label}")
+
+for token, label in {
+    'private let runtimeStateReadSubjectPath = "runtime-state/read"': "swift_path_missing",
+    "public func runtimeStateReadSubjectURA(": "swift_public_helper_missing",
+    'requiredAuthorityPrincipalID(userID, "user_id")': "swift_user_guard_missing",
+    "containsAllZeroPrincipal": "swift_all_zero_guard_missing",
+    "canonicalResourceSubject(subject) != nil": "swift_canonical_resource_guard_missing",
+}.items():
+    if token not in swift_authority:
+        raise SystemExit(f"runtime_state_subject_parity:{label}")
+for token, label in {
+    "testRuntimeStateReadSubjectHelperBuildsUserOwnedResourceSubject": "swift_test_missing",
+    'runtimeStateReadSubjectURA(realm: "example", userID: "alice")': "swift_success_vector_missing",
+    '"easynet:///r/example/resource/user.alice/runtime-state/read"': "swift_subject_vector_missing",
+    '"user_id must not be all-zero"': "swift_all_zero_test_missing",
+}.items():
+    if token not in swift_tests:
+        raise SystemExit(f"runtime_state_subject_parity:{label}")
+PY
+}
+
+check_swift_sdk_invocation_authority_binding_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local invocation="$cli_root/sdk/swift/Sources/RuntimeSDK/Invocation.swift"
+  local authority="$cli_root/sdk/swift/Sources/RuntimeSDK/Authority.swift"
+  local tests="$cli_root/sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift"
+  for path in "$invocation" "$authority" "$tests"; do
+    [[ -f "$path" ]] || fail "Swift authority binding source is missing: ${path#$cli_root/}"
+  done
+
+  "$PYTHON_BIN" - "$invocation" "$authority" "$tests" <<'PY'
+import sys
+from pathlib import Path
+
+invocation, authority, tests = [Path(path).read_text(encoding="utf-8") for path in sys.argv[1:]]
+
+if "try validateInvocationAuthorityBinding(tuple)" not in invocation:
+    raise SystemExit("swift_invocation_authority_binding:builder_validator_missing")
+if "try validateAuthorityMetadata(metadata)\n        return InvocationDraft(" in invocation:
+    raise SystemExit("swift_invocation_authority_binding:builder_shape_only_metadata_validation")
+
+required_authority = {
+    "func validateInvocationAuthorityBinding(_ tuple: InvocationTuple) throws": "validator_entry_missing",
+    "DelegationProof.fromMetadata(delegation)": "delegation_decode_missing",
+    "SessionAuthority.fromMetadata(session)": "session_decode_missing",
+    "struct InvocationAuthorityBindingValidator": "validator_value_object_missing",
+    "func validateDelegation(_ proof: DelegationProof) throws": "delegation_validation_missing",
+    "func validateSession(_ authority: SessionAuthority) throws": "session_validation_missing",
+    ".authoritySubjectMismatch": "subject_mismatch_code_missing",
+    "delegation authority subject does not match invocation subject_ura": "delegation_subject_error_missing",
+    "session authority subject does not admit invocation subject_ura": "session_subject_error_missing",
+    "audienceAdmits": "audience_binding_missing",
+    "scopesAdmit": "scope_binding_missing",
+    "sessionAuthorityAdmitsSubject": "session_subject_predicate_missing",
+    "struct InvocationAbilityView": "ability_view_missing",
+    "canonicalResourceSubject": "structured_resource_subject_parser_missing",
+    "struct ResourceSubject": "resource_subject_value_object_missing",
+}
+for needle, label in required_authority.items():
+    if needle not in authority:
+        raise SystemExit(f"swift_invocation_authority_binding:{label}")
+for forbidden, label in {
+    "resourceOwnerID": "validator_owns_resource_owner_parser",
+    'let marker = "/resource/"': "validator_owns_resource_path_substring_parser",
+}.items():
+    if forbidden in authority:
+        raise SystemExit(f"swift_invocation_authority_binding:{label}")
+
+required_tests = {
+    "testAuthorityMetadataIsTypedAndMutuallyExclusive": "test_body_missing",
+    ".authoritySubjectMismatch": "subject_mismatch_test_missing",
+    "delegation authority subject does not match invocation subject_ura": "delegation_subject_test_missing",
+    "session authority subject does not admit invocation subject_ura": "session_subject_test_missing",
+    '"subject_ura": callee': "tuple_bound_delegation_fixture_missing",
+    '"scopes": ["observe.health"]': "tuple_bound_scope_fixture_missing",
+    "not-a-ura/resource/user.alice/runtime-state/read": "path_substring_subject_regression_missing",
+    "easynet:///r/example/device/dev-a/resource/user.alice/runtime-state/read": "nested_resource_path_subject_regression_missing",
+}
+for needle, label in required_tests.items():
+    if needle not in tests:
+        raise SystemExit(f"swift_invocation_authority_binding:{label}")
+PY
+}
+
 check_java_sdk_runtime_receipt_projection_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local result="$cli_root/sdk/java/src/main/java/run/runtime/sdk/InvocationResult.java"
@@ -13404,6 +13531,39 @@ EOF
     > "$tmp/cli-java-authority-binding-legacy/sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
   if ( CLI_ROOT="$tmp/cli-java-authority-binding-legacy"; check_java_sdk_invocation_authority_binding_contract ) >/dev/null 2>&1; then
     fail "self-test expected Java invocation authority binding gate to fail"
+  fi
+  mkdir -p "$tmp/cli-runtime-state-subject-parity-legacy/sdk/java/src/main/java/run/runtime/sdk" \
+    "$tmp/cli-runtime-state-subject-parity-legacy/sdk/java/src/test/java/run/runtime/sdk" \
+    "$tmp/cli-runtime-state-subject-parity-legacy/sdk/swift/Sources/RuntimeSDK" \
+    "$tmp/cli-runtime-state-subject-parity-legacy/sdk/swift/Tests/RuntimeSDKTests"
+  cp "$ROOT/sdk/java/src/main/java/run/runtime/sdk/AuthoritySupport.java" \
+    "$tmp/cli-runtime-state-subject-parity-legacy/sdk/java/src/main/java/run/runtime/sdk/AuthoritySupport.java"
+  cp "$ROOT/sdk/java/src/main/java/run/runtime/sdk/RuntimeSubjects.java" \
+    "$tmp/cli-runtime-state-subject-parity-legacy/sdk/java/src/main/java/run/runtime/sdk/RuntimeSubjects.java"
+  cp "$ROOT/sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java" \
+    "$tmp/cli-runtime-state-subject-parity-legacy/sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
+  cp "$ROOT/sdk/swift/Sources/RuntimeSDK/Authority.swift" \
+    "$tmp/cli-runtime-state-subject-parity-legacy/sdk/swift/Sources/RuntimeSDK/Authority.swift"
+  cp "$ROOT/sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift" \
+    "$tmp/cli-runtime-state-subject-parity-legacy/sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift"
+  perl -0pi -e 's/runtime-state\/read/session\/invocation_history/g' \
+    "$tmp/cli-runtime-state-subject-parity-legacy/sdk/java/src/main/java/run/runtime/sdk/AuthoritySupport.java" \
+    "$tmp/cli-runtime-state-subject-parity-legacy/sdk/swift/Sources/RuntimeSDK/Authority.swift"
+  if ( CLI_ROOT="$tmp/cli-runtime-state-subject-parity-legacy"; check_java_swift_runtime_state_subject_parity_contract ) >/dev/null 2>&1; then
+    fail "self-test expected Java/Swift runtime-state subject parity gate to fail"
+  fi
+  mkdir -p "$tmp/cli-swift-authority-binding-legacy/sdk/swift/Sources/RuntimeSDK" \
+    "$tmp/cli-swift-authority-binding-legacy/sdk/swift/Tests/RuntimeSDKTests"
+  cp "$ROOT/sdk/swift/Sources/RuntimeSDK/Invocation.swift" \
+    "$tmp/cli-swift-authority-binding-legacy/sdk/swift/Sources/RuntimeSDK/Invocation.swift"
+  cp "$ROOT/sdk/swift/Sources/RuntimeSDK/Authority.swift" \
+    "$tmp/cli-swift-authority-binding-legacy/sdk/swift/Sources/RuntimeSDK/Authority.swift"
+  cp "$ROOT/sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift" \
+    "$tmp/cli-swift-authority-binding-legacy/sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift"
+  perl -0pi -e 's/\n\s*try validateInvocationAuthorityBinding\(tuple\)//' \
+    "$tmp/cli-swift-authority-binding-legacy/sdk/swift/Sources/RuntimeSDK/Invocation.swift"
+  if ( CLI_ROOT="$tmp/cli-swift-authority-binding-legacy"; check_swift_sdk_invocation_authority_binding_contract ) >/dev/null 2>&1; then
+    fail "self-test expected Swift invocation authority binding gate to fail"
   fi
   mkdir -p "$tmp/cli-java-receipt-legacy/sdk/java/src/main/java/run/runtime/sdk" \
     "$tmp/cli-java-receipt-legacy/sdk/java/src/test/java/run/runtime/sdk"
@@ -19179,6 +19339,9 @@ EOF
   check_cli_rust_local_fast_signer_boundary_contract
   check_cli_signed_submission_boundary_contract
   check_receipt_proof_fact_contract
+  check_java_sdk_invocation_authority_binding_contract
+  check_java_swift_runtime_state_subject_parity_contract
+  check_swift_sdk_invocation_authority_binding_contract
   check_java_sdk_runtime_receipt_projection_contract
   check_go_sdk_runtime_receipt_projection_contract
   check_python_sdk_runtime_receipt_projection_contract
@@ -19387,6 +19550,8 @@ check_cli_rust_local_fast_signer_boundary_contract
 check_cli_signed_submission_boundary_contract
 check_receipt_proof_fact_contract
 check_java_sdk_invocation_authority_binding_contract
+check_java_swift_runtime_state_subject_parity_contract
+check_swift_sdk_invocation_authority_binding_contract
 check_java_sdk_runtime_receipt_projection_contract
 check_go_sdk_runtime_receipt_projection_contract
 check_python_sdk_runtime_receipt_projection_contract

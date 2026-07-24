@@ -28,6 +28,7 @@ public final class RuntimeCoreSeamTest {
           "runtimeReceiptProofFactsAreMandatory",
           "authorityMetadataIsTypedAndMutuallyExclusive",
           "invocationAuthorityMetadataIsTupleBound",
+          "runtimeStateReadSubjectHelperBuildsUserOwnedResourceSubject",
           "authorityMetadataRejectsAllZeroSessionOwners",
           "authorityMetadataBindsSessionAuthoritySubjects",
           "streamAndBidiLifecyclesAreBounded",
@@ -81,6 +82,8 @@ public final class RuntimeCoreSeamTest {
           authorityMetadataIsTypedAndMutuallyExclusive();
       case "invocationAuthorityMetadataIsTupleBound" ->
           invocationAuthorityMetadataIsTupleBound();
+      case "runtimeStateReadSubjectHelperBuildsUserOwnedResourceSubject" ->
+          runtimeStateReadSubjectHelperBuildsUserOwnedResourceSubject();
       case "authorityMetadataRejectsAllZeroSessionOwners" ->
           authorityMetadataRejectsAllZeroSessionOwners();
       case "authorityMetadataBindsSessionAuthoritySubjects" ->
@@ -595,6 +598,19 @@ public final class RuntimeCoreSeamTest {
                 .subject("easynet:///r/example/device/dev-a/resource/user.alice/runtime-state/read")
                 .authorityMetadata(scopedSession.metadata())
                 .inspect());
+  }
+
+  private static void runtimeStateReadSubjectHelperBuildsUserOwnedResourceSubject() {
+    check(
+        RuntimeSubjects.runtimeStateReadSubjectURA("example", "alice")
+            .equals("easynet:///r/example/resource/user.alice/runtime-state/read"),
+        "runtime-state read subject helper builds a user-owned Resource URA");
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        "user_id must not be all-zero",
+        () ->
+            RuntimeSubjects.runtimeStateReadSubjectURA(
+                "example", "00000000-0000-0000-0000-000000000000"));
   }
 
   private static void authorityMetadataRejectsAllZeroSessionOwners() {

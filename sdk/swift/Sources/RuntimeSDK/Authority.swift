@@ -3,6 +3,23 @@ import Foundation
 public let authorityProfile = "authority"
 public let delegationMetadataKey = "x-runtime-delegation"
 public let sessionAuthorityMetadataKey = "x-runtime-session-authority"
+private let runtimeStateReadSubjectPath = "runtime-state/read"
+
+public func runtimeStateReadSubjectURA(realm: String, userID: String) throws -> String {
+    let cleanRealm = try requiredAuthorityString(realm, "realm")
+    let cleanUserID = try requiredAuthorityPrincipalID(userID, "user_id")
+    guard !cleanRealm.contains("/"), !cleanRealm.contains("?"), !cleanRealm.contains("#") else {
+        throw invalidAuthority("runtime-state read subject realm is not canonical")
+    }
+    guard !cleanUserID.contains("/"), !cleanUserID.contains("?"), !cleanUserID.contains("#") else {
+        throw invalidAuthority("runtime-state read subject user_id is not canonical")
+    }
+    let subject = "easynet:///r/\(cleanRealm)/resource/user.\(cleanUserID)/\(runtimeStateReadSubjectPath)"
+    guard canonicalResourceSubject(subject) != nil else {
+        throw invalidAuthority("runtime-state read subject_ura must be canonical")
+    }
+    return subject
+}
 
 public struct AuthorityMetadata: Sendable, Equatable {
     public let kind: String
@@ -313,6 +330,19 @@ func validateAuthorityMetadata(_ metadata: [String: JSONValue]) throws {
     }
 }
 
+func validateInvocationAuthorityBinding(_ tuple: InvocationTuple) throws {
+    try validateAuthorityMetadata(tuple.metadata)
+    let delegation = try authorityMetadataValue(tuple.metadata, delegationMetadataKey)
+    if !delegation.isEmpty {
+        try InvocationAuthorityBindingValidator(tuple: tuple).validateDelegation(try DelegationProof.fromMetadata(delegation))
+        return
+    }
+    let session = try authorityMetadataValue(tuple.metadata, sessionAuthorityMetadataKey)
+    if !session.isEmpty {
+        try InvocationAuthorityBindingValidator(tuple: tuple).validateSession(try SessionAuthority.fromMetadata(session))
+    }
+}
+
 func invocationMetadataObject(_ value: Any?) throws -> [String: JSONValue] {
     guard let value, !(value is NSNull) else {
         return [:]
@@ -467,6 +497,31 @@ private func validateSessionAuthoritySubjectBinding(subjectURA: String, sessionO
     }
 }
 
+private func sessionAuthorityAdmitsSubject(_ authority: SessionAuthority, _ subjectURA: String) -> Bool {
+    if authority.subjectURA.trimmingCharacters(in: .whitespacesAndNewlines) ==
+        subjectURA.trimmingCharacters(in: .whitespacesAndNewlines) {
+        return true
+    }
+    guard let resource = canonicalResourceSubject(subjectURA) else {
+        return false
+    }
+    let ownerUserID = authority.sessionOwnerUserID.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !ownerUserID.isEmpty else {
+        return false
+    }
+    if resource.ownerID == "user.\(ownerUserID)" {
+        return true
+    }
+    guard resource.ownerID.hasPrefix("agent.") else {
+        return false
+    }
+    let agentOwner = String(resource.ownerID.dropFirst("agent.".count))
+    guard let dot = agentOwner.firstIndex(of: "."), dot != agentOwner.startIndex else {
+        return false
+    }
+    return String(agentOwner[..<dot]) == ownerUserID
+}
+
 private func canonicalAuthoritySubject(_ subjectURA: String) throws -> AuthoritySubject? {
     let raw = try requiredAuthorityURA(subjectURA, "subject_ura")
     let realmPrefix = "easynet:///r/"
@@ -501,6 +556,247 @@ private func canonicalAuthoritySubject(_ subjectURA: String) throws -> Authority
         return nil
     }
     return AuthoritySubject(kind: "session", ownerUserID: ownerUserID, sessionID: authoritySessionID)
+}
+
+private struct ResourceSubject {
+    let ownerID: String
+    let path: String
+}
+
+private func canonicalResourceSubject(_ subjectURA: String) -> ResourceSubject? {
+    guard !containsAllZeroPrincipal(subjectURA) else {
+        return nil
+    }
+    let raw = subjectURA.trimmingCharacters(in: .whitespacesAndNewlines)
+    let realmPrefix = "easynet:///r/"
+    guard raw.hasPrefix(realmPrefix) else {
+        return nil
+    }
+    let rest = String(raw.dropFirst(realmPrefix.count))
+    guard let slash = rest.firstIndex(of: "/"), slash != rest.startIndex else {
+        return nil
+    }
+    let path = String(rest[rest.index(after: slash)...])
+    let resourcePrefix = "resource/"
+    guard path.hasPrefix(resourcePrefix) else {
+        return nil
+    }
+    let resource = String(path.dropFirst(resourcePrefix.count))
+    guard let pathSlash = resource.firstIndex(of: "/"),
+          pathSlash != resource.startIndex,
+          pathSlash != resource.index(before: resource.endIndex)
+    else {
+        return nil
+    }
+    let ownerID = String(resource[..<pathSlash]).trimmingCharacters(in: .whitespacesAndNewlines)
+    let resourcePath = String(resource[resource.index(after: pathSlash)...]).trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !ownerID.isEmpty,
+          !ownerID.contains("/"),
+          !resourcePath.isEmpty,
+          !resourcePath.hasPrefix("/"),
+          !resourcePath.contains("//")
+    else {
+        return nil
+    }
+    return ResourceSubject(ownerID: ownerID, path: resourcePath)
+}
+
+private struct InvocationAuthorityBindingValidator {
+    let tuple: InvocationTuple
+    let ability: InvocationAbilityView
+    let details: [String: String]
+
+    init(tuple: InvocationTuple) {
+        self.tuple = tuple
+        self.ability = InvocationAbilityView(tuple: tuple)
+        self.details = [
+            "caller_ura": tuple.caller,
+            "callee_ura": tuple.callee,
+            "subject_ura": tuple.subject,
+            "descriptor_ref": tuple.descriptorRef,
+        ]
+    }
+
+    func validateDelegation(_ proof: DelegationProof) throws {
+        try require(
+            proof.callerURA.trimmingCharacters(in: .whitespacesAndNewlines) ==
+                tuple.caller.trimmingCharacters(in: .whitespacesAndNewlines),
+            .authorityDenied,
+            "delegation authority caller does not match invocation caller_ura"
+        )
+        try require(
+            proof.subjectURA.trimmingCharacters(in: .whitespacesAndNewlines) ==
+                tuple.subject.trimmingCharacters(in: .whitespacesAndNewlines),
+            .authoritySubjectMismatch,
+            "delegation authority subject does not match invocation subject_ura"
+        )
+        try require(
+            audienceAdmits(proof.audience, tuple.callee),
+            .authorityDenied,
+            "delegation authority audience does not admit invocation callee_ura"
+        )
+        try require(
+            scopesAdmit(proof.scopes, ability),
+            .authorityDenied,
+            "delegation authority scopes do not admit invocation ability"
+        )
+    }
+
+    func validateSession(_ authority: SessionAuthority) throws {
+        try require(
+            authority.issuerURA.trimmingCharacters(in: .whitespacesAndNewlines) ==
+                tuple.caller.trimmingCharacters(in: .whitespacesAndNewlines),
+            .authorityDenied,
+            "session authority issuer does not match invocation caller_ura"
+        )
+        try require(
+            authority.calleeURA.trimmingCharacters(in: .whitespacesAndNewlines) ==
+                tuple.callee.trimmingCharacters(in: .whitespacesAndNewlines),
+            .authorityDenied,
+            "session authority callee does not match invocation callee_ura"
+        )
+        try require(
+            sessionAuthorityAdmitsSubject(authority, tuple.subject),
+            .authoritySubjectMismatch,
+            "session authority subject does not admit invocation subject_ura"
+        )
+        try require(
+            audienceAdmits(authority.audience, tuple.callee),
+            .authorityDenied,
+            "session authority audience does not admit invocation callee_ura"
+        )
+        try require(
+            listAdmits(authority.allowedActions, "invoke"),
+            .authorityDenied,
+            "session authority allowed_actions do not admit invoke"
+        )
+        try require(
+            scopesAdmit(authority.allowedFollowupAbilities, ability),
+            .authorityDenied,
+            "session authority allowed_followup_abilities do not admit invocation ability"
+        )
+        try require(
+            scopesAdmit(authority.scopes, ability),
+            .authorityDenied,
+            "session authority scopes do not admit invocation ability"
+        )
+    }
+
+    private func require(_ condition: Bool, _ code: SDKErrorCode, _ message: String) throws {
+        if !condition {
+            throw SDKError(code: code, stage: authorityProfile, message: message, details: details)
+        }
+    }
+}
+
+private func audienceAdmits(_ audience: String, _ calleeURA: String) -> Bool {
+    let pattern = audience.trimmingCharacters(in: .whitespacesAndNewlines)
+    let callee = calleeURA.trimmingCharacters(in: .whitespacesAndNewlines)
+    return pattern == "*" || pattern == callee || (pattern.hasSuffix("/") && callee.hasPrefix(pattern))
+}
+
+private func scopesAdmit(_ patterns: [String], _ ability: InvocationAbilityView) -> Bool {
+    for pattern in patterns {
+        if scopeMatches(pattern, ability.publicName) ||
+            scopeMatches(pattern, ability.abilityURA) ||
+            scopeMatches(pattern, ability.wire) {
+            return true
+        }
+    }
+    return false
+}
+
+private func listAdmits(_ patterns: [String], _ value: String) -> Bool {
+    patterns.contains { scopeMatches($0, value) }
+}
+
+private func scopeMatches(_ pattern: String, _ value: String) -> Bool {
+    let cleanPattern = pattern.trimmingCharacters(in: .whitespacesAndNewlines)
+    let cleanValue = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !cleanPattern.isEmpty, !cleanValue.isEmpty else {
+        return false
+    }
+    if cleanPattern == "*" {
+        return true
+    }
+    if cleanPattern.hasSuffix("*") {
+        let prefix = String(cleanPattern.dropLast())
+        return !prefix.isEmpty && cleanValue.hasPrefix(prefix)
+    }
+    return cleanPattern == cleanValue
+}
+
+private struct InvocationAbilityView {
+    let wire: String
+    let abilityURA: String
+    let publicName: String
+
+    init(tuple: InvocationTuple) {
+        let abilityURA = Self.descriptorAbilityURA(tuple.descriptorRef)
+        let wire = Self.descriptorWireAbility(abilityURA)
+        let publicName = Self.publicAbilityName(calleeURA: tuple.callee, ability: abilityURA.isEmpty ? wire : abilityURA)
+        self.wire = wire
+        self.abilityURA = abilityURA
+        self.publicName = publicName
+    }
+
+    private static func descriptorAbilityURA(_ descriptorRef: String) -> String {
+        let clean = descriptorRef.trimmingCharacters(in: .whitespacesAndNewlines)
+        let hash = clean.firstIndex(of: "#")
+        let bang = clean.firstIndex(of: "!")
+        var limit = clean.endIndex
+        if let hash {
+            limit = min(limit, hash)
+        }
+        if let bang {
+            limit = min(limit, bang)
+        }
+        let withoutMode = String(clean[..<limit])
+        if let version = withoutMode.lastIndex(of: "@") {
+            return String(withoutMode[..<version]).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return withoutMode.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func descriptorWireAbility(_ abilityURA: String) -> String {
+        let marker = "/ability/"
+        guard let range = abilityURA.range(of: marker) else {
+            return abilityURA.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return String(abilityURA[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func publicAbilityName(calleeURA: String, ability: String) -> String {
+        let clean = ability.trimmingCharacters(in: .whitespacesAndNewlines)
+        let owner = abilityOwnerPrefix(calleeURA)
+        if !owner.isEmpty, clean.hasPrefix("\(owner).") {
+            return String(clean.dropFirst(owner.count + 1))
+        }
+        let marker = "/ability/"
+        if let range = clean.range(of: marker) {
+            return publicAbilityName(calleeURA: calleeURA, ability: String(clean[range.upperBound...]))
+        }
+        return clean
+    }
+
+    private static func abilityOwnerPrefix(_ calleeURA: String) -> String {
+        let clean = calleeURA.trimmingCharacters(in: .whitespacesAndNewlines)
+        let device = "/device/"
+        if let range = clean.range(of: device) {
+            let rest = String(clean[range.upperBound...])
+            let id = rest.split(maxSplits: 1, whereSeparator: { $0 == "/" || $0 == "?" || $0 == "#" }).first.map(String.init) ?? ""
+            return id.isEmpty ? "" : "device.\(id)"
+        }
+        if clean.hasSuffix("/authority") {
+            let realmMarker = "easynet:///r/"
+            if clean.hasPrefix(realmMarker) {
+                let start = clean.index(clean.startIndex, offsetBy: realmMarker.count)
+                let end = clean.index(clean.endIndex, offsetBy: -"/authority".count)
+                return "hub.\(String(clean[start..<end]))"
+            }
+        }
+        return ""
+    }
 }
 
 private func requiredAuthorityBase64(_ value: String, _ field: String) throws -> String {

@@ -11,6 +11,7 @@ final class AuthoritySupport {
   static final String SESSION_AUTHORITY_METADATA_KEY = "x-runtime-session-authority";
   static final String DELEGATION_KIND = "delegation";
   static final String SESSION_AUTHORITY_KIND = "session_authority";
+  static final String RUNTIME_STATE_READ_SUBJECT_PATH = "runtime-state/read";
   private static final String ALL_ZERO_PRINCIPAL_ID = "00000000-0000-0000-0000-000000000000";
 
   private AuthoritySupport() {}
@@ -84,6 +85,28 @@ final class AuthoritySupport {
 
   static SDKError invalid(String message) {
     return SDKError.validation("authority", message);
+  }
+
+  static String runtimeStateReadSubjectURA(String realm, String userID) {
+    String cleanRealm = requiredString(realm, "realm");
+    String cleanUserID = requiredPrincipalID(userID, "user_id");
+    if (cleanRealm.contains("/") || cleanRealm.contains("?") || cleanRealm.contains("#")) {
+      throw invalid("runtime-state read subject realm is not canonical");
+    }
+    if (cleanUserID.contains("/") || cleanUserID.contains("?") || cleanUserID.contains("#")) {
+      throw invalid("runtime-state read subject user_id is not canonical");
+    }
+    String subject =
+        "easynet:///r/"
+            + cleanRealm
+            + "/resource/user."
+            + cleanUserID
+            + "/"
+            + RUNTIME_STATE_READ_SUBJECT_PATH;
+    if (canonicalResourceSubject(subject) == null) {
+      throw invalid("runtime-state read subject_ura must be canonical");
+    }
+    return subject;
   }
 
   static String requiredString(Object value, String field) {

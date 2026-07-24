@@ -1454,6 +1454,7 @@
       "RuntimeHealth",
       "RuntimeReceipt",
       "RuntimeReceiptProofFacts",
+      "RuntimeSubjects",
       "RuntimeTransport",
       "SDKError",
       "SessionAuthority",
@@ -1511,6 +1512,7 @@
       "StreamSource",
       "authorityProfile",
       "delegationMetadataKey",
+      "runtimeStateReadSubjectURA(realm:userID:)",
       "sessionAuthorityMetadataKey"
     ]
   },
@@ -5878,6 +5880,7 @@
       "RuntimeReceipt.rawProjection",
       "RuntimeReceipt.receiptType",
       "RuntimeReceipt.state",
+      "RuntimeSubjects.runtimeStateReadSubjectURA",
       "RuntimeTransport.awaitHandle",
       "RuntimeTransport.cancelHandle",
       "RuntimeTransport.close",
@@ -9979,10 +9982,12 @@
       "java": {
         "symbols": [
           "RuntimeFuture",
+          "RuntimeSubjects",
           "RuntimeTransport"
         ],
         "members": [
           "RuntimeFuture.cancel",
+          "RuntimeSubjects.runtimeStateReadSubjectURA",
           "RuntimeTransport.awaitHandle",
           "RuntimeTransport.cancelHandle",
           "RuntimeTransport.close",
@@ -9997,7 +10002,8 @@
       },
       "swift": {
         "symbols": [
-          "RuntimeTransport"
+          "RuntimeTransport",
+          "runtimeStateReadSubjectURA(realm:userID:)"
         ],
         "members": [
           "RuntimeTransport.awaitHandle(_:)",
@@ -21160,6 +21166,8 @@
       "RuntimeReceipt.receiptType": "f7861006aad7bffb228f546a3f04ae68efa1cbf130577f44fbf0ce7631a34a85",
       "RuntimeReceipt.state": "c08ee7d8f0c6e9ae06a73fbfefa42f17bcfd35d412c1451cf8692ada4b53f7bb",
       "RuntimeReceiptProofFacts": "e7db0d7b5e3880dcd92c6935ddf1efae38c8b339bd3f47889f1827dc1260c329",
+      "RuntimeSubjects": "00bd7ef3e94fdfbc7e1620435dacb45c1a42ff13882ec3f32a0c8c8b5ccba59b",
+      "RuntimeSubjects.runtimeStateReadSubjectURA": "afea9a398d93a690253d5d6a05458b690ae44a66574713bef491e744c64f1e60",
       "RuntimeTransport": "cb46823ad065fb864edf4ae547dc8fee30c35fdd7e997095c197d46ffa0960ae",
       "RuntimeTransport.awaitHandle": "2020558deb26195dc73cbbb8c65f5c49d051e0705d7600d0fc4eb15e330ad3ba",
       "RuntimeTransport.cancelHandle": "059789d37ff3410c6cc13cdafd4d0219a4b9afc740f24a13978b6c54fd0221cf",
@@ -21774,6 +21782,7 @@
       "StreamSource.next()": "c645625050b352cd54e68b3de519a25754c02928885559c33d28fa86ffed77a5",
       "authorityProfile": "6c7b7d38e4c2141888acdd39c208087b0c7c673dac8242912d228b5d082b585a",
       "delegationMetadataKey": "5f973bd682b92c6567b243f49bbd3d463fadc847280324333caddb41d0203ddf",
+      "runtimeStateReadSubjectURA(realm:userID:)": "21cb79e9be64988c5d20bae957a8722da9a8fe02e442c5d709acad597e0dd518",
       "sessionAuthorityMetadataKey": "121002aba8afb689bc07f2b9f9ce9c386e7565e4151032b016ad3d9436fa3403"
     }
   },

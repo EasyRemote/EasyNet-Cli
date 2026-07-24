@@ -376,6 +376,43 @@ final class RuntimeCoreSeamTests: XCTestCase {
             .string(delegationValue)
         )
 
+        let mismatchedDelegation = try DelegationProof.fromMetadata(authorityMetadataValue([
+            "issuer_ura": "easynet:///r/example/user/alice",
+            "subject_ura": "easynet:///r/example/user/alice",
+            "caller_ura": caller,
+            "audience": callee,
+            "scopes": ["observe.health"],
+            "issued_at_ms": 10,
+            "expires_at_ms": 20,
+        ]))
+        expectSyncSDKError(.authoritySubjectMismatch, "delegation authority subject does not match invocation subject_ura") {
+            _ = try completeBuilder()
+                .withAuthorityMetadata(mismatchedDelegation.metadata())
+                .inspect()
+        }
+
+        let scopedSession = try SessionAuthority.fromMetadata(sessionMetadataValue(scopes: ["observe.health"]))
+        _ = try completeBuilder()
+            .withSubjectURA(try runtimeStateReadSubjectURA(realm: "example", userID: "alice"))
+            .withAuthorityMetadata(scopedSession.metadata())
+            .inspect()
+        _ = try completeBuilder()
+            .withSubjectURA("easynet:///r/example/resource/agent.alice.sdk/runtime-state/read")
+            .withAuthorityMetadata(scopedSession.metadata())
+            .inspect()
+        expectSyncSDKError(.authoritySubjectMismatch, "session authority subject does not admit invocation subject_ura") {
+            _ = try completeBuilder()
+                .withSubjectURA("not-a-ura/resource/user.alice/runtime-state/read")
+                .withAuthorityMetadata(scopedSession.metadata())
+                .inspect()
+        }
+        expectSyncSDKError(.authoritySubjectMismatch, "session authority subject does not admit invocation subject_ura") {
+            _ = try completeBuilder()
+                .withSubjectURA("easynet:///r/example/device/dev-a/resource/user.alice/runtime-state/read")
+                .withAuthorityMetadata(scopedSession.metadata())
+                .inspect()
+        }
+
         expectSyncSDKError(.invalidArgument) {
             _ = try completeBuilder()
                 .withMetadata([
@@ -397,6 +434,19 @@ final class RuntimeCoreSeamTests: XCTestCase {
                     issuedAtMS: 10,
                     expiresAtMS: 20
                 )
+            )
+        }
+    }
+
+    func testRuntimeStateReadSubjectHelperBuildsUserOwnedResourceSubject() throws {
+        XCTAssertEqual(
+            try runtimeStateReadSubjectURA(realm: "example", userID: "alice"),
+            "easynet:///r/example/resource/user.alice/runtime-state/read"
+        )
+        expectSyncSDKError(.invalidArgument, "user_id must not be all-zero") {
+            _ = try runtimeStateReadSubjectURA(
+                realm: "example",
+                userID: "00000000-0000-0000-0000-000000000000"
             )
         }
     }
@@ -674,16 +724,20 @@ final class RuntimeCoreSeamTests: XCTestCase {
     private func delegationMetadataValue() throws -> String {
         try authorityMetadataValue([
             "issuer_ura": "easynet:///r/example/user/alice",
-            "subject_ura": "easynet:///r/example/user/alice",
+            "subject_ura": callee,
             "caller_ura": caller,
             "audience": callee,
-            "scopes": ["invoke"],
+            "scopes": ["observe.health"],
             "issued_at_ms": 10,
             "expires_at_ms": 20,
         ])
     }
 
     private func sessionMetadataValue() throws -> String {
+        try sessionMetadataValue(scopes: ["invoke"])
+    }
+
+    private func sessionMetadataValue(scopes: [String]) throws -> String {
         try authorityMetadataValue([
             "issuer_ura": caller,
             "session_id": "session-1",
@@ -692,7 +746,7 @@ final class RuntimeCoreSeamTests: XCTestCase {
             "callee_ura": callee,
             "subject_ura": "easynet:///r/example/user/alice",
             "audience": callee,
-            "scopes": ["invoke"],
+            "scopes": scopes,
             "allowed_actions": ["invoke"],
             "allowed_followup_abilities": ["observe.health"],
             "issued_at_ms": 10,
