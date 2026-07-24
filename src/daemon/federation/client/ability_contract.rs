@@ -82,12 +82,14 @@ pub struct JoinArgs {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct PrincipalEnrollmentProof {
     pub principal_ura: String,
     pub proof: PrincipalProofRef,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct PrincipalProofRef {
     pub kind: String,
     pub reference: String,
@@ -141,6 +143,7 @@ pub enum AdvertisedSigningAuthority {
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct AdvertiseAgentReceipt {
     pub ack: bool,
     pub replaced_prior: bool,
@@ -213,6 +216,7 @@ pub struct ResolveFilter {
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct ResolvedAgent {
     pub ura: String,
     pub status: String,
@@ -229,6 +233,7 @@ pub struct ResolvedAgent {
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct ResolveReceipt {
     pub agents: Vec<ResolvedAgent>,
 }
@@ -328,6 +333,47 @@ mod tests {
     }
 
     #[test]
+    fn principal_enrollment_proof_rejects_product_account_aliases() {
+        for field in ["user_id", "username", "device_ura"] {
+            let mut body = serde_json::Map::new();
+            body.insert(
+                "principal_ura".to_string(),
+                json!("easynet:///r/acme/user/alice"),
+            );
+            body.insert(
+                "proof".to_string(),
+                json!({
+                    "kind": "active_key",
+                    "reference": "binding-1"
+                }),
+            );
+            body.insert(field.to_string(), json!("retired"));
+
+            let err = serde_json::from_value::<PrincipalEnrollmentProof>(Value::Object(body))
+                .expect_err("principal enrollment proof must reject product account aliases");
+
+            assert!(
+                err.to_string().contains(field),
+                "retired field {field:?} must be named in parse error: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn principal_proof_ref_rejects_unknown_proof_handle_fields() {
+        let body = json!({
+            "kind": "active_key",
+            "reference": "binding-1",
+            "key_id": "retired"
+        });
+
+        let err = serde_json::from_value::<PrincipalProofRef>(body)
+            .expect_err("principal proof ref must reject retired key handles");
+
+        assert!(err.to_string().contains("key_id"));
+    }
+
+    #[test]
     fn resolve_key_receipt_parses_canonical_key_facts() {
         let body = json!({
             "public_key_b64": "pub-b64",
@@ -406,6 +452,24 @@ mod tests {
             "easynet:///r/acme/device/01DEV"
         );
         assert_eq!(v["generation"], 7);
+    }
+
+    #[test]
+    fn advertise_agent_receipt_rejects_retired_status_aliases() {
+        for field in ["status", "agent_ura"] {
+            let mut body = serde_json::Map::new();
+            body.insert("ack".to_string(), json!(true));
+            body.insert("replaced_prior".to_string(), json!(false));
+            body.insert(field.to_string(), json!("retired"));
+
+            let err = parse_receipt_value::<AdvertiseAgentReceipt>(&Value::Object(body))
+                .expect_err("advertise receipt must reject retired fields");
+
+            assert!(
+                err.to_string().contains(field),
+                "retired field {field:?} must be named in parse error: {err}"
+            );
+        }
     }
 
     #[test]
@@ -600,5 +664,44 @@ mod tests {
             parsed.agents[0].ability_summaries[0]["ability_ura"],
             "easynet:///r/acme/ability/alice.bot.chat"
         );
+    }
+
+    #[test]
+    fn resolve_receipt_rejects_top_level_compat_agent_lists() {
+        for field in ["items", "results", "directory"] {
+            let mut body = serde_json::Map::new();
+            body.insert("agents".to_string(), json!([]));
+            body.insert(field.to_string(), json!([]));
+
+            let err = parse_receipt_value::<ResolveReceipt>(&Value::Object(body))
+                .expect_err("resolve receipt must reject alternate agent list aliases");
+
+            assert!(
+                err.to_string().contains(field),
+                "retired field {field:?} must be named in parse error: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn resolved_agent_rejects_retired_identity_and_directory_aliases() {
+        for field in ["agent_ura", "node_id", "tenant_id"] {
+            let mut agent = serde_json::Map::new();
+            agent.insert(
+                "ura".to_string(),
+                json!("easynet:///r/acme/agent/alice.bot"),
+            );
+            agent.insert("status".to_string(), json!("active"));
+            agent.insert(field.to_string(), json!("retired"));
+            let body = json!({ "agents": [Value::Object(agent)] });
+
+            let err = parse_receipt_value::<ResolveReceipt>(&body)
+                .expect_err("resolved agent row must reject retired aliases");
+
+            assert!(
+                err.to_string().contains(field),
+                "retired field {field:?} must be named in parse error: {err}"
+            );
+        }
     }
 }
