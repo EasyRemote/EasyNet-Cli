@@ -30,6 +30,22 @@ impl CallCreateParticipantIdentity {
     }
 }
 
+struct CallSignalingIssuer;
+
+impl CallSignalingIssuer {
+    fn invoke(ability: &str, args: Value) -> anyhow::Result<Value> {
+        if let Some(value) = invoke_current_realm_hub_system_ability(ability, args.clone())? {
+            return Ok(value);
+        }
+        Self::invoke_local(ability, args)
+    }
+
+    fn invoke_local(ability: &str, args: Value) -> anyhow::Result<Value> {
+        let subject_ura = LocalDaemonSystemAbilityIssuer::local_daemon_identity_subject_ura()?;
+        LocalDaemonSystemAbilityIssuer::invoke_root_for_subject(ability, args, &subject_ura)
+    }
+}
+
 #[test]
 fn call_create_participant_rejects_malformed_credentials() {}
 
@@ -59,5 +75,44 @@ set +e
 rc=$?
 set -e
 [[ "$rc" == "1" ]] || fail "credential-to-hostname collapse should exit 1 (got $rc)"
+
+cp "$SCRIPT" "$SB/tools/scripts/check-call-create-participant-identity-boundary.sh"
+cat > "$SB/src/cli/commands/groups/call.rs" <<'RS'
+enum CallCreateParticipantIdentity {
+    DeviceNode(String),
+    UnpairedHostname(String),
+}
+
+impl CallCreateParticipantIdentity {
+    fn resolve() -> anyhow::Result<Self> {
+        let Some(credentials) = crate::daemon::persistence::config::load_credentials_optional()? else {
+            return Ok(Self::UnpairedHostname("host".to_string()));
+        };
+        Ok(Self::DeviceNode(credentials.node_id))
+    }
+}
+
+struct CallSignalingIssuer;
+
+impl CallSignalingIssuer {
+    fn invoke(ability: &str, args: Value) -> anyhow::Result<Value> {
+        invoke_local_ability(ability, args)
+    }
+}
+
+#[test]
+fn call_create_participant_rejects_malformed_credentials() {}
+
+#[test]
+fn call_create_participant_rejects_incomplete_credentials() {}
+RS
+set +e
+(
+  cd "$SB"
+  bash tools/scripts/check-call-create-participant-identity-boundary.sh
+) >/tmp/check-call-create-participant-identity.out 2>&1
+rc=$?
+set -e
+[[ "$rc" == "1" ]] || fail "generic call signaling invoke should exit 1 (got $rc)"
 
 echo "test_check_call_create_participant_identity_boundary.sh: all cases passed"

@@ -5,9 +5,10 @@
 // Description: Eight abilities backing the `easynet call …`
 //              subcommand surface. Replaces the dead
 //              `bridge.*_voice_*` family removed by
-//              AXON-RFC-001 P1.5; the CLI talks to these via the
-//              shared `support::local_invoke::invoke_local_ability`
-//              helper, same as every other CLI subcommand.
+//              AXON-RFC-001 P1.5; the CLI talks to these through the
+//              call signaling issuer, which routes paired calls to the
+//              realm Hub and binds an explicit local daemon subject for
+//              unpaired local signaling.
 //
 // Abilities registered here
 // -------------------------

@@ -25,6 +25,22 @@ if rg -n 'load_credentials\(\)|load_credentials\(\)\s*\.ok\(\)|map\(\|creds\|\s*
   fail "call create must not collapse credential errors into hostname participant identity"
 fi
 
+if ! rg -n 'struct CallSignalingIssuer' "$TARGET" >/dev/null; then
+  fail "call signaling must use a named issuer"
+fi
+
+if ! rg -n 'invoke_current_realm_hub_system_ability\(ability, args\.clone\(\)\)' "$TARGET" >/dev/null; then
+  fail "call signaling must preserve the current-realm Hub route before local signaling"
+fi
+
+if ! rg -n -U 'LocalDaemonSystemAbilityIssuer::invoke_root_for_subject\(\s*ability,\s*args,\s*&subject_ura' "$TARGET" >/dev/null; then
+  fail "local call signaling must bind an explicit local daemon subject"
+fi
+
+if rg -n '\binvoke_local_ability\s*\(' "$TARGET"; then
+  fail "call signaling must not use generic invoke_local_ability"
+fi
+
 if ! rg -n 'call_create_participant_rejects_malformed_credentials' "$TARGET" >/dev/null; then
   fail "call create participant identity must test malformed credentials as fail-closed"
 fi

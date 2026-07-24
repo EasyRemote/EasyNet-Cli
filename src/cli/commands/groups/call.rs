@@ -25,7 +25,7 @@ use clap::{Args, Subcommand};
 use serde_json::{json, Value};
 
 use crate::cli::daemon_client::remote_system_ability::invoke_current_realm_hub_system_ability;
-use crate::support::platform::local_invoke::invoke_local_ability;
+use crate::support::platform::local_invoke::LocalDaemonSystemAbilityIssuer;
 use crate::support::platform::output::{self, OutputFormat};
 
 #[derive(Debug, Args)]
@@ -160,12 +160,26 @@ pub fn run(args: CallArgs) -> anyhow::Result<()> {
     }
 }
 
-fn invoke_call_signaling(ability: &str, args: Value) -> anyhow::Result<Value> {
-    if let Some(value) = invoke_current_realm_hub_system_ability(ability, args.clone())? {
-        return Ok(value);
+struct CallSignalingIssuer;
+
+impl CallSignalingIssuer {
+    fn invoke(ability: &str, args: Value) -> anyhow::Result<Value> {
+        if let Some(value) = invoke_current_realm_hub_system_ability(ability, args.clone())? {
+            return Ok(value);
+        }
+        Self::invoke_local(ability, args)
     }
 
-    invoke_local_ability(ability, args).with_context(|| format!("invoke {ability} locally"))
+    fn invoke_local(ability: &str, args: Value) -> anyhow::Result<Value> {
+        let subject_ura = LocalDaemonSystemAbilityIssuer::local_daemon_identity_subject_ura()
+            .with_context(|| format!("resolve local call signaling subject for {ability}"))?;
+        LocalDaemonSystemAbilityIssuer::invoke_root_for_subject(ability, args, &subject_ura)
+            .with_context(|| format!("invoke {ability} locally"))
+    }
+}
+
+fn invoke_call_signaling(ability: &str, args: Value) -> anyhow::Result<Value> {
+    CallSignalingIssuer::invoke(ability, args)
 }
 
 fn run_create(args: CreateArgs) -> anyhow::Result<()> {
