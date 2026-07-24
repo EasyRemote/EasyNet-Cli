@@ -1114,6 +1114,13 @@ test("session history keeps subject filters as ledger predicates", async () => {
   assert.equal(page.records.length, 1);
 });
 
+test("receipt filter rejects retired agent_ura alias", () => {
+  assert.throws(
+    () => new sdk.ReceiptFilter({ agent_ura: callee }),
+    /agent_ura is not a runtime field/,
+  );
+});
+
 test("runtime-state read subject helper builds user-owned resource subject", () => {
   assert.equal(
     sdk.runtimeStateReadSubjectURA("example", "alice"),

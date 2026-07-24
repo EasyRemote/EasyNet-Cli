@@ -418,7 +418,6 @@ export interface ReceiptFilterFields {
   callee_ura?: string | null;
   subject_ura?: string | null;
   ability_ura?: string | null;
-  agent_ura?: string | null;
   state?: string | null;
 }
 
@@ -427,7 +426,6 @@ export class ReceiptFilter {
   calleeURA: string;
   subjectURA: string;
   abilityURA: string;
-  agentURA: string;
   state: string;
   constructor(fields?: ReceiptFilterFields);
   toJSON(): Record<string, unknown>;

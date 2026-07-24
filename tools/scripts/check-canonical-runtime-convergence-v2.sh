@@ -1028,12 +1028,18 @@ scoped_callee = re.search(
 if scoped_callee is None:
     raise SystemExit("invocation_history_filter_scope_callee_missing")
 scoped_body = scoped_callee.group("body")
-for required in (
-    'optional_principal_ura_filter_string(object, "callee_ura")',
+if 'optional_principal_ura_filter_string(object, "callee_ura")' not in scoped_body:
+    raise SystemExit(
+        'invocation_history_filter_scope_callee_missing:optional_principal_ura_filter_string(object, "callee_ura")'
+    )
+for retired in (
     'optional_principal_ura_filter_string(object, "agent_ura")',
+    '"agent_ura"',
 ):
-    if required not in scoped_body:
-        raise SystemExit(f"invocation_history_filter_scope_callee_missing:{required}")
+    if retired in scoped_body:
+        raise SystemExit(f"invocation_history_filter_scope_callee_legacy:{retired}")
+if re.search(r'"agent_ura"\s*:', production):
+    raise SystemExit("invocation_history_filter_scope_schema_legacy_agent_ura")
 
 fetch_key = re.search(
     r"fn fetch_key_from_value\([^)]*\) -> anyhow::Result<InvocationLedgerFetchKey> \{(?P<body>.*?)\n\}\n\nfn apply_filter_object",

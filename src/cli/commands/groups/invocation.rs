@@ -533,7 +533,7 @@ fn percentile(sorted: &[u64], p: u64) -> u64 {
 
 fn fetch_history_list(args: &ListArgs) -> anyhow::Result<HistoryListResponse> {
     invoke_invocation_history_read(InvocationHistoryRead::List(
-        InvocationHistoryListQuery::from_list_args(args),
+        InvocationHistoryListQuery::from_list_args(args)?,
     ))
 }
 
@@ -604,18 +604,20 @@ impl InvocationHistoryListQuery {
         }
     }
 
-    fn from_list_args(args: &ListArgs) -> Self {
-        Self {
+    fn from_list_args(args: &ListArgs) -> anyhow::Result<Self> {
+        Ok(Self {
             limit: args.limit,
             filter: InvocationHistoryFilter {
                 state: args.state.clone(),
                 ability_ura: args.ability_ura.clone(),
                 caller_ura: args.caller.clone(),
-                callee_ura: args.callee.clone(),
-                agent_ura: args.agent_ura.clone(),
+                callee_ura: canonical_history_callee_filter(
+                    args.callee.as_deref(),
+                    args.agent_ura.as_deref(),
+                )?,
                 subject_ura: args.subject.clone(),
             },
-        }
+        })
     }
 
     fn into_args(self) -> Value {
@@ -634,7 +636,6 @@ struct InvocationHistoryFilter {
     ability_ura: Option<String>,
     caller_ura: Option<String>,
     callee_ura: Option<String>,
-    agent_ura: Option<String>,
     subject_ura: Option<String>,
 }
 
@@ -645,7 +646,6 @@ impl InvocationHistoryFilter {
         Self::insert_arg_value(&mut filter, "ability_ura", self.ability_ura);
         Self::insert_arg_value(&mut filter, "caller_ura", self.caller_ura);
         Self::insert_arg_value(&mut filter, "callee_ura", self.callee_ura);
-        Self::insert_arg_value(&mut filter, "agent_ura", self.agent_ura);
         Self::insert_arg_value(&mut filter, "subject_ura", self.subject_ura);
         (!filter.is_empty()).then(|| Value::Object(filter))
     }
@@ -654,6 +654,21 @@ impl InvocationHistoryFilter {
         if let Some(value) = value.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
             filter.insert(key.to_string(), json!(value));
         }
+    }
+}
+
+fn canonical_history_callee_filter(
+    callee_ura: Option<&str>,
+    agent_ura: Option<&str>,
+) -> anyhow::Result<Option<String>> {
+    let callee = callee_ura.map(str::trim).filter(|value| !value.is_empty());
+    let agent = agent_ura.map(str::trim).filter(|value| !value.is_empty());
+    match (callee, agent) {
+        (Some(callee), Some(agent)) if callee != agent => anyhow::bail!(
+            "`--agent-ura` is a CLI facade for `--callee-ura`; both values must match when supplied"
+        ),
+        (Some(value), _) | (_, Some(value)) => Ok(Some(value.to_string())),
+        (None, None) => Ok(None),
     }
 }
 
@@ -712,8 +727,8 @@ mod tests {
 
     #[test]
     fn invocation_history_read_list_emits_explicit_ura_scope_fields() {
-        let body =
-            InvocationHistoryRead::List(InvocationHistoryListQuery::from_list_args(&ListArgs {
+        let body = InvocationHistoryRead::List(
+            InvocationHistoryListQuery::from_list_args(&ListArgs {
                 limit: 25,
                 state: Some("completed".into()),
                 ability_ura: Some("easynet:///r/test/ability/device.callee.fs.read".into()),
@@ -722,8 +737,10 @@ mod tests {
                 agent_ura: Some("easynet:///r/test/device/callee".into()),
                 subject: Some("easynet:///r/test/user/alice".into()),
                 format: OutputFormat::Json,
-            }))
-            .into_args();
+            })
+            .unwrap(),
+        )
+        .into_args();
 
         assert_eq!(body["limit"], 25);
         assert_eq!(
@@ -735,20 +752,21 @@ mod tests {
             "easynet:///r/test/device/caller"
         );
         assert_eq!(
-            body["filter"]["agent_ura"],
+            body["filter"]["callee_ura"],
             "easynet:///r/test/device/callee"
         );
         assert_eq!(
             body["filter"]["subject_ura"],
             "easynet:///r/test/user/alice"
         );
+        assert!(body["filter"].get("agent_ura").is_none());
         assert!(body["filter"].get("subject").is_none());
     }
 
     #[test]
     fn invocation_history_read_list_omits_blank_filter_values() {
-        let body =
-            InvocationHistoryRead::List(InvocationHistoryListQuery::from_list_args(&ListArgs {
+        let body = InvocationHistoryRead::List(
+            InvocationHistoryListQuery::from_list_args(&ListArgs {
                 limit: 25,
                 state: Some(" ".into()),
                 ability_ura: None,
@@ -757,8 +775,10 @@ mod tests {
                 agent_ura: None,
                 subject: None,
                 format: OutputFormat::Json,
-            }))
-            .into_args();
+            })
+            .unwrap(),
+        )
+        .into_args();
 
         assert_eq!(body["limit"], 25);
         assert!(body.get("filter").is_none());
@@ -814,6 +834,7 @@ mod tests {
             subject: Some("easynet:///r/test/user/alice".into()),
             format: OutputFormat::Json,
         })
+        .unwrap()
         .into_args();
 
         assert_eq!(body["limit"], 25);
@@ -826,14 +847,54 @@ mod tests {
             "easynet:///r/test/device/caller"
         );
         assert_eq!(
-            body["filter"]["agent_ura"],
+            body["filter"]["callee_ura"],
             "easynet:///r/test/device/callee"
         );
         assert_eq!(
             body["filter"]["subject_ura"],
             "easynet:///r/test/user/alice"
         );
+        assert!(body["filter"].get("agent_ura").is_none());
         assert!(body["filter"].get("subject").is_none());
+    }
+
+    #[test]
+    fn invocation_history_agent_filter_is_cli_only_callee_lowering() {
+        let query = InvocationHistoryListQuery::from_list_args(&ListArgs {
+            limit: 25,
+            state: None,
+            ability_ura: None,
+            caller: None,
+            callee: Some("easynet:///r/test/device/callee".into()),
+            agent_ura: Some("easynet:///r/test/device/other".into()),
+            subject: None,
+            format: OutputFormat::Json,
+        })
+        .expect_err("conflicting CLI facade and canonical callee filters must fail");
+
+        assert!(
+            query.to_string().contains("facade for `--callee-ura`"),
+            "got {query}"
+        );
+
+        let body = InvocationHistoryListQuery::from_list_args(&ListArgs {
+            limit: 25,
+            state: None,
+            ability_ura: None,
+            caller: None,
+            callee: None,
+            agent_ura: Some("easynet:///r/test/device/callee".into()),
+            subject: None,
+            format: OutputFormat::Json,
+        })
+        .unwrap()
+        .into_args();
+
+        assert_eq!(
+            body["filter"]["callee_ura"],
+            "easynet:///r/test/device/callee"
+        );
+        assert!(body["filter"].get("agent_ura").is_none());
     }
 
     // ── `invocation stats` aggregation (F-051) ──────────────────

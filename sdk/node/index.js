@@ -794,14 +794,12 @@ export class ReceiptFilter {
       "callee_ura",
       "subject_ura",
       "ability_ura",
-      "agent_ura",
       "state",
     ]);
     this.callerURA = optionalHistoryPrincipalString(value.caller_ura, "filter.caller_ura");
     this.calleeURA = optionalHistoryPrincipalString(value.callee_ura, "filter.callee_ura");
     this.subjectURA = optionalHistoryPrincipalString(value.subject_ura, "filter.subject_ura");
     this.abilityURA = optionalRuntimeString(value.ability_ura, "filter.ability_ura") ?? "";
-    this.agentURA = optionalRuntimeString(value.agent_ura, "filter.agent_ura") ?? "";
     this.state = optionalRuntimeString(value.state, "filter.state") ?? "";
   }
 
@@ -811,7 +809,6 @@ export class ReceiptFilter {
     if (this.calleeURA) value.callee_ura = this.calleeURA;
     if (this.subjectURA) value.subject_ura = this.subjectURA;
     if (this.abilityURA) value.ability_ura = this.abilityURA;
-    if (this.agentURA) value.agent_ura = this.agentURA;
     if (this.state) value.state = this.state;
     return value;
   }

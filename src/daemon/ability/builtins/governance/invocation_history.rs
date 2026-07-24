@@ -599,8 +599,8 @@ fn apply_filter_object(
 fn validate_filter_keys(object: &serde_json::Map<String, Value>) -> anyhow::Result<()> {
     for key in object.keys() {
         match key.as_str() {
-            "caller_ura" | "callee_ura" | "agent_ura" | "subject_ura" | "subject_uras"
-            | "ability_ura" | "ability_uras" | "state" | "trace_id" => {}
+            "caller_ura" | "callee_ura" | "subject_ura" | "subject_uras" | "ability_ura"
+            | "ability_uras" | "state" | "trace_id" => {}
             other => anyhow::bail!("unsupported filter field `{other}`"),
         }
     }
@@ -608,15 +608,7 @@ fn validate_filter_keys(object: &serde_json::Map<String, Value>) -> anyhow::Resu
 }
 
 fn scoped_callee_ura(object: &serde_json::Map<String, Value>) -> anyhow::Result<Option<String>> {
-    let callee = optional_principal_ura_filter_string(object, "callee_ura")?;
-    let agent = optional_principal_ura_filter_string(object, "agent_ura")?;
-    match (callee, agent) {
-        (Some(callee), Some(agent)) if callee != agent => {
-            anyhow::bail!("filter.callee_ura and filter.agent_ura must match when both are set")
-        }
-        (Some(value), _) | (_, Some(value)) => Ok(Some(value.to_string())),
-        (None, None) => Ok(None),
-    }
+    optional_principal_ura_filter_string(object, "callee_ura")
 }
 
 fn non_empty_str(value: &Value) -> Option<&str> {
@@ -1038,11 +1030,7 @@ fn filter_schema() -> Value {
         "type": "object",
         "properties": {
             "caller_ura": { "type": "string", "description": "Caller Agent URA." },
-            "callee_ura": { "type": "string", "description": "Callee/owner Agent URA." },
-            "agent_ura": {
-                "type": "string",
-                "description": "Ability owner/callee Agent URA. Equivalent to callee_ura for history scope."
-            },
+            "callee_ura": { "type": "string", "description": "Callee principal URA." },
             "subject_ura": { "type": "string", "description": "Single subject URA." },
             "subject_uras": {
                 "type": "array",
@@ -1545,7 +1533,7 @@ mod tests {
             "key": { "ura": "easynet:///r/test/resource/alice.invocations/req-test" },
             "filter": {
                 "caller_ura": "easynet:///r/test/device/caller",
-                "agent_ura": "easynet:///r/test/device/callee",
+                "callee_ura": "easynet:///r/test/device/callee",
                 "subject_ura": "easynet:///r/test/user/alice",
                 "ability_ura": "easynet:///r/test/ability/authority.observe.health",
                 "state": "completed"
@@ -1614,7 +1602,6 @@ mod tests {
         for (field, value) in [
             ("caller_ura", json!(42)),
             ("callee_ura", json!("")),
-            ("agent_ura", json!(false)),
             ("ability_ura", json!([])),
             ("state", json!("  ")),
             ("trace_id", json!({})),
@@ -1642,7 +1629,6 @@ mod tests {
                 json!("easynet:///r/test/ability/authority.bad"),
                 "canonical Agent, Device, or Authority URA",
             ),
-            ("agent_ura", json!("not-a-ura"), "canonical principal URA"),
             ("subject_ura", json!("not-a-ura"), "canonical URA"),
             (
                 "ability_ura",
@@ -1696,27 +1682,19 @@ mod tests {
 
     #[test]
     fn query_from_args_rejects_unknown_filter_fields() {
-        let err = query_from_args(&json!({
-            "filter": {
-                "subject": "easynet:///r/test/user/alice"
-            }
-        }))
-        .unwrap_err()
-        .to_string();
-        assert!(err.contains("unsupported filter field"), "got {err}");
-    }
-
-    #[test]
-    fn query_from_args_rejects_conflicting_agent_and_callee_scope() {
-        let err = query_from_args(&json!({
-            "filter": {
-                "agent_ura": "easynet:///r/test/device/owner-a",
-                "callee_ura": "easynet:///r/test/device/owner-b"
-            }
-        }))
-        .unwrap_err()
-        .to_string();
-        assert!(err.contains("must match"), "got {err}");
+        for field in ["subject", "agent_ura"] {
+            let err = query_from_args(&json!({
+                "filter": {
+                    field: "easynet:///r/test/user/alice"
+                }
+            }))
+            .unwrap_err()
+            .to_string();
+            assert!(
+                err.contains("unsupported filter field"),
+                "field {field} got {err}"
+            );
+        }
     }
 
     #[test]
