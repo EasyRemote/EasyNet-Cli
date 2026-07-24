@@ -7424,34 +7424,35 @@ if node_sdk.exists():
 
 
 # Rule 71: Node type-level SDK tests must exercise the generic runtime surface
-# without importing removed product clients at runtime. A static ESM import of
-# `AdminClient`/Mission/etc. fails before the test can assert product neutrality
-# and pressures the SDK to restore product compatibility symbols.
+# without importing downstream workflow/profile placeholders at runtime. A
+# static ESM import fails before the test can assert SDK neutrality and
+# pressures the SDK to restore non-canonical convenience symbols.
 node_types_test = cli_root / "sdk/node/test/types.test.ts"
 if node_types_test.exists():
     text = source(node_types_test)
-    forbidden_products = (
-        "AdminClient",
-        "CompanionClient",
-        "CompatibilityClient",
-        "DirectoryClient",
-        "MissionClient",
-        "ReceiptClient",
-        "SurfaceClient",
+    downstream_profile_symbols = (
+        "WorkflowClient",
+        "WorkflowTransport",
+        "ApplicationLifecycleClient",
+        "ApplicationDirectoryView",
+        "ApplicationReceiptPage",
+        "CompatibilityAdapter",
+        "ConvenienceWrapperClient",
+        "ProfileBundle",
     )
-    for product in forbidden_products:
+    for symbol in downstream_profile_symbols:
         for token in (
-            f"import {{ {product} }}",
-            f"import {{ type {product} }}",
-            f"import type {{ {product} }}",
-            f"void {product}",
+            f"import {{ {symbol} }}",
+            f"import {{ type {symbol} }}",
+            f"import type {{ {symbol} }}",
+            f"void {symbol}",
         ):
             if token in text:
                 add(
                     "R71_NODE_PRODUCT_NEUTRAL_TYPES_TEST",
                     node_types_test,
                     line_number(text, text.find(token)),
-                    f"Node type tests must not import removed product symbol {product}",
+                    f"Node type tests must not import downstream profile symbol {symbol}",
                 )
     if "opaque-authority" in text:
         add(
@@ -7462,12 +7463,12 @@ if node_types_test.exists():
         )
     for token, detail in (
         (
-            "Object.hasOwn(sdk, product)",
-            "Node type tests must assert product symbols are absent from runtime exports",
+            "Object.hasOwn(sdk, symbol)",
+            "Node type tests must assert downstream profile symbols are absent from runtime exports",
         ),
         (
-            "declarations.includes(product)",
-            "Node type tests must assert product symbols are absent from index.d.ts",
+            "declarations.includes(symbol)",
+            "Node type tests must assert downstream profile symbols are absent from index.d.ts",
         ),
     ):
         if token not in text:

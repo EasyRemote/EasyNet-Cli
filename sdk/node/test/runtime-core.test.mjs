@@ -55,19 +55,19 @@ const expectedExports = [
   "runtimeStateReadSubjectURA",
 ];
 
-const productSymbols = [
-  "AdminClient",
-  "CompanionClient",
-  "CompatibilityClient",
-  "DirectoryClient",
-  "IdentityClient",
-  "EventClient",
-  "HostBindingClient",
-  "MissionClient",
-  "PublicationClient",
-  "ReceiptClient",
-  "SurfaceClient",
-  "WrapperClient",
+const downstreamProfileSymbols = [
+  "WorkflowClient",
+  "WorkflowTransport",
+  "ApplicationLifecycleClient",
+  "ApplicationDirectoryView",
+  "ApplicationReceiptPage",
+  "ApplicationEventClient",
+  "HostIntegrationClient",
+  "PublicationWorkflowClient",
+  "CompatibilityAdapter",
+  "ConvenienceWrapperClient",
+  "ProfileBundle",
+  "ServiceLocator",
 ];
 
 const completeDraft = () =>
@@ -280,8 +280,8 @@ test("runtime package exports exactly the generic public surface", async () => {
   assert.deepEqual(Object.keys(sdk).sort(), expectedExports);
 
   const declarations = await readFile(new URL("../index.d.ts", import.meta.url), "utf8");
-  for (const product of productSymbols) {
-    assert.equal(declarations.includes(product), false, `${product} leaked through index.d.ts`);
+  for (const symbol of downstreamProfileSymbols) {
+    assert.equal(declarations.includes(symbol), false, `${symbol} leaked through index.d.ts`);
   }
   for (const exported of expectedExports.filter((name) => /^[A-Z]/.test(name))) {
     assert.match(declarations, new RegExp(`\\b${exported}\\b`));

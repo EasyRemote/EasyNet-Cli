@@ -81,6 +81,14 @@ fn sdk_cutover_readiness_script_contract_holds() {
 }
 
 #[test]
+fn sdk_seam_test_vocabulary_script_contract_holds() {
+    // Pins SDK seam tests to generic downstream workflow/profile vocabulary.
+    // Test evidence must not keep concrete EasyNet/EasyRemote product client
+    // names inside canonical SDK package boundaries.
+    run_bash_script("tests/scripts/test_check_sdk_seam_test_vocabulary.sh");
+}
+
+#[test]
 fn ability_model_convergence_script_contract_holds() {
     // Pins CallMode ownership to the daemon ability descriptor model. Plugin
     // manifest code consumes the type but must not re-export it.

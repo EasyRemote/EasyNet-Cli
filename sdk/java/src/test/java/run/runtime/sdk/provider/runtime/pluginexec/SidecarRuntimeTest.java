@@ -138,9 +138,7 @@ public final class SidecarRuntimeTest {
 
   static void sidecarInvocationRejectsMissingCanonicalInvocationObjects() {
     for (String field : java.util.List.of("causal_context", "args")) {
-      java.util.Map<String, Object> invocation =
-          new java.util.LinkedHashMap<>(
-              (java.util.Map<String, Object>) frame().get("invocation"));
+      java.util.Map<String, Object> invocation = canonicalInvocation();
       invocation.remove(field);
       java.util.Map<String, Object> incomplete = new java.util.LinkedHashMap<>();
       incomplete.put("type", "invoke");
@@ -152,7 +150,7 @@ public final class SidecarRuntimeTest {
       } catch (SidecarProtocolError expected) {
         check(expected.getMessage().contains("object"), "missing " + field + " error");
       }
-      invocation = new java.util.LinkedHashMap<>((java.util.Map<String, Object>) frame().get("invocation"));
+      invocation = canonicalInvocation();
       invocation.put(field, null);
       java.util.Map<String, Object> nullField = new java.util.LinkedHashMap<>();
       nullField.put("type", "invoke");
@@ -174,21 +172,19 @@ public final class SidecarRuntimeTest {
         "call_id",
         "call-1",
         "invocation",
-        Map.of(
-            "caller_ura",
-            "easynet:///r/hub/user/alice",
-            "callee_ura",
-            "easynet:///r/hub/device/provider",
-            "ability_ura",
-            "demo.echo",
-            "subject_ura",
-            "easynet:///r/hub/resource/demo",
-            "invocation_nonce",
-            java.util.List.of(1, 2, 3, 4),
-            "causal_context",
-            Map.of("form", "none"),
-            "args",
-            Map.of("message", "hello")));
+        canonicalInvocation());
+  }
+
+  private static java.util.LinkedHashMap<String, Object> canonicalInvocation() {
+    java.util.LinkedHashMap<String, Object> invocation = new java.util.LinkedHashMap<>();
+    invocation.put("caller_ura", "easynet:///r/hub/user/alice");
+    invocation.put("callee_ura", "easynet:///r/hub/device/provider");
+    invocation.put("ability_ura", "demo.echo");
+    invocation.put("subject_ura", "easynet:///r/hub/resource/demo");
+    invocation.put("invocation_nonce", java.util.List.of(1, 2, 3, 4));
+    invocation.put("causal_context", Map.of("form", "none"));
+    invocation.put("args", Map.of("message", "hello"));
+    return invocation;
   }
 
   private static String frameJSON() {

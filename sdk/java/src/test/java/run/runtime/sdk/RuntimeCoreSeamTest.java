@@ -113,21 +113,21 @@ public final class RuntimeCoreSeamTest {
   }
 
   private static void productNeutralJarExportsOnlyGenericRuntimeConcepts() {
-    List<String> removedProducts =
+    List<String> downstreamProfileSymbols =
         List.of(
-            "AdminClient",
-            "CompanionClient",
-            "CompatibilityClient",
-            "DirectoryClient",
-            "IdentityClient",
-            "EventClient",
-            "HostBindingClient",
-            "MissionClient",
-            "PublicationClient",
-            "ReceiptClient",
-            "SurfaceClient",
-            "WrapperClient");
-    for (String className : removedProducts) {
+            "WorkflowClient",
+            "WorkflowTransport",
+            "ApplicationLifecycleClient",
+            "ApplicationDirectoryView",
+            "ApplicationReceiptPage",
+            "ApplicationEventClient",
+            "HostIntegrationClient",
+            "PublicationWorkflowClient",
+            "CompatibilityAdapter",
+            "ConvenienceWrapperClient",
+            "ProfileBundle",
+            "ServiceLocator");
+    for (String className : downstreamProfileSymbols) {
       try {
         Class.forName("run.runtime.sdk." + className);
         throw new AssertionError("product-neutral SDK must not export " + className);

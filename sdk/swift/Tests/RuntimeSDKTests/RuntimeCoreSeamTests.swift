@@ -34,27 +34,27 @@ final class RuntimeCoreSeamTests: XCTestCase {
             ])
         )
 
-        let forbiddenExports = [
-            "AdminClient",
-            "CompanionClient",
-            "CompatibilityClient",
-            "DirectoryClient",
-            "IdentityClient",
-            "EventClient",
-            "HostBindingClient",
-            "MissionClient",
-            "PublicationClient",
-            "ReceiptClient",
-            "SurfaceClient",
-            "WrapperClient",
+        let downstreamProfileSymbols = [
+            "WorkflowClient",
+            "WorkflowTransport",
+            "ApplicationLifecycleClient",
+            "ApplicationDirectoryView",
+            "ApplicationReceiptPage",
+            "ApplicationEventClient",
+            "HostIntegrationClient",
+            "PublicationWorkflowClient",
+            "CompatibilityAdapter",
+            "ConvenienceWrapperClient",
+            "ProfileBundle",
+            "ServiceLocator",
         ]
         for sourceName in sourceNames {
             let source = try String(
                 contentsOf: sourceDirectory.appendingPathComponent(sourceName),
                 encoding: .utf8
             )
-            for forbidden in forbiddenExports {
-                XCTAssertFalse(source.contains(forbidden), "\(sourceName) exports \(forbidden)")
+            for symbol in downstreamProfileSymbols {
+                XCTAssertFalse(source.contains(symbol), "\(sourceName) exports \(symbol)")
             }
         }
     }

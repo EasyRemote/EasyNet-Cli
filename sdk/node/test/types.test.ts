@@ -11,20 +11,21 @@ import {
 } from "../index.js";
 import * as sdk from "../index.js";
 
-const productSymbols = [
-  "AdminClient",
-  "CompanionClient",
-  "CompatibilityClient",
-  "DirectoryClient",
-  "MissionClient",
-  "ReceiptClient",
-  "SurfaceClient",
+const downstreamProfileSymbols = [
+  "WorkflowClient",
+  "WorkflowTransport",
+  "ApplicationLifecycleClient",
+  "ApplicationDirectoryView",
+  "ApplicationReceiptPage",
+  "CompatibilityAdapter",
+  "ConvenienceWrapperClient",
+  "ProfileBundle",
 ];
 
 const declarations = await readFile(new URL("../index.d.ts", import.meta.url), "utf8");
-for (const product of productSymbols) {
-  assert.equal(Object.hasOwn(sdk, product), false, `${product} leaked through runtime exports`);
-  assert.equal(declarations.includes(product), false, `${product} leaked through index.d.ts`);
+for (const symbol of downstreamProfileSymbols) {
+  assert.equal(Object.hasOwn(sdk, symbol), false, `${symbol} leaked through runtime exports`);
+  assert.equal(declarations.includes(symbol), false, `${symbol} leaked through index.d.ts`);
 }
 
 const callerURA = "easynet:///r/example/agent/alice.sdk";

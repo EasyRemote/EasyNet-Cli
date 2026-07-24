@@ -665,6 +665,14 @@ check_sdk_doc_product_vocabulary_contract() {
   CHECK_SDK_DOC_PRODUCT_VOCABULARY_ROOT="$cli_root" bash "$script" >/dev/null
 }
 
+check_sdk_seam_test_vocabulary_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local script="$ROOT/tools/scripts/check-sdk-seam-test-vocabulary.sh"
+  [[ -f "$script" ]] || fail "SDK seam test vocabulary script is missing: ${script#$ROOT/}"
+
+  CHECK_SDK_SEAM_TEST_VOCABULARY_ROOT="$cli_root" bash "$script" >/dev/null
+}
+
 check_go_sdk_runtime_lifecycle_neutrality_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local lifecycle="$cli_root/sdk/go/runtime_lifecycle.go"
@@ -20635,6 +20643,7 @@ EOF
   check_active_source_contract
   check_sdk_root_runtime_description_contract
   check_sdk_doc_product_vocabulary_contract
+  check_sdk_seam_test_vocabulary_contract
   check_go_sdk_public_ura_alias_contract
   check_go_sdk_runtime_lifecycle_neutrality_contract
   check_go_sdk_lifecycle_fixture_neutrality_contract
@@ -20850,6 +20859,7 @@ check_session_failure_wire_facts_contract
 check_active_source_contract
 check_sdk_root_runtime_description_contract
 check_sdk_doc_product_vocabulary_contract
+check_sdk_seam_test_vocabulary_contract
 check_go_sdk_public_ura_alias_contract
 check_go_sdk_runtime_lifecycle_neutrality_contract
 check_go_sdk_lifecycle_fixture_neutrality_contract
