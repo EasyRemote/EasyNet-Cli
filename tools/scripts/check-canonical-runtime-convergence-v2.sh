@@ -2620,6 +2620,7 @@ child_path = Path(sys.argv[3])
 child = child_path.read_text(encoding="utf-8") if child_path.exists() else ""
 
 for required in (
+    "#[serde(deny_unknown_fields)]",
     "pub(crate) fn matches_route_binding(&self, binding: &AuthorityProofRouteBinding<'_>) -> bool",
     "pub(crate) struct AuthorityProofRouteBinding<'a>",
     "fn verify_session_binding_facts(",
@@ -2631,6 +2632,8 @@ for required in (
     "session proof must bind session owner",
     "pub(crate) fn request_scoped_one_time_authority_proof(proof: &AuthorityProof) -> bool",
     "request_scoped_one_time_authority_proof(proof) && !proof_binds_invocation_identity(proof)",
+    "authority_proof_deserialization_rejects_unknown_fields",
+    "unknown field `legacy_scope`",
 ):
     if required not in text:
         raise SystemExit(f"authority_proof_session_fact:missing:{required}")
@@ -17997,6 +18000,7 @@ EOF
   fi
   mkdir -p "$tmp/authority-proof-session-fact-legacy/src/daemon/invocation/admission"
   cat >"$tmp/authority-proof-session-fact-legacy/src/daemon/invocation/admission/authority_proof.rs" <<'EOF'
+#[derive(Deserialize)]
 pub struct AuthorityProof {
     pub session_id: Option<String>,
     pub session_owner_user_id: Option<String>,
@@ -18022,6 +18026,9 @@ fn verify_invocation_binding(
 #[cfg(test)]
 mod tests {
     fn verifier_rejects_session_proof_without_followup_set() {}
+    fn authority_proof_deserialization_rejects_unknown_fields() {
+        assert!("unknown field `legacy_scope`".len() > 0);
+    }
 }
 EOF
   if ( CLI_ROOT="$tmp/authority-proof-session-fact-legacy"; check_authority_proof_session_fact_contract ) >/dev/null 2>&1; then

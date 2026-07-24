@@ -1419,3 +1419,39 @@ architecture rather than add feature surface.
   - `tools/scripts/check-architecture-convergence.sh`
   - `cargo fmt --check`
   - `git diff --check`
+
+## Iteration 33 candidate policy
+
+- Move from provider helper exactness into admission proof exactness. Authority
+  proof metadata is a signer/proof custody boundary, so accepting extra fields
+  there is more dangerous than accepting presentation metadata: ignored fields
+  are not part of the canonical signed material but can still travel with a
+  proof envelope.
+- codegraph highlighted `AuthorityProof` as a highly shared admission model
+  consumed by access-control persistence, admission facade verification, and
+  child invocation building.
+- The root abstraction problem is that the proof struct had canonical material
+  and route/session binding checks, but its serde ingress was still wider than
+  the canonical proof model.
+- The selected cutover is to make `AuthorityProof` fail closed on unknown
+  fields and to gate that invariant together with the existing session/route
+  proof facts.
+
+## Iteration 33 decision log
+
+- `AuthorityProof` now uses `#[serde(deny_unknown_fields)]`.
+- Added a negative deserialization vector proving a noncanonical
+  `legacy_scope` proof field is rejected before verification.
+- SPEC v2 `check_authority_proof_session_fact_contract` now requires
+  `deny_unknown_fields` and the unknown-field negative test, with self-test
+  coverage through the existing authority-proof legacy fixture.
+- Verification passed:
+  - `/Users/macbook.silan.tech/.local/bin/codegraph explore "AuthorityProof compatibility fallback legacy admission proof signer descriptor route subject unknown fields"`
+  - `cargo test -q authority_proof_deserialization_rejects_unknown_fields`
+  - `cargo test -q authority_proof`
+  - `bash -n tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - `tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  - `tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - `tools/scripts/check-architecture-convergence.sh`
+  - `cargo fmt --check`
+  - `git diff --check`

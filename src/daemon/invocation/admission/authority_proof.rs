@@ -11,6 +11,7 @@ use sha2::{Digest, Sha256};
 use super::decision::{AccessAction, PrincipalKind};
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct AuthorityProof {
     pub proof_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -383,6 +384,40 @@ mod tests {
         assert_eq!(
             proof.canonical_material()["allowed_followup_abilities"],
             json!(["terminal.attach", "terminal.read"])
+        );
+    }
+
+    #[test]
+    fn authority_proof_deserialization_rejects_unknown_fields() {
+        let raw = json!({
+            "proof_id": "proof-1",
+            "grant_id": "grant-1",
+            "owner_user_id": "alice",
+            "principal_kind": "token",
+            "principal_id": "token-principal",
+            "token_id": "token-1",
+            "callee_ura": "easynet:///r/test/device/dev",
+            "subject_ura": "easynet:///r/test/resource/user.alice/session/s1",
+            "ability_ura": "terminal.attach",
+            "action": "stream",
+            "canonical_hash": "sha256:abc",
+            "session_id": "s1",
+            "session_owner_user_id": "alice",
+            "allowed_followup_abilities": ["terminal.attach"],
+            "session_expires_at": "2026-07-09T01:00:00Z",
+            "issued_at": "2026-07-09T00:00:00Z",
+            "expires_at": "2026-07-09T00:05:00Z",
+            "issuer_ura": "easynet:///r/test/user/alice",
+            "audience_ura": "easynet:///r/test/device/dev",
+            "signature": "ed25519:signature",
+            "legacy_scope": "compat-carrier"
+        });
+
+        let error = serde_json::from_value::<AuthorityProof>(raw)
+            .expect_err("authority proof must reject unknown fields");
+        assert!(
+            error.to_string().contains("unknown field `legacy_scope`"),
+            "error should name the noncanonical proof field: {error}"
         );
     }
 
