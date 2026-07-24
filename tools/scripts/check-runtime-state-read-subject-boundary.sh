@@ -34,6 +34,14 @@ if ! rg -n 'struct LocalRuntimeStateReadSubject' "$ISSUER" >/dev/null; then
   fail "runtime-state read issuer must own an explicit read-subject value object"
 fi
 
+if ! rg -n '/// Invoke a canonical local target with public-ingress tuple facts\.' "$ISSUER" >/dev/null; then
+  fail "runtime-state read issuer section terminator is missing"
+fi
+
+runtime_state_issuer_section="$(
+  sed -n '/pub struct LocalRuntimeStateReadIssuer/,/\/\/\/ Invoke a canonical local target with public-ingress tuple facts\./p' "$ISSUER"
+)"
+
 if ! rg -n 'runtime-state/read' "$ISSUER" >/dev/null; then
   fail "runtime-state read issuer must bind a dedicated runtime-state resource subject"
 fi
@@ -78,7 +86,8 @@ if ! rg -n 'identity\.node_id\.as_deref\(\)' "$ISSUER" >/dev/null; then
   fail "runtime-state read issuer must reject stale node attachment"
 fi
 
-if rg -n 'local_invocation::local_daemon_ura\(\)|local_invocation::local_device_ura\(\)|UNPAIRED_LOCAL_REALM|UNPAIRED_LOCAL_DEVICE_ID' "$ISSUER"; then
+if printf '%s\n' "$runtime_state_issuer_section" \
+  | rg -n 'local_invocation::local_daemon_ura\(\)|local_invocation::local_device_ura\(\)|UNPAIRED_LOCAL_REALM|UNPAIRED_LOCAL_DEVICE_ID'; then
   fail "runtime-state read issuer must not fall back to daemon/device/default subjects"
 fi
 

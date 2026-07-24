@@ -111,6 +111,9 @@ fn runtime_state_read_subject_rejects_stale_daemon_identity() {}
 
 #[test]
 fn runtime_state_read_subject_rejects_missing_live_signer_custody() {}
+
+/// Invoke a canonical local target with public-ingress tuple facts.
+pub struct LocalDaemonSystemAbilityIssuer;
 RS
 
 for target in \

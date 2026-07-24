@@ -475,3 +475,11 @@ fn ability_catalog_row_boundary_script_holds() {
     // silently ignored in the presentation projector.
     run_bash_script("tests/scripts/test_check_ability_catalog_row_boundary.sh");
 }
+
+#[test]
+fn local_daemon_subject_owner_boundary_script_holds() {
+    // Pins local daemon subject selection to LocalDaemonSystemAbilityIssuer
+    // backed by daemon identity ownership. The gRPC transport must not expose
+    // a second authority-subject helper.
+    run_bash_script("tests/scripts/test_check_local_daemon_subject_owner_boundary.sh");
+}

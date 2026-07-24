@@ -308,8 +308,16 @@ pub fn classify_invoke_failure(err: &anyhow::Error) -> LocalInvokeFailureClass {
 pub struct LocalDaemonSystemAbilityIssuer;
 
 impl LocalDaemonSystemAbilityIssuer {
+    #[cfg(feature = "axon-pb")]
     pub fn local_daemon_identity_subject_ura() -> anyhow::Result<String> {
-        crate::support::platform::local_daemon_grpc::local_daemon_identity_subject_ura()
+        crate::daemon::identity::local_invocation::local_daemon_ura()
+    }
+
+    #[cfg(not(feature = "axon-pb"))]
+    pub fn local_daemon_identity_subject_ura() -> anyhow::Result<String> {
+        Err(local_invocation_capability_unsupported_error(
+            "resolve local daemon identity subject",
+        ))
     }
 
     pub fn invoke_root_for_subject(
@@ -763,6 +771,17 @@ pub fn federation_capability_unsupported_error(action: &str) -> anyhow::Error {
     anyhow::Error::new(LocalInvokeFailure::DaemonOffline(format!(
         "{action} is unsupported by the canonical runtime capability matrix: \
          federation transport provider is unavailable; capability_state=unsupported"
+    )))
+}
+
+/// Standard error for CLI/support surfaces that require the local Invocation
+/// provider while the current runtime capability matrix marks that provider
+/// Unsupported.
+#[cfg(not(feature = "axon-pb"))]
+pub fn local_invocation_capability_unsupported_error(action: &str) -> anyhow::Error {
+    anyhow::Error::new(LocalInvokeFailure::DaemonOffline(format!(
+        "{action} is unsupported by the canonical runtime capability matrix: \
+         local invocation provider is unavailable; capability_state=unsupported"
     )))
 }
 

@@ -1665,14 +1665,6 @@ pub(crate) fn invoke_local_daemon_ability_targeted_with_hosted_agent_delegation(
 }
 
 #[cfg(not(feature = "axon-pb"))]
-pub(crate) fn local_daemon_identity_subject_ura() -> anyhow::Result<String> {
-    anyhow::bail!(
-        "resolving the local daemon identity subject requires the `axon-pb` feature; \
-         rebuild with `cargo build --features axon-pb`"
-    )
-}
-
-#[cfg(not(feature = "axon-pb"))]
 pub(crate) fn invoke_local_daemon_system_ability_root_for_subject_timeout(
     function_name: &str,
     _payload_json: serde_json::Value,
@@ -1728,11 +1720,6 @@ fn local_daemon_loopback_caller_ura() -> anyhow::Result<String> {
 #[cfg(feature = "axon-pb")]
 fn local_daemon_identity_ura() -> anyhow::Result<String> {
     crate::daemon::identity::local_invocation::local_daemon_ura()
-}
-
-#[cfg(feature = "axon-pb")]
-pub(crate) fn local_daemon_identity_subject_ura() -> anyhow::Result<String> {
-    local_daemon_identity_ura()
 }
 
 #[cfg(all(test, feature = "axon-pb"))]

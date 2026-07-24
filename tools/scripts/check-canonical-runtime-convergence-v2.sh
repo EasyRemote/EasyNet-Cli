@@ -11755,6 +11755,14 @@ for token, code in (
 PY
 }
 
+check_local_daemon_subject_owner_boundary_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local script="$ROOT/tools/scripts/check-local-daemon-subject-owner-boundary.sh"
+  [[ -f "$script" ]] || fail "local daemon subject owner boundary script is missing: ${script#$ROOT/}"
+
+  CHECK_LOCAL_DAEMON_SUBJECT_OWNER_BOUNDARY_ROOT="$cli_root" bash "$script" >/dev/null
+}
+
 check_sdk_principal_projection_fail_closed_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local go_principal="$cli_root/sdk/go/principal.go"
@@ -20701,6 +20709,7 @@ EOF
   check_admission_authority_ability_projection_contract
   check_peer_envelope_signer_subject_profile_contract
   check_local_ability_target_subject_policy_contract
+  check_local_daemon_subject_owner_boundary_contract
   check_session_prelude_credentials_contract
   check_session_prelude_receipt_contract
   check_federation_heartbeat_ingress_strict_contract
@@ -20911,6 +20920,7 @@ check_admission_authority_raw_wire_strict_contract
 check_admission_authority_ability_projection_contract
 check_peer_envelope_signer_subject_profile_contract
 check_local_ability_target_subject_policy_contract
+check_local_daemon_subject_owner_boundary_contract
 check_session_prelude_credentials_contract
 check_start_attach_user_signer_readiness_contract
 check_session_prelude_receipt_contract
