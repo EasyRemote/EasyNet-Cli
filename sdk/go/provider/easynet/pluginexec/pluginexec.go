@@ -143,7 +143,14 @@ func (f requestFrame) projectInvocation() (SidecarInvocation, error) {
 	if len(f.Invocation) == 0 {
 		return SidecarInvocation{}, protocolError("sidecar frame field \"invocation\" must be an object")
 	}
-	if err := rejectLegacyTupleAliases(f.Invocation); err != nil {
+	fields, err := decodeInvocationFields(f.Invocation)
+	if err != nil {
+		return SidecarInvocation{}, err
+	}
+	if err := rejectLegacyTupleAliases(fields); err != nil {
+		return SidecarInvocation{}, err
+	}
+	if err := rejectUnknownInvocationFields(fields); err != nil {
 		return SidecarInvocation{}, err
 	}
 	var invocation sidecarInvocationFrame
@@ -153,11 +160,15 @@ func (f requestFrame) projectInvocation() (SidecarInvocation, error) {
 	return invocation.project(f.Type, f.CallID)
 }
 
-func rejectLegacyTupleAliases(raw json.RawMessage) error {
+func decodeInvocationFields(raw json.RawMessage) (map[string]json.RawMessage, error) {
 	var object map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &object); err != nil {
-		return protocolError("sidecar frame field \"invocation\" must be an object")
+		return nil, protocolError("sidecar frame field \"invocation\" must be an object")
 	}
+	return object, nil
+}
+
+func rejectLegacyTupleAliases(object map[string]json.RawMessage) error {
 	for legacy, canonical := range map[string]string{
 		"caller":  "caller_ura",
 		"callee":  "callee_ura",
@@ -166,6 +177,24 @@ func rejectLegacyTupleAliases(raw json.RawMessage) error {
 	} {
 		if _, ok := object[legacy]; ok {
 			return protocolError("sidecar frame field %q is retired; use %q", legacy, canonical)
+		}
+	}
+	return nil
+}
+
+func rejectUnknownInvocationFields(object map[string]json.RawMessage) error {
+	allowed := map[string]struct{}{
+		"caller_ura":       {},
+		"callee_ura":       {},
+		"ability_ura":      {},
+		"subject_ura":      {},
+		"invocation_nonce": {},
+		"causal_context":   {},
+		"args":             {},
+	}
+	for field := range object {
+		if _, ok := allowed[field]; !ok {
+			return protocolError("sidecar frame field %q is not part of the canonical invocation frame", field)
 		}
 	}
 	return nil

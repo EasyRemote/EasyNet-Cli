@@ -98,6 +98,17 @@ class PluginExecTests(unittest.TestCase):
         with self.assertRaisesRegex(SidecarProtocolError, "retired"):
             SidecarInvocation.from_frame(frame)
 
+    def test_plugin_invocation_rejects_unknown_invocation_fields(self) -> None:
+        frame = _frame()
+        invocation = frame["invocation"]
+        assert isinstance(invocation, dict)
+        invocation["descriptor_ref"] = "legacy-provider-leak"
+
+        with self.assertRaisesRegex(
+            SidecarProtocolError, "canonical invocation frame"
+        ):
+            SidecarInvocation.from_frame(frame)
+
 
 if __name__ == "__main__":
     unittest.main()

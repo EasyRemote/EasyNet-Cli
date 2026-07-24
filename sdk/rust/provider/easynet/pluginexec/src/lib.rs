@@ -42,6 +42,7 @@ impl SidecarInvocation {
         })?;
         let mut invocation = expect_object(invocation, "invocation")?;
         reject_legacy_tuple_aliases(&invocation)?;
+        reject_unknown_invocation_fields(&invocation)?;
         let nonce = take_required_nonce(&mut invocation, "invocation_nonce")?;
         let args = match invocation.remove("args") {
             Some(value) => expect_object(value, "args")?,
@@ -189,9 +190,7 @@ fn expect_object(value: Value, field: &str) -> Result<Map<String, Value>, Sideca
     }
 }
 
-fn reject_legacy_tuple_aliases(
-    object: &Map<String, Value>,
-) -> Result<(), SidecarProtocolError> {
+fn reject_legacy_tuple_aliases(object: &Map<String, Value>) -> Result<(), SidecarProtocolError> {
     for (legacy, canonical) in [
         ("caller", "caller_ura"),
         ("callee", "callee_ura"),
@@ -201,6 +200,28 @@ fn reject_legacy_tuple_aliases(
         if object.contains_key(legacy) {
             return Err(SidecarProtocolError::new(format!(
                 "sidecar frame field {legacy:?} is retired; use {canonical:?}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn reject_unknown_invocation_fields(
+    object: &Map<String, Value>,
+) -> Result<(), SidecarProtocolError> {
+    for field in object.keys() {
+        if !matches!(
+            field.as_str(),
+            "caller_ura"
+                | "callee_ura"
+                | "ability_ura"
+                | "subject_ura"
+                | "invocation_nonce"
+                | "causal_context"
+                | "args"
+        ) {
+            return Err(SidecarProtocolError::new(format!(
+                "sidecar frame field {field:?} is not part of the canonical invocation frame"
             )));
         }
     }

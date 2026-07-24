@@ -9726,6 +9726,8 @@ required_helper_tokens = {
     "rust": [
         "pub caller_ura: String",
         "reject_legacy_tuple_aliases(&invocation)?",
+        "reject_unknown_invocation_fields(&invocation)?",
+        "fn reject_unknown_invocation_fields(",
         'take_required_string(&mut invocation, "caller_ura")?',
         'take_required_string(&mut invocation, "callee_ura")?',
         'take_required_string(&mut invocation, "ability_ura")?',
@@ -9733,7 +9735,9 @@ required_helper_tokens = {
     ],
     "go": [
         "CallerURA",
-        "rejectLegacyTupleAliases(f.Invocation)",
+        "rejectLegacyTupleAliases(fields)",
+        "rejectUnknownInvocationFields(fields)",
+        "func rejectUnknownInvocationFields(",
         '`json:"caller_ura"`',
         '`json:"callee_ura"`',
         '`json:"ability_ura"`',
@@ -9742,6 +9746,8 @@ required_helper_tokens = {
     "python": [
         "caller_ura: str",
         "_reject_legacy_tuple_aliases(invocation)",
+        "_reject_unknown_invocation_fields(invocation)",
+        "def _reject_unknown_invocation_fields(",
         '_required_string(invocation, "caller_ura")',
         '_required_string(invocation, "callee_ura")',
         '_required_string(invocation, "ability_ura")',
@@ -9750,6 +9756,8 @@ required_helper_tokens = {
     "node": [
         "callerURA",
         "rejectLegacyTupleAliases(invocation)",
+        "rejectUnknownInvocationFields(invocation)",
+        "function rejectUnknownInvocationFields(",
         "invocation.caller_ura",
         "invocation.callee_ura",
         "invocation.ability_ura",
@@ -9758,6 +9766,8 @@ required_helper_tokens = {
     "java": [
         "String callerURA",
         "rejectLegacyTupleAliases(invocation)",
+        "rejectUnknownInvocationFields(invocation)",
+        "private static void rejectUnknownInvocationFields(",
         'requiredString(invocation, "caller_ura")',
         'requiredString(invocation, "callee_ura")',
         'requiredString(invocation, "ability_ura")',
@@ -9769,6 +9779,17 @@ for language, tokens in required_helper_tokens.items():
     for token in tokens:
         if token not in source:
             raise SystemExit(f"plugin_sidecar_helper_tuple_missing:{language}:{token}")
+
+required_helper_tests = {
+    "rust": "sidecar_invocation_rejects_unknown_invocation_fields",
+    "go": "TestServeIORejectsUnknownInvocationFields",
+    "python": "test_plugin_invocation_rejects_unknown_invocation_fields",
+    "node": "SidecarInvocation rejects unknown invocation fields",
+    "java": "sidecarInvocationRejectsUnknownInvocationFields",
+}
+for language, test_name in required_helper_tests.items():
+    if test_name not in helper_sources[language]:
+        raise SystemExit(f"plugin_sidecar_helper_unknown_field_test_missing:{language}")
 
 legacy_public_field_patterns = {
     "daemon_frame": [
@@ -14291,10 +14312,36 @@ EOF
     mkdir -p "$(dirname "$tmp/cli-sidecar-tuple/$rel")"
     cp "$ROOT/$rel" "$tmp/cli-sidecar-tuple/$rel"
   done
-  perl -0pi -e 's/"caller_ura"/"caller"/' \
+  perl -0pi -e 's/\n\s*_reject_legacy_tuple_aliases\(invocation\)//' \
     "$tmp/cli-sidecar-tuple/sdk/python/easynet_sdk/providers/easynet/plugin_exec.py"
   if ( CLI_ROOT="$tmp/cli-sidecar-tuple"; check_plugin_sidecar_helper_matrix_contract ) >/dev/null 2>&1; then
     fail "self-test expected legacy sidecar tuple key gate to fail"
+  fi
+  for rel in \
+    src/cli/commands/groups/plugin_template.rs \
+    src/daemon/plugins/sidecar/frame.rs \
+    src/daemon/plugins/sidecar.rs \
+    src/daemon/plugins/host_api.rs \
+    sdk/python/easynet_sdk/providers/easynet/plugin_exec.py \
+    sdk/python/tests/test_plugin_exec.py \
+    sdk/go/provider/easynet/pluginexec/pluginexec.go \
+    sdk/go/provider/easynet/pluginexec/pluginexec_test.go \
+    sdk/rust/provider/easynet/pluginexec/Cargo.toml \
+    sdk/rust/provider/easynet/pluginexec/src/lib.rs \
+    sdk/rust/provider/easynet/pluginexec/tests/pluginexec.rs \
+    sdk/java/src/main/java/run/runtime/sdk/provider/easynet/pluginexec/SidecarRuntime.java \
+    sdk/java/src/main/java/run/runtime/sdk/provider/easynet/pluginexec/SidecarInvocation.java \
+    sdk/java/src/test/java/run/runtime/sdk/provider/easynet/pluginexec/SidecarRuntimeTest.java \
+    sdk/node/provider/easynet/pluginexec.js \
+    sdk/node/provider/easynet/pluginexec.d.ts \
+    sdk/node/test/pluginexec.test.mjs; do
+    mkdir -p "$(dirname "$tmp/cli-sidecar-unknown-field/$rel")"
+    cp "$ROOT/$rel" "$tmp/cli-sidecar-unknown-field/$rel"
+  done
+  perl -0pi -e 's/_reject_unknown_invocation_fields/_accept_unknown_invocation_fields/g' \
+    "$tmp/cli-sidecar-unknown-field/sdk/python/easynet_sdk/providers/easynet/plugin_exec.py"
+  if ( CLI_ROOT="$tmp/cli-sidecar-unknown-field"; check_plugin_sidecar_helper_matrix_contract ) >/dev/null 2>&1; then
+    fail "self-test expected sidecar unknown invocation field gate to fail"
   fi
   mkdir -p "$tmp/cli-browser-mock/src/daemon/ability/builtins/device_control" \
     "$tmp/cli-browser-mock/ability-descriptors/system/device_control" \

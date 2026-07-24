@@ -6,6 +6,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 /** Handler-facing view of one daemon-admitted declarative exec sidecar call. */
 public final class SidecarInvocation {
@@ -49,6 +50,7 @@ public final class SidecarInvocation {
     String callId = requiredString(frame, "call_id");
     Map<String, Object> invocation = requiredObject(frame, "invocation");
     rejectLegacyTupleAliases(invocation);
+    rejectUnknownInvocationFields(invocation);
     return new SidecarInvocation(
         callId,
         requiredString(invocation, "caller_ura"),
@@ -146,6 +148,26 @@ public final class SidecarInvocation {
                 + "\" is retired; use \""
                 + entry.getValue()
                 + "\"");
+      }
+    }
+  }
+
+  private static void rejectUnknownInvocationFields(Map<String, Object> object) {
+    Set<String> allowed =
+        Set.of(
+            "caller_ura",
+            "callee_ura",
+            "ability_ura",
+            "subject_ura",
+            "invocation_nonce",
+            "causal_context",
+            "args");
+    for (String field : object.keySet()) {
+      if (!allowed.contains(field)) {
+        throw new SidecarProtocolError(
+            "sidecar frame field \""
+                + field
+                + "\" is not part of the canonical invocation frame");
       }
     }
   }

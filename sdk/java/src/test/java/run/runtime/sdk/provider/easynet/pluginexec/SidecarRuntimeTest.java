@@ -13,6 +13,7 @@ public final class SidecarRuntimeTest {
     serveWritesErrorFrameForHandlerFailure();
     sidecarInvocationRejectsNonInvokeFrame();
     sidecarInvocationRejectsRetiredTupleAliases();
+    sidecarInvocationRejectsUnknownInvocationFields();
   }
 
   static void sidecarInvocationProjectsDaemonFrame() {
@@ -90,6 +91,26 @@ public final class SidecarRuntimeTest {
       throw new AssertionError("retired tuple aliases must fail");
     } catch (SidecarProtocolError expected) {
       check(expected.getMessage().contains("retired"), "retired alias error");
+    }
+  }
+
+  static void sidecarInvocationRejectsUnknownInvocationFields() {
+    java.util.Map<String, Object> invocation = new java.util.LinkedHashMap<>();
+    invocation.put("caller_ura", "easynet:///r/hub/user/alice");
+    invocation.put("callee_ura", "easynet:///r/hub/device/provider");
+    invocation.put("ability_ura", "demo.echo");
+    invocation.put("subject_ura", "easynet:///r/hub/resource/demo");
+    invocation.put("invocation_nonce", java.util.List.of(1, 2, 3, 4));
+    invocation.put("descriptor_ref", "legacy-provider-leak");
+    java.util.Map<String, Object> frame = new java.util.LinkedHashMap<>();
+    frame.put("type", "invoke");
+    frame.put("call_id", "call-1");
+    frame.put("invocation", invocation);
+    try {
+      SidecarInvocation.fromFrame(frame);
+      throw new AssertionError("unknown invocation fields must fail");
+    } catch (SidecarProtocolError expected) {
+      check(expected.getMessage().contains("canonical invocation frame"), "unknown field error");
     }
   }
 

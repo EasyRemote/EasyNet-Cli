@@ -1336,3 +1336,46 @@ architecture rather than add feature surface.
   - `tools/scripts/check-canonical-runtime-convergence-v2.sh`
   - `tools/scripts/check-architecture-convergence.sh`
   - `git diff --check`
+
+## Iteration 31 candidate policy
+
+- Focus on provider sidecar helper exactness because plugin templates are the
+  product-facing bridge into the canonical runtime model. A helper that silently
+  ignores extra invocation fields becomes a compatibility layer even when the
+  template calls the SDK/provider package instead of hand-writing JSON.
+- codegraph found the same sidecar invocation abstraction implemented in
+  Go/Python/Node/Java/Rust with retired tuple alias rejection, but without a
+  shared fail-closed rule for unknown `invocation` fields.
+- The root abstraction problem is schema authority drift at the provider helper
+  boundary: the daemon sidecar frame is the canonical contract, while helper
+  parsers were still open-ended maps/struct decoders.
+- The selected cutover is to make the provider sidecar invocation parser exact
+  across all supported helper languages. Retired aliases still produce retired
+  field diagnostics; any other non-canonical invocation key now fails before the
+  plugin handler runs.
+
+## Iteration 31 decision log
+
+- Canonical sidecar invocation fields are now exactly:
+  `caller_ura`, `callee_ura`, `ability_ura`, `subject_ura`,
+  `invocation_nonce`, `causal_context`, and `args`.
+- Go, Python, Node, Java, and Rust provider helpers now reject unknown
+  `invocation` fields before projecting handler-facing `SidecarInvocation`.
+- Cross-language tests now include an unknown-field negative vector using
+  `descriptor_ref` as a representative legacy/provider leak.
+- SPEC v2 now gates both production helper tokens and test evidence for unknown
+  sidecar invocation field rejection, and its self-test proves both retired
+  alias and unknown-field regressions are caught.
+- Verification passed:
+  - `/Users/macbook.silan.tech/.local/bin/codegraph explore "SidecarInvocation rejectLegacyTupleAliases pluginexec invocation unknown fields"`
+  - `cd sdk/go && go test ./provider/easynet/pluginexec`
+  - `PYTHONPATH=/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/python:/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli/sdk/python python3 sdk/python/tests/test_plugin_exec.py`
+  - `node --test sdk/node/test/pluginexec.test.mjs`
+  - `cargo test -q --manifest-path sdk/rust/provider/easynet/pluginexec/Cargo.toml`
+  - `mvn -q -f sdk/java/pom.xml test -Dtest=run.runtime.sdk.provider.easynet.pluginexec.SidecarRuntimeTest`
+  - `bash -n tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - `tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  - `tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - `tools/scripts/check-architecture-convergence.sh`
+  - `cargo fmt --check`
+  - `git diff --check`

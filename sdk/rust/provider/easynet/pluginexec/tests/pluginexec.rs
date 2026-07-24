@@ -112,3 +112,23 @@ fn sidecar_invocation_rejects_retired_tuple_aliases() {
     let error = SidecarInvocation::from_frame(frame).expect_err("retired alias");
     assert!(error.to_string().contains("retired"));
 }
+
+#[test]
+fn sidecar_invocation_rejects_unknown_invocation_fields() {
+    let frame = json!({
+        "type": "invoke",
+        "call_id": "call-1",
+        "invocation": {
+            "caller_ura": "easynet:///r/hub/user/alice",
+            "callee_ura": "easynet:///r/hub/device/provider",
+            "ability_ura": "demo.echo",
+            "subject_ura": "easynet:///r/hub/resource/demo",
+            "invocation_nonce": [1, 2, 3, 4],
+            "descriptor_ref": "legacy-provider-leak",
+            "args": {}
+        }
+    });
+
+    let error = SidecarInvocation::from_frame(frame).expect_err("unknown field");
+    assert!(error.to_string().contains("canonical invocation frame"));
+}

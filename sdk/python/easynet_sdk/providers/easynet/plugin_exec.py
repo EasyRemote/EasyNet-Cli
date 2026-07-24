@@ -18,6 +18,19 @@ class SidecarProtocolError(ValueError):
     """Raised when a daemon/plugin sidecar frame is structurally invalid."""
 
 
+_CANONICAL_INVOCATION_FIELDS = frozenset(
+    {
+        "caller_ura",
+        "callee_ura",
+        "ability_ura",
+        "subject_ura",
+        "invocation_nonce",
+        "causal_context",
+        "args",
+    }
+)
+
+
 @dataclass(frozen=True)
 class SidecarInvocation:
     """Typed view of one daemon-admitted plugin invocation."""
@@ -44,6 +57,7 @@ class SidecarInvocation:
         call_id = _required_string(frame, "call_id")
         invocation = _required_mapping(frame, "invocation")
         _reject_legacy_tuple_aliases(invocation)
+        _reject_unknown_invocation_fields(invocation)
         nonce = _required_nonce(invocation, "invocation_nonce")
         args = _optional_mapping(invocation.get("args"), "args")
         return cls(
@@ -130,6 +144,14 @@ def _reject_legacy_tuple_aliases(frame: Mapping[str, Any]) -> None:
         if legacy in frame:
             raise SidecarProtocolError(
                 f"sidecar frame field {legacy!r} is retired; use {canonical!r}"
+            )
+
+
+def _reject_unknown_invocation_fields(frame: Mapping[str, Any]) -> None:
+    for field in frame:
+        if field not in _CANONICAL_INVOCATION_FIELDS:
+            raise SidecarProtocolError(
+                f"sidecar frame field {field!r} is not part of the canonical invocation frame"
             )
 
 

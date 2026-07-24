@@ -47,6 +47,7 @@ export class SidecarInvocation {
     const callID = requireString(value.call_id, "call_id");
     const invocation = optionalObject(value.invocation, "invocation", { required: true });
     rejectLegacyTupleAliases(invocation);
+    rejectUnknownInvocationFields(invocation);
     return new SidecarInvocation({
       callID,
       callerURA: invocation.caller_ura,
@@ -117,6 +118,25 @@ function rejectLegacyTupleAliases(value) {
     if (Object.hasOwn(value, legacy)) {
       throw new SidecarProtocolError(
         `sidecar frame field ${JSON.stringify(legacy)} is retired; use ${JSON.stringify(canonical)}`,
+      );
+    }
+  }
+}
+
+function rejectUnknownInvocationFields(value) {
+  const allowed = new Set([
+    "caller_ura",
+    "callee_ura",
+    "ability_ura",
+    "subject_ura",
+    "invocation_nonce",
+    "causal_context",
+    "args",
+  ]);
+  for (const field of Object.keys(value)) {
+    if (!allowed.has(field)) {
+      throw new SidecarProtocolError(
+        `sidecar frame field ${JSON.stringify(field)} is not part of the canonical invocation frame`,
       );
     }
   }

@@ -115,3 +115,13 @@ test("SidecarInvocation rejects retired tuple aliases", () => {
     /retired/,
   );
 });
+
+test("SidecarInvocation rejects unknown invocation fields", () => {
+  const frame = requestFrame();
+  frame.invocation.descriptor_ref = "legacy-provider-leak";
+
+  assert.throws(
+    () => SidecarInvocation.fromFrame(frame),
+    /canonical invocation frame/,
+  );
+});
