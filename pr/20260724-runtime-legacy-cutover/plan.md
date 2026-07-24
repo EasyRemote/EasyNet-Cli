@@ -766,3 +766,62 @@ architecture rather than add feature surface.
   - `tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
   - `tools/scripts/check-architecture-convergence.sh`
   - `git diff --check`
+
+## Iteration 19 candidate policy
+
+- Focus on EAL Mission orchestration persistence authority. rg found
+  `MissionRunStore::create` warning-only initial meta writes, `MissionRunner`
+  best-effort `source.eal` / `ir.json` writes, warning-only `trace.json`
+  writes, warning-only terminal `meta.json` writes, and
+  `record_terminal` rebuilding a running aggregate when stored meta cannot be
+  loaded.
+- The root abstraction problem is the same half-audit state that was removed
+  from local Agent dispatch, now at the Mission run lifecycle layer. A Mission
+  run directory is the canonical lifecycle projection for source, compiled IR,
+  trace, terminal status, and heartbeat liveness; it must not silently execute
+  or finalize when those projections are missing or unreadable.
+- The intended cutover is:
+  - initial running `meta.json` persistence is required for run creation;
+  - source and IR persistence are required before execution;
+  - successful interpreter reports require `trace.json` persistence before
+    terminal meta is written;
+  - terminal meta persistence is required on both completion and failure paths;
+  - terminal recording loads the stored aggregate fail-closed instead of
+    reconstructing a running projection.
+- Verification must prove terminal recording fails when `meta.json` is missing
+  and SPEC v2 must reject the retired best-effort source/IR/trace/meta
+  vocabulary and aggregate reconstruction fallback.
+
+## Iteration 19 decision log
+
+- Made initial Mission running `meta.json` persistence required during
+  `MissionRunStore::create`; a run without persisted lifecycle state is no
+  longer considered created.
+- Refactored MissionRunner source/IR persistence to fail closed before
+  interpreter execution. If source or IR persistence fails after run creation,
+  the runner records a failed terminal meta before returning the error.
+- Refactored successful interpreter reports so `trace.json` persistence is
+  required before terminal completion is recorded. Trace persistence failure
+  becomes a failed Mission terminal outcome.
+- Changed `MissionRunDir::record_terminal` to return
+  `anyhow::Result<MissionRunMeta>` and to require loading the stored aggregate.
+  The retired reconstruction fallback from `transition.running_projection()` was
+  removed.
+- Removed warning-only terminal meta writes from both completion and failure
+  paths. Terminal meta persistence now participates in the function result.
+- Replaced stale "best-effort" Mission context wording with deterministic run
+  directory projection wording.
+- Added focused coverage proving terminal recording fails when stored
+  `meta.json` is missing.
+- Added SPEC v2 gate
+  `check_mission_orchestration_persistence_authority_contract` plus a negative
+  self-test fixture rejecting best-effort source/IR/trace/meta writes and the
+  aggregate reconstruction fallback.
+- Verification passed:
+  - `cargo test -q daemon::execution::mission::orchestration::tests`
+  - `cargo check -q`
+  - `cargo fmt --check`
+  - `tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - `tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  - `tools/scripts/check-architecture-convergence.sh`
+  - `git diff --check`

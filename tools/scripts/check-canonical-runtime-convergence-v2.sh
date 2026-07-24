@@ -7714,6 +7714,45 @@ for required in (
 PY
 }
 
+check_mission_orchestration_persistence_authority_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local orchestration="$cli_root/src/daemon/execution/mission/orchestration.rs"
+  [[ -f "$orchestration" ]] || fail "mission orchestration source is missing: ${orchestration#$cli_root/}"
+
+  "$PYTHON_BIN" - "$orchestration" <<'PY'
+import sys
+from pathlib import Path
+
+orchestration = Path(sys.argv[1]).read_text(encoding="utf-8")
+
+for retired in (
+    "write initial meta failed",
+    "The writes are best-effort",
+    "write source.eal failed",
+    "write ir.json failed",
+    "write trace.json failed",
+    "write meta.json failed",
+    "MissionRunAggregate::from_meta(transition.running_projection())",
+    "fn running_projection(&self) -> MissionRunMeta",
+):
+    if retired in orchestration:
+        raise SystemExit(f"mission_orchestration_persistence_authority:retired:{retired}")
+
+for required in (
+    "mission run requires initial meta persistence",
+    "mission run requires source.eal persistence",
+    "mission run requires ir.json persistence",
+    "mission run requires trace.json persistence",
+    "mission run requires terminal meta persistence",
+    "mission run requires stored lifecycle aggregate",
+    "record_mission_persistence_failure(",
+    "terminal_record_requires_stored_running_meta",
+):
+    if required not in orchestration:
+        raise SystemExit(f"mission_orchestration_persistence_authority:missing:{required}")
+PY
+}
+
 check_mission_terminal_receipt_projection_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local gateway="$cli_root/src/daemon/execution/mission/invocation_gateway.rs"
@@ -15825,6 +15864,45 @@ EOF
   if ( check_mission_runtime_meta_identity_schema_contract "$tmp/mission-meta-identity-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected mission runtime meta identity legacy default gate to fail"
   fi
+  mkdir -p "$tmp/mission-orchestration-persistence-legacy/src/daemon/execution/mission"
+  cat >"$tmp/mission-orchestration-persistence-legacy/src/daemon/execution/mission/orchestration.rs" <<'EOF'
+fn create(run: &MissionRunDir) {
+    if let Err(e) = run.persist_meta_projection(meta) {
+        eprintln!("write initial meta failed ({e})");
+    }
+}
+
+fn record_terminal(transition: MissionRunTerminalTransition) {
+    let aggregate = self
+        .load_aggregate()
+        .unwrap_or_else(|_| MissionRunAggregate::from_meta(transition.running_projection()));
+}
+
+impl MissionRunTerminalTransition {
+    fn running_projection(&self) -> MissionRunMeta {
+        MissionRunMeta::default()
+    }
+}
+
+fn run(run_dir: &MissionRunDir) {
+    // The writes are best-effort.
+    if let Err(e) = run_dir.write_source(source) {
+        eprintln!("write source.eal failed ({e})");
+    }
+    if let Err(e) = run_dir.write_ir(ir) {
+        eprintln!("write ir.json failed ({e})");
+    }
+    if let Err(e) = run_dir.write_trace(trace) {
+        eprintln!("write trace.json failed ({e})");
+    }
+    if let Err(e) = run_dir.write_meta(meta) {
+        eprintln!("write meta.json failed ({e})");
+    }
+}
+EOF
+  if ( check_mission_orchestration_persistence_authority_contract "$tmp/mission-orchestration-persistence-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected mission orchestration persistence fallback gate to fail"
+  fi
   mkdir -p "$tmp/sdk-runtime-failure-legacy/sdk/go" \
     "$tmp/sdk-runtime-failure-legacy/sdk/python/easynet_sdk" \
     "$tmp/sdk-runtime-failure-legacy/sdk/python/tests"
@@ -17457,6 +17535,7 @@ EOF
   check_mission_agent_trace_sink_cutover_contract
   check_mission_dispatch_audit_authority_contract
   check_mission_runtime_meta_identity_schema_contract
+  check_mission_orchestration_persistence_authority_contract
   check_mission_terminal_receipt_projection_contract
   check_edge_adapter_policy_contract
   check_sdk_product_neutrality_contract
@@ -17642,6 +17721,7 @@ check_mission_traditional_target_conflict_contract
 check_mission_agent_trace_sink_cutover_contract
 check_mission_dispatch_audit_authority_contract
 check_mission_runtime_meta_identity_schema_contract
+check_mission_orchestration_persistence_authority_contract
 check_mission_terminal_receipt_projection_contract
 check_edge_adapter_policy_contract
 check_sdk_product_neutrality_contract

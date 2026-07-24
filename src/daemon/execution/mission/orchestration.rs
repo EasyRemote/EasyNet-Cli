@@ -189,12 +189,12 @@ impl MissionRunStore {
             mission_run_id(&run.path),
             Local::now().to_rfc3339(),
         );
-        if let Err(e) = run.persist_meta_projection(aggregate.meta()) {
-            eprintln!(
-                "[easynet warn] mission run {}: write initial meta failed ({e})",
+        run.persist_meta_projection(aggregate.meta()).map_err(|e| {
+            anyhow::anyhow!(
+                "mission run requires initial meta persistence at {}: {e}",
                 run.path.display()
-            );
-        }
+            )
+        })?;
         Ok(run)
     }
 }
@@ -226,19 +226,32 @@ impl MissionRunDir {
     fn record_terminal(
         &self,
         transition: MissionRunTerminalTransition,
-    ) -> (MissionRunMeta, io::Result<()>) {
-        let mut aggregate = self
-            .load_aggregate()
-            .unwrap_or_else(|_| MissionRunAggregate::from_meta(transition.running_projection()));
+    ) -> anyhow::Result<MissionRunMeta> {
+        let mut aggregate = self.load_aggregate().map_err(|e| {
+            anyhow::anyhow!(
+                "mission run requires stored lifecycle aggregate at {}: {e}",
+                self.path.display()
+            )
+        })?;
         let changed = aggregate.apply_terminal(transition);
         let meta = aggregate.meta().clone();
-        let persisted = if changed {
-            self.persist_meta_projection(&meta)
+        if changed {
+            self.persist_meta_projection(&meta).map_err(|e| {
+                anyhow::anyhow!(
+                    "mission run requires terminal meta persistence at {}: {e}",
+                    self.path.display()
+                )
+            })?;
         } else {
-            Ok(())
-        };
+            self.persist_meta_projection(&meta).map_err(|e| {
+                anyhow::anyhow!(
+                    "mission run requires terminal meta persistence at {}: {e}",
+                    self.path.display()
+                )
+            })?;
+        }
         self.finish();
-        (meta, persisted)
+        Ok(meta)
     }
 
     pub fn finish(&self) {
@@ -481,17 +494,6 @@ impl MissionRunTerminalTransition {
             steps_completed: 0,
             steps_failed: 0,
             ability_graph_traces: None,
-        }
-    }
-
-    fn running_projection(&self) -> MissionRunMeta {
-        MissionRunMeta {
-            name: self.context.name.clone(),
-            source_file: self.context.source_file.clone(),
-            trace_id: self.context.trace_id.clone(),
-            started_at: self.context.started_at.clone(),
-            status: MissionRunStatus::Running,
-            ..Default::default()
         }
     }
 
@@ -840,31 +842,64 @@ impl MissionRunner {
             );
         }
 
-        // Persist source + IR. The writes are best-effort: a missed
-        // source.eal / ir.json means the on-disk audit record is incomplete,
-        // but the mission still runs. We log so an operator inspecting a
-        // partially-populated run dir can attribute the gap.
         let run_dir = MissionRunDir::create(&ir.name)?;
-        if let Err(e) = run_dir.write_source(source) {
-            eprintln!(
-                "[easynet warn] mission run {}: write source.eal failed ({e})",
-                run_dir.path.display()
-            );
-        }
-        if let Ok(ir_json) = serde_json::to_string_pretty(&ir) {
-            if let Err(e) = run_dir.write_ir(&ir_json) {
-                eprintln!(
-                    "[easynet warn] mission run {}: write ir.json failed ({e})",
-                    run_dir.path.display()
-                );
-            }
-        }
         let run_id = run_dir
             .path
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("")
             .to_string();
+        let started_at = chrono::Local::now().to_rfc3339();
+        let total_steps = ir.steps.len();
+
+        // Persist source + IR before execution. A Mission run without its
+        // source/compiled plan is not auditable, so persistence failure becomes
+        // a terminal mission failure instead of a warning-only gap.
+        if let Err(error) = run_dir.write_source(source) {
+            return Err(record_mission_persistence_failure(
+                &run_dir,
+                MissionPersistenceFailureContext {
+                    name: ir.name.clone(),
+                    source_file: opts.source_label.clone(),
+                    trace_id: run_id,
+                    started_at,
+                    duration_ms: 0,
+                    steps_total: total_steps,
+                    error: format!("mission run requires source.eal persistence: {error}"),
+                },
+            ));
+        }
+        let ir_json = match serde_json::to_string_pretty(&ir) {
+            Ok(ir_json) => ir_json,
+            Err(error) => {
+                return Err(record_mission_persistence_failure(
+                    &run_dir,
+                    MissionPersistenceFailureContext {
+                        name: ir.name.clone(),
+                        source_file: opts.source_label.clone(),
+                        trace_id: run_id,
+                        started_at,
+                        duration_ms: 0,
+                        steps_total: total_steps,
+                        error: format!("mission run requires ir.json encoding: {error}"),
+                    },
+                ))
+            }
+        };
+        if let Err(error) = run_dir.write_ir(&ir_json) {
+            return Err(record_mission_persistence_failure(
+                &run_dir,
+                MissionPersistenceFailureContext {
+                    name: ir.name.clone(),
+                    source_file: opts.source_label.clone(),
+                    trace_id: run_id,
+                    started_at,
+                    duration_ms: 0,
+                    steps_total: total_steps,
+                    error: format!("mission run requires ir.json persistence: {error}"),
+                },
+            ));
+        }
 
         // Execute. The mission-context env var is set here so the dispatch
         // invariant in
@@ -877,7 +912,6 @@ impl MissionRunner {
         let state = crate::daemon::persistence::config::load()?;
         let tenant = state.tenant_or_default();
         let started = std::time::Instant::now();
-        let started_at = chrono::Local::now().to_rfc3339();
 
         let exec = crate::eal::interpreter::execute_with_gateway_for_trace_with_timeout(
             Arc::clone(&self.gateway),
@@ -888,8 +922,6 @@ impl MissionRunner {
         );
 
         let duration_ms = started.elapsed().as_millis() as u64;
-
-        let total_steps = ir.steps.len();
 
         match exec {
             Ok(report) => {
@@ -902,36 +934,52 @@ impl MissionRunner {
                 // The interpreter returns Ok even when individual steps fail
                 // — surface that as "partial" so the listing doesn't lie about
                 // a run with broken steps.
-                if let Ok(trace_json) = serde_json::to_string_pretty(&report.trace) {
-                    if let Err(e) = run_dir.write_trace(&trace_json) {
-                        eprintln!(
-                            "[easynet warn] mission run {}: write trace.json failed ({e})",
-                            run_dir.path.display()
-                        );
+                let trace_json = match serde_json::to_string_pretty(&report.trace) {
+                    Ok(trace_json) => trace_json,
+                    Err(error) => {
+                        return Err(record_mission_persistence_failure(
+                            &run_dir,
+                            MissionPersistenceFailureContext {
+                                name: ir.name.clone(),
+                                source_file: opts.source_label.clone(),
+                                trace_id: run_id,
+                                started_at,
+                                duration_ms: report.total_elapsed_ms,
+                                steps_total: total_steps,
+                                error: format!("mission run requires trace.json encoding: {error}"),
+                            },
+                        ))
                     }
-                }
-                let (meta, meta_write) =
-                    run_dir.record_terminal(MissionRunTerminalTransition::completed(
-                        MissionRunTerminalContext {
+                };
+                if let Err(error) = run_dir.write_trace(&trace_json) {
+                    return Err(record_mission_persistence_failure(
+                        &run_dir,
+                        MissionPersistenceFailureContext {
                             name: ir.name.clone(),
                             source_file: opts.source_label.clone(),
-                            trace_id: run_id.clone(),
+                            trace_id: run_id,
                             started_at,
                             duration_ms: report.total_elapsed_ms,
-                        },
-                        MissionRunCompletion {
                             steps_total: total_steps,
-                            steps_completed: report.steps_completed,
-                            steps_failed,
-                            ability_graph_traces,
+                            error: format!("mission run requires trace.json persistence: {error}"),
                         },
                     ));
-                if let Err(e) = meta_write {
-                    eprintln!(
-                        "[easynet warn] mission run {}: write meta.json failed ({e})",
-                        run_dir.path.display()
-                    );
                 }
+                let meta = run_dir.record_terminal(MissionRunTerminalTransition::completed(
+                    MissionRunTerminalContext {
+                        name: ir.name.clone(),
+                        source_file: opts.source_label.clone(),
+                        trace_id: run_id.clone(),
+                        started_at,
+                        duration_ms: report.total_elapsed_ms,
+                    },
+                    MissionRunCompletion {
+                        steps_total: total_steps,
+                        steps_completed: report.steps_completed,
+                        steps_failed,
+                        ability_graph_traces,
+                    },
+                ))?;
 
                 // Convert ExecutionReport.outputs (HashMap<String, String>)
                 // into HashMap<String, Value> by parsing each as JSON. If a
@@ -962,29 +1010,59 @@ impl MissionRunner {
             }
             Err(e) => {
                 let error = e.to_string();
-                let (_meta, meta_write) =
-                    run_dir.record_terminal(MissionRunTerminalTransition::failed(
-                        MissionRunTerminalContext {
-                            name: ir.name.clone(),
-                            source_file: opts.source_label.clone(),
-                            trace_id: run_id,
-                            started_at,
-                            duration_ms,
-                        },
-                        MissionRunFailure {
-                            steps_total: total_steps,
-                            error: error.clone(),
-                        },
-                    ));
-                if let Err(write_err) = meta_write {
-                    eprintln!(
-                        "[easynet warn] mission run {}: write meta.json failed ({write_err})",
-                        run_dir.path.display()
-                    );
-                }
+                run_dir.record_terminal(MissionRunTerminalTransition::failed(
+                    MissionRunTerminalContext {
+                        name: ir.name.clone(),
+                        source_file: opts.source_label.clone(),
+                        trace_id: run_id,
+                        started_at,
+                        duration_ms,
+                    },
+                    MissionRunFailure {
+                        steps_total: total_steps,
+                        error: error.clone(),
+                    },
+                ))?;
                 Err(anyhow::anyhow!("mission run failed: {error}"))
             }
         }
+    }
+}
+
+struct MissionPersistenceFailureContext {
+    name: String,
+    source_file: Option<String>,
+    trace_id: String,
+    started_at: String,
+    duration_ms: u64,
+    steps_total: usize,
+    error: String,
+}
+
+fn record_mission_persistence_failure(
+    run_dir: &MissionRunDir,
+    context: MissionPersistenceFailureContext,
+) -> anyhow::Error {
+    let error = context.error.clone();
+    let terminal = run_dir.record_terminal(MissionRunTerminalTransition::failed(
+        MissionRunTerminalContext {
+            name: context.name,
+            source_file: context.source_file,
+            trace_id: context.trace_id,
+            started_at: context.started_at,
+            duration_ms: context.duration_ms,
+        },
+        MissionRunFailure {
+            steps_total: context.steps_total,
+            error: error.clone(),
+        },
+    ));
+
+    match terminal {
+        Ok(_) => anyhow::anyhow!("mission run failed: {error}"),
+        Err(terminal_error) => anyhow::anyhow!(
+            "mission run failed: {error}; terminal meta persistence failed: {terminal_error}"
+        ),
     }
 }
 
@@ -1022,10 +1100,9 @@ impl MissionContextGuard {
         // never through the parent's own environment, which is
         // process-global and stomped under concurrent missions.
         //
-        // The run_dir field is filled in best-effort from the canonical
-        // mission-runs root; if the dir is missing the dispatch
-        // invariant check surfaces that separately (Stage 2
-        // anti-forgery).
+        // The run_dir field is the deterministic projection from the canonical
+        // mission-runs root and the run id. If the dir is missing, the dispatch
+        // invariant check surfaces that separately (Stage 2 anti-forgery).
         let ctx = crate::daemon::execution::mission::context::DispatchContext::for_mission(
             run_id,
             root_dir().join(run_id),
@@ -1193,6 +1270,25 @@ mod tests {
         assert_eq!(meta.status, MissionRunStatus::Running);
     }
 
+    #[test]
+    fn terminal_record_requires_stored_running_meta() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = MissionRunStore::with_root(dir.path().to_path_buf());
+        let run = store.create("missing-meta").expect("create run");
+        fs::remove_file(run.path.join("meta.json")).expect("remove meta");
+
+        let error = run
+            .record_terminal(MissionRunTerminalTransition::from_terminal_meta_for_test(
+                make_meta("missing-meta", MissionRunStatus::Ok),
+            ))
+            .expect_err("missing stored lifecycle aggregate must fail closed");
+
+        assert!(
+            format!("{error:#}").contains("requires stored lifecycle aggregate"),
+            "unexpected terminal record error: {error:#}"
+        );
+    }
+
     fn make_meta(name: &str, status: MissionRunStatus) -> MissionRunMeta {
         MissionRunMeta {
             name: name.into(),
@@ -1211,10 +1307,11 @@ mod tests {
 
     fn record_terminal_meta(run: &MissionRunDir, meta: MissionRunMeta) {
         let status = meta.status;
-        let (recorded, result) = run.record_terminal(
-            MissionRunTerminalTransition::from_terminal_meta_for_test(meta),
-        );
-        result.expect("record terminal meta");
+        let recorded = run
+            .record_terminal(MissionRunTerminalTransition::from_terminal_meta_for_test(
+                meta,
+            ))
+            .expect("record terminal meta");
         assert_eq!(recorded.status, status);
     }
 
