@@ -118,6 +118,7 @@ AGENT_PUBLISH="src/cli/commands/agent/publish.rs"
 LLM_API="src/cli/commands/llm_api.rs"
 SKILL_CLI="src/cli/commands/skill.rs"
 API_KEY_CLI="src/cli/commands/api_key_cli.rs"
+ABILITY_GROUP="src/cli/commands/groups/ability.rs"
 
 [[ -f "$AGENT_GATEWAY" ]] || fail "missing $AGENT_GATEWAY"
 [[ -f "$AGENT_VIEW" ]] || fail "missing $AGENT_VIEW"
@@ -125,6 +126,7 @@ API_KEY_CLI="src/cli/commands/api_key_cli.rs"
 [[ -f "$LLM_API" ]] || fail "missing $LLM_API"
 [[ -f "$SKILL_CLI" ]] || fail "missing $SKILL_CLI"
 [[ -f "$API_KEY_CLI" ]] || fail "missing $API_KEY_CLI"
+[[ -f "$ABILITY_GROUP" ]] || fail "missing $ABILITY_GROUP"
 
 if ! rg -n 'trait AgentStateReadGateway' "$AGENT_GATEWAY" >/dev/null; then
   fail "agent.list must have a dedicated AgentStateReadGateway"
@@ -210,6 +212,18 @@ fi
 
 if ! rg -n -U 'invoke_api_key_manage\(&principal,\s*&ability,\s*(serde_json::)?json!\(\{\s*"id_prefix"' "$API_KEY_CLI" >/dev/null; then
   fail "api-key revoke must remain on the explicit action issuer path"
+fi
+
+if rg -n -U '\binvoke_local_ability\s*\(' "$ABILITY_GROUP"; then
+  fail "ability CLI must not use generic invoke_local_ability"
+fi
+
+if ! rg -n -U 'LocalDaemonSystemAbilityIssuer::invoke_root_for_subject\(\s*"ability\.uninstall",\s*args,\s*&subject_ura' "$ABILITY_GROUP" >/dev/null; then
+  fail "ability.uninstall must use explicit local daemon system issuer subject"
+fi
+
+if ! rg -n -F 'invoke_ability_uninstall(ability_uninstall_payload(&args))' "$ABILITY_GROUP" >/dev/null; then
+  fail "ability.uninstall must remain on the explicit action issuer path"
 fi
 
 echo "check-runtime-state-read-subject-boundary: ok"

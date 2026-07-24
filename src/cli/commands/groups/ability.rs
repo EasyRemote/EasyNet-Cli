@@ -70,7 +70,7 @@ use crate::cli::commands::{
     exec, invoke, teach,
 };
 use crate::cli::daemon_client::ability_catalog::{AbilityCatalogueClient, AbilityCatalogueQuery};
-use crate::support::platform::local_invoke::invoke_local_ability;
+use crate::support::platform::local_invoke::LocalDaemonSystemAbilityIssuer;
 use crate::support::platform::output::{self, OutputFormat};
 
 #[derive(Debug, Args)]
@@ -276,6 +276,22 @@ fn run_uninstall(args: UninstallArgs) -> anyhow::Result<()> {
             return Ok(());
         }
     }
+    let result = invoke_ability_uninstall(ability_uninstall_payload(&args))?;
+    output::success(&format!("uninstalled {}", args.ability_ura));
+    if !result.is_null() {
+        println!("{}", serde_json::to_string_pretty(&result)?);
+    }
+    Ok(())
+}
+
+fn invoke_ability_uninstall(args: Value) -> anyhow::Result<Value> {
+    let subject_ura = LocalDaemonSystemAbilityIssuer::local_daemon_identity_subject_ura()
+        .context("resolve local ability.uninstall subject")?;
+    LocalDaemonSystemAbilityIssuer::invoke_root_for_subject("ability.uninstall", args, &subject_ura)
+        .context("invoke ability.uninstall")
+}
+
+fn ability_uninstall_payload(args: &UninstallArgs) -> Value {
     let mut body = serde_json::json!({ "ability_ura": args.ability_ura.clone() });
     if let Some(node) = args.node.as_deref().filter(|s| !s.trim().is_empty()) {
         body["node_id"] = serde_json::json!(node);
@@ -283,13 +299,7 @@ fn run_uninstall(args: UninstallArgs) -> anyhow::Result<()> {
     if let Some(iid) = args.install_id.as_deref().filter(|s| !s.trim().is_empty()) {
         body["install_id"] = serde_json::json!(iid);
     }
-    let result =
-        invoke_local_ability("ability.uninstall", body).context("invoke ability.uninstall")?;
-    output::success(&format!("uninstalled {}", args.ability_ura));
-    if !result.is_null() {
-        println!("{}", serde_json::to_string_pretty(&result)?);
-    }
-    Ok(())
+    body
 }
 
 fn ensure_ability_ura(value: &str) -> anyhow::Result<()> {
@@ -299,4 +309,45 @@ fn ensure_ability_ura(value: &str) -> anyhow::Result<()> {
         anyhow::bail!("expected canonical Ability URA, got {value:?}");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ability_uninstall_payload_preserves_public_wire_shape() {
+        let payload = ability_uninstall_payload(&UninstallArgs {
+            ability_ura: "easynet:///r/test/ability/device.dev.example.run".to_string(),
+            node: Some("dev-node".to_string()),
+            install_id: Some("install-123".to_string()),
+            yes: true,
+        });
+
+        assert_eq!(
+            payload,
+            serde_json::json!({
+                "ability_ura": "easynet:///r/test/ability/device.dev.example.run",
+                "node_id": "dev-node",
+                "install_id": "install-123",
+            })
+        );
+    }
+
+    #[test]
+    fn ability_uninstall_payload_omits_blank_optional_fields() {
+        let payload = ability_uninstall_payload(&UninstallArgs {
+            ability_ura: "easynet:///r/test/ability/device.dev.example.run".to_string(),
+            node: Some("  ".to_string()),
+            install_id: Some("".to_string()),
+            yes: true,
+        });
+
+        assert_eq!(
+            payload,
+            serde_json::json!({
+                "ability_ura": "easynet:///r/test/ability/device.dev.example.run",
+            })
+        );
+    }
 }
