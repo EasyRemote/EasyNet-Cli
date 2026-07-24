@@ -491,3 +491,11 @@ fn go_sdk_lifecycle_fixture_neutrality_script_holds() {
     // test-only SDK model evidence.
     run_bash_script("tests/scripts/test_check_go_sdk_lifecycle_fixture_neutrality.sh");
 }
+
+#[test]
+fn sdk_doc_product_vocabulary_script_holds() {
+    // Pins SDK-facing documentation to canonical runtime vocabulary. Product
+    // names and workflow examples must not become the way SDK boundaries are
+    // described.
+    run_bash_script("tests/scripts/test_check_sdk_doc_product_vocabulary.sh");
+}

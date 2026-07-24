@@ -1,14 +1,13 @@
 # Python Runtime SDK
 
 The Python package is the Python binding of the canonical, product-neutral
-runtime SDK. It is not an EasyRemote SDK and it is not a product profile
-bundle.
+runtime SDK. It is not a product profile bundle.
 
-Products such as EasyNet Backend, EasyRemote and future applications own their
-workflow names, request/result DTOs, account policy, HTTP routes, UI
-projections and product lifecycle. They consume the generic runtime concepts in
-this package instead of importing raw FFI handles, Axon protobufs, daemon
-configuration files or product-specific compatibility modules.
+Downstream products own their workflow names, request/result DTOs, account
+policy, HTTP routes, UI projections and product lifecycle. They consume the
+generic runtime concepts in this package instead of importing raw FFI handles,
+Axon protobufs, daemon configuration files or product-specific compatibility
+modules.
 
 ## Runtime surface
 
@@ -37,11 +36,11 @@ environment variables or expose private key material.
 
 The following belong downstream, not in this package:
 
-- Mission/EAL product workflows;
-- Backend account, OAuth, HTTP, pairing and dashboard DTOs;
-- EasyRemote Control, Pipeline, Context and remote-control workflow objects;
-- Publication, Pages/Surface, OpenAI compatibility, HostBinding, wrappers,
-  desktop companion and other product helper clients;
+- workflow orchestration and hosted execution product workflows;
+- account, OAuth, HTTP, pairing and dashboard DTOs;
+- remote-control workflow objects;
+- publication, page/model/file, host-binding, wrapper, desktop lifecycle and
+  other product helper clients;
 - product Directory views, product receipt pages and product event
   presentations.
 
@@ -54,8 +53,8 @@ product repository that owns the behavior.
 
 `SignatureProvider` is the generic seam for signatures produced by an external
 signer selected by the consumer. The Python SDK never accepts or stores a
-private key or seed. Keys managed by the local EasyNet runtime are available
-only through runtime-backed signing and managed-signing surfaces.
+private key or seed. Keys managed by the local runtime are available only
+through runtime-backed signing and managed-signing surfaces.
 
 ## Verification
 

@@ -1,20 +1,20 @@
 # Canonical Runtime SDK
 
 This directory contains product-neutral language bindings for the governed
-runtime hosted by `easynet-daemon`. The SDK is not a collection of EasyNet or
-EasyRemote product APIs. Products build typed local facades on top of complete
-generic Invocation.
+runtime hosted by native runtime providers. The SDK is not a collection of
+product APIs. Downstream applications build typed local facades on top of
+complete generic Invocation.
 
 ## Current model
 
 | Layer | Responsibility |
 | --- | --- |
 | Axon | URA and descriptor-reference grammar, canonical bytes, admission, call modes and receipt cryptography |
-| Rust runtime | daemon/provider implementation and generic handle semantics |
+| Rust runtime | native provider implementation and generic handle semantics |
 | C ABI v6 | exact generic lifecycle, Invocation, stream/bidi, health, Addressing and memory boundary |
 | Go/Python | provider-backed projections of the same runtime object graph |
 | Node/Java/Swift | supported subsets of that graph; absent capabilities are explicitly unsupported |
-| products | ability names, request/result DTOs and workflows in downstream repositories |
+| downstream products | ability names, request/result DTOs and workflows outside the SDK |
 
 The object graph and prohibitions are defined in
 [`SDK_INTERFACE_SPEC.md`](SDK_INTERFACE_SPEC.md). The normative requirements
@@ -26,7 +26,7 @@ are in
 - environment and daemon/runtime lifecycle;
 - canonical Addressing delegated to Axon;
 - runtime identity and sign-only capabilities;
-- managed-signing lifecycle through the daemon key-service;
+- managed-signing lifecycle through the runtime key service;
 - product-neutral PrincipalLifecycle and public-key bindings;
 - canonical Directory resolution/subscription;
 - governed AbilityDescriptor and authority metadata projection;
@@ -36,11 +36,11 @@ are in
 - receipt/causal facts and runtime event cursors;
 - product-neutral runtime administration.
 
-The SDK does not expose product Directory views, Mission workflows, product
-account/admin APIs, Publication UX, Pages/Surface, OpenAI compatibility,
-HostBinding, product event presentations, convenience wrappers, desktop
-companions or other product workflows. Those concepts live with the product
-that owns their behavior and consume the generic capabilities above.
+The SDK does not expose downstream workflow clients, application account
+policy, UI-specific directory or receipt pages, product event presentations,
+route/model/page/file helpers, desktop application lifecycle, or convenience
+wrappers. Those concepts live with the product that owns their behavior and
+consume the generic capabilities above.
 
 ## ABI
 

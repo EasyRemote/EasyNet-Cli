@@ -14,11 +14,12 @@ public model is limited to:
 `InvocationResult` preserves runtime-provided receipt facts as an opaque string
 map. It does not expose receipt history or interpret product receipt policy.
 
-Product profiles are deliberately absent. Product administration, gateway,
-companion, compatibility, directory views, identity projections, event feeds,
-host binding, mission, publication, receipt-history pages, surface/pages, and
-wrapper behavior belong to downstream products. The Swift module provides no
-aliases or empty transport placeholders for those surfaces.
+Downstream workflow profiles are deliberately absent. Product administration,
+gateway, application lifecycle, compatibility adapters, directory views,
+identity projections, event feeds, host binding, orchestration, publication,
+receipt-history pages, page/model/file helpers, and wrapper behavior belong to
+downstream products. The Swift module provides no aliases or empty transport
+placeholders for those surfaces.
 
 The package currently has no bundled runtime-host transport or C ABI provider.
 `tools/scripts/check-swift-sdk-seam.sh` builds with warnings as errors, runs the

@@ -657,6 +657,14 @@ for path in files:
 PY
 }
 
+check_sdk_doc_product_vocabulary_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local script="$ROOT/tools/scripts/check-sdk-doc-product-vocabulary.sh"
+  [[ -f "$script" ]] || fail "SDK documentation product-vocabulary script is missing: ${script#$ROOT/}"
+
+  CHECK_SDK_DOC_PRODUCT_VOCABULARY_ROOT="$cli_root" bash "$script" >/dev/null
+}
+
 check_go_sdk_runtime_lifecycle_neutrality_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local lifecycle="$cli_root/sdk/go/runtime_lifecycle.go"
@@ -20626,6 +20634,7 @@ EOF
   check_session_failure_wire_facts_contract
   check_active_source_contract
   check_sdk_root_runtime_description_contract
+  check_sdk_doc_product_vocabulary_contract
   check_go_sdk_public_ura_alias_contract
   check_go_sdk_runtime_lifecycle_neutrality_contract
   check_go_sdk_lifecycle_fixture_neutrality_contract
@@ -20840,6 +20849,7 @@ check_ffi_unknown_invocation_resource_terminality_contract
 check_session_failure_wire_facts_contract
 check_active_source_contract
 check_sdk_root_runtime_description_contract
+check_sdk_doc_product_vocabulary_contract
 check_go_sdk_public_ura_alias_contract
 check_go_sdk_runtime_lifecycle_neutrality_contract
 check_go_sdk_lifecycle_fixture_neutrality_contract

@@ -43,10 +43,10 @@ The matrix may contain only product-neutral capabilities from these families:
 | health | runtime readiness and diagnostics |
 | errors | shared code/class/retry semantics |
 
-Product Directory pages, hosted-agent workflow, Mission, publication, pages,
-OpenAI compatibility, host binding, product events, wrappers and companion
-lifecycle are not capability rows. They are downstream product behavior over
-the generic capabilities above.
+Workflow-specific directory pages, hosted workflow orchestration, publication
+UX, page/model/file helpers, application event buses, convenience wrappers and
+desktop application lifecycle are not capability rows. They are downstream
+product behavior over the generic capabilities above.
 
 ## Language requirements
 
@@ -83,8 +83,7 @@ The aggregate gates validate:
 
 Consumer readiness is proven in the consumer repository:
 
-- EasyNet backend owns its Go product ports and DTOs;
-- EasyRemote owns its Python product workflows and projections;
+- each consumer owns its product ports, DTOs, workflows and projections;
 - each consumer depends on generic Runtime/Addressing/stream/bidi/health
   interfaces without copying Axon protocol logic.
 
