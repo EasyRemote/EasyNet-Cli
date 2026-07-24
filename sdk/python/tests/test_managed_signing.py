@@ -23,7 +23,7 @@ from easynet_sdk import (
     SignerPolicy,
     SigningMaterial,
 )
-from easynet_sdk.providers.easynet.key_service import (
+from easynet_sdk.providers.runtime.key_service import (
     KEY_SERVICE_PROTOCOL_VERSION,
     MAX_KEY_SERVICE_CANONICAL_BYTES,
     MAX_KEY_SERVICE_FRAME_BYTES,

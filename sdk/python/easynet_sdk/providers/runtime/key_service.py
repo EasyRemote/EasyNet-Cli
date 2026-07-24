@@ -1,4 +1,4 @@
-"""Private transport for the daemon-owned key service."""
+"""Private transport for the runtime-owned key service."""
 
 from __future__ import annotations
 
@@ -29,14 +29,14 @@ _PRIVATE_FIELD_TOKENS = (
 
 @dataclass(frozen=True)
 class KeyServiceClient:
-    """Length-prefixed JSON client for the daemon-local custody boundary."""
+    """Length-prefixed JSON client for the runtime-local custody boundary."""
 
     socket_path: str = ""
     timeout_seconds: float = 10.0
 
     def __post_init__(self) -> None:
         if not isinstance(self.socket_path, str) or not self.socket_path.strip():
-            raise invalid_key_service_input("daemon key-service endpoint is required")
+            raise invalid_key_service_input("runtime key-service endpoint is required")
         object.__setattr__(self, "socket_path", self.socket_path.strip())
         if (
             isinstance(self.timeout_seconds, bool)
@@ -44,7 +44,7 @@ class KeyServiceClient:
             or not math.isfinite(self.timeout_seconds)
         ):
             raise invalid_key_service_input(
-                "daemon key-service timeout must be a finite number"
+                "runtime key-service timeout must be a finite number"
             )
         if self.timeout_seconds <= 0:
             object.__setattr__(self, "timeout_seconds", 10.0)
@@ -53,7 +53,7 @@ class KeyServiceClient:
         encoded = json.dumps(request, separators=(",", ":")).encode("utf-8")
         if len(encoded) > MAX_KEY_SERVICE_FRAME_BYTES:
             raise invalid_key_service_input(
-                "daemon key-service request exceeds frame limit"
+                "runtime key-service request exceeds frame limit"
             )
         deadline = time.monotonic() + self.timeout_seconds
         connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -70,7 +70,7 @@ class KeyServiceClient:
                 length = struct.unpack(">I", _read_exact(connection, 4, deadline))[0]
                 if length > MAX_KEY_SERVICE_FRAME_BYTES:
                     raise invalid_key_service_payload(
-                        "daemon key-service response exceeds frame limit"
+                        "runtime key-service response exceeds frame limit"
                     )
                 response = json.loads(
                     _read_exact(connection, length, deadline).decode("utf-8")
@@ -83,14 +83,14 @@ class KeyServiceClient:
             raise
         except (TypeError, ValueError, UnicodeDecodeError) as exc:
             raise invalid_key_service_payload(
-                f"decode daemon key-service response: {exc}", exc
+                f"decode runtime key-service response: {exc}", exc
             ) from exc
         finally:
             connection.close()
 
         if not isinstance(response, dict):
             raise invalid_key_service_payload(
-                "daemon key-service response must be an object"
+                "runtime key-service response must be an object"
             )
         reject_private_response_fields(response)
         result = required_response_string(response, "result")
@@ -106,7 +106,7 @@ def require_result(response: Mapping[str, Any], expected: str) -> None:
     result = required_response_string(response, "result")
     if result != expected:
         raise invalid_key_service_payload(
-            f"daemon key-service response result is {result!r}, want {expected!r}"
+            f"runtime key-service response result is {result!r}, want {expected!r}"
         )
 
 
@@ -124,12 +124,12 @@ def require_response_shape(
     unknown = sorted(set(response).difference(allowed))
     if unknown:
         raise invalid_key_service_payload(
-            "daemon key-service response contains unknown fields: " + ", ".join(unknown)
+            "runtime key-service response contains unknown fields: " + ", ".join(unknown)
         )
     missing = [field for field in required if field not in response]
     if missing:
         raise invalid_key_service_payload(
-            "daemon key-service response is missing fields: " + ", ".join(missing)
+            "runtime key-service response is missing fields: " + ", ".join(missing)
         )
 
 
@@ -137,7 +137,7 @@ def required_response_string(response: Mapping[str, Any], field: str) -> str:
     value = response.get(field)
     if not isinstance(value, str) or not value:
         raise invalid_key_service_payload(
-            f"daemon key-service response field {field} must be a non-empty string"
+            f"runtime key-service response field {field} must be a non-empty string"
         )
     return value
 
@@ -146,11 +146,11 @@ def required_response_i64(response: Mapping[str, Any], field: str) -> int:
     value = response.get(field)
     if isinstance(value, bool) or not isinstance(value, int):
         raise invalid_key_service_payload(
-            f"daemon key-service response field {field} must be an integer"
+            f"runtime key-service response field {field} must be an integer"
         )
     if value < -(1 << 63) or value > (1 << 63) - 1:
         raise invalid_key_service_payload(
-            f"daemon key-service response field {field} must fit i64"
+            f"runtime key-service response field {field} must fit i64"
         )
     return value
 
@@ -159,7 +159,7 @@ def required_response_bool(response: Mapping[str, Any], field: str) -> bool:
     value = response.get(field)
     if not isinstance(value, bool):
         raise invalid_key_service_payload(
-            f"daemon key-service response field {field} must be a boolean"
+            f"runtime key-service response field {field} must be a boolean"
         )
     return value
 
@@ -175,7 +175,7 @@ def decode_base64_value(
 ) -> bytes:
     if not isinstance(value, str) or not value:
         raise invalid_key_service_payload(
-            f"daemon key-service response field {field} is required"
+            f"runtime key-service response field {field} is required"
         )
     try:
         decoded = base64.b64decode(value, validate=True)
@@ -189,18 +189,18 @@ def decode_base64_value(
 
 
 def reject_private_response_fields(value: Any, path: str = "response") -> None:
-    """Fail closed if a daemon projection ever exposes custody material."""
+    """Fail closed if a runtime projection ever exposes custody material."""
 
     if isinstance(value, Mapping):
         for field, nested in value.items():
             if not isinstance(field, str):
                 raise invalid_key_service_payload(
-                    f"daemon key-service {path} field names must be strings"
+                    f"runtime key-service {path} field names must be strings"
                 )
             normalized = field.lower()
             if any(token in normalized for token in _PRIVATE_FIELD_TOKENS):
                 raise invalid_key_service_payload(
-                    f"daemon key-service {path} contains forbidden private field {field}"
+                    f"runtime key-service {path} contains forbidden private field {field}"
                 )
             reject_private_response_fields(nested, f"{path}.{field}")
     elif isinstance(value, list):
@@ -248,7 +248,7 @@ def key_service_rejection(kind: str, message: str) -> SDKError:
         stage="key_service",
         retry=retry,
         retryable=retry == RetryHint.SAFE,
-        message=f"daemon key service rejected request ({kind}): {message}",
+        message=f"runtime key service rejected request ({kind}): {message}",
         details={"kind": kind},
     )
 
@@ -259,7 +259,7 @@ def _read_exact(connection: socket.socket, count: int, deadline: float) -> bytes
         _set_remaining_timeout(connection, deadline)
         chunk = connection.recv(count - len(data))
         if not chunk:
-            raise OSError("unexpected EOF from daemon key service")
+            raise OSError("unexpected EOF from runtime key service")
         data.extend(chunk)
     return bytes(data)
 
@@ -267,12 +267,12 @@ def _read_exact(connection: socket.socket, count: int, deadline: float) -> bytes
 def _set_remaining_timeout(connection: socket.socket, deadline: float) -> None:
     remaining = deadline - time.monotonic()
     if remaining <= 0:
-        raise TimeoutError("daemon key-service request deadline exceeded")
+        raise TimeoutError("runtime key-service request deadline exceeded")
     try:
         connection.settimeout(remaining)
     except (OverflowError, ValueError) as exc:
         raise invalid_key_service_input(
-            "daemon key-service timeout is outside the platform range", exc
+            "runtime key-service timeout is outside the platform range", exc
         ) from exc
 
 
@@ -281,7 +281,7 @@ def _runtime_offline(path: str, cause: OSError) -> SDKError:
         code=ErrorCode.RUNTIME_OFFLINE,
         stage="key_service",
         retry=RetryHint.SAFE,
-        message=f"daemon key service unavailable at {path}: {cause}",
+        message=f"runtime key service unavailable at {path}: {cause}",
         retryable=True,
         cause=cause,
     )
@@ -292,7 +292,7 @@ def _transport_failure(path: str, cause: OSError) -> SDKError:
         code=ErrorCode.TRANSPORT,
         stage="key_service",
         retry=RetryHint.SAFE,
-        message=f"daemon key-service transport failed at {path}: {cause}",
+        message=f"runtime key-service transport failed at {path}: {cause}",
         retryable=True,
         cause=cause,
     )

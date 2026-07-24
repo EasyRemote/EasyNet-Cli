@@ -6,8 +6,9 @@ from pathlib import Path
 import easynet_sdk
 from easynet_sdk import runtime_lifecycle as canonical_lifecycle
 from easynet_sdk import transport
-from easynet_sdk.providers.easynet import keyring as provider_keyring
+import easynet_sdk.providers.easynet as easynet_provider
 from easynet_sdk.providers.easynet import lifecycle as provider_lifecycle
+from easynet_sdk.providers.runtime import keyring as provider_keyring
 from easynet_sdk.providers.runtime import plugin_exec as provider_plugin_exec
 
 
@@ -41,9 +42,17 @@ def test_transport_root_exports_only_runtime_transport_names() -> None:
 
 def test_keyring_provider_is_not_reexported_as_canonical_root() -> None:
     assert provider_keyring.RuntimeSigningIdentity.__module__.endswith(
-        "providers.easynet.keyring"
+        "providers.runtime.keyring"
     )
+    assert provider_keyring.RuntimeKeyringSignatureProvider.__module__.endswith(
+        "providers.runtime.keyring"
+    )
+    assert not hasattr(easynet_provider, "DaemonKeyringSignatureProvider")
+    assert not hasattr(easynet_provider, "RuntimeSigningIdentity")
+    assert not hasattr(easynet_provider, "ensure_runtime_signing_identity")
+    assert not hasattr(easynet_provider, "load_runtime_signing_identity")
     assert not hasattr(easynet_sdk, "DaemonKeyringSignatureProvider")
+    assert not hasattr(easynet_sdk, "RuntimeKeyringSignatureProvider")
     assert not hasattr(easynet_sdk, "RuntimeSigningIdentity")
 
 

@@ -1,4 +1,4 @@
-"""Public projections and capabilities for daemon-managed signing keys."""
+"""Public projections and capabilities for runtime-managed signing keys."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Protocol, TypeVar
 
-from .providers.easynet.key_service import (
+from .providers.runtime.key_service import (
     KeyServiceClient,
     MAX_KEY_SERVICE_CANONICAL_BYTES,
     decode_base64_value,
@@ -45,7 +45,7 @@ class ManagedSigningStatus(StrEnum):
 
 @dataclass(frozen=True)
 class ManagedSigningKey:
-    """Public projection of a daemon-custodied signing key."""
+    """Public projection of a runtime-custodied signing key."""
 
     key_id: str
     purpose: str
@@ -149,7 +149,7 @@ class ManagedSigningClient:
             or key.rotated_from is not None
         ):
             raise invalid_key_service_payload(
-                "daemon key service violated managed-key create postconditions"
+                "runtime key service violated managed-key create postconditions"
             )
         return key
 
@@ -175,11 +175,11 @@ class ManagedSigningClient:
         raw_entries = response.get("entries")
         if not isinstance(raw_entries, list):
             raise invalid_key_service_payload(
-                "daemon key-service response field entries must be an array"
+                "runtime key-service response field entries must be an array"
             )
         if len(raw_entries) > limit:
             raise invalid_key_service_payload(
-                "daemon key service returned more managed keys than the page limit"
+                "runtime key service returned more managed keys than the page limit"
             )
         keys = tuple(_decode_key(entry) for entry in raw_entries)
         _reject_duplicate_values((key.key_id for key in keys), "key IDs")
@@ -187,18 +187,18 @@ class ManagedSigningClient:
             expected_purpose = _required_text("purpose filter", filter.purpose)
             if any(key.purpose != expected_purpose for key in keys):
                 raise invalid_key_service_payload(
-                    "daemon key service returned a key outside the purpose filter"
+                    "runtime key service returned a key outside the purpose filter"
                 )
         if filter.status is not None:
             expected_status = ManagedSigningStatus(filter.status)
             if any(key.status != expected_status for key in keys):
                 raise invalid_key_service_payload(
-                    "daemon key service returned a key outside the status filter"
+                    "runtime key service returned a key outside the status filter"
                 )
         next_cursor = _response_cursor(response.get("next_cursor"))
         if next_cursor is not None and next_cursor == normalized_cursor:
             raise invalid_key_service_payload(
-                "daemon key service did not advance the managed-key cursor"
+                "runtime key service did not advance the managed-key cursor"
             )
         return ManagedSigningKeyPage(keys, next_cursor, limit)
 
@@ -219,7 +219,7 @@ class ManagedSigningClient:
         key = _decode_key_response(response)
         if key.key_id != normalized_key_id:
             raise invalid_key_service_payload(
-                "daemon key service returned a different managed key projection"
+                "runtime key service returned a different managed key projection"
             )
         return key
 
@@ -259,7 +259,7 @@ class ManagedSigningClient:
             or successor.key_id == predecessor
         ):
             raise invalid_key_service_payload(
-                "daemon key service violated managed-key rotation postconditions"
+                "runtime key service violated managed-key rotation postconditions"
             )
         return successor
 
@@ -347,18 +347,18 @@ class ManagedSigningClient:
         raw_peers = response.get("peers")
         if not isinstance(raw_peers, list):
             raise invalid_key_service_payload(
-                "daemon key-service response field peers must be an array"
+                "runtime key-service response field peers must be an array"
             )
         if len(raw_peers) > limit:
             raise invalid_key_service_payload(
-                "daemon key service returned more peers than the page limit"
+                "runtime key service returned more peers than the page limit"
             )
         peers = tuple(_decode_peer(peer) for peer in raw_peers)
         _reject_duplicate_values((peer.peer_ura for peer in peers), "peer URAs")
         next_cursor = _response_cursor(response.get("next_cursor"))
         if next_cursor is not None and next_cursor == normalized_cursor:
             raise invalid_key_service_payload(
-                "daemon key service did not advance the peer cursor"
+                "runtime key service did not advance the peer cursor"
             )
         return ManagedSigningPeerPage(peers, next_cursor, limit)
 
@@ -547,7 +547,7 @@ def _decode_key(raw: object) -> ManagedSigningKey:
         status = ManagedSigningStatus(status_raw)
     except ValueError as exc:
         raise invalid_key_service_payload(
-            f"daemon key service returned unsupported managed signing status {status_raw!r}",
+            f"runtime key service returned unsupported managed signing status {status_raw!r}",
             exc,
         ) from exc
     key_id = _projection_text(raw, "key_id")
@@ -679,7 +679,7 @@ def _verify_ed25519_signature(
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
     except ImportError as exc:
         raise invalid_key_service_payload(
-            "Ed25519 verifier is unavailable; cryptography is required to validate daemon signatures",
+            "Ed25519 verifier is unavailable; cryptography is required to validate runtime signatures",
             exc,
         ) from exc
     try:
@@ -688,7 +688,7 @@ def _verify_ed25519_signature(
         )
     except InvalidSignature as exc:
         raise invalid_key_service_payload(
-            "daemon key service returned an invalid managed signature", exc
+            "runtime key service returned an invalid managed signature", exc
         ) from exc
     except ValueError as exc:
         raise invalid_key_service_payload(
@@ -753,7 +753,7 @@ def _collect_pages(
             item_identity = identity(item)
             if item_identity in seen_items:
                 raise invalid_key_service_payload(
-                    f"daemon key service returned duplicate {label} across pages"
+                    f"runtime key service returned duplicate {label} across pages"
                 )
             seen_items.add(item_identity)
             items.append(item)
@@ -800,7 +800,7 @@ def _projection_text(raw: Mapping[str, object], field: str) -> str:
     value = raw.get(field)
     if not isinstance(value, str) or not value or value.strip() != value:
         raise invalid_key_service_payload(
-            f"daemon key service returned an invalid managed signing {field}"
+            f"runtime key service returned an invalid managed signing {field}"
         )
     return value
 
@@ -821,7 +821,7 @@ def _projection_i64(raw: Mapping[str, object], field: str) -> int:
         or value > _I64_MAX
     ):
         raise invalid_key_service_payload(
-            f"daemon key service returned an invalid i64 managed signing {field}"
+            f"runtime key service returned an invalid i64 managed signing {field}"
         )
     return value
 
@@ -835,7 +835,7 @@ def _projection_u64(raw: Mapping[str, object], field: str) -> int:
         or value > _U64_MAX
     ):
         raise invalid_key_service_payload(
-            f"daemon key service returned an invalid u64 managed signing {field}"
+            f"runtime key service returned an invalid u64 managed signing {field}"
         )
     return value
 
@@ -903,7 +903,7 @@ def _response_cursor(cursor: object) -> str | None:
         return _optional_cursor(cursor)
     except SDKError as exc:
         raise invalid_key_service_payload(
-            "daemon key service returned an invalid pagination cursor", exc
+            "runtime key service returned an invalid pagination cursor", exc
         ) from exc
 
 
@@ -911,7 +911,7 @@ def _reject_duplicate_values(values: Iterable[str], label: str) -> None:
     materialized = tuple(values)
     if len(set(materialized)) != len(materialized):
         raise invalid_key_service_payload(
-            f"daemon key service returned duplicate {label}"
+            f"runtime key service returned duplicate {label}"
         )
 
 
