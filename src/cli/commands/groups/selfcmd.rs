@@ -353,6 +353,7 @@ impl UninstallEnvironment for ProductionUninstallEnvironment {
             match crate::daemon::invocation::routing::remote_invoke::invoke_federation_revoke(
                 &identity.device_ura,
                 "self uninstall",
+                &identity.device_ura,
             ) {
                 Ok(()) => HubRemovalReport::Reported,
                 Err(err) => HubRemovalReport::Failed(err.to_string()),

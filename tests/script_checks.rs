@@ -444,6 +444,13 @@ fn current_realm_hub_context_boundary_script_holds() {
 }
 
 #[test]
+fn federation_revoke_caller_boundary_script_holds() {
+    // Pins federation.revoke lifecycle callers to one explicit local daemon
+    // caller fact instead of letting the helper reselect ambient identity.
+    run_bash_script("tests/scripts/test_check_federation_revoke_caller_boundary.sh");
+}
+
+#[test]
 fn call_create_participant_identity_boundary_script_holds() {
     // Pins call-create participant identity to typed credential absence.
     // Existing malformed credentials must not become hostname participants.

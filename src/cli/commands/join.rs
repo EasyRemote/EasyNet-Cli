@@ -1677,6 +1677,7 @@ fn invoke_federation_revoke_for_rejoin(device_ura: &str) -> anyhow::Result<()> {
     crate::daemon::invocation::routing::remote_invoke::invoke_federation_revoke(
         device_ura,
         "device-rejoin",
+        device_ura,
     )
 }
 

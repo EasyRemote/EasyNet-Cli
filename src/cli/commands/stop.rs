@@ -145,6 +145,7 @@ impl StopPlan {
             match crate::daemon::invocation::routing::remote_invoke::invoke_federation_revoke(
                 &caller_ura,
                 "device shutdown",
+                &caller_ura,
             ) {
                 Ok(_) => self.renderer.stage_ok("revoke"),
                 Err(e) => self.renderer.stage_skipped("revoke", &format!("({e})")),

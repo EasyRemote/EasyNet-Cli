@@ -1352,10 +1352,18 @@ fn local_daemon_federation_signer(
 ///     a device URA `easynet:///r/<realm>/device/<id>`).
 ///   * `reason` — operator-supplied label, written through to the
 ///     receipt for audit. `"deregister"` / `"reset"` are common.
+///   * `caller_ura` — explicit local daemon caller selected by the product
+///     facade before transport entry. The helper validates it against the
+///     active control-discovery identity instead of silently reselecting an
+///     ambient caller.
 /// Returns `Ok(())` on a successful ack from the daemon. Best-effort
 /// by contract on the hub side, but this helper still surfaces
 /// transport / parse errors so callers can log them honestly.
-pub fn invoke_federation_revoke(agent_ura: &str, reason: &str) -> anyhow::Result<()> {
+pub fn invoke_federation_revoke(
+    agent_ura: &str,
+    reason: &str,
+    caller_ura: &str,
+) -> anyhow::Result<()> {
     let socket_path = daemon_config::resolved_local_uds_path_with_env_override();
     if !crate::support::platform::local_daemon_grpc::probe_accepting(&socket_path) {
         bail!(
@@ -1372,13 +1380,14 @@ pub fn invoke_federation_revoke(agent_ura: &str, reason: &str) -> anyhow::Result
     let arg_bytes = serde_json::to_vec(&req_args).context("encode revoke args")?;
 
     let local_daemon_ura = crate::daemon::identity::local_invocation::local_daemon_ura()?;
+    let caller_ura = canonical_federation_revoke_caller(caller_ura, &local_daemon_ura)?;
     let target = RemoteAbilityInvocationTarget::for_target_owned_selector(
         &local_daemon_ura,
         "federation.revoke",
     )?;
-    let signer = local_daemon_federation_signer(&local_daemon_ura, "federation.revoke")?;
+    let signer = local_daemon_federation_signer(&caller_ura, "federation.revoke")?;
     let request_envelope = ProtoEnvelope::from_target(
-        local_daemon_ura.as_str(),
+        caller_ura.as_str(),
         target.callee_ura(),
         agent_ura,
         RootInvocationDerivationIssuer::fresh_root(),
@@ -1417,6 +1426,32 @@ pub fn invoke_federation_revoke(agent_ura: &str, reason: &str) -> anyhow::Result
         ensure_completed_invoke_response("federation.revoke", &response.into_inner())?;
         Ok::<_, anyhow::Error>(())
     })
+}
+
+fn canonical_federation_revoke_caller(
+    caller_ura: &str,
+    local_daemon_ura: &str,
+) -> anyhow::Result<String> {
+    let caller = checked_remote_invocation_ura(caller_ura.to_string(), "federation.revoke caller")?;
+    let local = checked_remote_invocation_ura(
+        local_daemon_ura.to_string(),
+        "federation.revoke local daemon",
+    )?;
+    if caller != local {
+        bail!("federation.revoke caller `{caller}` does not match active local daemon `{local}`");
+    }
+    let parsed = crate::core::ura::parse_ura(&caller)
+        .map_err(|error| anyhow!("federation.revoke caller is not canonical: {error}"))?;
+    if !matches!(
+        parsed.kind,
+        crate::core::ura::URAKind::Device | crate::core::ura::URAKind::Authority
+    ) {
+        bail!(
+            "federation.revoke caller must be a Device or Hub URA, got {}",
+            parsed.kind
+        );
+    }
+    Ok(caller)
 }
 
 #[cfg(test)]
@@ -1631,6 +1666,44 @@ mod tests {
         assert!(
             message.contains("receipt history ability `invocation.history.list`")
                 && message.contains("canonical invocation history read path"),
+            "wrong error: {message}"
+        );
+    }
+
+    #[test]
+    fn federation_revoke_caller_must_match_active_local_daemon() {
+        let caller = canonical_federation_revoke_caller(
+            "easynet:///r/realm/device/local",
+            "easynet:///r/realm/device/local",
+        )
+        .expect("matching caller");
+
+        assert_eq!(caller, "easynet:///r/realm/device/local");
+
+        let error = canonical_federation_revoke_caller(
+            "easynet:///r/realm/device/stale",
+            "easynet:///r/realm/device/local",
+        )
+        .expect_err("stale caller must not be repaired from ambient daemon state");
+
+        let message = error.to_string();
+        assert!(
+            message.contains("does not match active local daemon"),
+            "wrong error: {message}"
+        );
+    }
+
+    #[test]
+    fn federation_revoke_caller_rejects_non_runtime_owner() {
+        let error = canonical_federation_revoke_caller(
+            "easynet:///r/realm/resource/user.alice/runtime-state/read",
+            "easynet:///r/realm/resource/user.alice/runtime-state/read",
+        )
+        .expect_err("revoke caller must be a daemon owner identity");
+
+        let message = error.to_string();
+        assert!(
+            message.contains("must be a Device or Hub URA"),
             "wrong error: {message}"
         );
     }

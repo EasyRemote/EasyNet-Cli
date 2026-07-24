@@ -285,8 +285,9 @@ fn canonicalize_remove_target_ura(ura: &str) -> anyhow::Result<String> {
 
 #[cfg(feature = "axon-pb")]
 fn invoke_revoke(target_ura: &str, reason: &str, caller_ura: &str) -> anyhow::Result<()> {
-    let _ = caller_ura;
-    crate::daemon::invocation::routing::remote_invoke::invoke_federation_revoke(target_ura, reason)
+    crate::daemon::invocation::routing::remote_invoke::invoke_federation_revoke(
+        target_ura, reason, caller_ura,
+    )
 }
 
 #[cfg(not(feature = "axon-pb"))]
