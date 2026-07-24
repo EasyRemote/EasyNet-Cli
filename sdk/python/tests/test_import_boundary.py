@@ -2,10 +2,12 @@ from pathlib import Path
 import json
 import subprocess
 import sys
+import tempfile
 import unittest
 
 import easynet_sdk
 import easynet_sdk.direct_runtime as direct_runtime
+from easynet_sdk.consumer_boundary import audit_consumer_boundary
 
 
 class ImportBoundaryTests(unittest.TestCase):
@@ -177,6 +179,18 @@ print(json.dumps({
         self.assertFalse(hasattr(direct_runtime, "invoke_pb2"))
         self.assertFalse(hasattr(direct_runtime, "invoke_pb2_grpc"))
         self.assertFalse(hasattr(direct_runtime, "types_pb2"))
+
+    def test_consumer_boundary_reports_runtime_host_session_rule(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "consumer.py"
+            source.write_text(
+                'CONTROL = "unix:///tmp/easynet-daemon.sock"\n',
+                encoding="utf-8",
+            )
+            result = audit_consumer_boundary(tmp)
+            rules = {violation.rule for violation in result.violations}
+            self.assertIn("raw_runtime_host_session", rules)
+            self.assertNotIn("raw_daemon_session", rules)
 
     def test_descriptor_ref_grammar_stays_out_of_python_runtime_core(self) -> None:
         root = Path(__file__).resolve().parents[1] / "easynet_sdk"

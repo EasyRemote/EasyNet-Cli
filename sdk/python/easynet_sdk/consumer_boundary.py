@@ -38,14 +38,14 @@ _DIRECT_RUNTIME_SYMBOLS = {
     "DirectRuntimeConnector",
     "DirectRuntimeTransport",
 }
-_RAW_DAEMON_SOCKET_MARKERS = (
+_RAW_RUNTIME_HOST_SOCKET_MARKERS = (
     "control.sock",
     "daemon.sock",
     "easynet-control.sock",
     "easynet-daemon.sock",
     "unix:///tmp/easynet",
 )
-_RAW_DAEMON_SESSION_CALLS = {
+_RAW_RUNTIME_HOST_SESSION_CALLS = {
     "grpc.insecure_channel",
     "socket.socket",
     "asyncio.open_unix_connection",
@@ -147,7 +147,7 @@ class ConsumerBoundaryAuditor:
         violations.extend(_audit_raw_ffi_markers(relative, text))
         violations.extend(_audit_raw_abi_symbols(relative, text))
         violations.extend(_audit_invocation_codec(relative, text))
-        violations.extend(_audit_raw_daemon_sessions(relative, text))
+        violations.extend(_audit_raw_runtime_host_sessions(relative, text))
         violations.extend(_audit_runtime_subprocess(relative, text))
         violations.extend(_audit_raw_ura_shape_literals(relative, text))
         violations.extend(_audit_addressing_semantics(relative, text))
@@ -436,7 +436,9 @@ def _audit_invocation_codec(path: str, text: str) -> tuple[BoundaryViolation, ..
     return tuple(violations)
 
 
-def _audit_raw_daemon_sessions(path: str, text: str) -> tuple[BoundaryViolation, ...]:
+def _audit_raw_runtime_host_sessions(
+    path: str, text: str
+) -> tuple[BoundaryViolation, ...]:
     violations: list[BoundaryViolation] = []
     try:
         tree = ast.parse(text)
@@ -446,13 +448,13 @@ def _audit_raw_daemon_sessions(path: str, text: str) -> tuple[BoundaryViolation,
     for node in ast.walk(tree):
         if id(node) in docstrings:
             continue
-        markers = sorted(_raw_daemon_session_markers(node))
+        markers = sorted(_raw_runtime_host_session_markers(node))
         if not markers:
             continue
         violations.append(
             BoundaryViolation(
                 path=path,
-                rule="raw_daemon_session",
+                rule="raw_runtime_host_session",
                 detail=", ".join(markers),
                 line=getattr(node, "lineno", 1),
             )
@@ -460,35 +462,35 @@ def _audit_raw_daemon_sessions(path: str, text: str) -> tuple[BoundaryViolation,
     return tuple(violations)
 
 
-def _raw_daemon_session_markers(node: ast.AST) -> set[str]:
+def _raw_runtime_host_session_markers(node: ast.AST) -> set[str]:
     markers: set[str] = set()
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
         markers.update(
-            marker for marker in _RAW_DAEMON_SOCKET_MARKERS if marker in node.value
+            marker for marker in _RAW_RUNTIME_HOST_SOCKET_MARKERS if marker in node.value
         )
     if isinstance(node, ast.Call):
         dotted = _dotted_name(node.func)
-        if dotted in _RAW_DAEMON_SESSION_CALLS:
+        if dotted in _RAW_RUNTIME_HOST_SESSION_CALLS:
             argument_markers: set[str] = set()
             for value in _string_constants_in_args(node.args):
                 argument_markers.update(
                     marker
-                    for marker in _RAW_DAEMON_SOCKET_MARKERS
+                    for marker in _RAW_RUNTIME_HOST_SOCKET_MARKERS
                     if marker in value
                 )
             for keyword in node.keywords:
-                argument_markers.update(_raw_daemon_markers_in_keyword(keyword))
+                argument_markers.update(_raw_runtime_host_markers_in_keyword(keyword))
             if argument_markers:
                 markers.add(dotted)
                 markers.update(argument_markers)
     return markers
 
 
-def _raw_daemon_markers_in_keyword(keyword: ast.keyword) -> set[str]:
+def _raw_runtime_host_markers_in_keyword(keyword: ast.keyword) -> set[str]:
     return {
         marker
         for value in _string_constants_in(keyword.value)
-        for marker in _RAW_DAEMON_SOCKET_MARKERS
+        for marker in _RAW_RUNTIME_HOST_SOCKET_MARKERS
         if marker in value
     }
 
