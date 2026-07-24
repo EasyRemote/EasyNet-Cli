@@ -1656,6 +1656,84 @@ for required in (
 PY
 }
 
+check_managed_skill_directory_projection_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local store="$cli_root/src/daemon/resources/skills/store.rs"
+  local list="$cli_root/src/daemon/ability/builtins/resources/skills/list.rs"
+  local publish="$cli_root/src/daemon/ability/builtins/resources/skills/publish.rs"
+  local install="$cli_root/src/daemon/ability/builtins/resources/skills/install.rs"
+  [[ -f "$store" ]] || fail "skill store source is missing: $store"
+  [[ -f "$list" ]] || fail "skill list source is missing: $list"
+  [[ -f "$publish" ]] || fail "skill publish source is missing: $publish"
+  [[ -f "$install" ]] || fail "skill install ability source is missing: $install"
+
+  "$PYTHON_BIN" - "$store" "$list" "$publish" "$install" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+store, list_src, publish, install = [
+    Path(arg).read_text(encoding="utf-8") for arg in sys.argv[1:]
+]
+store_production = store.split("\n#[cfg(test)]", 1)[0]
+list_production = list_src.split("\n#[cfg(test)]", 1)[0]
+publish_production = publish.split("\n#[cfg(test)]", 1)[0]
+install_production = install.split("\n#[cfg(test)]", 1)[0]
+
+helper = re.search(
+    r"pub\(crate\) fn managed_skill_dir_for\([^)]*\)\s*->\s*PathBuf\s*\{(?P<body>.*?)\n\}",
+    store_production,
+    re.S,
+)
+if helper is None:
+    raise SystemExit("managed_skill_directory:store_helper_missing")
+helper_body = helper.group("body")
+for required in (
+    'AgentSkillLayout::ClaudeCode => root.join(".claude").join("skills")',
+    'AgentSkillLayout::Codex => root.join(".agents").join("skills")',
+    'AgentSkillLayout::External => root.join("skills")',
+):
+    if required not in helper_body:
+        raise SystemExit(f"managed_skill_directory:helper_missing:{required}")
+for retired in (
+    'AgentSkillLayout::Codex | AgentSkillLayout::External => root.join("skills")',
+    "resolve_skill_agent_root(",
+):
+    if retired in store_production:
+        raise SystemExit(f"managed_skill_directory:store_retired:{retired}")
+for required in (
+    "resolve_skill_agent_workspace(",
+    "managed_skill_dir_for(agent_root, workspace.skill_layout())",
+    "managed_skill_dir_for(workspace.root_path(), workspace.skill_layout()).join(name)",
+):
+    if required not in store_production:
+        raise SystemExit(f"managed_skill_directory:store_missing:{required}")
+
+for name, text in (("list", list_production), ("publish", publish_production)):
+    for retired in (
+        "fn managed_skill_dir_for_layout(",
+        "fn skills_dir_for(",
+        'AgentSkillLayout::Codex | AgentSkillLayout::External => root.join("skills")',
+        'root.join("skills").join(skill_name)',
+    ):
+        if retired in text:
+            raise SystemExit(f"managed_skill_directory:{name}_retired:{retired}")
+    if "managed_skill_dir_for(" not in text:
+        raise SystemExit(f"managed_skill_directory:{name}_does_not_use_store_helper")
+
+if 'agent_root.join("skills").join("alpha")' in install_production:
+    raise SystemExit("managed_skill_directory:install_fixture_uses_retired_codex_root")
+
+for required_test, text in (
+    ("managed_skill_dir_for_codex_uses_runtime_project_skill_root", store),
+    ("managed_skill_dir_for_codex_profiles_uses_agents_project_dir", list_src),
+    ("publish_writes_codex_skill_to_runtime_project_dir", publish),
+):
+    if required_test not in text:
+        raise SystemExit(f"managed_skill_directory:missing_test:{required_test}")
+PY
+}
+
 check_resource_list_projection_boundary_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local projection="$cli_root/src/daemon/resources/projection.rs"
@@ -16195,6 +16273,51 @@ EOF
   if ( CLI_ROOT="$tmp/skill-record-projection-boundary-legacy"; check_skill_record_projection_boundary_contract ) >/dev/null 2>&1; then
     fail "self-test expected skill record projection boundary gate to fail"
   fi
+  mkdir -p "$tmp/managed-skill-directory-legacy/src/daemon/resources/skills"
+  mkdir -p "$tmp/managed-skill-directory-legacy/src/daemon/ability/builtins/resources/skills"
+  cat >"$tmp/managed-skill-directory-legacy/src/daemon/resources/skills/store.rs" <<'EOF'
+fn resolve_skill_agent_root(agent: &str, mutation: SkillMutation) -> anyhow::Result<PathBuf> {
+    Ok(root)
+}
+
+pub(crate) fn managed_skill_dir_for(root: &Path, layout: AgentSkillLayout) -> PathBuf {
+    match layout {
+        AgentSkillLayout::ClaudeCode => root.join(".claude").join("skills"),
+        AgentSkillLayout::Codex | AgentSkillLayout::External => root.join("skills"),
+    }
+}
+
+fn install_skill() {
+    let skills_dir = agent_root.join("skills");
+}
+EOF
+  cat >"$tmp/managed-skill-directory-legacy/src/daemon/ability/builtins/resources/skills/list.rs" <<'EOF'
+fn managed_skill_dir_for_layout(root: &std::path::Path, layout: AgentSkillLayout) -> std::path::PathBuf {
+    match layout {
+        AgentSkillLayout::ClaudeCode => root.join(".claude").join("skills"),
+        AgentSkillLayout::Codex | AgentSkillLayout::External => root.join("skills"),
+    }
+}
+EOF
+  cat >"$tmp/managed-skill-directory-legacy/src/daemon/ability/builtins/resources/skills/publish.rs" <<'EOF'
+fn skills_dir_for(root: &std::path::Path, layout: AgentSkillLayout) -> PathBuf {
+    match layout {
+        AgentSkillLayout::ClaudeCode => root.join(".claude").join("skills"),
+        AgentSkillLayout::Codex | AgentSkillLayout::External => root.join("skills"),
+    }
+}
+fn skill_dir_candidates_for(root: &Path, skill_name: &str) {
+    let candidate = root.join("skills").join(skill_name);
+}
+EOF
+  cat >"$tmp/managed-skill-directory-legacy/src/daemon/ability/builtins/resources/skills/install.rs" <<'EOF'
+fn remove_handler_fixture() {
+    std::fs::create_dir_all(agent_root.join("skills").join("alpha")).unwrap();
+}
+EOF
+  if ( CLI_ROOT="$tmp/managed-skill-directory-legacy"; check_managed_skill_directory_projection_contract ) >/dev/null 2>&1; then
+    fail "self-test expected managed skill directory projection gate to fail"
+  fi
   mkdir -p "$tmp/resource-list-projection-boundary-legacy/src/daemon/resources"
   mkdir -p "$tmp/resource-list-projection-boundary-legacy/src/daemon/ability/builtins/resources"
   cat >"$tmp/resource-list-projection-boundary-legacy/src/daemon/resources/mod.rs" <<'EOF'
@@ -17135,6 +17258,7 @@ EOF
   check_chat_session_index_schema_contract
   check_skill_install_record_schema_contract
   check_skill_record_projection_boundary_contract
+  check_managed_skill_directory_projection_contract
   check_resource_list_projection_boundary_contract
   check_files_store_response_projection_contract
   check_pages_management_response_projection_contract
@@ -17316,6 +17440,7 @@ check_runtime_state_kind_required_contract
 check_federation_realm_resolver_contract
 check_skill_install_record_schema_contract
 check_skill_record_projection_boundary_contract
+check_managed_skill_directory_projection_contract
 check_resource_list_projection_boundary_contract
 check_files_store_response_projection_contract
 check_pages_management_response_projection_contract

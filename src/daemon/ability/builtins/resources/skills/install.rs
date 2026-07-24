@@ -320,7 +320,8 @@ mod tests {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
         let agent_name = "skill-remove-receipt";
         let agent_root = crate::daemon::persistence::config::agents_root().join(agent_name);
-        std::fs::create_dir_all(agent_root.join("skills").join("alpha")).expect("skill dir");
+        std::fs::create_dir_all(agent_root.join(".agents").join("skills").join("alpha"))
+            .expect("skill dir");
 
         let mut registry = crate::daemon::persistence::agent_registry::AgentRegistry::default();
         let mut agent = crate::daemon::persistence::agent_registry::AgentEntry::new(

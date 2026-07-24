@@ -37,6 +37,7 @@ use crate::daemon::persistence::agent_aggregate::{
     AgentRegisteredWorkspace, AgentSkillLayout,
 };
 use crate::daemon::resources::skills::projection::{InstalledSkillProjection, SkillListResponse};
+use crate::daemon::resources::skills::store::managed_skill_dir_for;
 
 /// Skill inventory handler.
 ///
@@ -143,8 +144,7 @@ impl<'a> SkillInventoryBuilder<'a> {
         &mut self,
         workspace: &AgentRegisteredWorkspace,
     ) -> anyhow::Result<()> {
-        let skills_dir =
-            managed_skill_dir_for_layout(workspace.root_path(), workspace.skill_layout());
+        let skills_dir = managed_skill_dir_for(workspace.root_path(), workspace.skill_layout());
         if !skills_dir.exists() {
             return Ok(());
         }
@@ -303,16 +303,6 @@ impl GlobalSkillPoolCache {
             .templates_by_dir
             .get(pool_dir)
             .expect("global skill pool template inserted"))
-    }
-}
-
-fn managed_skill_dir_for_layout(
-    root: &std::path::Path,
-    layout: AgentSkillLayout,
-) -> std::path::PathBuf {
-    match layout {
-        AgentSkillLayout::ClaudeCode => root.join(".claude").join("skills"),
-        AgentSkillLayout::Codex | AgentSkillLayout::External => root.join("skills"),
     }
 }
 
@@ -522,7 +512,7 @@ mod tests {
     #[test]
     fn managed_skill_dir_for_claude_code_uses_native_project_dir_only() {
         let root = std::path::Path::new("/tmp/agent-root");
-        let dir = managed_skill_dir_for_layout(root, AgentSkillLayout::ClaudeCode);
+        let dir = managed_skill_dir_for(root, AgentSkillLayout::ClaudeCode);
         assert_eq!(dir, root.join(".claude").join("skills"));
         assert_ne!(
             dir,
@@ -532,12 +522,24 @@ mod tests {
     }
 
     #[test]
-    fn managed_skill_dir_for_codex_profiles_uses_agent_root_skills() {
+    fn managed_skill_dir_for_codex_profiles_uses_agents_project_dir() {
         let root = std::path::Path::new("/tmp/agent-root");
-        for layout in [AgentSkillLayout::Codex, AgentSkillLayout::External] {
-            let dir = managed_skill_dir_for_layout(root, layout);
-            assert_eq!(dir, root.join("skills"));
-        }
+        let dir = managed_skill_dir_for(root, AgentSkillLayout::Codex);
+        assert_eq!(dir, root.join(".agents").join("skills"));
+        assert_ne!(
+            dir,
+            root.join("skills"),
+            "codex managed skills must not use the retired root-level directory"
+        );
+    }
+
+    #[test]
+    fn managed_skill_dir_for_external_keeps_generic_skill_dir() {
+        let root = std::path::Path::new("/tmp/agent-root");
+        assert_eq!(
+            managed_skill_dir_for(root, AgentSkillLayout::External),
+            root.join("skills")
+        );
     }
 
     #[test]
@@ -689,7 +691,10 @@ mod tests {
     fn list_handler_projects_resource_ura_without_extending_install_record_schema() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
         let agent_root = crate::daemon::persistence::config::agents_root().join("claude");
-        let skill_dir = agent_root.join("skills").join("inspectable");
+        let skill_dir = agent_root
+            .join(".agents")
+            .join("skills")
+            .join("inspectable");
         std::fs::create_dir_all(skill_dir.join(".easynet")).expect("skill metadata dir");
         std::fs::write(
             skill_dir.join(".easynet").join("install.json"),

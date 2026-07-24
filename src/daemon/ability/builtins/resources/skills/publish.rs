@@ -4,9 +4,9 @@
 // File: src/daemon/ability/builtins/resources/skills/publish.rs
 // Description: Root meta-abilities that let a curator session
 //              (spawned by `mission.think`) materialise a new skill
-//              into a registered agent's skills/ directory, delete
-//              an existing one, list the agent's skills, or inspect
-//              the skill package's files. Sibling of
+//              into a registered agent runtime's managed skills
+//              directory, delete an existing one, list the agent's
+//              skills, or inspect the skill package's files. Sibling of
 //              `ability_publish_ability`; the two surfaces are the
 //              two sinks the judge picks between when its
 //              `value_kind` field is `"ability"` vs `"skill"`.
@@ -21,7 +21,7 @@
 // Skill on-disk layout (mirrors `easynet skill install`)
 // ------------------------------------------------------
 //
-//   <agent-root>/skills/<skill-name>/
+//   <agent-managed-skills-dir>/<skill-name>/
 //       SKILL.md               # the curator-authored description
 //       .easynet/
 //           install.json       # provenance: source = curator:mission.think,
@@ -45,7 +45,7 @@
 // ------------------------
 // Same as `ability.publish`/`ability.unpublish`:
 //   * publish refuses to overwrite an existing skill of the same name
-//   * unpublish hard-deletes the entire `skills/<name>/` subtree
+//   * unpublish hard-deletes the entire managed skill subtree
 //   * daemon log captures `[skill.unpublish] owner=… name=…
 //     content_hash=…` so the body can be reconstructed from any
 //     external backup
@@ -64,6 +64,7 @@ use crate::daemon::resources::skills::projection::{
     SkillPublishReceipt, SkillReadFileResponse, SkillTreeEntry, SkillTreeResponse,
     SkillUnpublishReceipt, SkillWriteFileReceipt,
 };
+use crate::daemon::resources::skills::store::managed_skill_dir_for;
 
 use super::list;
 use crate::daemon::ability::dispatch::OwnerKind;
@@ -134,7 +135,7 @@ fn publish_handler(args: Value) -> anyhow::Result<Value> {
     validate_skill_name(&skill_name)?;
     let (owner_root, layout) = resolve_owner_root_and_layout(&owner_id)?;
 
-    let skills_dir = skills_dir_for(&owner_root, layout);
+    let skills_dir = managed_skill_dir_for(&owner_root, layout);
     let skill_dir = skills_dir.join(&skill_name);
     if skill_dir.exists() {
         anyhow::bail!(
@@ -233,7 +234,7 @@ fn unpublish_handler(args: Value) -> anyhow::Result<Value> {
     let (owner_id, skill_name) = parse_unpublish_args(&args)?;
     validate_skill_name(&skill_name)?;
     let (owner_root, layout) = resolve_owner_root_and_layout(&owner_id)?;
-    let skill_dir = skills_dir_for(&owner_root, layout).join(&skill_name);
+    let skill_dir = managed_skill_dir_for(&owner_root, layout).join(&skill_name);
 
     if !skill_dir.exists() {
         anyhow::bail!(
@@ -576,13 +577,9 @@ fn parse_skill_file_args(
     Ok((owner, name, path))
 }
 
-/// Resolve the owner agent's root path and skill layout. Needed
-/// by the publish path so we can pick the right SKILL.md install
-/// location: Claude Code looks for project-local skills under
-/// `<cwd>/.claude/skills/<name>/`, not `<cwd>/skills/<name>/`.
-/// Codex has no native skill concept; for codex agents we still
-/// use `<cwd>/skills/` so EasyNet's own listing surfaces the
-/// artifact, but we know the LLM won't auto-load it.
+/// Resolve the owner agent's root path and skill layout. Directory
+/// projection is delegated to the daemon skill store so publish, list,
+/// install, upgrade, and remove cannot drift by runtime.
 fn resolve_owner_root_and_layout(owner_id: &str) -> anyhow::Result<(PathBuf, AgentSkillLayout)> {
     let owner =
         AgentAggregateRepository::load_registered_agent_workspace(owner_id, "skill.publish")?;
@@ -596,49 +593,12 @@ fn resolve_owner_root_and_layout(owner_id: &str) -> anyhow::Result<(PathBuf, Age
     Ok((root, owner.skill_layout()))
 }
 
-/// Pick the on-disk skills directory for a given skill layout. This
-/// is the LOAD-BEARING piece of skill discovery: Claude Code's
-/// skill loader scans `<cwd>/.claude/skills/<name>/SKILL.md`. If
-/// EasyNet writes to `<cwd>/skills/<name>/SKILL.md` instead, the
-/// skill is published but invisible to the running LLM.
-///
-/// History (2026-04-29): an earlier version of skill.publish wrote
-/// every skill to `<root>/skills/`. The skill artifact existed,
-/// `easynet skill list` saw it, `manifests_for` could enumerate
-/// the directory — but Claude Code never picked it up because the
-/// running `claude` subprocess was looking at
-/// `<cwd>/.claude/skills/` per Anthropic's project-local
-/// convention. Real e2e (mission.think → curator → skill.publish
-/// → restart daemon → agent send) showed `skills_loaded` listing
-/// only the EasyNet ability shims, never the freshly-published
-/// skill. The fix: route claude-code agents to `.claude/skills/`.
-///
-/// Codex has no equivalent project-local skill convention; we
-/// keep its skills under `<root>/skills/` for EasyNet's audit
-/// path, knowing the codex CLI won't auto-load them. A future
-/// codex-skill convention (if one ships upstream) would plug in
-/// here without changing call sites.
-fn skills_dir_for(root: &std::path::Path, layout: AgentSkillLayout) -> PathBuf {
-    match layout {
-        AgentSkillLayout::ClaudeCode => root.join(".claude").join("skills"),
-        AgentSkillLayout::Codex | AgentSkillLayout::External => root.join("skills"),
-    }
-}
-
 fn skill_dir_candidates_for(
     root: &Path,
     layout: AgentSkillLayout,
     skill_name: &str,
 ) -> anyhow::Result<Vec<PathBuf>> {
-    let mut candidates = match layout {
-        AgentSkillLayout::ClaudeCode => vec![
-            root.join(".claude").join("skills").join(skill_name),
-            root.join("skills").join(skill_name),
-        ],
-        AgentSkillLayout::Codex | AgentSkillLayout::External => {
-            vec![root.join("skills").join(skill_name)]
-        }
-    };
+    let mut candidates = vec![managed_skill_dir_for(root, layout).join(skill_name)];
     if let Some(global_dir) =
         crate::daemon::resources::skills::store::global_skill_dir_for(layout, skill_name)?
     {
@@ -1010,13 +970,14 @@ pub fn write_file_input_schema() -> Value {
 }
 
 pub fn publish_description() -> &'static str {
-    "Publish a curator-authored skill into a registered agent's skills/<name>/ directory. \
+    "Publish a curator-authored skill into a registered Agent runtime's managed skills directory. \
      The skill body becomes SKILL.md; provenance is recorded in .easynet/install.json. \
      Refuses to overwrite an existing skill — call skill.unpublish first to replace."
 }
 
 pub fn unpublish_description() -> &'static str {
-    "Remove a skill from an agent's skills/ directory. Hard delete of the skill subtree; \
+    "Remove a skill from a registered Agent runtime's managed skills directory. \
+     Hard delete of the skill subtree; \
      daemon log records the deleted skill's content hash for recovery from backup."
 }
 
@@ -1050,6 +1011,14 @@ mod tests {
     use crate::daemon::persistence::agent_registry::{AgentEntry, AgentRegistry, AgentType};
 
     fn materialise_agent(tag: &str, _guard: &HomeGuard) -> String {
+        materialise_agent_with_runtime(tag, RuntimeKind::ClaudeCode, AgentType::ClaudeCode)
+    }
+
+    fn materialise_agent_with_runtime(
+        tag: &str,
+        runtime: RuntimeKind,
+        agent_type: AgentType,
+    ) -> String {
         let pid = std::process::id();
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -1057,7 +1026,7 @@ mod tests {
             .unwrap_or(0);
         let name = format!("test-agent-{tag}-{pid}-{nanos}");
         let agent_root = crate::daemon::persistence::config::agents_root().join(&name);
-        let spec = AgentSpec::new(&name, RuntimeKind::ClaudeCode);
+        let spec = AgentSpec::new(&name, runtime);
         let _ = AgentDirectory::create(
             &Location::Local {
                 root: agent_root.clone(),
@@ -1066,7 +1035,7 @@ mod tests {
         )
         .unwrap();
         let mut registry = agents::load_agents().unwrap_or_else(|_| AgentRegistry::default());
-        let mut entry = AgentEntry::new(AgentType::ClaudeCode, None);
+        let mut entry = AgentEntry::new(agent_type, None);
         entry.root_path = Some(agent_root.clone());
         registry.agents.insert(name.clone(), entry);
         agents::save_agents(&registry).unwrap();
@@ -1105,6 +1074,34 @@ mod tests {
         let body = std::fs::read_to_string(p.join(".easynet").join("install.json")).unwrap();
         assert!(body.contains("\"kind\": \"curator\""));
         assert!(body.contains("mission-think-001"));
+    }
+
+    #[test]
+    fn publish_writes_codex_skill_to_runtime_project_dir() {
+        let _g = HomeGuard::new();
+        let name =
+            materialise_agent_with_runtime("codex-writes", RuntimeKind::Codex, AgentType::Codex);
+        let res = publish_handler(json!({
+            "owner_agent_id": name,
+            "skill_name": "codex-visible",
+            "skill_md": "# Codex Visible",
+        }))
+        .expect("publish ok");
+        let skill_dir = PathBuf::from(res["skill_dir"].as_str().unwrap());
+        assert!(
+            skill_dir.ends_with(".agents/skills/codex-visible"),
+            "codex skills must land in the runtime project skill root: {}",
+            skill_dir.display()
+        );
+        assert!(skill_dir.join("SKILL.md").exists());
+        assert!(
+            !crate::daemon::persistence::config::agents_root()
+                .join(&name)
+                .join("skills")
+                .join("codex-visible")
+                .exists(),
+            "codex publish must not leave a retired root-level managed skill"
+        );
     }
 
     #[test]

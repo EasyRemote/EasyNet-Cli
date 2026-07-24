@@ -11,16 +11,16 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::daemon::persistence::agent_aggregate::{
-    AgentAggregateRepository, AgentRegisteredAgentLoadError, AgentRegisteredWorkspaceLookupError,
-    AgentSkillLayout,
+    AgentAggregateRepository, AgentRegisteredAgentLoadError, AgentRegisteredWorkspace,
+    AgentRegisteredWorkspaceLookupError, AgentSkillLayout,
 };
 use crate::daemon::persistence::config;
 
 const GLOBAL_SKILL_OWNER_PREFIX: &str = "global:";
 
 /// The normalised install record persisted at
-/// `<agent-root>/skills/<name>/.easynet/install.json`. One file per
-/// installed skill; the file is the source of truth for `list` /
+/// `<agent-managed-skills-dir>/<name>/.easynet/install.json`. One file
+/// per installed skill; the file is the source of truth for `list` /
 /// `upgrade` / `remove`.
 ///
 /// Matches the backend's `types.InstalledSkill` shape (minus
@@ -107,9 +107,9 @@ impl SkillSource {
 }
 
 /// Pure install helper: fetches the source, atomically moves into
-/// the agent's skills/ dir, writes the install record, and returns
-/// it. No stdout, no CLI dep. Used by `run_install` (CLI) and
-/// `skill.install` ability (daemon ability dispatch).
+/// the agent runtime's managed skills dir, writes the install record,
+/// and returns it. No stdout, no CLI dep. Used by `run_install` (CLI)
+/// and `skill.install` ability (daemon ability dispatch).
 ///
 /// `pub(crate)` because the only callers are in this crate
 /// (run_install in this file + the skill.install system ability
@@ -136,7 +136,8 @@ pub(crate) fn install_skill(
         ..parsed
     };
 
-    let agent_root = resolve_skill_agent_root(agent, SkillMutation::Install)?;
+    let workspace = resolve_skill_agent_workspace(agent, SkillMutation::Install)?;
+    let agent_root = workspace.root_path();
     if !agent_root.exists() {
         anyhow::bail!(
             "agent '{}' has no on-disk root at {}",
@@ -145,7 +146,7 @@ pub(crate) fn install_skill(
         );
     }
 
-    let skills_dir = agent_root.join("skills");
+    let skills_dir = managed_skill_dir_for(agent_root, workspace.skill_layout());
     fs::create_dir_all(&skills_dir)?;
 
     // Workdir wrapped in an RAII guard so it's removed on every
@@ -662,8 +663,10 @@ pub(crate) fn upgrade_skill(
     agent: &str,
     target_ref: Option<&str>,
 ) -> anyhow::Result<InstallRecord> {
-    let agent_root = resolve_skill_agent_root(agent, SkillMutation::Upgrade)?;
-    let skill_dir = agent_root.join("skills").join(name);
+    let workspace = resolve_skill_agent_workspace(agent, SkillMutation::Upgrade)?;
+    let agent_root = workspace.root_path();
+    let skills_dir = managed_skill_dir_for(agent_root, workspace.skill_layout());
+    let skill_dir = skills_dir.join(name);
     let record_path = skill_dir.join(".easynet").join("install.json");
     let existing = read_install_record(&record_path)?;
 
@@ -679,9 +682,7 @@ pub(crate) fn upgrade_skill(
     new_source.ref_ = resolved_target_ref.clone();
     let fetch = fetch_github(&new_source, workdir.path())?;
 
-    let backup = agent_root
-        .join("skills")
-        .join(format!(".{}-backup-{}", name, rand_suffix()));
+    let backup = skills_dir.join(format!(".{}-backup-{}", name, rand_suffix()));
     fs::rename(&skill_dir, &backup)?;
     let result = (|| -> anyhow::Result<InstallRecord> {
         if fs::rename(&fetch.unpacked, &skill_dir).is_err() {
@@ -738,8 +739,9 @@ pub(crate) fn upgrade_skill(
 ///     idempotent at the ability layer if desired; we surface the
 ///     distinction here)
 pub(crate) fn remove_skill(name: &str, agent: &str) -> anyhow::Result<()> {
-    let agent_root = resolve_skill_agent_root(agent, SkillMutation::Remove)?;
-    let skill_dir = agent_root.join("skills").join(name);
+    let workspace = resolve_skill_agent_workspace(agent, SkillMutation::Remove)?;
+    let skill_dir =
+        managed_skill_dir_for(workspace.root_path(), workspace.skill_layout()).join(name);
     if !skill_dir.exists() {
         anyhow::bail!("skill '{}' is not installed on agent '{}'", name, agent);
     }
@@ -775,13 +777,31 @@ impl SkillMutation {
     }
 }
 
-fn resolve_skill_agent_root(agent: &str, mutation: SkillMutation) -> anyhow::Result<PathBuf> {
+fn resolve_skill_agent_workspace(
+    agent: &str,
+    mutation: SkillMutation,
+) -> anyhow::Result<AgentRegisteredWorkspace> {
     match AgentAggregateRepository::load_registered_agent_workspace(agent, mutation.operation()) {
-        Ok(workspace) => Ok(workspace.root_path().to_path_buf()),
+        Ok(workspace) => Ok(workspace),
         Err(AgentRegisteredAgentLoadError::Lookup(
             AgentRegisteredWorkspaceLookupError::Missing { .. },
         )) => Err(mutation.missing_owner_error(agent)),
         Err(error) => Err(error.into_source_or_self()),
+    }
+}
+
+/// Canonical managed skill directory for an Agent runtime workspace.
+///
+/// This is the single projection used by `skill.install`,
+/// `skill.publish`, `skill.list`, `skill.upgrade`, and `skill.remove`.
+/// Runtime-specific loaders are the authority: Claude Code reads
+/// `.claude/skills`, Codex/Codex App Server read `.agents/skills`, and only
+/// External runtimes keep the generic `<root>/skills` convention.
+pub(crate) fn managed_skill_dir_for(root: &Path, layout: AgentSkillLayout) -> PathBuf {
+    match layout {
+        AgentSkillLayout::ClaudeCode => root.join(".claude").join("skills"),
+        AgentSkillLayout::Codex => root.join(".agents").join("skills"),
+        AgentSkillLayout::External => root.join("skills"),
     }
 }
 
@@ -980,7 +1000,7 @@ mod tests {
     use crate::daemon::persistence::agent_registry as agents;
 
     #[test]
-    fn resolve_skill_agent_root_projects_registered_workspace() {
+    fn resolve_skill_agent_workspace_projects_registered_workspace() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
         let root = config::home_dir().join("agents").join("alice");
         let mut entry = agents::AgentEntry::new(agents::AgentType::ClaudeCode, None);
@@ -989,14 +1009,14 @@ mod tests {
         registry.agents.insert("alice".to_string(), entry);
         agents::save_agents(&registry).expect("save registry");
 
-        assert_eq!(
-            resolve_skill_agent_root("alice", SkillMutation::Install).expect("resolve workspace"),
-            root
-        );
+        let workspace =
+            resolve_skill_agent_workspace("alice", SkillMutation::Install).expect("workspace");
+        assert_eq!(workspace.root_path(), root);
+        assert_eq!(workspace.skill_layout(), AgentSkillLayout::ClaudeCode);
     }
 
     #[test]
-    fn resolve_skill_agent_root_preserves_command_specific_missing_owner_errors() {
+    fn resolve_skill_agent_workspace_preserves_command_specific_missing_owner_errors() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
         for (mutation, expected) in [
             (
@@ -1006,10 +1026,24 @@ mod tests {
             (SkillMutation::Upgrade, "agent 'missing' not registered"),
             (SkillMutation::Remove, "agent 'missing' not registered"),
         ] {
-            let err =
-                resolve_skill_agent_root("missing", mutation).expect_err("missing owner must fail");
+            let err = resolve_skill_agent_workspace("missing", mutation)
+                .expect_err("missing owner must fail");
             assert!(err.to_string().contains(expected), "wrong error: {err}");
         }
+    }
+
+    #[test]
+    fn managed_skill_dir_for_codex_uses_runtime_project_skill_root() {
+        let root = std::path::Path::new("/tmp/agent-root");
+        assert_eq!(
+            managed_skill_dir_for(root, AgentSkillLayout::Codex),
+            root.join(".agents").join("skills")
+        );
+        assert_ne!(
+            managed_skill_dir_for(root, AgentSkillLayout::Codex),
+            root.join("skills"),
+            "codex managed installs must not land in the retired audit-only root"
+        );
     }
 
     #[test]

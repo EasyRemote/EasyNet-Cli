@@ -552,3 +552,56 @@ architecture rather than add feature surface.
   - `tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
   - `tools/scripts/check-architecture-convergence.sh`
   - `git diff --check`
+
+## Iteration 15 candidate policy
+
+- Focus on installed-skill directory ownership. codegraph/rg found that Mission
+  workspace seeding writes Codex project skills to `.agents/skills`, while
+  `skill.publish`, `skill.list`, and `easynet skill install/upgrade/remove`
+  still use `<agent-root>/skills` for Codex agents.
+- The root abstraction problem is duplicated directory projection for one
+  runtime capability. A skill package is an Agent-runtime resource; its managed
+  directory must be derived once from the Agent runtime layout, not independently
+  by workspace boot, publish, list, and install code.
+- The intended cutover is to move managed skill directory selection into the
+  daemon skill store, make Claude Code map to `.claude/skills`, Codex/Codex App
+  Server map to `.agents/skills`, and keep only External runtimes on the
+  generic `<root>/skills` path.
+- This removes the legacy Codex audit-only `<root>/skills` path from managed
+  runtime skills. The existing global pools remain runtime-specific
+  (`~/.claude/skills`, `~/.agents/skills`) and are not a fallback for managed
+  per-agent installs.
+- Verification must prove publish/list/install/upgrade/remove all consume the
+  shared directory helper and that SPEC v2 rejects reintroducing Codex managed
+  skills under `<root>/skills`.
+
+## Iteration 15 decision log
+
+- Added `daemon::resources::skills::store::managed_skill_dir_for` as the single
+  managed skill directory projection for registered Agent runtime workspaces:
+  Claude Code → `.claude/skills`, Codex/Codex App Server → `.agents/skills`,
+  External → `<root>/skills`.
+- Refactored `skill.install`, `skill.upgrade`, and `skill.remove` to resolve
+  an `AgentRegisteredWorkspace` once and derive the managed skill directory
+  through the shared helper instead of hardcoding `<agent-root>/skills`.
+- Refactored `skill.publish`, `skill.unpublish`, `skill.tree`,
+  `skill.read_file`, and `skill.write_file` to use the shared helper and
+  removed the legacy Claude `<root>/skills/<name>` candidate fallback.
+- Refactored `skill.list` to consume the shared helper instead of maintaining
+  its own `managed_skill_dir_for_layout` mapping.
+- Added focused tests proving Codex managed skills now land/read from
+  `.agents/skills` and never from the retired root-level managed directory.
+- Updated architecture/SPEC gates to enforce the new workspace+layout helper
+  boundary and added a SPEC v2 negative fixture for the retired Codex
+  `<root>/skills` projection.
+- Verification passed:
+  - `cargo check -q`
+  - `cargo test -q daemon::resources::skills::store::tests`
+  - `cargo test -q daemon::ability::builtins::resources::skills::list::tests`
+  - `cargo test -q daemon::ability::builtins::resources::skills::publish::tests`
+  - `cargo test -q daemon::ability::builtins::resources::skills::install::tests`
+  - `cargo fmt --check`
+  - `tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - `tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  - `tools/scripts/check-architecture-convergence.sh`
+  - `git diff --check`

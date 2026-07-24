@@ -5269,8 +5269,8 @@ if skill_store.exists():
     production_text = text.split("#[cfg(test)]", 1)[0]
     for token, detail in (
         (
-            "fn resolve_skill_agent_root(",
-            "shared skill mutations must centralize registered workspace resolution",
+            "fn resolve_skill_agent_workspace(",
+            "shared skill mutations must centralize registered workspace and layout resolution",
         ),
         (
             "AgentAggregateRepository::load_registered_agent_workspace(",
