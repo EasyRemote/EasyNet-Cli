@@ -125,6 +125,33 @@ final class AuthoritySupport {
     }
   }
 
+  static boolean sessionAuthorityAdmitsSubject(SessionAuthority authority, String subjectURA) {
+    if (authority == null || subjectURA == null) {
+      return false;
+    }
+    String subject = subjectURA.trim();
+    if (authority.subjectURA().trim().equals(subject)) {
+      return true;
+    }
+    ResourceSubject resource = canonicalResourceSubject(subject);
+    if (resource == null) {
+      return false;
+    }
+    String ownerUserID = authority.sessionOwnerUserID().trim();
+    if (ownerUserID.isBlank()) {
+      return false;
+    }
+    if (resource.ownerID.equals("user." + ownerUserID)) {
+      return true;
+    }
+    if (!resource.ownerID.startsWith("agent.")) {
+      return false;
+    }
+    String agentOwner = resource.ownerID.substring("agent.".length());
+    int dot = agentOwner.indexOf('.');
+    return dot > 0 && agentOwner.substring(0, dot).equals(ownerUserID);
+  }
+
   private static void rejectAllZero(String value, String field) {
     if (containsAllZeroPrincipal(value)) {
       throw invalid(field + " must not be all-zero");
@@ -245,7 +272,45 @@ final class AuthoritySupport {
     return new AuthoritySubject("session", ownerUserID, authoritySessionID);
   }
 
+  private static ResourceSubject canonicalResourceSubject(String subjectURA) {
+    if (subjectURA == null || containsAllZeroPrincipal(subjectURA)) {
+      return null;
+    }
+    String raw = subjectURA.trim();
+    String prefix = "easynet:///r/";
+    if (!raw.startsWith(prefix)) {
+      return null;
+    }
+    String rest = raw.substring(prefix.length());
+    int slash = rest.indexOf('/');
+    if (slash <= 0) {
+      return null;
+    }
+    String path = rest.substring(slash + 1);
+    String resourcePrefix = "resource/";
+    if (!path.startsWith(resourcePrefix)) {
+      return null;
+    }
+    String resource = path.substring(resourcePrefix.length());
+    int pathSlash = resource.indexOf('/');
+    if (pathSlash <= 0 || pathSlash == resource.length() - 1) {
+      return null;
+    }
+    String ownerID = resource.substring(0, pathSlash).trim();
+    String resourcePath = resource.substring(pathSlash + 1).trim();
+    if (ownerID.isEmpty()
+        || ownerID.contains("/")
+        || resourcePath.isEmpty()
+        || resourcePath.startsWith("/")
+        || resourcePath.contains("//")) {
+      return null;
+    }
+    return new ResourceSubject(ownerID, resourcePath);
+  }
+
   private record AuthoritySubject(String kind, String ownerUserID, String sessionID) {}
+
+  private record ResourceSubject(String ownerID, String path) {}
 
   record DecodedAuthority(Map<String, Object> payload, String signatureBase64) {}
 }

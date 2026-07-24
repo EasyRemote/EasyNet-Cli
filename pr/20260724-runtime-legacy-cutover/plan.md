@@ -99,3 +99,31 @@ architecture rather than add feature surface.
 - Verification must prove that hints cannot change call mode or descriptor refs,
   and that wire payloads with contradictory hints fail closed instead of being
   interpreted through a legacy transport selector.
+
+## Iteration 3 candidate policy
+
+- Focus on SDK receipt/proof-fact parity because public product flows rely on
+  SDK-side validation before and after daemon submission.
+- Prefer removal of language-local canonicalizers that can accept weaker receipt
+  or authority facts than the canonical runtime model.
+- The first audit target is Java receipt/proof-fact handling. If Java accepts a
+  receipt or authority shape that Go/Python/Rust reject, that is a cross-language
+  compatibility fork, not a product feature.
+- Verification must include the touched language tests, API inventory gates when
+  SDK public surface changes, and the canonical runtime convergence gate.
+
+## Iteration 3 decision log
+
+- The Java receipt proof-fact constructor already calls
+  `RuntimeReceiptProofFacts.validate(raw)`, but codegraph exposed a separate
+  authority subject predicate inside `InvocationAuthorityBindingValidator`.
+- That predicate parsed the invocation subject by substring search for
+  `/resource/`, which can admit path-shaped strings without proving a canonical
+  URA resource owner projection. Go and Python already route this through
+  structured URA parsing.
+- The selected cutover is to move Java session-authority subject admission into
+  `AuthoritySupport` and remove the validator-local parser. The helper now
+  admits exact subject equality or canonical resource URAs owned by the session
+  user / that user's agent, and rejects path-substring impostors.
+- This keeps the public Java API unchanged while converging Java onto the same
+  SDK authority model as Go/Python.

@@ -10774,9 +10774,18 @@ for needle, label in required_validator.items():
 required_support = {
     "static String authorityMetadataValue": "authority_metadata_value_missing",
     "static SDKError authorityBindingError": "authority_binding_error_missing",
+    "static boolean sessionAuthorityAdmitsSubject": "shared_session_subject_predicate_missing",
+    "canonicalResourceSubject": "structured_resource_subject_parser_missing",
+    "private record ResourceSubject": "resource_subject_value_object_missing",
 }
 for needle, label in required_support.items():
     if needle not in support:
+        raise SystemExit(f"java_invocation_authority_binding:{label}")
+for forbidden, label in {
+    "resourceOwnerID": "validator_owns_resource_owner_parser",
+    'String marker = "/resource/"': "validator_owns_resource_path_substring_parser",
+}.items():
+    if forbidden in validator:
         raise SystemExit(f"java_invocation_authority_binding:{label}")
 
 required_tests = {
@@ -10787,6 +10796,8 @@ required_tests = {
     "session authority subject does not admit invocation subject_ura": "session_subject_test_missing",
     'payload.put("subject_ura", CALLEE)': "tuple_bound_delegation_fixture_missing",
     'payload.put("scopes", List.of("observe.health"))': "tuple_bound_scope_fixture_missing",
+    "not-a-ura/resource/user.alice/runtime-state/read": "path_substring_subject_regression_missing",
+    "easynet:///r/example/device/dev-a/resource/user.alice/runtime-state/read": "nested_resource_path_subject_regression_missing",
 }
 for needle, label in required_tests.items():
     if needle not in tests:

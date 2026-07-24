@@ -81,7 +81,7 @@ final class InvocationAuthorityBindingValidator {
         ErrorCode.AUTHORITY_DENIED,
         "session authority callee does not match invocation callee_ura");
     require(
-        sessionAuthorityAdmitsSubject(authority, tuple.subject()),
+        AuthoritySupport.sessionAuthorityAdmitsSubject(authority, tuple.subject()),
         ErrorCode.AUTHORITY_SUBJECT_MISMATCH,
         "session authority subject does not admit invocation subject_ura");
     require(
@@ -150,42 +150,6 @@ final class InvocationAuthorityBindingValidator {
       return !prefix.isBlank() && cleanValue.startsWith(prefix);
     }
     return cleanPattern.equals(cleanValue);
-  }
-
-  private static boolean sessionAuthorityAdmitsSubject(
-      SessionAuthority authority, String subjectURA) {
-    String subject = subjectURA.trim();
-    if (authority.subjectURA().trim().equals(subject)) {
-      return true;
-    }
-    String owner = resourceOwnerID(subject);
-    if (owner.isBlank()) {
-      return false;
-    }
-    String ownerUserID = authority.sessionOwnerUserID().trim();
-    if (ownerUserID.isBlank()) {
-      return false;
-    }
-    if (owner.equals("user." + ownerUserID)) {
-      return true;
-    }
-    if (!owner.startsWith("agent.")) {
-      return false;
-    }
-    String rest = owner.substring("agent.".length());
-    int dot = rest.indexOf('.');
-    return dot > 0 && rest.substring(0, dot).equals(ownerUserID);
-  }
-
-  private static String resourceOwnerID(String ura) {
-    String marker = "/resource/";
-    int index = ura.indexOf(marker);
-    if (index < 0) {
-      return "";
-    }
-    String rest = ura.substring(index + marker.length());
-    int slash = rest.indexOf('/');
-    return (slash < 0 ? rest : rest.substring(0, slash)).trim();
   }
 
   private record AbilityView(String wire, String abilityURA, String publicName) {

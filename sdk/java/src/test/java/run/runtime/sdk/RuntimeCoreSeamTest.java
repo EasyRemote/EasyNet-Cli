@@ -530,6 +530,33 @@ public final class RuntimeCoreSeamTest {
         ErrorCode.AUTHORITY_SUBJECT_MISMATCH,
         "session authority subject does not admit invocation subject_ura",
         () -> completeBuilder().authorityMetadata(session.metadata()).inspect());
+
+    SessionAuthority scopedSession =
+        SessionAuthority.fromMetadata(sessionMetadataValue(List.of("observe.health")));
+    completeBuilder()
+        .subject("easynet:///r/example/resource/user.alice/runtime-state/read")
+        .authorityMetadata(scopedSession.metadata())
+        .inspect();
+    completeBuilder()
+        .subject("easynet:///r/example/resource/agent.alice.sdk/runtime-state/read")
+        .authorityMetadata(scopedSession.metadata())
+        .inspect();
+    expectSDKError(
+        ErrorCode.AUTHORITY_SUBJECT_MISMATCH,
+        "session authority subject does not admit invocation subject_ura",
+        () ->
+            completeBuilder()
+                .subject("not-a-ura/resource/user.alice/runtime-state/read")
+                .authorityMetadata(scopedSession.metadata())
+                .inspect());
+    expectSDKError(
+        ErrorCode.AUTHORITY_SUBJECT_MISMATCH,
+        "session authority subject does not admit invocation subject_ura",
+        () ->
+            completeBuilder()
+                .subject("easynet:///r/example/device/dev-a/resource/user.alice/runtime-state/read")
+                .authorityMetadata(scopedSession.metadata())
+                .inspect());
   }
 
   private static void authorityMetadataRejectsAllZeroSessionOwners() {
@@ -852,6 +879,10 @@ public final class RuntimeCoreSeamTest {
   }
 
   private static String sessionMetadataValue() {
+    return sessionMetadataValue(List.of("invoke"));
+  }
+
+  private static String sessionMetadataValue(List<String> scopes) {
     Map<String, Object> payload = new LinkedHashMap<>();
     payload.put("issuer_ura", CALLER);
     payload.put("session_id", "session-1");
@@ -860,7 +891,7 @@ public final class RuntimeCoreSeamTest {
     payload.put("callee_ura", CALLEE);
     payload.put("subject_ura", "easynet:///r/example/user/alice");
     payload.put("audience", CALLEE);
-    payload.put("scopes", List.of("invoke"));
+    payload.put("scopes", scopes);
     payload.put("allowed_actions", List.of("invoke"));
     payload.put("allowed_followup_abilities", List.of("observe.health"));
     payload.put("issued_at_ms", 10);
