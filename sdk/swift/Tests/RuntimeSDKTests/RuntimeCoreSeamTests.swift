@@ -118,6 +118,8 @@ final class RuntimeCoreSeamTests: XCTestCase {
         )
         let signed = try prepared.signWithCallerSignature(signature)
         XCTAssertTrue(signed.submitReady())
+        XCTAssertEqual(signed.policy?.mode, "provider_managed_signing")
+        XCTAssertEqual(signed.policy?.signerId, "policy-signer-1")
         let handle = try await signed.submit()
         XCTAssertFalse(handle.terminal)
         let awaited = try await runtime.awaitResult(handle)
@@ -129,7 +131,9 @@ final class RuntimeCoreSeamTests: XCTestCase {
         XCTAssertTrue(events.terminal)
         try await runtime.closeHandle(handle)
         let submittedSigner = await transport.submittedSigner()
-        XCTAssertEqual(submittedSigner, "caller-key-1")
+        XCTAssertEqual(submittedSigner, "policy-signer-1")
+        let submittedPolicyRef = await transport.submittedPolicyRef()
+        XCTAssertEqual(submittedPolicyRef, "policy/local")
         let forged = try InvocationHandle.fromJSON(
             Data(#"{"handle_id":7,"state":"Running","terminal":false}"#.utf8)
         )
@@ -882,6 +886,7 @@ actor MemoryHealthTransport: HealthTransport, DiagnosticsTransport {
 actor MemoryRuntimeTransport: RuntimeTransport {
     private let descriptor: String
     private var signer = ""
+    private var policyRef = ""
     private var eventHandleId: Int64 = 7
     private var openedBidi = 0
 
@@ -924,6 +929,12 @@ actor MemoryRuntimeTransport: RuntimeTransport {
                     "canonical_bytes_base64": "Y2Fub25pY2Fs",
                     "args_digest_hex": String(repeating: "a", count: 64),
                     "descriptor_ref": descriptor,
+                    "signer_policy": [
+                        "mode": "provider_managed_signing",
+                        "signer_id": "policy-signer-1",
+                        "policy_ref": "policy/local",
+                        "expires_at_unix_ms": 4_102_444_800_000,
+                    ],
                     "expires_at_unix_ms": 4_102_444_800_000,
                 ],
                 "descriptor_ref": descriptor,
@@ -940,6 +951,8 @@ actor MemoryRuntimeTransport: RuntimeTransport {
     func submitSigned(_ signedJSON: Data) throws -> Data {
         let signed = try object(signedJSON)
         signer = signed["signer_id"] as? String ?? ""
+        let policy = signed["policy"] as? [String: Any]
+        policyRef = policy?["policy_ref"] as? String ?? ""
         return try JSONSerialization.data(
             withJSONObject: ["handle_id": 7, "state": "Running", "terminal": false],
             options: [.sortedKeys]
@@ -1008,6 +1021,10 @@ actor MemoryRuntimeTransport: RuntimeTransport {
 
     func submittedSigner() -> String {
         signer
+    }
+
+    func submittedPolicyRef() -> String {
+        policyRef
     }
 
     func setEventHandleId(_ handleId: Int64) {

@@ -150043,6 +150043,10 @@
           "sha256": "3b5dd25667e6bcf7f2900d237167127e56e5302e2d8f05acffa097191388e6a7"
         },
         {
+          "item": "SignerPolicy",
+          "sha256": "1f401eb397431af21bdf11c5f997aa60797538565064d5765c8fbc44190677f6"
+        },
+        {
           "item": "SigningMaterial",
           "sha256": "a6a37079f10bda50d1564bbd18de6fedcb8b60098e332d22e1d80c030601be73"
         },
@@ -150099,8 +150103,12 @@
           "sha256": "37476009c337a225a14e647fe5f3e2e56a934a26973f003848c59892f618ae2d"
         },
         {
-          "item": "SignedInvocation.init(prepared:signature:signerId:)",
-          "sha256": "79e5a44f473a30272386dfeba9eccca37a48e81f8ae3d656195b7a3829f68daf"
+          "item": "SignedInvocation.init(prepared:signature:signerId:policy:)",
+          "sha256": "e3146e9f2fcda2d56897a00ec7b082fa2cbf1ac89443f9757c863ce2b732646b"
+        },
+        {
+          "item": "SignedInvocation.policy",
+          "sha256": "2591e28c24347cd4610dfa7c7206d16e8c2d2501df96f89d35936ceccaf1ebf2"
         },
         {
           "item": "SignedInvocation.prepared",
@@ -150121,6 +150129,30 @@
         {
           "item": "SignedInvocation.submitReady()",
           "sha256": "6de8a1978b4dcd6d1a5f127bd07b1d984cfcce9a5f08fe8dae9900dfe4c501ae"
+        },
+        {
+          "item": "SignerPolicy.!=(_:_:)",
+          "sha256": "8287c8f5ecc62f6e80896cc022fc3def5f567eb7942428762c69fa7cc1c91580"
+        },
+        {
+          "item": "SignerPolicy.expiresAtUnixMS",
+          "sha256": "1413c956cb4b8e56107835418405a08369050336a8e002d19a32ac738c6b6520"
+        },
+        {
+          "item": "SignerPolicy.init(mode:signerId:policyRef:expiresAtUnixMS:)",
+          "sha256": "7202d104d5d58a5b025cede777b8b6fa917a716c05d1801d03566f2fdc705aeb"
+        },
+        {
+          "item": "SignerPolicy.mode",
+          "sha256": "ec8f0a4e89ba9dac6445f99c918ece795e6d256ebf487756e8379b707e225037"
+        },
+        {
+          "item": "SignerPolicy.policyRef",
+          "sha256": "d87131ec668649e71912a97d28fdfdf92f5ec550a3b46f6d29b229740a89b883"
+        },
+        {
+          "item": "SignerPolicy.signerId",
+          "sha256": "f1db2e84a00a7278a073eb7113152049463c6cfb3195bcd79b78eea39ec3cb88"
         },
         {
           "item": "SigningMaterial.!=(_:_:)",
@@ -150147,8 +150179,12 @@
           "sha256": "1413c956cb4b8e56107835418405a08369050336a8e002d19a32ac738c6b6520"
         },
         {
-          "item": "SigningMaterial.init(algorithm:canonicalBytesBase64:argsDigestHex:descriptorRef:expiresAtUnixMS:)",
-          "sha256": "db07ce6d49668098388aed34ecb2d6faefcdbc6e3373648cadc84408760119e4"
+          "item": "SigningMaterial.init(algorithm:canonicalBytesBase64:argsDigestHex:descriptorRef:expiresAtUnixMS:signerPolicy:)",
+          "sha256": "36b40fa139115c92323b7ffbfa623dd447a866af9d8784be7e1f2bc6c636fafa"
+        },
+        {
+          "item": "SigningMaterial.signerPolicy",
+          "sha256": "bc347d567b90eee6ac71db98ceee21106d449ff7dd2f3af75b7509808b8b2b3e"
         }
       ],
       "step_shape_evidence": [
@@ -150166,6 +150202,10 @@
               "sha256": "3b5dd25667e6bcf7f2900d237167127e56e5302e2d8f05acffa097191388e6a7"
             },
             {
+              "item": "SignerPolicy",
+              "sha256": "1f401eb397431af21bdf11c5f997aa60797538565064d5765c8fbc44190677f6"
+            },
+            {
               "item": "SigningMaterial",
               "sha256": "a6a37079f10bda50d1564bbd18de6fedcb8b60098e332d22e1d80c030601be73"
             },
@@ -150222,8 +150262,12 @@
               "sha256": "37476009c337a225a14e647fe5f3e2e56a934a26973f003848c59892f618ae2d"
             },
             {
-              "item": "SignedInvocation.init(prepared:signature:signerId:)",
-              "sha256": "79e5a44f473a30272386dfeba9eccca37a48e81f8ae3d656195b7a3829f68daf"
+              "item": "SignedInvocation.init(prepared:signature:signerId:policy:)",
+              "sha256": "e3146e9f2fcda2d56897a00ec7b082fa2cbf1ac89443f9757c863ce2b732646b"
+            },
+            {
+              "item": "SignedInvocation.policy",
+              "sha256": "2591e28c24347cd4610dfa7c7206d16e8c2d2501df96f89d35936ceccaf1ebf2"
             },
             {
               "item": "SignedInvocation.prepared",
@@ -150244,6 +150288,30 @@
             {
               "item": "SignedInvocation.submitReady()",
               "sha256": "6de8a1978b4dcd6d1a5f127bd07b1d984cfcce9a5f08fe8dae9900dfe4c501ae"
+            },
+            {
+              "item": "SignerPolicy.!=(_:_:)",
+              "sha256": "8287c8f5ecc62f6e80896cc022fc3def5f567eb7942428762c69fa7cc1c91580"
+            },
+            {
+              "item": "SignerPolicy.expiresAtUnixMS",
+              "sha256": "1413c956cb4b8e56107835418405a08369050336a8e002d19a32ac738c6b6520"
+            },
+            {
+              "item": "SignerPolicy.init(mode:signerId:policyRef:expiresAtUnixMS:)",
+              "sha256": "7202d104d5d58a5b025cede777b8b6fa917a716c05d1801d03566f2fdc705aeb"
+            },
+            {
+              "item": "SignerPolicy.mode",
+              "sha256": "ec8f0a4e89ba9dac6445f99c918ece795e6d256ebf487756e8379b707e225037"
+            },
+            {
+              "item": "SignerPolicy.policyRef",
+              "sha256": "d87131ec668649e71912a97d28fdfdf92f5ec550a3b46f6d29b229740a89b883"
+            },
+            {
+              "item": "SignerPolicy.signerId",
+              "sha256": "f1db2e84a00a7278a073eb7113152049463c6cfb3195bcd79b78eea39ec3cb88"
             },
             {
               "item": "SigningMaterial.!=(_:_:)",
@@ -150270,8 +150338,12 @@
               "sha256": "1413c956cb4b8e56107835418405a08369050336a8e002d19a32ac738c6b6520"
             },
             {
-              "item": "SigningMaterial.init(algorithm:canonicalBytesBase64:argsDigestHex:descriptorRef:expiresAtUnixMS:)",
-              "sha256": "db07ce6d49668098388aed34ecb2d6faefcdbc6e3373648cadc84408760119e4"
+              "item": "SigningMaterial.init(algorithm:canonicalBytesBase64:argsDigestHex:descriptorRef:expiresAtUnixMS:signerPolicy:)",
+              "sha256": "36b40fa139115c92323b7ffbfa623dd447a866af9d8784be7e1f2bc6c636fafa"
+            },
+            {
+              "item": "SigningMaterial.signerPolicy",
+              "sha256": "bc347d567b90eee6ac71db98ceee21106d449ff7dd2f3af75b7509808b8b2b3e"
             }
           ]
         },
@@ -150289,6 +150361,10 @@
               "sha256": "3b5dd25667e6bcf7f2900d237167127e56e5302e2d8f05acffa097191388e6a7"
             },
             {
+              "item": "SignerPolicy",
+              "sha256": "1f401eb397431af21bdf11c5f997aa60797538565064d5765c8fbc44190677f6"
+            },
+            {
               "item": "SigningMaterial",
               "sha256": "a6a37079f10bda50d1564bbd18de6fedcb8b60098e332d22e1d80c030601be73"
             },
@@ -150345,8 +150421,12 @@
               "sha256": "37476009c337a225a14e647fe5f3e2e56a934a26973f003848c59892f618ae2d"
             },
             {
-              "item": "SignedInvocation.init(prepared:signature:signerId:)",
-              "sha256": "79e5a44f473a30272386dfeba9eccca37a48e81f8ae3d656195b7a3829f68daf"
+              "item": "SignedInvocation.init(prepared:signature:signerId:policy:)",
+              "sha256": "e3146e9f2fcda2d56897a00ec7b082fa2cbf1ac89443f9757c863ce2b732646b"
+            },
+            {
+              "item": "SignedInvocation.policy",
+              "sha256": "2591e28c24347cd4610dfa7c7206d16e8c2d2501df96f89d35936ceccaf1ebf2"
             },
             {
               "item": "SignedInvocation.prepared",
@@ -150367,6 +150447,30 @@
             {
               "item": "SignedInvocation.submitReady()",
               "sha256": "6de8a1978b4dcd6d1a5f127bd07b1d984cfcce9a5f08fe8dae9900dfe4c501ae"
+            },
+            {
+              "item": "SignerPolicy.!=(_:_:)",
+              "sha256": "8287c8f5ecc62f6e80896cc022fc3def5f567eb7942428762c69fa7cc1c91580"
+            },
+            {
+              "item": "SignerPolicy.expiresAtUnixMS",
+              "sha256": "1413c956cb4b8e56107835418405a08369050336a8e002d19a32ac738c6b6520"
+            },
+            {
+              "item": "SignerPolicy.init(mode:signerId:policyRef:expiresAtUnixMS:)",
+              "sha256": "7202d104d5d58a5b025cede777b8b6fa917a716c05d1801d03566f2fdc705aeb"
+            },
+            {
+              "item": "SignerPolicy.mode",
+              "sha256": "ec8f0a4e89ba9dac6445f99c918ece795e6d256ebf487756e8379b707e225037"
+            },
+            {
+              "item": "SignerPolicy.policyRef",
+              "sha256": "d87131ec668649e71912a97d28fdfdf92f5ec550a3b46f6d29b229740a89b883"
+            },
+            {
+              "item": "SignerPolicy.signerId",
+              "sha256": "f1db2e84a00a7278a073eb7113152049463c6cfb3195bcd79b78eea39ec3cb88"
             },
             {
               "item": "SigningMaterial.!=(_:_:)",
@@ -150393,8 +150497,12 @@
               "sha256": "1413c956cb4b8e56107835418405a08369050336a8e002d19a32ac738c6b6520"
             },
             {
-              "item": "SigningMaterial.init(algorithm:canonicalBytesBase64:argsDigestHex:descriptorRef:expiresAtUnixMS:)",
-              "sha256": "db07ce6d49668098388aed34ecb2d6faefcdbc6e3373648cadc84408760119e4"
+              "item": "SigningMaterial.init(algorithm:canonicalBytesBase64:argsDigestHex:descriptorRef:expiresAtUnixMS:signerPolicy:)",
+              "sha256": "36b40fa139115c92323b7ffbfa623dd447a866af9d8784be7e1f2bc6c636fafa"
+            },
+            {
+              "item": "SigningMaterial.signerPolicy",
+              "sha256": "bc347d567b90eee6ac71db98ceee21106d449ff7dd2f3af75b7509808b8b2b3e"
             }
           ]
         },
@@ -150412,6 +150520,10 @@
               "sha256": "3b5dd25667e6bcf7f2900d237167127e56e5302e2d8f05acffa097191388e6a7"
             },
             {
+              "item": "SignerPolicy",
+              "sha256": "1f401eb397431af21bdf11c5f997aa60797538565064d5765c8fbc44190677f6"
+            },
+            {
               "item": "SigningMaterial",
               "sha256": "a6a37079f10bda50d1564bbd18de6fedcb8b60098e332d22e1d80c030601be73"
             },
@@ -150468,8 +150580,12 @@
               "sha256": "37476009c337a225a14e647fe5f3e2e56a934a26973f003848c59892f618ae2d"
             },
             {
-              "item": "SignedInvocation.init(prepared:signature:signerId:)",
-              "sha256": "79e5a44f473a30272386dfeba9eccca37a48e81f8ae3d656195b7a3829f68daf"
+              "item": "SignedInvocation.init(prepared:signature:signerId:policy:)",
+              "sha256": "e3146e9f2fcda2d56897a00ec7b082fa2cbf1ac89443f9757c863ce2b732646b"
+            },
+            {
+              "item": "SignedInvocation.policy",
+              "sha256": "2591e28c24347cd4610dfa7c7206d16e8c2d2501df96f89d35936ceccaf1ebf2"
             },
             {
               "item": "SignedInvocation.prepared",
@@ -150490,6 +150606,30 @@
             {
               "item": "SignedInvocation.submitReady()",
               "sha256": "6de8a1978b4dcd6d1a5f127bd07b1d984cfcce9a5f08fe8dae9900dfe4c501ae"
+            },
+            {
+              "item": "SignerPolicy.!=(_:_:)",
+              "sha256": "8287c8f5ecc62f6e80896cc022fc3def5f567eb7942428762c69fa7cc1c91580"
+            },
+            {
+              "item": "SignerPolicy.expiresAtUnixMS",
+              "sha256": "1413c956cb4b8e56107835418405a08369050336a8e002d19a32ac738c6b6520"
+            },
+            {
+              "item": "SignerPolicy.init(mode:signerId:policyRef:expiresAtUnixMS:)",
+              "sha256": "7202d104d5d58a5b025cede777b8b6fa917a716c05d1801d03566f2fdc705aeb"
+            },
+            {
+              "item": "SignerPolicy.mode",
+              "sha256": "ec8f0a4e89ba9dac6445f99c918ece795e6d256ebf487756e8379b707e225037"
+            },
+            {
+              "item": "SignerPolicy.policyRef",
+              "sha256": "d87131ec668649e71912a97d28fdfdf92f5ec550a3b46f6d29b229740a89b883"
+            },
+            {
+              "item": "SignerPolicy.signerId",
+              "sha256": "f1db2e84a00a7278a073eb7113152049463c6cfb3195bcd79b78eea39ec3cb88"
             },
             {
               "item": "SigningMaterial.!=(_:_:)",
@@ -150516,8 +150656,12 @@
               "sha256": "1413c956cb4b8e56107835418405a08369050336a8e002d19a32ac738c6b6520"
             },
             {
-              "item": "SigningMaterial.init(algorithm:canonicalBytesBase64:argsDigestHex:descriptorRef:expiresAtUnixMS:)",
-              "sha256": "db07ce6d49668098388aed34ecb2d6faefcdbc6e3373648cadc84408760119e4"
+              "item": "SigningMaterial.init(algorithm:canonicalBytesBase64:argsDigestHex:descriptorRef:expiresAtUnixMS:signerPolicy:)",
+              "sha256": "36b40fa139115c92323b7ffbfa623dd447a866af9d8784be7e1f2bc6c636fafa"
+            },
+            {
+              "item": "SigningMaterial.signerPolicy",
+              "sha256": "bc347d567b90eee6ac71db98ceee21106d449ff7dd2f3af75b7509808b8b2b3e"
             }
           ]
         },
@@ -150535,6 +150679,10 @@
               "sha256": "3b5dd25667e6bcf7f2900d237167127e56e5302e2d8f05acffa097191388e6a7"
             },
             {
+              "item": "SignerPolicy",
+              "sha256": "1f401eb397431af21bdf11c5f997aa60797538565064d5765c8fbc44190677f6"
+            },
+            {
               "item": "SigningMaterial",
               "sha256": "a6a37079f10bda50d1564bbd18de6fedcb8b60098e332d22e1d80c030601be73"
             },
@@ -150591,8 +150739,12 @@
               "sha256": "37476009c337a225a14e647fe5f3e2e56a934a26973f003848c59892f618ae2d"
             },
             {
-              "item": "SignedInvocation.init(prepared:signature:signerId:)",
-              "sha256": "79e5a44f473a30272386dfeba9eccca37a48e81f8ae3d656195b7a3829f68daf"
+              "item": "SignedInvocation.init(prepared:signature:signerId:policy:)",
+              "sha256": "e3146e9f2fcda2d56897a00ec7b082fa2cbf1ac89443f9757c863ce2b732646b"
+            },
+            {
+              "item": "SignedInvocation.policy",
+              "sha256": "2591e28c24347cd4610dfa7c7206d16e8c2d2501df96f89d35936ceccaf1ebf2"
             },
             {
               "item": "SignedInvocation.prepared",
@@ -150613,6 +150765,30 @@
             {
               "item": "SignedInvocation.submitReady()",
               "sha256": "6de8a1978b4dcd6d1a5f127bd07b1d984cfcce9a5f08fe8dae9900dfe4c501ae"
+            },
+            {
+              "item": "SignerPolicy.!=(_:_:)",
+              "sha256": "8287c8f5ecc62f6e80896cc022fc3def5f567eb7942428762c69fa7cc1c91580"
+            },
+            {
+              "item": "SignerPolicy.expiresAtUnixMS",
+              "sha256": "1413c956cb4b8e56107835418405a08369050336a8e002d19a32ac738c6b6520"
+            },
+            {
+              "item": "SignerPolicy.init(mode:signerId:policyRef:expiresAtUnixMS:)",
+              "sha256": "7202d104d5d58a5b025cede777b8b6fa917a716c05d1801d03566f2fdc705aeb"
+            },
+            {
+              "item": "SignerPolicy.mode",
+              "sha256": "ec8f0a4e89ba9dac6445f99c918ece795e6d256ebf487756e8379b707e225037"
+            },
+            {
+              "item": "SignerPolicy.policyRef",
+              "sha256": "d87131ec668649e71912a97d28fdfdf92f5ec550a3b46f6d29b229740a89b883"
+            },
+            {
+              "item": "SignerPolicy.signerId",
+              "sha256": "f1db2e84a00a7278a073eb7113152049463c6cfb3195bcd79b78eea39ec3cb88"
             },
             {
               "item": "SigningMaterial.!=(_:_:)",
@@ -150639,8 +150815,12 @@
               "sha256": "1413c956cb4b8e56107835418405a08369050336a8e002d19a32ac738c6b6520"
             },
             {
-              "item": "SigningMaterial.init(algorithm:canonicalBytesBase64:argsDigestHex:descriptorRef:expiresAtUnixMS:)",
-              "sha256": "db07ce6d49668098388aed34ecb2d6faefcdbc6e3373648cadc84408760119e4"
+              "item": "SigningMaterial.init(algorithm:canonicalBytesBase64:argsDigestHex:descriptorRef:expiresAtUnixMS:signerPolicy:)",
+              "sha256": "36b40fa139115c92323b7ffbfa623dd447a866af9d8784be7e1f2bc6c636fafa"
+            },
+            {
+              "item": "SigningMaterial.signerPolicy",
+              "sha256": "bc347d567b90eee6ac71db98ceee21106d449ff7dd2f3af75b7509808b8b2b3e"
             }
           ]
         },
@@ -150658,6 +150838,10 @@
               "sha256": "3b5dd25667e6bcf7f2900d237167127e56e5302e2d8f05acffa097191388e6a7"
             },
             {
+              "item": "SignerPolicy",
+              "sha256": "1f401eb397431af21bdf11c5f997aa60797538565064d5765c8fbc44190677f6"
+            },
+            {
               "item": "SigningMaterial",
               "sha256": "a6a37079f10bda50d1564bbd18de6fedcb8b60098e332d22e1d80c030601be73"
             },
@@ -150714,8 +150898,12 @@
               "sha256": "37476009c337a225a14e647fe5f3e2e56a934a26973f003848c59892f618ae2d"
             },
             {
-              "item": "SignedInvocation.init(prepared:signature:signerId:)",
-              "sha256": "79e5a44f473a30272386dfeba9eccca37a48e81f8ae3d656195b7a3829f68daf"
+              "item": "SignedInvocation.init(prepared:signature:signerId:policy:)",
+              "sha256": "e3146e9f2fcda2d56897a00ec7b082fa2cbf1ac89443f9757c863ce2b732646b"
+            },
+            {
+              "item": "SignedInvocation.policy",
+              "sha256": "2591e28c24347cd4610dfa7c7206d16e8c2d2501df96f89d35936ceccaf1ebf2"
             },
             {
               "item": "SignedInvocation.prepared",
@@ -150736,6 +150924,30 @@
             {
               "item": "SignedInvocation.submitReady()",
               "sha256": "6de8a1978b4dcd6d1a5f127bd07b1d984cfcce9a5f08fe8dae9900dfe4c501ae"
+            },
+            {
+              "item": "SignerPolicy.!=(_:_:)",
+              "sha256": "8287c8f5ecc62f6e80896cc022fc3def5f567eb7942428762c69fa7cc1c91580"
+            },
+            {
+              "item": "SignerPolicy.expiresAtUnixMS",
+              "sha256": "1413c956cb4b8e56107835418405a08369050336a8e002d19a32ac738c6b6520"
+            },
+            {
+              "item": "SignerPolicy.init(mode:signerId:policyRef:expiresAtUnixMS:)",
+              "sha256": "7202d104d5d58a5b025cede777b8b6fa917a716c05d1801d03566f2fdc705aeb"
+            },
+            {
+              "item": "SignerPolicy.mode",
+              "sha256": "ec8f0a4e89ba9dac6445f99c918ece795e6d256ebf487756e8379b707e225037"
+            },
+            {
+              "item": "SignerPolicy.policyRef",
+              "sha256": "d87131ec668649e71912a97d28fdfdf92f5ec550a3b46f6d29b229740a89b883"
+            },
+            {
+              "item": "SignerPolicy.signerId",
+              "sha256": "f1db2e84a00a7278a073eb7113152049463c6cfb3195bcd79b78eea39ec3cb88"
             },
             {
               "item": "SigningMaterial.!=(_:_:)",
@@ -150762,8 +150974,12 @@
               "sha256": "1413c956cb4b8e56107835418405a08369050336a8e002d19a32ac738c6b6520"
             },
             {
-              "item": "SigningMaterial.init(algorithm:canonicalBytesBase64:argsDigestHex:descriptorRef:expiresAtUnixMS:)",
-              "sha256": "db07ce6d49668098388aed34ecb2d6faefcdbc6e3373648cadc84408760119e4"
+              "item": "SigningMaterial.init(algorithm:canonicalBytesBase64:argsDigestHex:descriptorRef:expiresAtUnixMS:signerPolicy:)",
+              "sha256": "36b40fa139115c92323b7ffbfa623dd447a866af9d8784be7e1f2bc6c636fafa"
+            },
+            {
+              "item": "SigningMaterial.signerPolicy",
+              "sha256": "bc347d567b90eee6ac71db98ceee21106d449ff7dd2f3af75b7509808b8b2b3e"
             }
           ]
         },
@@ -150781,6 +150997,10 @@
               "sha256": "3b5dd25667e6bcf7f2900d237167127e56e5302e2d8f05acffa097191388e6a7"
             },
             {
+              "item": "SignerPolicy",
+              "sha256": "1f401eb397431af21bdf11c5f997aa60797538565064d5765c8fbc44190677f6"
+            },
+            {
               "item": "SigningMaterial",
               "sha256": "a6a37079f10bda50d1564bbd18de6fedcb8b60098e332d22e1d80c030601be73"
             },
@@ -150837,8 +151057,12 @@
               "sha256": "37476009c337a225a14e647fe5f3e2e56a934a26973f003848c59892f618ae2d"
             },
             {
-              "item": "SignedInvocation.init(prepared:signature:signerId:)",
-              "sha256": "79e5a44f473a30272386dfeba9eccca37a48e81f8ae3d656195b7a3829f68daf"
+              "item": "SignedInvocation.init(prepared:signature:signerId:policy:)",
+              "sha256": "e3146e9f2fcda2d56897a00ec7b082fa2cbf1ac89443f9757c863ce2b732646b"
+            },
+            {
+              "item": "SignedInvocation.policy",
+              "sha256": "2591e28c24347cd4610dfa7c7206d16e8c2d2501df96f89d35936ceccaf1ebf2"
             },
             {
               "item": "SignedInvocation.prepared",
@@ -150859,6 +151083,30 @@
             {
               "item": "SignedInvocation.submitReady()",
               "sha256": "6de8a1978b4dcd6d1a5f127bd07b1d984cfcce9a5f08fe8dae9900dfe4c501ae"
+            },
+            {
+              "item": "SignerPolicy.!=(_:_:)",
+              "sha256": "8287c8f5ecc62f6e80896cc022fc3def5f567eb7942428762c69fa7cc1c91580"
+            },
+            {
+              "item": "SignerPolicy.expiresAtUnixMS",
+              "sha256": "1413c956cb4b8e56107835418405a08369050336a8e002d19a32ac738c6b6520"
+            },
+            {
+              "item": "SignerPolicy.init(mode:signerId:policyRef:expiresAtUnixMS:)",
+              "sha256": "7202d104d5d58a5b025cede777b8b6fa917a716c05d1801d03566f2fdc705aeb"
+            },
+            {
+              "item": "SignerPolicy.mode",
+              "sha256": "ec8f0a4e89ba9dac6445f99c918ece795e6d256ebf487756e8379b707e225037"
+            },
+            {
+              "item": "SignerPolicy.policyRef",
+              "sha256": "d87131ec668649e71912a97d28fdfdf92f5ec550a3b46f6d29b229740a89b883"
+            },
+            {
+              "item": "SignerPolicy.signerId",
+              "sha256": "f1db2e84a00a7278a073eb7113152049463c6cfb3195bcd79b78eea39ec3cb88"
             },
             {
               "item": "SigningMaterial.!=(_:_:)",
@@ -150885,8 +151133,12 @@
               "sha256": "1413c956cb4b8e56107835418405a08369050336a8e002d19a32ac738c6b6520"
             },
             {
-              "item": "SigningMaterial.init(algorithm:canonicalBytesBase64:argsDigestHex:descriptorRef:expiresAtUnixMS:)",
-              "sha256": "db07ce6d49668098388aed34ecb2d6faefcdbc6e3373648cadc84408760119e4"
+              "item": "SigningMaterial.init(algorithm:canonicalBytesBase64:argsDigestHex:descriptorRef:expiresAtUnixMS:signerPolicy:)",
+              "sha256": "36b40fa139115c92323b7ffbfa623dd447a866af9d8784be7e1f2bc6c636fafa"
+            },
+            {
+              "item": "SigningMaterial.signerPolicy",
+              "sha256": "bc347d567b90eee6ac71db98ceee21106d449ff7dd2f3af75b7509808b8b2b3e"
             }
           ]
         },
@@ -150904,6 +151156,10 @@
               "sha256": "3b5dd25667e6bcf7f2900d237167127e56e5302e2d8f05acffa097191388e6a7"
             },
             {
+              "item": "SignerPolicy",
+              "sha256": "1f401eb397431af21bdf11c5f997aa60797538565064d5765c8fbc44190677f6"
+            },
+            {
               "item": "SigningMaterial",
               "sha256": "a6a37079f10bda50d1564bbd18de6fedcb8b60098e332d22e1d80c030601be73"
             },
@@ -150960,8 +151216,12 @@
               "sha256": "37476009c337a225a14e647fe5f3e2e56a934a26973f003848c59892f618ae2d"
             },
             {
-              "item": "SignedInvocation.init(prepared:signature:signerId:)",
-              "sha256": "79e5a44f473a30272386dfeba9eccca37a48e81f8ae3d656195b7a3829f68daf"
+              "item": "SignedInvocation.init(prepared:signature:signerId:policy:)",
+              "sha256": "e3146e9f2fcda2d56897a00ec7b082fa2cbf1ac89443f9757c863ce2b732646b"
+            },
+            {
+              "item": "SignedInvocation.policy",
+              "sha256": "2591e28c24347cd4610dfa7c7206d16e8c2d2501df96f89d35936ceccaf1ebf2"
             },
             {
               "item": "SignedInvocation.prepared",
@@ -150982,6 +151242,30 @@
             {
               "item": "SignedInvocation.submitReady()",
               "sha256": "6de8a1978b4dcd6d1a5f127bd07b1d984cfcce9a5f08fe8dae9900dfe4c501ae"
+            },
+            {
+              "item": "SignerPolicy.!=(_:_:)",
+              "sha256": "8287c8f5ecc62f6e80896cc022fc3def5f567eb7942428762c69fa7cc1c91580"
+            },
+            {
+              "item": "SignerPolicy.expiresAtUnixMS",
+              "sha256": "1413c956cb4b8e56107835418405a08369050336a8e002d19a32ac738c6b6520"
+            },
+            {
+              "item": "SignerPolicy.init(mode:signerId:policyRef:expiresAtUnixMS:)",
+              "sha256": "7202d104d5d58a5b025cede777b8b6fa917a716c05d1801d03566f2fdc705aeb"
+            },
+            {
+              "item": "SignerPolicy.mode",
+              "sha256": "ec8f0a4e89ba9dac6445f99c918ece795e6d256ebf487756e8379b707e225037"
+            },
+            {
+              "item": "SignerPolicy.policyRef",
+              "sha256": "d87131ec668649e71912a97d28fdfdf92f5ec550a3b46f6d29b229740a89b883"
+            },
+            {
+              "item": "SignerPolicy.signerId",
+              "sha256": "f1db2e84a00a7278a073eb7113152049463c6cfb3195bcd79b78eea39ec3cb88"
             },
             {
               "item": "SigningMaterial.!=(_:_:)",
@@ -151008,8 +151292,12 @@
               "sha256": "1413c956cb4b8e56107835418405a08369050336a8e002d19a32ac738c6b6520"
             },
             {
-              "item": "SigningMaterial.init(algorithm:canonicalBytesBase64:argsDigestHex:descriptorRef:expiresAtUnixMS:)",
-              "sha256": "db07ce6d49668098388aed34ecb2d6faefcdbc6e3373648cadc84408760119e4"
+              "item": "SigningMaterial.init(algorithm:canonicalBytesBase64:argsDigestHex:descriptorRef:expiresAtUnixMS:signerPolicy:)",
+              "sha256": "36b40fa139115c92323b7ffbfa623dd447a866af9d8784be7e1f2bc6c636fafa"
+            },
+            {
+              "item": "SigningMaterial.signerPolicy",
+              "sha256": "bc347d567b90eee6ac71db98ceee21106d449ff7dd2f3af75b7509808b8b2b3e"
             }
           ]
         },
@@ -151027,6 +151315,10 @@
               "sha256": "3b5dd25667e6bcf7f2900d237167127e56e5302e2d8f05acffa097191388e6a7"
             },
             {
+              "item": "SignerPolicy",
+              "sha256": "1f401eb397431af21bdf11c5f997aa60797538565064d5765c8fbc44190677f6"
+            },
+            {
               "item": "SigningMaterial",
               "sha256": "a6a37079f10bda50d1564bbd18de6fedcb8b60098e332d22e1d80c030601be73"
             },
@@ -151083,8 +151375,12 @@
               "sha256": "37476009c337a225a14e647fe5f3e2e56a934a26973f003848c59892f618ae2d"
             },
             {
-              "item": "SignedInvocation.init(prepared:signature:signerId:)",
-              "sha256": "79e5a44f473a30272386dfeba9eccca37a48e81f8ae3d656195b7a3829f68daf"
+              "item": "SignedInvocation.init(prepared:signature:signerId:policy:)",
+              "sha256": "e3146e9f2fcda2d56897a00ec7b082fa2cbf1ac89443f9757c863ce2b732646b"
+            },
+            {
+              "item": "SignedInvocation.policy",
+              "sha256": "2591e28c24347cd4610dfa7c7206d16e8c2d2501df96f89d35936ceccaf1ebf2"
             },
             {
               "item": "SignedInvocation.prepared",
@@ -151105,6 +151401,30 @@
             {
               "item": "SignedInvocation.submitReady()",
               "sha256": "6de8a1978b4dcd6d1a5f127bd07b1d984cfcce9a5f08fe8dae9900dfe4c501ae"
+            },
+            {
+              "item": "SignerPolicy.!=(_:_:)",
+              "sha256": "8287c8f5ecc62f6e80896cc022fc3def5f567eb7942428762c69fa7cc1c91580"
+            },
+            {
+              "item": "SignerPolicy.expiresAtUnixMS",
+              "sha256": "1413c956cb4b8e56107835418405a08369050336a8e002d19a32ac738c6b6520"
+            },
+            {
+              "item": "SignerPolicy.init(mode:signerId:policyRef:expiresAtUnixMS:)",
+              "sha256": "7202d104d5d58a5b025cede777b8b6fa917a716c05d1801d03566f2fdc705aeb"
+            },
+            {
+              "item": "SignerPolicy.mode",
+              "sha256": "ec8f0a4e89ba9dac6445f99c918ece795e6d256ebf487756e8379b707e225037"
+            },
+            {
+              "item": "SignerPolicy.policyRef",
+              "sha256": "d87131ec668649e71912a97d28fdfdf92f5ec550a3b46f6d29b229740a89b883"
+            },
+            {
+              "item": "SignerPolicy.signerId",
+              "sha256": "f1db2e84a00a7278a073eb7113152049463c6cfb3195bcd79b78eea39ec3cb88"
             },
             {
               "item": "SigningMaterial.!=(_:_:)",
@@ -151131,8 +151451,12 @@
               "sha256": "1413c956cb4b8e56107835418405a08369050336a8e002d19a32ac738c6b6520"
             },
             {
-              "item": "SigningMaterial.init(algorithm:canonicalBytesBase64:argsDigestHex:descriptorRef:expiresAtUnixMS:)",
-              "sha256": "db07ce6d49668098388aed34ecb2d6faefcdbc6e3373648cadc84408760119e4"
+              "item": "SigningMaterial.init(algorithm:canonicalBytesBase64:argsDigestHex:descriptorRef:expiresAtUnixMS:signerPolicy:)",
+              "sha256": "36b40fa139115c92323b7ffbfa623dd447a866af9d8784be7e1f2bc6c636fafa"
+            },
+            {
+              "item": "SigningMaterial.signerPolicy",
+              "sha256": "bc347d567b90eee6ac71db98ceee21106d449ff7dd2f3af75b7509808b8b2b3e"
             }
           ]
         }

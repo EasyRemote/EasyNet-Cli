@@ -1518,6 +1518,50 @@ architecture rather than add feature surface.
   - `cargo fmt --check`
   - `git diff --check`
 
+## Iteration 43 candidate policy
+
+- Continue RF-5/RF-4 convergence by applying the same signer custody policy
+  preservation to the Swift SDK.
+- codegraph showed Swift still lacked `SignerPolicy`, did not parse
+  `signing_material.signer_policy`, selected only signature key hints for
+  `signerId`, and serialized signed submissions without a policy object.
+- The root abstraction problem is the same custody gap fixed in Java:
+  provider-managed signing policy is part of prepared canonical material and
+  must survive language-facade sign/submit boundaries.
+- The selected cutover is to add a generic Swift `SignerPolicy` value object,
+  carry it through `SigningMaterial`, use the policy signer when present, and
+  serialize it on `SignedInvocation`.
+
+## Iteration 43 decision log
+
+- Added Swift `SignerPolicy` with exact generic runtime fields:
+  `mode`, `signerId`, `policyRef`, and `expiresAtUnixMS`.
+- Swift `SigningMaterial` now parses and serializes optional
+  `signer_policy`.
+- Swift `PreparedInvocation.signWithCallerSignature` now selects
+  `signingMaterial.signerPolicy.signerId` when present and carries the policy
+  into `SignedInvocation`.
+- Swift `SignedInvocation` now exposes optional `policy` and serializes it on
+  the signed envelope when present.
+- Swift runtime seam tests now assert provider-managed signer id selection and
+  signed-envelope `policy_ref` preservation.
+- Added SPEC v2 `check_swift_sdk_signer_policy_custody_contract`, including a
+  negative self-test fixture that rejects the retired Swift policy-drop shape.
+- Rebuilt `sdk/conformance/canonical-public-api.json` and
+  `sdk/conformance/sdk-parity-matrix.json` after the Swift SDK public model
+  gained `SignerPolicy` and policy accessors.
+- Verification passed:
+  - `/Users/macbook.silan.tech/.local/bin/codegraph explore "Swift SigningMaterial SignerPolicy signer_policy SignedInvocation policy signWithCallerSignature provider_managed_signing RuntimeSDK"`
+  - `cd sdk/swift && swift test`
+  - `python3 sdk/conformance/rebuild_public_api_model.py --write`
+  - `bash -n tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - `tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  - `tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - `tools/scripts/check-sdk-canonical-public-api.sh`
+  - `tools/scripts/check-architecture-convergence.sh`
+  - `cargo fmt --check`
+  - `git diff --check`
+
 ## Iteration 36 candidate policy
 
 - Move the same proof-custody convergence into the Java SDK receipt validator.

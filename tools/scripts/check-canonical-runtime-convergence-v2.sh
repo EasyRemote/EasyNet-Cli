@@ -3628,6 +3628,78 @@ for token in (
 PY
 }
 
+check_swift_sdk_signer_policy_custody_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local invocation="$cli_root/sdk/swift/Sources/RuntimeSDK/Invocation.swift"
+  local swift_test="$cli_root/sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift"
+
+  "$PYTHON_BIN" - "$invocation" "$swift_test" <<'PY'
+import sys
+from pathlib import Path
+
+invocation_path, test_path = map(Path, sys.argv[1:])
+for path in (invocation_path, test_path):
+    if not path.exists():
+        raise SystemExit(f"swift_signer_policy_custody:missing:{path}")
+
+invocation = invocation_path.read_text(encoding="utf-8")
+tests = test_path.read_text(encoding="utf-8")
+
+required_source = {
+    "signer_policy_type": (
+        invocation,
+        "public struct SignerPolicy",
+        "public let mode: String",
+        "public let signerId: String",
+        "public let policyRef: String",
+        "public let expiresAtUnixMS: Int64",
+        "func object() -> [String: Any]",
+    ),
+    "signing_material": (
+        invocation,
+        "public let signerPolicy: SignerPolicy?",
+        '"signer_policy"',
+        'optionalObject(object, "signer_policy", "signing_material")',
+        "SignerPolicy.fromObject($0)",
+        'value["signer_policy"] = signerPolicy.object()',
+    ),
+    "prepared_invocation": (
+        invocation,
+        "signingMaterial.signerPolicy?.signerId",
+        "policy: signingMaterial.signerPolicy",
+    ),
+    "signed_invocation": (
+        invocation,
+        "public let policy: SignerPolicy?",
+        "policy: SignerPolicy? = nil",
+        'value["policy"] = policy.object()',
+    ),
+}
+for section, entries in required_source.items():
+    text, *tokens = entries
+    for token in tokens:
+        if token not in text:
+            raise SystemExit(f"swift_signer_policy_custody:{section}:missing:{token}")
+
+for retired in (
+    "return try SignedInvocation(prepared: self, signature: signature, signerId: signerId).bindRuntime(runtime)",
+    'allowed: ["algorithm", "canonical_bytes_base64", "args_digest_hex", "descriptor_ref", "expires_at_unix_ms"]',
+):
+    if retired in invocation:
+        raise SystemExit(f"swift_signer_policy_custody:retired_policy_drop:{retired}")
+
+for token in (
+    "provider_managed_signing",
+    "policy-signer-1",
+    "policy/local",
+    "submittedPolicyRef",
+    "signed.policy?.signerId",
+):
+    if token not in tests:
+        raise SystemExit(f"swift_signer_policy_custody:test_missing:{token}")
+PY
+}
+
 check_sdk_descriptor_resolution_error_vocabulary_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local go="$cli_root/sdk/go/authorized_runtime_session.go"
@@ -16111,6 +16183,44 @@ EOF
   if ( check_java_sdk_signer_policy_custody_contract "$tmp/java-signer-policy-custody-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected Java signer policy custody gate to fail"
   fi
+  mkdir -p "$tmp/swift-signer-policy-custody-legacy/sdk/swift/Sources/RuntimeSDK" \
+    "$tmp/swift-signer-policy-custody-legacy/sdk/swift/Tests/RuntimeSDKTests"
+  printf '%s\n' \
+    'public struct SigningMaterial {' \
+    '  public let algorithm: String' \
+    '  public let canonicalBytesBase64: String' \
+    '  public let argsDigestHex: String' \
+    '  public let descriptorRef: String' \
+    '  public let expiresAtUnixMS: Int64' \
+    '  static func fromObject(_ object: [String: Any]) throws -> SigningMaterial {' \
+    '    try rejectUnknownFields(object, allowed: ["algorithm", "canonical_bytes_base64", "args_digest_hex", "descriptor_ref", "expires_at_unix_ms"], label: "signing_material")' \
+    '    fatalError()' \
+    '  }' \
+    '}' \
+    'public final class PreparedInvocation {' \
+    '  public let signingMaterial: SigningMaterial' \
+    '  public func signWithCallerSignature(_ signature: InvocationSignature) throws -> SignedInvocation {' \
+    '    let signerId = signature.keyIdHint' \
+    '    return try SignedInvocation(prepared: self, signature: signature, signerId: signerId).bindRuntime(runtime)' \
+    '  }' \
+    '}' \
+    'public final class SignedInvocation {' \
+    '  public init(prepared: PreparedInvocation, signature: InvocationSignature, signerId: String) throws {}' \
+    '  func object() throws -> [String: Any] { ["signer_id": "caller-key-1"] }' \
+    '}' \
+    > "$tmp/swift-signer-policy-custody-legacy/sdk/swift/Sources/RuntimeSDK/Invocation.swift"
+  printf '%s\n' \
+    'final class RuntimeCoreSeamTests {' \
+    '  func testInvocationPrepareSignSubmitPreservesCompleteTuple() {' \
+    '    _ = "provider_managed_signing"' \
+    '    _ = "policy-signer-1"' \
+    '    _ = "policy/local"' \
+    '  }' \
+    '}' \
+    > "$tmp/swift-signer-policy-custody-legacy/sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift"
+  if ( check_swift_sdk_signer_policy_custody_contract "$tmp/swift-signer-policy-custody-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected Swift signer policy custody gate to fail"
+  fi
   mkdir -p "$tmp/sdk-go-authority-subject-helper-embedded-legacy/sdk/go" \
     "$tmp/sdk-go-authority-subject-helper-embedded-legacy/sdk/python/easynet_sdk" \
     "$tmp/sdk-go-authority-subject-helper-embedded-legacy/sdk/python/tests"
@@ -19662,6 +19772,7 @@ EOF
   check_swift_sdk_invocation_authority_binding_contract
   check_python_sdk_signed_submission_complete_tuple_contract
   check_java_sdk_signer_policy_custody_contract
+  check_swift_sdk_signer_policy_custody_contract
   check_java_sdk_runtime_receipt_projection_contract
   check_go_sdk_runtime_receipt_projection_contract
   check_python_sdk_runtime_receipt_projection_contract
@@ -19874,6 +19985,7 @@ check_java_swift_runtime_state_subject_parity_contract
 check_swift_sdk_invocation_authority_binding_contract
 check_python_sdk_signed_submission_complete_tuple_contract
 check_java_sdk_signer_policy_custody_contract
+check_swift_sdk_signer_policy_custody_contract
 check_java_sdk_runtime_receipt_projection_contract
 check_go_sdk_runtime_receipt_projection_contract
 check_python_sdk_runtime_receipt_projection_contract

@@ -99,13 +99,15 @@ public struct SigningMaterial: Sendable, Equatable {
     public let argsDigestHex: String
     public let descriptorRef: String
     public let expiresAtUnixMS: Int64
+    public let signerPolicy: SignerPolicy?
 
     public init(
         algorithm: String,
         canonicalBytesBase64: String,
         argsDigestHex: String,
         descriptorRef: String,
-        expiresAtUnixMS: Int64
+        expiresAtUnixMS: Int64,
+        signerPolicy: SignerPolicy? = nil
     ) throws {
         self.algorithm = try requiredNonEmpty(algorithm, "algorithm", "signing_material")
         self.canonicalBytesBase64 = try requiredNonEmpty(canonicalBytesBase64, "canonical_bytes_base64", "signing_material")
@@ -115,12 +117,13 @@ public struct SigningMaterial: Sendable, Equatable {
             throw SDKError.validation("signing_material", "expires_at_unix_ms must be non-negative")
         }
         self.expiresAtUnixMS = expiresAtUnixMS
+        self.signerPolicy = signerPolicy
     }
 
     static func fromObject(_ object: [String: Any]) throws -> SigningMaterial {
         try rejectUnknownFields(
             object,
-            allowed: ["algorithm", "canonical_bytes_base64", "args_digest_hex", "descriptor_ref", "expires_at_unix_ms"],
+            allowed: ["algorithm", "canonical_bytes_base64", "args_digest_hex", "descriptor_ref", "expires_at_unix_ms", "signer_policy"],
             label: "signing_material"
         )
         return try SigningMaterial(
@@ -128,16 +131,66 @@ public struct SigningMaterial: Sendable, Equatable {
             canonicalBytesBase64: requiredString(object, "canonical_bytes_base64", "signing_material"),
             argsDigestHex: requiredString(object, "args_digest_hex", "signing_material"),
             descriptorRef: requiredString(object, "descriptor_ref", "signing_material"),
-            expiresAtUnixMS: requiredInt64(object, "expires_at_unix_ms", "signing_material")
+            expiresAtUnixMS: requiredInt64(object, "expires_at_unix_ms", "signing_material"),
+            signerPolicy: optionalObject(object, "signer_policy", "signing_material").map { try SignerPolicy.fromObject($0) }
+        )
+    }
+
+    func object() -> [String: Any] {
+        var value: [String: Any] = [
+            "algorithm": algorithm,
+            "canonical_bytes_base64": canonicalBytesBase64,
+            "args_digest_hex": argsDigestHex,
+            "descriptor_ref": descriptorRef,
+            "expires_at_unix_ms": expiresAtUnixMS
+        ]
+        if let signerPolicy {
+            value["signer_policy"] = signerPolicy.object()
+        }
+        return value
+    }
+}
+
+public struct SignerPolicy: Sendable, Equatable {
+    public let mode: String
+    public let signerId: String
+    public let policyRef: String
+    public let expiresAtUnixMS: Int64
+
+    public init(
+        mode: String = "",
+        signerId: String = "",
+        policyRef: String = "",
+        expiresAtUnixMS: Int64 = 0
+    ) throws {
+        guard expiresAtUnixMS >= 0 else {
+            throw SDKError.validation("signer_policy", "expires_at_unix_ms must be non-negative")
+        }
+        self.mode = mode
+        self.signerId = signerId
+        self.policyRef = policyRef
+        self.expiresAtUnixMS = expiresAtUnixMS
+    }
+
+    static func fromObject(_ object: [String: Any]) throws -> SignerPolicy {
+        try rejectUnknownFields(
+            object,
+            allowed: ["mode", "signer_id", "policy_ref", "expires_at_unix_ms"],
+            label: "signer_policy"
+        )
+        return try SignerPolicy(
+            mode: optionalString(object, "mode", "signer_policy") ?? "",
+            signerId: optionalString(object, "signer_id", "signer_policy") ?? "",
+            policyRef: optionalString(object, "policy_ref", "signer_policy") ?? "",
+            expiresAtUnixMS: optionalInt64(object, "expires_at_unix_ms", "signer_policy") ?? 0
         )
     }
 
     func object() -> [String: Any] {
         [
-            "algorithm": algorithm,
-            "canonical_bytes_base64": canonicalBytesBase64,
-            "args_digest_hex": argsDigestHex,
-            "descriptor_ref": descriptorRef,
+            "mode": mode,
+            "signer_id": signerId,
+            "policy_ref": policyRef,
             "expires_at_unix_ms": expiresAtUnixMS
         ]
     }
@@ -286,11 +339,20 @@ public final class PreparedInvocation: @unchecked Sendable {
     }
 
     public func signWithCallerSignature(_ signature: InvocationSignature) throws -> SignedInvocation {
-        let signerId = signature.keyIdHint.isEmpty ? signature.signerPublicKeyBase64 : signature.keyIdHint
+        var signerId = signature.keyIdHint.isEmpty ? signature.signerPublicKeyBase64 : signature.keyIdHint
+        if let policySigner = signingMaterial.signerPolicy?.signerId,
+           !policySigner.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            signerId = policySigner
+        }
         guard !signerId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw SDKError.validation("prepared_invocation", "signer id is required")
         }
-        return try SignedInvocation(prepared: self, signature: signature, signerId: signerId).bindRuntime(runtime)
+        return try SignedInvocation(
+            prepared: self,
+            signature: signature,
+            signerId: signerId,
+            policy: signingMaterial.signerPolicy
+        ).bindRuntime(runtime)
     }
 
     func object() throws -> [String: Any] {
@@ -313,12 +375,19 @@ public final class SignedInvocation: @unchecked Sendable {
     public let prepared: PreparedInvocation
     public let signature: InvocationSignature
     public let signerId: String
+    public let policy: SignerPolicy?
     private weak var runtime: RuntimeClient?
 
-    public init(prepared: PreparedInvocation, signature: InvocationSignature, signerId: String) throws {
+    public init(
+        prepared: PreparedInvocation,
+        signature: InvocationSignature,
+        signerId: String,
+        policy: SignerPolicy? = nil
+    ) throws {
         self.prepared = prepared
         self.signature = signature
         self.signerId = try requiredNonEmpty(signerId, "signer_id", "signed_invocation")
+        self.policy = policy
         guard submitReady() else {
             throw SDKError.validation("signed_invocation", "signed invocation is not submit-ready")
         }
@@ -350,7 +419,7 @@ public final class SignedInvocation: @unchecked Sendable {
     }
 
     func object() throws -> [String: Any] {
-        [
+        var value: [String: Any] = [
             "signer_id": signerId,
             "prepared": [
                 "prepared_id": prepared.preparedId,
@@ -363,6 +432,10 @@ public final class SignedInvocation: @unchecked Sendable {
             ],
             "signature": signature.object()
         ]
+        if let policy {
+            value["policy"] = policy.object()
+        }
+        return value
     }
 }
 
@@ -566,6 +639,16 @@ private func requiredObject(_ object: [String: Any], _ field: String, _ label: S
         throw SDKError.validation(label, "\(field) must be an object")
     }
     return value
+}
+
+private func optionalObject(_ object: [String: Any], _ field: String, _ label: String) throws -> [String: Any]? {
+    guard let value = object[field], !(value is NSNull) else {
+        return nil
+    }
+    guard let object = value as? [String: Any] else {
+        throw SDKError.validation(label, "\(field) must be an object")
+    }
+    return object
 }
 
 private func requiredString(_ object: [String: Any], _ field: String, _ label: String) throws -> String {
