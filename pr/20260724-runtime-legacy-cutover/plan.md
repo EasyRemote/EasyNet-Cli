@@ -305,3 +305,38 @@ architecture rather than add feature surface.
   - `tools/scripts/check-canonical-runtime-convergence-v2.sh`
   - `tools/scripts/check-architecture-convergence.sh`
   - `git diff --check`
+
+## Iteration 9 candidate policy
+
+- Focus on the daemon Kernel runtime boundary. codegraph found `Kernel::invoke`
+  and `KernelApi::prepare_local_system_rpc` still reading the `OnceLock`
+  directly and reporting `kernel LocalRuntime is not wired`.
+- The root abstraction problem is the same as the transport dispatchers: the
+  Kernel owns a lifecycle precondition but exposes it as ad hoc optional runtime
+  lookup at each entry point.
+- The intended cutover is to add one `Kernel::require_local_runtime` boundary
+  and route every Kernel local-runtime entry through it.
+- The failure should describe a missing canonical daemon kernel runtime assembly,
+  not a compatibility wiring hole.
+- Verification must cover Kernel invoke failure, KernelApi prepare path through
+  compile/tests, rustfmt, SPEC v2, architecture convergence, and whitespace
+  checks.
+
+## Iteration 9 decision log
+
+- Added `Kernel::require_local_runtime` as the single daemon-kernel boundary for
+  LocalRuntime availability.
+- Migrated `Kernel::invoke` and `KernelApi::prepare_local_system_rpc` away from
+  direct `OnceLock` LocalRuntime lookup.
+- Missing runtime now reports a canonical daemon kernel runtime assembly
+  precondition instead of a wiring compatibility hole.
+- SPEC v2 now checks that Kernel runtime lookup remains centralized and that
+  both Kernel entry points route through `require_local_runtime`.
+- Verification passed:
+  - `cargo test -q kernel_invoke_without_runtime_returns_error_without_receipt`
+  - `cargo test -q prepare_local_system_rpc`
+  - `cargo test -q invoke_rejects_non_device_session_projection_without_admitting_row`
+  - `cargo fmt --check`
+  - `tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - `tools/scripts/check-architecture-convergence.sh`
+  - `git diff --check`

@@ -120,6 +120,17 @@ impl Kernel {
         let _ = self.local_runtime.set(runtime);
     }
 
+    fn require_local_runtime(
+        &self,
+        context: &str,
+    ) -> anyhow::Result<Arc<axon_sdk::invocation::LocalRuntime>> {
+        self.local_runtime.get().map(Arc::clone).ok_or_else(|| {
+            anyhow::anyhow!(
+                "{context} requires canonical daemon kernel runtime assembly: missing LocalRuntime"
+            )
+        })
+    }
+
     /// Borrow the SessionService handle. Used by the daemon bin's
     /// boot path to share the same Arc into the system ability
     /// registry.
@@ -214,11 +225,7 @@ impl Kernel {
         session_projection: LocalRuntimeSessionProjection,
         permission_decision: Option<PermissionDecision>,
     ) -> anyhow::Result<FinalizedInvocation> {
-        let runtime = Arc::clone(
-            self.local_runtime
-                .get()
-                .ok_or_else(|| anyhow::anyhow!("kernel LocalRuntime is not wired"))?,
-        );
+        let runtime = self.require_local_runtime("Kernel::invoke")?;
         let session = Arc::clone(&self.session);
         let preview: String = args
             .get("prompt")
@@ -448,11 +455,7 @@ impl KernelApi for Kernel {
         subject_ura: &str,
         payload: Vec<u8>,
     ) -> anyhow::Result<DescriptorBoundInvocationRequest> {
-        let runtime = Arc::clone(
-            self.local_runtime
-                .get()
-                .ok_or_else(|| anyhow::anyhow!("kernel LocalRuntime is not wired"))?,
-        );
+        let runtime = self.require_local_runtime("KernelApi::prepare_local_system_rpc")?;
         let callee_ura = callee_ura.to_string();
         let ability = ability.to_string();
         let subject_ura = subject_ura.to_string();
@@ -700,7 +703,7 @@ mod tests {
             serde_json::to_vec(&json!({})).unwrap(),
         );
         let err = k.invoke(request).expect_err("unwired runtime must reject");
-        assert!(format!("{err}").contains("LocalRuntime is not wired"));
+        assert!(format!("{err}").contains("requires canonical daemon kernel runtime assembly"));
     }
 
     #[test]

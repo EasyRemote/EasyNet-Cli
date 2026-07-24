@@ -7024,6 +7024,42 @@ for required in (
 PY
 }
 
+check_kernel_runtime_requirement_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local kernel="$cli_root/src/daemon/boot/kernel/mod.rs"
+  [[ -f "$kernel" ]] || fail "kernel source is missing: $kernel"
+
+  "$PYTHON_BIN" - "$kernel" <<'PY'
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+production = text.split("#[cfg(test)]", 1)[0]
+
+for required, code in (
+    ("fn require_local_runtime(", "require_local_runtime_missing"),
+    ("requires canonical daemon kernel runtime assembly: missing LocalRuntime", "runtime_requirement_diagnostic_missing"),
+    ('self.require_local_runtime("Kernel::invoke")?', "invoke_not_using_runtime_requirement"),
+    ('self.require_local_runtime("KernelApi::prepare_local_system_rpc")?', "prepare_not_using_runtime_requirement"),
+):
+    if required not in text:
+        raise SystemExit(f"kernel_runtime_requirement:{code}")
+
+for retired in (
+    "kernel LocalRuntime is not wired",
+    "LocalRuntime is not wired",
+):
+    if retired in production:
+        raise SystemExit(f"kernel_runtime_requirement:retired_optional_runtime:{retired}")
+
+if production.count("self.local_runtime.get()") != 1:
+    raise SystemExit("kernel_runtime_requirement:local_runtime_lookup_not_centralized")
+
+if "requires canonical daemon kernel runtime assembly" not in text:
+    raise SystemExit("kernel_runtime_requirement:test_diagnostic_missing")
+PY
+}
+
 check_daemon_runtime_session_binding_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local daemon="$cli_root/src/bin/easynet-daemon.rs"
@@ -16848,6 +16884,7 @@ EOF
   check_ready_capability_proof_contract
   check_daemon_local_runtime_identity_contract
   check_kernel_runtime_session_read_model_contract
+  check_kernel_runtime_requirement_contract
   check_daemon_runtime_session_binding_contract
   check_daemon_runtime_discuss_binding_contract
   check_daemon_runtime_tenant_store_binding_contract
@@ -17027,6 +17064,7 @@ check_federation_probe_local_identity_contract
 check_ready_capability_proof_contract
 check_daemon_local_runtime_identity_contract
 check_kernel_runtime_session_read_model_contract
+check_kernel_runtime_requirement_contract
 check_daemon_runtime_session_binding_contract
 check_daemon_runtime_discuss_binding_contract
 check_daemon_runtime_tenant_store_binding_contract
