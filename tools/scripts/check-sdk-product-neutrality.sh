@@ -20,7 +20,7 @@ fail() {
 canonical_core_violations() {
   rg -n -i \
     '(easynet|daemon|device_ura|session_id|federation\.subscribe|events\.device|events\.invocation|session\.attach)' \
-    "$@"
+    "$@" | grep -vF '"easynet.run/cli/sdk/go"'
 }
 
 route_lowering_violations() {
@@ -345,6 +345,7 @@ for retired in \
   sdk/python/easynet_sdk/providers/easynet/plugin_exec.py \
   sdk/python/easynet_sdk/providers/easynet/key_service.py \
   sdk/python/easynet_sdk/providers/easynet/keyring.py \
+  sdk/go/provider/easynet \
   sdk/go/provider/easynet/pluginexec \
   sdk/rust/provider/easynet/pluginexec \
   sdk/java/src/main/java/run/runtime/sdk/provider/easynet/pluginexec \

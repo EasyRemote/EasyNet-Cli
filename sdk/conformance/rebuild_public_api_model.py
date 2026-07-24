@@ -324,8 +324,7 @@ def package_manifest() -> dict[str, list[dict[str, str]]]:
         "sdk/go/directorycore": "provider_neutral_core",
         "sdk/go/internal/axonpb": "generated_wire",
         "sdk/go/internal/runtimeevents": "provider_neutral_core",
-        "sdk/go/provider/easynet": "easynet_provider",
-        "sdk/go/provider/easynet/contract": "easynet_provider",
+        "sdk/go/provider/runtime": "provider_neutral_core",
         "sdk/go/provider/runtime/pluginexec": "provider_neutral_core",
         "sdk/go/runtimeevents": "provider_neutral_core",
     }
