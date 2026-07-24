@@ -466,10 +466,9 @@ legacy_scope = "all"
             Some("easynet:///r/custom-realm/user/alice")
         );
         assert!(
-            created["key_ura"]
-                .as_str()
-                .expect("key ura")
-                .starts_with("easynet:///r/custom-realm/resource/api_key."),
+            created["key_ura"].as_str().expect("key ura").starts_with(
+                &crate::core::ura::resource_dot_ura("custom-realm", "api_key.", "")
+            ),
             "key URA should use registered realm: {created}"
         );
     }

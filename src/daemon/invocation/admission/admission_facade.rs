@@ -2923,7 +2923,7 @@ mod tests {
             (
                 "caller",
                 authority_wire_envelope(
-                    Some(&format!("easynet:///r/policy/user/{placeholder}")),
+                    Some(&crate::core::ura::user_ura("policy", placeholder)),
                     Some(callee),
                     Some(subject),
                 ),
@@ -2933,7 +2933,7 @@ mod tests {
                 "callee",
                 authority_wire_envelope(
                     Some(caller),
-                    Some(&format!("easynet:///r/policy/user/{placeholder}")),
+                    Some(&crate::core::ura::user_ura("policy", placeholder)),
                     Some(subject),
                 ),
                 callee_ura_required as fn(&Envelope) -> Result<&str, Status>,

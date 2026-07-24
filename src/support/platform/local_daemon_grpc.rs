@@ -1854,13 +1854,13 @@ mod tests {
         for (field, callee, candidate_subject) in [
             (
                 "callee_ura",
-                format!("easynet:///r/acme/user/{placeholder}"),
+                crate::core::ura::user_ura("acme", placeholder),
                 subject.to_string(),
             ),
             (
                 "subject_ura",
                 "easynet:///r/acme/device/edge-1".to_string(),
-                format!("easynet:///r/acme/resource/user.{placeholder}/job-1"),
+                crate::core::ura::resource_dot_ura("acme", &format!("user.{placeholder}"), "job-1"),
             ),
         ] {
             let error = LocalDaemonLoopbackTuplePlan::targeted_root_for_subject(

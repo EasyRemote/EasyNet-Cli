@@ -1579,21 +1579,25 @@ mod tests {
         for (field, candidate_caller, candidate_callee, candidate_subject) in [
             (
                 "caller_ura",
-                format!("easynet:///r/acme/user/{placeholder}"),
+                crate::core::ura::user_ura("acme", placeholder),
                 hub.clone(),
                 subject.to_string(),
             ),
             (
                 "callee_ura",
                 caller.to_string(),
-                format!("easynet:///r/acme/user/{placeholder}"),
+                crate::core::ura::user_ura("acme", placeholder),
                 subject.to_string(),
             ),
             (
                 "subject_ura",
                 caller.to_string(),
                 hub.clone(),
-                format!("easynet:///r/acme/resource/user.{placeholder}/runtime-state/read"),
+                crate::core::ura::resource_dot_ura(
+                    "acme",
+                    &format!("user.{placeholder}"),
+                    "runtime-state/read",
+                ),
             ),
         ] {
             let error = DaemonInvocation::builder(

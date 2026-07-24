@@ -1680,13 +1680,17 @@ mod tests {
         for (field, caller, subject) in [
             (
                 "caller",
-                format!("easynet:///r/realm/user/{placeholder}"),
+                crate::core::ura::user_ura("realm", placeholder),
                 target.callee_ura().to_string(),
             ),
             (
                 "caller-declared subject",
                 "easynet:///r/realm/device/caller".to_string(),
-                format!("easynet:///r/realm/resource/user.{placeholder}/task/read"),
+                crate::core::ura::resource_dot_ura(
+                    "realm",
+                    &format!("user.{placeholder}"),
+                    "task/read",
+                ),
             ),
         ] {
             let error = RemoteInvocationTuplePlan::public_explicit(

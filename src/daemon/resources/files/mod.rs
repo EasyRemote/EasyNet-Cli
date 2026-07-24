@@ -640,7 +640,11 @@ mod tests {
         assert!(reference["resource_ura"]
             .as_str()
             .expect("resource_ura string")
-            .starts_with("easynet:///r/acme/resource/device.dev-a/fs/tmp/"));
+            .starts_with(&crate::core::ura::resource_dot_ura(
+                "acme",
+                "device.dev-a",
+                "fs/tmp/"
+            )));
         std::fs::remove_file(&local).ok();
         std::fs::remove_dir_all(local.parent().unwrap()).ok();
     }

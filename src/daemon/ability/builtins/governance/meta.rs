@@ -1129,8 +1129,10 @@ mod tests {
         assert!(
             hub_entry["descriptor_ref"]
                 .as_str()
-                .is_some_and(|descriptor_ref| descriptor_ref
-                    .starts_with("easynet:///r/test/ability/authority.test.scope@")),
+                .is_some_and(|descriptor_ref| descriptor_ref.starts_with(&format!(
+                    "{}@",
+                    crate::core::ura::authority_ability_ura("test", "test.scope")
+                ))),
             "hub-published row must stay canonical: {hub_entry}"
         );
     }

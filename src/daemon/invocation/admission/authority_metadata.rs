@@ -603,8 +603,11 @@ mod tests {
         let all_zero = "00000000-0000-0000-0000-000000000000";
         let mut payload = session_payload();
         payload.session_owner_user_id = all_zero.into();
-        payload.subject_ura =
-            format!("easynet:///r/example/resource/user.{all_zero}/session/session-1");
+        payload.subject_ura = crate::core::ura::resource_dot_ura(
+            "example",
+            &format!("user.{all_zero}"),
+            "session/session-1",
+        );
 
         let err = validate_session_authority_payload_shape(&payload, None)
             .expect_err("all-zero session owner must fail at authority metadata validation");
