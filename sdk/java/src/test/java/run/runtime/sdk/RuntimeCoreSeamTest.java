@@ -324,6 +324,15 @@ public final class RuntimeCoreSeamTest {
         "authority_proof issuer does not match callee_binding",
         () -> RuntimeReceipt.fromMap(wrongIssuer));
 
+    for (String retiredProfile : List.of("axon-legacy-v1", "opaque")) {
+      Map<String, Object> retiredCalleeProfile = new LinkedHashMap<>(complete);
+      retiredCalleeProfile.put("callee_binding", Map.of("ura", CALLEE, "profile", retiredProfile));
+      expectSDKError(
+          ErrorCode.INVALID_ARGUMENT,
+          "callee_binding.profile is not canonical",
+          () -> RuntimeReceipt.fromMap(retiredCalleeProfile));
+    }
+
     Map<String, Object> hostedSignerWithoutAttestation = new LinkedHashMap<>(complete);
     hostedSignerWithoutAttestation.put(
         "signer_binding",

@@ -10623,6 +10623,82 @@ for forbidden, label in {
 PY
 }
 
+check_sdk_receipt_profile_convergence_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local node_runtime="$cli_root/sdk/node/index.js"
+  local node_tests="$cli_root/sdk/node/test/runtime-core.test.mjs"
+  local swift_runtime="$cli_root/sdk/swift/Sources/RuntimeSDK/Runtime.swift"
+  local swift_tests="$cli_root/sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift"
+  local java_proof="$cli_root/sdk/java/src/main/java/run/runtime/sdk/RuntimeReceiptProofFacts.java"
+  local java_tests="$cli_root/sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
+  for path in "$node_runtime" "$node_tests" "$swift_runtime" "$swift_tests" "$java_proof" "$java_tests"; do
+    [[ -f "$path" ]] || fail "SDK receipt profile convergence file is missing: ${path#$cli_root/}"
+  done
+
+  "$PYTHON_BIN" - "$node_runtime" "$node_tests" "$swift_runtime" "$swift_tests" "$java_proof" "$java_tests" <<'PY'
+import sys
+from pathlib import Path
+
+node_runtime, node_tests, swift_runtime, swift_tests, java_proof, java_tests = [
+    Path(path).read_text(encoding="utf-8") for path in sys.argv[1:]
+]
+
+for language, source in {
+    "node": node_runtime,
+    "swift": swift_runtime,
+    "java": java_proof,
+}.items():
+    if "axon-legacy-v1" in source:
+        raise SystemExit(f"sdk_receipt_profile_convergence:{language}:legacy_profile_admitted")
+
+for forbidden, label in {
+    '["axon-strict-v2", "axon-legacy-v1", "opaque"]': "node_local_profile_whitelist",
+    '["axon-strict-v2", "axon-legacy-v1", "opaque"].contains': "swift_local_profile_whitelist",
+    'case "axon-strict-v2", "axon-legacy-v1", "opaque"': "java_local_profile_whitelist",
+}.items():
+    corpus = "\n".join([node_runtime, swift_runtime, java_proof])
+    if forbidden in corpus:
+        raise SystemExit(f"sdk_receipt_profile_convergence:{label}")
+
+required_sources = {
+    "node": (node_runtime, 'profile !== "axon-strict-v2"'),
+    "swift": (swift_runtime, 'profile == "axon-strict-v2"'),
+    "java": (java_proof, 'case "axon-strict-v2" -> {}'),
+}
+for language, (source, marker) in required_sources.items():
+    if marker not in source:
+        raise SystemExit(f"sdk_receipt_profile_convergence:{language}:strict_profile_marker_missing")
+
+required_tests = {
+    "node": (
+        node_tests,
+        [
+            'for (const retiredProfile of ["axon-legacy-v1", "opaque"])',
+            "callee_binding.profile is not canonical",
+        ],
+    ),
+    "swift": (
+        swift_tests,
+        [
+            'for retiredProfile in ["axon-legacy-v1", "opaque"]',
+            "callee_binding.profile is not canonical",
+        ],
+    ),
+    "java": (
+        java_tests,
+        [
+            'List.of("axon-legacy-v1", "opaque")',
+            "callee_binding.profile is not canonical",
+        ],
+    ),
+}
+for language, (tests, markers) in required_tests.items():
+    for marker in markers:
+        if marker not in tests:
+            raise SystemExit(f"sdk_receipt_profile_convergence:{language}:missing_test:{marker}")
+PY
+}
+
 check_sdk_runtime_receipt_type_state_binding_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local go_runtime="$cli_root/sdk/go/runtime.go"
@@ -15971,6 +16047,7 @@ EOF
   check_java_sdk_runtime_receipt_projection_contract
   check_node_sdk_runtime_receipt_projection_contract
   check_swift_sdk_runtime_receipt_projection_contract
+  check_sdk_receipt_profile_convergence_contract
   check_sdk_runtime_receipt_type_state_binding_contract
   check_start_attach_user_signer_readiness_contract
   echo "canonical-runtime-convergence-v2 self-test ok"
@@ -16146,5 +16223,6 @@ check_java_sdk_invocation_authority_binding_contract
 check_java_sdk_runtime_receipt_projection_contract
 check_node_sdk_runtime_receipt_projection_contract
 check_swift_sdk_runtime_receipt_projection_contract
+check_sdk_receipt_profile_convergence_contract
 check_sdk_runtime_receipt_type_state_binding_contract
 echo "canonical-runtime-convergence-v2: OK"

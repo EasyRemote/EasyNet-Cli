@@ -232,6 +232,22 @@ final class RuntimeCoreSeamTests: XCTestCase {
             )
         }
 
+        for retiredProfile in ["axon-legacy-v1", "opaque"] {
+            var retiredCalleeProfile = terminal
+            var calleeBinding = retiredCalleeProfile["callee_binding"] as! [String: Any]
+            calleeBinding["profile"] = retiredProfile
+            retiredCalleeProfile["callee_binding"] = calleeBinding
+            expectSyncSDKError(.invalidArgument, "callee_binding.profile is not canonical") {
+                _ = try InvocationResult.fromJSON(
+                    jsonData([
+                        "ok": true,
+                        "terminal_state": "Completed",
+                        "terminal_receipt": retiredCalleeProfile,
+                    ])
+                )
+            }
+        }
+
         var hostedSignerWithoutAttestation = terminal
         hostedSignerWithoutAttestation["signer_binding"] = [
             "ura": "easynet:///r/example/device/runtime-host",

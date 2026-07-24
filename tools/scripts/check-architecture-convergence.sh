@@ -7470,6 +7470,52 @@ if node_types_test.exists():
             add("R71_NODE_PRODUCT_NEUTRAL_TYPES_TEST", node_types_test, 1, detail)
 
 
+# Rule 71B: Receipt proof-fact identity profiles are part of the canonical
+# runtime evidence model. Language SDKs must not keep local legacy/opaque
+# profile whitelists that diverge from the Go/Python Axon parser path.
+sdk_receipt_profile_files = {
+    "node": cli_root / "sdk/node/index.js",
+    "swift": cli_root / "sdk/swift/Sources/RuntimeSDK/Runtime.swift",
+    "java": cli_root / "sdk/java/src/main/java/run/runtime/sdk/RuntimeReceiptProofFacts.java",
+}
+for language, path in sdk_receipt_profile_files.items():
+    if not path.exists():
+        continue
+    text = source(path)
+    if "axon-legacy-v1" in text:
+        add(
+            "R71B_SDK_RECEIPT_PROFILE_CONVERGENCE",
+            path,
+            line_number(text, text.find("axon-legacy-v1")),
+            f"{language} receipt proof-fact validator must not admit retired axon-legacy-v1 profiles",
+        )
+    for token in (
+        '["axon-strict-v2", "axon-legacy-v1", "opaque"]',
+        'case "axon-strict-v2", "axon-legacy-v1", "opaque"',
+    ):
+        if token in text:
+            add(
+                "R71B_SDK_RECEIPT_PROFILE_CONVERGENCE",
+                path,
+                line_number(text, text.find(token)),
+                f"{language} receipt proof-fact validator must not use a local legacy/opaque profile whitelist",
+            )
+required_profile_markers = {
+    "node": 'profile !== "axon-strict-v2"',
+    "swift": 'profile == "axon-strict-v2"',
+    "java": 'case "axon-strict-v2" -> {}',
+}
+for language, marker in required_profile_markers.items():
+    path = sdk_receipt_profile_files[language]
+    if path.exists() and marker not in source(path):
+        add(
+            "R71B_SDK_RECEIPT_PROFILE_CONVERGENCE",
+            path,
+            1,
+            f"{language} receipt proof-fact validator must fail closed to axon-strict-v2 only",
+        )
+
+
 # Rule 72: Sidecar stderr is plugin failure evidence. The host must preserve
 # binary stderr lossily and capture reader failures explicitly; it must not
 # collapse read errors, UTF-8 errors, or reader panics into an empty diagnostic.

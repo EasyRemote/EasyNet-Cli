@@ -776,7 +776,7 @@ private func runtimeBase64(
 }
 
 private func runtimeValidateURAProfile(_ profile: String, _ field: String) throws {
-    guard ["axon-strict-v2", "axon-legacy-v1", "opaque"].contains(profile) else {
+    guard profile == "axon-strict-v2" else {
         throw SDKError.validation("runtime_receipt", "\(field) is not canonical")
     }
 }

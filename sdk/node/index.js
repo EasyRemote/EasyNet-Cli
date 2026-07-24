@@ -2254,7 +2254,7 @@ function requireRuntimeReceiptSameIdentity(left, right) {
 }
 
 function validateRuntimeReceiptURAProfile(profile, field) {
-  if (!["axon-strict-v2", "axon-legacy-v1", "opaque"].includes(profile)) {
+  if (profile !== "axon-strict-v2") {
     throw invalidRuntime(`${field} is not canonical`);
   }
 }

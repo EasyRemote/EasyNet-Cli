@@ -393,7 +393,7 @@ final class RuntimeReceiptProofFacts {
 
   private static void validateUraProfile(String profile, String field) {
     switch (profile) {
-      case "axon-strict-v2", "axon-legacy-v1", "opaque" -> {}
+      case "axon-strict-v2" -> {}
       default -> throw SDKError.validation("runtime_receipt", field + " is not canonical");
     }
   }

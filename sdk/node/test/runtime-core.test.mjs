@@ -510,6 +510,23 @@ test("runtime receipt proof facts are mandatory", () => {
       && error.message.includes("authority_proof issuer does not match callee_binding"),
   );
 
+  for (const retiredProfile of ["axon-legacy-v1", "opaque"]) {
+    const retiredCalleeProfile = {
+      ...complete,
+      callee_binding: {
+        ...complete.callee_binding,
+        profile: retiredProfile,
+      },
+    };
+    assert.throws(
+      () => sdk.RuntimeReceipt.fromObject(retiredCalleeProfile),
+      (error) =>
+        error instanceof sdk.SDKError
+        && error.code === sdk.ErrorCode.INVALID_ARGUMENT
+        && error.message.includes("callee_binding.profile is not canonical"),
+    );
+  }
+
   const hostedSignerWithoutAttestation = {
     ...complete,
     signer_binding: {
