@@ -55,9 +55,8 @@ impl RunDir {
     /// Write the composed prompt to `prompt.txt`.
     ///
     /// Returns `Result` rather than swallowing — a missed prompt write means
-    /// the run directory is no longer a faithful record, and a caller might
-    /// reasonably choose to fail loudly rather than continue with a half-
-    /// persisted run. The CLI dispatcher currently logs and proceeds.
+    /// the run directory is no longer a faithful record. The CLI dispatcher
+    /// treats this as a pre-invocation infrastructure failure.
     pub fn write_prompt(&self, prompt: &str) -> io::Result<()> {
         fs::write(self.path.join("prompt.txt"), prompt)
     }

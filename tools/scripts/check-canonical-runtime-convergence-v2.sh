@@ -6775,6 +6775,43 @@ for name, text in (("mission_ability", mission_ability), ("eal_executor", eal_ex
 PY
 }
 
+check_mission_dispatch_audit_authority_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local dispatch="$cli_root/src/daemon/execution/mission/dispatch.rs"
+  [[ -f "$dispatch" ]] || fail "mission dispatch source is missing: $dispatch"
+
+  "$PYTHON_BIN" - "$dispatch" <<'PY'
+import sys
+from pathlib import Path
+
+dispatch = Path(sys.argv[1]).read_text(encoding="utf-8")
+
+for retired in (
+    "let run_dir: Option<Arc<RunDir>>",
+    "fallback = \"no_per_run_persistence\"",
+    "fallback = \"run_dir_write_is_authoritative\"",
+    "fallback = \"run_dir_meta_is_authoritative\"",
+    "if let Some(dir) = &run_dir",
+    "run_dir.as_ref().map",
+    "timeline_admitted_emit_failed",
+    "timeline_terminal_emit_failed",
+):
+    if retired in dispatch:
+        raise SystemExit(f"mission_dispatch_audit_authority:retired:{retired}")
+
+for required in (
+    "agent dispatch requires per-run persistence",
+    "agent dispatch requires prompt persistence",
+    "agent dispatch requires admitted timeline event",
+    "agent dispatch requires terminal timeline event",
+    "dispatch_rejects_run_store_creation_failure_before_adapter_spawn",
+    "run_dir: Some(run_dir.path().to_path_buf())",
+):
+    if required not in dispatch:
+        raise SystemExit(f"mission_dispatch_audit_authority:missing:{required}")
+PY
+}
+
 check_edge_adapter_policy_contract() {
   "$PYTHON_BIN" "$EDGE_ADAPTER_POLICY" --manifest "$MANIFEST" >/dev/null
 }
@@ -15726,6 +15763,31 @@ EOF
   if ( check_mission_agent_trace_sink_cutover_contract "$tmp/mission-agent-trace-sink-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected Mission/Agent legacy trace sink gate to fail"
   fi
+  mkdir -p "$tmp/mission-dispatch-audit-fallback-legacy/src/daemon/execution/mission"
+  cat >"$tmp/mission-dispatch-audit-fallback-legacy/src/daemon/execution/mission/dispatch.rs" <<'EOF'
+fn send_to_agent_with_depth_and_progress(root: &Path) {
+    let run_dir: Option<Arc<RunDir>> = match RunDir::create(root) {
+        Ok(dir) => Some(Arc::new(dir)),
+        Err(_) => {
+            op_event!(fallback = "no_per_run_persistence");
+            None
+        }
+    };
+    if let Some(dir) = &run_dir {
+        let _ = dir.write_prompt("prompt");
+    }
+    if let Err(_) = session.writer().emit("admitted", None) {
+        op_event!(kind = timeline_admitted_emit_failed, fallback = "run_dir_write_is_authoritative");
+    }
+    if let Err(_) = session.writer().emit("completed", None) {
+        op_event!(kind = timeline_terminal_emit_failed, fallback = "run_dir_meta_is_authoritative");
+    }
+    let _ = run_dir.as_ref().map(|d| d.path().to_path_buf());
+}
+EOF
+  if ( check_mission_dispatch_audit_authority_contract "$tmp/mission-dispatch-audit-fallback-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected Mission dispatch audit fallback gate to fail"
+  fi
   mkdir -p "$tmp/mission-meta-identity-legacy/src/daemon/execution/mission"
   printf '%s\n' \
     '#[derive(Debug, Clone, Default, Serialize, Deserialize)]' \
@@ -17380,6 +17442,7 @@ EOF
   check_device_settings_loader_contract
   check_mission_traditional_target_conflict_contract
   check_mission_agent_trace_sink_cutover_contract
+  check_mission_dispatch_audit_authority_contract
   check_mission_runtime_meta_identity_schema_contract
   check_mission_terminal_receipt_projection_contract
   check_edge_adapter_policy_contract
@@ -17564,6 +17627,7 @@ check_federation_revoke_ingress_strict_contract
 check_device_settings_loader_contract
 check_mission_traditional_target_conflict_contract
 check_mission_agent_trace_sink_cutover_contract
+check_mission_dispatch_audit_authority_contract
 check_mission_runtime_meta_identity_schema_contract
 check_mission_terminal_receipt_projection_contract
 check_edge_adapter_policy_contract

@@ -488,47 +488,29 @@ pub fn send_to_agent_with_depth_and_progress(
     let mut env = entry.env.clone();
     active.child(agent_name).serialize_to_env(&mut env);
 
-    // Create a per-run directory. If creation fails (e.g. workspace dir is
-    // unwritable), skip persistence — the agent call still runs, but we
-    // surface the reason so the operator knows the run is unrecorded.
-    let run_dir: Option<Arc<RunDir>> = match RunDir::create(root) {
-        Ok(dir) => Some(Arc::new(dir)),
-        Err(e) => {
-            let err_msg = format!("{e}");
-            crate::op_event!(
-                component = dispatch,
-                kind = run_dir_create_failed,
-                level = "warn",
-                agent = agent_name,
-                error = err_msg,
-                fallback = "no_per_run_persistence",
-            );
-            None
-        }
-    };
-    if let Some(dir) = &run_dir {
-        if let Err(e) = dir.write_prompt(&full_prompt) {
-            let path_display = format!("{}", dir.path().display());
-            let err_msg = format!("{e}");
-            crate::op_event!(
-                component = dispatch,
-                kind = prompt_write_failed,
-                level = "warn",
-                run_path = path_display,
-                error = err_msg,
-            );
-        }
-    }
+    // Create the per-run directory before invoking the runtime. Local Agent
+    // dispatch no longer has a "run without audit" mode: a call that cannot
+    // establish its human-facing run store is an infrastructure failure, not a
+    // valid invocation with a missing side artifact.
+    let run_dir = Arc::new(RunDir::create(root).map_err(|e| {
+        anyhow::anyhow!(
+            "agent dispatch requires per-run persistence under {}: {e}",
+            root.display()
+        )
+    })?);
+    run_dir.write_prompt(&full_prompt).map_err(|e| {
+        anyhow::anyhow!(
+            "agent dispatch requires prompt persistence at {}: {e}",
+            run_dir.path().display()
+        )
+    })?;
 
-    // Allocate a PR-7 Session for this dispatch. The Session's
-    // invocation_id becomes the cross-reference key between the
-    // legacy `runs/<ts>/` directory (human-facing artefacts) and
-    // the PersistentLog event log (machine-auditable stream,
-    // P1-P6 compliant). Commit 1 of PR-7: dual-write — emit
-    // admitted + terminal events to the Timeline alongside the
-    // existing run_dir writes. Mid-stream progress events stay
-    // in run_dir/trace.jsonl for now; Commit 2 routes them
-    // through the Timeline broadcast path.
+    // Allocate a Session for this dispatch. The Session's invocation_id is the
+    // cross-reference key between the per-run directory (human-facing
+    // artifacts) and the PersistentLog event log (machine-auditable stream,
+    // P1-P6 compliant). The Timeline is the stream authority; the run directory
+    // records prompt/response/meta artifacts and never substitutes for a failed
+    // Timeline write.
     //
     // Session construction is infallible: PersistentLog uses its
     // own env-var / tempdir default when the caller passes None.
@@ -552,17 +534,10 @@ pub fn send_to_agent_with_depth_and_progress(
         "mission_id": active.mission_id.clone(),
         "context_present": context.is_some(),
     });
-    if let Err(e) = session.writer().emit("admitted", Some(admitted_payload)) {
-        let err_msg = format!("{e}");
-        crate::op_event!(
-            component = dispatch,
-            kind = timeline_admitted_emit_failed,
-            level = "warn",
-            agent = agent_name,
-            error = err_msg,
-            fallback = "run_dir_write_is_authoritative",
-        );
-    }
+    session
+        .writer()
+        .emit("admitted", Some(admitted_payload))
+        .map_err(|e| anyhow::anyhow!("agent dispatch requires admitted timeline event: {e}"))?;
 
     let started_at = Local::now().to_rfc3339();
     // Dispatch through the trait. `adapter_for` is the single place
@@ -619,65 +594,63 @@ pub fn send_to_agent_with_depth_and_progress(
     // Write meta.json regardless of success/failure so failed runs are still
     // inspectable.
     let duration_ms = start.elapsed().as_millis() as u64;
-    if let Some(dir) = &run_dir {
-        let (exit_status, error, content_for_meta, usage_for_meta) = match &run_result {
-            Ok(out) => (
-                "ok".to_string(),
-                None,
-                Some(out.content.as_str()),
-                out.usage.clone(),
-            ),
-            Err(e) => ("error".to_string(), Some(e.to_string()), None, None),
-        };
-        if let Some(text) = content_for_meta {
-            if let Err(e) = dir.write_response(text) {
-                let path_display = format!("{}", dir.path().display());
-                let err_msg = format!("{e}");
-                crate::op_event!(
-                    component = dispatch,
-                    kind = response_write_failed,
-                    level = "warn",
-                    run_path = path_display,
-                    error = err_msg,
-                );
-            }
-        }
-        let u = usage_for_meta.unwrap_or_default();
-        let meta = RunMeta {
-            agent: agent_name.to_string(),
-            agent_type: entry.agent_type.to_string(),
-            // Record the model actually dispatched, which is
-            // spec-resolved above. A stale entry.model on the
-            // registry row must not shadow the spec's choice in
-            // the audit trail.
-            model: effective_model.clone(),
-            // Cross-reference key to the PersistentLog event log.
-            // Operators grepping for this id under
-            // `$AXON_INVOCATION_LOG_DIR/<id>.jsonl` find the
-            // P1-P6-compliant stream of events for this run.
-            invocation_id: session.invocation_id().to_string(),
-            started_at,
-            duration_ms,
-            exit_status,
-            error,
-            input_tokens: u.input_tokens,
-            output_tokens: u.output_tokens,
-            cache_read_tokens: u.cache_read_tokens,
-            cache_creation_tokens: u.cache_creation_tokens,
-            num_turns: u.num_turns,
-            total_cost_usd: u.total_cost_usd,
-        };
-        if let Err(e) = dir.write_meta(&meta) {
-            let path_display = format!("{}", dir.path().display());
+    let (exit_status, error, content_for_meta, usage_for_meta) = match &run_result {
+        Ok(out) => (
+            "ok".to_string(),
+            None,
+            Some(out.content.as_str()),
+            out.usage.clone(),
+        ),
+        Err(e) => ("error".to_string(), Some(e.to_string()), None, None),
+    };
+    if let Some(text) = content_for_meta {
+        if let Err(e) = run_dir.write_response(text) {
+            let path_display = format!("{}", run_dir.path().display());
             let err_msg = format!("{e}");
             crate::op_event!(
                 component = dispatch,
-                kind = meta_write_failed,
+                kind = response_write_failed,
                 level = "warn",
                 run_path = path_display,
                 error = err_msg,
             );
         }
+    }
+    let u = usage_for_meta.unwrap_or_default();
+    let meta = RunMeta {
+        agent: agent_name.to_string(),
+        agent_type: entry.agent_type.to_string(),
+        // Record the model actually dispatched, which is
+        // spec-resolved above. A stale entry.model on the
+        // registry row must not shadow the spec's choice in
+        // the audit trail.
+        model: effective_model.clone(),
+        // Cross-reference key to the PersistentLog event log.
+        // Operators grepping for this id under
+        // `$AXON_INVOCATION_LOG_DIR/<id>.jsonl` find the
+        // P1-P6-compliant stream of events for this run.
+        invocation_id: session.invocation_id().to_string(),
+        started_at,
+        duration_ms,
+        exit_status,
+        error,
+        input_tokens: u.input_tokens,
+        output_tokens: u.output_tokens,
+        cache_read_tokens: u.cache_read_tokens,
+        cache_creation_tokens: u.cache_creation_tokens,
+        num_turns: u.num_turns,
+        total_cost_usd: u.total_cost_usd,
+    };
+    if let Err(e) = run_dir.write_meta(&meta) {
+        let path_display = format!("{}", run_dir.path().display());
+        let err_msg = format!("{e}");
+        crate::op_event!(
+            component = dispatch,
+            kind = meta_write_failed,
+            level = "warn",
+            run_path = path_display,
+            error = err_msg,
+        );
     }
 
     // Terminal timeline event. One of `completed` / `failed`
@@ -709,17 +682,10 @@ pub fn send_to_agent_with_depth_and_progress(
             dispatch_terminal_failure_payload(&e.to_string(), duration_ms),
         ),
     };
-    if let Err(e) = session.writer().emit(terminal_type, Some(terminal_payload)) {
-        let err_msg = format!("{e}");
-        crate::op_event!(
-            component = dispatch,
-            kind = timeline_terminal_emit_failed,
-            level = "warn",
-            agent = agent_name,
-            error = err_msg,
-            fallback = "run_dir_meta_is_authoritative",
-        );
-    }
+    session
+        .writer()
+        .emit(terminal_type, Some(terminal_payload))
+        .map_err(|e| anyhow::anyhow!("agent dispatch requires terminal timeline event: {e}"))?;
 
     let output = run_result?;
 
@@ -732,7 +698,7 @@ pub fn send_to_agent_with_depth_and_progress(
         duration_ms,
         truncated: false,
         usage: output.usage,
-        run_dir: run_dir.as_ref().map(|d| d.path().to_path_buf()),
+        run_dir: Some(run_dir.path().to_path_buf()),
         tool_calls: output.tool_calls,
         thread_id: output.thread_id,
     })
@@ -1000,6 +966,48 @@ mod tests {
         assert!(
             msg.contains("agent.toml names \"bob\""),
             "expected spec-name mismatch, got: {msg}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dispatch_rejects_run_store_creation_failure_before_adapter_spawn() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
+        let root = crate::daemon::persistence::config::agents_root().join("alice");
+        let spec = crate::core::agent::spec::AgentSpec::new(
+            "alice",
+            crate::core::agent::spec::RuntimeKind::ClaudeCode,
+        );
+        crate::daemon::execution::mission::directory::AgentDirectory::create(
+            &crate::daemon::execution::mission::directory::Location::Local { root: root.clone() },
+            spec,
+        )
+        .unwrap();
+        let runs_dir = root.join("runs");
+        let mut blocked_permissions = std::fs::metadata(&runs_dir).unwrap().permissions();
+        blocked_permissions.set_mode(0o500);
+        std::fs::set_permissions(&runs_dir, blocked_permissions).unwrap();
+
+        let mut entry = dummy_entry();
+        entry.root_path = Some(root.clone());
+        let result = send_to_agent_with_depth("alice", &entry, "prompt", None, Some(1), None);
+
+        let mut restored_permissions = std::fs::metadata(&runs_dir).unwrap().permissions();
+        restored_permissions.set_mode(0o700);
+        std::fs::set_permissions(&runs_dir, restored_permissions).unwrap();
+
+        let err = result.expect_err("run-store creation failure must stop before adapter spawn");
+        let msg = format!("{err:#}");
+
+        assert!(
+            msg.contains("requires per-run persistence"),
+            "expected required run-store error, got: {msg}"
+        );
+        assert!(
+            !msg.contains("easynet-test-nonexistent-agent-binary"),
+            "adapter command must not be spawned when run-store authority is unavailable: {msg}"
         );
     }
 

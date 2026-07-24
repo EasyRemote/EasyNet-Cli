@@ -657,3 +657,58 @@ architecture rather than add feature surface.
   - `tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
   - `tools/scripts/check-architecture-convergence.sh`
   - `git diff --check`
+
+## Iteration 17 candidate policy
+
+- Focus on Mission dispatch audit authority. codegraph/rg found
+  `send_to_agent_with_depth_and_progress` still converts
+  `RunDir::create(root)` failure into `None` and continues driver execution
+  under the explicit `fallback = "no_per_run_persistence"` event.
+- The same dispatch path also treats failed Timeline `admitted` and terminal
+  emits as warnings and labels the run directory as authoritative
+  (`run_dir_write_is_authoritative`, `run_dir_meta_is_authoritative`).
+- The root abstraction problem is a second audit authority path in the local
+  Agent/Mission dispatch lifecycle. A runtime call that cannot establish its
+  run directory and Timeline admission record is not a valid invocation; it is
+  an infrastructure failure before runtime execution.
+- The intended cutover is:
+  - run directory creation is required before adapter invocation;
+  - prompt persistence is required before adapter invocation;
+  - Timeline `admitted` is required before adapter invocation;
+  - Timeline terminal emission is required before returning a successful
+    dispatch response;
+  - `AgentResponse.run_dir` remains optional on the public DTO for source
+    compatibility, but successful local dispatch always projects `Some(path)`.
+- Verification must prove a blocked `runs` store fails before the bogus test
+  adapter command is spawned, and SPEC v2 must reject the retired fallback
+  vocabulary and optional `run_dir` branch in the dispatch implementation.
+
+## Iteration 17 decision log
+
+- Removed Mission/Agent dispatch degraded mode where `RunDir::create(root)`
+  failure produced `None` and the adapter still ran without per-run
+  persistence.
+- Made prompt persistence a pre-invocation requirement. A dispatch whose run
+  directory cannot faithfully record the prompt fails before spawning the
+  runtime adapter.
+- Made Timeline `admitted` emission a pre-invocation requirement and Timeline
+  terminal emission a response requirement. The run directory no longer acts as
+  an alternate authority when Timeline writes fail.
+- Preserved the public `AgentResponse.run_dir: Option<PathBuf>` shape while
+  making successful local dispatch project `Some(path)`.
+- Updated `RunDir::write_prompt` documentation to match the new dispatcher
+  contract.
+- Added focused dispatch coverage proving a blocked `runs/` store fails before
+  the bogus test adapter command can spawn.
+- Added SPEC v2 gate `check_mission_dispatch_audit_authority_contract` and a
+  negative self-test fixture that fails if `no_per_run_persistence`,
+  `run_dir_write_is_authoritative`, `run_dir_meta_is_authoritative`, optional
+  run-dir branching, or timeline warning fallbacks return.
+- Verification passed:
+  - `cargo test -q daemon::execution::mission::dispatch::tests`
+  - `cargo check -q`
+  - `cargo fmt --check`
+  - `tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - `tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  - `tools/scripts/check-architecture-convergence.sh`
+  - `git diff --check`
