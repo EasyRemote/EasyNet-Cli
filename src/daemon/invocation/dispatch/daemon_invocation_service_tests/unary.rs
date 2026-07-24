@@ -2301,10 +2301,114 @@ async fn invoke_rejects_namespace_proxy_resolve_missing_qtype() {
         "namespace.proxy_resolve must reject missing qtype before defaulting to directory listing",
     );
     assert!(
-        error.message.contains("missing canonical qtype"),
+        error.message.contains("qtype"),
         "rejection must name the missing canonical qtype; got: {}",
         error.message
     );
+}
+
+#[tokio::test]
+async fn invoke_rejects_namespace_proxy_resolve_missing_required_tuple_fields() {
+    let cases = [
+        (
+            "query_name",
+            r#"{
+                "peer_hub_urls":[],
+                "qtype":"RESOLVE_TYPE_DIRECTORY_LISTING",
+                "caller_ura":"easynet:///r/local-realm/authority",
+                "subject_ura":"easynet:///r/local-realm/user/alice",
+                "realm_hint":"peer-realm"
+            }"#,
+        ),
+        (
+            "caller_ura",
+            r#"{
+                "peer_hub_urls":[],
+                "query_name":"easynet:///r/peer-realm/device/",
+                "qtype":"RESOLVE_TYPE_DIRECTORY_LISTING",
+                "subject_ura":"easynet:///r/local-realm/user/alice",
+                "realm_hint":"peer-realm"
+            }"#,
+        ),
+        (
+            "subject_ura",
+            r#"{
+                "peer_hub_urls":[],
+                "query_name":"easynet:///r/peer-realm/device/",
+                "qtype":"RESOLVE_TYPE_DIRECTORY_LISTING",
+                "caller_ura":"easynet:///r/local-realm/authority",
+                "realm_hint":"peer-realm"
+            }"#,
+        ),
+        (
+            "realm_hint",
+            r#"{
+                "peer_hub_urls":[],
+                "query_name":"easynet:///r/peer-realm/device/",
+                "qtype":"RESOLVE_TYPE_DIRECTORY_LISTING",
+                "caller_ura":"easynet:///r/local-realm/authority",
+                "subject_ura":"easynet:///r/local-realm/user/alice"
+            }"#,
+        ),
+    ];
+
+    for (field, payload) in cases {
+        let svc = make_service();
+        let error = expect_canonical_in_band_failure(
+            svc.invoke(invoke_request(ABILITY_NAMESPACE_PROXY_RESOLVE, payload))
+                .await,
+            axon_sdk::invocation::ErrorCode::RequestPayloadInvalid,
+            "namespace.proxy_resolve must reject missing tuple fields before proxy routing",
+        );
+        assert!(
+            error.message.contains(field),
+            "rejection for missing {field} must name the field; got: {}",
+            error.message
+        );
+    }
+}
+
+#[tokio::test]
+async fn invoke_rejects_namespace_proxy_resolve_non_canonical_tuple_uras() {
+    let cases = [
+        (
+            "caller_ura",
+            r#"{
+                "peer_hub_urls":[],
+                "query_name":"easynet:///r/peer-realm/device/",
+                "qtype":"RESOLVE_TYPE_DIRECTORY_LISTING",
+                "caller_ura":"not-a-ura",
+                "subject_ura":"easynet:///r/local-realm/user/alice",
+                "realm_hint":"peer-realm"
+            }"#,
+        ),
+        (
+            "subject_ura",
+            r#"{
+                "peer_hub_urls":[],
+                "query_name":"easynet:///r/peer-realm/device/",
+                "qtype":"RESOLVE_TYPE_DIRECTORY_LISTING",
+                "caller_ura":"easynet:///r/local-realm/authority",
+                "subject_ura":"not-a-ura",
+                "realm_hint":"peer-realm"
+            }"#,
+        ),
+    ];
+
+    for (field, payload) in cases {
+        let svc = make_service();
+        let error = expect_canonical_in_band_failure(
+            svc.invoke(invoke_request(ABILITY_NAMESPACE_PROXY_RESOLVE, payload))
+                .await,
+            axon_sdk::invocation::ErrorCode::RequestPayloadInvalid,
+            "namespace.proxy_resolve must reject non-canonical tuple URAs before proxy routing",
+        );
+        assert!(
+            error.message.contains(field) && error.message.contains("canonical URA"),
+            "rejection for invalid {field} must name canonical URA requirement; got: {}",
+            error.message
+        );
+    }
 }
 
 #[tokio::test]

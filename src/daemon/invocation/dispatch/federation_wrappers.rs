@@ -1048,15 +1048,15 @@ pub struct ProxyListUserDevicesResponse {
 pub struct NamespaceProxyResolveRequest {
     #[serde(default)]
     pub peer_hub_urls: Vec<String>,
-    #[serde(default, rename = "query_name")]
+    #[serde(rename = "query_name")]
     pub query_name: String,
-    #[serde(default, rename = "qtype")]
+    #[serde(rename = "qtype")]
     pub qtype: String,
-    #[serde(default, rename = "caller_ura")]
+    #[serde(rename = "caller_ura")]
     pub caller_ura: String,
-    #[serde(default, rename = "subject_ura")]
+    #[serde(rename = "subject_ura")]
     pub subject_ura: String,
-    #[serde(default, rename = "realm_hint")]
+    #[serde(rename = "realm_hint")]
     pub realm_hint: String,
     #[serde(default, rename = "ability_name")]
     pub ability_name: String,

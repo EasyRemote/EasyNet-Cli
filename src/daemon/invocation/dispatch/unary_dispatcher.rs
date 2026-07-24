@@ -2028,6 +2028,7 @@ fn namespace_proxy_resolve_peer_arguments(
 fn validate_namespace_proxy_resolve_request(
     request: &federation_wrappers::NamespaceProxyResolveRequest,
 ) -> Result<(), Status> {
+    require_namespace_proxy_non_empty(&request.query_name, "query_name")?;
     let qtype = request.qtype.trim();
     if qtype.is_empty() {
         return Err(Status::invalid_argument(
@@ -2044,6 +2045,28 @@ fn validate_namespace_proxy_resolve_request(
             "namespace.proxy_resolve: qtype must not be RESOLVE_TYPE_UNSPECIFIED",
         ));
     }
+    require_namespace_proxy_ura(&request.caller_ura, "caller_ura")?;
+    require_namespace_proxy_ura(&request.subject_ura, "subject_ura")?;
+    require_namespace_proxy_non_empty(&request.realm_hint, "realm_hint")?;
+    Ok(())
+}
+
+fn require_namespace_proxy_non_empty(value: &str, field: &str) -> Result<(), Status> {
+    if value.trim().is_empty() {
+        return Err(Status::invalid_argument(format!(
+            "namespace.proxy_resolve: request missing canonical {field}"
+        )));
+    }
+    Ok(())
+}
+
+fn require_namespace_proxy_ura(value: &str, field: &str) -> Result<(), Status> {
+    require_namespace_proxy_non_empty(value, field)?;
+    crate::core::ura::parse_ura(value.trim()).map_err(|error| {
+        Status::invalid_argument(format!(
+            "namespace.proxy_resolve: {field} is not a canonical URA: {error}"
+        ))
+    })?;
     Ok(())
 }
 

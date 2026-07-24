@@ -312,18 +312,36 @@ pub(crate) fn input_schema_for(name: &str) -> Option<Value> {
             &[],
             false,
         ),
-        ABILITY_NAMESPACE_RESOLVE | ABILITY_NAMESPACE_PROXY_RESOLVE => object_schema(
+        ABILITY_NAMESPACE_RESOLVE => object_schema(
             json!({
                 "target_ura": string_prop("Owner, ability, or subject URA to resolve."),
                 "ability": string_prop("Optional owner-local ability name."),
-                "caller_ura": string_prop("Caller URA used for policy-aware resolution."),
-                "peers": {
+                "caller_ura": string_prop("Caller URA used for policy-aware resolution.")
+            }),
+            &[],
+            false,
+        ),
+        ABILITY_NAMESPACE_PROXY_RESOLVE => object_schema(
+            json!({
+                "peer_hub_urls": {
                     "type": "array",
                     "description": "Optional peer hubs selected for proxy resolution.",
                     "items": { "type": "string" }
-                }
+                },
+                "query_name": string_prop("Canonical namespace query name forwarded to namespace.resolve."),
+                "qtype": string_prop("Canonical ResolveType enum string."),
+                "caller_ura": string_prop("Caller URA used for policy-aware resolution."),
+                "subject_ura": string_prop("Subject URA used for policy-aware resolution."),
+                "realm_hint": string_prop("Realm context used by peer namespace resolution."),
+                "ability_name": string_prop("Optional owner-local ability filter.")
             }),
-            &[],
+            &[
+                "query_name",
+                "qtype",
+                "caller_ura",
+                "subject_ura",
+                "realm_hint",
+            ],
             false,
         ),
         ABILITY_FEDERATION_RESOLVE_KEY => object_schema(
@@ -508,5 +526,31 @@ mod tests {
                 ability.name
             );
         }
+    }
+
+    #[test]
+    fn namespace_proxy_resolve_schema_requires_explicit_resolver_tuple() {
+        let schema = input_schema_for(ABILITY_NAMESPACE_PROXY_RESOLVE).expect("proxy schema");
+        let required = schema["required"].as_array().expect("required array");
+        for field in [
+            "query_name",
+            "qtype",
+            "caller_ura",
+            "subject_ura",
+            "realm_hint",
+        ] {
+            assert!(
+                required.iter().any(|value| value.as_str() == Some(field)),
+                "namespace.proxy_resolve schema must require {field}: {schema}"
+            );
+        }
+        let properties = schema["properties"].as_object().expect("properties");
+        assert!(properties.contains_key("peer_hub_urls"));
+        assert!(properties.contains_key("ability_name"));
+        assert!(
+            !properties.contains_key("target_ura") && !properties.contains_key("peers"),
+            "proxy schema must not retain retired namespace.resolve/legacy peer fields: {schema}"
+        );
+        assert_eq!(schema["additionalProperties"], false);
     }
 }

@@ -1040,3 +1040,52 @@ architecture rather than add feature surface.
   `137` before emitting a SPEC failure. This is not counted as passed; the next
   iteration must still re-run the full gate in an environment that can complete
   it.
+
+## Iteration 24 candidate policy
+
+- Focus on namespace proxy resolver ingress. codegraph/rg found that
+  `NamespaceProxyResolveRequest` still defaulted core resolver tuple fields
+  (`query_name`, `qtype`, `caller_ura`, `subject_ura`, and `realm_hint`) to empty
+  strings.
+- The root abstraction problem is public ingress tuple defaulting: a malformed
+  product request can pass JSON decoding and then fail later as empty namespace
+  answers, peer fanout errors, or route-negative state. That preserves a
+  compatibility surface instead of making resolver tuple construction explicit.
+- The intended cutover is:
+  - keep `peer_hub_urls` optional because an empty peer set is a real
+    non-dispatchable answer state;
+  - keep `ability_name` optional because it is an owner-local filter;
+  - require `query_name`, `qtype`, `caller_ura`, `subject_ura`, and `realm_hint`
+    at request decode/validation;
+  - validate caller/subject as canonical URAs before proxy fanout;
+  - update the daemon Invocation descriptor schema so product clients generate
+    the real proxy request shape, not the older `target_ura` / `peers` shape.
+
+## Iteration 24 decision log
+
+- Removed `serde(default)` from the namespace proxy resolver tuple fields:
+  `query_name`, `qtype`, `caller_ura`, `subject_ura`, and `realm_hint`.
+- Added explicit dispatcher validation for non-empty `query_name` and
+  `realm_hint`, canonical `ResolveType`, non-unspecified qtype, and canonical
+  URA parsing for `caller_ura` and `subject_ura`.
+- Split the daemon Invocation descriptor schema for `namespace.resolve` and
+  `namespace.proxy_resolve`. The proxy schema now exposes
+  `peer_hub_urls`, `query_name`, `qtype`, `caller_ura`, `subject_ura`,
+  `realm_hint`, and optional `ability_name`, with the resolver tuple fields
+  required.
+- Added daemon unary tests proving missing tuple fields and non-canonical
+  caller/subject URAs fail before proxy routing.
+- Added catalog tests proving the proxy descriptor schema requires the explicit
+  resolver tuple and no longer advertises retired `target_ura` / `peers` fields.
+- Added SPEC v2 gate
+  `check_namespace_proxy_resolve_exact_tuple_ingress_contract` with a negative
+  self-test fixture rejecting reintroduced tuple defaulting.
+- Verification passed:
+  - `bash -n tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - `cargo fmt --check`
+  - `cargo test -q daemon::ability::catalog::daemon_invocation_contracts`
+  - `cargo test -q namespace_proxy_resolve`
+  - `cargo check -q`
+  - `tools/scripts/check-architecture-convergence.sh`
+  - `tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - `git diff --check`

@@ -8092,6 +8092,119 @@ if '"query_name is not a canonical URA, route-ref, or descriptor ref"' not in co
 PY
 }
 
+check_namespace_proxy_resolve_exact_tuple_ingress_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local wrappers="$cli_root/src/daemon/invocation/dispatch/federation_wrappers.rs"
+  local dispatcher="$cli_root/src/daemon/invocation/dispatch/unary_dispatcher.rs"
+  local contracts="$cli_root/src/daemon/ability/catalog/daemon_invocation_contracts.rs"
+  local tests="$cli_root/src/daemon/invocation/dispatch/daemon_invocation_service_tests/unary.rs"
+  [[ -f "$wrappers" ]] || fail "federation wrappers source is missing: $wrappers"
+  [[ -f "$dispatcher" ]] || fail "unary dispatcher source is missing: $dispatcher"
+  [[ -f "$contracts" ]] || fail "daemon invocation contracts source is missing: $contracts"
+  [[ -f "$tests" ]] || fail "daemon invocation service unary tests are missing: $tests"
+
+  "$PYTHON_BIN" - "$wrappers" "$dispatcher" "$contracts" "$tests" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+wrappers_path, dispatcher_path, contracts_path, tests_path = map(Path, sys.argv[1:])
+wrappers = wrappers_path.read_text(encoding="utf-8")
+dispatcher = dispatcher_path.read_text(encoding="utf-8")
+contracts = contracts_path.read_text(encoding="utf-8")
+tests = tests_path.read_text(encoding="utf-8")
+wrappers_production = wrappers.split("\n#[cfg(test)]\nmod tests", 1)[0]
+dispatcher_production = dispatcher.split("\n#[cfg(test)]\nmod tests", 1)[0]
+contracts_production = contracts.split("\n#[cfg(test)]\nmod tests", 1)[0]
+
+request_match = re.search(
+    r"pub struct NamespaceProxyResolveRequest\s*\{(?P<body>.*?)\n\}",
+    wrappers_production,
+    re.S,
+)
+if not request_match:
+    raise SystemExit("namespace_proxy_resolve_exact_tuple:request_struct_missing")
+request_body = request_match.group("body")
+for field in ("query_name", "qtype", "caller_ura", "subject_ura", "realm_hint"):
+    field_match = re.search(
+        rf"(?:#\[[^\n]*\]\n\s*)*pub\s+{field}\s*:\s*String",
+        request_body,
+        re.S,
+    )
+    if not field_match:
+        raise SystemExit(f"namespace_proxy_resolve_exact_tuple:required_field_missing:{field}")
+    field_block = field_match.group(0)
+    if "serde(default" in field_block:
+        raise SystemExit(f"namespace_proxy_resolve_exact_tuple:retired_default:{field}")
+if not re.search(r"#\[serde\(default\)\]\s*pub\s+peer_hub_urls\s*:\s*Vec<String>", request_body):
+    raise SystemExit("namespace_proxy_resolve_exact_tuple:peer_hub_urls_default_missing")
+if not re.search(r"#\[serde\(default,\s*rename\s*=\s*\"ability_name\"\)\]\s*pub\s+ability_name\s*:\s*String", request_body):
+    raise SystemExit("namespace_proxy_resolve_exact_tuple:ability_name_optional_default_missing")
+
+def function_body(text: str, name: str) -> str:
+    marker = f"fn {name}"
+    start = text.find(marker)
+    if start < 0:
+        raise SystemExit(f"namespace_proxy_resolve_exact_tuple:{name}:missing")
+    brace = text.find("{", start)
+    if brace < 0:
+        raise SystemExit(f"namespace_proxy_resolve_exact_tuple:{name}:body_missing")
+    depth = 0
+    for index in range(brace, len(text)):
+        if text[index] == "{":
+            depth += 1
+        elif text[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return text[brace:index + 1]
+    raise SystemExit(f"namespace_proxy_resolve_exact_tuple:{name}:unterminated")
+
+validate_body = function_body(dispatcher_production, "validate_namespace_proxy_resolve_request")
+for required in (
+    'require_namespace_proxy_non_empty(&request.query_name, "query_name")?',
+    'require_namespace_proxy_ura(&request.caller_ura, "caller_ura")?',
+    'require_namespace_proxy_ura(&request.subject_ura, "subject_ura")?',
+    'require_namespace_proxy_non_empty(&request.realm_hint, "realm_hint")?',
+    "ResolveType::from_str_name(qtype)",
+    "ResolveType::Unspecified",
+):
+    if required not in validate_body:
+        raise SystemExit(f"namespace_proxy_resolve_exact_tuple:validator_missing:{required}")
+if "fn require_namespace_proxy_ura(" not in dispatcher_production or "parse_ura(value.trim())" not in dispatcher_production:
+    raise SystemExit("namespace_proxy_resolve_exact_tuple:canonical_ura_validator_missing")
+
+schema_case = contracts_production.split("ABILITY_NAMESPACE_PROXY_RESOLVE => object_schema(", 1)
+if len(schema_case) != 2:
+    raise SystemExit("namespace_proxy_resolve_exact_tuple:schema_case_missing")
+schema_body = schema_case[1].split("ABILITY_FEDERATION_RESOLVE_KEY => object_schema(", 1)[0]
+for required in (
+    '"peer_hub_urls"',
+    '"query_name"',
+    '"qtype"',
+    '"caller_ura"',
+    '"subject_ura"',
+    '"realm_hint"',
+    '"ability_name"',
+):
+    if required not in schema_body:
+        raise SystemExit(f"namespace_proxy_resolve_exact_tuple:schema_missing:{required}")
+compact_schema = re.sub(r"\s+", "", schema_body)
+if '&["query_name","qtype","caller_ura","subject_ura","realm_hint",]' not in compact_schema:
+    raise SystemExit("namespace_proxy_resolve_exact_tuple:schema_required_tuple_not_exact")
+for retired in ('"target_ura"', '"peers"'):
+    if retired in schema_body:
+        raise SystemExit(f"namespace_proxy_resolve_exact_tuple:schema_retired_field:{retired}")
+
+for required_test in (
+    "invoke_rejects_namespace_proxy_resolve_missing_required_tuple_fields",
+    "invoke_rejects_namespace_proxy_resolve_non_canonical_tuple_uras",
+    "namespace_proxy_resolve_schema_requires_explicit_resolver_tuple",
+):
+    if required_test not in tests and required_test not in contracts:
+        raise SystemExit(f"namespace_proxy_resolve_exact_tuple:missing_test:{required_test}")
+PY
+}
+
 check_daemon_invocation_service_descriptor_ref_route_projection_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local service="$cli_root/src/daemon/invocation/dispatch/daemon_invocation_service.rs"
@@ -9180,6 +9293,25 @@ expected_helper_files = {
         "sdk/node/test/pluginexec.test.mjs",
     ],
 }
+expected_helper_production_files = {
+    "python": [
+        "sdk/python/easynet_sdk/providers/easynet/plugin_exec.py",
+    ],
+    "go": [
+        "sdk/go/provider/easynet/pluginexec/pluginexec.go",
+    ],
+    "rust": [
+        "sdk/rust/provider/easynet/pluginexec/src/lib.rs",
+    ],
+    "java": [
+        "sdk/java/src/main/java/run/runtime/sdk/provider/easynet/pluginexec/SidecarRuntime.java",
+        "sdk/java/src/main/java/run/runtime/sdk/provider/easynet/pluginexec/SidecarInvocation.java",
+    ],
+    "node": [
+        "sdk/node/provider/easynet/pluginexec.js",
+        "sdk/node/provider/easynet/pluginexec.d.ts",
+    ],
+}
 expected_daemon_sidecar_files = [
     "src/daemon/plugins/sidecar/frame.rs",
     "src/daemon/plugins/sidecar.rs",
@@ -9210,11 +9342,15 @@ helper_sources = {
     language: "\n".join(read_rel(rel_path) for rel_path in files)
     for language, files in expected_helper_files.items()
 }
+helper_production_sources = {
+    language: "\n".join(read_rel(rel_path) for rel_path in files)
+    for language, files in expected_helper_production_files.items()
+}
 all_sidecar_sources = {
     "daemon_frame": sidecar_frame,
     "daemon_projection": sidecar_projection,
     "daemon_host_api": host_api,
-    **helper_sources,
+    **helper_production_sources,
 }
 
 required_tuple_keys = ("caller_ura", "callee_ura", "ability_ura", "subject_ura")
@@ -13179,6 +13315,76 @@ mod tests {
 EOF
   if ( CLI_ROOT="$tmp/cli-namespace-authority-legacy"; check_namespace_resolver_authority_projection_contract ) >/dev/null 2>&1; then
     fail "self-test expected namespace resolver authority projection fallback gate to fail"
+  fi
+  mkdir -p "$tmp/cli-namespace-proxy-default/src/daemon/invocation/dispatch" \
+    "$tmp/cli-namespace-proxy-default/src/daemon/ability/catalog"
+  cat >"$tmp/cli-namespace-proxy-default/src/daemon/invocation/dispatch/federation_wrappers.rs" <<'EOF'
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct NamespaceProxyResolveRequest {
+    #[serde(default)]
+    pub peer_hub_urls: Vec<String>,
+    #[serde(default, rename = "query_name")]
+    pub query_name: String,
+    #[serde(rename = "qtype")]
+    pub qtype: String,
+    #[serde(rename = "caller_ura")]
+    pub caller_ura: String,
+    #[serde(rename = "subject_ura")]
+    pub subject_ura: String,
+    #[serde(rename = "realm_hint")]
+    pub realm_hint: String,
+    #[serde(default, rename = "ability_name")]
+    pub ability_name: String,
+}
+EOF
+  cat >"$tmp/cli-namespace-proxy-default/src/daemon/invocation/dispatch/unary_dispatcher.rs" <<'EOF'
+fn validate_namespace_proxy_resolve_request(request: &NamespaceProxyResolveRequest) -> Result<(), Status> {
+    require_namespace_proxy_non_empty(&request.query_name, "query_name")?;
+    let qtype = request.qtype.trim();
+    let parsed = ResolveType::from_str_name(qtype).unwrap();
+    if parsed == ResolveType::Unspecified {}
+    require_namespace_proxy_ura(&request.caller_ura, "caller_ura")?;
+    require_namespace_proxy_ura(&request.subject_ura, "subject_ura")?;
+    require_namespace_proxy_non_empty(&request.realm_hint, "realm_hint")?;
+    Ok(())
+}
+fn require_namespace_proxy_non_empty(_value: &str, _field: &str) -> Result<(), Status> { Ok(()) }
+fn require_namespace_proxy_ura(value: &str, _field: &str) -> Result<(), Status> {
+    crate::core::ura::parse_ura(value.trim()).unwrap();
+    Ok(())
+}
+EOF
+  cat >"$tmp/cli-namespace-proxy-default/src/daemon/ability/catalog/daemon_invocation_contracts.rs" <<'EOF'
+fn input_schema_for(name: &str) -> Option<Value> {
+    Some(match name {
+        ABILITY_NAMESPACE_PROXY_RESOLVE => object_schema(
+            json!({
+                "peer_hub_urls": {},
+                "query_name": {},
+                "qtype": {},
+                "caller_ura": {},
+                "subject_ura": {},
+                "realm_hint": {},
+                "ability_name": {}
+            }),
+            &["query_name", "qtype", "caller_ura", "subject_ura", "realm_hint"],
+            false,
+        ),
+        ABILITY_FEDERATION_RESOLVE_KEY => object_schema(json!({}), &[], false),
+    })
+}
+#[cfg(test)]
+mod tests {
+    fn namespace_proxy_resolve_schema_requires_explicit_resolver_tuple() {}
+}
+EOF
+  cat >"$tmp/cli-namespace-proxy-default/src/daemon/invocation/dispatch/daemon_invocation_service_tests.rs" <<'EOF'
+fn invoke_rejects_namespace_proxy_resolve_missing_required_tuple_fields() {}
+fn invoke_rejects_namespace_proxy_resolve_non_canonical_tuple_uras() {}
+EOF
+  if ( CLI_ROOT="$tmp/cli-namespace-proxy-default"; check_namespace_proxy_resolve_exact_tuple_ingress_contract ) >/dev/null 2>&1; then
+    fail "self-test expected namespace proxy default tuple ingress gate to fail"
   fi
   mkdir -p "$tmp/cli-daemon-route-projection-legacy/src/daemon/invocation/dispatch" \
     "$tmp/cli-daemon-route-projection-legacy/src/daemon/axon_bridge"
@@ -17984,6 +18190,7 @@ EOF
   check_eal_trace_schema_version_strict_contract
   check_route_resolver_descriptor_ref_selector_contract
   check_namespace_resolver_authority_projection_contract
+  check_namespace_proxy_resolve_exact_tuple_ingress_contract
   check_daemon_invocation_service_descriptor_ref_route_projection_contract
   check_ffi_descriptor_runtime_owner_contract
   check_ffi_descriptor_probe_not_found_vocabulary_contract
@@ -18175,6 +18382,7 @@ check_eal_trace_schema_version_strict_contract
 check_retired_federation_directory_v1_stream_contract
 check_route_resolver_descriptor_ref_selector_contract
 check_namespace_resolver_authority_projection_contract
+check_namespace_proxy_resolve_exact_tuple_ingress_contract
 check_daemon_invocation_service_descriptor_ref_route_projection_contract
 check_ffi_descriptor_runtime_owner_contract
 check_ffi_descriptor_probe_not_found_vocabulary_contract
