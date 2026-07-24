@@ -52,6 +52,9 @@ use crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore;
 use crate::daemon::federation::read_model::advertised_agents::{
     AdvertisedAgentRecord, AdvertisedAgentSigningAuthority, AdvertisedAgentStore,
 };
+use crate::daemon::federation::receipt_contract::{
+    AdvertiseContract, HubAbilitiesDiff, HubAbilityEntry,
+};
 #[cfg(test)]
 use crate::daemon::federation::resolver_contract::{GateResult, RecordType};
 use crate::daemon::federation::resolver_contract::{
@@ -293,6 +296,12 @@ pub struct JoinResponse {
     /// axon-runtime's prior nonce-bearing receipt, MAY-differ under
     /// schema-compat.
     pub join_receipt_hash: String,
+    /// Explicit hub-owned ability catalog snapshot published at join time.
+    pub hub_published_abilities: Vec<HubAbilityEntry>,
+    /// Monotonic revision for `hub_published_abilities`.
+    pub hub_abilities_revision: u64,
+    /// Explicit advertise policy fact for this membership.
+    pub advertise_contract: AdvertiseContract,
 }
 
 /// Handle a `federation.join` invocation. Pure function — no
@@ -305,6 +314,9 @@ pub fn handle_join(request: &JoinRequest) -> JoinResponse {
         membership_ura: request.membership_ura.clone(),
         realm: request.realm.clone(),
         join_receipt_hash: derive_join_receipt_hash(&request.membership_ura, &request.realm),
+        hub_published_abilities: Vec::new(),
+        hub_abilities_revision: 0,
+        advertise_contract: AdvertiseContract::device_default(),
     }
 }
 
@@ -506,6 +518,9 @@ pub struct HeartbeatResponse {
     /// skipped). Lets the device detect when it must re-advertise.
     #[serde(default)]
     pub refreshed_owner_count: usize,
+    /// Explicit hub-owned ability catalog diff since the caller's last
+    /// observed revision.
+    pub hub_abilities_diff: HubAbilitiesDiff,
 }
 
 /// Handle a `federation.heartbeat` invocation.
@@ -539,6 +554,7 @@ pub(crate) fn handle_heartbeat(
         membership_status: "active".to_string(),
         realm_directory_size: registry.online_count(),
         refreshed_owner_count,
+        hub_abilities_diff: HubAbilitiesDiff::empty_at(0),
     }
 }
 
@@ -1470,7 +1486,7 @@ mod tests {
         // `namespace.*` resolver surfaces live outside the federation ability
         // set. `runtime.bootstrap_self_identity` is namespaced under
         // `runtime.*`, so it also stays outside this list.
-        assert_eq!(FEDERATION_ABILITIES.len(), 13);
+        assert_eq!(FEDERATION_ABILITIES.len(), 12);
         assert!(
             !FEDERATION_ABILITIES.contains(&"aggregate.list_abilities_catalog"),
             "backend/product aggregate alias must not be advertised as federation baseline"
@@ -1578,6 +1594,13 @@ mod tests {
         assert_eq!(resp.membership_ura, req.membership_ura);
         assert_eq!(resp.realm, req.realm);
         assert_eq!(resp.join_receipt_hash.len(), 64);
+        assert!(resp.hub_published_abilities.is_empty());
+        assert_eq!(resp.hub_abilities_revision, 0);
+        assert_eq!(
+            resp.advertise_contract.allowed_owner_prefixes,
+            vec!["device.".to_string()]
+        );
+        assert!(resp.advertise_contract.allows_hosted_agents);
     }
 
     #[test]
@@ -1751,6 +1774,9 @@ mod tests {
         assert_eq!(resp.membership_status, "active");
         assert_eq!(resp.realm_directory_size, 2);
         assert_eq!(resp.refreshed_owner_count, 0);
+        assert_eq!(resp.hub_abilities_diff.revision, 0);
+        assert!(resp.hub_abilities_diff.added.is_empty());
+        assert!(resp.hub_abilities_diff.removed.is_empty());
     }
 
     #[test]

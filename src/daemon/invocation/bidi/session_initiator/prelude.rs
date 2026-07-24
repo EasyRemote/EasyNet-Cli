@@ -1340,7 +1340,11 @@ mod tests {
             "realm": "realm",
             "join_receipt_hash": "a".repeat(64),
             "hub_abilities_revision": 17,
-            "hub_published_abilities": [canonical_hub_entry("test.scope")]
+            "hub_published_abilities": [canonical_hub_entry("test.scope")],
+            "advertise_contract": {
+                "allowed_owner_prefixes": ["device."],
+                "allows_hosted_agents": true
+            }
         }))
         .expect("join receipt json");
 

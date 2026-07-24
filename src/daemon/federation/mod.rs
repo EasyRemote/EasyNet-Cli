@@ -15,6 +15,7 @@ pub mod directory;
 pub mod directory_reader;
 pub mod peers;
 pub mod read_model;
+pub(crate) mod receipt_contract;
 pub mod resolver;
 pub(crate) mod resolver_contract;
 pub(crate) mod wire_contract;

@@ -6179,6 +6179,99 @@ for test in (
 PY
 }
 
+check_federation_receipt_facts_strict_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local client="$cli_root/src/daemon/federation/client/ability_contract.rs"
+  local receipt="$cli_root/src/daemon/federation/receipt_contract.rs"
+  local wrappers="$cli_root/src/daemon/invocation/dispatch/federation_wrappers.rs"
+  [[ -f "$client" ]] || fail "federation client ability contract is missing: ${client#$cli_root/}"
+  [[ -f "$receipt" ]] || fail "federation receipt contract is missing: ${receipt#$cli_root/}"
+  [[ -f "$wrappers" ]] || fail "federation wrappers are missing: ${wrappers#$cli_root/}"
+
+  "$PYTHON_BIN" - "$client" "$receipt" "$wrappers" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+client = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+receipt = Path(sys.argv[2]).read_text(encoding="utf-8", errors="replace")
+wrappers = Path(sys.argv[3]).read_text(encoding="utf-8", errors="replace")
+
+for retired in (
+    "default_allows_hosted_agents",
+    "impl Default for AdvertiseContract",
+    "impl Default for HubAbilitiesDiff",
+    "Old hubs that don't send the field",
+    "v4.1.6 hubs that omit the field",
+    "no-op on the client",
+    "interop without breaking",
+):
+    if retired in client or retired in receipt:
+        raise SystemExit(f"federation_receipt_facts:retired_default_compat:{retired}")
+
+for struct_name, field_names in {
+    "JoinReceipt": (
+        "hub_published_abilities",
+        "hub_abilities_revision",
+        "advertise_contract",
+    ),
+    "AdvertiseContract": (
+        "allowed_owner_prefixes",
+        "allows_hosted_agents",
+    ),
+    "HubAbilitiesDiff": (
+        "revision",
+        "added",
+        "removed",
+    ),
+}.items():
+    match = re.search(rf"pub struct {struct_name} \{{(?P<body>.*?)\n\}}", receipt, re.S)
+    if match is None:
+        raise SystemExit(f"federation_receipt_facts:struct_missing:{struct_name}")
+    body = match.group("body")
+    for field in field_names:
+        field_match = re.search(rf"(?P<prefix>(?:\s*///[^\n]*\n|\s*#\[[^\]]*\]\n|\s*)*)\s*pub {field}:", body)
+        if field_match is None:
+            raise SystemExit(f"federation_receipt_facts:field_missing:{struct_name}.{field}")
+        if "serde(default" in field_match.group("prefix"):
+            raise SystemExit(f"federation_receipt_facts:legacy_default:{struct_name}.{field}")
+
+heartbeat_match = re.search(r"pub struct HeartbeatReceipt \{(?P<body>.*?)\n\}", client, re.S)
+if heartbeat_match is None:
+    raise SystemExit("federation_receipt_facts:heartbeat_receipt_missing")
+heartbeat_body = heartbeat_match.group("body")
+hub_diff_match = re.search(r"(?P<prefix>(?:\s*///[^\n]*\n|\s*#\[[^\]]*\]\n|\s*)*)\s*pub hub_abilities_diff: HubAbilitiesDiff,", heartbeat_body)
+if hub_diff_match is None:
+    raise SystemExit("federation_receipt_facts:heartbeat_diff_missing")
+if "serde(default" in hub_diff_match.group("prefix"):
+    raise SystemExit("federation_receipt_facts:heartbeat_diff_legacy_default")
+
+for required in (
+    "JoinReceipt,",
+    "HubAbilitiesDiff,",
+    "HubAbilityEntry,",
+    "AdvertiseContract,",
+    "join_receipt_rejects_missing_hub_runtime_facts",
+    "heartbeat_receipt_rejects_missing_hub_diff",
+):
+    if required not in client:
+        raise SystemExit(f"federation_receipt_facts:client_required_missing:{required}")
+
+for required in (
+    "pub hub_published_abilities: Vec<HubAbilityEntry>,",
+    "pub hub_abilities_revision: u64,",
+    "pub advertise_contract: AdvertiseContract,",
+    "pub hub_abilities_diff: HubAbilitiesDiff,",
+    "hub_published_abilities: Vec::new()",
+    "hub_abilities_revision: 0",
+    "advertise_contract: AdvertiseContract::device_default()",
+    "hub_abilities_diff: HubAbilitiesDiff::empty_at(0)",
+):
+    if required not in wrappers:
+        raise SystemExit(f"federation_receipt_facts:wrapper_required_missing:{required}")
+PY
+}
+
 check_device_settings_loader_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local config="$cli_root/src/daemon/persistence/config.rs"
@@ -16365,6 +16458,7 @@ EOF
   check_local_ability_target_subject_policy_contract
   check_session_prelude_credentials_contract
   check_session_prelude_receipt_contract
+  check_federation_receipt_facts_strict_contract
   check_device_settings_loader_contract
   check_mission_traditional_target_conflict_contract
   check_mission_runtime_meta_identity_schema_contract
@@ -16538,6 +16632,7 @@ check_local_ability_target_subject_policy_contract
 check_session_prelude_credentials_contract
 check_start_attach_user_signer_readiness_contract
 check_session_prelude_receipt_contract
+check_federation_receipt_facts_strict_contract
 check_device_settings_loader_contract
 check_mission_traditional_target_conflict_contract
 check_mission_runtime_meta_identity_schema_contract

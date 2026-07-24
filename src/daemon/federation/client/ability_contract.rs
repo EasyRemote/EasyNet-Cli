@@ -41,6 +41,10 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+pub use crate::daemon::federation::receipt_contract::{
+    AdvertiseContract, HubAbilitiesDiff, HubAbilityEntry, JoinReceipt,
+};
+
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct ResolveKeyReceipt {
     #[serde(default)]
@@ -91,70 +95,9 @@ pub struct PrincipalProofRef {
     pub reference: String,
 }
 
-/// Receipt body returned by a successful `federation.join`. The
-/// `join_receipt_hash` is the device's §A8 [P3] membership-lineage
-/// root and MUST be persisted into `~/.easynet/credentials.json`.
-///
-/// AXON-RFC-001 v4.1.7 hub-broadcast contract adds three fields:
-/// `hub_published_abilities` (the snapshot of hub-owned abilities
-/// the hub advertises to every member), `hub_abilities_revision`
-/// (the monotonic counter the device passes back as
-/// `since_abilities_revision` on subsequent heartbeats), and
-/// `advertise_contract` (the prefix bounds the device must respect
-/// on outbound `federation.advertise_*` calls). All three default
-/// when absent so a v4.1.6 device reading a v4.1.7 hub (or vice
-/// versa) interops without breaking — empty snapshot, revision 0,
-/// default contract.
-#[derive(Debug, Clone, Deserialize, PartialEq)]
-pub struct JoinReceipt {
-    pub membership_ura: String,
-    pub realm: String,
-    pub join_receipt_hash: String,
-    #[serde(default)]
-    pub hub_published_abilities: Vec<HubAbilityEntry>,
-    #[serde(default)]
-    pub hub_abilities_revision: u64,
-    #[serde(default)]
-    pub advertise_contract: AdvertiseContract,
-}
-
-/// One hub-owned ability descriptor as broadcast by the hub. The wire field is
-/// JSON so older transport envelopes can carry it, but consumers must validate
-/// it into the canonical `AbilityDescriptor` before it enters any runtime
-/// read-model.
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-pub struct HubAbilityEntry {
-    pub name: String,
-    pub descriptor: Value,
-}
-
-/// Bound on what a device may advertise at this hub. The hub
-/// pre-declares which name prefixes it accepts on
-/// `federation.advertise_*` calls; the device's session prelude
-/// filters its outbound advertise set against this list. v0
-/// default: `["device."]` + `allows_hosted_agents = true`. Old
-/// hubs that don't send the field land on this default — same
-/// behavior they had before the contract existed.
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-pub struct AdvertiseContract {
-    #[serde(default)]
-    pub allowed_owner_prefixes: Vec<String>,
-    #[serde(default = "default_allows_hosted_agents")]
-    pub allows_hosted_agents: bool,
-}
-
-impl Default for AdvertiseContract {
-    fn default() -> Self {
-        Self {
-            allowed_owner_prefixes: vec!["device.".to_string()],
-            allows_hosted_agents: true,
-        }
-    }
-}
-
-fn default_allows_hosted_agents() -> bool {
-    true
-}
+// JoinReceipt, HubAbilityEntry, AdvertiseContract, and HubAbilitiesDiff are
+// re-exported from `daemon::federation::receipt_contract` so hub producers and
+// device consumers bind to one required-facts receipt shape.
 
 /// Heartbeat outbound args. v4.1.7 carries the device's last-seen
 /// hub-abilities revision so the hub can answer with an
@@ -169,19 +112,6 @@ pub struct HeartbeatArgs {
 
 fn is_zero_u64(v: &u64) -> bool {
     *v == 0
-}
-
-/// Hub-broadcast contract diff returned in `HeartbeatReceipt`.
-/// Empty `added` + empty `removed` at `revision >= since` means
-/// the device is current.
-#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
-pub struct HubAbilitiesDiff {
-    #[serde(default)]
-    pub revision: u64,
-    #[serde(default)]
-    pub added: Vec<HubAbilityEntry>,
-    #[serde(default)]
-    pub removed: Vec<String>,
 }
 
 /// Arguments for `federation.advertise_agent`. The hosting
@@ -238,7 +168,7 @@ pub struct HeartbeatRejectedNode {
     pub message: String,
 }
 
-#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct HeartbeatReceipt {
     #[serde(default)]
     pub membership_status: String,
@@ -256,12 +186,10 @@ pub struct HeartbeatReceipt {
     pub status: String,
     #[serde(default)]
     pub rejected_nodes: Vec<HeartbeatRejectedNode>,
-    /// AXON-RFC-001 v4.1.7 hub-broadcast contract: incremental
+    /// AXON-RFC-001 v4.1.7 hub-broadcast contract: explicit incremental
     /// update of hub-published abilities since the caller's
-    /// `since_abilities_revision`. Defaults to an empty diff at
-    /// revision 0 so v4.1.6 hubs that omit the field produce a
-    /// no-op on the client (no perceived churn).
-    #[serde(default)]
+    /// `since_abilities_revision`. Empty `added` and `removed` arrays are
+    /// valid only when the hub serializes this diff with a revision.
     pub hub_abilities_diff: HubAbilitiesDiff,
 }
 
@@ -444,16 +372,42 @@ mod tests {
     }
 
     #[test]
-    fn join_receipt_round_trips_through_serde() {
+    fn join_receipt_round_trips_with_required_runtime_facts() {
         let body = json!({
             "membership_ura": "easynet:///r/acme/device/01DEV",
             "realm": "acme",
-            "join_receipt_hash": "abc123"
+            "join_receipt_hash": "abc123",
+            "hub_published_abilities": [],
+            "hub_abilities_revision": 0,
+            "advertise_contract": {
+                "allowed_owner_prefixes": ["device."],
+                "allows_hosted_agents": true
+            }
         });
         let parsed: JoinReceipt = parse_receipt_value(&body).unwrap();
         assert_eq!(parsed.membership_ura, "easynet:///r/acme/device/01DEV");
         assert_eq!(parsed.realm, "acme");
         assert_eq!(parsed.join_receipt_hash, "abc123");
+        assert_eq!(parsed.hub_abilities_revision, 0);
+        assert!(parsed.hub_published_abilities.is_empty());
+        assert_eq!(
+            parsed.advertise_contract.allowed_owner_prefixes,
+            vec!["device.".to_string()]
+        );
+    }
+
+    #[test]
+    fn join_receipt_rejects_missing_hub_runtime_facts() {
+        let body = json!({
+            "membership_ura": "easynet:///r/acme/device/01DEV",
+            "realm": "acme",
+            "join_receipt_hash": "abc123"
+        });
+        let err = parse_receipt_value::<JoinReceipt>(&body).unwrap_err();
+        assert!(
+            err.to_string().contains("hub_published_abilities"),
+            "missing hub snapshot must fail closed: {err}"
+        );
     }
 
     #[test]
@@ -491,14 +445,34 @@ mod tests {
     }
 
     #[test]
-    fn heartbeat_receipt_parses_minimal_body() {
+    fn heartbeat_receipt_parses_explicit_empty_hub_diff() {
         let body = json!({
             "membership_status": "active",
-            "realm_directory_size": 3
+            "realm_directory_size": 3,
+            "hub_abilities_diff": {
+                "revision": 0,
+                "added": [],
+                "removed": []
+            }
         });
         let parsed: HeartbeatReceipt = parse_receipt_value(&body).unwrap();
         assert_eq!(parsed.membership_status, "active");
         assert_eq!(parsed.realm_directory_size, 3);
+        assert_eq!(parsed.hub_abilities_diff.revision, 0);
+        assert!(parsed.hub_abilities_diff.added.is_empty());
+    }
+
+    #[test]
+    fn heartbeat_receipt_rejects_missing_hub_diff() {
+        let body = json!({
+            "membership_status": "active",
+            "realm_directory_size": 3
+        });
+        let err = parse_receipt_value::<HeartbeatReceipt>(&body).unwrap_err();
+        assert!(
+            err.to_string().contains("hub_abilities_diff"),
+            "missing hub ability diff must fail closed: {err}"
+        );
     }
 
     #[test]
