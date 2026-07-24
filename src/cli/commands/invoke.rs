@@ -72,8 +72,8 @@ pub struct InvokeArgs {
     /// omitted.
     #[arg(long, value_name = "JSON")]
     pub args: Option<String>,
-    /// Per-call deadline in seconds. '0' inherits the runtime default.
-    /// Default: 60 s, governed by 'support::timeouts::INVOKE_DEFAULT_SECS'.
+    /// Per-call transport guard in seconds. '0' uses the configured invocation
+    /// guard. Default: 1 hour, governed by `support::timeouts::INVOKE_DEFAULT_SECS`.
     #[arg(long, value_name = "SECS", default_value_t = timeouts::INVOKE_DEFAULT_SECS)]
     pub timeout: u64,
     /// Print the raw ability envelope instead of just the inner
@@ -143,14 +143,8 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
         None => Value::Object(Default::default()),
     };
 
-    // Validate-and-clamp the timeout the same way every other CLI
-    // invoke surface does, so the operator-visible behaviour around
-    // `--timeout 0` (inherit default) and "value too large" matches
-    // what `easynet mission run` / `agent send` already enforce.
-    let timeout_ms = timeouts::effective_ms(invoke_args.timeout)
-        .map_err(anyhow::Error::msg)?
-        .unwrap_or(timeouts::INVOKE_DEFAULT_SECS * 1000);
-    let timeout = std::time::Duration::from_millis(timeout_ms);
+    let timeout =
+        timeouts::invocation_transport_guard(invoke_args.timeout).map_err(anyhow::Error::msg)?;
 
     // Cross-hub dispatch when `--node` is set; local dispatch
     // otherwise. Both paths surface the same unwrap-or-raw result

@@ -49,7 +49,7 @@ pub struct RecordArgs {
     /// Camera recording duration in milliseconds.
     #[arg(long, value_name = "MS", default_value_t = DEFAULT_CAMERA_RECORD_DURATION_MS)]
     pub duration_ms: u64,
-    /// Per-invocation transport deadline in seconds. '0' inherits the runtime default.
+    /// Per-invocation transport guard in seconds. '0' uses the configured invocation guard.
     #[arg(long, value_name = "SECS", default_value_t = timeouts::INVOKE_DEFAULT_SECS)]
     pub timeout: u64,
     /// Directory where mic stream recording files are created.
@@ -236,9 +236,8 @@ impl RecordingPlan {
             Some(subject) => subject.to_string(),
             None => default_resource_ura(kind)?,
         };
-        let timeout_ms = timeouts::effective_ms(args.timeout)
-            .map_err(anyhow::Error::msg)?
-            .unwrap_or(timeouts::INVOKE_DEFAULT_SECS * 1000);
+        let timeout =
+            timeouts::invocation_transport_guard(args.timeout).map_err(anyhow::Error::msg)?;
         let target = LocalAbilityTarget::from_selector(&selector);
 
         Ok(Self {
@@ -247,7 +246,7 @@ impl RecordingPlan {
             kind,
             arguments,
             subject,
-            timeout: Duration::from_millis(timeout_ms),
+            timeout,
             duration: Duration::from_millis(args.duration_ms),
             max_frames: args.max_frames,
             output_dir: args.output_dir,

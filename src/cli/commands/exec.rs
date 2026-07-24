@@ -36,8 +36,8 @@ pub struct ExecArgs {
     /// Target device node id. Pass `local` for this device or a
     /// real node id once federation Invoke is wired.
     pub node: String,
-    /// Per-call deadline in seconds. '0' inherits the runtime
-    /// default. Default: 60 s ('support::timeouts::INVOKE_DEFAULT_SECS').
+    /// Per-call process deadline in seconds. '0' inherits the runtime default.
+    /// Default: 1 hour, governed by `support::timeouts::INVOKE_DEFAULT_SECS`.
     #[arg(long, value_name = "SECS", default_value_t = timeouts::INVOKE_DEFAULT_SECS)]
     pub timeout: u64,
     /// Command to execute (everything after '--'). Joined with
@@ -54,7 +54,8 @@ pub fn run(args: ExecArgs) -> anyhow::Result<()> {
         "no command specified (use -- to separate)"
     );
 
-    let timeout_ms = timeouts::effective_ms(args.timeout).map_err(anyhow::Error::msg)?;
+    let timeout_ms =
+        timeouts::runtime_request_timeout_ms(args.timeout).map_err(anyhow::Error::msg)?;
     let payload = json!({
         "command": args.command[0].clone(),
         "args": args.command[1..].to_vec(),

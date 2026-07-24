@@ -187,8 +187,8 @@ pub struct SendArgs {
     #[arg(long, value_name = "TEXT")]
     pub context: Option<String>,
     /// Per-call deadline in seconds. LLM dispatches can legitimately
-    /// take many minutes, so the default is 15 min
-    /// ('support::timeouts::AGENT_SEND_DEFAULT_SECS'). '0' inherits the
+    /// take many minutes, so the default is 1 hour
+    /// (`support::timeouts::AGENT_SEND_DEFAULT_SECS`). '0' inherits the
     /// runtime default.
     #[arg(long, value_name = "SECS", default_value_t = timeouts::AGENT_SEND_DEFAULT_SECS)]
     pub timeout: u64,

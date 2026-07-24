@@ -9,8 +9,6 @@
 // decoded JSON frames. Long-lived interactive surfaces use bidi abilities;
 // this command remains for ordinary server-stream ability output.
 
-use std::time::Duration;
-
 use anyhow::Context;
 use clap::{Args, ValueEnum};
 use serde_json::{json, Value};
@@ -47,8 +45,7 @@ pub struct StreamArgs {
     /// JSON object passed to the stream ability as its arguments.
     #[arg(long, value_name = "JSON")]
     pub args: Option<String>,
-    /// Per-stream transport deadline in seconds. '0' inherits the
-    /// runtime default.
+    /// Per-stream transport guard in seconds. '0' uses the configured invocation guard.
     #[arg(long, value_name = "SECS", default_value_t = timeouts::INVOKE_DEFAULT_SECS)]
     pub timeout: u64,
     /// AXIOM envelope subject, expressed as a canonical resource URA.
@@ -103,9 +100,7 @@ pub fn run(args: StreamArgs) -> anyhow::Result<()> {
         Some(s) => serde_json::from_str(s).context("parse --args JSON")?,
         None => Value::Object(Default::default()),
     };
-    let timeout_ms = timeouts::effective_ms(args.timeout)
-        .map_err(anyhow::Error::msg)?
-        .unwrap_or(timeouts::INVOKE_DEFAULT_SECS * 1000);
+    let timeout = timeouts::invocation_transport_guard(args.timeout).map_err(anyhow::Error::msg)?;
     let target = LocalAbilityTarget::from_selector(ability_selector);
     let frames = match node_ura.as_deref() {
         #[cfg(feature = "axon-pb")]
@@ -128,7 +123,7 @@ pub fn run(args: StreamArgs) -> anyhow::Result<()> {
                     invocation_nonce,
                     crate::daemon::invocation::routing::remote_invoke::declared_root_causal_context(),
                     arguments,
-                    Duration::from_millis(timeout_ms),
+                    timeout,
                 )?
                 .into_request()?;
             crate::daemon::invocation::routing::remote_invoke::invoke_remote_target_stream(
@@ -154,7 +149,7 @@ pub fn run(args: StreamArgs) -> anyhow::Result<()> {
                 arguments,
                 subject,
                 invocation_nonce,
-                Duration::from_millis(timeout_ms),
+                timeout,
                 args.max_frames,
             )?
         }

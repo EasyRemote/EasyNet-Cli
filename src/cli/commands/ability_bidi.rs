@@ -4,8 +4,6 @@
 // File: src/cli/ability_bidi.rs
 // Description: `easynet ability bidi <ability-ura> [--args JSON]`.
 
-use std::time::Duration;
-
 use anyhow::Context;
 use clap::{Args, ValueEnum};
 use serde_json::{json, Value};
@@ -44,7 +42,7 @@ pub struct BidiArgs {
     /// Optional JSON frame to send after open. Can be repeated.
     #[arg(long = "input", value_name = "JSON")]
     pub input_frames: Vec<String>,
-    /// Per-session transport deadline in seconds. '0' inherits the runtime default.
+    /// Per-session transport guard in seconds. '0' uses the configured invocation guard.
     #[arg(long, value_name = "SECS", default_value_t = timeouts::INVOKE_DEFAULT_SECS)]
     pub timeout: u64,
     /// AXIOM envelope subject, expressed as a canonical resource URA.
@@ -105,9 +103,7 @@ pub fn run(args: BidiArgs) -> anyhow::Result<()> {
         .iter()
         .map(|raw| serde_json::from_str(raw).context("parse --input JSON"))
         .collect::<anyhow::Result<Vec<Value>>>()?;
-    let timeout_ms = timeouts::effective_ms(args.timeout)
-        .map_err(anyhow::Error::msg)?
-        .unwrap_or(timeouts::INVOKE_DEFAULT_SECS * 1000);
+    let timeout = timeouts::invocation_transport_guard(args.timeout).map_err(anyhow::Error::msg)?;
     let target = LocalAbilityTarget::from_selector(&ability_selector);
     let frames = match node_ura.as_deref() {
         #[cfg(feature = "axon-pb")]
@@ -130,7 +126,7 @@ pub fn run(args: BidiArgs) -> anyhow::Result<()> {
                     invocation_nonce,
                     crate::daemon::invocation::routing::remote_invoke::declared_root_causal_context(),
                     arguments,
-                    Duration::from_millis(timeout_ms),
+                    timeout,
                 )?
                 .into_request()?;
             crate::daemon::invocation::routing::remote_invoke::invoke_remote_target_bidi_json_frames(
@@ -157,7 +153,7 @@ pub fn run(args: BidiArgs) -> anyhow::Result<()> {
                 arguments,
                 subject,
                 invocation_nonce,
-                Duration::from_millis(timeout_ms),
+                timeout,
                 input_frames,
                 drain_limit(args.max_frames, args.until_terminal),
             )?

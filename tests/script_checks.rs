@@ -282,6 +282,13 @@ fn mission_discuss_subject_boundary_script_holds() {
 }
 
 #[test]
+fn cli_timeout_policy_boundary_script_holds() {
+    // Pins CLI timeout semantics to named policies so transport guards and
+    // runtime-default request deadlines do not fork at call sites.
+    run_bash_script("tests/scripts/test_check_cli_timeout_policy_boundary.sh");
+}
+
+#[test]
 fn discover_scope_boundary_script_holds() {
     // Pins <agent>.discover to current scope literals only. The
     // retired easynet alias must stay absent from parser and schema.

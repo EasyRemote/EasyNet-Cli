@@ -18,12 +18,12 @@
 //    three buckets chosen for a human's wall-clock expectation of the
 //    operation:
 //
-//     - [`INVOKE_DEFAULT_SECS`]      — short network-bound tool calls.
-//                                      60 s is generous for any
-//                                      well-behaved ability; a longer
-//                                      budget belongs in the ability's
-//                                      own execution window, not at
-//                                      the CLI surface.
+//     - [`INVOKE_DEFAULT_SECS`]      — ability invocations over unary,
+//                                      stream, bidi, exec, and recording
+//                                      surfaces. The concrete transport guard
+//                                      is one hour because real tool-using
+//                                      abilities can legitimately run for
+//                                      minutes-to-tens-of-minutes.
 //     - [`AGENT_SEND_DEFAULT_SECS`]  — LLM-backed dispatches (Claude
 //                                      Code / Codex). These can stream
 //                                      for many minutes on a large
@@ -32,16 +32,14 @@
 //                                      users can raise it explicitly.
 //     - [`THINK_DEFAULT_SECS`]       — per-cycle budget inside the
 //                                      autonomous loop. Each cycle is
-//                                      one think + one action; 120 s
-//                                      is the legacy value kept for
-//                                      back-compat.
+//                                      one think + one action; it shares the
+//                                      same one-hour invocation budget.
 //
-// The number `0` is reserved across the CLI to mean "inherit the
-// runtime default" — never hard-coded, but often plumbed through the
-// bridge layer for per-operation budgets. [`effective_ms`] converts a
-// user-facing seconds value to an `Option<u64>` in milliseconds so
-// bridge callers can feed it straight into
-// `call_mcp_tool_with_timeout`.
+// The number `0` is interpreted by a named [`TimeoutPolicy`]. Payload
+// deadlines may preserve `0` as "inherit the runtime default". Transport
+// guards cannot be absent, so they explicitly resolve `0` to the command's
+// configured guard deadline instead of leaving each CLI command to hand-roll a
+// fallback.
 //
 // Why the infrastructure constant lives here, not in `shared::mod`
 // ----------------------------------------------------------------
@@ -86,8 +84,69 @@ pub const AGENT_SEND_DEFAULT_SECS: u64 = 3600;
 #[cfg(test)]
 pub const THINK_DEFAULT_SECS: u64 = 3600;
 
+use std::time::Duration;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ZeroTimeoutPolicy {
+    RuntimeDefault,
+    DefaultTransportGuard,
+}
+
+/// Canonical timeout policy for a CLI surface.
+///
+/// The policy owns the difference between an optional runtime request deadline
+/// and a mandatory local transport guard. Callers must choose one of the named
+/// methods rather than converting `0` and then applying ad-hoc fallbacks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TimeoutPolicy {
+    default_secs: u64,
+    zero: ZeroTimeoutPolicy,
+}
+
+impl TimeoutPolicy {
+    pub const fn runtime_request_default(default_secs: u64) -> Self {
+        Self {
+            default_secs,
+            zero: ZeroTimeoutPolicy::RuntimeDefault,
+        }
+    }
+
+    pub const fn transport_guard_default(default_secs: u64) -> Self {
+        Self {
+            default_secs,
+            zero: ZeroTimeoutPolicy::DefaultTransportGuard,
+        }
+    }
+
+    pub fn request_timeout_ms(self, secs: u64) -> Result<Option<u64>, &'static str> {
+        effective_ms(secs)
+    }
+
+    pub fn transport_guard(self, secs: u64) -> Result<Duration, &'static str> {
+        let millis = match (self.zero, effective_ms(secs)?) {
+            (_, Some(ms)) => ms,
+            (ZeroTimeoutPolicy::DefaultTransportGuard, None) => self.default_ms()?,
+            (ZeroTimeoutPolicy::RuntimeDefault, None) => {
+                return Err("transport guard requires a concrete timeout")
+            }
+        };
+        Ok(Duration::from_millis(millis))
+    }
+
+    fn default_ms(self) -> Result<u64, &'static str> {
+        self.default_secs
+            .checked_mul(1000)
+            .ok_or("timeout default is too large (overflow converting seconds to milliseconds)")
+    }
+}
+
+pub const INVOCATION_TRANSPORT_TIMEOUT: TimeoutPolicy =
+    TimeoutPolicy::transport_guard_default(INVOKE_DEFAULT_SECS);
+pub const RUNTIME_REQUEST_TIMEOUT: TimeoutPolicy =
+    TimeoutPolicy::runtime_request_default(INVOKE_DEFAULT_SECS);
+
 /// Convert a user-facing seconds value (from a `--timeout <N>` flag) to
-/// the `Option<Duration>`-in-milliseconds shape used by the bridge API.
+/// the `Option<Duration>`-in-milliseconds shape used by request payloads.
 ///
 /// `0` is the canonical "inherit the runtime default" sentinel: it maps
 /// to `None`, which the bridge layer interprets as "use whatever the
@@ -103,6 +162,14 @@ pub fn effective_ms(secs: u64) -> Result<Option<u64>, &'static str> {
             .map(Some)
             .ok_or("--timeout is too large (overflow converting seconds to milliseconds)"),
     }
+}
+
+pub fn invocation_transport_guard(secs: u64) -> Result<Duration, &'static str> {
+    INVOCATION_TRANSPORT_TIMEOUT.transport_guard(secs)
+}
+
+pub fn runtime_request_timeout_ms(secs: u64) -> Result<Option<u64>, &'static str> {
+    RUNTIME_REQUEST_TIMEOUT.request_timeout_ms(secs)
 }
 
 #[cfg(test)]
@@ -124,6 +191,19 @@ mod tests {
         assert_eq!(effective_ms(INVOKE_DEFAULT_SECS), Ok(Some(3_600_000)));
         assert_eq!(effective_ms(AGENT_SEND_DEFAULT_SECS), Ok(Some(3_600_000)));
         assert_eq!(effective_ms(THINK_DEFAULT_SECS), Ok(Some(3_600_000)));
+    }
+
+    #[test]
+    fn invocation_transport_guard_uses_default_guard_for_zero() {
+        assert_eq!(
+            invocation_transport_guard(0),
+            Ok(Duration::from_secs(INVOKE_DEFAULT_SECS))
+        );
+    }
+
+    #[test]
+    fn runtime_request_timeout_preserves_zero_as_runtime_default() {
+        assert_eq!(runtime_request_timeout_ms(0), Ok(None));
     }
 
     #[test]
