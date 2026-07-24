@@ -145,6 +145,7 @@ pub struct AdvertiseAgentReceipt {
 }
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct HeartbeatResponseHeader {
     #[serde(default)]
     pub status: String,
@@ -153,6 +154,7 @@ pub struct HeartbeatResponseHeader {
 }
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct HeartbeatRejectedNode {
     #[serde(default)]
     pub node_id: String,
@@ -161,21 +163,16 @@ pub struct HeartbeatRejectedNode {
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct HeartbeatReceipt {
     #[serde(default)]
     pub membership_status: String,
     #[serde(default)]
     pub realm_directory_size: u64,
-    /// Axon proto-compatible response header. Older hub wrappers used
-    /// top-level `permanent` / `status`; keep those aliases below so
-    /// heartbeat callers can consume either bridge shape without
-    /// reintroducing JSON inspection in the CLI state machine.
+    /// Axon proto-compatible response header. This is the only status header
+    /// projection accepted by the federation client contract.
     #[serde(default)]
     pub header: Option<HeartbeatResponseHeader>,
-    #[serde(default)]
-    pub permanent: bool,
-    #[serde(default)]
-    pub status: String,
     #[serde(default)]
     pub rejected_nodes: Vec<HeartbeatRejectedNode>,
     /// AXON-RFC-001 v4.1.7 hub-broadcast contract: explicit incremental
@@ -485,6 +482,32 @@ mod tests {
             err.to_string().contains("hub_abilities_diff"),
             "missing hub ability diff must fail closed: {err}"
         );
+    }
+
+    #[test]
+    fn heartbeat_receipt_rejects_retired_top_level_status_aliases() {
+        for field in ["status", "permanent"] {
+            let mut body = serde_json::Map::new();
+            body.insert("membership_status".to_string(), json!("active"));
+            body.insert("realm_directory_size".to_string(), json!(3));
+            body.insert(
+                "hub_abilities_diff".to_string(),
+                json!({
+                    "revision": 0,
+                    "added": [],
+                    "removed": []
+                }),
+            );
+            body.insert(field.to_string(), json!("retired"));
+
+            let err = parse_receipt_value::<HeartbeatReceipt>(&Value::Object(body))
+                .expect_err("retired heartbeat aliases must fail closed");
+
+            assert!(
+                err.to_string().contains(field),
+                "retired field {field:?} must be named in parse error: {err}"
+            );
+        }
     }
 
     #[test]
