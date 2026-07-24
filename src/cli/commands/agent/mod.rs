@@ -192,10 +192,6 @@ pub struct SendArgs {
     /// runtime default.
     #[arg(long, value_name = "SECS", default_value_t = timeouts::AGENT_SEND_DEFAULT_SECS)]
     pub timeout: u64,
-    /// Write the raw stream-json trace (one event per line) to this file.
-    /// The prompt is saved alongside it as '<file>.prompt.txt'.
-    #[arg(long, value_name = "FILE")]
-    pub trace: Option<std::path::PathBuf>,
     /// Continue the most-recent session for this agent. Reads the
     /// session_id from the agent's session log index. Mutually
     /// exclusive with --resume / --session-id; without any of the

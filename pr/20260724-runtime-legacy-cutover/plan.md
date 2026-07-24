@@ -502,3 +502,53 @@ architecture rather than add feature surface.
   - `tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
   - `tools/scripts/check-architecture-convergence.sh`
   - `git diff --check`
+
+## Iteration 14 candidate policy
+
+- Focus on Mission/Agent trace artifact ownership. codegraph still finds a
+  production `agent send --trace <file>` argument, a dispatch
+  `extra_trace_path` field, and a legacy prompt-sidecar mirror that writes
+  `<trace>.prompt.txt` outside the canonical mission run directory.
+- The root abstraction problem is a second artifact sink beside the canonical
+  Mission run directory and invocation ledger. Trace consumption has already
+  converged on `invocation watch --trace <trace_id>` / `invocation.trace.get`;
+  keeping a filesystem trace path on `agent send` preserves a legacy export
+  lifecycle that is not tied to admission, receipts, or run metadata.
+- The intended cutover is to remove the unused CLI `agent send --trace` flag,
+  remove `extra_trace_path` from the dispatch request model and function
+  signatures, remove the silent prompt sidecar write, and remove the reserved
+  `MissionRunOpts.trace_path` field.
+- This intentionally fails closed for the retired flag instead of accepting and
+  ignoring it. The public trace story is the canonical run/ledger read path:
+  users reference the printed mission run dir or `invocation watch --trace`.
+- Verification must prove no production source can pass an external trace path
+  into Mission/Agent dispatch, no prompt sidecar write exists, and SPEC v2
+  rejects reintroducing the retired fields/flag.
+
+## Iteration 14 decision log
+
+- Removed the retired `agent send --trace <file>` argument from the CLI send
+  surface. This makes the old path fail closed instead of accepting a flag that
+  no longer owned the canonical trace lifecycle.
+- Removed `extra_trace_path` from `AgentDispatchRequest`,
+  `send_to_agent_with_depth`, and every Mission dispatch call site. The dispatch
+  request model now only carries runtime inputs that are consumed by the
+  canonical Mission/Agent execution path.
+- Deleted the legacy prompt-sidecar writer that silently wrote
+  `<trace>.prompt.txt` next to a caller-supplied file. Prompt/run artifacts stay
+  in the agent run directory, while trace consumption remains the canonical
+  mission run directory / invocation ledger read path.
+- Removed the unused reserved `MissionRunOpts.trace_path` field and its `None`
+  initializers from both mission ability and EAL executor callers.
+- Added a SPEC v2 gate,
+  `check_mission_agent_trace_sink_cutover_contract`, plus a negative self-test
+  fixture that fails if `agent send --trace`, `extra_trace_path`,
+  `with_extension("prompt.txt")`, or `MissionRunOpts.trace_path` return.
+- Verification passed:
+  - `cargo check -q`
+  - `cargo test -q daemon::execution::mission::dispatch::tests`
+  - `cargo fmt --check`
+  - `tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - `tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  - `tools/scripts/check-architecture-convergence.sh`
+  - `git diff --check`

@@ -698,12 +698,6 @@ pub struct MissionRunOpts {
     /// this is the file path; for `agent send <name> "..."` this is the
     /// constructed mission name (`agent-send`).
     pub source_label: Option<String>,
-    /// Reserved for future per-run trace export (e.g. `--trace <path>` on
-    /// `agent send`). Currently unused — the runner always
-    /// writes the full trace into the run dir, and callers can read it
-    /// from there.
-    #[allow(dead_code)]
-    pub trace_path: Option<PathBuf>,
     /// Optional run-level deadline for manifest-bound mission executions.
     /// CLI-authored missions normally rely on step-local EAL timeouts; an
     /// ability manifest's `timeout_seconds` is a public per-invocation SLA and

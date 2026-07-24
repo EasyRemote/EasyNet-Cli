@@ -14,7 +14,7 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -147,7 +147,6 @@ pub struct AgentDispatchRequest<'a> {
     pub entry: &'a AgentEntry,
     pub prompt: &'a str,
     pub context: Option<&'a str>,
-    pub extra_trace_path: Option<&'a Path>,
     pub depth_override: Option<u32>,
     pub overrides: Option<&'a DriverOverrides>,
     pub progress_tx: Option<Arc<dyn Fn(serde_json::Value) + Send + Sync>>,
@@ -250,7 +249,7 @@ pub fn send_external(
     prompt: &str,
     context: Option<&str>,
 ) -> anyhow::Result<AgentResponse> {
-    send_to_agent_with_depth(agent_name, entry, prompt, context, None, Some(0), None)
+    send_to_agent_with_depth(agent_name, entry, prompt, context, Some(0), None)
 }
 
 /// Pin per-call driver knobs (model, temperature, max_tokens) when
@@ -265,7 +264,7 @@ pub fn send_external_with_overrides(
     context: Option<&str>,
     overrides: Option<&DriverOverrides>,
 ) -> anyhow::Result<AgentResponse> {
-    send_to_agent_with_depth(agent_name, entry, prompt, context, None, Some(0), overrides)
+    send_to_agent_with_depth(agent_name, entry, prompt, context, Some(0), overrides)
 }
 
 /// Same as `send_external_with_overrides` but threads a
@@ -285,7 +284,6 @@ pub fn send_external_with_overrides_and_progress(
         entry,
         prompt,
         context,
-        extra_trace_path: None,
         depth_override: Some(0),
         overrides,
         progress_tx,
@@ -324,7 +322,6 @@ pub fn send_to_agent_with_depth(
     entry: &AgentEntry,
     prompt: &str,
     context: Option<&str>,
-    extra_trace_path: Option<&Path>,
     depth_override: Option<u32>,
     overrides: Option<&DriverOverrides>,
 ) -> anyhow::Result<AgentResponse> {
@@ -333,7 +330,6 @@ pub fn send_to_agent_with_depth(
         entry,
         prompt,
         context,
-        extra_trace_path,
         depth_override,
         overrides,
         progress_tx: None,
@@ -357,7 +353,6 @@ pub fn send_to_agent_with_depth_and_progress(
         entry,
         prompt,
         context,
-        extra_trace_path,
         depth_override,
         overrides,
         progress_tx,
@@ -567,16 +562,6 @@ pub fn send_to_agent_with_depth_and_progress(
             error = err_msg,
             fallback = "run_dir_write_is_authoritative",
         );
-    }
-
-    // Legacy `--trace <path>` still supported: mirror the prompt next to the
-    // user-supplied trace file.
-    if let Some(tp) = extra_trace_path {
-        if let Some(parent) = tp.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        let prompt_path = tp.with_extension("prompt.txt");
-        let _ = std::fs::write(&prompt_path, &full_prompt);
     }
 
     let started_at = Local::now().to_rfc3339();
@@ -950,8 +935,7 @@ mod tests {
     #[test]
     fn recursion_guard_blocks_at_depth_2() {
         let entry = dummy_entry();
-        let res =
-            send_to_agent_with_depth("claude", &entry, "any prompt", None, None, Some(2), None);
+        let res = send_to_agent_with_depth("claude", &entry, "any prompt", None, Some(2), None);
         let err = res.expect_err("depth=2 must error");
         let msg = format!("{err}");
         assert!(
@@ -968,8 +952,7 @@ mod tests {
     fn recursion_guard_allows_depth_1() {
         let entry = dummy_entry();
         let _g = crate::cli::commands::test_support::HomeGuard::new();
-        let res =
-            send_to_agent_with_depth("claude", &entry, "any prompt", None, None, Some(1), None);
+        let res = send_to_agent_with_depth("claude", &entry, "any prompt", None, Some(1), None);
         match res {
             Ok(_) => panic!("expected an error from missing claude binary"),
             Err(e) => {
@@ -986,7 +969,7 @@ mod tests {
     fn dispatch_rejects_registry_row_without_root_path() {
         let _g = crate::cli::commands::test_support::HomeGuard::new();
         let entry = dummy_entry();
-        let err = send_to_agent_with_depth("alice", &entry, "prompt", None, None, Some(1), None)
+        let err = send_to_agent_with_depth("alice", &entry, "prompt", None, Some(1), None)
             .expect_err("missing root_path must stop dispatch");
         let msg = format!("{err}");
         assert!(
@@ -1011,7 +994,7 @@ mod tests {
 
         let mut entry = dummy_entry();
         entry.root_path = Some(root);
-        let err = send_to_agent_with_depth("alice", &entry, "prompt", None, None, Some(1), None)
+        let err = send_to_agent_with_depth("alice", &entry, "prompt", None, Some(1), None)
             .expect_err("spec name mismatch must stop dispatch");
         let msg = format!("{err}");
         assert!(
@@ -1032,8 +1015,7 @@ mod tests {
         // mission-context check.
         std::env::remove_var("EASYNET_MISSION_ID");
         let entry = dummy_entry();
-        let res =
-            send_to_agent_with_depth("claude", &entry, "any prompt", None, None, Some(2), None);
+        let res = send_to_agent_with_depth("claude", &entry, "any prompt", None, Some(2), None);
         assert!(res.is_err());
         let msg = format!("{}", res.unwrap_err());
         assert!(msg.contains("depth limit reached"));
@@ -1045,7 +1027,7 @@ mod tests {
         std::env::remove_var("EASYNET_MISSION_ID");
         std::env::remove_var("EASYNET_AGENT_DEPTH");
         let entry = dummy_entry();
-        let err = send_to_agent_with_depth("alice", &entry, "prompt", None, None, None, None)
+        let err = send_to_agent_with_depth("alice", &entry, "prompt", None, None, None)
             .expect_err("missing mission context must stop dispatch");
         let msg = format!("{err}");
         assert!(
@@ -1064,7 +1046,7 @@ mod tests {
         std::env::set_var("EASYNET_MISSION_ID", "forged-mission");
         std::env::set_var("EASYNET_AGENT_DEPTH", "0");
         let entry = dummy_entry();
-        let err = send_to_agent_with_depth("alice", &entry, "prompt", None, None, None, None)
+        let err = send_to_agent_with_depth("alice", &entry, "prompt", None, None, None)
             .expect_err("unknown mission id must stop dispatch");
         std::env::remove_var("EASYNET_MISSION_ID");
         std::env::remove_var("EASYNET_AGENT_DEPTH");
@@ -1128,15 +1110,8 @@ mod tests {
     fn send_external_depth_guard_pins_at_max_not_below() {
         let entry = dummy_entry();
 
-        let tripped = send_to_agent_with_depth(
-            "claude",
-            &entry,
-            "p",
-            None,
-            None,
-            Some(MAX_AGENT_DEPTH),
-            None,
-        );
+        let tripped =
+            send_to_agent_with_depth("claude", &entry, "p", None, Some(MAX_AGENT_DEPTH), None);
         let msg = format!("{}", tripped.expect_err("override=MAX must trip"));
         assert!(
             msg.contains("depth limit"),
@@ -1465,7 +1440,7 @@ mod tests {
         // enforcement (see recursion_guard_allows_depth_1's
         // rationale) and lets the dispatch reach the spawn
         // step, where `dummy_entry`'s bogus command fails fast.
-        let res = send_to_agent_with_depth("alice", &entry, "prompt", None, None, Some(1), None);
+        let res = send_to_agent_with_depth("alice", &entry, "prompt", None, Some(1), None);
         // Failure is expected — we don't need the response.
         // meta.json is written whether the run succeeded or
         // failed (see dispatch.rs's "Write meta.json regardless"
@@ -1494,7 +1469,7 @@ mod tests {
         entry.model = Some("stale-registry-model".into());
         let root = entry.root_path.clone().unwrap();
 
-        let _ = send_to_agent_with_depth("alice", &entry, "prompt", None, None, Some(1), None);
+        let _ = send_to_agent_with_depth("alice", &entry, "prompt", None, Some(1), None);
 
         let meta = read_latest_meta(&root).expect("meta.json must exist");
         assert!(
@@ -1517,7 +1492,7 @@ mod tests {
         entry.model = None;
         let root = entry.root_path.clone().unwrap();
 
-        let _ = send_to_agent_with_depth("alice", &entry, "prompt", None, None, Some(1), None);
+        let _ = send_to_agent_with_depth("alice", &entry, "prompt", None, Some(1), None);
 
         let meta = read_latest_meta(&root).expect("meta.json must exist");
         assert!(
@@ -1676,7 +1651,7 @@ mod tests {
         let entry = seed_agent_with_spec("alice", Some("model-x"), None);
         let root = entry.root_path.clone().unwrap();
 
-        let _ = send_to_agent_with_depth("alice", &entry, "hello", None, None, Some(1), None);
+        let _ = send_to_agent_with_depth("alice", &entry, "hello", None, Some(1), None);
 
         let meta = read_latest_meta(&root).expect("meta.json must exist");
         assert!(
@@ -1765,7 +1740,7 @@ mod tests {
         let _g = crate::cli::commands::test_support::HomeGuard::new();
         let entry = seed_agent_with_spec("alice", None, None);
         let root = entry.root_path.clone().unwrap();
-        let _ = send_to_agent_with_depth("alice", &entry, "hello", None, None, Some(1), None);
+        let _ = send_to_agent_with_depth("alice", &entry, "hello", None, Some(1), None);
 
         let meta = read_latest_meta(&root).expect("meta.json");
         use axon_sdk::invocation::persistence::PersistentLog;
@@ -1898,7 +1873,7 @@ mod tests {
         let _g = crate::cli::commands::test_support::HomeGuard::new();
         let entry = seed_agent_with_spec("alice", None, None);
         let root = entry.root_path.clone().unwrap();
-        let _ = send_to_agent_with_depth("alice", &entry, "hello", None, None, Some(1), None);
+        let _ = send_to_agent_with_depth("alice", &entry, "hello", None, Some(1), None);
 
         // Find the latest run directory.
         let runs = root.join("runs");
@@ -1936,7 +1911,7 @@ mod tests {
         let _g = crate::cli::commands::test_support::HomeGuard::new();
         let entry = seed_agent_with_spec("alice", None, None);
         let root = entry.root_path.clone().unwrap();
-        let _ = send_to_agent_with_depth("alice", &entry, "hello", None, None, Some(1), None);
+        let _ = send_to_agent_with_depth("alice", &entry, "hello", None, Some(1), None);
 
         let meta = read_latest_meta(&root).expect("meta.json");
         use axon_sdk::invocation::persistence::PersistentLog;

@@ -6598,6 +6598,71 @@ for doc_name, doc in (("parser", parser), ("ir", ir)):
 PY
 }
 
+check_mission_agent_trace_sink_cutover_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local agent_mod="$cli_root/src/cli/commands/agent/mod.rs"
+  local dispatch="$cli_root/src/daemon/execution/mission/dispatch.rs"
+  local orchestration="$cli_root/src/daemon/execution/mission/orchestration.rs"
+  local mission_ability="$cli_root/src/daemon/ability/builtins/automation/mission.rs"
+  local eal_executor="$cli_root/src/daemon/execution/mission/executors/eal.rs"
+  [[ -f "$agent_mod" && -f "$dispatch" && -f "$orchestration" ]] || return 0
+
+  "$PYTHON_BIN" - "$agent_mod" "$dispatch" "$orchestration" "$mission_ability" "$eal_executor" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+agent_mod = Path(sys.argv[1]).read_text()
+dispatch = Path(sys.argv[2]).read_text()
+orchestration = Path(sys.argv[3]).read_text()
+mission_ability = Path(sys.argv[4]).read_text() if Path(sys.argv[4]).exists() else ""
+eal_executor = Path(sys.argv[5]).read_text() if Path(sys.argv[5]).exists() else ""
+
+send_args = re.search(r"pub struct SendArgs \{(?P<body>.*?)\n\}", agent_mod, re.S)
+if send_args is None:
+    raise SystemExit("mission_agent_trace_sink:send_args_missing")
+send_args_body = send_args.group("body")
+for retired in (
+    "pub trace:",
+    "value_name = \"FILE\"",
+    "raw stream-json trace",
+    "prompt is saved alongside",
+    "<file>.prompt.txt",
+):
+    if retired in send_args_body:
+        raise SystemExit(f"mission_agent_trace_sink:retired_agent_send_trace_flag:{retired}")
+
+for retired in (
+    "extra_trace_path",
+    "with_extension(\"prompt.txt\")",
+    "user-supplied trace file",
+    "create_dir_all(parent)",
+):
+    if retired in dispatch:
+        raise SystemExit(f"mission_agent_trace_sink:retired_dispatch_trace_sidecar:{retired}")
+if "pub struct AgentDispatchRequest" not in dispatch:
+    raise SystemExit("mission_agent_trace_sink:dispatch_request_missing")
+if "send_to_agent_with_depth(" not in dispatch:
+    raise SystemExit("mission_agent_trace_sink:dispatch_entry_missing")
+
+mission_opts = re.search(r"pub struct MissionRunOpts \{(?P<body>.*?)\n\}", orchestration, re.S)
+if mission_opts is None:
+    raise SystemExit("mission_agent_trace_sink:mission_run_opts_missing")
+mission_opts_body = mission_opts.group("body")
+for retired in (
+    "trace_path",
+    "per-run trace export",
+    "`--trace <path>`",
+):
+    if retired in mission_opts_body:
+        raise SystemExit(f"mission_agent_trace_sink:retired_mission_opts_trace_sink:{retired}")
+
+for name, text in (("mission_ability", mission_ability), ("eal_executor", eal_executor)):
+    if "trace_path: None" in text:
+        raise SystemExit(f"mission_agent_trace_sink:retired_{name}_trace_path_initializer")
+PY
+}
+
 check_edge_adapter_policy_contract() {
   "$PYTHON_BIN" "$EDGE_ADAPTER_POLICY" --manifest "$MANIFEST" >/dev/null
 }
@@ -15516,6 +15581,39 @@ EOF
   if ( check_mission_traditional_target_conflict_contract "$tmp/mission-implicit-fallback" ) >/dev/null 2>&1; then
     fail "self-test expected Mission implicit fallback naming gate to fail"
   fi
+  mkdir -p "$tmp/mission-agent-trace-sink-legacy/src/cli/commands/agent" \
+    "$tmp/mission-agent-trace-sink-legacy/src/daemon/execution/mission/executors" \
+    "$tmp/mission-agent-trace-sink-legacy/src/daemon/ability/builtins/automation"
+  printf '%s\n' \
+    'pub struct SendArgs {' \
+    '  /// Write the raw stream-json trace (one event per line) to this file.' \
+    '  /// The prompt is saved alongside it as '"'"'<file>.prompt.txt'"'"'.' \
+    '  #[arg(long, value_name = "FILE")]' \
+    '  pub trace: Option<std::path::PathBuf>,' \
+    '}' \
+    > "$tmp/mission-agent-trace-sink-legacy/src/cli/commands/agent/mod.rs"
+  printf '%s\n' \
+    'pub struct AgentDispatchRequest<'"'"'a> {' \
+    '  pub extra_trace_path: Option<&'"'"'a std::path::Path>,' \
+    '}' \
+    'fn send_to_agent_with_depth() {' \
+    '  let prompt_path = extra_trace_path.unwrap().with_extension("prompt.txt");' \
+    '  std::fs::create_dir_all(parent).unwrap();' \
+    '}' \
+    > "$tmp/mission-agent-trace-sink-legacy/src/daemon/execution/mission/dispatch.rs"
+  printf '%s\n' \
+    'pub struct MissionRunOpts {' \
+    '  /// Reserved for future per-run trace export (e.g. `--trace <path>` on agent send).' \
+    '  pub trace_path: Option<std::path::PathBuf>,' \
+    '}' \
+    > "$tmp/mission-agent-trace-sink-legacy/src/daemon/execution/mission/orchestration.rs"
+  printf 'fn run() { let _opts = MissionRunOpts { trace_path: None }; }\n' \
+    > "$tmp/mission-agent-trace-sink-legacy/src/daemon/ability/builtins/automation/mission.rs"
+  printf 'fn run() { let _opts = MissionRunOpts { trace_path: None }; }\n' \
+    > "$tmp/mission-agent-trace-sink-legacy/src/daemon/execution/mission/executors/eal.rs"
+  if ( check_mission_agent_trace_sink_cutover_contract "$tmp/mission-agent-trace-sink-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected Mission/Agent legacy trace sink gate to fail"
+  fi
   mkdir -p "$tmp/mission-meta-identity-legacy/src/daemon/execution/mission"
   printf '%s\n' \
     '#[derive(Debug, Clone, Default, Serialize, Deserialize)]' \
@@ -17103,6 +17201,7 @@ EOF
   check_federation_revoke_ingress_strict_contract
   check_device_settings_loader_contract
   check_mission_traditional_target_conflict_contract
+  check_mission_agent_trace_sink_cutover_contract
   check_mission_runtime_meta_identity_schema_contract
   check_mission_terminal_receipt_projection_contract
   check_edge_adapter_policy_contract
@@ -17284,6 +17383,7 @@ check_federation_receipt_facts_strict_contract
 check_federation_revoke_ingress_strict_contract
 check_device_settings_loader_contract
 check_mission_traditional_target_conflict_contract
+check_mission_agent_trace_sink_cutover_contract
 check_mission_runtime_meta_identity_schema_contract
 check_mission_terminal_receipt_projection_contract
 check_edge_adapter_policy_contract

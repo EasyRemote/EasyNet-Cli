@@ -148,7 +148,6 @@ fn run_handler(
 
     let opts = crate::daemon::execution::mission::orchestration::MissionRunOpts {
         source_label: Some(label),
-        trace_path: None,
         run_timeout: None,
     };
 

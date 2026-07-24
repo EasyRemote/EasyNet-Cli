@@ -147,7 +147,6 @@ pub(crate) fn run_eal_exec_with_gateway(
 fn mission_run_opts(run_timeout: Duration) -> MissionRunOpts {
     MissionRunOpts {
         source_label: Some("ability:eal".to_string()),
-        trace_path: None,
         run_timeout: Some(run_timeout),
     }
 }
