@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use anyhow::Context;
 use serde_json::Value;
 
 /// The only dependency Agent CLI commands have on the daemon invocation plane.
@@ -13,8 +14,7 @@ pub(crate) trait AgentCommandGateway: Send + Sync {
 ///
 /// `agent.list` is a runtime-state read, not a command mutation. Keeping it
 /// outside [`AgentCommandGateway`] prevents read projections from inheriting
-/// the generic daemon-self local invoke shortcut used by mutating command
-/// abilities.
+/// the daemon-system command issuer used by mutating command abilities.
 pub(crate) trait AgentStateReadGateway: Send + Sync {
     fn invoke_read(&self, ability: &str, args: Value) -> anyhow::Result<Value>;
 
@@ -31,8 +31,15 @@ struct DaemonAgentStateReadGateway;
 
 impl AgentCommandGateway for DaemonAgentCommandGateway {
     fn invoke(&self, ability: &str, args: Value) -> anyhow::Result<Value> {
-        crate::support::platform::local_invoke::invoke_local_ability(ability, args)
-            .map_err(|error| anyhow::anyhow!("{ability} failed: {error}"))
+        let subject_ura =
+            crate::support::platform::local_invoke::LocalDaemonSystemAbilityIssuer::local_daemon_identity_subject_ura()
+                .with_context(|| format!("resolve local agent command subject for {ability}"))?;
+        crate::support::platform::local_invoke::LocalDaemonSystemAbilityIssuer::invoke_root_for_subject(
+            ability,
+            args,
+            &subject_ura,
+        )
+        .map_err(|error| anyhow::anyhow!("{ability} failed: {error}"))
     }
 }
 

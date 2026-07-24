@@ -146,7 +146,19 @@ pub trait AgentStateReadGateway {
     fn invoke_read(&self, ability: &str, args: serde_json::Value) -> anyhow::Result<serde_json::Value>;
 }
 
+struct DaemonAgentCommandGateway;
 struct DaemonAgentStateReadGateway;
+
+impl AgentCommandGateway for DaemonAgentCommandGateway {
+    fn invoke(&self, ability: &str, args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+        let subject_ura = crate::support::platform::local_invoke::LocalDaemonSystemAbilityIssuer::local_daemon_identity_subject_ura()?;
+        crate::support::platform::local_invoke::LocalDaemonSystemAbilityIssuer::invoke_root_for_subject(
+            ability,
+            args,
+            &subject_ura,
+        )
+    }
+}
 
 impl AgentStateReadGateway for DaemonAgentStateReadGateway {
     fn invoke_read(&self, ability: &str, args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
@@ -172,22 +184,27 @@ fn publish_view(gateway: &dyn AgentStateReadGateway) -> anyhow::Result<serde_jso
 RS
 
 cat >"$SB/src/cli/commands/llm_api.rs" <<'RS'
-use crate::support::platform::local_invoke::{invoke_local_ability, LocalRuntimeStateReadIssuer};
+use crate::support::platform::local_invoke::{LocalDaemonSystemAbilityIssuer, LocalRuntimeStateReadIssuer};
 
 fn pick_model() -> anyhow::Result<serde_json::Value> {
     LocalRuntimeStateReadIssuer::invoke("openai.list_models", serde_json::json!({}))
 }
 
-fn chat() -> anyhow::Result<serde_json::Value> {
-    invoke_local_ability("openai.chat_completions", serde_json::json!({}))
+fn run(adapter_args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+    invoke_openai_chat_completions(adapter_args)
+}
+
+fn invoke_openai_chat_completions(args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+    let subject_ura = LocalDaemonSystemAbilityIssuer::local_daemon_identity_subject_ura()?;
+    LocalDaemonSystemAbilityIssuer::invoke_root_for_subject("openai.chat_completions", args, &subject_ura)
 }
 RS
 
 cat >"$SB/src/cli/commands/skill.rs" <<'RS'
-use crate::support::platform::local_invoke::{invoke_local_ability, LocalRuntimeStateReadIssuer};
+use crate::support::platform::local_invoke::{LocalDaemonSystemAbilityIssuer, LocalRuntimeStateReadIssuer};
 
 fn install() -> anyhow::Result<serde_json::Value> {
-    invoke_local_ability("skill.install", serde_json::json!({}))
+    invoke_daemon_skill_mutation("skill.install", serde_json::json!({}))
 }
 
 fn list() -> anyhow::Result<serde_json::Value> {
@@ -195,27 +212,63 @@ fn list() -> anyhow::Result<serde_json::Value> {
 }
 
 fn upgrade() -> anyhow::Result<serde_json::Value> {
-    invoke_local_ability("skill.upgrade", serde_json::json!({}))
+    invoke_daemon_skill_mutation("skill.upgrade", serde_json::json!({}))
 }
 
 fn remove() -> anyhow::Result<serde_json::Value> {
-    invoke_local_ability("skill.remove", serde_json::json!({}))
+    invoke_daemon_skill_mutation("skill.remove", serde_json::json!({}))
+}
+
+fn invoke_daemon_skill_mutation(ability: &str, args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+    let subject_ura = LocalDaemonSystemAbilityIssuer::local_daemon_identity_subject_ura()?;
+    LocalDaemonSystemAbilityIssuer::invoke_root_for_subject(ability, args, &subject_ura)
 }
 RS
 
 cat >"$SB/src/cli/commands/api_key_cli.rs" <<'RS'
-use crate::support::platform::local_invoke::{invoke_local_ability, LocalRuntimeStateReadIssuer};
+use crate::support::platform::local_invoke::{LocalDaemonSystemAbilityIssuer, LocalRuntimeStateReadIssuer};
 
-fn create(ability: String, args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
-    invoke_local_ability(&ability, args)
+struct Principal {
+    subject_ura: String,
+}
+
+fn create(principal: Principal, ability: String, args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+    invoke_api_key_manage(&principal, &ability, args)
 }
 
 fn list(ability: String) -> anyhow::Result<serde_json::Value> {
     LocalRuntimeStateReadIssuer::invoke(&ability, serde_json::json!({}))
 }
 
-fn revoke(ability: String) -> anyhow::Result<serde_json::Value> {
-    invoke_local_ability(&ability, serde_json::json!({ "id_prefix": "key" }))
+fn revoke(principal: Principal, ability: String) -> anyhow::Result<serde_json::Value> {
+    invoke_api_key_manage(&principal, &ability, serde_json::json!({ "id_prefix": "key" }))
+}
+
+fn invoke_api_key_manage(
+    principal: &Principal,
+    ability: &str,
+    args: serde_json::Value,
+) -> anyhow::Result<serde_json::Value> {
+    LocalDaemonSystemAbilityIssuer::invoke_root_for_subject(ability, args, &principal.subject_ura)
+}
+RS
+
+cat >"$SB/src/cli/commands/groups/ability.rs" <<'RS'
+use crate::support::platform::local_invoke::LocalDaemonSystemAbilityIssuer;
+
+struct UninstallArgs;
+
+fn run_uninstall(args: UninstallArgs) -> anyhow::Result<serde_json::Value> {
+    invoke_ability_uninstall(ability_uninstall_payload(&args))
+}
+
+fn invoke_ability_uninstall(args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+    let subject_ura = LocalDaemonSystemAbilityIssuer::local_daemon_identity_subject_ura()?;
+    LocalDaemonSystemAbilityIssuer::invoke_root_for_subject("ability.uninstall", args, &subject_ura)
+}
+
+fn ability_uninstall_payload(_args: &UninstallArgs) -> serde_json::Value {
+    serde_json::json!({})
 }
 RS
 
@@ -271,6 +324,24 @@ set -e
 
 perl -0pi -e 's/\Qgateway.invoke("agent.list"\E/gateway.invoke_read("agent.list"/' \
   "$SB/src/cli/daemon_client/agent_view.rs"
+
+cat >>"$SB/src/cli/daemon_client/agent_gateway.rs" <<'RS'
+fn legacy_agent_command(ability: &str, args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+    crate::support::platform::local_invoke::invoke_local_ability(ability, args)
+}
+RS
+
+set +e
+(
+  cd "$SB"
+  bash tools/scripts/check-runtime-state-read-subject-boundary.sh
+) >/tmp/check-runtime-state-read-subject-boundary-agent-command.out 2>&1
+rc=$?
+set -e
+[[ "$rc" == "1" ]] || fail "agent command gateway generic invoke regression should exit 1 (got $rc)"
+
+perl -0pi -e 's/\nfn legacy_agent_command\(ability: &str, args: serde_json::Value\) -> anyhow::Result<serde_json::Value> \{\n    crate::support::platform::local_invoke::invoke_local_ability\(ability, args\)\n\}\n//' \
+  "$SB/src/cli/daemon_client/agent_gateway.rs"
 
 perl -0pi -e 's/\QLocalRuntimeStateReadIssuer::invoke("openai.list_models"\E/invoke_local_ability("openai.list_models"/' \
   "$SB/src/cli/commands/llm_api.rs"

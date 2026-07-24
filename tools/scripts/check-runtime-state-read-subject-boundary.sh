@@ -136,6 +136,14 @@ if ! rg -n 'LocalRuntimeStateReadIssuer::invoke' "$AGENT_GATEWAY" >/dev/null; th
   fail "production AgentStateReadGateway must use LocalRuntimeStateReadIssuer"
 fi
 
+if ! rg -n -U 'LocalDaemonSystemAbilityIssuer::invoke_root_for_subject\(\s*ability,\s*args,\s*&subject_ura' "$AGENT_GATEWAY" >/dev/null; then
+  fail "production AgentCommandGateway must bind explicit local daemon system issuer subject"
+fi
+
+if rg -n '\binvoke_local_ability\s*\(' "$AGENT_GATEWAY"; then
+  fail "agent command gateway must not use generic invoke_local_ability"
+fi
+
 if ! rg -n 'AgentStateReadGateway' "$AGENT_VIEW" >/dev/null; then
   fail "agent view must depend on AgentStateReadGateway, not AgentCommandGateway"
 fi
