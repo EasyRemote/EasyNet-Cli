@@ -2436,7 +2436,7 @@ async fn invoke_dispatches_federation_revoke() {
     let resp = svc
         .invoke(invoke_request(
             ABILITY_FEDERATION_REVOKE,
-            r#"{"target_ura":"easynet:///r/realm/device/missing"}"#,
+            r#"{"agent_ura":"easynet:///r/realm/device/missing"}"#,
         ))
         .await
         .expect("dispatch returns Ok");

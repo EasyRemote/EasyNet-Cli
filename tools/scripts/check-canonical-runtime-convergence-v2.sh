@@ -6272,6 +6272,67 @@ for required in (
 PY
 }
 
+check_federation_revoke_ingress_strict_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local wrappers="$cli_root/src/daemon/invocation/dispatch/federation_wrappers.rs"
+  local unary_tests="$cli_root/src/daemon/invocation/dispatch/daemon_invocation_service_tests/unary.rs"
+  [[ -f "$wrappers" ]] || fail "federation wrappers are missing: ${wrappers#$cli_root/}"
+  [[ -f "$unary_tests" ]] || fail "unary dispatcher tests are missing: ${unary_tests#$cli_root/}"
+
+  "$PYTHON_BIN" - "$wrappers" "$unary_tests" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+wrappers = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+unary = Path(sys.argv[2]).read_text(encoding="utf-8", errors="replace")
+
+match = re.search(r"(?P<prefix>(?:#\[[^\]]*\]\s*)*)pub struct RevokeRequest \{(?P<body>.*?)\n\}", wrappers, re.S)
+if match is None:
+    raise SystemExit("federation_revoke_ingress:request_missing")
+prefix = match.group("prefix")
+body = match.group("body")
+if "deny_unknown_fields" not in prefix:
+    raise SystemExit("federation_revoke_ingress:deny_unknown_fields_missing")
+if "pub agent_ura: String" not in body:
+    raise SystemExit("federation_revoke_ingress:agent_ura_missing")
+agent_field = re.search(r"(?P<prefix>(?:\s*///[^\n]*\n|\s*#\[[^\]]*\]\n|\s*)*)\s*pub agent_ura: String,", body)
+if agent_field is None:
+    raise SystemExit("federation_revoke_ingress:agent_ura_field_missing")
+if "serde(default" in agent_field.group("prefix"):
+    raise SystemExit("federation_revoke_ingress:agent_ura_legacy_default")
+if "target_ura" in body:
+    raise SystemExit("federation_revoke_ingress:target_ura_alias_present")
+
+for retired in (
+    "effective_target_ura",
+    "Modern callers send `agent_ura`; older callers send",
+    "We accept both",
+    "if !self.target_ura.is_empty()",
+    "&self.target_ura",
+):
+    if retired in wrappers:
+        raise SystemExit(f"federation_revoke_ingress:retired_alias_logic:{retired}")
+
+for required in (
+    "fn canonical_target_ura(&self) -> anyhow::Result<&str>",
+    "federation.revoke agent_ura is required",
+    "federation.revoke agent_ura is invalid",
+    "crate::core::ura::parse_ura(target)",
+    "let target_ura = request.canonical_target_ura()?",
+    "revoke_request_rejects_retired_target_ura_alias",
+    "handle_revoke_requires_canonical_agent_ura",
+):
+    if required not in wrappers:
+        raise SystemExit(f"federation_revoke_ingress:required_missing:{required}")
+
+if '{"target_ura":"easynet:///r/realm/device/missing"}' in unary:
+    raise SystemExit("federation_revoke_ingress:unary_test_uses_retired_target_ura")
+if '{"agent_ura":"easynet:///r/realm/device/missing"}' not in unary:
+    raise SystemExit("federation_revoke_ingress:unary_test_missing_canonical_agent_ura")
+PY
+}
+
 check_device_settings_loader_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local config="$cli_root/src/daemon/persistence/config.rs"
@@ -16459,6 +16520,7 @@ EOF
   check_session_prelude_credentials_contract
   check_session_prelude_receipt_contract
   check_federation_receipt_facts_strict_contract
+  check_federation_revoke_ingress_strict_contract
   check_device_settings_loader_contract
   check_mission_traditional_target_conflict_contract
   check_mission_runtime_meta_identity_schema_contract
@@ -16633,6 +16695,7 @@ check_session_prelude_credentials_contract
 check_start_attach_user_signer_readiness_contract
 check_session_prelude_receipt_contract
 check_federation_receipt_facts_strict_contract
+check_federation_revoke_ingress_strict_contract
 check_device_settings_loader_contract
 check_mission_traditional_target_conflict_contract
 check_mission_runtime_meta_identity_schema_contract

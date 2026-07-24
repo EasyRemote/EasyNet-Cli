@@ -1200,12 +1200,9 @@ fn list_user_devices_presence_entry(
 
 /// Request payload for `federation.revoke`.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RevokeRequest {
-    /// Modern callers send `agent_ura`; older callers send
-    /// `target_ura`. We accept both.
-    #[serde(default)]
-    pub target_ura: String,
-    #[serde(default)]
+    /// Canonical URA of the Device/Agent/User membership to revoke.
     pub agent_ura: String,
     #[serde(default)]
     pub purge_transaction_id: Option<String>,
@@ -1222,13 +1219,14 @@ pub struct RevokeRequest {
 }
 
 impl RevokeRequest {
-    #[must_use]
-    fn effective_target_ura(&self) -> &str {
-        if !self.target_ura.is_empty() {
-            &self.target_ura
-        } else {
-            &self.agent_ura
+    fn canonical_target_ura(&self) -> anyhow::Result<&str> {
+        let target = self.agent_ura.trim();
+        if target.is_empty() {
+            anyhow::bail!("federation.revoke agent_ura is required");
         }
+        crate::core::ura::parse_ura(target)
+            .map_err(|error| anyhow::anyhow!("federation.revoke agent_ura is invalid: {error}"))?;
+        Ok(target)
     }
 }
 
@@ -1263,7 +1261,7 @@ pub fn handle_revoke(
     advertised_agents: Option<&AdvertisedAgentStore>,
     ability_catalog: &AbilityCatalogStore,
 ) -> anyhow::Result<RevokeResponse> {
-    let target_ura = request.effective_target_ura();
+    let target_ura = request.canonical_target_ura()?;
     let advertised_record = advertised_agents
         .and_then(|store| store.get(target_ura))
         .filter(|record| {
@@ -2876,8 +2874,7 @@ mod tests {
 
         let resp = handle_revoke(
             &RevokeRequest {
-                target_ura: ura.clone(),
-                agent_ura: String::new(),
+                agent_ura: ura.clone(),
                 purge_transaction_id: None,
                 generation: 0,
                 reason: String::new(),
@@ -2893,6 +2890,57 @@ mod tests {
         assert!(resp.ack);
         assert!(resp.was_active);
         assert!(registry.lookup(&ura).is_none(), "must be removed");
+    }
+
+    #[test]
+    fn revoke_request_rejects_retired_target_ura_alias() {
+        let error = serde_json::from_value::<RevokeRequest>(serde_json::json!({
+            "target_ura": "easynet:///r/realm/device/n1"
+        }))
+        .expect_err("retired target_ura alias must fail closed");
+        assert!(
+            error.to_string().contains("unknown field `target_ura`"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn handle_revoke_requires_canonical_agent_ura() {
+        let registry = PresenceRegistry::new();
+        let catalog = AbilityCatalogStore::new();
+        let missing = handle_revoke(
+            &RevokeRequest {
+                agent_ura: String::new(),
+                purge_transaction_id: None,
+                generation: 0,
+                reason: String::new(),
+                authority_ura: String::new(),
+                protocol_version: 0,
+                delivery_fence: 0,
+            },
+            &registry,
+            None,
+            &catalog,
+        )
+        .expect_err("missing agent_ura must fail closed");
+        assert!(missing.to_string().contains("agent_ura is required"));
+
+        let invalid = handle_revoke(
+            &RevokeRequest {
+                agent_ura: "not-a-ura".to_string(),
+                purge_transaction_id: None,
+                generation: 0,
+                reason: String::new(),
+                authority_ura: String::new(),
+                protocol_version: 0,
+                delivery_fence: 0,
+            },
+            &registry,
+            None,
+            &catalog,
+        )
+        .expect_err("invalid agent_ura must fail closed");
+        assert!(invalid.to_string().contains("agent_ura is invalid"));
     }
 
     #[test]
@@ -2913,7 +2961,6 @@ mod tests {
         catalog.upsert_projection(projection_row_for(agent_ura, Vec::new()));
         let resp = handle_revoke(
             &RevokeRequest {
-                target_ura: String::new(),
                 agent_ura: agent_ura.to_string(),
                 purge_transaction_id: None,
                 generation: 0,
@@ -2972,7 +3019,6 @@ mod tests {
         .unwrap();
         catalog.upsert_projection(projection_row_for(agent_ura, Vec::new()));
         let request = RevokeRequest {
-            target_ura: String::new(),
             agent_ura: agent_ura.to_string(),
             purge_transaction_id: Some("fedcba9876543210fedcba9876543210".to_string()),
             generation: 1,
@@ -3026,7 +3072,6 @@ mod tests {
         };
         handle_advertise_agent(&advertise(1), Some(&advertised)).unwrap();
         let request = RevokeRequest {
-            target_ura: agent_ura.to_string(),
             agent_ura: agent_ura.to_string(),
             purge_transaction_id: Some("11111111111111111111111111111111".into()),
             generation: 1,
