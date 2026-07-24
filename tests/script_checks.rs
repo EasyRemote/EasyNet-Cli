@@ -253,6 +253,14 @@ fn pages_cli_ability_boundary_script_contract_holds() {
 }
 
 #[test]
+fn ability_catalogue_scope_boundary_script_holds() {
+    // Pins ability-list catalogue filtering to owner_ura/ability_ura scope
+    // projection. Invocation subject vocabulary must not leak past the public
+    // CLI flag boundary.
+    run_bash_script("tests/scripts/test_check_ability_catalogue_scope_boundary.sh");
+}
+
+#[test]
 fn openai_model_ability_ura_script_contract_holds() {
     // Pins the OpenAI-compatible model field to canonical
     // agent-owned chat Ability URAs, not bare provider names.

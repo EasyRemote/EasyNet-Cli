@@ -44,9 +44,9 @@
 //   --agent-ura <URA>  Canonical owner URA scope; required for remote
 //                      owner filtering.
 //   --subject-ura <URA>
-//                      Public compatibility flag. Owner URAs are projected to
+//                      Catalogue scope URA. Owner URAs are projected to
 //                      canonical owner_ura; Ability URAs are projected to
-//                      canonical ability_ura.
+//                      canonical ability_ura at the CLI facade boundary.
 //   --pattern <glob>   Glob filter on the fully qualified name. `*`
 //                      matches anything but `.`; `**` matches across
 //                      `.` boundaries.
@@ -72,7 +72,7 @@ pub struct AbilitiesArgs {
     /// Canonical owner URA. Filters the daemon catalogue by publisher.
     #[arg(long = "agent-ura", value_name = "URA")]
     pub agent_ura: Option<String>,
-    /// Owner URA or full Ability URA. Ability URAs filter to one canonical ability.
+    /// Catalogue scope URA. Owner URAs filter by owner; Ability URAs filter to one canonical ability.
     #[arg(long = "subject-ura", value_name = "URA")]
     pub subject_ura: Option<String>,
     /// Reserved for federation routing — only the local node is accepted today; remote listing ships post-AXON-RFC-001 P1.5.
@@ -167,45 +167,61 @@ impl AbilityCatalogueQuery {
             (None, Some(explicit)) => Some(explicit.to_string()),
             (None, None) => None,
         };
-        let subject_ura = args
+        let scope_ura = args
             .subject_ura
             .as_deref()
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(str::to_string);
-        let (subject_owner_ura, ability_ura) = classify_catalogue_subject_scope(subject_ura)?;
-        let owner_ura = merge_catalogue_owner_scope(agent_ura, subject_owner_ura)?;
+        let catalogue_scope = AbilityCatalogueScope::from_cli_scope(scope_ura)?;
+        let (scope_owner_ura, ability_ura) = catalogue_scope.into_parts();
+        let owner_ura = merge_catalogue_owner_scope(agent_ura, scope_owner_ura)?;
 
         Ok(Self::new(owner_ura, ability_ura))
     }
 }
 
-fn classify_catalogue_subject_scope(
-    subject_ura: Option<String>,
-) -> anyhow::Result<(Option<String>, Option<String>)> {
-    let Some(subject_ura) = subject_ura else {
-        return Ok((None, None));
-    };
-    let parsed = parse_ura(&subject_ura)?;
-    match parsed.kind {
-        URAKind::Ability => Ok((None, Some(subject_ura))),
-        URAKind::Agent | URAKind::Device | URAKind::Authority | URAKind::User => {
-            Ok((Some(subject_ura), None))
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum AbilityCatalogueScope {
+    All,
+    Owner(String),
+    Ability(String),
+}
+
+impl AbilityCatalogueScope {
+    fn from_cli_scope(scope_ura: Option<String>) -> anyhow::Result<Self> {
+        let Some(scope_ura) = scope_ura else {
+            return Ok(Self::All);
+        };
+        let parsed = parse_ura(&scope_ura)?;
+        match parsed.kind {
+            URAKind::Ability => Ok(Self::Ability(scope_ura)),
+            URAKind::Agent | URAKind::Device | URAKind::Authority | URAKind::User => {
+                Ok(Self::Owner(scope_ura))
+            }
+            other => bail!("--subject-ura must be an owner URA or Ability URA, got {other:?}"),
         }
-        other => bail!("--subject-ura must be an owner URA or Ability URA, got {other:?}"),
+    }
+
+    fn into_parts(self) -> (Option<String>, Option<String>) {
+        match self {
+            Self::All => (None, None),
+            Self::Owner(owner_ura) => (Some(owner_ura), None),
+            Self::Ability(ability_ura) => (None, Some(ability_ura)),
+        }
     }
 }
 
 fn merge_catalogue_owner_scope(
     explicit_owner_ura: Option<String>,
-    subject_owner_ura: Option<String>,
+    catalogue_owner_ura: Option<String>,
 ) -> anyhow::Result<Option<String>> {
-    match (explicit_owner_ura, subject_owner_ura) {
-        (Some(explicit), Some(subject)) if explicit != subject => {
-            bail!("--agent/--agent-ura owner scope does not match --subject-ura owner scope")
+    match (explicit_owner_ura, catalogue_owner_ura) {
+        (Some(explicit), Some(scope_owner)) if explicit != scope_owner => {
+            bail!("--agent/--agent-ura owner scope does not match --subject-ura catalogue scope")
         }
         (Some(explicit), _) => Ok(Some(explicit)),
-        (None, Some(subject)) => Ok(Some(subject)),
+        (None, Some(scope_owner)) => Ok(Some(scope_owner)),
         (None, None) => Ok(None),
     }
 }
@@ -493,7 +509,7 @@ pub(crate) fn truncate_display(text: &str, max: usize) -> String {
     out
 }
 
-/// Apply `--pattern` filtering. Owner/subject scope is sent to
+/// Apply `--pattern` filtering. Catalogue scope is sent to
 /// `meta.list_abilities` so catalogue ownership is decided by
 /// canonical URAs at the daemon, not by name-prefix conventions.
 fn filter_abilities(abilities: Vec<Value>, pattern: &str) -> anyhow::Result<Vec<Value>> {
@@ -726,7 +742,7 @@ mod tests {
     }
 
     #[test]
-    fn catalogue_query_projects_subject_owner_to_owner_scope() {
+    fn catalogue_query_projects_cli_owner_scope_to_owner_filter() {
         let query = AbilityCatalogueQuery::from_args(&AbilitiesArgs {
             agent: None,
             agent_ura: None,
@@ -745,7 +761,7 @@ mod tests {
     }
 
     #[test]
-    fn catalogue_query_rejects_conflicting_subject_owner_scope() {
+    fn catalogue_query_rejects_conflicting_cli_owner_scope() {
         let err = AbilityCatalogueQuery::from_args(&AbilitiesArgs {
             agent: None,
             agent_ura: Some("easynet:///r/test/device/dev-1".into()),
@@ -758,6 +774,20 @@ mod tests {
         .to_string();
 
         assert!(err.contains("does not match"), "got {err}");
+    }
+
+    #[test]
+    fn catalogue_scope_rejects_non_catalogue_ura_kind() {
+        let err = AbilityCatalogueScope::from_cli_scope(Some(
+            "easynet:///r/test/resource/user.alice/runtime-state/read".into(),
+        ))
+        .unwrap_err()
+        .to_string();
+
+        assert!(
+            err.contains("owner URA or Ability URA"),
+            "wrong error: {err}"
+        );
     }
 
     #[test]
