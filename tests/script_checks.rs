@@ -81,6 +81,13 @@ fn sdk_cutover_readiness_script_contract_holds() {
 }
 
 #[test]
+fn ability_model_convergence_script_contract_holds() {
+    // Pins CallMode ownership to the daemon ability descriptor model. Plugin
+    // manifest code consumes the type but must not re-export it.
+    run_bash_script("tests/scripts/test_check_ability_model_convergence.sh");
+}
+
+#[test]
 fn product_key_custody_boundary_script_contract_holds() {
     // Pins product processes as SDK consumers: Backend and EasyRemote must not
     // own runtime signing private material, key-service vault/passphrase

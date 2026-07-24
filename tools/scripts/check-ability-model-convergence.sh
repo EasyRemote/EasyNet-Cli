@@ -35,6 +35,26 @@ if rg -n '\bPluginCallMode\b|^pub enum Visibility' src/daemon/plugins src/daemon
     violations=$((violations + 1))
 fi
 
+if rg -n 'pub use crate::daemon::ability::CallMode' src/daemon/plugins/manifest.rs; then
+    echo "ERROR: plugin manifest must consume descriptor CallMode, not re-export it"
+    violations=$((violations + 1))
+fi
+
+if rg -n 'pub use manifest::\{[^}]*\bCallMode\b' src/daemon/plugins/mod.rs; then
+    echo "ERROR: plugin module must not re-export descriptor CallMode through plugins::*"
+    violations=$((violations + 1))
+fi
+
+if rg -n 'use crate::daemon::plugins::manifest::(\{[^}]*\bCallMode\b|CallMode\b)' src/daemon/plugins -g '*.rs'; then
+    echo "ERROR: plugin code must import CallMode from daemon::ability, not manifest"
+    violations=$((violations + 1))
+fi
+
+if rg -n 'use crate::daemon::plugins::(\{[^}]*\bCallMode\b|CallMode\b)' src plugins -g '*.rs'; then
+    echo "ERROR: plugin consumers must import CallMode from daemon::ability, not plugins"
+    violations=$((violations + 1))
+fi
+
 if rg -n 'core::ability(::|_)' src -g '*.rs'; then
     echo "ERROR: callers still depend on the retired core ability-manifest namespace"
     violations=$((violations + 1))

@@ -6,8 +6,9 @@
 
 use std::path::Path;
 
+use crate::daemon::ability::CallMode;
 use crate::daemon::plugins::errors::{PluginHostError, Result};
-use crate::daemon::plugins::manifest::{CallMode, PluginDeclarativeBinding, PluginKind};
+use crate::daemon::plugins::manifest::{PluginDeclarativeBinding, PluginKind};
 use crate::daemon::plugins::package::PluginPackage;
 
 /// Validate that a package kind can be installed by this release.

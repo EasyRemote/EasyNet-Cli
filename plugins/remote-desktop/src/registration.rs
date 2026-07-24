@@ -29,7 +29,7 @@ use crate::daemon::ability::builtins::resources::media::screen_snapshot::{
 };
 use crate::daemon::ability::descriptors::AdmissionAction;
 use crate::daemon::ability::dispatch::{BidiSource, EnvelopeContext, StreamSource};
-use crate::daemon::ability::AbilityImplSource;
+use crate::daemon::ability::{AbilityImplSource, CallMode};
 use crate::daemon::plugins::package::BuiltinPluginAbilitySpec;
 use crate::daemon::plugins::remote_desktop::constants::{
     ABILITY_ADD_ICE_CANDIDATE, ABILITY_ATTACH_SESSION, ABILITY_CREATE_SESSION, ABILITY_END_SESSION,
@@ -40,8 +40,7 @@ use crate::daemon::plugins::remote_desktop::handlers;
 use crate::daemon::plugins::remote_desktop::runtime::RemoteDesktopPlugin;
 use crate::daemon::plugins::remote_desktop::schema;
 use crate::daemon::plugins::{
-    CallMode, PluginAbilityLayer, PluginBidiWireKind, PluginContributionBuilder,
-    PluginRuntimeLimits, Result,
+    PluginAbilityLayer, PluginBidiWireKind, PluginContributionBuilder, PluginRuntimeLimits, Result,
 };
 
 type PluginRpcHandler =

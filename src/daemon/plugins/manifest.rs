@@ -8,11 +8,11 @@ use std::path::{Component, Path};
 
 use serde::{Deserialize, Serialize};
 
+use crate::daemon::ability::CallMode;
 use crate::daemon::plugins::errors::{PluginHostError, Result};
 
 /// Plugin package metadata declares the same governed invocation mode used by
 /// descriptors and routing. A plugin never owns a parallel transport taxonomy.
-pub use crate::daemon::ability::CallMode;
 
 /// Wire adapter a bidi plugin ability expects when it crosses the
 /// `session.open` bridge.

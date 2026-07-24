@@ -16,7 +16,8 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
 
-use crate::daemon::plugins::{CallMode, PluginBidiWireKind, PluginHostError, PluginRuntimeState};
+use crate::daemon::ability::CallMode;
+use crate::daemon::plugins::{PluginBidiWireKind, PluginHostError, PluginRuntimeState};
 
 /// Bidi wire codec used when an ability crosses the daemon/Axon session bridge.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

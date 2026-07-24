@@ -10,11 +10,9 @@ use crate::daemon::ability::dispatch::{
     AxonAbilityCatalog, ControlPlaneImplementation, LocalBidiHandlerWithEnvelope,
     LocalRpcHandlerWithEnvelope, LocalStreamHandlerWithEnvelope, OwnerKind,
 };
-use crate::daemon::ability::{AbilityImplSource, RuntimeEnv};
+use crate::daemon::ability::{AbilityImplSource, CallMode, RuntimeEnv};
 use crate::daemon::plugins::errors::{PluginHostError, Result};
-use crate::daemon::plugins::manifest::{
-    CallMode, PluginKind, PluginRealtimeCapability, PluginRuntimeLimits,
-};
+use crate::daemon::plugins::manifest::{PluginKind, PluginRealtimeCapability, PluginRuntimeLimits};
 
 /// Resource and permission declarations supplied by a plugin package.
 ///

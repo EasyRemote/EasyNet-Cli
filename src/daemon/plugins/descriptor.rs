@@ -7,10 +7,10 @@
 use serde_json::Value;
 
 use crate::daemon::ability::descriptors::AbilityHints;
+use crate::daemon::ability::CallMode;
 use crate::daemon::plugins::errors::PluginHostError;
 use crate::daemon::plugins::errors::Result;
 use crate::daemon::plugins::index::PluginPackageIndex;
-use crate::daemon::plugins::manifest::CallMode;
 
 /// Descriptor-generation metadata for one plugin-owned ability.
 #[derive(Debug, Clone)]

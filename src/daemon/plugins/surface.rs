@@ -8,11 +8,12 @@ use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 
+use crate::daemon::ability::CallMode;
 use crate::daemon::plugins::companion::DesktopCompanionManager;
 use crate::daemon::plugins::index::PluginPackageIndex;
 use crate::daemon::plugins::index::PluginPackageIndexError;
 use crate::daemon::plugins::load_plan::{PluginLoadPlan, PluginLoadStatus};
-use crate::daemon::plugins::manifest::{CallMode, PluginAbilityLayer, PluginKind};
+use crate::daemon::plugins::manifest::{PluginAbilityLayer, PluginKind};
 use crate::daemon::plugins::realtime::{
     activation_plans_for_manifest, PluginRealtimeActivationPlan,
 };

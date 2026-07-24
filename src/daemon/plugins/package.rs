@@ -12,12 +12,13 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::daemon::ability::descriptors::AdmissionAction;
+use crate::daemon::ability::CallMode;
 use sha2::{Digest, Sha256};
 
 use crate::daemon::plugins::errors::{PluginHostError, Result};
 use crate::daemon::plugins::manifest::{
-    validate_builtin_entrypoint, CallMode, PluginAbilityLayer, PluginBidiWireKind,
-    PluginPackageManifest, PluginRuntimeLimits,
+    validate_builtin_entrypoint, PluginAbilityLayer, PluginBidiWireKind, PluginPackageManifest,
+    PluginRuntimeLimits,
 };
 use crate::daemon::plugins::provider::ProviderBackedBuiltinBinding;
 
@@ -693,7 +694,8 @@ fn validate_package_child_path(root: &Path, allowed_root: &Path, path: &Path) ->
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::daemon::plugins::manifest::{CallMode, PluginAbilityLayer};
+    use crate::daemon::ability::CallMode;
+    use crate::daemon::plugins::manifest::PluginAbilityLayer;
     use crate::daemon::plugins::provider::{PluginProvider, PluginProviderKind};
 
     struct TestBuiltinProvider {

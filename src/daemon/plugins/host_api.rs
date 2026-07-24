@@ -15,13 +15,13 @@ use crate::daemon::ability::dispatch::{
     LocalStreamHandlerWithEnvelope,
 };
 use crate::daemon::ability::manifest::{EalExec, McpExec};
-use crate::daemon::ability::{AbilityImplSource, RuntimeEnv};
+use crate::daemon::ability::{AbilityImplSource, CallMode, RuntimeEnv};
 use crate::daemon::plugins::contribution::{
     PluginContributionBuilder, PluginContributionSet, PluginRequirementSet,
 };
 use crate::daemon::plugins::errors::{PluginHostError, Result};
 use crate::daemon::plugins::load_plan::PluginLoadPlan;
-use crate::daemon::plugins::manifest::{CallMode, PluginDeclarativeBinding, PluginKind};
+use crate::daemon::plugins::manifest::{PluginDeclarativeBinding, PluginKind};
 use crate::daemon::plugins::realtime::PluginRealtimeActivationPlan;
 use crate::daemon::plugins::sidecar::{
     sidecar_invocation_from_context, SidecarCommand, SidecarRuntimeHost,

@@ -4,11 +4,12 @@
 // File: src/daemon/plugins/load_plan.rs
 // Description: Convert package index entries into per-boot load decisions.
 
+use crate::daemon::ability::CallMode;
 use crate::daemon::plugins::companion::{
     DesktopCompanionPlan, DesktopCompanionPlanner, DesktopCompanionSessionProbe,
 };
 use crate::daemon::plugins::index::PluginPackageIndex;
-use crate::daemon::plugins::manifest::{CallMode, PluginDeclarativeBinding, PluginKind};
+use crate::daemon::plugins::manifest::{PluginDeclarativeBinding, PluginKind};
 use crate::daemon::plugins::package::SharedPluginPackage;
 
 /// Per-boot load state for one package.
