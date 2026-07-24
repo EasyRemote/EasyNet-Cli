@@ -1,11 +1,11 @@
 // EasyNet CLI — Node State Utilities
 // ===================================
 //
-// File: src/shared/node.rs
+// File: src/support/platform/node.rs
 // Description: Shared node state interpretation for consistent behavior across CLI commands.
 //
 // Extracted from devices.rs and status.rs to eliminate divergent is_online() implementations.
-// Aligned with axon/v1/types.proto NodeState enum.
+// Aligned with canonical directory read-model string states.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -28,11 +28,8 @@ pub fn is_online(n: &Value) -> bool {
 }
 
 /// Map a node's state field to a display string.
-/// Handles both string states and numeric protobuf enum values.
+/// Handles only canonical string states from the device directory read model.
 ///
-/// Aligned with axon/v1/types.proto `NodeState` enum:
-///   0=UNSPECIFIED, 1=JOINING, 2=PROBATION, 3=HEALTHY, 4=SUSPECT,
-///   5=QUARANTINED, 6=DRAINING, 7=REMOVED
 /// Known protocol states — used to return `&'static str` without allocation.
 const KNOWN_STATES: &[&str] = &[
     "UNSPECIFIED",
@@ -108,11 +105,6 @@ pub fn node_state_str(n: &Value) -> Cow<'_, str> {
             None => Cow::Borrowed(s),
         };
     }
-    if let Some(num) = state.as_u64() {
-        // Protobuf numeric enum mapping (axon/v1/types.proto NodeState).
-        let idx = usize::try_from(num).unwrap_or(usize::MAX);
-        return Cow::Borrowed(KNOWN_STATES.get(idx).copied().unwrap_or("UNKNOWN"));
-    }
     Cow::Borrowed("UNKNOWN")
 }
 
@@ -159,5 +151,19 @@ mod tests {
             }
         });
         assert_eq!(federation_label(&n), None);
+    }
+
+    #[test]
+    fn node_state_projection_rejects_numeric_legacy_enum_state() {
+        let n = json!({"state": 3});
+        assert_eq!(node_state_str(&n), "UNKNOWN");
+        assert!(!is_online(&n));
+    }
+
+    #[test]
+    fn node_state_projection_uses_only_canonical_string_state_for_online() {
+        let n = json!({"state": "HEALTHY"});
+        assert_eq!(node_state_str(&n), "HEALTHY");
+        assert!(is_online(&n));
     }
 }

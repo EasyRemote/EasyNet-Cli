@@ -1211,6 +1211,46 @@ for retired in (
 PY
 }
 
+check_shared_node_state_projection_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+
+  "$PYTHON_BIN" - "$cli_root" <<'PY'
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+path = root / "src/support/platform/node.rs"
+if not path.exists():
+    raise SystemExit(f"shared_node_state_projection:missing:{path}")
+text = path.read_text()
+start = text.find("pub fn node_state_str")
+end = text.find("#[cfg(test)]", start)
+if start < 0 or end < 0:
+    raise SystemExit("shared_node_state_projection:node_state_str_section_missing")
+body = text[start:end]
+
+for retired in (
+    "state.as_u64()",
+    "state.as_i64()",
+    "KNOWN_STATES.get(idx)",
+    "Protobuf numeric enum",
+    "numeric protobuf enum",
+    "NodeState enum",
+):
+    if retired in body:
+        raise SystemExit(f"shared_node_state_projection:retired_numeric_state_projection:{retired}")
+
+for required in (
+    "node_state_projection_rejects_numeric_legacy_enum_state",
+    'assert_eq!(node_state_str(&n), "UNKNOWN")',
+    "assert!(!is_online(&n))",
+    "node_state_projection_uses_only_canonical_string_state_for_online",
+):
+    if required not in text:
+        raise SystemExit(f"shared_node_state_projection:missing_regression_test:{required}")
+PY
+}
+
 check_invocation_history_placeholder_negative_only_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
 
@@ -13807,6 +13847,37 @@ EOF
   if ( check_local_runtime_state_read_subject_contract "$tmp/local-runtime-state-read-subject-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected local runtime-state read subject gate to fail"
   fi
+  mkdir -p "$tmp/shared-node-state-numeric-legacy/src/support/platform"
+  cat >"$tmp/shared-node-state-numeric-legacy/src/support/platform/node.rs" <<'EOF'
+use std::borrow::Cow;
+use serde_json::Value;
+
+const KNOWN_STATES: &[&str] = &["UNSPECIFIED", "JOINING", "PROBATION", "HEALTHY"];
+
+pub fn is_online(n: &Value) -> bool {
+    node_state_str(n) == "HEALTHY"
+}
+
+pub fn node_state_str(n: &Value) -> Cow<'_, str> {
+    let Some(state) = n.get("state") else {
+        return Cow::Borrowed("UNKNOWN");
+    };
+    if let Some(s) = state.as_str() {
+        return Cow::Borrowed(s);
+    }
+    if let Some(num) = state.as_u64() {
+        let idx = usize::try_from(num).unwrap_or(usize::MAX);
+        return Cow::Borrowed(KNOWN_STATES.get(idx).copied().unwrap_or("UNKNOWN"));
+    }
+    Cow::Borrowed("UNKNOWN")
+}
+
+#[cfg(test)]
+mod tests {}
+EOF
+  if ( check_shared_node_state_projection_contract "$tmp/shared-node-state-numeric-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected shared node numeric state projection gate to fail"
+  fi
   mkdir -p "$tmp/runtime-state-kind-default-legacy/src/daemon/persistence"
   cat >"$tmp/runtime-state-kind-default-legacy/src/daemon/persistence/config.rs" <<'EOF'
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -16922,6 +16993,7 @@ EOF
   check_invocation_history_placeholder_negative_only_contract
   check_agent_purge_publication_state_contract
   check_local_runtime_state_read_subject_contract
+  check_shared_node_state_projection_contract
   check_runtime_state_kind_required_contract
   check_federation_realm_resolver_contract
   check_daemon_config_mode_required_contract
@@ -17103,6 +17175,7 @@ check_cli_invocation_history_read_model_contract
 check_invocation_history_placeholder_negative_only_contract
 check_agent_purge_publication_state_contract
 check_local_runtime_state_read_subject_contract
+check_shared_node_state_projection_contract
 check_runtime_state_kind_required_contract
 check_federation_realm_resolver_contract
 check_skill_install_record_schema_contract

@@ -428,3 +428,40 @@ architecture rather than add feature surface.
   - `tools/scripts/check-canonical-runtime-convergence-v2.sh`
   - `tools/scripts/check-architecture-convergence.sh`
   - `git diff --check`
+
+## Iteration 12 candidate policy
+
+- Focus on shared device directory projection. `device show` already fails
+  closed when a node read model returns numeric legacy enum state, but
+  `support::platform::node::node_state_str` still translated numeric protobuf
+  values for device list/status renderers.
+- The root abstraction problem is split authority over directory row shape:
+  one product path requires canonical string state while the shared helper still
+  accepts a legacy wire enum and silently turns it into a display state.
+- The intended cutover is to make the shared node state projection string-only.
+  Numeric, object, boolean, missing, or otherwise malformed state projects to
+  `UNKNOWN` and never influences online filtering.
+- Verification must prove numeric `state` no longer maps to `HEALTHY`, `JOINING`
+  or other canonical states, and SPEC v2 must reject reintroducing numeric enum
+  projection in the shared helper.
+
+## Iteration 12 decision log
+
+- Removed numeric protobuf enum projection from
+  `support::platform::node::node_state_str`; the helper now treats only string
+  directory read-model states as canonical.
+- Numeric, missing, or malformed state now projects to `UNKNOWN` and cannot make
+  `node::is_online` return true unless an explicit `online: true` fact is
+  present.
+- Added focused tests proving `state: 3` no longer becomes `HEALTHY` and that
+  canonical string `HEALTHY` still drives online projection.
+- Added SPEC v2 coverage plus a negative self-test fixture that fails if the
+  retired numeric projector returns.
+- This closes the split authority where `device show` rejected legacy numeric
+  state but device list/status still accepted it through the shared helper.
+- Verification passed:
+  - `cargo test -q support::platform::node::tests`
+  - `cargo fmt --check`
+  - `tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - `tools/scripts/check-architecture-convergence.sh`
+  - `git diff --check`
