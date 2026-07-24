@@ -10024,6 +10024,64 @@ for token, code in (
 PY
 }
 
+check_agent_invoke_strict_args_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local invoke="$cli_root/src/daemon/ability/builtins/agents/invoke.rs"
+  [[ -f "$invoke" ]] || fail "agent invoke source is missing: $invoke"
+
+  "$PYTHON_BIN" - "$invoke" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+production = text.split("\n#[cfg(test)]\nmod tests", 1)[0]
+
+for forbidden, code in (
+    ("struct InvokeMetadata", "runtime_metadata_struct_in_business_parser"),
+    ("metadata: InvokeMetadata", "runtime_metadata_field_in_invoke_args"),
+    ("key.starts_with('_')", "underscore_sidecar_prefix_carveout"),
+    ('.get("_request_id")', "request_id_sidecar_extraction"),
+    ('.get("_caller_ura")', "caller_ura_sidecar_extraction"),
+    ("sidecar-metadata slot", "sidecar_slot_documented_in_parser"),
+    ("accepted-and-dropped", "silent_sidecar_drop_documented"),
+):
+    if forbidden in production:
+        raise SystemExit(f"agent_invoke_strict_args:{code}")
+
+for retired_test in (
+    "parse_accepts_underscore_prefixed_sidecar_fields",
+    "parse_drops_unread_underscore_fields_silently",
+    "parse_tolerates_non_string_sidecar_values",
+):
+    if retired_test in text:
+        raise SystemExit(f"agent_invoke_strict_args:retired_test:{retired_test}")
+
+for required in (
+    "parse_rejects_underscore_prefixed_sidecar_fields",
+    "parse_rejects_unread_underscore_fields",
+    "parse_rejects_non_string_sidecar_values",
+    "There is no underscore sidecar exception here",
+    "metadata are canonical invocation-envelope facts owned by",
+):
+    if required not in text:
+        raise SystemExit(f"agent_invoke_strict_args:missing:{required}")
+
+parse = re.search(
+    r"impl InvokeArgs \{\s*fn parse\(raw: &Value\) -> anyhow::Result<Self> \{(?P<body>.*?)\n    \}\n\}",
+    production,
+    re.S,
+)
+if parse is None:
+    raise SystemExit("agent_invoke_strict_args:parse_body_missing")
+body = parse.group("body")
+if 'const KNOWN: &[&str] = &["ability_ura", "args"];' not in body:
+    raise SystemExit("agent_invoke_strict_args:canonical_known_fields_missing")
+if "invalid_args: unknown field" not in body:
+    raise SystemExit("agent_invoke_strict_args:unknown_field_fail_closed_missing")
+PY
+}
+
 check_plugin_sidecar_helper_matrix_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local template="$cli_root/src/cli/commands/groups/plugin_template.rs"
@@ -15332,6 +15390,51 @@ EOF
   if ( CLI_ROOT="$tmp/ledger-route-caller-fallback"; check_daemon_runtime_assembly_contract ) >/dev/null 2>&1; then
     fail "self-test expected ledger route caller fallback gate to fail"
   fi
+  mkdir -p "$tmp/agent-invoke-sidecar-legacy/src/daemon/ability/builtins/agents"
+  cat >"$tmp/agent-invoke-sidecar-legacy/src/daemon/ability/builtins/agents/invoke.rs" <<'EOF'
+#[derive(Debug, Clone, PartialEq)]
+struct InvokeArgs {
+    args: serde_json::Value,
+    metadata: InvokeMetadata,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+struct InvokeMetadata {
+    request_id: String,
+    caller_ura: String,
+}
+
+impl InvokeArgs {
+    fn parse(raw: &serde_json::Value) -> anyhow::Result<Self> {
+        let obj = raw.as_object().unwrap();
+        const KNOWN: &[&str] = &["ability_ura", "args"];
+        for key in obj.keys() {
+            if KNOWN.contains(&key.as_str()) {
+                continue;
+            }
+            if key.starts_with('_') {
+                continue;
+            }
+            anyhow::bail!("invalid_args: unknown field {key:?}; known: {:?}", KNOWN);
+        }
+        let metadata = InvokeMetadata {
+            request_id: obj.get("_request_id").and_then(serde_json::Value::as_str).unwrap_or("").to_string(),
+            caller_ura: obj.get("_caller_ura").and_then(serde_json::Value::as_str).unwrap_or("").to_string(),
+        };
+        Ok(InvokeArgs { args: serde_json::json!({}), metadata })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    fn parse_accepts_underscore_prefixed_sidecar_fields() {}
+    fn parse_drops_unread_underscore_fields_silently() {}
+    fn parse_tolerates_non_string_sidecar_values() {}
+}
+EOF
+  if ( CLI_ROOT="$tmp/agent-invoke-sidecar-legacy"; check_agent_invoke_strict_args_contract ) >/dev/null 2>&1; then
+    fail "self-test expected agent invoke sidecar compatibility gate to fail"
+  fi
   mkdir -p "$tmp/cli-sidecar-template/src/cli/commands/groups"
   cp "$ROOT/src/cli/commands/groups/plugin_template.rs" \
     "$tmp/cli-sidecar-template/src/cli/commands/groups/plugin_template.rs"
@@ -20313,6 +20416,7 @@ EOF
   check_ffi_last_error_typed_tls_contract
   check_canonical_ability_catalog_projection_contract
   check_daemon_runtime_assembly_contract
+  check_agent_invoke_strict_args_contract
   check_runtime_plane_requirement_contract
   check_catalog_exact_runtime_key_contract
   check_federation_directory_device_projection_contract
@@ -20526,6 +20630,7 @@ check_ffi_callback_terminal_projection_contract
 check_ffi_last_error_typed_tls_contract
 check_canonical_ability_catalog_projection_contract
 check_daemon_runtime_assembly_contract
+check_agent_invoke_strict_args_contract
 check_runtime_plane_requirement_contract
 check_catalog_exact_runtime_key_contract
 check_federation_directory_device_projection_contract

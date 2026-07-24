@@ -222,7 +222,6 @@ pub fn dispatch(
         &parsed.args,
         dispatch_result.as_ref(),
         elapsed_ms,
-        &parsed.metadata,
     );
 
     let inner = dispatch_result?;
@@ -273,27 +272,19 @@ fn audit_invoke(
     args: &Value,
     dispatch_result: Result<&Value, &anyhow::Error>,
     elapsed_ms: u64,
-    metadata: &InvokeMetadata,
 ) {
     use std::io::Write;
     let (outcome, error_message, result_hash) = match dispatch_result {
         Ok(v) => ("ok", None, Some(sha256_hex_of_json(v))),
         Err(e) => ("error", Some(format!("{e}")), None),
     };
-    // Emit metadata fields only when populated. An empty `request_id`
-    // is the legacy / non-HTTP path (e.g. an EAL step or a peer agent
-    // calling directly without going through the backend); recording
-    // a literal `""` would make grep noisier without adding signal.
-    let request_id = if metadata.request_id.is_empty() {
-        Value::Null
-    } else {
-        Value::String(metadata.request_id.clone())
-    };
-    let caller_ura = if metadata.caller_ura.is_empty() {
-        Value::Null
-    } else {
-        Value::String(metadata.caller_ura.clone())
-    };
+    // `<agent>.invoke` is a business-args parser. Request/caller
+    // metadata belongs to the canonical invocation envelope owned by
+    // the SDK/runtime boundary, so this local audit projection keeps
+    // the historical fields present but does not source them from
+    // hidden top-level sidecars.
+    let request_id = Value::Null;
+    let caller_ura = Value::Null;
     let line = json!({
         "ts": chrono::Utc::now().to_rfc3339(),
         "caller": caller,
@@ -402,23 +393,6 @@ fn lookup_access_policy(
 
 /// Parsed invocation args. Pulled out so parse-time validation lives
 /// in one place and the test cases can construct it directly.
-///
-/// `metadata` carries `_`-prefixed sidecar fields that backends pass
-/// through the IPC frame but that DO NOT enter the inner ability call
-/// (so they don't perturb args_digest / canonical bytes). The
-/// EasyNet-backend cliipc adapter sets at minimum:
-///
-///   * `_caller_ura`       — original HTTP caller's URA
-///   * `_request_id`       — `req-…` correlation token from the HTTP
-///                            edge; flows into the audit row + the
-///                            canonical_invoke hop
-///   * `_idempotency_key`  — RFC-001 idempotency key (M1 metadata)
-///   * `_timeout_ms`       — RFC-001 timeout (M2 metadata)
-///
-/// Unknown `_`-prefixed fields are accepted silently and ignored —
-/// this is the forward-compat slot for future metadata. Unknown
-/// fields WITHOUT the underscore prefix still hard-fail per the
-/// canonical schema (see `parse`).
 #[derive(Debug, Clone, PartialEq)]
 struct InvokeArgs {
     dispatch_target: String,
@@ -427,23 +401,6 @@ struct InvokeArgs {
     ability_ura: String,
     local_registry_ability: String,
     args: Value,
-    metadata: InvokeMetadata,
-}
-
-/// Subset of sidecar metadata the handler actually consults. Other
-/// `_`-prefixed fields are accepted and dropped — keeping this struct
-/// small avoids growing the parse code for fields nobody reads.
-#[derive(Debug, Clone, Default, PartialEq)]
-struct InvokeMetadata {
-    /// Frontend-minted correlation ID (`req-` + 16 hex). Empty when
-    /// the caller did not pass one. Not validated for charset here —
-    /// the HTTP middleware already constrains the inbound shape; we
-    /// just guard against empty / non-string.
-    request_id: String,
-    /// Original HTTP caller's URA. Recorded in the audit row so the
-    /// device-side log can identify the operator behind a backend
-    /// request without grepping the backend log.
-    caller_ura: String,
 }
 
 impl InvokeArgs {
@@ -476,45 +433,18 @@ impl InvokeArgs {
         // operators would write `arguments:` instead of `args:`
         // and wonder why the call did nothing — fail loud to make
         // typos surface here.
-        //
-        // Exception: `_`-prefixed fields are reserved as the
-        // sidecar-metadata slot (the EasyNet backend adapter uses
-        // `_caller_ura`, `_request_id`, `_idempotency_key`,
-        // `_timeout_ms`). These flow through IPC for observability
-        // and routing context but DO NOT enter args_digest or the
-        // signed envelope. Unknown `_`-prefixed fields are
-        // accepted-and-dropped so adding new metadata at a later
-        // backend version doesn't require a CLI bump.
+        // There is no underscore sidecar exception here. Request
+        // identity, caller identity, timeout, idempotency, and causal
+        // metadata are canonical invocation-envelope facts owned by
+        // the SDK/runtime boundary, not hidden fields inside this
+        // business-args parser.
         const KNOWN: &[&str] = &["ability_ura", "args"];
         for key in obj.keys() {
             if KNOWN.contains(&key.as_str()) {
                 continue;
             }
-            if key.starts_with('_') {
-                continue;
-            }
-            anyhow::bail!(
-                "invalid_args: unknown field {key:?}; known: {:?} \
-                 (sidecar metadata fields must start with `_`)",
-                KNOWN
-            );
+            anyhow::bail!("invalid_args: unknown field {key:?}; known: {:?}", KNOWN);
         }
-
-        // Pluck the two sidecar fields the handler actually reads.
-        // Tolerate non-string values silently (caller passed garbage
-        // → we drop it), since metadata is non-load-bearing.
-        let metadata = InvokeMetadata {
-            request_id: obj
-                .get("_request_id")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string(),
-            caller_ura: obj
-                .get("_caller_ura")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string(),
-        };
 
         Ok(InvokeArgs {
             dispatch_target: selector.dispatch_target().to_string(),
@@ -523,7 +453,6 @@ impl InvokeArgs {
             ability_ura: raw_ability_ura,
             local_registry_ability: selector.local_registry_ability().to_string(),
             args,
-            metadata,
         })
     }
 }
@@ -770,73 +699,51 @@ mod tests {
     }
 
     #[test]
-    fn parse_accepts_underscore_prefixed_sidecar_fields() {
-        let caller_ura = crate::core::ura::hub_ura("silan.localhost");
-        // Backend cliipc adapter ships `_caller_ura`, `_request_id`,
-        // `_idempotency_key`, `_timeout_ms` as IPC-only sidecars.
-        // The handler must accept them silently — they don't enter
-        // args_digest / canonical bytes / signed envelope.
-        let parsed = InvokeArgs::parse(&json!({
+    fn parse_rejects_underscore_prefixed_sidecar_fields() {
+        let err = InvokeArgs::parse(&json!({
             "ability_ura": "easynet:///r/acme/ability/user-1.claude.weather",
-            "_caller_ura": caller_ura,
+            "_caller_ura": crate::core::ura::hub_ura("silan.localhost"),
             "_request_id": "req-deadbeef00112233",
             "_idempotency_key": "idem-abc",
             "_timeout_ms": 5000,
             "_future_field_we_dont_read_yet": "value",
         }))
-        .expect("sidecar fields must not be rejected");
-        assert_eq!(parsed.metadata.request_id, "req-deadbeef00112233");
-        assert_eq!(parsed.metadata.caller_ura, caller_ura);
-        // Sidecars MUST NOT bleed into the inner ability args; the
-        // signed args_digest covers `args` exclusively.
-        assert_eq!(parsed.args, json!({}));
+        .expect_err("runtime sidecars must be rejected by the business-args parser");
+        assert!(format!("{err}").contains("unknown field"));
+        assert!(format!("{err}").contains("_caller_ura"));
     }
 
     #[test]
-    fn parse_drops_unread_underscore_fields_silently() {
-        // Forward-compat: a future backend version adding new
-        // `_*` metadata must not require a CLI bump.
-        let parsed = InvokeArgs::parse(&json!({
+    fn parse_rejects_unread_underscore_fields() {
+        let err = InvokeArgs::parse(&json!({
             "ability_ura": "easynet:///r/acme/ability/user-1.claude.weather",
             "_brand_new_metadata_v3": {"nested": true},
         }))
-        .unwrap();
-        // Default empty strings, not panic / not error.
-        assert_eq!(parsed.metadata.request_id, "");
-        assert_eq!(parsed.metadata.caller_ura, "");
+        .expect_err("future runtime metadata must evolve the envelope, not this parser");
+        assert!(format!("{err}").contains("_brand_new_metadata_v3"));
     }
 
     #[test]
-    fn parse_tolerates_non_string_sidecar_values() {
-        // Caller passed garbage (e.g. number where string expected).
-        // Metadata is non-load-bearing — silently coerce to "" rather
-        // than crash, since rejecting would mean a typo in operator
-        // tooling could lock out the entire invoke surface.
-        let parsed = InvokeArgs::parse(&json!({
+    fn parse_rejects_non_string_sidecar_values() {
+        let err = InvokeArgs::parse(&json!({
             "ability_ura": "easynet:///r/acme/ability/user-1.claude.weather",
             "_request_id": 12345,
             "_caller_ura": null,
         }))
-        .unwrap();
-        assert_eq!(parsed.metadata.request_id, "");
-        assert_eq!(parsed.metadata.caller_ura, "");
+        .expect_err("invalid sidecar values are still sidecar injection");
+        assert!(
+            format!("{err}").contains("_caller_ura") || format!("{err}").contains("_request_id")
+        );
     }
 
     #[test]
     fn parse_still_rejects_unknown_field_without_underscore_prefix() {
-        // Underscore-prefix carve-out must not weaken the typo guard.
         let err = InvokeArgs::parse(&json!({
             "ability_ura": "easynet:///r/acme/ability/user-1.claude.weather",
             "arguments": {"x": 1},
         }))
         .unwrap_err();
         assert!(format!("{err}").contains("unknown field"));
-        // Hint should mention the underscore convention so a future
-        // operator reading the error knows the proper slot.
-        assert!(
-            format!("{err}").contains("_"),
-            "error should hint at the `_` prefix convention; got: {err}"
-        );
     }
 
     #[test]
