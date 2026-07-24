@@ -114,8 +114,8 @@ class SdkEnvironmentTests(unittest.TestCase):
             env.close()
 
         self.assertTrue(result.ok)
-        self.assertEqual(raw.daemon_open_clients, [707])
-        self.assertEqual(raw.daemon_detaches, [707])
+        self.assertEqual(raw.runtime_host_open_clients, [707])
+        self.assertEqual(raw.runtime_host_detaches, [707])
         self.assertEqual(raw.shutdown_handles, [808])
 
     def test_runtime_connection_uses_generic_cabi_connector_and_closes_runtime(self) -> None:
@@ -129,8 +129,8 @@ class SdkEnvironmentTests(unittest.TestCase):
                 env.close()
 
         self.assertTrue(result.ok)
-        self.assertEqual(raw.daemon_open_clients, [707])
-        self.assertEqual(raw.daemon_detaches, [707])
+        self.assertEqual(raw.runtime_host_open_clients, [707])
+        self.assertEqual(raw.runtime_host_detaches, [707])
         self.assertEqual(raw.shutdown_handles, [808])
 
     def test_default_environment_exposes_no_product_profiles(self) -> None:
@@ -168,7 +168,7 @@ def _write_control_discovery(directory: str) -> Path:
     path = Path(directory) / "control.json"
     path.write_text(
         '{"socket_path":"/tmp/control.sock",'
-        '"invocation_endpoint":"unix:///tmp/daemon.sock",'
+        '"invocation_endpoint":"unix:///tmp/runtime-host.sock",'
         '"pid":123,'
         '"daemon_version":"test",'
         '"supported_ipc_versions":{"min":1,"max":1},'

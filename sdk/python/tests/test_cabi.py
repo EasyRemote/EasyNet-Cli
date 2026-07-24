@@ -209,13 +209,13 @@ class FakeRawCABI:
         self.bidi_callbacks: dict[int, tuple[object, object]] = {}
         self.bidi_open_requests: list[dict[str, object]] = []
         self.overflow_callbacks = False
-        self.daemon_starts: list[dict[str, object]] = []
-        self.daemon_attaches: list[dict[str, object]] = []
-        self.daemon_discovers: list[dict[str, object]] = []
-        self.daemon_stops: list[int] = []
-        self.daemon_detaches: list[int] = []
-        self.daemon_open_clients: list[int] = []
-        self.daemon_invocation_endpoint_calls: list[int] = []
+        self.runtime_host_starts: list[dict[str, object]] = []
+        self.runtime_host_attaches: list[dict[str, object]] = []
+        self.runtime_host_discovers: list[dict[str, object]] = []
+        self.runtime_host_stops: list[int] = []
+        self.runtime_host_detaches: list[int] = []
+        self.runtime_host_open_clients: list[int] = []
+        self.runtime_host_invocation_endpoint_calls: list[int] = []
         self.next_prepared_id = 1001
 
         self.runtime_abi_version = FakeSymbol(lambda: EXPECTED_ABI_VERSION)
@@ -225,17 +225,17 @@ class FakeRawCABI:
         self.runtime_string_free = FakeSymbol(self._free)
         self.runtime_init = FakeSymbol(self._init)
         self.runtime_shutdown = FakeSymbol(self._shutdown)
-        self.runtime_host_start = FakeSymbol(self._daemon_start)
-        self.runtime_host_attach = FakeSymbol(self._daemon_attach)
-        self.runtime_host_discover = FakeSymbol(self._daemon_discover)
-        self.runtime_host_stop = FakeSymbol(self._daemon_stop)
-        self.runtime_host_detach = FakeSymbol(self._daemon_detach)
-        self.runtime_host_status = FakeSymbol(self._daemon_status)
-        self.runtime_host_endpoints = FakeSymbol(self._daemon_endpoints)
+        self.runtime_host_start = FakeSymbol(self._runtime_host_start)
+        self.runtime_host_attach = FakeSymbol(self._runtime_host_attach)
+        self.runtime_host_discover = FakeSymbol(self._runtime_host_discover)
+        self.runtime_host_stop = FakeSymbol(self._runtime_host_stop)
+        self.runtime_host_detach = FakeSymbol(self._runtime_host_detach)
+        self.runtime_host_status = FakeSymbol(self._runtime_host_status)
+        self.runtime_host_endpoints = FakeSymbol(self._runtime_host_endpoints)
         self.runtime_host_invocation_endpoint = FakeSymbol(
-            self._daemon_invocation_endpoint
+            self._runtime_host_invocation_endpoint
         )
-        self.runtime_host_open_client = FakeSymbol(self._daemon_open_client)
+        self.runtime_host_open_client = FakeSymbol(self._runtime_host_open_client)
         self.runtime_health = FakeSymbol(self._runtime_health)
         self.runtime_diagnostics = FakeSymbol(self._runtime_diagnostics)
         self.runtime_resolve_descriptor_ref = FakeSymbol(
@@ -336,47 +336,47 @@ class FakeRawCABI:
         self.shutdown_handles.append(int(handle.value))
         return 0
 
-    def _daemon_start(self, config_json, out_handle) -> int:
-        self.daemon_starts.append(json.loads(config_json.value.decode("utf-8")))
+    def _runtime_host_start(self, config_json, out_handle) -> int:
+        self.runtime_host_starts.append(json.loads(config_json.value.decode("utf-8")))
         out_handle._obj.value = 606
         return 0
 
-    def _daemon_attach(self, options_json, out_handle) -> int:
-        self.daemon_attaches.append(json.loads(options_json.value.decode("utf-8")))
+    def _runtime_host_attach(self, options_json, out_handle) -> int:
+        self.runtime_host_attaches.append(json.loads(options_json.value.decode("utf-8")))
         out_handle._obj.value = 707
         return 0
 
-    def _daemon_discover(self, options_json, out_ptr) -> int:
-        self.daemon_discovers.append(json.loads(options_json.value.decode("utf-8")))
-        return self._write(out_ptr, _DAEMON_STATUS)
+    def _runtime_host_discover(self, options_json, out_ptr) -> int:
+        self.runtime_host_discovers.append(json.loads(options_json.value.decode("utf-8")))
+        return self._write(out_ptr, _RUNTIME_HOST_STATUS)
 
-    def _daemon_stop(self, daemon_handle) -> int:
-        self.daemon_stops.append(int(daemon_handle.value))
+    def _runtime_host_stop(self, runtime_host_handle) -> int:
+        self.runtime_host_stops.append(int(runtime_host_handle.value))
         return 0
 
-    def _daemon_detach(self, daemon_handle) -> int:
-        self.daemon_detaches.append(int(daemon_handle.value))
+    def _runtime_host_detach(self, runtime_host_handle) -> int:
+        self.runtime_host_detaches.append(int(runtime_host_handle.value))
         return 0
 
-    def _daemon_status(self, daemon_handle, out_ptr) -> int:
-        _ = daemon_handle
-        return self._write(out_ptr, _DAEMON_STATUS)
+    def _runtime_host_status(self, runtime_host_handle, out_ptr) -> int:
+        _ = runtime_host_handle
+        return self._write(out_ptr, _RUNTIME_HOST_STATUS)
 
-    def _daemon_endpoints(self, daemon_handle, out_ptr) -> int:
-        _ = daemon_handle
+    def _runtime_host_endpoints(self, runtime_host_handle, out_ptr) -> int:
+        _ = runtime_host_handle
         return self._write(
             out_ptr,
             b'{"control_endpoint":"unix:///tmp/control.sock",'
-            b'"invocation_endpoint":"unix:///tmp/daemon.sock",'
+            b'"invocation_endpoint":"unix:///tmp/runtime-host.sock",'
             b'"public_endpoint":null}',
         )
 
-    def _daemon_invocation_endpoint(self, daemon_handle, out_ptr) -> int:
-        self.daemon_invocation_endpoint_calls.append(int(daemon_handle.value))
-        return self._write(out_ptr, b"unix:///tmp/daemon.sock")
+    def _runtime_host_invocation_endpoint(self, runtime_host_handle, out_ptr) -> int:
+        self.runtime_host_invocation_endpoint_calls.append(int(runtime_host_handle.value))
+        return self._write(out_ptr, b"unix:///tmp/runtime-host.sock")
 
-    def _daemon_open_client(self, daemon_handle, out_handle) -> int:
-        self.daemon_open_clients.append(int(daemon_handle.value))
+    def _runtime_host_open_client(self, runtime_host_handle, out_handle) -> int:
+        self.runtime_host_open_clients.append(int(runtime_host_handle.value))
         out_handle._obj.value = 808
         return 0
 
@@ -650,11 +650,11 @@ class FakeRawCABI:
         return 0
 
 
-_DAEMON_STATUS = (
+_RUNTIME_HOST_STATUS = (
     b'{"state":"Running","mode":"device","pid":123,'
     b'"version":"0.91.30","message":"ready","diagnostics":[],'
     b'"control_endpoint":"unix:///tmp/control.sock",'
-    b'"invocation_endpoint":"unix:///tmp/daemon.sock",'
+    b'"invocation_endpoint":"unix:///tmp/runtime-host.sock",'
     b'"invocation_accepting":true}'
 )
 
@@ -677,7 +677,32 @@ class CABITransportTests(unittest.TestCase):
         self.assertEqual(features["abi_version"], 6)
         self.assertEqual(features["profiles"], {"runtime_core": "provider-backed"})
 
-    def test_daemon_runtime_uses_generic_invocation(self) -> None:
+    def test_library_exposes_runtime_host_not_daemon_lifecycle_methods(self) -> None:
+        lifecycle_methods = {
+            name
+            for name in dir(CLILibrary)
+            if name.endswith(
+                (
+                    "_start",
+                    "_attach",
+                    "_discover",
+                    "_stop",
+                    "_detach",
+                    "_status",
+                    "_endpoints",
+                    "_invocation_endpoint",
+                    "_open_client",
+                )
+            )
+        }
+
+        self.assertIn("runtime_host_start", lifecycle_methods)
+        self.assertIn("runtime_host_open_client", lifecycle_methods)
+        self.assertFalse(
+            [name for name in lifecycle_methods if name.startswith("daemon_")]
+        )
+
+    def test_runtime_host_uses_generic_invocation(self) -> None:
         raw = FakeRawCABI()
         lifecycle = CABIRuntimeLifecycleTransport(CLILibrary(raw))
         handle = RuntimeLifecycle(lifecycle).start(
@@ -692,7 +717,7 @@ class CABITransportTests(unittest.TestCase):
 
         self.assertTrue(result.ok)
         self.assertEqual(result.output_json, {"ready": True})
-        self.assertEqual(raw.daemon_open_clients, [606])
+        self.assertEqual(raw.runtime_host_open_clients, [606])
 
     def test_runtime_handle_has_no_product_profile_factory(self) -> None:
         raw = FakeRawCABI()

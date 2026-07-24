@@ -268,9 +268,9 @@ class RuntimeInvocationTransportTests(unittest.TestCase):
                 transport.close()
 
         self.assertTrue(result["ok"])
-        self.assertEqual(raw.daemon_discovers, [])
-        self.assertEqual(raw.daemon_open_clients, [707])
-        self.assertEqual(raw.daemon_detaches, [707])
+        self.assertEqual(raw.runtime_host_discovers, [])
+        self.assertEqual(raw.runtime_host_open_clients, [707])
+        self.assertEqual(raw.runtime_host_detaches, [707])
         self.assertEqual(raw.shutdown_handles, [808])
 
     def test_daemon_transport_tracks_real_runtime_close_failure(
@@ -454,8 +454,8 @@ class RuntimeInvocationTransportTests(unittest.TestCase):
                     RuntimeInvocationTransport.connect(control_path=str(control_path))
 
         self.assertTrue(is_code(caught.exception, ErrorCode.CONTROL_ONLY))
-        self.assertEqual(raw.daemon_attaches, [])
-        self.assertEqual(raw.daemon_open_clients, [])
+        self.assertEqual(raw.runtime_host_attaches, [])
+        self.assertEqual(raw.runtime_host_open_clients, [])
 
     def test_stream_projects_sdk_events_to_dicts(self) -> None:
         runtime = MemoryRuntimeTransport()

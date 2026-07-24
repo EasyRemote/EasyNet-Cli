@@ -97,7 +97,7 @@ class CLILibrary:
         code = int(self._raw.runtime_shutdown(ctypes.c_uint64(handle)))
         self._raise_for_code(code)
 
-    def daemon_start(self, config_json: bytes) -> int:
+    def runtime_host_start(self, config_json: bytes) -> int:
         out_handle = ctypes.c_uint64(0)
         code = int(
             self._raw.runtime_host_start(
@@ -107,7 +107,7 @@ class CLILibrary:
         self._raise_for_code(code)
         return int(out_handle.value)
 
-    def daemon_attach(self, options_json: bytes) -> int:
+    def runtime_host_attach(self, options_json: bytes) -> int:
         out_handle = ctypes.c_uint64(0)
         code = int(
             self._raw.runtime_host_attach(
@@ -117,36 +117,36 @@ class CLILibrary:
         self._raise_for_code(code)
         return int(out_handle.value)
 
-    def daemon_discover(self, options_json: bytes) -> bytes:
+    def runtime_host_discover(self, options_json: bytes) -> bytes:
         return self._call_output(
             self._raw.runtime_host_discover,
             ctypes.c_char_p(options_json),
         )
 
-    def daemon_stop(self, daemon_handle: int) -> None:
-        code = int(self._raw.runtime_host_stop(ctypes.c_uint64(daemon_handle)))
+    def runtime_host_stop(self, runtime_host_handle: int) -> None:
+        code = int(self._raw.runtime_host_stop(ctypes.c_uint64(runtime_host_handle)))
         self._raise_for_code(code)
 
-    def daemon_detach(self, daemon_handle: int) -> None:
-        code = int(self._raw.runtime_host_detach(ctypes.c_uint64(daemon_handle)))
+    def runtime_host_detach(self, runtime_host_handle: int) -> None:
+        code = int(self._raw.runtime_host_detach(ctypes.c_uint64(runtime_host_handle)))
         self._raise_for_code(code)
 
-    def daemon_status(self, daemon_handle: int) -> bytes:
+    def runtime_host_status(self, runtime_host_handle: int) -> bytes:
         return self._call_output(
             self._raw.runtime_host_status,
-            ctypes.c_uint64(daemon_handle),
+            ctypes.c_uint64(runtime_host_handle),
         )
 
-    def daemon_endpoints(self, daemon_handle: int) -> bytes:
+    def runtime_host_endpoints(self, runtime_host_handle: int) -> bytes:
         return self._call_output(
             self._raw.runtime_host_endpoints,
-            ctypes.c_uint64(daemon_handle),
+            ctypes.c_uint64(runtime_host_handle),
         )
 
-    def daemon_invocation_endpoint(self, daemon_handle: int) -> str:
+    def runtime_host_invocation_endpoint(self, runtime_host_handle: int) -> str:
         raw = self._call_output(
             self._raw.runtime_host_invocation_endpoint,
-            ctypes.c_uint64(daemon_handle),
+            ctypes.c_uint64(runtime_host_handle),
         )
         endpoint = raw.decode("utf-8")
         if not endpoint:
@@ -155,15 +155,15 @@ class CLILibrary:
                 stage="cabi",
                 retry=RetryHint.SAFE,
                 retryable=True,
-                message="daemon did not advertise invocation_endpoint",
+                message="runtime host did not advertise invocation_endpoint",
             )
         return endpoint
 
-    def daemon_open_client(self, daemon_handle: int) -> int:
+    def runtime_host_open_client(self, runtime_host_handle: int) -> int:
         out_handle = ctypes.c_uint64(0)
         code = int(
             self._raw.runtime_host_open_client(
-                ctypes.c_uint64(daemon_handle), ctypes.byref(out_handle)
+                ctypes.c_uint64(runtime_host_handle), ctypes.byref(out_handle)
             )
         )
         self._raise_for_code(code)
@@ -619,7 +619,7 @@ class CABIRuntimeLifecycleTransport:
 
     def discover(self, options_json: bytes) -> bytes:
         self._require_open()
-        raw = self.lib.daemon_discover(options_json)
+        raw = self.lib.runtime_host_discover(options_json)
         status = _runtime_status_from_cabi("0", raw)
         endpoints = status["endpoints"]
         if not isinstance(endpoints, dict):
@@ -628,24 +628,24 @@ class CABIRuntimeLifecycleTransport:
 
     def start(self, config_json: bytes) -> bytes:
         self._require_open()
-        native_handle = self.lib.daemon_start(
+        native_handle = self.lib.runtime_host_start(
             _runtime_start_config_for_cabi(config_json)
         )
         public_id = str(native_handle)
         self._handles[public_id] = native_handle
         status = _runtime_status_from_cabi(
-            public_id, self.lib.daemon_status(native_handle)
+            public_id, self.lib.runtime_host_status(native_handle)
         )
         self._status_cache[public_id] = status
         return _json_bytes(status)
 
     def attach(self, options_json: bytes) -> bytes:
         self._require_open()
-        native_handle = self.lib.daemon_attach(options_json)
+        native_handle = self.lib.runtime_host_attach(options_json)
         public_id = str(native_handle)
         self._handles[public_id] = native_handle
         status = _runtime_status_from_cabi(
-            public_id, self.lib.daemon_status(native_handle)
+            public_id, self.lib.runtime_host_status(native_handle)
         )
         self._status_cache[public_id] = status
         return _json_bytes(status)
@@ -653,14 +653,14 @@ class CABIRuntimeLifecycleTransport:
     def status(self, handle_id: str) -> bytes:
         native_handle = self._require_runtime_handle(handle_id)
         status = _runtime_status_from_cabi(
-            handle_id, self.lib.daemon_status(native_handle)
+            handle_id, self.lib.runtime_host_status(native_handle)
         )
         self._status_cache[handle_id] = status
         return _json_bytes(status)
 
     def invocation_endpoint(self, handle_id: str) -> str:
         native_handle = self._require_runtime_handle(handle_id)
-        endpoint = self.lib.daemon_invocation_endpoint(native_handle)
+        endpoint = self.lib.runtime_host_invocation_endpoint(native_handle)
         status = dict(self._status_cache.get(handle_id, {}))
         cached_endpoints = status.get("endpoints", {})
         endpoints = dict(cached_endpoints) if isinstance(cached_endpoints, dict) else {}
@@ -709,7 +709,7 @@ class CABIRuntimeLifecycleTransport:
 
     def _open_client_handle(self, handle_id: str, profile: str) -> int:
         native_handle = self._require_runtime_handle(handle_id)
-        client_handle = self.lib.daemon_open_client(native_handle)
+        client_handle = self.lib.runtime_host_open_client(native_handle)
         if client_handle <= 0:
             raise SDKError(
                 code=ErrorCode.INVALID_HANDLE,
@@ -724,7 +724,7 @@ class CABIRuntimeLifecycleTransport:
     def stop(self, handle_id: str, options_json: bytes) -> bytes:
         _ = options_json
         native_handle = self._require_runtime_handle(handle_id)
-        self.lib.daemon_stop(native_handle)
+        self.lib.runtime_host_stop(native_handle)
         self._handles.pop(handle_id, None)
         prior = self._status_cache.pop(handle_id, {})
         stopped = {
@@ -738,7 +738,7 @@ class CABIRuntimeLifecycleTransport:
 
     def detach(self, handle_id: str) -> None:
         native_handle = self._require_runtime_handle(handle_id)
-        self.lib.daemon_detach(native_handle)
+        self.lib.runtime_host_detach(native_handle)
         self._handles.pop(handle_id, None)
         self._status_cache.pop(handle_id, None)
 
@@ -761,7 +761,7 @@ class CABIRuntimeLifecycleTransport:
         first_error: SDKError | None = None
         for handle_id, native_handle in list(self._handles.items()):
             try:
-                self.lib.daemon_detach(native_handle)
+                self.lib.runtime_host_detach(native_handle)
             except SDKError as exc:
                 if first_error is None:
                     first_error = exc
