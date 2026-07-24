@@ -15,11 +15,15 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+use anyhow::Context;
 use clap::{Args, Subcommand};
 use serde_json::{json, Value};
 
 use crate::daemon::ability::builtins::governance::api_key;
-use crate::support::platform::local_invoke::{invoke_local_ability, LocalRuntimeStateReadIssuer};
+use crate::daemon::ability::builtins::resources::pages::{PagesIdentity, PagesUserRootIdentity};
+use crate::support::platform::local_invoke::{
+    LocalDaemonSystemAbilityIssuer, LocalRuntimeStateReadIssuer,
+};
 
 #[derive(Debug, Args)]
 pub struct ApiKeyArgs {
@@ -60,28 +64,51 @@ pub struct RevokeArgs {
     pub id_prefix: String,
 }
 
-fn current_user() -> anyhow::Result<String> {
-    // Production: read username from `EASYNET_PAGES_USER` env (e2e
-    // / multi-user dev rigs) or `credentials.json` (paired
-    // device). M5 of the system-namespace migration banned the
-    // `legacy self alias` placeholder — an unpaired daemon has no
-    // user-rooted ability surface, so the CLI MUST surface the
-    // missing-identity error rather than silently dialling
-    // `self.api_key.*` (which the registry no longer answers).
-    if let Some(v) = std::env::var("EASYNET_PAGES_USER")
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-    {
-        return Ok(v);
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ApiKeyPrincipal {
+    user: String,
+    subject_ura: String,
+}
+
+impl ApiKeyPrincipal {
+    const SUBJECT_RESOURCE_PATH: &'static str = "api-key/manage";
+
+    fn from_user_root_identity(identity: PagesUserRootIdentity) -> anyhow::Result<Self> {
+        let subject_ura = crate::core::ura::resource_dot_ura(
+            &identity.realm,
+            &format!("user.{}", identity.user),
+            Self::SUBJECT_RESOURCE_PATH,
+        );
+        crate::core::ura::parse_ura(&subject_ura)
+            .map_err(|error| anyhow::anyhow!("api-key subject URA is invalid: {error}"))?;
+        Ok(Self {
+            user: identity.user,
+            subject_ura,
+        })
     }
-    if let Some(credentials) = crate::daemon::persistence::config::load_credentials_optional()? {
-        return Ok(credentials.username_slug()?.to_string());
+
+    fn ability(&self, action: &str) -> String {
+        format!("{}.api_key.{action}", self.user)
+    }
+}
+
+fn current_api_key_principal() -> anyhow::Result<ApiKeyPrincipal> {
+    if let Some(identity) = PagesIdentity::try_from_env()?.user_root_identity()? {
+        return ApiKeyPrincipal::from_user_root_identity(identity);
     }
     anyhow::bail!(
         "no user identity bound to this daemon — run 'easynet device pair' first \
-         (or set EASYNET_PAGES_USER for dev rigs)"
+         (or set EASYNET_PAGES_USER and EASYNET_PAGES_REALM for dev rigs)"
     )
+}
+
+fn invoke_api_key_manage(
+    principal: &ApiKeyPrincipal,
+    ability: &str,
+    args: Value,
+) -> anyhow::Result<Value> {
+    LocalDaemonSystemAbilityIssuer::invoke_root_for_subject(ability, args, &principal.subject_ura)
+        .with_context(|| format!("invoke {ability}"))
 }
 
 pub fn run(args: ApiKeyArgs) -> anyhow::Result<()> {
@@ -93,13 +120,13 @@ pub fn run(args: ApiKeyArgs) -> anyhow::Result<()> {
 }
 
 fn run_create(a: CreateArgs) -> anyhow::Result<()> {
-    let user = current_user()?;
-    let ability = format!("{user}.api_key.create");
+    let principal = current_api_key_principal()?;
+    let ability = principal.ability("create");
     let mut args = json!({});
     if let Some(label) = a.label {
         args["label"] = json!(label);
     }
-    let result = invoke_local_ability(&ability, args)?;
+    let result = invoke_api_key_manage(&principal, &ability, args)?;
     let token = result
         .get("token")
         .and_then(Value::as_str)
@@ -125,8 +152,8 @@ fn run_create(a: CreateArgs) -> anyhow::Result<()> {
 }
 
 fn run_list(a: ListArgs) -> anyhow::Result<()> {
-    let user = current_user()?;
-    let ability = format!("{user}.api_key.list");
+    let principal = current_api_key_principal()?;
+    let ability = principal.ability("list");
     let result = LocalRuntimeStateReadIssuer::invoke(&ability, json!({}))?;
     if a.json {
         println!("{}", serde_json::to_string_pretty(&result)?);
@@ -162,9 +189,9 @@ fn run_list(a: ListArgs) -> anyhow::Result<()> {
 }
 
 fn run_revoke(a: RevokeArgs) -> anyhow::Result<()> {
-    let user = current_user()?;
-    let ability = format!("{user}.api_key.revoke");
-    let result = invoke_local_ability(&ability, json!({ "id_prefix": a.id_prefix }))?;
+    let principal = current_api_key_principal()?;
+    let ability = principal.ability("revoke");
+    let result = invoke_api_key_manage(&principal, &ability, json!({ "id_prefix": a.id_prefix }))?;
     let revoked = result
         .get("revoked")
         .and_then(Value::as_str)
@@ -179,6 +206,34 @@ mod tests {
     use crate::cli::commands::test_support::HomeGuard;
     use crate::daemon::persistence::config::{save_credentials, state_dir, Credentials};
     use std::fs;
+
+    struct EnvGuard {
+        key: &'static str,
+        previous: Option<String>,
+    }
+
+    impl EnvGuard {
+        fn remove(key: &'static str) -> Self {
+            let previous = std::env::var(key).ok();
+            std::env::remove_var(key);
+            Self { key, previous }
+        }
+
+        fn set(key: &'static str, value: &str) -> Self {
+            let previous = std::env::var(key).ok();
+            std::env::set_var(key, value);
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match self.previous.as_ref() {
+                Some(value) => std::env::set_var(self.key, value),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
 
     fn paired_credentials(username: Option<&str>) -> Credentials {
         Credentials {
@@ -197,30 +252,58 @@ mod tests {
     }
 
     #[test]
-    fn current_user_accepts_explicit_dev_override() {
+    fn current_api_key_principal_accepts_complete_dev_override() {
         let _home = HomeGuard::new();
-        std::env::set_var("EASYNET_PAGES_USER", " alice ");
+        let _user = EnvGuard::set("EASYNET_PAGES_USER", " alice ");
+        let _realm = EnvGuard::set("EASYNET_PAGES_REALM", " localhost ");
 
-        let user = current_user().expect("env override");
+        let principal = current_api_key_principal().expect("env override");
 
-        assert_eq!(user, "alice");
+        assert_eq!(principal.user, "alice");
+        assert_eq!(
+            principal.subject_ura,
+            "easynet:///r/localhost/resource/user.alice/api-key/manage"
+        );
+        assert_eq!(principal.ability("create"), "alice.api_key.create");
     }
 
     #[test]
-    fn current_user_reads_valid_paired_credentials() {
+    fn current_api_key_principal_rejects_partial_dev_override() {
         let _home = HomeGuard::new();
+        let _user = EnvGuard::set("EASYNET_PAGES_USER", " alice ");
+        let _realm = EnvGuard::remove("EASYNET_PAGES_REALM");
+
+        let error = current_api_key_principal().expect_err("partial env override");
+
+        assert!(
+            error.to_string().contains("requires an explicit realm"),
+            "partial env override must fail closed: {error:#}"
+        );
+    }
+
+    #[test]
+    fn current_api_key_principal_reads_valid_paired_credentials() {
+        let _home = HomeGuard::new();
+        let _user = EnvGuard::remove("EASYNET_PAGES_USER");
+        let _realm = EnvGuard::remove("EASYNET_PAGES_REALM");
         save_credentials(&paired_credentials(Some("alice"))).expect("save credentials");
 
-        let user = current_user().expect("paired credentials");
+        let principal = current_api_key_principal().expect("paired credentials");
 
-        assert_eq!(user, "alice");
+        assert_eq!(principal.user, "alice");
+        assert_eq!(
+            principal.subject_ura,
+            "easynet:///r/localhost/resource/user.alice/api-key/manage"
+        );
     }
 
     #[test]
-    fn current_user_reports_unpaired_only_when_credentials_file_is_absent() {
+    fn current_api_key_principal_reports_unpaired_only_when_credentials_file_is_absent() {
         let _home = HomeGuard::new();
+        let _user = EnvGuard::remove("EASYNET_PAGES_USER");
+        let _realm = EnvGuard::remove("EASYNET_PAGES_REALM");
 
-        let error = current_user().expect_err("missing credentials");
+        let error = current_api_key_principal().expect_err("missing credentials");
 
         assert!(
             error.to_string().contains("no user identity bound"),
@@ -229,13 +312,15 @@ mod tests {
     }
 
     #[test]
-    fn current_user_rejects_malformed_existing_credentials() {
+    fn current_api_key_principal_rejects_malformed_existing_credentials() {
         let _home = HomeGuard::new();
+        let _user = EnvGuard::remove("EASYNET_PAGES_USER");
+        let _realm = EnvGuard::remove("EASYNET_PAGES_REALM");
         let dir = state_dir();
         fs::create_dir_all(&dir).expect("create state dir");
         fs::write(dir.join("credentials.json"), "{").expect("write malformed credentials");
 
-        let error = current_user().expect_err("malformed credentials");
+        let error = current_api_key_principal().expect_err("malformed credentials");
 
         assert!(
             error.to_string().contains("parse credentials"),
@@ -244,8 +329,10 @@ mod tests {
     }
 
     #[test]
-    fn current_user_rejects_credentials_without_username() {
+    fn current_api_key_principal_rejects_credentials_without_username() {
         let _home = HomeGuard::new();
+        let _user = EnvGuard::remove("EASYNET_PAGES_USER");
+        let _realm = EnvGuard::remove("EASYNET_PAGES_REALM");
         let dir = state_dir();
         fs::create_dir_all(&dir).expect("create state dir");
         fs::write(
@@ -262,7 +349,7 @@ mod tests {
         )
         .expect("write incomplete credentials");
 
-        let error = current_user().expect_err("missing username");
+        let error = current_api_key_principal().expect_err("missing username");
 
         assert!(
             error.to_string().contains("missing username"),

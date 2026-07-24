@@ -5107,36 +5107,52 @@ from pathlib import Path
 
 text = Path(sys.argv[1]).read_text()
 fn = re.search(
-    r"fn current_user\(\) -> anyhow::Result<String> \{(?P<body>.*?)\n\}",
+    r"fn current_api_key_principal\(\) -> anyhow::Result<ApiKeyPrincipal> \{(?P<body>.*?)\n\}",
     text,
     re.DOTALL,
 )
 if fn is None:
-    raise SystemExit("api_key_cli_identity:current_user_missing")
+    raise SystemExit("api_key_cli_identity:current_api_key_principal_missing")
 body = fn.group("body")
 for retired in (
+    "fn current_user(",
+    "invoke_local_ability",
     "load_credentials().ok()",
     ".and_then(|c| c.username)",
     ".and_then(|credentials| credentials.username)",
     "unwrap_or_default()",
 ):
-    if retired in body:
+    if retired in text:
         raise SystemExit(f"api_key_cli_identity:retired_credential_fallback:{retired}")
 for required in (
-    "load_credentials_optional()?",
-    "credentials.username_slug()?",
+    "PagesIdentity::try_from_env()?.user_root_identity()?",
+    "ApiKeyPrincipal::from_user_root_identity(identity)",
     "no user identity bound to this daemon",
     "EASYNET_PAGES_USER",
-    ".map(|s| s.trim().to_string())",
+    "EASYNET_PAGES_REALM",
 ):
     if required not in body:
         raise SystemExit(f"api_key_cli_identity:missing_strict_path:{required}")
+for required in (
+    "struct ApiKeyPrincipal",
+    "PagesUserRootIdentity",
+    "LocalDaemonSystemAbilityIssuer::invoke_root_for_subject",
+    "resource_dot_ura(",
+    "api-key/manage",
+    "principal.ability(\"create\")",
+    "principal.ability(\"list\")",
+    "principal.ability(\"revoke\")",
+    "LocalRuntimeStateReadIssuer::invoke(&ability",
+):
+    if required not in text:
+        raise SystemExit(f"api_key_cli_identity:missing_canonical_abstraction:{required}")
 for test in (
-    "current_user_accepts_explicit_dev_override",
-    "current_user_reads_valid_paired_credentials",
-    "current_user_reports_unpaired_only_when_credentials_file_is_absent",
-    "current_user_rejects_malformed_existing_credentials",
-    "current_user_rejects_credentials_without_username",
+    "current_api_key_principal_accepts_complete_dev_override",
+    "current_api_key_principal_rejects_partial_dev_override",
+    "current_api_key_principal_reads_valid_paired_credentials",
+    "current_api_key_principal_reports_unpaired_only_when_credentials_file_is_absent",
+    "current_api_key_principal_rejects_malformed_existing_credentials",
+    "current_api_key_principal_rejects_credentials_without_username",
 ):
     if test not in text:
         raise SystemExit(f"api_key_cli_identity:missing_test:{test}")

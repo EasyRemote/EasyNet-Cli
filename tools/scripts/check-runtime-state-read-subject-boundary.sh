@@ -180,12 +180,20 @@ if rg -n -U '\binvoke_local_ability\s*\(&ability,\s*(serde_json::)?json!\(\{\}\)
   fail "api-key list must not use generic invoke_local_ability"
 fi
 
-if ! rg -n -U '\binvoke_local_ability\s*\(&ability,\s*args\)' "$API_KEY_CLI" >/dev/null; then
-  fail "api-key create must remain on the action invoke path"
+if rg -n -U '\binvoke_local_ability\s*\(' "$API_KEY_CLI"; then
+  fail "api-key CLI must not use generic invoke_local_ability"
 fi
 
-if ! rg -n -U '\binvoke_local_ability\s*\(&ability,\s*(serde_json::)?json!\(\{\s*"id_prefix"' "$API_KEY_CLI" >/dev/null; then
-  fail "api-key revoke must remain on the action invoke path"
+if ! rg -n -U 'LocalDaemonSystemAbilityIssuer::invoke_root_for_subject\(\s*ability,\s*args,\s*&principal\.subject_ura' "$API_KEY_CLI" >/dev/null; then
+  fail "api-key mutations must use explicit local daemon system issuer subject"
+fi
+
+if ! rg -n -U 'invoke_api_key_manage\(&principal,\s*&ability,\s*args\)' "$API_KEY_CLI" >/dev/null; then
+  fail "api-key create must remain on the explicit action issuer path"
+fi
+
+if ! rg -n -U 'invoke_api_key_manage\(&principal,\s*&ability,\s*(serde_json::)?json!\(\{\s*"id_prefix"' "$API_KEY_CLI" >/dev/null; then
+  fail "api-key revoke must remain on the explicit action issuer path"
 fi
 
 echo "check-runtime-state-read-subject-boundary: ok"
