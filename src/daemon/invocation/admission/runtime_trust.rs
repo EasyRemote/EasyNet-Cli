@@ -558,6 +558,28 @@ mod tests {
     }
 
     #[test]
+    fn register_hub_role_uses_canonical_authority_identity() {
+        let (_dir, ctx) = context();
+        let hub_ura = crate::core::ura::hub_ura("realm");
+
+        ctx.writer()
+            .register_pubkey(hub_ura.clone(), b64_pubkey(1), TrustedAgentRole::Hub)
+            .expect("canonical Authority identity admits Hub role");
+        let err = ctx
+            .writer()
+            .register_pubkey(
+                "easynet:///r/realm/authority/extra".to_string(),
+                b64_pubkey(2),
+                TrustedAgentRole::Hub,
+            )
+            .expect_err("Authority URA with tail must not be admitted as Hub");
+
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        assert!(ctx.cell.snapshot().lookup(&hub_ura).is_some());
+        assert_eq!(ctx.cell.cert_anchor_generation(), 1);
+    }
+
+    #[test]
     fn list_reads_same_anchor_without_bumping_generation() {
         let (_dir, ctx) = context();
         ctx.writer()

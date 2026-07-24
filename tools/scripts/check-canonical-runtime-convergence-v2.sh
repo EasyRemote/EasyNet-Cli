@@ -673,6 +673,16 @@ check_sdk_seam_test_vocabulary_contract() {
   CHECK_SDK_SEAM_TEST_VOCABULARY_ROOT="$cli_root" bash "$script" >/dev/null
 }
 
+check_canonical_hub_ura_boundary_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local script="$ROOT/tools/scripts/check-canonical-hub-ura-boundary.sh"
+  [[ -f "$script" ]] || fail "canonical Hub URA boundary script is missing: ${script#$ROOT/}"
+
+  CHECK_CANONICAL_HUB_URA_ROOT="$cli_root" \
+  CHECK_CANONICAL_HUB_URA_AXON_URA_RS="$CANONICAL_LIFECYCLE_AXON_ROOT/core/ura-rs/src/lib.rs" \
+    bash "$script" >/dev/null
+}
+
 check_go_sdk_runtime_lifecycle_neutrality_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local lifecycle="$cli_root/sdk/go/runtime_lifecycle.go"
@@ -20644,6 +20654,7 @@ EOF
   check_sdk_root_runtime_description_contract
   check_sdk_doc_product_vocabulary_contract
   check_sdk_seam_test_vocabulary_contract
+  check_canonical_hub_ura_boundary_contract
   check_go_sdk_public_ura_alias_contract
   check_go_sdk_runtime_lifecycle_neutrality_contract
   check_go_sdk_lifecycle_fixture_neutrality_contract
@@ -20860,6 +20871,7 @@ check_active_source_contract
 check_sdk_root_runtime_description_contract
 check_sdk_doc_product_vocabulary_contract
 check_sdk_seam_test_vocabulary_contract
+check_canonical_hub_ura_boundary_contract
 check_go_sdk_public_ura_alias_contract
 check_go_sdk_runtime_lifecycle_neutrality_contract
 check_go_sdk_lifecycle_fixture_neutrality_contract

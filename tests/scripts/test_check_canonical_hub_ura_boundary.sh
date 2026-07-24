@@ -36,6 +36,7 @@ make_sandbox() {
     cp "$REPO_ROOT/src/daemon/invocation/dispatch/daemon_invocation_service.rs" "$sandbox/src/daemon/invocation/dispatch/daemon_invocation_service.rs"
     cp "$REPO_ROOT/src/daemon/invocation/dispatch/daemon_invocation_service_tests.rs" "$sandbox/src/daemon/invocation/dispatch/daemon_invocation_service_tests.rs"
     cp "$REPO_ROOT/src/daemon/invocation/admission/register_device_pubkey.rs" "$sandbox/src/daemon/invocation/admission/register_device_pubkey.rs"
+    cp "$REPO_ROOT/src/daemon/invocation/admission/runtime_trust.rs" "$sandbox/src/daemon/invocation/admission/runtime_trust.rs"
     copy_if_present "$REPO_ROOT/docs/spec/owner-truth-table/ability-owner-truth-table.tex" "$sandbox/docs/spec/owner-truth-table/ability-owner-truth-table.tex"
     cp "$REPO_ROOT/../EasyNet-Axon/core/ura-rs/src/lib.rs" "$sandbox/axon/lib.rs"
     echo "$sandbox"
@@ -75,11 +76,25 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "stale parse_node_ura /hub docs should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
+perl -0pi -e 's#crate::core::identity::RuntimeIdentityUra::parse\(trimmed\)#crate::core::ura::parse_ura(trimmed)#' "$SB/src/daemon/invocation/routing/remote_invoke.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "direct parse_ura route parser should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
 perl -0pi -e 's#assert!\(!facade\.is_federated_caller\("easynet:///r/peer-realm/authority/extra"\)\);#assert!(facade.is_federated_caller("easynet:///r/peer-realm/authority/extra"));#' "$SB/src/daemon/invocation/admission/admission_facade.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "admission authority-with-tail acceptance should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+perl -0pi -e 's#"easynet:///r/realm/authority/extra"\.to_string\(\)#hub_ura.clone()#' "$SB/src/daemon/invocation/admission/runtime_trust.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "runtime trust missing Authority-tail rejection should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
 mkdir -p "$SB/docs/stale"

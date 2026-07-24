@@ -53,6 +53,7 @@ require_file src/daemon/invocation/routing/remote_invoke.rs
 require_file src/daemon/invocation/admission/admission_facade.rs
 require_file src/daemon/invocation/dispatch/daemon_invocation_service.rs
 require_file src/daemon/invocation/admission/register_device_pubkey.rs
+require_file src/daemon/invocation/admission/runtime_trust.rs
 
 require_grep 'Self(format!("{URA_SCHEME}{realm}/authority"))' "$AXON_URA_RS" \
     "Axon authority builder must generate easynet:///r/<realm>/authority"
@@ -94,8 +95,33 @@ reject_grep 'easynet:///r/localhost/hub' src/core/ura/mod.rs \
 reject_grep 'hub       easynet:///r/<realm>/hub' src/core/ura/mod.rs \
     "CLI URA facade docs must not advertise /hub as canonical wire identity"
 
-require_grep 'use crate::core::ura::{parse_ura, URAKind};' src/daemon/invocation/routing/remote_invoke.rs \
-    "parse_node_ura must enter through the CLI URA facade"
+require_grep 'crate::core::identity::RuntimeIdentityUra::parse(trimmed)' src/daemon/invocation/routing/remote_invoke.rs \
+    "parse_node_ura must enter through the canonical RuntimeIdentityUra value object"
+require_grep 'URAKind::Authority => Ok(identity.into_string())' src/daemon/invocation/routing/remote_invoke.rs \
+    "parse_node_ura must classify canonical Authority URAs as product Hub targets"
+if python3 - "$ROOT/src/daemon/invocation/routing/remote_invoke.rs" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+match = re.search(
+    r"pub fn parse_node_ura\(node: &str\).*?^}",
+    text,
+    flags=re.M | re.S,
+)
+if not match:
+    raise SystemExit(2)
+body = match.group(0)
+if "crate::core::ura::parse_ura" in body or "parse_ura(trimmed)" in body:
+    raise SystemExit(1)
+raise SystemExit(0)
+PY
+then
+    :
+else
+    fail "parse_node_ura must not bypass RuntimeIdentityUra with direct parse_ura"
+fi
 require_grep 'whose canonical protocol identity is `easynet:///r/<realm>/authority`' src/daemon/invocation/routing/remote_invoke.rs \
     "parse_node_ura docs must state the canonical /authority identity"
 require_grep 'fn parse_node_ura_accepts_protocol_hub_identity()' src/daemon/invocation/routing/remote_invoke.rs \
@@ -114,18 +140,23 @@ require_grep 'assert!(!facade.is_federated_caller("easynet:///r/peer-realm/autho
     "admission facade must reject Authority callers with tail"
 # The service behavior tests consume the same helper through the
 # admission facade; the realm-extraction assertions live there now.
-require_grep 'parse_realm_from_ura("easynet:///r/peer-realm/authority")' \
+require_grep 'crate::core::ura::realm_from_ura("easynet:///r/peer-realm/authority")' \
     src/daemon/invocation/admission/admission_facade.rs \
     "daemon realm extraction must accept canonical Authority URAs"
-require_grep 'parse_realm_from_ura("easynet:///r/peer-realm/authority/extra")' \
+require_grep 'crate::core::ura::realm_from_ura("easynet:///r/peer-realm/authority/extra")' \
     src/daemon/invocation/admission/admission_facade.rs \
     "daemon realm extraction must reject Authority URAs with tail"
-require_grep 'parse_realm_from_ura("easynet:///r/abc/authority")' \
-    src/daemon/invocation/admission/register_device_pubkey.rs \
-    "register_device_pubkey realm extraction must accept canonical Authority URAs"
-require_grep 'parse_realm_from_ura("easynet:///r/abc/authority/extra")' \
-    src/daemon/invocation/admission/register_device_pubkey.rs \
-    "register_device_pubkey realm extraction must reject Authority URAs with tail"
+require_grep 'fn register_hub_role_uses_canonical_authority_identity()' \
+    src/daemon/invocation/admission/runtime_trust.rs \
+    "runtime trust must test Hub role registration through canonical Authority URAs"
+require_grep 'let hub_ura = crate::core::ura::hub_ura("realm");' \
+    src/daemon/invocation/admission/runtime_trust.rs \
+    "runtime trust Hub test must build Hub identity through the core URA facade"
+require_grep '"easynet:///r/realm/authority/extra".to_string()' \
+    src/daemon/invocation/admission/runtime_trust.rs \
+    "runtime trust Hub test must reject Authority URAs with tail"
+reject_grep 'parse_realm_from_ura' src/daemon/invocation/admission/register_device_pubkey.rs \
+    "register_device_pubkey must not own a duplicate realm parser"
 
 bad_docs="$(
     scan_roots=(src tests tools/scripts docs/spec)
