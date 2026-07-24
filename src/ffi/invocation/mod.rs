@@ -1312,9 +1312,9 @@ pub unsafe extern "C" fn runtime_invocation_stream_open(
 
 /// Cancel a stream opened by `runtime_invocation_stream_open`.
 ///
-/// Unknown `stream_id` values are treated as already-closed streams
-/// and return `RUNTIME_OK`. A valid `handle` is still required so a
-/// process cannot call this ABI before library initialization.
+/// `stream_id` must identify a stream currently registered to `handle`.
+/// Cancellation idempotency is owned by the registered provider cancellation
+/// state machine; unknown ids are invalid lifecycle state.
 ///
 /// # Safety
 /// `handle` may be any value; the function does not dereference
@@ -1352,13 +1352,12 @@ pub unsafe extern "C" fn runtime_invocation_stream_cancel(
 
 /// Close and release a stream handle.
 ///
-/// Unknown ids are treated as already closed and return `RUNTIME_OK`.
 /// This is a local resource close; daemon terminal frames are still
-/// delivered through the callback path when available before close.
+/// delivered through the callback path when available before close. `stream_id`
+/// must identify a stream currently registered to `handle`.
 ///
 /// # Safety
-/// `handle` and `stream_id` must have been returned by this C ABI. Passing an
-/// unknown stream id is treated as an idempotent close.
+/// `handle` and `stream_id` must have been returned by this C ABI.
 #[no_mangle]
 pub unsafe extern "C" fn runtime_invocation_stream_close(
     handle: RuntimeHandle,
@@ -1559,7 +1558,7 @@ pub unsafe extern "C" fn runtime_invocation_bidi_close_send(
 /// Gracefully close an InvokeBidi session by sending EOF, then drop
 /// the local up-direction sender.
 ///
-/// Unknown ids are treated as already closed and return `RUNTIME_OK`.
+/// `bidi_id` must identify a session currently registered to `handle`.
 ///
 /// # Safety
 /// `handle` must be a live handle returned by this FFI and not
@@ -1592,8 +1591,7 @@ pub unsafe extern "C" fn runtime_invocation_bidi_close(
 ///
 /// Cancellation submits a signed `invocation.cancel` command and keeps
 /// the local session registered so its reader can drain the canonical
-/// receipt-backed terminal. Unknown ids are treated as already closed
-/// and return `RUNTIME_OK`.
+/// receipt-backed terminal. Unknown ids are invalid lifecycle state.
 ///
 /// # Safety
 /// `handle` must be a live handle returned by this FFI. Concurrent
@@ -3357,10 +3355,7 @@ fn release_stream_with_reader_cancel(
             clear_last_error();
             RUNTIME_OK
         }
-        Ok(None) => {
-            clear_last_error();
-            RUNTIME_OK
-        }
+        Ok(None) => unregistered_invocation_resource_error(function, "stream", stream_id),
         Err(RegistryOwnerMismatch) => record_invocation_error(
             ERR_INVALID_HANDLE,
             format!(
@@ -3398,8 +3393,7 @@ where
     let resource = match resource {
         Ok(Some(resource)) => resource,
         Ok(None) => {
-            clear_last_error();
-            return RUNTIME_OK;
+            return unregistered_invocation_resource_error(function, resource_kind, resource_id);
         }
         Err(RegistryOwnerMismatch) => {
             return record_invocation_error(
@@ -3416,6 +3410,18 @@ where
         }
         Err(error) => ffi_provider_cancellation_error(function, error),
     }
+}
+
+#[cfg(feature = "axon-pb")]
+fn unregistered_invocation_resource_error(
+    function: &str,
+    resource_kind: &str,
+    resource_id: u64,
+) -> i32 {
+    record_invocation_error(
+        ERR_INVALID_HANDLE,
+        format!("{function}: {resource_kind} {resource_id} is not registered"),
+    )
 }
 
 #[cfg(feature = "axon-pb")]
@@ -3485,8 +3491,11 @@ fn bidi_close_with_axon_pb(handle: RuntimeHandle, bidi_id: InvocationBidiId) -> 
     let session = match remove_bidi_for_handle(owner, bidi_id) {
         Ok(Some(session)) => session,
         Ok(None) => {
-            clear_last_error();
-            return RUNTIME_OK;
+            return unregistered_invocation_resource_error(
+                "runtime_invocation_bidi_close",
+                "bidi session",
+                bidi_id,
+            );
         }
         Err(RegistryOwnerMismatch) => {
             return record_invocation_error(
@@ -9883,18 +9892,28 @@ mod tests {
     }
 
     #[test]
-    fn invocation_stream_cancel_is_idempotent_for_unknown_stream() {
+    fn invocation_stream_cancel_rejects_unknown_invocation_resource() {
         let (handle, _) = alloc(test_session());
         let code = unsafe { runtime_invocation_stream_cancel(handle, 9_999_999) };
-        assert_eq!(code, RUNTIME_OK);
+        assert_eq!(code, ERR_INVALID_HANDLE);
+        assert_typed_last_error(
+            "INVALID_HANDLE",
+            ERR_INVALID_HANDLE,
+            "stream 9999999 is not registered",
+        );
         crate::ffi::client::handle::release(handle);
     }
 
     #[test]
-    fn invocation_bidi_cancel_is_idempotent_for_unknown_session() {
+    fn invocation_bidi_cancel_rejects_unknown_invocation_resource() {
         let (handle, _) = alloc(test_session());
         let code = unsafe { runtime_invocation_bidi_cancel(handle, 9_999_999) };
-        assert_eq!(code, RUNTIME_OK);
+        assert_eq!(code, ERR_INVALID_HANDLE);
+        assert_typed_last_error(
+            "INVALID_HANDLE",
+            ERR_INVALID_HANDLE,
+            "bidi session 9999999 is not registered",
+        );
         crate::ffi::client::handle::release(handle);
     }
 
@@ -10030,10 +10049,28 @@ mod tests {
     }
 
     #[test]
-    fn invocation_stream_close_is_idempotent_for_unknown_stream() {
+    fn invocation_stream_close_rejects_unknown_invocation_resource() {
         let (handle, _) = alloc(test_session());
         let code = unsafe { runtime_invocation_stream_close(handle, 9_999_999) };
-        assert_eq!(code, RUNTIME_OK);
+        assert_eq!(code, ERR_INVALID_HANDLE);
+        assert_typed_last_error(
+            "INVALID_HANDLE",
+            ERR_INVALID_HANDLE,
+            "stream 9999999 is not registered",
+        );
+        crate::ffi::client::handle::release(handle);
+    }
+
+    #[test]
+    fn invocation_bidi_close_rejects_unknown_invocation_resource() {
+        let (handle, _) = alloc(test_session());
+        let code = unsafe { runtime_invocation_bidi_close(handle, 9_999_999) };
+        assert_eq!(code, ERR_INVALID_HANDLE);
+        assert_typed_last_error(
+            "INVALID_HANDLE",
+            ERR_INVALID_HANDLE,
+            "bidi session 9999999 is not registered",
+        );
         crate::ffi::client::handle::release(handle);
     }
 

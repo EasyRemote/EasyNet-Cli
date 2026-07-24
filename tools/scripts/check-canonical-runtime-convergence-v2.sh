@@ -268,6 +268,79 @@ for fn_name in ("run_stream_reader", "run_bidi_down_reader"):
 PY
 }
 
+check_ffi_unknown_invocation_resource_terminality_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local invocation="$cli_root/src/ffi/invocation/mod.rs"
+  [[ -f "$invocation" ]] || fail "FFI invocation source is missing: ${invocation#$cli_root/}"
+
+  "$PYTHON_BIN" - "$invocation" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+production = text.split("\n#[cfg(test)]", 1)[0]
+
+for retired in (
+    "Unknown `stream_id` values are treated as already-closed",
+    "Unknown ids are treated as already closed and return `RUNTIME_OK`",
+    "unknown stream id is treated as an idempotent close",
+    "receipt-backed terminal. Unknown ids are treated as already closed",
+):
+    if retired in text:
+        raise SystemExit(f"ffi_unknown_invocation_resource_terminality:retired:{retired}")
+
+required = {
+    "fn unregistered_invocation_resource_error(": "unregistered_resource_helper_missing",
+    "format!(\"{function}: {resource_kind} {resource_id} is not registered\")": "unregistered_resource_error_shape_missing",
+    "Ok(None) => unregistered_invocation_resource_error(function, \"stream\", stream_id)": "stream_close_unknown_invalid_missing",
+    "return unregistered_invocation_resource_error(function, resource_kind, resource_id);": "cancel_unknown_invalid_missing",
+    "\"runtime_invocation_bidi_close\"": "bidi_close_unknown_function_missing",
+    "\"bidi session\"": "bidi_session_unknown_kind_missing",
+    "invocation_stream_cancel_rejects_unknown_invocation_resource": "stream_cancel_unknown_test_missing",
+    "invocation_bidi_cancel_rejects_unknown_invocation_resource": "bidi_cancel_unknown_test_missing",
+    "invocation_stream_close_rejects_unknown_invocation_resource": "stream_close_unknown_test_missing",
+    "invocation_bidi_close_rejects_unknown_invocation_resource": "bidi_close_unknown_test_missing",
+    "\"stream 9999999 is not registered\"": "stream_unknown_error_assertion_missing",
+    "\"bidi session 9999999 is not registered\"": "bidi_unknown_error_assertion_missing",
+}
+for needle, label in required.items():
+    if needle not in text:
+        raise SystemExit(f"ffi_unknown_invocation_resource_terminality:{label}")
+
+for legacy_test in (
+    "invocation_stream_cancel_is_idempotent_for_unknown_stream",
+    "invocation_bidi_cancel_is_idempotent_for_unknown_session",
+    "invocation_stream_close_is_idempotent_for_unknown_stream",
+):
+    if legacy_test in text:
+        raise SystemExit(
+            f"ffi_unknown_invocation_resource_terminality:legacy_test:{legacy_test}"
+        )
+
+for fn_name in (
+    "release_stream_with_reader_cancel",
+    "request_registered_provider_cancellation",
+    "bidi_close_with_axon_pb",
+):
+    match = re.search(rf"fn {fn_name}\b.*?\n\}}\n", production, re.S)
+    if not match:
+        raise SystemExit(f"ffi_unknown_invocation_resource_terminality:{fn_name}_missing")
+    body = match.group(0)
+    if (
+        re.search(r"Ok\(None\)\s*=>\s*RUNTIME_OK\b", body)
+        or re.search(
+            r"Ok\(None\)\s*=>\s*\{\s*clear_last_error\(\);\s*(?:return\s+)?RUNTIME_OK;?\s*\}",
+            body,
+            re.S,
+        )
+    ):
+        raise SystemExit(
+            f"ffi_unknown_invocation_resource_terminality:{fn_name}_unknown_returns_success"
+        )
+PY
+}
+
 check_cabi_bidi_cancel_reason_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local cabi="$cli_root/sdk/go/cabi_runtime.go"
@@ -14064,6 +14137,61 @@ EOF
   if ( CLI_ROOT="$tmp/cli-ffi-terminal-json-legacy"; check_ffi_callback_terminal_projection_contract ) >/dev/null 2>&1; then
     fail "self-test expected FFI callback terminal JSON lookup gate to fail"
   fi
+  mkdir -p "$tmp/cli-ffi-unknown-resource-legacy/src/ffi/invocation"
+  cat >"$tmp/cli-ffi-unknown-resource-legacy/src/ffi/invocation/mod.rs" <<'EOF'
+/// Cancel a stream opened by `runtime_invocation_stream_open`.
+///
+/// Unknown `stream_id` values are treated as already-closed streams
+/// and return `RUNTIME_OK`.
+fn runtime_invocation_stream_cancel() {}
+
+/// Close and release a stream handle.
+///
+/// Unknown ids are treated as already closed and return `RUNTIME_OK`.
+/// Passing an unknown stream id is treated as an idempotent close.
+fn runtime_invocation_stream_close() {}
+
+/// Request canonical cancellation of an InvokeBidi session.
+/// The receipt-backed terminal. Unknown ids are treated as already closed.
+fn runtime_invocation_bidi_cancel() {}
+
+fn release_stream_with_reader_cancel() -> i32 {
+    match remove_stream_for_handle() {
+        Ok(None) => {
+            clear_last_error();
+            return RUNTIME_OK;
+        }
+    }
+}
+
+fn request_registered_provider_cancellation() -> i32 {
+    match get_stream_for_handle() {
+        Ok(None) => {
+            clear_last_error();
+            return RUNTIME_OK;
+        }
+    }
+}
+
+fn bidi_close_with_axon_pb() -> i32 {
+    match remove_bidi_for_handle() {
+        Ok(None) => {
+            clear_last_error();
+            return RUNTIME_OK;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    fn invocation_stream_cancel_is_idempotent_for_unknown_stream() {}
+    fn invocation_bidi_cancel_is_idempotent_for_unknown_session() {}
+    fn invocation_stream_close_is_idempotent_for_unknown_stream() {}
+}
+EOF
+  if ( CLI_ROOT="$tmp/cli-ffi-unknown-resource-legacy"; check_ffi_unknown_invocation_resource_terminality_contract ) >/dev/null 2>&1; then
+    fail "self-test expected FFI unknown invocation resource terminality gate to fail"
+  fi
   mkdir -p "$tmp/cli-ffi-last-error-legacy/src/ffi/errors"
   cat >"$tmp/cli-ffi-last-error-legacy/src/ffi/errors/mod.rs" <<'EOF'
 struct LastErrorRecord {
@@ -19898,6 +20026,7 @@ EOF
   check_bidi_dispatch_default_code_policy_contract
   check_bidi_reverse_unary_terminal_state_contract
   check_cabi_bidi_cancel_reason_contract
+  check_ffi_unknown_invocation_resource_terminality_contract
   check_terminal_lifecycle_args_contract
   check_session_failure_wire_facts_contract
   check_active_source_contract
@@ -20106,6 +20235,7 @@ check_bidi_dispatch_default_code_policy_contract
 check_remote_failure_route_negative_classification_contract
 check_bidi_reverse_unary_terminal_state_contract
 check_cabi_bidi_cancel_reason_contract
+check_ffi_unknown_invocation_resource_terminality_contract
 check_session_failure_wire_facts_contract
 check_active_source_contract
 check_sdk_root_runtime_description_contract
