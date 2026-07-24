@@ -39,9 +39,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+#[cfg(feature = "axon-pb")]
 use tonic::Status;
 
+#[cfg(feature = "axon-pb")]
 use axon_sdk::invocation::InvocationState;
+#[cfg(feature = "axon-pb")]
 use axon_sdk::pb::axon::v1::{
     Envelope, EnvelopeOpen, InvocationTarget, InvokeRequest, InvokeResponse,
     InvokeServerStreamRequest,
@@ -70,6 +73,7 @@ impl InvocationAttemptLedger {
         })
     }
 
+    #[cfg(feature = "axon-pb")]
     pub(crate) fn begin_invoke(
         &self,
         request: &InvokeRequest,
@@ -77,6 +81,7 @@ impl InvocationAttemptLedger {
         self.begin("Invoke", AttemptIdentity::from_invoke_request(request))
     }
 
+    #[cfg(feature = "axon-pb")]
     pub(crate) fn begin_stream(
         &self,
         request: &InvokeServerStreamRequest,
@@ -211,17 +216,39 @@ pub(crate) struct InvocationAttemptHandle {
 }
 
 impl InvocationAttemptHandle {
+    #[cfg(feature = "axon-pb")]
     pub(crate) fn reject_status(&self, stage: &str, status: &Status) -> anyhow::Result<()> {
+        self.reject_diagnostic(
+            stage,
+            status.code().to_string(),
+            status.message().to_string(),
+            Some(is_retryable_status(status)),
+        )
+    }
+
+    pub(crate) fn reject_diagnostic(
+        &self,
+        stage: &str,
+        status_code: impl Into<String>,
+        status_message: impl Into<String>,
+        retryable: Option<bool>,
+    ) -> anyhow::Result<()> {
+        let status_code = status_code.into();
+        let status_message = status_message.into();
         self.finish(FinishAttempt {
             state: AttemptState::Rejected,
             stage,
             invocation_ura: None,
-            status_code: Some(status.code().to_string()),
-            status_message: Some(status.message().to_string()),
+            status_code: Some(status_code.clone()).filter(|value| !value.is_empty()),
+            status_message: Some(status_message.clone()).filter(|value| !value.is_empty()),
             error_stage: Some(stage.to_string()),
-            retryable: Some(is_retryable_status(status)),
-            diagnostic_summary: format!("{stage}: {}", status.message()),
-            suggested_action: suggested_action(stage, status.code().to_string().as_str()),
+            retryable,
+            diagnostic_summary: if status_message.is_empty() {
+                format!("{stage}: rejected")
+            } else {
+                format!("{stage}: {status_message}")
+            },
+            suggested_action: suggested_action(stage, &status_code),
         })
     }
 
@@ -245,6 +272,7 @@ impl InvocationAttemptHandle {
         })
     }
 
+    #[cfg(feature = "axon-pb")]
     pub(crate) fn finalize_response(
         &self,
         stage: &str,
@@ -350,10 +378,12 @@ pub(crate) struct AttemptIdentity {
 }
 
 impl AttemptIdentity {
+    #[cfg(feature = "axon-pb")]
     fn from_invoke_request(request: &InvokeRequest) -> Self {
         Self::from_parts("Invoke", request.envelope.as_ref(), request.target.as_ref())
     }
 
+    #[cfg(feature = "axon-pb")]
     fn from_stream_request(request: &InvokeServerStreamRequest) -> Self {
         Self::from_parts(
             "InvokeStream",
@@ -362,6 +392,7 @@ impl AttemptIdentity {
         )
     }
 
+    #[cfg(feature = "axon-pb")]
     pub(crate) fn from_bidi_open(open: &EnvelopeOpen) -> Self {
         Self::from_parts(
             "InvokeBidi frame 0",
@@ -370,6 +401,7 @@ impl AttemptIdentity {
         )
     }
 
+    #[cfg(feature = "axon-pb")]
     fn from_parts(
         call_site: &str,
         envelope: Option<&Envelope>,
@@ -534,6 +566,7 @@ fn fill_option(target: &mut Option<String>, source: &Option<String>) {
     }
 }
 
+#[cfg(feature = "axon-pb")]
 fn is_retryable_status(status: &Status) -> bool {
     matches!(
         status.code(),
@@ -578,13 +611,13 @@ mod tests {
             .begin("Invoke", AttemptIdentity::default())
             .expect("begin first attempt");
         first
-            .reject_status("target", &Status::invalid_argument("bad target"))
+            .reject_diagnostic("target", "invalid_argument", "bad target", None)
             .expect("finish first attempt");
         let second = ledger
             .begin("Invoke", AttemptIdentity::default())
             .expect("begin second attempt");
         second
-            .reject_status("routing", &Status::not_found("missing route"))
+            .reject_diagnostic("routing", "not_found", "missing route", None)
             .expect("finish second attempt");
 
         let records = ledger.list_recent(10).expect("read attempts");

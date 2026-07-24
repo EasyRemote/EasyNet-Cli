@@ -157,3 +157,35 @@ architecture rather than add feature surface.
 - The invoke test now asserts that retired `not wired` / `legacy` wording is not
   accepted, and the SPEC v2 gate rejects reintroducing the old text or bypassing
   the shared helper.
+
+## Iteration 5 candidate policy
+
+- Focus on feature/cfg ownership. A canonical read model must not disappear just
+  because one transport carrier is disabled.
+- `cargo check --no-default-features --lib` currently fails because
+  `invocation_history.rs` imports `dispatch::attempt_audit`, while
+  `attempt_audit` is entirely behind `feature = "axon-pb"`.
+- The root abstraction problem is that the attempt audit ledger mixes two
+  responsibilities:
+  1. transport-specific protobuf request projection, and
+  2. transport-independent JSONL attempt read/write records consumed by
+     invocation history.
+- The intended cutover is to make the ledger record/store available independent
+  of axon-pb and cfg-gate only protobuf request adapters.
+- Verification must include `cargo check --no-default-features --lib` so this
+  does not regress back into a hidden feature compatibility fork.
+
+## Iteration 5 decision log
+
+- codegraph confirmed `attempt_audit` is consumed by both daemon transport and
+  the `invocation.history.list` governance read model.
+- The selected cutover keeps the attempt ledger module always available and
+  gates only protobuf/tonic adapters behind `axon-pb`.
+- `InvocationAttemptHandle::reject_diagnostic` is now the transport-neutral
+  terminal-state API; `reject_status` is only a tonic adapter.
+- The default real invocation history test was also migrated off the retired
+  provider filter field `agent_ura`. Runtime history providers accept canonical
+  `callee_ura` / `subject_ura`; CLI-only `--agent` lowering must not enter the
+  provider schema.
+- SPEC v2 now includes an explicit feature-boundary guard to prevent the ledger
+  module from being transport-gated again.

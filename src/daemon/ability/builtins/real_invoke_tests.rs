@@ -500,7 +500,7 @@ fn real_invocation_history_list_accepts_explicit_ura_scope() {
             json!({
                 "limit": 5,
                 "filter": {
-                    "agent_ura": "easynet:///r/test/device/callee",
+                    "callee_ura": "easynet:///r/test/device/callee",
                     "subject_ura": "easynet:///r/test/user/alice"
                 }
             }),
@@ -509,7 +509,7 @@ fn real_invocation_history_list_accepts_explicit_ura_scope() {
     let body = resp.as_object().expect("object");
     assert!(
         body.get("records").and_then(Value::as_array).is_some(),
-        "history list must accept agent_ura + subject_ura scope: {resp}"
+        "history list must accept canonical callee_ura + subject_ura scope: {resp}"
     );
 }
 

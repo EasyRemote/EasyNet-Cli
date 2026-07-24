@@ -8053,6 +8053,38 @@ if 'msg.contains("not wired")' not in invoke or 'msg.contains("legacy")' not in 
 PY
 }
 
+check_invocation_attempt_audit_feature_boundary_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local dispatch_mod="$cli_root/src/daemon/invocation/dispatch/mod.rs"
+  local attempt_audit="$cli_root/src/daemon/invocation/dispatch/attempt_audit.rs"
+  [[ -f "$dispatch_mod" ]] || fail "daemon invocation dispatch mod is missing: ${dispatch_mod#$cli_root/}"
+  [[ -f "$attempt_audit" ]] || fail "attempt audit source is missing: ${attempt_audit#$cli_root/}"
+
+  "$PYTHON_BIN" - "$dispatch_mod" "$attempt_audit" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+dispatch_mod = Path(sys.argv[1]).read_text(encoding="utf-8")
+attempt_audit = Path(sys.argv[2]).read_text(encoding="utf-8")
+
+if re.search(r'#\[cfg\(feature = "axon-pb"\)\]\s*pub\(crate\) mod attempt_audit;', dispatch_mod):
+    raise SystemExit("invocation_attempt_audit_feature_boundary:ledger_module_transport_gated")
+if "pub(crate) mod attempt_audit;" not in dispatch_mod:
+    raise SystemExit("invocation_attempt_audit_feature_boundary:ledger_module_missing")
+if "pub(crate) fn reject_diagnostic(" not in attempt_audit:
+    raise SystemExit("invocation_attempt_audit_feature_boundary:transport_neutral_rejection_missing")
+for required in (
+    "#[cfg(feature = \"axon-pb\")]\n    pub(crate) fn begin_invoke(",
+    "#[cfg(feature = \"axon-pb\")]\n    pub(crate) fn begin_stream(",
+    "#[cfg(feature = \"axon-pb\")]\n    pub(crate) fn reject_status(",
+    "#[cfg(feature = \"axon-pb\")]\n    pub(crate) fn finalize_response(",
+):
+    if required not in attempt_audit:
+        raise SystemExit(f"invocation_attempt_audit_feature_boundary:protobuf_adapter_cfg_missing:{required.splitlines()[-1]}")
+PY
+}
+
 check_ffi_last_error_typed_tls_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local ffi_errors="$cli_root/src/ffi/errors/mod.rs"
@@ -16886,6 +16918,7 @@ check_ffi_descriptor_probe_not_found_vocabulary_contract
 check_cli_discover_candidate_projection_contract
 check_ffi_invocation_json_projection_contract
 check_cli_public_invocation_transport_contract
+check_invocation_attempt_audit_feature_boundary_contract
 check_ffi_callback_terminal_projection_contract
 check_ffi_last_error_typed_tls_contract
 check_canonical_ability_catalog_projection_contract
