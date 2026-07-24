@@ -1,15 +1,13 @@
-// EasyNet CLI — device node, ability, and remote operation abilities
+// EasyNet CLI — device node and ability management abilities
 // ==========================================
 //
 // File: src/daemon/ability/builtins/device_control/ability_management/ops.rs
-// Description: Device-hosted abilities the CLI's
-//              device/ability subcommands invoke. Replaces the
-//              former direct calls to bridge fns
-//              (`list_nodes`, `publish_capability`, etc.) that
-//              AXON-RFC-001 P1.5 removed; the ability surface
-//              survives unchanged regardless of which transport
-//              backs them, in line with the ontology that says
-//              "every action is an ability invocation."
+// Description: Device-hosted abilities the CLI's device/ability
+//              subcommands invoke. Local device mutations are backed
+//              by the canonical device ability registrar. Remote
+//              device mutations are an explicit Unsupported capability
+//              state until a provider-backed federation mutation route
+//              exists in the runtime capability matrix.
 //
 // Abilities registered here
 // -------------------------
@@ -21,14 +19,11 @@
 //
 // Routing model
 // -------------
-// Every handler accepts `node_id` (or `target_node_id`); the value
-// `"local"` (or absent) means "this device" and is fully implemented
-// in-process. Any other id is a federation-tier target — the
-// transport that fans the call out across the realm was removed by
-// AXON-RFC-001 P1.5 and will be re-wired as a federation Invoke
-// surface. Until then, those handlers return a typed
-// `federation_not_wired` error so callers see the same actionable
-// message every CLI surface produces.
+// Every mutation handler classifies `node_id` through
+// `DeviceOperationTarget`. `"local"` or the local node id means the
+// current device. Any other id is a remote device target and fails
+// closed as Unsupported rather than attempting a legacy federation
+// compatibility path.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -81,6 +76,39 @@ struct SystemDeviceOpsClock;
 impl DeviceOpsClock for SystemDeviceOpsClock {
     fn now_unix_ms(&self) -> u64 {
         chrono::Utc::now().timestamp_millis().max(0) as u64
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DeviceOperationTarget {
+    Local,
+    RemoteUnsupported { node_id: String },
+}
+
+impl DeviceOperationTarget {
+    fn classify(node_id: &str, local_node_id: &str) -> Self {
+        let trimmed = node_id.trim();
+        if trimmed.is_empty() || trimmed == "local" || trimmed == local_node_id {
+            Self::Local
+        } else {
+            Self::RemoteUnsupported {
+                node_id: trimmed.to_string(),
+            }
+        }
+    }
+
+    fn is_local(&self) -> bool {
+        matches!(self, Self::Local)
+    }
+
+    fn require_local_mutation(&self, surface: &str) -> anyhow::Result<()> {
+        match self {
+            Self::Local => Ok(()),
+            Self::RemoteUnsupported { node_id } => Err(anyhow::anyhow!(
+                "{surface}: remote device target {node_id:?} is unsupported by the canonical \
+                 runtime capability matrix; capability_state=unsupported"
+            )),
+        }
     }
 }
 
@@ -183,15 +211,6 @@ fn local_identity() -> anyhow::Result<LocalDeviceIdentity> {
     }
 }
 
-/// Treat a node id as "this device". Accepts the literal `local`,
-/// the empty string (omitted flag), and the device's actual node_id
-/// from credentials. Any other value is a remote target, deferred
-/// to the federation-Invoke replacement.
-fn is_local_target(node_id: &str, local_node_id: &str) -> bool {
-    let trimmed = node_id.trim();
-    trimmed.is_empty() || trimmed == "local" || trimmed == local_node_id
-}
-
 fn require_local_device_authority(
     env: &EnvelopeContext,
     expected_device_ura: &str,
@@ -207,29 +226,22 @@ fn require_local_device_authority(
     Ok(caller.to_string())
 }
 
-/// Surface the canonical "federation not wired" error from an
-/// ability handler. The string mirrors `support::local_invoke`'s
-/// helper byte-for-byte so a CLI script that greps the message sees
-/// the same wording whether the error came from CLI-side validation
-/// (e.g. `--node bogus`) or daemon-side dispatch (here).
-fn federation_not_wired(action: &str) -> anyhow::Error {
-    anyhow::anyhow!(
-        "{action} requires the federation Invoke surface, which was removed by \
-         AXON-RFC-001 P1.5 and has not yet been re-published as a \
-         federation-tier ability. Local-only operations remain available — \
-         see `easynet ability list` for what this node can do without \
-         federation. The replacement (Invoke against an Agent ability on \
-         the realm) ships in a follow-up; this command will be re-wired \
-         without changing its CLI shape when it lands."
-    )
+fn require_device_registrar(
+    device_registrar: &SharedDeviceRegistrarCell,
+    surface: &str,
+) -> anyhow::Result<Arc<DeviceAbilityRegistrar>> {
+    device_registrar.get().cloned().ok_or_else(|| {
+        anyhow::anyhow!(
+            "{surface}: canonical device ability registrar is unavailable; \
+             daemon runtime assembly has not completed"
+        )
+    })
 }
 
 // ── node.list ─────────────────────────────────────────────
 
-/// List every node visible from this device. v1: just the local
-/// node (federation peer enumeration depends on the dead bridge
-/// `list_nodes`; will be re-wired through a federation Invoke
-/// helper when one ships, at which point this handler fan-outs).
+/// List every node visible from this device through the canonical
+/// federation read model resolver.
 fn list_nodes_handler(
     _args: Value,
     resolver: &dyn DiscoverFederationResolver,
@@ -270,7 +282,7 @@ fn describe_node_handler(
         anyhow::bail!("node.describe: `node_id` is required");
     }
     let local = local_identity()?;
-    if is_local_target(node_id, &local.node_id) {
+    if DeviceOperationTarget::classify(node_id, &local.node_id).is_local() {
         let catalog = local_catalog.get().ok_or_else(|| {
             anyhow::anyhow!("node.describe: live ability catalog is not attached")
         })?;
@@ -333,16 +345,20 @@ fn remove_node_handler(args: Value) -> anyhow::Result<Value> {
         anyhow::bail!("node.remove: `node_id` is required");
     }
     let local = local_identity()?;
-    if is_local_target(node_id, &local.node_id) {
-        anyhow::bail!(
-            "node.remove refuses to remove this device (would delete its own \
-             pairing). Use `easynet device reset` for that — it is the local \
-             side of the same operation."
-        );
+    let target = DeviceOperationTarget::classify(node_id, &local.node_id);
+    match &target {
+        DeviceOperationTarget::Local => {
+            anyhow::bail!(
+                "node.remove refuses to remove this device (would delete its own \
+                 pairing). Use `easynet device reset` for that — it is the local \
+                 side of the same operation."
+            );
+        }
+        DeviceOperationTarget::RemoteUnsupported { .. } => {
+            target.require_local_mutation("node.remove")?;
+            unreachable!("remote target classification must return Unsupported before mutation")
+        }
     }
-    Err(federation_not_wired(&format!(
-        "removing the remote node {node_id:?}"
-    )))
 }
 
 // ── ability.deploy ─────────────────────────────────────────
@@ -502,11 +518,8 @@ fn deploy_ability_handler_with_clock(
     let local = local_identity()?;
     let owner_ura = crate::core::ura::device_ura(&local.tenant_id, &local.node_id);
     let mutated_by = require_local_device_authority(&env, &owner_ura, "ability.deploy")?;
-    if !is_local_target(node_id, &local.node_id) {
-        return Err(federation_not_wired(&format!(
-            "deploying an ability to remote node {node_id:?}"
-        )));
-    }
+    DeviceOperationTarget::classify(node_id, &local.node_id)
+        .require_local_mutation("ability.deploy")?;
 
     // ── manifest materialization ────────────────────────────────────
     let bundle = AbilityBundle::from_resource_ref(&args)?;
@@ -518,13 +531,9 @@ fn deploy_ability_handler_with_clock(
         &manifest_digest(&bundle.manifest_bytes),
     );
 
-    // The registrar (runtime binding + durable commit) must be wired.
-    let Some(registrar) = device_registrar.get().cloned() else {
-        anyhow::bail!(
-            "ability.deploy: device registrar not wired yet (daemon still booting); \
-             retry once the runtime is up"
-        );
-    };
+    // The registrar (runtime binding + durable commit) is a canonical daemon
+    // runtime assembly precondition.
+    let registrar = require_device_registrar(device_registrar, "ability.deploy")?;
 
     // Operator-facing store timestamp. The cryptographic execution
     // timeline remains the Axon receipt chain; this field is for deploy
@@ -595,18 +604,10 @@ fn uninstall_ability_handler(
     let local = local_identity()?;
     let owner_ura = crate::core::ura::device_ura(&local.tenant_id, &local.node_id);
     let mutated_by = require_local_device_authority(&env, &owner_ura, "ability.uninstall")?;
-    if !is_local_target(node_id, &local.node_id) {
-        return Err(federation_not_wired(&format!(
-            "uninstalling ability {ability_ura:?} from remote node {node_id:?}"
-        )));
-    }
+    DeviceOperationTarget::classify(node_id, &local.node_id)
+        .require_local_mutation("ability.uninstall")?;
 
-    let Some(registrar) = device_registrar.get().cloned() else {
-        anyhow::bail!(
-            "ability.uninstall: device registrar not wired yet (daemon still booting); \
-             retry once the runtime is up"
-        );
-    };
+    let registrar = require_device_registrar(device_registrar, "ability.uninstall")?;
     let install_id = args
         .get("install_id")
         .and_then(Value::as_str)
@@ -700,8 +701,8 @@ pub fn describe_node_input_schema() -> Value {
 
 pub fn remove_node_description() -> &'static str {
     "Remove a node from the device set. Refuses to remove the local device \
-     (use `easynet device reset` for that). Remote removal awaits the \
-     federation Invoke replacement."
+     (use `easynet device reset` for that). Remote removal is currently \
+     unsupported by the canonical runtime capability matrix."
 }
 
 pub fn remove_node_input_schema() -> Value {
@@ -711,9 +712,9 @@ pub fn remove_node_input_schema() -> Value {
 pub fn deploy_ability_description() -> &'static str {
     "Publish a host_stream device ability bundle ResourceRef to a node. Local \
      target validates the manifest, durably installs it, binds the runtime, \
-     and registers the control-plane record. Remote targets defer to the \
-     federation Invoke replacement. Shell and arbitrary host-command exec kinds \
-     are rejected until a permission broker exists."
+     and registers the control-plane record. Remote targets are currently \
+     unsupported by the canonical runtime capability matrix. Shell and arbitrary \
+     host-command exec kinds are rejected until a permission broker exists."
 }
 
 pub fn deploy_ability_input_schema() -> Value {
@@ -731,8 +732,8 @@ pub fn deploy_ability_input_schema() -> Value {
 pub fn uninstall_ability_description() -> &'static str {
     "Uninstall an ability from a node. Mirrors `ability.deploy`: \
      local target removes the durable row, runtime binding, and \
-     control-plane record; remote targets are queued for the \
-     federation Invoke replacement."
+     control-plane record; remote targets are currently unsupported by the \
+     canonical runtime capability matrix."
 }
 
 pub fn uninstall_ability_input_schema() -> Value {
@@ -852,6 +853,17 @@ mod tests {
         );
     }
 
+    #[test]
+    fn remove_node_remote_target_is_unsupported_capability_state() {
+        let _home = provision_local_device_credentials();
+        let err = remove_node_handler(json!({"node_id": "remote-a"})).unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("capability_state=unsupported"),
+            "remote mutation must fail as an explicit capability state: {msg}"
+        );
+    }
+
     /// An unpopulated registrar cell — exercises the pre-binding
     /// validation path (resource_ref / manifest parse) without needing
     /// a live runtime. The install transaction itself is covered by the
@@ -919,16 +931,16 @@ mod tests {
     }
 
     #[test]
-    fn deploy_ability_parses_canonical_manifest_then_needs_registrar() {
+    fn deploy_ability_parses_canonical_manifest_then_requires_registrar() {
         let _home = provision_local_device_credentials();
         // New contract: a well-formed manifest parses (verb-only name,
-        // schema, exec), then the transaction needs a wired registrar.
-        // With an empty cell the handler fails honestly at the binding
-        // step — it does NOT report a false ACTIVE.
+        // schema, exec), then the transaction requires the canonical device
+        // ability registrar. With an empty cell the handler fails honestly at
+        // the runtime assembly step — it does NOT report a false ACTIVE.
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("ability.json"),
-            r#"{"name":"weather","namespace":"er","description":"w",
+            r#"{"schema_version":"1","name":"weather","namespace":"er","description":"w",
                 "input_schema":{"type":"object"},
                 "exec":{"kind":"shell","argv":["echo","hi"]}}"#,
         )
@@ -942,10 +954,25 @@ mod tests {
             &empty_device_cell(),
         )
         .unwrap_err();
-        // Honest failure (registrar not wired), never a fake ACTIVE.
         assert!(
-            format!("{err}").contains("registrar not wired"),
-            "expected an honest not-wired failure, got: {err}"
+            format!("{err}").contains("canonical device ability registrar is unavailable"),
+            "expected canonical registrar precondition failure, got: {err}"
+        );
+    }
+
+    #[test]
+    fn deploy_ability_remote_target_is_unsupported_before_bundle_materialization() {
+        let _home = provision_local_device_credentials();
+        let err = deploy_ability_handler(
+            local_device_env(),
+            json!({ "node_id": "remote-a" }),
+            &empty_device_cell(),
+        )
+        .unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("capability_state=unsupported") && !msg.contains("resource_ref"),
+            "remote target must fail before local bundle materialization: {msg}"
         );
     }
 
@@ -955,7 +982,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("ability.json"),
-            r#"{"name":"weather","description":"w",
+            r#"{"schema_version":"1","name":"weather","description":"w",
                 "input_schema":{"type":"object"},
                 "exec":{"kind":"shell","argv":["echo","hi"]}}"#,
         )
@@ -981,7 +1008,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("ability.json"),
-            r#"{"name":"weather","namespace":"device","description":"w",
+            r#"{"schema_version":"1","name":"weather","namespace":"device","description":"w",
                 "input_schema":{"type":"object"},
                 "exec":{"kind":"shell","argv":["echo","hi"]}}"#,
         )
@@ -1000,7 +1027,7 @@ mod tests {
 
     #[test]
     fn deploy_ability_bundle_parser_strips_namespace_from_canonical_manifest_bytes() {
-        let raw = br#"{"name":"weather","namespace":"er","description":"w",
+        let raw = br#"{"schema_version":"1","name":"weather","namespace":"er","description":"w",
             "input_schema":{"type":"object"},
             "exec":{"kind":"shell","argv":["echo","hi"]}}"#;
 
@@ -1023,7 +1050,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("ability.json"),
-            r#"{"name":"weather","namespace":"er","description":"w",
+            r#"{"schema_version":"1","name":"weather","namespace":"er","description":"w",
                 "input_schema":{"type":"object"},
                 "tool_name":"legacy-provider-field",
                 "exec":{"kind":"shell","argv":["echo","hi"]}}"#,
@@ -1045,7 +1072,7 @@ mod tests {
     }
 
     #[test]
-    fn uninstall_ability_needs_wired_registrar() {
+    fn uninstall_ability_requires_canonical_registrar() {
         let _home = provision_local_device_credentials();
         let err = uninstall_ability_handler(
             local_device_env(),
@@ -1056,7 +1083,26 @@ mod tests {
             &empty_device_cell(),
         )
         .unwrap_err();
-        assert!(format!("{err}").contains("registrar not wired"));
+        assert!(format!("{err}").contains("canonical device ability registrar is unavailable"));
+    }
+
+    #[test]
+    fn uninstall_ability_remote_target_is_unsupported_capability_state() {
+        let _home = provision_local_device_credentials();
+        let err = uninstall_ability_handler(
+            local_device_env(),
+            json!({
+                "ability_ura": "easynet:///r/localhost/ability/alice.claude.weather",
+                "node_id": "remote-a",
+            }),
+            &empty_device_cell(),
+        )
+        .unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("capability_state=unsupported"),
+            "remote uninstall must fail as an explicit capability state: {msg}"
+        );
     }
 
     #[test]
@@ -1065,7 +1111,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("ability.json"),
-            r#"{"name":"weather","namespace":"er","description":"w",
+            r#"{"schema_version":"1","name":"weather","namespace":"er","description":"w",
                 "admission_action":"stream","input_schema":{"type":"object"},
                 "exec":{"kind":"host_stream","host_socket":"/tmp/er-host.sock","function":"er.weather"}}"#,
         )

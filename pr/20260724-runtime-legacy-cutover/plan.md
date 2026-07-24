@@ -340,3 +340,50 @@ architecture rather than add feature surface.
   - `tools/scripts/check-canonical-runtime-convergence-v2.sh`
   - `tools/scripts/check-architecture-convergence.sh`
   - `git diff --check`
+
+## Iteration 10 candidate policy
+
+- Focus on `device_control/ability_management/ops.rs`. codegraph found
+  production `federation_not_wired` wording and direct registrar `not wired`
+  diagnostics in node/ability mutation handlers.
+- The root abstraction problem is target lifecycle ambiguity: the handlers
+  accept a `node_id` but branch procedurally between local device mutation and
+  remote device mutation without an explicit target state.
+- Current SPEC-aligned capability matrix treats remote device ability mutation
+  as Unsupported unless a provider-backed federation mutation route exists.
+  The handler must fail closed as an unsupported canonical capability state,
+  not as a removed surface that will be re-wired later.
+- Device ability registrar absence is a daemon runtime assembly precondition,
+  not a compatibility wiring hole.
+- The intended cutover is to introduce a local/remote target classifier,
+  migrate remove/deploy/uninstall handlers through it, centralize registrar
+  availability, and reject reintroduced federation-not-wired wording in SPEC v2.
+
+## Iteration 10 decision log
+
+- Added `DeviceOperationTarget` as the explicit local/remote target state for
+  device ability mutation handlers.
+- Removed the daemon ability-management `federation_not_wired` compatibility
+  helper and retired "re-wired/follow-up" implementation vocabulary from the
+  production path.
+- Remote node remove/deploy/uninstall now fail closed as
+  `capability_state=unsupported` under the canonical runtime capability matrix.
+- Added `require_device_registrar` so device ability registrar absence is a
+  daemon runtime assembly precondition rather than a wiring compatibility hole.
+- Updated ability deploy test fixtures to include strict manifest
+  `schema_version` when the test is targeting later manifest/registrar logic.
+- SPEC v2 now checks the target state, Unsupported remote mutation diagnostics,
+  centralized registrar lookup, and regression tests for all three remote
+  mutation surfaces.
+- Verification passed:
+  - `cargo test -q remove_node_remote_target_is_unsupported_capability_state`
+  - `cargo test -q deploy_ability_remote_target_is_unsupported_before_bundle_materialization`
+  - `cargo test -q uninstall_ability_remote_target_is_unsupported_capability_state`
+  - `cargo test -q deploy_ability_parses_canonical_manifest_then_requires_registrar`
+  - `cargo test -q uninstall_ability_requires_canonical_registrar`
+  - `cargo test -q deploy_ability_bundle_parser_strips_namespace_from_canonical_manifest_bytes`
+  - `cargo test -q deploy_ability_wired_transaction_completes_inside_current_thread_runtime`
+  - `cargo fmt --check`
+  - `tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - `tools/scripts/check-architecture-convergence.sh`
+  - `git diff --check`

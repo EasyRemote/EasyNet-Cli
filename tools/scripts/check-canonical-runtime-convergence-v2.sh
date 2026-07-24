@@ -8866,6 +8866,52 @@ check_ability_deploy_product_neutrality_contract() {
   fi
 }
 
+check_device_ability_mutation_target_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local ops="$cli_root/src/daemon/ability/builtins/device_control/ability_management/ops.rs"
+  [[ -f "$ops" ]] || fail "device ability management source is missing: ${ops#$cli_root/}"
+
+  "$PYTHON_BIN" - "$ops" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+production = text.split("\n#[cfg(test)]\nmod tests", 1)[0]
+
+for required, code in (
+    ("enum DeviceOperationTarget", "target_state_missing"),
+    ("RemoteUnsupported {", "remote_unsupported_state_missing"),
+    ("fn require_local_mutation(", "local_mutation_guard_missing"),
+    ("capability_state=unsupported", "unsupported_state_diagnostic_missing"),
+    ("fn require_device_registrar(", "registrar_requirement_missing"),
+    ("canonical device ability registrar is unavailable", "registrar_precondition_diagnostic_missing"),
+    ("remove_node_remote_target_is_unsupported_capability_state", "remove_remote_test_missing"),
+    ("deploy_ability_remote_target_is_unsupported_before_bundle_materialization", "deploy_remote_test_missing"),
+    ("uninstall_ability_remote_target_is_unsupported_capability_state", "uninstall_remote_test_missing"),
+):
+    if required not in text:
+        raise SystemExit(f"device_ability_mutation_target:{code}")
+
+for retired in (
+    "federation_not_wired",
+    "not wired",
+    "re-wired",
+    "follow-up",
+    "federation Invoke replacement",
+    "deferred to the federation",
+    "defer to the federation",
+    "queued for the federation",
+    "AXON-RFC-001 P1.5",
+):
+    if retired in production:
+        raise SystemExit(f"device_ability_mutation_target:retired_compat_vocabulary:{retired}")
+
+if len(re.findall(r"device_registrar\.get\(\)\s*\.cloned\(\)", production)) != 1:
+    raise SystemExit("device_ability_mutation_target:registrar_lookup_not_centralized")
+PY
+}
+
 check_invocation_outcome_terminal_result_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local dispatch_client="$cli_root/src/daemon/invocation/dispatch/client.rs"
@@ -13007,6 +13053,12 @@ EOF
   if ( CLI_ROOT="$tmp/cli-ability-deploy-product"; check_ability_deploy_product_neutrality_contract ) >/dev/null 2>&1; then
     fail "self-test expected ability.deploy product vocabulary gate to fail"
   fi
+  mkdir -p "$tmp/cli-device-ability-mutation-compat/src/daemon/ability/builtins/device_control/ability_management"
+  printf 'fn federation_not_wired() {}\nfn deploy(cell: Cell) { let _ = cell.device_registrar.get().cloned(); }\n' \
+    > "$tmp/cli-device-ability-mutation-compat/src/daemon/ability/builtins/device_control/ability_management/ops.rs"
+  if ( CLI_ROOT="$tmp/cli-device-ability-mutation-compat"; check_device_ability_mutation_target_contract ) >/dev/null 2>&1; then
+    fail "self-test expected device ability mutation compat gate to fail"
+  fi
   mkdir -p "$tmp/cli-ability-manifest-exec/src/daemon/ability/builtins/agents" \
     "$tmp/cli-ability-manifest-exec/src/daemon/ability/builtins/governance" \
     "$tmp/cli-ability-manifest-exec/src/daemon/ability"
@@ -16907,6 +16959,7 @@ EOF
   check_plugin_sidecar_helper_matrix_contract
   check_retired_browser_mock_surface_contract
   check_ability_deploy_product_neutrality_contract
+  check_device_ability_mutation_target_contract
   check_ability_manifest_exec_absence_contract
   check_runtime_wire_target_state_contract
   check_invocation_wire_callee_target_contract
@@ -17091,6 +17144,7 @@ check_cli_device_directory_projection_contract
 check_plugin_sidecar_helper_matrix_contract
 check_retired_browser_mock_surface_contract
 check_ability_deploy_product_neutrality_contract
+check_device_ability_mutation_target_contract
 check_invocation_outcome_terminal_result_contract
 check_ability_manifest_exec_absence_contract
 check_ability_manifest_schema_version_strict_contract
