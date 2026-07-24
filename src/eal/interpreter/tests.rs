@@ -959,20 +959,17 @@ mod cases {
     ///
     /// This test is the contract between this module and any external
     /// consumer that reads trace files (CI scrapers, external auditors,
-    /// the future trace-replay UI). Adding a field with
-    /// `#[serde(default)]` keeps this test green and is a backwards-
-    /// compatible change. *Renaming* a field, removing one, or changing
-    /// a numeric type fails this test — at which point the codebase is
-    /// telling you to bump `EXECUTION_TRACE_SCHEMA_VERSION` and write a
-    /// reader-side migration.
+    /// the future trace-replay UI). Renaming a field, removing one, or
+    /// changing a numeric type fails this test — at which point the
+    /// codebase is telling you to bump `EXECUTION_TRACE_SCHEMA_VERSION`
+    /// and write an explicit reader-side migration.
     ///
     /// We assert two properties:
     ///   1. A freshly constructed trace serializes with
     ///      `schema_version = EXECUTION_TRACE_SCHEMA_VERSION` and the
     ///      full set of expected top-level keys.
-    ///   2. A *legacy* JSON payload (no `schema_version` field) round-
-    ///      trips through deserialization and lands at version 1 — the
-    ///      tolerant-read promise documented on the constant.
+    ///   2. A JSON payload without `schema_version` fails closed instead
+    ///      of being inferred as the current schema.
     #[test]
     fn trace_schema_v1_is_stable() {
         // Use a hand-built trace rather than running a real mission so
@@ -1014,12 +1011,9 @@ mod cases {
             "steps_skipped",
             "outcome",
             "step_traces",
-            // `traces_truncated` is a v1-compatible additive field: it
-            // serializes as `0` for missions under the cap and older
-            // readers ignore unknown keys. Its presence here pins that
-            // the on-the-wire shape includes it for every fresh trace;
-            // the legacy-deserialize property below confirms old
-            // payloads without this key still parse.
+            // `traces_truncated` serializes as `0` for missions under
+            // the cap. Its presence here pins that the on-the-wire
+            // shape includes it for every fresh trace.
             "traces_truncated",
         ]
         .into_iter()
@@ -1037,12 +1031,10 @@ mod cases {
              and update this test."
         );
 
-        // Property 2: legacy payloads (no `schema_version`) read back
-        // as version 1 — the tolerant-read promise. A reader who pulls
-        // a pre-stamp trace file off disk must not get a deser error.
-        let legacy_json = serde_json::json!({
-            "mission_id": "legacy",
-            "mission_name": "legacy",
+        // Property 2: payloads without `schema_version` fail closed.
+        let missing_version_json = serde_json::json!({
+            "mission_id": "missing-version",
+            "mission_name": "missing-version",
             "started_at_unix_ms": 0,
             "completed_at_unix_ms": 0,
             "total_elapsed_ms": 0,
@@ -1053,11 +1045,11 @@ mod cases {
             "outcome": "completed",
             "step_traces": [],
         });
-        let legacy: ExecutionTrace = serde_json::from_value(legacy_json)
-            .expect("pre-stamp trace JSON must deserialize via #[serde(default)]");
-        assert_eq!(
-            legacy.schema_version, 1,
-            "pre-stamp traces must read back as v1 — bump current_trace_schema_version() if v2+ landed"
+        let err = serde_json::from_value::<ExecutionTrace>(missing_version_json)
+            .expect_err("trace JSON without schema_version must fail closed");
+        assert!(
+            err.to_string().contains("schema_version"),
+            "strict schema error should name schema_version: {err}"
         );
     }
 

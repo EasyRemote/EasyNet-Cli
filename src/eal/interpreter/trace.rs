@@ -32,19 +32,15 @@ use std::collections::{BTreeMap, HashMap};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-fn current_trace_schema_version() -> u32 {
-    EXECUTION_TRACE_SCHEMA_VERSION
-}
-
 /// On-disk schema version for `ExecutionTrace` JSON. Bump on any wire
 /// change that older readers cannot interpret (renamed fields, removed
-/// variants, changed numeric ranges). Adding *optional* fields with
-/// `#[serde(default)]` does NOT warrant a bump — old readers will
-/// transparently ignore them, which is the entire point of `default`.
+/// variants, changed numeric ranges, added audit facts). Trace readers
+/// must not infer unstamped payloads into the current schema; migrations
+/// need an explicit version boundary.
 ///
 /// The version is stamped on every fresh trace so trace consumers can
-/// branch on layout. Absent-version on a parsed trace means "pre-stamp";
-/// tolerant readers should treat it as `1`. The golden test
+/// branch on layout. Absent-version parsed traces are rejected instead
+/// of being inferred as current schema. The golden test
 /// `trace_schema_v1_is_stable` pins the exact serialized shape so a
 /// regression here cannot land silently.
 pub const EXECUTION_TRACE_SCHEMA_VERSION: u32 = 1;
@@ -148,10 +144,6 @@ impl CappedTraceBuffer {
 pub struct ExecutionTrace {
     /// Schema version of this trace document. See
     /// `EXECUTION_TRACE_SCHEMA_VERSION` for the contract on bumping.
-    /// `#[serde(default)]` lets old on-disk traces (which lacked this
-    /// field) deserialize as version 1 — matching the tolerant-read
-    /// promise documented above.
-    #[serde(default = "current_trace_schema_version")]
     pub schema_version: u32,
     pub mission_id: String,
     pub mission_name: String,
@@ -181,9 +173,10 @@ pub struct ExecutionTrace {
     /// in-memory cap (see `TRACE_CAP_TOTAL`). Zero means every step
     /// is present in `step_traces`. Nonzero means there are exactly
     /// this many consecutive steps *between the head and tail slices*
-    /// whose trace entries are absent from `step_traces`. This field
-    /// is `#[serde(default)]` so older on-disk traces (before the cap
-    /// existed) parse as `0` — preserving the tolerant-read promise.
+    /// whose trace entries are absent from `step_traces`. Fresh trace
+    /// writers always materialize this field; the default only pairs
+    /// with the current serializer's empty-value elision semantics and
+    /// is not a schema-version fallback.
     #[serde(default)]
     pub traces_truncated: usize,
 }

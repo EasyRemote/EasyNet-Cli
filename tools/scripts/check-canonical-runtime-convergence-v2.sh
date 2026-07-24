@@ -7012,6 +7012,72 @@ for required_test in (
 PY
 }
 
+check_eal_trace_schema_version_strict_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local trace="$cli_root/src/eal/interpreter/trace.rs"
+  local tests="$cli_root/src/eal/interpreter/tests.rs"
+  [[ -f "$trace" ]] || fail "EAL trace source is missing: ${trace#$cli_root/}"
+  [[ -f "$tests" ]] || fail "EAL interpreter tests are missing: ${tests#$cli_root/}"
+
+  "$PYTHON_BIN" - "$trace" "$tests" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+trace = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+tests = Path(sys.argv[2]).read_text(encoding="utf-8", errors="replace")
+
+match = re.search(r"pub struct ExecutionTrace \{(?P<body>.*?)\n\}", trace, re.S)
+if match is None:
+    raise SystemExit("eal_trace_schema_version:execution_trace_missing")
+body = match.group("body")
+schema_field = re.search(
+    r"(?P<prefix>(?:\s*///[^\n]*\n|\s*#\[[^\]]*\]\n|\s*)*)\s*pub schema_version: u32,",
+    body,
+)
+if schema_field is None:
+    raise SystemExit("eal_trace_schema_version:field_missing_or_not_required_u32")
+if "serde(default" in schema_field.group("prefix"):
+    raise SystemExit("eal_trace_schema_version:legacy_default_attribute")
+
+for retired in (
+    "fn current_trace_schema_version",
+    "current_trace_schema_version",
+    'serde(default = "current_trace_schema_version")',
+    "Absent-version on a parsed trace means",
+    "tolerant readers should treat it as `1`",
+    "pre-stamp",
+    "tolerant-read",
+    "legacy JSON payload",
+    "pre-stamp trace JSON must deserialize",
+    "pre-stamp traces must read back as v1",
+    "older on-disk traces",
+    "Adding *optional* fields",
+    "does NOT warrant a bump",
+    "the entire point of `default`",
+):
+    if retired in trace or retired in tests:
+        raise SystemExit(f"eal_trace_schema_version:legacy_compatibility_language:{retired}")
+
+for required in (
+    "pub const EXECUTION_TRACE_SCHEMA_VERSION: u32 = 1;",
+    "pub schema_version: u32,",
+    "not a schema-version fallback",
+):
+    if required not in trace:
+        raise SystemExit(f"eal_trace_schema_version:strict_source_missing:{required}")
+
+for required in (
+    "trace_schema_v1_is_stable",
+    "A JSON payload without `schema_version` fails closed",
+    "expect_err(\"trace JSON without schema_version must fail closed\")",
+    "strict schema error should name schema_version",
+):
+    if required not in tests:
+        raise SystemExit(f"eal_trace_schema_version:strict_test_missing:{required}")
+PY
+}
+
 check_mission_runtime_meta_identity_schema_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local orchestration="$cli_root/src/daemon/execution/mission/orchestration.rs"
@@ -16319,6 +16385,7 @@ EOF
   check_daemon_runtime_discuss_binding_contract
   check_daemon_runtime_tenant_store_binding_contract
   check_schedule_store_current_schema_contract
+  check_eal_trace_schema_version_strict_contract
   check_route_resolver_descriptor_ref_selector_contract
   check_namespace_resolver_authority_projection_contract
   check_daemon_invocation_service_descriptor_ref_route_projection_contract
@@ -16492,6 +16559,7 @@ check_daemon_runtime_session_binding_contract
 check_daemon_runtime_discuss_binding_contract
 check_daemon_runtime_tenant_store_binding_contract
 check_schedule_store_current_schema_contract
+check_eal_trace_schema_version_strict_contract
 check_retired_federation_directory_v1_stream_contract
 check_route_resolver_descriptor_ref_selector_contract
 check_namespace_resolver_authority_projection_contract
