@@ -233,7 +233,8 @@ impl SevenAxesHome {
         std::fs::create_dir_all(&abilities_dir).expect("abilities dir");
         std::fs::write(
             abilities_dir.join("weather-probe.ability.toml"),
-            "name = \"weather-probe\"\n\
+            "schema_version = \"1\"\n\
+             name = \"weather-probe\"\n\
              description = \"fetch the local weather forecast\"\n\
              \n\
              [input_schema]\n\
@@ -268,12 +269,12 @@ impl SevenAxesHome {
             state_dir.join("agents.json"),
             serde_json::to_vec_pretty(&serde_json::json!({
                 "agents": {
-                    "testbot": {
+                    "default/testbot": {
                         "schema_version": 2,
                         "agent_type": "claude-code",
                         "root_path": agent_root,
                     },
-                    "zlearner": {
+                    "default/zlearner": {
                         "schema_version": 2,
                         "agent_type": "claude-code",
                         "root_path": learner_root,
@@ -367,6 +368,39 @@ added_at_unix_ms = 0
             join_receipt_hash: None,
         })
         .expect("write credentials for federation-backed discover scope");
+        let user_ura = easynet_cli::core::ura::user_ura("cli", "user-local");
+        easynet_cli::daemon::identity::self_identity::ensure_user_runtime_signing_identity(
+            &KeyringClient::default_path(),
+            &user_ura,
+        )
+        .unwrap_or_else(|error| panic!("seed fixture paired User signer `{user_ura}`: {error}"));
+        easynet_cli::daemon::control::discovery::write(
+            &easynet_cli::daemon::control::discovery::default_path(),
+            &easynet_cli::daemon::control::discovery::ControlDiscovery {
+                socket_path: None,
+                pipe_name: None,
+                invocation_endpoint: Some(socket_path.clone()),
+                daemon_identity: Some(easynet_cli::daemon::control::discovery::DaemonIdentity {
+                    mode: "device".to_string(),
+                    realm: "cli".to_string(),
+                    node_id: Some("local".to_string()),
+                }),
+                pid: std::process::id(),
+                daemon_version: env!("CARGO_PKG_VERSION").to_string(),
+                supported_ipc_versions:
+                    easynet_cli::daemon::control::discovery::IpcVersionRange::single(
+                        easynet_cli::daemon::control::discovery::IPC_VERSION_V1,
+                    ),
+                capability_flags: vec![
+                    easynet_cli::daemon::control::discovery::flags::BOOT_STATUS.to_string(),
+                    easynet_cli::daemon::control::discovery::flags::CONTROL_DIAGNOSTICS.to_string(),
+                    easynet_cli::daemon::control::discovery::flags::PAIRED_USER_RUNTIME_SIGNER
+                        .to_string(),
+                ],
+                pages_port: None,
+            },
+        )
+        .expect("write production-shaped daemon Ready discovery");
         SevenAxesHome {
             home,
             _keyring: keyring,
@@ -403,8 +437,6 @@ added_at_unix_ms = 0
     #[allow(dead_code)]
     pub fn invoke_testbot_echo_with_meta(&self, message: &str) -> Value {
         let callee = self.testbot_ura.clone();
-        let ability_ura = easynet_cli::core::ura::owner_ability_ura(&self.testbot_ura, "echo")
-            .expect("mint testbot echo ability URA");
         let descriptor_ref =
             require_descriptor_ref(&self.descriptor_refs, &self.testbot_ura, "echo");
         let (_value, request_id, terminal_receipt) = invoke_daemon_ability(
@@ -412,7 +444,7 @@ added_at_unix_ms = 0
             &self.loopback_caller,
             &callee,
             &self.loopback_caller,
-            ability_ura.as_str(),
+            "echo",
             descriptor_ref.as_str(),
             json!({ "message": message }),
         );
@@ -424,14 +456,14 @@ added_at_unix_ms = 0
         let mut record = Value::Null;
         let history_descriptor_ref = require_descriptor_ref(
             &self.descriptor_refs,
-            &self.hub_ura,
+            &self.loopback_caller,
             "invocation.record.get",
         );
         for _ in 0..10 {
             let (history, _, _) = invoke_daemon_ability(
                 &self.socket_path,
                 &self.loopback_caller,
-                &self.hub_ura,
+                &self.loopback_caller,
                 &self.loopback_caller,
                 "invocation.record.get",
                 history_descriptor_ref.as_str(),
@@ -932,7 +964,7 @@ fn start_daemon_at(
     let agents = easynet_cli::daemon::persistence::agent_registry::load_agents()
         .expect("load seeded agents.json");
     assert!(
-        agents.agents.contains_key("testbot"),
+        agents.agents.contains_key("default/testbot"),
         "fixture must load the seeded agent through the production path"
     );
 

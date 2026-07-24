@@ -1561,6 +1561,7 @@ impl RuntimeSyncReport {
             HotAgentRegistrarError::AuthorityEnrollment { .. }
             | HotAgentRegistrarError::AuthorityScope { .. }
             | HotAgentRegistrarError::AuthorityRevocation { .. }
+            | HotAgentRegistrarError::InvalidAgentIdentifier { .. }
             | HotAgentRegistrarError::SecondWriter { .. } => {}
         }
         report

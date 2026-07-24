@@ -278,6 +278,12 @@ fn manifest_cache(
 /// discover) should prefer this; the owned-`Vec` wrapper exists for
 /// callers that mutate or consume the list.
 pub fn manifests_for_shared(agent_name: &str, entry: &AgentEntry) -> SharedManifests {
+    let Some(surface_name) = project_agent_surface_name(agent_name) else {
+        eprintln!(
+            "manifests_for[{agent_name}]: invalid Agent identifier for ability surface projection"
+        );
+        return SharedManifests::default();
+    };
     let Some(root) = entry.root_path.as_ref() else {
         eprintln!(
             "manifests_for[{agent_name}]: registry row is missing root_path; publishing no abilities"
@@ -339,7 +345,7 @@ pub fn manifests_for_shared(agent_name: &str, entry: &AgentEntry) -> SharedManif
         }
     };
 
-    if spec_name != agent_name {
+    if spec_name != surface_name {
         eprintln!(
             "manifests_for[{agent_name}]: root_path {} belongs to agent {spec_name:?}; publishing no abilities",
             root.display()
@@ -361,10 +367,13 @@ pub fn manifests_for_shared(agent_name: &str, entry: &AgentEntry) -> SharedManif
 /// fail-loud semantics.
 fn abilities_from_manifests(agent_name: &str, entry: &AgentEntry) -> Vec<AgentAbilitySpec> {
     let manifests = manifests_for_shared(agent_name, entry);
+    let Some(surface_name) = project_agent_surface_name(agent_name) else {
+        return Vec::new();
+    };
     let mut specs = Vec::with_capacity(manifests.len());
     for manifest in manifests.iter() {
         match AgentAbilitySpec::new(
-            manifest.qualified_name(agent_name),
+            manifest.qualified_name(&surface_name),
             manifest.description().to_string(),
             manifest.input_schema().clone(),
         ) {
@@ -378,6 +387,19 @@ fn abilities_from_manifests(agent_name: &str, entry: &AgentEntry) -> Vec<AgentAb
         }
     }
     specs
+}
+
+fn project_agent_surface_name(agent_identifier: &str) -> Option<String> {
+    if agent_identifier.contains('/') {
+        let agent_id = crate::core::agent::id::AgentId::parse(agent_identifier).ok()?;
+        if agent_id.to_string() != agent_identifier {
+            return None;
+        }
+        return Some(agent_id.name);
+    }
+    crate::core::agent::id::AgentId::new(crate::core::agent::id::DEFAULT_TENANT, agent_identifier)
+        .ok()
+        .map(|agent| agent.name)
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────────

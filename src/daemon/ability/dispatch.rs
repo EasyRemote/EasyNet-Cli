@@ -1438,9 +1438,17 @@ impl PersistedHotAgentAuthority {
         device: &CanonicalDeviceAuthority,
         agent: &str,
     ) -> Result<Self, HotAgentAuthorityInventoryError> {
+        let registry_key = crate::core::agent::id::AgentId::parse(agent)
+            .map_err(
+                |error| HotAgentAuthorityInventoryError::DurableRegistryUnreadable {
+                    agent: agent.to_string(),
+                    reason: format!("hosted Agent registry key projection failed: {error}"),
+                },
+            )?
+            .to_string();
         let snapshot = AgentAggregateRepository::try_load_snapshot()
             .map_err(|error| hot_agent_authority_snapshot_error(agent, error))?;
-        if !snapshot.has_registered_agent(agent) {
+        if !snapshot.has_registered_agent(&registry_key) {
             return Err(HotAgentAuthorityInventoryError::DurableAgentMissing {
                 agent: agent.to_string(),
             });

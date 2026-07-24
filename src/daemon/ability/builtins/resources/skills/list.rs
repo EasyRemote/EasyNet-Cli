@@ -121,14 +121,14 @@ impl<'a> SkillInventoryBuilder<'a> {
         }
 
         for name in self.snapshot.registered_agent_names() {
-            if !self.scope.includes_agent(name) {
+            if !self.scope.includes_agent(&name) {
                 continue;
             }
             let workspace = self
                 .snapshot
-                .registered_agent_workspace(name, "skill.list")?;
+                .registered_agent_workspace(&name, "skill.list")?;
             self.collect_managed_installs(&workspace)?;
-            self.collect_global_pools(name, workspace.skill_layout())?;
+            self.collect_global_pools(&name, workspace.skill_layout())?;
         }
         self.retain_skill_name_filter();
         Ok(self.rows)
@@ -640,8 +640,8 @@ mod tests {
             None,
         );
         bob.root_path = Some(bob_root);
-        registry.agents.insert("alice".to_string(), alice);
-        registry.agents.insert("bob".to_string(), bob);
+        registry.agents.insert("default/alice".to_string(), alice);
+        registry.agents.insert("default/bob".to_string(), bob);
         crate::daemon::persistence::agent_registry::save_agents(&registry).expect("save registry");
 
         let unscoped = handle(json!({})).expect("unscoped list");
@@ -716,7 +716,7 @@ mod tests {
             None,
         );
         agent.root_path = Some(agent_root);
-        registry.agents.insert("claude".to_string(), agent);
+        registry.agents.insert("default/claude".to_string(), agent);
         crate::daemon::persistence::agent_registry::save_agents(&registry).expect("save registry");
         crate::daemon::persistence::local_agents::save(
             &crate::daemon::persistence::local_agents::LocalAgentsFile {

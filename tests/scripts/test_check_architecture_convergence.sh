@@ -2400,9 +2400,12 @@ struct PersistedHotAgentAuthority;
 
 impl PersistedHotAgentAuthority {
     fn load(agent: &str) -> Result<(), HotAgentAuthorityInventoryError> {
+        let registry_key = crate::core::agent::id::AgentId::parse(agent)
+            .map_err(|error| HotAgentAuthorityInventoryError::CounterOverflow)?
+            .to_string();
         let snapshot = AgentAggregateRepository::try_load_snapshot()
             .map_err(|error| hot_agent_authority_snapshot_error(agent, error))?;
-        if !snapshot.has_registered_agent(agent) {
+        if !snapshot.has_registered_agent(&registry_key) {
             return Err(HotAgentAuthorityInventoryError::CounterOverflow);
         }
         let identity = match snapshot.hosted_llm_agent_identity(agent) {

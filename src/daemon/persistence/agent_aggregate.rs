@@ -88,8 +88,14 @@ impl AgentAggregateSnapshot {
             .map(|(name, entry)| (name.as_str(), entry))
     }
 
-    pub(crate) fn registered_agent_names(&self) -> impl Iterator<Item = &str> {
-        self.registry.agents.keys().map(String::as_str)
+    pub(crate) fn registered_agent_names(&self) -> impl Iterator<Item = String> {
+        self.registry
+            .agents
+            .keys()
+            .filter_map(|key| AgentId::parse(key).ok())
+            .map(|agent_id| agent_id.name)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
     }
 
     pub(crate) fn registered_agent_registry_projection(&self) -> AgentRegistry {
@@ -109,9 +115,10 @@ impl AgentAggregateSnapshot {
         &self,
         owner_id: &str,
     ) -> Option<AgentRegisteredRuntimeProjection> {
+        let registry_key = AgentId::parse(owner_id).ok()?.to_string();
         self.registry
             .agents
-            .get(owner_id)
+            .get(&registry_key)
             .cloned()
             .map(AgentRegisteredRuntimeProjection::new)
     }
@@ -221,7 +228,7 @@ impl AgentAggregateSnapshot {
                 .iter()
                 .filter_map(|entry| HostedAgentTarget::parse(&entry.agent_ura))
                 .collect(),
-            registered_agent_ids: self.registry.agents.keys().cloned().collect(),
+            registered_agent_ids: self.registered_agent_surface_names(),
         }
     }
 
@@ -262,6 +269,12 @@ pub(crate) enum AgentRegisteredWorkspaceLookupError {
     Missing {
         owner_id: String,
         registered_agent_ids: Vec<String>,
+    },
+    #[error("owner_agent_id {owner_id:?} is invalid for {operation}: {reason}")]
+    InvalidOwnerId {
+        owner_id: String,
+        operation: String,
+        reason: String,
     },
     #[error("registered Agent workspace is invalid: {source:#}")]
     InvalidWorkspace { source: anyhow::Error },
@@ -305,7 +318,16 @@ impl AgentRegisteredAgent {
         owner_id: &str,
         operation: &str,
     ) -> Result<Self, AgentRegisteredWorkspaceLookupError> {
-        let entry = registry.agents.get(owner_id).cloned().ok_or_else(|| {
+        let registry_key = AgentId::parse(owner_id)
+            .map_err(
+                |error| AgentRegisteredWorkspaceLookupError::InvalidOwnerId {
+                    owner_id: owner_id.to_string(),
+                    operation: operation.to_string(),
+                    reason: error.to_string(),
+                },
+            )?
+            .to_string();
+        let entry = registry.agents.get(&registry_key).cloned().ok_or_else(|| {
             AgentRegisteredWorkspaceLookupError::Missing {
                 owner_id: owner_id.to_string(),
                 registered_agent_ids: registry.agents.keys().cloned().collect(),
@@ -909,7 +931,7 @@ mod tests {
     fn registered_agent_surface_names_include_bare_and_tenant_forms() {
         let mut registry = AgentRegistry::default();
         registry.agents.insert(
-            "claude".to_string(),
+            "default/claude".to_string(),
             AgentEntry::new(AgentType::ClaudeCode, None),
         );
         registry.agents.insert(
@@ -932,7 +954,7 @@ mod tests {
         let mut entry = AgentEntry::new(AgentType::ClaudeCode, None);
         entry.root_path = Some(root.clone());
         let mut registry = AgentRegistry::default();
-        registry.agents.insert("claude".to_string(), entry);
+        registry.agents.insert("default/claude".to_string(), entry);
         let snapshot = AgentAggregateSnapshot::new(registry, LocalAgentsFile::default());
 
         let owner = snapshot
@@ -946,7 +968,9 @@ mod tests {
         let mut codex_entry = AgentEntry::new(AgentType::CodexAppServer, None);
         codex_entry.root_path = Some(codex_root);
         let mut registry = AgentRegistry::default();
-        registry.agents.insert("codex".to_string(), codex_entry);
+        registry
+            .agents
+            .insert("default/codex".to_string(), codex_entry);
         let snapshot = AgentAggregateSnapshot::new(registry, LocalAgentsFile::default());
         let codex = snapshot
             .registered_agent_workspace("codex", "skill.publish")
@@ -960,7 +984,9 @@ mod tests {
         let mut entry = AgentEntry::new(AgentType::Codex, None);
         entry.root_path = Some(root.clone());
         let mut registry = AgentRegistry::default();
-        registry.agents.insert("codex".to_string(), entry.clone());
+        registry
+            .agents
+            .insert("default/codex".to_string(), entry.clone());
         let snapshot = AgentAggregateSnapshot::new(registry, LocalAgentsFile::default());
 
         let projection = snapshot
@@ -980,9 +1006,10 @@ mod tests {
     #[test]
     fn registered_agent_workspace_reports_missing_and_corrupt_rows() {
         let mut registry = AgentRegistry::default();
-        registry
-            .agents
-            .insert("codex".to_string(), AgentEntry::new(AgentType::Codex, None));
+        registry.agents.insert(
+            "default/codex".to_string(),
+            AgentEntry::new(AgentType::Codex, None),
+        );
         let snapshot = AgentAggregateSnapshot::new(registry, LocalAgentsFile::default());
 
         let missing = snapshot
@@ -990,7 +1017,7 @@ mod tests {
             .expect_err("missing owner");
         assert!(missing
             .to_string()
-            .contains("registered agents: [\"codex\"]"));
+            .contains("registered agents: [\"default/codex\"]"));
 
         let corrupt = snapshot
             .registered_agent_workspace("codex", "skill.publish")
@@ -1006,7 +1033,7 @@ mod tests {
         let mut entry = AgentEntry::new(AgentType::ClaudeCode, None);
         entry.root_path = Some(root.clone());
         let mut registry = AgentRegistry::default();
-        registry.agents.insert("claude".to_string(), entry);
+        registry.agents.insert("default/claude".to_string(), entry);
         agent_registry::save_agents(&registry).expect("save registered Agent");
         std::fs::write(local_agents::path(), b"{").expect("corrupt hosted identity projection");
 
@@ -1017,7 +1044,7 @@ mod tests {
         assert_eq!(workspace.root_path(), root.as_path());
         let registry = AgentAggregateRepository::load_registered_agent_registry_projection()
             .expect("registry-only Agent projection");
-        assert!(registry.agents.contains_key("claude"));
+        assert!(registry.agents.contains_key("default/claude"));
         assert!(matches!(
             AgentAggregateRepository::try_load_snapshot(),
             Err(AgentAggregateSnapshotLoadError::IdentityUnreadable { .. })
@@ -1348,12 +1375,13 @@ mod tests {
     fn local_target_projection_parses_hosted_targets_and_registered_agent_ids() {
         let mut registry = AgentRegistry::default();
         registry.agents.insert(
-            "claude".to_string(),
+            "default/claude".to_string(),
             AgentEntry::new(AgentType::ClaudeCode, None),
         );
-        registry
-            .agents
-            .insert("codex".to_string(), AgentEntry::new(AgentType::Codex, None));
+        registry.agents.insert(
+            "default/codex".to_string(),
+            AgentEntry::new(AgentType::Codex, None),
+        );
         let snapshot = AgentAggregateSnapshot::new(
             registry,
             LocalAgentsFile {

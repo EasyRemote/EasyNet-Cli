@@ -457,29 +457,23 @@ fn validate_loaded_registry(registry: &AgentRegistry) -> anyhow::Result<()> {
 /// prefix at the *registration* boundary so the bad input never reaches a
 /// downstream consumer.
 pub fn validate_agent_name(name: &str) -> anyhow::Result<()> {
-    if name.is_empty() {
-        anyhow::bail!("agent name must not be empty");
+    let agent_id = crate::core::agent::id::AgentId::parse(name)
+        .map_err(|error| anyhow::anyhow!("agent registry key {name:?} is invalid: {error}"))?;
+    let canonical = agent_id.to_string();
+    if canonical != name {
+        anyhow::bail!("agent registry key {name:?} is not canonical; expected {canonical:?}");
     }
-    if name.len() > 63 {
-        anyhow::bail!(
-            "agent name '{name}' is too long ({} chars; max 63)",
-            name.len()
-        );
-    }
-    if !name
-        .chars()
-        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
-    {
-        anyhow::bail!(
-            "agent name '{name}' must contain only lowercase ASCII letters, digits, '_', or '-'"
-        );
-    }
-    // Reserved prefixes — the `a2a.*` namespace is owned by the A2A label
-    // schema (`shared/a2a_labels.rs`), and `easynet*` is reserved for the
-    // built-in MCP server identity. Both rules block the trivial collision
-    // case where a user names an agent after a system identifier.
-    if name.starts_with("a2a") || name.starts_with("easynet") {
-        anyhow::bail!("agent name '{name}' uses a reserved prefix ('a2a*' or 'easynet*')");
+    for segment in [agent_id.tenant.as_str(), agent_id.name.as_str()] {
+        // Reserved prefixes — the `a2a.*` namespace is owned by the A2A
+        // label schema (`shared/a2a_labels.rs`), and `easynet*` is
+        // reserved for the built-in MCP server identity. Both rules block
+        // the trivial collision case where a user names an agent after a
+        // system identifier.
+        if segment.starts_with("a2a") || segment.starts_with("easynet") {
+            anyhow::bail!(
+                "agent registry key {name:?} uses a reserved prefix ('a2a*' or 'easynet*')"
+            );
+        }
     }
     Ok(())
 }
@@ -534,7 +528,14 @@ mod tests {
 
     #[test]
     fn validate_agent_name_accepts_well_formed_names() {
-        for name in ["claude", "codex", "claude-2", "my_agent", "a", "agent42"] {
+        for name in [
+            "default/claude",
+            "default/codex",
+            "research/claude-2",
+            "default/my_agent",
+            "default/a",
+            "default/agent42",
+        ] {
             assert!(
                 validate_agent_name(name).is_ok(),
                 "expected '{name}' to be accepted"
@@ -555,8 +556,10 @@ mod tests {
         // member-call, or get re-interpreted by a shell expansion — block
         // them at the registration boundary.
         for bad in [
-            "claude/foo",
+            "claude",
+            "default/claude/foo",
             "../etc",
+            "default/../etc",
             "agent.name", // dot would collide with EAL `<agent>.chat` syntax
             "Claude",     // uppercase rejected for canonicalization
             "agent name",
@@ -577,7 +580,14 @@ mod tests {
         // `a2a.*` is the discovery-label namespace; `easynet*` is the
         // built-in MCP server identity. Both must not be shadowable by a
         // user-registered agent.
-        for reserved in ["a2a", "a2a-clone", "easynet", "easynet-fake"] {
+        for reserved in [
+            "default/a2a",
+            "default/a2a-clone",
+            "default/easynet",
+            "default/easynet-fake",
+            "a2a/team",
+            "easynet/team",
+        ] {
             assert!(
                 validate_agent_name(reserved).is_err(),
                 "expected reserved name '{reserved}' to be rejected"
@@ -606,7 +616,7 @@ mod tests {
         seed_registry(
             r#"{
                 "agents": {
-                    "alice": {
+                    "default/alice": {
                         "agent_type": "claude-code",
                         "command": "claude",
                         "args": ["-p"],
@@ -633,7 +643,7 @@ mod tests {
         seed_registry(
             r#"{
                 "agents": {
-                    "alice": {
+                    "default/alice": {
                         "schema_version": 2,
                         "agent_type": "claude-code",
                         "command": "claude"
@@ -677,7 +687,7 @@ mod tests {
         seed_registry(
             r#"{
                 "agents": {
-                    "alice": {
+                    "default/alice": {
                         "schema_version": 2,
                         "root_path": "/tmp/easynet-test-alice",
                         "agent_type": "claude-code",
@@ -687,7 +697,7 @@ mod tests {
             }"#,
         );
         let reg = load_agents().unwrap();
-        assert_eq!(reg.agents["alice"].schema_version, 2);
+        assert_eq!(reg.agents["default/alice"].schema_version, 2);
         let bak = agents_path().with_extension("json.v1.bak");
         assert!(!bak.exists(), "v2-on-disk registry must not trigger backup");
     }
@@ -698,7 +708,7 @@ mod tests {
         seed_registry(
             r#"{
                 "agents": {
-                    "alice": {
+                    "default/alice": {
                         "schema_version": 2,
                         "root_path": "/tmp/easynet-test-alice",
                         "agent_type": "claude-code"
@@ -707,12 +717,12 @@ mod tests {
             }"#,
         );
         let first = load_agents().unwrap();
-        assert!(first.agents.contains_key("alice"));
+        assert!(first.agents.contains_key("default/alice"));
 
         seed_registry(
             r#"{
                 "agents": {
-                    "bravo": {
+                    "default/bravo": {
                         "schema_version": 2,
                         "root_path": "/tmp/easynet-test-bravo",
                         "agent_type": "codex"
@@ -721,73 +731,22 @@ mod tests {
             }"#,
         );
         let second = load_agents().unwrap();
-        assert!(!second.agents.contains_key("alice"));
-        assert!(second.agents.contains_key("bravo"));
+        assert!(!second.agents.contains_key("default/alice"));
+        assert!(second.agents.contains_key("default/bravo"));
     }
 
-    /// Cross-module parity: every rule in
-    /// `registry::agents::validate_agent_name` must also be enforced
-    /// by `core::agent::spec::AgentSpec::validate`. If the two drift
-    /// (e.g. someone tightens this side but not the core side), a
-    /// user can write an `agent.toml` whose name parses locally but
-    /// gets rejected at registry insertion — a confusing half-state.
-    /// We pin the parity by feeding the registry's reject set into
-    /// the spec's validate and asserting every case also errors.
-    ///
-    /// Note we do NOT assert the error *messages* match — they are
-    /// allowed to differ (the spec names the file, the registry
-    /// names the name). Only the accept/reject decision matters.
     #[test]
-    fn agent_spec_and_registry_agent_name_rules_agree() {
+    fn registry_key_and_agent_spec_name_are_separate_boundaries() {
         use crate::core::agent::spec::{AgentSpec, RuntimeKind};
 
-        // Names that MUST be rejected by both sides.
-        let rejects = [
-            // empty
-            "",
-            // path / shell metas
-            "claude/foo",
-            "../etc",
-            "agent.name",
-            "agent name",
-            "agent;rm",
-            "agent$VAR",
-            "agent\n",
-            // non-ASCII / uppercase
-            "Claude",
-            "agent🤖",
-            // reserved prefixes
-            "a2a",
-            "a2a-clone",
-            "easynet",
-            "easynet-fake",
-        ];
-        for bad in rejects {
-            let registry_err = validate_agent_name(bad).is_err();
-            let spec_err = {
-                let mut s = AgentSpec::new("placeholder", RuntimeKind::ClaudeCode);
-                s.name = bad.to_string();
-                s.validate().is_err()
-            };
-            assert!(
-                registry_err && spec_err,
-                "parity broken on {bad:?}: registry_err={registry_err}, spec_err={spec_err}"
-            );
-        }
+        assert!(validate_agent_name("default/claude").is_ok());
+        assert!(validate_agent_name("claude").is_err());
 
-        // Names that MUST be accepted by both sides.
-        let accepts = ["claude", "codex", "claude-2", "my_agent", "a", "agent42"];
-        for good in accepts {
-            let registry_ok = validate_agent_name(good).is_ok();
-            let spec_ok = {
-                let mut s = AgentSpec::new("placeholder", RuntimeKind::ClaudeCode);
-                s.name = good.to_string();
-                s.validate().is_ok()
-            };
-            assert!(
-                registry_ok && spec_ok,
-                "parity broken on {good:?}: registry_ok={registry_ok}, spec_ok={spec_ok}"
-            );
-        }
+        let mut spec = AgentSpec::new("placeholder", RuntimeKind::ClaudeCode);
+        spec.name = "claude".to_string();
+        assert!(spec.validate().is_ok());
+
+        spec.name = "default/claude".to_string();
+        assert!(spec.validate().is_err());
     }
 }

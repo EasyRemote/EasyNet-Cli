@@ -1562,12 +1562,13 @@ mod tests {
 
     /// Register an Agent in the daemon-owned registry under a temp HOME.
     fn register_test_agent(name: &str) {
+        use crate::core::agent::id::AgentId;
         use crate::daemon::persistence::agent_registry::{AgentEntry, AgentRegistry, AgentType};
+        let registry_key = AgentId::parse(name).expect("test agent id").to_string();
         let mut registry = AgentRegistry::default();
-        registry.agents.insert(
-            name.to_string(),
-            AgentEntry::new(AgentType::ClaudeCode, None),
-        );
+        registry
+            .agents
+            .insert(registry_key, AgentEntry::new(AgentType::ClaudeCode, None));
         crate::daemon::persistence::agent_registry::save_agents(&registry)
             .expect("save test agent");
     }

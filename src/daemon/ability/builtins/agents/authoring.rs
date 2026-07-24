@@ -21,7 +21,7 @@ use crate::daemon::execution::mission::directory::{AgentDirectory, ABILITY_MANIF
 use crate::daemon::persistence::agent_aggregate::{
     AgentAggregateRepository, AgentRegisteredAgentLoadError, AgentRegisteredWorkspaceLookupError,
 };
-use crate::daemon::persistence::agent_registry::{self as agents, AgentEntry};
+use crate::daemon::persistence::agent_registry::AgentEntry;
 use crate::daemon::persistence::config;
 
 use super::lifecycle::SharedHotRegistrarCell;
@@ -274,8 +274,8 @@ fn put_agent_abilities_handler(
     let request: PutAgentAbilityArgs = serde_json::from_value(args)
         .map_err(|error| anyhow::anyhow!("agent.ability.put: invalid request: {error}"))?;
     let name = request.name.trim();
-    agents::validate_agent_name(name)
-        .map_err(|error| anyhow::anyhow!("agent.ability.put: invalid agent name: {error:#}"))?;
+    crate::core::agent::id::AgentId::parse(name)
+        .map_err(|error| anyhow::anyhow!("agent.ability.put: invalid agent identifier: {error}"))?;
     if request.manifests_toml.is_empty() {
         anyhow::bail!("agent.ability.put: `manifests_toml` must contain at least one manifest");
     }
@@ -296,6 +296,11 @@ fn put_agent_abilities_handler(
             AgentRegisteredWorkspaceLookupError::Missing { .. },
         )) => {
             anyhow::bail!("agent.ability.put: agent {name:?} is not registered");
+        }
+        Err(AgentRegisteredAgentLoadError::Lookup(
+            AgentRegisteredWorkspaceLookupError::InvalidOwnerId { reason, .. },
+        )) => {
+            anyhow::bail!("agent.ability.put: invalid agent identifier {name:?}: {reason}");
         }
         Err(AgentRegisteredAgentLoadError::Lookup(
             AgentRegisteredWorkspaceLookupError::InvalidWorkspace { .. },

@@ -3949,8 +3949,12 @@ if ability_dispatch.exists():
             "hot Agent authority enrollment must consume typed hosted identity lookup",
         ),
         (
-            "snapshot.has_registered_agent(agent)",
-            "hot Agent authority enrollment must verify durable registry membership from the snapshot",
+            "let registry_key = crate::core::agent::id::AgentId::parse(agent)",
+            "hot Agent authority enrollment must project the surface name to the canonical registry key",
+        ),
+        (
+            "snapshot.has_registered_agent(&registry_key)",
+            "hot Agent authority enrollment must verify durable registry membership by canonical registry key",
         ),
         (
             "snapshot.host_device_agent_ura()",

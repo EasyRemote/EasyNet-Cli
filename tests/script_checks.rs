@@ -289,6 +289,21 @@ fn mission_discuss_subject_boundary_script_holds() {
 }
 
 #[test]
+fn mission_runs_cli_facade_boundary_script_holds() {
+    // Pins cli::mission_runs to the read/cancel facade. Daemon execution
+    // service types must not leak through a wildcard re-export.
+    run_bash_script("tests/scripts/test_check_mission_runs_cli_facade_boundary.sh");
+}
+
+#[test]
+fn agent_registry_key_boundary_script_holds() {
+    // Pins persisted Agent registry keys to canonical tenant/name form while
+    // runtime catalogue and ability projection use the Agent surface name.
+    // No EAL or hot-registration fallback may re-admit bare registry rows.
+    run_bash_script("tests/scripts/test_check_agent_registry_key_boundary.sh");
+}
+
+#[test]
 fn cli_timeout_policy_boundary_script_holds() {
     // Pins CLI timeout semantics to named policies so transport guards and
     // runtime-default request deadlines do not fork at call sites.

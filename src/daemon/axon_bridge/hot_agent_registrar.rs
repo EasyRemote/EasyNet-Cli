@@ -135,6 +135,23 @@ fn dispatch_key_for_hosted_agent_runtime_key(
     ))
 }
 
+fn hot_agent_runtime_surface_name(agent_identifier: &str) -> Result<String, String> {
+    if agent_identifier.contains('/') {
+        let agent_id = crate::core::agent::id::AgentId::parse(agent_identifier)
+            .map_err(|error| error.to_string())?;
+        if agent_id.to_string() != agent_identifier {
+            return Err(format!(
+                "registry key is not canonical; expected {:?}",
+                agent_id.to_string()
+            ));
+        }
+        return Ok(agent_id.name);
+    }
+    crate::core::agent::id::AgentId::new(crate::core::agent::id::DEFAULT_TENANT, agent_identifier)
+        .map(|agent| agent.name)
+        .map_err(|error| error.to_string())
+}
+
 async fn hosted_agent_runtime_ability_uras_for_agent(
     runtime: &Arc<LocalRuntime>,
     agent: &str,
@@ -255,6 +272,8 @@ pub enum HotAgentRegistrarError {
     NotReady {
         readiness: HotAgentRegistrarReadiness,
     },
+    #[error("hosted Agent identifier {agent:?} is invalid for runtime registration: {reason}")]
+    InvalidAgentIdentifier { agent: String, reason: String },
     #[error("hosted Agent name {agent:?} claims the reserved device owner namespace")]
     ReservedOwner { agent: String },
     #[error("hosted Agent {agent:?} authority enrollment failed: {reason}")]
@@ -559,6 +578,26 @@ impl HotAgentRegistrar {
         entry: &AgentEntry,
         previous: Option<&AgentEntry>,
     ) -> Result<HotAgentRuntimeSyncOutcome, HotAgentRegistrarError> {
+        if name_claims_reserved_device_owner(name.trim()) {
+            crate::op_event!(
+                component = axon_bridge,
+                kind = hot_agent_register_reserved_owner_rejected,
+                agent = name.trim(),
+                message = "`device.` is the reserved owner token for \
+                          device-sponsored System Agents (RFC-005 §3.1.2); \
+                          hosted user agents cannot register under it",
+            );
+            return Err(HotAgentRegistrarError::ReservedOwner {
+                agent: name.trim().to_string(),
+            });
+        }
+        let surface_name = hot_agent_runtime_surface_name(name).map_err(|reason| {
+            HotAgentRegistrarError::InvalidAgentIdentifier {
+                agent: name.to_string(),
+                reason,
+            }
+        })?;
+        let name = surface_name.as_str();
         // DEC-F048 enforcement gate: the registrar owns hosted
         // agents' owner-local public namespace before mapping it to
         // LocalRuntime Ability URA keys. It refuses to mint rows
@@ -1300,7 +1339,9 @@ mod tests {
         .expect("seed local-agents.json");
         let mut registry = crate::daemon::persistence::agent_registry::AgentRegistry::default();
         registry.agents.insert(
-            name.to_string(),
+            crate::core::agent::id::AgentId::parse(name)
+                .expect("test agent name")
+                .to_string(),
             AgentEntry::new(AgentType::ClaudeCode, None),
         );
         crate::daemon::persistence::agent_registry::save_agents(&registry)
