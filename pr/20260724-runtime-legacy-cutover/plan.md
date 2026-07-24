@@ -260,3 +260,48 @@ architecture rather than add feature surface.
   - `tools/scripts/check-canonical-runtime-convergence-v2.sh`
   - `tools/scripts/check-architecture-convergence.sh`
   - `git diff --check`
+
+## Iteration 8 candidate policy
+
+- Focus on daemon transport dispatchers. codegraph found the same optional
+  runtime assembly branch still present in unary, server-stream, and bidi
+  dispatchers through direct `RuntimePlane::local_runtime()` option handling.
+- The root abstraction problem is that `RuntimePlane` owns the daemon runtime
+  assembly state but exposes only an optional getter to production dispatchers.
+  That lets each transport invent its own "not wired" failure and preserves the
+  idea that LocalRuntime is an optional side path.
+- The intended cutover is to add fallible `RuntimePlane` requirement helpers for
+  LocalRuntime and runtime admission, then migrate unary/stream/bidi dispatchers
+  through that single boundary.
+- Session-control hub realm absence is also a canonical session precondition,
+  not a wiring compatibility state; production diagnostics should say the
+  carrier lacks session realm context.
+- Verification must cover focused daemon route/transport tests, rustfmt, SPEC
+  v2, architecture convergence, and whitespace checks.
+
+## Iteration 8 decision log
+
+- Added `RuntimePlane::require_local_runtime` as the single production boundary
+  for daemon transport handlers that require the canonical daemon runtime
+  assembly.
+- Migrated unary exact routes, unary local abilities, server-stream exact
+  routes, server-stream local abilities, bidi exact routes, and bidi local
+  abilities away from direct `local_runtime()` option handling.
+- Updated runtime admission graph absence to report a canonical daemon runtime
+  assembly requirement instead of an optional wiring hole.
+- Updated session-control hub realm absence to report missing canonical session
+  realm context.
+- Updated principal enrollment proof handling to require a canonical
+  PrincipalLifecycle provider instead of saying the provider is "not wired".
+- SPEC v2 now checks the RuntimePlane helper, rejects production optional
+  runtime wiring wording in unary/stream/bidi dispatchers, and prevents direct
+  transport-level Option-to-Status conversion for LocalRuntime.
+- Verification passed:
+  - `cargo test -q invoke_stream_dispatches_registered_local_stream_ability`
+  - `cargo test -q invoke_stream_dispatches_remote_selected_route_over_presence_session`
+  - `cargo test -q exact_bidi_route_family_registers_hub_owned_session_open`
+  - `cargo test -q local_bidi_down_stream_preserves_supplied_initial_frame_before_handler_frames`
+  - `cargo fmt --check`
+  - `tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - `tools/scripts/check-architecture-convergence.sh`
+  - `git diff --check`

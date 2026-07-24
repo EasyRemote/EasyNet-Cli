@@ -106,13 +106,9 @@ impl StreamDispatcher {
         route: DaemonStreamRoute,
         request: &InvokeServerStreamRequest,
     ) -> Result<Response<BoxedDownStream<InvokeStreamChunk>>, Status> {
-        let Some(runtime) = self.runtime.local_runtime() else {
-            return Err(Status::failed_precondition(format!(
-                "InvokeStream: daemon stream route `{}` cannot run because Axon LocalRuntime \
-                 is not wired at boot",
-                route.name()
-            )));
-        };
+        let runtime = self
+            .runtime
+            .require_local_runtime(format!("InvokeStream daemon route `{}`", route.name()))?;
         let local_system_ingress = self
             .admission
             .accepts_local_system_envelope(request.envelope.as_ref());
@@ -226,12 +222,9 @@ impl StreamDispatcher {
     ) -> Result<Response<BoxedDownStream<InvokeStreamChunk>>, Status> {
         let ability =
             function_name_from_invocation_target("InvokeStream", request.target.as_ref())?;
-        let Some(runtime) = self.runtime.local_runtime() else {
-            return Err(Status::failed_precondition(format!(
-                "InvokeStream: ability `{ability}` cannot run because Axon LocalRuntime \
-                 is not wired at boot"
-            )));
-        };
+        let runtime = self
+            .runtime
+            .require_local_runtime(format!("InvokeStream ability `{ability}`"))?;
         let bound_ability = RuntimeBoundAbility::from_selected_route(
             "InvokeStream",
             &runtime,

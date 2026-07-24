@@ -280,8 +280,8 @@ fn session_control_kind_for_hub(
         .map(str::trim)
         .filter(|realm| !realm.is_empty())
         .ok_or_else(|| {
-            "session_request: hub session_realm is not wired; cannot validate request \
-             ability_ura"
+            "session_request requires canonical hub session realm context before validating \
+             request ability_ura"
                 .to_string()
         })?;
     let hub_ura = crate::core::ura::hub_ura(realm);
@@ -446,12 +446,9 @@ impl BidiDispatcher {
         envelope_open: &EnvelopeOpen,
         up: Streaming<InvokeBidiUp>,
     ) -> Result<Response<BoxedDownStream<InvokeBidiDown>>, Status> {
-        let runtime = self.runtime.local_runtime().ok_or_else(|| {
-            Status::failed_precondition(format!(
-                "{} exact bidi route requires shared Axon LocalRuntime",
-                route.name()
-            ))
-        })?;
+        let runtime = self
+            .runtime
+            .require_local_runtime(format!("{} exact bidi route", route.name()))?;
         crate::daemon::invocation::dispatch::daemon_route_runtime::DaemonRouteRuntimeAdapter::new(
             runtime,
             self.runtime.cancellations.clone(),
@@ -1152,13 +1149,10 @@ impl BidiDispatcher {
             route_ura = selected_route.route_ura.as_str(),
         );
 
-        let Some(runtime) = self.runtime.local_runtime() else {
-            return Err(Status::failed_precondition(format!(
-                "InvokeBidi: ability `{}` cannot run because Axon LocalRuntime \
-                 is not wired at boot",
-                selected_route.dispatch_name
-            )));
-        };
+        let runtime = self.runtime.require_local_runtime(format!(
+            "InvokeBidi ability `{}`",
+            selected_route.dispatch_name
+        ))?;
         let bound_ability = RuntimeBoundAbility::from_selected_route(
             "InvokeBidi",
             &runtime,

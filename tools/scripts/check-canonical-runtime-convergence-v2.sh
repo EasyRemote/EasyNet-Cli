@@ -8334,6 +8334,64 @@ for required_test in (
 PY
 }
 
+check_runtime_plane_requirement_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local deps="$cli_root/src/daemon/invocation/dispatch/deps.rs"
+  local unary="$cli_root/src/daemon/invocation/dispatch/unary_dispatcher.rs"
+  local stream="$cli_root/src/daemon/invocation/streams/stream_dispatcher.rs"
+  local bidi="$cli_root/src/daemon/invocation/bidi/bidi_dispatcher.rs"
+
+  for path in "$deps" "$unary" "$stream" "$bidi"; do
+    [[ -f "$path" ]] || fail "runtime plane requirement source missing: ${path#$cli_root/}"
+  done
+
+  "$PYTHON_BIN" - "$deps" "$unary" "$stream" "$bidi" <<'PY'
+import sys
+from pathlib import Path
+
+deps, unary, stream, bidi = [
+    Path(path).read_text(encoding="utf-8", errors="replace")
+    for path in sys.argv[1:]
+]
+
+for required, code in (
+    ("pub(crate) fn require_local_runtime(", "require_local_runtime_missing"),
+    ("requires canonical daemon runtime assembly: missing LocalRuntime", "runtime_assembly_diagnostic_missing"),
+    ("canonical daemon runtime assembly requires runtime admission graph", "runtime_admission_requirement_missing"),
+):
+    if required not in deps:
+        raise SystemExit(f"runtime_plane_requirement:{code}")
+
+for name, text in (
+    ("unary", unary),
+    ("stream", stream),
+    ("bidi", bidi),
+):
+    for retired in (
+        "not wired",
+        "is not wired at boot",
+        "LocalRuntime is not wired",
+        "requires shared Axon LocalRuntime",
+        "session_realm is not wired",
+    ):
+        if retired in text:
+            raise SystemExit(f"runtime_plane_requirement:{name}:retired_optional_runtime_wording:{retired}")
+    if ".local_runtime().ok_or_else" in text:
+        raise SystemExit(f"runtime_plane_requirement:{name}:direct_option_to_status")
+    if "let Some(runtime) = self.runtime.local_runtime()" in text:
+        raise SystemExit(f"runtime_plane_requirement:{name}:manual_optional_runtime_branch")
+    if "require_local_runtime(" not in text:
+        raise SystemExit(f"runtime_plane_requirement:{name}:missing_runtime_requirement_helper_call")
+
+if "session_request requires canonical hub session realm context" not in bidi:
+    raise SystemExit("runtime_plane_requirement:bidi:session_realm_requirement_missing")
+if "PrincipalLifecycle is not wired" in unary:
+    raise SystemExit("runtime_plane_requirement:unary:principal_lifecycle_optional_wording")
+if "requires canonical PrincipalLifecycle provider" not in unary:
+    raise SystemExit("runtime_plane_requirement:unary:principal_lifecycle_requirement_missing")
+PY
+}
+
 check_catalog_exact_runtime_key_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local dispatch="$cli_root/src/daemon/ability/dispatch.rs"
@@ -16805,6 +16863,7 @@ EOF
   check_ffi_last_error_typed_tls_contract
   check_canonical_ability_catalog_projection_contract
   check_daemon_runtime_assembly_contract
+  check_runtime_plane_requirement_contract
   check_catalog_exact_runtime_key_contract
   check_federation_directory_device_projection_contract
   check_cli_device_directory_projection_contract
@@ -16987,6 +17046,7 @@ check_ffi_callback_terminal_projection_contract
 check_ffi_last_error_typed_tls_contract
 check_canonical_ability_catalog_projection_contract
 check_daemon_runtime_assembly_contract
+check_runtime_plane_requirement_contract
 check_catalog_exact_runtime_key_contract
 check_federation_directory_device_projection_contract
 check_cli_device_directory_projection_contract

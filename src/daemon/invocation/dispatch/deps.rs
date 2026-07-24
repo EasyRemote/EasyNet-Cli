@@ -183,6 +183,17 @@ impl RuntimePlane {
         }
     }
 
+    pub(crate) fn require_local_runtime(
+        &self,
+        context: impl std::fmt::Display,
+    ) -> Result<Arc<axon_sdk::invocation::LocalRuntime>, tonic::Status> {
+        self.local_runtime().ok_or_else(|| {
+            tonic::Status::failed_precondition(format!(
+                "{context} requires canonical daemon runtime assembly: missing LocalRuntime"
+            ))
+        })
+    }
+
     pub(crate) fn daemon_admission_graph(
         &self,
     ) -> Option<Arc<crate::daemon::axon_bridge::runtime_factory::DaemonRuntimeAdmissionGraph>> {
@@ -205,7 +216,7 @@ impl RuntimePlane {
             .map(|graph| graph.runtime_admission())
             .ok_or_else(|| {
                 tonic::Status::failed_precondition(
-                    "daemon LocalRuntime runtime admission graph is not wired",
+                    "canonical daemon runtime assembly requires runtime admission graph",
                 )
             })
     }

@@ -262,7 +262,7 @@ fn admitted_join_principal_owner(
     };
     let lifecycle = lifecycle.ok_or_else(|| {
         Status::failed_precondition(
-            "federation.join: principal enrollment proof supplied but PrincipalLifecycle is not wired",
+            "federation.join principal enrollment proof requires canonical PrincipalLifecycle provider",
         )
     })?;
     lifecycle.reader().verify_join_enrollment_proof(
@@ -452,12 +452,9 @@ impl UnaryDispatcher {
         request: &InvokeRequest,
         ingress: crate::daemon::invocation::dispatch::daemon_route_runtime::DaemonRouteIngress,
     ) -> Result<Response<InvokeResponse>, Status> {
-        let runtime = self.runtime.local_runtime().ok_or_else(|| {
-            Status::failed_precondition(format!(
-                "easynet-daemon: exact route `{}` cannot run because Axon LocalRuntime is not wired at boot",
-                route.name()
-            ))
-        })?;
+        let runtime = self
+            .runtime
+            .require_local_runtime(format!("easynet-daemon exact route `{}`", route.name()))?;
         crate::daemon::invocation::dispatch::daemon_route_runtime::DaemonRouteRuntimeAdapter::new(
             runtime,
             self.runtime.cancellations.clone(),
@@ -759,14 +756,12 @@ impl UnaryDispatcher {
                 false,
             );
         }
-        let Some(runtime) = self.runtime.local_runtime() else {
-            return (
-                Err(Status::failed_precondition(format!(
-                    "easynet-daemon: ability `{ability}` cannot run because Axon LocalRuntime \
-                     is not wired at boot"
-                ))),
-                false,
-            );
+        let runtime = match self
+            .runtime
+            .require_local_runtime(format!("easynet-daemon ability `{ability}`"))
+        {
+            Ok(runtime) => runtime,
+            Err(status) => return (Err(status), false),
         };
         let bound_ability = match RuntimeBoundAbility::from_selected_route(
             "easynet-daemon",
