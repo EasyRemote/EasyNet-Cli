@@ -583,10 +583,10 @@ fn upsert_hub_trusted_agent(
     })
 }
 
-/// Generic [[trusted_agent]] upsert. Device rows stay append-only;
-/// hub rows are upgraded in place so legacy v4.1.4 entries gain the
-/// schema-B `origin_realm` / `hub_endpoint` / `tls_ca_pem_path`
-/// fields required by device-mode `session.open` bootstrap.
+/// Generic [[trusted_agent]] upsert. The row keyed by `agent_ura` is
+/// materialized through one canonical path for every role. Existing
+/// rows preserve their original `added_at_unix_ms` when present, but
+/// stale key, role, and role-specific schema fields are replaced.
 struct TrustedAgentUpsert<'a> {
     raw: &'a str,
     agent_ura: &'a str,
@@ -598,8 +598,18 @@ struct TrustedAgentUpsert<'a> {
     added_at_unix_ms: u64,
 }
 
+struct TrustedAgentRow<'a> {
+    agent_ura: &'a str,
+    public_key_b64: &'a str,
+    role: &'a str,
+    origin_realm: Option<&'a str>,
+    hub_endpoint: Option<&'a str>,
+    tls_ca_pem_path: Option<&'a Path>,
+    added_at_unix_ms: u64,
+}
+
 fn upsert_trusted_agent_inner(upsert: TrustedAgentUpsert<'_>) -> anyhow::Result<String> {
-    use toml_edit::{value, ArrayOfTables, DocumentMut, Item, Table};
+    use toml_edit::{ArrayOfTables, DocumentMut, Item};
 
     let TrustedAgentUpsert {
         raw,
@@ -635,45 +645,54 @@ fn upsert_trusted_agent_inner(upsert: TrustedAgentUpsert<'_>) -> anyhow::Result<
             .map(|s| s == agent_ura)
             .unwrap_or(false)
     });
+    let existing_added_at = existing_index
+        .and_then(|index| agents.get(index))
+        .and_then(|existing| existing.get("added_at_unix_ms"))
+        .and_then(|value| value.as_integer())
+        .and_then(|value| u64::try_from(value).ok())
+        .unwrap_or(added_at_unix_ms);
+    let replacement = trusted_agent_row(TrustedAgentRow {
+        agent_ura,
+        public_key_b64,
+        role,
+        origin_realm,
+        hub_endpoint,
+        tls_ca_pem_path,
+        added_at_unix_ms: existing_added_at,
+    });
+
     if let Some(existing_index) = existing_index {
         let existing = agents
             .get_mut(existing_index)
             .ok_or_else(|| anyhow::anyhow!("trusted_agent index disappeared during update"))?;
-        if role != "hub" {
-            return Ok(doc.to_string());
-        }
-        existing.insert("public_key_b64", value(public_key_b64));
-        existing.insert("role", value(role));
-        if let Some(v) = origin_realm {
-            existing.insert("origin_realm", value(v));
-        }
-        if let Some(v) = hub_endpoint {
-            existing.insert("hub_endpoint", value(v));
-        }
-        if let Some(v) = tls_ca_pem_path {
-            existing.insert("tls_ca_pem_path", value(v.display().to_string()));
-        }
+        *existing = replacement;
         return Ok(doc.to_string());
     }
 
     // No existing entry: append a fresh row.
-    let mut row = Table::new();
-    row.insert("agent_ura", value(agent_ura));
-    row.insert("public_key_b64", value(public_key_b64));
-    row.insert("role", value(role));
-    row.insert("added_at_unix_ms", value(added_at_unix_ms as i64));
-    if let Some(v) = origin_realm {
-        row.insert("origin_realm", value(v));
-    }
-    if let Some(v) = hub_endpoint {
-        row.insert("hub_endpoint", value(v));
-    }
-    if let Some(v) = tls_ca_pem_path {
-        row.insert("tls_ca_pem_path", value(v.display().to_string()));
-    }
-    agents.push(row);
+    agents.push(replacement);
 
     Ok(doc.to_string())
+}
+
+fn trusted_agent_row(upsert: TrustedAgentRow<'_>) -> toml_edit::Table {
+    use toml_edit::{value, Table};
+
+    let mut row = Table::new();
+    row.insert("agent_ura", value(upsert.agent_ura));
+    row.insert("public_key_b64", value(upsert.public_key_b64));
+    row.insert("role", value(upsert.role));
+    row.insert("added_at_unix_ms", value(upsert.added_at_unix_ms as i64));
+    if let Some(v) = upsert.origin_realm {
+        row.insert("origin_realm", value(v));
+    }
+    if let Some(v) = upsert.hub_endpoint {
+        row.insert("hub_endpoint", value(v));
+    }
+    if let Some(v) = upsert.tls_ca_pem_path {
+        row.insert("tls_ca_pem_path", value(v.display().to_string()));
+    }
+    row
 }
 
 /// TOML edit step: insert-or-update `[daemon.federated_peers]
@@ -1047,17 +1066,16 @@ listen_tcp = "127.0.0.1:50443"
     }
 
     #[test]
-    fn upsert_self_trusted_agent_idempotent_when_ura_already_present() {
-        // An existing row with our URA is left untouched even if
-        // the pubkey differs — the canonical
-        // `identity.register_pubkey` writer (or an operator
-        // edit) is authoritative.
+    fn upsert_self_trusted_agent_normalizes_existing_device_row() {
         let raw = r#"
 [[trusted_agent]]
 agent_ura = "easynet:///r/tenant-a/device/dev-1"
-public_key_b64 = "OPERATOR-WRITTEN-VALUE"
-role = "device"
+public_key_b64 = "STALE-KEY"
+role = "hub"
 added_at_unix_ms = 100
+origin_realm = "old"
+hub_endpoint = "https://old.example"
+tls_ca_pem_path = "/tmp/old-ca.pem"
 "#;
         let updated = upsert_self_trusted_agent(
             raw,
@@ -1065,12 +1083,33 @@ added_at_unix_ms = 100
             "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
             999_999_999_999,
         )
-        .expect("idempotent path");
-        // Pubkey untouched, no second row appended.
-        assert!(updated.contains("OPERATOR-WRITTEN-VALUE"));
-        assert!(!updated.contains("AAAAAAAA"));
+        .expect("canonical replacement path");
         let arr_count = updated.matches("[[trusted_agent]]").count();
         assert_eq!(arr_count, 1, "no duplicate row appended");
+        let parsed: toml::Value = updated.parse().expect("parses");
+        let row = parsed
+            .get("trusted_agent")
+            .and_then(|v| v.as_array())
+            .and_then(|rows| rows.first())
+            .and_then(|v| v.as_table())
+            .expect("trusted_agent row");
+        assert_eq!(
+            row.get("public_key_b64").and_then(|v| v.as_str()),
+            Some("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="),
+            "stale key must be replaced by canonical join-time key projection"
+        );
+        assert_eq!(row.get("role").and_then(|v| v.as_str()), Some("device"));
+        assert_eq!(
+            row.get("added_at_unix_ms").and_then(|v| v.as_integer()),
+            Some(100),
+            "existing added_at_unix_ms is stable across canonical replacement"
+        );
+        assert!(
+            row.get("origin_realm").is_none()
+                && row.get("hub_endpoint").is_none()
+                && row.get("tls_ca_pem_path").is_none(),
+            "device row must not retain hub-only schema fields: {row:?}"
+        );
     }
 
     #[test]
@@ -1098,6 +1137,58 @@ added_at_unix_ms = 1
             .and_then(|v| v.as_array())
             .expect("trusted_agent array");
         assert_eq!(arr.len(), 2, "preserves existing row + appends new");
+    }
+
+    #[test]
+    fn upsert_hub_trusted_agent_normalizes_existing_hub_row() {
+        let raw = r#"
+[[trusted_agent]]
+agent_ura = "easynet:///r/tenant-a/authority"
+public_key_b64 = "STALE-HUB-KEY"
+role = "device"
+added_at_unix_ms = 200
+"#;
+        let ca_path = Path::new("/tmp/tenant-a.ca.pem");
+        let updated = upsert_hub_trusted_agent(
+            raw,
+            "easynet:///r/tenant-a/authority",
+            "HUB-KEY",
+            "tenant-a",
+            "https://hub-a:50443",
+            Some(ca_path),
+            1_700_000_000_000,
+        )
+        .expect("canonical hub replacement");
+
+        let parsed: toml::Value = updated.parse().expect("parses");
+        let row = parsed
+            .get("trusted_agent")
+            .and_then(|v| v.as_array())
+            .and_then(|rows| rows.first())
+            .and_then(|v| v.as_table())
+            .expect("trusted_agent row");
+        assert_eq!(
+            row.get("public_key_b64").and_then(|v| v.as_str()),
+            Some("HUB-KEY")
+        );
+        assert_eq!(row.get("role").and_then(|v| v.as_str()), Some("hub"));
+        assert_eq!(
+            row.get("added_at_unix_ms").and_then(|v| v.as_integer()),
+            Some(200),
+            "existing added_at_unix_ms is stable across canonical replacement"
+        );
+        assert_eq!(
+            row.get("origin_realm").and_then(|v| v.as_str()),
+            Some("tenant-a")
+        );
+        assert_eq!(
+            row.get("hub_endpoint").and_then(|v| v.as_str()),
+            Some("https://hub-a:50443")
+        );
+        assert_eq!(
+            row.get("tls_ca_pem_path").and_then(|v| v.as_str()),
+            Some("/tmp/tenant-a.ca.pem")
+        );
     }
 
     #[test]
