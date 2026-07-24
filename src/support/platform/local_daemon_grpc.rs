@@ -419,22 +419,6 @@ fn ensure_local_daemon_accepting() -> anyhow::Result<std::path::PathBuf> {
 }
 
 #[cfg(feature = "axon-pb")]
-pub(crate) fn invoke_local_daemon_ability(
-    function_name: &str,
-    payload_json: serde_json::Value,
-) -> anyhow::Result<serde_json::Value> {
-    ensure_local_daemon_accepting()?;
-    let subject_ura = local_daemon_identity_ura()?;
-    let tuple_plan = LocalDaemonLoopbackTuplePlan::local_root_for_subject(
-        function_name,
-        payload_json,
-        &subject_ura,
-        Duration::from_secs(30),
-    )?;
-    invoke_local_daemon_ability_with_tuple_plan(tuple_plan)
-}
-
-#[cfg(feature = "axon-pb")]
 pub(crate) fn invoke_local_daemon_system_ability_root_for_subject_timeout(
     function_name: &str,
     payload_json: serde_json::Value,
@@ -1688,19 +1672,6 @@ pub(crate) fn invoke_local_daemon_ability_targeted_with_hosted_agent_delegation(
          rebuild with `cargo build --features axon-pb`",
         function_name
     )
-}
-
-#[cfg(not(feature = "axon-pb"))]
-pub(crate) fn invoke_local_daemon_ability(
-    function_name: &str,
-    _payload_json: serde_json::Value,
-) -> anyhow::Result<serde_json::Value> {
-    Err(anyhow::Error::new(
-        crate::support::platform::local_invoke::LocalInvokeFailure::DaemonOffline(format!(
-            "invoking `{function_name}` through the local Axon daemon requires the `axon-pb` \
-             feature; rebuild with `cargo build --features axon-pb`"
-        )),
-    ))
 }
 
 #[cfg(not(feature = "axon-pb"))]

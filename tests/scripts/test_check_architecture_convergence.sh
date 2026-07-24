@@ -885,6 +885,10 @@ EOF
 use crate::daemon::persistence::agent_aggregate::AgentAggregateRepository;
 
 fn describe_handler() -> usize {
+    let _scope = serde_json::json!({
+        "owner_ura": "easynet:///r/example/device/dev-a",
+        "ability_ura": "easynet:///r/example/ability/device.dev-a.meta.list_abilities",
+    });
     AgentAggregateRepository::load_hosted_identity_status()
         .map(|status| status.hosted_agent_count())
         .unwrap_or_default()
@@ -1970,9 +1974,24 @@ fn invocation_attempt_audit_status(error: Error) -> Status {
     Status::internal(format!("invocation attempt audit unavailable: {error}"))
 }
 
+struct RuntimeAdmissionPlane {
+    facade: AdmissionFacade,
+}
+
+impl RuntimeAdmissionPlane {
+    fn with_transport_boundary(mut self, boundary: AdmissionTransportBoundary) -> Self {
+        self.facade = self.facade.with_transport_boundary(boundary);
+        self
+    }
+}
+
+struct DaemonInvocationService {
+    admission_plane: RuntimeAdmissionPlane,
+}
+
 impl DaemonInvocationService {
     pub fn with_transport_boundary(mut self, boundary: AdmissionTransportBoundary) -> Self {
-        self.admission = self.admission.with_transport_boundary(boundary);
+        self.admission_plane = self.admission_plane.with_transport_boundary(boundary);
         self
     }
 
@@ -2500,6 +2519,16 @@ fn signed_invocation_prepares_independent_cancel_command() {
 }
 EOF
   cat >"$CLI/src/daemon/invocation/dispatch/client.rs" <<'EOF'
+struct InvocationOutcome;
+
+impl InvocationOutcome {
+    /// Read the canonical terminal-result projection.
+    fn result(&self) {}
+
+    /// Consume the outcome and return its canonical terminal-result projection.
+    fn into_result(self) {}
+}
+
 impl RuntimeClient {
     pub async fn request_cancel_signed(
         &self,
@@ -2904,12 +2933,6 @@ impl LocalDaemonLoopbackSubjectPolicy {
     }
 }
 
-fn invoke_local_daemon_ability() -> anyhow::Result<()> {
-    let subject_ura = local_daemon_identity_ura()?;
-    let _plan = LocalDaemonLoopbackTuplePlan::local_root_for_subject(&subject_ura)?;
-    Ok(())
-}
-
 fn loopback_invoke_request_does_not_pre_resolve_descriptor_ref() {}
 fn loopback_tuple_plan_requires_explicit_targeted_subject() {}
 EOF
@@ -3278,7 +3301,8 @@ expect_fail \
   "R7_UNARY_RESULT_RECEIPT_ALIAS"
 
 make_good_fixture
-cat >"$CLI/sdk/python/easynet_sdk/direct_runtime.py" <<'EOF'
+mkdir -p "$CLI/sdk/python/easynet_sdk/providers/runtime"
+cat >"$CLI/sdk/python/easynet_sdk/providers/runtime/direct.py" <<'EOF'
 def emit_unary_result(terminal_receipt):
     return {"receipt": terminal_receipt}
 EOF
@@ -3307,7 +3331,8 @@ expect_fail \
   "R11_STREAM_BIDI_RECEIPT_ALIAS"
 
 make_good_fixture
-cat >"$CLI/sdk/python/easynet_sdk/direct_runtime.py" <<'EOF'
+mkdir -p "$CLI/sdk/python/easynet_sdk/providers/runtime"
+cat >"$CLI/sdk/python/easynet_sdk/providers/runtime/direct.py" <<'EOF'
 def emit_stream_event(event, terminal_receipt):
     event["receipt"] = terminal_receipt
 

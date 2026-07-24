@@ -298,33 +298,6 @@ pub fn classify_invoke_failure(err: &anyhow::Error) -> LocalInvokeFailureClass {
     LocalInvokeFailureClass::Failed
 }
 
-/// Invoke an ability against the local daemon's Axon runtime.
-///
-/// `ability` is the wire-level qualified name (e.g. `easynet.discover`,
-/// `claude.weather`, `observe.health`). `args` is forwarded as-is —
-/// the helper does not validate the shape; the daemon-side handler
-/// is the authority on argument validation, and a CLI-side
-/// pre-check would only drift.
-///
-/// On success returns the raw value (whatever shape the handler
-/// produced). On error returns a typed `anyhow::Error` with the
-/// daemon-side `code` + `message` rendered into the message — the
-/// CLI's outer layer can surface that verbatim or pattern-match if
-/// it needs typed handling.
-///
-/// **Canonical entry point for the "one CLI subcommand = one
-/// ability invoke" contract.** CLI surfaces that invoke daemon-self
-/// root abilities use this function. Surfaces that intentionally bind
-/// a daemon-system root invocation to an explicit subject use
-/// [`LocalDaemonSystemAbilityIssuer`]. The indirection looks redundant
-/// — the body is one line — but it matters: the day the local-ability
-/// transport evolves, this is the **one** call site that knows the
-/// underlying transport. Callers that bypass it become per-surface
-/// transport coupling.
-pub fn invoke_local_ability(ability: &str, args: Value) -> anyhow::Result<Value> {
-    crate::support::platform::local_daemon_grpc::invoke_local_daemon_ability(ability, args)
-}
-
 /// Named issuer for product CLI commands that invoke daemon-local abilities as
 /// `_system.local` roots while preserving the ability owner's callee identity.
 ///
@@ -572,7 +545,7 @@ impl LocalRuntimeStateReadSubject {
 ///
 /// This is the user-facing ability-invoke path: subject, nonce, and root
 /// causal placement are declared by the caller before daemon transport entry.
-pub fn invoke_local_ability_target_explicit_root_timeout(
+pub fn invoke_local_target_explicit_root_timeout(
     target: &LocalAbilityTarget,
     args: Value,
     subject_ura: &str,
@@ -590,7 +563,7 @@ pub fn invoke_local_ability_target_explicit_root_timeout(
 }
 
 /// Stream a canonical local Ability URA target with public-ingress tuple facts.
-pub fn invoke_local_ability_target_stream_explicit_root(
+pub fn invoke_local_target_stream_explicit_root(
     target: &LocalAbilityTarget,
     args: Value,
     subject_ura: &str,
@@ -611,7 +584,7 @@ pub fn invoke_local_ability_target_stream_explicit_root(
 
 /// Open a canonical local Ability URA target as an InvokeBidi JSON-frame
 /// session and drain a bounded number of down frames.
-pub fn invoke_local_ability_target_bidi_json_frames_explicit_root(
+pub fn invoke_local_target_bidi_json_frames_explicit_root(
     target: &LocalAbilityTarget,
     args: Value,
     subject_ura: &str,
@@ -732,7 +705,7 @@ impl LocalSystemInvocationIssuer {
 
 /// Invoke a canonical local Ability target and return cryptographically
 /// verified invocation metadata with the result.
-pub fn invoke_local_ability_target_with_invocation_meta(
+pub fn invoke_local_target_with_invocation_meta(
     target: &LocalAbilityTarget,
     args: Value,
     context: LocalSystemInvocationContext<'_>,
@@ -759,7 +732,7 @@ pub fn invoke_local_ability_target_with_invocation_meta(
 /// Invocation caller is the local daemon IPC system identity; hosted-agent
 /// intent is carried as explicit delegation metadata and ability arguments,
 /// not by rewriting caller identity.
-pub fn invoke_local_ability_target_with_hosted_agent_delegation(
+pub fn invoke_local_target_with_hosted_agent_delegation(
     target: &LocalAbilityTarget,
     args: Value,
     context: LocalSystemInvocationContext<'_>,
@@ -796,7 +769,6 @@ pub fn federation_capability_unsupported_error(action: &str) -> anyhow::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
 
     struct ReadyRuntimeStateReadSignerCustody;
 
@@ -1052,26 +1024,6 @@ mod tests {
         assert!(
             error.to_string().contains("not valid JSON"),
             "wrong error: {error}"
-        );
-    }
-
-    #[test]
-    fn invoke_local_ability_surfaces_daemon_down_with_actionable_message() {
-        // Fresh HOME: no Axon daemon socket can be accepting. The
-        // canonical helper must surface the same actionable
-        // daemon-down message while routing through daemon.sock,
-        // not the legacy control socket frame.
-        let _g = crate::cli::commands::test_support::HomeGuard::new();
-        let err =
-            invoke_local_ability("observe.health", json!({})).expect_err("daemon-down must fail");
-        let msg = format!("{err}");
-        assert!(
-            msg.contains("daemon not running"),
-            "must say `daemon not running`; got: {msg}"
-        );
-        assert!(
-            msg.contains("easynet runtime start"),
-            "must point at `easynet [runtime] start`; got: {msg}"
         );
     }
 

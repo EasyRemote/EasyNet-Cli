@@ -48,7 +48,7 @@ use crate::cli::commands::invocation_tuple::{
     require_causal_root, required_nonce_hex, required_subject, AbilityInvocationRef,
 };
 use crate::support::platform::local_invoke::{
-    invoke_local_ability_target_explicit_root_timeout, LocalAbilityTarget,
+    invoke_local_target_explicit_root_timeout, LocalAbilityTarget,
 };
 use crate::support::platform::{output, timeouts};
 
@@ -206,7 +206,7 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
             let dispatch_name = ability_selector.local_registry_ability();
             let target = LocalAbilityTarget::from_selector(ability_selector);
             debug_assert_eq!(target.dispatch_name(), dispatch_name);
-            let value = invoke_local_ability_target_explicit_root_timeout(
+            let value = invoke_local_target_explicit_root_timeout(
                 &target,
                 arguments,
                 subject,

@@ -275,6 +275,13 @@ fn mission_think_subject_boundary_script_holds() {
 }
 
 #[test]
+fn mission_discuss_subject_boundary_script_holds() {
+    // Pins mission discuss CLI dispatch to projected requests plus explicit
+    // local daemon subject issuer, not the generic local invoke shortcut.
+    run_bash_script("tests/scripts/test_check_mission_discuss_subject_boundary.sh");
+}
+
+#[test]
 fn discover_scope_boundary_script_holds() {
     // Pins <agent>.discover to current scope literals only. The
     // retired easynet alias must stay absent from parser and schema.

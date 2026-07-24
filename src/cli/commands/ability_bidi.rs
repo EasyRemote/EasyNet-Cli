@@ -16,7 +16,7 @@ use crate::cli::commands::invocation_tuple::{
     require_causal_root, required_nonce_hex, required_subject, AbilityInvocationRef,
 };
 use crate::support::platform::local_invoke::{
-    invoke_local_ability_target_bidi_json_frames_explicit_root, LocalAbilityTarget, LocalBidiFrame,
+    invoke_local_target_bidi_json_frames_explicit_root, LocalAbilityTarget, LocalBidiFrame,
 };
 use crate::support::platform::{output, timeouts};
 
@@ -152,7 +152,7 @@ pub fn run(args: BidiArgs) -> anyhow::Result<()> {
             let subject = required_subject(args.subject.as_deref(), surface)?;
             let invocation_nonce = required_nonce_hex(args.nonce_hex.as_deref(), surface)?;
             require_causal_root(args.causal_root, surface)?;
-            invoke_local_ability_target_bidi_json_frames_explicit_root(
+            invoke_local_target_bidi_json_frames_explicit_root(
                 &target,
                 arguments,
                 subject,

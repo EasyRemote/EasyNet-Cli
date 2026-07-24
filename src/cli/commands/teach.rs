@@ -8,7 +8,7 @@
 //              daemon invocation, so every descriptor grant/import is
 //              admitted, ledgered, and receipted.
 //
-//              `learn` rides `invoke_local_ability_target_with_invocation_meta`
+//              `learn` rides `invoke_local_target_with_invocation_meta`
 //              with subject = the granted descriptor URA: the
 //              seven-tuple names the thing being transferred
 //              (spec 0.1-7).
@@ -26,7 +26,7 @@ use crate::daemon::persistence::agent_aggregate::{
     AgentAggregateRepository, HostedAgentNameLookupError,
 };
 use crate::support::platform::local_invoke::{
-    invoke_local_ability_target_with_hosted_agent_delegation, LocalAbilityTarget,
+    invoke_local_target_with_hosted_agent_delegation, LocalAbilityTarget,
     LocalSystemInvocationIssuer,
 };
 use crate::support::platform::output;
@@ -292,12 +292,7 @@ fn invoke_descriptor_mutation(
         std::time::Duration::from_secs(30),
         None,
     )?;
-    invoke_local_ability_target_with_hosted_agent_delegation(
-        &target,
-        args,
-        context,
-        hosted_agent_ura,
-    )
+    invoke_local_target_with_hosted_agent_delegation(&target, args, context, hosted_agent_ura)
 }
 
 fn resolve_learner_ura(learner: &str) -> anyhow::Result<String> {

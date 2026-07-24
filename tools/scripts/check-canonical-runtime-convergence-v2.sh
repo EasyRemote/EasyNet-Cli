@@ -11631,6 +11631,8 @@ for token, code in (
     ("local_daemon_default_callee_ura", "daemon_identity_named_as_callee_present"),
     ("fn local_root(", "subjectless_local_root_constructor_present"),
     ("LocalDaemonLoopbackTuplePlan::local_root(", "subjectless_local_root_call_present"),
+    ("fn invoke_local_daemon_ability(", "subjectless_generic_helper_present"),
+    ("pub(crate) fn invoke_local_daemon_ability(", "subjectless_generic_helper_present"),
 ):
     if token in text:
         raise SystemExit(f"local_daemon_loopback_explicit_subject:{code}")
@@ -11647,22 +11649,6 @@ if "fn resolve(&self) -> anyhow::Result<String>" not in body:
     raise SystemExit("local_daemon_loopback_explicit_subject:subject_resolve_must_not_take_callee")
 if "callee_ura" in body:
     raise SystemExit("local_daemon_loopback_explicit_subject:subject_resolve_reads_callee")
-
-helper = re.search(
-    r"pub\(crate\) fn invoke_local_daemon_ability\s*\([^)]*\)\s*->\s*anyhow::Result<serde_json::Value>\s*\{(?P<body>.*?)\n\}",
-    text,
-    re.S,
-)
-if not helper:
-    raise SystemExit("local_daemon_loopback_explicit_subject:generic_helper_missing")
-helper_body = helper.group("body")
-for token, code in (
-    ("let subject_ura = local_daemon_identity_ura()?", "generic_helper_subject_resolution_missing"),
-    ("LocalDaemonLoopbackTuplePlan::local_root_for_subject", "generic_helper_explicit_subject_plan_missing"),
-    ("&subject_ura", "generic_helper_subject_not_bound_to_plan"),
-):
-    if token not in helper_body:
-        raise SystemExit(f"local_daemon_loopback_explicit_subject:{code}")
 
 for token, code in (
     ("loopback_invoke_request_does_not_pre_resolve_descriptor_ref", "descriptor_projection_test_missing"),

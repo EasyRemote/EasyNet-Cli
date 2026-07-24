@@ -10777,6 +10777,14 @@ if local_daemon_grpc.exists():
             "LocalDaemonLoopbackTuplePlan::local_root(",
             "local daemon loopback callers must bind an explicit subject",
         ),
+        (
+            "fn invoke_local_daemon_ability(",
+            "subjectless generic local daemon helper is retired",
+        ),
+        (
+            "pub(crate) fn invoke_local_daemon_ability(",
+            "subjectless generic local daemon helper is retired",
+        ),
     ):
         if token in text:
             match = re.search(re.escape(token), text)
@@ -10816,38 +10824,6 @@ if local_daemon_grpc.exists():
                 line_number(text, offset),
                 "local daemon loopback subject policy must not read callee_ura",
             )
-
-    helper = rust_method_body(text, "invoke_local_daemon_ability")
-    if helper is None:
-        add(
-            "R92_LOCAL_DAEMON_LOOPBACK_EXPLICIT_SUBJECT",
-            local_daemon_grpc,
-            1,
-            "generic local daemon helper is missing",
-        )
-    else:
-        offset, body = helper
-        for present, detail in (
-            (
-                "let subject_ura = local_daemon_identity_ura()?" in body,
-                "generic local daemon helper must resolve daemon subject before tuple construction",
-            ),
-            (
-                "LocalDaemonLoopbackTuplePlan::local_root_for_subject" in body,
-                "generic local daemon helper must use explicit-subject tuple construction",
-            ),
-            (
-                "&subject_ura" in body,
-                "generic local daemon helper must pass the explicit subject into the tuple plan",
-            ),
-        ):
-            if not present:
-                add(
-                    "R92_LOCAL_DAEMON_LOOPBACK_EXPLICIT_SUBJECT",
-                    local_daemon_grpc,
-                    line_number(text, offset),
-                    detail,
-                )
 
     raw_text = local_daemon_grpc.read_text(encoding="utf-8", errors="replace")
     for token, detail in (

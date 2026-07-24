@@ -40,7 +40,7 @@
 // still print, exit code 0 (spec D9).
 //
 // The seven-tuple is auditable: each daemon discover call goes through
-// `invoke_local_ability_target_with_invocation_meta`, and the envelope echoes
+// `invoke_local_target_with_invocation_meta`, and the envelope echoes
 // (caller / callee / ability / subject / …) are included verbatim in
 // `--format json` output as `invocations` (spec 0.1-7, W1-E2E-1 ⑤).
 //
@@ -55,8 +55,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::core::ura::AbilitySelector;
 use crate::support::platform::local_invoke::{
-    invoke_local_ability_target_with_invocation_meta, LocalAbilityTarget,
-    LocalRuntimeStateReadIssuer,
+    invoke_local_target_with_invocation_meta, LocalAbilityTarget, LocalRuntimeStateReadIssuer,
 };
 
 /// Narrow re-export so integration tests (and other `pub` consumers
@@ -798,7 +797,7 @@ impl DiscoverRuntimeService {
             std::time::Duration::from_secs(30),
             trace_id,
         )?;
-        let (value, metadata) = invoke_local_ability_target_with_invocation_meta(
+        let (value, metadata) = invoke_local_target_with_invocation_meta(
             self.plan.ladder.target(),
             self.plan
                 .source_window

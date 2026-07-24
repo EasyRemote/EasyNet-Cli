@@ -152,13 +152,24 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "production remote request construction outside tuple plan should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
-cat >>"$SB/src/cli/daemon_client/remote_system_ability.rs" <<'RS'
+python3 - "$SB/src/cli/daemon_client/remote_system_ability.rs" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+probe = '''
 
 #[allow(dead_code)]
 fn anonymous_remote_system_nonce_probe() {
     let _ = axon_sdk::invocation::fresh_nonce();
 }
-RS
+'''
+anchor = "#[cfg(all(test, feature = \"axon-pb\"))]"
+if anchor not in text:
+    raise SystemExit("remote system ability test anchor missing")
+path.write_text(text.replace(anchor, probe + "\n" + anchor, 1), encoding="utf-8")
+PY
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
@@ -364,7 +375,7 @@ pub fn invoke_local_ability_with_subject(
 local_invoke.write_text(text.replace(needle, insertion + needle, 1), encoding="utf-8")
 
 text = local_daemon.read_text(encoding="utf-8")
-needle = "#[cfg(feature = \"axon-pb\")]\npub(crate) fn invoke_local_daemon_ability("
+needle = "#[cfg(feature = \"axon-pb\")]\npub(crate) fn invoke_local_daemon_system_ability_root_for_subject_timeout("
 insertion = '''
 pub(crate) struct LocalDaemonAbilityClient;
 
@@ -384,6 +395,8 @@ pub(crate) fn invoke_local_daemon_ability_with_subject(
 }
 
 '''
+if needle not in text:
+    raise SystemExit("subject-bound local daemon issuer anchor missing")
 local_daemon.write_text(text.replace(needle, insertion + needle, 1), encoding="utf-8")
 PY
 rc=0

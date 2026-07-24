@@ -372,6 +372,11 @@ for path in sorted((root / "src").rglob("*.rs")):
             )
 
     for token in (
+        "invoke_local_ability_target_explicit_root_timeout",
+        "invoke_local_ability_target_stream_explicit_root",
+        "invoke_local_ability_target_bidi_json_frames_explicit_root",
+        "invoke_local_ability_target_with_invocation_meta",
+        "invoke_local_ability_target_with_hosted_agent_delegation",
         "invoke_local_ability_target_with_subject_timeout",
         "invoke_local_ability_target_stream_with_subject",
         "invoke_local_ability_target_bidi_json_frames_with_subject",
@@ -450,9 +455,11 @@ for token, detail in (
     ("invoke_root_for_subject_timeout", "daemon-system local root subject timeout issuer"),
     ("invoke_target_root_timeout", "daemon-system unary target issuer"),
     ("stream_target_root", "daemon-system stream target issuer"),
-    ("invoke_local_ability_target_explicit_root_timeout", "public local unary explicit tuple helper"),
-    ("invoke_local_ability_target_stream_explicit_root", "public local stream explicit tuple helper"),
-    ("invoke_local_ability_target_bidi_json_frames_explicit_root", "public local bidi explicit tuple helper"),
+    ("invoke_local_target_explicit_root_timeout", "public local unary explicit tuple helper"),
+    ("invoke_local_target_stream_explicit_root", "public local stream explicit tuple helper"),
+    ("invoke_local_target_bidi_json_frames_explicit_root", "public local bidi explicit tuple helper"),
+    ("invoke_local_target_with_invocation_meta", "public local metadata-verifying tuple helper"),
+    ("invoke_local_target_with_hosted_agent_delegation", "public local hosted-agent delegation tuple helper"),
 ):
     if token not in local_invoke_text:
         violations.append(f"{local_invoke}: missing {detail}: {token}")

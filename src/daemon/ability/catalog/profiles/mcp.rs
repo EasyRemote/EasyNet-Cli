@@ -540,7 +540,7 @@ impl DaemonLocalInvoker {
             std::time::Duration::from_secs(30),
             None,
         )?;
-        crate::support::platform::local_invoke::invoke_local_ability_target_with_invocation_meta(
+        crate::support::platform::local_invoke::invoke_local_target_with_invocation_meta(
             target, args, context,
         )
     }
