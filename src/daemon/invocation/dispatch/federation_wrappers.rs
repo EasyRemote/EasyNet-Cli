@@ -1388,6 +1388,12 @@ mod tests {
         tx
     }
 
+    fn insert_presence(registry: &PresenceRegistry, ura: impl Into<String>) {
+        registry
+            .insert(ura.into(), make_dispatch_sender())
+            .expect("canonical presence key");
+    }
+
     fn projection_summary(
         owner_ura: &str,
         ability_ura: &str,
@@ -1764,14 +1770,8 @@ mod tests {
     #[test]
     fn handle_heartbeat_reports_registry_size() {
         let registry = PresenceRegistry::new();
-        registry.insert(
-            "easynet:///r/realm/device/a".to_string(),
-            make_dispatch_sender(),
-        );
-        registry.insert(
-            "easynet:///r/realm/device/b".to_string(),
-            make_dispatch_sender(),
-        );
+        insert_presence(&registry, "easynet:///r/realm/device/a".to_string());
+        insert_presence(&registry, "easynet:///r/realm/device/b".to_string());
         let req = HeartbeatRequest {
             since_abilities_revision: 9,
             refresh_owner_uras: Vec::new(),
@@ -1798,7 +1798,7 @@ mod tests {
         let catalog =
             crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore::new();
         let owner_ura = "easynet:///r/realm/device/a";
-        registry.insert(owner_ura.to_string(), make_dispatch_sender());
+        insert_presence(&registry, owner_ura.to_string());
 
         let ability_ura =
             crate::core::ura::owner_ability_ura(owner_ura, "terminal.list").expect("ability ura");
@@ -1917,18 +1917,9 @@ mod tests {
     #[test]
     fn handle_resolve_with_no_filter_returns_all_sorted() {
         let registry = PresenceRegistry::new();
-        registry.insert(
-            "easynet:///r/realm/device/c".to_string(),
-            make_dispatch_sender(),
-        );
-        registry.insert(
-            "easynet:///r/realm/device/a".to_string(),
-            make_dispatch_sender(),
-        );
-        registry.insert(
-            "easynet:///r/realm/device/b".to_string(),
-            make_dispatch_sender(),
-        );
+        insert_presence(&registry, "easynet:///r/realm/device/c".to_string());
+        insert_presence(&registry, "easynet:///r/realm/device/a".to_string());
+        insert_presence(&registry, "easynet:///r/realm/device/b".to_string());
         let catalog =
             crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore::new();
 
@@ -1961,14 +1952,8 @@ mod tests {
     #[test]
     fn handle_resolve_with_prefix_filters_correctly() {
         let registry = PresenceRegistry::new();
-        registry.insert(
-            "easynet:///r/realm-a/device/x".to_string(),
-            make_dispatch_sender(),
-        );
-        registry.insert(
-            "easynet:///r/realm-b/device/y".to_string(),
-            make_dispatch_sender(),
-        );
+        insert_presence(&registry, "easynet:///r/realm-a/device/x".to_string());
+        insert_presence(&registry, "easynet:///r/realm-b/device/y".to_string());
         let catalog =
             crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore::new();
 
@@ -1992,7 +1977,7 @@ mod tests {
     fn handle_resolve_includes_device_owned_ability_routes_for_live_devices() {
         let registry = PresenceRegistry::new();
         let self_device_ura = "easynet:///r/realm/device/dev-1";
-        registry.insert(self_device_ura.to_string(), make_dispatch_sender());
+        insert_presence(&registry, self_device_ura.to_string());
 
         let local_publication = crate::daemon::ability::catalog::publication::LocalAbilityPublicationSnapshot::from_owner_public_names(
             self_device_ura,
@@ -2044,7 +2029,7 @@ mod tests {
         // so it can only publish what that device advertised (here: nothing).
         let registry = PresenceRegistry::new();
         let remote_device = "easynet:///r/realm/device/dev-remote";
-        registry.insert(remote_device.to_string(), make_dispatch_sender());
+        insert_presence(&registry, remote_device.to_string());
         let catalog =
             crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore::new();
 
@@ -2072,10 +2057,7 @@ mod tests {
     #[test]
     fn handle_resolve_includes_hosted_agent_when_host_device_is_online() {
         let registry = PresenceRegistry::new();
-        registry.insert(
-            "easynet:///r/realm/device/dev-1".to_string(),
-            make_dispatch_sender(),
-        );
+        insert_presence(&registry, "easynet:///r/realm/device/dev-1".to_string());
         let catalog =
             crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore::new();
         catalog.upsert_projection(projection_row_for(
@@ -2123,10 +2105,7 @@ mod tests {
     #[test]
     fn handle_resolve_does_not_surface_expired_owner_projection() {
         let registry = PresenceRegistry::new();
-        registry.insert(
-            "easynet:///r/realm/device/dev-1".to_string(),
-            make_dispatch_sender(),
-        );
+        insert_presence(&registry, "easynet:///r/realm/device/dev-1".to_string());
         let catalog =
             crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore::new();
         catalog.upsert_projection(
@@ -2185,7 +2164,7 @@ mod tests {
         let owner_ura = "easynet:///r/realm/device/dev-1";
         let ability_ura = crate::core::ura::owner_ability_ura(owner_ura, "agent.list")
             .expect("device ability ura");
-        registry.insert(owner_ura.to_string(), make_dispatch_sender());
+        insert_presence(&registry, owner_ura.to_string());
         let catalog =
             crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore::new();
         catalog.upsert_projection(projection_row_for(
@@ -2230,7 +2209,7 @@ mod tests {
     fn namespace_resolve_returns_typed_negative_when_ability_absent() {
         let registry = PresenceRegistry::new();
         let owner_ura = "easynet:///r/realm/device/dev-1";
-        registry.insert(owner_ura.to_string(), make_dispatch_sender());
+        insert_presence(&registry, owner_ura.to_string());
         let catalog =
             crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore::new();
 
@@ -2261,7 +2240,7 @@ mod tests {
     fn namespace_resolve_rejects_missing_qtype_without_guessing_route_shape() {
         let registry = PresenceRegistry::new();
         let owner_ura = "easynet:///r/realm/device/dev-1";
-        registry.insert(owner_ura.to_string(), make_dispatch_sender());
+        insert_presence(&registry, owner_ura.to_string());
         let catalog =
             crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore::new();
         let ability_ura = crate::core::ura::owner_ability_ura(owner_ura, "agent.list")
@@ -2359,7 +2338,7 @@ mod tests {
         let registry = PresenceRegistry::new();
         let host_ura = "easynet:///r/realm/device/dev-1";
         let agent_ura = "easynet:///r/realm/agent/alice.remote";
-        registry.insert(host_ura.to_string(), make_dispatch_sender());
+        insert_presence(&registry, host_ura.to_string());
         let advertised = AdvertisedAgentStore::new();
         advertised.upsert(AdvertisedAgentRecord {
             agent_ura: agent_ura.to_string(),
@@ -2752,17 +2731,17 @@ mod tests {
         // the handler must surface only the requested realm's
         // entries.
         let registry = PresenceRegistry::new();
-        registry.insert(
+        insert_presence(
+            &registry,
             "easynet:///r/realm-a/device/device-1".to_string(),
-            make_dispatch_sender(),
         );
-        registry.insert(
+        insert_presence(
+            &registry,
             "easynet:///r/realm-a/device/device-2".to_string(),
-            make_dispatch_sender(),
         );
-        registry.insert(
+        insert_presence(
+            &registry,
             "easynet:///r/realm-b/device/device-3".to_string(),
-            make_dispatch_sender(),
         );
 
         let resp = handle_list_user_devices(
@@ -2784,9 +2763,9 @@ mod tests {
     #[test]
     fn handle_list_user_devices_extracts_node_id_from_ura() {
         let registry = PresenceRegistry::new();
-        registry.insert(
+        insert_presence(
+            &registry,
             "easynet:///r/realm-a/device/node-xyz".to_string(),
-            make_dispatch_sender(),
         );
 
         let resp = handle_list_user_devices(
@@ -2801,15 +2780,15 @@ mod tests {
     }
 
     #[test]
-    fn handle_list_user_devices_ignores_legacy_agent_device_shape() {
+    fn handle_list_user_devices_filters_canonical_non_device_principals() {
         let registry = PresenceRegistry::new();
-        registry.insert(
-            "easynet:///r/realm-a/agent/node-legacy".to_string(),
-            make_dispatch_sender(),
+        insert_presence(
+            &registry,
+            "easynet:///r/realm-a/agent/alice.helper".to_string(),
         );
-        registry.insert(
+        insert_presence(
+            &registry,
             "easynet:///r/realm-a/agent/alice.claude".to_string(),
-            make_dispatch_sender(),
         );
 
         let resp = handle_list_user_devices(
@@ -2818,20 +2797,17 @@ mod tests {
             },
             &registry,
         )
-        .expect("legacy agent shapes are ignored");
+        .expect("canonical non-device principals are filtered");
         assert!(
             resp.devices.is_empty(),
-            "legacy and hosted agent URAs must be ignored"
+            "list_user_devices must only project Device principal presence"
         );
     }
 
     #[test]
     fn handle_list_user_devices_returns_empty_when_no_match() {
         let registry = PresenceRegistry::new();
-        registry.insert(
-            "easynet:///r/realm-a/device/device".to_string(),
-            make_dispatch_sender(),
-        );
+        insert_presence(&registry, "easynet:///r/realm-a/device/device".to_string());
 
         let resp = handle_list_user_devices(
             &ListUserDevicesRequest {
@@ -2844,26 +2820,20 @@ mod tests {
     }
 
     #[test]
-    fn handle_list_user_devices_rejects_prefix_matched_malformed_device_presence() {
+    fn presence_registry_rejects_prefix_matched_malformed_device_presence() {
         let registry = PresenceRegistry::new();
-        registry.insert(
-            "easynet:///r/realm-a/device/".to_string(),
-            make_dispatch_sender(),
-        );
-
-        let error = handle_list_user_devices(
-            &ListUserDevicesRequest {
-                realm: "realm-a".to_string(),
-            },
-            &registry,
-        )
-        .expect_err("malformed device presence must fail closed");
+        let error = registry
+            .insert(
+                "easynet:///r/realm-a/device/".to_string(),
+                make_dispatch_sender(),
+            )
+            .expect_err("malformed device presence must fail closed before wrapper projection");
 
         assert!(
-            error.contains("matches realm device prefix")
-                || error.contains("missing canonical device id"),
-            "unexpected list_user_devices error: {error}"
+            error.contains("canonical URA"),
+            "unexpected presence registry error: {error}"
         );
+        assert!(registry.snapshot().is_empty());
     }
 
     #[test]
@@ -2924,7 +2894,7 @@ mod tests {
         let registry = PresenceRegistry::new();
         let catalog = AbilityCatalogStore::new();
         let ura = "easynet:///r/realm/device/n1".to_string();
-        registry.insert(ura.clone(), make_dispatch_sender());
+        insert_presence(&registry, ura.clone());
 
         let resp = handle_revoke(
             &RevokeRequest {
@@ -3048,7 +3018,7 @@ mod tests {
         let catalog = AbilityCatalogStore::new();
         let host_ura = "easynet:///r/realm/device/dev-1";
         let agent_ura = "easynet:///r/realm/agent/user.crash-window";
-        registry.insert(host_ura.to_string(), make_dispatch_sender());
+        insert_presence(&registry, host_ura.to_string());
         let record = AdvertisedAgentRecord {
             agent_ura: agent_ura.to_string(),
             generation: 1,
@@ -3159,7 +3129,7 @@ mod tests {
                 Vec::new(),
             ),
         );
-        registry.insert(agent_ura.to_string(), make_dispatch_sender());
+        insert_presence(&registry, agent_ura.to_string());
 
         let response = handle_revoke(&request, &registry, Some(&advertised), &catalog)
             .expect("old prepared revoke completes as superseded");
@@ -3175,14 +3145,8 @@ mod tests {
     #[test]
     fn build_subscribe_directory_v2_snapshot_is_sorted() {
         let registry = PresenceRegistry::new();
-        registry.insert(
-            "easynet:///r/realm/device/c".to_string(),
-            make_dispatch_sender(),
-        );
-        registry.insert(
-            "easynet:///r/realm/device/a".to_string(),
-            make_dispatch_sender(),
-        );
+        insert_presence(&registry, "easynet:///r/realm/device/c".to_string());
+        insert_presence(&registry, "easynet:///r/realm/device/a".to_string());
 
         let initial = build_subscribe_directory_v2_snapshot(&registry)
             .expect("canonical device snapshot builds");
@@ -3200,9 +3164,9 @@ mod tests {
     #[test]
     fn build_subscribe_directory_v2_snapshot_rejects_non_device_presence_row() {
         let registry = PresenceRegistry::new();
-        registry.insert(
+        insert_presence(
+            &registry,
             "easynet:///r/realm/agent/user.device-carryover".to_string(),
-            make_dispatch_sender(),
         );
 
         let err = build_subscribe_directory_v2_snapshot(&registry)

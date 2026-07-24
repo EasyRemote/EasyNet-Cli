@@ -1080,7 +1080,9 @@ fn start_daemon_at(
                 easynet_cli::daemon::invocation::bidi::state::presence::DISPATCH_CHANNEL_CAPACITY,
             );
             tokio::spawn(async move { while noop_rx.recv().await.is_some() {} });
-            presence.insert(daemon_ura_for_presence, noop_tx);
+            presence
+                .insert(daemon_ura_for_presence, noop_tx)
+                .expect("canonical presence key");
 
             let listener = UnixListener::bind(&socket).expect("bind test UDS");
             let incoming = UnixListenerStream::new(listener);

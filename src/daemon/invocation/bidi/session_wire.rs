@@ -258,14 +258,16 @@ mod tests {
         let host = "easynet:///r/realm/device/target";
         let (v0_sender, _v0_receiver) = tokio::sync::mpsc::channel(1);
         let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            presence.insert_negotiated(
-                host.to_string(),
-                v0_sender,
-                SessionContract {
-                    version: 0,
-                    claimant_boot_nonce: vec![1; 16],
-                },
-            );
+            presence
+                .insert_negotiated(
+                    host.to_string(),
+                    v0_sender,
+                    SessionContract {
+                        version: 0,
+                        claimant_boot_nonce: vec![1; 16],
+                    },
+                )
+                .expect("retired carrier must panic before registration");
         }));
         assert!(panic.is_err(), "v0 sessions must never enter live presence");
     }
@@ -278,14 +280,16 @@ mod tests {
         let host = "easynet:///r/realm/device/target";
 
         let (v1_sender, _v1_receiver) = tokio::sync::mpsc::channel(1);
-        let registration = presence.insert_negotiated(
-            host.to_string(),
-            v1_sender,
-            SessionContract {
-                version: CANONICAL_SESSION_CARRIER_VERSION,
-                claimant_boot_nonce: vec![2; 16],
-            },
-        );
+        let registration = presence
+            .insert_negotiated(
+                host.to_string(),
+                v1_sender,
+                SessionContract {
+                    version: CANONICAL_SESSION_CARRIER_VERSION,
+                    claimant_boot_nonce: vec![2; 16],
+                },
+            )
+            .expect("canonical presence key");
         for surface in ["Invoke", "InvokeStream", "InvokeBidi"] {
             let session =
                 require_canonical_dispatch_session(&presence, host, "route-ref::test", surface)

@@ -585,10 +585,13 @@ async fn invoke_dispatches_namespace_resolve_to_typed_answer() {
     let owner_ura = TEST_DAEMON_URA;
     let ability_ura =
         crate::core::ura::owner_ability_ura(owner_ura, "agent.list").expect("device ability ura");
-    svc.directory.presence.insert(owner_ura.to_string(), {
-        let (tx, _rx) = mpsc::channel(1);
-        tx
-    });
+    svc.directory
+        .presence
+        .insert(owner_ura.to_string(), {
+            let (tx, _rx) = mpsc::channel(1);
+            tx
+        })
+        .expect("canonical presence key");
     svc.directory.ability_catalog.upsert_projection(
         crate::daemon::federation::read_model::ability_catalog::OwnerAbilityProjectionRow::new(
             owner_ura.to_string(),
@@ -710,10 +713,12 @@ async fn invoke_dispatches_federation_discover_with_no_filter_returns_empty_when
 #[tokio::test]
 async fn invoke_dispatches_federation_discover_includes_local_presence_devices() {
     let presence = Arc::new(PresenceRegistry::new());
-    presence.insert(
-        crate::core::ura::device_ura("local-realm", "device-a"),
-        tokio::sync::mpsc::channel(8).0,
-    );
+    presence
+        .insert(
+            crate::core::ura::device_ura("local-realm", "device-a"),
+            tokio::sync::mpsc::channel(8).0,
+        )
+        .expect("canonical presence key");
     let mut svc = make_unregistered_service_for_route_owner(TEST_DAEMON_URA)
         .with_session_realm("local-realm");
     svc.directory.presence = presence;
@@ -1030,20 +1035,29 @@ async fn invoke_dispatches_federation_list_user_devices_admits_loopback_caller()
     // recognises `is_loopback = true` and accepts.
     let svc = make_service();
     // Two devices online for realm-x.
-    svc.directory.presence.insert(
-        "easynet:///r/realm-x/device/device-1".to_string(),
-        tokio::sync::mpsc::channel(8).0,
-    );
-    svc.directory.presence.insert(
-        "easynet:///r/realm-x/device/device-2".to_string(),
-        tokio::sync::mpsc::channel(8).0,
-    );
+    svc.directory
+        .presence
+        .insert(
+            "easynet:///r/realm-x/device/device-1".to_string(),
+            tokio::sync::mpsc::channel(8).0,
+        )
+        .expect("canonical presence key");
+    svc.directory
+        .presence
+        .insert(
+            "easynet:///r/realm-x/device/device-2".to_string(),
+            tokio::sync::mpsc::channel(8).0,
+        )
+        .expect("canonical presence key");
     // One device for an unrelated realm — must NOT show
     // through.
-    svc.directory.presence.insert(
-        "easynet:///r/realm-other/device/device-3".to_string(),
-        tokio::sync::mpsc::channel(8).0,
-    );
+    svc.directory
+        .presence
+        .insert(
+            "easynet:///r/realm-other/device/device-3".to_string(),
+            tokio::sync::mpsc::channel(8).0,
+        )
+        .expect("canonical presence key");
 
     let resp = svc
         .invoke(invoke_request(
@@ -1063,33 +1077,20 @@ async fn invoke_dispatches_federation_list_user_devices_admits_loopback_caller()
 #[tokio::test]
 async fn invoke_federation_list_user_devices_rejects_malformed_device_presence() {
     let svc = make_service();
-    svc.directory.presence.insert(
-        "easynet:///r/realm-x/device/".to_string(),
-        tokio::sync::mpsc::channel(8).0,
-    );
+    let error = svc
+        .directory
+        .presence
+        .insert(
+            "easynet:///r/realm-x/device/".to_string(),
+            tokio::sync::mpsc::channel(8).0,
+        )
+        .expect_err("malformed device presence must fail at registry admission");
 
-    let body = svc
-        .invoke(invoke_request(
-            ABILITY_FEDERATION_LIST_USER_DEVICES,
-            r#"{"realm":"realm-x"}"#,
-        ))
-        .await
-        .expect("runtime state failures are returned in-band")
-        .into_inner();
-
-    assert_eq!(
-        body.state,
-        axon_sdk::invocation::InvocationState::Failed.to_wire_i32(),
-        "malformed presence must not return a successful empty or malformed device list"
-    );
-    let error = body.error.expect("failed invocation must carry error");
     assert!(
-        error.message.contains("federation.list_user_devices")
-            && (error.message.contains("matches realm device prefix")
-                || error.message.contains("missing canonical device id")),
-        "failure must expose list_user_devices presence corruption; got: {}",
-        error.message
+        error.contains("canonical URA"),
+        "unexpected presence registry error: {error}"
     );
+    assert!(svc.directory.presence.snapshot().is_empty());
 }
 
 #[tokio::test]
@@ -1376,14 +1377,16 @@ async fn identity_revoke_user_pubkey_removes_matching_presence_after_write() {
         AdmissionFacade::with_trust_anchor_cell(cell.clone(), Some(TEST_DAEMON_URA.to_string()));
     let presence = Arc::new(PresenceRegistry::new());
     let (tx, _rx) = tokio::sync::mpsc::channel(1);
-    presence.insert_negotiated_with_trust(
-        user_ura.to_string(),
-        tx,
-        crate::daemon::invocation::bidi::state::presence::SessionContract::canonical(),
-        crate::daemon::invocation::bidi::state::presence::SessionTrustContext::user_pubkey(
-            user_pubkey_b64.clone(),
-        ),
-    );
+    presence
+        .insert_negotiated_with_trust(
+            user_ura.to_string(),
+            tx,
+            crate::daemon::invocation::bidi::state::presence::SessionContract::canonical(),
+            crate::daemon::invocation::bidi::state::presence::SessionTrustContext::user_pubkey(
+                user_pubkey_b64.clone(),
+            ),
+        )
+        .expect("canonical presence key");
     let mut events = presence.subscribe_events();
     let trust_dir = tempfile::tempdir().expect("trust tempdir");
     let trust_path = trust_dir.path().join("realm-trust.toml");
@@ -1496,7 +1499,9 @@ async fn identity_revoke_user_pubkey_removes_user_hosted_agents_and_host_presenc
         AdmissionFacade::with_trust_anchor_cell(cell.clone(), Some(TEST_DAEMON_URA.to_string()));
     let presence = Arc::new(PresenceRegistry::new());
     let (tx, _rx) = tokio::sync::mpsc::channel(1);
-    presence.insert(host_ura.to_string(), tx);
+    presence
+        .insert(host_ura.to_string(), tx)
+        .expect("canonical presence key");
     let mut events = presence.subscribe_events();
     let trust_dir = tempfile::tempdir().expect("trust tempdir");
     let trust_path = trust_dir.path().join("realm-trust.toml");
@@ -1641,7 +1646,9 @@ async fn identity_revoke_user_pubkey_idempotent_miss_keeps_presence() {
         AdmissionFacade::with_trust_anchor_cell(cell.clone(), Some(TEST_DAEMON_URA.to_string()));
     let presence = Arc::new(PresenceRegistry::new());
     let (tx, _rx) = tokio::sync::mpsc::channel(1);
-    presence.insert(user_ura.to_string(), tx);
+    presence
+        .insert(user_ura.to_string(), tx)
+        .expect("canonical presence key");
     let mut events = presence.subscribe_events();
     let trust_dir = tempfile::tempdir().expect("trust tempdir");
     let trust_path = trust_dir.path().join("realm-trust.toml");
@@ -2834,7 +2841,8 @@ async fn dispatch_remote_rpc_refuses_self_execution_host() {
     let svc = make_service().with_pending(Arc::new(PendingDispatchMap::new()));
     svc.directory
         .presence
-        .insert(TEST_DAEMON_URA.to_string(), self_tx);
+        .insert(TEST_DAEMON_URA.to_string(), self_tx)
+        .expect("canonical presence key");
     publish_test_route(&svc, TEST_DAEMON_URA, "observe.health");
 
     let ability_ura = crate::core::ura::owner_ability_ura(TEST_DAEMON_URA, "observe.health")
@@ -2878,14 +2886,17 @@ async fn dispatch_remote_rpc_times_out_when_target_never_replies() {
     let pending = Arc::new(PendingDispatchMap::new());
     let svc = make_service().with_pending(Arc::clone(&pending));
     let (wedged_tx, mut wedged_rx) = mpsc::channel(8);
-    svc.directory.presence.insert_negotiated(
-        WEDGED_DEVICE_URA.to_string(),
-        wedged_tx,
-        crate::daemon::invocation::bidi::state::presence::SessionContract {
-            version: 1,
-            claimant_boot_nonce: vec![7; 16],
-        },
-    );
+    svc.directory
+        .presence
+        .insert_negotiated(
+            WEDGED_DEVICE_URA.to_string(),
+            wedged_tx,
+            crate::daemon::invocation::bidi::state::presence::SessionContract {
+                version: 1,
+                claimant_boot_nonce: vec![7; 16],
+            },
+        )
+        .expect("canonical presence key");
     publish_test_route(&svc, WEDGED_DEVICE_URA, "observe.health");
 
     let ability_ura = crate::core::ura::owner_ability_ura(WEDGED_DEVICE_URA, "observe.health")
@@ -2925,7 +2936,8 @@ async fn dispatch_remote_rpc_rejects_missing_signed_descriptor_ref() {
     let (remote_tx, mut remote_rx) = mpsc::channel(8);
     svc.directory
         .presence
-        .insert(REMOTE_DEVICE_URA.to_string(), remote_tx);
+        .insert(REMOTE_DEVICE_URA.to_string(), remote_tx)
+        .expect("canonical presence key");
     publish_test_route(&svc, REMOTE_DEVICE_URA, "observe.health");
 
     let ability_ura = crate::core::ura::owner_ability_ura(REMOTE_DEVICE_URA, "observe.health")
@@ -2969,14 +2981,17 @@ async fn dispatch_remote_rpc_carrier_v1_preserves_signed_canonical_material() {
     let pending = Arc::new(PendingDispatchMap::new());
     let svc = make_service().with_pending(Arc::clone(&pending));
     let (remote_tx, mut remote_rx) = mpsc::channel(8);
-    svc.directory.presence.insert_negotiated(
-        REMOTE_DEVICE_URA.to_string(),
-        remote_tx,
-        crate::daemon::invocation::bidi::state::presence::SessionContract {
-            version: 1,
-            claimant_boot_nonce: vec![9; 16],
-        },
-    );
+    svc.directory
+        .presence
+        .insert_negotiated(
+            REMOTE_DEVICE_URA.to_string(),
+            remote_tx,
+            crate::daemon::invocation::bidi::state::presence::SessionContract {
+                version: 1,
+                claimant_boot_nonce: vec![9; 16],
+            },
+        )
+        .expect("canonical presence key");
     publish_test_route(&svc, REMOTE_DEVICE_URA, "shell.run");
 
     let ability_ura = crate::core::ura::owner_ability_ura(REMOTE_DEVICE_URA, "shell.run")
@@ -3054,7 +3069,8 @@ async fn dispatch_remote_rpc_rejects_signed_callee_rewrite() {
     let (remote_tx, mut remote_rx) = mpsc::channel(8);
     svc.directory
         .presence
-        .insert(REMOTE_DEVICE_URA.to_string(), remote_tx);
+        .insert(REMOTE_DEVICE_URA.to_string(), remote_tx)
+        .expect("canonical presence key");
     publish_test_route(&svc, REMOTE_DEVICE_URA, "observe.health");
 
     let ability_ura = crate::core::ura::owner_ability_ura(REMOTE_DEVICE_URA, "observe.health")

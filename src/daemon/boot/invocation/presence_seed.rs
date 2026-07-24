@@ -70,15 +70,25 @@ fn seed_device_mode_self_presence(daemon_ura: Option<&str>, presence: &Arc<Prese
             // out-of-path frames land here.
         }
     });
-    let prior = presence.insert(ura.to_string(), noop_tx);
-    if prior.is_none() {
-        crate::op_event!(
-            component = daemon_invocation,
-            kind = device_mode_self_presence_seeded,
-            self_ura = ura,
-            message =
-                "drain task holds receiver; self-targeted invokes route through Axon LocalRuntime",
-        );
+    match presence.insert(ura.to_string(), noop_tx) {
+        Ok(prior) if prior.is_none() => {
+            crate::op_event!(
+                component = daemon_invocation,
+                kind = device_mode_self_presence_seeded,
+                self_ura = ura,
+                message =
+                    "drain task holds receiver; self-targeted invokes route through Axon LocalRuntime",
+            );
+        }
+        Ok(_) => {}
+        Err(error) => {
+            crate::op_event!(
+                component = daemon_invocation,
+                kind = device_mode_self_presence_rejected,
+                self_ura = ura,
+                error = error,
+            );
+        }
     }
 }
 
@@ -110,7 +120,15 @@ fn maybe_seed_demo_presence(presence: &Arc<PresenceRegistry>) {
         let (tx, mut rx) = tokio::sync::mpsc::channel::<
             Result<crate::daemon::invocation::bidi::state::presence::DispatchFrame, tonic::Status>,
         >(8);
-        presence.insert(seed_ura.to_string(), tx);
+        if let Err(error) = presence.insert(seed_ura.to_string(), tx) {
+            crate::op_event!(
+                component = daemon_invocation,
+                kind = demo_presence_seed_rejected,
+                seed_ura = seed_ura,
+                error = error,
+            );
+            continue;
+        }
         tokio::spawn(async move {
             while rx.recv().await.is_some() {
                 // discard

@@ -413,13 +413,21 @@ impl PresenceRegistry {
     /// Returns the displaced sender if any so the caller can observe
     /// the prior session's state if it cares; production paths
     /// drop it.
-    pub fn insert(&self, ura: String, sender: DispatchSender) -> Option<DispatchSender> {
-        self.insert_tracked(ura, sender).displaced
+    pub fn insert(
+        &self,
+        ura: String,
+        sender: DispatchSender,
+    ) -> Result<Option<DispatchSender>, String> {
+        Ok(self.insert_tracked(ura, sender)?.displaced)
     }
 
     /// Register a canonical `session.open` and return the registry-owned
     /// `session_id` alongside any displaced prior sender.
-    pub fn insert_tracked(&self, ura: String, sender: DispatchSender) -> PresenceRegistration {
+    pub fn insert_tracked(
+        &self,
+        ura: String,
+        sender: DispatchSender,
+    ) -> Result<PresenceRegistration, String> {
         self.insert_negotiated(ura, sender, SessionContract::canonical())
     }
 
@@ -433,7 +441,7 @@ impl PresenceRegistry {
         ura: String,
         sender: DispatchSender,
         contract: SessionContract,
-    ) -> PresenceRegistration {
+    ) -> Result<PresenceRegistration, String> {
         self.insert_negotiated_with_trust(ura, sender, contract, SessionTrustContext::default())
     }
 
@@ -445,7 +453,8 @@ impl PresenceRegistry {
         sender: DispatchSender,
         contract: SessionContract,
         trust: SessionTrustContext,
-    ) -> PresenceRegistration {
+    ) -> Result<PresenceRegistration, String> {
+        validate_presence_principal_ura(&ura)?;
         assert!(
             contract.version >= CANONICAL_SESSION_CARRIER_VERSION,
             "session contract v{} is retired; v{} or newer is required",
@@ -476,11 +485,11 @@ impl PresenceRegistry {
             });
         }
         let _ = self.events.send(PresenceEvent::Online { ura });
-        PresenceRegistration {
+        Ok(PresenceRegistration {
             session_id,
             displaced,
             displaced_claimant_nonce,
-        }
+        })
     }
 
     /// Remove a session, emitting `PresenceEvent::Offline` with the
@@ -628,6 +637,28 @@ impl PresenceRegistry {
     }
 }
 
+fn validate_presence_principal_ura(ura: &str) -> Result<(), String> {
+    let trimmed = ura.trim();
+    if trimmed.is_empty() {
+        return Err("presence key must be a non-empty canonical principal URA".to_string());
+    }
+    if trimmed != ura {
+        return Err(format!(
+            "presence key {ura:?} must not carry leading or trailing whitespace"
+        ));
+    }
+    let parsed = crate::core::ura::parse_ura(trimmed)
+        .map_err(|error| format!("presence key {ura:?} is not a canonical URA: {error}"))?;
+    match parsed.kind {
+        crate::core::ura::URAKind::Device
+        | crate::core::ura::URAKind::User
+        | crate::core::ura::URAKind::Agent => Ok(()),
+        other => Err(format!(
+            "presence key {ura:?} must be a canonical Device, User, or Agent URA; got {other:?}"
+        )),
+    }
+}
+
 impl Default for PresenceRegistry {
     fn default() -> Self {
         Self::new()
@@ -658,14 +689,16 @@ mod tests {
     fn negotiated_insert_remembers_contract_and_surfaces_prior_nonce() {
         let reg = PresenceRegistry::new();
         let (tx1, _rx1) = tokio::sync::mpsc::channel(1);
-        let first = reg.insert_negotiated(
-            "easynet:///r/t/device/d1".into(),
-            tx1,
-            SessionContract {
-                version: 1,
-                claimant_boot_nonce: vec![1; 16],
-            },
-        );
+        let first = reg
+            .insert_negotiated(
+                "easynet:///r/t/device/d1".into(),
+                tx1,
+                SessionContract {
+                    version: 1,
+                    claimant_boot_nonce: vec![1; 16],
+                },
+            )
+            .expect("canonical presence key");
         assert!(first.displaced.is_none());
         assert!(first.displaced_claimant_nonce.is_none());
         assert_eq!(
@@ -677,14 +710,16 @@ mod tests {
         // A different claimant displacing the slot surfaces the prior
         // fingerprint so the accept path can classify the conflict.
         let (tx2, _rx2) = tokio::sync::mpsc::channel(1);
-        let second = reg.insert_negotiated(
-            "easynet:///r/t/device/d1".into(),
-            tx2,
-            SessionContract {
-                version: CANONICAL_SESSION_CARRIER_VERSION,
-                claimant_boot_nonce: vec![2; 16],
-            },
-        );
+        let second = reg
+            .insert_negotiated(
+                "easynet:///r/t/device/d1".into(),
+                tx2,
+                SessionContract {
+                    version: CANONICAL_SESSION_CARRIER_VERSION,
+                    claimant_boot_nonce: vec![2; 16],
+                },
+            )
+            .expect("canonical presence key");
         assert!(second.displaced.is_some());
         assert_eq!(second.displaced_claimant_nonce, Some(vec![1; 16]));
         assert_eq!(
@@ -698,7 +733,9 @@ mod tests {
     fn insert_tracked_registers_canonical_contract() {
         let reg = PresenceRegistry::new();
         let (tx, _rx) = tokio::sync::mpsc::channel(1);
-        let r = reg.insert_tracked("easynet:///r/t/device/d2".into(), tx);
+        let r = reg
+            .insert_tracked("easynet:///r/t/device/d2".into(), tx)
+            .expect("canonical presence key");
         assert!(r.displaced_claimant_nonce.is_none());
         assert_eq!(
             reg.lookup_dispatch_session("easynet:///r/t/device/d2")
@@ -711,7 +748,9 @@ mod tests {
     fn insert_then_lookup_returns_sender() {
         let registry = PresenceRegistry::new();
         let ura = "easynet:///r/realm/device/node-1".to_string();
-        let prior = registry.insert(ura.clone(), make_dispatch_sender());
+        let prior = registry
+            .insert(ura.clone(), make_dispatch_sender())
+            .expect("canonical presence key");
         assert!(prior.is_none());
         assert!(registry.lookup(&ura).is_some());
     }
@@ -719,18 +758,24 @@ mod tests {
     #[test]
     fn snapshot_is_sorted() {
         let registry = PresenceRegistry::new();
-        registry.insert(
-            "easynet:///r/realm/device/c".to_string(),
-            make_dispatch_sender(),
-        );
-        registry.insert(
-            "easynet:///r/realm/device/a".to_string(),
-            make_dispatch_sender(),
-        );
-        registry.insert(
-            "easynet:///r/realm/device/b".to_string(),
-            make_dispatch_sender(),
-        );
+        registry
+            .insert(
+                "easynet:///r/realm/device/c".to_string(),
+                make_dispatch_sender(),
+            )
+            .expect("canonical presence key");
+        registry
+            .insert(
+                "easynet:///r/realm/device/a".to_string(),
+                make_dispatch_sender(),
+            )
+            .expect("canonical presence key");
+        registry
+            .insert(
+                "easynet:///r/realm/device/b".to_string(),
+                make_dispatch_sender(),
+            )
+            .expect("canonical presence key");
 
         let snap = registry.snapshot();
         assert_eq!(
@@ -747,10 +792,12 @@ mod tests {
     async fn insert_emits_online_event() {
         let registry = PresenceRegistry::new();
         let mut subscriber = registry.subscribe_events();
-        registry.insert(
-            "easynet:///r/realm/device/n1".to_string(),
-            make_dispatch_sender(),
-        );
+        registry
+            .insert(
+                "easynet:///r/realm/device/n1".to_string(),
+                make_dispatch_sender(),
+            )
+            .expect("canonical presence key");
 
         match subscriber.recv().await.expect("event") {
             PresenceEvent::Online { ura } => {
@@ -764,7 +811,9 @@ mod tests {
     async fn remove_emits_offline_with_reason() {
         let registry = PresenceRegistry::new();
         let ura = "easynet:///r/realm/device/n1".to_string();
-        registry.insert(ura.clone(), make_dispatch_sender());
+        registry
+            .insert(ura.clone(), make_dispatch_sender())
+            .expect("canonical presence key");
 
         let mut subscriber = registry.subscribe_events();
         registry.remove(&ura, OfflineReason::StreamReset);
@@ -786,13 +835,17 @@ mod tests {
         let registry = PresenceRegistry::new();
         let ura = "easynet:///r/realm/device/n1".to_string();
 
-        registry.insert(ura.clone(), make_dispatch_sender());
+        registry
+            .insert(ura.clone(), make_dispatch_sender())
+            .expect("canonical presence key");
 
         // Subscribe AFTER the first insert so we observe only the
         // displacement transition.
         let mut subscriber = registry.subscribe_events();
 
-        let displaced = registry.insert(ura.clone(), make_dispatch_sender());
+        let displaced = registry
+            .insert(ura.clone(), make_dispatch_sender())
+            .expect("canonical presence key");
         assert!(displaced.is_some(), "second insert must displace");
 
         let first = subscriber.recv().await.expect("first event");
@@ -820,10 +873,14 @@ mod tests {
         let sender_a = make_dispatch_sender();
         let sender_b = make_dispatch_sender();
 
-        let first = registry.insert_tracked(ura.clone(), sender_a);
+        let first = registry
+            .insert_tracked(ura.clone(), sender_a)
+            .expect("canonical presence key");
 
         let mut subscriber = registry.subscribe_events();
-        let second = registry.insert_tracked(ura.clone(), sender_b.clone());
+        let second = registry
+            .insert_tracked(ura.clone(), sender_b.clone())
+            .expect("canonical presence key");
         assert!(
             second.displaced.is_some(),
             "second insert must displace first sender"
@@ -870,7 +927,9 @@ mod tests {
     fn force_revoke_emits_admin_revoked_offline() {
         let registry = PresenceRegistry::new();
         let ura = "easynet:///r/realm/device/n1".to_string();
-        registry.insert(ura.clone(), make_dispatch_sender());
+        registry
+            .insert(ura.clone(), make_dispatch_sender())
+            .expect("canonical presence key");
 
         let prior = registry.force_revoke(&ura);
         assert!(prior.is_some());
@@ -882,12 +941,14 @@ mod tests {
         let registry = PresenceRegistry::new();
         let ura = "easynet:///r/realm/user/alice".to_string();
         let key = "pubkey-a";
-        registry.insert_negotiated_with_trust(
-            ura.clone(),
-            make_dispatch_sender(),
-            SessionContract::canonical(),
-            SessionTrustContext::user_pubkey(key),
-        );
+        registry
+            .insert_negotiated_with_trust(
+                ura.clone(),
+                make_dispatch_sender(),
+                SessionContract::canonical(),
+                SessionTrustContext::user_pubkey(key),
+            )
+            .expect("canonical presence key");
 
         let prior = registry.force_revoke_if_admitted_key(&ura, key);
 
@@ -899,12 +960,14 @@ mod tests {
     fn force_revoke_if_admitted_key_keeps_different_key_slot() {
         let registry = PresenceRegistry::new();
         let ura = "easynet:///r/realm/user/alice".to_string();
-        registry.insert_negotiated_with_trust(
-            ura.clone(),
-            make_dispatch_sender(),
-            SessionContract::canonical(),
-            SessionTrustContext::user_pubkey("pubkey-b"),
-        );
+        registry
+            .insert_negotiated_with_trust(
+                ura.clone(),
+                make_dispatch_sender(),
+                SessionContract::canonical(),
+                SessionTrustContext::user_pubkey("pubkey-b"),
+            )
+            .expect("canonical presence key");
 
         let prior = registry.force_revoke_if_admitted_key(&ura, "pubkey-a");
 
@@ -919,10 +982,12 @@ mod tests {
         let mut subscriber = registry.subscribe_events();
 
         for n in 0..10 {
-            registry.insert(
-                crate::core::ura::agent_ura("realm", "u1", &format!("n{n}")),
-                make_dispatch_sender(),
-            );
+            registry
+                .insert(
+                    crate::core::ura::agent_ura("realm", "u1", &format!("n{n}")),
+                    make_dispatch_sender(),
+                )
+                .expect("canonical presence key");
         }
 
         // The slow subscriber observes lag rather than blocking
@@ -935,6 +1000,45 @@ mod tests {
         // Recovery path is to snapshot the registry directly.
         let snap = registry.snapshot();
         assert_eq!(snap.len(), 10);
+    }
+
+    #[test]
+    fn insert_rejects_malformed_presence_key_before_mutation() {
+        let registry = PresenceRegistry::new();
+
+        let error = registry
+            .insert("not-a-ura".to_string(), make_dispatch_sender())
+            .expect_err("malformed presence key must fail closed");
+
+        assert!(
+            error.contains("canonical URA"),
+            "unexpected presence validation error: {error}"
+        );
+        assert!(
+            registry.snapshot().is_empty(),
+            "malformed presence keys must not mutate live registry state"
+        );
+    }
+
+    #[test]
+    fn insert_rejects_non_principal_presence_key_before_mutation() {
+        let registry = PresenceRegistry::new();
+
+        let error = registry
+            .insert(
+                crate::core::ura::resource_dot_ura("realm", "user.alice", "session/s1"),
+                make_dispatch_sender(),
+            )
+            .expect_err("non-principal presence key must fail closed");
+
+        assert!(
+            error.contains("Device, User, or Agent URA"),
+            "unexpected presence validation error: {error}"
+        );
+        assert!(
+            registry.snapshot().is_empty(),
+            "non-principal presence keys must not mutate live registry state"
+        );
     }
 
     #[test]

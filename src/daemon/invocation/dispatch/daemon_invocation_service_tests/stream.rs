@@ -42,7 +42,9 @@ async fn invoke_stream_dispatches_subscribe_directory_v2_emits_directory_events(
     let (sender, _rx) = tokio::sync::mpsc::channel::<
         Result<crate::daemon::invocation::bidi::state::presence::DispatchFrame, tonic::Status>,
     >(1);
-    presence.insert("easynet:///r/test-realm/device/n1".to_string(), sender);
+    presence
+        .insert("easynet:///r/test-realm/device/n1".to_string(), sender)
+        .expect("canonical presence key");
     let second = stream.next().await.expect("second frame").expect("Ok");
     let evt2: DirectoryEvent =
         serde_json::from_slice(&second.payload).expect("decodes DirectoryEvent");
@@ -818,14 +820,17 @@ async fn invoke_stream_dispatches_remote_selected_route_over_presence_session() 
         .with_daemon_runtime(source_runtime_assembly)
         .with_pending_stream(Arc::clone(&pending_stream));
     let (target_tx, mut target_rx) = mpsc::channel(4);
-    svc.directory.presence.insert_negotiated(
-        TARGET_DEVICE_URA.to_string(),
-        target_tx,
-        crate::daemon::invocation::bidi::state::presence::SessionContract {
-            version: 1,
-            claimant_boot_nonce: vec![1; 16],
-        },
-    );
+    svc.directory
+        .presence
+        .insert_negotiated(
+            TARGET_DEVICE_URA.to_string(),
+            target_tx,
+            crate::daemon::invocation::bidi::state::presence::SessionContract {
+                version: 1,
+                claimant_boot_nonce: vec![1; 16],
+            },
+        )
+        .expect("canonical presence key");
     publish_test_route(&svc, TARGET_DEVICE_URA, ABILITY);
 
     let resp = svc

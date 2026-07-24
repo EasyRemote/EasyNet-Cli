@@ -264,14 +264,16 @@ async fn connect(socket_path: &std::path::Path) -> Channel {
 /// registry for liveness), so a throwaway channel is sufficient.
 fn mark_owner_online(presence: &PresenceRegistry) {
     let (tx, _rx) = mpsc::channel(1);
-    presence.insert_negotiated(
-        DEVICE_URA.to_string(),
-        tx,
-        SessionContract {
-            version: 1,
-            claimant_boot_nonce: vec![0xA1; 16],
-        },
-    );
+    presence
+        .insert_negotiated(
+            DEVICE_URA.to_string(),
+            tx,
+            SessionContract {
+                version: 1,
+                claimant_boot_nonce: vec![0xA1; 16],
+            },
+        )
+        .expect("canonical presence key");
 }
 
 /// Build a unary `Invoke` of `function_name` against `callee_ura`,

@@ -653,7 +653,9 @@ async fn pending_stream_presence_offline_watcher_delivers_terminal_failure() {
             let (sender, _rx) = tokio::sync::mpsc::channel::<
                 Result<crate::daemon::invocation::bidi::state::presence::DispatchFrame, tonic::Status>,
             >(1);
-            presence.insert(target_ura.to_string(), sender);
+            presence
+                .insert(target_ura.to_string(), sender)
+                .expect("canonical presence key");
             presence.remove(
                 target_ura,
                 crate::daemon::invocation::bidi::state::presence::OfflineReason::StreamClosed,

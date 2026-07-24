@@ -1981,7 +1981,9 @@ mod tests {
     /// Mark `owner_ura` as online in presence (the same liveness signal
     /// `handle_resolve_at` reads from `registry.snapshot()`).
     fn mark_online(registry: &PresenceRegistry, owner_ura: &str) {
-        registry.insert(owner_ura.to_string(), make_dispatch_sender());
+        registry
+            .insert(owner_ura.to_string(), make_dispatch_sender())
+            .expect("canonical presence key");
     }
 
     /// Test builder for the same immutable local publication snapshot used by

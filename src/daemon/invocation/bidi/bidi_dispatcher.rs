@@ -1460,12 +1460,9 @@ impl SessionOpenProvider {
             session_id,
             displaced,
             displaced_claimant_nonce,
-        } = presence.insert_negotiated_with_trust(
-            caller_ura.clone(),
-            down_tx,
-            contract,
-            trust_context,
-        );
+        } = presence
+            .insert_negotiated_with_trust(caller_ura.clone(), down_tx, contract, trust_context)
+            .map_err(AxonError::invalid_argument)?;
         let displaced_prior = displaced.is_some();
         drop(displaced);
         crate::op_event!(
@@ -3747,14 +3744,16 @@ mod tests {
         let caller_ura = "easynet:///r/test/device/provider-lease".to_string();
         let (sender, _receiver) =
             mpsc::channel::<Result<DispatchFrame, Status>>(DISPATCH_CHANNEL_CAPACITY);
-        let registration = presence.insert_negotiated(
-            caller_ura.clone(),
-            sender,
-            SessionContract {
-                version: CANONICAL_SESSION_CARRIER_VERSION,
-                claimant_boot_nonce: vec![0x11; 16],
-            },
-        );
+        let registration = presence
+            .insert_negotiated(
+                caller_ura.clone(),
+                sender,
+                SessionContract {
+                    version: CANONICAL_SESSION_CARRIER_VERSION,
+                    claimant_boot_nonce: vec![0x11; 16],
+                },
+            )
+            .expect("canonical presence key");
         let lease = SessionPresenceLease::new(
             Arc::clone(&presence),
             caller_ura.clone(),
@@ -3766,14 +3765,16 @@ mod tests {
             session_id: replacement_session_id,
             displaced,
             ..
-        } = presence.insert_negotiated(
-            caller_ura.clone(),
-            replacement_sender,
-            SessionContract {
-                version: CANONICAL_SESSION_CARRIER_VERSION,
-                claimant_boot_nonce: vec![0x22; 16],
-            },
-        );
+        } = presence
+            .insert_negotiated(
+                caller_ura.clone(),
+                replacement_sender,
+                SessionContract {
+                    version: CANONICAL_SESSION_CARRIER_VERSION,
+                    claimant_boot_nonce: vec![0x22; 16],
+                },
+            )
+            .expect("canonical presence key");
         drop(displaced);
         assert!(presence.lookup(&caller_ura).is_some());
         drop(lease);

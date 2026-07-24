@@ -467,7 +467,10 @@ fn publish_test_route_hosted_by(
     };
     if svc.directory.presence.lookup(&host_ura).is_none() {
         let (tx, _rx) = tokio::sync::mpsc::channel(1);
-        svc.directory.presence.insert(host_ura.clone(), tx);
+        svc.directory
+            .presence
+            .insert(host_ura.clone(), tx)
+            .expect("canonical presence key");
     }
     let (namespace, local_name) = public_name
         .rsplit_once('.')

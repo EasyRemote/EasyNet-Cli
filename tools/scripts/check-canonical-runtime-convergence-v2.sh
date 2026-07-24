@@ -9099,6 +9099,64 @@ for required_test in (
 PY
 }
 
+check_presence_registry_canonical_principal_key_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local presence="$cli_root/src/daemon/invocation/bidi/state/presence.rs"
+  local wrappers="$cli_root/src/daemon/invocation/dispatch/federation_wrappers.rs"
+  local unary_tests="$cli_root/src/daemon/invocation/dispatch/daemon_invocation_service_tests/unary.rs"
+  [[ -f "$presence" ]] || fail "presence registry source is missing: $presence"
+  [[ -f "$wrappers" ]] || fail "federation wrappers source is missing: $wrappers"
+  [[ -f "$unary_tests" ]] || fail "daemon invocation service unary tests are missing: $unary_tests"
+
+  "$PYTHON_BIN" - "$presence" "$wrappers" "$unary_tests" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+presence_path, wrappers_path, unary_tests_path = map(Path, sys.argv[1:])
+presence = presence_path.read_text(encoding="utf-8")
+wrappers = wrappers_path.read_text(encoding="utf-8")
+unary_tests = unary_tests_path.read_text(encoding="utf-8")
+presence_production = presence.split("\n#[cfg(test)]", 1)[0]
+
+required_presence_tokens = {
+    "fn validate_presence_principal_ura(ura: &str) -> Result<(), String>": "validator_missing",
+    "crate::core::ura::parse_ura(trimmed)": "validator_must_parse_canonical_ura",
+    "crate::core::ura::URAKind::Device": "device_principal_missing",
+    "crate::core::ura::URAKind::User": "user_principal_missing",
+    "crate::core::ura::URAKind::Agent": "agent_principal_missing",
+    "validate_presence_principal_ura(&ura)?;": "insert_boundary_validation_missing",
+    "pub fn insert(\n        &self,\n        ura: String,\n        sender: DispatchSender,\n    ) -> Result<Option<DispatchSender>, String>": "insert_result_contract_missing",
+    "pub fn insert_negotiated_with_trust(\n        &self,\n        ura: String,\n        sender: DispatchSender,\n        contract: SessionContract,\n        trust: SessionTrustContext,\n    ) -> Result<PresenceRegistration, String>": "trusted_insert_result_contract_missing",
+}
+for token, code in required_presence_tokens.items():
+    if token not in presence_production:
+        raise SystemExit(f"presence_registry_canonical_principal_key:{code}")
+
+for forbidden in (
+    "handle_list_user_devices_ignores_legacy_agent_device_shape",
+    "legacy agent shapes are ignored",
+    "legacy and hosted agent URAs must be ignored",
+):
+    if forbidden in wrappers or forbidden in unary_tests:
+        raise SystemExit(f"presence_registry_canonical_principal_key:legacy_wrapper_swallow:{forbidden}")
+
+for required_test in (
+    "insert_rejects_malformed_presence_key_before_mutation",
+    "insert_rejects_non_principal_presence_key_before_mutation",
+    "handle_list_user_devices_filters_canonical_non_device_principals",
+    "presence_registry_rejects_prefix_matched_malformed_device_presence",
+):
+    if required_test not in presence and required_test not in wrappers and required_test not in unary_tests:
+        raise SystemExit(f"presence_registry_canonical_principal_key:missing_test:{required_test}")
+
+if 'expect_err("malformed device presence must fail at registry admission")' not in unary_tests:
+    raise SystemExit("presence_registry_canonical_principal_key:daemon_unary_registry_failure_fixture_missing")
+if ".expect_err(\"malformed device presence must fail closed before wrapper projection\")" not in wrappers:
+    raise SystemExit("presence_registry_canonical_principal_key:wrapper_malformed_fixture_not_at_registry")
+PY
+}
+
 check_daemon_invocation_service_descriptor_ref_route_projection_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local service="$cli_root/src/daemon/invocation/dispatch/daemon_invocation_service.rs"
@@ -14886,6 +14944,62 @@ EOF
   if ( CLI_ROOT="$tmp/cli-namespace-proxy-default"; check_namespace_proxy_resolve_exact_tuple_ingress_contract ) >/dev/null 2>&1; then
     fail "self-test expected namespace proxy default tuple ingress gate to fail"
   fi
+  mkdir -p "$tmp/cli-presence-legacy/src/daemon/invocation/bidi/state" \
+    "$tmp/cli-presence-legacy/src/daemon/invocation/dispatch/daemon_invocation_service_tests" \
+    "$tmp/cli-presence-legacy/src/daemon/invocation/dispatch"
+  cat >"$tmp/cli-presence-legacy/src/daemon/invocation/bidi/state/presence.rs" <<'EOF'
+pub struct PresenceRegistry;
+pub struct DispatchSender;
+pub struct PresenceRegistration;
+pub struct SessionContract;
+pub struct SessionTrustContext;
+
+impl PresenceRegistry {
+    pub fn insert(&self, ura: String, sender: DispatchSender) -> Option<DispatchSender> {
+        self.insert_tracked(ura, sender).displaced
+    }
+    pub fn insert_tracked(&self, ura: String, sender: DispatchSender) -> PresenceRegistration {
+        self.insert_negotiated(ura, sender, SessionContract)
+    }
+    pub fn insert_negotiated(
+        &self,
+        ura: String,
+        sender: DispatchSender,
+        contract: SessionContract,
+    ) -> PresenceRegistration {
+        self.insert_negotiated_with_trust(ura, sender, contract, SessionTrustContext)
+    }
+    pub fn insert_negotiated_with_trust(
+        &self,
+        ura: String,
+        sender: DispatchSender,
+        contract: SessionContract,
+        trust: SessionTrustContext,
+    ) -> PresenceRegistration {
+        PresenceRegistration
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    fn insert_accepts_malformed_presence_key_for_wrapper_projection() {}
+}
+EOF
+  cat >"$tmp/cli-presence-legacy/src/daemon/invocation/dispatch/federation_wrappers.rs" <<'EOF'
+#[cfg(test)]
+mod tests {
+    fn handle_list_user_devices_ignores_legacy_agent_device_shape() {
+        let _ = "legacy agent shapes are ignored";
+        let _ = "legacy and hosted agent URAs must be ignored";
+    }
+}
+EOF
+  cat >"$tmp/cli-presence-legacy/src/daemon/invocation/dispatch/daemon_invocation_service_tests/unary.rs" <<'EOF'
+fn invoke_federation_list_user_devices_rejects_malformed_device_presence() {}
+EOF
+  if ( CLI_ROOT="$tmp/cli-presence-legacy"; check_presence_registry_canonical_principal_key_contract ) >/dev/null 2>&1; then
+    fail "self-test expected presence registry canonical principal key gate to fail"
+  fi
   mkdir -p "$tmp/cli-daemon-route-projection-legacy/src/daemon/invocation/dispatch" \
     "$tmp/cli-daemon-route-projection-legacy/src/daemon/axon_bridge"
   cat >"$tmp/cli-daemon-route-projection-legacy/src/daemon/invocation/dispatch/daemon_invocation_service.rs" <<'EOF'
@@ -20423,6 +20537,7 @@ EOF
   check_namespace_resolver_authority_projection_contract
   check_namespace_proxy_resolve_exact_tuple_ingress_contract
   check_federation_list_user_devices_exact_tuple_ingress_contract
+  check_presence_registry_canonical_principal_key_contract
   check_daemon_invocation_service_descriptor_ref_route_projection_contract
   check_ffi_descriptor_runtime_owner_contract
   check_ffi_descriptor_probe_not_found_vocabulary_contract
@@ -20633,6 +20748,7 @@ check_route_resolver_descriptor_ref_selector_contract
 check_namespace_resolver_authority_projection_contract
 check_namespace_proxy_resolve_exact_tuple_ingress_contract
 check_federation_list_user_devices_exact_tuple_ingress_contract
+check_presence_registry_canonical_principal_key_contract
 check_daemon_invocation_service_descriptor_ref_route_projection_contract
 check_ffi_descriptor_runtime_owner_contract
 check_ffi_descriptor_probe_not_found_vocabulary_contract

@@ -367,7 +367,9 @@ async fn streaming_chain_propagates_presence_event_to_peer_cell() {
             tonic::Status,
         >,
     >(8);
-    daemon_a_presence.insert(target_ura.to_string(), tx);
+    daemon_a_presence
+        .insert(target_ura.to_string(), tx)
+        .expect("canonical presence key");
 
     // ── Assert: daemon B's cell shows the entry within a
     // bounded window. The data-plane round-trip is in-process
@@ -436,7 +438,9 @@ async fn streaming_chain_propagates_presence_remove() {
             tonic::Status,
         >,
     >(8);
-    daemon_a_presence.insert(target_ura.to_string(), tx);
+    daemon_a_presence
+        .insert(target_ura.to_string(), tx)
+        .expect("canonical presence key");
     let mut observed_online = false;
     for _ in 0..40 {
         let snap = daemon_b_directory.snapshot();
