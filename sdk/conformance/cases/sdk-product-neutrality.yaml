@@ -3,7 +3,7 @@ profile: conformance
 required_for:
   - go
   - python
-description: Provider-neutral runtime cores contain only generic concepts; EasyNet provider/source-compatibility exports are explicitly classified outside the canonical inventory.
+description: Provider-neutral runtime cores contain only generic concepts; distribution facades are explicitly classified outside the canonical runtime core.
 steps:
   - action: run_sdk_product_neutrality_guard
 expect:

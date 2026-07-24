@@ -37,7 +37,7 @@ STATUS_CANONICAL_NAMES = {
 }
 PACKAGE_CATEGORIES = {
     "canonical_axon_sdk",
-    "easynet_provider",
+    "distribution_facade",
     "generated_wire",
     "provider_neutral_core",
     "provider_registry",
@@ -559,7 +559,11 @@ def validate_provider_implementations(
             or key in seen
         ):
             fail(f"invalid_provider_implementation:{language}:{identity}")
-        if re.search(r"\beasy(?:net|remote)\b", production_owner, flags=re.I):
+        if re.search(
+            r"\b(easy(?:net|remote)|product|branded|daemon)\b",
+            production_owner,
+            flags=re.I,
+        ):
             fail(f"product_specific_provider_owner:{language}:{identity}")
         if identity == "direct_runtime_provider" and {
             "stream",
@@ -1050,7 +1054,7 @@ def self_test(tmp: Path) -> None:
     product_specific_provider_owner = copy.deepcopy(concepts)
     product_specific_provider_owner["provider_implementations"][0][
         "production_owner"
-    ] = "EasyNet daemon provider"
+    ] = "branded daemon provider"
     expect(
         product_specific_provider_owner,
         "product_specific_provider_owner",

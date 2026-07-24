@@ -665,7 +665,7 @@ check_go_sdk_runtime_lifecycle_neutrality_contract() {
   if rg -n \
     'daemon (discover|start|attach|status|open-runtime|open runtime|stop|detach|transport|control|handle|invocation endpoint|endpoints|status JSON|lifecycle state)|daemon control|daemon handle|decode daemon|invalid daemon|runtime-ready daemon' \
     "$lifecycle"; then
-    fail "Go SDK canonical runtime lifecycle preserves daemon vocabulary outside the EasyNet provider package"
+    fail "Go SDK canonical runtime lifecycle preserves daemon vocabulary outside the runtime provider package"
   fi
 
   for token in \

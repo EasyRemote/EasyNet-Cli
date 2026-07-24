@@ -337,7 +337,7 @@ if rg -n 'easynet.run/cli/sdk/go/provider/easynet' sdk/go \
   --glob '!**/provider/**' \
   --glob '!**/*_test.go' \
   --glob '!**/runtime_events_compat.go'; then
-  fail "canonical Go implementation imports the EasyNet provider facade"
+  fail "canonical Go implementation imports the retired product provider facade"
 fi
 
 for retired in \
@@ -397,7 +397,7 @@ done
 if rg -n '(federation\.subscribe_directory_v2|events\.device\.subscribe|events\.invocation\.subscribe|session\.attach|daemon_ability|since_seq)' \
   sdk/go sdk/python/easynet_sdk tools/sdk-api-inventory \
   --glob '*.go' --glob '*.py' --glob '!**/*_test.go'; then
-  fail "EasyNet provider route literal leaked into canonical SDK source"
+  fail "product provider route literal leaked into canonical SDK source"
 fi
 
 for path in \

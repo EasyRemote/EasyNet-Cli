@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 
 DOWNSTREAM_ITEMS: set[str] = set()
-PRODUCT_NEUTRAL_CUTOVER_REF = "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces"
+PRODUCT_NEUTRAL_CUTOVER_REF = "docs/spec/daemon-sdk-requirements-v1.md#runtime-provider-surfaces"
 
 
 def is_fallback_signer_item(item: str) -> bool:
@@ -92,7 +92,7 @@ def canonical_quarantine_reason(item: str) -> str | None:
     )):
         return "Plain canonical/admission helpers are transitional defects; canonical runtime entry is descriptor-bound proof."
     if public_root(item) in DOWNSTREAM_ITEMS:
-        return "EasyNet federation payload is a downstream provider carrier, not a canonical SDK capability."
+        return "Federation payload is a downstream provider carrier, not a canonical SDK capability."
     if root in {
         "ControlDiscovery",
         "ControlDiscoveryReader",
@@ -105,7 +105,7 @@ def canonical_quarantine_reason(item: str) -> str | None:
         "NewControlDiscoveryRuntimeConnector",
         "ResolveControlDiscoveryPath",
     }:
-        return "Control discovery and raw control IPC are EasyNet provider boot/status surfaces, not canonical runtime SDK concepts."
+        return "Control discovery and raw control IPC are runtime-host provider boot/status surfaces, not canonical runtime SDK concepts."
     if root in {
         "DirectRuntimeConnector",
         "DirectRuntimeConnectorOptions",
@@ -115,9 +115,9 @@ def canonical_quarantine_reason(item: str) -> str | None:
         "NewDirectRuntimeConnectorWithOptions",
         "OpenDirectRuntimeTransport",
     }:
-        return "Direct runtime exports are EasyNet daemon provider/source-compatibility surface, not canonical SDK capability evidence."
+        return "Direct runtime exports are native transport provider surface, not canonical SDK capability evidence."
     if root == "RuntimeHostRole":
-        return "Current runtime host role values encode EasyNet device/hub topology and are provider/source-compatibility surface."
+        return "Current runtime host role values encode topology-bound provider surface, not canonical SDK capability evidence."
     if re.search(r"(?i)easynet|easyremote", item):
         return "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
     if re.search(r"(?i)remote_?desktop|voice(call|event|network|\b)", item):

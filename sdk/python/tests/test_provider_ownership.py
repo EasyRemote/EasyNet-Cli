@@ -87,7 +87,7 @@ def test_canonical_lifecycle_does_not_import_product_provider() -> None:
     assert "StartConfig" not in body
 
 
-def test_python_easynet_provider_package_is_retired() -> None:
+def test_python_product_provider_package_is_retired() -> None:
     provider_root = Path(easynet_sdk.__file__).resolve().parent / "providers" / "easynet"
     assert not provider_root.exists()
 

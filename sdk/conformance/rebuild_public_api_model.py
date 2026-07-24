@@ -344,7 +344,7 @@ def package_manifest() -> dict[str, list[dict[str, str]]]:
     python_categories: dict[str, str] = {}
     for path in python_paths:
         if "/providers/easynet" in path:
-            category = "easynet_provider"
+            category = "distribution_facade"
         elif "/providers/runtime" in path:
             category = "provider_neutral_core"
         elif "/providers" in path:
@@ -354,7 +354,7 @@ def package_manifest() -> dict[str, list[dict[str, str]]]:
         elif "/_axon_pb" in path:
             category = "generated_wire"
         elif path == "sdk/python/easynet_sdk":
-            category = "easynet_provider"
+            category = "distribution_facade"
         else:
             category = "public_facade"
         python_categories[path] = category
@@ -371,13 +371,13 @@ def package_manifest() -> dict[str, list[dict[str, str]]]:
         "java": [
             {
                 "path": "sdk/java/src/main/java/run/runtime/sdk",
-                "category": "easynet_provider",
+                "category": "distribution_facade",
             }
         ],
         "swift": [
             {
                 "path": "sdk/swift/Sources/RuntimeSDK",
-                "category": "easynet_provider",
+                "category": "distribution_facade",
             }
         ],
     }
