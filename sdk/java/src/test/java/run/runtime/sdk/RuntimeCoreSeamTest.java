@@ -197,6 +197,11 @@ public final class RuntimeCoreSeamTest {
         new InvocationSignature("ed25519", "c2lnbmF0dXJl", "caller-key-1", "");
     SignedInvocation signed = prepared.signWithCallerSignature(signature);
     check(signed.submitReady(), "signed invocation is submit-ready");
+    check(
+        signed.policy() != null
+            && "provider_managed_signing".equals(signed.policy().mode())
+            && "policy-signer-1".equals(signed.policy().signerId()),
+        "signer policy preserved on signed invocation");
     InvocationHandle handle = signed.submit();
     check(!handle.terminal(), "submitted invocation handle");
     InvocationResult awaited = runtime.awaitResult(handle);
@@ -212,7 +217,10 @@ public final class RuntimeCoreSeamTest {
     InvocationHandle events = runtime.events(handle);
     check(events.terminal(), "invocation events snapshot");
     runtime.closeHandle(handle);
-    check(transport.submittedSigner.equals("caller-key-1"), "caller signer preserved");
+    check(transport.submittedSigner.equals("policy-signer-1"), "policy signer preserved");
+    check(
+        "policy/local".equals(transport.submittedPolicy.get("policy_ref")),
+        "signed submission policy_ref preserved");
     InvocationHandle forged =
         InvocationHandle.fromJSON(
             "{\"handle_id\":7,\"state\":\"Running\",\"terminal\":false}"
@@ -1087,6 +1095,7 @@ public final class RuntimeCoreSeamTest {
 
   private static final class MemoryRuntimeTransport implements RuntimeTransport {
     private String submittedSigner = "";
+    private Map<String, Object> submittedPolicy = Map.of();
     private long eventHandleId = 7;
     private int openedBidi = 0;
 
@@ -1112,6 +1121,12 @@ public final class RuntimeCoreSeamTest {
               "canonical_bytes_base64", "Y2Fub25pY2Fs",
               "args_digest_hex", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
               "descriptor_ref", DESCRIPTOR,
+              "signer_policy",
+                  Map.of(
+                      "mode", "provider_managed_signing",
+                      "signer_id", "policy-signer-1",
+                      "policy_ref", "policy/local",
+                      "expires_at_unix_ms", 4102444800000L),
               "expires_at_unix_ms", 4102444800000L);
       Map<String, Object> prepared = new LinkedHashMap<>();
       prepared.put("prepared_id", "prepared-1");
@@ -1131,6 +1146,16 @@ public final class RuntimeCoreSeamTest {
     public byte[] submitSigned(byte[] signedJson) {
       Map<String, Object> signed = JsonValueReader.object(signedJson, "signed");
       submittedSigner = String.valueOf(signed.get("signer_id"));
+      Object policy = signed.get("policy");
+      if (policy instanceof Map<?, ?> raw) {
+        Map<String, Object> normalized = new LinkedHashMap<>();
+        for (Map.Entry<?, ?> entry : raw.entrySet()) {
+          if (entry.getKey() instanceof String key) {
+            normalized.put(key, entry.getValue());
+          }
+        }
+        submittedPolicy = normalized;
+      }
       return JsonValueWriter.object(Map.of("handle_id", 7, "state", "Running", "terminal", false));
     }
 

@@ -8,7 +8,8 @@ public record SigningMaterial(
     String canonicalBytesBase64,
     String argsDigestHex,
     String descriptorRef,
-    long expiresAtUnixMS) {
+    long expiresAtUnixMS,
+    SignerPolicy signerPolicy) {
   public SigningMaterial {
     algorithm = required(algorithm, "algorithm");
     canonicalBytesBase64 = required(canonicalBytesBase64, "canonical_bytes_base64");
@@ -26,13 +27,15 @@ public record SigningMaterial(
         "canonical_bytes_base64",
         "args_digest_hex",
         "descriptor_ref",
-        "expires_at_unix_ms");
+        "expires_at_unix_ms",
+        "signer_policy");
     return new SigningMaterial(
         string(fields, "algorithm"),
         string(fields, "canonical_bytes_base64"),
         string(fields, "args_digest_hex"),
         string(fields, "descriptor_ref"),
-        nonNegativeLong(fields, "expires_at_unix_ms"));
+        nonNegativeLong(fields, "expires_at_unix_ms"),
+        optionalSignerPolicy(fields, "signer_policy"));
   }
 
   private static void rejectUnknown(Map<String, Object> fields, String... allowed) {
@@ -51,7 +54,28 @@ public record SigningMaterial(
     out.put("args_digest_hex", argsDigestHex);
     out.put("descriptor_ref", descriptorRef);
     out.put("expires_at_unix_ms", expiresAtUnixMS);
+    if (signerPolicy != null) {
+      out.put("signer_policy", signerPolicy.toObject());
+    }
     return out;
+  }
+
+  private static SignerPolicy optionalSignerPolicy(Map<String, Object> fields, String field) {
+    Object value = fields.get(field);
+    if (value == null) {
+      return null;
+    }
+    if (!(value instanceof Map<?, ?> raw)) {
+      throw SDKError.validation("signing_material", field + " must be an object");
+    }
+    Map<String, Object> out = new LinkedHashMap<>();
+    for (Map.Entry<?, ?> entry : raw.entrySet()) {
+      if (!(entry.getKey() instanceof String key)) {
+        throw SDKError.validation("signing_material", field + " keys must be strings");
+      }
+      out.put(key, entry.getValue());
+    }
+    return SignerPolicy.fromObject(out);
   }
 
   private static String string(Map<String, Object> fields, String field) {

@@ -148493,6 +148493,10 @@
           "sha256": "5959bb1c65241ab720ee7595a54d2220c1e89f18d3aab3228bedc31c761203cf"
         },
         {
+          "item": "SignerPolicy",
+          "sha256": "77dcd697f006c13184534c37f8c2691c61a4dc3c5b5a49b62692826a0229b924"
+        },
+        {
           "item": "SigningMaterial",
           "sha256": "0b8c4870e2f99cd5f69c556605482596ca862f475809d46c8087cb17394a6ffb"
         },
@@ -148545,6 +148549,10 @@
           "sha256": "f94acb7611effd3c601f4c1195818b86198d9f5abb9957c72704d6e6ce1b8365"
         },
         {
+          "item": "SignedInvocation.policy",
+          "sha256": "6113bca9b60c18737d1fc406cd7887fb777c202a4f69f7df03645ada6d5935d9"
+        },
+        {
           "item": "SignedInvocation.prepared",
           "sha256": "d3c41147c1a93aa93a29e336546908e06d9cdcb4bb8cd24d02d8cfca92604d3d"
         },
@@ -148567,6 +148575,38 @@
         {
           "item": "SignedInvocation.toJSON",
           "sha256": "d11ab70ac5045d9dc59176e277df543e99228a75f67e1ca89dd5c3f9f311d7fe"
+        },
+        {
+          "item": "SignerPolicy.equals",
+          "sha256": "c7cbb6f842caa5c507af5ab227732a806df436baa2b4ebcfc0f42085bd20bf2f"
+        },
+        {
+          "item": "SignerPolicy.expiresAtUnixMS",
+          "sha256": "bd9ac17b517b533f23c509260bc8190812180580940c8871372e5c2e6fcb2271"
+        },
+        {
+          "item": "SignerPolicy.hashCode",
+          "sha256": "4a487f8e3ec4047ed6751f306a3ea5a8a549b874a0fa965ccba1d889d51583fb"
+        },
+        {
+          "item": "SignerPolicy.mode",
+          "sha256": "1c052b04bb6c5b0aae417e398d0666777c9bc05e8936b9ce6b113e7dbe2bd6d3"
+        },
+        {
+          "item": "SignerPolicy.new",
+          "sha256": "2ef42e2d0441a7372e28560c083f31bb3b3c5c149e72074b6d075387c0fd9b7b"
+        },
+        {
+          "item": "SignerPolicy.policyRef",
+          "sha256": "892ee7302b1d4b672c43fd0d45c2bfcee7b689897261cc4abcf5e8f70968c7d2"
+        },
+        {
+          "item": "SignerPolicy.signerId",
+          "sha256": "ce1c9e67dc43013995ed217d3b9c3f932a1bede294e71f2d303144f0c655fb5e"
+        },
+        {
+          "item": "SignerPolicy.toString",
+          "sha256": "a228119c68e6b363c289f8682e6850cf88ca540fd6b36456af0312774cce0571"
         },
         {
           "item": "SigningMaterial.algorithm",
@@ -148598,7 +148638,11 @@
         },
         {
           "item": "SigningMaterial.new",
-          "sha256": "9f239070c06f325b7fe3bb78521c91405ec55673bf3af045103a1063112dfe7a"
+          "sha256": "69b5e01ce97dcc27d56fa9caa077954b1768ca142d59286887fda9d227592ba9"
+        },
+        {
+          "item": "SigningMaterial.signerPolicy",
+          "sha256": "797a447b6643fc0e5a075171f44e8a1d3de280c55f43764a1161048e8c460c1b"
         },
         {
           "item": "SigningMaterial.toString",
@@ -148620,6 +148664,10 @@
               "sha256": "5959bb1c65241ab720ee7595a54d2220c1e89f18d3aab3228bedc31c761203cf"
             },
             {
+              "item": "SignerPolicy",
+              "sha256": "77dcd697f006c13184534c37f8c2691c61a4dc3c5b5a49b62692826a0229b924"
+            },
+            {
               "item": "SigningMaterial",
               "sha256": "0b8c4870e2f99cd5f69c556605482596ca862f475809d46c8087cb17394a6ffb"
             },
@@ -148672,6 +148720,10 @@
               "sha256": "f94acb7611effd3c601f4c1195818b86198d9f5abb9957c72704d6e6ce1b8365"
             },
             {
+              "item": "SignedInvocation.policy",
+              "sha256": "6113bca9b60c18737d1fc406cd7887fb777c202a4f69f7df03645ada6d5935d9"
+            },
+            {
               "item": "SignedInvocation.prepared",
               "sha256": "d3c41147c1a93aa93a29e336546908e06d9cdcb4bb8cd24d02d8cfca92604d3d"
             },
@@ -148694,6 +148746,38 @@
             {
               "item": "SignedInvocation.toJSON",
               "sha256": "d11ab70ac5045d9dc59176e277df543e99228a75f67e1ca89dd5c3f9f311d7fe"
+            },
+            {
+              "item": "SignerPolicy.equals",
+              "sha256": "c7cbb6f842caa5c507af5ab227732a806df436baa2b4ebcfc0f42085bd20bf2f"
+            },
+            {
+              "item": "SignerPolicy.expiresAtUnixMS",
+              "sha256": "bd9ac17b517b533f23c509260bc8190812180580940c8871372e5c2e6fcb2271"
+            },
+            {
+              "item": "SignerPolicy.hashCode",
+              "sha256": "4a487f8e3ec4047ed6751f306a3ea5a8a549b874a0fa965ccba1d889d51583fb"
+            },
+            {
+              "item": "SignerPolicy.mode",
+              "sha256": "1c052b04bb6c5b0aae417e398d0666777c9bc05e8936b9ce6b113e7dbe2bd6d3"
+            },
+            {
+              "item": "SignerPolicy.new",
+              "sha256": "2ef42e2d0441a7372e28560c083f31bb3b3c5c149e72074b6d075387c0fd9b7b"
+            },
+            {
+              "item": "SignerPolicy.policyRef",
+              "sha256": "892ee7302b1d4b672c43fd0d45c2bfcee7b689897261cc4abcf5e8f70968c7d2"
+            },
+            {
+              "item": "SignerPolicy.signerId",
+              "sha256": "ce1c9e67dc43013995ed217d3b9c3f932a1bede294e71f2d303144f0c655fb5e"
+            },
+            {
+              "item": "SignerPolicy.toString",
+              "sha256": "a228119c68e6b363c289f8682e6850cf88ca540fd6b36456af0312774cce0571"
             },
             {
               "item": "SigningMaterial.algorithm",
@@ -148725,7 +148809,11 @@
             },
             {
               "item": "SigningMaterial.new",
-              "sha256": "9f239070c06f325b7fe3bb78521c91405ec55673bf3af045103a1063112dfe7a"
+              "sha256": "69b5e01ce97dcc27d56fa9caa077954b1768ca142d59286887fda9d227592ba9"
+            },
+            {
+              "item": "SigningMaterial.signerPolicy",
+              "sha256": "797a447b6643fc0e5a075171f44e8a1d3de280c55f43764a1161048e8c460c1b"
             },
             {
               "item": "SigningMaterial.toString",
@@ -148747,6 +148835,10 @@
               "sha256": "5959bb1c65241ab720ee7595a54d2220c1e89f18d3aab3228bedc31c761203cf"
             },
             {
+              "item": "SignerPolicy",
+              "sha256": "77dcd697f006c13184534c37f8c2691c61a4dc3c5b5a49b62692826a0229b924"
+            },
+            {
               "item": "SigningMaterial",
               "sha256": "0b8c4870e2f99cd5f69c556605482596ca862f475809d46c8087cb17394a6ffb"
             },
@@ -148799,6 +148891,10 @@
               "sha256": "f94acb7611effd3c601f4c1195818b86198d9f5abb9957c72704d6e6ce1b8365"
             },
             {
+              "item": "SignedInvocation.policy",
+              "sha256": "6113bca9b60c18737d1fc406cd7887fb777c202a4f69f7df03645ada6d5935d9"
+            },
+            {
               "item": "SignedInvocation.prepared",
               "sha256": "d3c41147c1a93aa93a29e336546908e06d9cdcb4bb8cd24d02d8cfca92604d3d"
             },
@@ -148821,6 +148917,38 @@
             {
               "item": "SignedInvocation.toJSON",
               "sha256": "d11ab70ac5045d9dc59176e277df543e99228a75f67e1ca89dd5c3f9f311d7fe"
+            },
+            {
+              "item": "SignerPolicy.equals",
+              "sha256": "c7cbb6f842caa5c507af5ab227732a806df436baa2b4ebcfc0f42085bd20bf2f"
+            },
+            {
+              "item": "SignerPolicy.expiresAtUnixMS",
+              "sha256": "bd9ac17b517b533f23c509260bc8190812180580940c8871372e5c2e6fcb2271"
+            },
+            {
+              "item": "SignerPolicy.hashCode",
+              "sha256": "4a487f8e3ec4047ed6751f306a3ea5a8a549b874a0fa965ccba1d889d51583fb"
+            },
+            {
+              "item": "SignerPolicy.mode",
+              "sha256": "1c052b04bb6c5b0aae417e398d0666777c9bc05e8936b9ce6b113e7dbe2bd6d3"
+            },
+            {
+              "item": "SignerPolicy.new",
+              "sha256": "2ef42e2d0441a7372e28560c083f31bb3b3c5c149e72074b6d075387c0fd9b7b"
+            },
+            {
+              "item": "SignerPolicy.policyRef",
+              "sha256": "892ee7302b1d4b672c43fd0d45c2bfcee7b689897261cc4abcf5e8f70968c7d2"
+            },
+            {
+              "item": "SignerPolicy.signerId",
+              "sha256": "ce1c9e67dc43013995ed217d3b9c3f932a1bede294e71f2d303144f0c655fb5e"
+            },
+            {
+              "item": "SignerPolicy.toString",
+              "sha256": "a228119c68e6b363c289f8682e6850cf88ca540fd6b36456af0312774cce0571"
             },
             {
               "item": "SigningMaterial.algorithm",
@@ -148852,7 +148980,11 @@
             },
             {
               "item": "SigningMaterial.new",
-              "sha256": "9f239070c06f325b7fe3bb78521c91405ec55673bf3af045103a1063112dfe7a"
+              "sha256": "69b5e01ce97dcc27d56fa9caa077954b1768ca142d59286887fda9d227592ba9"
+            },
+            {
+              "item": "SigningMaterial.signerPolicy",
+              "sha256": "797a447b6643fc0e5a075171f44e8a1d3de280c55f43764a1161048e8c460c1b"
             },
             {
               "item": "SigningMaterial.toString",
@@ -148874,6 +149006,10 @@
               "sha256": "5959bb1c65241ab720ee7595a54d2220c1e89f18d3aab3228bedc31c761203cf"
             },
             {
+              "item": "SignerPolicy",
+              "sha256": "77dcd697f006c13184534c37f8c2691c61a4dc3c5b5a49b62692826a0229b924"
+            },
+            {
               "item": "SigningMaterial",
               "sha256": "0b8c4870e2f99cd5f69c556605482596ca862f475809d46c8087cb17394a6ffb"
             },
@@ -148926,6 +149062,10 @@
               "sha256": "f94acb7611effd3c601f4c1195818b86198d9f5abb9957c72704d6e6ce1b8365"
             },
             {
+              "item": "SignedInvocation.policy",
+              "sha256": "6113bca9b60c18737d1fc406cd7887fb777c202a4f69f7df03645ada6d5935d9"
+            },
+            {
               "item": "SignedInvocation.prepared",
               "sha256": "d3c41147c1a93aa93a29e336546908e06d9cdcb4bb8cd24d02d8cfca92604d3d"
             },
@@ -148948,6 +149088,38 @@
             {
               "item": "SignedInvocation.toJSON",
               "sha256": "d11ab70ac5045d9dc59176e277df543e99228a75f67e1ca89dd5c3f9f311d7fe"
+            },
+            {
+              "item": "SignerPolicy.equals",
+              "sha256": "c7cbb6f842caa5c507af5ab227732a806df436baa2b4ebcfc0f42085bd20bf2f"
+            },
+            {
+              "item": "SignerPolicy.expiresAtUnixMS",
+              "sha256": "bd9ac17b517b533f23c509260bc8190812180580940c8871372e5c2e6fcb2271"
+            },
+            {
+              "item": "SignerPolicy.hashCode",
+              "sha256": "4a487f8e3ec4047ed6751f306a3ea5a8a549b874a0fa965ccba1d889d51583fb"
+            },
+            {
+              "item": "SignerPolicy.mode",
+              "sha256": "1c052b04bb6c5b0aae417e398d0666777c9bc05e8936b9ce6b113e7dbe2bd6d3"
+            },
+            {
+              "item": "SignerPolicy.new",
+              "sha256": "2ef42e2d0441a7372e28560c083f31bb3b3c5c149e72074b6d075387c0fd9b7b"
+            },
+            {
+              "item": "SignerPolicy.policyRef",
+              "sha256": "892ee7302b1d4b672c43fd0d45c2bfcee7b689897261cc4abcf5e8f70968c7d2"
+            },
+            {
+              "item": "SignerPolicy.signerId",
+              "sha256": "ce1c9e67dc43013995ed217d3b9c3f932a1bede294e71f2d303144f0c655fb5e"
+            },
+            {
+              "item": "SignerPolicy.toString",
+              "sha256": "a228119c68e6b363c289f8682e6850cf88ca540fd6b36456af0312774cce0571"
             },
             {
               "item": "SigningMaterial.algorithm",
@@ -148979,7 +149151,11 @@
             },
             {
               "item": "SigningMaterial.new",
-              "sha256": "9f239070c06f325b7fe3bb78521c91405ec55673bf3af045103a1063112dfe7a"
+              "sha256": "69b5e01ce97dcc27d56fa9caa077954b1768ca142d59286887fda9d227592ba9"
+            },
+            {
+              "item": "SigningMaterial.signerPolicy",
+              "sha256": "797a447b6643fc0e5a075171f44e8a1d3de280c55f43764a1161048e8c460c1b"
             },
             {
               "item": "SigningMaterial.toString",
@@ -149001,6 +149177,10 @@
               "sha256": "5959bb1c65241ab720ee7595a54d2220c1e89f18d3aab3228bedc31c761203cf"
             },
             {
+              "item": "SignerPolicy",
+              "sha256": "77dcd697f006c13184534c37f8c2691c61a4dc3c5b5a49b62692826a0229b924"
+            },
+            {
               "item": "SigningMaterial",
               "sha256": "0b8c4870e2f99cd5f69c556605482596ca862f475809d46c8087cb17394a6ffb"
             },
@@ -149053,6 +149233,10 @@
               "sha256": "f94acb7611effd3c601f4c1195818b86198d9f5abb9957c72704d6e6ce1b8365"
             },
             {
+              "item": "SignedInvocation.policy",
+              "sha256": "6113bca9b60c18737d1fc406cd7887fb777c202a4f69f7df03645ada6d5935d9"
+            },
+            {
               "item": "SignedInvocation.prepared",
               "sha256": "d3c41147c1a93aa93a29e336546908e06d9cdcb4bb8cd24d02d8cfca92604d3d"
             },
@@ -149075,6 +149259,38 @@
             {
               "item": "SignedInvocation.toJSON",
               "sha256": "d11ab70ac5045d9dc59176e277df543e99228a75f67e1ca89dd5c3f9f311d7fe"
+            },
+            {
+              "item": "SignerPolicy.equals",
+              "sha256": "c7cbb6f842caa5c507af5ab227732a806df436baa2b4ebcfc0f42085bd20bf2f"
+            },
+            {
+              "item": "SignerPolicy.expiresAtUnixMS",
+              "sha256": "bd9ac17b517b533f23c509260bc8190812180580940c8871372e5c2e6fcb2271"
+            },
+            {
+              "item": "SignerPolicy.hashCode",
+              "sha256": "4a487f8e3ec4047ed6751f306a3ea5a8a549b874a0fa965ccba1d889d51583fb"
+            },
+            {
+              "item": "SignerPolicy.mode",
+              "sha256": "1c052b04bb6c5b0aae417e398d0666777c9bc05e8936b9ce6b113e7dbe2bd6d3"
+            },
+            {
+              "item": "SignerPolicy.new",
+              "sha256": "2ef42e2d0441a7372e28560c083f31bb3b3c5c149e72074b6d075387c0fd9b7b"
+            },
+            {
+              "item": "SignerPolicy.policyRef",
+              "sha256": "892ee7302b1d4b672c43fd0d45c2bfcee7b689897261cc4abcf5e8f70968c7d2"
+            },
+            {
+              "item": "SignerPolicy.signerId",
+              "sha256": "ce1c9e67dc43013995ed217d3b9c3f932a1bede294e71f2d303144f0c655fb5e"
+            },
+            {
+              "item": "SignerPolicy.toString",
+              "sha256": "a228119c68e6b363c289f8682e6850cf88ca540fd6b36456af0312774cce0571"
             },
             {
               "item": "SigningMaterial.algorithm",
@@ -149106,7 +149322,11 @@
             },
             {
               "item": "SigningMaterial.new",
-              "sha256": "9f239070c06f325b7fe3bb78521c91405ec55673bf3af045103a1063112dfe7a"
+              "sha256": "69b5e01ce97dcc27d56fa9caa077954b1768ca142d59286887fda9d227592ba9"
+            },
+            {
+              "item": "SigningMaterial.signerPolicy",
+              "sha256": "797a447b6643fc0e5a075171f44e8a1d3de280c55f43764a1161048e8c460c1b"
             },
             {
               "item": "SigningMaterial.toString",
@@ -149128,6 +149348,10 @@
               "sha256": "5959bb1c65241ab720ee7595a54d2220c1e89f18d3aab3228bedc31c761203cf"
             },
             {
+              "item": "SignerPolicy",
+              "sha256": "77dcd697f006c13184534c37f8c2691c61a4dc3c5b5a49b62692826a0229b924"
+            },
+            {
               "item": "SigningMaterial",
               "sha256": "0b8c4870e2f99cd5f69c556605482596ca862f475809d46c8087cb17394a6ffb"
             },
@@ -149180,6 +149404,10 @@
               "sha256": "f94acb7611effd3c601f4c1195818b86198d9f5abb9957c72704d6e6ce1b8365"
             },
             {
+              "item": "SignedInvocation.policy",
+              "sha256": "6113bca9b60c18737d1fc406cd7887fb777c202a4f69f7df03645ada6d5935d9"
+            },
+            {
               "item": "SignedInvocation.prepared",
               "sha256": "d3c41147c1a93aa93a29e336546908e06d9cdcb4bb8cd24d02d8cfca92604d3d"
             },
@@ -149202,6 +149430,38 @@
             {
               "item": "SignedInvocation.toJSON",
               "sha256": "d11ab70ac5045d9dc59176e277df543e99228a75f67e1ca89dd5c3f9f311d7fe"
+            },
+            {
+              "item": "SignerPolicy.equals",
+              "sha256": "c7cbb6f842caa5c507af5ab227732a806df436baa2b4ebcfc0f42085bd20bf2f"
+            },
+            {
+              "item": "SignerPolicy.expiresAtUnixMS",
+              "sha256": "bd9ac17b517b533f23c509260bc8190812180580940c8871372e5c2e6fcb2271"
+            },
+            {
+              "item": "SignerPolicy.hashCode",
+              "sha256": "4a487f8e3ec4047ed6751f306a3ea5a8a549b874a0fa965ccba1d889d51583fb"
+            },
+            {
+              "item": "SignerPolicy.mode",
+              "sha256": "1c052b04bb6c5b0aae417e398d0666777c9bc05e8936b9ce6b113e7dbe2bd6d3"
+            },
+            {
+              "item": "SignerPolicy.new",
+              "sha256": "2ef42e2d0441a7372e28560c083f31bb3b3c5c149e72074b6d075387c0fd9b7b"
+            },
+            {
+              "item": "SignerPolicy.policyRef",
+              "sha256": "892ee7302b1d4b672c43fd0d45c2bfcee7b689897261cc4abcf5e8f70968c7d2"
+            },
+            {
+              "item": "SignerPolicy.signerId",
+              "sha256": "ce1c9e67dc43013995ed217d3b9c3f932a1bede294e71f2d303144f0c655fb5e"
+            },
+            {
+              "item": "SignerPolicy.toString",
+              "sha256": "a228119c68e6b363c289f8682e6850cf88ca540fd6b36456af0312774cce0571"
             },
             {
               "item": "SigningMaterial.algorithm",
@@ -149233,7 +149493,11 @@
             },
             {
               "item": "SigningMaterial.new",
-              "sha256": "9f239070c06f325b7fe3bb78521c91405ec55673bf3af045103a1063112dfe7a"
+              "sha256": "69b5e01ce97dcc27d56fa9caa077954b1768ca142d59286887fda9d227592ba9"
+            },
+            {
+              "item": "SigningMaterial.signerPolicy",
+              "sha256": "797a447b6643fc0e5a075171f44e8a1d3de280c55f43764a1161048e8c460c1b"
             },
             {
               "item": "SigningMaterial.toString",
@@ -149255,6 +149519,10 @@
               "sha256": "5959bb1c65241ab720ee7595a54d2220c1e89f18d3aab3228bedc31c761203cf"
             },
             {
+              "item": "SignerPolicy",
+              "sha256": "77dcd697f006c13184534c37f8c2691c61a4dc3c5b5a49b62692826a0229b924"
+            },
+            {
               "item": "SigningMaterial",
               "sha256": "0b8c4870e2f99cd5f69c556605482596ca862f475809d46c8087cb17394a6ffb"
             },
@@ -149307,6 +149575,10 @@
               "sha256": "f94acb7611effd3c601f4c1195818b86198d9f5abb9957c72704d6e6ce1b8365"
             },
             {
+              "item": "SignedInvocation.policy",
+              "sha256": "6113bca9b60c18737d1fc406cd7887fb777c202a4f69f7df03645ada6d5935d9"
+            },
+            {
               "item": "SignedInvocation.prepared",
               "sha256": "d3c41147c1a93aa93a29e336546908e06d9cdcb4bb8cd24d02d8cfca92604d3d"
             },
@@ -149329,6 +149601,38 @@
             {
               "item": "SignedInvocation.toJSON",
               "sha256": "d11ab70ac5045d9dc59176e277df543e99228a75f67e1ca89dd5c3f9f311d7fe"
+            },
+            {
+              "item": "SignerPolicy.equals",
+              "sha256": "c7cbb6f842caa5c507af5ab227732a806df436baa2b4ebcfc0f42085bd20bf2f"
+            },
+            {
+              "item": "SignerPolicy.expiresAtUnixMS",
+              "sha256": "bd9ac17b517b533f23c509260bc8190812180580940c8871372e5c2e6fcb2271"
+            },
+            {
+              "item": "SignerPolicy.hashCode",
+              "sha256": "4a487f8e3ec4047ed6751f306a3ea5a8a549b874a0fa965ccba1d889d51583fb"
+            },
+            {
+              "item": "SignerPolicy.mode",
+              "sha256": "1c052b04bb6c5b0aae417e398d0666777c9bc05e8936b9ce6b113e7dbe2bd6d3"
+            },
+            {
+              "item": "SignerPolicy.new",
+              "sha256": "2ef42e2d0441a7372e28560c083f31bb3b3c5c149e72074b6d075387c0fd9b7b"
+            },
+            {
+              "item": "SignerPolicy.policyRef",
+              "sha256": "892ee7302b1d4b672c43fd0d45c2bfcee7b689897261cc4abcf5e8f70968c7d2"
+            },
+            {
+              "item": "SignerPolicy.signerId",
+              "sha256": "ce1c9e67dc43013995ed217d3b9c3f932a1bede294e71f2d303144f0c655fb5e"
+            },
+            {
+              "item": "SignerPolicy.toString",
+              "sha256": "a228119c68e6b363c289f8682e6850cf88ca540fd6b36456af0312774cce0571"
             },
             {
               "item": "SigningMaterial.algorithm",
@@ -149360,7 +149664,11 @@
             },
             {
               "item": "SigningMaterial.new",
-              "sha256": "9f239070c06f325b7fe3bb78521c91405ec55673bf3af045103a1063112dfe7a"
+              "sha256": "69b5e01ce97dcc27d56fa9caa077954b1768ca142d59286887fda9d227592ba9"
+            },
+            {
+              "item": "SigningMaterial.signerPolicy",
+              "sha256": "797a447b6643fc0e5a075171f44e8a1d3de280c55f43764a1161048e8c460c1b"
             },
             {
               "item": "SigningMaterial.toString",
@@ -149382,6 +149690,10 @@
               "sha256": "5959bb1c65241ab720ee7595a54d2220c1e89f18d3aab3228bedc31c761203cf"
             },
             {
+              "item": "SignerPolicy",
+              "sha256": "77dcd697f006c13184534c37f8c2691c61a4dc3c5b5a49b62692826a0229b924"
+            },
+            {
               "item": "SigningMaterial",
               "sha256": "0b8c4870e2f99cd5f69c556605482596ca862f475809d46c8087cb17394a6ffb"
             },
@@ -149434,6 +149746,10 @@
               "sha256": "f94acb7611effd3c601f4c1195818b86198d9f5abb9957c72704d6e6ce1b8365"
             },
             {
+              "item": "SignedInvocation.policy",
+              "sha256": "6113bca9b60c18737d1fc406cd7887fb777c202a4f69f7df03645ada6d5935d9"
+            },
+            {
               "item": "SignedInvocation.prepared",
               "sha256": "d3c41147c1a93aa93a29e336546908e06d9cdcb4bb8cd24d02d8cfca92604d3d"
             },
@@ -149456,6 +149772,38 @@
             {
               "item": "SignedInvocation.toJSON",
               "sha256": "d11ab70ac5045d9dc59176e277df543e99228a75f67e1ca89dd5c3f9f311d7fe"
+            },
+            {
+              "item": "SignerPolicy.equals",
+              "sha256": "c7cbb6f842caa5c507af5ab227732a806df436baa2b4ebcfc0f42085bd20bf2f"
+            },
+            {
+              "item": "SignerPolicy.expiresAtUnixMS",
+              "sha256": "bd9ac17b517b533f23c509260bc8190812180580940c8871372e5c2e6fcb2271"
+            },
+            {
+              "item": "SignerPolicy.hashCode",
+              "sha256": "4a487f8e3ec4047ed6751f306a3ea5a8a549b874a0fa965ccba1d889d51583fb"
+            },
+            {
+              "item": "SignerPolicy.mode",
+              "sha256": "1c052b04bb6c5b0aae417e398d0666777c9bc05e8936b9ce6b113e7dbe2bd6d3"
+            },
+            {
+              "item": "SignerPolicy.new",
+              "sha256": "2ef42e2d0441a7372e28560c083f31bb3b3c5c149e72074b6d075387c0fd9b7b"
+            },
+            {
+              "item": "SignerPolicy.policyRef",
+              "sha256": "892ee7302b1d4b672c43fd0d45c2bfcee7b689897261cc4abcf5e8f70968c7d2"
+            },
+            {
+              "item": "SignerPolicy.signerId",
+              "sha256": "ce1c9e67dc43013995ed217d3b9c3f932a1bede294e71f2d303144f0c655fb5e"
+            },
+            {
+              "item": "SignerPolicy.toString",
+              "sha256": "a228119c68e6b363c289f8682e6850cf88ca540fd6b36456af0312774cce0571"
             },
             {
               "item": "SigningMaterial.algorithm",
@@ -149487,7 +149835,11 @@
             },
             {
               "item": "SigningMaterial.new",
-              "sha256": "9f239070c06f325b7fe3bb78521c91405ec55673bf3af045103a1063112dfe7a"
+              "sha256": "69b5e01ce97dcc27d56fa9caa077954b1768ca142d59286887fda9d227592ba9"
+            },
+            {
+              "item": "SigningMaterial.signerPolicy",
+              "sha256": "797a447b6643fc0e5a075171f44e8a1d3de280c55f43764a1161048e8c460c1b"
             },
             {
               "item": "SigningMaterial.toString",
@@ -149509,6 +149861,10 @@
               "sha256": "5959bb1c65241ab720ee7595a54d2220c1e89f18d3aab3228bedc31c761203cf"
             },
             {
+              "item": "SignerPolicy",
+              "sha256": "77dcd697f006c13184534c37f8c2691c61a4dc3c5b5a49b62692826a0229b924"
+            },
+            {
               "item": "SigningMaterial",
               "sha256": "0b8c4870e2f99cd5f69c556605482596ca862f475809d46c8087cb17394a6ffb"
             },
@@ -149561,6 +149917,10 @@
               "sha256": "f94acb7611effd3c601f4c1195818b86198d9f5abb9957c72704d6e6ce1b8365"
             },
             {
+              "item": "SignedInvocation.policy",
+              "sha256": "6113bca9b60c18737d1fc406cd7887fb777c202a4f69f7df03645ada6d5935d9"
+            },
+            {
               "item": "SignedInvocation.prepared",
               "sha256": "d3c41147c1a93aa93a29e336546908e06d9cdcb4bb8cd24d02d8cfca92604d3d"
             },
@@ -149583,6 +149943,38 @@
             {
               "item": "SignedInvocation.toJSON",
               "sha256": "d11ab70ac5045d9dc59176e277df543e99228a75f67e1ca89dd5c3f9f311d7fe"
+            },
+            {
+              "item": "SignerPolicy.equals",
+              "sha256": "c7cbb6f842caa5c507af5ab227732a806df436baa2b4ebcfc0f42085bd20bf2f"
+            },
+            {
+              "item": "SignerPolicy.expiresAtUnixMS",
+              "sha256": "bd9ac17b517b533f23c509260bc8190812180580940c8871372e5c2e6fcb2271"
+            },
+            {
+              "item": "SignerPolicy.hashCode",
+              "sha256": "4a487f8e3ec4047ed6751f306a3ea5a8a549b874a0fa965ccba1d889d51583fb"
+            },
+            {
+              "item": "SignerPolicy.mode",
+              "sha256": "1c052b04bb6c5b0aae417e398d0666777c9bc05e8936b9ce6b113e7dbe2bd6d3"
+            },
+            {
+              "item": "SignerPolicy.new",
+              "sha256": "2ef42e2d0441a7372e28560c083f31bb3b3c5c149e72074b6d075387c0fd9b7b"
+            },
+            {
+              "item": "SignerPolicy.policyRef",
+              "sha256": "892ee7302b1d4b672c43fd0d45c2bfcee7b689897261cc4abcf5e8f70968c7d2"
+            },
+            {
+              "item": "SignerPolicy.signerId",
+              "sha256": "ce1c9e67dc43013995ed217d3b9c3f932a1bede294e71f2d303144f0c655fb5e"
+            },
+            {
+              "item": "SignerPolicy.toString",
+              "sha256": "a228119c68e6b363c289f8682e6850cf88ca540fd6b36456af0312774cce0571"
             },
             {
               "item": "SigningMaterial.algorithm",
@@ -149614,7 +150006,11 @@
             },
             {
               "item": "SigningMaterial.new",
-              "sha256": "9f239070c06f325b7fe3bb78521c91405ec55673bf3af045103a1063112dfe7a"
+              "sha256": "69b5e01ce97dcc27d56fa9caa077954b1768ca142d59286887fda9d227592ba9"
+            },
+            {
+              "item": "SigningMaterial.signerPolicy",
+              "sha256": "797a447b6643fc0e5a075171f44e8a1d3de280c55f43764a1161048e8c460c1b"
             },
             {
               "item": "SigningMaterial.toString",

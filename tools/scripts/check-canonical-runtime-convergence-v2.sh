@@ -3558,6 +3558,76 @@ for token in (
 PY
 }
 
+check_java_sdk_signer_policy_custody_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local signer_policy="$cli_root/sdk/java/src/main/java/run/runtime/sdk/SignerPolicy.java"
+  local signing_material="$cli_root/sdk/java/src/main/java/run/runtime/sdk/SigningMaterial.java"
+  local prepared_invocation="$cli_root/sdk/java/src/main/java/run/runtime/sdk/PreparedInvocation.java"
+  local signed_invocation="$cli_root/sdk/java/src/main/java/run/runtime/sdk/SignedInvocation.java"
+  local java_test="$cli_root/sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
+
+  "$PYTHON_BIN" - "$signer_policy" "$signing_material" "$prepared_invocation" "$signed_invocation" "$java_test" <<'PY'
+import sys
+from pathlib import Path
+
+paths = list(map(Path, sys.argv[1:]))
+for path in paths:
+    if not path.exists():
+        raise SystemExit(f"java_signer_policy_custody:missing:{path}")
+
+signer_policy, signing_material, prepared, signed, tests = [
+    path.read_text(encoding="utf-8") for path in paths
+]
+
+required_source = {
+    "signer_policy_type": (signer_policy, "public record SignerPolicy", "policyRef", "expiresAtUnixMS", "toObject()"),
+    "signing_material": (
+        signing_material,
+        "SignerPolicy signerPolicy",
+        '"signer_policy"',
+        'optionalSignerPolicy(fields, "signer_policy")',
+        "SignerPolicy.fromObject(out)",
+        'out.put("signer_policy", signerPolicy.toObject())',
+    ),
+    "prepared_invocation": (
+        prepared,
+        "signingMaterial.signerPolicy() != null",
+        "signingMaterial.signerPolicy().signerId()",
+        "signingMaterial.signerPolicy().toObject()",
+    ),
+    "signed_invocation": (
+        signed,
+        "private final SignerPolicy policy",
+        "public SignerPolicy policy()",
+        "SignerPolicy.fromObject(policy)",
+        'out.put("policy", policy.toObject())',
+    ),
+}
+for section, entries in required_source.items():
+    text, *tokens = entries
+    for token in tokens:
+        if token not in text:
+            raise SystemExit(f"java_signer_policy_custody:{section}:missing:{token}")
+
+for retired in (
+    "new SignedInvocation(this, signature, signerId, Map.of())",
+    "this.policy = policy == null ? Map.of() : Map.copyOf(policy)",
+):
+    if retired in prepared or retired in signed:
+        raise SystemExit(f"java_signer_policy_custody:retired_policy_drop:{retired}")
+
+for token in (
+    "provider_managed_signing",
+    "policy-signer-1",
+    "policy/local",
+    "signer policy preserved on signed invocation",
+    "signed submission policy_ref preserved",
+):
+    if token not in tests:
+        raise SystemExit(f"java_signer_policy_custody:test_missing:{token}")
+PY
+}
+
 check_sdk_descriptor_resolution_error_vocabulary_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local go="$cli_root/sdk/go/authorized_runtime_session.go"
@@ -15998,6 +16068,49 @@ EOF
   if ( check_python_sdk_signed_submission_complete_tuple_contract "$tmp/python-signed-submission-tuple-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected Python signed submission tuple gate to fail"
   fi
+  mkdir -p "$tmp/java-signer-policy-custody-legacy/sdk/java/src/main/java/run/runtime/sdk" \
+    "$tmp/java-signer-policy-custody-legacy/sdk/java/src/test/java/run/runtime/sdk"
+  printf '%s\n' \
+    'package run.runtime.sdk;' \
+    'public record SignerPolicy(String mode, String signerId, String policyRef, long expiresAtUnixMS) {' \
+    '  Object toObject() { return null; }' \
+    '}' \
+    > "$tmp/java-signer-policy-custody-legacy/sdk/java/src/main/java/run/runtime/sdk/SignerPolicy.java"
+  printf '%s\n' \
+    'package run.runtime.sdk;' \
+    'public record SigningMaterial(String algorithm, String canonicalBytesBase64, String argsDigestHex, String descriptorRef, long expiresAtUnixMS) {' \
+    '  static SigningMaterial fromObject(java.util.Map<String,Object> fields) { return null; }' \
+    '}' \
+    > "$tmp/java-signer-policy-custody-legacy/sdk/java/src/main/java/run/runtime/sdk/SigningMaterial.java"
+  printf '%s\n' \
+    'package run.runtime.sdk;' \
+    'public final class PreparedInvocation {' \
+    '  public SignedInvocation signWithCallerSignature(InvocationSignature signature) {' \
+    '    String signerId = signature.keyIdHint();' \
+    '    return new SignedInvocation(this, signature, signerId, java.util.Map.of());' \
+    '  }' \
+    '}' \
+    > "$tmp/java-signer-policy-custody-legacy/sdk/java/src/main/java/run/runtime/sdk/PreparedInvocation.java"
+  printf '%s\n' \
+    'package run.runtime.sdk;' \
+    'public final class SignedInvocation {' \
+    '  private final java.util.Map<String, Object> policy = java.util.Map.of();' \
+    '  public SignedInvocation(PreparedInvocation prepared, InvocationSignature signature, String signerId, java.util.Map<String,Object> policy) {}' \
+    '}' \
+    > "$tmp/java-signer-policy-custody-legacy/sdk/java/src/main/java/run/runtime/sdk/SignedInvocation.java"
+  printf '%s\n' \
+    'package run.runtime.sdk;' \
+    'final class RuntimeCoreSeamTest {' \
+    '  void invocationPrepareSignSubmitPreservesTheCompleteTuple() {' \
+    '    String mode = "provider_managed_signing";' \
+    '    String signer = "policy-signer-1";' \
+    '    String ref = "policy/local";' \
+    '  }' \
+    '}' \
+    > "$tmp/java-signer-policy-custody-legacy/sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
+  if ( check_java_sdk_signer_policy_custody_contract "$tmp/java-signer-policy-custody-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected Java signer policy custody gate to fail"
+  fi
   mkdir -p "$tmp/sdk-go-authority-subject-helper-embedded-legacy/sdk/go" \
     "$tmp/sdk-go-authority-subject-helper-embedded-legacy/sdk/python/easynet_sdk" \
     "$tmp/sdk-go-authority-subject-helper-embedded-legacy/sdk/python/tests"
@@ -19548,6 +19661,7 @@ EOF
   check_java_swift_runtime_state_subject_parity_contract
   check_swift_sdk_invocation_authority_binding_contract
   check_python_sdk_signed_submission_complete_tuple_contract
+  check_java_sdk_signer_policy_custody_contract
   check_java_sdk_runtime_receipt_projection_contract
   check_go_sdk_runtime_receipt_projection_contract
   check_python_sdk_runtime_receipt_projection_contract
@@ -19759,6 +19873,7 @@ check_java_sdk_invocation_authority_binding_contract
 check_java_swift_runtime_state_subject_parity_contract
 check_swift_sdk_invocation_authority_binding_contract
 check_python_sdk_signed_submission_complete_tuple_contract
+check_java_sdk_signer_policy_custody_contract
 check_java_sdk_runtime_receipt_projection_contract
 check_go_sdk_runtime_receipt_projection_contract
 check_python_sdk_runtime_receipt_projection_contract

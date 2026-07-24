@@ -1471,6 +1471,53 @@ architecture rather than add feature surface.
   - `cargo fmt --check`
   - `git diff --check`
 
+## Iteration 42 candidate policy
+
+- Continue RF-5/RF-4 convergence by preserving provider-issued signer custody
+  policy through Java prepare/sign/submit.
+- codegraph showed Node and Python attach `signing_material.signer_policy` to
+  `SignedInvocation`, while Java parsed no signer policy from
+  `SigningMaterial` and always constructed signed invocations with
+  `Map.of()`.
+- The root abstraction problem is signer policy custody loss: a prepared
+  invocation can carry provider-managed signing constraints, but the Java
+  language facade erased those constraints before submit-signed transport.
+- The selected cutover is to introduce a generic Java `SignerPolicy` value
+  object, parse it at the signing-material boundary, select the policy signer
+  when present, and serialize it on the signed invocation envelope.
+
+## Iteration 42 decision log
+
+- Added Java `SignerPolicy` as a product-neutral runtime signing policy value
+  object with exact wire projection for `mode`, `signer_id`, `policy_ref`, and
+  `expires_at_unix_ms`.
+- Java `SigningMaterial` now parses and serializes optional
+  `signer_policy`.
+- Java `PreparedInvocation.signWithCallerSignature` now uses the prepared
+  signer policy's signer id when present and passes the policy into
+  `SignedInvocation`.
+- Java `SignedInvocation` now normalizes constructor policy maps into typed
+  `SignerPolicy` and serializes the policy object instead of retaining an
+  untyped map.
+- Java runtime seam tests now assert provider-managed signer id selection and
+  signed-envelope `policy_ref` preservation.
+- Added SPEC v2 `check_java_sdk_signer_policy_custody_contract`, including a
+  negative self-test fixture that rejects the retired Java policy-drop shape.
+- Rebuilt `sdk/conformance/canonical-public-api.json` and
+  `sdk/conformance/sdk-parity-matrix.json` after the Java SDK public model
+  gained `SignerPolicy` and policy accessors.
+- Verification passed:
+  - `/Users/macbook.silan.tech/.local/bin/codegraph explore "SignedInvocation signer_policy policy signWithCallerSignature signer_id prepared signingMaterial cross-language SDK Go Python Node Java Swift"`
+  - `cd sdk/java && mvn -q test`
+  - `python3 sdk/conformance/rebuild_public_api_model.py --write`
+  - `bash -n tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - `tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  - `tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - `tools/scripts/check-sdk-canonical-public-api.sh`
+  - `tools/scripts/check-architecture-convergence.sh`
+  - `cargo fmt --check`
+  - `git diff --check`
+
 ## Iteration 36 candidate policy
 
 - Move the same proof-custody convergence into the Java SDK receipt validator.

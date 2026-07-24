@@ -132,10 +132,18 @@ public final class PreparedInvocation {
 
   public SignedInvocation signWithCallerSignature(InvocationSignature signature) {
     String signerId = signature.keyIdHint().isBlank() ? signature.signerPublicKeyBase64() : signature.keyIdHint();
+    if (signingMaterial.signerPolicy() != null && !signingMaterial.signerPolicy().signerId().isBlank()) {
+      signerId = signingMaterial.signerPolicy().signerId();
+    }
     if (signerId.isBlank()) {
       throw SDKError.validation("prepared_invocation", "signer id is required");
     }
-    return new SignedInvocation(this, signature, signerId, Map.of()).bindRuntime(runtime);
+    return new SignedInvocation(
+            this,
+            signature,
+            signerId,
+            signingMaterial.signerPolicy() == null ? Map.of() : signingMaterial.signerPolicy().toObject())
+        .bindRuntime(runtime);
   }
 
   Map<String, Object> toObject() {

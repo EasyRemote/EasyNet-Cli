@@ -7,7 +7,7 @@ public final class SignedInvocation {
   private final PreparedInvocation prepared;
   private final InvocationSignature signature;
   private final String signerId;
-  private final Map<String, Object> policy;
+  private final SignerPolicy policy;
   private RuntimeClient runtime;
 
   public SignedInvocation(
@@ -21,7 +21,7 @@ public final class SignedInvocation {
       throw SDKError.validation("signed_invocation", "signer_id is required");
     }
     this.signerId = signerId;
-    this.policy = policy == null ? Map.of() : Map.copyOf(policy);
+    this.policy = policy == null || policy.isEmpty() ? null : SignerPolicy.fromObject(policy);
     if (!submitReady()) {
       throw SDKError.validation("signed_invocation", "signed invocation is not submit-ready");
     }
@@ -42,6 +42,10 @@ public final class SignedInvocation {
 
   public String signerId() {
     return signerId;
+  }
+
+  public SignerPolicy policy() {
+    return policy;
   }
 
   public boolean submitReady() {
@@ -77,8 +81,8 @@ public final class SignedInvocation {
     out.put("signer_id", signerId);
     out.put("prepared", preparedOut);
     out.put("signature", signature.toObject());
-    if (!policy.isEmpty()) {
-      out.put("policy", policy);
+    if (policy != null) {
+      out.put("policy", policy.toObject());
     }
     return out;
   }
