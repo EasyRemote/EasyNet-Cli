@@ -7781,30 +7781,43 @@ identity = Path(sys.argv[1]).read_text(encoding="utf-8")
 boot_mod = Path(sys.argv[2]).read_text(encoding="utf-8")
 
 for retired in (
+    "StoredDeviceIdentity",
+    "RejectedAgentUra",
+    "RejectedTenantId",
+    "serde::Deserialize",
+    "serde_json::from_str",
+    "std::fs::read_to_string",
     "pub(super) agent_ura: Option<String>",
+    "_retired_agent_ura",
+    "_retired_tenant_id",
     "stored.agent_ura",
+    "tolerate unknown",
+    "unknown fields and read only what we own",
 ):
     if retired in identity:
-        raise SystemExit(f"daemon_credentials_identity:retired_agent_ura_projection:{retired}")
+        raise SystemExit(f"daemon_credentials_identity:duplicate_or_legacy_projection:{retired}")
 
 for retired_test in (
     "canonical_caller_ura_accepts_matching_agent_ura_checksum",
     "canonical_caller_ura_rejects_mismatched_agent_ura_checksum",
+    "daemon_identity_from_stored_accepts_realm_only_credentials",
+    "daemon_identity_from_stored_rejects_missing_realm_node_identity",
 ):
     if retired_test in boot_mod:
-        raise SystemExit(f"daemon_credentials_identity:retired_agent_ura_test:{retired_test}")
+        raise SystemExit(f"daemon_credentials_identity:retired_projection_test:{retired_test}")
 
 for required in (
-    'pub(super) _retired_agent_ura: Option<RejectedAgentUra>',
-    'serde(default, rename = "agent_ura")',
-    "pub(super) struct RejectedAgentUra",
-    "credentials.json carries retired `agent_ura`",
+    "use crate::daemon::persistence::config::{load_credentials_optional, Credentials};",
+    "let Some(credentials) = load_credentials_optional()? else",
+    "canonical_caller_ura_from_credentials(&credentials)?",
+    "pub(super) fn canonical_caller_ura_from_credentials(",
+    "credentials: &Credentials",
 ):
     if required not in identity:
-        raise SystemExit(f"daemon_credentials_identity:retired_agent_ura_rejector_missing:{required}")
+        raise SystemExit(f"daemon_credentials_identity:owning_schema_path_missing:{required}")
 
 match = re.search(
-    r"pub\(super\) fn canonical_caller_ura_from_stored_identity\([^)]*\) -> Option<String> \{(?P<body>.*?)\n\}",
+    r"pub\(super\) fn canonical_caller_ura_from_credentials\([^)]*\) -> anyhow::Result<String> \{(?P<body>.*?)\n\}",
     identity,
     re.DOTALL,
 )
@@ -7813,14 +7826,16 @@ if match is None:
 body = match.group("body")
 if "device_ura(realm, node_id)" not in body:
     raise SystemExit("daemon_credentials_identity:realm_node_projection_missing")
-for retired in ("agent_ura", "_retired_agent_ura", "expected ="):
+for retired in ("agent_ura", "_retired_agent_ura", "_retired_tenant_id", "expected ="):
     if retired in body:
         raise SystemExit(f"daemon_credentials_identity:canonical_projection_reads_retired_field:{retired}")
 
 for required_test in (
-    "daemon_identity_rejects_retired_agent_ura_credentials",
-    "daemon_identity_from_stored_accepts_realm_only_credentials",
-    "daemon_identity_from_stored_rejects_missing_realm_node_identity",
+    "daemon_identity_rejects_retired_agent_ura_credentials_via_owning_schema",
+    "daemon_identity_rejects_retired_tenant_id_credentials_via_owning_schema",
+    "daemon_identity_projects_full_modern_credentials_through_owning_schema",
+    "daemon_identity_from_credentials_uses_realm_and_node_id",
+    "daemon_identity_from_credentials_rejects_missing_realm_node_identity",
 ):
     if required_test not in boot_mod:
         raise SystemExit(f"daemon_credentials_identity:missing_test:{required_test}")

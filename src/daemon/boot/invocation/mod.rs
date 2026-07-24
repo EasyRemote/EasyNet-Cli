@@ -110,9 +110,11 @@ mod paths;
 mod presence_seed;
 mod trust;
 
+#[cfg(test)]
+use crate::daemon::persistence::config::Credentials;
 use crate::daemon::trust::anchor::trust_anchor_path_from_env_or_default;
 #[cfg(test)]
-use identity::{canonical_caller_ura_from_stored_identity, StoredDeviceIdentity};
+use identity::canonical_caller_ura_from_credentials;
 use identity::{load_daemon_identity_for_mode, load_runtime_signer, DaemonIdentity};
 use listeners::{spawn_tcp_tls_listener, spawn_uds_listener};
 use paths::expand_home;
@@ -1840,13 +1842,17 @@ mod tests {
     }
 
     #[test]
-    fn daemon_identity_rejects_retired_tenant_id_credentials() {
+    fn daemon_identity_rejects_retired_tenant_id_credentials_via_owning_schema() {
         let raw = r#"{
   "realm": "realm-a",
   "tenant_id": "tenant-a",
-  "node_id": "device-123"
+  "node_id": "device-123",
+  "credential_token": "token",
+  "hub_endpoint": "axon://hub.example:7700",
+  "username": "alice",
+  "user_id": "user-alice"
 }"#;
-        let err = serde_json::from_str::<StoredDeviceIdentity>(raw)
+        let err = serde_json::from_str::<Credentials>(raw)
             .expect_err("retired tenant_id must fail schema parse");
         assert!(
             err.to_string().contains("tenant_id"),
@@ -1855,13 +1861,17 @@ mod tests {
     }
 
     #[test]
-    fn daemon_identity_rejects_retired_agent_ura_credentials() {
+    fn daemon_identity_rejects_retired_agent_ura_credentials_via_owning_schema() {
         let raw = r#"{
   "realm": "realm-a",
   "node_id": "device-123",
+  "credential_token": "token",
+  "hub_endpoint": "axon://hub.example:7700",
+  "username": "alice",
+  "user_id": "user-alice",
   "agent_ura": "easynet:///r/realm-a/device/device-123"
 }"#;
-        let err = serde_json::from_str::<StoredDeviceIdentity>(raw)
+        let err = serde_json::from_str::<Credentials>(raw)
             .expect_err("retired agent_ura must fail schema parse");
         assert!(
             err.to_string().contains("agent_ura"),
@@ -1870,15 +1880,7 @@ mod tests {
     }
 
     #[test]
-    fn daemon_identity_parses_full_modern_credentials_json() {
-        // Regression: a credentials.json carrying the FULL modern
-        // field set (everything `persistence::config::Credentials`
-        // writes after v4.1.5 cold-start: credential_token,
-        // hub_endpoint, deploy_signature, hub_api_base, username,
-        // hub_pubkey_b64, hub_tls_ca_pem_b64) must still parse into a
-        // device identity. A `deny_unknown_fields` projection silently
-        // collapsed this to `None`, which stopped the `session.open`
-        // supervisor and rendered the device REMOVED on the hub.
+    fn daemon_identity_projects_full_modern_credentials_through_owning_schema() {
         let raw = r#"{
   "node_id": "01a5b007-f9c3-41f9-aa6f-7531267651bc",
   "credential_token": "2929dad1f03f",
@@ -1887,12 +1889,13 @@ mod tests {
   "deploy_signature": "",
   "hub_api_base": "http://127.0.0.1:8080",
   "username": "dev",
+  "user_id": "2a52f142-b244-426d-8b4f-9165e5d91948",
   "hub_pubkey_b64": "6Tp8qzyMm2",
   "hub_tls_ca_pem_b64": "LS0tLS1CRUdJ"
 }"#;
-        let stored = serde_json::from_str::<StoredDeviceIdentity>(raw)
-            .expect("modern credentials.json must parse despite extra fields");
-        let caller_ura = canonical_caller_ura_from_stored_identity(&stored)
+        let credentials = serde_json::from_str::<Credentials>(raw)
+            .expect("modern credentials.json must parse through owning schema");
+        let caller_ura = canonical_caller_ura_from_credentials(&credentials)
             .expect("must derive a device identity");
         assert_eq!(
             caller_ura,
@@ -1927,14 +1930,21 @@ mod tests {
     }
 
     #[test]
-    fn daemon_identity_from_stored_accepts_realm_only_credentials() {
-        let stored = StoredDeviceIdentity {
-            _retired_agent_ura: None,
-            realm: Some("realm-a".to_string()),
-            node_id: Some("device-123".to_string()),
-            _retired_tenant_id: None,
+    fn daemon_identity_from_credentials_uses_realm_and_node_id() {
+        let credentials = Credentials {
+            realm: "realm-a".to_string(),
+            node_id: "device-123".to_string(),
+            credential_token: "token".to_string(),
+            hub_endpoint: "axon://hub.example:7700".to_string(),
+            deploy_signature: String::new(),
+            hub_api_base: None,
+            username: Some("alice".to_string()),
+            user_id: Some("user-alice".to_string()),
+            hub_pubkey_b64: None,
+            hub_tls_ca_pem_b64: None,
+            join_receipt_hash: None,
         };
-        let caller_ura = canonical_caller_ura_from_stored_identity(&stored).expect("identity");
+        let caller_ura = canonical_caller_ura_from_credentials(&credentials).expect("identity");
         assert_eq!(caller_ura, "easynet:///r/realm-a/device/device-123");
     }
 
@@ -1992,15 +2002,22 @@ mod tests {
     }
 
     #[test]
-    fn daemon_identity_from_stored_rejects_missing_realm_node_identity() {
-        let stored = StoredDeviceIdentity {
-            _retired_agent_ura: None,
-            realm: None,
-            node_id: None,
-            _retired_tenant_id: None,
+    fn daemon_identity_from_credentials_rejects_missing_realm_node_identity() {
+        let credentials = Credentials {
+            realm: String::new(),
+            node_id: String::new(),
+            credential_token: "token".to_string(),
+            hub_endpoint: "axon://hub.example:7700".to_string(),
+            deploy_signature: String::new(),
+            hub_api_base: None,
+            username: Some("alice".to_string()),
+            user_id: Some("user-alice".to_string()),
+            hub_pubkey_b64: None,
+            hub_tls_ca_pem_b64: None,
+            join_receipt_hash: None,
         };
         assert!(
-            canonical_caller_ura_from_stored_identity(&stored).is_none(),
+            canonical_caller_ura_from_credentials(&credentials).is_err(),
             "realm and node_id are required for daemon device identity"
         );
     }
