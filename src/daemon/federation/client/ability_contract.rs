@@ -46,16 +46,18 @@ pub use crate::daemon::federation::receipt_contract::{
 };
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct ResolveKeyReceipt {
-    #[serde(default)]
-    pub agent_ura: String,
+    pub public_key_b64: String,
     pub public_key_hex: String,
     #[serde(default)]
-    pub status: String,
+    pub public_keys_b64: Vec<String>,
     #[serde(default)]
-    pub key_id: String,
+    pub principal_owner_ura: Option<String>,
     #[serde(default)]
-    pub rotation_epoch: u64,
+    pub principal_owner_user_id: Option<String>,
+    #[serde(default)]
+    pub principal_owner_username: Option<String>,
 }
 
 /// Arguments for `federation.join`. Matches the hub-profile's
@@ -323,6 +325,52 @@ mod tests {
             v.get("username").is_none() && v.get("user_id").is_none(),
             "federation.join must not grow product account fields"
         );
+    }
+
+    #[test]
+    fn resolve_key_receipt_parses_canonical_key_facts() {
+        let body = json!({
+            "public_key_b64": "pub-b64",
+            "public_key_hex": "707562",
+            "public_keys_b64": ["pub-b64", "rotated-b64"],
+            "principal_owner_ura": "easynet:///r/acme/user/alice",
+            "principal_owner_user_id": "alice",
+            "principal_owner_username": "alice-dev"
+        });
+
+        let parsed: ResolveKeyReceipt = parse_receipt_value(&body).unwrap();
+
+        assert_eq!(parsed.public_key_b64, "pub-b64");
+        assert_eq!(parsed.public_key_hex, "707562");
+        assert_eq!(parsed.public_keys_b64, vec!["pub-b64", "rotated-b64"]);
+        assert_eq!(
+            parsed.principal_owner_ura.as_deref(),
+            Some("easynet:///r/acme/user/alice")
+        );
+        assert_eq!(parsed.principal_owner_user_id.as_deref(), Some("alice"));
+        assert_eq!(
+            parsed.principal_owner_username.as_deref(),
+            Some("alice-dev")
+        );
+    }
+
+    #[test]
+    fn resolve_key_receipt_rejects_retired_directory_status_fields() {
+        for field in ["agent_ura", "status", "key_id", "rotation_epoch"] {
+            let mut body = serde_json::Map::new();
+            body.insert("public_key_b64".to_string(), json!("pub-b64"));
+            body.insert("public_key_hex".to_string(), json!("707562"));
+            body.insert("public_keys_b64".to_string(), json!(["pub-b64"]));
+            body.insert(field.to_string(), json!("retired"));
+
+            let err = parse_receipt_value::<ResolveKeyReceipt>(&Value::Object(body))
+                .expect_err("retired resolve_key receipt fields must fail closed");
+
+            assert!(
+                err.to_string().contains(field),
+                "retired field {field:?} must be named in parse error: {err}"
+            );
+        }
     }
 
     #[test]
