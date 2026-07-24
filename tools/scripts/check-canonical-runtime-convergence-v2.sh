@@ -8959,6 +8959,16 @@ for retired in (
         raise SystemExit("go_directory_projection_answer_kind_fallback")
 if 'func directoryText(value map[string]any, key string)' not in go_directory:
     raise SystemExit("go_directory_single_field_text_projector_missing")
+if "func projectDirectoryRecord(raw map[string]any) (DirectoryRecord, error)" not in go_directory:
+    raise SystemExit("go_directory_strict_record_projector_missing")
+if "projected, err := projectDirectoryRecord(record)" not in go_directory:
+    raise SystemExit("go_directory_resolution_bypasses_strict_record_projector")
+for token, code in (
+    ("Directory record kind is required", "record_kind_required_gate_missing"),
+    ("Directory record requires at least one canonical URA fact", "record_canonical_fact_gate_missing"),
+):
+    if token not in go_directory:
+        raise SystemExit("go_directory_projection:" + code)
 
 map_slice = re.search(
     r"func optionalDirectoryMapSlice\(.*?\n\}",
@@ -9017,6 +9027,12 @@ for retired in (
         raise SystemExit("python_directory_projection_answer_kind_fallback")
 if 'def _mapping_text(value: Mapping[str, object], key: str) -> str:' not in py_directory:
     raise SystemExit("python_directory_single_field_text_projector_missing")
+for token, code in (
+    ("Directory record kind is required", "record_kind_required_gate_missing"),
+    ("Directory record requires at least one canonical URA fact", "record_canonical_fact_gate_missing"),
+):
+    if token not in py_directory:
+        raise SystemExit("python_directory_projection:" + code)
 
 py_sequence = re.search(
     r"def _optional_mapping_sequence\(.*?\n\n",
@@ -9040,6 +9056,12 @@ for text, name in ((go_test, "go"), (py_test, "python")):
         raise SystemExit(f"{name}_directory_negative_without_answer_kind_test_missing")
     if "DoesNotPromoteLegacyAliases" not in text and "does_not_promote_legacy_aliases" not in text:
         raise SystemExit(f"{name}_directory_legacy_alias_projection_test_missing")
+    for required in (
+        "record kind is required",
+        "record requires at least one canonical URA fact",
+    ):
+        if required not in text:
+            raise SystemExit(f"{name}_directory_record_fact_test_missing:{required}")
     for field in (
         "answer",
         "records",

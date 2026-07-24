@@ -242,7 +242,7 @@ def _project_resolution(output: Mapping[str, object]) -> DirectoryResolution:
 def _project_record(value: object) -> DirectoryRecord:
     if not isinstance(value, Mapping):
         raise _invalid("Directory record must be an object")
-    return DirectoryRecord(
+    record = DirectoryRecord(
         kind=_mapping_text(value, "kind"),
         ura=_mapping_text(value, "ura"),
         owner_ura=_mapping_text(value, "owner_ura"),
@@ -250,6 +250,11 @@ def _project_record(value: object) -> DirectoryRecord:
         route_ura=_mapping_text(value, "route_ura"),
         raw=dict(value),
     )
+    if not record.kind:
+        raise _invalid("Directory record kind is required")
+    if not any((record.ura, record.owner_ura, record.ability_ura, record.route_ura)):
+        raise _invalid("Directory record requires at least one canonical URA fact")
+    return record
 
 
 def parse_directory_event(raw: object) -> DirectoryEvent:

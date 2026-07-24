@@ -100,6 +100,16 @@ def test_project_directory_resolution_rejects_malformed_present_facts() -> None:
     cases = [
         ("answer", "not-an-object", "answer must be an object"),
         ("records", "not-a-list", "records must be a list"),
+        (
+            "records",
+            [{"ura": "easynet:///r/example/user/alice"}],
+            "record kind is required",
+        ),
+        (
+            "records",
+            [{"kind": "ID", "canonical_name": "easynet:///r/example/user/alice"}],
+            "record requires at least one canonical URA fact",
+        ),
         ("next_hop", "not-an-object", "next_hop must be an object"),
         ("selected_route", "not-an-object", "selected_route must be an object"),
         ("route_candidates", {"node_id": "node-1"}, "route_candidates must be a list"),
@@ -133,17 +143,27 @@ def test_project_directory_resolution_rejects_negative_without_answer_kind() -> 
 
 
 def test_project_directory_record_does_not_promote_legacy_aliases() -> None:
+    with pytest.raises(SDKError, match="record kind is required"):
+        directory_module._project_record(
+            {
+                "type": "URA_KIND_DEVICE",
+                "canonical_name": "easynet:///r/example/device/dev-1",
+            }
+        )
+
     record = directory_module._project_record(
         {
+            "kind": "ID",
+            "ura": "easynet:///r/example/device/dev-1",
             "type": "URA_KIND_DEVICE",
-            "canonical_name": "easynet:///r/example/device/dev-1",
+            "canonical_name": "easynet:///r/example/user/alice",
         }
     )
 
-    assert record.kind == ""
-    assert record.ura == ""
+    assert record.kind == "ID"
+    assert record.ura == "easynet:///r/example/device/dev-1"
     assert record.raw["type"] == "URA_KIND_DEVICE"
-    assert record.raw["canonical_name"] == "easynet:///r/example/device/dev-1"
+    assert record.raw["canonical_name"] == "easynet:///r/example/user/alice"
 
 
 def test_directory_helpers_reject_unbounded_cursor_and_surface_negative_detail() -> None:

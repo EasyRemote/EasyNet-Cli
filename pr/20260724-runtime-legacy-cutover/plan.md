@@ -189,3 +189,41 @@ architecture rather than add feature surface.
   provider schema.
 - SPEC v2 now includes an explicit feature-boundary guard to prevent the ledger
   module from being transport-gated again.
+
+## Iteration 6 candidate policy
+
+- Focus on SDK provider-output projection. A product-neutral SDK must not
+  silently turn malformed provider directory rows into empty records.
+- codegraph located the shared Directory projection surfaces in Go and Python.
+  Both already reject malformed container types, but record projection still
+  accepts a mapping without canonical `kind` or any canonical URA fact by
+  projecting empty strings.
+- The root abstraction problem is not legacy alias promotion; that was already
+  blocked. The remaining compatibility behavior is weaker: malformed provider
+  rows survive as empty canonical records and defer failure to product code.
+- The intended cutover is to make Directory record projection fallible in both
+  SDKs and require canonical record identity facts at the SDK boundary.
+- Verification must cover Go/Python directory tests and the canonical runtime
+  convergence gate so both SDK implementations remain aligned.
+
+## Iteration 6 decision log
+
+- The selected cutover was SDK Directory record projection, not product device
+  rendering. Products may still decide how to display directory rows, but SDK
+  provider output must either carry canonical record facts or fail closed.
+- Go now uses an internal `projectDirectoryRecord` strict projector inside
+  `ProjectDirectoryResolution`. The exported `ProjectDirectoryRecord` signature
+  remains unchanged for public API compatibility, but it is no longer the
+  provider-output authority path.
+- Python's private `_project_record` now requires `kind` and at least one
+  canonical URA fact (`ura`, `owner_ura`, `ability_ura`, or `route_ura`).
+- Both SDKs now reject alias-only rows such as `{type, canonical_name}` at the
+  provider boundary instead of producing empty canonical records.
+- SPEC v2 now checks the strict record projector, canonical record fact guards,
+  and Go/Python tests for missing record identity facts.
+- Verification passed:
+  - `go test ./... -run Directory` in `sdk/go`
+  - `PYTHONPATH=sdk/python:../EasyNet-Axon/sdk/python python3 -m pytest -q sdk/python/tests/test_directory.py`
+  - `tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - `tools/scripts/check-architecture-convergence.sh`
+  - `git diff --check`

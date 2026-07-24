@@ -272,7 +272,11 @@ func ProjectDirectoryResolution(output map[string]any) (DirectoryResolution, err
 			if !ok {
 				return DirectoryResolution{}, invalidDirectory("Directory record must be an object", nil)
 			}
-			records = append(records, ProjectDirectoryRecord(record))
+			projected, err := projectDirectoryRecord(record)
+			if err != nil {
+				return DirectoryResolution{}, err
+			}
+			records = append(records, projected)
 		}
 	}
 	nextHop, err := optionalDirectoryMap(output, "next_hop")
@@ -348,6 +352,17 @@ func ProjectDirectoryRecord(raw map[string]any) DirectoryRecord {
 		RouteURA:   directoryText(raw, "route_ura"),
 		Raw:        copyRaw,
 	}
+}
+
+func projectDirectoryRecord(raw map[string]any) (DirectoryRecord, error) {
+	record := ProjectDirectoryRecord(raw)
+	if record.Kind == "" {
+		return DirectoryRecord{}, invalidDirectory("Directory record kind is required", nil)
+	}
+	if record.URA == "" && record.OwnerURA == "" && record.AbilityURA == "" && record.RouteURA == "" {
+		return DirectoryRecord{}, invalidDirectory("Directory record requires at least one canonical URA fact", nil)
+	}
+	return record, nil
 }
 
 func directoryLimit(limit uint32) (uint32, error) {

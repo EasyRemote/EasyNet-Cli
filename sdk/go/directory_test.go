@@ -85,6 +85,8 @@ func TestProjectDirectoryResolutionRejectsMalformedPresentFacts(t *testing.T) {
 	}{
 		{name: "answer", key: "answer", value: "not-an-object", message: "answer must be an object"},
 		{name: "records", key: "records", value: "not-a-list", message: "records must be a list"},
+		{name: "record missing kind", key: "records", value: []any{map[string]any{"ura": "easynet:///r/example/user/alice"}}, message: "record kind is required"},
+		{name: "record missing canonical facts", key: "records", value: []any{map[string]any{"kind": "ID", "canonical_name": "easynet:///r/example/user/alice"}}, message: "record requires at least one canonical URA fact"},
 		{name: "next hop", key: "next_hop", value: "not-an-object", message: "next_hop must be an object"},
 		{name: "selected route", key: "selected_route", value: "not-an-object", message: "selected_route must be an object"},
 		{name: "route candidates", key: "route_candidates", value: map[string]any{"node_id": "node-1"}, message: "route_candidates must be a list"},
