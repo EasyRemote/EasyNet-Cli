@@ -8205,7 +8205,7 @@ expected_helpers = {
     "go": "easynet.run/cli/sdk/go/provider/easynet/pluginexec",
     "rust": "easynet-provider-pluginexec",
     "java": "run.runtime.sdk.provider.easynet.pluginexec",
-    "node": "@easynet/daemon-sdk/provider/easynet/pluginexec",
+    "node": "@runtime/sdk/provider/easynet/pluginexec",
 }
 expected_helper_files = {
     "python": [

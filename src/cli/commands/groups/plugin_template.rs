@@ -76,7 +76,7 @@ pub const PROVIDER_SIDECAR_HELPER_CAPABILITY_MATRIX: &[ProviderSidecarHelperCapa
         call_mode: ProviderSidecarCallMode::ExecInvoke,
         state: ProviderSidecarHelperState::CutoverReady,
         template_available: true,
-        helper_package: Some("@easynet/daemon-sdk/provider/easynet/pluginexec"),
+        helper_package: Some("@runtime/sdk/provider/easynet/pluginexec"),
     },
     ProviderSidecarHelperCapability {
         language: "java",
@@ -474,7 +474,7 @@ The daemon runs `bin/exec-plugin`; it does not run Maven at invocation time.
                 r#"This template uses the Node CLI SDK provider helper:
 
 ```js
-import { serveExecPlugin } from "@easynet/daemon-sdk/provider/easynet/pluginexec.js";
+import { serveExecPlugin } from "@runtime/sdk/provider/easynet/pluginexec.js";
 ```
 
 Install dependencies before install:
@@ -577,7 +577,7 @@ replace easynet.run/cli/sdk/go => {sdk_path}
   "private": true,
   "type": "module",
   "dependencies": {{
-    "@easynet/daemon-sdk": "file:{sdk_path}"
+    "@runtime/sdk": "file:{sdk_path}"
   }}
 }}
 "#,
@@ -778,7 +778,7 @@ set -eu
 exec node "$(dirname "$0")/exec-plugin.mjs"
 "#;
 
-const NODE_EXEC_PLUGIN: &str = r#"import { serveExecPlugin } from "@easynet/daemon-sdk/provider/easynet/pluginexec.js";
+const NODE_EXEC_PLUGIN: &str = r#"import { serveExecPlugin } from "@runtime/sdk/provider/easynet/pluginexec.js";
 
 await serveExecPlugin((invocation) => ({
   ok: true,
@@ -1177,11 +1177,11 @@ mod tests {
         assert!(main_body.contains("serveExecPlugin"));
         assert!(!main_body.contains("JSON.parse"));
         let package_json = fs::read_to_string(target.join("package.json")).expect("package json");
-        assert!(package_json.contains("\"@easynet/daemon-sdk\": \"file:"));
+        assert!(package_json.contains("\"@runtime/sdk\": \"file:"));
         assert!(package_json.contains("/sdk/node"));
         let readme = fs::read_to_string(target.join("README.md")).expect("readme");
         assert!(readme.contains("npm install"));
-        assert!(readme.contains("@easynet/daemon-sdk/provider/easynet/pluginexec.js"));
+        assert!(readme.contains("@runtime/sdk/provider/easynet/pluginexec.js"));
     }
 
     #[test]

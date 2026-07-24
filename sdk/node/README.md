@@ -1,4 +1,4 @@
-# Node/TypeScript Daemon SDK
+# Node/TypeScript Runtime SDK
 
 The Node package is a generic Runtime Core seam for desktop tools and extension
 hosts. Its JavaScript and TypeScript public model is limited to:

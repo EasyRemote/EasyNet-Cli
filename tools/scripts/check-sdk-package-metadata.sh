@@ -76,8 +76,8 @@ if node_path is not None:
     except json.JSONDecodeError as exc:
         fail(f"node:invalid_json:{exc}")
         node = {}
-    if node.get("name") != "@easynet/daemon-sdk":
-        fail("node:name_must_be_@easynet/daemon-sdk")
+    if node.get("name") != "@runtime/sdk":
+        fail("node:name_must_be_@runtime/sdk")
     if node.get("version") != "0.0.0-seam":
         fail("node:version_must_be_0.0.0-seam")
     if node.get("private") is not True:
@@ -178,6 +178,7 @@ from pathlib import Path
 
 node_path = Path(sys.argv[1])
 node = json.loads(node_path.read_text(encoding="utf-8"))
+node["name"] = "@easynet/daemon-sdk"
 node["private"] = False
 node_path.write_text(json.dumps(node), encoding="utf-8")
 
@@ -193,6 +194,7 @@ PY
     exit 1
   fi
   grep -Fq "node:p1_seam_package_must_remain_private" "$tmp/out"
+  grep -Fq "node:name_must_be_@runtime/sdk" "$tmp/out"
   grep -Fq "pyproject:project.name_must_be_easynet-sdk" "$tmp/out"
 
   echo "check-sdk-package-metadata self-test ok"

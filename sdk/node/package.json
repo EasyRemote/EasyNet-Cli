@@ -1,5 +1,5 @@
 {
-  "name": "@easynet/daemon-sdk",
+  "name": "@runtime/sdk",
   "version": "0.0.0-seam",
   "private": true,
   "type": "module",
