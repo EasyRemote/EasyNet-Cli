@@ -95,6 +95,7 @@ fn tool_spec_from_descriptor_with_name(
     } else {
         descriptor.schema_summary.input.clone()
     };
+    let cost = CostMetadataProjection::from_descriptor(descriptor);
     serde_json::json!({
         "name": tool_name,
         "description": description,
@@ -108,8 +109,8 @@ fn tool_spec_from_descriptor_with_name(
             "exec_kind": descriptor.metadata.get("exec_kind").cloned().unwrap_or_default(),
             "mcp_server": descriptor.metadata.get("mcp_server").cloned().unwrap_or_default(),
             "mcp_tool": descriptor.metadata.get("mcp_tool").cloned().unwrap_or_default(),
-            "cost_kind": descriptor.metadata.get("cost_kind").cloned().unwrap_or_else(|| inferred_cost_kind(descriptor).to_string()),
-            "cost_label": descriptor.metadata.get("cost_label").cloned().unwrap_or_else(|| inferred_cost_label(inferred_cost_kind(descriptor)).to_string()),
+            "cost_kind": cost.kind(),
+            "cost_label": cost.label(),
         },
     })
 }
@@ -119,19 +120,14 @@ fn annotated_mcp_description(
     base_description: &str,
 ) -> String {
     let owner = owner_label_for_descriptor(descriptor);
-    let cost_kind = descriptor
-        .metadata
-        .get("cost_kind")
-        .map(String::as_str)
-        .unwrap_or_else(|| inferred_cost_kind(descriptor));
-    let cost_label = descriptor
-        .metadata
-        .get("cost_label")
-        .map(String::as_str)
-        .unwrap_or_else(|| inferred_cost_label(cost_kind));
+    let cost = CostMetadataProjection::from_descriptor(descriptor);
     format!(
         "[EasyNet ability: {} | owner: {} | cost: {} ({})] {}",
-        descriptor.name, owner, cost_kind, cost_label, base_description
+        descriptor.name,
+        owner,
+        cost.kind(),
+        cost.label(),
+        base_description
     )
 }
 
@@ -176,35 +172,74 @@ fn parsed_owner_label(owner_ura: &str) -> Option<String> {
     }
 }
 
-/// Fallback cost classification used when a descriptor's metadata
-/// does not declare `cost_kind` explicitly.
+/// Cost metadata projected onto the MCP edge.
 ///
-/// **Honesty rule (load-bearing).** This used to return `"free"` for
-/// any descriptor that wasn't an agent-chat surface. That mislabelled
-/// every reflectively-registered upstream MCP tool — operators saw
-/// billed upstreams as `cost: free (free/local)`. Per the plan §"Cost
-/// is static catalog metadata" rule, advisory cost lives in the
-/// ability manifest, not in heuristics, and we must NOT default to
-/// `free` for catalog rows we have not seen. We therefore return
-/// `"unknown"` for every descriptor that does not explicitly declare
-/// otherwise; the one inference we keep is the agent-chat case (no
-/// `exec_kind` AND `source = "agent:…"`) because that path is always
-/// an LLM dispatch by construction.
-fn inferred_cost_kind(
-    descriptor: &crate::daemon::ability::descriptors::AbilityDescriptor,
-) -> &'static str {
-    if descriptor.source.starts_with("agent:") && !descriptor.metadata.contains_key("exec_kind") {
-        return "llm_metered";
-    }
-    "unknown"
+/// **Honesty rule (load-bearing).** Advisory cost lives in the
+/// descriptor metadata produced by the ability manifest. Rows without
+/// declared cost are not labelled free; they project as `unknown`.
+/// The only special undeclared state is built-in agent chat:
+/// `source = "agent:…"` and no `exec_kind`, which is known to be an
+/// LLM dispatch path by construction.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CostMetadataProjection {
+    Declared { kind: String, label: String },
+    UndeclaredKnownLlm,
+    Undeclared,
 }
 
-fn inferred_cost_label(cost_kind: &str) -> &'static str {
+impl CostMetadataProjection {
+    fn from_descriptor(
+        descriptor: &crate::daemon::ability::descriptors::AbilityDescriptor,
+    ) -> Self {
+        if let Some(kind) = descriptor
+            .metadata
+            .get("cost_kind")
+            .map(String::as_str)
+            .filter(|value| !value.trim().is_empty())
+        {
+            let label = match descriptor
+                .metadata
+                .get("cost_label")
+                .map(String::as_str)
+                .filter(|value| !value.trim().is_empty())
+            {
+                Some(label) => label.to_string(),
+                None => declared_cost_label(kind).to_string(),
+            };
+            return Self::Declared {
+                kind: kind.to_string(),
+                label,
+            };
+        }
+        if descriptor.source.starts_with("agent:") && !descriptor.metadata.contains_key("exec_kind")
+        {
+            return Self::UndeclaredKnownLlm;
+        }
+        Self::Undeclared
+    }
+
+    fn kind(&self) -> &str {
+        match self {
+            Self::Declared { kind, .. } => kind.as_str(),
+            Self::UndeclaredKnownLlm => "llm_metered",
+            Self::Undeclared => "unknown",
+        }
+    }
+
+    fn label(&self) -> &str {
+        match self {
+            Self::Declared { label, .. } => label.as_str(),
+            Self::UndeclaredKnownLlm => "LLM token billing may apply",
+            Self::Undeclared => "cost not declared",
+        }
+    }
+}
+
+fn declared_cost_label(cost_kind: &str) -> &'static str {
     match cost_kind {
         "free" => "free/local",
         "external_metered" => "external API billing may apply",
         "llm_metered" => "LLM token billing may apply",
-        "unknown" => "cost not declared",
         _ => "cost not declared",
     }
 }
@@ -880,11 +915,9 @@ mod tests {
         // NOT the provenance string. Pre-fix this asserted the
         // opposite — bug pinned upside-down. Updated when the
         // transform started reading descriptor.description.
-        // Cost defaults to `unknown` when the descriptor carries no
-        // `cost_kind` metadata — the inferred fallback used to lie
-        // and return "free" for every catalog row that wasn't an
-        // agent-chat surface, including billed upstream MCP tools.
-        // See `inferred_cost_kind` doc for the honesty rationale.
+        // Undeclared cost projects to `unknown`; the MCP edge must
+        // not label catalog rows as free unless descriptors declare
+        // that metadata explicitly.
         assert!(spec["description"].as_str().unwrap().starts_with(
             "[EasyNet ability: agent.list | owner: device/01DEV | cost: unknown (cost not declared)] "
         ));
@@ -976,6 +1009,55 @@ mod tests {
         assert!(description.contains("owner: user/silan agent/openai"));
         assert!(description.contains("cost: external_metered"));
         assert!(description.contains("Geocode an address."));
+    }
+
+    #[test]
+    fn mcp_cost_projection_preserves_declared_metadata() {
+        let desc = d("billing.lookup")
+            .with_metadata_entry("cost_kind", "external_metered")
+            .with_metadata_entry("cost_label", "upstream billing applies");
+        let cost = CostMetadataProjection::from_descriptor(&desc);
+        assert_eq!(
+            cost,
+            CostMetadataProjection::Declared {
+                kind: "external_metered".to_string(),
+                label: "upstream billing applies".to_string()
+            }
+        );
+        assert_eq!(cost.kind(), "external_metered");
+        assert_eq!(cost.label(), "upstream billing applies");
+    }
+
+    #[test]
+    fn mcp_cost_projection_uses_declared_kind_label_when_label_is_absent() {
+        let desc = d("billing.lookup").with_metadata_entry("cost_kind", "external_metered");
+        let cost = CostMetadataProjection::from_descriptor(&desc);
+        assert_eq!(cost.kind(), "external_metered");
+        assert_eq!(cost.label(), "external API billing may apply");
+    }
+
+    #[test]
+    fn mcp_cost_projection_marks_known_agent_chat_as_llm_metered() {
+        let desc = AbilityDescriptor::new(
+            "chat",
+            TEST_AGENT_OWNER,
+            Visibility::Scoped,
+            AdmissionAction::Invoke,
+        )
+        .unwrap()
+        .with_source("agent:claude");
+        let cost = CostMetadataProjection::from_descriptor(&desc);
+        assert_eq!(cost, CostMetadataProjection::UndeclaredKnownLlm);
+        assert_eq!(cost.kind(), "llm_metered");
+        assert_eq!(cost.label(), "LLM token billing may apply");
+    }
+
+    #[test]
+    fn mcp_cost_projection_marks_ordinary_undeclared_rows_unknown() {
+        let cost = CostMetadataProjection::from_descriptor(&d("agent.list"));
+        assert_eq!(cost, CostMetadataProjection::Undeclared);
+        assert_eq!(cost.kind(), "unknown");
+        assert_eq!(cost.label(), "cost not declared");
     }
 
     /// Recording fake invoker that asserts the proxy contract: the

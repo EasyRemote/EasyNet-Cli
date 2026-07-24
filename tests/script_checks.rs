@@ -545,3 +545,10 @@ fn driver_command_state_boundary_script_holds() {
     // Runtime drivers must not infer default binaries from empty strings.
     run_bash_script("tests/scripts/test_check_driver_command_state_boundary.sh");
 }
+
+#[test]
+fn mcp_cost_metadata_projection_boundary_script_holds() {
+    // Pins MCP tool cost projection to declared/undeclared metadata states.
+    // The edge must not infer free/default cost through fallback helpers.
+    run_bash_script("tests/scripts/test_check_mcp_cost_metadata_projection_boundary.sh");
+}
