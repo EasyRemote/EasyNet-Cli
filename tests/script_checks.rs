@@ -467,3 +467,11 @@ fn runtime_abilities_manifest_boundary_script_holds() {
     // AgentDirectory. Missing roots must not synthesize chat abilities.
     run_bash_script("tests/scripts/test_check_runtime_abilities_manifest_boundary.sh");
 }
+
+#[test]
+fn ability_catalog_row_boundary_script_holds() {
+    // Pins CLI catalogue rendering to canonical row fields. Retired
+    // ability_name/tool_name aliases must fail closed instead of being
+    // silently ignored in the presentation projector.
+    run_bash_script("tests/scripts/test_check_ability_catalog_row_boundary.sh");
+}

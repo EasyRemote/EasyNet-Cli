@@ -7,9 +7,9 @@
 // Protocol Responsibility
 // -----------------------
 // Treat `ability_ura` as the only identity-bearing field. Human labels
-// may use owner-local `name` / `public_name`; legacy `ability_name` and
-// MCP `tool_name` fields are not identity and are intentionally ignored
-// by this projection.
+// may use owner-local `name` / `public_name`. Retired alias fields such
+// as `ability_name` and `tool_name` are rejected so stale read-model rows
+// cannot be rendered as canonical catalogue state.
 //
 // Implementation Approach
 // -----------------------
@@ -29,6 +29,8 @@
 
 use serde_json::Value;
 
+const RETIRED_CATALOGUE_FIELDS: &[&str] = &["ability_name", "tool_name"];
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AbilityCatalogueRow {
     label: String,
@@ -37,7 +39,9 @@ pub(crate) struct AbilityCatalogueRow {
 }
 
 impl AbilityCatalogueRow {
-    pub(crate) fn from_value(value: &Value) -> Self {
+    pub(crate) fn from_value(value: &Value) -> anyhow::Result<Self> {
+        reject_retired_catalogue_fields(value)?;
+
         let ability_ura = string_field(value, "ability_ura");
         let owner_ura = string_field(value, "owner_ura")
             .or_else(|| ability_ura.as_deref().and_then(owner_ura_from_ability_ura));
@@ -45,11 +49,11 @@ impl AbilityCatalogueRow {
             .or_else(|| string_field(value, "name"))
             .or_else(|| ability_ura.clone())
             .unwrap_or_else(|| "-".to_string());
-        Self {
+        Ok(Self {
             label,
             ability_ura,
             owner_ura,
-        }
+        })
     }
 
     pub(crate) fn label(&self) -> &str {
@@ -63,6 +67,24 @@ impl AbilityCatalogueRow {
     pub(crate) fn owner_ura(&self) -> Option<&str> {
         self.owner_ura.as_deref()
     }
+}
+
+fn reject_retired_catalogue_fields(value: &Value) -> anyhow::Result<()> {
+    let Some(object) = value.as_object() else {
+        return Ok(());
+    };
+    let retired = RETIRED_CATALOGUE_FIELDS
+        .iter()
+        .copied()
+        .filter(|field| object.contains_key(*field))
+        .collect::<Vec<_>>();
+    if retired.is_empty() {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "ability catalogue row contains retired field(s): {}",
+        retired.join(", ")
+    )
 }
 
 fn string_field(value: &Value, key: &str) -> Option<String> {
@@ -100,10 +122,9 @@ mod tests {
     fn projection_uses_ability_ura_for_identity_and_owner() {
         let row = AbilityCatalogueRow::from_value(&json!({
             "name": "chat",
-            "ability_ura": "easynet:///r/acme/ability/alice.bot.chat",
-            "ability_name": "bot.chat",
-            "tool_name": "legacy.tool"
-        }));
+            "ability_ura": "easynet:///r/acme/ability/alice.bot.chat"
+        }))
+        .expect("canonical row should project");
 
         assert_eq!(row.label(), "chat");
         assert_eq!(
@@ -114,17 +135,30 @@ mod tests {
     }
 
     #[test]
-    fn projection_ignores_legacy_aliases_as_label_fallback() {
+    fn projection_derives_label_and_owner_from_ability_ura() {
         let row = AbilityCatalogueRow::from_value(&json!({
-            "ability_name": "legacy.name",
-            "tool_name": "legacy.tool",
             "ability_ura": "easynet:///r/acme/ability/device.dev-1.fs.read"
-        }));
+        }))
+        .expect("canonical row should project");
 
         assert_eq!(
             row.label(),
             "easynet:///r/acme/ability/device.dev-1.fs.read"
         );
         assert_eq!(row.owner_ura(), Some("easynet:///r/acme/device/dev-1"));
+    }
+
+    #[test]
+    fn projection_rejects_retired_ability_name_and_tool_name_fields() {
+        let error = AbilityCatalogueRow::from_value(&json!({
+            "ability_name": "legacy.name",
+            "tool_name": "legacy.tool",
+            "ability_ura": "easynet:///r/acme/ability/device.dev-1.fs.read"
+        }))
+        .expect_err("retired aliases must fail closed");
+
+        let message = error.to_string();
+        assert!(message.contains("ability_name"), "{message}");
+        assert!(message.contains("tool_name"), "{message}");
     }
 }

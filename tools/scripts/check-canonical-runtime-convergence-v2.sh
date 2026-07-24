@@ -9917,6 +9917,14 @@ for token, code in (
 PY
 }
 
+check_cli_ability_catalog_row_boundary_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local script="$ROOT/tools/scripts/check-ability-catalog-row-boundary.sh"
+  [[ -f "$script" ]] || fail "ability catalogue row boundary script is missing: ${script#$ROOT/}"
+
+  CHECK_ABILITY_CATALOG_ROW_BOUNDARY_ROOT="$cli_root" bash "$script" >/dev/null
+}
+
 check_daemon_runtime_assembly_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local runtime_binding="$cli_root/src/daemon/invocation/dispatch/deps.rs"
@@ -20955,6 +20963,7 @@ check_invocation_attempt_audit_feature_boundary_contract
 check_ffi_callback_terminal_projection_contract
 check_ffi_last_error_typed_tls_contract
 check_canonical_ability_catalog_projection_contract
+check_cli_ability_catalog_row_boundary_contract
 check_daemon_runtime_assembly_contract
 check_agent_invoke_strict_args_contract
 check_runtime_plane_requirement_contract

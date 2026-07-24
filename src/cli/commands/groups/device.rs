@@ -182,7 +182,7 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
         style("hosted on this substrate").dim(),
     );
     for a in &abilities {
-        let row = AbilityCatalogueRow::from_value(a);
+        let row = AbilityCatalogueRow::from_value(a)?;
         let owner = row.owner_ura().unwrap_or("-");
         let ability_ura = row.ability_ura().unwrap_or("-");
         eprintln!(
