@@ -12443,6 +12443,9 @@ for fragment, label in {
     '"parent_receipts"': "parent_receipts_required_missing",
     "receiptHash(": "hash_validator_missing",
     "base64Bytes(": "base64_validator_missing",
+    "requireExactKeys(": "exact_object_schema_validator_missing",
+    "contains noncanonical field": "noncanonical_field_error_missing",
+    'requiredStringAllowEmpty(authorityProof, "proof_payload_base64")': "proof_payload_presence_missing",
 }.items():
     if fragment not in proof:
         raise SystemExit(f"java_runtime_receipt_projection:{label}")
@@ -12476,6 +12479,13 @@ for required_test in (
     "runtimeReceiptProofFactsAreMandatory",
     "canonicalRuntimeReceiptFixture",
     "missingProof.remove(\"authority_proof\")",
+    "legacyAuthorityBinding.put(\"legacy_authority\"",
+    "authority_binding contains noncanonical field legacy_authority",
+    "legacyAuthorityProofFact.put(\"legacy_proof_fact\"",
+    "authority_proof contains noncanonical field legacy_proof_fact",
+    "missingProofPayload.remove(\"proof_payload_base64\")",
+    "legacyProofIssuer.put(\"issuer\", issuer)",
+    "authority_proof.issuer contains noncanonical field legacy_profile",
     "terminal_receipt is required",
     "retired receipt alias",
 ):
@@ -13322,6 +13332,21 @@ EOF
     "$tmp/cli-java-receipt-legacy/sdk/java/src/main/java/run/runtime/sdk/InvocationResult.java"
   if ( CLI_ROOT="$tmp/cli-java-receipt-legacy"; check_java_sdk_runtime_receipt_projection_contract ) >/dev/null 2>&1; then
     fail "self-test expected Java SDK receipt projection bypass gate to fail"
+  fi
+  mkdir -p "$tmp/cli-java-receipt-proof-shape-legacy/sdk/java/src/main/java/run/runtime/sdk" \
+    "$tmp/cli-java-receipt-proof-shape-legacy/sdk/java/src/test/java/run/runtime/sdk"
+  cp "$ROOT/sdk/java/src/main/java/run/runtime/sdk/InvocationResult.java" \
+    "$tmp/cli-java-receipt-proof-shape-legacy/sdk/java/src/main/java/run/runtime/sdk/InvocationResult.java"
+  cp "$ROOT/sdk/java/src/main/java/run/runtime/sdk/RuntimeReceipt.java" \
+    "$tmp/cli-java-receipt-proof-shape-legacy/sdk/java/src/main/java/run/runtime/sdk/RuntimeReceipt.java"
+  cp "$ROOT/sdk/java/src/main/java/run/runtime/sdk/RuntimeReceiptProofFacts.java" \
+    "$tmp/cli-java-receipt-proof-shape-legacy/sdk/java/src/main/java/run/runtime/sdk/RuntimeReceiptProofFacts.java"
+  cp "$ROOT/sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java" \
+    "$tmp/cli-java-receipt-proof-shape-legacy/sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
+  perl -0pi -e 's/requireExactKeys/requireWideKeys/g' \
+    "$tmp/cli-java-receipt-proof-shape-legacy/sdk/java/src/main/java/run/runtime/sdk/RuntimeReceiptProofFacts.java"
+  if ( CLI_ROOT="$tmp/cli-java-receipt-proof-shape-legacy"; check_java_sdk_runtime_receipt_projection_contract ) >/dev/null 2>&1; then
+    fail "self-test expected Java SDK receipt proof-fact exact-shape gate to fail"
   fi
   mkdir -p "$tmp/cli-node-receipt-legacy/sdk/node/test"
   cat >"$tmp/cli-node-receipt-legacy/sdk/node/index.js" <<'EOF'

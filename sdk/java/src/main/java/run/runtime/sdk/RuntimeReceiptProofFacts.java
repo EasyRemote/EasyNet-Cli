@@ -11,6 +11,7 @@ import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 final class RuntimeReceiptProofFacts {
   private static final HexFormat HEX = HexFormat.of();
@@ -53,6 +54,17 @@ final class RuntimeReceiptProofFacts {
 
     Map<String, Object> authorityProof =
         requireObject(raw.get("authority_proof"), "authority_proof");
+    requireExactKeys(
+        authorityProof,
+        "authority_proof",
+        "proof_type",
+        "binding_kind",
+        "binding",
+        "proof_payload_base64",
+        "proof_hash_hex",
+        "issuer",
+        "signature",
+        "admission_hook");
     requiredString(authorityProof, "proof_type");
     String proofBindingKind = requiredString(authorityProof, "binding_kind");
     if (!proofBindingKind.equals(authorityKind)) {
@@ -70,7 +82,7 @@ final class RuntimeReceiptProofFacts {
 
     byte[] proofPayload =
         base64Bytes(
-            optionalString(authorityProof.get("proof_payload_base64")),
+            requiredStringAllowEmpty(authorityProof, "proof_payload_base64"),
             "authority_proof.proof_payload_base64",
             0,
             true);
@@ -217,9 +229,13 @@ final class RuntimeReceiptProofFacts {
           "runtime receipt causal_binding form does not match causal_binding_kind");
     }
     switch (form) {
-      case "none" -> {}
-      case "scalar" -> requireReceiptRef(binding.get("receipt"), "causal_binding.receipt");
+      case "none" -> requireExactKeys(binding, "causal_binding", "form");
+      case "scalar" -> {
+        requireExactKeys(binding, "causal_binding", "form", "receipt");
+        requireReceiptRef(binding.get("receipt"), "causal_binding.receipt");
+      }
       case "list" -> {
+        requireExactKeys(binding, "causal_binding", "form", "prior");
         List<Object> prior = requireList(binding.get("prior"), "causal_binding.prior");
         if (prior.isEmpty()) {
           throw SDKError.validation(
@@ -230,6 +246,7 @@ final class RuntimeReceiptProofFacts {
         }
       }
       case "merkle" -> {
+        requireExactKeys(binding, "causal_binding", "form", "root_hex", "proof_ura");
         receiptHash(binding, "root_hex", false);
         requiredString(binding, "proof_ura");
       }
@@ -240,6 +257,7 @@ final class RuntimeReceiptProofFacts {
 
   private static void requireReceiptRef(Object value, String field) {
     Map<String, Object> ref = requireObject(value, field);
+    requireExactKeys(ref, field, "receipt_hash_hex", "receipt_ura");
     receiptHash(ref, "receipt_hash_hex", false);
     requiredString(ref, "receipt_ura");
   }
@@ -253,6 +271,7 @@ final class RuntimeReceiptProofFacts {
 
   private static Map<String, Object> requireAgentBinding(Object value, String field) {
     Map<String, Object> binding = requireObject(value, field);
+    requireExactKeys(binding, field, "ura", "profile");
     requiredString(binding, "ura");
     validateUraProfile(requiredString(binding, "profile"), field + ".profile");
     return binding;
@@ -272,6 +291,7 @@ final class RuntimeReceiptProofFacts {
 
   private static void requireEntityRef(Object value, String field) {
     Map<String, Object> ref = requireObject(value, field);
+    requireExactKeys(ref, field, "kind", "ura", "profile");
     long kind = requiredLong(ref, "kind");
     if (kind < 1 || kind > 7) {
       throw SDKError.validation("runtime_receipt", field + ".kind is not canonical");
@@ -282,12 +302,47 @@ final class RuntimeReceiptProofFacts {
 
   private static Map<String, Object> requireAuthorityBinding(Object value, String field) {
     Map<String, Object> binding = requireObject(value, field);
-    requiredString(binding, "kind");
+    switch (requiredString(binding, "kind")) {
+      case "self" -> requireExactKeys(binding, field, "kind", "principal_ura");
+      case "delegation" ->
+          requireExactKeys(
+              binding,
+              field,
+              "kind",
+              "issuer_ura",
+              "subject_ura",
+              "caller_ura",
+              "audience",
+              "scopes",
+              "issued_at_ms",
+              "expires_at_ms",
+              "signature_base64");
+      case "capability" -> requireExactKeys(binding, field, "kind", "capability_ura");
+      case "policy" -> requireExactKeys(binding, field, "kind", "policy_ura");
+      case "session" ->
+          requireExactKeys(
+              binding,
+              field,
+              "kind",
+              "issuer_ura",
+              "subject_ura",
+              "session_id",
+              "scopes",
+              "audiences",
+              "issued_at_ms",
+              "expires_at_ms",
+              "signature_base64");
+      case "bootstrap" -> requireExactKeys(binding, field, "kind", "principal_ura", "realm", "ability");
+      default ->
+          throw SDKError.validation(
+              "runtime_receipt", field + ".kind is not canonical: " + binding.get("kind"));
+    }
     return binding;
   }
 
   private static void requireSignature(Object value, String field) {
     Map<String, Object> signature = requireObject(value, field);
+    requireExactKeys(signature, field, "algorithm", "signature_base64");
     requiredString(signature, "algorithm");
     base64Bytes(
         requiredString(signature, "signature_base64"),
@@ -334,6 +389,16 @@ final class RuntimeReceiptProofFacts {
     return Map.copyOf(out);
   }
 
+  private static void requireExactKeys(Map<String, Object> object, String field, String... keys) {
+    Set<String> allowed = Set.of(keys);
+    for (String key : object.keySet()) {
+      if (!allowed.contains(key)) {
+        throw SDKError.validation(
+            "runtime_receipt", field + " contains noncanonical field " + key);
+      }
+    }
+  }
+
   private static List<Object> requireList(Object value, String field) {
     if (!(value instanceof List<?> raw)) {
       throw SDKError.validation("runtime_receipt", field + " must be an array");
@@ -362,6 +427,14 @@ final class RuntimeReceiptProofFacts {
       throw SDKError.validation("runtime_receipt", "runtime receipt summary is missing " + field);
     }
     return string.trim();
+  }
+
+  private static String requiredStringAllowEmpty(Map<String, Object> raw, String field) {
+    Object value = raw.get(field);
+    if (!(value instanceof String string) || !string.equals(string.trim())) {
+      throw SDKError.validation("runtime_receipt", "runtime receipt summary is missing " + field);
+    }
+    return string;
   }
 
   private static String optionalString(Object value) {

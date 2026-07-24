@@ -305,6 +305,44 @@ public final class RuntimeCoreSeamTest {
         "authority_proof_hash_mismatch",
         () -> RuntimeReceipt.fromMap(mismatchedProofHash));
 
+    Map<String, Object> legacyAuthorityBindingReceipt = new LinkedHashMap<>(complete);
+    Map<String, Object> legacyAuthorityBinding =
+        mutableTopLevelObject(legacyAuthorityBindingReceipt, "authority_binding");
+    legacyAuthorityBinding.put("legacy_authority", "compat-carrier");
+    Map<String, Object> legacyAuthorityProof = mutableAuthorityProof(legacyAuthorityBindingReceipt);
+    legacyAuthorityProof.put("binding", new LinkedHashMap<>(legacyAuthorityBinding));
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        "authority_binding contains noncanonical field legacy_authority",
+        () -> RuntimeReceipt.fromMap(legacyAuthorityBindingReceipt));
+
+    Map<String, Object> legacyAuthorityProofFactReceipt = new LinkedHashMap<>(complete);
+    Map<String, Object> legacyAuthorityProofFact =
+        mutableAuthorityProof(legacyAuthorityProofFactReceipt);
+    legacyAuthorityProofFact.put("legacy_proof_fact", "compat-carrier");
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        "authority_proof contains noncanonical field legacy_proof_fact",
+        () -> RuntimeReceipt.fromMap(legacyAuthorityProofFactReceipt));
+
+    Map<String, Object> missingProofPayloadReceipt = new LinkedHashMap<>(complete);
+    Map<String, Object> missingProofPayload = mutableAuthorityProof(missingProofPayloadReceipt);
+    missingProofPayload.remove("proof_payload_base64");
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        "proof_payload_base64",
+        () -> RuntimeReceipt.fromMap(missingProofPayloadReceipt));
+
+    Map<String, Object> legacyProofIssuerReceipt = new LinkedHashMap<>(complete);
+    Map<String, Object> legacyProofIssuer = mutableAuthorityProof(legacyProofIssuerReceipt);
+    Map<String, Object> issuer = new LinkedHashMap<>(agentBinding(CALLEE));
+    issuer.put("legacy_profile", "opaque");
+    legacyProofIssuer.put("issuer", issuer);
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        "authority_proof.issuer contains noncanonical field legacy_profile",
+        () -> RuntimeReceipt.fromMap(legacyProofIssuerReceipt));
+
     Map<String, Object> bindingHashProof = new LinkedHashMap<>(complete);
     Map<String, Object> proof = mutableAuthorityProof(bindingHashProof);
     proof.put("proof_payload_base64", "");
@@ -382,7 +420,7 @@ public final class RuntimeCoreSeamTest {
     retiredSessionProof.put("proof_payload_base64", "");
     expectSDKError(
         ErrorCode.INVALID_ARGUMENT,
-        "issuer_ura",
+        "authority_binding contains noncanonical field",
         () -> RuntimeReceipt.fromMap(retiredSessionReceipt));
 
     Map<String, Object> wrongIssuer = new LinkedHashMap<>(complete);
@@ -1260,6 +1298,15 @@ public final class RuntimeCoreSeamTest {
     proof.put("binding", new LinkedHashMap<>(rawBinding));
     receipt.put("authority_proof", proof);
     return proof;
+  }
+
+  private static Map<String, Object> mutableTopLevelObject(
+      Map<String, Object> object, String field) {
+    @SuppressWarnings("unchecked")
+    Map<String, Object> raw = (Map<String, Object>) object.get(field);
+    Map<String, Object> copy = new LinkedHashMap<>(raw);
+    object.put(field, copy);
+    return copy;
   }
 
   private static String authorityBindingProofHashSelf(String principalURA) {

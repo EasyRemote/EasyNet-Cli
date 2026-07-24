@@ -1380,6 +1380,44 @@ architecture rather than add feature surface.
   - `cargo fmt --check`
   - `git diff --check`
 
+## Iteration 36 candidate policy
+
+- Move the same proof-custody convergence into the Java SDK receipt validator.
+  The Java SDK already required receipt proof facts and checked proof hashes,
+  but several nested proof-fact objects still accepted unknown metadata.
+- codegraph highlighted `RuntimeReceiptProofFacts` as the Java receipt
+  canonicalizer boundary and showed it was responsible for validating
+  `authority_binding`, `authority_proof`, issuer refs, signatures, causal
+  bindings, and receipt refs.
+- The root abstraction problem is mandatory proof facts inside open-ended
+  object shapes: a product could carry retired metadata through Java receipt
+  parsing without that metadata being part of a canonical proof fact.
+- The selected cutover is to make Java receipt proof-fact objects exact at the
+  SDK boundary instead of treating unknown fields as forward-compat metadata.
+
+## Iteration 36 decision log
+
+- Java `RuntimeReceiptProofFacts` now rejects unknown fields in authority
+  bindings, authority proofs, agent/entity refs, signatures, causal bindings,
+  and receipt refs.
+- `authority_proof.proof_payload_base64` is now an explicit proof-fact field:
+  it may be the empty string for binding-hash proofs, but it may not be omitted.
+- Added negative Java seam tests for legacy authority binding metadata, legacy
+  authority proof metadata, missing proof payload fields, and legacy issuer
+  profile metadata.
+- SPEC v2 now gates Java receipt proof-fact exactness and includes a negative
+  self-test that removes the exact-shape validator.
+- Verification passed:
+  - `/Users/macbook.silan.tech/.local/bin/codegraph explore "AuthoritySupport Java authority metadata all zero principal subject binding proof fact canonicalizer unknown fields"`
+  - `mvn -q -f sdk/java/pom.xml test -Dtest=run.runtime.sdk.RuntimeCoreSeamTest`
+  - `mvn -q -f sdk/java/pom.xml test`
+  - `bash -n tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - `tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  - `tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - `tools/scripts/check-architecture-convergence.sh`
+  - `cargo fmt --check`
+  - `git diff --check`
+
 ## Iteration 32 candidate policy
 
 - Continue the sidecar helper convergence one level up: after Iteration 31 made
