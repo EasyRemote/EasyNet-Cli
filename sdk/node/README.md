@@ -12,16 +12,16 @@ hosts. Its JavaScript and TypeScript public model is limited to:
 - bounded stream and bidirectional-session state machines with async iteration
   and `AbortSignal` cancellation.
 
-Invocation results preserve daemon-provided receipt facts as opaque objects. The
+Invocation results preserve runtime-provided receipt facts as opaque objects. The
 package does not expose receipt history or interpret product receipt policy.
 
-Product profiles are deliberately absent. Admin/Gateway, Companion,
-OpenAI-compatibility, Directory/Identity projections, Events, Host Binding,
-Mission, Publication, Receipt history, Surface/Pages, and Wrapper behavior
-belong to downstream products. `index.js` and `index.d.ts` provide no aliases or
-empty transport placeholders for those surfaces.
+Product profiles are deliberately absent. Product administration, gateway,
+companion, compatibility, directory views, identity projections, event feeds,
+host binding, mission, publication, receipt-history pages, surface/pages, and
+wrapper behavior belong to downstream products. `index.js` and `index.d.ts`
+provide no aliases or empty transport placeholders for those surfaces.
 
-The package currently has no bundled daemon transport or C ABI provider.
+The package currently has no bundled runtime-host transport or C ABI provider.
 `tools/scripts/check-node-sdk-seam.sh` runs the Runtime Core tests, validates the
 JavaScript module, and checks the source boundary. The test suite also enforces
 exact JavaScript exports and matching TypeScript declaration symbols.

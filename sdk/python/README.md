@@ -15,12 +15,12 @@ configuration files or product-specific compatibility modules.
 The package exposes the same capability families represented in
 `../conformance/sdk-parity-matrix.json`:
 
-- SDK environment and daemon/runtime lifecycle;
+- SDK environment and runtime-host lifecycle;
 - canonical Addressing delegated to Axon;
 - complete Invocation draft, prepare/sign/submit, unary, stream and bidi
   lifecycle;
-- runtime identity projection and daemon-managed signing handles;
-- managed signing through the daemon key-service;
+- runtime identity projection and runtime-managed signing handles;
+- managed signing through the runtime key service;
 - product-neutral PrincipalLifecycle, enrollment, public-key bindings,
   recovery and authorization grants;
 - product-neutral access-control and authority metadata projection;
@@ -30,7 +30,7 @@ The package exposes the same capability families represented in
 - runtime administration, health, diagnostics and typed errors.
 
 Missing or unavailable providers fail explicitly. The SDK does not search for
-fallback transports, parse product directories, infer daemon state from product
+fallback transports, parse product directories, infer runtime-host state from product
 environment variables or expose private key material.
 
 ## Product boundary
@@ -55,7 +55,7 @@ product repository that owns the behavior.
 `SignatureProvider` is the generic seam for signatures produced by an external
 signer selected by the consumer. The Python SDK never accepts or stores a
 private key or seed. Keys managed by the local EasyNet runtime are available
-only through daemon-backed runtime signing and managed-signing surfaces.
+only through runtime-backed signing and managed-signing surfaces.
 
 ## Verification
 

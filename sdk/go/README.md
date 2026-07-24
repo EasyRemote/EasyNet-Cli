@@ -16,5 +16,5 @@ those workflows through `RuntimeClient` and `Addressing`; no product profile
 clients, profile bundles, product C symbols or local key vaults belong here.
 
 The SDK never accepts or stores private key material. Runtime signing is an
-opaque capability backed by the daemon key service, and all endpoint paths are
+opaque capability backed by a runtime key service, and all endpoint paths are
 explicitly supplied by the embedding runtime.

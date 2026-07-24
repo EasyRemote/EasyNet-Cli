@@ -5,8 +5,8 @@
 // projections downstream; they lower those workflows through the generic
 // runtime concepts exported here.
 //
-// Public APIs expose daemon lifecycle, Addressing, Invocation, signing,
+// Public APIs expose runtime-host lifecycle, Addressing, Invocation, signing,
 // PrincipalLifecycle, Directory, receipts, runtime events, administration,
 // health and typed errors. They do not expose Axon SDK packages, generated
-// protobufs, C ABI handles, daemon internals or product profile clients.
+// protobufs, C ABI handles, runtime-host internals or product profile clients.
 package easynet
