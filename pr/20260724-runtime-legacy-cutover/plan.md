@@ -878,3 +878,54 @@ architecture rather than add feature surface.
   - `tools/scripts/check-canonical-runtime-convergence-v2.sh`
   - `tools/scripts/check-architecture-convergence.sh`
   - `git diff --check`
+
+## Iteration 21 candidate policy
+
+- Focus on join-time runtime authority wiring. codegraph/rg found that
+  `run_join_stages` still classified `daemon-config`, `federated-peers`, and
+  `realm-trust` as skipped best-effort stages even though those files feed the
+  daemon's runtime route, descriptor, and admission read models.
+- The root abstraction problem is a product lifecycle split: join can persist
+  credentials and then continue after local runtime authority wiring fails,
+  leaving the later daemon start/invoke path to surface unrelated
+  `AUTHORITY_DENIED`, descriptor, or route visibility errors.
+- The intended cutover is:
+  - join treats daemon-config, federated-peers, and realm-trust wiring as
+    required stages;
+  - stage failure is rendered as failed and returned immediately;
+  - no local hub-mode daemon-config remains a valid no-op, but write/reload
+    failure after a config exists is not hidden;
+  - SIGHUP reload after authority file updates is a required runtime refresh
+    when a pidfile exists, not a warning-only compatibility side effect.
+- Verification must prove the retired join best-effort vocabulary cannot return
+  around required authority wiring and that existing federation wire unit tests
+  still pass.
+
+## Iteration 21 decision log
+
+- Refactored join-time local runtime authority wiring into
+  `run_required_join_stage`, which renders required local transitions as failed
+  and returns immediately instead of continuing with skipped authority state.
+- Made `daemon-config`, `federated-peers`, and `realm-trust` required join
+  stages. The join flow no longer persists credentials and then hides local
+  runtime wiring failures that later surface as descriptor, route, or admission
+  errors.
+- Renamed the SIGHUP helper from `sighup_running_daemon_best_effort` to
+  `reload_running_daemon_after_join`. Missing pidfile remains a no-op because
+  there is no running read model to refresh; stale/unreachable pidfiles now
+  fail the authority wiring transition.
+- Removed warning-only "activate on next daemon restart" branches after
+  daemon-config and realm-trust updates. Runtime refresh is now part of the
+  join authority transition when a running daemon is present.
+- Added SPEC v2 gate `check_join_authority_wiring_required_contract` plus a
+  negative self-test fixture rejecting required-stage `stage_skipped` and
+  SIGHUP best-effort vocabulary.
+- Verification passed:
+  - `cargo test -q cli::commands::federation_wire`
+  - `cargo test -q cli::commands::join`
+  - `cargo check -q`
+  - `cargo fmt --check`
+  - `tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  - `tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - `tools/scripts/check-architecture-convergence.sh`
+  - `git diff --check`

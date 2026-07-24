@@ -977,6 +977,56 @@ check_resolve_key_request_dto_contract() {
   fi
 }
 
+check_join_authority_wiring_required_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local join="$cli_root/src/cli/commands/join.rs"
+  local federation_wire="$cli_root/src/cli/commands/federation_wire.rs"
+
+  [[ -f "$join" ]] || fail "join command source is missing: ${join#$cli_root/}"
+  [[ -f "$federation_wire" ]] || fail "federation wire source is missing: ${federation_wire#$cli_root/}"
+
+  "$PYTHON_BIN" - "$join" "$federation_wire" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+join = Path(sys.argv[1]).read_text(encoding="utf-8")
+wire = Path(sys.argv[2]).read_text(encoding="utf-8")
+join_prod = join.split("#[cfg(test)]", 1)[0]
+wire_prod = wire.split("#[cfg(test)]", 1)[0]
+
+if "fn run_required_join_stage" not in join_prod:
+    raise SystemExit("join_authority_wiring:required_stage_helper_missing")
+
+for stage in ("daemon-config", "federated-peers", "realm-trust"):
+    if f'run_required_join_stage(&mut renderer, "{stage}"' not in join_prod:
+        raise SystemExit(f"join_authority_wiring:stage_not_required:{stage}")
+    if f'stage_skipped("{stage}"' in join_prod:
+        raise SystemExit(f"join_authority_wiring:retired_stage_skip:{stage}")
+
+for retired in (
+    "best-effort steps (keyring, federated-peers",
+    "stage_skipped(\"(reason)\") and never short-circuit the join",
+    "The join command treats this helper as a best-effort side effect",
+    "side effect as best-effort",
+    "sighup_running_daemon_best_effort",
+    "SIGHUP to reload it failed",
+    "will activate on the next daemon restart",
+):
+    if retired in join_prod or retired in wire_prod:
+        raise SystemExit(f"join_authority_wiring:retired_best_effort:{retired}")
+
+for required in (
+    "reload_running_daemon_after_join",
+    'reload_running_daemon_after_join().context("reload daemon after federated_peers update")?',
+    'reload_running_daemon_after_join().context("reload daemon after realm-trust update")?',
+    "If a pidfile exists, reload is part of the join authority",
+):
+    if required not in wire_prod:
+        raise SystemExit(f"join_authority_wiring:missing_reload_contract:{required}")
+PY
+}
+
 check_invocation_history_filter_scope_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local history="$cli_root/src/daemon/ability/builtins/governance/invocation_history.rs"
@@ -14086,6 +14136,46 @@ EOF
   if ( check_resolve_key_request_dto_contract "$tmp/resolve-key-request-dto-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected resolve_key request DTO ownership gate to fail"
   fi
+  mkdir -p "$tmp/join-authority-wiring-legacy/src/cli/commands"
+  cat >"$tmp/join-authority-wiring-legacy/src/cli/commands/join.rs" <<'EOF'
+/// Walk through join side effects. best-effort steps (keyring, federated-peers,
+/// realm-trust, runtime-refresh) surface as `stage_ok` or
+/// `stage_skipped("(reason)")` and never short-circuit the join.
+fn run_join_stages(renderer: &mut StageRenderer) -> anyhow::Result<()> {
+    match ensure_minimal_device_config() {
+        Ok(()) => renderer.stage_ok("daemon-config"),
+        Err(e) => renderer.stage_skipped("daemon-config", &format!("({e})")),
+    }
+    match auto_wire_federated_peer_from_credentials() {
+        Ok(()) => renderer.stage_ok("federated-peers"),
+        Err(e) => renderer.stage_skipped("federated-peers", &format!("({e})")),
+    }
+    match auto_wire_self_realm_trust_from_credentials() {
+        Ok(()) => renderer.stage_ok("realm-trust"),
+        Err(e) => renderer.stage_skipped("realm-trust", &format!("({e})")),
+    }
+    Ok(())
+}
+EOF
+  cat >"$tmp/join-authority-wiring-legacy/src/cli/commands/federation_wire.rs" <<'EOF'
+// The join command treats this helper as a best-effort side effect.
+fn auto_wire_federated_peer_from_credentials() -> anyhow::Result<()> {
+    if let Err(err) = sighup_running_daemon_best_effort() {
+        eprintln!("SIGHUP to reload it failed ({err}); will activate on the next daemon restart");
+    }
+    Ok(())
+}
+fn auto_wire_self_realm_trust_from_credentials() -> anyhow::Result<()> {
+    if let Err(err) = sighup_running_daemon_best_effort() {
+        eprintln!("SIGHUP to reload it failed ({err}); will activate on the next daemon restart");
+    }
+    Ok(())
+}
+fn sighup_running_daemon_best_effort() -> anyhow::Result<()> { Ok(()) }
+EOF
+  if ( check_join_authority_wiring_required_contract "$tmp/join-authority-wiring-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected join authority wiring required-stage gate to fail"
+  fi
   mkdir -p "$tmp/invocation-history-filter-legacy/src/daemon/ability/builtins/governance"
   cat >"$tmp/invocation-history-filter-legacy/src/daemon/ability/builtins/governance/invocation_history.rs" <<'EOF'
 fn fetch_key_from_value(value: &Value) -> anyhow::Result<InvocationLedgerFetchKey> {
@@ -17524,6 +17614,7 @@ EOF
   check_invocation_history_ledger_ura_contract
   check_core_ura_realm_projection_contract
   check_resolve_key_request_dto_contract
+  check_join_authority_wiring_required_contract
   check_invocation_history_filter_scope_contract
   check_cli_invocation_history_read_model_contract
   check_invocation_history_placeholder_negative_only_contract
@@ -17712,6 +17803,7 @@ check_invocation_history_get_key_contract
 check_invocation_history_ledger_ura_contract
 check_core_ura_realm_projection_contract
 check_resolve_key_request_dto_contract
+check_join_authority_wiring_required_contract
 check_invocation_history_filter_scope_contract
 check_cli_invocation_history_read_model_contract
 check_invocation_history_placeholder_negative_only_contract

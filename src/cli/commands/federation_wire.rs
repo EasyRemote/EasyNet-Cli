@@ -25,15 +25,15 @@
 //      `https://host:port` shape the cross-hub dialer needs
 //      (see `daemon/federation/client/cross_hub_dial.rs`).
 //   3. Atomically rename-replace daemon-config.toml.
-//   4. Best-effort SIGHUP the running daemon (Unix only) so the
-//      `SharedFederatedPeers` cell picks up the new entry without
-//      a daemon restart.
+//   4. Reload the running daemon with SIGHUP (Unix only, no-op when no
+//      daemon pidfile exists) so the `SharedFederatedPeers` cell picks up
+//      the new entry without a daemon restart.
 //
 // Failure handling
 // ----------------
-// The join command treats this helper as a best-effort side effect, but the
-// helper itself returns failures. That keeps the stage UI honest: a skipped
-// federation wiring step must not be rendered as a completed one.
+// The join command treats this helper as a required local authority wiring
+// transition. That keeps the stage UI honest: a failed federation wiring step
+// must not be rendered as a completed join.
 //
 // Why CLI-side and not backend-side
 // ---------------------------------
@@ -196,10 +196,9 @@ fn resolve_peer_hub_endpoint(
 
 /// Auto-wire the `(realm, peer_hub)` mapping from a
 /// successful `easynet device join` into the local daemon's
-/// `[daemon.federated_peers]` table. The join flow treats this
-/// side effect as best-effort, but this helper still returns real
-/// errors so the stage renderer can distinguish "done" from
-/// "skipped with reason".
+/// `[daemon.federated_peers]` table. The join flow treats this side effect as
+/// a required local runtime authority transition, so this helper returns real
+/// errors and the stage renderer can abort before issuing unusable credentials.
 ///
 /// `operator_peer_hub` is the optional `--peer-hub` flag. When
 /// set it overrides the credentials-derived endpoint; when
@@ -294,16 +293,7 @@ pub fn auto_wire_federated_peer_from_credentials(
         anyhow::bail!("could not write daemon-config.toml for federated_peers: {err}");
     }
 
-    // Best-effort SIGHUP so the running daemon picks up the new
-    // peer entry without a restart (PR-N1 commit 10/N
-    // SharedFederatedPeers cell). Failure here is benign — the
-    // operator can SIGHUP / restart manually.
-    if let Err(err) = sighup_running_daemon_best_effort() {
-        eprintln!(
-            "[easynet device join] daemon-config.toml updated; SIGHUP to reload it failed ({err}). \
-             The new federated_peers entry will activate on the next daemon restart."
-        );
-    }
+    reload_running_daemon_after_join().context("reload daemon after federated_peers update")?;
 
     Ok(())
 }
@@ -330,9 +320,9 @@ pub fn auto_wire_federated_peer_from_credentials(
 ///
 /// Failure handling
 /// ----------------
-/// Mirrors `auto_wire_federated_peer_from_credentials`: the join
-/// command treats this as a best-effort stage, but this helper
-/// returns real errors so operator output remains truthful.
+/// Mirrors `auto_wire_federated_peer_from_credentials`: the join command
+/// treats this as a required local authority wiring stage, so this helper
+/// returns real errors and operator output remains truthful.
 /// Missing `realm` or `node_id` is invalid pairing state, not a
 /// successful no-op: otherwise `runtime start` can proceed with
 /// incomplete authority facts and surface later as route,
@@ -468,18 +458,7 @@ fn auto_wire_self_realm_trust_with_public_key(
         anyhow::bail!("could not write realm-trust.toml: {err}");
     }
 
-    // Best-effort SIGHUP so a co-located hub-mode daemon picks up
-    // the new entry without a restart (PR-7 commit 5/N
-    // SharedTrustAnchor cell, same SIGHUP-aware reload path the
-    // canonical `identity.register_pubkey` writer uses). The
-    // SIGHUP also reloads `[daemon.federated_peers]`; one signal
-    // covers both files.
-    if let Err(err) = sighup_running_daemon_best_effort() {
-        eprintln!(
-            "[easynet device join] realm-trust.toml updated; SIGHUP to reload it failed ({err}). \
-             The new self-entry will activate on the next daemon restart."
-        );
-    }
+    reload_running_daemon_after_join().context("reload daemon after realm-trust update")?;
 
     Ok(())
 }
@@ -755,12 +734,12 @@ fn upsert_daemon_hub_endpoint_in_toml(raw: &str, hub_endpoint: &str) -> anyhow::
     Ok(doc.to_string())
 }
 
-/// Send SIGHUP to the running easynet-daemon, if any. Returns
-/// `Ok(())` even if the pidfile is absent (no daemon running →
-/// nothing to reload). Errors only when the pidfile names a PID
-/// the OS rejects.
+/// Send SIGHUP to the running easynet-daemon, if any. Returns `Ok(())` when
+/// the pidfile is absent because there is no running runtime read model to
+/// refresh. If a pidfile exists, reload is part of the join authority
+/// transition and OS rejection is returned to the caller.
 #[cfg(unix)]
-fn sighup_running_daemon_best_effort() -> anyhow::Result<()> {
+fn reload_running_daemon_after_join() -> anyhow::Result<()> {
     let pid_path = config::easynet_daemon_pid_path();
     if !pid_path.exists() {
         return Ok(());
@@ -780,7 +759,7 @@ fn sighup_running_daemon_best_effort() -> anyhow::Result<()> {
 }
 
 #[cfg(not(unix))]
-fn sighup_running_daemon_best_effort() -> anyhow::Result<()> {
+fn reload_running_daemon_after_join() -> anyhow::Result<()> {
     Ok(())
 }
 

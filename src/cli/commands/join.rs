@@ -1013,11 +1013,11 @@ fn render_pairing_summary(title: &str, creds: &config::Credentials, peer_hub: Op
     eprintln!();
 }
 
-/// Walk through the eight join-time side effects under a live
-/// stage renderer. Network failures abort with `stage_failed +
-/// anyhow::bail`; best-effort steps (keyring, federated-peers,
-/// realm-trust, runtime-refresh) surface as `stage_ok` or
-/// `stage_skipped("(reason)")` and never short-circuit the join.
+/// Walk through the join-time side effects under a live stage renderer.
+/// Pairing, credential persistence, local runtime authority wiring, and
+/// key custody are required lifecycle transitions: a failed transition renders
+/// `stage_failed` and aborts the join instead of producing credentials that the
+/// daemon cannot later admit.
 ///
 /// Returns the resolved `Credentials` so the caller can render the
 /// summary block.
@@ -1138,17 +1138,15 @@ fn persist_join_credentials(
         source,
     ));
 
-    renderer.set_active("daemon-config");
-    match crate::daemon::persistence::daemon_config::ensure_minimal_device_config(&creds) {
-        Ok(()) => renderer.stage_ok("daemon-config"),
-        Err(e) => renderer.stage_skipped("daemon-config", &format!("({e})")),
-    }
+    run_required_join_stage(&mut renderer, "daemon-config", || {
+        crate::daemon::persistence::daemon_config::ensure_minimal_device_config(&creds)
+            .context("ensure daemon-config.toml for joined device")
+    })?;
 
-    renderer.set_active("federated-peers");
-    match super::federation_wire::auto_wire_federated_peer_from_credentials(&creds, peer_hub) {
-        Ok(()) => renderer.stage_ok("federated-peers"),
-        Err(e) => renderer.stage_skipped("federated-peers", &format!("({e})")),
-    }
+    run_required_join_stage(&mut renderer, "federated-peers", || {
+        super::federation_wire::auto_wire_federated_peer_from_credentials(&creds, peer_hub)
+            .context("wire federated peers for joined device")
+    })?;
 
     renderer.set_active("keyring");
     match ensure_device_runtime_identity(&creds.realm, &creds.node_id) {
@@ -1160,11 +1158,10 @@ fn persist_join_credentials(
         }
     }
 
-    renderer.set_active("realm-trust");
-    match super::federation_wire::auto_wire_self_realm_trust_from_credentials(&creds) {
-        Ok(()) => renderer.stage_ok("realm-trust"),
-        Err(e) => renderer.stage_skipped("realm-trust", &format!("({e})")),
-    }
+    run_required_join_stage(&mut renderer, "realm-trust", || {
+        super::federation_wire::auto_wire_self_realm_trust_from_credentials(&creds)
+            .context("wire local realm trust for joined device")
+    })?;
     record_snapshot(JoinConnectionSnapshot::from_credentials(
         JoinConnectionState::LocalTrustWired,
         Some(JoinTransition::WireLocalTrust),
@@ -1178,6 +1175,29 @@ fn persist_join_credentials(
 
     renderer.finish();
     Ok(creds)
+}
+
+fn run_required_join_stage<F>(
+    renderer: &mut crate::cli::presentation::stage::StageRenderer,
+    name: &'static str,
+    action: F,
+) -> anyhow::Result<()>
+where
+    F: FnOnce() -> anyhow::Result<()>,
+{
+    renderer.set_active(name);
+    match action() {
+        Ok(()) => {
+            renderer.stage_ok(name);
+            Ok(())
+        }
+        Err(error) => {
+            let message = error.to_string();
+            renderer.stage_failed(name, &message);
+            renderer.finish();
+            Err(error).with_context(|| format!("join stage `{name}` failed"))
+        }
+    }
 }
 
 /// A running daemon loaded identity and authority state before this join.
