@@ -689,16 +689,12 @@ impl<'a> DaemonRouteResolver<'a> {
     pub(crate) fn resolve_query_json(&self, query: &Value) -> Value {
         let query_name = json_string(query, "query_name");
         let ability_name = json_string(query, "ability_name");
-        let qtype = json_resolve_type(query).unwrap_or_else(|| {
-            if !ability_name.is_empty()
-                || is_descriptor_ref(&query_name)
-                || is_ability_ura(&query_name)
-            {
-                ResolveType::Route
-            } else {
-                ResolveType::DirectoryListing
+        let qtype = match json_resolve_type(query) {
+            Ok(qtype) => qtype,
+            Err(detail) => {
+                return negative_answer_json(&query_name, NegativeReason::Refused, Some(detail));
             }
-        });
+        };
 
         match qtype {
             ResolveType::Route | ResolveType::Ability => {
@@ -1595,10 +1591,6 @@ fn is_ability_ura(value: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn is_descriptor_ref(value: &str) -> bool {
-    axon_sdk::invocation::canonical_ability_descriptor_ref(value).is_ok()
-}
-
 fn looks_like_descriptor_ref(value: &str) -> bool {
     let value = value.trim();
     value.contains('@') || value.contains('#') || value.contains('!')
@@ -1617,19 +1609,19 @@ fn json_bool(value: &Value, key: &str) -> Option<bool> {
     value.get(key).and_then(Value::as_bool)
 }
 
-fn json_resolve_type(value: &Value) -> Option<ResolveType> {
-    let raw = value.get("qtype")?;
-    if let Some(num) = raw.as_i64() {
-        return ResolveType::try_from(num as i32).ok();
-    }
-    let text = raw.as_str()?.trim();
+fn json_resolve_type(value: &Value) -> Result<ResolveType, &'static str> {
+    let raw = value
+        .get("qtype")
+        .ok_or("resolve query missing canonical qtype")?;
+    let text = raw
+        .as_str()
+        .ok_or("resolve qtype must be a canonical ResolveType enum string")?
+        .trim();
     if text.is_empty() {
-        return None;
+        return Err("resolve qtype must be a non-empty canonical ResolveType enum string");
     }
-    ResolveType::from_str_name(text).or_else(|| {
-        let canonical = format!("RESOLVE_TYPE_{}", text.to_ascii_uppercase());
-        ResolveType::from_str_name(&canonical)
-    })
+    ResolveType::from_str_name(text)
+        .ok_or("resolve qtype must be a canonical ResolveType enum string")
 }
 
 fn advertised_agent_host_ura(
@@ -2841,39 +2833,19 @@ mod tests {
     }
 
     #[test]
-    fn hub_owned_ability_projects_hub_route_kind() {
+    fn hub_owned_catalog_projection_without_local_authority_fails_closed() {
         let registry = PresenceRegistry::new();
         let catalog = AbilityCatalogStore::new();
         let hub_ura = crate::core::ura::hub_ura("test-realm");
-        mark_online(&registry, &hub_ura);
-        let ability_ura = publish_ability(&catalog, &hub_ura, &hub_ura, "federation", "status");
+        publish_ability(&catalog, &hub_ura, &hub_ura, "federation", "status");
 
-        let route = DaemonRouteResolver::new(&registry, None, &catalog)
+        let error = DaemonRouteResolver::new(&registry, None, &catalog)
             .at(TEST_NOW_MS)
             .resolve_route(&hub_ura, "federation.status")
-            .expect("hub-owned ability must resolve through the hub route kind");
+            .expect_err("hub-owned catalog projection must not invent authority presence");
 
-        assert_eq!(route.kind(), SelectedRouteKind::HubOwned);
-        assert_eq!(route.route_reason(), RouteReason::LocalHub);
-        assert_eq!(
-            route.dispatch_target(true),
-            SelectedRouteDispatchTarget::LocalRuntime
-        );
-        assert_eq!(route.owner_ura, hub_ura);
-        assert_eq!(route.callee_ura, hub_ura);
-        assert_eq!(route.execution_host_ura, hub_ura);
-        assert_eq!(route.ability_ura, ability_ura);
-
-        let answer = route.final_route_answer_json();
-        assert_eq!(
-            answer["selected_route"]["reason"],
-            RouteReason::LocalHub.as_str_name()
-        );
-        assert!(answer["next_hop"]["local_hub_ability"].is_object());
-        assert_eq!(
-            answer["next_hop"]["local_hub_ability"]["dispatch_name"],
-            "federation.status"
-        );
+        assert_eq!(error.reason, NegativeReason::Nxdomain);
+        assert_eq!(error.detail, "owner is not online");
     }
 
     #[test]
@@ -2993,6 +2965,72 @@ mod tests {
         );
         assert_eq!(answer["negative"]["query_name"], "");
         assert!(answer.get("ability_ura").is_none());
+    }
+
+    #[test]
+    fn resolve_query_json_rejects_missing_qtype_instead_of_shape_guessing() {
+        let registry = PresenceRegistry::new();
+        let catalog = AbilityCatalogStore::new();
+        let owner_ura = device_owner_ura();
+        mark_online(&registry, &owner_ura);
+        publish_ability(&catalog, &owner_ura, &owner_ura, "agent", "list");
+
+        let answer = DaemonRouteResolver::new(&registry, None, &catalog)
+            .at(TEST_NOW_MS)
+            .resolve_query_json(&json!({
+                "query_name": owner_ura,
+                "ability_name": "agent.list",
+            }));
+
+        assert_eq!(
+            answer["answer_kind"],
+            ResolveAnswerKind::Negative.as_str_name()
+        );
+        assert_eq!(
+            answer["negative"]["reason"],
+            NegativeReason::Refused.as_str_name()
+        );
+        assert!(
+            answer["negative"]["detail"]
+                .as_str()
+                .is_some_and(|detail| detail.contains("missing canonical qtype")),
+            "missing qtype must fail before route/directory guessing: {answer}"
+        );
+    }
+
+    #[test]
+    fn resolve_query_json_rejects_short_qtype_aliases() {
+        let registry = PresenceRegistry::new();
+        let catalog = AbilityCatalogStore::new();
+        let owner_ura = device_owner_ura();
+        mark_online(&registry, &owner_ura);
+        publish_ability(&catalog, &owner_ura, &owner_ura, "agent", "list");
+
+        for qtype in [json!("ROUTE"), json!("route"), json!(2)] {
+            let answer = DaemonRouteResolver::new(&registry, None, &catalog)
+                .at(TEST_NOW_MS)
+                .resolve_query_json(&json!({
+                    "qtype": qtype,
+                    "query_name": owner_ura,
+                    "ability_name": "agent.list",
+                }));
+
+            assert_eq!(
+                answer["answer_kind"],
+                ResolveAnswerKind::Negative.as_str_name(),
+                "short/numeric qtype aliases must not resolve: {answer}"
+            );
+            assert_eq!(
+                answer["negative"]["reason"],
+                NegativeReason::Refused.as_str_name()
+            );
+            assert!(
+                answer["negative"]["detail"]
+                    .as_str()
+                    .is_some_and(|detail| detail.contains("canonical ResolveType enum string")),
+                "rejection must name canonical qtype requirement: {answer}"
+            );
+        }
     }
 
     #[test]

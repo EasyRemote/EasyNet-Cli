@@ -375,6 +375,14 @@ fn companion_status_package_version_boundary_script_holds() {
 }
 
 #[test]
+fn namespace_resolve_qtype_boundary_script_holds() {
+    // Pins local namespace.resolve ingress to canonical ResolveType enum
+    // strings. It must not guess qtype from query shape or accept short/numeric
+    // aliases.
+    run_bash_script("tests/scripts/test_check_namespace_resolve_qtype_boundary.sh");
+}
+
+#[test]
 fn workspace_agent_directory_boundary_script_holds() {
     // Pins runtime workspace projection to AgentDirectory input.
     // Dispatch must reject invalid registry roots instead of rebuilding
