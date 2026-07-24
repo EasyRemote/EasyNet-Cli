@@ -46,6 +46,38 @@ if ! rg -n '\.user_id\(\)' "$ISSUER" >/dev/null; then
   fail "runtime-state read issuer must require a paired user id"
 fi
 
+if rg -n 'from_credentials_file' "$ISSUER"; then
+  fail "runtime-state read issuer must not issue subjects from credentials alone"
+fi
+
+if ! rg -n 'trait RuntimeStateReadSignerCustody' "$ISSUER" >/dev/null; then
+  fail "runtime-state read issuer must have an explicit signer-custody proof seam"
+fi
+
+if ! rg -n 'prove_runtime_caller_signer_custody' "$ISSUER" >/dev/null; then
+  fail "runtime-state read issuer must prove live caller signer custody before issuing a read subject"
+fi
+
+if ! rg -n 'from_runtime_attachment_file' "$ISSUER" >/dev/null; then
+  fail "runtime-state read issuer must issue subjects from active runtime attachment, not raw credentials"
+fi
+
+if ! rg -n 'daemon Ready discovery' "$ISSUER" >/dev/null; then
+  fail "runtime-state read issuer must bind to daemon Ready discovery"
+fi
+
+if ! rg -n 'PAIRED_USER_RUNTIME_SIGNER' "$ISSUER" >/dev/null; then
+  fail "runtime-state read issuer must require the paired-user runtime signer capability"
+fi
+
+if ! rg -n 'identity\.realm\.trim\(\).*credentials\.realm_str\(\)\.trim\(\)' "$ISSUER" >/dev/null; then
+  fail "runtime-state read issuer must reject stale realm attachment"
+fi
+
+if ! rg -n 'identity\.node_id\.as_deref\(\)' "$ISSUER" >/dev/null; then
+  fail "runtime-state read issuer must reject stale node attachment"
+fi
+
 if rg -n 'local_invocation::local_daemon_ura\(\)|local_invocation::local_device_ura\(\)|UNPAIRED_LOCAL_REALM|UNPAIRED_LOCAL_DEVICE_ID' "$ISSUER"; then
   fail "runtime-state read issuer must not fall back to daemon/device/default subjects"
 fi
@@ -56,6 +88,18 @@ fi
 
 if ! rg -n 'runtime_state_read_subject_rejects_missing_user_id_before_device_fallback' "$ISSUER" >/dev/null; then
   fail "runtime-state read issuer must test missing user id as fail-closed"
+fi
+
+if ! rg -n 'runtime_state_read_subject_requires_ready_signer_capability' "$ISSUER" >/dev/null; then
+  fail "runtime-state read issuer must test missing Ready signer capability"
+fi
+
+if ! rg -n 'runtime_state_read_subject_rejects_stale_daemon_identity' "$ISSUER" >/dev/null; then
+  fail "runtime-state read issuer must test stale daemon identity rejection"
+fi
+
+if ! rg -n 'runtime_state_read_subject_rejects_missing_live_signer_custody' "$ISSUER" >/dev/null; then
+  fail "runtime-state read issuer must test live signer custody rejection"
 fi
 
 for target in "${TARGETS[@]}"; do

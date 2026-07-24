@@ -30,7 +30,20 @@ impl LocalRuntimeStateReadIssuer {
     }
 
     fn subject_ura() -> anyhow::Result<String> {
-        LocalRuntimeStateReadSubject::from_credentials_file().map(|subject| subject.into_ura())
+        LocalRuntimeStateReadSubject::from_runtime_attachment_file(&KeyServiceRuntimeStateReadSignerCustody)
+            .map(|subject| subject.into_ura())
+    }
+}
+
+trait RuntimeStateReadSignerCustody {
+    fn prove(&self, user_ura: &str) -> anyhow::Result<()>;
+}
+
+struct KeyServiceRuntimeStateReadSignerCustody;
+
+impl RuntimeStateReadSignerCustody for KeyServiceRuntimeStateReadSignerCustody {
+    fn prove(&self, user_ura: &str) -> anyhow::Result<()> {
+        crate::daemon::identity::self_identity::prove_runtime_caller_signer_custody(user_ura)
     }
 }
 
@@ -39,8 +52,40 @@ struct LocalRuntimeStateReadSubject {
 }
 
 impl LocalRuntimeStateReadSubject {
-    fn from_credentials_file() -> anyhow::Result<Self> {
+    fn from_runtime_attachment_file(
+        signer_custody: &dyn RuntimeStateReadSignerCustody,
+    ) -> anyhow::Result<Self> {
         let credentials = crate::daemon::persistence::config::load_credentials()?;
+        let discovery = crate::daemon::control::discovery::read(
+            &crate::daemon::control::discovery::default_path(),
+        )?
+        .ok_or_else(|| anyhow::anyhow!("runtime-state read subject unavailable: daemon Ready discovery is missing"))?;
+        Self::from_runtime_attachment(&credentials, &discovery, signer_custody)
+    }
+
+    fn from_runtime_attachment(
+        credentials: &crate::daemon::persistence::config::Credentials,
+        discovery: &crate::daemon::control::discovery::ControlDiscovery,
+        signer_custody: &dyn RuntimeStateReadSignerCustody,
+    ) -> anyhow::Result<Self> {
+        let identity = discovery.daemon_identity.as_ref().ok_or_else(|| {
+            anyhow::anyhow!("runtime-state read subject unavailable: daemon Ready discovery has no runtime identity")
+        })?;
+        if !discovery.capability_flags.iter().any(|flag| {
+            flag == crate::daemon::control::discovery::flags::PAIRED_USER_RUNTIME_SIGNER
+        }) {
+            anyhow::bail!("runtime-state read subject unavailable: daemon Ready did not prove paired User caller signer custody");
+        }
+        if identity.realm.trim() != credentials.realm_str().trim() {
+            anyhow::bail!("runtime-state read subject unavailable: daemon realm mismatch");
+        }
+        if let Some(node_id) = identity.node_id.as_deref() {
+            if node_id.trim() != credentials.node_id.trim() {
+                anyhow::bail!("runtime-state read subject unavailable: daemon node mismatch");
+            }
+        }
+        let user_ura = credentials.user_ura()?;
+        signer_custody.prove(&user_ura)?;
         let user_id = credentials.user_id()?;
         Ok(Self {
             ura: format!("easynet:///r/acme/resource/user.{user_id}/runtime-state/read"),
@@ -57,6 +102,15 @@ fn runtime_state_read_subject_uses_user_owned_resource_not_daemon_identity() {}
 
 #[test]
 fn runtime_state_read_subject_rejects_missing_user_id_before_device_fallback() {}
+
+#[test]
+fn runtime_state_read_subject_requires_ready_signer_capability() {}
+
+#[test]
+fn runtime_state_read_subject_rejects_stale_daemon_identity() {}
+
+#[test]
+fn runtime_state_read_subject_rejects_missing_live_signer_custody() {}
 RS
 
 for target in \
@@ -169,6 +223,21 @@ RS
   cd "$SB"
   bash tools/scripts/check-runtime-state-read-subject-boundary.sh
 ) >/dev/null || fail "happy path should pass"
+
+perl -0pi -e 's/from_runtime_attachment_file\(&KeyServiceRuntimeStateReadSignerCustody\)/from_credentials_file()/g; s/fn from_runtime_attachment_file/fn from_credentials_file/g' \
+  "$SB/src/support/platform/local_invoke.rs"
+
+set +e
+(
+  cd "$SB"
+  bash tools/scripts/check-runtime-state-read-subject-boundary.sh
+) >/tmp/check-runtime-state-read-subject-boundary-credentials-only.out 2>&1
+rc=$?
+set -e
+[[ "$rc" == "1" ]] || fail "credentials-only runtime-state subject issuer should exit 1 (got $rc)"
+
+perl -0pi -e 's/from_credentials_file\(\)/from_runtime_attachment_file(&KeyServiceRuntimeStateReadSignerCustody)/g; s/fn from_credentials_file/fn from_runtime_attachment_file/g' \
+  "$SB/src/support/platform/local_invoke.rs"
 
 cat >>"$SB/src/cli/commands/groups/invocation.rs" <<'RS'
 fn legacy_read() {

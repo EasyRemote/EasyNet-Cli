@@ -445,7 +445,27 @@ impl LocalRuntimeStateReadIssuer {
     }
 
     fn subject_ura() -> anyhow::Result<String> {
-        LocalRuntimeStateReadSubject::from_credentials_file().map(|subject| subject.into_ura())
+        LocalRuntimeStateReadSubject::from_runtime_attachment_file(
+            &KeyServiceRuntimeStateReadSignerCustody,
+        )
+        .map(|subject| subject.into_ura())
+    }
+}
+
+trait RuntimeStateReadSignerCustody {
+    fn prove(&self, user_ura: &str) -> anyhow::Result<()>;
+}
+
+struct KeyServiceRuntimeStateReadSignerCustody;
+
+impl RuntimeStateReadSignerCustody for KeyServiceRuntimeStateReadSignerCustody {
+    fn prove(&self, user_ura: &str) -> anyhow::Result<()> {
+        crate::daemon::identity::self_identity::prove_runtime_caller_signer_custody(user_ura)
+            .map_err(|_| {
+                anyhow::anyhow!(
+                    "runtime-state read subject unavailable: caller signer for `{user_ura}` is not prepared"
+                )
+            })
     }
 }
 
@@ -464,9 +484,61 @@ struct LocalRuntimeStateReadSubject {
 impl LocalRuntimeStateReadSubject {
     const RESOURCE_PATH: &'static str = "runtime-state/read";
 
-    fn from_credentials_file() -> anyhow::Result<Self> {
+    fn from_runtime_attachment_file(
+        signer_custody: &dyn RuntimeStateReadSignerCustody,
+    ) -> anyhow::Result<Self> {
         let credentials = crate::daemon::persistence::config::load_credentials()
             .map_err(|error| anyhow::anyhow!("runtime-state read subject unavailable: {error}"))?;
+        let discovery = crate::daemon::control::discovery::read(
+            &crate::daemon::control::discovery::default_path(),
+        )
+        .map_err(|error| anyhow::anyhow!("runtime-state read subject unavailable: {error}"))?
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "runtime-state read subject unavailable: daemon Ready discovery is missing"
+            )
+        })?;
+        Self::from_runtime_attachment(&credentials, &discovery, signer_custody)
+    }
+
+    fn from_runtime_attachment(
+        credentials: &crate::daemon::persistence::config::Credentials,
+        discovery: &crate::daemon::control::discovery::ControlDiscovery,
+        signer_custody: &dyn RuntimeStateReadSignerCustody,
+    ) -> anyhow::Result<Self> {
+        let identity = discovery.daemon_identity.as_ref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "runtime-state read subject unavailable: daemon Ready discovery has no runtime identity"
+            )
+        })?;
+        let has_paired_user_signer = discovery.capability_flags.iter().any(|flag| {
+            flag == crate::daemon::control::discovery::flags::PAIRED_USER_RUNTIME_SIGNER
+        });
+        if !has_paired_user_signer {
+            anyhow::bail!(
+                "runtime-state read subject unavailable: daemon Ready did not prove paired User caller signer custody"
+            );
+        }
+        if identity.realm.trim() != credentials.realm_str().trim() {
+            anyhow::bail!(
+                "runtime-state read subject unavailable: daemon realm `{}` does not match paired credentials realm `{}`",
+                identity.realm.trim(),
+                credentials.realm_str().trim()
+            );
+        }
+        if let Some(node_id) = identity.node_id.as_deref() {
+            if node_id.trim() != credentials.node_id.trim() {
+                anyhow::bail!(
+                    "runtime-state read subject unavailable: daemon node `{}` does not match paired credentials node `{}`",
+                    node_id.trim(),
+                    credentials.node_id.trim()
+                );
+            }
+        }
+        let user_ura = credentials
+            .user_ura()
+            .map_err(|error| anyhow::anyhow!("runtime-state read subject unavailable: {error}"))?;
+        signer_custody.prove(&user_ura)?;
         Self::from_credentials(&credentials)
     }
 
@@ -729,6 +801,67 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    struct ReadyRuntimeStateReadSignerCustody;
+
+    impl RuntimeStateReadSignerCustody for ReadyRuntimeStateReadSignerCustody {
+        fn prove(&self, user_ura: &str) -> anyhow::Result<()> {
+            assert_eq!(user_ura, "easynet:///r/acme/user/user-alice");
+            Ok(())
+        }
+    }
+
+    struct FailedRuntimeStateReadSignerCustody;
+
+    impl RuntimeStateReadSignerCustody for FailedRuntimeStateReadSignerCustody {
+        fn prove(&self, _user_ura: &str) -> anyhow::Result<()> {
+            anyhow::bail!("test signer unavailable")
+        }
+    }
+
+    fn runtime_state_read_credentials() -> crate::daemon::persistence::config::Credentials {
+        crate::daemon::persistence::config::Credentials {
+            node_id: "dev-a".to_string(),
+            credential_token: "token".to_string(),
+            hub_endpoint: "axon://hub.example:50051".to_string(),
+            realm: "acme".to_string(),
+            deploy_signature: String::new(),
+            hub_api_base: None,
+            username: Some("alice".to_string()),
+            user_id: Some("user-alice".to_string()),
+            hub_pubkey_b64: None,
+            hub_tls_ca_pem_b64: None,
+            join_receipt_hash: None,
+        }
+    }
+
+    fn runtime_state_read_discovery(
+        realm: &str,
+        node_id: Option<&str>,
+        capability_flags: Vec<String>,
+    ) -> crate::daemon::control::discovery::ControlDiscovery {
+        crate::daemon::control::discovery::ControlDiscovery {
+            socket_path: Some(std::path::PathBuf::from("/tmp/daemon.sock")),
+            pipe_name: None,
+            invocation_endpoint: Some(std::path::PathBuf::from("/tmp/daemon.sock")),
+            daemon_identity: Some(crate::daemon::control::discovery::DaemonIdentity {
+                mode: "device".to_string(),
+                realm: realm.to_string(),
+                node_id: node_id.map(str::to_string),
+            }),
+            pid: 42,
+            daemon_version: "test".to_string(),
+            supported_ipc_versions: crate::daemon::control::discovery::IpcVersionRange::single(
+                crate::daemon::control::discovery::IPC_VERSION_V1,
+            ),
+            capability_flags,
+            pages_port: None,
+        }
+    }
+
+    fn paired_user_runtime_signer_flag() -> Vec<String> {
+        vec![crate::daemon::control::discovery::flags::PAIRED_USER_RUNTIME_SIGNER.to_string()]
+    }
+
     #[test]
     fn local_system_context_requires_complete_explicit_facts() {
         let complete = LocalSystemInvocationContext::new(
@@ -936,53 +1069,70 @@ mod tests {
 
     #[test]
     fn runtime_state_read_subject_uses_user_owned_resource_not_daemon_identity() {
-        let _g = crate::cli::commands::test_support::HomeGuard::new();
-        crate::daemon::persistence::config::save_credentials(
-            &crate::daemon::persistence::config::Credentials {
-                node_id: "dev-a".to_string(),
-                credential_token: "token".to_string(),
-                hub_endpoint: "axon://hub.example:50051".to_string(),
-                realm: "acme".to_string(),
-                deploy_signature: String::new(),
-                hub_api_base: None,
-                username: Some("alice".to_string()),
-                user_id: Some("user-alice".to_string()),
-                hub_pubkey_b64: None,
-                hub_tls_ca_pem_b64: None,
-                join_receipt_hash: None,
-            },
+        let subject = LocalRuntimeStateReadSubject::from_runtime_attachment(
+            &runtime_state_read_credentials(),
+            &runtime_state_read_discovery("acme", Some("dev-a"), paired_user_runtime_signer_flag()),
+            &ReadyRuntimeStateReadSignerCustody,
         )
-        .expect("write paired credentials");
-        crate::daemon::control::discovery::write(
-            &crate::daemon::control::discovery::default_path(),
-            &crate::daemon::control::discovery::ControlDiscovery {
-                socket_path: Some(std::path::PathBuf::from("/tmp/daemon.sock")),
-                pipe_name: None,
-                invocation_endpoint: Some(std::path::PathBuf::from("/tmp/daemon.sock")),
-                daemon_identity: Some(crate::daemon::control::discovery::DaemonIdentity {
-                    mode: "device".to_string(),
-                    realm: "acme".to_string(),
-                    node_id: Some("dev-a".to_string()),
-                }),
-                pid: 42,
-                daemon_version: "test".to_string(),
-                supported_ipc_versions: crate::daemon::control::discovery::IpcVersionRange::single(
-                    crate::daemon::control::discovery::IPC_VERSION_V1,
-                ),
-                capability_flags: vec![],
-                pages_port: None,
-            },
-        )
-        .expect("write control discovery");
-
-        let subject = LocalRuntimeStateReadIssuer::subject_ura()
-            .expect("runtime-state read subject from credentials");
+        .expect("runtime-state read subject from ready runtime attachment")
+        .into_ura();
 
         assert_eq!(
             subject,
             "easynet:///r/acme/resource/user.user-alice/runtime-state/read"
         );
         assert_ne!(subject, crate::core::ura::device_ura("acme", "dev-a"));
+    }
+
+    #[test]
+    fn runtime_state_read_subject_requires_ready_signer_capability() {
+        let error = LocalRuntimeStateReadSubject::from_runtime_attachment(
+            &runtime_state_read_credentials(),
+            &runtime_state_read_discovery("acme", Some("dev-a"), vec![]),
+            &ReadyRuntimeStateReadSignerCustody,
+        )
+        .expect_err("runtime-state read must require daemon Ready signer proof");
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("paired User caller signer custody"),
+            "wrong readiness error: {message}"
+        );
+    }
+
+    #[test]
+    fn runtime_state_read_subject_rejects_stale_daemon_identity() {
+        let error = LocalRuntimeStateReadSubject::from_runtime_attachment(
+            &runtime_state_read_credentials(),
+            &runtime_state_read_discovery(
+                "acme",
+                Some("other-node"),
+                paired_user_runtime_signer_flag(),
+            ),
+            &ReadyRuntimeStateReadSignerCustody,
+        )
+        .expect_err("runtime-state read must bind credentials to active daemon identity");
+        let message = format!("{error:#}");
+        assert!(
+            message.contains(
+                "daemon node `other-node` does not match paired credentials node `dev-a`"
+            ),
+            "wrong stale-identity error: {message}"
+        );
+    }
+
+    #[test]
+    fn runtime_state_read_subject_rejects_missing_live_signer_custody() {
+        let error = LocalRuntimeStateReadSubject::from_runtime_attachment(
+            &runtime_state_read_credentials(),
+            &runtime_state_read_discovery("acme", Some("dev-a"), paired_user_runtime_signer_flag()),
+            &FailedRuntimeStateReadSignerCustody,
+        )
+        .expect_err("runtime-state read must prove live caller signer custody");
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("test signer unavailable"),
+            "wrong signer custody error: {message}"
+        );
     }
 
     #[test]

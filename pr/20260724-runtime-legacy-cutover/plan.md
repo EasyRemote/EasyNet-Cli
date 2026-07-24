@@ -1562,6 +1562,48 @@ architecture rather than add feature surface.
   - `cargo fmt --check`
   - `git diff --check`
 
+## Iteration 44 candidate policy
+
+- Continue RF-7/RF-4 convergence on the product-visible failure mode where
+  runtime-state reads can surface stale or mismatched caller/session subjects.
+- codegraph and source search showed production no longer constructs the
+  retired `/session/invocation_history` subject; remaining occurrences are
+  negative fixtures. The still-live root abstraction problem is weaker:
+  `LocalRuntimeStateReadIssuer` issued a user-owned read subject from the
+  credentials file alone, without proving the active daemon attachment or the
+  paired User caller signer that daemon Ready claimed.
+- The selected cutover is to make runtime-state read subject issuance an
+  explicit attachment state machine: credentials ownership, daemon Ready
+  identity, Ready signer capability, and live signer custody must all agree
+  before the support layer crosses the local Axon gRPC boundary.
+
+## Iteration 44 decision log
+
+- Replaced credentials-only read-subject issuance with
+  `LocalRuntimeStateReadSubject::from_runtime_attachment_file`.
+- Added a narrow `RuntimeStateReadSignerCustody` seam and production
+  `KeyServiceRuntimeStateReadSignerCustody` implementation. The seam proves
+  live caller signer custody before issuing a runtime-state read subject while
+  keeping key-service details out of the product-facing error.
+- Runtime-state reads now require `control.json` Ready discovery, a daemon
+  runtime identity, the `paired_user_runtime_signer` capability flag, matching
+  daemon/credential realm, matching daemon/credential node, and a live paired
+  User signer.
+- Added unit coverage for the ready path, missing Ready signer capability,
+  stale daemon identity, missing live signer custody, and missing user id.
+- Strengthened `check-runtime-state-read-subject-boundary.sh` and its
+  self-test fixture so future regressions cannot return to credentials-only
+  subject issuance.
+- Verification passed:
+  - `/Users/macbook.silan.tech/.local/bin/codegraph explore "00000000 session subject owned by does not admit envelope subject caller signer keyring entry not found self-identity invocation_history meta.list_abilities descriptor_ref not found owner is not online"`
+  - `cargo test runtime_state_read_subject --features axon-pb`
+  - `tools/scripts/check-runtime-state-read-subject-boundary.sh`
+  - `tests/scripts/test_check_runtime_state_read_subject_boundary.sh`
+  - `tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - `tools/scripts/check-architecture-convergence.sh`
+  - `cargo fmt --check`
+  - `git diff --check`
+
 ## Iteration 36 candidate policy
 
 - Move the same proof-custody convergence into the Java SDK receipt validator.
