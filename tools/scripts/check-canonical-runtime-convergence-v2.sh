@@ -10292,6 +10292,11 @@ if "serveExecPlugin" not in text:
 PY
 }
 
+check_remote_desktop_contract_boundary_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  bash "$cli_root/tools/scripts/check-remote-desktop-contract-boundary.sh" >/dev/null
+}
+
 check_retired_browser_mock_surface_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local descriptor_dir="$cli_root/ability-descriptors/system/device_control"
@@ -15018,6 +15023,27 @@ EOF
     "$tmp/cli-sidecar-request-field/sdk/python/easynet_sdk/providers/easynet/plugin_exec.py"
   if ( CLI_ROOT="$tmp/cli-sidecar-request-field"; check_plugin_sidecar_helper_matrix_contract ) >/dev/null 2>&1; then
     fail "self-test expected sidecar unknown request field gate to fail"
+  fi
+  mkdir -p "$tmp/cli-remote-desktop-contract-alias/tools/scripts" \
+    "$tmp/cli-remote-desktop-contract-alias/plugins/remote-desktop/src"
+  cp "$ROOT/tools/scripts/check-remote-desktop-contract-boundary.sh" \
+    "$tmp/cli-remote-desktop-contract-alias/tools/scripts/check-remote-desktop-contract-boundary.sh"
+  cat >"$tmp/cli-remote-desktop-contract-alias/plugins/remote-desktop/src/contract.rs" <<'EOF'
+#[derive(serde::Serialize, serde::Deserialize)]
+enum RemoteDesktopTransportKind {
+    Unspecified,
+    #[serde(rename = "webrtc", alias = "web_rtc")]
+    WebRtc,
+}
+
+#[test]
+fn media_backend_contract_accepts_only_canonical_webrtc_transport_name() {}
+
+#[test]
+fn media_backend_contract_rejects_retired_web_rtc_transport_alias() {}
+EOF
+  if ( CLI_ROOT="$tmp/cli-remote-desktop-contract-alias"; check_remote_desktop_contract_boundary_contract ) >/dev/null 2>&1; then
+    fail "self-test expected remote-desktop retired transport alias gate to fail"
   fi
   mkdir -p "$tmp/cli-browser-mock/src/daemon/ability/builtins/device_control" \
     "$tmp/cli-browser-mock/ability-descriptors/system/device_control" \
@@ -19943,6 +19969,7 @@ check_catalog_exact_runtime_key_contract
 check_federation_directory_device_projection_contract
 check_cli_device_directory_projection_contract
 check_plugin_sidecar_helper_matrix_contract
+check_remote_desktop_contract_boundary_contract
 check_retired_browser_mock_surface_contract
 check_ability_deploy_product_neutrality_contract
 check_device_ability_mutation_target_contract
