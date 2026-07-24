@@ -152,3 +152,32 @@ fn sidecar_invocation_rejects_unknown_request_fields() {
     let error = SidecarInvocation::from_frame(frame).expect_err("unknown field");
     assert!(error.to_string().contains("canonical request frame"));
 }
+
+#[test]
+fn sidecar_invocation_rejects_missing_canonical_invocation_objects() {
+    for field in ["causal_context", "args"] {
+        let mut frame: Value = serde_json::from_str(&request_frame()).expect("frame");
+        frame["invocation"]
+            .as_object_mut()
+            .expect("invocation object")
+            .remove(field);
+
+        let error = SidecarInvocation::from_frame(frame).expect_err("missing object");
+        assert!(
+            error.to_string().contains("must be an object"),
+            "unexpected {field} error: {error}"
+        );
+
+        let mut frame: Value = serde_json::from_str(&request_frame()).expect("frame");
+        frame["invocation"]
+            .as_object_mut()
+            .expect("invocation object")
+            .insert(field.to_string(), Value::Null);
+
+        let error = SidecarInvocation::from_frame(frame).expect_err("null object");
+        assert!(
+            error.to_string().contains("must be an object"),
+            "unexpected {field} null error: {error}"
+        );
+    }
+}

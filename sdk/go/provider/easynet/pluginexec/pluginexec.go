@@ -182,6 +182,9 @@ func (f requestFrame) projectInvocation() (SidecarInvocation, error) {
 	if err := rejectUnknownInvocationFields(fields); err != nil {
 		return SidecarInvocation{}, err
 	}
+	if err := requireInvocationFields(fields); err != nil {
+		return SidecarInvocation{}, err
+	}
 	var invocation sidecarInvocationFrame
 	if err := json.Unmarshal(f.Invocation, &invocation); err != nil {
 		return SidecarInvocation{}, protocolError("sidecar frame field \"invocation\" must be an object")
@@ -229,6 +232,23 @@ func rejectUnknownInvocationFields(object map[string]json.RawMessage) error {
 	return nil
 }
 
+func requireInvocationFields(object map[string]json.RawMessage) error {
+	for _, field := range []string{
+		"caller_ura",
+		"callee_ura",
+		"ability_ura",
+		"subject_ura",
+		"invocation_nonce",
+		"causal_context",
+		"args",
+	} {
+		if _, ok := object[field]; !ok {
+			return protocolError("sidecar frame field %q is required", field)
+		}
+	}
+	return nil
+}
+
 func (f sidecarInvocationFrame) project(frameType string, callID string) (SidecarInvocation, error) {
 	if frameType != "invoke" {
 		return SidecarInvocation{}, protocolError("exec sidecar expected invoke frame, got %q", frameType)
@@ -251,13 +271,11 @@ func (f sidecarInvocationFrame) project(frameType string, callID string) (Sideca
 			return SidecarInvocation{}, protocolError("sidecar frame field \"invocation_nonce\" must contain bytes")
 		}
 	}
-	args := f.Args
-	if args == nil {
-		args = map[string]any{}
+	if f.CausalContext == nil {
+		return SidecarInvocation{}, protocolError("sidecar frame field \"causal_context\" must be an object")
 	}
-	causalContext := f.CausalContext
-	if causalContext == nil {
-		causalContext = map[string]any{}
+	if f.Args == nil {
+		return SidecarInvocation{}, protocolError("sidecar frame field \"args\" must be an object")
 	}
 	return SidecarInvocation{
 		CallID:          callID,
@@ -266,8 +284,8 @@ func (f sidecarInvocationFrame) project(frameType string, callID string) (Sideca
 		AbilityURA:      f.AbilityURA,
 		SubjectURA:      f.SubjectURA,
 		InvocationNonce: append([]int(nil), f.InvocationNonce...),
-		CausalContext:   causalContext,
-		Args:            args,
+		CausalContext:   f.CausalContext,
+		Args:            f.Args,
 		FrameType:       frameType,
 	}, nil
 }

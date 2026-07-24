@@ -15,6 +15,7 @@ public final class SidecarRuntimeTest {
     sidecarInvocationRejectsRetiredTupleAliases();
     sidecarInvocationRejectsUnknownInvocationFields();
     sidecarInvocationRejectsUnknownRequestFields();
+    sidecarInvocationRejectsMissingCanonicalInvocationObjects();
   }
 
   static void sidecarInvocationProjectsDaemonFrame() {
@@ -132,6 +133,37 @@ public final class SidecarRuntimeTest {
       throw new AssertionError("unknown request fields must fail");
     } catch (SidecarProtocolError expected) {
       check(expected.getMessage().contains("canonical request frame"), "unknown request field error");
+    }
+  }
+
+  static void sidecarInvocationRejectsMissingCanonicalInvocationObjects() {
+    for (String field : java.util.List.of("causal_context", "args")) {
+      java.util.Map<String, Object> invocation =
+          new java.util.LinkedHashMap<>(
+              (java.util.Map<String, Object>) frame().get("invocation"));
+      invocation.remove(field);
+      java.util.Map<String, Object> incomplete = new java.util.LinkedHashMap<>();
+      incomplete.put("type", "invoke");
+      incomplete.put("call_id", "call-1");
+      incomplete.put("invocation", invocation);
+      try {
+        SidecarInvocation.fromFrame(incomplete);
+        throw new AssertionError("missing canonical invocation object must fail: " + field);
+      } catch (SidecarProtocolError expected) {
+        check(expected.getMessage().contains("object"), "missing " + field + " error");
+      }
+      invocation = new java.util.LinkedHashMap<>((java.util.Map<String, Object>) frame().get("invocation"));
+      invocation.put(field, null);
+      java.util.Map<String, Object> nullField = new java.util.LinkedHashMap<>();
+      nullField.put("type", "invoke");
+      nullField.put("call_id", "call-1");
+      nullField.put("invocation", invocation);
+      try {
+        SidecarInvocation.fromFrame(nullField);
+        throw new AssertionError("null canonical invocation object must fail: " + field);
+      } catch (SidecarProtocolError expected) {
+        check(expected.getMessage().contains("object"), "null " + field + " error");
+      }
     }
   }
 

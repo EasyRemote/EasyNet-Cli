@@ -42,7 +42,7 @@ class SidecarInvocation:
     ability_ura: str
     subject_ura: str
     invocation_nonce: tuple[int, ...]
-    causal_context: Any
+    causal_context: Mapping[str, Any]
     args: Mapping[str, Any]
     frame_type: str = "invoke"
 
@@ -60,8 +60,10 @@ class SidecarInvocation:
         invocation = _required_mapping(frame, "invocation")
         _reject_legacy_tuple_aliases(invocation)
         _reject_unknown_invocation_fields(invocation)
+        _require_invocation_fields(invocation)
         nonce = _required_nonce(invocation, "invocation_nonce")
-        args = _optional_mapping(invocation.get("args"), "args")
+        causal_context = _required_mapping(invocation, "causal_context")
+        args = _required_mapping(invocation, "args")
         return cls(
             call_id=call_id,
             caller_ura=_required_string(invocation, "caller_ura"),
@@ -69,7 +71,7 @@ class SidecarInvocation:
             ability_ura=_required_string(invocation, "ability_ura"),
             subject_ura=_required_string(invocation, "subject_ura"),
             invocation_nonce=nonce,
-            causal_context=invocation.get("causal_context"),
+            causal_context=causal_context,
             args=args,
             frame_type=frame_type,
         )
@@ -165,19 +167,22 @@ def _reject_unknown_request_fields(frame: Mapping[str, Any]) -> None:
             )
 
 
+def _require_invocation_fields(frame: Mapping[str, Any]) -> None:
+    for field in (
+        "caller_ura",
+        "callee_ura",
+        "ability_ura",
+        "subject_ura",
+        "invocation_nonce",
+        "causal_context",
+        "args",
+    ):
+        if field not in frame:
+            raise SidecarProtocolError(f"sidecar frame field {field!r} is required")
+
+
 def _required_mapping(frame: Mapping[str, Any], field: str) -> Mapping[str, Any]:
     value = frame.get(field)
-    return _optional_mapping(value, field, required=True)
-
-
-def _optional_mapping(
-    value: Any,
-    field: str,
-    *,
-    required: bool = False,
-) -> Mapping[str, Any]:
-    if value is None and not required:
-        return {}
     if not isinstance(value, Mapping):
         raise SidecarProtocolError(f"sidecar frame field {field!r} must be an object")
     return value

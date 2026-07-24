@@ -118,6 +118,28 @@ class PluginExecTests(unittest.TestCase):
         ):
             SidecarInvocation.from_frame(frame)
 
+    def test_plugin_invocation_rejects_missing_canonical_invocation_objects(
+        self,
+    ) -> None:
+        for field in ("causal_context", "args"):
+            with self.subTest(field=field, mode="missing"):
+                frame = _frame()
+                invocation = frame["invocation"]
+                assert isinstance(invocation, dict)
+                del invocation[field]
+
+                with self.assertRaisesRegex(SidecarProtocolError, "required"):
+                    SidecarInvocation.from_frame(frame)
+
+            with self.subTest(field=field, mode="null"):
+                frame = _frame()
+                invocation = frame["invocation"]
+                assert isinstance(invocation, dict)
+                invocation[field] = None
+
+                with self.assertRaisesRegex(SidecarProtocolError, "object"):
+                    SidecarInvocation.from_frame(frame)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -10252,6 +10252,8 @@ required_helper_tokens = {
         "reject_unknown_request_fields(&object)?",
         "fn reject_unknown_invocation_fields(",
         "fn reject_unknown_request_fields(",
+        'take_required_object(&mut invocation, "causal_context")?',
+        'take_required_object(&mut invocation, "args")?',
         'take_required_string(&mut invocation, "caller_ura")?',
         'take_required_string(&mut invocation, "callee_ura")?',
         'take_required_string(&mut invocation, "ability_ura")?',
@@ -10264,6 +10266,9 @@ required_helper_tokens = {
         "rejectUnknownRequestFields(fields)",
         "func rejectUnknownInvocationFields(",
         "func rejectUnknownRequestFields(",
+        "func requireInvocationFields(",
+        '"causal_context",',
+        '"args",',
         '`json:"caller_ura"`',
         '`json:"callee_ura"`',
         '`json:"ability_ura"`',
@@ -10276,6 +10281,9 @@ required_helper_tokens = {
         "_reject_unknown_request_fields(frame)",
         "def _reject_unknown_invocation_fields(",
         "def _reject_unknown_request_fields(",
+        "def _require_invocation_fields(",
+        '_required_mapping(invocation, "causal_context")',
+        '_required_mapping(invocation, "args")',
         '_required_string(invocation, "caller_ura")',
         '_required_string(invocation, "callee_ura")',
         '_required_string(invocation, "ability_ura")',
@@ -10288,6 +10296,9 @@ required_helper_tokens = {
         "rejectUnknownRequestFields(value)",
         "function rejectUnknownInvocationFields(",
         "function rejectUnknownRequestFields(",
+        'value === null || typeof value !== "object"',
+        'requireObject(causalContext, "causal_context")',
+        'requireObject(args, "args")',
         "invocation.caller_ura",
         "invocation.callee_ura",
         "invocation.ability_ura",
@@ -10300,6 +10311,8 @@ required_helper_tokens = {
         "rejectUnknownRequestFields(frame)",
         "private static void rejectUnknownInvocationFields(",
         "private static void rejectUnknownRequestFields(",
+        'requiredObject(invocation, "causal_context")',
+        'requiredObject(invocation, "args")',
         'requiredString(invocation, "caller_ura")',
         'requiredString(invocation, "callee_ura")',
         'requiredString(invocation, "ability_ura")',
@@ -10316,28 +10329,66 @@ required_helper_tests = {
     "rust": [
         "sidecar_invocation_rejects_unknown_invocation_fields",
         "sidecar_invocation_rejects_unknown_request_fields",
+        "sidecar_invocation_rejects_missing_canonical_invocation_objects",
     ],
     "go": [
         "TestServeIORejectsUnknownInvocationFields",
         "TestServeIORejectsUnknownRequestFields",
+        "TestServeIORejectsMissingCanonicalInvocationObjects",
     ],
     "python": [
         "test_plugin_invocation_rejects_unknown_invocation_fields",
         "test_plugin_invocation_rejects_unknown_request_fields",
+        "test_plugin_invocation_rejects_missing_canonical_invocation_objects",
     ],
     "node": [
         "SidecarInvocation rejects unknown invocation fields",
         "SidecarInvocation rejects unknown request fields",
+        "SidecarInvocation rejects missing canonical invocation objects",
     ],
     "java": [
         "sidecarInvocationRejectsUnknownInvocationFields",
         "sidecarInvocationRejectsUnknownRequestFields",
+        "sidecarInvocationRejectsMissingCanonicalInvocationObjects",
     ],
 }
 for language, test_names in required_helper_tests.items():
     for test_name in test_names:
         if test_name not in helper_sources[language]:
             raise SystemExit(f"plugin_sidecar_helper_unknown_field_test_missing:{language}:{test_name}")
+
+strict_tuple_default_patterns = {
+    "rust": [
+        r"None\s*=>\s*Map::new\(\)",
+        r"unwrap_or_else\(\|\|\s*Value::Object\(Map::new\(\)\)\)",
+    ],
+    "go": [
+        r"\bargs\s*=\s*map\[string\]any\{\}",
+        r"\bcausalContext\s*=\s*map\[string\]any\{\}",
+    ],
+    "python": [
+        r"def\s+_optional_mapping\b",
+        r"\.get\(\"args\"\)",
+        r"\.get\(\"causal_context\"\)",
+    ],
+    "node": [
+        r"\?\?\s*\{\}",
+        r"required\s*=\s*false",
+        r"causalContext\?:",
+        r"args\?:",
+    ],
+    "java": [
+        r"causalContext\s*==\s*null\s*\?\s*Map\.of\(\)",
+        r"optionalObject\(",
+    ],
+}
+for language, patterns in strict_tuple_default_patterns.items():
+    source = helper_production_sources[language]
+    for pattern in patterns:
+        if re.search(pattern, source, re.M):
+            raise SystemExit(
+                f"plugin_sidecar_helper_tuple_defaulting:{language}:{pattern}"
+            )
 
 legacy_public_field_patterns = {
     "daemon_frame": [
@@ -15331,6 +15382,37 @@ EOF
     "$tmp/cli-sidecar-request-field/sdk/python/easynet_sdk/providers/easynet/plugin_exec.py"
   if ( CLI_ROOT="$tmp/cli-sidecar-request-field"; check_plugin_sidecar_helper_matrix_contract ) >/dev/null 2>&1; then
     fail "self-test expected sidecar unknown request field gate to fail"
+  fi
+  for rel in \
+    src/cli/commands/groups/plugin_template.rs \
+    src/daemon/plugins/sidecar/frame.rs \
+    src/daemon/plugins/sidecar.rs \
+    src/daemon/plugins/host_api.rs \
+    sdk/python/easynet_sdk/providers/easynet/plugin_exec.py \
+    sdk/python/tests/test_plugin_exec.py \
+    sdk/go/provider/easynet/pluginexec/pluginexec.go \
+    sdk/go/provider/easynet/pluginexec/pluginexec_test.go \
+    sdk/rust/provider/easynet/pluginexec/Cargo.toml \
+    sdk/rust/provider/easynet/pluginexec/src/lib.rs \
+    sdk/rust/provider/easynet/pluginexec/tests/pluginexec.rs \
+    sdk/java/src/main/java/run/runtime/sdk/provider/easynet/pluginexec/SidecarRuntime.java \
+    sdk/java/src/main/java/run/runtime/sdk/provider/easynet/pluginexec/SidecarInvocation.java \
+    sdk/java/src/test/java/run/runtime/sdk/provider/easynet/pluginexec/SidecarRuntimeTest.java \
+    sdk/node/provider/easynet/pluginexec.js \
+    sdk/node/provider/easynet/pluginexec.d.ts \
+    sdk/node/test/pluginexec.test.mjs; do
+    mkdir -p "$(dirname "$tmp/cli-sidecar-tuple-defaulting/$rel")"
+    cp "$ROOT/$rel" "$tmp/cli-sidecar-tuple-defaulting/$rel"
+  done
+  cat >>"$tmp/cli-sidecar-tuple-defaulting/sdk/python/easynet_sdk/providers/easynet/plugin_exec.py" <<'EOF'
+
+def _optional_mapping(value, field, *, required=False):
+    if value is None and not required:
+        return {}
+    return value
+EOF
+  if ( CLI_ROOT="$tmp/cli-sidecar-tuple-defaulting"; check_plugin_sidecar_helper_matrix_contract ) >/dev/null 2>&1; then
+    fail "self-test expected sidecar tuple defaulting gate to fail"
   fi
   mkdir -p "$tmp/cli-remote-desktop-contract-alias/tools/scripts" \
     "$tmp/cli-remote-desktop-contract-alias/plugins/remote-desktop/src"

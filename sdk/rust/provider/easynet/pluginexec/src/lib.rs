@@ -45,10 +45,9 @@ impl SidecarInvocation {
         reject_legacy_tuple_aliases(&invocation)?;
         reject_unknown_invocation_fields(&invocation)?;
         let nonce = take_required_nonce(&mut invocation, "invocation_nonce")?;
-        let args = match invocation.remove("args") {
-            Some(value) => expect_object(value, "args")?,
-            None => Map::new(),
-        };
+        let causal_context =
+            Value::Object(take_required_object(&mut invocation, "causal_context")?);
+        let args = take_required_object(&mut invocation, "args")?;
         Ok(Self {
             call_id,
             caller_ura: take_required_string(&mut invocation, "caller_ura")?,
@@ -56,9 +55,7 @@ impl SidecarInvocation {
             ability_ura: take_required_string(&mut invocation, "ability_ura")?,
             subject_ura: take_required_string(&mut invocation, "subject_ura")?,
             invocation_nonce: nonce,
-            causal_context: invocation
-                .remove("causal_context")
-                .unwrap_or_else(|| Value::Object(Map::new())),
+            causal_context,
             args,
             frame_type,
         })
@@ -238,6 +235,18 @@ fn reject_unknown_request_fields(object: &Map<String, Value>) -> Result<(), Side
         }
     }
     Ok(())
+}
+
+fn take_required_object(
+    object: &mut Map<String, Value>,
+    field: &str,
+) -> Result<Map<String, Value>, SidecarProtocolError> {
+    match object.remove(field) {
+        Some(value) => expect_object(value, field),
+        None => Err(SidecarProtocolError::new(format!(
+            "sidecar frame field {field:?} must be an object"
+        ))),
+    }
 }
 
 fn take_required_string(

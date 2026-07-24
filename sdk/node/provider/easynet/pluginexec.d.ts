@@ -9,8 +9,8 @@ export interface SidecarInvocationFields {
   abilityURA: string;
   subjectURA: string;
   invocationNonce: number[];
-  causalContext?: unknown;
-  args?: Record<string, unknown>;
+  causalContext: Record<string, unknown>;
+  args: Record<string, unknown>;
   frameType?: "invoke";
 }
 
@@ -21,7 +21,7 @@ export class SidecarInvocation {
   abilityURA: string;
   subjectURA: string;
   invocationNonce: number[];
-  causalContext: unknown;
+  causalContext: Record<string, unknown>;
   args: Record<string, unknown>;
   frameType: string;
   constructor(fields: SidecarInvocationFields);

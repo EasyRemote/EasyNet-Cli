@@ -31,13 +31,13 @@ export class SidecarInvocation {
     this.abilityURA = requireString(abilityURA, "ability_ura");
     this.subjectURA = requireString(subjectURA, "subject_ura");
     this.invocationNonce = requireNonce(invocationNonce, "invocation_nonce");
-    this.causalContext = causalContext ?? {};
-    this.args = optionalObject(args, "args");
+    this.causalContext = requireObject(causalContext, "causal_context");
+    this.args = requireObject(args, "args");
     this.frameType = requireString(frameType, "type");
   }
 
   static fromFrame(frame) {
-    const value = optionalObject(frame, "sidecar request frame", { required: true });
+    const value = requireObject(frame, "sidecar request frame");
     rejectUnknownRequestFields(value);
     const frameType = requireString(value.type, "type");
     if (frameType !== "invoke") {
@@ -46,7 +46,7 @@ export class SidecarInvocation {
       );
     }
     const callID = requireString(value.call_id, "call_id");
-    const invocation = optionalObject(value.invocation, "invocation", { required: true });
+    const invocation = requireObject(value.invocation, "invocation");
     rejectLegacyTupleAliases(invocation);
     rejectUnknownInvocationFields(invocation);
     return new SidecarInvocation({
@@ -95,7 +95,7 @@ async function readFrame(input) {
       }
       try {
         const decoded = JSON.parse(line);
-        return optionalObject(decoded, "sidecar request frame", { required: true });
+        return requireObject(decoded, "sidecar request frame");
       } catch (error) {
         if (error instanceof SidecarProtocolError) {
           throw error;
@@ -165,11 +165,8 @@ function requireString(value, field) {
   return value;
 }
 
-function optionalObject(value, field, { required = false } = {}) {
-  if (value == null && !required) {
-    return {};
-  }
-  if (typeof value !== "object" || Array.isArray(value)) {
+function requireObject(value, field) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new SidecarProtocolError(`sidecar frame field ${JSON.stringify(field)} must be an object`);
   }
   return value;

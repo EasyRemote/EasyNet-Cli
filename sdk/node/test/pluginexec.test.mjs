@@ -135,3 +135,23 @@ test("SidecarInvocation rejects unknown request fields", () => {
     /canonical request frame/,
   );
 });
+
+test("SidecarInvocation rejects missing canonical invocation objects", () => {
+  for (const field of ["causal_context", "args"]) {
+    const frame = requestFrame();
+    delete frame.invocation[field];
+
+    assert.throws(
+      () => SidecarInvocation.fromFrame(frame),
+      /must be an object/,
+    );
+
+    const nullFrame = requestFrame();
+    nullFrame.invocation[field] = null;
+
+    assert.throws(
+      () => SidecarInvocation.fromFrame(nullFrame),
+      /must be an object/,
+    );
+  }
+});

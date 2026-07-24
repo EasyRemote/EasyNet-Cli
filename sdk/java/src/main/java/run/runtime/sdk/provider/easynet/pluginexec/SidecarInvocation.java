@@ -36,8 +36,8 @@ public final class SidecarInvocation {
     this.abilityURA = requireText(abilityURA, "ability_ura");
     this.subjectURA = requireText(subjectURA, "subject_ura");
     this.invocationNonce = List.copyOf(invocationNonce);
-    this.causalContext = causalContext == null ? Map.of() : causalContext;
-    this.args = Collections.unmodifiableMap(new LinkedHashMap<>(args));
+    this.causalContext = Objects.requireNonNull(causalContext, "causal_context");
+    this.args = Collections.unmodifiableMap(new LinkedHashMap<>(Objects.requireNonNull(args, "args")));
     this.frameType = requireText(frameType, "type");
   }
 
@@ -59,8 +59,8 @@ public final class SidecarInvocation {
         requiredString(invocation, "ability_ura"),
         requiredString(invocation, "subject_ura"),
         requiredNonce(invocation, "invocation_nonce"),
-        invocation.get("causal_context"),
-        optionalObject(invocation, "args"),
+        requiredObject(invocation, "causal_context"),
+        requiredObject(invocation, "args"),
         frameType);
   }
 
@@ -117,17 +117,6 @@ public final class SidecarInvocation {
 
   private static Map<String, Object> requiredObject(Map<String, Object> object, String field) {
     Object value = object.get(field);
-    if (!(value instanceof Map<?, ?> raw)) {
-      throw new SidecarProtocolError("sidecar frame field \"" + field + "\" must be an object");
-    }
-    return stringObject(raw, field);
-  }
-
-  private static Map<String, Object> optionalObject(Map<String, Object> object, String field) {
-    Object value = object.get(field);
-    if (value == null) {
-      return Map.of();
-    }
     if (!(value instanceof Map<?, ?> raw)) {
       throw new SidecarProtocolError("sidecar frame field \"" + field + "\" must be an object");
     }
