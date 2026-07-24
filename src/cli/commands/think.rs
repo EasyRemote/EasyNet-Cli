@@ -3,19 +3,18 @@
 //
 // File: src/cli/think.rs
 // Description: Thin CLI wrapper that drives `mission.think` through
-//              the local-invoke path. Same shape as
-//              `easynet mission discuss`: collect args, fire the
+//              the canonical local daemon system issuer. Same shape
+//              as `easynet mission discuss`: collect args, fire the
 //              ability, render the result.
 //
 // Why this lives at the facade layer (not as an EAL helper)
 // ---------------------------------------------------------
-// `mission.think` is a long-running orchestration that may take
-// minutes; the operator wants progress feedback (cycles ticking,
-// final verdict, curator outcome) on stderr. EAL is the right
-// surface for *programmatic* invocation; the CLI surface is the
-// right place for *interactive* invocation. Both go through
-// `invoke_local_ability`, so the one canonical handler runs in
-// either case — there is no duplicated mission.think shell.
+// `mission.think` is a long-running orchestration that may take minutes; the
+// operator wants progress feedback (cycles ticking, final verdict, curator
+// outcome) on stderr. EAL is the right surface for *programmatic* invocation;
+// the CLI surface is the right place for *interactive* invocation. The CLI
+// binds the local daemon identity subject before entering transport so the one
+// canonical handler runs with an explicit invocation tuple.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -25,7 +24,7 @@ use clap::Args;
 use console::style;
 use serde_json::{json, Value};
 
-use crate::support::platform::local_invoke::invoke_local_ability;
+use crate::support::platform::local_invoke::LocalDaemonSystemAbilityIssuer;
 
 #[derive(Debug, Args)]
 pub struct ThinkArgs {
@@ -69,15 +68,8 @@ pub struct ThinkArgs {
 }
 
 pub fn run(args: ThinkArgs) -> anyhow::Result<()> {
-    let mut payload = json!({
-        "owner_agent_id": args.agent,
-        "prompt": args.prompt,
-        "max_cycles": args.max_cycles,
-        "dry_run": args.dry_run,
-    });
-    if let Some(judge) = &args.judge {
-        payload["judge_agent_id"] = json!(judge);
-    }
+    let request = MissionThinkRequest::from_args(&args);
+    let payload = request.to_payload();
 
     eprintln!();
     eprintln!("{}", style("EasyNet Mission Think").cyan().bold());
@@ -91,7 +83,7 @@ pub fn run(args: ThinkArgs) -> anyhow::Result<()> {
     eprintln!("  Cycles:  up to {}", args.max_cycles);
     eprintln!();
 
-    let resp = invoke_local_ability("mission.think", payload).context("invoke mission.think")?;
+    let resp = MissionThinkIssuer::invoke(payload)?;
 
     if args.json {
         println!("{}", serde_json::to_string_pretty(&resp)?);
@@ -100,6 +92,51 @@ pub fn run(args: ThinkArgs) -> anyhow::Result<()> {
 
     render_summary(&resp);
     Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MissionThinkRequest {
+    owner_agent_id: String,
+    prompt: String,
+    max_cycles: u32,
+    judge_agent_id: Option<String>,
+    dry_run: bool,
+}
+
+impl MissionThinkRequest {
+    fn from_args(args: &ThinkArgs) -> Self {
+        Self {
+            owner_agent_id: args.agent.clone(),
+            prompt: args.prompt.clone(),
+            max_cycles: args.max_cycles,
+            judge_agent_id: args.judge.clone(),
+            dry_run: args.dry_run,
+        }
+    }
+
+    fn to_payload(&self) -> Value {
+        let mut payload = json!({
+            "owner_agent_id": self.owner_agent_id,
+            "prompt": self.prompt,
+            "max_cycles": self.max_cycles,
+            "dry_run": self.dry_run,
+        });
+        if let Some(judge) = &self.judge_agent_id {
+            payload["judge_agent_id"] = json!(judge);
+        }
+        payload
+    }
+}
+
+struct MissionThinkIssuer;
+
+impl MissionThinkIssuer {
+    fn invoke(args: Value) -> anyhow::Result<Value> {
+        let subject_ura = LocalDaemonSystemAbilityIssuer::local_daemon_identity_subject_ura()
+            .context("resolve local mission.think subject")?;
+        LocalDaemonSystemAbilityIssuer::invoke_root_for_subject("mission.think", args, &subject_ura)
+            .context("invoke mission.think")
+    }
 }
 
 /// Render the human-readable summary. Tracks four facts the
@@ -209,5 +246,57 @@ fn render_summary(resp: &Value) {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mission_think_request_projects_cli_payload_without_judge() {
+        let payload = MissionThinkRequest::from_args(&ThinkArgs {
+            agent: "worker".to_string(),
+            prompt: "ship the thing".to_string(),
+            max_cycles: 7,
+            judge: None,
+            json: false,
+            dry_run: true,
+        })
+        .to_payload();
+
+        assert_eq!(
+            payload,
+            json!({
+                "owner_agent_id": "worker",
+                "prompt": "ship the thing",
+                "max_cycles": 7,
+                "dry_run": true,
+            })
+        );
+    }
+
+    #[test]
+    fn mission_think_request_projects_optional_judge() {
+        let payload = MissionThinkRequest::from_args(&ThinkArgs {
+            agent: "worker".to_string(),
+            prompt: "review architecture".to_string(),
+            max_cycles: 3,
+            judge: Some("judge".to_string()),
+            json: true,
+            dry_run: false,
+        })
+        .to_payload();
+
+        assert_eq!(
+            payload,
+            json!({
+                "owner_agent_id": "worker",
+                "prompt": "review architecture",
+                "max_cycles": 3,
+                "dry_run": false,
+                "judge_agent_id": "judge",
+            })
+        );
     }
 }
