@@ -383,6 +383,14 @@ fn namespace_resolve_qtype_boundary_script_holds() {
 }
 
 #[test]
+fn mission_ability_vocabulary_boundary_script_holds() {
+    // Pins mission orchestration discovery, errors, and prompts to the
+    // canonical mission.* ability names after the retired easynet.* aliases
+    // were removed from the registry.
+    run_bash_script("tests/scripts/test_check_mission_ability_vocabulary_boundary.sh");
+}
+
+#[test]
 fn workspace_agent_directory_boundary_script_holds() {
     // Pins runtime workspace projection to AgentDirectory input.
     // Dispatch must reject invalid registry roots instead of rebuilding

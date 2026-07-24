@@ -1133,8 +1133,8 @@ pub(crate) fn classify_ability(name: &str) -> Option<AbilityLayer> {
         | device_names::TERMINAL_READ
         | device_names::TERMINAL_RESIZE
         // mission.discuss_round — sub-turn orchestration
-        // ability. Same Operational class as easynet.run /
-        // mission.run because the ability IS the work
+        // ability. Same Operational class as mission.run because
+        // the ability IS the work
         // (running one human-bracketed sub-turn of a
         // multi-agent discussion).
         | automation_names::MISSION_DISCUSS_ROUND
@@ -1175,12 +1175,11 @@ pub(crate) fn classify_ability(name: &str) -> Option<AbilityLayer> {
         | automation_names::LOOP_CREATE
         | automation_names::LOOP_SUBSCRIBE
         | automation_names::LOOP_CANCEL
-        // EAL orchestration. easynet.run / mission.run compile
-        // and execute a program (potentially multi-step,
-        // potentially cross-agent); easynet.cancel mutates the
-        // run state of an in-flight mission. Same Operational
-        // class as loop.{create,cancel} for the same reason —
-        // the ability IS the work.
+        // EAL orchestration. mission.run compiles and executes a
+        // program (potentially multi-step, potentially cross-agent);
+        // mission.cancel mutates the run state of an in-flight
+        // mission. Same Operational class as loop.{create,cancel}
+        // for the same reason — the ability IS the work.
         | automation_names::MISSION_RUN
         | automation_names::MISSION_CANCEL
         // ability.publish / ability.unpublish / skill.publish /

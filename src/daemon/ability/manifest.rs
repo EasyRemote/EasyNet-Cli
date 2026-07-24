@@ -500,8 +500,8 @@ pub enum AbilityExec {
     /// placeholders rendered against call args BEFORE the parser
     /// runs. Lets a curator-published ability compose existing
     /// abilities into a reusable workflow without inventing a second
-    /// orchestration surface — same EAL the human operator already
-    /// uses with `easynet.run`.
+    /// orchestration surface — same EAL exposed through the canonical
+    /// `mission.run` ability.
     Eal(EalExec),
     /// Dispatch to one configured upstream MCP tool. This is the
     /// deterministic executor used when an operator binds an MCP
@@ -1272,7 +1272,7 @@ impl EalExec {
             anyhow::bail!(
                 "ability.toml [exec] kind=\"eal\" `source` is {} bytes which exceeds \
                  the {}-byte cap; split the workflow into smaller abilities or call \
-                 them via `easynet.run` directly",
+                 them via `mission.run` directly",
                 self.source.len(),
                 Self::MAX_SOURCE_BYTES
             );

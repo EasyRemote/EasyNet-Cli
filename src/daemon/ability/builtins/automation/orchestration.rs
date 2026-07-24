@@ -543,7 +543,7 @@ fn render_agent_prompt(
           TASK (we have to produce something concrete: code, a file edit, a command run). You \
           decide which it is by reading the request — but until ALL participants have agreed on \
           a plan, NO ONE may use side-effecting tools (Bash, Write, Edit, EAL execution, \
-          easynet.run, easynet.invoke against state-mutating abilities). Plan first, act after \
+          mission.run, or direct invocation of state-mutating abilities). Plan first, act after \
           consensus.\n\
         - Skipping is honourable. If you have nothing new to contribute this cycle, reply with \
           `[SKIP]` alone — exactly that token, single line, nothing else. Don't pad with \

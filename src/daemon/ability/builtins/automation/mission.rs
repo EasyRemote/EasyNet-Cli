@@ -167,10 +167,10 @@ fn run_handler(
     .map_err(Into::into)
 }
 
-/// `easynet.track` handler.
+/// `mission.track` handler.
 ///
 /// Args (JSON object):
-///   `run_id` — REQUIRED. The id returned by a prior `easynet.run`
+///   `run_id` — REQUIRED. The id returned by a prior `mission.run`
 ///                (the trailing component of `run_dir`).
 ///
 /// Returns (JSON object):
@@ -190,9 +190,9 @@ fn track_handler(args: Value) -> anyhow::Result<Value> {
         .get("run_id")
         .and_then(Value::as_str)
         .map(str::to_string)
-        .ok_or_else(|| anyhow::anyhow!("easynet.track: `run_id` must be a non-empty string"))?;
+        .ok_or_else(|| anyhow::anyhow!("mission.track: `run_id` must be a non-empty string"))?;
     if run_id.trim().is_empty() {
-        anyhow::bail!("easynet.track: `run_id` must be a non-empty string");
+        anyhow::bail!("mission.track: `run_id` must be a non-empty string");
     }
     let summary = crate::daemon::execution::mission::orchestration::find_run(&run_id)?;
     let meta_json = serde_json::to_value(&summary.meta).unwrap_or(Value::Null);
@@ -204,7 +204,7 @@ fn track_handler(args: Value) -> anyhow::Result<Value> {
     }))
 }
 
-/// `easynet.cancel` handler.
+/// `mission.cancel` handler.
 ///
 /// Args (JSON object):
 ///   `run_id` — REQUIRED. The id of the in-flight mission to cancel.
@@ -226,9 +226,9 @@ fn cancel_handler(args: Value) -> anyhow::Result<Value> {
         .get("run_id")
         .and_then(Value::as_str)
         .map(str::to_string)
-        .ok_or_else(|| anyhow::anyhow!("easynet.cancel: `run_id` must be a non-empty string"))?;
+        .ok_or_else(|| anyhow::anyhow!("mission.cancel: `run_id` must be a non-empty string"))?;
     if run_id.trim().is_empty() {
-        anyhow::bail!("easynet.cancel: `run_id` must be a non-empty string");
+        anyhow::bail!("mission.cancel: `run_id` must be a non-empty string");
     }
     let outcome = crate::daemon::execution::mission::orchestration::cancel_run(&run_id)?;
     let (cancelled, summary) = match outcome {
@@ -257,8 +257,8 @@ pub fn run_description() -> &'static str {
      under `~/.easynet/missions/runs/<run_id>` and returns the run id, \
      run dir path, every `let`-bound output, and the run metadata. \
      Use this to drive multi-step or cross-agent orchestration; \
-     `easynet.track` polls a long run, `easynet.cancel` aborts one. \
-     For a single ability call, prefer `easynet.invoke` — it skips \
+     `mission.track` polls a long run, `mission.cancel` aborts one. \
+     For a single ability call, prefer direct invocation — it skips \
      the run-dir bookkeeping."
 }
 
@@ -287,8 +287,8 @@ pub fn run_input_schema() -> Value {
 }
 
 pub fn track_description() -> &'static str {
-    "Read the persisted state of a prior `easynet.run` invocation by \
-     run id. Returns the same shape `easynet.run` surfaces (run_id, \
+    "Read the persisted state of a prior `mission.run` invocation by \
+     run id. Returns the same shape `mission.run` surfaces (run_id, \
      run_dir, outputs, meta, ok) reconstructed from the on-disk run \
      dir. Use it to poll a long-running mission without holding the \
      original RPC open."
@@ -303,7 +303,7 @@ pub fn track_input_schema() -> Value {
             "run_id": {
                 "type": "string",
                 "description": "The run id returned by an earlier \
-                                `easynet.run` call (the trailing component \
+                                `mission.run` call (the trailing component \
                                 of run_dir)."
             }
         }
