@@ -296,6 +296,13 @@ fn core_agent_module_boundary_script_holds() {
 }
 
 #[test]
+fn local_daemon_socket_resolver_boundary_script_holds() {
+    // Pins local daemon socket resolution to daemon_config. The support
+    // transport layer must not reintroduce a resolver re-export shim.
+    run_bash_script("tests/scripts/test_check_local_daemon_socket_resolver_boundary.sh");
+}
+
+#[test]
 fn discover_scope_boundary_script_holds() {
     // Pins <agent>.discover to current scope literals only. The
     // retired easynet alias must stay absent from parser and schema.

@@ -66,6 +66,8 @@ use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 use crate::daemon::ability::dispatch::OwnerKind;
 #[cfg(feature = "axon-pb")]
 use crate::daemon::invocation::routing::remote_invoke::RemoteInvocationSubject;
+#[cfg(feature = "axon-pb")]
+use crate::daemon::persistence::daemon_config;
 pub const ABILITY_SEND_TASK: &str =
     crate::daemon::ability::names::integrations::A2A_CLIENT_SEND_TASK;
 
@@ -316,7 +318,7 @@ fn error_response(message: &str) -> Value {
 
 #[cfg(feature = "axon-pb")]
 fn local_daemon_transport_error() -> Option<String> {
-    let socket_path = crate::support::platform::local_daemon_grpc::resolve_socket_path();
+    let socket_path = daemon_config::resolved_local_uds_path_with_env_override();
     if crate::support::platform::local_daemon_grpc::probe_accepting(&socket_path) {
         return None;
     }

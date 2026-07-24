@@ -39,6 +39,7 @@ use crate::daemon::invocation::routing::target::InvocationCausalContext;
 use crate::daemon::invocation::{
     InvocationDerivationPolicy, ProtoEnvelope, RootInvocationDerivationIssuer,
 };
+use crate::daemon::persistence::daemon_config;
 use axon_sdk::invocation::CausalContext;
 use axon_sdk::pb::axon::v1::invocation_client::InvocationClient;
 use axon_sdk::pb::axon::v1::{InvocationState as WireInvocationState, InvokeResponse};
@@ -600,7 +601,7 @@ impl<'a> RemoteInvocationRequest<'a> {
 
 pub(crate) fn invoke_remote_target(request: RemoteInvocationRequest<'_>) -> anyhow::Result<Value> {
     let signer = load_remote_invocation_caller_signer(request.caller_ura.as_str())?;
-    let socket_path = crate::support::platform::local_daemon_grpc::resolve_socket_path();
+    let socket_path = daemon_config::resolved_local_uds_path_with_env_override();
     ensure_remote_invocation_daemon_accepting(&socket_path)?;
     invoke_remote_target_on_ready_socket(request, signer, socket_path)
 }
@@ -785,7 +786,7 @@ pub(crate) fn invoke_remote_target_stream(
         &caller_ura,
         RemoteInvocationCarrier::Stream,
     )?;
-    let socket_path = crate::support::platform::local_daemon_grpc::resolve_socket_path();
+    let socket_path = daemon_config::resolved_local_uds_path_with_env_override();
     if !crate::support::platform::local_daemon_grpc::probe_accepting(&socket_path) {
         bail!(
             "daemon not running (local gRPC listener unreachable at {}). \
@@ -906,7 +907,7 @@ pub(crate) fn invoke_remote_target_bidi_json_frames(
         &caller_ura,
         RemoteInvocationCarrier::Bidi,
     )?;
-    let socket_path = crate::support::platform::local_daemon_grpc::resolve_socket_path();
+    let socket_path = daemon_config::resolved_local_uds_path_with_env_override();
     if !crate::support::platform::local_daemon_grpc::probe_accepting(&socket_path) {
         bail!(
             "daemon not running (local gRPC listener unreachable at {}). \
@@ -1242,7 +1243,7 @@ fn invoke_federation_discover_with_user_filter(
     agent_ura_filter: Option<&str>,
     local_user_id_filter: Option<&str>,
 ) -> anyhow::Result<Vec<Value>> {
-    let socket_path = crate::support::platform::local_daemon_grpc::resolve_socket_path();
+    let socket_path = daemon_config::resolved_local_uds_path_with_env_override();
     if !crate::support::platform::local_daemon_grpc::probe_accepting(&socket_path) {
         bail!(
             "daemon not running (local gRPC listener unreachable at {}). \
@@ -1355,7 +1356,7 @@ fn local_daemon_federation_signer(
 /// by contract on the hub side, but this helper still surfaces
 /// transport / parse errors so callers can log them honestly.
 pub fn invoke_federation_revoke(agent_ura: &str, reason: &str) -> anyhow::Result<()> {
-    let socket_path = crate::support::platform::local_daemon_grpc::resolve_socket_path();
+    let socket_path = daemon_config::resolved_local_uds_path_with_env_override();
     if !crate::support::platform::local_daemon_grpc::probe_accepting(&socket_path) {
         bail!(
             "daemon not running (local gRPC listener unreachable at {}). \

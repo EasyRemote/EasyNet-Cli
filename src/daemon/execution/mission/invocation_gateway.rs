@@ -25,6 +25,7 @@ use crate::daemon::execution::child_invocation::{
 use crate::daemon::persistence::agent_aggregate::{
     AgentAggregateRepository, HostedAgentNameLookupError,
 };
+use crate::daemon::persistence::daemon_config;
 /// One child Invocation requested by Mission orchestration.
 ///
 /// Parent identity, subject, cause, trace, deadline ceiling, and cancellation
@@ -606,7 +607,7 @@ impl DaemonMissionInvocationGateway {
                     "Mission remote child request is not receipt-verifiable: {}",
                     status.message()
                 ))?;
-        let socket = crate::support::platform::local_daemon_grpc::resolve_socket_path();
+        let socket = daemon_config::resolved_local_uds_path_with_env_override();
         let connect_timeout = remaining_budget.min(Duration::from_secs(10));
         let channel = tokio::select! {
             channel = crate::support::platform::local_daemon_grpc::connect_channel(

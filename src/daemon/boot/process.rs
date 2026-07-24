@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use crate::daemon::control::{discovery, transport};
 use crate::daemon::persistence::config;
 use crate::daemon::persistence::daemon_config::{
-    DaemonConfig, DaemonMode as PersistedDaemonMode, DEFAULT_DAEMON_CONFIG_PATH,
+    self, DaemonConfig, DaemonMode as PersistedDaemonMode, DEFAULT_DAEMON_CONFIG_PATH,
     DEFAULT_DAEMON_UDS_PATH,
 };
 use crate::support::platform::{local_daemon_grpc, net};
@@ -401,7 +401,7 @@ impl DaemonEndpoints {
     pub fn current() -> Self {
         Self {
             control: transport::default_socket_path(),
-            invocation: local_daemon_grpc::resolve_socket_path(),
+            invocation: daemon_config::resolved_local_uds_path_with_env_override(),
         }
     }
 

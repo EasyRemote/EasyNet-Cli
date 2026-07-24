@@ -33,18 +33,8 @@ use crate::daemon::ability::{
 use crate::daemon::invocation::dispatch::invocation_wire::{
     wire_invocation_target, InvocationDerivationPolicy, LocalDaemonLoopbackInvocation,
 };
-
-/// Resolve the local daemon Invocation endpoint. Thin re-export of
-/// [`crate::daemon::persistence::daemon_config::resolved_local_uds_path_with_env_override`]
-/// kept here so the existing CLI call sites
-/// (`cli/federation_discover.rs`, `cli/start.rs`,
-/// `support/remote_invoke.rs`) need no rewrite. The body itself
-/// lives in `persistence/` because it consults `daemon-config.toml`
-/// — keeping it there preserves the `support/` leaf-layer invariant
-/// documented in `src/support/mod.rs`.
-pub(crate) fn resolve_socket_path() -> PathBuf {
-    crate::daemon::persistence::daemon_config::resolved_local_uds_path_with_env_override()
-}
+#[cfg(feature = "axon-pb")]
+use crate::daemon::persistence::daemon_config;
 
 /// Best-effort local liveness probe used by `runtime start` to avoid
 /// racing a second daemon process against an already-live listener.
@@ -411,7 +401,7 @@ fn local_daemon_offline_error(socket_path: &std::path::Path) -> anyhow::Error {
 
 #[cfg(feature = "axon-pb")]
 fn ensure_local_daemon_accepting() -> anyhow::Result<std::path::PathBuf> {
-    let socket_path = resolve_socket_path();
+    let socket_path = daemon_config::resolved_local_uds_path_with_env_override();
     if !probe_accepting(&socket_path) {
         return Err(local_daemon_offline_error(&socket_path));
     }

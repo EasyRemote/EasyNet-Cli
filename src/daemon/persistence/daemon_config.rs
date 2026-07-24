@@ -157,12 +157,9 @@ pub fn resolved_local_uds_path() -> PathBuf {
 /// **Why this lives here (not in `support/`):** `support/` is the
 /// leaf layer per `src/support/mod.rs` and must not depend on
 /// `persistence/`. The env-override-then-config-file recipe is one
-/// step on top of [`resolved_local_uds_path`] and belongs with it;
-/// the previous home (`support/local_daemon_grpc::resolve_socket_path`)
-/// inverted the dependency direction. Callers that need the
-/// CLI-resolved path import this function directly; the old name
-/// remains as a `pub(crate) use` re-export in `support` so call
-/// sites stay short.
+/// step on top of [`resolved_local_uds_path`] and belongs with it.
+/// Callers that need the CLI-resolved path import this function directly
+/// instead of going through support-layer re-export shims.
 pub fn resolved_local_uds_path_with_env_override() -> PathBuf {
     let raw = std::env::var("EASYNET_DAEMON_GRPC_UDS").ok();
     match raw {
