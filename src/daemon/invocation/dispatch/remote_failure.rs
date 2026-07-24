@@ -37,6 +37,9 @@ fn status_code_for_failure(raw_code: &str, detail: &str) -> Code {
     if is_route_unavailable_message(&code, detail) {
         return Code::Unavailable;
     }
+    if is_caller_signer_unavailable_message(&code, detail) {
+        return Code::PermissionDenied;
+    }
     if is_admission_denial_message(detail)
         || code == "PERMISSION_DENIED"
         || code.starts_with("AUTHORITY_")
@@ -96,6 +99,16 @@ fn is_route_unavailable_message(code: &str, detail: &str) -> bool {
         || detail.contains("OWNER IS NOT ONLINE")
 }
 
+fn is_caller_signer_unavailable_message(code: &str, detail: &str) -> bool {
+    let detail = detail.to_ascii_uppercase();
+    code == "CALLER_SIGNER_UNAVAILABLE"
+        || detail.contains("CALLER_SIGNER_UNAVAILABLE")
+        || detail.contains("CALLER SIGNER UNAVAILABLE")
+        || detail.contains("REQUIRES A CALLER SIGNER")
+        || detail.contains("KEYRING ENTRY NOT FOUND")
+        || detail.contains("SELF-IDENTITY:")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -153,5 +166,22 @@ mod tests {
         assert_eq!(status.code(), Code::Unavailable);
         assert!(status.message().contains("ROUTE_NEGATIVE"));
         assert!(status.message().contains("owner is not online"));
+    }
+
+    #[test]
+    fn caller_signer_readiness_is_not_downgraded_to_ability_absent() {
+        let failure = failure(
+            "ABILITY_NOT_FOUND",
+            "easynet_runtime_resolve_descriptor_ref: remote invocation requires a caller signer \
+             for `easynet:///r/localhost/user/alice`; load or provision that identity in the \
+             local key service: self-identity: keyring rejected request: kind=not_found, \
+             msg=keyring entry not found: easynet:///r/localhost/user/alice",
+        );
+
+        let status = status_from_remote_failure("remote Invoke", "ignored", Some(&failure));
+
+        assert_eq!(status.code(), Code::PermissionDenied);
+        assert!(status.message().contains("requires a caller signer"));
+        assert!(status.message().contains("keyring entry not found"));
     }
 }

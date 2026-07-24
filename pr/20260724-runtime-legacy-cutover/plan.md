@@ -465,3 +465,40 @@ architecture rather than add feature surface.
   - `tools/scripts/check-canonical-runtime-convergence-v2.sh`
   - `tools/scripts/check-architecture-convergence.sh`
   - `git diff --check`
+
+## Iteration 13 candidate policy
+
+- Focus on remote failure classification. Product-visible errors showed
+  descriptor resolution and history reads surfacing caller signer/key-custody
+  failures under a legacy `ABILITY_NOT_FOUND` envelope.
+- The root abstraction problem is semantic downgrading at the carrier boundary:
+  a caller signer readiness failure is an admission/identity precondition, not
+  ability absence. If the remote carrier reports the wrong outer code, the
+  forwarding daemon must preserve the stronger semantic class from detail
+  rather than returning NotFound.
+- The intended cutover is to classify caller signer/key custody detail before
+  the NotFound branch in `remote_failure.rs`, matching the existing explicit
+  `CALLER_SIGNER_UNAVAILABLE` classification.
+- Verification must prove `ABILITY_NOT_FOUND` with signer-readiness detail
+  becomes `PermissionDenied`, while real descriptor-missing failures remain
+  `NotFound` and route-negative remains `Unavailable`.
+
+## Iteration 13 decision log
+
+- Added a `remote_failure.rs` signer-readiness classifier that runs before the
+  NotFound branch and recognizes `CALLER_SIGNER_UNAVAILABLE`, `requires a caller
+  signer`, `self-identity`, and `keyring entry not found` detail.
+- Preserved existing behavior for true descriptor-missing failures
+  (`ABILITY_NOT_FOUND` -> `NotFound`) and route-negative owner-offline failures
+  (`ROUTE_NEGATIVE` -> `Unavailable`).
+- Added a focused regression test proving legacy `ABILITY_NOT_FOUND` outer codes
+  cannot downgrade caller signer/key-custody failures to ability absence.
+- Extended SPEC v2 remote-failure coverage with helper/order checks and a
+  negative self-test fixture that models the retired downgrade.
+- Verification passed:
+  - `cargo test -q remote_failure::tests`
+  - `cargo fmt --check`
+  - `tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - `tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  - `tools/scripts/check-architecture-convergence.sh`
+  - `git diff --check`

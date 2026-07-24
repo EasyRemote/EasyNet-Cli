@@ -167,18 +167,26 @@ from pathlib import Path
 text = Path(sys.argv[1]).read_text()
 required = {
     "fn is_route_unavailable_message": "route_unavailable_helper_missing",
+    "fn is_caller_signer_unavailable_message": "caller_signer_helper_missing",
     "detail.contains(\"ROUTE_NEGATIVE\")": "route_negative_detail_missing",
     "detail.contains(\"NEGATIVE_REASON_NXDOMAIN\")": "nxdomain_detail_missing",
     "detail.contains(\"OWNER IS NOT ONLINE\")": "owner_offline_detail_missing",
+    "detail.contains(\"REQUIRES A CALLER SIGNER\")": "caller_signer_detail_missing",
+    "detail.contains(\"KEYRING ENTRY NOT FOUND\")": "keyring_not_found_detail_missing",
+    "detail.contains(\"SELF-IDENTITY:\")": "self_identity_detail_missing",
     "route_negative_owner_offline_is_route_unavailable_not_ability_absent": "route_negative_test_missing",
+    "caller_signer_readiness_is_not_downgraded_to_ability_absent": "caller_signer_test_missing",
 }
 for needle, marker in required.items():
     if needle not in text:
         raise SystemExit(f"remote_failure_route_negative:{marker}")
 route_index = text.find("is_route_unavailable_message(&code, detail)")
+signer_index = text.find("is_caller_signer_unavailable_message(&code, detail)")
 not_found_index = text.find('matches!(code.as_str(), "NOT_FOUND" | "ABILITY_NOT_FOUND")')
 if route_index < 0 or not_found_index < 0 or route_index > not_found_index:
     raise SystemExit("remote_failure_route_negative:not_found_checked_before_route_negative")
+if signer_index < 0 or signer_index > not_found_index:
+    raise SystemExit("remote_failure_route_negative:not_found_checked_before_caller_signer")
 PY
 }
 
@@ -11859,6 +11867,35 @@ path.write_text(json.dumps(data))
 PY
   if ( MATRIX="$tmp/duplicate-lifecycle-cell.json"; check_manifest_contract ) >/dev/null 2>&1; then
     fail "self-test expected duplicate lifecycle cell claim gate to fail"
+  fi
+  mkdir -p "$tmp/remote-failure-signer-downgrade-legacy/src/daemon/invocation/dispatch"
+  cat >"$tmp/remote-failure-signer-downgrade-legacy/src/daemon/invocation/dispatch/remote_failure.rs" <<'EOF'
+fn status_code_for_failure(raw_code: &str, detail: &str) -> Code {
+    let code = raw_code.trim().to_ascii_uppercase();
+    if is_route_unavailable_message(&code, detail) {
+        return Code::Unavailable;
+    }
+    if matches!(code.as_str(), "NOT_FOUND" | "ABILITY_NOT_FOUND") {
+        return Code::NotFound;
+    }
+    Code::FailedPrecondition
+}
+
+fn is_route_unavailable_message(code: &str, detail: &str) -> bool {
+    let detail = detail.to_ascii_uppercase();
+    code == "ROUTE_UNAVAILABLE"
+        || detail.contains("ROUTE_NEGATIVE")
+        || detail.contains("NEGATIVE_REASON_NXDOMAIN")
+        || detail.contains("OWNER IS NOT ONLINE")
+}
+
+#[cfg(test)]
+mod tests {
+    fn route_negative_owner_offline_is_route_unavailable_not_ability_absent() {}
+}
+EOF
+  if ( CLI_ROOT="$tmp/remote-failure-signer-downgrade-legacy"; check_remote_failure_route_negative_classification_contract ) >/dev/null 2>&1; then
+    fail "self-test expected remote failure signer downgrade gate to fail"
   fi
   "$PYTHON_BIN" - "$tmp/manifest.json" <<'PY'
 import json
