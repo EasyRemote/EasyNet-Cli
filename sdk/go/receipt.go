@@ -281,15 +281,83 @@ func (c *ReceiptClient) VerifyChain(receipts []*axoninv.SignedInvocationReceipt)
 	return axoninv.VerifyReceiptChain(verified)
 }
 
+type runtimeReceiptRouteSet struct {
+	listAbility  string
+	getAbility   string
+	traceAbility string
+}
+
+func defaultRuntimeReceiptRouteSet() runtimeReceiptRouteSet {
+	return runtimeReceiptRouteSet{
+		listAbility:  receiptHistoryListAbility,
+		getAbility:   receiptHistoryGetAbility,
+		traceAbility: receiptTraceGetAbility,
+	}
+}
+
+func newRuntimeReceiptRouteSet(listAbility string, getAbility string, traceAbility string) (runtimeReceiptRouteSet, error) {
+	routes := runtimeReceiptRouteSet{
+		listAbility:  strings.TrimSpace(listAbility),
+		getAbility:   strings.TrimSpace(getAbility),
+		traceAbility: strings.TrimSpace(traceAbility),
+	}
+	if err := routes.validate(); err != nil {
+		return runtimeReceiptRouteSet{}, err
+	}
+	return routes, nil
+}
+
+func (r runtimeReceiptRouteSet) validate() error {
+	if strings.TrimSpace(r.listAbility) == "" {
+		return invalidReceipt("runtime receipt list route ability is required", nil)
+	}
+	if strings.TrimSpace(r.getAbility) == "" {
+		return invalidReceipt("runtime receipt get route ability is required", nil)
+	}
+	if strings.TrimSpace(r.traceAbility) == "" {
+		return invalidReceipt("runtime receipt trace route ability is required", nil)
+	}
+	return nil
+}
+
+func (r runtimeReceiptRouteSet) list(ctx context.Context, ability *RuntimeAbilityClient, call RuntimeCallContext, args map[string]any) (map[string]any, error) {
+	if err := r.validate(); err != nil {
+		return nil, err
+	}
+	return ability.Invoke(ctx, call, r.listAbility, args)
+}
+
+func (r runtimeReceiptRouteSet) get(ctx context.Context, ability *RuntimeAbilityClient, call RuntimeCallContext, args map[string]any) (map[string]any, error) {
+	if err := r.validate(); err != nil {
+		return nil, err
+	}
+	return ability.Invoke(ctx, call, r.getAbility, args)
+}
+
+func (r runtimeReceiptRouteSet) trace(ctx context.Context, ability *RuntimeAbilityClient, call RuntimeCallContext, args map[string]any) (map[string]any, error) {
+	if err := r.validate(); err != nil {
+		return nil, err
+	}
+	return ability.Invoke(ctx, call, r.traceAbility, args)
+}
+
 type RuntimeReceiptProvider struct {
 	ability *RuntimeAbilityClient
+	routes  runtimeReceiptRouteSet
 }
 
 func NewRuntimeReceiptProvider(ability *RuntimeAbilityClient) (*RuntimeReceiptProvider, error) {
+	return newRuntimeReceiptProviderWithRoutes(ability, defaultRuntimeReceiptRouteSet())
+}
+
+func newRuntimeReceiptProviderWithRoutes(ability *RuntimeAbilityClient, routes runtimeReceiptRouteSet) (*RuntimeReceiptProvider, error) {
 	if ability == nil {
 		return nil, invalidReceipt("runtime ability client is required", nil)
 	}
-	return &RuntimeReceiptProvider{ability: ability}, nil
+	if err := routes.validate(); err != nil {
+		return nil, err
+	}
+	return &RuntimeReceiptProvider{ability: ability, routes: routes}, nil
 }
 
 func (p *RuntimeReceiptProvider) List(ctx context.Context, request ReceiptListRequest) (ReceiptHistoryPage, error) {
@@ -319,7 +387,7 @@ func (p *RuntimeReceiptProvider) List(ctx context.Context, request ReceiptListRe
 	if len(excluded) != 0 {
 		args["exclude_ability_uras"] = excluded
 	}
-	output, err := p.ability.Invoke(ctx, request.Call, receiptHistoryListAbility, args)
+	output, err := p.routes.list(ctx, p.ability, request.Call, args)
 	if err != nil {
 		return ReceiptHistoryPage{}, err
 	}
@@ -357,7 +425,7 @@ func (p *RuntimeReceiptProvider) Get(ctx context.Context, request ReceiptGetRequ
 	if err != nil {
 		return ReceiptGetResult{}, err
 	}
-	output, err := p.ability.Invoke(ctx, request.Call, receiptHistoryGetAbility, args)
+	output, err := p.routes.get(ctx, p.ability, request.Call, args)
 	if err != nil {
 		return ReceiptGetResult{}, err
 	}
@@ -389,7 +457,7 @@ func (p *RuntimeReceiptProvider) Trace(ctx context.Context, request ReceiptTrace
 	if err != nil {
 		return ReceiptTraceResult{}, err
 	}
-	output, err := p.ability.Invoke(ctx, request.Call, receiptTraceGetAbility, args)
+	output, err := p.routes.trace(ctx, p.ability, request.Call, args)
 	if err != nil {
 		return ReceiptTraceResult{}, err
 	}
@@ -427,7 +495,7 @@ func (p *RuntimeReceiptProvider) requireReady() error {
 	if p == nil || p.ability == nil {
 		return invalidReceipt("runtime Receipt provider is not initialized", nil)
 	}
-	return nil
+	return p.routes.validate()
 }
 
 func receiptQueryArguments(lookup *ReceiptLookup, filter ReceiptFilter) (map[string]any, error) {

@@ -66,10 +66,51 @@ MAX_RECEIPT_PAGE_LIMIT = 500
 MAX_RECEIPT_CURSOR_LENGTH = 4096
 
 
-class _RuntimeReceiptAbility:
-    HISTORY_LIST = _RECEIPT_HISTORY_LIST
-    HISTORY_GET = _RECEIPT_HISTORY_GET
-    TRACE_GET = _RECEIPT_TRACE_GET
+@dataclass(frozen=True)
+class _RuntimeReceiptRouteSet:
+    list_ability: str
+    get_ability: str
+    trace_ability: str
+
+    @classmethod
+    def default(cls) -> "_RuntimeReceiptRouteSet":
+        return cls(
+            _RECEIPT_HISTORY_LIST,
+            _RECEIPT_HISTORY_GET,
+            _RECEIPT_TRACE_GET,
+        )
+
+    def __post_init__(self) -> None:
+        if not self.list_ability.strip():
+            raise _invalid("runtime receipt list route ability is required")
+        if not self.get_ability.strip():
+            raise _invalid("runtime receipt get route ability is required")
+        if not self.trace_ability.strip():
+            raise _invalid("runtime receipt trace route ability is required")
+
+    def list(
+        self,
+        ability: RuntimeAbilityClient,
+        call: RuntimeCallContext,
+        arguments: Mapping[str, object],
+    ) -> dict[str, object]:
+        return ability.invoke(call, self.list_ability.strip(), dict(arguments))
+
+    def get(
+        self,
+        ability: RuntimeAbilityClient,
+        call: RuntimeCallContext,
+        arguments: Mapping[str, object],
+    ) -> dict[str, object]:
+        return ability.invoke(call, self.get_ability.strip(), dict(arguments))
+
+    def trace(
+        self,
+        ability: RuntimeAbilityClient,
+        call: RuntimeCallContext,
+        arguments: Mapping[str, object],
+    ) -> dict[str, object]:
+        return ability.invoke(call, self.trace_ability.strip(), dict(arguments))
 
 
 @dataclass(frozen=True)
@@ -249,10 +290,15 @@ class ReceiptClient:
 class RuntimeReceiptProvider:
     """Receipt provider composed over the canonical runtime ability kernel."""
 
-    def __init__(self, ability: RuntimeAbilityClient) -> None:
+    def __init__(
+        self,
+        ability: RuntimeAbilityClient,
+        routes: _RuntimeReceiptRouteSet | None = None,
+    ) -> None:
         if ability is None:
             raise _invalid("runtime ability client is required")
         self._ability = ability
+        self._routes = routes or _RuntimeReceiptRouteSet.default()
 
     def list(self, request: ReceiptListRequest) -> ReceiptHistoryPage:
         if not isinstance(request, ReceiptListRequest):
@@ -271,9 +317,9 @@ class RuntimeReceiptProvider:
         )
         if excluded:
             arguments["exclude_ability_uras"] = list(excluded)
-        output = self._ability.invoke(
+        output = self._routes.list(
+            self._ability,
             request.call,
-            _RuntimeReceiptAbility.HISTORY_LIST,
             arguments,
         )
         records_raw = output.get("records")
@@ -297,9 +343,9 @@ class RuntimeReceiptProvider:
     def get(self, request: ReceiptGetRequest) -> ReceiptGetResult:
         if not isinstance(request, ReceiptGetRequest):
             raise _invalid("Receipt get request is required")
-        output = self._ability.invoke(
+        output = self._routes.get(
+            self._ability,
             request.call,
-            _RuntimeReceiptAbility.HISTORY_GET,
             _query_arguments(request.lookup, request.filter, lookup_required=True),
         )
         if "record" not in output:
@@ -311,9 +357,9 @@ class RuntimeReceiptProvider:
     def trace(self, request: ReceiptTraceRequest) -> ReceiptTraceResult:
         if not isinstance(request, ReceiptTraceRequest):
             raise _invalid("Receipt trace request is required")
-        output = self._ability.invoke(
+        output = self._routes.trace(
+            self._ability,
             request.call,
-            _RuntimeReceiptAbility.TRACE_GET,
             _query_arguments(request.lookup, request.filter, lookup_required=True),
         )
         graph_raw = {
