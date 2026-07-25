@@ -603,12 +603,12 @@ private func canonicalResourceSubject(_ subjectURA: String) -> ResourceSubject? 
 
 private struct InvocationAuthorityBindingValidator {
     let tuple: InvocationTuple
-    let ability: InvocationAbilityView
+    let ability: RuntimeAbilityProjection
     let details: [String: String]
 
-    init(tuple: InvocationTuple) {
+    init(tuple: InvocationTuple) throws {
         self.tuple = tuple
-        self.ability = InvocationAbilityView(tuple: tuple)
+        self.ability = try RuntimeAbilityProjection(tuple: tuple)
         self.details = [
             "caller_ura": tuple.caller,
             "callee_ura": tuple.callee,
@@ -695,7 +695,7 @@ private func audienceAdmits(_ audience: String, _ calleeURA: String) -> Bool {
     return pattern == "*" || pattern == callee || (pattern.hasSuffix("/") && callee.hasPrefix(pattern))
 }
 
-private func scopesAdmit(_ patterns: [String], _ ability: InvocationAbilityView) -> Bool {
+private func scopesAdmit(_ patterns: [String], _ ability: RuntimeAbilityProjection) -> Bool {
     for pattern in patterns {
         if scopeMatches(pattern, ability.publicName) ||
             scopeMatches(pattern, ability.abilityURA) ||
@@ -724,79 +724,6 @@ private func scopeMatches(_ pattern: String, _ value: String) -> Bool {
         return !prefix.isEmpty && cleanValue.hasPrefix(prefix)
     }
     return cleanPattern == cleanValue
-}
-
-private struct InvocationAbilityView {
-    let wire: String
-    let abilityURA: String
-    let publicName: String
-
-    init(tuple: InvocationTuple) {
-        let abilityURA = Self.descriptorAbilityURA(tuple.descriptorRef)
-        let wire = Self.descriptorWireAbility(abilityURA)
-        let publicName = Self.publicAbilityName(calleeURA: tuple.callee, ability: abilityURA.isEmpty ? wire : abilityURA)
-        self.wire = wire
-        self.abilityURA = abilityURA
-        self.publicName = publicName
-    }
-
-    private static func descriptorAbilityURA(_ descriptorRef: String) -> String {
-        let clean = descriptorRef.trimmingCharacters(in: .whitespacesAndNewlines)
-        let hash = clean.firstIndex(of: "#")
-        let bang = clean.firstIndex(of: "!")
-        var limit = clean.endIndex
-        if let hash {
-            limit = min(limit, hash)
-        }
-        if let bang {
-            limit = min(limit, bang)
-        }
-        let withoutMode = String(clean[..<limit])
-        if let version = withoutMode.lastIndex(of: "@") {
-            return String(withoutMode[..<version]).trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-        return withoutMode.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private static func descriptorWireAbility(_ abilityURA: String) -> String {
-        let marker = "/ability/"
-        guard let range = abilityURA.range(of: marker) else {
-            return abilityURA.trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-        return String(abilityURA[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private static func publicAbilityName(calleeURA: String, ability: String) -> String {
-        let clean = ability.trimmingCharacters(in: .whitespacesAndNewlines)
-        let owner = abilityOwnerPrefix(calleeURA)
-        if !owner.isEmpty, clean.hasPrefix("\(owner).") {
-            return String(clean.dropFirst(owner.count + 1))
-        }
-        let marker = "/ability/"
-        if let range = clean.range(of: marker) {
-            return publicAbilityName(calleeURA: calleeURA, ability: String(clean[range.upperBound...]))
-        }
-        return clean
-    }
-
-    private static func abilityOwnerPrefix(_ calleeURA: String) -> String {
-        let clean = calleeURA.trimmingCharacters(in: .whitespacesAndNewlines)
-        let device = "/device/"
-        if let range = clean.range(of: device) {
-            let rest = String(clean[range.upperBound...])
-            let id = rest.split(maxSplits: 1, whereSeparator: { $0 == "/" || $0 == "?" || $0 == "#" }).first.map(String.init) ?? ""
-            return id.isEmpty ? "" : "device.\(id)"
-        }
-        if clean.hasSuffix("/authority") {
-            let realmMarker = "easynet:///r/"
-            if clean.hasPrefix(realmMarker) {
-                let start = clean.index(clean.startIndex, offsetBy: realmMarker.count)
-                let end = clean.index(clean.endIndex, offsetBy: -"/authority".count)
-                return "hub.\(String(clean[start..<end]))"
-            }
-        }
-        return ""
-    }
 }
 
 private func requiredAuthorityBase64(_ value: String, _ field: String) throws -> String {

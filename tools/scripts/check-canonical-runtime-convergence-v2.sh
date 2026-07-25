@@ -13349,16 +13349,17 @@ check_swift_sdk_invocation_authority_binding_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local invocation="$cli_root/sdk/swift/Sources/RuntimeSDK/Invocation.swift"
   local authority="$cli_root/sdk/swift/Sources/RuntimeSDK/Authority.swift"
+  local projection="$cli_root/sdk/swift/Sources/RuntimeSDK/RuntimeAbilityProjection.swift"
   local tests="$cli_root/sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift"
-  for path in "$invocation" "$authority" "$tests"; do
+  for path in "$invocation" "$authority" "$projection" "$tests"; do
     [[ -f "$path" ]] || fail "Swift authority binding source is missing: ${path#$cli_root/}"
   done
 
-  "$PYTHON_BIN" - "$invocation" "$authority" "$tests" <<'PY'
+  "$PYTHON_BIN" - "$invocation" "$authority" "$projection" "$tests" <<'PY'
 import sys
 from pathlib import Path
 
-invocation, authority, tests = [Path(path).read_text(encoding="utf-8") for path in sys.argv[1:]]
+invocation, authority, projection, tests = [Path(path).read_text(encoding="utf-8") for path in sys.argv[1:]]
 
 if "try validateInvocationAuthorityBinding(tuple)" not in invocation:
     raise SystemExit("swift_invocation_authority_binding:builder_validator_missing")
@@ -13378,7 +13379,7 @@ required_authority = {
     "audienceAdmits": "audience_binding_missing",
     "scopesAdmit": "scope_binding_missing",
     "sessionAuthorityAdmitsSubject": "session_subject_predicate_missing",
-    "struct InvocationAbilityView": "ability_view_missing",
+    "RuntimeAbilityProjection(tuple: tuple)": "runtime_ability_projection_missing",
     "canonicalResourceSubject": "structured_resource_subject_parser_missing",
     "struct ResourceSubject": "resource_subject_value_object_missing",
 }
@@ -13386,10 +13387,26 @@ for needle, label in required_authority.items():
     if needle not in authority:
         raise SystemExit(f"swift_invocation_authority_binding:{label}")
 for forbidden, label in {
+    "InvocationAbilityView": "authority_retains_private_ability_view",
+    "descriptorAbilityURA": "authority_owns_descriptor_projection",
+    'let marker = "/ability/"': "authority_owns_ability_path_projection",
     "resourceOwnerID": "validator_owns_resource_owner_parser",
     'let marker = "/resource/"': "validator_owns_resource_path_substring_parser",
 }.items():
     if forbidden in authority:
+        raise SystemExit(f"swift_invocation_authority_binding:{label}")
+
+required_projection = {
+    "struct RuntimeAbilityProjection": "runtime_ability_projection_struct_missing",
+    "init(tuple: InvocationTuple) throws": "runtime_ability_projection_tuple_boundary_missing",
+    "descriptorAbilityURA": "descriptor_projection_missing",
+    "descriptorWireAbility": "wire_projection_missing",
+    "publicAbilityName": "public_name_projection_missing",
+    '"descriptor_ref must contain a canonical Ability URA"': "malformed_descriptor_rejection_missing",
+    "easynet:///r/": "ura_only_projection_missing",
+}
+for needle, label in required_projection.items():
+    if needle not in projection:
         raise SystemExit(f"swift_invocation_authority_binding:{label}")
 
 required_tests = {
@@ -13398,7 +13415,11 @@ required_tests = {
     "delegation authority subject does not match invocation subject_ura": "delegation_subject_test_missing",
     "session authority subject does not admit invocation subject_ura": "session_subject_test_missing",
     '"subject_ura": callee': "tuple_bound_delegation_fixture_missing",
-    '"scopes": ["observe.health"]': "tuple_bound_scope_fixture_missing",
+    '"scopes": scopes': "tuple_bound_scope_fixture_missing",
+    "testRuntimeAbilityProjectionIsCanonical": "runtime_ability_projection_test_missing",
+    '"device.dev-a.observe.health"': "runtime_ability_wire_scope_test_missing",
+    '"easynet:///r/example/ability/device.dev-a.observe.health"': "runtime_ability_ura_scope_test_missing",
+    '"descriptor_ref must contain a canonical Ability URA"': "malformed_descriptor_test_missing",
     "not-a-ura/resource/user.alice/runtime-state/read": "path_substring_subject_regression_missing",
     "easynet:///r/example/device/dev-a/resource/user.alice/runtime-state/read": "nested_resource_path_subject_regression_missing",
 }

@@ -29,6 +29,7 @@ final class RuntimeCoreSeamTests: XCTestCase {
                 "Invocation.swift",
                 "JSONValue.swift",
                 "Runtime.swift",
+                "RuntimeAbilityProjection.swift",
                 "SDKError.swift",
                 "Stream.swift",
             ])
@@ -442,6 +443,29 @@ final class RuntimeCoreSeamTests: XCTestCase {
         }
     }
 
+    func testRuntimeAbilityProjectionIsCanonical() throws {
+        let admittedScopes = [
+            "observe.health",
+            "device.dev-a.observe.health",
+            "easynet:///r/example/ability/device.dev-a.observe.health",
+            "easynet:///r/example/ability/device.dev-a.*",
+        ]
+        for scope in admittedScopes {
+            let proof = try DelegationProof.fromMetadata(delegationMetadataValue(scopes: [scope]))
+            _ = try completeBuilder()
+                .withAuthorityMetadata(proof.metadata())
+                .inspect()
+        }
+
+        let proof = try DelegationProof.fromMetadata(delegationMetadataValue(scopes: ["observe.health"]))
+        expectSyncSDKError(.invalidArgument, "descriptor_ref must contain a canonical Ability URA") {
+            _ = try completeBuilder()
+                .withDescriptorRef("observe.health")
+                .withAuthorityMetadata(proof.metadata())
+                .inspect()
+        }
+    }
+
     func testRuntimeStateReadSubjectHelperBuildsUserOwnedResourceSubject() throws {
         XCTAssertEqual(
             try runtimeStateReadSubjectURA(realm: "example", userID: "alice"),
@@ -758,12 +782,16 @@ final class RuntimeCoreSeamTests: XCTestCase {
     }
 
     private func delegationMetadataValue() throws -> String {
+        try delegationMetadataValue(scopes: ["observe.health"])
+    }
+
+    private func delegationMetadataValue(scopes: [String]) throws -> String {
         try authorityMetadataValue([
             "issuer_ura": "easynet:///r/example/user/alice",
             "subject_ura": callee,
             "caller_ura": caller,
             "audience": callee,
-            "scopes": ["observe.health"],
+            "scopes": scopes,
             "issued_at_ms": 10,
             "expires_at_ms": 20,
         ])
