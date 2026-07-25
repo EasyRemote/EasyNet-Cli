@@ -214,7 +214,7 @@ pub(crate) fn resolve_owner(
     let callee = owner_fact_from_ura(callee_ura, daemon_ura, trust_anchor)?;
     let device = match owner_fact_from_trust_anchor(callee_ura, trust_anchor) {
         Some(owner) => Some(owner),
-        None => owner_fact_from_local_device(callee_ura, daemon_ura)?,
+        None => owner_fact_from_local_device(callee_ura)?,
     };
     Ok(OwnerResolver::resolve(&OwnerResolutionInput {
         subject,
@@ -257,24 +257,25 @@ fn owner_fact_from_ura(
                 let device_ura = crate::core::ura::device_ura(&parsed.realm, &device_id);
                 match owner_fact_from_trust_anchor(&device_ura, trust_anchor) {
                     Some(owner) => Some(owner),
-                    None => owner_fact_from_local_device(&device_ura, daemon_ura)?,
+                    None => owner_fact_from_local_device(&device_ura)?,
                 }
             }
             Some(AbilityOwner::Authority) => {
                 let authority_ura = crate::core::ura::hub_ura(&parsed.realm);
-                match owner_fact_from_local_authority(&authority_ura, daemon_ura) {
-                    Some(owner) => Some(owner),
-                    None => owner_fact_from_local_device(&authority_ura, daemon_ura)?,
-                }
+                owner_fact_from_local_authority(&authority_ura, daemon_ura)
             }
             None => None,
         },
-        URAKind::Device | URAKind::Authority => {
+        URAKind::Device => match owner_fact_from_trust_anchor(ura, trust_anchor) {
+            Some(owner) => Some(owner),
+            None => owner_fact_from_local_device(ura)?,
+        },
+        URAKind::Authority => {
             match owner_fact_from_trust_anchor(ura, trust_anchor)
                 .or_else(|| owner_fact_from_local_authority(ura, daemon_ura))
             {
                 Some(owner) => Some(owner),
-                None => owner_fact_from_local_device(ura, daemon_ura)?,
+                None => None,
             }
         }
         URAKind::Resource => resource_owner_user_id(&parsed).map(|user_id| {
@@ -311,40 +312,15 @@ fn owner_fact_from_local_authority(ura: &str, daemon_ura: Option<&str>) -> Optio
     })
 }
 
-fn owner_fact_from_local_device(
-    ura: &str,
-    daemon_ura: Option<&str>,
-) -> Result<Option<OwnerFact>, Status> {
-    let parsed = parse_ura(ura).map_err(|error| {
-        Status::invalid_argument(format!("LOCAL_OWNER_URA_INVALID: {ura}: {error}"))
-    })?;
-    let Some(credentials) = crate::daemon::persistence::config::load_credentials_optional()
-        .map_err(|error| {
+fn owner_fact_from_local_device(ura: &str) -> Result<Option<OwnerFact>, Status> {
+    local_device_owner_fact(ura).map_err(|error| {
+        let message = error.to_string();
+        if message.contains("local device owner URA invalid") {
+            Status::invalid_argument(format!("LOCAL_OWNER_URA_INVALID: {message}"))
+        } else {
             Status::failed_precondition(format!("LOCAL_OWNER_CREDENTIALS_UNAVAILABLE: {error:#}"))
-        })?
-    else {
-        return Ok(None);
-    };
-    let is_local_identity = match parsed.kind {
-        URAKind::Device => {
-            parsed.realm == credentials.realm
-                && parsed
-                    .device_id()
-                    .is_some_and(|device_id| device_id == credentials.node_id.as_str())
         }
-        URAKind::Authority => Some(ura) == daemon_ura || parsed.realm == credentials.realm,
-        _ => Some(ura) == daemon_ura,
-    };
-    if !is_local_identity {
-        return Ok(None);
-    }
-    let user_id = credentials.user_id().map_err(|error| {
-        Status::failed_precondition(format!("LOCAL_OWNER_CREDENTIALS_UNAVAILABLE: {error}"))
-    })?;
-    Ok(Some(OwnerFact::user(
-        user_id,
-        crate::core::ura::user_ura(&credentials.realm, &user_id),
-    )))
+    })
 }
 
 fn resource_owner_user_id(parsed: &crate::core::ura::ParsedURA) -> Option<String> {
@@ -653,6 +629,55 @@ mod tests {
             owner.owner_ura.as_deref(),
             Some("easynet:///r/test/authority")
         );
+        assert_eq!(
+            owner.owner_source,
+            crate::daemon::invocation::admission::decision::OwnerSource::Unresolved
+        );
+    }
+
+    #[test]
+    fn authority_ability_does_not_project_paired_device_credentials_owner() {
+        let _home = HomeGuard::new();
+        save_test_credentials();
+        let anchor = empty_anchor();
+        let owner = resolve_owner(
+            "easynet:///r/test/ability/authority.federation.discover",
+            "easynet:///r/test/authority",
+            None,
+            &anchor,
+        )
+        .expect("authority owner resolution should not fail for saved device credentials");
+
+        assert!(owner.owner_user_id.is_none());
+        assert!(owner.owner_ura.is_none());
+        assert_eq!(
+            owner.owner_source,
+            crate::daemon::invocation::admission::decision::OwnerSource::Unresolved
+        );
+        assert!(
+            owner
+                .audit_warnings
+                .iter()
+                .any(|warning| warning.contains("no authoritative owner source")),
+            "authority owner without explicit authority fact must stay unresolved: {owner:?}"
+        );
+    }
+
+    #[test]
+    fn authority_subject_does_not_project_paired_device_credentials_owner() {
+        let _home = HomeGuard::new();
+        save_test_credentials();
+        let anchor = empty_anchor();
+        let owner = resolve_owner(
+            "easynet:///r/test/authority",
+            "easynet:///r/test/authority",
+            None,
+            &anchor,
+        )
+        .expect("authority subject resolution should not fail for saved device credentials");
+
+        assert!(owner.owner_user_id.is_none());
+        assert!(owner.owner_ura.is_none());
         assert_eq!(
             owner.owner_source,
             crate::daemon::invocation::admission::decision::OwnerSource::Unresolved

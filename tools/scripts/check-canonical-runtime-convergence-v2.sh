@@ -7305,20 +7305,32 @@ for retired in (
     "load_credentials().ok()?",
     "credentials.user_id().ok()",
     "parse_ura(ura).ok()",
+    "load_credentials_optional()",
+    "URAKind::Authority",
+    "parsed.realm == credentials.realm",
+    "Some(ura) == daemon_ura",
 ):
     if retired in body:
         raise SystemExit(f"admission_local_owner_retired_fallback:{retired}")
 for required in (
-    "load_credentials_optional()",
-    "return Ok(None)",
+    "local_device_owner_fact(ura)",
     "LOCAL_OWNER_CREDENTIALS_UNAVAILABLE",
     "LOCAL_OWNER_URA_INVALID",
 ):
     if required not in body:
         raise SystemExit(f"admission_local_owner_missing_fail_closed_path:{required}")
+for retired in (
+    "owner_fact_from_local_device(&authority_ura",
+    "owner_fact_from_local_device(ura, daemon_ura)",
+    "URAKind::Device | URAKind::Authority",
+):
+    if retired in text:
+        raise SystemExit(f"admission_authority_owner_retired_device_fallback:{retired}")
 for test in (
     "local_device_owner_resolution_rejects_malformed_credentials",
     "paired_device_subject_projects_credentials_owner",
+    "authority_ability_does_not_project_paired_device_credentials_owner",
+    "authority_subject_does_not_project_paired_device_credentials_owner",
 ):
     if test not in text:
         raise SystemExit(f"missing_admission_owner_credentials_test:{test}")
