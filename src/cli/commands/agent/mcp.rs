@@ -487,32 +487,50 @@ pub(super) fn generated_mcp_ability_name(prefix: &str, server: &str, tool: &str)
     let prefix_slug = slug_segment(prefix);
     let server_slug = slug_segment(server);
     let tool_slug = slug_segment(tool);
-    // Flat single-underscore form: `{prefix}_{server}_{tool}`. The
-    // earlier double-underscore at the server↔tool seam advertised
-    // the boundary visually but cost readability across the whole
-    // catalogue; user calls this trade-off in favour of a uniform
-    // separator. Two distinct server↔tool pairs that slugify to the
-    // same flat string would collide; the hash fallback below
-    // covers that case for empty / separator-only slugs.
     let base = if prefix_slug.is_empty() {
         format!("{server_slug}_{tool_slug}")
     } else {
         format!("{prefix_slug}_{server_slug}_{tool_slug}")
     };
-    // "Empty after slugify" means either the formatted string is
-    // literally empty OR it slugifies to nothing but separators
-    // (e.g. `"__"` from server=tool="…"). The hash fallback
-    // guarantees a deterministic, distinct ability name in both
-    // cases. We hash the RAW upstream identifiers (not the slugs)
-    // so that two upstream pairs that slugify to the same empty
-    // shape still receive distinct hashes — without this the test
-    // pair `("...", "///")` vs `("***", "===")` would collide on
-    // the empty-slug `":"` hash input.
-    let is_only_separators = !base.is_empty() && base.chars().all(|c| c == '_' || c == '-');
-    if base.is_empty() || is_only_separators {
-        format!("mcp_{}", short_hex(format!("{server}:{tool}").as_bytes()))
-    } else {
-        base
+    McpAbilityNameProjection::from_parts(base, server, tool).into_name()
+}
+
+/// Canonical projection from upstream MCP server/tool identifiers to an
+/// EasyNet ability name.
+///
+/// Flat names are the normal `{prefix}_{server}_{tool}` projection. Some
+/// upstream identifiers slugify to an empty or separator-only shape; those are
+/// not compatibility cases. They are a distinct, canonical projection state
+/// that binds the raw upstream identifiers into a deterministic digest so two
+/// punctuation-only tool pairs remain different.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum McpAbilityNameProjection {
+    Flat(String),
+    DigestDisambiguated { digest_input: String },
+}
+
+impl McpAbilityNameProjection {
+    fn from_parts(base: String, server: &str, tool: &str) -> Self {
+        if Self::requires_digest(&base) {
+            Self::DigestDisambiguated {
+                digest_input: format!("{server}:{tool}"),
+            }
+        } else {
+            Self::Flat(base)
+        }
+    }
+
+    fn requires_digest(base: &str) -> bool {
+        base.is_empty() || base.chars().all(|c| c == '_' || c == '-')
+    }
+
+    fn into_name(self) -> String {
+        match self {
+            Self::Flat(name) => name,
+            Self::DigestDisambiguated { digest_input } => {
+                format!("mcp_{}", short_hex(digest_input.as_bytes()))
+            }
+        }
     }
 }
 

@@ -1083,9 +1083,7 @@ fn run_add_refuses_when_root_carries_agent_toml_but_registry_empty() {
 #[test]
 fn generated_mcp_ability_name_is_slug_safe_and_deterministic() {
     // Prefix + server + tool slugify independently and join with
-    // the dotted-verb convention (single `_` between prefix and
-    // server, double `__` between server and tool — operators
-    // grep the double underscore to identify the tool half).
+    // a uniform single `_` separator across the emitted ability name.
     // Note: `slug_segment` collapses `-` to `_` along with other
     // non-alnum punctuation, so `geocode-address` lands as
     // `geocode_address` rather than retaining the hyphen.
@@ -1103,14 +1101,14 @@ fn generated_mcp_ability_name_collapses_runs_of_punctuation() {
 }
 
 #[test]
-fn generated_mcp_ability_name_falls_back_to_hash_when_slug_empty() {
+fn generated_mcp_ability_name_digest_disambiguates_empty_slug_projection() {
     // Upstream pair that slugifies to nothing (e.g. all
     // non-alphanumeric) must still produce a stable, unique
     // ability name so collisions surface as different bindings.
     let a = generated_mcp_ability_name("", "...", "///");
     let b = generated_mcp_ability_name("", "***", "===");
-    assert!(a.starts_with("mcp_"), "fallback prefix: {a}");
-    assert!(b.starts_with("mcp_"), "fallback prefix: {b}");
+    assert!(a.starts_with("mcp_"), "digest prefix: {a}");
+    assert!(b.starts_with("mcp_"), "digest prefix: {b}");
     assert_ne!(a, b, "distinct upstream pairs must hash to distinct names");
     // Determinism: same input → same output.
     let a2 = generated_mcp_ability_name("", "...", "///");
