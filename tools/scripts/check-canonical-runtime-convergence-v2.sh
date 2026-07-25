@@ -1556,6 +1556,76 @@ for required in (
 PY
 }
 
+check_join_user_signer_custody_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local join="$cli_root/src/cli/commands/join.rs"
+
+  [[ -f "$join" ]] || fail "join command source is missing: ${join#$cli_root/}"
+
+  "$PYTHON_BIN" - "$join" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+prod = text.split("#[cfg(test)]", 1)[0]
+
+required = (
+    "fn ensure_join_runtime_identity_custody(",
+    "trait JoinRuntimeIdentityCustody",
+    "struct KeyServiceJoinRuntimeIdentityCustody",
+    "impl JoinRuntimeIdentityCustody for KeyServiceJoinRuntimeIdentityCustody",
+    "creds.runtime_user_binding()?",
+    "config::RuntimeUserBinding::Bound { user_ura } => custody.ensure_user(&user_ura)",
+    "config::RuntimeUserBinding::Unbound { .. } => Ok(())",
+    "ensure_user_runtime_signing_identity(",
+    "ensure managed User runtime signer",
+)
+for token in required:
+    if token not in prod:
+        raise SystemExit(f"join_user_signer_custody:missing:{token}")
+
+persist = re.search(
+    r"fn persist_join_credentials\((?P<body>.*?)\nfn run_required_join_stage",
+    prod,
+    re.DOTALL,
+)
+if persist is None:
+    raise SystemExit("join_user_signer_custody:persist_join_credentials_missing")
+persist_body = persist.group("body")
+if 'run_required_join_stage(&mut renderer, "keyring"' not in persist_body:
+    raise SystemExit("join_user_signer_custody:keyring_stage_not_required")
+if "ensure_join_runtime_identity_custody(&creds, &KeyServiceJoinRuntimeIdentityCustody)" not in persist_body:
+    raise SystemExit("join_user_signer_custody:keyring_stage_not_custody_boundary")
+if "match ensure_device_runtime_identity(&creds.realm, &creds.node_id)" in persist_body:
+    raise SystemExit("join_user_signer_custody:legacy_device_only_keyring_stage")
+
+custody = re.search(
+    r"fn ensure_join_runtime_identity_custody\((?P<body>.*?)\n\}",
+    prod,
+    re.DOTALL,
+)
+if custody is None:
+    raise SystemExit("join_user_signer_custody:boundary_function_missing")
+custody_body = custody.group("body")
+if "custody.ensure_device(&creds.realm, &creds.node_id)?" not in custody_body:
+    raise SystemExit("join_user_signer_custody:device_custody_missing")
+if custody_body.find("custody.ensure_device") > custody_body.find("creds.runtime_user_binding()?"):
+    raise SystemExit("join_user_signer_custody:device_custody_must_precede_user_binding")
+if "crate::core::ura::user_ura(" in custody_body:
+    raise SystemExit("join_user_signer_custody:duplicates_user_binding_projection")
+
+tests = text.split("#[cfg(test)]", 1)[1] if "#[cfg(test)]" in text else ""
+for test in (
+    "join_identity_custody_ensures_bound_user_signer",
+    "join_identity_custody_leaves_federation_native_device_only_unbound",
+    "join_identity_custody_fails_closed_when_bound_user_signer_fails",
+):
+    if test not in tests:
+        raise SystemExit(f"join_user_signer_custody:missing_test:{test}")
+PY
+}
+
 check_invocation_history_filter_scope_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local history="$cli_root/src/daemon/ability/builtins/governance/invocation_history.rs"
@@ -17436,6 +17506,38 @@ EOF
   if ( check_join_authority_wiring_required_contract "$tmp/join-authority-wiring-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected join authority wiring required-stage gate to fail"
   fi
+  mkdir -p "$tmp/join-user-signer-custody-legacy/src/cli/commands"
+  cat >"$tmp/join-user-signer-custody-legacy/src/cli/commands/join.rs" <<'EOF'
+fn persist_join_credentials(creds: Credentials) -> anyhow::Result<()> {
+    run_required_join_stage(&mut renderer, "keyring", || {
+        match ensure_device_runtime_identity(&creds.realm, &creds.node_id) {
+            Ok(()) => Ok(()),
+            Err(err) => anyhow::bail!("device runtime identity custody failed: {err}"),
+        }
+    })?;
+    Ok(())
+}
+
+fn run_required_join_stage<F>(renderer: &mut StageRenderer, stage: &str, f: F) -> anyhow::Result<()>
+where
+    F: FnOnce() -> anyhow::Result<()>,
+{
+    f()
+}
+
+fn ensure_device_runtime_identity(realm: &str, node_id: &str) -> anyhow::Result<()> {
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn join_keyring_stage_ensures_device_identity() {}
+}
+EOF
+  if ( check_join_user_signer_custody_contract "$tmp/join-user-signer-custody-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected join user signer custody gate to fail"
+  fi
   mkdir -p "$tmp/invocation-history-filter-legacy/src/daemon/ability/builtins/governance"
   cat >"$tmp/invocation-history-filter-legacy/src/daemon/ability/builtins/governance/invocation_history.rs" <<'EOF'
 fn fetch_key_from_value(value: &Value) -> anyhow::Result<InvocationLedgerFetchKey> {
@@ -21487,6 +21589,7 @@ EOF
   check_core_ura_realm_projection_contract
   check_resolve_key_request_dto_contract
   check_join_authority_wiring_required_contract
+  check_join_user_signer_custody_contract
   check_invocation_history_filter_scope_contract
   check_cli_invocation_history_read_model_contract
   check_invocation_history_placeholder_negative_only_contract
@@ -21711,6 +21814,7 @@ check_invocation_history_ledger_ura_contract
 check_core_ura_realm_projection_contract
 check_resolve_key_request_dto_contract
 check_join_authority_wiring_required_contract
+check_join_user_signer_custody_contract
 check_invocation_history_filter_scope_contract
 check_cli_invocation_history_read_model_contract
 check_invocation_history_placeholder_negative_only_contract
