@@ -17,7 +17,6 @@ use crate::daemon::invocation::routing::remote_invoke::{
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RemoteDeviceSystemAbility {
-    MetaListAbilities,
     NodeDescribe,
     ProcessExec,
 }
@@ -25,7 +24,6 @@ pub(crate) enum RemoteDeviceSystemAbility {
 impl RemoteDeviceSystemAbility {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
-            Self::MetaListAbilities => "meta.list_abilities",
             Self::NodeDescribe => "node.describe",
             Self::ProcessExec => "process.exec",
         }
@@ -92,6 +90,21 @@ pub(crate) fn invoke_remote_device_system_ability(
         .with_context(|| format!("forward {selector} to remote device target={target_ura}"))
 }
 
+#[cfg(feature = "axon-pb")]
+pub(crate) fn invoke_remote_device_catalogue_read(
+    node: &str,
+    args: Value,
+    action_label: &str,
+) -> anyhow::Result<Value> {
+    let _ = action_label;
+    let target_ura = crate::support::platform::remote_device::resolve_target_device_ura(node)?;
+    let caller_ura =
+        crate::support::platform::remote_device::require_caller_device_ura_from_credentials()?;
+    invoke_remote_catalogue_read_for_target(&target_ura, args, &caller_ura).with_context(|| {
+        format!("forward meta.list_abilities to remote device target={target_ura}")
+    })
+}
+
 #[cfg(not(feature = "axon-pb"))]
 pub(crate) fn invoke_remote_device_system_ability(
     node: &str,
@@ -101,6 +114,20 @@ pub(crate) fn invoke_remote_device_system_ability(
 ) -> anyhow::Result<Value> {
     let label = if action_label.trim().is_empty() {
         format!("invoking a remote system ability on node {node:?}")
+    } else {
+        action_label.to_string()
+    };
+    Err(crate::support::platform::local_invoke::federation_capability_unsupported_error(&label))
+}
+
+#[cfg(not(feature = "axon-pb"))]
+pub(crate) fn invoke_remote_device_catalogue_read(
+    node: &str,
+    _args: Value,
+    action_label: &str,
+) -> anyhow::Result<Value> {
+    let label = if action_label.trim().is_empty() {
+        format!("reading a remote ability catalogue on node {node:?}")
     } else {
         action_label.to_string()
     };
@@ -184,6 +211,26 @@ where
     remote_invoke::invoke_remote_target(request)
 }
 
+#[cfg(feature = "axon-pb")]
+fn invoke_remote_catalogue_read_for_target(
+    execution_target_ura: &str,
+    args: Value,
+    caller_ura: &str,
+) -> anyhow::Result<Value> {
+    let target_call = RemoteAbilityInvocationTarget::for_target_owned_selector(
+        execution_target_ura,
+        crate::daemon::ability::builtins::governance::meta::ABILITY_LIST_ABILITIES,
+    )?;
+    let request = RemoteSystemInvocationIssuer::target_owned_root_plan(
+        &target_call,
+        caller_ura,
+        args,
+        std::time::Duration::from_secs(30),
+    )?
+    .into_request()?;
+    remote_invoke::invoke_remote_target(request)
+}
+
 #[cfg(all(test, feature = "axon-pb"))]
 mod tests {
     use super::*;
@@ -191,7 +238,6 @@ mod tests {
     #[test]
     fn typed_facade_does_not_expose_receipt_history_as_target_owned_system_ability() {
         let remote_device_abilities = [
-            RemoteDeviceSystemAbility::MetaListAbilities,
             RemoteDeviceSystemAbility::NodeDescribe,
             RemoteDeviceSystemAbility::ProcessExec,
         ];
@@ -211,6 +257,18 @@ mod tests {
         assert!(realm_hub_abilities
             .iter()
             .all(|ability| !ability.as_str().starts_with("invocation.history.")));
+    }
+
+    #[test]
+    fn typed_facade_does_not_expose_catalogue_read_as_target_owned_device_action() {
+        let remote_device_abilities = [
+            RemoteDeviceSystemAbility::NodeDescribe,
+            RemoteDeviceSystemAbility::ProcessExec,
+        ];
+
+        assert!(remote_device_abilities
+            .iter()
+            .all(|ability| ability.as_str() != "meta.list_abilities"));
     }
 
     #[test]
