@@ -58,7 +58,6 @@ class RuntimeCallContext:
 @dataclass(frozen=True)
 class _RuntimeAbilityProjection:
     descriptor_ref: str
-    wire: str
     ability_ura: str
     public_name: str
 
@@ -66,6 +65,7 @@ class _RuntimeAbilityProjection:
     def from_descriptor_ref(
         cls,
         addressing: AddressingClient,
+        callee_ura: str,
         descriptor_ref: str,
     ) -> "_RuntimeAbilityProjection":
         try:
@@ -87,17 +87,18 @@ class _RuntimeAbilityProjection:
                 exc,
             ) from exc
         wire = _descriptor_wire_ability(ability_ura)
-        public_name = ability.public_name.strip() or wire
+        public_name = ""
+        if ability.owner_ura.strip() == callee_ura.strip():
+            public_name = ability.public_name.strip() or wire
         return cls(
             descriptor_ref=canonical_ref,
-            wire=wire,
             ability_ura=ability_ura,
             public_name=public_name,
         )
 
     def matches_scope(self, matcher: Callable[[str], bool]) -> bool:
         seen: set[str] = set()
-        for candidate in (self.public_name, self.ability_ura, self.wire):
+        for candidate in (self.public_name, self.ability_ura):
             candidate = candidate.strip()
             if not candidate or candidate in seen:
                 continue
@@ -151,6 +152,7 @@ class RuntimeAbilityClient:
         )
         ability = _RuntimeAbilityProjection.from_descriptor_ref(
             self._addressing,
+            call.callee_ura,
             descriptor_ref,
         )
         metadata = _canonical_runtime_call_metadata(

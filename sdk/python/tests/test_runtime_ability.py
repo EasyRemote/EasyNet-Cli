@@ -394,6 +394,42 @@ def test_runtime_ability_authority_scope_admits_canonical_ability_ura() -> None:
     client.build(replace(call, authority=authority), "namespace.resolve", {})
 
 
+def test_runtime_ability_rejects_short_scope_for_descriptor_owner_mismatch() -> None:
+    class MismatchedOwnerDescriptorTransport(RuntimeTransportFake):
+        def resolve_descriptor_ref(self, request_json: bytes) -> bytes:
+            self.descriptor_requests.append(json.loads(request_json))
+            return json.dumps(
+                {
+                    "descriptor_ref": (
+                        "easynet:///r/example/ability/authority.namespace.resolve@1.0.0#"
+                        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                        "!read"
+                    )
+                }
+            ).encode()
+
+    transport = MismatchedOwnerDescriptorTransport()
+    client = RuntimeAbilityClient(
+        RuntimeClient(transport),  # type: ignore[arg-type]
+        AddressingClient(AxonAddressingTransport()),
+    )
+    call = replace(_call(), callee_ura="easynet:///r/example/device/device-a")
+    authority = _runtime_session_authority(call, "alice")
+
+    with pytest.raises(SDKError, match="runtime session authority scopes do not admit ability"):
+        client.build(replace(call, authority=authority), "namespace.resolve", {})
+
+    assert transport.descriptor_requests == [
+        {
+            "ability": "namespace.resolve",
+            "call_mode": "rpc",
+            "callee_ura": call.callee_ura,
+            "caller_ura": call.caller_ura,
+            "subject_ura": call.subject_ura,
+        }
+    ]
+
+
 def test_runtime_ability_rejects_descriptor_ref_without_canonical_ability_ura() -> None:
     class OpaqueDescriptorTransport(RuntimeTransportFake):
         def resolve_descriptor_ref(self, request_json: bytes) -> bytes:

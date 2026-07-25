@@ -4880,6 +4880,78 @@ if '"version": "1.0.0"' not in py_tests or '"descriptor_version": "2.0.0"' not i
 PY
 }
 
+check_sdk_runtime_ability_owner_bound_scope_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local go="$cli_root/sdk/go/runtime_ability.go"
+  local go_test="$cli_root/sdk/go/runtime_ability_test.go"
+  local py="$cli_root/sdk/python/easynet_sdk/runtime_ability.py"
+  local py_test="$cli_root/sdk/python/tests/test_runtime_ability.py"
+
+  "$PYTHON_BIN" - "$go" "$go_test" "$py" "$py_test" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+go_path, go_test_path, py_path, py_test_path = map(Path, sys.argv[1:])
+
+def read(path: Path) -> str:
+    if not path.exists():
+        raise SystemExit(f"sdk_runtime_ability_owner_scope_source_missing:{path}")
+    return path.read_text()
+
+go = read(go_path)
+if "PublicAbilityNameFromAbilityURA(strings.TrimSpace(calleeURA), abilityURA)" not in go:
+    raise SystemExit("sdk_go_runtime_ability_public_scope_not_callee_owner_bound")
+for retired in (
+    "publicName := AbilityNameFromURA(abilityURA)",
+    "publicName = AbilityNameFromURA(abilityURA)",
+    "PublicAbilityNameFromAbilityURA(parts.OwnerURA",
+    "p.wire",
+    "wire          string",
+):
+    if retired in go:
+        raise SystemExit(f"sdk_go_runtime_ability_owner_unbound_scope_projection:{retired}")
+go_tests = read(go_test_path)
+for required in (
+    "TestRuntimeAbilityClientRejectsShortScopeForDescriptorOwnerMismatch",
+    "easynet:///r/example/device/device-a",
+    "easynet:///r/example/ability/authority.namespace.resolve@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read",
+    "runtime session authority scopes do not admit ability",
+):
+    if required not in go_tests:
+        raise SystemExit(f"sdk_go_runtime_ability_owner_scope_test_missing:{required}")
+
+py = read(py_path)
+signature = re.search(r"def\s+from_descriptor_ref\s*\((?P<body>.*?)\)\s*->\s*\"_RuntimeAbilityProjection\"", py, re.S)
+if not signature or "callee_ura: str" not in signature.group("body"):
+    raise SystemExit("sdk_python_runtime_ability_projection_missing_callee_ura")
+call_site = "_RuntimeAbilityProjection.from_descriptor_ref(\n            self._addressing,\n            call.callee_ura,"
+if call_site not in py:
+    raise SystemExit("sdk_python_runtime_ability_projection_call_not_callee_bound")
+public_name_idx = py.find('public_name = ""')
+owner_guard_idx = py.find("if ability.owner_ura.strip() == callee_ura.strip():")
+if public_name_idx < 0 or owner_guard_idx < 0 or public_name_idx > owner_guard_idx:
+    raise SystemExit("sdk_python_runtime_ability_public_scope_not_callee_owner_bound")
+for retired in (
+    "wire: str",
+    "self.wire",
+    "self.public_name, self.ability_ura, self.wire",
+):
+    if retired in py:
+        raise SystemExit(f"sdk_python_runtime_ability_owner_unbound_scope_projection:{retired}")
+py_tests = read(py_test_path)
+for required in (
+    "test_runtime_ability_rejects_short_scope_for_descriptor_owner_mismatch",
+    "MismatchedOwnerDescriptorTransport",
+    "easynet:///r/example/device/device-a",
+    "easynet:///r/example/ability/authority.namespace.resolve@1.0.0#",
+    "runtime session authority scopes do not admit ability",
+):
+    if required not in py_tests:
+        raise SystemExit(f"sdk_python_runtime_ability_owner_scope_test_missing:{required}")
+PY
+}
+
 check_runtime_descriptor_catalog_scope_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local meta="$cli_root/src/daemon/ability/builtins/governance/meta.rs"
@@ -19771,6 +19843,35 @@ EOF
 	  if ( check_sdk_ability_descriptor_version_field_contract "$tmp/sdk-ability-descriptor-version-alias-legacy" ) >/dev/null 2>&1; then
 	    fail "self-test expected SDK ability descriptor version alias gate to fail"
 	  fi
+	  mkdir -p "$tmp/sdk-runtime-ability-owner-scope-legacy/sdk/go" \
+	    "$tmp/sdk-runtime-ability-owner-scope-legacy/sdk/python/easynet_sdk" \
+	    "$tmp/sdk-runtime-ability-owner-scope-legacy/sdk/python/tests"
+	  printf '%s\n' \
+	    'func newRuntimeAbilityProjection(calleeURA string, abilityURA string) runtimeAbilityProjection {' \
+	    '  publicName := AbilityNameFromURA(abilityURA)' \
+	    '  return runtimeAbilityProjection{publicName: publicName}' \
+	    '}' \
+	    > "$tmp/sdk-runtime-ability-owner-scope-legacy/sdk/go/runtime_ability.go"
+	  printf 'func TestRuntimeAbilityClientAuthorityScopeAdmitsCanonicalAbilityURA(t *testing.T) {}\n' \
+	    > "$tmp/sdk-runtime-ability-owner-scope-legacy/sdk/go/runtime_ability_test.go"
+	  printf '%s\n' \
+	    'class _RuntimeAbilityProjection:' \
+	    '    @classmethod' \
+	    '    def from_descriptor_ref(cls, addressing, descriptor_ref) -> "_RuntimeAbilityProjection":' \
+	    '        ability = addressing.project_ability_ura("easynet:///r/example/ability/authority.namespace.resolve")' \
+	    '        wire = "authority.namespace.resolve"' \
+	    '        public_name = ability.public_name.strip() or wire' \
+	    '        return cls()' \
+	    '' \
+	    'class RuntimeAbilityClient:' \
+	    '    def _build(self, call, descriptor_ref):' \
+	    '        return _RuntimeAbilityProjection.from_descriptor_ref(self._addressing, descriptor_ref)' \
+	    > "$tmp/sdk-runtime-ability-owner-scope-legacy/sdk/python/easynet_sdk/runtime_ability.py"
+	  printf 'def test_runtime_ability_authority_scope_admits_canonical_ability_ura(): pass\n' \
+	    > "$tmp/sdk-runtime-ability-owner-scope-legacy/sdk/python/tests/test_runtime_ability.py"
+	  if ( check_sdk_runtime_ability_owner_bound_scope_contract "$tmp/sdk-runtime-ability-owner-scope-legacy" ) >/dev/null 2>&1; then
+	    fail "self-test expected SDK runtime ability owner-bound scope gate to fail"
+	  fi
 	  mkdir -p "$tmp/runtime-descriptor-catalog-scope-legacy/src/daemon/ability/builtins/governance" \
 	    "$tmp/runtime-descriptor-catalog-scope-legacy/src/cli/daemon_client" \
 	    "$tmp/runtime-descriptor-catalog-scope-legacy/sdk/go" \
@@ -23427,6 +23528,7 @@ EOF
 	  check_sdk_runtime_client_provider_readiness_contract
 	  check_sdk_ability_descriptor_not_found_vocabulary_contract
 	  check_sdk_ability_descriptor_version_field_contract
+	  check_sdk_runtime_ability_owner_bound_scope_contract
 	  check_runtime_descriptor_catalog_scope_contract
   check_sdk_runtime_identity_signer_not_found_contract
   check_sdk_go_easynet_provider_retired_contract
@@ -23661,6 +23763,7 @@ check_sdk_descriptor_resolution_error_vocabulary_contract
 check_sdk_runtime_client_provider_readiness_contract
 check_sdk_ability_descriptor_not_found_vocabulary_contract
 check_sdk_ability_descriptor_version_field_contract
+check_sdk_runtime_ability_owner_bound_scope_contract
 check_runtime_descriptor_catalog_scope_contract
 check_sdk_runtime_identity_signer_not_found_contract
 check_sdk_go_easynet_provider_retired_contract

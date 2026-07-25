@@ -498,6 +498,42 @@ func TestRuntimeAbilityClientAuthorityScopeAdmitsCanonicalAbilityURA(t *testing.
 	}
 }
 
+func TestRuntimeAbilityClientRejectsShortScopeForDescriptorOwnerMismatch(t *testing.T) {
+	var descriptorRequests []RuntimeDescriptorRefRequest
+	runtime, err := NewRuntimeClient(RuntimeTransportFunc{
+		ResolveDescriptorRefFunc: func(_ context.Context, requestJSON []byte) ([]byte, error) {
+			var request RuntimeDescriptorRefRequest
+			if err := json.Unmarshal(requestJSON, &request); err != nil {
+				return nil, err
+			}
+			descriptorRequests = append(descriptorRequests, request)
+			return []byte(`{"descriptor_ref":"easynet:///r/example/ability/authority.namespace.resolve@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read"}`), nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
+	}
+	client, err := NewRuntimeAbilityClient(runtime, NewCanonicalAddressing())
+	if err != nil {
+		t.Fatalf("NewRuntimeAbilityClient: %v", err)
+	}
+	call := runtimeAbilityTestContext()
+	call.CalleeURA = "easynet:///r/example/device/device-a"
+	authority := runtimeAbilitySessionAuthority(t, call, "alice")
+	call.Authority = &authority
+
+	_, err = client.Build(context.Background(), call, "namespace.resolve", map[string]any{})
+	if err == nil || !strings.Contains(err.Error(), "runtime session authority scopes do not admit ability") {
+		t.Fatalf("owner mismatch scope error = %v", err)
+	}
+	if len(descriptorRequests) != 1 {
+		t.Fatalf("descriptor resolver calls = %d, want 1", len(descriptorRequests))
+	}
+	if descriptorRequests[0].CalleeURA != call.CalleeURA || descriptorRequests[0].Ability != "namespace.resolve" {
+		t.Fatalf("descriptor request = %#v, want callee-bound namespace.resolve", descriptorRequests[0])
+	}
+}
+
 func TestRuntimeAbilityClientRejectsDescriptorRefWithoutCanonicalAbilityURA(t *testing.T) {
 	runtime, err := NewRuntimeClient(RuntimeTransportFunc{
 		ResolveDescriptorRefFunc: func(context.Context, []byte) ([]byte, error) {

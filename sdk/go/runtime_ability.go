@@ -327,7 +327,6 @@ func validateRuntimeCallContext(call RuntimeCallContext) error {
 
 type runtimeAbilityProjection struct {
 	descriptorRef string
-	wire          string
 	abilityURA    string
 	publicName    string
 }
@@ -364,13 +363,15 @@ func newRuntimeAbilityProjection(
 		)
 	}
 	wire := strings.TrimSpace(parts.AbilityID)
-	publicName, ok := PublicAbilityNameFromAbilityURA(strings.TrimSpace(calleeURA), abilityURA)
-	if !ok || strings.TrimSpace(publicName) == "" {
-		publicName = wire
+	publicName := ""
+	if ownerBoundName, ok := PublicAbilityNameFromAbilityURA(strings.TrimSpace(calleeURA), abilityURA); ok {
+		publicName = strings.TrimSpace(ownerBoundName)
+		if publicName == "" {
+			publicName = wire
+		}
 	}
 	return runtimeAbilityProjection{
 		descriptorRef: canonicalRef,
-		wire:          wire,
 		abilityURA:    abilityURA,
 		publicName:    strings.TrimSpace(publicName),
 	}, nil
@@ -378,7 +379,7 @@ func newRuntimeAbilityProjection(
 
 func (p runtimeAbilityProjection) matchesScope(match func(string) bool) bool {
 	seen := map[string]struct{}{}
-	for _, candidate := range []string{p.publicName, p.abilityURA, p.wire} {
+	for _, candidate := range []string{p.publicName, p.abilityURA} {
 		candidate = strings.TrimSpace(candidate)
 		if candidate == "" {
 			continue
