@@ -1466,6 +1466,28 @@ check_core_ura_realm_projection_contract() {
   if ! rg -q 'pub fn user_realm_from_ura\(ura: &str\) -> Option<String>' "$core"; then
     fail "core URA facade must expose User-only user_realm_from_ura projection"
   fi
+  "$PYTHON_BIN" - "$core" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+production = text.split("\n#[cfg(test)]", 1)[0]
+arm = re.search(
+    r"AbilityOwner::Authority\s*=>\s*\{(?P<body>.*?)\n\s*\}",
+    production,
+    re.DOTALL,
+)
+if arm is None:
+    raise SystemExit("core_ura_authority_owner_kind:authority_arm_missing")
+body = arm.group("body")
+if '"hub"' in body:
+    raise SystemExit("core_ura_authority_owner_kind:product_hub_owner_kind")
+if '"authority"' not in body or "authority_ura(&parsed.realm)" not in body:
+    raise SystemExit("core_ura_authority_owner_kind:authority_projection_missing")
+if 'or `"hub"`' in production or 'owner_kind() == "hub"' in production:
+    raise SystemExit("core_ura_authority_owner_kind:hub_owner_kind_contract")
+PY
   if rg -n 'fn\s+parse_realm_from_user_ura' "$keyring_abilities" "$keyring_issue" "$keyring_resolver"; then
     fail "keyring must not define duplicated user URA realm parser functions"
   fi
@@ -10536,9 +10558,12 @@ for required_selector_state in (
     "enum RouteOwnerKind",
     "fn route_selector_from_ability_selector(",
     "RouteOwnerKind::from_ability_selector",
+    '"authority" => Ok(Self::Authority)',
 ):
     if required_selector_state not in production:
         raise SystemExit(f"route_resolver:descriptor_ref_selector:owner_kind_state_missing:{required_selector_state}")
+if '"hub" => Ok(Self::Authority)' in production:
+    raise SystemExit("route_resolver:descriptor_ref_selector:product_hub_owner_kind_mapping")
 if "ability_selector_from_descriptor_ref(query_name)?" not in route_body:
     raise SystemExit("route_resolver:descriptor_ref_selector:query_parse_not_propagated")
 if "route_selector_from_descriptor_ref(owner_ura, ability_name).map(Some)" not in route_body:
@@ -13799,6 +13824,7 @@ for retired, code in (
     ("HubAbilitySubject", "retired_hub_ability_subject_state"),
     ("local_system_context_for_hub_target_uses_ability_subject", "retired_hub_subject_regression_name"),
     ("daemon_system_subject_policy_names_hub_ability_subject", "retired_hub_policy_state_test"),
+    ('owner_kind() == "hub"', "retired_hub_owner_kind_policy"),
 ):
     if retired in target or retired in local_invoke:
         raise SystemExit(f"local_ability_target_subject_policy:{code}")

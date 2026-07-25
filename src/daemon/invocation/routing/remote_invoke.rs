@@ -1274,12 +1274,12 @@ fn validate_remote_execution_target(
                 );
             }
         }
-        (URAKind::Authority, "hub") => {
+        (URAKind::Authority, "authority") => {
             if selector.owner_ura() == target.as_str() {
                 Ok(())
             } else {
                 bail!(
-                    "hub-owned ability URA `{}` must execute on its owning hub `{}`, not `{}`",
+                    "authority-owned ability URA `{}` must execute on its owning Authority `{}`, not `{}`",
                     selector.ability_ura(),
                     selector.owner_ura(),
                     execution_target_ura
@@ -1287,13 +1287,13 @@ fn validate_remote_execution_target(
             }
         }
         (URAKind::Authority, "agent") => Ok(()),
-        (URAKind::Device, "hub") => bail!(
-            "hub-owned ability URA `{}` requires a Hub execution target, not device `{}`",
+        (URAKind::Device, "authority") => bail!(
+            "authority-owned ability URA `{}` requires an Authority execution target, not device `{}`",
             selector.ability_ura(),
             execution_target_ura
         ),
         (URAKind::Authority, "device") => bail!(
-            "device-owned ability URA `{}` requires its owning Device execution target `{}`, not hub `{}`",
+            "device-owned ability URA `{}` requires its owning Device execution target `{}`, not Authority `{}`",
             selector.ability_ura(),
             selector.owner_ura(),
             execution_target_ura
@@ -1630,6 +1630,35 @@ mod tests {
         .expect("target");
         assert_eq!(target.descriptor_ref(), descriptor);
         assert_eq!(target.route_function_name(), "echo");
+    }
+
+    #[test]
+    fn remote_execution_validation_accepts_canonical_authority_owner_kind() {
+        let selector = crate::core::ura::AbilitySelector::parse(
+            "easynet:///r/realm/ability/authority.federation.status",
+        )
+        .expect("authority selector");
+
+        validate_remote_execution_target("easynet:///r/realm/authority", &selector)
+            .expect("authority-owned ability should execute on its Authority owner");
+    }
+
+    #[test]
+    fn remote_execution_validation_rejects_authority_owner_on_device_target() {
+        let selector = crate::core::ura::AbilitySelector::parse(
+            "easynet:///r/realm/ability/authority.federation.status",
+        )
+        .expect("authority selector");
+
+        let error = validate_remote_execution_target("easynet:///r/realm/device/node-a", &selector)
+            .expect_err("authority-owned ability must not execute on a Device target");
+
+        let message = error.to_string();
+        assert!(message.contains("authority-owned ability URA"), "{message}");
+        assert!(
+            message.contains("requires an Authority execution target"),
+            "{message}"
+        );
     }
 
     #[test]

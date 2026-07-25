@@ -113,7 +113,7 @@ impl LocalAbilityTarget {
         &self.dispatch_name
     }
 
-    /// Canonical Agent/Device/Hub identity that advertises the ability.
+    /// Canonical Agent/Device/Authority identity that advertises the ability.
     #[must_use]
     pub fn callee_ura(&self) -> &str {
         &self.callee_ura
@@ -263,7 +263,7 @@ enum DaemonSystemSubjectPolicy {
 impl DaemonSystemSubjectPolicy {
     fn for_descriptor(ability: &str, callee_ura: &str) -> Self {
         match crate::core::ura::AbilitySelector::parse(ability) {
-            Ok(selector) if selector.owner_kind() == "hub" => {
+            Ok(selector) if selector.owner_kind() == "authority" => {
                 Self::RealmAuthorityAbilitySubject(selector.ability_ura().to_string())
             }
             _ => Self::CalleeOwnerSubject(callee_ura.to_string()),
@@ -935,35 +935,37 @@ mod tests {
 
     #[test]
     fn daemon_system_subject_resolves_to_ability_ura_for_realm_authority_owner() {
-        let hub_ability = crate::core::ura::hub_ability_ura("acme", "federation.status");
+        let authority_ability =
+            crate::core::ura::authority_ability_ura("acme", "federation.status");
         let target =
             crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root(
-                hub_ability,
+                authority_ability,
                 json!({}),
                 CallMode::Rpc,
             );
 
         assert_eq!(
             target
-                .resolved_subject_ura(&crate::core::ura::hub_ura("acme"))
+                .resolved_subject_ura(&crate::core::ura::authority_ura("acme"))
                 .unwrap(),
-            crate::core::ura::hub_ability_ura("acme", "federation.status")
+            crate::core::ura::authority_ability_ura("acme", "federation.status")
         );
     }
 
     #[test]
     fn daemon_system_subject_policy_names_realm_authority_ability_subject() {
-        let hub_ability = crate::core::ura::hub_ability_ura("acme", "federation.status");
+        let authority_ability =
+            crate::core::ura::authority_ability_ura("acme", "federation.status");
         let policy = DaemonSystemSubjectPolicy::for_descriptor(
-            &hub_ability,
-            &crate::core::ura::hub_ura("acme"),
+            &authority_ability,
+            &crate::core::ura::authority_ura("acme"),
         );
 
         assert_eq!(
             policy,
-            DaemonSystemSubjectPolicy::RealmAuthorityAbilitySubject(hub_ability.clone())
+            DaemonSystemSubjectPolicy::RealmAuthorityAbilitySubject(authority_ability.clone())
         );
-        assert_eq!(policy.subject_ura(), hub_ability);
+        assert_eq!(policy.subject_ura(), authority_ability);
     }
 
     #[test]

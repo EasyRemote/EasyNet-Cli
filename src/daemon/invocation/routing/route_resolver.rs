@@ -1339,7 +1339,7 @@ impl RouteOwnerKind {
     ) -> Result<Self, ResolveRouteFailure> {
         match selector.owner_kind() {
             "device" => Ok(Self::Device),
-            "hub" => Ok(Self::Authority),
+            "authority" => Ok(Self::Authority),
             "agent" => Ok(Self::Agent),
             other => Err(ResolveRouteFailure {
                 query_name: query_name.to_string(),
@@ -2338,13 +2338,14 @@ mod tests {
             .expect("device selector present");
         assert_eq!(device_selector.owner_kind, RouteOwnerKind::Device);
 
-        let hub_ura = crate::core::ura::hub_ura("test-realm");
-        let hub_ability = crate::core::ura::owner_ability_ura(&hub_ura, "meta.list_abilities")
-            .expect("hub ability");
-        let hub_selector = route_selector_from_query(&hub_ability, "")
-            .expect("hub selector")
-            .expect("hub selector present");
-        assert_eq!(hub_selector.owner_kind, RouteOwnerKind::Authority);
+        let authority_ura = crate::core::ura::authority_ura("test-realm");
+        let authority_ability =
+            crate::core::ura::owner_ability_ura(&authority_ura, "meta.list_abilities")
+                .expect("authority ability");
+        let authority_selector = route_selector_from_query(&authority_ability, "")
+            .expect("authority selector")
+            .expect("authority selector present");
+        assert_eq!(authority_selector.owner_kind, RouteOwnerKind::Authority);
 
         let agent_ura = crate::core::ura::agent_ura("test-realm", "alice", "worker");
         let agent_ability =

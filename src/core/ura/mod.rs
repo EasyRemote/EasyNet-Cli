@@ -150,8 +150,8 @@ impl AbilitySelector {
                 (owner_ura.clone(), "device", owner_ura)
             }
             AbilityOwner::Authority => {
-                let owner_ura = hub_ura(&parsed.realm);
-                (owner_ura.clone(), "hub", owner_ura)
+                let owner_ura = authority_ura(&parsed.realm);
+                (owner_ura.clone(), "authority", owner_ura)
             }
         };
         let public_name = ability_name_from_parts(&parsed).ok_or_else(|| {
@@ -180,7 +180,7 @@ impl AbilitySelector {
     }
 
     /// Owner kind encoded by the Ability URA: `"agent"`, `"device"`,
-    /// or `"hub"`. Derived from the typed `AbilityOwner` arm at parse
+    /// or `"authority"`. Derived from the typed `AbilityOwner` arm at parse
     /// time — consumers never re-sniff URA strings (F-047).
     pub fn owner_kind(&self) -> &'static str {
         self.owner_kind
@@ -553,6 +553,19 @@ mod tests {
         assert_eq!(selector.dispatch_target(), "easynet:///r/acme/device/dev-1");
         assert_eq!(selector.public_name(), "fs.read");
         assert_eq!(selector.local_registry_ability(), "fs.read");
+    }
+
+    #[test]
+    fn ability_selector_projects_authority_owned_ability_ura() {
+        let selector =
+            AbilitySelector::parse("easynet:///r/acme/ability/authority.federation.status")
+                .expect("authority ability selector");
+
+        assert_eq!(selector.owner_ura(), "easynet:///r/acme/authority");
+        assert_eq!(selector.owner_kind(), "authority");
+        assert_eq!(selector.dispatch_target(), "easynet:///r/acme/authority");
+        assert_eq!(selector.public_name(), "federation.status");
+        assert_eq!(selector.local_registry_ability(), "federation.status");
     }
 
     #[test]
