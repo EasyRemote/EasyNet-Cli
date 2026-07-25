@@ -189,7 +189,7 @@ pub struct ManagedSigningPeerListEntry {
     pub fingerprint: String,
     pub public_key: String,
     pub status: String,
-    pub via_hub: Option<String>,
+    pub via_authority: Option<String>,
     pub added_unix_ms: i64,
     pub last_seen_unix_ms: i64,
 }
@@ -201,7 +201,7 @@ impl ManagedSigningPeerListEntry {
             fingerprint: peer.fingerprint_b64.clone(),
             public_key: peer.public_key_b64.clone(),
             status: MANAGED_SIGNING_PEER_STATUS_TRUSTED.to_string(),
-            via_hub: peer.via_hub.clone(),
+            via_authority: peer.via_authority.clone(),
             added_unix_ms: peer.added_unix_ms,
             last_seen_unix_ms: peer.last_seen_unix_ms,
         }
@@ -259,7 +259,7 @@ mod tests {
             peer_ura: "easynet:///r/example/agent/alice.node".to_string(),
             fingerprint_b64: "fingerprint".to_string(),
             public_key_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
-            via_hub: Some("easynet:///r/example/authority".to_string()),
+            via_authority: Some("easynet:///r/example/authority".to_string()),
             added_unix_ms: 42,
             last_seen_unix_ms: 84,
         }
@@ -374,7 +374,7 @@ mod tests {
         );
         assert_eq!(wire["peers"][0]["status"], "trusted");
         assert_eq!(
-            wire["peers"][0]["via_hub"],
+            wire["peers"][0]["via_authority"],
             "easynet:///r/example/authority"
         );
         assert_eq!(wire["peers"][0]["added_unix_ms"], 42);
@@ -483,7 +483,7 @@ mod tests {
                 "fingerprint": "fingerprint",
                 "public_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
                 "status": "trusted",
-                "via_hub": "easynet:///r/example/authority",
+                "via_authority": "easynet:///r/example/authority",
                 "added_unix_ms": 42,
                 "last_seen_unix_ms": 84,
                 "public_key_b64": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="

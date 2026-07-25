@@ -111,7 +111,7 @@ class ManagedSigningTests(unittest.TestCase):
                         "peer_ura": peer_ura,
                         "fingerprint_b64": _b64(fingerprint),
                         "public_key_b64": _b64(peer_public_key),
-                        "via_hub": via_authority_ura,
+                        "via_authority": via_authority_ura,
                         "added_unix_ms": 1700000000200,
                         "last_seen_unix_ms": 1700000000300,
                     }
@@ -203,7 +203,7 @@ class ManagedSigningTests(unittest.TestCase):
                 "method": "inventory.peer_add",
                 "peer_ura": peer_ura,
                 "public_key_b64": _b64(peer_public_key),
-                "via_hub": via_authority_ura,
+                "via_authority": via_authority_ura,
             },
             {"method": "inventory.peer_list", "limit": 16},
         ]
@@ -227,7 +227,7 @@ class ManagedSigningTests(unittest.TestCase):
             "peer_ura": "easynet:///r/peer/agent/a",
             "fingerprint_b64": _b64(hashlib.sha256(peer_key_1).digest()),
             "public_key_b64": _b64(peer_key_1),
-            "via_hub": None,
+            "via_authority": None,
             "added_unix_ms": 10,
             "last_seen_unix_ms": 11,
         }
@@ -235,7 +235,7 @@ class ManagedSigningTests(unittest.TestCase):
             "peer_ura": "easynet:///r/peer/agent/b",
             "fingerprint_b64": _b64(hashlib.sha256(peer_key_2).digest()),
             "public_key_b64": _b64(peer_key_2),
-            "via_hub": None,
+            "via_authority": None,
             "added_unix_ms": 12,
             "last_seen_unix_ms": 13,
         }
@@ -450,7 +450,7 @@ class ManagedSigningTests(unittest.TestCase):
             "peer_ura": "easynet:///r/peer/agent/hash",
             "fingerprint_b64": _b64(bytes(32)),
             "public_key_b64": _b64(peer_key),
-            "via_hub": None,
+            "via_authority": None,
             "added_unix_ms": 10,
             "last_seen_unix_ms": 11,
         }
@@ -623,7 +623,7 @@ class ManagedSigningTests(unittest.TestCase):
             "peer_ura": "easynet:///r/peer/agent/fixture",
             "fingerprint_b64": _b64(fingerprint),
             "public_key_b64": _b64(public_key),
-            "via_hub": None,
+            "via_authority": None,
             "added_unix_ms": 1,
             "last_seen_unix_ms": 1,
         }

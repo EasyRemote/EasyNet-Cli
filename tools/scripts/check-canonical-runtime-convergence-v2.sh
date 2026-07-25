@@ -783,7 +783,7 @@ check_sdk_managed_signing_authority_route_contract() {
   local py_signing="$cli_root/sdk/python/easynet_sdk/managed_signing.py"
 
   if [[ -f "$go_signing" ]]; then
-    if rg -n 'ViaHubURA|via_hub_ura|peer via-hub URA' "$go_signing"; then
+    if rg -n 'ViaHubURA|via_hub_ura|peer via-hub URA|via_hub' "$go_signing"; then
       fail "Go SDK managed-signing public model preserves Hub route vocabulary"
     fi
     if ! rg -q 'ViaAuthorityURA string' "$go_signing"; then
@@ -792,23 +792,29 @@ check_sdk_managed_signing_authority_route_contract() {
     if ! rg -q '`json:"via_authority_ura,omitempty"`' "$go_signing"; then
       fail "Go SDK managed-signing peer projection must serialize via_authority_ura"
     fi
-    if ! rg -q 'payload\["via_hub"\] = viaAuthorityURA' "$go_signing"; then
-      fail "Go SDK managed-signing provider adapter must translate authority route to daemon wire via_hub"
+    if ! rg -q 'payload\["via_authority"\] = viaAuthorityURA' "$go_signing"; then
+      fail "Go SDK managed-signing provider adapter must send canonical daemon wire via_authority"
+    fi
+    if rg -n 'json:"via_hub"|ViaHub|via_hub' "$go_signing"; then
+      fail "Go SDK managed-signing provider adapter preserves legacy daemon wire via_hub"
     fi
   fi
 
   if [[ -f "$py_signing" ]]; then
-    if rg -n 'via_hub_ura|peer via-hub URA' "$py_signing"; then
+    if rg -n 'via_hub_ura|peer via-hub URA|via_hub' "$py_signing"; then
       fail "Python SDK managed-signing public model preserves Hub route vocabulary"
     fi
     if ! rg -q 'via_authority_ura: str \| None' "$py_signing"; then
       fail "Python SDK managed-signing peer model must expose via_authority_ura"
     fi
-    if ! rg -q 'payload\["via_hub"\] = _required_text' "$py_signing"; then
-      fail "Python SDK managed-signing provider adapter must translate authority route to daemon wire via_hub"
+    if ! rg -q 'payload\["via_authority"\] = _required_text' "$py_signing"; then
+      fail "Python SDK managed-signing provider adapter must send canonical daemon wire via_authority"
     fi
-    if ! rg -q 'via_authority_ura=_optional_projection_text\(raw, "via_hub"\)' "$py_signing"; then
-      fail "Python SDK managed-signing provider adapter must decode daemon wire via_hub into authority route"
+    if ! rg -q 'via_authority_ura=_optional_projection_text\(raw, "via_authority"\)' "$py_signing"; then
+      fail "Python SDK managed-signing provider adapter must decode daemon wire via_authority into authority route"
+    fi
+    if rg -n 'raw, "via_hub"|payload\["via_hub"\]|via_hub' "$py_signing"; then
+      fail "Python SDK managed-signing provider adapter preserves legacy daemon wire via_hub"
     fi
   fi
 
@@ -5675,7 +5681,7 @@ for field in (
     "pub fingerprint: String",
     "pub public_key: String",
     "pub status: String",
-    "pub via_hub: Option<String>",
+    "pub via_authority: Option<String>",
     "pub added_unix_ms: i64",
     "pub last_seen_unix_ms: i64",
 ):
@@ -18165,7 +18171,7 @@ pub struct ManagedSigningPeerListEntry {
     pub fingerprint: String,
     pub public_key: String,
     pub status: String,
-    pub via_hub: Option<String>,
+    pub via_authority: Option<String>,
     pub added_unix_ms: i64,
     pub last_seen_unix_ms: i64,
 }

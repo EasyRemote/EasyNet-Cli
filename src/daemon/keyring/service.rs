@@ -397,11 +397,11 @@ impl KeyServiceRuntime {
             KeyringRequest::InventoryPeerAdd {
                 peer_ura,
                 public_key_b64,
-                via_hub,
+                via_authority,
             } => {
                 let mut vault = operational_vault!();
                 match vault.mutate_and_seal(|vault| {
-                    vault.inventory_peer_add(peer_ura, public_key_b64, via_hub)
+                    vault.inventory_peer_add(peer_ura, public_key_b64, via_authority)
                 }) {
                     Ok(added) => KeyringResponse::InventoryPeerAdded { added },
                     Err(error) => vault_error_to_response(error),
@@ -1065,7 +1065,7 @@ mod tests {
         let add = |public_key_b64: String| KeyringRequest::InventoryPeerAdd {
             peer_ura: peer_ura.into(),
             public_key_b64,
-            via_hub: None,
+            via_authority: None,
         };
         assert!(matches!(
             runtime.dispatch(add(first_key.clone())).await,

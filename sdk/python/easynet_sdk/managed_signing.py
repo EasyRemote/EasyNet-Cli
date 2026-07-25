@@ -317,7 +317,7 @@ class ManagedSigningClient:
             "public_key_b64": base64.b64encode(registration.public_key).decode("ascii"),
         }
         if registration.via_authority_ura is not None:
-            payload["via_hub"] = _required_text(
+            payload["via_authority"] = _required_text(
                 "peer via-authority URA", registration.via_authority_ura
             )
         response = self._client.call(payload)
@@ -621,7 +621,7 @@ def _decode_peer(raw: object) -> ManagedSigningPeer:
             "peer_ura",
             "fingerprint_b64",
             "public_key_b64",
-            "via_hub",
+            "via_authority",
             "added_unix_ms",
             "last_seen_unix_ms",
         ),
@@ -647,7 +647,7 @@ def _decode_peer(raw: object) -> ManagedSigningPeer:
         peer_ura=_projection_text(raw, "peer_ura"),
         fingerprint=fingerprint,
         public_key=public_key,
-        via_authority_ura=_optional_projection_text(raw, "via_hub"),
+        via_authority_ura=_optional_projection_text(raw, "via_authority"),
         added_unix_ms=added_unix_ms,
         last_seen_unix_ms=last_seen_unix_ms,
     )

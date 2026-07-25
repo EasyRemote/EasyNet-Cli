@@ -950,12 +950,12 @@ impl KeyringClient {
         &self,
         peer_ura: &str,
         public_key_b64: &str,
-        via_hub: Option<String>,
+        via_authority: Option<String>,
     ) -> Result<bool, SelfIdentityError> {
         match self.rpc(&KeyringRequest::InventoryPeerAdd {
             peer_ura: peer_ura.to_string(),
             public_key_b64: public_key_b64.to_string(),
-            via_hub,
+            via_authority,
         })? {
             KeyringResponse::InventoryPeerAdded { added } => Ok(added),
             KeyringResponse::Error { kind, message } => {

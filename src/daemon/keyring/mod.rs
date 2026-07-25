@@ -283,7 +283,7 @@ pub struct ManagedPeer {
     pub peer_ura: String,
     pub fingerprint_b64: String,
     pub public_key_b64: String,
-    pub via_hub: Option<String>,
+    pub via_authority: Option<String>,
     pub added_unix_ms: i64,
     pub last_seen_unix_ms: i64,
 }
@@ -339,11 +339,12 @@ impl ManagedSigningInventory {
         }
         for peer in &self.peers {
             validate_persisted_ura(&peer.peer_ura, "managed peer URA")?;
-            if let Some(via_hub) = peer.via_hub.as_deref() {
-                let via_hub = parse_persisted_ura(via_hub, "managed peer hub URA")?;
-                if via_hub.kind() != crate::core::ura::URAKind::Authority {
+            if let Some(via_authority) = peer.via_authority.as_deref() {
+                let via_authority =
+                    parse_persisted_ura(via_authority, "managed peer authority URA")?;
+                if via_authority.kind() != crate::core::ura::URAKind::Authority {
                     return Err(VaultError::Corrupt(
-                        "managed peer hub URA must be an Authority URA".into(),
+                        "managed peer authority URA must be an Authority URA".into(),
                     ));
                 }
             }
@@ -1177,12 +1178,12 @@ impl Vault {
         &mut self,
         peer_ura: String,
         public_key_b64: String,
-        via_hub: Option<String>,
+        via_authority: Option<String>,
     ) -> Result<bool, VaultError> {
         use base64::Engine;
         let peer_ura = validate_managed_ura(&peer_ura, "managed peer URA")?;
-        let via_hub = via_hub
-            .map(|ura| validate_hub_ura(&ura, "managed peer via-hub URA"))
+        let via_authority = via_authority
+            .map(|ura| validate_authority_ura(&ura, "managed peer via-authority URA"))
             .transpose()?;
         let public_key = base64::engine::general_purpose::STANDARD
             .decode(&public_key_b64)
@@ -1208,7 +1209,7 @@ impl Vault {
                     peer.peer_ura
                 )));
             }
-            peer.via_hub = via_hub;
+            peer.via_authority = via_authority;
             peer.last_seen_unix_ms = now;
             return Ok(false);
         }
@@ -1216,7 +1217,7 @@ impl Vault {
             peer_ura,
             fingerprint_b64,
             public_key_b64,
-            via_hub,
+            via_authority,
             added_unix_ms: now,
             last_seen_unix_ms: now,
         };
@@ -1400,12 +1401,14 @@ fn validate_persisted_ura(value: &str, field: &str) -> Result<(), VaultError> {
     parse_persisted_ura(value, field).map(|_| ())
 }
 
-fn validate_hub_ura(value: &str, field: &str) -> Result<String, VaultError> {
+fn validate_authority_ura(value: &str, field: &str) -> Result<String, VaultError> {
     let value = validate_managed_ura(value, field)?;
     let parsed = crate::core::ura::parse_ura(&value)
         .map_err(|error| VaultError::Policy(format!("{field} is not a canonical URA: {error}")))?;
     if parsed.kind != crate::core::ura::URAKind::Authority {
-        return Err(VaultError::Policy(format!("{field} must be a Hub URA")));
+        return Err(VaultError::Policy(format!(
+            "{field} must be an Authority URA"
+        )));
     }
     Ok(value)
 }
@@ -1597,7 +1600,7 @@ pub(crate) enum KeyringRequest {
         peer_ura: String,
         public_key_b64: String,
         #[serde(default)]
-        via_hub: Option<String>,
+        via_authority: Option<String>,
     },
     /// List trusted peer public projections.
     #[serde(rename = "inventory.peer_list")]
@@ -1786,10 +1789,10 @@ mod tests {
         vault.put(&hub_endpoint, fresh_seed_hex()).unwrap();
 
         let pubkey_via_device = vault.derive_pubkey(&device_ura).unwrap();
-        let pubkey_via_hub = vault.derive_pubkey(&hub_endpoint).unwrap();
+        let pubkey_via_authority = vault.derive_pubkey(&hub_endpoint).unwrap();
         assert_ne!(
             pubkey_via_device.to_bytes(),
-            pubkey_via_hub.to_bytes(),
+            pubkey_via_authority.to_bytes(),
             "Device and Hub authority must never share a keypair"
         );
     }
@@ -2378,7 +2381,7 @@ mod tests {
         ));
 
         write_encrypted_shape(
-            br#"{"entries":[],"managed_signing":{"keys":[],"peers":[{"peer_ura":"easynet:///r/example/user/00000000-0000-0000-0000-000000000000","fingerprint_b64":"fingerprint","public_key_b64":"public","via_hub":null,"added_unix_ms":1,"last_seen_unix_ms":1}]}}"#,
+            br#"{"entries":[],"managed_signing":{"keys":[],"peers":[{"peer_ura":"easynet:///r/example/user/00000000-0000-0000-0000-000000000000","fingerprint_b64":"fingerprint","public_key_b64":"public","via_authority":null,"added_unix_ms":1,"last_seen_unix_ms":1}]}}"#,
             KeyringFile::CURRENT_VERSION,
         );
         assert!(matches!(

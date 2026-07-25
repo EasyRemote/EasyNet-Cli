@@ -62,7 +62,7 @@ pub trait ManagedSigningProvider: Send + Sync {
         &self,
         peer_ura: &str,
         public_key_b64: &str,
-        via_hub: Option<String>,
+        via_authority: Option<String>,
     ) -> Result<bool>;
     fn peer_list(&self) -> Result<Vec<ManagedPeer>>;
 }
@@ -114,9 +114,9 @@ impl<T: ManagedSigningProvider + ?Sized> ManagedSigningProvider for Arc<T> {
         &self,
         peer_ura: &str,
         public_key_b64: &str,
-        via_hub: Option<String>,
+        via_authority: Option<String>,
     ) -> Result<bool> {
-        (**self).peer_add(peer_ura, public_key_b64, via_hub)
+        (**self).peer_add(peer_ura, public_key_b64, via_authority)
     }
     fn peer_list(&self) -> Result<Vec<ManagedPeer>> {
         (**self).peer_list()
@@ -160,9 +160,9 @@ impl ManagedSigningProvider for KeyringClient {
         &self,
         peer_ura: &str,
         public_key_b64: &str,
-        via_hub: Option<String>,
+        via_authority: Option<String>,
     ) -> Result<bool> {
-        Ok(self.inventory_peer_add(peer_ura, public_key_b64, via_hub)?)
+        Ok(self.inventory_peer_add(peer_ura, public_key_b64, via_authority)?)
     }
     fn peer_list(&self) -> Result<Vec<ManagedPeer>> {
         Ok(self.inventory_peer_list()?)

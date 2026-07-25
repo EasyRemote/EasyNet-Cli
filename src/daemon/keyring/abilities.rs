@@ -282,11 +282,11 @@ pub fn handle_peer_add(provider: &dyn ManagedSigningProvider, args: Value) -> Re
             return Err(anyhow!("peer fingerprint does not match public key"));
         }
     }
-    let via_hub = args
-        .get("via_hub")
+    let via_authority = args
+        .get("via_authority")
         .and_then(|v| v.as_str())
         .map(str::to_string);
-    let added = provider.peer_add(peer_ura, public_key, via_hub)?;
+    let added = provider.peer_add(peer_ura, public_key, via_authority)?;
     Ok(serde_json::to_value(
         ManagedSigningPeerAddResponse::from_added(added),
     )?)
@@ -471,12 +471,12 @@ mod tests {
             &self,
             peer_ura: &str,
             public_key_b64: &str,
-            via_hub: Option<String>,
+            via_authority: Option<String>,
         ) -> Result<bool> {
             Ok(self.0.lock().unwrap().inventory_peer_add(
                 peer_ura.to_string(),
                 public_key_b64.to_string(),
-                via_hub,
+                via_authority,
             )?)
         }
         fn peer_list(&self) -> Result<Vec<ManagedPeer>> {
@@ -557,7 +557,7 @@ mod tests {
             json!({
                 "peer_ura": "easynet:///r/alice.localhost/agent/alice.node",
                 "public_key": pk,
-                "via_hub": "easynet:///r/alice.localhost/authority"
+                "via_authority": "easynet:///r/alice.localhost/authority"
             }),
         )
         .unwrap();

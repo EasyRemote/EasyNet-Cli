@@ -535,7 +535,7 @@ func (c *ManagedSigningClient) AddPeer(registration ManagedSigningPeerRegistrati
 		if err != nil {
 			return false, err
 		}
-		payload["via_hub"] = viaAuthorityURA
+		payload["via_authority"] = viaAuthorityURA
 	}
 	response, err := c.service.call(payload)
 	if err != nil {
@@ -630,7 +630,7 @@ type managedSigningPeerWire struct {
 	PeerURA        string  `json:"peer_ura"`
 	FingerprintB64 string  `json:"fingerprint_b64"`
 	PublicKeyB64   string  `json:"public_key_b64"`
-	ViaHub         *string `json:"via_hub"`
+	ViaAuthority   *string `json:"via_authority"`
 	AddedUnixMS    *int64  `json:"added_unix_ms"`
 	LastSeenUnixMS *int64  `json:"last_seen_unix_ms"`
 }
@@ -798,7 +798,7 @@ func decodeManagedSigningPeersPageResponse(
 		if !bytes.Equal(fingerprint, expectedFingerprint[:]) {
 			return ManagedSigningPeerPage{}, invalidDaemonKeyServicePayload("daemon key service returned a peer fingerprint that does not match SHA-256(public_key)", nil)
 		}
-		viaAuthorityURA, err := optionalManagedSigningText("via_hub", wire.ViaHub)
+		viaAuthorityURA, err := optionalManagedSigningText("via_authority", wire.ViaAuthority)
 		if err != nil {
 			return ManagedSigningPeerPage{}, err
 		}

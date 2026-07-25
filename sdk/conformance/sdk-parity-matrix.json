@@ -129116,7 +129116,7 @@
         },
         {
           "item": "ManagedSigningClient",
-          "sha256": "b1191f7612b354ce66492867e7e40f33767304b3da5f8ecc4cc4682a8646fb65"
+          "sha256": "97f41d98bf093b45cacb44600916698eba032f2db5138d18663847b3cb5dc26f"
         },
         {
           "item": "ManagedSigningCreateRequest",
@@ -129184,7 +129184,7 @@
         },
         {
           "item": "ManagedSigningClient.add_peer",
-          "sha256": "b8adcbf370db6ccdcfd251d5c36a83e21e9cda4df90a04af0641b164047ef602"
+          "sha256": "083502670edd47d5ad727d7baa3f07bbe0bebeb1a582c6cceaa92d8618f948b1"
         },
         {
           "item": "ManagedSigningClient.bind_subject",
@@ -129395,7 +129395,7 @@
             },
             {
               "item": "ManagedSigningClient",
-              "sha256": "b1191f7612b354ce66492867e7e40f33767304b3da5f8ecc4cc4682a8646fb65"
+              "sha256": "97f41d98bf093b45cacb44600916698eba032f2db5138d18663847b3cb5dc26f"
             },
             {
               "item": "ManagedSigningCreateRequest",
@@ -129463,7 +129463,7 @@
             },
             {
               "item": "ManagedSigningClient.add_peer",
-              "sha256": "b8adcbf370db6ccdcfd251d5c36a83e21e9cda4df90a04af0641b164047ef602"
+              "sha256": "083502670edd47d5ad727d7baa3f07bbe0bebeb1a582c6cceaa92d8618f948b1"
             },
             {
               "item": "ManagedSigningClient.bind_subject",
@@ -129674,7 +129674,7 @@
             },
             {
               "item": "ManagedSigningClient",
-              "sha256": "b1191f7612b354ce66492867e7e40f33767304b3da5f8ecc4cc4682a8646fb65"
+              "sha256": "97f41d98bf093b45cacb44600916698eba032f2db5138d18663847b3cb5dc26f"
             },
             {
               "item": "ManagedSigningCreateRequest",
@@ -129742,7 +129742,7 @@
             },
             {
               "item": "ManagedSigningClient.add_peer",
-              "sha256": "b8adcbf370db6ccdcfd251d5c36a83e21e9cda4df90a04af0641b164047ef602"
+              "sha256": "083502670edd47d5ad727d7baa3f07bbe0bebeb1a582c6cceaa92d8618f948b1"
             },
             {
               "item": "ManagedSigningClient.bind_subject",
@@ -129953,7 +129953,7 @@
             },
             {
               "item": "ManagedSigningClient",
-              "sha256": "b1191f7612b354ce66492867e7e40f33767304b3da5f8ecc4cc4682a8646fb65"
+              "sha256": "97f41d98bf093b45cacb44600916698eba032f2db5138d18663847b3cb5dc26f"
             },
             {
               "item": "ManagedSigningCreateRequest",
@@ -130021,7 +130021,7 @@
             },
             {
               "item": "ManagedSigningClient.add_peer",
-              "sha256": "b8adcbf370db6ccdcfd251d5c36a83e21e9cda4df90a04af0641b164047ef602"
+              "sha256": "083502670edd47d5ad727d7baa3f07bbe0bebeb1a582c6cceaa92d8618f948b1"
             },
             {
               "item": "ManagedSigningClient.bind_subject",
@@ -130232,7 +130232,7 @@
             },
             {
               "item": "ManagedSigningClient",
-              "sha256": "b1191f7612b354ce66492867e7e40f33767304b3da5f8ecc4cc4682a8646fb65"
+              "sha256": "97f41d98bf093b45cacb44600916698eba032f2db5138d18663847b3cb5dc26f"
             },
             {
               "item": "ManagedSigningCreateRequest",
@@ -130300,7 +130300,7 @@
             },
             {
               "item": "ManagedSigningClient.add_peer",
-              "sha256": "b8adcbf370db6ccdcfd251d5c36a83e21e9cda4df90a04af0641b164047ef602"
+              "sha256": "083502670edd47d5ad727d7baa3f07bbe0bebeb1a582c6cceaa92d8618f948b1"
             },
             {
               "item": "ManagedSigningClient.bind_subject",
@@ -130511,7 +130511,7 @@
             },
             {
               "item": "ManagedSigningClient",
-              "sha256": "b1191f7612b354ce66492867e7e40f33767304b3da5f8ecc4cc4682a8646fb65"
+              "sha256": "97f41d98bf093b45cacb44600916698eba032f2db5138d18663847b3cb5dc26f"
             },
             {
               "item": "ManagedSigningCreateRequest",
@@ -130579,7 +130579,7 @@
             },
             {
               "item": "ManagedSigningClient.add_peer",
-              "sha256": "b8adcbf370db6ccdcfd251d5c36a83e21e9cda4df90a04af0641b164047ef602"
+              "sha256": "083502670edd47d5ad727d7baa3f07bbe0bebeb1a582c6cceaa92d8618f948b1"
             },
             {
               "item": "ManagedSigningClient.bind_subject",
@@ -130790,7 +130790,7 @@
             },
             {
               "item": "ManagedSigningClient",
-              "sha256": "b1191f7612b354ce66492867e7e40f33767304b3da5f8ecc4cc4682a8646fb65"
+              "sha256": "97f41d98bf093b45cacb44600916698eba032f2db5138d18663847b3cb5dc26f"
             },
             {
               "item": "ManagedSigningCreateRequest",
@@ -130858,7 +130858,7 @@
             },
             {
               "item": "ManagedSigningClient.add_peer",
-              "sha256": "b8adcbf370db6ccdcfd251d5c36a83e21e9cda4df90a04af0641b164047ef602"
+              "sha256": "083502670edd47d5ad727d7baa3f07bbe0bebeb1a582c6cceaa92d8618f948b1"
             },
             {
               "item": "ManagedSigningClient.bind_subject",
@@ -131069,7 +131069,7 @@
             },
             {
               "item": "ManagedSigningClient",
-              "sha256": "b1191f7612b354ce66492867e7e40f33767304b3da5f8ecc4cc4682a8646fb65"
+              "sha256": "97f41d98bf093b45cacb44600916698eba032f2db5138d18663847b3cb5dc26f"
             },
             {
               "item": "ManagedSigningCreateRequest",
@@ -131137,7 +131137,7 @@
             },
             {
               "item": "ManagedSigningClient.add_peer",
-              "sha256": "b8adcbf370db6ccdcfd251d5c36a83e21e9cda4df90a04af0641b164047ef602"
+              "sha256": "083502670edd47d5ad727d7baa3f07bbe0bebeb1a582c6cceaa92d8618f948b1"
             },
             {
               "item": "ManagedSigningClient.bind_subject",

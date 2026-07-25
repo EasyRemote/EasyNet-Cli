@@ -89,7 +89,7 @@ func TestManagedSigningClientConformsToDaemonKeyServiceProtocol(t *testing.T) {
 		case 10:
 			assertManagedSigningRequest(t, request, map[string]any{
 				"method": "inventory.peer_add", "peer_ura": peerURA,
-				"public_key_b64": base64.StdEncoding.EncodeToString(peerPublicKey), "via_hub": viaAuthorityURA,
+				"public_key_b64": base64.StdEncoding.EncodeToString(peerPublicKey), "via_authority": viaAuthorityURA,
 			})
 			response = map[string]any{"result": "inventory_peer_added", "added": true}
 		case 11:
@@ -98,7 +98,7 @@ func TestManagedSigningClientConformsToDaemonKeyServiceProtocol(t *testing.T) {
 			})
 			response = map[string]any{"result": "inventory_peers", "peers": []any{map[string]any{
 				"peer_ura": peerURA, "fingerprint_b64": base64.StdEncoding.EncodeToString(fingerprint[:]),
-				"public_key_b64": base64.StdEncoding.EncodeToString(peerPublicKey), "via_hub": viaAuthorityURA,
+				"public_key_b64": base64.StdEncoding.EncodeToString(peerPublicKey), "via_authority": viaAuthorityURA,
 				"added_unix_ms": int64(1700000000200), "last_seen_unix_ms": int64(1700000000300),
 			}}, "next_cursor": nil}
 			close(done)
@@ -602,7 +602,7 @@ func managedSigningPeerFixture(peerURA string, publicKey ed25519.PublicKey) map[
 	fingerprint := sha256.Sum256(publicKey)
 	return map[string]any{
 		"peer_ura": peerURA, "fingerprint_b64": base64.StdEncoding.EncodeToString(fingerprint[:]),
-		"public_key_b64": base64.StdEncoding.EncodeToString(publicKey), "via_hub": nil,
+		"public_key_b64": base64.StdEncoding.EncodeToString(publicKey), "via_authority": nil,
 		"added_unix_ms": int64(1700000000200), "last_seen_unix_ms": int64(1700000000300),
 	}
 }
