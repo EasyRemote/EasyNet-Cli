@@ -7046,6 +7046,44 @@ if description is None or "Returns Axon observe.health status fields." not in de
 PY
 }
 
+check_ability_health_store_recovery_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local health="$cli_root/src/daemon/ability/health.rs"
+  [[ -f "$health" ]] || fail "ability health monitor source is missing: ${health#$cli_root/}"
+
+  "$PYTHON_BIN" - "$health" <<'PY'
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+production = text.split("\n// ── Tests", 1)[0]
+
+for retired in (
+    "store().read().ok()?.get",
+    "if let Ok(mut map) = store().write()",
+):
+    if retired in production:
+        raise SystemExit(f"ability_health_store_recovery:retired_silent_lock_fallback:{retired}")
+for required in (
+    "fn snapshot_from_store",
+    "fn upsert_into_store",
+    "fn retain_live_in_store",
+    "poisoned.into_inner()",
+    "store_poison_recovered",
+):
+    if required not in production:
+        raise SystemExit(f"ability_health_store_recovery:missing:{required}")
+for required_test in (
+    "snapshot_recovers_poisoned_store_read_without_dropping_record",
+    "upsert_recovers_poisoned_store_write_without_losing_record",
+    "retain_live_recovers_poisoned_store_write_without_preserving_dead_records",
+    "poison ability-health store for recovery test",
+):
+    if required_test not in text:
+        raise SystemExit(f"ability_health_store_recovery:missing_test:{required_test}")
+PY
+}
+
 check_admission_owner_credentials_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local policy="$cli_root/src/daemon/invocation/admission/policy_gate.rs"
@@ -22376,6 +22414,7 @@ EOF
   check_device_trust_sync_caller_classification_contract
   check_product_e2e_invocation_history_exact_scope_contract
   check_observe_health_contract_projection_contract
+  check_ability_health_store_recovery_contract
   check_admission_owner_credentials_contract
   check_shared_local_device_owner_projection_contract
   check_node_session_authority_subject_contract
@@ -22604,6 +22643,7 @@ check_runtime_trust_user_key_write_scope_contract
 check_device_trust_sync_caller_classification_contract
 check_product_e2e_invocation_history_exact_scope_contract
 check_observe_health_contract_projection_contract
+check_ability_health_store_recovery_contract
 check_admission_owner_credentials_contract
 check_shared_local_device_owner_projection_contract
 check_node_session_authority_subject_contract
