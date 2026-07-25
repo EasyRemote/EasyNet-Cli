@@ -833,8 +833,11 @@ check_sdk_runtime_admin_authority_session_contract() {
     if ! rg -q '`json:"authority_ura,omitempty"`' "$go_admin"; then
       fail "Go SDK runtime-admin session projection must serialize authority_ura"
     fi
-    if ! rg -q 'AuthorityURA:\s+runtimeAdminString\(row, "hub_ura"\)' "$go_admin"; then
-      fail "Go SDK runtime-admin adapter must translate daemon wire hub_ura to AuthorityURA"
+    if ! rg -q 'AuthorityURA:\s+runtimeAdminString\(row, "authority_ura"\)' "$go_admin"; then
+      fail "Go SDK runtime-admin adapter must decode canonical daemon wire authority_ura"
+    fi
+    if rg -n 'runtimeAdminString\(row, "hub_ura"\)' "$go_admin"; then
+      fail "Go SDK runtime-admin adapter preserves legacy daemon wire hub_ura fallback"
     fi
   fi
 
@@ -845,8 +848,11 @@ check_sdk_runtime_admin_authority_session_contract() {
     if ! rg -q 'authority_ura: str = ""' "$py_admin"; then
       fail "Python SDK runtime-admin session projection must expose authority_ura"
     fi
-    if ! rg -q 'authority_ura=_admin_string\(row.get\("hub_ura"\)\)' "$py_admin"; then
-      fail "Python SDK runtime-admin adapter must translate daemon wire hub_ura to authority_ura"
+    if ! rg -q 'authority_ura=_admin_string\(row.get\("authority_ura"\)\)' "$py_admin"; then
+      fail "Python SDK runtime-admin adapter must decode canonical daemon wire authority_ura"
+    fi
+    if rg -n 'row.get\("hub_ura"\)' "$py_admin"; then
+      fail "Python SDK runtime-admin adapter preserves legacy daemon wire hub_ura fallback"
     fi
   fi
 

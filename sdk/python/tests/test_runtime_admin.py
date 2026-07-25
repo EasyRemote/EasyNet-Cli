@@ -192,7 +192,7 @@ def test_runtime_admin_ability_client_lists_sessions() -> None:
                 "kind": "terminal",
                 "session_id": "session-a",
                 "device_ura": "easynet:///r/example/device/laptop",
-                "hub_ura": "easynet:///r/example/authority",
+                "authority_ura": "easynet:///r/example/authority",
                 "state": "active",
                 "session_kind": "pty",
                 "created_unix_ms": 1714492800000,

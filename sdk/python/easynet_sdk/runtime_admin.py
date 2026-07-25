@@ -226,7 +226,7 @@ def _runtime_session_page(output: Mapping[str, object]) -> RuntimeSessionPage:
                 kind=_admin_string(row.get("kind")),
                 session_id=_admin_string(row.get("session_id")),
                 device_ura=_admin_string(row.get("device_ura")),
-                authority_ura=_admin_string(row.get("hub_ura")),
+                authority_ura=_admin_string(row.get("authority_ura")),
                 state=_admin_string(row.get("state")),
                 session_kind=_admin_string(row.get("session_kind")),
                 created_unix_ms=_admin_int(row.get("created_unix_ms")),

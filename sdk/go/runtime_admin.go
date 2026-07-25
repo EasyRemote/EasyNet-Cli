@@ -232,7 +232,7 @@ func runtimeSessionPage(output map[string]any) (RuntimeSessionPage, error) {
 			Kind:          runtimeAdminString(row, "kind"),
 			SessionID:     runtimeAdminString(row, "session_id"),
 			DeviceURA:     runtimeAdminString(row, "device_ura"),
-			AuthorityURA:  runtimeAdminString(row, "hub_ura"),
+			AuthorityURA:  runtimeAdminString(row, "authority_ura"),
 			State:         runtimeAdminString(row, "state"),
 			SessionKind:   runtimeAdminString(row, "session_kind"),
 			CreatedUnixMS: runtimeAdminInt64(row["created_unix_ms"]),
