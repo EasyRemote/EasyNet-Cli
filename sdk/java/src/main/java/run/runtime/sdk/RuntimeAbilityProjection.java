@@ -76,8 +76,7 @@ final class RuntimeAbilityProjection {
       return "device." + rest.split("[/?#]", 2)[0];
     }
     if (clean.endsWith("/authority") && clean.startsWith(REALM_PREFIX)) {
-      return "hub."
-          + clean.substring(REALM_PREFIX.length(), clean.length() - "/authority".length());
+      return "authority";
     }
     return "";
   }

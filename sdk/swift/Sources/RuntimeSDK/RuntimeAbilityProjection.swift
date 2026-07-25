@@ -68,8 +68,6 @@ struct RuntimeAbilityProjection: Sendable, Equatable {
         guard clean.hasSuffix("/authority"), clean.hasPrefix(realmPrefix) else {
             return ""
         }
-        let start = clean.index(clean.startIndex, offsetBy: realmPrefix.count)
-        let end = clean.index(clean.endIndex, offsetBy: -"/authority".count)
-        return "hub.\(String(clean[start..<end]))"
+        return "authority"
     }
 }

@@ -13324,6 +13324,8 @@ required_projection = {
 for needle, label in required_projection.items():
     if needle not in projection:
         raise SystemExit(f"java_invocation_authority_binding:{label}")
+if "hub." in projection:
+    raise SystemExit("java_invocation_authority_binding:authority_projection_lowers_to_hub")
 
 required_support = {
     "static String authorityMetadataValue": "authority_metadata_value_missing",
@@ -13354,6 +13356,8 @@ required_tests = {
     "private static void runtimeAbilityProjectionIsCanonical()": "runtime_ability_projection_test_body_missing",
     '"device.dev-a.observe.health"': "runtime_ability_wire_scope_test_missing",
     '"easynet:///r/example/ability/device.dev-a.observe.health"': "runtime_ability_ura_scope_test_missing",
+    '"easynet:///r/example/ability/authority.namespace.resolve@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read"': "authority_projection_descriptor_test_missing",
+    '"namespace.resolve"': "authority_projection_scope_test_missing",
     '"descriptor_ref must contain a canonical Ability URA"': "malformed_descriptor_test_missing",
     "not-a-ura/resource/user.alice/runtime-state/read": "path_substring_subject_regression_missing",
     "easynet:///r/example/device/dev-a/resource/user.alice/runtime-state/read": "nested_resource_path_subject_regression_missing",
@@ -13491,6 +13495,8 @@ required_projection = {
 for needle, label in required_projection.items():
     if needle not in projection:
         raise SystemExit(f"swift_invocation_authority_binding:{label}")
+if "hub." in projection:
+    raise SystemExit("swift_invocation_authority_binding:authority_projection_lowers_to_hub")
 
 required_tests = {
     "testAuthorityMetadataIsTypedAndMutuallyExclusive": "test_body_missing",
@@ -13502,6 +13508,8 @@ required_tests = {
     "testRuntimeAbilityProjectionIsCanonical": "runtime_ability_projection_test_missing",
     '"device.dev-a.observe.health"': "runtime_ability_wire_scope_test_missing",
     '"easynet:///r/example/ability/device.dev-a.observe.health"': "runtime_ability_ura_scope_test_missing",
+    '"easynet:///r/example/ability/authority.namespace.resolve@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read"': "authority_projection_descriptor_test_missing",
+    '"namespace.resolve"': "authority_projection_scope_test_missing",
     '"descriptor_ref must contain a canonical Ability URA"': "malformed_descriptor_test_missing",
     "not-a-ura/resource/user.alice/runtime-state/read": "path_substring_subject_regression_missing",
     "easynet:///r/example/device/dev-a/resource/user.alice/runtime-state/read": "nested_resource_path_subject_regression_missing",

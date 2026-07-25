@@ -509,6 +509,25 @@ final class RuntimeCoreSeamTests: XCTestCase {
                 .inspect()
         }
 
+        let authoritySubject = "easynet:///r/example/resource/user.alice/invoke/namespace.resolve"
+        let authorityProof = try DelegationProof.fromMetadata(authorityMetadataValue([
+            "issuer_ura": "easynet:///r/example/user/alice",
+            "subject_ura": authoritySubject,
+            "caller_ura": caller,
+            "audience": "easynet:///r/example/authority",
+            "scopes": ["namespace.resolve"],
+            "issued_at_ms": 10,
+            "expires_at_ms": 20,
+        ]))
+        _ = try completeBuilder()
+            .withCalleeURA("easynet:///r/example/authority")
+            .withDescriptorRef(
+                "easynet:///r/example/ability/authority.namespace.resolve@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read"
+            )
+            .withSubjectURA(authoritySubject)
+            .withAuthorityMetadata(authorityProof.metadata())
+            .inspect()
+
         let proof = try DelegationProof.fromMetadata(delegationMetadataValue(scopes: ["observe.health"]))
         expectSyncSDKError(.invalidArgument, "descriptor_ref must contain a canonical Ability URA") {
             _ = try completeBuilder()

@@ -647,6 +647,33 @@ public final class RuntimeCoreSeamTest {
       completeBuilder().authorityMetadata(proof.metadata()).inspect();
     }
 
+    String authoritySubject = "easynet:///r/example/resource/user.alice/invoke/namespace.resolve";
+    DelegationProof authorityProof =
+        DelegationProof.fromMetadata(
+            authorityMetadataValue(
+                Map.of(
+                    "issuer_ura",
+                    "easynet:///r/example/user/alice",
+                    "subject_ura",
+                    authoritySubject,
+                    "caller_ura",
+                    CALLER,
+                    "audience",
+                    "easynet:///r/example/authority",
+                    "scopes",
+                    List.of("namespace.resolve"),
+                    "issued_at_ms",
+                    10,
+                    "expires_at_ms",
+                    20)));
+    completeBuilder()
+        .callee("easynet:///r/example/authority")
+        .descriptor(
+            "easynet:///r/example/ability/authority.namespace.resolve@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read")
+        .subject(authoritySubject)
+        .authorityMetadata(authorityProof.metadata())
+        .inspect();
+
     DelegationProof proof =
         DelegationProof.fromMetadata(delegationMetadataValue(List.of("observe.health")));
     expectSDKError(
