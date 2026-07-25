@@ -182290,7 +182290,7 @@
         },
         {
           "item": "RuntimeSession",
-          "sha256": "de49310e436310f4d43f93ff1c07ffa4f3a78685089ce3b59cb0950467ec7164"
+          "sha256": "67e51089139d883cee8a27e1dbe35b85d79a95f336898627a44f8287e35f1e9b"
         },
         {
           "item": "RuntimeSessionListRequest",
@@ -182405,16 +182405,12 @@
           "sha256": "7c456ebf1ff4b45467134a8b48eaa86e57748c46401a4ba16a61a43602166cb8"
         },
         {
-          "item": "RuntimeSession.authority_ura",
-          "sha256": "5d177ab986c21b1d1ec10bab3ee27f65882162b1511e1e737cde1aa0984a7f18"
+          "item": "RuntimeSession.control_authority_ura",
+          "sha256": "d8c97c6944731b86b0635b6ff0145c37f90c58df23000e1ab71cf2444a0d99b5"
         },
         {
           "item": "RuntimeSession.created_unix_ms",
           "sha256": "e237f5aa029bc3d2d0ba43b729146563494c5920afbc926e9309e5c1434d2034"
-        },
-        {
-          "item": "RuntimeSession.device_ura",
-          "sha256": "cd57fa27f36faaa15f273c76e3335935fb0bcf8dbe91e33beecfca9acc87250a"
         },
         {
           "item": "RuntimeSession.expires_unix_ms",
@@ -182427,6 +182423,10 @@
         {
           "item": "RuntimeSession.metadata",
           "sha256": "0ad0e67ef1c600046ee4194ff5d839dc18d771ca6ac839b7ea49a758f4bf40d7"
+        },
+        {
+          "item": "RuntimeSession.runtime_host_ura",
+          "sha256": "287fb126456a7128cbca73251acf719a61184550c0877dad35eafd5baa10f2c4"
         },
         {
           "item": "RuntimeSession.session_id",
@@ -182493,7 +182493,7 @@
             },
             {
               "item": "RuntimeSession",
-              "sha256": "de49310e436310f4d43f93ff1c07ffa4f3a78685089ce3b59cb0950467ec7164"
+              "sha256": "67e51089139d883cee8a27e1dbe35b85d79a95f336898627a44f8287e35f1e9b"
             },
             {
               "item": "RuntimeSessionListRequest",
@@ -182608,16 +182608,12 @@
               "sha256": "7c456ebf1ff4b45467134a8b48eaa86e57748c46401a4ba16a61a43602166cb8"
             },
             {
-              "item": "RuntimeSession.authority_ura",
-              "sha256": "5d177ab986c21b1d1ec10bab3ee27f65882162b1511e1e737cde1aa0984a7f18"
+              "item": "RuntimeSession.control_authority_ura",
+              "sha256": "d8c97c6944731b86b0635b6ff0145c37f90c58df23000e1ab71cf2444a0d99b5"
             },
             {
               "item": "RuntimeSession.created_unix_ms",
               "sha256": "e237f5aa029bc3d2d0ba43b729146563494c5920afbc926e9309e5c1434d2034"
-            },
-            {
-              "item": "RuntimeSession.device_ura",
-              "sha256": "cd57fa27f36faaa15f273c76e3335935fb0bcf8dbe91e33beecfca9acc87250a"
             },
             {
               "item": "RuntimeSession.expires_unix_ms",
@@ -182630,6 +182626,10 @@
             {
               "item": "RuntimeSession.metadata",
               "sha256": "0ad0e67ef1c600046ee4194ff5d839dc18d771ca6ac839b7ea49a758f4bf40d7"
+            },
+            {
+              "item": "RuntimeSession.runtime_host_ura",
+              "sha256": "287fb126456a7128cbca73251acf719a61184550c0877dad35eafd5baa10f2c4"
             },
             {
               "item": "RuntimeSession.session_id",
@@ -182696,7 +182696,7 @@
             },
             {
               "item": "RuntimeSession",
-              "sha256": "de49310e436310f4d43f93ff1c07ffa4f3a78685089ce3b59cb0950467ec7164"
+              "sha256": "67e51089139d883cee8a27e1dbe35b85d79a95f336898627a44f8287e35f1e9b"
             },
             {
               "item": "RuntimeSessionListRequest",
@@ -182811,16 +182811,12 @@
               "sha256": "7c456ebf1ff4b45467134a8b48eaa86e57748c46401a4ba16a61a43602166cb8"
             },
             {
-              "item": "RuntimeSession.authority_ura",
-              "sha256": "5d177ab986c21b1d1ec10bab3ee27f65882162b1511e1e737cde1aa0984a7f18"
+              "item": "RuntimeSession.control_authority_ura",
+              "sha256": "d8c97c6944731b86b0635b6ff0145c37f90c58df23000e1ab71cf2444a0d99b5"
             },
             {
               "item": "RuntimeSession.created_unix_ms",
               "sha256": "e237f5aa029bc3d2d0ba43b729146563494c5920afbc926e9309e5c1434d2034"
-            },
-            {
-              "item": "RuntimeSession.device_ura",
-              "sha256": "cd57fa27f36faaa15f273c76e3335935fb0bcf8dbe91e33beecfca9acc87250a"
             },
             {
               "item": "RuntimeSession.expires_unix_ms",
@@ -182833,6 +182829,10 @@
             {
               "item": "RuntimeSession.metadata",
               "sha256": "0ad0e67ef1c600046ee4194ff5d839dc18d771ca6ac839b7ea49a758f4bf40d7"
+            },
+            {
+              "item": "RuntimeSession.runtime_host_ura",
+              "sha256": "287fb126456a7128cbca73251acf719a61184550c0877dad35eafd5baa10f2c4"
             },
             {
               "item": "RuntimeSession.session_id",
@@ -182899,7 +182899,7 @@
             },
             {
               "item": "RuntimeSession",
-              "sha256": "de49310e436310f4d43f93ff1c07ffa4f3a78685089ce3b59cb0950467ec7164"
+              "sha256": "67e51089139d883cee8a27e1dbe35b85d79a95f336898627a44f8287e35f1e9b"
             },
             {
               "item": "RuntimeSessionListRequest",
@@ -183014,16 +183014,12 @@
               "sha256": "7c456ebf1ff4b45467134a8b48eaa86e57748c46401a4ba16a61a43602166cb8"
             },
             {
-              "item": "RuntimeSession.authority_ura",
-              "sha256": "5d177ab986c21b1d1ec10bab3ee27f65882162b1511e1e737cde1aa0984a7f18"
+              "item": "RuntimeSession.control_authority_ura",
+              "sha256": "d8c97c6944731b86b0635b6ff0145c37f90c58df23000e1ab71cf2444a0d99b5"
             },
             {
               "item": "RuntimeSession.created_unix_ms",
               "sha256": "e237f5aa029bc3d2d0ba43b729146563494c5920afbc926e9309e5c1434d2034"
-            },
-            {
-              "item": "RuntimeSession.device_ura",
-              "sha256": "cd57fa27f36faaa15f273c76e3335935fb0bcf8dbe91e33beecfca9acc87250a"
             },
             {
               "item": "RuntimeSession.expires_unix_ms",
@@ -183036,6 +183032,10 @@
             {
               "item": "RuntimeSession.metadata",
               "sha256": "0ad0e67ef1c600046ee4194ff5d839dc18d771ca6ac839b7ea49a758f4bf40d7"
+            },
+            {
+              "item": "RuntimeSession.runtime_host_ura",
+              "sha256": "287fb126456a7128cbca73251acf719a61184550c0877dad35eafd5baa10f2c4"
             },
             {
               "item": "RuntimeSession.session_id",

@@ -68,8 +68,8 @@ class RuntimeSession:
 
     kind: str = ""
     session_id: str = ""
-    device_ura: str = ""
-    authority_ura: str = ""
+    runtime_host_ura: str = ""
+    control_authority_ura: str = ""
     state: str = ""
     session_kind: str = ""
     created_unix_ms: int = 0
@@ -225,8 +225,8 @@ def _runtime_session_page(output: Mapping[str, object]) -> RuntimeSessionPage:
             RuntimeSession(
                 kind=_admin_string(row.get("kind")),
                 session_id=_admin_string(row.get("session_id")),
-                device_ura=_admin_string(row.get("device_ura")),
-                authority_ura=_admin_string(row.get("authority_ura")),
+                runtime_host_ura=_admin_string(row.get("device_ura")),
+                control_authority_ura=_admin_string(row.get("authority_ura")),
                 state=_admin_string(row.get("state")),
                 session_kind=_admin_string(row.get("session_kind")),
                 created_unix_ms=_admin_int(row.get("created_unix_ms")),

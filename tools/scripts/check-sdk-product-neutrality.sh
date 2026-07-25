@@ -54,6 +54,52 @@ runtime_device_revoke_violations() {
   rg -n '\b(RuntimeDeviceRevoke(Request|Result)|RevokeDevice|revoke_device)\b' "$@"
 }
 
+python_runtime_admin_session_projection_violations() {
+  local runtime_admin="${1:-sdk/python/easynet_sdk/runtime_admin.py}"
+  [[ -f "$runtime_admin" ]] || return 0
+  "$PYTHON_BIN" - "$runtime_admin" <<'PY'
+import ast
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+tree = ast.parse(path.read_text(), filename=str(path))
+text = path.read_text()
+
+session_class = next(
+    (
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "RuntimeSession"
+    ),
+    None,
+)
+if session_class is None:
+    raise SystemExit("python_runtime_admin_session_projection:missing_runtime_session")
+fields = {
+    target.id
+    for stmt in session_class.body
+    if isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name)
+    for target in [stmt.target]
+}
+for retired in ("device_ura", "authority_ura"):
+    if retired in fields:
+        raise SystemExit(f"python_runtime_admin_session_projection:retired_field:{retired}")
+for required in ("runtime_host_ura", "control_authority_ura"):
+    if required not in fields:
+        raise SystemExit(f"python_runtime_admin_session_projection:missing_field:{required}")
+for required_mapping in (
+    'runtime_host_ura=_admin_string(row.get("device_ura"))',
+    'control_authority_ura=_admin_string(row.get("authority_ura"))',
+):
+    if required_mapping not in text:
+        raise SystemExit(
+            "python_runtime_admin_session_projection:missing_wire_to_neutral_mapping:"
+            + required_mapping
+        )
+PY
+}
+
 retired_product_sdk_modules() {
   cat <<'EOF'
 sdk/go/profiles.go
@@ -191,6 +237,33 @@ if [[ "${1:-}" == "--self-test" ]]; then
     fail "self-test failed to detect Python runtime device revoke surface"
   fi
   rm -f "$injected"
+  injected="$tmp/sdk/python/easynet_sdk/runtime_admin.py"
+  mkdir -p "$(dirname "$injected")"
+  cat >"$injected" <<'PY'
+from dataclasses import dataclass
+@dataclass(frozen=True)
+class RuntimeSession:
+    device_ura: str = ""
+    authority_ura: str = ""
+PY
+  if python_runtime_admin_session_projection_violations "$injected" >/dev/null 2>&1; then
+    fail "self-test failed to detect product runtime-admin session projection"
+  fi
+  cat >"$injected" <<'PY'
+from dataclasses import dataclass
+@dataclass(frozen=True)
+class RuntimeSession:
+    runtime_host_ura: str = ""
+    control_authority_ura: str = ""
+def _runtime_session_page(row):
+    return RuntimeSession(
+        runtime_host_ura=_admin_string(row.get("device_ura")),
+        control_authority_ura=_admin_string(row.get("authority_ura")),
+    )
+PY
+  python_runtime_admin_session_projection_violations "$injected" \
+    || fail "self-test rejected neutral runtime-admin session projection"
+  rm -f "$injected"
   injected="$tmp/sdk/python/easynet_sdk/providers/easynet/lifecycle.py"
   mkdir -p "$(dirname "$injected")"
   printf 'class DaemonStartProjection:\n    @classmethod\n    def hub(cls):\n        return cls.from_profile(mode="hub")\ndef start_daemon(transport, config):\n    return None\n' >"$injected"
@@ -326,6 +399,10 @@ fi
 if runtime_device_revoke_violations "${production_sources[@]}"; then
   fail "runtime device revoke surface leaked into runtime SDK production source"
 fi
+
+python_runtime_admin_session_projection_violations \
+  "$ROOT/sdk/python/easynet_sdk/runtime_admin.py" \
+  || fail "product runtime-admin session projection leaked into Python SDK"
 
 for path in sdk/go/runtime_events.go sdk/python/easynet_sdk/runtime_events.py; do
   if rg -n '(federation\.subscribe_directory_v2|events\.device\.subscribe|session\.attach|events\.invocation\.subscribe|daemon_ability|device_ura|owner_ura|session_id)' "$path"; then
