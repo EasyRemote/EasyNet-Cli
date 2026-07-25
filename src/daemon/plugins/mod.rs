@@ -184,38 +184,16 @@ pub(crate) fn try_description_for(name: &str) -> Result<Option<&'static str>> {
         .map(|spec| (spec.description)()))
 }
 
-/// Resolve plugin-owned human-readable ability metadata as an owned value.
-pub fn description_for_owned(name: &str) -> Option<String> {
-    try_description_for_owned(name).ok().flatten()
-}
-
 pub(crate) fn try_description_for_owned(name: &str) -> Result<Option<String>> {
     Ok(try_descriptor_for(name)?.map(|descriptor| descriptor.description().to_string()))
-}
-
-/// Resolve builtin plugin descriptor text without reading installed package
-/// state or env-disable gates.
-pub fn builtin_description_for_owned(name: &str) -> Option<String> {
-    try_builtin_description_for_owned(name).ok().flatten()
 }
 
 pub(crate) fn try_builtin_description_for_owned(name: &str) -> Result<Option<String>> {
     Ok(try_builtin_descriptor_for(name)?.map(|descriptor| descriptor.description().to_string()))
 }
 
-/// Resolve plugin-owned ability input schema metadata.
-pub fn input_schema_for(name: &str) -> Option<Value> {
-    try_input_schema_for(name).ok().flatten()
-}
-
 pub(crate) fn try_input_schema_for(name: &str) -> Result<Option<Value>> {
     Ok(try_descriptor_for(name)?.map(|descriptor| descriptor.input_schema().clone()))
-}
-
-/// Resolve builtin plugin schema without reading installed package state or
-/// env-disable gates.
-pub fn builtin_input_schema_for(name: &str) -> Option<Value> {
-    try_builtin_input_schema_for(name).ok().flatten()
 }
 
 pub(crate) fn try_builtin_input_schema_for(name: &str) -> Result<Option<Value>> {

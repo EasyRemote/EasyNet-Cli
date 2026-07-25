@@ -642,14 +642,6 @@ pub fn description_for(name: &str) -> &'static str {
     }
 }
 
-/// Owned description projection for registry publication.
-///
-/// Plugin packages own descriptor text that may come from TOML at runtime.
-/// Builtin system abilities still use the static `description_for` table.
-pub fn description_for_owned(name: &str) -> String {
-    try_description_for_owned(name).unwrap_or_else(|_| description_for(name).to_string())
-}
-
 pub fn try_description_for_owned(name: &str) -> anyhow::Result<String> {
     if let Some(description) = crate::daemon::plugins::try_builtin_description_for_owned(name)? {
         return Ok(description);

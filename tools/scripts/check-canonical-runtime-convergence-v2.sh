@@ -21,6 +21,10 @@ check_catalog_schema_projection_boundary_contract() {
   bash "$ROOT/tools/scripts/check-catalog-schema-projection-boundary.sh" >/dev/null
 }
 
+check_catalog_description_projection_boundary_contract() {
+  bash "$ROOT/tools/scripts/check-catalog-description-projection-boundary.sh" >/dev/null
+}
+
 check_control_plane_manifest_materialization_boundary_contract() {
   bash "$ROOT/tools/scripts/check-control-plane-manifest-materialization-boundary.sh" >/dev/null
 }
@@ -22946,6 +22950,7 @@ EOF
   check_terminal_lifecycle_args_contract
   check_session_failure_wire_facts_contract
   check_catalog_schema_projection_boundary_contract
+  check_catalog_description_projection_boundary_contract
   check_control_plane_manifest_materialization_boundary_contract
   check_daemon_invocation_contract_metadata_boundary_contract
   check_static_registration_manifest_boundary_contract
@@ -23412,6 +23417,7 @@ check_python_sdk_runtime_receipt_projection_contract
 check_node_sdk_runtime_receipt_projection_contract
 check_swift_sdk_runtime_receipt_projection_contract
 check_catalog_schema_projection_boundary_contract
+check_catalog_description_projection_boundary_contract
 check_control_plane_manifest_materialization_boundary_contract
 check_daemon_invocation_contract_metadata_boundary_contract
 check_static_registration_manifest_boundary_contract
