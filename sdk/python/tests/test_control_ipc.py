@@ -18,11 +18,19 @@ from easynet_sdk.providers.runtime.control import (
     _ControlIpcClient,
     _ControlRuntimeHostIdentity,
     _IpcVersionRange,
+    _default_control_path,
     _read_control_discovery,
 )
 
 
 class ControlIpcTests(unittest.TestCase):
+    def test_default_control_path_uses_runtime_host_state_root(self) -> None:
+        path = _default_control_path()
+
+        self.assertEqual(path.name, "control.json")
+        self.assertEqual(path.parent.name, ".runtime-host")
+        self.assertNotIn(".easynet", str(path))
+
     def test_reads_discovery_and_negotiates_v1(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "control.json"

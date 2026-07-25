@@ -118,7 +118,7 @@
         {
           "kind": "python_test",
           "ref_path": "sdk/python/tests/test_control_ipc.py",
-          "sha256": "c517f9642cb58b58217cb471d682fc673361fa4997a3899475c65222c85afe1b"
+          "sha256": "6f850538492a048ab993942f8bb387e885b4a290160618d57f961af538a2b397"
         }
       ],
       "profile": "runtime_core"

@@ -68,6 +68,12 @@ python_cabi_product_adapter_name_violations() {
   rg -n '\bCLILibrary\b|EasyNet-Cli C ABI|EasyNet CLI C ABI' "$cabi"
 }
 
+python_runtime_control_product_state_dir_violations() {
+  local control="${1:-sdk/python/easynet_sdk/providers/runtime/control.py}"
+  [[ -f "$control" ]] || return 0
+  rg -n '(\.easynet|\.easy["'\''][[:space:]]*\+[[:space:]]*["'\'']net|easy["'\''][[:space:]]*\+[[:space:]]*["'\'']net|EASYNET_[A-Z0-9_]*CONTROL)' "$control"
+}
+
 python_runtime_admin_session_projection_violations() {
   local runtime_admin="${1:-sdk/python/easynet_sdk/runtime_admin.py}"
   [[ -f "$runtime_admin" ]] || return 0
@@ -313,6 +319,13 @@ if [[ "${1:-}" == "--self-test" ]]; then
     fail "self-test failed to detect product C ABI adapter naming in Python SDK"
   fi
   rm -f "$injected"
+  injected="$tmp/sdk/python/easynet_sdk/providers/runtime/control.py"
+  mkdir -p "$(dirname "$injected")"
+  printf '_CONTROL_STATE_DIR_NAME = ".easy" + "net"\n' >"$injected"
+  if ! python_runtime_control_product_state_dir_violations "$injected" >/dev/null; then
+    fail "self-test failed to detect product runtime state directory in Python SDK control provider"
+  fi
+  rm -f "$injected"
   mkdir -p "$tmp/sdk/node/provider/easynet"
   retired_output="$(retired_product_sdk_module_violations "$tmp")"
   if ! grep -Fxq "sdk/node/provider/easynet" <<<"$retired_output"; then
@@ -519,6 +532,11 @@ fi
 if python_cabi_product_adapter_name_violations \
   "$ROOT/sdk/python/easynet_sdk/_cabi.py"; then
   fail "product C ABI adapter naming leaked into Python SDK runtime transport"
+fi
+
+if python_runtime_control_product_state_dir_violations \
+  "$ROOT/sdk/python/easynet_sdk/providers/runtime/control.py"; then
+  fail "product runtime state directory leaked into Python SDK control provider"
 fi
 
 python_runtime_admin_session_projection_violations \

@@ -20,7 +20,7 @@ _CONTROL_IPC_VERSION = 1
 _MAX_CONTROL_FRAME_BYTES = 8 * 1024 * 1024
 _CONTROL_BOOT_STATUS_ABILITY = "system.watch_boot"
 _CONTROL_FRAME_TYPES = {"subscribe", "cancel"}
-_CONTROL_STATE_DIR_NAME = ".easy" + "net"
+_DEFAULT_RUNTIME_STATE_DIR_NAME = ".runtime-host"
 _RAW_RUNTIME_HOST_IDENTITY_FIELD = "daemon_identity"
 _RAW_RUNTIME_INSTANCE_ID_FIELD = "node_id"
 _RAW_RUNTIME_HOST_VERSION_FIELD = "daemon_version"
@@ -385,7 +385,7 @@ class _ControlIpcClient:
 def _default_control_path() -> Path:
     """Return the default runtime-host control discovery file path."""
 
-    return Path.home() / _CONTROL_STATE_DIR_NAME / "control.json"
+    return Path.home() / _DEFAULT_RUNTIME_STATE_DIR_NAME / "control.json"
 
 
 def _read_control_discovery(control_path: str | Path = "") -> _ControlDiscovery:
