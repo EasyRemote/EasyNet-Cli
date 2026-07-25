@@ -935,6 +935,27 @@ check_voice_realm_authority_vocabulary_contract() {
   fi
 }
 
+check_route_kind_realm_authority_vocabulary_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local route_resolver="$cli_root/src/daemon/invocation/routing/route_resolver.rs"
+  [[ -f "$route_resolver" ]] || fail "route kind vocabulary source is missing: ${route_resolver#$cli_root/}"
+
+  if rg -n 'SelectedRouteKind::HubOwned|\bHubOwned\b|hub_owned_catalog_projection|hub_local_authority_resolves_hub_owned|combined_local_authority_resolves_hub_owned' \
+    "$route_resolver"; then
+    fail "route resolver internal route kind preserves retired HubOwned vocabulary"
+  fi
+
+  if ! rg -q 'RealmAuthorityOwned' "$route_resolver"; then
+    fail "route resolver internal route kind must expose RealmAuthorityOwned"
+  fi
+  if ! rg -q 'realm_authority_resolves_authority_owned_ability_as_local_authority_route' "$route_resolver"; then
+    fail "route resolver must test authority-owned local route selection"
+  fi
+  if ! rg -q 'authority_owned_catalog_projection_without_local_authority_fails_closed' "$route_resolver"; then
+    fail "route resolver must test authority-owned catalog projection fail-closed behavior"
+  fi
+}
+
 check_authority_context_model_vocabulary_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local dispatch="$cli_root/src/daemon/ability/dispatch.rs"
@@ -21123,6 +21144,7 @@ EOF
   check_sdk_runtime_admin_authority_session_contract
   check_runtime_authority_vocabulary_contract
   check_voice_realm_authority_vocabulary_contract
+  check_route_kind_realm_authority_vocabulary_contract
   check_authority_context_model_vocabulary_contract
   check_provider_route_manifest_neutrality_contract
   check_advertise_agent_ingress_contract
@@ -21550,5 +21572,6 @@ check_sdk_runtime_receipt_type_state_binding_contract
 check_public_descriptor_authority_vocabulary_contract
 check_runtime_authority_vocabulary_contract
 check_voice_realm_authority_vocabulary_contract
+check_route_kind_realm_authority_vocabulary_contract
 check_authority_context_model_vocabulary_contract
 echo "canonical-runtime-convergence-v2: OK"

@@ -75,7 +75,7 @@ pub(crate) struct LocalRuntimeAbility {
 pub(crate) enum SelectedRouteKind {
     LocalDevice,
     SameRealmDevice,
-    HubOwned,
+    RealmAuthorityOwned,
     HostedAgent,
 }
 
@@ -84,7 +84,7 @@ impl SelectedRouteKind {
     pub(crate) fn route_reason(self) -> RouteReason {
         match self {
             Self::LocalDevice | Self::SameRealmDevice => RouteReason::LocalDevice,
-            Self::HubOwned => RouteReason::LocalHub,
+            Self::RealmAuthorityOwned => RouteReason::LocalHub,
             Self::HostedAgent => RouteReason::HostedAgent,
         }
     }
@@ -199,7 +199,7 @@ impl SelectedInvokeRoute {
         match self.kind {
             SelectedRouteKind::LocalDevice => SelectedRouteDispatchTarget::LocalRuntime,
             SelectedRouteKind::SameRealmDevice
-            | SelectedRouteKind::HubOwned
+            | SelectedRouteKind::RealmAuthorityOwned
             | SelectedRouteKind::HostedAgent => {
                 if execution_host_is_self {
                     SelectedRouteDispatchTarget::LocalRuntime
@@ -256,7 +256,7 @@ impl SelectedInvokeRoute {
 
     fn next_hop_json(&self) -> Value {
         match self.kind {
-            SelectedRouteKind::HubOwned => json!({
+            SelectedRouteKind::RealmAuthorityOwned => json!({
                 "local_hub_ability": {
                     "ability_ura": self.ability_ura,
                     "route_ura": self.route_ura,
@@ -765,7 +765,7 @@ impl<'a> DaemonRouteResolver<'a> {
                     device_local,
                     selector.owner_ura.as_str(),
                     None,
-                    SelectedRouteKind::HubOwned,
+                    SelectedRouteKind::RealmAuthorityOwned,
                 );
             }
 
@@ -1475,7 +1475,12 @@ fn selected_execution_for_owner(
                 .map(|parsed| parsed.realm)
                 .unwrap_or_default();
             let hub_ura = crate::core::ura::hub_ura(&realm);
-            Ok((SelectedRouteKind::HubOwned, hub_ura.clone(), hub_ura, None))
+            Ok((
+                SelectedRouteKind::RealmAuthorityOwned,
+                hub_ura.clone(),
+                hub_ura,
+                None,
+            ))
         }
         Ok(crate::core::ura::URAKind::Agent) => {
             let Some(host_device_ura) = advertised_agent_host_ura(advertised_agents, owner_ura)
@@ -1647,7 +1652,7 @@ fn local_authority_route_kind(local_authority_ura: &str) -> SelectedRouteKind {
         .ok()
         .is_some_and(|parsed| parsed.kind == crate::core::ura::URAKind::Authority)
     {
-        SelectedRouteKind::HubOwned
+        SelectedRouteKind::RealmAuthorityOwned
     } else {
         SelectedRouteKind::LocalDevice
     }
@@ -2752,7 +2757,7 @@ mod tests {
     }
 
     #[test]
-    fn hub_local_authority_resolves_hub_owned_ability_as_hub_route() {
+    fn realm_authority_resolves_authority_owned_ability_as_local_authority_route() {
         let registry = PresenceRegistry::new();
         let catalog = AbilityCatalogStore::new();
         let host_ura = crate::core::ura::hub_ura("test-realm");
@@ -2763,9 +2768,9 @@ mod tests {
             .with_local_catalog_authority(host_ura.clone(), authority)
             .at(TEST_NOW_MS)
             .resolve_route(&host_ura, "federation.status")
-            .expect("hub-owned runtime ability must resolve through local hub authority");
+            .expect("authority-owned runtime ability must resolve through local realm authority");
 
-        assert_eq!(route.kind(), SelectedRouteKind::HubOwned);
+        assert_eq!(route.kind(), SelectedRouteKind::RealmAuthorityOwned);
         assert_eq!(route.route_reason(), RouteReason::LocalHub);
         assert_eq!(
             route.dispatch_target(true),
@@ -2779,7 +2784,7 @@ mod tests {
     }
 
     #[test]
-    fn combined_local_authority_resolves_hub_owned_ability_from_catalog_snapshot() {
+    fn combined_local_authority_resolves_authority_owned_ability_from_catalog_snapshot() {
         let registry = PresenceRegistry::new();
         let catalog = AbilityCatalogStore::new();
         let device_ura = crate::core::ura::device_ura("test-realm", "device-a");
@@ -2793,9 +2798,9 @@ mod tests {
             .with_local_catalog_authority(device_ura, authority)
             .at(TEST_NOW_MS)
             .resolve_route(&hub_ura, "runtime.bootstrap_self_identity")
-            .expect("combined local authority must route Hub runtime-admin ability");
+            .expect("combined local authority must route Authority runtime-admin ability");
 
-        assert_eq!(route.kind(), SelectedRouteKind::HubOwned);
+        assert_eq!(route.kind(), SelectedRouteKind::RealmAuthorityOwned);
         assert_eq!(
             route.dispatch_target(true),
             SelectedRouteDispatchTarget::LocalRuntime
@@ -2833,7 +2838,7 @@ mod tests {
     }
 
     #[test]
-    fn hub_owned_catalog_projection_without_local_authority_fails_closed() {
+    fn authority_owned_catalog_projection_without_local_authority_fails_closed() {
         let registry = PresenceRegistry::new();
         let catalog = AbilityCatalogStore::new();
         let hub_ura = crate::core::ura::hub_ura("test-realm");
@@ -2842,7 +2847,7 @@ mod tests {
         let error = DaemonRouteResolver::new(&registry, None, &catalog)
             .at(TEST_NOW_MS)
             .resolve_route(&hub_ura, "federation.status")
-            .expect_err("hub-owned catalog projection must not invent authority presence");
+            .expect_err("authority-owned catalog projection must not invent authority presence");
 
         assert_eq!(error.reason, NegativeReason::Nxdomain);
         assert_eq!(error.detail, "owner is not online");
