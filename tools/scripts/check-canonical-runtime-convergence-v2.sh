@@ -4755,7 +4755,7 @@ check_sdk_runtime_identity_signer_not_found_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local go="$cli_root/sdk/go/runtime_identity.go"
   local go_test="$cli_root/sdk/go/runtime_identity_test.go"
-  local py="$cli_root/sdk/python/easynet_sdk/providers/runtime/keyring.py"
+  local py="$cli_root/sdk/python/easynet_sdk/providers/runtime/runtime_key_service.py"
   local py_test="$cli_root/sdk/python/tests/test_runtime_identity.py"
 
   "$PYTHON_BIN" - "$go" "$go_test" "$py" "$py_test" <<'PY'
@@ -4777,7 +4777,7 @@ def section(text: str, start: str, end: str) -> str:
     return text[offset : stop if stop >= 0 else len(text)]
 
 go = read(go_path)
-go_body = section(go, "func runtimeIdentityError(", "func (c runtimeKeyringClient) sign(")
+go_body = section(go, "func runtimeIdentityError(", "func (c runtimeKeyServiceSignerClient) sign(")
 if "ErrNotFound" not in go_body or "ErrCallerSignerUnavailable" not in go_body:
     raise SystemExit("sdk_go_runtime_identity_not_found_projection_missing")
 if go.count("runtimeIdentityError(err)") < 3:
@@ -15417,7 +15417,7 @@ targets = [
     "sdk/go/signing.go",
     "sdk/go/runtime_identity.go",
     "sdk/python/easynet_sdk/_cabi.py",
-    "sdk/python/easynet_sdk/providers/runtime/keyring.py",
+    "sdk/python/easynet_sdk/providers/runtime/runtime_key_service.py",
     "sdk/python/easynet_sdk/signer_handle.py",
     "sdk/schemas/authority.schema.json",
     "sdk/conformance/canonical-public-api.json",
@@ -18929,7 +18929,7 @@ EOF
     'func runtimeIdentityError(err error) error {' \
     '  return err' \
     '}' \
-    'func (c runtimeKeyringClient) sign() {}' \
+    'func (c runtimeKeyServiceSignerClient) sign() {}' \
     > "$tmp/sdk-runtime-identity-signer-not-found-legacy/sdk/go/runtime_identity.go"
   printf 'func TestRuntimeSigningIdentityProjectsMissingKeyAsCallerSignerUnavailable(t *testing.T) {}\n' \
     > "$tmp/sdk-runtime-identity-signer-not-found-legacy/sdk/go/runtime_identity_test.go"
@@ -18938,7 +18938,7 @@ EOF
     '    return SDKError(code=error.code, stage="runtime_identity")' \
     '' \
     'def load_runtime_signing_identity(): pass' \
-    > "$tmp/sdk-runtime-identity-signer-not-found-legacy/sdk/python/easynet_sdk/providers/runtime/keyring.py"
+    > "$tmp/sdk-runtime-identity-signer-not-found-legacy/sdk/python/easynet_sdk/providers/runtime/runtime_key_service.py"
   printf 'def test_rejection_projects_missing_runtime_identity_to_caller_signer_unavailable(): pass\n' \
     > "$tmp/sdk-runtime-identity-signer-not-found-legacy/sdk/python/tests/test_runtime_identity.py"
   if ( check_sdk_runtime_identity_signer_not_found_contract "$tmp/sdk-runtime-identity-signer-not-found-legacy" ) >/dev/null 2>&1; then

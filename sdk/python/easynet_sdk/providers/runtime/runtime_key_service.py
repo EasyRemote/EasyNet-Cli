@@ -1,7 +1,7 @@
 """Runtime-owned signing capabilities.
 
 This module deliberately contains no vault codec or private-key material. A
-facade reaches the canonical keyring service over its local endpoint and can
+facade reaches the canonical runtime key service over its local endpoint and can
 only obtain a public-key projection or a signature over supplied canonical
 bytes.
 """
@@ -129,7 +129,7 @@ def ensure_runtime_signing_identity(
 
 
 @dataclass(frozen=True)
-class RuntimeKeyringSignatureProvider(SignatureProvider):
+class RuntimeKeyServiceSignatureProvider(SignatureProvider):
     """SignatureProvider backed by a runtime-owned signing identity."""
 
     identity: RuntimeSigningIdentity
@@ -138,7 +138,7 @@ class RuntimeKeyringSignatureProvider(SignatureProvider):
         self, material: SigningMaterial, handle: SignerHandle
     ) -> InvocationSignature:
         if material.algorithm != "ed25519" or handle.algorithm != "ed25519":
-            raise _invalid("runtime keyring signing requires ed25519")
+            raise _invalid("runtime key-service signing requires ed25519")
         if handle.owner_ura != self.identity.owner_ura:
             raise _invalid("signer handle owner URA does not match runtime identity")
         canonical = _runtime_identity_operation(

@@ -4,7 +4,7 @@ from importlib import import_module
 from typing import Any
 
 __all__ = [
-    "RuntimeKeyringSignatureProvider",
+    "RuntimeKeyServiceSignatureProvider",
     "RuntimeHostDiscoverConfig",
     "RuntimeHostMode",
     "RuntimeHostStartConfig",
@@ -20,10 +20,10 @@ __all__ = [
 ]
 
 _EXPORT_MODULES = {
-    "RuntimeKeyringSignatureProvider": ".keyring",
-    "RuntimeSigningIdentity": ".keyring",
-    "ensure_runtime_signing_identity": ".keyring",
-    "load_runtime_signing_identity": ".keyring",
+    "RuntimeKeyServiceSignatureProvider": ".runtime_key_service",
+    "RuntimeSigningIdentity": ".runtime_key_service",
+    "ensure_runtime_signing_identity": ".runtime_key_service",
+    "load_runtime_signing_identity": ".runtime_key_service",
     "RuntimeHostDiscoverConfig": ".lifecycle",
     "RuntimeHostMode": ".lifecycle",
     "RuntimeHostStartConfig": ".lifecycle",
