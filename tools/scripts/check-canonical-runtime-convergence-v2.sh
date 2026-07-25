@@ -910,7 +910,7 @@ check_voice_realm_authority_vocabulary_contract() {
     [[ -f "$file" ]] || fail "voice realm authority vocabulary source is missing: ${file#$cli_root/}"
   done
 
-  if rg -n 'realm Hub|Hub-owned|Hub authority|Hub replica|Hub voice media provider|Hub voice aggregate|Hub voice repository|Hub voice mutations|Hub voice reads|Hub TTS/ASR|Hub voice rows|realm Hub voice|realm Hub\.' \
+  if rg -n 'realm Hub|realm-Hub|Hub-owned|Hub authority|authority must be Hub|Hub replica|Hub voice media provider|Hub voice aggregate|Hub voice repository|Hub voice mutations|Hub voice reads|Hub TTS/ASR|Hub voice rows|realm Hub voice|realm Hub\.' \
     "$voice" "$voice_contract" "$media" "$conformance"; then
     fail "voice/media realm-state boundary preserves retired Hub vocabulary"
   fi

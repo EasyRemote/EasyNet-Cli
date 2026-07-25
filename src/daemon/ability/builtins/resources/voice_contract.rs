@@ -184,7 +184,7 @@ impl VoiceParticipant {
     }
 }
 
-/// Durable realm-Hub aggregate for one signaling call.
+/// Durable realm Authority aggregate for one signaling call.
 ///
 /// Every lifecycle mutation is expressed through this type. Persistence owns
 /// transaction boundaries; handlers never mutate a detached process-local
@@ -763,7 +763,7 @@ impl VoiceCallAggregate {
         })?;
         if authority.kind != crate::core::ura::URAKind::Authority {
             anyhow::bail!(
-                "voice aggregate authority must be Hub, got {:?}",
+                "voice aggregate authority must be Authority, got {:?}",
                 self.authority_ura
             );
         }
@@ -1172,18 +1172,18 @@ mod tests {
 
     #[test]
     fn repository_compare_and_swap_rejects_a_stale_revision() {
-        const HUB: &str = "easynet:///r/voice-cas/authority";
+        const AUTHORITY: &str = "easynet:///r/voice-cas/authority";
         let repository = TestVoiceCallRepository::default();
         repository
             .insert_if_absent(VoiceCallAggregate::new(
-                HUB.to_string(),
+                AUTHORITY.to_string(),
                 "call-1".to_string(),
                 Some("alice".to_string()),
                 10,
             ))
             .expect("insert aggregate");
         let stale = repository
-            .load(HUB, "call-1")
+            .load(AUTHORITY, "call-1")
             .expect("load aggregate")
             .expect("aggregate exists");
 
@@ -1194,7 +1194,7 @@ mod tests {
         winner.bump_revision().expect("winner revision");
         assert!(matches!(
             repository
-                .compare_and_swap(HUB, "call-1", 1, winner)
+                .compare_and_swap(AUTHORITY, "call-1", 1, winner)
                 .expect("winner compare-and-swap"),
             VoiceCallCasOutcome::Committed(_)
         ));
@@ -1206,13 +1206,13 @@ mod tests {
         loser.bump_revision().expect("loser revision");
         assert!(matches!(
             repository
-                .compare_and_swap(HUB, "call-1", 1, loser)
+                .compare_and_swap(AUTHORITY, "call-1", 1, loser)
                 .expect("stale compare-and-swap"),
             VoiceCallCasOutcome::Current(_)
         ));
         assert_eq!(
             repository
-                .load(HUB, "call-1")
+                .load(AUTHORITY, "call-1")
                 .expect("reload aggregate")
                 .expect("aggregate exists")
                 .revision(),
@@ -1222,23 +1222,28 @@ mod tests {
 
     #[test]
     fn repository_rejects_a_non_advancing_cas_replacement() {
-        const HUB: &str = "easynet:///r/voice-cas/authority";
+        const AUTHORITY: &str = "easynet:///r/voice-cas/authority";
         let repository = TestVoiceCallRepository::default();
-        let aggregate =
-            VoiceCallAggregate::new(HUB.to_string(), "call-same-revision".to_string(), None, 10);
+        let aggregate = VoiceCallAggregate::new(
+            AUTHORITY.to_string(),
+            "call-same-revision".to_string(),
+            None,
+            10,
+        );
         repository
             .insert_if_absent(aggregate.clone())
             .expect("insert aggregate");
         let error = repository
-            .compare_and_swap(HUB, "call-same-revision", 1, aggregate)
+            .compare_and_swap(AUTHORITY, "call-same-revision", 1, aggregate)
             .expect_err("CAS replacement must advance exactly one revision");
         assert!(error.to_string().contains("expected+1"));
     }
 
     #[test]
     fn maximum_revision_fails_recovery_and_mutation_closed() {
-        const HUB: &str = "easynet:///r/voice-revision/authority";
-        let aggregate = VoiceCallAggregate::new(HUB.to_string(), "call-max".to_string(), None, 10);
+        const AUTHORITY: &str = "easynet:///r/voice-revision/authority";
+        let aggregate =
+            VoiceCallAggregate::new(AUTHORITY.to_string(), "call-max".to_string(), None, 10);
         let mut encoded = serde_json::to_value(aggregate).expect("serialize aggregate");
         encoded["revision"] = json!(u64::MAX);
         let mut recovered: VoiceCallAggregate =
@@ -1248,7 +1253,7 @@ mod tests {
         assert!(recovered.bump_revision().is_err());
 
         let mut near_max = serde_json::to_value(VoiceCallAggregate::new(
-            HUB.to_string(),
+            AUTHORITY.to_string(),
             "call-near-max".to_string(),
             None,
             10,
@@ -1263,9 +1268,9 @@ mod tests {
 
     #[test]
     fn recovery_rejects_cardinality_time_and_event_sequence_corruption() {
-        const HUB: &str = "easynet:///r/voice-recovery/authority";
+        const AUTHORITY: &str = "easynet:///r/voice-recovery/authority";
         let base = VoiceCallAggregate::new(
-            HUB.to_string(),
+            AUTHORITY.to_string(),
             "call-corrupt".to_string(),
             Some("alice".to_string()),
             10,
