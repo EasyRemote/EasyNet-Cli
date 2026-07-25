@@ -499,6 +499,61 @@ test("runtime receipt proof facts are mandatory", () => {
       && error.message.includes("authority_proof"),
   );
   assert.throws(
+    () => sdk.RuntimeReceipt.fromObject({
+      ...complete,
+      legacy_receipt_canonicalizer: "node-compatible-raw",
+    }),
+    (error) =>
+      error instanceof sdk.SDKError
+      && error.code === sdk.ErrorCode.INVALID_ARGUMENT
+      && error.message.includes("runtime_receipt contains noncanonical field legacy_receipt_canonicalizer"),
+  );
+  const legacyAuthorityBinding = {
+    ...complete,
+    authority_binding: {
+      ...complete.authority_binding,
+      legacy_authority: "opaque",
+    },
+  };
+  assert.throws(
+    () => sdk.RuntimeReceipt.fromObject(legacyAuthorityBinding),
+    (error) =>
+      error instanceof sdk.SDKError
+      && error.code === sdk.ErrorCode.INVALID_ARGUMENT
+      && error.message.includes("authority_binding contains noncanonical field legacy_authority"),
+  );
+  const legacyAuthorityProof = { ...complete };
+  mutableAuthorityProof(legacyAuthorityProof).legacy_proof_fact = "opaque";
+  assert.throws(
+    () => sdk.RuntimeReceipt.fromObject(legacyAuthorityProof),
+    (error) =>
+      error instanceof sdk.SDKError
+      && error.code === sdk.ErrorCode.INVALID_ARGUMENT
+      && error.message.includes("authority_proof contains noncanonical field legacy_proof_fact"),
+  );
+  const legacyProofIssuer = { ...complete };
+  mutableAuthorityProof(legacyProofIssuer).issuer = {
+    ...complete.callee_binding,
+    legacy_profile: "opaque",
+  };
+  assert.throws(
+    () => sdk.RuntimeReceipt.fromObject(legacyProofIssuer),
+    (error) =>
+      error instanceof sdk.SDKError
+      && error.code === sdk.ErrorCode.INVALID_ARGUMENT
+      && error.message.includes("authority_proof.issuer contains noncanonical field legacy_profile"),
+  );
+  assert.throws(
+    () => sdk.RuntimeReceipt.fromObject({
+      ...complete,
+      causal_binding: { form: "none", legacy_parent: "opaque" },
+    }),
+    (error) =>
+      error instanceof sdk.SDKError
+      && error.code === sdk.ErrorCode.INVALID_ARGUMENT
+      && error.message.includes("causal_binding contains noncanonical field legacy_parent"),
+  );
+  assert.throws(
     () =>
       sdk.RuntimeReceipt.fromObject({
         ...complete,
@@ -633,7 +688,7 @@ test("runtime receipt session authority facade uses generic fields", () => {
     (error) =>
       error instanceof sdk.SDKError
       && error.code === sdk.ErrorCode.INVALID_ARGUMENT
-      && error.message.includes("issuer_ura"),
+      && error.message.includes("authority_binding contains noncanonical field backend_ura"),
   );
 });
 

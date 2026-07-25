@@ -13692,6 +13692,8 @@ for fragment, label in {
     "validateRuntimeReceiptProofFacts": "proof_fact_validator_missing",
     "validateRuntimeReceiptAuthorityProofHash": "authority_proof_hash_validator_missing",
     "canonicalRuntimeAuthorityBytes": "authority_binding_projection_missing",
+    "requireRuntimeReceiptExactKeys": "exact_object_schema_validator_missing",
+    "contains noncanonical field": "noncanonical_field_error_missing",
     "authority_proof_hash_mismatch": "authority_proof_hash_mismatch_missing",
     "hosted runtime receipt is missing host_attestation_base64": "hosted_signer_attestation_missing",
     "raw.authority_proof": "authority_proof_required_missing",
@@ -13723,6 +13725,13 @@ for required_test in (
     "authority_proof_hash_mismatch",
     "hosted runtime receipt is missing host_attestation_base64",
     "delete missingProof.authority_proof",
+    "legacy_authority",
+    "authority_binding contains noncanonical field legacy_authority",
+    "legacy_proof_fact",
+    "authority_proof contains noncanonical field legacy_proof_fact",
+    "legacy_profile",
+    "authority_proof.issuer contains noncanonical field legacy_profile",
+    "authority_binding contains noncanonical field",
     "receipt_type",
     "retired receipt alias is not accepted",
 ):
@@ -14066,7 +14075,7 @@ required_tests = {
         [
             "runtime receipt session authority facade uses generic fields",
             "inv-retired-session-authority",
-            'error.message.includes("issuer_ura")',
+            'error.message.includes("authority_binding contains noncanonical field backend_ura")',
         ],
     ),
     "java": (

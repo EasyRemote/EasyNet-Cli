@@ -1899,6 +1899,41 @@ function validatedTerminalReceipt(value, terminalState, ok) {
 }
 
 function validateRuntimeReceiptProofFacts(raw) {
+  requireRuntimeReceiptExactKeys(raw, "runtime_receipt", [
+    "receipt_ura",
+    "invocation_id",
+    "receipt_type",
+    "state",
+    "index",
+    "timestamp_unix_ms",
+    "prev_receipt_hash_hex",
+    "self_hash_hex",
+    "payload_base64",
+    "payload_content_type",
+    "cleanup_complete",
+    "caller_binding",
+    "callee_binding",
+    "subject_binding",
+    "invocation_nonce_base64",
+    "causal_binding_kind",
+    "causal_binding",
+    "callee_signature",
+    "signer_binding",
+    "host_attestation_base64",
+    "authority_binding_kind",
+    "authority_binding",
+    "ability_binding",
+    "usage",
+    "subject_ref",
+    "descriptor_version",
+    "schema_hash_hex",
+    "impl_hash_hex",
+    "runtime_env",
+    "authority_proof",
+    "input_hash_hex",
+    "output_hash_hex",
+    "parent_receipts",
+  ]);
   requireRuntimeReceiptAgentBinding(raw.caller_binding, "caller_binding");
   const calleeBinding = requireRuntimeReceiptAgentBinding(raw.callee_binding, "callee_binding");
   requireRuntimeReceiptAgentBinding(raw.subject_binding, "subject_binding");
@@ -1925,6 +1960,16 @@ function validateRuntimeReceiptProofFacts(raw) {
   runtimeReceiptHash(raw.impl_hash_hex, "impl_hash_hex", false);
   requiredRuntimeString(raw.runtime_env, "runtime_env");
   const proof = objectValue(raw.authority_proof, "authority_proof");
+  requireRuntimeReceiptExactKeys(proof, "authority_proof", [
+    "proof_type",
+    "binding_kind",
+    "binding",
+    "proof_payload_base64",
+    "proof_hash_hex",
+    "issuer",
+    "signature",
+    "admission_hook",
+  ]);
   requiredRuntimeString(proof.proof_type, "authority_proof.proof_type");
   const proofBindingKind = requiredRuntimeString(proof.binding_kind, "authority_proof.binding_kind");
   if (proofBindingKind !== authorityKind) {
@@ -2048,13 +2093,16 @@ function validateRuntimeReceiptCausalBinding(kind, binding) {
     throw invalidRuntime("runtime receipt causal_binding form does not match causal_binding_kind");
   }
   if (form === "none") {
+    requireRuntimeReceiptExactKeys(binding, "causal_binding", ["form"]);
     return;
   }
   if (form === "scalar") {
+    requireRuntimeReceiptExactKeys(binding, "causal_binding", ["form", "receipt"]);
     requireRuntimeReceiptRef(binding.receipt, "causal_binding.receipt");
     return;
   }
   if (form === "list") {
+    requireRuntimeReceiptExactKeys(binding, "causal_binding", ["form", "prior"]);
     if (!Array.isArray(binding.prior) || binding.prior.length === 0) {
       throw invalidRuntime("causal_binding.prior must be a non-empty array");
     }
@@ -2064,6 +2112,7 @@ function validateRuntimeReceiptCausalBinding(kind, binding) {
     return;
   }
   if (form === "merkle") {
+    requireRuntimeReceiptExactKeys(binding, "causal_binding", ["form", "root_hex", "proof_ura"]);
     runtimeReceiptHash(binding.root_hex, "causal_binding.root_hex", false);
     requiredRuntimeString(binding.proof_ura, "causal_binding.proof_ura");
     return;
@@ -2073,6 +2122,7 @@ function validateRuntimeReceiptCausalBinding(kind, binding) {
 
 function requireRuntimeReceiptRef(value, field) {
   const ref = objectValue(value, field);
+  requireRuntimeReceiptExactKeys(ref, field, ["receipt_hash_hex", "receipt_ura"]);
   runtimeReceiptHash(ref.receipt_hash_hex, `${field}.receipt_hash_hex`, false);
   requiredRuntimeString(ref.receipt_ura, `${field}.receipt_ura`);
 }
@@ -2088,6 +2138,7 @@ function requireRuntimeReceiptParents(value) {
 
 function requireRuntimeReceiptAgentBinding(value, field) {
   const binding = objectValue(value, field);
+  requireRuntimeReceiptExactKeys(binding, field, ["ura", "profile"]);
   const out = {
     ura: requiredRuntimeText(binding.ura, `${field}.ura`),
     profile: requiredRuntimeText(binding.profile, `${field}.profile`),
@@ -2098,6 +2149,7 @@ function requireRuntimeReceiptAgentBinding(value, field) {
 
 function requireRuntimeReceiptEntityRef(value, field) {
   const ref = objectValue(value, field);
+  requireRuntimeReceiptExactKeys(ref, field, ["kind", "ura", "profile"]);
   if (!Number.isInteger(ref.kind) || ref.kind < 1 || ref.kind > 7) {
     throw invalidRuntime(`${field}.kind is not canonical`);
   }
@@ -2109,9 +2161,21 @@ function requireRuntimeReceiptAuthorityBinding(value, field) {
   const binding = objectValue(value, field);
   const kind = requiredRuntimeText(binding.kind, `${field}.kind`);
   if (kind === "self") {
+    requireRuntimeReceiptExactKeys(binding, field, ["kind", "principal_ura"]);
     return { kind, principal_ura: requiredRuntimeText(binding.principal_ura, `${field}.principal_ura`) };
   }
   if (kind === "delegation") {
+    requireRuntimeReceiptExactKeys(binding, field, [
+      "kind",
+      "issuer_ura",
+      "subject_ura",
+      "caller_ura",
+      "audience",
+      "scopes",
+      "issued_at_ms",
+      "expires_at_ms",
+      "signature_base64",
+    ]);
     return {
       kind,
       issuer_ura: requiredRuntimeText(binding.issuer_ura, `${field}.issuer_ura`),
@@ -2125,12 +2189,25 @@ function requireRuntimeReceiptAuthorityBinding(value, field) {
     };
   }
   if (kind === "capability") {
+    requireRuntimeReceiptExactKeys(binding, field, ["kind", "capability_ura"]);
     return { kind, capability_ura: requiredRuntimeText(binding.capability_ura, `${field}.capability_ura`) };
   }
   if (kind === "policy") {
+    requireRuntimeReceiptExactKeys(binding, field, ["kind", "policy_ura"]);
     return { kind, policy_ura: requiredRuntimeText(binding.policy_ura, `${field}.policy_ura`) };
   }
   if (kind === "session") {
+    requireRuntimeReceiptExactKeys(binding, field, [
+      "kind",
+      "issuer_ura",
+      "subject_ura",
+      "session_id",
+      "scopes",
+      "audiences",
+      "issued_at_ms",
+      "expires_at_ms",
+      "signature_base64",
+    ]);
     return {
       kind,
       issuer_ura: requiredRuntimeText(binding.issuer_ura, `${field}.issuer_ura`),
@@ -2144,6 +2221,7 @@ function requireRuntimeReceiptAuthorityBinding(value, field) {
     };
   }
   if (kind === "bootstrap") {
+    requireRuntimeReceiptExactKeys(binding, field, ["kind", "principal_ura", "realm", "ability"]);
     return {
       kind,
       principal_ura: requiredRuntimeText(binding.principal_ura, `${field}.principal_ura`),
@@ -2156,11 +2234,21 @@ function requireRuntimeReceiptAuthorityBinding(value, field) {
 
 function requireRuntimeReceiptSignature(value, field) {
   const signature = objectValue(value, field);
+  requireRuntimeReceiptExactKeys(signature, field, ["algorithm", "signature_base64"]);
   requiredRuntimeString(signature.algorithm, `${field}.algorithm`);
   validateRuntimeBase64(
     requiredRuntimeString(signature.signature_base64, `${field}.signature_base64`),
     `${field}.signature_base64`,
   );
+}
+
+function requireRuntimeReceiptExactKeys(value, field, allowedKeys) {
+  const allowed = new Set(allowedKeys);
+  for (const key of Object.keys(value)) {
+    if (!allowed.has(key)) {
+      throw invalidRuntime(`${field} contains noncanonical field ${key}`);
+    }
+  }
 }
 
 function runtimeReceiptHash(value, field, allowZero) {
