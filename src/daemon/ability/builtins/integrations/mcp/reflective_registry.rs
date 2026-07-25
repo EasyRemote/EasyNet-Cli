@@ -131,11 +131,59 @@ impl McpReflectionMode {
 pub const ENV_MCP_REFLECTION_MODE: &str = "EASYNET_MCP_REFLECTION";
 
 /// Env var controlling the lazy supervisor's per-server fan-out.
-/// Must parse as a positive integer; malformed values fall back to
-/// [`DEFAULT_MCP_REFLECTION_CONCURRENCY`].
+/// Must parse as a positive integer. Missing, empty, malformed, and
+/// non-positive values enter an explicit defaulted configuration state.
 pub const ENV_MCP_REFLECTION_CONCURRENCY: &str = "EASYNET_MCP_REFLECTION_CONCURRENCY";
 
 const DEFAULT_MCP_REFLECTION_CONCURRENCY: usize = 4;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum McpReflectionConcurrency {
+    Configured(usize),
+    Defaulted(McpReflectionConcurrencyDefaultReason),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum McpReflectionConcurrencyDefaultReason {
+    Missing,
+    Empty,
+    Invalid,
+    NonPositive,
+}
+
+impl McpReflectionConcurrency {
+    fn from_env() -> Self {
+        Self::from_env_value(
+            std::env::var(ENV_MCP_REFLECTION_CONCURRENCY)
+                .ok()
+                .as_deref(),
+        )
+    }
+
+    fn from_env_value(raw: Option<&str>) -> Self {
+        let Some(raw) = raw else {
+            return Self::Defaulted(McpReflectionConcurrencyDefaultReason::Missing);
+        };
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return Self::Defaulted(McpReflectionConcurrencyDefaultReason::Empty);
+        }
+        let Ok(limit) = trimmed.parse::<usize>() else {
+            return Self::Defaulted(McpReflectionConcurrencyDefaultReason::Invalid);
+        };
+        if limit == 0 {
+            return Self::Defaulted(McpReflectionConcurrencyDefaultReason::NonPositive);
+        }
+        Self::Configured(limit)
+    }
+
+    fn limit(&self) -> usize {
+        match self {
+            Self::Configured(limit) => *limit,
+            Self::Defaulted(_) => DEFAULT_MCP_REFLECTION_CONCURRENCY,
+        }
+    }
+}
 
 /// Build the canonical `AbilityDescriptor.source` value for a tool
 /// reflected from upstream MCP server `server_name` whose
@@ -222,7 +270,7 @@ impl McpReflectionSupervisor {
             client,
             registry,
             owner_ura: owner_ura.into(),
-            concurrency_limit: mcp_reflection_concurrency(),
+            concurrency_limit: McpReflectionConcurrency::from_env().limit(),
         }
     }
 
@@ -556,14 +604,6 @@ impl PostArcReflection {
             }
         }
     }
-}
-
-fn mcp_reflection_concurrency() -> usize {
-    std::env::var(ENV_MCP_REFLECTION_CONCURRENCY)
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .filter(|v| *v > 0)
-        .unwrap_or(DEFAULT_MCP_REFLECTION_CONCURRENCY)
 }
 
 fn reflected_names_by_server(report: &ReflectResult) -> BTreeMap<String, Vec<String>> {
@@ -1934,6 +1974,46 @@ while True:
             McpReflectionMode::from_env_value(Some("eagre")),
             Err(UnknownReflectionMode("eagre".to_string()))
         );
+    }
+
+    #[test]
+    fn reflection_concurrency_resolution_records_default_reasons() {
+        let cases = [
+            (
+                None,
+                McpReflectionConcurrencyDefaultReason::Missing,
+                DEFAULT_MCP_REFLECTION_CONCURRENCY,
+            ),
+            (
+                Some(""),
+                McpReflectionConcurrencyDefaultReason::Empty,
+                DEFAULT_MCP_REFLECTION_CONCURRENCY,
+            ),
+            (
+                Some("not-a-number"),
+                McpReflectionConcurrencyDefaultReason::Invalid,
+                DEFAULT_MCP_REFLECTION_CONCURRENCY,
+            ),
+            (
+                Some("0"),
+                McpReflectionConcurrencyDefaultReason::NonPositive,
+                DEFAULT_MCP_REFLECTION_CONCURRENCY,
+            ),
+        ];
+
+        for (raw, reason, limit) in cases {
+            let resolution = McpReflectionConcurrency::from_env_value(raw);
+            assert_eq!(resolution, McpReflectionConcurrency::Defaulted(reason));
+            assert_eq!(resolution.limit(), limit);
+        }
+    }
+
+    #[test]
+    fn reflection_concurrency_resolution_accepts_positive_integer() {
+        let resolution = McpReflectionConcurrency::from_env_value(Some(" 8 "));
+
+        assert_eq!(resolution, McpReflectionConcurrency::Configured(8));
+        assert_eq!(resolution.limit(), 8);
     }
 
     /// Build an `McpClientService` with no configured upstreams. Used

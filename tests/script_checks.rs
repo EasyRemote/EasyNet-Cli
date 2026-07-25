@@ -578,3 +578,11 @@ fn catalog_schema_projection_boundary_script_holds() {
     // schema branches.
     run_bash_script("tests/scripts/test_check_catalog_schema_projection_boundary.sh");
 }
+
+#[test]
+fn mcp_reflection_concurrency_resolution_boundary_script_holds() {
+    // Pins MCP reflection fan-out configuration to configured/defaulted
+    // resolution states. Malformed env values must not be hidden behind
+    // procedural fallback helpers.
+    run_bash_script("tests/scripts/test_check_mcp_reflection_concurrency_resolution_boundary.sh");
+}
