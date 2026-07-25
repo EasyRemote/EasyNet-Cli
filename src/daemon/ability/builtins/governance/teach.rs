@@ -236,8 +236,27 @@ pub fn register(reg: &mut AxonAbilityCatalog, hot_registrar: Arc<SharedHotRegist
 #[derive(Debug, Clone)]
 struct AbilityHome {
     owner_agent: String,
+    owner_local_name: String,
     public_name: String,
     manifest_path: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+struct CanonicalAgentRegistryKey {
+    registry_key: String,
+    local_name: String,
+}
+
+impl CanonicalAgentRegistryKey {
+    fn parse(surface: &str, field: &str, raw: &str) -> anyhow::Result<Self> {
+        let agent_id = crate::core::agent::id::AgentId::parse(raw).map_err(|error| {
+            anyhow::anyhow!("{surface} invalid `{field}` Agent id {raw:?}: {error}")
+        })?;
+        Ok(Self {
+            registry_key: agent_id.to_string(),
+            local_name: agent_id.name,
+        })
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -311,28 +330,36 @@ struct OwnerAuthority {
 /// a transfer surface must never guess.
 fn resolve_owner_manifest(registry_name: &str) -> anyhow::Result<AbilityHome> {
     let owner_local = crate::core::ura::OwnerLocalAbilityName::parse(registry_name)?;
-    let agent = owner_local.owner();
+    let agent = CanonicalAgentRegistryKey::parse(TEACH, "ability owner", owner_local.owner())?;
     let public_name = owner_local.public_name();
     let agents = AgentAggregateRepository::load_registered_agent_registry_projection()
         .map_err(AgentRegistryProjectionLoadError::into_source_or_self)?;
-    let Some(entry) = agents.agents.get(agent) else {
-        anyhow::bail!("no agent {agent:?} on this device (see `easynet agent list`)");
+    let Some(entry) = agents.agents.get(&agent.registry_key) else {
+        anyhow::bail!(
+            "no agent {:?} on this device (see `easynet agent list`)",
+            agent.registry_key
+        );
     };
     let Some(root) = entry.root_path.as_ref() else {
-        anyhow::bail!("agent {agent:?} has no workspace root; cannot locate its abilities");
+        anyhow::bail!(
+            "agent {:?} has no workspace root; cannot locate its abilities",
+            agent.registry_key
+        );
     };
     let manifest_path = root
         .join("abilities")
         .join(format!("{public_name}.ability.toml"));
     if !manifest_path.exists() {
         anyhow::bail!(
-            "agent {agent:?} publishes no ability {public_name:?} \
+            "agent {:?} publishes no ability {public_name:?} \
              (expected manifest at {})",
+            agent.registry_key,
             manifest_path.display()
         );
     }
     Ok(AbilityHome {
-        owner_agent: agent.to_string(),
+        owner_agent: agent.registry_key,
+        owner_local_name: agent.local_name,
         public_name: public_name.to_string(),
         manifest_path,
     })
@@ -519,7 +546,7 @@ fn teach_handler_with_clock(
 
     let home = resolve_owner_manifest(ability)?;
     let descriptor_snapshot = GrantedDescriptorSnapshot::from_home(&home)?;
-    let authority = require_owner_authority(&env, &agent_snapshot, &home.owner_agent)?;
+    let authority = require_owner_authority(&env, &agent_snapshot, &home.owner_local_name)?;
     let ability_ura = crate::core::ura::owner_ability_ura(&authority.owner_ura, &home.public_name)
         .ok_or_else(|| anyhow::anyhow!("could not mint the granted descriptor URA"))?;
     let granted_at = clock.now_rfc3339();
@@ -1005,6 +1032,7 @@ impl<'a> AcquireWorkflow<'a> {
 struct AcquireRequest {
     ability_ura: String,
     learner: String,
+    learner_local_name: String,
     registry_name: String,
     public_name: String,
     owner_ura: String,
@@ -1013,11 +1041,16 @@ struct AcquireRequest {
 impl AcquireRequest {
     fn from_args(args: &Value) -> anyhow::Result<Self> {
         let ability_ura_arg = required_str(args, "ability_ura", ACQUIRE)?;
-        let learner = required_str(args, "learner", ACQUIRE)?.to_string();
+        let learner = CanonicalAgentRegistryKey::parse(
+            ACQUIRE,
+            "learner",
+            required_str(args, "learner", ACQUIRE)?,
+        )?;
         let selector = AbilitySelector::parse(ability_ura_arg)?;
         Ok(Self {
             ability_ura: selector.ability_ura().to_string(),
-            learner,
+            learner: learner.registry_key,
+            learner_local_name: learner.local_name,
             registry_name: selector.local_registry_ability().to_string(),
             public_name: selector.public_name().to_string(),
             owner_ura: selector.owner_ura().to_string(),
@@ -1046,17 +1079,15 @@ impl AuthorizedAcquire {
             );
         }
         let agent_snapshot = AgentAggregateRepository::load_snapshot()?;
-        let learner_entry_for_runtime = agent_snapshot
-            .registry
-            .agents
-            .get(&request.learner)
-            .cloned()
+        let learner_runtime = agent_snapshot
+            .registered_agent_runtime_projection(&request.learner)
             .ok_or_else(|| {
                 anyhow::anyhow!(
                     "no agent {:?} on this device to learn into",
                     request.learner
                 )
             })?;
+        let learner_entry_for_runtime = learner_runtime.entry().clone();
         let learner_root = learner_entry_for_runtime
             .root_path
             .as_ref()
@@ -1068,19 +1099,19 @@ impl AuthorizedAcquire {
             })?;
 
         let learner_identity =
-            hosted_agent_identity_by_name(&agent_snapshot, &request.learner, ACQUIRE)?;
+            hosted_agent_identity_by_name(&agent_snapshot, &request.learner_local_name, ACQUIRE)?;
         let learner_ura = learner_identity.agent_ura.to_string();
         let mutated_by = require_hosted_agent_authority(
             &env,
             learner_identity,
-            &request.learner,
+            &request.learner_local_name,
             &learner_ura,
             ACQUIRE,
         )?;
 
         let owner_home = resolve_owner_manifest(&request.registry_name)?;
         let owner_identity =
-            hosted_agent_identity_by_name(&agent_snapshot, &owner_home.owner_agent, ACQUIRE)?;
+            hosted_agent_identity_by_name(&agent_snapshot, &owner_home.owner_local_name, ACQUIRE)?;
         if owner_identity.agent_ura != request.owner_ura {
             anyhow::bail!(
                 "{ACQUIRE} rejected {:?}: local ability {:?} belongs to owner {}, not {}",
@@ -1236,13 +1267,20 @@ impl RuntimeSyncedAcquire {
 struct ForgetRequest {
     ability: String,
     agent: String,
+    agent_local_name: String,
 }
 
 impl ForgetRequest {
     fn from_args(args: &Value) -> anyhow::Result<Self> {
+        let agent = CanonicalAgentRegistryKey::parse(
+            FORGET,
+            "agent",
+            required_str(args, "agent", FORGET)?,
+        )?;
         Ok(Self {
             ability: required_str(args, "ability", FORGET)?.to_string(),
-            agent: required_str(args, "agent", FORGET)?.to_string(),
+            agent: agent.registry_key,
+            agent_local_name: agent.local_name,
         })
     }
 }
@@ -1261,7 +1299,7 @@ impl AuthorizedForget {
         let registered_agent = agent_snapshot.registered_agent_runtime_projection(&request.agent);
         let agent_entry_for_runtime = registered_agent.as_ref().map(|agent| agent.entry().clone());
         let agent_identity =
-            hosted_agent_identity_by_name(&agent_snapshot, &request.agent, FORGET)?;
+            hosted_agent_identity_by_name(&agent_snapshot, &request.agent_local_name, FORGET)?;
         let agent_ura = agent_identity.agent_ura.to_string();
         let expected_subject = crate::core::ura::owner_ability_ura(&agent_ura, &request.ability)
             .ok_or_else(|| {
@@ -1277,7 +1315,7 @@ impl AuthorizedForget {
         let mutated_by = require_hosted_agent_authority(
             &env,
             agent_identity,
-            &request.agent,
+            &request.agent_local_name,
             &agent_ura,
             FORGET,
         )?;
@@ -1698,7 +1736,8 @@ mod tests {
     /// through the product files.
     fn seed() -> (String, String, String) {
         seed_with_mentor_manifest(
-            "name = \"quote\"\n\
+            "schema_version = \"1\"\n\
+             name = \"quote\"\n\
              description = \"emit a quotable line\"\n\n\
              [input_schema]\n\
              type = \"object\"\n\n\
@@ -1714,7 +1753,8 @@ mod tests {
     /// registration.
     fn seed_declaration_only() -> (String, String, String) {
         seed_with_mentor_manifest(
-            "name = \"quote\"\n\
+            "schema_version = \"1\"\n\
+             name = \"quote\"\n\
              description = \"emit a quotable line\"\n\n\
              [input_schema]\n\
              type = \"object\"\n",
@@ -1749,7 +1789,12 @@ mod tests {
                 None,
             );
             entry.root_path = Some(root);
-            registry.agents.insert(name.to_string(), entry);
+            registry.agents.insert(
+                crate::core::agent::id::AgentId::parse(name)
+                    .expect("test agent key")
+                    .to_string(),
+                entry,
+            );
         }
         crate::daemon::persistence::agent_registry::save_agents(&registry).expect("save agents");
 
@@ -2081,7 +2126,8 @@ mod tests {
             std::path::Path::new(&home).join("agents/mentor/abilities/quote.ability.toml");
         std::fs::write(
             &mentor_manifest,
-            "name = \"quote\"\n\
+            "schema_version = \"1\"\n\
+             name = \"quote\"\n\
              description = \"mutated after the grant\"\n\n\
              [input_schema]\n\
              type = \"object\"\n",
@@ -2426,7 +2472,11 @@ mod tests {
         // converge against.
         let mut registry =
             crate::daemon::persistence::agent_registry::load_agents().expect("load agents");
-        registry.agents.remove("apprentice");
+        registry.agents.remove(
+            &crate::core::agent::id::AgentId::parse("apprentice")
+                .expect("test agent key")
+                .to_string(),
+        );
         crate::daemon::persistence::agent_registry::save_agents(&registry).expect("save agents");
 
         // The boot sweep must retire the orphaned tombstone, not skip it.
@@ -2513,7 +2563,7 @@ mod tests {
         let home = std::env::var("HOME").unwrap();
         std::fs::write(
             std::path::Path::new(&home).join("agents/apprentice/abilities/quote.ability.toml"),
-            "name = \"quote\"\ndescription = \"the apprentice's own quote\"\n\n[input_schema]\ntype = \"object\"\n",
+            "schema_version = \"1\"\nname = \"quote\"\ndescription = \"the apprentice's own quote\"\n\n[input_schema]\ntype = \"object\"\n",
         )
         .expect("native manifest");
         let err = acquire_handler_with_hot_registrar(
@@ -2533,7 +2583,8 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("dir");
         let temp = dir.join(".quote.ability.toml.import.staging");
         let dest = dir.join("quote.ability.toml");
-        let staged_bytes = b"name = \"quote\"\ndescription = \"imported\"\n";
+        let staged_bytes =
+            b"schema_version = \"1\"\nname = \"quote\"\ndescription = \"imported\"\n";
         std::fs::write(&temp, staged_bytes).expect("stage");
         std::fs::write(&dest, b"native ability").expect("racing writer");
         let staged = StagedDescriptorImportManifest {
@@ -2633,7 +2684,8 @@ mod tests {
             std::path::Path::new(&home).join("agents/apprentice/abilities/quote.ability.toml");
         std::fs::write(
             &imported_descriptor_manifest,
-            "name = \"quote\"\n\
+            "schema_version = \"1\"\n\
+             name = \"quote\"\n\
              description = \"mutated learner copy\"\n\n\
              [input_schema]\n\
              type = \"object\"\n",
@@ -2724,7 +2776,8 @@ mod tests {
     fn teach_rejects_manifest_name_that_does_not_match_owner_registry_key() {
         let _g = HomeGuard::new();
         let (_, apprentice_ura, mentor_ura) = seed_with_mentor_manifest(
-            "name = \"renamed\"\n\
+            "schema_version = \"1\"\n\
+             name = \"renamed\"\n\
              description = \"wrong identity\"\n\n\
              [input_schema]\n\
              type = \"object\"\n",

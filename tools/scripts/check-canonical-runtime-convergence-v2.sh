@@ -12905,6 +12905,52 @@ for text, token, code in required:
 PY
 }
 
+check_teach_canonical_agent_key_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local teach="$cli_root/src/daemon/ability/builtins/governance/teach.rs"
+  [[ -f "$teach" ]] || fail "teach canonical agent key source is missing: ${teach#$cli_root/}"
+
+  "$PYTHON_BIN" - "$teach" <<'PY'
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+production = text.split("#[cfg(all(test, feature = \"axon-pb\"))]", 1)[0]
+
+for required in (
+    "struct CanonicalAgentRegistryKey",
+    "registry_key: String",
+    "local_name: String",
+    "AgentId::parse(raw)",
+    "registry_key: agent_id.to_string()",
+    "local_name: agent_id.name",
+    "registered_agent_runtime_projection(&request.learner)",
+    "hosted_agent_identity_by_name(&agent_snapshot, &request.learner_local_name, ACQUIRE)",
+    "hosted_agent_identity_by_name(&agent_snapshot, &request.agent_local_name, FORGET)",
+    "hosted_agent_identity_by_name(&agent_snapshot, &owner_home.owner_local_name, ACQUIRE)",
+):
+    if required not in production:
+        raise SystemExit(f"teach_canonical_agent_key:missing_production:{required}")
+
+for retired in (
+    ".registry\n            .agents\n            .get(&request.learner)",
+    "registry.agents.insert(name.to_string(), entry)",
+    'registry.agents.remove("apprentice")',
+):
+    if retired in text:
+        raise SystemExit(f"teach_canonical_agent_key:retired_shorthand_registry_path:{retired}")
+
+for required_test in (
+    'AgentId::parse(name)',
+    'AgentId::parse("apprentice")',
+    'schema_version = \\"1\\"\\n\\',
+    'schema_version = \\"1\\"\\nname = \\"quote\\"',
+):
+    if required_test not in text:
+        raise SystemExit(f"teach_canonical_agent_key:missing_test_fixture:{required_test}")
+PY
+}
+
 check_ability_manifest_schema_version_strict_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local manifest="$cli_root/src/daemon/ability/manifest.rs"
@@ -18580,6 +18626,18 @@ EOF
   if ( CLI_ROOT="$tmp/cli-ability-manifest-exec"; check_ability_manifest_exec_absence_contract ) >/dev/null 2>&1; then
     fail "self-test expected ability manifest exec absence gate to fail"
   fi
+  mkdir -p "$tmp/cli-teach-agent-key-legacy/src/daemon/ability/builtins/governance"
+  cat > "$tmp/cli-teach-agent-key-legacy/src/daemon/ability/builtins/governance/teach.rs" <<'EOF'
+struct AcquireRequest { learner: String }
+fn seed() {
+    registry.agents.insert(name.to_string(), entry);
+    registry.agents.remove("apprentice");
+    let _ = "name = \"quote\"\n";
+}
+EOF
+  if ( CLI_ROOT="$tmp/cli-teach-agent-key-legacy"; check_teach_canonical_agent_key_contract ) >/dev/null 2>&1; then
+    fail "self-test expected teach canonical agent key gate to fail"
+  fi
   mkdir -p "$tmp/cli-local-runtime-identity/src/bin" \
     "$tmp/cli-local-runtime-identity/src/daemon/execution/loop_instance" \
     "$tmp/cli-local-runtime-identity/src/daemon/execution"
@@ -23931,6 +23989,7 @@ EOF
   check_ability_deploy_product_neutrality_contract
   check_device_ability_mutation_target_contract
   check_ability_manifest_exec_absence_contract
+  check_teach_canonical_agent_key_contract
   check_runtime_wire_target_state_contract
   check_invocation_wire_callee_target_contract
   check_local_session_runtime_assembly_contract
