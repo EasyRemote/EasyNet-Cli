@@ -1298,6 +1298,47 @@ test("stream and bidi state machines retain bounded history", async () => {
   assert.equal(bidi.terminalFrame().error.details.direction, "send");
 });
 
+test("stream and bidi terminality ignore retired event-kind aliases", async () => {
+  const streamFrames = [
+    { sequence: 1, frame_type: "terminal", state: "Running", terminal: false },
+    { sequence: 2, kind: "terminal", state: "Completed", terminal: false },
+  ];
+  const stream = new sdk.StreamHandle(
+    {
+      receive: () => JSON.stringify(streamFrames.shift()),
+    },
+    { stream_id: "stream-alias-cutover", max_buffered_events: 4 },
+  );
+
+  const aliasStreamEvent = await stream.receive();
+  assert.equal(aliasStreamEvent.frame_type, "terminal");
+  assert.equal(stream.terminal, false);
+  assert.equal(stream.terminalEvent(), null);
+
+  await stream.receive();
+  assert.equal(stream.terminal, true);
+
+  const bidiFrames = [
+    { sequence: 1, event_type: "terminal", state: "Running", terminal: false },
+    { sequence: 2, kind: "completed", state: "Completed", terminal: false },
+  ];
+  const bidi = new sdk.BidiSession(
+    {
+      send: () => {},
+      receive: () => JSON.stringify(bidiFrames.shift()),
+    },
+    { session_id: "bidi-alias-cutover", max_buffered_frames: 4 },
+  );
+
+  const aliasBidiFrame = await bidi.receive();
+  assert.equal(aliasBidiFrame.event_type, "terminal");
+  assert.equal(bidi.terminal, false);
+  assert.equal(bidi.terminalFrame(), null);
+
+  await bidi.receive();
+  assert.equal(bidi.terminal, true);
+});
+
 test("typed errors preserve stable categories and source refs", () => {
   assert.equal(
     new sdk.SDKError({ code: sdk.ErrorCode.AUTHORITY_DENIED, stage: "admission", message: "denied" }).errorClass(),

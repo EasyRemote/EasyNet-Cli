@@ -3813,12 +3813,7 @@ function isTerminalFrame(value) {
   if (value.terminal === true) {
     return true;
   }
-  for (const key of ["state", "frame_type", "event_type", "type", "kind"]) {
-    if (terminalToken(value[key])) {
-      return true;
-    }
-  }
-  return false;
+  return terminalToken(value.kind);
 }
 
 function terminalToken(value) {
