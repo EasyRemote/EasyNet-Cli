@@ -7,7 +7,10 @@ import unittest
 
 import easynet_sdk
 import easynet_sdk.providers.runtime.direct as direct_runtime
-from easynet_sdk.consumer_boundary import audit_consumer_boundary
+from easynet_sdk.consumer_boundary import (
+    ConsumerBoundaryPolicy,
+    audit_consumer_boundary,
+)
 
 
 class ImportBoundaryTests(unittest.TestCase):
@@ -186,13 +189,33 @@ print(json.dumps({
         with tempfile.TemporaryDirectory() as tmp:
             source = Path(tmp) / "consumer.py"
             source.write_text(
-                'CONTROL = "unix:///tmp/easynet-daemon.sock"\n',
+                'CONTROL = "unix:///tmp/runtime-host.sock"\n',
                 encoding="utf-8",
             )
             result = audit_consumer_boundary(tmp)
             rules = {violation.rule for violation in result.violations}
             self.assertIn("raw_runtime_host_session", rules)
             self.assertNotIn("raw_daemon_session", rules)
+
+    def test_consumer_boundary_subprocess_targets_are_policy_owned(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "consumer.py"
+            source.write_text(
+                'import subprocess\nsubprocess.run(["runtime-host", "start"])\n',
+                encoding="utf-8",
+            )
+            default_result = audit_consumer_boundary(tmp)
+            default_rules = {violation.rule for violation in default_result.violations}
+            self.assertNotIn("runtime_subprocess", default_rules)
+
+            policy_result = audit_consumer_boundary(
+                tmp,
+                ConsumerBoundaryPolicy(
+                    runtime_subprocess_targets=("runtime-host",),
+                ),
+            )
+            policy_rules = {violation.rule for violation in policy_result.violations}
+            self.assertIn("runtime_subprocess", policy_rules)
 
     def test_descriptor_ref_grammar_stays_out_of_python_runtime_core(self) -> None:
         root = Path(__file__).resolve().parents[1] / "easynet_sdk"

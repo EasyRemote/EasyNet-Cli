@@ -54,6 +54,14 @@ runtime_device_revoke_violations() {
   rg -n '\b(RuntimeDeviceRevoke(Request|Result)|RevokeDevice|revoke_device)\b' "$@"
 }
 
+python_consumer_boundary_product_marker_violations() {
+  local consumer_boundary="${1:-sdk/python/easynet_sdk/consumer_boundary.py}"
+  [[ -f "$consumer_boundary" ]] || return 0
+  rg -n \
+    '(easynet-(daemon|control)|unix:///tmp/easynet|runtime_subprocess_targets[^)]*["'\'']easynet["'\'']|EasyRemote)' \
+    "$consumer_boundary"
+}
+
 python_runtime_admin_session_projection_violations() {
   local runtime_admin="${1:-sdk/python/easynet_sdk/runtime_admin.py}"
   [[ -f "$runtime_admin" ]] || return 0
@@ -285,6 +293,13 @@ if [[ "${1:-}" == "--self-test" ]]; then
     fail "self-test failed to detect Python runtime device revoke surface"
   fi
   rm -f "$injected"
+  injected="$tmp/sdk/python/easynet_sdk/consumer_boundary.py"
+  mkdir -p "$(dirname "$injected")"
+  printf 'PRODUCT_SOCKET = "unix:///tmp/easynet-daemon.sock"\nruntime_subprocess_targets = ("easynet",)\n' >"$injected"
+  if ! python_consumer_boundary_product_marker_violations "$injected" >/dev/null; then
+    fail "self-test failed to detect product runtime-host marker in Python consumer boundary"
+  fi
+  rm -f "$injected"
   mkdir -p "$tmp/sdk/node/provider/easynet"
   retired_output="$(retired_product_sdk_module_violations "$tmp")"
   if ! grep -Fxq "sdk/node/provider/easynet" <<<"$retired_output"; then
@@ -481,6 +496,11 @@ fi
 
 if runtime_device_revoke_violations "${production_sources[@]}"; then
   fail "runtime device revoke surface leaked into runtime SDK production source"
+fi
+
+if python_consumer_boundary_product_marker_violations \
+  "$ROOT/sdk/python/easynet_sdk/consumer_boundary.py"; then
+  fail "product runtime-host marker leaked into Python SDK consumer boundary policy"
 fi
 
 python_runtime_admin_session_projection_violations \
