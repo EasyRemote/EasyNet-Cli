@@ -112,10 +112,10 @@ mkfinal() {
   touch "$dir/schemas/control_plane.proto" "$dir/schemas/common.proto"
   touch "$dir/tools/sdk-conformance-runner/Cargo.toml" "$dir/tools/sdk-conformance-runner/src/main.rs"
   touch \
-    "$dir/provider_routes/easynet-access-control-routes.v1.json" \
-    "$dir/provider_routes/easynet-principal-lifecycle-routes.v1.json" \
-    "$dir/provider_routes/easynet-receipt-routes.v1.json" \
-    "$dir/provider_routes/easynet-runtime-admin-routes.v1.json" \
+    "$dir/provider_routes/runtime-access-control-routes.v1.json" \
+    "$dir/provider_routes/runtime-principal-lifecycle-routes.v1.json" \
+    "$dir/provider_routes/runtime-receipt-routes.v1.json" \
+    "$dir/provider_routes/runtime-admin-routes.v1.json" \
     "$dir/provider_routes/generate_access_control_routes.py" \
     "$dir/provider_routes/generate_principal_routes.py" \
     "$dir/provider_routes/generate_receipt_routes.py" \

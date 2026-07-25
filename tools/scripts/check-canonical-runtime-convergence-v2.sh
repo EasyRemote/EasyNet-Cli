@@ -857,6 +857,44 @@ check_sdk_runtime_admin_authority_session_contract() {
   fi
 }
 
+check_provider_route_manifest_neutrality_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local routes="$cli_root/provider_routes"
+  [[ -d "$routes" ]] || return 0
+
+  if find "$routes" -maxdepth 1 -type f -name 'easynet-*-routes.v1.json' | grep -q .; then
+    fail "provider route manifests preserve EasyNet-shaped filenames"
+  fi
+  if rg -n '"provider":\s*"easynet"|expected_provider="easynet"|easynet-(access-control|principal-lifecycle|receipt|runtime-admin)-routes' \
+    "$routes" \
+    "$cli_root/sdk/go" \
+    "$cli_root/sdk/python" \
+    "$cli_root/src" \
+    "$cli_root/tests" \
+    --glob '!sdk/node/node_modules/**'; then
+    fail "provider route bindings preserve EasyNet-shaped manifest identity"
+  fi
+  for manifest in \
+    runtime-access-control-routes.v1.json \
+    runtime-principal-lifecycle-routes.v1.json \
+    runtime-receipt-routes.v1.json \
+    runtime-admin-routes.v1.json
+  do
+    if [[ ! -f "$routes/$manifest" ]]; then
+      fail "provider route manifest missing: provider_routes/$manifest"
+    fi
+    "$PYTHON_BIN" - "$routes/$manifest" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+manifest = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+if manifest.get("provider") != "runtime":
+    raise SystemExit("provider_route_manifest_not_runtime")
+PY
+  done
+}
+
 check_advertise_agent_ingress_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local wrappers="$cli_root/src/daemon/invocation/dispatch/federation_wrappers.rs"
@@ -20900,6 +20938,7 @@ EOF
   check_python_sdk_runtime_addressing_kind_contract
   check_sdk_managed_signing_authority_route_contract
   check_sdk_runtime_admin_authority_session_contract
+  check_provider_route_manifest_neutrality_contract
   check_advertise_agent_ingress_contract
   check_agent_start_model_intent_contract
   check_invocation_history_get_key_contract
@@ -21120,6 +21159,7 @@ check_go_sdk_runtime_resource_namespace_contract
 check_python_sdk_runtime_addressing_kind_contract
 check_sdk_managed_signing_authority_route_contract
 check_sdk_runtime_admin_authority_session_contract
+check_provider_route_manifest_neutrality_contract
 check_advertise_agent_ingress_contract
 check_agent_start_model_intent_contract
 check_invocation_history_get_key_contract

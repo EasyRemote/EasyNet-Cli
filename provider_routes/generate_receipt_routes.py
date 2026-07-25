@@ -14,7 +14,7 @@ from route_generator import (
     write_if_changed,
 )
 
-MANIFEST = ROOT / "provider_routes/easynet-receipt-routes.v1.json"
+MANIFEST = ROOT / "provider_routes/runtime-receipt-routes.v1.json"
 GO_OUTPUT = ROOT / "sdk/go/receipt_routes_gen.go"
 PY_OUTPUT = ROOT / "sdk/python/easynet_sdk/_receipt_routes.py"
 DAEMON_RUST_OUTPUT = ROOT / "src/daemon/ability/receipt_routes_gen.rs"
@@ -23,7 +23,7 @@ DAEMON_RUST_OUTPUT = ROOT / "src/daemon/ability/receipt_routes_gen.rs"
 def receipt_manifest() -> dict[str, object]:
     return load_manifest(
         MANIFEST,
-        expected_provider="easynet",
+        expected_provider="runtime",
         expected_capability="receipt",
         route_const_keys={"go_const", "python_const", "daemon_const"},
         route_label="receipt",

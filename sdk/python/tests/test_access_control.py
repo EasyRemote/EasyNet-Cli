@@ -150,7 +150,7 @@ class AccessControlTests(unittest.TestCase):
             Path(__file__).resolve().parents[2]
             .parent
             / "provider_routes"
-            / "easynet-access-control-routes.v1.json"
+            / "runtime-access-control-routes.v1.json"
         )
         digest = hashlib.sha256(manifest.read_bytes()).hexdigest()
         self.assertEqual(_ACCESS_CONTROL_ROUTE_MANIFEST_SHA256, digest)

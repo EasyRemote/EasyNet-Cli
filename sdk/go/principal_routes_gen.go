@@ -3,7 +3,7 @@ package easynet
 
 const (
 	principalLifecycleProfile             = "principal_lifecycle"
-	principalLifecycleRouteManifestSHA256 = "268a2e372ca9fa106c868a0b4c2561d334fd72dc62f8844b5a8add627de52038"
+	principalLifecycleRouteManifestSHA256 = "37354919a12da7c16835a31bb8b3c7b5d62652ddc129c5ae993f838d61414189"
 	principalAbilityCreate                = "principal.lifecycle.create"
 	principalAbilityBindFirstKey          = "principal.lifecycle.bind_first_key"
 	principalAbilityAddKey                = "principal.lifecycle.add_key"

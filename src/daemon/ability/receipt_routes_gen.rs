@@ -4,7 +4,7 @@
 pub(crate) const RECEIPT_PROFILE: &str = "receipt";
 #[cfg(test)]
 pub(crate) const RECEIPT_ROUTE_MANIFEST_SHA256: &str =
-    "186d834b426d4e84d3584904ed434eb19cf38bb568eebaf2db376725b74b46f2";
+    "0f692814e211b24c224f741686470220354360263921553d1fe045df2304c178";
 pub(crate) const INVOCATION_HISTORY_LIST: &str = "invocation.history.list";
 pub(crate) const INVOCATION_HISTORY_GET: &str = "invocation.history.get";
 pub(crate) const INVOCATION_TRACE_GET: &str = "invocation.trace.get";

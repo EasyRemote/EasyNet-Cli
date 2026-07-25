@@ -225,10 +225,10 @@ require_only_dirs ability-descriptors/system \
 
 require_no_dirs provider_routes
 require_only_files provider_routes \
-  easynet-access-control-routes.v1.json \
-  easynet-principal-lifecycle-routes.v1.json \
-  easynet-receipt-routes.v1.json \
-  easynet-runtime-admin-routes.v1.json \
+  runtime-access-control-routes.v1.json \
+  runtime-principal-lifecycle-routes.v1.json \
+  runtime-receipt-routes.v1.json \
+  runtime-admin-routes.v1.json \
   generate_access_control_routes.py \
   generate_principal_routes.py \
   generate_receipt_routes.py \

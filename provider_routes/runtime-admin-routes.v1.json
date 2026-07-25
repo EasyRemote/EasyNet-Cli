@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "provider": "easynet",
+  "provider": "runtime",
   "capability": "runtime_admin",
   "profile": "runtime_admin",
   "routes": [

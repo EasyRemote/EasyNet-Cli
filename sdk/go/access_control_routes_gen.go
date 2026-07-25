@@ -3,7 +3,7 @@ package easynet
 
 const (
 	accessControlProfile                     = "access_control"
-	accessControlRouteManifestSHA256         = "677ac1516587c846cbdc12e74b1d35b880e260e291fcf7570859f4b220922e1a"
+	accessControlRouteManifestSHA256         = "382074b1171e40afc508fe852948f9043b20503b51d9383b9523490f3c68b14e"
 	accessControlAbilityGrant                = "authority.binding.grant"
 	accessControlAbilityRevoke               = "authority.binding.revoke"
 	accessControlAbilityList                 = "authority.binding.list"

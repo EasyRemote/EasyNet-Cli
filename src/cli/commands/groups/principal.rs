@@ -1400,7 +1400,7 @@ mod tests {
     #[test]
     fn principal_routes_are_generated_from_manifest() {
         let manifest = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("provider_routes/easynet-principal-lifecycle-routes.v1.json");
+            .join("provider_routes/runtime-principal-lifecycle-routes.v1.json");
         let digest = sha2::Sha256::digest(std::fs::read(manifest).expect("read manifest"));
 
         assert_eq!(routes::PRINCIPAL_ROUTE_MANIFEST_SHA256, hex::encode(digest));

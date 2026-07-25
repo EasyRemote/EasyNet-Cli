@@ -3,6 +3,6 @@ package easynet
 
 const (
 	runtimeAdminProfile             = "runtime_admin"
-	runtimeAdminRouteManifestSHA256 = "193ba5b5a28180af5d5d936930e880f7d40153963f85c6d0425c54febb214d6a"
+	runtimeAdminRouteManifestSHA256 = "7ebcf5c31052f8a37e2a5d4f98943db90c7506a4795195ab6f1aaa2ce90c21cf"
 	runtimeAdminSessionListAbility  = "session.list"
 )

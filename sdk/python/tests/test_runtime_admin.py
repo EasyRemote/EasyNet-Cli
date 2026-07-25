@@ -34,7 +34,7 @@ def test_runtime_admin_routes_are_generated_from_manifest() -> None:
     manifest = (
         Path(__file__).resolve().parents[2].parent
         / "provider_routes"
-        / "easynet-runtime-admin-routes.v1.json"
+        / "runtime-admin-routes.v1.json"
     )
     digest = hashlib.sha256(manifest.read_bytes()).hexdigest()
     assert _RUNTIME_ADMIN_ROUTE_MANIFEST_SHA256 == digest

@@ -24,7 +24,7 @@ func TestReceiptRoutesGeneratedFromManifest(t *testing.T) {
 		"..",
 		"..",
 		"provider_routes",
-		"easynet-receipt-routes.v1.json",
+		"runtime-receipt-routes.v1.json",
 	)
 	manifest, err := os.ReadFile(manifestPath)
 	if err != nil {

@@ -1197,7 +1197,7 @@ mod tests {
         use sha2::Digest as _;
 
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("provider_routes/easynet-access-control-routes.v1.json");
+            .join("provider_routes/runtime-access-control-routes.v1.json");
         let digest = sha2::Sha256::digest(std::fs::read(manifest).expect("read manifest"));
 
         assert_eq!(

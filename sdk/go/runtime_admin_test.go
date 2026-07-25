@@ -22,7 +22,7 @@ func TestRuntimeAdminRoutesGeneratedFromManifest(t *testing.T) {
 		"..",
 		"..",
 		"provider_routes",
-		"easynet-runtime-admin-routes.v1.json",
+		"runtime-admin-routes.v1.json",
 	)
 	manifest, err := os.ReadFile(manifestPath)
 	if err != nil {

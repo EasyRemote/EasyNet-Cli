@@ -4,6 +4,6 @@
 pub(crate) const RUNTIME_ADMIN_PROFILE: &str = "runtime_admin";
 #[cfg(test)]
 pub(crate) const RUNTIME_ADMIN_ROUTE_MANIFEST_SHA256: &str =
-    "193ba5b5a28180af5d5d936930e880f7d40153963f85c6d0425c54febb214d6a";
+    "7ebcf5c31052f8a37e2a5d4f98943db90c7506a4795195ab6f1aaa2ce90c21cf";
 pub(crate) const SESSION_LIST: &str = "session.list";
 pub(crate) const FEDERATION_REVOKE: &str = "federation.revoke";

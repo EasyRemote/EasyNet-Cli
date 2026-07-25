@@ -14,7 +14,7 @@ from route_generator import (
     write_if_changed,
 )
 
-MANIFEST = ROOT / "provider_routes/easynet-runtime-admin-routes.v1.json"
+MANIFEST = ROOT / "provider_routes/runtime-admin-routes.v1.json"
 GO_OUTPUT = ROOT / "sdk/go/runtime_admin_routes_gen.go"
 PY_OUTPUT = ROOT / "sdk/python/easynet_sdk/_runtime_admin_routes.py"
 DAEMON_RUST_OUTPUT = ROOT / "src/daemon/ability/runtime_admin_routes_gen.rs"
@@ -25,7 +25,7 @@ ALLOWED_ABILITIES = {"session.list", "federation.revoke"}
 def runtime_admin_manifest() -> dict[str, object]:
     manifest = load_manifest(
         MANIFEST,
-        expected_provider="easynet",
+        expected_provider="runtime",
         expected_capability="runtime_admin",
         route_const_keys={"daemon_const"},
         route_label="runtime-admin",

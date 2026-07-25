@@ -3,7 +3,7 @@ package easynet
 
 const (
 	receiptProfile             = "receipt"
-	receiptRouteManifestSHA256 = "186d834b426d4e84d3584904ed434eb19cf38bb568eebaf2db376725b74b46f2"
+	receiptRouteManifestSHA256 = "0f692814e211b24c224f741686470220354360263921553d1fe045df2304c178"
 	receiptHistoryListAbility  = "invocation.history.list"
 	receiptHistoryGetAbility   = "invocation.history.get"
 	receiptTraceGetAbility     = "invocation.trace.get"

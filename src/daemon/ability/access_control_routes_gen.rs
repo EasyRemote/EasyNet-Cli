@@ -4,7 +4,7 @@
 pub(crate) const ACCESS_CONTROL_PROFILE: &str = "access_control";
 #[cfg(test)]
 pub(crate) const ACCESS_CONTROL_ROUTE_MANIFEST_SHA256: &str =
-    "677ac1516587c846cbdc12e74b1d35b880e260e291fcf7570859f4b220922e1a";
+    "382074b1171e40afc508fe852948f9043b20503b51d9383b9523490f3c68b14e";
 pub(crate) const AUTHORITY_BINDING_GRANT: &str = "authority.binding.grant";
 pub(crate) const AUTHORITY_BINDING_REVOKE: &str = "authority.binding.revoke";
 pub(crate) const AUTHORITY_BINDING_LIST: &str = "authority.binding.list";

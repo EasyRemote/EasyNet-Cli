@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "provider": "easynet",
+  "provider": "runtime",
   "capability": "access_control",
   "profile": "access_control",
   "routes": [

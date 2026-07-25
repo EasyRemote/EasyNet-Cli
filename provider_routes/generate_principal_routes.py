@@ -14,7 +14,7 @@ from route_generator import (
     write_if_changed,
 )
 
-MANIFEST = ROOT / "provider_routes/easynet-principal-lifecycle-routes.v1.json"
+MANIFEST = ROOT / "provider_routes/runtime-principal-lifecycle-routes.v1.json"
 GO_OUTPUT = ROOT / "sdk/go/principal_routes_gen.go"
 PY_OUTPUT = ROOT / "sdk/python/easynet_sdk/_principal_routes.py"
 RUST_OUTPUT = ROOT / "src/cli/commands/groups/principal_routes_gen.rs"
@@ -24,7 +24,7 @@ DAEMON_RUST_OUTPUT = ROOT / "src/daemon/ability/principal_routes_gen.rs"
 def principal_manifest() -> dict[str, object]:
     return load_manifest(
         MANIFEST,
-        expected_provider="easynet",
+        expected_provider="runtime",
         expected_capability="principal_lifecycle",
         route_const_keys={"go_const", "python_const", "rust_const", "daemon_const"},
         route_label="principal",

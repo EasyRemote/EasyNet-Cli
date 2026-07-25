@@ -39,7 +39,7 @@ def test_receipt_routes_are_generated_from_manifest() -> None:
         Path(__file__).resolve().parents[2]
         .parent
         / "provider_routes"
-        / "easynet-receipt-routes.v1.json"
+        / "runtime-receipt-routes.v1.json"
     )
     digest = hashlib.sha256(manifest.read_bytes()).hexdigest()
     assert _RECEIPT_ROUTE_MANIFEST_SHA256 == digest

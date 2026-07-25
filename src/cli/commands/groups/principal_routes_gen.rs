@@ -4,7 +4,7 @@
 pub(crate) const PRINCIPAL_LIFECYCLE_PROFILE: &str = "principal_lifecycle";
 #[cfg(test)]
 pub(crate) const PRINCIPAL_ROUTE_MANIFEST_SHA256: &str =
-    "268a2e372ca9fa106c868a0b4c2561d334fd72dc62f8844b5a8add627de52038";
+    "37354919a12da7c16835a31bb8b3c7b5d62652ddc129c5ae993f838d61414189";
 pub(crate) const PRINCIPAL_ABILITY_CREATE: &str = "principal.lifecycle.create";
 pub(crate) const PRINCIPAL_ABILITY_BIND_FIRST_KEY: &str = "principal.lifecycle.bind_first_key";
 pub(crate) const PRINCIPAL_ABILITY_ADD_KEY: &str = "principal.lifecycle.add_key";

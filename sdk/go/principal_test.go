@@ -50,7 +50,7 @@ func TestPrincipalLifecycleRoutesGeneratedFromManifest(t *testing.T) {
 		"..",
 		"..",
 		"provider_routes",
-		"easynet-principal-lifecycle-routes.v1.json",
+		"runtime-principal-lifecycle-routes.v1.json",
 	)
 	manifest, err := os.ReadFile(manifestPath)
 	if err != nil {

@@ -25,7 +25,7 @@ func TestAccessControlRoutesGeneratedFromManifest(t *testing.T) {
 		"..",
 		"..",
 		"provider_routes",
-		"easynet-access-control-routes.v1.json",
+		"runtime-access-control-routes.v1.json",
 	)
 	manifest, err := os.ReadFile(manifestPath)
 	if err != nil {

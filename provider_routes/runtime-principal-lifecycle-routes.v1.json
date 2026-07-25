@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "provider": "easynet",
+  "provider": "runtime",
   "capability": "principal_lifecycle",
   "profile": "principal_lifecycle",
   "routes": [
