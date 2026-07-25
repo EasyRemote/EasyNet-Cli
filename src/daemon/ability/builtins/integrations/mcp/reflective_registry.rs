@@ -1410,9 +1410,11 @@ fn descriptor_owner_authority(owner_ura: &str) -> Result<DescriptorOwnerAuthorit
                 owner_ura.to_string(),
             )
         }
-        crate::core::ura::URAKind::Authority => {
-            (OwnerKind::Hub, "hub".to_string(), owner_ura.to_string())
-        }
+        crate::core::ura::URAKind::Authority => (
+            OwnerKind::RealmAuthority,
+            "hub".to_string(),
+            owner_ura.to_string(),
+        ),
         crate::core::ura::URAKind::Device => (
             OwnerKind::Device,
             "device".to_string(),

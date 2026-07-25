@@ -22,7 +22,7 @@ pub(crate) fn register(reg: &mut AxonAbilityCatalog) -> anyhow::Result<()> {
         let manifest = super::system_manifest::registration_manifest(ability.name)?;
         reg.register_control_plane_descriptor_with_owner(
             ability.name,
-            &OwnerKind::Hub,
+            &OwnerKind::RealmAuthority,
             &manifest,
             ability.call_mode,
             ReceiptSemantics::Operational,
@@ -38,7 +38,7 @@ pub(crate) fn register(reg: &mut AxonAbilityCatalog) -> anyhow::Result<()> {
         let manifest = super::system_manifest::registration_manifest(ability.name)?;
         reg.register_control_plane_descriptor_with_owner(
             ability.name,
-            &OwnerKind::Hub,
+            &OwnerKind::RealmAuthority,
             &manifest,
             ability.call_mode,
             ReceiptSemantics::Operational,

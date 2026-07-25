@@ -185,7 +185,7 @@ fn register_with_repository(
 ) {
     use crate::daemon::ability::dispatch::OwnerKind;
     let service = Arc::new(VoiceCallService::new(repository));
-    let owner = OwnerKind::Hub;
+    let owner = OwnerKind::RealmAuthority;
     let create = Arc::clone(&service);
     reg.register_rpc_with_envelope_and_owner(
         ABILITY_CREATE_CALL,

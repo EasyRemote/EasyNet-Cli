@@ -750,7 +750,7 @@ fn build_registry_satisfies_device_baseline_contract() {
 }
 
 #[test]
-fn default_registry_build_uses_device_authority_profile_without_hub_rows() {
+fn default_registry_build_uses_device_authority_profile_without_realm_authority_rows() {
     let _home = crate::cli::commands::test_support::HomeGuard::new();
     let registry = build_registry();
     let rows = registry.authority_ability_catalog_snapshot();
@@ -761,13 +761,13 @@ fn default_registry_build_uses_device_authority_profile_without_hub_rows() {
     );
     assert!(
         rows.iter()
-            .all(|row| row.owner != crate::daemon::ability::dispatch::OwnerKind::Hub),
-        "default RegistryBuildConfig leaked Hub authority rows: {rows:?}"
+            .all(|row| row.owner != crate::daemon::ability::dispatch::OwnerKind::RealmAuthority),
+        "default RegistryBuildConfig leaked RealmAuthority rows: {rows:?}"
     );
 }
 
 #[test]
-fn combined_registry_binds_local_introspection_to_distinct_device_and_hub_roots() {
+fn combined_registry_binds_local_introspection_to_distinct_device_and_realm_authority_roots() {
     let _home = crate::cli::commands::test_support::HomeGuard::new();
     let agents = AgentRegistry::default();
     let device_ura = crate::core::ura::device_ura("realm-b", "dev-b");
@@ -1053,30 +1053,30 @@ fn hub_registry_assembly_contains_no_device_plane_control_or_runtime_rows() {
     let rows = registry.authority_ability_catalog_snapshot();
     assert!(
         !rows.is_empty(),
-        "Hub registry must retain its Hub abilities"
+        "RealmAuthority registry must retain its Authority-owned abilities"
     );
     let leaked_rows: Vec<_> = rows
         .iter()
         .filter(|row| {
-            row.owner != crate::daemon::ability::dispatch::OwnerKind::Hub
+            row.owner != crate::daemon::ability::dispatch::OwnerKind::RealmAuthority
                 || row.descriptor.owner_ura != hub_ura
         })
         .collect();
     assert!(
         leaked_rows.is_empty(),
-        "Hub registry leaked a non-Hub authority row: {leaked_rows:?}"
+        "RealmAuthority registry leaked a non-Authority row: {leaked_rows:?}"
     );
     assert_eq!(
         rows.iter()
             .filter(|row| {
                 row.name == crate::daemon::ability::names::device_control::SESSION_OPEN
-                    && row.owner == crate::daemon::ability::dispatch::OwnerKind::Hub
+                    && row.owner == crate::daemon::ability::dispatch::OwnerKind::RealmAuthority
                     && row.descriptor.owner_ura == hub_ura
                     && row.descriptor.call_mode() == crate::daemon::ability::CallMode::Bidi
             })
             .count(),
         1,
-        "Hub registry must retain exactly one Hub-owned session.open descriptor"
+        "RealmAuthority registry must retain exactly one Authority-owned session.open descriptor"
     );
     let exclusions = registry.static_authority_exclusion_snapshot();
     assert!(
@@ -1090,7 +1090,7 @@ fn hub_registry_assembly_contains_no_device_plane_control_or_runtime_rows() {
         );
     assert!(
         conformance.is_conformant(),
-        "Hub owner filtering broke the local Hub baseline: {}",
+        "RealmAuthority owner filtering broke the local authority baseline: {}",
         conformance.panic_message()
     );
 
@@ -1098,28 +1098,28 @@ fn hub_registry_assembly_contains_no_device_plane_control_or_runtime_rows() {
         &hub_ura,
         "meta.list_abilities",
     )
-    .expect("Hub meta runtime key");
+    .expect("RealmAuthority meta runtime key");
     assert!(
         crate::support::async_bridge::run_blocking(
             runtime.ability_options(&hub_meta),
             crate::support::async_bridge::SyncBridgeRuntimePolicy::UseFuturesExecutor,
         )
         .is_some(),
-        "Hub LocalRuntime must retain Hub meta.list_abilities"
+        "RealmAuthority LocalRuntime must retain meta.list_abilities"
     );
 
     let hub_voice_list = crate::daemon::axon_bridge::descriptor_ref::ability_ura_for_wire(
         &hub_ura,
         crate::daemon::ability::names::resources::VOICE_LIST_CALLS,
     )
-    .expect("Hub voice.list_calls runtime key");
+    .expect("RealmAuthority voice.list_calls runtime key");
     assert!(
         crate::support::async_bridge::run_blocking(
             runtime.ability_options(&hub_voice_list),
             crate::support::async_bridge::SyncBridgeRuntimePolicy::UseFuturesExecutor,
         )
         .is_none(),
-        "Hub LocalRuntime must not expose voice.list_calls without a realm provider"
+        "RealmAuthority LocalRuntime must not expose voice.list_calls without a realm provider"
     );
 
     let former_synthetic_device = crate::core::ura::device_ura("hub-only", "local");
@@ -1134,12 +1134,12 @@ fn hub_registry_assembly_contains_no_device_plane_control_or_runtime_rows() {
             crate::support::async_bridge::SyncBridgeRuntimePolicy::UseFuturesExecutor,
         )
         .is_none(),
-        "Hub LocalRuntime must not contain rows under the former synthetic Device root"
+        "RealmAuthority LocalRuntime must not contain rows under the former synthetic Device root"
     );
 }
 
 #[test]
-fn hub_daemon_builder_does_not_read_device_agent_transaction_state() {
+fn realm_authority_daemon_builder_does_not_read_device_agent_transaction_state() {
     let _home = crate::cli::commands::test_support::HomeGuard::new();
     let state_dir = crate::daemon::persistence::config::state_dir();
     std::fs::create_dir_all(&state_dir).expect("create isolated state directory");
@@ -1167,12 +1167,12 @@ fn hub_daemon_builder_does_not_read_device_agent_transaction_state() {
         ),
     );
     let built = build_registry_for_daemon_result(config)
-        .expect("Hub daemon builder must not parse Device agent transaction state");
+        .expect("RealmAuthority daemon builder must not parse Device agent transaction state");
     let rows = built.catalog.authority_ability_catalog_snapshot();
     assert!(
         rows.iter()
-            .all(|row| row.owner == crate::daemon::ability::dispatch::OwnerKind::Hub),
-        "Hub daemon builder leaked Device/Agent state: {rows:?}"
+            .all(|row| row.owner == crate::daemon::ability::dispatch::OwnerKind::RealmAuthority),
+        "RealmAuthority daemon builder leaked Device/Agent state: {rows:?}"
     );
     assert!(built
         .catalog
@@ -1180,12 +1180,12 @@ fn hub_daemon_builder_does_not_read_device_agent_transaction_state() {
         .iter()
         .any(
             |row| row.name == crate::daemon::ability::names::governance::AUTHORITY_BINDING_GRANT
-                && row.owner == crate::daemon::ability::dispatch::OwnerKind::Hub
+                && row.owner == crate::daemon::ability::dispatch::OwnerKind::RealmAuthority
         ));
 }
 
 #[test]
-fn hub_daemon_builder_starts_without_publishing_unprovided_voice_capabilities() {
+fn realm_authority_daemon_builder_starts_without_publishing_unprovided_voice_capabilities() {
     let _home = crate::cli::commands::test_support::HomeGuard::new();
     let authority_context =
         crate::daemon::ability::dispatch::AbilityAuthorityContext::for_realm_authority_root(

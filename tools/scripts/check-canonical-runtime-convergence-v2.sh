@@ -1009,13 +1009,16 @@ check_authority_context_model_vocabulary_contract() {
     [[ -f "$file" ]] || fail "authority context vocabulary source is missing: ${file#$cli_root/}"
   done
 
-  if rg -n 'CanonicalHubAuthority|for_hub_authority_root|hosts_hub_authority|hub_authority_root|AbilityAuthoritySet::Hub|AbilityAuthoritySet::Both|Self::Hub \{|Self::Both|fn hub\(&self\)|\.hub\(\)|Hub authority context|Hub authority set|authority_set: "hub"|authority set "hub"|Device\+Hub authority|InvalidHubAuthorityRoot|hub authority root must|product Hub Authority' \
+  if rg -n 'CanonicalHubAuthority|for_hub_authority_root|hosts_hub_authority|hub_authority_root|OwnerKind::Hub|AbilityAuthoritySet::Hub|AbilityAuthoritySet::Both|Self::Hub \{|Self::Both|fn hub\(&self\)|\.hub\(\)|Hub authority context|Hub authority set|authority_set: "hub"|authority set "hub"|Device\+Hub authority|InvalidHubAuthorityRoot|hub authority root must|product Hub Authority|supported Hub owner|Hub owners|dynamic Hub owner|Hub owner with Device projection|foreign Hub authority root|Hub-owned session\.open|Hub registry leaked|Hub owner filtering|Hub LocalRuntime|Hub daemon builder' \
     "$dispatch" "$catalog_build" "$conformance" "$meta" "$assembly" "$daemon_tests" "$errors"; then
     fail "authority context model preserves retired Hub/Both vocabulary"
   fi
 
   for required in \
     "struct CanonicalRealmAuthority" \
+    "RealmAuthority," \
+    "OwnerKind::RealmAuthority" \
+    '"hub" => Some(OwnerKind::RealmAuthority)' \
     "RealmAuthority {" \
     "DeviceAndRealmAuthority {" \
     "fn realm_authority(&self)" \

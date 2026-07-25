@@ -349,7 +349,7 @@ pub(crate) fn catalog_owner_kind_for_wire(
             Ok(crate::daemon::ability::dispatch::OwnerKind::Device)
         }
         crate::core::ura::URAKind::Authority => {
-            Ok(crate::daemon::ability::dispatch::OwnerKind::Hub)
+            Ok(crate::daemon::ability::dispatch::OwnerKind::RealmAuthority)
         }
         crate::core::ura::URAKind::Agent => {
             let Some((_, agent_id)) = parsed.agent_ids().or_else(|| parsed.device_agent_ids())

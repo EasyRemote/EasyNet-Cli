@@ -608,9 +608,9 @@ fn build_registry_with_services_result_inner(
     if hosts_realm_authority {
         daemon_invocation_contracts::register_for_owner(
             &mut reg,
-            &crate::daemon::ability::dispatch::OwnerKind::Hub,
+            &crate::daemon::ability::dispatch::OwnerKind::RealmAuthority,
         )
-        .context("register Hub daemon Invocation descriptor contracts")?;
+        .context("register Authority-owned daemon Invocation descriptor contracts")?;
         runtime_admin_contracts::register(&mut reg)
             .context("register Hub runtime-admin descriptor contracts")?;
     }

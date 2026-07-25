@@ -353,7 +353,9 @@ fn authority_row_visible_from_callee(
     invocation_callee_ura: &str,
 ) -> bool {
     match &row.owner {
-        OwnerKind::Device | OwnerKind::Hub => row.descriptor.owner_ura == invocation_callee_ura,
+        OwnerKind::Device | OwnerKind::RealmAuthority => {
+            row.descriptor.owner_ura == invocation_callee_ura
+        }
         OwnerKind::Agent(_) | OwnerKind::User(_) => {
             row.descriptor.owner_ura == invocation_callee_ura
                 || invocation_callee_hosts_subordinate_owners(invocation_callee_ura)
@@ -824,7 +826,7 @@ mod tests {
         let registry = authority_bound_meta_registry(
             AbilityAuthorityContext::for_realm_authority_root(&hub_ura)
                 .expect("fixed realm authority context"),
-            vec![OwnerKind::Hub],
+            vec![OwnerKind::RealmAuthority],
         );
 
         let response = invoke_list_targeted(&registry, &hub_ura, json!({})).unwrap();
@@ -870,7 +872,7 @@ mod tests {
         );
         super::register(
             &mut registry,
-            vec![OwnerKind::Hub],
+            vec![OwnerKind::RealmAuthority],
             move || -> Vec<AbilityDescriptor> {
                 calls_for_provider.fetch_add(1, Ordering::SeqCst);
                 panic!("Hub live catalogue must not call Device descriptor provider")
@@ -911,7 +913,7 @@ mod tests {
         let registry = authority_bound_meta_registry(
             AbilityAuthorityContext::for_combined_authority_roots(&device_ura)
                 .expect("combined authority context"),
-            vec![OwnerKind::Device, OwnerKind::Hub],
+            vec![OwnerKind::Device, OwnerKind::RealmAuthority],
         );
 
         let device_response = invoke_list_targeted(&registry, &device_ura, json!({})).unwrap();

@@ -27,7 +27,7 @@ const LLM_DYNAMIC_ABILITY_PREFIXES: &[&str] = &[
     // `voice.*` was previously listed here on the
     // assumption that voice signaling is an LLM-owned ability
     // family (RFC-005 v3.2 A6/A7). The handlers actually run
-    // under the realm Hub authority (`OwnerKind::Hub` in the
+    // under the realm Authority (`OwnerKind::RealmAuthority` in the
     // registry); claiming them in this profile caused the
     // catalogue's `descriptors_for(agent_ura)` to stamp every
     // voice verb with the agent URA, so `easynet ability list`
@@ -37,7 +37,7 @@ const LLM_DYNAMIC_ABILITY_PREFIXES: &[&str] = &[
     // "which surface category it semantically belongs to" —
     // microphone / camera / speaker hardware remains Device-owned,
     // while voice synthesis, transcription, and signaling are now
-    // described through registry `OwnerKind::Hub`, not through an
+    // described through registry `OwnerKind::RealmAuthority`, not through an
     // LLM prefix claim.
     "conversation.",
     "skill.",

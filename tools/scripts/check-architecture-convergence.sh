@@ -1303,7 +1303,7 @@ voice_catalog = cli_root / "src/daemon/ability/builtins/resources/voice.rs"
 if voice_catalog.exists():
     text = source(voice_catalog)
     device_owner = re.search(r"\bOwnerKind::Device\b", text)
-    hub_owner = re.search(r"\bOwnerKind::Hub\b", text)
+    realm_authority_owner = re.search(r"\bOwnerKind::RealmAuthority\b", text)
     if device_owner:
         add(
             "R9_VOICE_OWNER_FORK",
@@ -1311,7 +1311,7 @@ if voice_catalog.exists():
             line_number(text, device_owner.start()),
             "voice signaling must not mirror its realm Authority state machine under Device authority",
         )
-    if not hub_owner:
+    if not realm_authority_owner:
         add(
             "R9_VOICE_HUB_OWNER_MISSING",
             voice_catalog,
@@ -1873,8 +1873,8 @@ if runtime_admin_contracts.exists():
             "session.open must use an explicit canonical owner registration",
         ),
         (
-            "&OwnerKind::Hub",
-            "session.open descriptor ownership must converge on the realm Hub",
+            "&OwnerKind::RealmAuthority",
+            "session.open descriptor ownership must converge on the realm Authority",
         ),
     ):
         if token not in contract_text:

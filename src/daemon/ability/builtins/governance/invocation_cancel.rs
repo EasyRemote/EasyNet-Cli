@@ -11,7 +11,7 @@ use crate::daemon::invocation::dispatch::cancellation::{
 };
 
 pub fn register(registry: &mut AxonAbilityCatalog, cancellations: InvocationCancellationRegistry) {
-    for owner in [OwnerKind::Device, OwnerKind::Hub] {
+    for owner in [OwnerKind::Device, OwnerKind::RealmAuthority] {
         let cancellations = cancellations.clone();
         registry.register_rpc_with_envelope_and_spec(
             ABILITY_INVOCATION_CANCEL,

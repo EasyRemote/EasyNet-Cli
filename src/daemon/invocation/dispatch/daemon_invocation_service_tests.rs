@@ -559,7 +559,7 @@ fn local_test_owner_kind(
             .session_realm
             .as_deref()
             .is_some_and(|realm| crate::core::ura::hub_ura(realm) == owner_ura)
-            .then_some(crate::daemon::ability::dispatch::OwnerKind::Hub),
+            .then_some(crate::daemon::ability::dispatch::OwnerKind::RealmAuthority),
         crate::core::ura::URAKind::Agent => {
             let (_, agent_id) = parsed.agent_ids()?;
             Some(crate::daemon::ability::dispatch::OwnerKind::Agent(

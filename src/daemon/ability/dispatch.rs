@@ -1312,11 +1312,14 @@ pub enum OwnerKind {
     /// Examples: `fs.read`, `terminal.create`, `session.list`,
     /// `node.list`, `skill.list`, `device.keyring.sign`.
     Device,
-    /// Hosted by the realm hub (federation-tier). Examples (terminal
-    /// state): `hub.openai.chat_completions`, `hub.openai.list_models`.
-    /// The handler may execute on the device daemon as a hub-local
-    /// proxy, but the protocol owner is the hub.
-    Hub,
+    /// Hosted by the realm Authority plane.
+    ///
+    /// Product packages may still use product-prefixed ability names such as
+    /// `hub.openai.chat_completions`, but the canonical owner root is the
+    /// realm Authority URA. The control-plane projection string remains
+    /// `"hub"` for persisted/public compatibility; this enum variant is the
+    /// internal runtime state and must use canonical runtime vocabulary.
+    RealmAuthority,
     /// Hosted by a sub-agent on this device. The contained string is
     /// the sub-agent's `agent_id` (e.g. `"codex"`, `"web-builder"`,
     /// `"consent"`). The full owner URA is
@@ -1324,7 +1327,7 @@ pub enum OwnerKind {
     /// realm + user are read from credentials at advertise time.
     Agent(String),
     /// Hosted by the user's account agent. Axon Ability URA ownership
-    /// has Hub, Device, and Agent branches, but no raw User branch; the
+    /// has Authority, Device, and Agent branches, but no raw User branch; the
     /// contained string is therefore projected to
     /// `agent/<user-id>.account` at the protocol boundary while the
     /// product owner projection remains `user:<id>`.
@@ -1335,7 +1338,7 @@ impl OwnerKind {
     fn authority_projection(&self) -> String {
         match self {
             OwnerKind::Device => "device".to_string(),
-            OwnerKind::Hub => "hub".to_string(),
+            OwnerKind::RealmAuthority => "hub".to_string(),
             OwnerKind::Agent(agent_id) => format!("agent:{agent_id}"),
             OwnerKind::User(user_id) => format!("user:{user_id}"),
         }
@@ -1358,7 +1361,7 @@ impl OwnerKind {
 fn owner_kind_from_projection(owner_projection: &str) -> Option<OwnerKind> {
     match owner_projection {
         "device" => Some(OwnerKind::Device),
-        "hub" => Some(OwnerKind::Hub),
+        "hub" => Some(OwnerKind::RealmAuthority),
         other => {
             if let Some(agent_id) = other.strip_prefix("agent:") {
                 Some(OwnerKind::Agent(agent_id.to_string()))
@@ -2107,9 +2110,9 @@ impl AbilityAuthorityContext {
     pub(crate) fn local_runtime_owners(&self) -> Vec<OwnerKind> {
         match &self.authorities {
             AbilityAuthoritySet::Device { .. } => vec![OwnerKind::Device],
-            AbilityAuthoritySet::RealmAuthority { .. } => vec![OwnerKind::Hub],
+            AbilityAuthoritySet::RealmAuthority { .. } => vec![OwnerKind::RealmAuthority],
             AbilityAuthoritySet::DeviceAndRealmAuthority { .. } => {
-                vec![OwnerKind::Device, OwnerKind::Hub]
+                vec![OwnerKind::Device, OwnerKind::RealmAuthority]
             }
         }
     }
@@ -2118,7 +2121,7 @@ impl AbilityAuthorityContext {
         match &self.authorities {
             AbilityAuthoritySet::Device { .. }
             | AbilityAuthoritySet::DeviceAndRealmAuthority { .. } => OwnerKind::Device,
-            AbilityAuthoritySet::RealmAuthority { .. } => OwnerKind::Hub,
+            AbilityAuthoritySet::RealmAuthority { .. } => OwnerKind::RealmAuthority,
         }
     }
 
@@ -2147,7 +2150,7 @@ impl AbilityAuthorityContext {
 
     fn supports_owner(&self, owner: &OwnerKind) -> bool {
         match owner {
-            OwnerKind::Hub => self.authorities.realm_authority().is_some(),
+            OwnerKind::RealmAuthority => self.authorities.realm_authority().is_some(),
             OwnerKind::Device | OwnerKind::Agent(_) | OwnerKind::User(_) => {
                 self.authorities.device().is_some()
             }
@@ -2195,7 +2198,7 @@ impl AbilityAuthorityContext {
                 .authorities
                 .device()
                 .is_some_and(|(device, _)| device.ura == authority_root),
-            OwnerKind::Hub => self
+            OwnerKind::RealmAuthority => self
                 .authorities
                 .realm_authority()
                 .is_some_and(|authority| authority.ura == authority_root),
@@ -2221,10 +2224,10 @@ impl AbilityAuthorityContext {
                 .0
                 .ura
                 .clone(),
-            OwnerKind::Hub => self
+            OwnerKind::RealmAuthority => self
                 .authorities
                 .realm_authority()
-                .expect("supported Hub owner requires realm authority")
+                .expect("supported RealmAuthority owner requires realm authority")
                 .ura
                 .clone(),
             OwnerKind::Agent(agent_id) => self.agent_authority_root(agent_id),
@@ -6468,12 +6471,15 @@ mod tests {
         let context = AbilityAuthorityContext::for_realm_authority_root(hub_ura.clone())
             .expect("canonical realm authority context");
 
-        let hub_scope = OwnerKind::Hub
+        let authority_scope = OwnerKind::RealmAuthority
             .authority_scope(&context)
             .expect("realm owner scope");
-        assert_eq!(hub_scope.authority_root(), hub_ura);
-        assert_eq!(context.local_runtime_owners(), vec![OwnerKind::Hub]);
-        assert_eq!(context.ledger_governance_owner(), OwnerKind::Hub);
+        assert_eq!(authority_scope.authority_root(), hub_ura);
+        assert_eq!(
+            context.local_runtime_owners(),
+            vec![OwnerKind::RealmAuthority]
+        );
+        assert_eq!(context.ledger_governance_owner(), OwnerKind::RealmAuthority);
 
         let err =
             AbilityAuthorityContext::for_realm_authority_root("easynet:///r/realm-b/device/dev-b")
@@ -6502,7 +6508,7 @@ mod tests {
     }
 
     #[test]
-    fn fixed_device_context_keeps_device_sponsored_agent_policy_and_rejects_hub() {
+    fn fixed_device_context_keeps_device_sponsored_agent_policy_and_rejects_realm_authority() {
         let device_ura = crate::core::ura::device_ura("realm-b", "dev-b");
         let context = AbilityAuthorityContext::for_device_authority_root(&device_ura)
             .expect("fixed Device authority context");
@@ -6516,11 +6522,11 @@ mod tests {
             agent_scope.authority_root(),
             crate::core::ura::device_agent_ura("realm-b", "dev-b", "worker")
         );
-        let hub_error = OwnerKind::Hub
+        let authority_error = OwnerKind::RealmAuthority
             .authority_scope(&context)
-            .expect_err("Device authority set must reject Hub owners");
+            .expect_err("Device authority set must reject RealmAuthority owners");
         assert!(matches!(
-            hub_error,
+            authority_error,
             AbilityControlPlaneError::UnsupportedOwnerForAuthoritySet {
                 authority_set: "device",
                 ..
@@ -6544,11 +6550,16 @@ mod tests {
             OwnerKind::Device,
             ok_handler(),
         );
-        register_test_rpc(&mut catalog, "meta.hub_only", OwnerKind::Hub, ok_handler());
+        register_test_rpc(
+            &mut catalog,
+            "meta.hub_only",
+            OwnerKind::RealmAuthority,
+            ok_handler(),
+        );
 
         let rows = catalog.authority_ability_catalog_snapshot();
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].owner, OwnerKind::Hub);
+        assert_eq!(rows[0].owner, OwnerKind::RealmAuthority);
         assert_eq!(rows[0].descriptor.owner_ura, hub_ura);
         assert_eq!(
             catalog.static_authority_exclusion_snapshot(),
@@ -6556,7 +6567,7 @@ mod tests {
         );
 
         let hub_runtime_key = local_runtime_ability_key_for_authority(&hub_ura, "meta.hub_only")
-            .expect("Hub runtime key");
+            .expect("RealmAuthority runtime key");
         assert!(block_on_runtime_sync(runtime.ability_options(&hub_runtime_key)).is_some());
         let synthetic_device_key = local_runtime_ability_key_for_authority(
             &crate::core::ura::device_ura("hub-only", "local"),
@@ -6567,7 +6578,7 @@ mod tests {
     }
 
     #[test]
-    fn device_registration_excludes_hub_owner_before_control_plane_and_runtime() {
+    fn device_registration_excludes_realm_authority_owner_before_control_plane_and_runtime() {
         let device_ura = crate::core::ura::device_ura("device-only", "dev-1");
         let hub_ura = crate::core::ura::hub_ura("device-only");
         let runtime = test_runtime();
@@ -6583,7 +6594,12 @@ mod tests {
             OwnerKind::Device,
             ok_handler(),
         );
-        register_test_rpc(&mut catalog, "meta.hub_only", OwnerKind::Hub, ok_handler());
+        register_test_rpc(
+            &mut catalog,
+            "meta.hub_only",
+            OwnerKind::RealmAuthority,
+            ok_handler(),
+        );
 
         let rows = catalog.authority_ability_catalog_snapshot();
         assert_eq!(rows.len(), 1);
@@ -6599,7 +6615,7 @@ mod tests {
                 .expect("Device runtime key");
         assert!(block_on_runtime_sync(runtime.ability_options(&device_runtime_key)).is_some());
         let hub_runtime_key = local_runtime_ability_key_for_authority(&hub_ura, "meta.hub_only")
-            .expect("hypothetical Hub runtime key");
+            .expect("hypothetical RealmAuthority runtime key");
         assert!(block_on_runtime_sync(runtime.ability_options(&hub_runtime_key)).is_none());
     }
 
@@ -6635,9 +6651,13 @@ mod tests {
             AbilityAuthorityContext::for_device_authority_root(device_ura)
                 .expect("Device authority context"),
         );
-        let error =
-            hot_register_test_rpc(&device_catalog, "hub.dynamic", OwnerKind::Hub, ok_handler())
-                .expect_err("Device authority set must reject dynamic Hub owner");
+        let error = hot_register_test_rpc(
+            &device_catalog,
+            "hub.dynamic",
+            OwnerKind::RealmAuthority,
+            ok_handler(),
+        )
+        .expect_err("Device authority set must reject dynamic RealmAuthority owner");
         assert!(error.to_string().contains("authority set \"device\""));
         assert!(device_catalog
             .authority_ability_catalog_snapshot()
@@ -6646,14 +6666,14 @@ mod tests {
     }
 
     #[test]
-    fn combined_authority_context_exposes_distinct_device_and_hub_owners() {
+    fn combined_authority_context_exposes_distinct_device_and_realm_authority_owners() {
         let device_ura = crate::core::ura::device_ura("realm-b", "dev-b");
         let context = AbilityAuthorityContext::for_combined_authority_roots(device_ura.clone())
             .expect("combined authority context");
 
         assert_eq!(
             context.local_runtime_owners(),
-            vec![OwnerKind::Device, OwnerKind::Hub]
+            vec![OwnerKind::Device, OwnerKind::RealmAuthority]
         );
         assert_eq!(context.ledger_governance_owner(), OwnerKind::Device);
         assert_eq!(
@@ -6664,16 +6684,16 @@ mod tests {
             device_ura
         );
         assert_eq!(
-            OwnerKind::Hub
+            OwnerKind::RealmAuthority
                 .authority_scope(&context)
-                .expect("Hub scope")
+                .expect("RealmAuthority scope")
                 .authority_root(),
             crate::core::ura::hub_ura("realm-b")
         );
     }
 
     #[test]
-    fn public_catalog_constructor_preserves_device_and_hub_registration() {
+    fn public_catalog_constructor_preserves_device_and_realm_authority_registration() {
         let mut catalog = combined_catalog();
         register_test_rpc(
             &mut catalog,
@@ -6684,13 +6704,15 @@ mod tests {
         register_test_rpc(
             &mut catalog,
             "meta.constructor",
-            OwnerKind::Hub,
+            OwnerKind::RealmAuthority,
             ok_handler(),
         );
 
         let rows = catalog.authority_ability_catalog_snapshot();
         assert!(rows.iter().any(|row| row.owner == OwnerKind::Device));
-        assert!(rows.iter().any(|row| row.owner == OwnerKind::Hub));
+        assert!(rows
+            .iter()
+            .any(|row| row.owner == OwnerKind::RealmAuthority));
         assert!(catalog.static_authority_exclusion_snapshot().is_empty());
     }
 
@@ -6708,7 +6730,7 @@ mod tests {
             .register_static(
                 StaticRegistration::new(
                     "meta.scope_mismatch",
-                    OwnerKind::Hub,
+                    OwnerKind::RealmAuthority,
                     StaticRegistrationHandler::Rpc(ok_handler()),
                 )
                 .with_manifest(test_manifest(
@@ -6718,7 +6740,7 @@ mod tests {
                 ))
                 .with_authority_scope(device_scope),
             )
-            .expect_err("Hub owner with Device projection must fail closed");
+            .expect_err("RealmAuthority owner with Device projection must fail closed");
         assert!(error
             .to_string()
             .contains("does not match registration owner"));
@@ -6734,11 +6756,11 @@ mod tests {
                 .expect("realm authority context"),
         );
         let foreign_scope = AuthorityScope::new("hub", crate::core::ura::hub_ura("foreign"))
-            .expect("foreign Hub scope is structurally valid");
+            .expect("foreign RealmAuthority scope is structurally valid");
 
         let error = DynamicRegistration::rpc_with_spec(
             "meta.foreign_scope",
-            OwnerKind::Hub,
+            OwnerKind::RealmAuthority,
             test_manifest(
                 "meta.foreign_scope",
                 "Foreign scope test ability.",
@@ -6748,7 +6770,7 @@ mod tests {
         )
         .with_authority_scope(foreign_scope)
         .commit(&catalog)
-        .expect_err("foreign Hub authority root must fail closed");
+        .expect_err("foreign RealmAuthority root must fail closed");
         assert!(error.to_string().contains("is not hosted by authority set"));
         assert!(catalog.authority_ability_catalog_snapshot().is_empty());
         assert!(!catalog.has_dynamic("meta.foreign_scope"));
@@ -6870,7 +6892,7 @@ mod tests {
 
         for (owner, projection, authority_root) in [
             (OwnerKind::Device, "device", device_ura.as_str()),
-            (OwnerKind::Hub, "hub", hub_ura.as_str()),
+            (OwnerKind::RealmAuthority, "hub", hub_ura.as_str()),
         ] {
             catalog
                 .register_static(
@@ -6916,7 +6938,7 @@ mod tests {
         register_test_rpc(
             &mut catalog,
             "meta.describe",
-            OwnerKind::Hub,
+            OwnerKind::RealmAuthority,
             Arc::new(|_args| Ok(json!({}))),
         );
 
@@ -6932,7 +6954,7 @@ mod tests {
                     )
         }));
         assert!(rows.iter().any(|row| {
-            row.owner == OwnerKind::Hub
+            row.owner == OwnerKind::RealmAuthority
                 && row.descriptor.owner_ura == hub_ura
                 && row.descriptor.canonical_ability_ura().as_deref()
                     == Some(crate::core::ura::hub_ability_ura("realm-b", "meta.describe").as_str())
@@ -7351,10 +7373,10 @@ mod tests {
 
         reg.register_control_plane_descriptor_with_owner(
             "shared.route",
-            &OwnerKind::Hub,
+            &OwnerKind::RealmAuthority,
             &test_manifest(
                 "shared.route",
-                "Same public name under an unrelated Hub Stream authority.",
+                "Same public name under an unrelated RealmAuthority Stream authority.",
                 serde_json::json!({"type": "object"}),
             ),
             DescriptorCallMode::Stream,
@@ -7384,17 +7406,17 @@ mod tests {
         ));
         reg.register_control_plane_descriptor_with_owner(
             "shared.missing",
-            &OwnerKind::Hub,
+            &OwnerKind::RealmAuthority,
             &test_manifest(
                 "shared.missing",
-                "Unrelated Hub RPC descriptor must not rescue Device handler state.",
+                "Unrelated RealmAuthority RPC descriptor must not rescue Device handler state.",
                 serde_json::json!({"type": "object"}),
             ),
             DescriptorCallMode::Rpc,
             ReceiptSemantics::Operational,
             &ControlPlaneImplementation::native_daemon(),
         )
-        .expect("unrelated Hub RPC descriptor registers");
+        .expect("unrelated RealmAuthority RPC descriptor registers");
 
         let err = reg
             .handler_control_plane_key("shared.missing")
@@ -7418,10 +7440,10 @@ mod tests {
 
         reg.register_control_plane_descriptor_with_owner(
             "dynamic.shared",
-            &OwnerKind::Hub,
+            &OwnerKind::RealmAuthority,
             &test_manifest(
                 "dynamic.shared",
-                "Same public name under an unrelated Hub Stream authority.",
+                "Same public name under an unrelated RealmAuthority Stream authority.",
                 serde_json::json!({"type": "object"}),
             ),
             DescriptorCallMode::Stream,
@@ -7450,7 +7472,7 @@ mod tests {
         register_test_rpc(
             &mut reg,
             "shared.rpc",
-            OwnerKind::Hub,
+            OwnerKind::RealmAuthority,
             Arc::new(|_| Ok(serde_json::json!({"owner": "hub"}))),
         );
 
@@ -7480,7 +7502,7 @@ mod tests {
         register_test_stream(
             &mut reg,
             "shared.modes",
-            OwnerKind::Hub,
+            OwnerKind::RealmAuthority,
             Arc::new(|_| Ok(StreamSource::Snapshot(Vec::new()))),
         );
 
@@ -7869,7 +7891,7 @@ mod tests {
         register_test_rpc(
             &mut reg,
             "hub.openai.list_models",
-            OwnerKind::Hub,
+            OwnerKind::RealmAuthority,
             ok_handler(),
         );
         register_test_rpc(
@@ -7887,7 +7909,7 @@ mod tests {
 
         for (ability, expected) in [
             ("fs.read", OwnerKind::Device),
-            ("hub.openai.list_models", OwnerKind::Hub),
+            ("hub.openai.list_models", OwnerKind::RealmAuthority),
             ("codex.weather", OwnerKind::Agent("codex".to_string())),
             ("codex.chat", OwnerKind::Agent("codex".to_string())),
         ] {
@@ -8300,7 +8322,7 @@ mod tests {
         register_test_rpc(
             &mut reg,
             "hub.openai.chat_completions",
-            OwnerKind::Hub,
+            OwnerKind::RealmAuthority,
             ok_handler(),
         );
         register_test_rpc(
@@ -8319,7 +8341,7 @@ mod tests {
         assert_eq!(reg.control_plane_owner("fs.read"), Some(OwnerKind::Device));
         assert_eq!(
             reg.control_plane_owner("hub.openai.chat_completions"),
-            Some(OwnerKind::Hub)
+            Some(OwnerKind::RealmAuthority)
         );
         assert_eq!(
             reg.control_plane_owner("consent.decide"),
@@ -8368,7 +8390,7 @@ mod tests {
             })
         });
 
-        register_test_rpc(&mut reg, "a.rpc", OwnerKind::Hub, ok_handler());
+        register_test_rpc(&mut reg, "a.rpc", OwnerKind::RealmAuthority, ok_handler());
         register_test_stream(
             &mut reg,
             "a.stream",
@@ -8382,7 +8404,12 @@ mod tests {
             bidi_handler,
         );
         register_test_rpc_env(&mut reg, "a.rpc.env", OwnerKind::Device, rpc_env);
-        register_test_stream_env(&mut reg, "a.stream.env", OwnerKind::Hub, stream_env);
+        register_test_stream_env(
+            &mut reg,
+            "a.stream.env",
+            OwnerKind::RealmAuthority,
+            stream_env,
+        );
         register_test_bidi_env(
             &mut reg,
             "a.bidi.env",
@@ -8390,7 +8417,10 @@ mod tests {
             bidi_env,
         );
 
-        assert_eq!(reg.control_plane_owner("a.rpc"), Some(OwnerKind::Hub));
+        assert_eq!(
+            reg.control_plane_owner("a.rpc"),
+            Some(OwnerKind::RealmAuthority)
+        );
         assert_eq!(
             reg.control_plane_owner("a.stream"),
             Some(OwnerKind::Agent("codex".to_string()))
@@ -8405,7 +8435,7 @@ mod tests {
         );
         assert_eq!(
             reg.control_plane_owner("a.stream.env"),
-            Some(OwnerKind::Hub)
+            Some(OwnerKind::RealmAuthority)
         );
         assert_eq!(
             reg.control_plane_owner("a.bidi.env"),
@@ -8455,13 +8485,13 @@ mod tests {
         register_test_rpc(
             &mut reg,
             "hub.openai.chat_completions",
-            OwnerKind::Hub,
+            OwnerKind::RealmAuthority,
             Arc::new(|_args: Value| Ok(json!({}))),
         );
         // Canonical lookup returns Hub.
         assert_eq!(
             reg.control_plane_owner("hub.openai.chat_completions"),
-            Some(OwnerKind::Hub)
+            Some(OwnerKind::RealmAuthority)
         );
         // Post-M3 legacy lookup returns None (alias retired).
         assert_eq!(

@@ -70,7 +70,7 @@ pub fn register_with_ledger(
     _catalog: Arc<OnceLock<Arc<AxonAbilityCatalog>>>,
     access_control_stores: Arc<AccessControlStoreRegistry>,
 ) {
-    let runtime_governance_owners = [OwnerKind::Device, OwnerKind::Hub];
+    let runtime_governance_owners = [OwnerKind::Device, OwnerKind::RealmAuthority];
     for ability in [
         AUTHORITY_BINDING_GRANT,
         AUTHORITY_BINDING_REVOKE,
