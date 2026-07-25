@@ -156,7 +156,7 @@ class RuntimeStatus:
             raise _invalid_runtime_lifecycle(
                 "invalid runtime lifecycle state", exc
             ) from exc
-        mode = _optional_string(decoded.get("mode"), "mode") or ""
+        mode = _runtime_status_mode(decoded.get("mode"))
         endpoints_value = decoded.get("endpoints", {})
         if endpoints_value is None:
             endpoints_value = {}
@@ -179,6 +179,13 @@ class RuntimeStatus:
             ),
             diagnostics=tuple(diagnostics_value),
         )
+
+
+def _runtime_status_mode(value: object) -> str:
+    mode = _optional_string(value, "mode") or ""
+    if mode and mode not in {"edge", "authority", "combined"}:
+        raise _invalid_runtime_lifecycle("invalid runtime host mode")
+    return mode
 
 
 @runtime_checkable

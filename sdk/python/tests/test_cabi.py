@@ -719,6 +719,7 @@ class CABITransportTests(unittest.TestCase):
                 runtime_instance_id="dev-a",
             )
         )
+        self.assertEqual(handle.status().mode, "edge")
         runtime = handle.open_runtime(ConnectOptions())
 
         result = runtime.invoke(complete_draft())

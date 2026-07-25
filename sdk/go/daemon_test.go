@@ -21,18 +21,18 @@ func (r testRuntimeHostStartRequest) RuntimeHostStartPayload() ([]byte, error) {
 }
 
 type memoryDaemonTransport struct {
-	discoverJSON   string
-	startJSON      string
-	attachJSON     string
-	statusJSON     string
-	stopJSON       string
-	startCalls     int
-	stopCalls      int
-	detachCalls    int
-	openCalls      int
-	openErr        error
-	seenStart      map[string]any
-	seenOptions    map[string]any
+	discoverJSON string
+	startJSON    string
+	attachJSON   string
+	statusJSON   string
+	stopJSON     string
+	startCalls   int
+	stopCalls    int
+	detachCalls  int
+	openCalls    int
+	openErr      error
+	seenStart    map[string]any
+	seenOptions  map[string]any
 }
 
 func (m *memoryDaemonTransport) Discover(ctx context.Context, optionsJSON []byte) ([]byte, error) {
@@ -87,7 +87,7 @@ func (m *memoryDaemonTransport) Detach(ctx context.Context, handleID string) err
 }
 
 func readyDaemonStatus() string {
-	return `{"handle_id":"daemon-1","state":"Running","mode":"hub","pid":42,"endpoints":{"control_endpoint":"unix:///tmp/control.sock","invocation_endpoint":"unix:///tmp/daemon.sock","public_endpoint":"https://hub.example"}}`
+	return `{"handle_id":"daemon-1","state":"Running","mode":"authority","pid":42,"endpoints":{"control_endpoint":"unix:///tmp/control.sock","invocation_endpoint":"unix:///tmp/daemon.sock","public_endpoint":"https://hub.example"}}`
 }
 
 func TestRuntimeHostStartReturnsRuntimeReadyHandle(t *testing.T) {
@@ -280,7 +280,7 @@ func TestConnectLocalAllowsExplicitEndpointOverride(t *testing.T) {
 func TestDaemonStopIsIdempotentAndDetachDoesNotStop(t *testing.T) {
 	transport := &memoryDaemonTransport{
 		startJSON: readyDaemonStatus(),
-		stopJSON:  `{"handle_id":"daemon-1","state":"Stopped","mode":"hub"}`,
+		stopJSON:  `{"handle_id":"daemon-1","state":"Stopped","mode":"authority"}`,
 	}
 	handle, err := StartRuntimeHost(context.Background(), transport, testRuntimeHostStartRequest{
 		payload: map[string]any{"mode": "test-runtime"},

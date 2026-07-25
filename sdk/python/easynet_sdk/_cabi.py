@@ -1615,7 +1615,7 @@ def _runtime_status_from_cabi(handle_id: str, raw: bytes) -> dict[str, object]:
         status["handle_id"] = handle_id
     mode = decoded.get("mode")
     if isinstance(mode, str) and mode:
-        status["mode"] = mode
+        status["mode"] = _runtime_status_mode_for_cabi(mode)
     pid = decoded.get("pid")
     if isinstance(pid, int) and not isinstance(pid, bool) and pid >= 0:
         status["pid"] = pid
@@ -1626,6 +1626,19 @@ def _runtime_status_from_cabi(handle_id: str, raw: bytes) -> dict[str, object]:
     if isinstance(message, str) and message:
         status["message"] = message
     return status
+
+
+def _runtime_status_mode_for_cabi(value: object) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise _cabi_payload_error("runtime host status mode must be a non-empty string")
+    mode = value.strip()
+    if mode == "device":
+        return "edge"
+    if mode == "hub":
+        return "authority"
+    if mode == "both":
+        return "combined"
+    raise _cabi_payload_error("runtime host status mode must be device, hub, or both")
 
 
 def _runtime_endpoints_from_cabi(decoded: dict[str, object]) -> dict[str, object]:

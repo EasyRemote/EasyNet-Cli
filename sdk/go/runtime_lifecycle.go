@@ -544,7 +544,19 @@ func NewRuntimeLifecycleStatusFromJSON(raw []byte) (RuntimeLifecycleStatus, erro
 	if !validRuntimeLifecycleState(status.State) {
 		return RuntimeLifecycleStatus{}, invalidRuntimePayload("invalid runtime lifecycle state", nil)
 	}
+	if status.Mode != "" && !validRuntimeHostMode(status.Mode) {
+		return RuntimeLifecycleStatus{}, invalidRuntimePayload("invalid runtime host mode", nil)
+	}
 	return status, nil
+}
+
+func validRuntimeHostMode(mode RuntimeMode) bool {
+	switch mode {
+	case "edge", "authority", "combined":
+		return true
+	default:
+		return false
+	}
 }
 
 func validRuntimeLifecycleState(state RuntimeLifecycleState) bool {

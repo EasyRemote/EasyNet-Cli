@@ -4,6 +4,7 @@ from pathlib import Path
 from easynet_sdk import (
     AddressingClient,
     AxonAddressingTransport,
+    ErrorCode,
     RuntimeHandle,
     RuntimeLifecycle,
     RuntimeLifecycleState,
@@ -13,6 +14,7 @@ from easynet_sdk import (
     RuntimeCallContext,
     RuntimeClient,
     RuntimeSessionListRequest,
+    RuntimeStatus,
     SDKError,
 )
 from easynet_sdk.providers.runtime.lifecycle import (
@@ -38,10 +40,23 @@ def test_runtime_admin_routes_are_generated_from_manifest() -> None:
     assert _RUNTIME_ADMIN_ROUTE_MANIFEST_SHA256 == digest
 
 
+def test_runtime_status_rejects_retired_product_mode() -> None:
+    try:
+        RuntimeStatus.from_json(
+            b'{"handle_id":"daemon-1","state":"Running","mode":"hub",'
+            b'"endpoints":{"invocation_endpoint":"unix:///tmp/daemon.sock"}}'
+        )
+    except SDKError as exc:
+        assert exc.code == ErrorCode.INVALID_ARGUMENT
+        assert "invalid runtime host mode" in exc.message
+    else:
+        raise AssertionError("RuntimeStatus accepted retired product mode")
+
+
 class MemoryDaemonTransport:
     def __init__(self) -> None:
         self.status_json = (
-            b'{"handle_id":"daemon-1","state":"Running","mode":"hub",'
+            b'{"handle_id":"daemon-1","state":"Running","mode":"authority",'
             b'"endpoints":{"control_endpoint":"unix:///tmp/control.sock",'
             b'"invocation_endpoint":"unix:///tmp/daemon.sock"},'
             b'"diagnostics":["status-ok"]}'

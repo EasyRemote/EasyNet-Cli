@@ -37,7 +37,7 @@ func TestRuntimeAdminRoutesGeneratedFromManifest(t *testing.T) {
 func TestRuntimeAdminReadinessComposesLifecycleAndHealth(t *testing.T) {
 	daemon := &memoryDaemonTransport{
 		startJSON:  readyDaemonStatus(),
-		statusJSON: `{"handle_id":"daemon-1","state":"Running","mode":"hub","endpoints":{"control_endpoint":"unix:///tmp/control.sock","invocation_endpoint":"unix:///tmp/daemon.sock"},"diagnostics":["status-ok"]}`,
+		statusJSON: `{"handle_id":"daemon-1","state":"Running","mode":"authority","endpoints":{"control_endpoint":"unix:///tmp/control.sock","invocation_endpoint":"unix:///tmp/daemon.sock"},"diagnostics":["status-ok"]}`,
 	}
 	control, err := NewRuntimeHost(daemon)
 	if err != nil {
@@ -96,7 +96,7 @@ func TestRuntimeAdminRejectsMissingHandle(t *testing.T) {
 func TestRuntimeAdminUsesRuntimeHostLifecycleInterface(t *testing.T) {
 	lifecycle := &runtimeAdminLifecycleStub{
 		transport: &memoryDaemonTransport{
-			statusJSON: `{"handle_id":"runtime-1","state":"Running","mode":"hub","endpoints":{"control_endpoint":"unix:///tmp/control.sock","invocation_endpoint":"unix:///tmp/runtime.sock"}}`,
+			statusJSON: `{"handle_id":"runtime-1","state":"Running","mode":"authority","endpoints":{"control_endpoint":"unix:///tmp/control.sock","invocation_endpoint":"unix:///tmp/runtime.sock"}}`,
 		},
 	}
 	admin, err := NewRuntimeHostAdminClient(lifecycle, nil)

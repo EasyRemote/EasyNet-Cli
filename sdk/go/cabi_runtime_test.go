@@ -287,9 +287,10 @@ func TestCABIRuntimeHostStartConfigRejectsRetiredProductModeInput(t *testing.T) 
 	}
 }
 
-func TestCABIDaemonStatusProjectionFromFlatAndNestedShapes(t *testing.T) {
+func TestCABIRuntimeHostStatusProjectionFromFlatAndNestedShapes(t *testing.T) {
 	status, err := runtimeHostStatusFromCABI("42", []byte(`{
 		"control_accepting":true,
+		"mode":"both",
 		"pid":123,
 		"version":"1.2.3",
 		"message":"ready for control",
@@ -309,6 +310,9 @@ func TestCABIDaemonStatusProjectionFromFlatAndNestedShapes(t *testing.T) {
 	}
 	if status["state"] != string(RuntimeControlOnly) {
 		t.Fatalf("state = %v, want %s", status["state"], RuntimeControlOnly)
+	}
+	if status["mode"] != "combined" {
+		t.Fatalf("mode = %v, want combined", status["mode"])
 	}
 	endpoints, ok := status["endpoints"].(map[string]any)
 	if !ok {

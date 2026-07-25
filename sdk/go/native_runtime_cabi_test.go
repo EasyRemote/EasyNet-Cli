@@ -44,7 +44,7 @@ func TestConnectNativeRuntimeStartsWhenConfigured(t *testing.T) {
 	runtime, health, closeFn, err := connectNativeRuntime(context.Background(), transport, NativeRuntimeOptions{
 		StartRequest: testRuntimeHostStartRequest{
 			payload: map[string]any{
-				"mode":  "hub",
+				"mode":  "authority",
 				"realm": "example.com",
 			},
 		},
@@ -58,7 +58,7 @@ func TestConnectNativeRuntimeStartsWhenConfigured(t *testing.T) {
 	if transport.startCalls != 1 || transport.discoverCalls != 0 || transport.attachCalls != 0 || transport.detachCalls != 1 {
 		t.Fatalf("unexpected lifecycle calls: %#v", transport)
 	}
-	if transport.startConfig["mode"] != "hub" || transport.startConfig["realm"] != "example.com" {
+	if transport.startConfig["mode"] != "authority" || transport.startConfig["realm"] != "example.com" {
 		t.Fatalf("unexpected start config: %v", transport.startConfig)
 	}
 }
@@ -67,7 +67,7 @@ func TestConnectNativeRuntimeStopOnCloseKeepsStartedHandle(t *testing.T) {
 	transport := &nativeRuntimeTestDaemonTransport{}
 
 	runtime, _, closeFn, err := connectNativeRuntime(context.Background(), transport, NativeRuntimeOptions{
-		StartRequest:       testRuntimeHostStartRequest{payload: map[string]any{"mode": "hub"}},
+		StartRequest:       testRuntimeHostStartRequest{payload: map[string]any{"mode": "authority"}},
 		StopRuntimeOnClose: true,
 	})
 	if err != nil {
@@ -147,5 +147,5 @@ func (nativeRuntimeTestRuntimeTransport) RuntimeHealth(context.Context) ([]byte,
 }
 
 func nativeRuntimeTestStatusJSON(handleID string) []byte {
-	return []byte(`{"handle_id":"` + handleID + `","state":"Running","mode":"hub","endpoints":{"control_endpoint":"unix:///run/easynet/control.sock","invocation_endpoint":"unix:///run/easynet/daemon.sock"}}`)
+	return []byte(`{"handle_id":"` + handleID + `","state":"Running","mode":"authority","endpoints":{"control_endpoint":"unix:///run/easynet/control.sock","invocation_endpoint":"unix:///run/easynet/daemon.sock"}}`)
 }

@@ -1759,13 +1759,38 @@ func runtimeHostStatusFromCABI(handleID string, raw []byte) (map[string]any, err
 	}
 	for _, key := range []string{"mode", "version", "message"} {
 		if value, ok := decoded[key].(string); ok && value != "" {
-			status[key] = value
+			if key == "mode" {
+				mode, err := runtimeHostStatusModeForCABI(value)
+				if err != nil {
+					return nil, err
+				}
+				status[key] = mode
+			} else {
+				status[key] = value
+			}
 		}
 	}
 	if value, ok := decoded["pid"].(float64); ok && value >= 0 {
 		status["pid"] = int(value)
 	}
 	return status, nil
+}
+
+func runtimeHostStatusModeForCABI(value any) (string, error) {
+	mode, ok := value.(string)
+	if !ok || strings.TrimSpace(mode) == "" {
+		return "", invalidRuntimePayload("runtime host status mode must be a non-empty string", nil)
+	}
+	switch strings.TrimSpace(mode) {
+	case "device":
+		return "edge", nil
+	case "hub":
+		return "authority", nil
+	case "both":
+		return "combined", nil
+	default:
+		return "", invalidRuntimePayload("runtime host status mode must be device, hub, or both", nil)
+	}
 }
 
 func runtimeHostEndpointsFromCABI(decoded map[string]any) map[string]any {
