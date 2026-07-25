@@ -2973,6 +2973,60 @@ async fn dispatch_remote_rpc_rejects_missing_signed_descriptor_ref() {
 }
 
 #[tokio::test]
+async fn dispatch_remote_rpc_rejects_receipt_history_as_public_remote_action() {
+    const REMOTE_DEVICE_URA: &str = "easynet:///r/test-realm/device/remote-device";
+    const HISTORY_READ: &str = crate::daemon::ability::names::governance::INVOCATION_HISTORY_LIST;
+
+    let pending = Arc::new(PendingDispatchMap::new());
+    let svc = make_service().with_pending(Arc::clone(&pending));
+    let (remote_tx, mut remote_rx) = mpsc::channel(8);
+    svc.directory
+        .presence
+        .insert(REMOTE_DEVICE_URA.to_string(), remote_tx)
+        .expect("canonical presence key");
+    publish_test_route(&svc, REMOTE_DEVICE_URA, HISTORY_READ);
+
+    let ability_ura = crate::core::ura::owner_ability_ura(REMOTE_DEVICE_URA, HISTORY_READ)
+        .expect("remote device history Ability URA");
+    let selected_route = svc
+        .target_gate()
+        .route_resolver()
+        .await
+        .resolve_route(&ability_ura, "")
+        .expect("resolver selects the remote-device history route");
+    assert_eq!(selected_route.execution_host_ura, REMOTE_DEVICE_URA);
+
+    let request =
+        invoke_request_for_callee(REMOTE_DEVICE_URA, HISTORY_READ, r#"{"limit":5}"#).into_inner();
+    let err = svc
+        .unary_dispatcher()
+        .dispatch_remote_rpc_selected_route(&request, &selected_route, CallMode::Rpc)
+        .await
+        .expect_err("receipt history must fail before remote carrier dispatch");
+
+    assert_eq!(err.code(), tonic::Code::FailedPrecondition);
+    assert!(
+        err.message().contains("CANONICAL_HISTORY_READ_REQUIRED")
+            && err.message().contains(HISTORY_READ)
+            && err
+                .message()
+                .contains("canonical invocation history read path"),
+        "unexpected receipt-history route denial: {}",
+        err.message()
+    );
+    assert!(
+        !err.message().contains("AUTHORITY_SUBJECT_MISMATCH"),
+        "history route denial must not leak deferred admission mismatch: {}",
+        err.message()
+    );
+    assert!(
+        remote_rx.try_recv().is_err(),
+        "receipt history direct ingress must not be forwarded to remote admission"
+    );
+    assert_eq!(pending.outstanding(), 0);
+}
+
+#[tokio::test]
 async fn dispatch_remote_rpc_carrier_v1_preserves_signed_canonical_material() {
     use ed25519_dalek::Verifier as _;
 

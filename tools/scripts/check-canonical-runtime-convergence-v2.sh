@@ -9116,7 +9116,7 @@ for required in (
     "Self::DaemonTargetOwned(value) => (value, \"daemon target-owned subject\")",
     "pub(crate) fn target_owned_root_plan<'a>(",
     "fn target_owned_remote_system_subject(",
-    "fn is_receipt_history_ability(",
+    "crate::daemon::ability::names::governance::is_invocation_history_read(public_ability)",
     "canonical invocation history read path",
 ):
     if required not in remote:
@@ -9144,6 +9144,77 @@ for required_test in (
 ):
     if required_test not in remote:
         raise SystemExit(f"remote_invocation_subject_provenance:missing_test:{required_test}")
+PY
+}
+
+check_remote_receipt_history_route_admission_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local governance="$cli_root/src/daemon/ability/names/governance.rs"
+  local remote="$cli_root/src/daemon/invocation/routing/remote_invoke.rs"
+  local unary="$cli_root/src/daemon/invocation/dispatch/unary_dispatcher.rs"
+  local unary_tests="$cli_root/src/daemon/invocation/dispatch/daemon_invocation_service_tests/unary.rs"
+
+  [[ -f "$governance" ]] || fail "governance ability names source is missing: $governance"
+  [[ -f "$remote" ]] || fail "remote invocation routing source is missing: $remote"
+  [[ -f "$unary" ]] || fail "unary dispatcher source is missing: $unary"
+  [[ -f "$unary_tests" ]] || fail "unary dispatcher tests source is missing: $unary_tests"
+
+  "$PYTHON_BIN" - "$governance" "$remote" "$unary" "$unary_tests" <<'PY'
+import sys
+from pathlib import Path
+
+governance = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+remote = Path(sys.argv[2]).read_text(encoding="utf-8", errors="replace")
+unary = Path(sys.argv[3]).read_text(encoding="utf-8", errors="replace")
+unary_tests = Path(sys.argv[4]).read_text(encoding="utf-8", errors="replace")
+unary_production = unary
+
+for required in (
+    "pub(crate) fn is_invocation_history_read(ability: &str) -> bool",
+    "INVOCATION_HISTORY_LIST",
+    "INVOCATION_HISTORY_GET",
+    "INVOCATION_HISTORY_PATH",
+    "INVOCATION_RECORD_GET",
+    "INVOCATION_TRACE_GET",
+):
+    if required not in governance:
+        raise SystemExit(f"remote_receipt_history_route_admission:missing_governance:{required}")
+
+if "fn is_receipt_history_ability(" in remote:
+    raise SystemExit("remote_receipt_history_route_admission:duplicated_remote_history_predicate")
+if "is_invocation_history_read(public_ability)" not in remote:
+    raise SystemExit("remote_receipt_history_route_admission:remote_helper_not_using_governance_predicate")
+
+for required in (
+    "fn reject_remote_receipt_history_action(route: &SelectedInvokeRoute) -> Result<(), Status>",
+    "CANONICAL_HISTORY_READ_REQUIRED",
+    "is_invocation_history_read(",
+    "&route.dispatch_name",
+    "AbilitySelector::parse(&route.ability_ura)",
+    "receipt history ability `{history_ability}` is not a",
+    "canonical invocation history read path",
+):
+    if required not in unary_production:
+        raise SystemExit(f"remote_receipt_history_route_admission:missing_unary_reject:{required}")
+
+call_index = unary_production.find("reject_remote_receipt_history_action(selected_route)?;")
+dispatch_index = unary_production.find(".dispatch_frame_to_presence(")
+if call_index < 0:
+    raise SystemExit("remote_receipt_history_route_admission:missing_dispatch_callsite")
+if dispatch_index < 0:
+    raise SystemExit("remote_receipt_history_route_admission:missing_presence_dispatch_call")
+if call_index > dispatch_index:
+    raise SystemExit("remote_receipt_history_route_admission:reject_after_presence_dispatch")
+
+for required_test in (
+    "dispatch_remote_rpc_rejects_receipt_history_as_public_remote_action",
+    "CANONICAL_HISTORY_READ_REQUIRED",
+    "AUTHORITY_SUBJECT_MISMATCH",
+    "receipt history must fail before remote carrier dispatch",
+    "remote_rx.try_recv().is_err()",
+):
+    if required_test not in unary_tests:
+        raise SystemExit(f"remote_receipt_history_route_admission:missing_test:{required_test}")
 PY
 }
 
@@ -19265,12 +19336,42 @@ where
 fn history_list_args(args: &ListArgs) -> Value { json!({ "limit": args.limit }) }
 fn history_key_for_id(id: &str) -> Value { json!({ "request_id": id }) }
 EOF
-  if ( check_cli_invocation_history_read_model_contract "$tmp/cli-invocation-history-read-legacy" ) >/dev/null 2>&1; then
-    fail "self-test expected CLI invocation history read-model gate to fail"
-  fi
-  mkdir -p "$tmp/history-placeholder-positive/src/product"
-  cat >"$tmp/history-placeholder-positive/src/product/history.rs" <<'EOF'
-fn subject() -> &'static str {
+	  if ( check_cli_invocation_history_read_model_contract "$tmp/cli-invocation-history-read-legacy" ) >/dev/null 2>&1; then
+	    fail "self-test expected CLI invocation history read-model gate to fail"
+	  fi
+	  mkdir -p "$tmp/remote-history-route-legacy/src/daemon/ability/names" \
+	    "$tmp/remote-history-route-legacy/src/daemon/invocation/routing" \
+	    "$tmp/remote-history-route-legacy/src/daemon/invocation/dispatch" \
+	    "$tmp/remote-history-route-legacy/src/daemon/invocation/dispatch/daemon_invocation_service_tests"
+	  cat >"$tmp/remote-history-route-legacy/src/daemon/ability/names/governance.rs" <<'EOF'
+pub const INVOCATION_HISTORY_LIST: &str = "invocation.history.list";
+pub const INVOCATION_HISTORY_GET: &str = "invocation.history.get";
+pub const INVOCATION_HISTORY_PATH: &str = "invocation.history.path";
+pub const INVOCATION_RECORD_GET: &str = "invocation.record.get";
+pub const INVOCATION_TRACE_GET: &str = "invocation.trace.get";
+EOF
+	  cat >"$tmp/remote-history-route-legacy/src/daemon/invocation/routing/remote_invoke.rs" <<'EOF'
+fn is_receipt_history_ability(ability: &str) -> bool { ability == "invocation.history.list" }
+fn evaluate(public_ability: &str) {
+    if is_receipt_history_ability(public_ability) {
+        let _ = "canonical invocation history read path";
+    }
+}
+EOF
+	  cat >"$tmp/remote-history-route-legacy/src/daemon/invocation/dispatch/unary_dispatcher.rs" <<'EOF'
+pub(crate) async fn dispatch_remote_rpc_selected_route(&self, selected_route: &SelectedInvokeRoute) {
+    self.dispatch_frame_to_presence(selected_route).await;
+}
+EOF
+	  cat >"$tmp/remote-history-route-legacy/src/daemon/invocation/dispatch/daemon_invocation_service_tests/unary.rs" <<'EOF'
+fn dispatch_remote_rpc_rejects_signed_callee_rewrite() {}
+EOF
+	  if ( check_remote_receipt_history_route_admission_contract "$tmp/remote-history-route-legacy" ) >/dev/null 2>&1; then
+	    fail "self-test expected remote receipt-history route admission gate to fail"
+	  fi
+	  mkdir -p "$tmp/history-placeholder-positive/src/product"
+	  cat >"$tmp/history-placeholder-positive/src/product/history.rs" <<'EOF'
+	fn subject() -> &'static str {
     "easynet:///r/example/resource/user.00000000-0000-0000-0000-000000000000/session/invocation_history"
 }
 EOF
@@ -23680,9 +23781,10 @@ EOF
   check_retired_edge_adapter_policy_absence_contract
   check_sdk_product_neutrality_contract
   check_python_sdk_bytecode_index_contract
-  check_daemon_tuple_route_contract
-  check_remote_invocation_subject_provenance_contract
-  check_daemon_runtime_route_inventory_contract
+	  check_daemon_tuple_route_contract
+	  check_remote_invocation_subject_provenance_contract
+	  check_remote_receipt_history_route_admission_contract
+	  check_daemon_runtime_route_inventory_contract
   check_daemon_local_device_identity_contract
   check_daemon_credentials_identity_contract
   check_filesystem_resource_owner_contract
@@ -23812,6 +23914,7 @@ check_join_authority_wiring_required_contract
 check_join_user_signer_custody_contract
 check_invocation_history_filter_scope_contract
 check_cli_invocation_history_read_model_contract
+check_remote_receipt_history_route_admission_contract
 check_invocation_history_placeholder_negative_only_contract
 check_rust_all_zero_principal_guard_contract
 check_agent_purge_publication_state_contract

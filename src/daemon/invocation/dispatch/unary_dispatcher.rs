@@ -1833,6 +1833,7 @@ impl UnaryDispatcher {
     ) -> Result<Response<InvokeResponse>, Status> {
         let ability =
             function_name_from_invocation_target("Invoke", request.target.as_ref())?.to_string();
+        reject_remote_receipt_history_action(selected_route)?;
         let Some(envelope) = request.envelope.clone() else {
             return Err(Status::invalid_argument(format!(
                 "Invoke: remote-hosted ability `{ability}` requires the seven-tuple \
@@ -1915,6 +1916,32 @@ impl UnaryDispatcher {
         )?;
         Ok(Response::new(finalized.into_response()))
     }
+}
+
+fn reject_remote_receipt_history_action(route: &SelectedInvokeRoute) -> Result<(), Status> {
+    let history_ability = if crate::daemon::ability::names::governance::is_invocation_history_read(
+        &route.dispatch_name,
+    ) {
+        Some(route.dispatch_name.clone())
+    } else {
+        crate::core::ura::AbilitySelector::parse(&route.ability_ura)
+            .ok()
+            .and_then(|selector| {
+                crate::daemon::ability::names::governance::is_invocation_history_read(
+                    selector.public_name(),
+                )
+                .then(|| selector.public_name().to_string())
+            })
+    };
+
+    let Some(history_ability) = history_ability else {
+        return Ok(());
+    };
+
+    Err(Status::failed_precondition(format!(
+        "CANONICAL_HISTORY_READ_REQUIRED: receipt history ability `{history_ability}` is not a \
+         public remote action; use the canonical invocation history read path"
+    )))
 }
 
 fn local_invoke_target_ura(request: &InvokeRequest) -> Result<String, Status> {

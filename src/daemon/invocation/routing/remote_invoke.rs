@@ -335,7 +335,7 @@ enum RemoteRootAbilityAdmission {
 
 impl RemoteRootAbilityAdmission {
     fn evaluate(public_ability: &str) -> Self {
-        if is_receipt_history_ability(public_ability) {
+        if crate::daemon::ability::names::governance::is_invocation_history_read(public_ability) {
             Self::ReceiptHistoryRead
         } else {
             Self::Accepted
@@ -369,7 +369,7 @@ enum RemotePublicAbilityAdmission {
 
 impl RemotePublicAbilityAdmission {
     fn evaluate(public_ability: &str) -> Self {
-        if is_receipt_history_ability(public_ability) {
+        if crate::daemon::ability::names::governance::is_invocation_history_read(public_ability) {
             Self::ReceiptHistoryRead
         } else {
             Self::Accepted
@@ -647,17 +647,6 @@ fn target_owned_remote_system_subject(
         ),
     };
     Ok(RemoteInvocationSubject::DaemonTargetOwned(subject_ura))
-}
-
-fn is_receipt_history_ability(ability: &str) -> bool {
-    matches!(
-        ability.trim(),
-        crate::daemon::ability::names::governance::INVOCATION_HISTORY_LIST
-            | crate::daemon::ability::names::governance::INVOCATION_HISTORY_GET
-            | crate::daemon::ability::names::governance::INVOCATION_HISTORY_PATH
-            | crate::daemon::ability::names::governance::INVOCATION_RECORD_GET
-            | crate::daemon::ability::names::governance::INVOCATION_TRACE_GET
-    )
 }
 
 /// Issuer for child/continuation remote calls spawned from admitted runtime

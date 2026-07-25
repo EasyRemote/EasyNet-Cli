@@ -19,6 +19,24 @@ pub const INVOCATION_TRACE_GET: &str =
     crate::daemon::ability::receipt_routes_gen::INVOCATION_TRACE_GET;
 pub const INVOCATION_CANCEL: &str = "invocation.cancel";
 
+/// Canonical receipt-history/governance read-model ability family.
+///
+/// These abilities are runtime governance reads. They are callable through the
+/// canonical history read issuer, not as product/public remote actions owned by
+/// a target device. Keeping the predicate with the governance ability names
+/// prevents CLI wrappers, SDK/FFI direct ingress, and daemon dispatch from
+/// carrying separate allow/deny lists.
+pub(crate) fn is_invocation_history_read(ability: &str) -> bool {
+    matches!(
+        ability.trim(),
+        INVOCATION_HISTORY_LIST
+            | INVOCATION_HISTORY_GET
+            | INVOCATION_HISTORY_PATH
+            | INVOCATION_RECORD_GET
+            | INVOCATION_TRACE_GET
+    )
+}
+
 pub const AUTHORITY_BINDING_GRANT: &str =
     crate::daemon::ability::access_control_routes_gen::AUTHORITY_BINDING_GRANT;
 pub const AUTHORITY_BINDING_REVOKE: &str =
