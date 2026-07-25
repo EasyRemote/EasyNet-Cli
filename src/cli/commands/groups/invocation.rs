@@ -3,10 +3,10 @@
 //
 // File: src/cli/groups/invocation.rs
 // Description: `easynet invocation ...` queries the local daemon's
-//              device-owned invocation.history.* abilities through Axon's
-//              Invocation gRPC surface. The daemon owns the native
-//              ledger handle, so the CLI never races native storage
-//              locks or reimplements ability dispatch.
+//              governance-owned invocation.history.* abilities through the
+//              runtime-state read issuer. The daemon owns the native ledger
+//              handle, so the CLI never races native storage locks or
+//              reimplements ability dispatch.
 
 use anyhow::Context;
 use clap::{Args, Subcommand};
@@ -609,13 +609,16 @@ impl InvocationHistoryListQuery {
             limit: args.limit,
             filter: InvocationHistoryFilter {
                 state: args.state.clone(),
-                ability_ura: args.ability_ura.clone(),
-                caller_ura: args.caller.clone(),
+                ability_ura: canonical_history_ability_filter(args.ability_ura.as_deref())?,
+                caller_ura: canonical_history_ura_filter("--caller-ura", args.caller.as_deref())?,
                 callee_ura: canonical_history_callee_filter(
                     args.callee.as_deref(),
                     args.agent_ura.as_deref(),
                 )?,
-                subject_ura: args.subject.clone(),
+                subject_ura: canonical_history_ura_filter(
+                    "--subject-ura",
+                    args.subject.as_deref(),
+                )?,
             },
         })
     }
@@ -661,15 +664,33 @@ fn canonical_history_callee_filter(
     callee_ura: Option<&str>,
     agent_ura: Option<&str>,
 ) -> anyhow::Result<Option<String>> {
-    let callee = callee_ura.map(str::trim).filter(|value| !value.is_empty());
-    let agent = agent_ura.map(str::trim).filter(|value| !value.is_empty());
-    match (callee, agent) {
+    let callee = canonical_history_ura_filter("--callee-ura", callee_ura)?;
+    let agent = canonical_history_ura_filter("--agent-ura", agent_ura)?;
+    match (callee.as_deref(), agent.as_deref()) {
         (Some(callee), Some(agent)) if callee != agent => anyhow::bail!(
             "`--agent-ura` is a CLI facade for `--callee-ura`; both values must match when supplied"
         ),
         (Some(value), _) | (_, Some(value)) => Ok(Some(value.to_string())),
         (None, None) => Ok(None),
     }
+}
+
+fn canonical_history_ability_filter(value: Option<&str>) -> anyhow::Result<Option<String>> {
+    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    let selector = crate::core::ura::AbilitySelector::parse(value)
+        .with_context(|| format!("`--ability-ura` must be a canonical Ability URA"))?;
+    Ok(Some(selector.ability_ura().to_string()))
+}
+
+fn canonical_history_ura_filter(flag: &str, value: Option<&str>) -> anyhow::Result<Option<String>> {
+    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    crate::core::ura::parse_ura(value)
+        .with_context(|| format!("`{flag}` must be a canonical URA"))?;
+    Ok(Some(value.to_string()))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -782,6 +803,93 @@ mod tests {
 
         assert_eq!(body["limit"], 25);
         assert!(body.get("filter").is_none());
+    }
+
+    #[test]
+    fn invocation_history_rejects_malformed_filter_uras() {
+        let cases = [
+            (
+                "ability",
+                ListArgs {
+                    limit: 25,
+                    state: None,
+                    ability_ura: Some("easynet:///r/test/device/dev-a".into()),
+                    caller: None,
+                    callee: None,
+                    agent_ura: None,
+                    subject: None,
+                    format: OutputFormat::Json,
+                },
+                "`--ability-ura` must be a canonical Ability URA",
+            ),
+            (
+                "caller",
+                ListArgs {
+                    limit: 25,
+                    state: None,
+                    ability_ura: None,
+                    caller: Some("not-a-ura".into()),
+                    callee: None,
+                    agent_ura: None,
+                    subject: None,
+                    format: OutputFormat::Json,
+                },
+                "`--caller-ura` must be a canonical URA",
+            ),
+            (
+                "callee",
+                ListArgs {
+                    limit: 25,
+                    state: None,
+                    ability_ura: None,
+                    caller: None,
+                    callee: Some("not-a-ura".into()),
+                    agent_ura: None,
+                    subject: None,
+                    format: OutputFormat::Json,
+                },
+                "`--callee-ura` must be a canonical URA",
+            ),
+            (
+                "agent facade",
+                ListArgs {
+                    limit: 25,
+                    state: None,
+                    ability_ura: None,
+                    caller: None,
+                    callee: None,
+                    agent_ura: Some("not-a-ura".into()),
+                    subject: None,
+                    format: OutputFormat::Json,
+                },
+                "`--agent-ura` must be a canonical URA",
+            ),
+            (
+                "subject",
+                ListArgs {
+                    limit: 25,
+                    state: None,
+                    ability_ura: None,
+                    caller: None,
+                    callee: None,
+                    agent_ura: None,
+                    subject: Some("not-a-ura".into()),
+                    format: OutputFormat::Json,
+                },
+                "`--subject-ura` must be a canonical URA",
+            ),
+        ];
+
+        for (label, args, expected) in cases {
+            let error = match InvocationHistoryListQuery::from_list_args(&args) {
+                Ok(_) => panic!("{label} filter accepted malformed URA"),
+                Err(error) => error,
+            };
+            assert!(
+                error.to_string().contains(expected),
+                "{label} filter error = {error}"
+            );
+        }
     }
 
     #[test]
