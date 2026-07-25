@@ -128,6 +128,12 @@ sdk/python/easynet_sdk/publication.py
 sdk/python/easynet_sdk/surface.py
 sdk/python/easynet_sdk/system_abilities.py
 sdk/python/easynet_sdk/wrappers.py
+sdk/python/easynet_sdk/providers/easynet
+sdk/go/provider/easynet
+sdk/node/provider/easynet
+sdk/rust/provider/easynet
+sdk/java/src/main/java/run/runtime/sdk/provider/easynet
+sdk/java/src/test/java/run/runtime/sdk/provider/easynet
 EOF
 }
 
@@ -237,6 +243,12 @@ if [[ "${1:-}" == "--self-test" ]]; then
     fail "self-test failed to detect Python runtime device revoke surface"
   fi
   rm -f "$injected"
+  mkdir -p "$tmp/sdk/node/provider/easynet"
+  retired_output="$(retired_product_sdk_module_violations "$tmp")"
+  if ! grep -Fxq "sdk/node/provider/easynet" <<<"$retired_output"; then
+    fail "self-test failed to detect retired Node product provider root"
+  fi
+  rmdir "$tmp/sdk/node/provider/easynet"
   injected="$tmp/sdk/python/easynet_sdk/runtime_admin.py"
   mkdir -p "$(dirname "$injected")"
   cat >"$injected" <<'PY'
@@ -274,7 +286,8 @@ PY
   mkdir -p "$tmp/sdk/python/easynet_sdk"
   injected="$tmp/sdk/python/easynet_sdk/_key_service.py"
   printf '"""Compatibility exports for the EasyNet key-service provider."""\n' >"$injected"
-  if ! retired_product_sdk_module_violations "$tmp" | grep -Fxq "sdk/python/easynet_sdk/_key_service.py"; then
+  retired_output="$(retired_product_sdk_module_violations "$tmp")"
+  if ! grep -Fxq "sdk/python/easynet_sdk/_key_service.py" <<<"$retired_output"; then
     fail "self-test failed to detect retired Python key-service facade"
   fi
   rm -f "$injected"
@@ -417,23 +430,6 @@ if rg -n 'easynet.run/cli/sdk/go/provider/easynet' sdk/go \
   --glob '!**/runtime_events_compat.go'; then
   fail "canonical Go implementation imports the retired product provider facade"
 fi
-
-for retired in \
-  sdk/python/easynet_sdk/providers/easynet \
-  sdk/python/easynet_sdk/providers/easynet/plugin_exec.py \
-  sdk/python/easynet_sdk/providers/easynet/key_service.py \
-  sdk/python/easynet_sdk/providers/easynet/keyring.py \
-  sdk/go/provider/easynet \
-  sdk/go/provider/easynet/pluginexec \
-  sdk/rust/provider/easynet/pluginexec \
-  sdk/java/src/main/java/run/runtime/sdk/provider/easynet/pluginexec \
-  sdk/java/src/test/java/run/runtime/sdk/provider/easynet/pluginexec \
-  sdk/node/provider/easynet/pluginexec.js \
-  sdk/node/provider/easynet/pluginexec.d.ts; do
-  if [[ -e "$retired" ]]; then
-    fail "plugin execution helper must live under product-neutral runtime provider path: $retired"
-  fi
-done
 
 if rg -n 'providers\.easynet\.key|providers/easynet/key' sdk/python/easynet_sdk \
   --glob '*.py' \
