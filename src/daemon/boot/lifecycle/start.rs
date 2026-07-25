@@ -46,6 +46,31 @@ enum RuntimeStartMode {
     Hub,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DeviceNodeIdFact<'a> {
+    Present(&'a str),
+    Missing,
+    Blank,
+}
+
+impl<'a> DeviceNodeIdFact<'a> {
+    fn from_optional(value: Option<&'a str>) -> Self {
+        match value {
+            Some(value) if value.trim().is_empty() => Self::Blank,
+            Some(value) => Self::Present(value),
+            None => Self::Missing,
+        }
+    }
+
+    fn mismatch_value(self) -> String {
+        match self {
+            Self::Present(value) => value.to_string(),
+            Self::Missing => "<missing>".to_string(),
+            Self::Blank => "<blank>".to_string(),
+        }
+    }
+}
+
 impl RuntimeStartRequest {
     /// Build a device-mode start request.
     pub fn device(realm: impl Into<String>, node_id: impl Into<String>) -> Self {
@@ -235,16 +260,19 @@ fn validate_node_id(
     if !matches!(request.mode, RuntimeStartMode::Device) {
         return Ok(());
     }
-    let requested = request.node_id.clone().unwrap_or_default();
-    let actual = identity.node_id.clone().unwrap_or_default();
-    if requested == actual {
-        Ok(())
-    } else {
-        Err(RuntimeLifecycleError::StartRefusedIdentityMismatch {
+    let requested = DeviceNodeIdFact::from_optional(request.node_id.as_deref());
+    let actual = DeviceNodeIdFact::from_optional(identity.node_id.as_deref());
+    match (requested, actual) {
+        (DeviceNodeIdFact::Present(requested), DeviceNodeIdFact::Present(actual))
+            if requested == actual =>
+        {
+            Ok(())
+        }
+        _ => Err(RuntimeLifecycleError::StartRefusedIdentityMismatch {
             field: "node_id",
-            requested,
-            actual,
-        })
+            requested: requested.mismatch_value(),
+            actual: actual.mismatch_value(),
+        }),
     }
 }
 
@@ -390,6 +418,122 @@ mod tests {
                 field: "node_id",
                 ..
             }
+        ));
+    }
+
+    #[test]
+    fn start_preflight_refuses_missing_requested_device_node_id() {
+        let daemon = DaemonDiscoverySnapshot::from_parts(
+            Some(discovery_with_identity(identity())),
+            Some(std::process::id()),
+            true,
+            true,
+            true,
+            endpoints(),
+        );
+        let status = RuntimeStatusReport::from_parts(None, daemon);
+        let request = RuntimeStartRequest {
+            mode: RuntimeStartMode::Device,
+            realm: "tenant-test".to_string(),
+            node_id: None,
+        };
+
+        let err =
+            preflight_start(&request, &status).expect_err("missing requested node id must fail");
+
+        assert!(matches!(
+            err,
+            RuntimeLifecycleError::StartRefusedIdentityMismatch {
+                field: "node_id",
+                requested,
+                actual,
+            } if requested == "<missing>" && actual == "node-test"
+        ));
+    }
+
+    #[test]
+    fn start_preflight_refuses_blank_requested_device_node_id() {
+        let daemon = DaemonDiscoverySnapshot::from_parts(
+            Some(discovery_with_identity(identity())),
+            Some(std::process::id()),
+            true,
+            true,
+            true,
+            endpoints(),
+        );
+        let status = RuntimeStatusReport::from_parts(None, daemon);
+        let request = RuntimeStartRequest::device("tenant-test", "   ");
+
+        let err =
+            preflight_start(&request, &status).expect_err("blank requested node id must fail");
+
+        assert!(matches!(
+            err,
+            RuntimeLifecycleError::StartRefusedIdentityMismatch {
+                field: "node_id",
+                requested,
+                actual,
+            } if requested == "<blank>" && actual == "node-test"
+        ));
+    }
+
+    #[test]
+    fn start_preflight_refuses_missing_discovered_device_node_id() {
+        let mut daemon_identity = identity();
+        daemon_identity.node_id = None;
+        let daemon = DaemonDiscoverySnapshot::from_parts(
+            Some(discovery_with_identity(daemon_identity)),
+            Some(std::process::id()),
+            true,
+            true,
+            true,
+            endpoints(),
+        );
+        let status = RuntimeStatusReport::from_parts(None, daemon);
+
+        let err = preflight_start(
+            &RuntimeStartRequest::device("tenant-test", "node-test"),
+            &status,
+        )
+        .expect_err("missing discovered node id must fail");
+
+        assert!(matches!(
+            err,
+            RuntimeLifecycleError::StartRefusedIdentityMismatch {
+                field: "node_id",
+                requested,
+                actual,
+            } if requested == "node-test" && actual == "<missing>"
+        ));
+    }
+
+    #[test]
+    fn start_preflight_refuses_blank_discovered_device_node_id() {
+        let mut daemon_identity = identity();
+        daemon_identity.node_id = Some("   ".to_string());
+        let daemon = DaemonDiscoverySnapshot::from_parts(
+            Some(discovery_with_identity(daemon_identity)),
+            Some(std::process::id()),
+            true,
+            true,
+            true,
+            endpoints(),
+        );
+        let status = RuntimeStatusReport::from_parts(None, daemon);
+
+        let err = preflight_start(
+            &RuntimeStartRequest::device("tenant-test", "node-test"),
+            &status,
+        )
+        .expect_err("blank discovered node id must fail");
+
+        assert!(matches!(
+            err,
+            RuntimeLifecycleError::StartRefusedIdentityMismatch {
+                field: "node_id",
+                requested,
+                actual,
+            } if requested == "node-test" && actual == "<blank>"
         ));
     }
 }

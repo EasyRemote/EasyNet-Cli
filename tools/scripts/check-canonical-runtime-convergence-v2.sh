@@ -7626,6 +7626,58 @@ for token in retired:
 PY
 }
 
+check_start_preflight_node_identity_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local lifecycle_start="$cli_root/src/daemon/boot/lifecycle/start.rs"
+  [[ -f "$lifecycle_start" ]] || fail "lifecycle start source is missing: $lifecycle_start"
+
+  "$PYTHON_BIN" - "$lifecycle_start" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+production = text.split("\n#[cfg(test)]", 1)[0]
+
+for retired in (
+    "request.node_id.clone().unwrap_or_default()",
+    "identity.node_id.clone().unwrap_or_default()",
+    ".node_id.clone().unwrap_or_default()",
+):
+    if retired in production:
+        raise SystemExit(f"start_preflight_node_identity:retired_node_id_fallback:{retired}")
+
+validate = re.search(r"fn validate_node_id\((?P<body>.*?)\n\}", production, re.S)
+if validate is None:
+    raise SystemExit("start_preflight_node_identity:validate_node_id_missing")
+validate_body = validate.group("body")
+if "unwrap_or_default()" in validate_body:
+    raise SystemExit("start_preflight_node_identity:validate_node_id_uses_default")
+
+for required in (
+    "enum DeviceNodeIdFact<'a>",
+    "Present(&'a str)",
+    "Missing",
+    "Blank",
+    "fn from_optional(value: Option<&'a str>) -> Self",
+    "fn mismatch_value(self) -> String",
+    "DeviceNodeIdFact::from_optional(request.node_id.as_deref())",
+    "DeviceNodeIdFact::from_optional(identity.node_id.as_deref())",
+):
+    if required not in production:
+        raise SystemExit(f"start_preflight_node_identity:missing:{required}")
+
+for test in (
+    "start_preflight_refuses_missing_requested_device_node_id",
+    "start_preflight_refuses_blank_requested_device_node_id",
+    "start_preflight_refuses_missing_discovered_device_node_id",
+    "start_preflight_refuses_blank_discovered_device_node_id",
+):
+    if test not in text:
+        raise SystemExit(f"start_preflight_node_identity:missing_test:{test}")
+PY
+}
+
 check_session_prelude_receipt_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local prelude="$cli_root/src/daemon/invocation/bidi/session_initiator/prelude.rs"
@@ -19653,6 +19705,31 @@ EOF
   if ( check_start_attach_user_signer_readiness_contract "$tmp/start-attach-user-signer-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected start attach user signer readiness gate to fail"
   fi
+  mkdir -p "$tmp/start-node-identity-default-legacy/src/daemon/boot/lifecycle"
+  cat >"$tmp/start-node-identity-default-legacy/src/daemon/boot/lifecycle/start.rs" <<'EOF'
+fn validate_node_id(
+    request: &RuntimeStartRequest,
+    identity: &DaemonIdentity,
+) -> Result<(), RuntimeLifecycleError> {
+    if !matches!(request.mode, RuntimeStartMode::Device) {
+        return Ok(());
+    }
+    let requested = request.node_id.clone().unwrap_or_default();
+    let actual = identity.node_id.clone().unwrap_or_default();
+    if requested == actual {
+        Ok(())
+    } else {
+        Err(RuntimeLifecycleError::StartRefusedIdentityMismatch {
+            field: "node_id",
+            requested,
+            actual,
+        })
+    }
+}
+EOF
+  if ( check_start_preflight_node_identity_contract "$tmp/start-node-identity-default-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected start preflight node identity default fallback gate to fail"
+  fi
   mkdir -p "$tmp/start-ready-env-node-legacy/src/daemon/control" \
     "$tmp/start-ready-env-node-legacy/src/bin" \
     "$tmp/start-ready-env-node-legacy/src/daemon/boot/lifecycle"
@@ -22060,6 +22137,7 @@ EOF
   check_sdk_provider_managed_signing_custody_contract
   check_sdk_runtime_receipt_type_state_binding_contract
   check_start_attach_user_signer_readiness_contract
+  check_start_preflight_node_identity_contract
   echo "canonical-runtime-convergence-v2 self-test ok"
   exit 0
 fi
@@ -22182,6 +22260,7 @@ check_local_runtime_public_callee_cutover_contract
 check_local_daemon_subject_owner_boundary_contract
 check_session_prelude_credentials_contract
 check_start_attach_user_signer_readiness_contract
+check_start_preflight_node_identity_contract
 check_session_prelude_receipt_contract
 check_federation_heartbeat_ingress_strict_contract
 check_federation_join_ingress_strict_contract
