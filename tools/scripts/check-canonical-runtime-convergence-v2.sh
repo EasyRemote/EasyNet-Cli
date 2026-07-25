@@ -7628,44 +7628,74 @@ PY
 
 check_start_preflight_node_identity_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local identity_fact="$cli_root/src/daemon/boot/identity_fact.rs"
   local lifecycle_start="$cli_root/src/daemon/boot/lifecycle/start.rs"
+  local process="$cli_root/src/daemon/boot/process.rs"
+  [[ -f "$identity_fact" ]] || fail "boot identity fact source is missing: $identity_fact"
   [[ -f "$lifecycle_start" ]] || fail "lifecycle start source is missing: $lifecycle_start"
+  [[ -f "$process" ]] || fail "daemon boot process source is missing: $process"
 
-  "$PYTHON_BIN" - "$lifecycle_start" <<'PY'
+  "$PYTHON_BIN" - "$identity_fact" "$lifecycle_start" "$process" <<'PY'
 import re
 import sys
 from pathlib import Path
 
-text = Path(sys.argv[1]).read_text(encoding="utf-8")
-production = text.split("\n#[cfg(test)]", 1)[0]
+identity_fact = Path(sys.argv[1]).read_text(encoding="utf-8")
+start_text = Path(sys.argv[2]).read_text(encoding="utf-8")
+process_text = Path(sys.argv[3]).read_text(encoding="utf-8")
+start_production = start_text.split("\n#[cfg(test)]", 1)[0]
+process_production = process_text.split("\n#[cfg(test)]", 1)[0]
 
 for retired in (
     "request.node_id.clone().unwrap_or_default()",
     "identity.node_id.clone().unwrap_or_default()",
     ".node_id.clone().unwrap_or_default()",
 ):
-    if retired in production:
+    if retired in start_production or retired in process_production:
         raise SystemExit(f"start_preflight_node_identity:retired_node_id_fallback:{retired}")
 
-validate = re.search(r"fn validate_node_id\((?P<body>.*?)\n\}", production, re.S)
+validate = re.search(r"fn validate_node_id\((?P<body>.*?)\n\}", start_production, re.S)
 if validate is None:
     raise SystemExit("start_preflight_node_identity:validate_node_id_missing")
 validate_body = validate.group("body")
 if "unwrap_or_default()" in validate_body:
     raise SystemExit("start_preflight_node_identity:validate_node_id_uses_default")
 
+process_start = process_production.find("fn validate_discovered_identity(")
+if process_start < 0:
+    raise SystemExit("start_preflight_node_identity:process_validate_identity_missing")
+process_end = process_production.find("\n    fn spawn_child", process_start)
+process_validate_body = process_production[process_start : process_end if process_end >= 0 else len(process_production)]
+if "unwrap_or_default()" in process_validate_body:
+    raise SystemExit("start_preflight_node_identity:process_validate_identity_uses_default")
+
 for required in (
     "enum DeviceNodeIdFact<'a>",
     "Present(&'a str)",
     "Missing",
     "Blank",
-    "fn from_optional(value: Option<&'a str>) -> Self",
-    "fn mismatch_value(self) -> String",
+    "pub(super) fn from_optional(value: Option<&'a str>) -> Self",
+    "pub(super) fn present_value(self) -> Option<&'a str>",
+    "pub(super) fn mismatch_value(self) -> String",
+):
+    if required not in identity_fact:
+        raise SystemExit(f"start_preflight_node_identity:identity_fact_missing:{required}")
+
+for required in (
+    "use super::super::identity_fact::DeviceNodeIdFact;",
     "DeviceNodeIdFact::from_optional(request.node_id.as_deref())",
     "DeviceNodeIdFact::from_optional(identity.node_id.as_deref())",
 ):
-    if required not in production:
-        raise SystemExit(f"start_preflight_node_identity:missing:{required}")
+    if required not in start_production:
+        raise SystemExit(f"start_preflight_node_identity:start_missing:{required}")
+
+for required in (
+    "use super::identity_fact::DeviceNodeIdFact;",
+    "DeviceNodeIdFact::from_optional(Some(self.node_id.trim()))",
+    "DeviceNodeIdFact::from_optional(identity.node_id.as_deref())",
+):
+    if required not in process_production:
+        raise SystemExit(f"start_preflight_node_identity:process_missing:{required}")
 
 for test in (
     "start_preflight_refuses_missing_requested_device_node_id",
@@ -7673,8 +7703,14 @@ for test in (
     "start_preflight_refuses_missing_discovered_device_node_id",
     "start_preflight_refuses_blank_discovered_device_node_id",
 ):
-    if test not in text:
+    if test not in start_text:
         raise SystemExit(f"start_preflight_node_identity:missing_test:{test}")
+for test in (
+    "device_attach_identity_rejects_missing_discovered_node_id",
+    "device_attach_identity_rejects_blank_discovered_node_id",
+):
+    if test not in process_text:
+        raise SystemExit(f"start_preflight_node_identity:missing_process_test:{test}")
 PY
 }
 
@@ -19729,6 +19765,67 @@ fn validate_node_id(
 EOF
   if ( check_start_preflight_node_identity_contract "$tmp/start-node-identity-default-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected start preflight node identity default fallback gate to fail"
+  fi
+  mkdir -p "$tmp/process-node-identity-default-legacy/src/daemon/boot/lifecycle" \
+    "$tmp/process-node-identity-default-legacy/src/daemon/boot"
+  cat >"$tmp/process-node-identity-default-legacy/src/daemon/boot/identity_fact.rs" <<'EOF'
+pub(super) enum DeviceNodeIdFact<'a> {
+    Present(&'a str),
+    Missing,
+    Blank,
+}
+
+impl<'a> DeviceNodeIdFact<'a> {
+    pub(super) fn from_optional(value: Option<&'a str>) -> Self { Self::Missing }
+    pub(super) fn present_value(self) -> Option<&'a str> { None }
+    pub(super) fn mismatch_value(self) -> String { String::new() }
+}
+EOF
+  cat >"$tmp/process-node-identity-default-legacy/src/daemon/boot/lifecycle/start.rs" <<'EOF'
+use super::super::identity_fact::DeviceNodeIdFact;
+
+fn validate_node_id(
+    request: &RuntimeStartRequest,
+    identity: &DaemonIdentity,
+) -> Result<(), RuntimeLifecycleError> {
+    let requested = DeviceNodeIdFact::from_optional(request.node_id.as_deref());
+    let actual = DeviceNodeIdFact::from_optional(identity.node_id.as_deref());
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    fn start_preflight_refuses_missing_requested_device_node_id() {}
+    fn start_preflight_refuses_blank_requested_device_node_id() {}
+    fn start_preflight_refuses_missing_discovered_device_node_id() {}
+    fn start_preflight_refuses_blank_discovered_device_node_id() {}
+}
+EOF
+  cat >"$tmp/process-node-identity-default-legacy/src/daemon/boot/process.rs" <<'EOF'
+use super::identity_fact::DeviceNodeIdFact;
+
+fn validate_discovered_identity(&self, identity: discovery::DaemonIdentity) -> Result<()> {
+    if matches!(self.mode, DaemonStartMode::Device) {
+        let actual_node = identity.node_id.unwrap_or_default();
+        if self.node_id.trim() != actual_node {
+            return Err(DaemonError::DiscoveryIdentityMismatch {
+                field: "node_id",
+                requested: self.node_id.trim().to_string(),
+                actual: actual_node,
+            });
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    fn device_attach_identity_rejects_missing_discovered_node_id() {}
+    fn device_attach_identity_rejects_blank_discovered_node_id() {}
+}
+EOF
+  if ( check_start_preflight_node_identity_contract "$tmp/process-node-identity-default-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected daemon process node identity default fallback gate to fail"
   fi
   mkdir -p "$tmp/start-ready-env-node-legacy/src/daemon/control" \
     "$tmp/start-ready-env-node-legacy/src/bin" \

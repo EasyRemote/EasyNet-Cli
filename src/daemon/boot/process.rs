@@ -11,6 +11,7 @@ use crate::daemon::persistence::daemon_config::{
 };
 use crate::support::platform::{local_daemon_grpc, net};
 
+use super::identity_fact::DeviceNodeIdFact;
 use super::{DaemonError, Result};
 
 const DEFAULT_DAEMON_BIN: &str = "easynet-daemon";
@@ -305,12 +306,13 @@ impl DaemonStartConfig {
             }
         }
         if matches!(self.mode, DaemonStartMode::Device) {
-            let actual_node = identity.node_id.unwrap_or_default();
-            if self.node_id.trim() != actual_node {
+            let requested_node = DeviceNodeIdFact::from_optional(Some(self.node_id.trim()));
+            let actual_node = DeviceNodeIdFact::from_optional(identity.node_id.as_deref());
+            if requested_node.present_value() != actual_node.present_value() {
                 return Err(DaemonError::DiscoveryIdentityMismatch {
                     field: "node_id",
-                    requested: self.node_id.trim().to_string(),
-                    actual: actual_node,
+                    requested: requested_node.mismatch_value(),
+                    actual: actual_node.mismatch_value(),
                 });
             }
         }
@@ -849,6 +851,52 @@ mod tests {
                 field: "node_id",
                 ..
             }
+        ));
+    }
+
+    #[test]
+    fn device_attach_identity_rejects_missing_discovered_node_id() {
+        let config = DaemonStartConfig::device("node-a")
+            .unwrap()
+            .with_realm("realm-a");
+        let err = config
+            .validate_discovered_identity(discovery::DaemonIdentity {
+                mode: "device".into(),
+                realm: "realm-a".into(),
+                node_id: None,
+            })
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            DaemonError::DiscoveryIdentityMismatch {
+                field: "node_id",
+                requested,
+                actual,
+            } if requested == "node-a" && actual == "<missing>"
+        ));
+    }
+
+    #[test]
+    fn device_attach_identity_rejects_blank_discovered_node_id() {
+        let config = DaemonStartConfig::device("node-a")
+            .unwrap()
+            .with_realm("realm-a");
+        let err = config
+            .validate_discovered_identity(discovery::DaemonIdentity {
+                mode: "device".into(),
+                realm: "realm-a".into(),
+                node_id: Some("  ".into()),
+            })
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            DaemonError::DiscoveryIdentityMismatch {
+                field: "node_id",
+                requested,
+                actual,
+            } if requested == "node-a" && actual == "<blank>"
         ));
     }
 

@@ -1,6 +1,7 @@
 //! Daemon boot sequencing and startup state projections.
 
 mod error;
+mod identity_fact;
 #[cfg(feature = "axon-pb")]
 pub mod invocation;
 pub mod join_connection_state;

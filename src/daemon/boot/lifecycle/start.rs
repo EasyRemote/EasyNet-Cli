@@ -25,6 +25,7 @@
 
 use crate::daemon::control::discovery::DaemonIdentity;
 
+use super::super::identity_fact::DeviceNodeIdFact;
 use super::{RuntimeLifecycleError, RuntimeLifecycleStatus, RuntimeStatusReport};
 
 /// Requested daemon identity for start attach decisions.
@@ -44,31 +45,6 @@ pub struct RuntimeStartRequest {
 enum RuntimeStartMode {
     Device,
     Hub,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DeviceNodeIdFact<'a> {
-    Present(&'a str),
-    Missing,
-    Blank,
-}
-
-impl<'a> DeviceNodeIdFact<'a> {
-    fn from_optional(value: Option<&'a str>) -> Self {
-        match value {
-            Some(value) if value.trim().is_empty() => Self::Blank,
-            Some(value) => Self::Present(value),
-            None => Self::Missing,
-        }
-    }
-
-    fn mismatch_value(self) -> String {
-        match self {
-            Self::Present(value) => value.to_string(),
-            Self::Missing => "<missing>".to_string(),
-            Self::Blank => "<blank>".to_string(),
-        }
-    }
 }
 
 impl RuntimeStartRequest {
@@ -262,12 +238,8 @@ fn validate_node_id(
     }
     let requested = DeviceNodeIdFact::from_optional(request.node_id.as_deref());
     let actual = DeviceNodeIdFact::from_optional(identity.node_id.as_deref());
-    match (requested, actual) {
-        (DeviceNodeIdFact::Present(requested), DeviceNodeIdFact::Present(actual))
-            if requested == actual =>
-        {
-            Ok(())
-        }
+    match (requested.present_value(), actual.present_value()) {
+        (Some(requested), Some(actual)) if requested == actual => Ok(()),
         _ => Err(RuntimeLifecycleError::StartRefusedIdentityMismatch {
             field: "node_id",
             requested: requested.mismatch_value(),
