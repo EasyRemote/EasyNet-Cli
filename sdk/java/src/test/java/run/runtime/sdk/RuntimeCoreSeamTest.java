@@ -355,6 +355,13 @@ public final class RuntimeCoreSeamTest {
         "authority_proof contains noncanonical field legacy_proof_fact",
         () -> RuntimeReceipt.fromMap(legacyAuthorityProofFactReceipt));
 
+    Map<String, Object> legacyTopLevelReceipt = new LinkedHashMap<>(complete);
+    legacyTopLevelReceipt.put("legacy_receipt_canonicalizer", "compat-carrier");
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        "runtime_receipt contains noncanonical field legacy_receipt_canonicalizer",
+        () -> RuntimeReceipt.fromMap(legacyTopLevelReceipt));
+
     Map<String, Object> missingProofPayloadReceipt = new LinkedHashMap<>(complete);
     Map<String, Object> missingProofPayload = mutableAuthorityProof(missingProofPayloadReceipt);
     missingProofPayload.remove("proof_payload_base64");

@@ -19,6 +19,42 @@ final class RuntimeReceiptProofFacts {
   private RuntimeReceiptProofFacts() {}
 
   static void validate(Map<String, Object> raw) {
+    requireExactKeys(
+        raw,
+        "runtime_receipt",
+        "receipt_ura",
+        "invocation_id",
+        "receipt_type",
+        "state",
+        "index",
+        "timestamp_unix_ms",
+        "prev_receipt_hash_hex",
+        "self_hash_hex",
+        "payload_base64",
+        "payload_content_type",
+        "cleanup_complete",
+        "caller_binding",
+        "callee_binding",
+        "subject_binding",
+        "invocation_nonce_base64",
+        "causal_binding_kind",
+        "causal_binding",
+        "callee_signature",
+        "signer_binding",
+        "host_attestation_base64",
+        "authority_binding_kind",
+        "authority_binding",
+        "ability_binding",
+        "usage",
+        "subject_ref",
+        "descriptor_version",
+        "schema_hash_hex",
+        "impl_hash_hex",
+        "runtime_env",
+        "authority_proof",
+        "input_hash_hex",
+        "output_hash_hex",
+        "parent_receipts");
     Map<String, Object> callerBinding = requireAgentBinding(raw.get("caller_binding"), "caller_binding");
     Map<String, Object> calleeBinding = requireAgentBinding(raw.get("callee_binding"), "callee_binding");
     requireAgentBinding(raw.get("subject_binding"), "subject_binding");
