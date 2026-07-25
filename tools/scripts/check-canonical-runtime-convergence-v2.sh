@@ -37,6 +37,10 @@ check_static_registration_manifest_boundary_contract() {
   bash "$ROOT/tools/scripts/check-static-registration-manifest-boundary.sh" >/dev/null
 }
 
+check_remote_public_governance_read_boundary_contract() {
+  bash "$ROOT/tools/scripts/check-remote-public-governance-read-boundary.sh" >/dev/null
+}
+
 check_mcp_reflection_async_bridge_contract() {
   local cli_root="${1:-$ROOT}"
   local reflective="$cli_root/src/daemon/ability/builtins/integrations/mcp/reflective_registry.rs"
@@ -23421,6 +23425,7 @@ check_catalog_description_projection_boundary_contract
 check_control_plane_manifest_materialization_boundary_contract
 check_daemon_invocation_contract_metadata_boundary_contract
 check_static_registration_manifest_boundary_contract
+check_remote_public_governance_read_boundary_contract
 check_sdk_receipt_profile_convergence_contract
 check_sdk_session_authority_binding_facade_contract
 check_sdk_provider_managed_signing_custody_contract

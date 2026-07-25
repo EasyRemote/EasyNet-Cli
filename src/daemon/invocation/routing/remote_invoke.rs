@@ -354,6 +354,40 @@ impl RemoteRootAbilityAdmission {
     }
 }
 
+/// Admission state for public remote descriptor-bound ingress.
+///
+/// Public remote invoke/stream/bidi routes are caller-declared action
+/// invocations. Receipt/history abilities are governance read-model routes
+/// with their own caller, subject, authority, and filter semantics. Admitting
+/// them here lets product callers bypass the canonical history read issuer and
+/// recreate the legacy `/session/invocation_history` subject path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RemotePublicAbilityAdmission {
+    Accepted,
+    ReceiptHistoryRead,
+}
+
+impl RemotePublicAbilityAdmission {
+    fn evaluate(public_ability: &str) -> Self {
+        if is_receipt_history_ability(public_ability) {
+            Self::ReceiptHistoryRead
+        } else {
+            Self::Accepted
+        }
+    }
+
+    fn require(self, public_ability: &str) -> anyhow::Result<()> {
+        match self {
+            Self::Accepted => Ok(()),
+            Self::ReceiptHistoryRead => anyhow::bail!(
+                "receipt history ability `{}` is not a public remote action; \
+                 use the canonical invocation history read path",
+                public_ability.trim()
+            ),
+        }
+    }
+}
+
 /// Complete caller-owned facts for one descriptor-bound remote invocation.
 ///
 /// The selected target supplies only the descriptor-bound `ability` and
@@ -449,6 +483,8 @@ impl<'a> RemoteInvocationTuplePlan<'a> {
         args: Value,
         timeout: Duration,
     ) -> anyhow::Result<Self> {
+        RemotePublicAbilityAdmission::evaluate(target.public_ability())
+            .require(target.public_ability())?;
         Self::new(
             target,
             caller_ura,
@@ -1671,6 +1707,35 @@ mod tests {
         );
         assert_eq!(request.invocation_nonce, [0x41; 16]);
         assert_eq!(request.causal_context, CausalContext::None);
+    }
+
+    #[test]
+    fn public_tuple_plan_rejects_receipt_history_before_request_construction() {
+        let descriptor = "easynet:///r/realm/ability/device.node-a.invocation.history.list@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read";
+        let target = RemoteAbilityInvocationTarget::from_descriptor_ref(
+            "easynet:///r/realm/device/node-a",
+            descriptor,
+        )
+        .expect("descriptor-bound history target");
+
+        let error = RemoteInvocationTuplePlan::public_explicit(
+            &target,
+            "easynet:///r/realm/device/caller",
+            "easynet:///r/realm/resource/user.alice/runtime-state/read",
+            [0x41; 16],
+            CausalContext::None,
+            json!({"limit": 25}),
+            Duration::from_secs(7),
+        )
+        .expect_err("receipt history must use the canonical history read path");
+
+        let message = error.to_string();
+        assert!(
+            message.contains("receipt history ability `invocation.history.list`")
+                && message.contains("not a public remote action")
+                && message.contains("canonical invocation history read path"),
+            "wrong error: {message}"
+        );
     }
 
     #[test]
