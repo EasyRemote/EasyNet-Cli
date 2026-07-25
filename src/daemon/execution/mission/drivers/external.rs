@@ -6,9 +6,7 @@
 // runs the registered `command` + `args`, feeds the NL prompt on stdin,
 // and returns stdout as the answer.
 
-use crate::daemon::execution::mission::adapter::{
-    AdapterOutput, AgentAdapter, DriverCommand, InvokeOpts,
-};
+use crate::daemon::execution::mission::adapter::{AdapterOutput, AgentAdapter, InvokeOpts};
 use crate::daemon::execution::mission::process_runner::{self, ChildOptions};
 use crate::daemon::persistence::agent_registry::AgentEntry;
 
@@ -30,8 +28,7 @@ impl AgentAdapter for ExternalAdapter {
         prompt: &str,
         opts: InvokeOpts,
     ) -> anyhow::Result<AdapterOutput> {
-        let entry_command = DriverCommand::from_registry_value(&entry.command);
-        let command = entry_command.explicit().or_else(|| opts.command.explicit());
+        let command = opts.command.explicit();
         let Some(command) = command else {
             anyhow::bail!(
                 "external agent has no command configured; register it with \

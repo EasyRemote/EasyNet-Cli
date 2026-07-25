@@ -78,6 +78,22 @@ RS
 
 ( cd "$SB" && bash tools/scripts/check-driver-command-state-boundary.sh )
 
+cat >>"$SB/src/daemon/execution/mission/drivers/external.rs" <<'RS'
+fn reparses_registry_command(entry: AgentEntry) {
+    let _ = DriverCommand::from_registry_value(&entry.command);
+}
+RS
+
+if ( cd "$SB" && bash tools/scripts/check-driver-command-state-boundary.sh ) >/dev/null 2>&1; then
+  fail "self-test expected duplicate registry command bridge to fail"
+fi
+
+cat >"$SB/src/daemon/execution/mission/drivers/external.rs" <<'RS'
+fn invoke(opts: InvokeOpts) {
+    let _ = opts.command.explicit();
+}
+RS
+
 cat >>"$SB/src/daemon/execution/mission/drivers/codex.rs" <<'RS'
 pub struct BadOptions {
     pub command: String,
@@ -87,4 +103,3 @@ RS
 if ( cd "$SB" && bash tools/scripts/check-driver-command-state-boundary.sh ) >/dev/null 2>&1; then
   fail "self-test expected string command sentinel to fail"
 fi
-

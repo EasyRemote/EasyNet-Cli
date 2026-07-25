@@ -8680,6 +8680,10 @@ for required in (
 PY
 }
 
+check_driver_command_state_contract() {
+  bash "$ROOT/tools/scripts/check-driver-command-state-boundary.sh" >/dev/null
+}
+
 check_retired_edge_adapter_policy_absence_contract() {
   local policy_py="$ROOT/sdk/conformance/edge_adapter_policy.py"
   local policy_json="$ROOT/sdk/conformance/edge-adapter-policy.v1.json"
@@ -22931,6 +22935,7 @@ EOF
   check_mission_workspace_easynet_binary_contract
   check_mission_agent_trace_sink_cutover_contract
   check_mission_dispatch_audit_authority_contract
+  check_driver_command_state_contract
   check_mission_runtime_meta_identity_schema_contract
   check_mission_orchestration_persistence_authority_contract
   check_mission_terminal_receipt_projection_contract
@@ -23164,6 +23169,7 @@ check_eal_device_target_identity_contract
 check_mission_workspace_easynet_binary_contract
 check_mission_agent_trace_sink_cutover_contract
 check_mission_dispatch_audit_authority_contract
+check_driver_command_state_contract
 check_mission_runtime_meta_identity_schema_contract
 check_mission_orchestration_persistence_authority_contract
 check_mission_terminal_receipt_projection_contract

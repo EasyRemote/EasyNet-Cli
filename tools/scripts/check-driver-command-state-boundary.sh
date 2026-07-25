@@ -37,11 +37,19 @@ if ! rg -n 'pub command: DriverCommand' "$ADAPTER" "$CLAUDE" "$CODEX" >/dev/null
 fi
 
 if ! rg -n 'command: DriverCommand::from_registry_value\(&entry\.command\)' "$DISPATCH" >/dev/null; then
-  fail "dispatch must convert AgentEntry::command into DriverCommand exactly once"
+    fail "dispatch must convert AgentEntry::command into DriverCommand exactly once"
+fi
+
+duplicate_registry_bridge="$(
+  rg -n 'DriverCommand::from_registry_value\(&entry\.command\)' "$CLAUDE" "$CODEX" "$EXTERNAL" || true
+)"
+if [[ -n "$duplicate_registry_bridge" ]]; then
+  fail "drivers must consume InvokeOpts.command instead of reparsing AgentEntry::command:
+$duplicate_registry_bridge"
 fi
 
 if ! rg -n 'self\.command\.resolve\(DEFAULT_CLAUDE_BINARY\)' "$CLAUDE" >/dev/null; then
-  fail "Claude driver must resolve DriverCommand through its canonical binary"
+    fail "Claude driver must resolve DriverCommand through its canonical binary"
 fi
 
 if ! rg -n 'self\.command\.resolve\(DEFAULT_CODEX_BINARY\)' "$CODEX" >/dev/null; then
