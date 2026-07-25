@@ -5,8 +5,10 @@ import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
+import java.util.Collections;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -17,6 +19,34 @@ final class RuntimeReceiptProofFacts {
   private static final HexFormat HEX = HexFormat.of();
 
   private RuntimeReceiptProofFacts() {}
+
+  static Map<String, Object> immutableObject(Object value, String field) {
+    if (!(value instanceof Map<?, ?> raw)) {
+      throw SDKError.validation("runtime_receipt", field + " must be an object");
+    }
+    LinkedHashMap<String, Object> out = new LinkedHashMap<>();
+    for (Map.Entry<?, ?> entry : raw.entrySet()) {
+      if (!(entry.getKey() instanceof String key)) {
+        throw SDKError.validation("runtime_receipt", field + " object keys must be strings");
+      }
+      out.put(key, immutableValue(entry.getValue(), field + "." + key));
+    }
+    return Collections.unmodifiableMap(out);
+  }
+
+  private static Object immutableValue(Object value, String field) {
+    if (value instanceof Map<?, ?>) {
+      return immutableObject(value, field);
+    }
+    if (value instanceof List<?> raw) {
+      ArrayList<Object> out = new ArrayList<>(raw.size());
+      for (int i = 0; i < raw.size(); i++) {
+        out.add(immutableValue(raw.get(i), field + "[" + i + "]"));
+      }
+      return Collections.unmodifiableList(out);
+    }
+    return value;
+  }
 
   static void validate(Map<String, Object> raw) {
     requireExactKeys(

@@ -14827,6 +14827,10 @@ for fragment, label in {
     "base64Bytes(": "base64_validator_missing",
     "requireExactKeys(": "exact_object_schema_validator_missing",
     "requirePresentKeys(": "required_top_level_fact_validator_missing",
+    "static Map<String, Object> immutableObject(": "deep_immutable_object_missing",
+    "private static Object immutableValue(": "deep_immutable_value_missing",
+    "Collections.unmodifiableMap(out)": "deep_immutable_map_missing",
+    "Collections.unmodifiableList(out)": "deep_immutable_list_missing",
     'requiredString(raw, "payload_content_type")': "payload_content_type_required_missing",
     'requireObject(raw.get("usage"), "usage")': "usage_required_missing",
     "contains noncanonical field": "noncanonical_field_error_missing",
@@ -14835,6 +14839,7 @@ for fragment, label in {
     if fragment not in proof:
         raise SystemExit(f"java_runtime_receipt_projection:{label}")
 for fragment, label in {
+    'RuntimeReceiptProofFacts.immutableObject(raw, "runtime receipt")': "runtime_receipt_not_deep_immutable",
     "RuntimeReceiptProofFacts.validate(raw)": "runtime_receipt_not_using_proof_fact_validator",
     "canonicalLifecycleState": "lifecycle_state_machine_missing",
 }.items():
@@ -14855,6 +14860,7 @@ legacy_patterns = {
     "terminalReceiptValue instanceof Map<?, ?> map ? copyStringMap(map) : Map.of()": "malformed_terminal_receipt_downgrade",
     "optionalReceipt(fields, \"terminal_receipt\")": "optional_terminal_receipt_decoder",
     "terminalReceipt = terminalReceipt == null ? Map.of() : Map.copyOf(terminalReceipt);\n    if (ok": "constructor_without_receipt_validation",
+    "Map.copyOf(RuntimeReceiptProofFacts.requireObject(raw, \"runtime receipt\"))": "runtime_receipt_shallow_copy_bypass",
 }
 for pattern, label in legacy_patterns.items():
     if pattern in result:
@@ -14862,6 +14868,9 @@ for pattern, label in legacy_patterns.items():
 
 for required_test in (
     "runtimeReceiptProofFactsAreMandatory",
+    "runtimeReceiptProjectionIsDeepImmutable",
+    "post-validation-mutation",
+    "raw projection must expose deeply immutable proof fact maps",
     "canonicalRuntimeReceiptFixture",
     "missingProof.remove(\"authority_proof\")",
     "legacyAuthorityBinding.put(\"legacy_authority\"",
@@ -15920,6 +15929,21 @@ EOF
     "$tmp/cli-java-receipt-proof-shape-legacy/sdk/java/src/main/java/run/runtime/sdk/RuntimeReceiptProofFacts.java"
   if ( CLI_ROOT="$tmp/cli-java-receipt-proof-shape-legacy"; check_java_sdk_runtime_receipt_projection_contract ) >/dev/null 2>&1; then
     fail "self-test expected Java SDK receipt proof-fact exact-shape gate to fail"
+  fi
+  mkdir -p "$tmp/cli-java-receipt-shallow-copy-legacy/sdk/java/src/main/java/run/runtime/sdk" \
+    "$tmp/cli-java-receipt-shallow-copy-legacy/sdk/java/src/test/java/run/runtime/sdk"
+  cp "$ROOT/sdk/java/src/main/java/run/runtime/sdk/InvocationResult.java" \
+    "$tmp/cli-java-receipt-shallow-copy-legacy/sdk/java/src/main/java/run/runtime/sdk/InvocationResult.java"
+  cp "$ROOT/sdk/java/src/main/java/run/runtime/sdk/RuntimeReceipt.java" \
+    "$tmp/cli-java-receipt-shallow-copy-legacy/sdk/java/src/main/java/run/runtime/sdk/RuntimeReceipt.java"
+  cp "$ROOT/sdk/java/src/main/java/run/runtime/sdk/RuntimeReceiptProofFacts.java" \
+    "$tmp/cli-java-receipt-shallow-copy-legacy/sdk/java/src/main/java/run/runtime/sdk/RuntimeReceiptProofFacts.java"
+  cp "$ROOT/sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java" \
+    "$tmp/cli-java-receipt-shallow-copy-legacy/sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
+  perl -0pi -e 's/RuntimeReceiptProofFacts\.immutableObject\(raw, "runtime receipt"\)/Map.copyOf(RuntimeReceiptProofFacts.requireObject(raw, "runtime receipt"))/' \
+    "$tmp/cli-java-receipt-shallow-copy-legacy/sdk/java/src/main/java/run/runtime/sdk/RuntimeReceipt.java"
+  if ( CLI_ROOT="$tmp/cli-java-receipt-shallow-copy-legacy"; check_java_sdk_runtime_receipt_projection_contract ) >/dev/null 2>&1; then
+    fail "self-test expected Java SDK receipt shallow-copy mutability gate to fail"
   fi
   mkdir -p "$tmp/cli-go-receipt-proof-shape-legacy/sdk/go"
   cp "$ROOT/sdk/go/runtime.go" "$tmp/cli-go-receipt-proof-shape-legacy/sdk/go/runtime.go"

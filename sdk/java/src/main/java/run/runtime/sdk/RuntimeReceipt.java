@@ -9,7 +9,7 @@ public final class RuntimeReceipt {
   private final String state;
 
   private RuntimeReceipt(Map<String, Object> raw) {
-    this.raw = Map.copyOf(RuntimeReceiptProofFacts.requireObject(raw, "runtime receipt"));
+    this.raw = RuntimeReceiptProofFacts.immutableObject(raw, "runtime receipt");
     this.invocationId = requiredString(this.raw, "invocation_id");
     this.receiptType = requiredString(this.raw, "receipt_type");
     this.state = requiredString(this.raw, "state");

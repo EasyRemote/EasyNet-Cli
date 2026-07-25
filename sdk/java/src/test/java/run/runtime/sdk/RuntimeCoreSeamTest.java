@@ -26,6 +26,7 @@ public final class RuntimeCoreSeamTest {
           "invocationPrepareSignSubmitPreservesTheCompleteTuple",
           "invocationResultUsesTerminalReceipt",
           "runtimeReceiptProofFactsAreMandatory",
+          "runtimeReceiptProjectionIsDeepImmutable",
           "authorityMetadataIsTypedAndMutuallyExclusive",
           "invocationAuthorityMetadataIsTupleBound",
           "runtimeAbilityProjectionIsCanonical",
@@ -80,6 +81,7 @@ public final class RuntimeCoreSeamTest {
           invocationPrepareSignSubmitPreservesTheCompleteTuple();
       case "invocationResultUsesTerminalReceipt" -> invocationResultUsesTerminalReceipt();
       case "runtimeReceiptProofFactsAreMandatory" -> runtimeReceiptProofFactsAreMandatory();
+      case "runtimeReceiptProjectionIsDeepImmutable" -> runtimeReceiptProjectionIsDeepImmutable();
       case "authorityMetadataIsTypedAndMutuallyExclusive" ->
           authorityMetadataIsTypedAndMutuallyExclusive();
       case "invocationAuthorityMetadataIsTupleBound" ->
@@ -519,6 +521,50 @@ public final class RuntimeCoreSeamTest {
                         "Completed",
                         "terminal_receipt",
                         missingProof))));
+  }
+
+  private static void runtimeReceiptProjectionIsDeepImmutable() {
+    Map<String, Object> complete =
+        new LinkedHashMap<>(
+            canonicalRuntimeReceiptFixture("inv-proof-immutable", "completed", "Completed", 1));
+    Map<String, Object> mutableAuthorityBinding =
+        mutableTopLevelObject(complete, "authority_binding");
+    Map<String, Object> mutableAuthorityProof = mutableAuthorityProof(complete);
+    @SuppressWarnings("unchecked")
+    Map<String, Object> mutableProofBinding =
+        (Map<String, Object>) mutableAuthorityProof.get("binding");
+
+    RuntimeReceipt receipt = RuntimeReceipt.fromMap(complete);
+
+    mutableAuthorityBinding.put("legacy_authority", "post-validation-mutation");
+    mutableProofBinding.put("legacy_proof_fact", "post-validation-mutation");
+
+    @SuppressWarnings("unchecked")
+    Map<String, Object> projectedAuthorityBinding =
+        (Map<String, Object>) receipt.raw().get("authority_binding");
+    check(
+        !projectedAuthorityBinding.containsKey("legacy_authority"),
+        "RuntimeReceipt must detach authority_binding from mutable caller input after proof validation");
+
+    @SuppressWarnings("unchecked")
+    Map<String, Object> projectedAuthorityProof =
+        (Map<String, Object>) receipt.raw().get("authority_proof");
+    @SuppressWarnings("unchecked")
+    Map<String, Object> projectedProofBinding =
+        (Map<String, Object>) projectedAuthorityProof.get("binding");
+    check(
+        !projectedProofBinding.containsKey("legacy_proof_fact"),
+        "RuntimeReceipt must detach authority_proof.binding from mutable caller input after proof validation");
+
+    boolean rejectedNestedMutation = false;
+    try {
+      projectedProofBinding.put("legacy_proof_fact", "raw-projection-mutation");
+    } catch (UnsupportedOperationException expected) {
+      rejectedNestedMutation = true;
+    }
+    check(
+        rejectedNestedMutation,
+        "RuntimeReceipt raw projection must expose deeply immutable proof fact maps");
   }
 
   private static void authorityMetadataIsTypedAndMutuallyExclusive() {
