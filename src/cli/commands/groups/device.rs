@@ -41,7 +41,9 @@ use serde_json::{json, Value};
 
 use crate::cli::commands::ability_catalog_row::AbilityCatalogueRow;
 use crate::cli::commands::{config_cmd, devices, join, reset};
-use crate::cli::daemon_client::remote_system_ability::invoke_remote_device_system_ability;
+use crate::cli::daemon_client::remote_system_ability::{
+    invoke_remote_device_system_ability, RemoteDeviceSystemAbility,
+};
 use crate::support::platform::output::{self, OutputFormat};
 
 #[derive(Debug, Args)]
@@ -333,7 +335,7 @@ fn describe_target(node_id: &str) -> anyhow::Result<Value> {
 fn invoke_remote_describe(node: &str) -> anyhow::Result<Value> {
     invoke_remote_device_system_ability(
         node,
-        "node.describe",
+        RemoteDeviceSystemAbility::NodeDescribe,
         serde_json::json!({"node_id": "local"}),
         &format!("describing remote device {node:?}"),
     )

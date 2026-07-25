@@ -15,25 +15,87 @@ use crate::daemon::invocation::routing::remote_invoke::{
     self, RemoteAbilityInvocationTarget, RemoteSystemInvocationIssuer,
 };
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RemoteDeviceSystemAbility {
+    MetaListAbilities,
+    NodeDescribe,
+    ProcessExec,
+}
+
+impl RemoteDeviceSystemAbility {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::MetaListAbilities => "meta.list_abilities",
+            Self::NodeDescribe => "node.describe",
+            Self::ProcessExec => "process.exec",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RealmHubSystemAbility {
+    VoiceCreateCall,
+    VoiceShowCall,
+    VoiceJoinCall,
+    VoiceLeaveCall,
+    VoiceEndCall,
+    VoiceWatchCall,
+    VoiceReportMetrics,
+}
+
+impl RealmHubSystemAbility {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::VoiceCreateCall => "voice.create_call",
+            Self::VoiceShowCall => "voice.show_call",
+            Self::VoiceJoinCall => "voice.join_call",
+            Self::VoiceLeaveCall => "voice.leave_call",
+            Self::VoiceEndCall => "voice.end_call",
+            Self::VoiceWatchCall => "voice.watch_call",
+            Self::VoiceReportMetrics => "voice.report_metrics",
+        }
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+trait TargetOwnedRemoteSystemAbilityName {
+    fn remote_system_ability_name(self) -> &'static str;
+}
+
+#[cfg(feature = "axon-pb")]
+impl TargetOwnedRemoteSystemAbilityName for RemoteDeviceSystemAbility {
+    fn remote_system_ability_name(self) -> &'static str {
+        self.as_str()
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+impl TargetOwnedRemoteSystemAbilityName for RealmHubSystemAbility {
+    fn remote_system_ability_name(self) -> &'static str {
+        self.as_str()
+    }
+}
+
 #[cfg(feature = "axon-pb")]
 pub(crate) fn invoke_remote_device_system_ability(
     node: &str,
-    selector: &str,
+    ability: RemoteDeviceSystemAbility,
     args: Value,
     action_label: &str,
 ) -> anyhow::Result<Value> {
     let _ = action_label;
+    let selector = ability.as_str();
     let target_ura = crate::support::platform::remote_device::resolve_target_device_ura(node)?;
     let caller_ura =
         crate::support::platform::remote_device::require_caller_device_ura_from_credentials()?;
-    invoke_target_owned_system_ability(&target_ura, selector, args, &caller_ura)
+    invoke_target_owned_system_ability(&target_ura, ability, args, &caller_ura)
         .with_context(|| format!("forward {selector} to remote device target={target_ura}"))
 }
 
 #[cfg(not(feature = "axon-pb"))]
 pub(crate) fn invoke_remote_device_system_ability(
     node: &str,
-    _selector: &str,
+    _ability: RemoteDeviceSystemAbility,
     _args: Value,
     action_label: &str,
 ) -> anyhow::Result<Value> {
@@ -47,22 +109,23 @@ pub(crate) fn invoke_remote_device_system_ability(
 
 #[cfg(feature = "axon-pb")]
 pub(crate) fn invoke_current_realm_hub_system_ability(
-    selector: &str,
+    ability: RealmHubSystemAbility,
     args: Value,
 ) -> anyhow::Result<Option<Value>> {
     let context = match CurrentRealmHubInvocationContext::resolve()? {
         CurrentRealmHubInvocationContext::Ready(context) => context,
         CurrentRealmHubInvocationContext::Unpaired => return Ok(None),
     };
+    let selector = ability.as_str();
     let value =
-        invoke_target_owned_system_ability(&context.hub_ura, selector, args, &context.caller_ura)
+        invoke_target_owned_system_ability(&context.hub_ura, ability, args, &context.caller_ura)
             .with_context(|| format!("invoke {selector} against realm hub"))?;
     Ok(Some(value))
 }
 
 #[cfg(not(feature = "axon-pb"))]
 pub(crate) fn invoke_current_realm_hub_system_ability(
-    _selector: &str,
+    _ability: RealmHubSystemAbility,
     _args: Value,
 ) -> anyhow::Result<Option<Value>> {
     Ok(None)
@@ -99,12 +162,16 @@ impl CurrentRealmHubInvocationContext {
 }
 
 #[cfg(feature = "axon-pb")]
-fn invoke_target_owned_system_ability(
+fn invoke_target_owned_system_ability<A>(
     execution_target_ura: &str,
-    selector: &str,
+    ability: A,
     args: Value,
     caller_ura: &str,
-) -> anyhow::Result<Value> {
+) -> anyhow::Result<Value>
+where
+    A: TargetOwnedRemoteSystemAbilityName,
+{
+    let selector = ability.remote_system_ability_name();
     let target_call =
         RemoteAbilityInvocationTarget::for_target_owned_selector(execution_target_ura, selector)?;
     let request = RemoteSystemInvocationIssuer::target_owned_root_plan(
@@ -120,6 +187,31 @@ fn invoke_target_owned_system_ability(
 #[cfg(all(test, feature = "axon-pb"))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn typed_facade_does_not_expose_receipt_history_as_target_owned_system_ability() {
+        let remote_device_abilities = [
+            RemoteDeviceSystemAbility::MetaListAbilities,
+            RemoteDeviceSystemAbility::NodeDescribe,
+            RemoteDeviceSystemAbility::ProcessExec,
+        ];
+        let realm_hub_abilities = [
+            RealmHubSystemAbility::VoiceCreateCall,
+            RealmHubSystemAbility::VoiceShowCall,
+            RealmHubSystemAbility::VoiceJoinCall,
+            RealmHubSystemAbility::VoiceLeaveCall,
+            RealmHubSystemAbility::VoiceEndCall,
+            RealmHubSystemAbility::VoiceWatchCall,
+            RealmHubSystemAbility::VoiceReportMetrics,
+        ];
+
+        assert!(remote_device_abilities
+            .iter()
+            .all(|ability| !ability.as_str().starts_with("invocation.history.")));
+        assert!(realm_hub_abilities
+            .iter()
+            .all(|ability| !ability.as_str().starts_with("invocation.history.")));
+    }
 
     #[test]
     fn current_realm_hub_context_is_unpaired_when_credentials_are_absent() {

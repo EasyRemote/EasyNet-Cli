@@ -24,7 +24,9 @@ use anyhow::Context;
 use clap::{Args, Subcommand};
 use serde_json::{json, Value};
 
-use crate::cli::daemon_client::remote_system_ability::invoke_current_realm_hub_system_ability;
+use crate::cli::daemon_client::remote_system_ability::{
+    invoke_current_realm_hub_system_ability, RealmHubSystemAbility,
+};
 use crate::support::platform::local_invoke::LocalDaemonSystemAbilityIssuer;
 use crate::support::platform::output::{self, OutputFormat};
 
@@ -163,14 +165,15 @@ pub fn run(args: CallArgs) -> anyhow::Result<()> {
 struct CallSignalingIssuer;
 
 impl CallSignalingIssuer {
-    fn invoke(ability: &str, args: Value) -> anyhow::Result<Value> {
+    fn invoke(ability: RealmHubSystemAbility, args: Value) -> anyhow::Result<Value> {
         if let Some(value) = invoke_current_realm_hub_system_ability(ability, args.clone())? {
             return Ok(value);
         }
         Self::invoke_local(ability, args)
     }
 
-    fn invoke_local(ability: &str, args: Value) -> anyhow::Result<Value> {
+    fn invoke_local(ability: RealmHubSystemAbility, args: Value) -> anyhow::Result<Value> {
+        let ability = ability.as_str();
         let subject_ura = LocalDaemonSystemAbilityIssuer::local_daemon_identity_subject_ura()
             .with_context(|| format!("resolve local call signaling subject for {ability}"))?;
         LocalDaemonSystemAbilityIssuer::invoke_root_for_subject(ability, args, &subject_ura)
@@ -178,7 +181,7 @@ impl CallSignalingIssuer {
     }
 }
 
-fn invoke_call_signaling(ability: &str, args: Value) -> anyhow::Result<Value> {
+fn invoke_call_signaling(ability: RealmHubSystemAbility, args: Value) -> anyhow::Result<Value> {
     CallSignalingIssuer::invoke(ability, args)
 }
 
@@ -195,7 +198,7 @@ fn run_create(args: CreateArgs) -> anyhow::Result<()> {
     let participant_identity = CallCreateParticipantIdentity::resolve()?;
     let participant_id = participant_identity.participant_id();
     body["participant_id"] = json!(participant_id);
-    let result = invoke_call_signaling("voice.create_call", body)?;
+    let result = invoke_call_signaling(RealmHubSystemAbility::VoiceCreateCall, body)?;
     if args.format == OutputFormat::Json {
         println!("{}", serde_json::to_string_pretty(&result)?);
     } else {
@@ -347,7 +350,10 @@ mod tests {
 }
 
 fn run_show(args: ShowArgs) -> anyhow::Result<()> {
-    let result = invoke_call_signaling("voice.show_call", json!({"call_id": args.call_id}))?;
+    let result = invoke_call_signaling(
+        RealmHubSystemAbility::VoiceShowCall,
+        json!({"call_id": args.call_id}),
+    )?;
     if args.format == OutputFormat::Json {
         println!("{}", serde_json::to_string_pretty(&result)?);
         return Ok(());
@@ -373,7 +379,7 @@ fn run_join(args: JoinArgs) -> anyhow::Result<()> {
         .participant_id
         .unwrap_or_else(|| gethostname::gethostname().to_string_lossy().to_string());
     let result = invoke_call_signaling(
-        "voice.join_call",
+        RealmHubSystemAbility::VoiceJoinCall,
         json!({"call_id": args.call_id, "participant_id": pid}),
     )?;
     output::success(&format!("Joined call {} as {pid}", args.call_id));
@@ -385,7 +391,7 @@ fn run_join(args: JoinArgs) -> anyhow::Result<()> {
 
 fn run_leave(args: LeaveArgs) -> anyhow::Result<()> {
     invoke_call_signaling(
-        "voice.leave_call",
+        RealmHubSystemAbility::VoiceLeaveCall,
         json!({
             "call_id": args.call_id,
             "participant_id": args.participant_id,
@@ -401,7 +407,7 @@ fn run_leave(args: LeaveArgs) -> anyhow::Result<()> {
 
 fn run_end(args: EndArgs) -> anyhow::Result<()> {
     let result = invoke_call_signaling(
-        "voice.end_call",
+        RealmHubSystemAbility::VoiceEndCall,
         json!({"call_id": args.call_id, "end_reason": 1}),
     )?;
     output::success(&format!("Call {} ended", args.call_id));
@@ -413,7 +419,10 @@ fn run_end(args: EndArgs) -> anyhow::Result<()> {
 }
 
 fn run_watch(args: WatchArgs) -> anyhow::Result<()> {
-    let result = invoke_call_signaling("voice.watch_call", json!({"call_id": args.call_id}))?;
+    let result = invoke_call_signaling(
+        RealmHubSystemAbility::VoiceWatchCall,
+        json!({"call_id": args.call_id}),
+    )?;
     let events = result.get("events").and_then(Value::as_array);
     let mut count = 0;
     if let Some(events) = events {
@@ -439,7 +448,7 @@ fn run_metrics(args: MetricsArgs) -> anyhow::Result<()> {
         "packet_loss_ratio": args.loss,
     });
     let _ = invoke_call_signaling(
-        "voice.report_metrics",
+        RealmHubSystemAbility::VoiceReportMetrics,
         json!({
             "call_id":        args.call_id,
             "participant_id": args.participant_id,

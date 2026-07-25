@@ -27,7 +27,9 @@ use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use clap::Args;
 use serde_json::{json, Value};
 
-use crate::cli::daemon_client::remote_system_ability::invoke_remote_device_system_ability;
+use crate::cli::daemon_client::remote_system_ability::{
+    invoke_remote_device_system_ability, RemoteDeviceSystemAbility,
+};
 use crate::support::platform::local_invoke::LocalDaemonSystemAbilityIssuer;
 use crate::support::platform::{output, timeouts};
 
@@ -122,7 +124,7 @@ fn invoke_local_process_exec(payload: Value) -> anyhow::Result<Value> {
 fn invoke_remote_process_exec(node: &str, payload: Value) -> anyhow::Result<Value> {
     invoke_remote_device_system_ability(
         node,
-        "process.exec",
+        RemoteDeviceSystemAbility::ProcessExec,
         payload,
         &format!("running a one-shot command on remote node {node:?}"),
     )

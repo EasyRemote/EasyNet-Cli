@@ -10,7 +10,9 @@
 
 use serde_json::Value;
 
-use crate::cli::daemon_client::remote_system_ability::invoke_remote_device_system_ability;
+use crate::cli::daemon_client::remote_system_ability::{
+    invoke_remote_device_system_ability, RemoteDeviceSystemAbility,
+};
 use crate::core::ura::{parse_ura, AbilitySelector, URAKind};
 use crate::support::platform::local_invoke::LocalRuntimeStateReadIssuer;
 
@@ -187,7 +189,12 @@ fn invoke_remote_catalogue(
     request: Value,
     action_label: &str,
 ) -> anyhow::Result<Value> {
-    invoke_remote_device_system_ability(node, "meta.list_abilities", request, action_label)
+    invoke_remote_device_system_ability(
+        node,
+        RemoteDeviceSystemAbility::MetaListAbilities,
+        request,
+        action_label,
+    )
 }
 
 #[cfg(test)]
