@@ -186,6 +186,7 @@ impl RemoteAbilityInvocationTarget {
         validate_remote_target_ura(execution_target_ura)?;
         let public_ability =
             crate::core::ura::owner_local_ability_name(execution_target_ura, selector);
+        RemoteRootAbilityAdmission::evaluate(&public_ability).require(&public_ability)?;
         let ability_ura =
             crate::core::ura::owner_ability_ura(execution_target_ura, &public_ability).ok_or_else(
                 || anyhow!("derive ability URA for {execution_target_ura} {public_ability}"),
@@ -302,6 +303,42 @@ impl RemoteAbilityInvocationTarget {
 
     pub(crate) fn callee_ura(&self) -> &str {
         &self.callee_ura
+    }
+}
+
+/// Admission state for a selector that claims to be a target-owned daemon
+/// system ability.
+///
+/// Receipt/history abilities are governance reads whose caller, subject,
+/// authority, and filter scope are selected by the canonical history read
+/// model. Treating them as target-owned system calls recreates the legacy
+/// "callee as subject" path and produces AUTHORITY_SUBJECT_MISMATCH at
+/// admission. This state object keeps the rejection at the factory/issuer
+/// boundary where the tuple policy is chosen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RemoteRootAbilityAdmission {
+    Accepted,
+    ReceiptHistoryRead,
+}
+
+impl RemoteRootAbilityAdmission {
+    fn evaluate(public_ability: &str) -> Self {
+        if is_receipt_history_ability(public_ability) {
+            Self::ReceiptHistoryRead
+        } else {
+            Self::Accepted
+        }
+    }
+
+    fn require(self, public_ability: &str) -> anyhow::Result<()> {
+        match self {
+            Self::Accepted => Ok(()),
+            Self::ReceiptHistoryRead => anyhow::bail!(
+                "receipt history ability `{}` is not a target-owned remote system ability; \
+                 use the canonical invocation history read path",
+                public_ability.trim()
+            ),
+        }
     }
 }
 
@@ -513,13 +550,8 @@ impl RemoteSystemInvocationIssuer {
 fn target_owned_remote_system_subject(
     target: &RemoteAbilityInvocationTarget,
 ) -> anyhow::Result<RemoteInvocationSubject> {
-    if is_receipt_history_ability(target.public_ability()) {
-        anyhow::bail!(
-            "receipt history ability `{}` is not a target-owned remote system ability; \
-             use the canonical invocation history read path",
-            target.public_ability()
-        );
-    }
+    RemoteRootAbilityAdmission::evaluate(target.public_ability())
+        .require(target.public_ability())?;
     let callee = crate::core::ura::parse_ura(target.callee_ura())
         .map_err(|error| anyhow!("remote system callee URA is invalid: {error}"))?;
     let subject_ura = match callee.kind {
@@ -1647,12 +1679,28 @@ mod tests {
     }
 
     #[test]
-    fn remote_system_issuer_rejects_receipt_history_as_target_owned() {
-        let target = RemoteAbilityInvocationTarget::for_target_owned_selector(
+    fn target_owned_selector_rejects_receipt_history_before_tuple_build() {
+        let error = RemoteAbilityInvocationTarget::for_target_owned_selector(
             "easynet:///r/realm/device/node-a",
             crate::daemon::ability::names::governance::INVOCATION_HISTORY_LIST,
         )
-        .expect("target");
+        .expect_err("receipt history must not construct a target-owned selector");
+
+        let message = error.to_string();
+        assert!(
+            message.contains("receipt history ability `invocation.history.list`")
+                && message.contains("canonical invocation history read path"),
+            "wrong error: {message}"
+        );
+    }
+
+    #[test]
+    fn remote_system_issuer_rejects_receipt_history_as_target_owned() {
+        let target = RemoteAbilityInvocationTarget::from_ability_ura(
+            "easynet:///r/realm/device/node-a",
+            "easynet:///r/realm/ability/device.node-a.invocation.history.list",
+        )
+        .expect("explicit target");
 
         let error = RemoteSystemInvocationIssuer::target_owned_root_plan(
             &target,
