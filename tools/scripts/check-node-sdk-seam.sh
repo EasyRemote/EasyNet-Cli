@@ -45,6 +45,37 @@ fi
 npm test --prefix "$ROOT/sdk/node" >/dev/null
 node --check "$ROOT/sdk/node/index.js" >/dev/null
 
+receipt_fixture="$ROOT/sdk/node/test-support/runtime-fixtures.mjs"
+if [[ ! -f "$receipt_fixture" ]]; then
+  echo "check-node-sdk-seam: missing shared runtime receipt fixture" >&2
+  exit 1
+fi
+node --check "$receipt_fixture" >/dev/null
+
+for required in \
+  "export const canonicalRuntimeReceipt" \
+  "payload_base64" \
+  "payload_content_type" \
+  "host_attestation_base64" \
+  "usage: {}" \
+  "proof_payload_base64" \
+  "proof_hash_hex"
+do
+  if ! grep -Fq "$required" "$receipt_fixture"; then
+    echo "check-node-sdk-seam: shared runtime receipt fixture is missing $required" >&2
+    exit 1
+  fi
+done
+
+if grep -RInE '\b(const|function) canonicalRuntimeReceipt\b' "$ROOT/sdk/node/test" \
+  --include='*.js' --include='*.mjs' --include='*.ts' >/tmp/easynet-node-receipt-fixture-scan.out 2>/dev/null; then
+  echo "check-node-sdk-seam: Node SDK tests must use the shared runtime receipt fixture" >&2
+  cat /tmp/easynet-node-receipt-fixture-scan.out >&2
+  rm -f /tmp/easynet-node-receipt-fixture-scan.out
+  exit 1
+fi
+rm -f /tmp/easynet-node-receipt-fixture-scan.out
+
 retired_name_scan="$(mktemp)"
 trap 'rm -f "$retired_name_scan"' EXIT
 if grep -RInE "$SDK_URA_NAMING_PATTERN" "$ROOT/sdk/node" --include='*.js' --include='*.ts' --include='*.md' --exclude-dir='node_modules' >"$retired_name_scan" 2>/dev/null; then
