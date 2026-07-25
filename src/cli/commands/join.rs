@@ -1148,15 +1148,10 @@ fn persist_join_credentials(
             .context("wire federated peers for joined device")
     })?;
 
-    renderer.set_active("keyring");
-    match ensure_device_runtime_identity(&creds.realm, &creds.node_id) {
-        Ok(_) => renderer.stage_ok("keyring"),
-        Err(error) => {
-            renderer.stage_failed("keyring", &error.to_string());
-            renderer.finish();
-            return Err(error);
-        }
-    }
+    run_required_join_stage(&mut renderer, "keyring", || {
+        ensure_join_runtime_identity_custody(&creds, &KeyServiceJoinRuntimeIdentityCustody)
+            .context("ensure joined runtime identity custody")
+    })?;
 
     run_required_join_stage(&mut renderer, "realm-trust", || {
         super::federation_wire::auto_wire_self_realm_trust_from_credentials(&creds)
@@ -1208,6 +1203,50 @@ fn refresh_running_runtime_after_join(_creds: &config::Credentials) {
             "paired successfully, but a local easynet-daemon is already running. \
              Restart it with `easynet runtime stop && easynet runtime start` so it picks up the new credentials.",
         );
+    }
+}
+
+/// Ensure every runtime identity implied by joined credentials exists in the
+/// daemon custody service.
+///
+/// Bound-user credentials imply both a device signer and a managed User signer:
+/// canonical SDK descriptor resolution signs as the User for user-scoped reads,
+/// so letting join finish with only the device signer keeps an obsolete
+/// "start later and maybe reconcile" compatibility window alive. Federation-
+/// native device-only credentials remain explicitly unbound and must not mint a
+/// placeholder User signer.
+fn ensure_join_runtime_identity_custody(
+    creds: &config::Credentials,
+    custody: &dyn JoinRuntimeIdentityCustody,
+) -> anyhow::Result<()> {
+    custody.ensure_device(&creds.realm, &creds.node_id)?;
+    match creds.runtime_user_binding()? {
+        config::RuntimeUserBinding::Bound { user_ura } => custody.ensure_user(&user_ura),
+        config::RuntimeUserBinding::Unbound { .. } => Ok(()),
+    }
+}
+
+trait JoinRuntimeIdentityCustody {
+    fn ensure_device(&self, realm: &str, node_id: &str) -> anyhow::Result<()>;
+    fn ensure_user(&self, user_ura: &str) -> anyhow::Result<()>;
+}
+
+struct KeyServiceJoinRuntimeIdentityCustody;
+
+impl JoinRuntimeIdentityCustody for KeyServiceJoinRuntimeIdentityCustody {
+    fn ensure_device(&self, realm: &str, node_id: &str) -> anyhow::Result<()> {
+        ensure_device_runtime_identity(realm, node_id).map(|_| ())
+    }
+
+    fn ensure_user(&self, user_ura: &str) -> anyhow::Result<()> {
+        let client = crate::daemon::identity::self_identity::KeyringClient::default_path();
+        crate::daemon::identity::self_identity::ensure_user_runtime_signing_identity(
+            &client, user_ura,
+        )
+        .map(|_| ())
+        .map_err(|error| {
+            anyhow::anyhow!("ensure managed User runtime signer `{user_ura}`: {error}")
+        })
     }
 }
 
@@ -1693,7 +1732,64 @@ fn invoke_federation_revoke_for_rejoin(_device_ura: &str) -> anyhow::Result<()> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
     use std::net::TcpListener;
+
+    #[derive(Default)]
+    struct RecordingJoinRuntimeIdentityCustody {
+        devices: RefCell<Vec<(String, String)>>,
+        users: RefCell<Vec<String>>,
+        fail_user: Option<&'static str>,
+    }
+
+    impl RecordingJoinRuntimeIdentityCustody {
+        fn failing_user(message: &'static str) -> Self {
+            Self {
+                fail_user: Some(message),
+                ..Self::default()
+            }
+        }
+    }
+
+    impl JoinRuntimeIdentityCustody for RecordingJoinRuntimeIdentityCustody {
+        fn ensure_device(&self, realm: &str, node_id: &str) -> anyhow::Result<()> {
+            self.devices
+                .borrow_mut()
+                .push((realm.to_string(), node_id.to_string()));
+            Ok(())
+        }
+
+        fn ensure_user(&self, user_ura: &str) -> anyhow::Result<()> {
+            self.users.borrow_mut().push(user_ura.to_string());
+            if let Some(message) = self.fail_user {
+                anyhow::bail!("{message}");
+            }
+            Ok(())
+        }
+    }
+
+    fn join_identity_test_credentials(
+        user_id: Option<&str>,
+        join_receipt_hash: Option<&str>,
+    ) -> config::Credentials {
+        config::Credentials {
+            node_id: "dev-one".to_string(),
+            credential_token: if join_receipt_hash.is_some() {
+                String::new()
+            } else {
+                "credential-token".to_string()
+            },
+            hub_endpoint: "https://hub.acme.internal:50443".to_string(),
+            realm: "acme".to_string(),
+            deploy_signature: String::new(),
+            hub_api_base: None,
+            username: user_id.map(|_| "silan".to_string()),
+            user_id: user_id.map(str::to_string),
+            hub_pubkey_b64: None,
+            hub_tls_ca_pem_b64: None,
+            join_receipt_hash: join_receipt_hash.map(str::to_string),
+        }
+    }
 
     #[test]
     fn token_format_accepts_alnum_dash_underscore() {
@@ -1711,6 +1807,63 @@ mod tests {
         assert!(validate_token_format(&"a".repeat(257)).is_err());
         assert!(validate_token_format("bad token").is_err());
         assert!(validate_token_format("bad/token").is_err());
+    }
+
+    #[test]
+    fn join_identity_custody_ensures_bound_user_signer() {
+        let creds = join_identity_test_credentials(Some("usr_silan"), None);
+        let custody = RecordingJoinRuntimeIdentityCustody::default();
+
+        ensure_join_runtime_identity_custody(&creds, &custody)
+            .expect("bound join must ensure device and User custody");
+
+        assert_eq!(
+            custody.devices.borrow().as_slice(),
+            &[("acme".to_string(), "dev-one".to_string())]
+        );
+        assert_eq!(
+            custody.users.borrow().as_slice(),
+            &["easynet:///r/acme/user/usr_silan".to_string()]
+        );
+    }
+
+    #[test]
+    fn join_identity_custody_leaves_federation_native_device_only_unbound() {
+        let creds = join_identity_test_credentials(None, Some(&"a".repeat(64)));
+        let custody = RecordingJoinRuntimeIdentityCustody::default();
+
+        ensure_join_runtime_identity_custody(&creds, &custody)
+            .expect("device-only federation-native join must not mint a User signer");
+
+        assert_eq!(
+            custody.devices.borrow().as_slice(),
+            &[("acme".to_string(), "dev-one".to_string())]
+        );
+        assert!(
+            custody.users.borrow().is_empty(),
+            "unbound federation-native credentials must not synthesize User custody"
+        );
+    }
+
+    #[test]
+    fn join_identity_custody_fails_closed_when_bound_user_signer_fails() {
+        let creds = join_identity_test_credentials(Some("usr_silan"), None);
+        let custody =
+            RecordingJoinRuntimeIdentityCustody::failing_user("managed User signer unavailable");
+
+        let error = ensure_join_runtime_identity_custody(&creds, &custody)
+            .expect_err("bound join must fail when User signer custody fails");
+
+        assert!(
+            error
+                .to_string()
+                .contains("managed User signer unavailable"),
+            "error must preserve User signer custody failure: {error:#}"
+        );
+        assert_eq!(
+            custody.users.borrow().as_slice(),
+            &["easynet:///r/acme/user/usr_silan".to_string()]
+        );
     }
 
     #[test]
