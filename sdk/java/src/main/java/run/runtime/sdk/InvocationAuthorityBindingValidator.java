@@ -5,12 +5,12 @@ import java.util.Map;
 
 final class InvocationAuthorityBindingValidator {
   private final InvocationTuple tuple;
-  private final AbilityView ability;
+  private final RuntimeAbilityProjection ability;
   private final Map<String, Object> details;
 
   private InvocationAuthorityBindingValidator(InvocationTuple tuple) {
     this.tuple = tuple;
-    this.ability = AbilityView.fromTuple(tuple);
+    this.ability = RuntimeAbilityProjection.fromTuple(tuple);
     this.details =
         Map.of(
             "caller_ura",
@@ -116,7 +116,7 @@ final class InvocationAuthorityBindingValidator {
         || (pattern.endsWith("/") && callee.startsWith(pattern));
   }
 
-  private static boolean scopesAdmit(List<String> patterns, AbilityView ability) {
+  private static boolean scopesAdmit(List<String> patterns, RuntimeAbilityProjection ability) {
     for (String pattern : patterns) {
       if (scopeMatches(pattern, ability.publicName())
           || scopeMatches(pattern, ability.abilityURA())
@@ -152,67 +152,4 @@ final class InvocationAuthorityBindingValidator {
     return cleanPattern.equals(cleanValue);
   }
 
-  private record AbilityView(String wire, String abilityURA, String publicName) {
-    static AbilityView fromTuple(InvocationTuple tuple) {
-      String abilityURA = descriptorAbilityURA(tuple.descriptor());
-      String wire = descriptorWireAbility(abilityURA);
-      String publicName =
-          publicAbilityName(tuple.callee(), abilityURA.isBlank() ? wire : abilityURA);
-      return new AbilityView(wire, abilityURA, publicName);
-    }
-
-    private static String descriptorAbilityURA(String descriptorRef) {
-      String clean = descriptorRef == null ? "" : descriptorRef.trim();
-      int hash = clean.indexOf('#');
-      int bang = clean.indexOf('!');
-      int limit = clean.length();
-      if (hash >= 0) {
-        limit = Math.min(limit, hash);
-      }
-      if (bang >= 0) {
-        limit = Math.min(limit, bang);
-      }
-      String withoutMode = clean.substring(0, limit);
-      int version = withoutMode.lastIndexOf('@');
-      return (version >= 0 ? withoutMode.substring(0, version) : withoutMode).trim();
-    }
-
-    private static String descriptorWireAbility(String abilityURA) {
-      String marker = "/ability/";
-      int index = abilityURA.indexOf(marker);
-      return (index >= 0 ? abilityURA.substring(index + marker.length()) : abilityURA).trim();
-    }
-
-    private static String publicAbilityName(String calleeURA, String ability) {
-      String clean = ability == null ? "" : ability.trim();
-      String owner = abilityOwnerPrefix(calleeURA);
-      if (!owner.isBlank() && clean.startsWith(owner + ".")) {
-        return clean.substring(owner.length() + 1);
-      }
-      String marker = "/ability/";
-      int index = clean.indexOf(marker);
-      if (index >= 0) {
-        return publicAbilityName(calleeURA, clean.substring(index + marker.length()));
-      }
-      return clean;
-    }
-
-    private static String abilityOwnerPrefix(String calleeURA) {
-      String clean = calleeURA == null ? "" : calleeURA.trim();
-      String device = "/device/";
-      int deviceIndex = clean.indexOf(device);
-      if (deviceIndex >= 0) {
-        String rest = clean.substring(deviceIndex + device.length());
-        return "device." + rest.split("[/?#]", 2)[0];
-      }
-      if (clean.endsWith("/authority")) {
-        String realmMarker = "easynet:///r/";
-        if (clean.startsWith(realmMarker)) {
-          return "hub."
-              + clean.substring(realmMarker.length(), clean.length() - "/authority".length());
-        }
-      }
-      return "";
-    }
-  }
 }

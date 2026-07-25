@@ -28,6 +28,7 @@ public final class RuntimeCoreSeamTest {
           "runtimeReceiptProofFactsAreMandatory",
           "authorityMetadataIsTypedAndMutuallyExclusive",
           "invocationAuthorityMetadataIsTupleBound",
+          "runtimeAbilityProjectionIsCanonical",
           "runtimeStateReadSubjectHelperBuildsUserOwnedResourceSubject",
           "authorityMetadataRejectsAllZeroSessionOwners",
           "authorityMetadataBindsSessionAuthoritySubjects",
@@ -83,6 +84,7 @@ public final class RuntimeCoreSeamTest {
           authorityMetadataIsTypedAndMutuallyExclusive();
       case "invocationAuthorityMetadataIsTupleBound" ->
           invocationAuthorityMetadataIsTupleBound();
+      case "runtimeAbilityProjectionIsCanonical" -> runtimeAbilityProjectionIsCanonical();
       case "runtimeStateReadSubjectHelperBuildsUserOwnedResourceSubject" ->
           runtimeStateReadSubjectHelperBuildsUserOwnedResourceSubject();
       case "authorityMetadataRejectsAllZeroSessionOwners" ->
@@ -611,6 +613,31 @@ public final class RuntimeCoreSeamTest {
                 .inspect());
   }
 
+  private static void runtimeAbilityProjectionIsCanonical() {
+    List<String> admittedScopes =
+        List.of(
+            "observe.health",
+            "device.dev-a.observe.health",
+            "easynet:///r/example/ability/device.dev-a.observe.health",
+            "easynet:///r/example/ability/device.dev-a.*");
+    for (String scope : admittedScopes) {
+      DelegationProof proof =
+          DelegationProof.fromMetadata(delegationMetadataValue(List.of(scope)));
+      completeBuilder().authorityMetadata(proof.metadata()).inspect();
+    }
+
+    DelegationProof proof =
+        DelegationProof.fromMetadata(delegationMetadataValue(List.of("observe.health")));
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        "descriptor_ref must contain a canonical Ability URA",
+        () ->
+            completeBuilder()
+                .descriptor("observe.health")
+                .authorityMetadata(proof.metadata())
+                .inspect());
+  }
+
   private static void runtimeStateReadSubjectHelperBuildsUserOwnedResourceSubject() {
     check(
         RuntimeSubjects.runtimeStateReadSubjectURA("example", "alice")
@@ -970,12 +997,16 @@ public final class RuntimeCoreSeamTest {
   }
 
   private static String delegationMetadataValue() {
+    return delegationMetadataValue(List.of("observe.health"));
+  }
+
+  private static String delegationMetadataValue(List<String> scopes) {
     Map<String, Object> payload = new LinkedHashMap<>();
     payload.put("issuer_ura", "easynet:///r/example/user/alice");
     payload.put("subject_ura", CALLEE);
     payload.put("caller_ura", CALLER);
     payload.put("audience", CALLEE);
-    payload.put("scopes", List.of("observe.health"));
+    payload.put("scopes", scopes);
     payload.put("issued_at_ms", 10);
     payload.put("expires_at_ms", 20);
     return authorityMetadataValue(payload);

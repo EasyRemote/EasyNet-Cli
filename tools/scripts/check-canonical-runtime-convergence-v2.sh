@@ -13182,18 +13182,20 @@ check_java_sdk_invocation_authority_binding_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local builder="$cli_root/sdk/java/src/main/java/run/runtime/sdk/InvocationBuilder.java"
   local validator="$cli_root/sdk/java/src/main/java/run/runtime/sdk/InvocationAuthorityBindingValidator.java"
+  local projection="$cli_root/sdk/java/src/main/java/run/runtime/sdk/RuntimeAbilityProjection.java"
   local support="$cli_root/sdk/java/src/main/java/run/runtime/sdk/AuthoritySupport.java"
   local tests="$cli_root/sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
   [[ -f "$builder" ]] || fail "Java InvocationBuilder source is missing: ${builder#$cli_root/}"
   [[ -f "$validator" ]] || fail "Java InvocationAuthorityBindingValidator source is missing: ${validator#$cli_root/}"
+  [[ -f "$projection" ]] || fail "Java RuntimeAbilityProjection source is missing: ${projection#$cli_root/}"
   [[ -f "$support" ]] || fail "Java AuthoritySupport source is missing: ${support#$cli_root/}"
   [[ -f "$tests" ]] || fail "Java RuntimeCoreSeamTest source is missing: ${tests#$cli_root/}"
 
-  "$PYTHON_BIN" - "$builder" "$validator" "$support" "$tests" <<'PY'
+  "$PYTHON_BIN" - "$builder" "$validator" "$projection" "$support" "$tests" <<'PY'
 import sys
 from pathlib import Path
 
-builder, validator, support, tests = [Path(path).read_text(encoding="utf-8") for path in sys.argv[1:]]
+builder, validator, projection, support, tests = [Path(path).read_text(encoding="utf-8") for path in sys.argv[1:]]
 
 if "InvocationAuthorityBindingValidator.validate(tuple);" not in builder:
     raise SystemExit("java_invocation_authority_binding:builder_validator_missing")
@@ -13214,10 +13216,30 @@ required_validator = {
     "audienceAdmits": "audience_binding_missing",
     "scopesAdmit": "scope_binding_missing",
     "sessionAuthorityAdmitsSubject": "session_subject_predicate_missing",
-    "AbilityView": "ability_view_missing",
+    "RuntimeAbilityProjection.fromTuple(tuple)": "runtime_ability_projection_missing",
 }
 for needle, label in required_validator.items():
     if needle not in validator:
+        raise SystemExit(f"java_invocation_authority_binding:{label}")
+for forbidden, label in {
+    "AbilityView": "validator_retains_private_ability_view",
+    "descriptorAbilityURA": "validator_owns_descriptor_projection",
+    'String marker = "/ability/"': "validator_owns_ability_path_projection",
+}.items():
+    if forbidden in validator:
+        raise SystemExit(f"java_invocation_authority_binding:{label}")
+
+required_projection = {
+    "final class RuntimeAbilityProjection": "runtime_ability_projection_class_missing",
+    "static RuntimeAbilityProjection fromTuple(InvocationTuple tuple)": "runtime_ability_projection_tuple_boundary_missing",
+    "descriptorAbilityURA": "descriptor_projection_missing",
+    "descriptorWireAbility": "wire_projection_missing",
+    "publicAbilityName": "public_name_projection_missing",
+    '"descriptor_ref must contain a canonical Ability URA"': "malformed_descriptor_rejection_missing",
+    "easynet:///r/": "ura_only_projection_missing",
+}
+for needle, label in required_projection.items():
+    if needle not in projection:
         raise SystemExit(f"java_invocation_authority_binding:{label}")
 
 required_support = {
@@ -13244,7 +13266,12 @@ required_tests = {
     "delegation authority subject does not match invocation subject_ura": "delegation_subject_test_missing",
     "session authority subject does not admit invocation subject_ura": "session_subject_test_missing",
     'payload.put("subject_ura", CALLEE)': "tuple_bound_delegation_fixture_missing",
-    'payload.put("scopes", List.of("observe.health"))': "tuple_bound_scope_fixture_missing",
+    'payload.put("scopes", scopes)': "tuple_bound_scope_fixture_missing",
+    '"runtimeAbilityProjectionIsCanonical"': "runtime_ability_projection_test_selector_missing",
+    "private static void runtimeAbilityProjectionIsCanonical()": "runtime_ability_projection_test_body_missing",
+    '"device.dev-a.observe.health"': "runtime_ability_wire_scope_test_missing",
+    '"easynet:///r/example/ability/device.dev-a.observe.health"': "runtime_ability_ura_scope_test_missing",
+    '"descriptor_ref must contain a canonical Ability URA"': "malformed_descriptor_test_missing",
     "not-a-ura/resource/user.alice/runtime-state/read": "path_substring_subject_regression_missing",
     "easynet:///r/example/device/dev-a/resource/user.alice/runtime-state/read": "nested_resource_path_subject_regression_missing",
 }
