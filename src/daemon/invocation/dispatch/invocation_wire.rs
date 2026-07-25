@@ -234,7 +234,10 @@ impl ProtoEnvelope {
         let parsed_hub = crate::core::ura::parse_ura(&hub_ura)
             .map_err(|e| anyhow::anyhow!("hub_ura is not a valid URA: {e}"))?;
         if parsed_hub.kind != crate::core::ura::URAKind::Authority {
-            anyhow::bail!("hub_ura must identify a Hub, got {:?}", parsed_hub.kind);
+            anyhow::bail!(
+                "hub_ura must identify a canonical Authority, got {:?}",
+                parsed_hub.kind
+            );
         }
         let parsed_membership = crate::core::ura::parse_ura(&membership_ura)
             .map_err(|e| anyhow::anyhow!("membership_ura is not a valid URA: {e}"))?;

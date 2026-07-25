@@ -99,20 +99,22 @@ impl OwnerProjectionPublicationAuthority {
             )
         })?;
         let callee = parse_ura(callee_ura).map_err(|_| {
-            OwnerProjectionPublicationError::InvalidIdentity("callee must be a canonical hub URA")
+            OwnerProjectionPublicationError::InvalidIdentity(
+                "callee must be a canonical Authority URA",
+            )
         })?;
         if callee.kind != URAKind::Authority
             || callee.realm != caller.realm
             || daemon_ura.is_some_and(|daemon| daemon != callee_ura)
         {
             return Err(OwnerProjectionPublicationError::InvalidIdentity(
-                "callee must be the selected hub in the caller realm",
+                "callee must be the selected Authority in the caller realm",
             ));
         }
 
         let owner = parse_ura(&publication.owner_ura).map_err(|_| {
             OwnerProjectionPublicationError::InvalidIdentity(
-                "owner_ura must be a canonical Agent, device, or hub URA",
+                "owner_ura must be a canonical Agent, Device, or Authority URA",
             )
         })?;
         if owner.realm != caller.realm {
@@ -154,7 +156,7 @@ impl OwnerProjectionPublicationAuthority {
                 Ok(())
             }
             _ => Err(OwnerProjectionPublicationError::InvalidIdentity(
-                "only a host device or the selected hub may publish ability projections",
+                "only a host device or the selected Authority may publish ability projections",
             )),
         }
     }

@@ -72,16 +72,16 @@ impl HostedAgentPublication {
                 ))?;
 
         let callee = parse_ura(callee_ura).map_err(|_| {
-            HostedAgentPublicationError::InvalidIdentity("callee must be a canonical hub URA")
+            HostedAgentPublicationError::InvalidIdentity("callee must be a canonical Authority URA")
         })?;
         if callee.kind != URAKind::Authority || callee.realm != caller.realm {
             return Err(HostedAgentPublicationError::InvalidIdentity(
-                "callee must be the caller realm hub",
+                "callee must be the caller realm Authority",
             ));
         }
         if daemon_ura.is_some_and(|daemon| daemon != callee_ura) {
             return Err(HostedAgentPublicationError::InvalidIdentity(
-                "callee does not identify the selected hub",
+                "callee does not identify the selected Authority",
             ));
         }
 

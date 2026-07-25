@@ -872,15 +872,20 @@ check_runtime_authority_vocabulary_contract() {
   local session_envelope="$cli_root/src/daemon/invocation/bidi/session_initiator/envelope.rs"
   local directory="$cli_root/src/daemon/federation/directory.rs"
   local mission_gateway="$cli_root/src/daemon/execution/mission/invocation_gateway.rs"
+  local owner_projection_publication="$cli_root/src/daemon/invocation/admission/owner_projection_publication.rs"
+  local hosted_agent_publication="$cli_root/src/daemon/invocation/admission/hosted_agent_publication.rs"
+  local invocation_wire="$cli_root/src/daemon/invocation/dispatch/invocation_wire.rs"
 
   for file in "$remote_invoke" "$cli_invoke" "$cli_stream" "$cli_bidi" "$voice" \
-    "$daemon_service" "$bidi_tests" "$session_envelope" "$directory" "$mission_gateway"; do
+    "$daemon_service" "$bidi_tests" "$session_envelope" "$directory" "$mission_gateway" \
+    "$owner_projection_publication" "$hosted_agent_publication" "$invocation_wire"; do
     [[ -f "$file" ]] || fail "runtime authority vocabulary source is missing: ${file#$cli_root/}"
   done
 
-  if rg -n 'Device or Hub|canonical Axon Device or Hub|Hub authority callee|requires a Hub authority|canonical realm Hub owner|Hub URA; got|remote Mission target must be a Device or Hub' \
+  if rg -n 'Device or Hub|canonical Axon Device or Hub|Hub authority callee|requires a Hub authority|canonical realm Hub owner|Hub URA; got|remote Mission target must be a Device or Hub|canonical hub URA|caller realm hub|selected hub|identify a Hub|Agent, device, or hub URA' \
     "$remote_invoke" "$cli_invoke" "$cli_stream" "$cli_bidi" "$voice" \
-    "$daemon_service" "$bidi_tests" "$session_envelope" "$directory" "$mission_gateway"; then
+    "$daemon_service" "$bidi_tests" "$session_envelope" "$directory" "$mission_gateway" \
+    "$owner_projection_publication" "$hosted_agent_publication" "$invocation_wire"; then
     fail "runtime invocation/route diagnostics preserve Hub vocabulary for Authority URA owners"
   fi
 
@@ -895,6 +900,22 @@ check_runtime_authority_vocabulary_contract() {
   fi
   if ! rg -q 'Authority URA; got' "$directory"; then
     fail "federation directory signer diagnostics must describe Authority URA ownership"
+  fi
+  if ! rg -q 'callee must be a canonical Authority URA' \
+    "$owner_projection_publication" "$hosted_agent_publication"; then
+    fail "admission publication diagnostics must describe canonical Authority callees"
+  fi
+  if ! rg -q 'callee must be the selected Authority in the caller realm' "$owner_projection_publication"; then
+    fail "owner projection diagnostics must describe the selected Authority"
+  fi
+  if ! rg -q 'only a host device or the selected Authority may publish ability projections' "$owner_projection_publication"; then
+    fail "owner projection admission diagnostics must describe selected Authority publishers"
+  fi
+  if ! rg -q 'callee must be the caller realm Authority' "$hosted_agent_publication"; then
+    fail "hosted agent publication diagnostics must describe caller realm Authority"
+  fi
+  if ! rg -q 'hub_ura must identify a canonical Authority' "$invocation_wire"; then
+    fail "invocation wire diagnostics must describe hub_ura as canonical Authority"
   fi
 }
 
