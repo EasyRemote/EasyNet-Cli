@@ -10280,6 +10280,53 @@ for required in (
 PY
 }
 
+check_mission_token_usage_authority_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local orchestration="$cli_root/src/daemon/execution/mission/orchestration.rs"
+  local agent_send="$cli_root/src/cli/commands/agent/send.rs"
+  [[ -f "$orchestration" ]] || fail "mission orchestration source is missing: ${orchestration#$cli_root/}"
+  [[ -f "$agent_send" ]] || fail "agent send source is missing: ${agent_send#$cli_root/}"
+
+  "$PYTHON_BIN" - "$orchestration" "$agent_send" <<'PY'
+import sys
+from pathlib import Path
+
+orchestration = Path(sys.argv[1]).read_text(encoding="utf-8")
+agent_send = Path(sys.argv[2]).read_text(encoding="utf-8")
+
+for required in (
+    "pub struct MissionTokenUsage",
+    "pub token_usage: Option<MissionTokenUsage>",
+    "fn mission_token_usage_from_outputs(",
+    "aggregate.add_usage_value",
+    "value.get(\"usage\")",
+    "mission_token_usage_from_outputs(&report.outputs)",
+    "token_usage,",
+    "mission_run_token_usage_aggregates_step_outputs",
+):
+    if required not in orchestration:
+        raise SystemExit(f"mission_token_usage_authority:missing:{required}")
+
+for required in (
+    "result.meta.token_usage.as_ref()",
+    "presentation layer must not inspect nested agent run directories",
+):
+    if required not in agent_send:
+        raise SystemExit(f"mission_token_usage_agent_send:missing:{required}")
+
+for retired in (
+    "read_latest_agent_usage",
+    "AgentUsageReader",
+    "TODO(token-meta-aggregation)",
+    "agents_root()",
+    "sibling artefact",
+    "one-step `agent send`",
+):
+    if retired in agent_send:
+        raise SystemExit(f"mission_token_usage_agent_send:retired:{retired}")
+PY
+}
+
 check_mission_orchestration_persistence_authority_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local orchestration="$cli_root/src/daemon/execution/mission/orchestration.rs"
@@ -21843,6 +21890,27 @@ EOF
   if ( check_mission_runtime_meta_identity_schema_contract "$tmp/mission-meta-identity-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected mission runtime meta identity legacy default gate to fail"
   fi
+  mkdir -p "$tmp/mission-token-usage-legacy/src/daemon/execution/mission" \
+           "$tmp/mission-token-usage-legacy/src/cli/commands/agent"
+  printf '%s\n' \
+    'pub struct MissionRunMeta { }' \
+    'fn run(report: Report) {' \
+    '  let _ = report.outputs;' \
+    '}' \
+    > "$tmp/mission-token-usage-legacy/src/daemon/execution/mission/orchestration.rs"
+  printf '%s\n' \
+    'fn run_send(args: Args) {' \
+    '  if let Some(usage) = read_latest_agent_usage(&args.name) { println!("{}", usage.input_tokens); }' \
+    '}' \
+    'fn read_latest_agent_usage(agent_name: &str) -> Option<AgentUsageReader> {' \
+    '  let runs_root = crate::daemon::persistence::config::agents_root().join(agent_name).join("runs");' \
+    '  None' \
+    '}' \
+    'struct AgentUsageReader { input_tokens: u64 }' \
+    > "$tmp/mission-token-usage-legacy/src/cli/commands/agent/send.rs"
+  if ( check_mission_token_usage_authority_contract "$tmp/mission-token-usage-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected mission token usage authority gate to fail"
+  fi
   mkdir -p "$tmp/mission-orchestration-persistence-legacy/src/daemon/execution/mission"
   cat >"$tmp/mission-orchestration-persistence-legacy/src/daemon/execution/mission/orchestration.rs" <<'EOF'
 fn create(run: &MissionRunDir) {
@@ -23962,11 +24030,12 @@ EOF
   check_eal_device_target_identity_contract
   check_mission_workspace_easynet_binary_contract
   check_mission_agent_trace_sink_cutover_contract
-  check_mission_dispatch_audit_authority_contract
-  check_driver_command_state_contract
-  check_mission_runtime_meta_identity_schema_contract
-  check_mission_orchestration_persistence_authority_contract
-  check_mission_terminal_receipt_projection_contract
+	  check_mission_dispatch_audit_authority_contract
+	  check_driver_command_state_contract
+	  check_mission_runtime_meta_identity_schema_contract
+	  check_mission_token_usage_authority_contract
+	  check_mission_orchestration_persistence_authority_contract
+	  check_mission_terminal_receipt_projection_contract
   check_retired_edge_adapter_policy_absence_contract
   check_sdk_product_neutrality_contract
   check_python_sdk_bytecode_index_contract
@@ -24205,6 +24274,7 @@ check_mission_agent_trace_sink_cutover_contract
 check_mission_dispatch_audit_authority_contract
 check_driver_command_state_contract
 check_mission_runtime_meta_identity_schema_contract
+check_mission_token_usage_authority_contract
 check_mission_orchestration_persistence_authority_contract
 check_mission_terminal_receipt_projection_contract
 check_retired_edge_adapter_policy_absence_contract

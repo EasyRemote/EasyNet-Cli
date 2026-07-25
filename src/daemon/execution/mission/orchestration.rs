@@ -340,6 +340,77 @@ impl std::fmt::Display for MissionRunStatus {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MissionTokenUsage {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cache_creation_tokens: u64,
+    pub num_turns: u64,
+    pub total_cost_usd: f64,
+}
+
+impl MissionTokenUsage {
+    fn add_usage_value(&mut self, usage: &serde_json::Value) -> bool {
+        let Some(object) = usage.as_object() else {
+            return false;
+        };
+        self.input_tokens = self.input_tokens.saturating_add(
+            object
+                .get("input_tokens")
+                .and_then(|value| value.as_u64())
+                .unwrap_or(0),
+        );
+        self.output_tokens = self.output_tokens.saturating_add(
+            object
+                .get("output_tokens")
+                .and_then(|value| value.as_u64())
+                .unwrap_or(0),
+        );
+        self.cache_read_tokens = self.cache_read_tokens.saturating_add(
+            object
+                .get("cache_read_tokens")
+                .or_else(|| object.get("cached_input_tokens"))
+                .and_then(|value| value.as_u64())
+                .unwrap_or(0),
+        );
+        self.cache_creation_tokens = self.cache_creation_tokens.saturating_add(
+            object
+                .get("cache_creation_tokens")
+                .or_else(|| object.get("cache_creation_input_tokens"))
+                .and_then(|value| value.as_u64())
+                .unwrap_or(0),
+        );
+        self.num_turns = self.num_turns.saturating_add(
+            object
+                .get("num_turns")
+                .and_then(|value| value.as_u64())
+                .unwrap_or(0),
+        );
+        self.total_cost_usd += object
+            .get("total_cost_usd")
+            .and_then(|value| value.as_f64())
+            .unwrap_or(0.0);
+        true
+    }
+}
+
+fn mission_token_usage_from_outputs(
+    outputs: &HashMap<String, String>,
+) -> Option<MissionTokenUsage> {
+    let mut aggregate = MissionTokenUsage::default();
+    let mut saw_usage = false;
+    for raw in outputs.values() {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) else {
+            continue;
+        };
+        if aggregate.add_usage_value(value.get("usage").unwrap_or(&serde_json::Value::Null)) {
+            saw_usage = true;
+        }
+    }
+    saw_usage.then_some(aggregate)
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MissionRunMeta {
     pub name: String,
     pub source_file: Option<String>,
@@ -363,6 +434,12 @@ pub struct MissionRunMeta {
     pub steps_total: usize,
     pub steps_completed: usize,
     pub steps_failed: usize,
+    /// Aggregate token/cost usage reported by child runtime calls whose
+    /// outputs include canonical `usage` facts. Owned by the mission runtime
+    /// so presentation layers never inspect nested agent run directories or
+    /// guess which sibling run corresponds to this mission.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_usage: Option<MissionTokenUsage>,
 
     /// Per-cross-agent-ability-call execution summaries. Each entry
     /// captures what the target agent's ability graph did to satisfy one
@@ -442,6 +519,7 @@ struct MissionRunCompletion {
     steps_total: usize,
     steps_completed: usize,
     steps_failed: usize,
+    token_usage: Option<MissionTokenUsage>,
     ability_graph_traces: Option<Vec<serde_json::Value>>,
 }
 
@@ -469,6 +547,7 @@ struct MissionRunTerminalTransition {
     steps_total: usize,
     steps_completed: usize,
     steps_failed: usize,
+    token_usage: Option<MissionTokenUsage>,
     ability_graph_traces: Option<Vec<serde_json::Value>>,
 }
 
@@ -481,6 +560,7 @@ impl MissionRunTerminalTransition {
             steps_total: completion.steps_total,
             steps_completed: completion.steps_completed,
             steps_failed: completion.steps_failed,
+            token_usage: completion.token_usage,
             ability_graph_traces: completion.ability_graph_traces,
         }
     }
@@ -493,6 +573,7 @@ impl MissionRunTerminalTransition {
             steps_total: failure.steps_total,
             steps_completed: 0,
             steps_failed: 0,
+            token_usage: None,
             ability_graph_traces: None,
         }
     }
@@ -510,6 +591,7 @@ impl MissionRunTerminalTransition {
             steps_total: self.steps_total,
             steps_completed: self.steps_completed,
             steps_failed: self.steps_failed,
+            token_usage: self.token_usage,
             ability_graph_traces: self.ability_graph_traces,
         }
     }
@@ -533,6 +615,7 @@ impl MissionRunTerminalTransition {
             steps_total: meta.steps_total,
             steps_completed: meta.steps_completed,
             steps_failed: meta.steps_failed,
+            token_usage: meta.token_usage,
             ability_graph_traces: meta.ability_graph_traces,
         }
     }
@@ -931,6 +1014,7 @@ impl MissionRunner {
                 } else {
                     Some(report.trace.ability_graph.clone())
                 };
+                let token_usage = mission_token_usage_from_outputs(&report.outputs);
                 // The interpreter returns Ok even when individual steps fail
                 // — surface that as "partial" so the listing doesn't lie about
                 // a run with broken steps.
@@ -977,6 +1061,7 @@ impl MissionRunner {
                         steps_total: total_steps,
                         steps_completed: report.steps_completed,
                         steps_failed,
+                        token_usage,
                         ability_graph_traces,
                     },
                 ))?;
@@ -1255,6 +1340,51 @@ mod tests {
         );
     }
 
+    #[test]
+    fn mission_run_token_usage_aggregates_step_outputs() {
+        let mut outputs = std::collections::HashMap::new();
+        outputs.insert(
+            "__reply".to_string(),
+            serde_json::json!({
+                "reply": "first",
+                "usage": {
+                    "input_tokens": 10,
+                    "output_tokens": 4,
+                    "cache_read_tokens": 3,
+                    "cache_creation_tokens": 2,
+                    "num_turns": 1,
+                    "total_cost_usd": 0.25
+                }
+            })
+            .to_string(),
+        );
+        outputs.insert(
+            "worker".to_string(),
+            serde_json::json!({
+                "reply": "second",
+                "usage": {
+                    "input_tokens": 5,
+                    "output_tokens": 6,
+                    "cached_input_tokens": 7,
+                    "cache_creation_input_tokens": 8,
+                    "num_turns": 2,
+                    "total_cost_usd": 0.75
+                }
+            })
+            .to_string(),
+        );
+        outputs.insert("plain".to_string(), "not json".to_string());
+
+        let usage = mission_token_usage_from_outputs(&outputs)
+            .expect("step outputs with usage facts aggregate into mission meta");
+        assert_eq!(usage.input_tokens, 15);
+        assert_eq!(usage.output_tokens, 10);
+        assert_eq!(usage.cache_read_tokens, 10);
+        assert_eq!(usage.cache_creation_tokens, 10);
+        assert_eq!(usage.num_turns, 3);
+        assert!((usage.total_cost_usd - 1.0).abs() < f64::EPSILON);
+    }
+
     /// The in-flight meta written at `create()` time already carries
     /// the trace anchor — `invocation watch --trace` must be able to
     /// attach while the run is alive, not only after completion.
@@ -1301,6 +1431,7 @@ mod tests {
             steps_total: 3,
             steps_completed: 3,
             steps_failed: 0,
+            token_usage: None,
             ability_graph_traces: None,
         }
     }

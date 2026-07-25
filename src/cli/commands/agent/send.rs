@@ -318,18 +318,10 @@ pub(super) fn run_send(args: SendArgs) -> anyhow::Result<()> {
         style(format!("{:.1}s", result.meta.duration_ms as f64 / 1000.0)).cyan(),
     );
 
-    // Token line: read the nested agent run dir's meta.json. The mission
-    // run dir contains the agent run dir as a sibling artefact (the
-    // dispatch layer creates it independently under
-    // ~/.easynet/agents/<agent>/runs/). We surface the most recent
-    // one for this agent — for a one-step `agent send` it is unambiguous.
-    //
-    // TODO(token-meta-aggregation): this token aggregation logic is a
-    // presentation-layer leak into execution detail. The right home is
-    // `MissionRunMeta` itself — after every step, the mission runner
-    // should sum the agent run stats into a `MissionRunMeta.token_usage`
-    // field. Defer to a follow-up PR.
-    if let Some(usage) = read_latest_agent_usage(&args.name) {
+    // Token line: read the mission runtime's own aggregate. The CLI
+    // presentation layer must not inspect nested agent run directories or
+    // guess which sibling run belongs to this mission.
+    if let Some(usage) = result.meta.token_usage.as_ref() {
         let total_in = usage.input_tokens + usage.cache_read_tokens + usage.cache_creation_tokens;
         eprintln!(
             "  {} in={} out={} cache_read={} cache_write={} turns={} cost=${:.4}",
@@ -439,73 +431,6 @@ fn build_agent_send_eal_source(
             "mission \"agent-send\" {{\n    let __reply = {agent}.chat(prompt: {prompt})\n}}\n",
         )),
     }
-}
-
-/// Read the most recent agent run dir for `agent_name` and extract the
-/// usage stats from its `meta.json`. Returns `None` if no run dir
-/// exists or the meta is unreadable. This is the temporary glue that
-/// powers the token line in `run_send` — see the
-/// `TODO(token-meta-aggregation)` comment in `run_send` for the
-/// long-term plan.
-fn read_latest_agent_usage(agent_name: &str) -> Option<AgentUsageReader> {
-    use std::fs;
-
-    // Source of truth for the per-agent root directory is the canonical
-    // `~/.easynet/agents/` layout. Startup commits the one-time directory
-    // migration before command execution, so runtime readers never select an
-    // alternate root.
-    let runs_root = crate::daemon::persistence::config::agents_root()
-        .join(agent_name)
-        .join("runs");
-    if !runs_root.exists() {
-        return None;
-    }
-
-    let mut latest: Option<(String, std::path::PathBuf)> = None;
-    for entry in fs::read_dir(&runs_root).ok()? {
-        let entry = entry.ok()?;
-        if !entry.path().is_dir() {
-            continue;
-        }
-        let name = entry.file_name().to_string_lossy().to_string();
-        if latest
-            .as_ref()
-            .map(|(n, _)| name.as_str() > n.as_str())
-            .unwrap_or(true)
-        {
-            latest = Some((name, entry.path()));
-        }
-    }
-    let (_, path) = latest?;
-    let meta_path = path.join("meta.json");
-    let raw = fs::read_to_string(&meta_path).ok()?;
-    let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
-    Some(AgentUsageReader {
-        input_tokens: v.get("input_tokens").and_then(|x| x.as_u64()).unwrap_or(0),
-        output_tokens: v.get("output_tokens").and_then(|x| x.as_u64()).unwrap_or(0),
-        cache_read_tokens: v
-            .get("cache_read_tokens")
-            .and_then(|x| x.as_u64())
-            .unwrap_or(0),
-        cache_creation_tokens: v
-            .get("cache_creation_tokens")
-            .and_then(|x| x.as_u64())
-            .unwrap_or(0),
-        num_turns: v.get("num_turns").and_then(|x| x.as_u64()).unwrap_or(0),
-        total_cost_usd: v
-            .get("total_cost_usd")
-            .and_then(|x| x.as_f64())
-            .unwrap_or(0.0),
-    })
-}
-
-struct AgentUsageReader {
-    input_tokens: u64,
-    output_tokens: u64,
-    cache_read_tokens: u64,
-    cache_creation_tokens: u64,
-    num_turns: u64,
-    total_cost_usd: f64,
 }
 
 /// Build a custom termimad skin: compact spacing, colourful header levels,
