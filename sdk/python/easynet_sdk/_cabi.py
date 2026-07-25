@@ -22,6 +22,9 @@ from .runtime import InvocationControlCapability
 EXPECTED_ABI_VERSION = 6
 RUNTIME_OK = 0
 MAX_CABI_CALLBACK_QUEUE = 1024
+CABI_RUNTIME_HOST_WIRE_EDGE = "device"
+CABI_RUNTIME_HOST_WIRE_AUTHORITY = "hub"
+CABI_RUNTIME_HOST_WIRE_COMBINED = "both"
 
 _StreamCallback = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p)
 _BidiCallback = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p)
@@ -1582,11 +1585,11 @@ def _runtime_host_mode_for_cabi(value: object) -> str:
         raise _cabi_payload_error("runtime host mode must be a non-empty string")
     mode = value.strip()
     if mode == "edge":
-        return "device"
+        return CABI_RUNTIME_HOST_WIRE_EDGE
     if mode == "authority":
-        return "hub"
+        return CABI_RUNTIME_HOST_WIRE_AUTHORITY
     if mode == "combined":
-        return "both"
+        return CABI_RUNTIME_HOST_WIRE_COMBINED
     raise _cabi_payload_error("runtime host mode must be edge, authority, or combined")
 
 
@@ -1632,11 +1635,11 @@ def _runtime_status_mode_for_cabi(value: object) -> str:
     if not isinstance(value, str) or not value.strip():
         raise _cabi_payload_error("runtime host status mode must be a non-empty string")
     mode = value.strip()
-    if mode == "device":
+    if mode == CABI_RUNTIME_HOST_WIRE_EDGE:
         return "edge"
-    if mode == "hub":
+    if mode == CABI_RUNTIME_HOST_WIRE_AUTHORITY:
         return "authority"
-    if mode == "both":
+    if mode == CABI_RUNTIME_HOST_WIRE_COMBINED:
         return "combined"
     raise _cabi_payload_error("runtime host status mode must be device, hub, or both")
 

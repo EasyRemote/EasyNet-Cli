@@ -82,7 +82,7 @@ class DescriptorResolverTransport(Protocol):
 
 @dataclass(frozen=True)
 class PrepareOptions:
-    """Daemon-owned prepare policy knobs."""
+    """Runtime-owned prepare policy knobs."""
 
     expires_in_ms: int = 0
     signer_id: str = ""
@@ -980,7 +980,7 @@ def _validate_invocation_result_receipt_topology(
 
 @dataclass(frozen=True)
 class InvocationCancel:
-    """Daemon cancellation outcome for a submitted handle."""
+    """Runtime cancellation outcome for a submitted handle."""
 
     control: InvocationControlCapability
     request_accepted: bool

@@ -2510,7 +2510,7 @@ func decodeInvocationFailure(raw json.RawMessage) (*InvocationFailure, error) {
 	}, nil
 }
 
-// InvocationCancel is the daemon cancellation outcome for a submitted handle.
+// InvocationCancel is the runtime cancellation outcome for a submitted handle.
 type InvocationCancel struct {
 	control         InvocationControlCapability
 	requestAccepted bool
@@ -2544,7 +2544,7 @@ func (c InvocationCancel) Terminal() bool {
 	return c.terminal
 }
 
-// NewInvocationCancelFromJSON decodes the daemon cancellation outcome projection.
+// NewInvocationCancelFromJSON decodes the runtime cancellation outcome projection.
 func NewInvocationCancelFromJSON(raw []byte) (InvocationCancel, error) {
 	return newInvocationCancelFromJSON(raw, nil)
 }
