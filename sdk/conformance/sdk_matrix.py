@@ -675,7 +675,7 @@ def self_test(tmp: Path) -> None:
 
     synthetic_results(results, matrix)
     result_path.write_text(
-        (ROOT / "sdk/conformance/runner/rust-action-adapter-report.json").read_text(
+        (ROOT / "sdk/conformance/runner/rust-runtime-conformance-report.json").read_text(
             encoding="utf-8"
         ),
         encoding="utf-8",

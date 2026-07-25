@@ -11,7 +11,7 @@ required_for:
 description: SDK returns a typed version mismatch before opening invocation traffic.
 steps:
   - action: load_fixture
-    fixture: feature-discovery.v5.json
+    fixture: feature-discovery.v6.json
   - action: feature_discovery
     override:
       abi_version: 0

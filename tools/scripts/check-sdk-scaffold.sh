@@ -22,7 +22,7 @@ required=(
   sdk/CONFORMANCE_SUITE.md
   sdk/conformance/fixture-schema-bindings.json
   sdk/conformance/python_toolchain.sh
-  sdk/conformance/refresh_adapter_report_evidence.py
+  sdk/conformance/refresh_conformance_report_evidence.py
   sdk/conformance/sdk-parity-matrix.json
   sdk/conformance/runner/README.md
   sdk/go/go.mod
@@ -80,9 +80,9 @@ def load_json(path: Path) -> object:
 schemas = sorted(schema_dir.glob("*.schema.json"))
 fixtures = sorted(fixture_dir.glob("*.v*.json"))
 cases = sorted(case_dir.glob("*.yaml"))
-reports = sorted(runner_dir.glob("*-action-adapter-report.json"))
+reports = sorted(runner_dir.glob("*-runtime-conformance-report.json"))
 if not schemas or not fixtures or not cases or not reports:
-    fail("schema, fixture, case, and adapter-report sets must be non-empty")
+    fail("schema, fixture, case, and conformance-report sets must be non-empty")
 
 for path in schemas + fixtures + reports:
     load_json(path)
@@ -179,9 +179,9 @@ if "product_boundary_rules" in matrix:
 for path in reports:
     report = load_json(path)
     if not isinstance(report, dict) or report.get("schema_version") != 2:
-        fail(f"invalid adapter report header: {path.relative_to(root)}")
+        fail(f"invalid conformance report header: {path.relative_to(root)}")
     if not isinstance(report.get("records"), list):
-        fail(f"missing adapter records: {path.relative_to(root)}")
+        fail(f"missing conformance records: {path.relative_to(root)}")
 PY
 
 header_symbols="$(python3 - "$ROOT/include/easynet_cli.h" <<'PY'

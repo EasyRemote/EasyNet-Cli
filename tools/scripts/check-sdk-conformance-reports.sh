@@ -327,7 +327,7 @@ run_report() {
       "$RUNNER_BIN" \
       --root "$REPO_ROOT" \
       --language "$language" \
-      --adapter-report "$report" \
+      --conformance-report "$report" \
       --format json || bounded_rc=$?
   if [[ "$bounded_rc" -ne 0 ]]; then
     return "$bounded_rc"
@@ -404,17 +404,17 @@ run_selected_reports() {
 }
 
 language_reports=(
-  "rust:sdk/conformance/runner/rust-action-adapter-report.json"
-  "c_abi:sdk/conformance/runner/c-abi-action-adapter-report.json"
-  "go:sdk/conformance/runner/go-action-adapter-report.json"
-  "python:sdk/conformance/runner/python-action-adapter-report.json"
-  "node:sdk/conformance/runner/node-action-adapter-report.json"
-  "java:sdk/conformance/runner/java-action-adapter-report.json"
-  "swift:sdk/conformance/runner/swift-action-adapter-report.json"
+  "rust:sdk/conformance/runner/rust-runtime-conformance-report.json"
+  "c_abi:sdk/conformance/runner/c-abi-runtime-conformance-report.json"
+  "go:sdk/conformance/runner/go-runtime-conformance-report.json"
+  "python:sdk/conformance/runner/python-runtime-conformance-report.json"
+  "node:sdk/conformance/runner/node-runtime-conformance-report.json"
+  "java:sdk/conformance/runner/java-runtime-conformance-report.json"
+  "swift:sdk/conformance/runner/swift-runtime-conformance-report.json"
 )
 
-check_adapter_report_evidence() {
-  python3 "$SOURCE_ROOT/sdk/conformance/refresh_adapter_report_evidence.py" --check
+check_conformance_report_evidence() {
+  python3 "$SOURCE_ROOT/sdk/conformance/refresh_conformance_report_evidence.py" --check
 }
 
 prepare_report_gate_toolchains() {
@@ -434,7 +434,7 @@ if [[ "${1:-}" == "--self-test" ]]; then
   trap cleanup EXIT
 
   mkdir -p "$tmp/sdk/conformance/runner"
-  cp "$REPO_ROOT/sdk/conformance/runner/go-action-adapter-report.json" \
+  cp "$REPO_ROOT/sdk/conformance/runner/go-runtime-conformance-report.json" \
     "$tmp/forged-status-report.json"
   python3 - "$tmp/forged-status-report.json" <<'PY'
 from __future__ import annotations
@@ -462,7 +462,7 @@ PY
     exit 1
   fi
 
-  cp "$REPO_ROOT/sdk/conformance/runner/go-action-adapter-report.json" \
+  cp "$REPO_ROOT/sdk/conformance/runner/go-runtime-conformance-report.json" \
     "$tmp/forged-hash-report.json"
   python3 - "$tmp/forged-hash-report.json" <<'PY'
 from __future__ import annotations
@@ -542,11 +542,11 @@ from pathlib import Path
 print(hashlib.sha256(Path(sys.argv[1]).read_bytes()).hexdigest())
 PY
 )"
-  cat >"$minimal_root/adapter.json" <<EOF
+  cat >"$minimal_root/report.json" <<EOF
 {
   "schema_version": 2,
   "language": "go",
-  "adapter_kind": "unit_test",
+  "report_kind": "unit_test",
   "records": [
     {
       "case_id": "test/minimal",
@@ -559,7 +559,7 @@ EOF
   if env SDK_CONFORMANCE_RUN_NONCE="$RUN_NONCE" "$RUNNER_BIN" \
     --root "$minimal_root" \
     --language go \
-    --adapter-report "$minimal_root/adapter.json" \
+    --conformance-report "$minimal_root/report.json" \
     --format json >"$tmp/missing-binding.out" 2>&1; then
     echo "self-test expected missing execution binding to fail" >&2
     exit 1
@@ -722,7 +722,7 @@ EOF
 fi
 
 rm -rf "$RESULT_DIR"
-check_adapter_report_evidence
+check_conformance_report_evidence
 prepare_report_gate_toolchains
 create_source_snapshot
 write_source_attestation_manifest

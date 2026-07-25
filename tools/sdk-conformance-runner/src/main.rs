@@ -10,14 +10,14 @@
 // -----------------------
 // Own the executable runner contract for the repository's SDK conformance
 // manifest. This runner validates the shared case/fixture/schema graph that
-// every language facade must consume. When given a language action-adapter
+// every language facade must consume. When given a language runtime-conformance
 // report, it also proves that the report is closed over required manifest cases
 // and backed by repository-local evidence.
 //
 // Implementation Approach
 // -----------------------
 // Treat YAML cases as declarative manifests, bind every referenced fixture to a
-// repository schema, validate the fixture payload before adapter execution, and
+// repository schema, validate the fixture payload before conformance execution, and
 // emit one stable result record per case/language pair. This moves the
 // conformance runner root from README-only scaffold to a CI-usable integrity
 // gate without introducing a second daemon or Axon semantic path.
@@ -25,11 +25,11 @@
 // Usage
 // -----
 //   cargo run -p sdk-conformance-runner -- --language rust \
-//     --adapter-report sdk/conformance/runner/rust-action-adapter-report.json
+//     --conformance-report sdk/conformance/runner/rust-runtime-conformance-report.json
 //   cargo run -p sdk-conformance-runner -- --language c_abi \
-//     --adapter-report sdk/conformance/runner/c-abi-action-adapter-report.json
+//     --conformance-report sdk/conformance/runner/c-abi-runtime-conformance-report.json
 //   cargo run -p sdk-conformance-runner -- --language go \
-//     --adapter-report sdk/conformance/runner/go-action-adapter-report.json
+//     --conformance-report sdk/conformance/runner/go-runtime-conformance-report.json
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -65,10 +65,10 @@ struct Cli {
     #[arg(long, value_enum, default_value_t = OutputFormat::Jsonl)]
     format: OutputFormat,
 
-    /// Optional language action-adapter report. Report mode always executes
+    /// Optional language runtime conformance report. Report mode always executes
     /// runner-owned case selectors.
     #[arg(long)]
-    adapter_report: Option<PathBuf>,
+    conformance_report: Option<PathBuf>,
 
     /// Emit a runner-issued nonce for a multi-language gate invocation.
     #[arg(long)]
@@ -97,13 +97,13 @@ struct ConformanceResultRecord {
     profile: String,
     case_sha256: String,
     selector: Option<String>,
-    evidence: Vec<AdapterEvidence>,
+    evidence: Vec<ConformanceEvidence>,
     collected_tests: Vec<String>,
     attestation_sha256: Option<String>,
     status: ConformanceStatus,
     error_code: Option<&'static str>,
     message: Option<String>,
-    executions: Vec<AdapterExecutionProof>,
+    executions: Vec<ConformanceExecutionProof>,
     run_nonce: String,
     tree_sha256: String,
     toolchain_sha256: String,
@@ -130,32 +130,32 @@ enum ConformanceStatus {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct AdapterReport {
+struct ConformanceReport {
     schema_version: u64,
     language: String,
-    adapter_kind: String,
-    records: Vec<AdapterResultRecord>,
+    report_kind: String,
+    records: Vec<ConformanceReportRecord>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct AdapterResultRecord {
+struct ConformanceReportRecord {
     case_id: String,
     profile: String,
-    evidence: Vec<AdapterEvidence>,
+    evidence: Vec<ConformanceEvidence>,
     coverage: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-struct AdapterEvidence {
+struct ConformanceEvidence {
     kind: String,
     ref_path: String,
     sha256: String,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-struct AdapterExecutionProof {
+struct ConformanceExecutionProof {
     phase: &'static str,
     command: Vec<String>,
     working_directory: String,
@@ -164,37 +164,37 @@ struct AdapterExecutionProof {
 }
 
 #[derive(Debug, Clone)]
-struct AdapterExecution {
-    proofs: Vec<AdapterExecutionProof>,
+struct ConformanceExecution {
+    proofs: Vec<ConformanceExecutionProof>,
     collected_tests: Vec<String>,
     failure: Option<String>,
 }
 
-trait AdapterExecutor {
-    fn execute(&self, root: &Path, binding: &ExecutionBinding) -> Result<AdapterExecution>;
+trait ConformanceExecutor {
+    fn execute(&self, root: &Path, binding: &ExecutionBinding) -> Result<ConformanceExecution>;
 
     fn execute_many(
         &self,
         root: &Path,
         bindings: &[ExecutionBinding],
-    ) -> BTreeMap<(String, String), AdapterExecution> {
+    ) -> BTreeMap<(String, String), ConformanceExecution> {
         execute_cases_individually(self, root, bindings)
     }
 }
 
 #[derive(Debug, Default)]
-struct ProcessAdapterExecutor;
+struct ProcessConformanceExecutor;
 
-impl AdapterExecutor for ProcessAdapterExecutor {
-    fn execute(&self, root: &Path, binding: &ExecutionBinding) -> Result<AdapterExecution> {
-        execute_adapter_case(root, binding)
+impl ConformanceExecutor for ProcessConformanceExecutor {
+    fn execute(&self, root: &Path, binding: &ExecutionBinding) -> Result<ConformanceExecution> {
+        execute_conformance_case(root, binding)
     }
 
     fn execute_many(
         &self,
         root: &Path,
         bindings: &[ExecutionBinding],
-    ) -> BTreeMap<(String, String), AdapterExecution> {
+    ) -> BTreeMap<(String, String), ConformanceExecution> {
         if bindings.is_empty() {
             return BTreeMap::new();
         }
@@ -212,11 +212,11 @@ impl AdapterExecutor for ProcessAdapterExecutor {
                 .map(|binding| {
                     (
                         execution_key(binding),
-                        AdapterExecution {
+                        ConformanceExecution {
                             proofs: Vec::new(),
                             collected_tests: Vec::new(),
                             failure: Some(format!(
-                                "adapter batch execution could not start: {error:#}"
+                                "conformance batch execution could not start: {error:#}"
                             )),
                         },
                     )
@@ -226,21 +226,21 @@ impl AdapterExecutor for ProcessAdapterExecutor {
     }
 }
 
-fn execute_cases_individually<T: AdapterExecutor + ?Sized>(
+fn execute_cases_individually<T: ConformanceExecutor + ?Sized>(
     executor: &T,
     root: &Path,
     bindings: &[ExecutionBinding],
-) -> BTreeMap<(String, String), AdapterExecution> {
+) -> BTreeMap<(String, String), ConformanceExecution> {
     bindings
         .iter()
         .map(|binding| {
             let execution =
                 executor
                     .execute(root, binding)
-                    .unwrap_or_else(|error| AdapterExecution {
+                    .unwrap_or_else(|error| ConformanceExecution {
                         proofs: Vec::new(),
                         collected_tests: Vec::new(),
-                        failure: Some(format!("adapter execution could not start: {error:#}")),
+                        failure: Some(format!("conformance execution could not start: {error:#}")),
                     });
             (execution_key(binding), execution)
         })
@@ -286,15 +286,15 @@ fn main() -> Result<()> {
         println!("{}", issue_run_nonce(&cli.root)?);
         return Ok(());
     }
-    let mut records = if cli.adapter_report.is_some() {
+    let mut records = if cli.conformance_report.is_some() {
         run_manifest_with_executor(
             &cli.root,
             &cli.language,
-            cli.adapter_report.as_deref(),
-            &ProcessAdapterExecutor,
+            cli.conformance_report.as_deref(),
+            &ProcessConformanceExecutor,
         )?
     } else {
-        run_manifest(&cli.root, &cli.language, cli.adapter_report.as_deref())?
+        run_manifest(&cli.root, &cli.language, cli.conformance_report.as_deref())?
     };
     bind_run_context(&cli.root, &cli.language, &mut records)?;
     let failed = records
@@ -311,10 +311,10 @@ fn main() -> Result<()> {
 fn run_manifest(
     root: &Path,
     language: &str,
-    adapter_report_path: Option<&Path>,
+    conformance_report_path: Option<&Path>,
 ) -> Result<Vec<ConformanceResultRecord>> {
-    if adapter_report_path.is_some() {
-        anyhow::bail!("adapter report execution is mandatory; no executor was provided");
+    if conformance_report_path.is_some() {
+        anyhow::bail!("conformance report execution is mandatory; no executor was provided");
     }
     run_manifest_with_optional_executor(root, language, None, None)
 }
@@ -322,30 +322,30 @@ fn run_manifest(
 fn run_manifest_with_executor(
     root: &Path,
     language: &str,
-    adapter_report_path: Option<&Path>,
-    executor: &dyn AdapterExecutor,
+    conformance_report_path: Option<&Path>,
+    executor: &dyn ConformanceExecutor,
 ) -> Result<Vec<ConformanceResultRecord>> {
-    run_manifest_with_optional_executor(root, language, adapter_report_path, Some(executor))
+    run_manifest_with_optional_executor(root, language, conformance_report_path, Some(executor))
 }
 
 fn run_manifest_with_optional_executor(
     root: &Path,
     language: &str,
-    adapter_report_path: Option<&Path>,
-    executor: Option<&dyn AdapterExecutor>,
+    conformance_report_path: Option<&Path>,
+    executor: Option<&dyn ConformanceExecutor>,
 ) -> Result<Vec<ConformanceResultRecord>> {
     let cases = load_cases(root)?;
     let fixture_schemas = FixtureSchemaBindings::load(root)?;
-    let adapter_report = {
+    let conformance_report = {
         let case_index = ManifestCaseIndex::new(&cases);
-        adapter_report_path
-            .map(|path| load_adapter_report(root, language, path, &case_index))
+        conformance_report_path
+            .map(|path| load_conformance_report(root, language, path, &case_index))
             .transpose()?
     };
-    if adapter_report.is_some() && executor.is_none() {
-        anyhow::bail!("adapter report execution is mandatory; no executor was provided");
+    if conformance_report.is_some() && executor.is_none() {
+        anyhow::bail!("conformance report execution is mandatory; no executor was provided");
     }
-    let execution_manifest = adapter_report
+    let execution_manifest = conformance_report
         .as_ref()
         .map(|_| ExecutionManifestIndex::load(root, &cases))
         .transpose()?;
@@ -360,7 +360,7 @@ fn run_manifest_with_optional_executor(
         }
         _ => BTreeMap::new(),
     };
-    let adapter_report = adapter_report.as_ref().map(AdapterReportIndex::new);
+    let conformance_report = conformance_report.as_ref().map(ConformanceReportIndex::new);
     let duplicate_errors = duplicate_case_errors(&cases);
     let mut records = Vec::with_capacity(cases.len());
 
@@ -396,14 +396,16 @@ fn run_manifest_with_optional_executor(
                 axon_revision: String::new(),
             }
         } else if errors.is_empty() {
-            match adapter_report.as_ref() {
+            match conformance_report.as_ref() {
                 Some(report) => {
                     let binding = execution_manifest
                         .as_ref()
                         .and_then(|manifest| manifest.find(language, &case.id));
                     let execution =
                         binding.and_then(|binding| execution_results.get(&execution_key(binding)));
-                    record_from_adapter(root, language, &case, report, binding, execution)
+                    record_from_conformance_report(
+                        root, language, &case, report, binding, execution,
+                    )
                 }
                 None => ConformanceResultRecord {
                     case_id: case.id,
@@ -417,7 +419,7 @@ fn run_manifest_with_optional_executor(
                     status: ConformanceStatus::Unsupported,
                     error_code: Some("MANIFEST_ONLY"),
                     message: Some(
-                        "manifest integrity validated without adapter execution".to_string(),
+                        "manifest integrity validated without conformance execution".to_string(),
                     ),
                     executions: Vec::new(),
                     run_nonce: String::new(),
@@ -454,73 +456,76 @@ fn run_manifest_with_optional_executor(
     Ok(records)
 }
 
-fn load_adapter_report(
+fn load_conformance_report(
     root: &Path,
     language: &str,
     path: &Path,
     case_index: &ManifestCaseIndex<'_>,
-) -> Result<AdapterReport> {
+) -> Result<ConformanceReport> {
     let path = resolve_repo_path(root, path);
     ensure_path_inside_root(root, &path).with_context(|| {
         format!(
-            "adapter report {} must stay under repository root {}",
+            "conformance report {} must stay under repository root {}",
             path.display(),
             root.display()
         )
     })?;
     let raw = fs::read_to_string(&path)
-        .with_context(|| format!("read adapter report {}", path.display()))?;
-    let report: AdapterReport = serde_json::from_str(&raw)
-        .with_context(|| format!("decode adapter report {}", path.display()))?;
+        .with_context(|| format!("read conformance report {}", path.display()))?;
+    let report: ConformanceReport = serde_json::from_str(&raw)
+        .with_context(|| format!("decode conformance report {}", path.display()))?;
     if report.schema_version != 2 {
-        anyhow::bail!("adapter report schema_version must be 2");
+        anyhow::bail!("conformance report schema_version must be 2");
     }
     if report.language != language {
         anyhow::bail!(
-            "adapter report language `{}` does not match requested language `{}`",
+            "conformance report language `{}` does not match requested language `{}`",
             report.language,
             language
         );
     }
-    if report.adapter_kind.trim().is_empty() {
-        anyhow::bail!("adapter report adapter_kind must not be empty");
+    if report.report_kind.trim().is_empty() {
+        anyhow::bail!("conformance report_kind must not be empty");
     }
     let mut seen = BTreeSet::new();
     for record in &report.records {
         if record.case_id.trim().is_empty() {
-            anyhow::bail!("adapter record case_id must not be empty");
+            anyhow::bail!("conformance record case_id must not be empty");
         }
         if record.profile.trim().is_empty() {
-            anyhow::bail!("adapter record profile must not be empty");
+            anyhow::bail!("conformance record profile must not be empty");
         }
         if record
             .coverage
             .as_deref()
             .is_some_and(|coverage| coverage.trim().is_empty())
         {
-            anyhow::bail!("adapter record coverage must not be empty when present");
+            anyhow::bail!("conformance record coverage must not be empty when present");
         }
         if !seen.insert(record.case_id.clone()) {
-            anyhow::bail!("duplicate adapter record case_id `{}`", record.case_id);
+            anyhow::bail!("duplicate conformance record case_id `{}`", record.case_id);
         }
         let Some(case) = case_index.find(&record.case_id) else {
             anyhow::bail!(
-                "adapter record `{}` does not match any manifest case",
+                "conformance record `{}` does not match any manifest case",
                 record.case_id
             );
         };
         if !case.required_for.contains(language) {
             anyhow::bail!(
-                "adapter record `{}` is not declared for language `{}`",
+                "conformance record `{}` is not declared for language `{}`",
                 record.case_id,
                 language
             );
         }
         if record.evidence.is_empty() {
-            anyhow::bail!("adapter record `{}` must include evidence", record.case_id);
+            anyhow::bail!(
+                "conformance record `{}` must include evidence",
+                record.case_id
+            );
         }
         for evidence in &record.evidence {
-            validate_adapter_evidence(root, language, &record.case_id, evidence)?;
+            validate_conformance_evidence(root, language, &record.case_id, evidence)?;
         }
     }
     Ok(report)
@@ -544,12 +549,12 @@ impl<'a> ManifestCaseIndex<'a> {
 }
 
 #[derive(Debug)]
-struct AdapterReportIndex<'a> {
-    records: BTreeMap<&'a str, &'a AdapterResultRecord>,
+struct ConformanceReportIndex<'a> {
+    records: BTreeMap<&'a str, &'a ConformanceReportRecord>,
 }
 
-impl<'a> AdapterReportIndex<'a> {
-    fn new(report: &'a AdapterReport) -> Self {
+impl<'a> ConformanceReportIndex<'a> {
+    fn new(report: &'a ConformanceReport) -> Self {
         Self {
             records: report
                 .records
@@ -559,7 +564,7 @@ impl<'a> AdapterReportIndex<'a> {
         }
     }
 
-    fn find(&self, case_id: &str) -> Option<&'a AdapterResultRecord> {
+    fn find(&self, case_id: &str) -> Option<&'a ConformanceReportRecord> {
         self.records.get(case_id).copied()
     }
 }
@@ -768,30 +773,30 @@ fn is_versioned_fixture_file_name(raw: &str) -> bool {
         && version.parse::<u64>().is_ok_and(|version| version > 0)
 }
 
-fn validate_adapter_evidence(
+fn validate_conformance_evidence(
     root: &Path,
     language: &str,
     case_id: &str,
-    evidence: &AdapterEvidence,
+    evidence: &ConformanceEvidence,
 ) -> Result<()> {
-    let expected_kind = adapter_evidence_kind(language);
+    let expected_kind = conformance_evidence_kind(language);
     if evidence.kind != expected_kind {
         anyhow::bail!(
-            "adapter record `{case_id}` evidence kind `{}` does not match language `{language}`; expected `{expected_kind}`",
+            "conformance record `{case_id}` evidence kind `{}` does not match language `{language}`; expected `{expected_kind}`",
             evidence.kind
         );
     }
     validate_evidence_scope(language, &evidence.ref_path)
-        .with_context(|| format!("adapter record `{case_id}` has invalid evidence scope"))?;
+        .with_context(|| format!("conformance record `{case_id}` has invalid evidence scope"))?;
     let path = resolve_repo_path(root, Path::new(&evidence.ref_path));
     ensure_path_inside_root(root, &path)
-        .with_context(|| format!("validate adapter evidence {}", path.display()))?;
+        .with_context(|| format!("validate conformance evidence {}", path.display()))?;
     let contents =
-        fs::read(&path).with_context(|| format!("read adapter evidence {}", path.display()))?;
+        fs::read(&path).with_context(|| format!("read conformance evidence {}", path.display()))?;
     let actual = sha256_hex(&contents);
     if evidence.sha256 != actual {
         anyhow::bail!(
-            "adapter record `{case_id}` evidence hash mismatch for `{}`: expected `{}`, actual `{actual}`",
+            "conformance record `{case_id}` evidence hash mismatch for `{}`: expected `{}`, actual `{actual}`",
             evidence.ref_path,
             evidence.sha256
         );
@@ -827,24 +832,27 @@ fn validate_evidence_scope(language: &str, ref_path: &str) -> Result<()> {
     };
     if !allowed {
         anyhow::bail!(
-            "evidence path `{ref_path}` is not covered by the `{language}` adapter suite"
+            "evidence path `{ref_path}` is not covered by the `{language}` conformance suite"
         );
     }
     Ok(())
 }
 
-fn adapter_evidence_kind(language: &str) -> String {
+fn conformance_evidence_kind(language: &str) -> String {
     format!("{}_test", language.replace('-', "_"))
 }
 
 #[derive(Debug, Clone)]
 struct CommandResult {
-    proof: AdapterExecutionProof,
+    proof: ConformanceExecutionProof,
     output: String,
     success: bool,
 }
 
-fn execute_adapter_case(root: &Path, binding: &ExecutionBinding) -> Result<AdapterExecution> {
+fn execute_conformance_case(
+    root: &Path,
+    binding: &ExecutionBinding,
+) -> Result<ConformanceExecution> {
     match binding.language.as_str() {
         "go" => execute_go_case(root, binding),
         "python" => execute_python_case(root, binding),
@@ -853,7 +861,7 @@ fn execute_adapter_case(root: &Path, binding: &ExecutionBinding) -> Result<Adapt
         "java" => execute_java_case(root, binding),
         "swift" => execute_swift_case(root, binding),
         language => {
-            anyhow::bail!("no executable case adapter is registered for language `{language}`")
+            anyhow::bail!("no executable case executor is registered for language `{language}`")
         }
     }
 }
@@ -864,9 +872,9 @@ fn execution_key(binding: &ExecutionBinding) -> (String, String) {
 
 const GO_CONFORMANCE_BUILD_TAGS: &str = "runtime_direct,runtime_cabi";
 
-fn execute_go_case(root: &Path, binding: &ExecutionBinding) -> Result<AdapterExecution> {
+fn execute_go_case(root: &Path, binding: &ExecutionBinding) -> Result<ConformanceExecution> {
     let pattern = format!("^{}$", regex::escape(&binding.selector));
-    let collect = run_adapter_command(
+    let collect = run_conformance_command(
         root,
         "go",
         "collection",
@@ -886,7 +894,7 @@ fn execute_go_case(root: &Path, binding: &ExecutionBinding) -> Result<AdapterExe
         .filter(|line| line.trim() == binding.selector)
         .map(|_| binding.selector.clone())
         .collect::<Vec<_>>();
-    let execute = run_adapter_command(
+    let execute = run_conformance_command(
         root,
         "go",
         "execution",
@@ -919,8 +927,8 @@ fn execute_go_case(root: &Path, binding: &ExecutionBinding) -> Result<AdapterExe
 fn execute_go_cases(
     root: &Path,
     bindings: &[ExecutionBinding],
-) -> Result<BTreeMap<(String, String), AdapterExecution>> {
-    let collect = run_adapter_command(
+) -> Result<BTreeMap<(String, String), ConformanceExecution>> {
+    let collect = run_conformance_command(
         root,
         "go",
         "collection",
@@ -948,7 +956,7 @@ fn execute_go_cases(
             .then(|| binding.selector.clone())
             .into_iter()
             .collect::<Vec<_>>();
-        let execute = run_adapter_command(
+        let execute = run_conformance_command(
             root,
             "go",
             "execution",
@@ -984,7 +992,7 @@ fn execute_go_cases(
     Ok(executions)
 }
 
-fn execute_python_case(root: &Path, binding: &ExecutionBinding) -> Result<AdapterExecution> {
+fn execute_python_case(root: &Path, binding: &ExecutionBinding) -> Result<ConformanceExecution> {
     let evidence = binding.evidence.first().expect("validated evidence");
     let evidence = Path::new(evidence)
         .strip_prefix("sdk/python")
@@ -992,7 +1000,7 @@ fn execute_python_case(root: &Path, binding: &ExecutionBinding) -> Result<Adapte
         .to_string_lossy()
         .into_owned();
     let python = std::env::var("SDK_CONFORMANCE_PYTHON").unwrap_or_else(|_| "python".to_string());
-    let collect = run_adapter_command(
+    let collect = run_conformance_command(
         root,
         "python",
         "collection",
@@ -1017,7 +1025,7 @@ fn execute_python_case(root: &Path, binding: &ExecutionBinding) -> Result<Adapte
         })
         .collect::<Vec<_>>();
     let execute = if nodeids.len() == 1 {
-        run_adapter_command(
+        run_conformance_command(
             root,
             "python",
             "execution",
@@ -1036,22 +1044,22 @@ fn execute_python_case(root: &Path, binding: &ExecutionBinding) -> Result<Adapte
     finish_case_execution(binding, collected, vec![collect, execute], passed)
 }
 
-fn execute_rust_case(root: &Path, binding: &ExecutionBinding) -> Result<AdapterExecution> {
+fn execute_rust_case(root: &Path, binding: &ExecutionBinding) -> Result<ConformanceExecution> {
     let mut executions = execute_rust_cases(root, std::slice::from_ref(binding))?;
     executions
         .remove(&execution_key(binding))
-        .ok_or_else(|| anyhow::anyhow!("rust adapter did not return case execution"))
+        .ok_or_else(|| anyhow::anyhow!("rust conformance runner did not return case execution"))
 }
 
 fn execute_rust_cases(
     root: &Path,
     bindings: &[ExecutionBinding],
-) -> Result<BTreeMap<(String, String), AdapterExecution>> {
+) -> Result<BTreeMap<(String, String), ConformanceExecution>> {
     let language = bindings
         .first()
         .map(|binding| binding.language.as_str())
         .unwrap_or("rust");
-    let build = run_adapter_command(
+    let build = run_conformance_command(
         root,
         language,
         "build",
@@ -1070,7 +1078,7 @@ fn execute_rust_cases(
     let collect = executable
         .as_deref()
         .map(|executable| {
-            run_adapter_command(root, language, "collection", ".", &[executable, "--list"])
+            run_conformance_command(root, language, "collection", ".", &[executable, "--list"])
         })
         .transpose()?
         .unwrap_or_else(|| {
@@ -1100,7 +1108,7 @@ fn execute_rust_cases(
             synthetic_failed_command("execution", ".", "cargo test binary was not produced")
         } else if test_ids.len() == 1 {
             let executable = executable.as_deref().expect("checked executable");
-            run_adapter_command(
+            run_conformance_command(
                 root,
                 &binding.language,
                 "execution",
@@ -1146,10 +1154,10 @@ fn cargo_test_executable(output: &str) -> Option<String> {
     })
 }
 
-fn execute_node_case(root: &Path, binding: &ExecutionBinding) -> Result<AdapterExecution> {
+fn execute_node_case(root: &Path, binding: &ExecutionBinding) -> Result<ConformanceExecution> {
     let evidence = binding.evidence.first().expect("validated evidence");
     let pattern = format!("^{}$", regex::escape(&binding.selector));
-    let collect = run_adapter_command(
+    let collect = run_conformance_command(
         root,
         "node",
         "collection",
@@ -1164,7 +1172,7 @@ fn execute_node_case(root: &Path, binding: &ExecutionBinding) -> Result<AdapterE
         ],
     )?;
     let count = node_tap_selector_pass_count(&collect.output, &binding.selector);
-    let execute = run_adapter_command(
+    let execute = run_conformance_command(
         root,
         "node",
         "execution",
@@ -1200,8 +1208,8 @@ fn node_tap_selector_pass_count(output: &str, selector: &str) -> usize {
         .count()
 }
 
-fn execute_java_case(root: &Path, binding: &ExecutionBinding) -> Result<AdapterExecution> {
-    let build = run_adapter_command(
+fn execute_java_case(root: &Path, binding: &ExecutionBinding) -> Result<ConformanceExecution> {
+    let build = run_conformance_command(
         root,
         "java",
         "build",
@@ -1209,7 +1217,7 @@ fn execute_java_case(root: &Path, binding: &ExecutionBinding) -> Result<AdapterE
         &["mvn", "test", "--batch-mode", "--quiet"],
     )?;
     let classpath = "target/test-classes:target/classes";
-    let collect = run_adapter_command(
+    let collect = run_conformance_command(
         root,
         "java",
         "collection",
@@ -1228,7 +1236,7 @@ fn execute_java_case(root: &Path, binding: &ExecutionBinding) -> Result<AdapterE
         .filter(|line| line.trim() == binding.selector)
         .map(|_| binding.selector.clone())
         .collect::<Vec<_>>();
-    let execute = run_adapter_command(
+    let execute = run_conformance_command(
         root,
         "java",
         "execution",
@@ -1248,8 +1256,8 @@ fn execute_java_case(root: &Path, binding: &ExecutionBinding) -> Result<AdapterE
 fn execute_java_cases(
     root: &Path,
     bindings: &[ExecutionBinding],
-) -> Result<BTreeMap<(String, String), AdapterExecution>> {
-    let build = run_adapter_command(
+) -> Result<BTreeMap<(String, String), ConformanceExecution>> {
+    let build = run_conformance_command(
         root,
         "java",
         "build",
@@ -1257,7 +1265,7 @@ fn execute_java_cases(
         &["mvn", "test", "--batch-mode", "--quiet"],
     )?;
     let classpath = "target/test-classes:target/classes";
-    let collect = run_adapter_command(
+    let collect = run_conformance_command(
         root,
         "java",
         "collection",
@@ -1283,7 +1291,7 @@ fn execute_java_cases(
             .then(|| binding.selector.clone())
             .into_iter()
             .collect::<Vec<_>>();
-        let execute = run_adapter_command(
+        let execute = run_conformance_command(
             root,
             "java",
             "execution",
@@ -1310,8 +1318,8 @@ fn execute_java_cases(
     Ok(executions)
 }
 
-fn execute_swift_case(root: &Path, binding: &ExecutionBinding) -> Result<AdapterExecution> {
-    let collect = run_adapter_command(
+fn execute_swift_case(root: &Path, binding: &ExecutionBinding) -> Result<ConformanceExecution> {
+    let collect = run_conformance_command(
         root,
         "swift",
         "collection",
@@ -1325,7 +1333,7 @@ fn execute_swift_case(root: &Path, binding: &ExecutionBinding) -> Result<Adapter
         .map(|line| line.trim().to_string())
         .collect::<Vec<_>>();
     let execute = if test_ids.len() == 1 {
-        run_adapter_command(
+        run_conformance_command(
             root,
             "swift",
             "execution",
@@ -1343,8 +1351,8 @@ fn execute_swift_case(root: &Path, binding: &ExecutionBinding) -> Result<Adapter
 fn execute_swift_cases(
     root: &Path,
     bindings: &[ExecutionBinding],
-) -> Result<BTreeMap<(String, String), AdapterExecution>> {
-    let collect = run_adapter_command(
+) -> Result<BTreeMap<(String, String), ConformanceExecution>> {
+    let collect = run_conformance_command(
         root,
         "swift",
         "collection",
@@ -1369,7 +1377,7 @@ fn execute_swift_cases(
             .cloned()
             .unwrap_or_default();
         let execute = if test_ids.len() == 1 {
-            run_adapter_command(
+            run_conformance_command(
                 root,
                 "swift",
                 "execution",
@@ -1389,7 +1397,7 @@ fn execute_swift_cases(
     Ok(executions)
 }
 
-fn run_adapter_command(
+fn run_conformance_command(
     root: &Path,
     language: &str,
     phase: &'static str,
@@ -1402,7 +1410,7 @@ fn run_adapter_command(
     command.args(&argv[1..]).current_dir(&cwd);
     if matches!(language, "rust" | "c_abi") {
         let target_dir = std::env::var("SDK_CONFORMANCE_RUST_TARGET_DIR").unwrap_or_else(|_| {
-            root.join("target/sdk-conformance-rust-adapter")
+            root.join("target/sdk-conformance-rust-runner")
                 .to_string_lossy()
                 .into_owned()
         });
@@ -1428,7 +1436,7 @@ fn run_adapter_command(
     combined.extend_from_slice(&output.stderr);
     let decoded = String::from_utf8_lossy(&combined).into_owned();
     Ok(CommandResult {
-        proof: AdapterExecutionProof {
+        proof: ConformanceExecutionProof {
             phase,
             command: argv
                 .iter()
@@ -1445,7 +1453,7 @@ fn run_adapter_command(
 
 fn synthetic_failed_command(phase: &'static str, cwd: &str, message: &str) -> CommandResult {
     CommandResult {
-        proof: AdapterExecutionProof {
+        proof: ConformanceExecutionProof {
             phase,
             command: Vec::new(),
             working_directory: cwd.to_string(),
@@ -1462,10 +1470,10 @@ fn finish_case_execution(
     collected_tests: Vec<String>,
     commands: Vec<CommandResult>,
     selector_passed: bool,
-) -> Result<AdapterExecution> {
+) -> Result<ConformanceExecution> {
     let failure = if let Some(command) = commands.iter().find(|command| !command.success) {
         Some(format!(
-            "adapter command failed with exit {}: {}",
+            "conformance command failed with exit {}: {}",
             command.proof.exit_code,
             output_tail(command.output.as_bytes(), 40)
         ))
@@ -1482,7 +1490,7 @@ fn finish_case_execution(
     } else {
         None
     };
-    Ok(AdapterExecution {
+    Ok(ConformanceExecution {
         proofs: commands.into_iter().map(|command| command.proof).collect(),
         collected_tests,
         failure,
@@ -1516,15 +1524,15 @@ fn ensure_path_inside_root(root: &Path, path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn record_from_adapter(
+fn record_from_conformance_report(
     root: &Path,
     language: &str,
     case: &ConformanceCase,
-    report: &AdapterReportIndex<'_>,
+    report: &ConformanceReportIndex<'_>,
     binding: Option<&ExecutionBinding>,
-    execution: Option<&AdapterExecution>,
+    execution: Option<&ConformanceExecution>,
 ) -> ConformanceResultRecord {
-    let Some(adapter) = report.find(&case.id) else {
+    let Some(report_record) = report.find(&case.id) else {
         return ConformanceResultRecord {
             case_id: case.id.clone(),
             language: language.to_string(),
@@ -1537,9 +1545,9 @@ fn record_from_adapter(
                 .unwrap_or_default(),
             attestation_sha256: None,
             status: ConformanceStatus::Failed,
-            error_code: Some("ACTION_ADAPTER_MISSING"),
+            error_code: Some("CONFORMANCE_REPORT_MISSING"),
             message: Some(format!(
-                "adapter report missing required case `{}`",
+                "conformance report missing required case `{}`",
                 case.id
             )),
             executions: execution
@@ -1553,21 +1561,23 @@ fn record_from_adapter(
         };
     };
     let mut errors = Vec::new();
-    if adapter.profile != case.profile {
+    if report_record.profile != case.profile {
         errors.push(format!(
-            "adapter profile `{}` does not match case profile `{}`",
-            adapter.profile, case.profile
+            "conformance profile `{}` does not match case profile `{}`",
+            report_record.profile, case.profile
         ));
     }
-    for evidence in &adapter.evidence {
-        if let Err(err) = validate_adapter_evidence(root, language, &adapter.case_id, evidence) {
+    for evidence in &report_record.evidence {
+        if let Err(err) =
+            validate_conformance_evidence(root, language, &report_record.case_id, evidence)
+        {
             errors.push(err.to_string());
         }
     }
     let Some(binding) = binding else {
         errors.push(format!(
-            "adapter record `{}` has no runner-owned execution binding",
-            adapter.case_id
+            "conformance record `{}` has no runner-owned execution binding",
+            report_record.case_id
         ));
         return ConformanceResultRecord {
             case_id: case.id.clone(),
@@ -1575,11 +1585,11 @@ fn record_from_adapter(
             profile: case.profile.clone(),
             case_sha256: case.sha256.clone(),
             selector: None,
-            evidence: adapter.evidence.clone(),
+            evidence: report_record.evidence.clone(),
             collected_tests: Vec::new(),
             attestation_sha256: None,
             status: ConformanceStatus::Failed,
-            error_code: Some("ACTION_ADAPTER_EXECUTION_BINDING_MISSING"),
+            error_code: Some("CONFORMANCE_REPORT_EXECUTION_BINDING_MISSING"),
             message: Some(errors.join("; ")),
             executions: Vec::new(),
             run_nonce: String::new(),
@@ -1589,7 +1599,7 @@ fn record_from_adapter(
             axon_revision: String::new(),
         };
     };
-    let report_evidence = adapter
+    let report_evidence = report_record
         .evidence
         .iter()
         .map(|evidence| evidence.ref_path.as_str())
@@ -1628,8 +1638,9 @@ fn record_from_adapter(
     if let Some(failure) = execution.and_then(|execution| execution.failure.as_ref()) {
         errors.push(failure.clone());
     }
-    let attestation_sha256 = execution
-        .map(|execution| adapter_attestation_sha256(case, language, binding, adapter, execution));
+    let attestation_sha256 = execution.map(|execution| {
+        conformance_attestation_sha256(case, language, binding, report_record, execution)
+    });
     if errors.is_empty() {
         ConformanceResultRecord {
             case_id: case.id.clone(),
@@ -1637,7 +1648,7 @@ fn record_from_adapter(
             profile: case.profile.clone(),
             case_sha256: case.sha256.clone(),
             selector: Some(binding.selector.clone()),
-            evidence: adapter.evidence.clone(),
+            evidence: report_record.evidence.clone(),
             collected_tests: execution
                 .map(|execution| execution.collected_tests.clone())
                 .unwrap_or_default(),
@@ -1661,7 +1672,7 @@ fn record_from_adapter(
             profile: case.profile.clone(),
             case_sha256: case.sha256.clone(),
             selector: Some(binding.selector.clone()),
-            evidence: adapter.evidence.clone(),
+            evidence: report_record.evidence.clone(),
             collected_tests: execution
                 .map(|execution| execution.collected_tests.clone())
                 .unwrap_or_default(),
@@ -1671,14 +1682,14 @@ fn record_from_adapter(
                 if execution.is_none()
                     || execution.is_some_and(|execution| execution.proofs.is_empty())
                 {
-                    "ACTION_ADAPTER_EXECUTION_MISSING"
+                    "CONFORMANCE_REPORT_EXECUTION_MISSING"
                 } else if execution
                     .and_then(|execution| execution.failure.as_ref())
                     .is_some()
                 {
-                    "ACTION_ADAPTER_EXECUTION_FAILED"
+                    "CONFORMANCE_REPORT_EXECUTION_FAILED"
                 } else {
-                    "ACTION_ADAPTER_FAILED"
+                    "CONFORMANCE_REPORT_FAILED"
                 },
             ),
             message: Some(errors.join("; ")),
@@ -1694,19 +1705,19 @@ fn record_from_adapter(
     }
 }
 
-fn adapter_attestation_sha256(
+fn conformance_attestation_sha256(
     case: &ConformanceCase,
     language: &str,
     binding: &ExecutionBinding,
-    adapter: &AdapterResultRecord,
-    execution: &AdapterExecution,
+    report_record: &ConformanceReportRecord,
+    execution: &ConformanceExecution,
 ) -> String {
     let payload = serde_json::json!({
         "case_id": case.id,
         "case_sha256": case.sha256,
         "language": language,
         "selector": binding.selector,
-        "evidence": adapter.evidence,
+        "evidence": report_record.evidence,
         "collected_tests": execution.collected_tests,
         "executions": execution.proofs,
         "execution_failure": execution.failure,
@@ -2634,13 +2645,13 @@ mod tests {
     }
 
     #[derive(Debug)]
-    struct StaticAdapterExecutor {
+    struct StaticConformanceExecutor {
         failure: Option<String>,
         include_proof: bool,
         collected_override: Option<Vec<String>>,
     }
 
-    impl StaticAdapterExecutor {
+    impl StaticConformanceExecutor {
         fn passing() -> Self {
             Self {
                 failure: None,
@@ -2676,12 +2687,16 @@ mod tests {
         }
     }
 
-    impl AdapterExecutor for StaticAdapterExecutor {
-        fn execute(&self, _root: &Path, binding: &ExecutionBinding) -> Result<AdapterExecution> {
-            Ok(AdapterExecution {
+    impl ConformanceExecutor for StaticConformanceExecutor {
+        fn execute(
+            &self,
+            _root: &Path,
+            binding: &ExecutionBinding,
+        ) -> Result<ConformanceExecution> {
+            Ok(ConformanceExecution {
                 proofs: self
                     .include_proof
-                    .then(|| AdapterExecutionProof {
+                    .then(|| ConformanceExecutionProof {
                         phase: "execution",
                         command: vec![binding.language.clone(), binding.selector.clone()],
                         working_directory: ".".to_string(),
@@ -2794,25 +2809,28 @@ expect:
     }
 
     #[test]
-    fn runner_validates_repository_adapter_reports() {
+    fn runner_validates_repository_conformance_reports() {
         let root = repository_root();
         for (language, report) in [
             (
                 "rust",
-                "sdk/conformance/runner/rust-action-adapter-report.json",
+                "sdk/conformance/runner/rust-runtime-conformance-report.json",
             ),
             (
                 "c_abi",
-                "sdk/conformance/runner/c-abi-action-adapter-report.json",
+                "sdk/conformance/runner/c-abi-runtime-conformance-report.json",
             ),
-            ("go", "sdk/conformance/runner/go-action-adapter-report.json"),
+            (
+                "go",
+                "sdk/conformance/runner/go-runtime-conformance-report.json",
+            ),
             (
                 "python",
-                "sdk/conformance/runner/python-action-adapter-report.json",
+                "sdk/conformance/runner/python-runtime-conformance-report.json",
             ),
             (
                 "node",
-                "sdk/conformance/runner/node-action-adapter-report.json",
+                "sdk/conformance/runner/node-runtime-conformance-report.json",
             ),
         ] {
             let report = root.join(report);
@@ -2820,9 +2838,9 @@ expect:
                 &root,
                 language,
                 Some(&report),
-                &StaticAdapterExecutor::passing(),
+                &StaticConformanceExecutor::passing(),
             )
-            .expect("runner validates adapter report");
+            .expect("runner validates conformance report");
 
             let required: Vec<_> = records
                 .iter()
@@ -2835,22 +2853,22 @@ expect:
                 required
                     .iter()
                     .all(|record| record.status == ConformanceStatus::Passed),
-                "{language} adapter report must pass every required case"
+                "{language} conformance report must pass every required case"
             );
         }
     }
 
     #[test]
-    fn runner_reports_missing_required_adapter_record() {
+    fn runner_reports_missing_required_conformance_record() {
         let root = TestDir::new();
         create_minimal_case_root(root.path(), "go");
-        let report = root.path().join("adapter.json");
+        let report = root.path().join("report.json");
         fs::write(
             &report,
             r#"{
   "schema_version": 2,
   "language": "go",
-  "adapter_kind": "unit_test",
+  "report_kind": "unit_test",
   "records": []
 }"#,
         )
@@ -2873,27 +2891,27 @@ expect:
             root.path(),
             "go",
             Some(&report),
-            &StaticAdapterExecutor::passing(),
+            &StaticConformanceExecutor::passing(),
         )
         .expect("runner manifest");
 
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].status, ConformanceStatus::Failed);
-        assert_eq!(records[0].error_code, Some("ACTION_ADAPTER_MISSING"));
+        assert_eq!(records[0].error_code, Some("CONFORMANCE_REPORT_MISSING"));
     }
 
     #[test]
-    fn runner_reports_failed_adapter_execution() {
+    fn runner_reports_failed_conformance_execution() {
         let root = TestDir::new();
         create_minimal_case_root(root.path(), "python");
-        let report = root.path().join("adapter.json");
+        let report = root.path().join("report.json");
         let evidence_hash = sha256_hex(b"def test_minimal():\n    assert True\n");
         fs::write(
             &report,
             format!(r#"{{
   "schema_version": 2,
   "language": "python",
-  "adapter_kind": "unit_test",
+  "report_kind": "unit_test",
   "records": [
     {{
       "case_id": "test/minimal",
@@ -2922,7 +2940,7 @@ expect:
             root.path(),
             "python",
             Some(&report),
-            &StaticAdapterExecutor::failing("forced command failure"),
+            &StaticConformanceExecutor::failing("forced command failure"),
         )
         .expect("runner manifest");
 
@@ -2930,7 +2948,7 @@ expect:
         assert_eq!(records[0].status, ConformanceStatus::Failed);
         assert_eq!(
             records[0].error_code,
-            Some("ACTION_ADAPTER_EXECUTION_FAILED")
+            Some("CONFORMANCE_REPORT_EXECUTION_FAILED")
         );
         assert!(records[0]
             .message
@@ -2940,16 +2958,16 @@ expect:
     }
 
     #[test]
-    fn runner_rejects_cross_language_adapter_evidence() {
+    fn runner_rejects_cross_language_conformance_evidence() {
         let root = TestDir::new();
         create_minimal_case_root(root.path(), "go");
-        let report = root.path().join("adapter.json");
+        let report = root.path().join("report.json");
         fs::write(
             &report,
             r#"{
   "schema_version": 2,
   "language": "go",
-  "adapter_kind": "unit_test",
+  "report_kind": "unit_test",
   "records": [
     {
       "case_id": "test/minimal",
@@ -2965,24 +2983,24 @@ expect:
             root.path(),
             "go",
             Some(&report),
-            &StaticAdapterExecutor::passing(),
+            &StaticConformanceExecutor::passing(),
         )
-        .expect_err("cross-language adapter evidence must fail");
+        .expect_err("cross-language conformance evidence must fail");
 
         assert!(err.to_string().contains("expected `go_test`"));
     }
 
     #[test]
-    fn runner_rejects_unknown_adapter_record_case() {
+    fn runner_rejects_unknown_conformance_record_case() {
         let root = TestDir::new();
         create_minimal_case_root(root.path(), "go");
-        let report = root.path().join("adapter.json");
+        let report = root.path().join("report.json");
         fs::write(
             &report,
             r#"{
   "schema_version": 2,
   "language": "go",
-  "adapter_kind": "unit_test",
+  "report_kind": "unit_test",
   "records": [
     {
       "case_id": "test/unknown",
@@ -2998,24 +3016,24 @@ expect:
             root.path(),
             "go",
             Some(&report),
-            &StaticAdapterExecutor::passing(),
+            &StaticConformanceExecutor::passing(),
         )
-        .expect_err("unknown adapter case must fail");
+        .expect_err("unknown conformance case must fail");
 
         assert!(err.to_string().contains("does not match any manifest case"));
     }
 
     #[test]
-    fn runner_rejects_language_undeclared_adapter_record_case() {
+    fn runner_rejects_language_undeclared_conformance_record_case() {
         let root = TestDir::new();
         create_minimal_case_root(root.path(), "rust");
-        let report = root.path().join("adapter.json");
+        let report = root.path().join("report.json");
         fs::write(
             &report,
             r#"{
   "schema_version": 2,
   "language": "go",
-  "adapter_kind": "unit_test",
+  "report_kind": "unit_test",
   "records": [
     {
       "case_id": "test/minimal",
@@ -3031,9 +3049,9 @@ expect:
             root.path(),
             "go",
             Some(&report),
-            &StaticAdapterExecutor::passing(),
+            &StaticConformanceExecutor::passing(),
         )
-        .expect_err("language-undeclared adapter case must fail");
+        .expect_err("language-undeclared conformance case must fail");
 
         assert!(err
             .to_string()
@@ -3048,14 +3066,14 @@ expect:
         let evidence = root.path().join("sdk/go/minimal_test.go");
         fs::write(&evidence, "package minimal\n").unwrap();
         let evidence_hash = sha256_hex(b"package minimal\n");
-        let report = root.path().join("adapter.json");
+        let report = root.path().join("report.json");
         fs::write(
             &report,
             format!(
                 r#"{{
   "schema_version": 2,
   "language": "go",
-  "adapter_kind": "unit_test",
+  "report_kind": "unit_test",
   "records": [{{
     "case_id": "test/minimal",
     "profile": "runtime_core",
@@ -3071,7 +3089,7 @@ expect:
             root.path(),
             "go",
             Some(&report),
-            &StaticAdapterExecutor::passing(),
+            &StaticConformanceExecutor::passing(),
         )
         .expect_err("committed status must be rejected");
 
@@ -3090,7 +3108,7 @@ expect:
             root.path(),
             "go",
             Some(&report),
-            &StaticAdapterExecutor::passing(),
+            &StaticConformanceExecutor::passing(),
         )
         .expect_err("reports must not provide execution commands");
 
@@ -3162,13 +3180,13 @@ expect:
             "package minimal\n",
         )
         .unwrap();
-        let report = root.path().join("adapter.json");
+        let report = root.path().join("report.json");
         fs::write(
             &report,
             r#"{
   "schema_version": 2,
   "language": "go",
-  "adapter_kind": "unit_test",
+  "report_kind": "unit_test",
   "records": [{
     "case_id": "test/minimal",
     "profile": "runtime_core",
@@ -3182,7 +3200,7 @@ expect:
             root.path(),
             "go",
             Some(&report),
-            &StaticAdapterExecutor::passing(),
+            &StaticConformanceExecutor::passing(),
         )
         .expect_err("mutated evidence must fail hash validation");
 
@@ -3190,7 +3208,7 @@ expect:
     }
 
     #[test]
-    fn runner_rejects_adapter_report_without_executor() {
+    fn runner_rejects_conformance_report_without_executor() {
         let root = TestDir::new();
         let report = create_executable_go_case(root.path());
 
@@ -3209,14 +3227,14 @@ expect:
             root.path(),
             "go",
             Some(&report),
-            &StaticAdapterExecutor::without_proof(),
+            &StaticConformanceExecutor::without_proof(),
         )
         .expect("runner result");
 
         assert_eq!(records[0].status, ConformanceStatus::Failed);
         assert_eq!(
             records[0].error_code,
-            Some("ACTION_ADAPTER_EXECUTION_MISSING")
+            Some("CONFORMANCE_REPORT_EXECUTION_MISSING")
         );
         assert!(records[0].executions.is_empty());
     }
@@ -3230,7 +3248,7 @@ expect:
             root.path(),
             "go",
             Some(&report),
-            &StaticAdapterExecutor::with_collected(&[]),
+            &StaticConformanceExecutor::with_collected(&[]),
         )
         .expect("runner result");
 
@@ -3272,7 +3290,7 @@ expect:
             root.path(),
             "go",
             Some(&report),
-            &StaticAdapterExecutor::with_collected(&["TestUnrelated"]),
+            &StaticConformanceExecutor::with_collected(&["TestUnrelated"]),
         )
         .expect("runner result");
 
@@ -3296,7 +3314,7 @@ expect:
             root.path(),
             "go",
             Some(&report),
-            &StaticAdapterExecutor::passing(),
+            &StaticConformanceExecutor::passing(),
         )
         .expect_err("unrelated selector must fail before execution");
 
@@ -3312,7 +3330,7 @@ expect:
             root.path(),
             "go",
             Some(&report),
-            &StaticAdapterExecutor::passing(),
+            &StaticConformanceExecutor::passing(),
         )
         .expect("runner result");
 
@@ -3346,38 +3364,57 @@ expect:
             selector: "TestMinimal".to_string(),
             evidence: vec!["sdk/go/minimal_test.go".to_string()],
         };
-        let adapter = AdapterResultRecord {
+        let report_record = ConformanceReportRecord {
             case_id: case.id.clone(),
             profile: case.profile.clone(),
-            evidence: vec![AdapterEvidence {
+            evidence: vec![ConformanceEvidence {
                 kind: "go_test".to_string(),
                 ref_path: binding.evidence[0].clone(),
                 sha256: "b".repeat(64),
             }],
             coverage: None,
         };
-        let execution = StaticAdapterExecutor::passing()
+        let execution = StaticConformanceExecutor::passing()
             .execute(Path::new("."), &binding)
             .unwrap();
-        let baseline = adapter_attestation_sha256(&case, "go", &binding, &adapter, &execution);
+        let baseline =
+            conformance_attestation_sha256(&case, "go", &binding, &report_record, &execution);
 
         let mut changed_case = case.clone();
         changed_case.sha256 = "c".repeat(64);
         assert_ne!(
             baseline,
-            adapter_attestation_sha256(&changed_case, "go", &binding, &adapter, &execution)
+            conformance_attestation_sha256(
+                &changed_case,
+                "go",
+                &binding,
+                &report_record,
+                &execution
+            )
         );
-        let mut changed_adapter = adapter.clone();
-        changed_adapter.evidence[0].sha256 = "d".repeat(64);
+        let mut changed_report_record = report_record.clone();
+        changed_report_record.evidence[0].sha256 = "d".repeat(64);
         assert_ne!(
             baseline,
-            adapter_attestation_sha256(&case, "go", &binding, &changed_adapter, &execution)
+            conformance_attestation_sha256(
+                &case,
+                "go",
+                &binding,
+                &changed_report_record,
+                &execution
+            )
         );
         let mut changed_execution = execution.clone();
         changed_execution.proofs[0].output_sha256 = "e".repeat(64);
         assert_ne!(
             baseline,
-            adapter_attestation_sha256(&case, "go", &binding, &adapter, &changed_execution)
+            conformance_attestation_sha256(
+                &case,
+                "go",
+                &binding,
+                &report_record,
+                &changed_execution
+            )
         );
     }
 
@@ -3451,14 +3488,14 @@ expect:
             b"package minimal\n\nimport \"testing\"\n\nfunc TestMinimal(t *testing.T) {}\n";
         fs::write(root.join(evidence_path), evidence).unwrap();
         write_execution_manifest(root, "go", "test/minimal", "TestMinimal", &[evidence_path]);
-        let report = root.join("adapter.json");
+        let report = root.join("report.json");
         fs::write(
             &report,
             format!(
                 r#"{{
   "schema_version": 2,
   "language": "go",
-  "adapter_kind": "unit_test",
+  "report_kind": "unit_test",
   "records": [{{
     "case_id": "test/minimal",
     "profile": "runtime_core",

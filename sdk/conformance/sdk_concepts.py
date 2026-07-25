@@ -13,11 +13,6 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-from edge_adapter_policy import (
-    DEFAULT_POLICY as EDGE_ADAPTER_POLICY,
-    load_json as load_edge_adapter_policy,
-    validate_policy as validate_edge_adapter_policy,
-)
 from sdk_public_surface_policy import (
     non_canonical_public_reason,
 )
@@ -433,12 +428,6 @@ def validate_schema(
 
     validate_provider_implementations(concepts, check_paths=check_paths)
     validate_provider_proofs(concepts, contracts, check_paths=check_paths)
-    validate_edge_adapter_policy(
-        load_edge_adapter_policy(EDGE_ADAPTER_POLICY),
-        concepts,
-        root=ROOT,
-        check_sources=False,
-    )
     return concepts
 
 

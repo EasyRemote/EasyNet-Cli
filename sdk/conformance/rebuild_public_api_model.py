@@ -10,11 +10,6 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from edge_adapter_policy import (
-    DEFAULT_POLICY as EDGE_ADAPTER_POLICY,
-    load_json as load_edge_adapter_policy,
-    validate_policy as validate_edge_adapter_policy,
-)
 from sdk_public_surface_policy import (
     non_canonical_public_reason,
 )
@@ -684,11 +679,6 @@ def main() -> int:
             }
         )
     refresh_provider_proof_implementations(model)
-    validate_edge_adapter_policy(
-        load_edge_adapter_policy(EDGE_ADAPTER_POLICY),
-        model,
-        root=ROOT,
-    )
     encoded = json.dumps(model, indent=2, sort_keys=False) + "\n"
     if args.write:
         MODEL.write_text(encoded, encoding="utf-8")

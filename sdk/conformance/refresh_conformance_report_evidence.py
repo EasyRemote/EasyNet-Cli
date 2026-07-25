@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Refresh derived source digests in SDK conformance adapter reports."""
+"""Refresh derived source digests in SDK conformance reports."""
 
 from __future__ import annotations
 
@@ -13,17 +13,17 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
 REPORT_DIRECTORY = Path("sdk/conformance/runner")
-REPORT_GLOB = "*-action-adapter-report.json"
+REPORT_GLOB = "*-runtime-conformance-report.json"
 
 
 class EvidenceRefreshError(ValueError):
-    """Raised when an adapter report cannot be refreshed safely."""
+    """Raised when a conformance report cannot be refreshed safely."""
 
 
 def report_paths(root: Path) -> list[Path]:
     paths = sorted((root / REPORT_DIRECTORY).glob(REPORT_GLOB))
     if not paths:
-        raise EvidenceRefreshError("no adapter reports found")
+        raise EvidenceRefreshError("no conformance reports found")
     return paths
 
 
@@ -31,13 +31,13 @@ def load_report(path: Path) -> dict[str, Any]:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
-        raise EvidenceRefreshError(f"read adapter report {path}: {error}") from error
+        raise EvidenceRefreshError(f"read conformance report {path}: {error}") from error
     if not isinstance(value, dict) or value.get("schema_version") != 2:
-        raise EvidenceRefreshError(f"invalid adapter report schema: {path}")
+        raise EvidenceRefreshError(f"invalid conformance report schema: {path}")
     if not isinstance(value.get("language"), str) or not value["language"]:
-        raise EvidenceRefreshError(f"adapter report language is required: {path}")
+        raise EvidenceRefreshError(f"conformance report language is required: {path}")
     if not isinstance(value.get("records"), list) or not value["records"]:
-        raise EvidenceRefreshError(f"adapter report records are required: {path}")
+        raise EvidenceRefreshError(f"conformance report records are required: {path}")
     return value
 
 
@@ -63,16 +63,16 @@ def refreshed_report(root: Path, path: Path) -> tuple[dict[str, Any], list[str]]
     stale: list[str] = []
     for record in report["records"]:
         if not isinstance(record, dict) or not isinstance(record.get("case_id"), str):
-            raise EvidenceRefreshError(f"adapter report record is invalid: {path}")
+            raise EvidenceRefreshError(f"conformance report record is invalid: {path}")
         evidence = record.get("evidence")
         if not isinstance(evidence, list) or not evidence:
             raise EvidenceRefreshError(
-                f"adapter report evidence is required: {path}: {record['case_id']}"
+                f"conformance report evidence is required: {path}: {record['case_id']}"
             )
         for item in evidence:
             if not isinstance(item, dict):
                 raise EvidenceRefreshError(
-                    f"adapter evidence is invalid: {path}: {record['case_id']}"
+                    f"conformance evidence is invalid: {path}: {record['case_id']}"
                 )
             source = evidence_path(root, path, item.get("ref_path"))
             actual = hashlib.sha256(source.read_bytes()).hexdigest()
@@ -100,14 +100,14 @@ def self_test() -> None:
         source = root / "sdk/go/example_test.go"
         source.parent.mkdir(parents=True)
         source.write_text("package sdk\n", encoding="utf-8")
-        report = root / REPORT_DIRECTORY / "go-action-adapter-report.json"
+        report = root / REPORT_DIRECTORY / "go-runtime-conformance-report.json"
         report.parent.mkdir(parents=True)
         report.write_text(
             json.dumps(
                 {
                     "schema_version": 2,
                     "language": "go",
-                    "adapter_kind": "unit_test",
+                    "report_kind": "unit_test",
                     "records": [
                         {
                             "case_id": "test/example",
@@ -128,7 +128,7 @@ def self_test() -> None:
         )
         stale = refresh(root, write=False)
         if stale != [
-            "sdk/conformance/runner/go-action-adapter-report.json:test/example:sdk/go/example_test.go"
+            "sdk/conformance/runner/go-runtime-conformance-report.json:test/example:sdk/go/example_test.go"
         ]:
             raise EvidenceRefreshError(f"unexpected check result: {stale}")
         refresh(root, write=True)
@@ -158,19 +158,19 @@ def main() -> int:
     try:
         if args.self_test:
             self_test()
-            print("adapter report evidence refresh self-test ok")
+            print("conformance report evidence refresh self-test ok")
             return 0
         stale = refresh(ROOT, write=args.write)
         if args.check and stale:
             for item in stale:
-                print(f"stale adapter evidence: {item}")
+                print(f"stale conformance evidence: {item}")
             return 1
         print(
-            "adapter report evidence refreshed" if args.write else "adapter report evidence is current"
+            "conformance report evidence refreshed" if args.write else "conformance report evidence is current"
         )
         return 0
     except EvidenceRefreshError as error:
-        print(f"refresh_adapter_report_evidence: {error}")
+        print(f"refresh_conformance_report_evidence: {error}")
         return 1
 
 

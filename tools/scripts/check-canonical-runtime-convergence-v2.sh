@@ -11,7 +11,6 @@ resolve_sdk_python_toolchain "$ROOT"
 PYTHON_BIN="$SDK_CONFORMANCE_PYTHON"
 MANIFEST="$ROOT/sdk/conformance/canonical-public-api.json"
 MATRIX="$ROOT/sdk/conformance/sdk-parity-matrix.json"
-EDGE_ADAPTER_POLICY="$ROOT/sdk/conformance/edge_adapter_policy.py"
 
 fail() {
   echo "canonical-runtime-convergence-v2: $*" >&2
@@ -8267,8 +8266,12 @@ for required in (
 PY
 }
 
-check_edge_adapter_policy_contract() {
-  "$PYTHON_BIN" "$EDGE_ADAPTER_POLICY" --manifest "$MANIFEST" >/dev/null
+check_retired_edge_adapter_policy_absence_contract() {
+  local policy_py="$ROOT/sdk/conformance/edge_adapter_policy.py"
+  local policy_json="$ROOT/sdk/conformance/edge-adapter-policy.v1.json"
+
+  [[ ! -e "$policy_py" ]] || fail "retired SDK edge-adapter policy script is still present"
+  [[ ! -e "$policy_json" ]] || fail "retired SDK edge-adapter policy manifest is still present"
 }
 
 check_daemon_tuple_route_contract() {
@@ -14864,7 +14867,6 @@ fi
 if [[ "${1:-}" == "--self-test" ]]; then
   tmp="$(mktemp -d "$ROOT/target/canonical-runtime-convergence-v2.XXXXXX")"
   trap 'rm -rf "$tmp"' EXIT
-  "$PYTHON_BIN" "$EDGE_ADAPTER_POLICY" --self-test >/dev/null
   cp "$MANIFEST" "$tmp/manifest.json"
   cp "$MATRIX" "$tmp/matrix.json"
   cp "$MATRIX" "$tmp/lifecycle-reference-drift.json"
@@ -21536,7 +21538,7 @@ EOF
   check_mission_runtime_meta_identity_schema_contract
   check_mission_orchestration_persistence_authority_contract
   check_mission_terminal_receipt_projection_contract
-  check_edge_adapter_policy_contract
+  check_retired_edge_adapter_policy_absence_contract
   check_sdk_product_neutrality_contract
   check_python_sdk_bytecode_index_contract
   check_daemon_tuple_route_contract
@@ -21759,7 +21761,7 @@ check_mission_dispatch_audit_authority_contract
 check_mission_runtime_meta_identity_schema_contract
 check_mission_orchestration_persistence_authority_contract
 check_mission_terminal_receipt_projection_contract
-check_edge_adapter_policy_contract
+check_retired_edge_adapter_policy_absence_contract
 check_sdk_product_neutrality_contract
 check_python_sdk_bytecode_index_contract
 check_daemon_tuple_route_contract

@@ -76,7 +76,7 @@ mod tests {
     #[test]
     fn feature_catalog_matches_shared_conformance_fixture() {
         let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("sdk/conformance/fixtures/feature-discovery.v5.json");
+            .join("sdk/conformance/fixtures/feature-discovery.v6.json");
         let fixture: Value =
             serde_json::from_slice(&std::fs::read(fixture_path).expect("read feature fixture"))
                 .expect("decode feature fixture");

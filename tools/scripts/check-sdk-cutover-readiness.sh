@@ -29,6 +29,20 @@ run_gate() {
   fi
 }
 
+check_retired_edge_adapter_policy_absence() {
+  local policy_script="$REPO_ROOT/sdk/conformance/edge_adapter_policy.py"
+  local policy_manifest="$REPO_ROOT/sdk/conformance/edge-adapter-policy.v1.json"
+
+  if [[ -e "$policy_script" ]]; then
+    echo "retired edge-adapter policy script still exists: $policy_script" >&2
+    return 1
+  fi
+  if [[ -e "$policy_manifest" ]]; then
+    echo "retired edge-adapter policy manifest still exists: $policy_manifest" >&2
+    return 1
+  fi
+}
+
 run_sdk_conformance_live_gates() {
   local live_results_dir="$1"
   local parity_languages="${EASYNET_SDK_PARITY_LANGUAGES:-${SDK_CONFORMANCE_LANGUAGES:-}}"
@@ -95,7 +109,7 @@ if [[ "${1:-}" == "--self-test" ]]; then
   run_gate "backend route-family coverage self-test" bash "$SELF_DIR/check-backend-route-family-coverage.sh" --self-test
   run_gate "SDK completion matrix self-test" bash "$SELF_DIR/check-sdk-completion-audit.sh" --self-test
   run_gate "SDK URA naming self-test" bash "$SELF_DIR/check-sdk-ura-naming.sh" --self-test
-  run_gate "released edge-adapter policy self-test" "$PYTHON_BIN" "$REPO_ROOT/sdk/conformance/edge_adapter_policy.py" --self-test
+  run_gate "retired edge-adapter policy absence self-test" check_retired_edge_adapter_policy_absence
   run_gate "canonical runtime convergence V2 self-test" bash "$SELF_DIR/check-canonical-runtime-convergence-v2.sh" --self-test
   run_gate "SDK product-neutrality syntax" bash -n "$SELF_DIR/check-sdk-product-neutrality.sh"
   run_gate "SDK conformance reports self-test" bash "$SELF_DIR/check-sdk-conformance-reports.sh" --self-test
@@ -188,7 +202,7 @@ run_gate "SDK scaffold" bash "$SELF_DIR/check-sdk-scaffold.sh" || status=1
 run_gate "SDK parity matrix" bash "$SELF_DIR/check-sdk-parity-matrix.sh" --self-test || status=1
 run_gate "SDK completion matrix" bash "$SELF_DIR/check-sdk-completion-audit.sh" --matrix-only || status=1
 run_gate "SDK canonical public API" bash "$SELF_DIR/check-sdk-canonical-public-api.sh" || status=1
-run_gate "released edge-adapter policy" "$PYTHON_BIN" "$REPO_ROOT/sdk/conformance/edge_adapter_policy.py" || status=1
+run_gate "retired edge-adapter policy absence" check_retired_edge_adapter_policy_absence || status=1
 run_gate "SDK product neutrality" bash "$SELF_DIR/check-sdk-product-neutrality.sh" || status=1
 run_sdk_conformance_live_gates "$CUTOVER_LIVE_RESULTS_DIR" || status=1
 run_gate "generic FFI ABI v6 exact surface" bash "$SELF_DIR/check-ffi-abi-v6-header.sh" || status=1

@@ -5,7 +5,6 @@ ROOT="${SDK_PRODUCT_NEUTRALITY_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.."
 cd "$ROOT"
 CONCEPTS="${SDK_CONCEPT_MANIFEST:-$ROOT/sdk/conformance/canonical-public-api.json}"
 CONCEPT_VALIDATOR="$ROOT/sdk/conformance/sdk_concepts.py"
-EDGE_ADAPTER_POLICY="$ROOT/sdk/conformance/edge_adapter_policy.py"
 source "$ROOT/sdk/conformance/python_toolchain.sh"
 source "$ROOT/sdk/conformance/toolchain_path.sh"
 resolve_sdk_toolchain_path "$ROOT"
@@ -107,8 +106,6 @@ for root in "${canonical_roots[@]}"; do
 done
 
 if [[ "${1:-}" == "--self-test" ]]; then
-  "$PYTHON_BIN" "$EDGE_ADAPTER_POLICY" --self-test >/dev/null \
-    || fail "released edge-adapter policy self-test failed"
   tmp="$(mktemp -d)"
   trap 'rm -rf "$tmp"' EXIT
   for root in "${canonical_roots[@]}"; do
@@ -241,8 +238,10 @@ PY
   exit 0
 fi
 
-"$PYTHON_BIN" "$EDGE_ADAPTER_POLICY" --manifest "$CONCEPTS" >/dev/null \
-  || fail "released edge-adapter policy validation failed"
+[[ ! -e "$ROOT/sdk/conformance/edge_adapter_policy.py" ]] \
+  || fail "retired edge-adapter policy script still exists"
+[[ ! -e "$ROOT/sdk/conformance/edge-adapter-policy.v1.json" ]] \
+  || fail "retired edge-adapter policy manifest still exists"
 
 retired_module_output="$(retired_product_sdk_module_violations "$ROOT")"
 if [[ -n "$retired_module_output" ]]; then

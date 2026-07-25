@@ -6,48 +6,48 @@ The repository ships a manifest runner as `cargo run -p
 sdk-conformance-runner`. It loads the shared cases from `../cases`, validates
 fixture and schema references, validates every referenced fixture through
 `../fixture-schema-bindings.json`, and emits machine-readable result records.
-This is the common integrity gate for every language adapter.
+This is the common integrity gate for every language implementation.
 
 `fixture-schema-bindings.json` is the closed fixture contract. Every
 `../fixtures/*.v4.json` file must appear exactly once and point at one
 `../../schemas/*.schema.json` file. The runner rejects missing bindings,
 duplicate bindings, missing fixtures, missing schemas, and fixture payloads that
-do not satisfy the bound schema before it considers a language action-adapter
+do not satisfy the bound schema before it considers a language runtime-conformance
 report.
 
-Each SDK facade may provide its own action adapter report, but it must consume
+Each SDK facade may provide its own runtime conformance report, but it must consume
 the same cases from `../cases`, the same fixtures from `../fixtures`, and emit
-equivalent machine-readable results. Pass the report with `--adapter-report` to
-turn manifest validation into a language action-adapter gate:
+equivalent machine-readable results. Pass the report with `--conformance-report` to
+turn manifest validation into a language runtime-conformance gate:
 
 ```bash
 cargo run -p sdk-conformance-runner -- \
   --language rust \
-  --adapter-report sdk/conformance/runner/rust-action-adapter-report.json
+  --conformance-report sdk/conformance/runner/rust-runtime-conformance-report.json
 
 cargo run -p sdk-conformance-runner -- \
   --language c_abi \
-  --adapter-report sdk/conformance/runner/c-abi-action-adapter-report.json
+  --conformance-report sdk/conformance/runner/c-abi-runtime-conformance-report.json
 
 cargo run -p sdk-conformance-runner -- \
   --language go \
-  --adapter-report sdk/conformance/runner/go-action-adapter-report.json
+  --conformance-report sdk/conformance/runner/go-runtime-conformance-report.json
 
 cargo run -p sdk-conformance-runner -- \
   --language python \
-  --adapter-report sdk/conformance/runner/python-action-adapter-report.json
+  --conformance-report sdk/conformance/runner/python-runtime-conformance-report.json
 
 cargo run -p sdk-conformance-runner -- \
   --language node \
-  --adapter-report sdk/conformance/runner/node-action-adapter-report.json
+  --conformance-report sdk/conformance/runner/node-runtime-conformance-report.json
 
 cargo run -p sdk-conformance-runner -- \
   --language java \
-  --adapter-report sdk/conformance/runner/java-action-adapter-report.json
+  --conformance-report sdk/conformance/runner/java-runtime-conformance-report.json
 
 cargo run -p sdk-conformance-runner -- \
   --language swift \
-  --adapter-report sdk/conformance/runner/swift-action-adapter-report.json
+  --conformance-report sdk/conformance/runner/swift-runtime-conformance-report.json
 ```
 
 Minimum live result record:
@@ -82,7 +82,7 @@ Minimum live result record:
 
 Skipped required cases block a `language-stable` claim.
 
-Adapter reports are schema-v2 coverage manifests, not test-result reports. They
+Runtime conformance reports are schema-v2 coverage manifests, not test-result reports. They
 contain no `status`; the schema rejects a committed status attestation. Each
 record maps a shared case to a test source and pins that source by SHA-256.
 `execution-manifest.json` is runner-owned and binds that same case to one exact
@@ -91,11 +91,11 @@ hash, proves the selector is declared in the bound source, collects the
 selector through the language test tool, then executes that exact collected
 test. Reports cannot supply or override selectors or commands.
 
-A required case without a report record fails as `ACTION_ADAPTER_MISSING`; a
+A required case without a report record fails as `CONFORMANCE_REPORT_MISSING`; a
 mismatched profile, invalid evidence scope, missing evidence, stale hash, or
 report/manifest evidence mismatch fails closed. Missing execution is
-`ACTION_ADAPTER_EXECUTION_MISSING`; an uncollected, multiply collected,
-unrelated, or failing selector is `ACTION_ADAPTER_EXECUTION_FAILED`. The
+`CONFORMANCE_REPORT_EXECUTION_MISSING`; an uncollected, multiply collected,
+unrelated, or failing selector is `CONFORMANCE_REPORT_EXECUTION_FAILED`. The
 emitted case SHA-256, evidence SHA-256, selector, collected test, command,
 working directory, exit code and command-output SHA-256 form one live result.
 The runner hashes those fields into `attestation_sha256`, so replacing any one
@@ -110,14 +110,14 @@ evidence is rejected. Evidence paths must also fall under the test-source roots
 covered by that language's fixed suite, such as `sdk/go/**/*_test.go` or
 `sdk/python/tests/test_*.py`.
 
-Every adapter consumes the generic runtime cases explicitly listed for its
+Every language implementation consumes the generic runtime cases explicitly listed for its
 language in `required_for`. The shared manifest contains no product profile
 cases. Product repositories own their workflow tests and prove that their local
 facades lower to generic Invocation, Addressing, stream, bidi, health and
 authority interfaces. Inline samples may remain as focused unit tests, but they
 do not replace the shared case-aware parity gate.
 
-The Go adapter collects and executes its fixed suite with the
-`runtime_direct` build tag because that downstream provider is an
+The Go conformance runner collects and executes its fixed suite with the
+`runtime_direct` build tag because that runtime-direct provider path is an
 explicit part of the Go runtime evidence set. The tag is applied identically to
 collection and execution and is included in each command attestation.
