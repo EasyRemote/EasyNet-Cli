@@ -194,39 +194,39 @@ import (
 )
 
 type cabiRuntimeSymbols struct {
-	abiVersion         unsafe.Pointer
-	lastErrorJSON      unsafe.Pointer
-	stringFree         unsafe.Pointer
-	daemonStart        unsafe.Pointer
-	daemonAttach       unsafe.Pointer
-	daemonDiscover     unsafe.Pointer
-	daemonStop         unsafe.Pointer
-	daemonDetach       unsafe.Pointer
-	daemonStatus       unsafe.Pointer
-	daemonOpenClient   unsafe.Pointer
-	shutdown           unsafe.Pointer
-	runtimeHealth      unsafe.Pointer
-	runtimeDiagnostics unsafe.Pointer
-	resolveDescriptor  unsafe.Pointer
-	invocationInvoke   unsafe.Pointer
-	invocationPrepare  unsafe.Pointer
-	signPrepared       unsafe.Pointer
-	signPreparedLocal  unsafe.Pointer
-	submitSignedHandle unsafe.Pointer
-	handleAwait        unsafe.Pointer
-	handleCancel       unsafe.Pointer
-	handleEvents       unsafe.Pointer
-	handleFree         unsafe.Pointer
-	preparedFree       unsafe.Pointer
-	signedFree         unsafe.Pointer
-	streamOpen         unsafe.Pointer
-	streamCancel       unsafe.Pointer
-	streamClose        unsafe.Pointer
-	bidiOpen           unsafe.Pointer
-	bidiSend           unsafe.Pointer
-	bidiCloseSend      unsafe.Pointer
-	bidiClose          unsafe.Pointer
-	bidiCancel         unsafe.Pointer
+	abiVersion            unsafe.Pointer
+	lastErrorJSON         unsafe.Pointer
+	stringFree            unsafe.Pointer
+	runtimeHostStart      unsafe.Pointer
+	runtimeHostAttach     unsafe.Pointer
+	runtimeHostDiscover   unsafe.Pointer
+	runtimeHostStop       unsafe.Pointer
+	runtimeHostDetach     unsafe.Pointer
+	runtimeHostStatus     unsafe.Pointer
+	runtimeHostOpenClient unsafe.Pointer
+	shutdown              unsafe.Pointer
+	runtimeHealth         unsafe.Pointer
+	runtimeDiagnostics    unsafe.Pointer
+	resolveDescriptor     unsafe.Pointer
+	invocationInvoke      unsafe.Pointer
+	invocationPrepare     unsafe.Pointer
+	signPrepared          unsafe.Pointer
+	signPreparedLocal     unsafe.Pointer
+	submitSignedHandle    unsafe.Pointer
+	handleAwait           unsafe.Pointer
+	handleCancel          unsafe.Pointer
+	handleEvents          unsafe.Pointer
+	handleFree            unsafe.Pointer
+	preparedFree          unsafe.Pointer
+	signedFree            unsafe.Pointer
+	streamOpen            unsafe.Pointer
+	streamCancel          unsafe.Pointer
+	streamClose           unsafe.Pointer
+	bidiOpen              unsafe.Pointer
+	bidiSend              unsafe.Pointer
+	bidiCloseSend         unsafe.Pointer
+	bidiClose             unsafe.Pointer
+	bidiCancel            unsafe.Pointer
 }
 
 // cabiRuntimeLifecycleTransport is the package-private native provider binding
@@ -296,14 +296,14 @@ func (t *cabiRuntimeLifecycleTransport) Start(ctx context.Context, configJSON []
 	}
 	var out C.uint64_t
 	code := int32(cabiWithCString(projected, func(cConfig *C.char) C.int32_t {
-		return C.runtime_cabi_call_host_start(t.symbols.daemonStart, cConfig, &out)
+		return C.runtime_cabi_call_host_start(t.symbols.runtimeHostStart, cConfig, &out)
 	}))
 	if code != 0 {
-		return nil, t.lastErrorOrCode(code, "C ABI daemon start failed")
+		return nil, t.lastErrorOrCode(code, "C ABI runtime host start failed")
 	}
 	handle := uint64(out)
 	if handle == 0 {
-		return nil, invalidCABIHandle("C ABI daemon start returned an invalid handle")
+		return nil, invalidCABIHandle("C ABI runtime host start returned an invalid handle")
 	}
 	handleID := strconv.FormatUint(handle, 10)
 	t.mu.Lock()
@@ -326,14 +326,14 @@ func (t *cabiRuntimeLifecycleTransport) Attach(ctx context.Context, optionsJSON 
 	}
 	var out C.uint64_t
 	code := int32(cabiWithCString(optionsJSON, func(cOptions *C.char) C.int32_t {
-		return C.runtime_cabi_call_host_attach(t.symbols.daemonAttach, cOptions, &out)
+		return C.runtime_cabi_call_host_attach(t.symbols.runtimeHostAttach, cOptions, &out)
 	}))
 	if code != 0 {
-		return nil, t.lastErrorOrCode(code, "C ABI daemon attach failed")
+		return nil, t.lastErrorOrCode(code, "C ABI runtime host attach failed")
 	}
 	handle := uint64(out)
 	if handle == 0 {
-		return nil, invalidCABIHandle("C ABI daemon attach returned an invalid handle")
+		return nil, invalidCABIHandle("C ABI runtime host attach returned an invalid handle")
 	}
 	handleID := strconv.FormatUint(handle, 10)
 	t.mu.Lock()
@@ -390,9 +390,9 @@ func (t *cabiRuntimeLifecycleTransport) Stop(ctx context.Context, handleID strin
 	if err != nil {
 		return nil, err
 	}
-	code := int32(C.runtime_cabi_call_host_stop(t.symbols.daemonStop, C.uint64_t(handle)))
+	code := int32(C.runtime_cabi_call_host_stop(t.symbols.runtimeHostStop, C.uint64_t(handle)))
 	if code != 0 {
-		return nil, t.lastErrorOrCode(code, "C ABI daemon stop failed")
+		return nil, t.lastErrorOrCode(code, "C ABI runtime host stop failed")
 	}
 	t.mu.Lock()
 	delete(t.handles, handleID)
@@ -465,7 +465,7 @@ func (t *cabiRuntimeLifecycleTransport) requireOpen(ctx context.Context) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.closed {
-		return invalidRuntimeClient("C ABI daemon transport is closed")
+		return invalidRuntimeClient("C ABI runtime host transport is closed")
 	}
 	return nil
 }
@@ -480,7 +480,7 @@ func (t *cabiRuntimeLifecycleTransport) requireRuntimeHostHandle(handleID string
 			Stage:     "cabi",
 			Retry:     RetryNever,
 			Retryable: false,
-			Message:   "daemon handle is not owned by this transport",
+			Message:   "runtime host handle is not owned by this transport",
 		}
 	}
 	return handle, nil
@@ -488,9 +488,9 @@ func (t *cabiRuntimeLifecycleTransport) requireRuntimeHostHandle(handleID string
 
 func (t *cabiRuntimeLifecycleTransport) statusForHandle(handleID string, handle uint64) ([]byte, error) {
 	var out *C.char
-	code := int32(C.runtime_cabi_call_host_status(t.symbols.daemonStatus, C.uint64_t(handle), &out))
+	code := int32(C.runtime_cabi_call_host_status(t.symbols.runtimeHostStatus, C.uint64_t(handle), &out))
 	if code != 0 {
-		return nil, t.lastErrorOrCode(code, "C ABI daemon status failed")
+		return nil, t.lastErrorOrCode(code, "C ABI runtime host status failed")
 	}
 	raw := cabiTakeCString(t.symbols.stringFree, out)
 	status, err := runtimeHostStatusFromCABI(handleID, raw)
@@ -503,18 +503,18 @@ func (t *cabiRuntimeLifecycleTransport) statusForHandle(handleID string, handle 
 func (t *cabiRuntimeLifecycleTransport) callRuntimeHostDiscover(optionsJSON []byte) ([]byte, error) {
 	var out *C.char
 	code := int32(cabiWithCString(optionsJSON, func(cOptions *C.char) C.int32_t {
-		return C.runtime_cabi_call_host_discover(t.symbols.daemonDiscover, cOptions, &out)
+		return C.runtime_cabi_call_host_discover(t.symbols.runtimeHostDiscover, cOptions, &out)
 	}))
 	if code != 0 {
-		return nil, t.lastErrorOrCode(code, "C ABI daemon discover failed")
+		return nil, t.lastErrorOrCode(code, "C ABI runtime host discover failed")
 	}
 	return cabiTakeCString(t.symbols.stringFree, out), nil
 }
 
 func (t *cabiRuntimeLifecycleTransport) detachCHandle(handle uint64) error {
-	code := int32(C.runtime_cabi_call_host_detach(t.symbols.daemonDetach, C.uint64_t(handle)))
+	code := int32(C.runtime_cabi_call_host_detach(t.symbols.runtimeHostDetach, C.uint64_t(handle)))
 	if code != 0 {
-		return t.lastErrorOrCode(code, "C ABI daemon detach failed")
+		return t.lastErrorOrCode(code, "C ABI runtime host detach failed")
 	}
 	return nil
 }
@@ -525,13 +525,13 @@ func (t *cabiRuntimeLifecycleTransport) lastErrorOrCode(code int32, operation st
 
 func (t *cabiRuntimeLifecycleTransport) openClientHandle(runtimeHostHandle uint64, profile string) (uint64, error) {
 	var out C.uint64_t
-	code := int32(C.runtime_cabi_call_host_open_client(t.symbols.daemonOpenClient, C.uint64_t(runtimeHostHandle), &out))
+	code := int32(C.runtime_cabi_call_host_open_client(t.symbols.runtimeHostOpenClient, C.uint64_t(runtimeHostHandle), &out))
 	if code != 0 {
-		return 0, t.lastErrorOrCode(code, "C ABI daemon open "+profile+" client failed")
+		return 0, t.lastErrorOrCode(code, "C ABI runtime host open "+profile+" client failed")
 	}
 	clientHandle := uint64(out)
 	if clientHandle == 0 {
-		return 0, invalidCABIHandle("C ABI daemon open " + profile + " returned an invalid client handle")
+		return 0, invalidCABIHandle("C ABI runtime host open " + profile + " returned an invalid client handle")
 	}
 	return clientHandle, nil
 }
@@ -1600,13 +1600,13 @@ func bindCABIRuntimeSymbols(library unsafe.Pointer) (cabiRuntimeSymbols, error) 
 		{"runtime_abi_version", &symbols.abiVersion},
 		{"runtime_last_error_json", &symbols.lastErrorJSON},
 		{"runtime_string_free", &symbols.stringFree},
-		{"runtime_host_start", &symbols.daemonStart},
-		{"runtime_host_attach", &symbols.daemonAttach},
-		{"runtime_host_discover", &symbols.daemonDiscover},
-		{"runtime_host_stop", &symbols.daemonStop},
-		{"runtime_host_detach", &symbols.daemonDetach},
-		{"runtime_host_status", &symbols.daemonStatus},
-		{"runtime_host_open_client", &symbols.daemonOpenClient},
+		{"runtime_host_start", &symbols.runtimeHostStart},
+		{"runtime_host_attach", &symbols.runtimeHostAttach},
+		{"runtime_host_discover", &symbols.runtimeHostDiscover},
+		{"runtime_host_stop", &symbols.runtimeHostStop},
+		{"runtime_host_detach", &symbols.runtimeHostDetach},
+		{"runtime_host_status", &symbols.runtimeHostStatus},
+		{"runtime_host_open_client", &symbols.runtimeHostOpenClient},
 		{"runtime_shutdown", &symbols.shutdown},
 		{"runtime_health", &symbols.runtimeHealth},
 		{"runtime_diagnostics", &symbols.runtimeDiagnostics},
@@ -1727,19 +1727,19 @@ func runtimeHostModeForCABI(value any) (string, error) {
 type cabiRuntimeHostMode string
 
 const (
-	cabiRuntimeHostWireEdge      cabiRuntimeHostMode = "device"
-	cabiRuntimeHostWireAuthority cabiRuntimeHostMode = "hub"
-	cabiRuntimeHostWireCombined  cabiRuntimeHostMode = "both"
+	cabiRuntimeHostWireRoleEdge      cabiRuntimeHostMode = "device"
+	cabiRuntimeHostWireRoleAuthority cabiRuntimeHostMode = "hub"
+	cabiRuntimeHostWireRoleCombined  cabiRuntimeHostMode = "both"
 )
 
 func cabiRuntimeHostModeFromCanonical(mode RuntimeMode) (cabiRuntimeHostMode, bool) {
 	switch mode {
 	case "edge":
-		return cabiRuntimeHostWireEdge, true
+		return cabiRuntimeHostWireRoleEdge, true
 	case "authority":
-		return cabiRuntimeHostWireAuthority, true
+		return cabiRuntimeHostWireRoleAuthority, true
 	case "combined":
-		return cabiRuntimeHostWireCombined, true
+		return cabiRuntimeHostWireRoleCombined, true
 	default:
 		return "", false
 	}
@@ -1752,7 +1752,7 @@ func cabiRuntimeHostModeFromWire(value any) (cabiRuntimeHostMode, error) {
 	}
 	wire := cabiRuntimeHostMode(strings.TrimSpace(mode))
 	switch wire {
-	case cabiRuntimeHostWireEdge, cabiRuntimeHostWireAuthority, cabiRuntimeHostWireCombined:
+	case cabiRuntimeHostWireRoleEdge, cabiRuntimeHostWireRoleAuthority, cabiRuntimeHostWireRoleCombined:
 		return wire, nil
 	default:
 		return "", invalidRuntimePayload("runtime host status mode must map to edge, authority, or combined", nil)
@@ -1761,11 +1761,11 @@ func cabiRuntimeHostModeFromWire(value any) (cabiRuntimeHostMode, error) {
 
 func (m cabiRuntimeHostMode) Canonical() RuntimeMode {
 	switch m {
-	case cabiRuntimeHostWireEdge:
+	case cabiRuntimeHostWireRoleEdge:
 		return "edge"
-	case cabiRuntimeHostWireAuthority:
+	case cabiRuntimeHostWireRoleAuthority:
 		return "authority"
-	case cabiRuntimeHostWireCombined:
+	case cabiRuntimeHostWireRoleCombined:
 		return "combined"
 	default:
 		return ""

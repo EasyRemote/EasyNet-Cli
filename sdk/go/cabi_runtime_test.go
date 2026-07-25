@@ -31,7 +31,7 @@ func TestCABIProviderReportsMissingLibrary(t *testing.T) {
 		t.Fatal("openCABIRuntimeLifecycleTransport succeeded for missing library")
 	}
 	if !IsCode(err, ErrTransport) {
-		t.Fatalf("missing C ABI daemon library error = %v, want %s", err, ErrTransport)
+		t.Fatalf("missing C ABI runtime host library error = %v, want %s", err, ErrTransport)
 	}
 }
 
