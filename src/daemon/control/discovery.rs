@@ -170,6 +170,56 @@ pub fn default_path() -> PathBuf {
     state_dir().join(CONTROL_JSON_FILENAME)
 }
 
+/// Resolve a local attach endpoint or explicit discovery path to `control.json`.
+///
+/// Runtime owner and descriptor-catalog readers use this helper instead of
+/// reconstructing `control.json` ad hoc. The input must be absolute: accepting
+/// relative paths would make daemon identity depend on the caller's current
+/// working directory.
+pub fn resolve_control_json_path(path: &Path) -> anyhow::Result<PathBuf> {
+    require_absolute_control_path(path, "control discovery attach path")?;
+    if path.file_name().and_then(|name| name.to_str()) == Some(CONTROL_JSON_FILENAME) {
+        return Ok(path.to_path_buf());
+    }
+    Ok(control_path_parent(path)?.join(CONTROL_JSON_FILENAME))
+}
+
+fn require_absolute_control_path(path: &Path, label: &str) -> anyhow::Result<()> {
+    if path.as_os_str().is_empty() {
+        anyhow::bail!("{label} must not be empty");
+    }
+    if !path.is_absolute() {
+        anyhow::bail!(
+            "{label} must be absolute; relative paths would inherit process cwd: {}",
+            path.display()
+        );
+    }
+    Ok(())
+}
+
+fn control_path_parent(path: &Path) -> anyhow::Result<&Path> {
+    require_absolute_control_path(path, "control discovery path")?;
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "control discovery path {} has no parent directory",
+                path.display()
+            )
+        })
+}
+
+fn control_path_file_name(path: &Path) -> anyhow::Result<&std::ffi::OsStr> {
+    path.file_name()
+        .filter(|name| !name.is_empty())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "control discovery path {} has no file name component",
+                path.display()
+            )
+        })
+}
+
 /// Read and parse `~/.easynet/control.json`. Returns `Ok(None)` if
 /// the file doesn't exist; returns `Err` for any parse failure (the
 /// file existing but unreadable is an operator-visible problem, not
@@ -191,9 +241,8 @@ pub fn read(path: &Path) -> anyhow::Result<Option<ControlDiscovery>> {
 /// permission contract independent of umask and avoids readers
 /// observing partial JSON during daemon Ready updates.
 pub fn write(path: &Path, disc: &ControlDiscovery) -> anyhow::Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
+    let parent = control_path_parent(path)?;
+    std::fs::create_dir_all(parent)?;
     let bytes = serde_json::to_vec_pretty(disc)?;
     write_atomic(path, &bytes)?;
     Ok(())
@@ -203,11 +252,8 @@ pub fn write(path: &Path, disc: &ControlDiscovery) -> anyhow::Result<()> {
 fn write_atomic(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let file_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or(CONTROL_JSON_FILENAME);
+    let parent = control_path_parent(path)?;
+    let file_name = control_path_file_name(path)?.to_string_lossy();
     let counter = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
     let tmp = parent.join(format!(".{file_name}.{}.{counter}.tmp", std::process::id()));
     let mut file = std::fs::OpenOptions::new()
@@ -227,11 +273,8 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
 
 #[cfg(not(unix))]
 fn write_atomic(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let file_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or(CONTROL_JSON_FILENAME);
+    let parent = control_path_parent(path)?;
+    let file_name = control_path_file_name(path)?.to_string_lossy();
     let counter = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
     let tmp = parent.join(format!(".{file_name}.{}.{counter}.tmp", std::process::id()));
     std::fs::write(&tmp, bytes)?;
@@ -306,6 +349,48 @@ mod tests {
         let p = dir.join(CONTROL_JSON_FILENAME);
         let got = read(&p).unwrap();
         assert!(got.is_none());
+    }
+
+    #[test]
+    fn resolve_control_json_path_accepts_explicit_absolute_discovery_file() {
+        let dir = unique_tmp();
+        let path = dir.join(CONTROL_JSON_FILENAME);
+
+        let resolved = resolve_control_json_path(&path).expect("absolute control.json path");
+
+        assert_eq!(resolved, path);
+    }
+
+    #[test]
+    fn resolve_control_json_path_maps_absolute_endpoint_to_sibling_discovery_file() {
+        let dir = unique_tmp();
+        let endpoint = dir.join("daemon.sock");
+
+        let resolved = resolve_control_json_path(&endpoint).expect("absolute endpoint path");
+
+        assert_eq!(resolved, dir.join(CONTROL_JSON_FILENAME));
+    }
+
+    #[test]
+    fn resolve_control_json_path_rejects_relative_endpoint_before_cwd_lookup() {
+        let error = resolve_control_json_path(Path::new("daemon.sock"))
+            .expect_err("relative endpoint must not resolve through cwd");
+
+        assert!(
+            error.to_string().contains("must be absolute"),
+            "unexpected error: {error:#}"
+        );
+    }
+
+    #[test]
+    fn write_rejects_relative_control_json_before_cwd_tmp_file() {
+        let error = write(Path::new(CONTROL_JSON_FILENAME), &sample())
+            .expect_err("relative control.json must not write through cwd");
+
+        assert!(
+            error.to_string().contains("must be absolute"),
+            "unexpected error: {error:#}"
+        );
     }
 
     #[test]

@@ -3727,6 +3727,7 @@ import sys
 from pathlib import Path
 
 text = Path(sys.argv[1]).read_text(encoding="utf-8")
+production = text.split("\n#[cfg(test)]", 1)[0]
 
 def item_with_attrs(kind: str, name: str) -> tuple[str, str]:
     pattern = (
@@ -3768,9 +3769,20 @@ for retired in (
     "backward compat over the frames",
     "ignored compatibility data",
     "historical default",
+    'unwrap_or_else(|| Path::new("."))',
 ):
-    if retired in text:
+    if retired in production:
         raise SystemExit(f"control_discovery_schema:retired_compat:{retired}")
+for required in (
+    "pub fn resolve_control_json_path(path: &Path) -> anyhow::Result<PathBuf>",
+    "fn require_absolute_control_path(path: &Path, label: &str) -> anyhow::Result<()>",
+    "relative paths would inherit process cwd",
+    "fn control_path_parent(path: &Path) -> anyhow::Result<&Path>",
+    "fn control_path_file_name(path: &Path) -> anyhow::Result<&std::ffi::OsStr>",
+    "let parent = control_path_parent(path)?",
+):
+    if required not in production:
+        raise SystemExit(f"control_discovery_schema:path_boundary_missing:{required}")
 for required in (
     "control_discovery_rejects_unknown_fields",
     "unknown field `retired_attach_hint`",
@@ -3779,6 +3791,8 @@ for required in (
     "unknown field `retired_version`",
     "malformed_control_json_is_a_hard_error_not_silent_none",
     "read_missing_file_returns_none_not_error",
+    "resolve_control_json_path_rejects_relative_endpoint_before_cwd_lookup",
+    "write_rejects_relative_control_json_before_cwd_tmp_file",
 ):
     if required not in text:
         raise SystemExit(f"control_discovery_schema:missing:{required}")
@@ -10177,6 +10191,24 @@ if "runtime_owner_ura_from_session(session).ok()" in resolve_body:
     raise SystemExit("ffi_descriptor_runtime_owner:runtime_owner_error_collapsed")
 if ".map_err(DescriptorResolutionError::runtime_owner_unavailable)" not in resolve_body:
     raise SystemExit("ffi_descriptor_runtime_owner:runtime_owner_typed_error_mapping_missing")
+owner = re.search(
+    r"fn runtime_owner_ura_from_session\([^)]*\)\s*->\s*std::result::Result<String,\s*String>\s*\{(?P<body>.*?)\n\}\n\n/// Binds unsigned native-runtime calls",
+    text,
+    re.S,
+)
+if owner is None:
+    raise SystemExit("ffi_descriptor_runtime_owner:owner_function_missing")
+owner_body = owner.group("body")
+if "resolve_control_json_path(" not in owner_body:
+    raise SystemExit("ffi_descriptor_runtime_owner:shared_control_discovery_path_helper_missing")
+for retired in (
+    'unwrap_or_else(|| std::path::Path::new("."))',
+    'unwrap_or_else(|| Path::new("."))',
+    ".parent()\n",
+    f".join(crate::daemon::control::discovery::CONTROL_JSON_FILENAME)",
+):
+    if retired in owner_body:
+        raise SystemExit(f"ffi_descriptor_runtime_owner:retired_control_path_fallback:{retired}")
 if "RemoteSystemInvocationIssuer::root_plan(" in resolve_body:
     raise SystemExit("ffi_descriptor_runtime_owner:remote_probe_inline_plan")
 if "invoke_remote_target)" in resolve_body or ".and_then(remote_invoke::invoke_remote_target)" in resolve_body:
@@ -10258,6 +10290,7 @@ for required_test in (
     "runtime owner failure must not expose custody implementation details",
     "runtime_descriptor_resolver_does_not_remote_probe_realm_catalog_miss",
     "runtime_descriptor_resolver_rejects_ability_owner_mismatch_before_catalog_lookup",
+    "runtime_owner_resolution_rejects_relative_control_endpoint_before_cwd_lookup",
     "descriptor_resolution_errors_project_canonical_runtime_codes",
 ):
     if required_test not in text:

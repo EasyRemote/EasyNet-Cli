@@ -1702,18 +1702,9 @@ fn runtime_owner_ura_from_session(
     session: &crate::ffi::client::handle::ClientSession,
 ) -> std::result::Result<String, String> {
     let session_control_path = PathBuf::from(&session.control_path);
-    let control_path = if session_control_path
-        .file_name()
-        .and_then(|name| name.to_str())
-        == Some(crate::daemon::control::discovery::CONTROL_JSON_FILENAME)
-    {
-        session_control_path
-    } else {
-        session_control_path
-            .parent()
-            .unwrap_or_else(|| std::path::Path::new("."))
-            .join(crate::daemon::control::discovery::CONTROL_JSON_FILENAME)
-    };
+    let control_path =
+        crate::daemon::control::discovery::resolve_control_json_path(&session_control_path)
+            .map_err(|error| format!("resolve control discovery path: {error}"))?;
     let discovery = crate::daemon::control::discovery::read(&control_path)
         .map_err(|error| format!("read control discovery {}: {error}", control_path.display()))?
         .ok_or_else(|| {
@@ -9136,6 +9127,23 @@ mod tests {
             "easynet:///r/localhost"
         )));
         assert!(descriptor_ref.ends_with("!read"));
+    }
+
+    #[cfg(feature = "axon-pb")]
+    #[test]
+    fn runtime_owner_resolution_rejects_relative_control_endpoint_before_cwd_lookup() {
+        let session = crate::ffi::client::handle::ClientSession::with_control_path_only(
+            "daemon.sock".to_string(),
+            Some("/tmp/offline-daemon.sock".to_string()),
+        );
+
+        let error = runtime_owner_ura_from_session(&session)
+            .expect_err("relative control endpoint must not resolve through cwd");
+
+        assert!(
+            error.contains("resolve control discovery path") && error.contains("must be absolute"),
+            "unexpected runtime owner error: {error}"
+        );
     }
 
     #[cfg(feature = "axon-pb")]
