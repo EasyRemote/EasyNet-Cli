@@ -15,6 +15,10 @@ pub enum AbilityControlPlaneError {
     /// The canonical descriptor aggregate rejected a daemon import row.
     #[error("ability descriptor construction failed: {reason}")]
     DescriptorConstruction { reason: String },
+    /// A control-plane registration reached descriptor materialization without
+    /// the manifest that owns the public contract.
+    #[error("ability {ability:?} control-plane registration requires a manifest before descriptor materialization")]
+    MissingManifest { ability: String },
     /// Descriptor version was supplied as an empty or whitespace-only string.
     #[error("ability descriptor version must be non-empty")]
     EmptyDescriptorVersion,

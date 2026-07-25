@@ -492,7 +492,7 @@ mod tests {
             "easynet:///r/default/agent/u.mentor",
             CallMode::Rpc,
             AdmissionAction::Invoke,
-            Some(&manifest),
+            &manifest,
         )
         .unwrap();
         assert_eq!(descriptor.version, "2.0.0");

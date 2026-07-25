@@ -835,53 +835,40 @@ impl AbilityDescriptor {
         }
     }
 
-    /// Normalize one daemon registry row and its optional persistence manifest
-    /// into the governed descriptor aggregate.
+    /// Normalize one daemon registry row and its persistence manifest into the
+    /// governed descriptor aggregate.
     ///
-    /// A missing manifest is not interpreted as open access: the synthesized
-    /// descriptor is scoped to its owner on both caller and subject axes. A
-    /// present manifest contributes version, schemas, access allow/deny rules,
-    /// and description exactly once at this import boundary.
+    /// The manifest is mandatory at this boundary: descriptor publication is
+    /// provider-backed and must not synthesize a schema-less owner-only
+    /// descriptor from execution rows alone. The manifest contributes version,
+    /// schemas, access allow/deny rules, and description exactly once at this
+    /// import boundary.
     pub fn from_registry_manifest(
         registry_ability: impl Into<String>,
         owner_ura: impl Into<String>,
         call_mode: CallMode,
         admission_action: AdmissionAction,
-        manifest: Option<&crate::daemon::ability::manifest::AbilityManifest>,
+        manifest: &crate::daemon::ability::manifest::AbilityManifest,
     ) -> Result<Self, DescriptorError> {
         let registry_ability = registry_ability.into();
         let owner_ura = owner_ura.into();
         let public_name =
             crate::core::ura::descriptor_public_ability_name(&owner_ura, &registry_ability);
 
-        let visibility = manifest
-            .map(crate::daemon::ability::manifest::AbilityManifest::access)
-            .map(|access| visibility_from_manifest(access.visibility))
-            .unwrap_or(Visibility::Scoped);
+        let access = manifest.access();
+        let visibility = visibility_from_manifest(access.visibility);
         let mut descriptor =
             Self::new(public_name, owner_ura.clone(), visibility, admission_action)?
                 .with_call_mode(call_mode);
-
-        match manifest {
-            Some(manifest) => {
-                let access = manifest.access();
-                descriptor = descriptor
-                    .with_version(manifest.descriptor_version())?
-                    .with_description(manifest.description())
-                    .with_input_schema(manifest.input_schema().clone())
-                    .with_scope_subjects(ScopeRule::Any)
-                    .with_scope_agents(scope_agents_from_manifest(&access))
-                    .with_denied_agents(access.deny_callers.unwrap_or_default());
-                if let Some(output_schema) = manifest.output_schema() {
-                    descriptor = descriptor.with_output_schema(output_schema.clone());
-                }
-            }
-            None => {
-                let owner_only = ScopeRule::OnlyMatching(vec![owner_ura]);
-                descriptor = descriptor
-                    .with_scope_subjects(owner_only.clone())
-                    .with_scope_agents(owner_only);
-            }
+        descriptor = descriptor
+            .with_version(manifest.descriptor_version())?
+            .with_description(manifest.description())
+            .with_input_schema(manifest.input_schema().clone())
+            .with_scope_subjects(ScopeRule::Any)
+            .with_scope_agents(scope_agents_from_manifest(&access))
+            .with_denied_agents(access.deny_callers.unwrap_or_default());
+        if let Some(output_schema) = manifest.output_schema() {
+            descriptor = descriptor.with_output_schema(output_schema.clone());
         }
         Ok(descriptor)
     }
@@ -1476,24 +1463,6 @@ mod tests {
     }
 
     #[test]
-    fn missing_manifest_normalizes_to_owner_only_scope() {
-        let owner = "easynet:///r/acme/device/dev-1";
-        let descriptor = AbilityDescriptor::from_registry_manifest(
-            "fs.read",
-            owner,
-            CallMode::Rpc,
-            AdmissionAction::Invoke,
-            None,
-        )
-        .unwrap();
-        assert_eq!(descriptor.visibility, Visibility::Scoped);
-        assert_eq!(descriptor.call_mode(), CallMode::Rpc);
-        assert!(descriptor.is_visible_to(owner, owner));
-        assert!(!descriptor.is_visible_to("easynet:///r/acme/agent/alice", owner));
-        assert!(!descriptor.is_visible_to(owner, "easynet:///r/acme/resource/other"));
-    }
-
-    #[test]
     fn manifest_normalization_projects_schema_mode_and_access_once() {
         let manifest = crate::daemon::ability::manifest::AbilityManifest::new(
             "quote",
@@ -1516,7 +1485,7 @@ mod tests {
             "easynet:///r/acme/agent/alice.mentor",
             CallMode::Stream,
             AdmissionAction::Invoke,
-            Some(&manifest),
+            &manifest,
         )
         .unwrap();
 

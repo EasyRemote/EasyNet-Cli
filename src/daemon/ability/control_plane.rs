@@ -220,6 +220,9 @@ impl<'a> AbilityControlPlaneRegistrationPlan<'a> {
                 ability: public_ability_name.clone(),
             },
         )?;
+        let manifest = manifest.ok_or_else(|| AbilityControlPlaneError::MissingManifest {
+            ability: ability.clone(),
+        })?;
         ensure_manifest_descriptor_version_matches(&descriptor_version, manifest)?;
         let mut descriptor = AbilityDescriptor::from_registry_manifest(
             &ability,
@@ -231,13 +234,6 @@ impl<'a> AbilityControlPlaneRegistrationPlan<'a> {
         .map_err(|error| AbilityControlPlaneError::DescriptorConstruction {
             reason: error.to_string(),
         })?;
-        if manifest.is_none() && descriptor.version != descriptor_version {
-            descriptor = descriptor
-                .with_version(&descriptor_version)
-                .map_err(|error| AbilityControlPlaneError::DescriptorConstruction {
-                    reason: error.to_string(),
-                })?;
-        }
         if let Some(hints) = descriptor_hints {
             descriptor = descriptor.with_hints(hints).with_call_mode(call_mode);
         }
@@ -703,11 +699,8 @@ fn manifest_descriptor_version(
 
 fn ensure_manifest_descriptor_version_matches(
     registration_version: &str,
-    manifest: Option<&crate::daemon::ability::manifest::AbilityManifest>,
+    manifest: &crate::daemon::ability::manifest::AbilityManifest,
 ) -> Result<(), AbilityControlPlaneError> {
-    let Some(manifest) = manifest else {
-        return Ok(());
-    };
     let manifest_version = manifest.descriptor_version();
     if manifest_version == registration_version {
         return Ok(());
@@ -730,10 +723,15 @@ mod tests {
         ability: impl Into<String>,
         call_mode: CallMode,
         admission_action: AdmissionAction,
-        manifest: Option<&'a crate::daemon::ability::manifest::AbilityManifest>,
+        manifest_override: Option<&'a crate::daemon::ability::manifest::AbilityManifest>,
         authority_scope: AuthorityScope,
         runtime_env: RuntimeEnv,
     ) -> AbilityControlPlaneRegistration<'a> {
+        let ability = ability.into();
+        let manifest = match manifest_override {
+            Some(manifest) => Some(manifest),
+            None => Some(test_manifest_for(&ability)),
+        };
         AbilityControlPlaneRegistration::new(
             ability,
             call_mode,
@@ -743,6 +741,20 @@ mod tests {
             runtime_env,
             AbilityImplSource::NativeDaemon,
         )
+    }
+
+    fn test_manifest_for(
+        ability: &str,
+    ) -> &'static crate::daemon::ability::manifest::AbilityManifest {
+        let public_name = ability.rsplit('.').next().unwrap_or(ability);
+        Box::leak(Box::new(
+            crate::daemon::ability::manifest::AbilityManifest::new(
+                public_name,
+                format!("test manifest for {ability}"),
+                json!({"type": "object"}),
+            )
+            .unwrap(),
+        ))
     }
 
     #[test]
@@ -769,6 +781,29 @@ mod tests {
             .get("fs.read")
             .expect("single record lookup is unambiguous")
             .is_some());
+    }
+
+    #[test]
+    fn register_rejects_missing_manifest_before_descriptor_materialization() {
+        let mut registry = AbilityControlPlaneRegistry::default();
+        let error = registry
+            .register_registration(AbilityControlPlaneRegistration::new(
+                "fs.read",
+                CallMode::Rpc,
+                AdmissionAction::Read,
+                None,
+                AuthorityScope::new("device", LOCAL_DEVICE_URA).unwrap(),
+                RuntimeEnv::daemon_native(),
+                AbilityImplSource::NativeDaemon,
+            ))
+            .expect_err("control-plane materialization must be provider-backed");
+
+        assert_eq!(
+            error,
+            AbilityControlPlaneError::MissingManifest {
+                ability: "fs.read".to_string()
+            }
+        );
     }
 
     #[test]
@@ -916,6 +951,22 @@ mod tests {
 
     #[test]
     fn register_version_keeps_same_ability_versions_distinct() {
+        let manifest_v1 = crate::daemon::ability::manifest::AbilityManifest::new(
+            "read",
+            "read local file",
+            json!({"type": "object"}),
+        )
+        .unwrap()
+        .with_descriptor_version("1.0.0")
+        .unwrap();
+        let manifest_v2 = crate::daemon::ability::manifest::AbilityManifest::new(
+            "read",
+            "read local file",
+            json!({"type": "object"}),
+        )
+        .unwrap()
+        .with_descriptor_version("2.0.0")
+        .unwrap();
         let mut registry = AbilityControlPlaneRegistry::default();
         registry
             .register_registration(
@@ -923,7 +974,7 @@ mod tests {
                     "fs.read",
                     CallMode::Rpc,
                     AdmissionAction::Read,
-                    None,
+                    Some(&manifest_v1),
                     AuthorityScope::new("device", LOCAL_DEVICE_URA).unwrap(),
                     RuntimeEnv::new("env:v1").unwrap(),
                     AbilityImplSource::NativeDaemon,
@@ -937,7 +988,7 @@ mod tests {
                     "fs.read",
                     CallMode::Rpc,
                     AdmissionAction::Read,
-                    None,
+                    Some(&manifest_v2),
                     AuthorityScope::new("device", LOCAL_DEVICE_URA).unwrap(),
                     RuntimeEnv::new("env:v2").unwrap(),
                     AbilityImplSource::NativeDaemon,

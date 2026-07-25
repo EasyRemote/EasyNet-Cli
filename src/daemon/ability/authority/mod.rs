@@ -914,7 +914,7 @@ mod tests {
                 "easynet:///r/default/agent/u.mentor",
                 CallMode::Rpc,
                 crate::daemon::ability::descriptors::AdmissionAction::Invoke,
-                Some(&base),
+                &base,
             )
             .unwrap();
         let restricted_descriptor =
@@ -923,7 +923,7 @@ mod tests {
                 "easynet:///r/default/agent/u.mentor",
                 CallMode::Rpc,
                 crate::daemon::ability::descriptors::AdmissionAction::Invoke,
-                Some(&restricted),
+                &restricted,
             )
             .unwrap();
         let scope =

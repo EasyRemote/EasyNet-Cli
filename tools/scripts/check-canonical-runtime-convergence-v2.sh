@@ -21,6 +21,10 @@ check_catalog_schema_projection_boundary_contract() {
   bash "$ROOT/tools/scripts/check-catalog-schema-projection-boundary.sh" >/dev/null
 }
 
+check_control_plane_manifest_materialization_boundary_contract() {
+  bash "$ROOT/tools/scripts/check-control-plane-manifest-materialization-boundary.sh" >/dev/null
+}
+
 check_mcp_reflection_async_bridge_contract() {
   local cli_root="${1:-$ROOT}"
   local reflective="$cli_root/src/daemon/ability/builtins/integrations/mcp/reflective_registry.rs"
@@ -22934,6 +22938,7 @@ EOF
   check_terminal_lifecycle_args_contract
   check_session_failure_wire_facts_contract
   check_catalog_schema_projection_boundary_contract
+  check_control_plane_manifest_materialization_boundary_contract
   check_active_source_contract
   check_sdk_root_runtime_description_contract
   check_sdk_doc_product_vocabulary_contract
@@ -23397,6 +23402,7 @@ check_python_sdk_runtime_receipt_projection_contract
 check_node_sdk_runtime_receipt_projection_contract
 check_swift_sdk_runtime_receipt_projection_contract
 check_catalog_schema_projection_boundary_contract
+check_control_plane_manifest_materialization_boundary_contract
 check_sdk_receipt_profile_convergence_contract
 check_sdk_session_authority_binding_facade_contract
 check_sdk_provider_managed_signing_custody_contract
