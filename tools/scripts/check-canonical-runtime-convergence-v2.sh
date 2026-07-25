@@ -10811,17 +10811,19 @@ check_canonical_ability_catalog_projection_contract() {
   local descriptor="$cli_root/src/daemon/ability/descriptors/surface.rs"
   local store="$cli_root/src/daemon/federation/read_model/hub_published_abilities.rs"
   local meta="$cli_root/src/daemon/ability/builtins/governance/meta.rs"
+  local catalog_meta="$cli_root/src/daemon/ability/catalog/catalog_metadata.rs"
   local ffi_invocation="$cli_root/src/ffi/invocation/mod.rs"
   local cli_catalog="$cli_root/src/cli/daemon_client/ability_catalog.rs"
   local cli_ability="$cli_root/src/cli/commands/groups/ability.rs"
   [[ -f "$descriptor" ]] || fail "AbilityDescriptor source is missing: $descriptor"
   [[ -f "$store" ]] || fail "hub-published ability store is missing: $store"
   [[ -f "$meta" ]] || fail "meta.list_abilities source is missing: $meta"
+  [[ -f "$catalog_meta" ]] || fail "catalog metadata source is missing: $catalog_meta"
   [[ -f "$ffi_invocation" ]] || fail "FFI invocation source is missing: $ffi_invocation"
   [[ -f "$cli_catalog" ]] || fail "CLI ability catalogue client is missing: $cli_catalog"
   [[ -f "$cli_ability" ]] || fail "CLI ability command source is missing: $cli_ability"
 
-  "$PYTHON_BIN" - "$descriptor" "$store" "$meta" "$ffi_invocation" "$cli_catalog" "$cli_ability" <<'PY'
+  "$PYTHON_BIN" - "$descriptor" "$store" "$meta" "$catalog_meta" "$ffi_invocation" "$cli_catalog" "$cli_ability" <<'PY'
 import re
 import sys
 from pathlib import Path
@@ -10829,9 +10831,10 @@ from pathlib import Path
 descriptor = Path(sys.argv[1]).read_text(encoding="utf-8")
 store = Path(sys.argv[2]).read_text(encoding="utf-8")
 meta = Path(sys.argv[3]).read_text(encoding="utf-8")
-ffi = Path(sys.argv[4]).read_text(encoding="utf-8")
-cli_catalog = Path(sys.argv[5]).read_text(encoding="utf-8")
-cli_ability = Path(sys.argv[6]).read_text(encoding="utf-8")
+catalog_meta = Path(sys.argv[4]).read_text(encoding="utf-8")
+ffi = Path(sys.argv[5]).read_text(encoding="utf-8")
+cli_catalog = Path(sys.argv[6]).read_text(encoding="utf-8")
+cli_ability = Path(sys.argv[7]).read_text(encoding="utf-8")
 
 descriptor_production = descriptor.split("\n#[cfg(test)]\nmod tests", 1)[0]
 production_store = store.split("\n#[cfg(test)]\nmod tests", 1)[0]
@@ -10849,6 +10852,29 @@ if "descriptor_ref_derivation_fails_closed_for_corrupt_identity" not in descript
     raise SystemExit("ability_descriptor:descriptor_ref_fail_closed_test_missing")
 if "descriptor_wire_projection_fails_closed_for_corrupt_identity" not in descriptor:
     raise SystemExit("ability_descriptor:wire_projection_fail_closed_test_missing")
+inventory = re.search(
+    r"pub fn system_ability_contract_inventory_for_voice_assembly\([^)]*\)\s*->\s*Vec<SystemAbilityContract>\s*\{(?P<body>.*?)\n\}\n\n/// Voice static contracts",
+    catalog_meta,
+    re.S,
+)
+if inventory is None:
+    raise SystemExit("system_ability_contract_inventory:body_missing")
+inventory_body = inventory.group("body")
+for required, code in (
+    ("panic!(\"read system ability contract", "read_failure_not_terminal"),
+    ("panic!(\"parse system ability contract", "parse_failure_not_terminal"),
+    ("resolve system ability contract path", "path_resolution_failure_not_terminal"),
+    ("assert_eq!(\n            path,\n            expected_path,", "path_mismatch_not_terminal"),
+):
+    if required not in inventory_body:
+        raise SystemExit(f"system_ability_contract_inventory:{code}")
+for forbidden, code in (
+    ("let Ok(body) = std::fs::read_to_string(&path) else {\n            continue;\n        };", "read_error_silent_skip"),
+    ("let Ok(contract) = super::ability_toml::parse_ability_contract_toml(&body) else {\n            continue;\n        };", "parse_error_silent_skip"),
+    ("let Ok(expected_path) = super::try_system_ability_descriptor_path(&contract.name) else {\n            continue;\n        };", "path_error_silent_skip"),
+):
+    if forbidden in inventory_body:
+        raise SystemExit(f"system_ability_contract_inventory:{code}")
 if "entries: BTreeMap<String, AbilityDescriptor>" not in production_store:
     raise SystemExit("hub_published_store:entries_not_canonical_descriptor")
 if "entries: BTreeMap<String, HubAbilityEntry>" in production_store:
@@ -17148,6 +17174,7 @@ EOF
   fi
   mkdir -p "$tmp/cli-opaque-hub-catalog/src/daemon/federation/read_model"
   mkdir -p "$tmp/cli-opaque-hub-catalog/src/daemon/ability/descriptors"
+  mkdir -p "$tmp/cli-opaque-hub-catalog/src/daemon/ability/catalog"
   mkdir -p "$tmp/cli-opaque-hub-catalog/src/daemon/ability/builtins/governance"
   mkdir -p "$tmp/cli-opaque-hub-catalog/src/ffi/invocation"
   mkdir -p "$tmp/cli-opaque-hub-catalog/src/cli/daemon_client"
@@ -17162,6 +17189,27 @@ impl AbilityDescriptor {
         axon_sdk::invocation::canonical_ability_descriptor_ref("legacy").ok()
     }
 }
+EOF
+  cat >"$tmp/cli-opaque-hub-catalog/src/daemon/ability/catalog/catalog_metadata.rs" <<'EOF'
+pub fn system_ability_contract_inventory_for_voice_assembly(
+    voice_assembly: VoiceAssemblyEvidence,
+) -> Vec<SystemAbilityContract> {
+    let mut contracts = BTreeMap::new();
+    for path in super::iter_system_ability_descriptor_paths() {
+        let Ok(body) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(contract) = super::ability_toml::parse_ability_contract_toml(&body) else {
+            continue;
+        };
+        let Ok(expected_path) = super::try_system_ability_descriptor_path(&contract.name) else {
+            continue;
+        };
+    }
+    contracts.into_values().collect()
+}
+
+/// Voice static contracts
 EOF
   cat >"$tmp/cli-opaque-hub-catalog/src/daemon/federation/read_model/hub_published_abilities.rs" <<'EOF'
 use std::collections::BTreeMap;
@@ -22551,6 +22599,7 @@ EOF
     fail "self-test expected control frame schema compatibility gate to fail"
   fi
   mkdir -p "$tmp/descriptor-wire-identity-fallback-legacy/src/daemon/ability/descriptors" \
+    "$tmp/descriptor-wire-identity-fallback-legacy/src/daemon/ability/catalog" \
     "$tmp/descriptor-wire-identity-fallback-legacy/src/daemon/federation/read_model" \
     "$tmp/descriptor-wire-identity-fallback-legacy/src/daemon/ability/builtins/governance" \
     "$tmp/descriptor-wire-identity-fallback-legacy/src/ffi/invocation" \
@@ -22582,6 +22631,27 @@ mod tests {
     fn descriptor_ref_derivation_fails_closed_for_corrupt_identity() {}
     fn descriptor_wire_projection_fails_closed_for_corrupt_identity() {}
 }
+EOF
+  cat >"$tmp/descriptor-wire-identity-fallback-legacy/src/daemon/ability/catalog/catalog_metadata.rs" <<'EOF'
+pub fn system_ability_contract_inventory_for_voice_assembly(
+    voice_assembly: VoiceAssemblyEvidence,
+) -> Vec<SystemAbilityContract> {
+    let mut contracts = BTreeMap::new();
+    for path in super::iter_system_ability_descriptor_paths() {
+        let Ok(body) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(contract) = super::ability_toml::parse_ability_contract_toml(&body) else {
+            continue;
+        };
+        let Ok(expected_path) = super::try_system_ability_descriptor_path(&contract.name) else {
+            continue;
+        };
+    }
+    contracts.into_values().collect()
+}
+
+/// Voice static contracts
 EOF
   touch "$tmp/descriptor-wire-identity-fallback-legacy/src/daemon/federation/read_model/hub_published_abilities.rs" \
     "$tmp/descriptor-wire-identity-fallback-legacy/src/daemon/ability/builtins/governance/meta.rs" \

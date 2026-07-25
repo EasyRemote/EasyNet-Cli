@@ -177,25 +177,37 @@ pub fn system_ability_contract_inventory_for_voice_assembly(
         .map(|contract| (contract.name.clone(), contract))
         .collect::<BTreeMap<_, _>>();
     for path in super::iter_system_ability_descriptor_paths() {
-        let Ok(body) = std::fs::read_to_string(&path) else {
+        let body = std::fs::read_to_string(&path).unwrap_or_else(|error| {
+            panic!("read system ability contract {}: {error}", path.display())
+        });
+        let contract =
+            super::ability_toml::parse_ability_contract_toml(&body).unwrap_or_else(|error| {
+                panic!("parse system ability contract {}: {error}", path.display())
+            });
+        let expected_path = super::try_system_ability_descriptor_path(&contract.name)
+            .unwrap_or_else(|error| {
+                panic!(
+                    "resolve system ability contract path for {:?} from {}: {error}",
+                    contract.name,
+                    path.display()
+                )
+            });
+        assert_eq!(
+            path,
+            expected_path,
+            "system ability contract {:?} is stored at {}, expected {}",
+            contract.name,
+            path.display(),
+            expected_path.display()
+        );
+        // Voice capability state is an assembly fact. Its canonical
+        // contract is parsed from this same TOML and projected once by
+        // `voice_ability_contract_inventory`; do not collide that
+        // projection with the file's unassembled Seam baseline.
+        if voice_contracts.contains_key(&contract.name) {
             continue;
-        };
-        let Ok(contract) = super::ability_toml::parse_ability_contract_toml(&body) else {
-            continue;
-        };
-        let Ok(expected_path) = super::try_system_ability_descriptor_path(&contract.name) else {
-            continue;
-        };
-        if path == expected_path {
-            // Voice capability state is an assembly fact. Its canonical
-            // contract is parsed from this same TOML and projected once by
-            // `voice_ability_contract_inventory`; do not collide that
-            // projection with the file's unassembled Seam baseline.
-            if voice_contracts.contains_key(&contract.name) {
-                continue;
-            }
-            insert_canonical_contract(&mut contracts, contract);
         }
+        insert_canonical_contract(&mut contracts, contract);
     }
     for descriptor in published_system_abilities() {
         let name = descriptor.name.clone();
