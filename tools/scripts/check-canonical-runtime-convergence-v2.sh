@@ -12263,6 +12263,45 @@ for required in (
 PY
 }
 
+check_plugin_runtime_state_constructor_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local runtime_manager="$cli_root/src/daemon/plugins/runtime_manager.rs"
+  [[ -f "$runtime_manager" ]] || fail "plugin runtime manager source is missing: ${runtime_manager#$cli_root/}"
+
+  "$PYTHON_BIN" - "$runtime_manager" <<'PY'
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+production = text.split("\n#[cfg(test)]", 1)[0]
+start = production.find("impl PluginRuntimeState {")
+end = production.find("/// Daemon-owned plugin runtime manager.", start)
+if start < 0 or end < 0:
+    raise SystemExit("plugin_runtime_state_constructor:impl_section_missing")
+body = production[start:end]
+for required in (
+    "fn from_parts(",
+    "fn from_load_report(",
+    "Self::from_index_with_planner(index, PluginLoadPlanner::current())",
+    "Self::from_parts(index, planner, Vec::new())",
+    "Self::from_load_report(report, PluginLoadPlanner::current())",
+    "let (index, index_errors) = report.into_parts();",
+):
+    if required not in body:
+        raise SystemExit(f"plugin_runtime_state_constructor:missing:{required}")
+snapshot_literal = "Self {\n            index,\n            load_plan,\n            index_errors,\n        }"
+if body.count(snapshot_literal) != 1:
+    raise SystemExit("plugin_runtime_state_constructor:multiple_snapshot_literals")
+for retired in (
+    "let load_plan = PluginLoadPlanner::current().plan(&index);\n        Self {",
+):
+    if retired in body.replace("\r\n", "\n"):
+        raise SystemExit(f"plugin_runtime_state_constructor:retired_hand_assembly:{retired}")
+if "plugin_runtime_state_constructors_share_canonical_snapshot_projection" not in text:
+    raise SystemExit("plugin_runtime_state_constructor:missing_regression_test")
+PY
+}
+
 check_retired_browser_mock_surface_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local descriptor_dir="$cli_root/ability-descriptors/system/device_control"
@@ -18008,6 +18047,41 @@ EOF
   if ( CLI_ROOT="$tmp/cli-remote-desktop-contract-alias"; check_remote_desktop_contract_boundary_contract ) >/dev/null 2>&1; then
     fail "self-test expected remote-desktop retired transport alias gate to fail"
   fi
+  mkdir -p "$tmp/plugin-runtime-state-legacy/src/daemon/plugins"
+  cat >"$tmp/plugin-runtime-state-legacy/src/daemon/plugins/runtime_manager.rs" <<'EOF'
+pub struct PluginRuntimeState {
+    index: PluginPackageIndex,
+    load_plan: PluginLoadPlan,
+    index_errors: Vec<PluginPackageIndexError>,
+}
+
+impl PluginRuntimeState {
+    pub fn from_index(index: PluginPackageIndex) -> Self {
+        let load_plan = PluginLoadPlanner::current().plan(&index);
+        Self {
+            index,
+            load_plan,
+            index_errors: Vec::new(),
+        }
+    }
+
+    pub fn load_default() -> Result<Self> {
+        let report = PluginPackageIndex::load_default_resilient()?;
+        let (index, index_errors) = report.into_parts();
+        let load_plan = PluginLoadPlanner::current().plan(&index);
+        Ok(Self {
+            index,
+            load_plan,
+            index_errors,
+        })
+    }
+}
+
+/// Daemon-owned plugin runtime manager.
+EOF
+  if ( CLI_ROOT="$tmp/plugin-runtime-state-legacy"; check_plugin_runtime_state_constructor_contract ) >/dev/null 2>&1; then
+    fail "self-test expected plugin runtime state constructor gate to fail"
+  fi
   mkdir -p "$tmp/cli-browser-mock/src/daemon/ability/builtins/device_control" \
     "$tmp/cli-browser-mock/ability-descriptors/system/device_control" \
     "$tmp/cli-browser-mock/src/daemon/ability/catalog" \
@@ -23329,6 +23403,7 @@ EOF
   check_plugin_sidecar_helper_matrix_contract
   check_plugin_schema_rejection_vocabulary_contract
   check_plugin_metadata_lookup_fail_closed_contract
+  check_plugin_runtime_state_constructor_contract
   check_retired_browser_mock_surface_contract
   check_ability_deploy_product_neutrality_contract
   check_device_ability_mutation_target_contract
@@ -23571,6 +23646,7 @@ check_cli_device_show_projection_error_contract
 check_plugin_sidecar_helper_matrix_contract
 check_plugin_schema_rejection_vocabulary_contract
 check_plugin_metadata_lookup_fail_closed_contract
+check_plugin_runtime_state_constructor_contract
 check_remote_desktop_contract_boundary_contract
 check_retired_browser_mock_surface_contract
 check_ability_deploy_product_neutrality_contract
