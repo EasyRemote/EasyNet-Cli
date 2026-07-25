@@ -14,9 +14,9 @@ from easynet_sdk import (
 )
 from easynet_sdk.providers.runtime.control import (
     _CONTROL_IPC_VERSION,
-    _ControlDaemonIdentity,
     _ControlDiscovery,
     _ControlIpcClient,
+    _ControlRuntimeHostIdentity,
     _IpcVersionRange,
     _read_control_discovery,
 )
@@ -49,11 +49,11 @@ class ControlIpcTests(unittest.TestCase):
         self.assertEqual(discovery.socket_path, f"{tmp}/control.sock")
         self.assertEqual(discovery.invocation_endpoint, f"{tmp}/daemon.sock")
         self.assertEqual(
-            discovery.daemon_identity,
-            _ControlDaemonIdentity(
+            discovery.runtime_host_identity,
+            _ControlRuntimeHostIdentity(
                 mode="device",
                 realm="localhost",
-                node_id="node-1",
+                runtime_instance_id="node-1",
             ),
         )
         self.assertEqual(discovery.supported_ipc_versions, _IpcVersionRange(1, 1))

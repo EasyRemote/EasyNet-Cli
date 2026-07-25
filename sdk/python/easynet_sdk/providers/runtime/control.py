@@ -22,6 +22,7 @@ _CONTROL_BOOT_STATUS_ABILITY = "system.watch_boot"
 _CONTROL_FRAME_TYPES = {"subscribe", "cancel"}
 _CONTROL_STATE_DIR_NAME = ".easy" + "net"
 _RAW_RUNTIME_HOST_IDENTITY_FIELD = "daemon_identity"
+_RAW_RUNTIME_INSTANCE_ID_FIELD = "node_id"
 _RAW_RUNTIME_HOST_VERSION_FIELD = "daemon_version"
 
 
@@ -51,27 +52,33 @@ class _IpcVersionRange:
 
 
 @dataclass(frozen=True)
-class _ControlDaemonIdentity:
+class _ControlRuntimeHostIdentity:
     """Runtime-host identity fact advertised by control discovery."""
 
     mode: str
     realm: str
-    node_id: str = ""
+    runtime_instance_id: str = ""
 
     @classmethod
-    def from_mapping(cls, value: object) -> "_ControlDaemonIdentity":
+    def from_mapping(cls, value: object) -> "_ControlRuntimeHostIdentity":
         if not isinstance(value, Mapping):
-            raise _invalid_control("daemon_identity must be an object")
-        identity_unknown = sorted(set(value).difference({"mode", "realm", "node_id"}))
+            raise _invalid_control("runtime host identity projection must be an object")
+        identity_unknown = sorted(
+            set(value).difference({"mode", "realm", _RAW_RUNTIME_INSTANCE_ID_FIELD})
+        )
         if identity_unknown:
             raise _invalid_control(
-                "daemon_identity contains unknown fields: "
+                "runtime host identity projection contains unknown fields: "
                 + ", ".join(identity_unknown)
             )
         return cls(
             mode=_required_string(value, "mode"),
             realm=_required_string(value, "realm"),
-            node_id=_optional_string(value.get("node_id"), "node_id") or "",
+            runtime_instance_id=_optional_string(
+                value.get(_RAW_RUNTIME_INSTANCE_ID_FIELD),
+                _RAW_RUNTIME_INSTANCE_ID_FIELD,
+            )
+            or "",
         )
 
 
@@ -82,7 +89,7 @@ class _ControlDiscovery:
     socket_path: str = ""
     pipe_name: str = ""
     invocation_endpoint: str = ""
-    daemon_identity: Optional[_ControlDaemonIdentity] = None
+    runtime_host_identity: Optional[_ControlRuntimeHostIdentity] = None
     pid: int = 0
     runtime_host_version: str = ""
     supported_ipc_versions: _IpcVersionRange = field(
@@ -115,10 +122,13 @@ class _ControlDiscovery:
                 raise _invalid_control(f"control discovery {field_name} is required")
         if "capability_flags" not in decoded or decoded.get("capability_flags") is None:
             raise _invalid_control("control discovery capability_flags is required")
-        daemon_identity = None
-        if "daemon_identity" in decoded and decoded.get("daemon_identity") is not None:
-            daemon_identity = _ControlDaemonIdentity.from_mapping(
-                decoded.get("daemon_identity")
+        runtime_host_identity = None
+        if (
+            _RAW_RUNTIME_HOST_IDENTITY_FIELD in decoded
+            and decoded.get(_RAW_RUNTIME_HOST_IDENTITY_FIELD) is not None
+        ):
+            runtime_host_identity = _ControlRuntimeHostIdentity.from_mapping(
+                decoded.get(_RAW_RUNTIME_HOST_IDENTITY_FIELD)
             )
         flags = decoded.get("capability_flags")
         if not isinstance(flags, list) or not all(isinstance(item, str) for item in flags):
@@ -146,7 +156,7 @@ class _ControlDiscovery:
                 decoded.get("invocation_endpoint"), "invocation_endpoint"
             )
             or "",
-            daemon_identity=daemon_identity,
+            runtime_host_identity=runtime_host_identity,
             pid=pid,
             runtime_host_version=runtime_host_version,
             supported_ipc_versions=_IpcVersionRange.from_mapping(

@@ -66,8 +66,8 @@ func TestControlDiscoveryRuntimeConnectorReadsInvocationEndpoint(t *testing.T) {
 	reader := &memoryControlDiscoveryReader{
 		discovery: controlDiscovery{
 			socketPath:         "/tmp/control.sock",
-			invocationEndpoint: "unix:///tmp/discovered-daemon.sock",
-			daemonVersion:      "0.91.30",
+			invocationEndpoint: "unix:///tmp/discovered-runtime.sock",
+			runtimeHostVersion: "0.91.30",
 			capabilityFlags:    []string{"invocation", "stream"},
 		},
 	}
@@ -87,7 +87,7 @@ func TestControlDiscoveryRuntimeConnectorReadsInvocationEndpoint(t *testing.T) {
 	if connection.State() != ConnectionReady {
 		t.Fatalf("state = %s", connection.State())
 	}
-	if connection.Endpoint().Endpoint != "unix:///tmp/discovered-daemon.sock" ||
+	if connection.Endpoint().Endpoint != "unix:///tmp/discovered-runtime.sock" ||
 		connection.Endpoint().ControlPath != "/tmp/default-control.json" {
 		t.Fatalf("endpoint = %#v", connection.Endpoint())
 	}

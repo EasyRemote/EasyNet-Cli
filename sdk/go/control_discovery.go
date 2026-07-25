@@ -12,44 +12,48 @@ import (
 
 const defaultControlDiscoveryPath = ".easynet/control.json"
 
-// IpcVersionRange is the daemon control-plane discovery version range.
+// IpcVersionRange is the runtime-host control-plane discovery version range.
 type IpcVersionRange struct {
 	Min int `json:"min"`
 	Max int `json:"max"`
 }
 
-// controlDiscovery is the local daemon control.json projection.
+// controlDiscovery is the local runtime-host control.json projection.
 //
 // It is discovery data only. Invocation wire encoding, signing, routing, and
 // Axon protocol semantics stay behind the RuntimeTransport selected by
 // RuntimeConnection handshake.
 type controlDiscovery struct {
-	socketPath           string          `json:"socket_path,omitempty"`
-	pipeName             string          `json:"pipe_name,omitempty"`
-	invocationEndpoint   string          `json:"invocation_endpoint,omitempty"`
-	pid                  int             `json:"pid,omitempty"`
-	daemonVersion        string          `json:"daemon_version,omitempty"`
-	supportedIPCVersions IpcVersionRange `json:"supported_ipc_versions,omitempty"`
-	capabilityFlags      []string        `json:"capability_flags,omitempty"`
-	pagesPort            int             `json:"pages_port,omitempty"`
+	socketPath           string
+	pipeName             string
+	invocationEndpoint   string
+	pid                  int
+	runtimeHostVersion   string
+	supportedIPCVersions IpcVersionRange
+	capabilityFlags      []string
+	pagesPort            int
 }
 
 type controlDiscoveryJSON struct {
-	SocketPath           *string                `json:"socket_path,omitempty"`
-	PipeName             *string                `json:"pipe_name,omitempty"`
-	InvocationEndpoint   *string                `json:"invocation_endpoint,omitempty"`
-	DaemonIdentity       *controlDaemonIdentity `json:"daemon_identity,omitempty"`
-	PID                  *int                   `json:"pid,omitempty"`
-	DaemonVersion        *string                `json:"daemon_version,omitempty"`
-	SupportedIPCVersions *IpcVersionRange       `json:"supported_ipc_versions,omitempty"`
-	CapabilityFlags      *[]string              `json:"capability_flags,omitempty"`
-	PagesPort            *int                   `json:"pages_port,omitempty"`
+	SocketPath           *string                               `json:"socket_path,omitempty"`
+	PipeName             *string                               `json:"pipe_name,omitempty"`
+	InvocationEndpoint   *string                               `json:"invocation_endpoint,omitempty"`
+	RuntimeHostIdentity  *controlRuntimeHostIdentityProjection `json:"daemon_identity,omitempty"`
+	PID                  *int                                  `json:"pid,omitempty"`
+	RuntimeHostVersion   *string                               `json:"daemon_version,omitempty"`
+	SupportedIPCVersions *IpcVersionRange                      `json:"supported_ipc_versions,omitempty"`
+	CapabilityFlags      *[]string                             `json:"capability_flags,omitempty"`
+	PagesPort            *int                                  `json:"pages_port,omitempty"`
 }
 
-type controlDaemonIdentity struct {
-	Mode   string  `json:"mode"`
-	Realm  string  `json:"realm"`
-	NodeID *string `json:"node_id,omitempty"`
+// controlRuntimeHostIdentityProjection isolates current provider wire keys
+// from the SDK domain model. The provider discovery file still spells this
+// object as daemon_identity/node_id; SDK internals treat it as a runtime-host
+// identity with a runtime instance id.
+type controlRuntimeHostIdentityProjection struct {
+	Mode              string  `json:"mode"`
+	Realm             string  `json:"realm"`
+	RuntimeInstanceID *string `json:"node_id,omitempty"`
 }
 
 func (d *controlDiscovery) UnmarshalJSON(raw []byte) error {
@@ -65,7 +69,7 @@ func (d *controlDiscovery) UnmarshalJSON(raw []byte) error {
 	if wire.PID == nil || *wire.PID <= 0 {
 		return fmt.Errorf("control discovery pid is required")
 	}
-	if wire.DaemonVersion == nil || *wire.DaemonVersion == "" {
+	if wire.RuntimeHostVersion == nil || *wire.RuntimeHostVersion == "" {
 		return fmt.Errorf("control discovery daemon_version is required")
 	}
 	if wire.SupportedIPCVersions == nil ||
@@ -89,14 +93,14 @@ func (d *controlDiscovery) UnmarshalJSON(raw []byte) error {
 	d.pipeName = stringPointerValue(wire.PipeName)
 	d.invocationEndpoint = stringPointerValue(wire.InvocationEndpoint)
 	d.pid = *wire.PID
-	d.daemonVersion = *wire.DaemonVersion
+	d.runtimeHostVersion = *wire.RuntimeHostVersion
 	d.supportedIPCVersions = *wire.SupportedIPCVersions
 	d.capabilityFlags = append([]string(nil), (*wire.CapabilityFlags)...)
 	d.pagesPort = intPointerValue(wire.PagesPort)
 	return nil
 }
 
-// controlDiscoveryReader supplies daemon discovery facts to runtime connectors.
+// controlDiscoveryReader supplies runtime-host discovery facts to runtime connectors.
 type controlDiscoveryReader interface {
 	readControlDiscovery(ctx context.Context, controlPath string) (controlDiscovery, error)
 }
@@ -171,7 +175,7 @@ func intPointerValue(value *int) int {
 	return *value
 }
 
-// controlDiscoveryRuntimeConnector resolves RuntimeEndpoint from daemon
+// controlDiscoveryRuntimeConnector resolves RuntimeEndpoint from runtime-host
 // control discovery and delegates handshake to an inner connector.
 type controlDiscoveryRuntimeConnector struct {
 	inner       RuntimeConnector
