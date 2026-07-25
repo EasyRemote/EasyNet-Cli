@@ -997,6 +997,7 @@ check_session_open_authority_vocabulary_contract() {
 
 check_authority_context_model_vocabulary_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local authority="$cli_root/src/daemon/ability/authority/mod.rs"
   local dispatch="$cli_root/src/daemon/ability/dispatch.rs"
   local catalog_build="$cli_root/src/daemon/ability/catalog/build.rs"
   local conformance="$cli_root/src/daemon/ability/conformance.rs"
@@ -1005,13 +1006,23 @@ check_authority_context_model_vocabulary_contract() {
   local daemon_tests="$cli_root/src/daemon/invocation/dispatch/daemon_invocation_service_tests.rs"
   local errors="$cli_root/src/daemon/ability/control_plane_error.rs"
 
-  for file in "$dispatch" "$catalog_build" "$conformance" "$meta" "$assembly" "$daemon_tests" "$errors"; do
+  for file in "$authority" "$dispatch" "$catalog_build" "$conformance" "$meta" "$assembly" "$daemon_tests" "$errors"; do
     [[ -f "$file" ]] || fail "authority context vocabulary source is missing: ${file#$cli_root/}"
   done
 
   if rg -n 'CanonicalHubAuthority|for_hub_authority_root|hosts_hub_authority|hub_authority_root|OwnerKind::Hub|AbilityAuthoritySet::Hub|AbilityAuthoritySet::Both|Self::Hub \{|Self::Both|fn hub\(&self\)|\.hub\(\)|Hub authority context|Hub authority set|authority_set: "hub"|authority set "hub"|Device\+Hub authority|InvalidHubAuthorityRoot|hub authority root must|product Hub Authority|supported Hub owner|Hub owners|dynamic Hub owner|Hub owner with Device projection|foreign Hub authority root|Hub-owned session\.open|Hub registry leaked|Hub owner filtering|Hub LocalRuntime|Hub daemon builder' \
-    "$dispatch" "$catalog_build" "$conformance" "$meta" "$assembly" "$daemon_tests" "$errors"; then
+    "$authority" "$dispatch" "$catalog_build" "$conformance" "$meta" "$assembly" "$daemon_tests" "$errors"; then
     fail "authority context model preserves retired Hub/Both vocabulary"
+  fi
+
+  if ! rg -q 'RealmAuthority' "$authority"; then
+    fail "authority owner projection parser must expose RealmAuthority"
+  fi
+  if ! rg -F -q '"hub" => Ok(Self::RealmAuthority)' "$authority"; then
+    fail "authority owner projection must preserve hub marker to RealmAuthority mapping"
+  fi
+  if ! rg -q 'authority_scope_hub_marker_projects_realm_authority_state' "$authority"; then
+    fail "authority owner projection must test hub marker RealmAuthority projection"
   fi
 
   for required in \

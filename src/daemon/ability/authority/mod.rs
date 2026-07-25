@@ -57,7 +57,7 @@ impl AuthorityPredicate {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum OwnerProjection {
     Device,
-    Hub,
+    RealmAuthority,
     Agent(String),
     User(String),
     Plugin(String),
@@ -73,7 +73,7 @@ impl OwnerProjection {
         };
         match marker {
             "device" => Ok(Self::Device),
-            "hub" => Ok(Self::Hub),
+            "hub" => Ok(Self::RealmAuthority),
             _ => {
                 let (plane, id) = marker.split_once(':').ok_or_else(invalid)?;
                 if !is_valid_owner_projection_id(id) {
@@ -94,7 +94,7 @@ impl OwnerProjection {
     fn canonical(&self) -> String {
         match self {
             Self::Device => "device".to_string(),
-            Self::Hub => "hub".to_string(),
+            Self::RealmAuthority => "hub".to_string(),
             Self::Agent(id) => format!("agent:{id}"),
             Self::User(id) => format!("user:{id}"),
             Self::Plugin(id) => format!("plugin:{id}"),
@@ -842,6 +842,14 @@ mod tests {
                 .unwrap_or_else(|err| panic!("{marker} must be a valid owner projection: {err}"));
             assert_eq!(scope.owner_projection(), marker);
         }
+    }
+
+    #[test]
+    fn authority_scope_hub_marker_projects_realm_authority_state() {
+        let projection = OwnerProjection::parse("hub").expect("hub marker is accepted");
+
+        assert_eq!(projection, OwnerProjection::RealmAuthority);
+        assert_eq!(projection.canonical(), "hub");
     }
 
     #[test]
