@@ -12043,6 +12043,7 @@ for retired in (
     "default_loaded_package_for_ability(name).ok()?",
     "let package = default_loaded_package_for_ability(name).ok()?",
     "PluginPackageIndex::builtin().ok()?",
+    "pub fn descriptor_for(name: &str) -> Option<Arc<PluginAbilityDescriptor>>",
 ):
     if retired in production_plugins:
         raise SystemExit(f"plugin_metadata_lookup_fail_closed:retired_silent_lookup:{retired}")

@@ -186,7 +186,7 @@ pub(crate) fn try_description_for(name: &str) -> Result<Option<&'static str>> {
 
 /// Resolve plugin-owned human-readable ability metadata as an owned value.
 pub fn description_for_owned(name: &str) -> Option<String> {
-    descriptor_for(name).map(|descriptor| descriptor.description().to_string())
+    try_description_for_owned(name).ok().flatten()
 }
 
 pub(crate) fn try_description_for_owned(name: &str) -> Result<Option<String>> {
@@ -220,11 +220,6 @@ pub fn builtin_input_schema_for(name: &str) -> Option<Value> {
 
 pub(crate) fn try_builtin_input_schema_for(name: &str) -> Result<Option<Value>> {
     Ok(try_builtin_descriptor_for(name)?.map(|descriptor| descriptor.input_schema().clone()))
-}
-
-/// Resolve full plugin descriptor metadata for a loaded plugin ability.
-pub fn descriptor_for(name: &str) -> Option<Arc<PluginAbilityDescriptor>> {
-    try_descriptor_for(name).ok().flatten()
 }
 
 pub(crate) fn try_descriptor_for(name: &str) -> Result<Option<Arc<PluginAbilityDescriptor>>> {
@@ -457,8 +452,10 @@ layer = "control"
             .expect("schema lookup should preserve absent plugin as None")
             .is_none());
         assert!(
-            descriptor_for(missing).is_none(),
-            "public compatibility helper remains Option-shaped"
+            try_descriptor_for(missing)
+                .expect("descriptor lookup should preserve absent plugin as None")
+                .is_none(),
+            "descriptor lookup must stay on the explicit Result<Option<_>> boundary"
         );
     }
 
