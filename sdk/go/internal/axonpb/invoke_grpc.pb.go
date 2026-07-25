@@ -138,8 +138,6 @@ func (c *invocationClient) InvokeStream(ctx context.Context, in *InvokeServerStr
 	return x, nil
 }
 
-// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type Invocation_InvokeStreamClient = grpc.ServerStreamingClient[InvokeStreamChunk]
 
 func (c *invocationClient) InvokeBidi(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[InvokeBidiUp, InvokeBidiDown], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
@@ -151,8 +149,6 @@ func (c *invocationClient) InvokeBidi(ctx context.Context, opts ...grpc.CallOpti
 	return x, nil
 }
 
-// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type Invocation_InvokeBidiClient = grpc.BidiStreamingClient[InvokeBidiUp, InvokeBidiDown]
 
 // InvocationServer is the server API for Invocation service.
 // All implementations must embed UnimplementedInvocationServer
@@ -273,15 +269,11 @@ func _Invocation_InvokeStream_Handler(srv interface{}, stream grpc.ServerStream)
 	return srv.(InvocationServer).InvokeStream(m, &grpc.GenericServerStream[InvokeServerStreamRequest, InvokeStreamChunk]{ServerStream: stream})
 }
 
-// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type Invocation_InvokeStreamServer = grpc.ServerStreamingServer[InvokeStreamChunk]
 
 func _Invocation_InvokeBidi_Handler(srv interface{}, stream grpc.ServerStream) error {
 	return srv.(InvocationServer).InvokeBidi(&grpc.GenericServerStream[InvokeBidiUp, InvokeBidiDown]{ServerStream: stream})
 }
 
-// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type Invocation_InvokeBidiServer = grpc.BidiStreamingServer[InvokeBidiUp, InvokeBidiDown]
 
 // Invocation_ServiceDesc is the grpc.ServiceDesc for Invocation service.
 // It's only intended for direct use with grpc.RegisterService,

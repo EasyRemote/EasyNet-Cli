@@ -644,6 +644,18 @@ check_python_sdk_bytecode_index_contract() {
   fi
 }
 
+check_go_internal_grpc_stream_alias_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local invoke_grpc="$cli_root/sdk/go/internal/axonpb/invoke_grpc.pb.go"
+  [[ -f "$invoke_grpc" ]] || return 0
+
+  if rg -n \
+    'backwards compatibility with existing code that references the prior non-generic stream type by name|type\s+Invocation_Invoke(Stream|Bidi)(Client|Server)\s*=' \
+    "$invoke_grpc"; then
+    fail "Go internal Axon gRPC projection preserves retired stream compatibility aliases"
+  fi
+}
+
 check_sdk_root_runtime_description_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
 
@@ -15587,6 +15599,17 @@ PY
   if ( MATRIX="$tmp/duplicate-lifecycle-cell.json"; check_manifest_contract ) >/dev/null 2>&1; then
     fail "self-test expected duplicate lifecycle cell claim gate to fail"
   fi
+  mkdir -p "$tmp/go-internal-grpc-stream-alias-legacy/sdk/go/internal/axonpb"
+  cat >"$tmp/go-internal-grpc-stream-alias-legacy/sdk/go/internal/axonpb/invoke_grpc.pb.go" <<'EOF'
+package axonpb
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type Invocation_InvokeStreamClient = grpc.ServerStreamingClient[InvokeStreamChunk]
+type Invocation_InvokeBidiServer = grpc.BidiStreamingServer[InvokeBidiUp, InvokeBidiDown]
+EOF
+  if ( check_go_internal_grpc_stream_alias_contract "$tmp/go-internal-grpc-stream-alias-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected Go internal gRPC stream alias gate to fail"
+  fi
   mkdir -p "$tmp/remote-failure-signer-downgrade-legacy/src/daemon/invocation/dispatch"
   cat >"$tmp/remote-failure-signer-downgrade-legacy/src/daemon/invocation/dispatch/remote_failure.rs" <<'EOF'
 fn status_code_for_failure(raw_code: &str, detail: &str) -> Code {
@@ -22749,6 +22772,7 @@ check_mission_terminal_receipt_projection_contract
 check_retired_edge_adapter_policy_absence_contract
 check_sdk_product_neutrality_contract
 check_python_sdk_bytecode_index_contract
+check_go_internal_grpc_stream_alias_contract
 check_daemon_tuple_route_contract
 check_remote_invocation_subject_provenance_contract
 check_daemon_runtime_route_inventory_contract
