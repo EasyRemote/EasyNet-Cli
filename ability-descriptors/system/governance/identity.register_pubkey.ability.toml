@@ -22,7 +22,7 @@ additionalProperties = false
 
 [input_schema.properties.agent_ura]
 type = "string"
-description = "Agent, Device, User, or Hub URA to trust."
+description = "Agent, Device, User, or Authority URA to trust."
 
 [input_schema.properties.principal_owner_ura]
 type = "string"

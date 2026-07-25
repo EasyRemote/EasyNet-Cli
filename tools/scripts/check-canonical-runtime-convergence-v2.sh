@@ -824,6 +824,42 @@ check_sdk_managed_signing_authority_route_contract() {
   fi
 }
 
+check_public_descriptor_authority_vocabulary_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local identity_descriptor="$cli_root/ability-descriptors/system/governance/identity.register_pubkey.ability.toml"
+  local advertise_descriptor="$cli_root/ability-descriptors/system/federation/federation.advertise_abilities.ability.toml"
+  local resolve_key_descriptor="$cli_root/ability-descriptors/system/federation/federation.resolve_key.ability.toml"
+  local contracts="$cli_root/src/daemon/ability/catalog/daemon_invocation_contracts.rs"
+  local surface="$cli_root/src/daemon/ability/descriptors/surface.rs"
+
+  for file in "$identity_descriptor" "$advertise_descriptor" "$resolve_key_descriptor" "$contracts" "$surface"; do
+    [[ -f "$file" ]] || fail "public descriptor authority vocabulary source is missing: ${file#$cli_root/}"
+  done
+
+  if rg -n 'Agent, Device, User, or Hub URA|Agent or Hub URA|canonical Agent, Device, or Hub URA|Hub URA to trust' \
+    "$identity_descriptor" "$advertise_descriptor" "$resolve_key_descriptor" "$contracts" "$surface"; then
+    fail "public descriptor/catalog contracts preserve Hub vocabulary for Authority URA owners"
+  fi
+  if ! rg -q 'Agent, Device, User, or Authority URA to trust\.' "$identity_descriptor"; then
+    fail "identity.register_pubkey descriptor must describe Authority URA trust targets"
+  fi
+  if ! rg -q 'Agent or Authority URA that owns the advertised descriptors\.' "$advertise_descriptor"; then
+    fail "federation.advertise_abilities descriptor must describe Authority owners"
+  fi
+  if ! rg -q 'Agent, Device, User, or Authority URA whose verifying key is requested\.' "$resolve_key_descriptor"; then
+    fail "federation.resolve_key descriptor must describe Authority key targets"
+  fi
+  if ! rg -q 'Agent or Authority URA that owns the advertised descriptors\.' "$contracts"; then
+    fail "daemon catalog schema must describe advertise_abilities Authority owners"
+  fi
+  if ! rg -q 'Agent, Device, User, or Authority URA whose verifying key is requested\.' "$contracts"; then
+    fail "daemon catalog schema must describe resolve_key Authority targets"
+  fi
+  if ! rg -q 'canonical Agent, Device, or Authority URA' "$surface"; then
+    fail "descriptor validation error must describe canonical Authority owners"
+  fi
+}
+
 check_sdk_runtime_admin_authority_session_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local go_admin="$cli_root/sdk/go/runtime_admin.go"
@@ -18560,7 +18596,7 @@ EOF
     'fn dispatch(intent: &RevokeUserPubkeyIntent) { invalidate_revoked_subject(intent.agent_ura(), None, true); }' \
     > "$tmp/runtime-trust-user-key-write-legacy/src/daemon/invocation/dispatch/unary_dispatcher.rs"
   printf '%s\n' \
-    'ABILITY_IDENTITY_REGISTER_PUBKEY => object_schema(json!({"agent_ura": string_prop("Agent, Device, User, or Hub URA to trust."), "public_key_b64": string_prop("key"), "role": string_prop("role")}), &["agent_ura", "public_key_b64", "role"], false),' \
+    'ABILITY_IDENTITY_REGISTER_PUBKEY => object_schema(json!({"agent_ura": string_prop("Agent, Device, User, or Authority URA to trust."), "public_key_b64": string_prop("key"), "role": string_prop("role")}), &["agent_ura", "public_key_b64", "role"], false),' \
     'ABILITY_IDENTITY_REVOKE_USER_PUBKEY => object_schema(json!({"agent_ura": string_prop("User URA whose key row should be revoked."), "public_key_b64": string_prop("key")}), &["agent_ura", "public_key_b64"], false),' \
     > "$tmp/runtime-trust-user-key-write-legacy/src/daemon/ability/catalog/daemon_invocation_contracts.rs"
   printf '%s\n' \
@@ -21392,4 +21428,5 @@ check_sdk_receipt_profile_convergence_contract
 check_sdk_session_authority_binding_facade_contract
 check_sdk_provider_managed_signing_custody_contract
 check_sdk_runtime_receipt_type_state_binding_contract
+check_public_descriptor_authority_vocabulary_contract
 echo "canonical-runtime-convergence-v2: OK"

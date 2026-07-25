@@ -734,7 +734,7 @@ impl std::fmt::Display for DescriptorError {
             }
             DescriptorError::InvalidOwnerUra { owner_ura } => write!(
                 f,
-                "owner_ura {owner_ura:?} must be a canonical Agent, Device, or Hub URA"
+                "owner_ura {owner_ura:?} must be a canonical Agent, Device, or Authority URA"
             ),
             DescriptorError::InvalidVersion { version } => {
                 write!(f, "descriptor version {version:?} is not a valid semver")
@@ -1963,7 +1963,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("canonical Agent, Device, or Hub URA"),
+                .contains("canonical Agent, Device, or Authority URA"),
             "{error}"
         );
     }

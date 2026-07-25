@@ -31,4 +31,4 @@ description = "Monotonic generation for the descriptor projection."
 
 [input_schema.properties.owner_ura]
 type = "string"
-description = "Agent or Hub URA that owns the advertised descriptors."
+description = "Agent or Authority URA that owns the advertised descriptors."

@@ -22,4 +22,4 @@ additionalProperties = false
 
 [input_schema.properties.agent_ura]
 type = "string"
-description = "Agent, Device, User, or Hub URA whose verifying key is requested."
+description = "Agent, Device, User, or Authority URA whose verifying key is requested."

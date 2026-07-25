@@ -279,7 +279,7 @@ pub(crate) fn input_schema_for(name: &str) -> Option<Value> {
         ),
         ABILITY_FEDERATION_ADVERTISE_ABILITIES => object_schema(
             json!({
-                "owner_ura": string_prop("Agent or Hub URA that owns the advertised descriptors."),
+                "owner_ura": string_prop("Agent or Authority URA that owns the advertised descriptors."),
                 "generation": integer_prop("Monotonic generation for the descriptor projection."),
                 "abilities": {
                     "type": "array",
@@ -346,7 +346,7 @@ pub(crate) fn input_schema_for(name: &str) -> Option<Value> {
         ),
         ABILITY_FEDERATION_RESOLVE_KEY => object_schema(
             json!({
-                "agent_ura": string_prop("Agent, Device, User, or Hub URA whose verifying key is requested.")
+                "agent_ura": string_prop("Agent, Device, User, or Authority URA whose verifying key is requested.")
             }),
             &["agent_ura"],
             false,
