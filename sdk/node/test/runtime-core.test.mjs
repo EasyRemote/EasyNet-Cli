@@ -993,6 +993,37 @@ test("runtime ability projection is canonical for authority scope admission", ()
     assert.equal(authorized.metadata[sdk.DELEGATION_METADATA_KEY], proof.metadataValue);
   }
 
+  const nestedDeviceCallee = "easynet:///r/example/resource/user.alice/archive/device/dev-a";
+  const nestedDeviceProof = sdk.DelegationProof.fromMetadata(
+    authorityValue({
+      issuer_ura: "easynet:///r/example/user/alice",
+      subject_ura: nestedDeviceCallee,
+      caller_ura: caller,
+      audience: nestedDeviceCallee,
+      scopes: ["observe.health"],
+      issued_at_ms: 10,
+      expires_at_ms: 20,
+    }),
+  );
+  assert.throws(
+    () =>
+      new sdk.InvocationBuilder()
+        .withCallerURA(caller)
+        .withCalleeURA(nestedDeviceCallee)
+        .withDescriptorRef(descriptor)
+        .withSubjectURA(nestedDeviceCallee)
+        .withNonceBase64(nonce)
+        .withCausalContext({ form: "none" })
+        .withJSONArgs({ probe: true })
+        .withContentType("application/json")
+        .withAuthorityMetadata(nestedDeviceProof.metadata())
+        .build(),
+    (error) =>
+      error instanceof sdk.SDKError &&
+      error.code === sdk.ErrorCode.AUTHORITY_DENIED &&
+      /delegation authority scopes do not admit invocation ability/.test(error.message),
+  );
+
   const proof = sdk.DelegationProof.fromMetadata(delegationValue(["observe.health"]));
   assert.throws(
     () =>

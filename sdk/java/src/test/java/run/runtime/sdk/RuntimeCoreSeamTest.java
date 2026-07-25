@@ -749,6 +749,35 @@ public final class RuntimeCoreSeamTest {
           DelegationProof.fromMetadata(delegationMetadataValue(List.of(scope)));
       completeBuilder().authorityMetadata(proof.metadata()).inspect();
     }
+    String nestedDeviceCallee =
+        "easynet:///r/example/resource/user.alice/archive/device/dev-a";
+    DelegationProof nestedDeviceProof =
+        DelegationProof.fromMetadata(
+            authorityMetadataValue(
+                Map.of(
+                    "issuer_ura",
+                    "easynet:///r/example/user/alice",
+                    "subject_ura",
+                    nestedDeviceCallee,
+                    "caller_ura",
+                    CALLER,
+                    "audience",
+                    nestedDeviceCallee,
+                    "scopes",
+                    List.of("observe.health"),
+                    "issued_at_ms",
+                    10,
+                    "expires_at_ms",
+                    20)));
+    expectSDKError(
+        ErrorCode.AUTHORITY_DENIED,
+        "delegation authority scopes do not admit invocation ability",
+        () ->
+            completeBuilder()
+                .callee(nestedDeviceCallee)
+                .subject(nestedDeviceCallee)
+                .authorityMetadata(nestedDeviceProof.metadata())
+                .inspect());
 
     String authoritySubject = "easynet:///r/example/resource/user.alice/invoke/namespace.resolve";
     DelegationProof authorityProof =

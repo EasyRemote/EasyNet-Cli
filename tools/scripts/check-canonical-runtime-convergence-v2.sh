@@ -7558,6 +7558,27 @@ for required in (
     if required not in node:
         raise SystemExit(f"node_invocation_authority_projection_missing:{required}")
 
+projection_start = node.find("class RuntimeAbilityProjection")
+projection_end = node.find("function authorityMetadataValue", projection_start)
+if projection_start < 0 or projection_end < 0:
+    raise SystemExit("node_invocation_authority_projection:projection_body_missing")
+projection_body = node[projection_start:projection_end]
+for required in (
+    "const parsed = parseCanonicalURANullable(calleeURA);",
+    "const path = parsed?.path ?? \"\";",
+    "!deviceID.includes(\"/\")",
+):
+    if required not in projection_body:
+        raise SystemExit(f"node_invocation_authority_projection:top_level_owner_parser_missing:{required}")
+for forbidden in (
+    'const device = "/device/";',
+    "deviceIndex",
+    'indexOf("/device/")',
+    "split(/[/?#]/, 1)",
+):
+    if forbidden in projection_body:
+        raise SystemExit(f"node_invocation_authority_projection:substring_owner_projection:{forbidden}")
+
 validator_start = node.find("class InvocationAuthorityBindingValidator")
 validator_end = node.find("function invocationAuthorityFromMetadata", validator_start)
 if validator_start < 0 or validator_end < 0:
@@ -7586,6 +7607,9 @@ for required in (
     '"easynet:///r/example/ability/device.dev-a.observe.health"',
     '"descriptor_ref must contain a canonical Ability URA"',
     "delegationValue([scope])",
+    "nestedDeviceCallee",
+    "archive/device/dev-a",
+    "delegation authority scopes do not admit invocation ability",
 ):
     if required not in test:
         raise SystemExit(f"node_invocation_authority_projection_test_missing:{required}")
@@ -14843,6 +14867,9 @@ required_projection = {
     "descriptorAbilityURA": "descriptor_projection_missing",
     "descriptorWireAbility": "wire_projection_missing",
     "publicAbilityName": "public_name_projection_missing",
+    "private static String canonicalTopLevelPath(String ura)": "top_level_path_parser_missing",
+    "String path = canonicalTopLevelPath(calleeURA)": "top_level_owner_parser_missing",
+    '!deviceID.contains("/")': "nested_device_owner_rejection_missing",
     '"descriptor_ref must contain a canonical Ability URA"': "malformed_descriptor_rejection_missing",
     "easynet:///r/": "ura_only_projection_missing",
 }
@@ -14851,6 +14878,13 @@ for needle, label in required_projection.items():
         raise SystemExit(f"java_invocation_authority_binding:{label}")
 if "hub." in projection:
     raise SystemExit("java_invocation_authority_binding:authority_projection_lowers_to_hub")
+for forbidden, label in {
+    'String device = "/device/"': "substring_device_marker_projection",
+    "deviceIndex": "substring_device_index_projection",
+    'split("[/?#]"': "regex_tail_projection",
+}.items():
+    if forbidden in projection:
+        raise SystemExit(f"java_invocation_authority_binding:{label}")
 
 required_support = {
     "static String authorityMetadataValue": "authority_metadata_value_missing",
@@ -14886,6 +14920,9 @@ required_tests = {
     '"descriptor_ref must contain a canonical Ability URA"': "malformed_descriptor_test_missing",
     "not-a-ura/resource/user.alice/runtime-state/read": "path_substring_subject_regression_missing",
     "easynet:///r/example/device/dev-a/resource/user.alice/runtime-state/read": "nested_resource_path_subject_regression_missing",
+    "nestedDeviceCallee": "nested_device_owner_projection_regression_missing",
+    "archive/device/dev-a": "nested_device_owner_path_vector_missing",
+    "delegation authority scopes do not admit invocation ability": "nested_device_owner_scope_rejection_missing",
 }
 for needle, label in required_tests.items():
     if needle not in tests:
@@ -15014,6 +15051,9 @@ required_projection = {
     "descriptorAbilityURA": "descriptor_projection_missing",
     "descriptorWireAbility": "wire_projection_missing",
     "publicAbilityName": "public_name_projection_missing",
+    "private static func canonicalTopLevelPath(_ ura: String) -> String": "top_level_path_parser_missing",
+    "let path = canonicalTopLevelPath(calleeURA)": "top_level_owner_parser_missing",
+    '!deviceID.contains("/")': "nested_device_owner_rejection_missing",
     '"descriptor_ref must contain a canonical Ability URA"': "malformed_descriptor_rejection_missing",
     "easynet:///r/": "ura_only_projection_missing",
 }
@@ -15022,6 +15062,13 @@ for needle, label in required_projection.items():
         raise SystemExit(f"swift_invocation_authority_binding:{label}")
 if "hub." in projection:
     raise SystemExit("swift_invocation_authority_binding:authority_projection_lowers_to_hub")
+for forbidden, label in {
+    'let device = "/device/"': "substring_device_marker_projection",
+    "range(of: device)": "substring_device_range_projection",
+    "split(maxSplits: 1, whereSeparator:": "tail_split_projection",
+}.items():
+    if forbidden in projection:
+        raise SystemExit(f"swift_invocation_authority_binding:{label}")
 
 required_tests = {
     "testAuthorityMetadataIsTypedAndMutuallyExclusive": "test_body_missing",
@@ -15038,6 +15085,9 @@ required_tests = {
     '"descriptor_ref must contain a canonical Ability URA"': "malformed_descriptor_test_missing",
     "not-a-ura/resource/user.alice/runtime-state/read": "path_substring_subject_regression_missing",
     "easynet:///r/example/device/dev-a/resource/user.alice/runtime-state/read": "nested_resource_path_subject_regression_missing",
+    "nestedDeviceCallee": "nested_device_owner_projection_regression_missing",
+    "archive/device/dev-a": "nested_device_owner_path_vector_missing",
+    "delegation authority scopes do not admit invocation ability": "nested_device_owner_scope_rejection_missing",
 }
 for needle, label in required_tests.items():
     if needle not in tests:

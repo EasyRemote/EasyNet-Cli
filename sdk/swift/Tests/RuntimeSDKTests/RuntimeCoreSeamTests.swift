@@ -561,6 +561,24 @@ final class RuntimeCoreSeamTests: XCTestCase {
                 .inspect()
         }
 
+        let nestedDeviceCallee = "easynet:///r/example/resource/user.alice/archive/device/dev-a"
+        let nestedDeviceProof = try DelegationProof.fromMetadata(authorityMetadataValue([
+            "issuer_ura": "easynet:///r/example/user/alice",
+            "subject_ura": nestedDeviceCallee,
+            "caller_ura": caller,
+            "audience": nestedDeviceCallee,
+            "scopes": ["observe.health"],
+            "issued_at_ms": 10,
+            "expires_at_ms": 20,
+        ]))
+        expectSyncSDKError(.authorityDenied, "delegation authority scopes do not admit invocation ability") {
+            _ = try completeBuilder()
+                .withCalleeURA(nestedDeviceCallee)
+                .withSubjectURA(nestedDeviceCallee)
+                .withAuthorityMetadata(nestedDeviceProof.metadata())
+                .inspect()
+        }
+
         let authoritySubject = "easynet:///r/example/resource/user.alice/invoke/namespace.resolve"
         let authorityProof = try DelegationProof.fromMetadata(authorityMetadataValue([
             "issuer_ura": "easynet:///r/example/user/alice",

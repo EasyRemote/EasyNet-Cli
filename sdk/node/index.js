@@ -3817,13 +3817,15 @@ class RuntimeAbilityProjection {
   }
 
   static abilityOwnerPrefix(calleeURA) {
-    const clean = String(calleeURA ?? "").trim();
-    const device = "/device/";
-    const deviceIndex = clean.indexOf(device);
-    if (deviceIndex >= 0) {
-      return `device.${clean.slice(deviceIndex + device.length).split(/[/?#]/, 1)[0]}`;
+    const parsed = parseCanonicalURANullable(calleeURA);
+    const path = parsed?.path ?? "";
+    if (path.startsWith("device/")) {
+      const deviceID = path.slice("device/".length).trim();
+      if (deviceID && !deviceID.includes("/")) {
+        return `device.${deviceID}`;
+      }
     }
-    if (clean.endsWith("/authority") && clean.startsWith(this.realmPrefix)) {
+    if (path === "authority") {
       return "authority";
     }
     return "";

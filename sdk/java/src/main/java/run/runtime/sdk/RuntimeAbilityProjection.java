@@ -68,16 +68,29 @@ final class RuntimeAbilityProjection {
   }
 
   private static String abilityOwnerPrefix(String calleeURA) {
-    String clean = calleeURA == null ? "" : calleeURA.trim();
-    String device = "/device/";
-    int deviceIndex = clean.indexOf(device);
-    if (deviceIndex >= 0) {
-      String rest = clean.substring(deviceIndex + device.length());
-      return "device." + rest.split("[/?#]", 2)[0];
+    String path = canonicalTopLevelPath(calleeURA);
+    if (path.startsWith("device/")) {
+      String deviceID = path.substring("device/".length()).trim();
+      if (!deviceID.isBlank() && !deviceID.contains("/")) {
+        return "device." + deviceID;
+      }
     }
-    if (clean.endsWith("/authority") && clean.startsWith(REALM_PREFIX)) {
+    if ("authority".equals(path)) {
       return "authority";
     }
     return "";
+  }
+
+  private static String canonicalTopLevelPath(String ura) {
+    String clean = ura == null ? "" : ura.trim();
+    if (!clean.startsWith(REALM_PREFIX)) {
+      return "";
+    }
+    String rest = clean.substring(REALM_PREFIX.length());
+    int slash = rest.indexOf('/');
+    if (slash <= 0 || slash == rest.length() - 1) {
+      return "";
+    }
+    return rest.substring(slash + 1).trim();
   }
 }

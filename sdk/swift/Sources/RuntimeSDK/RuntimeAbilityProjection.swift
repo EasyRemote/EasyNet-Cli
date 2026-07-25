@@ -55,19 +55,28 @@ struct RuntimeAbilityProjection: Sendable, Equatable {
     }
 
     private static func abilityOwnerPrefix(_ calleeURA: String) -> String {
-        let clean = calleeURA.trimmingCharacters(in: .whitespacesAndNewlines)
-        let device = "/device/"
-        if let range = clean.range(of: device) {
-            let rest = String(clean[range.upperBound...])
-            let id = rest
-                .split(maxSplits: 1, whereSeparator: { $0 == "/" || $0 == "?" || $0 == "#" })
-                .first
-                .map(String.init) ?? ""
-            return id.isEmpty ? "" : "device.\(id)"
+        let path = canonicalTopLevelPath(calleeURA)
+        if path.hasPrefix("device/") {
+            let deviceID = String(path.dropFirst("device/".count)).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !deviceID.isEmpty, !deviceID.contains("/") {
+                return "device.\(deviceID)"
+            }
         }
-        guard clean.hasSuffix("/authority"), clean.hasPrefix(realmPrefix) else {
+        if path == "authority" {
+            return "authority"
+        }
+        return ""
+    }
+
+    private static func canonicalTopLevelPath(_ ura: String) -> String {
+        let clean = ura.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard clean.hasPrefix(realmPrefix) else {
             return ""
         }
-        return "authority"
+        let rest = String(clean.dropFirst(realmPrefix.count))
+        guard let slash = rest.firstIndex(of: "/"), slash != rest.startIndex, slash != rest.index(before: rest.endIndex) else {
+            return ""
+        }
+        return String(rest[rest.index(after: slash)...]).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
