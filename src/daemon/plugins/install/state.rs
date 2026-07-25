@@ -245,7 +245,7 @@ mod tests {
             root.path(),
             r#"
 plugins = []
-legacy_repaired = true
+retired_repaired = true
 "#,
         );
 
@@ -254,6 +254,10 @@ legacy_repaired = true
             .expect_err("unknown state fields must not be preserved as compat data");
 
         assert!(matches!(err, PluginHostError::ManifestParseFailed { .. }));
+        assert!(
+            format!("{err}").contains("unknown field `retired_repaired`"),
+            "parse error should name rejected state field: {err}"
+        );
     }
 
     #[test]

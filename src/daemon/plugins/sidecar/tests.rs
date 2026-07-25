@@ -67,13 +67,13 @@ fn sidecar_request_frame_rejects_unknown_variant_fields() {
         "type": "invoke",
         "call_id": "call-1",
         "invocation": canonical_sidecar_envelope_json(),
-        "legacy_route": "rpc"
+        "retired_route": "rpc"
     });
 
     let err = serde_json::from_value::<SidecarRequestFrame>(raw)
         .expect_err("sidecar request frames must reject unknown variant fields");
     assert!(
-        err.to_string().contains("unknown field `legacy_route`"),
+        err.to_string().contains("unknown field `retired_route`"),
         "strict sidecar request decode should name the rejected field: {err}"
     );
 }
@@ -84,14 +84,14 @@ fn sidecar_invocation_envelope_rejects_unknown_identity_fields() {
     raw.as_object_mut()
         .expect("sidecar envelope object")
         .insert(
-            "legacy_subject".to_string(),
+            "retired_subject".to_string(),
             json!("easynet:///r/acme/device/mac"),
         );
 
     let err = serde_json::from_value::<SidecarInvocationEnvelope>(raw)
         .expect_err("sidecar envelope must reject hidden identity aliases");
     assert!(
-        err.to_string().contains("unknown field `legacy_subject`"),
+        err.to_string().contains("unknown field `retired_subject`"),
         "strict sidecar envelope decode should name the rejected field: {err}"
     );
 }
@@ -132,7 +132,7 @@ fn sidecar_response_frame_rejects_unknown_variant_fields() {
         "type": "result",
         "call_id": "call-1",
         "value": {"ok": true},
-        "receipt": {"legacy": true}
+        "receipt": {"retired": true}
     });
 
     let err = serde_json::from_value::<SidecarResponseFrame>(raw)

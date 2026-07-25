@@ -1177,7 +1177,7 @@ abilities = ["abilities/*.ability.toml"]
 permissions = []
 resources = []
 platforms = []
-legacy_kind_alias = "stateful-device-plugin"
+retired_kind_alias = "stateful-device-plugin"
 
 [limits]
 max_sessions = 1
@@ -1187,7 +1187,7 @@ max_frame_queue = 1
 name = "test.echo"
 layer = "operational"
 "#,
-            "legacy_kind_alias",
+            "retired_kind_alias",
         );
     }
 
@@ -1221,10 +1221,10 @@ layer = "operational"
 [[ability_metadata]]
 name = "test.echo"
 layer = "operational"
-legacy_call_mode = "rpc"
+retired_call_mode = "rpc"
 "#,
             ),
-            "legacy_call_mode",
+            "retired_call_mode",
         );
     }
 
@@ -1243,10 +1243,10 @@ kind = "camera"
 modes = ["snapshot"]
 transport = "invoke_bidi"
 resources = ["camera"]
-legacy_media_bus = "webrtc-v0"
+retired_media_bus = "webrtc-v0"
 "#,
             ),
-            "legacy_media_bus",
+            "retired_media_bus",
         );
     }
 
@@ -1267,13 +1267,13 @@ platforms = []
 [limits]
 max_sessions = 1
 max_frame_queue = 1
-legacy_queue = 1024
+retired_queue = 1024
 
 [[ability_metadata]]
 name = "test.echo"
 layer = "operational"
 "#,
-            "legacy_queue",
+            "retired_queue",
         );
     }
 
@@ -1298,13 +1298,13 @@ max_frame_queue = 1
 [declarative]
 kind = "exec"
 argv = ["bin/plugin"]
-legacy_shell = true
+retired_shell = true
 
 [[ability_metadata]]
 name = "test.echo"
 layer = "operational"
 "#,
-            "legacy_shell",
+            "retired_shell",
         );
     }
 
@@ -1340,9 +1340,9 @@ app_bundle = "dist/macos/EasyNetMenuBar.app"
 supervisor = "launch_agent"
 launch_agent_label = "tech.silan.easynet.menubar"
 session = "aqua"
-legacy_plist_label = "tech.silan.old"
+retired_plist_label = "tech.silan.old"
 "#,
-            "legacy_plist_label",
+            "retired_plist_label",
         );
     }
 

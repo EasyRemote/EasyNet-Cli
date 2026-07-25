@@ -953,14 +953,14 @@ session = "aqua"
 name = "test.echo"
 description = "test descriptor for test.echo"
 admission_action = "invoke"
-legacy_descriptor_hash = "sha256:retired"
+retired_descriptor_hash = "sha256:retired"
 
 [input_schema]
 type = "object"
 additionalProperties = false
 "#,
         )
-        .expect("descriptor with legacy field");
+        .expect("descriptor with retired field");
 
         let err = PluginPackage::from_installed(dir.path(), None)
             .expect_err("unknown descriptor fields must fail package indexing");
@@ -969,7 +969,7 @@ additionalProperties = false
             "unknown descriptor field must fail at typed parse, got: {err}"
         );
         assert!(
-            format!("{err}").contains("unknown field `legacy_descriptor_hash`"),
+            format!("{err}").contains("unknown field `retired_descriptor_hash`"),
             "parse error should name rejected descriptor field: {err}"
         );
     }

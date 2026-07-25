@@ -11374,6 +11374,106 @@ if "serveExecPlugin" not in text:
 PY
 }
 
+check_plugin_schema_rejection_vocabulary_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local sidecar_tests="$cli_root/src/daemon/plugins/sidecar/tests.rs"
+  local sidecar_frame="$cli_root/src/daemon/plugins/sidecar/frame.rs"
+  local manifest="$cli_root/src/daemon/plugins/manifest.rs"
+  local package="$cli_root/src/daemon/plugins/package.rs"
+  local install_state="$cli_root/src/daemon/plugins/install/state.rs"
+  for path in "$sidecar_tests" "$sidecar_frame" "$manifest" "$package" "$install_state"; do
+    [[ -f "$path" ]] || fail "plugin schema source is missing: ${path#$cli_root/}"
+  done
+
+  "$PYTHON_BIN" - "$sidecar_tests" "$sidecar_frame" "$manifest" "$package" "$install_state" <<'PY'
+from pathlib import Path
+import sys
+
+sidecar_tests, sidecar_frame, manifest, package, install_state = [
+    Path(path).read_text(encoding="utf-8") for path in sys.argv[1:]
+]
+
+for label, text in {
+    "sidecar_tests": sidecar_tests,
+    "manifest": manifest,
+    "package": package,
+    "install_state": install_state,
+}.items():
+    for retired in (
+        "legacy_route",
+        "legacy_subject",
+        "legacy_descriptor_hash",
+        "legacy_kind_alias",
+        "legacy_call_mode",
+        "legacy_media_bus",
+        "legacy_queue",
+        "legacy_shell",
+        "legacy_plist_label",
+        "legacy_repaired",
+    ):
+        if retired in text:
+            raise SystemExit(
+                f"plugin_schema_rejection_vocabulary:legacy_fixture:{label}:{retired}"
+            )
+
+for label, text in {
+    "sidecar_frame": sidecar_frame,
+    "manifest": manifest,
+    "package": package,
+    "install_state": install_state,
+}.items():
+    if "deny_unknown_fields" not in text:
+        raise SystemExit(
+            f"plugin_schema_rejection_vocabulary:missing_deny_unknown_fields:{label}"
+        )
+
+required = {
+    "sidecar_tests": [
+        "sidecar_request_frame_rejects_unknown_variant_fields",
+        "unknown field `retired_route`",
+        "sidecar_invocation_envelope_rejects_unknown_identity_fields",
+        "unknown field `retired_subject`",
+        '"receipt": {"retired": true}',
+    ],
+    "manifest": [
+        "manifest_rejects_unknown_top_level_fields",
+        "retired_kind_alias",
+        "manifest_rejects_unknown_ability_metadata_fields",
+        "retired_call_mode",
+        "manifest_rejects_unknown_realtime_capability_fields",
+        "retired_media_bus",
+        "manifest_rejects_unknown_runtime_limit_fields",
+        "retired_queue",
+        "manifest_rejects_unknown_declarative_binding_fields",
+        "retired_shell",
+        "manifest_rejects_unknown_companion_platform_fields",
+        "retired_plist_label",
+    ],
+    "package": [
+        "plugin_host_installed_package_rejects_unknown_descriptor_fields",
+        "unknown field `retired_descriptor_hash`",
+    ],
+    "install_state": [
+        "plugin_state_store_rejects_unknown_state_fields",
+        "unknown field `retired_repaired`",
+    ],
+}
+sources = {
+    "sidecar_tests": sidecar_tests,
+    "manifest": manifest,
+    "package": package,
+    "install_state": install_state,
+}
+for label, tokens in required.items():
+    text = sources[label]
+    for token in tokens:
+        if token not in text:
+            raise SystemExit(
+                f"plugin_schema_rejection_vocabulary:missing:{label}:{token}"
+            )
+PY
+}
+
 check_remote_desktop_contract_boundary_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   bash "$cli_root/tools/scripts/check-remote-desktop-contract-boundary.sh" >/dev/null
@@ -16465,6 +16565,20 @@ EOF
   if ( CLI_ROOT="$tmp/cli-sidecar-daemon-defaulting"; check_plugin_sidecar_helper_matrix_contract ) >/dev/null 2>&1; then
     fail "self-test expected daemon sidecar tuple defaulting gate to fail"
   fi
+  for rel in \
+    src/daemon/plugins/sidecar/tests.rs \
+    src/daemon/plugins/sidecar/frame.rs \
+    src/daemon/plugins/manifest.rs \
+    src/daemon/plugins/package.rs \
+    src/daemon/plugins/install/state.rs; do
+    mkdir -p "$(dirname "$tmp/plugin-schema-legacy-vocabulary/$rel")"
+    cp "$ROOT/$rel" "$tmp/plugin-schema-legacy-vocabulary/$rel"
+  done
+  perl -0pi -e 's/retired_kind_alias/legacy_kind_alias/g' \
+    "$tmp/plugin-schema-legacy-vocabulary/src/daemon/plugins/manifest.rs"
+  if ( CLI_ROOT="$tmp/plugin-schema-legacy-vocabulary"; check_plugin_schema_rejection_vocabulary_contract ) >/dev/null 2>&1; then
+    fail "self-test expected plugin schema legacy vocabulary gate to fail"
+  fi
   mkdir -p "$tmp/cli-remote-desktop-contract-alias/tools/scripts" \
     "$tmp/cli-remote-desktop-contract-alias/plugins/remote-desktop/src"
   cp "$ROOT/tools/scripts/check-remote-desktop-contract-boundary.sh" \
@@ -21395,6 +21509,7 @@ EOF
   check_federation_directory_device_projection_contract
   check_cli_device_directory_projection_contract
   check_plugin_sidecar_helper_matrix_contract
+  check_plugin_schema_rejection_vocabulary_contract
   check_retired_browser_mock_surface_contract
   check_ability_deploy_product_neutrality_contract
   check_device_ability_mutation_target_contract
