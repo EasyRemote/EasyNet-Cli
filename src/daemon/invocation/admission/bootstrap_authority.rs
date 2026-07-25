@@ -80,7 +80,7 @@ impl BootstrapAuthorityVerifier {
         }
 
         if ability == ABILITY_FEDERATION_RESOLVE_KEY && action == AccessAction::Read {
-            let hub_key_authority = verify_device_hub_key_bootstrap_authority(
+            let authority_key_decision = verify_device_authority_key_bootstrap_authority(
                 caller_ura,
                 callee_ura,
                 subject_ura,
@@ -89,10 +89,10 @@ impl BootstrapAuthorityVerifier {
                 daemon_ura,
             );
             if matches!(
-                hub_key_authority,
+                authority_key_decision,
                 BootstrapAuthorityDecision::Verified { .. }
             ) {
-                return hub_key_authority;
+                return authority_key_decision;
             }
         }
 
@@ -152,15 +152,15 @@ impl BootstrapAuthorityVerifier {
                 };
             }
             (_, AccessAction::Manage) if subject_ura == caller_ura => {
-                if !callee_is_selected_hub(callee_ura, caller_ura, daemon_ura) {
+                if !callee_is_selected_authority(callee_ura, caller_ura, daemon_ura) {
                     return BootstrapAuthorityDecision::NotApplicable;
                 }
-                if verify_hub_bootstrap_mutation(ability, args, caller_ura).is_none() {
+                if verify_authority_bootstrap_mutation(ability, args, caller_ura).is_none() {
                     return BootstrapAuthorityDecision::NotApplicable;
                 }
             }
             (ABILITY_FEDERATION_RESOLVE_KEY, AccessAction::Read) => {
-                if !callee_is_selected_hub(callee_ura, caller_ura, daemon_ura) {
+                if !callee_is_selected_authority(callee_ura, caller_ura, daemon_ura) {
                     return BootstrapAuthorityDecision::NotApplicable;
                 }
                 if verify_bootstrap_resolve_key(args, callee_ura, owner_ura).is_none() {
@@ -168,7 +168,7 @@ impl BootstrapAuthorityVerifier {
                 }
             }
             (ABILITY_IDENTITY_REGISTER_PUBKEY, AccessAction::Manage) => {
-                if !callee_is_selected_hub(callee_ura, caller_ura, daemon_ura) {
+                if !callee_is_selected_authority(callee_ura, caller_ura, daemon_ura) {
                     return BootstrapAuthorityDecision::NotApplicable;
                 }
                 if verify_bootstrap_owner_user_key(args, owner_ura).is_none() {
@@ -195,7 +195,7 @@ fn verify_hub_link_authority(
     if ability != ABILITY_FEDERATION_RESOLVE_KEY || action != AccessAction::Read {
         return BootstrapAuthorityDecision::NotApplicable;
     }
-    if !is_hub_ura(caller_ura) || !callee_is_current_hub(callee_ura, daemon_ura) {
+    if !is_authority_ura(caller_ura) || !callee_is_current_authority(callee_ura, daemon_ura) {
         return BootstrapAuthorityDecision::NotApplicable;
     }
     if verify_hub_link_resolve_key(args, callee_ura).is_none() {
@@ -206,7 +206,7 @@ fn verify_hub_link_authority(
     }
 }
 
-fn verify_device_hub_key_bootstrap_authority(
+fn verify_device_authority_key_bootstrap_authority(
     caller_ura: &str,
     callee_ura: &str,
     subject_ura: &str,
@@ -214,13 +214,13 @@ fn verify_device_hub_key_bootstrap_authority(
     args: &[u8],
     daemon_ura: Option<&str>,
 ) -> BootstrapAuthorityDecision {
-    if !callee_is_selected_hub(callee_ura, caller_ura, daemon_ura) {
+    if !callee_is_selected_authority(callee_ura, caller_ura, daemon_ura) {
         return BootstrapAuthorityDecision::NotApplicable;
     }
     if crate::core::ura::owner_ability_ura(callee_ura, ability).as_deref() != Some(subject_ura) {
         return BootstrapAuthorityDecision::NotApplicable;
     }
-    if verify_bootstrap_selected_hub_key(args, callee_ura).is_none() {
+    if verify_bootstrap_selected_authority_key(args, callee_ura).is_none() {
         return BootstrapAuthorityDecision::NotApplicable;
     }
     BootstrapAuthorityDecision::Verified {
@@ -228,7 +228,7 @@ fn verify_device_hub_key_bootstrap_authority(
     }
 }
 
-fn verify_hub_bootstrap_mutation(ability: &str, args: &[u8], caller_ura: &str) -> Option<()> {
+fn verify_authority_bootstrap_mutation(ability: &str, args: &[u8], caller_ura: &str) -> Option<()> {
     match ability {
         ABILITY_FEDERATION_JOIN => {
             let Ok(request) = serde_json::from_slice::<JoinRequest>(args) else {
@@ -265,27 +265,27 @@ fn verify_hub_bootstrap_mutation(ability: &str, args: &[u8], caller_ura: &str) -
     Some(())
 }
 
-fn verify_bootstrap_selected_hub_key(args: &[u8], hub_ura: &str) -> Option<()> {
+fn verify_bootstrap_selected_authority_key(args: &[u8], authority_ura: &str) -> Option<()> {
     let Ok(request) = serde_json::from_slice::<ResolveKeyRequest>(args) else {
         return None;
     };
-    (request.agent_ura.trim() == hub_ura).then_some(())
+    (request.agent_ura.trim() == authority_ura).then_some(())
 }
 
-fn verify_bootstrap_resolve_key(args: &[u8], hub_ura: &str, owner_ura: &str) -> Option<()> {
+fn verify_bootstrap_resolve_key(args: &[u8], authority_ura: &str, owner_ura: &str) -> Option<()> {
     let Ok(request) = serde_json::from_slice::<ResolveKeyRequest>(args) else {
         return None;
     };
     let agent_ura = request.agent_ura.trim();
-    if agent_ura == hub_ura || agent_ura == owner_ura {
+    if agent_ura == authority_ura || agent_ura == owner_ura {
         return Some(());
     }
     None
 }
 
 /// Pairing bootstrap may seed exactly the paired owner's user signing key at
-/// the selected hub. It is intentionally narrower than general identity
-/// mutation: a device cannot author another user, a device key, or a hub key.
+/// the selected authority. It is intentionally narrower than general identity
+/// mutation: a device cannot author another user, a device key, or an authority key.
 fn verify_bootstrap_owner_user_key(args: &[u8], owner_ura: &str) -> Option<()> {
     #[derive(serde::Deserialize)]
     struct UserKeyRegistration {
@@ -324,13 +324,13 @@ fn is_device_ura(ura: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn is_hub_ura(ura: &str) -> bool {
+fn is_authority_ura(ura: &str) -> bool {
     parse_ura(ura)
         .map(|parsed| parsed.kind == URAKind::Authority)
         .unwrap_or(false)
 }
 
-fn callee_is_current_hub(callee_ura: &str, daemon_ura: Option<&str>) -> bool {
+fn callee_is_current_authority(callee_ura: &str, daemon_ura: Option<&str>) -> bool {
     if daemon_ura.is_some_and(|daemon| daemon != callee_ura) {
         return false;
     }
@@ -339,7 +339,11 @@ fn callee_is_current_hub(callee_ura: &str, daemon_ura: Option<&str>) -> bool {
         .unwrap_or(false)
 }
 
-fn callee_is_selected_hub(callee_ura: &str, caller_ura: &str, daemon_ura: Option<&str>) -> bool {
+fn callee_is_selected_authority(
+    callee_ura: &str,
+    caller_ura: &str,
+    daemon_ura: Option<&str>,
+) -> bool {
     if daemon_ura.is_some_and(|daemon| daemon != callee_ura) {
         return false;
     }
@@ -581,6 +585,7 @@ mod tests {
 
     #[test]
     fn device_without_owner_binding_has_no_bootstrap_authority() {
+        let _home = HomeGuard::new();
         let args = serde_json::to_vec(&serde_json::json!({
             "membership_ura": "easynet:///r/test/device/dev-1",
             "agent_ura": "easynet:///r/test/device/dev-1",
@@ -647,7 +652,7 @@ mod tests {
     }
 
     #[test]
-    fn ownerless_joined_device_can_resolve_selected_hub_key_during_bootstrap() {
+    fn ownerless_joined_device_can_resolve_selected_authority_key_during_bootstrap() {
         let args = serde_json::to_vec(&serde_json::json!({
             "agent_ura": "easynet:///r/test/authority",
         }))
@@ -677,6 +682,7 @@ mod tests {
 
     #[test]
     fn ownerless_joined_device_cannot_resolve_user_key_during_bootstrap() {
+        let _home = HomeGuard::new();
         let args = serde_json::to_vec(&serde_json::json!({
             "agent_ura": "easynet:///r/test/user/alice",
         }))
@@ -705,7 +711,7 @@ mod tests {
     }
 
     #[test]
-    fn paired_device_can_resolve_selected_hub_key_during_bootstrap() {
+    fn paired_device_can_resolve_selected_authority_key_during_bootstrap() {
         let args = serde_json::to_vec(&serde_json::json!({
             "agent_ura": "easynet:///r/test/authority",
         }))

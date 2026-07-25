@@ -6771,9 +6771,26 @@ if policy:
 if bootstrap:
     if "Unavailable { message: String }" not in bootstrap:
         raise SystemExit("bootstrap_authority_unavailable_state_missing")
+    for retired in (
+        "verify_device_hub_key_bootstrap_authority",
+        "verify_bootstrap_selected_hub_key",
+        "callee_is_selected_hub",
+        "callee_is_current_hub",
+        "is_hub_ura",
+        "verify_hub_bootstrap_mutation",
+        "selected_hub_key",
+    ):
+        if retired in bootstrap:
+            raise SystemExit(f"bootstrap_authority_retired_helper_name:{retired}")
     for required in (
         "LOCAL_BOOTSTRAP_OWNER_UNAVAILABLE",
         "malformed_local_credentials_make_bootstrap_owner_unavailable",
+        "verify_device_authority_key_bootstrap_authority",
+        "verify_bootstrap_selected_authority_key",
+        "callee_is_selected_authority",
+        "callee_is_current_authority",
+        "is_authority_ura",
+        "verify_authority_bootstrap_mutation",
     ):
         if required not in bootstrap:
             raise SystemExit(f"bootstrap_owner_projection_missing:{required}")
