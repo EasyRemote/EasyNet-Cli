@@ -242,7 +242,7 @@ async fn upstream_daemon(
     let runtime_assembly = runtime_fixture::daemon_runtime_with_key_resolver(Arc::new(
         RealmTrustAnchorKeyResolver::new(trust_anchor.clone()),
     ));
-    let authority_context = AbilityAuthorityContext::for_hub_authority_root(&owner_ura)
+    let authority_context = AbilityAuthorityContext::for_realm_authority_root(&owner_ura)
         .expect("upstream Hub authority context");
     let agents = easynet_cli::daemon::persistence::agent_registry::AgentRegistry::default();
     let mut catalog_config =

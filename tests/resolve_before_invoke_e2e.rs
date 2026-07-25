@@ -361,8 +361,10 @@ fn catalog_owner_kind_for(callee_ura: &str) -> OwnerKind {
         .unwrap_or_else(|err| panic!("fixture callee URA must parse: {callee_ura}: {err}"));
     match parsed.kind {
         easynet_cli::core::ura::URAKind::Device => OwnerKind::Device,
-        easynet_cli::core::ura::URAKind::Authority => OwnerKind::Hub,
-        other => panic!("fixture callee owner kind must be Device or Hub, got {other:?}"),
+        easynet_cli::core::ura::URAKind::Authority => OwnerKind::RealmAuthority,
+        other => {
+            panic!("fixture callee owner kind must be Device or RealmAuthority, got {other:?}")
+        }
     }
 }
 

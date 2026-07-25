@@ -170,7 +170,7 @@ async fn hub_service(
     let daemon_runtime = runtime_fixture::daemon_runtime_with_key_resolver(runtime_keys);
     let runtime = daemon_runtime.runtime();
     let agents = easynet_cli::daemon::persistence::agent_registry::AgentRegistry::default();
-    let authority = AbilityAuthorityContext::for_hub_authority_root(daemon_ura.clone())
+    let authority = AbilityAuthorityContext::for_realm_authority_root(daemon_ura.clone())
         .expect("hub authority context");
     let mut config =
         easynet_cli::daemon::ability::catalog::RegistryBuildConfig::new_with_authority_context(

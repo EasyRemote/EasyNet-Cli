@@ -380,7 +380,7 @@ async fn main() -> anyhow::Result<()> {
         DaemonMode::Hub => {
             let hub_ura = easynet_cli::core::ura::hub_ura(daemon_config.realm());
             receipt_owner_uras.push(hub_ura.clone());
-            easynet_cli::daemon::ability::dispatch::AbilityAuthorityContext::for_hub_authority_root(
+            easynet_cli::daemon::ability::dispatch::AbilityAuthorityContext::for_realm_authority_root(
                 hub_ura,
             )?
         }

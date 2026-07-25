@@ -90,7 +90,7 @@ fn hub_mode_registry_satisfies_hub_local_registry_slice() {
     let _home = HomeGuard::new();
     let hub_ura = easynet_cli::core::ura::hub_ura("conformance-test");
     let authority_context =
-        easynet_cli::daemon::ability::dispatch::AbilityAuthorityContext::for_hub_authority_root(
+        easynet_cli::daemon::ability::dispatch::AbilityAuthorityContext::for_realm_authority_root(
             &hub_ura,
         )
         .expect("Hub authority context");
