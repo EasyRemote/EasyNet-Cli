@@ -161,7 +161,7 @@ func TestFileControlDiscoveryReaderRejectsLooseControlJSON(t *testing.T) {
 				"daemon_version":"0.91.30",
 				"supported_ipc_versions":{"min":1,"max":1},
 				"capability_flags":["invocation"],
-				"legacy_attach_hint":true
+				"retired_attach_hint":true
 			}`,
 		},
 		{

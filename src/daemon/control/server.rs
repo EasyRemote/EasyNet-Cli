@@ -19,8 +19,9 @@
 //   only boot/status subscriptions; serialise `OutgoingFrame`
 //   events back over the codec.
 // - Stay distinct from the RFC-003 gRPC transport socket
-//   `~/.easynet/daemon.sock`; `control.sock` is legacy
-//   length-delimited JSON IPC, `daemon.sock` is tonic `Invocation`.
+//   `~/.easynet/daemon.sock`; `control.sock` is bounded
+//   length-delimited boot/status IPC, `daemon.sock` is tonic
+//   `Invocation`.
 //
 // What is NOT in this commit
 // --------------------------
@@ -29,7 +30,7 @@
 //   dials this socket; this server still treats every accepted
 //   connection as v1 because there is no first-frame handshake yet.
 // - Product ability dispatch. That path is the daemon Invocation
-//   transport, not this legacy length-delimited JSON socket.
+//   transport, not this boot/status control socket.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.

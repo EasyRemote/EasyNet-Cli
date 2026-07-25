@@ -25,9 +25,9 @@
 // `supported_ipc_versions` is a *range* `{ min, max }`, not a single
 // value. The lib also knows a range; it picks `min(max_both)` if
 // the ranges overlap and fails early with `VERSION_INCOMPATIBLE` if
-// they don't. This lets the daemon deprecate an old protocol
-// version without a flag-day (ship `{ min: 2, max: 3 }` to drop v1;
-// old libs fail at init with a clear message).
+// they don't. This lets the daemon retire an unsupported protocol
+// version with an explicit cutover plan (ship `{ min: 2, max: 3 }`
+// to drop v1; older clients fail at init with a clear message).
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -47,14 +47,13 @@ static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// v1 IPC protocol version — the one the daemon actually speaks
 /// today. The range emitted into `control.json` is `{ min: 1, max:
-/// 1 }`. Bumping this requires either (a) maintaining backward
-/// compat over the frames the prior version understood or (b)
-/// widening the range with a flag-day plan.
+/// 1 }`. Bumping this requires a declared migration plan and an
+/// explicit range contract for every supported frame version.
 pub const IPC_VERSION_V1: u16 = 1;
 
 /// Contents of `~/.easynet/control.json`. The layout is an explicit local
 /// attach contract; once the file exists, unknown fields are malformed rather
-/// than ignored compatibility data.
+/// than ignored extension data.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ControlDiscovery {
@@ -393,13 +392,13 @@ mod tests {
         value
             .as_object_mut()
             .expect("sample discovery object")
-            .insert("legacy_attach_hint".to_string(), serde_json::json!(true));
+            .insert("retired_attach_hint".to_string(), serde_json::json!(true));
         std::fs::write(&p, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
 
         let err = read(&p).expect_err("unknown control.json fields must fail closed");
         assert!(
             err.to_string()
-                .contains("unknown field `legacy_attach_hint`"),
+                .contains("unknown field `retired_attach_hint`"),
             "unknown field should be reported explicitly: {err}"
         );
     }
@@ -412,13 +411,13 @@ mod tests {
         value["daemon_identity"]
             .as_object_mut()
             .expect("daemon identity object")
-            .insert("legacy_role".to_string(), serde_json::json!("agent"));
+            .insert("retired_role".to_string(), serde_json::json!("agent"));
         std::fs::write(&p, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
         let identity_err = read(&p).expect_err("unknown daemon_identity fields must fail closed");
         assert!(
             identity_err
                 .to_string()
-                .contains("unknown field `legacy_role`"),
+                .contains("unknown field `retired_role`"),
             "unknown identity field should be reported explicitly: {identity_err}"
         );
 
@@ -426,14 +425,14 @@ mod tests {
         value["supported_ipc_versions"]
             .as_object_mut()
             .expect("ipc version object")
-            .insert("legacy_version".to_string(), serde_json::json!(0));
+            .insert("retired_version".to_string(), serde_json::json!(0));
         std::fs::write(&p, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
         let version_err =
             read(&p).expect_err("unknown supported_ipc_versions fields must fail closed");
         assert!(
             version_err
                 .to_string()
-                .contains("unknown field `legacy_version`"),
+                .contains("unknown field `retired_version`"),
             "unknown version field should be reported explicitly: {version_err}"
         );
     }

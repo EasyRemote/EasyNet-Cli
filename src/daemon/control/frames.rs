@@ -128,12 +128,12 @@ mod tests {
             "subscription_id": "sub-42",
             "ability": "system.watch_boot",
             "args": {},
-            "legacy_route": "invoke"
+            "retired_route": "invoke"
         }"#;
         let err = serde_json::from_str::<IncomingFrame>(unknown)
             .expect_err("unknown inbound control frame fields must fail closed");
         assert!(
-            err.to_string().contains("unknown field `legacy_route`"),
+            err.to_string().contains("unknown field `retired_route`"),
             "unexpected unknown-field error: {err}"
         );
 
@@ -176,12 +176,12 @@ mod tests {
             "subscription_id": "sub-42",
             "code": "protocol",
             "message": "bad frame",
-            "legacy_status": "failed"
+            "retired_status": "failed"
         }"#;
         let err = serde_json::from_str::<OutgoingFrame>(raw)
             .expect_err("unknown outbound control frame fields must fail closed");
         assert!(
-            err.to_string().contains("unknown field `legacy_status`"),
+            err.to_string().contains("unknown field `retired_status`"),
             "unexpected unknown outbound field error: {err}"
         );
     }

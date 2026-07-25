@@ -3671,16 +3671,18 @@ for retired in (
     "adding a field later must use `#[serde(default)]`",
     "so old libs ignore it",
     "old libs ignore",
+    "backward compat over the frames",
+    "ignored compatibility data",
     "historical default",
 ):
     if retired in text:
         raise SystemExit(f"control_discovery_schema:retired_compat:{retired}")
 for required in (
     "control_discovery_rejects_unknown_fields",
-    "unknown field `legacy_attach_hint`",
+    "unknown field `retired_attach_hint`",
     "control_discovery_rejects_unknown_nested_identity_and_version_fields",
-    "unknown field `legacy_role`",
-    "unknown field `legacy_version`",
+    "unknown field `retired_role`",
+    "unknown field `retired_version`",
     "malformed_control_json_is_a_hard_error_not_silent_none",
     "read_missing_file_returns_none_not_error",
 ):
@@ -3748,15 +3750,15 @@ for token in (
 
 for token in (
     "TestFileControlDiscoveryReaderRejectsLooseControlJSON",
-    "legacy_attach_hint",
+    "retired_attach_hint",
     '"pages_port":0',
 ):
     if token not in go_test:
         raise SystemExit(f"sdk_control_discovery_strict_wire:go_test_missing:{token}")
 
 for token in (
-    "test_discovery_rejects_loose_compatibility_shape",
-    "legacy_attach_hint",
+    "test_discovery_rejects_retired_extension_shape",
+    "retired_attach_hint",
     '"pages_port": 0',
 ):
     if token not in py_test:
@@ -3818,10 +3820,10 @@ for required in (
 for required in (
     "retired_product_incoming_variant_fails_to_parse",
     "incoming_frame_rejects_unknown_fields_and_missing_subscribe_args",
-    "unknown field `legacy_route`",
+    "unknown field `retired_route`",
     "missing field `args`",
     "outgoing_frame_rejects_unknown_fields",
-    "unknown field `legacy_status`",
+    "unknown field `retired_status`",
 ):
     if required not in text:
         raise SystemExit(f"control_frame_schema:missing:{required}")
@@ -20814,8 +20816,8 @@ EOF
   if ( CLI_ROOT="$tmp/agent-spec-schema-legacy"; check_agent_spec_schema_contract ) >/dev/null 2>&1; then
     fail "self-test expected agent spec schema compatibility gate to fail"
   fi
-  mkdir -p "$tmp/control-discovery-schema-legacy/src/daemon/control"
-  cat >"$tmp/control-discovery-schema-legacy/src/daemon/control/discovery.rs" <<'EOF'
+  mkdir -p "$tmp/control-discovery-schema-retired/src/daemon/control"
+  cat >"$tmp/control-discovery-schema-retired/src/daemon/control/discovery.rs" <<'EOF'
 /// Contents of `~/.easynet/control.json`. The layout is frozen as
 /// of PR-DAEMON; adding a field later must use `#[serde(default)]`
 /// so old libs ignore it.
@@ -20858,7 +20860,7 @@ mod tests {
     fn read_missing_file_returns_none_not_error() {}
 }
 EOF
-  if ( CLI_ROOT="$tmp/control-discovery-schema-legacy"; check_control_discovery_schema_contract ) >/dev/null 2>&1; then
+  if ( CLI_ROOT="$tmp/control-discovery-schema-retired"; check_control_discovery_schema_contract ) >/dev/null 2>&1; then
     fail "self-test expected control discovery schema compatibility gate to fail"
   fi
   mkdir -p "$tmp/sdk-control-discovery-loose/sdk/go" \
@@ -20886,7 +20888,7 @@ EOF
 package easynet
 
 func TestFileControlDiscoveryReaderRejectsLooseControlJSON() {
-    _ = "legacy_attach_hint"
+    _ = "retired_attach_hint"
     _ = `"pages_port":0`
 }
 EOF
@@ -20897,15 +20899,15 @@ def from_json(decoded):
     return flags, pages_port
 EOF
   cat >"$tmp/sdk-control-discovery-loose/sdk/python/tests/test_control_ipc.py" <<'EOF'
-def test_discovery_rejects_loose_compatibility_shape():
-    legacy_attach_hint = True
+def test_discovery_rejects_retired_extension_shape():
+    retired_attach_hint = True
     value = {"pages_port": 0}
 EOF
   if ( CLI_ROOT="$tmp/sdk-control-discovery-loose"; check_sdk_control_discovery_strict_wire_contract ) >/dev/null 2>&1; then
     fail "self-test expected SDK control discovery loose parser gate to fail"
   fi
-  mkdir -p "$tmp/control-frame-schema-legacy/src/daemon/control"
-  cat >"$tmp/control-frame-schema-legacy/src/daemon/control/frames.rs" <<'EOF'
+  mkdir -p "$tmp/control-frame-schema-retired/src/daemon/control"
+  cat >"$tmp/control-frame-schema-retired/src/daemon/control/frames.rs" <<'EOF'
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum IncomingFrame {
@@ -20942,7 +20944,7 @@ mod tests {
     fn retired_product_incoming_variant_fails_to_parse() {}
 }
 EOF
-  if ( CLI_ROOT="$tmp/control-frame-schema-legacy"; check_control_frame_schema_contract ) >/dev/null 2>&1; then
+  if ( CLI_ROOT="$tmp/control-frame-schema-retired"; check_control_frame_schema_contract ) >/dev/null 2>&1; then
     fail "self-test expected control frame schema compatibility gate to fail"
   fi
   mkdir -p "$tmp/descriptor-wire-identity-fallback-legacy/src/daemon/ability/descriptors" \

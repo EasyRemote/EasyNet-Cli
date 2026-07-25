@@ -65,7 +65,7 @@ class ControlIpcTests(unittest.TestCase):
 
         self.assertTrue(is_code(caught.exception, ErrorCode.RUNTIME_OFFLINE))
 
-    def test_discovery_rejects_loose_compatibility_shape(self) -> None:
+    def test_discovery_rejects_retired_extension_shape(self) -> None:
         cases = [
             {
                 "socket_path": "/tmp/control.sock",
@@ -74,7 +74,7 @@ class ControlIpcTests(unittest.TestCase):
                 "daemon_version": "test",
                 "supported_ipc_versions": {"min": 1, "max": 1},
                 "capability_flags": ["boot_status"],
-                "legacy_attach_hint": True,
+                "retired_attach_hint": True,
             },
             {
                 "socket_path": "/tmp/control.sock",
@@ -98,7 +98,7 @@ class ControlIpcTests(unittest.TestCase):
                 "daemon_identity": {
                     "mode": "device",
                     "realm": "localhost",
-                    "legacy_role": "agent",
+                    "retired_role": "agent",
                 },
                 "pid": 123,
                 "daemon_version": "test",
