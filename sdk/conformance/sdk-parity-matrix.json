@@ -16416,11 +16416,270 @@
       "capability_id": "ability_invocation_facade",
       "language": "java",
       "profile": "runtime_core",
-      "status": "unsupported",
+      "status": "seam",
       "evidence_case_ids": [],
       "unproven_requirement_ids": [],
-      "shape_evidence": [],
-      "step_shape_evidence": [],
+      "shape_evidence": [
+        {
+          "item": "RuntimeAbilityProjection",
+          "sha256": "46b1209ceab47277bea11cebfb62eb35e8551ed9c6aba41a0b619c64d6dbe775"
+        }
+      ],
+      "step_shape_evidence": [
+        {
+          "case_id": "runtime/ability_child_dispatch",
+          "action": "derive_child_causal_context_from_parent_receipt",
+          "execution_case_bound": false,
+          "items": [
+            {
+              "item": "RuntimeAbilityProjection",
+              "sha256": "46b1209ceab47277bea11cebfb62eb35e8551ed9c6aba41a0b619c64d6dbe775"
+            }
+          ]
+        },
+        {
+          "case_id": "runtime/ability_child_dispatch",
+          "action": "dispatch_child_invocation_through_runtime",
+          "execution_case_bound": false,
+          "items": [
+            {
+              "item": "RuntimeAbilityProjection",
+              "sha256": "46b1209ceab47277bea11cebfb62eb35e8551ed9c6aba41a0b619c64d6dbe775"
+            }
+          ]
+        },
+        {
+          "case_id": "runtime/ability_child_dispatch",
+          "action": "observe_child_parent_receipt_link",
+          "execution_case_bound": false,
+          "items": [
+            {
+              "item": "RuntimeAbilityProjection",
+              "sha256": "46b1209ceab47277bea11cebfb62eb35e8551ed9c6aba41a0b619c64d6dbe775"
+            }
+          ]
+        },
+        {
+          "case_id": "runtime/ability_deadline_owner",
+          "action": "dispatch_ability_with_provider_deadline",
+          "execution_case_bound": false,
+          "items": [
+            {
+              "item": "RuntimeAbilityProjection",
+              "sha256": "46b1209ceab47277bea11cebfb62eb35e8551ed9c6aba41a0b619c64d6dbe775"
+            }
+          ]
+        },
+        {
+          "case_id": "runtime/ability_deadline_owner",
+          "action": "observe_ability_typed_timeout",
+          "execution_case_bound": false,
+          "items": [
+            {
+              "item": "RuntimeAbilityProjection",
+              "sha256": "46b1209ceab47277bea11cebfb62eb35e8551ed9c6aba41a0b619c64d6dbe775"
+            }
+          ]
+        },
+        {
+          "case_id": "runtime/ability_deadline_owner",
+          "action": "retry_ability_after_deadline_cleanup",
+          "execution_case_bound": false,
+          "items": [
+            {
+              "item": "RuntimeAbilityProjection",
+              "sha256": "46b1209ceab47277bea11cebfb62eb35e8551ed9c6aba41a0b619c64d6dbe775"
+            }
+          ]
+        },
+        {
+          "case_id": "runtime/ability_lowering",
+          "action": "require_explicit_caller",
+          "execution_case_bound": false,
+          "items": [
+            {
+              "item": "RuntimeAbilityProjection",
+              "sha256": "46b1209ceab47277bea11cebfb62eb35e8551ed9c6aba41a0b619c64d6dbe775"
+            }
+          ]
+        },
+        {
+          "case_id": "runtime/ability_lowering",
+          "action": "require_explicit_nonce_and_causal_context",
+          "execution_case_bound": false,
+          "items": [
+            {
+              "item": "RuntimeAbilityProjection",
+              "sha256": "46b1209ceab47277bea11cebfb62eb35e8551ed9c6aba41a0b619c64d6dbe775"
+            }
+          ]
+        },
+        {
+          "case_id": "runtime/ability_lowering",
+          "action": "delegate_descriptor_and_subject_projection",
+          "execution_case_bound": false,
+          "items": [
+            {
+              "item": "RuntimeAbilityProjection",
+              "sha256": "46b1209ceab47277bea11cebfb62eb35e8551ed9c6aba41a0b619c64d6dbe775"
+            }
+          ]
+        },
+        {
+          "case_id": "runtime/ability_lowering",
+          "action": "preserve_metadata_without_profile_injection",
+          "execution_case_bound": false,
+          "items": [
+            {
+              "item": "RuntimeAbilityProjection",
+              "sha256": "46b1209ceab47277bea11cebfb62eb35e8551ed9c6aba41a0b619c64d6dbe775"
+            }
+          ]
+        },
+        {
+          "case_id": "runtime/ability_lowering",
+          "action": "preserve_typed_runtime_failure",
+          "execution_case_bound": false,
+          "items": [
+            {
+              "item": "RuntimeAbilityProjection",
+              "sha256": "46b1209ceab47277bea11cebfb62eb35e8551ed9c6aba41a0b619c64d6dbe775"
+            }
+          ]
+        },
+        {
+          "case_id": "runtime/ability_provider_lifecycle",
+          "action": "dispatch_unary_invocation_through_runtime",
+          "execution_case_bound": false,
+          "items": [
+            {
+              "item": "RuntimeAbilityProjection",
+              "sha256": "46b1209ceab47277bea11cebfb62eb35e8551ed9c6aba41a0b619c64d6dbe775"
+            }
+          ]
+        },
+        {
+          "case_id": "runtime/ability_provider_lifecycle",
+          "action": "open_stream_invocation_through_runtime",
+          "execution_case_bound": false,
+          "items": [
+            {
+              "item": "RuntimeAbilityProjection",
+              "sha256": "46b1209ceab47277bea11cebfb62eb35e8551ed9c6aba41a0b619c64d6dbe775"
+            }
+          ]
+        },
+        {
+          "case_id": "runtime/ability_provider_lifecycle",
+          "action": "open_bidi_invocation_through_runtime",
+          "execution_case_bound": false,
+          "items": [
+            {
+              "item": "RuntimeAbilityProjection",
+              "sha256": "46b1209ceab47277bea11cebfb62eb35e8551ed9c6aba41a0b619c64d6dbe775"
+            }
+          ]
+        },
+        {
+          "case_id": "runtime/ability_provider_lifecycle",
+          "action": "cancel_runtime_invocation_handle",
+          "execution_case_bound": false,
+          "items": [
+            {
+              "item": "RuntimeAbilityProjection",
+              "sha256": "46b1209ceab47277bea11cebfb62eb35e8551ed9c6aba41a0b619c64d6dbe775"
+            }
+          ]
+        },
+        {
+          "case_id": "runtime/ability_provider_lifecycle",
+          "action": "observe_terminal_receipt_from_runtime_result",
+          "execution_case_bound": false,
+          "items": [
+            {
+              "item": "RuntimeAbilityProjection",
+              "sha256": "46b1209ceab47277bea11cebfb62eb35e8551ed9c6aba41a0b619c64d6dbe775"
+            }
+          ]
+        },
+        {
+          "case_id": "runtime/ability_restart_recover",
+          "action": "submit_ability_recovery_request",
+          "execution_case_bound": false,
+          "items": [
+            {
+              "item": "RuntimeAbilityProjection",
+              "sha256": "46b1209ceab47277bea11cebfb62eb35e8551ed9c6aba41a0b619c64d6dbe775"
+            }
+          ]
+        },
+        {
+          "case_id": "runtime/ability_restart_recover",
+          "action": "delegate_recovery_to_runtime_core",
+          "execution_case_bound": false,
+          "items": [
+            {
+              "item": "RuntimeAbilityProjection",
+              "sha256": "46b1209ceab47277bea11cebfb62eb35e8551ed9c6aba41a0b619c64d6dbe775"
+            }
+          ]
+        },
+        {
+          "case_id": "runtime/ability_restart_recover",
+          "action": "observe_runtime_started_recovery_report",
+          "execution_case_bound": false,
+          "items": [
+            {
+              "item": "RuntimeAbilityProjection",
+              "sha256": "46b1209ceab47277bea11cebfb62eb35e8551ed9c6aba41a0b619c64d6dbe775"
+            }
+          ]
+        },
+        {
+          "case_id": "runtime/ability_start_provider",
+          "action": "start_native_runtime_provider",
+          "execution_case_bound": false,
+          "items": [
+            {
+              "item": "RuntimeAbilityProjection",
+              "sha256": "46b1209ceab47277bea11cebfb62eb35e8551ed9c6aba41a0b619c64d6dbe775"
+            }
+          ]
+        },
+        {
+          "case_id": "runtime/ability_start_provider",
+          "action": "borrow_runtime_ability_facade",
+          "execution_case_bound": false,
+          "items": [
+            {
+              "item": "RuntimeAbilityProjection",
+              "sha256": "46b1209ceab47277bea11cebfb62eb35e8551ed9c6aba41a0b619c64d6dbe775"
+            }
+          ]
+        },
+        {
+          "case_id": "runtime/ability_start_provider",
+          "action": "lower_ability_call_after_start",
+          "execution_case_bound": false,
+          "items": [
+            {
+              "item": "RuntimeAbilityProjection",
+              "sha256": "46b1209ceab47277bea11cebfb62eb35e8551ed9c6aba41a0b619c64d6dbe775"
+            }
+          ]
+        },
+        {
+          "case_id": "runtime/ability_start_provider",
+          "action": "reject_ability_facade_after_provider_close",
+          "execution_case_bound": false,
+          "items": [
+            {
+              "item": "RuntimeAbilityProjection",
+              "sha256": "46b1209ceab47277bea11cebfb62eb35e8551ed9c6aba41a0b619c64d6dbe775"
+            }
+          ]
+        }
+      ],
       "public_api_ref": "sdk/conformance/canonical-public-api.json#capability_inventory/ability_invocation_facade",
       "provider_proof_ref": null
     },
@@ -278502,7 +278761,7 @@
         },
         {
           "item": "RuntimeAbilityClient",
-          "sha256": "2090ef6f08f856ae6beb29af6833a9f55a26445c97ab1d9ecb38f99e0f272f32"
+          "sha256": "a82fcd4cfa5712c048347edb0b03fc8b4e1e8700ea0127c44906a723db176b44"
         },
         {
           "item": "RuntimeCallContext",
@@ -278933,7 +279192,7 @@
             },
             {
               "item": "RuntimeAbilityClient",
-              "sha256": "2090ef6f08f856ae6beb29af6833a9f55a26445c97ab1d9ecb38f99e0f272f32"
+              "sha256": "a82fcd4cfa5712c048347edb0b03fc8b4e1e8700ea0127c44906a723db176b44"
             },
             {
               "item": "RuntimeCallContext",
@@ -279364,7 +279623,7 @@
             },
             {
               "item": "RuntimeAbilityClient",
-              "sha256": "2090ef6f08f856ae6beb29af6833a9f55a26445c97ab1d9ecb38f99e0f272f32"
+              "sha256": "a82fcd4cfa5712c048347edb0b03fc8b4e1e8700ea0127c44906a723db176b44"
             },
             {
               "item": "RuntimeCallContext",
@@ -279795,7 +280054,7 @@
             },
             {
               "item": "RuntimeAbilityClient",
-              "sha256": "2090ef6f08f856ae6beb29af6833a9f55a26445c97ab1d9ecb38f99e0f272f32"
+              "sha256": "a82fcd4cfa5712c048347edb0b03fc8b4e1e8700ea0127c44906a723db176b44"
             },
             {
               "item": "RuntimeCallContext",
@@ -280226,7 +280485,7 @@
             },
             {
               "item": "RuntimeAbilityClient",
-              "sha256": "2090ef6f08f856ae6beb29af6833a9f55a26445c97ab1d9ecb38f99e0f272f32"
+              "sha256": "a82fcd4cfa5712c048347edb0b03fc8b4e1e8700ea0127c44906a723db176b44"
             },
             {
               "item": "RuntimeCallContext",
@@ -280657,7 +280916,7 @@
             },
             {
               "item": "RuntimeAbilityClient",
-              "sha256": "2090ef6f08f856ae6beb29af6833a9f55a26445c97ab1d9ecb38f99e0f272f32"
+              "sha256": "a82fcd4cfa5712c048347edb0b03fc8b4e1e8700ea0127c44906a723db176b44"
             },
             {
               "item": "RuntimeCallContext",
@@ -281088,7 +281347,7 @@
             },
             {
               "item": "RuntimeAbilityClient",
-              "sha256": "2090ef6f08f856ae6beb29af6833a9f55a26445c97ab1d9ecb38f99e0f272f32"
+              "sha256": "a82fcd4cfa5712c048347edb0b03fc8b4e1e8700ea0127c44906a723db176b44"
             },
             {
               "item": "RuntimeCallContext",
@@ -281519,7 +281778,7 @@
             },
             {
               "item": "RuntimeAbilityClient",
-              "sha256": "2090ef6f08f856ae6beb29af6833a9f55a26445c97ab1d9ecb38f99e0f272f32"
+              "sha256": "a82fcd4cfa5712c048347edb0b03fc8b4e1e8700ea0127c44906a723db176b44"
             },
             {
               "item": "RuntimeCallContext",
@@ -281950,7 +282209,7 @@
             },
             {
               "item": "RuntimeAbilityClient",
-              "sha256": "2090ef6f08f856ae6beb29af6833a9f55a26445c97ab1d9ecb38f99e0f272f32"
+              "sha256": "a82fcd4cfa5712c048347edb0b03fc8b4e1e8700ea0127c44906a723db176b44"
             },
             {
               "item": "RuntimeCallContext",
@@ -282381,7 +282640,7 @@
             },
             {
               "item": "RuntimeAbilityClient",
-              "sha256": "2090ef6f08f856ae6beb29af6833a9f55a26445c97ab1d9ecb38f99e0f272f32"
+              "sha256": "a82fcd4cfa5712c048347edb0b03fc8b4e1e8700ea0127c44906a723db176b44"
             },
             {
               "item": "RuntimeCallContext",
@@ -282812,7 +283071,7 @@
             },
             {
               "item": "RuntimeAbilityClient",
-              "sha256": "2090ef6f08f856ae6beb29af6833a9f55a26445c97ab1d9ecb38f99e0f272f32"
+              "sha256": "a82fcd4cfa5712c048347edb0b03fc8b4e1e8700ea0127c44906a723db176b44"
             },
             {
               "item": "RuntimeCallContext",
@@ -283243,7 +283502,7 @@
             },
             {
               "item": "RuntimeAbilityClient",
-              "sha256": "2090ef6f08f856ae6beb29af6833a9f55a26445c97ab1d9ecb38f99e0f272f32"
+              "sha256": "a82fcd4cfa5712c048347edb0b03fc8b4e1e8700ea0127c44906a723db176b44"
             },
             {
               "item": "RuntimeCallContext",
@@ -283674,7 +283933,7 @@
             },
             {
               "item": "RuntimeAbilityClient",
-              "sha256": "2090ef6f08f856ae6beb29af6833a9f55a26445c97ab1d9ecb38f99e0f272f32"
+              "sha256": "a82fcd4cfa5712c048347edb0b03fc8b4e1e8700ea0127c44906a723db176b44"
             },
             {
               "item": "RuntimeCallContext",
@@ -284105,7 +284364,7 @@
             },
             {
               "item": "RuntimeAbilityClient",
-              "sha256": "2090ef6f08f856ae6beb29af6833a9f55a26445c97ab1d9ecb38f99e0f272f32"
+              "sha256": "a82fcd4cfa5712c048347edb0b03fc8b4e1e8700ea0127c44906a723db176b44"
             },
             {
               "item": "RuntimeCallContext",

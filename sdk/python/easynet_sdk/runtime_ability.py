@@ -5,7 +5,7 @@ from __future__ import annotations
 import base64
 import binascii
 from dataclasses import dataclass, field
-from typing import Mapping, TypeAlias
+from typing import Callable, Mapping, TypeAlias
 
 from ._identity_guards import contains_all_zero_principal
 from .axon_addressing import AddressingClient, AddressingProjection
@@ -55,6 +55,58 @@ class RuntimeCallContext:
     authority: RuntimeInvocationAuthority | None = None
 
 
+@dataclass(frozen=True)
+class _RuntimeAbilityProjection:
+    descriptor_ref: str
+    wire: str
+    ability_ura: str
+    public_name: str
+
+    @classmethod
+    def from_descriptor_ref(
+        cls,
+        addressing: AddressingClient,
+        descriptor_ref: str,
+    ) -> "_RuntimeAbilityProjection":
+        try:
+            projection = addressing.project_descriptor_ref(descriptor_ref)
+        except SDKError as exc:
+            raise _invalid(
+                "descriptor_ref must contain a canonical Ability URA",
+                exc,
+            ) from exc
+        ability_ura = projection.ability_ura.strip()
+        canonical_ref = projection.descriptor_ref.strip()
+        if not ability_ura or not canonical_ref:
+            raise _invalid("descriptor_ref must contain a canonical Ability URA")
+        try:
+            ability = addressing.project_ability_ura(ability_ura)
+        except SDKError as exc:
+            raise _invalid(
+                "descriptor_ref must contain a canonical Ability URA",
+                exc,
+            ) from exc
+        wire = _descriptor_wire_ability(ability_ura)
+        public_name = ability.public_name.strip() or wire
+        return cls(
+            descriptor_ref=canonical_ref,
+            wire=wire,
+            ability_ura=ability_ura,
+            public_name=public_name,
+        )
+
+    def matches_scope(self, matcher: Callable[[str], bool]) -> bool:
+        seen: set[str] = set()
+        for candidate in (self.public_name, self.ability_ura, self.wire):
+            candidate = candidate.strip()
+            if not candidate or candidate in seen:
+                continue
+            seen.add(candidate)
+            if matcher(candidate):
+                return True
+        return False
+
+
 class RuntimeAbilityClient:
     """Single generic Addressing-to-Invocation lowering path."""
 
@@ -90,12 +142,6 @@ class RuntimeAbilityClient:
             subject_ura = subject.ura
         else:
             raise _invalid(f"subject kind {subject.kind!r} is not descriptor-bound")
-        metadata = _canonical_runtime_call_metadata(
-            call,
-            subject_ura,
-            self._addressing.parse_ura(subject_ura),
-            ability_name,
-        )
         descriptor_ref = self._runtime.resolve_descriptor_ref(
             callee_ura=call.callee_ura.strip(),
             ability=ability_name,
@@ -103,11 +149,21 @@ class RuntimeAbilityClient:
             caller_ura=call.caller_ura.strip(),
             subject_ura=call.subject_ura.strip(),
         )
+        ability = _RuntimeAbilityProjection.from_descriptor_ref(
+            self._addressing,
+            descriptor_ref,
+        )
+        metadata = _canonical_runtime_call_metadata(
+            call,
+            subject_ura,
+            self._addressing.parse_ura(subject_ura),
+            ability,
+        )
         return (
             InvocationBuilder()
             .with_caller_ura(call.caller_ura.strip())
             .with_callee_ura(call.callee_ura.strip())
-            .with_descriptor_ref(descriptor_ref)
+            .with_descriptor_ref(ability.descriptor_ref)
             .with_subject_ura(subject_ura)
             .with_nonce_base64(call.nonce_base64.strip())
             .with_causal_context(dict(call.causal_context))
@@ -195,7 +251,7 @@ def _canonical_runtime_call_metadata(
     call: RuntimeCallContext,
     envelope_subject_ura: str,
     envelope_subject: AddressingProjection,
-    ability_name: str,
+    ability: _RuntimeAbilityProjection,
 ) -> dict[str, object]:
     metadata = dict(call.metadata)
     validate_authority_metadata(metadata)
@@ -218,7 +274,7 @@ def _canonical_runtime_call_metadata(
             call,
             envelope_subject_ura,
             envelope_subject,
-            ability_name,
+            ability,
         )
     return metadata
 
@@ -240,7 +296,7 @@ def _validate_runtime_authority_binding(
     call: RuntimeCallContext,
     envelope_subject_ura: str,
     envelope_subject: AddressingProjection,
-    ability_name: str,
+    ability: _RuntimeAbilityProjection,
 ) -> None:
     caller_ura = call.caller_ura.strip()
     callee_ura = call.callee_ura.strip()
@@ -253,7 +309,7 @@ def _validate_runtime_authority_binding(
             )
         if not authority.matches_audience(callee_ura):
             raise _invalid("runtime delegation audience does not admit callee_ura")
-        if not authority.matches_scope(ability_name):
+        if not ability.matches_scope(authority.matches_scope):
             raise _invalid("runtime delegation scopes do not admit ability")
         return
     if authority.issuer_ura.strip() != caller_ura:
@@ -270,8 +326,19 @@ def _validate_runtime_authority_binding(
         raise _invalid(
             "runtime session authority does not admit descriptor-bound subject_ura"
         )
-    if not authority.matches_scope(ability_name):
+    if not ability.matches_scope(authority.matches_scope):
         raise _invalid("runtime session authority scopes do not admit ability")
+
+
+def _descriptor_wire_ability(ability_ura: str) -> str:
+    marker = "/ability/"
+    clean = ability_ura.strip()
+    if marker not in clean:
+        raise _invalid("descriptor_ref must contain a canonical Ability URA")
+    wire = clean.split(marker, 1)[1].strip()
+    if not wire:
+        raise _invalid("descriptor_ref must contain a canonical Ability URA")
+    return wire
 
 
 def _required_text(value: object, field_name: str) -> str:

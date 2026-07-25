@@ -158,10 +158,6 @@ func (c *RuntimeAbilityClient) buildWithCallMode(ctx context.Context, call Runti
 	if err != nil {
 		return InvocationDraft{}, err
 	}
-	metadata, err := canonicalRuntimeCallMetadata(call, subjectURA, abilityName)
-	if err != nil {
-		return InvocationDraft{}, err
-	}
 	descriptorRef, err := c.runtime.ResolveDescriptorRef(ctx, RuntimeDescriptorRefRequest{
 		CalleeURA:  strings.TrimSpace(call.CalleeURA),
 		Ability:    abilityName,
@@ -172,10 +168,18 @@ func (c *RuntimeAbilityClient) buildWithCallMode(ctx context.Context, call Runti
 	if err != nil {
 		return InvocationDraft{}, err
 	}
+	ability, err := newRuntimeAbilityProjection(ctx, c.addressing, strings.TrimSpace(call.CalleeURA), descriptorRef)
+	if err != nil {
+		return InvocationDraft{}, err
+	}
+	metadata, err := canonicalRuntimeCallMetadata(call, subjectURA, ability)
+	if err != nil {
+		return InvocationDraft{}, err
+	}
 	return NewInvocationBuilder().
 		WithCallerURA(strings.TrimSpace(call.CallerURA)).
 		WithCalleeURA(strings.TrimSpace(call.CalleeURA)).
-		WithDescriptorRef(descriptorRef).
+		WithDescriptorRef(ability.descriptorRef).
 		WithSubjectURA(subjectURA).
 		WithNonceBase64(strings.TrimSpace(call.NonceBase64)).
 		WithCausalContext(call.CausalContext).
@@ -321,10 +325,79 @@ func validateRuntimeCallContext(call RuntimeCallContext) error {
 	return nil
 }
 
+type runtimeAbilityProjection struct {
+	descriptorRef string
+	wire          string
+	abilityURA    string
+	publicName    string
+}
+
+func newRuntimeAbilityProjection(
+	ctx context.Context,
+	addressing Addressing,
+	calleeURA string,
+	descriptorRef string,
+) (runtimeAbilityProjection, error) {
+	projection, err := addressing.ProjectDescriptorRef(
+		ctx,
+		CanonicalDescriptorRefRequest{DescriptorRef: descriptorRef},
+	)
+	if err != nil {
+		return runtimeAbilityProjection{}, invalidRuntimePayload(
+			"descriptor_ref must contain a canonical Ability URA",
+			err,
+		)
+	}
+	abilityURA := strings.TrimSpace(projection.AbilityURA)
+	canonicalRef := strings.TrimSpace(projection.DescriptorRef)
+	if abilityURA == "" || canonicalRef == "" {
+		return runtimeAbilityProjection{}, invalidRuntimePayload(
+			"descriptor_ref must contain a canonical Ability URA",
+			nil,
+		)
+	}
+	parts, err := ParseURAParts(abilityURA)
+	if err != nil || parts.Kind != URAKindAbility {
+		return runtimeAbilityProjection{}, invalidRuntimePayload(
+			"descriptor_ref must contain a canonical Ability URA",
+			err,
+		)
+	}
+	wire := strings.TrimSpace(parts.AbilityID)
+	publicName, ok := PublicAbilityNameFromAbilityURA(strings.TrimSpace(calleeURA), abilityURA)
+	if !ok || strings.TrimSpace(publicName) == "" {
+		publicName = wire
+	}
+	return runtimeAbilityProjection{
+		descriptorRef: canonicalRef,
+		wire:          wire,
+		abilityURA:    abilityURA,
+		publicName:    strings.TrimSpace(publicName),
+	}, nil
+}
+
+func (p runtimeAbilityProjection) matchesScope(match func(string) bool) bool {
+	seen := map[string]struct{}{}
+	for _, candidate := range []string{p.publicName, p.abilityURA, p.wire} {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" {
+			continue
+		}
+		if _, ok := seen[candidate]; ok {
+			continue
+		}
+		seen[candidate] = struct{}{}
+		if match(candidate) {
+			return true
+		}
+	}
+	return false
+}
+
 func canonicalRuntimeCallMetadata(
 	call RuntimeCallContext,
 	envelopeSubjectURA string,
-	abilityName string,
+	ability runtimeAbilityProjection,
 ) (map[string]any, error) {
 	metadata := cloneAbilityMetadata(call.Metadata)
 	if err := validateAuthorityMetadata(metadata); err != nil {
@@ -349,7 +422,7 @@ func canonicalRuntimeCallMetadata(
 			call.Authority,
 			call,
 			envelopeSubjectURA,
-			abilityName,
+			ability,
 		); err != nil {
 			return nil, err
 		}
@@ -365,7 +438,7 @@ func canonicalRuntimeCallMetadata(
 			authority,
 			call,
 			envelopeSubjectURA,
-			abilityName,
+			ability,
 		); err != nil {
 			return nil, err
 		}
@@ -414,19 +487,19 @@ func validateRuntimeAuthorityBinding(
 	authority RuntimeInvocationAuthority,
 	call RuntimeCallContext,
 	envelopeSubjectURA string,
-	abilityName string,
+	ability runtimeAbilityProjection,
 ) error {
 	callerURA := strings.TrimSpace(call.CallerURA)
 	calleeURA := strings.TrimSpace(call.CalleeURA)
 	switch typed := authority.(type) {
 	case DelegationProof:
-		return validateRuntimeDelegationBinding(&typed, callerURA, calleeURA, envelopeSubjectURA, abilityName)
+		return validateRuntimeDelegationBinding(&typed, callerURA, calleeURA, envelopeSubjectURA, ability)
 	case *DelegationProof:
-		return validateRuntimeDelegationBinding(typed, callerURA, calleeURA, envelopeSubjectURA, abilityName)
+		return validateRuntimeDelegationBinding(typed, callerURA, calleeURA, envelopeSubjectURA, ability)
 	case SessionAuthority:
-		return validateRuntimeSessionBinding(&typed, callerURA, calleeURA, envelopeSubjectURA, abilityName)
+		return validateRuntimeSessionBinding(&typed, callerURA, calleeURA, envelopeSubjectURA, ability)
 	case *SessionAuthority:
-		return validateRuntimeSessionBinding(typed, callerURA, calleeURA, envelopeSubjectURA, abilityName)
+		return validateRuntimeSessionBinding(typed, callerURA, calleeURA, envelopeSubjectURA, ability)
 	default:
 		return invalidRuntimePayload("runtime call authority has an unsupported canonical type", nil)
 	}
@@ -437,7 +510,7 @@ func validateRuntimeDelegationBinding(
 	callerURA string,
 	calleeURA string,
 	subjectURA string,
-	abilityName string,
+	ability runtimeAbilityProjection,
 ) error {
 	if proof == nil {
 		return invalidRuntimePayload("runtime delegation authority is required", nil)
@@ -451,7 +524,7 @@ func validateRuntimeDelegationBinding(
 	if !proof.MatchesAudience(calleeURA) {
 		return invalidRuntimePayload("runtime delegation audience does not admit callee_ura", nil)
 	}
-	if !proof.MatchesScope(abilityName) {
+	if !ability.matchesScope(proof.MatchesScope) {
 		return invalidRuntimePayload("runtime delegation scopes do not admit ability", nil)
 	}
 	return nil
@@ -462,7 +535,7 @@ func validateRuntimeSessionBinding(
 	callerURA string,
 	calleeURA string,
 	subjectURA string,
-	abilityName string,
+	ability runtimeAbilityProjection,
 ) error {
 	if authority == nil {
 		return invalidRuntimePayload("runtime session authority is required", nil)
@@ -479,7 +552,7 @@ func validateRuntimeSessionBinding(
 	if !runtimeSessionAuthorityAdmitsSubject(authority, subjectURA) {
 		return invalidRuntimePayload("runtime session authority does not admit descriptor-bound subject_ura", nil)
 	}
-	if !authority.MatchesScope(abilityName) {
+	if !ability.matchesScope(authority.MatchesScope) {
 		return invalidRuntimePayload("runtime session authority scopes do not admit ability", nil)
 	}
 	return nil

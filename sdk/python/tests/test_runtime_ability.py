@@ -340,7 +340,7 @@ def test_runtime_ability_materializes_typed_authority() -> None:
     assert SESSION_AUTHORITY_METADATA_KEY not in call.metadata
 
 
-def test_runtime_ability_rejects_authority_subject_mismatch_before_resolution() -> None:
+def test_runtime_ability_rejects_authority_subject_mismatch_after_descriptor_projection() -> None:
     client, transport = _client()
     call = replace(
         _call(),
@@ -355,7 +355,7 @@ def test_runtime_ability_rejects_authority_subject_mismatch_before_resolution() 
             {},
         )
 
-    assert transport.descriptor_requests == []
+    assert len(transport.descriptor_requests) == 1
 
 
 def test_runtime_ability_validates_raw_authority_metadata() -> None:
@@ -376,7 +376,46 @@ def test_runtime_ability_validates_raw_authority_metadata() -> None:
             {},
         )
 
-    assert transport.descriptor_requests == []
+    assert len(transport.descriptor_requests) == 1
+
+
+def test_runtime_ability_authority_scope_admits_canonical_ability_ura() -> None:
+    client, _ = _client()
+    call = _call()
+    authority = _runtime_session_authority(call, "alice")
+    authority = replace(
+        authority,
+        scopes=("easynet:///r/example/ability/authority.namespace.resolve",),
+        allowed_followup_abilities=(
+            "easynet:///r/example/ability/authority.namespace.resolve",
+        ),
+    )
+
+    client.build(replace(call, authority=authority), "namespace.resolve", {})
+
+
+def test_runtime_ability_rejects_descriptor_ref_without_canonical_ability_ura() -> None:
+    class OpaqueDescriptorTransport(RuntimeTransportFake):
+        def resolve_descriptor_ref(self, request_json: bytes) -> bytes:
+            self.descriptor_requests.append(json.loads(request_json))
+            return json.dumps(
+                {
+                    "descriptor_ref": (
+                        "opaque-provider-ref@1.0.0#"
+                        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                        "!read"
+                    )
+                }
+            ).encode()
+
+    transport = OpaqueDescriptorTransport()
+    client = RuntimeAbilityClient(
+        RuntimeClient(transport),  # type: ignore[arg-type]
+        AddressingClient(AxonAddressingTransport()),
+    )
+
+    with pytest.raises(SDKError, match="descriptor_ref must contain a canonical Ability URA"):
+        client.build(_call(), "namespace.resolve", {})
 
 
 def test_runtime_ability_rejects_duplicate_authority_representations() -> None:

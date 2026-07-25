@@ -414,12 +414,12 @@ func TestRuntimeAbilityClientMaterializesTypedAuthorityIntoCanonicalDraft(t *tes
 	}
 }
 
-func TestRuntimeAbilityClientRejectsAuthoritySubjectMismatchBeforeResolution(t *testing.T) {
+func TestRuntimeAbilityClientRejectsAuthoritySubjectMismatchAfterDescriptorProjection(t *testing.T) {
 	resolverCalls := 0
 	runtime, err := NewRuntimeClient(RuntimeTransportFunc{
-		ResolveDescriptorRefFunc: func(_ context.Context, _ []byte) ([]byte, error) {
+		ResolveDescriptorRefFunc: func(ctx context.Context, requestJSON []byte) ([]byte, error) {
 			resolverCalls++
-			return nil, nil
+			return testResolveDescriptorRef(t)(ctx, requestJSON)
 		},
 	})
 	if err != nil {
@@ -438,17 +438,17 @@ func TestRuntimeAbilityClientRejectsAuthoritySubjectMismatchBeforeResolution(t *
 	if err == nil || !strings.Contains(err.Error(), "does not admit descriptor-bound subject_ura") {
 		t.Fatalf("subject mismatch error = %v", err)
 	}
-	if resolverCalls != 0 {
-		t.Fatalf("descriptor resolver called %d times after authority mismatch", resolverCalls)
+	if resolverCalls != 1 {
+		t.Fatalf("descriptor resolver calls = %d, want descriptor-bound projection before authority", resolverCalls)
 	}
 }
 
 func TestRuntimeAbilityClientValidatesRawAuthorityMetadata(t *testing.T) {
 	resolverCalls := 0
 	runtime, err := NewRuntimeClient(RuntimeTransportFunc{
-		ResolveDescriptorRefFunc: func(_ context.Context, _ []byte) ([]byte, error) {
+		ResolveDescriptorRefFunc: func(ctx context.Context, requestJSON []byte) ([]byte, error) {
 			resolverCalls++
-			return nil, nil
+			return testResolveDescriptorRef(t)(ctx, requestJSON)
 		},
 	})
 	if err != nil {
@@ -471,8 +471,52 @@ func TestRuntimeAbilityClientValidatesRawAuthorityMetadata(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "does not admit descriptor-bound subject_ura") {
 		t.Fatalf("raw authority mismatch error = %v", err)
 	}
-	if resolverCalls != 0 {
-		t.Fatalf("descriptor resolver called %d times after raw authority mismatch", resolverCalls)
+	if resolverCalls != 1 {
+		t.Fatalf("descriptor resolver calls = %d, want descriptor-bound projection before raw authority", resolverCalls)
+	}
+}
+
+func TestRuntimeAbilityClientAuthorityScopeAdmitsCanonicalAbilityURA(t *testing.T) {
+	runtime, err := NewRuntimeClient(RuntimeTransportFunc{
+		ResolveDescriptorRefFunc: testResolveDescriptorRef(t),
+	})
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
+	}
+	client, err := NewRuntimeAbilityClient(runtime, NewCanonicalAddressing())
+	if err != nil {
+		t.Fatalf("NewRuntimeAbilityClient: %v", err)
+	}
+	call := runtimeAbilityTestContext()
+	authority := runtimeAbilitySessionAuthority(t, call, "alice")
+	authority.Scopes = []string{"easynet:///r/example/ability/authority.namespace.resolve"}
+	authority.AllowedFollowupAbilities = []string{"easynet:///r/example/ability/authority.namespace.resolve"}
+	call.Authority = &authority
+
+	if _, err := client.Build(context.Background(), call, "namespace.resolve", map[string]any{}); err != nil {
+		t.Fatalf("Build with canonical Ability URA scope: %v", err)
+	}
+}
+
+func TestRuntimeAbilityClientRejectsDescriptorRefWithoutCanonicalAbilityURA(t *testing.T) {
+	runtime, err := NewRuntimeClient(RuntimeTransportFunc{
+		ResolveDescriptorRefFunc: func(context.Context, []byte) ([]byte, error) {
+			return json.Marshal(map[string]any{
+				"descriptor_ref": "opaque-provider-ref@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read",
+			})
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
+	}
+	client, err := NewRuntimeAbilityClient(runtime, NewCanonicalAddressing())
+	if err != nil {
+		t.Fatalf("NewRuntimeAbilityClient: %v", err)
+	}
+
+	_, err = client.Build(context.Background(), runtimeAbilityTestContext(), "namespace.resolve", map[string]any{})
+	if err == nil || !strings.Contains(err.Error(), "descriptor_ref must contain a canonical Ability URA") {
+		t.Fatalf("descriptor projection error = %v", err)
 	}
 }
 
