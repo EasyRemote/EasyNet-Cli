@@ -189,7 +189,11 @@ func (f requestFrame) projectInvocation() (SidecarInvocation, error) {
 	if err := json.Unmarshal(f.Invocation, &invocation); err != nil {
 		return SidecarInvocation{}, protocolError("sidecar frame field \"invocation\" must be an object")
 	}
-	return invocation.project(f.Type, f.CallID)
+	return sidecarInvocationProjection{
+		frameType: f.Type,
+		callID:    f.CallID,
+		frame:     invocation,
+	}.project()
 }
 
 func decodeInvocationFields(raw json.RawMessage) (map[string]json.RawMessage, error) {
@@ -249,45 +253,83 @@ func requireInvocationFields(object map[string]json.RawMessage) error {
 	return nil
 }
 
-func (f sidecarInvocationFrame) project(frameType string, callID string) (SidecarInvocation, error) {
-	if frameType != "invoke" {
-		return SidecarInvocation{}, protocolError("exec sidecar expected invoke frame, got %q", frameType)
+type sidecarInvocationProjection struct {
+	frameType string
+	callID    string
+	frame     sidecarInvocationFrame
+}
+
+func (p sidecarInvocationProjection) project() (SidecarInvocation, error) {
+	if err := p.validateFrameType(); err != nil {
+		return SidecarInvocation{}, err
 	}
+	if err := p.validateTupleStrings(); err != nil {
+		return SidecarInvocation{}, err
+	}
+	if err := p.validateNonce(); err != nil {
+		return SidecarInvocation{}, err
+	}
+	if err := p.validateObjects(); err != nil {
+		return SidecarInvocation{}, err
+	}
+	return p.intoInvocation(), nil
+}
+
+func (p sidecarInvocationProjection) validateFrameType() error {
+	if p.frameType != "invoke" {
+		return protocolError("exec sidecar expected invoke frame, got %q", p.frameType)
+	}
+	return nil
+}
+
+func (p sidecarInvocationProjection) validateTupleStrings() error {
 	for field, value := range map[string]string{
-		"caller_ura":  f.CallerURA,
-		"callee_ura":  f.CalleeURA,
-		"ability_ura": f.AbilityURA,
-		"subject_ura": f.SubjectURA,
+		"caller_ura":  p.frame.CallerURA,
+		"callee_ura":  p.frame.CalleeURA,
+		"ability_ura": p.frame.AbilityURA,
+		"subject_ura": p.frame.SubjectURA,
 	} {
 		if value == "" {
-			return SidecarInvocation{}, protocolError("sidecar frame field %q must be a string", field)
+			return protocolError("sidecar frame field %q must be a string", field)
 		}
 	}
-	if len(f.InvocationNonce) == 0 {
-		return SidecarInvocation{}, protocolError("sidecar frame field \"invocation_nonce\" must be a byte array")
+	return nil
+}
+
+func (p sidecarInvocationProjection) validateNonce() error {
+	if len(p.frame.InvocationNonce) == 0 {
+		return protocolError("sidecar frame field \"invocation_nonce\" must be a byte array")
 	}
-	for _, item := range f.InvocationNonce {
+	for _, item := range p.frame.InvocationNonce {
 		if item < 0 || item > 255 {
-			return SidecarInvocation{}, protocolError("sidecar frame field \"invocation_nonce\" must contain bytes")
+			return protocolError("sidecar frame field \"invocation_nonce\" must contain bytes")
 		}
 	}
-	if f.CausalContext == nil {
-		return SidecarInvocation{}, protocolError("sidecar frame field \"causal_context\" must be an object")
+	return nil
+}
+
+func (p sidecarInvocationProjection) validateObjects() error {
+	if p.frame.CausalContext == nil {
+		return protocolError("sidecar frame field \"causal_context\" must be an object")
 	}
-	if f.Args == nil {
-		return SidecarInvocation{}, protocolError("sidecar frame field \"args\" must be an object")
+	if p.frame.Args == nil {
+		return protocolError("sidecar frame field \"args\" must be an object")
 	}
+	return nil
+}
+
+func (p sidecarInvocationProjection) intoInvocation() SidecarInvocation {
 	return SidecarInvocation{
-		CallID:          callID,
-		CallerURA:       f.CallerURA,
-		CalleeURA:       f.CalleeURA,
-		AbilityURA:      f.AbilityURA,
-		SubjectURA:      f.SubjectURA,
-		InvocationNonce: append([]int(nil), f.InvocationNonce...),
-		CausalContext:   f.CausalContext,
-		Args:            f.Args,
-		FrameType:       frameType,
-	}, nil
+		CallID:          p.callID,
+		CallerURA:       p.frame.CallerURA,
+		CalleeURA:       p.frame.CalleeURA,
+		AbilityURA:      p.frame.AbilityURA,
+		SubjectURA:      p.frame.SubjectURA,
+		InvocationNonce: append([]int(nil), p.frame.InvocationNonce...),
+		CausalContext:   p.frame.CausalContext,
+		Args:            p.frame.Args,
+		FrameType:       p.frameType,
+	}
 }
 
 func writeResponseFrame(output io.Writer, frame responseFrame) error {

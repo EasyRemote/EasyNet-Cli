@@ -219,6 +219,53 @@ func TestServeIORejectsMissingCanonicalInvocationObjects(t *testing.T) {
 	}
 }
 
+func TestSidecarInvocationProjectionCopiesNonceAndRejectsMutation(t *testing.T) {
+	nonce := []int{1, 2, 3, 4}
+	projection := sidecarInvocationProjection{
+		frameType: "invoke",
+		callID:    "call-1",
+		frame: sidecarInvocationFrame{
+			CallerURA:       "easynet:///r/hub/user/alice",
+			CalleeURA:       "easynet:///r/hub/device/provider",
+			AbilityURA:      "demo.echo",
+			SubjectURA:      "easynet:///r/hub/resource/demo",
+			InvocationNonce: nonce,
+			CausalContext:   map[string]any{"form": "none"},
+			Args:            map[string]any{"message": "hello"},
+		},
+	}
+
+	invocation, err := projection.project()
+	if err != nil {
+		t.Fatalf("project: %v", err)
+	}
+	nonce[0] = 99
+
+	if invocation.InvocationNonce[0] != 1 {
+		t.Fatalf("projection must copy invocation_nonce, got %#v", invocation.InvocationNonce)
+	}
+}
+
+func TestSidecarInvocationProjectionRejectsNonInvokeFrame(t *testing.T) {
+	_, err := sidecarInvocationProjection{
+		frameType: "stream_open",
+		callID:    "call-1",
+		frame: sidecarInvocationFrame{
+			CallerURA:       "easynet:///r/hub/user/alice",
+			CalleeURA:       "easynet:///r/hub/device/provider",
+			AbilityURA:      "demo.echo",
+			SubjectURA:      "easynet:///r/hub/resource/demo",
+			InvocationNonce: []int{1, 2, 3, 4},
+			CausalContext:   map[string]any{"form": "none"},
+			Args:            map[string]any{"message": "hello"},
+		},
+	}.project()
+
+	if err == nil || !strings.Contains(err.Error(), "expected invoke frame") {
+		t.Fatalf("expected non-invoke frame rejection, got %v", err)
+	}
+}
+
 func testFrame() string {
 	return `{"type":"invoke","call_id":"call-1","invocation":{"caller_ura":"easynet:///r/hub/user/alice","callee_ura":"easynet:///r/hub/device/provider","ability_ura":"demo.echo","subject_ura":"easynet:///r/hub/resource/demo","invocation_nonce":[1,2,3,4],"causal_context":{"form":"none"},"args":{"message":"hello"}}}`
 }

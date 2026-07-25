@@ -10298,6 +10298,8 @@ PY
 
 check_plugin_sidecar_helper_matrix_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
+  CHECK_GO_PLUGINEXEC_PROJECTION_ROOT="$cli_root" \
+    bash "$ROOT/tools/scripts/check-go-pluginexec-projection-boundary.sh" >/dev/null
   local template="$cli_root/src/cli/commands/groups/plugin_template.rs"
   if [[ ! -f "$template" ]]; then
     fail "plugin sidecar helper matrix source is missing: $template"
