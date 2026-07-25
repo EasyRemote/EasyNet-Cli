@@ -3,6 +3,7 @@ import hashlib
 import json
 import unittest
 from dataclasses import fields, replace
+from types import MappingProxyType
 
 from axon_sdk.invocation import AuthorityBinding, authority_binding_proof_hash
 from easynet_sdk import (
@@ -858,6 +859,51 @@ class RuntimeTests(unittest.TestCase):
             RuntimeReceipt.from_required_mapping(incomplete)
 
         self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+
+    def test_runtime_receipt_projection_is_deep_immutable(self) -> None:
+        complete = canonical_runtime_receipt(
+            "inv-proof-immutable", "completed", "completed", 1
+        )
+        receipt = RuntimeReceipt.from_mapping(complete)
+
+        authority_binding = complete["authority_binding"]
+        authority_proof = complete["authority_proof"]
+        assert isinstance(authority_binding, dict)
+        assert isinstance(authority_proof, dict)
+        proof_binding = authority_proof["binding"]
+        assert isinstance(proof_binding, dict)
+        authority_binding["legacy_authority"] = "post-validation-mutation"
+        proof_binding["legacy_proof_fact"] = "post-validation-mutation"
+
+        self.assertIsInstance(receipt.raw, MappingProxyType)
+        self.assertIsInstance(receipt.raw["authority_binding"], MappingProxyType)
+        self.assertIsInstance(receipt.raw["authority_proof"], MappingProxyType)
+        proof = receipt.raw["authority_proof"]
+        assert isinstance(proof, MappingProxyType)
+        self.assertIsInstance(proof["binding"], MappingProxyType)
+
+        first_projection = receipt.to_json_dict()
+        projected_authority = first_projection["authority_binding"]
+        projected_proof = first_projection["authority_proof"]
+        projected_parents = first_projection["parent_receipts"]
+        assert isinstance(projected_authority, dict)
+        assert isinstance(projected_proof, dict)
+        assert isinstance(projected_proof["binding"], dict)
+        self.assertIsInstance(projected_parents, list)
+        self.assertNotIn("legacy_authority", projected_authority)
+        self.assertNotIn("legacy_proof_fact", projected_proof["binding"])
+
+        projected_authority["legacy_authority"] = "raw-projection-mutation"
+        projected_proof["binding"]["legacy_proof_fact"] = "raw-projection-mutation"
+
+        second_projection = receipt.to_json_dict()
+        second_authority = second_projection["authority_binding"]
+        second_proof = second_projection["authority_proof"]
+        assert isinstance(second_authority, dict)
+        assert isinstance(second_proof, dict)
+        assert isinstance(second_proof["binding"], dict)
+        self.assertNotIn("legacy_authority", second_authority)
+        self.assertNotIn("legacy_proof_fact", second_proof["binding"])
 
     def test_runtime_receipt_owns_fail_closed_lifecycle_projection(self) -> None:
         receipt = RuntimeReceipt.from_required_mapping(

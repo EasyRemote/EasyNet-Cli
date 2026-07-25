@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import json
 from dataclasses import dataclass, field, fields, replace
+from types import MappingProxyType
 from typing import Any, Mapping, Optional, Protocol, cast, runtime_checkable
 
 from axon_sdk.invocation import (
@@ -492,7 +493,9 @@ class RuntimeReceipt:
     parent_receipts: tuple[RuntimeReceiptRef, ...] = field(default_factory=tuple)
 
     def __post_init__(self) -> None:
-        decoded = _decode_runtime_receipt_mapping(self.raw)
+        decoded = _decode_runtime_receipt_mapping(
+            _mutable_runtime_receipt_projection(self.raw)
+        )
         for decoded_field in fields(_DecodedRuntimeReceipt):
             name = decoded_field.name
             if getattr(self, name) != getattr(decoded, name):
@@ -505,8 +508,11 @@ class RuntimeReceipt:
     def from_mapping(cls, decoded: Mapping[str, object]) -> "RuntimeReceipt":
         """Decode the only accepted canonical runtime receipt projection."""
 
-        projection = _decode_runtime_receipt_mapping(decoded)
-        return cls(raw=dict(decoded), **vars(projection))
+        raw = _immutable_runtime_receipt_projection(decoded, "runtime receipt")
+        projection = _decode_runtime_receipt_mapping(
+            _mutable_runtime_receipt_projection(raw)
+        )
+        return cls(raw=raw, **vars(projection))
 
     @classmethod
     def from_required_mapping(cls, decoded: Mapping[str, object]) -> "RuntimeReceipt":
@@ -661,7 +667,52 @@ class RuntimeReceipt:
         _validate_runtime_receipt_canonical_proof_facts(self)
 
     def to_json_dict(self) -> dict[str, object]:
-        return dict(self.raw)
+        return _mutable_runtime_receipt_projection(self.raw)
+
+
+def _immutable_runtime_receipt_projection(
+    value: object,
+    field_name: str,
+) -> Mapping[str, object]:
+    if not isinstance(value, Mapping):
+        raise _invalid_runtime(f"{field_name} must be an object")
+    projected: dict[str, object] = {}
+    for key, item in value.items():
+        if not isinstance(key, str):
+            raise _invalid_runtime(f"{field_name} object keys must be strings")
+        projected[key] = _immutable_runtime_receipt_value(
+            item,
+            f"{field_name}.{key}",
+        )
+    return MappingProxyType(projected)
+
+
+def _immutable_runtime_receipt_value(value: object, field_name: str) -> object:
+    if isinstance(value, Mapping):
+        return _immutable_runtime_receipt_projection(value, field_name)
+    if isinstance(value, (list, tuple)):
+        return tuple(
+            _immutable_runtime_receipt_value(item, f"{field_name}[{index}]")
+            for index, item in enumerate(value)
+        )
+    return value
+
+
+def _mutable_runtime_receipt_projection(value: object) -> dict[str, object]:
+    if not isinstance(value, Mapping):
+        raise _invalid_runtime("runtime receipt projection must be an object")
+    return {
+        str(key): _mutable_runtime_receipt_value(item)
+        for key, item in value.items()
+    }
+
+
+def _mutable_runtime_receipt_value(value: object) -> object:
+    if isinstance(value, Mapping):
+        return _mutable_runtime_receipt_projection(value)
+    if isinstance(value, (list, tuple)):
+        return [_mutable_runtime_receipt_value(item) for item in value]
+    return value
 
 
 @dataclass(frozen=True)
@@ -1651,9 +1702,12 @@ def _validate_runtime_receipt_causal_binding(
             "prior",
         )
         prior = binding.get("prior")
-        if not isinstance(prior, list) or not prior:
-            raise _invalid_runtime("causal_binding.prior must be a non-empty array")
-        for index, receipt in enumerate(prior):
+        prior_items = _runtime_receipt_raw_array(
+            prior,
+            "causal_binding.prior",
+            require_non_empty=True,
+        )
+        for index, receipt in enumerate(prior_items):
             _validate_runtime_receipt_ref(
                 receipt,
                 f"causal_binding.prior[{index}]",
@@ -1785,9 +1839,9 @@ def _validate_runtime_receipt_raw_proof_shape(raw: Mapping[str, object]) -> None
         )
 
     parents = raw.get("parent_receipts")
-    if not isinstance(parents, list):
-        raise _invalid_runtime("parent_receipts must be an array")
-    for index, parent in enumerate(parents):
+    for index, parent in enumerate(
+        _runtime_receipt_raw_array(parents, "parent_receipts")
+    ):
         field_name = f"parent_receipts[{index}]"
         _require_runtime_receipt_exact_keys(
             _runtime_receipt_raw_mapping(parent, field_name),
@@ -1861,6 +1915,19 @@ def _runtime_receipt_raw_mapping(
     if not isinstance(value, Mapping):
         raise _invalid_runtime(f"{field_name} must be an object")
     return value
+
+
+def _runtime_receipt_raw_array(
+    value: object,
+    field_name: str,
+    *,
+    require_non_empty: bool = False,
+) -> tuple[object, ...]:
+    if not isinstance(value, (list, tuple)):
+        raise _invalid_runtime(f"{field_name} must be an array")
+    if require_non_empty and not value:
+        raise _invalid_runtime(f"{field_name} must be a non-empty array")
+    return tuple(value)
 
 
 def _require_runtime_receipt_exact_keys(

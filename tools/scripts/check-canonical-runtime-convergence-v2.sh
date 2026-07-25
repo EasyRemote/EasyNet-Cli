@@ -14962,6 +14962,13 @@ from pathlib import Path
 runtime, tests = [Path(path).read_text(encoding="utf-8") for path in sys.argv[1:]]
 
 for fragment, label in {
+    "MappingProxyType": "deep_immutable_mapping_missing",
+    "_immutable_runtime_receipt_projection": "deep_immutable_projection_missing",
+    "_immutable_runtime_receipt_value": "deep_immutable_value_missing",
+    "_mutable_runtime_receipt_projection": "deep_mutable_projection_missing",
+    "_mutable_runtime_receipt_value": "deep_mutable_value_missing",
+    'raw = _immutable_runtime_receipt_projection(decoded, "runtime receipt")': "runtime_receipt_not_deep_immutable",
+    "return _mutable_runtime_receipt_projection(self.raw)": "raw_projection_not_deep_cloned",
     "_validate_runtime_receipt_raw_proof_shape": "raw_proof_shape_validator_missing",
     "_validate_runtime_receipt_authority_binding_shape": "authority_binding_shape_validator_missing",
     "_require_runtime_receipt_exact_keys": "exact_object_schema_validator_missing",
@@ -14977,9 +14984,13 @@ for fragment, label in {
         raise SystemExit(f"python_runtime_receipt_projection:{label}")
 
 for forbidden, label in {
+    "raw=dict(decoded)": "runtime_receipt_shallow_copy_bypass",
+    "return dict(self.raw)": "runtime_receipt_shallow_projection_bypass",
     'self.assertIn("issuer_ura", raised.exception.message)': "retired_session_field_missing_only_test",
 }.items():
     if forbidden in tests:
+        raise SystemExit(f"python_runtime_receipt_projection:{label}")
+    if forbidden in runtime:
         raise SystemExit(f"python_runtime_receipt_projection:{label}")
 
 for required_test in (
@@ -14996,6 +15007,10 @@ for required_test in (
     "payload_content_type",
     "host_attestation_base64",
     "usage",
+    "test_runtime_receipt_projection_is_deep_immutable",
+    "MappingProxyType",
+    "post-validation-mutation",
+    "raw-projection-mutation",
 ):
     if required_test not in tests:
         raise SystemExit(f"python_runtime_receipt_projection:missing_test:{required_test}")
@@ -15973,6 +15988,19 @@ EOF
     "$tmp/cli-python-receipt-proof-shape-legacy/sdk/python/easynet_sdk/runtime.py"
   if ( CLI_ROOT="$tmp/cli-python-receipt-proof-shape-legacy"; check_python_sdk_runtime_receipt_projection_contract ) >/dev/null 2>&1; then
     fail "self-test expected Python SDK receipt proof-fact exact-shape gate to fail"
+  fi
+  mkdir -p "$tmp/cli-python-receipt-shallow-copy-legacy/sdk/python/easynet_sdk" \
+    "$tmp/cli-python-receipt-shallow-copy-legacy/sdk/python/tests"
+  cp "$ROOT/sdk/python/easynet_sdk/runtime.py" \
+    "$tmp/cli-python-receipt-shallow-copy-legacy/sdk/python/easynet_sdk/runtime.py"
+  cp "$ROOT/sdk/python/tests/test_runtime.py" \
+    "$tmp/cli-python-receipt-shallow-copy-legacy/sdk/python/tests/test_runtime.py"
+  perl -0pi -e 's/raw = _immutable_runtime_receipt_projection\(decoded, "runtime receipt"\)\n        projection = _decode_runtime_receipt_mapping\(\n            _mutable_runtime_receipt_projection\(raw\)\n        \)\n        return cls\(raw=raw, \*\*vars\(projection\)\)/projection = _decode_runtime_receipt_mapping(decoded)\n        return cls(raw=dict(decoded), **vars(projection))/s' \
+    "$tmp/cli-python-receipt-shallow-copy-legacy/sdk/python/easynet_sdk/runtime.py"
+  perl -0pi -e 's/return _mutable_runtime_receipt_projection\(self\.raw\)/return dict(self.raw)/' \
+    "$tmp/cli-python-receipt-shallow-copy-legacy/sdk/python/easynet_sdk/runtime.py"
+  if ( CLI_ROOT="$tmp/cli-python-receipt-shallow-copy-legacy"; check_python_sdk_runtime_receipt_projection_contract ) >/dev/null 2>&1; then
+    fail "self-test expected Python SDK receipt shallow-copy mutability gate to fail"
   fi
   mkdir -p "$tmp/cli-node-receipt-legacy/sdk/node/test"
   cat >"$tmp/cli-node-receipt-legacy/sdk/node/index.js" <<'EOF'
