@@ -15030,6 +15030,11 @@ if "export class RuntimeReceipt" not in types:
     raise SystemExit("node_runtime_receipt_projection:runtime_receipt_declaration_missing")
 for fragment, label in {
     "validateRuntimeReceiptProofFacts": "proof_fact_validator_missing",
+    "immutableRuntimeReceiptProjection": "deep_immutable_projection_missing",
+    "immutableRuntimeReceiptValue": "deep_immutable_value_missing",
+    "mutableRuntimeReceiptProjection": "deep_mutable_projection_missing",
+    'this.raw = immutableRuntimeReceiptProjection(raw, "runtime receipt")': "runtime_receipt_not_deep_immutable",
+    "return mutableRuntimeReceiptProjection(this.raw)": "raw_projection_not_deep_cloned",
     "validateRuntimeReceiptAuthorityProofHash": "authority_proof_hash_validator_missing",
     "canonicalRuntimeAuthorityBytes": "authority_binding_projection_missing",
     "requireRuntimeReceiptExactKeys": "exact_object_schema_validator_missing",
@@ -15056,6 +15061,8 @@ if "RuntimeReceipt.fromObject(objectValue(value, \"terminal_receipt\"))" not in 
 if 'Object.hasOwn(decoded, "receipt")' not in runtime or "retired receipt alias is not accepted" not in runtime:
     raise SystemExit("node_runtime_receipt_projection:retired_receipt_alias_not_rejected")
 for forbidden, label in {
+    "Object.freeze(this.raw)": "runtime_receipt_shallow_freeze_bypass",
+    "return { ...this.raw }": "runtime_receipt_shallow_projection_bypass",
     "delete result.receipt": "retired_receipt_alias_delete",
     "terminal_receipt: { receipt_ref": "opaque_terminal_receipt_fixture",
     "receipt_ref:": "opaque_receipt_ref_fixture",
@@ -15084,6 +15091,9 @@ for required_test in (
     "payload_content_type",
     "host_attestation_base64",
     "usage",
+    "runtime receipt projection is deep immutable",
+    "post-validation-mutation",
+    "raw-projection-mutation",
     "retired receipt alias is not accepted",
 ):
     if required_test not in test_corpus:
@@ -15983,6 +15993,20 @@ EOF
     > "$tmp/cli-node-receipt-legacy/sdk/node/test/conformance-cases.test.mjs"
   if ( CLI_ROOT="$tmp/cli-node-receipt-legacy"; check_node_sdk_runtime_receipt_projection_contract ) >/dev/null 2>&1; then
     fail "self-test expected Node SDK receipt projection bypass gate to fail"
+  fi
+  mkdir -p "$tmp/cli-node-receipt-shallow-copy-legacy/sdk/node/test"
+  cp "$ROOT/sdk/node/index.js" "$tmp/cli-node-receipt-shallow-copy-legacy/sdk/node/index.js"
+  cp "$ROOT/sdk/node/index.d.ts" "$tmp/cli-node-receipt-shallow-copy-legacy/sdk/node/index.d.ts"
+  cp "$ROOT/sdk/node/test/runtime-core.test.mjs" \
+    "$tmp/cli-node-receipt-shallow-copy-legacy/sdk/node/test/runtime-core.test.mjs"
+  cp "$ROOT/sdk/node/test/conformance-cases.test.mjs" \
+    "$tmp/cli-node-receipt-shallow-copy-legacy/sdk/node/test/conformance-cases.test.mjs"
+  perl -0pi -e 's/this\.raw = immutableRuntimeReceiptProjection\(raw, "runtime receipt"\);/this.raw = objectValue(raw, "runtime receipt");/' \
+    "$tmp/cli-node-receipt-shallow-copy-legacy/sdk/node/index.js"
+  perl -0pi -e 's/return mutableRuntimeReceiptProjection\(this\.raw\);/return { ...this.raw };/' \
+    "$tmp/cli-node-receipt-shallow-copy-legacy/sdk/node/index.js"
+  if ( CLI_ROOT="$tmp/cli-node-receipt-shallow-copy-legacy"; check_node_sdk_runtime_receipt_projection_contract ) >/dev/null 2>&1; then
+    fail "self-test expected Node SDK receipt shallow-copy mutability gate to fail"
   fi
   mkdir -p "$tmp/cli-ffi-json-legacy/src/ffi/invocation"
   cat >"$tmp/cli-ffi-json-legacy/src/ffi/invocation/mod.rs" <<'EOF'

@@ -729,14 +729,47 @@ export class InvocationDraft {
   }
 }
 
+function immutableRuntimeReceiptProjection(raw, field) {
+  const value = objectValue(raw, field);
+  for (const [key, item] of Object.entries(value)) {
+    value[key] = immutableRuntimeReceiptValue(item, `${field}.${key}`);
+  }
+  return Object.freeze(value);
+}
+
+function immutableRuntimeReceiptValue(value, field) {
+  if (Array.isArray(value)) {
+    return Object.freeze(
+      value.map((item, index) => immutableRuntimeReceiptValue(item, `${field}[${index}]`)),
+    );
+  }
+  if (value && typeof value === "object") {
+    return immutableRuntimeReceiptProjection(value, field);
+  }
+  return value;
+}
+
+function mutableRuntimeReceiptProjection(raw) {
+  if (Array.isArray(raw)) {
+    return raw.map((item) => mutableRuntimeReceiptProjection(item));
+  }
+  if (raw && typeof raw === "object") {
+    const value = {};
+    for (const [key, item] of Object.entries(raw)) {
+      value[key] = mutableRuntimeReceiptProjection(item);
+    }
+    return value;
+  }
+  return raw;
+}
+
 export class RuntimeReceipt {
   constructor(raw) {
-    this.raw = objectValue(raw, "runtime receipt");
+    this.raw = immutableRuntimeReceiptProjection(raw, "runtime receipt");
     this.invocationId = requiredRuntimeString(this.raw.invocation_id, "invocation_id");
     this.receiptType = requiredRuntimeString(this.raw.receipt_type, "receipt_type");
     this.state = requiredRuntimeString(this.raw.state, "state");
     this.validateSummary();
-    Object.freeze(this.raw);
   }
 
   static fromObject(raw) {
@@ -748,7 +781,7 @@ export class RuntimeReceipt {
   }
 
   rawProjection() {
-    return { ...this.raw };
+    return mutableRuntimeReceiptProjection(this.raw);
   }
 
   validateSummary() {

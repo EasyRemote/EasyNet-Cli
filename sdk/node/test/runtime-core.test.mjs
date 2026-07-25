@@ -614,6 +614,30 @@ test("runtime receipt proof facts are mandatory", () => {
   );
 });
 
+test("runtime receipt projection is deep immutable", () => {
+  const complete = canonicalRuntimeReceipt("inv-proof-immutable", "completed", "Completed", 1);
+  const receipt = sdk.RuntimeReceipt.fromObject(complete);
+
+  complete.authority_binding.legacy_authority = "post-validation-mutation";
+  complete.authority_proof.binding.legacy_proof_fact = "post-validation-mutation";
+
+  assert.equal(Object.isFrozen(receipt.raw), true);
+  assert.equal(Object.isFrozen(receipt.raw.authority_binding), true);
+  assert.equal(Object.isFrozen(receipt.raw.authority_proof), true);
+  assert.equal(Object.isFrozen(receipt.raw.authority_proof.binding), true);
+
+  const firstProjection = receipt.rawProjection();
+  assert.equal(Object.hasOwn(firstProjection.authority_binding, "legacy_authority"), false);
+  assert.equal(Object.hasOwn(firstProjection.authority_proof.binding, "legacy_proof_fact"), false);
+
+  firstProjection.authority_binding.legacy_authority = "raw-projection-mutation";
+  firstProjection.authority_proof.binding.legacy_proof_fact = "raw-projection-mutation";
+
+  const secondProjection = receipt.rawProjection();
+  assert.equal(Object.hasOwn(secondProjection.authority_binding, "legacy_authority"), false);
+  assert.equal(Object.hasOwn(secondProjection.authority_proof.binding, "legacy_proof_fact"), false);
+});
+
 test("runtime receipt session authority facade uses generic fields", () => {
   const sessionBinding = {
     kind: "session",
