@@ -8272,6 +8272,62 @@ for test in (
 PY
 }
 
+check_mission_workspace_easynet_binary_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local workspace="$cli_root/src/daemon/execution/mission/workspace.rs"
+  local codex_driver="$cli_root/src/daemon/execution/mission/drivers/codex.rs"
+  [[ -f "$workspace" ]] || return 0
+
+  "$PYTHON_BIN" - "$workspace" "$codex_driver" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+codex_driver = Path(sys.argv[2]).read_text(encoding="utf-8") if Path(sys.argv[2]).exists() else ""
+production = text.split("\n#[cfg(test)]", 1)[0]
+
+for retired in (
+    '"easynet".to_string()',
+    "Last resort: the literal string",
+    "Step 3: last resort",
+    "let spawn-time PATH search find it",
+    "final fallback: bare name",
+):
+    if retired in production:
+        raise SystemExit(f"mission_workspace_easynet_binary:retired_fallback:{retired}")
+
+for required in (
+    "fn resolve_easynet_binary() -> anyhow::Result<String>",
+    "fn resolve_easynet_binary_from(",
+    "path_env: Option<&OsStr>",
+    "build_mcp_entry(\n    agent_name: &str,\n) -> anyhow::Result<",
+    "let (cmd, args, env) = build_mcp_entry(agent_name)?;",
+    "refusing to persist an unresolved MCP command",
+):
+    if required not in production:
+        raise SystemExit(f"mission_workspace_easynet_binary:missing:{required}")
+
+if re.search(r"fn\s+resolve_easynet_binary\(\)\s*->\s*String", production):
+    raise SystemExit("mission_workspace_easynet_binary:resolver_still_infallible")
+if re.search(r"pub\(super\)\s+fn\s+build_mcp_entry\([^)]*\)\s*->\s*\(String,\s*Vec<String>,\s*serde_json::Value\)", production, re.S):
+    raise SystemExit("mission_workspace_easynet_binary:mcp_entry_still_infallible")
+if codex_driver:
+    if "workspace::build_mcp_entry(&agent_name);" in codex_driver:
+        raise SystemExit("mission_workspace_easynet_binary:codex_driver_drops_fallible_entry")
+    if "resolve EasyNet MCP entry for Codex mission driver" not in codex_driver:
+        raise SystemExit("mission_workspace_easynet_binary:codex_driver_context_missing")
+
+for test in (
+    "resolve_easynet_binary_does_not_use_test_runner_path",
+    "resolve_easynet_binary_rejects_unresolved_bare_name",
+    "resolve_easynet_binary_accepts_daemon_sibling_cli",
+):
+    if test not in text:
+        raise SystemExit(f"mission_workspace_easynet_binary:missing_test:{test}")
+PY
+}
+
 check_mission_agent_trace_sink_cutover_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local agent_mod="$cli_root/src/cli/commands/agent/mod.rs"
@@ -19731,6 +19787,70 @@ EOF
   if ( check_eal_device_target_identity_contract "$tmp/eal-device-target-identity-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected EAL device target identity fallback gate to fail"
   fi
+  mkdir -p "$tmp/mission-workspace-easynet-binary-legacy/src/daemon/execution/mission"
+  cat >"$tmp/mission-workspace-easynet-binary-legacy/src/daemon/execution/mission/workspace.rs" <<'EOF'
+fn resolve_easynet_binary() -> String {
+    let current = std::env::current_exe().ok();
+    if let Some(path) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&path) {
+            let candidate = dir.join("easynet");
+            if candidate.is_file() {
+                return candidate.to_string_lossy().to_string();
+            }
+        }
+    }
+    // Step 3: last resort — let spawn-time PATH search find it.
+    "easynet".to_string()
+}
+
+pub(super) fn build_mcp_entry(agent_name: &str) -> (String, Vec<String>, serde_json::Value) {
+    let cmd = resolve_easynet_binary();
+    (cmd, vec!["mcp".into(), "serve".into()], serde_json::json!({}))
+}
+EOF
+  if ( check_mission_workspace_easynet_binary_contract "$tmp/mission-workspace-easynet-binary-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected Mission workspace EasyNet binary fallback gate to fail"
+  fi
+  mkdir -p "$tmp/mission-workspace-codex-driver-legacy/src/daemon/execution/mission/drivers" \
+    "$tmp/mission-workspace-codex-driver-legacy/src/daemon/execution/mission"
+  cat >"$tmp/mission-workspace-codex-driver-legacy/src/daemon/execution/mission/workspace.rs" <<'EOF'
+use std::ffi::OsStr;
+use std::path::Path;
+
+fn resolve_easynet_binary() -> anyhow::Result<String> {
+    resolve_easynet_binary_from(None, None)
+}
+
+fn resolve_easynet_binary_from(
+    current: Option<&Path>,
+    path_env: Option<&OsStr>,
+) -> anyhow::Result<String> {
+    anyhow::bail!("refusing to persist an unresolved MCP command")
+}
+
+pub(super) fn build_mcp_entry(
+    agent_name: &str,
+) -> anyhow::Result<(String, Vec<String>, serde_json::Value)> {
+    let cmd = resolve_easynet_binary()?;
+    Ok((cmd, vec!["mcp".into(), "serve".into()], serde_json::json!({})))
+}
+
+#[cfg(test)]
+mod tests {
+    fn resolve_easynet_binary_does_not_use_test_runner_path() {}
+    fn resolve_easynet_binary_rejects_unresolved_bare_name() {}
+    fn resolve_easynet_binary_accepts_daemon_sibling_cli() {}
+}
+EOF
+  cat >"$tmp/mission-workspace-codex-driver-legacy/src/daemon/execution/mission/drivers/codex.rs" <<'EOF'
+fn invoke_exec() {
+    let agent_name = "codex".to_string();
+    let (mcp_cmd, mcp_args, mcp_env) = workspace::build_mcp_entry(&agent_name);
+}
+EOF
+  if ( check_mission_workspace_easynet_binary_contract "$tmp/mission-workspace-codex-driver-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected Mission workspace Codex driver fallible entry gate to fail"
+  fi
   mkdir -p "$tmp/mission-agent-trace-sink-legacy/src/cli/commands/agent" \
     "$tmp/mission-agent-trace-sink-legacy/src/daemon/execution/mission/executors" \
     "$tmp/mission-agent-trace-sink-legacy/src/daemon/ability/builtins/automation"
@@ -21844,6 +21964,7 @@ EOF
   check_device_settings_loader_contract
   check_mission_traditional_target_conflict_contract
   check_eal_device_target_identity_contract
+  check_mission_workspace_easynet_binary_contract
   check_mission_agent_trace_sink_cutover_contract
   check_mission_dispatch_audit_authority_contract
   check_mission_runtime_meta_identity_schema_contract
@@ -22070,6 +22191,7 @@ check_federation_revoke_ingress_strict_contract
 check_device_settings_loader_contract
 check_mission_traditional_target_conflict_contract
 check_eal_device_target_identity_contract
+check_mission_workspace_easynet_binary_contract
 check_mission_agent_trace_sink_cutover_contract
 check_mission_dispatch_audit_authority_contract
 check_mission_runtime_meta_identity_schema_contract

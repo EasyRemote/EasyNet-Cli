@@ -43,6 +43,7 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -181,7 +182,7 @@ pub fn ensure_from_directory(dir: &AgentDirectory) -> anyhow::Result<PathBuf> {
 // ── .mcp.json — Claude Code project-level MCP discovery ─────────────────────
 
 fn write_mcp_json(ws: &Path, agent_name: &str) -> anyhow::Result<()> {
-    let (cmd, args, env) = build_mcp_entry(agent_name);
+    let (cmd, args, env) = build_mcp_entry(agent_name)?;
 
     let mcp_json = serde_json::json!({
         "mcpServers": {
@@ -214,7 +215,7 @@ fn write_codex_config(ws: &Path, model: Option<&str>, agent_name: &str) -> anyho
     // same encoder is used by `daemon::execution::mission::drivers::codex`
     // so the runtime form (`-c` overrides) and the on-disk form (this file)
     // stay in lock-step.
-    let (cmd, args, env) = build_mcp_entry(agent_name);
+    let (cmd, args, env) = build_mcp_entry(agent_name)?;
     let args_toml = args
         .iter()
         .map(|a| toml_basic_string(a))
@@ -364,10 +365,7 @@ const ABILITY_AUTHOR_SKILL_MD: &str =
 ///
 /// Resolution order:
 ///   1. `current_exe()` IF the executable is named `easynet`
-///      / `easynet-daemon` (the two binaries that actually
-///      implement `mcp-server`). This is the production case:
-///      the daemon spawned the call, so its own path is the
-///      correct subprocess to relaunch.
+///      or sibling `easynet` next to `easynet-daemon`.
 ///   2. Else, search `PATH` for a binary literally named
 ///      `easynet`. This catches the dev-time scenario where a
 ///      maintainer runs `cargo run --bin gen-ability-tomls` or
@@ -376,8 +374,8 @@ const ABILITY_AUTHOR_SKILL_MD: &str =
 ///      point at the real `easynet` install on the developer's
 ///      PATH (typically `/usr/local/bin/easynet` from
 ///      `cargo install easynet`).
-///   3. Last resort: the literal string `"easynet"` and let
-///      the spawn-time PATH search find it.
+///   3. If neither source proves an executable, fail before the
+///      workspace projection writes a stale MCP command.
 ///
 /// Why we don't use current_exe unconditionally
 /// --------------------------------------------
@@ -389,9 +387,17 @@ const ABILITY_AUTHOR_SKILL_MD: &str =
 /// to use an EasyNet MCP tool would fail silently. The check
 /// against the binary's filename eliminates that whole class
 /// of test-side-effect.
-fn resolve_easynet_binary() -> String {
-    let current = std::env::current_exe().ok();
+fn resolve_easynet_binary() -> anyhow::Result<String> {
+    resolve_easynet_binary_from(
+        std::env::current_exe().ok().as_deref(),
+        std::env::var_os("PATH").as_deref(),
+    )
+}
 
+fn resolve_easynet_binary_from(
+    current: Option<&Path>,
+    path_env: Option<&OsStr>,
+) -> anyhow::Result<String> {
     // Step 1: if current_exe is `easynet` (the CLI binary that DOES
     // parse `mcp serve`), use it directly. Doing this preserves the
     // dev-build path (target/debug/easynet) — the production
@@ -417,13 +423,13 @@ fn resolve_easynet_binary() -> String {
     // The right binary for `.mcp.json` is always `easynet` (which
     // routes `mcp serve` through `cli::mcp_server::run`). Resolve
     // it from the current_exe's parent directory first (production
-    // installs side-by-side); fall back to PATH lookup; final
-    // fallback: bare name and let exec() find it.
-    if let Some(p) = current.as_ref() {
+    // installs side-by-side), then fall back to PATH lookup. If
+    // neither source proves the CLI exists, reject the projection.
+    if let Some(p) = current {
         if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
             if stem == "easynet" {
                 if let Some(s) = p.to_str() {
-                    return s.to_string();
+                    return Ok(s.to_string());
                 }
             }
             if stem == "easynet-daemon" {
@@ -434,7 +440,7 @@ fn resolve_easynet_binary() -> String {
                     let sibling = parent.join("easynet");
                     if sibling.is_file() {
                         if let Some(s) = sibling.to_str() {
-                            return s.to_string();
+                            return Ok(s.to_string());
                         }
                     }
                 }
@@ -443,27 +449,31 @@ fn resolve_easynet_binary() -> String {
     }
 
     // Step 2: search PATH for `easynet`.
-    if let Some(path) = std::env::var_os("PATH") {
+    if let Some(path) = path_env {
         for dir in std::env::split_paths(&path) {
             let candidate = dir.join("easynet");
             if candidate.is_file() {
                 if let Some(s) = candidate.to_str() {
-                    return s.to_string();
+                    return Ok(s.to_string());
                 }
             }
         }
     }
 
-    // Step 3: last resort — let spawn-time PATH search find it.
-    "easynet".to_string()
+    anyhow::bail!(
+        "resolve EasyNet MCP binary: current executable is not `easynet` and no `easynet` binary \
+         was found on PATH; refusing to persist an unresolved MCP command"
+    )
 }
 
 /// Build the command, arguments, and environment for the read-only EasyNet
 /// MCP subprocess in an agent workspace. Cross-agent execution is owned by
 /// the mission runtime; the MCP entry carries only tenant and launching-agent
 /// identity for discovery and audit projection.
-pub(super) fn build_mcp_entry(agent_name: &str) -> (String, Vec<String>, serde_json::Value) {
-    let cmd = resolve_easynet_binary();
+pub(super) fn build_mcp_entry(
+    agent_name: &str,
+) -> anyhow::Result<(String, Vec<String>, serde_json::Value)> {
+    let cmd = resolve_easynet_binary()?;
     // The CLI subcommand is `easynet mcp serve` (a two-token
     // path, not a single hyphenated `mcp-server`). The earlier
     // shape was renamed when the `mcp` group split into
@@ -507,7 +517,7 @@ pub(super) fn build_mcp_entry(agent_name: &str) -> (String, Vec<String>, serde_j
         );
     }
 
-    (cmd, args, serde_json::Value::Object(env))
+    Ok((cmd, args, serde_json::Value::Object(env)))
 }
 
 fn generate_knowledge_doc() -> String {
@@ -695,6 +705,38 @@ easynet device list                     # list hosting substrates
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    static PATH_ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+    fn with_fake_easynet_on_path<T>(tag: &str, f: impl FnOnce() -> T) -> T {
+        let _guard = PATH_ENV_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("PATH fixture lock");
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.subsec_nanos())
+            .unwrap_or(0);
+        let bin_dir = std::env::temp_dir().join(format!("easynet-bin-{tag}-{pid}-{nanos}"));
+        fs::create_dir_all(&bin_dir).expect("create fake easynet bin dir");
+        fs::write(bin_dir.join("easynet"), b"#!/bin/sh\n").expect("write fake easynet binary");
+        let previous_path = std::env::var_os("PATH");
+        let mut paths = vec![bin_dir.clone()];
+        if let Some(previous) = previous_path.as_ref() {
+            paths.extend(std::env::split_paths(previous));
+        }
+        let joined_path = std::env::join_paths(paths).expect("join PATH fixture");
+        std::env::set_var("PATH", joined_path);
+        let result = f();
+        match previous_path {
+            Some(path) => std::env::set_var("PATH", path),
+            None => std::env::remove_var("PATH"),
+        }
+        let _ = fs::remove_dir_all(&bin_dir);
+        result
+    }
 
     /// Verify that workspace generation resolves the production CLI rather
     /// than accidentally persisting the Rust test-runner path.
@@ -705,10 +747,10 @@ mod tests {
         // `target/debug/deps/easynet_cli-<hash>`), NOT `easynet`.
         // Pre-fix this leaked into the developer's `.mcp.json`
         // and broke claude.chat's MCP discovery for any subsequent
-        // call. The resolver must return either an actual
-        // `easynet` path on PATH, or the bare string "easynet"
-        // — never the test runner's path.
-        let resolved = resolve_easynet_binary();
+        // call. The resolver must return an actual `easynet` path,
+        // never the test runner's path or an unresolved bare name.
+        let resolved =
+            with_fake_easynet_on_path("runner-path", || resolve_easynet_binary().unwrap());
         let runner = std::env::current_exe().ok();
         if let Some(r) = runner {
             let r_str = r.to_string_lossy().to_string();
@@ -718,16 +760,51 @@ mod tests {
                  fix the resolver, see the slice-24 commit message"
             );
         }
-        // The resolved path either ends in /easynet or is the
-        // literal "easynet" fallback.
+        assert_ne!(
+            resolved, "easynet",
+            "resolver must not return a bare fallback"
+        );
         let stem = std::path::Path::new(&resolved)
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("");
         assert!(
-            stem == "easynet" || stem == "easynet-daemon" || resolved == "easynet",
+            stem == "easynet",
             "resolved binary path has unexpected name: {resolved}"
         );
+    }
+
+    #[test]
+    fn resolve_easynet_binary_rejects_unresolved_bare_name() {
+        let error = resolve_easynet_binary_from(None, None)
+            .expect_err("missing current executable and PATH must fail closed");
+
+        assert!(
+            error
+                .to_string()
+                .contains("refusing to persist an unresolved MCP command"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn resolve_easynet_binary_accepts_daemon_sibling_cli() {
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.subsec_nanos())
+            .unwrap_or(0);
+        let bin_dir = std::env::temp_dir().join(format!("easynet-sibling-{pid}-{nanos}"));
+        fs::create_dir_all(&bin_dir).expect("create sibling fixture");
+        let daemon = bin_dir.join("easynet-daemon");
+        let cli = bin_dir.join("easynet");
+        fs::write(&daemon, b"daemon").expect("write daemon fixture");
+        fs::write(&cli, b"cli").expect("write cli fixture");
+
+        let resolved = resolve_easynet_binary_from(Some(&daemon), None).unwrap();
+
+        assert_eq!(resolved, cli.to_string_lossy().to_string());
+        let _ = fs::remove_dir_all(&bin_dir);
     }
 
     #[test]
@@ -741,7 +818,8 @@ mod tests {
         // it. Lock the correct two-token path so a future
         // rename of the subcommand requires updating both this
         // writer and this test in lockstep.
-        let (_, args, _) = build_mcp_entry("claude");
+        let (_, args, _) =
+            with_fake_easynet_on_path("two-token", || build_mcp_entry("claude").unwrap());
         assert_eq!(args.first().map(|s| s.as_str()), Some("mcp"));
         assert_eq!(args.get(1).map(|s| s.as_str()), Some("serve"));
         // The hyphenated form must NEVER appear.
@@ -755,7 +833,8 @@ mod tests {
 
     #[test]
     fn build_mcp_entry_passes_agent_name_via_two_arg_flag() {
-        let (cmd, args, _env) = build_mcp_entry("claude");
+        let (cmd, args, _env) =
+            with_fake_easynet_on_path("agent-flag", || build_mcp_entry("claude").unwrap());
         assert!(!cmd.is_empty(), "command must be set");
         // The agent name must be passed as `--agent <name>` (two adjacent
         // args, not a single `--agent=name`).
@@ -786,8 +865,12 @@ mod tests {
 
     #[test]
     fn build_mcp_entry_threads_different_agent_names() {
-        let (_, args_a, _) = build_mcp_entry("alice");
-        let (_, args_b, _) = build_mcp_entry("bob");
+        let ((_, args_a, _), (_, args_b, _)) = with_fake_easynet_on_path("agent-names", || {
+            (
+                build_mcp_entry("alice").unwrap(),
+                build_mcp_entry("bob").unwrap(),
+            )
+        });
         let agent_a = args_a
             .iter()
             .position(|a| a == "--agent")
@@ -831,7 +914,8 @@ mod tests {
     #[test]
     fn ensure_from_directory_writes_claude_knowledge_and_mcp_json() {
         let (dir, root) = scratch_dir("claude-proj", RuntimeKind::ClaudeCode);
-        let returned = ensure_from_directory(&dir).unwrap();
+        let returned =
+            with_fake_easynet_on_path("claude-proj", || ensure_from_directory(&dir).unwrap());
         assert_eq!(returned, root);
         // Claude-path files.
         assert!(root.join("CLAUDE.md").is_file());
@@ -861,7 +945,7 @@ mod tests {
     #[test]
     fn ensure_from_directory_for_codex_also_writes_codex_config_and_skill() {
         let (dir, root) = scratch_dir("codex-proj", RuntimeKind::Codex);
-        ensure_from_directory(&dir).unwrap();
+        with_fake_easynet_on_path("codex-proj", || ensure_from_directory(&dir).unwrap());
         assert!(root.join("CLAUDE.md").is_file());
         assert!(root.join(".mcp.json").is_file());
         assert!(root.join(".codex/config.toml").is_file());
@@ -918,7 +1002,7 @@ mod tests {
         // a future refactor that tightens the match from
         // accidentally splitting the two variants.
         let (dir, root) = scratch_dir("codex-as", RuntimeKind::CodexAppServer);
-        ensure_from_directory(&dir).unwrap();
+        with_fake_easynet_on_path("codex-as", || ensure_from_directory(&dir).unwrap());
         assert!(root.join(".codex/config.toml").is_file());
         cleanup(&root);
     }
@@ -940,12 +1024,16 @@ mod tests {
         // branch deterministic.
         let _g = crate::cli::commands::test_support::HomeGuard::new();
         let (dir, root) = scratch_dir("idem", RuntimeKind::Codex);
-        ensure_from_directory(&dir).unwrap();
-        let mcp_before = fs::read(root.join(".mcp.json")).unwrap();
-        let codex_before = fs::read(root.join(".codex/config.toml")).unwrap();
-        ensure_from_directory(&dir).unwrap();
-        let mcp_after = fs::read(root.join(".mcp.json")).unwrap();
-        let codex_after = fs::read(root.join(".codex/config.toml")).unwrap();
+        let (mcp_before, codex_before, mcp_after, codex_after) =
+            with_fake_easynet_on_path("idem", || {
+                ensure_from_directory(&dir).unwrap();
+                let mcp_before = fs::read(root.join(".mcp.json")).unwrap();
+                let codex_before = fs::read(root.join(".codex/config.toml")).unwrap();
+                ensure_from_directory(&dir).unwrap();
+                let mcp_after = fs::read(root.join(".mcp.json")).unwrap();
+                let codex_after = fs::read(root.join(".codex/config.toml")).unwrap();
+                (mcp_before, codex_before, mcp_after, codex_after)
+            });
         assert_eq!(mcp_before, mcp_after);
         assert_eq!(codex_before, codex_after);
         cleanup(&root);
@@ -970,7 +1058,7 @@ mod tests {
         spec.model = Some("gpt-5-turbo".into());
         let dir = AgentDirectory::create(&Location::Local { root: root.clone() }, spec).unwrap();
 
-        ensure_from_directory(&dir).unwrap();
+        with_fake_easynet_on_path("model", || ensure_from_directory(&dir).unwrap());
         let codex_toml = fs::read_to_string(root.join(".codex/config.toml")).unwrap();
         assert!(
             codex_toml.contains("model = \"gpt-5-turbo\""),

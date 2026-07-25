@@ -33,6 +33,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
+use anyhow::Context;
 use serde_json::Value;
 
 use crate::daemon::execution::mission::adapter::DriverCommand;
@@ -224,7 +225,8 @@ pub fn invoke_exec(prompt: &str, opts: CodexOptions) -> anyhow::Result<(String, 
         .and_then(|n| n.to_str())
         .unwrap_or("codex")
         .to_string();
-    let (mcp_cmd, mcp_args, mcp_env) = workspace::build_mcp_entry(&agent_name);
+    let (mcp_cmd, mcp_args, mcp_env) = workspace::build_mcp_entry(&agent_name)
+        .context("resolve EasyNet MCP entry for Codex mission driver")?;
     args.push("-c".to_string());
     args.push(format!(
         "mcp_servers.easynet.command={}",
