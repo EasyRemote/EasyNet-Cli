@@ -1478,6 +1478,24 @@ fn description_for_and_input_schema_for_cover_every_published_name() {
 }
 
 #[test]
+fn fallible_input_schema_projection_does_not_treat_absent_plugin_as_failure() {
+    let schema = try_input_schema_for("observe.health")
+        .expect("system ability schema projection must continue after absent plugin lookup");
+    let description = try_description_for_owned("observe.health")
+        .expect("system ability description projection must continue after absent plugin lookup");
+
+    assert_eq!(schema["type"], "object");
+    assert!(
+        schema.as_object().is_some_and(|object| object.len() > 1),
+        "system ability must not fall through to undeclared object schema"
+    );
+    assert_ne!(
+        description, "(system ability)",
+        "system ability must not fall through to generic description metadata"
+    );
+}
+
+#[test]
 fn registry_includes_chat_handler_per_registered_agent() {
     // After Phase 3 wired chat as a system ability, every agent
     // in the registry should produce a `<agent>.chat` handler in

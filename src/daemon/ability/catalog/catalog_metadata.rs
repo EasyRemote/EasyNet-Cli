@@ -635,8 +635,17 @@ pub fn description_for(name: &str) -> &'static str {
 /// Plugin packages own descriptor text that may come from TOML at runtime.
 /// Builtin system abilities still use the static `description_for` table.
 pub fn description_for_owned(name: &str) -> String {
-    crate::daemon::plugins::builtin_description_for_owned(name)
-        .unwrap_or_else(|| description_for(name).to_string())
+    try_description_for_owned(name).unwrap_or_else(|_| description_for(name).to_string())
+}
+
+pub fn try_description_for_owned(name: &str) -> anyhow::Result<String> {
+    if let Some(description) = crate::daemon::plugins::try_builtin_description_for_owned(name)? {
+        return Ok(description);
+    }
+    if let Some(description) = crate::daemon::plugins::try_description_for_owned(name)? {
+        return Ok(description);
+    }
+    Ok(description_for(name).to_string())
 }
 
 /// JSON Schema for a published system ability's input. Mirrors
@@ -649,7 +658,11 @@ pub fn description_for_owned(name: &str) -> String {
 /// authored no-arg schemas and missing metadata. CI pins the live registry so
 /// published system abilities cannot accidentally ship in that state.
 pub fn input_schema_for(name: &str) -> serde_json::Value {
-    CatalogSchemaProjection::for_input_name(name).into_schema()
+    try_input_schema_for(name).unwrap_or_else(|_| serde_json::json!({ "type": "object" }))
+}
+
+pub fn try_input_schema_for(name: &str) -> anyhow::Result<serde_json::Value> {
+    Ok(CatalogSchemaProjection::try_for_input_name(name)?.into_schema())
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -659,24 +672,24 @@ enum CatalogSchemaProjection {
 }
 
 impl CatalogSchemaProjection {
-    fn for_input_name(name: &str) -> Self {
-        match Self::declared_input_schema(name) {
+    fn try_for_input_name(name: &str) -> anyhow::Result<Self> {
+        Ok(match Self::try_declared_input_schema(name)? {
             Some(schema) => Self::Declared(schema),
             None => Self::UndeclaredObject,
-        }
+        })
     }
 
-    fn declared_input_schema(name: &str) -> Option<serde_json::Value> {
-        if let Some(schema) = crate::daemon::plugins::builtin_input_schema_for(name) {
-            return Some(schema);
+    fn try_declared_input_schema(name: &str) -> anyhow::Result<Option<serde_json::Value>> {
+        if let Some(schema) = crate::daemon::plugins::try_builtin_input_schema_for(name)? {
+            return Ok(Some(schema));
         }
-        if let Some(schema) = crate::daemon::plugins::input_schema_for(name) {
-            return Some(schema);
+        if let Some(schema) = crate::daemon::plugins::try_input_schema_for(name)? {
+            return Ok(Some(schema));
         }
         if let Some(schema) = daemon_invocation_contracts::input_schema_for(name) {
-            return Some(schema);
+            return Ok(Some(schema));
         }
-        authored_static_input_schema(name)
+        Ok(authored_static_input_schema(name))
     }
 
     fn into_schema(self) -> serde_json::Value {
@@ -1305,7 +1318,9 @@ mod canonical_contract_tests {
 
     #[test]
     fn catalog_schema_projection_distinguishes_declared_from_undeclared_object() {
-        let declared = CatalogSchemaProjection::for_input_name(governance_names::CONSENT_SUBSCRIBE);
+        let declared =
+            CatalogSchemaProjection::try_for_input_name(governance_names::CONSENT_SUBSCRIBE)
+                .expect("declared schema projection");
         assert!(
             matches!(declared, CatalogSchemaProjection::Declared(_)),
             "authored no-arg schemas must remain declared, not undeclared object projections"
@@ -1315,7 +1330,8 @@ mod canonical_contract_tests {
         assert_eq!(declared_schema["additionalProperties"], false);
 
         let undeclared =
-            CatalogSchemaProjection::for_input_name("runtime.test.unpublished_schema_probe");
+            CatalogSchemaProjection::try_for_input_name("runtime.test.unpublished_schema_probe")
+                .expect("undeclared schema projection");
         assert_eq!(undeclared, CatalogSchemaProjection::UndeclaredObject);
         assert_eq!(
             undeclared.into_schema(),
@@ -1326,7 +1342,8 @@ mod canonical_contract_tests {
     #[test]
     fn catalog_schema_projection_treats_context_table_hits_as_declared() {
         let projection =
-            CatalogSchemaProjection::for_input_name(context_ability::ABILITY_CLIPBOARD_LIST);
+            CatalogSchemaProjection::try_for_input_name(context_ability::ABILITY_CLIPBOARD_LIST)
+                .expect("context schema projection");
 
         assert!(
             matches!(projection, CatalogSchemaProjection::Declared(_)),

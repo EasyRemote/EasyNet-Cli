@@ -11927,6 +11927,76 @@ check_remote_desktop_contract_boundary_contract() {
   bash "$cli_root/tools/scripts/check-remote-desktop-contract-boundary.sh" >/dev/null
 }
 
+check_plugin_metadata_lookup_fail_closed_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local plugins="$cli_root/src/daemon/plugins/mod.rs"
+  local catalog="$cli_root/src/daemon/ability/catalog/catalog_metadata.rs"
+  local dispatch="$cli_root/src/daemon/ability/dispatch.rs"
+  local assembly_tests="$cli_root/src/daemon/ability/catalog/assembly_tests.rs"
+  [[ -f "$plugins" ]] || fail "plugin module source is missing: ${plugins#$cli_root/}"
+  [[ -f "$catalog" ]] || fail "catalog metadata source is missing: ${catalog#$cli_root/}"
+  [[ -f "$dispatch" ]] || fail "ability dispatch source is missing: ${dispatch#$cli_root/}"
+  [[ -f "$assembly_tests" ]] || fail "catalog assembly tests are missing: ${assembly_tests#$cli_root/}"
+
+  "$PYTHON_BIN" - "$plugins" "$catalog" "$dispatch" "$assembly_tests" <<'PY'
+import sys
+from pathlib import Path
+
+plugins = Path(sys.argv[1]).read_text(encoding="utf-8")
+catalog = Path(sys.argv[2]).read_text(encoding="utf-8")
+dispatch = Path(sys.argv[3]).read_text(encoding="utf-8")
+assembly_tests = Path(sys.argv[4]).read_text(encoding="utf-8")
+production_plugins = plugins.split("\n#[cfg(test)]", 1)[0]
+
+for retired in (
+    "default_loaded_package_for_ability(name).ok()?",
+    "let package = default_loaded_package_for_ability(name).ok()?",
+    "PluginPackageIndex::builtin().ok()?",
+):
+    if retired in production_plugins:
+        raise SystemExit(f"plugin_metadata_lookup_fail_closed:retired_silent_lookup:{retired}")
+for required in (
+    "fn try_loaded_package_for_ability(",
+    "pub(crate) fn try_description_for_owned(",
+    "fn try_builtin_descriptor_for(",
+    "pub(crate) fn try_builtin_description_for_owned(",
+    "pub(crate) fn try_builtin_input_schema_for(",
+    "pub(crate) fn try_description_for(",
+    "pub(crate) fn try_descriptor_for(",
+    "pub(crate) fn try_input_schema_for(",
+    "pub(crate) fn try_ability_layer_for(",
+    "pub(crate) fn try_plugin_bidi_wire_kind(",
+    "plugin_metadata_try_helpers_distinguish_absent_plugin_from_lookup_failure",
+):
+    if required not in plugins:
+        raise SystemExit(f"plugin_metadata_lookup_fail_closed:missing:{required}")
+for required in (
+    "pub fn try_description_for_owned(name: &str) -> anyhow::Result<String>",
+    "pub fn try_input_schema_for(name: &str) -> anyhow::Result<serde_json::Value>",
+    "fn try_for_input_name(name: &str) -> anyhow::Result<Self>",
+    "fn try_declared_input_schema(name: &str) -> anyhow::Result<Option<serde_json::Value>>",
+    "crate::daemon::plugins::try_builtin_description_for_owned(name)?",
+    "crate::daemon::plugins::try_description_for_owned(name)?",
+    "crate::daemon::plugins::try_builtin_input_schema_for(name)?",
+    "crate::daemon::plugins::try_input_schema_for(name)?",
+):
+    if required not in catalog:
+        raise SystemExit(f"plugin_metadata_lookup_fail_closed:catalog_missing:{required}")
+for required in (
+    "crate::daemon::ability::catalog::try_description_for_owned(&ability)?",
+    "crate::daemon::ability::catalog::try_input_schema_for(&ability)?",
+):
+    if required not in dispatch:
+        raise SystemExit(f"plugin_metadata_lookup_fail_closed:dispatch_missing:{required}")
+for required in (
+    "fallible_input_schema_projection_does_not_treat_absent_plugin_as_failure",
+    "try_input_schema_for(\"observe.health\")",
+):
+    if required not in assembly_tests:
+        raise SystemExit(f"plugin_metadata_lookup_fail_closed:missing_test:{required}")
+PY
+}
+
 check_retired_browser_mock_surface_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local descriptor_dir="$cli_root/ability-descriptors/system/device_control"
@@ -22482,6 +22552,7 @@ EOF
   check_cli_device_show_projection_error_contract
   check_plugin_sidecar_helper_matrix_contract
   check_plugin_schema_rejection_vocabulary_contract
+  check_plugin_metadata_lookup_fail_closed_contract
   check_retired_browser_mock_surface_contract
   check_ability_deploy_product_neutrality_contract
   check_device_ability_mutation_target_contract
@@ -22719,6 +22790,8 @@ check_federation_directory_device_projection_contract
 check_cli_device_directory_projection_contract
 check_cli_device_show_projection_error_contract
 check_plugin_sidecar_helper_matrix_contract
+check_plugin_schema_rejection_vocabulary_contract
+check_plugin_metadata_lookup_fail_closed_contract
 check_remote_desktop_contract_boundary_contract
 check_retired_browser_mock_surface_contract
 check_ability_deploy_product_neutrality_contract

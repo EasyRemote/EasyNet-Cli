@@ -3059,8 +3059,8 @@ impl StaticRegistration {
                 Some(manifest) => manifest.as_ref().clone(),
                 None => crate::daemon::ability::manifest::AbilityManifest::new(
                     ability.rsplit('.').next().unwrap_or(&ability),
-                    crate::daemon::ability::catalog::description_for_owned(&ability),
-                    crate::daemon::ability::catalog::input_schema_for(&ability),
+                    crate::daemon::ability::catalog::try_description_for_owned(&ability)?,
+                    crate::daemon::ability::catalog::try_input_schema_for(&ability)?,
                 )?,
             };
             manifest = Some(Arc::new(
