@@ -119,7 +119,7 @@ func TestServeIORejectsRetiredTupleAliases(t *testing.T) {
 
 func TestServeIORejectsUnknownInvocationFields(t *testing.T) {
 	var output bytes.Buffer
-	frame := `{"type":"invoke","call_id":"call-1","invocation":{"caller_ura":"easynet:///r/hub/user/alice","callee_ura":"easynet:///r/hub/device/provider","ability_ura":"demo.echo","subject_ura":"easynet:///r/hub/resource/demo","invocation_nonce":[1,2,3,4],"descriptor_ref":"legacy-provider-leak","args":{}}}`
+	frame := `{"type":"invoke","call_id":"call-1","invocation":{"caller_ura":"easynet:///r/hub/user/alice","callee_ura":"easynet:///r/hub/device/provider","ability_ura":"demo.echo","subject_ura":"easynet:///r/hub/resource/demo","invocation_nonce":[1,2,3,4],"descriptor_ref":"retired-provider-leak","args":{}}}`
 	err := ServeIO(
 		context.Background(),
 		bytes.NewBufferString(frame+"\n"),
@@ -146,7 +146,7 @@ func TestServeIORejectsUnknownInvocationFields(t *testing.T) {
 
 func TestServeIORejectsUnknownRequestFields(t *testing.T) {
 	var output bytes.Buffer
-	frame := `{"type":"invoke","call_id":"call-1","legacy_mode":"json","invocation":{"caller_ura":"easynet:///r/hub/user/alice","callee_ura":"easynet:///r/hub/device/provider","ability_ura":"demo.echo","subject_ura":"easynet:///r/hub/resource/demo","invocation_nonce":[1,2,3,4],"args":{}}}`
+	frame := `{"type":"invoke","call_id":"call-1","retired_mode":"json","invocation":{"caller_ura":"easynet:///r/hub/user/alice","callee_ura":"easynet:///r/hub/device/provider","ability_ura":"demo.echo","subject_ura":"easynet:///r/hub/resource/demo","invocation_nonce":[1,2,3,4],"args":{}}}`
 	err := ServeIO(
 		context.Background(),
 		bytes.NewBufferString(frame+"\n"),

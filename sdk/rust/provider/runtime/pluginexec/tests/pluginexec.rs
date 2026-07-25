@@ -124,7 +124,7 @@ fn sidecar_invocation_rejects_unknown_invocation_fields() {
             "ability_ura": "demo.echo",
             "subject_ura": "easynet:///r/hub/resource/demo",
             "invocation_nonce": [1, 2, 3, 4],
-            "descriptor_ref": "legacy-provider-leak",
+            "descriptor_ref": "retired-provider-leak",
             "args": {}
         }
     });
@@ -138,7 +138,7 @@ fn sidecar_invocation_rejects_unknown_request_fields() {
     let frame = json!({
         "type": "invoke",
         "call_id": "call-1",
-        "legacy_mode": "json",
+        "retired_mode": "json",
         "invocation": {
             "caller_ura": "easynet:///r/hub/user/alice",
             "callee_ura": "easynet:///r/hub/device/provider",

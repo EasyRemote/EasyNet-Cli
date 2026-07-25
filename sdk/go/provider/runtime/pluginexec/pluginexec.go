@@ -176,7 +176,7 @@ func (f requestFrame) projectInvocation() (SidecarInvocation, error) {
 	if err != nil {
 		return SidecarInvocation{}, err
 	}
-	if err := rejectLegacyTupleAliases(fields); err != nil {
+	if err := rejectRetiredTupleFields(fields); err != nil {
 		return SidecarInvocation{}, err
 	}
 	if err := rejectUnknownInvocationFields(fields); err != nil {
@@ -204,15 +204,15 @@ func decodeInvocationFields(raw json.RawMessage) (map[string]json.RawMessage, er
 	return object, nil
 }
 
-func rejectLegacyTupleAliases(object map[string]json.RawMessage) error {
-	for legacy, canonical := range map[string]string{
+func rejectRetiredTupleFields(object map[string]json.RawMessage) error {
+	for retired, canonical := range map[string]string{
 		"caller":  "caller_ura",
 		"callee":  "callee_ura",
 		"ability": "ability_ura",
 		"subject": "subject_ura",
 	} {
-		if _, ok := object[legacy]; ok {
-			return protocolError("sidecar frame field %q is retired; use %q", legacy, canonical)
+		if _, ok := object[retired]; ok {
+			return protocolError("sidecar frame field %q is retired; use %q", retired, canonical)
 		}
 	}
 	return nil

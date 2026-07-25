@@ -51,7 +51,7 @@ public final class SidecarInvocation {
     }
     String callId = requiredString(frame, "call_id");
     Map<String, Object> invocation = requiredObject(frame, "invocation");
-    rejectLegacyTupleAliases(invocation);
+    rejectRetiredTupleFields(invocation);
     rejectUnknownInvocationFields(invocation);
     return new SidecarInvocation(
         callId,
@@ -124,7 +124,7 @@ public final class SidecarInvocation {
     return stringObject(raw, field);
   }
 
-  private static void rejectLegacyTupleAliases(Map<String, Object> object) {
+  private static void rejectRetiredTupleFields(Map<String, Object> object) {
     for (Map.Entry<String, String> entry :
         Map.of(
                 "caller", "caller_ura",

@@ -110,7 +110,7 @@ public final class SidecarRuntimeTest {
     invocation.put("ability_ura", "demo.echo");
     invocation.put("subject_ura", "easynet:///r/hub/resource/demo");
     invocation.put("invocation_nonce", java.util.List.of(1, 2, 3, 4));
-    invocation.put("descriptor_ref", "legacy-provider-leak");
+    invocation.put("descriptor_ref", "retired-provider-leak");
     java.util.Map<String, Object> frame = new java.util.LinkedHashMap<>();
     frame.put("type", "invoke");
     frame.put("call_id", "call-1");
@@ -133,7 +133,7 @@ public final class SidecarRuntimeTest {
     java.util.Map<String, Object> frame = new java.util.LinkedHashMap<>();
     frame.put("type", "invoke");
     frame.put("call_id", "call-1");
-    frame.put("legacy_mode", "json");
+    frame.put("retired_mode", "json");
     frame.put("invocation", invocation);
     try {
       SidecarInvocation.fromFrame(frame);

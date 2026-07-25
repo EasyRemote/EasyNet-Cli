@@ -118,7 +118,7 @@ test("SidecarInvocation rejects retired tuple aliases", () => {
 
 test("SidecarInvocation rejects unknown invocation fields", () => {
   const frame = requestFrame();
-  frame.invocation.descriptor_ref = "legacy-provider-leak";
+  frame.invocation.descriptor_ref = "retired-provider-leak";
 
   assert.throws(
     () => SidecarInvocation.fromFrame(frame),
@@ -128,7 +128,7 @@ test("SidecarInvocation rejects unknown invocation fields", () => {
 
 test("SidecarInvocation rejects unknown request fields", () => {
   const frame = requestFrame();
-  frame.legacy_mode = "json";
+  frame.retired_mode = "json";
 
   assert.throws(
     () => SidecarInvocation.fromFrame(frame),

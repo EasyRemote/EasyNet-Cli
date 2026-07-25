@@ -58,7 +58,7 @@ class SidecarInvocation:
             )
         call_id = _required_string(frame, "call_id")
         invocation = _required_mapping(frame, "invocation")
-        _reject_legacy_tuple_aliases(invocation)
+        _reject_retired_tuple_fields(invocation)
         _reject_unknown_invocation_fields(invocation)
         _require_invocation_fields(invocation)
         nonce = _required_nonce(invocation, "invocation_nonce")
@@ -138,16 +138,16 @@ def _required_string(frame: Mapping[str, Any], field: str) -> str:
     return value
 
 
-def _reject_legacy_tuple_aliases(frame: Mapping[str, Any]) -> None:
-    for legacy, canonical in (
+def _reject_retired_tuple_fields(frame: Mapping[str, Any]) -> None:
+    for retired, canonical in (
         ("caller", "caller_ura"),
         ("callee", "callee_ura"),
         ("ability", "ability_ura"),
         ("subject", "subject_ura"),
     ):
-        if legacy in frame:
+        if retired in frame:
             raise SidecarProtocolError(
-                f"sidecar frame field {legacy!r} is retired; use {canonical!r}"
+                f"sidecar frame field {retired!r} is retired; use {canonical!r}"
             )
 
 

@@ -102,7 +102,7 @@ class PluginExecTests(unittest.TestCase):
         frame = _frame()
         invocation = frame["invocation"]
         assert isinstance(invocation, dict)
-        invocation["descriptor_ref"] = "legacy-provider-leak"
+        invocation["descriptor_ref"] = "retired-provider-leak"
 
         with self.assertRaisesRegex(
             SidecarProtocolError, "canonical invocation frame"
@@ -111,7 +111,7 @@ class PluginExecTests(unittest.TestCase):
 
     def test_plugin_invocation_rejects_unknown_request_fields(self) -> None:
         frame = _frame()
-        frame["legacy_mode"] = "json"
+        frame["retired_mode"] = "json"
 
         with self.assertRaisesRegex(
             SidecarProtocolError, "canonical request frame"

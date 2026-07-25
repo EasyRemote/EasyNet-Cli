@@ -11047,7 +11047,7 @@ if "sidecar_invocation_envelope_rejects_missing_canonical_tuple_objects" not in 
     raise SystemExit("plugin_sidecar_daemon_missing_tuple_object_test_missing")
 if "sidecar envelope must reject null canonical tuple objects" not in sidecar_tests:
     raise SystemExit("plugin_sidecar_daemon_null_tuple_object_test_missing")
-for legacy_causal in (
+for retired_causal_fixture in (
     '"causal_context": {}',
     '"causal_context": {"root"',
     '"causal_context": { root',
@@ -11056,13 +11056,13 @@ for legacy_causal in (
     '"root": true',
     '"root":true',
 ):
-    if legacy_causal in sidecar_tests or any(legacy_causal in source for source in helper_sources.values()):
-        raise SystemExit(f"plugin_sidecar_legacy_causal_context_fixture:{legacy_causal}")
+    if retired_causal_fixture in sidecar_tests or any(retired_causal_fixture in source for source in helper_sources.values()):
+        raise SystemExit(f"plugin_sidecar_retired_causal_context_fixture:{retired_causal_fixture}")
 
 required_helper_tokens = {
     "rust": [
         "pub caller_ura: String",
-        "reject_legacy_tuple_aliases(&invocation)?",
+        "reject_retired_tuple_fields(&invocation)?",
         "reject_unknown_invocation_fields(&invocation)?",
         "reject_unknown_request_fields(&object)?",
         "fn reject_unknown_invocation_fields(",
@@ -11076,7 +11076,7 @@ required_helper_tokens = {
     ],
     "go": [
         "CallerURA",
-        "rejectLegacyTupleAliases(fields)",
+        "rejectRetiredTupleFields(fields)",
         "rejectUnknownInvocationFields(fields)",
         "rejectUnknownRequestFields(fields)",
         "func rejectUnknownInvocationFields(",
@@ -11091,7 +11091,7 @@ required_helper_tokens = {
     ],
     "python": [
         "caller_ura: str",
-        "_reject_legacy_tuple_aliases(invocation)",
+        "_reject_retired_tuple_fields(invocation)",
         "_reject_unknown_invocation_fields(invocation)",
         "_reject_unknown_request_fields(frame)",
         "def _reject_unknown_invocation_fields(",
@@ -11106,7 +11106,7 @@ required_helper_tokens = {
     ],
     "node": [
         "callerURA",
-        "rejectLegacyTupleAliases(invocation)",
+        "rejectRetiredTupleFields(invocation)",
         "rejectUnknownInvocationFields(invocation)",
         "rejectUnknownRequestFields(value)",
         "function rejectUnknownInvocationFields(",
@@ -11121,7 +11121,7 @@ required_helper_tokens = {
     ],
     "java": [
         "String callerURA",
-        "rejectLegacyTupleAliases(invocation)",
+        "rejectRetiredTupleFields(invocation)",
         "rejectUnknownInvocationFields(invocation)",
         "rejectUnknownRequestFields(frame)",
         "private static void rejectUnknownInvocationFields(",
@@ -11205,7 +11205,7 @@ for language, patterns in strict_tuple_default_patterns.items():
                 f"plugin_sidecar_helper_tuple_defaulting:{language}:{pattern}"
             )
 
-legacy_public_field_patterns = {
+retired_public_field_patterns = {
     "daemon_frame": [
         r"\bpub\s+caller\s*:",
         r"\bpub\s+callee\s*:",
@@ -11271,11 +11271,11 @@ legacy_public_field_patterns = {
         r'requiredString\(invocation,\s*"subject"\)',
     ],
 }
-for label, patterns in legacy_public_field_patterns.items():
+for label, patterns in retired_public_field_patterns.items():
     source = all_sidecar_sources[label]
     for pattern in patterns:
         if re.search(pattern, source, re.M):
-            raise SystemExit(f"plugin_sidecar_legacy_tuple_public_field:{label}:{pattern}")
+            raise SystemExit(f"plugin_sidecar_retired_tuple_public_field:{label}:{pattern}")
 
 for language in sorted(required_languages - set(expected_helpers)):
     row = rows[(language, "ExecInvoke")]
@@ -16249,8 +16249,8 @@ EOF
   if ( CLI_ROOT="$tmp/ledger-route-caller-fallback"; check_daemon_runtime_assembly_contract ) >/dev/null 2>&1; then
     fail "self-test expected ledger route caller fallback gate to fail"
   fi
-  mkdir -p "$tmp/agent-invoke-sidecar-legacy/src/daemon/ability/builtins/agents"
-  cat >"$tmp/agent-invoke-sidecar-legacy/src/daemon/ability/builtins/agents/invoke.rs" <<'EOF'
+  mkdir -p "$tmp/agent-invoke-sidecar-retired/src/daemon/ability/builtins/agents"
+  cat >"$tmp/agent-invoke-sidecar-retired/src/daemon/ability/builtins/agents/invoke.rs" <<'EOF'
 #[derive(Debug, Clone, PartialEq)]
 struct InvokeArgs {
     args: serde_json::Value,
@@ -16291,7 +16291,7 @@ mod tests {
     fn parse_tolerates_non_string_sidecar_values() {}
 }
 EOF
-  if ( CLI_ROOT="$tmp/agent-invoke-sidecar-legacy"; check_agent_invoke_strict_args_contract ) >/dev/null 2>&1; then
+  if ( CLI_ROOT="$tmp/agent-invoke-sidecar-retired"; check_agent_invoke_strict_args_contract ) >/dev/null 2>&1; then
     fail "self-test expected agent invoke sidecar compatibility gate to fail"
   fi
   mkdir -p "$tmp/cli-sidecar-template/src/cli/commands/groups"
@@ -16324,10 +16324,10 @@ EOF
     mkdir -p "$(dirname "$tmp/cli-sidecar-tuple/$rel")"
     cp "$ROOT/$rel" "$tmp/cli-sidecar-tuple/$rel"
   done
-  perl -0pi -e 's/\n\s*_reject_legacy_tuple_aliases\(invocation\)//' \
+  perl -0pi -e 's/\n\s*_reject_retired_tuple_fields\(invocation\)//' \
     "$tmp/cli-sidecar-tuple/sdk/python/easynet_sdk/providers/runtime/plugin_exec.py"
   if ( CLI_ROOT="$tmp/cli-sidecar-tuple"; check_plugin_sidecar_helper_matrix_contract ) >/dev/null 2>&1; then
-    fail "self-test expected legacy sidecar tuple key gate to fail"
+    fail "self-test expected retired sidecar tuple key gate to fail"
   fi
   for rel in \
     src/cli/commands/groups/plugin_template.rs \

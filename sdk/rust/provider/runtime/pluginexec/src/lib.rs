@@ -42,7 +42,7 @@ impl SidecarInvocation {
             SidecarProtocolError::new("sidecar frame field \"invocation\" must be an object")
         })?;
         let mut invocation = expect_object(invocation, "invocation")?;
-        reject_legacy_tuple_aliases(&invocation)?;
+        reject_retired_tuple_fields(&invocation)?;
         reject_unknown_invocation_fields(&invocation)?;
         let nonce = take_required_nonce(&mut invocation, "invocation_nonce")?;
         let causal_context =
@@ -188,16 +188,16 @@ fn expect_object(value: Value, field: &str) -> Result<Map<String, Value>, Sideca
     }
 }
 
-fn reject_legacy_tuple_aliases(object: &Map<String, Value>) -> Result<(), SidecarProtocolError> {
-    for (legacy, canonical) in [
+fn reject_retired_tuple_fields(object: &Map<String, Value>) -> Result<(), SidecarProtocolError> {
+    for (retired, canonical) in [
         ("caller", "caller_ura"),
         ("callee", "callee_ura"),
         ("ability", "ability_ura"),
         ("subject", "subject_ura"),
     ] {
-        if object.contains_key(legacy) {
+        if object.contains_key(retired) {
             return Err(SidecarProtocolError::new(format!(
-                "sidecar frame field {legacy:?} is retired; use {canonical:?}"
+                "sidecar frame field {retired:?} is retired; use {canonical:?}"
             )));
         }
     }
