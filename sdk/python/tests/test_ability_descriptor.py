@@ -184,7 +184,7 @@ def test_runtime_ability_descriptor_provider_uses_generic_catalog_error() -> Non
     assert "meta.list_abilities" not in str(caught.value)
 
 
-def test_runtime_ability_descriptor_provider_get_rejects_ambiguous_descriptors() -> None:
+def test_runtime_ability_descriptor_provider_rejects_legacy_version_alias() -> None:
     provider, transport = _provider()
     transport.output_json = {
         "abilities": [
@@ -194,12 +194,32 @@ def test_runtime_ability_descriptor_provider_get_rejects_ambiguous_descriptors()
                 "owner_ura": "easynet:///r/example/authority",
                 "version": "1.0.0",
                 "call_mode": "rpc",
+            }
+        ]
+    }
+
+    with pytest.raises(SDKError) as caught:
+        provider.list(AbilityDescriptorListRequest(call=_call()))
+
+    assert "ability descriptor row 0 is missing identity fields" in str(caught.value)
+
+
+def test_runtime_ability_descriptor_provider_get_rejects_ambiguous_descriptors() -> None:
+    provider, transport = _provider()
+    transport.output_json = {
+        "abilities": [
+            {
+                "name": "observe.health",
+                "ability_ura": "easynet:///r/example/ability/authority.observe.health",
+                "owner_ura": "easynet:///r/example/authority",
+                "descriptor_version": "1.0.0",
+                "call_mode": "rpc",
             },
             {
                 "name": "observe.health",
                 "ability_ura": "easynet:///r/example/ability/authority.observe.health",
                 "owner_ura": "easynet:///r/example/authority",
-                "version": "2.0.0",
+                "descriptor_version": "2.0.0",
                 "call_mode": "rpc",
             },
         ]

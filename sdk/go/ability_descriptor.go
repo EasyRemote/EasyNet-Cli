@@ -197,7 +197,10 @@ func (p *RuntimeAbilityDescriptorProvider) List(ctx context.Context, request Abi
 			return AbilityDescriptorPage{}, invalidAbilityDescriptor(fmt.Sprintf("ability descriptor row %d must be an object", i), nil)
 		}
 		projection := ProjectAbilityDescriptor(row)
-		if strings.TrimSpace(projection.AbilityURA) == "" || strings.TrimSpace(projection.OwnerURA) == "" || strings.TrimSpace(projection.Name) == "" {
+		if strings.TrimSpace(projection.AbilityURA) == "" ||
+			strings.TrimSpace(projection.OwnerURA) == "" ||
+			strings.TrimSpace(projection.Name) == "" ||
+			strings.TrimSpace(projection.Version) == "" {
 			return AbilityDescriptorPage{}, invalidAbilityDescriptor(fmt.Sprintf("ability descriptor row %d is missing identity fields", i), nil)
 		}
 		descriptors = append(descriptors, projection)
@@ -273,7 +276,7 @@ func ProjectAbilityDescriptor(raw map[string]any) AbilityDescriptorProjection {
 		DescriptorRef:    descriptorString(values["descriptor_ref"]),
 		Name:             descriptorString(values["name"]),
 		OwnerURA:         descriptorString(values["owner_ura"]),
-		Version:          firstDescriptorString(values["version"], values["descriptor_version"]),
+		Version:          descriptorString(values["descriptor_version"]),
 		SchemaHash:       descriptorString(values["schema_hash"]),
 		DescriptorHash:   descriptorString(values["descriptor_hash"]),
 		CallMode:         descriptorString(values["call_mode"]),
@@ -342,15 +345,6 @@ func joinAbilityDescriptorName(namespace string, localName string) string {
 func descriptorString(value any) string {
 	if typed, ok := value.(string); ok {
 		return typed
-	}
-	return ""
-}
-
-func firstDescriptorString(values ...any) string {
-	for _, value := range values {
-		if text := strings.TrimSpace(descriptorString(value)); text != "" {
-			return text
-		}
 	}
 	return ""
 }

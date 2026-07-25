@@ -213,11 +213,33 @@ func TestRuntimeAbilityDescriptorProviderUsesGenericCatalogError(t *testing.T) {
 	}
 }
 
+func TestRuntimeAbilityDescriptorProviderRejectsLegacyVersionAlias(t *testing.T) {
+	transport := RuntimeTransportFunc{InvokeFunc: func(_ context.Context, _ []byte) ([]byte, error) {
+		return runtimeAbilityResultJSON(true, `{"abilities":[{
+			"name":"observe.health",
+			"ability_ura":"easynet:///r/example/ability/authority.observe.health",
+			"owner_ura":"easynet:///r/example/authority",
+			"version":"1.0.0",
+			"call_mode":"rpc"
+		}]}`, "", false), nil
+	}, ResolveDescriptorRefFunc: testResolveDescriptorRef(t)}
+	runtime, _ := NewRuntimeClient(transport)
+	ability, _ := NewRuntimeAbilityClient(runtime, NewCanonicalAddressing())
+	provider, _ := NewRuntimeAbilityDescriptorProvider(ability)
+
+	_, err := provider.List(context.Background(), AbilityDescriptorListRequest{
+		Call: runtimeAbilityTestContext(),
+	})
+	if err == nil || !strings.Contains(err.Error(), "ability descriptor row 0 is missing identity fields") {
+		t.Fatalf("legacy version alias error = %v", err)
+	}
+}
+
 func TestRuntimeAbilityDescriptorProviderGetRejectsAmbiguousDescriptors(t *testing.T) {
 	transport := RuntimeTransportFunc{InvokeFunc: func(_ context.Context, _ []byte) ([]byte, error) {
 		return runtimeAbilityResultJSON(true, `{"abilities":[
-			{"name":"observe.health","ability_ura":"easynet:///r/example/ability/authority.observe.health","owner_ura":"easynet:///r/example/authority","version":"1.0.0","call_mode":"rpc"},
-			{"name":"observe.health","ability_ura":"easynet:///r/example/ability/authority.observe.health","owner_ura":"easynet:///r/example/authority","version":"2.0.0","call_mode":"rpc"}
+			{"name":"observe.health","ability_ura":"easynet:///r/example/ability/authority.observe.health","owner_ura":"easynet:///r/example/authority","descriptor_version":"1.0.0","call_mode":"rpc"},
+			{"name":"observe.health","ability_ura":"easynet:///r/example/ability/authority.observe.health","owner_ura":"easynet:///r/example/authority","descriptor_version":"2.0.0","call_mode":"rpc"}
 		]}`, "", false), nil
 	}, ResolveDescriptorRefFunc: testResolveDescriptorRef(t)}
 	runtime, _ := NewRuntimeClient(transport)

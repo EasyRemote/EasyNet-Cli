@@ -4826,6 +4826,60 @@ if "test_runtime_ability_descriptor_provider_get_reports_descriptor_not_found" n
 PY
 }
 
+check_sdk_ability_descriptor_version_field_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local go="$cli_root/sdk/go/ability_descriptor.go"
+  local go_test="$cli_root/sdk/go/ability_descriptor_test.go"
+  local py="$cli_root/sdk/python/easynet_sdk/ability_descriptor.py"
+  local py_test="$cli_root/sdk/python/tests/test_ability_descriptor.py"
+
+  "$PYTHON_BIN" - "$go" "$go_test" "$py" "$py_test" <<'PY'
+import sys
+from pathlib import Path
+
+go_path, go_test_path, py_path, py_test_path = map(Path, sys.argv[1:])
+
+def read(path: Path) -> str:
+    if not path.exists():
+        raise SystemExit(f"sdk_ability_descriptor_version_source_missing:{path}")
+    return path.read_text()
+
+go = read(go_path)
+if 'Version:          descriptorString(values["descriptor_version"])' not in go:
+    raise SystemExit("sdk_go_ability_descriptor_version_not_descriptor_version_owned")
+for retired in (
+    "firstDescriptorString(",
+    'values["version"]',
+):
+    if retired in go:
+        raise SystemExit(f"sdk_go_ability_descriptor_version_alias:{retired}")
+if "strings.TrimSpace(projection.Version) == \"\"" not in go:
+    raise SystemExit("sdk_go_ability_descriptor_version_not_required_at_provider_boundary")
+go_tests = read(go_test_path)
+if "TestRuntimeAbilityDescriptorProviderRejectsLegacyVersionAlias" not in go_tests:
+    raise SystemExit("sdk_go_ability_descriptor_version_alias_negative_test_missing")
+if '"version":"1.0.0"' not in go_tests or '"descriptor_version":"2.0.0"' not in go_tests:
+    raise SystemExit("sdk_go_ability_descriptor_version_vectors_missing")
+
+py = read(py_path)
+if 'version=_text(values.get("descriptor_version"))' not in py:
+    raise SystemExit("sdk_python_ability_descriptor_version_not_descriptor_version_owned")
+for retired in (
+    "_first_text(",
+    'values.get("version")',
+):
+    if retired in py:
+        raise SystemExit(f"sdk_python_ability_descriptor_version_alias:{retired}")
+if "or not projection.version" not in py:
+    raise SystemExit("sdk_python_ability_descriptor_version_not_required_at_provider_boundary")
+py_tests = read(py_test_path)
+if "test_runtime_ability_descriptor_provider_rejects_legacy_version_alias" not in py_tests:
+    raise SystemExit("sdk_python_ability_descriptor_version_alias_negative_test_missing")
+if '"version": "1.0.0"' not in py_tests or '"descriptor_version": "2.0.0"' not in py_tests:
+    raise SystemExit("sdk_python_ability_descriptor_version_vectors_missing")
+PY
+}
+
 check_runtime_descriptor_catalog_scope_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local meta="$cli_root/src/daemon/ability/builtins/governance/meta.rs"
@@ -19695,6 +19749,28 @@ EOF
 	  if ( check_sdk_ability_descriptor_not_found_vocabulary_contract "$tmp/sdk-ability-descriptor-not-found-legacy" ) >/dev/null 2>&1; then
 	    fail "self-test expected SDK ability descriptor generic NOT_FOUND gate to fail"
 	  fi
+	  mkdir -p "$tmp/sdk-ability-descriptor-version-alias-legacy/sdk/go" \
+	    "$tmp/sdk-ability-descriptor-version-alias-legacy/sdk/python/easynet_sdk" \
+	    "$tmp/sdk-ability-descriptor-version-alias-legacy/sdk/python/tests"
+	  printf '%s\n' \
+	    'func ProjectAbilityDescriptor(values map[string]any) AbilityDescriptorProjection {' \
+	    '  return AbilityDescriptorProjection{Version: firstDescriptorString(values["version"], values["descriptor_version"])}' \
+	    '}' \
+	    'func firstDescriptorString(values ...any) string { return "" }' \
+	    > "$tmp/sdk-ability-descriptor-version-alias-legacy/sdk/go/ability_descriptor.go"
+	  printf 'func TestRuntimeAbilityDescriptorProviderRejectsLegacyVersionAlias(t *testing.T) {}\n' \
+	    > "$tmp/sdk-ability-descriptor-version-alias-legacy/sdk/go/ability_descriptor_test.go"
+	  printf '%s\n' \
+	    'def project_ability_descriptor(values):' \
+	    '    return AbilityDescriptorProjection(version=_first_text(values.get("version"), values.get("descriptor_version")))' \
+	    '' \
+	    'def _first_text(*values): return ""' \
+	    > "$tmp/sdk-ability-descriptor-version-alias-legacy/sdk/python/easynet_sdk/ability_descriptor.py"
+	  printf 'def test_runtime_ability_descriptor_provider_rejects_legacy_version_alias(): pass\n' \
+	    > "$tmp/sdk-ability-descriptor-version-alias-legacy/sdk/python/tests/test_ability_descriptor.py"
+	  if ( check_sdk_ability_descriptor_version_field_contract "$tmp/sdk-ability-descriptor-version-alias-legacy" ) >/dev/null 2>&1; then
+	    fail "self-test expected SDK ability descriptor version alias gate to fail"
+	  fi
 	  mkdir -p "$tmp/runtime-descriptor-catalog-scope-legacy/src/daemon/ability/builtins/governance" \
 	    "$tmp/runtime-descriptor-catalog-scope-legacy/src/cli/daemon_client" \
 	    "$tmp/runtime-descriptor-catalog-scope-legacy/sdk/go" \
@@ -23350,6 +23426,7 @@ EOF
 	  check_sdk_descriptor_resolution_error_vocabulary_contract
 	  check_sdk_runtime_client_provider_readiness_contract
 	  check_sdk_ability_descriptor_not_found_vocabulary_contract
+	  check_sdk_ability_descriptor_version_field_contract
 	  check_runtime_descriptor_catalog_scope_contract
   check_sdk_runtime_identity_signer_not_found_contract
   check_sdk_go_easynet_provider_retired_contract
@@ -23583,6 +23660,7 @@ check_sdk_prepared_descriptor_ref_required_contract
 check_sdk_descriptor_resolution_error_vocabulary_contract
 check_sdk_runtime_client_provider_readiness_contract
 check_sdk_ability_descriptor_not_found_vocabulary_contract
+check_sdk_ability_descriptor_version_field_contract
 check_runtime_descriptor_catalog_scope_contract
 check_sdk_runtime_identity_signer_not_found_contract
 check_sdk_go_easynet_provider_retired_contract

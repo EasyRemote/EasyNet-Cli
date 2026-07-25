@@ -183,7 +183,12 @@ class RuntimeAbilityDescriptorProvider:
                     f"ability descriptor row {index} must be an object"
                 )
             projection = project_ability_descriptor(raw)
-            if not projection.ability_ura or not projection.owner_ura or not projection.name:
+            if (
+                not projection.ability_ura
+                or not projection.owner_ura
+                or not projection.name
+                or not projection.version
+            ):
                 raise _invalid_descriptor(
                     f"ability descriptor row {index} is missing identity fields"
                 )
@@ -274,7 +279,7 @@ def project_ability_descriptor(raw: Mapping[str, object]) -> AbilityDescriptorPr
         descriptor_ref=_text(values.get("descriptor_ref")),
         name=name,
         owner_ura=_text(values.get("owner_ura")),
-        version=_first_text(values.get("version"), values.get("descriptor_version")),
+        version=_text(values.get("descriptor_version")),
         schema_hash=_text(values.get("schema_hash")),
         descriptor_hash=_text(values.get("descriptor_hash")),
         call_mode=_text(values.get("call_mode")),
@@ -326,14 +331,6 @@ def _join_name(namespace: str, local_name: str) -> str:
 
 def _text(value: object) -> str:
     return value.strip() if isinstance(value, str) else ""
-
-
-def _first_text(*values: object) -> str:
-    for value in values:
-        text = _text(value)
-        if text:
-            return text
-    return ""
 
 
 def _bool(value: object) -> bool:

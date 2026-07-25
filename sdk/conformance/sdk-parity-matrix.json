@@ -3651,7 +3651,7 @@
         },
         {
           "item": "RuntimeAbilityDescriptorProvider",
-          "sha256": "d975472822d2b082c276068f8a1f7545f6e23a9b6b5b1ca9e21ba38ca0e727b8"
+          "sha256": "f5f441b05d204da306c4ff538c87015d3705ffc4ddd8a19122902133349503b1"
         },
         {
           "item": "RuntimeClientDescriptorProvider",
@@ -3663,7 +3663,7 @@
         },
         {
           "item": "project_ability_descriptor",
-          "sha256": "40cc7339b4011f0d29055b456548543c2663b1a55fddb016fd0236d8cf272e7b"
+          "sha256": "26ce75b308f3f0d5df60f0613396224dfe5097f3d0cad4e38d7dcbf6022b4825"
         },
         {
           "item": "AbilityDescriptorClient.get",
@@ -3911,7 +3911,7 @@
         },
         {
           "item": "RuntimeAbilityDescriptorProvider.list",
-          "sha256": "b5fa565560653aa7da8184d0d6bcc5c7ebcd192fa139e3d77dc6a7b94ea02b72"
+          "sha256": "9293ad1fba79f27aac06af761ea98bfec5c53203379e4701c10539a0179d9a63"
         },
         {
           "item": "RuntimeClient.resolve_descriptor_ref",
@@ -3978,7 +3978,7 @@
             },
             {
               "item": "RuntimeAbilityDescriptorProvider",
-              "sha256": "d975472822d2b082c276068f8a1f7545f6e23a9b6b5b1ca9e21ba38ca0e727b8"
+              "sha256": "f5f441b05d204da306c4ff538c87015d3705ffc4ddd8a19122902133349503b1"
             },
             {
               "item": "RuntimeClientDescriptorProvider",
@@ -3990,7 +3990,7 @@
             },
             {
               "item": "project_ability_descriptor",
-              "sha256": "40cc7339b4011f0d29055b456548543c2663b1a55fddb016fd0236d8cf272e7b"
+              "sha256": "26ce75b308f3f0d5df60f0613396224dfe5097f3d0cad4e38d7dcbf6022b4825"
             },
             {
               "item": "AbilityDescriptorClient.get",
@@ -4238,7 +4238,7 @@
             },
             {
               "item": "RuntimeAbilityDescriptorProvider.list",
-              "sha256": "b5fa565560653aa7da8184d0d6bcc5c7ebcd192fa139e3d77dc6a7b94ea02b72"
+              "sha256": "9293ad1fba79f27aac06af761ea98bfec5c53203379e4701c10539a0179d9a63"
             },
             {
               "item": "RuntimeClient.resolve_descriptor_ref",
@@ -4305,7 +4305,7 @@
             },
             {
               "item": "RuntimeAbilityDescriptorProvider",
-              "sha256": "d975472822d2b082c276068f8a1f7545f6e23a9b6b5b1ca9e21ba38ca0e727b8"
+              "sha256": "f5f441b05d204da306c4ff538c87015d3705ffc4ddd8a19122902133349503b1"
             },
             {
               "item": "RuntimeClientDescriptorProvider",
@@ -4317,7 +4317,7 @@
             },
             {
               "item": "project_ability_descriptor",
-              "sha256": "40cc7339b4011f0d29055b456548543c2663b1a55fddb016fd0236d8cf272e7b"
+              "sha256": "26ce75b308f3f0d5df60f0613396224dfe5097f3d0cad4e38d7dcbf6022b4825"
             },
             {
               "item": "AbilityDescriptorClient.get",
@@ -4565,7 +4565,7 @@
             },
             {
               "item": "RuntimeAbilityDescriptorProvider.list",
-              "sha256": "b5fa565560653aa7da8184d0d6bcc5c7ebcd192fa139e3d77dc6a7b94ea02b72"
+              "sha256": "9293ad1fba79f27aac06af761ea98bfec5c53203379e4701c10539a0179d9a63"
             },
             {
               "item": "RuntimeClient.resolve_descriptor_ref",
