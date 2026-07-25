@@ -100,6 +100,48 @@ for required_mapping in (
 PY
 }
 
+go_runtime_admin_session_projection_violations() {
+  local runtime_admin="${1:-sdk/go/runtime_admin.go}"
+  [[ -f "$runtime_admin" ]] || return 0
+  "$PYTHON_BIN" - "$runtime_admin" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+text = path.read_text()
+match = re.search(r"type\s+RuntimeSession\s+struct\s*\{(?P<body>.*?)\n\}", text, re.S)
+if match is None:
+    raise SystemExit("go_runtime_admin_session_projection:missing_runtime_session")
+body = match.group("body")
+for retired, pattern in (
+    ("DeviceURA", r"\bDeviceURA\b"),
+    ("AuthorityURA", r"\bAuthorityURA\b"),
+    ('`json:"device_ura,omitempty"`', r'`json:"device_ura,omitempty"`'),
+    ('`json:"authority_ura,omitempty"`', r'`json:"authority_ura,omitempty"`'),
+):
+    if re.search(pattern, body):
+        raise SystemExit(f"go_runtime_admin_session_projection:retired_field:{retired}")
+for required in (
+    "RuntimeHostURA",
+    "ControlAuthorityURA",
+    '`json:"runtime_host_ura,omitempty"`',
+    '`json:"control_authority_ura,omitempty"`',
+):
+    if required not in body:
+        raise SystemExit(f"go_runtime_admin_session_projection:missing_field:{required}")
+for required_mapping in (
+    r"RuntimeHostURA:\s+runtimeAdminString\(row,\s*\"device_ura\"\)",
+    r"ControlAuthorityURA:\s+runtimeAdminString\(row,\s*\"authority_ura\"\)",
+):
+    if not re.search(required_mapping, text):
+        raise SystemExit(
+            "go_runtime_admin_session_projection:missing_wire_to_neutral_mapping:"
+            + required_mapping
+        )
+PY
+}
+
 retired_product_sdk_modules() {
   cat <<'EOF'
 sdk/go/profiles.go
@@ -276,6 +318,34 @@ PY
   python_runtime_admin_session_projection_violations "$injected" \
     || fail "self-test rejected neutral runtime-admin session projection"
   rm -f "$injected"
+  injected="$tmp/sdk/go/runtime_admin.go"
+  mkdir -p "$(dirname "$injected")"
+  cat >"$injected" <<'GO'
+package easynet
+type RuntimeSession struct {
+	DeviceURA    string `json:"device_ura,omitempty"`
+	AuthorityURA string `json:"authority_ura,omitempty"`
+}
+GO
+  if go_runtime_admin_session_projection_violations "$injected" >/dev/null 2>&1; then
+    fail "self-test failed to detect product Go runtime-admin session projection"
+  fi
+  cat >"$injected" <<'GO'
+package easynet
+type RuntimeSession struct {
+	RuntimeHostURA      string `json:"runtime_host_ura,omitempty"`
+	ControlAuthorityURA string `json:"control_authority_ura,omitempty"`
+}
+func runtimeSessionPage(row map[string]any) {
+	_ = RuntimeSession{
+		RuntimeHostURA:      runtimeAdminString(row, "device_ura"),
+		ControlAuthorityURA: runtimeAdminString(row, "authority_ura"),
+	}
+}
+GO
+  go_runtime_admin_session_projection_violations "$injected" \
+    || fail "self-test rejected neutral Go runtime-admin session projection"
+  rm -f "$injected"
   injected="$tmp/sdk/python/easynet_sdk/providers/easynet/lifecycle.py"
   mkdir -p "$(dirname "$injected")"
   printf 'class DaemonStartProjection:\n    @classmethod\n    def hub(cls):\n        return cls.from_profile(mode="hub")\ndef start_daemon(transport, config):\n    return None\n' >"$injected"
@@ -416,6 +486,10 @@ fi
 python_runtime_admin_session_projection_violations \
   "$ROOT/sdk/python/easynet_sdk/runtime_admin.py" \
   || fail "product runtime-admin session projection leaked into Python SDK"
+
+go_runtime_admin_session_projection_violations \
+  "$ROOT/sdk/go/runtime_admin.go" \
+  || fail "product runtime-admin session projection leaked into Go SDK"
 
 for path in sdk/go/runtime_events.go sdk/python/easynet_sdk/runtime_events.py; do
   if rg -n '(federation\.subscribe_directory_v2|events\.device\.subscribe|session\.attach|events\.invocation\.subscribe|daemon_ability|device_ura|owner_ura|session_id)' "$path"; then

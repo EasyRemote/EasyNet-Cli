@@ -8,7 +8,7 @@
         {
           "kind": "go_test",
           "ref_path": "sdk/go/ability_descriptor_test.go",
-          "sha256": "f88915d19fed47fb1676f04ffc75adf0ef7b8e6b10060e0441adb629608482b3"
+          "sha256": "6a7b0c8e23f4a4cb7358288894c0cd3678bdc043a03c97c7acb90098125bcd5f"
         }
       ],
       "profile": "runtime_core"
@@ -30,7 +30,7 @@
         {
           "kind": "go_test",
           "ref_path": "sdk/go/runtime_test.go",
-          "sha256": "8390a0f854d0d978d2506510d610de5af68de1ce41cde02f882cb4aafecea58e"
+          "sha256": "5e99ff802b4b99f41f9e9b6d621f30eb224835faa1d825dbec79847519be7617"
         }
       ],
       "profile": "runtime_core"
@@ -63,7 +63,7 @@
         {
           "kind": "go_test",
           "ref_path": "sdk/go/runtime_ability_test.go",
-          "sha256": "137ad6d94f3b7227c7e56aa501c013a70eb9c881e2e132c3701aff8db1b1c2a5"
+          "sha256": "73b5a135f58bd326237941b4d4ed6ed1d76f7f35f9b4cde5893c183a164bb081"
         }
       ],
       "profile": "runtime_core"
@@ -118,7 +118,7 @@
         {
           "kind": "go_test",
           "ref_path": "sdk/go/cabi_runtime_test.go",
-          "sha256": "6d00320b5a3f0bc060d61f664f20ddf4af3b309872971d3f2cf9ae5173b91c87"
+          "sha256": "2f3c100d6fe602430013c991a5801466f3d749228eee792eb7526e0652a5114d"
         }
       ],
       "profile": "runtime_core"
@@ -239,7 +239,7 @@
         {
           "kind": "go_test",
           "ref_path": "sdk/go/signing_test.go",
-          "sha256": "c44867922a2b9b45aa340154beb61644fb2dcd150f6db71abaef16b0a594391b"
+          "sha256": "89903319bc09692f82ddadff64623b49e663d038db41697c3040a46b322f7623"
         }
       ],
       "profile": "runtime_core"
@@ -250,7 +250,7 @@
         {
           "kind": "go_test",
           "ref_path": "sdk/go/managed_signing_test.go",
-          "sha256": "44d05b60b41441da0f63c7f680b863589d524d1361d6ef33bfe8c09df3167d4a"
+          "sha256": "8eee0e6f45f5df1c8c1cb2cbd83eb6a24d78906c9c0fce2ae7ccaec91657ba14"
         }
       ],
       "profile": "managed_signing"
@@ -305,7 +305,7 @@
         {
           "kind": "go_test",
           "ref_path": "sdk/go/runtime_admin_test.go",
-          "sha256": "8480aac231f2c36e50604a96d13c4b590c4c5e3431e12f20d88d38cc23ca857d"
+          "sha256": "8ed1ebd22bb031b0273cb0dbae20cf4b7b36529cc2eb3de21017b833a501bde4"
         }
       ],
       "profile": "runtime_administration"
@@ -327,7 +327,7 @@
         {
           "kind": "go_test",
           "ref_path": "sdk/go/signing_test.go",
-          "sha256": "c44867922a2b9b45aa340154beb61644fb2dcd150f6db71abaef16b0a594391b"
+          "sha256": "89903319bc09692f82ddadff64623b49e663d038db41697c3040a46b322f7623"
         }
       ],
       "profile": "runtime_core"
@@ -338,7 +338,7 @@
         {
           "kind": "go_test",
           "ref_path": "sdk/go/runtime_test.go",
-          "sha256": "8390a0f854d0d978d2506510d610de5af68de1ce41cde02f882cb4aafecea58e"
+          "sha256": "5e99ff802b4b99f41f9e9b6d621f30eb224835faa1d825dbec79847519be7617"
         }
       ],
       "profile": "runtime_core"
@@ -360,7 +360,7 @@
         {
           "kind": "go_test",
           "ref_path": "sdk/go/client_test.go",
-          "sha256": "dad3ac00630f4dc1f03350fd77fc147b24937933cbff78d6a926fd0a8044fe0e"
+          "sha256": "a1faf7dd60ee60e7b80ff99d4133faa515ba129a23caba2f92bf20815c911528"
         }
       ],
       "profile": "runtime_core"
@@ -382,7 +382,7 @@
         {
           "kind": "go_test",
           "ref_path": "sdk/go/cabi_runtime_test.go",
-          "sha256": "6d00320b5a3f0bc060d61f664f20ddf4af3b309872971d3f2cf9ae5173b91c87"
+          "sha256": "2f3c100d6fe602430013c991a5801466f3d749228eee792eb7526e0652a5114d"
         }
       ],
       "profile": "runtime_core"
@@ -393,7 +393,7 @@
         {
           "kind": "go_test",
           "ref_path": "sdk/go/cabi_runtime_test.go",
-          "sha256": "6d00320b5a3f0bc060d61f664f20ddf4af3b309872971d3f2cf9ae5173b91c87"
+          "sha256": "2f3c100d6fe602430013c991a5801466f3d749228eee792eb7526e0652a5114d"
         }
       ],
       "profile": "runtime_core"
@@ -404,7 +404,7 @@
         {
           "kind": "go_test",
           "ref_path": "sdk/go/client_test.go",
-          "sha256": "dad3ac00630f4dc1f03350fd77fc147b24937933cbff78d6a926fd0a8044fe0e"
+          "sha256": "a1faf7dd60ee60e7b80ff99d4133faa515ba129a23caba2f92bf20815c911528"
         }
       ],
       "profile": "runtime_core"
@@ -415,7 +415,7 @@
         {
           "kind": "go_test",
           "ref_path": "sdk/go/client_test.go",
-          "sha256": "dad3ac00630f4dc1f03350fd77fc147b24937933cbff78d6a926fd0a8044fe0e"
+          "sha256": "a1faf7dd60ee60e7b80ff99d4133faa515ba129a23caba2f92bf20815c911528"
         }
       ],
       "profile": "runtime_core"
@@ -427,7 +427,7 @@
         {
           "kind": "go_test",
           "ref_path": "sdk/go/cabi_runtime_test.go",
-          "sha256": "6d00320b5a3f0bc060d61f664f20ddf4af3b309872971d3f2cf9ae5173b91c87"
+          "sha256": "2f3c100d6fe602430013c991a5801466f3d749228eee792eb7526e0652a5114d"
         }
       ]
     },
@@ -438,7 +438,7 @@
         {
           "kind": "go_test",
           "ref_path": "sdk/go/cabi_runtime_test.go",
-          "sha256": "6d00320b5a3f0bc060d61f664f20ddf4af3b309872971d3f2cf9ae5173b91c87"
+          "sha256": "2f3c100d6fe602430013c991a5801466f3d749228eee792eb7526e0652a5114d"
         }
       ]
     },
@@ -449,7 +449,7 @@
         {
           "kind": "go_test",
           "ref_path": "sdk/go/cabi_runtime_test.go",
-          "sha256": "6d00320b5a3f0bc060d61f664f20ddf4af3b309872971d3f2cf9ae5173b91c87"
+          "sha256": "2f3c100d6fe602430013c991a5801466f3d749228eee792eb7526e0652a5114d"
         }
       ]
     },
@@ -460,7 +460,7 @@
         {
           "kind": "go_test",
           "ref_path": "sdk/go/cabi_runtime_test.go",
-          "sha256": "6d00320b5a3f0bc060d61f664f20ddf4af3b309872971d3f2cf9ae5173b91c87"
+          "sha256": "2f3c100d6fe602430013c991a5801466f3d749228eee792eb7526e0652a5114d"
         }
       ]
     },
@@ -471,7 +471,7 @@
         {
           "kind": "go_test",
           "ref_path": "sdk/go/runtime_test.go",
-          "sha256": "8390a0f854d0d978d2506510d610de5af68de1ce41cde02f882cb4aafecea58e"
+          "sha256": "5e99ff802b4b99f41f9e9b6d621f30eb224835faa1d825dbec79847519be7617"
         }
       ]
     },
@@ -482,7 +482,7 @@
         {
           "kind": "go_test",
           "ref_path": "sdk/go/runtime_ability_test.go",
-          "sha256": "137ad6d94f3b7227c7e56aa501c013a70eb9c881e2e132c3701aff8db1b1c2a5"
+          "sha256": "73b5a135f58bd326237941b4d4ed6ed1d76f7f35f9b4cde5893c183a164bb081"
         }
       ]
     },
@@ -504,7 +504,7 @@
         {
           "kind": "go_test",
           "ref_path": "sdk/go/runtime_ability_test.go",
-          "sha256": "137ad6d94f3b7227c7e56aa501c013a70eb9c881e2e132c3701aff8db1b1c2a5"
+          "sha256": "73b5a135f58bd326237941b4d4ed6ed1d76f7f35f9b4cde5893c183a164bb081"
         }
       ]
     },
@@ -515,7 +515,7 @@
         {
           "kind": "go_test",
           "ref_path": "sdk/go/runtime_ability_test.go",
-          "sha256": "137ad6d94f3b7227c7e56aa501c013a70eb9c881e2e132c3701aff8db1b1c2a5"
+          "sha256": "73b5a135f58bd326237941b4d4ed6ed1d76f7f35f9b4cde5893c183a164bb081"
         }
       ]
     },
@@ -537,7 +537,7 @@
         {
           "kind": "go_test",
           "ref_path": "sdk/go/direct_runtime_test.go",
-          "sha256": "5647fa2114d3ead6db6ab29ea7de707ec1ac613d77131616796e269e26a4152a"
+          "sha256": "f1d52a9bd28caf020b8beb43b03339f729ab9c7f3b6c938015a3759f4b80b3a2"
         }
       ]
     },
@@ -548,7 +548,7 @@
         {
           "kind": "go_test",
           "ref_path": "sdk/go/runtime_test.go",
-          "sha256": "8390a0f854d0d978d2506510d610de5af68de1ce41cde02f882cb4aafecea58e"
+          "sha256": "5e99ff802b4b99f41f9e9b6d621f30eb224835faa1d825dbec79847519be7617"
         }
       ]
     },
@@ -559,7 +559,7 @@
         {
           "kind": "go_test",
           "ref_path": "sdk/go/cabi_runtime_test.go",
-          "sha256": "6d00320b5a3f0bc060d61f664f20ddf4af3b309872971d3f2cf9ae5173b91c87"
+          "sha256": "2f3c100d6fe602430013c991a5801466f3d749228eee792eb7526e0652a5114d"
         }
       ]
     },
@@ -570,7 +570,7 @@
         {
           "kind": "go_test",
           "ref_path": "sdk/go/cabi_runtime_test.go",
-          "sha256": "6d00320b5a3f0bc060d61f664f20ddf4af3b309872971d3f2cf9ae5173b91c87"
+          "sha256": "2f3c100d6fe602430013c991a5801466f3d749228eee792eb7526e0652a5114d"
         }
       ]
     },
@@ -581,7 +581,7 @@
         {
           "kind": "go_test",
           "ref_path": "sdk/go/cabi_runtime_test.go",
-          "sha256": "6d00320b5a3f0bc060d61f664f20ddf4af3b309872971d3f2cf9ae5173b91c87"
+          "sha256": "2f3c100d6fe602430013c991a5801466f3d749228eee792eb7526e0652a5114d"
         }
       ]
     }

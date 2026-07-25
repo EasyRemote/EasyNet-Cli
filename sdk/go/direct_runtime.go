@@ -1364,7 +1364,12 @@ func directReceipt(receipt *axonpb.InvocationReceipt, stage string) (map[string]
 	if err != nil {
 		return nil, err
 	}
+	receiptURA, err := directReceiptURA(receipt)
+	if err != nil {
+		return nil, err
+	}
 	value := map[string]any{
+		"receipt_ura":             receiptURA,
 		"index":                   receipt.GetIndex(),
 		"invocation_id":           receipt.GetInvocationId(),
 		"receipt_type":            receipt.GetReceiptType(),
@@ -1414,6 +1419,30 @@ func directReceipt(receipt *axonpb.InvocationReceipt, stage string) (map[string]
 		}
 	}
 	return value, nil
+}
+
+func directReceiptURA(receipt *axonpb.InvocationReceipt) (string, error) {
+	if receipt == nil {
+		return "", invalidRuntimePayload("direct runtime receipt is missing", nil)
+	}
+	callee := receipt.GetCalleeBinding()
+	if callee == nil {
+		return "", invalidRuntimePayload("direct runtime receipt is missing callee_binding", nil)
+	}
+	parts, err := ParseURAParts(strings.TrimSpace(callee.GetUra()))
+	if err != nil || strings.TrimSpace(parts.Realm) == "" {
+		return "", invalidRuntimePayload("direct runtime receipt callee_binding.ura must be a canonical URA", err)
+	}
+	invocationID := strings.TrimSpace(receipt.GetInvocationId())
+	if invocationID == "" || strings.Contains(invocationID, "/") {
+		return "", invalidRuntimePayload("direct runtime receipt invocation_id must be owner-local for receipt URA", nil)
+	}
+	return fmt.Sprintf(
+		"%s/resource/runtime/invocation/%s/receipt/%d",
+		RealmResourcePrefix(parts.Realm),
+		invocationID,
+		receipt.GetIndex(),
+	), nil
 }
 
 func directAgentBinding(binding *axonpb.AgentIdentity) map[string]any {

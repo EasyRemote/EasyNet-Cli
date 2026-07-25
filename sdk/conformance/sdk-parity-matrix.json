@@ -181493,7 +181493,7 @@
         },
         {
           "item": "RuntimeSession",
-          "sha256": "8d367047bdf9576817730e1a5cbfad93fa8a0b26c6f3682815f12e2e758df8cd"
+          "sha256": "54797b01be71138d56ee9c1ff2f6209e98e569534d559091c03e6d5e70bb2f71"
         },
         {
           "item": "RuntimeSessionListRequest",
@@ -181572,16 +181572,12 @@
           "sha256": "b760f44fa5965c2474a3b471467a22c43185152129295af588b022ae50b50903"
         },
         {
-          "item": "RuntimeSession.AuthorityURA",
+          "item": "RuntimeSession.ControlAuthorityURA",
           "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
         },
         {
           "item": "RuntimeSession.CreatedUnixMS",
           "sha256": "bc2229666b96007e875c5f62897ee5b7648db2baa5fabf3e771afac323afbd57"
-        },
-        {
-          "item": "RuntimeSession.DeviceURA",
-          "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
         },
         {
           "item": "RuntimeSession.ExpiresUnixMS",
@@ -181594,6 +181590,10 @@
         {
           "item": "RuntimeSession.Metadata",
           "sha256": "26c0c2adc8ab309ae43ec9e419697304d0c5bc6def3858cf3b609bef3562b415"
+        },
+        {
+          "item": "RuntimeSession.RuntimeHostURA",
+          "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
         },
         {
           "item": "RuntimeSession.SessionID",
@@ -181700,7 +181700,7 @@
             },
             {
               "item": "RuntimeSession",
-              "sha256": "8d367047bdf9576817730e1a5cbfad93fa8a0b26c6f3682815f12e2e758df8cd"
+              "sha256": "54797b01be71138d56ee9c1ff2f6209e98e569534d559091c03e6d5e70bb2f71"
             },
             {
               "item": "RuntimeSessionListRequest",
@@ -181779,16 +181779,12 @@
               "sha256": "b760f44fa5965c2474a3b471467a22c43185152129295af588b022ae50b50903"
             },
             {
-              "item": "RuntimeSession.AuthorityURA",
+              "item": "RuntimeSession.ControlAuthorityURA",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "RuntimeSession.CreatedUnixMS",
               "sha256": "bc2229666b96007e875c5f62897ee5b7648db2baa5fabf3e771afac323afbd57"
-            },
-            {
-              "item": "RuntimeSession.DeviceURA",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "RuntimeSession.ExpiresUnixMS",
@@ -181801,6 +181797,10 @@
             {
               "item": "RuntimeSession.Metadata",
               "sha256": "26c0c2adc8ab309ae43ec9e419697304d0c5bc6def3858cf3b609bef3562b415"
+            },
+            {
+              "item": "RuntimeSession.RuntimeHostURA",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "RuntimeSession.SessionID",
@@ -181907,7 +181907,7 @@
             },
             {
               "item": "RuntimeSession",
-              "sha256": "8d367047bdf9576817730e1a5cbfad93fa8a0b26c6f3682815f12e2e758df8cd"
+              "sha256": "54797b01be71138d56ee9c1ff2f6209e98e569534d559091c03e6d5e70bb2f71"
             },
             {
               "item": "RuntimeSessionListRequest",
@@ -181986,16 +181986,12 @@
               "sha256": "b760f44fa5965c2474a3b471467a22c43185152129295af588b022ae50b50903"
             },
             {
-              "item": "RuntimeSession.AuthorityURA",
+              "item": "RuntimeSession.ControlAuthorityURA",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "RuntimeSession.CreatedUnixMS",
               "sha256": "bc2229666b96007e875c5f62897ee5b7648db2baa5fabf3e771afac323afbd57"
-            },
-            {
-              "item": "RuntimeSession.DeviceURA",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "RuntimeSession.ExpiresUnixMS",
@@ -182008,6 +182004,10 @@
             {
               "item": "RuntimeSession.Metadata",
               "sha256": "26c0c2adc8ab309ae43ec9e419697304d0c5bc6def3858cf3b609bef3562b415"
+            },
+            {
+              "item": "RuntimeSession.RuntimeHostURA",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "RuntimeSession.SessionID",
@@ -182114,7 +182114,7 @@
             },
             {
               "item": "RuntimeSession",
-              "sha256": "8d367047bdf9576817730e1a5cbfad93fa8a0b26c6f3682815f12e2e758df8cd"
+              "sha256": "54797b01be71138d56ee9c1ff2f6209e98e569534d559091c03e6d5e70bb2f71"
             },
             {
               "item": "RuntimeSessionListRequest",
@@ -182193,16 +182193,12 @@
               "sha256": "b760f44fa5965c2474a3b471467a22c43185152129295af588b022ae50b50903"
             },
             {
-              "item": "RuntimeSession.AuthorityURA",
+              "item": "RuntimeSession.ControlAuthorityURA",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "RuntimeSession.CreatedUnixMS",
               "sha256": "bc2229666b96007e875c5f62897ee5b7648db2baa5fabf3e771afac323afbd57"
-            },
-            {
-              "item": "RuntimeSession.DeviceURA",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "RuntimeSession.ExpiresUnixMS",
@@ -182215,6 +182211,10 @@
             {
               "item": "RuntimeSession.Metadata",
               "sha256": "26c0c2adc8ab309ae43ec9e419697304d0c5bc6def3858cf3b609bef3562b415"
+            },
+            {
+              "item": "RuntimeSession.RuntimeHostURA",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "RuntimeSession.SessionID",

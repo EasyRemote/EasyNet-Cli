@@ -34,15 +34,15 @@ type RuntimeSessionListRequest struct {
 }
 
 type RuntimeSession struct {
-	Kind          string         `json:"kind,omitempty"`
-	SessionID     string         `json:"session_id,omitempty"`
-	DeviceURA     string         `json:"device_ura,omitempty"`
-	AuthorityURA  string         `json:"authority_ura,omitempty"`
-	State         string         `json:"state,omitempty"`
-	SessionKind   string         `json:"session_kind,omitempty"`
-	CreatedUnixMS int64          `json:"created_unix_ms,omitempty"`
-	ExpiresUnixMS int64          `json:"expires_unix_ms,omitempty"`
-	Metadata      map[string]any `json:"metadata,omitempty"`
+	Kind                string         `json:"kind,omitempty"`
+	SessionID           string         `json:"session_id,omitempty"`
+	RuntimeHostURA      string         `json:"runtime_host_ura,omitempty"`
+	ControlAuthorityURA string         `json:"control_authority_ura,omitempty"`
+	State               string         `json:"state,omitempty"`
+	SessionKind         string         `json:"session_kind,omitempty"`
+	CreatedUnixMS       int64          `json:"created_unix_ms,omitempty"`
+	ExpiresUnixMS       int64          `json:"expires_unix_ms,omitempty"`
+	Metadata            map[string]any `json:"metadata,omitempty"`
 }
 
 type RuntimeSessionPage struct {
@@ -229,15 +229,15 @@ func runtimeSessionPage(output map[string]any) (RuntimeSessionPage, error) {
 	sessions := make([]RuntimeSession, 0, len(rows))
 	for _, row := range rows {
 		sessions = append(sessions, RuntimeSession{
-			Kind:          runtimeAdminString(row, "kind"),
-			SessionID:     runtimeAdminString(row, "session_id"),
-			DeviceURA:     runtimeAdminString(row, "device_ura"),
-			AuthorityURA:  runtimeAdminString(row, "authority_ura"),
-			State:         runtimeAdminString(row, "state"),
-			SessionKind:   runtimeAdminString(row, "session_kind"),
-			CreatedUnixMS: runtimeAdminInt64(row["created_unix_ms"]),
-			ExpiresUnixMS: runtimeAdminInt64(row["expires_unix_ms"]),
-			Metadata:      runtimeAdminMap(row["metadata"]),
+			Kind:                runtimeAdminString(row, "kind"),
+			SessionID:           runtimeAdminString(row, "session_id"),
+			RuntimeHostURA:      runtimeAdminString(row, "device_ura"),
+			ControlAuthorityURA: runtimeAdminString(row, "authority_ura"),
+			State:               runtimeAdminString(row, "state"),
+			SessionKind:         runtimeAdminString(row, "session_kind"),
+			CreatedUnixMS:       runtimeAdminInt64(row["created_unix_ms"]),
+			ExpiresUnixMS:       runtimeAdminInt64(row["expires_unix_ms"]),
+			Metadata:            runtimeAdminMap(row["metadata"]),
 		})
 	}
 	return RuntimeSessionPage{

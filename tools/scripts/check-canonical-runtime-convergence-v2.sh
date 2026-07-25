@@ -1175,17 +1175,26 @@ check_sdk_runtime_admin_authority_session_contract() {
   local py_admin="$cli_root/sdk/python/easynet_sdk/runtime_admin.py"
 
   if [[ -f "$go_admin" ]]; then
-    if rg -n '\bHubURA\b' "$go_admin"; then
-      fail "Go SDK runtime-admin session projection preserves HubURA public field"
+    if rg -n '\b(HubURA|DeviceURA|AuthorityURA)\b' "$go_admin"; then
+      fail "Go SDK runtime-admin session projection preserves product or wire public field"
     fi
-    if ! rg -q 'AuthorityURA  string' "$go_admin"; then
-      fail "Go SDK runtime-admin session projection must expose AuthorityURA"
+    if ! rg -q 'RuntimeHostURA\s+string' "$go_admin"; then
+      fail "Go SDK runtime-admin session projection must expose RuntimeHostURA"
     fi
-    if ! rg -q '`json:"authority_ura,omitempty"`' "$go_admin"; then
-      fail "Go SDK runtime-admin session projection must serialize authority_ura"
+    if ! rg -q 'ControlAuthorityURA\s+string' "$go_admin"; then
+      fail "Go SDK runtime-admin session projection must expose ControlAuthorityURA"
     fi
-    if ! rg -q 'AuthorityURA:\s+runtimeAdminString\(row, "authority_ura"\)' "$go_admin"; then
-      fail "Go SDK runtime-admin adapter must decode canonical daemon wire authority_ura"
+    if ! rg -q '`json:"runtime_host_ura,omitempty"`' "$go_admin"; then
+      fail "Go SDK runtime-admin session projection must serialize runtime_host_ura"
+    fi
+    if ! rg -q '`json:"control_authority_ura,omitempty"`' "$go_admin"; then
+      fail "Go SDK runtime-admin session projection must serialize control_authority_ura"
+    fi
+    if ! rg -q 'RuntimeHostURA:\s+runtimeAdminString\(row, "device_ura"\)' "$go_admin"; then
+      fail "Go SDK runtime-admin adapter must decode daemon wire device_ura into RuntimeHostURA"
+    fi
+    if ! rg -q 'ControlAuthorityURA:\s+runtimeAdminString\(row, "authority_ura"\)' "$go_admin"; then
+      fail "Go SDK runtime-admin adapter must decode daemon wire authority_ura into ControlAuthorityURA"
     fi
     if rg -n 'runtimeAdminString\(row, "hub_ura"\)' "$go_admin"; then
       fail "Go SDK runtime-admin adapter preserves legacy daemon wire hub_ura fallback"
@@ -1193,14 +1202,20 @@ check_sdk_runtime_admin_authority_session_contract() {
   fi
 
   if [[ -f "$py_admin" ]]; then
-    if rg -n '^\s+hub_ura:\s*str' "$py_admin"; then
-      fail "Python SDK runtime-admin session projection preserves hub_ura public field"
+    if rg -n '^\s+(hub_ura|device_ura|authority_ura):\s*str' "$py_admin"; then
+      fail "Python SDK runtime-admin session projection preserves product or wire public field"
     fi
-    if ! rg -q 'authority_ura: str = ""' "$py_admin"; then
-      fail "Python SDK runtime-admin session projection must expose authority_ura"
+    if ! rg -q 'runtime_host_ura: str = ""' "$py_admin"; then
+      fail "Python SDK runtime-admin session projection must expose runtime_host_ura"
     fi
-    if ! rg -q 'authority_ura=_admin_string\(row.get\("authority_ura"\)\)' "$py_admin"; then
-      fail "Python SDK runtime-admin adapter must decode canonical daemon wire authority_ura"
+    if ! rg -q 'control_authority_ura: str = ""' "$py_admin"; then
+      fail "Python SDK runtime-admin session projection must expose control_authority_ura"
+    fi
+    if ! rg -q 'runtime_host_ura=_admin_string\(row.get\("device_ura"\)\)' "$py_admin"; then
+      fail "Python SDK runtime-admin adapter must decode daemon wire device_ura into runtime_host_ura"
+    fi
+    if ! rg -q 'control_authority_ura=_admin_string\(row.get\("authority_ura"\)\)' "$py_admin"; then
+      fail "Python SDK runtime-admin adapter must decode daemon wire authority_ura into control_authority_ura"
     fi
     if rg -n 'row.get\("hub_ura"\)' "$py_admin"; then
       fail "Python SDK runtime-admin adapter preserves legacy daemon wire hub_ura fallback"
@@ -1209,8 +1224,8 @@ check_sdk_runtime_admin_authority_session_contract() {
 
   local public_api="$cli_root/sdk/conformance/canonical-public-api.json"
   if [[ -f "$public_api" ]] \
-    && rg -n 'RuntimeSession\.(HubURA|hub_ura)' "$public_api"; then
-    fail "canonical public API inventory preserves runtime-admin Hub session projection"
+    && rg -n 'RuntimeSession\.(HubURA|DeviceURA|AuthorityURA|hub_ura|device_ura|authority_ura)' "$public_api"; then
+    fail "canonical public API inventory preserves runtime-admin product or wire session projection"
   fi
 }
 

@@ -372,7 +372,7 @@
     {
       "language": "go",
       "case_id": "managed_signing/provider_lifecycle",
-      "selector": "TestManagedSigningClientConformsToDaemonKeyServiceProtocol",
+      "selector": "TestManagedSigningClientConformsToRuntimeKeyServiceProtocol",
       "evidence": [
         "sdk/go/managed_signing_test.go"
       ]
@@ -1060,7 +1060,7 @@
     {
       "language": "python",
       "case_id": "managed_signing/provider_lifecycle",
-      "selector": "test_client_conforms_to_daemon_key_service_protocol",
+      "selector": "test_client_conforms_to_runtime_key_service_protocol",
       "evidence": [
         "sdk/python/tests/test_managed_signing.py"
       ]
