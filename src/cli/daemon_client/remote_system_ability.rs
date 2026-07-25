@@ -12,7 +12,7 @@ use anyhow::Context;
 
 #[cfg(feature = "axon-pb")]
 use crate::daemon::invocation::routing::remote_invoke::{
-    self, RemoteAbilityInvocationTarget, RemoteSystemInvocationIssuer,
+    self, RemoteAbilityInvocationTarget, RemoteCatalogueReadIssuer, RemoteSystemInvocationIssuer,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -217,11 +217,8 @@ fn invoke_remote_catalogue_read_for_target(
     args: Value,
     caller_ura: &str,
 ) -> anyhow::Result<Value> {
-    let target_call = RemoteAbilityInvocationTarget::for_target_owned_selector(
-        execution_target_ura,
-        crate::daemon::ability::builtins::governance::meta::ABILITY_LIST_ABILITIES,
-    )?;
-    let request = RemoteSystemInvocationIssuer::target_owned_root_plan(
+    let target_call = RemoteAbilityInvocationTarget::for_catalogue_read(execution_target_ura)?;
+    let request = RemoteCatalogueReadIssuer::catalogue_read_plan(
         &target_call,
         caller_ura,
         args,

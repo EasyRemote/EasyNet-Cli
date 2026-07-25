@@ -194,6 +194,18 @@ impl RemoteAbilityInvocationTarget {
         Self::from_ability_ura(execution_target_ura, &ability_ura)
     }
 
+    /// Project a remote runtime catalogue read target without routing it
+    /// through the target-owned system action selector.
+    pub(crate) fn for_catalogue_read(execution_target_ura: &str) -> anyhow::Result<Self> {
+        validate_remote_target_ura(execution_target_ura)?;
+        let ability_ura = crate::core::ura::owner_ability_ura(
+            execution_target_ura,
+            crate::daemon::ability::builtins::governance::meta::ABILITY_LIST_ABILITIES,
+        )
+        .ok_or_else(|| anyhow!("derive catalogue Ability URA for {execution_target_ura}"))?;
+        Self::from_ability_ura(execution_target_ura, &ability_ura)
+    }
+
     /// Accept an already-canonical Ability URA and bind it to an execution
     /// target without rewriting the Ability owner.
     pub(crate) fn from_ability_ura(
@@ -368,6 +380,7 @@ pub(crate) struct RemoteInvocationRequest<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum RemoteInvocationSubject {
     CallerDeclared(String),
+    RuntimeReadProjection(String),
     DaemonTargetOwned(String),
 }
 
@@ -375,6 +388,7 @@ impl RemoteInvocationSubject {
     fn resolve(&self) -> anyhow::Result<String> {
         let (value, field) = match self {
             Self::CallerDeclared(value) => (value, "caller-declared subject"),
+            Self::RuntimeReadProjection(value) => (value, "runtime read projection subject"),
             Self::DaemonTargetOwned(value) => (value, "daemon target-owned subject"),
         };
         checked_remote_invocation_ura(value.clone(), field)
@@ -384,6 +398,7 @@ impl RemoteInvocationSubject {
     fn policy_name(&self) -> &'static str {
         match self {
             Self::CallerDeclared(_) => "CallerDeclared",
+            Self::RuntimeReadProjection(_) => "RuntimeReadProjection",
             Self::DaemonTargetOwned(_) => "DaemonTargetOwned",
         }
     }
@@ -540,6 +555,40 @@ impl RemoteSystemInvocationIssuer {
             target,
             caller_ura,
             subject,
+            axon_sdk::invocation::fresh_nonce(),
+            args,
+            timeout,
+        )
+    }
+}
+
+/// Issuer for daemon-owned remote runtime catalogue reads.
+///
+/// Catalogue reads share the descriptor-bound remote transport with system
+/// actions, but the tuple policy is not a product action: the subject is the
+/// runtime owner being read, not an action-specific target-owned surrogate.
+pub(crate) struct RemoteCatalogueReadIssuer;
+
+impl RemoteCatalogueReadIssuer {
+    pub(crate) fn catalogue_read_plan<'a>(
+        target: &'a RemoteAbilityInvocationTarget,
+        caller_ura: impl Into<String>,
+        args: Value,
+        timeout: Duration,
+    ) -> anyhow::Result<RemoteInvocationTuplePlan<'a>> {
+        if target.public_ability()
+            != crate::daemon::ability::builtins::governance::meta::ABILITY_LIST_ABILITIES
+        {
+            anyhow::bail!(
+                "remote catalogue read issuer requires `{}`, got `{}`",
+                crate::daemon::ability::builtins::governance::meta::ABILITY_LIST_ABILITIES,
+                target.public_ability()
+            );
+        }
+        RemoteInvocationTuplePlan::system_root_with_explicit_nonce(
+            target,
+            caller_ura,
+            RemoteInvocationSubject::RuntimeReadProjection(target.callee_ura().to_string()),
             axon_sdk::invocation::fresh_nonce(),
             args,
             timeout,
@@ -1676,6 +1725,56 @@ mod tests {
         assert_eq!(request.subject_ura, target.as_str());
         assert_ne!(request.invocation_nonce, [0; 16]);
         assert_eq!(request.causal_context, CausalContext::None);
+    }
+
+    #[test]
+    fn remote_catalogue_read_issuer_uses_read_projection_subject() {
+        let target =
+            RemoteAbilityInvocationTarget::for_catalogue_read("easynet:///r/realm/device/node-a")
+                .expect("catalogue target");
+        let plan = RemoteCatalogueReadIssuer::catalogue_read_plan(
+            &target,
+            "easynet:///r/realm/device/caller",
+            json!({}),
+            Duration::from_secs(30),
+        )
+        .expect("catalogue read tuple plan");
+
+        assert_eq!(plan.subject.policy_name(), "RuntimeReadProjection");
+        assert_eq!(
+            plan.causal_context,
+            InvocationCausalContext::daemon_system_root()
+        );
+        assert_ne!(plan.nonce.derive(), [0; 16]);
+
+        let request = plan.into_request().expect("request");
+        assert_eq!(request.subject_ura, target.callee_ura());
+        assert_ne!(request.invocation_nonce, [0; 16]);
+        assert_eq!(request.causal_context, CausalContext::None);
+    }
+
+    #[test]
+    fn remote_catalogue_read_issuer_rejects_non_catalogue_target() {
+        let target = RemoteAbilityInvocationTarget::for_target_owned_selector(
+            "easynet:///r/realm/device/node-a",
+            "node.describe",
+        )
+        .expect("system target");
+
+        let error = RemoteCatalogueReadIssuer::catalogue_read_plan(
+            &target,
+            "easynet:///r/realm/device/caller",
+            json!({}),
+            Duration::from_secs(30),
+        )
+        .expect_err("non-catalogue target must not enter catalogue read issuer");
+
+        assert!(
+            error
+                .to_string()
+                .contains("remote catalogue read issuer requires"),
+            "wrong error: {error}"
+        );
     }
 
     #[test]
