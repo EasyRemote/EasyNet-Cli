@@ -371,8 +371,7 @@ fn every_published_ability_has_a_toml_byte_for_byte_matching_the_renderer() {
     let _home = crate::cli::commands::test_support::HomeGuard::new();
     // The TOML descriptors in ability-descriptors/system/ are the
     // source of truth for external discovery tools. They are
-    // GENERATED from `render_ability_toml(name,
-    // description_for(name), input_schema_for(name))`. This
+    // GENERATED from the canonical descriptor contract inventory. This
     // test enforces that the on-disk file is byte-for-byte
     // identical to what the renderer produces; if the
     // dispatcher's metadata changed and a maintainer forgot
@@ -1438,9 +1437,8 @@ fn daemon_local_discover_is_routable_but_not_publishable() {
 #[test]
 fn description_for_and_input_schema_for_cover_every_published_name() {
     // Adding a new ability to build_registry without also adding
-    // arms to `description_for`/`input_schema_for` would let it
-    // ship with the unknown-name fallback ("(system ability)" and
-    // empty `{type: object}` schema). Pin the contract that every
+    // arms to `description_for`/`try_input_schema_for` would let it
+    // ship with the undeclared-object schema. Pin the contract that every
     // published system name has real metadata. This deliberately uses
     // `published_system_abilities()` instead of the live daemon view so a
     // developer's `$HOME/.easynet/plugins` cannot make the unit test
@@ -1454,7 +1452,8 @@ fn description_for_and_input_schema_for_cover_every_published_name() {
             desc, "(system ability)",
             "{name} is missing a description_for arm — add one in daemon::ability::catalog::catalog_metadata"
         );
-        let schema = input_schema_for(&name);
+        let schema = try_input_schema_for(&name)
+            .unwrap_or_else(|error| panic!("{name} schema lookup must be fail-closed: {error}"));
         // The undeclared object projection returns `{"type":"object"}` with
         // NO other keys. A real authored schema always pins something more —
         // `properties`, `additionalProperties`, `oneOf`, etc. —
@@ -1471,7 +1470,7 @@ fn description_for_and_input_schema_for_cover_every_published_name() {
         assert!(
             !has_only_type,
             "{name} fell through to the default `{{type: object}}` schema; \
-                 add an input_schema_for arm (declare additionalProperties: false \
+                 add an authored schema arm (declare additionalProperties: false \
                  even if the ability is genuinely no-arg)"
         );
     }

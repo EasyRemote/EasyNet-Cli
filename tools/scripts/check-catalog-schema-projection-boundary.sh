@@ -66,6 +66,10 @@ check_root() {
     fail "catalog schema projection preserves retired infallible metadata lookup"
   fi
 
+  if rg -n 'pub fn input_schema_for\(name: &str\) -> serde_json::Value|try_input_schema_for\(name\)\.unwrap_or_else' "$catalog"; then
+    fail "catalog schema projection preserves retired infallible input_schema_for fallback facade"
+  fi
+
   if rg -n 'Unknown names fall back|empty-object default|schema fallback|default fallback|unwrap_or_else\(\|\| serde_json::json!\(\{"type": "object"\}\)' "$catalog" "$assembly_tests"; then
     fail "catalog schema publication still uses fallback/default vocabulary or local object fallback"
   fi

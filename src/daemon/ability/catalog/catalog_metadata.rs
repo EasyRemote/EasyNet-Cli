@@ -669,10 +669,6 @@ pub fn try_description_for_owned(name: &str) -> anyhow::Result<String> {
 /// a valid object JSON Schema that preserves the internal distinction between
 /// authored no-arg schemas and missing metadata. CI pins the live registry so
 /// published system abilities cannot accidentally ship in that state.
-pub fn input_schema_for(name: &str) -> serde_json::Value {
-    try_input_schema_for(name).unwrap_or_else(|_| serde_json::json!({ "type": "object" }))
-}
-
 pub fn try_input_schema_for(name: &str) -> anyhow::Result<serde_json::Value> {
     Ok(CatalogSchemaProjection::try_for_input_name(name)?.into_schema())
 }
