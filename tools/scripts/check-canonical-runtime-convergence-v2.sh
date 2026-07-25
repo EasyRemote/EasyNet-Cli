@@ -1067,6 +1067,48 @@ check_authority_context_model_vocabulary_contract() {
     "$authority" "$dispatch" "$catalog_build" "$conformance" "$meta" "$assembly" "$daemon_tests" "$errors"; then
     fail "authority context model preserves retired Hub/Both vocabulary"
   fi
+  if rg -n 'for_local_combined_environment|Public catalogue constructors historically|Preserve that API behavior' "$dispatch"; then
+    fail "AxonAbilityCatalog default constructors must not preserve implicit combined-authority compatibility"
+  fi
+
+  python3 - "$dispatch" <<'PY'
+import pathlib
+import re
+import sys
+
+text = pathlib.Path(sys.argv[1]).read_text()
+impl_marker = "impl AxonAbilityCatalog {\n    pub fn new() -> Self {"
+impl_start = text.find(impl_marker)
+if impl_start == -1:
+    raise SystemExit("missing AxonAbilityCatalog constructor impl")
+text = text[impl_start:]
+
+def body(name: str) -> str:
+    match = re.search(rf"pub fn {name}\([^)]*\) -> Self \{{", text)
+    if not match:
+        raise SystemExit(f"missing AxonAbilityCatalog::{name}")
+    depth = 0
+    for index in range(match.end() - 1, len(text)):
+        char = text[index]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return text[match.end():index]
+    raise SystemExit(f"unterminated AxonAbilityCatalog::{name}")
+
+new_body = body("new")
+runtime_body = body("new_with_runtime")
+required = "AbilityAuthorityContext::from_local_environment()"
+if required not in new_body:
+    raise SystemExit("AxonAbilityCatalog::new must bind the non-test default Device authority context")
+if required not in runtime_body:
+    raise SystemExit("AxonAbilityCatalog::new_with_runtime must bind the non-test default Device authority context")
+for constructor, source in [("new", new_body), ("new_with_runtime", runtime_body)]:
+    if "for_local_combined_environment" in source:
+        raise SystemExit(f"AxonAbilityCatalog::{constructor} preserves implicit combined authority")
+PY
 
   if ! rg -q 'RealmAuthority' "$authority"; then
     fail "authority owner projection parser must expose RealmAuthority"

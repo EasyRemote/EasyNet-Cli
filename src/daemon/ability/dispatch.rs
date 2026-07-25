@@ -1964,30 +1964,6 @@ impl AbilityAuthorityContext {
         }
     }
 
-    #[cfg(not(test))]
-    fn for_local_combined_environment() -> Self {
-        let device = CanonicalDeviceAuthority::parse(
-            local_device_authority_root().expect("local Device authority must be available"),
-        )
-        .expect("local Device authority helper must return a canonical Device URA");
-        let authority = CanonicalRealmAuthority::for_realm(&device.realm);
-        let roots = crate::daemon::persistence::hosted_agent_authority_roots().expect(
-            "local hosted-Agent lifecycle state must be readable when building authority context",
-        );
-        let roots = hosted_agent_roots_for_device(&device, roots)
-            .expect("local hosted-Agent lifecycle state must contain canonical authority roots");
-        Self {
-            authorities: AbilityAuthoritySet::DeviceAndRealmAuthority {
-                authority,
-                subordinate_source: DeviceSubordinateAuthoritySource::ExplicitHostedAgentRoots(
-                    HotAgentAuthorityInventory::new(device.clone(), roots),
-                ),
-                device,
-            },
-            declared_agent_roots: BTreeMap::new(),
-        }
-    }
-
     pub fn for_device_authority_root(
         device_authority_root: impl Into<String>,
     ) -> Result<Self, AbilityControlPlaneError> {
@@ -3615,7 +3591,7 @@ impl AxonAbilityCatalog {
         )
         .expect("test Device authority root must be canonical");
         #[cfg(not(test))]
-        let authority_context = AbilityAuthorityContext::for_local_combined_environment();
+        let authority_context = AbilityAuthorityContext::from_local_environment();
 
         Self::new_metadata_only_with_authority_context(authority_context)
     }
@@ -3673,11 +3649,7 @@ impl AxonAbilityCatalog {
         #[cfg(not(test))]
         Self::new_with_runtime_and_authority_context(
             runtime,
-            // Public catalogue constructors historically admitted both Device
-            // and Hub registrations. Preserve that API behavior with an
-            // explicit real Both set; product boot uses RegistryBuildConfig's
-            // Device default or injects its daemon mode context.
-            AbilityAuthorityContext::for_local_combined_environment(),
+            AbilityAuthorityContext::from_local_environment(),
         )
     }
 
