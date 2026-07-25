@@ -15145,6 +15145,10 @@ if "runtimeRequiredTerminalReceipt(object, terminalState: terminalState)" not in
     raise SystemExit("swift_runtime_receipt_projection:terminal_receipt_not_required")
 for fragment, label in {
     "public struct RuntimeReceipt": "runtime_receipt_type_missing",
+    "public let terminalReceiptProjection: [String: JSONValue]": "invocation_result_full_projection_missing",
+    "public func rawProjection() -> [String: JSONValue]": "runtime_receipt_raw_projection_missing",
+    "private struct RuntimeTerminalReceiptProjection": "terminal_receipt_projection_state_missing",
+    "terminalReceiptProjection: terminalReceipt.rawProjection": "invocation_result_not_using_raw_projection",
     "RuntimeReceiptProofFacts": "proof_fact_validator_missing",
     "validateAuthorityProofHash": "authority_proof_hash_validator_missing",
     "RuntimeAuthorityBinding": "authority_binding_projection_missing",
@@ -15167,6 +15171,7 @@ for retired, label in {
     "runtimeStringMap(object[\"terminal_receipt\"])": "optional_terminal_receipt_decoder",
     "private func runtimeStringMap(_ value: Any?) -> [String: String]": "malformed_terminal_receipt_downgrade",
     "private func runtimeRequiredStringMap(_ object: [String: Any], _ field: String, _ label: String)": "generic_terminal_receipt_projection",
+    "return receipt.projection()": "summary_only_terminal_receipt_projection",
     "XCTAssertTrue(legacyOnly.terminalReceipt.isEmpty)": "retired_alias_empty_projection_test",
 }.items():
     if retired in runtime or retired in tests:
@@ -15186,6 +15191,9 @@ for required_test in (
     "host_attestation_base64",
     "usage",
     "hosted runtime receipt is missing host_attestation_base64",
+    'terminalReceiptProjection["authority_proof"]',
+    'terminalReceiptProjection["authority_binding"]',
+    'terminalReceiptProjection["invocation_id"]',
 ):
     if required_test not in tests:
         raise SystemExit(f"swift_runtime_receipt_projection:missing_test:{required_test}")
@@ -16101,6 +16109,37 @@ EOF
     "$tmp/cli-node-receipt-shallow-copy-legacy/sdk/node/index.js"
   if ( CLI_ROOT="$tmp/cli-node-receipt-shallow-copy-legacy"; check_node_sdk_runtime_receipt_projection_contract ) >/dev/null 2>&1; then
     fail "self-test expected Node SDK receipt shallow-copy mutability gate to fail"
+  fi
+  mkdir -p "$tmp/cli-swift-receipt-summary-only-legacy/sdk/swift/Sources/RuntimeSDK" \
+    "$tmp/cli-swift-receipt-summary-only-legacy/sdk/swift/Tests/RuntimeSDKTests"
+  cp "$ROOT/sdk/swift/Sources/RuntimeSDK/Runtime.swift" \
+    "$tmp/cli-swift-receipt-summary-only-legacy/sdk/swift/Sources/RuntimeSDK/Runtime.swift"
+  cp "$ROOT/sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift" \
+    "$tmp/cli-swift-receipt-summary-only-legacy/sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift"
+  perl -0pi -e 's/\n    public let terminalReceiptProjection: \[String: JSONValue\]//' \
+    "$tmp/cli-swift-receipt-summary-only-legacy/sdk/swift/Sources/RuntimeSDK/Runtime.swift"
+  perl -0pi -e 's/\n        terminalReceiptProjection: \[String: JSONValue\] = \[:\],//' \
+    "$tmp/cli-swift-receipt-summary-only-legacy/sdk/swift/Sources/RuntimeSDK/Runtime.swift"
+  perl -0pi -e 's/\n        self\.terminalReceiptProjection = terminalReceiptProjection//' \
+    "$tmp/cli-swift-receipt-summary-only-legacy/sdk/swift/Sources/RuntimeSDK/Runtime.swift"
+  perl -0pi -e 's/let terminalReceipt = try runtimeRequiredTerminalReceipt\(object, terminalState: terminalState\)\n        return try InvocationResult\((.*?)terminalReceiptProjection: terminalReceipt\.rawProjection,\n            terminalReceipt: terminalReceipt\.summary/return try InvocationResult($1terminalReceipt: try runtimeRequiredTerminalReceipt(object, terminalState: terminalState)/s' \
+    "$tmp/cli-swift-receipt-summary-only-legacy/sdk/swift/Sources/RuntimeSDK/Runtime.swift"
+  perl -0pi -e 's/\n    private let rawProjectionValue: \[String: JSONValue\]//' \
+    "$tmp/cli-swift-receipt-summary-only-legacy/sdk/swift/Sources/RuntimeSDK/Runtime.swift"
+  perl -0pi -e 's/\n        guard let projection = try jsonValue\(raw\)\.objectValue else \{\n            throw SDKError\.validation\("runtime_receipt", "runtime receipt must be an object"\)\n        \}\n        rawProjectionValue = projection//' \
+    "$tmp/cli-swift-receipt-summary-only-legacy/sdk/swift/Sources/RuntimeSDK/Runtime.swift"
+  perl -0pi -e 's/\n    public func rawProjection\(\) -> \[String: JSONValue\] \{\n        rawProjectionValue\n    \}\n//' \
+    "$tmp/cli-swift-receipt-summary-only-legacy/sdk/swift/Sources/RuntimeSDK/Runtime.swift"
+  perl -0pi -e 's/rawProjectionValue\.compactMapValues \{ value in\n            if case let \.string\(text\) = value \{\n                return text\n            \}\n            return nil\n        \}/raw.compactMapValues { \$0 as? String }/' \
+    "$tmp/cli-swift-receipt-summary-only-legacy/sdk/swift/Sources/RuntimeSDK/Runtime.swift"
+  perl -0pi -e 's/private struct RuntimeTerminalReceiptProjection \{\n    let summary: \[String: String\]\n    let rawProjection: \[String: JSONValue\]\n\}\n\n//' \
+    "$tmp/cli-swift-receipt-summary-only-legacy/sdk/swift/Sources/RuntimeSDK/Runtime.swift"
+  perl -0pi -e 's/\) throws -> RuntimeTerminalReceiptProjection/) throws -> [String: String]/' \
+    "$tmp/cli-swift-receipt-summary-only-legacy/sdk/swift/Sources/RuntimeSDK/Runtime.swift"
+  perl -0pi -e 's/return RuntimeTerminalReceiptProjection\(\n        summary: receipt\.projection\(\),\n        rawProjection: receipt\.rawProjection\(\)\n    \)/return receipt.projection()/' \
+    "$tmp/cli-swift-receipt-summary-only-legacy/sdk/swift/Sources/RuntimeSDK/Runtime.swift"
+  if ( CLI_ROOT="$tmp/cli-swift-receipt-summary-only-legacy"; check_swift_sdk_runtime_receipt_projection_contract ) >/dev/null 2>&1; then
+    fail "self-test expected Swift SDK summary-only receipt projection gate to fail"
   fi
   mkdir -p "$tmp/cli-ffi-json-legacy/src/ffi/invocation"
   cat >"$tmp/cli-ffi-json-legacy/src/ffi/invocation/mod.rs" <<'EOF'

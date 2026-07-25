@@ -241192,6 +241192,10 @@
           "sha256": "f18d8a03258a5b09658e2d72597c2bd44cc5560baf83da444a719ec571bd12f1"
         },
         {
+          "item": "RuntimeReceipt.rawProjection()",
+          "sha256": "a5c69d6dd35659f8119ffaee50cbb9e7daca1fab964ff4a2a55038d1832278d8"
+        },
+        {
           "item": "RuntimeReceipt.receiptType",
           "sha256": "97b197f6a353401363ff9ea551519ed16b2925d05310b4d567318dfb5cf8afc0"
         },
@@ -241225,6 +241229,10 @@
             {
               "item": "RuntimeReceipt.projection()",
               "sha256": "f18d8a03258a5b09658e2d72597c2bd44cc5560baf83da444a719ec571bd12f1"
+            },
+            {
+              "item": "RuntimeReceipt.rawProjection()",
+              "sha256": "a5c69d6dd35659f8119ffaee50cbb9e7daca1fab964ff4a2a55038d1832278d8"
             },
             {
               "item": "RuntimeReceipt.receiptType",
@@ -241262,6 +241270,10 @@
               "sha256": "f18d8a03258a5b09658e2d72597c2bd44cc5560baf83da444a719ec571bd12f1"
             },
             {
+              "item": "RuntimeReceipt.rawProjection()",
+              "sha256": "a5c69d6dd35659f8119ffaee50cbb9e7daca1fab964ff4a2a55038d1832278d8"
+            },
+            {
               "item": "RuntimeReceipt.receiptType",
               "sha256": "97b197f6a353401363ff9ea551519ed16b2925d05310b4d567318dfb5cf8afc0"
             },
@@ -241295,6 +241307,10 @@
             {
               "item": "RuntimeReceipt.projection()",
               "sha256": "f18d8a03258a5b09658e2d72597c2bd44cc5560baf83da444a719ec571bd12f1"
+            },
+            {
+              "item": "RuntimeReceipt.rawProjection()",
+              "sha256": "a5c69d6dd35659f8119ffaee50cbb9e7daca1fab964ff4a2a55038d1832278d8"
             },
             {
               "item": "RuntimeReceipt.receiptType",
@@ -241332,6 +241348,10 @@
               "sha256": "f18d8a03258a5b09658e2d72597c2bd44cc5560baf83da444a719ec571bd12f1"
             },
             {
+              "item": "RuntimeReceipt.rawProjection()",
+              "sha256": "a5c69d6dd35659f8119ffaee50cbb9e7daca1fab964ff4a2a55038d1832278d8"
+            },
+            {
               "item": "RuntimeReceipt.receiptType",
               "sha256": "97b197f6a353401363ff9ea551519ed16b2925d05310b4d567318dfb5cf8afc0"
             },
@@ -241367,6 +241387,10 @@
               "sha256": "f18d8a03258a5b09658e2d72597c2bd44cc5560baf83da444a719ec571bd12f1"
             },
             {
+              "item": "RuntimeReceipt.rawProjection()",
+              "sha256": "a5c69d6dd35659f8119ffaee50cbb9e7daca1fab964ff4a2a55038d1832278d8"
+            },
+            {
               "item": "RuntimeReceipt.receiptType",
               "sha256": "97b197f6a353401363ff9ea551519ed16b2925d05310b4d567318dfb5cf8afc0"
             },
@@ -241400,6 +241424,10 @@
             {
               "item": "RuntimeReceipt.projection()",
               "sha256": "f18d8a03258a5b09658e2d72597c2bd44cc5560baf83da444a719ec571bd12f1"
+            },
+            {
+              "item": "RuntimeReceipt.rawProjection()",
+              "sha256": "a5c69d6dd35659f8119ffaee50cbb9e7daca1fab964ff4a2a55038d1832278d8"
             },
             {
               "item": "RuntimeReceipt.receiptType",
@@ -292914,8 +292942,8 @@
           "sha256": "aa0c8ca52d62764ce25f2c742d823eac618b308c9eec02b4b913bb9f89b6334e"
         },
         {
-          "item": "InvocationResult.init(ok:terminalState:outputJSON:error:terminalReceipt:)",
-          "sha256": "2b178e10071a9465042ba6829e424dce642df7b877bc4bbe44d62500f6bb1ff8"
+          "item": "InvocationResult.init(ok:terminalState:outputJSON:error:terminalReceiptProjection:terminalReceipt:)",
+          "sha256": "a51ccc7cab7e92a6def72da15c752e7da9839f65c0be3b1d74f729bcd5ee30b5"
         },
         {
           "item": "InvocationResult.ok",
@@ -292928,6 +292956,10 @@
         {
           "item": "InvocationResult.terminalReceipt",
           "sha256": "1c4fd291f64a19171ffc2fe7e7242534e904bb102476942327554ff95d6219f8"
+        },
+        {
+          "item": "InvocationResult.terminalReceiptProjection",
+          "sha256": "e2bd8807926a11965b36fb5c061b37a7a2ef496cbf533eb24fede5b92818a2b6"
         },
         {
           "item": "InvocationResult.terminalState",
@@ -293093,8 +293125,8 @@
               "sha256": "aa0c8ca52d62764ce25f2c742d823eac618b308c9eec02b4b913bb9f89b6334e"
             },
             {
-              "item": "InvocationResult.init(ok:terminalState:outputJSON:error:terminalReceipt:)",
-              "sha256": "2b178e10071a9465042ba6829e424dce642df7b877bc4bbe44d62500f6bb1ff8"
+              "item": "InvocationResult.init(ok:terminalState:outputJSON:error:terminalReceiptProjection:terminalReceipt:)",
+              "sha256": "a51ccc7cab7e92a6def72da15c752e7da9839f65c0be3b1d74f729bcd5ee30b5"
             },
             {
               "item": "InvocationResult.ok",
@@ -293107,6 +293139,10 @@
             {
               "item": "InvocationResult.terminalReceipt",
               "sha256": "1c4fd291f64a19171ffc2fe7e7242534e904bb102476942327554ff95d6219f8"
+            },
+            {
+              "item": "InvocationResult.terminalReceiptProjection",
+              "sha256": "e2bd8807926a11965b36fb5c061b37a7a2ef496cbf533eb24fede5b92818a2b6"
             },
             {
               "item": "InvocationResult.terminalState",
@@ -293272,8 +293308,8 @@
               "sha256": "aa0c8ca52d62764ce25f2c742d823eac618b308c9eec02b4b913bb9f89b6334e"
             },
             {
-              "item": "InvocationResult.init(ok:terminalState:outputJSON:error:terminalReceipt:)",
-              "sha256": "2b178e10071a9465042ba6829e424dce642df7b877bc4bbe44d62500f6bb1ff8"
+              "item": "InvocationResult.init(ok:terminalState:outputJSON:error:terminalReceiptProjection:terminalReceipt:)",
+              "sha256": "a51ccc7cab7e92a6def72da15c752e7da9839f65c0be3b1d74f729bcd5ee30b5"
             },
             {
               "item": "InvocationResult.ok",
@@ -293286,6 +293322,10 @@
             {
               "item": "InvocationResult.terminalReceipt",
               "sha256": "1c4fd291f64a19171ffc2fe7e7242534e904bb102476942327554ff95d6219f8"
+            },
+            {
+              "item": "InvocationResult.terminalReceiptProjection",
+              "sha256": "e2bd8807926a11965b36fb5c061b37a7a2ef496cbf533eb24fede5b92818a2b6"
             },
             {
               "item": "InvocationResult.terminalState",
@@ -293451,8 +293491,8 @@
               "sha256": "aa0c8ca52d62764ce25f2c742d823eac618b308c9eec02b4b913bb9f89b6334e"
             },
             {
-              "item": "InvocationResult.init(ok:terminalState:outputJSON:error:terminalReceipt:)",
-              "sha256": "2b178e10071a9465042ba6829e424dce642df7b877bc4bbe44d62500f6bb1ff8"
+              "item": "InvocationResult.init(ok:terminalState:outputJSON:error:terminalReceiptProjection:terminalReceipt:)",
+              "sha256": "a51ccc7cab7e92a6def72da15c752e7da9839f65c0be3b1d74f729bcd5ee30b5"
             },
             {
               "item": "InvocationResult.ok",
@@ -293465,6 +293505,10 @@
             {
               "item": "InvocationResult.terminalReceipt",
               "sha256": "1c4fd291f64a19171ffc2fe7e7242534e904bb102476942327554ff95d6219f8"
+            },
+            {
+              "item": "InvocationResult.terminalReceiptProjection",
+              "sha256": "e2bd8807926a11965b36fb5c061b37a7a2ef496cbf533eb24fede5b92818a2b6"
             },
             {
               "item": "InvocationResult.terminalState",
@@ -293630,8 +293674,8 @@
               "sha256": "aa0c8ca52d62764ce25f2c742d823eac618b308c9eec02b4b913bb9f89b6334e"
             },
             {
-              "item": "InvocationResult.init(ok:terminalState:outputJSON:error:terminalReceipt:)",
-              "sha256": "2b178e10071a9465042ba6829e424dce642df7b877bc4bbe44d62500f6bb1ff8"
+              "item": "InvocationResult.init(ok:terminalState:outputJSON:error:terminalReceiptProjection:terminalReceipt:)",
+              "sha256": "a51ccc7cab7e92a6def72da15c752e7da9839f65c0be3b1d74f729bcd5ee30b5"
             },
             {
               "item": "InvocationResult.ok",
@@ -293644,6 +293688,10 @@
             {
               "item": "InvocationResult.terminalReceipt",
               "sha256": "1c4fd291f64a19171ffc2fe7e7242534e904bb102476942327554ff95d6219f8"
+            },
+            {
+              "item": "InvocationResult.terminalReceiptProjection",
+              "sha256": "e2bd8807926a11965b36fb5c061b37a7a2ef496cbf533eb24fede5b92818a2b6"
             },
             {
               "item": "InvocationResult.terminalState",
@@ -293809,8 +293857,8 @@
               "sha256": "aa0c8ca52d62764ce25f2c742d823eac618b308c9eec02b4b913bb9f89b6334e"
             },
             {
-              "item": "InvocationResult.init(ok:terminalState:outputJSON:error:terminalReceipt:)",
-              "sha256": "2b178e10071a9465042ba6829e424dce642df7b877bc4bbe44d62500f6bb1ff8"
+              "item": "InvocationResult.init(ok:terminalState:outputJSON:error:terminalReceiptProjection:terminalReceipt:)",
+              "sha256": "a51ccc7cab7e92a6def72da15c752e7da9839f65c0be3b1d74f729bcd5ee30b5"
             },
             {
               "item": "InvocationResult.ok",
@@ -293823,6 +293871,10 @@
             {
               "item": "InvocationResult.terminalReceipt",
               "sha256": "1c4fd291f64a19171ffc2fe7e7242534e904bb102476942327554ff95d6219f8"
+            },
+            {
+              "item": "InvocationResult.terminalReceiptProjection",
+              "sha256": "e2bd8807926a11965b36fb5c061b37a7a2ef496cbf533eb24fede5b92818a2b6"
             },
             {
               "item": "InvocationResult.terminalState",
@@ -293988,8 +294040,8 @@
               "sha256": "aa0c8ca52d62764ce25f2c742d823eac618b308c9eec02b4b913bb9f89b6334e"
             },
             {
-              "item": "InvocationResult.init(ok:terminalState:outputJSON:error:terminalReceipt:)",
-              "sha256": "2b178e10071a9465042ba6829e424dce642df7b877bc4bbe44d62500f6bb1ff8"
+              "item": "InvocationResult.init(ok:terminalState:outputJSON:error:terminalReceiptProjection:terminalReceipt:)",
+              "sha256": "a51ccc7cab7e92a6def72da15c752e7da9839f65c0be3b1d74f729bcd5ee30b5"
             },
             {
               "item": "InvocationResult.ok",
@@ -294002,6 +294054,10 @@
             {
               "item": "InvocationResult.terminalReceipt",
               "sha256": "1c4fd291f64a19171ffc2fe7e7242534e904bb102476942327554ff95d6219f8"
+            },
+            {
+              "item": "InvocationResult.terminalReceiptProjection",
+              "sha256": "e2bd8807926a11965b36fb5c061b37a7a2ef496cbf533eb24fede5b92818a2b6"
             },
             {
               "item": "InvocationResult.terminalState",
@@ -294167,8 +294223,8 @@
               "sha256": "aa0c8ca52d62764ce25f2c742d823eac618b308c9eec02b4b913bb9f89b6334e"
             },
             {
-              "item": "InvocationResult.init(ok:terminalState:outputJSON:error:terminalReceipt:)",
-              "sha256": "2b178e10071a9465042ba6829e424dce642df7b877bc4bbe44d62500f6bb1ff8"
+              "item": "InvocationResult.init(ok:terminalState:outputJSON:error:terminalReceiptProjection:terminalReceipt:)",
+              "sha256": "a51ccc7cab7e92a6def72da15c752e7da9839f65c0be3b1d74f729bcd5ee30b5"
             },
             {
               "item": "InvocationResult.ok",
@@ -294181,6 +294237,10 @@
             {
               "item": "InvocationResult.terminalReceipt",
               "sha256": "1c4fd291f64a19171ffc2fe7e7242534e904bb102476942327554ff95d6219f8"
+            },
+            {
+              "item": "InvocationResult.terminalReceiptProjection",
+              "sha256": "e2bd8807926a11965b36fb5c061b37a7a2ef496cbf533eb24fede5b92818a2b6"
             },
             {
               "item": "InvocationResult.terminalState",
@@ -294346,8 +294406,8 @@
               "sha256": "aa0c8ca52d62764ce25f2c742d823eac618b308c9eec02b4b913bb9f89b6334e"
             },
             {
-              "item": "InvocationResult.init(ok:terminalState:outputJSON:error:terminalReceipt:)",
-              "sha256": "2b178e10071a9465042ba6829e424dce642df7b877bc4bbe44d62500f6bb1ff8"
+              "item": "InvocationResult.init(ok:terminalState:outputJSON:error:terminalReceiptProjection:terminalReceipt:)",
+              "sha256": "a51ccc7cab7e92a6def72da15c752e7da9839f65c0be3b1d74f729bcd5ee30b5"
             },
             {
               "item": "InvocationResult.ok",
@@ -294360,6 +294420,10 @@
             {
               "item": "InvocationResult.terminalReceipt",
               "sha256": "1c4fd291f64a19171ffc2fe7e7242534e904bb102476942327554ff95d6219f8"
+            },
+            {
+              "item": "InvocationResult.terminalReceiptProjection",
+              "sha256": "e2bd8807926a11965b36fb5c061b37a7a2ef496cbf533eb24fede5b92818a2b6"
             },
             {
               "item": "InvocationResult.terminalState",
@@ -294525,8 +294589,8 @@
               "sha256": "aa0c8ca52d62764ce25f2c742d823eac618b308c9eec02b4b913bb9f89b6334e"
             },
             {
-              "item": "InvocationResult.init(ok:terminalState:outputJSON:error:terminalReceipt:)",
-              "sha256": "2b178e10071a9465042ba6829e424dce642df7b877bc4bbe44d62500f6bb1ff8"
+              "item": "InvocationResult.init(ok:terminalState:outputJSON:error:terminalReceiptProjection:terminalReceipt:)",
+              "sha256": "a51ccc7cab7e92a6def72da15c752e7da9839f65c0be3b1d74f729bcd5ee30b5"
             },
             {
               "item": "InvocationResult.ok",
@@ -294539,6 +294603,10 @@
             {
               "item": "InvocationResult.terminalReceipt",
               "sha256": "1c4fd291f64a19171ffc2fe7e7242534e904bb102476942327554ff95d6219f8"
+            },
+            {
+              "item": "InvocationResult.terminalReceiptProjection",
+              "sha256": "e2bd8807926a11965b36fb5c061b37a7a2ef496cbf533eb24fede5b92818a2b6"
             },
             {
               "item": "InvocationResult.terminalState",
@@ -294704,8 +294772,8 @@
               "sha256": "aa0c8ca52d62764ce25f2c742d823eac618b308c9eec02b4b913bb9f89b6334e"
             },
             {
-              "item": "InvocationResult.init(ok:terminalState:outputJSON:error:terminalReceipt:)",
-              "sha256": "2b178e10071a9465042ba6829e424dce642df7b877bc4bbe44d62500f6bb1ff8"
+              "item": "InvocationResult.init(ok:terminalState:outputJSON:error:terminalReceiptProjection:terminalReceipt:)",
+              "sha256": "a51ccc7cab7e92a6def72da15c752e7da9839f65c0be3b1d74f729bcd5ee30b5"
             },
             {
               "item": "InvocationResult.ok",
@@ -294718,6 +294786,10 @@
             {
               "item": "InvocationResult.terminalReceipt",
               "sha256": "1c4fd291f64a19171ffc2fe7e7242534e904bb102476942327554ff95d6219f8"
+            },
+            {
+              "item": "InvocationResult.terminalReceiptProjection",
+              "sha256": "e2bd8807926a11965b36fb5c061b37a7a2ef496cbf533eb24fede5b92818a2b6"
             },
             {
               "item": "InvocationResult.terminalState",
@@ -294883,8 +294955,8 @@
               "sha256": "aa0c8ca52d62764ce25f2c742d823eac618b308c9eec02b4b913bb9f89b6334e"
             },
             {
-              "item": "InvocationResult.init(ok:terminalState:outputJSON:error:terminalReceipt:)",
-              "sha256": "2b178e10071a9465042ba6829e424dce642df7b877bc4bbe44d62500f6bb1ff8"
+              "item": "InvocationResult.init(ok:terminalState:outputJSON:error:terminalReceiptProjection:terminalReceipt:)",
+              "sha256": "a51ccc7cab7e92a6def72da15c752e7da9839f65c0be3b1d74f729bcd5ee30b5"
             },
             {
               "item": "InvocationResult.ok",
@@ -294897,6 +294969,10 @@
             {
               "item": "InvocationResult.terminalReceipt",
               "sha256": "1c4fd291f64a19171ffc2fe7e7242534e904bb102476942327554ff95d6219f8"
+            },
+            {
+              "item": "InvocationResult.terminalReceiptProjection",
+              "sha256": "e2bd8807926a11965b36fb5c061b37a7a2ef496cbf533eb24fede5b92818a2b6"
             },
             {
               "item": "InvocationResult.terminalState",
@@ -295062,8 +295138,8 @@
               "sha256": "aa0c8ca52d62764ce25f2c742d823eac618b308c9eec02b4b913bb9f89b6334e"
             },
             {
-              "item": "InvocationResult.init(ok:terminalState:outputJSON:error:terminalReceipt:)",
-              "sha256": "2b178e10071a9465042ba6829e424dce642df7b877bc4bbe44d62500f6bb1ff8"
+              "item": "InvocationResult.init(ok:terminalState:outputJSON:error:terminalReceiptProjection:terminalReceipt:)",
+              "sha256": "a51ccc7cab7e92a6def72da15c752e7da9839f65c0be3b1d74f729bcd5ee30b5"
             },
             {
               "item": "InvocationResult.ok",
@@ -295076,6 +295152,10 @@
             {
               "item": "InvocationResult.terminalReceipt",
               "sha256": "1c4fd291f64a19171ffc2fe7e7242534e904bb102476942327554ff95d6219f8"
+            },
+            {
+              "item": "InvocationResult.terminalReceiptProjection",
+              "sha256": "e2bd8807926a11965b36fb5c061b37a7a2ef496cbf533eb24fede5b92818a2b6"
             },
             {
               "item": "InvocationResult.terminalState",
@@ -295241,8 +295321,8 @@
               "sha256": "aa0c8ca52d62764ce25f2c742d823eac618b308c9eec02b4b913bb9f89b6334e"
             },
             {
-              "item": "InvocationResult.init(ok:terminalState:outputJSON:error:terminalReceipt:)",
-              "sha256": "2b178e10071a9465042ba6829e424dce642df7b877bc4bbe44d62500f6bb1ff8"
+              "item": "InvocationResult.init(ok:terminalState:outputJSON:error:terminalReceiptProjection:terminalReceipt:)",
+              "sha256": "a51ccc7cab7e92a6def72da15c752e7da9839f65c0be3b1d74f729bcd5ee30b5"
             },
             {
               "item": "InvocationResult.ok",
@@ -295255,6 +295335,10 @@
             {
               "item": "InvocationResult.terminalReceipt",
               "sha256": "1c4fd291f64a19171ffc2fe7e7242534e904bb102476942327554ff95d6219f8"
+            },
+            {
+              "item": "InvocationResult.terminalReceiptProjection",
+              "sha256": "e2bd8807926a11965b36fb5c061b37a7a2ef496cbf533eb24fede5b92818a2b6"
             },
             {
               "item": "InvocationResult.terminalState",

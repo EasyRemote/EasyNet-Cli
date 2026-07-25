@@ -13,6 +13,7 @@ public struct InvocationResult: Sendable {
     public let terminalState: InvocationTerminalState
     public let outputJSON: String
     public let error: SDKError?
+    public let terminalReceiptProjection: [String: JSONValue]
     public let terminalReceipt: [String: String]
 
     public init(
@@ -20,6 +21,7 @@ public struct InvocationResult: Sendable {
         terminalState: InvocationTerminalState,
         outputJSON: String = "",
         error: SDKError? = nil,
+        terminalReceiptProjection: [String: JSONValue] = [:],
         terminalReceipt: [String: String] = [:]
     ) throws {
         if ok && error != nil {
@@ -32,6 +34,7 @@ public struct InvocationResult: Sendable {
         self.terminalState = terminalState
         self.outputJSON = outputJSON
         self.error = error
+        self.terminalReceiptProjection = terminalReceiptProjection
         self.terminalReceipt = terminalReceipt
     }
 
@@ -43,12 +46,14 @@ public struct InvocationResult: Sendable {
         let terminalState = try runtimeInvocationTerminalState(
             runtimeRequiredString(object, "terminal_state", "invocation_result")
         )
+        let terminalReceipt = try runtimeRequiredTerminalReceipt(object, terminalState: terminalState)
         return try InvocationResult(
             ok: try runtimeRequiredBool(object, "ok", "invocation_result"),
             terminalState: terminalState,
             outputJSON: runtimeOptionalJSONObjectString(object["output_json"]),
             error: nil,
-            terminalReceipt: try runtimeRequiredTerminalReceipt(object, terminalState: terminalState)
+            terminalReceiptProjection: terminalReceipt.rawProjection,
+            terminalReceipt: terminalReceipt.summary
         )
     }
 }
@@ -65,9 +70,14 @@ public struct RuntimeReceipt {
     public let receiptType: String
     public let state: String
     private let raw: [String: Any]
+    private let rawProjectionValue: [String: JSONValue]
 
     public init(_ raw: [String: Any]) throws {
         self.raw = raw
+        guard let projection = try jsonValue(raw).objectValue else {
+            throw SDKError.validation("runtime_receipt", "runtime receipt must be an object")
+        }
+        rawProjectionValue = projection
         invocationId = try runtimeRequiredString(raw, "invocation_id", "runtime_receipt")
         receiptType = try runtimeRequiredString(raw, "receipt_type", "runtime_receipt")
         state = try runtimeRequiredString(raw, "state", "runtime_receipt")
@@ -78,8 +88,17 @@ public struct RuntimeReceipt {
         try RuntimeReceipt.canonicalLifecycleState(state)
     }
 
+    public func rawProjection() -> [String: JSONValue] {
+        rawProjectionValue
+    }
+
     public func projection() -> [String: String] {
-        raw.compactMapValues { $0 as? String }
+        rawProjectionValue.compactMapValues { value in
+            if case let .string(text) = value {
+                return text
+            }
+            return nil
+        }
     }
 
     private func validateSummary() throws {
@@ -639,10 +658,15 @@ private func runtimeRequiredInt64(_ object: [String: Any], _ field: String, _ la
     throw SDKError.validation(label, "\(field) must be an integer")
 }
 
+private struct RuntimeTerminalReceiptProjection {
+    let summary: [String: String]
+    let rawProjection: [String: JSONValue]
+}
+
 private func runtimeRequiredTerminalReceipt(
     _ object: [String: Any],
     terminalState: InvocationTerminalState
-) throws -> [String: String] {
+) throws -> RuntimeTerminalReceiptProjection {
     guard let value = object["terminal_receipt"] else {
         throw SDKError.validation("invocation_result", "terminal_receipt is required")
     }
@@ -653,7 +677,10 @@ private func runtimeRequiredTerminalReceipt(
     guard try receipt.lifecycleState() == runtimeCanonicalTerminalState(terminalState) else {
         throw SDKError.validation("invocation_result", "terminal_receipt state does not match invocation terminal_state")
     }
-    return receipt.projection()
+    return RuntimeTerminalReceiptProjection(
+        summary: receipt.projection(),
+        rawProjection: receipt.rawProjection()
+    )
 }
 
 private struct RuntimeAgentBinding: Equatable {

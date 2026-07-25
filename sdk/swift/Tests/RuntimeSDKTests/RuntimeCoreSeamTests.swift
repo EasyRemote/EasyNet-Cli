@@ -106,6 +106,7 @@ final class RuntimeCoreSeamTests: XCTestCase {
         let result = try await runtime.invoke(draft)
         XCTAssertTrue(result.ok)
         XCTAssertEqual(result.terminalReceipt["invocation_id"], "inv-direct")
+        XCTAssertEqual(result.terminalReceiptProjection["invocation_id"], .string("inv-direct"))
 
         let prepared = try await runtime.prepare(draft, options: ["deadline_ms": 1000])
         XCTAssertFalse(prepared.submitReady())
@@ -172,6 +173,22 @@ final class RuntimeCoreSeamTests: XCTestCase {
             ])
         )
         XCTAssertEqual(canonical.terminalReceipt["invocation_id"], "inv-result")
+        XCTAssertEqual(canonical.terminalReceiptProjection["invocation_id"], .string("inv-result"))
+        guard case let .object(projectedAuthorityProof)? = canonical.terminalReceiptProjection["authority_proof"] else {
+            XCTFail("InvocationResult terminalReceiptProjection must retain authority_proof")
+            return
+        }
+        XCTAssertEqual(projectedAuthorityProof["proof_type"], .string("self"))
+        guard case let .object(projectedProofBinding)? = projectedAuthorityProof["binding"] else {
+            XCTFail("InvocationResult terminalReceiptProjection must retain authority_proof.binding")
+            return
+        }
+        XCTAssertEqual(projectedProofBinding["principal_ura"], .string(callee))
+        guard case let .object(projectedAuthorityBinding)? = canonical.terminalReceiptProjection["authority_binding"] else {
+            XCTFail("InvocationResult terminalReceiptProjection must retain authority_binding")
+            return
+        }
+        XCTAssertEqual(projectedAuthorityBinding["principal_ura"], .string(callee))
 
         var topLevelLegacyField = terminal
         topLevelLegacyField["legacy_receipt_canonicalizer"] = "java-compatible-raw"
@@ -332,6 +349,11 @@ final class RuntimeCoreSeamTests: XCTestCase {
             ])
         )
         XCTAssertEqual(sessionResult.terminalReceipt["authority_binding_kind"], "session")
+        guard case let .object(sessionProjection)? = sessionResult.terminalReceiptProjection["authority_binding"] else {
+            XCTFail("InvocationResult terminalReceiptProjection must retain session authority_binding")
+            return
+        }
+        XCTAssertEqual(sessionProjection["session_id"], .string("session-1"))
 
         let retiredSessionBinding: [String: Any] = [
             "kind": "session",
@@ -1027,20 +1049,22 @@ actor MemoryRuntimeTransport: RuntimeTransport {
     }
 
     func invoke(_ draft: InvocationDraft) throws -> InvocationResult {
-        try InvocationResult(
+        let receipt = try RuntimeReceipt(
+            canonicalRuntimeReceipt(
+                invocationId: "inv-direct",
+                receiptType: "completed",
+                state: "Completed",
+                index: 1,
+                callee: callee,
+                descriptor: descriptor
+            )
+        )
+        return try InvocationResult(
             ok: true,
             terminalState: .completed,
             outputJSON: "{\"ok\":true}",
-            terminalReceipt: try RuntimeReceipt(
-                canonicalRuntimeReceipt(
-                    invocationId: "inv-direct",
-                    receiptType: "completed",
-                    state: "Completed",
-                    index: 1,
-                    callee: callee,
-                    descriptor: descriptor
-                )
-            ).projection()
+            terminalReceiptProjection: receipt.rawProjection(),
+            terminalReceipt: receipt.projection()
         )
     }
 
