@@ -86,9 +86,11 @@ impl std::fmt::Display for RealmResolutionError {
 
 impl std::error::Error for RealmResolutionError {}
 
-/// Static configuration for resolver behaviour. In production this is
-/// loaded from `~/.config/easynet/rendezvous.json`; tests inject a
-/// `ResolverConfig` directly.
+/// Static configuration for resolver behaviour.
+///
+/// Runtime assembly must inject this explicitly. The resolver does not read
+/// environment variables or config files itself, so malformed operator state
+/// cannot degrade into an endpointless federation route.
 #[derive(Debug, Clone, Default)]
 pub struct ResolverConfig {
     /// Endpoints to use for any realm ending in `.easynet`. Empty by
@@ -98,34 +100,6 @@ pub struct ResolverConfig {
     /// suffix `.<host>`) to hub endpoints. Used for `<host>.com`-style
     /// realms when DNS TXT lookup is not configured (or in tests).
     pub static_hubs: std::collections::HashMap<String, Vec<String>>,
-}
-
-impl ResolverConfig {
-    pub fn from_env_and_file() -> Self {
-        let mut cfg = ResolverConfig::default();
-        if let Ok(list) = std::env::var("EASYNET_RENDEZVOUS") {
-            cfg.easynet_rendezvous = list
-                .split(',')
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .collect();
-        }
-        if let Some(path) = dirs::config_dir().map(|d| d.join("easynet").join("rendezvous.json")) {
-            if path.exists() {
-                if let Ok(bytes) = std::fs::read(&path) {
-                    if let Ok(parsed) = serde_json::from_slice::<ResolverConfig>(&bytes) {
-                        if !parsed.easynet_rendezvous.is_empty() {
-                            cfg.easynet_rendezvous = parsed.easynet_rendezvous;
-                        }
-                        for (k, v) in parsed.static_hubs {
-                            cfg.static_hubs.insert(k, v);
-                        }
-                    }
-                }
-            }
-        }
-        cfg
-    }
 }
 
 impl serde::Serialize for ResolverConfig {

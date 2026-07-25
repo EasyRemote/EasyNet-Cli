@@ -1458,6 +1458,11 @@ for retired in (
     "Backward-compat",
     "treat as Local-fast",
     "bare_token_falls_back_to_local",
+    "pub fn from_env_and_file() -> Self",
+    "EASYNET_RENDEZVOUS",
+    "dirs::config_dir().map(|d| d.join(\"easynet\").join(\"rendezvous.json\"))",
+    "if let Ok(bytes) = std::fs::read(&path)",
+    "if let Ok(parsed) = serde_json::from_slice::<ResolverConfig>(&bytes)",
 ):
     if retired in text:
         raise SystemExit(f"federation_realm_resolver:retired_fallback:{retired}")
