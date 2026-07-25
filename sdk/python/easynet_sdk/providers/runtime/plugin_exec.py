@@ -11,6 +11,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 import json
 import sys
+from types import MappingProxyType
 from typing import Any, TextIO
 
 
@@ -62,8 +63,10 @@ class SidecarInvocation:
         _reject_unknown_invocation_fields(invocation)
         _require_invocation_fields(invocation)
         nonce = _required_nonce(invocation, "invocation_nonce")
-        causal_context = _required_mapping(invocation, "causal_context")
-        args = _required_mapping(invocation, "args")
+        causal_context = _immutable_mapping(
+            _required_mapping(invocation, "causal_context")
+        )
+        args = _immutable_mapping(_required_mapping(invocation, "args"))
         return cls(
             call_id=call_id,
             caller_ura=_required_string(invocation, "caller_ura"),
@@ -185,6 +188,23 @@ def _required_mapping(frame: Mapping[str, Any], field: str) -> Mapping[str, Any]
     value = frame.get(field)
     if not isinstance(value, Mapping):
         raise SidecarProtocolError(f"sidecar frame field {field!r} must be an object")
+    return value
+
+
+def _immutable_mapping(value: Mapping[str, Any]) -> Mapping[str, Any]:
+    projected: dict[str, Any] = {}
+    for key, item in value.items():
+        if not isinstance(key, str):
+            raise SidecarProtocolError("sidecar frame object keys must be strings")
+        projected[key] = _immutable_value(item)
+    return MappingProxyType(projected)
+
+
+def _immutable_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return _immutable_mapping(value)
+    if isinstance(value, (list, tuple)):
+        return tuple(_immutable_value(item) for item in value)
     return value
 
 

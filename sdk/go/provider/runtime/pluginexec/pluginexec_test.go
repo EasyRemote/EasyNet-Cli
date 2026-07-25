@@ -45,6 +45,40 @@ func TestServeIOWritesResultFrame(t *testing.T) {
 	}
 }
 
+func TestSidecarInvocationOwnsHandlerProjection(t *testing.T) {
+	frame := sidecarInvocationFrame{
+		CallerURA:       "easynet:///r/hub/user/alice",
+		CalleeURA:       "easynet:///r/hub/device/provider",
+		AbilityURA:      "demo.echo",
+		SubjectURA:      "easynet:///r/hub/resource/demo",
+		InvocationNonce: []int{1, 2, 3, 4},
+		CausalContext:   map[string]any{"form": "none"},
+		Args: map[string]any{
+			"message": "hello",
+			"nested":  map[string]any{"value": "owned"},
+		},
+	}
+	projected := sidecarInvocationProjection{
+		frameType: "invoke",
+		callID:    "call-1",
+		frame:     frame,
+	}.intoInvocation()
+
+	frame.InvocationNonce[0] = 99
+	frame.Args["message"] = "mutated-after-projection"
+	frame.Args["nested"].(map[string]any)["value"] = "mutated-after-projection"
+
+	if projected.InvocationNonce[0] != 1 {
+		t.Fatalf("invocation nonce aliases source frame: %#v", projected.InvocationNonce)
+	}
+	if projected.Args["message"] != "hello" {
+		t.Fatalf("args aliases source frame: %#v", projected.Args)
+	}
+	if nested := projected.Args["nested"].(map[string]any); nested["value"] != "owned" {
+		t.Fatalf("nested args aliases source frame: %#v", nested)
+	}
+}
+
 func TestServeIOWritesErrorFrameForHandlerFailure(t *testing.T) {
 	var output bytes.Buffer
 	err := ServeIO(

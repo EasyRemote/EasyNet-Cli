@@ -11579,6 +11579,10 @@ required_helper_tokens = {
         "func rejectUnknownInvocationFields(",
         "func rejectUnknownRequestFields(",
         "func requireInvocationFields(",
+        "func cloneSidecarObject(",
+        "func cloneSidecarValue(",
+        "CausalContext:   cloneSidecarObject(p.frame.CausalContext)",
+        "Args:            cloneSidecarObject(p.frame.Args)",
         '"causal_context",',
         '"args",',
         '`json:"caller_ura"`',
@@ -11594,6 +11598,9 @@ required_helper_tokens = {
         "def _reject_unknown_invocation_fields(",
         "def _reject_unknown_request_fields(",
         "def _require_invocation_fields(",
+        "MappingProxyType",
+        "def _immutable_mapping(",
+        "def _immutable_value(",
         '_required_mapping(invocation, "causal_context")',
         '_required_mapping(invocation, "args")',
         '_required_string(invocation, "caller_ura")',
@@ -11608,6 +11615,9 @@ required_helper_tokens = {
         "rejectUnknownRequestFields(value)",
         "function rejectUnknownInvocationFields(",
         "function rejectUnknownRequestFields(",
+        "function immutableSidecarObject(",
+        "function immutableSidecarValue(",
+        "Object.freeze(requireNonce(invocationNonce, \"invocation_nonce\"))",
         'value === null || typeof value !== "object"',
         'requireObject(causalContext, "causal_context")',
         'requireObject(args, "args")',
@@ -11623,6 +11633,8 @@ required_helper_tokens = {
         "rejectUnknownRequestFields(frame)",
         "private static void rejectUnknownInvocationFields(",
         "private static void rejectUnknownRequestFields(",
+        "private static Map<String, Object> immutableObject(",
+        "private static Object immutableValue(",
         'requiredObject(invocation, "causal_context")',
         'requiredObject(invocation, "args")',
         'requiredString(invocation, "caller_ura")',
@@ -11647,21 +11659,25 @@ required_helper_tests = {
         "TestServeIORejectsUnknownInvocationFields",
         "TestServeIORejectsUnknownRequestFields",
         "TestServeIORejectsMissingCanonicalInvocationObjects",
+        "TestSidecarInvocationOwnsHandlerProjection",
     ],
     "python": [
         "test_plugin_invocation_rejects_unknown_invocation_fields",
         "test_plugin_invocation_rejects_unknown_request_fields",
         "test_plugin_invocation_rejects_missing_canonical_invocation_objects",
+        "test_plugin_invocation_owns_handler_projection",
     ],
     "node": [
         "SidecarInvocation rejects unknown invocation fields",
         "SidecarInvocation rejects unknown request fields",
         "SidecarInvocation rejects missing canonical invocation objects",
+        "SidecarInvocation owns handler projection",
     ],
     "java": [
         "sidecarInvocationRejectsUnknownInvocationFields",
         "sidecarInvocationRejectsUnknownRequestFields",
         "sidecarInvocationRejectsMissingCanonicalInvocationObjects",
+        "frameWithMutableArgs",
     ],
 }
 for language, test_names in required_helper_tests.items():
@@ -11677,6 +11693,8 @@ strict_tuple_default_patterns = {
     "go": [
         r"\bargs\s*=\s*map\[string\]any\{\}",
         r"\bcausalContext\s*=\s*map\[string\]any\{\}",
+        r"CausalContext:\s+p\.frame\.CausalContext",
+        r"Args:\s+p\.frame\.Args",
     ],
     "python": [
         r"def\s+_optional_mapping\b",
@@ -11688,10 +11706,14 @@ strict_tuple_default_patterns = {
         r"required\s*=\s*false",
         r"causalContext\?:",
         r"args\?:",
+        r"this\.causalContext\s*=\s*requireObject\(causalContext,\s*\"causal_context\"\)",
+        r"this\.args\s*=\s*requireObject\(args,\s*\"args\"\)",
     ],
     "java": [
         r"causalContext\s*==\s*null\s*\?\s*Map\.of\(\)",
         r"optionalObject\(",
+        r"this\.causalContext\s*=\s*Collections\.unmodifiableMap\(new LinkedHashMap",
+        r"this\.args\s*=\s*Collections\.unmodifiableMap\(new LinkedHashMap",
     ],
 }
 for language, patterns in strict_tuple_default_patterns.items():
@@ -17541,6 +17563,33 @@ def _optional_mapping(value, field, *, required=False):
 EOF
   if ( CLI_ROOT="$tmp/cli-sidecar-tuple-defaulting"; check_plugin_sidecar_helper_matrix_contract ) >/dev/null 2>&1; then
     fail "self-test expected sidecar tuple defaulting gate to fail"
+  fi
+  for rel in \
+    src/cli/commands/groups/plugin_template.rs \
+    src/daemon/plugins/sidecar/frame.rs \
+    src/daemon/plugins/sidecar.rs \
+    src/daemon/plugins/host_api.rs \
+    src/daemon/plugins/sidecar/tests.rs \
+    sdk/python/easynet_sdk/providers/runtime/plugin_exec.py \
+    sdk/python/tests/test_plugin_exec.py \
+    sdk/go/provider/runtime/pluginexec/pluginexec.go \
+    sdk/go/provider/runtime/pluginexec/pluginexec_test.go \
+    tools/provider-runtime-pluginexec-rust/Cargo.toml \
+    tools/provider-runtime-pluginexec-rust/src/lib.rs \
+    tools/provider-runtime-pluginexec-rust/tests/pluginexec.rs \
+    sdk/java/src/main/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarRuntime.java \
+    sdk/java/src/main/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarInvocation.java \
+    sdk/java/src/test/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarRuntimeTest.java \
+    sdk/node/provider/runtime/pluginexec.js \
+    sdk/node/provider/runtime/pluginexec.d.ts \
+    sdk/node/test/pluginexec.test.mjs; do
+    mkdir -p "$(dirname "$tmp/cli-sidecar-projection-aliasing/$rel")"
+    cp "$ROOT/$rel" "$tmp/cli-sidecar-projection-aliasing/$rel"
+  done
+  perl -0pi -e 's/from types import MappingProxyType\n//; s/\n\ndef _immutable_mapping\(.*?\n    return value\n//s; s/_immutable_mapping\(\n            _required_mapping\(invocation, "causal_context"\)\n        \)/_required_mapping(invocation, "causal_context")/; s/_immutable_mapping\(_required_mapping\(invocation, "args"\)\)/_required_mapping(invocation, "args")/' \
+    "$tmp/cli-sidecar-projection-aliasing/sdk/python/easynet_sdk/providers/runtime/plugin_exec.py"
+  if ( CLI_ROOT="$tmp/cli-sidecar-projection-aliasing"; check_plugin_sidecar_helper_matrix_contract ) >/dev/null 2>&1; then
+    fail "self-test expected sidecar projection aliasing gate to fail"
   fi
   for rel in \
     src/cli/commands/groups/plugin_template.rs \

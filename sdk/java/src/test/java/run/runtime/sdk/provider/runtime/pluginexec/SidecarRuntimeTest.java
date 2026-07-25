@@ -35,6 +35,28 @@ public final class SidecarRuntimeTest {
     } catch (UnsupportedOperationException expected) {
       // expected
     }
+    java.util.Map<String, Object> mutableFrame = frameWithMutableArgs();
+    SidecarInvocation owned = SidecarInvocation.fromFrame(mutableFrame);
+    @SuppressWarnings("unchecked")
+    java.util.Map<String, Object> sourceInvocation =
+        (java.util.Map<String, Object>) mutableFrame.get("invocation");
+    @SuppressWarnings("unchecked")
+    java.util.Map<String, Object> sourceArgs =
+        (java.util.Map<String, Object>) sourceInvocation.get("args");
+    @SuppressWarnings("unchecked")
+    java.util.Map<String, Object> sourceNested =
+        (java.util.Map<String, Object>) sourceArgs.get("nested");
+    sourceNested.put("value", "mutated-after-projection");
+    @SuppressWarnings("unchecked")
+    java.util.Map<String, Object> projectedNested =
+        (java.util.Map<String, Object>) owned.args().get("nested");
+    check("owned".equals(projectedNested.get("value")), "args projection owns nested maps");
+    try {
+      projectedNested.put("value", "handler-mutation");
+      throw new AssertionError("nested args projection must be immutable");
+    } catch (UnsupportedOperationException expected) {
+      // expected
+    }
   }
 
   static void serveWritesResultFrame() throws Exception {
@@ -180,6 +202,19 @@ public final class SidecarRuntimeTest {
         "call-1",
         "invocation",
         canonicalInvocation());
+  }
+
+  private static java.util.Map<String, Object> frameWithMutableArgs() {
+    java.util.Map<String, Object> args = new java.util.LinkedHashMap<>();
+    args.put("message", "hello");
+    args.put("nested", new java.util.LinkedHashMap<>(Map.of("value", "owned")));
+    java.util.Map<String, Object> invocation = canonicalInvocation();
+    invocation.put("args", args);
+    java.util.Map<String, Object> frame = new java.util.LinkedHashMap<>();
+    frame.put("type", "invoke");
+    frame.put("call_id", "call-1");
+    frame.put("invocation", invocation);
+    return frame;
   }
 
   private static java.util.LinkedHashMap<String, Object> canonicalInvocation() {

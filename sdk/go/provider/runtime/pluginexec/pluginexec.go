@@ -325,10 +325,46 @@ func (p sidecarInvocationProjection) intoInvocation() SidecarInvocation {
 		CalleeURA:       p.frame.CalleeURA,
 		AbilityURA:      p.frame.AbilityURA,
 		SubjectURA:      p.frame.SubjectURA,
-		InvocationNonce: append([]int(nil), p.frame.InvocationNonce...),
-		CausalContext:   p.frame.CausalContext,
-		Args:            p.frame.Args,
+		InvocationNonce: cloneIntSlice(p.frame.InvocationNonce),
+		CausalContext:   cloneSidecarObject(p.frame.CausalContext),
+		Args:            cloneSidecarObject(p.frame.Args),
 		FrameType:       p.frameType,
+	}
+}
+
+func cloneIntSlice(values []int) []int {
+	return append([]int(nil), values...)
+}
+
+func cloneSidecarObject(value map[string]any) map[string]any {
+	if value == nil {
+		return nil
+	}
+	projected := make(map[string]any, len(value))
+	for key, item := range value {
+		projected[key] = cloneSidecarValue(item)
+	}
+	return projected
+}
+
+func cloneSidecarValue(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		return cloneSidecarObject(typed)
+	case []any:
+		out := make([]any, len(typed))
+		for i, item := range typed {
+			out[i] = cloneSidecarValue(item)
+		}
+		return out
+	case []string:
+		return append([]string(nil), typed...)
+	case []int:
+		return append([]int(nil), typed...)
+	case []float64:
+		return append([]float64(nil), typed...)
+	default:
+		return value
 	}
 }
 

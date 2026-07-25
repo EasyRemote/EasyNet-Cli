@@ -40,6 +40,26 @@ class PluginExecTests(unittest.TestCase):
         self.assertEqual(invocation.causal_context, {"form": "none"})
         self.assertEqual(invocation.args, {"message": "hello"})
 
+    def test_plugin_invocation_owns_handler_projection(self) -> None:
+        frame = _frame()
+        invocation_frame = frame["invocation"]
+        assert isinstance(invocation_frame, dict)
+        invocation_frame["args"] = {"message": "hello", "nested": {"value": "owned"}}
+
+        invocation = SidecarInvocation.from_frame(frame)
+
+        args = invocation_frame["args"]
+        assert isinstance(args, dict)
+        nested = args["nested"]
+        assert isinstance(nested, dict)
+        nested["value"] = "mutated-after-projection"
+
+        self.assertEqual(invocation.args["nested"]["value"], "owned")
+        with self.assertRaises(TypeError):
+            invocation.args["message"] = "handler-mutation"  # type: ignore[index]
+        with self.assertRaises(TypeError):
+            invocation.args["nested"]["value"] = "handler-mutation"  # type: ignore[index]
+
     def test_exec_plugin_helper_writes_result_frame(self) -> None:
         output = StringIO()
 

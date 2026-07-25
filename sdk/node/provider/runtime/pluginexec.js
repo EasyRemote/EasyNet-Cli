@@ -30,9 +30,9 @@ export class SidecarInvocation {
     this.calleeURA = requireString(calleeURA, "callee_ura");
     this.abilityURA = requireString(abilityURA, "ability_ura");
     this.subjectURA = requireString(subjectURA, "subject_ura");
-    this.invocationNonce = requireNonce(invocationNonce, "invocation_nonce");
-    this.causalContext = requireObject(causalContext, "causal_context");
-    this.args = requireObject(args, "args");
+    this.invocationNonce = Object.freeze(requireNonce(invocationNonce, "invocation_nonce"));
+    this.causalContext = immutableSidecarObject(requireObject(causalContext, "causal_context"));
+    this.args = immutableSidecarObject(requireObject(args, "args"));
     this.frameType = requireString(frameType, "type");
   }
 
@@ -184,4 +184,22 @@ function requireNonce(value, field) {
     }
     return item;
   });
+}
+
+function immutableSidecarObject(value) {
+  const projected = {};
+  for (const [key, item] of Object.entries(value)) {
+    projected[key] = immutableSidecarValue(item);
+  }
+  return Object.freeze(projected);
+}
+
+function immutableSidecarValue(value) {
+  if (Array.isArray(value)) {
+    return Object.freeze(value.map((item) => immutableSidecarValue(item)));
+  }
+  if (value !== null && typeof value === "object") {
+    return immutableSidecarObject(value);
+  }
+  return value;
 }

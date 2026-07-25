@@ -57,6 +57,22 @@ test("SidecarInvocation projects daemon frame", () => {
   assert.deepEqual(invocation.args, { message: "hello" });
 });
 
+test("SidecarInvocation owns handler projection", () => {
+  const frame = requestFrame();
+  frame.invocation.args = { message: "hello", nested: { value: "owned" } };
+
+  const invocation = SidecarInvocation.fromFrame(frame);
+  frame.invocation.args.nested.value = "mutated-after-projection";
+
+  assert.equal(invocation.args.nested.value, "owned");
+  assert.throws(() => {
+    invocation.args.message = "handler-mutation";
+  }, TypeError);
+  assert.throws(() => {
+    invocation.args.nested.value = "handler-mutation";
+  }, TypeError);
+});
+
 test("serveExecPlugin writes result frame", async () => {
   const capture = captureOutput();
 

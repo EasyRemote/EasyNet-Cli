@@ -36,9 +36,8 @@ public final class SidecarInvocation {
     this.abilityURA = requireText(abilityURA, "ability_ura");
     this.subjectURA = requireText(subjectURA, "subject_ura");
     this.invocationNonce = List.copyOf(invocationNonce);
-    this.causalContext =
-        Collections.unmodifiableMap(new LinkedHashMap<>(Objects.requireNonNull(causalContext, "causal_context")));
-    this.args = Collections.unmodifiableMap(new LinkedHashMap<>(Objects.requireNonNull(args, "args")));
+    this.causalContext = immutableObject(Objects.requireNonNull(causalContext, "causal_context"));
+    this.args = immutableObject(Objects.requireNonNull(args, "args"));
     this.frameType = requireText(frameType, "type");
   }
 
@@ -212,5 +211,27 @@ public final class SidecarInvocation {
       nonce.add(byteValue);
     }
     return nonce;
+  }
+
+  private static Map<String, Object> immutableObject(Map<String, Object> value) {
+    Map<String, Object> projected = new LinkedHashMap<>();
+    for (Map.Entry<String, Object> entry : value.entrySet()) {
+      projected.put(entry.getKey(), immutableValue(entry.getValue()));
+    }
+    return Collections.unmodifiableMap(projected);
+  }
+
+  private static Object immutableValue(Object value) {
+    if (value instanceof Map<?, ?> map) {
+      return immutableObject(stringObject(map, "nested"));
+    }
+    if (value instanceof List<?> list) {
+      List<Object> projected = new ArrayList<>(list.size());
+      for (Object item : list) {
+        projected.add(immutableValue(item));
+      }
+      return Collections.unmodifiableList(projected);
+    }
+    return value;
   }
 }
