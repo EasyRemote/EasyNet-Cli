@@ -187,14 +187,6 @@ impl LocalDaemonLoopbackInvocation {
 }
 
 impl ProtoEnvelope {
-    pub fn loopback(
-        ura: impl Into<String>,
-        derivation_policy: InvocationDerivationPolicy,
-    ) -> anyhow::Result<Self> {
-        let ura = checked_ura(ura.into(), "loopback_ura")?;
-        Self::from_target(ura.clone(), ura.clone(), ura, derivation_policy)
-    }
-
     pub fn from_target(
         caller_ura: impl Into<String>,
         callee_ura: impl Into<String>,
@@ -1123,8 +1115,10 @@ mod tests {
     }
 
     #[test]
-    fn loopback_sets_caller_callee_subject_to_same_ura() {
-        let req = ProtoEnvelope::loopback(
+    fn explicit_target_tuple_preserves_caller_callee_subject() {
+        let req = ProtoEnvelope::from_target(
+            "easynet:///r/acme/device/dev-a",
+            "easynet:///r/acme/device/dev-a",
             "easynet:///r/acme/device/dev-a",
             InvocationDerivationPolicy::FreshRoot,
         )
@@ -1241,8 +1235,13 @@ mod tests {
 
     #[test]
     fn invalid_ura_is_rejected_before_wire_send() {
-        let err = ProtoEnvelope::loopback("agent://self", InvocationDerivationPolicy::FreshRoot)
-            .unwrap_err();
+        let err = ProtoEnvelope::from_target(
+            "agent://self",
+            "easynet:///r/acme/device/dev-a",
+            "easynet:///r/acme/device/dev-a",
+            InvocationDerivationPolicy::FreshRoot,
+        )
+        .unwrap_err();
         assert!(format!("{err}").contains("valid URA"));
     }
 

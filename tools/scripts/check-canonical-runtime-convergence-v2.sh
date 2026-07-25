@@ -13021,8 +13021,14 @@ PY
 check_local_daemon_loopback_explicit_subject_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local grpc="$cli_root/src/support/platform/local_daemon_grpc.rs"
+  local invocation_wire="$cli_root/src/daemon/invocation/dispatch/invocation_wire.rs"
 
   [[ -f "$grpc" ]] || fail "local daemon loopback source is missing: ${grpc#$cli_root/}"
+  [[ -f "$invocation_wire" ]] || fail "invocation wire source is missing: ${invocation_wire#$cli_root/}"
+
+  if rg -n 'pub fn loopback\s*\(|fn loopback\s*\(|ProtoEnvelope::loopback' "$invocation_wire"; then
+    fail "invocation wire preserves retired subjectless ProtoEnvelope loopback constructor"
+  fi
 
   "$PYTHON_BIN" - "$grpc" <<'PY'
 import re
