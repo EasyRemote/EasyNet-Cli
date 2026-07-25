@@ -49,7 +49,7 @@ pub type RuntimeHostHandle = u64;
 ///
 /// ```text
 /// {
-///   "mode": "device" | "hub",
+///   "mode": "edge" | "authority",
 ///   "runtime_instance_id": "dev-a",  // required for edge host mode
 ///   "runtime_bin": "/path/to/bin",   // optional
 ///   "log_path": "/path/to/log",      // optional
@@ -529,7 +529,7 @@ fn remove_host_handle(handle: RuntimeHostHandle) -> Option<Arc<ActiveDaemonHandl
 
 #[derive(Debug)]
 struct DaemonStartConfigJson {
-    mode: DaemonStartMode,
+    mode: RuntimeHostStartMode,
     runtime_instance_id: Option<String>,
     realm: Option<String>,
     runtime_bin: Option<String>,
@@ -546,7 +546,7 @@ impl DaemonStartConfigJson {
             .as_object()
             .ok_or(DaemonStartConfigError::ExpectedObject)?;
         Ok(Self {
-            mode: DaemonStartMode::parse(required_string(obj, "mode")?)?,
+            mode: RuntimeHostStartMode::parse(required_string(obj, "mode")?)?,
             runtime_instance_id: optional_string(obj, "runtime_instance_id")?,
             realm: optional_string(obj, "realm")?,
             runtime_bin: optional_string(obj, "runtime_bin")?,
@@ -559,13 +559,13 @@ impl DaemonStartConfigJson {
 
     fn build(self) -> Result<DaemonStartConfig, DaemonStartConfigError> {
         let mut config = match self.mode {
-            DaemonStartMode::Device => {
+            RuntimeHostStartMode::Edge => {
                 let runtime_instance_id = self
                     .runtime_instance_id
                     .ok_or(DaemonStartConfigError::MissingField("runtime_instance_id"))?;
                 DaemonStartConfig::device(runtime_instance_id)?
             }
-            DaemonStartMode::Hub => DaemonStartConfig::hub(),
+            RuntimeHostStartMode::Authority => DaemonStartConfig::hub(),
         };
         if let Some(realm) = self.realm {
             config = config.with_realm(realm);
@@ -590,16 +590,16 @@ impl DaemonStartConfigJson {
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
-enum DaemonStartMode {
-    Device,
-    Hub,
+enum RuntimeHostStartMode {
+    Edge,
+    Authority,
 }
 
-impl DaemonStartMode {
+impl RuntimeHostStartMode {
     fn parse(raw: String) -> Result<Self, DaemonStartConfigError> {
         match raw.as_str() {
-            "device" => Ok(Self::Device),
-            "hub" => Ok(Self::Hub),
+            "edge" => Ok(Self::Edge),
+            "authority" => Ok(Self::Authority),
             other => Err(DaemonStartConfigError::UnsupportedMode(other.to_string())),
         }
     }
@@ -613,7 +613,7 @@ enum DaemonStartConfigError {
     MissingField(&'static str),
     #[error("field `{0}` must be a non-empty string")]
     InvalidString(&'static str),
-    #[error("unsupported daemon mode `{0}`")]
+    #[error("unsupported runtime host mode `{0}`")]
     UnsupportedMode(String),
     #[error("field `{0}` must be a boolean")]
     InvalidBool(&'static str),
@@ -740,10 +740,10 @@ mod tests {
     }
 
     #[test]
-    fn parse_start_config_builds_device_config() {
+    fn parse_start_config_builds_edge_config() {
         let config = DaemonStartConfigJson::parse(
             r#"{
-                "mode": "device",
+                "mode": "edge",
                 "runtime_instance_id": "dev-a",
                 "runtime_bin": "/tmp/runtime-host",
                 "log_path": "/tmp/easynet.log",
@@ -759,8 +759,8 @@ mod tests {
     }
 
     #[test]
-    fn parse_start_config_rejects_device_without_runtime_instance_id() {
-        let err = DaemonStartConfigJson::parse(r#"{"mode":"device"}"#)
+    fn parse_start_config_rejects_edge_without_runtime_instance_id() {
+        let err = DaemonStartConfigJson::parse(r#"{"mode":"edge"}"#)
             .unwrap()
             .build()
             .unwrap_err();
@@ -772,9 +772,21 @@ mod tests {
 
     #[test]
     fn daemon_start_rejects_null_out_handle_before_io() {
-        let raw = CString::new(r#"{"mode":"hub"}"#).unwrap();
+        let raw = CString::new(r#"{"mode":"authority"}"#).unwrap();
         let code = unsafe { runtime_host_start(raw.as_ptr(), std::ptr::null_mut()) };
         assert_eq!(code, ERR_NULL_POINTER);
+    }
+
+    #[test]
+    fn parse_start_config_rejects_retired_product_modes() {
+        for mode in ["device", "hub", "both", "combined"] {
+            let err = DaemonStartConfigJson::parse(&format!(r#"{{"mode":"{mode}"}}"#))
+                .expect_err("retired or unsupported host mode must fail at the C ABI boundary");
+            assert!(
+                err.to_string().contains("unsupported runtime host mode"),
+                "unexpected mode error for {mode}: {err}"
+            );
+        }
     }
 
     #[test]

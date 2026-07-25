@@ -22,6 +22,7 @@ from easynet_sdk._cabi import (
     _CABIStreamTransport,
     _platform_library_candidates,
     _project_cabi_ordered_event,
+    _runtime_status_from_cabi,
     _runtime_start_config_for_cabi,
     _resolve_descriptor_ref_from_diagnostics,
 )
@@ -652,7 +653,7 @@ class FakeRawCABI:
 
 
 _RUNTIME_HOST_STATUS = (
-    b'{"state":"Running","mode":"device","pid":123,'
+    b'{"state":"Running","mode":"edge","pid":123,'
     b'"version":"0.91.30","message":"ready","diagnostics":[],'
     b'"control_endpoint":"unix:///tmp/control.sock",'
     b'"invocation_endpoint":"unix:///tmp/runtime-host.sock",'
@@ -727,11 +728,60 @@ class CABITransportTests(unittest.TestCase):
         self.assertTrue(result.ok)
         self.assertEqual(result.output_json, {"ready": True})
         self.assertEqual(raw.runtime_host_open_clients, [606])
-        self.assertEqual(raw.runtime_host_starts[0]["mode"], "device")
+        self.assertEqual(raw.runtime_host_starts[0]["mode"], "edge")
 
     def test_runtime_host_start_rejects_retired_product_mode_input(self) -> None:
+        for mode in ("device", "hub", "both"):
+            with self.subTest(mode=mode):
+                with self.assertRaises(SDKError) as caught:
+                    _runtime_start_config_for_cabi(
+                        json.dumps({"mode": mode}).encode("utf-8")
+                    )
+
+                self.assertEqual(caught.exception.code, ErrorCode.INVALID_ARGUMENT)
+                self.assertIn("edge, authority, or combined", caught.exception.message)
+
+    def test_runtime_host_start_rejects_unsupported_combined_mode(self) -> None:
         with self.assertRaises(SDKError) as caught:
-            _runtime_start_config_for_cabi(b'{"mode":"device"}')
+            _runtime_start_config_for_cabi(b'{"mode":"combined"}')
+
+        self.assertEqual(caught.exception.code, ErrorCode.NOT_IMPLEMENTED)
+        self.assertIn(
+            "does not support combined runtime host mode", caught.exception.message
+        )
+
+    def test_runtime_host_status_rejects_retired_product_modes(self) -> None:
+        for mode in ("device", "hub", "both"):
+            with self.subTest(mode=mode):
+                with self.assertRaises(SDKError) as caught:
+                    _runtime_status_from_cabi(
+                        "42",
+                        json.dumps(
+                            {
+                                "state": "Running",
+                                "mode": mode,
+                                "endpoints": {
+                                    "control_endpoint": "unix:///tmp/control.sock"
+                                },
+                            }
+                        ).encode("utf-8"),
+                    )
+
+                self.assertEqual(caught.exception.code, ErrorCode.INVALID_ARGUMENT)
+                self.assertIn("edge, authority, or combined", caught.exception.message)
+
+    def test_runtime_host_status_accepts_canonical_combined_mode(self) -> None:
+        status = _runtime_status_from_cabi(
+            "42",
+            b'{"state":"Running","mode":"combined","endpoints":'
+            b'{"control_endpoint":"unix:///tmp/control.sock"}}',
+        )
+
+        self.assertEqual(status["mode"], "combined")
+
+    def test_runtime_host_start_rejects_unknown_mode_input(self) -> None:
+        with self.assertRaises(SDKError) as caught:
+            _runtime_start_config_for_cabi(b'{"mode":"daemon"}')
 
         self.assertEqual(caught.exception.code, ErrorCode.INVALID_ARGUMENT)
         self.assertIn("edge, authority, or combined", caught.exception.message)

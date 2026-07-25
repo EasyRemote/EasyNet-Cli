@@ -5260,17 +5260,20 @@ check_sdk_cabi_descriptor_error_projection_contract() {
   local go_cabi_test="$cli_root/sdk/go/cabi_runtime_test.go"
   local py_cabi="$cli_root/sdk/python/easynet_sdk/_cabi.py"
   local py_cabi_test="$cli_root/sdk/python/tests/test_cabi.py"
+  local rust_daemon="$cli_root/src/ffi/daemon/mod.rs"
 
   "$PYTHON_BIN" - \
     "$go_cabi" \
     "$go_cabi_errors" \
     "$go_cabi_test" \
     "$py_cabi" \
-    "$py_cabi_test" <<'PY'
+    "$py_cabi_test" \
+    "$rust_daemon" <<'PY'
 import sys
+import re
 from pathlib import Path
 
-go_cabi_path, go_cabi_errors_path, go_cabi_test_path, py_cabi_path, py_cabi_test_path = map(Path, sys.argv[1:])
+go_cabi_path, go_cabi_errors_path, go_cabi_test_path, py_cabi_path, py_cabi_test_path, rust_daemon_path = map(Path, sys.argv[1:])
 
 def read(path: Path) -> str:
     if not path.exists():
@@ -5282,6 +5285,7 @@ go_cabi_errors = read(go_cabi_errors_path)
 go_cabi_test = read(go_cabi_test_path)
 py_cabi = read(py_cabi_path)
 py_cabi_test = read(py_cabi_test_path)
+rust_daemon = read(rust_daemon_path)
 
 for token in (
     "func cabiErrorFromLastErrorJSON(",
@@ -5292,23 +5296,67 @@ for token in (
 if "return cabiErrorFromLastErrorJSON(raw, true, code, operation)" not in go_cabi:
     raise SystemExit("sdk_go_cabi_last_error_json_not_authoritative")
 
-for required in (
+for retired in (
     "type cabiRuntimeHostMode string",
     "func cabiRuntimeHostModeFromCanonical(",
     "func cabiRuntimeHostModeFromWire(",
+    "cabiRuntimeHostWireRole",
+    "CABI_RUNTIME_HOST_WIRE_ROLE_",
     "runtime host status mode must map to edge, authority, or combined",
+    "runtime host status mode uses an unsupported C ABI wire role",
+):
+    if retired in go_cabi or retired in py_cabi:
+        raise SystemExit(f"sdk_cabi_runtime_host_role_legacy_adapter:{retired}")
+for required in (
+    'case "edge", "authority":',
+    'case "combined":',
+    "C ABI runtime host start does not support combined runtime host mode",
+    "runtime host status mode must be edge, authority, or combined",
 ):
     if required not in go_cabi:
-        raise SystemExit(f"sdk_go_cabi_runtime_host_mode_adapter_missing:{required}")
-if "runtime host status mode must be device, hub, or both" in go_cabi:
-    raise SystemExit("sdk_go_cabi_runtime_host_status_error_leaks_product_modes")
+        raise SystemExit(f"sdk_go_cabi_runtime_host_role_contract_missing:{required}")
+for required in (
+    'if mode in {"edge", "authority"}:',
+    'if mode == "combined":',
+    "C ABI runtime host start does not support combined runtime host mode",
+    'if mode in {"edge", "authority", "combined"}:',
+    "runtime host status mode must be edge, authority, or combined",
+):
+    if required not in py_cabi:
+        raise SystemExit(f"sdk_python_cabi_runtime_host_role_contract_missing:{required}")
+parse_match = re.search(r"impl RuntimeHostStartMode\s*\{(?P<body>.*?)\n\}", rust_daemon, re.S)
+if parse_match is None:
+    raise SystemExit("rust_cabi_runtime_host_mode_parser_missing")
+parse_body = parse_match.group("body")
+for required in ('"edge" => Ok(Self::Edge)', '"authority" => Ok(Self::Authority)'):
+    if required not in parse_body:
+        raise SystemExit(f"rust_cabi_runtime_host_mode_parser_missing:{required}")
+for retired in ('"device" =>', '"hub" =>', '"both" =>', '"combined" => Ok'):
+    if retired in parse_body:
+        raise SystemExit(f"rust_cabi_runtime_host_mode_parser_accepts_legacy_or_unsupported:{retired}")
+if '"mode": "device" | "hub"' in rust_daemon:
+    raise SystemExit("rust_cabi_runtime_host_doc_preserves_legacy_modes")
+for required in (
+    "parse_start_config_rejects_retired_product_modes",
+    'for mode in ["device", "hub", "both", "combined"]',
+):
+    if required not in rust_daemon:
+        raise SystemExit(f"rust_cabi_runtime_host_role_negative_test_missing:{required}")
 for required in (
     "TestCABIRuntimeHostStatusRejectsUnknownWireModeWithCanonicalError",
-    "invalid status mode error did not name canonical roles",
-    "invalid status mode error leaked C-ABI wire vocabulary",
+    "TestCABIRuntimeHostStartConfigRejectsUnsupportedCombinedMode",
+    "did not name canonical roles",
+    "leaked C-ABI wire vocabulary",
 ):
     if required not in go_cabi_test:
         raise SystemExit(f"sdk_go_cabi_runtime_host_mode_adapter_test_missing:{required}")
+for required in (
+    "test_runtime_host_start_rejects_unsupported_combined_mode",
+    "test_runtime_host_status_rejects_retired_product_modes",
+    "test_runtime_host_status_accepts_canonical_combined_mode",
+):
+    if required not in py_cabi_test:
+        raise SystemExit(f"sdk_python_cabi_runtime_host_mode_adapter_test_missing:{required}")
 
 go_test_start = go_cabi_test.find("func TestCABIRuntimeProviderProjectsDescriptorResolverLastError")
 if go_test_start < 0:
@@ -20757,6 +20805,68 @@ EOF
     > "$tmp/sdk-cabi-descriptor-error-generic/sdk/python/tests/test_cabi.py"
   if ( check_sdk_cabi_descriptor_error_projection_contract "$tmp/sdk-cabi-descriptor-error-generic" ) >/dev/null 2>&1; then
     fail "self-test expected SDK C ABI descriptor error projection gate to fail"
+  fi
+  mkdir -p "$tmp/sdk-cabi-runtime-host-role-legacy/sdk/go" \
+    "$tmp/sdk-cabi-runtime-host-role-legacy/sdk/python/easynet_sdk" \
+    "$tmp/sdk-cabi-runtime-host-role-legacy/sdk/python/tests" \
+    "$tmp/sdk-cabi-runtime-host-role-legacy/src/ffi/daemon"
+  cat >"$tmp/sdk-cabi-runtime-host-role-legacy/sdk/go/cabi_runtime.go" <<'EOF'
+func cabiRuntimeLastErrorOrCode() error {
+  return cabiErrorFromLastErrorJSON(raw, true, code, operation)
+}
+type cabiRuntimeHostMode string
+func cabiRuntimeHostModeFromCanonical() {}
+func cabiRuntimeHostModeFromWire() {}
+func runtimeHostStatusModeForCABI() string {
+  return "runtime host status mode must map to edge, authority, or combined"
+}
+EOF
+  printf 'func cabiErrorFromLastErrorJSON(raw []byte, ok bool, code int32, operation string) error { return nil }\nfunc decodeRuntimeErrorJSON(raw []byte) {}\n' \
+    > "$tmp/sdk-cabi-runtime-host-role-legacy/sdk/go/cabi_errors.go"
+  cat >"$tmp/sdk-cabi-runtime-host-role-legacy/sdk/go/cabi_runtime_test.go" <<'EOF'
+func TestCABIRuntimeHostStatusRejectsUnknownWireModeWithCanonicalError(t *testing.T) {
+  _ = "invalid status mode error did not name canonical roles"
+  _ = "invalid status mode error leaked C-ABI wire vocabulary"
+}
+func TestCABIRuntimeHostStartConfigRejectsUnsupportedCombinedMode(t *testing.T) {}
+func TestCABIRuntimeProviderProjectsDescriptorResolverLastError(t *testing.T) {
+  _ = ErrDescriptorNotFound
+  _ = sdkErr.Stage != "routing"
+  _ = "DESCRIPTOR_NOT_FOUND"
+  _ = "descriptor_ref not found in runtime realm catalog"
+  _ = "missing.descriptor"
+}
+EOF
+  cat >"$tmp/sdk-cabi-runtime-host-role-legacy/sdk/python/easynet_sdk/_cabi.py" <<'EOF'
+CABI_RUNTIME_HOST_WIRE_ROLE_EDGE = "device"
+def _runtime_resolve_descriptor_ref(): pass
+_ = '{"code":"DESCRIPTOR_NOT_FOUND"}'
+_ = '"stage":"routing"'
+EOF
+  cat >"$tmp/sdk-cabi-runtime-host-role-legacy/sdk/python/tests/test_cabi.py" <<'EOF'
+def test_descriptor_diagnostics_owner_mismatch_is_descriptor_not_found(): pass
+def test_descriptor_resolution_projects_native_last_error(): pass
+def test_runtime_host_start_rejects_unsupported_combined_mode(): pass
+def test_runtime_host_status_rejects_retired_product_modes(): pass
+def test_runtime_host_status_accepts_canonical_combined_mode(): pass
+ErrorCode.DESCRIPTOR_NOT_FOUND
+EOF
+  cat >"$tmp/sdk-cabi-runtime-host-role-legacy/src/ffi/daemon/mod.rs" <<'EOF'
+impl RuntimeHostStartMode {
+  fn parse(raw: String) -> Result<Self, Error> {
+    match raw.as_str() {
+      "edge" => Ok(Self::Edge),
+      "authority" => Ok(Self::Authority),
+      other => Err(other),
+    }
+  }
+}
+fn parse_start_config_rejects_retired_product_modes() {
+  for mode in ["device", "hub", "both", "combined"] {}
+}
+EOF
+  if ( check_sdk_cabi_descriptor_error_projection_contract "$tmp/sdk-cabi-runtime-host-role-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected SDK C ABI runtime host legacy role adapter gate to fail"
   fi
   mkdir -p "$tmp/sdk-root-product-named/sdk/go" \
     "$tmp/sdk-root-product-named/sdk/python/easynet_sdk"

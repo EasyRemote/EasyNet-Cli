@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -256,7 +257,7 @@ func TestCABIRuntimeHostStartConfigProjectsFacadeShape(t *testing.T) {
 	if projected["working_dir"] != "/srv/easynet" {
 		t.Fatalf("working_dir = %v, want /srv/easynet", projected["working_dir"])
 	}
-	if projected["mode"] != "device" || projected["realm"] != "lab" {
+	if projected["mode"] != "edge" || projected["realm"] != "lab" {
 		t.Fatalf("projected config lost runtime host fields: %v", projected)
 	}
 }
@@ -277,20 +278,33 @@ func TestCABIRuntimeHostStartConfigRejectsUnsupportedTransportFields(t *testing.
 }
 
 func TestCABIRuntimeHostStartConfigRejectsRetiredProductModeInput(t *testing.T) {
-	_, err := runtimeHostStartConfigForCABI([]byte(`{"mode":"device"}`))
+	for _, mode := range []string{"device", "hub", "both"} {
+		_, err := runtimeHostStartConfigForCABI([]byte(fmt.Sprintf(`{"mode":%q}`, mode)))
 
-	if !IsCode(err, ErrInvalidArgument) {
-		t.Fatalf("retired mode error = %v, want %s", err, ErrInvalidArgument)
+		if !IsCode(err, ErrInvalidArgument) {
+			t.Fatalf("retired mode %q error = %v, want %s", mode, err, ErrInvalidArgument)
+		}
+		if err == nil || !strings.Contains(err.Error(), "edge, authority, or combined") {
+			t.Fatalf("retired mode %q error did not name generic roles: %v", mode, err)
+		}
 	}
-	if err == nil || !strings.Contains(err.Error(), "edge, authority, or combined") {
-		t.Fatalf("retired mode error did not name generic roles: %v", err)
+}
+
+func TestCABIRuntimeHostStartConfigRejectsUnsupportedCombinedMode(t *testing.T) {
+	_, err := runtimeHostStartConfigForCABI([]byte(`{"mode":"combined"}`))
+
+	if !IsCode(err, ErrNotImplemented) {
+		t.Fatalf("combined mode error = %v, want %s", err, ErrNotImplemented)
+	}
+	if err == nil || !strings.Contains(err.Error(), "does not support combined runtime host mode") {
+		t.Fatalf("combined mode error did not name unsupported provider capability: %v", err)
 	}
 }
 
 func TestCABIRuntimeHostStatusProjectionFromFlatAndNestedShapes(t *testing.T) {
 	status, err := runtimeHostStatusFromCABI("42", []byte(`{
 		"control_accepting":true,
-		"mode":"both",
+		"mode":"combined",
 		"pid":123,
 		"version":"1.2.3",
 		"message":"ready for control",
@@ -324,20 +338,22 @@ func TestCABIRuntimeHostStatusProjectionFromFlatAndNestedShapes(t *testing.T) {
 }
 
 func TestCABIRuntimeHostStatusRejectsUnknownWireModeWithCanonicalError(t *testing.T) {
-	_, err := runtimeHostStatusFromCABI("42", []byte(`{
-		"state":"Running",
-		"mode":"daemon",
-		"endpoints":{"control_endpoint":"unix:///tmp/control.sock"}
-	}`))
+	for _, mode := range []string{"daemon", "device", "hub", "both"} {
+		_, err := runtimeHostStatusFromCABI("42", []byte(fmt.Sprintf(`{
+			"state":"Running",
+			"mode":%q,
+			"endpoints":{"control_endpoint":"unix:///tmp/control.sock"}
+		}`, mode)))
 
-	if !IsCode(err, ErrInvalidArgument) {
-		t.Fatalf("invalid status mode error = %v, want %s", err, ErrInvalidArgument)
-	}
-	if err == nil || !strings.Contains(err.Error(), "edge, authority, or combined") {
-		t.Fatalf("invalid status mode error did not name canonical roles: %v", err)
-	}
-	if strings.Contains(err.Error(), "device, hub, or both") {
-		t.Fatalf("invalid status mode error leaked C-ABI wire vocabulary: %v", err)
+		if !IsCode(err, ErrInvalidArgument) {
+			t.Fatalf("invalid status mode %q error = %v, want %s", mode, err, ErrInvalidArgument)
+		}
+		if err == nil || !strings.Contains(err.Error(), "edge, authority, or combined") {
+			t.Fatalf("invalid status mode %q error did not name canonical roles: %v", mode, err)
+		}
+		if strings.Contains(err.Error(), "device, hub, or both") {
+			t.Fatalf("invalid status mode %q error leaked C-ABI wire vocabulary: %v", mode, err)
+		}
 	}
 }
 
@@ -1080,7 +1096,7 @@ int32_t runtime_host_stop(uint64_t handle) { (void)handle; return 0; }
 int32_t runtime_host_detach(uint64_t handle) { (void)handle; return 0; }
 int32_t runtime_host_status(uint64_t handle, char **out_status_json) {
 	(void)handle;
-	*out_status_json = dup_json("{\"state\":\"Running\",\"mode\":\"device\",\"endpoints\":{\"control_endpoint\":\"unix:///tmp/control.sock\",\"invocation_endpoint\":\"unix:///tmp/daemon.sock\"},\"diagnostics\":[]}");
+	*out_status_json = dup_json("{\"state\":\"Running\",\"mode\":\"edge\",\"endpoints\":{\"control_endpoint\":\"unix:///tmp/control.sock\",\"invocation_endpoint\":\"unix:///tmp/daemon.sock\"},\"diagnostics\":[]}");
 	return 0;
 }
 int32_t runtime_host_open_client(uint64_t daemon_handle, uint64_t *out_handle) {
