@@ -49,8 +49,9 @@ use crate::daemon::persistence::config::state_dir;
 use crate::support::platform::named_pipe::{scoped_pipe_name, PipeListener};
 
 /// Filename for the Unix Domain Socket inside the user's
-/// `~/.easynet/` directory. Pinned so the Client FFI library can
-/// fall back to it if `control.json` is missing.
+/// `~/.easynet/` directory. Discovery writes this exact path into
+/// `control.json`; clients attach from discovery rather than
+/// synthesizing a second control route.
 pub const UDS_FILENAME: &str = "control.sock";
 
 /// Platform-neutral listener handle. Concrete OS variants live

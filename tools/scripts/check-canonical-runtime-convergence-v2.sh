@@ -120,6 +120,27 @@ check_ffi_init_typed_connect_error_contract() {
   fi
 }
 
+check_daemon_lifecycle_control_vocabulary_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local daemon_bin="$cli_root/src/bin/easynet-daemon.rs"
+  local boot_process="$cli_root/src/daemon/boot/process.rs"
+  local control_transport="$cli_root/src/daemon/control/transport.rs"
+  local ipc="$cli_root/src/ffi/client/ipc.rs"
+  for source in "$daemon_bin" "$boot_process" "$control_transport" "$ipc"; do
+    [[ -f "$source" ]] || fail "daemon lifecycle control source is missing: ${source#$cli_root/}"
+  done
+  if rg -n 'legacy heartbeat sidecar|legacy control-plane endpoint|Legacy control-plane endpoint|control\.sock.*legacy|legacy length-delimited|fall back to it if `control\.json` is missing|control\.json.*missing.*fallback|fallback.*control\.sock' \
+    "$daemon_bin" "$boot_process" "$control_transport" "$ipc"; then
+    fail "daemon lifecycle control attach preserves retired legacy/fallback vocabulary"
+  fi
+  if ! rg -q 'control\.json not found' "$ipc"; then
+    fail "FFI control attach must continue to report missing control.json explicitly"
+  fi
+  if ! rg -q 'clients attach from discovery rather than' "$control_transport"; then
+    fail "control transport must document discovery-owned attach routing"
+  fi
+}
+
 check_failure_code_default_policy_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local classifier="$cli_root/src/daemon/execution/mission/failure_codes.rs"
@@ -21274,6 +21295,7 @@ EOF
   check_control_discovery_schema_contract
   check_sdk_control_discovery_strict_wire_contract
   check_control_frame_schema_contract
+  check_daemon_lifecycle_control_vocabulary_contract
   check_sdk_history_authority_subject_contract
 	  check_sdk_descriptor_resolution_error_vocabulary_contract
 	  check_sdk_runtime_client_provider_readiness_contract
@@ -21492,6 +21514,7 @@ check_agent_spec_schema_contract
 check_control_discovery_schema_contract
 check_sdk_control_discovery_strict_wire_contract
 check_control_frame_schema_contract
+check_daemon_lifecycle_control_vocabulary_contract
 check_sdk_history_authority_subject_contract
 check_sdk_prepared_descriptor_ref_required_contract
 check_sdk_descriptor_resolution_error_vocabulary_contract

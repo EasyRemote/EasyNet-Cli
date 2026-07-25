@@ -4,10 +4,9 @@
 // File: src/bin/easynet-daemon.rs
 // Description: Long-running daemon entry — one process owns the
 //              Control-plane IPC server, daemon Invocation, and ability
-//              hosting. Directory liveness is
-//              the session-lifetime federation.heartbeat loop inside
-//              the invocation transport (the legacy heartbeat sidecar
-//              was retired in F-049/T1.5-1).
+//              hosting. Directory liveness is owned by the
+//              session-lifetime federation.heartbeat loop inside the
+//              invocation transport.
 //
 // Current shape
 // -------------

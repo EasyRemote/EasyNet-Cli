@@ -405,7 +405,7 @@ impl DaemonEndpoints {
         }
     }
 
-    /// Legacy control-plane endpoint (`control.sock` or named pipe).
+    /// Boot/status control endpoint (`control.sock` or named pipe).
     pub fn control(&self) -> &Path {
         &self.control
     }
