@@ -119,7 +119,7 @@ class ManagedSigningPeerPage:
 
 @dataclass(frozen=True)
 class ManagedSigningClient:
-    """Provider-backed facade over the daemon managed-signing domain."""
+    """Provider-backed facade over runtime key-service signing custody."""
 
     socket_path: str = ""
     timeout_seconds: float = 10.0

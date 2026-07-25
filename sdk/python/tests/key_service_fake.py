@@ -1,4 +1,4 @@
-"""Reusable fake daemon key-service endpoint for facade conformance tests."""
+"""Reusable fake runtime key-service endpoint for facade conformance tests."""
 
 from __future__ import annotations
 

@@ -14,7 +14,7 @@ from key_service_fake import KeyServiceServer
 
 
 class RuntimeIdentityTests(unittest.TestCase):
-    def test_runtime_identity_requires_explicit_daemon_endpoint(self) -> None:
+    def test_runtime_identity_requires_explicit_runtime_key_service_endpoint(self) -> None:
         for socket_path in ("", " \t\n "):
             with self.subTest(socket_path=socket_path):
                 with self.assertRaises(SDKError) as caught:
@@ -75,7 +75,7 @@ class RuntimeIdentityTests(unittest.TestCase):
         self.assertNotIn("private_key_seed", requests[1])
         self.assertNotIn("vault_path", requests[1])
 
-    def test_ensure_delegates_single_owner_key_generation_to_daemon(self) -> None:
+    def test_ensure_delegates_single_owner_key_generation_to_runtime_key_service(self) -> None:
         public_key = bytes(range(32))
         requests: list[dict[str, object]] = []
         with KeyServiceServer(

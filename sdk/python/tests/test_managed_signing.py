@@ -34,7 +34,7 @@ from key_service_fake import KeyServiceResponsePlan, KeyServiceServer
 
 
 class ManagedSigningTests(unittest.TestCase):
-    def test_client_requires_explicit_daemon_endpoint(self) -> None:
+    def test_client_requires_explicit_runtime_key_service_endpoint(self) -> None:
         for socket_path in ("", " \t\n "):
             with self.subTest(socket_path=socket_path):
                 with self.assertRaises(SDKError) as caught:
@@ -58,7 +58,7 @@ class ManagedSigningTests(unittest.TestCase):
 
         self.assertEqual(raised.exception.code, ErrorCode.PROTOCOL)
 
-    def test_client_conforms_to_daemon_key_service_protocol(self) -> None:
+    def test_client_conforms_to_runtime_key_service_protocol(self) -> None:
         private_key_1 = Ed25519PrivateKey.from_private_bytes(bytes(range(32)))
         public_key_1 = private_key_1.public_key().public_bytes(
             encoding=serialization.Encoding.Raw,
@@ -378,7 +378,7 @@ class ManagedSigningTests(unittest.TestCase):
             invocation_signature.signer_public_key_base64, _b64(public_key)
         )
 
-    def test_key_bound_signer_rejects_invalid_daemon_signature(self) -> None:
+    def test_key_bound_signer_rejects_invalid_runtime_key_service_signature(self) -> None:
         private_key = Ed25519PrivateKey.from_private_bytes(bytes([8] * 32))
         public_key = private_key.public_key().public_bytes(
             encoding=serialization.Encoding.Raw,
@@ -486,9 +486,9 @@ class ManagedSigningTests(unittest.TestCase):
         for invalid_expiry in (0, -1, 1 << 63):
             with self.subTest(invalid_expiry=invalid_expiry):
                 with self.assertRaises(SDKError) as caught:
-                    ManagedSigningClient(socket_path="/unused/keyring.sock").set_expiry(
-                        "key", invalid_expiry
-                    )
+                    ManagedSigningClient(
+                        socket_path="/unused/runtime-key-service.sock"
+                    ).set_expiry("key", invalid_expiry)
                 self.assertEqual(caught.exception.code, ErrorCode.INVALID_ARGUMENT)
 
     def test_projection_policy_is_purpose_bound(self) -> None:

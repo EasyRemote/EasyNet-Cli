@@ -227,6 +227,13 @@ print(json.dumps({
         self.assertIn(".axon_addressing", body)
         self.assertIn("project_descriptor_ref", body)
 
+    def test_managed_signing_module_uses_runtime_key_service_terms(self) -> None:
+        root = Path(__file__).resolve().parents[1] / "easynet_sdk"
+        body = (root / "managed_signing.py").read_text()
+        self.assertIn("runtime key-service signing custody", body)
+        self.assertNotIn("daemon managed-signing", body)
+        self.assertNotIn("daemon key-service", body)
+
 
 if __name__ == "__main__":
     unittest.main()
