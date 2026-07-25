@@ -15692,6 +15692,25 @@ all_text = "\n".join(combined)
 for token, code in required:
     if token not in all_text:
         raise SystemExit(f"sdk_provider_managed_signing_custody:{code}")
+
+request = (root / "src/daemon/invocation/dispatch/request.rs").read_text(
+    encoding="utf-8", errors="replace"
+)
+for token, code in (
+    ("options.signer_id.unwrap_or_default()", "prepare_signer_id_empty_fallback"),
+    ("options.policy_ref.unwrap_or_default()", "prepare_policy_ref_empty_fallback"),
+):
+    if token in request:
+        raise SystemExit(f"sdk_provider_managed_signing_custody:{code}")
+for token, code in (
+    ("fn into_signer_policy(self, expires_at_unix_ms: u64) -> Result<SignerPolicy>", "prepare_policy_materializer_missing"),
+    ("optional_prepare_policy_value", "prepare_policy_value_validator_missing"),
+    ("provider-managed prepare requires signer_id", "provider_managed_signer_id_fail_closed_missing"),
+    ("provider-managed prepare requires policy_ref", "provider_managed_policy_ref_fail_closed_missing"),
+    ("sdk_prepare_rejects_incomplete_provider_managed_policy", "provider_managed_prepare_regression_missing"),
+):
+    if token not in request:
+        raise SystemExit(f"sdk_provider_managed_signing_custody:{code}")
 PY
 }
 

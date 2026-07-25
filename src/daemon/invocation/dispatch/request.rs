@@ -519,16 +519,7 @@ impl InvocationDraft {
         let canonical_hash_hex = hex::encode(axon_sdk::invocation::sha256(&canonical_bytes));
         let args_digest_hex = hex::encode(descriptor_bound.envelope().args_digest);
         let expires_at_unix_ms = unix_ms_after(options.expires_in);
-        let signer_policy = SignerPolicy {
-            mode: if options.provider_managed_signing {
-                SignerPolicyMode::ProviderManagedSigning
-            } else {
-                SignerPolicyMode::CallerSigning
-            },
-            signer_id: options.signer_id.unwrap_or_default(),
-            policy_ref: options.policy_ref.unwrap_or_default(),
-            expires_at_unix_ms,
-        };
+        let signer_policy = options.into_signer_policy(expires_at_unix_ms)?;
         Ok(PreparedInvocation {
             draft: self.clone(),
             request_id: fresh_prepare_request_id(),
@@ -623,6 +614,51 @@ impl Default for PrepareOptions {
             provider_managed_signing: false,
         }
     }
+}
+
+#[cfg(feature = "axon-pb")]
+impl PrepareOptions {
+    fn into_signer_policy(self, expires_at_unix_ms: u64) -> Result<SignerPolicy> {
+        let mode = if self.provider_managed_signing {
+            SignerPolicyMode::ProviderManagedSigning
+        } else {
+            SignerPolicyMode::CallerSigning
+        };
+        let signer_id = optional_prepare_policy_value(self.signer_id, "signer_id")?;
+        let policy_ref = optional_prepare_policy_value(self.policy_ref, "policy_ref")?;
+        if mode == SignerPolicyMode::ProviderManagedSigning {
+            if signer_id.is_none() {
+                return Err(DaemonError::InvalidInvocation(
+                    "provider-managed prepare requires signer_id".to_string(),
+                ));
+            }
+            if policy_ref.is_none() {
+                return Err(DaemonError::InvalidInvocation(
+                    "provider-managed prepare requires policy_ref".to_string(),
+                ));
+            }
+        }
+        Ok(SignerPolicy {
+            mode,
+            signer_id: signer_id.unwrap_or_default(),
+            policy_ref: policy_ref.unwrap_or_default(),
+            expires_at_unix_ms,
+        })
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+fn optional_prepare_policy_value(raw: Option<String>, field: &str) -> Result<Option<String>> {
+    raw.map(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            return Err(DaemonError::InvalidInvocation(format!(
+                "prepare signer policy {field} must not be blank"
+            )));
+        }
+        Ok(trimmed.to_string())
+    })
+    .transpose()
 }
 
 /// Prepared canonical signing material. This object is not
@@ -1816,6 +1852,65 @@ mod tests {
             "provider-key-inventory:sha256:test-policy"
         );
         assert!(signed.policy().expires_at_unix_ms > 0);
+    }
+
+    #[test]
+    fn sdk_prepare_rejects_incomplete_provider_managed_policy() {
+        let hub = crate::core::ura::hub_ura("acme");
+        let observe_ref = descriptor_ref(&hub, "observe.health", "2.4.0");
+        let draft = DaemonInvocation::builder(
+            "easynet:///r/acme/device/dev-a",
+            &hub,
+            &observe_ref,
+            "easynet:///r/acme/device/dev-a",
+            explicit_root([0x17; 16]),
+        )
+        .unwrap()
+        .args_json(&serde_json::json!({"probe": true}))
+        .unwrap()
+        .build_draft()
+        .unwrap();
+
+        for (label, signer_id, policy_ref, expected) in [
+            ("missing signer_id", None, Some("policy/local"), "signer_id"),
+            (
+                "blank signer_id",
+                Some("  "),
+                Some("policy/local"),
+                "signer_id",
+            ),
+            (
+                "missing policy_ref",
+                Some("signer-key-1"),
+                None,
+                "policy_ref",
+            ),
+            (
+                "blank policy_ref",
+                Some("signer-key-1"),
+                Some("  "),
+                "policy_ref",
+            ),
+        ] {
+            let error = draft
+                .prepare(PrepareOptions {
+                    expires_in: Duration::from_secs(60),
+                    signer_id: signer_id.map(str::to_string),
+                    policy_ref: policy_ref.map(str::to_string),
+                    provider_managed_signing: true,
+                })
+                .expect_err(label);
+            let message = error.to_string();
+            assert!(
+                message.contains("provider-managed prepare")
+                    || message.contains("prepare signer policy"),
+                "wrong {label} error: {message}"
+            );
+            assert!(
+                message.contains(expected),
+                "wrong {label} field in error: {message}"
+            );
+        }
     }
 
     #[test]
