@@ -16,7 +16,7 @@ public final class SidecarInvocation {
   private final String abilityURA;
   private final String subjectURA;
   private final List<Integer> invocationNonce;
-  private final Object causalContext;
+  private final Map<String, Object> causalContext;
   private final Map<String, Object> args;
   private final String frameType;
 
@@ -27,7 +27,7 @@ public final class SidecarInvocation {
       String abilityURA,
       String subjectURA,
       List<Integer> invocationNonce,
-      Object causalContext,
+      Map<String, Object> causalContext,
       Map<String, Object> args,
       String frameType) {
     this.callId = requireText(callId, "call_id");
@@ -36,7 +36,8 @@ public final class SidecarInvocation {
     this.abilityURA = requireText(abilityURA, "ability_ura");
     this.subjectURA = requireText(subjectURA, "subject_ura");
     this.invocationNonce = List.copyOf(invocationNonce);
-    this.causalContext = Objects.requireNonNull(causalContext, "causal_context");
+    this.causalContext =
+        Collections.unmodifiableMap(new LinkedHashMap<>(Objects.requireNonNull(causalContext, "causal_context")));
     this.args = Collections.unmodifiableMap(new LinkedHashMap<>(Objects.requireNonNull(args, "args")));
     this.frameType = requireText(frameType, "type");
   }
@@ -88,7 +89,7 @@ public final class SidecarInvocation {
     return invocationNonce;
   }
 
-  public Object causalContext() {
+  public Map<String, Object> causalContext() {
     return causalContext;
   }
 

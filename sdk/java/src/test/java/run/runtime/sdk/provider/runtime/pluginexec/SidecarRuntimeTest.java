@@ -27,7 +27,14 @@ public final class SidecarRuntimeTest {
     check("demo.echo".equals(invocation.abilityURA()), "ability_ura");
     check("easynet:///r/hub/resource/demo".equals(invocation.subjectURA()), "subject_ura");
     check(invocation.invocationNonce().equals(java.util.List.of(1, 2, 3, 4)), "nonce");
+    check("none".equals(invocation.causalContext().get("form")), "causal_context");
     check("hello".equals(invocation.args().get("message")), "args");
+    try {
+      invocation.causalContext().put("form", "mutated");
+      throw new AssertionError("causal_context projection must be immutable");
+    } catch (UnsupportedOperationException expected) {
+      // expected
+    }
   }
 
   static void serveWritesResultFrame() throws Exception {
