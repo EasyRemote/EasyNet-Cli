@@ -9913,8 +9913,8 @@ if resolve is None:
 resolve_body = resolve.group("body")
 if "runtime_owner_ura_from_session(session).ok()" in resolve_body:
     raise SystemExit("ffi_descriptor_runtime_owner:runtime_owner_error_collapsed")
-if "resolve descriptor_ref runtime owner" not in resolve_body:
-    raise SystemExit("ffi_descriptor_runtime_owner:runtime_owner_error_context_missing")
+if ".map_err(DescriptorResolutionError::runtime_owner_unavailable)" not in resolve_body:
+    raise SystemExit("ffi_descriptor_runtime_owner:runtime_owner_typed_error_mapping_missing")
 if "RemoteSystemInvocationIssuer::root_plan(" in resolve_body:
     raise SystemExit("ffi_descriptor_runtime_owner:remote_probe_inline_plan")
 if "invoke_remote_target)" in resolve_body or ".and_then(remote_invoke::invoke_remote_target)" in resolve_body:
@@ -9976,6 +9976,7 @@ for required in (
     "enum DescriptorResolutionError",
     "RuntimeOwnerUnavailable(String)",
     "DescriptorNotFound(String)",
+    "descriptor resolution requires a caller signer",
     "fn abi_projection(&self) -> (i32, ErrorProjection)",
     'code: CALLER_SIGNER_UNAVAILABLE_CODE',
     'code: "DESCRIPTOR_NOT_FOUND"',
@@ -9992,6 +9993,7 @@ if "format!(\"runtime_resolve_descriptor_ref: {error:#}\")" in entry:
 
 for required_test in (
     "runtime_descriptor_resolver_requires_runtime_owner_for_realm_catalog",
+    "runtime owner failure must not expose custody implementation details",
     "runtime_descriptor_resolver_does_not_remote_probe_realm_catalog_miss",
     "runtime_descriptor_resolver_rejects_ability_owner_mismatch_before_catalog_lookup",
     "descriptor_resolution_errors_project_canonical_runtime_codes",

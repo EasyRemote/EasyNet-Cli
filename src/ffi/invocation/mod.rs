@@ -438,8 +438,11 @@ impl DescriptorResolutionError {
         Self::InvalidCatalogPayload(message.into())
     }
 
-    fn runtime_owner_unavailable(message: impl Into<String>) -> Self {
-        Self::RuntimeOwnerUnavailable(message.into())
+    fn runtime_owner_unavailable(_detail: impl Into<String>) -> Self {
+        Self::RuntimeOwnerUnavailable(format!(
+            "{CALLER_SIGNER_UNAVAILABLE_CODE}: descriptor resolution requires a caller signer; \
+             load or provision that identity in the local key service"
+        ))
     }
 
     fn descriptor_not_found(message: impl Into<String>) -> Self {
@@ -1965,11 +1968,8 @@ fn runtime_resolve_descriptor_ref_json(
             "resolve descriptor_ref ability for callee_ura={callee_ura:?} ability={ability:?}: {error}"
         ))
     })?;
-    let runtime_owner_ura = runtime_owner_ura_from_session(session).map_err(|error| {
-        DescriptorResolutionError::runtime_owner_unavailable(format!(
-            "resolve descriptor_ref runtime owner: {error}"
-        ))
-    })?;
+    let runtime_owner_ura = runtime_owner_ura_from_session(session)
+        .map_err(DescriptorResolutionError::runtime_owner_unavailable)?;
     if runtime_owner_ura == callee_ura {
         let catalog = runtime_descriptor_catalog_entries(callee_ura);
         if let Some(resolution) = descriptor_catalog_resolution_from_entries(
@@ -9493,12 +9493,16 @@ mod tests {
 
         let message = error.to_string();
         assert!(
-            message.contains("resolve descriptor_ref runtime owner"),
+            message.contains(CALLER_SIGNER_UNAVAILABLE_CODE)
+                && message.contains("descriptor resolution requires a caller signer"),
             "unexpected descriptor resolver error: {message}"
         );
         assert!(
-            !message.contains("requires a caller signer"),
-            "runtime owner failure must not be reclassified through remote probe state: {message}"
+            !message.contains("resolve descriptor_ref runtime owner")
+                && !message.contains("control discovery")
+                && !message.contains("keyring")
+                && !message.contains("self-identity"),
+            "runtime owner failure must not expose custody implementation details: {message}"
         );
         assert!(
             !message.contains("offline-daemon.sock"),
@@ -9517,14 +9521,23 @@ mod tests {
         assert_eq!(projection.code, "DESCRIPTOR_NOT_FOUND");
         assert_eq!(projection.stage, "routing");
 
-        let (abi_code, projection) =
-            DescriptorResolutionError::runtime_owner_unavailable(
-                "resolve descriptor_ref runtime owner: control discovery /tmp/control.json does not exist",
-            )
-            .abi_projection();
+        let (abi_code, projection) = DescriptorResolutionError::runtime_owner_unavailable(
+            "control discovery /tmp/control.json does not exist",
+        )
+        .abi_projection();
         assert_eq!(abi_code, ERR_PERMISSION_DENIED);
         assert_eq!(projection.code, CALLER_SIGNER_UNAVAILABLE_CODE);
         assert_eq!(projection.stage, "caller_identity");
+
+        let message =
+            DescriptorResolutionError::runtime_owner_unavailable("keyring entry not found")
+                .to_string();
+        assert!(message.contains(CALLER_SIGNER_UNAVAILABLE_CODE));
+        assert!(
+            !message.contains("resolve descriptor_ref runtime owner")
+                && !message.contains("keyring entry not found"),
+            "descriptor resolver must not expose signer custody internals: {message}"
+        );
 
         let (abi_code, projection) =
             DescriptorResolutionError::invalid_catalog_payload(
