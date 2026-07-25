@@ -9537,7 +9537,7 @@ for required in (
     "RuntimeOwnerUnavailable(String)",
     "DescriptorNotFound(String)",
     "fn abi_projection(&self) -> (i32, ErrorProjection)",
-    'code: "CALLER_IDENTITY_UNAVAILABLE"',
+    'code: CALLER_SIGNER_UNAVAILABLE_CODE',
     'code: "DESCRIPTOR_NOT_FOUND"',
     "error.abi_projection()",
 ):
@@ -15397,7 +15397,7 @@ struct ErrorProjection {
 impl DescriptorResolutionError {
     fn abi_projection(&self) -> (i32, ErrorProjection) {
         let code = match self {
-            Self::RuntimeOwnerUnavailable(_) => "CALLER_IDENTITY_UNAVAILABLE",
+            Self::RuntimeOwnerUnavailable(_) => CALLER_SIGNER_UNAVAILABLE_CODE,
             Self::DescriptorNotFound(_) => "DESCRIPTOR_NOT_FOUND",
         };
         (0, ErrorProjection { code })
@@ -15448,7 +15448,7 @@ struct ErrorProjection {
 impl DescriptorResolutionError {
     fn abi_projection(&self) -> (i32, ErrorProjection) {
         let code = match self {
-            Self::RuntimeOwnerUnavailable(_) => "CALLER_IDENTITY_UNAVAILABLE",
+            Self::RuntimeOwnerUnavailable(_) => CALLER_SIGNER_UNAVAILABLE_CODE,
             Self::DescriptorNotFound(_) => "DESCRIPTOR_NOT_FOUND",
         };
         (0, ErrorProjection { code })

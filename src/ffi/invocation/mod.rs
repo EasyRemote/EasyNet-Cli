@@ -476,7 +476,7 @@ impl DescriptorResolutionError {
             Self::RuntimeOwnerUnavailable(_) => (
                 ERR_PERMISSION_DENIED,
                 ErrorProjection {
-                    code: "CALLER_IDENTITY_UNAVAILABLE",
+                    code: CALLER_SIGNER_UNAVAILABLE_CODE,
                     stage: "caller_identity",
                     retry: "never",
                 },
@@ -9523,7 +9523,7 @@ mod tests {
             )
             .abi_projection();
         assert_eq!(abi_code, ERR_PERMISSION_DENIED);
-        assert_eq!(projection.code, "CALLER_IDENTITY_UNAVAILABLE");
+        assert_eq!(projection.code, CALLER_SIGNER_UNAVAILABLE_CODE);
         assert_eq!(projection.stage, "caller_identity");
 
         let (abi_code, projection) =
