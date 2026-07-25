@@ -1453,13 +1453,13 @@ fn description_for_and_input_schema_for_cover_every_published_name() {
             "{name} is missing a description_for arm — add one in daemon::ability::catalog::catalog_metadata"
         );
         let schema = input_schema_for(&name);
-        // The default fallback returns `{"type":"object"}` with
-        // NO other keys. A real arm always pins something more —
+        // The undeclared object projection returns `{"type":"object"}` with
+        // NO other keys. A real authored schema always pins something more —
         // `properties`, `additionalProperties`, `oneOf`, etc. —
         // even for genuinely-no-arg abilities (e.g.
         // `consent.subscribe` declares
-        // `additionalProperties: false`). Distinguishing the
-        // fallback from an authored "no-arg" schema by structure
+        // `additionalProperties: false`). Distinguishing an
+        // undeclared projection from an authored "no-arg" schema by structure
         // (does the object have any key besides `type`?) is
         // strictly stronger than a name allowlist.
         let obj = schema

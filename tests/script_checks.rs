@@ -570,3 +570,11 @@ fn invocation_wire_entity_ref_kind_resolution_boundary_script_holds() {
         "tests/scripts/test_check_invocation_wire_entity_ref_kind_resolution_boundary.sh",
     );
 }
+
+#[test]
+fn catalog_schema_projection_boundary_script_holds() {
+    // Pins catalogue schema publication to declared/undeclared projection
+    // states. Unknown ability names must not be modeled as local fallback
+    // schema branches.
+    run_bash_script("tests/scripts/test_check_catalog_schema_projection_boundary.sh");
+}

@@ -642,33 +642,60 @@ pub fn description_for_owned(name: &str) -> String {
 /// JSON Schema for a published system ability's input. Mirrors
 /// `description_for` — adding an arm here is the second half of
 /// landing a new system ability so it can register against
-/// axon-runtime with a real schema (not the empty-object default).
+/// axon-runtime with an authored schema.
 ///
-/// Unknown names fall back to `{"type":"object"}` — the most
-/// permissive shape that still validates as a JSON Schema. A future
-/// ability that lands without an arm here is callable but appears
-/// as schema-less in MCP `ListTools`; a CI test pins the table
-/// against the live registry to surface that drift.
+/// Undeclared names project through `CatalogSchemaProjection::UndeclaredObject`:
+/// a valid object JSON Schema that preserves the internal distinction between
+/// authored no-arg schemas and missing metadata. CI pins the live registry so
+/// published system abilities cannot accidentally ship in that state.
 pub fn input_schema_for(name: &str) -> serde_json::Value {
-    if let Some(schema) = crate::daemon::plugins::builtin_input_schema_for(name) {
-        return schema;
-    }
-    if let Some(schema) = crate::daemon::plugins::input_schema_for(name) {
-        return schema;
-    }
-    if let Some(schema) = daemon_invocation_contracts::input_schema_for(name) {
-        return schema;
+    CatalogSchemaProjection::for_input_name(name).into_schema()
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum CatalogSchemaProjection {
+    Declared(serde_json::Value),
+    UndeclaredObject,
+}
+
+impl CatalogSchemaProjection {
+    fn for_input_name(name: &str) -> Self {
+        match Self::declared_input_schema(name) {
+            Some(schema) => Self::Declared(schema),
+            None => Self::UndeclaredObject,
+        }
     }
 
-    match name {
+    fn declared_input_schema(name: &str) -> Option<serde_json::Value> {
+        if let Some(schema) = crate::daemon::plugins::builtin_input_schema_for(name) {
+            return Some(schema);
+        }
+        if let Some(schema) = crate::daemon::plugins::input_schema_for(name) {
+            return Some(schema);
+        }
+        if let Some(schema) = daemon_invocation_contracts::input_schema_for(name) {
+            return Some(schema);
+        }
+        authored_static_input_schema(name)
+    }
+
+    fn into_schema(self) -> serde_json::Value {
+        match self {
+            Self::Declared(schema) => schema,
+            Self::UndeclaredObject => serde_json::json!({ "type": "object" }),
+        }
+    }
+}
+
+fn authored_static_input_schema(name: &str) -> Option<serde_json::Value> {
+    Some(match name {
         governance_names::OBSERVE_HEALTH => ping::input_schema(),
         governance_names::OBSERVE_NETWORK_HEALTH => network_health_ability::input_schema(),
         device_names::SESSION_LIST => session_ability::list_input_schema(),
         device_names::SESSION_ATTACH => session_ability::attach_input_schema(),
         agent_names::CHAT_HISTORY_LIST => chat_history_ability::list_input_schema(),
         agent_names::CHAT_HISTORY_GET => chat_history_ability::get_input_schema(),
-        name if name.starts_with("context.") => context_ability::input_schema_for(name)
-            .unwrap_or_else(|| serde_json::json!({"type": "object"})),
+        name if name.starts_with("context.") => return context_ability::input_schema_for(name),
         governance_names::CONSENT_SUBSCRIBE => permission_ability::subscribe_input_schema(),
         governance_names::CONSENT_DECIDE => permission_ability::decide_input_schema(),
         governance_names::CONSENT_LIST_PENDING => permission_ability::list_pending_input_schema(),
@@ -788,7 +815,7 @@ pub fn input_schema_for(name: &str) -> serde_json::Value {
         automation_names::MISSION_THINK => think_ability::input_schema(),
         // RFC-005 v3.2 A1–A8 — media abilities. Same single-source
         // -of-truth pattern as `description_for` above.
-        n if media::input_schema(n).is_some() => media::input_schema(n).unwrap(),
+        name if media::input_schema(name).is_some() => return media::input_schema(name),
         list_resources_ability::ABILITY_META_LIST_RESOURCES => {
             list_resources_ability::input_schema()
         }
@@ -926,8 +953,8 @@ pub fn input_schema_for(name: &str) -> serde_json::Value {
                 }
             }
         }),
-        _ => serde_json::json!({ "type": "object" }),
-    }
+        _ => return None,
+    })
 }
 
 /// Sync bridge so `build_registry_with_services` (sync) can call
@@ -1275,6 +1302,42 @@ mod canonical_contract_tests {
     use crate::daemon::ability::descriptors::{
         AdmissionAction, ReceiptSemantics, ScopeRule, StateTransition, TransitionClass, Visibility,
     };
+
+    #[test]
+    fn catalog_schema_projection_distinguishes_declared_from_undeclared_object() {
+        let declared = CatalogSchemaProjection::for_input_name(governance_names::CONSENT_SUBSCRIBE);
+        assert!(
+            matches!(declared, CatalogSchemaProjection::Declared(_)),
+            "authored no-arg schemas must remain declared, not undeclared object projections"
+        );
+        let declared_schema = declared.into_schema();
+        assert_eq!(declared_schema["type"], "object");
+        assert_eq!(declared_schema["additionalProperties"], false);
+
+        let undeclared =
+            CatalogSchemaProjection::for_input_name("runtime.test.unpublished_schema_probe");
+        assert_eq!(undeclared, CatalogSchemaProjection::UndeclaredObject);
+        assert_eq!(
+            undeclared.into_schema(),
+            serde_json::json!({ "type": "object" })
+        );
+    }
+
+    #[test]
+    fn catalog_schema_projection_treats_context_table_hits_as_declared() {
+        let projection =
+            CatalogSchemaProjection::for_input_name(context_ability::ABILITY_CLIPBOARD_LIST);
+
+        assert!(
+            matches!(projection, CatalogSchemaProjection::Declared(_)),
+            "context.* schemas must pass through declared catalogue projection"
+        );
+        assert_ne!(
+            projection.into_schema(),
+            serde_json::json!({ "type": "object" }),
+            "declared context schema must not collapse to the undeclared object projection"
+        );
+    }
 
     #[test]
     fn authority_rows_reject_every_canonical_contract_difference() {
