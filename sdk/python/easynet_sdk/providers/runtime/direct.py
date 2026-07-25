@@ -56,6 +56,7 @@ DEFAULT_DIAL_TIMEOUT_SECONDS = 3.0
 DEFAULT_INVOKE_TIMEOUT_SECONDS = 60.0
 DEFAULT_DIRECT_STREAM_QUEUE_EVENTS = 1024
 DEFAULT_DIRECT_BIDI_QUEUE_FRAMES = 1024
+CANONICAL_URA_REALM_PREFIX = "easynet:///r/"
 _DIRECT_BIDI_EOF = object()
 _AXON_AUTHORITY_LINK_FIELD = "session" + "_id"
 _TERMINAL_INVOCATION_STATES = frozenset(
@@ -1629,6 +1630,7 @@ def _canonical_receipt_projection(receipt: Any) -> dict[str, object]:
     proof_binding_kind = _authority_binding_kind(proof.binding)
     proof_binding = _facade_authority_binding_projection(proof.binding)
     projection: dict[str, object] = {
+        "receipt_ura": _receipt_ura(receipt),
         "index": int(receipt.index),
         "invocation_id": receipt.invocation_id,
         "receipt_type": receipt.receipt_type,
@@ -1742,6 +1744,7 @@ def _canonical_receipt_document(receipt: Any) -> dict[str, object]:
             "authority_proof.binding does not match authority_binding"
         )
     return {
+        "receipt_ura": _receipt_ura(receipt),
         "index": str(int(receipt.index)),
         "invocation_id": receipt.invocation_id,
         "receipt_type": receipt.receipt_type,
@@ -1789,6 +1792,31 @@ def _receipt_ref_projection(receipt: Any) -> dict[str, object]:
         "receipt_hash_hex": receipt.receipt_hash.hex(),
         "receipt_ura": receipt.receipt_ura,
     }
+
+
+def _receipt_ura(receipt: Any) -> str:
+    realm = _realm_from_principal_ura(receipt.callee_binding.ura, "callee_binding.ura")
+    invocation_id = receipt.invocation_id.strip()
+    if "/" in invocation_id:
+        raise _receipt_protocol_error("invocation_id must be owner-local for receipt URA")
+    return (
+        f"{CANONICAL_URA_REALM_PREFIX}{realm}/resource/runtime/invocation/"
+        f"{invocation_id}/receipt/{int(receipt.index)}"
+    )
+
+
+def _realm_from_principal_ura(ura: object, field_name: str) -> str:
+    if not isinstance(ura, str):
+        raise _receipt_protocol_error(f"{field_name} must be a canonical URA")
+    value = ura.strip()
+    _require_receipt_text(value, field_name)
+    if not value.startswith(CANONICAL_URA_REALM_PREFIX):
+        raise _receipt_protocol_error(f"{field_name} must be a canonical URA")
+    suffix = value[len(CANONICAL_URA_REALM_PREFIX) :]
+    realm = suffix.split("/", 1)[0].strip()
+    if not realm:
+        raise _receipt_protocol_error(f"{field_name} is missing realm")
+    return realm
 
 
 def _causal_binding_projection(context: Any) -> tuple[str, dict[str, object]]:

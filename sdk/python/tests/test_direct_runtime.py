@@ -183,6 +183,10 @@ def _assert_complete_receipt_projection(
     test: unittest.TestCase,
     receipt: dict[str, object],
 ) -> None:
+    test.assertRegex(
+        cast(str, receipt["receipt_ura"]),
+        r"^easynet:///r/example/resource/runtime/invocation/.+/receipt/[0-9]+$",
+    )
     test.assertEqual(receipt["descriptor_version"], "1.0.0")
     test.assertEqual(receipt["schema_hash_hex"], "21" * 32)
     test.assertEqual(receipt["impl_hash_hex"], "31" * 32)

@@ -5727,12 +5727,19 @@ for required in (
     "def _runtime_resolve_descriptor_ref(",
     '"code":"DESCRIPTOR_NOT_FOUND"',
     '"stage":"routing"',
-    "test_descriptor_diagnostics_owner_mismatch_is_descriptor_not_found",
     "test_descriptor_resolution_projects_native_last_error",
     "ErrorCode.DESCRIPTOR_NOT_FOUND",
 ):
     if required not in py_cabi + "\n" + py_cabi_test:
         raise SystemExit(f"sdk_python_cabi_descriptor_error_contract_missing:{required}")
+for retired in (
+    "resolveDescriptorRefFromDiagnostics",
+    "_resolve_descriptor_ref_from_diagnostics",
+    "test_descriptor_diagnostics_owner_mismatch_is_descriptor_not_found",
+    "TestResolveDescriptorRefFromDiagnostics",
+):
+    if retired in go_cabi + "\n" + go_cabi_test + "\n" + py_cabi + "\n" + py_cabi_test:
+        raise SystemExit(f"sdk_cabi_descriptor_diagnostics_resolver_retired:{retired}")
 py_resolver_start = py_cabi_test.find("def _runtime_resolve_descriptor_ref(")
 py_resolver_end = py_cabi_test.find("def _invocation_invoke(", py_resolver_start)
 py_resolver = py_cabi_test[py_resolver_start:py_resolver_end if py_resolver_end >= 0 else len(py_cabi_test)]
@@ -22231,7 +22238,7 @@ EOF
     '    self.last_error_json = b'\''{"code":"NOT_FOUND"}'\''' \
     > "$tmp/sdk-cabi-descriptor-error-generic/sdk/python/easynet_sdk/_cabi.py"
   printf '%s\n' \
-    'def test_descriptor_diagnostics_owner_mismatch_is_descriptor_not_found():' \
+    'def test_descriptor_resolution_projects_native_last_error():' \
     '    assert ErrorCode.DESCRIPTOR_NOT_FOUND' \
     > "$tmp/sdk-cabi-descriptor-error-generic/sdk/python/tests/test_cabi.py"
   if ( check_sdk_cabi_descriptor_error_projection_contract "$tmp/sdk-cabi-descriptor-error-generic" ) >/dev/null 2>&1; then
@@ -22275,7 +22282,6 @@ _ = '{"code":"DESCRIPTOR_NOT_FOUND"}'
 _ = '"stage":"routing"'
 EOF
   cat >"$tmp/sdk-cabi-runtime-host-role-legacy/sdk/python/tests/test_cabi.py" <<'EOF'
-def test_descriptor_diagnostics_owner_mismatch_is_descriptor_not_found(): pass
 def test_descriptor_resolution_projects_native_last_error(): pass
 def test_runtime_host_start_rejects_unsupported_combined_mode(): pass
 def test_runtime_host_status_rejects_retired_product_modes(): pass

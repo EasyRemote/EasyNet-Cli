@@ -5836,25 +5836,26 @@ if python_runtime.exists():
         )
 if python_cabi.exists():
     text = source(python_cabi)
-    for token, detail in (
-        (
-            'request.get("call_mode") or "rpc"',
-            "Python C ABI diagnostics resolver must not default request call_mode to rpc",
-        ),
-        (
-            'entry.get("call_mode") or "rpc"',
-            "Python C ABI diagnostics resolver must not default catalog entry call_mode to rpc",
-        ),
-    ):
-        if token in text:
-            add("R60_SDK_DESCRIPTOR_CALL_MODE_NORMALIZATION_FORK", python_cabi, 1, detail)
-    if '_required_string(request, "call_mode")' not in text:
-        add(
-            "R60_SDK_DESCRIPTOR_CALL_MODE_NORMALIZATION_FORK",
-            python_cabi,
-            1,
-            "Python C ABI diagnostics resolver must require request call_mode",
-        )
+    if "_resolve_descriptor_ref_from_diagnostics" in text:
+        for token, detail in (
+            (
+                'request.get("call_mode") or "rpc"',
+                "Python C ABI diagnostics resolver must not default request call_mode to rpc",
+            ),
+            (
+                'entry.get("call_mode") or "rpc"',
+                "Python C ABI diagnostics resolver must not default catalog entry call_mode to rpc",
+            ),
+        ):
+            if token in text:
+                add("R60_SDK_DESCRIPTOR_CALL_MODE_NORMALIZATION_FORK", python_cabi, 1, detail)
+        if '_required_string(request, "call_mode")' not in text:
+            add(
+                "R60_SDK_DESCRIPTOR_CALL_MODE_NORMALIZATION_FORK",
+                python_cabi,
+                1,
+                "Python C ABI diagnostics resolver must require request call_mode",
+            )
 if go_runtime.exists():
     text = source(go_runtime)
     for token, detail in (
@@ -5878,25 +5879,26 @@ if go_runtime.exists():
         )
 if go_cabi_runtime.exists():
     text = source(go_cabi_runtime)
-    for token, detail in (
-        (
-            'callMode = "rpc"',
-            "Go C ABI diagnostics resolver must not default request call_mode to rpc",
-        ),
-        (
-            'entryCallMode = "rpc"',
-            "Go C ABI diagnostics resolver must not default catalog entry call_mode to rpc",
-        ),
-    ):
-        if token in text:
-            add("R60_SDK_DESCRIPTOR_CALL_MODE_NORMALIZATION_FORK", go_cabi_runtime, 1, detail)
-    if 'invalidRuntimePayload("call_mode is required for descriptor_ref resolution", nil)' not in text:
-        add(
-            "R60_SDK_DESCRIPTOR_CALL_MODE_NORMALIZATION_FORK",
-            go_cabi_runtime,
-            1,
-            "Go C ABI diagnostics resolver must require request call_mode",
-        )
+    if "resolveDescriptorRefFromDiagnostics" in text:
+        for token, detail in (
+            (
+                'callMode = "rpc"',
+                "Go C ABI diagnostics resolver must not default request call_mode to rpc",
+            ),
+            (
+                'entryCallMode = "rpc"',
+                "Go C ABI diagnostics resolver must not default catalog entry call_mode to rpc",
+            ),
+        ):
+            if token in text:
+                add("R60_SDK_DESCRIPTOR_CALL_MODE_NORMALIZATION_FORK", go_cabi_runtime, 1, detail)
+        if 'invalidRuntimePayload("call_mode is required for descriptor_ref resolution", nil)' not in text:
+            add(
+                "R60_SDK_DESCRIPTOR_CALL_MODE_NORMALIZATION_FORK",
+                go_cabi_runtime,
+                1,
+                "Go C ABI diagnostics resolver must require request call_mode",
+            )
 if rust_ffi_invocation.exists():
     text = source(rust_ffi_invocation)
     for token, detail in (

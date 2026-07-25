@@ -24,7 +24,6 @@ from easynet_sdk._cabi import (
     _project_cabi_ordered_event,
     _runtime_status_from_cabi,
     _runtime_start_config_for_cabi,
-    _resolve_descriptor_ref_from_diagnostics,
 )
 from easynet_sdk.providers.runtime.lifecycle import (
     RuntimeHostMode,
@@ -32,82 +31,6 @@ from easynet_sdk.providers.runtime.lifecycle import (
 )
 
 from test_runtime import canonical_runtime_receipt_pair, complete_draft
-
-
-class CABIDescriptorDiagnosticsTests(unittest.TestCase):
-    def test_descriptor_diagnostics_owner_mismatch_is_descriptor_not_found(self) -> None:
-        diagnostics = {
-            "descriptor_catalog": {
-                "source": "test",
-                "entries": [
-                    {
-                        "name": "page.fetch",
-                        "owner_ura": "easynet:///r/test/agent/alice.pages",
-                        "ability_ura": "easynet:///r/test/ability/alice.pages.page.fetch",
-                        "descriptor_ref": "easynet:///r/test/ability/alice.pages.page.fetch@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
-                        "call_mode": "rpc",
-                    }
-                ],
-            }
-        }
-
-        with self.assertRaises(SDKError) as raised:
-            _resolve_descriptor_ref_from_diagnostics(
-                b'{"callee_ura":"easynet:///r/test/device/dev-a","ability":"page.fetch","call_mode":"rpc"}',
-                diagnostics,
-            )
-
-        self.assertEqual(raised.exception.code, ErrorCode.DESCRIPTOR_NOT_FOUND)
-        self.assertIn("descriptor_ref not found", raised.exception.message)
-
-    def test_descriptor_diagnostics_requires_call_mode(self) -> None:
-        diagnostics = {
-            "descriptor_catalog": {
-                "entries": [
-                    {
-                        "name": "page.fetch",
-                        "owner_ura": "easynet:///r/test/device/dev-a",
-                        "ability_ura": "easynet:///r/test/ability/device.dev-a.page.fetch",
-                        "descriptor_ref": "easynet:///r/test/ability/device.dev-a.page.fetch@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
-                        "call_mode": "rpc",
-                    }
-                ]
-            }
-        }
-
-        with self.assertRaises(SDKError) as raised:
-            _resolve_descriptor_ref_from_diagnostics(
-                b'{"callee_ura":"easynet:///r/test/device/dev-a","ability":"page.fetch"}',
-                diagnostics,
-            )
-
-        self.assertEqual(raised.exception.code, ErrorCode.INVALID_ARGUMENT)
-        self.assertIn("call_mode is required", raised.exception.message)
-
-    def test_descriptor_diagnostics_rejects_matching_row_without_descriptor_ref(self) -> None:
-        diagnostics = {
-            "descriptor_catalog": {
-                "source": "test",
-                "entries": [
-                    {
-                        "name": "page.fetch",
-                        "owner_ura": "easynet:///r/test/device/dev-a",
-                        "ability_ura": "easynet:///r/test/ability/device.dev-a.page.fetch",
-                        "call_mode": "rpc",
-                    }
-                ],
-            }
-        }
-
-        with self.assertRaises(SDKError) as raised:
-            _resolve_descriptor_ref_from_diagnostics(
-                b'{"callee_ura":"easynet:///r/test/device/dev-a","ability":"page.fetch","call_mode":"rpc"}',
-                diagnostics,
-            )
-
-        self.assertEqual(raised.exception.code, ErrorCode.INVALID_ARGUMENT)
-        self.assertIn("descriptor catalog row", raised.exception.message)
-        self.assertIn("missing descriptor_ref", raised.exception.message)
 
 
 class FakeSymbol:
