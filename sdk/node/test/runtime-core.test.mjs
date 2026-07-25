@@ -1336,6 +1336,29 @@ test("authority metadata binds session subject to owner and session id", () => {
   );
 });
 
+test("runtime authority rejects path-substring owner subject before dispatch", () => {
+  assert.throws(
+    () =>
+      new sdk.InvocationBuilder()
+        .withCallerURA(caller)
+        .withCalleeURA(callee)
+        .withDescriptorRef(descriptor)
+        .withSubjectURA("easynet:///r/example/device/dev-a/resource/user.alice/runtime-state/read")
+        .withNonceBase64(nonce)
+        .withCausalContext({ form: "none" })
+        .withJSONArgs({ probe: true })
+        .withContentType("application/json")
+        .withMetadata({
+          [sdk.SESSION_AUTHORITY_METADATA_KEY]: sessionValue(),
+        })
+        .build(),
+    (error) =>
+      error instanceof sdk.SDKError &&
+      error.code === sdk.ErrorCode.AUTHORITY_SUBJECT_MISMATCH &&
+      /session authority subject does not admit invocation subject_ura/.test(error.message),
+  );
+});
+
 test("session history preflight rejects authority subject mismatch before receipt provider", async () => {
   let providerCalls = 0;
   const history = new sdk.SessionHistoryOperations({
@@ -1372,6 +1395,43 @@ test("session history preflight rejects authority subject mismatch before receip
       error.code === sdk.ErrorCode.AUTHORITY_SUBJECT_MISMATCH &&
       error.stage === "history" &&
       /session authority subject does not admit receipt query subject_ura/.test(error.message),
+  );
+  assert.equal(providerCalls, 0);
+});
+
+test("session history preflight rejects path-substring owner subject before receipt provider", async () => {
+  let providerCalls = 0;
+  const history = new sdk.SessionHistoryOperations({
+    list: () => {
+      providerCalls += 1;
+      return {
+        records: [],
+        next_cursor: "",
+        limit: 50,
+        source: "invocation.history.list",
+      };
+    },
+  });
+
+  const request = new sdk.ReceiptListRequest({
+    call: {
+      caller_ura: caller,
+      callee_ura: callee,
+      subject_ura: "easynet:///r/example/device/dev-a/resource/user.alice/runtime-state/read",
+      metadata: {
+        [sdk.SESSION_AUTHORITY_METADATA_KEY]: historySessionValue(),
+      },
+    },
+    limit: 50,
+  });
+
+  await assert.rejects(
+    () => history.list(request),
+    (error) =>
+      error instanceof sdk.SDKError &&
+      error.code === sdk.ErrorCode.INVALID_INVOCATION &&
+      error.stage === "history" &&
+      /runtime-state read subject/.test(error.message),
   );
   assert.equal(providerCalls, 0);
 });

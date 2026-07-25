@@ -2732,21 +2732,15 @@ export function runtimeStateReadSubjectURA(realm, userID) {
 }
 
 function isRuntimeStateReadSubjectURA(subjectURA) {
-  const parsed = parseCanonicalURANullable(subjectURA);
-  if (!parsed || !parsed.path.startsWith("resource/user.")) {
+  const subject = canonicalResourceSubject(subjectURA);
+  if (!subject || !subject.ownerID.startsWith("user.")) {
     return false;
   }
-  const resource = parsed.path.slice("resource/user.".length);
-  const slash = resource.indexOf("/");
-  if (slash <= 0) {
-    return false;
-  }
-  const ownerUserID = resource.slice(0, slash).trim();
-  const subjectPath = resource.slice(slash + 1).trim();
+  const ownerUserID = subject.ownerID.slice("user.".length).trim();
   return (
     ownerUserID !== "" &&
     !containsAllZeroPrincipal(ownerUserID) &&
-    subjectPath === RUNTIME_STATE_READ_SUBJECT_PATH
+    subject.resourcePath === RUNTIME_STATE_READ_SUBJECT_PATH
   );
 }
 
@@ -3697,35 +3691,50 @@ function sessionAuthorityAdmitsSubject(authority, subjectURA) {
   if (authority.subjectURA.trim() === subject) {
     return true;
   }
-  const owner = resourceOwnerId(subject);
-  if (!owner) {
+  const resource = canonicalResourceSubject(subject);
+  if (!resource) {
     return false;
   }
   const ownerUserID = authority.sessionOwnerUserID.trim();
   if (!ownerUserID) {
     return false;
   }
-  if (owner === `user.${ownerUserID}`) {
+  if (resource.ownerID === `user.${ownerUserID}`) {
     return true;
   }
-  if (!owner.startsWith("agent.")) {
+  if (!resource.ownerID.startsWith("agent.")) {
     return false;
   }
-  const rest = owner.slice("agent.".length);
+  const rest = resource.ownerID.slice("agent.".length);
   const dot = rest.indexOf(".");
   return dot > 0 && rest.slice(0, dot) === ownerUserID;
 }
 
-function resourceOwnerId(ura) {
-  const marker = "/resource/";
-  const index = ura.indexOf(marker);
-  if (index < 0) {
-    return "";
+function canonicalResourceSubject(subjectURA) {
+  if (containsAllZeroPrincipal(subjectURA)) {
+    return null;
   }
-  const rest = ura.slice(index + marker.length);
-  const slash = rest.indexOf("/");
-  const owner = slash < 0 ? rest : rest.slice(0, slash);
-  return owner.trim();
+  const parsed = parseCanonicalURANullable(subjectURA);
+  if (!parsed || !parsed.path.startsWith("resource/")) {
+    return null;
+  }
+  const resource = parsed.path.slice("resource/".length);
+  const slash = resource.indexOf("/");
+  if (slash <= 0 || slash === resource.length - 1) {
+    return null;
+  }
+  const ownerID = resource.slice(0, slash).trim();
+  const resourcePath = resource.slice(slash + 1).trim();
+  if (
+    ownerID === "" ||
+    ownerID.includes("/") ||
+    resourcePath === "" ||
+    resourcePath.startsWith("/") ||
+    resourcePath.includes("//")
+  ) {
+    return null;
+  }
+  return { ownerID, resourcePath };
 }
 
 function authorityAudienceAdmits(audience, calleeURA) {

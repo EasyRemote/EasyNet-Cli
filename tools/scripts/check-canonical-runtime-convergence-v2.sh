@@ -7678,6 +7678,7 @@ for required in (
     "function sessionOwnerURAFromSubject(",
     "function userIDFromUserURA(",
     "function canonicalAuthoritySubject(",
+    "function canonicalResourceSubject(",
     "session_owner_ura",
     "creator_principal_ura",
     "session authority subject_ura must be a canonical user or session subject",
@@ -7728,10 +7729,34 @@ for token in (
     if token not in subject_body:
         raise SystemExit(f"node_session_authority_subject_classifier_missing:{token}")
 
+resource_body = body_after(
+    "function canonicalResourceSubject(subjectURA)",
+    "function authorityAudienceAdmits",
+)
+for token in (
+    'parsed.path.startsWith("resource/")',
+    'const ownerID = resource.slice(0, slash).trim()',
+    'const resourcePath = resource.slice(slash + 1).trim()',
+    "ownerID.includes(\"/\")",
+    "resourcePath.includes(\"//\")",
+):
+    if token not in resource_body:
+        raise SystemExit(f"node_session_authority_resource_subject_parser_missing:{token}")
+for forbidden in (
+    "function resourceOwnerId(",
+    'const marker = "/resource/"',
+    'ura.indexOf(marker)',
+):
+    if forbidden in node:
+        raise SystemExit(f"node_session_authority_retired_resource_substring_parser:{forbidden}")
+
 for required_test in (
     "authority metadata binds session subject to owner and session id",
     "authority client projects canonical principal URAs to current session wire",
     "authority client rejects conflicting canonical principal URAs",
+    "runtime authority rejects path-substring owner subject before dispatch",
+    "session history preflight rejects path-substring owner subject before receipt provider",
+    "easynet:///r/example/device/dev-a/resource/user.alice/runtime-state/read",
     "easynet:///r/example/user/bob",
     "easynet:///r/example/resource/user.alice/session/session-2",
     "session_owner_ura",
