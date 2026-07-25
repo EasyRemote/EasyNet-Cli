@@ -17,13 +17,13 @@ const URAScheme = axonsdk.URAScheme
 type URAKind string
 
 const (
-	URAKindUnknown  URAKind = "unknown"
-	URAKindUser     URAKind = "user"
-	URAKindDevice   URAKind = "device"
-	URAKindAgent    URAKind = "agent"
-	URAKindAbility  URAKind = "ability"
-	URAKindHub      URAKind = "hub"
-	URAKindResource URAKind = "resource"
+	URAKindUnknown   URAKind = "unknown"
+	URAKindUser      URAKind = "user"
+	URAKindDevice    URAKind = "device"
+	URAKindAgent     URAKind = "agent"
+	URAKindAbility   URAKind = "ability"
+	URAKindAuthority URAKind = "authority"
+	URAKindResource  URAKind = "resource"
 )
 
 type ResourceNamespace string
@@ -72,9 +72,9 @@ type ParsedAbility struct {
 }
 
 const (
-	abilityOwnerHub    AbilityOwnerKind = "hub"
-	AbilityOwnerAgent  AbilityOwnerKind = "agent"
-	abilityOwnerDevice AbilityOwnerKind = "device"
+	abilityOwnerAuthority AbilityOwnerKind = "authority"
+	AbilityOwnerAgent     AbilityOwnerKind = "agent"
+	abilityOwnerDevice    AbilityOwnerKind = "device"
 )
 
 func IsResourceNamespace(namespace string) bool {
@@ -161,11 +161,11 @@ func AbilityURA(realm, userID, agentID, abilityID string) string {
 	return axonsdk.AbilityURA(realm, userID, agentID, abilityID)
 }
 
-func HubURA(realm string) string {
+func AuthorityURA(realm string) string {
 	return axonsdk.AuthorityURA(realm)
 }
 
-func HubAbilityURA(realm, abilityName string) string {
+func AuthorityAbilityURA(realm, abilityName string) string {
 	return axonsdk.AuthorityAbilityURA(realm, abilityName)
 }
 
@@ -234,9 +234,6 @@ func ParseURAParts(raw string) (ParsedURA, error) {
 func parsedURAFromAxon(parts axonsdk.ParsedURA) ParsedURA {
 	resourceNamespace, resourcePath := projectRuntimeResourcePath(parts.Kind, parts.Path)
 	kind := URAKind(string(parts.Kind))
-	if parts.Kind == axonsdk.URAKindAuthority {
-		kind = URAKindHub
-	}
 	return ParsedURA{
 		Raw:               parts.Raw,
 		Realm:             parts.Realm,
@@ -265,7 +262,7 @@ func parsedAbilityFromAxon(ability axonsdk.ParsedAbility) ParsedAbility {
 func abilityOwnerFromAxon(owner axonsdk.AbilityOwner) AbilityOwner {
 	kind := AbilityOwnerKind(string(owner.Kind))
 	if owner.Kind == axonsdk.AbilityOwnerAuthority {
-		kind = abilityOwnerHub
+		kind = abilityOwnerAuthority
 	}
 	return AbilityOwner{
 		Kind:    kind,

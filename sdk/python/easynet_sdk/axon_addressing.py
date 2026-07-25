@@ -167,8 +167,8 @@ class AddressingClient:
             agent_id=_clean(agent_id, "agent_id"),
         )
 
-    def hub_ura(self, realm: str) -> str:
-        return self._build("hub", realm=_clean(realm, "realm"))
+    def authority_ura(self, realm: str) -> str:
+        return self._build("authority", realm=_clean(realm, "realm"))
 
     def resource_ura(self, owner_ura: str, path: str) -> str:
         return self._build(
@@ -301,8 +301,8 @@ def device_agent_ura(realm: str, device_id: str, agent_id: str) -> str:
     )
 
 
-def hub_ura(realm: str) -> str:
-    return _with_client(lambda client: client.hub_ura(realm))
+def authority_ura(realm: str) -> str:
+    return _with_client(lambda client: client.authority_ura(realm))
 
 
 def resource_ura(owner_ura: str, path: str) -> str:
@@ -434,7 +434,7 @@ class AxonAddressingTransport:
                     ),
                 )
             raise ParseError(f"unsupported agent owner_kind {owner_kind!r}")
-        if kind == "hub":
+        if kind == "authority":
             return cast(
                 str, self._addressing.authority_ura(_required_string(request, "realm"))
             )
@@ -542,11 +542,11 @@ def _ura_projection(addressing: CanonicalUraFacade, parsed: ParsedURA) -> bytes:
 
 
 def _runtime_ura_kind(canonical_kind: str) -> str:
-    return "hub" if canonical_kind == "authority" else canonical_kind
+    return canonical_kind
 
 
 def _runtime_ability_owner_kind(canonical_kind: str) -> str:
-    return "hub" if canonical_kind == "authority" else canonical_kind
+    return canonical_kind
 
 
 def _required_ability(parsed: ParsedURA) -> Any:

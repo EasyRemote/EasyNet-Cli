@@ -772,6 +772,9 @@ check_python_sdk_runtime_addressing_kind_contract() {
   if ! rg -q 'def _runtime_ability_owner_kind\(canonical_kind: str\) -> str:' "$addressing"; then
     fail "Python SDK Addressing must name ability owner projection as runtime state"
   fi
+  if rg -n '"hub"|hub_ura|return "hub" if canonical_kind == "authority"' "$addressing"; then
+    fail "Python SDK Addressing must not lower canonical Authority to product Hub vocabulary"
+  fi
 }
 
 check_advertise_agent_ingress_contract() {

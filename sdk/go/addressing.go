@@ -148,8 +148,8 @@ func (a *CanonicalAddressing) BuildURA(ctx context.Context, req CanonicalURABuil
 				nil,
 			)
 		}
-	case "hub":
-		raw = HubURA(req.Realm)
+	case "authority":
+		raw = AuthorityURA(req.Realm)
 	case "ability":
 		raw = OwnerAbilityURA(req.OwnerURA, req.AbilityName)
 	case "resource":
@@ -326,8 +326,8 @@ func ownerURAFromAbilityParts(parts ParsedURA) string {
 		return AgentURA(parts.Realm, parts.AbilityOwner.UserID, parts.AbilityOwner.AgentID)
 	case abilityOwnerDevice:
 		return DeviceURA(parts.Realm, parts.AbilityOwner.OwnerID)
-	case abilityOwnerHub:
-		return HubURA(parts.Realm)
+	case abilityOwnerAuthority:
+		return AuthorityURA(parts.Realm)
 	default:
 		return ""
 	}
@@ -350,8 +350,8 @@ func canonicalOwnerResourceURA(ownerURA string, path string) (string, error) {
 		} else {
 			ownerID = "agent." + parts.UserID + "." + parts.AgentID
 		}
-	case URAKindHub:
-		ownerID = "hub"
+	case URAKindAuthority:
+		ownerID = "authority"
 	default:
 		return "", invalidProfilePayload(addressingProfile, fmt.Sprintf("owner_ura kind %q cannot own protocol resources", parts.Kind), nil)
 	}

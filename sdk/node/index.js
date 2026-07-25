@@ -3690,7 +3690,7 @@ class RuntimeAbilityProjection {
       return `device.${clean.slice(deviceIndex + device.length).split(/[/?#]/, 1)[0]}`;
     }
     if (clean.endsWith("/authority") && clean.startsWith(this.realmPrefix)) {
-      return `hub.${clean.slice(this.realmPrefix.length, -"/authority".length)}`;
+      return "authority";
     }
     return "";
   }

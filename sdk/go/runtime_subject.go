@@ -18,7 +18,7 @@ func descriptorBoundSubjectURA(ctx context.Context, addressing Addressing, subje
 	switch parts.Kind {
 	case URAKindAgent, URAKindAbility, URAKindDevice, URAKindResource:
 		return subjectURA, nil
-	case URAKindUser, URAKindHub:
+	case URAKindUser, URAKindAuthority:
 		if addressing == nil {
 			return "", invalidProfileClient(addressingProfile, "addressing provider is required for descriptor-bound subject projection")
 		}

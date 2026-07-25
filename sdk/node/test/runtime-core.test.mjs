@@ -955,6 +955,35 @@ test("runtime ability projection is canonical for authority scope admission", ()
   );
 });
 
+test("runtime ability projection strips canonical authority owner prefix", () => {
+  const subjectURA = "easynet:///r/example/resource/user.alice/invoke/namespace.resolve";
+  const proof = sdk.DelegationProof.fromMetadata(
+    authorityValue({
+      issuer_ura: "easynet:///r/example/user/alice",
+      subject_ura: subjectURA,
+      caller_ura: caller,
+      audience: "easynet:///r/example/authority",
+      scopes: ["namespace.resolve"],
+      issued_at_ms: 10,
+      expires_at_ms: 20,
+    }),
+  );
+  const authorized = new sdk.InvocationBuilder()
+    .withCallerURA(caller)
+    .withCalleeURA("easynet:///r/example/authority")
+    .withDescriptorRef(
+      "easynet:///r/example/ability/authority.namespace.resolve@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read",
+    )
+    .withSubjectURA(subjectURA)
+    .withNonceBase64(nonce)
+    .withCausalContext({ form: "none" })
+    .withJSONArgs({})
+    .withContentType("application/json")
+    .withAuthorityMetadata(proof.metadata())
+    .build();
+  assert.equal(authorized.metadata[sdk.DELEGATION_METADATA_KEY], proof.metadataValue);
+});
+
 test("authority client projects canonical principal URAs to current session wire", async () => {
   const payload = {
     issuer_ura: caller,

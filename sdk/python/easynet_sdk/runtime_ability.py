@@ -134,7 +134,7 @@ class RuntimeAbilityClient:
         _validate_call(call)
         ability_name = _required_text(ability_name, "ability name")
         subject = self._addressing.parse_ura(call.subject_ura.strip())
-        if subject.kind in {"user", "hub"}:
+        if subject.kind in {"user", "authority"}:
             subject_ura = self._addressing.descriptor_bound_resource_subject_ura(
                 subject.ura, f"invoke/{ability_name}"
             )

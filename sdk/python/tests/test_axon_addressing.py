@@ -46,8 +46,8 @@ class AxonAddressingProviderTests(unittest.TestCase):
                             request["user_id"],
                             request["agent_id"],
                         )
-                elif kind == "hub":
-                    built = addressing.hub_ura(request["realm"])
+                elif kind == "authority":
+                    built = addressing.authority_ura(request["realm"])
                 elif kind == "ability":
                     built = addressing.owner_ability_ura(
                         request["owner_ura"], request["ability_name"]
@@ -117,13 +117,13 @@ class AxonAddressingProviderTests(unittest.TestCase):
         )
         environment.close()
 
-    def test_runtime_projection_maps_authority_to_hub(self) -> None:
+    def test_runtime_projection_preserves_authority_kind(self) -> None:
         environment = SdkEnvironment()
         addressing = environment.addressing_client()
 
-        hub = addressing.parse_ura(addressing.hub_ura("example"))
-        self.assertEqual(hub.kind, "hub")
-        self.assertEqual(hub.components["realm"], "example")
+        authority = addressing.parse_ura(addressing.authority_ura("example"))
+        self.assertEqual(authority.kind, "authority")
+        self.assertEqual(authority.components["realm"], "example")
 
         descriptor = addressing.project_descriptor_ref(
             addressing.owner_ability_descriptor_ref(
@@ -132,7 +132,7 @@ class AxonAddressingProviderTests(unittest.TestCase):
                 "1.0.0",
             )
         )
-        self.assertEqual(descriptor.components["owner_kind"], "hub")
+        self.assertEqual(descriptor.components["owner_kind"], "authority")
         self.assertEqual(
             descriptor.components["owner_ura"],
             "easynet:///r/example/authority",

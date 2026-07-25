@@ -27,8 +27,8 @@
       "components": {"realm": "example", "owner_kind": "device", "device_id": "dev-a", "agent_id": "terminal"}
     },
     {
-      "name": "hub",
-      "request": {"kind": "hub", "realm": "example"},
+      "name": "authority",
+      "request": {"kind": "authority", "realm": "example"},
       "ura": "easynet:///r/example/authority",
       "components": {"realm": "example"}
     },
@@ -48,13 +48,13 @@
       }
     },
     {
-      "name": "hub_ability",
+      "name": "authority_ability",
       "request": {"kind": "ability", "owner_ura": "easynet:///r/example/authority", "ability_name": "federation.resolve"},
       "ura": "easynet:///r/example/ability/authority.federation.resolve",
       "components": {
         "realm": "example",
         "owner_ura": "easynet:///r/example/authority",
-        "owner_kind": "hub",
+        "owner_kind": "authority",
         "ability_name": "federation.resolve",
         "public_name": "federation.resolve",
         "local_registry_ability": "federation.resolve",
@@ -75,7 +75,7 @@
       "ability_ura": "easynet:///r/example/ability/authority.federation.resolve",
       "descriptor_version": "1.0.0",
       "owner_ura": "easynet:///r/example/authority",
-      "owner_kind": "hub",
+      "owner_kind": "authority",
       "public_name": "federation.resolve",
       "local_registry_ability": "federation.resolve"
     }
