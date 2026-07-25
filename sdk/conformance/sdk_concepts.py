@@ -19,9 +19,7 @@ from edge_adapter_policy import (
     validate_policy as validate_edge_adapter_policy,
 )
 from sdk_public_surface_policy import (
-    PRODUCT_NEUTRAL_CUTOVER_REF,
-    canonical_quarantine_reason,
-    is_fallback_signer_item,
+    non_canonical_public_reason,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -175,7 +173,7 @@ def validate_product_neutral_inventory(concepts: dict[str, Any]) -> None:
     for section, languages in graph.items():
         for language, values in languages.items():
             for value in values:
-                if canonical_quarantine_reason(value) is not None:
+                if non_canonical_public_reason(value) is not None:
                     fail(
                         f"canonical_inventory_product_leak:{language}:{section}:{value}"
                     )
@@ -185,7 +183,7 @@ def validate_product_neutral_inventory(concepts: dict[str, Any]) -> None:
         for language, payload in projection.items():
             for section in ("symbols", "members"):
                 for value in payload.get(section, []):
-                    if canonical_quarantine_reason(value) is not None:
+                    if non_canonical_public_reason(value) is not None:
                         fail(
                             "canonical_capability_product_leak:"
                             f"{capability_id}:{language}:{section}:{value}"
@@ -196,7 +194,7 @@ def validate_schema(
     concepts: dict[str, Any], *, check_paths: bool = True
 ) -> dict[str, Any]:
     if (
-        concepts.get("schema_version") != 5
+        concepts.get("schema_version") != 6
         or concepts.get("complete_inventory") is not True
     ):
         fail("concept_schema_version")
@@ -224,81 +222,25 @@ def validate_schema(
         "symbols": concepts.get("languages"),
         "members": concepts.get("members"),
     }
-    quarantined = concepts.get("non_canonical")
-    quarantine_metadata = concepts.get("legacy_quarantine")
+    non_canonical = concepts.get("non_canonical")
+    if "legacy_quarantine" in concepts:
+        fail("legacy_quarantine_retired")
+    if not isinstance(non_canonical, dict) or set(non_canonical) != {
+        "languages",
+        "members",
+    }:
+        fail("non_canonical_graph_required")
     for section, values in graph.items():
         if not isinstance(values, dict) or set(values) != set(PUBLIC_LANGUAGES):
             fail(f"invalid_public_graph:{section}")
-        excluded = quarantined.get("languages" if section == "symbols" else section, {})
-        metadata = quarantine_metadata.get(
-            "languages" if section == "symbols" else section, {}
-        )
+        excluded = non_canonical.get("languages" if section == "symbols" else section, {})
+        if not isinstance(excluded, dict) or set(excluded) != set(PUBLIC_LANGUAGES):
+            fail(f"invalid_non_canonical_graph:{section}")
         for language in PUBLIC_LANGUAGES:
             canonical = values[language]
-            legacy = excluded.get(language)
-            if canonical != sorted(set(canonical)) or legacy != sorted(
-                set(legacy or [])
-            ):
+            retired = excluded.get(language)
+            if canonical != sorted(set(canonical)) or retired != []:
                 fail(f"unsorted_public_graph:{language}:{section}")
-            if set(canonical) & set(legacy):
-                fail(f"public_graph_overlap:{language}:{section}")
-            if set(metadata.get(language, {})) != set(legacy):
-                fail(f"legacy_metadata_not_closed:{language}:{section}")
-            for value, entry in metadata.get(language, {}).items():
-                if is_fallback_signer_item(value):
-                    fail(f"fallback_signer_legacy_export:{language}:{section}:{value}")
-                required = {
-                    "canonical_replacement",
-                    "consumer_cutover_ref",
-                    "removal_phase",
-                    "reason",
-                }
-                if not isinstance(entry, dict) or set(entry) != required:
-                    fail(f"invalid_legacy_metadata:{language}:{section}:{value}")
-                policy_reason = canonical_quarantine_reason(value)
-                if policy_reason is None:
-                    fail(f"unapproved_legacy_quarantine:{language}:{section}:{value}")
-                if entry["reason"] != policy_reason:
-                    fail(
-                        f"legacy_quarantine_reason_mismatch:{language}:{section}:{value}"
-                    )
-                replacements = entry["canonical_replacement"]
-                if (
-                    not isinstance(replacements, list)
-                    or replacements != sorted(set(replacements))
-                    or not replacements
-                ):
-                    fail(f"invalid_legacy_replacement:{language}:{section}:{value}")
-                for reference in replacements:
-                    if reference.startswith(f"languages.{language}."):
-                        target = reference.split(f"languages.{language}.", 1)[1]
-                        valid = target in graph["symbols"][language]
-                    elif reference.startswith(f"members.{language}."):
-                        target = reference.split(f"members.{language}.", 1)[1]
-                        valid = target in graph["members"][language]
-                    elif reference.startswith("capability_inventory."):
-                        target = reference.split(".", 1)[1]
-                        valid = target in concepts.get("capability_inventory", {})
-                    else:
-                        valid = False
-                    if not valid:
-                        fail(f"stale_legacy_replacement:{language}:{section}:{value}")
-                cutover_ref = entry["consumer_cutover_ref"]
-                cutover_path = str(cutover_ref).split("#", 1)[0]
-                if not str(cutover_ref).strip() or (
-                    check_paths
-                    and not str(cutover_ref).startswith(("http://", "https://"))
-                    and not (ROOT / cutover_path).exists()
-                ):
-                    fail(f"stale_consumer_cutover_ref:{language}:{section}:{value}")
-                if entry["removal_phase"] not in {
-                    "quarantined",
-                    "consumer_cutover",
-                    "removal_ready",
-                }:
-                    fail(f"invalid_removal_phase:{language}:{section}:{value}")
-                if not str(entry["reason"]).strip():
-                    fail(f"legacy_reason_required:{language}:{section}:{value}")
 
     capabilities = concepts.get("capabilities")
     inventory = concepts.get("capability_inventory")
@@ -320,9 +262,6 @@ def validate_schema(
     for language in PUBLIC_LANGUAGES:
         expected_items = set(graph["symbols"][language]) | set(
             graph["members"][language]
-        )
-        expected_items |= set(quarantined["languages"][language]) | set(
-            quarantined["members"][language]
         )
         if set(shape_hashes[language]) != expected_items:
             fail(f"shape_inventory_not_closed:{language}")
@@ -486,7 +425,7 @@ def validate_schema(
             category = entry.get("category")
             if category not in PACKAGE_CATEGORIES or not isinstance(path, str):
                 fail(f"invalid_canonical_package:{language}")
-            reason = canonical_quarantine_reason(package_identity(path))
+            reason = non_canonical_public_reason(package_identity(path))
             if reason is not None and category in PRODUCT_NEUTRAL_PACKAGE_CATEGORIES:
                 fail(f"product_branded_canonical_package:{language}:{category}:{path}")
             if check_paths and not (ROOT / path).exists():
@@ -931,7 +870,7 @@ def self_test(tmp: Path) -> None:
     ].pop(value)
     expect(product_leak, "canonical_inventory_product_leak")
 
-    quarantine_cases = {
+    non_canonical_cases = {
         "canonical_invocation_bytes": "Plain canonical/admission helpers",
         "axiom.canonical_invocation_bytes": "Plain canonical/admission helpers",
         "sign_invocation": "Plain canonical/admission helpers",
@@ -951,23 +890,24 @@ def self_test(tmp: Path) -> None:
         "RuntimeModeHub": "Non-URA device/hub",
         "RuntimeAdminAbilityClient.RevokeDevice": "Non-URA device/hub",
     }
-    for item, marker in quarantine_cases.items():
-        reason = canonical_quarantine_reason(item)
+    for item, marker in non_canonical_cases.items():
+        reason = non_canonical_public_reason(item)
         if reason is None or marker not in reason:
-            fail(f"self_test_quarantine_policy:{item}:{reason}")
-    if canonical_quarantine_reason("ParsedURA.DeviceID") is not None:
-        fail("self_test_ura_grammar_quarantine")
+            fail(f"self_test_non_canonical_policy:{item}:{reason}")
+    if non_canonical_public_reason("ParsedURA.DeviceID") is not None:
+        fail("self_test_ura_grammar_policy")
 
-    fallback_quarantine = copy.deepcopy(concepts)
-    fallback_quarantine["non_canonical"]["languages"]["go"].append("GeneratedSubjectAuth")
-    fallback_quarantine["non_canonical"]["languages"]["go"].sort()
-    fallback_quarantine["legacy_quarantine"]["languages"]["go"]["GeneratedSubjectAuth"] = {
-        "canonical_replacement": ["capability_inventory.runtime_signing"],
-        "consumer_cutover_ref": PRODUCT_NEUTRAL_CUTOVER_REF,
-        "removal_phase": "quarantined",
-        "reason": canonical_quarantine_reason("GeneratedSubjectAuth"),
+    retired_surface = copy.deepcopy(concepts)
+    retired_surface["non_canonical"]["languages"]["go"].append("GeneratedSubjectAuth")
+    retired_surface["non_canonical"]["languages"]["go"].sort()
+    expect(retired_surface, "unsorted_public_graph")
+
+    retired_metadata = copy.deepcopy(concepts)
+    retired_metadata["legacy_quarantine"] = {
+        "languages": {language: {} for language in PUBLIC_LANGUAGES},
+        "members": {language: {} for language in PUBLIC_LANGUAGES},
     }
-    expect(fallback_quarantine, "fallback_signer_legacy_export")
+    expect(retired_metadata, "legacy_quarantine_retired")
 
     bad_status_names = copy.deepcopy(concepts)
     bad_status_names["status_canonical_names"]["seam"] = "PublicSeam"
@@ -982,47 +922,6 @@ def self_test(tmp: Path) -> None:
     duplicate_lifecycle_contract = copy.deepcopy(concepts)
     duplicate_lifecycle_contract["lifecycle_actions"] = ["invented"]
     expect(duplicate_lifecycle_contract, "duplicate_lifecycle_contract")
-
-    unapproved_quarantine = copy.deepcopy(concepts)
-    unapproved_value = next(
-        value
-        for value in unapproved_quarantine["languages"]["go"]
-        if canonical_quarantine_reason(value) is None
-    )
-    unapproved_quarantine["languages"]["go"].remove(unapproved_value)
-    unapproved_quarantine["non_canonical"]["languages"]["go"].append(unapproved_value)
-    unapproved_quarantine["non_canonical"]["languages"]["go"].sort()
-    unapproved_quarantine["legacy_quarantine"]["languages"]["go"][unapproved_value] = {
-        "canonical_replacement": ["capability_inventory.runtime_lifecycle"],
-        "consumer_cutover_ref": PRODUCT_NEUTRAL_CUTOVER_REF,
-        "removal_phase": "quarantined",
-        "reason": "test-only quarantine entry",
-    }
-    expect(unapproved_quarantine, "unapproved_legacy_quarantine")
-
-    mismatched_quarantine = copy.deepcopy(concepts)
-    quarantined_section = "languages"
-    quarantined_language = "go"
-    quarantined_value = "start_daemon"
-    if quarantined_value in mismatched_quarantine[quarantined_section][quarantined_language]:
-        mismatched_quarantine[quarantined_section][quarantined_language].remove(
-            quarantined_value
-        )
-    mismatched_quarantine["non_canonical"][quarantined_section][
-        quarantined_language
-    ].append(quarantined_value)
-    mismatched_quarantine["non_canonical"][quarantined_section][
-        quarantined_language
-    ].sort()
-    mismatched_quarantine["legacy_quarantine"][quarantined_section][
-        quarantined_language
-    ][quarantined_value] = {
-        "canonical_replacement": ["capability_inventory.runtime_lifecycle"],
-        "consumer_cutover_ref": PRODUCT_NEUTRAL_CUTOVER_REF,
-        "removal_phase": "quarantined",
-        "reason": "test-only mismatched quarantine reason",
-    }
-    expect(mismatched_quarantine, "legacy_quarantine_reason_mismatch")
 
     invented = copy.deepcopy(concepts)
     invented["capabilities"]["invented"] = {"profile": "runtime_core", "case_ids": []}

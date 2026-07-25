@@ -1,5 +1,5 @@
 {
-  "schema_version": 5,
+  "schema_version": 6,
   "complete_inventory": true,
   "matrix_languages": [
     "rust",
@@ -6483,26 +6483,6 @@
       "node": [],
       "java": [],
       "swift": []
-    }
-  },
-  "legacy_quarantine": {
-    "languages": {
-      "rust": {},
-      "c_abi": {},
-      "go": {},
-      "python": {},
-      "node": {},
-      "java": {},
-      "swift": {}
-    },
-    "members": {
-      "rust": {},
-      "c_abi": {},
-      "go": {},
-      "python": {},
-      "node": {},
-      "java": {},
-      "swift": {}
     }
   },
   "capabilities": {

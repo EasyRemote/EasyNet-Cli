@@ -2,10 +2,6 @@ from __future__ import annotations
 
 import re
 
-DOWNSTREAM_ITEMS: set[str] = set()
-PRODUCT_NEUTRAL_CUTOVER_REF = "docs/spec/daemon-sdk-requirements-v1.md#runtime-provider-surfaces"
-
-
 def is_fallback_signer_item(item: str) -> bool:
     lowered = item.lower()
     tokens = semantic_tokens(item)
@@ -69,7 +65,7 @@ def is_ura_grammar_item(item: str) -> bool:
     )
 
 
-def canonical_quarantine_reason(item: str) -> str | None:
+def non_canonical_public_reason(item: str) -> str | None:
     root = public_root(item)
     tokens = semantic_tokens(item)
     lowered = item.lower()
@@ -91,8 +87,6 @@ def canonical_quarantine_reason(item: str) -> str | None:
         ".run_admission",
     )):
         return "Plain canonical/admission helpers are transitional defects; canonical runtime entry is descriptor-bound proof."
-    if public_root(item) in DOWNSTREAM_ITEMS:
-        return "Federation payload is a downstream provider carrier, not a canonical SDK capability."
     if root in {
         "ControlDiscovery",
         "ControlDiscoveryReader",
@@ -119,7 +113,7 @@ def canonical_quarantine_reason(item: str) -> str | None:
     if root == "RuntimeHostRole":
         return "Current runtime host role values encode topology-bound provider surface, not canonical SDK capability evidence."
     if re.search(r"(?i)easynet|easyremote", item):
-        return "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
+        return "Product-branded public surface; the canonical SDK runtime model must stay product-neutral."
     if re.search(r"(?i)remote_?desktop|voice(call|event|network|\b)", item):
         return "Product media/control carrier belongs to a downstream provider surface, not the canonical runtime capability model."
     if re.search(r"(?i)remote_?control|deploy|discover_nodes|resolve_tenant|abilitypackagedescriptor", item):
@@ -127,7 +121,7 @@ def canonical_quarantine_reason(item: str) -> str | None:
     if "Daemon" in item or "daemon" in tokens:
         return "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
     if "cabi" in tokens or "CABI" in item:
-        return "C ABI transport/provider compatibility surface; canonical SDK runtime concepts must not encode provider binding names."
+        return "C ABI transport/provider surface; canonical SDK runtime concepts must not encode provider binding names."
     retired_address_pattern = (
         r"(^|[^A-Za-z])" + "U" + r"RI([^A-Za-z]|$)"
         r"|\b" + "U" + r"ri\b"

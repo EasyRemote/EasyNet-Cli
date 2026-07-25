@@ -508,8 +508,8 @@ expected_reference = {
         "sha256": hashlib.sha256(axon_vectors_path.read_bytes()).hexdigest(),
     },
 }
-for name, document in (("manifest", manifest), ("matrix", matrix)):
-    if document.get("schema_version") != 5:
+for name, document, schema_version in (("manifest", manifest, 6), ("matrix", matrix, 5)):
+    if document.get("schema_version") != schema_version:
         raise SystemExit(f"{name}:schema_version")
     if document.get("status_canonical_names") != expected_status_names:
         raise SystemExit(f"{name}:status_canonical_names")
@@ -577,20 +577,20 @@ for section in ("languages", "members"):
                 f"fallback_signer_helper_leak:{language}:{section}:{','.join(fallback_leaked)}"
             )
 
-quarantine = manifest.get("non_canonical", {})
+non_canonical = manifest.get("non_canonical", {})
 for section in ("languages", "members"):
-    graph = quarantine.get(section, {})
+    graph = non_canonical.get(section, {})
     for language, values in graph.items():
-        legacy_plain = sorted(plain_helpers & set(values))
-        if legacy_plain:
+        retired_plain = sorted(plain_helpers & set(values))
+        if retired_plain:
             raise SystemExit(
-                f"plain_helper_legacy_export:{language}:{section}:{','.join(legacy_plain)}"
+                f"plain_helper_retired_export:{language}:{section}:{','.join(retired_plain)}"
             )
 for section in ("languages", "members"):
-    graph = quarantine.get(section, {})
+    graph = non_canonical.get(section, {})
     for language, values in graph.items():
         for helper in sorted(fallback_signer_helpers & set(values)):
-            raise SystemExit(f"fallback_signer_legacy_export:{language}:{section}:{helper}")
+            raise SystemExit(f"fallback_signer_retired_export:{language}:{section}:{helper}")
 PY
 }
 
@@ -14957,8 +14957,8 @@ PY
   then
     fail "self-test expected canonical helper leak to fail"
   fi
-  cp "$MANIFEST" "$tmp/plain-legacy-manifest.json"
-  "$PYTHON_BIN" - "$tmp/plain-legacy-manifest.json" <<'PY'
+  cp "$MANIFEST" "$tmp/plain-retired-manifest.json"
+  "$PYTHON_BIN" - "$tmp/plain-retired-manifest.json" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -14968,17 +14968,17 @@ data["non_canonical"]["members"]["rust"].append("axiom.sign_invocation")
 data["non_canonical"]["members"]["rust"].sort()
 path.write_text(json.dumps(data))
 PY
-  if "$PYTHON_BIN" - "$tmp/plain-legacy-manifest.json" "$tmp/matrix.json" <<'PY' >/dev/null 2>&1
+  if "$PYTHON_BIN" - "$tmp/plain-retired-manifest.json" "$tmp/matrix.json" <<'PY' >/dev/null 2>&1
 import json
 import sys
 from pathlib import Path
 manifest = json.loads(Path(sys.argv[1]).read_text())
 plain = {"axiom.sign_invocation"}
 if plain & set(manifest["non_canonical"]["members"]["rust"]):
-    raise SystemExit("plain_helper_legacy_export")
+    raise SystemExit("plain_helper_retired_export")
 PY
   then
-    fail "self-test expected legacy plain helper export to fail"
+    fail "self-test expected retired plain helper export to fail"
   fi
   cp "$MANIFEST" "$tmp/fallback-manifest.json"
   "$PYTHON_BIN" - "$tmp/fallback-manifest.json" <<'PY'
@@ -15003,8 +15003,8 @@ PY
   then
     fail "self-test expected fallback signer leak to fail"
   fi
-  cp "$MANIFEST" "$tmp/fallback-legacy-manifest.json"
-  "$PYTHON_BIN" - "$tmp/fallback-legacy-manifest.json" <<'PY'
+  cp "$MANIFEST" "$tmp/fallback-retired-manifest.json"
+  "$PYTHON_BIN" - "$tmp/fallback-retired-manifest.json" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -15012,25 +15012,19 @@ path = Path(sys.argv[1])
 data = json.loads(path.read_text())
 data["non_canonical"]["languages"]["go"].append("GeneratedSubjectAuth")
 data["non_canonical"]["languages"]["go"].sort()
-data["legacy_quarantine"]["languages"]["go"]["GeneratedSubjectAuth"] = {
-    "canonical_replacement": ["capability_inventory.runtime_invocation_signing"],
-    "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-    "removal_phase": "quarantined",
-    "reason": "Process-local signer fallback is prohibited; canonical SDK signing uses an explicit signer handle or daemon KeyService authority.",
-}
 path.write_text(json.dumps(data))
 PY
-  if "$PYTHON_BIN" - "$tmp/fallback-legacy-manifest.json" "$tmp/matrix.json" <<'PY' >/dev/null 2>&1
+  if "$PYTHON_BIN" - "$tmp/fallback-retired-manifest.json" "$tmp/matrix.json" <<'PY' >/dev/null 2>&1
 import json
 import sys
 from pathlib import Path
 manifest = json.loads(Path(sys.argv[1]).read_text())
 fallback = {"GeneratedSubjectAuth"}
 if fallback & set(manifest["non_canonical"]["languages"]["go"]):
-    raise SystemExit("fallback_signer_legacy_export")
+    raise SystemExit("fallback_signer_retired_export")
 PY
   then
-    fail "self-test expected fallback signer legacy export to fail"
+    fail "self-test expected fallback signer retired export to fail"
   fi
   mkdir -p "$tmp/axon/sdk/node/src/invocation"
   mkdir -p "$tmp/axon/sdk/java/src/main/java/run/axon/sdk/invocation"

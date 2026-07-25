@@ -16,10 +16,7 @@ from edge_adapter_policy import (
     validate_policy as validate_edge_adapter_policy,
 )
 from sdk_public_surface_policy import (
-    DOWNSTREAM_ITEMS,
-    PRODUCT_NEUTRAL_CUTOVER_REF,
-    canonical_quarantine_reason,
-    public_root,
+    non_canonical_public_reason,
 )
 from sdk_concepts import (
     STATUS_CANONICAL_NAMES,
@@ -180,33 +177,6 @@ SEMANTIC_RULES: list[tuple[str, str]] = [
     (r"(^easynetaxon$|^axonsdk$)", "runtime_connection"),
     (r"(runtime|server)", "native_runtime"),
 ]
-
-
-def quarantine_replacement(
-    language: str,
-    item: str,
-    exact: dict[tuple[str, str], str],
-    aliases: dict[str, set[str]],
-) -> list[str]:
-    if public_root(item) in DOWNSTREAM_ITEMS:
-        return ["capability_inventory.principal_authorization_grants"]
-    if "CABI" in item:
-        return ["capability_inventory.native_runtime"]
-    try:
-        capability = classify(language, item, exact, aliases)
-    except ValueError:
-        key = normalize(item)
-        if any(
-            token in key for token in ("runtime", "mode", "startconfig", "lifecycle")
-        ):
-            capability = "runtime_lifecycle"
-        elif any(token in key for token in ("directory", "listuser", "hubendpoint")):
-            capability = "directory_resolution"
-        elif any(token in key for token in ("device", "hub", "nodeid", "realm")):
-            capability = "canonical_addressing"
-        else:
-            capability = "typed_errors"
-    return [f"capability_inventory.{capability}"]
 
 
 def normalize(value: str) -> str:
@@ -473,7 +443,7 @@ def main() -> int:
                 f"expected={axon_revision}:actual={inventories[language].get('source_revision')}"
             )
 
-    model["schema_version"] = 5
+    model["schema_version"] = 6
     model["status_order"] = STATUSES
     model["status_canonical_names"] = STATUS_CANONICAL_NAMES
     model.pop("lifecycle_actions", None)
@@ -492,10 +462,7 @@ def main() -> int:
         "languages": {language: [] for language in LANGUAGES},
         "members": {language: [] for language in LANGUAGES},
     }
-    model["legacy_quarantine"] = {
-        "languages": {language: {} for language in LANGUAGES},
-        "members": {language: {} for language in LANGUAGES},
-    }
+    model.pop("legacy_quarantine", None)
     model["shape_sha256"] = {}
     for language, found in inventories.items():
         model["languages"][language] = []
@@ -505,19 +472,12 @@ def main() -> int:
             ("members", found["members"]),
         ):
             for item in source_items:
-                reason = canonical_quarantine_reason(item)
-                if reason is None:
-                    model[section][language].append(item)
-                    continue
-                model["non_canonical"][section][language].append(item)
-                model["legacy_quarantine"][section][language][item] = {
-                    "canonical_replacement": quarantine_replacement(
-                        language, item, exact, aliases
-                    ),
-                    "consumer_cutover_ref": PRODUCT_NEUTRAL_CUTOVER_REF,
-                    "removal_phase": "quarantined",
-                    "reason": reason,
-                }
+                reason = non_canonical_public_reason(item)
+                if reason is not None:
+                    raise ValueError(
+                        f"non_canonical_public_item:{language}:{section}:{item}:{reason}"
+                    )
+                model[section][language].append(item)
         model["shape_sha256"][language] = {
             item: hashlib.sha256(shape.encode()).hexdigest()
             for item, shape in found["shapes"].items()
