@@ -2175,8 +2175,8 @@ for name in ("InstallRecord", "SkillSource"):
     if "#[serde(deny_unknown_fields)]" not in attrs:
         raise SystemExit(f"skill_install_record_schema:{name}:missing_deny_unknown_fields")
 
-if '#[serde(rename = "content_hash")]' not in store:
-    raise SystemExit("skill_install_record_schema:content_hash_wire_name_missing")
+if '#[serde(rename = "content_hash")]' in store:
+    raise SystemExit("skill_install_record_schema:persistence_uses_legacy_content_hash_wire_name")
 if "pub skill_tree_hash: String" not in store:
     raise SystemExit("skill_install_record_schema:semantic_tree_hash_field_missing")
 for retired in (
@@ -2187,6 +2187,10 @@ for retired in (
     if retired in publish:
         raise SystemExit(f"skill_install_record_schema:retired_silent_parse:{retired}")
 for required in (
+    "install_record_serialize_emits_skill_tree_hash_on_disk",
+    "install_record_deserialize_reads_skill_tree_hash_from_disk",
+    "install_record_rejects_legacy_content_hash_on_disk",
+    "legacy content_hash must fail closed in persistence",
     "install_record_rejects_unknown_top_level_fields",
     "unknown install record fields must fail closed",
     "install_record_rejects_unknown_source_fields",
@@ -20093,10 +20097,12 @@ EOF
   mkdir -p "$tmp/skill-install-record-schema-legacy/src/daemon/ability/builtins/resources/skills"
   cat >"$tmp/skill-install-record-schema-legacy/src/daemon/resources/skills/store.rs" <<'EOF'
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct InstallRecord {
     pub name: String,
     pub agent_id: String,
     pub source: SkillSource,
+    #[serde(rename = "content_hash")]
     pub skill_tree_hash: String,
     pub size_bytes: u64,
     pub installed_at: String,
@@ -20105,6 +20111,7 @@ pub struct InstallRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SkillSource {
     pub kind: String,
     pub identifier: String,
@@ -20114,7 +20121,10 @@ pub struct SkillSource {
 
 #[cfg(test)]
 mod tests {
-    fn install_record_unknown_field_is_ignored_for_compat() {}
+    fn install_record_serialize_emits_content_hash_on_wire() {}
+    fn install_record_deserialize_reads_content_hash_from_wire() {}
+    fn install_record_rejects_unknown_top_level_fields() {}
+    fn install_record_rejects_unknown_source_fields() {}
 }
 EOF
   cat >"$tmp/skill-install-record-schema-legacy/src/daemon/ability/builtins/resources/skills/publish.rs" <<'EOF'

@@ -702,7 +702,7 @@ mod tests {
                 "name": "inspectable",
                 "agent_id": "claude",
                 "source": {"kind": "github", "identifier": "owner/repo", "ref": "main"},
-                "content_hash": "sha256:abc",
+                "skill_tree_hash": "sha256:abc",
                 "size_bytes": 42,
                 "installed_at": "2026-04-23T00:00:00Z",
                 "upgrade_available": false

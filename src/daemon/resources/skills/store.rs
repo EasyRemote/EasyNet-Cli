@@ -23,18 +23,14 @@ const GLOBAL_SKILL_OWNER_PREFIX: &str = "global:";
 /// per installed skill; the file is the source of truth for `list` /
 /// `upgrade` / `remove`.
 ///
-/// Matches the backend's `types.InstalledSkill` shape (minus
-/// `agent_id` / `node_id`, which the backend injects when
-/// aggregating). Keeping the two schemas isomorphic means
-/// `skill list --json` output is directly parseable by the backend
-/// without a translation shim.
+/// Persistence model only. Public skill ability / CLI response fields
+/// are owned by `projection.rs` so the store does not carry product
+/// or legacy wire names.
 ///
-/// Rust field names here are chosen for *semantic* honesty (see
-/// `skill_tree_hash` doc). Wire + on-disk JSON keeps the legacy
-/// `content_hash` name via `#[serde(rename)]` so that the backend
-/// (`types.InstalledSkill.ContentHash`), the Frontend (`content_hash`
-/// in `easynet-skills.ts`), and any pre-existing `install.json`
-/// files remain wire-compatible with the canonical public field name.
+/// The install tree digest is persisted as `skill_tree_hash`. The
+/// public `content_hash` response name is intentionally projected at
+/// the API boundary instead of being baked into this canonical store
+/// record.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct InstallRecord {
@@ -61,9 +57,8 @@ pub struct InstallRecord {
     /// signed-envelope path tracked in
     /// `docs/open-questions/cli-dispatch-as-first-class-invocation.md`.
     ///
-    /// Wire name is `content_hash` — see the struct-level doc for
-    /// why we don't rename in JSON.
-    #[serde(rename = "content_hash")]
+    /// Disk name is `skill_tree_hash`. Public response compatibility
+    /// with `content_hash` belongs to `InstalledSkillProjection`.
     pub skill_tree_hash: String,
     pub size_bytes: u64,
     pub installed_at: String,
@@ -1239,8 +1234,8 @@ mod tests {
     fn hash_tree_is_deterministic_across_platforms() {
         // Build a tiny tree twice, verify the hash matches. The
         // walk must sort paths — otherwise two runs on the same
-        // content produce different hashes and content_hash
-        // loses its AXIOM §6.1 Q6 meaning.
+        // content produce different skill tree hashes, making
+        // upgrade and install-integrity comparisons unstable.
         let tmp = std::env::temp_dir().join(format!(
             "easynet-hash-test-{}-{}",
             std::process::id(),
@@ -1262,9 +1257,8 @@ mod tests {
     #[test]
     fn hash_tree_respects_skip_list() {
         // Our .easynet/install.json changes between installs but
-        // must not participate in content_hash — otherwise every
-        // skill's hash depends on its own install timestamp,
-        // which makes Q6 attestation meaningless.
+        // must not participate in the skill tree hash — otherwise
+        // every skill's hash depends on its own install timestamp.
         let tmp = std::env::temp_dir().join(format!(
             "easynet-hash-skip-test-{}-{}",
             std::process::id(),
@@ -1281,7 +1275,7 @@ mod tests {
 
         assert_eq!(
             h_without_easynet, h_with_easynet,
-            "adding .easynet/ must not change the content hash"
+            "adding .easynet/ must not change the skill tree hash"
         );
         let _ = fs::remove_dir_all(&tmp);
     }
@@ -1305,18 +1299,15 @@ mod tests {
         assert_eq!(format_bytes(1024 * 1024), "1.0MB");
     }
 
-    // ─── wire compatibility for the Q6-motivated rename ──────────
+    // ─── canonical install-record persistence schema ─────────────
     //
-    // The Rust field is `skill_tree_hash` (semantic name — it is
-    // NOT AXIOM §6.1 Q6's `ability_snapshot.content_hash`). The
-    // JSON wire field stays `content_hash` because the backend's
-    // `types.InstalledSkill.ContentHash` and the Frontend's
-    // `content_hash` in `easynet-skills.ts` read that name. Losing
-    // the `#[serde(rename = "content_hash")]` silently breaks the
-    // whole cross-repo wire. These tests pin both directions.
+    // The persisted field is `skill_tree_hash` (semantic name — it is
+    // NOT AXIOM §6.1 Q6's `ability_snapshot.content_hash`). Public
+    // response compatibility with `content_hash` belongs to
+    // `InstalledSkillProjection`, never to the canonical store record.
 
     #[test]
-    fn install_record_serialize_emits_content_hash_on_wire() {
+    fn install_record_serialize_emits_skill_tree_hash_on_disk() {
         let rec = InstallRecord {
             name: "alpha".into(),
             description: "Alpha skill".into(),
@@ -1335,24 +1326,23 @@ mod tests {
         };
         let wire = serde_json::to_string(&rec).unwrap();
         assert!(
-            wire.contains("\"content_hash\":\"sha256:deadbeef\""),
-            "wire must emit 'content_hash' (not the Rust field name): {wire}"
+            wire.contains("\"skill_tree_hash\":\"sha256:deadbeef\""),
+            "install record must persist the canonical 'skill_tree_hash': {wire}"
         );
         assert!(
             wire.contains("\"description\":\"Alpha skill\""),
-            "wire must include the skill description: {wire}"
+            "install record must include the skill description: {wire}"
         );
         assert!(
-            !wire.contains("skill_tree_hash"),
-            "wire must NOT leak the Rust field name: {wire}"
+            !wire.contains("\"content_hash\""),
+            "install record must not persist the public projection field: {wire}"
         );
     }
 
     #[test]
-    fn install_record_deserialize_reads_content_hash_from_wire() {
-        // Simulates reading a record that came across the wire
-        // (or from an older install.json file). The wire name is
-        // `content_hash`; the Rust field is `skill_tree_hash`.
+    fn install_record_deserialize_reads_skill_tree_hash_from_disk() {
+        // Simulates reading the canonical install.json persistence
+        // record. Public `content_hash` is a projection-only field.
         let wire = r#"{
             "name": "alpha",
             "agent_id": "alice",
@@ -1360,7 +1350,7 @@ mod tests {
                 "kind": "github",
                 "identifier": "a/b"
             },
-            "content_hash": "sha256:wire",
+            "skill_tree_hash": "sha256:wire",
             "size_bytes": 99,
             "installed_at": "2026-04-23T00:00:00Z",
             "upgrade_available": false
@@ -1368,6 +1358,28 @@ mod tests {
         let rec: InstallRecord = serde_json::from_str(wire).unwrap();
         assert_eq!(rec.skill_tree_hash, "sha256:wire");
         assert_eq!(rec.description, "");
+    }
+
+    #[test]
+    fn install_record_rejects_legacy_content_hash_on_disk() {
+        let wire = r#"{
+            "name": "alpha",
+            "agent_id": "alice",
+            "source": {
+                "kind": "github",
+                "identifier": "a/b"
+            },
+            "content_hash": "sha256:legacy",
+            "size_bytes": 99,
+            "installed_at": "2026-04-23T00:00:00Z",
+            "upgrade_available": false
+        }"#;
+        let error = serde_json::from_str::<InstallRecord>(wire)
+            .expect_err("legacy content_hash must fail closed in persistence");
+        assert!(
+            error.to_string().contains("content_hash"),
+            "strict schema error should name the legacy field: {error}"
+        );
     }
 
     #[test]
@@ -1379,7 +1391,7 @@ mod tests {
                 "kind": "github",
                 "identifier": "a/b"
             },
-            "content_hash": "sha256:wire",
+            "skill_tree_hash": "sha256:wire",
             "size_bytes": 99,
             "installed_at": "2026-04-23T00:00:00Z",
             "upgrade_available": false,
@@ -1403,7 +1415,7 @@ mod tests {
                 "identifier": "a/b",
                 "legacy_ref": "main"
             },
-            "content_hash": "sha256:wire",
+            "skill_tree_hash": "sha256:wire",
             "size_bytes": 99,
             "installed_at": "2026-04-23T00:00:00Z",
             "upgrade_available": false
