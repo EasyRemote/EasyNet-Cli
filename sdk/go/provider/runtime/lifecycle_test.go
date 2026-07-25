@@ -26,15 +26,15 @@ func (t *lifecycleTransport) Start(_ context.Context, payload []byte) ([]byte, e
 	if err := json.Unmarshal(payload, &t.start); err != nil {
 		return nil, err
 	}
-	return []byte(`{"handle_id":"daemon-1","state":"Running","mode":"hub","endpoints":{"invocation_endpoint":"unix:///tmp/daemon.sock"}}`), nil
+	return []byte(`{"handle_id":"daemon-1","state":"Running","mode":"authority","endpoints":{"invocation_endpoint":"unix:///tmp/daemon.sock"}}`), nil
 }
 
 func (t *lifecycleTransport) Attach(context.Context, []byte) ([]byte, error) {
-	return []byte(`{"handle_id":"daemon-1","state":"Running","mode":"hub","endpoints":{"invocation_endpoint":"unix:///tmp/daemon.sock"}}`), nil
+	return []byte(`{"handle_id":"daemon-1","state":"Running","mode":"authority","endpoints":{"invocation_endpoint":"unix:///tmp/daemon.sock"}}`), nil
 }
 
 func (t *lifecycleTransport) Status(context.Context, string) ([]byte, error) {
-	return []byte(`{"handle_id":"daemon-1","state":"Running","mode":"hub","endpoints":{"invocation_endpoint":"unix:///tmp/daemon.sock"}}`), nil
+	return []byte(`{"handle_id":"daemon-1","state":"Running","mode":"authority","endpoints":{"invocation_endpoint":"unix:///tmp/daemon.sock"}}`), nil
 }
 
 func (t *lifecycleTransport) OpenRuntime(context.Context, string, []byte) (runtimesdk.RuntimeTransport, []byte, error) {
@@ -42,7 +42,7 @@ func (t *lifecycleTransport) OpenRuntime(context.Context, string, []byte) (runti
 }
 
 func (t *lifecycleTransport) Stop(context.Context, string, []byte) ([]byte, error) {
-	return []byte(`{"handle_id":"daemon-1","state":"Stopped","mode":"hub"}`), nil
+	return []byte(`{"handle_id":"daemon-1","state":"Stopped","mode":"authority"}`), nil
 }
 
 func (t *lifecycleTransport) Detach(context.Context, string) error {
@@ -68,6 +68,9 @@ func TestLifecycleDelegatesToCanonicalRuntimeHost(t *testing.T) {
 
 	if transport.startCalls != 1 || transport.start["runtime_bin"] != "/usr/local/bin/runtime-host" {
 		t.Fatalf("provider did not lower start config exactly once: %#v", transport.start)
+	}
+	if transport.start["mode"] != "authority" {
+		t.Fatalf("provider leaked host wire mode = %v, want authority", transport.start["mode"])
 	}
 	if handle.HandleID() != "daemon-1" || handle.State() != runtimesdk.RuntimeRunning {
 		t.Fatalf("provider returned a non-canonical handle: %#v", handle)

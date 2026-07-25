@@ -1570,9 +1570,34 @@ def _runtime_start_config_for_cabi(config_json: bytes) -> bytes:
         value = config.get(field_name)
         if value not in (None, "", {}, False):
             projected[field_name] = value
+    if "mode" in projected:
+        projected["mode"] = _runtime_host_mode_for_cabi(projected["mode"])
     if config.get("detached"):
         projected["detached"] = True
     return _json_bytes(projected)
+
+
+def _runtime_host_mode_for_cabi(value: object) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise _cabi_payload_error("runtime host mode must be a non-empty string")
+    mode = value.strip()
+    if mode == "edge":
+        return "device"
+    if mode == "authority":
+        return "hub"
+    if mode == "combined":
+        return "both"
+    raise _cabi_payload_error("runtime host mode must be edge, authority, or combined")
+
+
+def _cabi_payload_error(message: str) -> SDKError:
+    return SDKError(
+        code=ErrorCode.INVALID_ARGUMENT,
+        stage="cabi",
+        retry=RetryHint.NEVER,
+        retryable=False,
+        message=message,
+    )
 
 
 def _runtime_status_from_cabi(handle_id: str, raw: bytes) -> dict[str, object]:

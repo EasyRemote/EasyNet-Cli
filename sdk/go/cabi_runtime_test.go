@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -226,7 +227,7 @@ func TestProjectCABIOrderedEventDoesNotSynthesizeKindFromLegacyEvent(t *testing.
 
 func TestCABIRuntimeHostStartConfigProjectsFacadeShape(t *testing.T) {
 	raw, err := runtimeHostStartConfigForCABI([]byte(`{
-		"mode":"device",
+		"mode":"edge",
 		"realm":"lab",
 		"runtime_instance_id":"runtime-a",
 		"runtime_bin":"/usr/local/bin/runtime-host",
@@ -262,7 +263,7 @@ func TestCABIRuntimeHostStartConfigProjectsFacadeShape(t *testing.T) {
 
 func TestCABIRuntimeHostStartConfigRejectsUnsupportedTransportFields(t *testing.T) {
 	_, err := runtimeHostStartConfigForCABI([]byte(`{
-		"mode":"hub",
+		"mode":"authority",
 		"uds_path":"/tmp/easynet.sock",
 		"listen_tcp":"127.0.0.1:9000"
 	}`))
@@ -272,6 +273,17 @@ func TestCABIRuntimeHostStartConfigRejectsUnsupportedTransportFields(t *testing.
 	}
 	if !IsCode(err, ErrNotImplemented) {
 		t.Fatalf("unsupported config error = %v, want %s", err, ErrNotImplemented)
+	}
+}
+
+func TestCABIRuntimeHostStartConfigRejectsRetiredProductModeInput(t *testing.T) {
+	_, err := runtimeHostStartConfigForCABI([]byte(`{"mode":"device"}`))
+
+	if !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("retired mode error = %v, want %s", err, ErrInvalidArgument)
+	}
+	if err == nil || !strings.Contains(err.Error(), "edge, authority, or combined") {
+		t.Fatalf("retired mode error did not name generic roles: %v", err)
 	}
 }
 
@@ -857,7 +869,7 @@ func openFakeCABIRuntime(t *testing.T) *RuntimeClient {
 	}
 	handle, err := control.StartRuntime(context.Background(), testRuntimeHostStartRequest{
 		payload: map[string]any{
-			"mode":                "device",
+			"mode":                "edge",
 			"runtime_instance_id": "dev-a",
 		},
 	})

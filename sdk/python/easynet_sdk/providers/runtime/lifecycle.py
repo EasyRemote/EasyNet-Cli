@@ -13,9 +13,9 @@ from ...errors import ErrorCode, RetryHint, SDKError
 class RuntimeHostMode(StrEnum):
     """Runtime host deployment role understood by the local host provider."""
 
-    EDGE = "device"
-    AUTHORITY = "hub"
-    COMBINED = "both"
+    EDGE = "edge"
+    AUTHORITY = "authority"
+    COMBINED = "combined"
 
 
 @dataclass(frozen=True)

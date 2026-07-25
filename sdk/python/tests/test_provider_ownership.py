@@ -38,6 +38,18 @@ def test_runtime_lifecycle_provider_exports_are_provider_scoped() -> None:
         assert not hasattr(provider_lifecycle, name), name
 
 
+def test_runtime_lifecycle_provider_modes_are_generic_runtime_roles() -> None:
+    assert provider_lifecycle.RuntimeHostMode.EDGE.value == "edge"
+    assert provider_lifecycle.RuntimeHostMode.AUTHORITY.value == "authority"
+    assert provider_lifecycle.RuntimeHostMode.COMBINED.value == "combined"
+
+    payload = provider_lifecycle.RuntimeHostStartConfig(
+        mode=provider_lifecycle.RuntimeHostMode.AUTHORITY
+    ).to_json_dict()
+
+    assert payload["mode"] == "authority"
+
+
 def test_transport_root_exports_only_runtime_transport_names() -> None:
     assert hasattr(easynet_sdk, "RuntimeInvocationTransport")
     assert hasattr(transport, "RuntimeInvocationTransport")

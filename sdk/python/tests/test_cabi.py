@@ -22,6 +22,7 @@ from easynet_sdk._cabi import (
     _CABIStreamTransport,
     _platform_library_candidates,
     _project_cabi_ordered_event,
+    _runtime_start_config_for_cabi,
     _resolve_descriptor_ref_from_diagnostics,
 )
 from easynet_sdk.providers.runtime.lifecycle import (
@@ -705,6 +706,13 @@ class CABITransportTests(unittest.TestCase):
     def test_runtime_host_uses_generic_invocation(self) -> None:
         raw = FakeRawCABI()
         lifecycle = CABIRuntimeLifecycleTransport(CLILibrary(raw))
+        self.assertEqual(
+            RuntimeHostStartConfig(
+                mode=RuntimeHostMode.EDGE,
+                runtime_instance_id="dev-a",
+            ).to_json_dict()["mode"],
+            "edge",
+        )
         handle = RuntimeLifecycle(lifecycle).start(
             RuntimeHostStartConfig(
                 mode=RuntimeHostMode.EDGE,
@@ -718,6 +726,14 @@ class CABITransportTests(unittest.TestCase):
         self.assertTrue(result.ok)
         self.assertEqual(result.output_json, {"ready": True})
         self.assertEqual(raw.runtime_host_open_clients, [606])
+        self.assertEqual(raw.runtime_host_starts[0]["mode"], "device")
+
+    def test_runtime_host_start_rejects_retired_product_mode_input(self) -> None:
+        with self.assertRaises(SDKError) as caught:
+            _runtime_start_config_for_cabi(b'{"mode":"device"}')
+
+        self.assertEqual(caught.exception.code, ErrorCode.INVALID_ARGUMENT)
+        self.assertIn("edge, authority, or combined", caught.exception.message)
 
     def test_runtime_handle_has_no_product_profile_factory(self) -> None:
         raw = FakeRawCABI()

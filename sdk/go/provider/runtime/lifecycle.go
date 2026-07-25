@@ -15,9 +15,9 @@ import (
 type Mode string
 
 const (
-	ModeEdge      Mode = "device"
-	ModeAuthority Mode = "hub"
-	ModeCombined  Mode = "both"
+	ModeEdge      Mode = "edge"
+	ModeAuthority Mode = "authority"
+	ModeCombined  Mode = "combined"
 )
 
 // RuntimeHostStartConfig is the provider-owned runtime host start policy.

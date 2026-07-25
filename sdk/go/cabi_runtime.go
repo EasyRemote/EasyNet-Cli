@@ -1699,10 +1699,34 @@ func runtimeHostStartConfigForCABI(configJSON []byte) ([]byte, error) {
 			projected[key] = config[key]
 		}
 	}
+	if mode, ok := projected["mode"]; ok {
+		lowered, err := runtimeHostModeForCABI(mode)
+		if err != nil {
+			return nil, err
+		}
+		projected["mode"] = lowered
+	}
 	if value, ok := config["detached"].(bool); ok && value {
 		projected["detached"] = true
 	}
 	return json.Marshal(projected)
+}
+
+func runtimeHostModeForCABI(value any) (string, error) {
+	mode, ok := value.(string)
+	if !ok || strings.TrimSpace(mode) == "" {
+		return "", invalidRuntimePayload("runtime host mode must be a non-empty string", nil)
+	}
+	switch strings.TrimSpace(mode) {
+	case "edge":
+		return "device", nil
+	case "authority":
+		return "hub", nil
+	case "combined":
+		return "both", nil
+	default:
+		return "", invalidRuntimePayload("runtime host mode must be edge, authority, or combined", nil)
+	}
 }
 
 func emptyCABIConfigValue(value any) bool {
