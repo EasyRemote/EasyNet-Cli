@@ -13,16 +13,24 @@ TARGET="src/cli/commands/groups/call.rs"
 
 [[ -f "$TARGET" ]] || fail "missing $TARGET"
 
-if ! rg -n 'enum CallCreateParticipantIdentity' "$TARGET" >/dev/null; then
-  fail "call create participant identity must use an explicit state enum"
+if ! rg -n 'struct CallParticipantIdentity' "$TARGET" >/dev/null; then
+  fail "call participant identity must use a named paired-device identity type"
 fi
 
 if ! rg -n 'load_credentials_optional\(\)\?' "$TARGET" >/dev/null; then
   fail "call create participant identity must distinguish missing credentials with load_credentials_optional"
 fi
 
-if rg -n 'load_credentials\(\)|load_credentials\(\)\s*\.ok\(\)|map\(\|creds\|\s*creds\.node_id\)|credentials.*unwrap_or_else\(\|\|\s*gethostname::gethostname' "$TARGET"; then
-  fail "call create must not collapse credential errors into hostname participant identity"
+if ! rg -n 'resolve_paired_device' "$TARGET" >/dev/null; then
+  fail "call participant identity must resolve from paired device credentials"
+fi
+
+if rg -n 'UnpairedHostname|from_unpaired_hostname|gethostname::gethostname|load_credentials\(\)\s*\.ok\(\)|map\(\|creds\|\s*creds\.node_id\)' "$TARGET"; then
+  fail "call signaling must not collapse credential state into hostname participant identity"
+fi
+
+if ! rg -n 'requires paired device credentials' "$TARGET" >/dev/null; then
+  fail "unpaired call signaling must fail closed with an explicit paired-device credential error"
 fi
 
 if ! rg -n 'struct CallSignalingIssuer' "$TARGET" >/dev/null; then
@@ -41,11 +49,15 @@ if rg -n '\binvoke_local_ability\s*\(' "$TARGET"; then
   fail "call signaling must not use generic invoke_local_ability"
 fi
 
-if ! rg -n 'call_create_participant_rejects_malformed_credentials' "$TARGET" >/dev/null; then
+if ! rg -n 'call_participant_rejects_unpaired_hostname_fallback' "$TARGET" >/dev/null; then
+  fail "call participant identity must test that unpaired hostname fallback is retired"
+fi
+
+if ! rg -n 'call_participant_rejects_malformed_credentials' "$TARGET" >/dev/null; then
   fail "call create participant identity must test malformed credentials as fail-closed"
 fi
 
-if ! rg -n 'call_create_participant_rejects_incomplete_credentials' "$TARGET" >/dev/null; then
+if ! rg -n 'call_participant_rejects_incomplete_credentials' "$TARGET" >/dev/null; then
   fail "call create participant identity must test incomplete credentials as fail-closed"
 fi
 

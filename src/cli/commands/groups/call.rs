@@ -195,7 +195,7 @@ fn run_create(args: CreateArgs) -> anyhow::Result<()> {
     if !args.call_id.is_empty() {
         body["call_id"] = json!(args.call_id);
     }
-    let participant_identity = CallCreateParticipantIdentity::resolve()?;
+    let participant_identity = CallParticipantIdentity::resolve_paired_device()?;
     let participant_id = participant_identity.participant_id();
     body["participant_id"] = json!(participant_id);
     let result = invoke_call_signaling(RealmHubSystemAbility::VoiceCreateCall, body)?;
@@ -217,32 +217,35 @@ fn run_create(args: CreateArgs) -> anyhow::Result<()> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum CallCreateParticipantIdentity {
-    DeviceNode(String),
-    UnpairedHostname(String),
+struct CallParticipantIdentity {
+    node_id: String,
 }
 
-impl CallCreateParticipantIdentity {
-    fn resolve() -> anyhow::Result<Self> {
-        let Some(credentials) = crate::daemon::persistence::config::load_credentials_optional()?
-        else {
-            return Self::from_unpaired_hostname(gethostname::gethostname().to_string_lossy());
-        };
-        Ok(Self::DeviceNode(credentials.node_id.trim().to_string()))
+impl CallParticipantIdentity {
+    fn resolve_paired_device() -> anyhow::Result<Self> {
+        let credentials = crate::daemon::persistence::config::load_credentials_optional()?
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "call participant identity requires paired device credentials; run `easynet start` before call signaling"
+                )
+            })?;
+        Self::from_credentials(&credentials)
     }
 
-    fn from_unpaired_hostname(hostname: impl AsRef<str>) -> anyhow::Result<Self> {
-        let hostname = hostname.as_ref().trim();
-        if hostname.is_empty() {
-            anyhow::bail!("call create unpaired participant hostname must not be empty");
+    fn from_credentials(
+        credentials: &crate::daemon::persistence::config::Credentials,
+    ) -> anyhow::Result<Self> {
+        let node_id = credentials.node_id.trim();
+        if node_id.is_empty() {
+            anyhow::bail!("call participant identity requires credentials.node_id");
         }
-        Ok(Self::UnpairedHostname(hostname.to_string()))
+        Ok(Self {
+            node_id: node_id.to_string(),
+        })
     }
 
     fn participant_id(&self) -> &str {
-        match self {
-            Self::DeviceNode(node_id) | Self::UnpairedHostname(node_id) => node_id,
-        }
+        &self.node_id
     }
 }
 
@@ -251,21 +254,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn call_create_participant_uses_hostname_when_unpaired() {
+    fn call_participant_rejects_unpaired_hostname_fallback() {
         let _guard = crate::cli::commands::test_support::HomeGuard::new();
 
-        let identity = CallCreateParticipantIdentity::resolve().expect("unpaired hostname");
+        let error = CallParticipantIdentity::resolve_paired_device()
+            .expect_err("unpaired call signaling must fail before hostname identity fallback");
+        let message = format!("{error:#}");
 
-        match identity {
-            CallCreateParticipantIdentity::UnpairedHostname(hostname) => {
-                assert!(!hostname.trim().is_empty());
-            }
-            other => panic!("expected unpaired hostname identity, got {other:?}"),
-        }
+        assert!(
+            message.contains("requires paired device credentials"),
+            "wrong unpaired identity error: {message}"
+        );
     }
 
     #[test]
-    fn call_create_participant_uses_valid_credential_node_id() {
+    fn call_participant_uses_valid_credential_node_id() {
         let _guard = crate::cli::commands::test_support::HomeGuard::new();
         crate::daemon::persistence::config::save_credentials(
             &crate::daemon::persistence::config::Credentials {
@@ -280,17 +283,20 @@ mod tests {
         )
         .expect("write test credentials");
 
-        let identity = CallCreateParticipantIdentity::resolve().expect("credential identity");
+        let identity =
+            CallParticipantIdentity::resolve_paired_device().expect("credential identity");
 
         assert_eq!(
             identity,
-            CallCreateParticipantIdentity::DeviceNode("dev-a".to_string())
+            CallParticipantIdentity {
+                node_id: "dev-a".to_string()
+            }
         );
         assert_eq!(identity.participant_id(), "dev-a");
     }
 
     #[test]
-    fn call_create_participant_rejects_malformed_credentials() {
+    fn call_participant_rejects_malformed_credentials() {
         let _guard = crate::cli::commands::test_support::HomeGuard::new();
         std::fs::create_dir_all(crate::daemon::persistence::config::state_dir())
             .expect("state dir");
@@ -300,7 +306,7 @@ mod tests {
         )
         .expect("write malformed credentials");
 
-        let error = CallCreateParticipantIdentity::resolve()
+        let error = CallParticipantIdentity::resolve_paired_device()
             .expect_err("malformed credentials must not become hostname identity");
 
         assert!(
@@ -310,7 +316,7 @@ mod tests {
     }
 
     #[test]
-    fn call_create_participant_rejects_incomplete_credentials() {
+    fn call_participant_rejects_incomplete_credentials() {
         let _guard = crate::cli::commands::test_support::HomeGuard::new();
         std::fs::create_dir_all(crate::daemon::persistence::config::state_dir())
             .expect("state dir");
@@ -328,22 +334,11 @@ mod tests {
         )
         .expect("write incomplete credentials");
 
-        let error = CallCreateParticipantIdentity::resolve()
+        let error = CallParticipantIdentity::resolve_paired_device()
             .expect_err("incomplete credentials must not become hostname identity");
 
         assert!(
             error.to_string().contains("validate credentials"),
-            "wrong error: {error}"
-        );
-    }
-
-    #[test]
-    fn call_create_participant_rejects_empty_unpaired_hostname() {
-        let error = CallCreateParticipantIdentity::from_unpaired_hostname(" ")
-            .expect_err("empty hostname must fail");
-
-        assert!(
-            error.to_string().contains("hostname must not be empty"),
             "wrong error: {error}"
         );
     }
@@ -375,9 +370,10 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
 }
 
 fn run_join(args: JoinArgs) -> anyhow::Result<()> {
-    let pid = args
-        .participant_id
-        .unwrap_or_else(|| gethostname::gethostname().to_string_lossy().to_string());
+    let pid = args.participant_id.map(Ok).unwrap_or_else(|| {
+        CallParticipantIdentity::resolve_paired_device()
+            .map(|identity| identity.participant_id().to_string())
+    })?;
     let result = invoke_call_signaling(
         RealmHubSystemAbility::VoiceJoinCall,
         json!({"call_id": args.call_id, "participant_id": pid}),
