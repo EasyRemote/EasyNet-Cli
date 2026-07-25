@@ -66,7 +66,6 @@ public record InvocationResult(
           case FAILED -> "FAILED";
           case CANCELLED -> "CANCELLED";
           case TIMED_OUT -> "TIMED_OUT";
-          case BACKPRESSURE_TERMINATED -> "BACKPRESSURE_TERMINATED";
         };
     if (!receiptState.equals(resultState)) {
       throw SDKError.validation(
@@ -112,7 +111,6 @@ public record InvocationResult(
       case "Failed" -> "FAILED";
       case "Cancelled" -> "CANCELLED";
       case "TimedOut" -> "TIMED_OUT";
-      case "BackpressureTerminated" -> "BACKPRESSURE_TERMINATED";
       default -> throw SDKError.validation("invocation_result", "unknown terminal state " + state);
     };
   }

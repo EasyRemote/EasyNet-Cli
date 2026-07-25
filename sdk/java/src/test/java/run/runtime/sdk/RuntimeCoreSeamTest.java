@@ -303,6 +303,21 @@ public final class RuntimeCoreSeamTest {
                         "Completed",
                         "receipt",
                         terminal))));
+
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        "unknown terminal state BackpressureTerminated",
+        () ->
+            InvocationResult.fromJSON(
+                JsonValueWriter.object(
+                    Map.of(
+                        "ok",
+                        false,
+                        "terminal_state",
+                        "BackpressureTerminated",
+                        "terminal_receipt",
+                        canonicalRuntimeReceiptFixture(
+                            "inv-backpressure", "failed", "Failed", 1)))));
   }
 
   private static void runtimeReceiptProofFactsAreMandatory() {

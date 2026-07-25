@@ -247,6 +247,22 @@ final class RuntimeCoreSeamTests: XCTestCase {
                 )
             )
         }
+        expectSyncSDKError(.invalidArgument, "unknown terminal state BackpressureTerminated") {
+            _ = try InvocationResult.fromJSON(
+                jsonData([
+                    "ok": false,
+                    "terminal_state": "BackpressureTerminated",
+                    "terminal_receipt": canonicalRuntimeReceipt(
+                        invocationId: "inv-backpressure",
+                        receiptType: "failed",
+                        state: "Failed",
+                        index: 1,
+                        callee: callee,
+                        descriptor: descriptor
+                    ),
+                ])
+            )
+        }
         expectSyncSDKError(.invalidArgument) {
             _ = try InvocationResult.fromJSON(
                 Data(#"{"ok":true,"terminal_state":"Completed"}"#.utf8)

@@ -6,7 +6,6 @@ public enum InvocationTerminalState: String, Sendable {
     case failed = "Failed"
     case cancelled = "Cancelled"
     case timedOut = "TimedOut"
-    case backpressureTerminated = "BackpressureTerminated"
 }
 
 public struct InvocationResult: Sendable {
@@ -41,9 +40,9 @@ public struct InvocationResult: Sendable {
         if object.keys.contains("receipt") {
             throw SDKError.validation("invocation_result", "retired receipt alias is not accepted")
         }
-        let terminalState = try InvocationTerminalState(
-            rawValue: runtimeRequiredString(object, "terminal_state", "invocation_result")
-        ).unwrap("terminal_state")
+        let terminalState = try runtimeInvocationTerminalState(
+            runtimeRequiredString(object, "terminal_state", "invocation_result")
+        )
         return try InvocationResult(
             ok: try runtimeRequiredBool(object, "ok", "invocation_result"),
             terminalState: terminalState,
@@ -52,6 +51,13 @@ public struct InvocationResult: Sendable {
             terminalReceipt: try runtimeRequiredTerminalReceipt(object, terminalState: terminalState)
         )
     }
+}
+
+private func runtimeInvocationTerminalState(_ value: String) throws -> InvocationTerminalState {
+    guard let state = InvocationTerminalState(rawValue: value) else {
+        throw SDKError.validation("invocation_result", "unknown terminal state \(value)")
+    }
+    return state
 }
 
 public struct RuntimeReceipt {
@@ -969,7 +975,6 @@ private func runtimeCanonicalTerminalState(_ terminalState: InvocationTerminalSt
     case .failed: return "FAILED"
     case .cancelled: return "CANCELLED"
     case .timedOut: return "TIMED_OUT"
-    case .backpressureTerminated: return "FAILED"
     }
 }
 
@@ -1000,13 +1005,4 @@ private func runtimeOptionalJSONObjectString(_ value: Any?) throws -> String {
     }
     let data = try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys])
     return String(data: data, encoding: .utf8) ?? ""
-}
-
-private extension Optional {
-    func unwrap(_ field: String) throws -> Wrapped {
-        guard let value = self else {
-            throw SDKError.validation("runtime", "\(field) is invalid")
-        }
-        return value
-    }
 }

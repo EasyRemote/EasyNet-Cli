@@ -15617,6 +15617,44 @@ for corpus, language in ((go_tests, "go"), (py_tests, "python")):
 PY
 }
 
+check_sdk_invocation_terminal_state_canonical_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local java_state="$cli_root/sdk/java/src/main/java/run/runtime/sdk/InvocationTerminalState.java"
+  local java_result="$cli_root/sdk/java/src/main/java/run/runtime/sdk/InvocationResult.java"
+  local java_tests="$cli_root/sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
+  local swift_runtime="$cli_root/sdk/swift/Sources/RuntimeSDK/Runtime.swift"
+  local swift_tests="$cli_root/sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift"
+  [[ -f "$java_state" ]] || fail "Java InvocationTerminalState source is missing: ${java_state#$cli_root/}"
+  [[ -f "$java_result" ]] || fail "Java InvocationResult source is missing: ${java_result#$cli_root/}"
+  [[ -f "$java_tests" ]] || fail "Java runtime seam tests are missing: ${java_tests#$cli_root/}"
+  [[ -f "$swift_runtime" ]] || fail "Swift Runtime source is missing: ${swift_runtime#$cli_root/}"
+  [[ -f "$swift_tests" ]] || fail "Swift runtime seam tests are missing: ${swift_tests#$cli_root/}"
+
+  "$PYTHON_BIN" - "$java_state" "$java_result" "$java_tests" "$swift_runtime" "$swift_tests" <<'PY'
+import sys
+from pathlib import Path
+
+java_state, java_result, java_tests, swift_runtime, swift_tests = [
+    Path(path).read_text(encoding="utf-8") for path in sys.argv[1:]
+]
+
+for corpus, language in ((java_state + "\n" + java_result, "java"), (swift_runtime, "swift")):
+    for retired in ("BACKPRESSURE_TERMINATED", "BackpressureTerminated", "backpressureTerminated"):
+        if retired in corpus:
+            raise SystemExit(f"sdk_invocation_terminal_state_canonical:{language}:retired_backpressure_terminal_state")
+
+for required in ("COMPLETED", "FAILED", "CANCELLED", "TIMED_OUT"):
+    if required not in java_state:
+        raise SystemExit(f"sdk_invocation_terminal_state_canonical:java:missing:{required}")
+for required in ('case completed = "Completed"', 'case failed = "Failed"', 'case cancelled = "Cancelled"', 'case timedOut = "TimedOut"'):
+    if required not in swift_runtime:
+        raise SystemExit(f"sdk_invocation_terminal_state_canonical:swift:missing:{required}")
+for tests, language in ((java_tests, "java"), (swift_tests, "swift")):
+    if "unknown terminal state BackpressureTerminated" not in tests:
+        raise SystemExit(f"sdk_invocation_terminal_state_canonical:{language}:missing_negative_test")
+PY
+}
+
 if [[ "${1:-}" == "--ura-only" ]]; then
   check_ura_vocabulary_contract
   check_axon_protocol_pack_ura_vector_contract
@@ -16201,6 +16239,34 @@ EOF
     > "$tmp/cli-sdk-receipt-type-legacy/sdk/node/test/runtime-core.test.mjs"
   if ( CLI_ROOT="$tmp/cli-sdk-receipt-type-legacy"; check_sdk_runtime_receipt_type_state_binding_contract ) >/dev/null 2>&1; then
     fail "self-test expected SDK runtime receipt type/state binding gate to fail"
+  fi
+  mkdir -p "$tmp/cli-sdk-terminal-state-legacy/sdk/java/src/main/java/run/runtime/sdk" \
+    "$tmp/cli-sdk-terminal-state-legacy/sdk/java/src/test/java/run/runtime/sdk" \
+    "$tmp/cli-sdk-terminal-state-legacy/sdk/swift/Sources/RuntimeSDK" \
+    "$tmp/cli-sdk-terminal-state-legacy/sdk/swift/Tests/RuntimeSDKTests"
+  cat >"$tmp/cli-sdk-terminal-state-legacy/sdk/java/src/main/java/run/runtime/sdk/InvocationTerminalState.java" <<'EOF'
+public enum InvocationTerminalState { COMPLETED, FAILED, CANCELLED, TIMED_OUT, BACKPRESSURE_TERMINATED }
+EOF
+  cat >"$tmp/cli-sdk-terminal-state-legacy/sdk/java/src/main/java/run/runtime/sdk/InvocationResult.java" <<'EOF'
+class InvocationResult {
+  String camelEnum(String state) { return switch (state) { case "BackpressureTerminated" -> "BACKPRESSURE_TERMINATED"; default -> state; }; }
+}
+EOF
+  printf 'class RuntimeCoreSeamTest { void t() { String s = "unknown terminal state BackpressureTerminated"; } }\n' \
+    > "$tmp/cli-sdk-terminal-state-legacy/sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
+  cat >"$tmp/cli-sdk-terminal-state-legacy/sdk/swift/Sources/RuntimeSDK/Runtime.swift" <<'EOF'
+public enum InvocationTerminalState: String {
+  case completed = "Completed"
+  case failed = "Failed"
+  case cancelled = "Cancelled"
+  case timedOut = "TimedOut"
+  case backpressureTerminated = "BackpressureTerminated"
+}
+EOF
+  printf 'func test() { _ = "unknown terminal state BackpressureTerminated" }\n' \
+    > "$tmp/cli-sdk-terminal-state-legacy/sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift"
+  if ( CLI_ROOT="$tmp/cli-sdk-terminal-state-legacy"; check_sdk_invocation_terminal_state_canonical_contract ) >/dev/null 2>&1; then
+    fail "self-test expected SDK invocation terminal state canonical gate to fail"
   fi
   cp -R "$tmp/axon" "$tmp/axon-python-receipt-runtime"
   printf 'binding = AxiomBinding(proof_facts=ReceiptProofFacts())\n' \
@@ -22814,6 +22880,7 @@ EOF
   check_sdk_session_authority_binding_facade_contract
   check_sdk_provider_managed_signing_custody_contract
   check_sdk_runtime_receipt_type_state_binding_contract
+  check_sdk_invocation_terminal_state_canonical_contract
   check_start_attach_user_signer_readiness_contract
   check_start_preflight_node_identity_contract
   echo "canonical-runtime-convergence-v2 self-test ok"
@@ -23059,6 +23126,7 @@ check_sdk_receipt_profile_convergence_contract
 check_sdk_session_authority_binding_facade_contract
 check_sdk_provider_managed_signing_custody_contract
 check_sdk_runtime_receipt_type_state_binding_contract
+check_sdk_invocation_terminal_state_canonical_contract
 check_public_descriptor_authority_vocabulary_contract
 check_runtime_authority_vocabulary_contract
 check_voice_realm_authority_vocabulary_contract
