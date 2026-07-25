@@ -1080,7 +1080,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_state_read_subject_rejects_stale_daemon_identity() {
+    fn runtime_state_read_subject_rejects_stale_runtime_attachment() {
         let error = LocalRuntimeStateReadSubject::from_runtime_attachment(
             &runtime_state_read_credentials(),
             &runtime_state_read_discovery(
@@ -1090,13 +1090,13 @@ mod tests {
             ),
             &ReadyRuntimeStateReadSignerCustody,
         )
-        .expect_err("runtime-state read must bind credentials to active daemon identity");
+        .expect_err("runtime-state read must bind credentials to the active runtime attachment");
         let message = format!("{error:#}");
         assert!(
             message.contains(
                 "daemon node `other-node` does not match paired credentials node `dev-a`"
             ),
-            "wrong stale-identity error: {message}"
+            "wrong stale runtime attachment error: {message}"
         );
     }
 

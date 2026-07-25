@@ -111,8 +111,12 @@ if ! rg -n 'runtime_state_read_subject_requires_ready_signer_capability' "$ISSUE
   fail "runtime-state read issuer must test missing Ready signer capability"
 fi
 
-if ! rg -n 'runtime_state_read_subject_rejects_stale_daemon_identity' "$ISSUER" >/dev/null; then
-  fail "runtime-state read issuer must test stale daemon identity rejection"
+if ! rg -n 'runtime_state_read_subject_rejects_stale_runtime_attachment' "$ISSUER" >/dev/null; then
+  fail "runtime-state read issuer must test stale runtime attachment rejection"
+fi
+
+if rg -n 'active daemon identity|stale daemon identity' "$ISSUER"; then
+  fail "runtime-state read subject tests must describe stale runtime attachment, not daemon identity"
 fi
 
 if ! rg -n 'runtime_state_read_subject_rejects_missing_live_signer_custody' "$ISSUER" >/dev/null; then
