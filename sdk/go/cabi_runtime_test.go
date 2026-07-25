@@ -323,6 +323,24 @@ func TestCABIRuntimeHostStatusProjectionFromFlatAndNestedShapes(t *testing.T) {
 	}
 }
 
+func TestCABIRuntimeHostStatusRejectsUnknownWireModeWithCanonicalError(t *testing.T) {
+	_, err := runtimeHostStatusFromCABI("42", []byte(`{
+		"state":"Running",
+		"mode":"daemon",
+		"endpoints":{"control_endpoint":"unix:///tmp/control.sock"}
+	}`))
+
+	if !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("invalid status mode error = %v, want %s", err, ErrInvalidArgument)
+	}
+	if err == nil || !strings.Contains(err.Error(), "edge, authority, or combined") {
+		t.Fatalf("invalid status mode error did not name canonical roles: %v", err)
+	}
+	if strings.Contains(err.Error(), "device, hub, or both") {
+		t.Fatalf("invalid status mode error leaked C-ABI wire vocabulary: %v", err)
+	}
+}
+
 func TestCABIPreparedAndSignedEnvelopeKeys(t *testing.T) {
 	key, err := preparedKeyFromJSON([]byte(`{"prepared_id":"prep-1","request_id":"req-1"}`))
 	if err != nil {

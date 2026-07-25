@@ -4747,6 +4747,24 @@ for token in (
 if "return cabiErrorFromLastErrorJSON(raw, true, code, operation)" not in go_cabi:
     raise SystemExit("sdk_go_cabi_last_error_json_not_authoritative")
 
+for required in (
+    "type cabiRuntimeHostMode string",
+    "func cabiRuntimeHostModeFromCanonical(",
+    "func cabiRuntimeHostModeFromWire(",
+    "runtime host status mode must map to edge, authority, or combined",
+):
+    if required not in go_cabi:
+        raise SystemExit(f"sdk_go_cabi_runtime_host_mode_adapter_missing:{required}")
+if "runtime host status mode must be device, hub, or both" in go_cabi:
+    raise SystemExit("sdk_go_cabi_runtime_host_status_error_leaks_product_modes")
+for required in (
+    "TestCABIRuntimeHostStatusRejectsUnknownWireModeWithCanonicalError",
+    "invalid status mode error did not name canonical roles",
+    "invalid status mode error leaked C-ABI wire vocabulary",
+):
+    if required not in go_cabi_test:
+        raise SystemExit(f"sdk_go_cabi_runtime_host_mode_adapter_test_missing:{required}")
+
 go_test_start = go_cabi_test.find("func TestCABIRuntimeProviderProjectsDescriptorResolverLastError")
 if go_test_start < 0:
     raise SystemExit("sdk_go_cabi_descriptor_error_test_missing")

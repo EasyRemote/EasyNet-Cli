@@ -14582,7 +14582,7 @@
           "identity": "cabi_runtime_provider",
           "owner_path": "sdk/go/",
           "path": "sdk/go/cabi_runtime.go",
-          "sha256": "8aa69c3ec086fc18d46e9f589012b8d71072437e1bd9b863df8f5287a31106a6",
+          "sha256": "27ca6ac07d65dd53b977ad0e89c3226cb01023cec048e2e599c845c1f19724a6",
           "interface": "RuntimeTransport",
           "revision": "dd9152570d83d1f6f382d6a464898316600a31a3"
         },
@@ -14934,7 +14934,7 @@
           "identity": "cabi_runtime_provider",
           "owner_path": "sdk/go/",
           "path": "sdk/go/cabi_runtime.go",
-          "sha256": "8aa69c3ec086fc18d46e9f589012b8d71072437e1bd9b863df8f5287a31106a6",
+          "sha256": "27ca6ac07d65dd53b977ad0e89c3226cb01023cec048e2e599c845c1f19724a6",
           "interface": "RuntimeTransport",
           "revision": "dd9152570d83d1f6f382d6a464898316600a31a3"
         },
@@ -22447,7 +22447,7 @@
       "production_owner": "canonical runtime provider",
       "owner_path": "sdk/go/",
       "path": "sdk/go/cabi_runtime.go",
-      "sha256": "8aa69c3ec086fc18d46e9f589012b8d71072437e1bd9b863df8f5287a31106a6",
+      "sha256": "27ca6ac07d65dd53b977ad0e89c3226cb01023cec048e2e599c845c1f19724a6",
       "interface": "RuntimeTransport",
       "interface_path": "sdk/go/runtime.go",
       "interface_sha256": "0cacdd965d045b1c7f7dd5f041fba8cd5750a4d66dd773f8211ba2231c9b4c70",

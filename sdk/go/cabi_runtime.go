@@ -1717,16 +1717,63 @@ func runtimeHostModeForCABI(value any) (string, error) {
 	if !ok || strings.TrimSpace(mode) == "" {
 		return "", invalidRuntimePayload("runtime host mode must be a non-empty string", nil)
 	}
-	switch strings.TrimSpace(mode) {
-	case "edge":
-		return "device", nil
-	case "authority":
-		return "hub", nil
-	case "combined":
-		return "both", nil
-	default:
+	wire, ok := cabiRuntimeHostModeFromCanonical(RuntimeMode(strings.TrimSpace(mode)))
+	if !ok {
 		return "", invalidRuntimePayload("runtime host mode must be edge, authority, or combined", nil)
 	}
+	return wire.String(), nil
+}
+
+type cabiRuntimeHostMode string
+
+const (
+	cabiRuntimeHostWireEdge      cabiRuntimeHostMode = "device"
+	cabiRuntimeHostWireAuthority cabiRuntimeHostMode = "hub"
+	cabiRuntimeHostWireCombined  cabiRuntimeHostMode = "both"
+)
+
+func cabiRuntimeHostModeFromCanonical(mode RuntimeMode) (cabiRuntimeHostMode, bool) {
+	switch mode {
+	case "edge":
+		return cabiRuntimeHostWireEdge, true
+	case "authority":
+		return cabiRuntimeHostWireAuthority, true
+	case "combined":
+		return cabiRuntimeHostWireCombined, true
+	default:
+		return "", false
+	}
+}
+
+func cabiRuntimeHostModeFromWire(value any) (cabiRuntimeHostMode, error) {
+	mode, ok := value.(string)
+	if !ok || strings.TrimSpace(mode) == "" {
+		return "", invalidRuntimePayload("runtime host status mode must be a non-empty string", nil)
+	}
+	wire := cabiRuntimeHostMode(strings.TrimSpace(mode))
+	switch wire {
+	case cabiRuntimeHostWireEdge, cabiRuntimeHostWireAuthority, cabiRuntimeHostWireCombined:
+		return wire, nil
+	default:
+		return "", invalidRuntimePayload("runtime host status mode must map to edge, authority, or combined", nil)
+	}
+}
+
+func (m cabiRuntimeHostMode) Canonical() RuntimeMode {
+	switch m {
+	case cabiRuntimeHostWireEdge:
+		return "edge"
+	case cabiRuntimeHostWireAuthority:
+		return "authority"
+	case cabiRuntimeHostWireCombined:
+		return "combined"
+	default:
+		return ""
+	}
+}
+
+func (m cabiRuntimeHostMode) String() string {
+	return string(m)
 }
 
 func emptyCABIConfigValue(value any) bool {
@@ -1777,20 +1824,11 @@ func runtimeHostStatusFromCABI(handleID string, raw []byte) (map[string]any, err
 }
 
 func runtimeHostStatusModeForCABI(value any) (string, error) {
-	mode, ok := value.(string)
-	if !ok || strings.TrimSpace(mode) == "" {
-		return "", invalidRuntimePayload("runtime host status mode must be a non-empty string", nil)
+	wire, err := cabiRuntimeHostModeFromWire(value)
+	if err != nil {
+		return "", err
 	}
-	switch strings.TrimSpace(mode) {
-	case "device":
-		return "edge", nil
-	case "hub":
-		return "authority", nil
-	case "both":
-		return "combined", nil
-	default:
-		return "", invalidRuntimePayload("runtime host status mode must be device, hub, or both", nil)
-	}
+	return string(wire.Canonical()), nil
 }
 
 func runtimeHostEndpointsFromCABI(decoded map[string]any) map[string]any {
