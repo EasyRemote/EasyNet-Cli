@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -200,6 +201,30 @@ func TestFileControlDiscoveryReaderRejectsLooseControlJSON(t *testing.T) {
 				t.Fatalf("readControlDiscovery error = %v, want INVALID_ARGUMENT", err)
 			}
 		})
+	}
+}
+
+func TestFileControlDiscoveryReaderNamesRuntimeHostVersionWhenRawFieldMissing(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "control.json")
+	raw := []byte(`{
+		"socket_path":"/tmp/control.sock",
+		"invocation_endpoint":"unix:///tmp/daemon.sock",
+		"pid":42,
+		"supported_ipc_versions":{"min":1,"max":1},
+		"capability_flags":["invocation"]
+	}`)
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	_, err := fileControlDiscoveryReader{}.readControlDiscovery(context.Background(), path)
+	if !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("readControlDiscovery error = %v, want INVALID_ARGUMENT", err)
+	}
+	message := err.Error()
+	if !strings.Contains(message, "runtime-host version field daemon_version") {
+		t.Fatalf("missing version diagnostic = %v, want runtime-host semantic plus raw field", err)
 	}
 }
 

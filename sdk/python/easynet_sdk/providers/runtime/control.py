@@ -119,6 +119,11 @@ class _ControlDiscovery:
             )
         for field_name in ("pid", _RAW_RUNTIME_HOST_VERSION_FIELD, "supported_ipc_versions"):
             if field_name not in decoded or decoded.get(field_name) is None:
+                if field_name == _RAW_RUNTIME_HOST_VERSION_FIELD:
+                    raise _invalid_control(
+                        "control discovery runtime-host version field "
+                        f"{_RAW_RUNTIME_HOST_VERSION_FIELD} is required"
+                    )
                 raise _invalid_control(f"control discovery {field_name} is required")
         if "capability_flags" not in decoded or decoded.get("capability_flags") is None:
             raise _invalid_control("control discovery capability_flags is required")
@@ -144,7 +149,8 @@ class _ControlDiscovery:
         )
         if not runtime_host_version:
             raise _invalid_control(
-                f"control discovery {_RAW_RUNTIME_HOST_VERSION_FIELD} is required"
+                "control discovery runtime-host version field "
+                f"{_RAW_RUNTIME_HOST_VERSION_FIELD} is required"
             )
         pages_port = _optional_non_negative_int(decoded.get("pages_port"), "pages_port")
         if "pages_port" in decoded and (pages_port <= 0 or pages_port > 65535):

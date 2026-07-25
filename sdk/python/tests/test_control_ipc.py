@@ -112,6 +112,26 @@ class ControlIpcTests(unittest.TestCase):
                     _ControlDiscovery.from_json(json.dumps(value))
                 self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
 
+    def test_discovery_missing_raw_version_names_runtime_host_semantic(self) -> None:
+        with self.assertRaises(SDKError) as caught:
+            _ControlDiscovery.from_json(
+                json.dumps(
+                    {
+                        "socket_path": "/tmp/control.sock",
+                        "invocation_endpoint": "/tmp/daemon.sock",
+                        "pid": 123,
+                        "supported_ipc_versions": {"min": 1, "max": 1},
+                        "capability_flags": ["boot_status"],
+                    }
+                )
+            )
+
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+        self.assertIn(
+            "runtime-host version field daemon_version",
+            str(caught.exception),
+        )
+
     def test_disjoint_version_range_fails_before_dial(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "control.json"

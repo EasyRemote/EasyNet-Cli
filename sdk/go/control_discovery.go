@@ -10,7 +10,10 @@ import (
 	"path/filepath"
 )
 
-const defaultControlDiscoveryPath = ".easynet/control.json"
+const (
+	defaultControlDiscoveryPath = ".easynet/control.json"
+	rawRuntimeHostVersionField  = "daemon_version"
+)
 
 // IpcVersionRange is the runtime-host control-plane discovery version range.
 type IpcVersionRange struct {
@@ -70,7 +73,10 @@ func (d *controlDiscovery) UnmarshalJSON(raw []byte) error {
 		return fmt.Errorf("control discovery pid is required")
 	}
 	if wire.RuntimeHostVersion == nil || *wire.RuntimeHostVersion == "" {
-		return fmt.Errorf("control discovery daemon_version is required")
+		return fmt.Errorf(
+			"control discovery runtime-host version field %s is required",
+			rawRuntimeHostVersionField,
+		)
 	}
 	if wire.SupportedIPCVersions == nil ||
 		wire.SupportedIPCVersions.Min <= 0 ||
