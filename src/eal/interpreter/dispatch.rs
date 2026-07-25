@@ -144,12 +144,9 @@ fn device_request(
     arguments: Value,
 ) -> Result<MissionInvocationRequest, EalError> {
     let node_id = node_id.trim();
-    let local_node = crate::daemon::persistence::config::load_credentials()
-        .ok()
-        .map(|credentials| credentials.node_id);
     if node_id.is_empty()
         || node_id.eq_ignore_ascii_case("local")
-        || local_node.as_deref() == Some(node_id)
+        || EalLocalNodeIdentity::load().matches_node(node_id)?
     {
         return Ok(MissionInvocationRequest::system(ability, arguments));
     }
@@ -164,6 +161,45 @@ fn device_request(
     };
     MissionInvocationRequest::remote_node(target, ability, arguments)
         .map_err(|error| EalError::Validation(format!("parse device target: {error}")))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum EalLocalNodeIdentity {
+    Known(String),
+    Unpaired,
+    Unavailable { reason: String },
+}
+
+impl EalLocalNodeIdentity {
+    fn load() -> Self {
+        match crate::daemon::persistence::config::load_credentials_optional() {
+            Ok(Some(credentials)) => {
+                let node_id = credentials.node_id.trim();
+                if node_id.is_empty() {
+                    return Self::Unavailable {
+                        reason:
+                            "EAL device target resolution requires non-empty local node identity"
+                                .to_string(),
+                    };
+                }
+                Self::Known(node_id.to_string())
+            }
+            Ok(None) => Self::Unpaired,
+            Err(error) => Self::Unavailable {
+                reason: format!(
+                    "load local credentials for EAL device target resolution: {error:#}"
+                ),
+            },
+        }
+    }
+
+    fn matches_node(&self, node_id: &str) -> Result<bool, EalError> {
+        match self {
+            Self::Known(local_node_id) => Ok(local_node_id == node_id),
+            Self::Unpaired => Ok(false),
+            Self::Unavailable { reason } => Err(EalError::Unavailable(reason.clone())),
+        }
+    }
 }
 
 fn validate_agent_target(
@@ -202,8 +238,10 @@ fn validate_agent_target(
 mod tests {
     use super::*;
     use crate::core::agent::id::{AbilityName, AgentId};
+    use crate::daemon::execution::mission::invocation_gateway::MissionInvocationTarget;
     use crate::daemon::persistence::agent_registry::{AgentEntry, AgentRegistry, AgentType};
     use crate::daemon::persistence::config;
+    use serde_json::json;
 
     struct UnusedMissionGateway;
 
@@ -260,6 +298,62 @@ mod tests {
             error.message().contains("unknown ability: claude.chat"),
             "canonical row was not used; unexpected error: {error}"
         );
+    }
+
+    #[test]
+    fn device_request_rejects_malformed_credentials_before_remote_guess() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        std::fs::create_dir_all(config::state_dir()).expect("create state dir");
+        std::fs::write(config::state_dir().join("credentials.json"), b"{")
+            .expect("write malformed credentials");
+
+        let error = device_request("acme", "node-b", "observe.health", json!({}))
+            .expect_err("malformed credentials must not collapse to remote target guessing");
+
+        assert_eq!(error.error_code(), "unavailable");
+        assert!(
+            error
+                .message()
+                .contains("load local credentials for EAL device target resolution"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            error.message().contains("parse credentials"),
+            "malformed credentials must surface parse failure: {error}"
+        );
+    }
+
+    #[test]
+    fn device_request_resolves_remote_device_when_credentials_are_unpaired() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+
+        let request = device_request("acme", "node-b", "observe.health", json!({}))
+            .expect("explicit tenant allows remote device target without local pairing");
+
+        assert_eq!(
+            request.target(),
+            &MissionInvocationTarget::RemoteNode("easynet:///r/acme/device/node-b".to_string())
+        );
+    }
+
+    #[test]
+    fn device_request_resolves_known_local_node_to_system_target() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        config::save_credentials(&config::Credentials {
+            node_id: "node-a".to_string(),
+            credential_token: "token".to_string(),
+            hub_endpoint: "axon://hub.example:50051".to_string(),
+            realm: "acme".to_string(),
+            username: Some("alice".to_string()),
+            user_id: Some("user-alice".to_string()),
+            ..Default::default()
+        })
+        .expect("write credentials");
+
+        let request = device_request("acme", "node-a", "observe.health", json!({}))
+            .expect("known local node resolves to local system target");
+
+        assert_eq!(request.target(), &MissionInvocationTarget::LocalDevice);
     }
 
     #[test]

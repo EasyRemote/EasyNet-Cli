@@ -209,6 +209,11 @@ impl MissionInvocationRequest {
             _ => None,
         }
     }
+
+    #[cfg(test)]
+    pub(crate) fn target(&self) -> &MissionInvocationTarget {
+        &self.target
+    }
 }
 
 fn default_child_timeout() -> Duration {

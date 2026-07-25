@@ -8231,6 +8231,47 @@ for doc_name, doc in (("parser", parser), ("ir", ir)):
 PY
 }
 
+check_eal_device_target_identity_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local dispatch="$cli_root/src/eal/interpreter/dispatch.rs"
+  [[ -f "$dispatch" ]] || fail "EAL dispatch source is missing: ${dispatch#$cli_root/}"
+
+  "$PYTHON_BIN" - "$dispatch" <<'PY'
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+production = text.split("\n#[cfg(test)]", 1)[0]
+
+for retired in (
+    "load_credentials().ok()",
+    "load_credentials()\n        .ok()",
+):
+    if retired in production:
+        raise SystemExit(f"eal_device_target_identity:retired_credentials_fallback:{retired}")
+
+for required in (
+    "enum EalLocalNodeIdentity",
+    "Known(String)",
+    "Unpaired",
+    "Unavailable { reason: String }",
+    "load_credentials_optional()",
+    "load local credentials for EAL device target resolution",
+    "fn matches_node(&self, node_id: &str) -> Result<bool, EalError>",
+):
+    if required not in production:
+        raise SystemExit(f"eal_device_target_identity:missing:{required}")
+
+for test in (
+    "device_request_rejects_malformed_credentials_before_remote_guess",
+    "device_request_resolves_remote_device_when_credentials_are_unpaired",
+    "device_request_resolves_known_local_node_to_system_target",
+):
+    if test not in text:
+        raise SystemExit(f"eal_device_target_identity:missing_test:{test}")
+PY
+}
+
 check_mission_agent_trace_sink_cutover_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local agent_mod="$cli_root/src/cli/commands/agent/mod.rs"
@@ -19671,6 +19712,25 @@ EOF
   if ( check_mission_traditional_target_conflict_contract "$tmp/mission-implicit-fallback" ) >/dev/null 2>&1; then
     fail "self-test expected Mission implicit fallback naming gate to fail"
   fi
+  mkdir -p "$tmp/eal-device-target-identity-legacy/src/eal/interpreter"
+  cat >"$tmp/eal-device-target-identity-legacy/src/eal/interpreter/dispatch.rs" <<'EOF'
+fn device_request(tenant: &str, node_id: &str, ability: &str, arguments: Value) -> Result<MissionInvocationRequest, EalError> {
+    let local_node = crate::daemon::persistence::config::load_credentials()
+        .ok()
+        .map(|credentials| credentials.node_id);
+    if local_node.as_deref() == Some(node_id) {
+        return Ok(MissionInvocationRequest::system(ability, arguments));
+    }
+    MissionInvocationRequest::remote_node(crate::core::ura::device_ura(tenant, node_id), ability, arguments)
+}
+#[cfg(test)]
+mod tests {
+    fn device_request_resolves_remote_device_when_credentials_are_unpaired() {}
+}
+EOF
+  if ( check_eal_device_target_identity_contract "$tmp/eal-device-target-identity-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected EAL device target identity fallback gate to fail"
+  fi
   mkdir -p "$tmp/mission-agent-trace-sink-legacy/src/cli/commands/agent" \
     "$tmp/mission-agent-trace-sink-legacy/src/daemon/execution/mission/executors" \
     "$tmp/mission-agent-trace-sink-legacy/src/daemon/ability/builtins/automation"
@@ -21783,6 +21843,7 @@ EOF
   check_federation_revoke_ingress_strict_contract
   check_device_settings_loader_contract
   check_mission_traditional_target_conflict_contract
+  check_eal_device_target_identity_contract
   check_mission_agent_trace_sink_cutover_contract
   check_mission_dispatch_audit_authority_contract
   check_mission_runtime_meta_identity_schema_contract
@@ -22008,6 +22069,7 @@ check_federation_receipt_facts_strict_contract
 check_federation_revoke_ingress_strict_contract
 check_device_settings_loader_contract
 check_mission_traditional_target_conflict_contract
+check_eal_device_target_identity_contract
 check_mission_agent_trace_sink_cutover_contract
 check_mission_dispatch_audit_authority_contract
 check_mission_runtime_meta_identity_schema_contract
