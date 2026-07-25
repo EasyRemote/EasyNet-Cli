@@ -199,6 +199,20 @@ final class RuntimeCoreSeamTests: XCTestCase {
             )
         }
 
+        var missingProofPayload = terminal
+        var proofWithoutPayload = missingProofPayload["authority_proof"] as! [String: Any]
+        proofWithoutPayload.removeValue(forKey: "proof_payload_base64")
+        missingProofPayload["authority_proof"] = proofWithoutPayload
+        expectSyncSDKError(.invalidArgument, "runtime receipt summary is missing authority_proof.proof_payload_base64") {
+            _ = try InvocationResult.fromJSON(
+                jsonData([
+                    "ok": true,
+                    "terminal_state": "Completed",
+                    "terminal_receipt": missingProofPayload,
+                ])
+            )
+        }
+
         var causalLegacyField = terminal
         causalLegacyField["causal_binding"] = ["form": "none", "legacy_parent": "opaque"]
         expectSyncSDKError(.invalidArgument, "causal_binding contains noncanonical field legacy_parent") {
@@ -309,7 +323,7 @@ final class RuntimeCoreSeamTests: XCTestCase {
         retiredSessionProof["binding"] = retiredSessionBinding
         retiredSessionProof["proof_payload_base64"] = ""
         retiredSessionReceipt["authority_proof"] = retiredSessionProof
-        expectSyncSDKError(.invalidArgument, "authority_binding contains noncanonical field user_ura") {
+        expectSyncSDKError(.invalidArgument, "authority_binding contains noncanonical field backend_ura") {
             _ = try InvocationResult.fromJSON(
                 jsonData([
                     "ok": true,

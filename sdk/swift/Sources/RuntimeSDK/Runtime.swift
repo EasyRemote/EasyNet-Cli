@@ -216,7 +216,7 @@ private enum RuntimeReceiptProofFacts {
             throw SDKError.validation("runtime_receipt", "runtime receipt authority_proof binding does not match authority_binding")
         }
         let proofPayload = try runtimeBase64(
-            runtimeOptionalString(proof, "proof_payload_base64", "runtime_receipt") ?? "",
+            runtimeRequiredStringAllowEmpty(proof, "proof_payload_base64", "authority_proof"),
             "authority_proof.proof_payload_base64",
             expectedLength: nil,
             allowEmpty: true
@@ -723,12 +723,26 @@ private func runtimeObject(_ value: Any?, _ field: String) throws -> [String: An
     return object
 }
 
+private func runtimeRequiredStringAllowEmpty(
+    _ object: [String: Any],
+    _ field: String,
+    _ objectName: String
+) throws -> String {
+    guard let value = object[field] as? String, value == value.trimmingCharacters(in: .whitespacesAndNewlines) else {
+        if objectName == "authority_proof", field == "proof_payload_base64" {
+            throw SDKError.validation("runtime_receipt", "runtime receipt summary is missing authority_proof.proof_payload_base64")
+        }
+        throw SDKError.validation("runtime_receipt", "runtime receipt summary is missing \(objectName).\(field)")
+    }
+    return value
+}
+
 private func runtimeRequireExactKeys(
     _ object: [String: Any],
     _ field: String,
     _ allowedKeys: Set<String>
 ) throws {
-    for key in object.keys where !allowedKeys.contains(key) {
+    for key in object.keys.sorted() where !allowedKeys.contains(key) {
         throw SDKError.validation("runtime_receipt", "\(field) contains noncanonical field \(key)")
     }
 }

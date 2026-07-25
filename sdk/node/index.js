@@ -1980,7 +1980,10 @@ function validateRuntimeReceiptProofFacts(raw) {
     throw invalidRuntime("runtime receipt authority_proof binding does not match authority_binding");
   }
   const proofPayload = validateRuntimeBase64(
-    stringValue(proof.proof_payload_base64, "authority_proof.proof_payload_base64", true),
+    requiredRuntimeStringAllowEmpty(
+      proof.proof_payload_base64,
+      "authority_proof.proof_payload_base64",
+    ),
     "authority_proof.proof_payload_base64",
     null,
     true,
@@ -2406,6 +2409,16 @@ function requiredRuntimeNonNegativeInteger(value, field) {
 function requiredRuntimeString(value, field) {
   if (typeof value !== "string" || value === "") {
     throw invalidRuntime(`${field} must be a non-empty string`);
+  }
+  return value;
+}
+
+function requiredRuntimeStringAllowEmpty(value, field) {
+  if (typeof value !== "string" || value !== value.trim()) {
+    if (field === "authority_proof.proof_payload_base64") {
+      throw invalidRuntime("runtime receipt summary is missing authority_proof.proof_payload_base64");
+    }
+    throw invalidRuntime(`runtime receipt summary is missing ${field}`);
   }
   return value;
 }

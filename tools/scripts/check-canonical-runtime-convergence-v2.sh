@@ -13694,6 +13694,8 @@ for fragment, label in {
     "canonicalRuntimeAuthorityBytes": "authority_binding_projection_missing",
     "requireRuntimeReceiptExactKeys": "exact_object_schema_validator_missing",
     "contains noncanonical field": "noncanonical_field_error_missing",
+    "requiredRuntimeStringAllowEmpty": "proof_payload_presence_check_missing",
+    "runtime receipt summary is missing authority_proof.proof_payload_base64": "proof_payload_presence_error_missing",
     "authority_proof_hash_mismatch": "authority_proof_hash_mismatch_missing",
     "hosted runtime receipt is missing host_attestation_base64": "hosted_signer_attestation_missing",
     "raw.authority_proof": "authority_proof_required_missing",
@@ -13731,6 +13733,7 @@ for required_test in (
     "authority_proof contains noncanonical field legacy_proof_fact",
     "legacy_profile",
     "authority_proof.issuer contains noncanonical field legacy_profile",
+    "delete mutableAuthorityProof(missingProofPayload).proof_payload_base64",
     "authority_binding contains noncanonical field",
     "receipt_type",
     "retired receipt alias is not accepted",
@@ -13763,6 +13766,8 @@ for fragment, label in {
     "RuntimeReceiptProofFacts": "proof_fact_validator_missing",
     "validateAuthorityProofHash": "authority_proof_hash_validator_missing",
     "RuntimeAuthorityBinding": "authority_binding_projection_missing",
+    "runtimeRequiredStringAllowEmpty": "proof_payload_presence_check_missing",
+    "runtime receipt summary is missing authority_proof.proof_payload_base64": "proof_payload_presence_error_missing",
     "authority_proof_hash_mismatch": "authority_proof_hash_mismatch_missing",
     "hosted runtime receipt is missing host_attestation_base64": "hosted_signer_attestation_missing",
     "terminal_receipt state does not match invocation terminal_state": "terminal_state_topology_missing",
@@ -13789,6 +13794,7 @@ for required_test in (
     "canonicalRuntimeReceipt",
     "authorityBindingProofHashSelf",
     "authority_proof_hash_mismatch",
+    "proofWithoutPayload.removeValue(forKey: \"proof_payload_base64\")",
     "hosted runtime receipt is missing host_attestation_base64",
 ):
     if required_test not in tests:
@@ -14091,7 +14097,7 @@ required_tests = {
         [
             "authorityBindingProofHashSession",
             "retiredSessionBinding",
-            'expectSyncSDKError(.invalidArgument, "authority_binding contains noncanonical field user_ura")',
+            'expectSyncSDKError(.invalidArgument, "authority_binding contains noncanonical field backend_ura")',
         ],
     ),
 }

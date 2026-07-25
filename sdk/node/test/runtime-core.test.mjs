@@ -531,6 +531,15 @@ test("runtime receipt proof facts are mandatory", () => {
       && error.code === sdk.ErrorCode.INVALID_ARGUMENT
       && error.message.includes("authority_proof contains noncanonical field legacy_proof_fact"),
   );
+  const missingProofPayload = { ...complete };
+  delete mutableAuthorityProof(missingProofPayload).proof_payload_base64;
+  assert.throws(
+    () => sdk.RuntimeReceipt.fromObject(missingProofPayload),
+    (error) =>
+      error instanceof sdk.SDKError
+      && error.code === sdk.ErrorCode.INVALID_ARGUMENT
+      && error.message.includes("runtime receipt summary is missing authority_proof.proof_payload_base64"),
+  );
   const legacyProofIssuer = { ...complete };
   mutableAuthorityProof(legacyProofIssuer).issuer = {
     ...complete.callee_binding,
