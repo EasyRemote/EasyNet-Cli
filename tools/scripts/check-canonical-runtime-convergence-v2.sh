@@ -777,6 +777,47 @@ check_python_sdk_runtime_addressing_kind_contract() {
   fi
 }
 
+check_sdk_managed_signing_authority_route_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local go_signing="$cli_root/sdk/go/managed_signing.go"
+  local py_signing="$cli_root/sdk/python/easynet_sdk/managed_signing.py"
+
+  if [[ -f "$go_signing" ]]; then
+    if rg -n 'ViaHubURA|via_hub_ura|peer via-hub URA' "$go_signing"; then
+      fail "Go SDK managed-signing public model preserves Hub route vocabulary"
+    fi
+    if ! rg -q 'ViaAuthorityURA string' "$go_signing"; then
+      fail "Go SDK managed-signing peer registration must expose ViaAuthorityURA"
+    fi
+    if ! rg -q '`json:"via_authority_ura,omitempty"`' "$go_signing"; then
+      fail "Go SDK managed-signing peer projection must serialize via_authority_ura"
+    fi
+    if ! rg -q 'payload\["via_hub"\] = viaAuthorityURA' "$go_signing"; then
+      fail "Go SDK managed-signing provider adapter must translate authority route to daemon wire via_hub"
+    fi
+  fi
+
+  if [[ -f "$py_signing" ]]; then
+    if rg -n 'via_hub_ura|peer via-hub URA' "$py_signing"; then
+      fail "Python SDK managed-signing public model preserves Hub route vocabulary"
+    fi
+    if ! rg -q 'via_authority_ura: str \| None' "$py_signing"; then
+      fail "Python SDK managed-signing peer model must expose via_authority_ura"
+    fi
+    if ! rg -q 'payload\["via_hub"\] = _required_text' "$py_signing"; then
+      fail "Python SDK managed-signing provider adapter must translate authority route to daemon wire via_hub"
+    fi
+    if ! rg -q 'via_authority_ura=_optional_projection_text\(raw, "via_hub"\)' "$py_signing"; then
+      fail "Python SDK managed-signing provider adapter must decode daemon wire via_hub into authority route"
+    fi
+  fi
+
+  local public_api="$cli_root/sdk/conformance/canonical-public-api.json"
+  if [[ -f "$public_api" ]] && rg -n 'ViaHubURA|via_hub_ura' "$public_api"; then
+    fail "canonical public API inventory preserves managed-signing Hub route vocabulary"
+  fi
+}
+
 check_advertise_agent_ingress_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local wrappers="$cli_root/src/daemon/invocation/dispatch/federation_wrappers.rs"
@@ -20818,6 +20859,7 @@ EOF
   check_go_sdk_lifecycle_fixture_neutrality_contract
   check_go_sdk_runtime_resource_namespace_contract
   check_python_sdk_runtime_addressing_kind_contract
+  check_sdk_managed_signing_authority_route_contract
   check_advertise_agent_ingress_contract
   check_agent_start_model_intent_contract
   check_invocation_history_get_key_contract
@@ -21036,6 +21078,7 @@ check_go_sdk_runtime_lifecycle_neutrality_contract
 check_go_sdk_lifecycle_fixture_neutrality_contract
 check_go_sdk_runtime_resource_namespace_contract
 check_python_sdk_runtime_addressing_kind_contract
+check_sdk_managed_signing_authority_route_contract
 check_advertise_agent_ingress_contract
 check_agent_start_model_intent_contract
 check_invocation_history_get_key_contract

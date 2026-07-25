@@ -126911,7 +126911,7 @@
         },
         {
           "item": "ManagedSigningPeer",
-          "sha256": "7bfb611533b9d4c3b750138115530b5135014d2618392ef6099c484043b20423"
+          "sha256": "dd988b2fe7ba112bd9a81a87c037273f2c8a1bdec5157ba6fef831b7c4b40da1"
         },
         {
           "item": "ManagedSigningPeerPage",
@@ -126919,7 +126919,7 @@
         },
         {
           "item": "ManagedSigningPeerRegistration",
-          "sha256": "eb76114cf0ed0e663e9d3707523c7f8c845fa4c6acfd766e0cd4f3284dbe9523"
+          "sha256": "2fb6978740673dcb89b6183830c70d245a4e62194e3a3372b3562da5f7ca4a71"
         },
         {
           "item": "ManagedSigningStatus",
@@ -127118,7 +127118,7 @@
           "sha256": "8362cdd056364a14979a467f7cc7f44bec858bebde78561b8d7fe26b2940ec0e"
         },
         {
-          "item": "ManagedSigningPeer.ViaHubURA",
+          "item": "ManagedSigningPeer.ViaAuthorityURA",
           "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
         },
         {
@@ -127138,7 +127138,7 @@
           "sha256": "8362cdd056364a14979a467f7cc7f44bec858bebde78561b8d7fe26b2940ec0e"
         },
         {
-          "item": "ManagedSigningPeerRegistration.ViaHubURA",
+          "item": "ManagedSigningPeerRegistration.ViaAuthorityURA",
           "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
         }
       ],
@@ -127190,7 +127190,7 @@
             },
             {
               "item": "ManagedSigningPeer",
-              "sha256": "7bfb611533b9d4c3b750138115530b5135014d2618392ef6099c484043b20423"
+              "sha256": "dd988b2fe7ba112bd9a81a87c037273f2c8a1bdec5157ba6fef831b7c4b40da1"
             },
             {
               "item": "ManagedSigningPeerPage",
@@ -127198,7 +127198,7 @@
             },
             {
               "item": "ManagedSigningPeerRegistration",
-              "sha256": "eb76114cf0ed0e663e9d3707523c7f8c845fa4c6acfd766e0cd4f3284dbe9523"
+              "sha256": "2fb6978740673dcb89b6183830c70d245a4e62194e3a3372b3562da5f7ca4a71"
             },
             {
               "item": "ManagedSigningStatus",
@@ -127397,7 +127397,7 @@
               "sha256": "8362cdd056364a14979a467f7cc7f44bec858bebde78561b8d7fe26b2940ec0e"
             },
             {
-              "item": "ManagedSigningPeer.ViaHubURA",
+              "item": "ManagedSigningPeer.ViaAuthorityURA",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
@@ -127417,7 +127417,7 @@
               "sha256": "8362cdd056364a14979a467f7cc7f44bec858bebde78561b8d7fe26b2940ec0e"
             },
             {
-              "item": "ManagedSigningPeerRegistration.ViaHubURA",
+              "item": "ManagedSigningPeerRegistration.ViaAuthorityURA",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             }
           ]
@@ -127469,7 +127469,7 @@
             },
             {
               "item": "ManagedSigningPeer",
-              "sha256": "7bfb611533b9d4c3b750138115530b5135014d2618392ef6099c484043b20423"
+              "sha256": "dd988b2fe7ba112bd9a81a87c037273f2c8a1bdec5157ba6fef831b7c4b40da1"
             },
             {
               "item": "ManagedSigningPeerPage",
@@ -127477,7 +127477,7 @@
             },
             {
               "item": "ManagedSigningPeerRegistration",
-              "sha256": "eb76114cf0ed0e663e9d3707523c7f8c845fa4c6acfd766e0cd4f3284dbe9523"
+              "sha256": "2fb6978740673dcb89b6183830c70d245a4e62194e3a3372b3562da5f7ca4a71"
             },
             {
               "item": "ManagedSigningStatus",
@@ -127676,7 +127676,7 @@
               "sha256": "8362cdd056364a14979a467f7cc7f44bec858bebde78561b8d7fe26b2940ec0e"
             },
             {
-              "item": "ManagedSigningPeer.ViaHubURA",
+              "item": "ManagedSigningPeer.ViaAuthorityURA",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
@@ -127696,7 +127696,7 @@
               "sha256": "8362cdd056364a14979a467f7cc7f44bec858bebde78561b8d7fe26b2940ec0e"
             },
             {
-              "item": "ManagedSigningPeerRegistration.ViaHubURA",
+              "item": "ManagedSigningPeerRegistration.ViaAuthorityURA",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             }
           ]
@@ -127748,7 +127748,7 @@
             },
             {
               "item": "ManagedSigningPeer",
-              "sha256": "7bfb611533b9d4c3b750138115530b5135014d2618392ef6099c484043b20423"
+              "sha256": "dd988b2fe7ba112bd9a81a87c037273f2c8a1bdec5157ba6fef831b7c4b40da1"
             },
             {
               "item": "ManagedSigningPeerPage",
@@ -127756,7 +127756,7 @@
             },
             {
               "item": "ManagedSigningPeerRegistration",
-              "sha256": "eb76114cf0ed0e663e9d3707523c7f8c845fa4c6acfd766e0cd4f3284dbe9523"
+              "sha256": "2fb6978740673dcb89b6183830c70d245a4e62194e3a3372b3562da5f7ca4a71"
             },
             {
               "item": "ManagedSigningStatus",
@@ -127955,7 +127955,7 @@
               "sha256": "8362cdd056364a14979a467f7cc7f44bec858bebde78561b8d7fe26b2940ec0e"
             },
             {
-              "item": "ManagedSigningPeer.ViaHubURA",
+              "item": "ManagedSigningPeer.ViaAuthorityURA",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
@@ -127975,7 +127975,7 @@
               "sha256": "8362cdd056364a14979a467f7cc7f44bec858bebde78561b8d7fe26b2940ec0e"
             },
             {
-              "item": "ManagedSigningPeerRegistration.ViaHubURA",
+              "item": "ManagedSigningPeerRegistration.ViaAuthorityURA",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             }
           ]
@@ -128027,7 +128027,7 @@
             },
             {
               "item": "ManagedSigningPeer",
-              "sha256": "7bfb611533b9d4c3b750138115530b5135014d2618392ef6099c484043b20423"
+              "sha256": "dd988b2fe7ba112bd9a81a87c037273f2c8a1bdec5157ba6fef831b7c4b40da1"
             },
             {
               "item": "ManagedSigningPeerPage",
@@ -128035,7 +128035,7 @@
             },
             {
               "item": "ManagedSigningPeerRegistration",
-              "sha256": "eb76114cf0ed0e663e9d3707523c7f8c845fa4c6acfd766e0cd4f3284dbe9523"
+              "sha256": "2fb6978740673dcb89b6183830c70d245a4e62194e3a3372b3562da5f7ca4a71"
             },
             {
               "item": "ManagedSigningStatus",
@@ -128234,7 +128234,7 @@
               "sha256": "8362cdd056364a14979a467f7cc7f44bec858bebde78561b8d7fe26b2940ec0e"
             },
             {
-              "item": "ManagedSigningPeer.ViaHubURA",
+              "item": "ManagedSigningPeer.ViaAuthorityURA",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
@@ -128254,7 +128254,7 @@
               "sha256": "8362cdd056364a14979a467f7cc7f44bec858bebde78561b8d7fe26b2940ec0e"
             },
             {
-              "item": "ManagedSigningPeerRegistration.ViaHubURA",
+              "item": "ManagedSigningPeerRegistration.ViaAuthorityURA",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             }
           ]
@@ -128306,7 +128306,7 @@
             },
             {
               "item": "ManagedSigningPeer",
-              "sha256": "7bfb611533b9d4c3b750138115530b5135014d2618392ef6099c484043b20423"
+              "sha256": "dd988b2fe7ba112bd9a81a87c037273f2c8a1bdec5157ba6fef831b7c4b40da1"
             },
             {
               "item": "ManagedSigningPeerPage",
@@ -128314,7 +128314,7 @@
             },
             {
               "item": "ManagedSigningPeerRegistration",
-              "sha256": "eb76114cf0ed0e663e9d3707523c7f8c845fa4c6acfd766e0cd4f3284dbe9523"
+              "sha256": "2fb6978740673dcb89b6183830c70d245a4e62194e3a3372b3562da5f7ca4a71"
             },
             {
               "item": "ManagedSigningStatus",
@@ -128513,7 +128513,7 @@
               "sha256": "8362cdd056364a14979a467f7cc7f44bec858bebde78561b8d7fe26b2940ec0e"
             },
             {
-              "item": "ManagedSigningPeer.ViaHubURA",
+              "item": "ManagedSigningPeer.ViaAuthorityURA",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
@@ -128533,7 +128533,7 @@
               "sha256": "8362cdd056364a14979a467f7cc7f44bec858bebde78561b8d7fe26b2940ec0e"
             },
             {
-              "item": "ManagedSigningPeerRegistration.ViaHubURA",
+              "item": "ManagedSigningPeerRegistration.ViaAuthorityURA",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             }
           ]
@@ -128585,7 +128585,7 @@
             },
             {
               "item": "ManagedSigningPeer",
-              "sha256": "7bfb611533b9d4c3b750138115530b5135014d2618392ef6099c484043b20423"
+              "sha256": "dd988b2fe7ba112bd9a81a87c037273f2c8a1bdec5157ba6fef831b7c4b40da1"
             },
             {
               "item": "ManagedSigningPeerPage",
@@ -128593,7 +128593,7 @@
             },
             {
               "item": "ManagedSigningPeerRegistration",
-              "sha256": "eb76114cf0ed0e663e9d3707523c7f8c845fa4c6acfd766e0cd4f3284dbe9523"
+              "sha256": "2fb6978740673dcb89b6183830c70d245a4e62194e3a3372b3562da5f7ca4a71"
             },
             {
               "item": "ManagedSigningStatus",
@@ -128792,7 +128792,7 @@
               "sha256": "8362cdd056364a14979a467f7cc7f44bec858bebde78561b8d7fe26b2940ec0e"
             },
             {
-              "item": "ManagedSigningPeer.ViaHubURA",
+              "item": "ManagedSigningPeer.ViaAuthorityURA",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
@@ -128812,7 +128812,7 @@
               "sha256": "8362cdd056364a14979a467f7cc7f44bec858bebde78561b8d7fe26b2940ec0e"
             },
             {
-              "item": "ManagedSigningPeerRegistration.ViaHubURA",
+              "item": "ManagedSigningPeerRegistration.ViaAuthorityURA",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             }
           ]
@@ -128864,7 +128864,7 @@
             },
             {
               "item": "ManagedSigningPeer",
-              "sha256": "7bfb611533b9d4c3b750138115530b5135014d2618392ef6099c484043b20423"
+              "sha256": "dd988b2fe7ba112bd9a81a87c037273f2c8a1bdec5157ba6fef831b7c4b40da1"
             },
             {
               "item": "ManagedSigningPeerPage",
@@ -128872,7 +128872,7 @@
             },
             {
               "item": "ManagedSigningPeerRegistration",
-              "sha256": "eb76114cf0ed0e663e9d3707523c7f8c845fa4c6acfd766e0cd4f3284dbe9523"
+              "sha256": "2fb6978740673dcb89b6183830c70d245a4e62194e3a3372b3562da5f7ca4a71"
             },
             {
               "item": "ManagedSigningStatus",
@@ -129071,7 +129071,7 @@
               "sha256": "8362cdd056364a14979a467f7cc7f44bec858bebde78561b8d7fe26b2940ec0e"
             },
             {
-              "item": "ManagedSigningPeer.ViaHubURA",
+              "item": "ManagedSigningPeer.ViaAuthorityURA",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
@@ -129091,7 +129091,7 @@
               "sha256": "8362cdd056364a14979a467f7cc7f44bec858bebde78561b8d7fe26b2940ec0e"
             },
             {
-              "item": "ManagedSigningPeerRegistration.ViaHubURA",
+              "item": "ManagedSigningPeerRegistration.ViaAuthorityURA",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             }
           ]
@@ -129116,7 +129116,7 @@
         },
         {
           "item": "ManagedSigningClient",
-          "sha256": "c3fc6c69d9da844e91c56ace62ad0defe41e2f0433ff7f49c6c521a6f18e10eb"
+          "sha256": "b1191f7612b354ce66492867e7e40f33767304b3da5f8ecc4cc4682a8646fb65"
         },
         {
           "item": "ManagedSigningCreateRequest",
@@ -129136,7 +129136,7 @@
         },
         {
           "item": "ManagedSigningPeer",
-          "sha256": "b4d1e9c79d19297ab3e7fb621e07b08b65252c1045f38966594b3d7905cc3f51"
+          "sha256": "f2784d62e139f1de16eee560d9d8983046bc86fe8c33c7db9ef68415ca9832ff"
         },
         {
           "item": "ManagedSigningPeerPage",
@@ -129144,7 +129144,7 @@
         },
         {
           "item": "ManagedSigningPeerRegistration",
-          "sha256": "d6acb50c3d911e0bb89eb45058fd72d008b2ab8b4fcdafa10b9d26a9b801800a"
+          "sha256": "41eaa8a6cda3cc91e15546e362a5ec68314c073e69a697ba1b6410d5ed60ea69"
         },
         {
           "item": "ManagedSigningStatus",
@@ -129184,7 +129184,7 @@
         },
         {
           "item": "ManagedSigningClient.add_peer",
-          "sha256": "2ac9e17fd56024169a351b3fae31a1854bde5bc04dcca0d4708477869bde3d67"
+          "sha256": "b8adcbf370db6ccdcfd251d5c36a83e21e9cda4df90a04af0641b164047ef602"
         },
         {
           "item": "ManagedSigningClient.bind_subject",
@@ -129339,8 +129339,8 @@
           "sha256": "710c0109eceff0ca761e6946c9bc0d78981d1a12515c562affc3e8d31c5648ad"
         },
         {
-          "item": "ManagedSigningPeer.via_hub_ura",
-          "sha256": "957b89c69c48af339d19df63deef6898ebe8590e8525d1db72862e98a65fd084"
+          "item": "ManagedSigningPeer.via_authority_ura",
+          "sha256": "bcdb54123b2dcacbc7638f3b94acb395d9cebc979ea53137bd198df987d6cfae"
         },
         {
           "item": "ManagedSigningPeerPage.items",
@@ -129367,8 +129367,8 @@
           "sha256": "710c0109eceff0ca761e6946c9bc0d78981d1a12515c562affc3e8d31c5648ad"
         },
         {
-          "item": "ManagedSigningPeerRegistration.via_hub_ura",
-          "sha256": "fed6cc3b72036ef61c0401ff562da57add512756143b59b254f1d5810ac528e2"
+          "item": "ManagedSigningPeerRegistration.via_authority_ura",
+          "sha256": "08440d3b02a3ee704ea0660b1e7c11083b3999aa2f9f08d7c4a27c312b3abbb2"
         },
         {
           "item": "ManagedSigningStatus.ACTIVE",
@@ -129395,7 +129395,7 @@
             },
             {
               "item": "ManagedSigningClient",
-              "sha256": "c3fc6c69d9da844e91c56ace62ad0defe41e2f0433ff7f49c6c521a6f18e10eb"
+              "sha256": "b1191f7612b354ce66492867e7e40f33767304b3da5f8ecc4cc4682a8646fb65"
             },
             {
               "item": "ManagedSigningCreateRequest",
@@ -129415,7 +129415,7 @@
             },
             {
               "item": "ManagedSigningPeer",
-              "sha256": "b4d1e9c79d19297ab3e7fb621e07b08b65252c1045f38966594b3d7905cc3f51"
+              "sha256": "f2784d62e139f1de16eee560d9d8983046bc86fe8c33c7db9ef68415ca9832ff"
             },
             {
               "item": "ManagedSigningPeerPage",
@@ -129423,7 +129423,7 @@
             },
             {
               "item": "ManagedSigningPeerRegistration",
-              "sha256": "d6acb50c3d911e0bb89eb45058fd72d008b2ab8b4fcdafa10b9d26a9b801800a"
+              "sha256": "41eaa8a6cda3cc91e15546e362a5ec68314c073e69a697ba1b6410d5ed60ea69"
             },
             {
               "item": "ManagedSigningStatus",
@@ -129463,7 +129463,7 @@
             },
             {
               "item": "ManagedSigningClient.add_peer",
-              "sha256": "2ac9e17fd56024169a351b3fae31a1854bde5bc04dcca0d4708477869bde3d67"
+              "sha256": "b8adcbf370db6ccdcfd251d5c36a83e21e9cda4df90a04af0641b164047ef602"
             },
             {
               "item": "ManagedSigningClient.bind_subject",
@@ -129618,8 +129618,8 @@
               "sha256": "710c0109eceff0ca761e6946c9bc0d78981d1a12515c562affc3e8d31c5648ad"
             },
             {
-              "item": "ManagedSigningPeer.via_hub_ura",
-              "sha256": "957b89c69c48af339d19df63deef6898ebe8590e8525d1db72862e98a65fd084"
+              "item": "ManagedSigningPeer.via_authority_ura",
+              "sha256": "bcdb54123b2dcacbc7638f3b94acb395d9cebc979ea53137bd198df987d6cfae"
             },
             {
               "item": "ManagedSigningPeerPage.items",
@@ -129646,8 +129646,8 @@
               "sha256": "710c0109eceff0ca761e6946c9bc0d78981d1a12515c562affc3e8d31c5648ad"
             },
             {
-              "item": "ManagedSigningPeerRegistration.via_hub_ura",
-              "sha256": "fed6cc3b72036ef61c0401ff562da57add512756143b59b254f1d5810ac528e2"
+              "item": "ManagedSigningPeerRegistration.via_authority_ura",
+              "sha256": "08440d3b02a3ee704ea0660b1e7c11083b3999aa2f9f08d7c4a27c312b3abbb2"
             },
             {
               "item": "ManagedSigningStatus.ACTIVE",
@@ -129674,7 +129674,7 @@
             },
             {
               "item": "ManagedSigningClient",
-              "sha256": "c3fc6c69d9da844e91c56ace62ad0defe41e2f0433ff7f49c6c521a6f18e10eb"
+              "sha256": "b1191f7612b354ce66492867e7e40f33767304b3da5f8ecc4cc4682a8646fb65"
             },
             {
               "item": "ManagedSigningCreateRequest",
@@ -129694,7 +129694,7 @@
             },
             {
               "item": "ManagedSigningPeer",
-              "sha256": "b4d1e9c79d19297ab3e7fb621e07b08b65252c1045f38966594b3d7905cc3f51"
+              "sha256": "f2784d62e139f1de16eee560d9d8983046bc86fe8c33c7db9ef68415ca9832ff"
             },
             {
               "item": "ManagedSigningPeerPage",
@@ -129702,7 +129702,7 @@
             },
             {
               "item": "ManagedSigningPeerRegistration",
-              "sha256": "d6acb50c3d911e0bb89eb45058fd72d008b2ab8b4fcdafa10b9d26a9b801800a"
+              "sha256": "41eaa8a6cda3cc91e15546e362a5ec68314c073e69a697ba1b6410d5ed60ea69"
             },
             {
               "item": "ManagedSigningStatus",
@@ -129742,7 +129742,7 @@
             },
             {
               "item": "ManagedSigningClient.add_peer",
-              "sha256": "2ac9e17fd56024169a351b3fae31a1854bde5bc04dcca0d4708477869bde3d67"
+              "sha256": "b8adcbf370db6ccdcfd251d5c36a83e21e9cda4df90a04af0641b164047ef602"
             },
             {
               "item": "ManagedSigningClient.bind_subject",
@@ -129897,8 +129897,8 @@
               "sha256": "710c0109eceff0ca761e6946c9bc0d78981d1a12515c562affc3e8d31c5648ad"
             },
             {
-              "item": "ManagedSigningPeer.via_hub_ura",
-              "sha256": "957b89c69c48af339d19df63deef6898ebe8590e8525d1db72862e98a65fd084"
+              "item": "ManagedSigningPeer.via_authority_ura",
+              "sha256": "bcdb54123b2dcacbc7638f3b94acb395d9cebc979ea53137bd198df987d6cfae"
             },
             {
               "item": "ManagedSigningPeerPage.items",
@@ -129925,8 +129925,8 @@
               "sha256": "710c0109eceff0ca761e6946c9bc0d78981d1a12515c562affc3e8d31c5648ad"
             },
             {
-              "item": "ManagedSigningPeerRegistration.via_hub_ura",
-              "sha256": "fed6cc3b72036ef61c0401ff562da57add512756143b59b254f1d5810ac528e2"
+              "item": "ManagedSigningPeerRegistration.via_authority_ura",
+              "sha256": "08440d3b02a3ee704ea0660b1e7c11083b3999aa2f9f08d7c4a27c312b3abbb2"
             },
             {
               "item": "ManagedSigningStatus.ACTIVE",
@@ -129953,7 +129953,7 @@
             },
             {
               "item": "ManagedSigningClient",
-              "sha256": "c3fc6c69d9da844e91c56ace62ad0defe41e2f0433ff7f49c6c521a6f18e10eb"
+              "sha256": "b1191f7612b354ce66492867e7e40f33767304b3da5f8ecc4cc4682a8646fb65"
             },
             {
               "item": "ManagedSigningCreateRequest",
@@ -129973,7 +129973,7 @@
             },
             {
               "item": "ManagedSigningPeer",
-              "sha256": "b4d1e9c79d19297ab3e7fb621e07b08b65252c1045f38966594b3d7905cc3f51"
+              "sha256": "f2784d62e139f1de16eee560d9d8983046bc86fe8c33c7db9ef68415ca9832ff"
             },
             {
               "item": "ManagedSigningPeerPage",
@@ -129981,7 +129981,7 @@
             },
             {
               "item": "ManagedSigningPeerRegistration",
-              "sha256": "d6acb50c3d911e0bb89eb45058fd72d008b2ab8b4fcdafa10b9d26a9b801800a"
+              "sha256": "41eaa8a6cda3cc91e15546e362a5ec68314c073e69a697ba1b6410d5ed60ea69"
             },
             {
               "item": "ManagedSigningStatus",
@@ -130021,7 +130021,7 @@
             },
             {
               "item": "ManagedSigningClient.add_peer",
-              "sha256": "2ac9e17fd56024169a351b3fae31a1854bde5bc04dcca0d4708477869bde3d67"
+              "sha256": "b8adcbf370db6ccdcfd251d5c36a83e21e9cda4df90a04af0641b164047ef602"
             },
             {
               "item": "ManagedSigningClient.bind_subject",
@@ -130176,8 +130176,8 @@
               "sha256": "710c0109eceff0ca761e6946c9bc0d78981d1a12515c562affc3e8d31c5648ad"
             },
             {
-              "item": "ManagedSigningPeer.via_hub_ura",
-              "sha256": "957b89c69c48af339d19df63deef6898ebe8590e8525d1db72862e98a65fd084"
+              "item": "ManagedSigningPeer.via_authority_ura",
+              "sha256": "bcdb54123b2dcacbc7638f3b94acb395d9cebc979ea53137bd198df987d6cfae"
             },
             {
               "item": "ManagedSigningPeerPage.items",
@@ -130204,8 +130204,8 @@
               "sha256": "710c0109eceff0ca761e6946c9bc0d78981d1a12515c562affc3e8d31c5648ad"
             },
             {
-              "item": "ManagedSigningPeerRegistration.via_hub_ura",
-              "sha256": "fed6cc3b72036ef61c0401ff562da57add512756143b59b254f1d5810ac528e2"
+              "item": "ManagedSigningPeerRegistration.via_authority_ura",
+              "sha256": "08440d3b02a3ee704ea0660b1e7c11083b3999aa2f9f08d7c4a27c312b3abbb2"
             },
             {
               "item": "ManagedSigningStatus.ACTIVE",
@@ -130232,7 +130232,7 @@
             },
             {
               "item": "ManagedSigningClient",
-              "sha256": "c3fc6c69d9da844e91c56ace62ad0defe41e2f0433ff7f49c6c521a6f18e10eb"
+              "sha256": "b1191f7612b354ce66492867e7e40f33767304b3da5f8ecc4cc4682a8646fb65"
             },
             {
               "item": "ManagedSigningCreateRequest",
@@ -130252,7 +130252,7 @@
             },
             {
               "item": "ManagedSigningPeer",
-              "sha256": "b4d1e9c79d19297ab3e7fb621e07b08b65252c1045f38966594b3d7905cc3f51"
+              "sha256": "f2784d62e139f1de16eee560d9d8983046bc86fe8c33c7db9ef68415ca9832ff"
             },
             {
               "item": "ManagedSigningPeerPage",
@@ -130260,7 +130260,7 @@
             },
             {
               "item": "ManagedSigningPeerRegistration",
-              "sha256": "d6acb50c3d911e0bb89eb45058fd72d008b2ab8b4fcdafa10b9d26a9b801800a"
+              "sha256": "41eaa8a6cda3cc91e15546e362a5ec68314c073e69a697ba1b6410d5ed60ea69"
             },
             {
               "item": "ManagedSigningStatus",
@@ -130300,7 +130300,7 @@
             },
             {
               "item": "ManagedSigningClient.add_peer",
-              "sha256": "2ac9e17fd56024169a351b3fae31a1854bde5bc04dcca0d4708477869bde3d67"
+              "sha256": "b8adcbf370db6ccdcfd251d5c36a83e21e9cda4df90a04af0641b164047ef602"
             },
             {
               "item": "ManagedSigningClient.bind_subject",
@@ -130455,8 +130455,8 @@
               "sha256": "710c0109eceff0ca761e6946c9bc0d78981d1a12515c562affc3e8d31c5648ad"
             },
             {
-              "item": "ManagedSigningPeer.via_hub_ura",
-              "sha256": "957b89c69c48af339d19df63deef6898ebe8590e8525d1db72862e98a65fd084"
+              "item": "ManagedSigningPeer.via_authority_ura",
+              "sha256": "bcdb54123b2dcacbc7638f3b94acb395d9cebc979ea53137bd198df987d6cfae"
             },
             {
               "item": "ManagedSigningPeerPage.items",
@@ -130483,8 +130483,8 @@
               "sha256": "710c0109eceff0ca761e6946c9bc0d78981d1a12515c562affc3e8d31c5648ad"
             },
             {
-              "item": "ManagedSigningPeerRegistration.via_hub_ura",
-              "sha256": "fed6cc3b72036ef61c0401ff562da57add512756143b59b254f1d5810ac528e2"
+              "item": "ManagedSigningPeerRegistration.via_authority_ura",
+              "sha256": "08440d3b02a3ee704ea0660b1e7c11083b3999aa2f9f08d7c4a27c312b3abbb2"
             },
             {
               "item": "ManagedSigningStatus.ACTIVE",
@@ -130511,7 +130511,7 @@
             },
             {
               "item": "ManagedSigningClient",
-              "sha256": "c3fc6c69d9da844e91c56ace62ad0defe41e2f0433ff7f49c6c521a6f18e10eb"
+              "sha256": "b1191f7612b354ce66492867e7e40f33767304b3da5f8ecc4cc4682a8646fb65"
             },
             {
               "item": "ManagedSigningCreateRequest",
@@ -130531,7 +130531,7 @@
             },
             {
               "item": "ManagedSigningPeer",
-              "sha256": "b4d1e9c79d19297ab3e7fb621e07b08b65252c1045f38966594b3d7905cc3f51"
+              "sha256": "f2784d62e139f1de16eee560d9d8983046bc86fe8c33c7db9ef68415ca9832ff"
             },
             {
               "item": "ManagedSigningPeerPage",
@@ -130539,7 +130539,7 @@
             },
             {
               "item": "ManagedSigningPeerRegistration",
-              "sha256": "d6acb50c3d911e0bb89eb45058fd72d008b2ab8b4fcdafa10b9d26a9b801800a"
+              "sha256": "41eaa8a6cda3cc91e15546e362a5ec68314c073e69a697ba1b6410d5ed60ea69"
             },
             {
               "item": "ManagedSigningStatus",
@@ -130579,7 +130579,7 @@
             },
             {
               "item": "ManagedSigningClient.add_peer",
-              "sha256": "2ac9e17fd56024169a351b3fae31a1854bde5bc04dcca0d4708477869bde3d67"
+              "sha256": "b8adcbf370db6ccdcfd251d5c36a83e21e9cda4df90a04af0641b164047ef602"
             },
             {
               "item": "ManagedSigningClient.bind_subject",
@@ -130734,8 +130734,8 @@
               "sha256": "710c0109eceff0ca761e6946c9bc0d78981d1a12515c562affc3e8d31c5648ad"
             },
             {
-              "item": "ManagedSigningPeer.via_hub_ura",
-              "sha256": "957b89c69c48af339d19df63deef6898ebe8590e8525d1db72862e98a65fd084"
+              "item": "ManagedSigningPeer.via_authority_ura",
+              "sha256": "bcdb54123b2dcacbc7638f3b94acb395d9cebc979ea53137bd198df987d6cfae"
             },
             {
               "item": "ManagedSigningPeerPage.items",
@@ -130762,8 +130762,8 @@
               "sha256": "710c0109eceff0ca761e6946c9bc0d78981d1a12515c562affc3e8d31c5648ad"
             },
             {
-              "item": "ManagedSigningPeerRegistration.via_hub_ura",
-              "sha256": "fed6cc3b72036ef61c0401ff562da57add512756143b59b254f1d5810ac528e2"
+              "item": "ManagedSigningPeerRegistration.via_authority_ura",
+              "sha256": "08440d3b02a3ee704ea0660b1e7c11083b3999aa2f9f08d7c4a27c312b3abbb2"
             },
             {
               "item": "ManagedSigningStatus.ACTIVE",
@@ -130790,7 +130790,7 @@
             },
             {
               "item": "ManagedSigningClient",
-              "sha256": "c3fc6c69d9da844e91c56ace62ad0defe41e2f0433ff7f49c6c521a6f18e10eb"
+              "sha256": "b1191f7612b354ce66492867e7e40f33767304b3da5f8ecc4cc4682a8646fb65"
             },
             {
               "item": "ManagedSigningCreateRequest",
@@ -130810,7 +130810,7 @@
             },
             {
               "item": "ManagedSigningPeer",
-              "sha256": "b4d1e9c79d19297ab3e7fb621e07b08b65252c1045f38966594b3d7905cc3f51"
+              "sha256": "f2784d62e139f1de16eee560d9d8983046bc86fe8c33c7db9ef68415ca9832ff"
             },
             {
               "item": "ManagedSigningPeerPage",
@@ -130818,7 +130818,7 @@
             },
             {
               "item": "ManagedSigningPeerRegistration",
-              "sha256": "d6acb50c3d911e0bb89eb45058fd72d008b2ab8b4fcdafa10b9d26a9b801800a"
+              "sha256": "41eaa8a6cda3cc91e15546e362a5ec68314c073e69a697ba1b6410d5ed60ea69"
             },
             {
               "item": "ManagedSigningStatus",
@@ -130858,7 +130858,7 @@
             },
             {
               "item": "ManagedSigningClient.add_peer",
-              "sha256": "2ac9e17fd56024169a351b3fae31a1854bde5bc04dcca0d4708477869bde3d67"
+              "sha256": "b8adcbf370db6ccdcfd251d5c36a83e21e9cda4df90a04af0641b164047ef602"
             },
             {
               "item": "ManagedSigningClient.bind_subject",
@@ -131013,8 +131013,8 @@
               "sha256": "710c0109eceff0ca761e6946c9bc0d78981d1a12515c562affc3e8d31c5648ad"
             },
             {
-              "item": "ManagedSigningPeer.via_hub_ura",
-              "sha256": "957b89c69c48af339d19df63deef6898ebe8590e8525d1db72862e98a65fd084"
+              "item": "ManagedSigningPeer.via_authority_ura",
+              "sha256": "bcdb54123b2dcacbc7638f3b94acb395d9cebc979ea53137bd198df987d6cfae"
             },
             {
               "item": "ManagedSigningPeerPage.items",
@@ -131041,8 +131041,8 @@
               "sha256": "710c0109eceff0ca761e6946c9bc0d78981d1a12515c562affc3e8d31c5648ad"
             },
             {
-              "item": "ManagedSigningPeerRegistration.via_hub_ura",
-              "sha256": "fed6cc3b72036ef61c0401ff562da57add512756143b59b254f1d5810ac528e2"
+              "item": "ManagedSigningPeerRegistration.via_authority_ura",
+              "sha256": "08440d3b02a3ee704ea0660b1e7c11083b3999aa2f9f08d7c4a27c312b3abbb2"
             },
             {
               "item": "ManagedSigningStatus.ACTIVE",
@@ -131069,7 +131069,7 @@
             },
             {
               "item": "ManagedSigningClient",
-              "sha256": "c3fc6c69d9da844e91c56ace62ad0defe41e2f0433ff7f49c6c521a6f18e10eb"
+              "sha256": "b1191f7612b354ce66492867e7e40f33767304b3da5f8ecc4cc4682a8646fb65"
             },
             {
               "item": "ManagedSigningCreateRequest",
@@ -131089,7 +131089,7 @@
             },
             {
               "item": "ManagedSigningPeer",
-              "sha256": "b4d1e9c79d19297ab3e7fb621e07b08b65252c1045f38966594b3d7905cc3f51"
+              "sha256": "f2784d62e139f1de16eee560d9d8983046bc86fe8c33c7db9ef68415ca9832ff"
             },
             {
               "item": "ManagedSigningPeerPage",
@@ -131097,7 +131097,7 @@
             },
             {
               "item": "ManagedSigningPeerRegistration",
-              "sha256": "d6acb50c3d911e0bb89eb45058fd72d008b2ab8b4fcdafa10b9d26a9b801800a"
+              "sha256": "41eaa8a6cda3cc91e15546e362a5ec68314c073e69a697ba1b6410d5ed60ea69"
             },
             {
               "item": "ManagedSigningStatus",
@@ -131137,7 +131137,7 @@
             },
             {
               "item": "ManagedSigningClient.add_peer",
-              "sha256": "2ac9e17fd56024169a351b3fae31a1854bde5bc04dcca0d4708477869bde3d67"
+              "sha256": "b8adcbf370db6ccdcfd251d5c36a83e21e9cda4df90a04af0641b164047ef602"
             },
             {
               "item": "ManagedSigningClient.bind_subject",
@@ -131292,8 +131292,8 @@
               "sha256": "710c0109eceff0ca761e6946c9bc0d78981d1a12515c562affc3e8d31c5648ad"
             },
             {
-              "item": "ManagedSigningPeer.via_hub_ura",
-              "sha256": "957b89c69c48af339d19df63deef6898ebe8590e8525d1db72862e98a65fd084"
+              "item": "ManagedSigningPeer.via_authority_ura",
+              "sha256": "bcdb54123b2dcacbc7638f3b94acb395d9cebc979ea53137bd198df987d6cfae"
             },
             {
               "item": "ManagedSigningPeerPage.items",
@@ -131320,8 +131320,8 @@
               "sha256": "710c0109eceff0ca761e6946c9bc0d78981d1a12515c562affc3e8d31c5648ad"
             },
             {
-              "item": "ManagedSigningPeerRegistration.via_hub_ura",
-              "sha256": "fed6cc3b72036ef61c0401ff562da57add512756143b59b254f1d5810ac528e2"
+              "item": "ManagedSigningPeerRegistration.via_authority_ura",
+              "sha256": "08440d3b02a3ee704ea0660b1e7c11083b3999aa2f9f08d7c4a27c312b3abbb2"
             },
             {
               "item": "ManagedSigningStatus.ACTIVE",

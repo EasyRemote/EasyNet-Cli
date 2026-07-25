@@ -93,20 +93,20 @@ type ManagedSigningKeyPage struct {
 
 // ManagedSigningPeer is the public trust projection for one peer runtime.
 type ManagedSigningPeer struct {
-	PeerURA        string            `json:"peer_ura"`
-	Fingerprint    []byte            `json:"fingerprint"`
-	PublicKey      ed25519.PublicKey `json:"public_key"`
-	ViaHubURA      string            `json:"via_hub_ura,omitempty"`
-	AddedUnixMS    int64             `json:"added_unix_ms"`
-	LastSeenUnixMS int64             `json:"last_seen_unix_ms"`
+	PeerURA         string            `json:"peer_ura"`
+	Fingerprint     []byte            `json:"fingerprint"`
+	PublicKey       ed25519.PublicKey `json:"public_key"`
+	ViaAuthorityURA string            `json:"via_authority_ura,omitempty"`
+	AddedUnixMS     int64             `json:"added_unix_ms"`
+	LastSeenUnixMS  int64             `json:"last_seen_unix_ms"`
 }
 
 // ManagedSigningPeerRegistration contains only a peer's public trust
 // material. Local private keys never participate in peer registration.
 type ManagedSigningPeerRegistration struct {
-	PeerURA   string
-	PublicKey ed25519.PublicKey
-	ViaHubURA string
+	PeerURA         string
+	PublicKey       ed25519.PublicKey
+	ViaAuthorityURA string
 }
 
 // ManagedSigningPeerPage is one bounded page of peer trust projections.
@@ -530,12 +530,12 @@ func (c *ManagedSigningClient) AddPeer(registration ManagedSigningPeerRegistrati
 		"peer_ura":       peerURA,
 		"public_key_b64": base64.StdEncoding.EncodeToString(registration.PublicKey),
 	}
-	if registration.ViaHubURA != "" {
-		viaHubURA, err := managedSigningRequiredText("peer via-hub URA", registration.ViaHubURA)
+	if registration.ViaAuthorityURA != "" {
+		viaAuthorityURA, err := managedSigningRequiredText("peer via-authority URA", registration.ViaAuthorityURA)
 		if err != nil {
 			return false, err
 		}
-		payload["via_hub"] = viaHubURA
+		payload["via_hub"] = viaAuthorityURA
 	}
 	response, err := c.service.call(payload)
 	if err != nil {
@@ -798,7 +798,7 @@ func decodeManagedSigningPeersPageResponse(
 		if !bytes.Equal(fingerprint, expectedFingerprint[:]) {
 			return ManagedSigningPeerPage{}, invalidDaemonKeyServicePayload("daemon key service returned a peer fingerprint that does not match SHA-256(public_key)", nil)
 		}
-		viaHubURA, err := optionalManagedSigningText("via_hub", wire.ViaHub)
+		viaAuthorityURA, err := optionalManagedSigningText("via_hub", wire.ViaHub)
 		if err != nil {
 			return ManagedSigningPeerPage{}, err
 		}
@@ -808,12 +808,12 @@ func decodeManagedSigningPeersPageResponse(
 		}
 		seen[peerURA] = struct{}{}
 		peers = append(peers, ManagedSigningPeer{
-			PeerURA:        peerURA,
-			Fingerprint:    append([]byte(nil), fingerprint...),
-			PublicKey:      ed25519.PublicKey(publicKey),
-			ViaHubURA:      viaHubURA,
-			AddedUnixMS:    *wire.AddedUnixMS,
-			LastSeenUnixMS: *wire.LastSeenUnixMS,
+			PeerURA:         peerURA,
+			Fingerprint:     append([]byte(nil), fingerprint...),
+			PublicKey:       ed25519.PublicKey(publicKey),
+			ViaAuthorityURA: viaAuthorityURA,
+			AddedUnixMS:     *wire.AddedUnixMS,
+			LastSeenUnixMS:  *wire.LastSeenUnixMS,
 		})
 	}
 	nextCursor, err := decodeManagedSigningNextCursor(response, requestCursor)

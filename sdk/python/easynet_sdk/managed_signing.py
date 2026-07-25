@@ -92,7 +92,7 @@ class ManagedSigningPeer:
     peer_ura: str
     fingerprint: bytes
     public_key: bytes
-    via_hub_ura: str | None
+    via_authority_ura: str | None
     added_unix_ms: int
     last_seen_unix_ms: int
 
@@ -101,7 +101,7 @@ class ManagedSigningPeer:
 class ManagedSigningPeerRegistration:
     peer_ura: str
     public_key: bytes
-    via_hub_ura: str | None = None
+    via_authority_ura: str | None = None
 
 
 @dataclass(frozen=True)
@@ -316,9 +316,9 @@ class ManagedSigningClient:
             "peer_ura": peer_ura,
             "public_key_b64": base64.b64encode(registration.public_key).decode("ascii"),
         }
-        if registration.via_hub_ura is not None:
+        if registration.via_authority_ura is not None:
             payload["via_hub"] = _required_text(
-                "peer via-hub URA", registration.via_hub_ura
+                "peer via-authority URA", registration.via_authority_ura
             )
         response = self._client.call(payload)
         require_response_shape(response, "inventory_peer_added", required=("added",))
@@ -647,7 +647,7 @@ def _decode_peer(raw: object) -> ManagedSigningPeer:
         peer_ura=_projection_text(raw, "peer_ura"),
         fingerprint=fingerprint,
         public_key=public_key,
-        via_hub_ura=_optional_projection_text(raw, "via_hub"),
+        via_authority_ura=_optional_projection_text(raw, "via_hub"),
         added_unix_ms=added_unix_ms,
         last_seen_unix_ms=last_seen_unix_ms,
     )

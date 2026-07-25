@@ -72,7 +72,7 @@ class ManagedSigningTests(unittest.TestCase):
         key_id_2 = "managed-key-2"
         subject_ura = "easynet:///r/acme/agent/signer.main"
         peer_ura = "easynet:///r/peer/agent/verifier.main"
-        via_hub_ura = "easynet:///r/acme/authority"
+        via_authority_ura = "easynet:///r/acme/authority"
         responses = [
             {
                 "result": "inventory_key",
@@ -111,7 +111,7 @@ class ManagedSigningTests(unittest.TestCase):
                         "peer_ura": peer_ura,
                         "fingerprint_b64": _b64(fingerprint),
                         "public_key_b64": _b64(peer_public_key),
-                        "via_hub": via_hub_ura,
+                        "via_hub": via_authority_ura,
                         "added_unix_ms": 1700000000200,
                         "last_seen_unix_ms": 1700000000300,
                     }
@@ -141,7 +141,7 @@ class ManagedSigningTests(unittest.TestCase):
                 ManagedSigningPeerRegistration(
                     peer_ura=peer_ura,
                     public_key=peer_public_key,
-                    via_hub_ura=via_hub_ura,
+                    via_authority_ura=via_authority_ura,
                 )
             )
             peers = client.list_peers()
@@ -161,6 +161,7 @@ class ManagedSigningTests(unittest.TestCase):
         self.assertTrue(added)
         self.assertEqual(peers[0].peer_ura, peer_ura)
         self.assertEqual(peers[0].public_key, peer_public_key)
+        self.assertEqual(peers[0].via_authority_ura, via_authority_ura)
 
         expected_requests = [
             {
@@ -202,7 +203,7 @@ class ManagedSigningTests(unittest.TestCase):
                 "method": "inventory.peer_add",
                 "peer_ura": peer_ura,
                 "public_key_b64": _b64(peer_public_key),
-                "via_hub": via_hub_ura,
+                "via_hub": via_authority_ura,
             },
             {"method": "inventory.peer_list", "limit": 16},
         ]

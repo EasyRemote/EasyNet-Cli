@@ -31,11 +31,11 @@ func TestManagedSigningClientConformsToDaemonKeyServiceProtocol(t *testing.T) {
 	signature := ed25519.Sign(privateKey1, []byte("canonical"))
 	fingerprint := sha256.Sum256(peerPublicKey)
 	const (
-		keyID1     = "managed-key-1"
-		keyID2     = "managed-key-2"
-		subjectURA = "easynet:///r/acme/agent/signer.main"
-		peerURA    = "easynet:///r/peer/agent/verifier.main"
-		viaHubURA  = "easynet:///r/acme/authority"
+		keyID1          = "managed-key-1"
+		keyID2          = "managed-key-2"
+		subjectURA      = "easynet:///r/acme/agent/signer.main"
+		peerURA         = "easynet:///r/peer/agent/verifier.main"
+		viaAuthorityURA = "easynet:///r/acme/authority"
 	)
 
 	requestCount := 0
@@ -89,7 +89,7 @@ func TestManagedSigningClientConformsToDaemonKeyServiceProtocol(t *testing.T) {
 		case 10:
 			assertManagedSigningRequest(t, request, map[string]any{
 				"method": "inventory.peer_add", "peer_ura": peerURA,
-				"public_key_b64": base64.StdEncoding.EncodeToString(peerPublicKey), "via_hub": viaHubURA,
+				"public_key_b64": base64.StdEncoding.EncodeToString(peerPublicKey), "via_hub": viaAuthorityURA,
 			})
 			response = map[string]any{"result": "inventory_peer_added", "added": true}
 		case 11:
@@ -98,7 +98,7 @@ func TestManagedSigningClientConformsToDaemonKeyServiceProtocol(t *testing.T) {
 			})
 			response = map[string]any{"result": "inventory_peers", "peers": []any{map[string]any{
 				"peer_ura": peerURA, "fingerprint_b64": base64.StdEncoding.EncodeToString(fingerprint[:]),
-				"public_key_b64": base64.StdEncoding.EncodeToString(peerPublicKey), "via_hub": viaHubURA,
+				"public_key_b64": base64.StdEncoding.EncodeToString(peerPublicKey), "via_hub": viaAuthorityURA,
 				"added_unix_ms": int64(1700000000200), "last_seen_unix_ms": int64(1700000000300),
 			}}, "next_cursor": nil}
 			close(done)
@@ -146,12 +146,12 @@ func TestManagedSigningClientConformsToDaemonKeyServiceProtocol(t *testing.T) {
 	if err := client.BindSubject(keyID2, subjectURA); err != nil {
 		t.Fatalf("BindSubject: %v", err)
 	}
-	added, err := client.AddPeer(ManagedSigningPeerRegistration{PeerURA: peerURA, PublicKey: peerPublicKey, ViaHubURA: viaHubURA})
+	added, err := client.AddPeer(ManagedSigningPeerRegistration{PeerURA: peerURA, PublicKey: peerPublicKey, ViaAuthorityURA: viaAuthorityURA})
 	if err != nil || !added {
 		t.Fatalf("AddPeer = %t, %v", added, err)
 	}
 	peers, err := client.ListPeers()
-	if err != nil || len(peers) != 1 || peers[0].PeerURA != peerURA || !peers[0].PublicKey.Equal(peerPublicKey) {
+	if err != nil || len(peers) != 1 || peers[0].PeerURA != peerURA || !peers[0].PublicKey.Equal(peerPublicKey) || peers[0].ViaAuthorityURA != viaAuthorityURA {
 		t.Fatalf("ListPeers = %#v, %v", peers, err)
 	}
 
