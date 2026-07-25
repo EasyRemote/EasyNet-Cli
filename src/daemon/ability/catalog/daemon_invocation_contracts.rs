@@ -445,13 +445,15 @@ pub(crate) fn input_schema_for(name: &str) -> Option<Value> {
 
 fn manifest_for(ability: &str, action: AdmissionAction) -> anyhow::Result<AbilityManifest> {
     let manifest_name = ability.rsplit('.').next().unwrap_or(ability);
-    AbilityManifest::new(
-        manifest_name,
-        description_for(ability).unwrap_or("(daemon Invocation ability)"),
-        input_schema_for(ability).unwrap_or_else(closed_empty_schema),
-    )?
-    .with_descriptor_version(DEFAULT_ABILITY_DESCRIPTOR_VERSION)?
-    .with_admission_action(action.as_str())
+    let description = description_for(ability).ok_or_else(|| {
+        anyhow::anyhow!("daemon Invocation ability {ability:?} is missing descriptor description")
+    })?;
+    let input_schema = input_schema_for(ability).ok_or_else(|| {
+        anyhow::anyhow!("daemon Invocation ability {ability:?} is missing input schema")
+    })?;
+    AbilityManifest::new(manifest_name, description, input_schema)?
+        .with_descriptor_version(DEFAULT_ABILITY_DESCRIPTOR_VERSION)?
+        .with_admission_action(action.as_str())
 }
 
 fn is_principal_mutation(name: &str) -> bool {
@@ -530,6 +532,16 @@ mod tests {
                 ability.name
             );
         }
+    }
+
+    #[test]
+    fn manifest_for_rejects_missing_contract_metadata() {
+        let error = manifest_for("daemon.unknown", AdmissionAction::Read)
+            .expect_err("daemon Invocation descriptors must be provider-backed");
+        assert!(
+            error.to_string().contains("missing descriptor description"),
+            "unexpected error: {error:#}"
+        );
     }
 
     #[test]
