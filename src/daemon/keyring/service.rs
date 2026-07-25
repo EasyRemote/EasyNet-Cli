@@ -23,9 +23,9 @@ use super::passphrase::PassphraseStore;
 #[cfg(test)]
 use super::ManagedSigningKeyProjection;
 use super::{
-    default_passphrase_path, default_socket_path, default_vault_path, vault_error_to_response,
-    KeyringRequest, KeyringResponse, MasterKeySource, Vault, KEY_SERVICE_PROTOCOL_VERSION,
-    MAX_KEY_SERVICE_CANONICAL_BYTES, MAX_KEY_SERVICE_FRAME_BYTES,
+    try_default_passphrase_path, try_default_socket_path, try_default_vault_path,
+    vault_error_to_response, KeyringRequest, KeyringResponse, MasterKeySource, Vault,
+    KEY_SERVICE_PROTOCOL_VERSION, MAX_KEY_SERVICE_CANONICAL_BYTES, MAX_KEY_SERVICE_FRAME_BYTES,
 };
 use crate::daemon::persistence::file_lock::ExclusiveFileLock;
 
@@ -107,11 +107,15 @@ impl KeyServiceRuntime {
     /// Open the configured encrypted vault using the production master-key
     /// resolution policy.
     fn open_default() -> Result<Self, KeyServiceRuntimeError> {
-        let (passphrase, _) = PassphraseStore::new(default_passphrase_path())
+        let passphrase_path = try_default_passphrase_path()
+            .map_err(|error| KeyServiceRuntimeError::Configuration(error.to_string()))?;
+        let vault_path = try_default_vault_path()
+            .map_err(|error| KeyServiceRuntimeError::Configuration(error.to_string()))?;
+        let (passphrase, _) = PassphraseStore::new(passphrase_path)
             .load_or_create()
             .map_err(|error| KeyServiceRuntimeError::Configuration(error.to_string()))?;
         let source = MasterKeySource::Explicit(passphrase);
-        Self::open_with_source(&default_vault_path(), &source)
+        Self::open_with_source(&vault_path, &source)
     }
 
     /// Open a service runtime at an explicit path.
@@ -425,8 +429,8 @@ impl KeyServiceRuntime {
 /// This is the only public server entry point. The decrypted runtime and its
 /// vault lease stay private to this module for the process lifetime.
 pub async fn run_default_key_service() -> Result<(), Box<dyn std::error::Error>> {
-    let vault_path = default_vault_path();
-    let socket_path = default_socket_path();
+    let vault_path = try_default_vault_path()?;
+    let socket_path = try_default_socket_path()?;
     let runtime = KeyServiceRuntime::open_default().map_err(|error| {
         format!(
             "[easynet-keyring] open/init vault at {}: {error}",

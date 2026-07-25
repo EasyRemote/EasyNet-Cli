@@ -53,6 +53,7 @@
 // Copyright (c) 2026-2027 easynet. All rights reserved.
 
 use std::collections::BTreeMap;
+use std::ffi::OsStr;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -1700,26 +1701,36 @@ pub const DEFAULT_VAULT_REL: &str = ".easynet/keyring.enc";
 /// process. It is deliberately not an environment-configurable public API.
 const DEFAULT_PASSPHRASE_REL: &str = ".easynet/keyring.pass";
 
-/// Resolve a `~/.easynet/...` path against `$HOME` (or fallback).
-pub fn home_relative(rel: &str) -> PathBuf {
-    let home = std::env::var_os("HOME")
+/// Resolve a `~/.easynet/...` path against an explicit `$HOME`.
+pub fn home_relative(rel: &str) -> anyhow::Result<PathBuf> {
+    home_relative_from(rel, std::env::var_os("HOME").as_deref())
+}
+
+pub(super) fn home_relative_from(rel: &str, home: Option<&OsStr>) -> anyhow::Result<PathBuf> {
+    let home = home
+        .filter(|value| !value.is_empty())
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."));
-    home.join(rel)
+        .ok_or_else(|| anyhow::anyhow!("HOME is required for daemon key-service custody paths"))?;
+    Ok(home.join(rel))
 }
 
 /// Default transport endpoint for the keyring daemon.
 pub fn default_socket_path() -> PathBuf {
+    try_default_socket_path().expect("resolve default daemon key-service socket path")
+}
+
+/// Fallible default transport endpoint for daemon-owned lifecycle startup.
+pub fn try_default_socket_path() -> anyhow::Result<PathBuf> {
     if let Some(path) =
         std::env::var_os("EASYNET_KEYRING_SOCKET_PATH").filter(|path| !path.is_empty())
     {
-        return PathBuf::from(path);
+        return Ok(PathBuf::from(path));
     }
 
     #[cfg(windows)]
     {
-        return PathBuf::from(crate::support::platform::named_pipe::scoped_pipe_name(
-            "keyring",
+        return Ok(PathBuf::from(
+            crate::support::platform::named_pipe::scoped_pipe_name("keyring"),
         ));
     }
 
@@ -1729,11 +1740,15 @@ pub fn default_socket_path() -> PathBuf {
 
 /// Default encrypted vault path owned exclusively by the key-service process.
 pub fn default_vault_path() -> PathBuf {
+    try_default_vault_path().expect("resolve default daemon key-service vault path")
+}
+
+/// Fallible default encrypted vault path owned by the key-service process.
+pub fn try_default_vault_path() -> anyhow::Result<PathBuf> {
     home_relative(DEFAULT_VAULT_REL)
 }
 
-/// Default path of the key-service-owned passphrase file.
-fn default_passphrase_path() -> PathBuf {
+fn try_default_passphrase_path() -> anyhow::Result<PathBuf> {
     home_relative(DEFAULT_PASSPHRASE_REL)
 }
 
@@ -1761,6 +1776,43 @@ mod tests {
 
     fn explicit_pass() -> MasterKeySource {
         MasterKeySource::Explicit("test-passphrase-which-is-long-enough".into())
+    }
+
+    #[test]
+    fn home_relative_rejects_missing_home_before_cwd_fallback() {
+        let error = home_relative_from(DEFAULT_VAULT_REL, None)
+            .expect_err("missing HOME must fail before resolving key-service custody path");
+
+        assert!(
+            error
+                .to_string()
+                .contains("HOME is required for daemon key-service custody paths"),
+            "unexpected error: {error:#}"
+        );
+    }
+
+    #[test]
+    fn home_relative_rejects_blank_home_before_cwd_fallback() {
+        let error = home_relative_from(DEFAULT_VAULT_REL, Some(OsStr::new("")))
+            .expect_err("blank HOME must fail before resolving key-service custody path");
+
+        assert!(
+            error
+                .to_string()
+                .contains("HOME is required for daemon key-service custody paths"),
+            "unexpected error: {error:#}"
+        );
+    }
+
+    #[test]
+    fn home_relative_resolves_against_explicit_home() {
+        let path = home_relative_from(DEFAULT_VAULT_REL, Some(OsStr::new("/tmp/easynet-home")))
+            .expect("explicit HOME should resolve");
+
+        assert_eq!(
+            path,
+            PathBuf::from("/tmp/easynet-home/.easynet/keyring.enc")
+        );
     }
 
     #[test]

@@ -14,7 +14,7 @@ use anyhow::Context as _;
 
 use crate::daemon::identity::self_identity::{KeyringClient, SelfIdentityError};
 
-use super::{default_socket_path, home_relative};
+use super::{home_relative, try_default_socket_path};
 
 // A fresh vault performs the production Argon2id derivation before binding its
 // socket. Debug builds and contended edge devices can legitimately cross five
@@ -49,8 +49,14 @@ static KEY_SERVICE_MANAGER: OnceLock<KeyServiceManager> = OnceLock::new();
 /// material remains in `easynet-keyring`; this function only owns process
 /// lifecycle and readiness.
 pub fn ensure_key_service_running() -> anyhow::Result<KeyServiceStartup> {
+    if let Some(manager) = KEY_SERVICE_MANAGER.get() {
+        return manager.ensure_running();
+    }
+    let manager = KeyServiceManager::try_default()?;
+    let _ = KEY_SERVICE_MANAGER.set(manager);
     KEY_SERVICE_MANAGER
-        .get_or_init(KeyServiceManager::default)
+        .get()
+        .context("daemon key service manager initialized")?
         .ensure_running()
 }
 
@@ -93,12 +99,12 @@ struct KeyServiceManager {
     state: Mutex<KeyServiceManagerState>,
 }
 
-impl Default for KeyServiceManager {
-    fn default() -> Self {
-        Self {
-            lifecycle: KeyServiceLifecycle::default(),
+impl KeyServiceManager {
+    fn try_default() -> anyhow::Result<Self> {
+        Ok(Self {
+            lifecycle: KeyServiceLifecycle::try_default()?,
             state: Mutex::new(KeyServiceManagerState::default()),
-        }
+        })
     }
 }
 
@@ -415,19 +421,28 @@ struct KeyServiceLifecycle {
     ready_timeout: Duration,
 }
 
-impl Default for KeyServiceLifecycle {
-    fn default() -> Self {
-        Self {
-            socket_path: default_socket_path(),
-            binary_path: resolve_key_service_binary(),
-            log_path: home_relative(".easynet/logs/easynet-keyring.log"),
-            lease_path: home_relative(".easynet/keyring.start.lock"),
-            ready_timeout: DEFAULT_READY_TIMEOUT,
-        }
-    }
-}
-
 impl KeyServiceLifecycle {
+    fn try_default() -> anyhow::Result<Self> {
+        Ok(Self {
+            socket_path: try_default_socket_path()?,
+            binary_path: resolve_key_service_binary(),
+            log_path: home_relative(".easynet/logs/easynet-keyring.log")?,
+            lease_path: home_relative(".easynet/keyring.start.lock")?,
+            ready_timeout: DEFAULT_READY_TIMEOUT,
+        })
+    }
+
+    #[cfg(test)]
+    fn try_default_with_home(home: Option<&std::ffi::OsStr>) -> anyhow::Result<Self> {
+        Ok(Self {
+            socket_path: super::home_relative_from(super::DEFAULT_KEYRING_SOCKET_REL, home)?,
+            binary_path: PathBuf::from("easynet-keyring"),
+            log_path: super::home_relative_from(".easynet/logs/easynet-keyring.log", home)?,
+            lease_path: super::home_relative_from(".easynet/keyring.start.lock", home)?,
+            ready_timeout: DEFAULT_READY_TIMEOUT,
+        })
+    }
+
     fn ensure_running(
         &self,
         state: &mut KeyServiceManagerState,
@@ -722,6 +737,32 @@ mod tests {
             Some(KeyServiceLifecycleState::Failed {
                 message: "probe failed".into(),
             })
+        );
+    }
+
+    #[test]
+    fn lifecycle_default_rejects_missing_home_before_cwd_paths() {
+        let error = KeyServiceLifecycle::try_default_with_home(None)
+            .expect_err("missing HOME must fail before key-service lifecycle paths are built");
+
+        assert!(
+            error
+                .to_string()
+                .contains("HOME is required for daemon key-service custody paths"),
+            "unexpected error: {error:#}"
+        );
+    }
+
+    #[test]
+    fn lifecycle_default_rejects_blank_home_before_cwd_paths() {
+        let error = KeyServiceLifecycle::try_default_with_home(Some(std::ffi::OsStr::new("")))
+            .expect_err("blank HOME must fail before key-service lifecycle paths are built");
+
+        assert!(
+            error
+                .to_string()
+                .contains("HOME is required for daemon key-service custody paths"),
+            "unexpected error: {error:#}"
         );
     }
 

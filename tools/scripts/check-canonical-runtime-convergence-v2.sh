@@ -13198,6 +13198,86 @@ check_key_custody_boundary_contract() {
   bash "$ROOT/tools/scripts/check-product-key-custody-boundary.sh" >/dev/null
 }
 
+check_key_service_home_resolution_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local keyring="$cli_root/src/daemon/keyring/mod.rs"
+  local lifecycle="$cli_root/src/daemon/keyring/lifecycle.rs"
+  local service="$cli_root/src/daemon/keyring/service.rs"
+  [[ -f "$keyring" ]] || fail "daemon keyring source is missing: ${keyring#$cli_root/}"
+  [[ -f "$lifecycle" ]] || fail "daemon key-service lifecycle source is missing: ${lifecycle#$cli_root/}"
+  [[ -f "$service" ]] || fail "daemon key-service source is missing: ${service#$cli_root/}"
+
+  "$PYTHON_BIN" - "$keyring" "$lifecycle" "$service" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+keyring_path, lifecycle_path, service_path = map(Path, sys.argv[1:])
+keyring = keyring_path.read_text(encoding="utf-8")
+lifecycle = lifecycle_path.read_text(encoding="utf-8")
+service = service_path.read_text(encoding="utf-8")
+keyring_prod = keyring.split("\n#[cfg(test)]", 1)[0]
+lifecycle_prod = lifecycle.split("\n#[cfg(test)]", 1)[0]
+service_prod = service.split("\n#[cfg(test)]", 1)[0]
+production = "\n".join((keyring_prod, lifecycle_prod, service_prod))
+
+for retired in (
+    'PathBuf::from(".")',
+    'unwrap_or_else(|| PathBuf::from("."))',
+    'std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else',
+    "get_or_init(KeyServiceManager::default)",
+):
+    if retired in production:
+        raise SystemExit(f"key_service_home_resolution:retired_fallback:{retired}")
+
+for retired_pattern, label in (
+    (r"impl\s+Default\s+for\s+KeyServiceManager\s*\{", "impl Default for KeyServiceManager"),
+    (r"impl\s+Default\s+for\s+KeyServiceLifecycle\s*\{", "impl Default for KeyServiceLifecycle"),
+):
+    if re.search(retired_pattern, production):
+        raise SystemExit(f"key_service_home_resolution:retired_fallback:{label}")
+
+for required in (
+    "use std::ffi::OsStr;",
+    "pub fn home_relative(rel: &str) -> anyhow::Result<PathBuf>",
+    "pub(super) fn home_relative_from(rel: &str, home: Option<&OsStr>) -> anyhow::Result<PathBuf>",
+    "HOME is required for daemon key-service custody paths",
+    "pub fn try_default_socket_path() -> anyhow::Result<PathBuf>",
+    "pub fn try_default_vault_path() -> anyhow::Result<PathBuf>",
+    "fn try_default_passphrase_path() -> anyhow::Result<PathBuf>",
+):
+    if required not in keyring_prod:
+        raise SystemExit(f"key_service_home_resolution:keyring_missing:{required}")
+
+for required in (
+    "let manager = KeyServiceManager::try_default()?",
+    "fn try_default() -> anyhow::Result<Self>",
+    "socket_path: try_default_socket_path()?",
+    'log_path: home_relative(".easynet/logs/easynet-keyring.log")?',
+    'lease_path: home_relative(".easynet/keyring.start.lock")?',
+):
+    if required not in lifecycle_prod:
+        raise SystemExit(f"key_service_home_resolution:lifecycle_missing:{required}")
+
+for required in (
+    "try_default_passphrase_path()",
+    "try_default_vault_path()",
+    "try_default_socket_path()?",
+):
+    if required not in service:
+        raise SystemExit(f"key_service_home_resolution:service_missing:{required}")
+
+for required_test in (
+    "home_relative_rejects_missing_home_before_cwd_fallback",
+    "home_relative_rejects_blank_home_before_cwd_fallback",
+    "lifecycle_default_rejects_missing_home_before_cwd_paths",
+    "lifecycle_default_rejects_blank_home_before_cwd_paths",
+):
+    if required_test not in keyring and required_test not in lifecycle:
+        raise SystemExit(f"key_service_home_resolution:test_missing:{required_test}")
+PY
+}
+
 check_daemon_mission_eal_boundary_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   bash "$ROOT/tools/scripts/check-dispatch-mission-context-boundary.sh" >/dev/null
@@ -17347,6 +17427,75 @@ fn f() { let _ = "managed user signing identity requires a User URA"; }
 EOF
   if ( CLI_ROOT="$tmp/managed-user-signer-embedded-legacy"; check_runtime_owner_signer_custody_contract ) >/dev/null 2>&1; then
     fail "self-test expected embedded managed-user signer custody gate to fail"
+  fi
+  mkdir -p "$tmp/key-service-home-fallback-legacy/src/daemon/keyring"
+  cat >"$tmp/key-service-home-fallback-legacy/src/daemon/keyring/mod.rs" <<'EOF'
+use std::path::PathBuf;
+
+pub const DEFAULT_KEYRING_SOCKET_REL: &str = ".easynet/keyring.sock";
+pub const DEFAULT_VAULT_REL: &str = ".easynet/keyring.enc";
+
+pub fn home_relative(rel: &str) -> PathBuf {
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."));
+    home.join(rel)
+}
+
+pub fn default_socket_path() -> PathBuf {
+    home_relative(DEFAULT_KEYRING_SOCKET_REL)
+}
+
+pub fn default_vault_path() -> PathBuf {
+    home_relative(DEFAULT_VAULT_REL)
+}
+
+fn default_passphrase_path() -> PathBuf {
+    home_relative(".easynet/keyring.pass")
+}
+EOF
+  cat >"$tmp/key-service-home-fallback-legacy/src/daemon/keyring/lifecycle.rs" <<'EOF'
+use std::sync::OnceLock;
+
+use super::{default_socket_path, home_relative};
+
+static KEY_SERVICE_MANAGER: OnceLock<KeyServiceManager> = OnceLock::new();
+
+pub fn ensure_key_service_running() {
+    let _ = KEY_SERVICE_MANAGER.get_or_init(KeyServiceManager::default);
+}
+
+struct KeyServiceManager {
+    lifecycle: KeyServiceLifecycle,
+}
+
+impl Default for KeyServiceManager {
+    fn default() -> Self {
+        Self { lifecycle: KeyServiceLifecycle::default() }
+    }
+}
+
+struct KeyServiceLifecycle;
+
+impl Default for KeyServiceLifecycle {
+    fn default() -> Self {
+        let _socket = default_socket_path();
+        let _log = home_relative(".easynet/logs/easynet-keyring.log");
+        let _lease = home_relative(".easynet/keyring.start.lock");
+        Self
+    }
+}
+EOF
+  cat >"$tmp/key-service-home-fallback-legacy/src/daemon/keyring/service.rs" <<'EOF'
+use super::{default_socket_path, default_vault_path};
+
+pub async fn run_default_key_service() {
+    let _vault = default_vault_path();
+    let _socket = default_socket_path();
+}
+EOF
+  if ( CLI_ROOT="$tmp/key-service-home-fallback-legacy"; check_key_service_home_resolution_contract ) >/dev/null 2>&1; then
+    fail "self-test expected key-service HOME cwd fallback gate to fail"
   fi
   mkdir -p "$tmp/remote-invocation-signer-first-legacy/src/daemon/invocation/routing"
   cat >"$tmp/remote-invocation-signer-first-legacy/src/daemon/invocation/routing/remote_invoke.rs" <<'EOF'
@@ -22200,6 +22349,7 @@ EOF
   check_remote_failure_caller_signer_projection_contract
   check_daemon_runtime_identity_vocabulary_contract
   check_key_custody_boundary_contract
+  check_key_service_home_resolution_contract
   check_daemon_mission_eal_boundary_contract
   check_product_identity_boundary_contract
   check_ura_vocabulary_contract
@@ -22440,6 +22590,7 @@ check_remote_failure_caller_signer_projection_contract
 check_ffi_native_runtime_signer_projection_contract
 check_daemon_runtime_identity_vocabulary_contract
 check_key_custody_boundary_contract
+check_key_service_home_resolution_contract
 check_daemon_mission_eal_boundary_contract
 check_product_identity_boundary_contract
 check_ura_vocabulary_contract
