@@ -1775,8 +1775,8 @@ tool_name = "legacy-provider-field"
                 props.keys().collect::<Vec<_>>()
             );
         }
-        // Only `prompt` is required — every newer field is optional so
-        // a legacy `{"prompt": "..."}` call still validates.
+        // Only `prompt` is required. Every extended field is optional so the
+        // canonical minimal `{"prompt": "..."}` payload remains valid.
         let required = m
             .input_schema()
             .get("required")

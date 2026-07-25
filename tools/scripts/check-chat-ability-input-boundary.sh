@@ -17,15 +17,21 @@ fail() {
 }
 
 CHAT_RS="src/daemon/ability/builtins/agents/chat.rs"
+MANIFEST_RS="src/daemon/ability/manifest.rs"
 
 [[ -f "$CHAT_RS" ]] || fail "required file missing: $CHAT_RS"
+[[ -f "$MANIFEST_RS" ]] || fail "required file missing: $MANIFEST_RS"
 
-if rg -n 'parse_accepts_legacy_prompt|legacy_prompt_(only|and_context)|legacy[[:space:]_-]+prompt|prompt[[:space:]_-]+legacy|legacy[^[:cntrl:]]+chat[^[:cntrl:]]+input|chat[^[:cntrl:]]+input[^[:cntrl:]]+legacy' "$CHAT_RS"; then
+if rg -n 'parse_accepts_legacy_prompt|legacy_prompt_(only|and_context)|legacy[[:space:]_-]+prompt|prompt[[:space:]_-]+legacy|legacy[^[:cntrl:]]+chat[^[:cntrl:]]+input|chat[^[:cntrl:]]+input[^[:cntrl:]]+legacy' "$CHAT_RS" "$MANIFEST_RS"; then
   fail "agents.chat input boundary still describes canonical prompt/context payloads as legacy compatibility"
 fi
 
 if ! rg -q 'parse_accepts_canonical_minimal_prompt_args' "$CHAT_RS"; then
   fail "agents.chat parser tests must pin the canonical minimal prompt payload"
+fi
+
+if ! rg -Fq 'canonical minimal `{"prompt": "..."}` payload' "$MANIFEST_RS"; then
+  fail "agents.chat manifest contract must describe prompt-only input as canonical minimal payload"
 fi
 
 if ! rg -q 'parse_accepts_canonical_prompt_and_context_args' "$CHAT_RS"; then
