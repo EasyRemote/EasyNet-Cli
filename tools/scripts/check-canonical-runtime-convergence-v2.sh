@@ -14846,8 +14846,12 @@ for fragment, label in {
     if fragment not in receipt:
         raise SystemExit(f"java_runtime_receipt_projection:{label}")
 
+if "terminalReceipt = validatedTerminalReceipt(terminalReceipt, terminalState, ok);" not in result:
+    raise SystemExit("java_runtime_receipt_projection:invocation_result_not_using_validated_projection")
 if "RuntimeReceipt.fromMap(terminalReceipt)" not in result:
     raise SystemExit("java_runtime_receipt_projection:invocation_result_not_using_receipt_validator")
+if "return receipt.rawProjection();" not in result:
+    raise SystemExit("java_runtime_receipt_projection:invocation_result_not_using_receipt_owned_projection")
 if "requiredTerminalReceipt(fields)" not in result:
     raise SystemExit("java_runtime_receipt_projection:terminal_receipt_not_required")
 if "terminal_receipt is required" not in result:
@@ -14860,6 +14864,8 @@ legacy_patterns = {
     "terminalReceiptValue instanceof Map<?, ?> map ? copyStringMap(map) : Map.of()": "malformed_terminal_receipt_downgrade",
     "optionalReceipt(fields, \"terminal_receipt\")": "optional_terminal_receipt_decoder",
     "terminalReceipt = terminalReceipt == null ? Map.of() : Map.copyOf(terminalReceipt);\n    if (ok": "constructor_without_receipt_validation",
+    "terminalReceipt = Map.copyOf(terminalReceipt);": "invocation_result_terminal_receipt_shallow_copy_bypass",
+    "private static void validateTerminalReceipt(": "invocation_result_void_receipt_validator",
     "Map.copyOf(RuntimeReceiptProofFacts.requireObject(raw, \"runtime receipt\"))": "runtime_receipt_shallow_copy_bypass",
 }
 for pattern, label in legacy_patterns.items():
@@ -14871,6 +14877,9 @@ for required_test in (
     "runtimeReceiptProjectionIsDeepImmutable",
     "post-validation-mutation",
     "raw projection must expose deeply immutable proof fact maps",
+    "InvocationResult terminalReceipt must detach from mutable caller input after proof validation",
+    "InvocationResult terminalReceipt projection must expose deeply immutable proof fact maps",
+    "raw-projection-mutation",
     "canonicalRuntimeReceiptFixture",
     "missingProof.remove(\"authority_proof\")",
     "legacyAuthorityBinding.put(\"legacy_authority\"",
@@ -15992,6 +16001,25 @@ EOF
     "$tmp/cli-java-receipt-proof-shape-legacy/sdk/java/src/main/java/run/runtime/sdk/RuntimeReceiptProofFacts.java"
   if ( CLI_ROOT="$tmp/cli-java-receipt-proof-shape-legacy"; check_java_sdk_runtime_receipt_projection_contract ) >/dev/null 2>&1; then
     fail "self-test expected Java SDK receipt proof-fact exact-shape gate to fail"
+  fi
+  mkdir -p "$tmp/cli-java-invocation-result-shallow-copy-legacy/sdk/java/src/main/java/run/runtime/sdk" \
+    "$tmp/cli-java-invocation-result-shallow-copy-legacy/sdk/java/src/test/java/run/runtime/sdk"
+  cp "$ROOT/sdk/java/src/main/java/run/runtime/sdk/InvocationResult.java" \
+    "$tmp/cli-java-invocation-result-shallow-copy-legacy/sdk/java/src/main/java/run/runtime/sdk/InvocationResult.java"
+  cp "$ROOT/sdk/java/src/main/java/run/runtime/sdk/RuntimeReceipt.java" \
+    "$tmp/cli-java-invocation-result-shallow-copy-legacy/sdk/java/src/main/java/run/runtime/sdk/RuntimeReceipt.java"
+  cp "$ROOT/sdk/java/src/main/java/run/runtime/sdk/RuntimeReceiptProofFacts.java" \
+    "$tmp/cli-java-invocation-result-shallow-copy-legacy/sdk/java/src/main/java/run/runtime/sdk/RuntimeReceiptProofFacts.java"
+  cp "$ROOT/sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java" \
+    "$tmp/cli-java-invocation-result-shallow-copy-legacy/sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
+  perl -0pi -e 's/terminalReceipt = validatedTerminalReceipt\(terminalReceipt, terminalState, ok\);/terminalReceipt = Map.copyOf(terminalReceipt);\n    validateTerminalReceipt(terminalReceipt, terminalState, ok);/' \
+    "$tmp/cli-java-invocation-result-shallow-copy-legacy/sdk/java/src/main/java/run/runtime/sdk/InvocationResult.java"
+  perl -0pi -e 's/private static Map<String, Object> validatedTerminalReceipt/private static void validateTerminalReceipt/' \
+    "$tmp/cli-java-invocation-result-shallow-copy-legacy/sdk/java/src/main/java/run/runtime/sdk/InvocationResult.java"
+  perl -0pi -e 's/\n    return receipt\.rawProjection\(\);//' \
+    "$tmp/cli-java-invocation-result-shallow-copy-legacy/sdk/java/src/main/java/run/runtime/sdk/InvocationResult.java"
+  if ( CLI_ROOT="$tmp/cli-java-invocation-result-shallow-copy-legacy"; check_java_sdk_runtime_receipt_projection_contract ) >/dev/null 2>&1; then
+    fail "self-test expected Java SDK invocation result shallow-copy mutability gate to fail"
   fi
   mkdir -p "$tmp/cli-java-receipt-shallow-copy-legacy/sdk/java/src/main/java/run/runtime/sdk" \
     "$tmp/cli-java-receipt-shallow-copy-legacy/sdk/java/src/test/java/run/runtime/sdk"

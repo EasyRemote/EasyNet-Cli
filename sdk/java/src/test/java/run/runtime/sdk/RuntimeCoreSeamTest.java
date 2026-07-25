@@ -254,6 +254,32 @@ public final class RuntimeCoreSeamTest {
         "inv-result".equals(canonical.terminalReceipt().get("invocation_id")),
         "terminal_receipt populates terminalReceipt");
 
+    Map<String, Object> mutableTerminal =
+        new LinkedHashMap<>(
+            canonicalRuntimeReceiptFixture(
+                "inv-result-immutable", "completed", "Completed", 1));
+    Map<String, Object> mutableAuthorityBinding =
+        mutableTopLevelObject(mutableTerminal, "authority_binding");
+    InvocationResult owned =
+        new InvocationResult(
+            true, InvocationTerminalState.COMPLETED, "", null, mutableTerminal);
+    mutableAuthorityBinding.put("legacy_authority", "post-validation-mutation");
+    @SuppressWarnings("unchecked")
+    Map<String, Object> projectedAuthorityBinding =
+        (Map<String, Object>) owned.terminalReceipt().get("authority_binding");
+    check(
+        !projectedAuthorityBinding.containsKey("legacy_authority"),
+        "InvocationResult terminalReceipt must detach from mutable caller input after proof validation");
+    boolean rejectedInvocationResultNestedMutation = false;
+    try {
+      projectedAuthorityBinding.put("legacy_authority", "raw-projection-mutation");
+    } catch (UnsupportedOperationException expected) {
+      rejectedInvocationResultNestedMutation = true;
+    }
+    check(
+        rejectedInvocationResultNestedMutation,
+        "InvocationResult terminalReceipt projection must expose deeply immutable proof fact maps");
+
     expectSDKError(
         ErrorCode.INVALID_ARGUMENT,
         "terminal_receipt is required",
