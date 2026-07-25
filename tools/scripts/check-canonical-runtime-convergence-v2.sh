@@ -906,13 +906,14 @@ check_authority_context_model_vocabulary_contract() {
   local meta="$cli_root/src/daemon/ability/builtins/governance/meta.rs"
   local assembly="$cli_root/src/daemon/ability/catalog/assembly_tests.rs"
   local daemon_tests="$cli_root/src/daemon/invocation/dispatch/daemon_invocation_service_tests.rs"
+  local errors="$cli_root/src/daemon/ability/control_plane_error.rs"
 
-  for file in "$dispatch" "$catalog_build" "$conformance" "$meta" "$assembly" "$daemon_tests"; do
+  for file in "$dispatch" "$catalog_build" "$conformance" "$meta" "$assembly" "$daemon_tests" "$errors"; do
     [[ -f "$file" ]] || fail "authority context vocabulary source is missing: ${file#$cli_root/}"
   done
 
-  if rg -n 'CanonicalHubAuthority|for_hub_authority_root|hosts_hub_authority|hub_authority_root|AbilityAuthoritySet::Hub|AbilityAuthoritySet::Both|Self::Hub \{|Self::Both|fn hub\(&self\)|\.hub\(\)|Hub authority context|Hub authority set|authority_set: "hub"|authority set "hub"|Device\+Hub authority' \
-    "$dispatch" "$catalog_build" "$conformance" "$meta" "$assembly" "$daemon_tests"; then
+  if rg -n 'CanonicalHubAuthority|for_hub_authority_root|hosts_hub_authority|hub_authority_root|AbilityAuthoritySet::Hub|AbilityAuthoritySet::Both|Self::Hub \{|Self::Both|fn hub\(&self\)|\.hub\(\)|Hub authority context|Hub authority set|authority_set: "hub"|authority set "hub"|Device\+Hub authority|InvalidHubAuthorityRoot|hub authority root must|product Hub Authority' \
+    "$dispatch" "$catalog_build" "$conformance" "$meta" "$assembly" "$daemon_tests" "$errors"; then
     fail "authority context model preserves retired Hub/Both vocabulary"
   fi
 
@@ -929,6 +930,13 @@ check_authority_context_model_vocabulary_contract() {
       fail "authority context model is missing canonical runtime vocabulary: $required"
     fi
   done
+
+  if ! rg -q 'InvalidRealmAuthorityRoot' "$errors"; then
+    fail "ability control-plane errors must expose InvalidRealmAuthorityRoot"
+  fi
+  if ! rg -q 'realm authority root must be a canonical Authority URA' "$errors"; then
+    fail "ability control-plane errors must describe canonical realm authority roots"
+  fi
 }
 
 check_sdk_runtime_admin_authority_session_contract() {

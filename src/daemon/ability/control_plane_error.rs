@@ -70,19 +70,19 @@ pub enum AbilityControlPlaneError {
         authority_root: String,
         reason: String,
     },
-    /// A hub-scoped authority context was constructed with a non-authority URA
-    /// or a value that could not be parsed as a canonical URA.
+    /// A realm-authority context was constructed with a non-authority URA or a
+    /// value that could not be parsed as a canonical URA.
     #[error(
-        "hub authority root must be the product Hub Authority URA: {authority_root:?}: {reason}"
+        "realm authority root must be a canonical Authority URA: {authority_root:?}: {reason}"
     )]
-    InvalidHubAuthorityRoot {
+    InvalidRealmAuthorityRoot {
         authority_root: String,
         reason: String,
     },
     /// A registration requested an owner plane that the process-local
     /// authority set does not host. Device contexts admit Device, Agent, and
-    /// User owners; Hub contexts admit Hub owners; combined contexts admit
-    /// both planes.
+    /// User owners; realm-authority contexts admit realm-owned authority
+    /// owners; combined contexts admit both planes.
     #[error(
         "authority set {authority_set:?} does not support owner projection {owner_projection:?}"
     )]

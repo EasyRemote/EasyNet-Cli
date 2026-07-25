@@ -1826,13 +1826,13 @@ struct CanonicalRealmAuthority {
 impl CanonicalRealmAuthority {
     fn parse(ura: String) -> Result<Self, AbilityControlPlaneError> {
         let parsed = crate::core::ura::parse_ura(&ura).map_err(|error| {
-            AbilityControlPlaneError::InvalidHubAuthorityRoot {
+            AbilityControlPlaneError::InvalidRealmAuthorityRoot {
                 authority_root: ura.clone(),
                 reason: error.to_string(),
             }
         })?;
         if parsed.kind != crate::core::ura::URAKind::Authority {
-            return Err(AbilityControlPlaneError::InvalidHubAuthorityRoot {
+            return Err(AbilityControlPlaneError::InvalidRealmAuthorityRoot {
                 authority_root: ura,
                 reason: format!("expected authority URA, got {:?}", parsed.kind),
             });
@@ -6477,10 +6477,10 @@ mod tests {
 
         let err =
             AbilityAuthorityContext::for_realm_authority_root("easynet:///r/realm-b/device/dev-b")
-                .expect_err("Device URA must not be accepted as Hub authority");
+                .expect_err("Device URA must not be accepted as realm authority");
         assert!(matches!(
             err,
-            AbilityControlPlaneError::InvalidHubAuthorityRoot { .. }
+            AbilityControlPlaneError::InvalidRealmAuthorityRoot { .. }
         ));
 
         for unsupported in [
