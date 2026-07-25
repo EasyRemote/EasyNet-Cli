@@ -17,6 +17,7 @@ fail() {
 }
 
 SEAM_TESTS=(
+    "sdk/python/tests/test_environment.py"
     "sdk/node/test/runtime-core.test.mjs"
     "sdk/node/test/types.test.ts"
     "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
@@ -28,7 +29,7 @@ for path in "${SEAM_TESTS[@]}"; do
 done
 
 product_client_leaks="$(
-    rg -n '\b(AdminClient|CompanionClient|CompatibilityClient|DirectoryClient|IdentityClient|EventClient|HostBindingClient|MissionClient|PublicationClient|ReceiptClient|SurfaceClient|WrapperClient)\b' \
+    rg -n '\b(AdminClient|CompanionClient|CompatibilityClient|DirectoryClient|IdentityClient|EventClient|HostBindingClient|MissionClient|PublicationClient|ReceiptClient|SurfaceClient|WrapperClient|admin_client|companion_client|compatibility_client|directory_client|identity_client|event_client|host_binding_client|mission_client|publication_client|receipt_client|surface_client|wrapper_client)\b' \
         "${SEAM_TESTS[@]}" 2>/dev/null || true
 )"
 if [[ -n "$product_client_leaks" ]]; then

@@ -3,6 +3,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import easynet_sdk as runtime_sdk
 from easynet_sdk import (
     ConnectOptions,
     ErrorCode,
@@ -21,6 +22,22 @@ from easynet_sdk.runtime_ability import RuntimeCallContext
 
 from test_cabi import FakeRawCABI
 from test_runtime_ability import RuntimeTransportFake
+
+
+downstreamProfileSymbols = (
+    "WorkflowClient",
+    "WorkflowTransport",
+    "ApplicationLifecycleClient",
+    "ApplicationDirectoryView",
+    "ApplicationReceiptPage",
+    "ApplicationEventClient",
+    "HostIntegrationClient",
+    "PublicationWorkflowClient",
+    "CompatibilityAdapter",
+    "ConvenienceWrapperClient",
+    "ProfileBundle",
+    "ServiceLocator",
+)
 
 
 def _load_patch(raw: FakeRawCABI):
@@ -135,8 +152,9 @@ class SdkEnvironmentTests(unittest.TestCase):
 
     def test_default_environment_exposes_no_product_profiles(self) -> None:
         env = SdkEnvironment()
-        for name in ("identity_client", "directory_client", "receipt_client", "publication_client", "host_binding_client", "mission_client", "admin_client", "event_client", "surface_client", "compatibility_client", "wrapper_client"):
-            self.assertFalse(hasattr(env, name), name)
+        for symbol in downstreamProfileSymbols:
+            self.assertFalse(hasattr(runtime_sdk, symbol), symbol)
+            self.assertFalse(hasattr(env, symbol), symbol)
 
         addressing = env.addressing_client()
         self.assertEqual(
