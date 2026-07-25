@@ -26,6 +26,7 @@ from easynet_sdk import (
 PREPARED_FIXTURE = b"""{
   "prepared_id": "prepared-example-1",
   "descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+  "expires_at_unix_ms": 1783000000000,
   "tuple": {
     "caller_ura": "easynet:///r/example/agent/alice.sdk",
     "callee_ura": "easynet:///r/example/device/dev-a",
@@ -195,6 +196,27 @@ class SigningTests(unittest.TestCase):
                     PreparedInvocation.from_json(json.dumps(value))
                 self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
                 self.assertIn("provider-managed signer_policy", caught.exception.message)
+                self.assertIn(expected, caught.exception.message)
+
+    def test_prepared_invocation_requires_explicit_expiry_fact(self) -> None:
+        for label, edit, expected in (
+            (
+                "missing top-level expiry",
+                lambda value: value.pop("expires_at_unix_ms"),
+                "expires_at_unix_ms is required",
+            ),
+            (
+                "mismatched top-level expiry",
+                lambda value: value.update({"expires_at_unix_ms": 1783000000001}),
+                "expires_at_unix_ms must match signing_material.expires_at_unix_ms",
+            ),
+        ):
+            value = json.loads(PREPARED_FIXTURE.decode("utf-8"))
+            edit(value)
+            with self.subTest(label=label):
+                with self.assertRaises(SDKError) as caught:
+                    PreparedInvocation.from_json(json.dumps(value))
+                self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
                 self.assertIn(expected, caught.exception.message)
 
     def test_prepared_invocation_rejects_request_id_only_payload(self) -> None:
@@ -545,6 +567,7 @@ class SigningTests(unittest.TestCase):
             b"""{
                 "prepared_id": "prepared-example-1",
                 "descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+                "expires_at_unix_ms": 1783000000000,
                 "tuple": {
                     "caller_ura": "easynet:///r/example/agent/alice.sdk",
                     "callee_ura": "easynet:///r/example/device/dev-a",

@@ -813,6 +813,37 @@ test("provider-managed signer policy requires custody facts", () => {
   }
 });
 
+test("prepared invocation requires explicit expiry fact", () => {
+  for (const [label, edit, expected] of [
+    [
+      "missing top-level expiry",
+      (value) => {
+        delete value.expires_at_unix_ms;
+      },
+      "expires_at_unix_ms",
+    ],
+    [
+      "mismatched top-level expiry",
+      (value) => {
+        value.expires_at_unix_ms += 1;
+      },
+      "expires_at_unix_ms must match signing_material.expires_at_unix_ms",
+    ],
+  ]) {
+    const value = JSON.parse(preparedJSON(completeDraft().toJSON()));
+    edit(value);
+
+    assert.throws(
+      () => sdk.PreparedInvocation.fromJSON(JSON.stringify(value)),
+      (error) =>
+        error instanceof sdk.SDKError &&
+        error.code === sdk.ErrorCode.INVALID_ARGUMENT &&
+        error.message.includes(expected),
+      label,
+    );
+  }
+});
+
 test("prepared invocation rejects request-id-only alias", () => {
   const value = JSON.parse(preparedJSON(completeDraft().toJSON()));
   delete value.prepared_id;

@@ -272,9 +272,11 @@ def _prepared_invocation_from_json(
         raise _invalid_prepared(
             "signing_material.descriptor_ref must match tuple descriptor_ref"
         )
-    expires_at_unix_ms = _optional_int(
-        decoded.get("expires_at_unix_ms"), "expires_at_unix_ms"
-    ) or material.expires_at_unix_ms
+    expires_at_unix_ms = _required_int(decoded, "expires_at_unix_ms")
+    if expires_at_unix_ms != material.expires_at_unix_ms:
+        raise _invalid_prepared(
+            "expires_at_unix_ms must match signing_material.expires_at_unix_ms"
+        )
     canonical_hash_hex = _optional_string(
         decoded.get("canonical_hash_hex"), "canonical_hash_hex"
     ) or ""

@@ -15756,6 +15756,61 @@ for rel in (
     text = (root / rel).read_text(encoding="utf-8", errors="replace")
     if "providerManagedSignerPolicyRequiresCustodyFacts" not in text and "provider_managed_signer_policy_requires_custody_facts" not in text and "provider-managed signer policy requires custody facts" not in text and "ProviderManagedSignerPolicyRequiresCustodyFacts" not in text:
         raise SystemExit(f"sdk_provider_managed_signing_custody:language_policy_regression_missing:{rel}")
+
+prepared_expiry_forbidden = {
+    "sdk/go/signing.go": (
+        "prepared.expiresAtUnixMS = material.ExpiresAtUnixMS()",
+    ),
+    "sdk/python/easynet_sdk/signing.py": (
+        ") or material.expires_at_unix_ms",
+    ),
+    "sdk/java/src/main/java/run/runtime/sdk/PreparedInvocation.java": (
+        'optionalLong(fields, "expires_at_unix_ms", material.expiresAtUnixMS())',
+        "expiresAtUnixMS < 0 ? signingMaterial.expiresAtUnixMS() : expiresAtUnixMS",
+    ),
+    "sdk/node/index.js": (
+        "??\n      this.signingMaterial.expiresAtUnixMS",
+    ),
+}
+for rel, tokens in prepared_expiry_forbidden.items():
+    text = (root / rel).read_text(encoding="utf-8", errors="replace")
+    for token in tokens:
+        if token in text:
+            raise SystemExit(f"sdk_provider_managed_signing_custody:prepared_expiry_fallback:{rel}:{token}")
+
+prepared_expiry_checks = {
+    "sdk/go/signing.go": (
+        'requiredPreparedInt64(fields, "expires_at_unix_ms")',
+        "expires_at_unix_ms must match signing_material.expires_at_unix_ms",
+    ),
+    "sdk/python/easynet_sdk/signing.py": (
+        '_required_int(decoded, "expires_at_unix_ms")',
+        "expires_at_unix_ms must match signing_material.expires_at_unix_ms",
+    ),
+    "sdk/java/src/main/java/run/runtime/sdk/PreparedInvocation.java": (
+        'requiredLong(fields, "expires_at_unix_ms")',
+        "expires_at_unix_ms must match signing_material.expires_at_unix_ms",
+    ),
+    "sdk/node/index.js": (
+        'positiveRuntimeInteger(value.expires_at_unix_ms, "expires_at_unix_ms")',
+        "expires_at_unix_ms must match signing_material.expires_at_unix_ms",
+    ),
+}
+for rel, tokens in prepared_expiry_checks.items():
+    text = (root / rel).read_text(encoding="utf-8", errors="replace")
+    for token in tokens:
+        if token not in text:
+            raise SystemExit(f"sdk_provider_managed_signing_custody:prepared_expiry_missing:{rel}:{token}")
+
+for rel in (
+    "sdk/go/signing_test.go",
+    "sdk/python/tests/test_signing.py",
+    "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java",
+    "sdk/node/test/runtime-core.test.mjs",
+):
+    text = (root / rel).read_text(encoding="utf-8", errors="replace")
+    if "PreparedInvocationRequiresExplicitExpiryFact" not in text and "preparedInvocationRequiresExplicitExpiryFact" not in text and "prepared_invocation_requires_explicit_expiry_fact" not in text and "prepared invocation requires explicit expiry fact" not in text:
+        raise SystemExit(f"sdk_provider_managed_signing_custody:prepared_expiry_regression_missing:{rel}")
 PY
 }
 

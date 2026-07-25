@@ -1297,9 +1297,10 @@ export class PreparedInvocation {
     this.schemaHashHex = optionalRuntimeString(value.schema_hash_hex, "schema_hash_hex") ?? "";
     this.canonicalHashHex = optionalRuntimeString(value.canonical_hash_hex, "canonical_hash_hex") ?? "";
     validatePreparedHash(this.signingMaterial.canonicalBytesBase64, this.canonicalHashHex);
-    this.expiresAtUnixMS =
-      optionalRuntimeNonNegativeInteger(value.expires_at_unix_ms, "expires_at_unix_ms") ??
-      this.signingMaterial.expiresAtUnixMS;
+    this.expiresAtUnixMS = positiveRuntimeInteger(value.expires_at_unix_ms, "expires_at_unix_ms");
+    if (this.expiresAtUnixMS !== this.signingMaterial.expiresAtUnixMS) {
+      throw invalidRuntime("expires_at_unix_ms must match signing_material.expires_at_unix_ms");
+    }
     this.runtime = null;
   }
 

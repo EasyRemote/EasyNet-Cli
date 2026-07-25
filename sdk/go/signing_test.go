@@ -11,6 +11,7 @@ import (
 const preparedFixture = `{
   "prepared_id": "prepared-example-1",
   "descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
+  "expires_at_unix_ms": 1783000000000,
   "tuple": {
     "caller_ura": "easynet:///r/example/agent/alice.sdk",
     "callee_ura": "easynet:///r/example/device/dev-a",
@@ -54,6 +55,7 @@ func TestPreparedInvocationDecodesSigningMaterialFixture(t *testing.T) {
 func TestPreparedInvocationRejectsMissingPreparedDescriptorRef(t *testing.T) {
 	_, err := NewPreparedInvocationFromJSON([]byte(`{
 		"prepared_id": "prepared-example-1",
+		"expires_at_unix_ms": 1783000000000,
 		"tuple": {
 			"caller_ura": "easynet:///r/example/agent/alice.sdk",
 			"callee_ura": "easynet:///r/example/device/dev-a",
@@ -249,9 +251,47 @@ func TestProviderManagedSignerPolicyRequiresCustodyFacts(t *testing.T) {
 	}
 }
 
+func TestPreparedInvocationRequiresExplicitExpiryFact(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		edit     func(string) string
+		expected string
+	}{
+		{
+			name: "missing top-level expiry",
+			edit: func(raw string) string {
+				return strings.Replace(raw, `  "expires_at_unix_ms": 1783000000000,
+`, "", 1)
+			},
+			expected: "expires_at_unix_ms is required",
+		},
+		{
+			name: "mismatched top-level expiry",
+			edit: func(raw string) string {
+				return strings.Replace(raw, `  "expires_at_unix_ms": 1783000000000,`, `  "expires_at_unix_ms": 1783000000001,`, 1)
+			},
+			expected: "expires_at_unix_ms must match signing_material.expires_at_unix_ms",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := NewPreparedInvocationFromJSON([]byte(tc.edit(preparedFixture)))
+			if err == nil {
+				t.Fatalf("NewPreparedInvocationFromJSON accepted invalid prepared expiry")
+			}
+			if !IsCode(err, ErrInvalidArgument) {
+				t.Fatalf("error code = %v, want %s", err, ErrInvalidArgument)
+			}
+			if !strings.Contains(err.Error(), tc.expected) {
+				t.Fatalf("error = %v, want %q", err, tc.expected)
+			}
+		})
+	}
+}
+
 func TestPreparedInvocationRejectsRequestIDOnlyPayload(t *testing.T) {
 	_, err := NewPreparedInvocationFromJSON([]byte(`{
 		"request_id": "req-1",
+		"expires_at_unix_ms": 1783000000000,
 		"tuple": {
 			"caller_ura": "easynet:///r/example/agent/alice.sdk",
 			"callee_ura": "easynet:///r/example/device/dev-a",
@@ -339,6 +379,7 @@ func TestPreparedInvocationRejectsCanonicalHashMismatch(t *testing.T) {
 	_, err := NewPreparedInvocationFromJSON([]byte(`{
 		"prepared_id": "prepared-example-1",
 		"descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
+		"expires_at_unix_ms": 1783000000000,
 		"canonical_hash_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		"tuple": {
 			"caller_ura": "easynet:///r/example/agent/alice.sdk",

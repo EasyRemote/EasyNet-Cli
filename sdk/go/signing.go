@@ -148,6 +148,10 @@ func decodePreparedInvocation(raw []byte, requirePreparedID bool) (PreparedInvoc
 	if material.DescriptorRef() != tuple.DescriptorRef() {
 		return PreparedInvocation{}, invalidInvocation("signing_material.descriptor_ref must match tuple descriptor_ref", nil)
 	}
+	expiresAtUnixMS, err := requiredPreparedInt64(fields, "expires_at_unix_ms")
+	if err != nil {
+		return PreparedInvocation{}, err
+	}
 	prepared := PreparedInvocation{
 		preparedID:       optionalPreparedString(fields, "prepared_id"),
 		requestID:        optionalPreparedString(fields, "request_id"),
@@ -155,15 +159,15 @@ func decodePreparedInvocation(raw []byte, requirePreparedID bool) (PreparedInvoc
 		descriptorHash:   optionalPreparedString(fields, "descriptor_hash_hex"),
 		schemaHash:       optionalPreparedString(fields, "schema_hash_hex"),
 		canonicalHashHex: optionalPreparedString(fields, "canonical_hash_hex"),
-		expiresAtUnixMS:  optionalPreparedInt64(fields, "expires_at_unix_ms"),
+		expiresAtUnixMS:  expiresAtUnixMS,
 		tuple:            tuple,
 		signingMaterial:  material,
 	}
 	if requirePreparedID && prepared.preparedID == "" {
 		return PreparedInvocation{}, invalidInvocation("prepared_id is required", nil)
 	}
-	if prepared.expiresAtUnixMS == 0 {
-		prepared.expiresAtUnixMS = material.ExpiresAtUnixMS()
+	if prepared.expiresAtUnixMS != material.ExpiresAtUnixMS() {
+		return PreparedInvocation{}, invalidInvocation("expires_at_unix_ms must match signing_material.expires_at_unix_ms", nil)
 	}
 	if prepared.descriptorRef == "" {
 		return PreparedInvocation{}, invalidInvocation("descriptor_ref is required", nil)
@@ -737,6 +741,21 @@ func optionalPreparedString(fields map[string]json.RawMessage, name string) stri
 		return ""
 	}
 	return value
+}
+
+func requiredPreparedInt64(fields map[string]json.RawMessage, name string) (int64, error) {
+	raw, ok := fields[name]
+	if !ok || string(raw) == "null" {
+		return 0, invalidInvocation(fmt.Sprintf("%s is required", name), nil)
+	}
+	var value int64
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return 0, invalidInvocation(fmt.Sprintf("%s must be an integer", name), err)
+	}
+	if value <= 0 {
+		return 0, invalidInvocation(fmt.Sprintf("%s is required", name), nil)
+	}
+	return value, nil
 }
 
 func optionalPreparedInt64(fields map[string]json.RawMessage, name string) int64 {

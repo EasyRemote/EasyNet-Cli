@@ -43,6 +43,7 @@ public final class RuntimeCoreSeamTest {
           "canonicalSigningMaterialComesFromPrepare",
           "preparedInvocationRequiresExplicitDescriptorRef",
           "providerManagedSignerPolicyRequiresCustodyFacts",
+          "preparedInvocationRequiresExplicitExpiryFact",
           "preparedInvocationRejectsRequestIDOnlyAlias",
           "completeTupleRejectsMissingCaller",
           "completeTupleRejectsAllZeroPrincipals",
@@ -108,6 +109,8 @@ public final class RuntimeCoreSeamTest {
           preparedInvocationRequiresExplicitDescriptorRef();
       case "providerManagedSignerPolicyRequiresCustodyFacts" ->
           providerManagedSignerPolicyRequiresCustodyFacts();
+      case "preparedInvocationRequiresExplicitExpiryFact" ->
+          preparedInvocationRequiresExplicitExpiryFact();
       case "preparedInvocationRejectsRequestIDOnlyAlias" ->
           preparedInvocationRejectsRequestIDOnlyAlias();
       case "completeTupleRejectsMissingCaller" -> completeTupleRejectsMissingCaller();
@@ -1036,6 +1039,23 @@ public final class RuntimeCoreSeamTest {
     }
   }
 
+  private static void preparedInvocationRequiresExplicitExpiryFact() {
+    RuntimeClient runtime = new RuntimeClient(new MemoryRuntimeTransport());
+    Map<String, Object> missing = preparedInvocationWire(runtime);
+    missing.remove("expires_at_unix_ms");
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        "expires_at_unix_ms is required",
+        () -> PreparedInvocation.fromJSON(JsonValueWriter.object(missing)));
+
+    Map<String, Object> mismatched = preparedInvocationWire(runtime);
+    mismatched.put("expires_at_unix_ms", 4102444800001L);
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        "expires_at_unix_ms must match signing_material.expires_at_unix_ms",
+        () -> PreparedInvocation.fromJSON(JsonValueWriter.object(mismatched)));
+  }
+
   private static void preparedInvocationRejectsRequestIDOnlyAlias() {
     RuntimeClient runtime = new RuntimeClient(new MemoryRuntimeTransport());
     Map<String, Object> prepared = preparedInvocationWire(runtime);
@@ -1081,6 +1101,7 @@ public final class RuntimeCoreSeamTest {
     prepared.put("request_id", "request-1");
     prepared.put("tuple", JsonValueReader.object(completeDraft(runtime).toJSON(), "draft"));
     prepared.put("signing_material", material);
+    prepared.put("descriptor_ref", DESCRIPTOR);
     prepared.put("descriptor_hash_hex", "");
     prepared.put("schema_hash_hex", "");
     prepared.put("canonical_hash_hex", "");

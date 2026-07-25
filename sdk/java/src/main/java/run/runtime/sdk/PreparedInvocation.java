@@ -45,7 +45,14 @@ public final class PreparedInvocation {
     this.descriptorHashHex = descriptorHashHex == null ? "" : descriptorHashHex;
     this.schemaHashHex = schemaHashHex == null ? "" : schemaHashHex;
     this.canonicalHashHex = canonicalHashHex == null ? "" : canonicalHashHex;
-    this.expiresAtUnixMS = expiresAtUnixMS < 0 ? signingMaterial.expiresAtUnixMS() : expiresAtUnixMS;
+    if (expiresAtUnixMS <= 0) {
+      throw SDKError.validation("prepared_invocation", "expires_at_unix_ms is required");
+    }
+    if (expiresAtUnixMS != signingMaterial.expiresAtUnixMS()) {
+      throw SDKError.validation(
+          "prepared_invocation", "expires_at_unix_ms must match signing_material.expires_at_unix_ms");
+    }
+    this.expiresAtUnixMS = expiresAtUnixMS;
   }
 
   public static PreparedInvocation fromJSON(byte[] raw) {
@@ -80,7 +87,7 @@ public final class PreparedInvocation {
         optionalString(fields, "descriptor_hash_hex"),
         optionalString(fields, "schema_hash_hex"),
         optionalString(fields, "canonical_hash_hex"),
-        optionalLong(fields, "expires_at_unix_ms", material.expiresAtUnixMS()),
+        requiredLong(fields, "expires_at_unix_ms"),
         false);
   }
 
@@ -187,18 +194,23 @@ public final class PreparedInvocation {
     return string;
   }
 
-  private static long optionalLong(Map<String, Object> fields, String field, long defaultValue) {
+  private static long requiredLong(Map<String, Object> fields, String field) {
     Object value = fields.get(field);
     if (value == null) {
-      return defaultValue;
+      throw SDKError.validation("prepared_invocation", field + " is required");
     }
+    long out;
     if (value instanceof Long longValue) {
-      return longValue;
+      out = longValue;
+    } else if (value instanceof Integer integerValue) {
+      out = integerValue.longValue();
+    } else {
+      throw SDKError.validation("prepared_invocation", field + " must be an integer");
     }
-    if (value instanceof Integer integerValue) {
-      return integerValue.longValue();
+    if (out <= 0) {
+      throw SDKError.validation("prepared_invocation", field + " is required");
     }
-    throw SDKError.validation("prepared_invocation", field + " must be an integer");
+    return out;
   }
 
   private static String required(String value, String field) {
