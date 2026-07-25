@@ -15,7 +15,7 @@ const (
 	// ManagedSigningDefaultPageLimit bounds every managed-signing List call.
 	ManagedSigningDefaultPageLimit uint32 = 16
 	// ManagedSigningMaxPageLimit is the largest page the SDK will request or
-	// accept from the daemon key service.
+	// accept from the runtime key service.
 	ManagedSigningMaxPageLimit uint32 = 16
 
 	managedSigningAutoPaginationMaxPages = 1024
@@ -42,7 +42,7 @@ func (s ManagedSigningStatus) valid() bool {
 	}
 }
 
-// ManagedSigningKey is the public projection of a daemon-custodied signing
+// ManagedSigningKey is the public projection of a runtime-custodied signing
 // key. It deliberately has no private-key or persistence fields.
 type ManagedSigningKey struct {
 	KeyID           string               `json:"key_id"`
@@ -64,7 +64,7 @@ func (k ManagedSigningKey) SigningPublicKey() ed25519.PublicKey {
 }
 
 // ManagedSigningCreateRequest describes policy metadata for a key generated
-// inside daemon custody.
+// inside runtime custody.
 type ManagedSigningCreateRequest struct {
 	Purpose         string
 	BoundSubjectURA string
@@ -78,8 +78,8 @@ type ManagedSigningKeyFilter struct {
 }
 
 // ManagedSigningPageOptions selects one bounded inventory page. Cursor is an
-// opaque daemon token; the SDK deliberately does not parse daemon URAs or
-// cursor internals.
+// opaque runtime key-service token; the SDK deliberately does not parse
+// provider cursor internals.
 type ManagedSigningPageOptions struct {
 	Limit  uint32
 	Cursor string
@@ -115,23 +115,23 @@ type ManagedSigningPeerPage struct {
 	NextCursor string
 }
 
-// ManagedSigningClientOptions configures the daemon-local provider endpoint.
+// ManagedSigningClientOptions configures the runtime key-service provider endpoint.
 // SocketPath is required: product runtime discovery and directory policy
-// belong to the daemon, not to this generic SDK facade.
+// belong to the provider, not to this generic SDK facade.
 type ManagedSigningClientOptions struct {
 	SocketPath string
 	Timeout    time.Duration
 }
 
-// ManagedSigningClient is a provider-backed facade over the daemon's
+// ManagedSigningClient is a provider-backed facade over the runtime key-service
 // rotatable signing-key domain.
 type ManagedSigningClient struct {
-	service daemonKeyServiceClient
+	service runtimeKeyServiceClient
 }
 
 // ManagedSigner is a key-bound canonical signing capability. It retains the
 // complete validated public authority projection and verifies every
-// daemon-produced signature.
+// runtime key-service-produced signature.
 type ManagedSigner struct {
 	client     *ManagedSigningClient
 	projection ManagedSigningKey
@@ -140,7 +140,7 @@ type ManagedSigner struct {
 var _ CanonicalSigner = (*ManagedSigner)(nil)
 
 func NewManagedSigningClient(options ManagedSigningClientOptions) (*ManagedSigningClient, error) {
-	service, err := newDaemonKeyServiceClient(options.SocketPath, options.Timeout)
+	service, err := newRuntimeKeyServiceClient(options.SocketPath, options.Timeout)
 	if err != nil {
 		return nil, err
 	}
@@ -148,7 +148,7 @@ func NewManagedSigningClient(options ManagedSigningClientOptions) (*ManagedSigni
 }
 
 // Signer resolves one active key into a narrow canonical-signing capability.
-// The capability retains no private material and verifies daemon signatures
+// The capability retains no private material and verifies runtime key-service signatures
 // against the resolved public projection before returning them.
 func (c *ManagedSigningClient) Signer(keyID string) (*ManagedSigner, error) {
 	projection, err := c.PublicProjection(keyID)
@@ -156,13 +156,13 @@ func (c *ManagedSigningClient) Signer(keyID string) (*ManagedSigner, error) {
 		return nil, err
 	}
 	if projection.Status != ManagedSigningStatusActive {
-		return nil, daemonKeyServiceRejected(
+		return nil, runtimeKeyServiceRejected(
 			"lifecycle",
 			fmt.Sprintf("managed signing key %q is not active", projection.KeyID),
 		)
 	}
 	if projection.BoundSubjectURA == "" || projection.SignerPolicyRef == "" {
-		return nil, daemonKeyServiceRejected(
+		return nil, runtimeKeyServiceRejected(
 			"policy",
 			fmt.Sprintf("managed signing key %q is not bound to a signing subject", projection.KeyID),
 		)
@@ -173,7 +173,7 @@ func (c *ManagedSigningClient) Signer(keyID string) (*ManagedSigner, error) {
 	}, nil
 }
 
-// KeyID returns the immutable daemon inventory identifier bound to the signer.
+// KeyID returns the immutable runtime key-service inventory identifier bound to the signer.
 func (s *ManagedSigner) KeyID() string {
 	if s == nil {
 		return ""
@@ -193,15 +193,15 @@ func (s *ManagedSigner) Projection() ManagedSigningKey {
 func (s *ManagedSigner) SignCanonical(canonicalBytes []byte) ([]byte, error) {
 	if s == nil || s.client == nil || s.projection.KeyID == "" ||
 		len(s.projection.PublicKey) != ed25519.PublicKeySize {
-		return nil, invalidDaemonKeyServiceInput("managed signer is not initialized")
+		return nil, invalidRuntimeKeyServiceInput("managed signer is not initialized")
 	}
 	signature, err := s.client.signWithProjection(s.projection, canonicalBytes)
 	if err != nil {
 		return nil, err
 	}
 	if !ed25519.Verify(s.projection.PublicKey, canonicalBytes, signature) {
-		return nil, invalidDaemonKeyServicePayload(
-			"daemon key service returned a signature that does not verify against the bound key projection",
+		return nil, invalidRuntimeKeyServicePayload(
+			"runtime key service returned a signature that does not verify against the bound key projection",
 			nil,
 		)
 	}
@@ -210,7 +210,7 @@ func (s *ManagedSigner) SignCanonical(canonicalBytes []byte) ([]byte, error) {
 
 func (s *ManagedSigner) SigningPublicKey() (ed25519.PublicKey, error) {
 	if s == nil || len(s.projection.PublicKey) != ed25519.PublicKeySize {
-		return nil, invalidDaemonKeyServiceInput("managed signer is not initialized")
+		return nil, invalidRuntimeKeyServiceInput("managed signer is not initialized")
 	}
 	return s.projection.SigningPublicKey(), nil
 }
@@ -241,8 +241,8 @@ func (c *ManagedSigningClient) Create(request ManagedSigningCreateRequest) (Mana
 	}
 	if created.Purpose != purpose || created.BoundSubjectURA != strings.TrimSpace(request.BoundSubjectURA) ||
 		created.Status != ManagedSigningStatusActive || created.RotationEpoch != 0 || created.RotatedFrom != "" {
-		return ManagedSigningKey{}, invalidDaemonKeyServicePayload(
-			"daemon key service violated managed signing create postconditions",
+		return ManagedSigningKey{}, invalidRuntimeKeyServicePayload(
+			"runtime key service violated managed signing create postconditions",
 			nil,
 		)
 	}
@@ -266,11 +266,11 @@ func (c *ManagedSigningClient) List(filter ManagedSigningKeyFilter) ([]ManagedSi
 			return nil, err
 		}
 		if len(all)+len(page.Keys) > managedSigningAutoPaginationMaxItems {
-			return nil, invalidDaemonKeyServicePayload("managed signing list exceeded the bounded auto-pagination item limit", nil)
+			return nil, invalidRuntimeKeyServicePayload("managed signing list exceeded the bounded auto-pagination item limit", nil)
 		}
 		for _, key := range page.Keys {
 			if _, exists := seenKeys[key.KeyID]; exists {
-				return nil, invalidDaemonKeyServicePayload(fmt.Sprintf("daemon key service returned duplicate key ID %q across pages", key.KeyID), nil)
+				return nil, invalidRuntimeKeyServicePayload(fmt.Sprintf("runtime key service returned duplicate key ID %q across pages", key.KeyID), nil)
 			}
 			seenKeys[key.KeyID] = struct{}{}
 			all = append(all, key)
@@ -279,12 +279,12 @@ func (c *ManagedSigningClient) List(filter ManagedSigningKeyFilter) ([]ManagedSi
 			return all, nil
 		}
 		if _, exists := seenCursors[page.NextCursor]; exists {
-			return nil, invalidDaemonKeyServicePayload("daemon key service repeated a managed signing key cursor", nil)
+			return nil, invalidRuntimeKeyServicePayload("runtime key service repeated a managed signing key cursor", nil)
 		}
 		seenCursors[page.NextCursor] = struct{}{}
 		cursor = page.NextCursor
 	}
-	return nil, invalidDaemonKeyServicePayload("managed signing list exceeded the bounded auto-pagination page limit", nil)
+	return nil, invalidRuntimeKeyServicePayload("managed signing list exceeded the bounded auto-pagination page limit", nil)
 }
 
 // ListPage returns one bounded page of public managed-signing projections.
@@ -312,7 +312,7 @@ func (c *ManagedSigningClient) ListPage(
 	}
 	if filter.Status != "" {
 		if !filter.Status.valid() {
-			return ManagedSigningKeyPage{}, invalidDaemonKeyServiceInput(fmt.Sprintf("unsupported managed signing status %q", filter.Status))
+			return ManagedSigningKeyPage{}, invalidRuntimeKeyServiceInput(fmt.Sprintf("unsupported managed signing status %q", filter.Status))
 		}
 		payload["status"] = filter.Status
 	}
@@ -326,10 +326,10 @@ func (c *ManagedSigningClient) ListPage(
 	}
 	for _, key := range page.Keys {
 		if filter.Purpose != "" && key.Purpose != strings.TrimSpace(filter.Purpose) {
-			return ManagedSigningKeyPage{}, invalidDaemonKeyServicePayload("daemon key service returned a key outside the requested purpose filter", nil)
+			return ManagedSigningKeyPage{}, invalidRuntimeKeyServicePayload("runtime key service returned a key outside the requested purpose filter", nil)
 		}
 		if filter.Status != "" && key.Status != filter.Status {
-			return ManagedSigningKeyPage{}, invalidDaemonKeyServicePayload("daemon key service returned a key outside the requested status filter", nil)
+			return ManagedSigningKeyPage{}, invalidRuntimeKeyServicePayload("runtime key service returned a key outside the requested status filter", nil)
 		}
 	}
 	return page, nil
@@ -356,13 +356,14 @@ func (c *ManagedSigningClient) PublicProjection(keyID string) (ManagedSigningKey
 		return ManagedSigningKey{}, err
 	}
 	if projection.KeyID != keyID {
-		return ManagedSigningKey{}, invalidDaemonKeyServicePayload("daemon key service returned a public projection for a different key ID", nil)
+		return ManagedSigningKey{}, invalidRuntimeKeyServicePayload("runtime key service returned a public projection for a different key ID", nil)
 	}
 	return projection, nil
 }
 
-// Sign requests a signature over caller-supplied canonical bytes. The daemon
-// enforces active/unexpired lifecycle state and immutable subject policy.
+// Sign requests a signature over caller-supplied canonical bytes. The runtime
+// key service enforces active/unexpired lifecycle state and immutable subject
+// policy.
 func (c *ManagedSigningClient) Sign(keyID string, canonicalBytes []byte) ([]byte, error) {
 	keyID, err := validateManagedSigningRequest(keyID, canonicalBytes)
 	if err != nil {
@@ -387,7 +388,7 @@ func (c *ManagedSigningClient) signWithProjection(projection ManagedSigningKey, 
 		return nil, err
 	}
 	if projection.BoundSubjectURA == "" || projection.SignerPolicyRef == "" {
-		return nil, invalidDaemonKeyServiceInput("managed signer requires a bound subject and signer policy reference")
+		return nil, invalidRuntimeKeyServiceInput("managed signer requires a bound subject and signer policy reference")
 	}
 	response, err := c.service.call(map[string]any{
 		"method":              "inventory.sign",
@@ -400,16 +401,16 @@ func (c *ManagedSigningClient) signWithProjection(projection ManagedSigningKey, 
 	if err != nil {
 		return nil, err
 	}
-	if err := requireDaemonKeyServiceResult(response, "signature", "signature_b64"); err != nil {
+	if err := requireRuntimeKeyServiceResult(response, "signature", "signature_b64"); err != nil {
 		return nil, err
 	}
-	encoded, err := daemonKeyServiceResponseString(response, "signature_b64")
+	encoded, err := runtimeKeyServiceResponseString(response, "signature_b64")
 	if err != nil {
 		return nil, err
 	}
-	signature, err := decodeCanonicalDaemonKeyServiceBase64(encoded, ed25519.SignatureSize, "Ed25519 signature")
+	signature, err := decodeCanonicalRuntimeKeyServiceBase64(encoded, ed25519.SignatureSize, "Ed25519 signature")
 	if err != nil {
-		return nil, invalidDaemonKeyServicePayload("daemon key service returned an invalid Ed25519 signature", err)
+		return nil, invalidRuntimeKeyServicePayload("runtime key service returned an invalid Ed25519 signature", err)
 	}
 	return signature, nil
 }
@@ -432,8 +433,8 @@ func (c *ManagedSigningClient) Rotate(keyID string) (ManagedSigningKey, error) {
 	}
 	if rotated.KeyID == keyID || rotated.RotatedFrom != keyID ||
 		rotated.Status != ManagedSigningStatusActive || rotated.RotationEpoch == 0 {
-		return ManagedSigningKey{}, invalidDaemonKeyServicePayload(
-			"daemon key service violated managed signing rotate postconditions",
+		return ManagedSigningKey{}, invalidRuntimeKeyServicePayload(
+			"runtime key service violated managed signing rotate postconditions",
 			nil,
 		)
 	}
@@ -441,7 +442,7 @@ func (c *ManagedSigningClient) Rotate(keyID string) (ManagedSigningKey, error) {
 }
 
 // Revoke moves an active or retired key to its terminal state and returns the
-// daemon-issued transition timestamp.
+// runtime key-service-issued transition timestamp.
 func (c *ManagedSigningClient) Revoke(keyID string) (int64, error) {
 	if err := requireManagedSigningClient(c); err != nil {
 		return 0, err
@@ -454,15 +455,15 @@ func (c *ManagedSigningClient) Revoke(keyID string) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	if err := requireDaemonKeyServiceResult(response, "inventory_revoked", "revoked_unix_ms"); err != nil {
+	if err := requireRuntimeKeyServiceResult(response, "inventory_revoked", "revoked_unix_ms"); err != nil {
 		return 0, err
 	}
 	var revokedUnixMS int64
-	if err := decodeDaemonKeyServiceField(response, "revoked_unix_ms", &revokedUnixMS); err != nil {
+	if err := decodeRuntimeKeyServiceField(response, "revoked_unix_ms", &revokedUnixMS); err != nil {
 		return 0, err
 	}
 	if revokedUnixMS <= 0 {
-		return 0, invalidDaemonKeyServicePayload("daemon key service returned an invalid revocation timestamp", nil)
+		return 0, invalidRuntimeKeyServicePayload("runtime key service returned an invalid revocation timestamp", nil)
 	}
 	return revokedUnixMS, nil
 }
@@ -476,7 +477,7 @@ func (c *ManagedSigningClient) SetExpiry(keyID string, expiresUnixMS int64) erro
 		return err
 	}
 	if expiresUnixMS <= 0 {
-		return invalidDaemonKeyServiceInput("managed signing expiry must be a positive Unix millisecond timestamp")
+		return invalidRuntimeKeyServiceInput("managed signing expiry must be a positive Unix millisecond timestamp")
 	}
 	response, err := c.service.call(map[string]any{
 		"method":          "inventory.set_expiry",
@@ -486,7 +487,7 @@ func (c *ManagedSigningClient) SetExpiry(keyID string, expiresUnixMS int64) erro
 	if err != nil {
 		return err
 	}
-	return requireDaemonKeyServiceResult(response, "ok")
+	return requireRuntimeKeyServiceResult(response, "ok")
 }
 
 func (c *ManagedSigningClient) BindSubject(keyID, subjectURA string) error {
@@ -509,11 +510,11 @@ func (c *ManagedSigningClient) BindSubject(keyID, subjectURA string) error {
 	if err != nil {
 		return err
 	}
-	return requireDaemonKeyServiceResult(response, "ok")
+	return requireRuntimeKeyServiceResult(response, "ok")
 }
 
 // AddPeer creates or refreshes one public trust projection. The returned flag
-// is true only when the daemon inserted a new peer.
+// is true only when the runtime key service inserted a new peer.
 func (c *ManagedSigningClient) AddPeer(registration ManagedSigningPeerRegistration) (bool, error) {
 	if err := requireManagedSigningClient(c); err != nil {
 		return false, err
@@ -523,7 +524,7 @@ func (c *ManagedSigningClient) AddPeer(registration ManagedSigningPeerRegistrati
 		return false, err
 	}
 	if len(registration.PublicKey) != ed25519.PublicKeySize {
-		return false, invalidDaemonKeyServiceInput("managed signing peer public key must be 32 bytes")
+		return false, invalidRuntimeKeyServiceInput("managed signing peer public key must be 32 bytes")
 	}
 	payload := map[string]any{
 		"method":         "inventory.peer_add",
@@ -541,11 +542,11 @@ func (c *ManagedSigningClient) AddPeer(registration ManagedSigningPeerRegistrati
 	if err != nil {
 		return false, err
 	}
-	if err := requireDaemonKeyServiceResult(response, "inventory_peer_added", "added"); err != nil {
+	if err := requireRuntimeKeyServiceResult(response, "inventory_peer_added", "added"); err != nil {
 		return false, err
 	}
 	var added bool
-	if err := decodeDaemonKeyServiceField(response, "added", &added); err != nil {
+	if err := decodeRuntimeKeyServiceField(response, "added", &added); err != nil {
 		return false, err
 	}
 	return added, nil
@@ -568,11 +569,11 @@ func (c *ManagedSigningClient) ListPeers() ([]ManagedSigningPeer, error) {
 			return nil, err
 		}
 		if len(all)+len(page.Peers) > managedSigningAutoPaginationMaxItems {
-			return nil, invalidDaemonKeyServicePayload("managed signing peer list exceeded the bounded auto-pagination item limit", nil)
+			return nil, invalidRuntimeKeyServicePayload("managed signing peer list exceeded the bounded auto-pagination item limit", nil)
 		}
 		for _, peer := range page.Peers {
 			if _, exists := seenPeers[peer.PeerURA]; exists {
-				return nil, invalidDaemonKeyServicePayload(fmt.Sprintf("daemon key service returned duplicate peer URA %q across pages", peer.PeerURA), nil)
+				return nil, invalidRuntimeKeyServicePayload(fmt.Sprintf("runtime key service returned duplicate peer URA %q across pages", peer.PeerURA), nil)
 			}
 			seenPeers[peer.PeerURA] = struct{}{}
 			all = append(all, peer)
@@ -581,15 +582,15 @@ func (c *ManagedSigningClient) ListPeers() ([]ManagedSigningPeer, error) {
 			return all, nil
 		}
 		if len(page.Peers) == 0 {
-			return nil, invalidDaemonKeyServicePayload("daemon key service returned an empty peer page with a continuation cursor", nil)
+			return nil, invalidRuntimeKeyServicePayload("runtime key service returned an empty peer page with a continuation cursor", nil)
 		}
 		if _, exists := seenCursors[page.NextCursor]; exists {
-			return nil, invalidDaemonKeyServicePayload("daemon key service repeated a managed signing peer cursor", nil)
+			return nil, invalidRuntimeKeyServicePayload("runtime key service repeated a managed signing peer cursor", nil)
 		}
 		seenCursors[page.NextCursor] = struct{}{}
 		cursor = page.NextCursor
 	}
-	return nil, invalidDaemonKeyServicePayload("managed signing peer list exceeded the bounded auto-pagination page limit", nil)
+	return nil, invalidRuntimeKeyServicePayload("managed signing peer list exceeded the bounded auto-pagination page limit", nil)
 }
 
 // ListPeersPage returns one bounded page of public peer projections.
@@ -636,11 +637,11 @@ type managedSigningPeerWire struct {
 }
 
 func decodeManagedSigningKeyResponse(response map[string]json.RawMessage) (ManagedSigningKey, error) {
-	if err := requireDaemonKeyServiceResult(response, "inventory_key", "entry"); err != nil {
+	if err := requireRuntimeKeyServiceResult(response, "inventory_key", "entry"); err != nil {
 		return ManagedSigningKey{}, err
 	}
 	var wire managedSigningKeyWire
-	if err := decodeDaemonKeyServiceField(response, "entry", &wire); err != nil {
+	if err := decodeRuntimeKeyServiceField(response, "entry", &wire); err != nil {
 		return ManagedSigningKey{}, err
 	}
 	return projectManagedSigningKey(wire)
@@ -651,15 +652,15 @@ func decodeManagedSigningKeysPageResponse(
 	limit uint32,
 	requestCursor string,
 ) (ManagedSigningKeyPage, error) {
-	if err := requireDaemonKeyServiceResult(response, "inventory_keys", "entries", "next_cursor"); err != nil {
+	if err := requireRuntimeKeyServiceResult(response, "inventory_keys", "entries", "next_cursor"); err != nil {
 		return ManagedSigningKeyPage{}, err
 	}
 	var wires []managedSigningKeyWire
-	if err := decodeDaemonKeyServiceField(response, "entries", &wires); err != nil {
+	if err := decodeRuntimeKeyServiceField(response, "entries", &wires); err != nil {
 		return ManagedSigningKeyPage{}, err
 	}
 	if len(wires) > int(limit) {
-		return ManagedSigningKeyPage{}, invalidDaemonKeyServicePayload("daemon key service returned a key page larger than the requested limit", nil)
+		return ManagedSigningKeyPage{}, invalidRuntimeKeyServicePayload("runtime key service returned a key page larger than the requested limit", nil)
 	}
 	keys := make([]ManagedSigningKey, 0, len(wires))
 	seen := make(map[string]struct{}, len(wires))
@@ -669,7 +670,7 @@ func decodeManagedSigningKeysPageResponse(
 			return ManagedSigningKeyPage{}, err
 		}
 		if _, exists := seen[key.KeyID]; exists {
-			return ManagedSigningKeyPage{}, invalidDaemonKeyServicePayload(fmt.Sprintf("daemon key service returned duplicate key ID %q", key.KeyID), nil)
+			return ManagedSigningKeyPage{}, invalidRuntimeKeyServicePayload(fmt.Sprintf("runtime key service returned duplicate key ID %q", key.KeyID), nil)
 		}
 		seen[key.KeyID] = struct{}{}
 		keys = append(keys, key)
@@ -691,17 +692,17 @@ func projectManagedSigningKey(wire managedSigningKeyWire) (ManagedSigningKey, er
 		return ManagedSigningKey{}, err
 	}
 	if !wire.Status.valid() {
-		return ManagedSigningKey{}, invalidDaemonKeyServicePayload(fmt.Sprintf("daemon key service returned unsupported managed signing status %q", wire.Status), nil)
+		return ManagedSigningKey{}, invalidRuntimeKeyServicePayload(fmt.Sprintf("runtime key service returned unsupported managed signing status %q", wire.Status), nil)
 	}
-	publicKey, err := decodeCanonicalDaemonKeyServiceBase64(wire.PublicKeyB64, ed25519.PublicKeySize, "managed Ed25519 public key")
+	publicKey, err := decodeCanonicalRuntimeKeyServiceBase64(wire.PublicKeyB64, ed25519.PublicKeySize, "managed Ed25519 public key")
 	if err != nil {
-		return ManagedSigningKey{}, invalidDaemonKeyServicePayload("daemon key service returned an invalid managed Ed25519 public key", err)
+		return ManagedSigningKey{}, invalidRuntimeKeyServicePayload("runtime key service returned an invalid managed Ed25519 public key", err)
 	}
 	if wire.RotationEpoch == nil {
-		return ManagedSigningKey{}, invalidDaemonKeyServicePayload("daemon key service response missing managed signing rotation_epoch", nil)
+		return ManagedSigningKey{}, invalidRuntimeKeyServicePayload("runtime key service response missing managed signing rotation_epoch", nil)
 	}
 	if wire.CreatedUnixMS == nil || *wire.CreatedUnixMS <= 0 {
-		return ManagedSigningKey{}, invalidDaemonKeyServicePayload("daemon key service returned an invalid managed signing created_unix_ms", nil)
+		return ManagedSigningKey{}, invalidRuntimeKeyServicePayload("runtime key service returned an invalid managed signing created_unix_ms", nil)
 	}
 	boundSubjectURA, err := optionalManagedSigningText("bound_subject", wire.BoundSubject)
 	if err != nil {
@@ -716,23 +717,23 @@ func projectManagedSigningKey(wire managedSigningKeyWire) (ManagedSigningKey, er
 		return ManagedSigningKey{}, err
 	}
 	if *wire.RotationEpoch == 0 && rotatedFrom != "" {
-		return ManagedSigningKey{}, invalidDaemonKeyServicePayload("generation-zero managed signing key cannot have rotated_from", nil)
+		return ManagedSigningKey{}, invalidRuntimeKeyServicePayload("generation-zero managed signing key cannot have rotated_from", nil)
 	}
 	if *wire.RotationEpoch > 0 && rotatedFrom == "" {
-		return ManagedSigningKey{}, invalidDaemonKeyServicePayload("rotated managed signing key is missing rotated_from", nil)
+		return ManagedSigningKey{}, invalidRuntimeKeyServicePayload("rotated managed signing key is missing rotated_from", nil)
 	}
 	if rotatedFrom == keyID {
-		return ManagedSigningKey{}, invalidDaemonKeyServicePayload("managed signing key cannot rotate from itself", nil)
+		return ManagedSigningKey{}, invalidRuntimeKeyServicePayload("managed signing key cannot rotate from itself", nil)
 	}
 	if wire.Status == ManagedSigningStatusRevoked {
 		if wire.RevokedUnixMS == nil || *wire.RevokedUnixMS < *wire.CreatedUnixMS {
-			return ManagedSigningKey{}, invalidDaemonKeyServicePayload("revoked managed signing key has an invalid revoked_unix_ms", nil)
+			return ManagedSigningKey{}, invalidRuntimeKeyServicePayload("revoked managed signing key has an invalid revoked_unix_ms", nil)
 		}
 	} else if wire.RevokedUnixMS != nil {
-		return ManagedSigningKey{}, invalidDaemonKeyServicePayload("non-revoked managed signing key contains revoked_unix_ms", nil)
+		return ManagedSigningKey{}, invalidRuntimeKeyServicePayload("non-revoked managed signing key contains revoked_unix_ms", nil)
 	}
 	if wire.ExpiresUnixMS != nil && *wire.ExpiresUnixMS <= 0 {
-		return ManagedSigningKey{}, invalidDaemonKeyServicePayload("managed signing key contains an invalid expires_unix_ms", nil)
+		return ManagedSigningKey{}, invalidRuntimeKeyServicePayload("managed signing key contains an invalid expires_unix_ms", nil)
 	}
 	expectedPolicyRef := ""
 	if boundSubjectURA != "" {
@@ -744,7 +745,7 @@ func projectManagedSigningKey(wire managedSigningKeyWire) (ManagedSigningKey, er
 		)
 	}
 	if signerPolicyRef != expectedPolicyRef {
-		return ManagedSigningKey{}, invalidDaemonKeyServicePayload("managed signing signer_policy_ref does not match its canonical subject/key projection", nil)
+		return ManagedSigningKey{}, invalidRuntimeKeyServicePayload("managed signing signer_policy_ref does not match its canonical subject/key projection", nil)
 	}
 	return ManagedSigningKey{
 		KeyID:           keyID,
@@ -766,15 +767,15 @@ func decodeManagedSigningPeersPageResponse(
 	limit uint32,
 	requestCursor string,
 ) (ManagedSigningPeerPage, error) {
-	if err := requireDaemonKeyServiceResult(response, "inventory_peers", "peers", "next_cursor"); err != nil {
+	if err := requireRuntimeKeyServiceResult(response, "inventory_peers", "peers", "next_cursor"); err != nil {
 		return ManagedSigningPeerPage{}, err
 	}
 	var wires []managedSigningPeerWire
-	if err := decodeDaemonKeyServiceField(response, "peers", &wires); err != nil {
+	if err := decodeRuntimeKeyServiceField(response, "peers", &wires); err != nil {
 		return ManagedSigningPeerPage{}, err
 	}
 	if len(wires) > int(limit) {
-		return ManagedSigningPeerPage{}, invalidDaemonKeyServicePayload("daemon key service returned a peer page larger than the requested limit", nil)
+		return ManagedSigningPeerPage{}, invalidRuntimeKeyServicePayload("runtime key service returned a peer page larger than the requested limit", nil)
 	}
 	peers := make([]ManagedSigningPeer, 0, len(wires))
 	seen := make(map[string]struct{}, len(wires))
@@ -784,19 +785,19 @@ func decodeManagedSigningPeersPageResponse(
 			return ManagedSigningPeerPage{}, err
 		}
 		if _, exists := seen[peerURA]; exists {
-			return ManagedSigningPeerPage{}, invalidDaemonKeyServicePayload(fmt.Sprintf("daemon key service returned duplicate peer URA %q", peerURA), nil)
+			return ManagedSigningPeerPage{}, invalidRuntimeKeyServicePayload(fmt.Sprintf("runtime key service returned duplicate peer URA %q", peerURA), nil)
 		}
-		publicKey, err := decodeCanonicalDaemonKeyServiceBase64(wire.PublicKeyB64, ed25519.PublicKeySize, "peer Ed25519 public key")
+		publicKey, err := decodeCanonicalRuntimeKeyServiceBase64(wire.PublicKeyB64, ed25519.PublicKeySize, "peer Ed25519 public key")
 		if err != nil {
-			return ManagedSigningPeerPage{}, invalidDaemonKeyServicePayload("daemon key service returned an invalid peer Ed25519 public key", err)
+			return ManagedSigningPeerPage{}, invalidRuntimeKeyServicePayload("runtime key service returned an invalid peer Ed25519 public key", err)
 		}
-		fingerprint, err := decodeCanonicalDaemonKeyServiceBase64(wire.FingerprintB64, sha256.Size, "peer fingerprint")
+		fingerprint, err := decodeCanonicalRuntimeKeyServiceBase64(wire.FingerprintB64, sha256.Size, "peer fingerprint")
 		if err != nil {
-			return ManagedSigningPeerPage{}, invalidDaemonKeyServicePayload("daemon key service returned an invalid peer fingerprint", err)
+			return ManagedSigningPeerPage{}, invalidRuntimeKeyServicePayload("runtime key service returned an invalid peer fingerprint", err)
 		}
 		expectedFingerprint := sha256.Sum256(publicKey)
 		if !bytes.Equal(fingerprint, expectedFingerprint[:]) {
-			return ManagedSigningPeerPage{}, invalidDaemonKeyServicePayload("daemon key service returned a peer fingerprint that does not match SHA-256(public_key)", nil)
+			return ManagedSigningPeerPage{}, invalidRuntimeKeyServicePayload("runtime key service returned a peer fingerprint that does not match SHA-256(public_key)", nil)
 		}
 		viaAuthorityURA, err := optionalManagedSigningText("via_authority", wire.ViaAuthority)
 		if err != nil {
@@ -804,7 +805,7 @@ func decodeManagedSigningPeersPageResponse(
 		}
 		if wire.AddedUnixMS == nil || wire.LastSeenUnixMS == nil ||
 			*wire.AddedUnixMS <= 0 || *wire.LastSeenUnixMS < *wire.AddedUnixMS {
-			return ManagedSigningPeerPage{}, invalidDaemonKeyServicePayload("daemon key service returned invalid managed peer timestamps", nil)
+			return ManagedSigningPeerPage{}, invalidRuntimeKeyServicePayload("runtime key service returned invalid managed peer timestamps", nil)
 		}
 		seen[peerURA] = struct{}{}
 		peers = append(peers, ManagedSigningPeer{
@@ -823,13 +824,13 @@ func decodeManagedSigningPeersPageResponse(
 	return ManagedSigningPeerPage{Peers: peers, NextCursor: nextCursor}, nil
 }
 
-func decodeDaemonKeyServiceField(response map[string]json.RawMessage, field string, target any) error {
+func decodeRuntimeKeyServiceField(response map[string]json.RawMessage, field string, target any) error {
 	raw, ok := response[field]
 	if !ok {
-		return invalidDaemonKeyServicePayload(fmt.Sprintf("daemon key-service response missing %s", field), nil)
+		return invalidRuntimeKeyServicePayload(fmt.Sprintf("runtime key-service response missing %s", field), nil)
 	}
-	if err := decodeDaemonKeyServiceJSON(raw, target, true); err != nil {
-		return invalidDaemonKeyServicePayload(fmt.Sprintf("daemon key-service response field %s is invalid", field), err)
+	if err := decodeRuntimeKeyServiceJSON(raw, target, true); err != nil {
+		return invalidRuntimeKeyServicePayload(fmt.Sprintf("runtime key-service response field %s is invalid", field), err)
 	}
 	return nil
 }
@@ -840,16 +841,16 @@ func normalizeManagedSigningPageOptions(options ManagedSigningPageOptions) (uint
 		limit = ManagedSigningDefaultPageLimit
 	}
 	if limit > ManagedSigningMaxPageLimit {
-		return 0, "", invalidDaemonKeyServiceInput(
+		return 0, "", invalidRuntimeKeyServiceInput(
 			fmt.Sprintf("managed signing page limit must be at most %d", ManagedSigningMaxPageLimit),
 		)
 	}
 	cursor := options.Cursor
 	if cursor != "" && (strings.TrimSpace(cursor) == "" || strings.TrimSpace(cursor) != cursor) {
-		return 0, "", invalidDaemonKeyServiceInput("managed signing cursor must be a non-empty canonical token")
+		return 0, "", invalidRuntimeKeyServiceInput("managed signing cursor must be a non-empty canonical token")
 	}
 	if len(cursor) > managedSigningMaxCursorBytes {
-		return 0, "", invalidDaemonKeyServiceInput("managed signing cursor exceeds 4096 bytes")
+		return 0, "", invalidRuntimeKeyServiceInput("managed signing cursor exceeds 4096 bytes")
 	}
 	return limit, cursor, nil
 }
@@ -859,7 +860,7 @@ func decodeManagedSigningNextCursor(
 	requestCursor string,
 ) (string, error) {
 	var nextCursor *string
-	if err := decodeDaemonKeyServiceField(response, "next_cursor", &nextCursor); err != nil {
+	if err := decodeRuntimeKeyServiceField(response, "next_cursor", &nextCursor); err != nil {
 		return "", err
 	}
 	if nextCursor == nil {
@@ -867,18 +868,18 @@ func decodeManagedSigningNextCursor(
 	}
 	normalized := strings.TrimSpace(*nextCursor)
 	if normalized == "" || normalized != *nextCursor {
-		return "", invalidDaemonKeyServicePayload("daemon key service returned an invalid continuation cursor", nil)
+		return "", invalidRuntimeKeyServicePayload("runtime key service returned an invalid continuation cursor", nil)
 	}
 	if len(*nextCursor) > managedSigningMaxCursorBytes {
-		return "", invalidDaemonKeyServicePayload("daemon key service returned a continuation cursor exceeding 4096 bytes", nil)
+		return "", invalidRuntimeKeyServicePayload("runtime key service returned a continuation cursor exceeding 4096 bytes", nil)
 	}
 	if *nextCursor == requestCursor {
-		return "", invalidDaemonKeyServicePayload("daemon key service returned a non-advancing continuation cursor", nil)
+		return "", invalidRuntimeKeyServicePayload("runtime key service returned a non-advancing continuation cursor", nil)
 	}
 	return *nextCursor, nil
 }
 
-func decodeCanonicalDaemonKeyServiceBase64(encoded string, expectedLength int, field string) ([]byte, error) {
+func decodeCanonicalRuntimeKeyServiceBase64(encoded string, expectedLength int, field string) ([]byte, error) {
 	decoded, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {
 		return nil, fmt.Errorf("decode %s: %w", field, err)
@@ -920,17 +921,17 @@ func validateManagedSigningRequest(keyID string, canonicalBytes []byte) (string,
 		return "", err
 	}
 	if len(canonicalBytes) == 0 {
-		return "", invalidDaemonKeyServiceInput("canonical bytes are required for managed signing")
+		return "", invalidRuntimeKeyServiceInput("canonical bytes are required for managed signing")
 	}
-	if len(canonicalBytes) > daemonKeyServiceMaxCanonicalSigningBytes {
-		return "", invalidDaemonKeyServiceInput("canonical bytes exceed the 64 MiB runtime signing limit")
+	if len(canonicalBytes) > runtimeKeyServiceMaxCanonicalSigningBytes {
+		return "", invalidRuntimeKeyServiceInput("canonical bytes exceed the 64 MiB runtime signing limit")
 	}
 	return keyID, nil
 }
 
 func requireManagedSigningClient(client *ManagedSigningClient) error {
 	if client == nil || client.service.socketPath == "" {
-		return invalidDaemonKeyServiceInput("managed signing client is required")
+		return invalidRuntimeKeyServiceInput("managed signing client is required")
 	}
 	return nil
 }
@@ -938,7 +939,7 @@ func requireManagedSigningClient(client *ManagedSigningClient) error {
 func managedSigningRequiredText(field, value string) (string, error) {
 	normalized := strings.TrimSpace(value)
 	if normalized == "" {
-		return "", invalidDaemonKeyServiceInput(fmt.Sprintf("managed signing %s is required", field))
+		return "", invalidRuntimeKeyServiceInput(fmt.Sprintf("managed signing %s is required", field))
 	}
 	return normalized, nil
 }
@@ -946,7 +947,7 @@ func managedSigningRequiredText(field, value string) (string, error) {
 func managedSigningProjectionText(field, value string) (string, error) {
 	normalized := strings.TrimSpace(value)
 	if normalized == "" || normalized != value {
-		return "", invalidDaemonKeyServicePayload(fmt.Sprintf("daemon key service returned an invalid managed signing %s", field), nil)
+		return "", invalidRuntimeKeyServicePayload(fmt.Sprintf("runtime key service returned an invalid managed signing %s", field), nil)
 	}
 	return value, nil
 }
@@ -957,7 +958,7 @@ func optionalManagedSigningText(field string, value *string) (string, error) {
 	}
 	normalized := strings.TrimSpace(*value)
 	if normalized == "" || normalized != *value {
-		return "", invalidDaemonKeyServicePayload(fmt.Sprintf("daemon key service returned an invalid managed signing %s", field), nil)
+		return "", invalidRuntimeKeyServicePayload(fmt.Sprintf("runtime key service returned an invalid managed signing %s", field), nil)
 	}
 	return *value, nil
 }

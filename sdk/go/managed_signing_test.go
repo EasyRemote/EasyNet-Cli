@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-func TestManagedSigningClientRequiresExplicitDaemonEndpoint(t *testing.T) {
+func TestManagedSigningClientRequiresExplicitRuntimeKeyServiceEndpoint(t *testing.T) {
 	for _, socketPath := range []string{"", " \t\n "} {
 		_, err := NewManagedSigningClient(ManagedSigningClientOptions{SocketPath: socketPath})
 		if !IsCode(err, ErrInvalidArgument) {
@@ -23,7 +23,7 @@ func TestManagedSigningClientRequiresExplicitDaemonEndpoint(t *testing.T) {
 	}
 }
 
-func TestManagedSigningClientConformsToDaemonKeyServiceProtocol(t *testing.T) {
+func TestManagedSigningClientConformsToRuntimeKeyServiceProtocol(t *testing.T) {
 	privateKey1 := ed25519.NewKeyFromSeed(bytesOf(1, ed25519.SeedSize))
 	publicKey1 := privateKey1.Public().(ed25519.PublicKey)
 	publicKey2 := ed25519.NewKeyFromSeed(bytesOf(2, ed25519.SeedSize)).Public().(ed25519.PublicKey)
@@ -40,7 +40,7 @@ func TestManagedSigningClientConformsToDaemonKeyServiceProtocol(t *testing.T) {
 
 	requestCount := 0
 	done := make(chan struct{})
-	socketPath := startRuntimeKeyringTestServer(t, func(request map[string]any) map[string]any {
+	socketPath := startRuntimeKeyServiceTestServer(t, func(request map[string]any) map[string]any {
 		requestCount++
 		assertNoPrivateKeyRequestFields(t, request)
 		var response map[string]any
@@ -163,7 +163,7 @@ func TestManagedSigningClientConformsToDaemonKeyServiceProtocol(t *testing.T) {
 }
 
 func TestManagedSigningClientProjectsTypedLifecycleRejection(t *testing.T) {
-	socketPath := startRuntimeKeyringTestServer(t, func(request map[string]any) map[string]any {
+	socketPath := startRuntimeKeyServiceTestServer(t, func(request map[string]any) map[string]any {
 		assertNoPrivateKeyRequestFields(t, request)
 		return map[string]any{
 			"result": "error", "kind": "lifecycle", "message": "only active keys can sign",
@@ -184,7 +184,7 @@ func TestManagedSigningClientProjectsTypedLifecycleRejection(t *testing.T) {
 }
 
 func TestManagedSigningClientRejectsWrongResponseVariant(t *testing.T) {
-	socketPath := startRuntimeKeyringTestServer(t, func(request map[string]any) map[string]any {
+	socketPath := startRuntimeKeyServiceTestServer(t, func(request map[string]any) map[string]any {
 		return map[string]any{"result": "signature", "signature_b64": base64.StdEncoding.EncodeToString(bytesOf(1, 64))}
 	})
 	client, err := NewManagedSigningClient(ManagedSigningClientOptions{SocketPath: socketPath})
@@ -204,7 +204,7 @@ func TestManagedSigningClientAutoPaginatesBoundedInventories(t *testing.T) {
 	peerPublic2 := ed25519.NewKeyFromSeed(bytesOf(14, ed25519.SeedSize)).Public().(ed25519.PublicKey)
 
 	requestCount := 0
-	socketPath := startRuntimeKeyringTestServer(t, func(request map[string]any) map[string]any {
+	socketPath := startRuntimeKeyServiceTestServer(t, func(request map[string]any) map[string]any {
 		requestCount++
 		switch requestCount {
 		case 1:
@@ -274,7 +274,7 @@ func TestManagedSigningPageAPIsRejectUnboundedOrNonAdvancingPages(t *testing.T) 
 	}
 
 	publicKey := ed25519.NewKeyFromSeed(bytesOf(15, ed25519.SeedSize)).Public().(ed25519.PublicKey)
-	socketPath := startRuntimeKeyringTestServer(t, func(request map[string]any) map[string]any {
+	socketPath := startRuntimeKeyServiceTestServer(t, func(request map[string]any) map[string]any {
 		return map[string]any{
 			"result": "inventory_keys", "entries": []any{managedSigningKeyFixture("key-1", publicKey, "active", 0, "", "")},
 			"next_cursor": "cursor:1",
@@ -331,7 +331,7 @@ func TestManagedSigningClientRejectsUnknownAndCustodyResponseFields(t *testing.T
 			entry := managedSigningKeyFixture("key-1", publicKey, "active", 0, "", "")
 			response := map[string]any{"result": "inventory_key", "entry": entry}
 			test.mutate(response, entry)
-			socketPath := startRuntimeKeyringTestServer(t, func(map[string]any) map[string]any { return response })
+			socketPath := startRuntimeKeyServiceTestServer(t, func(map[string]any) map[string]any { return response })
 			client, err := NewManagedSigningClient(ManagedSigningClientOptions{SocketPath: socketPath})
 			if err != nil {
 				t.Fatalf("NewManagedSigningClient: %v", err)
@@ -343,12 +343,12 @@ func TestManagedSigningClientRejectsUnknownAndCustodyResponseFields(t *testing.T
 	}
 }
 
-func TestManagedSignerVerifiesDaemonSignatureAgainstBoundProjection(t *testing.T) {
+func TestManagedSignerVerifiesRuntimeKeyServiceSignatureAgainstBoundProjection(t *testing.T) {
 	privateKey := ed25519.NewKeyFromSeed(bytesOf(17, ed25519.SeedSize))
 	publicKey := privateKey.Public().(ed25519.PublicKey)
 	canonical := []byte("canonical managed invocation")
 	requestCount := 0
-	socketPath := startRuntimeKeyringTestServer(t, func(request map[string]any) map[string]any {
+	socketPath := startRuntimeKeyServiceTestServer(t, func(request map[string]any) map[string]any {
 		requestCount++
 		switch requestCount {
 		case 1:
@@ -409,7 +409,7 @@ func TestManagedSigningClientSignCannotBypassSignatureVerification(t *testing.T)
 	privateKey := ed25519.NewKeyFromSeed(bytesOf(18, ed25519.SeedSize))
 	publicKey := privateKey.Public().(ed25519.PublicKey)
 	requestCount := 0
-	socketPath := startRuntimeKeyringTestServer(t, func(map[string]any) map[string]any {
+	socketPath := startRuntimeKeyServiceTestServer(t, func(map[string]any) map[string]any {
 		requestCount++
 		if requestCount == 1 {
 			return map[string]any{"result": "inventory_key", "entry": managedSigningKeyFixture("key-1", publicKey, "active", 0, "", "easynet:///r/acme/agent/signer.main")}
@@ -433,7 +433,7 @@ func TestManagedSigningProjectionValidatesCanonicalPolicyAndPeerFingerprint(t *t
 	t.Run("signer policy reference", func(t *testing.T) {
 		entry := managedSigningKeyFixture("key-1", publicKey, "active", 0, "", "easynet:///r/acme/agent/signer")
 		entry["signer_policy_ref"] = "provider-key-inventory:sha256:00000000000000000000000000000000"
-		socketPath := startRuntimeKeyringTestServer(t, func(map[string]any) map[string]any {
+		socketPath := startRuntimeKeyServiceTestServer(t, func(map[string]any) map[string]any {
 			return map[string]any{"result": "inventory_key", "entry": entry}
 		})
 		client, err := NewManagedSigningClient(ManagedSigningClientOptions{SocketPath: socketPath})
@@ -448,7 +448,7 @@ func TestManagedSigningProjectionValidatesCanonicalPolicyAndPeerFingerprint(t *t
 	t.Run("purpose is part of signer policy", func(t *testing.T) {
 		entry := managedSigningKeyFixture("key-1", publicKey, "active", 0, "", "easynet:///r/acme/agent/signer")
 		entry["purpose"] = "different-purpose"
-		socketPath := startRuntimeKeyringTestServer(t, func(map[string]any) map[string]any {
+		socketPath := startRuntimeKeyServiceTestServer(t, func(map[string]any) map[string]any {
 			return map[string]any{"result": "inventory_key", "entry": entry}
 		})
 		client, err := NewManagedSigningClient(ManagedSigningClientOptions{SocketPath: socketPath})
@@ -463,7 +463,7 @@ func TestManagedSigningProjectionValidatesCanonicalPolicyAndPeerFingerprint(t *t
 	t.Run("peer SHA-256 fingerprint", func(t *testing.T) {
 		peer := managedSigningPeerFixture("easynet:///r/peer/a", publicKey)
 		peer["fingerprint_b64"] = base64.StdEncoding.EncodeToString(bytesOf(1, sha256.Size))
-		socketPath := startRuntimeKeyringTestServer(t, func(map[string]any) map[string]any {
+		socketPath := startRuntimeKeyServiceTestServer(t, func(map[string]any) map[string]any {
 			return map[string]any{"result": "inventory_peers", "peers": []any{peer}, "next_cursor": nil}
 		})
 		client, err := NewManagedSigningClient(ManagedSigningClientOptions{SocketPath: socketPath})
@@ -495,14 +495,14 @@ func TestManagedSigningCanonicalProjectionFixtures(t *testing.T) {
 	}
 }
 
-func TestDaemonKeyServiceSigningFrameCoversCanonicalRuntimeMaximum(t *testing.T) {
-	if daemonKeyServiceProtocolVersion != 2 {
-		t.Fatalf("daemon key-service protocol version = %d, want 2", daemonKeyServiceProtocolVersion)
+func TestRuntimeKeyServiceSigningFrameCoversCanonicalRuntimeMaximum(t *testing.T) {
+	if runtimeKeyServiceProtocolVersion != 2 {
+		t.Fatalf("runtime key-service protocol version = %d, want 2", runtimeKeyServiceProtocolVersion)
 	}
-	if daemonKeyServiceMaxFrameBytes != 90*1024*1024 {
-		t.Fatalf("daemon key-service frame limit = %d, want canonical 90 MiB", daemonKeyServiceMaxFrameBytes)
+	if runtimeKeyServiceMaxFrameBytes != 90*1024*1024 {
+		t.Fatalf("runtime key-service frame limit = %d, want canonical 90 MiB", runtimeKeyServiceMaxFrameBytes)
 	}
-	emptyRequest, err := encodeDaemonKeyServiceRequest(map[string]any{
+	emptyRequest, err := encodeRuntimeKeyServiceRequest(map[string]any{
 		"method": "inventory.sign", "key_id": "key-1", "expected_purpose": "invocation",
 		"subject_ura": "easynet:///r/acme/agent/signer", "signer_policy_ref": "managed-signing:v2:sha256:fixture",
 		"canonical_bytes_b64": "",
@@ -510,22 +510,22 @@ func TestDaemonKeyServiceSigningFrameCoversCanonicalRuntimeMaximum(t *testing.T)
 	if err != nil {
 		t.Fatalf("encode empty signing request: %v", err)
 	}
-	maximumWireBytes := len(emptyRequest) + base64.StdEncoding.EncodedLen(daemonKeyServiceMaxCanonicalSigningBytes)
-	if maximumWireBytes > daemonKeyServiceMaxFrameBytes {
-		t.Fatalf("maximum canonical signing request requires %d bytes, frame limit is %d", maximumWireBytes, daemonKeyServiceMaxFrameBytes)
+	maximumWireBytes := len(emptyRequest) + base64.StdEncoding.EncodedLen(runtimeKeyServiceMaxCanonicalSigningBytes)
+	if maximumWireBytes > runtimeKeyServiceMaxFrameBytes {
+		t.Fatalf("maximum canonical signing request requires %d bytes, frame limit is %d", maximumWireBytes, runtimeKeyServiceMaxFrameBytes)
 	}
 
 	client, err := NewManagedSigningClient(ManagedSigningClientOptions{SocketPath: filepath.Join(t.TempDir(), "unused.sock")})
 	if err != nil {
 		t.Fatalf("NewManagedSigningClient: %v", err)
 	}
-	oversized := make([]byte, daemonKeyServiceMaxCanonicalSigningBytes+1)
+	oversized := make([]byte, runtimeKeyServiceMaxCanonicalSigningBytes+1)
 	if _, err := client.Sign("key-1", oversized); !IsCode(err, ErrInvalidArgument) {
 		t.Fatalf("oversized signing error = %v, want INVALID_ARGUMENT", err)
 	}
 }
 
-func TestDaemonKeyServiceErrorTaxonomySeparatesAvailabilityTransportAndExecution(t *testing.T) {
+func TestRuntimeKeyServiceErrorTaxonomySeparatesAvailabilityTransportAndExecution(t *testing.T) {
 	t.Run("connect failure", func(t *testing.T) {
 		client, err := NewManagedSigningClient(ManagedSigningClientOptions{
 			SocketPath: filepath.Join(t.TempDir(), "missing.sock"),
@@ -548,8 +548,8 @@ func TestDaemonKeyServiceErrorTaxonomySeparatesAvailabilityTransportAndExecution
 		assertManagedSigningSDKError(t, err, ErrTransport, RetrySafe, true)
 	})
 
-	t.Run("daemon IO rejection", func(t *testing.T) {
-		socketPath := startRuntimeKeyringTestServer(t, func(map[string]any) map[string]any {
+	t.Run("runtime key-service IO rejection", func(t *testing.T) {
+		socketPath := startRuntimeKeyServiceTestServer(t, func(map[string]any) map[string]any {
 			return map[string]any{"result": "error", "kind": "io", "message": "vault persistence failed"}
 		})
 		client, err := NewManagedSigningClient(ManagedSigningClientOptions{SocketPath: socketPath})
@@ -561,7 +561,7 @@ func TestDaemonKeyServiceErrorTaxonomySeparatesAvailabilityTransportAndExecution
 	})
 
 	t.Run("peer replacement policy rejection", func(t *testing.T) {
-		socketPath := startRuntimeKeyringTestServer(t, func(map[string]any) map[string]any {
+		socketPath := startRuntimeKeyServiceTestServer(t, func(map[string]any) map[string]any {
 			return map[string]any{"result": "error", "kind": "policy", "message": "explicit retrust is required"}
 		})
 		client, err := NewManagedSigningClient(ManagedSigningClientOptions{SocketPath: socketPath})
@@ -626,12 +626,12 @@ func assertManagedSigningSDKError(
 
 func startClosingKeyServiceTestServer(t *testing.T) string {
 	t.Helper()
-	directory, err := os.MkdirTemp("/tmp", "easynet-keyring-close-")
+	directory, err := os.MkdirTemp("/tmp", "runtime-key-service-close-")
 	if err != nil {
 		t.Fatalf("create closing key-service directory: %v", err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(directory) })
-	socketPath := filepath.Join(directory, "keyring.sock")
+	socketPath := filepath.Join(directory, "runtime-key-service.sock")
 	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: socketPath, Net: "unix"})
 	if err != nil {
 		t.Fatalf("listen closing key-service socket: %v", err)

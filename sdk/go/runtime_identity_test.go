@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-func TestRuntimeSigningIdentityRequiresExplicitDaemonEndpoint(t *testing.T) {
+func TestRuntimeSigningIdentityRequiresExplicitRuntimeKeyServiceEndpoint(t *testing.T) {
 	for _, socketPath := range []string{"", " \t\n "} {
 		_, err := LoadRuntimeSigningIdentity(RuntimeSigningIdentityRequest{
 			OwnerURA:   "easynet:///r/acme/authority",
@@ -34,14 +34,14 @@ func TestRuntimeSigningIdentityRequiresExplicitDaemonEndpoint(t *testing.T) {
 	}
 }
 
-func TestLoadRuntimeSigningIdentityUsesDaemonKeyringProjection(t *testing.T) {
+func TestLoadRuntimeSigningIdentityUsesRuntimeKeyServiceProjection(t *testing.T) {
 	publicKey := ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize)).Public().(ed25519.PublicKey)
-	socketPath := startRuntimeKeyringTestServer(t, func(request map[string]any) map[string]any {
+	socketPath := startRuntimeKeyServiceTestServer(t, func(request map[string]any) map[string]any {
 		if request["method"] != "derive_pubkey" || request["self_ura"] != "easynet:///r/acme/authority" {
 			t.Fatalf("unexpected request: %#v", request)
 		}
 		if _, containsVaultField := request["vault_path"]; containsVaultField {
-			t.Fatal("SDK must not send a vault path to the daemon keyring")
+			t.Fatal("SDK must not send a vault path to the runtime key service")
 		}
 		return map[string]any{
 			"result":         "public_key",
@@ -57,16 +57,16 @@ func TestLoadRuntimeSigningIdentityUsesDaemonKeyringProjection(t *testing.T) {
 		t.Fatalf("LoadRuntimeSigningIdentity: %v", err)
 	}
 	if !identity.PublicKey.Equal(publicKey) {
-		t.Fatal("identity public key did not match daemon projection")
+		t.Fatal("identity public key did not match runtime key-service projection")
 	}
 }
 
-func TestRuntimeSigningIdentitySignsThroughDaemonKeyring(t *testing.T) {
+func TestRuntimeSigningIdentitySignsThroughRuntimeKeyService(t *testing.T) {
 	publicKey := ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize)).Public().(ed25519.PublicKey)
 	message := []byte("canonical invocation bytes")
 	signature := ed25519.Sign(ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize)), message)
 	requests := 0
-	socketPath := startRuntimeKeyringTestServer(t, func(request map[string]any) map[string]any {
+	socketPath := startRuntimeKeyServiceTestServer(t, func(request map[string]any) map[string]any {
 		requests++
 		switch requests {
 		case 1:
@@ -91,7 +91,7 @@ func TestRuntimeSigningIdentitySignsThroughDaemonKeyring(t *testing.T) {
 				"signature_b64": base64.StdEncoding.EncodeToString(signature),
 			}
 		default:
-			t.Fatalf("unexpected extra keyring request: %#v", request)
+			t.Fatalf("unexpected extra runtime key-service request: %#v", request)
 			return nil
 		}
 	})
@@ -104,7 +104,7 @@ func TestRuntimeSigningIdentitySignsThroughDaemonKeyring(t *testing.T) {
 		t.Fatalf("identity.Sign: %v", err)
 	}
 	if string(actual) != string(signature) {
-		t.Fatal("signature did not match daemon response")
+		t.Fatal("signature did not match runtime key-service response")
 	}
 }
 
@@ -113,7 +113,7 @@ func TestRuntimeSigningIdentityRejectsSignatureFromAnotherKey(t *testing.T) {
 	publicKey := privateKey.Public().(ed25519.PublicKey)
 	wrongKey := ed25519.NewKeyFromSeed(bytesOf(9, ed25519.SeedSize))
 	requests := 0
-	socketPath := startRuntimeKeyringTestServer(t, func(map[string]any) map[string]any {
+	socketPath := startRuntimeKeyServiceTestServer(t, func(map[string]any) map[string]any {
 		requests++
 		if requests == 1 {
 			return map[string]any{
@@ -137,7 +137,7 @@ func TestRuntimeSigningIdentityRejectsSignatureFromAnotherKey(t *testing.T) {
 
 func TestEnsureRuntimeSigningIdentityDelegatesKeyGeneration(t *testing.T) {
 	publicKey := ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize)).Public().(ed25519.PublicKey)
-	socketPath := startRuntimeKeyringTestServer(t, func(request map[string]any) map[string]any {
+	socketPath := startRuntimeKeyServiceTestServer(t, func(request map[string]any) map[string]any {
 		if request["method"] != "ensure" || request["primary_self"] != "easynet:///r/acme/authority" {
 			t.Fatalf("unexpected ensure request: %#v", request)
 		}
@@ -165,7 +165,7 @@ func TestEnsureRuntimeSigningIdentityDelegatesKeyGeneration(t *testing.T) {
 }
 
 func TestRuntimeSigningIdentityProjectsMissingKeyAsCallerSignerUnavailable(t *testing.T) {
-	socketPath := startRuntimeKeyringTestServer(t, func(request map[string]any) map[string]any {
+	socketPath := startRuntimeKeyServiceTestServer(t, func(request map[string]any) map[string]any {
 		if request["method"] != "derive_pubkey" {
 			t.Fatalf("unexpected request: %#v", request)
 		}
@@ -192,17 +192,17 @@ func TestRuntimeSigningIdentityProjectsMissingKeyAsCallerSignerUnavailable(t *te
 	}
 }
 
-func startRuntimeKeyringTestServer(t *testing.T, handle func(map[string]any) map[string]any) string {
+func startRuntimeKeyServiceTestServer(t *testing.T, handle func(map[string]any) map[string]any) string {
 	t.Helper()
-	dir, err := os.MkdirTemp("/tmp", "easynet-keyring-")
+	dir, err := os.MkdirTemp("/tmp", "runtime-key-service-")
 	if err != nil {
-		t.Fatalf("create keyring test directory: %v", err)
+		t.Fatalf("create runtime key-service test directory: %v", err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	socketPath := filepath.Join(dir, "keyring.sock")
+	socketPath := filepath.Join(dir, "runtime-key-service.sock")
 	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: socketPath, Net: "unix"})
 	if err != nil {
-		t.Fatalf("listen keyring test socket: %v", err)
+		t.Fatalf("listen runtime key-service test socket: %v", err)
 	}
 	t.Cleanup(func() { _ = listener.Close() })
 	go func() {
@@ -224,12 +224,12 @@ func startRuntimeKeyringTestServer(t *testing.T, handle func(map[string]any) map
 				}
 				var request map[string]any
 				if err := json.Unmarshal(body, &request); err != nil {
-					t.Errorf("decode keyring request: %v", err)
+					t.Errorf("decode runtime key-service request: %v", err)
 					return
 				}
 				response, err := json.Marshal(handle(request))
 				if err != nil {
-					t.Errorf("encode keyring response: %v", err)
+					t.Errorf("encode runtime key-service response: %v", err)
 					return
 				}
 				binary.BigEndian.PutUint32(length[:], uint32(len(response)))

@@ -27,7 +27,7 @@ func identitySignerPolicyRef(ownerURA string, keyID string, publicKeyBase64 stri
 type RuntimeSigningIdentity struct {
 	OwnerURA  string
 	PublicKey ed25519.PublicKey
-	signer    runtimeKeyringSigner
+	signer    runtimeKeyServiceSigner
 }
 
 // CanonicalSigner is a narrow signing capability for canonical payloads. It
@@ -79,10 +79,11 @@ type EnsureRuntimeSigningIdentityRequest struct {
 	Timeout    time.Duration
 }
 
-// LoadRuntimeSigningIdentity resolves an existing identity without reading a
-// keyring file or materializing private-key bytes in the facade process.
+// LoadRuntimeSigningIdentity resolves an existing identity without reading
+// provider custody storage or materializing private-key bytes in the facade
+// process.
 func LoadRuntimeSigningIdentity(req RuntimeSigningIdentityRequest) (RuntimeSigningIdentity, error) {
-	owner, signer, err := newRuntimeKeyringSigner(req.OwnerURA, req.SocketPath, req.Timeout)
+	owner, signer, err := newRuntimeKeyServiceSigner(req.OwnerURA, req.SocketPath, req.Timeout)
 	if err != nil {
 		return RuntimeSigningIdentity{}, err
 	}
@@ -93,10 +94,10 @@ func LoadRuntimeSigningIdentity(req RuntimeSigningIdentityRequest) (RuntimeSigni
 	return RuntimeSigningIdentity{OwnerURA: owner, PublicKey: publicKey, signer: signer}, nil
 }
 
-// EnsureRuntimeSigningIdentity asks the daemon keyring to provision the owner
+// EnsureRuntimeSigningIdentity asks the runtime key service to provision the owner
 // when absent. The facade never participates in seed generation or storage.
 func EnsureRuntimeSigningIdentity(req EnsureRuntimeSigningIdentityRequest) (RuntimeSigningIdentity, error) {
-	owner, signer, err := newRuntimeKeyringSigner(req.OwnerURA, req.SocketPath, req.Timeout)
+	owner, signer, err := newRuntimeKeyServiceSigner(req.OwnerURA, req.SocketPath, req.Timeout)
 	if err != nil {
 		return RuntimeSigningIdentity{}, err
 	}
@@ -107,26 +108,26 @@ func EnsureRuntimeSigningIdentity(req EnsureRuntimeSigningIdentityRequest) (Runt
 	return RuntimeSigningIdentity{OwnerURA: owner, PublicKey: publicKey, signer: signer}, nil
 }
 
-type runtimeKeyringSigner interface {
+type runtimeKeyServiceSigner interface {
 	sign(ownerURA string, publicKey ed25519.PublicKey, canonicalBytes []byte) ([]byte, error)
 	publicKey(ownerURA string) (ed25519.PublicKey, error)
 	ensure(ownerURA string) (ed25519.PublicKey, error)
 }
 
-type runtimeKeyringClient struct {
-	service daemonKeyServiceClient
+type runtimeKeyServiceSignerClient struct {
+	service runtimeKeyServiceClient
 }
 
-func newRuntimeKeyringSigner(ownerURA, socketPath string, timeout time.Duration) (string, runtimeKeyringSigner, error) {
+func newRuntimeKeyServiceSigner(ownerURA, socketPath string, timeout time.Duration) (string, runtimeKeyServiceSigner, error) {
 	ownerURA = strings.TrimSpace(ownerURA)
 	if ownerURA == "" {
 		return "", nil, invalidRuntimeClient("runtime signing identity owner URA is required")
 	}
-	service, err := newDaemonKeyServiceClient(socketPath, timeout)
+	service, err := newRuntimeKeyServiceClient(socketPath, timeout)
 	if err != nil {
 		return "", nil, err
 	}
-	return ownerURA, runtimeKeyringClient{service: service}, nil
+	return ownerURA, runtimeKeyServiceSignerClient{service: service}, nil
 }
 
 func runtimeIdentityError(err error) error {
@@ -155,11 +156,11 @@ func runtimeIdentityError(err error) error {
 	}
 }
 
-func (c runtimeKeyringClient) sign(ownerURA string, publicKey ed25519.PublicKey, canonicalBytes []byte) ([]byte, error) {
+func (c runtimeKeyServiceSignerClient) sign(ownerURA string, publicKey ed25519.PublicKey, canonicalBytes []byte) ([]byte, error) {
 	if len(canonicalBytes) == 0 {
 		return nil, invalidRuntimeClient("canonical bytes are required for runtime signing")
 	}
-	if len(canonicalBytes) > daemonKeyServiceMaxCanonicalSigningBytes {
+	if len(canonicalBytes) > runtimeKeyServiceMaxCanonicalSigningBytes {
 		return nil, invalidRuntimeClient("canonical bytes exceed the 64 MiB runtime signing limit")
 	}
 	if len(publicKey) != ed25519.PublicKeySize {
@@ -176,32 +177,32 @@ func (c runtimeKeyringClient) sign(ownerURA string, publicKey ed25519.PublicKey,
 	if err != nil {
 		return nil, err
 	}
-	if err := requireDaemonKeyServiceResult(response, "signature", "signature_b64"); err != nil {
+	if err := requireRuntimeKeyServiceResult(response, "signature", "signature_b64"); err != nil {
 		return nil, err
 	}
-	encoded, err := daemonKeyServiceResponseString(response, "signature_b64")
+	encoded, err := runtimeKeyServiceResponseString(response, "signature_b64")
 	if err != nil {
 		return nil, err
 	}
-	signature, err := decodeCanonicalDaemonKeyServiceBase64(encoded, ed25519.SignatureSize, "Ed25519 signature")
+	signature, err := decodeCanonicalRuntimeKeyServiceBase64(encoded, ed25519.SignatureSize, "Ed25519 signature")
 	if err != nil {
-		return nil, invalidDaemonKeyServicePayload("provider key service returned an invalid Ed25519 signature", err)
+		return nil, invalidRuntimeKeyServicePayload("provider key service returned an invalid Ed25519 signature", err)
 	}
 	if !ed25519.Verify(publicKey, canonicalBytes, signature) {
-		return nil, invalidDaemonKeyServicePayload("provider key service returned a signature that does not verify against the bound runtime identity", nil)
+		return nil, invalidRuntimeKeyServicePayload("provider key service returned a signature that does not verify against the bound runtime identity", nil)
 	}
 	return signature, nil
 }
 
-func (c runtimeKeyringClient) publicKey(ownerURA string) (ed25519.PublicKey, error) {
+func (c runtimeKeyServiceSignerClient) publicKey(ownerURA string) (ed25519.PublicKey, error) {
 	response, err := c.service.call(map[string]any{"method": "derive_pubkey", "self_ura": ownerURA})
 	if err != nil {
 		return nil, err
 	}
-	return runtimeKeyringPublicKey(response)
+	return runtimeKeyServicePublicKey(response)
 }
 
-func (c runtimeKeyringClient) ensure(ownerURA string) (ed25519.PublicKey, error) {
+func (c runtimeKeyServiceSignerClient) ensure(ownerURA string) (ed25519.PublicKey, error) {
 	response, err := c.service.call(map[string]any{
 		"method":       "ensure",
 		"primary_self": ownerURA,
@@ -209,20 +210,20 @@ func (c runtimeKeyringClient) ensure(ownerURA string) (ed25519.PublicKey, error)
 	if err != nil {
 		return nil, err
 	}
-	return runtimeKeyringPublicKey(response)
+	return runtimeKeyServicePublicKey(response)
 }
 
-func runtimeKeyringPublicKey(response map[string]json.RawMessage) (ed25519.PublicKey, error) {
-	if err := requireDaemonKeyServiceResult(response, "public_key", "public_key_b64"); err != nil {
+func runtimeKeyServicePublicKey(response map[string]json.RawMessage) (ed25519.PublicKey, error) {
+	if err := requireRuntimeKeyServiceResult(response, "public_key", "public_key_b64"); err != nil {
 		return nil, err
 	}
-	encoded, err := daemonKeyServiceResponseString(response, "public_key_b64")
+	encoded, err := runtimeKeyServiceResponseString(response, "public_key_b64")
 	if err != nil {
 		return nil, err
 	}
-	publicKey, err := decodeCanonicalDaemonKeyServiceBase64(encoded, ed25519.PublicKeySize, "Ed25519 public key")
+	publicKey, err := decodeCanonicalRuntimeKeyServiceBase64(encoded, ed25519.PublicKeySize, "Ed25519 public key")
 	if err != nil {
-		return nil, invalidDaemonKeyServicePayload("provider key service returned an invalid Ed25519 public key", err)
+		return nil, invalidRuntimeKeyServicePayload("provider key service returned an invalid Ed25519 public key", err)
 	}
 	return ed25519.PublicKey(publicKey), nil
 }
