@@ -1,10 +1,11 @@
-//! Runtime provider-scoped declarative exec plugin helper.
+//! Runtime SDK provider-scoped declarative exec plugin helper.
 //!
 //! This crate owns the JSON frame details used between the runtime host and a
-//! process-backed declarative exec plugin. It is intentionally not part of a
-//! canonical runtime SDK root: plugin sidecar execution is a runtime provider
-//! boundary. Plugin authors implement handlers over
-//! [`SidecarInvocation`] instead of hand-writing stdin/stdout protocol frames.
+//! process-backed declarative exec plugin. It is part of the canonical runtime
+//! SDK provider surface: plugin sidecar execution is a runtime provider
+//! boundary, not an EasyNet product boundary. Plugin authors implement handlers
+//! over [`SidecarInvocation`] instead of hand-writing stdin/stdout protocol
+//! frames.
 
 use std::fmt;
 use std::io::{self, BufRead, Write};

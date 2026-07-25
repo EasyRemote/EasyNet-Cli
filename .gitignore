@@ -34,7 +34,7 @@ sdk/python/.tmp/
 sdk/python/*.egg-info/
 sdk/java/target/
 sdk/swift/.build/
-tools/provider-runtime-pluginexec-rust/target/
+sdk/rust/provider/runtime/pluginexec/target/
 
 # Local PR-review work notes generated during multi-agent review loops.
 /pr/

@@ -11405,9 +11405,9 @@ expected_helper_files = {
         "sdk/go/provider/runtime/pluginexec/pluginexec_test.go",
     ],
     "rust": [
-        "tools/provider-runtime-pluginexec-rust/Cargo.toml",
-        "tools/provider-runtime-pluginexec-rust/src/lib.rs",
-        "tools/provider-runtime-pluginexec-rust/tests/pluginexec.rs",
+        "sdk/rust/provider/runtime/pluginexec/Cargo.toml",
+        "sdk/rust/provider/runtime/pluginexec/src/lib.rs",
+        "sdk/rust/provider/runtime/pluginexec/tests/pluginexec.rs",
     ],
     "java": [
         "sdk/java/src/main/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarRuntime.java",
@@ -11428,7 +11428,7 @@ expected_helper_production_files = {
         "sdk/go/provider/runtime/pluginexec/pluginexec.go",
     ],
     "rust": [
-        "tools/provider-runtime-pluginexec-rust/src/lib.rs",
+        "sdk/rust/provider/runtime/pluginexec/src/lib.rs",
     ],
     "java": [
         "sdk/java/src/main/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarRuntime.java",
@@ -11453,12 +11453,15 @@ for retired_path in (
 ):
     if (cli_root / retired_path).exists():
         raise SystemExit(f"plugin_sidecar_helper_retired_product_path:{retired_path}")
+if (cli_root / "tools/provider-runtime-pluginexec-rust").exists():
+    raise SystemExit("plugin_sidecar_helper_tool_owned_path:tools/provider-runtime-pluginexec-rust")
 retired_tokens = (
     "easynet_sdk.providers.easynet.plugin_exec",
     "easynet.run/cli/sdk/go/provider/easynet/pluginexec",
     "sdk/rust/provider/easynet/pluginexec",
     "run.runtime.sdk.provider.easynet.pluginexec",
     "@runtime/sdk/provider/easynet/pluginexec",
+    "tools/provider-runtime-pluginexec-rust",
 )
 for rel_path in (
     "src/cli/commands/groups/plugin_template.rs",
@@ -17461,9 +17464,35 @@ EOF
     sdk/python/tests/test_plugin_exec.py \
     sdk/go/provider/runtime/pluginexec/pluginexec.go \
     sdk/go/provider/runtime/pluginexec/pluginexec_test.go \
-    tools/provider-runtime-pluginexec-rust/Cargo.toml \
-    tools/provider-runtime-pluginexec-rust/src/lib.rs \
-    tools/provider-runtime-pluginexec-rust/tests/pluginexec.rs \
+    sdk/rust/provider/runtime/pluginexec/Cargo.toml \
+    sdk/rust/provider/runtime/pluginexec/src/lib.rs \
+    sdk/rust/provider/runtime/pluginexec/tests/pluginexec.rs \
+    sdk/java/src/main/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarRuntime.java \
+    sdk/java/src/main/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarInvocation.java \
+    sdk/java/src/test/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarRuntimeTest.java \
+    sdk/node/provider/runtime/pluginexec.js \
+    sdk/node/provider/runtime/pluginexec.d.ts \
+    sdk/node/test/pluginexec.test.mjs; do
+    mkdir -p "$(dirname "$tmp/cli-sidecar-rust-tool-owned/$rel")"
+    cp "$ROOT/$rel" "$tmp/cli-sidecar-rust-tool-owned/$rel"
+  done
+  mkdir -p "$tmp/cli-sidecar-rust-tool-owned/tools/provider-runtime-pluginexec-rust"
+  if ( CLI_ROOT="$tmp/cli-sidecar-rust-tool-owned"; check_plugin_sidecar_helper_matrix_contract ) >/dev/null 2>&1; then
+    fail "self-test expected Rust sidecar helper tool-owned path gate to fail"
+  fi
+  for rel in \
+    src/cli/commands/groups/plugin_template.rs \
+    src/daemon/plugins/sidecar/frame.rs \
+    src/daemon/plugins/sidecar.rs \
+    src/daemon/plugins/host_api.rs \
+    src/daemon/plugins/sidecar/tests.rs \
+    sdk/python/easynet_sdk/providers/runtime/plugin_exec.py \
+    sdk/python/tests/test_plugin_exec.py \
+    sdk/go/provider/runtime/pluginexec/pluginexec.go \
+    sdk/go/provider/runtime/pluginexec/pluginexec_test.go \
+    sdk/rust/provider/runtime/pluginexec/Cargo.toml \
+    sdk/rust/provider/runtime/pluginexec/src/lib.rs \
+    sdk/rust/provider/runtime/pluginexec/tests/pluginexec.rs \
     sdk/java/src/main/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarRuntime.java \
     sdk/java/src/main/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarInvocation.java \
     sdk/java/src/test/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarRuntimeTest.java \
@@ -17488,9 +17517,9 @@ EOF
     sdk/python/tests/test_plugin_exec.py \
     sdk/go/provider/runtime/pluginexec/pluginexec.go \
     sdk/go/provider/runtime/pluginexec/pluginexec_test.go \
-    tools/provider-runtime-pluginexec-rust/Cargo.toml \
-    tools/provider-runtime-pluginexec-rust/src/lib.rs \
-    tools/provider-runtime-pluginexec-rust/tests/pluginexec.rs \
+    sdk/rust/provider/runtime/pluginexec/Cargo.toml \
+    sdk/rust/provider/runtime/pluginexec/src/lib.rs \
+    sdk/rust/provider/runtime/pluginexec/tests/pluginexec.rs \
     sdk/java/src/main/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarRuntime.java \
     sdk/java/src/main/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarInvocation.java \
     sdk/java/src/test/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarRuntimeTest.java \
@@ -17515,9 +17544,9 @@ EOF
     sdk/python/tests/test_plugin_exec.py \
     sdk/go/provider/runtime/pluginexec/pluginexec.go \
     sdk/go/provider/runtime/pluginexec/pluginexec_test.go \
-    tools/provider-runtime-pluginexec-rust/Cargo.toml \
-    tools/provider-runtime-pluginexec-rust/src/lib.rs \
-    tools/provider-runtime-pluginexec-rust/tests/pluginexec.rs \
+    sdk/rust/provider/runtime/pluginexec/Cargo.toml \
+    sdk/rust/provider/runtime/pluginexec/src/lib.rs \
+    sdk/rust/provider/runtime/pluginexec/tests/pluginexec.rs \
     sdk/java/src/main/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarRuntime.java \
     sdk/java/src/main/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarInvocation.java \
     sdk/java/src/test/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarRuntimeTest.java \
@@ -17542,9 +17571,9 @@ EOF
     sdk/python/tests/test_plugin_exec.py \
     sdk/go/provider/runtime/pluginexec/pluginexec.go \
     sdk/go/provider/runtime/pluginexec/pluginexec_test.go \
-    tools/provider-runtime-pluginexec-rust/Cargo.toml \
-    tools/provider-runtime-pluginexec-rust/src/lib.rs \
-    tools/provider-runtime-pluginexec-rust/tests/pluginexec.rs \
+    sdk/rust/provider/runtime/pluginexec/Cargo.toml \
+    sdk/rust/provider/runtime/pluginexec/src/lib.rs \
+    sdk/rust/provider/runtime/pluginexec/tests/pluginexec.rs \
     sdk/java/src/main/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarRuntime.java \
     sdk/java/src/main/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarInvocation.java \
     sdk/java/src/test/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarRuntimeTest.java \
@@ -17574,9 +17603,9 @@ EOF
     sdk/python/tests/test_plugin_exec.py \
     sdk/go/provider/runtime/pluginexec/pluginexec.go \
     sdk/go/provider/runtime/pluginexec/pluginexec_test.go \
-    tools/provider-runtime-pluginexec-rust/Cargo.toml \
-    tools/provider-runtime-pluginexec-rust/src/lib.rs \
-    tools/provider-runtime-pluginexec-rust/tests/pluginexec.rs \
+    sdk/rust/provider/runtime/pluginexec/Cargo.toml \
+    sdk/rust/provider/runtime/pluginexec/src/lib.rs \
+    sdk/rust/provider/runtime/pluginexec/tests/pluginexec.rs \
     sdk/java/src/main/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarRuntime.java \
     sdk/java/src/main/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarInvocation.java \
     sdk/java/src/test/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarRuntimeTest.java \
@@ -17601,9 +17630,9 @@ EOF
     sdk/python/tests/test_plugin_exec.py \
     sdk/go/provider/runtime/pluginexec/pluginexec.go \
     sdk/go/provider/runtime/pluginexec/pluginexec_test.go \
-    tools/provider-runtime-pluginexec-rust/Cargo.toml \
-    tools/provider-runtime-pluginexec-rust/src/lib.rs \
-    tools/provider-runtime-pluginexec-rust/tests/pluginexec.rs \
+    sdk/rust/provider/runtime/pluginexec/Cargo.toml \
+    sdk/rust/provider/runtime/pluginexec/src/lib.rs \
+    sdk/rust/provider/runtime/pluginexec/tests/pluginexec.rs \
     sdk/java/src/main/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarRuntime.java \
     sdk/java/src/main/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarInvocation.java \
     sdk/java/src/test/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarRuntimeTest.java \
