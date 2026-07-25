@@ -8,6 +8,7 @@ from easynet_sdk.ability_descriptor import (
     AbilityDescriptorGetRequest,
     AbilityDescriptorListRequest,
     RuntimeAbilityDescriptorProvider,
+    _RuntimeAbilityDescriptorRoute,
     project_ability_descriptor,
 )
 from easynet_sdk.axon_addressing import AddressingClient, AxonAddressingTransport
@@ -150,6 +151,37 @@ def test_runtime_ability_descriptor_provider_lists_runtime_descriptors() -> None
     assert descriptor.schema_summary["input"]
     assert descriptor.input_schema["type"] == "object"
     assert descriptor.metadata["stable"] == "true"
+
+
+def test_runtime_ability_descriptor_provider_uses_explicit_route() -> None:
+    transport = RuntimeTransportFake()
+    ability = RuntimeAbilityClient(
+        RuntimeClient(transport),  # type: ignore[arg-type]
+        AddressingClient(AxonAddressingTransport()),
+    )
+    provider = RuntimeAbilityDescriptorProvider(
+        ability,
+        route=_RuntimeAbilityDescriptorRoute("runtime.catalog.list"),
+    )
+
+    provider.list(AbilityDescriptorListRequest(call=_call()))
+
+    assert transport.seen["descriptor_ref"] == (
+        "easynet:///r/example/ability/authority.runtime.catalog.list@1.0.0"
+    )
+
+
+def test_runtime_ability_descriptor_provider_uses_generic_catalog_error() -> None:
+    provider, transport = _provider()
+    transport.output_json = {"items": []}
+
+    with pytest.raises(SDKError) as caught:
+        provider.list(AbilityDescriptorListRequest(call=_call()))
+
+    assert "runtime descriptor catalog output must include descriptor rows" in str(
+        caught.value
+    )
+    assert "meta.list_abilities" not in str(caught.value)
 
 
 def test_runtime_ability_descriptor_provider_get_rejects_ambiguous_descriptors() -> None:

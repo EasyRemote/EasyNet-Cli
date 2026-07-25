@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-const abilityDescriptorListAbility = "meta.list_abilities"
+const runtimeAbilityDescriptorListRoute = "meta.list_abilities"
 
 // AbilityDescriptorHints mirrors descriptor tool-annotation booleans that
 // consumers may render without parsing ability names.
@@ -106,17 +106,66 @@ func (c *AbilityDescriptorClient) Get(ctx context.Context, request AbilityDescri
 	return c.provider.Get(ctx, request)
 }
 
-// RuntimeAbilityDescriptorProvider reads the runtime
-// `meta.list_abilities` catalog through the generic RuntimeAbilityClient.
+type runtimeAbilityDescriptorRoute struct {
+	listAbility string
+	rowsField   string
+}
+
+func defaultRuntimeAbilityDescriptorRoute() runtimeAbilityDescriptorRoute {
+	return runtimeAbilityDescriptorRoute{
+		listAbility: runtimeAbilityDescriptorListRoute,
+		rowsField:   "abilities",
+	}
+}
+
+func newRuntimeAbilityDescriptorRoute(listAbility string) (runtimeAbilityDescriptorRoute, error) {
+	route := runtimeAbilityDescriptorRoute{
+		listAbility: strings.TrimSpace(listAbility),
+		rowsField:   "abilities",
+	}
+	if route.listAbility == "" {
+		return runtimeAbilityDescriptorRoute{}, invalidAbilityDescriptor("descriptor catalog route ability is required", nil)
+	}
+	return route, nil
+}
+
+func (r runtimeAbilityDescriptorRoute) list(ctx context.Context, ability *RuntimeAbilityClient, call RuntimeCallContext, args map[string]any) (map[string]any, error) {
+	if strings.TrimSpace(r.listAbility) == "" {
+		return nil, invalidAbilityDescriptor("descriptor catalog route ability is required", nil)
+	}
+	if strings.TrimSpace(r.rowsField) == "" {
+		return nil, invalidAbilityDescriptor("descriptor catalog route rows field is required", nil)
+	}
+	return ability.Invoke(ctx, call, r.listAbility, args)
+}
+
+func (r runtimeAbilityDescriptorRoute) rows(output map[string]any) ([]any, error) {
+	rawRows, ok := output[r.rowsField].([]any)
+	if !ok {
+		return nil, invalidAbilityDescriptor("runtime descriptor catalog output must include descriptor rows", nil)
+	}
+	return rawRows, nil
+}
+
+// RuntimeAbilityDescriptorProvider reads the runtime descriptor catalog through
+// an explicit provider route and the generic RuntimeAbilityClient.
 type RuntimeAbilityDescriptorProvider struct {
 	ability *RuntimeAbilityClient
+	route   runtimeAbilityDescriptorRoute
 }
 
 func NewRuntimeAbilityDescriptorProvider(ability *RuntimeAbilityClient) (*RuntimeAbilityDescriptorProvider, error) {
+	return newRuntimeAbilityDescriptorProviderWithRoute(ability, defaultRuntimeAbilityDescriptorRoute())
+}
+
+func newRuntimeAbilityDescriptorProviderWithRoute(ability *RuntimeAbilityClient, route runtimeAbilityDescriptorRoute) (*RuntimeAbilityDescriptorProvider, error) {
 	if ability == nil {
 		return nil, invalidAbilityDescriptor("runtime ability client is required", nil)
 	}
-	return &RuntimeAbilityDescriptorProvider{ability: ability}, nil
+	if strings.TrimSpace(route.listAbility) == "" || strings.TrimSpace(route.rowsField) == "" {
+		return nil, invalidAbilityDescriptor("descriptor catalog route is incomplete", nil)
+	}
+	return &RuntimeAbilityDescriptorProvider{ability: ability, route: route}, nil
 }
 
 func (p *RuntimeAbilityDescriptorProvider) List(ctx context.Context, request AbilityDescriptorListRequest) (AbilityDescriptorPage, error) {
@@ -133,13 +182,13 @@ func (p *RuntimeAbilityDescriptorProvider) List(ctx context.Context, request Abi
 	if abilityURA := strings.TrimSpace(request.AbilityURA); abilityURA != "" {
 		args["ability_ura"] = abilityURA
 	}
-	output, err := p.ability.Invoke(ctx, request.Call, abilityDescriptorListAbility, args)
+	output, err := p.route.list(ctx, p.ability, request.Call, args)
 	if err != nil {
 		return AbilityDescriptorPage{}, err
 	}
-	rawAbilities, ok := output["abilities"].([]any)
-	if !ok {
-		return AbilityDescriptorPage{}, invalidAbilityDescriptor("meta.list_abilities output must include abilities array", nil)
+	rawAbilities, err := p.route.rows(output)
+	if err != nil {
+		return AbilityDescriptorPage{}, err
 	}
 	descriptors := make([]AbilityDescriptorProjection, 0, len(rawAbilities))
 	for i, raw := range rawAbilities {

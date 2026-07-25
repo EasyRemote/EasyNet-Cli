@@ -3,6 +3,7 @@ package easynet
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -160,9 +161,57 @@ func TestRuntimeAbilityDescriptorProviderListsRuntimeDescriptors(t *testing.T) {
 		got.SchemaSummary["input"] == nil ||
 		got.InputSchema["type"] != "object" ||
 		got.Metadata["stable"] != "true" {
-			t.Fatalf("descriptor projection lost runtime facts: %#v", got)
-		}
+		t.Fatalf("descriptor projection lost runtime facts: %#v", got)
 	}
+}
+
+func TestRuntimeAbilityDescriptorProviderUsesExplicitRoute(t *testing.T) {
+	var seen map[string]any
+	transport := RuntimeTransportFunc{InvokeFunc: func(_ context.Context, raw []byte) ([]byte, error) {
+		if err := json.Unmarshal(raw, &seen); err != nil {
+			return nil, err
+		}
+		return runtimeAbilityResultJSON(true, `{"abilities":[]}`, "", false), nil
+	}, ResolveDescriptorRefFunc: testResolveDescriptorRef(t)}
+	runtime, _ := NewRuntimeClient(transport)
+	ability, _ := NewRuntimeAbilityClient(runtime, NewCanonicalAddressing())
+	route, err := newRuntimeAbilityDescriptorRoute("runtime.catalog.list")
+	if err != nil {
+		t.Fatalf("newRuntimeAbilityDescriptorRoute: %v", err)
+	}
+	provider, err := newRuntimeAbilityDescriptorProviderWithRoute(ability, route)
+	if err != nil {
+		t.Fatalf("newRuntimeAbilityDescriptorProviderWithRoute: %v", err)
+	}
+
+	if _, err := provider.List(context.Background(), AbilityDescriptorListRequest{
+		Call: runtimeAbilityTestContext(),
+	}); err != nil {
+		t.Fatalf("List through explicit route: %v", err)
+	}
+	if seen["descriptor_ref"] != "easynet:///r/example/ability/authority.runtime.catalog.list@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read" {
+		t.Fatalf("descriptor_ref = %q", seen["descriptor_ref"])
+	}
+}
+
+func TestRuntimeAbilityDescriptorProviderUsesGenericCatalogError(t *testing.T) {
+	transport := RuntimeTransportFunc{InvokeFunc: func(_ context.Context, _ []byte) ([]byte, error) {
+		return runtimeAbilityResultJSON(true, `{"items":[]}`, "", false), nil
+	}, ResolveDescriptorRefFunc: testResolveDescriptorRef(t)}
+	runtime, _ := NewRuntimeClient(transport)
+	ability, _ := NewRuntimeAbilityClient(runtime, NewCanonicalAddressing())
+	provider, _ := NewRuntimeAbilityDescriptorProvider(ability)
+
+	_, err := provider.List(context.Background(), AbilityDescriptorListRequest{
+		Call: runtimeAbilityTestContext(),
+	})
+	if err == nil || !strings.Contains(err.Error(), "runtime descriptor catalog output must include descriptor rows") {
+		t.Fatalf("catalog error = %v", err)
+	}
+	if strings.Contains(err.Error(), "meta.list_abilities") {
+		t.Fatalf("generic descriptor catalog error leaked provider route: %v", err)
+	}
+}
 
 func TestRuntimeAbilityDescriptorProviderGetRejectsAmbiguousDescriptors(t *testing.T) {
 	transport := RuntimeTransportFunc{InvokeFunc: func(_ context.Context, _ []byte) ([]byte, error) {

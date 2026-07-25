@@ -22,7 +22,7 @@ __all__ = [
     "project_ability_descriptor",
 ]
 
-_ABILITY_DESCRIPTOR_LIST_ABILITY = "meta.list_abilities"
+_RUNTIME_ABILITY_DESCRIPTOR_LIST_ROUTE = "meta.list_abilities"
 
 
 @dataclass(frozen=True)
@@ -119,13 +119,50 @@ class AbilityDescriptorClient:
         return self._provider.get(request)
 
 
-class RuntimeAbilityDescriptorProvider:
-    """Provider-backed descriptor catalog over daemon `meta.list_abilities`."""
+@dataclass(frozen=True)
+class _RuntimeAbilityDescriptorRoute:
+    list_ability: str
+    rows_field: str = "abilities"
 
-    def __init__(self, ability: RuntimeAbilityClient) -> None:
+    @classmethod
+    def default(cls) -> "_RuntimeAbilityDescriptorRoute":
+        return cls(_RUNTIME_ABILITY_DESCRIPTOR_LIST_ROUTE)
+
+    def __post_init__(self) -> None:
+        if not self.list_ability.strip():
+            raise _invalid_descriptor("descriptor catalog route ability is required")
+        if not self.rows_field.strip():
+            raise _invalid_descriptor("descriptor catalog route rows field is required")
+
+    def list(
+        self,
+        ability: RuntimeAbilityClient,
+        call: RuntimeCallContext,
+        args: Mapping[str, object],
+    ) -> dict[str, object]:
+        return ability.invoke(call, self.list_ability.strip(), dict(args))
+
+    def rows(self, output: Mapping[str, object]) -> list[object]:
+        raw_rows = output.get(self.rows_field)
+        if not isinstance(raw_rows, list):
+            raise _invalid_descriptor(
+                "runtime descriptor catalog output must include descriptor rows"
+            )
+        return raw_rows
+
+
+class RuntimeAbilityDescriptorProvider:
+    """Provider-backed descriptor catalog over an explicit runtime route."""
+
+    def __init__(
+        self,
+        ability: RuntimeAbilityClient,
+        route: _RuntimeAbilityDescriptorRoute | None = None,
+    ) -> None:
         if ability is None:
             raise _invalid_descriptor("runtime ability client is required")
         self._ability = ability
+        self._route = route or _RuntimeAbilityDescriptorRoute.default()
 
     def list(self, request: AbilityDescriptorListRequest) -> AbilityDescriptorPage:
         if not isinstance(request, AbilityDescriptorListRequest):
@@ -137,12 +174,8 @@ class RuntimeAbilityDescriptorProvider:
             args["owner_ura"] = request.owner_ura.strip()
         if request.ability_ura.strip():
             args["ability_ura"] = request.ability_ura.strip()
-        output = self._ability.invoke(request.call, _ABILITY_DESCRIPTOR_LIST_ABILITY, args)
-        raw_abilities = output.get("abilities")
-        if not isinstance(raw_abilities, list):
-            raise _invalid_descriptor(
-                "meta.list_abilities output must include abilities array"
-            )
+        output = self._route.list(self._ability, request.call, args)
+        raw_abilities = self._route.rows(output)
         descriptors: list[AbilityDescriptorProjection] = []
         for index, raw in enumerate(raw_abilities):
             if not isinstance(raw, Mapping):
