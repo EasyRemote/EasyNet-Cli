@@ -416,7 +416,7 @@ fn device_show_abilities(node: &Value) -> anyhow::Result<Vec<Value>> {
         .cloned()
         .ok_or_else(|| {
             anyhow::anyhow!(
-                "node.describe response omitted `abilities`; device show refuses to fall back to local meta.list_abilities"
+                "node.describe response omitted `abilities`; device show requires the canonical describe abilities projection"
             )
         })
 }
@@ -427,7 +427,7 @@ fn device_show_state(node: &Value) -> anyhow::Result<String> {
         .map(str::to_string)
         .ok_or_else(|| {
             anyhow::anyhow!(
-                "node.describe response omitted string `state`; device show refuses to translate legacy numeric state"
+                "node.describe response omitted canonical string `state`; device show requires the canonical describe state projection"
             )
         })
 }
@@ -537,7 +537,7 @@ mod tests {
             "wrong error: {message}"
         );
         assert!(
-            message.contains("refuses to fall back"),
+            message.contains("requires the canonical describe abilities projection"),
             "wrong error: {message}"
         );
     }
@@ -556,16 +556,18 @@ mod tests {
         let missing = device_show_state(&json!({"abilities": []}))
             .expect_err("missing state must fail closed");
         assert!(
-            missing.to_string().contains("omitted string `state`"),
+            missing
+                .to_string()
+                .contains("omitted canonical string `state`"),
             "wrong error: {missing}"
         );
 
-        let numeric = device_show_state(&json!({"state": 3}))
-            .expect_err("numeric legacy enum state must fail closed");
+        let numeric =
+            device_show_state(&json!({"state": 3})).expect_err("numeric state must fail closed");
         assert!(
             numeric
                 .to_string()
-                .contains("refuses to translate legacy numeric state"),
+                .contains("requires the canonical describe state projection"),
             "wrong error: {numeric}"
         );
 

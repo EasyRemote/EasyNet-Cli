@@ -12070,6 +12070,53 @@ for required in (
 PY
 }
 
+check_cli_device_show_projection_error_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local device_group="$cli_root/src/cli/commands/groups/device.rs"
+  local group_mod="$cli_root/src/cli/commands/groups/mod.rs"
+  [[ -f "$device_group" ]] || fail "CLI device group source is missing: ${device_group#$cli_root/}"
+  [[ -f "$group_mod" ]] || fail "CLI command group module source is missing: ${group_mod#$cli_root/}"
+
+  "$PYTHON_BIN" - "$device_group" "$group_mod" <<'PY'
+import sys
+from pathlib import Path
+
+device_group = Path(sys.argv[1]).read_text(encoding="utf-8")
+group_mod = Path(sys.argv[2]).read_text(encoding="utf-8")
+production = device_group.split("\n#[cfg(test)]", 1)[0]
+
+for retired in (
+    "refuses to fall back",
+    "fall back to local meta.list_abilities",
+    "translate legacy numeric state",
+    "legacy numeric state",
+):
+    if retired in production:
+        raise SystemExit(f"cli_device_show_projection_error:retired_product_message:{retired}")
+
+for required in (
+    "device show requires the canonical describe abilities projection",
+    "device show requires the canonical describe state projection",
+    "device_show_requires_describe_payload_abilities",
+    "requires the canonical describe abilities projection",
+    "device_show_requires_string_describe_state",
+    "requires the canonical describe state projection",
+):
+    if required not in device_group:
+        raise SystemExit(f"cli_device_show_projection_error:missing:{required}")
+
+for retired in (
+    "existing legacy handlers",
+    "brand-new logic",
+    "old flat top-level commands",
+):
+    if retired in group_mod:
+        raise SystemExit(f"cli_command_group_boundary:retired_header:{retired}")
+if "typed product entrypoint for one noun-owned command family" not in group_mod:
+    raise SystemExit("cli_command_group_boundary:canonical_header_missing")
+PY
+}
+
 check_runtime_wire_target_state_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local descriptor_binding="$cli_root/src/daemon/invocation/dispatch/descriptor_binding.rs"
@@ -19921,6 +19968,28 @@ EOF
   if ( CLI_ROOT="$tmp/cli-device-directory-alias-legacy"; check_cli_device_directory_projection_contract ) >/dev/null 2>&1; then
     fail "self-test expected CLI device directory alias gate to fail"
   fi
+  mkdir -p "$tmp/cli-device-show-projection-error-legacy/src/cli/commands/groups"
+  cat >"$tmp/cli-device-show-projection-error-legacy/src/cli/commands/groups/device.rs" <<'EOF'
+fn device_show_abilities() {
+    let _ = "node.describe response omitted `abilities`; device show refuses to fall back to local meta.list_abilities";
+}
+
+fn device_show_state() {
+    let _ = "node.describe response omitted string `state`; device show refuses to translate legacy numeric state";
+}
+
+#[cfg(test)]
+mod tests {
+    fn device_show_requires_describe_payload_abilities() {}
+    fn device_show_requires_string_describe_state() {}
+}
+EOF
+  cat >"$tmp/cli-device-show-projection-error-legacy/src/cli/commands/groups/mod.rs" <<'EOF'
+// dispatches either to the existing legacy handlers in super::* or to brand-new logic
+EOF
+  if ( CLI_ROOT="$tmp/cli-device-show-projection-error-legacy"; check_cli_device_show_projection_error_contract ) >/dev/null 2>&1; then
+    fail "self-test expected CLI device show projection error vocabulary gate to fail"
+  fi
   mkdir -p "$tmp/ready-capability-mode-derived/src/bin" \
     "$tmp/ready-capability-mode-derived/src/daemon/boot/invocation"
   cat >"$tmp/ready-capability-mode-derived/src/bin/easynet-daemon.rs" <<'EOF'
@@ -21510,6 +21579,7 @@ EOF
   check_catalog_exact_runtime_key_contract
   check_federation_directory_device_projection_contract
   check_cli_device_directory_projection_contract
+  check_cli_device_show_projection_error_contract
   check_plugin_sidecar_helper_matrix_contract
   check_plugin_schema_rejection_vocabulary_contract
   check_retired_browser_mock_surface_contract
@@ -21739,6 +21809,7 @@ check_runtime_plane_requirement_contract
 check_catalog_exact_runtime_key_contract
 check_federation_directory_device_projection_contract
 check_cli_device_directory_projection_contract
+check_cli_device_show_projection_error_contract
 check_plugin_sidecar_helper_matrix_contract
 check_remote_desktop_contract_boundary_contract
 check_retired_browser_mock_surface_contract
