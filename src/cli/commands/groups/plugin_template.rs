@@ -377,6 +377,7 @@ call_mode = "rpc"
         format!(
             r#"schema_version = "2"
 name = "{ability_name}"
+descriptor_version = "{descriptor_version}"
 description = "Echo one message from a Hello World plugin."
 admission_action = "invoke"
 
@@ -393,6 +394,7 @@ type = "object"
 additionalProperties = true
 "#,
             ability_name = self.ability_name,
+            descriptor_version = self.descriptor_version,
         )
     }
 
@@ -470,12 +472,11 @@ Language: `{language}`
 ## Versions
 
 - Plugin package version: `{package_version}`
-- Requested ability descriptor version: `{descriptor_version}`
+- Ability descriptor version: `{descriptor_version}`
 
 The package version controls install/update/remove lifecycle. The descriptor
-schema itself remains `schema_version = "2"` and is hashed by the daemon when
-published into descriptor refs, authority bindings, implementation bindings,
-and receipts.
+version controls the governed callable interface that enters descriptor refs,
+authority bindings, implementation bindings, and receipts.
 
 ## Install
 
@@ -935,7 +936,6 @@ mod tests {
             fs::read_to_string(target.join("abilities/hello_plugin.echo.ability.toml"))
                 .expect("ability body");
         for package_owned_field in [
-            "descriptor_version",
             "call_mode",
             "capability_state",
             "visibility",
@@ -951,6 +951,10 @@ mod tests {
                 "ability descriptor must not contain package-owned field {package_owned_field}"
             );
         }
+        assert!(
+            ability_body.contains("descriptor_version = \"1.0.0\""),
+            "template ability descriptor must bind the requested descriptor version"
+        );
         assert!(
             ability_body.contains("[output_schema]"),
             "template ability descriptor should declare a parser-owned output schema"

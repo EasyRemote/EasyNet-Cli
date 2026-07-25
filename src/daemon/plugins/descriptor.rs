@@ -16,6 +16,7 @@ use crate::daemon::plugins::index::PluginPackageIndex;
 #[derive(Debug, Clone)]
 pub struct PluginAbilityMetadata {
     pub name: String,
+    pub descriptor_version: String,
     pub description: String,
     pub input_schema: Value,
     pub output_schema: Option<Value>,
@@ -42,6 +43,7 @@ impl PluginDescriptorProjector {
                     })?;
                 out.push(PluginAbilityMetadata {
                     name: descriptor.name().to_string(),
+                    descriptor_version: descriptor.descriptor_version().to_string(),
                     description: descriptor.description().to_string(),
                     input_schema: descriptor.input_schema().clone(),
                     output_schema: descriptor.output_schema().cloned(),
@@ -91,6 +93,7 @@ mod tests {
             .expect("installed plugin descriptor");
 
         assert_eq!(descriptor.description, "test descriptor for test.echo");
+        assert_eq!(descriptor.descriptor_version, "1.2.3");
         assert_eq!(descriptor.input_schema["type"], "object");
         assert_eq!(descriptor.hints, AbilityHints::default());
         assert!(descriptor.output_schema.is_none());

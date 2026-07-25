@@ -231,6 +231,7 @@ bidi_wire_kind = "json_frames"
             format!(
                 r#"schema_version = "2"
 name = "{ability}"
+descriptor_version = "1.2.3"
 description = "test descriptor for {ability}"
 admission_action = "stream"
 

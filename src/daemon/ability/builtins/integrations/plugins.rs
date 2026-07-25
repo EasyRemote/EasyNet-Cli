@@ -507,7 +507,6 @@ max_frame_queue = 1
 
 [[ability_metadata]]
 name = "camera.snapshot"
-descriptor_path = "camera/snapshot.toml"
 layer = "operational"
 call_mode = "rpc"
 

@@ -11380,6 +11380,35 @@ if "SidecarRuntime.serve" not in text or "run.runtime.sdk.provider.runtime.plugi
     raise SystemExit("plugin_java_template_missing_provider_helper")
 if "serveExecPlugin" not in text:
     raise SystemExit("plugin_node_template_missing_provider_helper")
+ability_template = re.search(
+    r"fn ability_toml\(&self\) -> String \{(?P<body>.*?)\n    \}",
+    text,
+    re.S,
+)
+if not ability_template:
+    raise SystemExit("plugin_template_ability_toml_missing")
+ability_body = ability_template.group("body")
+if 'descriptor_version = "{descriptor_version}"' not in ability_body:
+    raise SystemExit("plugin_template_descriptor_version_not_descriptor_owned")
+if "descriptor_version = self.descriptor_version" not in ability_body:
+    raise SystemExit("plugin_template_descriptor_version_not_bound_to_init")
+for package_owned in (
+    'call_mode = "rpc"',
+    'capability_state = "provider_backed"',
+    'visibility = "SCOPED"',
+    "scope_subjects_kind",
+    "scope_agents_kind",
+    "denied_agents = []",
+    "output_receipt_schema_json",
+    "hints_json",
+    "receipt_semantics",
+):
+    if package_owned in ability_body:
+        raise SystemExit(f"plugin_template_ability_toml_package_field:{package_owned}")
+if "Ability descriptor version: `{descriptor_version}`" not in text:
+    raise SystemExit("plugin_template_readme_descriptor_version_not_real")
+if "Requested ability descriptor version" in text:
+    raise SystemExit("plugin_template_readme_descriptor_version_still_requested")
 PY
 }
 
@@ -11461,6 +11490,13 @@ required = {
     "package": [
         "plugin_host_installed_package_rejects_unknown_descriptor_fields",
         "unknown field `retired_descriptor_hash`",
+        "descriptor_version: String",
+        "pub fn descriptor_version(&self) -> &str",
+        "AbilityDescriptorVersion::new(&raw.descriptor_version)",
+        ".with_descriptor_version(&self.descriptor_version)",
+        "plugin_host_installed_package_rejects_missing_descriptor_version",
+        "missing field `descriptor_version`",
+        "plugin_descriptor_projection_preserves_descriptor_version",
     ],
     "install_state": [
         "plugin_state_store_rejects_unknown_state_fields",

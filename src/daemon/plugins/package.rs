@@ -120,6 +120,7 @@ impl BuiltinPluginAbilitySpec {
 #[derive(Clone, Debug, PartialEq)]
 pub struct PluginAbilityDescriptor {
     name: String,
+    descriptor_version: String,
     description: String,
     input_schema: Value,
     output_schema: Option<Value>,
@@ -130,6 +131,11 @@ impl PluginAbilityDescriptor {
     /// Full daemon ability name declared by the descriptor.
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// Governed callable interface version declared by the descriptor.
+    pub fn descriptor_version(&self) -> &str {
+        &self.descriptor_version
     }
 
     /// Human-readable ability description.
@@ -177,6 +183,12 @@ impl PluginAbilityDescriptor {
             ability: self.name.clone(),
             reason: source.to_string(),
         })?;
+        manifest = manifest
+            .with_descriptor_version(&self.descriptor_version)
+            .map_err(|source| PluginHostError::DescriptorProjectionFailed {
+                ability: self.name.clone(),
+                reason: source.to_string(),
+            })?;
         manifest = manifest
             .with_admission_action(self.admission_action.as_str())
             .map_err(|source| PluginHostError::DescriptorProjectionFailed {
@@ -399,6 +411,7 @@ pub type SharedPluginPackage = Arc<PluginPackage>;
 struct RawPluginAbilityDescriptor {
     schema_version: String,
     name: String,
+    descriptor_version: String,
     description: String,
     admission_action: AdmissionAction,
     input_schema: Value,
@@ -422,6 +435,8 @@ fn builtin_descriptors(
             spec.name.to_string(),
             Arc::new(PluginAbilityDescriptor {
                 name: spec.name.to_string(),
+                descriptor_version: crate::daemon::ability::manifest::DEFAULT_DESCRIPTOR_VERSION
+                    .to_string(),
                 description: (spec.description)().to_string(),
                 input_schema: (spec.input_schema)(),
                 output_schema: None,
@@ -490,6 +505,11 @@ fn validate_descriptor(
             reason: "description must be non-empty".to_string(),
         });
     }
+    crate::daemon::ability::descriptors::AbilityDescriptorVersion::new(&raw.descriptor_version)
+        .map_err(|source| PluginHostError::InvalidAbilityDescriptor {
+            path: path.to_path_buf(),
+            reason: source.to_string(),
+        })?;
     if !raw.input_schema.is_object() {
         return Err(PluginHostError::InvalidAbilityDescriptor {
             path: path.to_path_buf(),
@@ -508,6 +528,7 @@ fn validate_descriptor(
     }
     Ok(PluginAbilityDescriptor {
         name: raw.name,
+        descriptor_version: raw.descriptor_version,
         description: raw.description,
         input_schema: raw.input_schema,
         output_schema: raw.output_schema,
@@ -951,6 +972,7 @@ session = "aqua"
             dir.path().join("abilities/test.echo.ability.toml"),
             r#"schema_version = "2"
 name = "test.echo"
+descriptor_version = "1.2.3"
 description = "test descriptor for test.echo"
 admission_action = "invoke"
 retired_descriptor_hash = "sha256:retired"
@@ -972,6 +994,51 @@ additionalProperties = false
             format!("{err}").contains("unknown field `retired_descriptor_hash`"),
             "parse error should name rejected descriptor field: {err}"
         );
+    }
+
+    #[test]
+    fn plugin_host_installed_package_rejects_missing_descriptor_version() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_test_package(dir.path(), "0.1.0");
+        std::fs::write(
+            dir.path().join("abilities/test.echo.ability.toml"),
+            r#"schema_version = "2"
+name = "test.echo"
+description = "test descriptor for test.echo"
+admission_action = "invoke"
+
+[input_schema]
+type = "object"
+additionalProperties = false
+"#,
+        )
+        .expect("descriptor without descriptor_version");
+
+        let err = PluginPackage::from_installed(dir.path(), None)
+            .expect_err("missing descriptor_version must fail package indexing");
+        assert!(
+            matches!(err, PluginHostError::DescriptorParseFailed { .. }),
+            "missing descriptor_version must fail at typed parse, got: {err}"
+        );
+        assert!(
+            format!("{err}").contains("missing field `descriptor_version`"),
+            "parse error should name descriptor_version: {err}"
+        );
+    }
+
+    #[test]
+    fn plugin_descriptor_projection_preserves_descriptor_version() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_test_package(dir.path(), "0.1.0");
+
+        let package = PluginPackage::from_installed(dir.path(), None).expect("package");
+        let descriptor = package.ability_descriptor("test.echo").expect("descriptor");
+        assert_eq!(descriptor.descriptor_version(), "1.2.3");
+
+        let manifest = descriptor
+            .to_registry_manifest()
+            .expect("registry projection");
+        assert_eq!(manifest.descriptor_version(), "1.2.3");
     }
 
     #[test]
@@ -1069,6 +1136,7 @@ layer = "control"
         format!(
             r#"schema_version = "2"
 name = "{ability}"
+descriptor_version = "1.2.3"
 description = "test descriptor for {ability}"
 admission_action = "invoke"
 
