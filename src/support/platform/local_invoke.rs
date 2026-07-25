@@ -404,8 +404,9 @@ impl LocalDaemonSystemAbilityIssuer {
 /// state: ability catalogue, health/status probes, and invocation ledger views.
 /// They must not enter transport through the generic daemon-self subject
 /// shortcut because that hides the semantic subject until admission fails. The
-/// issuer binds every read to the daemon identity published by control discovery
-/// before crossing the local Axon gRPC boundary.
+/// issuer binds every read to a user-owned Resource URA derived from paired
+/// credentials and requires active daemon Ready discovery plus paired User
+/// signer custody before crossing the local Axon gRPC boundary.
 pub struct LocalRuntimeStateReadIssuer;
 
 impl LocalRuntimeStateReadIssuer {

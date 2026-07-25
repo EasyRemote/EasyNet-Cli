@@ -46,6 +46,14 @@ if ! rg -n 'runtime-state/read' "$ISSUER" >/dev/null; then
   fail "runtime-state read issuer must bind a dedicated runtime-state resource subject"
 fi
 
+if ! rg -n 'user-owned Resource URA' "$ISSUER" >/dev/null; then
+  fail "runtime-state read issuer contract must describe user-owned Resource subjects"
+fi
+
+if rg -n 'issuer binds every read to the daemon identity|daemon identity published by control discovery' "$ISSUER"; then
+  fail "runtime-state read issuer contract must not describe daemon identity subjects"
+fi
+
 if ! rg -n 'persistence::config::load_credentials\(\)' "$ISSUER" >/dev/null; then
   fail "runtime-state read issuer must derive subject ownership from paired credentials"
 fi
