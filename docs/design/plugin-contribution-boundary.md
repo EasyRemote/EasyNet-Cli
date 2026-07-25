@@ -50,7 +50,7 @@ sidecar processes; Python, Go, Rust, Node, Java, C++, or another runtime can be
 used if the package supplies the executable declared by `[declarative].argv`.
 
 Generated executables do not hand-write sidecar JSON frames. Python templates
-import `easynet_sdk.providers.easynet.plugin_exec`; Go templates import
+import `easynet_sdk.providers.runtime.plugin_exec`; Go templates import
 `easynet.run/cli/sdk/go/provider/runtime/pluginexec`. Each template implements
 only a `SidecarInvocation -> result` handler. The daemon/provider frame grammar
 remains owned by CLI SDK provider helpers; plugin code should not construct

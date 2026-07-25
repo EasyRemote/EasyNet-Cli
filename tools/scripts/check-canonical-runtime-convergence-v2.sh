@@ -11402,6 +11402,8 @@ retired_tokens = (
 )
 for rel_path in (
     "src/cli/commands/groups/plugin_template.rs",
+    "docs/design/desktop-companion-plugin-spec.md",
+    "docs/design/plugin-contribution-boundary.md",
     "sdk/python/tests/test_plugin_exec.py",
     "sdk/node/test/pluginexec.test.mjs",
 ):
