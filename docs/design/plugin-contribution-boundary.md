@@ -51,7 +51,7 @@ used if the package supplies the executable declared by `[declarative].argv`.
 
 Generated executables do not hand-write sidecar JSON frames. Python templates
 import `easynet_sdk.providers.easynet.plugin_exec`; Go templates import
-`easynet.run/cli/sdk/go/provider/easynet/pluginexec`. Each template implements
+`easynet.run/cli/sdk/go/provider/runtime/pluginexec`. Each template implements
 only a `SidecarInvocation -> result` handler. The daemon/provider frame grammar
 remains owned by CLI SDK provider helpers; plugin code should not construct
 `call_id`, `result`, `error`, stream, or bidi protocol frames directly.

@@ -68,7 +68,7 @@ surface, and status projection. They do not share runtime semantics.
 Declarative exec plugin authoring uses CLI SDK provider facades rather than
 hand-written daemon JSON frames. Python templates import
 `easynet_sdk.providers.easynet.plugin_exec`; Go templates import
-`easynet.run/cli/sdk/go/provider/easynet/pluginexec`. Both receive a typed
+`easynet.run/cli/sdk/go/provider/runtime/pluginexec`. Both receive a typed
 `SidecarInvocation`; the facade owns the sidecar frame grammar and converts
 handler success or failure into daemon protocol frames. Compiled templates are
 build-then-install: the daemon executes the compiled artifact declared by

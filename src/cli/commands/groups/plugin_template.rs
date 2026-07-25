@@ -786,7 +786,7 @@ fn default_node_sdk_file_path() -> PathBuf {
 }
 
 fn default_rust_pluginexec_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("sdk/rust/provider/runtime/pluginexec")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tools/provider-runtime-pluginexec-rust")
 }
 
 fn default_java_sdk_pom_path() -> PathBuf {
@@ -1130,7 +1130,7 @@ mod tests {
         assert!(!main_body.contains("serde_json::from_str"));
         let cargo_toml = fs::read_to_string(target.join("Cargo.toml")).expect("cargo toml");
         assert!(cargo_toml.contains("runtime-provider-pluginexec = { path = \""));
-        assert!(cargo_toml.contains("/sdk/rust/provider/runtime/pluginexec"));
+        assert!(cargo_toml.contains("/tools/provider-runtime-pluginexec-rust"));
         let readme = fs::read_to_string(target.join("README.md")).expect("readme");
         assert!(readme.contains("Build the executable before install"));
         assert!(readme.contains("```bash\nmake build\neasynet plugin install .\n```"));

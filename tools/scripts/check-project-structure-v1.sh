@@ -36,6 +36,19 @@ contains_name() {
   return 1
 }
 
+is_generated_cache_dir() {
+  local name="$1"
+
+  case "$name" in
+    __pycache__|.pytest_cache)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 check_root_contract() {
   local allowed_files=(
     .dockerignore
@@ -107,6 +120,7 @@ require_only_dirs() {
   local actual name allowed
   while IFS= read -r actual; do
     name="$(basename "$actual")"
+    is_generated_cache_dir "$name" && continue
     allowed=false
     for expected_name in "${expected[@]}"; do
       if [[ "$name" == "$expected_name" ]]; then
@@ -155,6 +169,7 @@ require_no_dirs() {
   local actual name
   while IFS= read -r actual; do
     name="$(basename "$actual")"
+    is_generated_cache_dir "$name" && continue
     fail "unexpected directory under $parent: $name"
   done < <(find "$ROOT/$parent" -mindepth 1 -maxdepth 1 -type d | sort)
 }
