@@ -1869,10 +1869,16 @@ while True:
         let (_dir, svc) = make_echo_client("echo");
         let owner = "easynet:///r/r/agent/u.mcp";
         let mut reg = registry_for_mcp_owner(owner);
-        reg.register_rpc_with_owner_and_action(
+        reg.register_rpc_with_spec_and_action(
             "echo_one",
             OwnerKind::Agent("mcp".into()),
             crate::daemon::ability::descriptors::AdmissionAction::Invoke,
+            crate::daemon::ability::manifest::AbilityManifest::new(
+                "echo_one",
+                "Local test MCP collision fixture.",
+                json!({"type": "object", "additionalProperties": true}),
+            )
+            .expect("test collision manifest"),
             Arc::new(|_: Value| Ok(json!("local"))),
         );
 
@@ -2299,10 +2305,16 @@ while True:
         // from the [a, b] state. Manually register `a` so the
         // diff has something to remove.
         use std::sync::Arc;
-        reg2.register_rpc_with_owner_and_action(
+        reg2.register_rpc_with_spec_and_action(
             "a",
             OwnerKind::Agent("mcp".into()),
             crate::daemon::ability::descriptors::AdmissionAction::Invoke,
+            crate::daemon::ability::manifest::AbilityManifest::new(
+                "a",
+                "Local stale reflected MCP fixture.",
+                serde_json::json!({"type": "object", "additionalProperties": true}),
+            )
+            .expect("test stale reflected manifest"),
             Arc::new(|_: Value| Ok(serde_json::json!({"stale": "tool a"}))),
         );
         // After this seed, reg2 has [a, b, c]. previously_reflected

@@ -673,6 +673,16 @@ mod tests {
         handler(envelope, args)
     }
 
+    fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
+        match payload.downcast::<String>() {
+            Ok(message) => *message,
+            Err(payload) => match payload.downcast::<&'static str>() {
+                Ok(message) => (*message).to_string(),
+                Err(_) => "<non-string panic>".to_string(),
+            },
+        }
+    }
+
     fn invoke_describe(reg: &AxonAbilityCatalog, callee_ura: &str) -> anyhow::Result<Value> {
         let handler = reg
             .resolve_rpc_with_env(ABILITY_DESCRIBE)
@@ -1286,14 +1296,6 @@ mod tests {
                 ))
             }),
         );
-        // A schema-less static registration imports the pure system catalog
-        // metadata before commit; discovery still performs no overlay.
-        live_reg.register_rpc_with_owner_and_action(
-            "alice.legacy",
-            OwnerKind::Agent("alice".to_string()),
-            crate::daemon::ability::descriptors::AdmissionAction::Invoke,
-            Arc::new(|_args| Ok(json!({}))),
-        );
         live_reg
             .hot_register_stream_with_spec(
                 "alice.mcp_search",
@@ -1386,14 +1388,6 @@ mod tests {
         assert_eq!(subscribe["call_mode"], json!("stream"));
         assert!(subscribe.get("class").is_none());
 
-        let legacy = abilities
-            .iter()
-            .find(|a| a["name"] == "alice.legacy")
-            .expect("agent-owned fallback ability must surface as the owner-local ability name");
-        let legacy_desc = legacy["description"].as_str().unwrap_or_default();
-        assert_eq!(legacy_desc, "(system ability)");
-        assert_eq!(legacy["schema_summary"]["input"]["type"], "object");
-
         let mcp_search = abilities
             .iter()
             .find(|a| a["name"] == "alice.mcp_search")
@@ -1402,6 +1396,41 @@ mod tests {
             mcp_search["schema_summary"]["input"]["properties"]["query"]["type"],
             json!("string"),
             "dynamic overlay manifests must be visible to meta.list_abilities"
+        );
+    }
+
+    #[test]
+    fn agent_owned_static_registration_rejects_fallback_manifest_publication() {
+        use crate::daemon::ability::dispatch::{AbilityAuthorityContext, OwnerKind};
+
+        let mut live_reg = runtime_metadata_test_catalog(
+            AbilityAuthorityContext::for_device_authority_root_with_hosted_agents(
+                "easynet:///r/alice-realm/device/test-node",
+                vec![crate::core::ura::device_agent_ura(
+                    "alice-realm",
+                    "test-node",
+                    "alice",
+                )],
+            )
+            .expect("fixed Device context with hosted Agent"),
+        );
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            live_reg.register_rpc_with_owner_and_action(
+                "alice.legacy",
+                OwnerKind::Agent("alice".to_string()),
+                crate::daemon::ability::descriptors::AdmissionAction::Invoke,
+                Arc::new(|_args| Ok(json!({}))),
+            );
+        }));
+        let panic = result.expect_err(
+            "agent-owned descriptor publication must require a provider-backed manifest",
+        );
+        let message = panic_message(panic);
+        assert!(
+            message.contains("requires an explicit manifest")
+                && message.contains("fallback metadata"),
+            "wrong fallback-manifest rejection: {message}"
         );
     }
 

@@ -747,10 +747,11 @@ mod tests {
             ),
             authority_context,
         );
-        reg.register_rpc_with_owner_and_action(
+        reg.register_rpc_with_spec_and_action(
             "codex.chat",
             OwnerKind::Agent("codex".into()),
             crate::daemon::ability::descriptors::AdmissionAction::Invoke,
+            crate::daemon::ability::manifest::default_chat_manifest(),
             Arc::new(|_args| Ok(json!({"reply":"ok"}))),
         );
         let reg = Arc::new(reg);

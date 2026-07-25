@@ -3033,11 +3033,24 @@ impl StaticRegistration {
         if let Some(action) = admission_action {
             let internal_manifest = match manifest.take() {
                 Some(manifest) => manifest.as_ref().clone(),
-                None => crate::daemon::ability::manifest::AbilityManifest::new(
-                    ability.rsplit('.').next().unwrap_or(&ability),
-                    crate::daemon::ability::catalog::try_description_for_owned(&ability)?,
-                    crate::daemon::ability::catalog::try_input_schema_for(&ability)?,
-                )?,
+                None => {
+                    if matches!(owner, OwnerKind::Agent(_))
+                        && crate::daemon::ability::catalog::try_system_ability_descriptor_path(
+                            &ability,
+                        )
+                        .is_err()
+                    {
+                        anyhow::bail!(
+                            "agent-owned ability {ability:?} requires an explicit manifest; \
+                             descriptor publication must not synthesize fallback metadata"
+                        );
+                    }
+                    crate::daemon::ability::manifest::AbilityManifest::new(
+                        ability.rsplit('.').next().unwrap_or(&ability),
+                        crate::daemon::ability::catalog::try_description_for_owned(&ability)?,
+                        crate::daemon::ability::catalog::try_input_schema_for(&ability)?,
+                    )?
+                }
             };
             manifest = Some(Arc::new(
                 internal_manifest.with_admission_action(action.as_str())?,

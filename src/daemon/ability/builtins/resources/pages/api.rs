@@ -437,10 +437,16 @@ mod tests {
                 ),
                 authority_context,
             );
-            reg.register_rpc_with_owner_and_action(
+            reg.register_rpc_with_spec_and_action(
                 "demo.backend",
                 OwnerKind::Agent("demo".into()),
                 crate::daemon::ability::descriptors::AdmissionAction::Invoke,
+                crate::daemon::ability::manifest::AbilityManifest::new(
+                    "backend",
+                    "Pages API test backend fixture.",
+                    json!({"type": "object", "additionalProperties": true}),
+                )
+                .expect("pages API test backend manifest"),
                 Arc::new(|args| Ok(json!({"ok": true, "echo": args}))),
             );
             let reg = Arc::new(reg);
