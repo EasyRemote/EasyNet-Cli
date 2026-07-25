@@ -12,7 +12,10 @@ public record InvocationResult(
     if (terminalState == null) {
       throw SDKError.validation("runtime", "terminalState is required");
     }
-    terminalReceipt = terminalReceipt == null ? Map.of() : Map.copyOf(terminalReceipt);
+    if (terminalReceipt == null || terminalReceipt.isEmpty()) {
+      throw SDKError.validation("invocation_result", "terminal_receipt is required");
+    }
+    terminalReceipt = Map.copyOf(terminalReceipt);
     validateTerminalReceipt(terminalReceipt, terminalState, ok);
     if (ok && error != null) {
       throw SDKError.validation("runtime", "ok result must not carry error");
@@ -55,9 +58,6 @@ public record InvocationResult(
 
   private static void validateTerminalReceipt(
       Map<String, Object> terminalReceipt, InvocationTerminalState terminalState, boolean ok) {
-    if (terminalReceipt.isEmpty()) {
-      return;
-    }
     RuntimeReceipt receipt = RuntimeReceipt.fromMap(terminalReceipt);
     String receiptState = receipt.lifecycleState();
     String resultState =

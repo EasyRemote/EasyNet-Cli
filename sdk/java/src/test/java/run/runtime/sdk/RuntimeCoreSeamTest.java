@@ -280,6 +280,16 @@ public final class RuntimeCoreSeamTest {
 
     expectSDKError(
         ErrorCode.INVALID_ARGUMENT,
+        "terminal_receipt is required",
+        () -> new InvocationResult(true, InvocationTerminalState.COMPLETED, "", null, null));
+
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        "terminal_receipt is required",
+        () -> new InvocationResult(true, InvocationTerminalState.COMPLETED, "", null, Map.of()));
+
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
         "retired receipt alias is not accepted",
         () ->
             InvocationResult.fromJSON(
@@ -312,6 +322,10 @@ public final class RuntimeCoreSeamTest {
         ErrorCode.INVALID_ARGUMENT,
         "authority_proof",
         () -> RuntimeReceipt.fromMap(missingProof));
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        "authority_proof",
+        () -> new InvocationResult(true, InvocationTerminalState.COMPLETED, "", null, missingProof));
 
     Map<String, Object> mismatchedProofHash = new LinkedHashMap<>(complete);
     Map<String, Object> mismatchedProof = mutableAuthorityProof(mismatchedProofHash);
