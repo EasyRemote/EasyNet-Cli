@@ -154,6 +154,9 @@ func TestRuntimeAdminAbilityClientListsSessions(t *testing.T) {
 	if len(page.Sessions) != 1 || page.Sessions[0].SessionID != "session-a" {
 		t.Fatalf("unexpected session page: %#v", page)
 	}
+	if got, want := page.Sessions[0].AuthorityURA, "easynet:///r/example/authority"; got != want {
+		t.Fatalf("authority_ura = %q, want %q", got, want)
+	}
 	if got, want := capture.draft["descriptor_ref"], "easynet:///r/example/ability/authority.session.list@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read"; got != want {
 		t.Fatalf("descriptor_ref = %#v, want %q", got, want)
 	}

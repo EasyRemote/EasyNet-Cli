@@ -208,6 +208,7 @@ def test_runtime_admin_ability_client_lists_sessions() -> None:
 
     assert len(page.sessions) == 1
     assert page.sessions[0].session_id == "session-a"
+    assert page.sessions[0].authority_ura == "easynet:///r/example/authority"
     assert transport.seen["descriptor_ref"] == (
         "easynet:///r/example/ability/authority.session.list@1.0.0"
     )

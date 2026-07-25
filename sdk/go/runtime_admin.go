@@ -37,7 +37,7 @@ type RuntimeSession struct {
 	Kind          string         `json:"kind,omitempty"`
 	SessionID     string         `json:"session_id,omitempty"`
 	DeviceURA     string         `json:"device_ura,omitempty"`
-	HubURA        string         `json:"hub_ura,omitempty"`
+	AuthorityURA  string         `json:"authority_ura,omitempty"`
 	State         string         `json:"state,omitempty"`
 	SessionKind   string         `json:"session_kind,omitempty"`
 	CreatedUnixMS int64          `json:"created_unix_ms,omitempty"`
@@ -232,7 +232,7 @@ func runtimeSessionPage(output map[string]any) (RuntimeSessionPage, error) {
 			Kind:          runtimeAdminString(row, "kind"),
 			SessionID:     runtimeAdminString(row, "session_id"),
 			DeviceURA:     runtimeAdminString(row, "device_ura"),
-			HubURA:        runtimeAdminString(row, "hub_ura"),
+			AuthorityURA:  runtimeAdminString(row, "hub_ura"),
 			State:         runtimeAdminString(row, "state"),
 			SessionKind:   runtimeAdminString(row, "session_kind"),
 			CreatedUnixMS: runtimeAdminInt64(row["created_unix_ms"]),

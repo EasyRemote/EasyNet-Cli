@@ -818,6 +818,45 @@ check_sdk_managed_signing_authority_route_contract() {
   fi
 }
 
+check_sdk_runtime_admin_authority_session_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local go_admin="$cli_root/sdk/go/runtime_admin.go"
+  local py_admin="$cli_root/sdk/python/easynet_sdk/runtime_admin.py"
+
+  if [[ -f "$go_admin" ]]; then
+    if rg -n '\bHubURA\b' "$go_admin"; then
+      fail "Go SDK runtime-admin session projection preserves HubURA public field"
+    fi
+    if ! rg -q 'AuthorityURA  string' "$go_admin"; then
+      fail "Go SDK runtime-admin session projection must expose AuthorityURA"
+    fi
+    if ! rg -q '`json:"authority_ura,omitempty"`' "$go_admin"; then
+      fail "Go SDK runtime-admin session projection must serialize authority_ura"
+    fi
+    if ! rg -q 'AuthorityURA:\s+runtimeAdminString\(row, "hub_ura"\)' "$go_admin"; then
+      fail "Go SDK runtime-admin adapter must translate daemon wire hub_ura to AuthorityURA"
+    fi
+  fi
+
+  if [[ -f "$py_admin" ]]; then
+    if rg -n '^\s+hub_ura:\s*str' "$py_admin"; then
+      fail "Python SDK runtime-admin session projection preserves hub_ura public field"
+    fi
+    if ! rg -q 'authority_ura: str = ""' "$py_admin"; then
+      fail "Python SDK runtime-admin session projection must expose authority_ura"
+    fi
+    if ! rg -q 'authority_ura=_admin_string\(row.get\("hub_ura"\)\)' "$py_admin"; then
+      fail "Python SDK runtime-admin adapter must translate daemon wire hub_ura to authority_ura"
+    fi
+  fi
+
+  local public_api="$cli_root/sdk/conformance/canonical-public-api.json"
+  if [[ -f "$public_api" ]] \
+    && rg -n 'RuntimeSession\.(HubURA|hub_ura)' "$public_api"; then
+    fail "canonical public API inventory preserves runtime-admin Hub session projection"
+  fi
+}
+
 check_advertise_agent_ingress_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local wrappers="$cli_root/src/daemon/invocation/dispatch/federation_wrappers.rs"
@@ -20860,6 +20899,7 @@ EOF
   check_go_sdk_runtime_resource_namespace_contract
   check_python_sdk_runtime_addressing_kind_contract
   check_sdk_managed_signing_authority_route_contract
+  check_sdk_runtime_admin_authority_session_contract
   check_advertise_agent_ingress_contract
   check_agent_start_model_intent_contract
   check_invocation_history_get_key_contract
@@ -21079,6 +21119,7 @@ check_go_sdk_lifecycle_fixture_neutrality_contract
 check_go_sdk_runtime_resource_namespace_contract
 check_python_sdk_runtime_addressing_kind_contract
 check_sdk_managed_signing_authority_route_contract
+check_sdk_runtime_admin_authority_session_contract
 check_advertise_agent_ingress_contract
 check_agent_start_model_intent_contract
 check_invocation_history_get_key_contract
