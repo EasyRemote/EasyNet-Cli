@@ -1496,9 +1496,9 @@ mod tests {
     #[tokio::test]
     async fn build_session_envelope_open_carries_caller_ura_and_ability_name() {
         let expected_device = crate::core::ura::device_ura("realm", "n1");
-        let expected_hub = crate::core::ura::hub_ura("realm");
+        let expected_authority = crate::core::ura::hub_ura("realm");
         let expected_ability =
-            crate::core::ura::owner_ability_ura(&expected_hub, ABILITY_SESSION_OPEN)
+            crate::core::ura::owner_ability_ura(&expected_authority, ABILITY_SESSION_OPEN)
                 .expect("session.open Ability URA");
         let signer = TestSessionSigner::random(expected_device.as_str());
         let frame = build_session_envelope_open(signer.as_ref())
@@ -1522,12 +1522,12 @@ mod tests {
                 .and_then(|e| e.callee.as_ref())
                 .map(|a| a.ura.as_str())
                 .unwrap_or(""),
-            expected_hub,
+            expected_authority,
         );
         let descriptor_ref =
             crate::daemon::invocation::dispatch::invocation_wire::descriptor_ref_from_invocation_target(
                 "test session.open",
-                &expected_hub,
+                &expected_authority,
                 Some(target),
             )
             .expect("session.open descriptor ref");

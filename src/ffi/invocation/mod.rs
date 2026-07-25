@@ -9608,20 +9608,20 @@ mod tests {
 
     #[cfg(feature = "axon-pb")]
     #[test]
-    fn runtime_system_descriptor_catalog_includes_hub_daemon_invocation_contracts() {
-        let hub = crate::core::ura::hub_ura("localhost");
-        let entries =
-            runtime_system_descriptor_catalog_entries(&hub).expect("Hub system descriptor catalog");
+    fn runtime_system_descriptor_catalog_includes_authority_daemon_invocation_contracts() {
+        let authority = crate::core::ura::hub_ura("localhost");
+        let entries = runtime_system_descriptor_catalog_entries(&authority)
+            .expect("Authority system descriptor catalog");
         let principal_create = entries
             .iter()
             .find(|entry| entry["name"] == "principal.lifecycle.create")
             .unwrap_or_else(|| {
                 panic!(
-                    "principal.lifecycle.create missing from Hub descriptor catalog: {entries:?}"
+                    "principal.lifecycle.create missing from Authority descriptor catalog: {entries:?}"
                 )
             });
 
-        assert_eq!(principal_create["owner_ura"], hub);
+        assert_eq!(principal_create["owner_ura"], authority);
         assert_eq!(principal_create["call_mode"], "rpc");
         assert_eq!(principal_create["admission_action"], "invoke");
         assert!(principal_create["descriptor_ref"]
@@ -9636,10 +9636,10 @@ mod tests {
             .find(|entry| entry["name"] == "runtime.bootstrap_self_identity")
             .unwrap_or_else(|| {
                 panic!(
-                    "runtime.bootstrap_self_identity missing from Hub descriptor catalog: {entries:?}"
+                    "runtime.bootstrap_self_identity missing from Authority descriptor catalog: {entries:?}"
                 )
             });
-        assert_eq!(runtime_bootstrap["owner_ura"], hub);
+        assert_eq!(runtime_bootstrap["owner_ura"], authority);
         assert_eq!(runtime_bootstrap["call_mode"], "rpc");
         assert_eq!(runtime_bootstrap["admission_action"], "manage");
         assert!(runtime_bootstrap["descriptor_ref"]

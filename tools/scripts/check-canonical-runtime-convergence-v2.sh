@@ -956,6 +956,45 @@ check_route_kind_realm_authority_vocabulary_contract() {
   fi
 }
 
+check_session_open_authority_vocabulary_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local session_initiator="$cli_root/src/daemon/invocation/bidi/session_initiator.rs"
+  local envelope="$cli_root/src/daemon/invocation/bidi/session_initiator/envelope.rs"
+  local bidi_dispatcher="$cli_root/src/daemon/invocation/bidi/bidi_dispatcher.rs"
+  local unary_tests="$cli_root/src/daemon/invocation/dispatch/daemon_invocation_service_tests/unary.rs"
+  local runtime_admin="$cli_root/src/daemon/ability/catalog/runtime_admin_contracts.rs"
+  local daemon_invocation="$cli_root/src/daemon/ability/catalog/daemon_invocation_contracts.rs"
+  local ffi_invocation="$cli_root/src/ffi/invocation/mod.rs"
+
+  for file in "$session_initiator" "$envelope" "$bidi_dispatcher" "$unary_tests" "$runtime_admin" "$daemon_invocation" "$ffi_invocation"; do
+    [[ -f "$file" ]] || fail "session.open authority vocabulary source is missing: ${file#$cli_root/}"
+  done
+
+  if rg -n 'realm Hub|Hub-owned `session\.open`|Hub-owned runtime-admin|Hub-owned descriptor-bound|Hub daemon Invocation route|Hub daemon Invocation baseline ability|Hub descriptor catalog|Hub system descriptor catalog|expected_hub|includes_hub_daemon_invocation_contracts' \
+    "$session_initiator" "$envelope" "$bidi_dispatcher" "$unary_tests" "$runtime_admin" "$daemon_invocation" "$ffi_invocation"; then
+    fail "session.open/runtime-admin descriptor contracts preserve retired Hub-owned vocabulary"
+  fi
+
+  if ! rg -q 'descriptor owner and callee are the realm Authority' "$envelope"; then
+    fail "session.open envelope must describe Authority descriptor ownership"
+  fi
+  if ! rg -q 'Authority-owned `session\.open` lifecycle' "$bidi_dispatcher"; then
+    fail "session.open provider must describe Authority-owned lifecycle"
+  fi
+  if ! rg -q 'Authority-owned descriptor contracts for Axon runtime-admin' "$runtime_admin"; then
+    fail "runtime-admin descriptor contracts must describe Authority ownership"
+  fi
+  if ! rg -q 'Authority-owned daemon Invocation route' "$daemon_invocation"; then
+    fail "daemon Invocation descriptor contracts must describe Authority-owned routes"
+  fi
+  if ! rg -q 'Authority descriptor catalog' "$ffi_invocation"; then
+    fail "FFI descriptor catalog tests must describe Authority catalog ownership"
+  fi
+  if ! rg -q 'runtime_system_descriptor_catalog_includes_authority_daemon_invocation_contracts' "$ffi_invocation"; then
+    fail "FFI descriptor catalog test must name Authority daemon Invocation contracts"
+  fi
+}
+
 check_authority_context_model_vocabulary_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local dispatch="$cli_root/src/daemon/ability/dispatch.rs"
@@ -21145,6 +21184,7 @@ EOF
   check_runtime_authority_vocabulary_contract
   check_voice_realm_authority_vocabulary_contract
   check_route_kind_realm_authority_vocabulary_contract
+  check_session_open_authority_vocabulary_contract
   check_authority_context_model_vocabulary_contract
   check_provider_route_manifest_neutrality_contract
   check_advertise_agent_ingress_contract
@@ -21573,5 +21613,6 @@ check_public_descriptor_authority_vocabulary_contract
 check_runtime_authority_vocabulary_contract
 check_voice_realm_authority_vocabulary_contract
 check_route_kind_realm_authority_vocabulary_contract
+check_session_open_authority_vocabulary_contract
 check_authority_context_model_vocabulary_contract
 echo "canonical-runtime-convergence-v2: OK"

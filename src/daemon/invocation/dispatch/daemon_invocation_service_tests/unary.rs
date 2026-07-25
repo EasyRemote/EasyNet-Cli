@@ -2702,7 +2702,7 @@ async fn invoke_selected_route_unknown_runtime_handler_surfaces_not_found() {
 #[tokio::test]
 async fn invoke_runtime_bootstrap_self_identity_is_not_cli_shadow_acked() {
     // No SDK admin installed: descriptor-bound routing may resolve the
-    // Hub-owned runtime-admin contract, but LocalRuntime must still report
+    // Authority-owned runtime-admin contract, but LocalRuntime must still report
     // the missing canonical runtime row. The daemon must not fabricate a
     // CLI-side ack or fall back to a bare `runtime.*` dispatch.
     let rt = test_runtime_with_default_trust();
@@ -2748,7 +2748,7 @@ async fn invoke_runtime_bootstrap_self_identity_succeeds_when_sdk_admin_installe
     use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
     use ed25519_dalek::SigningKey;
 
-    // Runtime admin is installed as a Hub-owned descriptor-bound ability.
+    // Runtime admin is installed as an Authority-owned descriptor-bound ability.
     // The bare `runtime.bootstrap_self_identity` key must disappear; dispatch
     // enters through the canonical Ability URA selected by namespace.resolve.
     let svc = make_service().with_session_realm("test-realm".to_string());

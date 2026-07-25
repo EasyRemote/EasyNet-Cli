@@ -7,7 +7,7 @@
 //
 //                * typed `DispatchCall` / `ReverseDispatchCall` relay over a
 //                  device's session reverse channel
-//                * `session.open` - Hub-owned presence and carrier provider
+//                * `session.open` - Authority-owned presence and carrier provider
 //                * plugin/builtin bidi wire abilities — local PTY/
 //                  file-transfer adapters and the remote bidi bridge
 //
@@ -1423,7 +1423,7 @@ impl BidiDispatcher {
 }
 
 impl SessionOpenProvider {
-    /// Hub-owned `session.open` lifecycle.
+    /// Authority-owned `session.open` lifecycle.
     ///
     /// The signed tuple and carrier contract are read only from the admitted
     /// runtime context. Presence ownership is held by `SessionPresenceLease`,

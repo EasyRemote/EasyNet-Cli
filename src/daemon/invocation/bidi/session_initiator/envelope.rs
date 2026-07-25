@@ -24,9 +24,9 @@ pub async fn build_session_envelope_open(
     let initial_args = Vec::new();
 
     // Descriptor-bound frame-0 signing mirrors the unary prelude. The
-    // descriptor owner and callee are the realm Hub, while the Device remains
-    // the signed caller and subject. The canonical typed target carries the
-    // descriptor ref; route and product metadata remain separate. The gate
+    // descriptor owner and callee are the realm Authority, while the Device
+    // remains the signed caller and subject. The canonical typed target carries
+    // the descriptor ref; route and product metadata remain separate. The gate
     // re-derives these exact canonical bytes through
     // `descriptor_bound_from_wire_parts`; signing the old axiom bytes would
     // satisfy metadata presence but fail signature verification.

@@ -7,7 +7,7 @@
 //              index.
 //
 // Protocol Responsibility:
-// - Give every Hub daemon Invocation route one governed descriptor contract.
+// - Give every Authority-owned daemon Invocation route one governed descriptor contract.
 // - Keep descriptor proof facts in the ability control plane instead of the
 //   transport adapter.
 //
@@ -67,7 +67,7 @@ pub(crate) fn register_for_owner(
     {
         let action = admission_action_for(ability.name).ok_or_else(|| {
             anyhow::anyhow!(
-                "Hub daemon Invocation baseline ability {:?} has no descriptor contract action",
+                "Authority-owned daemon Invocation baseline ability {:?} has no descriptor contract action",
                 ability.name
             )
         })?;

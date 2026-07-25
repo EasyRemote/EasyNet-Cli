@@ -2,7 +2,7 @@
 // =====================================================
 //
 // File: src/daemon/ability/catalog/runtime_admin_contracts.rs
-// Description: Hub-owned descriptor contracts for Axon runtime-admin
+// Description: Authority-owned descriptor contracts for Axon runtime-admin
 //              handlers and descriptor-bound daemon runtime providers.
 
 use crate::daemon::ability::conformance::{
