@@ -88,8 +88,18 @@ pub fn run(args: StatusArgs) -> anyhow::Result<()> {
         rows.push(("Projection", "missing runtime.json".to_string()));
     }
     rows.push(("Status", report.status().as_wire_str().to_string()));
+    if let Some(error) = report.daemon().control_discovery_error() {
+        rows.push(("Discovery error", error.to_string()));
+    }
     let kv: Vec<(&str, &str)> = rows.iter().map(|(k, v)| (*k, v.as_str())).collect();
     output::kv_section(&kv);
+    if matches!(
+        report.status(),
+        RuntimeLifecycleStatus::DaemonDiscoveryInvalid
+    ) {
+        output::warn("Daemon discovery is invalid; canonical runtime attach is disabled until control.json is repaired or removed.");
+        return Ok(());
+    }
     if matches!(
         report.status(),
         RuntimeLifecycleStatus::ProjectionMissingProcessRunning

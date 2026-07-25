@@ -59,6 +59,11 @@ pub enum RuntimeLifecycleError {
         capability: &'static str,
     },
 
+    /// Start refused because daemon discovery exists but is invalid, so attach
+    /// identity and runtime readiness cannot be trusted.
+    #[error("daemon discovery is invalid; refusing attach/start until control.json is repaired or removed: {message}")]
+    StartRefusedInvalidDaemonDiscovery { message: String },
+
     /// Removing a stale runtime projection failed during start preflight.
     #[error("remove stale runtime projection failed: {message}")]
     ProjectionRemoveFailed { message: String },
@@ -98,6 +103,9 @@ impl RuntimeLifecycleError {
             | Self::StartRefusedMissingRuntimeCapability { .. } => {
                 Some(RuntimeLifecycleStatus::IdentityMismatch)
             }
+            Self::StartRefusedInvalidDaemonDiscovery { .. } => {
+                Some(RuntimeLifecycleStatus::DaemonDiscoveryInvalid)
+            }
             Self::ProjectionPersistFailed { .. }
             | Self::ProjectionPersistRolledBack { .. }
             | Self::ProjectionPersistRollbackFailed { .. } => {
@@ -122,6 +130,18 @@ mod tests {
         assert_eq!(
             err.status_hint(),
             Some(RuntimeLifecycleStatus::StartProjectionCommitFailed)
+        );
+    }
+
+    #[test]
+    fn invalid_discovery_error_maps_to_invalid_discovery_status() {
+        let err = RuntimeLifecycleError::StartRefusedInvalidDaemonDiscovery {
+            message: "control.json malformed".to_string(),
+        };
+
+        assert_eq!(
+            err.status_hint(),
+            Some(RuntimeLifecycleStatus::DaemonDiscoveryInvalid)
         );
     }
 }

@@ -54,6 +54,10 @@ pub enum RuntimeLifecycleStatus {
     StartProjectionCommitFailed,
     /// Stop did not reach process/socket terminal postconditions.
     StopTimedOut,
+    /// `control.json` exists but cannot be consumed as canonical daemon
+    /// discovery, so lifecycle cannot safely infer identity, endpoints, or
+    /// signer readiness.
+    DaemonDiscoveryInvalid,
 }
 
 impl RuntimeLifecycleStatus {
@@ -68,6 +72,7 @@ impl RuntimeLifecycleStatus {
             Self::IdentityMismatch => "identity_mismatch",
             Self::StartProjectionCommitFailed => "start_projection_commit_failed",
             Self::StopTimedOut => "stop_timed_out",
+            Self::DaemonDiscoveryInvalid => "daemon_discovery_invalid",
         }
     }
 }
@@ -260,6 +265,10 @@ fn classify(
 ) -> RuntimeLifecycleStatus {
     let has_projection = projection.is_some();
     let has_daemon_fact = daemon.has_daemon_fact();
+
+    if daemon.control_discovery_error().is_some() {
+        return RuntimeLifecycleStatus::DaemonDiscoveryInvalid;
+    }
 
     if daemon.control_accepting() && !daemon.invocation_accepting() {
         return RuntimeLifecycleStatus::ControlOnlyInvocationDown;
@@ -457,6 +466,23 @@ mod tests {
         assert_eq!(
             report.status(),
             RuntimeLifecycleStatus::ControlOnlyInvocationDown
+        );
+    }
+
+    #[test]
+    fn status_classifier_preserves_invalid_discovery_as_terminal_state() {
+        let daemon =
+            DaemonDiscoverySnapshot::from_invalid_discovery("control.json malformed", endpoints());
+        let report = RuntimeStatusReport::from_parts(None, daemon);
+
+        assert_eq!(
+            report.status(),
+            RuntimeLifecycleStatus::DaemonDiscoveryInvalid,
+            "invalid daemon discovery must not collapse into stopped"
+        );
+        assert_eq!(
+            report.to_json(json!({"state": "test"}))["daemon"]["control_discovery_error"],
+            "control.json malformed"
         );
     }
 }

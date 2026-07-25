@@ -394,6 +394,12 @@ impl BannerDaemonObservation {
                 dot: "●",
                 message: "runtime stop timed out".to_string(),
             },
+            RuntimeLifecycleStatus::DaemonDiscoveryInvalid => Self {
+                dot_sgr: sgr::WARN,
+                text_sgr: sgr::DIM,
+                dot: "●",
+                message: "daemon discovery invalid".to_string(),
+            },
         }
     }
 }

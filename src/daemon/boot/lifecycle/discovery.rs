@@ -64,6 +64,7 @@ impl DaemonDiscoveryObserver {
 #[derive(Debug, Clone)]
 pub struct DaemonDiscoverySnapshot {
     control_discovery: Option<ControlDiscovery>,
+    control_discovery_error: Option<String>,
     pid: Option<u32>,
     pid_alive: bool,
     pid_matches_easynet: bool,
@@ -77,7 +78,11 @@ impl DaemonDiscoverySnapshot {
     /// directory.
     pub fn capture_current() -> Self {
         let default_endpoints = DaemonEndpoints::current();
-        let control_discovery = discovery::read(&discovery::default_path()).ok().flatten();
+        let (control_discovery, control_discovery_error) =
+            match discovery::read(&discovery::default_path()) {
+                Ok(discovery) => (discovery, None),
+                Err(error) => (None, Some(error.to_string())),
+            };
         let endpoints = endpoints_from_discovery(&default_endpoints, control_discovery.as_ref());
         let discovery_pid = control_discovery.as_ref().map(|disc| disc.pid);
         let pidfile_pid = read_pidfile(&config::easynet_daemon_pid_path());
@@ -89,6 +94,7 @@ impl DaemonDiscoverySnapshot {
 
         Self {
             control_discovery,
+            control_discovery_error,
             pid,
             pid_alive,
             pid_matches_easynet,
@@ -101,7 +107,8 @@ impl DaemonDiscoverySnapshot {
     /// Whether any process-level fact proves there is daemon work to
     /// inspect or clean up.
     pub fn has_daemon_fact(&self) -> bool {
-        (self.pid_alive && self.pid_matches_easynet)
+        self.control_discovery_error.is_some()
+            || (self.pid_alive && self.pid_matches_easynet)
             || self.control_accepting
             || self.invocation_accepting
     }
@@ -110,6 +117,12 @@ impl DaemonDiscoverySnapshot {
     /// parseable.
     pub fn control_discovery(&self) -> Option<&ControlDiscovery> {
         self.control_discovery.as_ref()
+    }
+
+    /// Discovery read/parse error, when `control.json` exists but could not
+    /// be consumed as the canonical daemon discovery contract.
+    pub fn control_discovery_error(&self) -> Option<&str> {
+        self.control_discovery_error.as_deref()
     }
 
     /// Product identity declared by the daemon, when advertised.
@@ -164,7 +177,10 @@ impl DaemonDiscoverySnapshot {
 
     /// JSON representation used by CLI status and FFI-facing reports.
     pub fn to_json(&self) -> Value {
-        if self.control_discovery.is_none() && !self.has_daemon_fact() {
+        if self.control_discovery.is_none()
+            && self.control_discovery_error.is_none()
+            && !self.has_daemon_fact()
+        {
             return Value::Null;
         }
         json!({
@@ -175,6 +191,7 @@ impl DaemonDiscoverySnapshot {
             "invocation_accepting": self.invocation_accepting,
             "control_socket": self.endpoints.control().display().to_string(),
             "invocation_endpoint": self.endpoints.invocation().display().to_string(),
+            "control_discovery_error": self.control_discovery_error,
             "capability_flags": self.control_discovery.as_ref().map(|disc| disc.capability_flags.clone()).unwrap_or_default(),
             "identity": self.identity().map(|identity| json!({
                 "mode": identity.mode,
@@ -195,6 +212,7 @@ impl DaemonDiscoverySnapshot {
     ) -> Self {
         Self::from_parts_with_pid_match(
             control_discovery,
+            None,
             pid,
             pid_alive,
             pid_alive,
@@ -207,6 +225,7 @@ impl DaemonDiscoverySnapshot {
     #[cfg(test)]
     pub(crate) fn from_parts_with_pid_match(
         control_discovery: Option<ControlDiscovery>,
+        control_discovery_error: Option<String>,
         pid: Option<u32>,
         pid_alive: bool,
         pid_matches_easynet: bool,
@@ -216,11 +235,29 @@ impl DaemonDiscoverySnapshot {
     ) -> Self {
         Self {
             control_discovery,
+            control_discovery_error,
             pid,
             pid_alive,
             pid_matches_easynet,
             control_accepting,
             invocation_accepting,
+            endpoints,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_invalid_discovery(
+        control_discovery_error: impl Into<String>,
+        endpoints: DaemonEndpoints,
+    ) -> Self {
+        Self {
+            control_discovery: None,
+            control_discovery_error: Some(control_discovery_error.into()),
+            pid: None,
+            pid_alive: false,
+            pid_matches_easynet: false,
+            control_accepting: false,
+            invocation_accepting: false,
             endpoints,
         }
     }
@@ -281,6 +318,7 @@ mod tests {
     fn has_daemon_fact_rejects_reused_non_easynet_pid() {
         let snapshot = DaemonDiscoverySnapshot::from_parts_with_pid_match(
             None,
+            None,
             Some(12_345),
             true,
             false,
@@ -301,5 +339,39 @@ mod tests {
             DaemonDiscoverySnapshot::from_parts(None, None, false, false, false, endpoints());
 
         assert!(snapshot.to_json().is_null());
+    }
+
+    #[test]
+    fn invalid_discovery_is_a_daemon_fact_for_cleanup_planning() {
+        let snapshot =
+            DaemonDiscoverySnapshot::from_invalid_discovery("control.json malformed", endpoints());
+
+        assert!(
+            snapshot.has_daemon_fact(),
+            "invalid discovery is local daemon state to inspect or clean up"
+        );
+    }
+
+    #[test]
+    fn capture_current_preserves_malformed_control_discovery_error() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        std::fs::create_dir_all(config::state_dir()).expect("state dir");
+        std::fs::write(discovery::default_path(), b"{\"retired_attach_hint\":true}")
+            .expect("malformed control discovery");
+
+        let snapshot = DaemonDiscoverySnapshot::capture_current();
+
+        let error = snapshot
+            .control_discovery_error()
+            .expect("malformed discovery must be preserved");
+        assert!(
+            error.contains("control.json") && error.contains("retired_attach_hint"),
+            "error must preserve parser context: {error}"
+        );
+        assert!(
+            snapshot.control_discovery().is_none(),
+            "invalid discovery must not be reused as valid discovery evidence"
+        );
+        assert_eq!(snapshot.to_json()["control_discovery_error"], error);
     }
 }

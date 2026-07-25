@@ -3719,14 +3719,26 @@ PY
 check_control_discovery_schema_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local discovery="$cli_root/src/daemon/control/discovery.rs"
+  local lifecycle_discovery="$cli_root/src/daemon/boot/lifecycle/discovery.rs"
+  local lifecycle_status="$cli_root/src/daemon/boot/lifecycle/status.rs"
+  local lifecycle_start="$cli_root/src/daemon/boot/lifecycle/start.rs"
+  local lifecycle_stop="$cli_root/src/daemon/boot/lifecycle/stop.rs"
   [[ -f "$discovery" ]] || fail "control discovery source is missing: $discovery"
+  [[ -f "$lifecycle_discovery" ]] || fail "daemon lifecycle discovery source is missing: $lifecycle_discovery"
+  [[ -f "$lifecycle_status" ]] || fail "daemon lifecycle status source is missing: $lifecycle_status"
+  [[ -f "$lifecycle_start" ]] || fail "daemon lifecycle start source is missing: $lifecycle_start"
+  [[ -f "$lifecycle_stop" ]] || fail "daemon lifecycle stop source is missing: $lifecycle_stop"
 
-  "$PYTHON_BIN" - "$discovery" <<'PY'
+  "$PYTHON_BIN" - "$discovery" "$lifecycle_discovery" "$lifecycle_status" "$lifecycle_start" "$lifecycle_stop" <<'PY'
 import re
 import sys
 from pathlib import Path
 
 text = Path(sys.argv[1]).read_text(encoding="utf-8")
+lifecycle_discovery = Path(sys.argv[2]).read_text(encoding="utf-8")
+lifecycle_status = Path(sys.argv[3]).read_text(encoding="utf-8")
+lifecycle_start = Path(sys.argv[4]).read_text(encoding="utf-8")
+lifecycle_stop = Path(sys.argv[5]).read_text(encoding="utf-8")
 production = text.split("\n#[cfg(test)]", 1)[0]
 
 def item_with_attrs(kind: str, name: str) -> tuple[str, str]:
@@ -3796,6 +3808,37 @@ for required in (
 ):
     if required not in text:
         raise SystemExit(f"control_discovery_schema:missing:{required}")
+
+if "discovery::read(&discovery::default_path()).ok().flatten()" in lifecycle_discovery:
+    raise SystemExit("control_discovery_schema:lifecycle_silent_discovery_fallback")
+if "invalid discovery must be treated as missing" in lifecycle_discovery:
+    raise SystemExit("control_discovery_schema:lifecycle_retired_compat:invalid_discovery_as_missing")
+for required in (
+    "control_discovery_error: Option<String>",
+    "pub fn control_discovery_error(&self) -> Option<&str>",
+    "capture_current_preserves_malformed_control_discovery_error",
+    "malformed discovery must be preserved",
+    "invalid_discovery_is_a_daemon_fact_for_cleanup_planning",
+    '"control_discovery_error"',
+):
+    if required not in lifecycle_discovery:
+        raise SystemExit(f"control_discovery_schema:lifecycle_missing:{required}")
+for required in (
+    "DaemonDiscoveryInvalid",
+    '"daemon_discovery_invalid"',
+    "daemon.control_discovery_error().is_some()",
+    "status_classifier_preserves_invalid_discovery_as_terminal_state",
+):
+    if required not in lifecycle_status:
+        raise SystemExit(f"control_discovery_schema:lifecycle_status_missing:{required}")
+for required in (
+    "StartRefusedInvalidDaemonDiscovery",
+    "start_preflight_refuses_invalid_daemon_discovery",
+):
+    if required not in lifecycle_start:
+        raise SystemExit(f"control_discovery_schema:lifecycle_start_missing:{required}")
+if "stop_plan_treats_invalid_discovery_as_cleanup_state" not in lifecycle_stop:
+    raise SystemExit("control_discovery_schema:lifecycle_stop_missing:invalid_discovery_cleanup")
 PY
 }
 

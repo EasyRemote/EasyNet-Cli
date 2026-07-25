@@ -151,6 +151,15 @@ pub(crate) fn preflight_start(
         | RuntimeLifecycleStatus::StopTimedOut => {
             return Err(RuntimeLifecycleError::StartRefusedMissingDaemonIdentity);
         }
+        RuntimeLifecycleStatus::DaemonDiscoveryInvalid => {
+            return Err(RuntimeLifecycleError::StartRefusedInvalidDaemonDiscovery {
+                message: report
+                    .daemon()
+                    .control_discovery_error()
+                    .unwrap_or("lifecycle invariant violated: invalid discovery status has no discovery error")
+                    .to_string(),
+            });
+        }
     };
     Ok(RuntimeStartPreflightReport::new(action))
 }
@@ -336,6 +345,25 @@ mod tests {
                 RuntimeLifecycleError::StartRefusedControlOnlyInvocationDown { .. }
             ),
             "Invariant 3: start must not attach to control-only daemon"
+        );
+    }
+
+    #[test]
+    fn start_preflight_refuses_invalid_daemon_discovery() {
+        let daemon =
+            DaemonDiscoverySnapshot::from_invalid_discovery("control.json malformed", endpoints());
+        let status = RuntimeStatusReport::from_parts(None, daemon);
+
+        let err = preflight_start(&RuntimeStartRequest::hub("tenant-test"), &status)
+            .expect_err("invalid daemon discovery must be refused");
+
+        assert!(
+            matches!(
+                err,
+                RuntimeLifecycleError::StartRefusedInvalidDaemonDiscovery { ref message }
+                    if message.contains("control.json malformed")
+            ),
+            "invalid discovery must remain the explicit refusal cause: {err}"
         );
     }
 

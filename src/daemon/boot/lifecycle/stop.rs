@@ -121,6 +121,22 @@ mod tests {
     }
 
     #[test]
+    fn stop_plan_treats_invalid_discovery_as_cleanup_state() {
+        let daemon =
+            DaemonDiscoverySnapshot::from_invalid_discovery("control.json malformed", endpoints());
+        let report = RuntimeStatusReport::from_parts(None, daemon);
+
+        let plan = RuntimeStopPlan::from_report(&report);
+
+        assert!(
+            matches!(plan.shape(), RuntimeStopShape::DaemonOnly),
+            "invalid discovery must not be hidden as a stateless runtime"
+        );
+        assert_eq!(plan.discovery_pid(), None);
+        assert!(!plan.should_cleanup_runtime_projection());
+    }
+
+    #[test]
     fn stop_plan_maps_runtime_projection_to_daemon_only() {
         let projection = RuntimeSessionProjection::from_state(config::RuntimeState {
             endpoint: "/tmp/easynet-stop-daemon.sock".to_string(),

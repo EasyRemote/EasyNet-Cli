@@ -199,6 +199,7 @@ fn reset_runtime_is_active(status: RuntimeLifecycleStatus) -> bool {
         RuntimeLifecycleStatus::Running
             | RuntimeLifecycleStatus::ProjectionMissingProcessRunning
             | RuntimeLifecycleStatus::ControlOnlyInvocationDown
+            | RuntimeLifecycleStatus::DaemonDiscoveryInvalid
     )
 }
 
