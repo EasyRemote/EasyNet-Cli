@@ -190,13 +190,13 @@ fn register_with_repository(
     reg.register_rpc_with_envelope_and_owner(
         ABILITY_CREATE_CALL,
         owner.clone(),
-        Arc::new(move |envelope, args| create.create_call(hub_authority(&envelope)?, args)),
+        Arc::new(move |envelope, args| create.create_call(signaling_authority(&envelope)?, args)),
     );
     let show = Arc::clone(&service);
     reg.register_rpc_with_envelope_and_owner(
         ABILITY_SHOW_CALL,
         owner.clone(),
-        Arc::new(move |envelope, args| show.show_call(hub_authority(&envelope)?, args)),
+        Arc::new(move |envelope, args| show.show_call(signaling_authority(&envelope)?, args)),
     );
     let join = Arc::clone(&service);
     reg.register_rpc_with_envelope_and_owner(
@@ -204,7 +204,7 @@ fn register_with_repository(
         owner.clone(),
         Arc::new(move |envelope, args| {
             let command_id = mutation_command_id(&envelope);
-            join.join_call(hub_authority(&envelope)?, &command_id, args)
+            join.join_call(signaling_authority(&envelope)?, &command_id, args)
         }),
     );
     let leave = Arc::clone(&service);
@@ -213,7 +213,7 @@ fn register_with_repository(
         owner.clone(),
         Arc::new(move |envelope, args| {
             let command_id = mutation_command_id(&envelope);
-            leave.leave_call(hub_authority(&envelope)?, &command_id, args)
+            leave.leave_call(signaling_authority(&envelope)?, &command_id, args)
         }),
     );
     let end = Arc::clone(&service);
@@ -222,14 +222,14 @@ fn register_with_repository(
         owner.clone(),
         Arc::new(move |envelope, args| {
             let command_id = mutation_command_id(&envelope);
-            end.end_call(hub_authority(&envelope)?, &command_id, args)
+            end.end_call(signaling_authority(&envelope)?, &command_id, args)
         }),
     );
     let watch = Arc::clone(&service);
     reg.register_rpc_with_envelope_and_owner(
         ABILITY_WATCH_CALL,
         owner.clone(),
-        Arc::new(move |envelope, args| watch.watch_call(hub_authority(&envelope)?, args)),
+        Arc::new(move |envelope, args| watch.watch_call(signaling_authority(&envelope)?, args)),
     );
     let report = Arc::clone(&service);
     reg.register_rpc_with_envelope_and_owner(
@@ -237,14 +237,14 @@ fn register_with_repository(
         owner.clone(),
         Arc::new(move |envelope, args| {
             let command_id = mutation_command_id(&envelope);
-            report.report_metrics(hub_authority(&envelope)?, &command_id, args)
+            report.report_metrics(signaling_authority(&envelope)?, &command_id, args)
         }),
     );
     let list = Arc::clone(&service);
     reg.register_rpc_with_envelope_and_owner(
         ABILITY_LIST_CALLS,
         owner,
-        Arc::new(move |envelope, args| list.list_calls(hub_authority(&envelope)?, args)),
+        Arc::new(move |envelope, args| list.list_calls(signaling_authority(&envelope)?, args)),
     );
 }
 
@@ -256,17 +256,17 @@ fn require_str<'a>(args: &'a Value, key: &str, ability: &str) -> anyhow::Result<
         .ok_or_else(|| anyhow::anyhow!("{ability}: `{key}` is required"))
 }
 
-fn hub_authority(envelope: &EnvelopeContext) -> anyhow::Result<&str> {
+fn signaling_authority(envelope: &EnvelopeContext) -> anyhow::Result<&str> {
     let authority = crate::core::ura::parse_ura(envelope.callee()).map_err(|error| {
         anyhow::anyhow!(
-            "{}: invalid Hub callee {:?}: {error}",
+            "{}: invalid Authority callee {:?}: {error}",
             envelope.ability(),
             envelope.callee()
         )
     })?;
     if authority.kind != crate::core::ura::URAKind::Authority {
         anyhow::bail!(
-            "{}: voice signaling requires a Hub authority callee, got {:?}",
+            "{}: voice signaling requires an Authority callee, got {:?}",
             envelope.ability(),
             envelope.callee()
         );
@@ -1372,7 +1372,7 @@ mod tests {
     }
 
     #[test]
-    fn call_ids_are_scoped_by_hub_authority() {
+    fn call_ids_are_scoped_by_authority() {
         let service = service();
         let call_id = fresh_call_id("authority");
         service
@@ -1394,7 +1394,7 @@ mod tests {
     }
 
     #[test]
-    fn voice_handler_rejects_non_hub_callee() {
+    fn voice_handler_rejects_non_authority_callee() {
         let device = crate::core::ura::device_ura("voice-test", "device-1");
         let envelope = EnvelopeContext::for_test_targeted_ability(
             &device,
@@ -1402,7 +1402,8 @@ mod tests {
             ABILITY_CREATE_CALL,
             &device,
         );
-        let error = hub_authority(&envelope).expect_err("Device must not own voice signaling");
-        assert!(error.to_string().contains("requires a Hub authority"));
+        let error =
+            signaling_authority(&envelope).expect_err("Device must not own voice signaling");
+        assert!(error.to_string().contains("requires an Authority callee"));
     }
 }

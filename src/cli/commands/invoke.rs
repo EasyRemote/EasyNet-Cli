@@ -60,7 +60,7 @@ pub struct InvokeArgs {
     /// version.
     pub ability_ura: String,
     /// Pin the invocation to a remote node: a canonical Device URA
-    /// (`easynet:///r/<realm>/device/<node_id>`) or Hub URA
+    /// (`easynet:///r/<realm>/device/<node_id>`) or Authority URA
     /// (`easynet:///r/<realm>/authority`). The call routes through the
     /// local daemon's canonical `Invocation::Invoke` RPC — the
     /// cross-device main channel. Builds without canonical remote invocation
@@ -316,7 +316,7 @@ mod tests {
         // preserves the retired not-wired path.
         assert!(
             (msg.contains("--node") && msg.contains("unsupported"))
-                || msg.contains("canonical Axon Device or Hub URA"),
+                || msg.contains("canonical Axon Device or Authority URA"),
             "error must surface a canonical --node error, got: {msg}"
         );
         assert!(

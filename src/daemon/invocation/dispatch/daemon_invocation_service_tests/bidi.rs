@@ -55,7 +55,9 @@ async fn exact_bidi_route_registration_rejects_device_owner() {
         .await
         .expect_err("session.open cannot register under a Device owner");
     assert!(
-        error.to_string().contains("canonical realm Hub owner"),
+        error
+            .to_string()
+            .contains("canonical realm Authority owner"),
         "{error}"
     );
 }

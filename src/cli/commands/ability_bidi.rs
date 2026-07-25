@@ -32,7 +32,7 @@ pub enum BidiOutputFormat {
 pub struct BidiArgs {
     /// Canonical Ability URA returned by `easynet ability list`.
     pub ability_ura: String,
-    /// Pin the bidi session to a remote Device or Hub URA through the
+    /// Pin the bidi session to a remote Device or Authority URA through the
     /// local daemon's canonical InvokeBidi RPC.
     #[arg(long, short = 'n', value_name = "URA")]
     pub node: Option<String>,

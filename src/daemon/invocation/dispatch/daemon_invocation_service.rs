@@ -605,7 +605,7 @@ fn normalize_daemon_route_owners(
             crate::core::ura::URAKind::Device | crate::core::ura::URAKind::Authority
         ) {
             return Err(axon_sdk::invocation::AxonError::invalid_argument(
-                "daemon unary route owner must be a canonical Device or Hub URA",
+                "daemon unary route owner must be a canonical Device or Authority URA",
             ));
         }
         normalized.insert(owner_ura.to_string());
@@ -878,7 +878,7 @@ impl DaemonInvocationService {
         })?;
         if parsed.kind != crate::core::ura::URAKind::Authority {
             return Err(axon_sdk::invocation::AxonError::invalid_argument(
-                "daemon exact bidi routes require the canonical realm Hub owner",
+                "daemon exact bidi routes require the canonical realm Authority owner",
             ));
         }
         let registration = self

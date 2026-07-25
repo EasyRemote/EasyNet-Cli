@@ -36,7 +36,7 @@ pub async fn build_session_envelope_open(
             ABILITY_SESSION_OPEN,
             crate::daemon::ability::CallMode::Bidi,
         )
-        .expect("session.open descriptor ref is well-formed for the realm Hub URA");
+        .expect("session.open descriptor ref is well-formed for the realm Authority URA");
     let request = crate::daemon::invocation::ProtoEnvelope::from_target(
         caller_ura,
         &hub_ura,

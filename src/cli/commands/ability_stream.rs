@@ -38,7 +38,7 @@ pub enum StreamOutputFormat {
 pub struct StreamArgs {
     /// Canonical Ability URA returned by `easynet ability list`.
     pub ability_ura: String,
-    /// Pin the stream invocation to a remote Device or Hub URA through the
+    /// Pin the stream invocation to a remote Device or Authority URA through the
     /// local daemon's canonical InvokeStream RPC.
     #[arg(long, short = 'n', value_name = "URA")]
     pub node: Option<String>,

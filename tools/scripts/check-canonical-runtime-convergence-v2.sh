@@ -860,6 +860,44 @@ check_public_descriptor_authority_vocabulary_contract() {
   fi
 }
 
+check_runtime_authority_vocabulary_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local remote_invoke="$cli_root/src/daemon/invocation/routing/remote_invoke.rs"
+  local cli_invoke="$cli_root/src/cli/commands/invoke.rs"
+  local cli_stream="$cli_root/src/cli/commands/ability_stream.rs"
+  local cli_bidi="$cli_root/src/cli/commands/ability_bidi.rs"
+  local voice="$cli_root/src/daemon/ability/builtins/resources/voice.rs"
+  local daemon_service="$cli_root/src/daemon/invocation/dispatch/daemon_invocation_service.rs"
+  local bidi_tests="$cli_root/src/daemon/invocation/dispatch/daemon_invocation_service_tests/bidi.rs"
+  local session_envelope="$cli_root/src/daemon/invocation/bidi/session_initiator/envelope.rs"
+  local directory="$cli_root/src/daemon/federation/directory.rs"
+  local mission_gateway="$cli_root/src/daemon/execution/mission/invocation_gateway.rs"
+
+  for file in "$remote_invoke" "$cli_invoke" "$cli_stream" "$cli_bidi" "$voice" \
+    "$daemon_service" "$bidi_tests" "$session_envelope" "$directory" "$mission_gateway"; do
+    [[ -f "$file" ]] || fail "runtime authority vocabulary source is missing: ${file#$cli_root/}"
+  done
+
+  if rg -n 'Device or Hub|canonical Axon Device or Hub|Hub authority callee|requires a Hub authority|canonical realm Hub owner|Hub URA; got|remote Mission target must be a Device or Hub' \
+    "$remote_invoke" "$cli_invoke" "$cli_stream" "$cli_bidi" "$voice" \
+    "$daemon_service" "$bidi_tests" "$session_envelope" "$directory" "$mission_gateway"; then
+    fail "runtime invocation/route diagnostics preserve Hub vocabulary for Authority URA owners"
+  fi
+
+  if ! rg -q 'Device or Authority URA' "$remote_invoke" "$cli_invoke" "$cli_stream" "$cli_bidi" "$mission_gateway"; then
+    fail "runtime remote invocation diagnostics must describe Authority URA owners"
+  fi
+  if ! rg -q 'voice signaling requires an Authority callee' "$voice"; then
+    fail "voice signaling diagnostics must describe Authority callees"
+  fi
+  if ! rg -q 'canonical realm Authority owner' "$daemon_service" "$bidi_tests"; then
+    fail "daemon route-owner diagnostics must describe canonical Authority owners"
+  fi
+  if ! rg -q 'Authority URA; got' "$directory"; then
+    fail "federation directory signer diagnostics must describe Authority URA ownership"
+  fi
+}
+
 check_sdk_runtime_admin_authority_session_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local go_admin="$cli_root/sdk/go/runtime_admin.go"
@@ -21005,6 +21043,7 @@ EOF
   check_python_sdk_runtime_addressing_kind_contract
   check_sdk_managed_signing_authority_route_contract
   check_sdk_runtime_admin_authority_session_contract
+  check_runtime_authority_vocabulary_contract
   check_provider_route_manifest_neutrality_contract
   check_advertise_agent_ingress_contract
   check_agent_start_model_intent_contract
@@ -21429,4 +21468,5 @@ check_sdk_session_authority_binding_facade_contract
 check_sdk_provider_managed_signing_custody_contract
 check_sdk_runtime_receipt_type_state_binding_contract
 check_public_descriptor_authority_vocabulary_contract
+check_runtime_authority_vocabulary_contract
 echo "canonical-runtime-convergence-v2: OK"

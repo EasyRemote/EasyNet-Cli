@@ -786,7 +786,7 @@ impl FederatedDirectorySubscriptionIssuer {
         })?;
         if parsed.kind != crate::core::ura::URAKind::Authority {
             anyhow::bail!(
-                "directory subscription signer must be bound to a Hub URA; got `{owner_ura}`"
+                "directory subscription signer must be bound to an Authority URA; got `{owner_ura}`"
             );
         }
         Ok(Self {

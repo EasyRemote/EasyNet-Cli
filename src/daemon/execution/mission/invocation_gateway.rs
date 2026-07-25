@@ -159,7 +159,7 @@ impl MissionInvocationRequest {
             crate::core::ura::URAKind::Device | crate::core::ura::URAKind::Authority
         ) {
             anyhow::bail!(
-                "remote Mission target must be a Device or Hub URA, got {}",
+                "remote Mission target must be a Device or Authority URA, got {}",
                 parsed.kind
             );
         }
