@@ -16,7 +16,7 @@ from easynet_sdk import (
     default_environment,
     is_code,
 )
-from easynet_sdk._cabi import EXPECTED_ABI_VERSION, CLILibrary
+from easynet_sdk._cabi import EXPECTED_ABI_VERSION, RuntimeCABILibrary
 from easynet_sdk.axon_addressing import AddressingClient, AxonAddressingTransport
 from easynet_sdk.runtime_ability import RuntimeCallContext
 
@@ -41,7 +41,10 @@ downstreamProfileSymbols = (
 
 
 def _load_patch(raw: FakeRawCABI):
-    return patch("easynet_sdk._cabi.CLILibrary.load", return_value=CLILibrary(raw))
+    return patch(
+        "easynet_sdk._cabi.RuntimeCABILibrary.load",
+        return_value=RuntimeCABILibrary(raw),
+    )
 
 
 class SdkEnvironmentTests(unittest.TestCase):

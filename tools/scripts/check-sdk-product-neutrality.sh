@@ -62,6 +62,12 @@ python_consumer_boundary_product_marker_violations() {
     "$consumer_boundary"
 }
 
+python_cabi_product_adapter_name_violations() {
+  local cabi="${1:-sdk/python/easynet_sdk/_cabi.py}"
+  [[ -f "$cabi" ]] || return 0
+  rg -n '\bCLILibrary\b|EasyNet-Cli C ABI|EasyNet CLI C ABI' "$cabi"
+}
+
 python_runtime_admin_session_projection_violations() {
   local runtime_admin="${1:-sdk/python/easynet_sdk/runtime_admin.py}"
   [[ -f "$runtime_admin" ]] || return 0
@@ -300,6 +306,13 @@ if [[ "${1:-}" == "--self-test" ]]; then
     fail "self-test failed to detect product runtime-host marker in Python consumer boundary"
   fi
   rm -f "$injected"
+  injected="$tmp/sdk/python/easynet_sdk/_cabi.py"
+  mkdir -p "$(dirname "$injected")"
+  printf 'class CLILibrary:\n    """Typed binding for the generic EasyNet-Cli C ABI v6 surface."""\n' >"$injected"
+  if ! python_cabi_product_adapter_name_violations "$injected" >/dev/null; then
+    fail "self-test failed to detect product C ABI adapter naming in Python SDK"
+  fi
+  rm -f "$injected"
   mkdir -p "$tmp/sdk/node/provider/easynet"
   retired_output="$(retired_product_sdk_module_violations "$tmp")"
   if ! grep -Fxq "sdk/node/provider/easynet" <<<"$retired_output"; then
@@ -501,6 +514,11 @@ fi
 if python_consumer_boundary_product_marker_violations \
   "$ROOT/sdk/python/easynet_sdk/consumer_boundary.py"; then
   fail "product runtime-host marker leaked into Python SDK consumer boundary policy"
+fi
+
+if python_cabi_product_adapter_name_violations \
+  "$ROOT/sdk/python/easynet_sdk/_cabi.py"; then
+  fail "product C ABI adapter naming leaked into Python SDK runtime transport"
 fi
 
 python_runtime_admin_session_projection_violations \

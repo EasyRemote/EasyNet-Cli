@@ -30,15 +30,15 @@ _CALLBACK_INBOXES: dict[int, "_CallbackInbox"] = {}
 _NEXT_CALLBACK_TOKEN = 1
 
 
-class CLILibrary:
-    """Typed binding for the generic EasyNet-Cli C ABI v6 surface."""
+class RuntimeCABILibrary:
+    """Typed binding for the generic runtime C ABI v6 surface."""
 
     def __init__(self, raw: Any) -> None:
         self._raw = raw
         self._bind_symbols()
 
     @classmethod
-    def load(cls, path: str | None = None) -> "CLILibrary":
+    def load(cls, path: str | None = None) -> "RuntimeCABILibrary":
         """Load ``libeasynet_cli`` and verify the ABI version."""
 
         candidates: list[str] = []
@@ -596,7 +596,7 @@ class CLILibrary:
 class CABIDiscoveryTransport:
     """Feature discovery transport backed by C ABI v6."""
 
-    lib: CLILibrary
+    lib: RuntimeCABILibrary
     _closed: bool = False
 
     def feature_discovery(self) -> bytes:
@@ -612,7 +612,7 @@ class CABIDiscoveryTransport:
 class CABIRuntimeLifecycleTransport:
     """Runtime host lifecycle transport backed by generic C ABI v6."""
 
-    lib: CLILibrary
+    lib: RuntimeCABILibrary
     _handles: dict[str, int] = field(default_factory=dict)
     _status_cache: dict[str, dict[str, object]] = field(default_factory=dict)
     _closed: bool = False
@@ -861,7 +861,7 @@ class _CABIPreparedHandleRegistry:
 class CABIRuntimeTransport:
     """Runtime Core and Health transport backed by C ABI v6."""
 
-    lib: CLILibrary
+    lib: RuntimeCABILibrary
     handle: int
     owns_handle: bool = False
     _prepared_handles: _CABIPreparedHandleRegistry = field(
@@ -1094,7 +1094,7 @@ class CABIRuntimeTransport:
 class CABIRuntimeConnector:
     """RuntimeConnection connector backed by C ABI runtime lifecycle calls."""
 
-    lib: CLILibrary
+    lib: RuntimeCABILibrary
     _lifecycle: CABIRuntimeLifecycleTransport = field(init=False)
     _runtime: CABIRuntimeTransport | None = None
     _closed: bool = False
@@ -1499,7 +1499,7 @@ def open_cabi_runtime_lifecycle_transport(
 ) -> CABIRuntimeLifecycleTransport:
     """Open a C ABI runtime host lifecycle transport."""
 
-    return CABIRuntimeLifecycleTransport(lib=CLILibrary.load(library_path))
+    return CABIRuntimeLifecycleTransport(lib=RuntimeCABILibrary.load(library_path))
 
 
 def open_cabi_runtime_transport(
@@ -1509,7 +1509,7 @@ def open_cabi_runtime_transport(
 ) -> CABIRuntimeTransport:
     """Open an owned C ABI runtime transport using ``runtime_init``."""
 
-    lib = CLILibrary.load(library_path)
+    lib = RuntimeCABILibrary.load(library_path)
     handle = lib.init(control_path)
     return CABIRuntimeTransport(lib=lib, handle=handle, owns_handle=True)
 
@@ -1520,7 +1520,7 @@ def open_cabi_runtime_connector(
 ) -> CABIRuntimeConnector:
     """Open a C ABI-backed RuntimeConnection connector."""
 
-    return CABIRuntimeConnector(lib=CLILibrary.load(library_path))
+    return CABIRuntimeConnector(lib=RuntimeCABILibrary.load(library_path))
 
 
 def _optional_c_string(value: str) -> bytes | None:

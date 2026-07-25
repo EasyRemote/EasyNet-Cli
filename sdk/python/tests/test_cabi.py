@@ -16,7 +16,7 @@ from easynet_sdk import (
 from easynet_sdk._cabi import (
     CABIRuntimeLifecycleTransport,
     CABIRuntimeTransport,
-    CLILibrary,
+    RuntimeCABILibrary,
     EXPECTED_ABI_VERSION,
     MAX_CABI_CALLBACK_QUEUE,
     _CABIStreamTransport,
@@ -593,7 +593,7 @@ class CABITransportTests(unittest.TestCase):
 
     def test_library_binds_only_generic_v6_symbols(self) -> None:
         raw = FakeRawCABI()
-        library = CLILibrary(raw)
+        library = RuntimeCABILibrary(raw)
 
         library.require_abi()
         features = json.loads(library.feature_discovery())
@@ -605,7 +605,7 @@ class CABITransportTests(unittest.TestCase):
     def test_library_exposes_runtime_host_not_daemon_lifecycle_methods(self) -> None:
         lifecycle_methods = {
             name
-            for name in dir(CLILibrary)
+            for name in dir(RuntimeCABILibrary)
             if name.endswith(
                 (
                     "_start",
@@ -629,7 +629,7 @@ class CABITransportTests(unittest.TestCase):
 
     def test_runtime_host_uses_generic_invocation(self) -> None:
         raw = FakeRawCABI()
-        lifecycle = CABIRuntimeLifecycleTransport(CLILibrary(raw))
+        lifecycle = CABIRuntimeLifecycleTransport(RuntimeCABILibrary(raw))
         self.assertEqual(
             RuntimeHostStartConfig(
                 mode=RuntimeHostMode.EDGE,
@@ -711,7 +711,7 @@ class CABITransportTests(unittest.TestCase):
 
     def test_runtime_handle_has_no_product_profile_factory(self) -> None:
         raw = FakeRawCABI()
-        lifecycle = CABIRuntimeLifecycleTransport(CLILibrary(raw))
+        lifecycle = CABIRuntimeLifecycleTransport(RuntimeCABILibrary(raw))
         handle = RuntimeLifecycle(lifecycle).start(
             RuntimeHostStartConfig(
                 mode=RuntimeHostMode.EDGE,
@@ -723,7 +723,7 @@ class CABITransportTests(unittest.TestCase):
 
     def test_runtime_transport_closes_owned_handle_once(self) -> None:
         raw = FakeRawCABI()
-        transport = CABIRuntimeTransport(CLILibrary(raw), 42, owns_handle=True)
+        transport = CABIRuntimeTransport(RuntimeCABILibrary(raw), 42, owns_handle=True)
         runtime = RuntimeClient(transport)
 
         runtime.close()
@@ -762,7 +762,7 @@ class CABITransportTests(unittest.TestCase):
                 )
 
         raw = NativeDescriptorRaw()
-        transport = CABIRuntimeTransport(CLILibrary(raw), 42, owns_handle=False)
+        transport = CABIRuntimeTransport(RuntimeCABILibrary(raw), 42, owns_handle=False)
 
         resolved = json.loads(
             transport.resolve_descriptor_ref(
@@ -793,7 +793,9 @@ class CABITransportTests(unittest.TestCase):
         )
 
     def test_descriptor_resolution_projects_native_last_error(self) -> None:
-        transport = CABIRuntimeTransport(CLILibrary(FakeRawCABI()), 42, owns_handle=False)
+        transport = CABIRuntimeTransport(
+            RuntimeCABILibrary(FakeRawCABI()), 42, owns_handle=False
+        )
 
         with self.assertRaises(SDKError) as raised:
             transport.resolve_descriptor_ref(
@@ -814,7 +816,7 @@ class CABITransportTests(unittest.TestCase):
 
     def test_prepare_uses_opaque_c_handle_when_request_id_repeats(self) -> None:
         raw = FakeRawCABI()
-        transport = CABIRuntimeTransport(CLILibrary(raw), 42, owns_handle=False)
+        transport = CABIRuntimeTransport(RuntimeCABILibrary(raw), 42, owns_handle=False)
 
         first = json.loads(transport.prepare(b"{}", b"{}").decode("utf-8"))
         second = json.loads(transport.prepare(b"{}", b"{}").decode("utf-8"))
@@ -825,7 +827,7 @@ class CABITransportTests(unittest.TestCase):
 
     def test_prepare_rejects_duplicate_prepared_handle_id(self) -> None:
         raw = FakeRawCABI()
-        transport = CABIRuntimeTransport(CLILibrary(raw), 42, owns_handle=False)
+        transport = CABIRuntimeTransport(RuntimeCABILibrary(raw), 42, owns_handle=False)
 
         first = json.loads(transport.prepare(b"{}", b"{}").decode("utf-8"))
         raw.next_prepared_id = int(first["prepared_id"])
@@ -840,7 +842,7 @@ class CABITransportTests(unittest.TestCase):
 
     def test_prepare_material_only_does_not_retain_prepared_handle(self) -> None:
         raw = FakeRawCABI()
-        transport = CABIRuntimeTransport(CLILibrary(raw), 42, owns_handle=False)
+        transport = CABIRuntimeTransport(RuntimeCABILibrary(raw), 42, owns_handle=False)
 
         material = json.loads(
             transport.prepare(b"{}", b'{"material_only":true}').decode("utf-8")
@@ -855,7 +857,7 @@ class CABITransportTests(unittest.TestCase):
 
     def test_submit_signed_rejects_request_id_only_prepared_reference(self) -> None:
         raw = FakeRawCABI()
-        transport = CABIRuntimeTransport(CLILibrary(raw), 42, owns_handle=False)
+        transport = CABIRuntimeTransport(RuntimeCABILibrary(raw), 42, owns_handle=False)
         transport.prepare(b"{}", b"{}")
 
         with self.assertRaises(SDKError) as caught:
@@ -929,7 +931,7 @@ class CABITransportTests(unittest.TestCase):
     def _observe_stream_lifecycle(self):
         raw = FakeRawCABI()
         runtime = RuntimeClient(
-            CABIRuntimeTransport(CLILibrary(raw), 42, owns_handle=False)
+            CABIRuntimeTransport(RuntimeCABILibrary(raw), 42, owns_handle=False)
         )
         self.addCleanup(runtime.close)
 
@@ -943,7 +945,7 @@ class CABITransportTests(unittest.TestCase):
     def _observe_bidi_lifecycle(self):
         raw = FakeRawCABI()
         runtime = RuntimeClient(
-            CABIRuntimeTransport(CLILibrary(raw), 42, owns_handle=False)
+            CABIRuntimeTransport(RuntimeCABILibrary(raw), 42, owns_handle=False)
         )
         self.addCleanup(runtime.close)
         session = runtime.open_bidi(
@@ -964,7 +966,7 @@ class CABITransportTests(unittest.TestCase):
         raw = FakeRawCABI()
         raw.overflow_callbacks = True
         runtime = RuntimeClient(
-            CABIRuntimeTransport(CLILibrary(raw), 42, owns_handle=False)
+            CABIRuntimeTransport(RuntimeCABILibrary(raw), 42, owns_handle=False)
         )
         self.addCleanup(runtime.close)
 
@@ -1002,7 +1004,7 @@ class CABITransportTests(unittest.TestCase):
     def test_cabi_provider_owns_stream_receive_deadline(self) -> None:
         raw = FakeRawCABI()
         runtime = RuntimeClient(
-            CABIRuntimeTransport(CLILibrary(raw), 42, owns_handle=False)
+            CABIRuntimeTransport(RuntimeCABILibrary(raw), 42, owns_handle=False)
         )
         self.addCleanup(runtime.close)
 
@@ -1020,7 +1022,7 @@ class CABITransportTests(unittest.TestCase):
     def test_cabi_provider_owns_bidi_receive_deadline(self) -> None:
         raw = FakeRawCABI()
         runtime = RuntimeClient(
-            CABIRuntimeTransport(CLILibrary(raw), 42, owns_handle=False)
+            CABIRuntimeTransport(RuntimeCABILibrary(raw), 42, owns_handle=False)
         )
         self.addCleanup(runtime.close)
         session = runtime.open_bidi(
@@ -1051,7 +1053,7 @@ class CABITransportTests(unittest.TestCase):
     def test_cabi_provider_keeps_close_send_distinct_from_cancel(self) -> None:
         raw = FakeRawCABI()
         runtime = RuntimeClient(
-            CABIRuntimeTransport(CLILibrary(raw), 42, owns_handle=False)
+            CABIRuntimeTransport(RuntimeCABILibrary(raw), 42, owns_handle=False)
         )
         self.addCleanup(runtime.close)
         session = runtime.open_bidi(
@@ -1084,7 +1086,7 @@ class CABITransportTests(unittest.TestCase):
     def test_cabi_provider_rejects_missing_bidi_frame_zero(self) -> None:
         raw = FakeRawCABI()
         runtime = RuntimeClient(
-            CABIRuntimeTransport(CLILibrary(raw), 42, owns_handle=False)
+            CABIRuntimeTransport(RuntimeCABILibrary(raw), 42, owns_handle=False)
         )
         self.addCleanup(runtime.close)
 

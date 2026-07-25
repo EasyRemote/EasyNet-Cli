@@ -163,7 +163,7 @@ class SdkEnvironment:
         from . import _cabi
 
         transport = _cabi.CABIDiscoveryTransport(
-            _cabi.CLILibrary.load(self.library_path)
+            _cabi.RuntimeCABILibrary.load(self.library_path)
         )
         return self._track(Client(transport))
 

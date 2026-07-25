@@ -25,7 +25,7 @@ from easynet_sdk import (
     StreamState,
     is_code,
 )
-from easynet_sdk._cabi import CLILibrary
+from easynet_sdk._cabi import RuntimeCABILibrary
 from easynet_sdk.connection import ConnectOptions, RuntimeConnection
 
 from test_cabi import FakeRawCABI
@@ -38,7 +38,10 @@ from test_signing import signer_handle
 
 
 def _load_patch(raw: FakeRawCABI):
-    return patch("easynet_sdk._cabi.CLILibrary.load", return_value=CLILibrary(raw))
+    return patch(
+        "easynet_sdk._cabi.RuntimeCABILibrary.load",
+        return_value=RuntimeCABILibrary(raw),
+    )
 
 
 class RuntimeInvocationTransportTests(unittest.TestCase):
