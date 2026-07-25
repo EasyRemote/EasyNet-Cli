@@ -8916,7 +8916,7 @@ for required in (
 
 for test in (
     "device_request_rejects_malformed_credentials_before_remote_guess",
-    "device_request_resolves_remote_device_when_credentials_are_unpaired",
+    "device_request_rejects_unpaired_credentials_before_remote_guess",
     "device_request_resolves_known_local_node_to_system_target",
 ):
     if test not in text:
@@ -21732,7 +21732,7 @@ fn device_request(tenant: &str, node_id: &str, ability: &str, arguments: Value) 
 }
 #[cfg(test)]
 mod tests {
-    fn device_request_resolves_remote_device_when_credentials_are_unpaired() {}
+    fn device_request_rejects_unpaired_credentials_before_remote_guess() {}
 }
 EOF
   if ( check_eal_device_target_identity_contract "$tmp/eal-device-target-identity-legacy" ) >/dev/null 2>&1; then

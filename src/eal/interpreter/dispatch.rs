@@ -144,10 +144,11 @@ fn device_request(
     arguments: Value,
 ) -> Result<MissionInvocationRequest, EalError> {
     let node_id = node_id.trim();
-    if node_id.is_empty()
-        || node_id.eq_ignore_ascii_case("local")
-        || EalLocalNodeIdentity::load().matches_node(node_id)?
-    {
+    if node_id.is_empty() || node_id.eq_ignore_ascii_case("local") {
+        return Ok(MissionInvocationRequest::system(ability, arguments));
+    }
+    let local_identity = EalLocalNodeIdentity::load();
+    if local_identity.matches_node(node_id)? {
         return Ok(MissionInvocationRequest::system(ability, arguments));
     }
     let target = if crate::core::ura::parse_ura(node_id).is_ok() {
@@ -196,7 +197,9 @@ impl EalLocalNodeIdentity {
     fn matches_node(&self, node_id: &str) -> Result<bool, EalError> {
         match self {
             Self::Known(local_node_id) => Ok(local_node_id == node_id),
-            Self::Unpaired => Ok(false),
+            Self::Unpaired => Err(EalError::Unavailable(
+                "EAL device target resolution requires paired local credentials before remote device dispatch".to_string(),
+            )),
             Self::Unavailable { reason } => Err(EalError::Unavailable(reason.clone())),
         }
     }
@@ -324,15 +327,18 @@ mod tests {
     }
 
     #[test]
-    fn device_request_resolves_remote_device_when_credentials_are_unpaired() {
+    fn device_request_rejects_unpaired_credentials_before_remote_guess() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
 
         let request = device_request("acme", "node-b", "observe.health", json!({}))
-            .expect("explicit tenant allows remote device target without local pairing");
+            .expect_err("unpaired credentials must not synthesize a remote device target");
 
-        assert_eq!(
-            request.target(),
-            &MissionInvocationTarget::RemoteNode("easynet:///r/acme/device/node-b".to_string())
+        assert_eq!(request.error_code(), "unavailable");
+        assert!(
+            request
+                .message()
+                .contains("requires paired local credentials"),
+            "unexpected error: {request}"
         );
     }
 
