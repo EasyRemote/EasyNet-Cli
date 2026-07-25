@@ -560,3 +560,13 @@ fn device_ability_call_mode_resolution_boundary_script_holds() {
     // reintroduce procedural inference helpers.
     run_bash_script("tests/scripts/test_check_device_ability_call_mode_resolution_boundary.sh");
 }
+
+#[test]
+fn invocation_wire_entity_ref_kind_resolution_boundary_script_holds() {
+    // Pins protobuf EntityRef kind projection to one explicit wire-resolution
+    // object. Invocation wire construction must not reintroduce subject-kind
+    // inference helpers or fallback vocabulary.
+    run_bash_script(
+        "tests/scripts/test_check_invocation_wire_entity_ref_kind_resolution_boundary.sh",
+    );
+}

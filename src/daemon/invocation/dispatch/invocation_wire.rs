@@ -663,7 +663,7 @@ fn checked_provisional_ura(ura: String) -> anyhow::Result<String> {
 }
 
 pub(crate) fn try_entity_ref(ura: String) -> anyhow::Result<EntityRef> {
-    let kind = infer_entity_ref_kind(&ura)?;
+    let kind = EntityRefKindResolution::from_ura(&ura)?.protobuf_kind();
     Ok(EntityRef {
         kind: kind as i32,
         ura,
@@ -671,21 +671,48 @@ pub(crate) fn try_entity_ref(ura: String) -> anyhow::Result<EntityRef> {
     })
 }
 
-fn infer_entity_ref_kind(ura: &str) -> anyhow::Result<EntityRefKind> {
-    if let Some(kind) = top_level_subject_entity_kind(ura) {
-        return Ok(kind);
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EntityRefKindResolution {
+    Agent,
+    Ability,
+    Device,
+    Resource,
+    Session,
+    Continuation,
+    StateObject,
+}
+
+impl EntityRefKindResolution {
+    fn from_ura(ura: &str) -> anyhow::Result<Self> {
+        if let Some(resolution) = top_level_subject_resolution(ura) {
+            return Ok(resolution);
+        }
+        match crate::core::ura::parse_ura(ura.trim()).map(|parsed| parsed.kind) {
+            Ok(crate::core::ura::URAKind::Agent) => Ok(Self::Agent),
+            Ok(crate::core::ura::URAKind::Ability) => Ok(Self::Ability),
+            Ok(crate::core::ura::URAKind::Device) => Ok(Self::Device),
+            Ok(crate::core::ura::URAKind::Resource) => Ok(Self::Resource),
+            Ok(other) => {
+                anyhow::bail!("subject_ref_kind_unsupported:{}", subject_kind_label(other))
+            }
+            Err(err) => anyhow::bail!("subject_ref_ura_parse_failed:{err}"),
+        }
     }
-    match crate::core::ura::parse_ura(ura.trim()).map(|parsed| parsed.kind) {
-        Ok(crate::core::ura::URAKind::Agent) => Ok(EntityRefKind::Agent),
-        Ok(crate::core::ura::URAKind::Ability) => Ok(EntityRefKind::Ability),
-        Ok(crate::core::ura::URAKind::Device) => Ok(EntityRefKind::Device),
-        Ok(crate::core::ura::URAKind::Resource) => Ok(EntityRefKind::Resource),
-        Ok(other) => anyhow::bail!("subject_ref_kind_unsupported:{}", subject_kind_label(other)),
-        Err(err) => anyhow::bail!("subject_ref_ura_parse_failed:{err}"),
+
+    fn protobuf_kind(self) -> EntityRefKind {
+        match self {
+            Self::Agent => EntityRefKind::Agent,
+            Self::Ability => EntityRefKind::Ability,
+            Self::Device => EntityRefKind::Device,
+            Self::Resource => EntityRefKind::Resource,
+            Self::Session => EntityRefKind::Session,
+            Self::Continuation => EntityRefKind::Continuation,
+            Self::StateObject => EntityRefKind::StateObject,
+        }
     }
 }
 
-fn top_level_subject_entity_kind(ura: &str) -> Option<EntityRefKind> {
+fn top_level_subject_resolution(ura: &str) -> Option<EntityRefKindResolution> {
     let rest = ura.trim().strip_prefix(crate::core::ura::URA_SCHEME)?;
     let mut segments = rest.split('/');
     let first = segments.next()?;
@@ -698,14 +725,14 @@ fn top_level_subject_entity_kind(ura: &str) -> Option<EntityRefKind> {
         return None;
     }
     match role {
-        "agent" | "agents" => Some(EntityRefKind::Agent),
-        "ability" | "abilities" => Some(EntityRefKind::Ability),
-        "device" | "devices" => Some(EntityRefKind::Device),
-        "resource" | "resources" => Some(EntityRefKind::Resource),
-        "session" | "sessions" => Some(EntityRefKind::Session),
-        "continuation" | "continuations" => Some(EntityRefKind::Continuation),
+        "agent" | "agents" => Some(EntityRefKindResolution::Agent),
+        "ability" | "abilities" => Some(EntityRefKindResolution::Ability),
+        "device" | "devices" => Some(EntityRefKindResolution::Device),
+        "resource" | "resources" => Some(EntityRefKindResolution::Resource),
+        "session" | "sessions" => Some(EntityRefKindResolution::Session),
+        "continuation" | "continuations" => Some(EntityRefKindResolution::Continuation),
         "state_object" | "state-object" | "state_objects" | "state-objects" | "state"
-        | "states" => Some(EntityRefKind::StateObject),
+        | "states" => Some(EntityRefKindResolution::StateObject),
         _ => None,
     }
 }
@@ -1152,6 +1179,61 @@ mod tests {
         .unwrap();
         let subject_ref = try_entity_ref(env.subject.unwrap().ura).unwrap();
         assert_eq!(subject_ref.kind, EntityRefKind::Resource as i32);
+    }
+
+    #[test]
+    fn invocation_wire_entity_ref_kind_resolution_preserves_canonical_kinds() {
+        let cases = [
+            ("easynet:///r/acme/agent/alice.worker", EntityRefKind::Agent),
+            (
+                "easynet:///r/acme/ability/device.dev-a.observe.health",
+                EntityRefKind::Ability,
+            ),
+            ("easynet:///r/acme/device/dev-a", EntityRefKind::Device),
+            (
+                "easynet:///r/acme/resource/user.alice/session/read",
+                EntityRefKind::Resource,
+            ),
+        ];
+
+        for (ura, expected) in cases {
+            assert_eq!(
+                try_entity_ref(ura.to_string()).unwrap().kind,
+                expected as i32
+            );
+        }
+    }
+
+    #[test]
+    fn invocation_wire_entity_ref_kind_resolution_preserves_top_level_subject_forms() {
+        let cases = [
+            ("easynet:///r/acme/session/s1", EntityRefKind::Session),
+            (
+                "easynet:///r/acme/continuations/c1",
+                EntityRefKind::Continuation,
+            ),
+            (
+                "easynet:///r/acme/state-objects/runtime",
+                EntityRefKind::StateObject,
+            ),
+        ];
+
+        for (ura, expected) in cases {
+            assert_eq!(
+                try_entity_ref(ura.to_string()).unwrap().kind,
+                expected as i32
+            );
+        }
+    }
+
+    #[test]
+    fn invocation_wire_entity_ref_kind_resolution_rejects_unsupported_canonical_kinds() {
+        let user_err = try_entity_ref("easynet:///r/acme/user/alice".to_string()).unwrap_err();
+        assert!(format!("{user_err}").contains("subject_ref_kind_unsupported:User"));
+
+        let hub = crate::core::ura::hub_ura("acme");
+        let hub_err = try_entity_ref(hub).unwrap_err();
+        assert!(format!("{hub_err}").contains("subject_ref_kind_unsupported:Hub"));
     }
 
     #[test]
