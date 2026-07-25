@@ -32,6 +32,7 @@ from easynet_sdk import (
     runtime_state_read_subject_ura,
 )
 from easynet_sdk.authorized_runtime_session import _descriptor_resolution_from_error
+from easynet_sdk._session_authority_subjects import is_runtime_state_read_subject_ura
 
 
 class AuthorizedRuntimeSessionTests(unittest.TestCase):
@@ -288,6 +289,15 @@ class AuthorizedRuntimeSessionTests(unittest.TestCase):
             runtime_state_read_subject_ura(
                 "example", "00000000-0000-0000-0000-000000000000"
             )
+
+    def test_runtime_state_read_subject_predicate_rejects_all_zero_owner(
+        self,
+    ) -> None:
+        self.assertFalse(
+            is_runtime_state_read_subject_ura(
+                "easynet:///r/example/resource/user.00000000-0000-0000-0000-000000000000/runtime-state/read"
+            )
+        )
 
     def test_history_rejects_path_substring_owner_subject_before_receipt_provider(self) -> None:
         fixture = _SessionFixture()

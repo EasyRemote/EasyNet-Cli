@@ -4146,6 +4146,7 @@ if go:
     for token in (
         "strings.TrimSpace(parts.Path) == runtimeStateReadSubjectPath",
         "strings.TrimPrefix(ownerID, \"user.\")",
+        "!containsAllZeroPrincipal(userID)",
     ):
         if token not in go_helper:
             raise SystemExit(f"sdk_go_runtime_state_read_subject_predicate_missing:{token}")
@@ -4186,6 +4187,11 @@ if go:
         go_test_path,
         "TestRuntimeStateReadSubjectURARejectsAllZeroUserBeforeDeviceFallback",
         "sdk_go_runtime_state_read_subject_all_zero_test_missing",
+    )
+    require(
+        go_test_path,
+        "TestRuntimeStateReadSubjectPredicateRejectsAllZeroOwner",
+        "sdk_go_runtime_state_read_subject_predicate_all_zero_test_missing",
     )
     require(
         go_test_path,
@@ -4249,6 +4255,7 @@ if py:
     for token in (
         "path == _RUNTIME_STATE_READ_SUBJECT_PATH",
         "owner_id.removeprefix(\"user.\").strip() != \"\"",
+        "not contains_all_zero_principal(owner_id.removeprefix(\"user.\"))",
     ):
         if token not in py_helper:
             raise SystemExit(f"sdk_python_runtime_state_read_subject_predicate_missing:{token}")
@@ -4300,6 +4307,11 @@ if py:
     )
     require(
         py_test_path,
+        "test_runtime_state_read_subject_predicate_rejects_all_zero_owner",
+        "sdk_python_runtime_state_read_subject_predicate_all_zero_test_missing",
+    )
+    require(
+        py_test_path,
         "test_history_rejects_path_substring_owner_subject_before_receipt_provider",
         "sdk_python_history_authority_path_substring_test_missing",
     )
@@ -4332,6 +4344,7 @@ if node:
         "runtimeStateSubjectSegment(realm, \"realm\")",
         "runtimeStateSubjectSegment(userID, \"user_id\")",
         "containsAllZeroPrincipal(cleanUserID)",
+        "containsAllZeroPrincipal(ownerUserID)",
         "session authority subject does not admit receipt query subject_ura",
         "receipt filter caller_ura does not match receipt query caller_ura",
         "receipt filter callee_ura does not match receipt query callee_ura",
@@ -4359,6 +4372,7 @@ if node:
         "session history keeps subject filters as ledger predicates",
         "runtime-state read subject helper builds user-owned resource subject",
         "runtime-state read subject helper rejects all-zero user before device fallback",
+        "runtime-state read subject predicate rejects all-zero owner before history preflight",
         "runtime-state read subject helper rejects non-canonical realm and user segments",
         'sdk.runtimeStateReadSubjectURA("example", "alice")',
         'sdk.runtimeStateReadSubjectURA("example/tenant", "alice")',

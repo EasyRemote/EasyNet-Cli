@@ -345,6 +345,13 @@ func TestRuntimeStateReadSubjectURARejectsAllZeroUserBeforeDeviceFallback(t *tes
 	}
 }
 
+func TestRuntimeStateReadSubjectPredicateRejectsAllZeroOwner(t *testing.T) {
+	subject := "easynet:///r/example/resource/user.00000000-0000-0000-0000-000000000000/runtime-state/read"
+	if isRuntimeStateReadSubjectURA(subject) {
+		t.Fatalf("all-zero runtime-state read subject was accepted: %s", subject)
+	}
+}
+
 func TestAuthorizedRuntimeSessionHistoryRejectsPathSubstringOwnerSubjectBeforeReceiptProvider(t *testing.T) {
 	session := newAuthorizedRuntimeSessionFixture(t)
 	request := ReceiptListRequest{

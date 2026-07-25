@@ -1383,6 +1383,25 @@ test("runtime-state read subject helper rejects all-zero user before device fall
   );
 });
 
+test("runtime-state read subject predicate rejects all-zero owner before history preflight", () => {
+  assert.throws(
+    () =>
+      new sdk.ReceiptListRequest({
+        call: {
+          caller_ura: caller,
+          callee_ura: callee,
+          subject_ura:
+            "easynet:///r/example/resource/user.00000000-0000-0000-0000-000000000000/runtime-state/read",
+          metadata: {
+            [sdk.SESSION_AUTHORITY_METADATA_KEY]: historySessionValue(),
+          },
+        },
+        limit: 50,
+      }),
+    /subject_ura must not be all-zero/,
+  );
+});
+
 test("runtime-state read subject helper rejects non-canonical realm and user segments", () => {
   assert.throws(
     () => sdk.runtimeStateReadSubjectURA("example/tenant", "alice"),

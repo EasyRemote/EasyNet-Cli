@@ -2743,7 +2743,11 @@ function isRuntimeStateReadSubjectURA(subjectURA) {
   }
   const ownerUserID = resource.slice(0, slash).trim();
   const subjectPath = resource.slice(slash + 1).trim();
-  return ownerUserID !== "" && subjectPath === RUNTIME_STATE_READ_SUBJECT_PATH;
+  return (
+    ownerUserID !== "" &&
+    !containsAllZeroPrincipal(ownerUserID) &&
+    subjectPath === RUNTIME_STATE_READ_SUBJECT_PATH
+  );
 }
 
 function runtimeStateSubjectString(value, field) {

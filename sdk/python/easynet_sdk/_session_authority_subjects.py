@@ -48,6 +48,7 @@ def is_runtime_state_read_subject_ura(subject_ura: str) -> bool:
         and isinstance(owner_id, str)
         and owner_id.startswith("user.")
         and owner_id.removeprefix("user.").strip() != ""
+        and not contains_all_zero_principal(owner_id.removeprefix("user."))
         and path == _RUNTIME_STATE_READ_SUBJECT_PATH
     )
 

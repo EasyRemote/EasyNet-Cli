@@ -39,6 +39,7 @@ func isRuntimeStateReadSubjectURA(subjectURA string) bool {
 	userID := strings.TrimPrefix(ownerID, "user.")
 	return strings.HasPrefix(ownerID, "user.") &&
 		strings.TrimSpace(userID) != "" &&
+		!containsAllZeroPrincipal(userID) &&
 		strings.TrimSpace(parts.Path) == runtimeStateReadSubjectPath
 }
 
