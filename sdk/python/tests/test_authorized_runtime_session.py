@@ -152,10 +152,15 @@ class AuthorizedRuntimeSessionTests(unittest.TestCase):
             call=RuntimeCallContext(
                 caller_ura="easynet:///r/example/agent/backend",
                 callee_ura="easynet:///r/example/device/dev-a",
-                subject_ura="easynet:///r/example/device/dev-a",
+                subject_ura=runtime_state_read_subject_ura("example", "alice"),
                 nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
                 causal_context={"form": "none"},
-                authority=_session_authority(),
+                authority=_session_authority(
+                    {
+                        "session_owner_user_id": "bob",
+                        "subject_ura": "easynet:///r/example/resource/user.bob/session/session-1",
+                    }
+                ),
             ),
             limit=10,
         )
@@ -185,6 +190,28 @@ class AuthorizedRuntimeSessionTests(unittest.TestCase):
 
         self.assertEqual(fixture.receipts.list_calls, 0)
 
+    def test_history_rejects_retired_session_subject_before_receipt_provider(
+        self,
+    ) -> None:
+        fixture = _SessionFixture()
+        request = ReceiptListRequest(
+            call=RuntimeCallContext(
+                caller_ura="easynet:///r/example/agent/backend",
+                callee_ura="easynet:///r/example/device/dev-a",
+                subject_ura="easynet:///r/example/resource/user.alice/session/invocation_history",
+                nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
+                causal_context={"form": "none"},
+                authority=_session_authority(),
+            ),
+            limit=10,
+        )
+
+        with self.assertRaisesRegex(SDKError, "runtime-state read subject") as caught:
+            fixture.session.history.list(request)
+
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_INVOCATION))
+        self.assertEqual(fixture.receipts.list_calls, 0)
+
     def test_history_allows_user_owned_resource_subject_before_receipt_provider(self) -> None:
         fixture = _SessionFixture()
         request = ReceiptListRequest(
@@ -210,7 +237,7 @@ class AuthorizedRuntimeSessionTests(unittest.TestCase):
             call=RuntimeCallContext(
                 caller_ura="easynet:///r/example/agent/backend",
                 callee_ura="easynet:///r/example/device/dev-a",
-                subject_ura="easynet:///r/example/resource/user.alice/session/session-1",
+                subject_ura=runtime_state_read_subject_ura("example", "alice"),
                 nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
                 causal_context={"form": "none"},
                 authority=_session_authority(
@@ -233,7 +260,7 @@ class AuthorizedRuntimeSessionTests(unittest.TestCase):
             call=RuntimeCallContext(
                 caller_ura="easynet:///r/example/agent/backend",
                 callee_ura="easynet:///r/example/device/dev-a",
-                subject_ura="easynet:///r/example/resource/user.alice/session/session-1",
+                subject_ura=runtime_state_read_subject_ura("example", "alice"),
                 nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
                 causal_context={"form": "none"},
                 authority=_session_authority(),
@@ -279,7 +306,7 @@ class AuthorizedRuntimeSessionTests(unittest.TestCase):
         with self.assertRaises(SDKError) as caught:
             fixture.session.history.list(request)
 
-        self.assertTrue(is_code(caught.exception, ErrorCode.AUTHORITY_SUBJECT_MISMATCH))
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_INVOCATION))
         self.assertEqual(fixture.receipts.list_calls, 0)
 
     def test_history_allows_session_authority_with_exact_device_subject_filter(self) -> None:
@@ -288,7 +315,7 @@ class AuthorizedRuntimeSessionTests(unittest.TestCase):
             call=RuntimeCallContext(
                 caller_ura="easynet:///r/example/agent/backend",
                 callee_ura="easynet:///r/example/device/dev-a",
-                subject_ura="easynet:///r/example/resource/user.alice/session/session-1",
+                subject_ura=runtime_state_read_subject_ura("example", "alice"),
                 nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
                 causal_context={"form": "none"},
                 authority=_session_authority(),
@@ -359,6 +386,7 @@ class _RuntimeProvider:
         raw = {
             "prepared_id": "prepared-1",
             "descriptor_ref": draft.descriptor_ref,
+            "expires_at_unix_ms": 3000,
             "tuple": json.loads(draft.to_json()),
             "signing_material": {
                 "canonical_bytes_base64": base64.b64encode(b"canonical").decode("ascii"),

@@ -4122,6 +4122,11 @@ if go:
     )
     require(
         go_helper_path,
+        "func isRuntimeStateReadSubjectURA(",
+        "sdk_go_runtime_state_read_subject_predicate_missing",
+    )
+    require(
+        go_helper_path,
         'const runtimeStateReadSubjectPath = "runtime-state/read"',
         "sdk_go_runtime_state_read_subject_path_missing",
     )
@@ -4138,8 +4143,21 @@ if go:
     ):
         if token not in go_helper:
             raise SystemExit(f"sdk_go_authority_subject_structured_owner_missing:{token}")
+    for token in (
+        "strings.TrimSpace(parts.Path) == runtimeStateReadSubjectPath",
+        "strings.TrimPrefix(ownerID, \"user.\")",
+    ):
+        if token not in go_helper:
+            raise SystemExit(f"sdk_go_runtime_state_read_subject_predicate_missing:{token}")
     if "func runtimeSessionAuthorityAdmitsSubject(" in go_runtime:
         raise SystemExit("sdk_go_runtime_ability_owns_authority_subject_helper")
+    call_body = section(
+        go,
+        "func validateSessionHistoryRuntimeCall(",
+        "func validateSessionHistoryFilterBinding(",
+    )
+    if "isRuntimeStateReadSubjectURA(call.SubjectURA)" not in call_body:
+        raise SystemExit("sdk_go_history_call_subject_not_runtime_state_read")
     body = section(
         go,
         "func validateSessionHistorySessionBinding(",
@@ -4176,6 +4194,11 @@ if go:
     )
     require(
         go_test_path,
+        "TestAuthorizedRuntimeSessionHistoryRejectsRetiredSessionSubjectBeforeReceiptProvider",
+        "sdk_go_history_retired_session_subject_test_missing",
+    )
+    require(
+        go_test_path,
         "TestAuthorizedRuntimeSessionRejectsPathSubstringOwnerSubjectBeforeDispatch",
         "sdk_go_authority_path_substring_regression_test_missing",
     )
@@ -4183,11 +4206,12 @@ if go:
 py = read(py_path)
 if py:
     py_helper = read(py_helper_path)
-    require(
-        py_path,
-        "from ._session_authority_subjects import session_authority_admits_subject",
-        "sdk_python_authority_subject_shared_helper_import_missing",
-    )
+    for token in (
+        "session_authority_admits_subject",
+        "is_runtime_state_read_subject_ura",
+    ):
+        if token not in py:
+            raise SystemExit(f"sdk_python_authority_subject_shared_helper_import_missing:{token}")
     require(
         py_helper_path,
         "def session_authority_admits_subject(",
@@ -4197,6 +4221,11 @@ if py:
         py_helper_path,
         "def runtime_state_read_subject_ura(",
         "sdk_python_runtime_state_read_subject_constructor_missing",
+    )
+    require(
+        py_helper_path,
+        "def is_runtime_state_read_subject_ura(",
+        "sdk_python_runtime_state_read_subject_predicate_missing",
     )
     require(
         py_helper_path,
@@ -4210,12 +4239,26 @@ if py:
     )
     for token in (
         "subject.components.get(\"owner_id\")",
+        "subject.components.get(\"path\")",
         "parse_ura(subject_ura.strip())",
         "owner_id == f\"user.{owner_user_id}\"",
         "owner_id.startswith(\"agent.\")",
     ):
         if token not in py_helper:
             raise SystemExit(f"sdk_python_authority_subject_structured_owner_missing:{token}")
+    for token in (
+        "path == _RUNTIME_STATE_READ_SUBJECT_PATH",
+        "owner_id.removeprefix(\"user.\").strip() != \"\"",
+    ):
+        if token not in py_helper:
+            raise SystemExit(f"sdk_python_runtime_state_read_subject_predicate_missing:{token}")
+    call_body = section(
+        py,
+        "def _validate_session_history_call(",
+        "def _validate_session_history_filter_binding(",
+    )
+    if "is_runtime_state_read_subject_ura(call.subject_ura)" not in call_body:
+        raise SystemExit("sdk_python_history_call_subject_not_runtime_state_read")
     for forbidden in (
         "f\"resource/user.{owner_user_id}/\" in subject_ura",
         "f\"resource/agent.{owner_user_id}.\" in subject_ura",
@@ -4262,6 +4305,11 @@ if py:
     )
     require(
         py_test_path,
+        "test_history_rejects_retired_session_subject_before_receipt_provider",
+        "sdk_python_history_retired_session_subject_test_missing",
+    )
+    require(
+        py_test_path,
         "test_rejects_path_substring_owner_subject_before_dispatch",
         "sdk_python_authority_path_substring_regression_test_missing",
     )
@@ -4276,6 +4324,8 @@ if node:
         "function validateSessionHistoryRequest(request)",
         "function validateSessionHistoryFilterBinding(call, filter)",
         "function validateSessionHistorySessionBinding(",
+        "function isRuntimeStateReadSubjectURA(subjectURA)",
+        "isRuntimeStateReadSubjectURA(call.subjectURA)",
         "sessionAuthorityAdmitsSubject(authority, subjectURA)",
         "export function runtimeStateReadSubjectURA(",
         "const RUNTIME_STATE_READ_SUBJECT_PATH = \"runtime-state/read\"",
@@ -4305,6 +4355,7 @@ if node:
             raise SystemExit("sdk_node_history_subject_filter_authority_alias")
     for token in (
         "session history preflight rejects authority subject mismatch before receipt provider",
+        "session history preflight rejects retired session subject before receipt provider",
         "session history keeps subject filters as ledger predicates",
         "runtime-state read subject helper builds user-owned resource subject",
         "runtime-state read subject helper rejects all-zero user before device fallback",

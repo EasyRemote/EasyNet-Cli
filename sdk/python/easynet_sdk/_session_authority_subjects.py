@@ -36,6 +36,22 @@ def runtime_state_read_subject_ura(realm: str, user_id: str) -> str:
     return subject
 
 
+def is_runtime_state_read_subject_ura(subject_ura: str) -> bool:
+    try:
+        subject = parse_ura(str(subject_ura).strip())
+    except SDKError:
+        return False
+    owner_id = subject.components.get("owner_id")
+    path = subject.components.get("path")
+    return (
+        subject.kind == "resource"
+        and isinstance(owner_id, str)
+        and owner_id.startswith("user.")
+        and owner_id.removeprefix("user.").strip() != ""
+        and path == _RUNTIME_STATE_READ_SUBJECT_PATH
+    )
+
+
 def _invalid_runtime_state_subject(message: str, cause: Exception | None = None) -> None:
     raise SDKError(
         code="INVALID_INVOCATION",

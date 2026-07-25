@@ -136,7 +136,7 @@ const sessionResourceValue = () =>
     expires_at_ms: 20,
   });
 
-const historySessionValue = () =>
+const historySessionValue = (override = {}) =>
   authorityValue({
     issuer_ura: caller,
     session_id: "session-1",
@@ -150,6 +150,7 @@ const historySessionValue = () =>
     allowed_followup_abilities: ["invocation.history.list"],
     issued_at_ms: 10,
     expires_at_ms: 20,
+    ...override,
   });
 
 const preparedJSON = (draft) =>
@@ -1266,9 +1267,12 @@ test("session history preflight rejects authority subject mismatch before receip
     call: {
       caller_ura: caller,
       callee_ura: callee,
-      subject_ura: callee,
+      subject_ura: sdk.runtimeStateReadSubjectURA("example", "alice"),
       metadata: {
-        [sdk.SESSION_AUTHORITY_METADATA_KEY]: historySessionValue(),
+        [sdk.SESSION_AUTHORITY_METADATA_KEY]: historySessionValue({
+          session_owner_user_id: "bob",
+          subject_ura: "easynet:///r/example/resource/user.bob/session/session-1",
+        }),
       },
     },
     limit: 50,
@@ -1281,6 +1285,43 @@ test("session history preflight rejects authority subject mismatch before receip
       error.code === sdk.ErrorCode.AUTHORITY_SUBJECT_MISMATCH &&
       error.stage === "history" &&
       /session authority subject does not admit receipt query subject_ura/.test(error.message),
+  );
+  assert.equal(providerCalls, 0);
+});
+
+test("session history preflight rejects retired session subject before receipt provider", async () => {
+  let providerCalls = 0;
+  const history = new sdk.SessionHistoryOperations({
+    list: () => {
+      providerCalls += 1;
+      return {
+        records: [],
+        next_cursor: "",
+        limit: 50,
+        source: "invocation.history.list",
+      };
+    },
+  });
+
+  const request = new sdk.ReceiptListRequest({
+    call: {
+      caller_ura: caller,
+      callee_ura: callee,
+      subject_ura: "easynet:///r/example/resource/user.alice/session/invocation_history",
+      metadata: {
+        [sdk.SESSION_AUTHORITY_METADATA_KEY]: historySessionValue(),
+      },
+    },
+    limit: 50,
+  });
+
+  await assert.rejects(
+    () => history.list(request),
+    (error) =>
+      error instanceof sdk.SDKError &&
+      error.code === sdk.ErrorCode.INVALID_INVOCATION &&
+      error.stage === "history" &&
+      /runtime-state read subject/.test(error.message),
   );
   assert.equal(providerCalls, 0);
 });

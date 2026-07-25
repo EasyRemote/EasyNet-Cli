@@ -44,7 +44,10 @@ from .runtime_ability import (
     RuntimeInvocationAuthority,
     _validate_runtime_call_context,
 )
-from ._session_authority_subjects import session_authority_admits_subject
+from ._session_authority_subjects import (
+    is_runtime_state_read_subject_ura,
+    session_authority_admits_subject,
+)
 from .signing import PreparedInvocation, SignedInvocation, Signer, SigningMaterial
 
 
@@ -766,6 +769,13 @@ def _validate_session_history_call(
             _runtime_call_details(call) if isinstance(call, RuntimeCallContext) else None,
             error,
         ) from error
+    if not is_runtime_state_read_subject_ura(call.subject_ura):
+        raise _session_error(
+            ErrorCode.INVALID_INVOCATION,
+            "history",
+            "session history call.subject_ura must be a user-owned runtime-state read subject",
+            _runtime_call_details(call),
+        )
     authority = _runtime_call_authority(call)
     if authority is None:
         raise _session_error(

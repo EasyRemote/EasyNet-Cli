@@ -30,6 +30,18 @@ func RuntimeStateReadSubjectURA(realm string, userID string) (string, error) {
 	return subject, nil
 }
 
+func isRuntimeStateReadSubjectURA(subjectURA string) bool {
+	parts, err := ParseURAParts(strings.TrimSpace(subjectURA))
+	if err != nil || parts.Kind != URAKindResource {
+		return false
+	}
+	ownerID := strings.TrimSpace(parts.OwnerID)
+	userID := strings.TrimPrefix(ownerID, "user.")
+	return strings.HasPrefix(ownerID, "user.") &&
+		strings.TrimSpace(userID) != "" &&
+		strings.TrimSpace(parts.Path) == runtimeStateReadSubjectPath
+}
+
 // runtimeSessionAuthorityAdmitsSubject is the Go SDK's canonical
 // session-authority subject admission predicate. Runtime ability calls and
 // invocation-history queries both consume this helper; neither path owns a

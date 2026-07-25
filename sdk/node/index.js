@@ -2731,6 +2731,21 @@ export function runtimeStateReadSubjectURA(realm, userID) {
   return subject;
 }
 
+function isRuntimeStateReadSubjectURA(subjectURA) {
+  const parsed = parseCanonicalURANullable(subjectURA);
+  if (!parsed || !parsed.path.startsWith("resource/user.")) {
+    return false;
+  }
+  const resource = parsed.path.slice("resource/user.".length);
+  const slash = resource.indexOf("/");
+  if (slash <= 0) {
+    return false;
+  }
+  const ownerUserID = resource.slice(0, slash).trim();
+  const subjectPath = resource.slice(slash + 1).trim();
+  return ownerUserID !== "" && subjectPath === RUNTIME_STATE_READ_SUBJECT_PATH;
+}
+
 function runtimeStateSubjectString(value, field) {
   if (typeof value !== "string" || value.trim() === "") {
     throw invalidInvocation(`runtime-state read subject ${field} is required`);
@@ -3489,6 +3504,13 @@ function validateSessionHistoryRequest(request) {
 function validateSessionHistoryRuntimeCall(call) {
   if (!(call instanceof RuntimeCallContext)) {
     throw historyError(ErrorCode.INVALID_INVOCATION, "runtime call context is required");
+  }
+  if (!isRuntimeStateReadSubjectURA(call.subjectURA)) {
+    throw historyError(
+      ErrorCode.INVALID_INVOCATION,
+      "session history call.subject_ura must be a user-owned runtime-state read subject",
+      runtimeCallDetails(call),
+    );
   }
   const authority = runtimeCallAuthority(call);
   if (authority === null) {
