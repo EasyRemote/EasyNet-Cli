@@ -552,3 +552,11 @@ fn mcp_cost_metadata_projection_boundary_script_holds() {
     // The edge must not infer free/default cost through fallback helpers.
     run_bash_script("tests/scripts/test_check_mcp_cost_metadata_projection_boundary.sh");
 }
+
+#[test]
+fn device_ability_call_mode_resolution_boundary_script_holds() {
+    // Pins dynamic device ability call-mode ownership to one registrar value
+    // object. Install, uninstall, replay, and runtime proof binding must not
+    // reintroduce procedural inference helpers.
+    run_bash_script("tests/scripts/test_check_device_ability_call_mode_resolution_boundary.sh");
+}

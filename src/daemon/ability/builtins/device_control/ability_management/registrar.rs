@@ -17,10 +17,10 @@
 // runtime (catalog is built before the runtime exists), boot calls
 // `set_runtime` once. Mirrors `HotAgentRegistrar`.
 //
-// Call mode is inferred from `exec.kind`, not a separate manifest
-// field: `host_stream` is server-stream (the only external-process
-// stream path); every other exec kind is unary RPC. There is no
-// ambiguity to encode, so no `call_mode` field is introduced.
+// Device call-mode resolution is an explicit registrar value object, not a
+// manifest field and not duplicated install/uninstall/replay branching.
+// `host_stream` resolves to server-stream (the only external-process stream
+// path). Unsupported exec kinds fail closed before runtime binding.
 //
 // Author: Silan.Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -383,7 +383,8 @@ impl DeviceRuntimeBinding {
         record: &AbilityControlPlaneRecord,
     ) -> anyhow::Result<Self> {
         let (ability_fn, options) = build_binding(manifest)?;
-        let call_mode = descriptor_call_mode_for_modes(options.modes);
+        let call_mode =
+            DeviceAbilityCallModeResolution::from_runtime_modes(options.modes).descriptor_mode();
         if record.descriptor().call_mode() != call_mode {
             anyhow::bail!(
                 "device ability runtime binding mode drift for {:?}: manifest implies {:?}, \
@@ -402,7 +403,8 @@ impl DeviceRuntimeBinding {
                 record.descriptor().version.as_str()
             );
         }
-        let axon_call_mode = axon_call_mode_for_descriptor_mode(call_mode);
+        let axon_call_mode =
+            DeviceAbilityCallModeResolution::from_descriptor_mode(call_mode).axon_mode();
         let options = options.with_mode_descriptor_proof(
             axon_call_mode,
             record.descriptor().version.as_str(),
@@ -545,7 +547,8 @@ impl DeviceAbilityRegistrar {
             );
         }
 
-        let call_mode = descriptor_call_mode_for_manifest(install.manifest())?;
+        let call_mode =
+            DeviceAbilityCallModeResolution::from_manifest(install.manifest())?.descriptor_mode();
         let control_plane_key = DeviceAbilityControlPlaneKey::from_install(&install, call_mode)?;
 
         // ── durable installing intent (hidden from boot replay) ─────
@@ -729,12 +732,12 @@ impl DeviceAbilityRegistrar {
             Err(err) => {
                 if let Err(restore_err) = self.store.restore_records(transaction.removed.clone()) {
                     anyhow::bail!(
-                        "ability.uninstall: failed to infer control-plane modes: {err}; \
+                        "ability.uninstall: failed to resolve control-plane modes: {err}; \
                              additionally failed to restore durable store rows: {restore_err}"
                     );
                 }
                 anyhow::bail!(
-                        "ability.uninstall: failed to infer control-plane modes: {err}; durable store rows restored"
+                        "ability.uninstall: failed to resolve control-plane modes: {err}; durable store rows restored"
                     );
             }
         };
@@ -848,7 +851,7 @@ impl DeviceAbilityRegistrar {
             })?;
             let control_plane_key = DeviceAbilityControlPlaneKey::from_record(
                 row,
-                descriptor_call_mode_for_manifest(&manifest)?,
+                DeviceAbilityCallModeResolution::from_manifest(&manifest)?.descriptor_mode(),
             )?;
             let control_plane_txn =
                 Self::begin_control_plane_transaction(&catalog, &control_plane_key);
@@ -885,19 +888,19 @@ impl DeviceAbilityRegistrar {
         for row in records {
             let bytes = row.manifest_bytes().map_err(|e| {
                 anyhow::anyhow!(
-                    "infer control-plane mode for {}: read manifest: {e}",
+                    "resolve control-plane mode for {}: read manifest: {e}",
                     row.public_name()
                 )
             })?;
             let manifest = AbilityManifest::from_json_slice(&bytes).map_err(|e| {
                 anyhow::anyhow!(
-                    "infer control-plane mode for {}: parse manifest: {e}",
+                    "resolve control-plane mode for {}: parse manifest: {e}",
                     row.public_name()
                 )
             })?;
             let key = DeviceAbilityControlPlaneKey::from_record(
                 row,
-                descriptor_call_mode_for_manifest(&manifest)?,
+                DeviceAbilityCallModeResolution::from_manifest(&manifest)?.descriptor_mode(),
             )?;
             if !keys.contains(&key) {
                 keys.push(key);
@@ -1042,13 +1045,14 @@ impl DeviceAbilityRegistrar {
                     continue;
                 }
             };
-            let descriptor_call_mode = match descriptor_call_mode_for_manifest(&manifest) {
-                Ok(mode) => mode,
-                Err(err) => {
-                    report.push_errored(&row, format!("infer descriptor call mode: {err}"));
-                    continue;
-                }
-            };
+            let descriptor_call_mode =
+                match DeviceAbilityCallModeResolution::from_manifest(&manifest) {
+                    Ok(resolution) => resolution.descriptor_mode(),
+                    Err(err) => {
+                        report.push_errored(&row, format!("resolve descriptor call mode: {err}"));
+                        continue;
+                    }
+                };
             let control_plane_key =
                 match DeviceAbilityControlPlaneKey::from_record(&row, descriptor_call_mode) {
                     Ok(key) => key,
@@ -1257,7 +1261,7 @@ pub enum ReplayOutcomeStatus {
 /// The single deployable device exec kind, with the deployability policy and
 /// its operator-facing rejection strings defined in exactly one place.
 ///
-/// `build_binding` (handler + options) and `descriptor_call_mode_for_manifest`
+/// `build_binding` (handler + options) and `DeviceAbilityCallModeResolution`
 /// (call mode) both classify through here, so the "what may be deployed and why
 /// not" decision — a security-relevant gate — cannot diverge between the two
 /// consumers or grow two different error strings for the same condition.
@@ -1284,9 +1288,9 @@ impl<'a> DeployableExec<'a> {
         }
     }
 
-    fn descriptor_call_mode(&self) -> DescriptorCallMode {
+    fn call_mode_resolution(&self) -> DeviceAbilityCallModeResolution {
         match self {
-            Self::HostStream(_) => DescriptorCallMode::Stream,
+            Self::HostStream(_) => DeviceAbilityCallModeResolution::Stream,
         }
     }
 }
@@ -1309,27 +1313,50 @@ fn rpc_only() -> AbilityCallModes {
     }
 }
 
-fn descriptor_call_mode_for_modes(modes: AbilityCallModes) -> DescriptorCallMode {
-    if modes.bidi {
-        DescriptorCallMode::Bidi
-    } else if modes.stream {
-        DescriptorCallMode::Stream
-    } else {
-        DescriptorCallMode::Rpc
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DeviceAbilityCallModeResolution {
+    Rpc,
+    Stream,
+    Bidi,
+}
+
+impl DeviceAbilityCallModeResolution {
+    fn from_manifest(manifest: &AbilityManifest) -> anyhow::Result<Self> {
+        Ok(DeployableExec::classify(manifest)?.call_mode_resolution())
     }
-}
 
-fn descriptor_call_mode_for_manifest(
-    manifest: &AbilityManifest,
-) -> anyhow::Result<DescriptorCallMode> {
-    Ok(DeployableExec::classify(manifest)?.descriptor_call_mode())
-}
+    fn from_runtime_modes(modes: AbilityCallModes) -> Self {
+        if modes.bidi {
+            Self::Bidi
+        } else if modes.stream {
+            Self::Stream
+        } else {
+            Self::Rpc
+        }
+    }
 
-fn axon_call_mode_for_descriptor_mode(mode: DescriptorCallMode) -> AxonCallMode {
-    match mode {
-        DescriptorCallMode::Rpc => AxonCallMode::Rpc,
-        DescriptorCallMode::Stream => AxonCallMode::Stream,
-        DescriptorCallMode::Bidi => AxonCallMode::Bidi,
+    fn from_descriptor_mode(mode: DescriptorCallMode) -> Self {
+        match mode {
+            DescriptorCallMode::Rpc => Self::Rpc,
+            DescriptorCallMode::Stream => Self::Stream,
+            DescriptorCallMode::Bidi => Self::Bidi,
+        }
+    }
+
+    fn descriptor_mode(self) -> DescriptorCallMode {
+        match self {
+            Self::Rpc => DescriptorCallMode::Rpc,
+            Self::Stream => DescriptorCallMode::Stream,
+            Self::Bidi => DescriptorCallMode::Bidi,
+        }
+    }
+
+    fn axon_mode(self) -> AxonCallMode {
+        match self {
+            Self::Rpc => AxonCallMode::Rpc,
+            Self::Stream => AxonCallMode::Stream,
+            Self::Bidi => AxonCallMode::Bidi,
+        }
     }
 }
 
@@ -1546,6 +1573,58 @@ mod tests {
             .control_plane_record_for_mode("er.generate", DescriptorCallMode::Stream)
             .expect("device ability control-plane lookup is unambiguous")
             .expect("device ability control-plane record")
+    }
+
+    #[test]
+    fn device_ability_call_mode_resolution_maps_manifest_to_stream() {
+        let manifest = host_stream_manifest("/tmp/er-host.sock", "er.generate");
+        let resolution =
+            DeviceAbilityCallModeResolution::from_manifest(&manifest).expect("host_stream mode");
+
+        assert_eq!(resolution, DeviceAbilityCallModeResolution::Stream);
+        assert_eq!(resolution.descriptor_mode(), DescriptorCallMode::Stream);
+        assert_eq!(resolution.axon_mode(), AxonCallMode::Stream);
+    }
+
+    #[test]
+    fn device_ability_call_mode_resolution_projects_runtime_modes() {
+        assert_eq!(
+            DeviceAbilityCallModeResolution::from_runtime_modes(rpc_only()).descriptor_mode(),
+            DescriptorCallMode::Rpc
+        );
+        assert_eq!(
+            DeviceAbilityCallModeResolution::from_runtime_modes(AbilityOptions::streaming().modes)
+                .descriptor_mode(),
+            DescriptorCallMode::Stream
+        );
+        assert_eq!(
+            DeviceAbilityCallModeResolution::from_runtime_modes(AbilityCallModes {
+                rpc: false,
+                stream: true,
+                bidi: true,
+            })
+            .descriptor_mode(),
+            DescriptorCallMode::Bidi
+        );
+    }
+
+    #[test]
+    fn device_ability_call_mode_resolution_projects_descriptor_modes_to_axon() {
+        assert_eq!(
+            DeviceAbilityCallModeResolution::from_descriptor_mode(DescriptorCallMode::Rpc)
+                .axon_mode(),
+            AxonCallMode::Rpc
+        );
+        assert_eq!(
+            DeviceAbilityCallModeResolution::from_descriptor_mode(DescriptorCallMode::Stream)
+                .axon_mode(),
+            AxonCallMode::Stream
+        );
+        assert_eq!(
+            DeviceAbilityCallModeResolution::from_descriptor_mode(DescriptorCallMode::Bidi)
+                .axon_mode(),
+            AxonCallMode::Bidi
+        );
     }
 
     // ── Negative test matrix (plan §"必测四个失败态") ──────────────
