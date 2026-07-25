@@ -7583,6 +7583,8 @@ for required in (
 for retired in (
     "tenant_by_node",
     "node_id_already_bootstrapped_for_tenant",
+    "hub_ura: &str",
+    "Hub owner",
 ):
     if retired in runtime_admin:
         raise SystemExit(f"runtime_bootstrap_self_identity_ingress:runtime_retired:{retired}")

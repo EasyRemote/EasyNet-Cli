@@ -1779,41 +1779,41 @@ mod tests {
     }
 
     #[test]
-    fn device_and_hub_owners_use_distinct_keypairs() {
+    fn device_and_authority_owners_use_distinct_keypairs() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("keyring.enc");
         let mut vault = Vault::open_or_init(&path, &explicit_pass()).unwrap();
         let device_ura = "easynet:///r/localhost/device/dev-uuid".to_string();
-        let hub_endpoint = crate::core::ura::hub_ura("localhost");
+        let authority_ura = crate::core::ura::hub_ura("localhost");
         vault.put(&device_ura, fresh_seed_hex()).unwrap();
-        vault.put(&hub_endpoint, fresh_seed_hex()).unwrap();
+        vault.put(&authority_ura, fresh_seed_hex()).unwrap();
 
         let pubkey_via_device = vault.derive_pubkey(&device_ura).unwrap();
-        let pubkey_via_authority = vault.derive_pubkey(&hub_endpoint).unwrap();
+        let pubkey_via_authority = vault.derive_pubkey(&authority_ura).unwrap();
         assert_ne!(
             pubkey_via_device.to_bytes(),
             pubkey_via_authority.to_bytes(),
-            "Device and Hub authority must never share a keypair"
+            "Device and Authority owners must never share a keypair"
         );
     }
 
     #[test]
-    fn ensure_never_aliases_device_and_hub_authority() {
+    fn ensure_never_aliases_device_and_authority_owner() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("keyring.enc");
         let mut vault = Vault::open_or_init(&path, &explicit_pass()).unwrap();
         let device_ura = crate::core::ura::device_ura("localhost", "dev-uuid");
-        let hub_ura = crate::core::ura::hub_ura("localhost");
+        let authority_ura = crate::core::ura::hub_ura("localhost");
 
         vault.ensure(&device_ura).unwrap();
         assert!(matches!(
-            vault.derive_pubkey(&hub_ura),
+            vault.derive_pubkey(&authority_ura),
             Err(VaultError::NotFound(_))
         ));
-        vault.ensure(&hub_ura).unwrap();
+        vault.ensure(&authority_ura).unwrap();
         assert_ne!(
             vault.derive_pubkey(&device_ura).unwrap().to_bytes(),
-            vault.derive_pubkey(&hub_ura).unwrap().to_bytes()
+            vault.derive_pubkey(&authority_ura).unwrap().to_bytes()
         );
     }
 

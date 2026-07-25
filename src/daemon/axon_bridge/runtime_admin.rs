@@ -253,20 +253,20 @@ pub(crate) struct RuntimeAdminRegistration {
 pub(crate) async fn register_runtime_bootstrap_identity_ability(
     runtime: &Arc<LocalRuntime>,
     catalog: &AxonAbilityCatalog,
-    hub_ura: &str,
+    authority_ura: &str,
     provider: Arc<RuntimeBootstrapIdentityProvider>,
 ) -> anyhow::Result<RuntimeAdminRegistration> {
     let runtime_key = crate::daemon::axon_bridge::descriptor_ref::ability_ura_for_wire(
-        hub_ura,
+        authority_ura,
         ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY,
     )
     .map_err(|error| {
         anyhow::anyhow!(
-            "derive runtime-admin Ability URA for `{hub_ura}` \
+            "derive runtime-admin Ability URA for `{authority_ura}` \
              `{ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY}`: {error}"
         )
     })?;
-    let options = runtime_admin_options(catalog, hub_ura)?;
+    let options = runtime_admin_options(catalog, authority_ura)?;
     runtime
         .register_ability_with_options(
             runtime_key.clone(),
@@ -300,7 +300,7 @@ pub(crate) async fn register_runtime_bootstrap_identity_ability(
 
 fn runtime_admin_options(
     catalog: &AxonAbilityCatalog,
-    hub_ura: &str,
+    authority_ura: &str,
 ) -> anyhow::Result<AbilityOptions> {
     let record = catalog
         .control_plane_record_for_mode(
@@ -322,10 +322,10 @@ fn runtime_admin_options(
     let descriptor = record
         .descriptor()
         .clone()
-        .rebind_owner_ura(hub_ura)
+        .rebind_owner_ura(authority_ura)
         .map_err(|error| {
             anyhow::anyhow!(
-                "runtime-admin descriptor cannot bind to Hub owner `{hub_ura}`: {error}"
+                "runtime-admin descriptor cannot bind to Authority owner `{authority_ura}`: {error}"
             )
         })?;
     Ok(AbilityOptions::default()
