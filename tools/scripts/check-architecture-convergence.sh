@@ -1497,7 +1497,7 @@ stream_dispatcher = cli_root / "src/daemon/invocation/streams/stream_dispatcher.
 bidi_dispatcher = cli_root / "src/daemon/invocation/bidi/bidi_dispatcher.rs"
 daemon_route_runtime = cli_root / "src/daemon/invocation/dispatch/daemon_route_runtime.rs"
 boot_invocation_routes = cli_root / "src/daemon/boot/invocation/mod.rs"
-dispatch_shim = cli_root / "src/daemon/axon_bridge/dispatch_shim.rs"
+descriptor_bound_dispatch = cli_root / "src/daemon/axon_bridge/descriptor_bound_dispatch.rs"
 runtime_admin_contracts = (
     cli_root / "src/daemon/ability/catalog/runtime_admin_contracts.rs"
 )
@@ -1850,8 +1850,8 @@ if boot_invocation_routes.exists():
                 f"exact {family} routes must be registered before invocation listeners are spawned",
             )
 
-if dispatch_shim.exists():
-    shim_text = source(dispatch_shim)
+if descriptor_bound_dispatch.exists():
+    dispatch_text = source(descriptor_bound_dispatch)
     for token, detail in (
         (
             "pub async fn open_bidi_external_signed",
@@ -1862,8 +1862,8 @@ if dispatch_shim.exists():
             "the bidi ingress seam must open Axon's descriptor-bound runtime request",
         ),
     ):
-        if token not in shim_text:
-            add("R16_DAEMON_ROUTE_RUNTIME_OWNER_FORK", dispatch_shim, 1, detail)
+        if token not in dispatch_text:
+            add("R16_DAEMON_ROUTE_RUNTIME_OWNER_FORK", descriptor_bound_dispatch, 1, detail)
 
 if runtime_admin_contracts.exists():
     contract_text = source(runtime_admin_contracts)
@@ -2014,7 +2014,7 @@ if invocation_wire.exists():
 # Transport shims may resolve descriptor refs and select call mode, but they
 # must not mint the `_system.local` envelope fields or root causal policy in
 # each RPC/stream/bidi helper.
-dispatch_shim = cli_root / "src/daemon/axon_bridge/dispatch_shim.rs"
+descriptor_bound_dispatch = cli_root / "src/daemon/axon_bridge/descriptor_bound_dispatch.rs"
 local_runtime_request = cli_root / "src/daemon/axon_bridge/local_runtime_request.rs"
 wire_descriptor = cli_root / "src/daemon/axon_bridge/wire_descriptor.rs"
 kernel_runtime = cli_root / "src/daemon/boot/kernel/mod.rs"
@@ -2114,9 +2114,9 @@ if wire_descriptor.exists():
                 line_number(wire_descriptor_text, offset),
                 detail,
             )
-if dispatch_shim.exists():
-    shim_text = source(dispatch_shim)
-    production_text = shim_text.split("#[cfg(test)]", 1)[0]
+if descriptor_bound_dispatch.exists():
+    dispatch_text = source(descriptor_bound_dispatch)
+    production_text = dispatch_text.split("#[cfg(test)]", 1)[0]
     for token, detail in (
         (
             "pub(crate) fn local_system_from_wire_parts",
@@ -2152,23 +2152,23 @@ if dispatch_shim.exists():
         ),
         (
             "DescriptorBoundEnvelopeParts",
-            "dispatch shim production code must not construct local system envelope parts",
+            "descriptor-bound dispatch production code must not construct local system envelope parts",
         ),
         (
             "system_agent_identity()",
-            "dispatch shim production code must not mint the local system caller directly",
+            "descriptor-bound dispatch production code must not mint the local system caller directly",
         ),
         (
             "open_stream_local_with_subject",
-            "dispatch shim must not preserve retired with_subject stream vocabulary",
+            "descriptor-bound dispatch must not preserve retired with_subject stream vocabulary",
         ),
         (
             "open_bidi_local_with_subject",
-            "dispatch shim must not preserve retired with_subject bidi vocabulary",
+            "descriptor-bound dispatch must not preserve retired with_subject bidi vocabulary",
         ),
         (
             "dispatch_rpc_local_with_subject",
-            "dispatch shim must not preserve retired with_subject RPC vocabulary",
+            "descriptor-bound dispatch must not preserve retired with_subject RPC vocabulary",
         ),
     ):
         if token in (
@@ -2182,13 +2182,13 @@ if dispatch_shim.exists():
             "dispatch_rpc_local_explicit_subject",
         ):
             if token not in production_text:
-                add("R16C_SYSTEM_INVOCATION_ISSUER_FORK", dispatch_shim, 1, detail)
+                add("R16C_SYSTEM_INVOCATION_ISSUER_FORK", descriptor_bound_dispatch, 1, detail)
             continue
         offset = production_text.find(token)
         if offset >= 0:
             add(
                 "R16C_SYSTEM_INVOCATION_ISSUER_FORK",
-                dispatch_shim,
+                descriptor_bound_dispatch,
                 line_number(production_text, offset),
                 detail,
             )

@@ -258,7 +258,7 @@ impl StreamDispatcher {
                     true,
                     ability,
                 )?;
-                crate::daemon::axon_bridge::dispatch_shim::local_system_from_wire_parts(
+                crate::daemon::axon_bridge::descriptor_bound_dispatch::local_system_from_wire_parts(
                     envelope,
                     selected_descriptor_ref,
                     request.arguments.clone(),
@@ -280,7 +280,7 @@ impl StreamDispatcher {
                         request.target.as_ref(),
                     )?
                     .into_descriptor_ref();
-                crate::daemon::axon_bridge::dispatch_shim::external_signed_from_wire_parts(
+                crate::daemon::axon_bridge::descriptor_bound_dispatch::external_signed_from_wire_parts(
                     envelope,
                     signed_descriptor_ref,
                     request.arguments.clone(),
@@ -299,10 +299,11 @@ impl StreamDispatcher {
             ability,
             CallMode::Stream,
         )?;
-        let handle =
-            crate::daemon::axon_bridge::dispatch_shim::open_stream_admitted(&runtime, wire)
-                .await
-                .map_err(|err| status_from_axon_invoke_error("InvokeStream", ability, err))?;
+        let handle = crate::daemon::axon_bridge::descriptor_bound_dispatch::open_stream_admitted(
+            &runtime, wire,
+        )
+        .await
+        .map_err(|err| status_from_axon_invoke_error("InvokeStream", ability, err))?;
         let lifecycle = match RegisteredInvocationLifecycle::register(
             self.runtime.cancellations.clone(),
             &lifecycle_envelope,

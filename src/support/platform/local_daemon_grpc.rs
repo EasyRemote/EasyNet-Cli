@@ -2002,13 +2002,14 @@ mod tests {
             )
             .expect("descriptor ref");
         let result = br#"{"ok":true}"#.to_vec();
-        let dispatch = crate::daemon::axon_bridge::dispatch_shim::local_system_from_wire_parts(
-            envelope,
-            descriptor_ref,
-            request.arguments.clone(),
-            Default::default(),
-        )
-        .expect("local-system descriptor-bound dispatch");
+        let dispatch =
+            crate::daemon::axon_bridge::descriptor_bound_dispatch::local_system_from_wire_parts(
+                envelope,
+                descriptor_ref,
+                request.arguments.clone(),
+                Default::default(),
+            )
+            .expect("local-system descriptor-bound dispatch");
         let response = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -2036,12 +2037,13 @@ mod tests {
                     )
                     .await
                     .expect("register fixture ability");
-                let outcome = crate::daemon::axon_bridge::dispatch_shim::dispatch_rpc_admitted(
-                    &runtime,
-                    dispatch,
-                    &Default::default(),
-                )
-                .await;
+                let outcome =
+                    crate::daemon::axon_bridge::descriptor_bound_dispatch::dispatch_rpc_admitted(
+                        &runtime,
+                        dispatch,
+                        &Default::default(),
+                    )
+                    .await;
                 assert_eq!(outcome.state, InvocationState::Completed);
                 assert!(outcome.error.is_none(), "{:?}", outcome.error);
                 InvokeResponse {

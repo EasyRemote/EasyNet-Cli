@@ -413,29 +413,29 @@ impl DaemonRuntimeAdmissionCoordinator {
     pub(crate) fn stage(
         self: &Arc<Self>,
         facade: &AdmissionFacade,
-        wire: &crate::daemon::axon_bridge::dispatch_shim::WireDispatch,
+        wire: &crate::daemon::axon_bridge::descriptor_bound_dispatch::WireDispatch,
         ability: &str,
         call_mode: AxonCallMode,
     ) -> Result<DaemonRuntimeAdmissionLease, Status> {
         let caller_signature = match &wire.ingress {
-            crate::daemon::axon_bridge::dispatch_shim::WireDispatchIngress::ExternalSigned(_) => {
+            crate::daemon::axon_bridge::descriptor_bound_dispatch::WireDispatchIngress::ExternalSigned(_) => {
                 Some(wire_caller_signature(wire)?)
             }
-            crate::daemon::axon_bridge::dispatch_shim::WireDispatchIngress::ProvisionalBootstrap(
+            crate::daemon::axon_bridge::descriptor_bound_dispatch::WireDispatchIngress::ProvisionalBootstrap(
                 _,
             ) => Some(wire_caller_signature(wire)?),
-            crate::daemon::axon_bridge::dispatch_shim::WireDispatchIngress::LocalSystem => {
+            crate::daemon::axon_bridge::descriptor_bound_dispatch::WireDispatchIngress::LocalSystem => {
                 None
             }
         };
         let ingress = match &wire.ingress {
-            crate::daemon::axon_bridge::dispatch_shim::WireDispatchIngress::ExternalSigned(_) => {
+            crate::daemon::axon_bridge::descriptor_bound_dispatch::WireDispatchIngress::ExternalSigned(_) => {
                 RuntimeAdmissionIngress::CallerSigned
             }
-            crate::daemon::axon_bridge::dispatch_shim::WireDispatchIngress::ProvisionalBootstrap(
+            crate::daemon::axon_bridge::descriptor_bound_dispatch::WireDispatchIngress::ProvisionalBootstrap(
                 _,
             ) => RuntimeAdmissionIngress::ProvisionalBootstrap,
-            crate::daemon::axon_bridge::dispatch_shim::WireDispatchIngress::LocalSystem => {
+            crate::daemon::axon_bridge::descriptor_bound_dispatch::WireDispatchIngress::LocalSystem => {
                 RuntimeAdmissionIngress::TrustedLocalSystem
             }
         };
@@ -1685,16 +1685,16 @@ fn runtime_admission_envelope(
 }
 
 fn wire_caller_signature(
-    wire: &crate::daemon::axon_bridge::dispatch_shim::WireDispatch,
+    wire: &crate::daemon::axon_bridge::descriptor_bound_dispatch::WireDispatch,
 ) -> Result<axon_sdk::invocation::CallerSignature, Status> {
     match &wire.ingress {
-        crate::daemon::axon_bridge::dispatch_shim::WireDispatchIngress::ExternalSigned(
+        crate::daemon::axon_bridge::descriptor_bound_dispatch::WireDispatchIngress::ExternalSigned(
             signature,
         )
-        | crate::daemon::axon_bridge::dispatch_shim::WireDispatchIngress::ProvisionalBootstrap(
+        | crate::daemon::axon_bridge::descriptor_bound_dispatch::WireDispatchIngress::ProvisionalBootstrap(
             signature,
         ) => Ok(signature.clone()),
-        crate::daemon::axon_bridge::dispatch_shim::WireDispatchIngress::LocalSystem => Err(
+        crate::daemon::axon_bridge::descriptor_bound_dispatch::WireDispatchIngress::LocalSystem => Err(
             Status::internal("trusted local-system ingress has no caller signature"),
         ),
     }

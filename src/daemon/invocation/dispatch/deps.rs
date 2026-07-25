@@ -224,7 +224,7 @@ impl RuntimePlane {
     pub(crate) fn stage_runtime_admission(
         &self,
         facade: &crate::daemon::invocation::admission::admission_facade::AdmissionFacade,
-        wire: &crate::daemon::axon_bridge::dispatch_shim::WireDispatch,
+        wire: &crate::daemon::axon_bridge::descriptor_bound_dispatch::WireDispatch,
         ability: &str,
         call_mode: axon_sdk::invocation::CallMode,
     ) -> Result<

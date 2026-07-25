@@ -1020,13 +1020,14 @@ async fn external_signed_bidi_file_transfer_download_emits_business_frames() {
             open.target.as_ref(),
         )
         .expect("typed descriptor target");
-    let wire = crate::daemon::axon_bridge::dispatch_shim::external_signed_from_wire_parts(
-        open.envelope.clone().expect("signed envelope"),
-        descriptor_ref,
-        open.initial_args.clone(),
-        open.metadata.clone(),
-    )
-    .expect("wire dispatch");
+    let wire =
+        crate::daemon::axon_bridge::descriptor_bound_dispatch::external_signed_from_wire_parts(
+            open.envelope.clone().expect("signed envelope"),
+            descriptor_ref,
+            open.initial_args.clone(),
+            open.metadata.clone(),
+        )
+        .expect("wire dispatch");
     let admission =
         AdmissionFacade::with_trust_anchor_cell(trust, Some(TEST_DAEMON_URA.to_string()))
             .with_ability_catalog(Arc::new(catalog));
@@ -1040,9 +1041,10 @@ async fn external_signed_bidi_file_transfer_download_emits_business_frames() {
             axon_sdk::invocation::CallMode::Bidi,
         )
         .expect("stage daemon runtime admission");
-    let handle = crate::daemon::axon_bridge::dispatch_shim::open_bidi_external_signed(&rt, wire)
-        .await
-        .expect("open external-signed bidi");
+    let handle =
+        crate::daemon::axon_bridge::descriptor_bound_dispatch::open_bidi_external_signed(&rt, wire)
+            .await
+            .expect("open external-signed bidi");
     runtime_admission
         .commit()
         .expect("commit daemon runtime admission");

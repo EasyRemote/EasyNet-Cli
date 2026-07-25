@@ -1194,7 +1194,7 @@ impl BidiDispatcher {
                 true,
                 &dispatch_ability,
             )?;
-            crate::daemon::axon_bridge::dispatch_shim::local_system_from_wire_parts(
+            crate::daemon::axon_bridge::descriptor_bound_dispatch::local_system_from_wire_parts(
                 wire_envelope,
                 dispatch_descriptor_ref,
                 envelope_open.initial_args.clone(),
@@ -1215,7 +1215,7 @@ impl BidiDispatcher {
                     envelope_open.target.as_ref(),
                 )?
                 .into_descriptor_ref();
-            crate::daemon::axon_bridge::dispatch_shim::external_signed_from_wire_parts(
+            crate::daemon::axon_bridge::descriptor_bound_dispatch::external_signed_from_wire_parts(
                 wire_envelope,
                 signed_descriptor_ref,
                 envelope_open.initial_args.clone(),
@@ -1231,11 +1231,11 @@ impl BidiDispatcher {
             CallMode::Bidi,
         )?;
         let handle =
-            crate::daemon::axon_bridge::dispatch_shim::open_bidi_external_signed(&runtime, wire)
-                .await
-                .map_err(|err| {
-                    status_from_axon_invoke_error("InvokeBidi", &dispatch_ability, err)
-                })?;
+            crate::daemon::axon_bridge::descriptor_bound_dispatch::open_bidi_external_signed(
+                &runtime, wire,
+            )
+            .await
+            .map_err(|err| status_from_axon_invoke_error("InvokeBidi", &dispatch_ability, err))?;
         let lifecycle = match RegisteredInvocationLifecycle::register(
             self.runtime.cancellations.clone(),
             &lifecycle_envelope,

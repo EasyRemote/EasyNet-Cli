@@ -344,7 +344,7 @@ impl DaemonRouteRuntimeAdapter {
                         request.target.as_ref(),
                     )?
                     .into_descriptor_ref();
-                crate::daemon::axon_bridge::dispatch_shim::provisional_bootstrap_from_wire_parts(
+                crate::daemon::axon_bridge::descriptor_bound_dispatch::provisional_bootstrap_from_wire_parts(
                     envelope,
                     signed_ref,
                     request.arguments.clone(),
@@ -360,7 +360,7 @@ impl DaemonRouteRuntimeAdapter {
                     true,
                     route.name(),
                 )?;
-                crate::daemon::axon_bridge::dispatch_shim::local_system_from_wire_parts(
+                crate::daemon::axon_bridge::descriptor_bound_dispatch::local_system_from_wire_parts(
                     envelope,
                     registered_ref,
                     request.arguments.clone(),
@@ -382,7 +382,7 @@ impl DaemonRouteRuntimeAdapter {
                         request.target.as_ref(),
                     )?
                     .into_descriptor_ref();
-                crate::daemon::axon_bridge::dispatch_shim::external_signed_from_wire_parts(
+                crate::daemon::axon_bridge::descriptor_bound_dispatch::external_signed_from_wire_parts(
                     envelope,
                     signed_ref,
                     request.arguments.clone(),
@@ -395,7 +395,7 @@ impl DaemonRouteRuntimeAdapter {
             self.runtime_admission
                 .stage(&self.admission, &wire, route.name(), CallMode::Rpc)?;
 
-        let outcome = crate::daemon::axon_bridge::dispatch_shim::dispatch_rpc_admitted(
+        let outcome = crate::daemon::axon_bridge::descriptor_bound_dispatch::dispatch_rpc_admitted(
             &self.runtime,
             wire,
             &self.cancellations,
@@ -450,7 +450,7 @@ impl DaemonRouteRuntimeAdapter {
                 true,
                 route.name(),
             )?;
-            crate::daemon::axon_bridge::dispatch_shim::local_system_from_wire_parts(
+            crate::daemon::axon_bridge::descriptor_bound_dispatch::local_system_from_wire_parts(
                 envelope,
                 registered_ref,
                 request.arguments.clone(),
@@ -471,7 +471,7 @@ impl DaemonRouteRuntimeAdapter {
                     request.target.as_ref(),
                 )?
                 .into_descriptor_ref();
-            crate::daemon::axon_bridge::dispatch_shim::external_signed_from_wire_parts(
+            crate::daemon::axon_bridge::descriptor_bound_dispatch::external_signed_from_wire_parts(
                 envelope,
                 signed_ref,
                 request.arguments.clone(),
@@ -484,10 +484,12 @@ impl DaemonRouteRuntimeAdapter {
             self.runtime_admission
                 .stage(&self.admission, &wire, route.name(), CallMode::Stream)?;
 
-        let handle =
-            crate::daemon::axon_bridge::dispatch_shim::open_stream_admitted(&self.runtime, wire)
-                .await
-                .map_err(|err| status_from_axon_invoke_error("InvokeStream", route.name(), err))?;
+        let handle = crate::daemon::axon_bridge::descriptor_bound_dispatch::open_stream_admitted(
+            &self.runtime,
+            wire,
+        )
+        .await
+        .map_err(|err| status_from_axon_invoke_error("InvokeStream", route.name(), err))?;
         let lifecycle = match RegisteredInvocationLifecycle::register(
             self.cancellations.clone(),
             &lifecycle_envelope,
@@ -565,7 +567,7 @@ impl DaemonRouteRuntimeAdapter {
             );
         }
         let wire = if local_system_ingress {
-            crate::daemon::axon_bridge::dispatch_shim::local_system_from_wire_parts(
+            crate::daemon::axon_bridge::descriptor_bound_dispatch::local_system_from_wire_parts(
                 envelope,
                 registered_ref,
                 envelope_open.initial_args.clone(),
@@ -580,7 +582,7 @@ impl DaemonRouteRuntimeAdapter {
                     envelope_open.target.as_ref(),
                 )?
                 .into_descriptor_ref();
-            crate::daemon::axon_bridge::dispatch_shim::external_signed_from_wire_parts(
+            crate::daemon::axon_bridge::descriptor_bound_dispatch::external_signed_from_wire_parts(
                 envelope,
                 signed_ref,
                 envelope_open.initial_args.clone(),
@@ -592,12 +594,13 @@ impl DaemonRouteRuntimeAdapter {
         let runtime_admission =
             self.runtime_admission
                 .stage(&self.admission, &wire, route.name(), CallMode::Bidi)?;
-        let handle = crate::daemon::axon_bridge::dispatch_shim::open_bidi_external_signed(
-            &self.runtime,
-            wire,
-        )
-        .await
-        .map_err(|error| status_from_axon_invoke_error("InvokeBidi", route.name(), error))?;
+        let handle =
+            crate::daemon::axon_bridge::descriptor_bound_dispatch::open_bidi_external_signed(
+                &self.runtime,
+                wire,
+            )
+            .await
+            .map_err(|error| status_from_axon_invoke_error("InvokeBidi", route.name(), error))?;
         let lifecycle = match RegisteredInvocationLifecycle::register(
             self.cancellations.clone(),
             &lifecycle_envelope,
@@ -954,7 +957,7 @@ mod provisional_join_proof_tests {
 }
 
 fn daemon_route_outcome_response(
-    outcome: crate::daemon::axon_bridge::dispatch_shim::RpcDispatchOutcome,
+    outcome: crate::daemon::axon_bridge::descriptor_bound_dispatch::RpcDispatchOutcome,
 ) -> Result<Response<InvokeResponse>, Status> {
     rpc_dispatch_outcome_response(outcome).0
 }

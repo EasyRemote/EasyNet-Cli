@@ -113,7 +113,7 @@ fn receipt_to_session_wire(
 }
 
 fn unary_checkpoints_to_session_wire(
-    outcome: &crate::daemon::axon_bridge::dispatch_shim::RpcDispatchOutcome,
+    outcome: &crate::daemon::axon_bridge::descriptor_bound_dispatch::RpcDispatchOutcome,
 ) -> Result<
     (
         Option<axon_sdk::pb::axon::v1::InvocationReceipt>,
@@ -285,15 +285,16 @@ impl LocalAxonSessionDispatcher {
                 request.target.as_ref(),
             )
             .map_err(|status| SessionDispatchError::Other(status.message().to_string()))?;
-        let wire = crate::daemon::axon_bridge::dispatch_shim::external_signed_from_wire_parts(
-            envelope,
-            descriptor_ref.into_descriptor_ref(),
-            request.arguments,
-            request.metadata,
-        )
-        .map_err(|err| {
-            SessionDispatchError::Other(format!("build carrier-v1 signed dispatch: {err}"))
-        })?;
+        let wire =
+            crate::daemon::axon_bridge::descriptor_bound_dispatch::external_signed_from_wire_parts(
+                envelope,
+                descriptor_ref.into_descriptor_ref(),
+                request.arguments,
+                request.metadata,
+            )
+            .map_err(|err| {
+                SessionDispatchError::Other(format!("build carrier-v1 signed dispatch: {err}"))
+            })?;
         let runtime_admission = self.stage_runtime_admission(&wire, &function_name, call_mode)?;
 
         // ── step-3c: server-stream over carrier ──────────────────────
@@ -310,7 +311,7 @@ impl LocalAxonSessionDispatcher {
                 .await;
         }
 
-        let outcome = crate::daemon::axon_bridge::dispatch_shim::dispatch_rpc_admitted(
+        let outcome = crate::daemon::axon_bridge::descriptor_bound_dispatch::dispatch_rpc_admitted(
             &runtime,
             wire,
             &self.lifecycle_cancellations,
@@ -358,7 +359,7 @@ impl LocalAxonSessionDispatcher {
     async fn handle_carrier_v1_stream_open(
         &self,
         call_id: u64,
-        wire: crate::daemon::axon_bridge::dispatch_shim::WireDispatch,
+        wire: crate::daemon::axon_bridge::descriptor_bound_dispatch::WireDispatch,
         runtime_admission: Option<
             crate::daemon::invocation::admission::admission_facade::DaemonRuntimeAdmissionLease,
         >,
@@ -367,8 +368,10 @@ impl LocalAxonSessionDispatcher {
         let runtime = self.require_local_runtime("carrier-v1 stream")?;
         let lifecycle_envelope = wire.envelope.clone();
         let handle =
-            match crate::daemon::axon_bridge::dispatch_shim::open_stream_admitted(&runtime, wire)
-                .await
+            match crate::daemon::axon_bridge::descriptor_bound_dispatch::open_stream_admitted(
+                &runtime, wire,
+            )
+            .await
             {
                 Ok(handle) => handle,
                 Err(err) => {
@@ -830,7 +833,7 @@ impl LocalAxonSessionDispatcher {
 
     fn stage_runtime_admission(
         &self,
-        wire: &crate::daemon::axon_bridge::dispatch_shim::WireDispatch,
+        wire: &crate::daemon::axon_bridge::descriptor_bound_dispatch::WireDispatch,
         ability: &str,
         call_mode: axon_sdk::invocation::CallMode,
     ) -> Result<
@@ -1123,7 +1126,7 @@ impl LocalAxonSessionDispatcher {
                 .await;
             }
         };
-        let wire = match crate::daemon::axon_bridge::dispatch_shim::external_signed_from_wire_parts(
+        let wire = match crate::daemon::axon_bridge::descriptor_bound_dispatch::external_signed_from_wire_parts(
             envelope,
             descriptor_ref.into_descriptor_ref(),
             request.arguments,
@@ -1158,8 +1161,10 @@ impl LocalAxonSessionDispatcher {
         };
         let lifecycle_envelope = wire.envelope.clone();
         let handle =
-            match crate::daemon::axon_bridge::dispatch_shim::open_bidi_admitted(&runtime, wire)
-                .await
+            match crate::daemon::axon_bridge::descriptor_bound_dispatch::open_bidi_admitted(
+                &runtime, wire,
+            )
+            .await
             {
                 Ok(handle) => handle,
                 Err(err) => {

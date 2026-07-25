@@ -107,7 +107,7 @@
   · 6× `result_large_err`:全部 `Err=AxonError`(Axon SDK 结构体,String×2/Option×N/BTreeMap →
     ≥144B,根因在 SDK)。两条修法都非小修:本仓侧 `Box<AxonError>` 6 签名 = 改 ~13 调用点的
     `?`/map_err 适配(payload_to_json_value 7 caller、json_value_to_payload 4、decode_pubkey 2,
-    dispatch_shim 3 处 pub);或 SDK 侧 AxonError 瘦身(跨仓)。中型,单列。
+    descriptor_bound_dispatch 3 处 pub);或 SDK 侧 AxonError 瘦身(跨仓)。中型,单列。
   · 防回潮已就位:src/lib.rs `#![deny]` 棘轮锁死已清 5 类(needless_borrow/return、
     redundant_closure、useless_format、missing_safety_doc)→ 回潮即 `cargo clippy` 失败
     (已注入 needless_return 验证咬合);result_large_err + too_many_arguments 仍 warn 待 SDK/F-002。

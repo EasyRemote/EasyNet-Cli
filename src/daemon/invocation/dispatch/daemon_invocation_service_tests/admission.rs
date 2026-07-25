@@ -125,7 +125,7 @@ fn axon_mode(mode: crate::daemon::ability::CallMode) -> AxonCallMode {
 async fn invoke_staged_wire(
     service: &DaemonInvocationService,
     geometry: &GeometryFixture,
-    wire: crate::daemon::axon_bridge::dispatch_shim::WireDispatch,
+    wire: crate::daemon::axon_bridge::descriptor_bound_dispatch::WireDispatch,
 ) -> Result<(), AxonError> {
     let runtime = service
         .runtime
@@ -142,12 +142,13 @@ async fn invoke_staged_wire(
         .map_err(|status| AxonError::internal(status.to_string()))?;
     let result = match geometry.mode {
         crate::daemon::ability::CallMode::Rpc => {
-            let outcome = crate::daemon::axon_bridge::dispatch_shim::dispatch_rpc_admitted(
-                &runtime,
-                wire,
-                &service.runtime.cancellations,
-            )
-            .await;
+            let outcome =
+                crate::daemon::axon_bridge::descriptor_bound_dispatch::dispatch_rpc_admitted(
+                    &runtime,
+                    wire,
+                    &service.runtime.cancellations,
+                )
+                .await;
             match outcome.error {
                 Some(error) => Err(error),
                 None => Ok(()),
@@ -155,15 +156,18 @@ async fn invoke_staged_wire(
         }
         crate::daemon::ability::CallMode::Stream => {
             let handle =
-                crate::daemon::axon_bridge::dispatch_shim::open_stream_admitted(&runtime, wire)
-                    .await?;
+                crate::daemon::axon_bridge::descriptor_bound_dispatch::open_stream_admitted(
+                    &runtime, wire,
+                )
+                .await?;
             handle.finalized().await.map(|_| ())
         }
         crate::daemon::ability::CallMode::Bidi => {
-            let handle = crate::daemon::axon_bridge::dispatch_shim::open_bidi_external_signed(
-                &runtime, wire,
-            )
-            .await?;
+            let handle =
+                crate::daemon::axon_bridge::descriptor_bound_dispatch::open_bidi_external_signed(
+                    &runtime, wire,
+                )
+                .await?;
             handle.finalized().await.map(|_| ())
         }
     };
@@ -178,7 +182,7 @@ async fn invoke_staged_wire(
 fn external_wire(
     geometry: &GeometryFixture,
     corrupt_signature: bool,
-) -> crate::daemon::axon_bridge::dispatch_shim::WireDispatch {
+) -> crate::daemon::axon_bridge::descriptor_bound_dispatch::WireDispatch {
     let payload = b"{}".to_vec();
     let mut envelope = signed_test_envelope_with_descriptor_ref(
         TEST_DAEMON_URA,
@@ -195,7 +199,7 @@ fn external_wire(
             .expect("signed RF7 test envelope")
             .signature[0] ^= 0x80;
     }
-    crate::daemon::axon_bridge::dispatch_shim::external_signed_from_wire_parts(
+    crate::daemon::axon_bridge::descriptor_bound_dispatch::external_signed_from_wire_parts(
         envelope,
         geometry.descriptor_ref.clone(),
         payload,
@@ -207,8 +211,8 @@ fn external_wire(
 fn local_system_wire(
     geometry: &GeometryFixture,
     envelope: Envelope,
-) -> crate::daemon::axon_bridge::dispatch_shim::WireDispatch {
-    crate::daemon::axon_bridge::dispatch_shim::local_system_from_wire_parts(
+) -> crate::daemon::axon_bridge::descriptor_bound_dispatch::WireDispatch {
+    crate::daemon::axon_bridge::descriptor_bound_dispatch::local_system_from_wire_parts(
         envelope,
         geometry.descriptor_ref.clone(),
         b"{}".to_vec(),

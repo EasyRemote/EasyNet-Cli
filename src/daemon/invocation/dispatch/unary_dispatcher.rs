@@ -96,9 +96,9 @@ use crate::daemon::invocation::routing::route_resolver::{
 use crate::daemon::trust::anchor::{TrustedAgentRole, TrustedPrincipalOwner};
 
 pub(crate) fn rpc_dispatch_outcome_response(
-    outcome: crate::daemon::axon_bridge::dispatch_shim::RpcDispatchOutcome,
+    outcome: crate::daemon::axon_bridge::descriptor_bound_dispatch::RpcDispatchOutcome,
 ) -> (Result<Response<InvokeResponse>, Status>, bool) {
-    let crate::daemon::axon_bridge::dispatch_shim::RpcDispatchOutcome {
+    let crate::daemon::axon_bridge::descriptor_bound_dispatch::RpcDispatchOutcome {
         invocation_id,
         state,
         payload_bytes,
@@ -172,7 +172,7 @@ mod rpc_dispatch_outcome_response_tests {
             .with_security_class(SecurityClass::Authentication)
             .with_message("ed25519_signature_wrong_length");
         let (response, axon_started) = rpc_dispatch_outcome_response(
-            crate::daemon::axon_bridge::dispatch_shim::RpcDispatchOutcome {
+            crate::daemon::axon_bridge::descriptor_bound_dispatch::RpcDispatchOutcome {
                 invocation_id: None,
                 state: InvocationState::Failed,
                 payload_bytes: Vec::new(),
@@ -825,7 +825,7 @@ impl UnaryDispatcher {
                     Ok(metadata) => metadata,
                     Err(status) => return (Err(status), false),
                 };
-                crate::daemon::axon_bridge::dispatch_shim::local_system_from_wire_parts(
+                crate::daemon::axon_bridge::descriptor_bound_dispatch::local_system_from_wire_parts(
                     envelope,
                     runtime_descriptor_ref,
                     arguments.to_vec(),
@@ -851,7 +851,7 @@ impl UnaryDispatcher {
                     Ok(ref_) => ref_.into_descriptor_ref(),
                     Err(status) => return (Err(status), false),
                 };
-                crate::daemon::axon_bridge::dispatch_shim::external_signed_from_wire_parts(
+                crate::daemon::axon_bridge::descriptor_bound_dispatch::external_signed_from_wire_parts(
                     envelope,
                     signed_descriptor_ref,
                     arguments.to_vec(),
@@ -880,7 +880,7 @@ impl UnaryDispatcher {
             Ok(lease) => lease,
             Err(status) => return (Err(status), false),
         };
-        let outcome = crate::daemon::axon_bridge::dispatch_shim::dispatch_rpc_admitted(
+        let outcome = crate::daemon::axon_bridge::descriptor_bound_dispatch::dispatch_rpc_admitted(
             &runtime,
             wire,
             &self.runtime.cancellations,

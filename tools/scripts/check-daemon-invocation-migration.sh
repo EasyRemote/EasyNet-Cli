@@ -211,7 +211,7 @@ if require_file "src/daemon/invocation/routing/target.rs" \
     && require_file "src/support/platform/local_daemon_grpc.rs" \
     && require_file "src/daemon/invocation/dispatch/local_runtime_invoker.rs" \
     && require_file "src/daemon/invocation/dispatch/daemon_route_runtime.rs" \
-    && require_file "src/daemon/axon_bridge/dispatch_shim.rs" \
+    && require_file "src/daemon/axon_bridge/descriptor_bound_dispatch.rs" \
     && require_file "src/daemon/axon_bridge/local_runtime_request.rs" \
     && require_file "src/daemon/invocation/dispatch/daemon_invocation_service.rs"; then
     bad_route_tuple_ownership="$(
@@ -611,7 +611,7 @@ for token, detail in (
 ):
     require(runtime, token, detail)
 
-shim = "src/daemon/axon_bridge/dispatch_shim.rs"
+dispatch_adapter = "src/daemon/axon_bridge/descriptor_bound_dispatch.rs"
 for token, detail in (
     ("descriptor_bound_from_wire_parts", "wire tuple reassembly through Axon descriptor-bound parser"),
     ("LocalRuntimeRequestFactory::request_for", "external signed request factory"),
@@ -620,7 +620,7 @@ for token, detail in (
     ("invoke_descriptor_bound_stream_request_async(prepared.request)", "stream LocalRuntime descriptor-bound dispatch"),
     ("invoke_descriptor_bound_bidi_request_async(prepared.request)", "bidi LocalRuntime descriptor-bound dispatch"),
 ):
-    require(shim, token, detail)
+    require(dispatch_adapter, token, detail)
 
 factory = "src/daemon/axon_bridge/local_runtime_request.rs"
 for token, detail in (

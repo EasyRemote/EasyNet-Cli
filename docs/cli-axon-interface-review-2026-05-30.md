@@ -53,7 +53,7 @@ ControlPlane / Federation / Identity / MissionControl / Observe / Policy / State
 作为 ability 的参数/回执形状复用。
 
 - **冗余表现**：同一个文件里，有的消息背后有方法，有的没有，肉眼无法区分。
-- **对 CLI 的影响**：CLI 的 `wire_conv.rs` / `dispatch_shim.rs` 在做 `From<pb::*>` 转换时，要靠人脑记住"哪些是活的"。
+- **对 CLI 的影响**：CLI 的 `wire_conv.rs` / `descriptor_bound_dispatch.rs` 在做 `From<pb::*>` 转换时，要靠人脑记住"哪些是活的"。
 - **PM 结论**：低优先级，但 Axon 应在 proto 注释里给这些消息打 `// RPC removed by RFC-001, retained as ability arg shape`，
   把"接口考古"成本降下来。
 

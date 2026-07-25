@@ -337,7 +337,7 @@ async fn drain_to_outcome(handle: InvocationHandle) -> RpcDispatchOutcome {
 /// is `None` on success, `Some` for every operational failure
 /// (target unknown, signature invalid, handler returned Err,
 /// timed out, cancelled). The wire-shape mapping (in-band frame
-/// vs gRPC `Status`) is the *caller's* responsibility; this shim
+/// vs gRPC `Status`) is the *caller's* responsibility; this adapter
 /// only speaks in SDK types, matching the broader Phase-4 invariant
 /// that admission / dispatch / audit / persist live in Axon and
 /// CLI owns only the transport translation.
@@ -545,7 +545,7 @@ pub async fn open_bidi_local_explicit_subject(
     Ok(handle)
 }
 
-/// Daemon-internal dispatch. The shim binds execution to an explicit callee
+/// Daemon-internal dispatch. The adapter binds execution to an explicit callee
 /// and `EntityRef` subject, then signs with the synthetic `_system.local`
 /// caller before entering Axon's public admission path.
 pub async fn dispatch_rpc_local_explicit_subject(
@@ -719,7 +719,7 @@ mod tests {
 
         // Project the SDK pieces back into wire form. CLI's
         // outbound clients would do the inverse direction; for the
-        // shim's inbound test we only need the wire field shapes.
+        // adapter's inbound test we only need the wire field shapes.
         let wire_caller = pb::AgentIdentity {
             ura: caller_sdk.ura.clone(),
             profile: caller_sdk.profile.as_str().to_string(),
@@ -987,7 +987,7 @@ mod tests {
     #[tokio::test]
     async fn dispatch_rpc_unknown_ability_returns_in_band_error() {
         // Before Phase 4: this would have been Status::not_found
-        // ("target not in PresenceRegistry") that the Go shim
+        // ("target not in PresenceRegistry") that the Go adapter
         // logged as HTTP 500 with no body — the original bug the
         // user kept hitting. After Phase 4: the runtime answers
         // with a typed AxonError that the wire layer projects into
@@ -1023,7 +1023,7 @@ mod tests {
     async fn external_signed_wire_rejects_missing_caller() {
         // Defensive: the daemon should never receive a wire
         // envelope without a caller, but
-        // the shim must reject cleanly instead of panicking when
+        // the adapter must reject cleanly instead of panicking when
         // a malformed peer sends one anyway.
         let (_rt, _ledger, sk, _temp) = build_test_runtime();
         let (mut wire, ability, args) = build_wire_envelope(&sk, "x", b"{}");

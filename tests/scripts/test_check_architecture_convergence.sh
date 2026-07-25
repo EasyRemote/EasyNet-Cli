@@ -2190,7 +2190,7 @@ fn descriptor_bound_from_wire_parts(envelope: Envelope) -> Result<(), AxonError>
     Ok(())
 }
 EOF
-  cat >"$CLI/src/daemon/axon_bridge/dispatch_shim.rs" <<'EOF'
+  cat >"$CLI/src/daemon/axon_bridge/descriptor_bound_dispatch.rs" <<'EOF'
 struct LocalSystemAuthority;
 
 struct WireDispatch {
@@ -3780,7 +3780,7 @@ expect_fail \
   "R16B_LOCAL_LOOPBACK_INVOCATION_OWNER_FORK"
 
 make_good_fixture
-cat >"$CLI/src/daemon/axon_bridge/dispatch_shim.rs" <<'EOF'
+cat >"$CLI/src/daemon/axon_bridge/descriptor_bound_dispatch.rs" <<'EOF'
 fn dispatch_rpc_local_explicit_subject() {
     let envelope = DescriptorBoundEnvelope::from_parts(DescriptorBoundEnvelopeParts {
         caller: system_agent_identity(),
@@ -3793,7 +3793,7 @@ expect_fail \
   "R16C_SYSTEM_INVOCATION_ISSUER_FORK"
 
 make_good_fixture
-cat >"$CLI/src/daemon/axon_bridge/dispatch_shim.rs" <<'EOF'
+cat >"$CLI/src/daemon/axon_bridge/descriptor_bound_dispatch.rs" <<'EOF'
 pub fn local_system_from_wire_parts() {
     SystemInvocationIssuer::request_for_complete_envelope();
 }
@@ -3807,7 +3807,7 @@ expect_fail \
   "R16C_SYSTEM_INVOCATION_ISSUER_FORK"
 
 make_good_fixture
-cat >"$CLI/src/daemon/axon_bridge/dispatch_shim.rs" <<'EOF'
+cat >"$CLI/src/daemon/axon_bridge/descriptor_bound_dispatch.rs" <<'EOF'
 struct LocalSystemAuthority;
 
 struct WireDispatch {
