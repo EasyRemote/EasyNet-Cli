@@ -20,7 +20,7 @@
 //   stream <ability-ura>       Call a server-stream ability locally        (-> cli::ability_stream)
 //   bidi <ability-ura>         Open a bidirectional ability locally        (-> cli::ability_bidi)
 //   record <ability-ura>       Record from a resource-backed stream        (-> cli::ability_record)
-//          [--node <id>]       --node pins to a specific remote device
+//          [--node <ura>]      --node pins to a canonical remote Device URA
 //   exec <node> -- <cmd>        One-shot remote shell (ad-hoc ability)     (-> cli::exec)
 //   teach <agent.name> --to U   Grant descriptor import to ONE agent       (-> cli::teach)
 //   learn <ability-ura> --as A  Import a granted descriptor into A         (-> cli::teach)
@@ -122,10 +122,9 @@ pub struct ShowArgs {
     /// Canonical Ability URA (e.g.
     /// `easynet:///r/localhost/ability/alice.claude.weather`).
     pub ability_ura: String,
-    /// Target node id or canonical device URA. Omit, or pass `local`,
-    /// to inspect this daemon; any other value is resolved through the
-    /// canonical remote catalogue path.
-    #[arg(long, short = 'n', value_name = "NODE_ID")]
+    /// Canonical remote Device URA. Omit, or pass `local`, to inspect
+    /// this daemon; remote catalogue reads do not repair bare node ids.
+    #[arg(long, short = 'n', value_name = "DEVICE_URA")]
     pub node: Option<String>,
     /// Output format. 'table' emits the human-readable contract view;
     /// 'json' emits the raw underlying registry record. Aligned with

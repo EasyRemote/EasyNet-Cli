@@ -8924,6 +8924,47 @@ for test in (
 PY
 }
 
+check_remote_device_ingress_ura_only_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local remote="$cli_root/src/support/platform/remote_device.rs"
+  local ability_cli="$cli_root/src/cli/commands/groups/ability.rs"
+  [[ -f "$remote" ]] || fail "remote device ingress source is missing: ${remote#$cli_root/}"
+  [[ -f "$ability_cli" ]] || fail "ability CLI source is missing: ${ability_cli#$cli_root/}"
+
+  "$PYTHON_BIN" - "$remote" "$ability_cli" <<'PY'
+import sys
+from pathlib import Path
+
+remote = Path(sys.argv[1]).read_text(encoding="utf-8")
+ability_cli = Path(sys.argv[2]).read_text(encoding="utf-8")
+production = remote.split("\n#[cfg(test)]", 1)[0]
+
+for retired in (
+    "lookup_node_ura_in_directory",
+    "resolve_target_device_ura_with_lookup",
+    "read_federated_directory_for_current_user",
+    "federation.discover returned no matching device",
+):
+    if retired in production:
+        raise SystemExit(f"remote_device_ingress_ura_only:retired_lookup:{retired}")
+
+for required in (
+    "remote invocation ingress is URA-only",
+    "parse_node_ura(trimmed)",
+    "not a canonical URA",
+    "bare_node_id_is_rejected_before_directory_lookup",
+    "empty_target_rejects_before_remote_dispatch",
+):
+    if required not in remote:
+        raise SystemExit(f"remote_device_ingress_ura_only:missing:{required}")
+
+if 'value_name = "DEVICE_URA"' not in ability_cli:
+    raise SystemExit("remote_device_ingress_ura_only:ability_node_help_not_ura")
+if "Target node id or canonical device URA" in ability_cli:
+    raise SystemExit("remote_device_ingress_ura_only:retired_ability_node_id_help")
+PY
+}
+
 check_mission_workspace_easynet_binary_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local workspace="$cli_root/src/daemon/execution/mission/workspace.rs"
@@ -21738,6 +21779,38 @@ EOF
   if ( check_eal_device_target_identity_contract "$tmp/eal-device-target-identity-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected EAL device target identity fallback gate to fail"
   fi
+  mkdir -p "$tmp/remote-device-ingress-legacy/src/support/platform" \
+    "$tmp/remote-device-ingress-legacy/src/cli/commands/groups"
+  cat >"$tmp/remote-device-ingress-legacy/src/support/platform/remote_device.rs" <<'EOF'
+pub(crate) fn resolve_target_device_ura(node: &str) -> anyhow::Result<String> {
+    resolve_target_device_ura_with_lookup(node, lookup_node_ura_in_directory)
+}
+fn resolve_target_device_ura_with_lookup<F>(node: &str, lookup: F) -> anyhow::Result<String>
+where
+    F: FnOnce(&str) -> anyhow::Result<Option<String>>,
+{
+    if let Some(ura) = lookup(node)? {
+        return Ok(ura);
+    }
+    anyhow::bail!("federation.discover returned no matching device")
+}
+fn lookup_node_ura_in_directory(node: &str) -> anyhow::Result<Option<String>> {
+    let entries = crate::daemon::federation::directory_reader::read_federated_directory_for_current_user(None)?;
+    Ok(None)
+}
+#[cfg(test)]
+mod tests {
+    fn bare_node_id_is_rejected_before_directory_lookup() {}
+    fn empty_target_rejects_before_remote_dispatch() {}
+}
+EOF
+  cat >"$tmp/remote-device-ingress-legacy/src/cli/commands/groups/ability.rs" <<'EOF'
+#[arg(long, short = 'n', value_name = "NODE_ID")]
+pub node: Option<String>,
+EOF
+  if ( check_remote_device_ingress_ura_only_contract "$tmp/remote-device-ingress-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected remote device ingress URA-only gate to fail"
+  fi
   mkdir -p "$tmp/mission-workspace-easynet-binary-legacy/src/daemon/execution/mission"
   cat >"$tmp/mission-workspace-easynet-binary-legacy/src/daemon/execution/mission/workspace.rs" <<'EOF'
 fn resolve_easynet_binary() -> String {
@@ -24028,6 +24101,7 @@ EOF
   check_device_settings_loader_contract
   check_mission_traditional_target_conflict_contract
   check_eal_device_target_identity_contract
+  check_remote_device_ingress_ura_only_contract
   check_mission_workspace_easynet_binary_contract
   check_mission_agent_trace_sink_cutover_contract
 	  check_mission_dispatch_audit_authority_contract
@@ -24269,6 +24343,7 @@ check_federation_revoke_ingress_strict_contract
 check_device_settings_loader_contract
 check_mission_traditional_target_conflict_contract
 check_eal_device_target_identity_contract
+check_remote_device_ingress_ura_only_contract
 check_mission_workspace_easynet_binary_contract
 check_mission_agent_trace_sink_cutover_contract
 check_mission_dispatch_audit_authority_contract
