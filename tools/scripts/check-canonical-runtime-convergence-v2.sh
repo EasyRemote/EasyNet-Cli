@@ -6716,6 +6716,68 @@ for required_test in (
 PY
 }
 
+check_node_sdk_invocation_authority_projection_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local node="$cli_root/sdk/node/index.js"
+  local test="$cli_root/sdk/node/test/runtime-core.test.mjs"
+  [[ -f "$node" ]] || return 0
+
+  "$PYTHON_BIN" - "$node" "$test" <<'PY'
+import sys
+from pathlib import Path
+
+node = Path(sys.argv[1]).read_text(encoding="utf-8")
+test = Path(sys.argv[2]).read_text(encoding="utf-8") if Path(sys.argv[2]).exists() else ""
+
+for required in (
+    "class InvocationAuthorityBindingValidator",
+    "RuntimeAbilityProjection.fromInvocation(draft)",
+    "function authorityScopesAdmit(patterns, ability)",
+    "class RuntimeAbilityProjection",
+    "static fromInvocation(draft)",
+    "static descriptorAbilityURA(descriptorRef)",
+    "static descriptorWireAbility(abilityURA)",
+    "static publicAbilityName(calleeURA, abilityURA)",
+    "descriptor_ref must contain a canonical Ability URA",
+    "easynet:///r/",
+):
+    if required not in node:
+        raise SystemExit(f"node_invocation_authority_projection_missing:{required}")
+
+validator_start = node.find("class InvocationAuthorityBindingValidator")
+validator_end = node.find("function invocationAuthorityFromMetadata", validator_start)
+if validator_start < 0 or validator_end < 0:
+    raise SystemExit("node_invocation_authority_projection:validator_body_missing")
+validator_body = node[validator_start:validator_end]
+for forbidden in (
+    "abilityViewForInvocation",
+    "descriptorAbilityURA(",
+    "descriptorWireAbility(",
+    "publicAbilityName(",
+    '"/ability/"',
+):
+    if forbidden in validator_body:
+        raise SystemExit(f"node_invocation_authority_projection:validator_retains_descriptor_projection:{forbidden}")
+
+for forbidden in (
+    "function abilityViewForInvocation",
+    "abilityURA || wire",
+):
+    if forbidden in node:
+        raise SystemExit(f"node_invocation_authority_projection:retired_fallback:{forbidden}")
+
+for required in (
+    "runtime ability projection is canonical for authority scope admission",
+    '"device.dev-a.observe.health"',
+    '"easynet:///r/example/ability/device.dev-a.observe.health"',
+    '"descriptor_ref must contain a canonical Ability URA"',
+    "delegationValue([scope])",
+):
+    if required not in test:
+        raise SystemExit(f"node_invocation_authority_projection_test_missing:{required}")
+PY
+}
+
 check_runtime_authority_metadata_key_neutrality_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local paths=(
@@ -20794,6 +20856,7 @@ EOF
   check_admission_owner_credentials_contract
   check_shared_local_device_owner_projection_contract
   check_node_session_authority_subject_contract
+  check_node_sdk_invocation_authority_projection_contract
   check_runtime_authority_metadata_key_neutrality_contract
   check_admission_authority_raw_wire_strict_contract
   check_admission_authority_ability_projection_contract
@@ -21009,6 +21072,7 @@ check_observe_health_contract_projection_contract
 check_admission_owner_credentials_contract
 check_shared_local_device_owner_projection_contract
 check_node_session_authority_subject_contract
+check_node_sdk_invocation_authority_projection_contract
 check_runtime_authority_metadata_key_neutrality_contract
 check_admission_authority_raw_wire_strict_contract
 check_admission_authority_ability_projection_contract

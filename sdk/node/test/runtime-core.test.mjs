@@ -91,13 +91,13 @@ const authorityValue = (payload) =>
     }),
   ).toString("base64");
 
-const delegationValue = () =>
+const delegationValue = (scopes = ["observe.health"]) =>
   authorityValue({
     issuer_ura: "easynet:///r/example/user/alice",
     subject_ura: callee,
     caller_ura: caller,
     audience: callee,
-    scopes: ["observe.health"],
+    scopes,
     issued_at_ms: 10,
     expires_at_ms: 20,
   });
@@ -846,6 +846,49 @@ test("authority metadata is typed, delegated, and mutually exclusive", async () 
     (error) => error instanceof sdk.SDKError && error.code === sdk.ErrorCode.INVALID_ARGUMENT,
   );
   await authority.close();
+});
+
+test("runtime ability projection is canonical for authority scope admission", () => {
+  for (const scope of [
+    "observe.health",
+    "device.dev-a.observe.health",
+    "easynet:///r/example/ability/device.dev-a.observe.health",
+    "easynet:///r/example/ability/device.dev-a.*",
+  ]) {
+    const proof = sdk.DelegationProof.fromMetadata(delegationValue([scope]));
+    const authorized = new sdk.InvocationBuilder()
+      .withCallerURA(caller)
+      .withCalleeURA(callee)
+      .withDescriptorRef(descriptor)
+      .withSubjectURA(callee)
+      .withNonceBase64(nonce)
+      .withCausalContext({ form: "none" })
+      .withJSONArgs({ probe: true })
+      .withContentType("application/json")
+      .withAuthorityMetadata(proof.metadata())
+      .build();
+    assert.equal(authorized.metadata[sdk.DELEGATION_METADATA_KEY], proof.metadataValue);
+  }
+
+  const proof = sdk.DelegationProof.fromMetadata(delegationValue(["observe.health"]));
+  assert.throws(
+    () =>
+      new sdk.InvocationBuilder()
+        .withCallerURA(caller)
+        .withCalleeURA(callee)
+        .withDescriptorRef("observe.health")
+        .withSubjectURA(callee)
+        .withNonceBase64(nonce)
+        .withCausalContext({ form: "none" })
+        .withJSONArgs({ probe: true })
+        .withContentType("application/json")
+        .withAuthorityMetadata(proof.metadata())
+        .build(),
+    (error) =>
+      error instanceof sdk.SDKError &&
+      error.code === sdk.ErrorCode.INVALID_ARGUMENT &&
+      error.message.includes("descriptor_ref must contain a canonical Ability URA"),
+  );
 });
 
 test("authority client projects canonical principal URAs to current session wire", async () => {

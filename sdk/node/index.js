@@ -3170,7 +3170,7 @@ class InvocationAuthorityBindingValidator {
   constructor(draft, authority) {
     this.draft = draft;
     this.authority = authority;
-    this.ability = abilityViewForInvocation(draft);
+    this.ability = RuntimeAbilityProjection.fromInvocation(draft);
     this.details = {
       caller_ura: draft.callerURA,
       callee_ura: draft.calleeURA,
@@ -3532,61 +3532,67 @@ function authorityScopeMatches(pattern, value) {
   return cleanPattern === cleanValue;
 }
 
-function abilityViewForInvocation(draft) {
-  const wire = descriptorWireAbility(draft.descriptorRef);
-  const abilityURA = descriptorAbilityURA(draft.descriptorRef);
-  const publicName = publicAbilityName(draft.calleeURA, abilityURA || wire);
-  return { wire, abilityURA, publicName };
-}
+class RuntimeAbilityProjection {
+  static abilityPathMarker = "/ability/";
+  static realmPrefix = "easynet:///r/";
 
-function descriptorAbilityURA(descriptorRef) {
-  const clean = String(descriptorRef ?? "").trim();
-  const hash = clean.indexOf("#");
-  const bang = clean.indexOf("!");
-  const limit = Math.min(
-    ...[hash, bang].filter((index) => index >= 0),
-    clean.length,
-  );
-  const withoutMode = clean.slice(0, limit);
-  const version = withoutMode.lastIndexOf("@");
-  return (version >= 0 ? withoutMode.slice(0, version) : withoutMode).trim();
-}
-
-function descriptorWireAbility(descriptorRef) {
-  const abilityURA = descriptorAbilityURA(descriptorRef);
-  const marker = "/ability/";
-  const index = abilityURA.indexOf(marker);
-  return (index >= 0 ? abilityURA.slice(index + marker.length) : abilityURA).trim();
-}
-
-function publicAbilityName(calleeURA, ability) {
-  const clean = String(ability ?? "").trim();
-  const owner = abilityOwnerPrefix(calleeURA);
-  if (owner && clean.startsWith(`${owner}.`)) {
-    return clean.slice(owner.length + 1);
+  constructor({ wire, abilityURA, publicName }) {
+    this.wire = wire;
+    this.abilityURA = abilityURA;
+    this.publicName = publicName;
+    Object.freeze(this);
   }
-  const marker = "/ability/";
-  const index = clean.indexOf(marker);
-  if (index >= 0) {
-    return publicAbilityName(calleeURA, clean.slice(index + marker.length));
-  }
-  return clean;
-}
 
-function abilityOwnerPrefix(calleeURA) {
-  const clean = String(calleeURA ?? "").trim();
-  const device = "/device/";
-  const deviceIndex = clean.indexOf(device);
-  if (deviceIndex >= 0) {
-    return `device.${clean.slice(deviceIndex + device.length).split(/[/?#]/, 1)[0]}`;
+  static fromInvocation(draft) {
+    const abilityURA = this.descriptorAbilityURA(draft.descriptorRef);
+    const wire = this.descriptorWireAbility(abilityURA);
+    const publicName = this.publicAbilityName(draft.calleeURA, abilityURA);
+    return new RuntimeAbilityProjection({ wire, abilityURA, publicName });
   }
-  if (clean.endsWith("/authority")) {
-    const realmMarker = "easynet:///r/";
-    if (clean.startsWith(realmMarker)) {
-      return `hub.${clean.slice(realmMarker.length, -"/authority".length)}`;
+
+  static descriptorAbilityURA(descriptorRef) {
+    const clean = String(descriptorRef ?? "").trim();
+    const hash = clean.indexOf("#");
+    const bang = clean.indexOf("!");
+    const limit = Math.min(
+      ...[hash, bang].filter((index) => index >= 0),
+      clean.length,
+    );
+    const withoutMode = clean.slice(0, limit);
+    const version = withoutMode.lastIndexOf("@");
+    const abilityURA = (version >= 0 ? withoutMode.slice(0, version) : withoutMode).trim();
+    if (!abilityURA.startsWith(this.realmPrefix) || !abilityURA.includes(this.abilityPathMarker)) {
+      throw invalidAuthority("descriptor_ref must contain a canonical Ability URA");
     }
+    return abilityURA;
   }
-  return "";
+
+  static descriptorWireAbility(abilityURA) {
+    const index = abilityURA.indexOf(this.abilityPathMarker);
+    return abilityURA.slice(index + this.abilityPathMarker.length).trim();
+  }
+
+  static publicAbilityName(calleeURA, abilityURA) {
+    const clean = this.descriptorWireAbility(abilityURA);
+    const owner = this.abilityOwnerPrefix(calleeURA);
+    if (owner && clean.startsWith(`${owner}.`)) {
+      return clean.slice(owner.length + 1);
+    }
+    return clean;
+  }
+
+  static abilityOwnerPrefix(calleeURA) {
+    const clean = String(calleeURA ?? "").trim();
+    const device = "/device/";
+    const deviceIndex = clean.indexOf(device);
+    if (deviceIndex >= 0) {
+      return `device.${clean.slice(deviceIndex + device.length).split(/[/?#]/, 1)[0]}`;
+    }
+    if (clean.endsWith("/authority") && clean.startsWith(this.realmPrefix)) {
+      return `hub.${clean.slice(this.realmPrefix.length, -"/authority".length)}`;
+    }
+    return "";
+  }
 }
 
 function authorityMetadataValue(metadata, key) {

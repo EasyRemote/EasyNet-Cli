@@ -7393,7 +7393,19 @@ if node_sdk.exists():
         ),
         (
             "function authorityScopesAdmit(patterns, ability)",
-            "Node SDK must validate authority scopes against ability view",
+            "Node SDK must validate authority scopes against runtime ability projection",
+        ),
+        (
+            "class RuntimeAbilityProjection",
+            "Node SDK must own descriptor-to-scope projection as a canonical runtime object",
+        ),
+        (
+            "RuntimeAbilityProjection.fromInvocation(draft)",
+            "Node SDK authority validator must consume the canonical runtime ability projection",
+        ),
+        (
+            "descriptor_ref must contain a canonical Ability URA",
+            "Node SDK must reject authority-bound bare descriptor names",
         ),
     )
     for token, detail in required_tokens:
@@ -7421,6 +7433,14 @@ if node_sdk.exists():
             1,
             "Node SDK must decode session authority metadata before draft submission",
         )
+    for forbidden, detail in (
+        (
+            "abilityViewForInvocation",
+            "Node SDK must not retain retired ability-view descriptor fallback",
+        ),
+    ):
+        if forbidden in text:
+            add("R70_NODE_AUTHORITY_BINDING_PREFLIGHT", node_sdk, 1, detail)
 
 
 # Rule 71: Node type-level SDK tests must exercise the generic runtime surface
