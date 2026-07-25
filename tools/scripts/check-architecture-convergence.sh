@@ -10988,8 +10988,8 @@ else:
             "missing agent-owner subject regression test",
         ),
         (
-            "local_system_context_for_hub_target_uses_ability_subject",
-            "missing hub-owner subject regression test",
+            "local_system_context_for_realm_authority_target_uses_ability_subject",
+            "missing realm Authority subject regression test",
         ),
     ):
         if token not in raw_local_invoke_text:

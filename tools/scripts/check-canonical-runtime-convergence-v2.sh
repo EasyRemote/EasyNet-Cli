@@ -12185,9 +12185,17 @@ if "default_subject_ura" in production:
 if "unwrap_or_else(|| callee_ura.to_string())" in production:
     raise SystemExit("local_ability_target_subject_policy:implicit_callee_subject_fallback")
 
+for retired, code in (
+    ("HubAbilitySubject", "retired_hub_ability_subject_state"),
+    ("local_system_context_for_hub_target_uses_ability_subject", "retired_hub_subject_regression_name"),
+    ("daemon_system_subject_policy_names_hub_ability_subject", "retired_hub_policy_state_test"),
+):
+    if retired in target or retired in local_invoke:
+        raise SystemExit(f"local_ability_target_subject_policy:{code}")
+
 for token, code in (
     ("enum DaemonSystemSubjectPolicy", "subject_policy_state_missing"),
-    ("HubAbilitySubject(String)", "hub_ability_subject_state_missing"),
+    ("RealmAuthorityAbilitySubject(String)", "realm_authority_ability_subject_state_missing"),
     ("CalleeOwnerSubject(String)", "callee_owner_subject_state_missing"),
     ("fn for_descriptor(ability: &str, callee_ura: &str) -> Self", "subject_policy_selector_missing"),
     ("fn daemon_system_subject_ura_for_descriptor(", "descriptor_policy_missing"),
@@ -12229,9 +12237,9 @@ for text, code in (
 
 for token, code in (
     ("local_system_context_for_agent_target_uses_agent_owner_subject", "agent_subject_regression_missing"),
-    ("local_system_context_for_hub_target_uses_ability_subject", "hub_subject_regression_missing"),
+    ("local_system_context_for_realm_authority_target_uses_ability_subject", "realm_authority_subject_regression_missing"),
     ("daemon_system_subject_policy_names_callee_owner_subject", "callee_policy_state_test_missing"),
-    ("daemon_system_subject_policy_names_hub_ability_subject", "hub_policy_state_test_missing"),
+    ("daemon_system_subject_policy_names_realm_authority_ability_subject", "realm_authority_policy_state_test_missing"),
 ):
     if token not in local_invoke and token not in target:
         raise SystemExit(f"local_ability_target_subject_policy:{code}")
@@ -16510,7 +16518,7 @@ pub fn classify_invoke_error(err: &anyhow::Error) -> LocalInvokeErrorKind { todo
 fn invoke_target_root_derived_subject_timeout() {}
 fn root_context_for_target() {}
 fn local_system_context_for_agent_target_uses_agent_owner_subject() {}
-fn local_system_context_for_hub_target_uses_ability_subject() {}
+fn local_system_context_for_realm_authority_target_uses_ability_subject() {}
 // fallback executor permission
 EOF
   printf 'fn bridge() { local_root_for_target(); }\n' \
@@ -16557,7 +16565,7 @@ pub fn classify_invoke_failure(err: &anyhow::Error) -> LocalInvokeFailureClass {
 fn invoke_issued_target_root_timeout() {}
 fn root_context_for_target() {}
 fn local_system_context_for_agent_target_uses_agent_owner_subject() {}
-fn local_system_context_for_hub_target_uses_ability_subject() {}
+fn local_system_context_for_realm_authority_target_uses_ability_subject() {}
 EOF
   printf 'fn bridge() { local_root_for_target(); }\n' \
     > "$tmp/cli-subject-policy-implicit-fallback/src/daemon/ability/builtins/integrations/mcp/bridge.rs"

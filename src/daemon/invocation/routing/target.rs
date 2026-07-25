@@ -256,7 +256,7 @@ fn checked_subject_ura(subject: &str, field: &str) -> anyhow::Result<String> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum DaemonSystemSubjectPolicy {
-    HubAbilitySubject(String),
+    RealmAuthorityAbilitySubject(String),
     CalleeOwnerSubject(String),
 }
 
@@ -264,7 +264,7 @@ impl DaemonSystemSubjectPolicy {
     fn for_descriptor(ability: &str, callee_ura: &str) -> Self {
         match crate::core::ura::AbilitySelector::parse(ability) {
             Ok(selector) if selector.owner_kind() == "hub" => {
-                Self::HubAbilitySubject(selector.ability_ura().to_string())
+                Self::RealmAuthorityAbilitySubject(selector.ability_ura().to_string())
             }
             _ => Self::CalleeOwnerSubject(callee_ura.to_string()),
         }
@@ -272,7 +272,9 @@ impl DaemonSystemSubjectPolicy {
 
     fn subject_ura(&self) -> &str {
         match self {
-            Self::HubAbilitySubject(subject) | Self::CalleeOwnerSubject(subject) => subject,
+            Self::RealmAuthorityAbilitySubject(subject) | Self::CalleeOwnerSubject(subject) => {
+                subject
+            }
         }
     }
 }
@@ -932,7 +934,7 @@ mod tests {
     }
 
     #[test]
-    fn daemon_system_subject_resolves_to_ability_ura_for_hub_owner() {
+    fn daemon_system_subject_resolves_to_ability_ura_for_realm_authority_owner() {
         let hub_ability = crate::core::ura::hub_ability_ura("acme", "federation.status");
         let target =
             crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root(
@@ -950,7 +952,7 @@ mod tests {
     }
 
     #[test]
-    fn daemon_system_subject_policy_names_hub_ability_subject() {
+    fn daemon_system_subject_policy_names_realm_authority_ability_subject() {
         let hub_ability = crate::core::ura::hub_ability_ura("acme", "federation.status");
         let policy = DaemonSystemSubjectPolicy::for_descriptor(
             &hub_ability,
@@ -959,7 +961,7 @@ mod tests {
 
         assert_eq!(
             policy,
-            DaemonSystemSubjectPolicy::HubAbilitySubject(hub_ability.clone())
+            DaemonSystemSubjectPolicy::RealmAuthorityAbilitySubject(hub_ability.clone())
         );
         assert_eq!(policy.subject_ura(), hub_ability);
     }

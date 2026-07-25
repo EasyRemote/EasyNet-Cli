@@ -921,11 +921,11 @@ mod tests {
     }
 
     #[test]
-    fn local_system_context_for_hub_target_uses_ability_subject() {
+    fn local_system_context_for_realm_authority_target_uses_ability_subject() {
         let selector = crate::core::ura::AbilitySelector::parse(
             "easynet:///r/acme/ability/authority.federation.resolve",
         )
-        .expect("hub ability selector");
+        .expect("realm Authority ability selector");
         let target = LocalAbilityTarget::from_selector(&selector);
         let context = LocalSystemInvocationIssuer::root_context_for_target(
             &target,

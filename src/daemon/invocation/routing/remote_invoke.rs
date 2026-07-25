@@ -2057,12 +2057,12 @@ mod tests {
     }
 
     #[test]
-    fn federation_discover_subject_uses_hub_ability_subject_and_device_self_subject() {
+    fn federation_discover_subject_uses_realm_authority_ability_subject_and_device_self_subject() {
         let hub = crate::core::ura::hub_ura("acme");
         assert_eq!(
             federation_discover_subject_ura(&hub).expect("hub subject"),
             crate::core::ura::owner_ability_ura(&hub, "federation.discover")
-                .expect("hub ability subject")
+                .expect("realm Authority ability subject")
         );
 
         let device = crate::core::ura::device_ura("acme", "device-a");

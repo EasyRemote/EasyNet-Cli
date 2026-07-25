@@ -966,7 +966,7 @@ mod tests {
     fn fresh_root_policy_builds_full_tuple_and_nonce() {
         let hub = crate::core::ura::hub_ura("acme");
         let subject = crate::core::ura::owner_ability_ura(&hub, "federation.resolve")
-            .expect("hub ability subject");
+            .expect("realm Authority ability subject");
         let env = ProtoEnvelope::from_target(
             "easynet:///r/acme/device/dev-a",
             &hub,
