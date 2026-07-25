@@ -24,7 +24,9 @@ use crate::daemon::axon_bridge::local_runtime_request::{
     LocalRuntimeRequestOptions, SystemInvocationIssuer,
 };
 use crate::daemon::identity::local_invocation::local_device_ura;
-use crate::daemon::invocation::routing::target::{InvocationTarget, TargetScope};
+use crate::daemon::invocation::routing::target::{
+    InvocationCausalContext, InvocationTarget, TargetScope,
+};
 
 /// Bidirectional LocalRuntime stream halves exposed to daemon dispatchers.
 ///
@@ -42,7 +44,16 @@ fn local_invocation_callee_ura(target: &InvocationTarget) -> Result<String, Stri
         return Ok(selector.owner_ura().to_string());
     }
 
-    local_device_ura().map_err(|err| err.to_string())
+    match &target.causal_context {
+        InvocationCausalContext::DaemonSystemRoot => {
+            local_device_ura().map_err(|err| err.to_string())
+        }
+        InvocationCausalContext::Explicit(_) => Err(format!(
+            "public LocalRuntime invocation requires a canonical Ability URA; \
+             bare ability `{}` cannot infer callee ownership",
+            target.ability
+        )),
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -431,6 +442,44 @@ mod tests {
             expected_descriptor_ref(
                 &crate::core::ura::owner_ability_ura(&local_device_ura, "device.inspect").unwrap()
             )
+        );
+    }
+
+    #[tokio::test]
+    async fn public_explicit_tuple_rejects_bare_ability_before_local_device_callee_fallback() {
+        let runtime = crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+            crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+            None,
+        );
+        let subject =
+            crate::core::ura::resource_dot_ura("acme", "device.dev-a.files", "tmp/report.txt");
+        let target = InvocationTarget::local_explicit_tuple(
+            "fs.read",
+            json!({}),
+            CallMode::Rpc,
+            subject,
+            CausalContext::None,
+        );
+
+        let error = match local_system_request(
+            &runtime,
+            AxonInvocationCallMode::Rpc,
+            &target,
+            b"{}".to_vec(),
+        )
+        .await
+        {
+            Ok(_) => panic!("public bare ability must not infer local-device callee"),
+            Err(error) => error,
+        };
+
+        assert!(
+            error.contains("public LocalRuntime invocation requires a canonical Ability URA"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            !error.contains("credentials-backed local device URA"),
+            "public ingress must fail before local device fallback: {error}"
         );
     }
 

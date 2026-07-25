@@ -12563,6 +12563,48 @@ for token, code in (
 PY
 }
 
+check_local_runtime_public_callee_cutover_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local local_invoker="$cli_root/src/daemon/invocation/dispatch/local_runtime_invoker.rs"
+  [[ -f "$local_invoker" ]] || fail "LocalRuntime invoker source is missing: ${local_invoker#$cli_root/}"
+
+  "$PYTHON_BIN" - "$local_invoker" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+production = text.split("\n#[cfg(test)]", 1)[0]
+fn = re.search(
+    r"fn local_invocation_callee_ura\(target: &InvocationTarget\) -> Result<String, String> \{(?P<body>.*?)\n\}",
+    production,
+    re.DOTALL,
+)
+if fn is None:
+    raise SystemExit("local_runtime_public_callee_cutover:callee_policy_missing")
+body = fn.group("body")
+for token, code in (
+    ("AbilitySelector::parse(&target.ability)", "canonical_ability_selector_missing"),
+    ("InvocationCausalContext::DaemonSystemRoot", "daemon_system_bare_ability_policy_missing"),
+    ("InvocationCausalContext::Explicit(_)", "public_explicit_reject_state_missing"),
+    ("public LocalRuntime invocation requires a canonical Ability URA", "public_bare_ability_error_missing"),
+):
+    if token not in body:
+        raise SystemExit(f"local_runtime_public_callee_cutover:{code}")
+
+unconditional = re.search(
+    r"AbilitySelector::parse\(&target\.ability\).*?local_device_ura\(\)\.map_err\([^;]+;\s*\n\}",
+    body,
+    re.DOTALL,
+)
+if unconditional is not None:
+    raise SystemExit("local_runtime_public_callee_cutover:unconditional_local_device_fallback")
+
+if "public_explicit_tuple_rejects_bare_ability_before_local_device_callee_fallback" not in text:
+    raise SystemExit("local_runtime_public_callee_cutover:negative_test_missing")
+PY
+}
+
 check_local_daemon_subject_owner_boundary_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local script="$ROOT/tools/scripts/check-local-daemon-subject-owner-boundary.sh"
@@ -16895,6 +16937,22 @@ EOF
     > "$tmp/cli-local-invoke-fallback/src/daemon/ability/catalog/profiles/mcp.rs"
   if ( CLI_ROOT="$tmp/cli-local-invoke-fallback"; check_local_ability_target_subject_policy_contract ) >/dev/null 2>&1; then
     fail "self-test expected local invoke fallback classifier gate to fail"
+  fi
+  mkdir -p "$tmp/cli-local-runtime-public-callee/src/daemon/invocation/dispatch"
+  cat > "$tmp/cli-local-runtime-public-callee/src/daemon/invocation/dispatch/local_runtime_invoker.rs" <<'EOF'
+fn local_invocation_callee_ura(target: &InvocationTarget) -> Result<String, String> {
+    if let Ok(selector) = AbilitySelector::parse(&target.ability) {
+        return Ok(selector.owner_ura().to_string());
+    }
+    local_device_ura().map_err(|err| err.to_string())
+}
+#[cfg(test)]
+mod tests {
+    fn daemon_system_bare_ability_still_works() {}
+}
+EOF
+  if ( CLI_ROOT="$tmp/cli-local-runtime-public-callee"; check_local_runtime_public_callee_cutover_contract ) >/dev/null 2>&1; then
+    fail "self-test expected public LocalRuntime callee fallback gate to fail"
   fi
   mkdir -p "$tmp/cli-subject-policy-implicit-fallback/src/daemon/invocation/routing" \
     "$tmp/cli-subject-policy-implicit-fallback/src/support/platform" \
@@ -21714,6 +21772,7 @@ EOF
   check_admission_authority_ability_projection_contract
   check_peer_envelope_signer_subject_profile_contract
   check_local_ability_target_subject_policy_contract
+  check_local_runtime_public_callee_cutover_contract
   check_local_daemon_subject_owner_boundary_contract
   check_session_prelude_credentials_contract
   check_session_prelude_receipt_contract
@@ -21937,6 +21996,7 @@ check_admission_authority_raw_wire_strict_contract
 check_admission_authority_ability_projection_contract
 check_peer_envelope_signer_subject_profile_contract
 check_local_ability_target_subject_policy_contract
+check_local_runtime_public_callee_cutover_contract
 check_local_daemon_subject_owner_boundary_contract
 check_session_prelude_credentials_contract
 check_start_attach_user_signer_readiness_contract
