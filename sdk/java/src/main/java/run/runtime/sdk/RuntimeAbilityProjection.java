@@ -4,25 +4,18 @@ final class RuntimeAbilityProjection {
   private static final String ABILITY_PATH_MARKER = "/ability/";
   private static final String REALM_PREFIX = "easynet:///r/";
 
-  private final String wire;
   private final String abilityURA;
   private final String publicName;
 
-  private RuntimeAbilityProjection(String wire, String abilityURA, String publicName) {
-    this.wire = wire;
+  private RuntimeAbilityProjection(String abilityURA, String publicName) {
     this.abilityURA = abilityURA;
     this.publicName = publicName;
   }
 
   static RuntimeAbilityProjection fromTuple(InvocationTuple tuple) {
     String abilityURA = descriptorAbilityURA(tuple.descriptor());
-    String wire = descriptorWireAbility(abilityURA);
     String publicName = publicAbilityName(tuple.callee(), abilityURA);
-    return new RuntimeAbilityProjection(wire, abilityURA, publicName);
-  }
-
-  String wire() {
-    return wire;
+    return new RuntimeAbilityProjection(abilityURA, publicName);
   }
 
   String abilityURA() {
@@ -64,7 +57,7 @@ final class RuntimeAbilityProjection {
     if (!owner.isBlank() && clean.startsWith(owner + ".")) {
       return clean.substring(owner.length() + 1);
     }
-    return clean;
+    return "";
   }
 
   private static String abilityOwnerPrefix(String calleeURA) {

@@ -3738,8 +3738,7 @@ function authorityScopesAdmit(patterns, ability) {
   return patterns.some(
     (pattern) =>
       authorityScopeMatches(pattern, ability.publicName) ||
-      authorityScopeMatches(pattern, ability.abilityURA) ||
-      authorityScopeMatches(pattern, ability.wire),
+      authorityScopeMatches(pattern, ability.abilityURA),
   );
 }
 
@@ -3771,8 +3770,7 @@ class RuntimeAbilityProjection {
   static abilityPathMarker = "/ability/";
   static realmPrefix = "easynet:///r/";
 
-  constructor({ wire, abilityURA, publicName }) {
-    this.wire = wire;
+  constructor({ abilityURA, publicName }) {
     this.abilityURA = abilityURA;
     this.publicName = publicName;
     Object.freeze(this);
@@ -3780,9 +3778,8 @@ class RuntimeAbilityProjection {
 
   static fromInvocation(draft) {
     const abilityURA = this.descriptorAbilityURA(draft.descriptorRef);
-    const wire = this.descriptorWireAbility(abilityURA);
     const publicName = this.publicAbilityName(draft.calleeURA, abilityURA);
-    return new RuntimeAbilityProjection({ wire, abilityURA, publicName });
+    return new RuntimeAbilityProjection({ abilityURA, publicName });
   }
 
   static descriptorAbilityURA(descriptorRef) {
@@ -3813,7 +3810,7 @@ class RuntimeAbilityProjection {
     if (owner && clean.startsWith(`${owner}.`)) {
       return clean.slice(owner.length + 1);
     }
-    return clean;
+    return "";
   }
 
   static abilityOwnerPrefix(calleeURA) {

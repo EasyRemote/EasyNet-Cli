@@ -698,8 +698,7 @@ private func audienceAdmits(_ audience: String, _ calleeURA: String) -> Bool {
 private func scopesAdmit(_ patterns: [String], _ ability: RuntimeAbilityProjection) -> Bool {
     for pattern in patterns {
         if scopeMatches(pattern, ability.publicName) ||
-            scopeMatches(pattern, ability.abilityURA) ||
-            scopeMatches(pattern, ability.wire) {
+            scopeMatches(pattern, ability.abilityURA) {
             return true
         }
     }

@@ -550,7 +550,6 @@ final class RuntimeCoreSeamTests: XCTestCase {
     func testRuntimeAbilityProjectionIsCanonical() throws {
         let admittedScopes = [
             "observe.health",
-            "device.dev-a.observe.health",
             "easynet:///r/example/ability/device.dev-a.observe.health",
             "easynet:///r/example/ability/device.dev-a.*",
         ]
@@ -558,6 +557,15 @@ final class RuntimeCoreSeamTests: XCTestCase {
             let proof = try DelegationProof.fromMetadata(delegationMetadataValue(scopes: [scope]))
             _ = try completeBuilder()
                 .withAuthorityMetadata(proof.metadata())
+                .inspect()
+        }
+
+        let ownerQualifiedWireProof = try DelegationProof.fromMetadata(
+            delegationMetadataValue(scopes: ["device.dev-a.observe.health"])
+        )
+        expectSyncSDKError(.authorityDenied, "delegation authority scopes do not admit invocation ability") {
+            _ = try completeBuilder()
+                .withAuthorityMetadata(ownerQualifiedWireProof.metadata())
                 .inspect()
         }
 
@@ -597,6 +605,24 @@ final class RuntimeCoreSeamTests: XCTestCase {
             .withSubjectURA(authoritySubject)
             .withAuthorityMetadata(authorityProof.metadata())
             .inspect()
+
+        let mismatchedOwnerProof = try DelegationProof.fromMetadata(authorityMetadataValue([
+            "issuer_ura": "easynet:///r/example/user/alice",
+            "subject_ura": callee,
+            "caller_ura": caller,
+            "audience": callee,
+            "scopes": ["namespace.resolve"],
+            "issued_at_ms": 10,
+            "expires_at_ms": 20,
+        ]))
+        expectSyncSDKError(.authorityDenied, "delegation authority scopes do not admit invocation ability") {
+            _ = try completeBuilder()
+                .withDescriptorRef(
+                    "easynet:///r/example/ability/authority.namespace.resolve@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read"
+                )
+                .withAuthorityMetadata(mismatchedOwnerProof.metadata())
+                .inspect()
+        }
 
         let proof = try DelegationProof.fromMetadata(delegationMetadataValue(scopes: ["observe.health"]))
         expectSyncSDKError(.invalidArgument, "descriptor_ref must contain a canonical Ability URA") {

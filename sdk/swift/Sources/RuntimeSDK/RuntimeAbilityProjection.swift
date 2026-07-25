@@ -4,13 +4,11 @@ struct RuntimeAbilityProjection: Sendable, Equatable {
     private static let abilityPathMarker = "/ability/"
     private static let realmPrefix = "easynet:///r/"
 
-    let wire: String
     let abilityURA: String
     let publicName: String
 
     init(tuple: InvocationTuple) throws {
         let abilityURA = try Self.descriptorAbilityURA(tuple.descriptorRef)
-        self.wire = Self.descriptorWireAbility(abilityURA)
         self.abilityURA = abilityURA
         self.publicName = Self.publicAbilityName(calleeURA: tuple.callee, abilityURA: abilityURA)
     }
@@ -51,7 +49,7 @@ struct RuntimeAbilityProjection: Sendable, Equatable {
         if !owner.isEmpty, clean.hasPrefix("\(owner).") {
             return String(clean.dropFirst(owner.count + 1))
         }
-        return clean
+        return ""
     }
 
     private static func abilityOwnerPrefix(_ calleeURA: String) -> String {

@@ -974,7 +974,6 @@ test("authority metadata is typed, delegated, and mutually exclusive", async () 
 test("runtime ability projection is canonical for authority scope admission", () => {
   for (const scope of [
     "observe.health",
-    "device.dev-a.observe.health",
     "easynet:///r/example/ability/device.dev-a.observe.health",
     "easynet:///r/example/ability/device.dev-a.*",
   ]) {
@@ -992,6 +991,28 @@ test("runtime ability projection is canonical for authority scope admission", ()
       .build();
     assert.equal(authorized.metadata[sdk.DELEGATION_METADATA_KEY], proof.metadataValue);
   }
+
+  const ownerQualifiedWireProof = sdk.DelegationProof.fromMetadata(
+    delegationValue(["device.dev-a.observe.health"]),
+  );
+  assert.throws(
+    () =>
+      new sdk.InvocationBuilder()
+        .withCallerURA(caller)
+        .withCalleeURA(callee)
+        .withDescriptorRef(descriptor)
+        .withSubjectURA(callee)
+        .withNonceBase64(nonce)
+        .withCausalContext({ form: "none" })
+        .withJSONArgs({ probe: true })
+        .withContentType("application/json")
+        .withAuthorityMetadata(ownerQualifiedWireProof.metadata())
+        .build(),
+    (error) =>
+      error instanceof sdk.SDKError &&
+      error.code === sdk.ErrorCode.AUTHORITY_DENIED &&
+      /delegation authority scopes do not admit invocation ability/.test(error.message),
+  );
 
   const nestedDeviceCallee = "easynet:///r/example/resource/user.alice/archive/device/dev-a";
   const nestedDeviceProof = sdk.DelegationProof.fromMetadata(
@@ -1072,6 +1093,41 @@ test("runtime ability projection strips canonical authority owner prefix", () =>
     .withAuthorityMetadata(proof.metadata())
     .build();
   assert.equal(authorized.metadata[sdk.DELEGATION_METADATA_KEY], proof.metadataValue);
+});
+
+test("runtime ability projection rejects short scope for descriptor owner mismatch", () => {
+  const proof = sdk.DelegationProof.fromMetadata(
+    authorityValue({
+      issuer_ura: "easynet:///r/example/user/alice",
+      subject_ura: callee,
+      caller_ura: caller,
+      audience: callee,
+      scopes: ["namespace.resolve"],
+      issued_at_ms: 10,
+      expires_at_ms: 20,
+    }),
+  );
+
+  assert.throws(
+    () =>
+      new sdk.InvocationBuilder()
+        .withCallerURA(caller)
+        .withCalleeURA(callee)
+        .withDescriptorRef(
+          "easynet:///r/example/ability/authority.namespace.resolve@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read",
+        )
+        .withSubjectURA(callee)
+        .withNonceBase64(nonce)
+        .withCausalContext({ form: "none" })
+        .withJSONArgs({})
+        .withContentType("application/json")
+        .withAuthorityMetadata(proof.metadata())
+        .build(),
+    (error) =>
+      error instanceof sdk.SDKError &&
+      error.code === sdk.ErrorCode.AUTHORITY_DENIED &&
+      error.message.includes("delegation authority scopes do not admit invocation ability"),
+  );
 });
 
 test("authority client projects canonical principal URAs to current session wire", async () => {

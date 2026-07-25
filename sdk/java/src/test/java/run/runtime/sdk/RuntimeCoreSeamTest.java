@@ -741,7 +741,6 @@ public final class RuntimeCoreSeamTest {
     List<String> admittedScopes =
         List.of(
             "observe.health",
-            "device.dev-a.observe.health",
             "easynet:///r/example/ability/device.dev-a.observe.health",
             "easynet:///r/example/ability/device.dev-a.*");
     for (String scope : admittedScopes) {
@@ -749,6 +748,14 @@ public final class RuntimeCoreSeamTest {
           DelegationProof.fromMetadata(delegationMetadataValue(List.of(scope)));
       completeBuilder().authorityMetadata(proof.metadata()).inspect();
     }
+
+    DelegationProof ownerQualifiedWireProof =
+        DelegationProof.fromMetadata(delegationMetadataValue(List.of("device.dev-a.observe.health")));
+    expectSDKError(
+        ErrorCode.AUTHORITY_DENIED,
+        "delegation authority scopes do not admit invocation ability",
+        () -> completeBuilder().authorityMetadata(ownerQualifiedWireProof.metadata()).inspect());
+
     String nestedDeviceCallee =
         "easynet:///r/example/resource/user.alice/archive/device/dev-a";
     DelegationProof nestedDeviceProof =
@@ -805,6 +812,34 @@ public final class RuntimeCoreSeamTest {
         .subject(authoritySubject)
         .authorityMetadata(authorityProof.metadata())
         .inspect();
+
+    DelegationProof mismatchedOwnerProof =
+        DelegationProof.fromMetadata(
+            authorityMetadataValue(
+                Map.of(
+                    "issuer_ura",
+                    "easynet:///r/example/user/alice",
+                    "subject_ura",
+                    CALLEE,
+                    "caller_ura",
+                    CALLER,
+                    "audience",
+                    CALLEE,
+                    "scopes",
+                    List.of("namespace.resolve"),
+                    "issued_at_ms",
+                    10,
+                    "expires_at_ms",
+                    20)));
+    expectSDKError(
+        ErrorCode.AUTHORITY_DENIED,
+        "delegation authority scopes do not admit invocation ability",
+        () ->
+            completeBuilder()
+                .descriptor(
+                    "easynet:///r/example/ability/authority.namespace.resolve@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read")
+                .authorityMetadata(mismatchedOwnerProof.metadata())
+                .inspect());
 
     DelegationProof proof =
         DelegationProof.fromMetadata(delegationMetadataValue(List.of("observe.health")));

@@ -118,9 +118,7 @@ final class InvocationAuthorityBindingValidator {
 
   private static boolean scopesAdmit(List<String> patterns, RuntimeAbilityProjection ability) {
     for (String pattern : patterns) {
-      if (scopeMatches(pattern, ability.publicName())
-          || scopeMatches(pattern, ability.abilityURA())
-          || scopeMatches(pattern, ability.wire())) {
+      if (scopeMatches(pattern, ability.publicName()) || scopeMatches(pattern, ability.abilityURA())) {
         return true;
       }
     }

@@ -4886,13 +4886,34 @@ check_sdk_runtime_ability_owner_bound_scope_contract() {
   local go_test="$cli_root/sdk/go/runtime_ability_test.go"
   local py="$cli_root/sdk/python/easynet_sdk/runtime_ability.py"
   local py_test="$cli_root/sdk/python/tests/test_runtime_ability.py"
+  local java="$cli_root/sdk/java/src/main/java/run/runtime/sdk/RuntimeAbilityProjection.java"
+  local java_validator="$cli_root/sdk/java/src/main/java/run/runtime/sdk/InvocationAuthorityBindingValidator.java"
+  local java_test="$cli_root/sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
+  local swift="$cli_root/sdk/swift/Sources/RuntimeSDK/RuntimeAbilityProjection.swift"
+  local swift_authority="$cli_root/sdk/swift/Sources/RuntimeSDK/Authority.swift"
+  local swift_test="$cli_root/sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift"
+  local node="$cli_root/sdk/node/index.js"
+  local node_test="$cli_root/sdk/node/test/runtime-core.test.mjs"
 
-  "$PYTHON_BIN" - "$go" "$go_test" "$py" "$py_test" <<'PY'
+  "$PYTHON_BIN" - "$go" "$go_test" "$py" "$py_test" "$java" "$java_validator" "$java_test" "$swift" "$swift_authority" "$swift_test" "$node" "$node_test" <<'PY'
 import re
 import sys
 from pathlib import Path
 
-go_path, go_test_path, py_path, py_test_path = map(Path, sys.argv[1:])
+(
+    go_path,
+    go_test_path,
+    py_path,
+    py_test_path,
+    java_path,
+    java_validator_path,
+    java_test_path,
+    swift_path,
+    swift_authority_path,
+    swift_test_path,
+    node_path,
+    node_test_path,
+) = map(Path, sys.argv[1:])
 
 def read(path: Path) -> str:
     if not path.exists():
@@ -4949,6 +4970,71 @@ for required in (
 ):
     if required not in py_tests:
         raise SystemExit(f"sdk_python_runtime_ability_owner_scope_test_missing:{required}")
+
+java = read(java_path)
+java_public = re.search(r"private static String publicAbilityName\(.*?\n  \}", java, re.S)
+if not java_public or "return \"\";" not in java_public.group(0) or "return clean;" in java_public.group(0):
+    raise SystemExit("sdk_java_runtime_ability_public_scope_not_callee_owner_bound")
+for retired in (
+    "private final String wire",
+    "String wire()",
+    "new RuntimeAbilityProjection(wire, abilityURA, publicName)",
+):
+    if retired in java:
+        raise SystemExit(f"sdk_java_runtime_ability_owner_unbound_scope_projection:{retired}")
+java_validator = read(java_validator_path)
+if "ability.wire()" in java_validator:
+    raise SystemExit("sdk_java_runtime_ability_wire_scope_candidate")
+java_tests = read(java_test_path)
+for required in (
+    "mismatchedOwnerProof",
+    "easynet:///r/example/ability/authority.namespace.resolve@1.0.0#",
+    "delegation authority scopes do not admit invocation ability",
+):
+    if required not in java_tests:
+        raise SystemExit(f"sdk_java_runtime_ability_owner_scope_test_missing:{required}")
+
+swift = read(swift_path)
+swift_public = re.search(r"private static func publicAbilityName\(.*?\n    \}", swift, re.S)
+if not swift_public or 'return ""' not in swift_public.group(0) or "return clean" in swift_public.group(0):
+    raise SystemExit("sdk_swift_runtime_ability_public_scope_not_callee_owner_bound")
+for retired in (
+    "let wire:",
+    "self.wire",
+):
+    if retired in swift:
+        raise SystemExit(f"sdk_swift_runtime_ability_owner_unbound_scope_projection:{retired}")
+swift_authority = read(swift_authority_path)
+if "ability.wire" in swift_authority:
+    raise SystemExit("sdk_swift_runtime_ability_wire_scope_candidate")
+swift_tests = read(swift_test_path)
+for required in (
+    "mismatchedOwnerProof",
+    "easynet:///r/example/ability/authority.namespace.resolve@1.0.0#",
+    "delegation authority scopes do not admit invocation ability",
+):
+    if required not in swift_tests:
+        raise SystemExit(f"sdk_swift_runtime_ability_owner_scope_test_missing:{required}")
+
+node = read(node_path)
+node_public = re.search(r"static publicAbilityName\(.*?\n  \}", node, re.S)
+if not node_public or 'return "";' not in node_public.group(0) or "return clean;" in node_public.group(0):
+    raise SystemExit("sdk_node_runtime_ability_public_scope_not_callee_owner_bound")
+for retired in (
+    "this.wire",
+    "ability.wire",
+    "new RuntimeAbilityProjection({ wire, abilityURA, publicName })",
+):
+    if retired in node:
+        raise SystemExit(f"sdk_node_runtime_ability_owner_unbound_scope_projection:{retired}")
+node_tests = read(node_test_path)
+for required in (
+    "runtime ability projection rejects short scope for descriptor owner mismatch",
+    "easynet:///r/example/ability/authority.namespace.resolve@1.0.0#",
+    "delegation authority scopes do not admit invocation ability",
+):
+    if required not in node_tests:
+        raise SystemExit(f"sdk_node_runtime_ability_owner_scope_test_missing:{required}")
 PY
 }
 
