@@ -25,6 +25,8 @@ pub mod local_session_dispatcher;
 #[cfg(feature = "axon-pb")]
 pub(crate) mod remote_failure;
 #[cfg(feature = "axon-pb")]
+pub(crate) mod remote_governance_read;
+#[cfg(feature = "axon-pb")]
 mod request;
 #[cfg(feature = "axon-pb")]
 pub(crate) mod unary_dispatcher;

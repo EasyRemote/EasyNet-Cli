@@ -1103,6 +1103,63 @@ async fn external_signed_bidi_file_transfer_download_emits_business_frames() {
 }
 
 #[tokio::test]
+async fn invoke_stream_rejects_governance_catalogue_route_before_presence_forwarding() {
+    const TARGET_DEVICE_URA: &str = "easynet:///r/test-realm/device/stream-catalogue-target";
+    const CATALOGUE_READ: &str = crate::daemon::ability::names::governance::META_LIST_ABILITIES;
+
+    let svc = make_service();
+    let (target_tx, mut target_rx) = mpsc::channel(4);
+    svc.directory
+        .presence
+        .insert(TARGET_DEVICE_URA.to_string(), target_tx)
+        .expect("canonical presence key");
+    publish_test_stream_route(&svc, TARGET_DEVICE_URA, CATALOGUE_READ);
+
+    let arguments = br#"{"scope":"local"}"#.to_vec();
+    let descriptor_ref = test_descriptor_ref(TARGET_DEVICE_URA, CATALOGUE_READ);
+    let result = svc
+        .invoke_stream(Request::new(InvokeServerStreamRequest {
+            envelope: Some(signed_test_envelope_with_descriptor_ref(
+                TEST_DAEMON_URA,
+                TARGET_DEVICE_URA,
+                TEST_DAEMON_URA,
+                descriptor_ref.clone(),
+                &arguments,
+                &test_device_signing_key(),
+            )),
+            target: Some(
+                wire_invocation_target(&descriptor_ref, CATALOGUE_READ)
+                    .expect("typed descriptor target"),
+            ),
+            arguments,
+            ..InvokeServerStreamRequest::default()
+        }))
+        .await;
+    let error = match result {
+        Ok(_) => panic!("stream catalogue read must use the unary catalogue path"),
+        Err(error) => error,
+    };
+
+    assert_eq!(error.code(), tonic::Code::FailedPrecondition);
+    assert!(
+        error
+            .message()
+            .contains("CANONICAL_CATALOGUE_READ_REQUIRED")
+            && error.message().contains("InvokeStream")
+            && error.message().contains(CATALOGUE_READ)
+            && error
+                .message()
+                .contains("canonical unary Invoke catalogue read path"),
+        "unexpected stream catalogue route denial: {}",
+        error.message()
+    );
+    assert!(
+        target_rx.try_recv().is_err(),
+        "stream governance read route must fail before presence forwarding"
+    );
+}
+
+#[tokio::test]
 async fn invoke_stream_unknown_function_returns_resolver_negative() {
     let svc = make_service();
     match svc

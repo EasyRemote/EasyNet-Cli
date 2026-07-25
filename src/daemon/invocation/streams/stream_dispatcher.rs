@@ -58,6 +58,7 @@ use crate::daemon::invocation::dispatch::invocation_wire::{
     BoxedDownStream, FEDERATION_RESULT_CONTENT_TYPE,
 };
 use crate::daemon::invocation::dispatch::remote_failure::status_from_remote_failure;
+use crate::daemon::invocation::dispatch::remote_governance_read::require_remote_governance_read_route;
 use crate::daemon::invocation::dispatch::unary_dispatcher::require_complete_signed_remote_request;
 use crate::daemon::invocation::routing::route_resolver::{
     CanonicalRouteDispatch, CanonicalRouteSelection, SelectedInvokeRoute,
@@ -342,6 +343,7 @@ impl StreamDispatcher {
                  envelope on the canonical Invocation face",
             )));
         };
+        require_remote_governance_read_route("InvokeStream", &selected_route, &envelope)?;
         signed_envelope_for_selected_route(
             envelope,
             &selected_route,

@@ -629,6 +629,62 @@ async fn remote_bidi_open_frame_is_canonical_and_fail_closed() {
     assert_eq!(err.code(), tonic::Code::FailedPrecondition);
 }
 
+#[tokio::test]
+async fn remote_bidi_rejects_governance_catalogue_route_before_carrier_frame() {
+    use axon_sdk::pb::axon::v1::EnvelopeOpen;
+
+    const TARGET_DEVICE_URA: &str = "easynet:///r/test-realm/device/bidi-catalogue-target";
+    const CATALOGUE_READ: &str = crate::daemon::ability::names::governance::META_LIST_ABILITIES;
+
+    let svc = make_service().with_session_realm("test-realm");
+    publish_test_route_with_mode(
+        &svc,
+        TARGET_DEVICE_URA,
+        CATALOGUE_READ,
+        crate::daemon::ability::CallMode::Bidi,
+    );
+    let route = svc
+        .target_gate()
+        .route_resolver()
+        .await
+        .resolve_route(TARGET_DEVICE_URA, CATALOGUE_READ)
+        .expect("published bidi catalogue route resolves before governance gate");
+
+    let initial_args = br#"{"scope":"local"}"#.to_vec();
+    let descriptor_ref = test_descriptor_ref(TARGET_DEVICE_URA, CATALOGUE_READ);
+    let envelope_open = EnvelopeOpen {
+        envelope: Some(signed_test_envelope_with_descriptor_ref(
+            "easynet:///r/test-realm/user/alice",
+            TARGET_DEVICE_URA,
+            TARGET_DEVICE_URA,
+            descriptor_ref.clone(),
+            &initial_args,
+            &test_device_signing_key(),
+        )),
+        target: Some(
+            wire_invocation_target(&descriptor_ref, CATALOGUE_READ)
+                .expect("typed descriptor target"),
+        ),
+        initial_args,
+        ..Default::default()
+    };
+
+    let err = build_remote_bidi_open_frame(10, &route, &envelope_open, CallMode::Bidi)
+        .expect_err("bidi catalogue read must use the unary catalogue path");
+
+    assert_eq!(err.code(), tonic::Code::FailedPrecondition);
+    assert!(
+        err.message().contains("CANONICAL_CATALOGUE_READ_REQUIRED")
+            && err.message().contains("InvokeBidi")
+            && err.message().contains(CATALOGUE_READ)
+            && err
+                .message()
+                .contains("canonical unary Invoke catalogue read path"),
+        "unexpected bidi catalogue route denial: {}",
+        err.message()
+    );
+}
+
 // Remote canonical relay coverage lives in canonical_relay.rs.
 // Legacy JSON dispatch tests were removed with the wrapper protocol.
 

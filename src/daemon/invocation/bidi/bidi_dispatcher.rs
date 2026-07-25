@@ -75,6 +75,7 @@ use crate::daemon::invocation::dispatch::forwarded_finalization::{
 use crate::daemon::invocation::dispatch::invocation_wire::{
     callee_ura_from_envelope, status_from_axon_invoke_error, BoxedDownStream,
 };
+use crate::daemon::invocation::dispatch::remote_governance_read::require_remote_governance_read_route;
 use crate::daemon::invocation::dispatch::unary_dispatcher::UnaryDispatcher;
 use crate::daemon::invocation::routing::route_resolver::{
     CanonicalRouteDispatch, CanonicalRouteSelection, SelectedInvokeRoute,
@@ -3524,6 +3525,7 @@ fn remote_bidi_forwarded_request(
         .envelope
         .clone()
         .ok_or_else(|| Status::invalid_argument("InvokeBidi request missing envelope"))?;
+    require_remote_governance_read_route("InvokeBidi", selected_route, &envelope)?;
     Ok(axon_sdk::pb::axon::v1::InvokeRequest {
         envelope: Some(signed_envelope_for_selected_route(
             envelope,
