@@ -4,7 +4,7 @@ package easynet
 
 import "context"
 
-// OpenNativeRuntime reports that the native daemon Runtime provider is not
+// OpenNativeRuntime reports that the native Runtime provider is not
 // compiled into this SDK build.
 func OpenNativeRuntime(ctx context.Context, _ NativeRuntimeOptions) (*NativeRuntimeHandle, error) {
 	if ctx == nil {

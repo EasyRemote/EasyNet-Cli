@@ -1,4 +1,4 @@
-"""Product-neutral access-control facade over daemon authority bindings."""
+"""Product-neutral access-control facade over runtime authority bindings."""
 
 from __future__ import annotations
 

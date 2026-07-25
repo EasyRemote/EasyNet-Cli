@@ -483,7 +483,7 @@ func (e StreamEvent) AdmissionReceiptJSON() json.RawMessage {
 }
 
 // TerminalReceiptJSON returns the canonical terminal receipt carried by a
-// daemon frame. Payload is invocation output and is never interpreted as
+// runtime frame. Payload is invocation output and is never interpreted as
 // metadata.
 func (e StreamEvent) TerminalReceiptJSON() json.RawMessage {
 	if len(e.terminalReceiptJSON) != 0 && string(e.terminalReceiptJSON) != "null" {
@@ -568,7 +568,7 @@ func (e StreamTerminalEvent) TerminalReceiptJSON() json.RawMessage {
 	return append(json.RawMessage(nil), e.terminalReceipt...)
 }
 
-// NewStreamEventFromJSON decodes one daemon stream event projection.
+// NewStreamEventFromJSON decodes one runtime stream event projection.
 func NewStreamEventFromJSON(raw []byte) (StreamEvent, error) {
 	var dto struct {
 		Sequence           uint64          `json:"sequence"`

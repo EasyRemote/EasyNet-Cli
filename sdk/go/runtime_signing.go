@@ -9,8 +9,8 @@ import (
 // RuntimeSigningTransport decorates a RuntimeTransport with caller signing.
 // It signs complete Invocation drafts that do not already carry a
 // caller_signature, then delegates to the wrapped transport. It never verifies
-// signatures and never changes daemon admission policy; those remain Axon and
-// daemon responsibilities.
+// signatures and never changes runtime admission policy; those remain Axon and
+// runtime responsibilities.
 type RuntimeSigningTransport struct {
 	next   RuntimeTransport
 	signer Signer

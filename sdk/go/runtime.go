@@ -47,7 +47,7 @@ func (c InvocationControlCapability) valid() bool {
 	return c.handleID != 0 && c.runtimeBound
 }
 
-// AdapterHandleID projects the adapter-private daemon handle behind this
+// AdapterHandleID projects the adapter-private runtime handle behind this
 // capability. RuntimeTransport implementations use it to address their handle
 // store; application code should keep treating InvocationHandle as the public
 // lifecycle object.
@@ -336,7 +336,7 @@ type RuntimeRecoveryReport struct {
 	Events                   []RuntimeRecoveryEvent `json:"events"`
 }
 
-// Invoke submits a complete Invocation tuple and decodes the daemon result projection.
+// Invoke submits a complete Invocation tuple and decodes the runtime result projection.
 func (c *RuntimeClient) Invoke(ctx context.Context, draft InvocationDraft) (InvocationResult, error) {
 	transport, err := c.runtimeTransport(ctx)
 	if err != nil {
@@ -614,7 +614,7 @@ func (c *RuntimeClient) Events(ctx context.Context, handle InvocationHandle) (In
 	return newInvocationHandleSnapshotFromJSON(raw, &control)
 }
 
-// CloseHandle releases daemon-side observation state for a submitted invocation handle.
+// CloseHandle releases runtime-side observation state for a submitted invocation handle.
 func (c *RuntimeClient) CloseHandle(ctx context.Context, handle InvocationHandle) error {
 	transport, err := c.runtimeTransport(ctx)
 	if err != nil {
@@ -2665,7 +2665,7 @@ func (e InvocationHandleEvent) Result() json.RawMessage {
 	return append(json.RawMessage(nil), e.result...)
 }
 
-// NewInvocationHandleFromJSON decodes the daemon handle snapshot projection.
+// NewInvocationHandleFromJSON decodes the runtime handle snapshot projection.
 func NewInvocationHandleFromJSON(raw []byte) (InvocationHandle, error) {
 	return newInvocationHandleSnapshotFromJSON(raw, nil)
 }

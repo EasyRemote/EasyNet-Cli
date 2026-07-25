@@ -499,7 +499,7 @@ class InvocationWireProjector:
         bidi_streams: Sequence[Mapping[str, object] | BidiStreamDescriptor | object] | None = None,
         descriptor_version: str = "",
     ) -> dict[str, object]:
-        """Return the canonical daemon Invocation JSON DTO."""
+        """Return the canonical runtime Invocation JSON DTO."""
 
         value = self.build_invocation(
             tuple_,
@@ -558,7 +558,7 @@ class InvocationObjectAdapter:
         descriptor_version: str = "",
         call_mode: str = "",
     ) -> dict[str, object]:
-        """Return the daemon Invocation JSON DTO."""
+        """Return the runtime Invocation JSON DTO."""
 
         self.invoker._require_open()
         value = self.build_invocation(

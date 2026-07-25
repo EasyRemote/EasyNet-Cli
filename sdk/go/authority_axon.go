@@ -67,7 +67,7 @@ func (p *DelegationProof) Verify(publicKey ed25519.PublicKey) error {
 	return (&proof).Verify(publicKey)
 }
 
-// MarshalRaw returns the daemon authority metadata wire payload.
+// MarshalRaw returns the runtime authority metadata wire payload.
 func (p *DelegationProof) MarshalRaw() ([]byte, error) {
 	if p == nil {
 		return nil, invalidInvocation("delegation authority is required", nil)
@@ -85,7 +85,7 @@ func (p *DelegationProof) MarshalMetadataValue() (string, error) {
 	return base64.StdEncoding.EncodeToString(raw), nil
 }
 
-// UnmarshalRawDelegationProof decodes daemon authority metadata wire payload.
+// UnmarshalRawDelegationProof decodes runtime authority metadata wire payload.
 func UnmarshalRawDelegationProof(data []byte) (*DelegationProof, error) {
 	proof, err := axonsdk.UnmarshalRawDelegationProof(data)
 	if err != nil {
@@ -198,7 +198,7 @@ func (a *SessionAuthority) Verify(publicKey ed25519.PublicKey) error {
 	return nil
 }
 
-// MarshalRaw returns the daemon authority metadata wire payload.
+// MarshalRaw returns the runtime authority metadata wire payload.
 func (a *SessionAuthority) MarshalRaw() ([]byte, error) {
 	if a == nil {
 		return nil, invalidInvocation("session authority is required", nil)
@@ -225,7 +225,7 @@ func (a *SessionAuthority) MarshalMetadataValue() (string, error) {
 	return base64.StdEncoding.EncodeToString(raw), nil
 }
 
-// UnmarshalRawSessionAuthority decodes daemon authority metadata wire payload.
+// UnmarshalRawSessionAuthority decodes runtime authority metadata wire payload.
 func UnmarshalRawSessionAuthority(data []byte) (*SessionAuthority, error) {
 	var raw SessionAuthorityRaw
 	if err := json.Unmarshal(data, &raw); err != nil {

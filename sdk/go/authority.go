@@ -134,7 +134,7 @@ type SessionAuthorityRequest struct {
 }
 
 // AuthorityMetadata is the mutually-exclusive Invocation metadata envelope
-// accepted by daemon admission.
+// accepted by runtime admission.
 type AuthorityMetadata struct {
 	kind  AuthorityKind
 	key   string

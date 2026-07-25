@@ -414,7 +414,7 @@ class UnaryInvocationTransport(Protocol):
         """Submit one runtime-shaped signed unary Invocation."""
 
     def close(self) -> None:
-        """Release the underlying daemon transport."""
+        """Release the underlying runtime transport."""
 
 
 class _UnaryDispatchState(Enum):
@@ -1016,7 +1016,7 @@ class StreamValue:
 class StreamValueAdapter:
     """SDK-owned stream frame projection.
 
-    The adapter consumes generic daemon stream frames and yields
+    The adapter consumes generic runtime stream frames and yields
     ability values. It keeps terminal-frame, timeout, wire-error, and payload
     projection rules out of product facades.
     """
