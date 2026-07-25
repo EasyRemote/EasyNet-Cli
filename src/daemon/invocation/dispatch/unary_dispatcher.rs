@@ -1841,6 +1841,7 @@ impl UnaryDispatcher {
             )));
         };
         require_complete_signed_remote_request(request)?;
+        require_remote_catalogue_read_subject(selected_route, &envelope)?;
         signed_envelope_for_selected_route(
             envelope,
             selected_route,
@@ -1919,20 +1920,9 @@ impl UnaryDispatcher {
 }
 
 fn reject_remote_receipt_history_action(route: &SelectedInvokeRoute) -> Result<(), Status> {
-    let history_ability = if crate::daemon::ability::names::governance::is_invocation_history_read(
-        &route.dispatch_name,
-    ) {
-        Some(route.dispatch_name.clone())
-    } else {
-        crate::core::ura::AbilitySelector::parse(&route.ability_ura)
-            .ok()
-            .and_then(|selector| {
-                crate::daemon::ability::names::governance::is_invocation_history_read(
-                    selector.public_name(),
-                )
-                .then(|| selector.public_name().to_string())
-            })
-    };
+    let history_ability = selected_route_public_ability(route).filter(|ability| {
+        crate::daemon::ability::names::governance::is_invocation_history_read(ability)
+    });
 
     let Some(history_ability) = history_ability else {
         return Ok(());
@@ -1942,6 +1932,48 @@ fn reject_remote_receipt_history_action(route: &SelectedInvokeRoute) -> Result<(
         "CANONICAL_HISTORY_READ_REQUIRED: receipt history ability `{history_ability}` is not a \
          public remote action; use the canonical invocation history read path"
     )))
+}
+
+fn require_remote_catalogue_read_subject(
+    route: &SelectedInvokeRoute,
+    envelope: &Envelope,
+) -> Result<(), Status> {
+    let Some(catalogue_ability) = selected_route_public_ability(route).filter(|ability| {
+        crate::daemon::ability::names::governance::is_runtime_catalogue_read(ability)
+    }) else {
+        return Ok(());
+    };
+
+    let subject_ura = envelope
+        .subject
+        .as_ref()
+        .map(|subject| subject.ura.trim())
+        .filter(|subject| !subject.is_empty())
+        .ok_or_else(|| {
+            Status::invalid_argument(
+                "remote Invoke catalogue read envelope is missing runtime-read subject",
+            )
+        })?;
+    if subject_ura == route.callee_ura {
+        return Ok(());
+    }
+
+    Err(Status::failed_precondition(format!(
+        "CANONICAL_CATALOGUE_READ_REQUIRED: remote catalogue ability `{catalogue_ability}` must \
+         use runtime-read subject `{}`; use the canonical remote catalogue read path",
+        route.callee_ura
+    )))
+}
+
+fn selected_route_public_ability(route: &SelectedInvokeRoute) -> Option<String> {
+    let projected =
+        crate::core::ura::owner_local_ability_name(&route.callee_ura, &route.dispatch_name);
+    if !projected.trim().is_empty() {
+        return Some(projected);
+    }
+    crate::core::ura::AbilitySelector::parse(&route.ability_ura)
+        .ok()
+        .map(|selector| selector.public_name().to_string())
 }
 
 fn local_invoke_target_ura(request: &InvokeRequest) -> Result<String, Status> {

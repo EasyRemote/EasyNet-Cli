@@ -37,6 +37,16 @@ pub(crate) fn is_invocation_history_read(ability: &str) -> bool {
     )
 }
 
+/// Canonical runtime catalogue read ability family.
+///
+/// Remote catalogue reads have a distinct tuple policy from product actions:
+/// the subject is the runtime owner being read. The predicate lives next to the
+/// governance ability names so remote issuers and direct dispatch admission do
+/// not maintain parallel string lists.
+pub(crate) fn is_runtime_catalogue_read(ability: &str) -> bool {
+    ability.trim() == META_LIST_ABILITIES
+}
+
 pub const AUTHORITY_BINDING_GRANT: &str =
     crate::daemon::ability::access_control_routes_gen::AUTHORITY_BINDING_GRANT;
 pub const AUTHORITY_BINDING_REVOKE: &str =

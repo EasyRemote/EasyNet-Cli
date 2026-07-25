@@ -3027,6 +3027,125 @@ async fn dispatch_remote_rpc_rejects_receipt_history_as_public_remote_action() {
 }
 
 #[tokio::test]
+async fn dispatch_remote_rpc_rejects_catalogue_read_with_public_action_subject() {
+    const REMOTE_DEVICE_URA: &str = "easynet:///r/test-realm/device/remote-device";
+    const CATALOGUE_READ: &str = crate::daemon::ability::names::governance::META_LIST_ABILITIES;
+
+    let pending = Arc::new(PendingDispatchMap::new());
+    let svc = make_service().with_pending(Arc::clone(&pending));
+    let (remote_tx, mut remote_rx) = mpsc::channel(8);
+    svc.directory
+        .presence
+        .insert(REMOTE_DEVICE_URA.to_string(), remote_tx)
+        .expect("canonical presence key");
+    publish_test_route(&svc, REMOTE_DEVICE_URA, CATALOGUE_READ);
+
+    let ability_ura = crate::core::ura::owner_ability_ura(REMOTE_DEVICE_URA, CATALOGUE_READ)
+        .expect("remote device catalogue Ability URA");
+    let selected_route = svc
+        .target_gate()
+        .route_resolver()
+        .await
+        .resolve_route(&ability_ura, "")
+        .expect("resolver selects the remote-device catalogue route");
+
+    let request =
+        invoke_request_for_callee(REMOTE_DEVICE_URA, CATALOGUE_READ, r#"{"scope":"local"}"#)
+            .into_inner();
+    let err = svc
+        .unary_dispatcher()
+        .dispatch_remote_rpc_selected_route(&request, &selected_route, CallMode::Rpc)
+        .await
+        .expect_err("catalogue read must require runtime-read subject");
+
+    assert_eq!(err.code(), tonic::Code::FailedPrecondition);
+    assert!(
+        err.message().contains("CANONICAL_CATALOGUE_READ_REQUIRED")
+            && err.message().contains(CATALOGUE_READ)
+            && err.message().contains(REMOTE_DEVICE_URA)
+            && err
+                .message()
+                .contains("canonical remote catalogue read path"),
+        "unexpected catalogue subject denial: {}",
+        err.message()
+    );
+    assert!(
+        remote_rx.try_recv().is_err(),
+        "catalogue read with public-action subject must not be forwarded"
+    );
+    assert_eq!(pending.outstanding(), 0);
+}
+
+#[tokio::test]
+async fn dispatch_remote_rpc_allows_catalogue_read_with_runtime_read_subject() {
+    const REMOTE_DEVICE_URA: &str = "easynet:///r/test-realm/device/remote-device";
+    const CATALOGUE_READ: &str = crate::daemon::ability::names::governance::META_LIST_ABILITIES;
+
+    let pending = Arc::new(PendingDispatchMap::new());
+    let svc = make_service().with_pending(Arc::clone(&pending));
+    let (remote_tx, mut remote_rx) = mpsc::channel(8);
+    svc.directory
+        .presence
+        .insert_negotiated(
+            REMOTE_DEVICE_URA.to_string(),
+            remote_tx,
+            crate::daemon::invocation::bidi::state::presence::SessionContract {
+                version: 1,
+                claimant_boot_nonce: vec![11; 16],
+            },
+        )
+        .expect("canonical presence key");
+    publish_test_route(&svc, REMOTE_DEVICE_URA, CATALOGUE_READ);
+
+    let ability_ura = crate::core::ura::owner_ability_ura(REMOTE_DEVICE_URA, CATALOGUE_READ)
+        .expect("remote device catalogue Ability URA");
+    let selected_route = svc
+        .target_gate()
+        .route_resolver()
+        .await
+        .resolve_route(&ability_ura, "")
+        .expect("resolver selects the remote-device catalogue route");
+    let request = signed_invoke_request(
+        TEST_DAEMON_URA,
+        REMOTE_DEVICE_URA,
+        REMOTE_DEVICE_URA,
+        CATALOGUE_READ,
+        r#"{"scope":"local"}"#,
+        &test_device_signing_key(),
+    )
+    .into_inner();
+
+    let dispatcher = svc.unary_dispatcher();
+    let dispatch_task = tokio::spawn(async move {
+        dispatcher
+            .dispatch_remote_rpc_selected_route(&request, &selected_route, CallMode::Rpc)
+            .await
+    });
+    let frame = remote_rx
+        .recv()
+        .await
+        .expect("catalogue read carrier frame delivered to v1 presence target")
+        .expect("presence dispatch frame ok")
+        .frame;
+    dispatch_task.abort();
+
+    let call = match frame.payload {
+        Some(axon_sdk::pb::axon::v1::invoke_bidi_down::Payload::DispatchCall(call)) => call,
+        other => panic!("expected carrier-v1 DispatchCall, got {other:?}"),
+    };
+    let request = call.request.expect("carrier-v1 request");
+    assert_eq!(invocation_function_name(&request), CATALOGUE_READ);
+    assert_eq!(
+        request
+            .envelope
+            .as_ref()
+            .and_then(|envelope| envelope.subject.as_ref())
+            .map(|subject| subject.ura.as_str()),
+        Some(REMOTE_DEVICE_URA)
+    );
+}
+
+#[tokio::test]
 async fn dispatch_remote_rpc_carrier_v1_preserves_signed_canonical_material() {
     use ed25519_dalek::Verifier as _;
 
