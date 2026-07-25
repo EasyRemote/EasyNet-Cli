@@ -176,7 +176,7 @@ class Client:
                 stage="sdk",
                 retry=RetryHint.NEVER,
                 message=(
-                    f"daemon ABI version {features.abi_version} "
+                    f"runtime ABI version {features.abi_version} "
                     f"does not match expected {expected}"
                 ),
             )

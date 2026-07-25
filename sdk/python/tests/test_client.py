@@ -54,6 +54,8 @@ class ClientTests(unittest.TestCase):
             client.require_abi(5)
 
         self.assertTrue(is_code(caught.exception, ErrorCode.VERSION_MISMATCH))
+        self.assertIn("runtime ABI version", str(caught.exception))
+        self.assertNotIn("daemon", str(caught.exception))
 
     def test_feature_discovery_wraps_transport_failure(self) -> None:
         client = Client(FailingTransport())
@@ -72,13 +74,15 @@ class ClientTests(unittest.TestCase):
 
         self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
 
-    def test_require_abi_maps_zero_daemon_abi_to_version_mismatch(self) -> None:
+    def test_require_abi_maps_zero_runtime_abi_to_version_mismatch(self) -> None:
         client = Client(StaticTransport(b'{"abi_version": 0, "sdk_version": "0.91.30"}'))
 
         with self.assertRaises(SDKError) as caught:
             client.require_abi(5)
 
         self.assertTrue(is_code(caught.exception, ErrorCode.VERSION_MISMATCH))
+        self.assertIn("runtime ABI version", str(caught.exception))
+        self.assertNotIn("daemon", str(caught.exception))
 
     def test_close_delegates_once_and_fails_closed(self) -> None:
         transport = StaticTransport(b'{"abi_version": 5, "sdk_version": "0.91.30"}')

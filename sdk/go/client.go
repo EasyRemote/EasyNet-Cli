@@ -225,7 +225,7 @@ func (c *Client) RequireABI(ctx context.Context, expected uint32) (FeatureSet, e
 			Stage:     "sdk",
 			Retry:     RetryNever,
 			Retryable: RetryableForHint(RetryNever),
-			Message:   fmt.Sprintf("daemon ABI version %d does not match expected %d", features.ABIVersion, expected),
+			Message:   fmt.Sprintf("runtime ABI version %d does not match expected %d", features.ABIVersion, expected),
 		}
 	}
 	return features, nil

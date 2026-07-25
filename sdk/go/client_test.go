@@ -3,6 +3,7 @@ package easynet
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -89,6 +90,9 @@ func TestRequireABIReturnsTypedVersionMismatch(t *testing.T) {
 	if !IsCode(err, ErrVersionMismatch) {
 		t.Fatalf("canonical version-mismatch request did not match error")
 	}
+	if !strings.Contains(err.Error(), "runtime ABI version") || strings.Contains(err.Error(), "daemon") {
+		t.Fatalf("version mismatch diagnostic = %v, want runtime ABI wording without daemon lifecycle", err)
+	}
 }
 
 func TestFeatureDiscoveryWrapsTransportFailure(t *testing.T) {
@@ -112,7 +116,7 @@ func TestFeatureDiscoveryWrapsTransportFailure(t *testing.T) {
 	}
 }
 
-func TestRequireABIMapsZeroDaemonABIToVersionMismatch(t *testing.T) {
+func TestRequireABIMapsZeroRuntimeABIToVersionMismatch(t *testing.T) {
 	client, err := NewClient(DiscoveryTransportFunc(func(ctx context.Context) ([]byte, error) {
 		return []byte(`{"abi_version": 0, "sdk_version": "0.91.30"}`), nil
 	}))
@@ -130,6 +134,9 @@ func TestRequireABIMapsZeroDaemonABIToVersionMismatch(t *testing.T) {
 	}
 	if !IsCode(err, ErrVersionMismatch) {
 		t.Fatalf("canonical version-mismatch request did not match error")
+	}
+	if !strings.Contains(err.Error(), "runtime ABI version") || strings.Contains(err.Error(), "daemon") {
+		t.Fatalf("zero ABI diagnostic = %v, want runtime ABI wording without daemon lifecycle", err)
 	}
 }
 

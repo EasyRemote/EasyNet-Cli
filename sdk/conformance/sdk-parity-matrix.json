@@ -578,7 +578,7 @@
       "shape_evidence": [
         {
           "item": "Client",
-          "sha256": "93521e1783e6d63ce177985a4466c46be0905aab7c0171dcdea6f2404c898956"
+          "sha256": "774f83aeb845f479803afea5adb20096bab73e6893ba805804a29246b378a136"
         },
         {
           "item": "DiscoveryTransport",
@@ -602,7 +602,7 @@
         },
         {
           "item": "Client.require_abi",
-          "sha256": "384aeac41d59b083ef602dfdbf51e5ed80f9c02b4141a51244e51972882ee186"
+          "sha256": "acf4c6f7dd1145d5f7a33390aa46f43993308ff15a213daf141e82de5c3251b0"
         },
         {
           "item": "DiscoveryTransport.close",
@@ -653,7 +653,7 @@
           "items": [
             {
               "item": "Client",
-              "sha256": "93521e1783e6d63ce177985a4466c46be0905aab7c0171dcdea6f2404c898956"
+              "sha256": "774f83aeb845f479803afea5adb20096bab73e6893ba805804a29246b378a136"
             },
             {
               "item": "DiscoveryTransport",
@@ -677,7 +677,7 @@
             },
             {
               "item": "Client.require_abi",
-              "sha256": "384aeac41d59b083ef602dfdbf51e5ed80f9c02b4141a51244e51972882ee186"
+              "sha256": "acf4c6f7dd1145d5f7a33390aa46f43993308ff15a213daf141e82de5c3251b0"
             },
             {
               "item": "DiscoveryTransport.close",
@@ -728,7 +728,7 @@
           "items": [
             {
               "item": "Client",
-              "sha256": "93521e1783e6d63ce177985a4466c46be0905aab7c0171dcdea6f2404c898956"
+              "sha256": "774f83aeb845f479803afea5adb20096bab73e6893ba805804a29246b378a136"
             },
             {
               "item": "DiscoveryTransport",
@@ -752,7 +752,7 @@
             },
             {
               "item": "Client.require_abi",
-              "sha256": "384aeac41d59b083ef602dfdbf51e5ed80f9c02b4141a51244e51972882ee186"
+              "sha256": "acf4c6f7dd1145d5f7a33390aa46f43993308ff15a213daf141e82de5c3251b0"
             },
             {
               "item": "DiscoveryTransport.close",
@@ -803,7 +803,7 @@
           "items": [
             {
               "item": "Client",
-              "sha256": "93521e1783e6d63ce177985a4466c46be0905aab7c0171dcdea6f2404c898956"
+              "sha256": "774f83aeb845f479803afea5adb20096bab73e6893ba805804a29246b378a136"
             },
             {
               "item": "DiscoveryTransport",
@@ -827,7 +827,7 @@
             },
             {
               "item": "Client.require_abi",
-              "sha256": "384aeac41d59b083ef602dfdbf51e5ed80f9c02b4141a51244e51972882ee186"
+              "sha256": "acf4c6f7dd1145d5f7a33390aa46f43993308ff15a213daf141e82de5c3251b0"
             },
             {
               "item": "DiscoveryTransport.close",
@@ -878,7 +878,7 @@
           "items": [
             {
               "item": "Client",
-              "sha256": "93521e1783e6d63ce177985a4466c46be0905aab7c0171dcdea6f2404c898956"
+              "sha256": "774f83aeb845f479803afea5adb20096bab73e6893ba805804a29246b378a136"
             },
             {
               "item": "DiscoveryTransport",
@@ -902,7 +902,7 @@
             },
             {
               "item": "Client.require_abi",
-              "sha256": "384aeac41d59b083ef602dfdbf51e5ed80f9c02b4141a51244e51972882ee186"
+              "sha256": "acf4c6f7dd1145d5f7a33390aa46f43993308ff15a213daf141e82de5c3251b0"
             },
             {
               "item": "DiscoveryTransport.close",
