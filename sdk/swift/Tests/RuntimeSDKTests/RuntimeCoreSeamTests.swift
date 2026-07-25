@@ -213,6 +213,20 @@ final class RuntimeCoreSeamTests: XCTestCase {
             )
         }
 
+        for missingField in ["payload_base64", "payload_content_type", "host_attestation_base64", "usage"] {
+            var missingTopLevelFact = terminal
+            missingTopLevelFact.removeValue(forKey: missingField)
+            expectSyncSDKError(.invalidArgument, "runtime receipt summary is missing runtime_receipt.\(missingField)") {
+                _ = try InvocationResult.fromJSON(
+                    jsonData([
+                        "ok": true,
+                        "terminal_state": "Completed",
+                        "terminal_receipt": missingTopLevelFact,
+                    ])
+                )
+            }
+        }
+
         var causalLegacyField = terminal
         causalLegacyField["causal_binding"] = ["form": "none", "legacy_parent": "opaque"]
         expectSyncSDKError(.invalidArgument, "causal_binding contains noncanonical field legacy_parent") {
@@ -1247,6 +1261,8 @@ private func canonicalRuntimeReceipt(
         "timestamp_unix_ms": 1_783_100_000_000 + index,
         "prev_receipt_hash_hex": String(repeating: "00", count: 32),
         "self_hash_hex": String(format: "%064x", index + 1),
+        "payload_base64": "",
+        "payload_content_type": "application/json",
         "cleanup_complete": !["admitted", "Admitted", "ADMITTED"].contains(state),
         "caller_binding": agentBinding("easynet:///r/example/agent/alice.sdk"),
         "callee_binding": agentBinding(callee),
@@ -1262,6 +1278,8 @@ private func canonicalRuntimeReceipt(
         "authority_binding_kind": "self",
         "authority_binding": ["kind": "self", "principal_ura": callee],
         "ability_binding": descriptor,
+        "host_attestation_base64": "",
+        "usage": [String: Any](),
         "subject_ref": ["kind": 1, "ura": callee, "profile": "axon-strict-v2"],
         "descriptor_version": "1.0.0",
         "schema_hash_hex": String(repeating: "11", count: 32),

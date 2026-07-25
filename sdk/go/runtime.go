@@ -1317,6 +1317,65 @@ func validateRuntimeReceiptCausalBinding(kind string, binding map[string]any) er
 }
 
 func validateRuntimeReceiptRawProofShape(raw map[string]any) error {
+	if err := requireRuntimeReceiptRequiredKeys(
+		raw,
+		"runtime_receipt",
+		"receipt_ura",
+		"invocation_id",
+		"receipt_type",
+		"state",
+		"index",
+		"timestamp_unix_ms",
+		"prev_receipt_hash_hex",
+		"self_hash_hex",
+		"payload_base64",
+		"payload_content_type",
+		"cleanup_complete",
+		"caller_binding",
+		"callee_binding",
+		"subject_binding",
+		"invocation_nonce_base64",
+		"causal_binding_kind",
+		"causal_binding",
+		"callee_signature",
+		"signer_binding",
+		"host_attestation_base64",
+		"authority_binding_kind",
+		"authority_binding",
+		"ability_binding",
+		"usage",
+		"subject_ref",
+		"descriptor_version",
+		"schema_hash_hex",
+		"impl_hash_hex",
+		"runtime_env",
+		"authority_proof",
+		"input_hash_hex",
+		"output_hash_hex",
+		"parent_receipts",
+	); err != nil {
+		return err
+	}
+	payloadBase64, err := runtimeReceiptRawString(raw["payload_base64"], "payload_base64", true)
+	if err != nil {
+		return err
+	}
+	if _, err := runtimeReceiptBase64(payloadBase64, "payload_base64", 0, true); err != nil {
+		return err
+	}
+	if _, err := runtimeReceiptRawString(raw["payload_content_type"], "payload_content_type", false); err != nil {
+		return err
+	}
+	if _, err := runtimeReceiptRawString(raw["host_attestation_base64"], "host_attestation_base64", true); err != nil {
+		return err
+	}
+	usage, err := runtimeReceiptRawObject(raw["usage"], "usage")
+	if err != nil {
+		return err
+	}
+	if err := requireRuntimeReceiptExactKeys(usage, "usage", "tokens_in", "tokens_out", "duration_ms", "external_calls"); err != nil {
+		return err
+	}
 	for _, field := range []string{
 		"caller_binding",
 		"callee_binding",
@@ -1479,6 +1538,30 @@ func requireRuntimeReceiptExactKeys(object map[string]any, field string, keys ..
 		}
 	}
 	return nil
+}
+
+func requireRuntimeReceiptRequiredKeys(object map[string]any, field string, keys ...string) error {
+	for _, key := range keys {
+		if _, ok := object[key]; !ok {
+			return invalidRuntimePayload("runtime receipt summary is missing "+field+"."+key, nil)
+		}
+	}
+	return nil
+}
+
+func runtimeReceiptRawString(value any, field string, allowEmpty bool) (string, error) {
+	text, ok := value.(string)
+	if !ok {
+		return "", invalidRuntimePayload("runtime receipt summary is missing "+field, nil)
+	}
+	trimmed := strings.TrimSpace(text)
+	if !allowEmpty && trimmed == "" {
+		return "", invalidRuntimePayload("runtime receipt summary is missing "+field, nil)
+	}
+	if trimmed != text {
+		return "", invalidRuntimePayload(field+" must not contain surrounding whitespace", nil)
+	}
+	return text, nil
 }
 
 func validateRuntimeReceiptCanonicalProofFacts(r RuntimeReceipt) error {

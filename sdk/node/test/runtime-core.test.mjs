@@ -185,6 +185,8 @@ const canonicalRuntimeReceipt = (invocationId, receiptType, state, index) => {
     timestamp_unix_ms: 1_783_100_000_000 + index,
     prev_receipt_hash_hex: "00".repeat(32),
     self_hash_hex: (index + 1).toString(16).padStart(64, "0"),
+    payload_base64: "",
+    payload_content_type: "application/json",
     cleanup_complete: !["admitted", "Admitted", "ADMITTED"].includes(state),
     caller_binding: agentBinding(caller),
     callee_binding: agentBinding(callee),
@@ -200,6 +202,8 @@ const canonicalRuntimeReceipt = (invocationId, receiptType, state, index) => {
     authority_binding_kind: "self",
     authority_binding: { kind: "self", principal_ura: callee },
     ability_binding: descriptor,
+    host_attestation_base64: "",
+    usage: {},
     subject_ref: { kind: 1, ura: callee, profile: "axon-strict-v2" },
     descriptor_version: "1.0.0",
     schema_hash_hex: "11".repeat(32),
@@ -498,6 +502,17 @@ test("runtime receipt proof facts are mandatory", () => {
       && error.code === sdk.ErrorCode.INVALID_ARGUMENT
       && error.message.includes("authority_proof"),
   );
+  for (const missingField of ["payload_base64", "payload_content_type", "host_attestation_base64", "usage"]) {
+    const missingTopLevelFact = { ...complete };
+    delete missingTopLevelFact[missingField];
+    assert.throws(
+      () => sdk.RuntimeReceipt.fromObject(missingTopLevelFact),
+      (error) =>
+        error instanceof sdk.SDKError
+        && error.code === sdk.ErrorCode.INVALID_ARGUMENT
+        && error.message.includes(`runtime receipt summary is missing runtime_receipt.${missingField}`),
+    );
+  }
   assert.throws(
     () => sdk.RuntimeReceipt.fromObject({
       ...complete,

@@ -160,6 +160,59 @@ private enum RuntimeReceiptProofFacts {
                 "parent_receipts",
             ]
         )
+        try runtimeRequireRequiredKeys(
+            raw,
+            "runtime_receipt",
+            [
+                "receipt_ura",
+                "invocation_id",
+                "receipt_type",
+                "state",
+                "index",
+                "timestamp_unix_ms",
+                "prev_receipt_hash_hex",
+                "self_hash_hex",
+                "payload_base64",
+                "payload_content_type",
+                "cleanup_complete",
+                "caller_binding",
+                "callee_binding",
+                "subject_binding",
+                "invocation_nonce_base64",
+                "causal_binding_kind",
+                "causal_binding",
+                "callee_signature",
+                "signer_binding",
+                "host_attestation_base64",
+                "authority_binding_kind",
+                "authority_binding",
+                "ability_binding",
+                "usage",
+                "subject_ref",
+                "descriptor_version",
+                "schema_hash_hex",
+                "impl_hash_hex",
+                "runtime_env",
+                "authority_proof",
+                "input_hash_hex",
+                "output_hash_hex",
+                "parent_receipts",
+            ]
+        )
+        _ = try runtimeBase64(
+            runtimeRequiredStringAllowEmpty(raw, "payload_base64", "runtime_receipt"),
+            "payload_base64",
+            expectedLength: nil,
+            allowEmpty: true
+        )
+        _ = try runtimeRequiredString(raw, "payload_content_type", "runtime_receipt")
+        _ = try runtimeRequiredStringAllowEmpty(raw, "host_attestation_base64", "runtime_receipt")
+        let usage = try runtimeRequiredObject(raw, "usage", "runtime_receipt")
+        try runtimeRequireExactKeys(
+            usage,
+            "usage",
+            ["tokens_in", "tokens_out", "duration_ms", "external_calls"]
+        )
         _ = try runtimeReceiptAgentBinding(raw["caller_binding"], "caller_binding")
         let calleeBinding = try runtimeReceiptAgentBinding(raw["callee_binding"], "callee_binding")
         _ = try runtimeReceiptAgentBinding(raw["subject_binding"], "subject_binding")
@@ -744,6 +797,16 @@ private func runtimeRequireExactKeys(
 ) throws {
     for key in object.keys.sorted() where !allowedKeys.contains(key) {
         throw SDKError.validation("runtime_receipt", "\(field) contains noncanonical field \(key)")
+    }
+}
+
+private func runtimeRequireRequiredKeys(
+    _ object: [String: Any],
+    _ field: String,
+    _ requiredKeys: Set<String>
+) throws {
+    for key in requiredKeys where !object.keys.contains(key) {
+        throw SDKError.validation("runtime_receipt", "runtime receipt summary is missing \(field).\(key)")
     }
 }
 

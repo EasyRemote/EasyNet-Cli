@@ -1934,6 +1934,50 @@ function validateRuntimeReceiptProofFacts(raw) {
     "output_hash_hex",
     "parent_receipts",
   ]);
+  requireRuntimeReceiptRequiredKeys(raw, "runtime_receipt", [
+    "receipt_ura",
+    "invocation_id",
+    "receipt_type",
+    "state",
+    "index",
+    "timestamp_unix_ms",
+    "prev_receipt_hash_hex",
+    "self_hash_hex",
+    "payload_base64",
+    "payload_content_type",
+    "cleanup_complete",
+    "caller_binding",
+    "callee_binding",
+    "subject_binding",
+    "invocation_nonce_base64",
+    "causal_binding_kind",
+    "causal_binding",
+    "callee_signature",
+    "signer_binding",
+    "host_attestation_base64",
+    "authority_binding_kind",
+    "authority_binding",
+    "ability_binding",
+    "usage",
+    "subject_ref",
+    "descriptor_version",
+    "schema_hash_hex",
+    "impl_hash_hex",
+    "runtime_env",
+    "authority_proof",
+    "input_hash_hex",
+    "output_hash_hex",
+    "parent_receipts",
+  ]);
+  validateRuntimeBase64(
+    requiredRuntimeStringAllowEmpty(raw.payload_base64, "payload_base64"),
+    "payload_base64",
+    null,
+    true,
+  );
+  requiredRuntimeString(raw.payload_content_type, "payload_content_type");
+  requiredRuntimeStringAllowEmpty(raw.host_attestation_base64, "host_attestation_base64");
+  requireRuntimeReceiptUsage(raw.usage);
   requireRuntimeReceiptAgentBinding(raw.caller_binding, "caller_binding");
   const calleeBinding = requireRuntimeReceiptAgentBinding(raw.callee_binding, "callee_binding");
   requireRuntimeReceiptAgentBinding(raw.subject_binding, "subject_binding");
@@ -2252,6 +2296,28 @@ function requireRuntimeReceiptExactKeys(value, field, allowedKeys) {
       throw invalidRuntime(`${field} contains noncanonical field ${key}`);
     }
   }
+}
+
+function requireRuntimeReceiptRequiredKeys(value, field, requiredKeys) {
+  for (const key of requiredKeys) {
+    if (!Object.hasOwn(value, key)) {
+      throw invalidRuntime(`runtime receipt summary is missing ${field}.${key}`);
+    }
+  }
+}
+
+function requireRuntimeReceiptUsage(value) {
+  const usage = objectValue(value, "usage");
+  requireRuntimeReceiptExactKeys(usage, "usage", [
+    "tokens_in",
+    "tokens_out",
+    "duration_ms",
+    "external_calls",
+  ]);
+  optionalRuntimeNonNegativeInteger(usage.tokens_in, "usage.tokens_in");
+  optionalRuntimeNonNegativeInteger(usage.tokens_out, "usage.tokens_out");
+  optionalRuntimeNonNegativeInteger(usage.duration_ms, "usage.duration_ms");
+  optionalRuntimeNonNegativeInteger(usage.external_calls, "usage.external_calls");
 }
 
 function runtimeReceiptHash(value, field, allowZero) {

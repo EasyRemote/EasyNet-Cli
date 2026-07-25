@@ -573,6 +573,55 @@ class RuntimeReceipt:
     def validate_proof_facts(self) -> None:
         """Reject receipt projections that omit canonical proof facts."""
 
+        _require_runtime_receipt_required_keys(
+            self.raw,
+            "runtime_receipt",
+            "receipt_ura",
+            "invocation_id",
+            "receipt_type",
+            "state",
+            "index",
+            "timestamp_unix_ms",
+            "prev_receipt_hash_hex",
+            "self_hash_hex",
+            "payload_base64",
+            "payload_content_type",
+            "cleanup_complete",
+            "caller_binding",
+            "callee_binding",
+            "subject_binding",
+            "invocation_nonce_base64",
+            "causal_binding_kind",
+            "causal_binding",
+            "callee_signature",
+            "signer_binding",
+            "host_attestation_base64",
+            "authority_binding_kind",
+            "authority_binding",
+            "ability_binding",
+            "usage",
+            "subject_ref",
+            "descriptor_version",
+            "schema_hash_hex",
+            "impl_hash_hex",
+            "runtime_env",
+            "authority_proof",
+            "input_hash_hex",
+            "output_hash_hex",
+            "parent_receipts",
+        )
+        _runtime_receipt_base64(
+            self.raw.get("payload_base64"),
+            "payload_base64",
+            allow_empty=True,
+        )
+        _required_receipt_text(self.raw.get("payload_content_type"), "payload_content_type")
+        _required_receipt_text_allow_empty(
+            self.raw.get("host_attestation_base64"),
+            "host_attestation_base64",
+        )
+        if self.usage is None:
+            raise _invalid_runtime("runtime receipt summary is missing usage")
         _required_receipt_agent_binding(self.caller_binding, "caller_binding")
         _required_receipt_agent_binding(self.callee_binding, "callee_binding")
         _required_receipt_subject_binding(self.subject_binding, "subject_binding")
@@ -1825,6 +1874,18 @@ def _require_runtime_receipt_exact_keys(
             raise _invalid_runtime(f"{field_name} contains noncanonical field {key}")
 
 
+def _require_runtime_receipt_required_keys(
+    value: Mapping[str, object],
+    field_name: str,
+    *required_keys: str,
+) -> None:
+    for key in required_keys:
+        if key not in value:
+            raise _invalid_runtime(
+                f"runtime receipt summary is missing {field_name}.{key}"
+            )
+
+
 def _validate_runtime_receipt_canonical_proof_facts(
     receipt: RuntimeReceipt,
 ) -> None:
@@ -2158,6 +2219,12 @@ def _required_receipt_text(value: object, field_name: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise _invalid_runtime(f"runtime receipt summary is missing {field_name}")
     return value.strip()
+
+
+def _required_receipt_text_allow_empty(value: object, field_name: str) -> str:
+    if not isinstance(value, str) or value != value.strip():
+        raise _invalid_runtime(f"runtime receipt summary is missing {field_name}")
+    return value
 
 
 def _optional_mapping(value: object, field_name: str) -> Optional[Mapping[str, object]]:

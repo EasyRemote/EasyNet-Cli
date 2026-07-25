@@ -327,6 +327,16 @@ public final class RuntimeCoreSeamTest {
         "authority_proof",
         () -> new InvocationResult(true, InvocationTerminalState.COMPLETED, "", null, missingProof));
 
+    for (String missingField :
+        List.of("payload_base64", "payload_content_type", "host_attestation_base64", "usage")) {
+      Map<String, Object> missingTopLevelFact = new LinkedHashMap<>(complete);
+      missingTopLevelFact.remove(missingField);
+      expectSDKError(
+          ErrorCode.INVALID_ARGUMENT,
+          "runtime receipt summary is missing runtime_receipt." + missingField,
+          () -> RuntimeReceipt.fromMap(missingTopLevelFact));
+    }
+
     Map<String, Object> mismatchedProofHash = new LinkedHashMap<>(complete);
     Map<String, Object> mismatchedProof = mutableAuthorityProof(mismatchedProofHash);
     mismatchedProof.put("proof_hash_hex", "ff".repeat(32));
@@ -1371,6 +1381,8 @@ public final class RuntimeCoreSeamTest {
     receipt.put("timestamp_unix_ms", 1_783_100_000_000L + index);
     receipt.put("prev_receipt_hash_hex", "00".repeat(32));
     receipt.put("self_hash_hex", "%064x".formatted(index + 1));
+    receipt.put("payload_base64", "");
+    receipt.put("payload_content_type", "application/json");
     receipt.put("cleanup_complete", !"admitted".equalsIgnoreCase(state));
     receipt.put("caller_binding", agentBinding(CALLER));
     receipt.put("callee_binding", agentBinding(CALLEE));
@@ -1391,6 +1403,8 @@ public final class RuntimeCoreSeamTest {
         "authority_binding",
         Map.of("kind", "self", "principal_ura", CALLEE));
     receipt.put("ability_binding", DESCRIPTOR);
+    receipt.put("host_attestation_base64", "");
+    receipt.put("usage", Map.of());
     receipt.put("subject_ref", Map.of("kind", 1L, "ura", CALLEE, "profile", "axon-strict-v2"));
     receipt.put("descriptor_version", "1.0.0");
     receipt.put("schema_hash_hex", "11".repeat(32));

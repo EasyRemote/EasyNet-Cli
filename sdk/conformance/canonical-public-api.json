@@ -19845,7 +19845,7 @@
       "RuntimeReadiness.lifecycle_state": "044e286b60d382303017641654f42c1a9f976147b0f7bd6ab9427eb52c4f9242",
       "RuntimeReadiness.messages": "2a4966c647cc1a870bee85864135b96b2e7fb987628956c7ba7232741b90be3a",
       "RuntimeReadiness.ready": "7c456ebf1ff4b45467134a8b48eaa86e57748c46401a4ba16a61a43602166cb8",
-      "RuntimeReceipt": "3483a7ed0ae7a41a38c1092f21ecf7d20716cc58e6496e4a66de1e603a5a9d13",
+      "RuntimeReceipt": "369b4846a70ce41412e1587c2d27786182620ca47760de2f8d012d9fea9c1ffd",
       "RuntimeReceipt.ability_binding": "c2530cf1997f67cec32ee41c6532207f8e54a98bf0e21670a1dc4c0b3716a26d",
       "RuntimeReceipt.authority_binding": "1c02afca84b9f00bf8363dd707f37576fd4d56b5d5b71b33b5ed688fa0d61eaf",
       "RuntimeReceipt.authority_binding_kind": "7420740be59c5dd4e50b4c8dcd2b5d9e537afc56f6d9395a72d42ee8c5421314",
@@ -19890,7 +19890,7 @@
       "RuntimeReceipt.timestamp_unix_ms": "b5cf791f1c2d4e9b3e0183be8f4f114b1473f5e8aa2c1077351c7e8daa4501b5",
       "RuntimeReceipt.to_json_dict": "5b4cdd43ec5246a90c5889394b1d1cb4f9d087d443b0ec36a0e5be3723df8e29",
       "RuntimeReceipt.usage": "4a431c4168679aafa50f828d1b9198b05dd191ea4cb9307c6a447d1e0245d8dd",
-      "RuntimeReceipt.validate_proof_facts": "91623a58974b907af12f1172452a82a15313da1930544b3b7e92c703ad684799",
+      "RuntimeReceipt.validate_proof_facts": "12e3899f3fab6745ceac2fd577cdaf975da6aae83898e7aa9c2e838c54cdaaa4",
       "RuntimeReceipt.validate_summary": "3084bf336ef2c3ed2d7737ce1a21da09992e6fd489785dacd814bed4f002094e",
       "RuntimeReceiptAgentBinding": "0674055c2cf05da9859f79850926083bc1524a19e712387f1857e934b76fba31",
       "RuntimeReceiptAgentBinding.profile": "221b38e18308a16f8131a568b327e020d585c1bd1c12042772263845500c32aa",
@@ -22430,7 +22430,7 @@
       "sha256": "27ca6ac07d65dd53b977ad0e89c3226cb01023cec048e2e599c845c1f19724a6",
       "interface": "RuntimeTransport",
       "interface_path": "sdk/go/runtime.go",
-      "interface_sha256": "0cacdd965d045b1c7f7dd5f041fba8cd5750a4d66dd773f8211ba2231c9b4c70",
+      "interface_sha256": "44475ce2252448afd410d8e64a5ea524300bc882f0774555bc6302758f5b0d3d",
       "capability_ids": [
         "stream",
         "bidi"

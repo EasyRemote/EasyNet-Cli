@@ -14239,6 +14239,9 @@ for fragment, label in {
     "receiptHash(": "hash_validator_missing",
     "base64Bytes(": "base64_validator_missing",
     "requireExactKeys(": "exact_object_schema_validator_missing",
+    "requirePresentKeys(": "required_top_level_fact_validator_missing",
+    'requiredString(raw, "payload_content_type")': "payload_content_type_required_missing",
+    'requireObject(raw.get("usage"), "usage")': "usage_required_missing",
     "contains noncanonical field": "noncanonical_field_error_missing",
     'requiredStringAllowEmpty(authorityProof, "proof_payload_base64")': "proof_payload_presence_missing",
 }.items():
@@ -14281,6 +14284,11 @@ for required_test in (
     "missingProofPayload.remove(\"proof_payload_base64\")",
     "legacyProofIssuer.put(\"issuer\", issuer)",
     "authority_proof.issuer contains noncanonical field legacy_profile",
+    "missingTopLevelFact",
+    "payload_base64",
+    "payload_content_type",
+    "host_attestation_base64",
+    "usage",
     "terminal_receipt is required",
     "retired receipt alias",
 ):
@@ -14306,6 +14314,10 @@ for fragment, label in {
     "validateRuntimeReceiptRawProofShape": "raw_proof_shape_validator_missing",
     "validateRuntimeReceiptAuthorityBindingShape": "authority_binding_shape_validator_missing",
     "requireRuntimeReceiptExactKeys": "exact_object_schema_validator_missing",
+    "requireRuntimeReceiptRequiredKeys": "required_top_level_fact_validator_missing",
+    "runtimeReceiptRawString": "required_top_level_string_validator_missing",
+    "payload_content_type": "payload_content_type_required_missing",
+    '"usage"': "usage_required_missing",
     "contains noncanonical field": "noncanonical_field_error_missing",
     'proof["proof_payload_base64"]': "proof_payload_presence_check_missing",
     '"runtime receipt summary is missing authority_proof.proof_payload_base64"': "proof_payload_presence_error_missing",
@@ -14329,6 +14341,11 @@ for required_test in (
     "legacy proof issuer metadata",
     "legacy_profile",
     "authority_binding contains noncanonical field",
+    "required top-level receipt fact",
+    "payload_base64",
+    "payload_content_type",
+    "host_attestation_base64",
+    "usage",
 ):
     if required_test not in tests:
         raise SystemExit(f"go_runtime_receipt_projection:missing_test:{required_test}")
@@ -14352,6 +14369,10 @@ for fragment, label in {
     "_validate_runtime_receipt_raw_proof_shape": "raw_proof_shape_validator_missing",
     "_validate_runtime_receipt_authority_binding_shape": "authority_binding_shape_validator_missing",
     "_require_runtime_receipt_exact_keys": "exact_object_schema_validator_missing",
+    "_require_runtime_receipt_required_keys": "required_top_level_fact_validator_missing",
+    "_required_receipt_text_allow_empty": "required_allow_empty_text_validator_missing",
+    '"payload_content_type"': "payload_content_type_required_missing",
+    '"usage"': "usage_required_missing",
     "contains noncanonical field": "noncanonical_field_error_missing",
     'if "proof_payload_base64" not in proof': "proof_payload_presence_check_missing",
     '"runtime receipt summary is missing authority_proof.proof_payload_base64"': "proof_payload_presence_error_missing",
@@ -14374,6 +14395,11 @@ for required_test in (
     "legacy_profile",
     "authority_proof.issuer contains noncanonical field legacy_profile",
     "authority_binding contains noncanonical field",
+    "missing_field=missing_field",
+    "payload_base64",
+    "payload_content_type",
+    "host_attestation_base64",
+    "usage",
 ):
     if required_test not in tests:
         raise SystemExit(f"python_runtime_receipt_projection:missing_test:{required_test}")
@@ -14411,6 +14437,9 @@ for fragment, label in {
     "validateRuntimeReceiptAuthorityProofHash": "authority_proof_hash_validator_missing",
     "canonicalRuntimeAuthorityBytes": "authority_binding_projection_missing",
     "requireRuntimeReceiptExactKeys": "exact_object_schema_validator_missing",
+    "requireRuntimeReceiptRequiredKeys": "required_top_level_fact_validator_missing",
+    "requireRuntimeReceiptUsage": "usage_required_missing",
+    "payload_content_type": "payload_content_type_required_missing",
     "contains noncanonical field": "noncanonical_field_error_missing",
     "requiredRuntimeStringAllowEmpty": "proof_payload_presence_check_missing",
     "runtime receipt summary is missing authority_proof.proof_payload_base64": "proof_payload_presence_error_missing",
@@ -14454,6 +14483,11 @@ for required_test in (
     "delete mutableAuthorityProof(missingProofPayload).proof_payload_base64",
     "authority_binding contains noncanonical field",
     "receipt_type",
+    "missingTopLevelFact",
+    "payload_base64",
+    "payload_content_type",
+    "host_attestation_base64",
+    "usage",
     "retired receipt alias is not accepted",
 ):
     if required_test not in test_corpus:
@@ -14484,6 +14518,9 @@ for fragment, label in {
     "RuntimeReceiptProofFacts": "proof_fact_validator_missing",
     "validateAuthorityProofHash": "authority_proof_hash_validator_missing",
     "RuntimeAuthorityBinding": "authority_binding_projection_missing",
+    "runtimeRequireRequiredKeys": "required_top_level_fact_validator_missing",
+    "payload_content_type": "payload_content_type_required_missing",
+    '"usage"': "usage_required_missing",
     "runtimeRequiredStringAllowEmpty": "proof_payload_presence_check_missing",
     "runtime receipt summary is missing authority_proof.proof_payload_base64": "proof_payload_presence_error_missing",
     "authority_proof_hash_mismatch": "authority_proof_hash_mismatch_missing",
@@ -14513,6 +14550,11 @@ for required_test in (
     "authorityBindingProofHashSelf",
     "authority_proof_hash_mismatch",
     "proofWithoutPayload.removeValue(forKey: \"proof_payload_base64\")",
+    "missingTopLevelFact",
+    "payload_base64",
+    "payload_content_type",
+    "host_attestation_base64",
+    "usage",
     "hosted runtime receipt is missing host_attestation_base64",
 ):
     if required_test not in tests:

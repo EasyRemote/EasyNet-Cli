@@ -52,6 +52,8 @@ func canonicalRuntimeReceiptFixture(
 		"timestamp_unix_ms":       1_783_100_000_000 + index,
 		"prev_receipt_hash_hex":   strings.Repeat("00", 32),
 		"self_hash_hex":           fmt.Sprintf("%064x", index+1),
+		"payload_base64":          "",
+		"payload_content_type":    "application/json",
 		"cleanup_complete":        state != "admitted" && state != "Admitted" && state != "ADMITTED",
 		"caller_binding":          map[string]any{"ura": "easynet:///r/example/agent/alice.sdk", "profile": "axon-strict-v2"},
 		"callee_binding":          map[string]any{"ura": "easynet:///r/example/device/dev-a", "profile": "axon-strict-v2"},
@@ -69,7 +71,9 @@ func canonicalRuntimeReceiptFixture(
 			"kind":          "self",
 			"principal_ura": "easynet:///r/example/device/dev-a",
 		},
-		"ability_binding": runtimeTestDescriptorRef,
+		"ability_binding":         runtimeTestDescriptorRef,
+		"host_attestation_base64": "",
+		"usage":                   map[string]any{},
 		"subject_ref": map[string]any{
 			"kind":    1,
 			"ura":     "easynet:///r/example/device/dev-a",
@@ -439,6 +443,13 @@ func TestRuntimeReceiptProofFactsRequired(t *testing.T) {
 	delete(incomplete, "authority_proof")
 	if _, err := NewRuntimeReceiptFromJSON(mustJSON(incomplete)); err == nil {
 		t.Fatal("NewRuntimeReceiptFromJSON accepted receipt without proof facts")
+	}
+	for _, missingField := range []string{"payload_base64", "payload_content_type", "host_attestation_base64", "usage"} {
+		incomplete := canonicalRuntimeReceiptFixture("inv-1", "completed", "Completed", 1)
+		delete(incomplete, missingField)
+		if _, err := NewRuntimeReceiptFromJSON(mustJSON(incomplete)); err == nil || !strings.Contains(err.Error(), "runtime receipt summary is missing runtime_receipt."+missingField) {
+			t.Fatalf("missing %s error = %v, want required top-level receipt fact", missingField, err)
+		}
 	}
 }
 

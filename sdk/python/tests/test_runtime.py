@@ -221,6 +221,8 @@ def canonical_runtime_receipt(
         "timestamp_unix_ms": 1_783_100_000_000 + index,
         "prev_receipt_hash_hex": "00" * 32,
         "self_hash_hex": f"{index + 1:064x}",
+        "payload_base64": "",
+        "payload_content_type": "application/json",
         "cleanup_complete": state.lower() != "admitted",
         "caller_binding": {
             "ura": "easynet:///r/example/agent/alice.sdk",
@@ -253,6 +255,8 @@ def canonical_runtime_receipt(
         "ability_binding": (
             "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"
         ),
+        "host_attestation_base64": "",
+        "usage": {},
         "subject_ref": {
             "kind": 1,
             "ura": "easynet:///r/example/device/dev-a",
@@ -627,6 +631,22 @@ class RuntimeTests(unittest.TestCase):
         proof["proof_hash_hex"] = "ff" * 32
         with self.assertRaises(SDKError, msg="mismatched proof hash"):
             RuntimeReceipt.from_mapping(receipt)
+
+        for missing_field in (
+            "payload_base64",
+            "payload_content_type",
+            "host_attestation_base64",
+            "usage",
+        ):
+            receipt = canonical_runtime_receipt("inv-1", "completed", "Completed", 1)
+            receipt.pop(missing_field)
+            with self.subTest(missing_field=missing_field):
+                with self.assertRaises(SDKError) as raised:
+                    RuntimeReceipt.from_mapping(receipt)
+                self.assertIn(
+                    f"runtime receipt summary is missing runtime_receipt.{missing_field}",
+                    raised.exception.message,
+                )
 
         receipt = canonical_runtime_receipt("inv-1", "completed", "Completed", 1)
         authority = receipt["authority_binding"]
