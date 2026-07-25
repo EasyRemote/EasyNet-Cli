@@ -153,7 +153,7 @@ pub(crate) fn local_device_ura() -> anyhow::Result<String> {
 /// let absent or stale control discovery synthesize a device/default owner and
 /// reintroduce a second daemon-identity authority outside daemon boot.
 pub(crate) fn local_daemon_ura() -> anyhow::Result<String> {
-    control_discovery_daemon_ura().ok_or_else(|| {
+    control_discovery_daemon_ura()?.ok_or_else(|| {
         anyhow::anyhow!(
             "local daemon identity unavailable: control discovery does not publish a daemon \
              identity; start or restart the daemon before constructing daemon-local invocation"
@@ -174,17 +174,30 @@ fn persisted_local_device_ura() -> Option<String> {
     }
 }
 
-fn control_discovery_daemon_ura() -> Option<String> {
+fn control_discovery_daemon_ura() -> anyhow::Result<Option<String>> {
     let path = crate::daemon::control::discovery::default_path();
-    let discovery = crate::daemon::control::discovery::read(&path).ok()??;
-    let identity = discovery.daemon_identity?;
+    let Some(discovery) = crate::daemon::control::discovery::read(&path).map_err(|error| {
+        anyhow::anyhow!(
+            "read local daemon identity from {}: {error}",
+            path.display()
+        )
+    })?
+    else {
+        return Ok(None);
+    };
+    let Some(identity) = discovery.daemon_identity else {
+        return Ok(None);
+    };
     match identity.mode.as_str() {
-        "hub" => Some(crate::core::ura::hub_ura(&identity.realm)),
-        "device" | "both" => identity
+        "hub" => Ok(Some(crate::core::ura::hub_ura(&identity.realm))),
+        "device" | "both" => Ok(identity
             .node_id
             .as_deref()
-            .map(|node_id| crate::core::ura::device_ura(&identity.realm, node_id)),
-        _ => None,
+            .map(|node_id| crate::core::ura::device_ura(&identity.realm, node_id))),
+        other => anyhow::bail!(
+            "local daemon identity unavailable: control discovery daemon_identity.mode {other:?} \
+             is not hub, device, or both"
+        ),
     }
 }
 
@@ -485,6 +498,30 @@ mod tests {
         assert!(
             message.contains("control discovery does not publish a daemon identity"),
             "unexpected error: {message}"
+        );
+    }
+
+    #[test]
+    fn local_daemon_ura_propagates_malformed_control_discovery() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let path = discovery::default_path();
+        std::fs::create_dir_all(path.parent().expect("default control path parent"))
+            .expect("create control discovery parent");
+        std::fs::write(&path, b"not json").expect("write malformed control discovery");
+
+        let error = local_daemon_ura()
+            .expect_err("malformed control discovery must not collapse to missing identity");
+
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("read local daemon identity")
+                && message.contains("control.json")
+                && message.contains("malformed"),
+            "unexpected error: {message}"
+        );
+        assert!(
+            !message.contains("does not publish a daemon identity"),
+            "malformed discovery must not be reported as absent identity: {message}"
         );
     }
 

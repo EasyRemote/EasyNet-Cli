@@ -8642,12 +8642,26 @@ for retired_global in (
 
 if "pub(crate) fn local_device_ura() -> anyhow::Result<String>" not in text:
     raise SystemExit("local_device_identity:local_device_ura_not_fallible")
+if "pub(crate) fn local_daemon_ura() -> anyhow::Result<String>" not in text:
+    raise SystemExit("local_device_identity:local_daemon_ura_not_fallible")
+if "fn control_discovery_daemon_ura() -> anyhow::Result<Option<String>>" not in text:
+    raise SystemExit("local_device_identity:control_discovery_daemon_ura_not_typed")
 
 start = text.find("pub(crate) fn local_device_ura()")
 end = text.find("pub(crate) fn local_daemon_ura()", start)
 if start < 0 or end < 0:
     raise SystemExit("local_device_identity:local_device_ura_section_missing")
 body = text[start:end]
+daemon_start = text.find("pub(crate) fn local_daemon_ura()")
+daemon_end = text.find("fn persisted_local_device_ura()", daemon_start)
+if daemon_start < 0 or daemon_end < 0:
+    raise SystemExit("local_device_identity:local_daemon_ura_section_missing")
+daemon_body = text[daemon_start:daemon_end]
+discovery_start = text.find("fn control_discovery_daemon_ura()")
+discovery_end = text.find("/// Stable CLI-owned resolver graph", discovery_start)
+if discovery_start < 0 or discovery_end < 0:
+    raise SystemExit("local_device_identity:control_discovery_daemon_ura_section_missing")
+discovery_body = text[discovery_start:discovery_end]
 
 for retired in (
     "unwrap_or_else",
@@ -8658,6 +8672,13 @@ for retired in (
 ):
     if retired in body:
         raise SystemExit(f"local_device_identity:default_local_fallback_retired:{retired}")
+for retired in (
+    ".ok()??",
+    "discovery::read(&path).ok()",
+    "control_discovery_daemon_ura().ok_or_else",
+):
+    if retired in daemon_body or retired in discovery_body:
+        raise SystemExit(f"local_device_identity:daemon_discovery_error_collapse_retired:{retired}")
 
 for required in (
     "persisted_local_device_ura()",
@@ -8666,10 +8687,23 @@ for required in (
 ):
     if required not in body:
         raise SystemExit(f"local_device_identity:projection_or_error_missing:{required}")
+for required in (
+    "control_discovery_daemon_ura()?.ok_or_else",
+):
+    if required not in daemon_body:
+        raise SystemExit(f"local_device_identity:daemon_projection_error_missing:{required}")
+for required in (
+    "read local daemon identity from",
+    "control discovery daemon_identity.mode",
+):
+    if required not in discovery_body:
+        raise SystemExit(f"local_device_identity:daemon_projection_error_missing:{required}")
 
 for required_test in (
     "local_device_ura_rejects_missing_identity_instead_of_synthesizing_default_local",
     "local_device_ura_projects_credentials_when_hosted_identity_is_absent",
+    "local_daemon_ura_propagates_malformed_control_discovery",
+    "malformed discovery must not be reported as absent identity",
 ):
     if required_test not in text:
         raise SystemExit(f"local_device_identity:test_missing:{required_test}")
