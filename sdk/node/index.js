@@ -175,7 +175,7 @@ export class Client {
         code: ErrorCode.VERSION_MISMATCH,
         stage: "sdk",
         retry: RetryHint.NEVER,
-        message: `daemon ABI version ${features.abiVersion} does not match expected ${expected}`,
+        message: `runtime ABI version ${features.abiVersion} does not match expected ${expected}`,
       });
     }
     return features;

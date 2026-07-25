@@ -259,7 +259,11 @@ test("feature discovery and client lifecycle are explicit", async () => {
   assert.equal(features.symbols.runtime_prepare, true);
   await assert.rejects(
     () => client.requireABI(4),
-    (error) => error instanceof sdk.SDKError && error.code === sdk.ErrorCode.VERSION_MISMATCH,
+    (error) =>
+      error instanceof sdk.SDKError &&
+      error.code === sdk.ErrorCode.VERSION_MISMATCH &&
+      error.message.includes("runtime ABI version") &&
+      !error.message.includes("daemon"),
   );
   await client.close();
   await client.close();
