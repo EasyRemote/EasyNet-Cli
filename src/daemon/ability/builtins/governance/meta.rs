@@ -822,8 +822,8 @@ mod tests {
 
         let hub_ura = crate::core::ura::hub_ura("hub-view");
         let registry = authority_bound_meta_registry(
-            AbilityAuthorityContext::for_hub_authority_root(&hub_ura)
-                .expect("fixed Hub authority context"),
+            AbilityAuthorityContext::for_realm_authority_root(&hub_ura)
+                .expect("fixed realm authority context"),
             vec![OwnerKind::Hub],
         );
 
@@ -865,8 +865,8 @@ mod tests {
         let calls_for_provider = Arc::clone(&provider_calls);
         let handle = Arc::new(std::sync::OnceLock::new());
         let mut registry = runtime_metadata_test_catalog(
-            AbilityAuthorityContext::for_hub_authority_root(&hub_ura)
-                .expect("Hub authority context"),
+            AbilityAuthorityContext::for_realm_authority_root(&hub_ura)
+                .expect("realm authority context"),
         );
         super::register(
             &mut registry,

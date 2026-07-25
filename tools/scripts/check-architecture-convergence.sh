@@ -2987,8 +2987,8 @@ if catalog_build.exists():
             "catalog build must snapshot voice provider assembly once",
         ),
         (
-            "if hosts_hub_authority",
-            "voice handlers may register only for Hub-capable authority",
+            "if hosts_realm_authority",
+            "voice handlers may register only for realm-authority-capable runtime",
         ),
         (
             "if let Some(provider) = voice_provider_assembly.as_ref()",

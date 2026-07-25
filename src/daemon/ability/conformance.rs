@@ -877,10 +877,10 @@ mod tests {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
         let hub_ura = crate::core::ura::hub_ura("conformance-test");
         let authority_context =
-            crate::daemon::ability::dispatch::AbilityAuthorityContext::for_hub_authority_root(
+            crate::daemon::ability::dispatch::AbilityAuthorityContext::for_realm_authority_root(
                 &hub_ura,
             )
-            .expect("Hub authority context");
+            .expect("realm authority context");
         let registry =
             crate::daemon::ability::catalog::build_registry_snapshot_with_authority_context(
                 authority_context,

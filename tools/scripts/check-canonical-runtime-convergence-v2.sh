@@ -898,6 +898,39 @@ check_runtime_authority_vocabulary_contract() {
   fi
 }
 
+check_authority_context_model_vocabulary_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local dispatch="$cli_root/src/daemon/ability/dispatch.rs"
+  local catalog_build="$cli_root/src/daemon/ability/catalog/build.rs"
+  local conformance="$cli_root/src/daemon/ability/conformance.rs"
+  local meta="$cli_root/src/daemon/ability/builtins/governance/meta.rs"
+  local assembly="$cli_root/src/daemon/ability/catalog/assembly_tests.rs"
+  local daemon_tests="$cli_root/src/daemon/invocation/dispatch/daemon_invocation_service_tests.rs"
+
+  for file in "$dispatch" "$catalog_build" "$conformance" "$meta" "$assembly" "$daemon_tests"; do
+    [[ -f "$file" ]] || fail "authority context vocabulary source is missing: ${file#$cli_root/}"
+  done
+
+  if rg -n 'CanonicalHubAuthority|for_hub_authority_root|hosts_hub_authority|hub_authority_root|AbilityAuthoritySet::Hub|AbilityAuthoritySet::Both|Self::Hub \{|Self::Both|fn hub\(&self\)|\.hub\(\)|Hub authority context|Hub authority set|authority_set: "hub"|authority set "hub"|Device\+Hub authority' \
+    "$dispatch" "$catalog_build" "$conformance" "$meta" "$assembly" "$daemon_tests"; then
+    fail "authority context model preserves retired Hub/Both vocabulary"
+  fi
+
+  for required in \
+    "struct CanonicalRealmAuthority" \
+    "RealmAuthority {" \
+    "DeviceAndRealmAuthority {" \
+    "fn realm_authority(&self)" \
+    "pub fn for_realm_authority_root" \
+    "pub(crate) fn hosts_realm_authority" \
+    '"realm-authority"' \
+    '"device+realm-authority"'; do
+    if ! rg -F -q "$required" "$dispatch"; then
+      fail "authority context model is missing canonical runtime vocabulary: $required"
+    fi
+  done
+}
+
 check_sdk_runtime_admin_authority_session_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local go_admin="$cli_root/sdk/go/runtime_admin.go"
@@ -21044,6 +21077,7 @@ EOF
   check_sdk_managed_signing_authority_route_contract
   check_sdk_runtime_admin_authority_session_contract
   check_runtime_authority_vocabulary_contract
+  check_authority_context_model_vocabulary_contract
   check_provider_route_manifest_neutrality_contract
   check_advertise_agent_ingress_contract
   check_agent_start_model_intent_contract
@@ -21469,4 +21503,5 @@ check_sdk_provider_managed_signing_custody_contract
 check_sdk_runtime_receipt_type_state_binding_contract
 check_public_descriptor_authority_vocabulary_contract
 check_runtime_authority_vocabulary_contract
+check_authority_context_model_vocabulary_contract
 echo "canonical-runtime-convergence-v2: OK"

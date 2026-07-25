@@ -559,7 +559,7 @@ fn build_registry_with_services_result_inner(
         );
 
     let hosts_device_authority = authority_context.hosts_device_authority();
-    let hosts_hub_authority = authority_context.hosts_hub_authority();
+    let hosts_realm_authority = authority_context.hosts_realm_authority();
     let daemon_runtime_assembly = assembly_mode.starts_runtime_services();
     let replay_hosted_agent_runtime =
         hosts_device_authority && assembly_mode.replays_hosted_agent_runtime();
@@ -605,7 +605,7 @@ fn build_registry_with_services_result_inner(
         )
         .context("register Device daemon Invocation descriptor contracts")?;
     }
-    if hosts_hub_authority {
+    if hosts_realm_authority {
         daemon_invocation_contracts::register_for_owner(
             &mut reg,
             &crate::daemon::ability::dispatch::OwnerKind::Hub,
@@ -742,7 +742,7 @@ fn build_registry_with_services_result_inner(
     // voice.* call signaling abilities — `easynet call …`
     // subcommand surface routes through these via the same
     // ability-only invocation path every other CLI surface uses.
-    if hosts_hub_authority {
+    if hosts_realm_authority {
         if let Some(provider) = voice_provider_assembly.as_ref() {
             voice_call_ability::register(&mut reg, provider.clone());
         }

@@ -1819,11 +1819,11 @@ impl CanonicalDeviceAuthority {
 }
 
 #[derive(Debug, Clone)]
-struct CanonicalHubAuthority {
+struct CanonicalRealmAuthority {
     ura: String,
 }
 
-impl CanonicalHubAuthority {
+impl CanonicalRealmAuthority {
     fn parse(ura: String) -> Result<Self, AbilityControlPlaneError> {
         let parsed = crate::core::ura::parse_ura(&ura).map_err(|error| {
             AbilityControlPlaneError::InvalidHubAuthorityRoot {
@@ -1860,7 +1860,7 @@ enum DeviceSubordinateAuthoritySource {
 /// Explicit process-local authority state.
 ///
 /// An authority root is present only when this runtime actually hosts that
-/// owner plane. In particular, Hub mode has no Device root: callers cannot
+/// owner plane. In particular, realm-authority mode has no Device root: callers cannot
 /// accidentally materialize Device/Agent/User rows under a fabricated owner.
 #[derive(Debug, Clone)]
 enum AbilityAuthoritySet {
@@ -1868,12 +1868,12 @@ enum AbilityAuthoritySet {
         device: CanonicalDeviceAuthority,
         subordinate_source: DeviceSubordinateAuthoritySource,
     },
-    Hub {
-        hub: CanonicalHubAuthority,
+    RealmAuthority {
+        authority: CanonicalRealmAuthority,
     },
-    Both {
+    DeviceAndRealmAuthority {
         device: CanonicalDeviceAuthority,
-        hub: CanonicalHubAuthority,
+        authority: CanonicalRealmAuthority,
         subordinate_source: DeviceSubordinateAuthoritySource,
     },
 }
@@ -1882,8 +1882,8 @@ impl AbilityAuthoritySet {
     fn label(&self) -> &'static str {
         match self {
             Self::Device { .. } => "device",
-            Self::Hub { .. } => "hub",
-            Self::Both { .. } => "device+hub",
+            Self::RealmAuthority { .. } => "realm-authority",
+            Self::DeviceAndRealmAuthority { .. } => "device+realm-authority",
         }
     }
 
@@ -1893,12 +1893,12 @@ impl AbilityAuthoritySet {
                 device,
                 subordinate_source,
             }
-            | Self::Both {
+            | Self::DeviceAndRealmAuthority {
                 device,
                 subordinate_source,
                 ..
             } => Some((device, subordinate_source)),
-            Self::Hub { .. } => None,
+            Self::RealmAuthority { .. } => None,
         }
     }
 
@@ -1906,9 +1906,10 @@ impl AbilityAuthoritySet {
         self.device().map(|(device, _)| device.ura.as_str())
     }
 
-    fn hub(&self) -> Option<&CanonicalHubAuthority> {
+    fn realm_authority(&self) -> Option<&CanonicalRealmAuthority> {
         match self {
-            Self::Hub { hub } | Self::Both { hub, .. } => Some(hub),
+            Self::RealmAuthority { authority }
+            | Self::DeviceAndRealmAuthority { authority, .. } => Some(authority),
             Self::Device { .. } => None,
         }
     }
@@ -1917,9 +1918,10 @@ impl AbilityAuthoritySet {
 /// Process-local authorities used when projecting owner kinds into descriptor
 /// records and Axon `LocalRuntime` ability keys.
 ///
-/// The set is an explicit Device/Hub/Both state rather than two always-present
-/// strings. Registration can therefore enforce the daemon's hosted owner
-/// planes before any control-plane or runtime row is written.
+/// The set is an explicit Device / RealmAuthority / DeviceAndRealmAuthority
+/// state rather than two always-present strings. Registration can therefore
+/// enforce the daemon's hosted owner planes before any control-plane or
+/// runtime row is written.
 #[derive(Debug, Clone)]
 pub struct AbilityAuthorityContext {
     authorities: AbilityAuthoritySet,
@@ -1965,15 +1967,15 @@ impl AbilityAuthorityContext {
             local_device_authority_root().expect("local Device authority must be available"),
         )
         .expect("local Device authority helper must return a canonical Device URA");
-        let hub = CanonicalHubAuthority::for_realm(&device.realm);
+        let authority = CanonicalRealmAuthority::for_realm(&device.realm);
         let roots = crate::daemon::persistence::hosted_agent_authority_roots().expect(
             "local hosted-Agent lifecycle state must be readable when building authority context",
         );
         let roots = hosted_agent_roots_for_device(&device, roots)
             .expect("local hosted-Agent lifecycle state must contain canonical authority roots");
         Self {
-            authorities: AbilityAuthoritySet::Both {
-                hub,
+            authorities: AbilityAuthoritySet::DeviceAndRealmAuthority {
+                authority,
                 subordinate_source: DeviceSubordinateAuthoritySource::ExplicitHostedAgentRoots(
                     HotAgentAuthorityInventory::new(device.clone(), roots),
                 ),
@@ -2017,35 +2019,35 @@ impl AbilityAuthorityContext {
         })
     }
 
-    /// Bind a combined Device+Hub registry. The two authority roots remain
-    /// distinct even though one process hosts both runtime roles.
+    /// Bind a combined Device + realm-authority registry. The two authority
+    /// roots remain distinct even though one process hosts both runtime roles.
     pub fn for_combined_authority_roots(
         device_authority_root: impl Into<String>,
     ) -> Result<Self, AbilityControlPlaneError> {
         let device = CanonicalDeviceAuthority::parse(device_authority_root.into())?;
-        let hub = CanonicalHubAuthority::for_realm(&device.realm);
+        let authority = CanonicalRealmAuthority::for_realm(&device.realm);
         Ok(Self {
-            authorities: AbilityAuthoritySet::Both {
+            authorities: AbilityAuthoritySet::DeviceAndRealmAuthority {
                 device,
-                hub,
+                authority,
                 subordinate_source: DeviceSubordinateAuthoritySource::DeviceScoped,
             },
             declared_agent_roots: BTreeMap::new(),
         })
     }
 
-    /// Bind a combined Device+Hub runtime with the explicit hosted-Agent
-    /// authority inventory captured at boot.
+    /// Bind a combined Device + realm-authority runtime with the explicit
+    /// hosted-Agent authority inventory captured at boot.
     pub fn for_combined_authority_roots_with_hosted_agents(
         device_authority_root: impl Into<String>,
         hosted_agent_uras: impl IntoIterator<Item = String>,
     ) -> Result<Self, AbilityControlPlaneError> {
         let device = CanonicalDeviceAuthority::parse(device_authority_root.into())?;
-        let hub = CanonicalHubAuthority::for_realm(&device.realm);
+        let authority = CanonicalRealmAuthority::for_realm(&device.realm);
         let hosted_agent_roots = hosted_agent_roots_for_device(&device, hosted_agent_uras)?;
         Ok(Self {
-            authorities: AbilityAuthoritySet::Both {
-                hub,
+            authorities: AbilityAuthoritySet::DeviceAndRealmAuthority {
+                authority,
                 subordinate_source: DeviceSubordinateAuthoritySource::ExplicitHostedAgentRoots(
                     HotAgentAuthorityInventory::new(device.clone(), hosted_agent_roots),
                 ),
@@ -2055,23 +2057,23 @@ impl AbilityAuthorityContext {
         })
     }
 
-    /// Bind a Hub-only registry to the configured realm authority. This state
-    /// intentionally has no Device authority and never consults Device
+    /// Bind an Authority-only registry to the configured realm authority. This
+    /// state intentionally has no Device authority and never consults Device
     /// credentials.
-    pub fn for_hub_authority_root(
-        hub_authority_root: impl Into<String>,
+    pub fn for_realm_authority_root(
+        realm_authority_root: impl Into<String>,
     ) -> Result<Self, AbilityControlPlaneError> {
-        let hub = CanonicalHubAuthority::parse(hub_authority_root.into())?;
+        let authority = CanonicalRealmAuthority::parse(realm_authority_root.into())?;
         Ok(Self {
-            authorities: AbilityAuthoritySet::Hub { hub },
+            authorities: AbilityAuthoritySet::RealmAuthority { authority },
             declared_agent_roots: BTreeMap::new(),
         })
     }
 
     /// Declare one daemon-native Agent execution root captured from explicit
     /// boot configuration. The root must belong to this Device authority's
-    /// realm (and, for a device-qualified agent, this exact Device). A Hub
-    /// runtime cannot host such an Agent root.
+    /// realm (and, for a device-qualified agent, this exact Device). An
+    /// Authority-only runtime cannot host such an Agent root.
     pub fn with_declared_agent_authority_root(
         mut self,
         authority_root: impl Into<String>,
@@ -2105,17 +2107,18 @@ impl AbilityAuthorityContext {
     pub(crate) fn local_runtime_owners(&self) -> Vec<OwnerKind> {
         match &self.authorities {
             AbilityAuthoritySet::Device { .. } => vec![OwnerKind::Device],
-            AbilityAuthoritySet::Hub { .. } => vec![OwnerKind::Hub],
-            AbilityAuthoritySet::Both { .. } => vec![OwnerKind::Device, OwnerKind::Hub],
+            AbilityAuthoritySet::RealmAuthority { .. } => vec![OwnerKind::Hub],
+            AbilityAuthoritySet::DeviceAndRealmAuthority { .. } => {
+                vec![OwnerKind::Device, OwnerKind::Hub]
+            }
         }
     }
 
     pub(crate) fn ledger_governance_owner(&self) -> OwnerKind {
         match &self.authorities {
-            AbilityAuthoritySet::Device { .. } | AbilityAuthoritySet::Both { .. } => {
-                OwnerKind::Device
-            }
-            AbilityAuthoritySet::Hub { .. } => OwnerKind::Hub,
+            AbilityAuthoritySet::Device { .. }
+            | AbilityAuthoritySet::DeviceAndRealmAuthority { .. } => OwnerKind::Device,
+            AbilityAuthoritySet::RealmAuthority { .. } => OwnerKind::Hub,
         }
     }
 
@@ -2123,8 +2126,8 @@ impl AbilityAuthorityContext {
         self.authorities.device().is_some()
     }
 
-    pub(crate) fn hosts_hub_authority(&self) -> bool {
-        self.authorities.hub().is_some()
+    pub(crate) fn hosts_realm_authority(&self) -> bool {
+        self.authorities.realm_authority().is_some()
     }
 
     fn hot_agent_authority_inventory(&self) -> Option<Arc<HotAgentAuthorityInventory>> {
@@ -2144,7 +2147,7 @@ impl AbilityAuthorityContext {
 
     fn supports_owner(&self, owner: &OwnerKind) -> bool {
         match owner {
-            OwnerKind::Hub => self.authorities.hub().is_some(),
+            OwnerKind::Hub => self.authorities.realm_authority().is_some(),
             OwnerKind::Device | OwnerKind::Agent(_) | OwnerKind::User(_) => {
                 self.authorities.device().is_some()
             }
@@ -2194,8 +2197,8 @@ impl AbilityAuthorityContext {
                 .is_some_and(|(device, _)| device.ura == authority_root),
             OwnerKind::Hub => self
                 .authorities
-                .hub()
-                .is_some_and(|hub| hub.ura == authority_root),
+                .realm_authority()
+                .is_some_and(|authority| authority.ura == authority_root),
             OwnerKind::Agent(agent_id) => {
                 self.authorities.device().is_some()
                     && authority_root == self.agent_authority_root(agent_id)
@@ -2220,8 +2223,8 @@ impl AbilityAuthorityContext {
                 .clone(),
             OwnerKind::Hub => self
                 .authorities
-                .hub()
-                .expect("supported Hub owner requires Hub authority")
+                .realm_authority()
+                .expect("supported Hub owner requires realm authority")
                 .ura
                 .clone(),
             OwnerKind::Agent(agent_id) => self.agent_authority_root(agent_id),
@@ -6460,20 +6463,20 @@ mod tests {
     }
 
     #[test]
-    fn fixed_hub_authority_context_uses_configured_realm_without_device_credentials() {
+    fn fixed_realm_authority_context_uses_configured_realm_without_device_credentials() {
         let hub_ura = crate::core::ura::hub_ura("realm-b");
-        let context = AbilityAuthorityContext::for_hub_authority_root(hub_ura.clone())
-            .expect("canonical Hub authority context");
+        let context = AbilityAuthorityContext::for_realm_authority_root(hub_ura.clone())
+            .expect("canonical realm authority context");
 
         let hub_scope = OwnerKind::Hub
             .authority_scope(&context)
-            .expect("Hub owner scope");
+            .expect("realm owner scope");
         assert_eq!(hub_scope.authority_root(), hub_ura);
         assert_eq!(context.local_runtime_owners(), vec![OwnerKind::Hub]);
         assert_eq!(context.ledger_governance_owner(), OwnerKind::Hub);
 
         let err =
-            AbilityAuthorityContext::for_hub_authority_root("easynet:///r/realm-b/device/dev-b")
+            AbilityAuthorityContext::for_realm_authority_root("easynet:///r/realm-b/device/dev-b")
                 .expect_err("Device URA must not be accepted as Hub authority");
         assert!(matches!(
             err,
@@ -6487,11 +6490,11 @@ mod tests {
         ] {
             let error = unsupported
                 .authority_scope(&context)
-                .expect_err("Hub authority set must reject Device-plane owners");
+                .expect_err("realm authority set must reject Device-plane owners");
             assert!(matches!(
                 error,
                 AbilityControlPlaneError::UnsupportedOwnerForAuthoritySet {
-                    authority_set: "hub",
+                    authority_set: "realm-authority",
                     ..
                 }
             ));
@@ -6531,8 +6534,8 @@ mod tests {
         let runtime = test_runtime();
         let mut catalog = AxonAbilityCatalog::new_with_runtime_and_authority_context(
             Arc::clone(&runtime),
-            AbilityAuthorityContext::for_hub_authority_root(&hub_ura)
-                .expect("Hub authority context"),
+            AbilityAuthorityContext::for_realm_authority_root(&hub_ura)
+                .expect("realm authority context"),
         );
 
         register_test_rpc(
@@ -6606,14 +6609,16 @@ mod tests {
         let runtime = test_runtime();
         let catalog = AxonAbilityCatalog::new_with_runtime_and_authority_context(
             Arc::clone(&runtime),
-            AbilityAuthorityContext::for_hub_authority_root(&hub_ura)
-                .expect("Hub authority context"),
+            AbilityAuthorityContext::for_realm_authority_root(&hub_ura)
+                .expect("realm authority context"),
         );
 
         let error =
             hot_register_test_rpc(&catalog, "device.dynamic", OwnerKind::Device, ok_handler())
-                .expect_err("Hub authority set must reject dynamic Device owner");
-        assert!(error.to_string().contains("authority set \"hub\""));
+                .expect_err("realm authority set must reject dynamic Device owner");
+        assert!(error
+            .to_string()
+            .contains("authority set \"realm-authority\""));
         assert!(catalog.authority_ability_catalog_snapshot().is_empty());
         assert!(!catalog.has_dynamic("device.dynamic"));
 
@@ -6725,8 +6730,8 @@ mod tests {
         let hub_ura = crate::core::ura::hub_ura("scope-test");
         let catalog = AxonAbilityCatalog::new_with_runtime_and_authority_context(
             test_runtime(),
-            AbilityAuthorityContext::for_hub_authority_root(&hub_ura)
-                .expect("Hub authority context"),
+            AbilityAuthorityContext::for_realm_authority_root(&hub_ura)
+                .expect("realm authority context"),
         );
         let foreign_scope = AuthorityScope::new("hub", crate::core::ura::hub_ura("foreign"))
             .expect("foreign Hub scope is structurally valid");

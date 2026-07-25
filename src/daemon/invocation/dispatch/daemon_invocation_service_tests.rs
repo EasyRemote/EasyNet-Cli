@@ -336,16 +336,16 @@ fn test_authority_context_for_route_owner(
         .unwrap_or_else(|err| panic!("route owner URA must parse: {route_owner_ura}: {err}"));
     match parsed.kind {
         crate::core::ura::URAKind::Authority => {
-            crate::daemon::ability::dispatch::AbilityAuthorityContext::for_hub_authority_root(
+            crate::daemon::ability::dispatch::AbilityAuthorityContext::for_realm_authority_root(
                 route_owner_ura,
             )
-            .expect("test Hub authority context")
+            .expect("test realm authority context")
         }
         crate::core::ura::URAKind::Device => {
             crate::daemon::ability::dispatch::AbilityAuthorityContext::for_combined_authority_roots(
                 route_owner_ura,
             )
-            .expect("test Device+Hub authority context")
+            .expect("test Device+realm authority context")
         }
         _ => panic!("daemon route owner must be a Hub or Device URA: {route_owner_ura}"),
     }

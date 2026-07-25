@@ -196,7 +196,7 @@ fn authority_context_for_real_invoke(
             crate::daemon::ability::dispatch::AbilityAuthorityContext::for_combined_authority_roots(
                 device_ura,
             )
-            .expect("build combined Device+Hub authority fixture")
+            .expect("build combined Device+realm-authority fixture")
         }
     }
 }

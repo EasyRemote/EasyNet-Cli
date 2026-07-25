@@ -1040,8 +1040,10 @@ fn hub_registry_assembly_contains_no_device_plane_control_or_runtime_rows() {
         None,
     );
     let authority_context =
-        crate::daemon::ability::dispatch::AbilityAuthorityContext::for_hub_authority_root(&hub_ura)
-            .expect("Hub authority context");
+        crate::daemon::ability::dispatch::AbilityAuthorityContext::for_realm_authority_root(
+            &hub_ura,
+        )
+        .expect("realm authority context");
     let mut config = registry_config_for_agents_with_authority(&agents, authority_context);
     config.local_runtime = Some(Arc::clone(&runtime));
     let registry = build_registry_with_services_result(config)
@@ -1150,10 +1152,10 @@ fn hub_daemon_builder_does_not_read_device_agent_transaction_state() {
     .expect("write invalid Device teach-transaction sentinel");
 
     let authority_context =
-        crate::daemon::ability::dispatch::AbilityAuthorityContext::for_hub_authority_root(
+        crate::daemon::ability::dispatch::AbilityAuthorityContext::for_realm_authority_root(
             crate::core::ura::hub_ura("hub-only"),
         )
-        .expect("Hub authority context");
+        .expect("realm authority context");
     let mut config = RegistryDaemonBuildConfig::new_with_authority_context(
         RegistryBuildServices::fresh(),
         authority_context,
@@ -1186,10 +1188,10 @@ fn hub_daemon_builder_does_not_read_device_agent_transaction_state() {
 fn hub_daemon_builder_starts_without_publishing_unprovided_voice_capabilities() {
     let _home = crate::cli::commands::test_support::HomeGuard::new();
     let authority_context =
-        crate::daemon::ability::dispatch::AbilityAuthorityContext::for_hub_authority_root(
+        crate::daemon::ability::dispatch::AbilityAuthorityContext::for_realm_authority_root(
             crate::core::ura::hub_ura("voice-provider-required"),
         )
-        .expect("Hub authority context");
+        .expect("realm authority context");
     let mut config = RegistryDaemonBuildConfig::new_with_authority_context(
         RegistryBuildServices::fresh(),
         authority_context,
