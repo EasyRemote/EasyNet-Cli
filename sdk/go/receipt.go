@@ -227,6 +227,13 @@ type ReceiptProvider interface {
 	Trace(context.Context, ReceiptTraceRequest) (ReceiptTraceResult, error)
 }
 
+// ReceiptHistoryAuthorityScopeProvider declares the authority scope required to
+// read receipt history through a concrete provider. Session-level admission
+// checks consume this provider capability instead of embedding route literals.
+type ReceiptHistoryAuthorityScopeProvider interface {
+	ReceiptHistoryListAuthorityScope() (string, error)
+}
+
 type ReceiptClient struct {
 	provider ReceiptProvider
 }
@@ -320,6 +327,13 @@ func (r runtimeReceiptRouteSet) validate() error {
 	return nil
 }
 
+func (r runtimeReceiptRouteSet) listAuthorityScope() (string, error) {
+	if err := r.validate(); err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(r.listAbility), nil
+}
+
 func (r runtimeReceiptRouteSet) list(ctx context.Context, ability *RuntimeAbilityClient, call RuntimeCallContext, args map[string]any) (map[string]any, error) {
 	if err := r.validate(); err != nil {
 		return nil, err
@@ -358,6 +372,13 @@ func newRuntimeReceiptProviderWithRoutes(ability *RuntimeAbilityClient, routes r
 		return nil, err
 	}
 	return &RuntimeReceiptProvider{ability: ability, routes: routes}, nil
+}
+
+func (p *RuntimeReceiptProvider) ReceiptHistoryListAuthorityScope() (string, error) {
+	if err := p.requireReady(); err != nil {
+		return "", err
+	}
+	return p.routes.listAuthorityScope()
 }
 
 func (p *RuntimeReceiptProvider) List(ctx context.Context, request ReceiptListRequest) (ReceiptHistoryPage, error) {

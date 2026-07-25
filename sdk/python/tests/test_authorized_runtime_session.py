@@ -203,6 +203,51 @@ class AuthorizedRuntimeSessionTests(unittest.TestCase):
 
         self.assertEqual(fixture.receipts.list_calls, 1)
 
+    def test_history_uses_receipt_provider_authority_scope(self) -> None:
+        fixture = _SessionFixture()
+        fixture.receipts.history_list_scope = "receipt.catalog.list"
+        request = ReceiptListRequest(
+            call=RuntimeCallContext(
+                caller_ura="easynet:///r/example/agent/backend",
+                callee_ura="easynet:///r/example/device/dev-a",
+                subject_ura="easynet:///r/example/resource/user.alice/session/session-1",
+                nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
+                causal_context={"form": "none"},
+                authority=_session_authority(
+                    {
+                        "scopes": ["receipt.catalog.list"],
+                        "allowed_followup_abilities": ["receipt.catalog.list"],
+                    }
+                ),
+            ),
+            limit=10,
+        )
+
+        fixture.session.history.list(request)
+
+        self.assertEqual(fixture.receipts.list_calls, 1)
+
+    def test_history_rejects_provider_without_authority_scope(self) -> None:
+        fixture = _SessionFixture(receipts=_ReceiptProviderWithoutScope())
+        request = ReceiptListRequest(
+            call=RuntimeCallContext(
+                caller_ura="easynet:///r/example/agent/backend",
+                callee_ura="easynet:///r/example/device/dev-a",
+                subject_ura="easynet:///r/example/resource/user.alice/session/session-1",
+                nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
+                causal_context={"form": "none"},
+                authority=_session_authority(),
+            ),
+            limit=10,
+        )
+
+        with self.assertRaisesRegex(
+            SDKError, "receipt provider does not expose receipt history authority scope"
+        ) as caught:
+            fixture.session.history.list(request)
+
+        self.assertTrue(is_code(caught.exception, ErrorCode.PROVIDER_UNAVAILABLE))
+
     def test_runtime_state_read_subject_ura_builds_user_owned_resource_subject(self) -> None:
         self.assertEqual(
             runtime_state_read_subject_ura("example", "alice"),
@@ -280,7 +325,9 @@ class AuthorizedRuntimeSessionTests(unittest.TestCase):
 
 
 class _SessionFixture:
-    def __init__(self, identity: object | None = None) -> None:
+    def __init__(
+        self, identity: object | None = None, receipts: object | None = None
+    ) -> None:
         self.runtime = _RuntimeProvider()
         self.descriptor = _DescriptorProvider()
         self.authorization = _AuthorizationProvider()
@@ -288,7 +335,7 @@ class _SessionFixture:
         self.identity = identity or StaticCallerIdentityProvider(
             CallerIdentityRef(PrincipalRef("easynet:///r/example/agent/backend"))
         )
-        self.receipts = _ReceiptProvider()
+        self.receipts = receipts or _ReceiptProvider()
         self.session = AuthorizedRuntimeSession(
             runtime=self.runtime,
             descriptor=self.descriptor,
@@ -393,9 +440,24 @@ class _SignerProvider:
 class _ReceiptProvider:
     def __init__(self) -> None:
         self.list_calls = 0
+        self.history_list_scope = "invocation.history.list"
+
+    def receipt_history_list_authority_scope(self) -> str:
+        return self.history_list_scope
 
     def list(self, request):
         self.list_calls += 1
+        return None
+
+    def get(self, request):
+        return None
+
+    def trace(self, request):
+        return None
+
+
+class _ReceiptProviderWithoutScope:
+    def list(self, request):
         return None
 
     def get(self, request):

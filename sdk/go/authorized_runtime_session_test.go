@@ -232,6 +232,59 @@ func TestAuthorizedRuntimeSessionHistoryAllowsUserOwnedResourceSubjectBeforeRece
 	}
 }
 
+func TestAuthorizedRuntimeSessionHistoryUsesReceiptProviderAuthorityScope(t *testing.T) {
+	session := newAuthorizedRuntimeSessionFixture(t)
+	session.receipts.historyListScope = "receipt.catalog.list"
+	request := ReceiptListRequest{
+		Call: RuntimeCallContext{
+			CallerURA:     "easynet:///r/example/agent/backend",
+			CalleeURA:     "easynet:///r/example/device/dev-a",
+			SubjectURA:    "easynet:///r/example/resource/user.alice/session/session-1",
+			NonceBase64:   "AQIDBAUGBwgJCgsMDQ4PEA==",
+			CausalContext: map[string]any{"form": "none"},
+			Authority: sessionAuthorityFixture(t, map[string]any{
+				"scopes":                     []string{"receipt.catalog.list"},
+				"allowed_followup_abilities": []string{"receipt.catalog.list"},
+			}),
+		},
+		Limit: 10,
+	}
+
+	_, err := session.sdk.History().List(context.Background(), request)
+	if err != nil {
+		t.Fatalf("history list: %v", err)
+	}
+	if session.receipts.listCalls != 1 {
+		t.Fatalf("receipt provider calls = %d, want 1", session.receipts.listCalls)
+	}
+}
+
+func TestAuthorizedRuntimeSessionHistoryRejectsProviderWithoutAuthorityScope(t *testing.T) {
+	session := newAuthorizedRuntimeSessionFixtureWithReceipts(t, &sessionReceiptProviderWithoutScope{})
+	request := ReceiptListRequest{
+		Call: RuntimeCallContext{
+			CallerURA:     "easynet:///r/example/agent/backend",
+			CalleeURA:     "easynet:///r/example/device/dev-a",
+			SubjectURA:    "easynet:///r/example/resource/user.alice/session/session-1",
+			NonceBase64:   "AQIDBAUGBwgJCgsMDQ4PEA==",
+			CausalContext: map[string]any{"form": "none"},
+			Authority: sessionAuthorityFixture(t, map[string]any{
+				"scopes":                     []string{"invocation.history.list"},
+				"allowed_followup_abilities": []string{"invocation.history.list"},
+			}),
+		},
+		Limit: 10,
+	}
+
+	_, err := session.sdk.History().List(context.Background(), request)
+	if err == nil {
+		t.Fatalf("expected missing history authority scope")
+	}
+	if !IsCode(err, ErrProviderUnavailable) || !strings.Contains(err.Error(), "receipt provider does not expose receipt history authority scope") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 func TestRuntimeStateReadSubjectURABuildsUserOwnedResourceSubject(t *testing.T) {
 	subject, err := RuntimeStateReadSubjectURA("example", "alice")
 	if err != nil {
@@ -374,6 +427,13 @@ type authorizedRuntimeSessionFixture struct {
 
 func newAuthorizedRuntimeSessionFixture(t *testing.T) authorizedRuntimeSessionFixture {
 	t.Helper()
+	return newAuthorizedRuntimeSessionFixtureWithReceipts(t, &sessionReceiptProviderFixture{
+		historyListScope: receiptHistoryListAbility,
+	})
+}
+
+func newAuthorizedRuntimeSessionFixtureWithReceipts(t *testing.T, receipts ReceiptProvider) authorizedRuntimeSessionFixture {
+	t.Helper()
 	runtime := &sessionRuntimeProviderFixture{}
 	descriptor := &sessionDescriptorProviderFixture{}
 	authorization := &sessionAuthorizationProviderFixture{
@@ -383,7 +443,6 @@ func newAuthorizedRuntimeSessionFixture(t *testing.T) authorizedRuntimeSessionFi
 		}),
 	}
 	signer := &sessionSignerProviderFixture{}
-	receipts := &sessionReceiptProviderFixture{}
 	identity := &sessionIdentityProviderFixture{
 		caller: CallerIdentityRef{Principal: PrincipalRef{URA: "easynet:///r/example/agent/backend"}},
 	}
@@ -406,8 +465,15 @@ func newAuthorizedRuntimeSessionFixture(t *testing.T) authorizedRuntimeSessionFi
 		authorization: authorization,
 		signer:        signer,
 		identity:      identity,
-		receipts:      receipts,
+		receipts:      sessionReceiptFixture(receipts),
 	}
+}
+
+func sessionReceiptFixture(provider ReceiptProvider) *sessionReceiptProviderFixture {
+	if fixture, ok := provider.(*sessionReceiptProviderFixture); ok {
+		return fixture
+	}
+	return nil
 }
 
 func canonicalSessionIntentFixture() InvocationIntent {
@@ -564,7 +630,12 @@ func (sessionClockFixture) NewNonceBase64() (string, error) {
 }
 
 type sessionReceiptProviderFixture struct {
-	listCalls int
+	listCalls        int
+	historyListScope string
+}
+
+func (p *sessionReceiptProviderFixture) ReceiptHistoryListAuthorityScope() (string, error) {
+	return p.historyListScope, nil
 }
 
 func (p *sessionReceiptProviderFixture) List(context.Context, ReceiptListRequest) (ReceiptHistoryPage, error) {
@@ -577,5 +648,19 @@ func (*sessionReceiptProviderFixture) Get(context.Context, ReceiptGetRequest) (R
 }
 
 func (*sessionReceiptProviderFixture) Trace(context.Context, ReceiptTraceRequest) (ReceiptTraceResult, error) {
+	return ReceiptTraceResult{}, nil
+}
+
+type sessionReceiptProviderWithoutScope struct{}
+
+func (*sessionReceiptProviderWithoutScope) List(context.Context, ReceiptListRequest) (ReceiptHistoryPage, error) {
+	return ReceiptHistoryPage{}, nil
+}
+
+func (*sessionReceiptProviderWithoutScope) Get(context.Context, ReceiptGetRequest) (ReceiptGetResult, error) {
+	return ReceiptGetResult{}, nil
+}
+
+func (*sessionReceiptProviderWithoutScope) Trace(context.Context, ReceiptTraceRequest) (ReceiptTraceResult, error) {
 	return ReceiptTraceResult{}, nil
 }

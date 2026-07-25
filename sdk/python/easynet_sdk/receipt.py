@@ -50,6 +50,7 @@ __all__ = [
     "ReceiptGetRequest",
     "ReceiptGetResult",
     "ReceiptHistoryPage",
+    "ReceiptHistoryAuthorityScopeProvider",
     "ReceiptLedgerSource",
     "ReceiptListRequest",
     "ReceiptLookup",
@@ -111,6 +112,9 @@ class _RuntimeReceiptRouteSet:
         arguments: Mapping[str, object],
     ) -> dict[str, object]:
         return ability.invoke(call, self.trace_ability.strip(), dict(arguments))
+
+    def list_authority_scope(self) -> str:
+        return self.list_ability.strip()
 
 
 @dataclass(frozen=True)
@@ -253,6 +257,12 @@ class ReceiptProvider(Protocol):
     def trace(self, request: ReceiptTraceRequest) -> ReceiptTraceResult: ...
 
 
+class ReceiptHistoryAuthorityScopeProvider(Protocol):
+    """Provider capability that declares the scope required for history reads."""
+
+    def receipt_history_list_authority_scope(self) -> str: ...
+
+
 class ReceiptClient:
     """Generic receipt reads plus Axon-owned verification operations."""
 
@@ -299,6 +309,9 @@ class RuntimeReceiptProvider:
             raise _invalid("runtime ability client is required")
         self._ability = ability
         self._routes = routes or _RuntimeReceiptRouteSet.default()
+
+    def receipt_history_list_authority_scope(self) -> str:
+        return self._routes.list_authority_scope()
 
     def list(self, request: ReceiptListRequest) -> ReceiptHistoryPage:
         if not isinstance(request, ReceiptListRequest):

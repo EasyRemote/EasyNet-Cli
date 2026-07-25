@@ -8941,6 +8941,8 @@ for (
     list_name,
     request_validator,
     filter_validator,
+    scope_resolver,
+    scope_capability,
     canonical_session_admission,
     retired_exact_subject_helper,
     history_test,
@@ -8950,8 +8952,10 @@ for (
     (
         cli_root / "sdk/go/authorized_runtime_session.go",
         "List",
-        "validateSessionHistoryRequest(request)",
+        "validateSessionHistoryRequest(request, scope)",
         "validateSessionHistoryFilterBinding(request.Call, request.Filter)",
+        "receiptHistoryListAuthorityScope(o.session.receipts)",
+        "ReceiptHistoryAuthorityScopeProvider",
         "runtimeSessionAuthorityAdmitsSubject(authority, subjectURA)",
         "sessionHistoryAuthoritySubjectMatches(",
         cli_root / "sdk/go/authorized_runtime_session_test.go",
@@ -8961,8 +8965,10 @@ for (
     (
         cli_root / "sdk/python/easynet_sdk/authorized_runtime_session.py",
         "list",
-        "_validate_session_history_request(request)",
+        "_validate_session_history_request(request, required_scope)",
         "_validate_session_history_filter_binding(request.call, request.filter)",
+        "_receipt_history_list_authority_scope(self._session._receipts)",
+        "receipt_history_list_authority_scope",
         "session_authority_admits_subject(authority, subject_ura)",
         "_session_history_authority_subject_matches(",
         cli_root / "sdk/python/tests/test_authorized_runtime_session.py",
@@ -9005,12 +9011,26 @@ for (
                 line_number(text, offset),
                 "Session history list must validate the complete request, including filters",
             )
+        if scope_resolver not in body:
+            add(
+                "R96_SDK_HISTORY_FILTER_TUPLE_BINDING",
+                path,
+                line_number(text, offset),
+                "Session history list must resolve the provider-declared authority scope",
+            )
     if request_validator not in text or filter_validator not in text:
         add(
             "R96_SDK_HISTORY_FILTER_TUPLE_BINDING",
             path,
             1,
             "Session history request validation must call filter tuple binding",
+        )
+    if scope_capability not in text:
+        add(
+            "R96_SDK_HISTORY_FILTER_TUPLE_BINDING",
+            path,
+            1,
+            "Session history validation must depend on a provider-declared authority-scope capability",
         )
     if canonical_session_admission not in text:
         add(

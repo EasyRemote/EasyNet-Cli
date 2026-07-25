@@ -534,7 +534,8 @@ class SessionHistoryOperations:
         self._session = session
 
     def list(self, request: ReceiptListRequest) -> ReceiptHistoryPage:
-        _validate_session_history_request(request)
+        required_scope = _receipt_history_list_authority_scope(self._session._receipts)
+        _validate_session_history_request(request, required_scope)
         return self._session._receipts.list(request)
 
 
@@ -706,18 +707,55 @@ def _descriptor_request_from_intent(
     )
 
 
-def _validate_session_history_request(request: ReceiptListRequest) -> None:
+def _receipt_history_list_authority_scope(receipts: ReceiptProvider) -> str:
+    capability = getattr(receipts, "receipt_history_list_authority_scope", None)
+    if not callable(capability):
+        raise _session_error(
+            ErrorCode.PROVIDER_UNAVAILABLE,
+            "history",
+            "receipt provider does not expose receipt history authority scope",
+        )
+    try:
+        scope = str(capability()).strip()
+    except Exception as error:
+        raise _session_error(
+            ErrorCode.PROVIDER_UNAVAILABLE,
+            "history",
+            "receipt provider history authority scope unavailable",
+            cause=error,
+        ) from error
+    if not scope:
+        raise _session_error(
+            ErrorCode.PROVIDER_UNAVAILABLE,
+            "history",
+            "receipt provider history authority scope is required",
+        )
+    return scope
+
+
+def _validate_session_history_request(
+    request: ReceiptListRequest, required_scope: str
+) -> None:
+    required_scope = required_scope.strip()
+    if not required_scope:
+        raise _session_error(
+            ErrorCode.PROVIDER_UNAVAILABLE,
+            "history",
+            "receipt history authority scope is required",
+        )
     if not isinstance(request, ReceiptListRequest):
         raise _session_error(
             ErrorCode.INVALID_INVOCATION,
             "history",
             "Receipt list request is required",
         )
-    _validate_session_history_call(request.call)
+    _validate_session_history_call(request.call, required_scope)
     _validate_session_history_filter_binding(request.call, request.filter)
 
 
-def _validate_session_history_call(call: RuntimeCallContext) -> None:
+def _validate_session_history_call(
+    call: RuntimeCallContext, required_scope: str
+) -> None:
     try:
         _validate_runtime_call_context(call)
     except SDKError as error:
@@ -736,7 +774,7 @@ def _validate_session_history_call(call: RuntimeCallContext) -> None:
             "session history requires runtime authority bound to the receipt query tuple",
             _runtime_call_details(call),
         )
-    _validate_session_history_authority_binding(authority, call)
+    _validate_session_history_authority_binding(authority, call, required_scope)
 
 
 def _validate_session_history_filter_binding(
@@ -806,11 +844,13 @@ def _runtime_call_authority(
 def _validate_session_history_authority_binding(
     authority: RuntimeInvocationAuthority,
     call: RuntimeCallContext,
+    required_scope: str,
 ) -> None:
     caller_ura = call.caller_ura.strip()
     callee_ura = call.callee_ura.strip()
     subject_ura = call.subject_ura.strip()
     details = _runtime_call_details(call)
+    details["required_scope"] = required_scope.strip()
     if isinstance(authority, DelegationProof):
         if authority.caller_ura.strip() != caller_ura:
             raise _session_error(
@@ -833,11 +873,11 @@ def _validate_session_history_authority_binding(
                 "delegation authority audience does not admit receipt query callee_ura",
                 details,
             )
-        if not authority.matches_scope("invocation.history.list"):
+        if not authority.matches_scope(required_scope):
             raise _session_error(
                 ErrorCode.AUTHORITY_DENIED,
                 "history",
-                "delegation authority scopes do not admit invocation.history.list",
+                "delegation authority scopes do not admit receipt history list authority scope",
                 details,
             )
         return
@@ -870,11 +910,11 @@ def _validate_session_history_authority_binding(
             "session authority subject does not admit receipt query subject_ura",
             details,
         )
-    if not authority.matches_scope("invocation.history.list"):
+    if not authority.matches_scope(required_scope):
         raise _session_error(
             ErrorCode.AUTHORITY_DENIED,
             "history",
-            "session authority scopes do not admit invocation.history.list",
+            "session authority scopes do not admit receipt history list authority scope",
             details,
         )
 

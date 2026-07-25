@@ -504,7 +504,11 @@ type SessionHistoryOperations struct {
 }
 
 func (o *SessionHistoryOperations) List(ctx context.Context, request ReceiptListRequest) (ReceiptHistoryPage, error) {
-	if err := validateSessionHistoryRequest(request); err != nil {
+	scope, err := receiptHistoryListAuthorityScope(o.session.receipts)
+	if err != nil {
+		return ReceiptHistoryPage{}, err
+	}
+	if err := validateSessionHistoryRequest(request, scope); err != nil {
 		return ReceiptHistoryPage{}, err
 	}
 	return o.session.receipts.List(ctx, request)
@@ -849,14 +853,52 @@ func descriptorRequestFromIntent(intent InvocationIntent) DescriptorResolutionRe
 	}
 }
 
-func validateSessionHistoryRequest(request ReceiptListRequest) error {
-	if err := validateSessionHistoryRuntimeCall(request.Call); err != nil {
+func receiptHistoryListAuthorityScope(provider ReceiptProvider) (string, error) {
+	scopeProvider, ok := provider.(ReceiptHistoryAuthorityScopeProvider)
+	if !ok {
+		return "", v3SessionError(
+			ErrProviderUnavailable,
+			"history",
+			"receipt provider does not expose receipt history authority scope",
+			nil,
+			nil,
+		)
+	}
+	scope, err := scopeProvider.ReceiptHistoryListAuthorityScope()
+	if err != nil {
+		return "", v3SessionError(
+			ErrProviderUnavailable,
+			"history",
+			"receipt provider history authority scope unavailable",
+			nil,
+			err,
+		)
+	}
+	scope = strings.TrimSpace(scope)
+	if scope == "" {
+		return "", v3SessionError(
+			ErrProviderUnavailable,
+			"history",
+			"receipt provider history authority scope is required",
+			nil,
+			nil,
+		)
+	}
+	return scope, nil
+}
+
+func validateSessionHistoryRequest(request ReceiptListRequest, requiredScope string) error {
+	requiredScope = strings.TrimSpace(requiredScope)
+	if requiredScope == "" {
+		return v3SessionError(ErrProviderUnavailable, "history", "receipt history authority scope is required", nil, nil)
+	}
+	if err := validateSessionHistoryRuntimeCall(request.Call, requiredScope); err != nil {
 		return err
 	}
 	return validateSessionHistoryFilterBinding(request.Call, request.Filter)
 }
 
-func validateSessionHistoryRuntimeCall(call RuntimeCallContext) error {
+func validateSessionHistoryRuntimeCall(call RuntimeCallContext, requiredScope string) error {
 	if err := validateRuntimeCallContext(call); err != nil {
 		return err
 	}
@@ -873,7 +915,7 @@ func validateSessionHistoryRuntimeCall(call RuntimeCallContext) error {
 			nil,
 		)
 	}
-	return validateSessionHistoryAuthorityBinding(authority, call)
+	return validateSessionHistoryAuthorityBinding(authority, call, requiredScope)
 }
 
 func validateSessionHistoryFilterBinding(call RuntimeCallContext, filter ReceiptFilter) error {
@@ -927,20 +969,22 @@ func runtimeCallAuthority(call RuntimeCallContext) (RuntimeInvocationAuthority, 
 func validateSessionHistoryAuthorityBinding(
 	authority RuntimeInvocationAuthority,
 	call RuntimeCallContext,
+	requiredScope string,
 ) error {
 	callerURA := strings.TrimSpace(call.CallerURA)
 	calleeURA := strings.TrimSpace(call.CalleeURA)
 	subjectURA := strings.TrimSpace(call.SubjectURA)
 	details := runtimeCallDetails(call)
+	details["required_scope"] = strings.TrimSpace(requiredScope)
 	switch typed := authority.(type) {
 	case DelegationProof:
-		return validateSessionHistoryDelegationBinding(&typed, callerURA, calleeURA, subjectURA, details)
+		return validateSessionHistoryDelegationBinding(&typed, callerURA, calleeURA, subjectURA, requiredScope, details)
 	case *DelegationProof:
-		return validateSessionHistoryDelegationBinding(typed, callerURA, calleeURA, subjectURA, details)
+		return validateSessionHistoryDelegationBinding(typed, callerURA, calleeURA, subjectURA, requiredScope, details)
 	case SessionAuthority:
-		return validateSessionHistorySessionBinding(&typed, callerURA, calleeURA, subjectURA, details)
+		return validateSessionHistorySessionBinding(&typed, callerURA, calleeURA, subjectURA, requiredScope, details)
 	case *SessionAuthority:
-		return validateSessionHistorySessionBinding(typed, callerURA, calleeURA, subjectURA, details)
+		return validateSessionHistorySessionBinding(typed, callerURA, calleeURA, subjectURA, requiredScope, details)
 	default:
 		return invalidRuntimePayload("runtime call authority has an unsupported canonical type", nil)
 	}
@@ -951,6 +995,7 @@ func validateSessionHistoryDelegationBinding(
 	callerURA string,
 	calleeURA string,
 	subjectURA string,
+	requiredScope string,
 	details map[string]any,
 ) error {
 	if proof == nil {
@@ -965,8 +1010,8 @@ func validateSessionHistoryDelegationBinding(
 	if !proof.MatchesAudience(calleeURA) {
 		return v3SessionError(ErrAuthorityDenied, "history", "delegation authority audience does not admit receipt query callee_ura", details, nil)
 	}
-	if !proof.MatchesScope(receiptHistoryListAbility) {
-		return v3SessionError(ErrAuthorityDenied, "history", "delegation authority scopes do not admit invocation.history.list", details, nil)
+	if !proof.MatchesScope(requiredScope) {
+		return v3SessionError(ErrAuthorityDenied, "history", "delegation authority scopes do not admit receipt history list authority scope", details, nil)
 	}
 	return nil
 }
@@ -976,6 +1021,7 @@ func validateSessionHistorySessionBinding(
 	callerURA string,
 	calleeURA string,
 	subjectURA string,
+	requiredScope string,
 	details map[string]any,
 ) error {
 	if authority == nil {
@@ -994,8 +1040,8 @@ func validateSessionHistorySessionBinding(
 	if !runtimeSessionAuthorityAdmitsSubject(authority, subjectURA) {
 		return v3SessionError(ErrAuthoritySubjectMismatch, "history", "session authority subject does not admit receipt query subject_ura", details, nil)
 	}
-	if !authority.MatchesScope(receiptHistoryListAbility) {
-		return v3SessionError(ErrAuthorityDenied, "history", "session authority scopes do not admit invocation.history.list", details, nil)
+	if !authority.MatchesScope(requiredScope) {
+		return v3SessionError(ErrAuthorityDenied, "history", "session authority scopes do not admit receipt history list authority scope", details, nil)
 	}
 	return nil
 }

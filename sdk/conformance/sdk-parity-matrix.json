@@ -32415,6 +32415,10 @@
           "sha256": "92206c088e4c5ac38dde52b9d47444982b4c8890210d4edac48e8da3249aeb12"
         },
         {
+          "item": "ReceiptHistoryAuthorityScopeProvider",
+          "sha256": "e332782c5d6bd87c0aaae667cad51c302810d5cb3b71ae63ca61347b6c445ce1"
+        },
+        {
           "item": "RuntimeInvocationAuthority",
           "sha256": "e0fedc416a12e669eb198cba53b93407b384fe13973fe024dfbdb3b91dc0502c"
         },
@@ -32695,6 +32699,10 @@
           "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
         },
         {
+          "item": "ReceiptHistoryAuthorityScopeProvider.ReceiptHistoryListAuthorityScope",
+          "sha256": "d0e696d61e60a01ffa0f71f3c010905126a9a2416d9d4afd670d223ad46f490b"
+        },
+        {
           "item": "RuntimeInvocationAuthority.Metadata",
           "sha256": "20f54ecaf56c81179795ddb98aeb1ceace4b2660d74960f97f69d47363cd535d"
         },
@@ -32970,6 +32978,10 @@
               "sha256": "92206c088e4c5ac38dde52b9d47444982b4c8890210d4edac48e8da3249aeb12"
             },
             {
+              "item": "ReceiptHistoryAuthorityScopeProvider",
+              "sha256": "e332782c5d6bd87c0aaae667cad51c302810d5cb3b71ae63ca61347b6c445ce1"
+            },
+            {
               "item": "RuntimeInvocationAuthority",
               "sha256": "e0fedc416a12e669eb198cba53b93407b384fe13973fe024dfbdb3b91dc0502c"
             },
@@ -33248,6 +33260,10 @@
             {
               "item": "DelegationRequest.SubjectURA",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "ReceiptHistoryAuthorityScopeProvider.ReceiptHistoryListAuthorityScope",
+              "sha256": "d0e696d61e60a01ffa0f71f3c010905126a9a2416d9d4afd670d223ad46f490b"
             },
             {
               "item": "RuntimeInvocationAuthority.Metadata",
@@ -33525,6 +33541,10 @@
               "sha256": "92206c088e4c5ac38dde52b9d47444982b4c8890210d4edac48e8da3249aeb12"
             },
             {
+              "item": "ReceiptHistoryAuthorityScopeProvider",
+              "sha256": "e332782c5d6bd87c0aaae667cad51c302810d5cb3b71ae63ca61347b6c445ce1"
+            },
+            {
               "item": "RuntimeInvocationAuthority",
               "sha256": "e0fedc416a12e669eb198cba53b93407b384fe13973fe024dfbdb3b91dc0502c"
             },
@@ -33803,6 +33823,10 @@
             {
               "item": "DelegationRequest.SubjectURA",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "ReceiptHistoryAuthorityScopeProvider.ReceiptHistoryListAuthorityScope",
+              "sha256": "d0e696d61e60a01ffa0f71f3c010905126a9a2416d9d4afd670d223ad46f490b"
             },
             {
               "item": "RuntimeInvocationAuthority.Metadata",
@@ -34080,6 +34104,10 @@
               "sha256": "92206c088e4c5ac38dde52b9d47444982b4c8890210d4edac48e8da3249aeb12"
             },
             {
+              "item": "ReceiptHistoryAuthorityScopeProvider",
+              "sha256": "e332782c5d6bd87c0aaae667cad51c302810d5cb3b71ae63ca61347b6c445ce1"
+            },
+            {
               "item": "RuntimeInvocationAuthority",
               "sha256": "e0fedc416a12e669eb198cba53b93407b384fe13973fe024dfbdb3b91dc0502c"
             },
@@ -34358,6 +34386,10 @@
             {
               "item": "DelegationRequest.SubjectURA",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "ReceiptHistoryAuthorityScopeProvider.ReceiptHistoryListAuthorityScope",
+              "sha256": "d0e696d61e60a01ffa0f71f3c010905126a9a2416d9d4afd670d223ad46f490b"
             },
             {
               "item": "RuntimeInvocationAuthority.Metadata",
@@ -34635,6 +34667,10 @@
               "sha256": "92206c088e4c5ac38dde52b9d47444982b4c8890210d4edac48e8da3249aeb12"
             },
             {
+              "item": "ReceiptHistoryAuthorityScopeProvider",
+              "sha256": "e332782c5d6bd87c0aaae667cad51c302810d5cb3b71ae63ca61347b6c445ce1"
+            },
+            {
               "item": "RuntimeInvocationAuthority",
               "sha256": "e0fedc416a12e669eb198cba53b93407b384fe13973fe024dfbdb3b91dc0502c"
             },
@@ -34913,6 +34949,10 @@
             {
               "item": "DelegationRequest.SubjectURA",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "ReceiptHistoryAuthorityScopeProvider.ReceiptHistoryListAuthorityScope",
+              "sha256": "d0e696d61e60a01ffa0f71f3c010905126a9a2416d9d4afd670d223ad46f490b"
             },
             {
               "item": "RuntimeInvocationAuthority.Metadata",
@@ -35190,6 +35230,10 @@
               "sha256": "92206c088e4c5ac38dde52b9d47444982b4c8890210d4edac48e8da3249aeb12"
             },
             {
+              "item": "ReceiptHistoryAuthorityScopeProvider",
+              "sha256": "e332782c5d6bd87c0aaae667cad51c302810d5cb3b71ae63ca61347b6c445ce1"
+            },
+            {
               "item": "RuntimeInvocationAuthority",
               "sha256": "e0fedc416a12e669eb198cba53b93407b384fe13973fe024dfbdb3b91dc0502c"
             },
@@ -35468,6 +35512,10 @@
             {
               "item": "DelegationRequest.SubjectURA",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "ReceiptHistoryAuthorityScopeProvider.ReceiptHistoryListAuthorityScope",
+              "sha256": "d0e696d61e60a01ffa0f71f3c010905126a9a2416d9d4afd670d223ad46f490b"
             },
             {
               "item": "RuntimeInvocationAuthority.Metadata",
@@ -35745,6 +35793,10 @@
               "sha256": "92206c088e4c5ac38dde52b9d47444982b4c8890210d4edac48e8da3249aeb12"
             },
             {
+              "item": "ReceiptHistoryAuthorityScopeProvider",
+              "sha256": "e332782c5d6bd87c0aaae667cad51c302810d5cb3b71ae63ca61347b6c445ce1"
+            },
+            {
               "item": "RuntimeInvocationAuthority",
               "sha256": "e0fedc416a12e669eb198cba53b93407b384fe13973fe024dfbdb3b91dc0502c"
             },
@@ -36023,6 +36075,10 @@
             {
               "item": "DelegationRequest.SubjectURA",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "ReceiptHistoryAuthorityScopeProvider.ReceiptHistoryListAuthorityScope",
+              "sha256": "d0e696d61e60a01ffa0f71f3c010905126a9a2416d9d4afd670d223ad46f490b"
             },
             {
               "item": "RuntimeInvocationAuthority.Metadata",
@@ -36300,6 +36356,10 @@
               "sha256": "92206c088e4c5ac38dde52b9d47444982b4c8890210d4edac48e8da3249aeb12"
             },
             {
+              "item": "ReceiptHistoryAuthorityScopeProvider",
+              "sha256": "e332782c5d6bd87c0aaae667cad51c302810d5cb3b71ae63ca61347b6c445ce1"
+            },
+            {
               "item": "RuntimeInvocationAuthority",
               "sha256": "e0fedc416a12e669eb198cba53b93407b384fe13973fe024dfbdb3b91dc0502c"
             },
@@ -36578,6 +36638,10 @@
             {
               "item": "DelegationRequest.SubjectURA",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "ReceiptHistoryAuthorityScopeProvider.ReceiptHistoryListAuthorityScope",
+              "sha256": "d0e696d61e60a01ffa0f71f3c010905126a9a2416d9d4afd670d223ad46f490b"
             },
             {
               "item": "RuntimeInvocationAuthority.Metadata",
@@ -36855,6 +36919,10 @@
               "sha256": "92206c088e4c5ac38dde52b9d47444982b4c8890210d4edac48e8da3249aeb12"
             },
             {
+              "item": "ReceiptHistoryAuthorityScopeProvider",
+              "sha256": "e332782c5d6bd87c0aaae667cad51c302810d5cb3b71ae63ca61347b6c445ce1"
+            },
+            {
               "item": "RuntimeInvocationAuthority",
               "sha256": "e0fedc416a12e669eb198cba53b93407b384fe13973fe024dfbdb3b91dc0502c"
             },
@@ -37133,6 +37201,10 @@
             {
               "item": "DelegationRequest.SubjectURA",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "ReceiptHistoryAuthorityScopeProvider.ReceiptHistoryListAuthorityScope",
+              "sha256": "d0e696d61e60a01ffa0f71f3c010905126a9a2416d9d4afd670d223ad46f490b"
             },
             {
               "item": "RuntimeInvocationAuthority.Metadata",
@@ -37410,6 +37482,10 @@
               "sha256": "92206c088e4c5ac38dde52b9d47444982b4c8890210d4edac48e8da3249aeb12"
             },
             {
+              "item": "ReceiptHistoryAuthorityScopeProvider",
+              "sha256": "e332782c5d6bd87c0aaae667cad51c302810d5cb3b71ae63ca61347b6c445ce1"
+            },
+            {
               "item": "RuntimeInvocationAuthority",
               "sha256": "e0fedc416a12e669eb198cba53b93407b384fe13973fe024dfbdb3b91dc0502c"
             },
@@ -37688,6 +37764,10 @@
             {
               "item": "DelegationRequest.SubjectURA",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "ReceiptHistoryAuthorityScopeProvider.ReceiptHistoryListAuthorityScope",
+              "sha256": "d0e696d61e60a01ffa0f71f3c010905126a9a2416d9d4afd670d223ad46f490b"
             },
             {
               "item": "RuntimeInvocationAuthority.Metadata",
@@ -37927,6 +38007,10 @@
           "sha256": "e11689f3946f64f3112391528fa8ea5beafeb08f0f863392cca2aca80bae4f10"
         },
         {
+          "item": "ReceiptHistoryAuthorityScopeProvider",
+          "sha256": "339c90fba4d3b32d503d91a50861bb7151b4c391bb2ecead5c21353ead689361"
+        },
+        {
           "item": "RuntimeInvocationAuthority",
           "sha256": "c10f6f372783544cd3c2ba186fbd994b2b1d54060757c0aa7c567e1dd0658939"
         },
@@ -38155,6 +38239,10 @@
           "sha256": "458a4d776e207c5e7d5a8c08f8fdd9afd1fe9913615163f64d844cae217c125e"
         },
         {
+          "item": "ReceiptHistoryAuthorityScopeProvider.receipt_history_list_authority_scope",
+          "sha256": "b5b162cf8e7f5c9ff817e28129e53c9b7cffe35130cdf9fa40f5f298db98bcc5"
+        },
+        {
           "item": "SessionAuthority.allowed_actions",
           "sha256": "87722d8464270100ac001cdc64a3fe7f585eae059a058ea20b8bec2572fdaebb"
         },
@@ -38352,6 +38440,10 @@
             {
               "item": "DelegationRequest",
               "sha256": "e11689f3946f64f3112391528fa8ea5beafeb08f0f863392cca2aca80bae4f10"
+            },
+            {
+              "item": "ReceiptHistoryAuthorityScopeProvider",
+              "sha256": "339c90fba4d3b32d503d91a50861bb7151b4c391bb2ecead5c21353ead689361"
             },
             {
               "item": "RuntimeInvocationAuthority",
@@ -38580,6 +38672,10 @@
             {
               "item": "DelegationRequest.subject_ura",
               "sha256": "458a4d776e207c5e7d5a8c08f8fdd9afd1fe9913615163f64d844cae217c125e"
+            },
+            {
+              "item": "ReceiptHistoryAuthorityScopeProvider.receipt_history_list_authority_scope",
+              "sha256": "b5b162cf8e7f5c9ff817e28129e53c9b7cffe35130cdf9fa40f5f298db98bcc5"
             },
             {
               "item": "SessionAuthority.allowed_actions",
@@ -38781,6 +38877,10 @@
               "sha256": "e11689f3946f64f3112391528fa8ea5beafeb08f0f863392cca2aca80bae4f10"
             },
             {
+              "item": "ReceiptHistoryAuthorityScopeProvider",
+              "sha256": "339c90fba4d3b32d503d91a50861bb7151b4c391bb2ecead5c21353ead689361"
+            },
+            {
               "item": "RuntimeInvocationAuthority",
               "sha256": "c10f6f372783544cd3c2ba186fbd994b2b1d54060757c0aa7c567e1dd0658939"
             },
@@ -39007,6 +39107,10 @@
             {
               "item": "DelegationRequest.subject_ura",
               "sha256": "458a4d776e207c5e7d5a8c08f8fdd9afd1fe9913615163f64d844cae217c125e"
+            },
+            {
+              "item": "ReceiptHistoryAuthorityScopeProvider.receipt_history_list_authority_scope",
+              "sha256": "b5b162cf8e7f5c9ff817e28129e53c9b7cffe35130cdf9fa40f5f298db98bcc5"
             },
             {
               "item": "SessionAuthority.allowed_actions",
@@ -39208,6 +39312,10 @@
               "sha256": "e11689f3946f64f3112391528fa8ea5beafeb08f0f863392cca2aca80bae4f10"
             },
             {
+              "item": "ReceiptHistoryAuthorityScopeProvider",
+              "sha256": "339c90fba4d3b32d503d91a50861bb7151b4c391bb2ecead5c21353ead689361"
+            },
+            {
               "item": "RuntimeInvocationAuthority",
               "sha256": "c10f6f372783544cd3c2ba186fbd994b2b1d54060757c0aa7c567e1dd0658939"
             },
@@ -39434,6 +39542,10 @@
             {
               "item": "DelegationRequest.subject_ura",
               "sha256": "458a4d776e207c5e7d5a8c08f8fdd9afd1fe9913615163f64d844cae217c125e"
+            },
+            {
+              "item": "ReceiptHistoryAuthorityScopeProvider.receipt_history_list_authority_scope",
+              "sha256": "b5b162cf8e7f5c9ff817e28129e53c9b7cffe35130cdf9fa40f5f298db98bcc5"
             },
             {
               "item": "SessionAuthority.allowed_actions",
@@ -39635,6 +39747,10 @@
               "sha256": "e11689f3946f64f3112391528fa8ea5beafeb08f0f863392cca2aca80bae4f10"
             },
             {
+              "item": "ReceiptHistoryAuthorityScopeProvider",
+              "sha256": "339c90fba4d3b32d503d91a50861bb7151b4c391bb2ecead5c21353ead689361"
+            },
+            {
               "item": "RuntimeInvocationAuthority",
               "sha256": "c10f6f372783544cd3c2ba186fbd994b2b1d54060757c0aa7c567e1dd0658939"
             },
@@ -39861,6 +39977,10 @@
             {
               "item": "DelegationRequest.subject_ura",
               "sha256": "458a4d776e207c5e7d5a8c08f8fdd9afd1fe9913615163f64d844cae217c125e"
+            },
+            {
+              "item": "ReceiptHistoryAuthorityScopeProvider.receipt_history_list_authority_scope",
+              "sha256": "b5b162cf8e7f5c9ff817e28129e53c9b7cffe35130cdf9fa40f5f298db98bcc5"
             },
             {
               "item": "SessionAuthority.allowed_actions",
@@ -40062,6 +40182,10 @@
               "sha256": "e11689f3946f64f3112391528fa8ea5beafeb08f0f863392cca2aca80bae4f10"
             },
             {
+              "item": "ReceiptHistoryAuthorityScopeProvider",
+              "sha256": "339c90fba4d3b32d503d91a50861bb7151b4c391bb2ecead5c21353ead689361"
+            },
+            {
               "item": "RuntimeInvocationAuthority",
               "sha256": "c10f6f372783544cd3c2ba186fbd994b2b1d54060757c0aa7c567e1dd0658939"
             },
@@ -40288,6 +40412,10 @@
             {
               "item": "DelegationRequest.subject_ura",
               "sha256": "458a4d776e207c5e7d5a8c08f8fdd9afd1fe9913615163f64d844cae217c125e"
+            },
+            {
+              "item": "ReceiptHistoryAuthorityScopeProvider.receipt_history_list_authority_scope",
+              "sha256": "b5b162cf8e7f5c9ff817e28129e53c9b7cffe35130cdf9fa40f5f298db98bcc5"
             },
             {
               "item": "SessionAuthority.allowed_actions",
@@ -40489,6 +40617,10 @@
               "sha256": "e11689f3946f64f3112391528fa8ea5beafeb08f0f863392cca2aca80bae4f10"
             },
             {
+              "item": "ReceiptHistoryAuthorityScopeProvider",
+              "sha256": "339c90fba4d3b32d503d91a50861bb7151b4c391bb2ecead5c21353ead689361"
+            },
+            {
               "item": "RuntimeInvocationAuthority",
               "sha256": "c10f6f372783544cd3c2ba186fbd994b2b1d54060757c0aa7c567e1dd0658939"
             },
@@ -40715,6 +40847,10 @@
             {
               "item": "DelegationRequest.subject_ura",
               "sha256": "458a4d776e207c5e7d5a8c08f8fdd9afd1fe9913615163f64d844cae217c125e"
+            },
+            {
+              "item": "ReceiptHistoryAuthorityScopeProvider.receipt_history_list_authority_scope",
+              "sha256": "b5b162cf8e7f5c9ff817e28129e53c9b7cffe35130cdf9fa40f5f298db98bcc5"
             },
             {
               "item": "SessionAuthority.allowed_actions",
@@ -40916,6 +41052,10 @@
               "sha256": "e11689f3946f64f3112391528fa8ea5beafeb08f0f863392cca2aca80bae4f10"
             },
             {
+              "item": "ReceiptHistoryAuthorityScopeProvider",
+              "sha256": "339c90fba4d3b32d503d91a50861bb7151b4c391bb2ecead5c21353ead689361"
+            },
+            {
               "item": "RuntimeInvocationAuthority",
               "sha256": "c10f6f372783544cd3c2ba186fbd994b2b1d54060757c0aa7c567e1dd0658939"
             },
@@ -41142,6 +41282,10 @@
             {
               "item": "DelegationRequest.subject_ura",
               "sha256": "458a4d776e207c5e7d5a8c08f8fdd9afd1fe9913615163f64d844cae217c125e"
+            },
+            {
+              "item": "ReceiptHistoryAuthorityScopeProvider.receipt_history_list_authority_scope",
+              "sha256": "b5b162cf8e7f5c9ff817e28129e53c9b7cffe35130cdf9fa40f5f298db98bcc5"
             },
             {
               "item": "SessionAuthority.allowed_actions",
@@ -41343,6 +41487,10 @@
               "sha256": "e11689f3946f64f3112391528fa8ea5beafeb08f0f863392cca2aca80bae4f10"
             },
             {
+              "item": "ReceiptHistoryAuthorityScopeProvider",
+              "sha256": "339c90fba4d3b32d503d91a50861bb7151b4c391bb2ecead5c21353ead689361"
+            },
+            {
               "item": "RuntimeInvocationAuthority",
               "sha256": "c10f6f372783544cd3c2ba186fbd994b2b1d54060757c0aa7c567e1dd0658939"
             },
@@ -41569,6 +41717,10 @@
             {
               "item": "DelegationRequest.subject_ura",
               "sha256": "458a4d776e207c5e7d5a8c08f8fdd9afd1fe9913615163f64d844cae217c125e"
+            },
+            {
+              "item": "ReceiptHistoryAuthorityScopeProvider.receipt_history_list_authority_scope",
+              "sha256": "b5b162cf8e7f5c9ff817e28129e53c9b7cffe35130cdf9fa40f5f298db98bcc5"
             },
             {
               "item": "SessionAuthority.allowed_actions",
@@ -41770,6 +41922,10 @@
               "sha256": "e11689f3946f64f3112391528fa8ea5beafeb08f0f863392cca2aca80bae4f10"
             },
             {
+              "item": "ReceiptHistoryAuthorityScopeProvider",
+              "sha256": "339c90fba4d3b32d503d91a50861bb7151b4c391bb2ecead5c21353ead689361"
+            },
+            {
               "item": "RuntimeInvocationAuthority",
               "sha256": "c10f6f372783544cd3c2ba186fbd994b2b1d54060757c0aa7c567e1dd0658939"
             },
@@ -41996,6 +42152,10 @@
             {
               "item": "DelegationRequest.subject_ura",
               "sha256": "458a4d776e207c5e7d5a8c08f8fdd9afd1fe9913615163f64d844cae217c125e"
+            },
+            {
+              "item": "ReceiptHistoryAuthorityScopeProvider.receipt_history_list_authority_scope",
+              "sha256": "b5b162cf8e7f5c9ff817e28129e53c9b7cffe35130cdf9fa40f5f298db98bcc5"
             },
             {
               "item": "SessionAuthority.allowed_actions",
@@ -174185,6 +174345,10 @@
           "sha256": "e628a23979c3590fd9d614e21e7841f7465e349d72ac294c2fd30f3dbfaad426"
         },
         {
+          "item": "RuntimeReceiptProvider.ReceiptHistoryListAuthorityScope",
+          "sha256": "d0e696d61e60a01ffa0f71f3c010905126a9a2416d9d4afd670d223ad46f490b"
+        },
+        {
           "item": "RuntimeReceiptProvider.Trace",
           "sha256": "95a5b8966d26f7dbddffad4370185a3457c729e5484387eb0ae0ca630861e22e"
         }
@@ -174472,6 +174636,10 @@
               "sha256": "e628a23979c3590fd9d614e21e7841f7465e349d72ac294c2fd30f3dbfaad426"
             },
             {
+              "item": "RuntimeReceiptProvider.ReceiptHistoryListAuthorityScope",
+              "sha256": "d0e696d61e60a01ffa0f71f3c010905126a9a2416d9d4afd670d223ad46f490b"
+            },
+            {
               "item": "RuntimeReceiptProvider.Trace",
               "sha256": "95a5b8966d26f7dbddffad4370185a3457c729e5484387eb0ae0ca630861e22e"
             }
@@ -174757,6 +174925,10 @@
             {
               "item": "RuntimeReceiptProvider.List",
               "sha256": "e628a23979c3590fd9d614e21e7841f7465e349d72ac294c2fd30f3dbfaad426"
+            },
+            {
+              "item": "RuntimeReceiptProvider.ReceiptHistoryListAuthorityScope",
+              "sha256": "d0e696d61e60a01ffa0f71f3c010905126a9a2416d9d4afd670d223ad46f490b"
             },
             {
               "item": "RuntimeReceiptProvider.Trace",
@@ -175046,6 +175218,10 @@
               "sha256": "e628a23979c3590fd9d614e21e7841f7465e349d72ac294c2fd30f3dbfaad426"
             },
             {
+              "item": "RuntimeReceiptProvider.ReceiptHistoryListAuthorityScope",
+              "sha256": "d0e696d61e60a01ffa0f71f3c010905126a9a2416d9d4afd670d223ad46f490b"
+            },
+            {
               "item": "RuntimeReceiptProvider.Trace",
               "sha256": "95a5b8966d26f7dbddffad4370185a3457c729e5484387eb0ae0ca630861e22e"
             }
@@ -175331,6 +175507,10 @@
             {
               "item": "RuntimeReceiptProvider.List",
               "sha256": "e628a23979c3590fd9d614e21e7841f7465e349d72ac294c2fd30f3dbfaad426"
+            },
+            {
+              "item": "RuntimeReceiptProvider.ReceiptHistoryListAuthorityScope",
+              "sha256": "d0e696d61e60a01ffa0f71f3c010905126a9a2416d9d4afd670d223ad46f490b"
             },
             {
               "item": "RuntimeReceiptProvider.Trace",
@@ -175620,6 +175800,10 @@
               "sha256": "e628a23979c3590fd9d614e21e7841f7465e349d72ac294c2fd30f3dbfaad426"
             },
             {
+              "item": "RuntimeReceiptProvider.ReceiptHistoryListAuthorityScope",
+              "sha256": "d0e696d61e60a01ffa0f71f3c010905126a9a2416d9d4afd670d223ad46f490b"
+            },
+            {
               "item": "RuntimeReceiptProvider.Trace",
               "sha256": "95a5b8966d26f7dbddffad4370185a3457c729e5484387eb0ae0ca630861e22e"
             }
@@ -175905,6 +176089,10 @@
             {
               "item": "RuntimeReceiptProvider.List",
               "sha256": "e628a23979c3590fd9d614e21e7841f7465e349d72ac294c2fd30f3dbfaad426"
+            },
+            {
+              "item": "RuntimeReceiptProvider.ReceiptHistoryListAuthorityScope",
+              "sha256": "d0e696d61e60a01ffa0f71f3c010905126a9a2416d9d4afd670d223ad46f490b"
             },
             {
               "item": "RuntimeReceiptProvider.Trace",
@@ -176194,6 +176382,10 @@
               "sha256": "e628a23979c3590fd9d614e21e7841f7465e349d72ac294c2fd30f3dbfaad426"
             },
             {
+              "item": "RuntimeReceiptProvider.ReceiptHistoryListAuthorityScope",
+              "sha256": "d0e696d61e60a01ffa0f71f3c010905126a9a2416d9d4afd670d223ad46f490b"
+            },
+            {
               "item": "RuntimeReceiptProvider.Trace",
               "sha256": "95a5b8966d26f7dbddffad4370185a3457c729e5484387eb0ae0ca630861e22e"
             }
@@ -176263,7 +176455,7 @@
         },
         {
           "item": "RuntimeReceiptProvider",
-          "sha256": "993b2dffd35c992516ff11b23c97298bb13c4c19c99098bd76358b66b12984fe"
+          "sha256": "86885f02958d64c16de45d5c0e5752ec0bd40de331f7abfa85847fac559c499d"
         },
         {
           "item": "ReceiptClient.get",
@@ -176446,6 +176638,10 @@
           "sha256": "c0e3c329f7c81751060b8069bbf42093e2eadd91d2aebef574fa271a677d4206"
         },
         {
+          "item": "RuntimeReceiptProvider.receipt_history_list_authority_scope",
+          "sha256": "cb128f7deac83b024148951292f53631e56226e22680bc2b282b9a46378be75c"
+        },
+        {
           "item": "RuntimeReceiptProvider.trace",
           "sha256": "229c368b1cdffc0f0363f4c15e0b596f0ded250b573413754e7c36eafa85758b"
         }
@@ -176506,7 +176702,7 @@
             },
             {
               "item": "RuntimeReceiptProvider",
-              "sha256": "993b2dffd35c992516ff11b23c97298bb13c4c19c99098bd76358b66b12984fe"
+              "sha256": "86885f02958d64c16de45d5c0e5752ec0bd40de331f7abfa85847fac559c499d"
             },
             {
               "item": "ReceiptClient.get",
@@ -176687,6 +176883,10 @@
             {
               "item": "RuntimeReceiptProvider.list",
               "sha256": "c0e3c329f7c81751060b8069bbf42093e2eadd91d2aebef574fa271a677d4206"
+            },
+            {
+              "item": "RuntimeReceiptProvider.receipt_history_list_authority_scope",
+              "sha256": "cb128f7deac83b024148951292f53631e56226e22680bc2b282b9a46378be75c"
             },
             {
               "item": "RuntimeReceiptProvider.trace",
@@ -176749,7 +176949,7 @@
             },
             {
               "item": "RuntimeReceiptProvider",
-              "sha256": "993b2dffd35c992516ff11b23c97298bb13c4c19c99098bd76358b66b12984fe"
+              "sha256": "86885f02958d64c16de45d5c0e5752ec0bd40de331f7abfa85847fac559c499d"
             },
             {
               "item": "ReceiptClient.get",
@@ -176930,6 +177130,10 @@
             {
               "item": "RuntimeReceiptProvider.list",
               "sha256": "c0e3c329f7c81751060b8069bbf42093e2eadd91d2aebef574fa271a677d4206"
+            },
+            {
+              "item": "RuntimeReceiptProvider.receipt_history_list_authority_scope",
+              "sha256": "cb128f7deac83b024148951292f53631e56226e22680bc2b282b9a46378be75c"
             },
             {
               "item": "RuntimeReceiptProvider.trace",
@@ -176992,7 +177196,7 @@
             },
             {
               "item": "RuntimeReceiptProvider",
-              "sha256": "993b2dffd35c992516ff11b23c97298bb13c4c19c99098bd76358b66b12984fe"
+              "sha256": "86885f02958d64c16de45d5c0e5752ec0bd40de331f7abfa85847fac559c499d"
             },
             {
               "item": "ReceiptClient.get",
@@ -177173,6 +177377,10 @@
             {
               "item": "RuntimeReceiptProvider.list",
               "sha256": "c0e3c329f7c81751060b8069bbf42093e2eadd91d2aebef574fa271a677d4206"
+            },
+            {
+              "item": "RuntimeReceiptProvider.receipt_history_list_authority_scope",
+              "sha256": "cb128f7deac83b024148951292f53631e56226e22680bc2b282b9a46378be75c"
             },
             {
               "item": "RuntimeReceiptProvider.trace",
@@ -177235,7 +177443,7 @@
             },
             {
               "item": "RuntimeReceiptProvider",
-              "sha256": "993b2dffd35c992516ff11b23c97298bb13c4c19c99098bd76358b66b12984fe"
+              "sha256": "86885f02958d64c16de45d5c0e5752ec0bd40de331f7abfa85847fac559c499d"
             },
             {
               "item": "ReceiptClient.get",
@@ -177416,6 +177624,10 @@
             {
               "item": "RuntimeReceiptProvider.list",
               "sha256": "c0e3c329f7c81751060b8069bbf42093e2eadd91d2aebef574fa271a677d4206"
+            },
+            {
+              "item": "RuntimeReceiptProvider.receipt_history_list_authority_scope",
+              "sha256": "cb128f7deac83b024148951292f53631e56226e22680bc2b282b9a46378be75c"
             },
             {
               "item": "RuntimeReceiptProvider.trace",
@@ -177478,7 +177690,7 @@
             },
             {
               "item": "RuntimeReceiptProvider",
-              "sha256": "993b2dffd35c992516ff11b23c97298bb13c4c19c99098bd76358b66b12984fe"
+              "sha256": "86885f02958d64c16de45d5c0e5752ec0bd40de331f7abfa85847fac559c499d"
             },
             {
               "item": "ReceiptClient.get",
@@ -177659,6 +177871,10 @@
             {
               "item": "RuntimeReceiptProvider.list",
               "sha256": "c0e3c329f7c81751060b8069bbf42093e2eadd91d2aebef574fa271a677d4206"
+            },
+            {
+              "item": "RuntimeReceiptProvider.receipt_history_list_authority_scope",
+              "sha256": "cb128f7deac83b024148951292f53631e56226e22680bc2b282b9a46378be75c"
             },
             {
               "item": "RuntimeReceiptProvider.trace",
@@ -177721,7 +177937,7 @@
             },
             {
               "item": "RuntimeReceiptProvider",
-              "sha256": "993b2dffd35c992516ff11b23c97298bb13c4c19c99098bd76358b66b12984fe"
+              "sha256": "86885f02958d64c16de45d5c0e5752ec0bd40de331f7abfa85847fac559c499d"
             },
             {
               "item": "ReceiptClient.get",
@@ -177902,6 +178118,10 @@
             {
               "item": "RuntimeReceiptProvider.list",
               "sha256": "c0e3c329f7c81751060b8069bbf42093e2eadd91d2aebef574fa271a677d4206"
+            },
+            {
+              "item": "RuntimeReceiptProvider.receipt_history_list_authority_scope",
+              "sha256": "cb128f7deac83b024148951292f53631e56226e22680bc2b282b9a46378be75c"
             },
             {
               "item": "RuntimeReceiptProvider.trace",
@@ -177964,7 +178184,7 @@
             },
             {
               "item": "RuntimeReceiptProvider",
-              "sha256": "993b2dffd35c992516ff11b23c97298bb13c4c19c99098bd76358b66b12984fe"
+              "sha256": "86885f02958d64c16de45d5c0e5752ec0bd40de331f7abfa85847fac559c499d"
             },
             {
               "item": "ReceiptClient.get",
@@ -178145,6 +178365,10 @@
             {
               "item": "RuntimeReceiptProvider.list",
               "sha256": "c0e3c329f7c81751060b8069bbf42093e2eadd91d2aebef574fa271a677d4206"
+            },
+            {
+              "item": "RuntimeReceiptProvider.receipt_history_list_authority_scope",
+              "sha256": "cb128f7deac83b024148951292f53631e56226e22680bc2b282b9a46378be75c"
             },
             {
               "item": "RuntimeReceiptProvider.trace",
