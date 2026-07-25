@@ -121,6 +121,45 @@ public struct RuntimeReceipt {
 
 private enum RuntimeReceiptProofFacts {
     static func validate(_ raw: [String: Any]) throws {
+        try runtimeRequireExactKeys(
+            raw,
+            "runtime_receipt",
+            [
+                "receipt_ura",
+                "invocation_id",
+                "receipt_type",
+                "state",
+                "index",
+                "timestamp_unix_ms",
+                "prev_receipt_hash_hex",
+                "self_hash_hex",
+                "payload_base64",
+                "payload_content_type",
+                "cleanup_complete",
+                "caller_binding",
+                "callee_binding",
+                "subject_binding",
+                "invocation_nonce_base64",
+                "causal_binding_kind",
+                "causal_binding",
+                "callee_signature",
+                "signer_binding",
+                "host_attestation_base64",
+                "authority_binding_kind",
+                "authority_binding",
+                "ability_binding",
+                "usage",
+                "subject_ref",
+                "descriptor_version",
+                "schema_hash_hex",
+                "impl_hash_hex",
+                "runtime_env",
+                "authority_proof",
+                "input_hash_hex",
+                "output_hash_hex",
+                "parent_receipts",
+            ]
+        )
         _ = try runtimeReceiptAgentBinding(raw["caller_binding"], "caller_binding")
         let calleeBinding = try runtimeReceiptAgentBinding(raw["callee_binding"], "callee_binding")
         _ = try runtimeReceiptAgentBinding(raw["subject_binding"], "subject_binding")
@@ -153,6 +192,20 @@ private enum RuntimeReceiptProofFacts {
         _ = try runtimeRequiredString(raw, "runtime_env", "runtime_receipt")
 
         let proof = try runtimeRequiredObject(raw, "authority_proof", "runtime_receipt")
+        try runtimeRequireExactKeys(
+            proof,
+            "authority_proof",
+            [
+                "proof_type",
+                "binding_kind",
+                "binding",
+                "proof_payload_base64",
+                "proof_hash_hex",
+                "issuer",
+                "signature",
+                "admission_hook",
+            ]
+        )
         _ = try runtimeRequiredString(proof, "proof_type", "runtime_receipt")
         let proofBindingKind = try runtimeRequiredString(proof, "binding_kind", "runtime_receipt")
         guard proofBindingKind == authorityKind else {
@@ -221,10 +274,13 @@ private enum RuntimeReceiptProofFacts {
         }
         switch form {
         case "none":
+            try runtimeRequireExactKeys(binding, "causal_binding", ["form"])
             return
         case "scalar":
+            try runtimeRequireExactKeys(binding, "causal_binding", ["form", "receipt"])
             try runtimeReceiptRef(binding["receipt"], "causal_binding.receipt")
         case "list":
+            try runtimeRequireExactKeys(binding, "causal_binding", ["form", "prior"])
             guard let prior = binding["prior"] as? [Any], !prior.isEmpty else {
                 throw SDKError.validation("runtime_receipt", "causal_binding.prior must be a non-empty array")
             }
@@ -232,6 +288,7 @@ private enum RuntimeReceiptProofFacts {
                 try runtimeReceiptRef(receipt, "causal_binding.prior[\(index)]")
             }
         case "merkle":
+            try runtimeRequireExactKeys(binding, "causal_binding", ["form", "root_hex", "proof_ura"])
             _ = try runtimeReceiptHash(binding, "root_hex", allowZero: false)
             _ = try runtimeRequiredString(binding, "proof_ura", "runtime_receipt")
         default:
@@ -555,9 +612,25 @@ private struct RuntimeAuthorityBinding {
         var bytes = Data()
         switch kind {
         case "self":
+            try runtimeRequireExactKeys(object, field, ["kind", "principal_ura"])
             bytes.append(0x01)
             bytes.appendLengthPrefixed(try runtimeRequiredText(object, "principal_ura", "runtime_receipt"))
         case "delegation":
+            try runtimeRequireExactKeys(
+                object,
+                field,
+                [
+                    "kind",
+                    "issuer_ura",
+                    "subject_ura",
+                    "caller_ura",
+                    "audience",
+                    "scopes",
+                    "issued_at_ms",
+                    "expires_at_ms",
+                    "signature_base64",
+                ]
+            )
             bytes.append(0x02)
             bytes.appendLengthPrefixed(try runtimeRequiredText(object, "issuer_ura", "runtime_receipt"))
             bytes.appendLengthPrefixed(try runtimeRequiredText(object, "subject_ura", "runtime_receipt"))
@@ -579,12 +652,29 @@ private struct RuntimeAuthorityBinding {
                 )
             )
         case "capability":
+            try runtimeRequireExactKeys(object, field, ["kind", "capability_ura"])
             bytes.append(0x03)
             bytes.appendLengthPrefixed(try runtimeRequiredText(object, "capability_ura", "runtime_receipt"))
         case "policy":
+            try runtimeRequireExactKeys(object, field, ["kind", "policy_ura"])
             bytes.append(0x04)
             bytes.appendLengthPrefixed(try runtimeRequiredText(object, "policy_ura", "runtime_receipt"))
         case "session":
+            try runtimeRequireExactKeys(
+                object,
+                field,
+                [
+                    "kind",
+                    "issuer_ura",
+                    "subject_ura",
+                    "session_id",
+                    "scopes",
+                    "audiences",
+                    "issued_at_ms",
+                    "expires_at_ms",
+                    "signature_base64",
+                ]
+            )
             bytes.append(0x05)
             bytes.appendLengthPrefixed(try runtimeRequiredText(object, "issuer_ura", "runtime_receipt"))
             bytes.appendLengthPrefixed(try runtimeRequiredText(object, "subject_ura", "runtime_receipt"))
@@ -610,6 +700,7 @@ private struct RuntimeAuthorityBinding {
                 )
             )
         case "bootstrap":
+            try runtimeRequireExactKeys(object, field, ["kind", "principal_ura", "realm", "ability"])
             bytes.append(0x06)
             bytes.appendLengthPrefixed(try runtimeRequiredText(object, "principal_ura", "runtime_receipt"))
             bytes.appendLengthPrefixed(try runtimeRequiredText(object, "realm", "runtime_receipt"))
@@ -630,6 +721,16 @@ private func runtimeObject(_ value: Any?, _ field: String) throws -> [String: An
         throw SDKError.validation("runtime_receipt", "\(field) must be an object")
     }
     return object
+}
+
+private func runtimeRequireExactKeys(
+    _ object: [String: Any],
+    _ field: String,
+    _ allowedKeys: Set<String>
+) throws {
+    for key in object.keys where !allowedKeys.contains(key) {
+        throw SDKError.validation("runtime_receipt", "\(field) contains noncanonical field \(key)")
+    }
 }
 
 private func runtimeOptionalString(_ object: [String: Any], _ field: String, _ label: String) throws -> String? {
@@ -686,6 +787,7 @@ private func runtimeNonNegativeInt64(_ value: Any?, _ field: String) throws -> I
 
 private func runtimeReceiptAgentBinding(_ value: Any?, _ field: String) throws -> RuntimeAgentBinding {
     let object = try runtimeObject(value, field)
+    try runtimeRequireExactKeys(object, field, ["ura", "profile"])
     let binding = RuntimeAgentBinding(
         ura: try runtimeRequiredText(object, "ura", "runtime_receipt"),
         profile: try runtimeRequiredText(object, "profile", "runtime_receipt")
@@ -696,6 +798,7 @@ private func runtimeReceiptAgentBinding(_ value: Any?, _ field: String) throws -
 
 private func runtimeReceiptEntityRef(_ value: Any?, _ field: String) throws {
     let object = try runtimeObject(value, field)
+    try runtimeRequireExactKeys(object, field, ["kind", "ura", "profile"])
     let kind = try runtimeNonNegativeInt64(object["kind"], "\(field).kind")
     guard (1...7).contains(kind) else {
         throw SDKError.validation("runtime_receipt", "\(field).kind is not canonical")
@@ -712,6 +815,7 @@ private func runtimeReceiptSignature(_ value: Any?, _ field: String, required: B
         return
     }
     let object = try runtimeObject(value, field)
+    try runtimeRequireExactKeys(object, field, ["algorithm", "signature_base64"])
     _ = try runtimeRequiredText(object, "algorithm", "runtime_receipt")
     _ = try runtimeBase64(
         try runtimeRequiredText(object, "signature_base64", "runtime_receipt"),
@@ -723,6 +827,7 @@ private func runtimeReceiptSignature(_ value: Any?, _ field: String, required: B
 
 private func runtimeReceiptRef(_ value: Any?, _ field: String) throws {
     let object = try runtimeObject(value, field)
+    try runtimeRequireExactKeys(object, field, ["receipt_hash_hex", "receipt_ura"])
     _ = try runtimeReceiptHash(object, "receipt_hash_hex", allowZero: false)
     _ = try runtimeRequiredText(object, "receipt_ura", "runtime_receipt")
 }

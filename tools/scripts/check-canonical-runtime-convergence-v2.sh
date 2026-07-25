@@ -14082,7 +14082,7 @@ required_tests = {
         [
             "authorityBindingProofHashSession",
             "retiredSessionBinding",
-            'expectSyncSDKError(.invalidArgument, "issuer_ura")',
+            'expectSyncSDKError(.invalidArgument, "authority_binding contains noncanonical field user_ura")',
         ],
     ),
 }

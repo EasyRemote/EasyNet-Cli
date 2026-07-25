@@ -173,6 +173,44 @@ final class RuntimeCoreSeamTests: XCTestCase {
         )
         XCTAssertEqual(canonical.terminalReceipt["invocation_id"], "inv-result")
 
+        var topLevelLegacyField = terminal
+        topLevelLegacyField["legacy_receipt_canonicalizer"] = "java-compatible-raw"
+        expectSyncSDKError(.invalidArgument, "runtime_receipt contains noncanonical field legacy_receipt_canonicalizer") {
+            _ = try InvocationResult.fromJSON(
+                jsonData([
+                    "ok": true,
+                    "terminal_state": "Completed",
+                    "terminal_receipt": topLevelLegacyField,
+                ])
+            )
+        }
+
+        var proofLegacyField = terminal
+        var proofWithLegacyField = proofLegacyField["authority_proof"] as! [String: Any]
+        proofWithLegacyField["legacy_signature_payload"] = "opaque"
+        proofLegacyField["authority_proof"] = proofWithLegacyField
+        expectSyncSDKError(.invalidArgument, "authority_proof contains noncanonical field legacy_signature_payload") {
+            _ = try InvocationResult.fromJSON(
+                jsonData([
+                    "ok": true,
+                    "terminal_state": "Completed",
+                    "terminal_receipt": proofLegacyField,
+                ])
+            )
+        }
+
+        var causalLegacyField = terminal
+        causalLegacyField["causal_binding"] = ["form": "none", "legacy_parent": "opaque"]
+        expectSyncSDKError(.invalidArgument, "causal_binding contains noncanonical field legacy_parent") {
+            _ = try InvocationResult.fromJSON(
+                jsonData([
+                    "ok": true,
+                    "terminal_state": "Completed",
+                    "terminal_receipt": causalLegacyField,
+                ])
+            )
+        }
+
         expectSyncSDKError(.invalidArgument) {
             _ = try InvocationResult.fromJSON(
                 Data(
@@ -271,7 +309,7 @@ final class RuntimeCoreSeamTests: XCTestCase {
         retiredSessionProof["binding"] = retiredSessionBinding
         retiredSessionProof["proof_payload_base64"] = ""
         retiredSessionReceipt["authority_proof"] = retiredSessionProof
-        expectSyncSDKError(.invalidArgument, "issuer_ura") {
+        expectSyncSDKError(.invalidArgument, "authority_binding contains noncanonical field user_ura") {
             _ = try InvocationResult.fromJSON(
                 jsonData([
                     "ok": true,
