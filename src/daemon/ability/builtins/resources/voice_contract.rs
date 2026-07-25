@@ -204,9 +204,9 @@ pub struct VoiceCallAggregate {
     revision: u64,
 }
 
-/// Realm-shared persistence port for the Hub-owned voice aggregate.
+/// Realm-shared persistence port for the Authority-owned voice aggregate.
 ///
-/// Implementations must make compare-and-swap atomic across every Hub replica
+/// Implementations must make compare-and-swap atomic across every realm Authority replica
 /// serving the realm. A process-local cache or per-replica file does not
 /// satisfy this contract. `compare_and_swap` must reject a replacement unless
 /// `replacement.revision() == expected_revision + 1`; equal, skipped, and
@@ -310,7 +310,7 @@ pub trait VoiceCallRepository: Debug + Send + Sync {
 /// Production-qualified Voice provider assembly.
 ///
 /// Live route registration accepts this value instead of a raw repository so
-/// unqualified providers cannot reach the Hub-owned call state machine.
+/// unqualified providers cannot reach the Authority-owned call state machine.
 #[derive(Clone, Debug)]
 pub struct VoiceCallProviderAssembly {
     repository: Arc<dyn VoiceCallRepository>,
@@ -374,7 +374,7 @@ impl VoiceCallRepositoryEntry {
 
 /// Shared deterministic repository used only by product state-machine tests.
 /// It deliberately has no production visibility: realm deployments must
-/// inject a provider whose compare-and-swap spans every Hub replica.
+/// inject a provider whose compare-and-swap spans every realm Authority replica.
 #[cfg(test)]
 #[derive(Debug, Clone, Default)]
 pub(crate) struct TestVoiceCallRepository {

@@ -7,7 +7,7 @@
 //              `bridge.*_voice_*` family removed by
 //              AXON-RFC-001 P1.5; the CLI talks to these through the
 //              call signaling issuer, which routes paired calls to the
-//              realm Hub and binds an explicit local daemon subject for
+//              realm Authority and binds an explicit local daemon subject for
 //              unpaired local signaling.
 //
 // Abilities registered here
@@ -23,9 +23,9 @@
 //
 // Storage model
 // -------------
-// The realm Hub aggregate is owned by an explicitly injected repository.
+// The realm Authority aggregate is owned by an explicitly injected repository.
 // Production registration requires a provider whose compare-and-swap scope
-// covers every Hub replica in the realm; no process-local map or daemon-local
+// covers every realm Authority replica; no process-local map or daemon-local
 // file is an authority.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
@@ -54,7 +54,7 @@ pub const ABILITY_REPORT_METRICS: &str =
     crate::daemon::ability::names::resources::VOICE_REPORT_METRICS;
 pub const ABILITY_LIST_CALLS: &str = crate::daemon::ability::names::resources::VOICE_LIST_CALLS;
 
-/// Executor over the durable realm-Hub voice aggregate repository.
+/// Executor over the durable realm Authority voice aggregate repository.
 #[derive(Debug, Clone)]
 struct VoiceCallService {
     calls: Arc<dyn VoiceCallRepository>,
@@ -172,7 +172,7 @@ fn now_ms() -> u64 {
 /// Register every voice.* call signaling handler.
 ///
 /// Call signaling is realm-wide state. Paired CLI and Backend callers address
-/// the realm Hub, so the live catalog publishes exactly one Hub-owned row per
+/// the realm Authority, so the live catalog publishes exactly one Authority-owned row per
 /// verb. Mirroring the same state machine under Device would create two
 /// descriptors for one authority and make owner-free resolution ambiguous.
 pub fn register(reg: &mut AxonAbilityCatalog, provider: VoiceCallProviderAssembly) {
@@ -478,8 +478,8 @@ impl VoiceCallService {
 // ── Discovery surfaces (description + input_schema) ──────────────
 
 pub fn create_call_description() -> &'static str {
-    "Create a realm Hub-owned voice/video call signaling session. Returns the \
-     `call_id` (auto-generated when omitted) and the initial state. The Hub \
+    "Create a realm Authority-owned voice/video call signaling session. Returns the \
+     `call_id` (auto-generated when omitted) and the initial state. The Authority \
      persists the call aggregate before acknowledging creation."
 }
 
@@ -705,7 +705,7 @@ pub fn report_metrics_input_schema() -> Value {
 }
 
 pub fn list_calls_description() -> &'static str {
-    "List the call signaling sessions currently owned by this realm Hub. \
+    "List the call signaling sessions currently owned by this realm Authority. \
      Returns each call's state plus the current participant snapshot."
 }
 
@@ -1383,7 +1383,7 @@ mod tests {
                 "easynet:///r/other-voice-test/authority",
                 json!({"call_id": call_id}),
             )
-            .expect("another Hub authority may use the same local call id");
+            .expect("another realm Authority may use the same local call id");
 
         let primary = service.list_calls(HUB_AUTHORITY, json!({})).unwrap();
         let secondary = service

@@ -898,6 +898,43 @@ check_runtime_authority_vocabulary_contract() {
   fi
 }
 
+check_voice_realm_authority_vocabulary_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local voice="$cli_root/src/daemon/ability/builtins/resources/voice.rs"
+  local voice_contract="$cli_root/src/daemon/ability/builtins/resources/voice_contract.rs"
+  local media="$cli_root/src/daemon/ability/builtins/resources/media/abilities.rs"
+  local conformance="$cli_root/src/daemon/ability/conformance.rs"
+  local architecture_gate="$cli_root/tools/scripts/check-architecture-convergence.sh"
+
+  for file in "$voice" "$voice_contract" "$media" "$conformance" "$architecture_gate"; do
+    [[ -f "$file" ]] || fail "voice realm authority vocabulary source is missing: ${file#$cli_root/}"
+  done
+
+  if rg -n 'realm Hub|Hub-owned|Hub authority|Hub replica|Hub voice media provider|Hub voice aggregate|Hub voice repository|Hub voice mutations|Hub voice reads|Hub TTS/ASR|Hub voice rows|realm Hub voice|realm Hub\.' \
+    "$voice" "$voice_contract" "$media" "$conformance"; then
+    fail "voice/media realm-state boundary preserves retired Hub vocabulary"
+  fi
+
+  if ! rg -q 'realm Authority-owned voice/video call signaling session' "$voice"; then
+    fail "voice.create_call descriptor must describe realm Authority ownership"
+  fi
+  if ! rg -q 'owned by this realm Authority' "$voice"; then
+    fail "voice.list_calls descriptor must describe realm Authority ownership"
+  fi
+  if ! rg -q 'Authority-owned voice aggregate' "$voice_contract"; then
+    fail "voice repository contract must describe Authority-owned aggregate"
+  fi
+  if ! rg -q 'realm Authority voice-synthesis resource' "$media"; then
+    fail "media voice descriptor must describe realm Authority resources"
+  fi
+  if ! rg -q 'no realm Authority voice media provider assembly port is available' "$conformance"; then
+    fail "voice conformance unsupported reason must describe realm Authority media providers"
+  fi
+  if ! rg -q 'voice signaling must publish its realm-wide state under realm Authority' "$architecture_gate"; then
+    fail "architecture gate must describe realm Authority voice ownership"
+  fi
+}
+
 check_authority_context_model_vocabulary_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local dispatch="$cli_root/src/daemon/ability/dispatch.rs"
@@ -21085,6 +21122,7 @@ EOF
   check_sdk_managed_signing_authority_route_contract
   check_sdk_runtime_admin_authority_session_contract
   check_runtime_authority_vocabulary_contract
+  check_voice_realm_authority_vocabulary_contract
   check_authority_context_model_vocabulary_contract
   check_provider_route_manifest_neutrality_contract
   check_advertise_agent_ingress_contract
@@ -21511,5 +21549,6 @@ check_sdk_provider_managed_signing_custody_contract
 check_sdk_runtime_receipt_type_state_binding_contract
 check_public_descriptor_authority_vocabulary_contract
 check_runtime_authority_vocabulary_contract
+check_voice_realm_authority_vocabulary_contract
 check_authority_context_model_vocabulary_contract
 echo "canonical-runtime-convergence-v2: OK"

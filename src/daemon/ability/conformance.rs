@@ -101,7 +101,8 @@ pub struct VoiceCapabilityStateEvidence {
 
 const VOICE_REALM_REPOSITORY_SEAM: &str =
     "no production realm-shared VoiceCallRepository provider is assembled";
-const VOICE_MEDIA_UNSUPPORTED: &str = "no Hub voice media provider assembly port is available";
+const VOICE_MEDIA_UNSUPPORTED: &str =
+    "no realm Authority voice media provider assembly port is available";
 const VOICE_PROVIDER_BACKED: &str = "realm-shared VoiceCallRepository is assembled";
 const VOICE_CUTOVER_READY: &str = "executable delivery evidence covers the assembled provider";
 

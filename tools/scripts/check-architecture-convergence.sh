@@ -1297,8 +1297,8 @@ if ffi_root.exists():
             )
 
 
-# Rule 9: realm-wide voice signaling has one Hub authority. Publishing the
-# same state machine under Device and Hub creates duplicate descriptor truth.
+# Rule 9: realm-wide voice signaling has one realm Authority. Publishing the
+# same state machine under Device and realm Authority creates duplicate descriptor truth.
 voice_catalog = cli_root / "src/daemon/ability/builtins/resources/voice.rs"
 if voice_catalog.exists():
     text = source(voice_catalog)
@@ -1309,17 +1309,17 @@ if voice_catalog.exists():
             "R9_VOICE_OWNER_FORK",
             voice_catalog,
             line_number(text, device_owner.start()),
-            "voice signaling must not mirror its Hub state machine under Device authority",
+            "voice signaling must not mirror its realm Authority state machine under Device authority",
         )
     if not hub_owner:
         add(
             "R9_VOICE_HUB_OWNER_MISSING",
             voice_catalog,
             1,
-            "voice signaling must publish its realm-wide state under Hub authority",
+            "voice signaling must publish its realm-wide state under realm Authority",
         )
 
-# A Hub-owned realm aggregate cannot be backed by a daemon-local filesystem
+# An Authority-owned realm aggregate cannot be backed by a daemon-local filesystem
 # adapter. Production assembly must receive an explicitly realm-shared
 # repository provider; tests use a cfg(test)-only in-memory contract fake.
 local_voice_repository = re.compile(
@@ -1336,7 +1336,7 @@ for path in production_files(cli_root / "src", {".rs"}):
             "R9_VOICE_LOCAL_STATE_FORK",
             path,
             line_number(text, match.start()),
-            "Hub voice aggregate must use an injected realm-shared repository",
+            "Authority voice aggregate must use an injected realm-shared repository",
         )
 
 
@@ -2869,7 +2869,7 @@ else:
     )
 
 
-# Rule 19: voice call signaling is Hub-owned realm state. Static descriptor
+# Rule 19: voice call signaling is Authority-owned realm state. Static descriptor
 # contracts may exist without live handlers, but production route registration
 # must require a qualified realm-shared repository provider. A process-local
 # map, test repository, or daemon-local state file must never become the source
@@ -2951,15 +2951,15 @@ if voice_repository.exists():
         ),
         (
             "VoiceCallRepositoryQualification::production",
-            "Hub voice repository must be production-qualified only after shared-root validation",
+            "Authority voice repository must be production-qualified only after shared-root validation",
         ),
         (
             "ExclusiveFileLock::acquire_for_data_path",
-            "Hub voice mutations require a cross-process write guard",
+            "Authority voice mutations require a cross-process write guard",
         ),
         (
             "SharedFileLock::acquire_for_data_path",
-            "Hub voice reads require a shared repository guard",
+            "Authority voice reads require a shared repository guard",
         ),
     )
     for token, detail in repository_requirements:

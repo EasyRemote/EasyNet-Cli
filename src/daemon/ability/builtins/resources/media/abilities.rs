@@ -47,7 +47,7 @@
 // Real media backend scope (NOT in this file yet)
 // ------------------------------------------------
 // Real device IO (cpal mic capture, nokhwa camera capture, screen
-// capture), plus Hub TTS/ASR providers. Hub voice rows remain descriptor
+// capture), plus realm Authority TTS/ASR providers. Authority voice rows remain descriptor
 // metadata only until such a provider is explicitly assembled; this module
 // does not publish an unavailable handler. Physical media stubs remain
 // Device-owned and never act as a voice proxy or fallback.
@@ -206,9 +206,10 @@ const ABILITIES: &[AbilityRow] = &[
     },
     AbilityRow {
         name: ABILITY_VOICE_SUBSCRIBE,
-        description: "Subscribe to a realm Hub voice-synthesis resource. Returns a server-pushed \
+        description:
+            "Subscribe to a realm Authority voice-synthesis resource. Returns a server-pushed \
                       stream of TTS audio BinaryChunk frames. Subject MUST be a \
-                      voice resource_ura (one Hub may expose multiple voice \
+                      voice resource_ura (one realm Authority may expose multiple voice \
                       profiles).",
         input_schema: tts_output_args,
         call_mode: CallMode::Stream,
@@ -219,7 +220,7 @@ const ABILITIES: &[AbilityRow] = &[
         description: "Stream audio in, receive transcription text out. True bidi: \
                       caller pushes audio BinaryChunk UP, callee returns text \
                       BinaryChunk (or structured JSON) DOWN. Subject MUST be an \
-                      ASR-model resource_ura governed by the realm Hub.",
+                      ASR-model resource_ura governed by the realm Authority.",
         input_schema: transcribe_args,
         call_mode: CallMode::Bidi,
         receipt_semantics: operational_receipt,
@@ -476,10 +477,10 @@ fn playback_audio_args() -> Value {
     })
 }
 
-/// TTS output (voice.subscribe): the Hub service selects the voice via
+/// TTS output (voice.subscribe): the realm Authority service selects the voice via
 /// subject (resource_ura); the caller picks how it wants the
 /// audio framed. No `channels` (TTS is mono); no codec list (the
-/// Hub voice resource declares its codec capabilities, the
+/// Authority voice resource declares its codec capabilities, the
 /// caller asks for one).
 fn tts_output_args() -> Value {
     json!({
