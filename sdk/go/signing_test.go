@@ -198,6 +198,57 @@ func TestPreparedInvocationDecodesCurrentABIShape(t *testing.T) {
 	}
 }
 
+func TestProviderManagedSignerPolicyRequiresCustodyFacts(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		policy   string
+		expected string
+	}{
+		{
+			name:     "missing signer_id",
+			policy:   `{"mode":"provider_managed_signing","policy_ref":"policy/local"}`,
+			expected: "signer_id",
+		},
+		{
+			name:     "blank signer_id",
+			policy:   `{"mode":"provider_managed_signing","signer_id":" ","policy_ref":"policy/local"}`,
+			expected: "signer_id",
+		},
+		{
+			name:     "missing policy_ref",
+			policy:   `{"mode":"provider_managed_signing","signer_id":"signer-key-1"}`,
+			expected: "policy_ref",
+		},
+		{
+			name:     "blank policy_ref",
+			policy:   `{"mode":"provider_managed_signing","signer_id":"signer-key-1","policy_ref":" "}`,
+			expected: "policy_ref",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := strings.Replace(
+				preparedFixture,
+				`"expires_at_unix_ms": 1783000000000
+  }`,
+				`"expires_at_unix_ms": 1783000000000,
+    "signer_policy": `+tc.policy+`
+  }`,
+				1,
+			)
+			_, err := NewPreparedInvocationFromJSON([]byte(raw))
+			if err == nil {
+				t.Fatalf("NewPreparedInvocationFromJSON accepted incomplete provider-managed signer policy")
+			}
+			if !IsCode(err, ErrInvalidArgument) {
+				t.Fatalf("error code = %v, want %s", err, ErrInvalidArgument)
+			}
+			if !strings.Contains(err.Error(), "provider-managed signer_policy") || !strings.Contains(err.Error(), tc.expected) {
+				t.Fatalf("error = %v, want provider-managed %s rejection", err, tc.expected)
+			}
+		})
+	}
+}
+
 func TestPreparedInvocationRejectsRequestIDOnlyPayload(t *testing.T) {
 	_, err := NewPreparedInvocationFromJSON([]byte(`{
 		"request_id": "req-1",

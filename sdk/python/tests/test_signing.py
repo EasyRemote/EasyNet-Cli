@@ -1,4 +1,5 @@
 import base64
+import json
 import unittest
 
 try:
@@ -155,6 +156,46 @@ class SigningTests(unittest.TestCase):
         self.assertIsNotNone(prepared.signing_material.signer_policy)
         assert prepared.signing_material.signer_policy is not None
         self.assertEqual(prepared.signing_material.signer_policy.signer_id, "browser-key")
+
+    def test_provider_managed_signer_policy_requires_custody_facts(self) -> None:
+        for label, policy, expected in (
+            (
+                "missing signer_id",
+                {"mode": "provider_managed_signing", "policy_ref": "policy/local"},
+                "signer_id",
+            ),
+            (
+                "blank signer_id",
+                {
+                    "mode": "provider_managed_signing",
+                    "signer_id": " ",
+                    "policy_ref": "policy/local",
+                },
+                "signer_id",
+            ),
+            (
+                "missing policy_ref",
+                {"mode": "provider_managed_signing", "signer_id": "signer-key-1"},
+                "policy_ref",
+            ),
+            (
+                "blank policy_ref",
+                {
+                    "mode": "provider_managed_signing",
+                    "signer_id": "signer-key-1",
+                    "policy_ref": " ",
+                },
+                "policy_ref",
+            ),
+        ):
+            value = json.loads(PREPARED_FIXTURE.decode("utf-8"))
+            value["signing_material"]["signer_policy"] = policy
+            with self.subTest(label=label):
+                with self.assertRaises(SDKError) as caught:
+                    PreparedInvocation.from_json(json.dumps(value))
+                self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+                self.assertIn("provider-managed signer_policy", caught.exception.message)
+                self.assertIn(expected, caught.exception.message)
 
     def test_prepared_invocation_rejects_request_id_only_payload(self) -> None:
         with self.assertRaises(SDKError) as caught:
@@ -521,7 +562,8 @@ class SigningTests(unittest.TestCase):
                     "expires_at_unix_ms": 1783000000000,
                     "signer_policy": {
                         "mode": "provider_managed_signing",
-                        "signer_id": "other-signer"
+                        "signer_id": "other-signer",
+                        "policy_ref": "provider-key-inventory:sha256:test-policy"
                     }
                 }
             }"""

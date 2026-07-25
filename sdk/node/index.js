@@ -1150,6 +1150,14 @@ export class SignerPolicy {
       value.expires_at_unix_ms,
       "expires_at_unix_ms",
     ) ?? 0;
+    if (this.mode.trim() === "provider_managed_signing") {
+      if (this.signerId.trim() === "") {
+        throw invalidRuntime("provider-managed signer_policy requires signer_id");
+      }
+      if (this.policyRef.trim() === "") {
+        throw invalidRuntime("provider-managed signer_policy requires policy_ref");
+      }
+    }
     Object.freeze(this);
   }
 

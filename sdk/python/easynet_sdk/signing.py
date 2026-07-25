@@ -302,7 +302,7 @@ def _prepared_invocation_from_json(
 def _signer_policy(value: object) -> SignerPolicy:
     if not isinstance(value, dict):
         raise _invalid_prepared("signer_policy must be an object")
-    return SignerPolicy(
+    policy = SignerPolicy(
         mode=_optional_string(value.get("mode"), "mode") or "",
         signer_id=_optional_string(value.get("signer_id"), "signer_id") or "",
         policy_ref=_optional_string(value.get("policy_ref"), "policy_ref") or "",
@@ -311,6 +311,16 @@ def _signer_policy(value: object) -> SignerPolicy:
         )
         or 0,
     )
+    if policy.mode.strip() == "provider_managed_signing":
+        if policy.signer_id.strip() == "":
+            raise _invalid_prepared(
+                "provider-managed signer_policy requires signer_id"
+            )
+        if policy.policy_ref.strip() == "":
+            raise _invalid_prepared(
+                "provider-managed signer_policy requires policy_ref"
+            )
+    return policy
 
 
 def _validate_signer_handle(handle: SignerHandle) -> None:

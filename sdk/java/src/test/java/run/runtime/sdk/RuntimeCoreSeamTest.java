@@ -42,6 +42,7 @@ public final class RuntimeCoreSeamTest {
           "retryHintsPreserveRetryability",
           "canonicalSigningMaterialComesFromPrepare",
           "preparedInvocationRequiresExplicitDescriptorRef",
+          "providerManagedSignerPolicyRequiresCustodyFacts",
           "preparedInvocationRejectsRequestIDOnlyAlias",
           "completeTupleRejectsMissingCaller",
           "completeTupleRejectsAllZeroPrincipals",
@@ -105,6 +106,8 @@ public final class RuntimeCoreSeamTest {
       case "canonicalSigningMaterialComesFromPrepare" -> canonicalSigningMaterialComesFromPrepare();
       case "preparedInvocationRequiresExplicitDescriptorRef" ->
           preparedInvocationRequiresExplicitDescriptorRef();
+      case "providerManagedSignerPolicyRequiresCustodyFacts" ->
+          providerManagedSignerPolicyRequiresCustodyFacts();
       case "preparedInvocationRejectsRequestIDOnlyAlias" ->
           preparedInvocationRejectsRequestIDOnlyAlias();
       case "completeTupleRejectsMissingCaller" -> completeTupleRejectsMissingCaller();
@@ -997,6 +1000,40 @@ public final class RuntimeCoreSeamTest {
     expectSDKError(
         ErrorCode.INVALID_ARGUMENT,
         () -> PreparedInvocation.fromJSON(JsonValueWriter.object(prepared)));
+  }
+
+  private static void providerManagedSignerPolicyRequiresCustodyFacts() {
+    RuntimeClient runtime = new RuntimeClient(new MemoryRuntimeTransport());
+    List<Map<String, Object>> policies =
+        List.of(
+            Map.of("mode", "provider_managed_signing", "policy_ref", "policy/local"),
+            Map.of(
+                "mode",
+                "provider_managed_signing",
+                "signer_id",
+                " ",
+                "policy_ref",
+                "policy/local"),
+            Map.of("mode", "provider_managed_signing", "signer_id", "signer-key-1"),
+            Map.of(
+                "mode",
+                "provider_managed_signing",
+                "signer_id",
+                "signer-key-1",
+                "policy_ref",
+                " "));
+    for (Map<String, Object> policy : policies) {
+      Map<String, Object> wire = preparedInvocationWire(runtime);
+      @SuppressWarnings("unchecked")
+      Map<String, Object> material =
+          new LinkedHashMap<>((Map<String, Object>) wire.get("signing_material"));
+      material.put("signer_policy", policy);
+      wire.put("signing_material", material);
+      expectSDKError(
+          ErrorCode.INVALID_ARGUMENT,
+          "provider-managed signer_policy",
+          () -> PreparedInvocation.fromJSON(JsonValueWriter.object(wire)));
+    }
   }
 
   private static void preparedInvocationRejectsRequestIDOnlyAlias() {

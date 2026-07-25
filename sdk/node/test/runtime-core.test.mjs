@@ -775,6 +775,44 @@ test("prepared invocation requires explicit top-level descriptor ref", () => {
   );
 });
 
+test("provider-managed signer policy requires custody facts", () => {
+  for (const [label, policy, expected] of [
+    [
+      "missing signer_id",
+      { mode: "provider_managed_signing", policy_ref: "policy/local" },
+      "signer_id",
+    ],
+    [
+      "blank signer_id",
+      { mode: "provider_managed_signing", signer_id: " ", policy_ref: "policy/local" },
+      "signer_id",
+    ],
+    [
+      "missing policy_ref",
+      { mode: "provider_managed_signing", signer_id: "signer-key-1" },
+      "policy_ref",
+    ],
+    [
+      "blank policy_ref",
+      { mode: "provider_managed_signing", signer_id: "signer-key-1", policy_ref: " " },
+      "policy_ref",
+    ],
+  ]) {
+    const value = JSON.parse(preparedJSON(completeDraft().toJSON()));
+    value.signing_material.signer_policy = policy;
+
+    assert.throws(
+      () => sdk.PreparedInvocation.fromJSON(JSON.stringify(value)),
+      (error) =>
+        error instanceof sdk.SDKError &&
+        error.code === sdk.ErrorCode.INVALID_ARGUMENT &&
+        error.message.includes("provider-managed signer_policy") &&
+        error.message.includes(expected),
+      label,
+    );
+  }
+});
+
 test("prepared invocation rejects request-id-only alias", () => {
   const value = JSON.parse(preparedJSON(completeDraft().toJSON()));
   delete value.prepared_id;

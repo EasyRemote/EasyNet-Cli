@@ -488,6 +488,10 @@ func requiredSigningMaterial(fields map[string]json.RawMessage, name string) (Si
 	if err := json.Unmarshal(raw, &materialFields); err != nil {
 		return SigningMaterial{}, invalidInvocation(fmt.Sprintf("%s must be an object", name), err)
 	}
+	signerPolicy, err := optionalSignerPolicy(materialFields, "signer_policy")
+	if err != nil {
+		return SigningMaterial{}, err
+	}
 	material := SigningMaterial{
 		algorithm:            optionalPreparedString(materialFields, "algorithm"),
 		canonicalBytesBase64: optionalPreparedString(materialFields, "canonical_bytes_base64"),
@@ -496,7 +500,7 @@ func requiredSigningMaterial(fields map[string]json.RawMessage, name string) (Si
 		nonceBase64:          optionalPreparedString(materialFields, "nonce_base64"),
 		signedFields:         optionalStringSlice(materialFields, "signed_fields"),
 		expiresAtUnixMS:      optionalPreparedInt64(materialFields, "expires_at_unix_ms"),
-		signerPolicy:         optionalSignerPolicy(materialFields, "signer_policy"),
+		signerPolicy:         signerPolicy,
 	}
 	if strings.TrimSpace(material.canonicalBytesBase64) == "" {
 		return SigningMaterial{}, invalidInvocation("signing_material.canonical_bytes_base64 is required", nil)
@@ -516,21 +520,30 @@ func requiredSigningMaterial(fields map[string]json.RawMessage, name string) (Si
 	return material, nil
 }
 
-func optionalSignerPolicy(fields map[string]json.RawMessage, name string) *SignerPolicy {
+func optionalSignerPolicy(fields map[string]json.RawMessage, name string) (*SignerPolicy, error) {
 	raw, ok := fields[name]
 	if !ok || string(raw) == "null" {
-		return nil
+		return nil, nil
 	}
 	var value map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &value); err != nil {
-		return nil
+		return nil, invalidInvocation(fmt.Sprintf("%s must be an object", name), err)
 	}
-	return &SignerPolicy{
+	policy := &SignerPolicy{
 		mode:            optionalPreparedString(value, "mode"),
 		signerID:        optionalPreparedString(value, "signer_id"),
 		policyRef:       optionalPreparedString(value, "policy_ref"),
 		expiresAtUnixMS: optionalPreparedInt64(value, "expires_at_unix_ms"),
 	}
+	if isProviderManagedSignerMode(policy.Mode()) {
+		if strings.TrimSpace(policy.SignerID()) == "" {
+			return nil, invalidInvocation("provider-managed signer_policy requires signer_id", nil)
+		}
+		if strings.TrimSpace(policy.PolicyRef()) == "" {
+			return nil, invalidInvocation("provider-managed signer_policy requires policy_ref", nil)
+		}
+	}
+	return policy, nil
 }
 
 func validatedCanonicalMaterialHash(

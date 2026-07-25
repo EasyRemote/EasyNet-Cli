@@ -8,6 +8,14 @@ public record SignerPolicy(String mode, String signerId, String policyRef, long 
     mode = mode == null ? "" : mode;
     signerId = signerId == null ? "" : signerId;
     policyRef = policyRef == null ? "" : policyRef;
+    if ("provider_managed_signing".equals(mode.strip())) {
+      if (signerId.isBlank()) {
+        throw SDKError.validation("signer_policy", "provider-managed signer_policy requires signer_id");
+      }
+      if (policyRef.isBlank()) {
+        throw SDKError.validation("signer_policy", "provider-managed signer_policy requires policy_ref");
+      }
+    }
     if (expiresAtUnixMS < 0) {
       throw SDKError.validation("signer_policy", "expires_at_unix_ms must be non-negative");
     }
