@@ -8816,6 +8816,54 @@ if '{"agent_ura":"easynet:///r/realm/device/missing"}' not in unary:
 PY
 }
 
+check_federation_discover_caller_scope_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local remote="$cli_root/src/daemon/invocation/routing/remote_invoke.rs"
+  [[ -f "$remote" ]] || fail "remote invocation source is missing: ${remote#$cli_root/}"
+
+  "$PYTHON_BIN" - "$remote" <<'PY'
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+production = text.split("\n#[cfg(test)]", 1)[0]
+
+for required in (
+    "struct FederationDiscoverScope",
+    "fn operator_audit(local_daemon_ura: &str) -> anyhow::Result<Self>",
+    "fn user(local_daemon_ura: &str, local_user_id_filter: &str) -> anyhow::Result<Self>",
+    "fn validate_federation_discover_local_user_id(local_user_id: &str) -> anyhow::Result<&str>",
+    "fn invoke_federation_discover_with_scope(",
+    "scope.write_request_args(&mut req_args)",
+    'load_federation_caller_signer(scope.caller_ura(), "federation.discover")',
+    "ProtoEnvelope::from_target(\n        scope.caller_ura(),",
+    "crate::core::ura::parse_ura(local_daemon_ura)",
+    "crate::core::ura::user_ura(&parsed_daemon.realm, local_user_id_filter)",
+):
+    if required not in production:
+        raise SystemExit(f"federation_discover_caller_scope:missing:{required}")
+
+for retired in (
+    "fn invoke_federation_discover_with_user_filter(",
+    "local_user_id_filter: Option<&str>",
+    'local_daemon_federation_signer(&local_daemon_ura, "federation.discover")',
+    'load_federation_caller_signer(&local_daemon_ura, "federation.discover")',
+    "ProtoEnvelope::from_target(\n        local_daemon_ura.as_str(),",
+):
+    if retired in production:
+        raise SystemExit(f"federation_discover_caller_scope:retired:{retired}")
+
+tests = text.split("\n#[cfg(test)]", 1)[1] if "\n#[cfg(test)]" in text else ""
+for required_test in (
+    "federation_discover_user_scope_binds_user_caller_before_daemon_io",
+    "federation_discover_operator_scope_binds_daemon_caller_without_user_filter",
+    "federation_discover_rejects_all_zero_user_filter_before_daemon_io",
+):
+    if required_test not in tests:
+        raise SystemExit(f"federation_discover_caller_scope:test_missing:{required_test}")
+PY
+}
+
 check_device_settings_loader_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local config="$cli_root/src/daemon/persistence/config.rs"
@@ -24159,6 +24207,7 @@ EOF
   check_runtime_bootstrap_self_identity_ingress_contract
   check_federation_receipt_facts_strict_contract
   check_federation_revoke_ingress_strict_contract
+  check_federation_discover_caller_scope_contract
   check_device_settings_loader_contract
   check_mission_traditional_target_conflict_contract
   check_eal_device_target_identity_contract
@@ -24401,6 +24450,7 @@ check_federation_join_ingress_strict_contract
 check_runtime_bootstrap_self_identity_ingress_contract
 check_federation_receipt_facts_strict_contract
 check_federation_revoke_ingress_strict_contract
+check_federation_discover_caller_scope_contract
 check_device_settings_loader_contract
 check_mission_traditional_target_conflict_contract
 check_eal_device_target_identity_contract

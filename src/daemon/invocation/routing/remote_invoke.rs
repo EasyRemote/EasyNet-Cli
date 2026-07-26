@@ -1327,7 +1327,9 @@ fn validate_remote_target_ura(target_ura: &str) -> anyhow::Result<()> {
 pub fn invoke_federation_discover_for_operator_audit(
     agent_ura_filter: Option<&str>,
 ) -> anyhow::Result<Vec<Value>> {
-    invoke_federation_discover_with_user_filter(agent_ura_filter, None)
+    let local_daemon_ura = crate::daemon::identity::local_invocation::local_daemon_ura()?;
+    let scope = FederationDiscoverScope::operator_audit(&local_daemon_ura)?;
+    invoke_federation_discover_with_scope(agent_ura_filter, &local_daemon_ura, scope)
 }
 
 /// User-scoped cross-realm directory query. Product surfaces use this path so
@@ -1338,19 +1340,80 @@ pub fn invoke_federation_discover_for_user(
     agent_ura_filter: Option<&str>,
     local_user_id_filter: &str,
 ) -> anyhow::Result<Vec<Value>> {
-    if local_user_id_filter.trim().is_empty() {
-        anyhow::bail!("federation.discover user filter requires a non-empty local_user_id");
-    }
-    if crate::core::identity::is_all_zero_principal_id(local_user_id_filter) {
-        anyhow::bail!("federation.discover user filter rejects the all-zero principal placeholder");
-    }
-    invoke_federation_discover_with_user_filter(agent_ura_filter, Some(local_user_id_filter))
+    let local_user_id_filter = validate_federation_discover_local_user_id(local_user_id_filter)?;
+    let local_daemon_ura = crate::daemon::identity::local_invocation::local_daemon_ura()?;
+    let scope = FederationDiscoverScope::user(&local_daemon_ura, local_user_id_filter)?;
+    invoke_federation_discover_with_scope(agent_ura_filter, &local_daemon_ura, scope)
 }
 
-fn invoke_federation_discover_with_user_filter(
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FederationDiscoverScope {
+    caller_ura: String,
+    local_user_id_filter: Option<String>,
+}
+
+impl FederationDiscoverScope {
+    fn operator_audit(local_daemon_ura: &str) -> anyhow::Result<Self> {
+        if local_daemon_ura.trim().is_empty() {
+            anyhow::bail!("federation.discover operator/audit scope requires local daemon URA");
+        }
+        Ok(Self {
+            caller_ura: local_daemon_ura.to_string(),
+            local_user_id_filter: None,
+        })
+    }
+
+    fn user(local_daemon_ura: &str, local_user_id_filter: &str) -> anyhow::Result<Self> {
+        let local_user_id_filter =
+            validate_federation_discover_local_user_id(local_user_id_filter)?;
+        let parsed_daemon = crate::core::ura::parse_ura(local_daemon_ura)
+            .map_err(|err| anyhow!("parse local daemon URA for federation.discover: {err}"))?;
+        Ok(Self {
+            caller_ura: crate::core::ura::user_ura(&parsed_daemon.realm, local_user_id_filter),
+            local_user_id_filter: Some(local_user_id_filter.to_string()),
+        })
+    }
+
+    fn caller_ura(&self) -> &str {
+        &self.caller_ura
+    }
+
+    fn write_request_args(&self, req_args: &mut Value) {
+        if let Some(user) = &self.local_user_id_filter {
+            req_args["local_user_id"] = Value::String(user.clone());
+        }
+    }
+}
+
+fn validate_federation_discover_local_user_id(local_user_id: &str) -> anyhow::Result<&str> {
+    let local_user_id = local_user_id.trim();
+    if local_user_id.is_empty() {
+        anyhow::bail!("federation.discover user filter requires a non-empty local_user_id");
+    }
+    if crate::core::identity::is_all_zero_principal_id(local_user_id) {
+        anyhow::bail!("federation.discover user filter rejects the all-zero principal placeholder");
+    }
+    Ok(local_user_id)
+}
+
+fn invoke_federation_discover_with_scope(
     agent_ura_filter: Option<&str>,
-    local_user_id_filter: Option<&str>,
+    local_daemon_ura: &str,
+    scope: FederationDiscoverScope,
 ) -> anyhow::Result<Vec<Value>> {
+    let mut req_args = json!({});
+    if let Some(ura) = agent_ura_filter {
+        req_args["agent_ura"] = Value::String(ura.to_string());
+    }
+    scope.write_request_args(&mut req_args);
+    let arg_bytes = serde_json::to_vec(&req_args).context("encode discover args")?;
+
+    let target = RemoteAbilityInvocationTarget::for_target_owned_selector(
+        local_daemon_ura,
+        "federation.discover",
+    )?;
+    let subject_ura = federation_discover_subject_ura(local_daemon_ura)?;
+    let signer = load_federation_caller_signer(scope.caller_ura(), "federation.discover")?;
     let socket_path = daemon_config::resolved_local_uds_path_with_env_override();
     if !crate::support::platform::local_daemon_grpc::probe_accepting(&socket_path) {
         bail!(
@@ -1359,25 +1422,8 @@ fn invoke_federation_discover_with_user_filter(
             socket_path.display()
         );
     }
-
-    let mut req_args = json!({});
-    if let Some(ura) = agent_ura_filter {
-        req_args["agent_ura"] = Value::String(ura.to_string());
-    }
-    if let Some(user) = local_user_id_filter {
-        req_args["local_user_id"] = Value::String(user.to_string());
-    }
-    let arg_bytes = serde_json::to_vec(&req_args).context("encode discover args")?;
-
-    let local_daemon_ura = crate::daemon::identity::local_invocation::local_daemon_ura()?;
-    let target = RemoteAbilityInvocationTarget::for_target_owned_selector(
-        &local_daemon_ura,
-        "federation.discover",
-    )?;
-    let subject_ura = federation_discover_subject_ura(&local_daemon_ura)?;
-    let signer = local_daemon_federation_signer(&local_daemon_ura, "federation.discover")?;
     let request_envelope = ProtoEnvelope::from_target(
-        local_daemon_ura.as_str(),
+        scope.caller_ura(),
         target.callee_ura(),
         subject_ura.as_str(),
         RootInvocationDerivationIssuer::fresh_root(),
@@ -1439,14 +1485,12 @@ fn federation_discover_subject_ura(callee_ura: &str) -> anyhow::Result<String> {
     Ok(callee_ura.to_string())
 }
 
-fn local_daemon_federation_signer(
-    local_daemon_ura: &str,
+fn load_federation_caller_signer(
+    caller_ura: &str,
     ability: &str,
 ) -> anyhow::Result<crate::daemon::identity::self_identity::RuntimeSigningIdentity> {
-    crate::daemon::identity::self_identity::RuntimeSigningIdentity::load_default(
-        local_daemon_ura.to_string(),
-    )
-    .map_err(|_err| caller_signer_unavailable_error(ability, local_daemon_ura))
+    crate::daemon::identity::self_identity::RuntimeSigningIdentity::load_default(caller_ura)
+        .map_err(|_err| caller_signer_unavailable_error(ability, caller_ura))
 }
 
 /// `federation.revoke` against the local daemon's gRPC
@@ -1493,7 +1537,7 @@ pub fn invoke_federation_revoke(
         &local_daemon_ura,
         "federation.revoke",
     )?;
-    let signer = local_daemon_federation_signer(&caller_ura, "federation.revoke")?;
+    let signer = load_federation_caller_signer(&caller_ura, "federation.revoke")?;
     let request_envelope = ProtoEnvelope::from_target(
         caller_ura.as_str(),
         target.callee_ura(),
@@ -2022,6 +2066,37 @@ mod tests {
             invoke_federation_discover_for_user(None, crate::core::identity::ALL_ZERO_PRINCIPAL_ID)
                 .expect_err("all-zero user filter must reject before local daemon transport");
         assert!(error.to_string().contains("all-zero principal"));
+    }
+
+    #[test]
+    fn federation_discover_user_scope_binds_user_caller_before_daemon_io() {
+        let local_daemon_ura = crate::core::ura::device_ura("acme", "device-a");
+        let scope = FederationDiscoverScope::user(&local_daemon_ura, "user-a").expect("user scope");
+
+        assert_eq!(
+            scope.caller_ura(),
+            crate::core::ura::user_ura("acme", "user-a")
+        );
+        assert_eq!(
+            scope.local_user_id_filter.as_deref(),
+            Some("user-a"),
+            "user-scoped discover must carry the same local user filter"
+        );
+        assert_ne!(
+            scope.caller_ura(),
+            local_daemon_ura,
+            "user-scoped discover must not sign as the daemon/device owner"
+        );
+    }
+
+    #[test]
+    fn federation_discover_operator_scope_binds_daemon_caller_without_user_filter() {
+        let local_daemon_ura = crate::core::ura::hub_ura("acme");
+        let scope = FederationDiscoverScope::operator_audit(&local_daemon_ura)
+            .expect("operator/audit scope");
+
+        assert_eq!(scope.caller_ura(), local_daemon_ura);
+        assert_eq!(scope.local_user_id_filter, None);
     }
 
     #[test]

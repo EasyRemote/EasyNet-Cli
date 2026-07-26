@@ -42,7 +42,7 @@ body = text[start:end]
 
 required = [
     "canonical_federation_revoke_caller(caller_ura, &local_daemon_ura)",
-    'local_daemon_federation_signer(&caller_ura, "federation.revoke")',
+    'load_federation_caller_signer(&caller_ura, "federation.revoke")',
     "ProtoEnvelope::from_target(\n        caller_ura.as_str(),",
 ]
 for needle in required:
@@ -50,7 +50,7 @@ for needle in required:
         raise SystemExit(f"invoke_federation_revoke missing boundary: {needle}")
 
 for forbidden in [
-    'local_daemon_federation_signer(&local_daemon_ura, "federation.revoke")',
+    'load_federation_caller_signer(&local_daemon_ura, "federation.revoke")',
     "ProtoEnvelope::from_target(\n        local_daemon_ura.as_str(),",
 ]:
     if forbidden in body:
