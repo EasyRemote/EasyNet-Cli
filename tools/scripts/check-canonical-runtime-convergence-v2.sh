@@ -13658,6 +13658,102 @@ if "plugin_runtime_state_constructors_share_canonical_snapshot_projection" not i
 PY
 }
 
+check_plugin_realtime_output_read_model_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local realtime="$cli_root/src/daemon/plugins/realtime.rs"
+  local surface="$cli_root/src/daemon/plugins/surface.rs"
+  local broker="$cli_root/src/daemon/plugins/broker.rs"
+  local cli_plugin="$cli_root/src/cli/commands/groups/plugin.rs"
+  [[ -f "$realtime" ]] || fail "plugin realtime source is missing: ${realtime#$cli_root/}"
+  [[ -f "$surface" ]] || fail "plugin surface source is missing: ${surface#$cli_root/}"
+  [[ -f "$broker" ]] || fail "plugin broker source is missing: ${broker#$cli_root/}"
+  [[ -f "$cli_plugin" ]] || fail "CLI plugin command source is missing: ${cli_plugin#$cli_root/}"
+
+  "$PYTHON_BIN" - "$realtime" "$surface" "$broker" "$cli_plugin" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+files = {
+    "realtime": (
+        Path(sys.argv[1]),
+        (
+            "PluginRealtimeActivationStatus",
+            "PluginRealtimeActivationPlan",
+            "PluginRealtimeTransportReadiness",
+            "PluginRealtimeTransportReadinessStatus",
+            "PluginRealtimeTransportAdapterReadiness",
+            "PluginRealtimeTransportAdapterStatus",
+            "PluginRealtimeTransportRoleReadiness",
+            "PluginRealtimeTransportRoleStatus",
+        ),
+    ),
+    "surface": (
+        Path(sys.argv[2]),
+        (
+            "PluginSurfaceReport",
+            "PluginPackageSurfaceRecord",
+            "PluginAbilitySurface",
+            "PluginAbilitySurfaceRecord",
+            "PluginKindView",
+            "PluginAbilityLayerView",
+            "CallModeView",
+        ),
+    ),
+    "broker": (
+        Path(sys.argv[3]),
+        (
+            "PluginRealtimeResourceReadiness",
+            "PluginRealtimeResourceMatch",
+            "PluginRealtimePermissionReadiness",
+            "PluginRealtimePermissionStatus",
+            "PluginRealtimeActivationOutcome",
+            "PluginRealtimeActivationReport",
+            "PluginRealtimeOutcomeStatus",
+            "PluginRealtimePublishReadiness",
+        ),
+    ),
+}
+for label, (path, output_types) in files.items():
+    text = path.read_text(encoding="utf-8")
+    production = text.split("\n#[cfg(test)]", 1)[0]
+    if "use serde::Serialize;" not in production:
+        raise SystemExit(f"plugin_realtime_output_read_model:serialize_import_missing:{label}")
+    for retired in (
+        "use serde::{Deserialize, Serialize};",
+        "use serde::{Serialize, Deserialize};",
+    ):
+        if retired in production:
+            raise SystemExit(f"plugin_realtime_output_read_model:retired_import:{label}:{retired}")
+    for type_name in output_types:
+        match = re.search(
+            r"#\[derive\((?P<derive>[^)]*)\)\]\s*(?:#\[[^\n]+\]\s*)*pub\s+(?:struct|enum)\s+"
+            + re.escape(type_name)
+            + r"\b",
+            production,
+            re.S,
+        )
+        if not match:
+            raise SystemExit(f"plugin_realtime_output_read_model:type_missing:{label}:{type_name}")
+        derive = match.group("derive")
+        if "Serialize" not in derive:
+            raise SystemExit(f"plugin_realtime_output_read_model:serialize_missing:{label}:{type_name}")
+        if "Deserialize" in derive:
+            raise SystemExit(f"plugin_realtime_output_read_model:deserialize_leak:{label}:{type_name}")
+
+cli = Path(sys.argv[4]).read_text(encoding="utf-8")
+cli_production = cli.split("\n#[cfg(test)]", 1)[0]
+for retired in (
+    "PluginSurfaceReport",
+    "PluginRealtimeActivationReport",
+    "PluginRealtimeActivationOutcome",
+    "serde_json::from_value(value)",
+):
+    if retired in cli_production:
+        raise SystemExit(f"plugin_realtime_output_read_model:cli_internal_report_deserialize:{retired}")
+PY
+}
+
 check_retired_browser_mock_surface_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local descriptor_dir="$cli_root/ability-descriptors/system/device_control"
@@ -19546,6 +19642,122 @@ EOF
   if ( CLI_ROOT="$tmp/plugin-runtime-state-legacy"; check_plugin_runtime_state_constructor_contract ) >/dev/null 2>&1; then
     fail "self-test expected plugin runtime state constructor gate to fail"
   fi
+  mkdir -p "$tmp/plugin-realtime-read-model-legacy/src/daemon/plugins" \
+    "$tmp/plugin-realtime-read-model-legacy/src/cli/commands/groups"
+  cat >"$tmp/plugin-realtime-read-model-legacy/src/daemon/plugins/realtime.rs" <<'EOF'
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub enum PluginRealtimeActivationStatus {
+    Ready,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct PluginRealtimeActivationPlan {
+    pub status: PluginRealtimeActivationStatus,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct PluginRealtimeTransportReadiness;
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub enum PluginRealtimeTransportReadinessStatus {
+    Ready,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct PluginRealtimeTransportAdapterReadiness;
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub enum PluginRealtimeTransportAdapterStatus {
+    Ready,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct PluginRealtimeTransportRoleReadiness;
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub enum PluginRealtimeTransportRoleStatus {
+    Satisfied,
+}
+EOF
+  cat >"$tmp/plugin-realtime-read-model-legacy/src/daemon/plugins/surface.rs" <<'EOF'
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+pub struct PluginSurfaceReport;
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub struct PluginPackageSurfaceRecord;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub enum PluginAbilitySurface {
+    Invocation,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub struct PluginAbilitySurfaceRecord;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub enum PluginKindView {
+    Sidecar,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub enum PluginAbilityLayerView {
+    Operational,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub enum CallModeView {
+    Rpc,
+}
+EOF
+  cat >"$tmp/plugin-realtime-read-model-legacy/src/daemon/plugins/broker.rs" <<'EOF'
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub struct PluginRealtimeResourceReadiness;
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub struct PluginRealtimeResourceMatch;
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub struct PluginRealtimePermissionReadiness;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub enum PluginRealtimePermissionStatus {
+    Unknown,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub struct PluginRealtimeActivationOutcome;
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub struct PluginRealtimeActivationReport;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub enum PluginRealtimeOutcomeStatus {
+    Unknown,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub struct PluginRealtimePublishReadiness;
+EOF
+  cat >"$tmp/plugin-realtime-read-model-legacy/src/cli/commands/groups/plugin.rs" <<'EOF'
+use crate::daemon::plugins::{PluginRealtimeActivationReport, PluginSurfaceReport};
+
+fn invoke_plugin_status(value: serde_json::Value) -> anyhow::Result<PluginSurfaceReport> {
+    Ok(serde_json::from_value(value)?)
+}
+
+fn invoke_plugin_activate_realtime(value: serde_json::Value) -> anyhow::Result<PluginRealtimeActivationReport> {
+    Ok(serde_json::from_value(value)?)
+}
+EOF
+  if ( CLI_ROOT="$tmp/plugin-realtime-read-model-legacy"; check_plugin_realtime_output_read_model_contract ) >/dev/null 2>&1; then
+    fail "self-test expected plugin realtime output read model gate to fail"
+  fi
   mkdir -p "$tmp/cli-browser-mock/src/daemon/ability/builtins/device_control" \
     "$tmp/cli-browser-mock/ability-descriptors/system/device_control" \
     "$tmp/cli-browser-mock/src/daemon/ability/catalog" \
@@ -25103,6 +25315,7 @@ EOF
   check_plugin_schema_rejection_vocabulary_contract
   check_plugin_metadata_lookup_fail_closed_contract
   check_plugin_runtime_state_constructor_contract
+  check_plugin_realtime_output_read_model_contract
   check_retired_browser_mock_surface_contract
   check_ability_deploy_product_neutrality_contract
   check_device_ability_mutation_target_contract
@@ -25363,6 +25576,7 @@ check_plugin_sidecar_helper_matrix_contract
 check_plugin_schema_rejection_vocabulary_contract
 check_plugin_metadata_lookup_fail_closed_contract
 check_plugin_runtime_state_constructor_contract
+check_plugin_realtime_output_read_model_contract
 check_remote_desktop_contract_boundary_contract
 check_retired_browser_mock_surface_contract
 check_ability_deploy_product_neutrality_contract

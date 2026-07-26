@@ -6,7 +6,7 @@
 
 use std::collections::BTreeSet;
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use crate::daemon::ability::CallMode;
 use crate::daemon::plugins::companion::DesktopCompanionManager;
@@ -19,14 +19,14 @@ use crate::daemon::plugins::realtime::{
 };
 
 /// Operator-visible plugin package and ability report.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct PluginSurfaceReport {
     pub packages: Vec<PluginPackageSurfaceRecord>,
     pub abilities: Vec<PluginAbilitySurfaceRecord>,
 }
 
 /// One operator-visible plugin package row.
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct PluginPackageSurfaceRecord {
     pub package_id: String,
     pub package_version: String,
@@ -55,7 +55,7 @@ pub struct PluginPackageSurfaceRecord {
 /// owned by [`PluginLoadPlan`] and [`crate::daemon::plugins::host_api`].
 /// This type exists so CLI discovery and descriptor generation do not silently
 /// disagree about what "published" means.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PluginAbilitySurface {
     /// Static descriptor TOML can be generated from package metadata.
@@ -67,7 +67,7 @@ pub enum PluginAbilitySurface {
 }
 
 /// One operator-visible plugin ability row.
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct PluginAbilitySurfaceRecord {
     pub package_id: String,
     pub package_version: String,
@@ -87,7 +87,7 @@ pub struct PluginAbilitySurfaceRecord {
 }
 
 /// Serializable plugin kind for CLI/API output.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PluginKindView {
     Declarative,
@@ -98,7 +98,7 @@ pub enum PluginKindView {
 }
 
 /// Serializable ability layer for CLI/API output.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PluginAbilityLayerView {
     Introspection,
@@ -109,7 +109,7 @@ pub enum PluginAbilityLayerView {
 }
 
 /// Serializable ability call mode for CLI/API output.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CallModeView {
     Rpc,

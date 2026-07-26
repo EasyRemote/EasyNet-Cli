@@ -7,15 +7,12 @@
 use std::path::PathBuf;
 
 use clap::{Args, Subcommand};
+use serde_json::Value;
 
 use super::plugin_template::{init_hello_plugin, PluginTemplateInit, PluginTemplateLanguage};
 use crate::daemon::plugins::index::default_plugin_root;
 use crate::daemon::plugins::{
-    DesktopCompanionManager, PluginInstaller, PluginKind, PluginKindView, PluginPackageIndex,
-    PluginPackageSurfaceRecord, PluginRealtimeActivationOutcome, PluginRealtimeActivationReport,
-    PluginRealtimeKind, PluginRealtimeMode, PluginRealtimeOutcomeStatus,
-    PluginRealtimePermissionStatus, PluginRealtimeTransport,
-    PluginRealtimeTransportReadinessStatus, PluginSurfaceReport,
+    DesktopCompanionManager, PluginInstaller, PluginKind, PluginPackageIndex,
 };
 use crate::support::platform::output::{self, OutputFormat};
 
@@ -192,7 +189,7 @@ fn run_init(args: InitArgs) -> anyhow::Result<()> {
 }
 
 fn run_list(args: ListArgs) -> anyhow::Result<()> {
-    let report = require_plugin_control_report(invoke_plugin_status()?, "plugin list")?;
+    let report = require_plugin_control_value(invoke_plugin_status()?, "plugin list")?;
 
     match args.format {
         OutputFormat::Json => {
@@ -213,20 +210,20 @@ fn run_list(args: ListArgs) -> anyhow::Result<()> {
                 "supervisor",
                 "observed",
             ]);
-            for package in report.packages {
-                let realtime = realtime_label(&package);
-                let companion = companion_field(&package, "projected_state");
-                let supervisor = companion_field(&package, "supervisor_state");
-                let observed = companion_field(&package, "observed_state");
+            for package in array_json(&report, "packages")? {
+                let realtime = realtime_label(package);
+                let companion = companion_field(package, "projected_state");
+                let supervisor = companion_field(package, "supervisor_state");
+                let observed = companion_field(package, "observed_state");
                 package_table.add_row([
-                    package.package_id,
-                    package.package_version,
-                    plugin_kind_label(package.kind).to_string(),
-                    package.planned_load_status,
-                    package.daemon_runtime_status,
-                    package.ability_count.to_string(),
-                    bool_label(package.runtime_published),
-                    bool_label(package.invokable),
+                    string_json(package, "package_id"),
+                    string_json(package, "package_version"),
+                    string_json(package, "kind"),
+                    string_json(package, "planned_load_status"),
+                    string_json(package, "daemon_runtime_status"),
+                    usize_json(package, "ability_count").to_string(),
+                    bool_label(bool_json(package, "runtime_published")),
+                    bool_label(bool_json(package, "invokable")),
                     realtime,
                     companion,
                     supervisor,
@@ -247,18 +244,18 @@ fn run_list(args: ListArgs) -> anyhow::Result<()> {
                 "runtime",
                 "invoke",
             ]);
-            for row in report.abilities {
+            for row in array_json(&report, "abilities")? {
                 ability_table.add_row([
-                    row.package_id,
-                    row.package_version,
-                    row.ability,
-                    plugin_kind_label(row.kind).to_string(),
-                    format!("{:?}", row.call_mode).to_ascii_lowercase(),
-                    row.planned_load_status,
-                    row.daemon_runtime_status,
-                    bool_label(row.descriptor_published),
-                    bool_label(row.runtime_published),
-                    bool_label(row.invokable),
+                    string_json(row, "package_id"),
+                    string_json(row, "package_version"),
+                    string_json(row, "ability"),
+                    string_json(row, "kind"),
+                    string_json(row, "call_mode"),
+                    string_json(row, "planned_load_status"),
+                    string_json(row, "daemon_runtime_status"),
+                    bool_label(bool_json(row, "descriptor_published")),
+                    bool_label(bool_json(row, "runtime_published")),
+                    bool_label(bool_json(row, "invokable")),
                 ]);
             }
             println!("{ability_table}");
@@ -340,13 +337,13 @@ fn run_status(args: PluginStatusArgs) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let report = require_plugin_control_report(invoke_plugin_status()?, "plugin status")?;
-    let Some(row) = report.packages.into_iter().find(|row| {
-        row.package_id == args.id
+    let report = require_plugin_control_value(invoke_plugin_status()?, "plugin status")?;
+    let Some(row) = array_json(&report, "packages")?.iter().find(|row| {
+        string_json(row, "package_id") == args.id
             && args
                 .version
                 .as_deref()
-                .map(|version| row.package_version == version)
+                .map(|version| string_json(row, "package_version") == version)
                 .unwrap_or(true)
     }) else {
         anyhow::bail!("plugin package not found: {}", args.id);
@@ -354,12 +351,17 @@ fn run_status(args: PluginStatusArgs) -> anyhow::Result<()> {
     if args.json {
         println!("{}", serde_json::to_string_pretty(&row)?);
     } else {
+        let package = string_json(row, "package_id");
+        let version = string_json(row, "package_version");
+        let kind = string_json(row, "kind");
+        let planned = string_json(row, "planned_load_status");
+        let daemon = string_json(row, "daemon_runtime_status");
         output::kv_section(&[
-            ("Package", row.package_id.as_str()),
-            ("Version", row.package_version.as_str()),
-            ("Kind", plugin_kind_label(row.kind)),
-            ("Planned", row.planned_load_status.as_str()),
-            ("Daemon", row.daemon_runtime_status.as_str()),
+            ("Package", package.as_str()),
+            ("Version", version.as_str()),
+            ("Kind", kind.as_str()),
+            ("Planned", planned.as_str()),
+            ("Daemon", daemon.as_str()),
         ]);
     }
     Ok(())
@@ -373,7 +375,7 @@ fn run_activate_realtime(args: ActivateRealtimeArgs) -> anyhow::Result<()> {
     };
     match args.format {
         OutputFormat::Json => println!("{}", serde_json::to_string_pretty(&report)?),
-        OutputFormat::Table => print_activation_report(&report),
+        OutputFormat::Table => print_activation_report(&report)?,
     }
     Ok(())
 }
@@ -386,37 +388,53 @@ fn bool_label(value: bool) -> String {
     }
 }
 
-fn plugin_kind_label(kind: PluginKindView) -> &'static str {
-    match kind {
-        PluginKindView::Declarative => "declarative",
-        PluginKindView::Sidecar => "sidecar",
-        PluginKindView::Builtin => "builtin",
-        PluginKindView::DesktopCompanion => "desktop_companion",
-        PluginKindView::Unknown => "unknown",
-    }
-}
-
-fn realtime_label(row: &PluginPackageSurfaceRecord) -> String {
-    if row.realtime_activation_plans.is_empty() {
+fn realtime_label(row: &Value) -> String {
+    let plans = row
+        .get("realtime_activation_plans")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    if plans.is_empty() {
         return "-".to_string();
     }
-    row.realtime_activation_plans
+    plans
         .iter()
         .map(|plan| {
-            let kind = format!("{:?}", plan.capability.kind()).to_ascii_lowercase();
+            let kind = plan
+                .pointer("/capability/kind")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
             let modes = plan
-                .capability
-                .modes()
+                .pointer("/capability/modes")
+                .and_then(Value::as_array)
+                .map(Vec::as_slice)
+                .unwrap_or(&[])
                 .iter()
-                .map(|mode| format!("{mode:?}").to_ascii_lowercase())
+                .filter_map(Value::as_str)
                 .collect::<Vec<_>>()
                 .join("/");
-            let quick = if plan.is_quick_add() { "+quick" } else { "" };
-            let status = format!("{:?}", plan.status).to_ascii_lowercase();
-            let missing = if plan.missing_abilities.is_empty() {
+            let quick = if plan
+                .pointer("/capability/quick_add")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                "+quick"
+            } else {
+                ""
+            };
+            let status = plan
+                .get("status")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            let missing_abilities = plan
+                .get("missing_abilities")
+                .and_then(Value::as_array)
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            let missing = if missing_abilities.is_empty() {
                 String::new()
             } else {
-                format!(" missing={}", plan.missing_abilities.join("/"))
+                format!(" missing={}", string_array_label(missing_abilities))
             };
             format!("{kind}:{modes}{quick}+{status}{missing}")
         })
@@ -424,9 +442,8 @@ fn realtime_label(row: &PluginPackageSurfaceRecord) -> String {
         .join(",")
 }
 
-fn companion_field(row: &PluginPackageSurfaceRecord, field: &str) -> String {
-    row.companion
-        .as_ref()
+fn companion_field(row: &Value, field: &str) -> String {
+    row.get("companion")
         .and_then(|value| value.get(field))
         .and_then(serde_json::Value::as_str)
         .unwrap_or("-")
@@ -459,11 +476,31 @@ fn string_json(value: &serde_json::Value, field: &str) -> String {
         .to_string()
 }
 
-fn require_plugin_control_report(
-    report: Option<PluginSurfaceReport>,
-    command: &str,
-) -> anyhow::Result<PluginSurfaceReport> {
-    require_plugin_control_value(report, command)
+fn bool_json(value: &Value, field: &str) -> bool {
+    value.get(field).and_then(Value::as_bool).unwrap_or(false)
+}
+
+fn usize_json(value: &Value, field: &str) -> usize {
+    value
+        .get(field)
+        .and_then(Value::as_u64)
+        .and_then(|value| usize::try_from(value).ok())
+        .unwrap_or(0)
+}
+
+fn array_json<'a>(value: &'a Value, field: &str) -> anyhow::Result<&'a Vec<Value>> {
+    value
+        .get(field)
+        .and_then(Value::as_array)
+        .ok_or_else(|| anyhow::anyhow!("plugin control response missing `{field}` array"))
+}
+
+fn string_array_label(values: &[Value]) -> String {
+    values
+        .iter()
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 fn require_plugin_control_value<T>(value: Option<T>, command: &str) -> anyhow::Result<T> {
@@ -499,7 +536,7 @@ fn resolve_package(
     }
 }
 
-fn print_activation_report(report: &PluginRealtimeActivationReport) {
+fn print_activation_report(report: &Value) -> anyhow::Result<()> {
     let mut table = output::table(&[
         "package",
         "version",
@@ -511,37 +548,49 @@ fn print_activation_report(report: &PluginRealtimeActivationReport) {
         "permissions",
         "publish",
     ]);
-    for outcome in &report.outcomes {
+    for outcome in array_json(report, "outcomes")? {
         table.add_row([
-            outcome.package_id.clone(),
-            outcome.package_version.clone(),
+            string_json(outcome, "package_id"),
+            string_json(outcome, "package_version"),
             activation_capability_label(outcome),
             activation_transport_label(outcome),
-            outcome_status_label(outcome.status).to_string(),
+            string_json(outcome, "status"),
             activation_resources_label(outcome),
             activation_abilities_label(outcome),
             activation_permissions_label(outcome),
-            outcome.publish.realm_advertise.clone(),
+            outcome
+                .get("publish")
+                .map(|publish| string_json(publish, "realm_advertise"))
+                .unwrap_or_else(|| "-".to_string()),
         ]);
     }
     println!("{table}");
+    Ok(())
 }
 
-fn activation_transport_label(outcome: &PluginRealtimeActivationOutcome) -> String {
-    let status = transport_readiness_status_label(outcome.transport.status);
-    match outcome.transport.selected {
-        Some(selected) => format!("{}:{status}", transport_label(selected)),
-        None => status.to_string(),
+fn activation_transport_label(outcome: &Value) -> String {
+    let Some(transport) = outcome.get("transport") else {
+        return "-".to_string();
+    };
+    let status = string_json(transport, "status");
+    match transport.get("selected").and_then(Value::as_str) {
+        Some(selected) => format!("{selected}:{status}"),
+        None => status,
     }
 }
 
-fn activation_capability_label(outcome: &PluginRealtimeActivationOutcome) -> String {
-    let kind = realtime_kind_label(outcome.capability.kind());
-    let modes = outcome
-        .capability
-        .modes()
+fn activation_capability_label(outcome: &Value) -> String {
+    let Some(capability) = outcome.get("capability") else {
+        return "-".to_string();
+    };
+    let kind = string_json(capability, "kind");
+    let modes = capability
+        .get("modes")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[])
         .iter()
-        .map(|mode| realtime_mode_label(*mode))
+        .filter_map(Value::as_str)
         .collect::<Vec<_>>()
         .join("/");
     if modes.is_empty() {
@@ -551,15 +600,31 @@ fn activation_capability_label(outcome: &PluginRealtimeActivationOutcome) -> Str
     }
 }
 
-fn activation_resources_label(outcome: &PluginRealtimeActivationOutcome) -> String {
-    if !outcome.resources.missing.is_empty() {
-        return format!("missing={}", outcome.resources.missing.join("/"));
+fn activation_resources_label(outcome: &Value) -> String {
+    let Some(resources) = outcome.get("resources") else {
+        return "-".to_string();
+    };
+    let missing = resources
+        .get("missing")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    if !missing.is_empty() {
+        return format!("missing={}", string_array_label(missing));
     }
-    let available = outcome
-        .resources
-        .available
+    let available = resources
+        .get("available")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[])
         .iter()
-        .map(|item| format!("{}={}", item.kind, item.count))
+        .map(|item| {
+            format!(
+                "{}={}",
+                string_json(item, "kind"),
+                item.get("count").and_then(Value::as_u64).unwrap_or(0)
+            )
+        })
         .collect::<Vec<_>>();
     if available.is_empty() {
         "ready".to_string()
@@ -568,83 +633,44 @@ fn activation_resources_label(outcome: &PluginRealtimeActivationOutcome) -> Stri
     }
 }
 
-fn activation_abilities_label(outcome: &PluginRealtimeActivationOutcome) -> String {
-    if !outcome.missing_abilities.is_empty() {
-        return format!("missing={}", outcome.missing_abilities.join("/"));
+fn activation_abilities_label(outcome: &Value) -> String {
+    let missing = outcome
+        .get("missing_abilities")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    if !missing.is_empty() {
+        return format!("missing={}", string_array_label(missing));
     }
-    if outcome.available_abilities.is_empty() {
+    let available = outcome
+        .get("available_abilities")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    if available.is_empty() {
         "-".to_string()
     } else {
-        outcome.available_abilities.join("/")
+        string_array_label(available)
     }
 }
 
-fn activation_permissions_label(outcome: &PluginRealtimeActivationOutcome) -> String {
-    if outcome.permissions.required.is_empty() {
+fn activation_permissions_label(outcome: &Value) -> String {
+    let Some(permissions) = outcome.get("permissions") else {
+        return "-".to_string();
+    };
+    let required = permissions
+        .get("required")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    if required.is_empty() {
         return "not_required".to_string();
     }
     format!(
         "{}:{}",
-        outcome.permissions.required.join("/"),
-        permission_status_label(outcome.permissions.status)
+        string_array_label(required),
+        string_json(permissions, "status")
     )
-}
-
-fn outcome_status_label(status: PluginRealtimeOutcomeStatus) -> &'static str {
-    match status {
-        PluginRealtimeOutcomeStatus::Ready => "ready",
-        PluginRealtimeOutcomeStatus::Blocked => "blocked",
-        PluginRealtimeOutcomeStatus::Partial => "partial",
-        PluginRealtimeOutcomeStatus::Unsupported => "unsupported",
-        PluginRealtimeOutcomeStatus::Unknown => "unknown",
-    }
-}
-
-fn permission_status_label(status: PluginRealtimePermissionStatus) -> &'static str {
-    match status {
-        PluginRealtimePermissionStatus::NotRequired => "not_required",
-        PluginRealtimePermissionStatus::StatusAbilityAvailable => "status_ability_available",
-        PluginRealtimePermissionStatus::RequestAbilityAvailable => "request_ability_available",
-        PluginRealtimePermissionStatus::Unknown => "unknown",
-    }
-}
-
-fn transport_readiness_status_label(
-    status: PluginRealtimeTransportReadinessStatus,
-) -> &'static str {
-    match status {
-        PluginRealtimeTransportReadinessStatus::Unknown => "unknown",
-        PluginRealtimeTransportReadinessStatus::Ready => "ready",
-        PluginRealtimeTransportReadinessStatus::Blocked => "blocked",
-    }
-}
-
-fn transport_label(transport: PluginRealtimeTransport) -> &'static str {
-    match transport {
-        PluginRealtimeTransport::InvokeStream => "invoke_stream",
-        PluginRealtimeTransport::InvokeBidi => "invoke_bidi",
-        PluginRealtimeTransport::Webrtc => "webrtc",
-    }
-}
-
-fn realtime_kind_label(kind: PluginRealtimeKind) -> &'static str {
-    match kind {
-        PluginRealtimeKind::Camera => "camera",
-        PluginRealtimeKind::Mic => "mic",
-        PluginRealtimeKind::Screen => "screen",
-        PluginRealtimeKind::Speaker => "speaker",
-        PluginRealtimeKind::Voice => "voice",
-    }
-}
-
-fn realtime_mode_label(mode: PluginRealtimeMode) -> &'static str {
-    match mode {
-        PluginRealtimeMode::Snapshot => "snapshot",
-        PluginRealtimeMode::Subscribe => "subscribe",
-        PluginRealtimeMode::Record => "record",
-        PluginRealtimeMode::Publish => "publish",
-        PluginRealtimeMode::Transcribe => "transcribe",
-    }
 }
 
 fn notify_daemon_reload() -> anyhow::Result<()> {
@@ -670,7 +696,7 @@ fn invoke_plugin_reload() -> anyhow::Result<Option<serde_json::Value>> {
     )
 }
 
-fn invoke_plugin_status() -> anyhow::Result<Option<PluginSurfaceReport>> {
+fn invoke_plugin_status() -> anyhow::Result<Option<Value>> {
     let Some(value) = invoke_plugin_control_ability(
         crate::daemon::ability::builtins::integrations::plugins::STATUS_ABILITY,
         serde_json::json!({}),
@@ -678,13 +704,13 @@ fn invoke_plugin_status() -> anyhow::Result<Option<PluginSurfaceReport>> {
     else {
         return Ok(None);
     };
-    Ok(Some(serde_json::from_value(value)?))
+    Ok(Some(value))
 }
 
 fn invoke_plugin_activate_realtime(
     id: &str,
     version: Option<&str>,
-) -> anyhow::Result<Option<PluginRealtimeActivationReport>> {
+) -> anyhow::Result<Option<Value>> {
     let mut body = serde_json::json!({ "package_id": id });
     if let Some(version) = version {
         body["package_version"] = serde_json::json!(version);
@@ -696,7 +722,7 @@ fn invoke_plugin_activate_realtime(
     else {
         return Ok(None);
     };
-    Ok(Some(serde_json::from_value(value)?))
+    Ok(Some(value))
 }
 
 fn invoke_companion_status(

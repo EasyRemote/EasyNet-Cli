@@ -6,7 +6,7 @@
 
 use std::collections::BTreeSet;
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use crate::daemon::ability::builtins::resources::media;
 use crate::daemon::plugins::manifest::{
@@ -15,7 +15,7 @@ use crate::daemon::plugins::manifest::{
 };
 
 /// Runtime readiness for one plugin realtime capability declaration.
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum PluginRealtimeActivationStatus {
     /// The daemon ability catalog was not supplied, so readiness is unknown.
@@ -36,7 +36,7 @@ pub enum PluginRealtimeActivationStatus {
 /// This is not an AbilityDescriptor and it does not register handlers. It only
 /// tells the UI/CLI which existing daemon abilities can activate the declared
 /// realtime surface, and which gaps still need implementation.
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct PluginRealtimeActivationPlan {
     pub package_id: String,
     pub package_version: String,
@@ -66,7 +66,7 @@ impl PluginRealtimeActivationPlan {
 }
 
 /// Readiness of the declared realtime transport.
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct PluginRealtimeTransportReadiness {
     pub primary: PluginRealtimeTransport,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -86,7 +86,7 @@ impl Default for PluginRealtimeTransportReadiness {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum PluginRealtimeTransportReadinessStatus {
     Unknown,
@@ -94,7 +94,7 @@ pub enum PluginRealtimeTransportReadinessStatus {
     Blocked,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct PluginRealtimeTransportAdapterReadiness {
     pub transport: PluginRealtimeTransport,
     pub required_abilities: Vec<String>,
@@ -105,7 +105,7 @@ pub struct PluginRealtimeTransportAdapterReadiness {
     pub status: PluginRealtimeTransportAdapterStatus,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum PluginRealtimeTransportAdapterStatus {
     Unknown,
@@ -113,7 +113,7 @@ pub enum PluginRealtimeTransportAdapterStatus {
     Blocked,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct PluginRealtimeTransportRoleReadiness {
     pub role: String,
     pub required: bool,
@@ -122,7 +122,7 @@ pub struct PluginRealtimeTransportRoleReadiness {
     pub status: PluginRealtimeTransportRoleStatus,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum PluginRealtimeTransportRoleStatus {
     Unknown,
