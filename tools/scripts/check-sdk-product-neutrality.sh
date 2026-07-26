@@ -164,8 +164,10 @@ for required in ("runtime_host_ura", "control_authority_ura"):
     if required not in fields:
         raise SystemExit(f"python_runtime_admin_session_projection:missing_field:{required}")
 for required_mapping in (
+    "_RUNTIME_SESSION_ROW_FIELDS",
+    "set(row) - _RUNTIME_SESSION_ROW_FIELDS",
     'runtime_host_ura=_required_admin_string(row, "runtime_host_ura")',
-    'control_authority_ura=_required_admin_string(',
+    'control_authority_ura=_required_admin_string(row, "control_authority_ura")',
 ):
     if required_mapping not in text:
         raise SystemExit(
@@ -181,8 +183,8 @@ for retired_mapping in (
             "python_runtime_admin_session_projection:retired_wire_mapping:"
             + retired_mapping
         )
-if "retired device_ura field" not in text:
-    raise SystemExit("python_runtime_admin_session_projection:retired_wire_rejection_missing")
+if "retired device_ura field" in text or "retired authority_ura field" in text:
+    raise SystemExit("python_runtime_admin_session_projection:retired_wire_rejection_branch")
 PY
 }
 
@@ -217,8 +219,8 @@ for required in (
     if required not in body:
         raise SystemExit(f"go_runtime_admin_session_projection:missing_field:{required}")
 for required_mapping in (
-    r"RuntimeHostURA:\s+runtimeHostURA",
-    r"ControlAuthorityURA:\s+controlAuthorityURA",
+    r"runtimeSessionFromRow\(row\)",
+    r"decoder\.DisallowUnknownFields\(\)",
 ):
     if not re.search(required_mapping, text):
         raise SystemExit(
@@ -234,8 +236,8 @@ for retired_mapping in (
             "go_runtime_admin_session_projection:retired_wire_mapping:"
             + retired_mapping
         )
-if "retired device_ura field" not in text:
-    raise SystemExit("go_runtime_admin_session_projection:retired_wire_rejection_missing")
+if "retired device_ura field" in text or "retired authority_ura field" in text:
+    raise SystemExit("go_runtime_admin_session_projection:retired_wire_rejection_branch")
 PY
 }
 
@@ -428,12 +430,16 @@ class RuntimeSession:
     runtime_host_ura: str = ""
     control_authority_ura: str = ""
 def _runtime_session_page(row):
+    return _runtime_session_from_row(row)
+_RUNTIME_SESSION_ROW_FIELDS = frozenset({"runtime_host_ura", "control_authority_ura"})
+def _runtime_session_from_row(row):
+    unknown = set(row) - _RUNTIME_SESSION_ROW_FIELDS
+    if unknown:
+        raise Exception("unknown field")
     return RuntimeSession(
         runtime_host_ura=_required_admin_string(row, "runtime_host_ura"),
         control_authority_ura=_required_admin_string(row, "control_authority_ura"),
     )
-def _reject(row):
-    raise Exception("retired device_ura field")
 PY
   python_runtime_admin_session_projection_violations "$injected" \
     || fail "self-test rejected neutral runtime-admin session projection"
@@ -457,13 +463,12 @@ type RuntimeSession struct {
 	ControlAuthorityURA string `json:"control_authority_ura,omitempty"`
 }
 func runtimeSessionPage(row map[string]any) {
-	runtimeHostURA := requiredRuntimeAdminString(row, "runtime_host_ura")
-	controlAuthorityURA := requiredRuntimeAdminString(row, "control_authority_ura")
-	_ = "retired device_ura field"
-	_ = RuntimeSession{
-		RuntimeHostURA:      runtimeHostURA,
-		ControlAuthorityURA: controlAuthorityURA,
-	}
+	_, _ = runtimeSessionFromRow(row)
+}
+func runtimeSessionFromRow(row map[string]any) (RuntimeSession, error) {
+	var decoder interface{ DisallowUnknownFields() }
+	decoder.DisallowUnknownFields()
+	return RuntimeSession{}, nil
 }
 GO
   go_runtime_admin_session_projection_violations "$injected" \

@@ -214,38 +214,49 @@ def _runtime_session_page(output: Mapping[str, object]) -> RuntimeSessionPage:
     for row in raw_rows:
         if not isinstance(row, Mapping):
             raise _invalid_admin("runtime admin response field sessions entries must be objects")
-        if "device_ura" in row:
-            raise _invalid_admin(
-                "runtime admin session row preserves retired device_ura field"
-            )
-        if "authority_ura" in row:
-            raise _invalid_admin(
-                "runtime admin session row preserves retired authority_ura field"
-            )
-        raw_metadata = row.get("metadata")
-        sessions.append(
-            RuntimeSession(
-                kind=_admin_string(row.get("kind")),
-                session_id=_required_admin_string(row, "session_id"),
-                runtime_host_ura=_required_admin_string(row, "runtime_host_ura"),
-                control_authority_ura=_required_admin_string(
-                    row, "control_authority_ura"
-                ),
-                state=_required_admin_string(row, "state"),
-                session_kind=_admin_string(row.get("session_kind")),
-                created_unix_ms=_admin_int(row.get("created_unix_ms")),
-                expires_unix_ms=_admin_int(row.get("expires_unix_ms")),
-                metadata=dict(raw_metadata)
-                if isinstance(raw_metadata, Mapping)
-                else {},
-            )
-        )
+        sessions.append(_runtime_session_from_row(row))
     return RuntimeSessionPage(
         system_ability=_RUNTIME_ADMIN_SESSION_LIST_ABILITY,
         state=_admin_string(output.get("state")),
         sessions=tuple(sessions),
         next_cursor=output.get("next_cursor"),
         raw=dict(output),
+    )
+
+
+_RUNTIME_SESSION_ROW_FIELDS = frozenset(
+    {
+        "kind",
+        "session_id",
+        "runtime_host_ura",
+        "control_authority_ura",
+        "state",
+        "session_kind",
+        "created_unix_ms",
+        "expires_unix_ms",
+        "metadata",
+    }
+)
+
+
+def _runtime_session_from_row(row: Mapping[str, object]) -> RuntimeSession:
+    unknown = sorted(set(row) - _RUNTIME_SESSION_ROW_FIELDS)
+    if unknown:
+        raise _invalid_admin(
+            "runtime admin session row is not canonical: unknown field "
+            + ", ".join(unknown)
+        )
+    raw_metadata = row.get("metadata")
+    return RuntimeSession(
+        kind=_admin_string(row.get("kind")),
+        session_id=_required_admin_string(row, "session_id"),
+        runtime_host_ura=_required_admin_string(row, "runtime_host_ura"),
+        control_authority_ura=_required_admin_string(row, "control_authority_ura"),
+        state=_required_admin_string(row, "state"),
+        session_kind=_admin_string(row.get("session_kind")),
+        created_unix_ms=_admin_int(row.get("created_unix_ms")),
+        expires_unix_ms=_admin_int(row.get("expires_unix_ms")),
+        metadata=dict(raw_metadata) if isinstance(raw_metadata, Mapping) else {},
     )
 
 

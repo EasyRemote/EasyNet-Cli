@@ -310,7 +310,7 @@ def test_runtime_admin_ability_client_accepts_empty_sessions() -> None:
     assert page.sessions == ()
 
 
-def test_runtime_admin_ability_client_rejects_retired_session_wire_fields() -> None:
+def test_runtime_admin_ability_client_rejects_non_canonical_session_wire_fields() -> None:
     client, transport = _ability_client()
     transport.output_json = {
         "state": "ok",
@@ -328,9 +328,10 @@ def test_runtime_admin_ability_client_rejects_retired_session_wire_fields() -> N
         client.list_sessions(RuntimeSessionListRequest(call=_call()))
     except SDKError as exc:
         assert exc.code == ErrorCode.INVALID_ARGUMENT
-        assert "retired device_ura field" in exc.message
+        assert "not canonical" in exc.message
+        assert "device_ura" in exc.message
     else:
-        raise AssertionError("ListSessions accepted retired session wire fields")
+        raise AssertionError("ListSessions accepted non-canonical session wire fields")
 
 
 def test_runtime_admin_ability_client_rejects_legacy_session_items() -> None:

@@ -1697,17 +1697,17 @@ check_sdk_runtime_admin_authority_session_contract() {
     if ! rg -q '`json:"control_authority_ura,omitempty"`' "$go_admin"; then
       fail "Go SDK runtime-admin session projection must serialize control_authority_ura"
     fi
-    if ! rg -q 'RuntimeHostURA:\s+runtimeHostURA' "$go_admin"; then
-      fail "Go SDK runtime-admin adapter must decode canonical runtime_host_ura"
+    if ! rg -q 'runtimeSessionFromRow\(row\)' "$go_admin"; then
+      fail "Go SDK runtime-admin adapter must use the canonical session row schema decoder"
     fi
-    if ! rg -q 'ControlAuthorityURA:\s+controlAuthorityURA' "$go_admin"; then
-      fail "Go SDK runtime-admin adapter must decode canonical control_authority_ura"
+    if ! rg -q 'decoder\.DisallowUnknownFields\(\)' "$go_admin"; then
+      fail "Go SDK runtime-admin adapter must reject non-canonical session row fields through exact schema decoding"
     fi
     if rg -n 'runtimeAdminString\(row, "(hub_ura|device_ura|authority_ura)"\)' "$go_admin"; then
       fail "Go SDK runtime-admin adapter preserves retired product-shaped session wire fallback"
     fi
-    if ! rg -q 'retired device_ura field' "$go_admin"; then
-      fail "Go SDK runtime-admin adapter must reject retired session wire fields"
+    if rg -n 'retired (device_ura|authority_ura) field' "$go_admin"; then
+      fail "Go SDK runtime-admin adapter preserves retired session wire rejection branch"
     fi
   fi
 
@@ -1721,17 +1721,17 @@ check_sdk_runtime_admin_authority_session_contract() {
     if ! rg -q 'control_authority_ura: str = ""' "$py_admin"; then
       fail "Python SDK runtime-admin session projection must expose control_authority_ura"
     fi
-    if ! rg -q 'runtime_host_ura=_required_admin_string\(row, "runtime_host_ura"\)' "$py_admin"; then
-      fail "Python SDK runtime-admin adapter must decode canonical runtime_host_ura"
+    if ! rg -q '_RUNTIME_SESSION_ROW_FIELDS' "$py_admin"; then
+      fail "Python SDK runtime-admin adapter must declare the canonical session row schema"
     fi
-    if ! rg -q 'control_authority_ura=_required_admin_string\(' "$py_admin"; then
-      fail "Python SDK runtime-admin adapter must decode canonical control_authority_ura"
+    if ! rg -q 'set\(row\) - _RUNTIME_SESSION_ROW_FIELDS' "$py_admin"; then
+      fail "Python SDK runtime-admin adapter must reject non-canonical session row fields through exact schema guarding"
     fi
     if rg -n 'row.get\("(hub_ura|device_ura|authority_ura)"\)' "$py_admin"; then
       fail "Python SDK runtime-admin adapter preserves retired product-shaped session wire fallback"
     fi
-    if ! rg -q 'retired device_ura field' "$py_admin"; then
-      fail "Python SDK runtime-admin adapter must reject retired session wire fields"
+    if rg -n 'retired (device_ura|authority_ura) field' "$py_admin"; then
+      fail "Python SDK runtime-admin adapter preserves retired session wire rejection branch"
     fi
   fi
 

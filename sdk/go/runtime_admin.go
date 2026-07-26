@@ -1,7 +1,9 @@
 package easynet
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"strings"
 )
 
@@ -228,39 +230,11 @@ func runtimeSessionPage(output map[string]any) (RuntimeSessionPage, error) {
 	}
 	sessions := make([]RuntimeSession, 0, len(rows))
 	for _, row := range rows {
-		if _, ok := row["device_ura"]; ok {
-			return RuntimeSessionPage{}, invalidRuntimePayload("runtime admin session row preserves retired device_ura field", nil)
-		}
-		if _, ok := row["authority_ura"]; ok {
-			return RuntimeSessionPage{}, invalidRuntimePayload("runtime admin session row preserves retired authority_ura field", nil)
-		}
-		sessionID, err := requiredRuntimeAdminString(row, "session_id")
+		session, err := runtimeSessionFromRow(row)
 		if err != nil {
 			return RuntimeSessionPage{}, err
 		}
-		runtimeHostURA, err := requiredRuntimeAdminString(row, "runtime_host_ura")
-		if err != nil {
-			return RuntimeSessionPage{}, err
-		}
-		controlAuthorityURA, err := requiredRuntimeAdminString(row, "control_authority_ura")
-		if err != nil {
-			return RuntimeSessionPage{}, err
-		}
-		state, err := requiredRuntimeAdminString(row, "state")
-		if err != nil {
-			return RuntimeSessionPage{}, err
-		}
-		sessions = append(sessions, RuntimeSession{
-			Kind:                runtimeAdminString(row, "kind"),
-			SessionID:           sessionID,
-			RuntimeHostURA:      runtimeHostURA,
-			ControlAuthorityURA: controlAuthorityURA,
-			State:               state,
-			SessionKind:         runtimeAdminString(row, "session_kind"),
-			CreatedUnixMS:       runtimeAdminInt64(row["created_unix_ms"]),
-			ExpiresUnixMS:       runtimeAdminInt64(row["expires_unix_ms"]),
-			Metadata:            runtimeAdminMap(row["metadata"]),
-		})
+		sessions = append(sessions, session)
 	}
 	return RuntimeSessionPage{
 		SystemAbility: runtimeAdminSessionListAbility,
@@ -269,6 +243,39 @@ func runtimeSessionPage(output map[string]any) (RuntimeSessionPage, error) {
 		NextCursor:    output["next_cursor"],
 		Raw:           cloneRuntimeAdminMap(output),
 	}, nil
+}
+
+func runtimeSessionFromRow(row map[string]any) (RuntimeSession, error) {
+	raw, err := json.Marshal(row)
+	if err != nil {
+		return RuntimeSession{}, invalidRuntimePayload("runtime admin session row is not canonical", err)
+	}
+	var session RuntimeSession
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&session); err != nil {
+		return RuntimeSession{}, invalidRuntimePayload("runtime admin session row is not canonical: "+err.Error(), nil)
+	}
+	session.Kind = strings.TrimSpace(session.Kind)
+	session.SessionID = strings.TrimSpace(session.SessionID)
+	session.RuntimeHostURA = strings.TrimSpace(session.RuntimeHostURA)
+	session.ControlAuthorityURA = strings.TrimSpace(session.ControlAuthorityURA)
+	session.State = strings.TrimSpace(session.State)
+	session.SessionKind = strings.TrimSpace(session.SessionKind)
+	if session.Metadata == nil {
+		session.Metadata = map[string]any{}
+	}
+	for field, value := range map[string]string{
+		"session_id":            session.SessionID,
+		"runtime_host_ura":      session.RuntimeHostURA,
+		"control_authority_ura": session.ControlAuthorityURA,
+		"state":                 session.State,
+	} {
+		if value == "" {
+			return RuntimeSession{}, invalidRuntimePayload("runtime admin session row field "+field+" is required", nil)
+		}
+	}
+	return session, nil
 }
 
 func cloneRuntimeAdminMap(input map[string]any) map[string]any {
@@ -288,13 +295,6 @@ func runtimeAdminString(value map[string]any, keys ...string) string {
 	return ""
 }
 
-func requiredRuntimeAdminString(value map[string]any, key string) (string, error) {
-	if raw, ok := value[key].(string); ok && strings.TrimSpace(raw) != "" {
-		return strings.TrimSpace(raw), nil
-	}
-	return "", invalidRuntimePayload("runtime admin session row field "+key+" is required", nil)
-}
-
 func requiredRuntimeAdminBool(output map[string]any, field string) (bool, error) {
 	raw, ok := output[field].(bool)
 	if !ok {
@@ -312,26 +312,6 @@ func optionalRuntimeAdminBool(output map[string]any, field string) (bool, error)
 		return raw, nil
 	}
 	return false, invalidRuntimePayload("runtime admin response field "+field+" must be a boolean", nil)
-}
-
-func runtimeAdminInt64(value any) int64 {
-	switch raw := value.(type) {
-	case float64:
-		return int64(raw)
-	case int64:
-		return raw
-	case int:
-		return int64(raw)
-	default:
-		return 0
-	}
-}
-
-func runtimeAdminMap(value any) map[string]any {
-	if raw, ok := value.(map[string]any); ok && raw != nil {
-		return raw
-	}
-	return map[string]any{}
 }
 
 func requiredRuntimeAdminSessionRows(output map[string]any, field string) ([]map[string]any, error) {

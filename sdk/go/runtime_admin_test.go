@@ -173,7 +173,7 @@ func TestRuntimeAdminAbilityClientListsSessions(t *testing.T) {
 	}
 }
 
-func TestRuntimeAdminAbilityClientRejectsRetiredSessionWireFields(t *testing.T) {
+func TestRuntimeAdminAbilityClientRejectsNonCanonicalSessionWireFields(t *testing.T) {
 	capture := &runtimeAdminInvokeCapture{outputJSON: `{
 		"state": "ok",
 		"sessions": [{
@@ -189,10 +189,11 @@ func TestRuntimeAdminAbilityClientRejectsRetiredSessionWireFields(t *testing.T) 
 		Call: runtimeAdminTestCall(),
 	})
 	if err == nil {
-		t.Fatal("ListSessions accepted retired runtime-admin session wire fields")
+		t.Fatal("ListSessions accepted non-canonical runtime-admin session wire fields")
 	}
-	if !strings.Contains(err.Error(), "retired device_ura field") {
-		t.Fatalf("error = %v, want retired device_ura rejection", err)
+	if !strings.Contains(err.Error(), "not canonical") ||
+		(!strings.Contains(err.Error(), "device_ura") && !strings.Contains(err.Error(), "authority_ura")) {
+		t.Fatalf("error = %v, want non-canonical session field rejection", err)
 	}
 }
 
