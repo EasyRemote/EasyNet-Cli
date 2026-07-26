@@ -13748,9 +13748,29 @@ for retired in (
     "PluginRealtimeActivationReport",
     "PluginRealtimeActivationOutcome",
     "serde_json::from_value(value)",
+    "fn string_json(",
+    "fn bool_json(",
+    "fn usize_json(",
+    "bool_label(bool_json(",
+    "usize_json(package, \"ability_count\").to_string()",
+    "item.get(\"count\").and_then(Value::as_u64).unwrap_or(0)",
 ):
     if retired in cli_production:
         raise SystemExit(f"plugin_realtime_output_read_model:cli_internal_report_deserialize:{retired}")
+for required in (
+    "fn required_string_json(",
+    "fn required_bool_json(",
+    "fn required_usize_json(",
+    "required_string_json(package, \"package_id\")?",
+    "required_bool_json(package, \"runtime_published\")?",
+    "required_usize_json(package, \"ability_count\")?.to_string()",
+    "required_usize_json(item, \"count\")?",
+    "plugin_table_projection_rejects_malformed_required_scalar",
+    "plugin_realtime_label_rejects_malformed_activation_plan",
+    "plugin_activation_table_rejects_malformed_nested_report",
+):
+    if required not in cli:
+        raise SystemExit(f"plugin_realtime_output_read_model:cli_strict_projection_missing:{required}")
 PY
 }
 
@@ -19757,6 +19777,126 @@ fn invoke_plugin_activate_realtime(value: serde_json::Value) -> anyhow::Result<P
 EOF
   if ( CLI_ROOT="$tmp/plugin-realtime-read-model-legacy"; check_plugin_realtime_output_read_model_contract ) >/dev/null 2>&1; then
     fail "self-test expected plugin realtime output read model gate to fail"
+  fi
+  mkdir -p "$tmp/plugin-cli-projection-fallback-legacy/src/daemon/plugins" \
+    "$tmp/plugin-cli-projection-fallback-legacy/src/cli/commands/groups"
+  cat >"$tmp/plugin-cli-projection-fallback-legacy/src/daemon/plugins/realtime.rs" <<'EOF'
+use serde::Serialize;
+
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+pub enum PluginRealtimeActivationStatus {
+    Ready,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct PluginRealtimeActivationPlan {
+    pub status: PluginRealtimeActivationStatus,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct PluginRealtimeTransportReadiness;
+
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+pub enum PluginRealtimeTransportReadinessStatus {
+    Ready,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct PluginRealtimeTransportAdapterReadiness;
+
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+pub enum PluginRealtimeTransportAdapterStatus {
+    Ready,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct PluginRealtimeTransportRoleReadiness;
+
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+pub enum PluginRealtimeTransportRoleStatus {
+    Satisfied,
+}
+EOF
+  cat >"$tmp/plugin-cli-projection-fallback-legacy/src/daemon/plugins/surface.rs" <<'EOF'
+use serde::Serialize;
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct PluginSurfaceReport;
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PluginPackageSurfaceRecord;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub enum PluginAbilitySurface {
+    Invocation,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PluginAbilitySurfaceRecord;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub enum PluginKindView {
+    Sidecar,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub enum PluginAbilityLayerView {
+    Operational,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub enum CallModeView {
+    Rpc,
+}
+EOF
+  cat >"$tmp/plugin-cli-projection-fallback-legacy/src/daemon/plugins/broker.rs" <<'EOF'
+use serde::Serialize;
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PluginRealtimeResourceReadiness;
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PluginRealtimeResourceMatch;
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PluginRealtimePermissionReadiness;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub enum PluginRealtimePermissionStatus {
+    Unknown,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PluginRealtimeActivationOutcome;
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PluginRealtimeActivationReport;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub enum PluginRealtimeOutcomeStatus {
+    Unknown,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PluginRealtimePublishReadiness;
+EOF
+  cat >"$tmp/plugin-cli-projection-fallback-legacy/src/cli/commands/groups/plugin.rs" <<'EOF'
+use serde_json::Value;
+
+fn string_json(value: &Value, field: &str) -> String {
+    value.get(field).and_then(Value::as_str).unwrap_or("-").to_string()
+}
+
+fn bool_json(value: &Value, field: &str) -> bool {
+    value.get(field).and_then(Value::as_bool).unwrap_or(false)
+}
+
+fn usize_json(value: &Value, field: &str) -> usize {
+    value.get(field).and_then(Value::as_u64).map(|value| value as usize).unwrap_or(0)
+}
+EOF
+  if ( CLI_ROOT="$tmp/plugin-cli-projection-fallback-legacy"; check_plugin_realtime_output_read_model_contract ) >/dev/null 2>&1; then
+    fail "self-test expected plugin CLI fallback projection gate to fail"
   fi
   mkdir -p "$tmp/cli-browser-mock/src/daemon/ability/builtins/device_control" \
     "$tmp/cli-browser-mock/ability-descriptors/system/device_control" \

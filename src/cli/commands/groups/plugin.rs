@@ -211,19 +211,19 @@ fn run_list(args: ListArgs) -> anyhow::Result<()> {
                 "observed",
             ]);
             for package in array_json(&report, "packages")? {
-                let realtime = realtime_label(package);
+                let realtime = realtime_label(package)?;
                 let companion = companion_field(package, "projected_state");
                 let supervisor = companion_field(package, "supervisor_state");
                 let observed = companion_field(package, "observed_state");
                 package_table.add_row([
-                    string_json(package, "package_id"),
-                    string_json(package, "package_version"),
-                    string_json(package, "kind"),
-                    string_json(package, "planned_load_status"),
-                    string_json(package, "daemon_runtime_status"),
-                    usize_json(package, "ability_count").to_string(),
-                    bool_label(bool_json(package, "runtime_published")),
-                    bool_label(bool_json(package, "invokable")),
+                    required_string_json(package, "package_id")?,
+                    required_string_json(package, "package_version")?,
+                    required_string_json(package, "kind")?,
+                    required_string_json(package, "planned_load_status")?,
+                    required_string_json(package, "daemon_runtime_status")?,
+                    required_usize_json(package, "ability_count")?.to_string(),
+                    bool_label(required_bool_json(package, "runtime_published")?),
+                    bool_label(required_bool_json(package, "invokable")?),
                     realtime,
                     companion,
                     supervisor,
@@ -246,16 +246,16 @@ fn run_list(args: ListArgs) -> anyhow::Result<()> {
             ]);
             for row in array_json(&report, "abilities")? {
                 ability_table.add_row([
-                    string_json(row, "package_id"),
-                    string_json(row, "package_version"),
-                    string_json(row, "ability"),
-                    string_json(row, "kind"),
-                    string_json(row, "call_mode"),
-                    string_json(row, "planned_load_status"),
-                    string_json(row, "daemon_runtime_status"),
-                    bool_label(bool_json(row, "descriptor_published")),
-                    bool_label(bool_json(row, "runtime_published")),
-                    bool_label(bool_json(row, "invokable")),
+                    required_string_json(row, "package_id")?,
+                    required_string_json(row, "package_version")?,
+                    required_string_json(row, "ability")?,
+                    required_string_json(row, "kind")?,
+                    required_string_json(row, "call_mode")?,
+                    required_string_json(row, "planned_load_status")?,
+                    required_string_json(row, "daemon_runtime_status")?,
+                    bool_label(required_bool_json(row, "descriptor_published")?),
+                    bool_label(required_bool_json(row, "runtime_published")?),
+                    bool_label(required_bool_json(row, "invokable")?),
                 ]);
             }
             println!("{ability_table}");
@@ -338,24 +338,32 @@ fn run_status(args: PluginStatusArgs) -> anyhow::Result<()> {
     }
 
     let report = require_plugin_control_value(invoke_plugin_status()?, "plugin status")?;
-    let Some(row) = array_json(&report, "packages")?.iter().find(|row| {
-        string_json(row, "package_id") == args.id
+    let mut selected_row = None;
+    for row in array_json(&report, "packages")? {
+        let package_id = required_string_json(row, "package_id")?;
+        let package_version = required_string_json(row, "package_version")?;
+        if package_id == args.id
             && args
                 .version
                 .as_deref()
-                .map(|version| string_json(row, "package_version") == version)
+                .map(|version| package_version == version)
                 .unwrap_or(true)
-    }) else {
+        {
+            selected_row = Some(row);
+            break;
+        }
+    }
+    let Some(row) = selected_row else {
         anyhow::bail!("plugin package not found: {}", args.id);
     };
     if args.json {
         println!("{}", serde_json::to_string_pretty(&row)?);
     } else {
-        let package = string_json(row, "package_id");
-        let version = string_json(row, "package_version");
-        let kind = string_json(row, "kind");
-        let planned = string_json(row, "planned_load_status");
-        let daemon = string_json(row, "daemon_runtime_status");
+        let package = required_string_json(row, "package_id")?;
+        let version = required_string_json(row, "package_version")?;
+        let kind = required_string_json(row, "kind")?;
+        let planned = required_string_json(row, "planned_load_status")?;
+        let daemon = required_string_json(row, "daemon_runtime_status")?;
         output::kv_section(&[
             ("Package", package.as_str()),
             ("Version", version.as_str()),
@@ -388,58 +396,65 @@ fn bool_label(value: bool) -> String {
     }
 }
 
-fn realtime_label(row: &Value) -> String {
+fn realtime_label(row: &Value) -> anyhow::Result<String> {
     let plans = row
         .get("realtime_activation_plans")
         .and_then(Value::as_array)
         .map(Vec::as_slice)
         .unwrap_or(&[]);
     if plans.is_empty() {
-        return "-".to_string();
+        return Ok("-".to_string());
     }
-    plans
+    let labels = plans
         .iter()
-        .map(|plan| {
+        .map(|plan| -> anyhow::Result<String> {
             let kind = plan
                 .pointer("/capability/kind")
                 .and_then(Value::as_str)
-                .unwrap_or("unknown");
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "plugin control response field `capability.kind` must be a string"
+                    )
+                })?;
             let modes = plan
                 .pointer("/capability/modes")
                 .and_then(Value::as_array)
-                .map(Vec::as_slice)
-                .unwrap_or(&[])
-                .iter()
-                .filter_map(Value::as_str)
-                .collect::<Vec<_>>()
-                .join("/");
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "plugin control response field `capability.modes` must be an array"
+                    )
+                })?;
+            let modes = string_array_label(modes)?;
             let quick = if plan
                 .pointer("/capability/quick_add")
                 .and_then(Value::as_bool)
-                .unwrap_or(false)
-            {
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "plugin control response field `capability.quick_add` must be a boolean"
+                    )
+                })? {
                 "+quick"
             } else {
                 ""
             };
-            let status = plan
-                .get("status")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown");
+            let status = required_string_json(plan, "status")?;
             let missing_abilities = plan
                 .get("missing_abilities")
                 .and_then(Value::as_array)
-                .map(Vec::as_slice)
-                .unwrap_or(&[]);
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "plugin control response field `missing_abilities` must be an array"
+                    )
+                })?;
             let missing = if missing_abilities.is_empty() {
                 String::new()
             } else {
-                format!(" missing={}", string_array_label(missing_abilities))
+                format!(" missing={}", string_array_label(missing_abilities)?)
             };
-            format!("{kind}:{modes}{quick}+{status}{missing}")
+            Ok(format!("{kind}:{modes}{quick}+{status}{missing}"))
         })
-        .collect::<Vec<_>>()
-        .join(",")
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    Ok(labels.join(","))
 }
 
 fn companion_field(row: &Value, field: &str) -> String {
@@ -452,14 +467,17 @@ fn companion_field(row: &Value, field: &str) -> String {
 
 fn print_companion_status(status: &serde_json::Value) {
     let rows: Vec<(&str, String)> = vec![
-        ("Package", string_json(status, "package_id")),
-        ("Version", string_json(status, "package_version")),
-        ("Display", string_json(status, "display_name")),
-        ("Platform", string_json(status, "platform")),
-        ("State", string_json(status, "projected_state")),
-        ("Desired", string_json(status, "desired_state")),
-        ("Supervisor", string_json(status, "supervisor_state")),
-        ("Observed", string_json(status, "observed_state")),
+        ("Package", optional_string_json(status, "package_id")),
+        ("Version", optional_string_json(status, "package_version")),
+        ("Display", optional_string_json(status, "display_name")),
+        ("Platform", optional_string_json(status, "platform")),
+        ("State", optional_string_json(status, "projected_state")),
+        ("Desired", optional_string_json(status, "desired_state")),
+        (
+            "Supervisor",
+            optional_string_json(status, "supervisor_state"),
+        ),
+        ("Observed", optional_string_json(status, "observed_state")),
     ];
     let kv = rows
         .iter()
@@ -468,7 +486,7 @@ fn print_companion_status(status: &serde_json::Value) {
     output::kv_section(&kv);
 }
 
-fn string_json(value: &serde_json::Value, field: &str) -> String {
+fn optional_string_json(value: &serde_json::Value, field: &str) -> String {
     value
         .get(field)
         .and_then(serde_json::Value::as_str)
@@ -476,16 +494,31 @@ fn string_json(value: &serde_json::Value, field: &str) -> String {
         .to_string()
 }
 
-fn bool_json(value: &Value, field: &str) -> bool {
-    value.get(field).and_then(Value::as_bool).unwrap_or(false)
+fn required_string_json(value: &serde_json::Value, field: &str) -> anyhow::Result<String> {
+    value
+        .get(field)
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| anyhow::anyhow!("plugin control response field `{field}` must be a string"))
 }
 
-fn usize_json(value: &Value, field: &str) -> usize {
+fn required_bool_json(value: &Value, field: &str) -> anyhow::Result<bool> {
+    value
+        .get(field)
+        .and_then(Value::as_bool)
+        .ok_or_else(|| anyhow::anyhow!("plugin control response field `{field}` must be a boolean"))
+}
+
+fn required_usize_json(value: &Value, field: &str) -> anyhow::Result<usize> {
     value
         .get(field)
         .and_then(Value::as_u64)
         .and_then(|value| usize::try_from(value).ok())
-        .unwrap_or(0)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "plugin control response field `{field}` must be a non-negative integer"
+            )
+        })
 }
 
 fn array_json<'a>(value: &'a Value, field: &str) -> anyhow::Result<&'a Vec<Value>> {
@@ -495,12 +528,16 @@ fn array_json<'a>(value: &'a Value, field: &str) -> anyhow::Result<&'a Vec<Value
         .ok_or_else(|| anyhow::anyhow!("plugin control response missing `{field}` array"))
 }
 
-fn string_array_label(values: &[Value]) -> String {
+fn string_array_label(values: &[Value]) -> anyhow::Result<String> {
     values
         .iter()
-        .filter_map(Value::as_str)
-        .collect::<Vec<_>>()
-        .join("/")
+        .map(|value| {
+            value.as_str().ok_or_else(|| {
+                anyhow::anyhow!("plugin control response string array contains a non-string item")
+            })
+        })
+        .collect::<anyhow::Result<Vec<_>>>()
+        .map(|items| items.join("/"))
 }
 
 fn require_plugin_control_value<T>(value: Option<T>, command: &str) -> anyhow::Result<T> {
@@ -550,127 +587,143 @@ fn print_activation_report(report: &Value) -> anyhow::Result<()> {
     ]);
     for outcome in array_json(report, "outcomes")? {
         table.add_row([
-            string_json(outcome, "package_id"),
-            string_json(outcome, "package_version"),
-            activation_capability_label(outcome),
-            activation_transport_label(outcome),
-            string_json(outcome, "status"),
-            activation_resources_label(outcome),
-            activation_abilities_label(outcome),
-            activation_permissions_label(outcome),
+            required_string_json(outcome, "package_id")?,
+            required_string_json(outcome, "package_version")?,
+            activation_capability_label(outcome)?,
+            activation_transport_label(outcome)?,
+            required_string_json(outcome, "status")?,
+            activation_resources_label(outcome)?,
+            activation_abilities_label(outcome)?,
+            activation_permissions_label(outcome)?,
             outcome
                 .get("publish")
-                .map(|publish| string_json(publish, "realm_advertise"))
-                .unwrap_or_else(|| "-".to_string()),
+                .ok_or_else(|| {
+                    anyhow::anyhow!("plugin control response field `publish` must be an object")
+                })
+                .and_then(|publish| required_string_json(publish, "realm_advertise"))?,
         ]);
     }
     println!("{table}");
     Ok(())
 }
 
-fn activation_transport_label(outcome: &Value) -> String {
-    let Some(transport) = outcome.get("transport") else {
-        return "-".to_string();
-    };
-    let status = string_json(transport, "status");
+fn activation_transport_label(outcome: &Value) -> anyhow::Result<String> {
+    let transport = outcome
+        .get("transport")
+        .and_then(Value::as_object)
+        .ok_or_else(|| {
+            anyhow::anyhow!("plugin control response field `transport` must be an object")
+        })?;
+    let transport = Value::Object(transport.clone());
+    let status = required_string_json(&transport, "status")?;
     match transport.get("selected").and_then(Value::as_str) {
-        Some(selected) => format!("{selected}:{status}"),
-        None => status,
+        Some(selected) => Ok(format!("{selected}:{status}")),
+        None if transport.get("selected").is_none()
+            || transport.get("selected") == Some(&Value::Null) =>
+        {
+            Ok(status)
+        }
+        None => Err(anyhow::anyhow!(
+            "plugin control response field `transport.selected` must be a string or null"
+        )),
     }
 }
 
-fn activation_capability_label(outcome: &Value) -> String {
-    let Some(capability) = outcome.get("capability") else {
-        return "-".to_string();
-    };
-    let kind = string_json(capability, "kind");
+fn activation_capability_label(outcome: &Value) -> anyhow::Result<String> {
+    let capability = outcome.get("capability").ok_or_else(|| {
+        anyhow::anyhow!("plugin control response field `capability` must be an object")
+    })?;
+    let kind = required_string_json(capability, "kind")?;
     let modes = capability
         .get("modes")
         .and_then(Value::as_array)
-        .map(Vec::as_slice)
-        .unwrap_or(&[])
-        .iter()
-        .filter_map(Value::as_str)
-        .collect::<Vec<_>>()
-        .join("/");
+        .ok_or_else(|| {
+            anyhow::anyhow!("plugin control response field `capability.modes` must be an array")
+        })?;
+    let modes = string_array_label(modes)?;
     if modes.is_empty() {
-        kind.to_string()
+        Ok(kind)
     } else {
-        format!("{kind}:{modes}")
+        Ok(format!("{kind}:{modes}"))
     }
 }
 
-fn activation_resources_label(outcome: &Value) -> String {
-    let Some(resources) = outcome.get("resources") else {
-        return "-".to_string();
-    };
+fn activation_resources_label(outcome: &Value) -> anyhow::Result<String> {
+    let resources = outcome.get("resources").ok_or_else(|| {
+        anyhow::anyhow!("plugin control response field `resources` must be an object")
+    })?;
     let missing = resources
         .get("missing")
         .and_then(Value::as_array)
-        .map(Vec::as_slice)
-        .unwrap_or(&[]);
+        .ok_or_else(|| {
+            anyhow::anyhow!("plugin control response field `resources.missing` must be an array")
+        })?;
     if !missing.is_empty() {
-        return format!("missing={}", string_array_label(missing));
+        return Ok(format!("missing={}", string_array_label(missing)?));
     }
     let available = resources
         .get("available")
         .and_then(Value::as_array)
-        .map(Vec::as_slice)
-        .unwrap_or(&[])
+        .ok_or_else(|| {
+            anyhow::anyhow!("plugin control response field `resources.available` must be an array")
+        })?
         .iter()
-        .map(|item| {
-            format!(
+        .map(|item| -> anyhow::Result<String> {
+            Ok(format!(
                 "{}={}",
-                string_json(item, "kind"),
-                item.get("count").and_then(Value::as_u64).unwrap_or(0)
-            )
+                required_string_json(item, "kind")?,
+                required_usize_json(item, "count")?
+            ))
         })
-        .collect::<Vec<_>>();
+        .collect::<anyhow::Result<Vec<_>>>()?;
     if available.is_empty() {
-        "ready".to_string()
+        Ok("ready".to_string())
     } else {
-        available.join("/")
+        Ok(available.join("/"))
     }
 }
 
-fn activation_abilities_label(outcome: &Value) -> String {
+fn activation_abilities_label(outcome: &Value) -> anyhow::Result<String> {
     let missing = outcome
         .get("missing_abilities")
         .and_then(Value::as_array)
-        .map(Vec::as_slice)
-        .unwrap_or(&[]);
+        .ok_or_else(|| {
+            anyhow::anyhow!("plugin control response field `missing_abilities` must be an array")
+        })?;
     if !missing.is_empty() {
-        return format!("missing={}", string_array_label(missing));
+        return Ok(format!("missing={}", string_array_label(missing)?));
     }
     let available = outcome
         .get("available_abilities")
         .and_then(Value::as_array)
-        .map(Vec::as_slice)
-        .unwrap_or(&[]);
+        .ok_or_else(|| {
+            anyhow::anyhow!("plugin control response field `available_abilities` must be an array")
+        })?;
     if available.is_empty() {
-        "-".to_string()
+        Ok("-".to_string())
     } else {
         string_array_label(available)
     }
 }
 
-fn activation_permissions_label(outcome: &Value) -> String {
-    let Some(permissions) = outcome.get("permissions") else {
-        return "-".to_string();
-    };
+fn activation_permissions_label(outcome: &Value) -> anyhow::Result<String> {
+    let permissions = outcome.get("permissions").ok_or_else(|| {
+        anyhow::anyhow!("plugin control response field `permissions` must be an object")
+    })?;
     let required = permissions
         .get("required")
         .and_then(Value::as_array)
-        .map(Vec::as_slice)
-        .unwrap_or(&[]);
+        .ok_or_else(|| {
+            anyhow::anyhow!("plugin control response field `permissions.required` must be an array")
+        })?;
     if required.is_empty() {
-        return "not_required".to_string();
+        return Ok("not_required".to_string());
     }
-    format!(
+    Ok(format!(
         "{}:{}",
-        string_array_label(required),
-        string_json(permissions, "status")
-    )
+        string_array_label(required)?,
+        required_string_json(permissions, "status")?
+    ))
 }
 
 fn notify_daemon_reload() -> anyhow::Result<()> {
@@ -825,6 +878,84 @@ mod tests {
         assert!(err
             .to_string()
             .contains("requires the daemon plugin control ability"));
+    }
+
+    #[test]
+    fn plugin_table_projection_rejects_malformed_required_scalar() {
+        let row = serde_json::json!({
+            "package_id": "pkg.demo",
+            "runtime_published": "yes"
+        });
+
+        let err = required_bool_json(&row, "runtime_published")
+            .expect_err("required boolean field must not default from malformed JSON");
+
+        assert!(
+            err.to_string().contains("runtime_published") && err.to_string().contains("boolean"),
+            "wrong error: {err}"
+        );
+    }
+
+    #[test]
+    fn plugin_realtime_label_rejects_malformed_activation_plan() {
+        let row = serde_json::json!({
+            "realtime_activation_plans": [{
+                "capability": {
+                    "kind": "camera",
+                    "modes": ["snapshot"]
+                },
+                "status": "ready",
+                "missing_abilities": []
+            }]
+        });
+
+        let err =
+            realtime_label(&row).expect_err("missing quick_add must not render as a false default");
+
+        assert!(
+            err.to_string().contains("capability.quick_add") && err.to_string().contains("boolean"),
+            "wrong error: {err}"
+        );
+    }
+
+    #[test]
+    fn plugin_activation_table_rejects_malformed_nested_report() {
+        let report = serde_json::json!({
+            "outcomes": [{
+                "package_id": "pkg.demo",
+                "package_version": "0.1.0",
+                "capability": {
+                    "kind": "camera",
+                    "modes": ["snapshot"]
+                },
+                "transport": {
+                    "status": "ready",
+                    "selected": "invoke_bidi"
+                },
+                "status": "ready",
+                "resources": {
+                    "missing": [],
+                    "available": [{"kind": "camera", "count": "one"}]
+                },
+                "available_abilities": ["camera.snapshot"],
+                "missing_abilities": [],
+                "permissions": {
+                    "required": [],
+                    "status": "not_required"
+                },
+                "publish": {
+                    "realm_advertise": "ready"
+                }
+            }]
+        });
+
+        let err = print_activation_report(&report)
+            .expect_err("malformed nested resource count must not render as zero");
+
+        assert!(
+            err.to_string().contains("count") && err.to_string().contains("non-negative integer"),
+            "wrong error: {err}"
+        );
     }
 
     #[test]
