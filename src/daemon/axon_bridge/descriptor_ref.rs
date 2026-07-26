@@ -251,6 +251,16 @@ pub(crate) fn ability_ura_for_wire(callee_ura: &str, ability: &str) -> Result<St
             selector.ability_ura().to_string()
         }
         Err(_) => {
+            let callee = crate::core::ura::parse_ura(callee_ura).map_err(|err| {
+                AxonError::invalid_argument(format!(
+                    "descriptor-bound ability callee URA is invalid: {err}"
+                ))
+            })?;
+            if callee.kind == crate::core::ura::URAKind::Authority && ability.starts_with("hub.") {
+                return Err(AxonError::invalid_argument(
+                    "Authority descriptor-bound ability must not use retired hub.* ability aliases",
+                ));
+            }
             let public_ability = public_ability_name_for_wire(callee_ura, ability);
             crate::core::ura::owner_ability_ura(callee_ura, &public_ability).ok_or_else(|| {
                 AxonError::invalid_argument(format!(
@@ -326,9 +336,6 @@ fn public_ability_name_for_wire(callee_ura: &str, ability: &str) -> String {
     };
     match callee.kind {
         crate::core::ura::URAKind::Agent => {
-            crate::core::ura::owner_local_ability_name(callee_ura, ability)
-        }
-        crate::core::ura::URAKind::Authority => {
             crate::core::ura::owner_local_ability_name(callee_ura, ability)
         }
         crate::core::ura::URAKind::Device => ability.to_string(),
@@ -548,14 +555,17 @@ mod tests {
     }
 
     #[test]
-    fn bare_hub_prefixed_name_projects_to_owner_local_ability_ura() {
+    fn authority_bare_hub_prefixed_name_is_rejected() {
         let callee = crate::core::ura::hub_ura("localhost");
-        let ability_ura = ability_ura_for_wire(&callee, "hub.openai.list_models")
-            .expect("hub-owned registry key should project to public ability URA");
+        let error = ability_ura_for_wire(&callee, "hub.openai.list_models")
+            .expect_err("Authority bare names must not project through Hub aliases");
 
-        assert_eq!(
-            ability_ura,
-            "easynet:///r/localhost/ability/authority.openai.list_models"
+        assert!(
+            error
+                .reason
+                .contains("must not use retired hub.* ability aliases"),
+            "unexpected error: {}",
+            error.reason
         );
     }
 }

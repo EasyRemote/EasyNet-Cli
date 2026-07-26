@@ -259,7 +259,7 @@ impl OwnerLocalAbilityName {
 /// Project an internal registry ability name into the public name a
 /// given owner publishes under RFC-005.
 ///
-/// Agent, device, and hub owners publish owner-local public ability names.
+/// Agent, Device, and Authority owners publish owner-local public ability names.
 /// The local daemon registry may store implementation-qualified keys such as
 /// `claude.chat` or `fs.read`; those prefixes identify the local
 /// dispatch table, not the public Ability URA tail.
@@ -291,7 +291,7 @@ pub fn owner_local_ability_name(owner_ura: &str, ability_name: &str) -> String {
                 .to_string()
         }
         URAKind::Device => name.strip_prefix("device.").unwrap_or(name).to_string(),
-        URAKind::Authority => name.strip_prefix("hub.").unwrap_or(name).to_string(),
+        URAKind::Authority => name.to_string(),
         _ => name.to_string(),
     }
 }
@@ -465,7 +465,7 @@ mod tests {
         );
         assert_eq!(
             owner_local_ability_name("easynet:///r/localhost/authority", "hub.openai.chat"),
-            "openai.chat"
+            "hub.openai.chat"
         );
         assert_eq!(
             owner_local_ability_name(

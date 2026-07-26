@@ -1414,6 +1414,50 @@ for test in (
 PY
 }
 
+check_authority_hub_ability_alias_retirement_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local core_ura="$cli_root/src/core/ura/mod.rs"
+  local descriptor_ref="$cli_root/src/daemon/axon_bridge/descriptor_ref.rs"
+
+  for file in "$core_ura" "$descriptor_ref"; do
+    [[ -f "$file" ]] || fail "authority Hub ability alias retirement source is missing: ${file#$cli_root/}"
+  done
+
+  "$PYTHON_BIN" - "$core_ura" "$descriptor_ref" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+core = Path(sys.argv[1]).read_text()
+descriptor = Path(sys.argv[2]).read_text()
+core_prod = core.split("\n#[cfg(test)]", 1)[0]
+descriptor_prod = descriptor.split("\n#[cfg(test)]", 1)[0]
+
+if 'URAKind::Authority => name.strip_prefix("hub.")' in core_prod:
+    raise SystemExit("owner_local_ability_name_still_strips_hub_prefix_for_authority")
+if "Agent, device, and hub owners" in core:
+    raise SystemExit("owner_local_ability_name_still_documents_hub_owners")
+
+if "must not use retired hub.* ability aliases" not in descriptor_prod:
+    raise SystemExit("descriptor_ref_missing_authority_hub_alias_rejection")
+if 'callee.kind == crate::core::ura::URAKind::Authority && ability.starts_with("hub.")' not in descriptor_prod:
+    raise SystemExit("descriptor_ref_missing_authority_hub_prefix_guard")
+if "authority_bare_hub_prefixed_name_is_rejected" not in descriptor:
+    raise SystemExit("descriptor_ref_missing_authority_hub_alias_negative_test")
+if "bare_hub_prefixed_name_projects_to_owner_local_ability_ura" in descriptor:
+    raise SystemExit("descriptor_ref_preserves_positive_hub_alias_projection_test")
+
+authority_arm = re.search(
+    r"URAKind::Authority\s*=>\s*(?P<body>[^,]+),",
+    core_prod,
+)
+if authority_arm is None:
+    raise SystemExit("owner_local_ability_name_authority_arm_missing")
+if "strip_prefix" in authority_arm.group("body"):
+    raise SystemExit("owner_local_ability_name_authority_arm_still_strips_prefix")
+PY
+}
+
 check_voice_realm_authority_vocabulary_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local voice="$cli_root/src/daemon/ability/builtins/resources/voice.rs"
@@ -27001,6 +27045,7 @@ check_runtime_authority_vocabulary_contract
 check_principal_owner_alias_retirement_contract
 check_admission_owner_authority_source_contract
 check_reset_local_state_purge_boundary_contract
+check_authority_hub_ability_alias_retirement_contract
 check_voice_realm_authority_vocabulary_contract
 check_route_kind_realm_authority_vocabulary_contract
 check_session_open_authority_vocabulary_contract
