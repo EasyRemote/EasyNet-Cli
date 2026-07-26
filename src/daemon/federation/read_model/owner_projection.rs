@@ -40,7 +40,7 @@ pub(crate) struct AbilityInputFieldSummary {
     pub value_type: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct AbilityCallableSummary {
     pub public_name: String,
     pub description: String,
@@ -56,14 +56,37 @@ pub(crate) struct AbilityCallableSummary {
 }
 
 impl AbilityCallableSummary {
+    pub(crate) fn new(
+        public_name: impl Into<String>,
+        description: impl Into<String>,
+        call_mode: CallMode,
+        receipt_semantics: ReceiptSemantics,
+        input_fields: Vec<AbilityInputFieldSummary>,
+        flags: AbilityCallableFlags,
+    ) -> Self {
+        Self {
+            public_name: public_name.into(),
+            description: description.into(),
+            call_mode,
+            receipt_semantics,
+            input_fields,
+            flags,
+            mode_geometry: Vec::new(),
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn minimal(public_name: impl Into<String>) -> Self {
         let public_name = public_name.into();
-        Self {
-            description: public_name.clone(),
+        let description = public_name.clone();
+        Self::new(
             public_name,
-            ..Self::default()
-        }
+            description,
+            CallMode::Rpc,
+            ReceiptSemantics::Operational,
+            Vec::new(),
+            AbilityCallableFlags::default(),
+        )
     }
 }
 
@@ -134,7 +157,6 @@ pub(crate) struct AbilityProjectionSummary {
     pub tags: Vec<String>,
     /// Proto-unacknowledged daemon extension — see the struct-level
     /// CONTRACT-DRIFT INVARIANT above before touching this field.
-    #[serde(default)]
     pub callable_summary: AbilityCallableSummary,
 }
 
@@ -1867,12 +1889,10 @@ mod tests {
     }
 
     /// Guards the SPEC §15.1-2 contract-drift invariant documented on
-    /// `AbilityProjectionSummary`: `callable_summary` is wire-carried (it
-    /// must survive the serde JSON round-trip the federation envelope uses),
-    /// AND a discovery payload that omits it — as a proto-only consumer may
-    /// emit — must still decode via `#[serde(default)]`. Such a lossy row is
-    /// deliberately rejected by `OwnerProjectionPublication::validate_integrity`
-    /// and remains usable only by read-only discovery projection.
+    /// `AbilityProjectionSummary`: `callable_summary` is wire-carried and must
+    /// survive the serde JSON round-trip the federation envelope uses. A
+    /// discovery payload that omits it is now rejected because it cannot carry
+    /// governed mode geometry without manufacturing an implicit RPC default.
     #[test]
     fn callable_summary_survives_projection_wire_roundtrip() {
         let summary = AbilityProjectionSummary {
@@ -1886,13 +1906,14 @@ mod tests {
             policy_ref: "visibility:PUBLIC".into(),
             route_summary_ref: None,
             tags: Vec::new(),
-            callable_summary: AbilityCallableSummary {
-                public_name: "fs.read".into(),
-                description: "read a file".into(),
-                call_mode: CallMode::Rpc,
-                receipt_semantics: ReceiptSemantics::Operational,
-                ..AbilityCallableSummary::default()
-            },
+            callable_summary: AbilityCallableSummary::new(
+                "fs.read",
+                "read a file",
+                CallMode::Rpc,
+                ReceiptSemantics::Operational,
+                Vec::new(),
+                AbilityCallableFlags::default(),
+            ),
         };
 
         // 1. Wire-carried: a full serialize -> deserialize preserves the
@@ -1915,8 +1936,8 @@ mod tests {
             serde_json::from_value(wire).expect("summary round-trips");
         assert_eq!(decoded, summary);
 
-        // 2. A proto-shaped discovery row still decodes for read-only listing.
-        //    Owner publication admission separately requires mode geometry.
+        // 2. A proto-shaped discovery row without the extension is lossy and
+        //    must fail before it can be treated as an owner publication row.
         let proto_shaped = json!({
             "ability_ura": "easynet:///r/acme/ability/device.01DEV.fs.read",
             "owner_ura": "easynet:///r/acme/device/01DEV",
@@ -1929,12 +1950,11 @@ mod tests {
             "route_summary_ref": null,
             "tags": [],
         });
-        let without_extension: AbilityProjectionSummary =
-            serde_json::from_value(proto_shaped).expect("proto-shaped payload decodes");
-        assert_eq!(
-            without_extension.callable_summary,
-            AbilityCallableSummary::default(),
-            "omitted callable_summary must default, not fail to parse"
+        let err = serde_json::from_value::<AbilityProjectionSummary>(proto_shaped)
+            .expect_err("proto-shaped payload without callable_summary must fail closed");
+        assert!(
+            err.to_string().contains("callable_summary"),
+            "unexpected missing-field error: {err}"
         );
     }
 

@@ -219,10 +219,9 @@ fn is_stable_authority_root(authority_root: &str) -> bool {
         && !authority_root.chars().any(char::is_control)
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CallMode {
-    #[default]
     Rpc,
     Stream,
     Bidi,

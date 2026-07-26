@@ -181,6 +181,45 @@ for required in (
 PY
 }
 
+check_descriptor_call_mode_explicit_transport_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local descriptors_mod="$cli_root/src/daemon/ability/descriptors/mod.rs"
+  local owner_projection="$cli_root/src/daemon/federation/read_model/owner_projection.rs"
+  [[ -f "$descriptors_mod" ]] || fail "ability descriptors source is missing: ${descriptors_mod#$cli_root/}"
+  [[ -f "$owner_projection" ]] || fail "owner projection source is missing: ${owner_projection#$cli_root/}"
+
+  "$PYTHON_BIN" - "$descriptors_mod" "$owner_projection" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+match = re.search(r"#\[derive\((?P<derive>[^\)]*)\)\]\s*#\[serde\(rename_all = \"snake_case\"\)\]\s*pub enum CallMode \{(?P<body>.*?)\n\}", text, re.S)
+if not match:
+    raise SystemExit("descriptor_call_mode_enum_missing")
+if "Default" in match.group("derive"):
+    raise SystemExit("descriptor_call_mode_default_impl_retired")
+if "#[default]" in match.group("body"):
+    raise SystemExit("descriptor_call_mode_default_variant_retired")
+for variant in ("Rpc", "Stream", "Bidi"):
+    if not re.search(rf"\b{variant}\b", match.group("body")):
+        raise SystemExit(f"descriptor_call_mode_variant_missing:{variant}")
+
+owner_projection = Path(sys.argv[2]).read_text(encoding="utf-8", errors="replace")
+summary = re.search(r"#\[derive\((?P<derive>[^\)]*)\)\]\s*pub\(crate\) struct AbilityCallableSummary \{(?P<body>.*?)\n\}", owner_projection, re.S)
+if not summary:
+    raise SystemExit("ability_callable_summary_struct_missing")
+if "Default" in summary.group("derive"):
+    raise SystemExit("ability_callable_summary_default_impl_retired")
+if re.search(r"#\[serde\(default\)\]\s*pub callable_summary:", owner_projection):
+    raise SystemExit("ability_projection_summary_callable_summary_serde_default_retired")
+if "pub(crate) fn new(" not in owner_projection:
+    raise SystemExit("ability_callable_summary_explicit_constructor_missing")
+if "AbilityCallableSummary::default()" in owner_projection:
+    raise SystemExit("ability_callable_summary_default_call_retired")
+PY
+}
+
 check_ffi_init_typed_connect_error_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local ffi_mod="$cli_root/src/ffi/mod.rs"
@@ -24546,6 +24585,7 @@ EOF
   check_ffi_runtime_sizing_policy_contract
   check_shellguard_path_normalization_fail_closed_contract
   check_ability_authority_context_explicit_construction_contract
+  check_descriptor_call_mode_explicit_transport_contract
   check_ffi_init_typed_connect_error_contract
   check_failure_code_default_policy_contract
   check_bidi_dispatch_default_code_policy_contract
@@ -24803,6 +24843,7 @@ check_runtime_session_projection_accessor_contract
 check_ffi_runtime_sizing_policy_contract
 check_shellguard_path_normalization_fail_closed_contract
 check_ability_authority_context_explicit_construction_contract
+check_descriptor_call_mode_explicit_transport_contract
 check_ffi_init_typed_connect_error_contract
 check_failure_code_default_policy_contract
 check_bidi_dispatch_default_code_policy_contract

@@ -67,7 +67,14 @@ mod tests {
                 policy_ref: "visibility:PUBLIC".to_string(),
                 route_summary_ref: None,
                 tags: Vec::new(),
-                callable_summary: AbilityCallableSummary::default(),
+                callable_summary: AbilityCallableSummary::new(
+                    "device.echo",
+                    "device.echo",
+                    crate::daemon::ability::descriptors::CallMode::Rpc,
+                    crate::daemon::ability::descriptors::ReceiptSemantics::Operational,
+                    Vec::new(),
+                    Default::default(),
+                ),
             }],
         };
 
