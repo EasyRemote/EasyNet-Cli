@@ -1328,6 +1328,29 @@ check_principal_owner_alias_retirement_contract() {
   fi
 }
 
+check_admission_owner_authority_source_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local policy_gate="$cli_root/src/daemon/invocation/admission/policy_gate.rs"
+  local owner_resolution="$cli_root/src/daemon/invocation/admission/owner_resolution.rs"
+
+  for file in "$policy_gate" "$owner_resolution"; do
+    [[ -f "$file" ]] || fail "admission owner authority source is missing: ${file#$cli_root/}"
+  done
+
+  if rg -n 'owner_fact_from_local_authority|local Authority owner|local_authority_ability_projects_authority_owner_without_device_credentials' \
+    "$policy_gate" "$owner_resolution"; then
+    fail "admission owner resolution must not synthesize owner facts from daemon-local Authority state"
+  fi
+
+  if sed -n '/pub(crate) fn resolve_owner/,/^}/p' "$policy_gate" | rg -n 'daemon_ura'; then
+    fail "resolve_owner must not accept daemon_ura as an owner fact source"
+  fi
+
+  if ! rg -q 'local_authority_ability_without_trust_owner_stays_unresolved' "$policy_gate"; then
+    fail "admission policy gate must prove local Authority abilities stay unresolved without trust owner facts"
+  fi
+}
+
 check_voice_realm_authority_vocabulary_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local voice="$cli_root/src/daemon/ability/builtins/resources/voice.rs"
@@ -26913,6 +26936,7 @@ check_sdk_invocation_terminal_state_canonical_contract
 check_public_descriptor_authority_vocabulary_contract
 check_runtime_authority_vocabulary_contract
 check_principal_owner_alias_retirement_contract
+check_admission_owner_authority_source_contract
 check_voice_realm_authority_vocabulary_contract
 check_route_kind_realm_authority_vocabulary_contract
 check_session_open_authority_vocabulary_contract

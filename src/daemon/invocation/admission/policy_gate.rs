@@ -46,12 +46,7 @@ impl AdmissionPolicyGate {
         let callee_ura = agent_ura(context.envelope.callee.as_ref(), "callee")?;
         let subject_ura = subject_ura(context.envelope.subject.as_ref())?;
         let ability_ura = ability_ura_for(&callee_ura, context.ability)?;
-        let owner = resolve_owner(
-            &subject_ura,
-            &callee_ura,
-            context.daemon_ura,
-            context.trust_anchor,
-        )?;
+        let owner = resolve_owner(&subject_ura, &callee_ura, context.trust_anchor)?;
         let principal = principal_for(context.trusted_role, &caller_ura, context.trust_anchor)?;
         let authority_self_read = authority_self_read_scope(
             &caller_ura,
@@ -199,11 +194,10 @@ pub(crate) fn principal_for(
 pub(crate) fn resolve_owner(
     subject_ura: &str,
     callee_ura: &str,
-    daemon_ura: Option<&str>,
     trust_anchor: &RealmTrustAnchor,
 ) -> Result<OwnerResolution, Status> {
-    let subject = owner_fact_from_ura(subject_ura, daemon_ura, trust_anchor)?;
-    let callee = owner_fact_from_ura(callee_ura, daemon_ura, trust_anchor)?;
+    let subject = owner_fact_from_ura(subject_ura, trust_anchor)?;
+    let callee = owner_fact_from_ura(callee_ura, trust_anchor)?;
     let device = owner_fact_from_trust_anchor(callee_ura, trust_anchor);
     Ok(OwnerResolver::resolve(&OwnerResolutionInput {
         subject,
@@ -215,7 +209,6 @@ pub(crate) fn resolve_owner(
 
 fn owner_fact_from_ura(
     ura: &str,
-    daemon_ura: Option<&str>,
     trust_anchor: &RealmTrustAnchor,
 ) -> Result<Option<OwnerFact>, Status> {
     if let Some(owner) = owner_fact_from_trust_anchor(ura, trust_anchor) {
@@ -246,21 +239,11 @@ fn owner_fact_from_ura(
                 let device_ura = crate::core::ura::device_ura(&parsed.realm, &device_id);
                 owner_fact_from_trust_anchor(&device_ura, trust_anchor)
             }
-            Some(AbilityOwner::Authority) => {
-                let authority_ura = crate::core::ura::hub_ura(&parsed.realm);
-                owner_fact_from_local_authority(&authority_ura, daemon_ura)
-            }
+            Some(AbilityOwner::Authority) => None,
             None => None,
         },
         URAKind::Device => owner_fact_from_trust_anchor(ura, trust_anchor),
-        URAKind::Authority => {
-            match owner_fact_from_trust_anchor(ura, trust_anchor)
-                .or_else(|| owner_fact_from_local_authority(ura, daemon_ura))
-            {
-                Some(owner) => Some(owner),
-                None => None,
-            }
-        }
+        URAKind::Authority => owner_fact_from_trust_anchor(ura, trust_anchor),
         URAKind::Resource => resource_owner_user_id(&parsed).map(|user_id| {
             OwnerFact::user(
                 user_id.clone(),
@@ -278,21 +261,6 @@ fn owner_fact_from_trust_anchor(ura: &str, trust_anchor: &RealmTrustAnchor) -> O
         owner.owner_user_id.clone(),
         owner.owner_ura.clone(),
     ))
-}
-
-fn owner_fact_from_local_authority(ura: &str, daemon_ura: Option<&str>) -> Option<OwnerFact> {
-    if Some(ura) != daemon_ura {
-        return None;
-    }
-    let parsed = parse_ura(ura).ok()?;
-    if parsed.kind != URAKind::Authority {
-        return None;
-    }
-    Some(OwnerFact {
-        owner_user_id: None,
-        owner_ura: Some(ura.to_string()),
-        authoritative: true,
-    })
 }
 
 fn resource_owner_user_id(parsed: &crate::core::ura::ParsedURA) -> Option<String> {
@@ -487,7 +455,6 @@ mod tests {
         let owner = resolve_owner(
             "easynet:///r/test/device/dev-1",
             "easynet:///r/test/device/dev-1",
-            None,
             &anchor,
         )
         .expect("anchor owner resolution");
@@ -507,7 +474,6 @@ mod tests {
         let owner = resolve_owner(
             "easynet:///r/test/device/dev-1",
             "easynet:///r/test/device/dev-1",
-            None,
             &anchor,
         )
         .expect("ordinary policy owner resolution must ignore local credentials");
@@ -551,7 +517,6 @@ mod tests {
         let owner = resolve_owner(
             "easynet:///r/test/device/dev-1",
             "easynet:///r/test/authority",
-            Some("easynet:///r/test/authority"),
             &anchor,
         )
         .expect("ordinary policy owner resolution must not read local credentials");
@@ -571,7 +536,6 @@ mod tests {
         let owner = resolve_owner(
             "easynet:///r/test/ability/device.dev-1.federation.advertise_abilities",
             "easynet:///r/test/authority",
-            Some("easynet:///r/test/authority"),
             &anchor,
         )
         .expect("ordinary policy device ability owner resolution must ignore local credentials");
@@ -584,22 +548,18 @@ mod tests {
     }
 
     #[test]
-    fn local_authority_ability_projects_authority_owner_without_device_credentials() {
+    fn local_authority_ability_without_trust_owner_stays_unresolved() {
         let _home = HomeGuard::new();
         let anchor = empty_anchor();
         let owner = resolve_owner(
             "easynet:///r/test/ability/authority.federation.discover",
             "easynet:///r/test/authority",
-            Some("easynet:///r/test/authority"),
             &anchor,
         )
         .expect("authority owner resolution");
 
         assert!(owner.owner_user_id.is_none());
-        assert_eq!(
-            owner.owner_ura.as_deref(),
-            Some("easynet:///r/test/authority")
-        );
+        assert!(owner.owner_ura.is_none());
         assert_eq!(
             owner.owner_source,
             crate::daemon::invocation::admission::decision::OwnerSource::Unresolved
@@ -614,7 +574,6 @@ mod tests {
         let owner = resolve_owner(
             "easynet:///r/test/ability/authority.federation.discover",
             "easynet:///r/test/authority",
-            None,
             &anchor,
         )
         .expect("authority owner resolution should not fail for saved device credentials");
@@ -642,7 +601,6 @@ mod tests {
         let owner = resolve_owner(
             "easynet:///r/test/authority",
             "easynet:///r/test/authority",
-            None,
             &anchor,
         )
         .expect("authority subject resolution should not fail for saved device credentials");
