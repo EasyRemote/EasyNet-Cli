@@ -1556,7 +1556,14 @@ def _axon_caller_signature(
     signature = draft.caller_signature
     if signature is None:
         return None
-    key_id_hint = signature.key_id_hint or signature.signer_public_key_base64 or ""
+    key_id_hint = (signature.key_id_hint or "").strip()
+    if key_id_hint == "":
+        raise _direct_error(
+            "caller_signature.key_id_hint is required",
+            code=ErrorCode.INVALID_INVOCATION,
+            retry=RetryHint.NEVER,
+            details={"field": "caller_signature.key_id_hint"},
+        )
     return _AxonCallerSignature(
         algorithm=signature.algorithm,
         signature=_base64_decode(

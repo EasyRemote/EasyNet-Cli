@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"math"
 	"strconv"
+	"strings"
 	"time"
 
 	axoninv "axon.run/sdk/go/axon/invocation"
@@ -246,6 +247,9 @@ func directCallerSignatureForAxon(draft InvocationDraft) (axoninv.CallerSignatur
 	decoded, err := base64.StdEncoding.DecodeString(signature.SignatureBase64)
 	if err != nil {
 		return axoninv.CallerSignature{}, invalidRuntimePayload(fmt.Sprintf("decode caller_signature.signature_base64: %v", err), err)
+	}
+	if strings.TrimSpace(signature.KeyIDHint) == "" {
+		return axoninv.CallerSignature{}, invalidRuntimePayload("caller_signature.key_id_hint is required", nil)
 	}
 	return axoninv.CallerSignature{
 		Algorithm: signature.Algorithm,

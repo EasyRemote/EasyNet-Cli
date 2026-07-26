@@ -268,7 +268,6 @@ func (b *InvocationBuilder) WithAuthorityMetadata(value AuthorityMetadata) *Invo
 }
 
 func (b *InvocationBuilder) WithCallerSignature(value InvocationSignature) *InvocationBuilder {
-	value = normalizeInvocationSignatureMaterial(value)
 	b.callerSignature = &value
 	return b
 }
@@ -359,12 +358,15 @@ func (b *InvocationBuilder) inspectDraft() (InvocationDraft, error) {
 		return InvocationDraft{}, err
 	}
 	if b.callerSignature != nil {
-		signature := normalizeInvocationSignatureMaterial(*b.callerSignature)
+		signature := *b.callerSignature
 		if strings.TrimSpace(signature.Algorithm) == "" {
 			return InvocationDraft{}, invalidInvocation("caller_signature.algorithm is required", nil)
 		}
 		if strings.TrimSpace(signature.SignatureBase64) == "" {
 			return InvocationDraft{}, invalidInvocation("caller_signature.signature_base64 is required", nil)
+		}
+		if strings.TrimSpace(signature.KeyIDHint) == "" {
+			return InvocationDraft{}, invalidInvocation("caller_signature.key_id_hint is required", nil)
 		}
 		b.callerSignature = &signature
 	}
@@ -382,13 +384,6 @@ func (b *InvocationBuilder) inspectDraft() (InvocationDraft, error) {
 		callerSignature: copySignature(b.callerSignature),
 		hasArgs:         b.hasArgs,
 	}, nil
-}
-
-func normalizeInvocationSignatureMaterial(signature InvocationSignature) InvocationSignature {
-	if strings.TrimSpace(signature.KeyIDHint) == "" {
-		signature.KeyIDHint = strings.TrimSpace(signature.SignerPublicKeyBase64)
-	}
-	return signature
 }
 
 func validateInvocationNonceBase64(value string) error {

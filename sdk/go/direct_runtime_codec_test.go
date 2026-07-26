@@ -325,16 +325,7 @@ func TestDirectRuntimeBidiRejectsCallbackCarrierWithoutTerminalClaim(t *testing.
 }
 
 func TestDirectRuntimeResponsesExposeOnlyCanonicalReceiptCheckpoints(t *testing.T) {
-	admission := &axonpb.InvocationReceipt{
-		Index:        1,
-		InvocationId: "inv-codec",
-		State:        axonpb.InvocationState_INVOCATION_STATE_ADMITTED,
-	}
-	terminal := &axonpb.InvocationReceipt{
-		Index:        2,
-		InvocationId: "inv-codec",
-		State:        axonpb.InvocationState_INVOCATION_STATE_COMPLETED,
-	}
+	admission, terminal := canonicalDirectRuntimeReceiptPair("inv-codec")
 	unary, err := directInvokeResponseJSON(directRuntimeDraft(t), &axonpb.InvokeResponse{
 		State:            axonpb.InvocationState_INVOCATION_STATE_COMPLETED,
 		AdmissionReceipt: admission,
@@ -526,5 +517,18 @@ func assertDirectDescriptorBoundEnvelope(t *testing.T, envelope *axonpb.Envelope
 		wireSignature.GetAlgorithm() != signature.Algorithm ||
 		wireSignature.GetKeyIdHint() != signature.KeyIDHint {
 		t.Fatalf("wire caller signature = %#v, draft=%#v", wireSignature, signature)
+	}
+}
+
+func TestDirectRuntimeCodecRejectsSignerPubkeyWithoutKeyHint(t *testing.T) {
+	draft := directRuntimeSignedDraft(t)
+	signature := *draft.CallerSignature()
+	signature.KeyIDHint = ""
+	signature.SignerPublicKeyBase64 = "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA="
+	draft.callerSignature = &signature
+
+	_, err := directCallerSignatureForAxon(draft)
+	if err == nil || !strings.Contains(err.Error(), "caller_signature.key_id_hint") {
+		t.Fatalf("directCallerSignatureForAxon error = %v, want caller_signature.key_id_hint", err)
 	}
 }

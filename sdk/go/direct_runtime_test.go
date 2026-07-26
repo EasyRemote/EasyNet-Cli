@@ -234,6 +234,7 @@ func TestDirectRuntimeInvokeDeadlineIsTypedTimeout(t *testing.T) {
 
 func (d *directRuntimeFakeDaemon) InvokeStream(req *axonpb.InvokeServerStreamRequest, stream grpc.ServerStreamingServer[axonpb.InvokeStreamChunk]) error {
 	d.seenStream = req
+	admission, terminal := canonicalDirectRuntimeReceiptPair("inv-stream")
 	delay, started := d.streamTiming()
 	if started != nil {
 		close(started)
@@ -246,33 +247,22 @@ func (d *directRuntimeFakeDaemon) InvokeStream(req *axonpb.InvokeServerStreamReq
 		}
 	}
 	if err := stream.Send(&axonpb.InvokeStreamChunk{
-		Sequence:    0,
-		State:       axonpb.InvocationState_INVOCATION_STATE_RUNNING,
-		Payload:     []byte(`{"delta":1}`),
-		ContentType: "application/json",
-		AdmissionReceipt: &axonpb.InvocationReceipt{
-			Index:        0,
-			InvocationId: "inv-stream",
-			ReceiptType:  "admitted",
-			State:        axonpb.InvocationState_INVOCATION_STATE_ADMITTED,
-		},
+		Sequence:         0,
+		State:            axonpb.InvocationState_INVOCATION_STATE_RUNNING,
+		Payload:          []byte(`{"delta":1}`),
+		ContentType:      "application/json",
+		AdmissionReceipt: admission,
 	}); err != nil {
 		return err
 	}
 	return stream.Send(&axonpb.InvokeStreamChunk{
-		Sequence:     1,
-		InvocationId: "inv-stream",
-		State:        axonpb.InvocationState_INVOCATION_STATE_COMPLETED,
-		Terminal:     true,
-		Payload:      []byte(`{"done":true}`),
-		ContentType:  "application/json",
-		TerminalReceipt: &axonpb.InvocationReceipt{
-			Index:           1,
-			InvocationId:    "inv-stream",
-			ReceiptType:     "completed",
-			State:           axonpb.InvocationState_INVOCATION_STATE_COMPLETED,
-			CleanupComplete: true,
-		},
+		Sequence:        1,
+		InvocationId:    "inv-stream",
+		State:           axonpb.InvocationState_INVOCATION_STATE_COMPLETED,
+		Terminal:        true,
+		Payload:         []byte(`{"done":true}`),
+		ContentType:     "application/json",
+		TerminalReceipt: terminal,
 	})
 }
 
@@ -311,14 +301,12 @@ func (d *directRuntimeFakeDaemon) InvokeBidi(stream grpc.BidiStreamingServer[axo
 			return status.Error(codes.DeadlineExceeded, "deadline elapsed")
 		}
 	}
+	admission, terminal := canonicalDirectRuntimeReceiptPair("inv-bidi")
+	terminal.Payload = []byte(`{"sha256":"bidi-sha"}`)
+	terminal.PayloadContentType = "application/json"
 	if err := stream.Send(&axonpb.InvokeBidiDown{
 		Sequence: 0,
-		Payload: &axonpb.InvokeBidiDown_Receipt{Receipt: &axonpb.InvocationReceipt{
-			Index:        0,
-			InvocationId: "inv-bidi",
-			ReceiptType:  "admitted",
-			State:        axonpb.InvocationState_INVOCATION_STATE_ADMITTED,
-		}},
+		Payload:  &axonpb.InvokeBidiDown_Receipt{Receipt: admission},
 	}); err != nil {
 		return err
 	}
@@ -338,15 +326,7 @@ func (d *directRuntimeFakeDaemon) InvokeBidi(stream grpc.BidiStreamingServer[axo
 	}
 	return stream.Send(&axonpb.InvokeBidiDown{
 		Sequence: 2,
-		Payload: &axonpb.InvokeBidiDown_Receipt{Receipt: &axonpb.InvocationReceipt{
-			Index:              1,
-			InvocationId:       "inv-bidi",
-			ReceiptType:        "completed",
-			State:              axonpb.InvocationState_INVOCATION_STATE_COMPLETED,
-			Payload:            []byte(`{"sha256":"bidi-sha"}`),
-			PayloadContentType: "application/json",
-			CleanupComplete:    true,
-		}},
+		Payload:  &axonpb.InvokeBidiDown_Receipt{Receipt: terminal},
 	})
 }
 

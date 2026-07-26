@@ -303,6 +303,10 @@ class InvocationBuilder:
                 self._caller_signature.signature_base64,
                 "caller_signature.signature_base64",
             )
+            _required_builder_string(
+                self._caller_signature.key_id_hint,
+                "caller_signature.key_id_hint",
+            )
 
         return InvocationDraft(
             caller_ura=caller_ura,

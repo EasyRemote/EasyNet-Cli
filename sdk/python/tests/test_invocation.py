@@ -6,6 +6,7 @@ from easynet_sdk import (
     ErrorCode,
     InvocationBuilder,
     InvocationDraft,
+    InvocationSignature,
     SDKError,
     is_code,
     new_invocation_nonce_base64,
@@ -84,6 +85,27 @@ class InvocationTests(unittest.TestCase):
 
         self.assertEqual(draft.caller_ura, "easynet:///r/example/agent/alice.sdk")
         self.assertIn("args", json.loads(draft.to_json()))
+
+    def test_draft_rejects_signer_public_key_without_key_hint(self) -> None:
+        with self.assertRaises(SDKError) as caught:
+            (
+                complete_builder()
+                .with_caller_signature(
+                    InvocationSignature(
+                        algorithm="ed25519",
+                        signature_base64=(
+                            "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBw=="
+                        ),
+                        signer_public_key_base64=(
+                            "o5TNp0VYb4h93vG8tNTXOh9gSePT3OYkGq1hlOYrmsM="
+                        ),
+                    )
+                )
+                .build()
+            )
+
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+        self.assertIn("caller_signature.key_id_hint", str(caught.exception))
 
     def test_builder_rejects_missing_tuple_field(self) -> None:
         with self.assertRaises(SDKError) as caught:

@@ -238,7 +238,6 @@ func (p PreparedInvocation) SubmitReady() bool {
 
 // SignWithCallerSignature attaches externally produced signature material.
 func (p PreparedInvocation) SignWithCallerSignature(signature InvocationSignature) (SignedInvocation, error) {
-	signature = normalizeInvocationSignatureMaterial(signature)
 	if strings.TrimSpace(signature.Algorithm) == "" {
 		return SignedInvocation{}, invalidInvocation("signature.algorithm is required", nil)
 	}
@@ -248,9 +247,6 @@ func (p PreparedInvocation) SignWithCallerSignature(signature InvocationSignatur
 	signerID := signature.KeyIDHint
 	if policy := p.signingMaterial.SignerPolicy(); policy != nil && policy.SignerID() != "" {
 		signerID = policy.SignerID()
-	}
-	if signerID == "" {
-		signerID = signature.SignerPublicKeyBase64
 	}
 	if strings.TrimSpace(signerID) == "" {
 		return SignedInvocation{}, invalidInvocation("signer id is required", nil)

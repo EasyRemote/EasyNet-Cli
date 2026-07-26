@@ -104,9 +104,9 @@ func TestInvocationDraftFromJSONDecodesFixtureShape(t *testing.T) {
 	}
 }
 
-func TestInvocationDraftNormalizesSignerPubkeyIntoKeyHint(t *testing.T) {
+func TestInvocationDraftRejectsSignerPubkeyWithoutKeyHint(t *testing.T) {
 	const pubkey = "o5TNp0VYb4h93vG8tNTXOh9gSePT3OYkGq1hlOYrmsM="
-	draft, err := NewInvocationDraftFromJSON([]byte(`{
+	_, err := NewInvocationDraftFromJSON([]byte(`{
 		"caller_ura": "easynet:///r/example/user/alice",
 		"callee_ura": "easynet:///r/example/device/dev-a",
 		"descriptor_ref": "easynet:///r/example/ability/device.dev-a.meta.list_resources@1.0.0",
@@ -121,15 +121,8 @@ func TestInvocationDraftNormalizesSignerPubkeyIntoKeyHint(t *testing.T) {
 			"signer_public_key_base64": "` + pubkey + `"
 		}
 	}`))
-	if err != nil {
-		t.Fatalf("NewInvocationDraftFromJSON: %v", err)
-	}
-	signature := draft.CallerSignature()
-	if signature == nil {
-		t.Fatal("caller signature missing")
-	}
-	if signature.KeyIDHint != pubkey {
-		t.Fatalf("key_id_hint = %q, want signer pubkey", signature.KeyIDHint)
+	if err == nil || !strings.Contains(err.Error(), "caller_signature.key_id_hint") {
+		t.Fatalf("NewInvocationDraftFromJSON error = %v, want key_id_hint rejection", err)
 	}
 }
 

@@ -74,8 +74,6 @@ class PreparedInvocation:
         signer_id = signature.key_id_hint or ""
         if self.signing_material.signer_policy and self.signing_material.signer_policy.signer_id:
             signer_id = self.signing_material.signer_policy.signer_id
-        if signer_id == "":
-            signer_id = signature.signer_public_key_base64 or ""
         if signer_id.strip() == "":
             raise _invalid_prepared("signer id is required")
         return SignedInvocation(

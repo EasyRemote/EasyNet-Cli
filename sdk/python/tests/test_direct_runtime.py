@@ -701,7 +701,7 @@ class DirectRuntimeTests(unittest.TestCase):
         self.assertIn("subject_ref_kind_unsupported:user", raised.exception.message)
         self.assertEqual(servicer.requests, [])
 
-    def test_direct_transport_projects_signer_pubkey_as_wire_key_hint(self) -> None:
+    def test_direct_transport_rejects_signer_pubkey_without_key_hint(self) -> None:
         servicer = RecordingInvocationServicer()
         public_key_b64 = "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA="
         draft = replace(
@@ -722,15 +722,14 @@ class DirectRuntimeTests(unittest.TestCase):
                 identity=_identity(),
             )
             try:
-                transport.invoke(draft)
+                with self.assertRaises(SDKError) as raised:
+                    transport.invoke(draft)
             finally:
                 transport.close()
 
-        self.assertEqual(len(servicer.requests), 1)
-        self.assertEqual(
-            servicer.requests[0].envelope.caller_signature.key_id_hint,
-            public_key_b64,
-        )
+        self.assertTrue(is_code(raised.exception, ErrorCode.INVALID_ARGUMENT))
+        self.assertIn("caller_signature.key_id_hint", raised.exception.message)
+        self.assertEqual(servicer.requests, [])
 
     def test_direct_transport_preserves_complete_caller_supplied_tuple(self) -> None:
         servicer = RecordingInvocationServicer()

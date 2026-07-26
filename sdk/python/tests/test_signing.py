@@ -424,6 +424,23 @@ class SigningTests(unittest.TestCase):
         self.assertFalse(signed.prepared.submit_ready())
         self.assertEqual(signed.signer_id, "caller-key")
 
+    def test_prepared_invocation_rejects_signer_public_key_without_key_hint(self) -> None:
+        prepared = PreparedInvocation.from_json(PREPARED_FIXTURE)
+
+        with self.assertRaises(SDKError) as caught:
+            prepared.sign_with_caller_signature(
+                InvocationSignature(
+                    algorithm="ed25519",
+                    signature_base64="c2lnbmF0dXJl",
+                    signer_public_key_base64=(
+                        "o5TNp0VYb4h93vG8tNTXOh9gSePT3OYkGq1hlOYrmsM="
+                    ),
+                )
+            )
+
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+        self.assertIn("signer id is required", str(caught.exception))
+
     def test_signer_provider_signs_with_daemon_authorized_handle(self) -> None:
         class MemorySignatureProvider:
             def sign(self, material, handle):
