@@ -13,14 +13,15 @@ pub(crate) fn status_from_remote_failure(
     raw_error: &str,
     failure: Option<&SessionFailure>,
 ) -> Status {
-    let raw_detail = failure
-        .map(SessionFailure::status_detail)
-        .filter(|detail| !detail.trim().is_empty())
-        .unwrap_or_else(|| raw_error.trim().to_string());
+    let Some(failure) = failure else {
+        return Status::unavailable(format!(
+            "{context}: {}",
+            canonical_untyped_remote_failure_detail(raw_error)
+        ));
+    };
+    let raw_detail = failure.status_detail();
     let detail = canonical_remote_failure_detail(&raw_detail);
-    let code = failure
-        .map(|failure| status_code_for_failure(&failure.code, &detail))
-        .unwrap_or_else(|| status_code_for_failure("", &detail));
+    let code = status_code_for_failure(&failure.code, &detail);
     Status::new(code, format!("{context}: {detail}"))
 }
 
@@ -124,6 +125,40 @@ fn canonical_remote_failure_detail(detail: &str) -> String {
     detail.to_string()
 }
 
+fn canonical_untyped_remote_failure_detail(raw_error: &str) -> String {
+    let detail = raw_error.trim();
+    if detail.is_empty() {
+        return "REMOTE_FAILURE_UNTYPED: remote failure omitted typed failure facts".to_string();
+    }
+    if contains_custody_implementation_detail(detail) {
+        return "REMOTE_FAILURE_UNTYPED: remote failure omitted typed failure facts; \
+                custody detail redacted"
+            .to_string();
+    }
+    format!(
+        "REMOTE_FAILURE_UNTYPED: remote failure omitted typed failure facts; diagnostic={}",
+        bounded_diagnostic(detail)
+    )
+}
+
+fn contains_custody_implementation_detail(detail: &str) -> bool {
+    let detail = detail.to_ascii_uppercase();
+    detail.contains("KEYRING ENTRY NOT FOUND")
+        || detail.contains("KEYRING REJECTED REQUEST")
+        || detail.contains("SELF-IDENTITY:")
+}
+
+fn bounded_diagnostic(detail: &str) -> String {
+    const MAX_DIAGNOSTIC_CHARS: usize = 256;
+    let mut chars = detail.chars();
+    let clipped: String = chars.by_ref().take(MAX_DIAGNOSTIC_CHARS).collect();
+    if chars.next().is_some() {
+        format!("{clipped}…")
+    } else {
+        clipped
+    }
+}
+
 fn is_descriptor_owner_offline_message(code: &str, detail: &str) -> bool {
     let code = code.trim().to_ascii_uppercase();
     let detail = detail.to_ascii_uppercase();
@@ -191,13 +226,37 @@ mod tests {
     }
 
     #[test]
-    fn classifies_legacy_typed_detail_without_downgrading_security() {
+    fn untyped_remote_failure_does_not_gain_canonical_authority_class() {
         let status = status_from_remote_failure(
             "remote Invoke",
             "AUTHORITY_DENIED: target rejected caller",
             None,
         );
-        assert_eq!(status.code(), Code::PermissionDenied);
+
+        assert_eq!(status.code(), Code::Unavailable);
+        assert!(status.message().contains("REMOTE_FAILURE_UNTYPED"));
+        assert!(status.message().contains("AUTHORITY_DENIED"));
+    }
+
+    #[test]
+    fn untyped_remote_failure_redacts_keyring_implementation_detail() {
+        let status = status_from_remote_failure(
+            "remote Invoke",
+            "self-identity: keyring rejected request: kind=not_found, \
+             msg=keyring entry not found: easynet:///r/localhost/user/alice",
+            None,
+        );
+
+        assert_eq!(status.code(), Code::Unavailable);
+        assert!(status.message().contains("REMOTE_FAILURE_UNTYPED"));
+        assert!(status.message().contains("custody detail redacted"));
+        assert!(
+            !status.message().contains("keyring entry not found")
+                && !status.message().contains("keyring rejected request")
+                && !status.message().contains("self-identity:"),
+            "untyped remote failure must not expose custody implementation detail: {}",
+            status.message()
+        );
     }
 
     #[test]
