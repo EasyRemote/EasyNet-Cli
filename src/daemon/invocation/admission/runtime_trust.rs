@@ -73,6 +73,10 @@ impl RuntimeTrustContext {
             .register_pubkey(user_ura, public_key_b64, TrustedAgentRole::User)
     }
 
+    pub(crate) fn bind_principal_owner(&self, owner: TrustedPrincipalOwner) -> Result<(), Status> {
+        self.writer().bind_principal_owner(owner)
+    }
+
     pub(crate) fn reader(&self) -> RuntimeTrustReader<'_> {
         RuntimeTrustReader::new(&self.cell)
     }

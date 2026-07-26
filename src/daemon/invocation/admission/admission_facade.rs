@@ -34,8 +34,8 @@ use tonic::{Code, Status};
 use axon_sdk::invocation::axiom::{authority_proof_expected_hash, KeyResolver};
 use axon_sdk::invocation::{
     AuthorityBinding, AxonError as InvocationError, AxonErrorKind as InvocationErrorKind,
-    CallMode as AxonCallMode, DelegationProofBody, DescriptorBoundEnvelope,
-    InvocationAuthorityProof, SessionAuthorityBody, VerifiedAdmissionPolicy,
+    CallMode as AxonCallMode, DelegationProofBody, DescriptorBoundEnvelope, ErrorCode, ErrorStage,
+    InvocationAuthorityProof, SecurityClass, SessionAuthorityBody, VerifiedAdmissionPolicy,
     REASON_CALLER_SIGNATURE_INVALID, REASON_ENVELOPE_INCOMPLETE, REASON_NONCE_REPLAY,
 };
 
@@ -1720,13 +1720,25 @@ fn quota_denied_status(
 fn runtime_admission_status_to_axon(status: Status) -> InvocationError {
     let detail = status.message().to_string();
     match status.code() {
-        Code::Cancelled => InvocationError::cancelled(detail),
-        Code::DeadlineExceeded => InvocationError::deadline_exceeded(detail),
-        Code::InvalidArgument | Code::OutOfRange => InvocationError::invalid_argument(detail),
-        Code::ResourceExhausted => InvocationError::resource_exhausted(detail),
-        Code::Unavailable => InvocationError::unavailable(detail),
+        Code::Cancelled => InvocationError::cancelled(detail.clone())
+            .with_code(ErrorCode::ExecutionFailed)
+            .with_stage(ErrorStage::Execution)
+            .with_security_class(SecurityClass::Internal)
+            .with_message(detail),
+        Code::DeadlineExceeded => InvocationError::deadline_exceeded(detail.clone())
+            .with_code(ErrorCode::ExecutionFailed)
+            .with_stage(ErrorStage::Execution)
+            .with_security_class(SecurityClass::Internal)
+            .with_message(detail),
+        Code::InvalidArgument | Code::OutOfRange => classify_runtime_admission_invalid(detail),
+        Code::ResourceExhausted => classify_runtime_admission_quota(detail),
+        Code::Unavailable => InvocationError::unavailable(detail.clone())
+            .with_code(ErrorCode::TransportUntrusted)
+            .with_stage(ErrorStage::Transport)
+            .with_security_class(SecurityClass::Transport)
+            .with_message(detail),
         Code::PermissionDenied | Code::Unauthenticated => {
-            InvocationError::permission_denied(detail)
+            classify_runtime_admission_permission_denied(detail)
         }
         Code::Ok
         | Code::Unknown
@@ -1736,7 +1748,116 @@ fn runtime_admission_status_to_axon(status: Status) -> InvocationError {
         | Code::Aborted
         | Code::Unimplemented
         | Code::Internal
-        | Code::DataLoss => InvocationError::internal(detail),
+        | Code::DataLoss => InvocationError::internal(detail.clone())
+            .with_code(ErrorCode::InternalError)
+            .with_stage(ErrorStage::GlobalAdmission)
+            .with_security_class(SecurityClass::Internal)
+            .with_message(detail),
+    }
+}
+
+fn classify_runtime_admission_invalid(detail: String) -> InvocationError {
+    let (code, stage, security_class) = if detail.contains("REQUEST_METADATA_INVALID") {
+        (
+            ErrorCode::RequestMetadataInvalid,
+            ErrorStage::RequestValidation,
+            SecurityClass::Resource,
+        )
+    } else if detail.contains(REASON_ENVELOPE_INCOMPLETE) {
+        (
+            ErrorCode::RequestPayloadInvalid,
+            ErrorStage::GlobalAdmission,
+            SecurityClass::Identity,
+        )
+    } else if detail.contains(REASON_CALLER_SIGNATURE_INVALID) {
+        (
+            ErrorCode::CallerSignatureInvalid,
+            ErrorStage::CallerAuthentication,
+            SecurityClass::Authentication,
+        )
+    } else if detail.contains(REASON_NONCE_REPLAY) {
+        (
+            ErrorCode::CallerNonceReplayed,
+            ErrorStage::CallerAuthentication,
+            SecurityClass::Authentication,
+        )
+    } else {
+        (
+            ErrorCode::RequestPayloadInvalid,
+            ErrorStage::RequestValidation,
+            SecurityClass::Internal,
+        )
+    };
+    InvocationError::invalid_argument(detail.clone())
+        .with_code(code)
+        .with_stage(stage)
+        .with_security_class(security_class)
+        .with_message(detail)
+}
+
+fn classify_runtime_admission_quota(detail: String) -> InvocationError {
+    let code = if detail.contains("RESOURCE_EXHAUSTED") {
+        ErrorCode::ResourceExhausted
+    } else {
+        ErrorCode::QuotaExceeded
+    };
+    InvocationError::resource_exhausted(detail.clone())
+        .with_code(code)
+        .with_stage(ErrorStage::Quota)
+        .with_security_class(SecurityClass::Resource)
+        .with_message(detail)
+}
+
+fn classify_runtime_admission_permission_denied(detail: String) -> InvocationError {
+    let (code, stage, security_class) = if detail.contains("AUTHORITY_") {
+        (
+            authority_error_code_for_detail(&detail),
+            ErrorStage::AuthorityValidation,
+            SecurityClass::Authority,
+        )
+    } else if detail.contains("POLICY_DENIED") {
+        (
+            ErrorCode::AbilityForbidden,
+            ErrorStage::AbilityPolicy,
+            SecurityClass::Authorization,
+        )
+    } else if detail.contains("BOOTSTRAP") || detail.contains("bootstrap") {
+        (
+            ErrorCode::BootstrapNotAllowed,
+            ErrorStage::BootstrapAuthorization,
+            SecurityClass::Bootstrap,
+        )
+    } else {
+        (
+            ErrorCode::AbilityForbidden,
+            ErrorStage::AbilityPolicy,
+            SecurityClass::Authorization,
+        )
+    };
+    InvocationError::permission_denied(detail.clone())
+        .with_code(code)
+        .with_stage(stage)
+        .with_security_class(security_class)
+        .with_message(detail)
+}
+
+fn authority_error_code_for_detail(detail: &str) -> ErrorCode {
+    if detail.contains("AUTHORITY_SUBJECT_MISMATCH") {
+        ErrorCode::AuthoritySubjectMismatch
+    } else if detail.contains("AUTHORITY_CALLER_MISMATCH") {
+        ErrorCode::AuthorityCallerMismatch
+    } else if detail.contains("AUTHORITY_AUDIENCE_VIOLATION") {
+        ErrorCode::AuthorityAudienceViolation
+    } else if detail.contains("AUTHORITY_SCOPE_VIOLATION") {
+        ErrorCode::AuthorityScopeViolation
+    } else if detail.contains("AUTHORITY_REALM_MISMATCH") {
+        ErrorCode::AuthorityRealmMismatch
+    } else if detail.contains("AUTHORITY_EXPIRED") {
+        ErrorCode::AuthorityExpired
+    } else if detail.contains("AUTHORITY_REQUIRED") {
+        ErrorCode::AuthorityRequired
+    } else {
+        ErrorCode::AuthorityChainInvalid
     }
 }
 
@@ -2627,6 +2748,45 @@ mod tests {
     use tempfile::tempdir;
 
     const TEST_DESCRIPTOR_REF: &str = "easynet:///r/policy/ability/policy.worker.run@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke";
+
+    #[test]
+    fn runtime_policy_denial_projects_canonical_pre_admission_facts() {
+        let error = runtime_admission_status_to_axon(Status::permission_denied(
+            r#"POLICY_DENIED: {"decision":"deny","reason":"OWNER_UNRESOLVED"}"#,
+        ));
+
+        assert_eq!(error.code, ErrorCode::AbilityForbidden);
+        assert_eq!(error.stage, Some(ErrorStage::AbilityPolicy));
+        assert_eq!(error.security_class, Some(SecurityClass::Authorization));
+        assert_eq!(error.reason, ErrorCode::AbilityForbidden.as_str());
+        assert!(
+            error.message.contains("OWNER_UNRESOLVED"),
+            "policy detail must remain visible for operator diagnosis: {error:?}"
+        );
+    }
+
+    #[test]
+    fn runtime_authority_denial_preserves_subject_mismatch_fact() {
+        let error = runtime_admission_status_to_axon(Status::permission_denied(
+            "AUTHORITY_DENIED: AUTHORITY_SUBJECT_MISMATCH: session subject does not admit envelope subject",
+        ));
+
+        assert_eq!(error.code, ErrorCode::AuthoritySubjectMismatch);
+        assert_eq!(error.stage, Some(ErrorStage::AuthorityValidation));
+        assert_eq!(error.security_class, Some(SecurityClass::Authority));
+        assert_eq!(error.reason, ErrorCode::AuthoritySubjectMismatch.as_str());
+    }
+
+    #[test]
+    fn runtime_quota_denial_projects_resource_stage() {
+        let error = runtime_admission_status_to_axon(Status::resource_exhausted(
+            "QUOTA_EXCEEDED: caller=easynet:///r/policy/user/alice ability=demo retry_after_ms=1000",
+        ));
+
+        assert_eq!(error.code, ErrorCode::QuotaExceeded);
+        assert_eq!(error.stage, Some(ErrorStage::Quota));
+        assert_eq!(error.security_class, Some(SecurityClass::Resource));
+    }
 
     fn receipt_policy_envelope(
         caller_ura: &str,

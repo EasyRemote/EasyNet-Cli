@@ -112,7 +112,7 @@ mod trust;
 
 #[cfg(test)]
 use crate::daemon::persistence::config::Credentials;
-use crate::daemon::trust::anchor::trust_anchor_path_from_env_or_default;
+use crate::daemon::trust::anchor::{trust_anchor_path_from_env_or_default, TrustedPrincipalOwner};
 #[cfg(test)]
 use identity::canonical_caller_ura_from_credentials;
 use identity::{load_daemon_identity_for_mode, load_runtime_signer, DaemonIdentity};
@@ -1117,19 +1117,37 @@ fn register_paired_user_runtime_signer(
             projection.key_id
         )
     })?;
-    RuntimeTrustContext {
+    let runtime_trust = RuntimeTrustContext {
         daemon_realm: config.realm().to_string(),
         trust_anchor_path: trust_anchor_path.clone(),
         cell: trust_anchor_cell.clone(),
-    }
-    .register_user_pubkey(user_ura.clone(), projection.public_key_b64.clone())
-    .map_err(|status| {
-        anyhow::anyhow!(
-            "register paired User `{user_ura}` runtime signing key: code={:?}, message={}",
-            status.code(),
-            status.message()
-        )
-    })?;
+    };
+    runtime_trust
+        .register_user_pubkey(user_ura.clone(), projection.public_key_b64.clone())
+        .map_err(|status| {
+            anyhow::anyhow!(
+                "register paired User `{user_ura}` runtime signing key: code={:?}, message={}",
+                status.code(),
+                status.message()
+            )
+        })?;
+    let device_ura = crate::core::ura::device_ura(credentials.realm_str(), &credentials.node_id);
+    let owner = TrustedPrincipalOwner {
+        principal_ura: device_ura.clone(),
+        owner_user_id: credentials.user_id()?.to_string(),
+        owner_ura: user_ura.clone(),
+        owner_username: credentials.username.clone(),
+        added_at_unix_ms: crate::daemon::invocation::admission::runtime_trust::now_unix_ms(),
+    };
+    runtime_trust
+        .bind_principal_owner(owner)
+        .map_err(|status| {
+            anyhow::anyhow!(
+                "bind paired Device `{device_ura}` owner `{user_ura}`: code={:?}, message={}",
+                status.code(),
+                status.message()
+            )
+        })?;
     crate::op_event!(
         component = daemon_invocation,
         kind = paired_user_runtime_signer_registered,

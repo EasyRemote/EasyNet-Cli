@@ -28,7 +28,7 @@ use std::os::raw::{c_char, c_void};
 #[cfg(feature = "axon-pb")]
 use std::path::PathBuf;
 #[cfg(feature = "axon-pb")]
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 #[cfg(feature = "axon-pb")]
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 
@@ -2841,11 +2841,11 @@ fn stream_open_with_axon_pb(
 
     let cancel = tokio_util::sync::CancellationToken::new();
     let owner = registration.binding();
-    let stream_id = insert_stream(ActiveInvocationStream {
+    let stream_id = insert_stream(ActiveInvocationStream::new(
         owner,
-        reader_cancel: cancel.clone(),
+        cancel.clone(),
         cancellation,
-    });
+    ));
     rt.spawn(run_stream_reader(stream_id, stream, cancel, tx));
     drop(registration);
 
@@ -3065,7 +3065,9 @@ fn release_stream_with_reader_cancel(
 ) -> i32 {
     match remove_stream_for_handle(owner, stream_id) {
         Ok(Some(stream)) => {
-            stream.reader_cancel.cancel();
+            if !stream.reader_finished() {
+                stream.reader_cancel.cancel();
+            }
             clear_last_error();
             RUNTIME_OK
         }
@@ -3501,6 +3503,31 @@ struct ActiveInvocationStream {
     owner: ClientSessionBinding,
     reader_cancel: tokio_util::sync::CancellationToken,
     cancellation: Arc<ProviderCancellationControl>,
+    reader_finished: AtomicBool,
+}
+
+#[cfg(feature = "axon-pb")]
+impl ActiveInvocationStream {
+    fn new(
+        owner: ClientSessionBinding,
+        reader_cancel: tokio_util::sync::CancellationToken,
+        cancellation: Arc<ProviderCancellationControl>,
+    ) -> Self {
+        Self {
+            owner,
+            reader_cancel,
+            cancellation,
+            reader_finished: AtomicBool::new(false),
+        }
+    }
+
+    fn mark_reader_finished(&self) {
+        self.reader_finished.store(true, Ordering::Release);
+    }
+
+    fn reader_finished(&self) -> bool {
+        self.reader_finished.load(Ordering::Acquire)
+    }
 }
 
 #[cfg(feature = "axon-pb")]
@@ -4374,12 +4401,22 @@ fn remove_invocation_handle_for_owner(
     Ok(entries.remove(&invocation_handle_id))
 }
 
-#[cfg(feature = "axon-pb")]
+#[cfg(all(test, feature = "axon-pb"))]
 fn remove_stream(stream_id: InvocationStreamId) -> Option<Arc<ActiveInvocationStream>> {
     if stream_id == 0 {
         return None;
     }
     lock_stream_entries(stream_registry()).remove(&stream_id)
+}
+
+#[cfg(feature = "axon-pb")]
+fn get_stream(stream_id: InvocationStreamId) -> Option<Arc<ActiveInvocationStream>> {
+    if stream_id == 0 {
+        return None;
+    }
+    lock_stream_entries(stream_registry())
+        .get(&stream_id)
+        .cloned()
 }
 
 #[cfg(feature = "axon-pb")]
@@ -4676,7 +4713,9 @@ async fn run_stream_reader(
             }
         }
     }
-    let _ = remove_stream(stream_id);
+    if let Some(stream) = get_stream(stream_id) {
+        stream.mark_reader_finished();
+    }
 }
 
 #[cfg(feature = "axon-pb")]
@@ -10150,11 +10189,11 @@ mod tests {
             submitter.clone(),
         ));
         let reader_cancel = tokio_util::sync::CancellationToken::new();
-        let stream_id = insert_stream(ActiveInvocationStream {
+        let stream_id = insert_stream(ActiveInvocationStream::new(
             owner,
-            reader_cancel: reader_cancel.clone(),
-            cancellation: cancellation.clone(),
-        });
+            reader_cancel.clone(),
+            cancellation.clone(),
+        ));
 
         let first = std::thread::spawn(move || unsafe {
             runtime_invocation_stream_cancel(handle, stream_id)
@@ -10243,11 +10282,11 @@ mod tests {
             submitter.clone(),
         ));
         let reader_cancel = tokio_util::sync::CancellationToken::new();
-        let stream_id = insert_stream(ActiveInvocationStream {
+        let stream_id = insert_stream(ActiveInvocationStream::new(
             owner,
-            reader_cancel: reader_cancel.clone(),
+            reader_cancel.clone(),
             cancellation,
-        });
+        ));
 
         assert_eq!(
             unsafe { runtime_invocation_stream_cancel(handle, stream_id) },
@@ -10286,6 +10325,31 @@ mod tests {
     }
 
     #[test]
+    fn invocation_stream_close_accepts_terminal_drained_resource() {
+        let (handle, session) = alloc(test_session());
+        let owner = session.binding(handle);
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let stream_id = insert_stream(ActiveInvocationStream::new(
+            owner,
+            cancel.clone(),
+            test_cancellation_control(),
+        ));
+        get_stream(stream_id)
+            .expect("registered stream")
+            .mark_reader_finished();
+
+        let code = unsafe { runtime_invocation_stream_close(handle, stream_id) };
+
+        assert_eq!(code, RUNTIME_OK);
+        assert!(
+            !cancel.is_cancelled(),
+            "terminal-drained close must not submit a second local reader cancellation"
+        );
+        assert!(get_stream_for_handle(owner, stream_id).unwrap().is_none());
+        crate::ffi::client::handle::release(handle);
+    }
+
+    #[test]
     fn invocation_bidi_close_rejects_unknown_invocation_resource() {
         let (handle, _) = alloc(test_session());
         let code = unsafe { runtime_invocation_bidi_close(handle, 9_999_999) };
@@ -10304,11 +10368,11 @@ mod tests {
         let owner_binding = owner_session.binding(owner);
         let (other, _) = alloc(test_session());
         let cancel = tokio_util::sync::CancellationToken::new();
-        let stream_id = insert_stream(ActiveInvocationStream {
-            owner: owner_binding,
-            reader_cancel: cancel.clone(),
-            cancellation: test_cancellation_control(),
-        });
+        let stream_id = insert_stream(ActiveInvocationStream::new(
+            owner_binding,
+            cancel.clone(),
+            test_cancellation_control(),
+        ));
 
         let code = unsafe { runtime_invocation_stream_close(other, stream_id) };
 
@@ -10437,11 +10501,11 @@ mod tests {
     #[test]
     fn stream_registry_remove_returns_registered_cancel_token() {
         let cancel = tokio_util::sync::CancellationToken::new();
-        let stream_id = insert_stream(ActiveInvocationStream {
-            owner: registry_owner(41, 4100),
-            reader_cancel: cancel.clone(),
-            cancellation: test_cancellation_control(),
-        });
+        let stream_id = insert_stream(ActiveInvocationStream::new(
+            registry_owner(41, 4100),
+            cancel.clone(),
+            test_cancellation_control(),
+        ));
         let stream = remove_stream(stream_id).expect("registered stream should be removable");
         stream.reader_cancel.cancel();
         assert!(cancel.is_cancelled());
@@ -10472,16 +10536,16 @@ mod tests {
         let other = other_session.binding(other_handle);
         let owned_stream_cancel = tokio_util::sync::CancellationToken::new();
         let other_stream_cancel = tokio_util::sync::CancellationToken::new();
-        let owned_stream_id = insert_stream(ActiveInvocationStream {
-            owner: owned,
-            reader_cancel: owned_stream_cancel.clone(),
-            cancellation: test_cancellation_control(),
-        });
-        let other_stream_id = insert_stream(ActiveInvocationStream {
-            owner: other,
-            reader_cancel: other_stream_cancel.clone(),
-            cancellation: test_cancellation_control(),
-        });
+        let owned_stream_id = insert_stream(ActiveInvocationStream::new(
+            owned,
+            owned_stream_cancel.clone(),
+            test_cancellation_control(),
+        ));
+        let other_stream_id = insert_stream(ActiveInvocationStream::new(
+            other,
+            other_stream_cancel.clone(),
+            test_cancellation_control(),
+        ));
 
         let (owned_bidi, _owned_up_rx, owned_bidi_cancel) = active_bidi_session(owned, 1);
         let (other_bidi, _other_up_rx, other_bidi_cancel) = active_bidi_session(other, 1);
@@ -10506,11 +10570,11 @@ mod tests {
     #[test]
     fn stream_registry_refuses_cross_handle_cancel() {
         let cancel = tokio_util::sync::CancellationToken::new();
-        let stream_id = insert_stream(ActiveInvocationStream {
-            owner: registry_owner(101, 1010),
-            reader_cancel: cancel,
-            cancellation: test_cancellation_control(),
-        });
+        let stream_id = insert_stream(ActiveInvocationStream::new(
+            registry_owner(101, 1010),
+            cancel,
+            test_cancellation_control(),
+        ));
 
         assert!(matches!(
             remove_stream_for_handle(registry_owner(101, 2020), stream_id),

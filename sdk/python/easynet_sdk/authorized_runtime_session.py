@@ -35,10 +35,6 @@ from .runtime import (
     RuntimeReceipt,
     StreamHandle,
 )
-from .runtime_ability import (
-    RuntimeCallContext,
-    RuntimeInvocationAuthority,
-)
 from ._session_authority_subjects import session_authority_admits_subject
 from ._receipt_history_admission import validate_receipt_history_request
 from .signing import PreparedInvocation, SignedInvocation, Signer, SigningMaterial
