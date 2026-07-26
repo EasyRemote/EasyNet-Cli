@@ -3,23 +3,9 @@ import Foundation
 public let authorityProfile = "authority"
 public let delegationMetadataKey = "x-runtime-delegation"
 public let sessionAuthorityMetadataKey = "x-runtime-session-authority"
-private let runtimeStateReadSubjectPath = "runtime-state/read"
-private let retiredInvocationHistorySubjectPath = "session/invocation_history"
 
 public func runtimeStateReadSubjectURA(realm: String, userID: String) throws -> String {
-    let cleanRealm = try requiredAuthorityString(realm, "realm")
-    let cleanUserID = try requiredAuthorityPrincipalID(userID, "user_id")
-    guard !cleanRealm.contains("/"), !cleanRealm.contains("?"), !cleanRealm.contains("#") else {
-        throw invalidAuthority("runtime-state read subject realm is not canonical")
-    }
-    guard !cleanUserID.contains("/"), !cleanUserID.contains("?"), !cleanUserID.contains("#") else {
-        throw invalidAuthority("runtime-state read subject user_id is not canonical")
-    }
-    let subject = "easynet:///r/\(cleanRealm)/resource/user.\(cleanUserID)/\(runtimeStateReadSubjectPath)"
-    guard canonicalResourceSubject(subject) != nil else {
-        throw invalidAuthority("runtime-state read subject_ura must be canonical")
-    }
-    return subject
+    try RuntimeSubjects.runtimeStateReadSubjectURA(realm: realm, userID: userID)
 }
 
 public struct AuthorityMetadata: Sendable, Equatable {
@@ -432,12 +418,7 @@ private func authorityMetadataValue(_ metadata: [String: JSONValue], _ key: Stri
 }
 
 private func requiredAuthorityString(_ value: String, _ field: String) throws -> String {
-    guard !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-          value == value.trimmingCharacters(in: .whitespacesAndNewlines)
-    else {
-        throw invalidAuthority("\(field) is required")
-    }
-    return value
+    try RuntimePrincipals.requiredString(value, field, stage: authorityProfile)
 }
 
 private func requiredAuthorityString(_ object: [String: JSONValue], _ field: String) throws -> String {
@@ -457,23 +438,13 @@ private func requiredAuthorityURA(_ value: String, _ field: String) throws -> St
 }
 
 private func requiredAuthorityPrincipalID(_ value: String, _ field: String) throws -> String {
-    let cleaned = try requiredAuthorityString(value, field)
-    try rejectAllZeroAuthorityField(cleaned, field)
-    return cleaned
+    try RuntimePrincipals.requiredPrincipalID(value, field, stage: authorityProfile)
 }
 
 private func rejectAllZeroAuthorityField(_ value: String, _ field: String) throws {
-    if containsAllZeroPrincipal(value) {
+    if RuntimePrincipals.containsAllZeroPrincipal(value) {
         throw invalidAuthority("\(field) must not be all-zero")
     }
-}
-
-private let allZeroPrincipalID = "00000000-0000-0000-0000-000000000000"
-
-func containsAllZeroPrincipal(_ value: String) -> Bool {
-    value.trimmingCharacters(in: .whitespacesAndNewlines)
-        .lowercased()
-        .contains(allZeroPrincipalID)
 }
 
 private struct AuthoritySubject {
@@ -483,7 +454,7 @@ private struct AuthoritySubject {
 }
 
 private func validateSessionAuthoritySubjectBinding(subjectURA: String, sessionOwnerUserID: String, sessionID: String) throws {
-    if isRetiredInvocationHistorySubject(subjectURA) {
+    if RuntimeSubjects.isRetiredInvocationHistorySubject(subjectURA) {
         throw invalidAuthority("session authority subject_ura uses retired invocation-history subject; use runtime-state/read")
     }
     guard let subject = try canonicalAuthoritySubject(subjectURA) else {
@@ -502,14 +473,14 @@ private func validateSessionAuthoritySubjectBinding(subjectURA: String, sessionO
 }
 
 private func sessionAuthorityAdmitsSubject(_ authority: SessionAuthority, _ subjectURA: String) -> Bool {
-    if isRetiredInvocationHistorySubject(subjectURA) {
+    if RuntimeSubjects.isRetiredInvocationHistorySubject(subjectURA) {
         return false
     }
     if authority.subjectURA.trimmingCharacters(in: .whitespacesAndNewlines) ==
         subjectURA.trimmingCharacters(in: .whitespacesAndNewlines) {
         return true
     }
-    guard let resource = canonicalResourceSubject(subjectURA) else {
+    guard let resource = RuntimeSubjects.canonicalResourceSubject(subjectURA) else {
         return false
     }
     let ownerUserID = authority.sessionOwnerUserID.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -563,62 +534,6 @@ private func canonicalAuthoritySubject(_ subjectURA: String) throws -> Authority
         return nil
     }
     return AuthoritySubject(kind: "session", ownerUserID: ownerUserID, sessionID: authoritySessionID)
-}
-
-private func isRetiredInvocationHistorySubject(_ subjectURA: String) -> Bool {
-    guard let subject = canonicalResourceSubject(subjectURA),
-          subject.ownerID.hasPrefix("user.")
-    else {
-        return false
-    }
-    let ownerUserID = String(subject.ownerID.dropFirst("user.".count)).trimmingCharacters(in: .whitespacesAndNewlines)
-    return !ownerUserID.isEmpty &&
-        !ownerUserID.contains(".") &&
-        !containsAllZeroPrincipal(ownerUserID) &&
-        subject.path == retiredInvocationHistorySubjectPath
-}
-
-private struct ResourceSubject {
-    let ownerID: String
-    let path: String
-}
-
-private func canonicalResourceSubject(_ subjectURA: String) -> ResourceSubject? {
-    guard !containsAllZeroPrincipal(subjectURA) else {
-        return nil
-    }
-    let raw = subjectURA.trimmingCharacters(in: .whitespacesAndNewlines)
-    let realmPrefix = "easynet:///r/"
-    guard raw.hasPrefix(realmPrefix) else {
-        return nil
-    }
-    let rest = String(raw.dropFirst(realmPrefix.count))
-    guard let slash = rest.firstIndex(of: "/"), slash != rest.startIndex else {
-        return nil
-    }
-    let path = String(rest[rest.index(after: slash)...])
-    let resourcePrefix = "resource/"
-    guard path.hasPrefix(resourcePrefix) else {
-        return nil
-    }
-    let resource = String(path.dropFirst(resourcePrefix.count))
-    guard let pathSlash = resource.firstIndex(of: "/"),
-          pathSlash != resource.startIndex,
-          pathSlash != resource.index(before: resource.endIndex)
-    else {
-        return nil
-    }
-    let ownerID = String(resource[..<pathSlash]).trimmingCharacters(in: .whitespacesAndNewlines)
-    let resourcePath = String(resource[resource.index(after: pathSlash)...]).trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !ownerID.isEmpty,
-          !ownerID.contains("/"),
-          !resourcePath.isEmpty,
-          !resourcePath.hasPrefix("/"),
-          !resourcePath.contains("//")
-    else {
-        return nil
-    }
-    return ResourceSubject(ownerID: ownerID, path: resourcePath)
 }
 
 private struct InvocationAuthorityBindingValidator {

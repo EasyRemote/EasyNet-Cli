@@ -30,6 +30,8 @@ final class RuntimeCoreSeamTests: XCTestCase {
                 "JSONValue.swift",
                 "Runtime.swift",
                 "RuntimeAbilityProjection.swift",
+                "RuntimePrincipals.swift",
+                "RuntimeSubjects.swift",
                 "SDKError.swift",
                 "Stream.swift",
             ])

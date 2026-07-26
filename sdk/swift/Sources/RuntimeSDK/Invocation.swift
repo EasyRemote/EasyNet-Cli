@@ -39,7 +39,7 @@ public struct InvocationTuple: Sendable, Equatable {
 
     private static func requiredPrincipal(_ value: String?, _ field: String) throws -> String {
         let cleaned = try required(value, field)
-        if containsAllZeroPrincipal(cleaned) {
+        if RuntimePrincipals.containsAllZeroPrincipal(cleaned) {
             throw SDKError.validation("invocation", "\(field) must not be all-zero")
         }
         return cleaned
