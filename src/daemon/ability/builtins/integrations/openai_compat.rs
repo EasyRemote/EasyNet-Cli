@@ -386,22 +386,7 @@ fn handle_chat_completions_with_handle(
             )
         })?;
 
-    // Extract reply text from agent response. Different chat
-    // abilities return slightly different shapes; v0.1 supports:
-    //   - { reply: "text" }
-    //   - { message: "text" }
-    //   - { content: "text" }
-    //   - any string at top level
-    let reply_text = dispatch_result
-        .get("reply")
-        .or_else(|| dispatch_result.get("message"))
-        .or_else(|| dispatch_result.get("content"))
-        .and_then(Value::as_str)
-        .map(String::from)
-        .unwrap_or_else(|| {
-            // fallback: stringify the whole response
-            serde_json::to_string(&dispatch_result).unwrap_or_default()
-        });
+    let reply_text = extract_chat_reply_text(&dispatch_result)?;
 
     // INV-3: deterministic projection. Approximate token counts
     // using char-based heuristic (same input → same numbers).
@@ -529,6 +514,25 @@ fn handle_chat_completions_with_handle(
         "done_sentinel":   "[DONE]",
         "easynet_user_ura": user_ura,
     }))
+}
+
+/// Extract the explicit text payload a chat-base ability returned.
+///
+/// The OpenAI-compatible adapter is a product projection over a canonical
+/// runtime ability result; it must not convert an unknown provider shape into a
+/// successful assistant message by stringifying arbitrary JSON.
+fn extract_chat_reply_text(dispatch_result: &Value) -> anyhow::Result<String> {
+    if let Some(text) = dispatch_result.as_str() {
+        return Ok(text.to_string());
+    }
+    for field in ["reply", "message", "content"] {
+        if let Some(text) = dispatch_result.get(field).and_then(Value::as_str) {
+            return Ok(text.to_string());
+        }
+    }
+    anyhow::bail!(
+        "chat-base ability response must be a string or object with string reply, message, or content"
+    )
 }
 
 /// `openai.list_models` — return list of chat-base abilities
@@ -1134,6 +1138,36 @@ mod tests {
         assert!(
             err.to_string()
                 .contains("model must point to the canonical agent chat Ability URA"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn extract_chat_reply_text_accepts_explicit_text_shapes() {
+        for (raw, expected) in [
+            (json!("top-level"), "top-level"),
+            (json!({"reply": "reply text"}), "reply text"),
+            (json!({"message": "message text"}), "message text"),
+            (json!({"content": "content text"}), "content text"),
+        ] {
+            assert_eq!(
+                extract_chat_reply_text(&raw).expect("explicit text shape"),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn extract_chat_reply_text_rejects_unknown_shape_without_json_stringify_fallback() {
+        let err = extract_chat_reply_text(&json!({
+            "tool_calls": [{"name": "search"}],
+            "structured": {"answer": "hidden"},
+        }))
+        .expect_err("unknown provider response shape must fail closed");
+
+        assert!(
+            err.to_string()
+                .contains("chat-base ability response must be a string"),
             "unexpected error: {err}"
         );
     }

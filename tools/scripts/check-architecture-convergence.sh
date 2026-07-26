@@ -1284,6 +1284,32 @@ if openai_compat.exists():
             line_number(text, match.start()),
             "OpenAI compatibility must not revive legacy <user>.files.* dispatch names",
         )
+    chat_contract_tokens = (
+        (
+            "fn extract_chat_reply_text(",
+            "OpenAI chat projection must centralize explicit provider response extraction",
+        ),
+        (
+            "chat-base ability response must be a string or object with string reply, message, or content",
+            "OpenAI chat projection must fail closed for unknown provider response shapes",
+        ),
+    )
+    for token, detail in chat_contract_tokens:
+        if token not in text:
+            add("R96_OPENAI_CHAT_RESPONSE_FALLBACK", openai_compat, 1, detail)
+    for token in (
+        "fallback: stringify",
+        "serde_json::to_string(&dispatch_result)",
+        "serde_json::to_string(dispatch_result)",
+    ):
+        pos = text.find(token)
+        if pos >= 0:
+            add(
+                "R96_OPENAI_CHAT_RESPONSE_FALLBACK",
+                openai_compat,
+                line_number(text, pos),
+                f"OpenAI chat projection must not preserve fallback response stringification token `{token}`",
+            )
 
 catalog_build = cli_root / "src/daemon/ability/catalog/build.rs"
 if catalog_build.exists():
