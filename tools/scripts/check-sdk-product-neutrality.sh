@@ -99,6 +99,36 @@ sdk_conformance_backend_case_violations() {
   printf '%s\n' "$output"
 }
 
+sdk_conformance_daemon_case_violations() {
+  local scan_root="${1:-$ROOT}"
+  local output
+  output="$(
+    {
+      if [[ -d "$scan_root/sdk/conformance/cases" ]]; then
+        find "$scan_root/sdk/conformance/cases" -maxdepth 1 -type f \( \
+          -name 'daemon-*' -o -name '*.yaml' \
+        \) -print0 \
+          | xargs -0 rg -n '(^id:[[:space:]]*daemon/|daemon/permission_denied)' \
+          || true
+      fi
+      for file in \
+        "$scan_root/sdk/conformance/canonical-public-api.json" \
+        "$scan_root/sdk/conformance/sdk-parity-matrix.json" \
+        "$scan_root/sdk/conformance/runner/go-runtime-conformance-report.json" \
+        "$scan_root/sdk/conformance/runner/c-abi-runtime-conformance-report.json" \
+        "$scan_root/sdk/conformance/runner/python-runtime-conformance-report.json" \
+        "$scan_root/sdk/conformance/runner/rust-runtime-conformance-report.json" \
+        "$scan_root/sdk/conformance/runner/execution-manifest.json"
+      do
+        [[ -f "$file" ]] || continue
+        rg -n '"daemon/permission_denied"' "$file" || true
+      done
+    } 2>/dev/null
+  )"
+  [[ -z "$output" ]] && return 1
+  printf '%s\n' "$output"
+}
+
 python_runtime_admin_session_projection_violations() {
   local runtime_admin="${1:-sdk/python/easynet_sdk/runtime_admin.py}"
   [[ -f "$runtime_admin" ]] || return 0
@@ -755,6 +785,10 @@ fi
 
 if sdk_conformance_backend_case_violations "$ROOT"; then
   fail "backend/product migration gate leaked into SDK conformance ownership"
+fi
+
+if sdk_conformance_daemon_case_violations "$ROOT"; then
+  fail "daemon-owned conformance case leaked into SDK runtime-host capability ownership"
 fi
 
 if jq -e '.capability_ids[] | select(. == "mission" or . == "admin_gateway" or . == "directory_identity" or . == "publication" or . == "host_binding" or . == "events" or . == "surface" or . == "compatibility" or . == "wrappers" or . == "runtime_companion_control")' sdk/conformance/sdk-parity-matrix.json >/dev/null; then

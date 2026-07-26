@@ -36,7 +36,7 @@
       "profile": "runtime_core"
     },
     {
-      "case_id": "daemon/permission_denied",
+      "case_id": "runtime_host/permission_denied",
       "evidence": [
         {
           "kind": "c_abi_test",

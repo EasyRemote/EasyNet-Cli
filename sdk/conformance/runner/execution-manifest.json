@@ -19,7 +19,7 @@
     },
     {
       "language": "c_abi",
-      "case_id": "daemon/permission_denied",
+      "case_id": "runtime_host/permission_denied",
       "selector": "daemon_status_error_records_typed_last_error",
       "evidence": [
         "src/ffi/invocation/mod.rs"
@@ -227,7 +227,7 @@
     },
     {
       "language": "go",
-      "case_id": "daemon/permission_denied",
+      "case_id": "runtime_host/permission_denied",
       "selector": "TestErrorClassForCodeProjectsStableClasses",
       "evidence": [
         "sdk/go/errors_test.go"
@@ -915,7 +915,7 @@
     },
     {
       "language": "python",
-      "case_id": "daemon/permission_denied",
+      "case_id": "runtime_host/permission_denied",
       "selector": "test_error_class_for_code_projects_stable_classes",
       "evidence": [
         "sdk/python/tests/test_errors.py"
@@ -1267,7 +1267,7 @@
     },
     {
       "language": "rust",
-      "case_id": "daemon/permission_denied",
+      "case_id": "runtime_host/permission_denied",
       "selector": "quota_meters_user_abilities_but_exempts_control_plane",
       "evidence": [
         "src/daemon/invocation/dispatch/daemon_invocation_service_tests/unary.rs"

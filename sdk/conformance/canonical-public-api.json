@@ -6697,10 +6697,10 @@
     "typed_errors": {
       "profile": "runtime_core",
       "case_ids": [
-        "daemon/permission_denied",
         "error/profile_source_refs",
         "error/retry_hint",
-        "error/typed_json"
+        "error/typed_json",
+        "runtime_host/permission_denied"
       ]
     },
     "unary_invoke": {

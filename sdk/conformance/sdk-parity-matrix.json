@@ -241213,7 +241213,7 @@
       "profile": "runtime_core",
       "status": "seam",
       "evidence_case_ids": [
-        "daemon/permission_denied",
+        "runtime_host/permission_denied",
         "error/retry_hint",
         "error/typed_json"
       ],
@@ -241390,7 +241390,7 @@
       ],
       "step_shape_evidence": [
         {
-          "case_id": "daemon/permission_denied",
+          "case_id": "runtime_host/permission_denied",
           "action": "deny_runtime_permission",
           "execution_case_bound": true,
           "items": [
@@ -241565,7 +241565,7 @@
           ]
         },
         {
-          "case_id": "daemon/permission_denied",
+          "case_id": "runtime_host/permission_denied",
           "action": "project_typed_error",
           "execution_case_bound": true,
           "items": [
@@ -244199,7 +244199,7 @@
       "profile": "runtime_core",
       "status": "seam",
       "evidence_case_ids": [
-        "daemon/permission_denied",
+        "runtime_host/permission_denied",
         "error/retry_hint",
         "error/typed_json"
       ],
@@ -244215,7 +244215,7 @@
       "profile": "runtime_core",
       "status": "seam",
       "evidence_case_ids": [
-        "daemon/permission_denied",
+        "runtime_host/permission_denied",
         "error/profile_source_refs",
         "error/retry_hint",
         "error/typed_json"
@@ -244533,7 +244533,7 @@
       ],
       "step_shape_evidence": [
         {
-          "case_id": "daemon/permission_denied",
+          "case_id": "runtime_host/permission_denied",
           "action": "deny_runtime_permission",
           "execution_case_bound": true,
           "items": [
@@ -244848,7 +244848,7 @@
           ]
         },
         {
-          "case_id": "daemon/permission_denied",
+          "case_id": "runtime_host/permission_denied",
           "action": "project_typed_error",
           "execution_case_bound": true,
           "items": [
@@ -249582,7 +249582,7 @@
       "profile": "runtime_core",
       "status": "seam",
       "evidence_case_ids": [
-        "daemon/permission_denied",
+        "runtime_host/permission_denied",
         "error/profile_source_refs",
         "error/retry_hint",
         "error/typed_json"
@@ -249936,7 +249936,7 @@
       ],
       "step_shape_evidence": [
         {
-          "case_id": "daemon/permission_denied",
+          "case_id": "runtime_host/permission_denied",
           "action": "deny_runtime_permission",
           "execution_case_bound": true,
           "items": [
@@ -250287,7 +250287,7 @@
           ]
         },
         {
-          "case_id": "daemon/permission_denied",
+          "case_id": "runtime_host/permission_denied",
           "action": "project_typed_error",
           "execution_case_bound": true,
           "items": [
@@ -255702,7 +255702,7 @@
       ],
       "step_shape_evidence": [
         {
-          "case_id": "daemon/permission_denied",
+          "case_id": "runtime_host/permission_denied",
           "action": "deny_runtime_permission",
           "execution_case_bound": false,
           "items": [
@@ -255841,7 +255841,7 @@
           ]
         },
         {
-          "case_id": "daemon/permission_denied",
+          "case_id": "runtime_host/permission_denied",
           "action": "project_typed_error",
           "execution_case_bound": false,
           "items": [
@@ -258275,7 +258275,7 @@
       ],
       "step_shape_evidence": [
         {
-          "case_id": "daemon/permission_denied",
+          "case_id": "runtime_host/permission_denied",
           "action": "deny_runtime_permission",
           "execution_case_bound": false,
           "items": [
@@ -258614,7 +258614,7 @@
           ]
         },
         {
-          "case_id": "daemon/permission_denied",
+          "case_id": "runtime_host/permission_denied",
           "action": "project_typed_error",
           "execution_case_bound": false,
           "items": [
@@ -264080,7 +264080,7 @@
       ],
       "step_shape_evidence": [
         {
-          "case_id": "daemon/permission_denied",
+          "case_id": "runtime_host/permission_denied",
           "action": "deny_runtime_permission",
           "execution_case_bound": false,
           "items": [
@@ -264451,7 +264451,7 @@
           ]
         },
         {
-          "case_id": "daemon/permission_denied",
+          "case_id": "runtime_host/permission_denied",
           "action": "project_typed_error",
           "execution_case_bound": false,
           "items": [
