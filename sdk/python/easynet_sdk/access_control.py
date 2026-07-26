@@ -609,6 +609,7 @@ def _check_args(
     principal_id = _principal_id(request.principal_kind, request.principal_ura, "")
     if not principal_id:
         raise _invalid("principal_ura is required")
+    owner_source = _required_text(request.owner_source, "owner_source")
     for field_name, value in {
         "callee_ura": request.callee_ura,
         "subject_ura": request.subject_ura,
@@ -618,6 +619,7 @@ def _check_args(
         _required_text(value, field_name)
     args: dict[str, object] = {
         "owner_ura": owner_ura,
+        "owner_source": owner_source,
         "principal_kind": request.principal_kind.value,
         "principal_ura": request.principal_ura.strip(),
         "callee_ura": request.callee_ura.strip(),
@@ -627,7 +629,6 @@ def _check_args(
         "safe_read": request.safe_read,
         "interactive_context_available": request.interactive_context_available,
     }
-    _optional(args, "owner_source", request.owner_source)
     _optional(args, "caller_ura", request.caller_ura)
     _optional(args, "token_id", request.token_id)
     _optional(args, "token_class", request.token_class)

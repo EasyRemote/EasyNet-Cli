@@ -678,6 +678,10 @@ func accessControlCheckArgs(request AccessControlCheckRequest) (AccessControlChe
 	if principalID == "" {
 		return AccessControlCheckRequest{}, nil, invalidAccessControl("principal_ura is required", nil)
 	}
+	ownerSource := strings.TrimSpace(request.OwnerSource)
+	if ownerSource == "" {
+		return AccessControlCheckRequest{}, nil, invalidAccessControl("owner_source is required", nil)
+	}
 	for _, field := range []struct{ name, value string }{
 		{"callee_ura", request.CalleeURA},
 		{"subject_ura", request.SubjectURA},
@@ -690,6 +694,7 @@ func accessControlCheckArgs(request AccessControlCheckRequest) (AccessControlChe
 	}
 	args := map[string]any{
 		"owner_ura":                     ownerURA,
+		"owner_source":                  ownerSource,
 		"principal_kind":                string(request.PrincipalKind),
 		"principal_ura":                 strings.TrimSpace(request.PrincipalURA),
 		"callee_ura":                    strings.TrimSpace(request.CalleeURA),
@@ -699,7 +704,6 @@ func accessControlCheckArgs(request AccessControlCheckRequest) (AccessControlChe
 		"safe_read":                     request.SafeRead,
 		"interactive_context_available": request.InteractiveContextAvailable,
 	}
-	optionalStringArg(args, "owner_source", request.OwnerSource)
 	optionalStringArg(args, "caller_ura", request.CallerURA)
 	optionalStringArg(args, "token_id", request.TokenID)
 	optionalStringArg(args, "token_class", request.TokenClass)
@@ -708,6 +712,7 @@ func accessControlCheckArgs(request AccessControlCheckRequest) (AccessControlChe
 	optionalStringArg(args, "authority_proof_id", request.AuthorityProofID)
 	optionalStringArg(args, "rejector_ura", request.RejectorURA)
 	request.OwnerURA = ownerURA
+	request.OwnerSource = ownerSource
 	return request, args, nil
 }
 

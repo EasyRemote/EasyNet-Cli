@@ -221,6 +221,7 @@ func TestRuntimeAccessControlProviderListsAndChecksCanonicalPolicies(t *testing.
 	check, err := provider.Check(context.Background(), AccessControlCheckRequest{
 		Call:          accessControlCallFixture(),
 		OwnerURA:      "easynet:///r/example/user/alice",
+		OwnerSource:   "subject",
 		PrincipalKind: AccessControlPrincipalUser,
 		PrincipalURA:  "easynet:///r/example/user/bob",
 		CalleeURA:     "easynet:///r/example/device/dev-a",
@@ -234,6 +235,34 @@ func TestRuntimeAccessControlProviderListsAndChecksCanonicalPolicies(t *testing.
 	}
 	if check.PolicyDecision.Decision != "allow" {
 		t.Fatalf("unexpected decision: %#v", check)
+	}
+	if transport.args["owner_source"] != "subject" {
+		t.Fatalf("check owner_source was not explicit: %#v", transport.args)
+	}
+}
+
+func TestRuntimeAccessControlProviderCheckRequiresExplicitOwnerSource(t *testing.T) {
+	transport := &memoryAccessControlAbility{}
+	provider, err := NewRuntimeAccessControlProvider(transport)
+	if err != nil {
+		t.Fatalf("NewRuntimeAccessControlProvider: %v", err)
+	}
+
+	_, err = provider.Check(context.Background(), AccessControlCheckRequest{
+		Call:          accessControlCallFixture(),
+		OwnerURA:      "easynet:///r/example/user/alice",
+		PrincipalKind: AccessControlPrincipalUser,
+		PrincipalURA:  "easynet:///r/example/user/bob",
+		CalleeURA:     "easynet:///r/example/device/dev-a",
+		SubjectURA:    "easynet:///r/example/resource/user.alice/session/session-1",
+		AbilityURA:    "easynet:///r/example/device/dev-a/ability/device.observe.health",
+		Action:        "invoke",
+	})
+	if !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("missing owner_source error = %v", err)
+	}
+	if transport.ability != "" {
+		t.Fatalf("missing owner_source should fail before provider invoke, got %s", transport.ability)
 	}
 }
 

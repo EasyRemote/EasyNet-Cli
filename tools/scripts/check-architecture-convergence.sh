@@ -2500,21 +2500,19 @@ if access_control.exists():
                 "revoke request must not expose scalar identity fields",
             )
 
-    scalar_actor_fallback = re.compile(
-        r"actor_ura[\s\S]{0,160}(?:unwrap_or|unwrap_or_else|or_else)\s*\("
-        r"[\s\S]{0,160}owner_user_id|"
-        r"owner_user_id[\s\S]{0,160}(?:unwrap_or|unwrap_or_else|or_else)\s*\("
-        r"[\s\S]{0,160}actor_ura",
-        re.S,
-    )
-    match = scalar_actor_fallback.search(text)
-    if match:
-        add(
-            "R18_ACCESS_CONTROL_ACTOR_URA_FORK",
-            access_control,
-            line_number(text, match.start()),
-            "audited actor_ura must not fall back to scalar owner_user_id",
-        )
+    for pattern in (
+        r"request\.actor_ura[\s\S]{0,120}(?:unwrap_or|unwrap_or_else|or_else)\s*\(",
+        r"actor_ura[\s\S]{0,120}(?:unwrap_or|unwrap_or_else|or_else)\s*\([^)]*owner_user_id",
+        r"actor_ura[\s\S]{0,120}(?:unwrap_or|unwrap_or_else|or_else)\s*\([^)]*request\.owner_ura",
+    ):
+        match = re.search(pattern, text, re.S)
+        if match:
+            add(
+                "R18_ACCESS_CONTROL_ACTOR_URA_FORK",
+                access_control,
+                line_number(text, match.start()),
+                "audited actor_ura must not fall back to scalar owner_user_id",
+            )
 
 # Rule 18b: SDK provider facades must mirror the daemon audited mutation
 # boundary. Revoke is a mutation; actor_ura is not optional transport metadata.
@@ -11335,6 +11333,98 @@ if media_resource_bootstrap.exists():
                 line_number(raw_media_bootstrap_text, offset),
                 detail,
             )
+
+
+access_control_governance = (
+    cli_root / "src/daemon/ability/builtins/governance/access_control.rs"
+)
+if access_control_governance.exists():
+    text = source(access_control_governance)
+    raw_text = access_control_governance.read_text(encoding="utf-8", errors="replace")
+    for token, detail in (
+        (
+            "fn require_owner_source(",
+            "access-control check must make owner-source provenance explicit",
+        ),
+        (
+            '"owner_ura", "owner_source", "caller_ura"',
+            "authority_binding.check schema must require owner_source before caller_ura",
+        ),
+        (
+            "authority_binding_check_requires_explicit_owner_source",
+            "access-control tests must prove omitted owner_source is rejected",
+        ),
+    ):
+        if token not in raw_text:
+            add("R98_ACCESS_CONTROL_EXPLICIT_OWNER_SOURCE", access_control_governance, 1, detail)
+    for token, detail in (
+        (
+            "request.owner_source.unwrap_or(OwnerSource::Subject)",
+            "access-control check must not preserve the legacy Subject owner_source default",
+        ),
+        (
+            "request.owner_source.unwrap_or_default()",
+            "access-control check must not default missing owner_source",
+        ),
+    ):
+        offset = raw_text.find(token)
+        if offset != -1:
+            add(
+                "R98_ACCESS_CONTROL_EXPLICIT_OWNER_SOURCE",
+                access_control_governance,
+                line_number(raw_text, offset),
+                detail,
+            )
+
+go_access_control = cli_root / "sdk/go/access_control.go"
+if go_access_control.exists():
+    text = go_access_control.read_text(encoding="utf-8", errors="replace")
+    for token, detail in (
+        (
+            'invalidAccessControl("owner_source is required"',
+            "Go SDK access-control check must reject missing owner_source before provider I/O",
+        ),
+        (
+            '"owner_source":                  ownerSource',
+            "Go SDK access-control check must always project explicit owner_source",
+        ),
+    ):
+        if token not in text:
+            add("R98_ACCESS_CONTROL_EXPLICIT_OWNER_SOURCE", go_access_control, 1, detail)
+    token = 'optionalStringArg(args, "owner_source", request.OwnerSource)'
+    offset = text.find(token)
+    if offset != -1:
+        add(
+            "R98_ACCESS_CONTROL_EXPLICIT_OWNER_SOURCE",
+            go_access_control,
+            line_number(text, offset),
+            "Go SDK access-control check must not keep owner_source optional",
+        )
+
+python_access_control = cli_root / "sdk/python/easynet_sdk/access_control.py"
+if python_access_control.exists():
+    text = python_access_control.read_text(encoding="utf-8", errors="replace")
+    for token, detail in (
+        (
+            '_required_text(request.owner_source, "owner_source")',
+            "Python SDK access-control check must reject missing owner_source before provider I/O",
+        ),
+        (
+            '"owner_source": owner_source',
+            "Python SDK access-control check must always project explicit owner_source",
+        ),
+    ):
+        if token not in text:
+            add("R98_ACCESS_CONTROL_EXPLICIT_OWNER_SOURCE", python_access_control, 1, detail)
+    token = '_optional(args, "owner_source", request.owner_source)'
+    offset = text.find(token)
+    if offset != -1:
+        add(
+            "R98_ACCESS_CONTROL_EXPLICIT_OWNER_SOURCE",
+            python_access_control,
+            line_number(text, offset),
+            "Python SDK access-control check must not keep owner_source optional",
+        )
 
 
 if violations:

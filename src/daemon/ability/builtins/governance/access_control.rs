@@ -214,7 +214,7 @@ fn check_handler(args: Value, stores: &AccessControlStoreRegistry) -> anyhow::Re
     let owner = OwnerResolution {
         owner_user_id: Some(owner_user_id),
         owner_ura: request.owner_ura,
-        owner_source: request.owner_source.unwrap_or(OwnerSource::Subject),
+        owner_source: require_owner_source(request.owner_source)?,
         audit_warnings: vec![],
     };
     let decision = PolicyEngine::check(PolicyInput {
@@ -444,6 +444,10 @@ fn owner_user_id_from_mutation_boundary(owner_ura: Option<&str>) -> anyhow::Resu
         .filter(|value| !value.is_empty())
         .ok_or_else(|| anyhow::anyhow!("owner_ura is required for a policy mutation"))?;
     owner_user_id_from_boundary(Some(owner_ura))
+}
+
+fn require_owner_source(owner_source: Option<OwnerSource>) -> anyhow::Result<OwnerSource> {
+    owner_source.ok_or_else(|| anyhow::anyhow!("owner_source is required for policy checks"))
 }
 
 fn require_actor_ura(actor_ura: Option<&str>) -> anyhow::Result<&str> {
@@ -1086,7 +1090,7 @@ pub fn input_schema_for(name: &str) -> Value {
         }),
         AUTHORITY_BINDING_CHECK => json!({
             "type": "object",
-            "required": ["owner_ura", "caller_ura", "principal_kind", "callee_ura", "subject_ura", "ability_ura", "action"],
+            "required": ["owner_ura", "owner_source", "caller_ura", "principal_kind", "callee_ura", "subject_ura", "ability_ura", "action"],
             "properties": {
                 "owner_ura": {"type": "string"},
                 "owner_source": {"type": "string"},
@@ -1244,6 +1248,33 @@ mod tests {
                 "{ability} must not require principal_id"
             );
         }
+    }
+
+    #[test]
+    fn authority_binding_check_requires_explicit_owner_source() {
+        let _home = HomeGuard::new();
+        let stores = AccessControlStoreRegistry::ephemeral();
+        let missing = check_handler(
+            json!({
+                "owner_ura": "easynet:///r/example/user/alice",
+                "caller_ura": "easynet:///r/example/authority",
+                "principal_kind": "user",
+                "principal_ura": "easynet:///r/example/user/bob",
+                "callee_ura": "easynet:///r/example/device/dev-a",
+                "subject_ura": "easynet:///r/example/resource/user.alice/session/session-target",
+                "ability_ura": "easynet:///r/example/ability/device.dev-a.terminal.attach",
+                "action": "stream"
+            }),
+            &stores,
+        )
+        .expect_err("policy checks must not infer owner_source from subject");
+        assert!(missing
+            .to_string()
+            .contains("owner_source is required for policy checks"));
+
+        let schema = input_schema_for(AUTHORITY_BINDING_CHECK);
+        let required = schema["required"].as_array().expect("required array");
+        assert!(required.iter().any(|item| item == "owner_source"));
     }
 
     #[test]

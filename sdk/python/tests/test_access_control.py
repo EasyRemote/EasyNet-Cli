@@ -231,6 +231,7 @@ class AccessControlTests(unittest.TestCase):
             AccessControlCheckRequest(
                 call=_call(),
                 owner_ura="easynet:///r/example/user/alice",
+                owner_source="subject",
                 principal_kind=AccessControlPrincipalKind.USER,
                 principal_ura="easynet:///r/example/user/bob",
                 callee_ura="easynet:///r/example/device/dev-a",
@@ -242,6 +243,28 @@ class AccessControlTests(unittest.TestCase):
         )
 
         self.assertEqual(result.policy_decision.decision, "allow")
+        self.assertEqual(ability.arguments["owner_source"], "subject")
+
+    def test_runtime_provider_check_requires_explicit_owner_source(self) -> None:
+        ability = _MemoryAbility()
+        provider = RuntimeAccessControlProvider(ability)
+
+        with self.assertRaises(SDKError) as caught:
+            provider.check(
+                AccessControlCheckRequest(
+                    call=_call(),
+                    owner_ura="easynet:///r/example/user/alice",
+                    principal_kind=AccessControlPrincipalKind.USER,
+                    principal_ura="easynet:///r/example/user/bob",
+                    callee_ura="easynet:///r/example/device/dev-a",
+                    subject_ura="easynet:///r/example/resource/user.alice/session/session-1",
+                    ability_ura="easynet:///r/example/device/dev-a/ability/device.observe.health",
+                    action="invoke",
+                )
+            )
+
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+        self.assertEqual(ability.ability, "")
 
     def test_runtime_provider_revoke_requires_canonical_actor_ura(self) -> None:
         ability = _MemoryAbility()
