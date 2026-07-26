@@ -1,30 +1,31 @@
-// EasyNet CLI — daemon federation read model — HubPublishedAbilityStore
-// ====================================================================
+// EasyNet CLI — daemon federation read model — AuthorityPublishedAbilityStore
+// =========================================================================
 //
-// File: src/daemon/federation/read_model/hub_published_abilities.rs
+// File: src/daemon/federation/read_model/authority_published_abilities.rs
 //
 // Why this exists
 // ---------------
-// AXON-RFC-001 v4.1.7 hub-broadcast contract. Each realm hub keeps
-// an authoritative list of abilities IT implements and pushes that list down
-// to every member device through `federation.join` (full snapshot) +
+// AXON-RFC-001 v4.1.7 Authority broadcast contract. Each realm Authority
+// publishes an authoritative list of abilities and pushes that list down to
+// every member device through `federation.join` (full snapshot) and
 // `federation.heartbeat` (incremental diff). The device-side catalogue
-// (`meta.list_abilities scope=realm`, `<agent>.discover` scope=realm)
-// merges the device-local registry with this store so users see everything
-// the realm offers without an extra round-trip per query.
+// (`meta.list_abilities scope=realm`, `<agent>.discover` scope=realm) merges
+// the device-local registry with this store so users see everything the realm
+// offers without an extra round-trip per query.
 //
 // This store is the schema gate between federation wire JSON and the canonical
-// runtime read-model. Hub broadcasts enter as `HubAbilityEntry { name,
-// descriptor: Value }`, but only parsed, validated `AbilityDescriptor` values
-// may be cached or returned. That keeps `meta.list_abilities` from exposing
-// names without `ability_ura` / `descriptor_ref` and prevents products from
-// discovering routes that cannot be resolved canonically.
+// runtime read model. Federation broadcasts enter as `HubAbilityEntry { name,
+// descriptor: Value }` for wire compatibility, but only parsed, validated
+// `AbilityDescriptor` values may be cached or returned. That keeps
+// `meta.list_abilities` from exposing names without `ability_ura` /
+// `descriptor_ref` and prevents products from discovering routes that cannot
+// be resolved canonically.
 //
 // What this store does NOT do:
 //   * It is not a registration target. The device never invokes
-//     hub-owned abilities through this store; calls to
-//     `hub.openai.*` go through the canonical `Invocation::Invoke` RPC to
-//     the hub. The store is read-mostly metadata.
+//     Authority-published abilities through this store; calls go through the
+//     canonical `Invocation::Invoke` RPC to the publishing runtime. The store
+//     is read-mostly metadata.
 //   * It is not persistent. Restart drops the cache; the next
 //     `federation.join` reseeds it. Simpler than disk
 //     synchronisation, and join is cheap enough to amortise.
@@ -43,12 +44,12 @@ use std::sync::{Arc, RwLock};
 use crate::daemon::ability::descriptors::AbilityDescriptor;
 use crate::daemon::federation::client::ability_contract::{HubAbilitiesDiff, HubAbilityEntry};
 
-/// In-memory cache of hub-published ability descriptors, scoped
+/// In-memory cache of Authority-published ability descriptors, scoped
 /// to one realm session. The store lives behind an `Arc` so the
 /// federation client + the meta-ability synth path can share it
 /// without ownership gymnastics.
 #[derive(Debug, Default)]
-pub struct HubPublishedAbilityStore {
+pub struct AuthorityPublishedAbilityStore {
     inner: RwLock<Inner>,
 }
 
@@ -58,28 +59,28 @@ struct Inner {
     /// stable across heartbeats — the meta-ability rendering is
     /// easier to audit when entries don't shuffle on each tick.
     entries: BTreeMap<String, AbilityDescriptor>,
-    /// Last hub revision the cache reflects. Surfaced to the
+    /// Last Authority broadcast revision the cache reflects. Surfaced to the
     /// federation client as `since_abilities_revision` on the
     /// next heartbeat.
     revision: u64,
 }
 
-impl HubPublishedAbilityStore {
+impl AuthorityPublishedAbilityStore {
     pub fn new() -> Arc<Self> {
         Arc::new(Self::default())
     }
 
     /// Replace the whole cache with a join-time snapshot. Called
     /// on `federation.join` (initial seed) and on rejoin after a
-    /// hub session drop — the device must drop any stale entries
-    /// since the hub's revision space resets only with explicit
+    /// realm session drop — the device must drop any stale entries
+    /// since the Authority's revision space resets only with explicit
     /// removes, not session restarts.
     pub fn seed_from_snapshot(
         &self,
         revision: u64,
         abilities: Vec<HubAbilityEntry>,
     ) -> Result<(), String> {
-        let entries = validate_hub_ability_entries(abilities)?;
+        let entries = validate_authority_ability_entries(abilities)?;
         let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
         inner.entries.clear();
         for descriptor in entries {
@@ -96,7 +97,7 @@ impl HubPublishedAbilityStore {
     /// heartbeat asks for "what's changed since the new value".
     /// Idempotent: replaying the same diff is a no-op.
     pub fn apply_diff(&self, diff: HubAbilitiesDiff) -> Result<(), String> {
-        let added = validate_hub_ability_entries(diff.added)?;
+        let added = validate_authority_ability_entries(diff.added)?;
         let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
         for descriptor in added {
             inner
@@ -112,7 +113,7 @@ impl HubPublishedAbilityStore {
         Ok(())
     }
 
-    /// Last-seen hub revision. Federation client passes this
+    /// Last-seen Authority broadcast revision. Federation client passes this
     /// verbatim as `since_abilities_revision` on the next
     /// heartbeat.
     pub fn revision(&self) -> u64 {
@@ -122,7 +123,7 @@ impl HubPublishedAbilityStore {
             .revision
     }
 
-    /// Snapshot of every hub-owned ability descriptor currently
+    /// Snapshot of every Authority-published ability descriptor currently
     /// cached. `meta.list_abilities scope=realm` consumes this and
     /// merges with the device-local published set.
     #[must_use]
@@ -153,37 +154,37 @@ impl HubPublishedAbilityStore {
     }
 }
 
-fn validate_hub_ability_entries(
+fn validate_authority_ability_entries(
     entries: Vec<HubAbilityEntry>,
 ) -> Result<Vec<AbilityDescriptor>, String> {
     entries
         .into_iter()
         .enumerate()
-        .map(|(index, entry)| validate_hub_ability_entry(index, entry))
+        .map(|(index, entry)| validate_authority_ability_entry(index, entry))
         .collect()
 }
 
-fn validate_hub_ability_entry(
+fn validate_authority_ability_entry(
     index: usize,
     entry: HubAbilityEntry,
 ) -> Result<AbilityDescriptor, String> {
     let descriptor: AbilityDescriptor =
         serde_json::from_value(entry.descriptor).map_err(|error| {
             format!(
-                "hub-published ability row {index} named {:?} is not a canonical descriptor: {error}",
+                "Authority-published ability row {index} named {:?} is not a canonical descriptor: {error}",
                 entry.name
             )
         })?;
     let public_name = descriptor.public_name();
     if entry.name != public_name {
         return Err(format!(
-            "hub-published ability row {index} outer name {:?} does not match canonical descriptor name {:?}",
+            "Authority-published ability row {index} outer name {:?} does not match canonical descriptor name {:?}",
             entry.name, public_name
         ));
     }
     descriptor.descriptor_ref().map_err(|error| {
         format!(
-            "hub-published ability row {index} named {:?} has invalid canonical descriptor_ref: {error}",
+            "Authority-published ability row {index} named {:?} has invalid canonical descriptor_ref: {error}",
             entry.name
         )
     })?;
@@ -203,7 +204,7 @@ mod tests {
             Visibility::Public,
             AdmissionAction::Read,
         )
-        .expect("canonical hub descriptor")
+        .expect("canonical realm Authority descriptor")
     }
 
     fn entry(name: &str) -> HubAbilityEntry {
@@ -216,14 +217,14 @@ mod tests {
 
     #[test]
     fn empty_store_starts_at_revision_zero() {
-        let store = HubPublishedAbilityStore::new();
+        let store = AuthorityPublishedAbilityStore::new();
         assert_eq!(store.revision(), 0);
         assert!(store.is_empty());
     }
 
     #[test]
     fn seed_replaces_cache_and_records_revision() {
-        let store = HubPublishedAbilityStore::new();
+        let store = AuthorityPublishedAbilityStore::new();
         store
             .seed_from_snapshot(7, vec![entry("test.a"), entry("test.b")])
             .expect("canonical snapshot");
@@ -233,7 +234,7 @@ mod tests {
 
     #[test]
     fn apply_diff_adds_new_entries() {
-        let store = HubPublishedAbilityStore::new();
+        let store = AuthorityPublishedAbilityStore::new();
         store
             .apply_diff(HubAbilitiesDiff {
                 revision: 1,
@@ -247,7 +248,7 @@ mod tests {
 
     #[test]
     fn apply_diff_removes_entries() {
-        let store = HubPublishedAbilityStore::new();
+        let store = AuthorityPublishedAbilityStore::new();
         store
             .seed_from_snapshot(1, vec![entry("test.a"), entry("test.b")])
             .expect("canonical snapshot");
@@ -265,7 +266,7 @@ mod tests {
 
     #[test]
     fn apply_diff_idempotent_when_replayed() {
-        let store = HubPublishedAbilityStore::new();
+        let store = AuthorityPublishedAbilityStore::new();
         let diff = HubAbilitiesDiff {
             revision: 3,
             added: vec![entry("test.a")],
@@ -284,7 +285,7 @@ mod tests {
         // client uses this value to ask for "what's new since
         // here", and rewinding would re-fetch already-applied
         // diffs.
-        let store = HubPublishedAbilityStore::new();
+        let store = AuthorityPublishedAbilityStore::new();
         store
             .seed_from_snapshot(10, vec![])
             .expect("canonical snapshot");
@@ -303,7 +304,7 @@ mod tests {
 
     #[test]
     fn seed_rejects_noncanonical_descriptor_rows() {
-        let store = HubPublishedAbilityStore::new();
+        let store = AuthorityPublishedAbilityStore::new();
         let error = store
             .seed_from_snapshot(
                 7,
@@ -312,7 +313,7 @@ mod tests {
                     descriptor: json!({"name": "hub.bad"}),
                 }],
             )
-            .expect_err("opaque hub rows must not enter the runtime catalog");
+            .expect_err("opaque broadcast rows must not enter the runtime catalog");
 
         assert!(
             error.contains("is not a canonical descriptor"),
@@ -324,7 +325,7 @@ mod tests {
 
     #[test]
     fn apply_diff_is_atomic_when_added_row_is_noncanonical() {
-        let store = HubPublishedAbilityStore::new();
+        let store = AuthorityPublishedAbilityStore::new();
         store
             .seed_from_snapshot(10, vec![entry("test.good")])
             .expect("canonical seed");

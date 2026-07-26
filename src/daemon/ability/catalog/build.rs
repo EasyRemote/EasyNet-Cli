@@ -270,8 +270,8 @@ pub struct BuiltAbilityRegistry {
 
 #[derive(Clone)]
 pub struct RegistrySharedStores {
-    pub hub_published_abilities: Arc<
-        crate::daemon::federation::read_model::hub_published_abilities::HubPublishedAbilityStore,
+    pub authority_published_abilities: Arc<
+        crate::daemon::federation::read_model::authority_published_abilities::AuthorityPublishedAbilityStore,
     >,
     pub voice_calls: Option<
         crate::daemon::ability::builtins::resources::voice_contract::VoiceCallProviderAssembly,
@@ -281,12 +281,12 @@ pub struct RegistrySharedStores {
 impl RegistrySharedStores {
     #[must_use]
     pub fn new(
-        hub_published_abilities: Arc<
-            crate::daemon::federation::read_model::hub_published_abilities::HubPublishedAbilityStore,
+        authority_published_abilities: Arc<
+            crate::daemon::federation::read_model::authority_published_abilities::AuthorityPublishedAbilityStore,
         >,
     ) -> Self {
         Self {
-            hub_published_abilities,
+            authority_published_abilities,
             voice_calls: None,
         }
     }
@@ -303,7 +303,7 @@ impl RegistrySharedStores {
 
 impl Default for RegistrySharedStores {
     fn default() -> Self {
-        Self::new(crate::daemon::federation::read_model::hub_published_abilities::HubPublishedAbilityStore::new())
+        Self::new(crate::daemon::federation::read_model::authority_published_abilities::AuthorityPublishedAbilityStore::new())
     }
 }
 
@@ -986,7 +986,7 @@ fn build_registry_with_services_result_inner(
         local_runtime_owners,
         profiles::load_host_descriptors,
         Arc::clone(&local_registry_handle),
-        Arc::clone(&shared_stores.hub_published_abilities),
+        Arc::clone(&shared_stores.authority_published_abilities),
     );
     // a2a.bridge.list_skills — same edge-adapter pattern as the MCP
     // bridge above, but for the A2A agent-card surface. The provider

@@ -381,8 +381,8 @@ pub struct InvocationTransportDependencies {
     pub hot_agent_registrar_cell:
         Arc<crate::daemon::ability::builtins::agents::lifecycle::SharedHotRegistrarCell>,
     pub plugin_runtime_manager: Option<Arc<crate::daemon::plugins::PluginRuntimeManager>>,
-    pub hub_published_abilities: Arc<
-        crate::daemon::federation::read_model::hub_published_abilities::HubPublishedAbilityStore,
+    pub authority_published_abilities: Arc<
+        crate::daemon::federation::read_model::authority_published_abilities::AuthorityPublishedAbilityStore,
     >,
     pub discover_federation_resolver: Option<
         Arc<crate::daemon::ability::builtins::agents::discover::DeferredDiscoverFederationResolver>,
@@ -402,7 +402,7 @@ pub fn start_daemon_invocation_transport(
         invocation_ledger,
         hot_agent_registrar_cell,
         plugin_runtime_manager,
-        hub_published_abilities,
+        authority_published_abilities,
         discover_federation_resolver,
     } = dependencies;
     let local_runtime = daemon_runtime.runtime();
@@ -894,7 +894,7 @@ pub fn start_daemon_invocation_transport(
                 local_ability_catalog: Arc::clone(&local_ability_catalog),
                 ability_wire_registry: Arc::clone(&ability_wire_registry),
                 admission: session_admission.clone(),
-                hub_published_abilities: Arc::clone(&hub_published_abilities),
+                authority_published_abilities: Arc::clone(&authority_published_abilities),
                 user_trust_sync,
             })?;
         } else {
@@ -1373,8 +1373,8 @@ struct SessionSupervisorConfig {
     local_ability_catalog: Arc<crate::daemon::ability::dispatch::AxonAbilityCatalog>,
     ability_wire_registry: Arc<crate::daemon::ability::wire::AbilityWireRegistry>,
     admission: AdmissionFacade,
-    hub_published_abilities: Arc<
-        crate::daemon::federation::read_model::hub_published_abilities::HubPublishedAbilityStore,
+    authority_published_abilities: Arc<
+        crate::daemon::federation::read_model::authority_published_abilities::AuthorityPublishedAbilityStore,
     >,
     user_trust_sync: crate::daemon::invocation::bidi::session_initiator::UserTrustSync,
 }
@@ -1389,7 +1389,7 @@ fn spawn_session_supervisor(config: SessionSupervisorConfig) -> anyhow::Result<S
         local_ability_catalog,
         ability_wire_registry,
         admission,
-        hub_published_abilities,
+        authority_published_abilities,
         user_trust_sync,
     } = config;
     let signing_state = "daemon-custodied canonical signer";
@@ -1465,7 +1465,7 @@ fn spawn_session_supervisor(config: SessionSupervisorConfig) -> anyhow::Result<S
                 crate::daemon::invocation::bidi::session_initiator::SessionAbilityDescriptorInventory::live_catalog(
                     local_ability_catalog,
                 ),
-            hub_published_abilities,
+            authority_published_abilities,
             initial_admission: Some(initial_admission),
             user_trust_sync: Some(user_trust_sync),
             connection_state_sink: Arc::new(
@@ -1828,8 +1828,8 @@ mod tests {
                 crate::daemon::ability::builtins::agents::lifecycle::SharedHotRegistrarCell::new(),
             ),
             plugin_runtime_manager: None,
-            hub_published_abilities:
-                crate::daemon::federation::read_model::hub_published_abilities::HubPublishedAbilityStore::new(),
+            authority_published_abilities:
+                crate::daemon::federation::read_model::authority_published_abilities::AuthorityPublishedAbilityStore::new(),
             discover_federation_resolver: None,
         }
     }

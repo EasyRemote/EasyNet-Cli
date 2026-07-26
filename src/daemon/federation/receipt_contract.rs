@@ -44,7 +44,8 @@ pub struct JoinReceipt {
     pub advertise_contract: AdvertiseContract,
 }
 
-/// One hub-owned ability descriptor as broadcast by the hub.
+/// One Authority-published ability descriptor as broadcast by the realm
+/// Authority.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct HubAbilityEntry {
     pub name: String,

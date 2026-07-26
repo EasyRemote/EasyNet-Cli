@@ -89,7 +89,7 @@ use tokio::sync::mpsc;
 use tonic::Status;
 
 use crate::daemon::ability::descriptors::AbilityDescriptor;
-use crate::daemon::federation::read_model::hub_published_abilities::HubPublishedAbilityStore;
+use crate::daemon::federation::read_model::authority_published_abilities::AuthorityPublishedAbilityStore;
 use crate::daemon::identity::self_identity::{CanonicalSigner, SelfIdentityError};
 
 mod connection_state;
@@ -433,7 +433,7 @@ pub(crate) struct SessionSupervisorRunConfig<D: SessionFrameDispatcher> {
     pub(crate) escalation_outbox:
         Option<crate::daemon::invocation::bidi::session_escalation::SharedSessionOutbox>,
     pub(crate) ability_inventory: SessionAbilityDescriptorInventory,
-    pub(crate) hub_published_abilities: Arc<HubPublishedAbilityStore>,
+    pub(crate) authority_published_abilities: Arc<AuthorityPublishedAbilityStore>,
     pub(crate) initial_admission: Option<InitialSessionAdmissionProbe>,
     pub(crate) user_trust_sync: Option<UserTrustSync>,
     pub(crate) connection_state_sink: Arc<dyn SessionConnectionStateSink>,
@@ -614,7 +614,7 @@ pub(crate) async fn run_session_supervisor<D: SessionFrameDispatcher>(
         dispatcher,
         escalation_outbox,
         ability_inventory,
-        hub_published_abilities,
+        authority_published_abilities,
         initial_admission,
         user_trust_sync,
         connection_state_sink,
@@ -641,7 +641,7 @@ pub(crate) async fn run_session_supervisor<D: SessionFrameDispatcher>(
                     escalation_outbox: escalation_outbox.as_ref(),
                     preludes: SessionPreludeInputs::new(
                         &ability_descriptors,
-                        Arc::clone(&hub_published_abilities),
+                        Arc::clone(&authority_published_abilities),
                     ),
                     idle_timeout: SESSION_IDLE_TIMEOUT,
                     initial_admission: initial_admission.clone(),
@@ -857,8 +857,8 @@ mod tests {
     /// reporting admission. This remains a hang guard, not a product SLA.
     const TEST_SUPERVISOR_PROGRESS_TIMEOUT: Duration = Duration::from_secs(30);
 
-    fn hub_store() -> Arc<HubPublishedAbilityStore> {
-        HubPublishedAbilityStore::new()
+    fn authority_store() -> Arc<AuthorityPublishedAbilityStore> {
+        AuthorityPublishedAbilityStore::new()
     }
 
     /// Per-test state sink. Session tests exercise lifecycle semantics without
@@ -1776,7 +1776,7 @@ mod tests {
                 None,
                 dispatcher,
                 None,
-                SessionPreludeInputs::new(&[], hub_store()),
+                SessionPreludeInputs::new(&[], authority_store()),
             ),
         )
         .await
@@ -1807,7 +1807,7 @@ mod tests {
             dispatcher: Arc::new(RecordingDispatcher::default()),
             escalation_outbox: None,
             ability_inventory: SessionAbilityDescriptorInventory::fixed(Vec::new()),
-            hub_published_abilities: hub_store(),
+            authority_published_abilities: authority_store(),
             initial_admission: None,
             user_trust_sync: None,
             connection_state_sink: sink_port,
@@ -1847,7 +1847,7 @@ mod tests {
             None,
             dispatcher,
             None,
-            SessionPreludeInputs::new(&[], hub_store()),
+            SessionPreludeInputs::new(&[], authority_store()),
         )
         .await;
         match result {
@@ -1872,7 +1872,7 @@ mod tests {
                 None,
                 dispatcher,
                 None,
-                SessionPreludeInputs::new(&[], hub_store()),
+                SessionPreludeInputs::new(&[], authority_store()),
             ),
         )
         .await
@@ -1905,7 +1905,7 @@ mod tests {
                 hub_ca_pem_path: None,
                 dispatcher,
                 escalation_outbox: None,
-                preludes: SessionPreludeInputs::new(&descriptors, hub_store()),
+                preludes: SessionPreludeInputs::new(&descriptors, authority_store()),
                 idle_timeout: Duration::from_millis(80),
                 initial_admission: None,
                 user_trust_sync: None, // not exercised here
@@ -1960,7 +1960,7 @@ mod tests {
                 hub_ca_pem_path: None,
                 dispatcher,
                 escalation_outbox: None,
-                preludes: SessionPreludeInputs::new(&[], hub_store()),
+                preludes: SessionPreludeInputs::new(&[], authority_store()),
                 idle_timeout: Duration::from_millis(80),
                 initial_admission: None,
                 user_trust_sync: Some(&user_trust_sync),
@@ -2043,7 +2043,7 @@ mod tests {
                 hub_ca_pem_path: None,
                 dispatcher,
                 escalation_outbox: None,
-                preludes: SessionPreludeInputs::new(&[], hub_store()),
+                preludes: SessionPreludeInputs::new(&[], authority_store()),
                 idle_timeout: Duration::from_millis(80),
                 initial_admission: None,
                 user_trust_sync: Some(&user_trust_sync),
@@ -2149,7 +2149,7 @@ mod tests {
                 hub_ca_pem_path: None,
                 dispatcher,
                 escalation_outbox: None,
-                preludes: SessionPreludeInputs::new(&descriptors, hub_store()),
+                preludes: SessionPreludeInputs::new(&descriptors, authority_store()),
                 idle_timeout: Duration::from_millis(80),
                 initial_admission: None,
                 user_trust_sync: None, // not exercised here
@@ -2235,7 +2235,7 @@ mod tests {
             Some(bogus.as_path()),
             dispatcher,
             None,
-            SessionPreludeInputs::new(&[], hub_store()),
+            SessionPreludeInputs::new(&[], authority_store()),
         )
         .await;
         match result {
@@ -2281,7 +2281,7 @@ mod tests {
             dispatcher: Arc::new(RecordingDispatcher::default()),
             escalation_outbox: None,
             ability_inventory: SessionAbilityDescriptorInventory::fixed(Vec::new()),
-            hub_published_abilities: hub_store(),
+            authority_published_abilities: authority_store(),
             initial_admission: Some(probe_a),
             user_trust_sync: None,
             connection_state_sink: sink_a_port,
@@ -2294,7 +2294,7 @@ mod tests {
             dispatcher: Arc::new(RecordingDispatcher::default()),
             escalation_outbox: None,
             ability_inventory: SessionAbilityDescriptorInventory::fixed(Vec::new()),
-            hub_published_abilities: hub_store(),
+            authority_published_abilities: authority_store(),
             initial_admission: Some(probe_b),
             user_trust_sync: None,
             connection_state_sink: sink_b_port,
@@ -2354,7 +2354,7 @@ mod tests {
             dispatcher,
             escalation_outbox: None,
             ability_inventory: SessionAbilityDescriptorInventory::fixed(Vec::new()),
-            hub_published_abilities: hub_store(),
+            authority_published_abilities: authority_store(),
             initial_admission: None,
             user_trust_sync: None,
             connection_state_sink: isolated_connection_state_sink(),
@@ -2388,7 +2388,7 @@ mod tests {
             dispatcher,
             escalation_outbox: None,
             ability_inventory: SessionAbilityDescriptorInventory::fixed(Vec::new()),
-            hub_published_abilities: hub_store(),
+            authority_published_abilities: authority_store(),
             initial_admission: Some(probe),
             user_trust_sync: None,
             connection_state_sink: isolated_connection_state_sink(),
@@ -2433,7 +2433,7 @@ mod tests {
             dispatcher,
             escalation_outbox: None,
             ability_inventory: SessionAbilityDescriptorInventory::fixed(Vec::new()),
-            hub_published_abilities: hub_store(),
+            authority_published_abilities: authority_store(),
             initial_admission: Some(probe),
             user_trust_sync: None,
             connection_state_sink: isolated_connection_state_sink(),
@@ -2480,7 +2480,7 @@ mod tests {
             dispatcher,
             escalation_outbox: None,
             ability_inventory: SessionAbilityDescriptorInventory::fixed(Vec::new()),
-            hub_published_abilities: hub_store(),
+            authority_published_abilities: authority_store(),
             initial_admission: Some(probe),
             user_trust_sync: None,
             connection_state_sink: isolated_connection_state_sink(),
@@ -2513,7 +2513,7 @@ mod tests {
                 hub_ca_pem_path: None,
                 dispatcher,
                 escalation_outbox: None,
-                preludes: SessionPreludeInputs::new(&[], hub_store()),
+                preludes: SessionPreludeInputs::new(&[], authority_store()),
                 idle_timeout: Duration::from_millis(80),
                 initial_admission: None,
                 user_trust_sync: None, // not exercised here
@@ -2546,7 +2546,7 @@ mod tests {
                 hub_ca_pem_path: None,
                 dispatcher,
                 escalation_outbox: None,
-                preludes: SessionPreludeInputs::new(&[], hub_store()),
+                preludes: SessionPreludeInputs::new(&[], authority_store()),
                 idle_timeout: Duration::from_secs(1),
                 initial_admission: None,
                 user_trust_sync: None, // not exercised here

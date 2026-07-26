@@ -11,7 +11,7 @@ use super::tasks::AbortOnDrop;
 use super::SessionError;
 use crate::daemon::ability::builtins::resources::pages::identity::pages_user_from_env_or_credentials;
 use crate::daemon::ability::descriptors::AbilityDescriptor;
-use crate::daemon::federation::read_model::hub_published_abilities::HubPublishedAbilityStore;
+use crate::daemon::federation::read_model::authority_published_abilities::AuthorityPublishedAbilityStore;
 use crate::daemon::identity::self_identity::CanonicalSigner;
 use crate::daemon::invocation::admission::register_device_pubkey::RegisterPubkeyRequest;
 use crate::daemon::persistence::agent_aggregate::{
@@ -21,18 +21,18 @@ use crate::daemon::trust::anchor::TrustedAgentRole;
 
 pub struct SessionPreludeInputs<'a> {
     pub(super) ability_descriptors: &'a [AbilityDescriptor],
-    pub(super) hub_published_abilities: Arc<HubPublishedAbilityStore>,
+    pub(super) authority_published_abilities: Arc<AuthorityPublishedAbilityStore>,
 }
 
 impl<'a> SessionPreludeInputs<'a> {
     #[must_use]
     pub fn new(
         ability_descriptors: &'a [AbilityDescriptor],
-        hub_published_abilities: Arc<HubPublishedAbilityStore>,
+        authority_published_abilities: Arc<AuthorityPublishedAbilityStore>,
     ) -> Self {
         Self {
             ability_descriptors,
-            hub_published_abilities,
+            authority_published_abilities,
         }
     }
 }
@@ -88,7 +88,7 @@ pub(super) async fn run_session_preludes(
             .and_then(|parsed| parsed.device_id().map(str::to_string))
             .as_deref(),
     );
-    let hub_published_abilities = inputs.hub_published_abilities;
+    let authority_published_abilities = inputs.authority_published_abilities;
 
     run_join_prelude(
         client,
@@ -96,7 +96,7 @@ pub(super) async fn run_session_preludes(
         hub_endpoint,
         &caller_ura,
         signer.as_ref(),
-        &hub_published_abilities,
+        &authority_published_abilities,
     )
     .await;
     run_owner_projection_prelude(
@@ -124,7 +124,7 @@ pub(super) async fn run_session_preludes(
     let federation_heartbeat = spawn_federation_heartbeat(
         channels.federation_heartbeat,
         Arc::clone(&signer),
-        Arc::clone(&hub_published_abilities),
+        Arc::clone(&authority_published_abilities),
     );
 
     run_hosted_agent_advertise_prelude(
@@ -148,7 +148,7 @@ async fn run_join_prelude(
     hub_endpoint: &str,
     caller_ura: &str,
     signer: &dyn CanonicalSigner,
-    hub_published_abilities: &HubPublishedAbilityStore,
+    authority_published_abilities: &AuthorityPublishedAbilityStore,
 ) {
     phase.transition(
         DeviceSessionPhase::Preluding(PreludeStep::Join),
@@ -160,7 +160,7 @@ async fn run_join_prelude(
         caller_ura = caller_ura,
         hub_endpoint = hub_endpoint,
     );
-    match send_federation_join_prelude(client, signer, hub_published_abilities).await {
+    match send_federation_join_prelude(client, signer, authority_published_abilities).await {
         Ok(()) => {
             crate::op_event!(
                 component = session,
@@ -491,7 +491,7 @@ async fn advertise_hosted_agent_abilities(
 async fn send_federation_join_prelude(
     client: &mut InvocationClient<Channel>,
     signer: &dyn CanonicalSigner,
-    hub_published_abilities: &HubPublishedAbilityStore,
+    authority_published_abilities: &AuthorityPublishedAbilityStore,
 ) -> Result<(), tonic::Status> {
     let caller_ura = signer.owner_ura();
     let realm = crate::core::ura::parse_ura(caller_ura)
@@ -512,15 +512,16 @@ async fn send_federation_join_prelude(
     match client.invoke(request).await {
         Ok(reply) => {
             let body_bytes = reply.into_inner().result;
-            let projection = apply_federation_join_receipt(&body_bytes, hub_published_abilities)?;
+            let projection =
+                apply_federation_join_receipt(&body_bytes, authority_published_abilities)?;
             if projection.seeded_ability_count > 0 {
                 let ability_count = projection.seeded_ability_count;
-                let hub_abilities_revision = projection.hub_abilities_revision;
+                let authority_abilities_revision = projection.authority_abilities_revision;
                 crate::op_event!(
                     component = session,
-                    kind = hub_broadcast_abilities_seeded,
+                    kind = authority_broadcast_abilities_seeded,
                     ability_count = ability_count,
-                    hub_abilities_revision = hub_abilities_revision,
+                    authority_abilities_revision = authority_abilities_revision,
                 );
             }
             Ok(())
@@ -538,12 +539,12 @@ async fn send_federation_join_prelude(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct FederationJoinReceiptProjection {
     seeded_ability_count: usize,
-    hub_abilities_revision: u64,
+    authority_abilities_revision: u64,
 }
 
 fn apply_federation_join_receipt(
     body_bytes: &[u8],
-    hub_published_abilities: &HubPublishedAbilityStore,
+    authority_published_abilities: &AuthorityPublishedAbilityStore,
 ) -> Result<FederationJoinReceiptProjection, tonic::Status> {
     if body_bytes.is_empty() {
         return Err(tonic::Status::failed_precondition(
@@ -556,16 +557,16 @@ fn apply_federation_join_receipt(
     .map_err(|error| {
         tonic::Status::failed_precondition(format!("federation.join receipt invalid: {error}"))
     })?;
-    hub_published_abilities
+    authority_published_abilities
         .seed_from_snapshot(body.hub_abilities_revision, body.hub_published_abilities)
         .map_err(|error| {
             tonic::Status::failed_precondition(format!(
-                "federation.join hub ability catalog invalid: {error}"
+                "federation.join Authority-published ability catalog invalid: {error}"
             ))
         })?;
     Ok(FederationJoinReceiptProjection {
-        seeded_ability_count: hub_published_abilities.len(),
-        hub_abilities_revision: body.hub_abilities_revision,
+        seeded_ability_count: authority_published_abilities.len(),
+        authority_abilities_revision: body.hub_abilities_revision,
     })
 }
 
@@ -1233,7 +1234,7 @@ mod tests {
     };
     use crate::daemon::ability::descriptors::{AbilityDescriptor, AdmissionAction, Visibility};
     use crate::daemon::federation::client::ability_contract::HubAbilityEntry;
-    use crate::daemon::federation::read_model::hub_published_abilities::HubPublishedAbilityStore;
+    use crate::daemon::federation::read_model::authority_published_abilities::AuthorityPublishedAbilityStore;
     use crate::daemon::identity::self_identity::TestCanonicalSigner;
     use crate::daemon::persistence::config::{save_credentials, state_dir, Credentials};
     use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
@@ -1242,7 +1243,7 @@ mod tests {
     use std::sync::Arc;
     use tonic::transport::Channel;
 
-    fn canonical_hub_entry(name: &str) -> HubAbilityEntry {
+    fn canonical_authority_entry(name: &str) -> HubAbilityEntry {
         HubAbilityEntry {
             name: name.to_string(),
             descriptor: serde_json::to_value(
@@ -1252,7 +1253,7 @@ mod tests {
                     Visibility::Public,
                     AdmissionAction::Read,
                 )
-                .expect("canonical hub descriptor"),
+                .expect("canonical realm Authority descriptor"),
             )
             .expect("descriptor json"),
         }
@@ -1317,7 +1318,7 @@ mod tests {
 
     #[test]
     fn federation_join_receipt_rejects_empty_or_malformed_body() {
-        let store = HubPublishedAbilityStore::new();
+        let store = AuthorityPublishedAbilityStore::new();
         let empty = apply_federation_join_receipt(&[], &store)
             .expect_err("empty join receipt must fail closed");
         assert_eq!(empty.code(), tonic::Code::FailedPrecondition);
@@ -1332,14 +1333,14 @@ mod tests {
     }
 
     #[test]
-    fn federation_join_receipt_seeds_canonical_hub_catalog() {
-        let store = HubPublishedAbilityStore::new();
+    fn federation_join_receipt_seeds_canonical_authority_catalog() {
+        let store = AuthorityPublishedAbilityStore::new();
         let body = serde_json::to_vec(&serde_json::json!({
             "membership_ura": "easynet:///r/realm/device/n1",
             "realm": "realm",
             "join_receipt_hash": "a".repeat(64),
             "hub_abilities_revision": 17,
-            "hub_published_abilities": [canonical_hub_entry("test.scope")],
+            "hub_published_abilities": [canonical_authority_entry("test.scope")],
             "advertise_contract": {
                 "allowed_owner_prefixes": ["device."],
                 "allows_hosted_agents": true
@@ -1351,7 +1352,7 @@ mod tests {
             apply_federation_join_receipt(&body, &store).expect("canonical join receipt");
 
         assert_eq!(projection.seeded_ability_count, 1);
-        assert_eq!(projection.hub_abilities_revision, 17);
+        assert_eq!(projection.authority_abilities_revision, 17);
         assert_eq!(store.revision(), 17);
         assert_eq!(store.snapshot()[0].public_name(), "test.scope");
     }

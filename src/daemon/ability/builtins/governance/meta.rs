@@ -48,7 +48,7 @@ use std::sync::Arc;
 use crate::daemon::ability::catalog as ability_catalog;
 use crate::daemon::ability::descriptors::{AbilityDescriptor, AbilityIdentity};
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, OwnerKind};
-use crate::daemon::federation::read_model::hub_published_abilities::HubPublishedAbilityStore;
+use crate::daemon::federation::read_model::authority_published_abilities::AuthorityPublishedAbilityStore;
 use crate::daemon::persistence::agent_aggregate::AgentAggregateRepository;
 use serde_json::{json, Value};
 
@@ -72,7 +72,7 @@ pub fn register<F>(
     local_runtime_owners: Vec<OwnerKind>,
     descriptors_provider: F,
     registry_handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
-    authority_published_abilities: Arc<HubPublishedAbilityStore>,
+    authority_published_abilities: Arc<AuthorityPublishedAbilityStore>,
 ) where
     F: Fn() -> Vec<AbilityDescriptor> + Send + Sync + 'static,
 {
@@ -120,7 +120,7 @@ pub fn register<F>(
 fn describe_handler(
     descriptors_provider: &Arc<dyn Fn() -> Vec<AbilityDescriptor> + Send + Sync>,
     registry_handle: &Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
-    authority_published_abilities: &HubPublishedAbilityStore,
+    authority_published_abilities: &AuthorityPublishedAbilityStore,
     invocation_callee_ura: &str,
 ) -> anyhow::Result<Value> {
     // The envelope callee is the runtime authority being described. Identity
@@ -205,7 +205,7 @@ fn list_abilities_handler(
     descriptors_provider: &Arc<dyn Fn() -> Vec<AbilityDescriptor> + Send + Sync>,
     registry_handle: &Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
     args: Value,
-    authority_published_abilities: &HubPublishedAbilityStore,
+    authority_published_abilities: &AuthorityPublishedAbilityStore,
     invocation_callee_ura: &str,
 ) -> anyhow::Result<Value> {
     let scope = AbilityListScope::from_args(&args)?;
@@ -652,7 +652,7 @@ mod tests {
             vec![OwnerKind::Device],
             descriptors_provider,
             registry_handle,
-            HubPublishedAbilityStore::new(),
+            AuthorityPublishedAbilityStore::new(),
         );
     }
 
@@ -771,7 +771,7 @@ mod tests {
             owners,
             canonical_meta_fixtures,
             Arc::clone(&handle),
-            HubPublishedAbilityStore::new(),
+            AuthorityPublishedAbilityStore::new(),
         );
         let registry = Arc::new(registry);
         handle
@@ -888,7 +888,7 @@ mod tests {
                 panic!("Hub live catalogue must not call Device descriptor provider")
             },
             Arc::clone(&handle),
-            HubPublishedAbilityStore::new(),
+            AuthorityPublishedAbilityStore::new(),
         );
         let registry = Arc::new(registry);
         handle
@@ -1078,7 +1078,7 @@ mod tests {
         // cached from federation joins and heartbeats. The default-local path
         // stays disjoint — pin both axes.
         use crate::daemon::federation::client::ability_contract::HubAbilityEntry;
-        let authority_published_abilities = HubPublishedAbilityStore::new();
+        let authority_published_abilities = AuthorityPublishedAbilityStore::new();
 
         let mut reg = metadata_test_catalog();
         super::register(

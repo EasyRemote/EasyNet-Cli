@@ -8845,6 +8845,17 @@ from pathlib import Path
 prelude = Path(sys.argv[1]).read_text(encoding="utf-8")
 heartbeat = Path(sys.argv[2]).read_text(encoding="utf-8")
 
+for source_name, source_text in (("prelude", prelude), ("heartbeat", heartbeat)):
+    for retired in (
+        "hub_published_abilities: &AuthorityPublishedAbilityStore",
+        "hub_published_abilities: Arc<AuthorityPublishedAbilityStore>",
+        "let hub_published_abilities = inputs.",
+        "hub_published_abilities.apply_diff",
+        "hub_published_abilities.seed_from_snapshot",
+    ):
+        if retired in source_text:
+            raise SystemExit(f"session_prelude_receipt:retired_internal_store_name:{source_name}:{retired}")
+
 if "fn apply_federation_join_receipt" not in prelude:
     raise SystemExit("session_prelude_receipt:join_projection_missing")
 join_projection = prelude.split("fn apply_federation_join_receipt", 1)[1].split(
@@ -8882,7 +8893,7 @@ if "owner projection cursor unavailable" not in owner_refresh_projection:
 
 for test in (
     "federation_join_receipt_rejects_empty_or_malformed_body",
-    "federation_join_receipt_seeds_canonical_hub_catalog",
+    "federation_join_receipt_seeds_canonical_authority_catalog",
 ):
     if test not in prelude:
         raise SystemExit(f"session_prelude_receipt:missing_join_test:{test}")
@@ -12098,14 +12109,16 @@ PY
 check_canonical_ability_catalog_projection_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local descriptor="$cli_root/src/daemon/ability/descriptors/surface.rs"
-  local store="$cli_root/src/daemon/federation/read_model/hub_published_abilities.rs"
+  local store="$cli_root/src/daemon/federation/read_model/authority_published_abilities.rs"
+  local retired_store="$cli_root/src/daemon/federation/read_model/hub_published_abilities.rs"
   local meta="$cli_root/src/daemon/ability/builtins/governance/meta.rs"
   local catalog_meta="$cli_root/src/daemon/ability/catalog/catalog_metadata.rs"
   local ffi_invocation="$cli_root/src/ffi/invocation/mod.rs"
   local cli_catalog="$cli_root/src/cli/daemon_client/ability_catalog.rs"
   local cli_ability="$cli_root/src/cli/commands/groups/ability.rs"
   [[ -f "$descriptor" ]] || fail "AbilityDescriptor source is missing: $descriptor"
-  [[ -f "$store" ]] || fail "hub-published ability store is missing: $store"
+  [[ -f "$store" ]] || fail "Authority-published ability store is missing: $store"
+  [[ ! -e "$retired_store" ]] || fail "retired hub-published ability store remains: $retired_store"
   [[ -f "$meta" ]] || fail "meta.list_abilities source is missing: $meta"
   [[ -f "$catalog_meta" ]] || fail "catalog metadata source is missing: $catalog_meta"
   [[ -f "$ffi_invocation" ]] || fail "FFI invocation source is missing: $ffi_invocation"
@@ -12174,28 +12187,32 @@ for forbidden, code in (
 ):
     if forbidden in inventory_body:
         raise SystemExit(f"system_ability_contract_inventory:{code}")
+if "pub struct AuthorityPublishedAbilityStore" not in production_store:
+    raise SystemExit("authority_published_store:canonical_type_missing")
+if "HubPublishedAbilityStore" in production_store:
+    raise SystemExit("authority_published_store:retired_type_alias_or_name")
 if "entries: BTreeMap<String, AbilityDescriptor>" not in production_store:
-    raise SystemExit("hub_published_store:entries_not_canonical_descriptor")
+    raise SystemExit("authority_published_store:entries_not_canonical_descriptor")
 if "entries: BTreeMap<String, HubAbilityEntry>" in production_store:
-    raise SystemExit("hub_published_store:opaque_entry_cache")
-if "fn validate_hub_ability_entry" not in production_store:
-    raise SystemExit("hub_published_store:validation_boundary_missing")
+    raise SystemExit("authority_published_store:opaque_entry_cache")
+if "fn validate_authority_ability_entry" not in production_store:
+    raise SystemExit("authority_published_store:validation_boundary_missing")
 if "serde_json::from_value(entry.descriptor)" not in production_store:
-    raise SystemExit("hub_published_store:descriptor_parse_missing")
+    raise SystemExit("authority_published_store:descriptor_parse_missing")
 if "descriptor.descriptor_ref().map_err" not in production_store:
-    raise SystemExit("hub_published_store:descriptor_ref_error_propagation_missing")
+    raise SystemExit("authority_published_store:descriptor_ref_error_propagation_missing")
 if "descriptor.descriptor_ref().is_none()" in production_store:
-    raise SystemExit("hub_published_store:descriptor_ref_optional_collapse")
+    raise SystemExit("authority_published_store:descriptor_ref_optional_collapse")
 if "pub fn seed_from_snapshot" not in production_store or "-> Result<(), String>" not in production_store:
-    raise SystemExit("hub_published_store:seed_not_fallible")
+    raise SystemExit("authority_published_store:seed_not_fallible")
 if "pub fn apply_diff" not in production_store or "-> Result<(), String>" not in production_store:
-    raise SystemExit("hub_published_store:diff_not_fallible")
+    raise SystemExit("authority_published_store:diff_not_fallible")
 for test_name in (
     "seed_rejects_noncanonical_descriptor_rows",
     "apply_diff_is_atomic_when_added_row_is_noncanonical",
 ):
     if test_name not in store:
-        raise SystemExit(f"hub_published_store:missing_test:{test_name}")
+        raise SystemExit(f"authority_published_store:missing_test:{test_name}")
 
 realm_split = meta.split("if scope.include_realm", 1)
 if len(realm_split) != 2:
@@ -18810,15 +18827,15 @@ pub fn system_ability_contract_inventory_for_voice_assembly(
 
 /// Voice static contracts
 EOF
-  cat >"$tmp/cli-opaque-hub-catalog/src/daemon/federation/read_model/hub_published_abilities.rs" <<'EOF'
+  cat >"$tmp/cli-opaque-hub-catalog/src/daemon/federation/read_model/authority_published_abilities.rs" <<'EOF'
 use std::collections::BTreeMap;
 use crate::daemon::federation::client::ability_contract::HubAbilityEntry;
 
-pub struct HubPublishedAbilityStore {
+pub struct AuthorityPublishedAbilityStore {
     entries: BTreeMap<String, HubAbilityEntry>,
 }
 
-impl HubPublishedAbilityStore {
+impl AuthorityPublishedAbilityStore {
     pub fn seed_from_snapshot(&self) {}
     pub fn apply_diff(&self) {}
 }
@@ -18826,7 +18843,7 @@ EOF
   cat >"$tmp/cli-opaque-hub-catalog/src/daemon/ability/builtins/governance/meta.rs" <<'EOF'
 fn list_abilities_handler() {
     if scope.include_realm {
-        for entry in hub_published_abilities.snapshot() {
+        for entry in authority_published_abilities.snapshot() {
             merged.push(entry.descriptor);
         }
     }
@@ -18865,7 +18882,7 @@ fn run_show(entry: serde_json::Value, args: ShowArgs) {
 }
 EOF
   if ( CLI_ROOT="$tmp/cli-opaque-hub-catalog"; check_canonical_ability_catalog_projection_contract ) >/dev/null 2>&1; then
-    fail "self-test expected opaque hub ability catalog gate to fail"
+    fail "self-test expected opaque Authority-published ability catalog gate to fail"
   fi
   cp -R "$tmp/axon" "$tmp/axon-python-private-plain-proof"
   printf 'def _canonical_invocation_bytes(env):\n  return b""\n' \
@@ -22393,7 +22410,7 @@ EOF
   fi
   mkdir -p "$tmp/session-prelude-receipt-legacy/src/daemon/invocation/bidi/session_initiator"
   printf '%s\n' \
-    'fn apply_federation_join_receipt(body_bytes: &[u8], hub_published_abilities: &HubPublishedAbilityStore) -> Result<(), tonic::Status> {' \
+    'fn apply_federation_join_receipt(body_bytes: &[u8], hub_published_abilities: &AuthorityPublishedAbilityStore) -> Result<(), tonic::Status> {' \
     '  if !body_bytes.is_empty() {' \
     '    if let Ok(body) = serde_json::from_slice::<crate::daemon::federation::client::ability_contract::JoinReceipt>(body_bytes) {' \
     '      hub_published_abilities.seed_from_snapshot(body.hub_abilities_revision, body.hub_published_abilities);' \
@@ -22404,7 +22421,7 @@ EOF
     'fn federation_join_public_key_hex() {}' \
     > "$tmp/session-prelude-receipt-legacy/src/daemon/invocation/bidi/session_initiator/prelude.rs"
   printf '%s\n' \
-    'fn apply_federation_heartbeat_receipt(body_bytes: &[u8], hub_published_abilities: &HubPublishedAbilityStore) -> Result<(), tonic::Status> {' \
+    'fn apply_federation_heartbeat_receipt(body_bytes: &[u8], hub_published_abilities: &AuthorityPublishedAbilityStore) -> Result<(), tonic::Status> {' \
     '  if let Ok(receipt) = serde_json::from_slice::<crate::daemon::federation::client::ability_contract::HeartbeatReceipt>(body_bytes) {' \
     '    let diff = receipt.hub_abilities_diff;' \
     '    if !diff.added.is_empty() || !diff.removed.is_empty() { hub_published_abilities.apply_diff(diff); }' \
@@ -24432,7 +24449,7 @@ pub fn system_ability_contract_inventory_for_voice_assembly(
 
 /// Voice static contracts
 EOF
-  touch "$tmp/descriptor-wire-identity-fallback-legacy/src/daemon/federation/read_model/hub_published_abilities.rs" \
+  touch "$tmp/descriptor-wire-identity-fallback-legacy/src/daemon/federation/read_model/authority_published_abilities.rs" \
     "$tmp/descriptor-wire-identity-fallback-legacy/src/daemon/ability/builtins/governance/meta.rs" \
     "$tmp/descriptor-wire-identity-fallback-legacy/src/ffi/invocation/mod.rs" \
     "$tmp/descriptor-wire-identity-fallback-legacy/src/cli/daemon_client/ability_catalog.rs" \

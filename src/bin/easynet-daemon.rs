@@ -47,7 +47,7 @@ use easynet_cli::daemon::control::{discovery, server};
 use easynet_cli::daemon::execution::loop_instance::KernelLoopInvocationDriver;
 use easynet_cli::daemon::execution::runtime_identity::LocalRuntimeInvocationIdentity;
 use easynet_cli::daemon::execution::schedule::ScheduleService;
-use easynet_cli::daemon::federation::read_model::hub_published_abilities::HubPublishedAbilityStore;
+use easynet_cli::daemon::federation::read_model::authority_published_abilities::AuthorityPublishedAbilityStore;
 use easynet_cli::daemon::persistence::config;
 use easynet_cli::daemon::persistence::daemon_config::{
     default_config_path, resolved_local_uds_path_with_env_override, DaemonConfig, DaemonMode,
@@ -364,7 +364,7 @@ async fn main() -> anyhow::Result<()> {
         }
     };
     let invocation_ledger = open_invocation_ledger();
-    let hub_published_abilities = HubPublishedAbilityStore::new();
+    let authority_published_abilities = AuthorityPublishedAbilityStore::new();
     let voice_calls = match daemon_config.mode() {
         DaemonMode::Hub | DaemonMode::Both => {
             easynet_cli::daemon::persistence::voice_calls::HubRealmVoiceCallRepository::from_env(
@@ -485,7 +485,7 @@ async fn main() -> anyhow::Result<()> {
             hot_agent_registrar_cell: Arc::clone(&hot_agent_registrar_cell),
             shared_stores: {
                 let stores = ability_catalog::RegistrySharedStores::new(Arc::clone(
-                    &hub_published_abilities,
+                    &authority_published_abilities,
                 ));
                 match voice_calls {
                     Some(repository) => {
@@ -567,7 +567,7 @@ async fn main() -> anyhow::Result<()> {
             invocation_ledger,
             hot_agent_registrar_cell: Arc::clone(&hot_agent_registrar_cell),
             plugin_runtime_manager: Some(Arc::clone(&built_registry.plugin_runtime_manager)),
-            hub_published_abilities: Arc::clone(&hub_published_abilities),
+            authority_published_abilities: Arc::clone(&authority_published_abilities),
             discover_federation_resolver: Some(Arc::clone(&discover_federation_resolver_cell)),
         };
         match easynet_cli::daemon::invocation::start_daemon_invocation_transport(dependencies) {

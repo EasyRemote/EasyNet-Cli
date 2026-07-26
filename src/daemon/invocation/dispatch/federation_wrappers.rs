@@ -297,9 +297,9 @@ pub struct JoinResponse {
     /// axon-runtime's prior nonce-bearing receipt, MAY-differ under
     /// schema-compat.
     pub join_receipt_hash: String,
-    /// Explicit hub-owned ability catalog snapshot published at join time.
+    /// Explicit Authority-published ability catalog snapshot published at join time.
     pub hub_published_abilities: Vec<HubAbilityEntry>,
-    /// Monotonic revision for `hub_published_abilities`.
+    /// Monotonic revision for the Authority-published ability snapshot.
     pub hub_abilities_revision: u64,
     /// Explicit advertise policy fact for this membership.
     pub advertise_contract: AdvertiseContract,
@@ -509,7 +509,7 @@ pub struct HeartbeatResponse {
     /// skipped). Lets the device detect when it must re-advertise.
     #[serde(default)]
     pub refreshed_owner_count: usize,
-    /// Explicit hub-owned ability catalog diff since the caller's last
+    /// Explicit Authority-published ability catalog diff since the caller's last
     /// observed revision.
     pub hub_abilities_diff: HubAbilitiesDiff,
 }

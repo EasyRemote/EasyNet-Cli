@@ -8,7 +8,7 @@ use super::prelude::{invoke_prelude_unary, signed_prelude_request};
 use super::tasks::AbortOnDrop;
 use super::{SessionUpSender, SESSION_UP_HEARTBEAT_INTERVAL};
 use crate::daemon::federation::client::ability_contract::HeartbeatArgs;
-use crate::daemon::federation::read_model::hub_published_abilities::HubPublishedAbilityStore;
+use crate::daemon::federation::read_model::authority_published_abilities::AuthorityPublishedAbilityStore;
 use crate::daemon::identity::self_identity::CanonicalSigner;
 
 pub(super) struct SessionUpHeartbeatTask {
@@ -65,7 +65,7 @@ const MAX_HEARTBEAT_LEASE_REFRESH_OWNERS: usize = 64;
 pub(super) fn spawn_federation_heartbeat(
     channel: Channel,
     signer: Arc<dyn CanonicalSigner>,
-    hub_published_abilities: Arc<HubPublishedAbilityStore>,
+    authority_published_abilities: Arc<AuthorityPublishedAbilityStore>,
 ) -> AbortOnDrop {
     AbortOnDrop(tokio::spawn(async move {
         let mut heartbeat_client =
@@ -76,7 +76,7 @@ pub(super) fn spawn_federation_heartbeat(
             match send_federation_heartbeat(
                 &mut heartbeat_client,
                 signer.as_ref(),
-                &hub_published_abilities,
+                &authority_published_abilities,
             )
             .await
             {
@@ -111,9 +111,9 @@ pub(super) fn spawn_federation_heartbeat(
 ///
 /// Refreshes this device's `last_heartbeat_unix_ms` in the hub
 /// directory plus the owner-projection leases this daemon has
-/// published (RFC-005), and applies the hub-broadcast abilities diff
+/// published (RFC-005), and applies the Authority broadcast abilities diff
 /// from the receipt (AXON-RFC-001 v4.1.7) so the local
-/// `HubPublishedAbilityStore` stays current between re-dials. Wire
+/// `AuthorityPublishedAbilityStore` stays current between re-dials. Wire
 /// shape mirrors the hub's `hub_profile/heartbeat.rs::HeartbeatArgs`;
 /// the hub keys the record refresh on the envelope caller URA and
 /// auto-includes it in the lease batch, so an empty batch is valid only when
@@ -122,12 +122,12 @@ pub(super) fn spawn_federation_heartbeat(
 async fn send_federation_heartbeat(
     client: &mut axon_sdk::pb::axon::v1::invocation_client::InvocationClient<Channel>,
     signer: &dyn CanonicalSigner,
-    hub_published_abilities: &HubPublishedAbilityStore,
+    authority_published_abilities: &AuthorityPublishedAbilityStore,
 ) -> Result<(), tonic::Status> {
     let caller_ura = signer.owner_ura();
     let refresh_owner_uras = heartbeat_refresh_owner_uras_for_caller(caller_ura)?;
     let args = HeartbeatArgs {
-        since_abilities_revision: hub_published_abilities.revision(),
+        since_abilities_revision: authority_published_abilities.revision(),
         refresh_owner_uras,
     };
     let arguments = serde_json::to_vec(&args)
@@ -135,7 +135,7 @@ async fn send_federation_heartbeat(
     let request =
         signed_prelude_request(signer, caller_ura, "federation.heartbeat", arguments).await?;
     let response = invoke_prelude_unary(client, request, "federation.heartbeat").await?;
-    apply_federation_heartbeat_receipt(&response.result, hub_published_abilities)?;
+    apply_federation_heartbeat_receipt(&response.result, authority_published_abilities)?;
     Ok(())
 }
 
@@ -154,7 +154,7 @@ fn heartbeat_refresh_owner_uras_for_caller(caller_ura: &str) -> Result<Vec<Strin
 
 fn apply_federation_heartbeat_receipt(
     body_bytes: &[u8],
-    hub_published_abilities: &HubPublishedAbilityStore,
+    authority_published_abilities: &AuthorityPublishedAbilityStore,
 ) -> Result<(), tonic::Status> {
     if body_bytes.is_empty() {
         return Err(tonic::Status::failed_precondition(
@@ -167,11 +167,11 @@ fn apply_federation_heartbeat_receipt(
     .map_err(|error| {
         tonic::Status::failed_precondition(format!("federation.heartbeat receipt invalid: {error}"))
     })?;
-    hub_published_abilities
+    authority_published_abilities
         .apply_diff(receipt.hub_abilities_diff)
         .map_err(|error| {
             tonic::Status::failed_precondition(format!(
-                "federation.heartbeat hub ability catalog invalid: {error}"
+                "federation.heartbeat Authority-published ability catalog invalid: {error}"
             ))
         })
 }
@@ -181,12 +181,12 @@ mod tests {
     use super::{apply_federation_heartbeat_receipt, heartbeat_refresh_owner_uras_for_caller};
     use crate::daemon::ability::descriptors::{AbilityDescriptor, AdmissionAction, Visibility};
     use crate::daemon::federation::client::ability_contract::HubAbilityEntry;
-    use crate::daemon::federation::read_model::hub_published_abilities::HubPublishedAbilityStore;
+    use crate::daemon::federation::read_model::authority_published_abilities::AuthorityPublishedAbilityStore;
     use crate::daemon::persistence::owner_projections::{
         self, OwnerProjectionCursor, OwnerProjectionCursorFile, OwnerProjectionCursorLifecycle,
     };
 
-    fn canonical_hub_entry(name: &str) -> HubAbilityEntry {
+    fn canonical_authority_entry(name: &str) -> HubAbilityEntry {
         HubAbilityEntry {
             name: name.to_string(),
             descriptor: serde_json::to_value(
@@ -196,7 +196,7 @@ mod tests {
                     Visibility::Public,
                     AdmissionAction::Read,
                 )
-                .expect("canonical hub descriptor"),
+                .expect("canonical realm Authority descriptor"),
             )
             .expect("descriptor json"),
         }
@@ -204,7 +204,7 @@ mod tests {
 
     #[test]
     fn federation_heartbeat_receipt_rejects_empty_or_malformed_body() {
-        let store = HubPublishedAbilityStore::new();
+        let store = AuthorityPublishedAbilityStore::new();
         let empty = apply_federation_heartbeat_receipt(&[], &store)
             .expect_err("empty heartbeat receipt must fail closed");
         assert_eq!(empty.code(), tonic::Code::FailedPrecondition);
@@ -220,7 +220,7 @@ mod tests {
 
     #[test]
     fn federation_heartbeat_receipt_applies_revision_only_diff() {
-        let store = HubPublishedAbilityStore::new();
+        let store = AuthorityPublishedAbilityStore::new();
         let body = serde_json::to_vec(&serde_json::json!({
             "membership_status": "active",
             "realm_directory_size": 1,
@@ -241,13 +241,13 @@ mod tests {
 
     #[test]
     fn federation_heartbeat_receipt_applies_canonical_added_rows() {
-        let store = HubPublishedAbilityStore::new();
+        let store = AuthorityPublishedAbilityStore::new();
         let body = serde_json::to_vec(&serde_json::json!({
             "membership_status": "active",
             "realm_directory_size": 1,
             "hub_abilities_diff": {
                 "revision": 22,
-                "added": [canonical_hub_entry("test.scope")],
+                "added": [canonical_authority_entry("test.scope")],
                 "removed": []
             }
         }))
