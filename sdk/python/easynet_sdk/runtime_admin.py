@@ -17,6 +17,7 @@ from .runtime_lifecycle import (
     RuntimeLifecycleState,
     RuntimeStatus,
     StopOptions,
+    _runtime_ready as _runtime_lifecycle_ready,
 )
 from .errors import ErrorCode, RetryHint, SDKError
 from .health import DiagnosticsReport, HealthClient, RuntimeHealth
@@ -160,7 +161,7 @@ class RuntimeAdminClient:
             endpoints=status.endpoints,
             health=health,
             diagnostics=diagnostics,
-            ready=_runtime_ready(status.state) and health.ready(),
+            ready=_runtime_lifecycle_ready(status.state) and health.ready(),
             messages=messages,
         )
 
@@ -187,13 +188,6 @@ class RuntimeAdminAbilityClient:
             args,
         )
         return _runtime_session_page(output)
-
-def _runtime_ready(state: RuntimeLifecycleState) -> bool:
-    return state in {
-        RuntimeLifecycleState.INVOCATION_READY,
-        RuntimeLifecycleState.RUNNING,
-    }
-
 
 def _runtime_admin_call(
     call: RuntimeCallContext, ability: str

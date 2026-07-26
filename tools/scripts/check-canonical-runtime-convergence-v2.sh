@@ -768,8 +768,10 @@ check_go_sdk_runtime_lifecycle_neutrality_contract() {
 check_python_sdk_runtime_lifecycle_transition_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local lifecycle="$cli_root/sdk/python/easynet_sdk/runtime_lifecycle.py"
+  local admin="$cli_root/sdk/python/easynet_sdk/runtime_admin.py"
   local tests="$cli_root/sdk/python/tests/test_runtime_admin.py"
   [[ -f "$lifecycle" ]] || return 0
+  [[ -f "$admin" ]] || fail "Python SDK runtime admin source is missing: ${admin#$ROOT/}"
 
   for token in \
     "_VALID_RUNTIME_LIFECYCLE_TRANSITIONS" \
@@ -781,6 +783,12 @@ check_python_sdk_runtime_lifecycle_transition_contract() {
       fail "Python SDK canonical runtime lifecycle is missing transition contract: $token"
     fi
   done
+  if rg -n 'def _runtime_ready\s*\(' "$admin"; then
+    fail "Python SDK runtime admin must not duplicate lifecycle readiness classification"
+  fi
+  if ! rg -Fq "_runtime_ready as _runtime_lifecycle_ready" "$admin"; then
+    fail "Python SDK runtime admin must reuse lifecycle-owned readiness classification"
+  fi
 
   if [[ -f "$tests" ]]; then
     for token in \
