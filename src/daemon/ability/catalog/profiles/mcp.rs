@@ -77,13 +77,22 @@ pub fn descriptors_for(
 pub fn tool_spec_from_descriptor(
     descriptor: &crate::daemon::ability::descriptors::AbilityDescriptor,
 ) -> serde_json::Value {
-    tool_spec_from_descriptor_with_name(descriptor, &mcp_tool_name_for_ability(&descriptor.name))
+    try_tool_spec_from_descriptor_with_name(
+        descriptor,
+        &mcp_tool_name_for_ability(&descriptor.name),
+    )
+    .unwrap_or_else(|error| {
+        panic!(
+            "MCP tool spec projection rejected descriptor `{}` owned by `{}`: {error}",
+            descriptor.name, descriptor.owner_ura
+        )
+    })
 }
 
-fn tool_spec_from_descriptor_with_name(
+fn try_tool_spec_from_descriptor_with_name(
     descriptor: &crate::daemon::ability::descriptors::AbilityDescriptor,
     tool_name: &str,
-) -> serde_json::Value {
+) -> Result<serde_json::Value, McpDescriptorMetadataProjectionError> {
     let base_description = if !descriptor.description.is_empty() {
         descriptor.description.clone()
     } else {
@@ -96,23 +105,113 @@ fn tool_spec_from_descriptor_with_name(
         descriptor.schema_summary.input.clone()
     };
     let cost = CostMetadataProjection::from_descriptor(descriptor);
-    serde_json::json!({
+    let metadata = McpDescriptorMetadataProjection::from_descriptor(descriptor)?;
+    let mut extension = serde_json::Map::new();
+    extension.insert("ability".to_string(), descriptor.name.clone().into());
+    extension.insert("owner_ura".to_string(), descriptor.owner_ura.clone().into());
+    extension.insert("source".to_string(), descriptor.source.clone().into());
+    metadata.insert_into(&mut extension);
+    extension.insert("cost_kind".to_string(), cost.kind().into());
+    extension.insert("cost_label".to_string(), cost.label().into());
+
+    Ok(serde_json::json!({
         "name": tool_name,
         "description": description,
         "inputSchema": input_schema,
-        "x-easynet": {
-            "ability": descriptor.name,
-            "owner_ura": descriptor.owner_ura,
-            "source": descriptor.source,
-            "owner_user": descriptor.metadata.get("owner_user").cloned().unwrap_or_default(),
-            "owner_agent": descriptor.metadata.get("owner_agent").cloned().unwrap_or_default(),
-            "exec_kind": descriptor.metadata.get("exec_kind").cloned().unwrap_or_default(),
-            "mcp_server": descriptor.metadata.get("mcp_server").cloned().unwrap_or_default(),
-            "mcp_tool": descriptor.metadata.get("mcp_tool").cloned().unwrap_or_default(),
-            "cost_kind": cost.kind(),
-            "cost_label": cost.label(),
-        },
-    })
+        "x-easynet": extension,
+    }))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct McpDescriptorMetadataProjection {
+    owner_user: Option<String>,
+    owner_agent: Option<String>,
+    exec_kind: Option<String>,
+    mcp_runtime: Option<McpRuntimeToolMetadata>,
+}
+
+impl McpDescriptorMetadataProjection {
+    fn from_descriptor(
+        descriptor: &crate::daemon::ability::descriptors::AbilityDescriptor,
+    ) -> Result<Self, McpDescriptorMetadataProjectionError> {
+        let exec_kind = non_empty_metadata(descriptor, "exec_kind");
+        let mcp_runtime = match exec_kind.as_deref() {
+            Some("mcp") => Some(McpRuntimeToolMetadata {
+                server: required_non_empty_metadata(descriptor, "mcp_server")?,
+                tool: required_non_empty_metadata(descriptor, "mcp_tool")?,
+            }),
+            _ => None,
+        };
+        Ok(Self {
+            owner_user: non_empty_metadata(descriptor, "owner_user"),
+            owner_agent: non_empty_metadata(descriptor, "owner_agent"),
+            exec_kind,
+            mcp_runtime,
+        })
+    }
+
+    fn insert_into(self, extension: &mut serde_json::Map<String, serde_json::Value>) {
+        insert_optional_string(extension, "owner_user", self.owner_user);
+        insert_optional_string(extension, "owner_agent", self.owner_agent);
+        insert_optional_string(extension, "exec_kind", self.exec_kind);
+        if let Some(runtime) = self.mcp_runtime {
+            extension.insert("mcp_server".to_string(), runtime.server.into());
+            extension.insert("mcp_tool".to_string(), runtime.tool.into());
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct McpRuntimeToolMetadata {
+    server: String,
+    tool: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct McpDescriptorMetadataProjectionError {
+    field: &'static str,
+}
+
+impl std::fmt::Display for McpDescriptorMetadataProjectionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "MCP-backed descriptor metadata is missing required non-empty `{}`",
+            self.field
+        )
+    }
+}
+
+impl std::error::Error for McpDescriptorMetadataProjectionError {}
+
+fn non_empty_metadata(
+    descriptor: &crate::daemon::ability::descriptors::AbilityDescriptor,
+    field: &'static str,
+) -> Option<String> {
+    descriptor
+        .metadata
+        .get(field)
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn required_non_empty_metadata(
+    descriptor: &crate::daemon::ability::descriptors::AbilityDescriptor,
+    field: &'static str,
+) -> Result<String, McpDescriptorMetadataProjectionError> {
+    non_empty_metadata(descriptor, field).ok_or(McpDescriptorMetadataProjectionError { field })
+}
+
+fn insert_optional_string(
+    extension: &mut serde_json::Map<String, serde_json::Value>,
+    key: &'static str,
+    value: Option<String>,
+) {
+    if let Some(value) = value {
+        extension.insert(key.to_string(), value.into());
+    }
 }
 
 fn annotated_mcp_description(
@@ -250,8 +349,8 @@ pub fn tool_specs_from_descriptors(
     let table = McpToolRouteTable::from_descriptors(descriptors);
     table
         .iter()
-        .map(|(tool_name, index)| {
-            tool_spec_from_descriptor_with_name(&descriptors[index], tool_name)
+        .filter_map(|(tool_name, index)| {
+            try_tool_spec_from_descriptor_with_name(&descriptors[index], tool_name).ok()
         })
         .collect()
 }
@@ -307,7 +406,7 @@ struct ToolRoute {
     /// the local Device default.
     target: crate::daemon::invocation::routing::target::LocalAbilityTarget,
     /// Index of the source descriptor in the caller-provided slice.
-    /// Lets `tool_spec_from_descriptor_with_name` re-attach metadata
+    /// Lets the MCP tool-spec projector re-attach metadata
     /// from the original descriptor without cloning it into the route.
     index: usize,
 }
@@ -633,6 +732,12 @@ impl<I: LocalInvoker> InvokeMcpProvider<I> {
         invoker: I,
         descriptors: Vec<crate::daemon::ability::descriptors::AbilityDescriptor>,
     ) -> Self {
+        let descriptors = descriptors
+            .into_iter()
+            .filter(|descriptor| {
+                McpDescriptorMetadataProjection::from_descriptor(descriptor).is_ok()
+            })
+            .collect::<Vec<_>>();
         let routes = McpToolRouteTable::from_descriptors(&descriptors);
         Self {
             invoker,
@@ -775,8 +880,8 @@ impl<I: LocalInvoker> McpToolProvider for InvokeMcpProvider<I> {
     fn tool_specs(&self) -> Vec<serde_json::Value> {
         self.routes
             .iter()
-            .map(|(tool_name, index)| {
-                tool_spec_from_descriptor_with_name(&self.descriptors[index], tool_name)
+            .filter_map(|(tool_name, index)| {
+                try_tool_spec_from_descriptor_with_name(&self.descriptors[index], tool_name).ok()
             })
             .collect()
     }
@@ -933,6 +1038,26 @@ mod tests {
             "description must not leak the source/provenance string"
         );
         assert_eq!(spec["inputSchema"]["type"], "object");
+        assert!(
+            spec["x-easynet"].get("owner_user").is_none(),
+            "missing owner_user must not be projected as an empty compatibility value"
+        );
+        assert!(
+            spec["x-easynet"].get("owner_agent").is_none(),
+            "missing owner_agent must not be projected as an empty compatibility value"
+        );
+        assert!(
+            spec["x-easynet"].get("exec_kind").is_none(),
+            "missing exec_kind must not be projected as an empty compatibility value"
+        );
+        assert!(
+            spec["x-easynet"].get("mcp_server").is_none(),
+            "non-MCP descriptor must not receive fake MCP server metadata"
+        );
+        assert!(
+            spec["x-easynet"].get("mcp_tool").is_none(),
+            "non-MCP descriptor must not receive fake MCP tool metadata"
+        );
     }
 
     #[test]
@@ -1009,6 +1134,27 @@ mod tests {
         assert!(description.contains("owner: user/silan agent/openai"));
         assert!(description.contains("cost: external_metered"));
         assert!(description.contains("Geocode an address."));
+    }
+
+    #[test]
+    fn mcp_metadata_projection_rejects_missing_required_runtime_tool_facts() {
+        let desc = AbilityDescriptor::new(
+            "openai.mcp_google_maps__geocode",
+            "easynet:///r/acme/agent/silan.openai",
+            Visibility::Scoped,
+            AdmissionAction::Invoke,
+        )
+        .unwrap()
+        .with_source("agent:openai")
+        .with_metadata_entry("owner_user", "silan")
+        .with_metadata_entry("owner_agent", "openai")
+        .with_metadata_entry("exec_kind", "mcp")
+        .with_metadata_entry("mcp_server", "Google Maps");
+
+        let error = try_tool_spec_from_descriptor_with_name(&desc, "openai_google_maps_geocode")
+            .expect_err("MCP-backed row without mcp_tool must fail closed");
+
+        assert_eq!(error.field, "mcp_tool");
     }
 
     #[test]
@@ -1381,6 +1527,47 @@ mod tests {
         assert_eq!(specs[0]["x-easynet"]["owner_agent"], "claude");
         assert_eq!(specs[0]["x-easynet"]["exec_kind"], "eal");
         assert_eq!(specs[0]["x-easynet"]["cost_kind"], "unknown");
+    }
+
+    #[test]
+    fn invoke_mcp_provider_does_not_advertise_corrupt_mcp_descriptor_metadata() {
+        let valid = AbilityDescriptor::new(
+            "openai.mcp_google_maps__geocode",
+            "easynet:///r/acme/agent/silan.openai",
+            Visibility::Scoped,
+            AdmissionAction::Invoke,
+        )
+        .unwrap()
+        .with_source("agent:openai")
+        .with_metadata_entry("owner_user", "silan")
+        .with_metadata_entry("owner_agent", "openai")
+        .with_metadata_entry("exec_kind", "mcp")
+        .with_metadata_entry("mcp_server", "Google Maps")
+        .with_metadata_entry("mcp_tool", "geocode");
+        let corrupt = AbilityDescriptor::new(
+            "openai.mcp_google_maps__place_search",
+            "easynet:///r/acme/agent/silan.openai",
+            Visibility::Scoped,
+            AdmissionAction::Invoke,
+        )
+        .unwrap()
+        .with_source("agent:openai")
+        .with_metadata_entry("owner_user", "silan")
+        .with_metadata_entry("owner_agent", "openai")
+        .with_metadata_entry("exec_kind", "mcp")
+        .with_metadata_entry("mcp_server", "Google Maps");
+        let provider = InvokeMcpProvider::new(
+            FakeInvoker {
+                value: serde_json::json!({"ok": true}),
+            },
+            vec![valid, corrupt],
+        );
+
+        let specs = provider.tool_specs();
+
+        assert_eq!(provider.descriptor_count(), 1);
+        assert_eq!(specs.len(), 1);
+        assert_eq!(specs[0]["x-easynet"]["mcp_tool"], "geocode");
     }
 
     #[test]
