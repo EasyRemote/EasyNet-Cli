@@ -98,7 +98,6 @@ const REASON_AUTHORITY_SCOPE_VIOLATION: &str = "AUTHORITY_SCOPE_VIOLATION";
 const REASON_AUTHORITY_ISSUER_UNKNOWN: &str = "AUTHORITY_ISSUER_UNKNOWN";
 const REASON_AUTHORITY_ISSUER_KEY_NOT_FOUND: &str = "AUTHORITY_ISSUER_KEY_NOT_FOUND";
 const REASON_HOSTED_AGENT_DELEGATION_LOCAL_ONLY: &str = "HOSTED_AGENT_DELEGATION_LOCAL_ONLY";
-const REASON_CALLER_UNKNOWN: &str = "CALLER_UNKNOWN";
 
 /// Per-RPC transport/runtime admission gate consulted by
 /// `DaemonInvocationService` before routing into a federation wrapper or
@@ -2505,8 +2504,9 @@ fn current_unix_ms() -> i64 {
 
 fn permission_denied_unknown_caller(caller_ura: &str) -> Status {
     Status::permission_denied(format!(
-        "{REASON_CALLER_UNKNOWN}: caller URA `{caller_ura}` is not in the canonical local \
+        "{}: caller URA `{caller_ura}` is not in the canonical local \
          PrincipalLifecycle aggregate or realm trust-anchor projection",
+        SignatureDecisionReason::CallerKeyNotFound.as_str(),
     ))
 }
 
@@ -2708,6 +2708,23 @@ mod tests {
             Ok(_) => panic!("session authority raw wire unexpectedly parsed"),
             Err(error) => error,
         }
+    }
+
+    #[test]
+    fn unknown_caller_status_uses_canonical_key_not_found_reason() {
+        let err = permission_denied_unknown_caller("easynet:///r/test/user/missing");
+        assert_eq!(err.code(), tonic::Code::PermissionDenied);
+        assert!(
+            err.message()
+                .starts_with(SignatureDecisionReason::CallerKeyNotFound.as_str()),
+            "{}",
+            err.message()
+        );
+        assert!(
+            !err.message().contains("CALLER_UNKNOWN"),
+            "{}",
+            err.message()
+        );
     }
 
     #[test]

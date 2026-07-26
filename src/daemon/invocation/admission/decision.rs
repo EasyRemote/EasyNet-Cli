@@ -229,34 +229,33 @@ impl SignatureDecisionReason {
 
     #[must_use]
     pub fn from_admission_detail(detail: &str) -> Self {
-        let upper = detail.to_ascii_uppercase();
-        if upper.contains(Self::CallerKeyNotFound.as_str()) || upper.contains("CALLER_UNKNOWN") {
-            return Self::CallerKeyNotFound;
-        }
-        if upper.contains(Self::CallerKeyRevoked.as_str()) {
-            return Self::CallerKeyRevoked;
-        }
-        if upper.contains(Self::CanonicalHashMismatch.as_str())
-            || upper.contains("CANONICALIZATION")
+        for token in detail
+            .split(':')
+            .map(str::trim)
+            .filter(|token| !token.is_empty())
         {
-            return Self::CanonicalHashMismatch;
-        }
-        if upper.contains(Self::SignedDescriptorRefMissing.as_str()) {
-            return Self::SignedDescriptorRefMissing;
-        }
-        if upper.contains(Self::SignedDescriptorRefMismatch.as_str()) {
-            return Self::SignedDescriptorRefMismatch;
-        }
-        if upper.contains(Self::SignedEnvelopeRouteMutation.as_str()) {
-            return Self::SignedEnvelopeRouteMutation;
-        }
-        if upper.contains(Self::FederatedKeyResolveFailed.as_str()) {
-            return Self::FederatedKeyResolveFailed;
-        }
-        if upper.contains("CALLER_SIGNATURE_MISSING") || upper.contains("SIGNATURE_MISSING") {
-            return Self::CallerSignatureMissing;
+            if let Some(reason) = Self::from_canonical_token(token) {
+                return reason;
+            }
         }
         Self::CallerSignatureVerifyFailed
+    }
+
+    #[must_use]
+    fn from_canonical_token(token: &str) -> Option<Self> {
+        Some(match token {
+            "SIGNATURE_VALID" => Self::SignatureValid,
+            "CALLER_SIGNATURE_MISSING" => Self::CallerSignatureMissing,
+            "CALLER_KEY_NOT_FOUND" => Self::CallerKeyNotFound,
+            "CALLER_KEY_REVOKED" => Self::CallerKeyRevoked,
+            "CALLER_SIGNATURE_VERIFY_FAILED" => Self::CallerSignatureVerifyFailed,
+            "CANONICAL_HASH_MISMATCH" => Self::CanonicalHashMismatch,
+            "SIGNED_DESCRIPTOR_REF_MISSING" => Self::SignedDescriptorRefMissing,
+            "SIGNED_DESCRIPTOR_REF_MISMATCH" => Self::SignedDescriptorRefMismatch,
+            "SIGNED_ENVELOPE_ROUTE_MUTATION" => Self::SignedEnvelopeRouteMutation,
+            "FEDERATED_KEY_RESOLVE_FAILED" => Self::FederatedKeyResolveFailed,
+            _ => return None,
+        })
     }
 }
 
@@ -445,7 +444,7 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn signature_reason_parser_preserves_specific_legacy_detail() {
+    fn signature_reason_parser_reads_canonical_reason_tokens_only() {
         assert_eq!(
             SignatureDecisionReason::from_admission_detail(
                 "AXON_CALLER_SIGNATURE_INVALID: CALLER_KEY_NOT_FOUND"
@@ -464,7 +463,13 @@ mod tests {
         );
         assert_eq!(
             SignatureDecisionReason::from_admission_detail("CALLER_UNKNOWN: caller not trusted"),
-            SignatureDecisionReason::CallerKeyNotFound
+            SignatureDecisionReason::CallerSignatureVerifyFailed
+        );
+        assert_eq!(
+            SignatureDecisionReason::from_admission_detail(
+                "detail mentioned CALLER_KEY_NOT_FOUND after non-token prose"
+            ),
+            SignatureDecisionReason::CallerSignatureVerifyFailed
         );
     }
 

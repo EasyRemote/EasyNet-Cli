@@ -3920,6 +3920,74 @@ for required_test in (
 PY
 }
 
+check_admission_signature_reason_canonicalization_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local decision="$cli_root/src/daemon/invocation/admission/decision.rs"
+  local facade="$cli_root/src/daemon/invocation/admission/admission_facade.rs"
+  [[ -f "$decision" ]] || fail "admission decision source is missing: ${decision#$cli_root/}"
+  [[ -f "$facade" ]] || fail "admission facade source is missing: ${facade#$cli_root/}"
+
+  "$PYTHON_BIN" - "$decision" "$facade" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+decision = Path(sys.argv[1]).read_text(encoding="utf-8")
+facade = Path(sys.argv[2]).read_text(encoding="utf-8")
+decision_prod = decision.split("#[cfg(test)]", 1)[0]
+facade_prod = facade.split("#[cfg(test)]", 1)[0]
+
+required_decision = (
+    "pub fn from_admission_detail(detail: &str) -> Self",
+    "fn from_canonical_token(token: &str) -> Option<Self>",
+    ".split(':')",
+    ".map(str::trim)",
+    ".filter(|token| !token.is_empty())",
+    "signature_reason_parser_reads_canonical_reason_tokens_only",
+    "CALLER_UNKNOWN: caller not trusted",
+    "CallerSignatureVerifyFailed",
+)
+for token in required_decision:
+    if token not in decision:
+        raise SystemExit(f"admission_signature_reason_canonicalization:decision_missing:{token}")
+
+parser = re.search(
+    r"pub fn from_admission_detail\(detail: &str\) -> Self \{(?P<body>.*?)\n    \}",
+    decision_prod,
+    re.S,
+)
+if parser is None:
+    raise SystemExit("admission_signature_reason_canonicalization:parser_missing")
+for retired in (
+    "to_ascii_uppercase",
+    ".contains(Self::",
+    'upper.contains("CALLER_UNKNOWN")',
+    'upper.contains("CANONICALIZATION")',
+    'upper.contains("SIGNATURE_MISSING")',
+):
+    if retired in parser.group("body"):
+        raise SystemExit(f"admission_signature_reason_canonicalization:retired_parser:{retired}")
+if "CALLER_UNKNOWN" in decision_prod:
+    raise SystemExit("admission_signature_reason_canonicalization:decision_prod_legacy_alias")
+
+required_facade = (
+    "fn permission_denied_unknown_caller(caller_ura: &str) -> Status",
+    "SignatureDecisionReason::CallerKeyNotFound.as_str()",
+    "unknown_caller_status_uses_canonical_key_not_found_reason",
+)
+for token in required_facade:
+    if token not in facade:
+        raise SystemExit(f"admission_signature_reason_canonicalization:facade_missing:{token}")
+for retired in (
+    "REASON_CALLER_UNKNOWN",
+    '"CALLER_UNKNOWN"',
+    "{REASON_CALLER_UNKNOWN}",
+):
+    if retired in facade_prod:
+        raise SystemExit(f"admission_signature_reason_canonicalization:facade_prod_legacy_alias:{retired}")
+PY
+}
+
 check_access_control_policy_schema_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local grant_matcher="$cli_root/src/daemon/invocation/admission/grant_matcher.rs"
@@ -25881,6 +25949,7 @@ EOF
   check_auth_session_owner_fact_contract
   check_authority_proof_session_fact_contract
   check_child_invocation_route_ref_traceability_contract
+  check_admission_signature_reason_canonicalization_contract
   check_access_control_policy_schema_contract
   check_access_control_store_schema_contract
   check_resources_schema_contract
@@ -26134,6 +26203,7 @@ check_profile_store_schema_contract
 check_auth_session_owner_fact_contract
 check_authority_proof_session_fact_contract
 check_child_invocation_route_ref_traceability_contract
+check_admission_signature_reason_canonicalization_contract
 check_access_control_policy_schema_contract
 check_access_control_store_schema_contract
 check_resources_schema_contract
