@@ -1974,6 +1974,39 @@ if session_open_envelope.exists():
         if token not in envelope_text:
             add("R16_DAEMON_ROUTE_RUNTIME_OWNER_FORK", session_open_envelope, 1, detail)
 
+session_open_initiator = cli_root / "src/daemon/invocation/bidi/session_initiator.rs"
+session_open_warmup = cli_root / "src/daemon/invocation/bidi/session_initiator/warmup.rs"
+if session_open_warmup.exists():
+    add(
+        "R16_DAEMON_ROUTE_RUNTIME_OWNER_FORK",
+        session_open_warmup,
+        1,
+        "session.open must not keep a REST credential warmup/backstop before signed gRPC admission",
+    )
+if session_open_initiator.exists():
+    initiator_text = source(session_open_initiator)
+    for token, detail in (
+        (
+            "warm_device_credential_for_session",
+            "session.open must not call a REST credential warmup before the canonical signed session",
+        ),
+        (
+            "CredentialWarmupOutcome",
+            "session.open must not maintain a parallel warmup lifecycle state",
+        ),
+        (
+            "verify-credential",
+            "session.open must not repair trust through the REST verify-credential route",
+        ),
+    ):
+        if token in initiator_text:
+            add(
+                "R16_DAEMON_ROUTE_RUNTIME_OWNER_FORK",
+                session_open_initiator,
+                line_number(initiator_text, initiator_text.find(token)),
+                detail,
+            )
+
 # Rule 16b: local daemon loopback request construction is daemon Invocation
 # wire ownership, not support-layer transport ownership. The support adapter
 # may resolve target policy and carry requests over tonic, but it must not

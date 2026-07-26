@@ -1075,6 +1075,7 @@ check_route_kind_realm_authority_vocabulary_contract() {
 check_session_open_authority_vocabulary_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local session_initiator="$cli_root/src/daemon/invocation/bidi/session_initiator.rs"
+  local session_warmup="$cli_root/src/daemon/invocation/bidi/session_initiator/warmup.rs"
   local envelope="$cli_root/src/daemon/invocation/bidi/session_initiator/envelope.rs"
   local bidi_dispatcher="$cli_root/src/daemon/invocation/bidi/bidi_dispatcher.rs"
   local unary_tests="$cli_root/src/daemon/invocation/dispatch/daemon_invocation_service_tests/unary.rs"
@@ -1108,6 +1109,12 @@ check_session_open_authority_vocabulary_contract() {
   fi
   if ! rg -q 'runtime_system_descriptor_catalog_includes_authority_daemon_invocation_contracts' "$ffi_invocation"; then
     fail "FFI descriptor catalog test must name Authority daemon Invocation contracts"
+  fi
+  if [[ -e "$session_warmup" ]]; then
+    fail "session.open must not keep a REST credential warmup module before signed gRPC admission"
+  fi
+  if rg -n 'warm_device_credential_for_session|CredentialWarmupOutcome|verify-credential|REST backstop|continuing to gRPC session prelude' "$session_initiator"; then
+    fail "session.open initiator preserves retired REST credential warmup/backstop"
   fi
 }
 

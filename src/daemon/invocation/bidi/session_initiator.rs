@@ -100,7 +100,6 @@ mod prelude;
 mod supervisor;
 mod tasks;
 mod transport;
-mod warmup;
 
 use connection_state::project_connection_state;
 #[cfg(test)]
@@ -120,9 +119,6 @@ use supervisor::{
 };
 #[cfg(test)]
 use supervisor::{CloseClass, PreludeStep, SESSION_HEALTHY_MIN_UPTIME};
-use warmup::warm_device_credential_for_session;
-#[cfg(test)]
-use warmup::{verify_device_credential_for_credentials, CredentialWarmupOutcome};
 
 use axon_sdk::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
 use axon_sdk::pb::axon::v1::{BidiControl, BinaryChunk, InvokeBidiDown, InvokeBidiUp};
@@ -547,12 +543,10 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
         user_trust_sync,
         connection_state_sink,
     } = attempt;
-    let caller_ura = signer.owner_ura().to_string();
     // Idempotent under a supervisor (begin_attempt already entered
     // Dialing; same-phase transitions early-return); direct callers
     // (one-shot dial, tests) enter the machine here.
     phase.transition(DeviceSessionPhase::Dialing, "dial_entered");
-    warm_device_credential_for_session(&caller_ura).await;
 
     let channel = transport::connect_session_channel(&hub_endpoint, hub_ca_pem_path).await?;
     // Cheap tonic Channel clone retained for the user-key re-sync
@@ -841,10 +835,7 @@ pub type SessionReplyStream =
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::{Read, Write};
     use std::net::{SocketAddr, TcpListener as StdTcpListener};
-    use std::sync::mpsc as std_mpsc;
-    use std::thread;
 
     use axon_sdk::pb::axon::v1::invocation_server::{Invocation, InvocationServer};
     use axon_sdk::pb::axon::v1::{
@@ -1845,128 +1836,6 @@ mod tests {
             .await
             .expect("supervisor stops after cancellation")
             .expect("supervisor task did not panic");
-    }
-
-    #[test]
-    fn credential_warmup_skips_when_credentials_do_not_match_session_caller() {
-        let creds = crate::daemon::persistence::config::Credentials {
-            node_id: "n1".to_string(),
-            credential_token: "token".to_string(),
-            hub_endpoint: "http://127.0.0.1:1".to_string(),
-            realm: "realm".to_string(),
-            deploy_signature: String::new(),
-            hub_api_base: Some("http://127.0.0.1:1".to_string()),
-            username: Some("dev".to_string()),
-            user_id: Some("user-dev".to_string()),
-            hub_pubkey_b64: None,
-            hub_tls_ca_pem_b64: None,
-            join_receipt_hash: None,
-        };
-
-        let outcome =
-            verify_device_credential_for_credentials("easynet:///r/realm/device/other", creds);
-
-        match outcome {
-            CredentialWarmupOutcome::Skipped { reason } => {
-                assert!(
-                    reason.contains("does not match session caller"),
-                    "skip reason should explain caller mismatch, got: {reason}"
-                );
-            }
-            other => panic!("expected caller-mismatch skip, got {other:?}"),
-        }
-    }
-
-    /// Read one full HTTP/1.1 request — header block plus exactly
-    /// `Content-Length` body bytes — off `stream`. A single `read()`
-    /// is NOT enough here: ureq writes the header block and the JSON
-    /// body in separate syscalls, so they can arrive as separate TCP
-    /// segments. A server that answers after the first segment and
-    /// drops the socket leaves the in-flight body unread in the
-    /// receive buffer; the kernel then resets the connection and the
-    /// client surfaces a transport error instead of the 200 (the
-    /// 1-in-3 flake of `credential_warmup_posts_current_device_credential`
-    /// recorded on 2026-06-11).
-    fn read_full_http_request(stream: &mut std::net::TcpStream) -> String {
-        let mut buf: Vec<u8> = Vec::with_capacity(4096);
-        let mut chunk = [0_u8; 4096];
-        loop {
-            if let Some(header_end) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
-                let headers = String::from_utf8_lossy(&buf[..header_end]).to_string();
-                let content_length = headers
-                    .lines()
-                    .find_map(|line| {
-                        let (name, value) = line.split_once(':')?;
-                        name.trim()
-                            .eq_ignore_ascii_case("content-length")
-                            .then(|| value.trim().parse::<usize>().ok())
-                            .flatten()
-                    })
-                    .unwrap_or(0);
-                if buf.len() >= header_end + 4 + content_length {
-                    return String::from_utf8_lossy(&buf).to_string();
-                }
-            }
-            let n = stream.read(&mut chunk).expect("read verify request");
-            if n == 0 {
-                // Peer closed mid-request; return what arrived so the
-                // assertion failure shows the truncated request.
-                return String::from_utf8_lossy(&buf).to_string();
-            }
-            buf.extend_from_slice(&chunk[..n]);
-        }
-    }
-
-    #[test]
-    fn credential_warmup_posts_current_device_credential() {
-        let listener = StdTcpListener::bind("127.0.0.1:0").expect("bind verify server");
-        let addr = listener.local_addr().expect("verify server addr");
-        let (tx, rx) = std_mpsc::channel::<String>();
-        let server = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().expect("accept verify request");
-            tx.send(read_full_http_request(&mut stream))
-                .expect("send captured request");
-            stream
-                .write_all(
-                    b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 14\r\n\r\n{\"valid\":true}",
-                )
-                .expect("write verify response");
-        });
-
-        let creds = crate::daemon::persistence::config::Credentials {
-            node_id: "n1".to_string(),
-            credential_token: "token-secret".to_string(),
-            hub_endpoint: format!("http://{addr}"),
-            realm: "realm".to_string(),
-            deploy_signature: String::new(),
-            hub_api_base: Some(format!("http://{addr}")),
-            username: Some("dev".to_string()),
-            user_id: Some("user-dev".to_string()),
-            hub_pubkey_b64: None,
-            hub_tls_ca_pem_b64: None,
-            join_receipt_hash: None,
-        };
-
-        let outcome =
-            verify_device_credential_for_credentials("easynet:///r/realm/device/n1", creds);
-
-        assert_eq!(
-            outcome,
-            CredentialWarmupOutcome::Verified {
-                api_base: format!("http://{addr}")
-            }
-        );
-        let request = rx.recv().expect("captured verify request");
-        server.join().expect("verify server exits");
-        assert!(
-            request.starts_with("POST /api/v1/devices/verify-credential "),
-            "unexpected request line: {request}"
-        );
-        assert!(request.contains("\"node_id\":\"n1\""), "{request}");
-        assert!(
-            request.contains("\"credential_token\":\"token-secret\""),
-            "{request}"
-        );
     }
 
     #[tokio::test]
