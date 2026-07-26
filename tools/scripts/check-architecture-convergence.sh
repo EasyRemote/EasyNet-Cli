@@ -9722,6 +9722,67 @@ if automation_think.exists():
         )
 
 
+# Rule 83b: skill.publish provenance is explicit runtime publication state,
+# not a Mission compatibility fallback. Missing mission_run_id preserves the
+# public request contract but must record direct runtime publication instead of
+# pretending the publish came from mission.think.
+skill_publish = cli_root / "src/daemon/ability/builtins/resources/skills/publish.rs"
+if skill_publish.exists():
+    text = source(skill_publish)
+    raw_text = skill_publish.read_text(encoding="utf-8", errors="replace")
+    for token, detail in (
+        (
+            "enum SkillPublishProvenance",
+            "skill.publish must keep provenance as an explicit state object",
+        ),
+        (
+            "DirectPublish",
+            "skill.publish must model missing mission_run_id as direct publication",
+        ),
+        (
+            '"direct_publish"',
+            "skill.publish must persist direct runtime publication provenance",
+        ),
+    ):
+        if token not in text:
+            add("R83B_SKILL_PUBLISH_EXPLICIT_PROVENANCE", skill_publish, 1, detail)
+    if "publish_without_run_id_records_direct_publish_provenance" not in raw_text:
+        add(
+            "R83B_SKILL_PUBLISH_EXPLICIT_PROVENANCE",
+            skill_publish,
+            1,
+            "skill.publish must test direct publication provenance",
+        )
+    body = rust_method_body(text, "publish_handler")
+    if body is None:
+        add(
+            "R83B_SKILL_PUBLISH_EXPLICIT_PROVENANCE",
+            skill_publish,
+            1,
+            "skill.publish must keep a named publish_handler for provenance auditing",
+        )
+    else:
+        offset, fn_body = body
+        body_start = text.find("{", offset) + 1
+        for token, detail in (
+            (
+                'unwrap_or_else(|| "mission.think".to_string())',
+                "skill.publish must not synthesize Mission provenance when mission_run_id is absent",
+            ),
+            (
+                'kind: "curator".to_string()',
+                "publish_handler must not inline curator provenance assembly outside SkillPublishProvenance",
+            ),
+        ):
+            if token in fn_body:
+                add(
+                    "R83B_SKILL_PUBLISH_EXPLICIT_PROVENANCE",
+                    skill_publish,
+                    line_number(text, body_start + fn_body.find(token)),
+                    detail,
+                )
+
+
 # Rule 84: schedule due selection and snapshot projection are runtime
 # lifecycle state, not optional cache reads. A poisoned schedule cache or
 # corrupt enabled cron row must fail the observation explicitly; it must never

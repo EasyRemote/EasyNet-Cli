@@ -2,8 +2,8 @@
 // =====================================================================================
 //
 // File: src/daemon/ability/builtins/resources/skills/publish.rs
-// Description: Root meta-abilities that let a curator session
-//              (spawned by `mission.think`) materialise a new skill
+// Description: Root meta-abilities that let a runtime publisher
+//              materialise a new skill
 //              into a registered agent runtime's managed skills
 //              directory, delete an existing one, list the agent's
 //              skills, or inspect the skill package's files. Sibling of
@@ -24,14 +24,14 @@
 //   <agent-managed-skills-dir>/<skill-name>/
 //       SKILL.md               # the curator-authored description
 //       .easynet/
-//           install.json       # provenance: source = curator:mission.think,
-//                              # content_hash, installed_at, size_bytes
+//           install.json       # provenance source, content_hash,
+//                              # installed_at, size_bytes
 //
-// The provenance source is `curator:mission.think:<run_id>` (the
-// mission run that spawned the curator). This is what
-// distinguishes a curator-published skill from a github-installed
-// one when an operator audits the skill source later. Backend
-// reads `source.kind` already.
+// The provenance source is explicit state: curator publishes carry
+// the supplied run id, while direct runtime publishes carry generic
+// `direct_publish:skill.publish` provenance. The runtime must not
+// synthesize product lifecycle provenance that the caller did not
+// provide.
 //
 // What `skill.publish` writes
 // ---------------------------
@@ -64,7 +64,7 @@ use crate::daemon::resources::skills::projection::{
     SkillPublishReceipt, SkillReadFileResponse, SkillTreeEntry, SkillTreeResponse,
     SkillUnpublishReceipt, SkillWriteFileReceipt,
 };
-use crate::daemon::resources::skills::store::managed_skill_dir_for;
+use crate::daemon::resources::skills::store::{managed_skill_dir_for, SkillSource};
 
 use super::list;
 use crate::daemon::ability::dispatch::OwnerKind;
@@ -82,6 +82,38 @@ pub const ABILITY_READ_FILE: &str = crate::daemon::ability::names::resources::SK
 pub const ABILITY_WRITE_FILE: &str = crate::daemon::ability::names::resources::SKILL_WRITE_FILE;
 
 const MAX_SKILL_FILE_BYTES: u64 = 1024 * 1024;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SkillPublishProvenance {
+    CuratorRun(String),
+    DirectPublish,
+}
+
+impl SkillPublishProvenance {
+    fn from_mission_run_id(mission_run_id: Option<String>) -> Self {
+        match mission_run_id {
+            Some(run_id) => Self::CuratorRun(run_id),
+            None => Self::DirectPublish,
+        }
+    }
+
+    fn source(&self) -> SkillSource {
+        match self {
+            Self::CuratorRun(run_id) => SkillSource {
+                kind: "curator".to_string(),
+                identifier: run_id.clone(),
+                ref_: None,
+                subpath: None,
+            },
+            Self::DirectPublish => SkillSource {
+                kind: "direct_publish".to_string(),
+                identifier: ABILITY_PUBLISH.to_string(),
+                ref_: None,
+                subpath: None,
+            },
+        }
+    }
+}
 
 pub fn register(reg: &mut AxonAbilityCatalog) {
     reg.register_rpc_with_owner(
@@ -157,19 +189,8 @@ fn publish_handler(args: Value) -> anyhow::Result<Value> {
     crate::daemon::persistence::config::atomic_write(&skill_md_path, body.as_bytes())
         .map_err(|e| anyhow::anyhow!("skill.publish: write {}: {e}", skill_md_path.display()))?;
 
-    // Provenance: source.kind = "curator", identifier carries the
-    // mission run id that produced this skill so an operator
-    // auditing the skill knows which mission.think session
-    // authored it.
-    let identifier = run_id
-        .clone()
-        .unwrap_or_else(|| "mission.think".to_string());
-    let source = crate::daemon::resources::skills::store::SkillSource {
-        kind: "curator".to_string(),
-        identifier: identifier.clone(),
-        ref_: None,
-        subpath: None,
-    };
+    let provenance = SkillPublishProvenance::from_mission_run_id(run_id.clone());
+    let source = provenance.source();
     let installed_at = chrono::Utc::now().to_rfc3339();
     // Strip the `sha256:` prefix for the on-disk install.json.
     // The wire envelope below keeps the prefix because callers
@@ -871,7 +892,7 @@ pub fn publish_input_schema() -> Value {
             },
             "mission_run_id": {
                 "type": "string",
-                "description": "Optional. The curator's mission run id, recorded as install provenance."
+                "description": "Optional. Curator run provenance. When omitted, install provenance is recorded as direct runtime publication."
             }
         }
     })
@@ -1072,8 +1093,9 @@ mod tests {
         assert!(p.join("SKILL.md").exists());
         assert!(p.join(".easynet").join("install.json").exists());
         let body = std::fs::read_to_string(p.join(".easynet").join("install.json")).unwrap();
-        assert!(body.contains("\"kind\": \"curator\""));
-        assert!(body.contains("mission-think-001"));
+        let install: Value = serde_json::from_str(&body).expect("install record json");
+        assert_eq!(install["source"]["kind"], "curator");
+        assert_eq!(install["source"]["identifier"], "mission-think-001");
     }
 
     #[test]
@@ -1101,6 +1123,30 @@ mod tests {
                 .join("codex-visible")
                 .exists(),
             "codex publish must not leave a retired root-level managed skill"
+        );
+    }
+
+    #[test]
+    fn publish_without_run_id_records_direct_publish_provenance() {
+        let g = HomeGuard::new();
+        let name = materialise_agent("direct-provenance", &g);
+        let res = publish_handler(json!({
+            "owner_agent_id": name,
+            "skill_name": "direct-audit",
+            "skill_md": "# Direct Audit\nPublished without a curator run.",
+        }))
+        .expect("publish ok");
+        assert!(res.get("mission_run_id").is_none());
+
+        let skill_dir = PathBuf::from(res["skill_dir"].as_str().unwrap());
+        let body = std::fs::read_to_string(skill_dir.join(".easynet").join("install.json"))
+            .expect("install record");
+        let install: Value = serde_json::from_str(&body).expect("install record json");
+        assert_eq!(install["source"]["kind"], "direct_publish");
+        assert_eq!(install["source"]["identifier"], ABILITY_PUBLISH);
+        assert!(
+            !body.contains("mission.think"),
+            "direct publish provenance must not synthesize Mission authorship: {body}"
         );
     }
 
