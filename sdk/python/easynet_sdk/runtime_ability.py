@@ -42,6 +42,15 @@ RuntimeInvocationAuthority: TypeAlias = DelegationProof | SessionAuthority
 
 
 @dataclass(frozen=True)
+class _RuntimeAbilityDispatchPolicy:
+    allow_governance_read: bool = False
+
+
+_PUBLIC_ACTION_POLICY = _RuntimeAbilityDispatchPolicy()
+_GOVERNANCE_READ_POLICY = _RuntimeAbilityDispatchPolicy(allow_governance_read=True)
+
+
+@dataclass(frozen=True)
 class RuntimeCallContext:
     """Complete caller-controlled context for one runtime ability call."""
 
@@ -131,9 +140,16 @@ class RuntimeAbilityClient:
         arguments: object,
         *,
         call_mode: str,
+        policy: _RuntimeAbilityDispatchPolicy = _PUBLIC_ACTION_POLICY,
     ) -> InvocationDraft:
         _validate_call(call)
         ability_name = _required_text(ability_name, "ability name")
+        if not policy.allow_governance_read and _is_runtime_governance_read_ability(
+            ability_name
+        ):
+            raise _invalid(
+                "runtime governance receipt/history abilities must use RuntimeReceiptProvider"
+            )
         subject = self._addressing.parse_ura(call.subject_ura.strip())
         if subject.kind in {"user", "authority"}:
             subject_ura = self._addressing.descriptor_bound_resource_subject_ura(
@@ -175,15 +191,37 @@ class RuntimeAbilityClient:
             .build()
         )
 
+    def _build_governance_read(
+        self,
+        call: RuntimeCallContext,
+        ability_name: str,
+        arguments: object,
+    ) -> InvocationDraft:
+        return self._build(
+            call,
+            ability_name,
+            arguments,
+            call_mode="rpc",
+            policy=_GOVERNANCE_READ_POLICY,
+        )
+
     def invoke(
         self, call: RuntimeCallContext, ability_name: str, arguments: object
     ) -> dict[str, object]:
         result = self._runtime.invoke(self.build(call, ability_name, arguments))
         if not result.ok:
             raise _invocation_failure(result)
-        if not isinstance(result.output_json, Mapping):
-            raise _invalid("runtime ability output_json must be an object")
-        return dict(result.output_json)
+        return _runtime_ability_object_output(result)
+
+    def _invoke_governance_read(
+        self, call: RuntimeCallContext, ability_name: str, arguments: object
+    ) -> dict[str, object]:
+        result = self._runtime.invoke(
+            self._build_governance_read(call, ability_name, arguments)
+        )
+        if not result.ok:
+            raise _invocation_failure(result)
+        return _runtime_ability_object_output(result)
 
     def open_stream(
         self, call: RuntimeCallContext, ability_name: str, arguments: object
@@ -247,6 +285,19 @@ def _validate_runtime_call_context(call: RuntimeCallContext) -> None:
             raise _invalid(f"{field_name} must not be all-zero")
     if not isinstance(call.causal_context, Mapping):
         raise _invalid("causal_context is required")
+
+
+def _is_runtime_governance_read_ability(ability_name: str) -> bool:
+    ability_name = ability_name.strip()
+    return ability_name.startswith("invocation.history.") or ability_name.startswith(
+        "invocation.trace."
+    )
+
+
+def _runtime_ability_object_output(result: InvocationResult) -> dict[str, object]:
+    if not isinstance(result.output_json, Mapping):
+        raise _invalid("runtime ability output_json must be an object")
+    return dict(result.output_json)
 
 
 def _canonical_runtime_call_metadata(

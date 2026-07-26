@@ -95,7 +95,7 @@ class _RuntimeReceiptRouteSet:
         call: RuntimeCallContext,
         arguments: Mapping[str, object],
     ) -> dict[str, object]:
-        return ability.invoke(call, self.list_ability.strip(), dict(arguments))
+        return ability._invoke_governance_read(call, self.list_ability.strip(), dict(arguments))
 
     def get(
         self,
@@ -103,7 +103,7 @@ class _RuntimeReceiptRouteSet:
         call: RuntimeCallContext,
         arguments: Mapping[str, object],
     ) -> dict[str, object]:
-        return ability.invoke(call, self.get_ability.strip(), dict(arguments))
+        return ability._invoke_governance_read(call, self.get_ability.strip(), dict(arguments))
 
     def trace(
         self,
@@ -111,7 +111,7 @@ class _RuntimeReceiptRouteSet:
         call: RuntimeCallContext,
         arguments: Mapping[str, object],
     ) -> dict[str, object]:
-        return ability.invoke(call, self.trace_ability.strip(), dict(arguments))
+        return ability._invoke_governance_read(call, self.trace_ability.strip(), dict(arguments))
 
     def list_authority_scope(self) -> str:
         return self.list_ability.strip()

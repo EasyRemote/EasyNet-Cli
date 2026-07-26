@@ -338,21 +338,21 @@ func (r runtimeReceiptRouteSet) list(ctx context.Context, ability *RuntimeAbilit
 	if err := r.validate(); err != nil {
 		return nil, err
 	}
-	return ability.Invoke(ctx, call, r.listAbility, args)
+	return ability.invokeGovernanceRead(ctx, call, r.listAbility, args)
 }
 
 func (r runtimeReceiptRouteSet) get(ctx context.Context, ability *RuntimeAbilityClient, call RuntimeCallContext, args map[string]any) (map[string]any, error) {
 	if err := r.validate(); err != nil {
 		return nil, err
 	}
-	return ability.Invoke(ctx, call, r.getAbility, args)
+	return ability.invokeGovernanceRead(ctx, call, r.getAbility, args)
 }
 
 func (r runtimeReceiptRouteSet) trace(ctx context.Context, ability *RuntimeAbilityClient, call RuntimeCallContext, args map[string]any) (map[string]any, error) {
 	if err := r.validate(); err != nil {
 		return nil, err
 	}
-	return ability.Invoke(ctx, call, r.traceAbility, args)
+	return ability.invokeGovernanceRead(ctx, call, r.traceAbility, args)
 }
 
 type RuntimeReceiptProvider struct {

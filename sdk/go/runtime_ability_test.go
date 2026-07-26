@@ -80,6 +80,27 @@ func TestRuntimeAbilityClientRejectsAllZeroRuntimeCallPrincipalBeforeDescriptorR
 	}
 }
 
+func TestRuntimeAbilityClientRejectsInvocationHistoryPublicRouteBeforeDescriptorResolution(t *testing.T) {
+	runtime, err := NewRuntimeClient(RuntimeTransportFunc{
+		ResolveDescriptorRefFunc: func(context.Context, []byte) ([]byte, error) {
+			t.Fatal("descriptor resolver transport must not be called for receipt history public ability routes")
+			return nil, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
+	}
+	client, err := NewRuntimeAbilityClient(runtime, NewCanonicalAddressing())
+	if err != nil {
+		t.Fatalf("NewRuntimeAbilityClient: %v", err)
+	}
+
+	_, err = client.Build(context.Background(), runtimeAbilityTestContext(), "invocation.history.list", map[string]any{})
+	if err == nil || !IsCode(err, ErrInvalidArgument) || !strings.Contains(err.Error(), "RuntimeReceiptProvider") {
+		t.Fatalf("Build error = %v, want receipt provider public-route rejection", err)
+	}
+}
+
 func TestRuntimeAbilityClientBuildsCompleteCanonicalDraft(t *testing.T) {
 	runtime, err := NewRuntimeClient(RuntimeTransportFunc{
 		ResolveDescriptorRefFunc: testResolveDescriptorRef(t),

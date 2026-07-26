@@ -40,6 +40,18 @@ type RuntimeAbilityClient struct {
 	addressing Addressing
 }
 
+type runtimeAbilityDispatchPolicy struct {
+	allowGovernanceRead bool
+}
+
+func runtimeAbilityPublicPolicy() runtimeAbilityDispatchPolicy {
+	return runtimeAbilityDispatchPolicy{}
+}
+
+func runtimeAbilityGovernanceReadPolicy() runtimeAbilityDispatchPolicy {
+	return runtimeAbilityDispatchPolicy{allowGovernanceRead: true}
+}
+
 // AbilityChildContext carries the complete child Invocation context derived
 // from a parent terminal receipt.
 type AbilityChildContext struct {
@@ -140,6 +152,14 @@ func (c AbilityChildContext) OpenBidi(ctx context.Context, call RuntimeCallConte
 }
 
 func (c *RuntimeAbilityClient) buildWithCallMode(ctx context.Context, call RuntimeCallContext, abilityName string, args any, callMode string) (InvocationDraft, error) {
+	return c.buildWithCallModePolicy(ctx, call, abilityName, args, callMode, runtimeAbilityPublicPolicy())
+}
+
+func (c *RuntimeAbilityClient) buildGovernanceRead(ctx context.Context, call RuntimeCallContext, abilityName string, args any) (InvocationDraft, error) {
+	return c.buildWithCallModePolicy(ctx, call, abilityName, args, "rpc", runtimeAbilityGovernanceReadPolicy())
+}
+
+func (c *RuntimeAbilityClient) buildWithCallModePolicy(ctx context.Context, call RuntimeCallContext, abilityName string, args any, callMode string, policy runtimeAbilityDispatchPolicy) (InvocationDraft, error) {
 	if err := c.requireReady(ctx); err != nil {
 		return InvocationDraft{}, err
 	}
@@ -149,6 +169,12 @@ func (c *RuntimeAbilityClient) buildWithCallMode(ctx context.Context, call Runti
 	abilityName = strings.TrimSpace(abilityName)
 	if abilityName == "" {
 		return InvocationDraft{}, invalidRuntimePayload("ability name is required", nil)
+	}
+	if !policy.allowGovernanceRead && isRuntimeGovernanceReadAbility(abilityName) {
+		return InvocationDraft{}, invalidRuntimePayload(
+			"runtime governance receipt/history abilities must use RuntimeReceiptProvider",
+			nil,
+		)
 	}
 	mode := strings.TrimSpace(callMode)
 	if mode == "" {
@@ -189,6 +215,11 @@ func (c *RuntimeAbilityClient) buildWithCallMode(ctx context.Context, call Runti
 		Build()
 }
 
+func isRuntimeGovernanceReadAbility(abilityName string) bool {
+	abilityName = strings.TrimSpace(abilityName)
+	return strings.HasPrefix(abilityName, "invocation.history.") || strings.HasPrefix(abilityName, "invocation.trace.")
+}
+
 // Invoke executes one addressed ability and returns its object result without
 // product-specific envelope or DTO projection.
 func (c *RuntimeAbilityClient) Invoke(ctx context.Context, call RuntimeCallContext, abilityName string, args any) (map[string]any, error) {
@@ -203,6 +234,25 @@ func (c *RuntimeAbilityClient) Invoke(ctx context.Context, call RuntimeCallConte
 	if !result.OK() {
 		return nil, runtimeAbilityFailure(result)
 	}
+	return runtimeAbilityObjectOutput(result)
+}
+
+func (c *RuntimeAbilityClient) invokeGovernanceRead(ctx context.Context, call RuntimeCallContext, abilityName string, args any) (map[string]any, error) {
+	draft, err := c.buildGovernanceRead(ctx, call, abilityName, args)
+	if err != nil {
+		return nil, err
+	}
+	result, err := c.runtime.Invoke(ctx, draft)
+	if err != nil {
+		return nil, err
+	}
+	if !result.OK() {
+		return nil, runtimeAbilityFailure(result)
+	}
+	return runtimeAbilityObjectOutput(result)
+}
+
+func runtimeAbilityObjectOutput(result InvocationResult) (map[string]any, error) {
 	raw := result.OutputJSON()
 	if len(raw) == 0 || string(raw) == "null" {
 		return nil, invalidRuntimePayload(

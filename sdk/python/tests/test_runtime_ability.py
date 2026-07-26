@@ -217,6 +217,15 @@ def test_runtime_ability_rejects_all_zero_runtime_call_principal_before_descript
     assert transport.descriptor_requests == []
 
 
+def test_runtime_ability_rejects_invocation_history_public_route_before_descriptor_resolution() -> None:
+    client, transport = _client()
+
+    with pytest.raises(SDKError, match="RuntimeReceiptProvider"):
+        client.build(_call(), "invocation.history.list", {})
+
+    assert transport.descriptor_requests == []
+
+
 def test_runtime_ability_invokes_object_result() -> None:
     client, transport = _client()
     assert client.invoke(_call(), "namespace.resolve", {"name": "alice"}) == {

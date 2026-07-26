@@ -4421,6 +4421,74 @@ if node:
 PY
 }
 
+check_sdk_go_python_history_public_route_cutover_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local go_runtime="$cli_root/sdk/go/runtime_ability.go"
+  local go_receipt="$cli_root/sdk/go/receipt.go"
+  local go_test="$cli_root/sdk/go/runtime_ability_test.go"
+  local py_runtime="$cli_root/sdk/python/easynet_sdk/runtime_ability.py"
+  local py_receipt="$cli_root/sdk/python/easynet_sdk/receipt.py"
+  local py_test="$cli_root/sdk/python/tests/test_runtime_ability.py"
+
+  "$PYTHON_BIN" - "$go_runtime" "$go_receipt" "$go_test" "$py_runtime" "$py_receipt" "$py_test" <<'PY'
+import sys
+from pathlib import Path
+
+paths = [Path(arg) for arg in sys.argv[1:]]
+for path in paths:
+    if not path.exists():
+        raise SystemExit(f"sdk_history_public_route_cutover:missing:{path}")
+
+go_runtime, go_receipt, go_test, py_runtime, py_receipt, py_test = [
+    path.read_text(encoding="utf-8", errors="replace") for path in paths
+]
+
+for required in (
+    "type runtimeAbilityDispatchPolicy struct",
+    "func runtimeAbilityPublicPolicy() runtimeAbilityDispatchPolicy",
+    "func runtimeAbilityGovernanceReadPolicy() runtimeAbilityDispatchPolicy",
+    "func (c *RuntimeAbilityClient) buildGovernanceRead(",
+    "func (c *RuntimeAbilityClient) buildWithCallModePolicy(",
+    "func isRuntimeGovernanceReadAbility(abilityName string) bool",
+    "strings.HasPrefix(abilityName, \"invocation.history.\")",
+    "strings.HasPrefix(abilityName, \"invocation.trace.\")",
+    "runtime governance receipt/history abilities must use RuntimeReceiptProvider",
+    "func (c *RuntimeAbilityClient) invokeGovernanceRead(",
+):
+    if required not in go_runtime:
+        raise SystemExit(f"sdk_history_public_route_cutover:go_runtime_missing:{required}")
+if "return c.buildWithCallModePolicy(ctx, call, abilityName, args, callMode, runtimeAbilityPublicPolicy())" not in go_runtime:
+    raise SystemExit("sdk_history_public_route_cutover:go_public_policy_not_bound")
+if "ability.Invoke(ctx, call, r.listAbility, args)" in go_receipt or "ability.Invoke(ctx, call, r.getAbility, args)" in go_receipt:
+    raise SystemExit("sdk_history_public_route_cutover:go_receipt_uses_public_invoke")
+if "ability.invokeGovernanceRead(ctx, call, r.listAbility, args)" not in go_receipt:
+    raise SystemExit("sdk_history_public_route_cutover:go_receipt_governance_entry_missing")
+if "TestRuntimeAbilityClientRejectsInvocationHistoryPublicRouteBeforeDescriptorResolution" not in go_test:
+    raise SystemExit("sdk_history_public_route_cutover:go_public_rejection_test_missing")
+
+for required in (
+    "class _RuntimeAbilityDispatchPolicy",
+    "_PUBLIC_ACTION_POLICY = _RuntimeAbilityDispatchPolicy()",
+    "_GOVERNANCE_READ_POLICY = _RuntimeAbilityDispatchPolicy(allow_governance_read=True)",
+    "policy: _RuntimeAbilityDispatchPolicy = _PUBLIC_ACTION_POLICY",
+    "def _build_governance_read(",
+    "def _invoke_governance_read(",
+    "def _is_runtime_governance_read_ability(ability_name: str) -> bool:",
+    'ability_name.startswith("invocation.history.")',
+    'ability_name.startswith(\n        "invocation.trace."',
+    "runtime governance receipt/history abilities must use RuntimeReceiptProvider",
+):
+    if required not in py_runtime:
+        raise SystemExit(f"sdk_history_public_route_cutover:py_runtime_missing:{required}")
+if "ability.invoke(call, self.list_ability.strip(), dict(arguments))" in py_receipt:
+    raise SystemExit("sdk_history_public_route_cutover:py_receipt_uses_public_invoke")
+if "ability._invoke_governance_read(call, self.list_ability.strip(), dict(arguments))" not in py_receipt:
+    raise SystemExit("sdk_history_public_route_cutover:py_receipt_governance_entry_missing")
+if "test_runtime_ability_rejects_invocation_history_public_route_before_descriptor_resolution" not in py_test:
+    raise SystemExit("sdk_history_public_route_cutover:py_public_rejection_test_missing")
+PY
+}
+
 check_sdk_prepared_descriptor_ref_required_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local go_src="$cli_root/sdk/go/signing.go"
@@ -24150,6 +24218,7 @@ EOF
   check_control_frame_schema_contract
   check_daemon_lifecycle_control_vocabulary_contract
   check_sdk_history_authority_subject_contract
+  check_sdk_go_python_history_public_route_cutover_contract
 	  check_sdk_descriptor_resolution_error_vocabulary_contract
 	  check_sdk_runtime_client_provider_readiness_contract
 	  check_sdk_ability_descriptor_not_found_vocabulary_contract
@@ -24390,6 +24459,7 @@ check_sdk_control_discovery_strict_wire_contract
 check_control_frame_schema_contract
 check_daemon_lifecycle_control_vocabulary_contract
 check_sdk_history_authority_subject_contract
+check_sdk_go_python_history_public_route_cutover_contract
 check_sdk_prepared_descriptor_ref_required_contract
 check_sdk_descriptor_resolution_error_vocabulary_contract
 check_sdk_runtime_client_provider_readiness_contract
