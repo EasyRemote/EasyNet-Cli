@@ -82,6 +82,7 @@ use crate::daemon::invocation::dispatch::forwarded_finalization::{
     ensure_forwarded_receipt_signer_key, ensure_forwarded_response_receipt_signer_keys,
     ForwardedFinalizedInvocation, ForwardedInvocationBinding,
 };
+use crate::daemon::invocation::dispatch::governance_read_route::require_selected_governance_read_route;
 use crate::daemon::invocation::dispatch::invocation_wire::{
     callee_ura_from_envelope, descriptor_ref_from_invocation_target, encode_json_payload,
     function_name_from_invocation_target, parse_json_args, status_from_axon_invoke_error,
@@ -90,7 +91,6 @@ use crate::daemon::invocation::dispatch::invocation_wire::{
 use crate::daemon::invocation::dispatch::remote_failure::{
     is_admission_denial_message, status_from_remote_failure,
 };
-use crate::daemon::invocation::dispatch::remote_governance_read::require_remote_governance_read_route;
 use crate::daemon::invocation::routing::route_resolver::{
     CanonicalRouteDispatch, CanonicalRouteSelection, DelegatedInvokeRoute, SelectedInvokeRoute,
 };
@@ -774,6 +774,13 @@ impl UnaryDispatcher {
                     .await,
                 false,
             );
+        }
+        if let Some(envelope) = request.envelope.as_ref() {
+            if let Err(status) =
+                require_selected_governance_read_route("Invoke", &selected_route, envelope)
+            {
+                return (Err(status), false);
+            }
         }
         let runtime = match self
             .runtime
@@ -1851,7 +1858,7 @@ impl UnaryDispatcher {
             )));
         };
         require_complete_signed_remote_request(request)?;
-        require_remote_governance_read_route("Invoke", selected_route, &envelope)?;
+        require_selected_governance_read_route("Invoke", selected_route, &envelope)?;
         signed_envelope_for_selected_route(
             envelope,
             selected_route,

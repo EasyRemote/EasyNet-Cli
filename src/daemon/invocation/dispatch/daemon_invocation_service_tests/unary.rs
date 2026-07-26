@@ -3027,6 +3027,42 @@ async fn dispatch_remote_rpc_rejects_receipt_history_as_public_remote_action() {
 }
 
 #[tokio::test]
+async fn dispatch_local_rpc_rejects_receipt_history_before_local_runtime_admission() {
+    const HISTORY_READ: &str = crate::daemon::ability::names::governance::INVOCATION_HISTORY_LIST;
+
+    let svc = make_service().with_session_realm("test-realm");
+    publish_test_route(&svc, TEST_DAEMON_URA, HISTORY_READ);
+
+    let request =
+        invoke_request_for_callee(TEST_DAEMON_URA, HISTORY_READ, r#"{"limit":5}"#).into_inner();
+    let (result, runtime_started) = svc
+        .unary_dispatcher()
+        .dispatch_local_rpc_selected_route(&request)
+        .await;
+    let err = result.expect_err("local receipt history direct ingress must fail at route gate");
+
+    assert!(
+        !runtime_started,
+        "governance-read gate must reject before LocalRuntime starts"
+    );
+    assert_eq!(err.code(), tonic::Code::FailedPrecondition);
+    assert!(
+        err.message().contains("CANONICAL_HISTORY_READ_REQUIRED")
+            && err.message().contains(HISTORY_READ)
+            && err
+                .message()
+                .contains("canonical invocation history read path"),
+        "unexpected local receipt-history route denial: {}",
+        err.message()
+    );
+    assert!(
+        !err.message().contains("AUTHORITY_SUBJECT_MISMATCH"),
+        "local history route denial must not defer to Axon admission mismatch: {}",
+        err.message()
+    );
+}
+
+#[tokio::test]
 async fn dispatch_remote_rpc_allows_receipt_history_with_resource_read_subject() {
     const REMOTE_DEVICE_URA: &str = "easynet:///r/test-realm/device/remote-device";
     const HISTORY_READ: &str = crate::daemon::ability::names::governance::INVOCATION_HISTORY_LIST;

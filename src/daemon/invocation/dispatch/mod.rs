@@ -18,14 +18,14 @@ pub mod federation_wrappers;
 #[cfg(feature = "axon-pb")]
 pub(crate) mod forwarded_finalization;
 #[cfg(feature = "axon-pb")]
+pub(crate) mod governance_read_route;
+#[cfg(feature = "axon-pb")]
 pub mod invocation_wire;
 pub mod local_runtime_invoker;
 #[cfg(feature = "axon-pb")]
 pub mod local_session_dispatcher;
 #[cfg(feature = "axon-pb")]
 pub(crate) mod remote_failure;
-#[cfg(feature = "axon-pb")]
-pub(crate) mod remote_governance_read;
 #[cfg(feature = "axon-pb")]
 mod request;
 #[cfg(feature = "axon-pb")]

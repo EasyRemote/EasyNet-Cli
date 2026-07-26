@@ -1,16 +1,16 @@
-//! Remote governance-read route admission.
+//! Selected-route governance-read admission.
 //!
 //! Receipt history and runtime catalogue abilities are daemon governance reads,
-//! not product actions. Every remote carrier must apply the same selected-route
-//! tuple policy before forwarding to presence so direct SDK/FFI ingress cannot
-//! bypass the typed issuers used by CLI facades.
+//! not product actions. Every selected-route dispatcher must apply the same
+//! tuple policy before forwarding to presence or entering LocalRuntime so direct
+//! SDK/FFI ingress cannot bypass the typed issuers used by CLI facades.
 
 use axon_sdk::pb::axon::v1::Envelope;
 use tonic::Status;
 
 use crate::daemon::invocation::routing::route_resolver::SelectedInvokeRoute;
 
-pub(crate) fn require_remote_governance_read_route(
+pub(crate) fn require_selected_governance_read_route(
     surface: &'static str,
     route: &SelectedInvokeRoute,
     envelope: &Envelope,
@@ -52,7 +52,7 @@ fn require_receipt_history_read_subject(
         return Err(Status::failed_precondition(format!(
             "CANONICAL_HISTORY_READ_REQUIRED: {surface} receipt-history ability \
              `{history_ability}` must not use target-owned subject `{}`; use the canonical \
-             receipt-history read path",
+             invocation history read path",
             route.callee_ura
         )));
     }

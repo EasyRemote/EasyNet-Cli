@@ -53,12 +53,12 @@ use crate::daemon::invocation::dispatch::federation_wrappers;
 use crate::daemon::invocation::dispatch::forwarded_finalization::{
     ensure_forwarded_receipt_signer_key, ForwardedFinalizationVerifier, ForwardedInvocationBinding,
 };
+use crate::daemon::invocation::dispatch::governance_read_route::require_selected_governance_read_route;
 use crate::daemon::invocation::dispatch::invocation_wire::{
     callee_ura_from_envelope, function_name_from_invocation_target, status_from_axon_invoke_error,
     BoxedDownStream, FEDERATION_RESULT_CONTENT_TYPE,
 };
 use crate::daemon::invocation::dispatch::remote_failure::status_from_remote_failure;
-use crate::daemon::invocation::dispatch::remote_governance_read::require_remote_governance_read_route;
 use crate::daemon::invocation::dispatch::unary_dispatcher::require_complete_signed_remote_request;
 use crate::daemon::invocation::routing::route_resolver::{
     CanonicalRouteDispatch, CanonicalRouteSelection, SelectedInvokeRoute,
@@ -223,6 +223,9 @@ impl StreamDispatcher {
     ) -> Result<Response<BoxedDownStream<InvokeStreamChunk>>, Status> {
         let ability =
             function_name_from_invocation_target("InvokeStream", request.target.as_ref())?;
+        if let Some(envelope) = request.envelope.as_ref() {
+            require_selected_governance_read_route("InvokeStream", &selected_route, envelope)?;
+        }
         let runtime = self
             .runtime
             .require_local_runtime(format!("InvokeStream ability `{ability}`"))?;
@@ -343,7 +346,7 @@ impl StreamDispatcher {
                  envelope on the canonical Invocation face",
             )));
         };
-        require_remote_governance_read_route("InvokeStream", &selected_route, &envelope)?;
+        require_selected_governance_read_route("InvokeStream", &selected_route, &envelope)?;
         signed_envelope_for_selected_route(
             envelope,
             &selected_route,

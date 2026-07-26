@@ -72,10 +72,10 @@ use crate::daemon::invocation::dispatch::federation_wrappers::{
 use crate::daemon::invocation::dispatch::forwarded_finalization::{
     ensure_forwarded_receipt_signer_key, ForwardedFinalizationVerifier, ForwardedInvocationBinding,
 };
+use crate::daemon::invocation::dispatch::governance_read_route::require_selected_governance_read_route;
 use crate::daemon::invocation::dispatch::invocation_wire::{
     callee_ura_from_envelope, status_from_axon_invoke_error, BoxedDownStream,
 };
-use crate::daemon::invocation::dispatch::remote_governance_read::require_remote_governance_read_route;
 use crate::daemon::invocation::dispatch::unary_dispatcher::UnaryDispatcher;
 use crate::daemon::invocation::routing::route_resolver::{
     CanonicalRouteDispatch, CanonicalRouteSelection, SelectedInvokeRoute,
@@ -1140,6 +1140,11 @@ impl BidiDispatcher {
         wire_kind: LocalBidiWireKind,
     ) -> Result<Response<BoxedDownStream<InvokeBidiDown>>, Status> {
         let dispatch_ability = selected_route.ability_ura.clone();
+        let wire_envelope = envelope_open
+            .envelope
+            .clone()
+            .ok_or_else(|| Status::invalid_argument("InvokeBidi request missing envelope"))?;
+        require_selected_governance_read_route("InvokeBidi", &selected_route, &wire_envelope)?;
         crate::op_event!(
             component = daemon_invocation,
             kind = invoke_bidi_local_runtime_dispatch,
@@ -1181,10 +1186,6 @@ impl BidiDispatcher {
             target_ability,
             &selected_route.route_ura,
         )?;
-        let wire_envelope = envelope_open
-            .envelope
-            .clone()
-            .ok_or_else(|| Status::invalid_argument("InvokeBidi request missing envelope"))?;
         let local_system_ingress = self
             .admission
             .accepts_local_system_envelope(envelope_open.envelope.as_ref());
@@ -3525,7 +3526,7 @@ fn remote_bidi_forwarded_request(
         .envelope
         .clone()
         .ok_or_else(|| Status::invalid_argument("InvokeBidi request missing envelope"))?;
-    require_remote_governance_read_route("InvokeBidi", selected_route, &envelope)?;
+    require_selected_governance_read_route("InvokeBidi", selected_route, &envelope)?;
     Ok(axon_sdk::pb::axon::v1::InvokeRequest {
         envelope: Some(signed_envelope_for_selected_route(
             envelope,

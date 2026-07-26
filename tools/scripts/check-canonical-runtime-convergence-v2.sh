@@ -9841,12 +9841,12 @@ for required_test in (
 PY
 }
 
-check_remote_governance_read_route_admission_contract() {
+check_selected_governance_read_route_admission_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local governance="$cli_root/src/daemon/ability/names/governance.rs"
   local remote="$cli_root/src/daemon/invocation/routing/remote_invoke.rs"
   local dispatch_mod="$cli_root/src/daemon/invocation/dispatch/mod.rs"
-  local shared_gate="$cli_root/src/daemon/invocation/dispatch/remote_governance_read.rs"
+  local shared_gate="$cli_root/src/daemon/invocation/dispatch/governance_read_route.rs"
   local unary="$cli_root/src/daemon/invocation/dispatch/unary_dispatcher.rs"
   local stream="$cli_root/src/daemon/invocation/streams/stream_dispatcher.rs"
   local bidi="$cli_root/src/daemon/invocation/bidi/bidi_dispatcher.rs"
@@ -9857,7 +9857,7 @@ check_remote_governance_read_route_admission_contract() {
   [[ -f "$governance" ]] || fail "governance ability names source is missing: $governance"
   [[ -f "$remote" ]] || fail "remote invocation routing source is missing: $remote"
   [[ -f "$dispatch_mod" ]] || fail "invocation dispatch module source is missing: $dispatch_mod"
-  [[ -f "$shared_gate" ]] || fail "remote governance read gate source is missing: $shared_gate"
+  [[ -f "$shared_gate" ]] || fail "selected governance read gate source is missing: $shared_gate"
   [[ -f "$unary" ]] || fail "unary dispatcher source is missing: $unary"
   [[ -f "$stream" ]] || fail "stream dispatcher source is missing: $stream"
   [[ -f "$bidi" ]] || fail "bidi dispatcher source is missing: $bidi"
@@ -9890,25 +9890,25 @@ for required in (
     "INVOCATION_TRACE_GET",
 ):
     if required not in governance:
-        raise SystemExit(f"remote_governance_read_route_admission:missing_governance:{required}")
+        raise SystemExit(f"selected_governance_read_route_admission:missing_governance:{required}")
 
 for required in (
     "pub(crate) fn is_runtime_catalogue_read(ability: &str) -> bool",
     "META_LIST_ABILITIES",
 ):
     if required not in governance:
-        raise SystemExit(f"remote_governance_read_route_admission:missing_catalogue_governance:{required}")
+        raise SystemExit(f"selected_governance_read_route_admission:missing_catalogue_governance:{required}")
 
 if "fn is_receipt_history_ability(" in remote:
-    raise SystemExit("remote_governance_read_route_admission:duplicated_remote_history_predicate")
+    raise SystemExit("selected_governance_read_route_admission:duplicated_history_predicate")
 if "is_invocation_history_read(public_ability)" not in remote:
-    raise SystemExit("remote_governance_read_route_admission:remote_helper_not_using_governance_predicate")
+    raise SystemExit("selected_governance_read_route_admission:route_helper_not_using_governance_predicate")
 
-if "pub(crate) mod remote_governance_read;" not in dispatch_mod:
-    raise SystemExit("remote_governance_read_route_admission:shared_gate_not_exported")
+if "pub(crate) mod governance_read_route;" not in dispatch_mod:
+    raise SystemExit("selected_governance_read_route_admission:shared_gate_not_exported")
 
 for required in (
-    "pub(crate) fn require_remote_governance_read_route(",
+    "pub(crate) fn require_selected_governance_read_route(",
     "fn require_receipt_history_read_subject(",
     "CANONICAL_HISTORY_READ_REQUIRED",
     "is_invocation_history_read(",
@@ -9921,7 +9921,7 @@ for required in (
     "canonical invocation history read path",
 ):
     if required not in shared_gate:
-        raise SystemExit(f"remote_governance_read_route_admission:missing_shared_history_gate:{required}")
+        raise SystemExit(f"selected_governance_read_route_admission:missing_shared_history_gate:{required}")
 
 for required in (
     "fn require_catalogue_read_subject(",
@@ -9935,38 +9935,38 @@ for required in (
     "catalogue read path",
 ):
     if required not in shared_gate:
-        raise SystemExit(f"remote_governance_read_route_admission:missing_shared_catalogue_gate:{required}")
+        raise SystemExit(f"selected_governance_read_route_admission:missing_shared_catalogue_gate:{required}")
 
 def require_before(text: str, before: str, after: str, label: str) -> None:
     before_index = text.find(before)
     if before_index < 0:
-        raise SystemExit(f"remote_governance_read_route_admission:missing_{label}_before:{before}")
+        raise SystemExit(f"selected_governance_read_route_admission:missing_{label}_before:{before}")
     after_index = text.find(after, before_index)
     if after_index < 0:
-        raise SystemExit(f"remote_governance_read_route_admission:missing_{label}_after:{after}")
+        raise SystemExit(f"selected_governance_read_route_admission:missing_{label}_after:{after}")
     if before_index > after_index:
-        raise SystemExit(f"remote_governance_read_route_admission:{label}_after_forwarding")
+        raise SystemExit(f"selected_governance_read_route_admission:{label}_after_forwarding")
 
 for surface, text in (
     ("Invoke", unary),
     ("InvokeStream", stream),
     ("InvokeBidi", bidi),
 ):
-    import_line = "use crate::daemon::invocation::dispatch::remote_governance_read::require_remote_governance_read_route;"
+    import_line = "use crate::daemon::invocation::dispatch::governance_read_route::require_selected_governance_read_route;"
     if import_line not in text:
-        raise SystemExit(f"remote_governance_read_route_admission:missing_{surface}_shared_gate_import")
-    if f'require_remote_governance_read_route("{surface}"' not in text:
-        raise SystemExit(f"remote_governance_read_route_admission:missing_{surface}_shared_gate_call")
+        raise SystemExit(f"selected_governance_read_route_admission:missing_{surface}_shared_gate_import")
+    if f'require_selected_governance_read_route("{surface}"' not in text:
+        raise SystemExit(f"selected_governance_read_route_admission:missing_{surface}_shared_gate_call")
 
 require_before(
     unary,
-    'require_remote_governance_read_route("Invoke", selected_route, &envelope)?;',
+    'require_selected_governance_read_route("Invoke", selected_route, &envelope)?;',
     ".dispatch_frame_to_presence(selected_route,",
     "unary_gate",
 )
 require_before(
     stream,
-    'require_remote_governance_read_route("InvokeStream", &selected_route, &envelope)?;',
+    'require_selected_governance_read_route("InvokeStream", &selected_route, &envelope)?;',
     "sender.try_send(Ok(dispatch_frame))",
     "stream_gate",
 )
@@ -9978,13 +9978,14 @@ require_before(
 )
 require_before(
     bidi,
-    'require_remote_governance_read_route("InvokeBidi", selected_route, &envelope)?;',
+    'require_selected_governance_read_route("InvokeBidi", selected_route, &envelope)?;',
     "signed_envelope_for_selected_route(",
     "bidi_gate",
 )
 
 for required_test in (
     "dispatch_remote_rpc_rejects_receipt_history_as_public_remote_action",
+    "dispatch_local_rpc_rejects_receipt_history_before_local_runtime_admission",
     "dispatch_remote_rpc_allows_receipt_history_with_resource_read_subject",
     "dispatch_remote_rpc_rejects_catalogue_read_with_public_action_subject",
     "dispatch_remote_rpc_allows_catalogue_read_with_runtime_read_subject",
@@ -9998,7 +9999,7 @@ for required_test in (
     "remote_rx.try_recv().is_err()",
 ):
     if required_test not in unary_tests:
-        raise SystemExit(f"remote_governance_read_route_admission:missing_test:{required_test}")
+        raise SystemExit(f"selected_governance_read_route_admission:missing_test:{required_test}")
 
 for required_test in (
     "invoke_stream_rejects_governance_catalogue_route_before_presence_forwarding",
@@ -10008,7 +10009,7 @@ for required_test in (
     "target_rx.try_recv().is_err()",
 ):
     if required_test not in stream_tests:
-        raise SystemExit(f"remote_governance_read_route_admission:missing_stream_test:{required_test}")
+        raise SystemExit(f"selected_governance_read_route_admission:missing_stream_test:{required_test}")
 
 for required_test in (
     "remote_bidi_rejects_governance_catalogue_route_before_carrier_frame",
@@ -10017,7 +10018,7 @@ for required_test in (
     "canonical unary Invoke catalogue read path",
 ):
     if required_test not in bidi_tests:
-        raise SystemExit(f"remote_governance_read_route_admission:missing_bidi_test:{required_test}")
+        raise SystemExit(f"selected_governance_read_route_admission:missing_bidi_test:{required_test}")
 PY
 }
 
@@ -20370,8 +20371,8 @@ EOF
 	  cat >"$tmp/remote-history-route-legacy/src/daemon/invocation/dispatch/daemon_invocation_service_tests/unary.rs" <<'EOF'
 fn dispatch_remote_rpc_rejects_signed_callee_rewrite() {}
 EOF
-	  if ( check_remote_governance_read_route_admission_contract "$tmp/remote-history-route-legacy" ) >/dev/null 2>&1; then
-	    fail "self-test expected remote governance-read route admission gate to fail"
+	  if ( check_selected_governance_read_route_admission_contract "$tmp/remote-history-route-legacy" ) >/dev/null 2>&1; then
+	    fail "self-test expected selected governance-read route admission gate to fail"
 	  fi
 	  mkdir -p "$tmp/history-placeholder-positive/src/product"
 	  cat >"$tmp/history-placeholder-positive/src/product/history.rs" <<'EOF'
@@ -24850,7 +24851,7 @@ EOF
   check_python_sdk_bytecode_index_contract
 	  check_daemon_tuple_route_contract
 	  check_remote_invocation_subject_provenance_contract
-	  check_remote_governance_read_route_admission_contract
+	  check_selected_governance_read_route_admission_contract
 	  check_daemon_runtime_route_inventory_contract
   check_daemon_local_device_identity_contract
   check_daemon_credentials_identity_contract
@@ -24987,7 +24988,7 @@ check_join_authority_wiring_required_contract
 check_join_user_signer_custody_contract
 check_invocation_history_filter_scope_contract
 check_cli_invocation_history_read_model_contract
-check_remote_governance_read_route_admission_contract
+check_selected_governance_read_route_admission_contract
 check_invocation_history_placeholder_negative_only_contract
 check_rust_all_zero_principal_guard_contract
 check_agent_purge_publication_state_contract
