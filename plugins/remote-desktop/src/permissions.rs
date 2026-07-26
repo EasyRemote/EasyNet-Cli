@@ -21,13 +21,73 @@ pub(in crate::daemon::plugins::remote_desktop) fn ensure_permission_probe_access
     args: &Value,
 ) -> anyhow::Result<()> {
     reject_subject_in_args(ability, args)?;
-    let resource_scoped = is_resource_ura_subject(env.subject());
-    if resource_scoped {
-        anyhow::bail!(
-            "{ability}: screen-capture permission probes are host-local and MUST NOT be scoped to a remote desktop resource subject; reason={REASON_INVALID_ARGUMENT}"
-        );
+    HostLocalPermissionProbeSubject::try_from_envelope(ability, env).map(|_| ())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum HostLocalPermissionProbeSubject {
+    UserSelf { user_ura: String },
+    LocalSystemLoopback,
+}
+
+impl HostLocalPermissionProbeSubject {
+    fn try_from_envelope(ability: &str, env: &EnvelopeContext) -> anyhow::Result<Self> {
+        let caller = env.caller().trim();
+        let subject = env.subject().trim();
+        if caller == crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA {
+            return if subject == crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA {
+                Ok(Self::LocalSystemLoopback)
+            } else {
+                Err(host_local_subject_error(
+                    ability,
+                    "local-system permission probes must use the local-system subject",
+                ))
+            };
+        }
+        if is_resource_ura_subject(subject) {
+            return Err(host_local_subject_error(
+                ability,
+                "screen-capture permission probes are host-local and MUST NOT be scoped to a remote desktop resource subject",
+            ));
+        }
+        let parsed_caller = crate::core::ura::parse_ura(caller).map_err(|error| {
+            host_local_subject_error(
+                ability,
+                &format!("caller_ura is not a canonical host-local caller: {error}"),
+            )
+        })?;
+        let parsed_subject = crate::core::ura::parse_ura(subject).map_err(|error| {
+            host_local_subject_error(
+                ability,
+                &format!("subject_ura is not a canonical host-local subject: {error}"),
+            )
+        })?;
+        if parsed_caller.kind != crate::core::ura::URAKind::User {
+            return Err(host_local_subject_error(
+                ability,
+                "host-local permission probes require a User caller or local-system loopback",
+            ));
+        }
+        if parsed_subject.kind != crate::core::ura::URAKind::User {
+            return Err(host_local_subject_error(
+                ability,
+                "host-local permission probes require a caller-owned User subject",
+            ));
+        }
+        if caller != subject {
+            return Err(host_local_subject_error(
+                ability,
+                "host-local permission probe subject must match the authenticated caller",
+            ));
+        }
+        Ok(Self::UserSelf {
+            user_ura: subject.to_string(),
+        })
     }
-    Ok(())
+}
+
+fn host_local_subject_error(ability: &str, detail: &str) -> anyhow::Error {
+    anyhow::anyhow!("{ability}: {detail}; reason={REASON_INVALID_ARGUMENT}")
 }
 
 pub(in crate::daemon::plugins::remote_desktop) fn screen_capture_permission_status() -> Value {

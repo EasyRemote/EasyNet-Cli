@@ -12,7 +12,7 @@ fail() {
 SB="$(mktemp -d)"
 trap 'rm -rf "$SB"' EXIT
 
-mkdir -p "$SB/tools/scripts" "$SB/plugins/remote-desktop/src"
+mkdir -p "$SB/tools/scripts" "$SB/plugins/remote-desktop/src/handlers"
 cp "$SCRIPT" "$SB/tools/scripts/check-remote-desktop-contract-boundary.sh"
 
 cat >"$SB/plugins/remote-desktop/src/contract.rs" <<'RS'
@@ -28,6 +28,27 @@ fn media_backend_contract_accepts_only_canonical_webrtc_transport_name() {}
 
 #[test]
 fn media_backend_contract_rejects_retired_web_rtc_transport_alias() {}
+RS
+
+cat >"$SB/plugins/remote-desktop/src/permissions.rs" <<'RS'
+enum HostLocalPermissionProbeSubject {
+    UserSelf,
+    LocalSystemLoopback,
+}
+RS
+
+cat >"$SB/plugins/remote-desktop/src/handlers/permission_status.rs" <<'RS'
+#[test]
+fn permission_probe_accepts_authenticated_user_self_subject() {}
+
+#[test]
+fn permission_probe_rejects_non_caller_user_subject() {}
+
+#[test]
+fn permission_probe_rejects_device_subject_before_defaulting() {}
+
+#[test]
+fn permission_probe_accepts_local_system_loopback_subject() {}
 RS
 
 (
@@ -59,5 +80,19 @@ set +e
 rc=$?
 set -e
 [[ "$rc" == "1" ]] || fail "missing retired-alias rejection test should exit 1 (got $rc)"
+
+perl -0pi -e 's/media_backend_contract_rejects_missing_alias_regression/media_backend_contract_rejects_retired_web_rtc_transport_alias/' \
+  "$SB/plugins/remote-desktop/src/contract.rs"
+perl -0pi -e 's/permission_probe_accepts_authenticated_user_self_subject/permission_probe_accepts_default_user_subject/' \
+  "$SB/plugins/remote-desktop/src/handlers/permission_status.rs"
+
+set +e
+(
+  cd "$SB"
+  bash tools/scripts/check-remote-desktop-contract-boundary.sh
+) >/tmp/check-remote-desktop-contract-boundary-subject.out 2>&1
+rc=$?
+set -e
+[[ "$rc" == "1" ]] || fail "default-subject permission probe vocabulary should exit 1 (got $rc)"
 
 echo "test_check_remote_desktop_contract_boundary.sh: all cases passed"

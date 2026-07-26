@@ -40,11 +40,52 @@ mod tests {
     }
 
     #[test]
-    fn permission_probe_accepts_default_user_subject() {
+    fn permission_probe_accepts_authenticated_user_self_subject() {
         let response = handle(
             EnvelopeContext::for_test(
                 "easynet:///r/acme/user/tester",
+                "easynet:///r/acme/user/tester",
+            ),
+            json!({}),
+        )
+        .unwrap();
+        assert!(response.get("granted").is_some());
+    }
+
+    #[test]
+    fn permission_probe_rejects_non_caller_user_subject() {
+        let err = handle(
+            EnvelopeContext::for_test(
+                "easynet:///r/acme/user/tester",
                 "easynet:///r/acme/user/dev",
+            ),
+            json!({}),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains(REASON_INVALID_ARGUMENT));
+        assert!(err.to_string().contains("subject must match"));
+    }
+
+    #[test]
+    fn permission_probe_rejects_device_subject_before_defaulting() {
+        let err = handle(
+            EnvelopeContext::for_test(
+                "easynet:///r/acme/user/tester",
+                "easynet:///r/acme/device/dev-1",
+            ),
+            json!({}),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains(REASON_INVALID_ARGUMENT));
+        assert!(err.to_string().contains("caller-owned User subject"));
+    }
+
+    #[test]
+    fn permission_probe_accepts_local_system_loopback_subject() {
+        let response = handle(
+            EnvelopeContext::for_test(
+                crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
+                crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
             ),
             json!({}),
         )
