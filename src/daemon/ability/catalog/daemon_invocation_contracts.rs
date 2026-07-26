@@ -292,7 +292,7 @@ pub(crate) fn input_schema_for(name: &str) -> Option<Value> {
         ),
         ABILITY_FEDERATION_HEARTBEAT => object_schema(
             json!({
-                "since_abilities_revision": integer_prop("Device's last observed hub-published ability revision."),
+                "since_abilities_revision": integer_prop("Device's last observed realm Authority-published ability revision."),
                 "refresh_owner_uras": {
                     "type": "array",
                     "description": "Owner URAs whose published ability projection leases should be renewed.",

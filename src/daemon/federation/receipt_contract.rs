@@ -8,7 +8,7 @@
 // Protocol Responsibility
 // -----------------------
 // These types define the explicit runtime facts a hub must emit for a device
-// to seed and advance its hub-published ability catalog. They are not product
+// to seed and advance its realm Authority-published ability catalog. They are not product
 // defaults and they are not optional enrichments.
 //
 // Implementation Approach

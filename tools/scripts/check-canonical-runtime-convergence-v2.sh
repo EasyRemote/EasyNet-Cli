@@ -12205,8 +12205,10 @@ if "entry.descriptor" in realm_body:
     raise SystemExit("meta_list_abilities:realm_opaque_descriptor_passthrough")
 if "serde_json::to_value(descriptor)" not in realm_body:
     raise SystemExit("meta_list_abilities:realm_canonical_descriptor_projection_missing")
-if 'Value::String("hub:broadcast".to_string())' not in realm_body:
+if 'Value::String("authority:broadcast".to_string())' not in realm_body:
     raise SystemExit("meta_list_abilities:realm_source_projection_missing")
+if 'Value::String("hub:broadcast".to_string())' in realm_body:
+    raise SystemExit("meta_list_abilities:retired_hub_broadcast_source")
 
 dedupe = re.search(
     r"fn dedupe_descriptor_catalog_entries\([^)]*\)\s*->\s*std::result::Result<Vec<serde_json::Value>, String>\s*\{(?P<body>.*?)\n\}\n\n#\[cfg\(feature = \"axon-pb\"\)\]\nfn descriptor_catalog_dedupe_required_string",

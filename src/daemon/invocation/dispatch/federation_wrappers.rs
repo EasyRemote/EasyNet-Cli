@@ -485,7 +485,7 @@ pub(crate) fn handle_advertise_abilities(
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HeartbeatRequest {
-    /// Device's last observed hub-published ability revision. Until the hub
+    /// Device's last observed realm Authority-published ability revision. Until the realm Authority
     /// has a provider-backed diff source, the response explicitly echoes this
     /// revision with an empty diff instead of silently ignoring the field.
     pub since_abilities_revision: u64,

@@ -72,7 +72,7 @@ pub fn register<F>(
     local_runtime_owners: Vec<OwnerKind>,
     descriptors_provider: F,
     registry_handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
-    hub_published_abilities: Arc<HubPublishedAbilityStore>,
+    authority_published_abilities: Arc<HubPublishedAbilityStore>,
 ) where
     F: Fn() -> Vec<AbilityDescriptor> + Send + Sync + 'static,
 {
@@ -80,26 +80,26 @@ pub fn register<F>(
         Arc::new(descriptors_provider);
     let p_for_describe = Arc::clone(&provider);
     let handle_for_describe = Arc::clone(&registry_handle);
-    let hub_published_abilities_for_describe = Arc::clone(&hub_published_abilities);
+    let authority_published_abilities_for_describe = Arc::clone(&authority_published_abilities);
     let describe_handler: crate::daemon::ability::dispatch::LocalRpcHandlerWithEnvelope =
         Arc::new(move |envelope, _args: Value| {
             describe_handler(
                 &p_for_describe,
                 &handle_for_describe,
-                &hub_published_abilities_for_describe,
+                &authority_published_abilities_for_describe,
                 envelope.callee(),
             )
         });
     let p_for_list = Arc::clone(&provider);
     let handle_for_list = Arc::clone(&registry_handle);
-    let hub_published_abilities_for_list = Arc::clone(&hub_published_abilities);
+    let authority_published_abilities_for_list = Arc::clone(&authority_published_abilities);
     let list_handler: crate::daemon::ability::dispatch::LocalRpcHandlerWithEnvelope =
         Arc::new(move |envelope, args: Value| {
             list_abilities_handler(
                 &p_for_list,
                 &handle_for_list,
                 args,
-                &hub_published_abilities_for_list,
+                &authority_published_abilities_for_list,
                 envelope.callee(),
             )
         });
@@ -120,7 +120,7 @@ pub fn register<F>(
 fn describe_handler(
     descriptors_provider: &Arc<dyn Fn() -> Vec<AbilityDescriptor> + Send + Sync>,
     registry_handle: &Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
-    hub_published_abilities: &HubPublishedAbilityStore,
+    authority_published_abilities: &HubPublishedAbilityStore,
     invocation_callee_ura: &str,
 ) -> anyhow::Result<Value> {
     // The envelope callee is the runtime authority being described. Identity
@@ -142,7 +142,7 @@ fn describe_handler(
         descriptors_provider,
         registry_handle,
         json!({}),
-        hub_published_abilities,
+        authority_published_abilities,
         invocation_callee_ura,
     )?;
     let abilities = catalog
@@ -205,7 +205,7 @@ fn list_abilities_handler(
     descriptors_provider: &Arc<dyn Fn() -> Vec<AbilityDescriptor> + Send + Sync>,
     registry_handle: &Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
     args: Value,
-    hub_published_abilities: &HubPublishedAbilityStore,
+    authority_published_abilities: &HubPublishedAbilityStore,
     invocation_callee_ura: &str,
 ) -> anyhow::Result<Value> {
     let scope = AbilityListScope::from_args(&args)?;
@@ -280,13 +280,13 @@ fn list_abilities_handler(
         })
         .collect();
 
-    // Phase 3: hub-published abilities. Only when the caller asked for realm
+    // Phase 3: realm Authority-published abilities. Only when the caller asked for realm
     // scope — the default-local path stays owner-local. The federation read
-    // model has already validated every cached hub entry as a canonical
+    // model has already validated every cached Authority entry as a canonical
     // `AbilityDescriptor`, so the merged catalog always exposes the same
     // `ability_ura` / `descriptor_ref` facts as local registry rows.
     if scope.include_realm {
-        for descriptor in hub_published_abilities.snapshot() {
+        for descriptor in authority_published_abilities.snapshot() {
             let mut row = serde_json::to_value(descriptor)?;
             if let Value::Object(ref mut map) = row {
                 let source_is_empty = map
@@ -298,7 +298,7 @@ fn list_abilities_handler(
                 if source_is_empty {
                     map.insert(
                         "source".to_string(),
-                        Value::String("hub:broadcast".to_string()),
+                        Value::String("authority:broadcast".to_string()),
                     );
                 }
             }
@@ -535,7 +535,7 @@ pub fn list_abilities_input_schema() -> Value {
                 "enum": ["local", "realm"],
                 "description":
                     "`local` (default) returns device-owned abilities only. \
-                     `realm` adds hub-published abilities the realm hub \
+                     `realm` adds realm Authority-published abilities the realm Authority \
                      broadcast at join + heartbeat (RFC-001 v4.1.7)."
             },
             "owner_ura": {
@@ -1072,13 +1072,13 @@ mod tests {
     }
 
     #[test]
-    fn list_abilities_realm_scope_includes_hub_published_entries() {
-        // RFC-001 v4.1.7 hub-broadcast contract: when the caller
-        // passes `scope = "realm"`, the merged catalogue includes
-        // entries cached from `federation.{join,heartbeat}`. The
-        // default-local path stays disjoint — pin both axes.
+    fn list_abilities_realm_scope_includes_authority_published_entries() {
+        // RFC-001 v4.1.7 realm Authority broadcast contract: when the caller
+        // passes `scope = "realm"`, the merged catalogue includes entries
+        // cached from federation joins and heartbeats. The default-local path
+        // stays disjoint — pin both axes.
         use crate::daemon::federation::client::ability_contract::HubAbilityEntry;
-        let hub_published_abilities = HubPublishedAbilityStore::new();
+        let authority_published_abilities = HubPublishedAbilityStore::new();
 
         let mut reg = metadata_test_catalog();
         super::register(
@@ -1086,9 +1086,9 @@ mod tests {
             vec![OwnerKind::Device],
             || vec![d("observe.health")],
             empty_registry_handle(),
-            Arc::clone(&hub_published_abilities),
+            Arc::clone(&authority_published_abilities),
         );
-        hub_published_abilities
+        authority_published_abilities
             .apply_diff(
                 crate::daemon::federation::client::ability_contract::HubAbilitiesDiff {
                     revision: 99,
@@ -1101,17 +1101,17 @@ mod tests {
                                 Visibility::Public,
                                 AdmissionAction::Read,
                             )
-                            .expect("canonical hub descriptor")
+                            .expect("canonical realm Authority descriptor")
                             .with_description("smoke entry"),
                         )
-                        .expect("hub descriptor json"),
+                        .expect("realm Authority descriptor json"),
                     }],
                     removed: vec![],
                 },
             )
-            .expect("canonical hub ability diff");
+            .expect("canonical realm Authority ability diff");
 
-        // Default scope: hub entry must NOT appear.
+        // Default scope: realm Authority entry must NOT appear.
         let local_resp = invoke_list(&reg, "easynet:///r/test/device/01DEV", json!({})).unwrap();
         let local_names: Vec<String> = local_resp["abilities"]
             .as_array()
@@ -1122,10 +1122,10 @@ mod tests {
         assert!(local_names.contains(&"observe.health".to_string()));
         assert!(
             !local_names.contains(&"test.scope".to_string()),
-            "default scope must not leak hub-broadcast entries"
+            "default scope must not leak realm Authority broadcast entries"
         );
 
-        // Realm scope: hub entry must appear, with `source` stamped.
+        // Realm scope: realm Authority entry must appear, with `source` stamped.
         let realm_resp = invoke_list(
             &reg,
             "easynet:///r/test/device/01DEV",
@@ -1133,19 +1133,19 @@ mod tests {
         )
         .unwrap();
         let abilities = realm_resp["abilities"].as_array().unwrap();
-        let hub_entry = abilities
+        let authority_entry = abilities
             .iter()
             .find(|a| a["name"] == "test.scope")
             .expect("test.scope must be in realm-scope output");
-        assert_eq!(hub_entry["source"], "hub:broadcast");
+        assert_eq!(authority_entry["source"], "authority:broadcast");
         assert!(
-            hub_entry["descriptor_ref"]
+            authority_entry["descriptor_ref"]
                 .as_str()
                 .is_some_and(|descriptor_ref| descriptor_ref.starts_with(&format!(
                     "{}@",
                     crate::core::ura::authority_ability_ura("test", "test.scope")
                 ))),
-            "hub-published row must stay canonical: {hub_entry}"
+            "realm Authority-published row must stay canonical: {authority_entry}"
         );
     }
 
@@ -1826,7 +1826,7 @@ mod tests {
 
     #[test]
     fn list_abilities_schema_advertises_scope_param() {
-        // RFC-001 v4.1.7 hub-broadcast contract added the optional
+        // RFC-001 v4.1.7 realm Authority broadcast contract added the optional
         // `scope` parameter (`local` | `realm`). Pin so a future
         // schema edit either keeps the enum or trips this test.
         let s = list_abilities_input_schema();

@@ -179,10 +179,10 @@ pub struct HeartbeatReceipt {
     pub header: Option<HeartbeatResponseHeader>,
     #[serde(default)]
     pub rejected_nodes: Vec<HeartbeatRejectedNode>,
-    /// AXON-RFC-001 v4.1.7 hub-broadcast contract: explicit incremental
-    /// update of hub-published abilities since the caller's
+    /// AXON-RFC-001 v4.1.7 realm Authority broadcast contract: explicit incremental
+    /// update of realm Authority-published abilities since the caller's
     /// `since_abilities_revision`. Empty `added` and `removed` arrays are
-    /// valid only when the hub serializes this diff with a revision.
+    /// valid only when the realm Authority serializes this diff with a revision.
     pub hub_abilities_diff: HubAbilitiesDiff,
 }
 
