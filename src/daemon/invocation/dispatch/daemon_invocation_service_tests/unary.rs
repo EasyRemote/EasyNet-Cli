@@ -3061,7 +3061,78 @@ async fn dispatch_local_rpc_rejects_receipt_history_before_local_runtime_admissi
 }
 
 #[tokio::test]
-async fn dispatch_remote_rpc_allows_receipt_history_with_resource_read_subject() {
+async fn dispatch_remote_rpc_rejects_receipt_history_with_generic_resource_subject() {
+    const REMOTE_DEVICE_URA: &str = "easynet:///r/test-realm/device/remote-device";
+    const HISTORY_READ: &str = crate::daemon::ability::names::governance::INVOCATION_HISTORY_LIST;
+    const GENERIC_RESOURCE_SUBJECT_URA: &str =
+        "easynet:///r/test-realm/resource/user.alice/document/report";
+
+    let pending = Arc::new(PendingDispatchMap::new());
+    let svc = make_service().with_pending(Arc::clone(&pending));
+    let (remote_tx, mut remote_rx) = mpsc::channel(8);
+    svc.directory
+        .presence
+        .insert_negotiated(
+            REMOTE_DEVICE_URA.to_string(),
+            remote_tx,
+            crate::daemon::invocation::bidi::state::presence::SessionContract {
+                version: 1,
+                claimant_boot_nonce: vec![13; 16],
+            },
+        )
+        .expect("canonical presence key");
+    publish_test_route(&svc, REMOTE_DEVICE_URA, HISTORY_READ);
+
+    let ability_ura = crate::core::ura::owner_ability_ura(REMOTE_DEVICE_URA, HISTORY_READ)
+        .expect("remote device history Ability URA");
+    let selected_route = svc
+        .target_gate()
+        .route_resolver()
+        .await
+        .resolve_route(&ability_ura, "")
+        .expect("resolver selects the remote-device history route");
+    let request = signed_invoke_request(
+        TEST_DAEMON_URA,
+        REMOTE_DEVICE_URA,
+        GENERIC_RESOURCE_SUBJECT_URA,
+        HISTORY_READ,
+        r#"{"limit":5}"#,
+        &test_device_signing_key(),
+    )
+    .into_inner();
+
+    let err = svc
+        .unary_dispatcher()
+        .dispatch_remote_rpc_selected_route(&request, &selected_route, CallMode::Rpc)
+        .await
+        .expect_err("receipt history must reject generic resource subjects before forwarding");
+
+    assert_eq!(err.code(), tonic::Code::FailedPrecondition);
+    assert!(
+        err.message().contains("CANONICAL_HISTORY_READ_REQUIRED")
+            && err
+                .message()
+                .contains("user-owned runtime-state read subject")
+            && err
+                .message()
+                .contains("canonical invocation history read path"),
+        "unexpected receipt-history route denial: {}",
+        err.message()
+    );
+    assert!(
+        !err.message().contains("AUTHORITY_SUBJECT_MISMATCH"),
+        "history route denial must not defer to Axon admission mismatch: {}",
+        err.message()
+    );
+    assert!(
+        remote_rx.try_recv().is_err(),
+        "generic resource receipt history ingress must not be forwarded to remote admission"
+    );
+    assert_eq!(pending.outstanding(), 0);
+}
+
+#[tokio::test]
+async fn dispatch_remote_rpc_allows_receipt_history_with_runtime_state_read_subject() {
     const REMOTE_DEVICE_URA: &str = "easynet:///r/test-realm/device/remote-device";
     const HISTORY_READ: &str = crate::daemon::ability::names::governance::INVOCATION_HISTORY_LIST;
     const READ_SUBJECT_URA: &str = "easynet:///r/test-realm/resource/user.alice/runtime-state/read";
@@ -3076,7 +3147,7 @@ async fn dispatch_remote_rpc_allows_receipt_history_with_resource_read_subject()
             remote_tx,
             crate::daemon::invocation::bidi::state::presence::SessionContract {
                 version: 1,
-                claimant_boot_nonce: vec![13; 16],
+                claimant_boot_nonce: vec![17; 16],
             },
         )
         .expect("canonical presence key");

@@ -10684,7 +10684,8 @@ for required in (
     "AbilitySelector::parse(&route.ability_ura)",
     "receipt-history ability",
     "must not use target-owned subject",
-    "must use a resource read-model subject",
+    "RuntimeStateReadSubject::parse(subject_ura)",
+    "must use a user-owned runtime-state read subject",
     "canonical invocation history read path",
 ):
     if required not in shared_gate:
@@ -10753,13 +10754,15 @@ require_before(
 for required_test in (
     "dispatch_remote_rpc_rejects_receipt_history_as_public_remote_action",
     "dispatch_local_rpc_rejects_receipt_history_before_local_runtime_admission",
-    "dispatch_remote_rpc_allows_receipt_history_with_resource_read_subject",
+    "dispatch_remote_rpc_rejects_receipt_history_with_generic_resource_subject",
+    "dispatch_remote_rpc_allows_receipt_history_with_runtime_state_read_subject",
     "dispatch_remote_rpc_rejects_catalogue_read_with_public_action_subject",
     "dispatch_remote_rpc_allows_catalogue_read_with_runtime_read_subject",
     "CANONICAL_HISTORY_READ_REQUIRED",
     "CANONICAL_CATALOGUE_READ_REQUIRED",
     "AUTHORITY_SUBJECT_MISMATCH",
     "receipt history must fail before remote carrier dispatch",
+    "receipt history must reject generic resource subjects before forwarding",
     "receipt-history read carrier frame delivered to v1 presence target",
     "catalogue read must require runtime-read subject",
     "catalogue read carrier frame delivered to v1 presence target",

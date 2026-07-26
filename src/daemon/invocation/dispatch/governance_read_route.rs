@@ -56,17 +56,14 @@ fn require_receipt_history_read_subject(
             route.callee_ura
         )));
     }
-    let subject = crate::core::identity::RuntimeIdentityUra::parse(subject_ura).map_err(|err| {
-        Status::invalid_argument(format!("{surface} receipt-history read subject_ura {err}"))
+    crate::core::identity::RuntimeStateReadSubject::parse(subject_ura).map_err(|err| {
+        Status::failed_precondition(format!(
+            "CANONICAL_HISTORY_READ_REQUIRED: {surface} receipt history ability \
+             `{history_ability}` must use a user-owned runtime-state read subject; \
+             use the canonical invocation history read path: {err}"
+        ))
     })?;
-    if subject.kind() == crate::core::ura::URAKind::Resource {
-        return Ok(());
-    }
-
-    Err(Status::failed_precondition(format!(
-        "CANONICAL_HISTORY_READ_REQUIRED: {surface} receipt history ability `{history_ability}` \
-         must use a resource read-model subject; use the canonical invocation history read path"
-    )))
+    Ok(())
 }
 
 fn require_catalogue_read_subject(
