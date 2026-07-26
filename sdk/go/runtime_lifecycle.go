@@ -572,7 +572,7 @@ func validRuntimeLifecycleState(state RuntimeLifecycleState) bool {
 }
 
 func validateRuntimeLifecycleTransition(current, next RuntimeLifecycleState) error {
-	if current == next || current == RuntimeUnknown {
+	if current == next {
 		return nil
 	}
 	allowed := map[RuntimeLifecycleState]map[RuntimeLifecycleState]bool{

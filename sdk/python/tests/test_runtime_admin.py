@@ -53,6 +53,14 @@ def test_runtime_status_rejects_retired_product_mode() -> None:
         raise AssertionError("RuntimeStatus accepted retired product mode")
 
 
+def test_runtime_status_keeps_unknown_as_parseable_observation() -> None:
+    status = RuntimeStatus.from_json(
+        b'{"handle_id":"daemon-1","state":"Unknown","mode":"authority"}'
+    )
+
+    assert status.state == RuntimeLifecycleState.UNKNOWN
+
+
 class MemoryDaemonTransport:
     def __init__(self) -> None:
         self.status_json = (
@@ -210,6 +218,31 @@ def test_runtime_handle_stop_rejects_backward_lifecycle_transition() -> None:
         raise AssertionError("stop accepted a backward lifecycle transition")
 
     assert handle.state == RuntimeLifecycleState.RUNNING
+
+
+def test_runtime_handle_rejects_unknown_wildcard_lifecycle_transition() -> None:
+    transport = MemoryDaemonTransport()
+    handle = RuntimeHandle(
+        transport,
+        RuntimeStatus(
+            handle_id="daemon-1",
+            state=RuntimeLifecycleState.UNKNOWN,
+            mode="authority",
+        ),
+    )
+
+    try:
+        handle.status()
+    except SDKError as exc:
+        assert exc.code == ErrorCode.INVALID_ARGUMENT
+        assert (
+            "runtime lifecycle cannot transition from Unknown to Running"
+            in exc.message
+        )
+    else:
+        raise AssertionError("status accepted Unknown wildcard lifecycle transition")
+
+    assert handle.state == RuntimeLifecycleState.UNKNOWN
 
 
 def test_runtime_admin_rejects_missing_handle_and_control() -> None:

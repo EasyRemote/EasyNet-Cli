@@ -603,7 +603,7 @@ _VALID_RUNTIME_LIFECYCLE_TRANSITIONS: dict[
 def _validate_runtime_lifecycle_transition(
     current: RuntimeLifecycleState, next_state: RuntimeLifecycleState
 ) -> None:
-    if current == next_state or current == RuntimeLifecycleState.UNKNOWN:
+    if current == next_state:
         return
     if next_state in _VALID_RUNTIME_LIFECYCLE_TRANSITIONS.get(current, frozenset()):
         return
