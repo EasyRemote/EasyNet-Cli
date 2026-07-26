@@ -70,4 +70,34 @@ run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "missing canonical prompt+context test should exit 1 (got $rc)"
 
+SB="$(make_sandbox)"
+perl -0pi -e 's/enum ChatTurnSessionId/enum ChatSessionFallback/' \
+  "$SB/src/daemon/ability/builtins/agents/chat.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "missing chat session selector should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+python3 - "$SB/src/daemon/ability/builtins/agents/chat.rs" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+needle = "enum ChatTurnSessionId"
+path.write_text(
+    text.replace(
+        needle,
+        "// session id fallback kept for compatibility\n" + needle,
+        1,
+    ),
+    encoding="utf-8",
+)
+PY
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "session fallback vocabulary should exit 1 (got $rc)"
+
 echo "test_check_chat_ability_input_boundary.sh: all cases passed"

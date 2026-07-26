@@ -767,31 +767,12 @@ pub(crate) fn invoke_direct_with_progress(
 
     let resp = response_result?;
     let elapsed_ms = started.elapsed().as_millis() as u64;
-    // The session id we report back. Three cases:
-    //
-    //   1. Resume turn (`driver_with_resume.resume_thread_id` was
-    //      Some): the caller already owns the id; we MUST echo it
-    //      back unchanged so subsequent turns keep finding the same
-    //      transcript. Some drivers (claude-code) return a freshly-
-    //      minted id on the resume's stream — that id is internal
-    //      to the resumed run and is NOT a stable handle to the
-    //      original transcript; passing it back would break R3.
-    //
-    //   2. Fresh turn, driver minted an id (codex / claude on
-    //      first turn): use the driver's id so future resume can
-    //      find the transcript.
-    //
-    //   3. Fresh turn, driver did NOT mint an id (no resume-capable
-    //      driver wired to thread_id yet): fall back to the local
-    //      `session_id` we resolved at handler entry — caller-
-    //      supplied or our `uuid_like` mint.
-    let session_id = if let Some(resume_id) = driver_with_resume.resume_thread_id.as_ref() {
-        resume_id.clone()
-    } else if let Some(driver_id) = resp.thread_id.as_ref() {
-        driver_id.clone()
-    } else {
-        session_id
-    };
+    let session_id = ChatTurnSessionId::select(
+        driver_with_resume.resume_thread_id.as_deref(),
+        resp.thread_id.as_deref(),
+        &session_id,
+    )
+    .into_string();
     let usage_value = usage_to_json(&resp).unwrap_or(Value::Null);
     let tool_calls_json = tool_calls_to_json(&resp.tool_calls);
 
@@ -1056,19 +1037,12 @@ fn stream_handler(
                 Ok(resp) => {
                     let usage_value = usage_to_json(&resp).unwrap_or(Value::Null);
                     let tool_calls_json = tool_calls_to_json(&resp.tool_calls);
-                    // Resolve the terminal-frame session id with the
-                    // same precedence as handle_invoke:
-                    //   1. Resume turn → echo caller's id unchanged.
-                    //   2. Fresh turn, driver minted an id → use it.
-                    //   3. Fresh turn, driver did not surface one →
-                    //      fall back to the locally-resolved id.
-                    let resolved_session_id = if let Some(rid) = resume_id_for_done.as_ref() {
-                        rid.clone()
-                    } else if let Some(did) = resp.thread_id.as_ref() {
-                        did.clone()
-                    } else {
-                        session_id_for_thread.clone()
-                    };
+                    let resolved_session_id = ChatTurnSessionId::select(
+                        resume_id_for_done.as_deref(),
+                        resp.thread_id.as_deref(),
+                        &session_id_for_thread,
+                    )
+                    .into_string();
                     // Persist the streamed turn too — same transcript
                     // contract as the RPC path (invoke_direct_with_progress).
                     crate::daemon::persistence::chat_sessions::write_turn_best_effort_with_elapsed(
@@ -1872,6 +1846,41 @@ fn looks_like_thread_id(s: &str) -> bool {
     true
 }
 
+/// Canonical lifecycle state for the chat session id surfaced to callers.
+///
+/// The selector is shared by RPC and stream terminal frames:
+/// 1. `ResumeRequested` preserves the caller-owned driver thread id.
+/// 2. `DriverMinted` adopts a fresh driver thread id for future resume.
+/// 3. `LocalResolved` uses the handler-resolved local session handle.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ChatTurnSessionId {
+    ResumeRequested(String),
+    DriverMinted(String),
+    LocalResolved(String),
+}
+
+impl ChatTurnSessionId {
+    fn select(
+        resume_thread_id: Option<&str>,
+        driver_thread_id: Option<&str>,
+        local_session_id: &str,
+    ) -> Self {
+        if let Some(resume_id) = resume_thread_id {
+            Self::ResumeRequested(resume_id.to_string())
+        } else if let Some(driver_id) = driver_thread_id {
+            Self::DriverMinted(driver_id.to_string())
+        } else {
+            Self::LocalResolved(local_session_id.to_string())
+        }
+    }
+
+    fn into_string(self) -> String {
+        match self {
+            Self::ResumeRequested(id) | Self::DriverMinted(id) | Self::LocalResolved(id) => id,
+        }
+    }
+}
+
 /// Mint a UUID-shaped session id without pulling in the `uuid` crate
 /// just for one helper. Mixes the current nanos with a process-local
 /// counter so two concurrent calls inside the same nanosecond still
@@ -2372,6 +2381,22 @@ mod tests {
         assert!(!looks_like_thread_id(
             "019dd304-60d9-74f2-8085-d4624e195XYZ"
         )); // non-hex tail
+    }
+
+    #[test]
+    fn chat_turn_session_id_prefers_resume_then_driver_then_local() {
+        assert_eq!(
+            ChatTurnSessionId::select(Some("resume-id"), Some("driver-id"), "local-id"),
+            ChatTurnSessionId::ResumeRequested("resume-id".to_string())
+        );
+        assert_eq!(
+            ChatTurnSessionId::select(None, Some("driver-id"), "local-id"),
+            ChatTurnSessionId::DriverMinted("driver-id".to_string())
+        );
+        assert_eq!(
+            ChatTurnSessionId::select(None, None, "local-id"),
+            ChatTurnSessionId::LocalResolved("local-id".to_string())
+        );
     }
 
     #[test]

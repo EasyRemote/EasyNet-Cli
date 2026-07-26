@@ -38,4 +38,27 @@ if ! rg -q 'parse_accepts_canonical_prompt_and_context_args' "$CHAT_RS"; then
   fail "agents.chat parser tests must pin canonical prompt+context payloads"
 fi
 
+if ! rg -q 'enum ChatTurnSessionId' "$CHAT_RS"; then
+  fail "agents.chat session id selection must use one explicit lifecycle selector"
+fi
+
+for token in \
+  'ResumeRequested' \
+  'DriverMinted' \
+  'LocalResolved' \
+  'chat_turn_session_id_prefers_resume_then_driver_then_local'
+do
+  if ! rg -q "$token" "$CHAT_RS"; then
+    fail "agents.chat session id selector is missing $token"
+  fi
+done
+
+if [[ "$(rg -c 'ChatTurnSessionId::select' "$CHAT_RS")" != "5" ]]; then
+  fail "agents.chat RPC, stream, and precedence regression cases must share ChatTurnSessionId::select"
+fi
+
+if rg -n 'fall back to the local|locally-resolved id|session id we report|session-id fallback|session id fallback' "$CHAT_RS"; then
+  fail "agents.chat session id lifecycle must not be described as fallback compatibility"
+fi
+
 echo "check-chat-ability-input-boundary: OK"
