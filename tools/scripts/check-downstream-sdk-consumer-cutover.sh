@@ -152,8 +152,10 @@ def check_backend() -> None:
     admin = require_file(backend, "internal/sdkadmin/admin.go", "backend:admin")
     for required in [
         "easynetsdk.NewRuntimeAdminAbilityClient",
+        "easynetsdk.NewRuntimeAbilityClient",
         "c.admin.ListSessions",
-        "c.admin.RevokeDevice",
+        "c.ability.Invoke",
+        '"federation.revoke"',
         'metadata["backend_adapter"] = "sdkadmin"',
     ]:
         require_contains(admin, required, "backend:admin")
@@ -322,9 +324,9 @@ def check_easyremote() -> None:
 
     config = require_file(easyremote, "easyremote/config.py", "easyremote:config")
     for required in [
-        "easynet_sdk.default_control_path().parent",
+        "easynet_sdk.runtime_state_root()",
         "easynet_sdk.SdkEnvironment",
-        "easynet_sdk.read_control_discovery",
+        "easynet_sdk.read_runtime_control_discovery",
         "runtime_identity_projection",
         "sdk_environment().runtime_identity_projection",
     ]:
@@ -353,7 +355,7 @@ def check_easyremote() -> None:
         "easynet_sdk.parse_ura",
         "easynet_sdk.device_ura",
         "easynet_sdk.agent_ura",
-        "easynet_sdk.hub_ura",
+        "easynet_sdk.authority_ura",
         "easynet_sdk.resource_ura",
     ]:
         require_contains(identity, required, "easyremote:identity")
@@ -569,7 +571,7 @@ EOF
 package sdkadmin
 
 // metadata["backend_adapter"] = "sdkadmin"
-var _ = []string{"easynetsdk.NewRuntimeAdminAbilityClient", "c.admin.ListSessions", "c.admin.RevokeDevice", "metadata[\"backend_adapter\"] = \"sdkadmin\""}
+var _ = []string{"easynetsdk.NewRuntimeAdminAbilityClient", "easynetsdk.NewRuntimeAbilityClient", "c.admin.ListSessions", "c.ability.Invoke", "federation.revoke", "metadata[\"backend_adapter\"] = \"sdkadmin\""}
 EOF
   cat >"$good_backend/internal/sdkaccesscontrol/accesscontrol.go" <<'EOF'
 package sdkaccesscontrol
@@ -632,9 +634,9 @@ EOF
   cat >"$good_remote/easyremote/config.py" <<'EOF'
 import easynet_sdk
 
-ROOT = easynet_sdk.default_control_path().parent
+ROOT = easynet_sdk.runtime_state_root()
 ENV = easynet_sdk.SdkEnvironment
-READ = easynet_sdk.read_control_discovery
+READ = easynet_sdk.read_runtime_control_discovery
 PROJECTION = "runtime_identity_projection"
 LOAD = "sdk_environment().runtime_identity_projection"
 def runtime_identity_projection(): pass
@@ -655,7 +657,7 @@ _ = [
     easynet_sdk.parse_ura,
     easynet_sdk.device_ura,
     easynet_sdk.agent_ura,
-    easynet_sdk.hub_ura,
+    easynet_sdk.authority_ura,
     easynet_sdk.resource_ura,
 ]
 EOF

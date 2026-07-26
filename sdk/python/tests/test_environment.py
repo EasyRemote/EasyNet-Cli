@@ -153,6 +153,18 @@ class SdkEnvironmentTests(unittest.TestCase):
         self.assertEqual(raw.runtime_host_detaches, [707])
         self.assertEqual(raw.shutdown_handles, [808])
 
+    def test_runtime_control_discovery_reader_uses_generic_projection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            control_path = _write_control_discovery(tmp)
+            discovery = runtime_sdk.read_runtime_control_discovery(control_path)
+
+        self.assertEqual(discovery.socket_path, "/tmp/control.sock")
+        self.assertEqual(discovery.invocation_endpoint, "unix:///tmp/runtime-host.sock")
+        self.assertEqual(discovery.runtime_host_version, "test")
+        self.assertEqual(discovery.supported_ipc_versions.min, 1)
+        self.assertEqual(discovery.supported_ipc_versions.max, 1)
+        self.assertEqual(discovery.capability_flags, ("invocation",))
+
     def test_default_environment_exposes_no_product_profiles(self) -> None:
         env = SdkEnvironment()
         for symbol in downstreamProfileSymbols:

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"math"
 	"strings"
@@ -85,6 +86,33 @@ type PublicKeyBinding struct {
 	RotatedUnixMS *int64                `json:"rotated_unix_ms,omitempty"`
 	RevokedUnixMS *int64                `json:"revoked_unix_ms,omitempty"`
 	RotatedTo     string                `json:"rotated_to,omitempty"`
+}
+
+func (b PublicKeyBinding) MarshalJSON() ([]byte, error) {
+	type wire struct {
+		BindingID     string                `json:"binding_id"`
+		PrincipalURA  string                `json:"principal_ura"`
+		KeyID         string                `json:"key_id,omitempty"`
+		PublicKeyB64  string                `json:"public_key_b64"`
+		State         PublicKeyBindingState `json:"state"`
+		CreatedUnixMS int64                 `json:"created_unix_ms"`
+		ExpiresUnixMS *int64                `json:"expires_unix_ms,omitempty"`
+		RotatedUnixMS *int64                `json:"rotated_unix_ms,omitempty"`
+		RevokedUnixMS *int64                `json:"revoked_unix_ms,omitempty"`
+		RotatedTo     string                `json:"rotated_to,omitempty"`
+	}
+	return json.Marshal(wire{
+		BindingID:     b.BindingID,
+		PrincipalURA:  b.PrincipalURA,
+		KeyID:         b.KeyID,
+		PublicKeyB64:  base64.StdEncoding.EncodeToString(b.PublicKey),
+		State:         b.State,
+		CreatedUnixMS: b.CreatedUnixMS,
+		ExpiresUnixMS: b.ExpiresUnixMS,
+		RotatedUnixMS: b.RotatedUnixMS,
+		RevokedUnixMS: b.RevokedUnixMS,
+		RotatedTo:     b.RotatedTo,
+	})
 }
 
 // RecoveryPolicy is the public projection of a configured recovery policy.

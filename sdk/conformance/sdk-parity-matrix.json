@@ -133184,12 +133184,28 @@
           "sha256": "0ec2d4222eab4de1f5407776dcea04b0b73f7dce28e879e26d7408bcd28134ae"
         },
         {
+          "item": "RuntimeControlDiscovery",
+          "sha256": "ef1f1cddc31d783f6488c2d2868c7af4b65cff469bc6e914952abf42c7a46941"
+        },
+        {
+          "item": "RuntimeControlIdentityProjection",
+          "sha256": "a5a0cb310d6998286a818a0f3a9f21f3958792f20c6ce2298e13f993f81802f9"
+        },
+        {
           "item": "RuntimeInvocationTransport",
           "sha256": "29aaaec97abd5053be4f964a42b503cf6a52a305c3041c1c9b2b7c832fa2394a"
         },
         {
+          "item": "RuntimeIpcVersionRange",
+          "sha256": "bc393320e99152c4a05314b0e94aacd4182aa519027508545a6101094462aa73"
+        },
+        {
           "item": "RuntimeProvider",
           "sha256": "bd48b3eb6cac0af7453913cf74fd8f8beb5ea532e3c0895d981b6f819856934b"
+        },
+        {
+          "item": "read_runtime_control_discovery",
+          "sha256": "7ce2b63fb9226bba7f929b5f46ca8a8091a6d6dd32b730a44e40dc6c46b2840a"
         },
         {
           "item": "runtime_state_read_subject_ura",
@@ -133214,6 +133230,54 @@
         {
           "item": "NativeRuntimeHandle.health",
           "sha256": "67aad354982227336a7afd67a704c953c097a41e58816b6ea2f91b46366329b3"
+        },
+        {
+          "item": "RuntimeControlDiscovery.capability_flags",
+          "sha256": "d8738c5d2b8110f4d7ea70bc077c99f0ad865660b67131f5c7937ed29e3d9109"
+        },
+        {
+          "item": "RuntimeControlDiscovery.invocation_endpoint",
+          "sha256": "1f763c96fe70e7ef696ae38c064ed0c3800e4a509309234bc68289f345ecc864"
+        },
+        {
+          "item": "RuntimeControlDiscovery.pages_port",
+          "sha256": "40d2dc846bfaba462bbdc3fc6c5fac3ab0636a019e7ecc5b28330e57d08d7c6c"
+        },
+        {
+          "item": "RuntimeControlDiscovery.pid",
+          "sha256": "8e3fb1dc14c2c06b2a8a38d72b55d06debbc5bde3e2e5d1ed0f944060d48d3fd"
+        },
+        {
+          "item": "RuntimeControlDiscovery.pipe_name",
+          "sha256": "3f382775650d03b1ea4609bc24ec1d2798070f16dd20d130868cc3c90c72d23c"
+        },
+        {
+          "item": "RuntimeControlDiscovery.runtime_host_identity",
+          "sha256": "22040fbf0f8254cf00809ebb359b8c389f2c553d9db180280584f8c8274f8136"
+        },
+        {
+          "item": "RuntimeControlDiscovery.runtime_host_version",
+          "sha256": "f872bfaab23b428e900c181b5a77463851843b61700191cb670e148610460c6a"
+        },
+        {
+          "item": "RuntimeControlDiscovery.socket_path",
+          "sha256": "61a32083123cb9f7501c612321cc9c6198f2a3d01b423702f2d2586bcc9f1bc0"
+        },
+        {
+          "item": "RuntimeControlDiscovery.supported_ipc_versions",
+          "sha256": "e8be2371f763645a6bc3cbcc3f0856da6cd854adadc237622e461a9c549b9fef"
+        },
+        {
+          "item": "RuntimeControlIdentityProjection.mode",
+          "sha256": "03cd57b3d8b5cfaad2d4da5ee592541b8d81bbd1bc5b32cdfab52b5cd4b59890"
+        },
+        {
+          "item": "RuntimeControlIdentityProjection.realm",
+          "sha256": "0a3d7b981b82a1edb44838b24f850004aa388144dac7bb232b9ce89150822d77"
+        },
+        {
+          "item": "RuntimeControlIdentityProjection.runtime_instance_id",
+          "sha256": "28f7d312eb4eaa50782472479f32e42c9ee199f653fc9bf959a226b7d4ec9dab"
         },
         {
           "item": "RuntimeInvocationTransport.bidi",
@@ -133254,6 +133318,14 @@
         {
           "item": "RuntimeInvocationTransport.stream",
           "sha256": "a49aad2617445db4452e329c4d561dd0eafaaa6c75deaf252a2c6771a024feba"
+        },
+        {
+          "item": "RuntimeIpcVersionRange.max",
+          "sha256": "bb01326e8309aaac56d27a8eb7a37976bd495244a3254c01d0edb8e5c6948bf4"
+        },
+        {
+          "item": "RuntimeIpcVersionRange.min",
+          "sha256": "5d54b6f8b844d6db792ae4fb36dc66bd3c8fff2e998ff8f4b7bd692142b88917"
         },
         {
           "item": "RuntimeProvider.await_terminal",
@@ -133299,12 +133371,28 @@
               "sha256": "0ec2d4222eab4de1f5407776dcea04b0b73f7dce28e879e26d7408bcd28134ae"
             },
             {
+              "item": "RuntimeControlDiscovery",
+              "sha256": "ef1f1cddc31d783f6488c2d2868c7af4b65cff469bc6e914952abf42c7a46941"
+            },
+            {
+              "item": "RuntimeControlIdentityProjection",
+              "sha256": "a5a0cb310d6998286a818a0f3a9f21f3958792f20c6ce2298e13f993f81802f9"
+            },
+            {
               "item": "RuntimeInvocationTransport",
               "sha256": "29aaaec97abd5053be4f964a42b503cf6a52a305c3041c1c9b2b7c832fa2394a"
             },
             {
+              "item": "RuntimeIpcVersionRange",
+              "sha256": "bc393320e99152c4a05314b0e94aacd4182aa519027508545a6101094462aa73"
+            },
+            {
               "item": "RuntimeProvider",
               "sha256": "bd48b3eb6cac0af7453913cf74fd8f8beb5ea532e3c0895d981b6f819856934b"
+            },
+            {
+              "item": "read_runtime_control_discovery",
+              "sha256": "7ce2b63fb9226bba7f929b5f46ca8a8091a6d6dd32b730a44e40dc6c46b2840a"
             },
             {
               "item": "runtime_state_read_subject_ura",
@@ -133329,6 +133417,54 @@
             {
               "item": "NativeRuntimeHandle.health",
               "sha256": "67aad354982227336a7afd67a704c953c097a41e58816b6ea2f91b46366329b3"
+            },
+            {
+              "item": "RuntimeControlDiscovery.capability_flags",
+              "sha256": "d8738c5d2b8110f4d7ea70bc077c99f0ad865660b67131f5c7937ed29e3d9109"
+            },
+            {
+              "item": "RuntimeControlDiscovery.invocation_endpoint",
+              "sha256": "1f763c96fe70e7ef696ae38c064ed0c3800e4a509309234bc68289f345ecc864"
+            },
+            {
+              "item": "RuntimeControlDiscovery.pages_port",
+              "sha256": "40d2dc846bfaba462bbdc3fc6c5fac3ab0636a019e7ecc5b28330e57d08d7c6c"
+            },
+            {
+              "item": "RuntimeControlDiscovery.pid",
+              "sha256": "8e3fb1dc14c2c06b2a8a38d72b55d06debbc5bde3e2e5d1ed0f944060d48d3fd"
+            },
+            {
+              "item": "RuntimeControlDiscovery.pipe_name",
+              "sha256": "3f382775650d03b1ea4609bc24ec1d2798070f16dd20d130868cc3c90c72d23c"
+            },
+            {
+              "item": "RuntimeControlDiscovery.runtime_host_identity",
+              "sha256": "22040fbf0f8254cf00809ebb359b8c389f2c553d9db180280584f8c8274f8136"
+            },
+            {
+              "item": "RuntimeControlDiscovery.runtime_host_version",
+              "sha256": "f872bfaab23b428e900c181b5a77463851843b61700191cb670e148610460c6a"
+            },
+            {
+              "item": "RuntimeControlDiscovery.socket_path",
+              "sha256": "61a32083123cb9f7501c612321cc9c6198f2a3d01b423702f2d2586bcc9f1bc0"
+            },
+            {
+              "item": "RuntimeControlDiscovery.supported_ipc_versions",
+              "sha256": "e8be2371f763645a6bc3cbcc3f0856da6cd854adadc237622e461a9c549b9fef"
+            },
+            {
+              "item": "RuntimeControlIdentityProjection.mode",
+              "sha256": "03cd57b3d8b5cfaad2d4da5ee592541b8d81bbd1bc5b32cdfab52b5cd4b59890"
+            },
+            {
+              "item": "RuntimeControlIdentityProjection.realm",
+              "sha256": "0a3d7b981b82a1edb44838b24f850004aa388144dac7bb232b9ce89150822d77"
+            },
+            {
+              "item": "RuntimeControlIdentityProjection.runtime_instance_id",
+              "sha256": "28f7d312eb4eaa50782472479f32e42c9ee199f653fc9bf959a226b7d4ec9dab"
             },
             {
               "item": "RuntimeInvocationTransport.bidi",
@@ -133369,6 +133505,14 @@
             {
               "item": "RuntimeInvocationTransport.stream",
               "sha256": "a49aad2617445db4452e329c4d561dd0eafaaa6c75deaf252a2c6771a024feba"
+            },
+            {
+              "item": "RuntimeIpcVersionRange.max",
+              "sha256": "bb01326e8309aaac56d27a8eb7a37976bd495244a3254c01d0edb8e5c6948bf4"
+            },
+            {
+              "item": "RuntimeIpcVersionRange.min",
+              "sha256": "5d54b6f8b844d6db792ae4fb36dc66bd3c8fff2e998ff8f4b7bd692142b88917"
             },
             {
               "item": "RuntimeProvider.await_terminal",
@@ -133414,12 +133558,28 @@
               "sha256": "0ec2d4222eab4de1f5407776dcea04b0b73f7dce28e879e26d7408bcd28134ae"
             },
             {
+              "item": "RuntimeControlDiscovery",
+              "sha256": "ef1f1cddc31d783f6488c2d2868c7af4b65cff469bc6e914952abf42c7a46941"
+            },
+            {
+              "item": "RuntimeControlIdentityProjection",
+              "sha256": "a5a0cb310d6998286a818a0f3a9f21f3958792f20c6ce2298e13f993f81802f9"
+            },
+            {
               "item": "RuntimeInvocationTransport",
               "sha256": "29aaaec97abd5053be4f964a42b503cf6a52a305c3041c1c9b2b7c832fa2394a"
             },
             {
+              "item": "RuntimeIpcVersionRange",
+              "sha256": "bc393320e99152c4a05314b0e94aacd4182aa519027508545a6101094462aa73"
+            },
+            {
               "item": "RuntimeProvider",
               "sha256": "bd48b3eb6cac0af7453913cf74fd8f8beb5ea532e3c0895d981b6f819856934b"
+            },
+            {
+              "item": "read_runtime_control_discovery",
+              "sha256": "7ce2b63fb9226bba7f929b5f46ca8a8091a6d6dd32b730a44e40dc6c46b2840a"
             },
             {
               "item": "runtime_state_read_subject_ura",
@@ -133444,6 +133604,54 @@
             {
               "item": "NativeRuntimeHandle.health",
               "sha256": "67aad354982227336a7afd67a704c953c097a41e58816b6ea2f91b46366329b3"
+            },
+            {
+              "item": "RuntimeControlDiscovery.capability_flags",
+              "sha256": "d8738c5d2b8110f4d7ea70bc077c99f0ad865660b67131f5c7937ed29e3d9109"
+            },
+            {
+              "item": "RuntimeControlDiscovery.invocation_endpoint",
+              "sha256": "1f763c96fe70e7ef696ae38c064ed0c3800e4a509309234bc68289f345ecc864"
+            },
+            {
+              "item": "RuntimeControlDiscovery.pages_port",
+              "sha256": "40d2dc846bfaba462bbdc3fc6c5fac3ab0636a019e7ecc5b28330e57d08d7c6c"
+            },
+            {
+              "item": "RuntimeControlDiscovery.pid",
+              "sha256": "8e3fb1dc14c2c06b2a8a38d72b55d06debbc5bde3e2e5d1ed0f944060d48d3fd"
+            },
+            {
+              "item": "RuntimeControlDiscovery.pipe_name",
+              "sha256": "3f382775650d03b1ea4609bc24ec1d2798070f16dd20d130868cc3c90c72d23c"
+            },
+            {
+              "item": "RuntimeControlDiscovery.runtime_host_identity",
+              "sha256": "22040fbf0f8254cf00809ebb359b8c389f2c553d9db180280584f8c8274f8136"
+            },
+            {
+              "item": "RuntimeControlDiscovery.runtime_host_version",
+              "sha256": "f872bfaab23b428e900c181b5a77463851843b61700191cb670e148610460c6a"
+            },
+            {
+              "item": "RuntimeControlDiscovery.socket_path",
+              "sha256": "61a32083123cb9f7501c612321cc9c6198f2a3d01b423702f2d2586bcc9f1bc0"
+            },
+            {
+              "item": "RuntimeControlDiscovery.supported_ipc_versions",
+              "sha256": "e8be2371f763645a6bc3cbcc3f0856da6cd854adadc237622e461a9c549b9fef"
+            },
+            {
+              "item": "RuntimeControlIdentityProjection.mode",
+              "sha256": "03cd57b3d8b5cfaad2d4da5ee592541b8d81bbd1bc5b32cdfab52b5cd4b59890"
+            },
+            {
+              "item": "RuntimeControlIdentityProjection.realm",
+              "sha256": "0a3d7b981b82a1edb44838b24f850004aa388144dac7bb232b9ce89150822d77"
+            },
+            {
+              "item": "RuntimeControlIdentityProjection.runtime_instance_id",
+              "sha256": "28f7d312eb4eaa50782472479f32e42c9ee199f653fc9bf959a226b7d4ec9dab"
             },
             {
               "item": "RuntimeInvocationTransport.bidi",
@@ -133484,6 +133692,14 @@
             {
               "item": "RuntimeInvocationTransport.stream",
               "sha256": "a49aad2617445db4452e329c4d561dd0eafaaa6c75deaf252a2c6771a024feba"
+            },
+            {
+              "item": "RuntimeIpcVersionRange.max",
+              "sha256": "bb01326e8309aaac56d27a8eb7a37976bd495244a3254c01d0edb8e5c6948bf4"
+            },
+            {
+              "item": "RuntimeIpcVersionRange.min",
+              "sha256": "5d54b6f8b844d6db792ae4fb36dc66bd3c8fff2e998ff8f4b7bd692142b88917"
             },
             {
               "item": "RuntimeProvider.await_terminal",
@@ -133529,12 +133745,28 @@
               "sha256": "0ec2d4222eab4de1f5407776dcea04b0b73f7dce28e879e26d7408bcd28134ae"
             },
             {
+              "item": "RuntimeControlDiscovery",
+              "sha256": "ef1f1cddc31d783f6488c2d2868c7af4b65cff469bc6e914952abf42c7a46941"
+            },
+            {
+              "item": "RuntimeControlIdentityProjection",
+              "sha256": "a5a0cb310d6998286a818a0f3a9f21f3958792f20c6ce2298e13f993f81802f9"
+            },
+            {
               "item": "RuntimeInvocationTransport",
               "sha256": "29aaaec97abd5053be4f964a42b503cf6a52a305c3041c1c9b2b7c832fa2394a"
             },
             {
+              "item": "RuntimeIpcVersionRange",
+              "sha256": "bc393320e99152c4a05314b0e94aacd4182aa519027508545a6101094462aa73"
+            },
+            {
               "item": "RuntimeProvider",
               "sha256": "bd48b3eb6cac0af7453913cf74fd8f8beb5ea532e3c0895d981b6f819856934b"
+            },
+            {
+              "item": "read_runtime_control_discovery",
+              "sha256": "7ce2b63fb9226bba7f929b5f46ca8a8091a6d6dd32b730a44e40dc6c46b2840a"
             },
             {
               "item": "runtime_state_read_subject_ura",
@@ -133559,6 +133791,54 @@
             {
               "item": "NativeRuntimeHandle.health",
               "sha256": "67aad354982227336a7afd67a704c953c097a41e58816b6ea2f91b46366329b3"
+            },
+            {
+              "item": "RuntimeControlDiscovery.capability_flags",
+              "sha256": "d8738c5d2b8110f4d7ea70bc077c99f0ad865660b67131f5c7937ed29e3d9109"
+            },
+            {
+              "item": "RuntimeControlDiscovery.invocation_endpoint",
+              "sha256": "1f763c96fe70e7ef696ae38c064ed0c3800e4a509309234bc68289f345ecc864"
+            },
+            {
+              "item": "RuntimeControlDiscovery.pages_port",
+              "sha256": "40d2dc846bfaba462bbdc3fc6c5fac3ab0636a019e7ecc5b28330e57d08d7c6c"
+            },
+            {
+              "item": "RuntimeControlDiscovery.pid",
+              "sha256": "8e3fb1dc14c2c06b2a8a38d72b55d06debbc5bde3e2e5d1ed0f944060d48d3fd"
+            },
+            {
+              "item": "RuntimeControlDiscovery.pipe_name",
+              "sha256": "3f382775650d03b1ea4609bc24ec1d2798070f16dd20d130868cc3c90c72d23c"
+            },
+            {
+              "item": "RuntimeControlDiscovery.runtime_host_identity",
+              "sha256": "22040fbf0f8254cf00809ebb359b8c389f2c553d9db180280584f8c8274f8136"
+            },
+            {
+              "item": "RuntimeControlDiscovery.runtime_host_version",
+              "sha256": "f872bfaab23b428e900c181b5a77463851843b61700191cb670e148610460c6a"
+            },
+            {
+              "item": "RuntimeControlDiscovery.socket_path",
+              "sha256": "61a32083123cb9f7501c612321cc9c6198f2a3d01b423702f2d2586bcc9f1bc0"
+            },
+            {
+              "item": "RuntimeControlDiscovery.supported_ipc_versions",
+              "sha256": "e8be2371f763645a6bc3cbcc3f0856da6cd854adadc237622e461a9c549b9fef"
+            },
+            {
+              "item": "RuntimeControlIdentityProjection.mode",
+              "sha256": "03cd57b3d8b5cfaad2d4da5ee592541b8d81bbd1bc5b32cdfab52b5cd4b59890"
+            },
+            {
+              "item": "RuntimeControlIdentityProjection.realm",
+              "sha256": "0a3d7b981b82a1edb44838b24f850004aa388144dac7bb232b9ce89150822d77"
+            },
+            {
+              "item": "RuntimeControlIdentityProjection.runtime_instance_id",
+              "sha256": "28f7d312eb4eaa50782472479f32e42c9ee199f653fc9bf959a226b7d4ec9dab"
             },
             {
               "item": "RuntimeInvocationTransport.bidi",
@@ -133599,6 +133879,14 @@
             {
               "item": "RuntimeInvocationTransport.stream",
               "sha256": "a49aad2617445db4452e329c4d561dd0eafaaa6c75deaf252a2c6771a024feba"
+            },
+            {
+              "item": "RuntimeIpcVersionRange.max",
+              "sha256": "bb01326e8309aaac56d27a8eb7a37976bd495244a3254c01d0edb8e5c6948bf4"
+            },
+            {
+              "item": "RuntimeIpcVersionRange.min",
+              "sha256": "5d54b6f8b844d6db792ae4fb36dc66bd3c8fff2e998ff8f4b7bd692142b88917"
             },
             {
               "item": "RuntimeProvider.await_terminal",
@@ -133644,12 +133932,28 @@
               "sha256": "0ec2d4222eab4de1f5407776dcea04b0b73f7dce28e879e26d7408bcd28134ae"
             },
             {
+              "item": "RuntimeControlDiscovery",
+              "sha256": "ef1f1cddc31d783f6488c2d2868c7af4b65cff469bc6e914952abf42c7a46941"
+            },
+            {
+              "item": "RuntimeControlIdentityProjection",
+              "sha256": "a5a0cb310d6998286a818a0f3a9f21f3958792f20c6ce2298e13f993f81802f9"
+            },
+            {
               "item": "RuntimeInvocationTransport",
               "sha256": "29aaaec97abd5053be4f964a42b503cf6a52a305c3041c1c9b2b7c832fa2394a"
             },
             {
+              "item": "RuntimeIpcVersionRange",
+              "sha256": "bc393320e99152c4a05314b0e94aacd4182aa519027508545a6101094462aa73"
+            },
+            {
               "item": "RuntimeProvider",
               "sha256": "bd48b3eb6cac0af7453913cf74fd8f8beb5ea532e3c0895d981b6f819856934b"
+            },
+            {
+              "item": "read_runtime_control_discovery",
+              "sha256": "7ce2b63fb9226bba7f929b5f46ca8a8091a6d6dd32b730a44e40dc6c46b2840a"
             },
             {
               "item": "runtime_state_read_subject_ura",
@@ -133674,6 +133978,54 @@
             {
               "item": "NativeRuntimeHandle.health",
               "sha256": "67aad354982227336a7afd67a704c953c097a41e58816b6ea2f91b46366329b3"
+            },
+            {
+              "item": "RuntimeControlDiscovery.capability_flags",
+              "sha256": "d8738c5d2b8110f4d7ea70bc077c99f0ad865660b67131f5c7937ed29e3d9109"
+            },
+            {
+              "item": "RuntimeControlDiscovery.invocation_endpoint",
+              "sha256": "1f763c96fe70e7ef696ae38c064ed0c3800e4a509309234bc68289f345ecc864"
+            },
+            {
+              "item": "RuntimeControlDiscovery.pages_port",
+              "sha256": "40d2dc846bfaba462bbdc3fc6c5fac3ab0636a019e7ecc5b28330e57d08d7c6c"
+            },
+            {
+              "item": "RuntimeControlDiscovery.pid",
+              "sha256": "8e3fb1dc14c2c06b2a8a38d72b55d06debbc5bde3e2e5d1ed0f944060d48d3fd"
+            },
+            {
+              "item": "RuntimeControlDiscovery.pipe_name",
+              "sha256": "3f382775650d03b1ea4609bc24ec1d2798070f16dd20d130868cc3c90c72d23c"
+            },
+            {
+              "item": "RuntimeControlDiscovery.runtime_host_identity",
+              "sha256": "22040fbf0f8254cf00809ebb359b8c389f2c553d9db180280584f8c8274f8136"
+            },
+            {
+              "item": "RuntimeControlDiscovery.runtime_host_version",
+              "sha256": "f872bfaab23b428e900c181b5a77463851843b61700191cb670e148610460c6a"
+            },
+            {
+              "item": "RuntimeControlDiscovery.socket_path",
+              "sha256": "61a32083123cb9f7501c612321cc9c6198f2a3d01b423702f2d2586bcc9f1bc0"
+            },
+            {
+              "item": "RuntimeControlDiscovery.supported_ipc_versions",
+              "sha256": "e8be2371f763645a6bc3cbcc3f0856da6cd854adadc237622e461a9c549b9fef"
+            },
+            {
+              "item": "RuntimeControlIdentityProjection.mode",
+              "sha256": "03cd57b3d8b5cfaad2d4da5ee592541b8d81bbd1bc5b32cdfab52b5cd4b59890"
+            },
+            {
+              "item": "RuntimeControlIdentityProjection.realm",
+              "sha256": "0a3d7b981b82a1edb44838b24f850004aa388144dac7bb232b9ce89150822d77"
+            },
+            {
+              "item": "RuntimeControlIdentityProjection.runtime_instance_id",
+              "sha256": "28f7d312eb4eaa50782472479f32e42c9ee199f653fc9bf959a226b7d4ec9dab"
             },
             {
               "item": "RuntimeInvocationTransport.bidi",
@@ -133714,6 +134066,14 @@
             {
               "item": "RuntimeInvocationTransport.stream",
               "sha256": "a49aad2617445db4452e329c4d561dd0eafaaa6c75deaf252a2c6771a024feba"
+            },
+            {
+              "item": "RuntimeIpcVersionRange.max",
+              "sha256": "bb01326e8309aaac56d27a8eb7a37976bd495244a3254c01d0edb8e5c6948bf4"
+            },
+            {
+              "item": "RuntimeIpcVersionRange.min",
+              "sha256": "5d54b6f8b844d6db792ae4fb36dc66bd3c8fff2e998ff8f4b7bd692142b88917"
             },
             {
               "item": "RuntimeProvider.await_terminal",
@@ -133759,12 +134119,28 @@
               "sha256": "0ec2d4222eab4de1f5407776dcea04b0b73f7dce28e879e26d7408bcd28134ae"
             },
             {
+              "item": "RuntimeControlDiscovery",
+              "sha256": "ef1f1cddc31d783f6488c2d2868c7af4b65cff469bc6e914952abf42c7a46941"
+            },
+            {
+              "item": "RuntimeControlIdentityProjection",
+              "sha256": "a5a0cb310d6998286a818a0f3a9f21f3958792f20c6ce2298e13f993f81802f9"
+            },
+            {
               "item": "RuntimeInvocationTransport",
               "sha256": "29aaaec97abd5053be4f964a42b503cf6a52a305c3041c1c9b2b7c832fa2394a"
             },
             {
+              "item": "RuntimeIpcVersionRange",
+              "sha256": "bc393320e99152c4a05314b0e94aacd4182aa519027508545a6101094462aa73"
+            },
+            {
               "item": "RuntimeProvider",
               "sha256": "bd48b3eb6cac0af7453913cf74fd8f8beb5ea532e3c0895d981b6f819856934b"
+            },
+            {
+              "item": "read_runtime_control_discovery",
+              "sha256": "7ce2b63fb9226bba7f929b5f46ca8a8091a6d6dd32b730a44e40dc6c46b2840a"
             },
             {
               "item": "runtime_state_read_subject_ura",
@@ -133789,6 +134165,54 @@
             {
               "item": "NativeRuntimeHandle.health",
               "sha256": "67aad354982227336a7afd67a704c953c097a41e58816b6ea2f91b46366329b3"
+            },
+            {
+              "item": "RuntimeControlDiscovery.capability_flags",
+              "sha256": "d8738c5d2b8110f4d7ea70bc077c99f0ad865660b67131f5c7937ed29e3d9109"
+            },
+            {
+              "item": "RuntimeControlDiscovery.invocation_endpoint",
+              "sha256": "1f763c96fe70e7ef696ae38c064ed0c3800e4a509309234bc68289f345ecc864"
+            },
+            {
+              "item": "RuntimeControlDiscovery.pages_port",
+              "sha256": "40d2dc846bfaba462bbdc3fc6c5fac3ab0636a019e7ecc5b28330e57d08d7c6c"
+            },
+            {
+              "item": "RuntimeControlDiscovery.pid",
+              "sha256": "8e3fb1dc14c2c06b2a8a38d72b55d06debbc5bde3e2e5d1ed0f944060d48d3fd"
+            },
+            {
+              "item": "RuntimeControlDiscovery.pipe_name",
+              "sha256": "3f382775650d03b1ea4609bc24ec1d2798070f16dd20d130868cc3c90c72d23c"
+            },
+            {
+              "item": "RuntimeControlDiscovery.runtime_host_identity",
+              "sha256": "22040fbf0f8254cf00809ebb359b8c389f2c553d9db180280584f8c8274f8136"
+            },
+            {
+              "item": "RuntimeControlDiscovery.runtime_host_version",
+              "sha256": "f872bfaab23b428e900c181b5a77463851843b61700191cb670e148610460c6a"
+            },
+            {
+              "item": "RuntimeControlDiscovery.socket_path",
+              "sha256": "61a32083123cb9f7501c612321cc9c6198f2a3d01b423702f2d2586bcc9f1bc0"
+            },
+            {
+              "item": "RuntimeControlDiscovery.supported_ipc_versions",
+              "sha256": "e8be2371f763645a6bc3cbcc3f0856da6cd854adadc237622e461a9c549b9fef"
+            },
+            {
+              "item": "RuntimeControlIdentityProjection.mode",
+              "sha256": "03cd57b3d8b5cfaad2d4da5ee592541b8d81bbd1bc5b32cdfab52b5cd4b59890"
+            },
+            {
+              "item": "RuntimeControlIdentityProjection.realm",
+              "sha256": "0a3d7b981b82a1edb44838b24f850004aa388144dac7bb232b9ce89150822d77"
+            },
+            {
+              "item": "RuntimeControlIdentityProjection.runtime_instance_id",
+              "sha256": "28f7d312eb4eaa50782472479f32e42c9ee199f653fc9bf959a226b7d4ec9dab"
             },
             {
               "item": "RuntimeInvocationTransport.bidi",
@@ -133829,6 +134253,14 @@
             {
               "item": "RuntimeInvocationTransport.stream",
               "sha256": "a49aad2617445db4452e329c4d561dd0eafaaa6c75deaf252a2c6771a024feba"
+            },
+            {
+              "item": "RuntimeIpcVersionRange.max",
+              "sha256": "bb01326e8309aaac56d27a8eb7a37976bd495244a3254c01d0edb8e5c6948bf4"
+            },
+            {
+              "item": "RuntimeIpcVersionRange.min",
+              "sha256": "5d54b6f8b844d6db792ae4fb36dc66bd3c8fff2e998ff8f4b7bd692142b88917"
             },
             {
               "item": "RuntimeProvider.await_terminal",
@@ -133874,12 +134306,28 @@
               "sha256": "0ec2d4222eab4de1f5407776dcea04b0b73f7dce28e879e26d7408bcd28134ae"
             },
             {
+              "item": "RuntimeControlDiscovery",
+              "sha256": "ef1f1cddc31d783f6488c2d2868c7af4b65cff469bc6e914952abf42c7a46941"
+            },
+            {
+              "item": "RuntimeControlIdentityProjection",
+              "sha256": "a5a0cb310d6998286a818a0f3a9f21f3958792f20c6ce2298e13f993f81802f9"
+            },
+            {
               "item": "RuntimeInvocationTransport",
               "sha256": "29aaaec97abd5053be4f964a42b503cf6a52a305c3041c1c9b2b7c832fa2394a"
             },
             {
+              "item": "RuntimeIpcVersionRange",
+              "sha256": "bc393320e99152c4a05314b0e94aacd4182aa519027508545a6101094462aa73"
+            },
+            {
               "item": "RuntimeProvider",
               "sha256": "bd48b3eb6cac0af7453913cf74fd8f8beb5ea532e3c0895d981b6f819856934b"
+            },
+            {
+              "item": "read_runtime_control_discovery",
+              "sha256": "7ce2b63fb9226bba7f929b5f46ca8a8091a6d6dd32b730a44e40dc6c46b2840a"
             },
             {
               "item": "runtime_state_read_subject_ura",
@@ -133904,6 +134352,54 @@
             {
               "item": "NativeRuntimeHandle.health",
               "sha256": "67aad354982227336a7afd67a704c953c097a41e58816b6ea2f91b46366329b3"
+            },
+            {
+              "item": "RuntimeControlDiscovery.capability_flags",
+              "sha256": "d8738c5d2b8110f4d7ea70bc077c99f0ad865660b67131f5c7937ed29e3d9109"
+            },
+            {
+              "item": "RuntimeControlDiscovery.invocation_endpoint",
+              "sha256": "1f763c96fe70e7ef696ae38c064ed0c3800e4a509309234bc68289f345ecc864"
+            },
+            {
+              "item": "RuntimeControlDiscovery.pages_port",
+              "sha256": "40d2dc846bfaba462bbdc3fc6c5fac3ab0636a019e7ecc5b28330e57d08d7c6c"
+            },
+            {
+              "item": "RuntimeControlDiscovery.pid",
+              "sha256": "8e3fb1dc14c2c06b2a8a38d72b55d06debbc5bde3e2e5d1ed0f944060d48d3fd"
+            },
+            {
+              "item": "RuntimeControlDiscovery.pipe_name",
+              "sha256": "3f382775650d03b1ea4609bc24ec1d2798070f16dd20d130868cc3c90c72d23c"
+            },
+            {
+              "item": "RuntimeControlDiscovery.runtime_host_identity",
+              "sha256": "22040fbf0f8254cf00809ebb359b8c389f2c553d9db180280584f8c8274f8136"
+            },
+            {
+              "item": "RuntimeControlDiscovery.runtime_host_version",
+              "sha256": "f872bfaab23b428e900c181b5a77463851843b61700191cb670e148610460c6a"
+            },
+            {
+              "item": "RuntimeControlDiscovery.socket_path",
+              "sha256": "61a32083123cb9f7501c612321cc9c6198f2a3d01b423702f2d2586bcc9f1bc0"
+            },
+            {
+              "item": "RuntimeControlDiscovery.supported_ipc_versions",
+              "sha256": "e8be2371f763645a6bc3cbcc3f0856da6cd854adadc237622e461a9c549b9fef"
+            },
+            {
+              "item": "RuntimeControlIdentityProjection.mode",
+              "sha256": "03cd57b3d8b5cfaad2d4da5ee592541b8d81bbd1bc5b32cdfab52b5cd4b59890"
+            },
+            {
+              "item": "RuntimeControlIdentityProjection.realm",
+              "sha256": "0a3d7b981b82a1edb44838b24f850004aa388144dac7bb232b9ce89150822d77"
+            },
+            {
+              "item": "RuntimeControlIdentityProjection.runtime_instance_id",
+              "sha256": "28f7d312eb4eaa50782472479f32e42c9ee199f653fc9bf959a226b7d4ec9dab"
             },
             {
               "item": "RuntimeInvocationTransport.bidi",
@@ -133944,6 +134440,14 @@
             {
               "item": "RuntimeInvocationTransport.stream",
               "sha256": "a49aad2617445db4452e329c4d561dd0eafaaa6c75deaf252a2c6771a024feba"
+            },
+            {
+              "item": "RuntimeIpcVersionRange.max",
+              "sha256": "bb01326e8309aaac56d27a8eb7a37976bd495244a3254c01d0edb8e5c6948bf4"
+            },
+            {
+              "item": "RuntimeIpcVersionRange.min",
+              "sha256": "5d54b6f8b844d6db792ae4fb36dc66bd3c8fff2e998ff8f4b7bd692142b88917"
             },
             {
               "item": "RuntimeProvider.await_terminal",
@@ -133989,12 +134493,28 @@
               "sha256": "0ec2d4222eab4de1f5407776dcea04b0b73f7dce28e879e26d7408bcd28134ae"
             },
             {
+              "item": "RuntimeControlDiscovery",
+              "sha256": "ef1f1cddc31d783f6488c2d2868c7af4b65cff469bc6e914952abf42c7a46941"
+            },
+            {
+              "item": "RuntimeControlIdentityProjection",
+              "sha256": "a5a0cb310d6998286a818a0f3a9f21f3958792f20c6ce2298e13f993f81802f9"
+            },
+            {
               "item": "RuntimeInvocationTransport",
               "sha256": "29aaaec97abd5053be4f964a42b503cf6a52a305c3041c1c9b2b7c832fa2394a"
             },
             {
+              "item": "RuntimeIpcVersionRange",
+              "sha256": "bc393320e99152c4a05314b0e94aacd4182aa519027508545a6101094462aa73"
+            },
+            {
               "item": "RuntimeProvider",
               "sha256": "bd48b3eb6cac0af7453913cf74fd8f8beb5ea532e3c0895d981b6f819856934b"
+            },
+            {
+              "item": "read_runtime_control_discovery",
+              "sha256": "7ce2b63fb9226bba7f929b5f46ca8a8091a6d6dd32b730a44e40dc6c46b2840a"
             },
             {
               "item": "runtime_state_read_subject_ura",
@@ -134019,6 +134539,54 @@
             {
               "item": "NativeRuntimeHandle.health",
               "sha256": "67aad354982227336a7afd67a704c953c097a41e58816b6ea2f91b46366329b3"
+            },
+            {
+              "item": "RuntimeControlDiscovery.capability_flags",
+              "sha256": "d8738c5d2b8110f4d7ea70bc077c99f0ad865660b67131f5c7937ed29e3d9109"
+            },
+            {
+              "item": "RuntimeControlDiscovery.invocation_endpoint",
+              "sha256": "1f763c96fe70e7ef696ae38c064ed0c3800e4a509309234bc68289f345ecc864"
+            },
+            {
+              "item": "RuntimeControlDiscovery.pages_port",
+              "sha256": "40d2dc846bfaba462bbdc3fc6c5fac3ab0636a019e7ecc5b28330e57d08d7c6c"
+            },
+            {
+              "item": "RuntimeControlDiscovery.pid",
+              "sha256": "8e3fb1dc14c2c06b2a8a38d72b55d06debbc5bde3e2e5d1ed0f944060d48d3fd"
+            },
+            {
+              "item": "RuntimeControlDiscovery.pipe_name",
+              "sha256": "3f382775650d03b1ea4609bc24ec1d2798070f16dd20d130868cc3c90c72d23c"
+            },
+            {
+              "item": "RuntimeControlDiscovery.runtime_host_identity",
+              "sha256": "22040fbf0f8254cf00809ebb359b8c389f2c553d9db180280584f8c8274f8136"
+            },
+            {
+              "item": "RuntimeControlDiscovery.runtime_host_version",
+              "sha256": "f872bfaab23b428e900c181b5a77463851843b61700191cb670e148610460c6a"
+            },
+            {
+              "item": "RuntimeControlDiscovery.socket_path",
+              "sha256": "61a32083123cb9f7501c612321cc9c6198f2a3d01b423702f2d2586bcc9f1bc0"
+            },
+            {
+              "item": "RuntimeControlDiscovery.supported_ipc_versions",
+              "sha256": "e8be2371f763645a6bc3cbcc3f0856da6cd854adadc237622e461a9c549b9fef"
+            },
+            {
+              "item": "RuntimeControlIdentityProjection.mode",
+              "sha256": "03cd57b3d8b5cfaad2d4da5ee592541b8d81bbd1bc5b32cdfab52b5cd4b59890"
+            },
+            {
+              "item": "RuntimeControlIdentityProjection.realm",
+              "sha256": "0a3d7b981b82a1edb44838b24f850004aa388144dac7bb232b9ce89150822d77"
+            },
+            {
+              "item": "RuntimeControlIdentityProjection.runtime_instance_id",
+              "sha256": "28f7d312eb4eaa50782472479f32e42c9ee199f653fc9bf959a226b7d4ec9dab"
             },
             {
               "item": "RuntimeInvocationTransport.bidi",
@@ -134059,6 +134627,14 @@
             {
               "item": "RuntimeInvocationTransport.stream",
               "sha256": "a49aad2617445db4452e329c4d561dd0eafaaa6c75deaf252a2c6771a024feba"
+            },
+            {
+              "item": "RuntimeIpcVersionRange.max",
+              "sha256": "bb01326e8309aaac56d27a8eb7a37976bd495244a3254c01d0edb8e5c6948bf4"
+            },
+            {
+              "item": "RuntimeIpcVersionRange.min",
+              "sha256": "5d54b6f8b844d6db792ae4fb36dc66bd3c8fff2e998ff8f4b7bd692142b88917"
             },
             {
               "item": "RuntimeProvider.await_terminal",
@@ -134104,12 +134680,28 @@
               "sha256": "0ec2d4222eab4de1f5407776dcea04b0b73f7dce28e879e26d7408bcd28134ae"
             },
             {
+              "item": "RuntimeControlDiscovery",
+              "sha256": "ef1f1cddc31d783f6488c2d2868c7af4b65cff469bc6e914952abf42c7a46941"
+            },
+            {
+              "item": "RuntimeControlIdentityProjection",
+              "sha256": "a5a0cb310d6998286a818a0f3a9f21f3958792f20c6ce2298e13f993f81802f9"
+            },
+            {
               "item": "RuntimeInvocationTransport",
               "sha256": "29aaaec97abd5053be4f964a42b503cf6a52a305c3041c1c9b2b7c832fa2394a"
             },
             {
+              "item": "RuntimeIpcVersionRange",
+              "sha256": "bc393320e99152c4a05314b0e94aacd4182aa519027508545a6101094462aa73"
+            },
+            {
               "item": "RuntimeProvider",
               "sha256": "bd48b3eb6cac0af7453913cf74fd8f8beb5ea532e3c0895d981b6f819856934b"
+            },
+            {
+              "item": "read_runtime_control_discovery",
+              "sha256": "7ce2b63fb9226bba7f929b5f46ca8a8091a6d6dd32b730a44e40dc6c46b2840a"
             },
             {
               "item": "runtime_state_read_subject_ura",
@@ -134134,6 +134726,54 @@
             {
               "item": "NativeRuntimeHandle.health",
               "sha256": "67aad354982227336a7afd67a704c953c097a41e58816b6ea2f91b46366329b3"
+            },
+            {
+              "item": "RuntimeControlDiscovery.capability_flags",
+              "sha256": "d8738c5d2b8110f4d7ea70bc077c99f0ad865660b67131f5c7937ed29e3d9109"
+            },
+            {
+              "item": "RuntimeControlDiscovery.invocation_endpoint",
+              "sha256": "1f763c96fe70e7ef696ae38c064ed0c3800e4a509309234bc68289f345ecc864"
+            },
+            {
+              "item": "RuntimeControlDiscovery.pages_port",
+              "sha256": "40d2dc846bfaba462bbdc3fc6c5fac3ab0636a019e7ecc5b28330e57d08d7c6c"
+            },
+            {
+              "item": "RuntimeControlDiscovery.pid",
+              "sha256": "8e3fb1dc14c2c06b2a8a38d72b55d06debbc5bde3e2e5d1ed0f944060d48d3fd"
+            },
+            {
+              "item": "RuntimeControlDiscovery.pipe_name",
+              "sha256": "3f382775650d03b1ea4609bc24ec1d2798070f16dd20d130868cc3c90c72d23c"
+            },
+            {
+              "item": "RuntimeControlDiscovery.runtime_host_identity",
+              "sha256": "22040fbf0f8254cf00809ebb359b8c389f2c553d9db180280584f8c8274f8136"
+            },
+            {
+              "item": "RuntimeControlDiscovery.runtime_host_version",
+              "sha256": "f872bfaab23b428e900c181b5a77463851843b61700191cb670e148610460c6a"
+            },
+            {
+              "item": "RuntimeControlDiscovery.socket_path",
+              "sha256": "61a32083123cb9f7501c612321cc9c6198f2a3d01b423702f2d2586bcc9f1bc0"
+            },
+            {
+              "item": "RuntimeControlDiscovery.supported_ipc_versions",
+              "sha256": "e8be2371f763645a6bc3cbcc3f0856da6cd854adadc237622e461a9c549b9fef"
+            },
+            {
+              "item": "RuntimeControlIdentityProjection.mode",
+              "sha256": "03cd57b3d8b5cfaad2d4da5ee592541b8d81bbd1bc5b32cdfab52b5cd4b59890"
+            },
+            {
+              "item": "RuntimeControlIdentityProjection.realm",
+              "sha256": "0a3d7b981b82a1edb44838b24f850004aa388144dac7bb232b9ce89150822d77"
+            },
+            {
+              "item": "RuntimeControlIdentityProjection.runtime_instance_id",
+              "sha256": "28f7d312eb4eaa50782472479f32e42c9ee199f653fc9bf959a226b7d4ec9dab"
             },
             {
               "item": "RuntimeInvocationTransport.bidi",
@@ -134174,6 +134814,14 @@
             {
               "item": "RuntimeInvocationTransport.stream",
               "sha256": "a49aad2617445db4452e329c4d561dd0eafaaa6c75deaf252a2c6771a024feba"
+            },
+            {
+              "item": "RuntimeIpcVersionRange.max",
+              "sha256": "bb01326e8309aaac56d27a8eb7a37976bd495244a3254c01d0edb8e5c6948bf4"
+            },
+            {
+              "item": "RuntimeIpcVersionRange.min",
+              "sha256": "5d54b6f8b844d6db792ae4fb36dc66bd3c8fff2e998ff8f4b7bd692142b88917"
             },
             {
               "item": "RuntimeProvider.await_terminal",
@@ -165779,6 +166427,10 @@
           "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
         },
         {
+          "item": "PublicKeyBinding.MarshalJSON",
+          "sha256": "a710cfa97c9653fa4e02f2ba36ed128ea0fabab5784bd5abd9ad617bf4915200"
+        },
+        {
           "item": "PublicKeyBinding.PrincipalURA",
           "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
         },
@@ -165920,6 +166572,10 @@
             {
               "item": "PublicKeyBinding.KeyID",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "PublicKeyBinding.MarshalJSON",
+              "sha256": "a710cfa97c9653fa4e02f2ba36ed128ea0fabab5784bd5abd9ad617bf4915200"
             },
             {
               "item": "PublicKeyBinding.PrincipalURA",
@@ -166065,6 +166721,10 @@
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
+              "item": "PublicKeyBinding.MarshalJSON",
+              "sha256": "a710cfa97c9653fa4e02f2ba36ed128ea0fabab5784bd5abd9ad617bf4915200"
+            },
+            {
               "item": "PublicKeyBinding.PrincipalURA",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
@@ -166206,6 +166866,10 @@
             {
               "item": "PublicKeyBinding.KeyID",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "PublicKeyBinding.MarshalJSON",
+              "sha256": "a710cfa97c9653fa4e02f2ba36ed128ea0fabab5784bd5abd9ad617bf4915200"
             },
             {
               "item": "PublicKeyBinding.PrincipalURA",
@@ -166351,6 +167015,10 @@
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
+              "item": "PublicKeyBinding.MarshalJSON",
+              "sha256": "a710cfa97c9653fa4e02f2ba36ed128ea0fabab5784bd5abd9ad617bf4915200"
+            },
+            {
               "item": "PublicKeyBinding.PrincipalURA",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
@@ -166492,6 +167160,10 @@
             {
               "item": "PublicKeyBinding.KeyID",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "PublicKeyBinding.MarshalJSON",
+              "sha256": "a710cfa97c9653fa4e02f2ba36ed128ea0fabab5784bd5abd9ad617bf4915200"
             },
             {
               "item": "PublicKeyBinding.PrincipalURA",
@@ -166637,6 +167309,10 @@
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
+              "item": "PublicKeyBinding.MarshalJSON",
+              "sha256": "a710cfa97c9653fa4e02f2ba36ed128ea0fabab5784bd5abd9ad617bf4915200"
+            },
+            {
               "item": "PublicKeyBinding.PrincipalURA",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
@@ -166780,6 +167456,10 @@
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
+              "item": "PublicKeyBinding.MarshalJSON",
+              "sha256": "a710cfa97c9653fa4e02f2ba36ed128ea0fabab5784bd5abd9ad617bf4915200"
+            },
+            {
               "item": "PublicKeyBinding.PrincipalURA",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
@@ -166921,6 +167601,10 @@
             {
               "item": "PublicKeyBinding.KeyID",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "PublicKeyBinding.MarshalJSON",
+              "sha256": "a710cfa97c9653fa4e02f2ba36ed128ea0fabab5784bd5abd9ad617bf4915200"
             },
             {
               "item": "PublicKeyBinding.PrincipalURA",
@@ -167066,6 +167750,10 @@
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
+              "item": "PublicKeyBinding.MarshalJSON",
+              "sha256": "a710cfa97c9653fa4e02f2ba36ed128ea0fabab5784bd5abd9ad617bf4915200"
+            },
+            {
               "item": "PublicKeyBinding.PrincipalURA",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
@@ -167207,6 +167895,10 @@
             {
               "item": "PublicKeyBinding.KeyID",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "PublicKeyBinding.MarshalJSON",
+              "sha256": "a710cfa97c9653fa4e02f2ba36ed128ea0fabab5784bd5abd9ad617bf4915200"
             },
             {
               "item": "PublicKeyBinding.PrincipalURA",
@@ -167352,6 +168044,10 @@
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
+              "item": "PublicKeyBinding.MarshalJSON",
+              "sha256": "a710cfa97c9653fa4e02f2ba36ed128ea0fabab5784bd5abd9ad617bf4915200"
+            },
+            {
               "item": "PublicKeyBinding.PrincipalURA",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
@@ -167495,6 +168191,10 @@
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
+              "item": "PublicKeyBinding.MarshalJSON",
+              "sha256": "a710cfa97c9653fa4e02f2ba36ed128ea0fabab5784bd5abd9ad617bf4915200"
+            },
+            {
               "item": "PublicKeyBinding.PrincipalURA",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
@@ -167636,6 +168336,10 @@
             {
               "item": "PublicKeyBinding.KeyID",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "PublicKeyBinding.MarshalJSON",
+              "sha256": "a710cfa97c9653fa4e02f2ba36ed128ea0fabab5784bd5abd9ad617bf4915200"
             },
             {
               "item": "PublicKeyBinding.PrincipalURA",

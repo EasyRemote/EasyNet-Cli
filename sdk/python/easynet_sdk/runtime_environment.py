@@ -32,6 +32,38 @@ class RuntimeIdentityProjection:
     control_plane_endpoint: str = ""
 
 
+@dataclass(frozen=True)
+class RuntimeIpcVersionRange:
+    """Inclusive runtime-host control IPC version range."""
+
+    min: int
+    max: int
+
+
+@dataclass(frozen=True)
+class RuntimeControlIdentityProjection:
+    """Public runtime-host identity advertised by control discovery."""
+
+    mode: str
+    realm: str
+    runtime_instance_id: str = ""
+
+
+@dataclass(frozen=True)
+class RuntimeControlDiscovery:
+    """Public runtime-host control discovery projection."""
+
+    socket_path: str = ""
+    pipe_name: str = ""
+    invocation_endpoint: str = ""
+    runtime_host_identity: RuntimeControlIdentityProjection | None = None
+    pid: int = 0
+    runtime_host_version: str = ""
+    supported_ipc_versions: RuntimeIpcVersionRange = RuntimeIpcVersionRange(1, 1)
+    capability_flags: tuple[str, ...] = ()
+    pages_port: int = 0
+
+
 def runtime_state_root(control_path: str | Path = "") -> Path:
     """Resolve the SDK-owned local runtime state directory."""
 
@@ -43,6 +75,37 @@ def runtime_credentials_path(control_path: str | Path = "") -> Path:
     """Resolve the paired runtime identity projection path."""
 
     return runtime_state_root(control_path) / _CREDENTIALS_FILENAME
+
+
+def read_runtime_control_discovery(
+    control_path: str | Path = "",
+) -> RuntimeControlDiscovery:
+    """Read and validate the runtime-host control discovery projection."""
+
+    from .providers.runtime.control import _read_control_discovery
+
+    discovery = _read_control_discovery(control_path)
+    identity = None
+    if discovery.runtime_host_identity is not None:
+        identity = RuntimeControlIdentityProjection(
+            mode=discovery.runtime_host_identity.mode,
+            realm=discovery.runtime_host_identity.realm,
+            runtime_instance_id=discovery.runtime_host_identity.runtime_instance_id,
+        )
+    return RuntimeControlDiscovery(
+        socket_path=discovery.socket_path,
+        pipe_name=discovery.pipe_name,
+        invocation_endpoint=discovery.invocation_endpoint,
+        runtime_host_identity=identity,
+        pid=discovery.pid,
+        runtime_host_version=discovery.runtime_host_version,
+        supported_ipc_versions=RuntimeIpcVersionRange(
+            discovery.supported_ipc_versions.min,
+            discovery.supported_ipc_versions.max,
+        ),
+        capability_flags=tuple(discovery.capability_flags),
+        pages_port=discovery.pages_port,
+    )
 
 
 def read_runtime_identity_projection(

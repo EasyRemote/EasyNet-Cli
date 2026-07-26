@@ -8,7 +8,7 @@
         {
           "kind": "java_test",
           "ref_path": "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java",
-          "sha256": "e7398525cc40f770a32e78c3c16eaa1d8d6e12fd917f29992e5b94c1825a4614"
+          "sha256": "e5880430ed9563d27a6d3139f6a2255b33636965cc1fbd1d4958fe70ea676074"
         }
       ],
       "profile": "runtime_core"
@@ -19,7 +19,7 @@
         {
           "kind": "java_test",
           "ref_path": "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java",
-          "sha256": "e7398525cc40f770a32e78c3c16eaa1d8d6e12fd917f29992e5b94c1825a4614"
+          "sha256": "e5880430ed9563d27a6d3139f6a2255b33636965cc1fbd1d4958fe70ea676074"
         }
       ],
       "profile": "runtime_core"
@@ -30,7 +30,7 @@
         {
           "kind": "java_test",
           "ref_path": "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java",
-          "sha256": "e7398525cc40f770a32e78c3c16eaa1d8d6e12fd917f29992e5b94c1825a4614"
+          "sha256": "e5880430ed9563d27a6d3139f6a2255b33636965cc1fbd1d4958fe70ea676074"
         }
       ],
       "profile": "runtime_core"
@@ -41,7 +41,7 @@
         {
           "kind": "java_test",
           "ref_path": "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java",
-          "sha256": "e7398525cc40f770a32e78c3c16eaa1d8d6e12fd917f29992e5b94c1825a4614"
+          "sha256": "e5880430ed9563d27a6d3139f6a2255b33636965cc1fbd1d4958fe70ea676074"
         }
       ],
       "profile": "runtime_core"
@@ -52,7 +52,7 @@
         {
           "kind": "java_test",
           "ref_path": "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java",
-          "sha256": "e7398525cc40f770a32e78c3c16eaa1d8d6e12fd917f29992e5b94c1825a4614"
+          "sha256": "e5880430ed9563d27a6d3139f6a2255b33636965cc1fbd1d4958fe70ea676074"
         }
       ],
       "profile": "runtime_core"
@@ -63,7 +63,7 @@
         {
           "kind": "java_test",
           "ref_path": "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java",
-          "sha256": "e7398525cc40f770a32e78c3c16eaa1d8d6e12fd917f29992e5b94c1825a4614"
+          "sha256": "e5880430ed9563d27a6d3139f6a2255b33636965cc1fbd1d4958fe70ea676074"
         }
       ],
       "profile": "health"
@@ -74,7 +74,7 @@
         {
           "kind": "java_test",
           "ref_path": "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java",
-          "sha256": "e7398525cc40f770a32e78c3c16eaa1d8d6e12fd917f29992e5b94c1825a4614"
+          "sha256": "e5880430ed9563d27a6d3139f6a2255b33636965cc1fbd1d4958fe70ea676074"
         }
       ],
       "profile": "runtime_core"
@@ -85,7 +85,7 @@
         {
           "kind": "java_test",
           "ref_path": "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java",
-          "sha256": "e7398525cc40f770a32e78c3c16eaa1d8d6e12fd917f29992e5b94c1825a4614"
+          "sha256": "e5880430ed9563d27a6d3139f6a2255b33636965cc1fbd1d4958fe70ea676074"
         }
       ],
       "profile": "runtime_core"
@@ -96,7 +96,7 @@
         {
           "kind": "java_test",
           "ref_path": "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java",
-          "sha256": "e7398525cc40f770a32e78c3c16eaa1d8d6e12fd917f29992e5b94c1825a4614"
+          "sha256": "e5880430ed9563d27a6d3139f6a2255b33636965cc1fbd1d4958fe70ea676074"
         }
       ],
       "profile": "runtime_core"
@@ -107,7 +107,7 @@
         {
           "kind": "java_test",
           "ref_path": "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java",
-          "sha256": "e7398525cc40f770a32e78c3c16eaa1d8d6e12fd917f29992e5b94c1825a4614"
+          "sha256": "e5880430ed9563d27a6d3139f6a2255b33636965cc1fbd1d4958fe70ea676074"
         }
       ],
       "profile": "runtime_core"
@@ -118,7 +118,7 @@
         {
           "kind": "java_test",
           "ref_path": "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java",
-          "sha256": "e7398525cc40f770a32e78c3c16eaa1d8d6e12fd917f29992e5b94c1825a4614"
+          "sha256": "e5880430ed9563d27a6d3139f6a2255b33636965cc1fbd1d4958fe70ea676074"
         }
       ],
       "profile": "runtime_core"
@@ -129,7 +129,7 @@
         {
           "kind": "java_test",
           "ref_path": "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java",
-          "sha256": "e7398525cc40f770a32e78c3c16eaa1d8d6e12fd917f29992e5b94c1825a4614"
+          "sha256": "e5880430ed9563d27a6d3139f6a2255b33636965cc1fbd1d4958fe70ea676074"
         }
       ],
       "profile": "runtime_core"
@@ -140,7 +140,7 @@
         {
           "kind": "java_test",
           "ref_path": "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java",
-          "sha256": "e7398525cc40f770a32e78c3c16eaa1d8d6e12fd917f29992e5b94c1825a4614"
+          "sha256": "e5880430ed9563d27a6d3139f6a2255b33636965cc1fbd1d4958fe70ea676074"
         }
       ],
       "profile": "runtime_core"
@@ -151,7 +151,7 @@
         {
           "kind": "java_test",
           "ref_path": "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java",
-          "sha256": "e7398525cc40f770a32e78c3c16eaa1d8d6e12fd917f29992e5b94c1825a4614"
+          "sha256": "e5880430ed9563d27a6d3139f6a2255b33636965cc1fbd1d4958fe70ea676074"
         }
       ],
       "profile": "runtime_core"
@@ -162,7 +162,7 @@
         {
           "kind": "java_test",
           "ref_path": "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java",
-          "sha256": "e7398525cc40f770a32e78c3c16eaa1d8d6e12fd917f29992e5b94c1825a4614"
+          "sha256": "e5880430ed9563d27a6d3139f6a2255b33636965cc1fbd1d4958fe70ea676074"
         }
       ],
       "profile": "runtime_core"
@@ -173,7 +173,7 @@
         {
           "kind": "java_test",
           "ref_path": "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java",
-          "sha256": "e7398525cc40f770a32e78c3c16eaa1d8d6e12fd917f29992e5b94c1825a4614"
+          "sha256": "e5880430ed9563d27a6d3139f6a2255b33636965cc1fbd1d4958fe70ea676074"
         }
       ],
       "profile": "runtime_core"

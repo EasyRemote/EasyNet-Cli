@@ -264,6 +264,9 @@ func abilityOwnerFromAxon(owner axonsdk.AbilityOwner) AbilityOwner {
 	if owner.Kind == axonsdk.AbilityOwnerAuthority {
 		kind = abilityOwnerAuthority
 	}
+	if owner.Kind == axonsdk.AbilityOwnerDevice {
+		kind = abilityOwnerDevice
+	}
 	return AbilityOwner{
 		Kind:    kind,
 		UserID:  owner.UserID,

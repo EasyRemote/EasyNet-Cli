@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -70,6 +71,34 @@ func TestPrincipalStatesPinTerminalVocabulary(t *testing.T) {
 	if PublicKeyBindingStateActive != "active" || PublicKeyBindingStateRotated != "rotated" ||
 		PublicKeyBindingStateRevoked != "revoked" {
 		t.Fatal("public-key binding state vocabulary changed")
+	}
+}
+
+func TestPublicKeyBindingMarshalUsesCanonicalWirePublicKeyB64(t *testing.T) {
+	publicKey := make(ed25519.PublicKey, ed25519.PublicKeySize)
+	for index := range publicKey {
+		publicKey[index] = byte(index)
+	}
+	raw, err := json.Marshal(PublicKeyBinding{
+		BindingID:     "binding-1",
+		PrincipalURA:  "easynet:///r/example/user/alice",
+		KeyID:         "laptop",
+		PublicKey:     publicKey,
+		State:         PublicKeyBindingStateActive,
+		CreatedUnixMS: 1_700_000_000_000,
+	})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var wire map[string]any
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if _, ok := wire["public_key"]; ok {
+		t.Fatalf("PublicKeyBinding marshaled in-memory public_key field: %s", raw)
+	}
+	if wire["public_key_b64"] != base64.StdEncoding.EncodeToString(publicKey) {
+		t.Fatalf("public_key_b64 mismatch: %#v", wire["public_key_b64"])
 	}
 }
 
