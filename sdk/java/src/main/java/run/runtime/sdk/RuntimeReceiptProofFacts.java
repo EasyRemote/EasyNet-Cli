@@ -164,48 +164,9 @@ final class RuntimeReceiptProofFacts {
     receiptHash(raw, "impl_hash_hex", false);
     requiredString(raw, "runtime_env");
 
-    Map<String, Object> authorityProof =
-        requireObject(raw.get("authority_proof"), "authority_proof");
-    requireExactKeys(
-        authorityProof,
-        "authority_proof",
-        "proof_type",
-        "binding_kind",
-        "binding",
-        "proof_payload_base64",
-        "proof_hash_hex",
-        "issuer",
-        "signature",
-        "admission_hook");
-    requiredString(authorityProof, "proof_type");
-    String proofBindingKind = requiredString(authorityProof, "binding_kind");
-    if (!proofBindingKind.equals(authorityKind)) {
-      throw SDKError.validation(
-          "runtime_receipt",
-          "runtime receipt authority_proof binding_kind does not match authority_binding_kind");
-    }
-    Map<String, Object> proofBinding =
-        requireAuthorityBinding(authorityProof.get("binding"), "authority_proof.binding");
-    if (!proofBinding.equals(authorityBinding)) {
-      throw SDKError.validation(
-          "runtime_receipt",
-          "runtime receipt authority_proof binding does not match authority_binding");
-    }
-
-    byte[] proofPayload =
-        base64Bytes(
-            requiredStringAllowEmpty(authorityProof, "proof_payload_base64"),
-            "authority_proof.proof_payload_base64",
-            0,
-            true);
-    byte[] proofHash = receiptHash(authorityProof, "proof_hash_hex", false);
-    validateAuthorityProofHash(proofPayload, proofBinding, proofHash);
-    Map<String, Object> issuer = requireAgentBinding(authorityProof.get("issuer"), "authority_proof.issuer");
-    requireSameIdentity(issuer, calleeBinding);
-    if (authorityProof.containsKey("signature") && authorityProof.get("signature") != null) {
-      requireSignature(authorityProof.get("signature"), "authority_proof.signature");
-    }
-    requiredString(authorityProof, "admission_hook");
+    AuthorityProofFacts authorityProof =
+        AuthorityProofFacts.parse(raw.get("authority_proof"), authorityKind, authorityBinding);
+    authorityProof.requireIssuer(calleeBinding);
 
     receiptHash(raw, "input_hash_hex", false);
     receiptHash(raw, "output_hash_hex", false);
@@ -257,6 +218,68 @@ final class RuntimeReceiptProofFacts {
     if (isZeroHash(expected) || isZeroHash(proofHash) || !Arrays.equals(proofHash, expected)) {
       throw SDKError.validation(
           "runtime_receipt", "runtime receipt proof facts are not canonical: authority_proof_hash_mismatch");
+    }
+  }
+
+  private record AuthorityProofFacts(Map<String, Object> issuer) {
+    private static AuthorityProofFacts parse(
+        Object value, String authorityKind, Map<String, Object> authorityBinding) {
+      Map<String, Object> proof = requireObject(value, "authority_proof");
+      requireExactKeys(
+          proof,
+          "authority_proof",
+          "proof_type",
+          "binding_kind",
+          "binding",
+          "proof_payload_base64",
+          "proof_hash_hex",
+          "issuer",
+          "signature",
+          "admission_hook");
+      requirePresentKeys(
+          proof,
+          "authority_proof",
+          "proof_type",
+          "binding_kind",
+          "binding",
+          "proof_payload_base64",
+          "proof_hash_hex",
+          "issuer",
+          "admission_hook");
+      requiredString(proof, "proof_type");
+      String proofBindingKind = requiredString(proof, "binding_kind");
+      if (!proofBindingKind.equals(authorityKind)) {
+        throw SDKError.validation(
+            "runtime_receipt",
+            "runtime receipt authority_proof binding_kind does not match authority_binding_kind");
+      }
+      Map<String, Object> proofBinding =
+          requireAuthorityBinding(proof.get("binding"), "authority_proof.binding");
+      if (!proofBinding.equals(authorityBinding)) {
+        throw SDKError.validation(
+            "runtime_receipt",
+            "runtime receipt authority_proof binding does not match authority_binding");
+      }
+
+      byte[] proofPayload =
+          base64Bytes(
+              requiredStringAllowEmpty(proof, "proof_payload_base64"),
+              "authority_proof.proof_payload_base64",
+              0,
+              true);
+      byte[] proofHash = receiptHash(proof, "proof_hash_hex", false);
+      validateAuthorityProofHash(proofPayload, proofBinding, proofHash);
+      Map<String, Object> issuer =
+          requireAgentBinding(proof.get("issuer"), "authority_proof.issuer");
+      if (proof.containsKey("signature") && proof.get("signature") != null) {
+        requireSignature(proof.get("signature"), "authority_proof.signature");
+      }
+      requiredString(proof, "admission_hook");
+      return new AuthorityProofFacts(issuer);
+    }
+
+    private void requireIssuer(Map<String, Object> calleeBinding) {
+      requireSameIdentity(issuer, calleeBinding);
     }
   }
 

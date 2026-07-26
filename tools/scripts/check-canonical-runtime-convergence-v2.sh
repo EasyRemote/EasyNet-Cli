@@ -16101,6 +16101,9 @@ for fragment, label in {
     "base64Bytes(": "base64_validator_missing",
     "requireExactKeys(": "exact_object_schema_validator_missing",
     "requirePresentKeys(": "required_top_level_fact_validator_missing",
+    "private record AuthorityProofFacts": "authority_proof_value_object_missing",
+    "AuthorityProofFacts.parse(": "authority_proof_parse_boundary_missing",
+    'requirePresentKeys(\n          proof,\n          "authority_proof"': "authority_proof_required_fact_validator_missing",
     "static Map<String, Object> immutableObject(": "deep_immutable_object_missing",
     "private static Object immutableValue(": "deep_immutable_value_missing",
     "Collections.unmodifiableMap(out)": "deep_immutable_map_missing",
@@ -16108,7 +16111,7 @@ for fragment, label in {
     'requiredString(raw, "payload_content_type")': "payload_content_type_required_missing",
     'requireObject(raw.get("usage"), "usage")': "usage_required_missing",
     "contains noncanonical field": "noncanonical_field_error_missing",
-    'requiredStringAllowEmpty(authorityProof, "proof_payload_base64")': "proof_payload_presence_missing",
+    'requiredStringAllowEmpty(proof, "proof_payload_base64")': "proof_payload_presence_missing",
 }.items():
     if fragment not in proof:
         raise SystemExit(f"java_runtime_receipt_projection:{label}")
@@ -16156,6 +16159,8 @@ for required_test in (
     "raw-projection-mutation",
     "canonicalRuntimeReceiptFixture",
     "missingProof.remove(\"authority_proof\")",
+    "missingAuthorityProofFact",
+    "runtime receipt summary is missing authority_proof.",
     "legacyAuthorityBinding.put(\"legacy_authority\"",
     "authority_binding contains noncanonical field legacy_authority",
     "legacyAuthorityProofFact.put(\"legacy_proof_fact\"",

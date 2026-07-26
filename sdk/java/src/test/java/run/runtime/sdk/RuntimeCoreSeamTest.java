@@ -382,6 +382,25 @@ public final class RuntimeCoreSeamTest {
         "authority_proof",
         () -> new InvocationResult(true, InvocationTerminalState.COMPLETED, "", null, missingProof));
 
+    for (String missingProofFact :
+        List.of(
+            "proof_type",
+            "binding_kind",
+            "binding",
+            "proof_payload_base64",
+            "proof_hash_hex",
+            "issuer",
+            "admission_hook")) {
+      Map<String, Object> missingAuthorityProofFactReceipt = new LinkedHashMap<>(complete);
+      Map<String, Object> missingAuthorityProofFact =
+          mutableAuthorityProof(missingAuthorityProofFactReceipt);
+      missingAuthorityProofFact.remove(missingProofFact);
+      expectSDKError(
+          ErrorCode.INVALID_ARGUMENT,
+          "runtime receipt summary is missing authority_proof." + missingProofFact,
+          () -> RuntimeReceipt.fromMap(missingAuthorityProofFactReceipt));
+    }
+
     for (String missingField :
         List.of("payload_base64", "payload_content_type", "host_attestation_base64", "usage")) {
       Map<String, Object> missingTopLevelFact = new LinkedHashMap<>(complete);
@@ -453,7 +472,7 @@ public final class RuntimeCoreSeamTest {
     RuntimeReceipt bindingHashReceipt = RuntimeReceipt.fromMap(bindingHashProof);
     check(
         "COMPLETED".equals(bindingHashReceipt.lifecycleState()),
-        "binding-hash proof without payload/signature is accepted");
+        "binding-hash proof with explicit empty payload and omitted optional signature is accepted");
 
     Map<String, Object> sessionBinding =
         nullableMapOf(
