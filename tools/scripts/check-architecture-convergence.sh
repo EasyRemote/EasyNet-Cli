@@ -11698,6 +11698,69 @@ if ability_manifest.exists():
             )
 
 
+policy_gate = cli_root / "src/daemon/invocation/admission/policy_gate.rs"
+bootstrap_authority = cli_root / "src/daemon/invocation/admission/bootstrap_authority.rs"
+if policy_gate.exists():
+    text = policy_gate.read_text(encoding="utf-8", errors="replace")
+    for token, detail in (
+        (
+            "local_device_owner_fact(",
+            "ordinary policy gate must not project device ownership from local credentials",
+        ),
+        (
+            "owner_fact_from_local_device(",
+            "ordinary policy gate must not keep a local-device owner fallback helper",
+        ),
+        (
+            "LOCAL_OWNER_CREDENTIALS_UNAVAILABLE",
+            "ordinary policy gate must not expose local credential owner fallback errors",
+        ),
+        (
+            "LOCAL_DEVICE_PRINCIPAL_OWNER_UNAVAILABLE",
+            "ordinary policy principal projection must not read local credentials",
+        ),
+    ):
+        offset = text.find(token)
+        if offset != -1:
+            add(
+                "R100_POLICY_GATE_NO_LOCAL_CREDENTIAL_OWNER_FALLBACK",
+                policy_gate,
+                line_number(text, offset),
+                detail,
+            )
+    for token, detail in (
+        (
+            "paired_device_subject_does_not_project_credentials_owner",
+            "policy tests must prove paired credentials do not define ordinary subject ownership",
+        ),
+        (
+            "paired_device_ability_does_not_project_credentials_owner",
+            "policy tests must prove paired credentials do not define ordinary device-ability ownership",
+        ),
+        (
+            "device_principal_projection_ignores_malformed_local_credentials",
+            "policy tests must prove malformed local credentials are outside ordinary principal projection",
+        ),
+    ):
+        if token not in text:
+            add(
+                "R100_POLICY_GATE_NO_LOCAL_CREDENTIAL_OWNER_FALLBACK",
+                policy_gate,
+                1,
+                detail,
+            )
+
+if bootstrap_authority.exists():
+    text = bootstrap_authority.read_text(encoding="utf-8", errors="replace")
+    if "local_device_owner_fact(caller_ura)" not in text:
+        add(
+            "R100_POLICY_GATE_NO_LOCAL_CREDENTIAL_OWNER_FALLBACK",
+            bootstrap_authority,
+            1,
+            "bootstrap authority must remain the explicit bounded owner of local paired-device projection",
+        )
+
+
 if violations:
     for violation in sorted(violations):
         print(

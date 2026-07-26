@@ -7849,35 +7849,18 @@ if "Result<OwnerResolution, Status>" not in resolve.group("ret"):
 if "let owner = resolve_owner(" not in text or ")?" not in text[text.find("let owner = resolve_owner("):text.find("let principal = principal_for")]:
     raise SystemExit("admission_policy_gate_not_propagating_owner_resolution")
 
-local = re.search(
-    r"fn owner_fact_from_local_device\((?P<sig>.*?)\) -> (?P<ret>[^{]+)\{(?P<body>.*?)\n\}",
-    text,
-    re.DOTALL,
-)
-if local is None:
-    raise SystemExit("admission_local_device_owner_fact_missing")
-if "Result<Option<OwnerFact>, Status>" not in local.group("ret"):
-    raise SystemExit("admission_local_device_owner_fact_not_fallible")
-body = local.group("body")
 for retired in (
-    "load_credentials().ok()",
-    "load_credentials().ok()?",
-    "credentials.user_id().ok()",
-    "parse_ura(ura).ok()",
-    "load_credentials_optional()",
-    "URAKind::Authority",
-    "parsed.realm == credentials.realm",
-    "Some(ura) == daemon_ura",
-):
-    if retired in body:
-        raise SystemExit(f"admission_local_owner_retired_fallback:{retired}")
-for required in (
-    "local_device_owner_fact(ura)",
+    "fn owner_fact_from_local_device(",
+    "local_device_owner_fact(",
     "LOCAL_OWNER_CREDENTIALS_UNAVAILABLE",
     "LOCAL_OWNER_URA_INVALID",
+    "LOCAL_DEVICE_PRINCIPAL_OWNER_UNAVAILABLE",
+    "load_credentials_optional()",
+    "load_credentials().ok()",
+    "credentials.user_id().ok()",
 ):
-    if required not in body:
-        raise SystemExit(f"admission_local_owner_missing_fail_closed_path:{required}")
+    if retired in text:
+        raise SystemExit(f"admission_policy_retains_local_credential_owner_fallback:{retired}")
 for retired in (
     "owner_fact_from_local_device(&authority_ura",
     "owner_fact_from_local_device(ura, daemon_ura)",
@@ -7886,8 +7869,10 @@ for retired in (
     if retired in text:
         raise SystemExit(f"admission_authority_owner_retired_device_fallback:{retired}")
 for test in (
-    "local_device_owner_resolution_rejects_malformed_credentials",
-    "paired_device_subject_projects_credentials_owner",
+    "local_device_owner_resolution_ignores_malformed_credentials",
+    "paired_device_subject_does_not_project_credentials_owner",
+    "paired_device_ability_does_not_project_credentials_owner",
+    "device_principal_projection_ignores_malformed_local_credentials",
     "authority_ability_does_not_project_paired_device_credentials_owner",
     "authority_subject_does_not_project_paired_device_credentials_owner",
 ):
@@ -7951,15 +7936,26 @@ for test in (
 if policy:
     if "pub(crate) fn principal_for(" not in policy or "-> Result<PrincipalProjection, Status>" not in policy:
         raise SystemExit("device_principal_projection_not_fallible")
-    for required in (
+    for retired in (
+        "local_device_owner_fact(",
         "LOCAL_DEVICE_PRINCIPAL_OWNER_UNAVAILABLE",
+        "owner_fact_from_local_device(",
+        "LOCAL_OWNER_CREDENTIALS_UNAVAILABLE",
+    ):
+        if retired in policy:
+            raise SystemExit(f"ordinary_policy_retains_local_device_owner_projection:{retired}")
+    for required in (
         "principal_for(context.trusted_role, &caller_ura, context.trust_anchor)?",
-        "device_principal_projection_rejects_malformed_local_credentials",
+        "device_principal_projection_ignores_malformed_local_credentials",
+        "paired_device_subject_does_not_project_credentials_owner",
+        "paired_device_ability_does_not_project_credentials_owner",
     ):
         if required not in policy:
             raise SystemExit(f"device_principal_projection_missing:{required}")
 
 if bootstrap:
+    if "local_device_owner_fact(caller_ura)" not in bootstrap:
+        raise SystemExit("bootstrap_authority_must_own_local_device_projection")
     if "Unavailable { message: String }" not in bootstrap:
         raise SystemExit("bootstrap_authority_unavailable_state_missing")
     for retired in (

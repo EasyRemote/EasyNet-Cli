@@ -16,7 +16,7 @@ use crate::daemon::invocation::admission::decision::{
     PrincipalKind, TokenClass,
 };
 use crate::daemon::invocation::admission::owner_resolution::{
-    local_device_owner_fact, OwnerFact, OwnerResolutionInput, OwnerResolver,
+    OwnerFact, OwnerResolutionInput, OwnerResolver,
 };
 use crate::daemon::invocation::admission::policy_engine::{PolicyEngine, PolicyInput};
 use crate::daemon::persistence::access_control::AccessControlStoreRegistry;
@@ -174,17 +174,9 @@ pub(crate) fn principal_for(
             caller_user_id: None,
         }),
         TrustedAgentRole::Device => {
-            let owner_fact = match trust_anchor.lookup_principal_owner(caller_ura) {
-                Some(owner) => Some(OwnerFact::user(
-                    owner.owner_user_id.clone(),
-                    owner.owner_ura.clone(),
-                )),
-                None => local_device_owner_fact(caller_ura).map_err(|error| {
-                    Status::failed_precondition(format!(
-                        "LOCAL_DEVICE_PRINCIPAL_OWNER_UNAVAILABLE: {error:#}"
-                    ))
-                })?,
-            };
+            let owner_fact = trust_anchor
+                .lookup_principal_owner(caller_ura)
+                .map(|owner| OwnerFact::user(owner.owner_user_id.clone(), owner.owner_ura.clone()));
             let owner_user_id = owner_fact.and_then(|owner| owner.owner_user_id);
             Ok(PrincipalProjection {
                 kind: PrincipalKind::Device,
@@ -212,10 +204,7 @@ pub(crate) fn resolve_owner(
 ) -> Result<OwnerResolution, Status> {
     let subject = owner_fact_from_ura(subject_ura, daemon_ura, trust_anchor)?;
     let callee = owner_fact_from_ura(callee_ura, daemon_ura, trust_anchor)?;
-    let device = match owner_fact_from_trust_anchor(callee_ura, trust_anchor) {
-        Some(owner) => Some(owner),
-        None => owner_fact_from_local_device(callee_ura)?,
-    };
+    let device = owner_fact_from_trust_anchor(callee_ura, trust_anchor);
     Ok(OwnerResolver::resolve(&OwnerResolutionInput {
         subject,
         callee,
@@ -255,10 +244,7 @@ fn owner_fact_from_ura(
             }),
             Some(AbilityOwner::Device { device_id }) => {
                 let device_ura = crate::core::ura::device_ura(&parsed.realm, &device_id);
-                match owner_fact_from_trust_anchor(&device_ura, trust_anchor) {
-                    Some(owner) => Some(owner),
-                    None => owner_fact_from_local_device(&device_ura)?,
-                }
+                owner_fact_from_trust_anchor(&device_ura, trust_anchor)
             }
             Some(AbilityOwner::Authority) => {
                 let authority_ura = crate::core::ura::hub_ura(&parsed.realm);
@@ -266,10 +252,7 @@ fn owner_fact_from_ura(
             }
             None => None,
         },
-        URAKind::Device => match owner_fact_from_trust_anchor(ura, trust_anchor) {
-            Some(owner) => Some(owner),
-            None => owner_fact_from_local_device(ura)?,
-        },
+        URAKind::Device => owner_fact_from_trust_anchor(ura, trust_anchor),
         URAKind::Authority => {
             match owner_fact_from_trust_anchor(ura, trust_anchor)
                 .or_else(|| owner_fact_from_local_authority(ura, daemon_ura))
@@ -309,17 +292,6 @@ fn owner_fact_from_local_authority(ura: &str, daemon_ura: Option<&str>) -> Optio
         owner_user_id: None,
         owner_ura: Some(ura.to_string()),
         authoritative: true,
-    })
-}
-
-fn owner_fact_from_local_device(ura: &str) -> Result<Option<OwnerFact>, Status> {
-    local_device_owner_fact(ura).map_err(|error| {
-        let message = error.to_string();
-        if message.contains("local device owner URA invalid") {
-            Status::invalid_argument(format!("LOCAL_OWNER_URA_INVALID: {message}"))
-        } else {
-            Status::failed_precondition(format!("LOCAL_OWNER_CREDENTIALS_UNAVAILABLE: {error:#}"))
-        }
     })
 }
 
@@ -515,8 +487,8 @@ mod tests {
         let anchor = anchor_with_device_owner();
         let owner = resolve_owner(
             "easynet:///r/test/device/dev-1",
-            "easynet:///r/test/authority",
-            Some("easynet:///r/test/authority"),
+            "easynet:///r/test/device/dev-1",
+            None,
             &anchor,
         )
         .expect("anchor owner resolution");
@@ -529,75 +501,71 @@ mod tests {
     }
 
     #[test]
-    fn paired_device_subject_projects_credentials_owner() {
+    fn paired_device_subject_does_not_project_credentials_owner() {
         let _home = HomeGuard::new();
         save_test_credentials();
         let anchor = empty_anchor();
+        let owner = resolve_owner(
+            "easynet:///r/test/device/dev-1",
+            "easynet:///r/test/device/dev-1",
+            None,
+            &anchor,
+        )
+        .expect("ordinary policy owner resolution must ignore local credentials");
+
+        assert!(owner.owner_user_id.is_none());
+        assert!(owner.owner_ura.is_none());
+        assert_eq!(
+            owner.owner_source,
+            crate::daemon::invocation::admission::decision::OwnerSource::Unresolved
+        );
+    }
+
+    #[test]
+    fn device_principal_projection_ignores_malformed_local_credentials() {
+        let _home = HomeGuard::new();
+        let state_dir = crate::daemon::persistence::config::state_dir();
+        std::fs::create_dir_all(&state_dir).expect("create isolated state dir");
+        std::fs::write(state_dir.join("credentials.json"), b"{")
+            .expect("write malformed credentials");
+
+        let principal = principal_for(
+            TrustedAgentRole::Device,
+            "easynet:///r/test/device/dev-1",
+            &empty_anchor(),
+        )
+        .expect("ordinary policy principal projection must not read local credentials");
+
+        assert_eq!(principal.kind, PrincipalKind::Device);
+        assert_eq!(principal.caller_user_id, None);
+    }
+
+    #[test]
+    fn local_device_owner_resolution_ignores_malformed_credentials() {
+        let _home = HomeGuard::new();
+        let state_dir = crate::daemon::persistence::config::state_dir();
+        std::fs::create_dir_all(&state_dir).expect("create isolated state dir");
+        std::fs::write(state_dir.join("credentials.json"), b"{")
+            .expect("write malformed credentials");
+        let anchor = empty_anchor();
+
         let owner = resolve_owner(
             "easynet:///r/test/device/dev-1",
             "easynet:///r/test/authority",
             Some("easynet:///r/test/authority"),
             &anchor,
         )
-        .expect("credential owner resolution");
+        .expect("ordinary policy owner resolution must not read local credentials");
 
-        assert_eq!(owner.owner_user_id.as_deref(), Some("alice"));
         assert_eq!(
-            owner.owner_ura.as_deref(),
-            Some("easynet:///r/test/user/alice")
+            owner.owner_source,
+            crate::daemon::invocation::admission::decision::OwnerSource::Unresolved
         );
+        assert!(owner.owner_user_id.is_none());
     }
 
     #[test]
-    fn device_principal_projection_rejects_malformed_local_credentials() {
-        let _home = HomeGuard::new();
-        let state_dir = crate::daemon::persistence::config::state_dir();
-        std::fs::create_dir_all(&state_dir).expect("create isolated state dir");
-        std::fs::write(state_dir.join("credentials.json"), b"{")
-            .expect("write malformed credentials");
-
-        let error = principal_for(
-            TrustedAgentRole::Device,
-            "easynet:///r/test/device/dev-1",
-            &empty_anchor(),
-        )
-        .expect_err("malformed credentials must fail principal projection");
-
-        let message = error.message();
-        assert!(
-            message.contains("LOCAL_DEVICE_PRINCIPAL_OWNER_UNAVAILABLE")
-                && message.contains("parse credentials"),
-            "unexpected error: {message}"
-        );
-    }
-
-    #[test]
-    fn local_device_owner_resolution_rejects_malformed_credentials() {
-        let _home = HomeGuard::new();
-        let state_dir = crate::daemon::persistence::config::state_dir();
-        std::fs::create_dir_all(&state_dir).expect("create isolated state dir");
-        std::fs::write(state_dir.join("credentials.json"), b"{")
-            .expect("write malformed credentials");
-        let anchor = empty_anchor();
-
-        let error = resolve_owner(
-            "easynet:///r/test/device/dev-1",
-            "easynet:///r/test/authority",
-            Some("easynet:///r/test/authority"),
-            &anchor,
-        )
-        .expect_err("malformed credentials must fail local owner resolution");
-
-        let message = error.message();
-        assert!(
-            message.contains("LOCAL_OWNER_CREDENTIALS_UNAVAILABLE")
-                && message.contains("parse credentials"),
-            "unexpected error: {message}"
-        );
-    }
-
-    #[test]
-    fn paired_device_ability_projects_credentials_owner() {
+    fn paired_device_ability_does_not_project_credentials_owner() {
         let _home = HomeGuard::new();
         save_test_credentials();
         let anchor = empty_anchor();
@@ -607,9 +575,13 @@ mod tests {
             Some("easynet:///r/test/authority"),
             &anchor,
         )
-        .expect("device ability owner resolution");
+        .expect("ordinary policy device ability owner resolution must ignore local credentials");
 
-        assert_eq!(owner.owner_user_id.as_deref(), Some("alice"));
+        assert!(owner.owner_user_id.is_none());
+        assert_eq!(
+            owner.owner_source,
+            crate::daemon::invocation::admission::decision::OwnerSource::Unresolved
+        );
     }
 
     #[test]
