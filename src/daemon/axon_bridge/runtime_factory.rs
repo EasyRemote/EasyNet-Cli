@@ -69,10 +69,10 @@ impl DaemonRuntimeAdmissionGraph {
         self.key_resolver.bootstrap_identity_provider()
     }
 
-    pub(crate) fn provisional_bootstrap_provider(
+    pub(crate) fn bootstrap_candidate_provider(
         &self,
-    ) -> Arc<crate::daemon::axon_bridge::runtime_admin::ProvisionalBootstrapKeyProvider> {
-        self.key_resolver.provisional_bootstrap_provider()
+    ) -> Arc<crate::daemon::axon_bridge::runtime_admin::BootstrapCandidateKeyProvider> {
+        self.key_resolver.bootstrap_candidate_provider()
     }
 
     pub(crate) fn runtime_admission(
@@ -227,13 +227,13 @@ fn assemble_daemon_runtime(
     let bootstrap_identities = Arc::new(
         crate::daemon::axon_bridge::runtime_admin::RuntimeBootstrapIdentityProvider::default(),
     );
-    let provisional_bootstrap = Arc::new(
-        crate::daemon::axon_bridge::runtime_admin::ProvisionalBootstrapKeyProvider::default(),
+    let bootstrap_candidate = Arc::new(
+        crate::daemon::axon_bridge::runtime_admin::BootstrapCandidateKeyProvider::default(),
     );
     let admission_key_resolver = Arc::new(CanonicalAdmissionKeyResolver::new(
         trusted_identities,
         bootstrap_identities,
-        provisional_bootstrap,
+        bootstrap_candidate,
         Arc::clone(&receipt_provider),
     ));
     let admission_graph = Arc::new(DaemonRuntimeAdmissionGraph::new(
@@ -265,13 +265,13 @@ pub fn build_local_runtime_with_receipt_provider(
     let bootstrap_identities = Arc::new(
         crate::daemon::axon_bridge::runtime_admin::RuntimeBootstrapIdentityProvider::default(),
     );
-    let provisional_bootstrap = Arc::new(
-        crate::daemon::axon_bridge::runtime_admin::ProvisionalBootstrapKeyProvider::default(),
+    let bootstrap_candidate = Arc::new(
+        crate::daemon::axon_bridge::runtime_admin::BootstrapCandidateKeyProvider::default(),
     );
     let resolver: Arc<dyn KeyResolver> = Arc::new(CanonicalAdmissionKeyResolver::new(
         trusted_identities,
         bootstrap_identities,
-        provisional_bootstrap,
+        bootstrap_candidate,
         Arc::clone(&receipt_provider),
     ));
     LocalRuntime::new_with_canonical_receipt_provider(resolver, receipt_provider)

@@ -715,8 +715,6 @@ fn invoke_federation_join_with_principal_proof(
             .expect("ensure joined member identity inside key service");
         let public_key_bytes = public_key.to_bytes();
         let public_key_hex = hex::encode(public_key_bytes);
-        let provisional_caller =
-            easynet_cli::core::ura::provisional::provisional_ura_for_pubkey(&public_key_bytes);
         let realm = easynet_cli::core::ura::parse_ura(hub_ura)
             .expect("fixture hub URA parses")
             .realm;
@@ -735,18 +733,17 @@ fn invoke_federation_join_with_principal_proof(
         .expect("encode federation.join args");
         let descriptor_ref = require_descriptor_ref(descriptor_refs, hub_ura, "federation.join");
         let signer = FixtureCanonicalSigner {
-            owner_ura: provisional_caller.clone(),
+            owner_ura: membership_ura.to_string(),
             signing_owner_ura: membership_ura.to_string(),
             public_key,
             provider: key_service,
         };
-        let request = ProtoEnvelope::federation_join_genesis(
-            provisional_caller,
+        let request = ProtoEnvelope::federation_join_bootstrap(
             hub_ura,
             membership_ura,
             InvocationDerivationPolicy::FreshRoot,
         )
-        .expect("valid federation.join genesis envelope")
+        .expect("valid federation.join bootstrap envelope")
         .signed_descriptor_ref_invoke_request_with_signer(
             easynet_cli::daemon::ability::conformance::ABILITY_FEDERATION_JOIN,
             descriptor_ref,

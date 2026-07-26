@@ -143,49 +143,54 @@ impl KeyResolver for RuntimeBootstrapIdentityProvider {
 }
 
 #[derive(Default)]
-struct ProvisionalBootstrapState {
+struct BootstrapCandidateState {
     candidates: HashMap<String, (u64, VerifyingKey)>,
 }
 
 /// Bounded, request-scoped key source for the first signed federation join.
 ///
-/// A candidate can be installed only when its public-key digest is exactly the
-/// provisional caller URA. The returned lease removes it after canonical Axon
+/// A candidate can be installed only for a canonical membership Device URA
+/// after the federation.join bootstrap proof has bound that URA to the
+/// presented public key. The returned lease removes it after canonical Axon
 /// admission has verified the descriptor-bound caller signature.
 #[derive(Default)]
-pub(crate) struct ProvisionalBootstrapKeyProvider {
+pub(crate) struct BootstrapCandidateKeyProvider {
     next_lease_id: AtomicU64,
-    state: Mutex<ProvisionalBootstrapState>,
+    state: Mutex<BootstrapCandidateState>,
 }
 
-impl ProvisionalBootstrapKeyProvider {
+impl BootstrapCandidateKeyProvider {
     pub(crate) fn lease_candidate(
         self: &Arc<Self>,
         caller_ura: &str,
         key: VerifyingKey,
-    ) -> Result<ProvisionalBootstrapKeyLease, AxonError> {
-        let expected = crate::core::ura::provisional::provisional_ura_for_pubkey(&key.to_bytes());
-        if caller_ura != expected {
+    ) -> Result<BootstrapCandidateKeyLease, AxonError> {
+        let parsed = crate::core::ura::parse_ura(caller_ura).map_err(|error| {
+            AxonError::permission_denied(format!(
+                "bootstrap_candidate_key_caller_ura_invalid:{error}"
+            ))
+        })?;
+        if parsed.kind != crate::core::ura::URAKind::Device {
             return Err(AxonError::permission_denied(
-                "provisional_bootstrap_key_caller_digest_mismatch",
+                "bootstrap_candidate_key_requires_device_caller",
             ));
         }
         let lease_id = self.next_lease_id.fetch_add(1, Ordering::Relaxed);
         let mut state = self
             .state
             .lock()
-            .map_err(|_| AxonError::internal("provisional_bootstrap_key_lock_poisoned"))?;
+            .map_err(|_| AxonError::internal("bootstrap_candidate_key_lock_poisoned"))?;
         if let Some((_, existing)) = state.candidates.get(caller_ura) {
             if existing != &key {
                 return Err(AxonError::permission_denied(
-                    "provisional_bootstrap_key_conflict",
+                    "bootstrap_candidate_key_conflict",
                 ));
             }
         }
         state
             .candidates
             .insert(caller_ura.to_string(), (lease_id, key));
-        Ok(ProvisionalBootstrapKeyLease {
+        Ok(BootstrapCandidateKeyLease {
             caller_ura: caller_ura.to_string(),
             lease_id,
             provider: Arc::clone(self),
@@ -196,38 +201,38 @@ impl ProvisionalBootstrapKeyProvider {
         Ok(self
             .state
             .lock()
-            .map_err(|_| AxonError::internal("provisional_bootstrap_key_lock_poisoned"))?
+            .map_err(|_| AxonError::internal("bootstrap_candidate_key_lock_poisoned"))?
             .candidates
             .get(agent_ura)
             .map(|(_, key)| *key))
     }
 }
 
-impl KeyResolver for ProvisionalBootstrapKeyProvider {
+impl KeyResolver for BootstrapCandidateKeyProvider {
     fn resolve(&self, agent_ura: &str) -> Result<VerifyingKey, AxonError> {
         self.key_for(agent_ura)?
             .ok_or_else(|| unknown_bootstrap_key(agent_ura))
     }
 }
 
-/// Lifetime capability for one provisional caller key.
-pub(crate) struct ProvisionalBootstrapKeyLease {
+/// Lifetime capability for one bootstrap candidate key.
+pub(crate) struct BootstrapCandidateKeyLease {
     caller_ura: String,
     lease_id: u64,
-    provider: Arc<ProvisionalBootstrapKeyProvider>,
+    provider: Arc<BootstrapCandidateKeyProvider>,
 }
 
-impl std::fmt::Debug for ProvisionalBootstrapKeyLease {
+impl std::fmt::Debug for BootstrapCandidateKeyLease {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
-            .debug_struct("ProvisionalBootstrapKeyLease")
+            .debug_struct("BootstrapCandidateKeyLease")
             .field("caller_ura", &self.caller_ura)
             .field("lease_id", &self.lease_id)
             .finish_non_exhaustive()
     }
 }
 
-impl Drop for ProvisionalBootstrapKeyLease {
+impl Drop for BootstrapCandidateKeyLease {
     fn drop(&mut self) {
         let Ok(mut state) = self.provider.state.lock() else {
             return;
@@ -450,10 +455,10 @@ mod tests {
     }
 
     #[test]
-    fn provisional_key_lease_requires_digest_binding_and_removes_on_drop() {
-        let provider = Arc::new(ProvisionalBootstrapKeyProvider::default());
+    fn bootstrap_candidate_key_lease_requires_device_caller_and_removes_on_drop() {
+        let provider = Arc::new(BootstrapCandidateKeyProvider::default());
         let key = SigningKey::from_bytes(&[7; 32]).verifying_key();
-        let caller = crate::core::ura::provisional::provisional_ura_for_pubkey(&key.to_bytes());
+        let caller = "easynet:///r/test/device/dev-a";
         let lease = provider.lease_candidate(&caller, key).unwrap();
         assert_eq!(provider.resolve(&caller).unwrap(), key);
         drop(lease);

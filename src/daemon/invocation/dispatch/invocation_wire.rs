@@ -213,13 +213,11 @@ impl ProtoEnvelope {
         })
     }
 
-    pub fn federation_join_genesis(
-        provisional_caller_ura: impl Into<String>,
+    pub fn federation_join_bootstrap(
         hub_ura: impl Into<String>,
         membership_ura: impl Into<String>,
         derivation_policy: InvocationDerivationPolicy,
     ) -> anyhow::Result<Self> {
-        let caller_ura = checked_provisional_ura(provisional_caller_ura.into())?;
         let hub_ura = checked_ura(hub_ura.into(), "hub_ura")?;
         let membership_ura = checked_ura(membership_ura.into(), "membership_ura")?;
 
@@ -249,7 +247,7 @@ impl ProtoEnvelope {
         try_entity_ref(membership_ura.clone())?;
 
         let canonical = CanonicalEnvelopeBuilder::new(
-            AgentIdentity::new(caller_ura, UraProfile::StrictV2),
+            AgentIdentity::new(membership_ura.clone(), UraProfile::StrictV2),
             AgentIdentity::new(hub_ura, UraProfile::StrictV2),
             SubjectIdentity::new(membership_ura, UraProfile::StrictV2),
             derivation_policy,
@@ -646,17 +644,6 @@ fn checked_ura(ura: String, field: &str) -> anyhow::Result<String> {
         .map_err(|error| anyhow::anyhow!("{field} {error}"))
 }
 
-fn checked_provisional_ura(ura: String) -> anyhow::Result<String> {
-    let ura = ura.trim().to_string();
-    let Some(digest) = ura.strip_prefix("provisional:") else {
-        anyhow::bail!("provisional_caller_ura must start with `provisional:`");
-    };
-    if digest.len() != 64 || !digest.chars().all(|ch| ch.is_ascii_hexdigit()) {
-        anyhow::bail!("provisional_caller_ura must be `provisional:` plus 64 hex characters");
-    }
-    Ok(ura)
-}
-
 pub(crate) fn try_entity_ref(ura: String) -> anyhow::Result<EntityRef> {
     let kind = EntityRefKindResolution::from_ura(&ura)?.protobuf_kind();
     Ok(EntityRef {
@@ -1032,12 +1019,11 @@ mod tests {
     }
 
     #[test]
-    fn target_rejects_provisional_caller() {
-        let provisional = format!("provisional:{}", "a".repeat(64));
+    fn target_rejects_non_ura_caller() {
         let hub = crate::core::ura::hub_ura("acme");
         let subject = "easynet:///r/acme/device/dev-a";
         let err = ProtoEnvelope::from_target(
-            provisional,
+            "not-a-ura",
             hub,
             subject,
             InvocationDerivationPolicy::FreshRoot,
@@ -1087,12 +1073,10 @@ mod tests {
     }
 
     #[test]
-    fn federation_join_genesis_accepts_only_provisional_join_tuple() {
-        let provisional = format!("provisional:{}", "a".repeat(64));
+    fn federation_join_bootstrap_uses_membership_ura_as_caller() {
         let hub = crate::core::ura::hub_ura("acme");
         let membership = "easynet:///r/acme/device/dev-a";
-        let env = ProtoEnvelope::federation_join_genesis(
-            &provisional,
+        let env = ProtoEnvelope::federation_join_bootstrap(
             &hub,
             membership,
             InvocationDerivationPolicy::FreshRoot,
@@ -1100,12 +1084,11 @@ mod tests {
         .unwrap()
         .into_inner("federation.join", b"{}")
         .unwrap();
-        assert_eq!(env.caller.unwrap().ura, provisional);
+        assert_eq!(env.caller.unwrap().ura, membership);
         assert_eq!(env.callee.unwrap().ura, hub);
         assert_eq!(env.subject.unwrap().ura, membership);
 
-        let cross_realm = ProtoEnvelope::federation_join_genesis(
-            format!("provisional:{}", "b".repeat(64)),
+        let cross_realm = ProtoEnvelope::federation_join_bootstrap(
             crate::core::ura::hub_ura("acme"),
             "easynet:///r/other/device/dev-a",
             InvocationDerivationPolicy::FreshRoot,

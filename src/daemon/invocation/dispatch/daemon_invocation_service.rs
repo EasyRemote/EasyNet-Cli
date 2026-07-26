@@ -417,8 +417,8 @@ fn invocation_attempt_audit_status(error: anyhow::Error) -> Status {
 
 use axon_sdk::pb::axon::v1::invocation_server::Invocation;
 use axon_sdk::pb::axon::v1::{
-    InvokeBidiDown, InvokeBidiUp, InvokeRequest, InvokeResponse, InvokeServerStreamRequest,
-    InvokeStreamChunk,
+    Envelope, InvokeBidiDown, InvokeBidiUp, InvokeRequest, InvokeResponse,
+    InvokeServerStreamRequest, InvokeStreamChunk,
 };
 
 /// gRPC `Invocation` service hosted by `easynet-daemon`.
@@ -942,7 +942,7 @@ impl DaemonInvocationService {
         let envelope = request.envelope.as_ref().ok_or_else(|| {
             Status::invalid_argument(format!("{}: envelope is required", route.name()))
         })?;
-        let caller_ura = envelope
+        envelope
             .caller
             .as_ref()
             .map(|caller| caller.ura.trim())
@@ -951,8 +951,10 @@ impl DaemonInvocationService {
                 Status::invalid_argument(format!("{}: envelope caller is required", route.name()))
             })?;
 
-        if caller_ura.starts_with("provisional:") {
-            let proof = crate::daemon::invocation::dispatch::daemon_route_runtime::ProvisionalJoinProof::verify(
+        if route == DaemonUnaryRoute::FederationJoin
+            && FederationJoinBootstrapTuple::matches(envelope)
+        {
+            let proof = crate::daemon::invocation::dispatch::daemon_route_runtime::BootstrapJoinProof::verify(
                 route, request,
             )?;
             let key_provider = self
@@ -960,10 +962,10 @@ impl DaemonInvocationService {
                 .daemon_admission_graph()
                 .ok_or_else(|| {
                     Status::failed_precondition(
-                        "federation.join provisional bootstrap requires the LocalRuntime admission resolver",
+                        "federation.join bootstrap requires the LocalRuntime admission resolver",
                     )
                 })?
-                .provisional_bootstrap_provider();
+                .bootstrap_candidate_provider();
             return Ok(DaemonRouteIngress::Bootstrap {
                 proof,
                 key_provider,
@@ -1357,6 +1359,55 @@ impl DaemonInvocationService {
     pub fn with_subscribe_v2_heartbeat_interval_ms(mut self, ms: std::num::NonZeroU64) -> Self {
         self.directory.subscribe_v2_heartbeat_interval_ms = ms.get();
         self
+    }
+}
+
+struct FederationJoinBootstrapTuple;
+
+impl FederationJoinBootstrapTuple {
+    fn matches(envelope: &Envelope) -> bool {
+        let Some(caller_ura) = envelope
+            .caller
+            .as_ref()
+            .map(|identity| identity.ura.trim())
+            .filter(|ura| !ura.is_empty())
+        else {
+            return false;
+        };
+        let Some(callee_ura) = envelope
+            .callee
+            .as_ref()
+            .map(|identity| identity.ura.trim())
+            .filter(|ura| !ura.is_empty())
+        else {
+            return false;
+        };
+        let Some(subject_ura) = envelope
+            .subject
+            .as_ref()
+            .map(|identity| identity.ura.trim())
+            .filter(|ura| !ura.is_empty())
+        else {
+            return false;
+        };
+        if caller_ura != subject_ura {
+            return false;
+        }
+
+        let Ok(caller) = crate::core::ura::parse_ura(caller_ura) else {
+            return false;
+        };
+        let Ok(callee) = crate::core::ura::parse_ura(callee_ura) else {
+            return false;
+        };
+        let Ok(subject) = crate::core::ura::parse_ura(subject_ura) else {
+            return false;
+        };
+        caller.kind == crate::core::ura::URAKind::Device
+            && callee.kind == crate::core::ura::URAKind::Authority
+            && subject.kind == crate::core::ura::URAKind::Device
+            && caller.realm == callee.realm
+            && caller.realm == subject.realm
     }
 }
 

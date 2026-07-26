@@ -50,7 +50,7 @@ pub enum WireDispatchIngress {
     ExternalSigned(CallerSignature),
     /// First-join signature whose candidate key is leased into the CLI
     /// admission resolver for canonical Axon verification.
-    ProvisionalBootstrap(CallerSignature),
+    BootstrapCandidate(CallerSignature),
     /// Explicit daemon/session-local dispatch signed by `_system.local`.
     LocalSystem,
 }
@@ -69,8 +69,8 @@ pub struct WireDispatch {
     /// runtime so the ledger record carries it.
     pub trace_id: String,
     local_system_authority: Option<LocalSystemAuthority>,
-    provisional_key_lease:
-        Option<crate::daemon::axon_bridge::runtime_admin::ProvisionalBootstrapKeyLease>,
+    bootstrap_candidate_key_lease:
+        Option<crate::daemon::axon_bridge::runtime_admin::BootstrapCandidateKeyLease>,
 }
 
 #[derive(Debug)]
@@ -114,7 +114,7 @@ fn dispatch_from_wire_parts(
         trace_id: reassembled.trace_id,
         local_system_authority: matches!(policy, WireIngressPolicy::LocalSystem)
             .then_some(LocalSystemAuthority),
-        provisional_key_lease: None,
+        bootstrap_candidate_key_lease: None,
     })
 }
 
@@ -164,13 +164,13 @@ pub(crate) fn local_system_from_wire_parts(
     )
 }
 
-pub(crate) fn provisional_bootstrap_from_wire_parts(
+pub(crate) fn bootstrap_candidate_from_wire_parts(
     envelope: pb::Envelope,
     target_ability_name: String,
     initial_args: Vec<u8>,
     request_metadata: HashMap<String, String>,
     public_key: [u8; 32],
-    key_provider: &Arc<crate::daemon::axon_bridge::runtime_admin::ProvisionalBootstrapKeyProvider>,
+    key_provider: &Arc<crate::daemon::axon_bridge::runtime_admin::BootstrapCandidateKeyProvider>,
 ) -> Result<WireDispatch, Box<AxonError>> {
     let reassembled =
         descriptor_bound_from_wire_parts(envelope.clone(), target_ability_name, &initial_args)
@@ -182,27 +182,27 @@ pub(crate) fn provisional_bootstrap_from_wire_parts(
         .into();
     let verifying_key = ed25519_dalek::VerifyingKey::from_bytes(&public_key).map_err(|error| {
         Box::new(AxonError::invalid_argument(format!(
-            "provisional_bootstrap_public_key:{error}"
+            "bootstrap_candidate_public_key:{error}"
         )))
     })?;
-    let provisional_key_lease = key_provider
+    let bootstrap_candidate_key_lease = key_provider
         .lease_candidate(&reassembled.envelope.envelope().caller.ura, verifying_key)
         .map_err(Box::new)?;
     Ok(WireDispatch {
         envelope: reassembled.envelope,
-        ingress: WireDispatchIngress::ProvisionalBootstrap(signature),
+        ingress: WireDispatchIngress::BootstrapCandidate(signature),
         payload: initial_args,
         request_metadata,
         trace_id: reassembled.trace_id,
         local_system_authority: None,
-        provisional_key_lease: Some(provisional_key_lease),
+        bootstrap_candidate_key_lease: Some(bootstrap_candidate_key_lease),
     })
 }
 
 struct PreparedWireDispatch {
     request: DescriptorBoundInvocationRequest,
-    _provisional_key_lease:
-        Option<crate::daemon::axon_bridge::runtime_admin::ProvisionalBootstrapKeyLease>,
+    _bootstrap_candidate_key_lease:
+        Option<crate::daemon::axon_bridge::runtime_admin::BootstrapCandidateKeyLease>,
 }
 
 fn request_for_wire_dispatch(
@@ -216,7 +216,7 @@ fn request_for_wire_dispatch(
         request_metadata,
         trace_id,
         local_system_authority,
-        provisional_key_lease,
+        bootstrap_candidate_key_lease,
     } = wire;
     let ingress = match ingress {
         WireDispatchIngress::ExternalSigned(signature) => LocalRuntimeIngress::ExternalSigned {
@@ -224,13 +224,11 @@ fn request_for_wire_dispatch(
             signature,
             payload,
         },
-        WireDispatchIngress::ProvisionalBootstrap(signature) => {
-            LocalRuntimeIngress::ExternalSigned {
-                envelope,
-                signature,
-                payload,
-            }
-        }
+        WireDispatchIngress::BootstrapCandidate(signature) => LocalRuntimeIngress::ExternalSigned {
+            envelope,
+            signature,
+            payload,
+        },
         WireDispatchIngress::LocalSystem => {
             local_system_authority.ok_or_else(|| {
                 AxonError::permission_denied(
@@ -247,7 +245,7 @@ fn request_for_wire_dispatch(
             )?;
             return Ok(PreparedWireDispatch {
                 request,
-                _provisional_key_lease: provisional_key_lease,
+                _bootstrap_candidate_key_lease: bootstrap_candidate_key_lease,
             });
         }
     };
@@ -260,7 +258,7 @@ fn request_for_wire_dispatch(
     )?;
     Ok(PreparedWireDispatch {
         request,
-        _provisional_key_lease: provisional_key_lease,
+        _bootstrap_candidate_key_lease: bootstrap_candidate_key_lease,
     })
 }
 

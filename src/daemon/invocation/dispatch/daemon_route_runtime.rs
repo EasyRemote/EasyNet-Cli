@@ -80,21 +80,19 @@ pub(crate) enum DaemonRouteIngress {
     ExternalSigned,
     TrustedLocalSystem,
     Bootstrap {
-        proof: ProvisionalJoinProof,
-        key_provider:
-            Arc<crate::daemon::axon_bridge::runtime_admin::ProvisionalBootstrapKeyProvider>,
+        proof: BootstrapJoinProof,
+        key_provider: Arc<crate::daemon::axon_bridge::runtime_admin::BootstrapCandidateKeyProvider>,
     },
 }
 
 /// Self-contained federation bootstrap claim derived from the join key.
 ///
-/// This value proves that the provisional caller digest, membership subject,
-/// realm, route, and payload are one immutable claim. It is transport policy
-/// context only: accepting its signature and nonce still belongs exclusively
-/// to Axon LocalRuntime's bootstrap admission mode.
+/// This value proves that the canonical membership caller, membership subject,
+/// realm, route, public key, and payload are one immutable claim. It is
+/// transport policy context only: accepting its signature and nonce still
+/// belongs exclusively to Axon LocalRuntime's bootstrap admission mode.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ProvisionalJoinProof {
-    caller_digest: [u8; 32],
+pub(crate) struct BootstrapJoinProof {
     public_key: [u8; 32],
     membership_ura: String,
     realm: String,
@@ -102,11 +100,11 @@ pub(crate) struct ProvisionalJoinProof {
     args_digest: [u8; 32],
 }
 
-impl ProvisionalJoinProof {
+impl BootstrapJoinProof {
     pub(crate) fn verify(route: DaemonUnaryRoute, request: &InvokeRequest) -> Result<Self, Status> {
         if route != DaemonUnaryRoute::FederationJoin {
             return Err(Status::permission_denied(
-                "provisional bootstrap is restricted to federation.join",
+                "bootstrap join is restricted to federation.join",
             ));
         }
         let envelope = request.envelope.as_ref().ok_or_else(|| {
@@ -129,16 +127,8 @@ impl ProvisionalJoinProof {
                 bytes.len()
             ))
         })?;
-        let expected_digest: [u8; 32] = Sha256::digest(public_key).into();
-        let caller_digest = provisional_caller_digest(envelope)?;
-        if !constant_time_eq_32(&caller_digest, &expected_digest) {
-            return Err(Status::permission_denied(
-                "federation.join provisional caller does not match join public key",
-            ));
-        }
         validate_join_tuple(envelope, &join)?;
         Ok(Self {
-            caller_digest,
             public_key,
             membership_ura: join.membership_ura,
             realm: join.realm,
@@ -154,17 +144,14 @@ impl ProvisionalJoinProof {
     ) -> Result<(), Status> {
         if route.name() != self.ability {
             return Err(Status::permission_denied(
-                "provisional bootstrap route binding mismatch",
+                "bootstrap join route binding mismatch",
             ));
         }
         let envelope = request.envelope.as_ref().ok_or_else(|| {
             Status::invalid_argument("federation.join bootstrap envelope is required")
         })?;
-        let presented_caller_digest = provisional_caller_digest(envelope)?;
         let presented_args_digest: [u8; 32] = Sha256::digest(&request.arguments).into();
-        if !constant_time_eq_32(&presented_caller_digest, &self.caller_digest)
-            || !constant_time_eq_32(&presented_args_digest, &self.args_digest)
-        {
+        if !constant_time_eq_32(&presented_args_digest, &self.args_digest) {
             return Err(Status::permission_denied(
                 "federation.join bootstrap claim changed after verification",
             ));
@@ -344,7 +331,7 @@ impl DaemonRouteRuntimeAdapter {
                         request.target.as_ref(),
                     )?
                     .into_descriptor_ref();
-                crate::daemon::axon_bridge::descriptor_bound_dispatch::provisional_bootstrap_from_wire_parts(
+                crate::daemon::axon_bridge::descriptor_bound_dispatch::bootstrap_candidate_from_wire_parts(
                     envelope,
                     signed_ref,
                     request.arguments.clone(),
@@ -813,33 +800,16 @@ async fn send_pending_bidi_admission(
     }
 }
 
-fn provisional_caller_digest(envelope: &Envelope) -> Result<[u8; 32], Status> {
+fn validate_join_tuple(
+    envelope: &Envelope,
+    join: &crate::daemon::invocation::dispatch::federation_wrappers::JoinRequest,
+) -> Result<(), Status> {
     let caller = envelope
         .caller
         .as_ref()
         .map(|caller| caller.ura.trim())
         .filter(|caller| !caller.is_empty())
         .ok_or_else(|| Status::invalid_argument("federation.join bootstrap caller is required"))?;
-    let encoded = caller.strip_prefix("provisional:").ok_or_else(|| {
-        Status::permission_denied("federation.join bootstrap caller must be provisional")
-    })?;
-    if encoded.len() != 64 || !encoded.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Err(Status::permission_denied(
-            "federation.join provisional caller digest is malformed",
-        ));
-    }
-    hex::decode(encoded)
-        .map_err(|_| Status::permission_denied("federation.join provisional caller is malformed"))?
-        .try_into()
-        .map_err(|_| {
-            Status::permission_denied("federation.join provisional digest length mismatch")
-        })
-}
-
-fn validate_join_tuple(
-    envelope: &Envelope,
-    join: &crate::daemon::invocation::dispatch::federation_wrappers::JoinRequest,
-) -> Result<(), Status> {
     let callee = envelope
         .callee
         .as_ref()
@@ -857,15 +827,23 @@ fn validate_join_tuple(
             "federation.join bootstrap callee is invalid: {error}"
         ))
     })?;
+    let caller_parsed = crate::core::ura::parse_ura(caller).map_err(|error| {
+        Status::invalid_argument(format!(
+            "federation.join bootstrap caller is invalid: {error}"
+        ))
+    })?;
     let subject_parsed = crate::core::ura::parse_ura(subject).map_err(|error| {
         Status::invalid_argument(format!(
             "federation.join bootstrap subject is invalid: {error}"
         ))
     })?;
     if callee.kind != crate::core::ura::URAKind::Authority
+        || caller_parsed.kind != crate::core::ura::URAKind::Device
         || subject_parsed.kind != crate::core::ura::URAKind::Device
+        || join.membership_ura != caller
         || join.membership_ura != subject
         || join.realm != callee.realm
+        || join.realm != caller_parsed.realm
         || join.realm != subject_parsed.realm
     {
         return Err(Status::permission_denied(
@@ -885,21 +863,19 @@ fn constant_time_eq_32(left: &[u8; 32], right: &[u8; 32]) -> bool {
 }
 
 #[cfg(test)]
-mod provisional_join_proof_tests {
+mod bootstrap_join_proof_tests {
     use super::*;
 
     fn join_request(public_key: [u8; 32]) -> InvokeRequest {
         let public_key_hex = hex::encode(public_key);
         let membership_ura = "easynet:///r/bootstrap-test/device/node-1";
-        let caller = crate::core::ura::provisional::provisional_ura_for_pubkey(&public_key);
         let arguments = serde_json::to_vec(&serde_json::json!({
             "membership_ura": membership_ura,
             "realm": "bootstrap-test",
             "public_key_hex": public_key_hex,
         }))
         .expect("join arguments");
-        crate::daemon::invocation::ProtoEnvelope::federation_join_genesis(
-            caller,
+        crate::daemon::invocation::ProtoEnvelope::federation_join_bootstrap(
             crate::core::ura::hub_ura("bootstrap-test"),
             membership_ura,
             crate::daemon::invocation::InvocationDerivationPolicy::FreshRoot,
@@ -910,7 +886,7 @@ mod provisional_join_proof_tests {
     }
 
     #[test]
-    fn arbitrary_provisional_format_is_rejected() {
+    fn non_ura_caller_is_rejected() {
         let mut request = join_request([0x11; 32]);
         request
             .envelope
@@ -919,27 +895,41 @@ mod provisional_join_proof_tests {
             .caller
             .as_mut()
             .expect("caller")
-            .ura = "provisional:attacker-key".to_string();
-        assert!(ProvisionalJoinProof::verify(DaemonUnaryRoute::FederationJoin, &request).is_err());
+            .ura = "not-a-ura".to_string();
+        assert!(BootstrapJoinProof::verify(DaemonUnaryRoute::FederationJoin, &request).is_err());
     }
 
     #[test]
-    fn mismatched_join_key_is_rejected() {
+    fn membership_caller_mismatch_is_rejected() {
+        let mut request = join_request([0x12; 32]);
+        request
+            .envelope
+            .as_mut()
+            .expect("envelope")
+            .caller
+            .as_mut()
+            .expect("caller")
+            .ura = "easynet:///r/bootstrap-test/device/other-node".to_string();
+        assert!(BootstrapJoinProof::verify(DaemonUnaryRoute::FederationJoin, &request).is_err());
+    }
+
+    #[test]
+    fn malformed_join_key_is_rejected() {
         let mut request = join_request([0x22; 32]);
         let arguments = serde_json::to_vec(&serde_json::json!({
             "membership_ura": "easynet:///r/bootstrap-test/device/node-1",
             "realm": "bootstrap-test",
-            "public_key_hex": hex::encode([0x23; 32]),
+            "public_key_hex": hex::encode([0x23; 31]),
         }))
         .expect("substituted join arguments");
         request.arguments = arguments;
-        assert!(ProvisionalJoinProof::verify(DaemonUnaryRoute::FederationJoin, &request).is_err());
+        assert!(BootstrapJoinProof::verify(DaemonUnaryRoute::FederationJoin, &request).is_err());
     }
 
     #[test]
     fn payload_substitution_after_proof_is_rejected() {
         let mut request = join_request([0x33; 32]);
-        let proof = ProvisionalJoinProof::verify(DaemonUnaryRoute::FederationJoin, &request)
+        let proof = BootstrapJoinProof::verify(DaemonUnaryRoute::FederationJoin, &request)
             .expect("valid proof");
         request.arguments.push(b' ');
         assert!(proof
@@ -948,11 +938,9 @@ mod provisional_join_proof_tests {
     }
 
     #[test]
-    fn provisional_identity_on_non_join_route_is_rejected() {
+    fn bootstrap_candidate_on_non_join_route_is_rejected() {
         let request = join_request([0x44; 32]);
-        assert!(
-            ProvisionalJoinProof::verify(DaemonUnaryRoute::FederationStatus, &request).is_err()
-        );
+        assert!(BootstrapJoinProof::verify(DaemonUnaryRoute::FederationStatus, &request).is_err());
     }
 }
 

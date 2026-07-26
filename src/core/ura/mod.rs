@@ -38,8 +38,6 @@
 
 pub use axon_sdk::ura::*;
 
-pub mod provisional;
-
 /// EasyNet product default realm.
 ///
 /// This policy default is intentionally owned by the CLI facade rather than

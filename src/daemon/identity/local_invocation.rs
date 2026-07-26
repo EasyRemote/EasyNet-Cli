@@ -208,7 +208,7 @@ fn control_discovery_daemon_ura() -> anyhow::Result<Option<String>> {
 ///
 /// - daemon trust-anchor identities;
 /// - product bootstrap identities;
-/// - request-scoped provisional bootstrap candidates;
+/// - request-scoped bootstrap candidate keys;
 /// - receipt-signer public projections.
 ///
 /// `_system.local` remains a bounded exact-match branch backed by the daemon
@@ -217,8 +217,8 @@ pub struct CanonicalAdmissionKeyResolver {
     trusted_identities: Arc<dyn KeyResolver>,
     bootstrap_identities:
         Arc<crate::daemon::axon_bridge::runtime_admin::RuntimeBootstrapIdentityProvider>,
-    provisional_bootstrap:
-        Arc<crate::daemon::axon_bridge::runtime_admin::ProvisionalBootstrapKeyProvider>,
+    bootstrap_candidate:
+        Arc<crate::daemon::axon_bridge::runtime_admin::BootstrapCandidateKeyProvider>,
     receipt_signers: Arc<dyn CanonicalReceiptProvider>,
 }
 
@@ -228,15 +228,15 @@ impl CanonicalAdmissionKeyResolver {
         bootstrap_identities: Arc<
             crate::daemon::axon_bridge::runtime_admin::RuntimeBootstrapIdentityProvider,
         >,
-        provisional_bootstrap: Arc<
-            crate::daemon::axon_bridge::runtime_admin::ProvisionalBootstrapKeyProvider,
+        bootstrap_candidate: Arc<
+            crate::daemon::axon_bridge::runtime_admin::BootstrapCandidateKeyProvider,
         >,
         receipt_signers: Arc<dyn CanonicalReceiptProvider>,
     ) -> Self {
         Self {
             trusted_identities,
             bootstrap_identities,
-            provisional_bootstrap,
+            bootstrap_candidate,
             receipt_signers,
         }
     }
@@ -247,10 +247,10 @@ impl CanonicalAdmissionKeyResolver {
         Arc::clone(&self.bootstrap_identities)
     }
 
-    pub(crate) fn provisional_bootstrap_provider(
+    pub(crate) fn bootstrap_candidate_provider(
         &self,
-    ) -> Arc<crate::daemon::axon_bridge::runtime_admin::ProvisionalBootstrapKeyProvider> {
-        Arc::clone(&self.provisional_bootstrap)
+    ) -> Arc<crate::daemon::axon_bridge::runtime_admin::BootstrapCandidateKeyProvider> {
+        Arc::clone(&self.bootstrap_candidate)
     }
 
     fn unknown_agent_key(agent_ura: &str) -> AxonError {
@@ -296,7 +296,7 @@ impl KeyResolver for CanonicalAdmissionKeyResolver {
                 Self::append_unique(&mut keys, key);
             }
         }
-        if let Some(key) = self.provisional_bootstrap.key_for(agent_ura)? {
+        if let Some(key) = self.bootstrap_candidate.key_for(agent_ura)? {
             Self::append_unique(&mut keys, key);
         }
         match self.trusted_identities.resolve_all(agent_ura) {
@@ -331,7 +331,7 @@ mod tests {
         CanonicalAdmissionKeyResolver,
     };
     use crate::daemon::axon_bridge::runtime_admin::{
-        ProvisionalBootstrapKeyProvider, RuntimeBootstrapIdentityProvider,
+        BootstrapCandidateKeyProvider, RuntimeBootstrapIdentityProvider,
     };
     use crate::daemon::control::discovery::{
         self, ControlDiscovery, DaemonIdentity, IpcVersionRange, IPC_VERSION_V1,
@@ -390,7 +390,7 @@ mod tests {
             CanonicalAdmissionKeyResolver::new(
                 trusted_identities,
                 Arc::new(RuntimeBootstrapIdentityProvider::default()),
-                Arc::new(ProvisionalBootstrapKeyProvider::default()),
+                Arc::new(BootstrapCandidateKeyProvider::default()),
                 receipt_signers,
             ),
             key,

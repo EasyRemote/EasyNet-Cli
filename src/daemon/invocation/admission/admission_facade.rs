@@ -353,7 +353,7 @@ const MAX_PENDING_RUNTIME_ADMISSIONS: usize = 4_096;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RuntimeAdmissionIngress {
     CallerSigned,
-    ProvisionalBootstrap,
+    BootstrapCandidate,
     TrustedLocalSystem,
 }
 
@@ -421,7 +421,7 @@ impl DaemonRuntimeAdmissionCoordinator {
             crate::daemon::axon_bridge::descriptor_bound_dispatch::WireDispatchIngress::ExternalSigned(_) => {
                 Some(wire_caller_signature(wire)?)
             }
-            crate::daemon::axon_bridge::descriptor_bound_dispatch::WireDispatchIngress::ProvisionalBootstrap(
+            crate::daemon::axon_bridge::descriptor_bound_dispatch::WireDispatchIngress::BootstrapCandidate(
                 _,
             ) => Some(wire_caller_signature(wire)?),
             crate::daemon::axon_bridge::descriptor_bound_dispatch::WireDispatchIngress::LocalSystem => {
@@ -432,9 +432,9 @@ impl DaemonRuntimeAdmissionCoordinator {
             crate::daemon::axon_bridge::descriptor_bound_dispatch::WireDispatchIngress::ExternalSigned(_) => {
                 RuntimeAdmissionIngress::CallerSigned
             }
-            crate::daemon::axon_bridge::descriptor_bound_dispatch::WireDispatchIngress::ProvisionalBootstrap(
+            crate::daemon::axon_bridge::descriptor_bound_dispatch::WireDispatchIngress::BootstrapCandidate(
                 _,
-            ) => RuntimeAdmissionIngress::ProvisionalBootstrap,
+            ) => RuntimeAdmissionIngress::BootstrapCandidate,
             crate::daemon::axon_bridge::descriptor_bound_dispatch::WireDispatchIngress::LocalSystem => {
                 RuntimeAdmissionIngress::TrustedLocalSystem
             }
@@ -1018,8 +1018,8 @@ impl AdmissionFacade {
                     RuntimeAdmissionReservation { quota: None },
                 );
             }
-            RuntimeAdmissionIngress::ProvisionalBootstrap => {
-                Self::verify_provisional_federation_join(
+            RuntimeAdmissionIngress::BootstrapCandidate => {
+                Self::verify_bootstrap_federation_join(
                     &input.envelope,
                     &input.ability,
                     &input.arguments,
@@ -1344,7 +1344,7 @@ impl AdmissionFacade {
         }
     }
 
-    fn verify_provisional_federation_join(
+    fn verify_bootstrap_federation_join(
         envelope: &Envelope,
         ability: &str,
         args: &[u8],
@@ -1355,18 +1355,10 @@ impl AdmissionFacade {
                     .caller
                     .as_ref()
                     .map(|caller| caller.ura.as_str())
-                    .unwrap_or("provisional:<missing>"),
+                    .unwrap_or("<missing>"),
             ));
         }
         let caller = caller_ura_required(envelope)?;
-        let digest = caller.strip_prefix("provisional:").ok_or_else(|| {
-            Status::invalid_argument("federation.join provisional caller missing prefix")
-        })?;
-        if digest.len() != 64 || !digest.chars().all(|ch| ch.is_ascii_hexdigit()) {
-            return Err(Status::invalid_argument(
-                "federation.join provisional caller must be `provisional:` plus 64 hex characters",
-            ));
-        }
         let callee_ura = envelope
             .callee
             .as_ref()
@@ -1390,6 +1382,15 @@ impl AdmissionFacade {
                 callee.kind
             )));
         }
+        let caller_parsed = crate::core::ura::parse_ura(caller).map_err(|err| {
+            Status::invalid_argument(format!("federation.join caller is not a device URA: {err}"))
+        })?;
+        if caller_parsed.kind != crate::core::ura::URAKind::Device {
+            return Err(Status::invalid_argument(format!(
+                "federation.join caller must identify a device, got {:?}",
+                caller_parsed.kind
+            )));
+        }
         let subject = crate::core::ura::parse_ura(subject_ura).map_err(|err| {
             Status::invalid_argument(format!(
                 "federation.join subject is not a device URA: {err}"
@@ -1405,11 +1406,19 @@ impl AdmissionFacade {
             serde_json::from_slice(args).map_err(|err| {
                 Status::invalid_argument(format!("federation.join args JSON decode failed: {err}"))
             })?;
-        if request.realm != callee.realm || request.realm != subject.realm {
+        if request.realm != callee.realm
+            || request.realm != caller_parsed.realm
+            || request.realm != subject.realm
+        {
             return Err(Status::invalid_argument(format!(
-                "federation.join realm mismatch: request={}, callee={}, subject={}",
-                request.realm, callee.realm, subject.realm
+                "federation.join realm mismatch: request={}, callee={}, caller={}, subject={}",
+                request.realm, callee.realm, caller_parsed.realm, subject.realm
             )));
+        }
+        if request.membership_ura != caller {
+            return Err(Status::invalid_argument(
+                "federation.join membership_ura must match envelope caller",
+            ));
         }
         if request.membership_ura != subject_ura {
             return Err(Status::invalid_argument(
@@ -1424,25 +1433,6 @@ impl AdmissionFacade {
                 "federation.join public_key_hex must decode to 32 bytes, got {}",
                 public_key.len()
             )));
-        }
-        let presented_digest: [u8; 32] = hex::decode(digest)
-            .map_err(|err| {
-                Status::invalid_argument(format!(
-                    "federation.join provisional caller digest is not hex: {err}"
-                ))
-            })?
-            .try_into()
-            .map_err(|bytes: Vec<u8>| {
-                Status::invalid_argument(format!(
-                    "federation.join provisional caller digest must decode to 32 bytes, got {}",
-                    bytes.len()
-                ))
-            })?;
-        let expected_digest: [u8; 32] = sha2::Sha256::digest(&public_key).into();
-        if presented_digest != expected_digest {
-            return Err(Status::permission_denied(
-                "federation.join provisional caller does not match public_key_hex",
-            ));
         }
         Ok(())
     }
@@ -1691,7 +1681,7 @@ fn wire_caller_signature(
         crate::daemon::axon_bridge::descriptor_bound_dispatch::WireDispatchIngress::ExternalSigned(
             signature,
         )
-        | crate::daemon::axon_bridge::descriptor_bound_dispatch::WireDispatchIngress::ProvisionalBootstrap(
+        | crate::daemon::axon_bridge::descriptor_bound_dispatch::WireDispatchIngress::BootstrapCandidate(
             signature,
         ) => Ok(signature.clone()),
         crate::daemon::axon_bridge::descriptor_bound_dispatch::WireDispatchIngress::LocalSystem => Err(

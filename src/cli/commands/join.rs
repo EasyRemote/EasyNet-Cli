@@ -710,17 +710,16 @@ struct UraJoinResult {
 }
 
 #[cfg(feature = "axon-pb")]
-struct ProvisionalJoinSigner {
-    provisional_ura: String,
+struct BootstrapJoinSigner {
     device_ura: String,
     public_key: ed25519_dalek::VerifyingKey,
 }
 
 #[cfg(feature = "axon-pb")]
 #[async_trait::async_trait]
-impl crate::daemon::identity::self_identity::CanonicalSigner for ProvisionalJoinSigner {
+impl crate::daemon::identity::self_identity::CanonicalSigner for BootstrapJoinSigner {
     fn owner_ura(&self) -> &str {
-        &self.provisional_ura
+        &self.device_ura
     }
 
     async fn sign_canonical(
@@ -743,7 +742,7 @@ impl crate::daemon::identity::self_identity::CanonicalSigner for ProvisionalJoin
         .await
         .map_err(|error| {
             crate::daemon::identity::self_identity::SelfIdentityError::Transport(format!(
-                "provisional join signing worker terminated unexpectedly: {error}"
+                "bootstrap join signing worker terminated unexpectedly: {error}"
             ))
         })?
     }
@@ -827,15 +826,13 @@ async fn do_federation_join_and_resolve_hub_key_async(
     let mut client = InvocationClient::new(channel);
 
     let public_key = hex::decode(public_key_hex).context("decode device public key hex")?;
-    let provisional_caller = crate::core::ura::provisional::provisional_ura_for_pubkey(&public_key);
     let public_key_bytes: [u8; 32] = public_key
         .as_slice()
         .try_into()
         .map_err(|_| anyhow::anyhow!("device public key must be 32 bytes"))?;
     let public_key =
         ed25519_dalek::VerifyingKey::from_bytes(&public_key_bytes).context("decode device key")?;
-    let provisional_signer = ProvisionalJoinSigner {
-        provisional_ura: provisional_caller.clone(),
+    let bootstrap_signer = BootstrapJoinSigner {
         device_ura: membership_ura.to_string(),
         public_key,
     };
@@ -854,8 +851,7 @@ async fn do_federation_join_and_resolve_hub_key_async(
             crate::daemon::ability::CallMode::Rpc,
         )
         .map_err(|err| anyhow::anyhow!("derive federation.join descriptor ref: {err}"))?;
-    let join_request = crate::daemon::invocation::ProtoEnvelope::federation_join_genesis(
-        provisional_caller,
+    let join_request = crate::daemon::invocation::ProtoEnvelope::federation_join_bootstrap(
         target.hub_ura.clone(),
         membership_ura.to_string(),
         crate::daemon::invocation::RootInvocationDerivationIssuer::fresh_root(),
@@ -864,7 +860,7 @@ async fn do_federation_join_and_resolve_hub_key_async(
         crate::daemon::ability::conformance::ABILITY_FEDERATION_JOIN,
         join_descriptor_ref,
         join_arguments,
-        &provisional_signer,
+        &bootstrap_signer,
     )
     .await?;
     let join_response = client.invoke(join_request).await.map_err(|status| {
