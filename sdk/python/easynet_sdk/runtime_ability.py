@@ -44,10 +44,15 @@ RuntimeInvocationAuthority: TypeAlias = DelegationProof | SessionAuthority
 @dataclass(frozen=True)
 class _RuntimeAbilityDispatchPolicy:
     allow_governance_read: bool = False
+    subject_policy: str = "descriptor_bound"
 
 
 _PUBLIC_ACTION_POLICY = _RuntimeAbilityDispatchPolicy()
 _GOVERNANCE_READ_POLICY = _RuntimeAbilityDispatchPolicy(allow_governance_read=True)
+_CATALOGUE_READ_POLICY = _RuntimeAbilityDispatchPolicy(
+    allow_governance_read=True,
+    subject_policy="runtime_owner",
+)
 
 
 @dataclass(frozen=True)
@@ -148,23 +153,17 @@ class RuntimeAbilityClient:
             ability_name
         ):
             raise _invalid(
-                "runtime governance receipt/history abilities must use RuntimeReceiptProvider"
+                "runtime governance receipt/history/catalogue abilities must use RuntimeReceiptProvider or RuntimeAbilityDescriptorProvider"
             )
-        subject = self._addressing.parse_ura(call.subject_ura.strip())
-        if subject.kind in {"user", "authority"}:
-            subject_ura = self._addressing.descriptor_bound_resource_subject_ura(
-                subject.ura, f"invoke/{ability_name}"
-            )
-        elif subject.kind in {"agent", "ability", "device", "resource"}:
-            subject_ura = subject.ura
-        else:
-            raise _invalid(f"subject kind {subject.kind!r} is not descriptor-bound")
+        subject_ura = self._subject_ura(call, ability_name, policy)
         descriptor_ref = self._runtime.resolve_descriptor_ref(
             callee_ura=call.callee_ura.strip(),
             ability=ability_name,
             call_mode=call_mode,
             caller_ura=call.caller_ura.strip(),
-            subject_ura=call.subject_ura.strip(),
+            subject_ura=self._descriptor_resolution_subject_ura(
+                call, subject_ura, policy
+            ),
         )
         ability = _RuntimeAbilityProjection.from_descriptor_ref(
             self._addressing,
@@ -205,6 +204,20 @@ class RuntimeAbilityClient:
             policy=_GOVERNANCE_READ_POLICY,
         )
 
+    def _build_catalogue_read(
+        self,
+        call: RuntimeCallContext,
+        ability_name: str,
+        arguments: object,
+    ) -> InvocationDraft:
+        return self._build(
+            call,
+            ability_name,
+            arguments,
+            call_mode="rpc",
+            policy=_CATALOGUE_READ_POLICY,
+        )
+
     def invoke(
         self, call: RuntimeCallContext, ability_name: str, arguments: object
     ) -> dict[str, object]:
@@ -222,6 +235,45 @@ class RuntimeAbilityClient:
         if not result.ok:
             raise _invocation_failure(result)
         return _runtime_ability_object_output(result)
+
+    def _invoke_catalogue_read(
+        self, call: RuntimeCallContext, ability_name: str, arguments: object
+    ) -> dict[str, object]:
+        result = self._runtime.invoke(
+            self._build_catalogue_read(call, ability_name, arguments)
+        )
+        if not result.ok:
+            raise _invocation_failure(result)
+        return _runtime_ability_object_output(result)
+
+    def _subject_ura(
+        self,
+        call: RuntimeCallContext,
+        ability_name: str,
+        policy: _RuntimeAbilityDispatchPolicy,
+    ) -> str:
+        if policy.subject_policy == "runtime_owner":
+            return call.callee_ura.strip()
+        if policy.subject_policy != "descriptor_bound":
+            raise _invalid("runtime ability subject policy is unsupported")
+        subject = self._addressing.parse_ura(call.subject_ura.strip())
+        if subject.kind in {"user", "authority"}:
+            return self._addressing.descriptor_bound_resource_subject_ura(
+                subject.ura, f"invoke/{ability_name}"
+            )
+        if subject.kind in {"agent", "ability", "device", "resource"}:
+            return subject.ura
+        raise _invalid(f"subject kind {subject.kind!r} is not descriptor-bound")
+
+    @staticmethod
+    def _descriptor_resolution_subject_ura(
+        call: RuntimeCallContext,
+        selected_subject_ura: str,
+        policy: _RuntimeAbilityDispatchPolicy,
+    ) -> str:
+        if policy.subject_policy == "runtime_owner":
+            return selected_subject_ura.strip()
+        return call.subject_ura.strip()
 
     def open_stream(
         self, call: RuntimeCallContext, ability_name: str, arguments: object
@@ -289,8 +341,10 @@ def _validate_runtime_call_context(call: RuntimeCallContext) -> None:
 
 def _is_runtime_governance_read_ability(ability_name: str) -> bool:
     ability_name = ability_name.strip()
-    return ability_name.startswith("invocation.history.") or ability_name.startswith(
-        "invocation.trace."
+    return (
+        ability_name == "meta.list_abilities"
+        or ability_name.startswith("invocation.history.")
+        or ability_name.startswith("invocation.trace.")
     )
 
 

@@ -140,7 +140,7 @@ class _RuntimeAbilityDescriptorRoute:
         call: RuntimeCallContext,
         args: Mapping[str, object],
     ) -> dict[str, object]:
-        return ability.invoke(call, self.list_ability.strip(), dict(args))
+        return ability._invoke_catalogue_read(call, self.list_ability.strip(), dict(args))
 
     def rows(self, output: Mapping[str, object]) -> list[object]:
         raw_rows = output.get(self.rows_field)

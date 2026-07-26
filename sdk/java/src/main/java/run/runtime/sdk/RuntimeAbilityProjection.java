@@ -3,7 +3,8 @@ package run.runtime.sdk;
 final class RuntimeAbilityProjection {
   private static final String ABILITY_PATH_MARKER = "/ability/";
   private static final String REALM_PREFIX = "easynet:///r/";
-  private static final String[] RECEIPT_HISTORY_READ_ABILITIES = {
+  private static final String[] RUNTIME_GOVERNANCE_READ_ABILITIES = {
+    "meta.list_abilities",
     "invocation.history.list",
     "invocation.history.get",
     "invocation.history.path",
@@ -33,15 +34,15 @@ final class RuntimeAbilityProjection {
     return publicName;
   }
 
-  static String receiptHistoryReadAbility(String calleeURA, String descriptorRef) {
+  static String runtimeGovernanceReadAbility(String calleeURA, String descriptorRef) {
     String abilityURA = descriptorAbilityURA(descriptorRef);
     String publicName = publicAbilityName(calleeURA, abilityURA);
     String wireName = descriptorWireAbility(abilityURA);
-    String matched = receiptHistoryReadAbility(publicName);
+    String matched = runtimeGovernanceReadAbility(publicName);
     if (!matched.isBlank()) {
       return matched;
     }
-    return receiptHistoryReadAbility(wireName);
+    return runtimeGovernanceReadAbility(wireName);
   }
 
   private static String descriptorAbilityURA(String descriptorRef) {
@@ -64,9 +65,9 @@ final class RuntimeAbilityProjection {
     return ability;
   }
 
-  private static String receiptHistoryReadAbility(String value) {
+  private static String runtimeGovernanceReadAbility(String value) {
     String clean = value == null ? "" : value.trim();
-    for (String ability : RECEIPT_HISTORY_READ_ABILITIES) {
+    for (String ability : RUNTIME_GOVERNANCE_READ_ABILITIES) {
       if (clean.equals(ability) || clean.endsWith("." + ability)) {
         return ability;
       }

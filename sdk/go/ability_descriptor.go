@@ -136,7 +136,7 @@ func (r runtimeAbilityDescriptorRoute) list(ctx context.Context, ability *Runtim
 	if strings.TrimSpace(r.rowsField) == "" {
 		return nil, invalidAbilityDescriptor("descriptor catalog route rows field is required", nil)
 	}
-	return ability.Invoke(ctx, call, r.listAbility, args)
+	return ability.invokeCatalogueRead(ctx, call, r.listAbility, args)
 }
 
 func (r runtimeAbilityDescriptorRoute) rows(output map[string]any) ([]any, error) {

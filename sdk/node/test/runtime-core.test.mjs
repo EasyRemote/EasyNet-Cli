@@ -1378,8 +1378,32 @@ test("public invocation builder rejects receipt history descriptor before dispat
     (error) =>
       error instanceof sdk.SDKError &&
       error.code === sdk.ErrorCode.INVALID_ARGUMENT &&
-      /receipt history ability `invocation\.history\.list`/.test(error.message) &&
+      /runtime governance read ability `invocation\.history\.list`/.test(error.message) &&
       /SessionHistoryOperations/.test(error.message),
+  );
+});
+
+test("public invocation builder rejects runtime catalogue descriptor before dispatch", () => {
+  const catalogueDescriptor =
+    "easynet:///r/example/ability/authority.meta.list_abilities@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read";
+
+  assert.throws(
+    () =>
+      new sdk.InvocationBuilder()
+        .withCallerURA(caller)
+        .withCalleeURA("easynet:///r/example/authority")
+        .withDescriptorRef(catalogueDescriptor)
+        .withSubjectURA("easynet:///r/example/authority")
+        .withNonceBase64(nonce)
+        .withCausalContext({ form: "none" })
+        .withJSONArgs({ scope: "realm" })
+        .withContentType("application/json")
+        .build(),
+    (error) =>
+      error instanceof sdk.SDKError &&
+      error.code === sdk.ErrorCode.INVALID_ARGUMENT &&
+      /runtime governance read ability `meta\.list_abilities`/.test(error.message) &&
+      /catalogue provider/.test(error.message),
   );
 });
 

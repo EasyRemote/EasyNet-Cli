@@ -70,20 +70,20 @@ public final class InvocationBuilder {
     AuthoritySupport.validateAuthorityMetadata(metadata);
     InvocationTuple tuple =
         new InvocationTuple(caller, callee, descriptor, subject, nonce, causalContext, argsJson, metadata);
-    rejectReceiptHistoryPublicInvocation(tuple);
+    rejectGovernanceReadPublicInvocation(tuple);
     InvocationAuthorityBindingValidator.validate(tuple);
     return new InvocationDraft(tuple);
   }
 
-  private static void rejectReceiptHistoryPublicInvocation(InvocationTuple tuple) {
-    String historyAbility =
-        RuntimeAbilityProjection.receiptHistoryReadAbility(tuple.callee(), tuple.descriptor());
-    if (!historyAbility.isBlank()) {
+  private static void rejectGovernanceReadPublicInvocation(InvocationTuple tuple) {
+    String governanceAbility =
+        RuntimeAbilityProjection.runtimeGovernanceReadAbility(tuple.callee(), tuple.descriptor());
+    if (!governanceAbility.isBlank()) {
       throw SDKError.validation(
           "invocation",
-          "receipt history ability `"
-              + historyAbility
-              + "` is not a public invocation action; use RuntimeReceiptProvider as the canonical invocation history read path");
+          "runtime governance read ability `"
+              + governanceAbility
+              + "` is not a public invocation action; use RuntimeReceiptProvider or RuntimeAbilityDescriptorProvider as the canonical runtime provider path");
     }
   }
 

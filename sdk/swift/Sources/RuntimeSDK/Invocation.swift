@@ -578,7 +578,7 @@ public final class InvocationBuilder {
             argsJSON: argsJSON,
             metadata: metadata
         )
-        try rejectReceiptHistoryPublicInvocation(tuple)
+        try rejectGovernanceReadPublicInvocation(tuple)
         try validateInvocationAuthorityBinding(tuple)
         return InvocationDraft(tuple: tuple)
     }
@@ -588,8 +588,8 @@ public final class InvocationBuilder {
     }
 }
 
-private func rejectReceiptHistoryPublicInvocation(_ tuple: InvocationTuple) throws {
-    guard let historyAbility = try RuntimeAbilityProjection.receiptHistoryReadAbility(
+private func rejectGovernanceReadPublicInvocation(_ tuple: InvocationTuple) throws {
+    guard let governanceAbility = try RuntimeAbilityProjection.runtimeGovernanceReadAbility(
         calleeURA: tuple.callee,
         descriptorRef: tuple.descriptorRef
     ) else {
@@ -597,7 +597,7 @@ private func rejectReceiptHistoryPublicInvocation(_ tuple: InvocationTuple) thro
     }
     throw SDKError.validation(
         "invocation",
-        "receipt history ability `\(historyAbility)` is not a public invocation action; use RuntimeReceiptProvider as the canonical invocation history read path"
+        "runtime governance read ability `\(governanceAbility)` is not a public invocation action; use RuntimeReceiptProvider or RuntimeAbilityDescriptorProvider as the canonical runtime provider path"
     )
 }
 

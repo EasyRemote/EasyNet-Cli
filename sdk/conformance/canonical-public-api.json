@@ -15158,7 +15158,7 @@
           "identity": "ability_invocation_facade",
           "owner_path": "sdk/go/",
           "path": "sdk/go/runtime_ability.go",
-          "sha256": "3347c8e396680be7e045f68448effe789a85299f9346aa46e32a735fa6522480",
+          "sha256": "ad585027e9cc4f8baeecceaa0ee50d51371765ee8ffda933d49709d334bd4337",
           "interface": "RuntimeAbilityClient",
           "revision": "1ce6b68472e8eba06e2e5b31d8c2c1b1c61db55b"
         },
@@ -19575,7 +19575,7 @@
       "RotatePrincipalKeyRequest.command": "2a7eb00639ba9b5d88f0c748b5502d8db1c99dd2f18641baedfdee4d55974b1c",
       "RotatePrincipalKeyRequest.principal_ura": "4bb3bb8f0394d8fd3b826b391ab9cf57c98a4daed72f82a5bce1518a3593aff7",
       "RotatePrincipalKeyRequest.replacement": "c59f920234088b53e9f54c134505c6f01222a0c6d7de1fdc0b2e7d294436240a",
-      "RuntimeAbilityClient": "8728d3385219639bafa7ca7d4f6dbf398a774e14baaf9c541f43fe5d3e0d9aab",
+      "RuntimeAbilityClient": "0360b31bd3ebf196fa64c31b29bb4ab8e8e83ae977cc5612a3a82e823b25bbb0",
       "RuntimeAbilityClient.await_result": "c24f91cdaf2e1391f583015307f694a74688998ed98c83baa59367826f6b2c36",
       "RuntimeAbilityClient.build": "f4964e82331e4ec224b518a3a4b23163946d1549e82cf41b26a8b118695bc038",
       "RuntimeAbilityClient.cancel": "94a3aa890b237a5b9a67496ae4af74f6109ab571363a20aa7d4b584d6405eae5",
@@ -22457,10 +22457,10 @@
       "production_owner": "canonical runtime provider",
       "owner_path": "sdk/go/",
       "path": "sdk/go/runtime_ability.go",
-      "sha256": "3347c8e396680be7e045f68448effe789a85299f9346aa46e32a735fa6522480",
+      "sha256": "ad585027e9cc4f8baeecceaa0ee50d51371765ee8ffda933d49709d334bd4337",
       "interface": "RuntimeAbilityClient",
       "interface_path": "sdk/go/runtime_ability.go",
-      "interface_sha256": "3347c8e396680be7e045f68448effe789a85299f9346aa46e32a735fa6522480",
+      "interface_sha256": "ad585027e9cc4f8baeecceaa0ee50d51371765ee8ffda933d49709d334bd4337",
       "capability_ids": [
         "ability_invocation_facade"
       ],

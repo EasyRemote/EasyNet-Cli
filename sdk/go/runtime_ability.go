@@ -42,14 +42,50 @@ type RuntimeAbilityClient struct {
 
 type runtimeAbilityDispatchPolicy struct {
 	allowGovernanceRead bool
+	subjectPolicy       runtimeAbilitySubjectPolicy
 }
 
 func runtimeAbilityPublicPolicy() runtimeAbilityDispatchPolicy {
-	return runtimeAbilityDispatchPolicy{}
+	return runtimeAbilityDispatchPolicy{subjectPolicy: runtimeAbilitySubjectDescriptorBound}
 }
 
 func runtimeAbilityGovernanceReadPolicy() runtimeAbilityDispatchPolicy {
-	return runtimeAbilityDispatchPolicy{allowGovernanceRead: true}
+	return runtimeAbilityDispatchPolicy{
+		allowGovernanceRead: true,
+		subjectPolicy:       runtimeAbilitySubjectDescriptorBound,
+	}
+}
+
+func runtimeAbilityCatalogueReadPolicy() runtimeAbilityDispatchPolicy {
+	return runtimeAbilityDispatchPolicy{
+		allowGovernanceRead: true,
+		subjectPolicy:       runtimeAbilitySubjectRuntimeOwner,
+	}
+}
+
+type runtimeAbilitySubjectPolicy int
+
+const (
+	runtimeAbilitySubjectDescriptorBound runtimeAbilitySubjectPolicy = iota
+	runtimeAbilitySubjectRuntimeOwner
+)
+
+func (policy runtimeAbilityDispatchPolicy) subjectURA(ctx context.Context, addressing Addressing, call RuntimeCallContext, abilityName string) (string, error) {
+	switch policy.subjectPolicy {
+	case runtimeAbilitySubjectDescriptorBound:
+		return descriptorBoundSubjectURA(ctx, addressing, call.SubjectURA, abilityName)
+	case runtimeAbilitySubjectRuntimeOwner:
+		return strings.TrimSpace(call.CalleeURA), nil
+	default:
+		return "", invalidRuntimePayload("runtime ability subject policy is unsupported", nil)
+	}
+}
+
+func (policy runtimeAbilityDispatchPolicy) descriptorResolutionSubjectURA(call RuntimeCallContext, selectedSubjectURA string) string {
+	if policy.subjectPolicy == runtimeAbilitySubjectRuntimeOwner {
+		return strings.TrimSpace(selectedSubjectURA)
+	}
+	return strings.TrimSpace(call.SubjectURA)
 }
 
 // AbilityChildContext carries the complete child Invocation context derived
@@ -159,6 +195,10 @@ func (c *RuntimeAbilityClient) buildGovernanceRead(ctx context.Context, call Run
 	return c.buildWithCallModePolicy(ctx, call, abilityName, args, "rpc", runtimeAbilityGovernanceReadPolicy())
 }
 
+func (c *RuntimeAbilityClient) buildCatalogueRead(ctx context.Context, call RuntimeCallContext, abilityName string, args any) (InvocationDraft, error) {
+	return c.buildWithCallModePolicy(ctx, call, abilityName, args, "rpc", runtimeAbilityCatalogueReadPolicy())
+}
+
 func (c *RuntimeAbilityClient) buildWithCallModePolicy(ctx context.Context, call RuntimeCallContext, abilityName string, args any, callMode string, policy runtimeAbilityDispatchPolicy) (InvocationDraft, error) {
 	if err := c.requireReady(ctx); err != nil {
 		return InvocationDraft{}, err
@@ -172,7 +212,7 @@ func (c *RuntimeAbilityClient) buildWithCallModePolicy(ctx context.Context, call
 	}
 	if !policy.allowGovernanceRead && isRuntimeGovernanceReadAbility(abilityName) {
 		return InvocationDraft{}, invalidRuntimePayload(
-			"runtime governance receipt/history abilities must use RuntimeReceiptProvider",
+			"runtime governance receipt/history/catalogue abilities must use RuntimeReceiptProvider or RuntimeAbilityDescriptorProvider",
 			nil,
 		)
 	}
@@ -180,7 +220,7 @@ func (c *RuntimeAbilityClient) buildWithCallModePolicy(ctx context.Context, call
 	if mode == "" {
 		return InvocationDraft{}, invalidRuntimePayload("call_mode is required", nil)
 	}
-	subjectURA, err := descriptorBoundSubjectURA(ctx, c.addressing, call.SubjectURA, abilityName)
+	subjectURA, err := policy.subjectURA(ctx, c.addressing, call, abilityName)
 	if err != nil {
 		return InvocationDraft{}, err
 	}
@@ -189,7 +229,7 @@ func (c *RuntimeAbilityClient) buildWithCallModePolicy(ctx context.Context, call
 		Ability:    abilityName,
 		CallMode:   mode,
 		CallerURA:  strings.TrimSpace(call.CallerURA),
-		SubjectURA: strings.TrimSpace(call.SubjectURA),
+		SubjectURA: policy.descriptorResolutionSubjectURA(call, subjectURA),
 	})
 	if err != nil {
 		return InvocationDraft{}, err
@@ -217,7 +257,7 @@ func (c *RuntimeAbilityClient) buildWithCallModePolicy(ctx context.Context, call
 
 func isRuntimeGovernanceReadAbility(abilityName string) bool {
 	abilityName = strings.TrimSpace(abilityName)
-	return strings.HasPrefix(abilityName, "invocation.history.") || strings.HasPrefix(abilityName, "invocation.trace.")
+	return abilityName == "meta.list_abilities" || strings.HasPrefix(abilityName, "invocation.history.") || strings.HasPrefix(abilityName, "invocation.trace.")
 }
 
 // Invoke executes one addressed ability and returns its object result without
@@ -239,6 +279,21 @@ func (c *RuntimeAbilityClient) Invoke(ctx context.Context, call RuntimeCallConte
 
 func (c *RuntimeAbilityClient) invokeGovernanceRead(ctx context.Context, call RuntimeCallContext, abilityName string, args any) (map[string]any, error) {
 	draft, err := c.buildGovernanceRead(ctx, call, abilityName, args)
+	if err != nil {
+		return nil, err
+	}
+	result, err := c.runtime.Invoke(ctx, draft)
+	if err != nil {
+		return nil, err
+	}
+	if !result.OK() {
+		return nil, runtimeAbilityFailure(result)
+	}
+	return runtimeAbilityObjectOutput(result)
+}
+
+func (c *RuntimeAbilityClient) invokeCatalogueRead(ctx context.Context, call RuntimeCallContext, abilityName string, args any) (map[string]any, error) {
+	draft, err := c.buildCatalogueRead(ctx, call, abilityName, args)
 	if err != nil {
 		return nil, err
 	}

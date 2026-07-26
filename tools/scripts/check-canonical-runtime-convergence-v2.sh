@@ -4425,12 +4425,16 @@ check_sdk_go_python_history_public_route_cutover_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local go_runtime="$cli_root/sdk/go/runtime_ability.go"
   local go_receipt="$cli_root/sdk/go/receipt.go"
+  local go_descriptor="$cli_root/sdk/go/ability_descriptor.go"
   local go_test="$cli_root/sdk/go/runtime_ability_test.go"
+  local go_descriptor_test="$cli_root/sdk/go/ability_descriptor_test.go"
   local py_runtime="$cli_root/sdk/python/easynet_sdk/runtime_ability.py"
   local py_receipt="$cli_root/sdk/python/easynet_sdk/receipt.py"
+  local py_descriptor="$cli_root/sdk/python/easynet_sdk/ability_descriptor.py"
   local py_test="$cli_root/sdk/python/tests/test_runtime_ability.py"
+  local py_descriptor_test="$cli_root/sdk/python/tests/test_ability_descriptor.py"
 
-  "$PYTHON_BIN" - "$go_runtime" "$go_receipt" "$go_test" "$py_runtime" "$py_receipt" "$py_test" <<'PY'
+  "$PYTHON_BIN" - "$go_runtime" "$go_receipt" "$go_descriptor" "$go_test" "$go_descriptor_test" "$py_runtime" "$py_receipt" "$py_descriptor" "$py_test" "$py_descriptor_test" <<'PY'
 import sys
 from pathlib import Path
 
@@ -4439,21 +4443,27 @@ for path in paths:
     if not path.exists():
         raise SystemExit(f"sdk_history_public_route_cutover:missing:{path}")
 
-go_runtime, go_receipt, go_test, py_runtime, py_receipt, py_test = [
+go_runtime, go_receipt, go_descriptor, go_test, go_descriptor_test, py_runtime, py_receipt, py_descriptor, py_test, py_descriptor_test = [
     path.read_text(encoding="utf-8", errors="replace") for path in paths
 ]
 
 for required in (
     "type runtimeAbilityDispatchPolicy struct",
+    "type runtimeAbilitySubjectPolicy int",
     "func runtimeAbilityPublicPolicy() runtimeAbilityDispatchPolicy",
     "func runtimeAbilityGovernanceReadPolicy() runtimeAbilityDispatchPolicy",
+    "func runtimeAbilityCatalogueReadPolicy() runtimeAbilityDispatchPolicy",
+    "runtimeAbilitySubjectRuntimeOwner",
     "func (c *RuntimeAbilityClient) buildGovernanceRead(",
+    "func (c *RuntimeAbilityClient) buildCatalogueRead(",
     "func (c *RuntimeAbilityClient) buildWithCallModePolicy(",
     "func isRuntimeGovernanceReadAbility(abilityName string) bool",
+    'abilityName == "meta.list_abilities"',
     "strings.HasPrefix(abilityName, \"invocation.history.\")",
     "strings.HasPrefix(abilityName, \"invocation.trace.\")",
-    "runtime governance receipt/history abilities must use RuntimeReceiptProvider",
+    "runtime governance receipt/history/catalogue abilities must use RuntimeReceiptProvider or RuntimeAbilityDescriptorProvider",
     "func (c *RuntimeAbilityClient) invokeGovernanceRead(",
+    "func (c *RuntimeAbilityClient) invokeCatalogueRead(",
 ):
     if required not in go_runtime:
         raise SystemExit(f"sdk_history_public_route_cutover:go_runtime_missing:{required}")
@@ -4463,20 +4473,33 @@ if "ability.Invoke(ctx, call, r.listAbility, args)" in go_receipt or "ability.In
     raise SystemExit("sdk_history_public_route_cutover:go_receipt_uses_public_invoke")
 if "ability.invokeGovernanceRead(ctx, call, r.listAbility, args)" not in go_receipt:
     raise SystemExit("sdk_history_public_route_cutover:go_receipt_governance_entry_missing")
+if "ability.Invoke(ctx, call, r.listAbility, args)" in go_descriptor:
+    raise SystemExit("sdk_history_public_route_cutover:go_descriptor_uses_public_invoke")
+if "ability.invokeCatalogueRead(ctx, call, r.listAbility, args)" not in go_descriptor:
+    raise SystemExit("sdk_history_public_route_cutover:go_descriptor_catalogue_entry_missing")
 if "TestRuntimeAbilityClientRejectsInvocationHistoryPublicRouteBeforeDescriptorResolution" not in go_test:
     raise SystemExit("sdk_history_public_route_cutover:go_public_rejection_test_missing")
+if "TestRuntimeAbilityClientRejectsCatalogueReadPublicRouteBeforeDescriptorResolution" not in go_test:
+    raise SystemExit("sdk_history_public_route_cutover:go_catalogue_public_rejection_test_missing")
+if 'seen["subject_ura"] != "easynet:///r/example/authority"' not in go_descriptor_test:
+    raise SystemExit("sdk_history_public_route_cutover:go_catalogue_subject_test_missing")
 
 for required in (
     "class _RuntimeAbilityDispatchPolicy",
+    'subject_policy: str = "descriptor_bound"',
     "_PUBLIC_ACTION_POLICY = _RuntimeAbilityDispatchPolicy()",
     "_GOVERNANCE_READ_POLICY = _RuntimeAbilityDispatchPolicy(allow_governance_read=True)",
+    "_CATALOGUE_READ_POLICY = _RuntimeAbilityDispatchPolicy(",
     "policy: _RuntimeAbilityDispatchPolicy = _PUBLIC_ACTION_POLICY",
     "def _build_governance_read(",
+    "def _build_catalogue_read(",
     "def _invoke_governance_read(",
+    "def _invoke_catalogue_read(",
     "def _is_runtime_governance_read_ability(ability_name: str) -> bool:",
+    'ability_name == "meta.list_abilities"',
     'ability_name.startswith("invocation.history.")',
-    'ability_name.startswith(\n        "invocation.trace."',
-    "runtime governance receipt/history abilities must use RuntimeReceiptProvider",
+    'ability_name.startswith("invocation.trace.")',
+    "runtime governance receipt/history/catalogue abilities must use RuntimeReceiptProvider or RuntimeAbilityDescriptorProvider",
 ):
     if required not in py_runtime:
         raise SystemExit(f"sdk_history_public_route_cutover:py_runtime_missing:{required}")
@@ -4484,8 +4507,16 @@ if "ability.invoke(call, self.list_ability.strip(), dict(arguments))" in py_rece
     raise SystemExit("sdk_history_public_route_cutover:py_receipt_uses_public_invoke")
 if "ability._invoke_governance_read(call, self.list_ability.strip(), dict(arguments))" not in py_receipt:
     raise SystemExit("sdk_history_public_route_cutover:py_receipt_governance_entry_missing")
+if "ability.invoke(call, self.list_ability.strip(), dict(args))" in py_descriptor:
+    raise SystemExit("sdk_history_public_route_cutover:py_descriptor_uses_public_invoke")
+if "ability._invoke_catalogue_read(call, self.list_ability.strip(), dict(args))" not in py_descriptor:
+    raise SystemExit("sdk_history_public_route_cutover:py_descriptor_catalogue_entry_missing")
 if "test_runtime_ability_rejects_invocation_history_public_route_before_descriptor_resolution" not in py_test:
     raise SystemExit("sdk_history_public_route_cutover:py_public_rejection_test_missing")
+if "test_runtime_ability_rejects_catalogue_read_public_route_before_descriptor_resolution" not in py_test:
+    raise SystemExit("sdk_history_public_route_cutover:py_catalogue_public_rejection_test_missing")
+if 'transport.seen["subject_ura"] == "easynet:///r/example/authority"' not in py_descriptor_test:
+    raise SystemExit("sdk_history_public_route_cutover:py_catalogue_subject_test_missing")
 PY
 }
 
@@ -4514,68 +4545,77 @@ node, node_test, java_builder, java_projection, java_test, swift_invocation, swi
 ]
 
 for required in (
-    "const RECEIPT_HISTORY_READ_ABILITIES",
-    "function rejectReceiptHistoryPublicInvocationDescriptor",
+    "const RUNTIME_GOVERNANCE_READ_ABILITIES",
+    "function rejectGovernanceReadPublicInvocationDescriptor",
     "RuntimeAbilityProjection.descriptorAbilityURA(descriptorRef)",
-    "receiptHistoryReadAbility(publicName)",
-    "receiptHistoryReadAbility(wireName)",
-    "use RuntimeReceiptProvider or SessionHistoryOperations as the canonical invocation history read path",
+    "runtimeGovernanceReadAbility(publicName)",
+    "runtimeGovernanceReadAbility(wireName)",
+    "use RuntimeReceiptProvider, SessionHistoryOperations, or the canonical runtime catalogue provider path",
 ):
     if required not in node:
         raise SystemExit(f"sdk_history_public_ingress_cutover:node_missing:{required}")
 for required in (
     "public invocation builder rejects receipt history descriptor before dispatch",
+    "public invocation builder rejects runtime catalogue descriptor before dispatch",
     "device.dev-a.invocation.history.list@1.0.0#",
+    "authority.meta.list_abilities@1.0.0#",
     "SessionHistoryOperations",
 ):
     if required not in node_test:
         raise SystemExit(f"sdk_history_public_ingress_cutover:node_test_missing:{required}")
 
 for required in (
-    "rejectReceiptHistoryPublicInvocation(tuple);",
-    "private static void rejectReceiptHistoryPublicInvocation(InvocationTuple tuple)",
-    "RuntimeAbilityProjection.receiptHistoryReadAbility(tuple.callee(), tuple.descriptor())",
-    "use RuntimeReceiptProvider as the canonical invocation history read path",
+    "rejectGovernanceReadPublicInvocation(tuple);",
+    "private static void rejectGovernanceReadPublicInvocation(InvocationTuple tuple)",
+    "RuntimeAbilityProjection.runtimeGovernanceReadAbility(tuple.callee(), tuple.descriptor())",
+    "RuntimeReceiptProvider or RuntimeAbilityDescriptorProvider",
 ):
     if required not in java_builder:
         raise SystemExit(f"sdk_history_public_ingress_cutover:java_builder_missing:{required}")
 for required in (
-    "private static final String[] RECEIPT_HISTORY_READ_ABILITIES",
-    "static String receiptHistoryReadAbility(String calleeURA, String descriptorRef)",
-    "receiptHistoryReadAbility(publicName)",
-    "receiptHistoryReadAbility(wireName)",
+    "private static final String[] RUNTIME_GOVERNANCE_READ_ABILITIES",
+    "static String runtimeGovernanceReadAbility(String calleeURA, String descriptorRef)",
+    "runtimeGovernanceReadAbility(publicName)",
+    "runtimeGovernanceReadAbility(wireName)",
 ):
     if required not in java_projection:
         raise SystemExit(f"sdk_history_public_ingress_cutover:java_projection_missing:{required}")
 for required in (
     '"completeTupleRejectsReceiptHistoryPublicInvocation"',
+    '"completeTupleRejectsCatalogueReadPublicInvocation"',
     "private static void completeTupleRejectsReceiptHistoryPublicInvocation()",
+    "private static void completeTupleRejectsCatalogueReadPublicInvocation()",
     "device.dev-a.invocation.history.list@1.0.0#",
+    "authority.meta.list_abilities@1.0.0#",
     "RuntimeReceiptProvider",
+    "RuntimeAbilityDescriptorProvider",
 ):
     if required not in java_test:
         raise SystemExit(f"sdk_history_public_ingress_cutover:java_test_missing:{required}")
 
 for required in (
-    "try rejectReceiptHistoryPublicInvocation(tuple)",
-    "private func rejectReceiptHistoryPublicInvocation(_ tuple: InvocationTuple) throws",
-    "RuntimeAbilityProjection.receiptHistoryReadAbility(",
-    "use RuntimeReceiptProvider as the canonical invocation history read path",
+    "try rejectGovernanceReadPublicInvocation(tuple)",
+    "private func rejectGovernanceReadPublicInvocation(_ tuple: InvocationTuple) throws",
+    "RuntimeAbilityProjection.runtimeGovernanceReadAbility(",
+    "RuntimeReceiptProvider or RuntimeAbilityDescriptorProvider",
 ):
     if required not in swift_invocation:
         raise SystemExit(f"sdk_history_public_ingress_cutover:swift_invocation_missing:{required}")
 for required in (
-    "private static let receiptHistoryReadAbilities",
-    "static func receiptHistoryReadAbility(calleeURA: String, descriptorRef: String) throws -> String?",
-    "receiptHistoryReadAbility(publicName)",
-    "receiptHistoryReadAbility(wireName)",
+    "private static let runtimeGovernanceReadAbilities",
+    "static func runtimeGovernanceReadAbility(calleeURA: String, descriptorRef: String) throws -> String?",
+    "runtimeGovernanceReadAbility(publicName)",
+    "runtimeGovernanceReadAbility(wireName)",
 ):
     if required not in swift_projection:
         raise SystemExit(f"sdk_history_public_ingress_cutover:swift_projection_missing:{required}")
 for required in (
     "testCompleteTupleRejectsReceiptHistoryPublicInvocation",
+    "testCompleteTupleRejectsCatalogueReadPublicInvocation",
     "device.dev-a.invocation.history.list@1.0.0#",
+    "authority.meta.list_abilities@1.0.0#",
     "RuntimeReceiptProvider",
+    "RuntimeAbilityDescriptorProvider",
 ):
     if required not in swift_test:
         raise SystemExit(f"sdk_history_public_ingress_cutover:swift_test_missing:{required}")
@@ -4586,6 +4626,7 @@ for corpus, label in (
     (swift_projection, "swift_projection"),
 ):
     for ability in (
+        "meta.list_abilities",
         "invocation.history.list",
         "invocation.history.get",
         "invocation.history.path",

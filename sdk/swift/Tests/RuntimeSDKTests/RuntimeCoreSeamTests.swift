@@ -905,6 +905,17 @@ final class RuntimeCoreSeamTests: XCTestCase {
         }
     }
 
+    func testCompleteTupleRejectsCatalogueReadPublicInvocation() {
+        let catalogueDescriptor = "easynet:///r/example/ability/authority.meta.list_abilities@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read"
+        expectSyncSDKError(.invalidArgument, "RuntimeAbilityDescriptorProvider") {
+            _ = try completeBuilder()
+                .withCalleeURA("easynet:///r/example/authority")
+                .withSubjectURA("easynet:///r/example/authority")
+                .withDescriptorRef(catalogueDescriptor)
+                .inspect()
+        }
+    }
+
     func testPreparedInvocationCannotBeSubmitted() async throws {
         let runtime = RuntimeClient(transport: MemoryRuntimeTransport(callee: callee, descriptor: descriptor))
         let prepared = try await runtime.prepare(completeDraft(runtime), options: ["deadline_ms": 1000])

@@ -101,6 +101,27 @@ func TestRuntimeAbilityClientRejectsInvocationHistoryPublicRouteBeforeDescriptor
 	}
 }
 
+func TestRuntimeAbilityClientRejectsCatalogueReadPublicRouteBeforeDescriptorResolution(t *testing.T) {
+	runtime, err := NewRuntimeClient(RuntimeTransportFunc{
+		ResolveDescriptorRefFunc: func(context.Context, []byte) ([]byte, error) {
+			t.Fatal("descriptor resolver transport must not be called for runtime catalogue public ability routes")
+			return nil, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
+	}
+	client, err := NewRuntimeAbilityClient(runtime, NewCanonicalAddressing())
+	if err != nil {
+		t.Fatalf("NewRuntimeAbilityClient: %v", err)
+	}
+
+	_, err = client.Build(context.Background(), runtimeAbilityTestContext(), "meta.list_abilities", map[string]any{})
+	if err == nil || !IsCode(err, ErrInvalidArgument) || !strings.Contains(err.Error(), "RuntimeAbilityDescriptorProvider") {
+		t.Fatalf("Build error = %v, want descriptor provider public-route rejection", err)
+	}
+}
+
 func TestRuntimeAbilityClientBuildsCompleteCanonicalDraft(t *testing.T) {
 	runtime, err := NewRuntimeClient(RuntimeTransportFunc{
 		ResolveDescriptorRefFunc: testResolveDescriptorRef(t),

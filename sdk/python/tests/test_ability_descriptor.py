@@ -132,6 +132,7 @@ def test_runtime_ability_descriptor_provider_lists_runtime_descriptors() -> None
     assert transport.seen["descriptor_ref"] == (
         "easynet:///r/example/ability/authority.meta.list_abilities@1.0.0"
     )
+    assert transport.seen["subject_ura"] == "easynet:///r/example/authority"
     assert transport.seen["args"] == {
         "scope": "realm",
         "owner_ura": "easynet:///r/example/authority",
@@ -169,6 +170,7 @@ def test_runtime_ability_descriptor_provider_uses_explicit_route() -> None:
     assert transport.seen["descriptor_ref"] == (
         "easynet:///r/example/ability/authority.runtime.catalog.list@1.0.0"
     )
+    assert transport.seen["subject_ura"] == "easynet:///r/example/authority"
 
 
 def test_runtime_ability_descriptor_provider_uses_generic_catalog_error() -> None:

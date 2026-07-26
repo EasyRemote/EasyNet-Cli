@@ -48,6 +48,7 @@ public final class RuntimeCoreSeamTest {
           "completeTupleRejectsMissingCaller",
           "completeTupleRejectsAllZeroPrincipals",
           "completeTupleRejectsReceiptHistoryPublicInvocation",
+          "completeTupleRejectsCatalogueReadPublicInvocation",
           "preparedInvocationCannotBeSubmitted",
           "streamAndBidiBackpressureAreBounded",
           "streamOrderAndTerminalArePreserved");
@@ -118,6 +119,8 @@ public final class RuntimeCoreSeamTest {
       case "completeTupleRejectsAllZeroPrincipals" -> completeTupleRejectsAllZeroPrincipals();
       case "completeTupleRejectsReceiptHistoryPublicInvocation" ->
           completeTupleRejectsReceiptHistoryPublicInvocation();
+      case "completeTupleRejectsCatalogueReadPublicInvocation" ->
+          completeTupleRejectsCatalogueReadPublicInvocation();
       case "preparedInvocationCannotBeSubmitted" -> preparedInvocationCannotBeSubmitted();
       case "streamAndBidiBackpressureAreBounded" -> streamAndBidiBackpressureAreBounded();
       case "streamOrderAndTerminalArePreserved" -> streamOrderAndTerminalArePreserved();
@@ -1202,6 +1205,19 @@ public final class RuntimeCoreSeamTest {
         ErrorCode.INVALID_ARGUMENT,
         "RuntimeReceiptProvider",
         () -> completeBuilder().descriptor(historyDescriptor).inspect());
+  }
+
+  private static void completeTupleRejectsCatalogueReadPublicInvocation() {
+    String catalogueDescriptor =
+        "easynet:///r/example/ability/authority.meta.list_abilities@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read";
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        "RuntimeAbilityDescriptorProvider",
+        () -> completeBuilder()
+            .callee("easynet:///r/example/authority")
+            .subject("easynet:///r/example/authority")
+            .descriptor(catalogueDescriptor)
+            .inspect());
   }
 
   private static void preparedInvocationCannotBeSubmitted() {

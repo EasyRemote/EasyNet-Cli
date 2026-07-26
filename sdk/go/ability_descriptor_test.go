@@ -147,6 +147,9 @@ func TestRuntimeAbilityDescriptorProviderListsRuntimeDescriptors(t *testing.T) {
 	if seen["descriptor_ref"] != "easynet:///r/example/ability/authority.meta.list_abilities@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read" {
 		t.Fatalf("descriptor_ref = %q", seen["descriptor_ref"])
 	}
+	if seen["subject_ura"] != "easynet:///r/example/authority" {
+		t.Fatalf("catalogue read subject_ura = %q", seen["subject_ura"])
+	}
 	if len(page.Descriptors) != 1 {
 		t.Fatalf("descriptor count = %d", len(page.Descriptors))
 	}
@@ -191,6 +194,9 @@ func TestRuntimeAbilityDescriptorProviderUsesExplicitRoute(t *testing.T) {
 	}
 	if seen["descriptor_ref"] != "easynet:///r/example/ability/authority.runtime.catalog.list@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read" {
 		t.Fatalf("descriptor_ref = %q", seen["descriptor_ref"])
+	}
+	if seen["subject_ura"] != "easynet:///r/example/authority" {
+		t.Fatalf("catalogue read subject_ura = %q", seen["subject_ura"])
 	}
 }
 

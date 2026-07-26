@@ -82,7 +82,8 @@ export const SESSION_AUTHORITY_METADATA_KEY = "x-runtime-session-authority";
 export const MAX_STREAM_BUFFERED_EVENTS = 1024;
 export const MAX_BIDI_BUFFERED_FRAMES = 1024;
 const RUNTIME_STATE_READ_SUBJECT_PATH = "runtime-state/read";
-const RECEIPT_HISTORY_READ_ABILITIES = Object.freeze([
+const RUNTIME_GOVERNANCE_READ_ABILITIES = Object.freeze([
+  "meta.list_abilities",
   "invocation.history.list",
   "invocation.history.get",
   "invocation.history.path",
@@ -669,7 +670,7 @@ export class InvocationDraft {
     this.metadata = objectValue(fields.metadata ?? {}, "metadata");
     this.callerSignature = fields.callerSignature ?? null;
     this.hasArgs = Boolean(fields.hasArgs);
-    rejectReceiptHistoryPublicInvocationDescriptor(this.calleeURA, this.descriptorRef);
+    rejectGovernanceReadPublicInvocationDescriptor(this.calleeURA, this.descriptorRef);
     validateAuthorityMetadata(this.metadata);
     validateInvocationAuthorityBinding(this);
     validateInvocationPayloadChoice(this);
@@ -3396,24 +3397,24 @@ function validateInvocationAuthorityBinding(draft) {
   new InvocationAuthorityBindingValidator(draft, authority).validate();
 }
 
-function rejectReceiptHistoryPublicInvocationDescriptor(calleeURA, descriptorRef) {
+function rejectGovernanceReadPublicInvocationDescriptor(calleeURA, descriptorRef) {
   const abilityURA = RuntimeAbilityProjection.descriptorAbilityURA(descriptorRef);
   const publicName = RuntimeAbilityProjection.publicAbilityName(calleeURA, abilityURA);
   const wireName = RuntimeAbilityProjection.descriptorWireAbility(abilityURA);
-  const historyAbility =
-    receiptHistoryReadAbility(publicName) || receiptHistoryReadAbility(wireName);
-  if (!historyAbility) {
+  const governanceAbility =
+    runtimeGovernanceReadAbility(publicName) || runtimeGovernanceReadAbility(wireName);
+  if (!governanceAbility) {
     return;
   }
   throw invalidInvocation(
-    `receipt history ability \`${historyAbility}\` is not a public invocation action; ` +
-      "use RuntimeReceiptProvider or SessionHistoryOperations as the canonical invocation history read path",
+    `runtime governance read ability \`${governanceAbility}\` is not a public invocation action; ` +
+      "use RuntimeReceiptProvider, SessionHistoryOperations, or the canonical runtime catalogue provider path",
   );
 }
 
-function receiptHistoryReadAbility(value) {
+function runtimeGovernanceReadAbility(value) {
   const clean = String(value ?? "").trim();
-  for (const ability of RECEIPT_HISTORY_READ_ABILITIES) {
+  for (const ability of RUNTIME_GOVERNANCE_READ_ABILITIES) {
     if (clean === ability || clean.endsWith(`.${ability}`)) {
       return ability;
     }
