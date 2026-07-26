@@ -530,7 +530,6 @@ struct AbilityDescriptorWire {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     ability_ura: String,
     owner_ura: String,
-    #[serde(default = "default_descriptor_version")]
     version: String,
     #[serde(default)]
     schema_hash: String,
@@ -611,11 +610,7 @@ impl AbilityDescriptorWire {
         let wire_schema_hash = self.schema_hash.trim().to_string();
         let wire_descriptor_hash = self.descriptor_hash.trim().to_string();
         let wire_descriptor_ref = self.descriptor_ref.trim().to_string();
-        let version = if self.version.trim().is_empty() {
-            default_descriptor_version()
-        } else {
-            self.version.trim().to_string()
-        };
+        let version = self.version.trim().to_string();
         crate::daemon::ability::descriptors::AbilityDescriptorVersion::new(version.clone())
             .map_err(|err| format!("invalid descriptor version {version:?}: {err}"))?;
 
@@ -2010,6 +2005,43 @@ mod tests {
         assert!(
             err.to_string().contains("invalid descriptor version"),
             "{err}"
+        );
+    }
+
+    #[test]
+    fn descriptor_wire_rejects_missing_version() {
+        let d = must(
+            "chat",
+            "easynet:///r/acme/agent/alice.claude",
+            Visibility::Scoped,
+        );
+        let mut json: serde_json::Value = serde_json::to_value(&d).unwrap();
+        json.as_object_mut()
+            .expect("descriptor JSON object")
+            .remove("version");
+        let err = serde_json::from_value::<AbilityDescriptor>(json).unwrap_err();
+        assert!(
+            err.to_string().contains("missing field `version`"),
+            "wire descriptor must not default a missing version: {err}"
+        );
+    }
+
+    #[test]
+    fn descriptor_wire_rejects_blank_version() {
+        let d = must(
+            "chat",
+            "easynet:///r/acme/agent/alice.claude",
+            Visibility::Scoped,
+        );
+        let mut json: serde_json::Value = serde_json::to_value(&d).unwrap();
+        json["version"] = serde_json::json!(" ");
+        let err = serde_json::from_value::<AbilityDescriptor>(json).unwrap_err();
+        assert!(
+            err.to_string().contains("invalid descriptor version")
+                && err
+                    .to_string()
+                    .contains("ability descriptor version must be non-empty"),
+            "wire descriptor must not default a blank version: {err}"
         );
     }
 

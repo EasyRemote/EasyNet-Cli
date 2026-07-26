@@ -11568,10 +11568,20 @@ if ".descriptor_ref().ok()" in descriptor_production or ".descriptor_ref().is_no
     raise SystemExit("ability_descriptor:descriptor_ref_optional_collapse")
 if ".or_else(|| d.canonical_ability_ura())" in descriptor_production:
     raise SystemExit("ability_descriptor:wire_identity_duplicate_fallback")
+if '#[serde(default = "default_descriptor_version")]' in descriptor_production:
+    raise SystemExit("ability_descriptor:wire_version_serde_default")
+if "let version = if self.version.trim().is_empty()" in descriptor_production:
+    raise SystemExit("ability_descriptor:wire_version_empty_default")
 if "descriptor_ref_derivation_fails_closed_for_corrupt_identity" not in descriptor:
     raise SystemExit("ability_descriptor:descriptor_ref_fail_closed_test_missing")
 if "descriptor_wire_projection_fails_closed_for_corrupt_identity" not in descriptor:
     raise SystemExit("ability_descriptor:wire_projection_fail_closed_test_missing")
+for required_test in (
+    "descriptor_wire_rejects_missing_version",
+    "descriptor_wire_rejects_blank_version",
+):
+    if required_test not in descriptor:
+        raise SystemExit(f"ability_descriptor:missing_wire_version_test:{required_test}")
 inventory = re.search(
     r"pub fn system_ability_contract_inventory_for_voice_assembly\([^)]*\)\s*->\s*Vec<SystemAbilityContract>\s*\{(?P<body>.*?)\n\}\n\n/// Voice static contracts",
     catalog_meta,
