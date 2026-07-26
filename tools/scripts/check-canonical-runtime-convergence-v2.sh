@@ -4651,6 +4651,25 @@ if py:
         "sdk_python_runtime_state_read_subject_all_zero_guard_missing",
     )
     for token in (
+        "from .axon_addressing import AddressingProjection, parse_ura, resource_ura, user_ura",
+        "owner_ura = user_ura(clean_realm, clean_user_id)",
+        "subject = resource_ura(owner_ura, _RUNTIME_STATE_READ_SUBJECT_PATH)",
+    ):
+        if token not in py_helper:
+            raise SystemExit(f"sdk_python_runtime_state_read_subject_addressing_builder_missing:{token}")
+    runtime_state_subject_body = section(
+        py_helper,
+        "def runtime_state_read_subject_ura(",
+        "def is_runtime_state_read_subject_ura(",
+    )
+    for retired in (
+        'f"easynet:///r/{clean_realm}/resource/user.{clean_user_id}/"',
+        '"easynet:///r/{clean_realm}/resource/user.{clean_user_id}/"',
+        "parse_ura(subject)",
+    ):
+        if retired in runtime_state_subject_body:
+            raise SystemExit(f"sdk_python_runtime_state_read_subject_raw_builder_retired:{retired}")
+    for token in (
         "subject.components.get(\"owner_id\")",
         "subject.components.get(\"path\")",
         "parse_ura(subject_ura.strip())",

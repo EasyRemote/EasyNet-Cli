@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from .authority import SessionAuthority
-from .axon_addressing import AddressingProjection, parse_ura
+from .axon_addressing import AddressingProjection, parse_ura, resource_ura, user_ura
 from .errors import SDKError
 from ._identity_guards import contains_all_zero_principal
 
@@ -23,12 +23,9 @@ def runtime_state_read_subject_ura(realm: str, user_id: str) -> str:
         _invalid_runtime_state_subject(
             "runtime-state read subject user_id must not be all-zero"
         )
-    subject = (
-        f"easynet:///r/{clean_realm}/resource/user.{clean_user_id}/"
-        f"{_RUNTIME_STATE_READ_SUBJECT_PATH}"
-    )
     try:
-        parse_ura(subject)
+        owner_ura = user_ura(clean_realm, clean_user_id)
+        subject = resource_ura(owner_ura, _RUNTIME_STATE_READ_SUBJECT_PATH)
     except SDKError as error:
         _invalid_runtime_state_subject(
             "runtime-state read subject_ura must be canonical", error
