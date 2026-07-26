@@ -127,6 +127,21 @@ fn sidecar_invocation_envelope_rejects_missing_canonical_tuple_objects() {
 }
 
 #[test]
+fn sidecar_invocation_envelope_rejects_non_canonical_nonce_length() {
+    let mut raw = canonical_sidecar_envelope_json();
+    raw.as_object_mut()
+        .expect("sidecar envelope object")
+        .insert("invocation_nonce".to_string(), json!([1, 2, 3, 4]));
+
+    let err = serde_json::from_value::<SidecarInvocationEnvelope>(raw)
+        .expect_err("sidecar envelope must reject non-canonical invocation nonce length");
+    assert!(
+        err.to_string().contains("exactly 16 bytes"),
+        "strict sidecar envelope decode should reject short nonce: {err}"
+    );
+}
+
+#[test]
 fn sidecar_response_frame_rejects_unknown_variant_fields() {
     let raw = json!({
         "type": "result",

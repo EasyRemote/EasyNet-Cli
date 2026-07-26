@@ -12571,12 +12571,23 @@ for field in ("causal_context", "args"):
         raise SystemExit(f"plugin_sidecar_daemon_envelope_defaulting:{field}")
     if 'deserialize_with = "required_object_value"' not in field_match.group("attrs"):
         raise SystemExit(f"plugin_sidecar_daemon_envelope_object_guard_missing:{field}")
+nonce_match = re.search(r'(?P<attrs>(?:\s*#\[[^\n]+\]\n)*)\s*pub\s+invocation_nonce\s*:', envelope_body)
+if not nonce_match:
+    raise SystemExit("plugin_sidecar_daemon_envelope_missing:invocation_nonce")
+if 'deserialize_with = "canonical_invocation_nonce"' not in nonce_match.group("attrs"):
+    raise SystemExit("plugin_sidecar_daemon_envelope_nonce_guard_missing")
+if "const CANONICAL_INVOCATION_NONCE_BYTES: usize = 16;" not in sidecar_frame:
+    raise SystemExit("plugin_sidecar_daemon_nonce_constant_missing")
+if "fn canonical_invocation_nonce" not in sidecar_frame or "exactly {CANONICAL_INVOCATION_NONCE_BYTES} bytes" not in sidecar_frame:
+    raise SystemExit("plugin_sidecar_daemon_nonce_guard_missing")
 if "fn required_object_value" not in sidecar_frame or "must be an object" not in sidecar_frame:
     raise SystemExit("plugin_sidecar_daemon_object_guard_missing")
 if "sidecar_invocation_envelope_rejects_missing_canonical_tuple_objects" not in sidecar_tests:
     raise SystemExit("plugin_sidecar_daemon_missing_tuple_object_test_missing")
 if "sidecar envelope must reject null canonical tuple objects" not in sidecar_tests:
     raise SystemExit("plugin_sidecar_daemon_null_tuple_object_test_missing")
+if "sidecar_invocation_envelope_rejects_non_canonical_nonce_length" not in sidecar_tests:
+    raise SystemExit("plugin_sidecar_daemon_nonce_length_test_missing")
 for retired_causal_fixture in (
     '"causal_context": {}',
     '"causal_context": {"root"',
