@@ -437,16 +437,16 @@ for path in (
                 f"{path}: public/daemon remote ingress may not use anonymous tuple default: {token}"
             )
 
-local_loopback = "src/support/platform/local_daemon_grpc.rs"
-local_text = read(local_loopback)
+local_daemon_system = "src/support/platform/local_daemon_grpc.rs"
+local_text = read(local_daemon_system)
 for token, detail in (
-    ("struct LocalDaemonLoopbackTuplePlan", "inspectable local loopback tuple plan"),
-    ("enum LocalDaemonLoopbackDerivationPolicy", "named local loopback derivation state"),
+    ("struct LocalDaemonSystemTuplePlan", "inspectable local daemon-system tuple plan"),
+    ("enum LocalDaemonSystemDerivationPolicy", "named local daemon-system derivation state"),
     ("targeted_explicit_causal", "local explicit-causal tuple constructor"),
-    ("local_daemon_loopback_invocation_from_tuple_plan", "single local loopback lowering helper"),
+    ("local_daemon_system_invocation_from_tuple_plan", "single local daemon-system lowering helper"),
 ):
     if token not in local_text:
-        violations.append(f"{local_loopback}: missing {detail}: {token}")
+        violations.append(f"{local_daemon_system}: missing {detail}: {token}")
 
 local_invoke = "src/support/platform/local_invoke.rs"
 local_invoke_text = read(local_invoke)
@@ -468,13 +468,13 @@ for token, detail in (
 local_production = production_source(local_text)
 for token in (
     "LocalDaemonSubjectPolicy",
-    "local_daemon_loopback_invocation_from_subject_policy",
+    "local_daemon_system_invocation_from_subject_policy",
     "CallerDeclaredSubject",
     "targeted_root_with_declared_subject",
     "explicit_or_caller_declared",
 ):
     if token in local_production:
-        violations.append(f"{local_loopback}: obsolete local loopback subject-only policy remains: {token}")
+        violations.append(f"{local_daemon_system}: obsolete local daemon-system subject-only policy remains: {token}")
 
 for match in re.finditer(
     r"invoke_local_daemon_system_ability_targeted_(?:root_timeout|stream_root)\s*\([^)]*subject\s*:\s*Option\s*<\s*String\s*>",
@@ -482,7 +482,7 @@ for match in re.finditer(
     re.S,
 ):
     violations.append(
-        f"{local_loopback}:{local_production.count(chr(10), 0, match.start()) + 1}: targeted daemon-system local invoke must require explicit subject_ura"
+        f"{local_daemon_system}:{local_production.count(chr(10), 0, match.start()) + 1}: targeted daemon-system local invoke must require explicit subject_ura"
     )
 
 local_invoke_production = production_source(local_invoke_text)
@@ -506,7 +506,7 @@ for token in (
 ):
     if token in local_production:
         violations.append(
-            f"{local_loopback}: generic subject-bearing transport facade is retired: {token}"
+            f"{local_daemon_system}: generic subject-bearing transport facade is retired: {token}"
         )
 
 for path, tokens in (
@@ -545,16 +545,16 @@ for match in re.finditer(
         f"{local_invoke}:{local_invoke_production.count(chr(10), 0, match.start()) + 1}: LocalDaemonSystemAbilityIssuer must not accept optional subject fallback"
     )
 
-for match in re.finditer(r"LocalDaemonLoopbackInvocation::from_target\s*\(", local_production):
+for match in re.finditer(r"LocalDaemonSystemInvocation::from_target\s*\(", local_production):
     if enclosing_function_name(local_production, match.start()) != "into_invocation":
         violations.append(
-            f"{local_loopback}:{local_production.count(chr(10), 0, match.start()) + 1}: local loopback ingress must lower through LocalDaemonLoopbackTuplePlan"
+            f"{local_daemon_system}:{local_production.count(chr(10), 0, match.start()) + 1}: local daemon-system ingress must lower through LocalDaemonSystemTuplePlan"
         )
 
 for match in re.finditer(r"InvocationDerivationPolicy::FreshRoot", local_production):
     if enclosing_function_name(local_production, match.start()) != "as_axon":
         violations.append(
-            f"{local_loopback}:{local_production.count(chr(10), 0, match.start()) + 1}: anonymous FreshRoot derivation must be owned by LocalDaemonLoopbackDerivationPolicy"
+            f"{local_daemon_system}:{local_production.count(chr(10), 0, match.start()) + 1}: anonymous FreshRoot derivation must be owned by LocalDaemonSystemDerivationPolicy"
         )
 
 bidi_dispatcher = "src/daemon/invocation/bidi/bidi_dispatcher.rs"

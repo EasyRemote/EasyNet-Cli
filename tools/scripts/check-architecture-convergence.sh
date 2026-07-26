@@ -2043,7 +2043,7 @@ if session_open_initiator.exists():
                 detail,
             )
 
-# Rule 16b: local daemon loopback request construction is daemon Invocation
+# Rule 16b: local daemon system request construction is daemon Invocation
 # wire ownership, not support-layer transport ownership. The support adapter
 # may resolve target policy and carry requests over tonic, but it must not
 # define a second request object or rebuild Axon envelopes directly.
@@ -2053,77 +2053,77 @@ if local_daemon_grpc.exists():
     support_text = source(local_daemon_grpc)
     for token, detail in (
         (
-            "struct LocalDaemonLoopbackInvocation",
-            "support/platform must not define the local loopback request owner",
+            "struct LocalDaemonSystemInvocation",
+            "support/platform must not define the local daemon-system request owner",
         ),
         (
             "ProtoEnvelope::targeted(",
-            "support/platform must not assemble local loopback Axon envelopes directly",
+            "support/platform must not assemble local daemon-system Axon envelopes directly",
         ),
         (
             "InvokeRequest {",
-            "support/platform must not construct local loopback unary request protobufs directly",
+            "support/platform must not construct local daemon-system unary request protobufs directly",
         ),
         (
             "InvokeServerStreamRequest {",
-            "support/platform must not construct local loopback stream request protobufs directly",
+            "support/platform must not construct local daemon-system stream request protobufs directly",
         ),
     ):
         offset = support_text.find(token)
         if offset >= 0:
             add(
-                "R16B_LOCAL_LOOPBACK_INVOCATION_OWNER_FORK",
+                "R16B_LOCAL_DAEMON_SYSTEM_INVOCATION_OWNER_FORK",
                 local_daemon_grpc,
                 line_number(support_text, offset),
                 detail,
             )
-    if "LocalDaemonLoopbackInvocation" in support_text and not invocation_wire.exists():
+    if "LocalDaemonSystemInvocation" in support_text and not invocation_wire.exists():
         add(
-            "R16B_LOCAL_LOOPBACK_INVOCATION_OWNER_FORK",
+            "R16B_LOCAL_DAEMON_SYSTEM_INVOCATION_OWNER_FORK",
             invocation_wire,
             1,
-            "daemon invocation wire owner for local loopback requests is missing",
+            "daemon invocation wire owner for local daemon-system requests is missing",
         )
 
 if invocation_wire.exists():
     wire_text = source(invocation_wire)
     for token, detail in (
         (
-            "pub(crate) struct LocalDaemonLoopbackInvocation",
-            "daemon invocation wire module must own the local loopback request object",
+            "pub(crate) struct LocalDaemonSystemInvocation",
+            "daemon invocation wire module must own the local daemon-system request object",
         ),
         (
             "pub(crate) fn invoke_request",
-            "local loopback owner must build unary InvokeRequest projections",
+            "local daemon-system owner must build unary InvokeRequest projections",
         ),
         (
             "pub(crate) fn stream_request",
-            "local loopback owner must build stream InvokeServerStreamRequest projections",
+            "local daemon-system owner must build stream InvokeServerStreamRequest projections",
         ),
         (
             "pub(crate) fn envelope",
-            "local loopback owner must build the Axon envelope projection",
+            "local daemon-system owner must build the Axon envelope projection",
         ),
         (
             "derivation_policy: InvocationDerivationPolicy",
-            "local loopback owner must require an explicit canonical derivation policy",
+            "local daemon-system owner must require an explicit canonical derivation policy",
         ),
         (
             "pub(crate) fn with_trace_id",
-            "local loopback owner must preserve trace-id projection",
+            "local daemon-system owner must preserve trace-id projection",
         ),
         (
             "ProtoEnvelope::from_target(",
-            "local loopback owner must use the daemon Invocation wire envelope builder",
+            "local daemon-system owner must use the daemon Invocation wire envelope builder",
         ),
     ):
         if token not in wire_text:
-            add("R16B_LOCAL_LOOPBACK_INVOCATION_OWNER_FORK", invocation_wire, 1, detail)
+            add("R16B_LOCAL_DAEMON_SYSTEM_INVOCATION_OWNER_FORK", invocation_wire, 1, detail)
     forbidden_policy_mutator = "pub(crate) fn with_causal_context"
     offset = wire_text.find(forbidden_policy_mutator)
     if offset >= 0:
         add(
-            "R16B_LOCAL_LOOPBACK_INVOCATION_OWNER_FORK",
+            "R16B_LOCAL_DAEMON_SYSTEM_INVOCATION_OWNER_FORK",
             invocation_wire,
             line_number(wire_text, offset),
             "causal derivation policy must be selected once at construction, not overwritten later",
@@ -11193,11 +11193,11 @@ if local_daemon_grpc.exists():
     for token, detail in (
         (
             "LocalDaemonSelf",
-            "local daemon loopback subject must not be derived from callee",
+            "local daemon system subject must not be derived from callee",
         ),
         (
             "local_daemon_self",
-            "local daemon loopback must not expose a self-subject constructor",
+            "local daemon system must not expose a self-subject constructor",
         ),
         (
             "local_daemon_default_callee_ura",
@@ -11205,11 +11205,11 @@ if local_daemon_grpc.exists():
         ),
         (
             "fn local_root(",
-            "local daemon loopback must not expose a subjectless local_root constructor",
+            "local daemon system must not expose a subjectless local_root constructor",
         ),
         (
-            "LocalDaemonLoopbackTuplePlan::local_root(",
-            "local daemon loopback callers must bind an explicit subject",
+            "LocalDaemonSystemTuplePlan::local_root(",
+            "local daemon system callers must bind an explicit subject",
         ),
         (
             "fn invoke_local_daemon_ability(",
@@ -11223,56 +11223,56 @@ if local_daemon_grpc.exists():
         if token in text:
             match = re.search(re.escape(token), text)
             add(
-                "R92_LOCAL_DAEMON_LOOPBACK_EXPLICIT_SUBJECT",
+                "R92_LOCAL_DAEMON_SYSTEM_EXPLICIT_SUBJECT",
                 local_daemon_grpc,
                 line_number(text, match.start() if match else 0),
                 detail,
             )
 
     subject_policy = re.search(
-        r"impl LocalDaemonLoopbackSubjectPolicy\s*\{(?P<body>.*?)\n\}",
+        r"impl LocalDaemonSystemSubjectPolicy\s*\{(?P<body>.*?)\n\}",
         text,
         re.S,
     )
     if subject_policy is None:
         add(
-            "R92_LOCAL_DAEMON_LOOPBACK_EXPLICIT_SUBJECT",
+            "R92_LOCAL_DAEMON_SYSTEM_EXPLICIT_SUBJECT",
             local_daemon_grpc,
             1,
-            "local daemon loopback subject policy implementation is missing",
+            "local daemon system subject policy implementation is missing",
         )
     else:
         body = subject_policy.group("body")
         offset = subject_policy.start("body")
         if "fn resolve(&self) -> anyhow::Result<String>" not in body:
             add(
-                "R92_LOCAL_DAEMON_LOOPBACK_EXPLICIT_SUBJECT",
+                "R92_LOCAL_DAEMON_SYSTEM_EXPLICIT_SUBJECT",
                 local_daemon_grpc,
                 line_number(text, offset),
-                "local daemon loopback subject resolution must not depend on callee",
+                "local daemon system subject resolution must not depend on callee",
             )
         if "callee_ura" in body:
             add(
-                "R92_LOCAL_DAEMON_LOOPBACK_EXPLICIT_SUBJECT",
+                "R92_LOCAL_DAEMON_SYSTEM_EXPLICIT_SUBJECT",
                 local_daemon_grpc,
                 line_number(text, offset),
-                "local daemon loopback subject policy must not read callee_ura",
+                "local daemon system subject policy must not read callee_ura",
             )
 
     raw_text = local_daemon_grpc.read_text(encoding="utf-8", errors="replace")
     for token, detail in (
         (
-            "loopback_invoke_request_does_not_pre_resolve_descriptor_ref",
-            "missing local daemon loopback descriptor projection regression test",
+            "local_system_invoke_request_does_not_pre_resolve_descriptor_ref",
+            "missing local daemon system descriptor projection regression test",
         ),
         (
-            "loopback_tuple_plan_requires_explicit_targeted_subject",
-            "missing local daemon loopback explicit-subject regression test",
+            "local_system_tuple_plan_requires_explicit_targeted_subject",
+            "missing local daemon system explicit-subject regression test",
         ),
     ):
         if token not in raw_text:
             add(
-                "R92_LOCAL_DAEMON_LOOPBACK_EXPLICIT_SUBJECT",
+                "R92_LOCAL_DAEMON_SYSTEM_EXPLICIT_SUBJECT",
                 local_daemon_grpc,
                 1,
                 detail,

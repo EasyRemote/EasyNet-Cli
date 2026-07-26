@@ -229,8 +229,8 @@ text = path.read_text(encoding="utf-8")
 probe = '''
 #[cfg(feature = "axon-pb")]
 #[allow(dead_code)]
-fn anonymous_local_loopback_probe() -> anyhow::Result<()> {
-    let _ = crate::daemon::invocation::dispatch::invocation_wire::LocalDaemonLoopbackInvocation::from_target(
+fn anonymous_local_daemon_system_probe() -> anyhow::Result<()> {
+    let _ = crate::daemon::invocation::dispatch::invocation_wire::LocalDaemonSystemInvocation::from_target(
         "job.run",
         serde_json::Value::Null,
         "easynet:///r/acme/device/local",
@@ -249,7 +249,7 @@ PY
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
-[[ "$rc" == "1" ]] || fail "local loopback direct invocation construction should exit 1 (got $rc)"
+[[ "$rc" == "1" ]] || fail "local daemon-system direct invocation construction should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
 python3 - "$SB/src/support/platform/local_daemon_grpc.rs" <<'PY'
@@ -272,7 +272,7 @@ PY
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
-[[ "$rc" == "1" ]] || fail "obsolete local loopback subject policy should exit 1 (got $rc)"
+[[ "$rc" == "1" ]] || fail "obsolete local daemon-system subject policy should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
 python3 - "$SB/src/daemon/invocation/bidi/bidi_dispatcher.rs" <<'PY'
@@ -385,7 +385,7 @@ pub(crate) fn invoke_local_daemon_ability_with_subject(
     payload_json: serde_json::Value,
     subject_ura: &str,
 ) -> anyhow::Result<serde_json::Value> {
-    let tuple_plan = LocalDaemonLoopbackTuplePlan::local_root_for_subject(
+    let tuple_plan = LocalDaemonSystemTuplePlan::local_root_for_subject(
         function_name,
         payload_json,
         subject_ura,

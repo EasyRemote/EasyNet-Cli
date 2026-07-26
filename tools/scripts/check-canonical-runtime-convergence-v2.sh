@@ -2769,7 +2769,7 @@ for rel, token in required_callers.items():
 
 required_tests = {
     "src/daemon/invocation/dispatch/request.rs": "invocation_builder_rejects_all_zero_principal_in_every_tuple_identity",
-    "src/support/platform/local_daemon_grpc.rs": "loopback_tuple_plan_rejects_all_zero_principal_before_transport",
+    "src/support/platform/local_daemon_grpc.rs": "local_system_tuple_plan_rejects_all_zero_principal_before_transport",
     "src/support/platform/local_invoke.rs": "all-zero User subject must fail before issuer construction",
     "src/daemon/keyring/mod.rs": "vault_open_rejects_legacy_v1_and_noncanonical_plaintext_shapes",
     "src/daemon/keyring/federated_bindings.rs": "open_or_create_rejects_persisted_all_zero_user_binding",
@@ -15575,12 +15575,12 @@ for fragment, code in required.items():
 PY
 }
 
-check_local_daemon_loopback_explicit_subject_contract() {
+check_local_daemon_system_explicit_subject_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local grpc="$cli_root/src/support/platform/local_daemon_grpc.rs"
   local invocation_wire="$cli_root/src/daemon/invocation/dispatch/invocation_wire.rs"
 
-  [[ -f "$grpc" ]] || fail "local daemon loopback source is missing: ${grpc#$cli_root/}"
+  [[ -f "$grpc" ]] || fail "local daemon system source is missing: ${grpc#$cli_root/}"
   [[ -f "$invocation_wire" ]] || fail "invocation wire source is missing: ${invocation_wire#$cli_root/}"
 
   if rg -n 'pub fn loopback\s*\(|fn loopback\s*\(|ProtoEnvelope::loopback' "$invocation_wire"; then
@@ -15599,32 +15599,32 @@ for token, code in (
     ("local_daemon_self", "self_subject_constructor_present"),
     ("local_daemon_default_callee_ura", "daemon_identity_named_as_callee_present"),
     ("fn local_root(", "subjectless_local_root_constructor_present"),
-    ("LocalDaemonLoopbackTuplePlan::local_root(", "subjectless_local_root_call_present"),
+    ("LocalDaemonSystemTuplePlan::local_root(", "subjectless_local_root_call_present"),
     ("fn invoke_local_daemon_ability(", "subjectless_generic_helper_present"),
     ("pub(crate) fn invoke_local_daemon_ability(", "subjectless_generic_helper_present"),
 ):
     if token in text:
-        raise SystemExit(f"local_daemon_loopback_explicit_subject:{code}")
+        raise SystemExit(f"local_daemon_system_explicit_subject:{code}")
 
 subject_resolver = re.search(
-    r"impl LocalDaemonLoopbackSubjectPolicy\s*\{(?P<body>.*?)\n\}",
+    r"impl LocalDaemonSystemSubjectPolicy\s*\{(?P<body>.*?)\n\}",
     text,
     re.S,
 )
 if not subject_resolver:
-    raise SystemExit("local_daemon_loopback_explicit_subject:subject_policy_impl_missing")
+    raise SystemExit("local_daemon_system_explicit_subject:subject_policy_impl_missing")
 body = subject_resolver.group("body")
 if "fn resolve(&self) -> anyhow::Result<String>" not in body:
-    raise SystemExit("local_daemon_loopback_explicit_subject:subject_resolve_must_not_take_callee")
+    raise SystemExit("local_daemon_system_explicit_subject:subject_resolve_must_not_take_callee")
 if "callee_ura" in body:
-    raise SystemExit("local_daemon_loopback_explicit_subject:subject_resolve_reads_callee")
+    raise SystemExit("local_daemon_system_explicit_subject:subject_resolve_reads_callee")
 
 for token, code in (
-    ("loopback_invoke_request_does_not_pre_resolve_descriptor_ref", "descriptor_projection_test_missing"),
-    ("loopback_tuple_plan_requires_explicit_targeted_subject", "explicit_subject_test_missing"),
+    ("local_system_invoke_request_does_not_pre_resolve_descriptor_ref", "descriptor_projection_test_missing"),
+    ("local_system_tuple_plan_requires_explicit_targeted_subject", "explicit_subject_test_missing"),
 ):
     if token not in text:
-        raise SystemExit(f"local_daemon_loopback_explicit_subject:{code}")
+        raise SystemExit(f"local_daemon_system_explicit_subject:{code}")
 PY
 }
 
@@ -22317,7 +22317,7 @@ EOF
 fn normalized_local_daemon_ura(value: &str) {
     crate::core::identity::contains_all_zero_principal_placeholder(value);
 }
-fn loopback_tuple_plan_rejects_all_zero_principal_before_transport() {}
+fn local_system_tuple_plan_rejects_all_zero_principal_before_transport() {}
 EOF
   cat >"$tmp/rust-all-zero-duplicate/src/support/platform/local_invoke.rs" <<'EOF'
 fn context(subject_ura: &str) {
@@ -26988,7 +26988,7 @@ EOF
   check_invocation_wire_callee_target_contract
   check_local_session_runtime_assembly_contract
   check_local_session_descriptor_ref_test_authority_contract
-  check_local_daemon_loopback_explicit_subject_contract
+  check_local_daemon_system_explicit_subject_contract
   check_sdk_directory_projection_fail_closed_contract
   check_sdk_principal_projection_fail_closed_contract
   check_runtime_owner_signer_custody_contract
@@ -27258,7 +27258,7 @@ check_runtime_wire_target_state_contract
 check_invocation_wire_callee_target_contract
 check_local_session_runtime_assembly_contract
 check_local_session_descriptor_ref_test_authority_contract
-check_local_daemon_loopback_explicit_subject_contract
+check_local_daemon_system_explicit_subject_contract
 check_canonical_receipt_resolver_trust_source_contract
 check_realm_trust_anchor_explicit_load_state_contract
 check_sdk_directory_projection_fail_closed_contract

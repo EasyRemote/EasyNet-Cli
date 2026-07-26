@@ -261,9 +261,9 @@ async fn invoke_stream_dispatches_registered_local_stream_ability() {
                     subject_ura,
                     InvocationDerivationPolicy::FreshRoot,
                 )
-                .expect("valid unsigned loopback stream envelope")
+                .expect("valid unsigned local-system stream envelope")
                 .into_inner(&function_name, &arguments)
-                .expect("complete unsigned loopback stream tuple"),
+                .expect("complete unsigned local-system stream tuple"),
             ),
             target: Some(test_invocation_target(&function_name)),
             arguments,
@@ -412,9 +412,9 @@ async fn invoke_stream_cancels_local_runtime_when_client_drops_response() {
                     TEST_DAEMON_URA,
                     InvocationDerivationPolicy::FreshRoot,
                 )
-                .expect("valid unsigned loopback stream envelope")
+                .expect("valid unsigned local-system stream envelope")
                 .into_inner(ABILITY, br#"{}"#)
-                .expect("complete unsigned loopback stream tuple"),
+                .expect("complete unsigned local-system stream tuple"),
             ),
             target: Some(test_invocation_target(ABILITY)),
             arguments: br#"{}"#.to_vec(),
@@ -495,7 +495,7 @@ async fn invoke_stream_accepts_descriptor_ref_function_name() {
                     TEST_DAEMON_URA,
                     InvocationDerivationPolicy::FreshRoot,
                 )
-                .expect("valid unsigned loopback stream envelope")
+                .expect("valid unsigned local-system stream envelope")
                 .into_inner(&descriptor_ref, &arguments)
                 .expect("complete descriptor-ref stream tuple"),
             ),
@@ -550,7 +550,7 @@ async fn invoke_stream_projects_empty_payload_terminal_frame_for_registry_snapsh
                     TEST_DAEMON_URA,
                     InvocationDerivationPolicy::FreshRoot,
                 )
-                .expect("valid unsigned loopback stream envelope")
+                .expect("valid unsigned local-system stream envelope")
                 .into_inner("browser.snapshot_once", br#"{}"#)
                 .expect("complete snapshot stream tuple"),
             ),
@@ -655,9 +655,9 @@ async fn invoke_stream_dispatches_non_default_descriptor_version() {
                     TEST_DAEMON_URA,
                     InvocationDerivationPolicy::FreshRoot,
                 )
-                .expect("valid loopback stream envelope")
+                .expect("valid local-system stream envelope")
                 .into_inner(&function_name, &arguments)
-                .expect("complete loopback stream tuple"),
+                .expect("complete local-system stream tuple"),
             ),
             target: Some(test_invocation_target(&function_name)),
             arguments,
@@ -1184,7 +1184,7 @@ async fn invoke_stream_unknown_function_returns_resolver_negative() {
 
 #[tokio::test]
 async fn invoke_rejects_caller_not_in_trust_anchor() {
-    // Trust-anchor membership is the first non-loopback check. A
+    // Trust-anchor membership is the first non-local-system check. A
     // URA absent from the anchor short-circuits to
     // `permission_denied` before any signature or replay work.
     let caller_ura = "easynet:///r/realm/agent/test.external";

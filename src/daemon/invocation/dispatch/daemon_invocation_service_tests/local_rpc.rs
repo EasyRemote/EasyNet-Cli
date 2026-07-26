@@ -472,7 +472,7 @@ async fn dispatch_local_rpc_selected_route_accepts_descriptor_ref_function_name(
 }
 
 #[tokio::test]
-async fn dispatch_local_rpc_selected_route_accepts_unsigned_loopback_request() {
+async fn dispatch_local_rpc_selected_route_accepts_unsigned_local_system_request() {
     use axon_sdk::invocation::{make_ability, InvocationLedger, LedgerSink};
 
     let _hg = crate::cli::commands::test_support::HomeGuard::new();
@@ -482,7 +482,7 @@ async fn dispatch_local_rpc_selected_route_accepts_unsigned_loopback_request() {
     let rt = runtime_assembly.runtime();
     rt.set_ledger_sink(LedgerSink::new(Arc::clone(&ledger)));
     let runtime_ability =
-        crate::core::ura::owner_ability_ura(TEST_DAEMON_URA, "demo.loopback_unsigned").unwrap();
+        crate::core::ura::owner_ability_ura(TEST_DAEMON_URA, "demo.local_system_unsigned").unwrap();
     rt.register_ability_with_options(
         runtime_ability.clone(),
         make_ability(|ctx| async move {
@@ -506,11 +506,11 @@ async fn dispatch_local_rpc_selected_route_accepts_unsigned_loopback_request() {
     .unwrap();
 
     let svc = make_service_with_test_runtime(runtime_assembly).with_session_realm("test-realm");
-    publish_test_route(&svc, TEST_DAEMON_URA, "demo.loopback_unsigned");
+    publish_test_route(&svc, TEST_DAEMON_URA, "demo.local_system_unsigned");
     sync_runtime_proof_from_catalog(
         &svc,
         TEST_DAEMON_URA,
-        "demo.loopback_unsigned",
+        "demo.local_system_unsigned",
         crate::daemon::ability::CallMode::Rpc,
     )
     .await;
@@ -519,7 +519,7 @@ async fn dispatch_local_rpc_selected_route_accepts_unsigned_loopback_request() {
     let descriptor_ref = catalog_test_descriptor_ref(
         svc.directory.local_ability_catalog.as_ref().unwrap(),
         TEST_DAEMON_URA,
-        "demo.loopback_unsigned",
+        "demo.local_system_unsigned",
         crate::daemon::ability::CallMode::Rpc,
     );
     let request = InvokeRequest {
@@ -530,12 +530,12 @@ async fn dispatch_local_rpc_selected_route_accepts_unsigned_loopback_request() {
                 "easynet:///r/test-realm/resource/camera-1",
                 InvocationDerivationPolicy::FreshRoot,
             )
-            .expect("valid loopback envelope")
-            .into_inner("demo.loopback_unsigned", &arguments)
-            .expect("complete loopback tuple"),
+            .expect("valid local-system envelope")
+            .into_inner("demo.local_system_unsigned", &arguments)
+            .expect("complete local-system tuple"),
         ),
         target: Some(
-            wire_invocation_target(&descriptor_ref, "demo.loopback_unsigned")
+            wire_invocation_target(&descriptor_ref, "demo.local_system_unsigned")
                 .expect("typed descriptor target"),
         ),
         arguments,
@@ -549,10 +549,12 @@ async fn dispatch_local_rpc_selected_route_accepts_unsigned_loopback_request() {
 
     assert!(
         axon_took_it,
-        "trusted loopback should enter Axon without external signature; result={:?}",
+        "trusted local-system should enter Axon without external signature; result={:?}",
         result.as_ref().err()
     );
-    let body = result.expect("loopback dispatch returns Ok").into_inner();
+    let body = result
+        .expect("local-system dispatch returns Ok")
+        .into_inner();
     let decoded: serde_json::Value =
         serde_json::from_slice(&body.result).expect("decode handler payload");
     assert_eq!(
@@ -572,21 +574,21 @@ async fn dispatch_local_rpc_selected_route_accepts_unsigned_loopback_request() {
     assert_eq!(
         records.len(),
         1,
-        "loopback dispatch must still be a single Axon-owned ledger row"
+        "local-system dispatch must still be a single Axon-owned ledger row"
     );
     assert_eq!(
         records[0].ability_name,
         catalog_test_descriptor_ref(
             svc.directory.local_ability_catalog.as_ref().unwrap(),
             TEST_DAEMON_URA,
-            "demo.loopback_unsigned",
+            "demo.local_system_unsigned",
             crate::daemon::ability::CallMode::Rpc,
         )
     );
     assert_eq!(
         records[0].caller_ura,
         crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
-        "loopback dispatch must be signed by daemon-local system identity"
+        "local-system dispatch must be signed by daemon-local system identity"
     );
     assert_eq!(records[0].callee_ura, TEST_DAEMON_URA);
     assert_eq!(

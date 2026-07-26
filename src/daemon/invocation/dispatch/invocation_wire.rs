@@ -78,14 +78,15 @@ pub struct ProtoEnvelope {
     wire_metadata: WireEnvelopeMetadata,
 }
 
-/// Daemon-owned local loopback request projection.
+/// Daemon-owned local-system request projection.
 ///
 /// This value is intentionally not the public `DaemonInvocation` SDK builder:
-/// local CLI loopback submits route names and lets the daemon dispatch boundary
-/// resolve descriptor refs. It retains only downstream request parameters and
-/// delegates canonical tuple derivation and wire envelope assembly to Axon.
+/// local daemon-system callers submit route names and let the daemon dispatch
+/// boundary resolve descriptor refs. It retains only downstream request
+/// parameters and delegates canonical tuple derivation and wire envelope
+/// assembly to Axon.
 #[derive(Debug, Clone)]
-pub(crate) struct LocalDaemonLoopbackInvocation {
+pub(crate) struct LocalDaemonSystemInvocation {
     function_name: String,
     caller_ura: String,
     callee_ura: String,
@@ -96,7 +97,7 @@ pub(crate) struct LocalDaemonLoopbackInvocation {
     trace_id: Option<String>,
 }
 
-impl LocalDaemonLoopbackInvocation {
+impl LocalDaemonSystemInvocation {
     pub(crate) fn from_target(
         function_name: &str,
         payload_json: serde_json::Value,
