@@ -1350,11 +1350,17 @@ PY
   if ! rg -q 'RealmAuthority' "$authority"; then
     fail "authority owner projection parser must expose RealmAuthority"
   fi
-  if ! rg -F -q '"hub" => Ok(Self::RealmAuthority)' "$authority"; then
-    fail "authority owner projection must preserve hub marker to RealmAuthority mapping"
+  if ! rg -F -q '"authority" => Ok(Self::RealmAuthority)' "$authority"; then
+    fail "authority owner projection must map authority marker to RealmAuthority"
   fi
-  if ! rg -q 'authority_scope_hub_marker_projects_realm_authority_state' "$authority"; then
-    fail "authority owner projection must test hub marker RealmAuthority projection"
+  if rg -F -q '"hub" => Ok(Self::RealmAuthority)' "$authority"; then
+    fail "authority owner projection must not preserve retired hub marker compatibility"
+  fi
+  if ! rg -q 'authority_scope_authority_marker_projects_realm_authority_state' "$authority"; then
+    fail "authority owner projection must test authority marker RealmAuthority projection"
+  fi
+  if ! rg -q 'authority_scope_rejects_retired_hub_owner_marker' "$authority"; then
+    fail "authority owner projection must test retired hub marker rejection"
   fi
 
   for required in \

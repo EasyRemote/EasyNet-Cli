@@ -49,8 +49,8 @@ impl AuthorityPredicate {
 
 /// Canonical owner-plane marker grammar for an [`AuthorityScope`].
 ///
-/// The owner projection is a product-level label, never a protocol owner.
-/// It has exactly five shapes: two bare planes (`device`, `hub`) and three
+/// The owner projection is a runtime-plane label, never a product deployment
+/// mode. It has exactly five shapes: two bare planes (`device`, `authority`) and three
 /// `<plane>:<id>` planes (`agent`, `user`, `plugin`). Parsing the marker is
 /// kept in its own type so the grammar lives in one place and every
 /// construction site is forced through the same validation.
@@ -73,7 +73,7 @@ impl OwnerProjection {
         };
         match marker {
             "device" => Ok(Self::Device),
-            "hub" => Ok(Self::RealmAuthority),
+            "authority" => Ok(Self::RealmAuthority),
             _ => {
                 let (plane, id) = marker.split_once(':').ok_or_else(invalid)?;
                 if !is_valid_owner_projection_id(id) {
@@ -94,7 +94,7 @@ impl OwnerProjection {
     fn canonical(&self) -> String {
         match self {
             Self::Device => "device".to_string(),
-            Self::RealmAuthority => "hub".to_string(),
+            Self::RealmAuthority => "authority".to_string(),
             Self::Agent(id) => format!("agent:{id}"),
             Self::User(id) => format!("user:{id}"),
             Self::Plugin(id) => format!("plugin:{id}"),
@@ -118,7 +118,7 @@ fn is_valid_owner_projection_id(id: &str) -> bool {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuthorityScope {
-    /// Human-readable owner plane: device, hub, agent:<id>, user:<id>, plugin:<id>.
+    /// Human-readable owner plane: device, authority, agent:<id>, user:<id>, plugin:<id>.
     ///
     /// This is intentionally not a protocol owner. The protocol owner is the
     /// callee/owner URA resolved during advertisement/invocation.
@@ -837,7 +837,13 @@ mod tests {
 
     #[test]
     fn authority_scope_accepts_every_canonical_owner_marker() {
-        for marker in ["device", "hub", "agent:codex", "user:u-1", "plugin:fs.read"] {
+        for marker in [
+            "device",
+            "authority",
+            "agent:codex",
+            "user:u-1",
+            "plugin:fs.read",
+        ] {
             let scope = AuthorityScope::new(marker, LOCAL_DEVICE_URA)
                 .unwrap_or_else(|err| panic!("{marker} must be a valid owner projection: {err}"));
             assert_eq!(scope.owner_projection(), marker);
@@ -845,11 +851,21 @@ mod tests {
     }
 
     #[test]
-    fn authority_scope_hub_marker_projects_realm_authority_state() {
-        let projection = OwnerProjection::parse("hub").expect("hub marker is accepted");
+    fn authority_scope_authority_marker_projects_realm_authority_state() {
+        let projection = OwnerProjection::parse("authority").expect("authority marker is accepted");
 
         assert_eq!(projection, OwnerProjection::RealmAuthority);
-        assert_eq!(projection.canonical(), "hub");
+        assert_eq!(projection.canonical(), "authority");
+    }
+
+    #[test]
+    fn authority_scope_rejects_retired_hub_owner_marker() {
+        assert_eq!(
+            AuthorityScope::new("hub", LOCAL_DEVICE_URA).unwrap_err(),
+            AbilityControlPlaneError::InvalidAuthorityOwnerProjection {
+                projection: "hub".to_string()
+            }
+        );
     }
 
     #[test]
