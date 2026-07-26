@@ -590,7 +590,7 @@ wait_hub_port_from caller
 wait_runtime hub /srv/easynet hub
 
 echo "==> bootstrapping PrincipalLifecycle"
-hub_cli "principal bootstrap --principal-ura '$ADMIN_URA' --create-idempotency-key admin-create-$TIMESTAMP --bind-idempotency-key admin-bind-$TIMESTAMP --json" \
+hub_cli "principal bootstrap --principal-ura '$ADMIN_URA' --proof-ref 'bootstrap-admin-$TIMESTAMP' --create-idempotency-key admin-create-$TIMESTAMP --bind-idempotency-key admin-bind-$TIMESTAMP --json" \
   >"$OUT_DIR/principal-admin.json"
 ADMIN_BINDING="$(jq -r '.principal.bindings[0].binding_id' "$OUT_DIR/principal-admin.json")"
 hub_cli "principal issue-enrollment --issuer-ura '$ADMIN_URA' --subject-principal-ura '$USER_URA' --proof-ref '$ADMIN_BINDING' --idempotency-key alice-principal-$TIMESTAMP --json" \

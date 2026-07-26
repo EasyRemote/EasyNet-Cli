@@ -50,6 +50,8 @@ fn principal_bound_device_join_hub_ura_uses_real_tcp_tls_daemon_without_backend(
             "bootstrap",
             "--principal-ura",
             ADMIN_URA,
+            "--proof-ref",
+            "bootstrap-tls-admin",
             "--create-idempotency-key",
             "tls-admin-create",
             "--bind-idempotency-key",

@@ -360,6 +360,7 @@ wait_runtime "$HUB_HOME" hub
 echo "==> bootstrapping user principal through CLI hub"
 cli_home "$HUB_HOME" principal bootstrap \
   --principal-ura "$ADMIN_URA" \
+  --proof-ref "bootstrap-admin-$TIMESTAMP" \
   --create-idempotency-key "admin-create-$TIMESTAMP" \
   --bind-idempotency-key "admin-bind-$TIMESTAMP" \
   --json >"$OUT_DIR/principal-admin.json"
