@@ -17,7 +17,6 @@ use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use ed25519_dalek::{Signer as _, SigningKey};
 use rand::RngCore as _;
 use serde_json::{json, Value};
-use sha2::{Digest as _, Sha256};
 
 static KEY_SERVICE: OnceLock<TestKeyService> = OnceLock::new();
 
@@ -145,7 +144,9 @@ fn sign_runtime_owner(request: Value, keys: &Mutex<BTreeMap<String, SigningKey>>
     if expected_public_key != actual_public_key {
         return error_response("policy", "runtime public projection does not match owner");
     }
-    if signer_policy_ref != runtime_signer_policy_ref(owner, &actual_public_key) {
+    if signer_policy_ref
+        != easynet_cli::daemon::identity::signer_policy_ref(owner, owner, &actual_public_key)
+    {
         return error_response(
             "policy",
             "runtime signing policy does not match owner projection",
@@ -155,17 +156,6 @@ fn sign_runtime_owner(request: Value, keys: &Mutex<BTreeMap<String, SigningKey>>
         "result": "signature",
         "signature_b64": BASE64_STANDARD.encode(key.sign(&canonical).to_bytes()),
     })
-}
-
-fn runtime_signer_policy_ref(owner: &str, public_key_b64: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(owner.as_bytes());
-    hasher.update(b"\0");
-    hasher.update(owner.as_bytes());
-    hasher.update(b"\0");
-    hasher.update(public_key_b64.as_bytes());
-    let digest = hasher.finalize();
-    format!("daemon-key-inventory:sha256:{}", hex::encode(&digest[..16]))
 }
 
 fn error_response(kind: &str, message: impl Into<String>) -> Value {

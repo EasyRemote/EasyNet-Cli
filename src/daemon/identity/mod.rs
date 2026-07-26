@@ -12,4 +12,4 @@ pub(crate) mod receipt_signing;
 pub mod self_identity;
 mod signer_policy;
 
-pub(crate) use signer_policy::signer_policy_ref;
+pub use signer_policy::signer_policy_ref;

@@ -16803,6 +16803,7 @@ targets = [
     "src/daemon/identity/signer_policy.rs",
     "src/daemon/invocation/dispatch/request.rs",
     "src/ffi/invocation/mod.rs",
+    "tests/key_service_fixture.rs",
     "sdk/go/cabi_runtime.go",
     "sdk/go/signing.go",
     "sdk/go/signing_test.go",
@@ -16845,6 +16846,19 @@ all_text = "\n".join(combined)
 for token, code in required:
     if token not in all_text:
         raise SystemExit(f"sdk_provider_managed_signing_custody:{code}")
+
+fixture = (root / "tests/key_service_fixture.rs").read_text(
+    encoding="utf-8", errors="replace"
+)
+for token, code in (
+    ("fn runtime_signer_policy_ref", "fixture_local_runtime_policy_helper"),
+    ("sha2::{Digest", "fixture_local_policy_hasher"),
+    ("daemon-key-inventory", "fixture_legacy_policy_namespace"),
+):
+    if token in fixture:
+        raise SystemExit(f"sdk_provider_managed_signing_custody:{code}")
+if "easynet_cli::daemon::identity::signer_policy_ref(owner, owner, &actual_public_key)" not in fixture:
+    raise SystemExit("sdk_provider_managed_signing_custody:fixture_not_using_canonical_policy_ref")
 
 request = (root / "src/daemon/invocation/dispatch/request.rs").read_text(
     encoding="utf-8", errors="replace"
