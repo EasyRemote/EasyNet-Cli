@@ -4159,13 +4159,18 @@ check_sdk_history_authority_subject_contract() {
   local go_runtime="$cli_root/sdk/go/runtime_ability.go"
   local go_helper="$cli_root/sdk/go/session_authority_subjects.go"
   local go_test="$cli_root/sdk/go/authorized_runtime_session_test.go"
+  local go_receipt="$cli_root/sdk/go/receipt.go"
+  local go_receipt_test="$cli_root/sdk/go/receipt_test.go"
   local py="$cli_root/sdk/python/easynet_sdk/authorized_runtime_session.py"
   local py_helper="$cli_root/sdk/python/easynet_sdk/_session_authority_subjects.py"
   local py_test="$cli_root/sdk/python/tests/test_authorized_runtime_session.py"
+  local py_receipt="$cli_root/sdk/python/easynet_sdk/receipt.py"
+  local py_receipt_guard="$cli_root/sdk/python/easynet_sdk/_receipt_history_admission.py"
+  local py_receipt_test="$cli_root/sdk/python/tests/test_receipt.py"
   local node="$cli_root/sdk/node/index.js"
   local node_test="$cli_root/sdk/node/test/runtime-core.test.mjs"
 
-  "$PYTHON_BIN" - "$go" "$go_runtime" "$go_helper" "$go_test" "$py" "$py_helper" "$py_test" "$node" "$node_test" <<'PY'
+  "$PYTHON_BIN" - "$go" "$go_runtime" "$go_helper" "$go_test" "$go_receipt" "$go_receipt_test" "$py" "$py_helper" "$py_test" "$py_receipt" "$py_receipt_guard" "$py_receipt_test" "$node" "$node_test" <<'PY'
 import sys
 from pathlib import Path
 
@@ -4174,9 +4179,14 @@ from pathlib import Path
     go_runtime_path,
     go_helper_path,
     go_test_path,
+    go_receipt_path,
+    go_receipt_test_path,
     py_path,
     py_helper_path,
     py_test_path,
+    py_receipt_path,
+    py_receipt_guard_path,
+    py_receipt_test_path,
     node_path,
     node_test_path,
 ) = map(Path, sys.argv[1:])
@@ -4199,6 +4209,7 @@ go = read(go_path)
 if go:
     go_runtime = read(go_runtime_path)
     go_helper = read(go_helper_path)
+    go_receipt = read(go_receipt_path)
     require(
         go_helper_path,
         "func runtimeSessionAuthorityAdmitsSubject(",
@@ -4257,6 +4268,20 @@ if go:
         raise SystemExit("sdk_go_history_authority_not_using_canonical_subject_admission")
     if "sessionHistoryAuthoritySubjectMatches(" in go:
         raise SystemExit("sdk_go_history_authority_exact_subject_helper_retired")
+    provider_body = section(
+        go_receipt,
+        "func (p *RuntimeReceiptProvider) List(",
+        "func (p *RuntimeReceiptProvider) Get(",
+    )
+    if "validateSessionHistoryRequest(request, scope)" not in provider_body:
+        raise SystemExit("sdk_go_receipt_provider_history_admission_guard_missing")
+    if provider_body.find("validateSessionHistoryRequest(request, scope)") > provider_body.find("p.routes.list("):
+        raise SystemExit("sdk_go_receipt_provider_history_admission_after_route")
+    require(
+        go_receipt_test_path,
+        "TestRuntimeReceiptProviderRejectsDeviceSubjectBeforeDescriptorResolution",
+        "sdk_go_receipt_provider_history_subject_guard_test_missing",
+    )
     require(
         go_test_path,
         "TestAuthorizedRuntimeSessionHistoryAllowsUserOwnedResourceSubjectBeforeReceiptProvider",
@@ -4301,12 +4326,12 @@ if go:
 py = read(py_path)
 if py:
     py_helper = read(py_helper_path)
-    for token in (
-        "session_authority_admits_subject",
-        "is_runtime_state_read_subject_ura",
-    ):
-        if token not in py:
-            raise SystemExit(f"sdk_python_authority_subject_shared_helper_import_missing:{token}")
+    py_receipt = read(py_receipt_path)
+    py_guard = read(py_receipt_guard_path)
+    if "validate_receipt_history_request" not in py:
+        raise SystemExit("sdk_python_session_history_not_using_shared_receipt_guard")
+    if "validate_receipt_history_request" not in py_receipt:
+        raise SystemExit("sdk_python_receipt_provider_not_using_shared_history_guard")
     require(
         py_helper_path,
         "def session_authority_admits_subject(",
@@ -4348,12 +4373,26 @@ if py:
     ):
         if token not in py_helper:
             raise SystemExit(f"sdk_python_runtime_state_read_subject_predicate_missing:{token}")
-    call_body = section(
-        py,
-        "def _validate_session_history_call(",
-        "def _validate_session_history_filter_binding(",
+    for token in (
+        "def validate_receipt_history_request(",
+        "def _validate_receipt_history_call(",
+        "def _validate_receipt_history_filter_binding(",
+        "def _validate_receipt_history_authority_binding(",
+        "is_runtime_state_read_subject_ura(call.subject_ura)",
+        "session_authority_admits_subject(authority, subject_ura)",
+    ):
+        if token not in py_guard:
+            raise SystemExit(f"sdk_python_receipt_history_shared_guard_missing:{token}")
+    provider_body = section(
+        py_receipt,
+        "class RuntimeReceiptProvider:",
+        "def _query_arguments(",
     )
-    if "is_runtime_state_read_subject_ura(call.subject_ura)" not in call_body:
+    if "validate_receipt_history_request(" not in provider_body:
+        raise SystemExit("sdk_python_receipt_provider_history_admission_guard_missing")
+    if provider_body.find("validate_receipt_history_request(") > provider_body.find("self._routes.list("):
+        raise SystemExit("sdk_python_receipt_provider_history_admission_after_route")
+    if "is_runtime_state_read_subject_ura(call.subject_ura)" not in py_guard:
         raise SystemExit("sdk_python_history_call_subject_not_runtime_state_read")
     for forbidden in (
         "f\"resource/user.{owner_user_id}/\" in subject_ura",
@@ -4361,19 +4400,25 @@ if py:
         "'resource/user.' in subject_ura",
         "'resource/agent.' in subject_ura",
     ):
-        if forbidden in py or forbidden in py_helper:
+        if forbidden in py or forbidden in py_helper or forbidden in py_guard:
             raise SystemExit("sdk_python_authority_subject_substring_expansion")
-    body = section(
-        py,
-        "def _validate_session_history_authority_binding(",
-        "def _validate_runtime_call_required(",
-    )
-    if "session_authority_admits_subject(authority, subject_ura)" not in body:
-        raise SystemExit("sdk_python_history_authority_not_using_canonical_subject_admission")
     if "def _session_authority_admits_subject(" in py:
         raise SystemExit("sdk_python_history_authority_private_wrapper_retired")
+    for retired in (
+        "def _validate_session_history_call(",
+        "def _validate_session_history_filter_binding(",
+        "def _validate_session_history_authority_binding(",
+        "def _runtime_call_authority(",
+    ):
+        if retired in py:
+            raise SystemExit(f"sdk_python_session_history_duplicate_guard_retired:{retired}")
     if "_session_history_authority_subject_matches(" in py:
         raise SystemExit("sdk_python_history_authority_exact_subject_helper_retired")
+    require(
+        py_receipt_test_path,
+        "test_runtime_receipt_provider_rejects_device_subject_before_descriptor_resolution",
+        "sdk_python_receipt_provider_history_subject_guard_test_missing",
+    )
     require(
         py_test_path,
         "test_history_allows_user_owned_resource_subject_before_receipt_provider",

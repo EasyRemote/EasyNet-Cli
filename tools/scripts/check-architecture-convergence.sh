@@ -9190,8 +9190,8 @@ for (
     (
         cli_root / "sdk/python/easynet_sdk/authorized_runtime_session.py",
         "list",
-        "_validate_session_history_request(request, required_scope)",
-        "_validate_session_history_filter_binding(request.call, request.filter)",
+        "validate_receipt_history_request(request.call, request.filter, required_scope)",
+        "_validate_receipt_history_filter_binding(call, receipt_filter)",
         "_receipt_history_list_authority_scope(self._session._receipts)",
         "receipt_history_list_authority_scope",
         "session_authority_admits_subject(authority, subject_ura)",
@@ -9204,6 +9204,12 @@ for (
     if not path.exists():
         continue
     text = source(path)
+    guard_text = ""
+    if path.suffix == ".py":
+        guard_path = cli_root / "sdk/python/easynet_sdk/_receipt_history_admission.py"
+        if guard_path.exists():
+            guard_text = source(guard_path)
+    combined_text = text + "\n" + guard_text
     if "SessionHistoryOperations" not in text:
         continue
     if path.suffix == ".go":
@@ -9243,7 +9249,7 @@ for (
                 line_number(text, offset),
                 "Session history list must resolve the provider-declared authority scope",
             )
-    if request_validator not in text or filter_validator not in text:
+    if request_validator not in text or filter_validator not in combined_text:
         add(
             "R96_SDK_HISTORY_FILTER_TUPLE_BINDING",
             path,
@@ -9257,7 +9263,7 @@ for (
             1,
             "Session history validation must depend on a provider-declared authority-scope capability",
         )
-    if canonical_session_admission not in text:
+    if canonical_session_admission not in combined_text:
         add(
             "R96_SDK_HISTORY_FILTER_TUPLE_BINDING",
             path,
@@ -9302,7 +9308,7 @@ for (
             "history filter callee_ura must be compared with call callee_ura",
         ),
     ):
-        if token not in text:
+        if token not in combined_text:
             add("R96_SDK_HISTORY_FILTER_TUPLE_BINDING", path, 1, detail)
     for retired in (
         "filter_subject_ura",

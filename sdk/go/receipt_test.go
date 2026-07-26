@@ -86,9 +86,10 @@ func TestRuntimeReceiptProviderUsesCanonicalHistoryAndTraceAbilities(t *testing.
 	ability, _ := NewRuntimeAbilityClient(runtime, NewCanonicalAddressing())
 	provider, _ := NewRuntimeReceiptProvider(ability)
 	client, _ := NewReceiptClient(provider)
+	call := runtimeReceiptHistoryTestContext(t)
 
 	page, err := client.List(context.Background(), ReceiptListRequest{
-		Call:   runtimeAbilityTestContext(),
+		Call:   call,
 		Limit:  5,
 		Filter: ReceiptFilter{SubjectURAs: []string{"easynet:///r/example/device/dev-a"}},
 	})
@@ -120,9 +121,12 @@ func TestRuntimeReceiptProviderUsesCanonicalHistoryAndTraceAbilities(t *testing.
 	if len(descriptorRequests) != 3 {
 		t.Fatalf("descriptor resolver calls = %d, want 3", len(descriptorRequests))
 	}
-	for _, request := range descriptorRequests {
+	for index, request := range descriptorRequests {
 		if request.Provider != "receipt_history" {
 			t.Fatalf("receipt descriptor provider = %q, want receipt_history in %#v", request.Provider, request)
+		}
+		if index == 0 && request.SubjectURA != call.SubjectURA {
+			t.Fatalf("receipt descriptor subject_ura = %q, want canonical history subject %q", request.SubjectURA, call.SubjectURA)
 		}
 	}
 	listArgs := invocations[0]["args"].(map[string]any)
@@ -187,7 +191,7 @@ func TestRuntimeReceiptProviderUsesExplicitRouteSet(t *testing.T) {
 		t.Fatalf("newRuntimeReceiptProviderWithRoutes: %v", err)
 	}
 
-	if _, err := provider.List(context.Background(), ReceiptListRequest{Call: runtimeAbilityTestContext()}); err != nil {
+	if _, err := provider.List(context.Background(), ReceiptListRequest{Call: runtimeReceiptHistoryTestContextWithScope(t, "receipt.catalog.list")}); err != nil {
 		t.Fatalf("List: %v", err)
 	}
 	if _, err := provider.Get(context.Background(), ReceiptGetRequest{
@@ -208,6 +212,49 @@ func TestRuntimeReceiptProviderUsesExplicitRouteSet(t *testing.T) {
 		!strings.Contains(descriptors[1], "receipt.catalog.get") ||
 		!strings.Contains(descriptors[2], "receipt.catalog.trace") {
 		t.Fatalf("route set descriptors = %#v", descriptors)
+	}
+}
+
+func TestRuntimeReceiptProviderRejectsDeviceSubjectBeforeDescriptorResolution(t *testing.T) {
+	transport := RuntimeTransportFunc{
+		ResolveDescriptorRefFunc: func(context.Context, []byte) ([]byte, error) {
+			t.Fatal("descriptor resolver transport must not run before history subject admission")
+			return nil, nil
+		},
+	}
+	runtime, _ := NewRuntimeClient(transport)
+	ability, _ := NewRuntimeAbilityClient(runtime, NewCanonicalAddressing())
+	provider, _ := NewRuntimeReceiptProvider(ability)
+	call := runtimeReceiptHistoryTestContext(t)
+	call.SubjectURA = "easynet:///r/example/device/dev-a"
+
+	_, err := provider.List(context.Background(), ReceiptListRequest{Call: call})
+	if err == nil || !IsCode(err, ErrInvalidInvocation) || !strings.Contains(err.Error(), "runtime-state read subject") {
+		t.Fatalf("List error = %v, want runtime-state read subject rejection", err)
+	}
+}
+
+func runtimeReceiptHistoryTestContext(t *testing.T) RuntimeCallContext {
+	return runtimeReceiptHistoryTestContextWithScope(t, "invocation.history.*")
+}
+
+func runtimeReceiptHistoryTestContextWithScope(t *testing.T, scope string) RuntimeCallContext {
+	t.Helper()
+	subject, err := RuntimeStateReadSubjectURA("example", "alice")
+	if err != nil {
+		t.Fatalf("RuntimeStateReadSubjectURA: %v", err)
+	}
+	return RuntimeCallContext{
+		CallerURA:     "easynet:///r/example/agent/backend",
+		CalleeURA:     "easynet:///r/example/device/dev-a",
+		SubjectURA:    subject,
+		NonceBase64:   "AQIDBAUGBwgJCgsMDQ4PEA==",
+		CausalContext: map[string]any{"form": "none"},
+		Metadata:      map[string]any{"request_id": "call-1"},
+		Authority: sessionAuthorityFixture(t, map[string]any{
+			"scopes":                     []string{scope},
+			"allowed_followup_abilities": []string{scope},
+		}),
 	}
 }
 
@@ -301,7 +348,7 @@ func TestRuntimeReceiptProviderForwardsAndValidatesCursor(t *testing.T) {
 	ability, _ := NewRuntimeAbilityClient(runtime, NewCanonicalAddressing())
 	provider, _ := NewRuntimeReceiptProvider(ability)
 	page, err := provider.List(context.Background(), ReceiptListRequest{
-		Call:   runtimeAbilityTestContext(),
+		Call:   runtimeReceiptHistoryTestContext(t),
 		Cursor: " receipt-history:v1:cursor-1 ",
 		Limit:  2,
 	})
@@ -321,7 +368,7 @@ func TestRuntimeReceiptProviderForwardsAndValidatesCursor(t *testing.T) {
 		"next_cursor": "receipt-history:v1:cursor-1",
 	})
 	_, err = repeated.List(context.Background(), ReceiptListRequest{
-		Call:   runtimeAbilityTestContext(),
+		Call:   runtimeReceiptHistoryTestContext(t),
 		Cursor: "receipt-history:v1:cursor-1",
 	})
 	if err == nil || !strings.Contains(err.Error(), "repeated cursor") {
@@ -357,7 +404,7 @@ func TestRuntimeReceiptProviderProjectsMultipleAbilityURAsAsOneSet(t *testing.T)
 	ability, _ := NewRuntimeAbilityClient(runtime, NewCanonicalAddressing())
 	provider, _ := NewRuntimeReceiptProvider(ability)
 	_, err := provider.List(context.Background(), ReceiptListRequest{
-		Call: runtimeAbilityTestContext(),
+		Call: runtimeReceiptHistoryTestContext(t),
 		Filter: ReceiptFilter{AbilityURAs: []string{
 			"easynet:///r/example/ability/authority.observe.health",
 			"easynet:///r/example/ability/authority.observe.metrics",
@@ -377,7 +424,7 @@ func TestRuntimeReceiptProviderRejectsMalformedBoundedResults(t *testing.T) {
 		"ledger_ura": "easynet:///r/example/resource/device.dev-a/billing/invocations",
 		"records":    []any{receiptLedgerRecordFixture(), receiptLedgerRecordFixture()},
 	})
-	if _, err := provider.List(context.Background(), ReceiptListRequest{Call: runtimeAbilityTestContext(), Limit: 1}); err == nil || !strings.Contains(err.Error(), "exceeds the bounded page") {
+	if _, err := provider.List(context.Background(), ReceiptListRequest{Call: runtimeReceiptHistoryTestContext(t), Limit: 1}); err == nil || !strings.Contains(err.Error(), "exceeds the bounded page") {
 		t.Fatalf("bounded list error = %v", err)
 	}
 
@@ -402,14 +449,14 @@ func TestRuntimeReceiptProviderRejectsMalformedBoundedResults(t *testing.T) {
 func TestRuntimeReceiptProviderRejectsNonCanonicalURAFilters(t *testing.T) {
 	provider := runtimeReceiptProviderWithOutput(t, map[string]any{})
 	_, err := provider.List(context.Background(), ReceiptListRequest{
-		Call:   runtimeAbilityTestContext(),
+		Call:   runtimeReceiptHistoryTestContext(t),
 		Filter: ReceiptFilter{CallerURA: "https://example.invalid/user/alice"},
 	})
 	if err == nil || !strings.Contains(err.Error(), "caller_ura must be a canonical URA") {
 		t.Fatalf("non-canonical filter error = %v", err)
 	}
 	_, err = provider.List(context.Background(), ReceiptListRequest{
-		Call:               runtimeAbilityTestContext(),
+		Call:               runtimeReceiptHistoryTestContext(t),
 		ExcludeAbilityURAs: []string{"easynet:///r/example/ability/authority.observe.health", "easynet:///r/example/ability/authority.observe.health"},
 	})
 	if err == nil || !strings.Contains(err.Error(), "must not contain duplicates") {
@@ -422,7 +469,7 @@ func TestRuntimeReceiptProviderRequiresCanonicalLedgerSource(t *testing.T) {
 		"ledger_ura": "https://example.invalid/invocations",
 		"records":    []any{},
 	})
-	_, err := provider.List(context.Background(), ReceiptListRequest{Call: runtimeAbilityTestContext()})
+	_, err := provider.List(context.Background(), ReceiptListRequest{Call: runtimeReceiptHistoryTestContext(t)})
 	if err == nil || !strings.Contains(err.Error(), "ledger_ura must be a canonical URA") {
 		t.Fatalf("non-canonical ledger source error = %v", err)
 	}

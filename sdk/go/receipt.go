@@ -385,6 +385,10 @@ func (p *RuntimeReceiptProvider) List(ctx context.Context, request ReceiptListRe
 	if err := p.requireReady(); err != nil {
 		return ReceiptHistoryPage{}, err
 	}
+	scope, err := p.ReceiptHistoryListAuthorityScope()
+	if err != nil {
+		return ReceiptHistoryPage{}, err
+	}
 	limit, err := receiptHistoryLimit(request.Limit)
 	if err != nil {
 		return ReceiptHistoryPage{}, err
@@ -403,6 +407,9 @@ func (p *RuntimeReceiptProvider) List(ctx context.Context, request ReceiptListRe
 	}
 	excluded, err := receiptURAList(request.ExcludeAbilityURAs, "exclude_ability_uras")
 	if err != nil {
+		return ReceiptHistoryPage{}, err
+	}
+	if err := validateSessionHistoryRequest(request, scope); err != nil {
 		return ReceiptHistoryPage{}, err
 	}
 	if len(excluded) != 0 {

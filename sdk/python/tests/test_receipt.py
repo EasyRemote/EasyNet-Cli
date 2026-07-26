@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import base64
 import hashlib
+import json
 from pathlib import Path
 from typing import Any
 
@@ -8,6 +10,8 @@ import pytest
 
 import easynet_sdk.receipt as receipt_module
 from easynet_sdk._receipt_routes import _RECEIPT_ROUTE_MANIFEST_SHA256
+from easynet_sdk._session_authority_subjects import runtime_state_read_subject_ura
+from easynet_sdk.authority import SessionAuthority
 from easynet_sdk.axon_addressing import AddressingClient, AxonAddressingTransport
 from easynet_sdk.errors import ErrorCode, SDKError
 from easynet_sdk.receipt import (
@@ -26,7 +30,7 @@ from easynet_sdk.receipt import (
     _RuntimeReceiptRouteSet,
 )
 from easynet_sdk.runtime import RuntimeClient
-from easynet_sdk.runtime_ability import RuntimeAbilityClient
+from easynet_sdk.runtime_ability import RuntimeAbilityClient, RuntimeCallContext
 
 from test_runtime_ability import RuntimeTransportFake, _call
 
@@ -77,7 +81,24 @@ def _record(
 
 
 def _provider() -> tuple[RuntimeReceiptProvider, RuntimeTransportFake]:
-    transport = RuntimeTransportFake()
+    class ReceiptRuntimeTransport(RuntimeTransportFake):
+        def resolve_descriptor_ref(self, request_json: bytes) -> bytes:
+            request = json.loads(request_json)
+            self.descriptor_requests.append(request)
+            owner_prefix = _ability_owner_prefix(str(request["callee_ura"]))
+            return json.dumps(
+                {
+                    "descriptor_ref": (
+                        "easynet:///r/example/ability/"
+                        f"{owner_prefix}."
+                        f"{request['ability']}@1.0.0#"
+                        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                        "!read"
+                    )
+                }
+            ).encode()
+
+    transport = ReceiptRuntimeTransport()
     ability = RuntimeAbilityClient(
         RuntimeClient(transport),  # type: ignore[arg-type]
         AddressingClient(AxonAddressingTransport()),
@@ -85,11 +106,66 @@ def _provider() -> tuple[RuntimeReceiptProvider, RuntimeTransportFake]:
     return RuntimeReceiptProvider(ability), transport
 
 
+def _ability_owner_prefix(callee_ura: str) -> str:
+    if "/authority" in callee_ura:
+        return "authority"
+    if "/agent/" in callee_ura:
+        return callee_ura.rsplit("/agent/", 1)[1].strip()
+    if "/device/" in callee_ura:
+        return f"device.{callee_ura.rsplit('/device/', 1)[1].strip()}"
+    if "/user/" in callee_ura:
+        return f"user.{callee_ura.rsplit('/user/', 1)[1].strip()}"
+    raise AssertionError(f"unsupported test callee URA: {callee_ura}")
+
+
 def _output(**values: object) -> dict[str, object]:
     return {
         "ledger_ura": LEDGER_URA,
         **values,
     }
+
+
+def _history_call(
+    *,
+    caller_ura: str = "easynet:///r/example/agent/backend",
+    callee_ura: str = "easynet:///r/example/authority",
+    scope: str = "invocation.history.*",
+    followup_ability: str = "invocation.history.list",
+) -> RuntimeCallContext:
+    subject_ura = runtime_state_read_subject_ura("example", "alice")
+    payload = {
+        "issuer_ura": caller_ura,
+        "session_id": "session-1",
+        "session_owner_user_id": "alice",
+        "creator_principal_id": caller_ura,
+        "callee_ura": callee_ura,
+        "subject_ura": "easynet:///r/example/resource/user.alice/session/session-1",
+        "audience": callee_ura,
+        "scopes": [scope],
+        "allowed_actions": ["read"],
+        "allowed_followup_abilities": [followup_ability],
+        "issued_at_ms": 1000,
+        "expires_at_ms": 2000,
+    }
+    metadata = base64.b64encode(
+        json.dumps(
+            {
+                "payload": payload,
+                "signature": base64.b64encode(b"session-signature").decode("ascii"),
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    ).decode("ascii")
+    return RuntimeCallContext(
+        caller_ura=caller_ura,
+        callee_ura=callee_ura,
+        subject_ura=subject_ura,
+        nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
+        causal_context={"form": "none"},
+        metadata={"request_id": "call-1"},
+        authority=SessionAuthority.from_metadata(metadata),
+    )
 
 
 def test_receipt_reference_uses_canonical_axon_scalar_projection() -> None:
@@ -167,9 +243,13 @@ def test_runtime_receipt_list_projects_typed_query_and_axon_record() -> None:
     transport.output_json = _output(
         records=[_record()], next_cursor="receipt-history:v1:cursor-1"
     )
+    call = _history_call(
+        caller_ura="easynet:///r/example/user/alice",
+        callee_ura="easynet:///r/example/agent/alice.worker",
+    )
     page = provider.list(
         ReceiptListRequest(
-            call=_call(),
+            call=call,
             lookup=ReceiptLookup(trace_id="trace-1"),
             filter=ReceiptFilter(
                 caller_ura="easynet:///r/example/user/alice",
@@ -195,6 +275,7 @@ def test_runtime_receipt_list_projects_typed_query_and_axon_record() -> None:
     assert isinstance(page.records[0], InvocationLedgerRecord)
     assert page.records[0].receipt_chain.anchors == ()
     assert transport.descriptor_requests[-1]["provider"] == "receipt_history"
+    assert transport.descriptor_requests[-1]["subject_ura"] == call.subject_ura
     assert transport.seen["args"] == {
         "key": {"trace_id": "trace-1"},
         "filter": {
@@ -245,7 +326,14 @@ def test_runtime_receipt_provider_uses_explicit_route_set() -> None:
     )
 
     transport.output_json = _output(records=[])
-    provider.list(ReceiptListRequest(call=_call()))
+    provider.list(
+        ReceiptListRequest(
+            call=_history_call(
+                scope="receipt.catalog.list",
+                followup_ability="receipt.catalog.list",
+            )
+        )
+    )
     assert transport.seen["descriptor_ref"] == (
         "easynet:///r/example/ability/authority.receipt.catalog.list@1.0.0"
     )
@@ -267,6 +355,26 @@ def test_runtime_receipt_provider_uses_explicit_route_set() -> None:
     )
 
 
+def test_runtime_receipt_provider_rejects_device_subject_before_descriptor_resolution() -> None:
+    provider, transport = _provider()
+    call = _history_call()
+    bad_call = RuntimeCallContext(
+        caller_ura=call.caller_ura,
+        callee_ura=call.callee_ura,
+        subject_ura="easynet:///r/example/device/dev-a",
+        nonce_base64=call.nonce_base64,
+        causal_context=call.causal_context,
+        descriptor_version=call.descriptor_version,
+        metadata=call.metadata,
+        authority=call.authority,
+    )
+
+    with pytest.raises(SDKError, match="runtime-state read subject") as caught:
+        provider.list(ReceiptListRequest(call=bad_call))
+    assert caught.value.code == ErrorCode.INVALID_INVOCATION
+    assert transport.descriptor_requests == []
+
+
 def test_runtime_receipt_provider_rejects_incomplete_route_set() -> None:
     with pytest.raises(SDKError, match="runtime receipt get route ability is required"):
         _RuntimeReceiptRouteSet(
@@ -279,7 +387,9 @@ def test_runtime_receipt_provider_rejects_incomplete_route_set() -> None:
 def test_runtime_receipt_list_accepts_maximum_bound() -> None:
     provider, transport = _provider()
     transport.output_json = _output(records=[])
-    page = provider.list(ReceiptListRequest(call=_call(), limit=MAX_RECEIPT_PAGE_LIMIT))
+    page = provider.list(
+        ReceiptListRequest(call=_history_call(), limit=MAX_RECEIPT_PAGE_LIMIT)
+    )
     assert page.limit == 500
     assert transport.seen["args"] == {"limit": 500}
 
@@ -289,7 +399,7 @@ def test_runtime_receipt_list_projects_multiple_ability_uras_as_one_set() -> Non
     transport.output_json = _output(records=[])
     provider.list(
         ReceiptListRequest(
-            call=_call(),
+            call=_history_call(),
             filter=ReceiptFilter(
                 ability_uras=(
                     "easynet:///r/example/ability/alice.worker.docs.read",
@@ -308,7 +418,7 @@ def test_runtime_receipt_list_projects_multiple_ability_uras_as_one_set() -> Non
 def test_runtime_receipt_list_rejects_invalid_page_bound(limit: object) -> None:
     provider, _ = _provider()
     with pytest.raises(SDKError):
-        provider.list(ReceiptListRequest(call=_call(), limit=limit))  # type: ignore[arg-type]
+        provider.list(ReceiptListRequest(call=_history_call(), limit=limit))  # type: ignore[arg-type]
 
 
 def test_runtime_receipt_list_forwards_and_validates_cursor() -> None:
@@ -316,7 +426,7 @@ def test_runtime_receipt_list_forwards_and_validates_cursor() -> None:
     transport.output_json = _output(records=[], next_cursor="receipt-history:v1:cursor-2")
     page = provider.list(
         ReceiptListRequest(
-            call=_call(),
+            call=_history_call(),
             cursor=" receipt-history:v1:cursor-1 ",
             limit=2,
         )
@@ -330,11 +440,11 @@ def test_runtime_receipt_list_forwards_and_validates_cursor() -> None:
     transport.output_json = _output(records=[], next_cursor="receipt-history:v1:cursor-1")
     with pytest.raises(SDKError, match="repeated cursor"):
         provider.list(
-            ReceiptListRequest(call=_call(), cursor="receipt-history:v1:cursor-1")
+            ReceiptListRequest(call=_history_call(), cursor="receipt-history:v1:cursor-1")
         )
 
     with pytest.raises(SDKError, match="cursor exceeds"):
-        provider.list(ReceiptListRequest(call=_call(), cursor="x" * 4097))
+        provider.list(ReceiptListRequest(call=_history_call(), cursor="x" * 4097))
 
 
 def test_runtime_receipt_list_rejects_noncanonical_and_duplicate_ura_filters() -> None:
@@ -342,14 +452,14 @@ def test_runtime_receipt_list_rejects_noncanonical_and_duplicate_ura_filters() -
     with pytest.raises(SDKError, match="caller_ura must be a canonical URA"):
         provider.list(
             ReceiptListRequest(
-                call=_call(),
+                call=_history_call(),
                 filter=ReceiptFilter(caller_ura="https://example.invalid/user/alice"),
             )
         )
     with pytest.raises(SDKError, match="must not contain duplicates"):
         provider.list(
             ReceiptListRequest(
-                call=_call(),
+                call=_history_call(),
                 exclude_ability_uras=(
                     "easynet:///r/example/ability/authority.observe.health",
                     "easynet:///r/example/ability/authority.observe.health",
@@ -365,7 +475,7 @@ def test_runtime_receipt_list_fails_closed_without_stable_cursor() -> None:
         records=[_record(request_id="one"), _record(request_id="two")]
     )
     with pytest.raises(SDKError, match="exceeds the bounded page"):
-        provider.list(ReceiptListRequest(call=_call(), limit=1))
+        provider.list(ReceiptListRequest(call=_history_call(), limit=1))
 
 
 def test_runtime_receipt_list_requires_canonical_ledger_source() -> None:
@@ -375,7 +485,7 @@ def test_runtime_receipt_list_requires_canonical_ledger_source() -> None:
         records=[],
     )
     with pytest.raises(SDKError, match="ledger_ura must be a canonical URA"):
-        provider.list(ReceiptListRequest(call=_call()))
+        provider.list(ReceiptListRequest(call=_history_call()))
 
 
 def test_runtime_receipt_get_requires_exactly_one_lookup_key() -> None:
@@ -440,7 +550,7 @@ def test_runtime_receipt_rejects_malformed_axon_record() -> None:
     provider, transport = _provider()
     transport.output_json = _output(records=[{"request_id": "missing-uras"}])
     with pytest.raises(SDKError, match="invalid Axon invocation ledger projection"):
-        provider.list(ReceiptListRequest(call=_call()))
+        provider.list(ReceiptListRequest(call=_history_call()))
 
 
 def test_receipt_client_delegates_verification_to_axon_receipt() -> None:

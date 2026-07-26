@@ -31,6 +31,7 @@ from ._receipt_routes import (
     _RECEIPT_HISTORY_LIST,
     _RECEIPT_TRACE_GET,
 )
+from ._receipt_history_admission import validate_receipt_history_request
 from .runtime import RuntimeReceipt
 from .runtime_ability import RuntimeAbilityClient, RuntimeCallContext
 
@@ -330,6 +331,11 @@ class RuntimeReceiptProvider:
         )
         if excluded:
             arguments["exclude_ability_uras"] = list(excluded)
+        validate_receipt_history_request(
+            request.call,
+            request.filter,
+            self.receipt_history_list_authority_scope(),
+        )
         output = self._routes.list(
             self._ability,
             request.call,
