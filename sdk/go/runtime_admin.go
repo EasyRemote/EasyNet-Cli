@@ -228,12 +228,34 @@ func runtimeSessionPage(output map[string]any) (RuntimeSessionPage, error) {
 	}
 	sessions := make([]RuntimeSession, 0, len(rows))
 	for _, row := range rows {
+		if _, ok := row["device_ura"]; ok {
+			return RuntimeSessionPage{}, invalidRuntimePayload("runtime admin session row preserves retired device_ura field", nil)
+		}
+		if _, ok := row["authority_ura"]; ok {
+			return RuntimeSessionPage{}, invalidRuntimePayload("runtime admin session row preserves retired authority_ura field", nil)
+		}
+		sessionID, err := requiredRuntimeAdminString(row, "session_id")
+		if err != nil {
+			return RuntimeSessionPage{}, err
+		}
+		runtimeHostURA, err := requiredRuntimeAdminString(row, "runtime_host_ura")
+		if err != nil {
+			return RuntimeSessionPage{}, err
+		}
+		controlAuthorityURA, err := requiredRuntimeAdminString(row, "control_authority_ura")
+		if err != nil {
+			return RuntimeSessionPage{}, err
+		}
+		state, err := requiredRuntimeAdminString(row, "state")
+		if err != nil {
+			return RuntimeSessionPage{}, err
+		}
 		sessions = append(sessions, RuntimeSession{
 			Kind:                runtimeAdminString(row, "kind"),
-			SessionID:           runtimeAdminString(row, "session_id"),
-			RuntimeHostURA:      runtimeAdminString(row, "device_ura"),
-			ControlAuthorityURA: runtimeAdminString(row, "authority_ura"),
-			State:               runtimeAdminString(row, "state"),
+			SessionID:           sessionID,
+			RuntimeHostURA:      runtimeHostURA,
+			ControlAuthorityURA: controlAuthorityURA,
+			State:               state,
 			SessionKind:         runtimeAdminString(row, "session_kind"),
 			CreatedUnixMS:       runtimeAdminInt64(row["created_unix_ms"]),
 			ExpiresUnixMS:       runtimeAdminInt64(row["expires_unix_ms"]),
@@ -264,6 +286,13 @@ func runtimeAdminString(value map[string]any, keys ...string) string {
 		}
 	}
 	return ""
+}
+
+func requiredRuntimeAdminString(value map[string]any, key string) (string, error) {
+	if raw, ok := value[key].(string); ok && strings.TrimSpace(raw) != "" {
+		return strings.TrimSpace(raw), nil
+	}
+	return "", invalidRuntimePayload("runtime admin session row field "+key+" is required", nil)
 }
 
 func requiredRuntimeAdminBool(output map[string]any, field string) (bool, error) {

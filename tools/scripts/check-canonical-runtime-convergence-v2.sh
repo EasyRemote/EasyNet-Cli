@@ -1229,14 +1229,17 @@ check_sdk_runtime_admin_authority_session_contract() {
     if ! rg -q '`json:"control_authority_ura,omitempty"`' "$go_admin"; then
       fail "Go SDK runtime-admin session projection must serialize control_authority_ura"
     fi
-    if ! rg -q 'RuntimeHostURA:\s+runtimeAdminString\(row, "device_ura"\)' "$go_admin"; then
-      fail "Go SDK runtime-admin adapter must decode daemon wire device_ura into RuntimeHostURA"
+    if ! rg -q 'RuntimeHostURA:\s+runtimeHostURA' "$go_admin"; then
+      fail "Go SDK runtime-admin adapter must decode canonical runtime_host_ura"
     fi
-    if ! rg -q 'ControlAuthorityURA:\s+runtimeAdminString\(row, "authority_ura"\)' "$go_admin"; then
-      fail "Go SDK runtime-admin adapter must decode daemon wire authority_ura into ControlAuthorityURA"
+    if ! rg -q 'ControlAuthorityURA:\s+controlAuthorityURA' "$go_admin"; then
+      fail "Go SDK runtime-admin adapter must decode canonical control_authority_ura"
     fi
-    if rg -n 'runtimeAdminString\(row, "hub_ura"\)' "$go_admin"; then
-      fail "Go SDK runtime-admin adapter preserves legacy daemon wire hub_ura fallback"
+    if rg -n 'runtimeAdminString\(row, "(hub_ura|device_ura|authority_ura)"\)' "$go_admin"; then
+      fail "Go SDK runtime-admin adapter preserves retired product-shaped session wire fallback"
+    fi
+    if ! rg -q 'retired device_ura field' "$go_admin"; then
+      fail "Go SDK runtime-admin adapter must reject retired session wire fields"
     fi
   fi
 
@@ -1250,14 +1253,17 @@ check_sdk_runtime_admin_authority_session_contract() {
     if ! rg -q 'control_authority_ura: str = ""' "$py_admin"; then
       fail "Python SDK runtime-admin session projection must expose control_authority_ura"
     fi
-    if ! rg -q 'runtime_host_ura=_admin_string\(row.get\("device_ura"\)\)' "$py_admin"; then
-      fail "Python SDK runtime-admin adapter must decode daemon wire device_ura into runtime_host_ura"
+    if ! rg -q 'runtime_host_ura=_required_admin_string\(row, "runtime_host_ura"\)' "$py_admin"; then
+      fail "Python SDK runtime-admin adapter must decode canonical runtime_host_ura"
     fi
-    if ! rg -q 'control_authority_ura=_admin_string\(row.get\("authority_ura"\)\)' "$py_admin"; then
-      fail "Python SDK runtime-admin adapter must decode daemon wire authority_ura into control_authority_ura"
+    if ! rg -q 'control_authority_ura=_required_admin_string\(' "$py_admin"; then
+      fail "Python SDK runtime-admin adapter must decode canonical control_authority_ura"
     fi
-    if rg -n 'row.get\("hub_ura"\)' "$py_admin"; then
-      fail "Python SDK runtime-admin adapter preserves legacy daemon wire hub_ura fallback"
+    if rg -n 'row.get\("(hub_ura|device_ura|authority_ura)"\)' "$py_admin"; then
+      fail "Python SDK runtime-admin adapter preserves retired product-shaped session wire fallback"
+    fi
+    if ! rg -q 'retired device_ura field' "$py_admin"; then
+      fail "Python SDK runtime-admin adapter must reject retired session wire fields"
     fi
   fi
 

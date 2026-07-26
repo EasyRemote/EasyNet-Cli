@@ -134,14 +134,25 @@ for required in ("runtime_host_ura", "control_authority_ura"):
     if required not in fields:
         raise SystemExit(f"python_runtime_admin_session_projection:missing_field:{required}")
 for required_mapping in (
-    'runtime_host_ura=_admin_string(row.get("device_ura"))',
-    'control_authority_ura=_admin_string(row.get("authority_ura"))',
+    'runtime_host_ura=_required_admin_string(row, "runtime_host_ura")',
+    'control_authority_ura=_required_admin_string(',
 ):
     if required_mapping not in text:
         raise SystemExit(
-            "python_runtime_admin_session_projection:missing_wire_to_neutral_mapping:"
+            "python_runtime_admin_session_projection:missing_canonical_wire_mapping:"
             + required_mapping
         )
+for retired_mapping in (
+    'row.get("device_ura")',
+    'row.get("authority_ura")',
+):
+    if retired_mapping in text:
+        raise SystemExit(
+            "python_runtime_admin_session_projection:retired_wire_mapping:"
+            + retired_mapping
+        )
+if "retired device_ura field" not in text:
+    raise SystemExit("python_runtime_admin_session_projection:retired_wire_rejection_missing")
 PY
 }
 
@@ -176,14 +187,25 @@ for required in (
     if required not in body:
         raise SystemExit(f"go_runtime_admin_session_projection:missing_field:{required}")
 for required_mapping in (
-    r"RuntimeHostURA:\s+runtimeAdminString\(row,\s*\"device_ura\"\)",
-    r"ControlAuthorityURA:\s+runtimeAdminString\(row,\s*\"authority_ura\"\)",
+    r"RuntimeHostURA:\s+runtimeHostURA",
+    r"ControlAuthorityURA:\s+controlAuthorityURA",
 ):
     if not re.search(required_mapping, text):
         raise SystemExit(
-            "go_runtime_admin_session_projection:missing_wire_to_neutral_mapping:"
+            "go_runtime_admin_session_projection:missing_canonical_wire_mapping:"
             + required_mapping
         )
+for retired_mapping in (
+    r"runtimeAdminString\(row,\s*\"device_ura\"\)",
+    r"runtimeAdminString\(row,\s*\"authority_ura\"\)",
+):
+    if re.search(retired_mapping, text):
+        raise SystemExit(
+            "go_runtime_admin_session_projection:retired_wire_mapping:"
+            + retired_mapping
+        )
+if "retired device_ura field" not in text:
+    raise SystemExit("go_runtime_admin_session_projection:retired_wire_rejection_missing")
 PY
 }
 
@@ -377,9 +399,11 @@ class RuntimeSession:
     control_authority_ura: str = ""
 def _runtime_session_page(row):
     return RuntimeSession(
-        runtime_host_ura=_admin_string(row.get("device_ura")),
-        control_authority_ura=_admin_string(row.get("authority_ura")),
+        runtime_host_ura=_required_admin_string(row, "runtime_host_ura"),
+        control_authority_ura=_required_admin_string(row, "control_authority_ura"),
     )
+def _reject(row):
+    raise Exception("retired device_ura field")
 PY
   python_runtime_admin_session_projection_violations "$injected" \
     || fail "self-test rejected neutral runtime-admin session projection"
@@ -403,9 +427,12 @@ type RuntimeSession struct {
 	ControlAuthorityURA string `json:"control_authority_ura,omitempty"`
 }
 func runtimeSessionPage(row map[string]any) {
+	runtimeHostURA := requiredRuntimeAdminString(row, "runtime_host_ura")
+	controlAuthorityURA := requiredRuntimeAdminString(row, "control_authority_ura")
+	_ = "retired device_ura field"
 	_ = RuntimeSession{
-		RuntimeHostURA:      runtimeAdminString(row, "device_ura"),
-		ControlAuthorityURA: runtimeAdminString(row, "authority_ura"),
+		RuntimeHostURA:      runtimeHostURA,
+		ControlAuthorityURA: controlAuthorityURA,
 	}
 }
 GO

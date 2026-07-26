@@ -85,9 +85,34 @@ fn list_handler(svc: &SessionService, args: Value) -> anyhow::Result<Value> {
         .collect();
     let json_sessions: Vec<Value> = filtered
         .iter()
-        .map(serde_json::to_value)
-        .collect::<Result<_, _>>()?;
+        .map(|session| runtime_admin_session_projection(session))
+        .collect();
     Ok(json!({ "sessions": json_sessions }))
+}
+
+fn runtime_admin_session_projection(session: &crate::core::domain::Session) -> Value {
+    let realm = session.tenant.as_str();
+    let runtime_host_ura = crate::core::ura::device_ura(realm, session.node.as_str());
+    let control_authority_ura = crate::core::ura::authority_ura(realm);
+    let state = if session.ended_unix_ms.is_some() {
+        "terminated"
+    } else {
+        "active"
+    };
+    json!({
+        "kind": "runtime_session",
+        "session_id": session.id.as_str(),
+        "runtime_host_ura": runtime_host_ura,
+        "control_authority_ura": control_authority_ura,
+        "state": state,
+        "session_kind": "agent",
+        "created_unix_ms": session.started_unix_ms,
+        "expires_unix_ms": session.ended_unix_ms.unwrap_or(0),
+        "metadata": {
+            "agent_id": session.agent.as_str(),
+            "tenant": realm,
+        },
+    })
 }
 
 /// `session.attach` stream handler.
@@ -194,7 +219,28 @@ mod tests {
         let resp = list_handler(&svc, json!({"include_terminated": false})).unwrap();
         let arr = resp["sessions"].as_array().unwrap();
         assert_eq!(arr.len(), 1);
-        assert_eq!(arr[0]["id"], "live");
+        assert_eq!(arr[0]["session_id"], "live");
+        assert_eq!(arr[0]["state"], "active");
+    }
+
+    #[test]
+    fn list_projects_generic_runtime_admin_session_rows() {
+        let svc = svc_with(&["live"]);
+        let resp = list_handler(&svc, json!({})).unwrap();
+        let row = &resp["sessions"].as_array().unwrap()[0];
+
+        assert_eq!(row["kind"], "runtime_session");
+        assert_eq!(row["session_id"], "live");
+        assert_eq!(
+            row["runtime_host_ura"],
+            "easynet:///r/runtime-tenant/device/runtime-node"
+        );
+        assert_eq!(
+            row["control_authority_ura"],
+            "easynet:///r/runtime-tenant/authority"
+        );
+        assert!(row.get("device_ura").is_none());
+        assert!(row.get("authority_ura").is_none());
     }
 
     #[test]

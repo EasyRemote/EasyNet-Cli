@@ -133,8 +133,8 @@ func TestRuntimeAdminAbilityClientListsSessions(t *testing.T) {
 		"sessions": [{
 			"kind": "terminal",
 			"session_id": "session-a",
-			"device_ura": "easynet:///r/example/device/laptop",
-			"authority_ura": "easynet:///r/example/authority",
+			"runtime_host_ura": "easynet:///r/example/device/laptop",
+			"control_authority_ura": "easynet:///r/example/authority",
 			"state": "active",
 			"session_kind": "pty",
 			"created_unix_ms": 1714492800000,
@@ -170,6 +170,29 @@ func TestRuntimeAdminAbilityClientListsSessions(t *testing.T) {
 	metadata := capture.metadata(t)
 	if metadata["sdk_profile"] != runtimeAdminProfile || metadata["system_ability"] != runtimeAdminSessionListAbility {
 		t.Fatalf("runtime admin metadata missing: %#v", metadata)
+	}
+}
+
+func TestRuntimeAdminAbilityClientRejectsRetiredSessionWireFields(t *testing.T) {
+	capture := &runtimeAdminInvokeCapture{outputJSON: `{
+		"state": "ok",
+		"sessions": [{
+			"session_id": "session-a",
+			"device_ura": "easynet:///r/example/device/laptop",
+			"authority_ura": "easynet:///r/example/authority",
+			"state": "active"
+		}]
+	}`}
+	client := newRuntimeAdminAbilityTestClient(t, capture)
+
+	_, err := client.ListSessions(context.Background(), RuntimeSessionListRequest{
+		Call: runtimeAdminTestCall(),
+	})
+	if err == nil {
+		t.Fatal("ListSessions accepted retired runtime-admin session wire fields")
+	}
+	if !strings.Contains(err.Error(), "retired device_ura field") {
+		t.Fatalf("error = %v, want retired device_ura rejection", err)
 	}
 }
 

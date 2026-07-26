@@ -238,8 +238,8 @@ def test_runtime_admin_ability_client_lists_sessions() -> None:
             {
                 "kind": "terminal",
                 "session_id": "session-a",
-                "device_ura": "easynet:///r/example/device/laptop",
-                "authority_ura": "easynet:///r/example/authority",
+                "runtime_host_ura": "easynet:///r/example/device/laptop",
+                "control_authority_ura": "easynet:///r/example/authority",
                 "state": "active",
                 "session_kind": "pty",
                 "created_unix_ms": 1714492800000,
@@ -275,6 +275,29 @@ def test_runtime_admin_ability_client_accepts_empty_sessions() -> None:
     page = client.list_sessions(RuntimeSessionListRequest(call=_call()))
 
     assert page.sessions == ()
+
+
+def test_runtime_admin_ability_client_rejects_retired_session_wire_fields() -> None:
+    client, transport = _ability_client()
+    transport.output_json = {
+        "state": "ok",
+        "sessions": [
+            {
+                "session_id": "session-a",
+                "device_ura": "easynet:///r/example/device/laptop",
+                "authority_ura": "easynet:///r/example/authority",
+                "state": "active",
+            }
+        ],
+    }
+
+    try:
+        client.list_sessions(RuntimeSessionListRequest(call=_call()))
+    except SDKError as exc:
+        assert exc.code == ErrorCode.INVALID_ARGUMENT
+        assert "retired device_ura field" in exc.message
+    else:
+        raise AssertionError("ListSessions accepted retired session wire fields")
 
 
 def test_runtime_admin_ability_client_rejects_legacy_session_items() -> None:
