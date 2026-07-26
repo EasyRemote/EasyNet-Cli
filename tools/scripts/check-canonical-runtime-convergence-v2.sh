@@ -14016,6 +14016,7 @@ required_helper_tokens = {
         "MappingProxyType",
         "_CANONICAL_INVOCATION_NONCE_BYTES = 16",
         "len(value) != _CANONICAL_INVOCATION_NONCE_BYTES",
+        "isinstance(item, bool)",
         "def _immutable_mapping(",
         "def _immutable_value(",
         '_required_mapping(invocation, "causal_context")',
@@ -14101,6 +14102,7 @@ required_helper_tests = {
         "test_plugin_invocation_rejects_missing_canonical_invocation_objects",
         "test_plugin_invocation_owns_handler_projection",
         "test_plugin_invocation_rejects_non_canonical_nonce_length",
+        "test_plugin_invocation_rejects_boolean_nonce_bytes",
     ],
     "node": [
         "SidecarInvocation rejects non-canonical tuple aliases",

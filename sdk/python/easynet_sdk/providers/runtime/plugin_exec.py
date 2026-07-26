@@ -208,7 +208,7 @@ def _required_nonce(frame: Mapping[str, Any], field: str) -> tuple[int, ...]:
         )
     nonce: list[int] = []
     for item in value:
-        if not isinstance(item, int) or item < 0 or item > 255:
+        if isinstance(item, bool) or not isinstance(item, int) or item < 0 or item > 255:
             raise SidecarProtocolError(
                 f"sidecar frame field {field!r} must contain bytes"
             )

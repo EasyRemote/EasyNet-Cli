@@ -171,6 +171,15 @@ class PluginExecTests(unittest.TestCase):
         with self.assertRaisesRegex(SidecarProtocolError, "exactly 16 bytes"):
             SidecarInvocation.from_frame(frame)
 
+    def test_plugin_invocation_rejects_boolean_nonce_bytes(self) -> None:
+        frame = _frame()
+        invocation = frame["invocation"]
+        assert isinstance(invocation, dict)
+        invocation["invocation_nonce"] = CANONICAL_NONCE[:-1] + [True]
+
+        with self.assertRaisesRegex(SidecarProtocolError, "must contain bytes"):
+            SidecarInvocation.from_frame(frame)
+
 
 if __name__ == "__main__":
     unittest.main()
