@@ -3398,11 +3398,10 @@ function validateInvocationAuthorityBinding(draft) {
 }
 
 function rejectGovernanceReadPublicInvocationDescriptor(calleeURA, descriptorRef) {
-  const abilityURA = RuntimeAbilityProjection.descriptorAbilityURA(descriptorRef);
-  const publicName = RuntimeAbilityProjection.publicAbilityName(calleeURA, abilityURA);
-  const wireName = RuntimeAbilityProjection.descriptorWireAbility(abilityURA);
+  const ability = RuntimeAbilityProjection.fromDescriptorRef(calleeURA, descriptorRef);
   const governanceAbility =
-    runtimeGovernanceReadAbility(publicName) || runtimeGovernanceReadAbility(wireName);
+    runtimeGovernanceReadAbility(ability.publicName) ||
+    runtimeGovernanceReadAbility(ability.intrinsicName);
   if (!governanceAbility) {
     return;
   }
@@ -3810,22 +3809,24 @@ function authorityScopeMatches(pattern, value) {
 }
 
 class RuntimeAbilityProjection {
-  static abilityPathMarker = "/ability/";
-  static realmPrefix = "easynet:///r/";
-
-  constructor({ abilityURA, publicName }) {
+  constructor({ abilityURA, publicName, intrinsicName }) {
     this.abilityURA = abilityURA;
     this.publicName = publicName;
+    this.intrinsicName = intrinsicName;
     Object.freeze(this);
   }
 
   static fromInvocation(draft) {
-    const abilityURA = this.descriptorAbilityURA(draft.descriptorRef);
-    const publicName = this.publicAbilityName(draft.calleeURA, abilityURA);
-    return new RuntimeAbilityProjection({ abilityURA, publicName });
+    return this.fromDescriptorRef(draft.calleeURA, draft.descriptorRef);
   }
 
-  static descriptorAbilityURA(descriptorRef) {
+  static fromDescriptorRef(calleeURA, descriptorRef) {
+    const projection = this.descriptorAbilityProjection(descriptorRef);
+    const publicName = this.publicAbilityName(calleeURA, projection.intrinsicName);
+    return new RuntimeAbilityProjection({ ...projection, publicName });
+  }
+
+  static descriptorAbilityProjection(descriptorRef) {
     const clean = String(descriptorRef ?? "").trim();
     const hash = clean.indexOf("#");
     const bang = clean.indexOf("!");
@@ -3836,19 +3837,21 @@ class RuntimeAbilityProjection {
     const withoutMode = clean.slice(0, limit);
     const version = withoutMode.lastIndexOf("@");
     const abilityURA = (version >= 0 ? withoutMode.slice(0, version) : withoutMode).trim();
-    if (!abilityURA.startsWith(this.realmPrefix) || !abilityURA.includes(this.abilityPathMarker)) {
+    const parsed = parseCanonicalURANullable(abilityURA);
+    const path = parsed?.path ?? "";
+    const abilityPrefix = "ability/";
+    if (!path.startsWith(abilityPrefix)) {
       throw invalidAuthority("descriptor_ref must contain a canonical Ability URA");
     }
-    return abilityURA;
+    const intrinsicName = path.slice(abilityPrefix.length).trim();
+    if (!intrinsicName || intrinsicName.includes("/")) {
+      throw invalidAuthority("descriptor_ref must contain a canonical Ability URA");
+    }
+    return { abilityURA, intrinsicName };
   }
 
-  static descriptorWireAbility(abilityURA) {
-    const index = abilityURA.indexOf(this.abilityPathMarker);
-    return abilityURA.slice(index + this.abilityPathMarker.length).trim();
-  }
-
-  static publicAbilityName(calleeURA, abilityURA) {
-    const clean = this.descriptorWireAbility(abilityURA);
+  static publicAbilityName(calleeURA, intrinsicName) {
+    const clean = String(intrinsicName ?? "").trim();
     const owner = this.abilityOwnerPrefix(calleeURA);
     if (owner && clean.startsWith(`${owner}.`)) {
       return clean.slice(owner.length + 1);

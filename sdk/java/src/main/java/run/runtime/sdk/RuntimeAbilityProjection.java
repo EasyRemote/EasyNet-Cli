@@ -1,7 +1,6 @@
 package run.runtime.sdk;
 
 final class RuntimeAbilityProjection {
-  private static final String ABILITY_PATH_MARKER = "/ability/";
   private static final String REALM_PREFIX = "easynet:///r/";
   private static final String[] RUNTIME_GOVERNANCE_READ_ABILITIES = {
     "meta.list_abilities",
@@ -14,16 +13,16 @@ final class RuntimeAbilityProjection {
 
   private final String abilityURA;
   private final String publicName;
+  private final String intrinsicName;
 
-  private RuntimeAbilityProjection(String abilityURA, String publicName) {
+  private RuntimeAbilityProjection(String abilityURA, String publicName, String intrinsicName) {
     this.abilityURA = abilityURA;
     this.publicName = publicName;
+    this.intrinsicName = intrinsicName;
   }
 
   static RuntimeAbilityProjection fromTuple(InvocationTuple tuple) {
-    String abilityURA = descriptorAbilityURA(tuple.descriptor());
-    String publicName = publicAbilityName(tuple.callee(), abilityURA);
-    return new RuntimeAbilityProjection(abilityURA, publicName);
+    return fromDescriptorRef(tuple.callee(), tuple.descriptor());
   }
 
   String abilityURA() {
@@ -34,18 +33,26 @@ final class RuntimeAbilityProjection {
     return publicName;
   }
 
+  String intrinsicName() {
+    return intrinsicName;
+  }
+
   static String runtimeGovernanceReadAbility(String calleeURA, String descriptorRef) {
-    String abilityURA = descriptorAbilityURA(descriptorRef);
-    String publicName = publicAbilityName(calleeURA, abilityURA);
-    String wireName = descriptorWireAbility(abilityURA);
-    String matched = runtimeGovernanceReadAbility(publicName);
+    RuntimeAbilityProjection ability = fromDescriptorRef(calleeURA, descriptorRef);
+    String matched = runtimeGovernanceReadAbility(ability.publicName());
     if (!matched.isBlank()) {
       return matched;
     }
-    return runtimeGovernanceReadAbility(wireName);
+    return runtimeGovernanceReadAbility(ability.intrinsicName());
   }
 
-  private static String descriptorAbilityURA(String descriptorRef) {
+  private static RuntimeAbilityProjection fromDescriptorRef(String calleeURA, String descriptorRef) {
+    AbilityDescriptorProjection projection = descriptorAbilityProjection(descriptorRef);
+    String publicName = publicAbilityName(calleeURA, projection.intrinsicName());
+    return new RuntimeAbilityProjection(projection.abilityURA(), publicName, projection.intrinsicName());
+  }
+
+  private static AbilityDescriptorProjection descriptorAbilityProjection(String descriptorRef) {
     String clean = descriptorRef == null ? "" : descriptorRef.trim();
     int hash = clean.indexOf('#');
     int bang = clean.indexOf('!');
@@ -59,10 +66,16 @@ final class RuntimeAbilityProjection {
     String withoutMode = clean.substring(0, limit);
     int version = withoutMode.lastIndexOf('@');
     String ability = (version >= 0 ? withoutMode.substring(0, version) : withoutMode).trim();
-    if (!ability.startsWith(REALM_PREFIX) || !ability.contains(ABILITY_PATH_MARKER)) {
+    String path = canonicalTopLevelPath(ability);
+    String abilityPrefix = "ability/";
+    if (!path.startsWith(abilityPrefix)) {
       throw SDKError.validation("authority", "descriptor_ref must contain a canonical Ability URA");
     }
-    return ability;
+    String intrinsicName = path.substring(abilityPrefix.length()).trim();
+    if (intrinsicName.isBlank() || intrinsicName.contains("/")) {
+      throw SDKError.validation("authority", "descriptor_ref must contain a canonical Ability URA");
+    }
+    return new AbilityDescriptorProjection(ability, intrinsicName);
   }
 
   private static String runtimeGovernanceReadAbility(String value) {
@@ -75,13 +88,8 @@ final class RuntimeAbilityProjection {
     return "";
   }
 
-  private static String descriptorWireAbility(String abilityURA) {
-    int index = abilityURA.indexOf(ABILITY_PATH_MARKER);
-    return abilityURA.substring(index + ABILITY_PATH_MARKER.length()).trim();
-  }
-
-  private static String publicAbilityName(String calleeURA, String abilityURA) {
-    String clean = descriptorWireAbility(abilityURA);
+  private static String publicAbilityName(String calleeURA, String intrinsicName) {
+    String clean = intrinsicName == null ? "" : intrinsicName.trim();
     String owner = abilityOwnerPrefix(calleeURA);
     if (!owner.isBlank() && clean.startsWith(owner + ".")) {
       return clean.substring(owner.length() + 1);
@@ -115,4 +123,6 @@ final class RuntimeAbilityProjection {
     }
     return rest.substring(slash + 1).trim();
   }
+
+  private record AbilityDescriptorProjection(String abilityURA, String intrinsicName) {}
 }

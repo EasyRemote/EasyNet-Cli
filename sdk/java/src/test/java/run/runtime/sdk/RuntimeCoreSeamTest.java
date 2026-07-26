@@ -810,12 +810,12 @@ public final class RuntimeCoreSeamTest {
       completeBuilder().authorityMetadata(proof.metadata()).inspect();
     }
 
-    DelegationProof ownerQualifiedWireProof =
+    DelegationProof ownerQualifiedProof =
         DelegationProof.fromMetadata(delegationMetadataValue(List.of("device.dev-a.observe.health")));
     expectSDKError(
         ErrorCode.AUTHORITY_DENIED,
         "delegation authority scopes do not admit invocation ability",
-        () -> completeBuilder().authorityMetadata(ownerQualifiedWireProof.metadata()).inspect());
+        () -> completeBuilder().authorityMetadata(ownerQualifiedProof.metadata()).inspect());
 
     String nestedDeviceCallee =
         "easynet:///r/example/resource/user.alice/archive/device/dev-a";

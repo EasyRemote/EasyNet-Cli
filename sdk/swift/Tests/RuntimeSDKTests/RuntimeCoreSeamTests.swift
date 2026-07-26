@@ -560,12 +560,12 @@ final class RuntimeCoreSeamTests: XCTestCase {
                 .inspect()
         }
 
-        let ownerQualifiedWireProof = try DelegationProof.fromMetadata(
+        let ownerQualifiedProof = try DelegationProof.fromMetadata(
             delegationMetadataValue(scopes: ["device.dev-a.observe.health"])
         )
         expectSyncSDKError(.authorityDenied, "delegation authority scopes do not admit invocation ability") {
             _ = try completeBuilder()
-                .withAuthorityMetadata(ownerQualifiedWireProof.metadata())
+                .withAuthorityMetadata(ownerQualifiedProof.metadata())
                 .inspect()
         }
 

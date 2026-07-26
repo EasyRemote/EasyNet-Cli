@@ -5037,13 +5037,21 @@ node, node_test, java_builder, java_projection, java_test, swift_invocation, swi
 for required in (
     "const RUNTIME_GOVERNANCE_READ_ABILITIES",
     "function rejectGovernanceReadPublicInvocationDescriptor",
-    "RuntimeAbilityProjection.descriptorAbilityURA(descriptorRef)",
-    "runtimeGovernanceReadAbility(publicName)",
-    "runtimeGovernanceReadAbility(wireName)",
+    "RuntimeAbilityProjection.fromDescriptorRef(calleeURA, descriptorRef)",
+    "runtimeGovernanceReadAbility(ability.publicName)",
+    "runtimeGovernanceReadAbility(ability.intrinsicName)",
     "use RuntimeReceiptProvider, SessionHistoryOperations, or the canonical runtime catalogue provider path",
 ):
     if required not in node:
         raise SystemExit(f"sdk_history_public_ingress_cutover:node_missing:{required}")
+for retired in (
+    "const wireName =",
+    "descriptorAbilityURA(",
+    "descriptorWireAbility(",
+    "abilityPathMarker",
+):
+    if retired in node:
+        raise SystemExit(f"sdk_history_public_ingress_cutover:node_retired:{retired}")
 for required in (
     "public invocation builder rejects receipt history descriptor before dispatch",
     "public invocation builder rejects runtime catalogue descriptor before dispatch",
@@ -5065,11 +5073,21 @@ for required in (
 for required in (
     "private static final String[] RUNTIME_GOVERNANCE_READ_ABILITIES",
     "static String runtimeGovernanceReadAbility(String calleeURA, String descriptorRef)",
-    "runtimeGovernanceReadAbility(publicName)",
-    "runtimeGovernanceReadAbility(wireName)",
+    "fromDescriptorRef(calleeURA, descriptorRef)",
+    "runtimeGovernanceReadAbility(ability.publicName())",
+    "runtimeGovernanceReadAbility(ability.intrinsicName())",
+    "descriptorAbilityProjection(String descriptorRef)",
 ):
     if required not in java_projection:
         raise SystemExit(f"sdk_history_public_ingress_cutover:java_projection_missing:{required}")
+for retired in (
+    "String wireName",
+    "descriptorAbilityURA(",
+    "descriptorWireAbility(",
+    "ABILITY_PATH_MARKER",
+):
+    if retired in java_projection:
+        raise SystemExit(f"sdk_history_public_ingress_cutover:java_projection_retired:{retired}")
 for required in (
     '"completeTupleRejectsReceiptHistoryPublicInvocation"',
     '"completeTupleRejectsCatalogueReadPublicInvocation"',
@@ -5094,11 +5112,21 @@ for required in (
 for required in (
     "private static let runtimeGovernanceReadAbilities",
     "static func runtimeGovernanceReadAbility(calleeURA: String, descriptorRef: String) throws -> String?",
-    "runtimeGovernanceReadAbility(publicName)",
-    "runtimeGovernanceReadAbility(wireName)",
+    "fromDescriptorRef(calleeURA: calleeURA, descriptorRef: descriptorRef)",
+    "runtimeGovernanceReadAbility(ability.publicName)",
+    "runtimeGovernanceReadAbility(ability.intrinsicName)",
+    "descriptorAbilityProjection(_ descriptorRef: String)",
 ):
     if required not in swift_projection:
         raise SystemExit(f"sdk_history_public_ingress_cutover:swift_projection_missing:{required}")
+for retired in (
+    "let wireName",
+    "descriptorAbilityURA(",
+    "descriptorWireAbility(",
+    "abilityPathMarker",
+):
+    if retired in swift_projection:
+        raise SystemExit(f"sdk_history_public_ingress_cutover:swift_projection_retired:{retired}")
 for required in (
     "testCompleteTupleRejectsReceiptHistoryPublicInvocation",
     "testCompleteTupleRejectsCatalogueReadPublicInvocation",
@@ -5726,9 +5754,19 @@ for retired in (
     "private final String wire",
     "String wire()",
     "new RuntimeAbilityProjection(wire, abilityURA, publicName)",
+    "String wireName",
+    "descriptorAbilityURA(",
+    "descriptorWireAbility(",
+    "ABILITY_PATH_MARKER",
 ):
     if retired in java:
         raise SystemExit(f"sdk_java_runtime_ability_owner_unbound_scope_projection:{retired}")
+for required in (
+    "private final String intrinsicName",
+    "descriptorAbilityProjection(String descriptorRef)",
+):
+    if required not in java:
+        raise SystemExit(f"sdk_java_runtime_ability_owner_scope_projection_missing:{required}")
 java_validator = read(java_validator_path)
 if "ability.wire()" in java_validator:
     raise SystemExit("sdk_java_runtime_ability_wire_scope_candidate")
@@ -5748,9 +5786,19 @@ if not swift_public or 'return ""' not in swift_public.group(0) or "return clean
 for retired in (
     "let wire:",
     "self.wire",
+    "let wireName",
+    "descriptorAbilityURA(",
+    "descriptorWireAbility(",
+    "abilityPathMarker",
 ):
     if retired in swift:
         raise SystemExit(f"sdk_swift_runtime_ability_owner_unbound_scope_projection:{retired}")
+for required in (
+    "let intrinsicName: String",
+    "descriptorAbilityProjection(_ descriptorRef: String)",
+):
+    if required not in swift:
+        raise SystemExit(f"sdk_swift_runtime_ability_owner_scope_projection_missing:{required}")
 swift_authority = read(swift_authority_path)
 if "ability.wire" in swift_authority:
     raise SystemExit("sdk_swift_runtime_ability_wire_scope_candidate")
@@ -5771,9 +5819,18 @@ for retired in (
     "this.wire",
     "ability.wire",
     "new RuntimeAbilityProjection({ wire, abilityURA, publicName })",
+    "descriptorAbilityURA(",
+    "descriptorWireAbility(",
+    "abilityPathMarker",
 ):
     if retired in node:
         raise SystemExit(f"sdk_node_runtime_ability_owner_unbound_scope_projection:{retired}")
+for required in (
+    "intrinsicName",
+    "descriptorAbilityProjection(descriptorRef)",
+):
+    if required not in node:
+        raise SystemExit(f"sdk_node_runtime_ability_owner_scope_projection_missing:{required}")
 node_tests = read(node_test_path)
 for required in (
     "runtime ability projection rejects short scope for descriptor owner mismatch",
@@ -8544,11 +8601,11 @@ for required in (
     "function authorityScopesAdmit(patterns, ability)",
     "class RuntimeAbilityProjection",
     "static fromInvocation(draft)",
-    "static descriptorAbilityURA(descriptorRef)",
-    "static descriptorWireAbility(abilityURA)",
-    "static publicAbilityName(calleeURA, abilityURA)",
+    "static fromDescriptorRef(calleeURA, descriptorRef)",
+    "static descriptorAbilityProjection(descriptorRef)",
+    "static publicAbilityName(calleeURA, intrinsicName)",
+    "intrinsicName",
     "descriptor_ref must contain a canonical Ability URA",
-    "easynet:///r/",
 ):
     if required not in node:
         raise SystemExit(f"node_invocation_authority_projection_missing:{required}")
@@ -8570,6 +8627,8 @@ for forbidden in (
     "deviceIndex",
     'indexOf("/device/")',
     "split(/[/?#]/, 1)",
+    "static descriptorWireAbility(abilityURA)",
+    "abilityPathMarker",
 ):
     if forbidden in projection_body:
         raise SystemExit(f"node_invocation_authority_projection:substring_owner_projection:{forbidden}")
@@ -8592,6 +8651,9 @@ for forbidden in (
 for forbidden in (
     "function abilityViewForInvocation",
     "abilityURA || wire",
+    "descriptorAbilityURA(",
+    "const wireName =",
+    "descriptorWireAbility(",
 ):
     if forbidden in node:
         raise SystemExit(f"node_invocation_authority_projection:retired_fallback:{forbidden}")
@@ -16725,8 +16787,9 @@ for forbidden, label in {
 required_projection = {
     "final class RuntimeAbilityProjection": "runtime_ability_projection_class_missing",
     "static RuntimeAbilityProjection fromTuple(InvocationTuple tuple)": "runtime_ability_projection_tuple_boundary_missing",
-    "descriptorAbilityURA": "descriptor_projection_missing",
-    "descriptorWireAbility": "wire_projection_missing",
+    "private static RuntimeAbilityProjection fromDescriptorRef(String calleeURA, String descriptorRef)": "runtime_ability_projection_descriptor_boundary_missing",
+    "descriptorAbilityProjection": "descriptor_fact_projection_missing",
+    "intrinsicName": "intrinsic_projection_missing",
     "publicAbilityName": "public_name_projection_missing",
     "private static String canonicalTopLevelPath(String ura)": "top_level_path_parser_missing",
     "String path = canonicalTopLevelPath(calleeURA)": "top_level_owner_parser_missing",
@@ -16743,6 +16806,10 @@ for forbidden, label in {
     'String device = "/device/"': "substring_device_marker_projection",
     "deviceIndex": "substring_device_index_projection",
     'split("[/?#]"': "regex_tail_projection",
+    "descriptorAbilityURA": "descriptor_ura_helper_retired",
+    "descriptorWireAbility": "wire_projection_retired",
+    "ABILITY_PATH_MARKER": "ability_marker_projection_retired",
+    "String wireName": "wire_name_projection_retired",
 }.items():
     if forbidden in projection:
         raise SystemExit(f"java_invocation_authority_binding:{label}")
@@ -16909,8 +16976,9 @@ for forbidden, label in {
 required_projection = {
     "struct RuntimeAbilityProjection": "runtime_ability_projection_struct_missing",
     "init(tuple: InvocationTuple) throws": "runtime_ability_projection_tuple_boundary_missing",
-    "descriptorAbilityURA": "descriptor_projection_missing",
-    "descriptorWireAbility": "wire_projection_missing",
+    "private static func fromDescriptorRef(calleeURA: String, descriptorRef: String) throws -> RuntimeAbilityProjection": "runtime_ability_projection_descriptor_boundary_missing",
+    "descriptorAbilityProjection": "descriptor_fact_projection_missing",
+    "intrinsicName": "intrinsic_projection_missing",
     "publicAbilityName": "public_name_projection_missing",
     "private static func canonicalTopLevelPath(_ ura: String) -> String": "top_level_path_parser_missing",
     "let path = canonicalTopLevelPath(calleeURA)": "top_level_owner_parser_missing",
@@ -16927,6 +16995,10 @@ for forbidden, label in {
     'let device = "/device/"': "substring_device_marker_projection",
     "range(of: device)": "substring_device_range_projection",
     "split(maxSplits: 1, whereSeparator:": "tail_split_projection",
+    "descriptorAbilityURA": "descriptor_ura_helper_retired",
+    "descriptorWireAbility": "wire_projection_retired",
+    "abilityPathMarker": "ability_marker_projection_retired",
+    "let wireName": "wire_name_projection_retired",
 }.items():
     if forbidden in projection:
         raise SystemExit(f"swift_invocation_authority_binding:{label}")
@@ -16939,7 +17011,7 @@ required_tests = {
     '"subject_ura": callee': "tuple_bound_delegation_fixture_missing",
     '"scopes": scopes': "tuple_bound_scope_fixture_missing",
     "testRuntimeAbilityProjectionIsCanonical": "runtime_ability_projection_test_missing",
-    '"device.dev-a.observe.health"': "runtime_ability_wire_scope_test_missing",
+    '"device.dev-a.observe.health"': "runtime_ability_owner_qualified_scope_rejection_missing",
     '"easynet:///r/example/ability/device.dev-a.observe.health"': "runtime_ability_ura_scope_test_missing",
     '"easynet:///r/example/ability/authority.namespace.resolve@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read"': "authority_projection_descriptor_test_missing",
     '"namespace.resolve"': "authority_projection_scope_test_missing",

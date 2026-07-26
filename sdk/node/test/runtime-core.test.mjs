@@ -992,7 +992,7 @@ test("runtime ability projection is canonical for authority scope admission", ()
     assert.equal(authorized.metadata[sdk.DELEGATION_METADATA_KEY], proof.metadataValue);
   }
 
-  const ownerQualifiedWireProof = sdk.DelegationProof.fromMetadata(
+  const ownerQualifiedProof = sdk.DelegationProof.fromMetadata(
     delegationValue(["device.dev-a.observe.health"]),
   );
   assert.throws(
@@ -1006,7 +1006,7 @@ test("runtime ability projection is canonical for authority scope admission", ()
         .withCausalContext({ form: "none" })
         .withJSONArgs({ probe: true })
         .withContentType("application/json")
-        .withAuthorityMetadata(ownerQualifiedWireProof.metadata())
+        .withAuthorityMetadata(ownerQualifiedProof.metadata())
         .build(),
     (error) =>
       error instanceof sdk.SDKError &&

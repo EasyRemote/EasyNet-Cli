@@ -1,7 +1,6 @@
 import Foundation
 
 struct RuntimeAbilityProjection: Sendable, Equatable {
-    private static let abilityPathMarker = "/ability/"
     private static let realmPrefix = "easynet:///r/"
     private static let runtimeGovernanceReadAbilities = [
         "meta.list_abilities",
@@ -14,21 +13,33 @@ struct RuntimeAbilityProjection: Sendable, Equatable {
 
     let abilityURA: String
     let publicName: String
+    let intrinsicName: String
+
+    private init(abilityURA: String, publicName: String, intrinsicName: String) {
+        self.abilityURA = abilityURA
+        self.publicName = publicName
+        self.intrinsicName = intrinsicName
+    }
 
     init(tuple: InvocationTuple) throws {
-        let abilityURA = try Self.descriptorAbilityURA(tuple.descriptorRef)
-        self.abilityURA = abilityURA
-        self.publicName = Self.publicAbilityName(calleeURA: tuple.callee, abilityURA: abilityURA)
+        self = try Self.fromDescriptorRef(calleeURA: tuple.callee, descriptorRef: tuple.descriptorRef)
     }
 
     static func runtimeGovernanceReadAbility(calleeURA: String, descriptorRef: String) throws -> String? {
-        let abilityURA = try descriptorAbilityURA(descriptorRef)
-        let publicName = publicAbilityName(calleeURA: calleeURA, abilityURA: abilityURA)
-        let wireName = descriptorWireAbility(abilityURA)
-        return runtimeGovernanceReadAbility(publicName) ?? runtimeGovernanceReadAbility(wireName)
+        let ability = try fromDescriptorRef(calleeURA: calleeURA, descriptorRef: descriptorRef)
+        return runtimeGovernanceReadAbility(ability.publicName) ?? runtimeGovernanceReadAbility(ability.intrinsicName)
     }
 
-    private static func descriptorAbilityURA(_ descriptorRef: String) throws -> String {
+    private static func fromDescriptorRef(calleeURA: String, descriptorRef: String) throws -> RuntimeAbilityProjection {
+        let projection = try descriptorAbilityProjection(descriptorRef)
+        return RuntimeAbilityProjection(
+            abilityURA: projection.abilityURA,
+            publicName: publicAbilityName(calleeURA: calleeURA, intrinsicName: projection.intrinsicName),
+            intrinsicName: projection.intrinsicName
+        )
+    }
+
+    private static func descriptorAbilityProjection(_ descriptorRef: String) throws -> AbilityDescriptorProjection {
         let clean = descriptorRef.trimmingCharacters(in: .whitespacesAndNewlines)
         let hash = clean.firstIndex(of: "#")
         let bang = clean.firstIndex(of: "!")
@@ -45,17 +56,16 @@ struct RuntimeAbilityProjection: Sendable, Equatable {
         } else {
             withoutMode.trimmingCharacters(in: .whitespacesAndNewlines)
         }
-        guard ability.hasPrefix(realmPrefix), ability.contains(abilityPathMarker) else {
+        let path = canonicalTopLevelPath(ability)
+        let abilityPrefix = "ability/"
+        guard path.hasPrefix(abilityPrefix) else {
             throw SDKError.validation("authority", "descriptor_ref must contain a canonical Ability URA")
         }
-        return ability
-    }
-
-    private static func descriptorWireAbility(_ abilityURA: String) -> String {
-        guard let range = abilityURA.range(of: abilityPathMarker) else {
-            return abilityURA.trimmingCharacters(in: .whitespacesAndNewlines)
+        let intrinsicName = String(path.dropFirst(abilityPrefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !intrinsicName.isEmpty, !intrinsicName.contains("/") else {
+            throw SDKError.validation("authority", "descriptor_ref must contain a canonical Ability URA")
         }
-        return String(abilityURA[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        return AbilityDescriptorProjection(abilityURA: ability, intrinsicName: intrinsicName)
     }
 
     private static func runtimeGovernanceReadAbility(_ value: String) -> String? {
@@ -65,8 +75,8 @@ struct RuntimeAbilityProjection: Sendable, Equatable {
         }
     }
 
-    private static func publicAbilityName(calleeURA: String, abilityURA: String) -> String {
-        let clean = descriptorWireAbility(abilityURA)
+    private static func publicAbilityName(calleeURA: String, intrinsicName: String) -> String {
+        let clean = intrinsicName.trimmingCharacters(in: .whitespacesAndNewlines)
         let owner = abilityOwnerPrefix(calleeURA)
         if !owner.isEmpty, clean.hasPrefix("\(owner).") {
             return String(clean.dropFirst(owner.count + 1))
@@ -98,5 +108,10 @@ struct RuntimeAbilityProjection: Sendable, Equatable {
             return ""
         }
         return String(rest[rest.index(after: slash)...]).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private struct AbilityDescriptorProjection: Sendable, Equatable {
+        let abilityURA: String
+        let intrinsicName: String
     }
 }
