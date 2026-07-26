@@ -56,8 +56,6 @@ pub struct ResolveKeyReceipt {
     pub principal_owner_ura: Option<String>,
     #[serde(default)]
     pub principal_owner_user_id: Option<String>,
-    #[serde(default)]
-    pub principal_owner_username: Option<String>,
 }
 
 /// Arguments for `federation.join`. Matches the hub-profile's
@@ -379,8 +377,7 @@ mod tests {
             "public_key_hex": "707562",
             "public_keys_b64": ["pub-b64", "rotated-b64"],
             "principal_owner_ura": "easynet:///r/acme/user/alice",
-            "principal_owner_user_id": "alice",
-            "principal_owner_username": "alice-dev"
+            "principal_owner_user_id": "alice"
         });
 
         let parsed: ResolveKeyReceipt = parse_receipt_value(&body).unwrap();
@@ -393,10 +390,6 @@ mod tests {
             Some("easynet:///r/acme/user/alice")
         );
         assert_eq!(parsed.principal_owner_user_id.as_deref(), Some("alice"));
-        assert_eq!(
-            parsed.principal_owner_username.as_deref(),
-            Some("alice-dev")
-        );
     }
 
     #[test]

@@ -198,7 +198,6 @@ mod tests {
             principal_ura: principal_ura.to_string(),
             owner_user_id: USER_ID.to_string(),
             owner_ura: USER_URA.to_string(),
-            owner_username: Some("dev".to_string()),
             added_at_unix_ms: 1,
         }
     }

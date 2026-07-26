@@ -354,7 +354,6 @@ mod tests {
                 principal_ura: device_ura.to_string(),
                 owner_user_id: "owner-1".to_string(),
                 owner_ura: owner_ura.to_string(),
-                owner_username: None,
                 added_at_unix_ms: 1,
             }],
         );

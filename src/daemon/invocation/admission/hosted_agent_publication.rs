@@ -1,10 +1,10 @@
 // EasyNet CLI - hosted Agent publication authority
 // =================================================
 //
-// A hosted Agent keeps its public username-based URA, while RFC-014 policy
-// requires an immutable user id. This value object proves the complete link
-// from the signed host device to that Agent and projects the authoritative
-// owner fact that admission and policy share.
+// A hosted Agent is user-owned by the immutable user id segment in its
+// canonical Agent URA. This value object proves the complete link from the
+// signed host device to that Agent and projects the authoritative owner fact
+// that admission and policy share.
 
 use thiserror::Error;
 
@@ -20,7 +20,6 @@ pub(crate) struct HostedAgentPublication {
     agent_ura: String,
     owner_user_id: String,
     owner_ura: String,
-    owner_username: String,
 }
 
 impl HostedAgentPublication {
@@ -99,7 +98,7 @@ impl HostedAgentPublication {
                 "agent_ura must identify a user-owned Agent in the caller realm",
             ));
         }
-        let (agent_owner_username, _) =
+        let (agent_owner_user_id, _) =
             agent
                 .agent_ids()
                 .ok_or(HostedAgentPublicationError::InvalidIdentity(
@@ -120,12 +119,8 @@ impl HostedAgentPublication {
         let owner = trust_anchor
             .lookup_principal_owner(caller_device_ura)
             .ok_or(HostedAgentPublicationError::OwnerBindingMissing)?;
-        let owner_username = owner
-            .owner_username
-            .as_deref()
-            .ok_or(HostedAgentPublicationError::OwnerAliasMissing)?;
-        if owner_username != agent_owner_username {
-            return Err(HostedAgentPublicationError::OwnerAliasMismatch);
+        if owner.owner_user_id != agent_owner_user_id {
+            return Err(HostedAgentPublicationError::OwnerUserMismatch);
         }
         let owner_ura = parse_ura(&owner.owner_ura).map_err(|_| {
             HostedAgentPublicationError::InvalidIdentity(
@@ -146,7 +141,6 @@ impl HostedAgentPublication {
             agent_ura: agent_ura.to_string(),
             owner_user_id: owner.owner_user_id.clone(),
             owner_ura: owner.owner_ura.clone(),
-            owner_username: owner_username.to_string(),
         })
     }
 
@@ -190,7 +184,6 @@ impl HostedAgentPublication {
             principal_ura: self.agent_ura,
             owner_user_id: self.owner_user_id,
             owner_ura: self.owner_ura,
-            owner_username: Some(self.owner_username),
             added_at_unix_ms,
         }
     }
@@ -220,10 +213,8 @@ pub(crate) enum HostedAgentPublicationError {
     HostNodeMismatch,
     #[error("caller device has no authoritative owner binding")]
     OwnerBindingMissing,
-    #[error("caller device owner binding has no authenticated username alias")]
-    OwnerAliasMissing,
-    #[error("Agent URA owner alias does not match the caller device owner")]
-    OwnerAliasMismatch,
+    #[error("Agent URA owner user id does not match the caller device owner")]
+    OwnerUserMismatch,
 }
 
 #[cfg(test)]
@@ -264,7 +255,7 @@ mod tests {
         }
     }
 
-    fn anchor(username: Option<&str>) -> RealmTrustAnchor {
+    fn anchor() -> RealmTrustAnchor {
         RealmTrustAnchor::from_parts_with_principal_owners(
             Vec::new(),
             vec![TrustedPrincipalOwner {
@@ -272,7 +263,6 @@ mod tests {
                 owner_user_id: "16567c49-7621-468e-8ed0-273825299cc2".to_string(),
                 owner_ura: "easynet:///r/test/user/16567c49-7621-468e-8ed0-273825299cc2"
                     .to_string(),
-                owner_username: username.map(ToString::to_string),
                 added_at_unix_ms: 1,
             }],
             Vec::new(),
@@ -281,12 +271,12 @@ mod tests {
     }
 
     #[test]
-    fn binds_username_agent_to_canonical_uuid_owner() {
-        let agent_ura = "easynet:///r/test/agent/dev.eval";
+    fn binds_agent_ura_to_canonical_uuid_owner() {
+        let agent_ura = "easynet:///r/test/agent/16567c49-7621-468e-8ed0-273825299cc2.eval";
         let publication = HostedAgentPublication::verify(
             &envelope(agent_ura),
             &request(agent_ura),
-            &anchor(Some("dev")),
+            &anchor(),
             Some("easynet:///r/test/authority"),
         )
         .expect("verified publication");
@@ -297,20 +287,19 @@ mod tests {
             binding.owner_user_id,
             "16567c49-7621-468e-8ed0-273825299cc2"
         );
-        assert_eq!(binding.owner_username.as_deref(), Some("dev"));
     }
 
     #[test]
-    fn rejects_agent_alias_not_owned_by_device_user() {
-        let agent_ura = "easynet:///r/test/agent/other.eval";
+    fn rejects_agent_user_id_not_owned_by_device_user() {
+        let agent_ura = "easynet:///r/test/agent/79f8c6a9-aee3-435c-ab78-cacdd49b3268.eval";
         let err = HostedAgentPublication::verify(
             &envelope(agent_ura),
             &request(agent_ura),
-            &anchor(Some("dev")),
+            &anchor(),
             Some("easynet:///r/test/authority"),
         )
-        .expect_err("alias mismatch must reject");
+        .expect_err("owner user mismatch must reject");
 
-        assert_eq!(err, HostedAgentPublicationError::OwnerAliasMismatch);
+        assert_eq!(err, HostedAgentPublicationError::OwnerUserMismatch);
     }
 }

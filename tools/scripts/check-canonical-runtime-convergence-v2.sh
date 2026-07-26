@@ -1291,6 +1291,43 @@ check_runtime_authority_vocabulary_contract() {
   fi
 }
 
+check_principal_owner_alias_retirement_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local trust_anchor="$cli_root/src/daemon/trust/anchor.rs"
+  local register_pubkey="$cli_root/src/daemon/invocation/admission/register_device_pubkey.rs"
+  local hosted_agent_publication="$cli_root/src/daemon/invocation/admission/hosted_agent_publication.rs"
+  local device_trust_sync="$cli_root/src/daemon/invocation/admission/device_trust_sync.rs"
+  local federation_ability="$cli_root/src/daemon/federation/client/ability_contract.rs"
+  local federation_wire="$cli_root/src/daemon/federation/wire_contract.rs"
+  local federation_wrappers="$cli_root/src/daemon/invocation/dispatch/federation_wrappers.rs"
+  local catalog="$cli_root/src/daemon/ability/catalog/daemon_invocation_contracts.rs"
+  local descriptor="$cli_root/ability-descriptors/system/governance/identity.register_pubkey.ability.toml"
+
+  for file in "$trust_anchor" "$register_pubkey" "$hosted_agent_publication" \
+    "$device_trust_sync" "$federation_ability" "$federation_wire" \
+    "$federation_wrappers" "$catalog" "$descriptor"; do
+    [[ -f "$file" ]] || fail "principal owner alias retirement source is missing: ${file#$cli_root/}"
+  done
+
+  if rg -n 'owner_username|principal_owner_username|OwnerAlias' \
+    "$trust_anchor" "$hosted_agent_publication" "$device_trust_sync" \
+    "$federation_ability" "$federation_wire" "$federation_wrappers" \
+    "$catalog" "$descriptor"; then
+    fail "canonical principal owner facts must not carry product username aliases"
+  fi
+
+  if sed '/#\[cfg(test)\]/,$d' "$register_pubkey" | rg -n 'owner_username|principal_owner_username'; then
+    fail "identity.register_pubkey production path must not accept or emit principal owner username aliases"
+  fi
+
+  if ! rg -q 'retired_principal_owner_username_is_rejected' "$register_pubkey"; then
+    fail "identity.register_pubkey must retain a negative test for retired principal_owner_username"
+  fi
+  if ! rg -q 'OwnerUserMismatch' "$hosted_agent_publication"; then
+    fail "hosted Agent publication must bind Agent URA owner user id, not username alias"
+  fi
+}
+
 check_voice_realm_authority_vocabulary_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local voice="$cli_root/src/daemon/ability/builtins/resources/voice.rs"
@@ -26875,6 +26912,7 @@ check_sdk_runtime_receipt_type_state_binding_contract
 check_sdk_invocation_terminal_state_canonical_contract
 check_public_descriptor_authority_vocabulary_contract
 check_runtime_authority_vocabulary_contract
+check_principal_owner_alias_retirement_contract
 check_voice_realm_authority_vocabulary_contract
 check_route_kind_realm_authority_vocabulary_contract
 check_session_open_authority_vocabulary_contract

@@ -862,7 +862,6 @@ pub(crate) fn resolve_key_response(
         },
         principal_owner_ura: principal_owner.map(|owner| owner.owner_ura.clone()),
         principal_owner_user_id: principal_owner.map(|owner| owner.owner_user_id.clone()),
-        principal_owner_username: principal_owner.and_then(|owner| owner.owner_username.clone()),
     })
 }
 
@@ -2407,7 +2406,6 @@ mod tests {
                 principal_ura: "easynet:///r/realm-a/device/n1".to_string(),
                 owner_user_id: "alice".to_string(),
                 owner_ura: "easynet:///r/realm-a/user/alice".to_string(),
-                owner_username: Some("alice".to_string()),
                 added_at_unix_ms: 1_700_000_000_001,
             }],
             Vec::new(),
@@ -2436,7 +2434,6 @@ mod tests {
             Some("easynet:///r/realm-a/user/alice")
         );
         assert_eq!(resp.principal_owner_user_id.as_deref(), Some("alice"));
-        assert_eq!(resp.principal_owner_username.as_deref(), Some("alice"));
     }
 
     #[test]

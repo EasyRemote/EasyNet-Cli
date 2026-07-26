@@ -532,7 +532,6 @@ mod tests {
                     principal_ura: device_ura.clone(),
                     owner_user_id: "alice".to_string(),
                     owner_ura: "easynet:///r/realm/user/alice".to_string(),
-                    owner_username: Some("alice".to_string()),
                     added_at_unix_ms: 1,
                 }),
             )

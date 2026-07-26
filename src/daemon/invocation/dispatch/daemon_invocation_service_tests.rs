@@ -276,7 +276,6 @@ fn test_trust_anchor() -> RealmTrustAnchor {
             principal_ura: (*principal_ura).to_string(),
             owner_user_id: "test-user".to_string(),
             owner_ura: "easynet:///r/test-realm/user/test-user".to_string(),
-            owner_username: Some("test-user".to_string()),
             added_at_unix_ms: 1_700_000_000_000,
         })
         .collect();

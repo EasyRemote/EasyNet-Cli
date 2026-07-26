@@ -203,9 +203,9 @@ pub struct TrustedAgent {
 ///
 /// `TrustedAgent` answers "which key may sign for this principal URA".
 /// This row answers "which user owns this principal URA" for RFC-014 policy
-/// owner resolution. Keeping it as a separate read model avoids overloading
-/// key trust with authorization ownership and lets existing trust rows remain
-/// valid while new pairings/backfills add owner facts.
+/// owner resolution. The canonical owner identity is the immutable User URA
+/// and user id; product display aliases are intentionally excluded from this
+/// authority fact.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct TrustedPrincipalOwner {
@@ -215,13 +215,6 @@ pub struct TrustedPrincipalOwner {
     pub owner_user_id: String,
     /// Canonical owner user URA.
     pub owner_ura: String,
-    /// Authenticated routing alias used by public user-owned Agent URAs.
-    ///
-    /// Authorization never treats this alias as the owner id. It is retained
-    /// only so a hosted Agent such as `/agent/dev.eval` can be bound back to
-    /// the canonical UUID in `owner_user_id` without changing its public URA.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub owner_username: Option<String>,
     /// Timestamp the owner fact was written.
     pub added_at_unix_ms: u64,
 }
@@ -387,21 +380,6 @@ fn canonicalize_principal_owner(
             detail: "owner_ura user id must equal owner_user_id".to_string(),
         });
     }
-    owner.owner_username = match owner.owner_username {
-        Some(username) if username.trim().is_empty() => {
-            return Err(RealmTrustError::InvalidPrincipalOwner {
-                principal_ura: owner.principal_ura,
-                detail: "owner_username must not be empty when supplied".to_string(),
-            });
-        }
-        Some(username) if username.trim() != username => {
-            return Err(RealmTrustError::InvalidPrincipalOwner {
-                principal_ura: owner.principal_ura,
-                detail: "owner_username must not contain surrounding whitespace".to_string(),
-            });
-        }
-        value => value,
-    };
     Ok(owner)
 }
 
@@ -567,17 +545,10 @@ impl RealmTrustAnchor {
         if let Some(existing) = self.principal_owners.get(&owner.principal_ura) {
             if existing.owner_user_id != owner.owner_user_id
                 || existing.owner_ura != owner.owner_ura
-                || matches!(
-                    (&existing.owner_username, &owner.owner_username),
-                    (Some(existing), Some(next)) if existing != next
-                )
             {
                 return Err(RealmTrustError::PrincipalOwnerConflict {
                     principal_ura: owner.principal_ura,
                 });
-            }
-            if owner.owner_username.is_none() {
-                owner.owner_username.clone_from(&existing.owner_username);
             }
             owner.added_at_unix_ms = existing.added_at_unix_ms;
         }

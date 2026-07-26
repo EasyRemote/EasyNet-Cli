@@ -200,7 +200,6 @@ async fn upstream_daemon(
             principal_ura: owner_ura.clone(),
             owner_user_id: UPSTREAM_OWNER_USER_ID.to_string(),
             owner_ura: owner_user_ura.clone(),
-            owner_username: None,
             added_at_unix_ms: 1_700_000_000_000,
         })
         .expect("bind upstream Hub to an accountable owner");

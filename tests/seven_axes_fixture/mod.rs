@@ -328,7 +328,6 @@ added_at_unix_ms = 0
 principal_ura = "{loopback_caller}"
 owner_user_id = "user-local"
 owner_ura = "easynet:///r/cli/user/user-local"
-owner_username = "local"
 added_at_unix_ms = 0
 "#
         )

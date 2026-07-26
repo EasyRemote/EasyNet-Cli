@@ -385,7 +385,6 @@ async fn federation_join_with_principal_proof_binds_device_owner_in_runtime_trus
         .expect("device owner binding");
     assert_eq!(owner.owner_ura, user_ura);
     assert_eq!(owner.owner_user_id, "alice");
-    assert_eq!(owner.owner_username.as_deref(), Some("alice"));
 }
 
 #[tokio::test]
@@ -410,7 +409,6 @@ async fn invoke_dispatches_federation_advertise_agent() {
             principal_ura: caller_ura.to_string(),
             owner_user_id: "user-dev".to_string(),
             owner_ura: "easynet:///r/realm/user/user-dev".to_string(),
-            owner_username: Some("dev".to_string()),
             added_at_unix_ms: 1,
         }],
         Vec::new(),

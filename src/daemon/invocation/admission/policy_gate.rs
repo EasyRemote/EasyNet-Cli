@@ -457,7 +457,6 @@ mod tests {
                 principal_ura: "easynet:///r/test/device/dev-1".to_string(),
                 owner_user_id: "alice".to_string(),
                 owner_ura: "easynet:///r/test/user/alice".to_string(),
-                owner_username: Some("alice".to_string()),
                 added_at_unix_ms: 1,
             }],
             Vec::new(),

@@ -352,10 +352,7 @@ impl DeviceTrustSync {
             let request = match resolved.principal_owner_ura.as_deref() {
                 Some(owner_ura) => {
                     RegisterPubkeyRequest::new(caller_ura, public_key_b64, role.trusted_role())
-                        .with_principal_owner(
-                            owner_ura,
-                            resolved.principal_owner_username.as_deref(),
-                        )
+                        .with_principal_owner(owner_ura)
                 }
                 None => RegisterPubkeyRequest::new(caller_ura, public_key_b64, role.trusted_role()),
             };
@@ -390,7 +387,6 @@ impl DeviceTrustSync {
 struct ResolvedCallerTrust {
     public_keys_b64: Vec<String>,
     principal_owner_ura: Option<String>,
-    principal_owner_username: Option<String>,
 }
 
 impl ResolvedCallerTrust {
@@ -398,7 +394,6 @@ impl ResolvedCallerTrust {
         Self {
             public_keys_b64,
             principal_owner_ura: None,
-            principal_owner_username: None,
         }
     }
 }
@@ -417,12 +412,6 @@ fn parse_resolved_caller_trust(result_bytes: &[u8]) -> anyhow::Result<ResolvedCa
         public_keys_b64: keys,
         principal_owner_ura: response
             .get("principal_owner_ura")
-            .and_then(|value| value.as_str())
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToString::to_string),
-        principal_owner_username: response
-            .get("principal_owner_username")
             .and_then(|value| value.as_str())
             .map(str::trim)
             .filter(|value| !value.is_empty())
@@ -581,7 +570,6 @@ mod tests {
         let resolved = ResolvedCallerTrust {
             public_keys_b64: vec![key.clone()],
             principal_owner_ura: Some("easynet:///r/test-realm/user/alice".to_string()),
-            principal_owner_username: Some("alice".to_string()),
         };
 
         assert!(sync.import_caller_trust(
@@ -603,7 +591,6 @@ mod tests {
             .expect("principal owner imported");
         assert_eq!(owner.owner_user_id, "alice");
         assert_eq!(owner.owner_ura, "easynet:///r/test-realm/user/alice");
-        assert_eq!(owner.owner_username.as_deref(), Some("alice"));
     }
 
     #[tokio::test]

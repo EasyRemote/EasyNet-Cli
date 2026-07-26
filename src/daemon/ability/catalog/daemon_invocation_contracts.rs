@@ -401,8 +401,7 @@ pub(crate) fn input_schema_for(name: &str) -> Option<Value> {
                 "principal_ura": string_prop("Principal URA whose verifying key should be trusted."),
                 "public_key_b64": string_prop("Base64-encoded Ed25519 verifying key."),
                 "role": string_prop("Trust role for this key row."),
-                "principal_owner_ura": string_prop("Optional owner principal URA."),
-                "principal_owner_username": string_prop("Optional owner principal username.")
+                "principal_owner_ura": string_prop("Optional canonical owner User URA.")
             }),
             &["principal_ura", "public_key_b64", "role"],
             false,

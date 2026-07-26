@@ -1136,7 +1136,6 @@ fn register_paired_user_runtime_signer(
         principal_ura: device_ura.clone(),
         owner_user_id: credentials.user_id()?.to_string(),
         owner_ura: user_ura.clone(),
-        owner_username: credentials.username.clone(),
         added_at_unix_ms: crate::daemon::invocation::admission::runtime_trust::now_unix_ms(),
     };
     runtime_trust

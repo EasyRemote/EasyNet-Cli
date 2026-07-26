@@ -17,20 +17,16 @@ receipt_semantics = "operational"
 
 [input_schema]
 type = "object"
-required = ["agent_ura", "public_key_b64", "role"]
+required = ["principal_ura", "public_key_b64", "role"]
 additionalProperties = false
 
-[input_schema.properties.agent_ura]
+[input_schema.properties.principal_ura]
 type = "string"
 description = "Agent, Device, User, or Authority URA to trust."
 
 [input_schema.properties.principal_owner_ura]
 type = "string"
-description = "Optional owner principal URA."
-
-[input_schema.properties.principal_owner_username]
-type = "string"
-description = "Optional owner principal username."
+description = "Optional canonical owner User URA."
 
 [input_schema.properties.public_key_b64]
 type = "string"
