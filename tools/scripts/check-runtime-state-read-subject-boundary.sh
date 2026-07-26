@@ -107,6 +107,15 @@ if ! rg -n 'runtime_state_read_subject_rejects_missing_user_id_before_device_fal
   fail "runtime-state read issuer must test missing user id as fail-closed"
 fi
 
+if printf '%s\n' "$runtime_state_issuer_section" | rg -n 'fn from_credentials\('; then
+  fail "runtime-state read subject must not keep a credentials-only constructor"
+fi
+
+if ! sed -n '/fn runtime_state_read_subject_rejects_missing_user_id_before_device_fallback/,/^    }/p' "$ISSUER" \
+  | rg -n 'from_runtime_attachment\(' >/dev/null; then
+  fail "runtime-state read missing-user test must exercise the runtime attachment constructor"
+fi
+
 if ! rg -n 'runtime_state_read_subject_requires_ready_signer_capability' "$ISSUER" >/dev/null; then
   fail "runtime-state read issuer must test missing Ready signer capability"
 fi

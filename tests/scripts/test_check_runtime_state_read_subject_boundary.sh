@@ -47,6 +47,7 @@ impl RuntimeStateReadSignerCustody for KeyServiceRuntimeStateReadSignerCustody {
     }
 }
 
+/// Runtime-state reads bind to a user-owned Resource URA.
 struct LocalRuntimeStateReadSubject {
     ura: String,
 }
@@ -101,13 +102,19 @@ impl LocalRuntimeStateReadSubject {
 fn runtime_state_read_subject_uses_user_owned_resource_not_daemon_identity() {}
 
 #[test]
-fn runtime_state_read_subject_rejects_missing_user_id_before_device_fallback() {}
+fn runtime_state_read_subject_rejects_missing_user_id_before_device_fallback() {
+    let _ = LocalRuntimeStateReadSubject::from_runtime_attachment(
+        &credentials,
+        &discovery,
+        &ReadyRuntimeStateReadSignerCustody,
+    );
+}
 
 #[test]
 fn runtime_state_read_subject_requires_ready_signer_capability() {}
 
 #[test]
-fn runtime_state_read_subject_rejects_stale_daemon_identity() {}
+fn runtime_state_read_subject_rejects_stale_runtime_attachment() {}
 
 #[test]
 fn runtime_state_read_subject_rejects_missing_live_signer_custody() {}
@@ -279,6 +286,21 @@ RS
   cd "$SB"
   bash tools/scripts/check-runtime-state-read-subject-boundary.sh
 ) >/dev/null || fail "happy path should pass"
+
+perl -0pi -e 's/\n    fn into_ura\(self\)/\n    fn from_credentials(\n        _credentials: &crate::daemon::persistence::config::Credentials,\n    ) -> anyhow::Result<Self> {\n        anyhow::bail!("credentials-only constructor")\n    }\n\n    fn into_ura(self)/' \
+  "$SB/src/support/platform/local_invoke.rs"
+
+set +e
+(
+  cd "$SB"
+  bash tools/scripts/check-runtime-state-read-subject-boundary.sh
+) >/tmp/check-runtime-state-read-subject-boundary-from-credentials.out 2>&1
+rc=$?
+set -e
+[[ "$rc" == "1" ]] || fail "credentials-only constructor should exit 1 (got $rc)"
+
+perl -0pi -e 's/\n    fn from_credentials\(\n        _credentials: &crate::daemon::persistence::config::Credentials,\n    \) -> anyhow::Result<Self> \{\n        anyhow::bail!\("credentials-only constructor"\)\n    \}\n//' \
+  "$SB/src/support/platform/local_invoke.rs"
 
 perl -0pi -e 's/from_runtime_attachment_file\(&KeyServiceRuntimeStateReadSignerCustody\)/from_credentials_file()/g; s/fn from_runtime_attachment_file/fn from_credentials_file/g' \
   "$SB/src/support/platform/local_invoke.rs"

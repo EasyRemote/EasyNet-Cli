@@ -519,22 +519,16 @@ impl LocalRuntimeStateReadSubject {
                 );
             }
         }
-        let user_ura = credentials
-            .user_ura()
-            .map_err(|error| anyhow::anyhow!("runtime-state read subject unavailable: {error}"))?;
-        signer_custody.prove(&user_ura)?;
-        Self::from_credentials(&credentials)
-    }
-
-    fn from_credentials(
-        credentials: &crate::daemon::persistence::config::Credentials,
-    ) -> anyhow::Result<Self> {
         let realm = credentials.realm_str().trim();
         if realm.is_empty() {
             anyhow::bail!(
                 "runtime-state read subject unavailable: credentials file is missing realm"
             );
         }
+        let user_ura = credentials
+            .user_ura()
+            .map_err(|error| anyhow::anyhow!("runtime-state read subject unavailable: {error}"))?;
+        signer_custody.prove(&user_ura)?;
         let user_id = credentials
             .user_id()
             .map_err(|error| anyhow::anyhow!("runtime-state read subject unavailable: {error}"))?;
@@ -1131,8 +1125,12 @@ mod tests {
             join_receipt_hash: None,
         };
 
-        let error = LocalRuntimeStateReadSubject::from_credentials(&credentials)
-            .expect_err("missing user_id must fail before any device subject fallback");
+        let error = LocalRuntimeStateReadSubject::from_runtime_attachment(
+            &credentials,
+            &runtime_state_read_discovery("acme", Some("dev-a"), paired_user_runtime_signer_flag()),
+            &ReadyRuntimeStateReadSignerCustody,
+        )
+        .expect_err("missing user_id must fail before any device subject fallback");
         let message = format!("{error:#}");
         assert!(
             message.contains("runtime-state read subject unavailable"),
