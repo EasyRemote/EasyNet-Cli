@@ -2,6 +2,7 @@ import base64
 import json
 import unittest
 
+import easynet_sdk.authority as authority_module
 from easynet_sdk import (
     AuthorityClient,
     DELEGATION_METADATA_KEY,
@@ -339,6 +340,29 @@ class AuthorityTests(unittest.TestCase):
             "easynet:///r/example/authority",
         )
         self.assertNotIn("session_owner_ura", transport.seen_session)
+
+    def test_session_authority_request_requires_explicit_creator_principal_ura(self) -> None:
+        request = SessionAuthorityRequest(
+            issuer_ura="easynet:///r/example/agent/backend",
+            session_id="session-1",
+            session_owner_user_id="alice",
+            creator_principal_id="easynet:///r/example/authority",
+            callee_ura="easynet:///r/example/device/dev-a",
+            subject_ura="easynet:///r/example/resource/user.alice/session/session-1",
+            audience="easynet:///r/example/device/dev-a",
+            scopes=("device.observe.*",),
+            allowed_actions=("read",),
+            allowed_followup_abilities=("device.observe.health",),
+            issued_at_ms=1000,
+            expires_at_ms=2000,
+        )
+
+        normalized = authority_module._normalized_session_authority_request(request)
+
+        self.assertEqual(
+            normalized.creator_principal_id, "easynet:///r/example/authority"
+        )
+        self.assertEqual(normalized.creator_principal_ura, "")
 
     def test_authority_client_rejects_conflicting_canonical_principal_uras(self) -> None:
         client = AuthorityClient(_MemoryAuthorityTransport())

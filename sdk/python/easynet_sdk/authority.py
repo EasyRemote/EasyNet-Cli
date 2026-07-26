@@ -741,12 +741,6 @@ def _normalized_session_authority_request(
                 "creator_principal_id must match creator_principal_ura"
             )
         creator_principal_id = creator_principal_ura
-    elif creator_principal_id.startswith("easynet:///"):
-        try:
-            _parse_required_ura(creator_principal_id, "creator_principal_id")
-            creator_principal_ura = creator_principal_id
-        except SDKError:
-            creator_principal_ura = ""
 
     return SessionAuthorityRequest(
         issuer_ura=request.issuer_ura,

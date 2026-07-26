@@ -4455,15 +4455,17 @@ check_sdk_history_authority_subject_contract() {
   local go_receipt="$cli_root/sdk/go/receipt.go"
   local go_receipt_test="$cli_root/sdk/go/receipt_test.go"
   local py="$cli_root/sdk/python/easynet_sdk/authorized_runtime_session.py"
+  local py_authority="$cli_root/sdk/python/easynet_sdk/authority.py"
   local py_helper="$cli_root/sdk/python/easynet_sdk/_session_authority_subjects.py"
   local py_test="$cli_root/sdk/python/tests/test_authorized_runtime_session.py"
+  local py_authority_test="$cli_root/sdk/python/tests/test_authority.py"
   local py_receipt="$cli_root/sdk/python/easynet_sdk/receipt.py"
   local py_receipt_guard="$cli_root/sdk/python/easynet_sdk/_receipt_history_admission.py"
   local py_receipt_test="$cli_root/sdk/python/tests/test_receipt.py"
   local node="$cli_root/sdk/node/index.js"
   local node_test="$cli_root/sdk/node/test/runtime-core.test.mjs"
 
-  "$PYTHON_BIN" - "$go" "$go_runtime" "$go_helper" "$go_test" "$go_receipt" "$go_receipt_test" "$py" "$py_helper" "$py_test" "$py_receipt" "$py_receipt_guard" "$py_receipt_test" "$node" "$node_test" <<'PY'
+  "$PYTHON_BIN" - "$go" "$go_runtime" "$go_helper" "$go_test" "$go_receipt" "$go_receipt_test" "$py" "$py_authority" "$py_helper" "$py_test" "$py_authority_test" "$py_receipt" "$py_receipt_guard" "$py_receipt_test" "$node" "$node_test" <<'PY'
 import sys
 from pathlib import Path
 
@@ -4475,8 +4477,10 @@ from pathlib import Path
     go_receipt_path,
     go_receipt_test_path,
     py_path,
+    py_authority_path,
     py_helper_path,
     py_test_path,
+    py_authority_test_path,
     py_receipt_path,
     py_receipt_guard_path,
     py_receipt_test_path,
@@ -4618,6 +4622,8 @@ if go:
 
 py = read(py_path)
 if py:
+    py_authority = read(py_authority_path)
+    py_authority_test = read(py_authority_test_path)
     py_helper = read(py_helper_path)
     py_receipt = read(py_receipt_path)
     py_guard = read(py_receipt_guard_path)
@@ -4726,6 +4732,20 @@ if py:
             raise SystemExit(f"sdk_python_session_history_duplicate_guard_retired:{retired}")
     if "_session_history_authority_subject_matches(" in py:
         raise SystemExit("sdk_python_history_authority_exact_subject_helper_retired")
+    if py_authority:
+        request_normalizer = section(
+            py_authority,
+            "def _normalized_session_authority_request(",
+            "def _session_authority_with_canonical_principals(",
+        )
+        for retired in (
+            'creator_principal_id.startswith("easynet:///")',
+            '_parse_required_ura(creator_principal_id, "creator_principal_id")',
+        ):
+            if retired in request_normalizer:
+                raise SystemExit(f"sdk_python_session_authority_creator_principal_implicit_promotion_retired:{retired}")
+        if "test_session_authority_request_requires_explicit_creator_principal_ura" not in py_authority_test:
+            raise SystemExit("sdk_python_session_authority_explicit_creator_principal_ura_test_missing")
     require(
         py_receipt_test_path,
         "test_runtime_receipt_provider_rejects_device_subject_before_descriptor_resolution",
