@@ -2002,6 +2002,74 @@ for required in (
 PY
 }
 
+check_join_peer_hub_explicit_endpoint_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local federation_wire="$cli_root/src/cli/commands/federation_wire.rs"
+
+  [[ -f "$federation_wire" ]] || fail "federation wire source is missing: ${federation_wire#$cli_root/}"
+
+  "$PYTHON_BIN" - "$federation_wire" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+wire = Path(sys.argv[1]).read_text(encoding="utf-8")
+wire_prod = wire.split("#[cfg(test)]", 1)[0]
+
+for required in (
+    "enum PeerHubEndpointSource",
+    "OperatorOverride",
+    "PairingTlsEndpoint",
+    "struct ResolvedPeerHubEndpoint",
+    "--peer-hub must not be empty",
+    "--peer-hub must be an https:// endpoint",
+    "requires --peer-hub when pairing hub_endpoint is not https://",
+    "resolve explicit peer hub endpoint for federated_peers auto-wire",
+):
+    if required not in wire_prod:
+        raise SystemExit(f"join_peer_hub_explicit_endpoint:missing:{required}")
+
+if not re.search(
+    r"fn\s+resolve_peer_hub_endpoint\s*\([^)]*\)\s*->\s*anyhow::Result<ResolvedPeerHubEndpoint>",
+    wire_prod,
+    re.S,
+):
+    raise SystemExit("join_peer_hub_explicit_endpoint:resolver_not_fallible")
+
+for retired in (
+    "CANONICAL_HUB_TO_HUB_PORT",
+    "PeerHubResolution",
+    "Guessed",
+    "guessing",
+    "guesses",
+    "guessed",
+    "port-50443 guess",
+    "strip_prefix(\"axon://\")",
+    "strip_prefix(\"http://\")",
+    "format!(\"https://{host}:",
+    "format!(\"https://{trimmed}\")",
+    "operator_override.map(str::trim).filter",
+    "empty_operator_override_falls_through_to_creds",
+    "axon_scheme_creds_endpoint_guesses_canonical_port",
+    "http_scheme_creds_endpoint_guesses_canonical_port_not_backend_port",
+    "unknown_scheme_falls_back_to_https_prefix_no_port_substitution",
+):
+    if retired in wire:
+        raise SystemExit(f"join_peer_hub_explicit_endpoint:retired:{retired}")
+
+for required_test in (
+    "empty_operator_override_is_invalid",
+    "explicit_peer_hub_must_be_https",
+    "axon_pairing_endpoint_requires_explicit_peer_hub",
+    "http_pairing_endpoint_requires_explicit_peer_hub",
+    "bare_pairing_endpoint_requires_explicit_peer_hub",
+    "auto_wire_rejects_ambiguous_pairing_endpoint_without_writing_config",
+):
+    if required_test not in wire:
+        raise SystemExit(f"join_peer_hub_explicit_endpoint:missing_test:{required_test}")
+PY
+}
+
 check_join_user_signer_custody_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local join="$cli_root/src/cli/commands/join.rs"
@@ -21479,6 +21547,46 @@ EOF
   if ( check_join_authority_wiring_required_contract "$tmp/join-authority-wiring-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected join authority wiring required-stage gate to fail"
   fi
+  mkdir -p "$tmp/join-peer-hub-guess-legacy/src/cli/commands"
+  cat >"$tmp/join-peer-hub-guess-legacy/src/cli/commands/federation_wire.rs" <<'EOF'
+const CANONICAL_HUB_TO_HUB_PORT: u16 = 50443;
+
+enum PeerHubResolution {
+    Confident(String),
+    Guessed { endpoint: String, source: String },
+}
+
+fn resolve_peer_hub_endpoint(
+    operator_override: Option<&str>,
+    creds_hub_endpoint: &str,
+) -> PeerHubResolution {
+    if let Some(raw) = operator_override.map(str::trim).filter(|s| !s.is_empty()) {
+        return PeerHubResolution::Confident(raw.to_string());
+    }
+    let trimmed = creds_hub_endpoint.trim();
+    if let Some(rest) = trimmed.strip_prefix("axon://") {
+        let host = rest.split(':').next().unwrap_or(rest);
+        return PeerHubResolution::Guessed {
+            endpoint: format!("https://{host}:{CANONICAL_HUB_TO_HUB_PORT}"),
+            source: trimmed.to_string(),
+        };
+    }
+    PeerHubResolution::Guessed {
+        endpoint: format!("https://{trimmed}"),
+        source: trimmed.to_string(),
+    }
+}
+
+fn empty_operator_override_is_invalid() {}
+fn explicit_peer_hub_must_be_https() {}
+fn axon_pairing_endpoint_requires_explicit_peer_hub() {}
+fn http_pairing_endpoint_requires_explicit_peer_hub() {}
+fn bare_pairing_endpoint_requires_explicit_peer_hub() {}
+fn auto_wire_rejects_ambiguous_pairing_endpoint_without_writing_config() {}
+EOF
+  if ( check_join_peer_hub_explicit_endpoint_contract "$tmp/join-peer-hub-guess-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected join peer-hub explicit endpoint gate to fail"
+  fi
   mkdir -p "$tmp/join-user-signer-custody-legacy/src/cli/commands"
   cat >"$tmp/join-user-signer-custody-legacy/src/cli/commands/join.rs" <<'EOF'
 fn persist_join_credentials(creds: Credentials) -> anyhow::Result<()> {
@@ -26097,6 +26205,7 @@ EOF
   check_core_ura_realm_projection_contract
   check_resolve_key_request_dto_contract
   check_join_authority_wiring_required_contract
+  check_join_peer_hub_explicit_endpoint_contract
   check_join_user_signer_custody_contract
   check_invocation_history_filter_scope_contract
   check_cli_invocation_history_read_model_contract
@@ -26355,6 +26464,7 @@ check_invocation_history_ledger_ura_contract
 check_core_ura_realm_projection_contract
 check_resolve_key_request_dto_contract
 check_join_authority_wiring_required_contract
+check_join_peer_hub_explicit_endpoint_contract
 check_join_user_signer_custody_contract
 check_invocation_history_filter_scope_contract
 check_cli_invocation_history_read_model_contract
