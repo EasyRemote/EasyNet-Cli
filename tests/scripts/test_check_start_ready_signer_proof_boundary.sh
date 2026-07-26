@@ -12,7 +12,7 @@ fail() {
 SB="$(mktemp -d)"
 trap 'rm -rf "$SB"' EXIT
 
-mkdir -p "$SB/tools/scripts" "$SB/src/cli/commands"
+mkdir -p "$SB/tools/scripts" "$SB/src/cli/commands" "$SB/src/daemon/boot/invocation"
 cp "$SCRIPT" "$SB/tools/scripts/check-start-ready-signer-proof-boundary.sh"
 
 cat >"$SB/src/cli/commands/start_boot_watcher.rs" <<'RS'
@@ -86,6 +86,38 @@ fn start_runtime_readiness_rejects_missing_credential_user_ura() {}
 fn start_runtime_readiness_rejects_failed_signer_custody_proof() {}
 RS
 
+cat >"$SB/src/daemon/boot/invocation/mod.rs" <<'RS'
+fn boot() -> anyhow::Result<()> {
+    register_paired_user_runtime_signer(&config, &trust_anchor_path, &trust_anchor_cell)?;
+    ready_capability_flags.push(crate::daemon::control::discovery::flags::PAIRED_USER_RUNTIME_SIGNER.to_string());
+    Ok(())
+}
+
+fn register_paired_user_runtime_signer(
+    config: &DaemonConfig,
+    trust_anchor_path: &PathBuf,
+    trust_anchor_cell: &SharedTrustAnchor,
+) -> anyhow::Result<()> {
+    let client = crate::daemon::identity::self_identity::KeyringClient::default_path();
+    let ensured = crate::daemon::identity::self_identity::ensure_user_runtime_signing_identity(
+        &client, &user_ura,
+    )?;
+    let projection = ensured.projection;
+    crate::daemon::identity::self_identity::prove_user_runtime_signing_projection_custody(
+        &client,
+        &user_ura,
+        &projection,
+    )?;
+    RuntimeTrustContext {
+        daemon_realm: config.realm().to_string(),
+        trust_anchor_path: trust_anchor_path.clone(),
+        cell: trust_anchor_cell.clone(),
+    }
+    .register_user_pubkey(user_ura.clone(), projection.public_key_b64.clone())?;
+    Ok(())
+}
+RS
+
 (
   cd "$SB"
   bash tools/scripts/check-start-ready-signer-proof-boundary.sh
@@ -107,5 +139,39 @@ set +e
 rc=$?
 set -e
 [[ "$rc" == "1" ]] || fail "missing ready signer validation should exit 1 (got $rc)"
+
+python3 - "$SB/src/cli/commands/start.rs" <<'PY'
+import pathlib
+path = pathlib.Path(__import__("sys").argv[1])
+text = path.read_text()
+needle = "    if !attached_existing_daemon {\n"
+if "validate_device_runtime_readiness(&boot, &creds)?" not in text:
+    text = text.replace(needle, "    validate_device_runtime_readiness(&boot, &creds)?;\n" + needle)
+path.write_text(text)
+PY
+
+python3 - "$SB/src/daemon/boot/invocation/mod.rs" <<'PY'
+import pathlib
+path = pathlib.Path(__import__("sys").argv[1])
+text = path.read_text()
+text = text.replace(
+    "    crate::daemon::identity::self_identity::prove_user_runtime_signing_projection_custody(\n"
+    "        &client,\n"
+    "        &user_ura,\n"
+    "        &projection,\n"
+    "    )?;\n",
+    "",
+)
+path.write_text(text)
+PY
+
+set +e
+(
+  cd "$SB"
+  bash tools/scripts/check-start-ready-signer-proof-boundary.sh
+) >/tmp/check-start-ready-signer-proof-boundary.out 2>&1
+rc=$?
+set -e
+[[ "$rc" == "1" ]] || fail "missing daemon projection-bound proof should exit 1 (got $rc)"
 
 echo "test_check_start_ready_signer_proof_boundary.sh: all cases passed"

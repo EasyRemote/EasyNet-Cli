@@ -11,9 +11,11 @@ fail() {
 
 START="src/cli/commands/start.rs"
 WATCHER="src/cli/commands/start_boot_watcher.rs"
+BOOT_INVOCATION="src/daemon/boot/invocation/mod.rs"
 
 [[ -f "$START" ]] || fail "missing $START"
 [[ -f "$WATCHER" ]] || fail "missing $WATCHER"
+[[ -f "$BOOT_INVOCATION" ]] || fail "missing $BOOT_INVOCATION"
 
 if ! rg -n 'ready_capability_flags: Vec<String>' "$WATCHER" >/dev/null; then
   fail "BootProgressOutcome must carry daemon Ready capability flags"
@@ -46,6 +48,40 @@ fi
 if rg -n 'fn validate_device_ready_capabilities' "$START" >/dev/null; then
   fail "retired device-ready flag-only validator is still present"
 fi
+
+if ! rg -n 'fn register_paired_user_runtime_signer' "$BOOT_INVOCATION" >/dev/null; then
+  fail "daemon boot must centralize paired User runtime signer readiness"
+fi
+
+if ! rg -n 'ensure_user_runtime_signing_identity' "$BOOT_INVOCATION" >/dev/null; then
+  fail "daemon boot must ensure paired User managed signing identity"
+fi
+
+if ! rg -n 'prove_user_runtime_signing_projection_custody' "$BOOT_INVOCATION" >/dev/null; then
+  fail "daemon boot must prove projection-bound paired User signer custody before Ready"
+fi
+
+python3 - "$BOOT_INVOCATION" <<'PY'
+import pathlib
+import sys
+
+text = pathlib.Path(sys.argv[1]).read_text()
+fn = text.find("fn register_paired_user_runtime_signer")
+if fn == -1:
+    raise SystemExit("missing register_paired_user_runtime_signer")
+body = text[fn:text.find("\nfn ", fn + 1) if text.find("\nfn ", fn + 1) != -1 else len(text)]
+ensure = body.find("ensure_user_runtime_signing_identity")
+prove = body.find("prove_user_runtime_signing_projection_custody")
+register = body.find(".register_user_pubkey(")
+flag = text.find("PAIRED_USER_RUNTIME_SIGNER")
+call = text.find("register_paired_user_runtime_signer(&")
+if ensure == -1 or prove == -1 or register == -1:
+    raise SystemExit("paired User signer boot gate must ensure, prove, and register")
+if not (ensure < prove < register):
+    raise SystemExit("paired User signer custody proof must bind the ensured projection before trust registration")
+if call == -1 or flag == -1 or not (call < flag):
+    raise SystemExit("daemon boot must register/prove paired User signer before publishing Ready flag")
+PY
 
 python3 - "$START" <<'PY'
 import pathlib

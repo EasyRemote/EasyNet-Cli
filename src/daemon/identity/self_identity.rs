@@ -54,8 +54,8 @@ mod managed_user_signing;
 
 use managed_user_signing::ManagedRuntimeSigningIdentity;
 pub use managed_user_signing::{
-    ensure_user_runtime_signing_identity, EnsuredUserRuntimeSigningIdentity,
-    USER_SIGNING_CLI_PURPOSE,
+    ensure_user_runtime_signing_identity, prove_user_runtime_signing_projection_custody,
+    EnsuredUserRuntimeSigningIdentity, USER_SIGNING_CLI_PURPOSE,
 };
 
 /// Errors surfaced by `SelfIdentity` callers. Most are 1:1 with
@@ -1365,7 +1365,7 @@ mod tests {
                 "test-passphrase".to_string(),
                 user_ura.to_string(),
                 USER_SIGNING_CLI_PURPOSE.to_string(),
-                2,
+                3,
                 ready_tx,
             );
         });
@@ -1374,7 +1374,9 @@ mod tests {
             .expect("test key service reports readiness")
             .expect("test key service starts");
         let provider = Arc::new(KeyringClient::new(socket));
-        let signer = ManagedRuntimeSigningIdentity::load_user(user_ura, provider)
+        prove_user_runtime_signing_projection_custody(provider.as_ref(), user_ura, &projection)
+            .expect("boot readiness proof signs with the exact managed projection");
+        let signer = ManagedRuntimeSigningIdentity::load_user(user_ura, Arc::clone(&provider))
             .expect("managed user signer loads");
 
         assert_eq!(signer.owner_ura(), user_ura);

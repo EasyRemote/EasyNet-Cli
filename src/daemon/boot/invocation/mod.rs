@@ -1106,6 +1106,17 @@ fn register_paired_user_runtime_signer(
         anyhow::anyhow!("ensure managed signing key for paired User `{user_ura}`: {error}")
     })?;
     let projection = ensured.projection;
+    crate::daemon::identity::self_identity::prove_user_runtime_signing_projection_custody(
+        &client,
+        &user_ura,
+        &projection,
+    )
+    .map_err(|error| {
+        anyhow::anyhow!(
+            "prove managed signing custody for paired User `{user_ura}` key `{}`: {error}",
+            projection.key_id
+        )
+    })?;
     RuntimeTrustContext {
         daemon_realm: config.realm().to_string(),
         trust_anchor_path: trust_anchor_path.clone(),

@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use ed25519_dalek::Verifier as _;
 use ed25519_dalek::{Signature, VerifyingKey};
 
 use super::{
@@ -43,6 +44,34 @@ pub fn ensure_user_runtime_signing_identity(
         projection,
         created,
     })
+}
+
+/// Prove custody for the exact managed key projection that will be registered.
+///
+/// `prove_runtime_caller_signer_custody(user_ura)` proves that at least one
+/// active User caller signer can sign. Daemon Ready has a stronger contract:
+/// the `(user_ura, public_key)` tuple published into the runtime trust anchor
+/// must itself be live in key-service custody. This helper signs the canonical
+/// custody challenge through the projection-bound managed signer path before
+/// boot publishes the paired-user readiness capability.
+pub fn prove_user_runtime_signing_projection_custody(
+    client: &KeyringClient,
+    user_ura: &str,
+    projection: &ManagedSigningKeyProjection,
+) -> Result<(), SelfIdentityError> {
+    let user_ura = user_ura.trim();
+    validate_user_runtime_signing_projection(projection, user_ura)?;
+    let public_key = decode_public_key(projection.public_key_b64.clone())?;
+    let signature =
+        client.inventory_sign_bound(projection, super::RUNTIME_CALLER_SIGNER_CUSTODY_CHALLENGE)?;
+    public_key
+        .verify(super::RUNTIME_CALLER_SIGNER_CUSTODY_CHALLENGE, &signature)
+        .map_err(|error| SelfIdentityError::Rejected {
+            kind: "signature_verification".into(),
+            message: format!(
+                "managed user runtime signer custody proof failed for `{user_ura}`: {error}"
+            ),
+        })
 }
 
 fn active_user_runtime_signing_identity(
