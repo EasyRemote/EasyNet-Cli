@@ -11115,6 +11115,55 @@ else:
             )
 
 
+bridge_lib_resolver = cli_root / "src/cli/daemon_client/bridge_lib.rs"
+if bridge_lib_resolver.exists():
+    bridge_text = source(bridge_lib_resolver)
+    raw_bridge_text = bridge_lib_resolver.read_text(encoding="utf-8", errors="replace")
+    for token, detail in (
+        (
+            "fn bridge_lib_from_claude_settings() -> anyhow::Result<Option<String>>",
+            "Claude bridge config source must distinguish absence from corruption",
+        ),
+        (
+            "fn bridge_lib_from_codex_config() -> anyhow::Result<Option<String>>",
+            "Codex bridge config source must distinguish absence from corruption",
+        ),
+        (
+            "fn read_optional_text(",
+            "bridge config file loading must centralize optional-file state handling",
+        ),
+    ):
+        if token not in bridge_text:
+            add(
+                "R94_BRIDGE_CONFIG_FAIL_CLOSED",
+                bridge_lib_resolver,
+                1,
+                detail,
+            )
+    for token, detail in (
+        (
+            "fs::read_to_string(path).ok()?",
+            "bridge config file read errors must not be erased as absence",
+        ),
+        (
+            "serde_json::from_str(&data).ok()?",
+            "Claude bridge config parse errors must not be erased as absence",
+        ),
+        (
+            "data.parse::<DocumentMut>().ok()?",
+            "Codex bridge config parse errors must not be erased as absence",
+        ),
+    ):
+        offset = raw_bridge_text.find(token)
+        if offset != -1:
+            add(
+                "R94_BRIDGE_CONFIG_FAIL_CLOSED",
+                bridge_lib_resolver,
+                line_number(raw_bridge_text, offset),
+                detail,
+            )
+
+
 if violations:
     for violation in sorted(violations):
         print(
