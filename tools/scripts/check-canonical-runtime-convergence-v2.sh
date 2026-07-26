@@ -765,6 +765,37 @@ check_go_sdk_runtime_lifecycle_neutrality_contract() {
   done
 }
 
+check_python_sdk_runtime_lifecycle_transition_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local lifecycle="$cli_root/sdk/python/easynet_sdk/runtime_lifecycle.py"
+  local tests="$cli_root/sdk/python/tests/test_runtime_admin.py"
+  [[ -f "$lifecycle" ]] || return 0
+
+  for token in \
+    "_VALID_RUNTIME_LIFECYCLE_TRANSITIONS" \
+    "def _validate_runtime_lifecycle_transition" \
+    "_validate_runtime_lifecycle_transition(self._status.state, status.state)" \
+    "runtime lifecycle cannot transition from"
+  do
+    if ! rg -Fq "$token" "$lifecycle"; then
+      fail "Python SDK canonical runtime lifecycle is missing transition contract: $token"
+    fi
+  done
+
+  if [[ -f "$tests" ]]; then
+    for token in \
+      "test_runtime_handle_status_rejects_backward_lifecycle_transition" \
+      "test_runtime_handle_stop_rejects_backward_lifecycle_transition"
+    do
+      if ! rg -Fq "$token" "$tests"; then
+        fail "Python SDK runtime lifecycle transition regression is missing: $token"
+      fi
+    done
+  else
+    fail "Python SDK runtime lifecycle transition regression file is missing: ${tests#$ROOT/}"
+  fi
+}
+
 check_go_sdk_lifecycle_fixture_neutrality_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local script="$ROOT/tools/scripts/check-go-sdk-lifecycle-fixture-neutrality.sh"
@@ -24343,6 +24374,7 @@ EOF
   check_canonical_hub_ura_boundary_contract
   check_go_sdk_public_ura_alias_contract
   check_go_sdk_runtime_lifecycle_neutrality_contract
+  check_python_sdk_runtime_lifecycle_transition_contract
   check_go_sdk_lifecycle_fixture_neutrality_contract
   check_go_sdk_runtime_resource_namespace_contract
   check_python_sdk_runtime_addressing_kind_contract

@@ -397,7 +397,9 @@ class RuntimeHandle:
             raise
         except Exception as exc:
             raise _transport_error("runtime host status failed", exc) from exc
-        self._status = RuntimeStatus.from_json(raw)
+        status = RuntimeStatus.from_json(raw)
+        _validate_runtime_lifecycle_transition(self._status.state, status.state)
+        self._status = status
         return self._status
 
     def open_runtime(self, options: ConnectOptions = ConnectOptions()) -> RuntimeClient:
@@ -431,7 +433,9 @@ class RuntimeHandle:
             raise
         except Exception as exc:
             raise _transport_error("runtime host stop failed", exc) from exc
-        self._status = RuntimeStatus.from_json(raw)
+        status = RuntimeStatus.from_json(raw)
+        _validate_runtime_lifecycle_transition(self._status.state, status.state)
+        self._status = status
 
     def detach(self) -> None:
         if self._detached:
@@ -516,6 +520,96 @@ def _runtime_ready(state: RuntimeLifecycleState) -> bool:
         RuntimeLifecycleState.INVOCATION_READY,
         RuntimeLifecycleState.RUNNING,
     }
+
+
+_VALID_RUNTIME_LIFECYCLE_TRANSITIONS: dict[
+    RuntimeLifecycleState, frozenset[RuntimeLifecycleState]
+] = {
+    RuntimeLifecycleState.DISCOVERED: frozenset(
+        {
+            RuntimeLifecycleState.STARTING,
+            RuntimeLifecycleState.CONTROL_READY,
+            RuntimeLifecycleState.INVOCATION_READY,
+            RuntimeLifecycleState.RUNNING,
+            RuntimeLifecycleState.CONTROL_ONLY,
+            RuntimeLifecycleState.START_FAILED,
+        }
+    ),
+    RuntimeLifecycleState.STARTING: frozenset(
+        {
+            RuntimeLifecycleState.CONTROL_READY,
+            RuntimeLifecycleState.INVOCATION_READY,
+            RuntimeLifecycleState.RUNNING,
+            RuntimeLifecycleState.CONTROL_ONLY,
+            RuntimeLifecycleState.START_FAILED,
+            RuntimeLifecycleState.CONFIG_INVALID,
+            RuntimeLifecycleState.PERMISSION_DENIED,
+            RuntimeLifecycleState.VERSION_MISMATCH,
+        }
+    ),
+    RuntimeLifecycleState.CONTROL_READY: frozenset(
+        {
+            RuntimeLifecycleState.INVOCATION_READY,
+            RuntimeLifecycleState.RUNNING,
+            RuntimeLifecycleState.CONTROL_ONLY,
+            RuntimeLifecycleState.STOPPING,
+            RuntimeLifecycleState.START_FAILED,
+        }
+    ),
+    RuntimeLifecycleState.INVOCATION_READY: frozenset(
+        {
+            RuntimeLifecycleState.RUNNING,
+            RuntimeLifecycleState.CONTROL_ONLY,
+            RuntimeLifecycleState.INVOCATION_DOWN,
+            RuntimeLifecycleState.STOPPING,
+            RuntimeLifecycleState.CRASH_LOOP,
+        }
+    ),
+    RuntimeLifecycleState.RUNNING: frozenset(
+        {
+            RuntimeLifecycleState.CONTROL_ONLY,
+            RuntimeLifecycleState.INVOCATION_DOWN,
+            RuntimeLifecycleState.STOPPING,
+            RuntimeLifecycleState.STOPPED,
+            RuntimeLifecycleState.CRASH_LOOP,
+        }
+    ),
+    RuntimeLifecycleState.CONTROL_ONLY: frozenset(
+        {
+            RuntimeLifecycleState.INVOCATION_READY,
+            RuntimeLifecycleState.RUNNING,
+            RuntimeLifecycleState.STOPPING,
+            RuntimeLifecycleState.CRASH_LOOP,
+        }
+    ),
+    RuntimeLifecycleState.INVOCATION_DOWN: frozenset(
+        {
+            RuntimeLifecycleState.INVOCATION_READY,
+            RuntimeLifecycleState.RUNNING,
+            RuntimeLifecycleState.CONTROL_ONLY,
+            RuntimeLifecycleState.STOPPING,
+            RuntimeLifecycleState.CRASH_LOOP,
+        }
+    ),
+    RuntimeLifecycleState.STOPPING: frozenset(
+        {
+            RuntimeLifecycleState.STOPPED,
+            RuntimeLifecycleState.CRASH_LOOP,
+        }
+    ),
+}
+
+
+def _validate_runtime_lifecycle_transition(
+    current: RuntimeLifecycleState, next_state: RuntimeLifecycleState
+) -> None:
+    if current == next_state or current == RuntimeLifecycleState.UNKNOWN:
+        return
+    if next_state in _VALID_RUNTIME_LIFECYCLE_TRANSITIONS.get(current, frozenset()):
+        return
+    raise _invalid_runtime_lifecycle(
+        f"runtime lifecycle cannot transition from {current.value} to {next_state.value}"
+    )
 
 
 def _json_bytes(value: Mapping[str, object]) -> bytes:

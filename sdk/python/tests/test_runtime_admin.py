@@ -61,6 +61,7 @@ class MemoryDaemonTransport:
             b'"invocation_endpoint":"unix:///tmp/daemon.sock"},'
             b'"diagnostics":["status-ok"]}'
         )
+        self.stop_json = b'{"handle_id":"daemon-1","state":"Stopped","diagnostics":[]}'
 
     def discover(self, options_json: bytes) -> bytes:
         return (
@@ -86,7 +87,7 @@ class MemoryDaemonTransport:
         return MemoryRuntimeTransport(), b'{"ready":true}'
 
     def stop(self, handle_id: str, options_json: bytes) -> bytes:
-        return b'{"handle_id":"daemon-1","state":"Stopped","diagnostics":[]}'
+        return self.stop_json
 
     def detach(self, handle_id: str) -> None:
         return None
@@ -163,6 +164,52 @@ def test_runtime_admin_readiness_composes_lifecycle_and_health() -> None:
     assert readiness.lifecycle_state == RuntimeLifecycleState.RUNNING
     assert readiness.messages == ("status-ok", "health-ok")
     assert readiness.diagnostics is not None
+
+
+def test_runtime_handle_status_rejects_backward_lifecycle_transition() -> None:
+    transport = MemoryDaemonTransport()
+    handle = RuntimeLifecycle(transport).start(
+        RuntimeHostStartConfig(mode=RuntimeHostMode.AUTHORITY)
+    )
+    transport.status_json = (
+        b'{"handle_id":"daemon-1","state":"Starting","mode":"authority",'
+        b'"endpoints":{"invocation_endpoint":"unix:///tmp/daemon.sock"}}'
+    )
+
+    try:
+        handle.status()
+    except SDKError as exc:
+        assert exc.code == ErrorCode.INVALID_ARGUMENT
+        assert "runtime lifecycle cannot transition from Running to Starting" in (
+            exc.message
+        )
+    else:
+        raise AssertionError("status accepted a backward lifecycle transition")
+
+    assert handle.state == RuntimeLifecycleState.RUNNING
+
+
+def test_runtime_handle_stop_rejects_backward_lifecycle_transition() -> None:
+    transport = MemoryDaemonTransport()
+    handle = RuntimeLifecycle(transport).start(
+        RuntimeHostStartConfig(mode=RuntimeHostMode.AUTHORITY)
+    )
+    transport.stop_json = (
+        b'{"handle_id":"daemon-1","state":"Starting","mode":"authority",'
+        b'"endpoints":{"invocation_endpoint":"unix:///tmp/daemon.sock"}}'
+    )
+
+    try:
+        handle.stop()
+    except SDKError as exc:
+        assert exc.code == ErrorCode.INVALID_ARGUMENT
+        assert "runtime lifecycle cannot transition from Running to Starting" in (
+            exc.message
+        )
+    else:
+        raise AssertionError("stop accepted a backward lifecycle transition")
+
+    assert handle.state == RuntimeLifecycleState.RUNNING
 
 
 def test_runtime_admin_rejects_missing_handle_and_control() -> None:
