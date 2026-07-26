@@ -107,7 +107,7 @@ impl HomeGuard {
         // Why clear (not pin to a value): pinning would still
         // register `<that-value>.api_key.*` etc., which (a) leaks
         // into every published-ability test's expected catalogue
-        // and (b) reintroduces the `legacy self alias` placeholder M5 banned.
+        // and (b) reintroduces a placeholder owner instead of an explicit URA.
         // An empty / absent var is the production "unpaired"
         // shape and the registry agrees by skipping registration.
         let prev_pages_user = std::env::var("EASYNET_PAGES_USER").ok();

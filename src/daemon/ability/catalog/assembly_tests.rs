@@ -1602,28 +1602,28 @@ fn published_catalogue_does_not_duplicate_device_owner_prefix() {
     );
 }
 
-/// **M5 lint** — the legacy self alias token never appears as a first
+/// **M5 lint** — placeholder owner tokens never appear as a first
 /// segment in the published catalogue. The wire-pinned trio
 /// (`session.open`,
 /// `identity.register_pubkey`) goes through wire-only
 /// constants; they are NOT registered into the discoverable
 /// catalogue. If they ever leak, this test fails and the
 /// regression is caught at CI rather than in an LLM seeing
-/// a legacy self-alias entry and getting confused.
+/// a placeholder owner entry and getting confused.
 #[test]
-fn published_catalogue_never_contains_self_alias() {
+fn published_catalogue_never_contains_placeholder_owner() {
     let _home = crate::cli::commands::test_support::HomeGuard::new();
     let names: Vec<String> = published_system_abilities()
         .into_iter()
         .map(|meta| meta.name)
         .collect();
-    let legacy_self_prefix = ["<", "self", ">"].concat();
+    let placeholder_owner_prefix = ["<", "self", ">"].concat();
     let leaks: Vec<&String> = names
         .iter()
-        .filter(|n| n.starts_with(&legacy_self_prefix))
+        .filter(|n| n.starts_with(&placeholder_owner_prefix))
         .collect();
     assert!(
         leaks.is_empty(),
-        "post-M5 catalogue must not expose legacy self-alias names; got {leaks:?}"
+        "post-M5 catalogue must not expose placeholder-owner names; got {leaks:?}"
     );
 }

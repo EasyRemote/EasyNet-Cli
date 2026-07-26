@@ -1,8 +1,8 @@
 // EasyNet CLI — Keyring ability handlers (RFC-002 §3.3)
 // =======================================================
 //
-// 10 abilities exposed by the daemon under `keyring.*` namespace
-// (the daemon agent's own bundle):
+// 10 abilities exposed by the daemon under the device-owned
+// `device.keyring.*` namespace:
 //
 //   keyring.create        — generate a fresh ed25519 entry
 //   keyring.list          — enumerate entries (filter by purpose/status)
@@ -40,6 +40,12 @@ use crate::daemon::keyring::managed_signing_projection::{
     ManagedSigningRevokeResponse, ManagedSigningRotateResponse,
 };
 use crate::daemon::keyring::managed_signing_provider::ManagedSigningProvider;
+
+const DEVICE_KEYRING_OWNER: &str = "device";
+
+fn device_keyring_ability_name(verb: &str) -> String {
+    format!("{DEVICE_KEYRING_OWNER}.keyring.{verb}")
+}
 
 fn b64_encode(bytes: &[u8]) -> String {
     use base64::engine::general_purpose::STANDARD;
@@ -299,110 +305,82 @@ pub fn handle_peer_list(provider: &dyn ManagedSigningProvider, _args: Value) -> 
     )?)
 }
 
-/// Register key administration projections under `<owner>.keyring.<verb>`.
+/// Register device key administration projections under `device.keyring.<verb>`.
 /// Raw signing is deliberately not an Invocation ability: signing consumers
 /// receive a subject/key-bound SDK capability through the local key service.
-///
-/// `owner` is the agent name they publish under (typically `"legacy self alias"`
-/// for the daemon's self-bundle).
-pub fn register_for_owner(
+pub fn register_device_keyring(
     reg: &mut AxonAbilityCatalog,
-    owner: &str,
     provider: Arc<dyn ManagedSigningProvider>,
 ) {
-    let name = |verb: &str| format!("{owner}.keyring.{verb}");
-
     let h = provider.clone();
     reg.register_rpc_with_owner_and_action(
-        name("create"),
+        device_keyring_ability_name("create"),
         OwnerKind::Device,
         AdmissionAction::Manage,
         Arc::new(move |args| handle_create(&h, args)),
     );
     let h = provider.clone();
     reg.register_rpc_with_owner_and_action(
-        name("list"),
+        device_keyring_ability_name("list"),
         OwnerKind::Device,
         AdmissionAction::Read,
         Arc::new(move |args| handle_list(&h, args)),
     );
     let h = provider.clone();
     reg.register_rpc_with_owner_and_action(
-        name("get_public"),
+        device_keyring_ability_name("get_public"),
         OwnerKind::Device,
         AdmissionAction::Read,
         Arc::new(move |args| handle_get_public(&h, args)),
     );
     let h = provider.clone();
     reg.register_rpc_with_owner_and_action(
-        name("rotate"),
+        device_keyring_ability_name("rotate"),
         OwnerKind::Device,
         AdmissionAction::Manage,
         Arc::new(move |args| handle_rotate(&h, args)),
     );
     let h = provider.clone();
     reg.register_rpc_with_owner_and_action(
-        name("revoke"),
+        device_keyring_ability_name("revoke"),
         OwnerKind::Device,
         AdmissionAction::Manage,
         Arc::new(move |args| handle_revoke(&h, args)),
     );
     let h = provider.clone();
     reg.register_rpc_with_owner_and_action(
-        name("expire_set"),
+        device_keyring_ability_name("expire_set"),
         OwnerKind::Device,
         AdmissionAction::Manage,
         Arc::new(move |args| handle_expire_set(&h, args)),
     );
     let h = provider.clone();
     reg.register_rpc_with_owner_and_action(
-        name("bind_subject"),
+        device_keyring_ability_name("bind_subject"),
         OwnerKind::Device,
         AdmissionAction::Manage,
         Arc::new(move |args| handle_bind_subject(&h, args)),
     );
     let h = provider.clone();
     reg.register_rpc_with_owner_and_action(
-        name("peer_add"),
+        device_keyring_ability_name("peer_add"),
         OwnerKind::Device,
         AdmissionAction::Manage,
         Arc::new(move |args| handle_peer_add(&h, args)),
     );
     let h = provider.clone();
     reg.register_rpc_with_owner_and_action(
-        name("peer_list"),
+        device_keyring_ability_name("peer_list"),
         OwnerKind::Device,
         AdmissionAction::Read,
         Arc::new(move |args| handle_peer_list(&h, args)),
     );
     let h = provider.clone();
     reg.register_rpc_with_owner_and_action(
-        name("federate_user_identity_token"),
+        device_keyring_ability_name("federate_user_identity_token"),
         OwnerKind::Device,
         AdmissionAction::Manage,
         Arc::new(move |args| handle_federate_user_identity_token(&h, args)),
-    );
-}
-
-/// **PR-N4 commit 3/N**. Register the consumer-side
-/// `device.keyring.consume_federate_user_token` ability under
-/// `owner`. Kept as a separate registration function rather
-/// than folding into `register_for_owner` because the bindings
-/// store has a different lifecycle than the keyring handle —
-/// production daemons construct one bindings store per process
-/// from a path, while the keyring handle is per-ring.
-pub fn register_federated_consume_for_owner(
-    reg: &mut AxonAbilityCatalog,
-    owner: &str,
-    bindings: Arc<FederatedBindingsStore>,
-) {
-    let name = format!("{owner}.keyring.consume_federate_user_token");
-    let b = bindings.clone();
-    reg.register_rpc_with_owner_and_action(
-        &name,
-        OwnerKind::Device,
-        AdmissionAction::Manage,
-        Arc::new(move |args| handle_consume_federate_user_token(&b, args)),
     );
 }
 

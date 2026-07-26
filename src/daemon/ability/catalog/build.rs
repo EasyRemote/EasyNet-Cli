@@ -845,9 +845,8 @@ fn build_registry_with_services_result_inner(
         // explicitly from the `pages_identity` argument — no
         // env-var read here.
         //
-        // M5 of the system-namespace migration banned the `legacy self alias`
-        // placeholder; an unpaired daemon (`pages_identity.user`
-        // is None) skips the user-rooted family entirely. The
+        // The user-rooted family has no placeholder owner. An unpaired
+        // daemon (`pages_identity.user` is None) skips the family entirely. The
         // ability surface returns once pairing completes and the
         // supervisor rebuilds the registry with a populated
         // identity.
@@ -961,18 +960,10 @@ fn build_registry_with_services_result_inner(
     // standard dispatch path. The ability provider is the daemon-local key
     // service; this process never opens key storage or derives a master key.
     //
-    // The legacy owner string was `legacy self alias` — a "this device"
-    // alias. v4.1.5 onward names the actor explicitly: keyring
-    // belongs to the device, so the owner is `device`. The
-    // catalogue now lists these as `device.keyring.<verb>`,
-    // matching the URA `callee = device/<id>` that already
-    // covers them.
-    //
-    crate::daemon::keyring::abilities::register_for_owner(
-        &mut reg,
-        "device",
-        key_service_for_daemon(),
-    );
+    // Keyring belongs to the device runtime, so the catalogue lists
+    // these as `device.keyring.<verb>`, matching the URA
+    // `callee = device/<id>` that already covers them.
+    crate::daemon::keyring::abilities::register_device_keyring(&mut reg, key_service_for_daemon());
     // meta.{describe,list_abilities} — Agent self-introspection on
     // the same descriptor catalogue PLUS the live registry. describe
     // is the lightweight identity+summary surface; list_abilities
