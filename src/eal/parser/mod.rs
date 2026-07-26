@@ -17,7 +17,7 @@
 //   arg_value   = STRING | INT | FLOAT | BOOL | var_ref
 //   var_ref     = IDENT "." "output"
 //   option      = "timeout" INT | "retries" INT | "on_failure" POLICY | "optional"
-//   field       = IDENT "=" (STRING | INT | FLOAT | BOOL | IDENT "." "output")
+//   field       = IDENT "=" arg_value
 //
 // EAL surface invariant (LOAD-BEARING — see docs/AGENT_IDENTITY.md):
 //
@@ -503,11 +503,11 @@ impl Parser {
 
     /// Parse one value inside a `with { ... }` field block.
     ///
-    /// Unlike `parse_arg_value` (member-call named args), this form
-    /// silently coerces a bare identifier to a string literal for
-    /// legacy ergonomics with the traditional `call "..." on "..." with
-    /// { key = value }` production. Everything else — var-refs, scalars
-    /// — behaves identically.
+    /// Traditional and member-call surfaces intentionally share the same
+    /// value grammar: scalar literals or explicit `<binding>.output` /
+    /// `<loop>.result` references. Bare identifiers are rejected instead of
+    /// silently coerced to strings so authoring cannot depend on a
+    /// legacy string fallback that the member-call surface already rejects.
     ///
     /// See `parse_arg_value` for the destructure-in-one-step rationale.
     fn parse_value(&mut self) -> anyhow::Result<FieldValue> {
@@ -526,7 +526,10 @@ impl Parser {
                     ),
                 };
             }
-            return Ok(FieldValue::String(ident));
+            anyhow::bail!(
+                "bare identifier '{ident}' is not a valid field value; \
+                 use a string literal, number, bool, '<var>.output', or '<loop>.result'"
+            );
         }
         match self.advance() {
             Token::StringLit(s) => Ok(FieldValue::String(s)),
@@ -796,6 +799,17 @@ mod tests {
         // to accidentally make `(prompt: foo)` resolve as a string.
         let r = parse(r#"mission "t" { let r = claude.chat(prompt: foo) }"#);
         assert!(r.is_err(), "bare identifier should be rejected");
+    }
+
+    #[test]
+    fn traditional_call_rejects_bare_ident_as_value() {
+        let err = parse(r#"mission "t" { let r = call "chat" on "node-1" with { prompt = foo } }"#)
+            .expect_err("traditional call must not coerce bare identifiers to strings");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("bare identifier 'foo' is not a valid field value"),
+            "unexpected bare identifier error: {msg}"
+        );
     }
 
     // ── PR-10 control-flow blocks (RFC §3) ─────────────────────────────────
