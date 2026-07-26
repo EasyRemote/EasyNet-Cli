@@ -12,7 +12,7 @@ public final class SidecarRuntimeTest {
     serveWritesResultFrame();
     serveWritesErrorFrameForHandlerFailure();
     sidecarInvocationRejectsNonInvokeFrame();
-    sidecarInvocationRejectsRetiredTupleAliases();
+    sidecarInvocationRejectsNonCanonicalTupleAliases();
     sidecarInvocationRejectsUnknownInvocationFields();
     sidecarInvocationRejectsUnknownRequestFields();
     sidecarInvocationRejectsMissingCanonicalInvocationObjects();
@@ -106,7 +106,7 @@ public final class SidecarRuntimeTest {
     }
   }
 
-  static void sidecarInvocationRejectsRetiredTupleAliases() {
+  static void sidecarInvocationRejectsNonCanonicalTupleAliases() {
     java.util.Map<String, Object> invocation = new java.util.LinkedHashMap<>();
     invocation.put("caller_ura", "easynet:///r/hub/user/alice");
     invocation.put("caller", "easynet:///r/hub/user/bob");
@@ -120,9 +120,11 @@ public final class SidecarRuntimeTest {
     frame.put("invocation", invocation);
     try {
       SidecarInvocation.fromFrame(frame);
-      throw new AssertionError("retired tuple aliases must fail");
+      throw new AssertionError("non-canonical tuple aliases must fail");
     } catch (SidecarProtocolError expected) {
-      check(expected.getMessage().contains("retired"), "retired alias error");
+      check(
+          expected.getMessage().contains("canonical invocation frame"),
+          "non-canonical alias error");
     }
   }
 

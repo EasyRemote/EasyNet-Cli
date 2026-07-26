@@ -124,13 +124,13 @@ test("SidecarInvocation rejects non-invoke frames", () => {
   assert.throws(() => SidecarInvocation.fromFrame(frame), SidecarProtocolError);
 });
 
-test("SidecarInvocation rejects retired tuple aliases", () => {
+test("SidecarInvocation rejects non-canonical tuple aliases", () => {
   const frame = requestFrame();
   frame.invocation.caller = "easynet:///r/hub/user/bob";
 
   assert.throws(
     () => SidecarInvocation.fromFrame(frame),
-    /retired/,
+    /canonical invocation frame/,
   );
 });
 

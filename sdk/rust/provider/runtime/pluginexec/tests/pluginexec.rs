@@ -97,7 +97,7 @@ fn sidecar_invocation_rejects_non_invoke_frame() {
 }
 
 #[test]
-fn sidecar_invocation_rejects_retired_tuple_aliases() {
+fn sidecar_invocation_rejects_non_canonical_tuple_aliases() {
     let frame = json!({
         "type": "invoke",
         "call_id": "call-1",
@@ -112,8 +112,8 @@ fn sidecar_invocation_rejects_retired_tuple_aliases() {
         }
     });
 
-    let error = SidecarInvocation::from_frame(frame).expect_err("retired alias");
-    assert!(error.to_string().contains("retired"));
+    let error = SidecarInvocation::from_frame(frame).expect_err("non-canonical alias");
+    assert!(error.to_string().contains("canonical invocation frame"));
 }
 
 #[test]

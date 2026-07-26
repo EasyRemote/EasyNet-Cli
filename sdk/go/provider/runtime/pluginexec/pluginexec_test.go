@@ -124,7 +124,7 @@ func TestServeIOWritesErrorFrameForProtocolFailure(t *testing.T) {
 	}
 }
 
-func TestServeIORejectsRetiredTupleAliases(t *testing.T) {
+func TestServeIORejectsNonCanonicalTupleAliases(t *testing.T) {
 	var output bytes.Buffer
 	frame := `{"type":"invoke","call_id":"call-1","invocation":{"caller_ura":"easynet:///r/hub/user/alice","caller":"easynet:///r/hub/user/bob","callee_ura":"easynet:///r/hub/device/provider","ability_ura":"demo.echo","subject_ura":"easynet:///r/hub/resource/demo","invocation_nonce":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16],"args":{}}}`
 	err := ServeIO(
@@ -132,7 +132,7 @@ func TestServeIORejectsRetiredTupleAliases(t *testing.T) {
 		bytes.NewBufferString(frame+"\n"),
 		&output,
 		func(context.Context, SidecarInvocation) (any, error) {
-			t.Fatal("handler must not run for retired aliases")
+			t.Fatal("handler must not run for non-canonical aliases")
 			return nil, nil
 		},
 	)
@@ -146,7 +146,7 @@ func TestServeIORejectsRetiredTupleAliases(t *testing.T) {
 	if decoded["type"] != "error" || decoded["call_id"] != "call-1" {
 		t.Fatalf("unexpected response: %#v", decoded)
 	}
-	if message, _ := decoded["message"].(string); !strings.Contains(message, "retired") {
+	if message, _ := decoded["message"].(string); !strings.Contains(message, "canonical invocation frame") {
 		t.Fatalf("unexpected error message: %#v", decoded)
 	}
 }

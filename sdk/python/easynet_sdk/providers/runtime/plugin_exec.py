@@ -60,7 +60,6 @@ class SidecarInvocation:
             )
         call_id = _required_string(frame, "call_id")
         invocation = _required_mapping(frame, "invocation")
-        _reject_retired_tuple_fields(invocation)
         _reject_unknown_invocation_fields(invocation)
         _require_invocation_fields(invocation)
         nonce = _required_nonce(invocation, "invocation_nonce")
@@ -140,19 +139,6 @@ def _required_string(frame: Mapping[str, Any], field: str) -> str:
     if not isinstance(value, str) or not value:
         raise SidecarProtocolError(f"sidecar frame field {field!r} must be a string")
     return value
-
-
-def _reject_retired_tuple_fields(frame: Mapping[str, Any]) -> None:
-    for retired, canonical in (
-        ("caller", "caller_ura"),
-        ("callee", "callee_ura"),
-        ("ability", "ability_ura"),
-        ("subject", "subject_ura"),
-    ):
-        if retired in frame:
-            raise SidecarProtocolError(
-                f"sidecar frame field {retired!r} is retired; use {canonical!r}"
-            )
 
 
 def _reject_unknown_invocation_fields(frame: Mapping[str, Any]) -> None:

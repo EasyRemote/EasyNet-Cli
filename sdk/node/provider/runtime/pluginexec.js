@@ -49,7 +49,6 @@ export class SidecarInvocation {
     }
     const callID = requireString(value.call_id, "call_id");
     const invocation = requireObject(value.invocation, "invocation");
-    rejectRetiredTupleFields(invocation);
     rejectUnknownInvocationFields(invocation);
     return new SidecarInvocation({
       callID,
@@ -108,21 +107,6 @@ async function readFrame(input) {
     throw new SidecarProtocolError("missing sidecar request frame");
   } finally {
     reader.close();
-  }
-}
-
-function rejectRetiredTupleFields(value) {
-  for (const [retired, canonical] of [
-    ["caller", "caller_ura"],
-    ["callee", "callee_ura"],
-    ["ability", "ability_ura"],
-    ["subject", "subject_ura"],
-  ]) {
-    if (Object.hasOwn(value, retired)) {
-      throw new SidecarProtocolError(
-        `sidecar frame field ${JSON.stringify(retired)} is retired; use ${JSON.stringify(canonical)}`,
-      );
-    }
   }
 }
 

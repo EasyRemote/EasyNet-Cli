@@ -52,7 +52,6 @@ public final class SidecarInvocation {
     }
     String callId = requiredString(frame, "call_id");
     Map<String, Object> invocation = requiredObject(frame, "invocation");
-    rejectRetiredTupleFields(invocation);
     rejectUnknownInvocationFields(invocation);
     return new SidecarInvocation(
         callId,
@@ -123,25 +122,6 @@ public final class SidecarInvocation {
       throw new SidecarProtocolError("sidecar frame field \"" + field + "\" must be an object");
     }
     return stringObject(raw, field);
-  }
-
-  private static void rejectRetiredTupleFields(Map<String, Object> object) {
-    for (Map.Entry<String, String> entry :
-        Map.of(
-                "caller", "caller_ura",
-                "callee", "callee_ura",
-                "ability", "ability_ura",
-                "subject", "subject_ura")
-            .entrySet()) {
-      if (object.containsKey(entry.getKey())) {
-        throw new SidecarProtocolError(
-            "sidecar frame field \""
-                + entry.getKey()
-                + "\" is retired; use \""
-                + entry.getValue()
-                + "\"");
-      }
-    }
   }
 
   private static void rejectUnknownInvocationFields(Map<String, Object> object) {

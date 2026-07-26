@@ -178,9 +178,6 @@ func (f requestFrame) projectInvocation() (SidecarInvocation, error) {
 	if err != nil {
 		return SidecarInvocation{}, err
 	}
-	if err := rejectRetiredTupleFields(fields); err != nil {
-		return SidecarInvocation{}, err
-	}
 	if err := rejectUnknownInvocationFields(fields); err != nil {
 		return SidecarInvocation{}, err
 	}
@@ -204,20 +201,6 @@ func decodeInvocationFields(raw json.RawMessage) (map[string]json.RawMessage, er
 		return nil, protocolError("sidecar frame field \"invocation\" must be an object")
 	}
 	return object, nil
-}
-
-func rejectRetiredTupleFields(object map[string]json.RawMessage) error {
-	for retired, canonical := range map[string]string{
-		"caller":  "caller_ura",
-		"callee":  "callee_ura",
-		"ability": "ability_ura",
-		"subject": "subject_ura",
-	} {
-		if _, ok := object[retired]; ok {
-			return protocolError("sidecar frame field %q is retired; use %q", retired, canonical)
-		}
-	}
-	return nil
 }
 
 func rejectUnknownInvocationFields(object map[string]json.RawMessage) error {

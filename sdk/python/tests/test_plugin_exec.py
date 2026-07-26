@@ -111,13 +111,13 @@ class PluginExecTests(unittest.TestCase):
         with self.assertRaises(SidecarProtocolError):
             SidecarInvocation.from_frame(frame)
 
-    def test_plugin_invocation_rejects_retired_tuple_aliases(self) -> None:
+    def test_plugin_invocation_rejects_non_canonical_tuple_aliases(self) -> None:
         frame = _frame()
         invocation = frame["invocation"]
         assert isinstance(invocation, dict)
         invocation["caller"] = "easynet:///r/hub/user/bob"
 
-        with self.assertRaisesRegex(SidecarProtocolError, "retired"):
+        with self.assertRaisesRegex(SidecarProtocolError, "canonical invocation frame"):
             SidecarInvocation.from_frame(frame)
 
     def test_plugin_invocation_rejects_unknown_invocation_fields(self) -> None:

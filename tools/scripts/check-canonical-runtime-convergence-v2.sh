@@ -13913,7 +13913,6 @@ for retired_causal_fixture in (
 required_helper_tokens = {
     "rust": [
         "pub caller_ura: String",
-        "reject_retired_tuple_fields(&invocation)?",
         "reject_unknown_invocation_fields(&invocation)?",
         "reject_unknown_request_fields(&object)?",
         "fn reject_unknown_invocation_fields(",
@@ -13929,7 +13928,6 @@ required_helper_tokens = {
     ],
     "go": [
         "CallerURA",
-        "rejectRetiredTupleFields(fields)",
         "rejectUnknownInvocationFields(fields)",
         "rejectUnknownRequestFields(fields)",
         "func rejectUnknownInvocationFields(",
@@ -13950,7 +13948,6 @@ required_helper_tokens = {
     ],
     "python": [
         "caller_ura: str",
-        "_reject_retired_tuple_fields(invocation)",
         "_reject_unknown_invocation_fields(invocation)",
         "_reject_unknown_request_fields(frame)",
         "def _reject_unknown_invocation_fields(",
@@ -13970,7 +13967,6 @@ required_helper_tokens = {
     ],
     "node": [
         "callerURA",
-        "rejectRetiredTupleFields(invocation)",
         "rejectUnknownInvocationFields(invocation)",
         "rejectUnknownRequestFields(value)",
         "function rejectUnknownInvocationFields(",
@@ -13990,7 +13986,6 @@ required_helper_tokens = {
     ],
     "java": [
         "String callerURA",
-        "rejectRetiredTupleFields(invocation)",
         "rejectUnknownInvocationFields(invocation)",
         "rejectUnknownRequestFields(frame)",
         "private static void rejectUnknownInvocationFields(",
@@ -14013,14 +14008,26 @@ for language, tokens in required_helper_tokens.items():
         if token not in source:
             raise SystemExit(f"plugin_sidecar_helper_tuple_missing:{language}:{token}")
 
+for language, source in helper_production_sources.items():
+    for retired in (
+        "rejectRetiredTupleFields",
+        "_reject_retired_tuple_fields",
+        "reject_retired_tuple_fields",
+        "is retired; use",
+    ):
+        if retired in source:
+            raise SystemExit(f"plugin_sidecar_helper_retired_tuple_branch:{language}:{retired}")
+
 required_helper_tests = {
     "rust": [
+        "sidecar_invocation_rejects_non_canonical_tuple_aliases",
         "sidecar_invocation_rejects_unknown_invocation_fields",
         "sidecar_invocation_rejects_unknown_request_fields",
         "sidecar_invocation_rejects_missing_canonical_invocation_objects",
         "sidecar_invocation_rejects_non_canonical_nonce_length",
     ],
     "go": [
+        "TestServeIORejectsNonCanonicalTupleAliases",
         "TestServeIORejectsUnknownInvocationFields",
         "TestServeIORejectsUnknownRequestFields",
         "TestServeIORejectsMissingCanonicalInvocationObjects",
@@ -14028,6 +14035,7 @@ required_helper_tests = {
         "TestSidecarInvocationProjectionRejectsNonCanonicalNonceLength",
     ],
     "python": [
+        "test_plugin_invocation_rejects_non_canonical_tuple_aliases",
         "test_plugin_invocation_rejects_unknown_invocation_fields",
         "test_plugin_invocation_rejects_unknown_request_fields",
         "test_plugin_invocation_rejects_missing_canonical_invocation_objects",
@@ -14035,6 +14043,7 @@ required_helper_tests = {
         "test_plugin_invocation_rejects_non_canonical_nonce_length",
     ],
     "node": [
+        "SidecarInvocation rejects non-canonical tuple aliases",
         "SidecarInvocation rejects unknown invocation fields",
         "SidecarInvocation rejects unknown request fields",
         "SidecarInvocation rejects missing canonical invocation objects",
@@ -14042,6 +14051,7 @@ required_helper_tests = {
         "SidecarInvocation rejects non-canonical nonce length",
     ],
     "java": [
+        "sidecarInvocationRejectsNonCanonicalTupleAliases",
         "sidecarInvocationRejectsUnknownInvocationFields",
         "sidecarInvocationRejectsUnknownRequestFields",
         "sidecarInvocationRejectsMissingCanonicalInvocationObjects",
@@ -20513,7 +20523,7 @@ EOF
     mkdir -p "$(dirname "$tmp/cli-sidecar-tuple/$rel")"
     cp "$ROOT/$rel" "$tmp/cli-sidecar-tuple/$rel"
   done
-  perl -0pi -e 's/\n\s*_reject_retired_tuple_fields\(invocation\)//' \
+  perl -0pi -e 's/(\n\s*)_reject_unknown_invocation_fields\(invocation\)/$1_reject_retired_tuple_fields(invocation)$1_reject_unknown_invocation_fields(invocation)/' \
     "$tmp/cli-sidecar-tuple/sdk/python/easynet_sdk/providers/runtime/plugin_exec.py"
   if ( CLI_ROOT="$tmp/cli-sidecar-tuple"; check_plugin_sidecar_helper_matrix_contract ) >/dev/null 2>&1; then
     fail "self-test expected retired sidecar tuple key gate to fail"
