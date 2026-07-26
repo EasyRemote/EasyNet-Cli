@@ -5,7 +5,8 @@
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct FederatedPeerEntry {
     pub realm: String,
     #[serde(default)]
@@ -14,7 +15,8 @@ pub(crate) struct FederatedPeerEntry {
     pub peer_hub_pubkey: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct PairingCredentialEnvelope {
     pub node_id: String,
     #[serde(default)]
@@ -61,14 +63,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn pairing_credential_requires_product_realm_key() {
+    fn pairing_credential_rejects_retired_tenant_id_alias() {
         let envelope = serde_json::from_value::<PairingCredentialEnvelope>(serde_json::json!({
             "node_id": "dev-1",
             "credential_token": "cred",
             "hub_endpoint": "https://hub.example",
+            "realm": "acme",
+            "username": "alice",
+            "user_id": "7a0d75be-1c47-44ce-83a1-60bdf14f3a0d",
             "tenant_id": "acme"
         }));
-        assert!(envelope.is_err());
+        let err = envelope.expect_err("retired tenant_id alias must fail at schema ingress");
+        assert!(
+            err.to_string().contains("tenant_id"),
+            "schema error should name the retired alias: {err}"
+        );
     }
 
     #[test]

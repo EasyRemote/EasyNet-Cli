@@ -1960,32 +1960,43 @@ mod tests {
         assert!(!message.contains("plain HTTP"));
     }
 
-    #[test]
-    fn validate_pairing_response_rejects_empty_node_id() {
-        let envelope = PairingCredentialEnvelope {
-            node_id: String::new(),
+    fn pairing_envelope_fixture() -> PairingCredentialEnvelope {
+        PairingCredentialEnvelope {
+            node_id: "node".into(),
+            display_name: "Node".into(),
+            state: "paired".into(),
+            trust_level: "trusted".into(),
+            device_group: "default".into(),
+            os: "macos".into(),
+            arch: "arm64".into(),
+            auth_binding: "user".into(),
+            credential_provisioned: true,
+            public_key_registered: true,
+            device_public_key: "device-public-key".into(),
+            device_public_key_fingerprint: "device-public-key-fingerprint".into(),
             credential_token: "cred".into(),
             hub_endpoint: "axon://easynet.run:50051".into(),
             realm: "tenant".into(),
+            username: Some("alice".into()),
+            user_id: Some("user-alice".into()),
             deploy_signature: "sig".into(),
-            ..Default::default()
-        };
+            federated_peers: Vec::new(),
+            ura: "easynet:///r/tenant/device/node".into(),
+            last_seen_unix_ms: 1,
+        }
+    }
+
+    #[test]
+    fn validate_pairing_response_rejects_empty_node_id() {
+        let mut envelope = pairing_envelope_fixture();
+        envelope.node_id.clear();
         let err = validate_pairing_response(envelope).expect_err("missing node_id must fail");
         assert!(err.to_string().contains("missing node_id"));
     }
 
     #[test]
     fn credentials_from_pairing_contract_projects_product_credentials() {
-        let envelope = PairingCredentialEnvelope {
-            node_id: "node".into(),
-            credential_token: "cred".into(),
-            hub_endpoint: "axon://easynet.run:50051".into(),
-            realm: "tenant".into(),
-            deploy_signature: "sig".into(),
-            username: Some("alice".into()),
-            user_id: Some("user-alice".into()),
-            ..Default::default()
-        };
+        let envelope = pairing_envelope_fixture();
         let creds = credentials_from_pairing_contract(envelope);
         assert_eq!(creds.node_id, "node");
         assert_eq!(creds.realm, "tenant");
@@ -1995,48 +2006,24 @@ mod tests {
 
     #[test]
     fn validate_pairing_response_rejects_missing_username() {
-        let envelope = PairingCredentialEnvelope {
-            node_id: "node".into(),
-            credential_token: "cred".into(),
-            hub_endpoint: "axon://easynet.run:50051".into(),
-            realm: "tenant".into(),
-            deploy_signature: "sig".into(),
-            username: None,
-            user_id: Some("user-alice".into()),
-            ..Default::default()
-        };
+        let mut envelope = pairing_envelope_fixture();
+        envelope.username = None;
         let err = validate_pairing_response(envelope).expect_err("missing username must fail");
         assert!(err.to_string().contains("missing username"));
     }
 
     #[test]
     fn validate_pairing_response_rejects_missing_user_id() {
-        let envelope = PairingCredentialEnvelope {
-            node_id: "node".into(),
-            credential_token: "cred".into(),
-            hub_endpoint: "axon://easynet.run:50051".into(),
-            realm: "tenant".into(),
-            deploy_signature: "sig".into(),
-            username: Some("alice".into()),
-            user_id: None,
-            ..Default::default()
-        };
+        let mut envelope = pairing_envelope_fixture();
+        envelope.user_id = None;
         let err = validate_pairing_response(envelope).expect_err("missing user_id must fail");
         assert!(err.to_string().contains("missing user_id"));
     }
 
     #[test]
     fn validate_pairing_response_rejects_all_zero_user_before_credentials_projection() {
-        let envelope = PairingCredentialEnvelope {
-            node_id: "node".into(),
-            credential_token: "cred".into(),
-            hub_endpoint: "axon://easynet.run:50051".into(),
-            realm: "tenant".into(),
-            deploy_signature: "sig".into(),
-            username: Some("alice".into()),
-            user_id: Some("00000000-0000-0000-0000-000000000000".into()),
-            ..Default::default()
-        };
+        let mut envelope = pairing_envelope_fixture();
+        envelope.user_id = Some("00000000-0000-0000-0000-000000000000".into());
         let err =
             validate_pairing_response(envelope).expect_err("all-zero user_id must fail at pairing");
         assert!(err.to_string().contains("all-zero user_id"));

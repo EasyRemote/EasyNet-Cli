@@ -9430,6 +9430,62 @@ for retired in (
 PY
 }
 
+check_pairing_response_strict_schema_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local pairing="$cli_root/src/cli/commands/pairing_contract.rs"
+  local join="$cli_root/src/cli/commands/join.rs"
+  [[ -f "$pairing" ]] || fail "pairing response contract is missing: ${pairing#$cli_root/}"
+  [[ -f "$join" ]] || fail "join command source is missing: ${join#$cli_root/}"
+
+  "$PYTHON_BIN" - "$pairing" "$join" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+pairing = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+join = Path(sys.argv[2]).read_text(encoding="utf-8", errors="replace")
+
+def struct_prefix(name: str) -> str:
+    match = re.search(rf"(?P<prefix>(?:#\[[^\n]+\]\n)*pub\(crate\) struct {name} \{{)", pairing)
+    if not match:
+        raise SystemExit(f"pairing_response_strict_schema:missing_struct:{name}")
+    return match.group("prefix")
+
+for name in ("FederatedPeerEntry", "PairingCredentialEnvelope"):
+    prefix = struct_prefix(name)
+    if "#[serde(deny_unknown_fields)]" not in prefix:
+        raise SystemExit(f"pairing_response_strict_schema:open_schema:{name}")
+    derive_line = next((line for line in prefix.splitlines() if line.startswith("#[derive(")), "")
+    if "Default" in derive_line:
+        raise SystemExit(f"pairing_response_strict_schema:default_derive:{name}")
+
+for required in (
+    "pairing_credential_rejects_retired_tenant_id_alias",
+    "pairing_credential_carries_immutable_user_binding",
+):
+    if required not in pairing:
+        raise SystemExit(f"pairing_response_strict_schema:missing_test:{required}")
+for retired in (
+    "pairing_credential_requires_product_realm_key",
+):
+    if retired in pairing:
+        raise SystemExit(f"pairing_response_strict_schema:retired_test:{retired}")
+
+if "pairing_envelope_fixture() -> PairingCredentialEnvelope" not in join:
+    raise SystemExit("pairing_response_strict_schema:join_fixture_missing")
+for initializer in re.finditer(r"PairingCredentialEnvelope \{(?P<body>.*?)\n\s*\}", join, re.S):
+    if "..Default::default()" in initializer.group("body"):
+        raise SystemExit("pairing_response_strict_schema:join_default_envelope_constructor")
+for required in (
+    "validate_pairing_response_rejects_missing_username",
+    "validate_pairing_response_rejects_missing_user_id",
+    "validate_pairing_response_rejects_all_zero_user_before_credentials_projection",
+):
+    if required not in join:
+        raise SystemExit(f"pairing_response_strict_schema:join_missing_test:{required}")
+PY
+}
+
 check_runtime_bootstrap_self_identity_ingress_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local descriptor="$cli_root/ability-descriptors/system/governance/runtime.bootstrap_self_identity.ability.toml"
@@ -25847,6 +25903,39 @@ EOF
   if ( CLI_ROOT="$tmp/federation-join-legacy-token"; check_federation_join_ingress_strict_contract ) >/dev/null 2>&1; then
     fail "self-test expected federation.join legacy pairing_secret gate to fail"
   fi
+  mkdir -p "$tmp/pairing-response-open-schema/src/cli/commands"
+  cat >"$tmp/pairing-response-open-schema/src/cli/commands/pairing_contract.rs" <<'EOF'
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct FederatedPeerEntry {
+    pub realm: String,
+}
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct PairingCredentialEnvelope {
+    pub node_id: String,
+    pub credential_token: String,
+    pub hub_endpoint: String,
+    pub realm: String,
+}
+fn pairing_credential_requires_product_realm_key() {}
+fn pairing_credential_carries_immutable_user_binding() {}
+EOF
+  cat >"$tmp/pairing-response-open-schema/src/cli/commands/join.rs" <<'EOF'
+fn pairing_envelope_fixture() -> PairingCredentialEnvelope {
+    PairingCredentialEnvelope {
+        node_id: "node".into(),
+        credential_token: "cred".into(),
+        hub_endpoint: "hub".into(),
+        realm: "realm".into(),
+        ..Default::default()
+    }
+}
+fn validate_pairing_response_rejects_missing_username() {}
+fn validate_pairing_response_rejects_missing_user_id() {}
+fn validate_pairing_response_rejects_all_zero_user_before_credentials_projection() {}
+EOF
+  if ( CLI_ROOT="$tmp/pairing-response-open-schema"; check_pairing_response_strict_schema_contract ) >/dev/null 2>&1; then
+    fail "self-test expected pairing response open-schema gate to fail"
+  fi
   mkdir -p "$tmp/runtime-bootstrap-legacy-tenant/ability-descriptors/system/governance" \
     "$tmp/runtime-bootstrap-legacy-tenant/src/daemon/axon_bridge" \
     "$tmp/runtime-bootstrap-legacy-tenant/src/daemon/invocation/dispatch/daemon_invocation_service_tests"
@@ -26027,6 +26116,7 @@ EOF
   check_session_prelude_receipt_contract
   check_federation_heartbeat_ingress_strict_contract
   check_federation_join_ingress_strict_contract
+  check_pairing_response_strict_schema_contract
   check_runtime_bootstrap_self_identity_ingress_contract
   check_federation_receipt_facts_strict_contract
   check_federation_revoke_ingress_strict_contract
