@@ -87,7 +87,7 @@ use http_body_util::{BodyExt, Full};
 use hyper::body::Bytes;
 use hyper::client::conn::http1;
 use hyper::header::{ACCEPT, CONTENT_TYPE};
-use hyper::{Request, Uri};
+use hyper::{Request, Uri as HttpLocator};
 use serde_json::{json, Value};
 use tokio::net::TcpStream;
 use tokio::sync::RwLock;
@@ -394,15 +394,15 @@ impl HttpConnection {
         capture_session: bool,
         sink: &mut dyn NotificationSink,
     ) -> anyhow::Result<(Vec<u8>, Option<String>)> {
-        let target_uri: Uri = format!("{}{}", self.base_url, self.endpoint)
+        let transport_endpoint: HttpLocator = format!("{}{}", self.base_url, self.endpoint)
             .parse()
             .with_context(|| format!("invalid MCP URL: {}{}", self.base_url, self.endpoint))?;
 
-        let host = target_uri
+        let host = transport_endpoint
             .host()
             .ok_or_else(|| anyhow!("MCP URL missing host"))?;
         let host_owned = host.to_string();
-        let port = target_uri
+        let port = transport_endpoint
             .port_u16()
             .unwrap_or(if self.tls_connector.is_some() {
                 443
@@ -410,7 +410,7 @@ impl HttpConnection {
                 80
             });
 
-        let path = target_uri
+        let path = transport_endpoint
             .path_and_query()
             .map(|p| p.as_str().to_string())
             .unwrap_or_else(|| "/".to_string());

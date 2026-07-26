@@ -15400,9 +15400,10 @@ for root in roots:
         for line_number, line in enumerate(text.splitlines(), start=1):
             if not retired.search(line):
                 continue
-            if transport.search(line):
+            if transport_target.search(line):
+                violations.append(f"{path}:{line_number}:{line.strip()}")
                 continue
-            if transport_target.search(line) and "easynet:///" not in line:
+            if transport.search(line):
                 continue
             match = semantic.search(line)
             if match and ura.search(match.group(0)):
@@ -15428,7 +15429,7 @@ run_ura_vocabulary_self_test() {
     'let _ = endpoint.connect_with_connector(tower::service_fn(move |_: Uri| async {}));' \
     'let path = req.uri().path().to_string();' \
     'let request = hyper::Request::builder().uri("/v1/models");' \
-    'let target_uri: hyper::Uri = "http://127.0.0.1/mcp".parse().unwrap();' \
+    'let transport_endpoint: hyper::Uri = "http://127.0.0.1/mcp".parse().unwrap();' \
     "let policy = \"default-src 'self'; base-uri 'none'\";" \
     > "$fixture_root/transport-uri.rs"
   printf '%s\n' \
@@ -15437,6 +15438,11 @@ run_ura_vocabulary_self_test() {
     > "$fixture_root/semantic-uri.rs"
 
   check_active_ura_transport_classification_contract "$fixture_root/transport-uri.rs"
+  printf 'let target_uri: hyper::Uri = "http://127.0.0.1/mcp".parse().unwrap();\n' \
+    > "$fixture_root/transport-target-uri.rs"
+  if check_active_ura_transport_classification_contract "$fixture_root/transport-target-uri.rs" >/dev/null 2>&1; then
+    fail "self-test expected target_uri transport variable to fail"
+  fi
   if check_active_ura_transport_classification_contract "$fixture_root/semantic-uri.rs" >/dev/null 2>&1; then
     fail "self-test expected semantic URI terminology to fail"
   fi
