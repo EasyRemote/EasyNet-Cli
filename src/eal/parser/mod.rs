@@ -9,7 +9,7 @@
 //   mission     = "mission" STRING "{" statement* "}"
 //   statement   = "let" IDENT "=" rhs | emit_stmt | rhs
 //   rhs         = call_expr | member_call
-//   call_expr   = "call" STRING ("on" STRING)? ("with" "{" field_list "}")? option*
+//   call_expr   = "call" STRING "on" STRING ("with" "{" field_list "}")? option*
 //   member_call = (IDENT | STRING) "." IDENT "(" named_arg_list? ")" option*
 //   emit_stmt   = "emit" STRING "kind" (STRING | IDENT) "value" arg_value
 //   named_arg_list = named_arg ("," named_arg)*
@@ -334,12 +334,8 @@ impl Parser {
     fn parse_call_expr(&mut self) -> anyhow::Result<CallExpr> {
         self.expect(&Token::Call)?;
         let function_name = self.expect_string()?;
-        let target_node = if *self.peek() == Token::On {
-            self.advance();
-            Some(self.expect_string()?)
-        } else {
-            None
-        };
+        self.expect(&Token::On)?;
+        let target_node = Some(self.expect_string()?);
         let arguments = if *self.peek() == Token::With {
             self.advance();
             self.expect(&Token::LBrace)?;
@@ -780,6 +776,17 @@ mod tests {
         assert_eq!(c.function_name, "chat");
         assert_eq!(c.target_node.as_deref(), Some("claude"));
         assert_eq!(c.arguments.len(), 1);
+    }
+
+    #[test]
+    fn traditional_call_requires_explicit_device_target() {
+        let err = parse(r#"mission "t" { let r = call "chat" with { prompt = "hi" } }"#)
+            .expect_err("traditional call must not default the device target");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("expected On"),
+            "missing `on` must fail at parse time, got: {msg}"
+        );
     }
 
     #[test]

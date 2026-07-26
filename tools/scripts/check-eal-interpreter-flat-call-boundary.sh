@@ -13,8 +13,11 @@ INTERPRETER_MOD="src/eal/interpreter/mod.rs"
 RETRY="src/eal/interpreter/retry.rs"
 PHASES="src/eal/interpreter/phases.rs"
 TESTS="src/eal/interpreter/tests.rs"
+PARSER_AST="src/eal/parser/ast.rs"
+PARSER_MOD="src/eal/parser/mod.rs"
+PLANNER="src/eal/runtime/planner.rs"
 
-for path in "$INTERPRETER_MOD" "$RETRY" "$PHASES" "$TESTS"; do
+for path in "$INTERPRETER_MOD" "$RETRY" "$PHASES" "$TESTS" "$PARSER_AST" "$PARSER_MOD" "$PLANNER"; do
   [[ -f "$path" ]] || fail "missing $path"
 done
 
@@ -48,6 +51,23 @@ fi
 
 if rg -n 'let step = IrStep \{' "$TESTS"; then
   fail "interpreter unit tests must construct flat IrCall values directly"
+fi
+
+if rg -n 'call_expr\s+=\s*"call"\s+STRING\s+\("on"\s+STRING\)\?' "$PARSER_MOD"; then
+  fail "traditional EAL call grammar must require an explicit device target"
+fi
+
+if rg -n 'let target_node = if \*self\.peek\(\) == Token::On|target_node\.clone\(\)\.unwrap_or_default\(\)|legacy missions|may omit `on' "$PARSER_MOD" "$PLANNER"; then
+  fail "EAL traditional call target must fail closed before empty-device fallback"
+fi
+
+if rg -n 'enum TargetKind|derive\(Debug, Clone, Copy, PartialEq, Eq, Default\)|#\[default\]' "$PARSER_AST" \
+  | grep -E 'Default|#\[default\]' >/dev/null; then
+  fail "EAL TargetKind must not carry a default target kind"
+fi
+
+if ! rg -n 'traditional_call_requires_explicit_device_target' "$PARSER_MOD" >/dev/null; then
+  fail "parser tests must pin explicit target requirement for traditional calls"
 fi
 
 echo "check-eal-interpreter-flat-call-boundary: ok"

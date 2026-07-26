@@ -100,17 +100,13 @@ pub struct CallExpr {
 /// parser at production-match time, consumed by the planner during IR
 /// lowering. There is no runtime classification — the surface form is
 /// the only signal.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TargetKind {
     /// Member-call form `agent.ability(...)`. Lowers to
     /// `IrTarget::Agent(AgentId)`.
     Agent,
     /// Traditional form `call "ability" on "node"`. Lowers to
-    /// `IrTarget::Device { node_id }`. This is the default because
-    /// the traditional form historically addressed devices, and the
-    /// EAL surface for "call an agent" is now the explicit member-call
-    /// form (ontology §6.2 sugar example).
-    #[default]
+    /// `IrTarget::Device { node_id }`.
     Device,
 }
 
