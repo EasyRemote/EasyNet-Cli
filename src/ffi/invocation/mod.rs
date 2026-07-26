@@ -114,6 +114,8 @@ const BIDI_CALLBACK_QUEUE_CAPACITY: usize = 64;
 const PROVIDER_CANCEL_REASON: &str = "consumer_request";
 #[cfg(feature = "axon-pb")]
 const CALLER_SIGNER_UNAVAILABLE_CODE: &str = "CALLER_SIGNER_UNAVAILABLE";
+#[cfg(feature = "axon-pb")]
+const DESCRIPTOR_OWNER_OFFLINE_CODE: &str = "DESCRIPTOR_OWNER_OFFLINE";
 
 fn record_invocation_error(code: i32, message: impl Into<String>) -> i32 {
     set_last_error_code(code, message);
@@ -138,6 +140,19 @@ fn record_caller_signer_unavailable_error(message: impl Into<String>) -> i32 {
             code: CALLER_SIGNER_UNAVAILABLE_CODE,
             stage: "caller_identity",
             retry: "never",
+        },
+        message,
+    )
+}
+
+#[cfg(feature = "axon-pb")]
+fn record_descriptor_owner_offline_error(message: impl Into<String>) -> i32 {
+    record_invocation_projected_error(
+        ERR_DAEMON_DOWN,
+        ErrorProjection {
+            code: DESCRIPTOR_OWNER_OFFLINE_CODE,
+            stage: "routing",
+            retry: "safe",
         },
         message,
     )
@@ -5001,6 +5016,9 @@ fn ffi_daemon_error(context: &str, err: crate::daemon::DaemonError) -> i32 {
     if is_caller_signer_unavailable_daemon_error(&err) {
         return record_caller_signer_unavailable_error(message);
     }
+    if is_descriptor_owner_offline_daemon_error(&err) {
+        return record_descriptor_owner_offline_error(message);
+    }
     record_invocation_error(code, message)
 }
 
@@ -5038,6 +5056,24 @@ fn is_caller_signer_unavailable_daemon_error(err: &crate::daemon::DaemonError) -
 #[cfg(feature = "axon-pb")]
 fn is_caller_signer_unavailable_message(message: &str) -> bool {
     message.contains(CALLER_SIGNER_UNAVAILABLE_CODE)
+}
+
+#[cfg(feature = "axon-pb")]
+fn is_descriptor_owner_offline_daemon_error(err: &crate::daemon::DaemonError) -> bool {
+    matches!(
+        err,
+        crate::daemon::DaemonError::InvokeStatus { code, message, .. }
+            | crate::daemon::DaemonError::InvokeStreamStatus { code, message, .. }
+            | crate::daemon::DaemonError::InvokeBidiStatus { code, message, .. }
+            if is_descriptor_owner_offline_message(*code, message)
+    )
+}
+
+#[cfg(feature = "axon-pb")]
+fn is_descriptor_owner_offline_message(code: tonic::Code, message: &str) -> bool {
+    let upper = message.to_ascii_uppercase();
+    upper.contains(DESCRIPTOR_OWNER_OFFLINE_CODE)
+        || (code == tonic::Code::Unavailable && upper.contains("OWNER IS NOT ONLINE"))
 }
 
 #[cfg(feature = "axon-pb")]
@@ -11023,6 +11059,54 @@ mod tests {
         assert_eq!(error["retry"], "never");
         assert_eq!(error["details"]["abi_code"], ERR_PERMISSION_DENIED);
         assert_eq!(error["details"]["abi_symbol"], "ERR_PERMISSION_DENIED");
+    }
+
+    #[test]
+    fn native_runtime_owner_offline_status_records_descriptor_owner_offline_projection() {
+        let code = ffi_daemon_error(
+            "runtime_invocation_invoke",
+            crate::daemon::DaemonError::InvokeStatus {
+                ability: "meta.list_abilities".to_string(),
+                code: tonic::Code::Unavailable,
+                message: "ROUTE_NEGATIVE: namespace.resolve negative for \
+                     `easynet:///r/localhost/ability/device.dev-a.meta.list_abilities`: \
+                     NEGATIVE_REASON_NXDOMAIN: owner is not online"
+                    .to_string(),
+            },
+        );
+
+        assert_eq!(
+            code, ERR_DAEMON_DOWN,
+            "ABI integer remains stable while typed JSON carries canonical routing state"
+        );
+        let error = read_last_error_json();
+        assert_eq!(error["code"], "DESCRIPTOR_OWNER_OFFLINE");
+        assert_eq!(error["stage"], "routing");
+        assert_eq!(error["retry"], "safe");
+        assert_eq!(error["details"]["abi_code"], ERR_DAEMON_DOWN);
+        assert_eq!(error["details"]["abi_symbol"], "ERR_DAEMON_DOWN");
+        assert!(error["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("owner is not online"));
+    }
+
+    #[test]
+    fn native_runtime_unavailable_without_owner_offline_remains_runtime_offline() {
+        let code = ffi_daemon_error(
+            "runtime_invocation_invoke",
+            crate::daemon::DaemonError::InvokeStatus {
+                ability: "observe.health".to_string(),
+                code: tonic::Code::Unavailable,
+                message: "transport unavailable".to_string(),
+            },
+        );
+
+        assert_eq!(code, ERR_DAEMON_DOWN);
+        let error = read_last_error_json();
+        assert_eq!(error["code"], "RUNTIME_OFFLINE");
+        assert_eq!(error["stage"], "transport");
+        assert_eq!(error["retry"], "after_backoff");
     }
 
     #[test]

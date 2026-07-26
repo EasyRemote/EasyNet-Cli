@@ -12037,16 +12037,25 @@ from pathlib import Path
 path = Path(sys.argv[1])
 text = path.read_text(encoding="utf-8")
 production = text.split("\nmod tests {", 1)[0].split("\n#[cfg(test)]", 1)[0]
+resolver_start = production.find("fn runtime_resolve_descriptor_ref_json(")
+resolver_end = production.find("\nfn runtime_system_descriptor_catalog_entries(", resolver_start)
+if resolver_start < 0 or resolver_end < 0:
+    raise SystemExit("ffi_descriptor_probe_not_found_vocabulary:descriptor_resolver_section_missing")
+resolver = production[resolver_start:resolver_end]
 
 for retired in (
     "fn from_remote_probe_rejection(",
     "RemoteInvocationFailure::",
     "Self::OwnerOffline(",
+):
+    if retired in production:
+        raise SystemExit(f"ffi_descriptor_probe_not_found_vocabulary:retired_remote_probe_classifier:{retired}")
+for retired in (
     '"ROUTE_NEGATIVE"',
     '"DESCRIPTOR_OWNER_OFFLINE"',
     '"NOT_FOUND"',
 ):
-    if retired in production:
+    if retired in resolver:
         raise SystemExit(f"ffi_descriptor_probe_not_found_vocabulary:retired_remote_probe_classifier:{retired}")
 if "descriptor_ref not found in runtime realm catalog" not in production:
     raise SystemExit("ffi_descriptor_probe_not_found_vocabulary:realm_catalog_miss_missing")
@@ -15425,12 +15434,19 @@ text = Path(sys.argv[1]).read_text(encoding="utf-8")
 production = text.split("\nmod tests {", 1)[0]
 for required in (
     'const CALLER_SIGNER_UNAVAILABLE_CODE: &str = "CALLER_SIGNER_UNAVAILABLE"',
+    'const DESCRIPTOR_OWNER_OFFLINE_CODE: &str = "DESCRIPTOR_OWNER_OFFLINE"',
     "fn record_caller_signer_unavailable_error(",
+    "fn record_descriptor_owner_offline_error(",
     'code: CALLER_SIGNER_UNAVAILABLE_CODE',
+    'code: DESCRIPTOR_OWNER_OFFLINE_CODE',
     'stage: "caller_identity"',
+    'stage: "routing"',
+    'retry: "safe"',
     "fn caller_signer_unavailable_error(owner_ura: &str)",
     "fn is_caller_signer_unavailable_daemon_error(",
     "fn is_caller_signer_unavailable_message(message: &str)",
+    "fn is_descriptor_owner_offline_daemon_error(",
+    "fn is_descriptor_owner_offline_message(code: tonic::Code, message: &str)",
 ):
     if required not in production:
         raise SystemExit(f"ffi_native_runtime_signer_projection:missing:{required}")
@@ -15458,10 +15474,16 @@ if ffi_error is None:
     raise SystemExit("ffi_native_runtime_signer_projection:ffi_daemon_error_missing")
 if "is_caller_signer_unavailable_daemon_error(&err)" not in ffi_error.group("body"):
     raise SystemExit("ffi_native_runtime_signer_projection:ffi_daemon_error_projection_missing")
+if "is_descriptor_owner_offline_daemon_error(&err)" not in ffi_error.group("body"):
+    raise SystemExit("ffi_native_runtime_signer_projection:ffi_daemon_error_owner_offline_projection_missing")
 
 for required_test in (
     "native_runtime_signer_error_records_caller_signer_projection",
+    "native_runtime_owner_offline_status_records_descriptor_owner_offline_projection",
+    "native_runtime_unavailable_without_owner_offline_remains_runtime_offline",
     'assert_eq!(error["code"], "CALLER_SIGNER_UNAVAILABLE")',
+    'assert_eq!(error["code"], "DESCRIPTOR_OWNER_OFFLINE")',
+    'assert_eq!(error["stage"], "routing")',
     'assert_eq!(error["stage"], "caller_identity")',
     '!message.contains("keyring entry not found")',
     '!projected_message.contains("keyring entry not found")',
