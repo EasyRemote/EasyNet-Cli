@@ -56,6 +56,7 @@ pub(crate) struct AbilityCallableSummary {
 }
 
 impl AbilityCallableSummary {
+    #[allow(dead_code)]
     pub(crate) fn new(
         public_name: impl Into<String>,
         description: impl Into<String>,

@@ -132,6 +132,7 @@ pub fn load_for_fresh_host_projection() -> anyhow::Result<LocalAgentsFile> {
 }
 
 /// Public read projection preserving the existing API shape.
+#[allow(dead_code)]
 pub fn load() -> anyhow::Result<LocalAgentsFile> {
     load_for_fresh_host_projection()
 }
