@@ -33,7 +33,9 @@ use axon_sdk::pb::axon::v1::{Error, InvokeServerStreamRequest, InvokeStreamChunk
 
 use crate::daemon::ability::dispatch::StreamSource;
 use crate::daemon::invocation::admission::admission_facade::AdmissionFacade;
-use crate::daemon::invocation::admission::hosted_agent_delegation::HostedAgentDelegationIssuer;
+use crate::daemon::invocation::admission::hosted_agent_delegation::{
+    HostedAgentDelegationIngress, HostedAgentDelegationIssuer,
+};
 use crate::daemon::invocation::admission::target_gate::{
     route_negative_status, route_profile_blocked_status, signed_envelope_for_selected_route,
     TargetGate,
@@ -259,7 +261,7 @@ impl StreamDispatcher {
                 let metadata = HostedAgentDelegationIssuer::materialize_request_metadata(
                     &request.metadata,
                     &envelope,
-                    true,
+                    HostedAgentDelegationIngress::TrustedLocalSystem,
                     ability,
                 )?;
                 crate::daemon::axon_bridge::descriptor_bound_dispatch::local_system_from_wire_parts(
@@ -273,7 +275,7 @@ impl StreamDispatcher {
                 let metadata = HostedAgentDelegationIssuer::materialize_request_metadata(
                     &request.metadata,
                     &envelope,
-                    false,
+                    HostedAgentDelegationIngress::ExternalSigned,
                     ability,
                 )?;
                 let signed_descriptor_ref = bound_ability

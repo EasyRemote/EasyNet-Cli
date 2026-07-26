@@ -44,7 +44,9 @@ use tonic::{Response, Status, Streaming};
 
 use crate::daemon::ability::dispatch::stream_env_ability_with_options;
 use crate::daemon::ability::CallMode as DescriptorCallMode;
-use crate::daemon::invocation::admission::hosted_agent_delegation::HostedAgentDelegationIssuer;
+use crate::daemon::invocation::admission::hosted_agent_delegation::{
+    HostedAgentDelegationIngress, HostedAgentDelegationIssuer,
+};
 use crate::daemon::invocation::dispatch::cancellation::{
     InvocationCancellationRegistry, RegisteredInvocationLifecycle,
 };
@@ -320,7 +322,7 @@ impl DaemonRouteRuntimeAdapter {
                 let metadata = HostedAgentDelegationIssuer::materialize_request_metadata(
                     &request.metadata,
                     &envelope,
-                    false,
+                    HostedAgentDelegationIngress::BootstrapCandidate,
                     route.name(),
                 )?;
                 let signed_ref = bound
@@ -344,7 +346,7 @@ impl DaemonRouteRuntimeAdapter {
                 let metadata = HostedAgentDelegationIssuer::materialize_request_metadata(
                     &request.metadata,
                     &envelope,
-                    true,
+                    HostedAgentDelegationIngress::TrustedLocalSystem,
                     route.name(),
                 )?;
                 crate::daemon::axon_bridge::descriptor_bound_dispatch::local_system_from_wire_parts(
@@ -358,7 +360,7 @@ impl DaemonRouteRuntimeAdapter {
                 let metadata = HostedAgentDelegationIssuer::materialize_request_metadata(
                     &request.metadata,
                     &envelope,
-                    false,
+                    HostedAgentDelegationIngress::ExternalSigned,
                     route.name(),
                 )?;
                 let signed_ref = bound
@@ -434,7 +436,7 @@ impl DaemonRouteRuntimeAdapter {
             let metadata = HostedAgentDelegationIssuer::materialize_request_metadata(
                 &request.metadata,
                 &envelope,
-                true,
+                HostedAgentDelegationIngress::TrustedLocalSystem,
                 route.name(),
             )?;
             crate::daemon::axon_bridge::descriptor_bound_dispatch::local_system_from_wire_parts(
@@ -447,7 +449,7 @@ impl DaemonRouteRuntimeAdapter {
             let metadata = HostedAgentDelegationIssuer::materialize_request_metadata(
                 &request.metadata,
                 &envelope,
-                false,
+                HostedAgentDelegationIngress::ExternalSigned,
                 route.name(),
             )?;
             let signed_ref = bound
@@ -544,7 +546,11 @@ impl DaemonRouteRuntimeAdapter {
         let mut metadata = HostedAgentDelegationIssuer::materialize_request_metadata(
             &envelope_open.metadata,
             &envelope,
-            local_system_ingress,
+            if local_system_ingress {
+                HostedAgentDelegationIngress::TrustedLocalSystem
+            } else {
+                HostedAgentDelegationIngress::ExternalSigned
+            },
             route.name(),
         )?;
         if let Some(extension) = envelope_open.session_ext.as_ref() {

@@ -44,7 +44,9 @@ use axon_sdk::pb::axon::v1::{
 
 use crate::core::ura::realm_from_ura;
 use crate::daemon::invocation::admission::admission_facade::AdmissionFacade;
-use crate::daemon::invocation::admission::hosted_agent_delegation::HostedAgentDelegationIssuer;
+use crate::daemon::invocation::admission::hosted_agent_delegation::{
+    HostedAgentDelegationIngress, HostedAgentDelegationIssuer,
+};
 use crate::daemon::invocation::admission::target_gate::{
     route_negative_status, route_profile_blocked_status, signed_envelope_for_selected_route,
     TargetGate,
@@ -1193,7 +1195,7 @@ impl BidiDispatcher {
             let metadata = HostedAgentDelegationIssuer::materialize_request_metadata(
                 &envelope_open.metadata,
                 &wire_envelope,
-                true,
+                HostedAgentDelegationIngress::TrustedLocalSystem,
                 &dispatch_ability,
             )?;
             crate::daemon::axon_bridge::descriptor_bound_dispatch::local_system_from_wire_parts(
@@ -1206,7 +1208,7 @@ impl BidiDispatcher {
             let metadata = HostedAgentDelegationIssuer::materialize_request_metadata(
                 &envelope_open.metadata,
                 &wire_envelope,
-                false,
+                HostedAgentDelegationIngress::ExternalSigned,
                 &dispatch_ability,
             )?;
             let signed_descriptor_ref = bound_ability

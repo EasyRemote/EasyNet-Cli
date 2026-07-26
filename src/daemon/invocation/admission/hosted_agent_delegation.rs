@@ -2,7 +2,7 @@
 // =================================================
 //
 // File: src/daemon/invocation/hosted_agent_delegation.rs
-// Description: Converts trusted loopback delegation requests into signed
+// Description: Converts trusted daemon-local delegation requests into signed
 //              handler metadata bound to one Axon invocation envelope.
 //
 // Protocol Responsibility
@@ -14,14 +14,14 @@
 //
 // Implementation Approach
 // -----------------------
-// The transport dispatcher calls this after trusted loopback admission and
+// The transport dispatcher calls this after trusted daemon-local admission and
 // before building the Axon LocalRuntime wire dispatch. The unsigned request key
 // is removed; handlers receive only the signed delegation key.
 //
 // Usage Contract
 // --------------
 // Public ingress must reject both hosted-agent metadata keys before this module
-// can run. This module also rejects non-loopback callers defensively so a
+// can run. This module also rejects non-local-system callers defensively so a
 // future dispatcher cannot mint authority by accident.
 
 use std::collections::HashMap;
@@ -34,13 +34,32 @@ use crate::daemon::ability::{
     HOSTED_AGENT_DELEGATION_METADATA_KEY, HOSTED_AGENT_DELEGATION_REQUEST_METADATA_KEY,
 };
 
+/// Dispatch ingress class for hosted-agent delegation materialization.
+///
+/// This is intentionally narrower than route ingress: it models only the
+/// authority state relevant to converting unsigned hosted-agent delegation
+/// request metadata into a signed daemon-local delegation token.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HostedAgentDelegationIngress {
+    TrustedLocalSystem,
+    ExternalSigned,
+    BootstrapCandidate,
+}
+
+impl HostedAgentDelegationIngress {
+    fn permits_unsigned_delegation_request(self) -> bool {
+        matches!(self, Self::TrustedLocalSystem)
+    }
+}
+
 /// Daemon-local issuer for hosted-agent delegation metadata.
 ///
 /// What this is: the one transport object allowed to turn unsigned local
 /// request metadata into signed hosted-agent delegation claims.
 ///
-/// What this is not: an admission bypass. Callers must pass `loopback_admitted`
-/// from `AdmissionFacade`; public requests are rejected before signing.
+/// What this is not: an admission bypass. Callers must pass an explicit
+/// [`HostedAgentDelegationIngress`] selected by the dispatcher; public requests
+/// are rejected before signing.
 ///
 /// Invariant 1: unsigned request metadata is never forwarded to handlers.
 /// Invariant 2: a signed token is minted only when the envelope caller is the
@@ -51,7 +70,7 @@ impl HostedAgentDelegationIssuer {
     pub(crate) fn materialize_request_metadata(
         metadata: &HashMap<String, String>,
         envelope: &Envelope,
-        loopback_admitted: bool,
+        ingress: HostedAgentDelegationIngress,
         route_ability: &str,
     ) -> Result<HashMap<String, String>, Status> {
         let Some(raw_request) = metadata
@@ -62,10 +81,10 @@ impl HostedAgentDelegationIssuer {
             return Ok(metadata.clone());
         };
 
-        if !loopback_admitted {
+        if !ingress.permits_unsigned_delegation_request() {
             return Err(Status::permission_denied(
                 "HOSTED_AGENT_DELEGATION_LOCAL_ONLY: unsigned hosted-agent delegation requests \
-                 are accepted only on trusted loopback ingress",
+                 are accepted only on trusted daemon-local system ingress",
             ));
         }
         if metadata
@@ -155,7 +174,7 @@ mod tests {
     use crate::daemon::ability::HostedAgentDelegationContext;
     use crate::daemon::invocation::{InvocationDerivationPolicy, ProtoEnvelope};
 
-    fn loopback_envelope() -> Envelope {
+    fn local_system_envelope() -> Envelope {
         ProtoEnvelope::from_target(
             crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
             "easynet:///r/default/device/local",
@@ -181,12 +200,12 @@ mod tests {
             HOSTED_AGENT_DELEGATION_REQUEST_METADATA_KEY.to_string(),
             request.metadata_value().unwrap(),
         );
-        let envelope = loopback_envelope();
+        let envelope = local_system_envelope();
 
         let materialized = HostedAgentDelegationIssuer::materialize_request_metadata(
             &metadata,
             &envelope,
-            true,
+            HostedAgentDelegationIngress::TrustedLocalSystem,
             "meta.acquire",
         )
         .unwrap();
@@ -214,7 +233,7 @@ mod tests {
     }
 
     #[test]
-    fn materialize_rejects_request_outside_loopback() {
+    fn materialize_rejects_request_outside_trusted_local_system() {
         let request = HostedAgentDelegationRequest::new(crate::core::ura::agent_ura(
             "default", "u", "learner",
         ))
@@ -223,12 +242,35 @@ mod tests {
             HOSTED_AGENT_DELEGATION_REQUEST_METADATA_KEY.to_string(),
             request.metadata_value().unwrap(),
         )]);
-        let envelope = loopback_envelope();
+        let envelope = local_system_envelope();
 
         let err = HostedAgentDelegationIssuer::materialize_request_metadata(
             &metadata,
             &envelope,
-            false,
+            HostedAgentDelegationIngress::ExternalSigned,
+            "meta.acquire",
+        )
+        .unwrap_err();
+
+        assert_eq!(err.code(), tonic::Code::PermissionDenied);
+    }
+
+    #[test]
+    fn materialize_rejects_bootstrap_candidate_ingress() {
+        let request = HostedAgentDelegationRequest::new(crate::core::ura::agent_ura(
+            "default", "u", "learner",
+        ))
+        .unwrap();
+        let metadata = HashMap::from([(
+            HOSTED_AGENT_DELEGATION_REQUEST_METADATA_KEY.to_string(),
+            request.metadata_value().unwrap(),
+        )]);
+        let envelope = local_system_envelope();
+
+        let err = HostedAgentDelegationIssuer::materialize_request_metadata(
+            &metadata,
+            &envelope,
+            HostedAgentDelegationIngress::BootstrapCandidate,
             "meta.acquire",
         )
         .unwrap_err();

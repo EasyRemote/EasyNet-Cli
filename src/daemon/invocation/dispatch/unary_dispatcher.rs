@@ -44,7 +44,9 @@ use crate::daemon::federation::directory::now_unix_ms;
 use crate::daemon::federation::resolver_contract::{RecordType, ResolveAnswerKind, ResolveType};
 use crate::daemon::invocation::admission::admission_facade::AdmissionFacade;
 use crate::daemon::invocation::admission::decision::SignatureDecisionReason;
-use crate::daemon::invocation::admission::hosted_agent_delegation::HostedAgentDelegationIssuer;
+use crate::daemon::invocation::admission::hosted_agent_delegation::{
+    HostedAgentDelegationIngress, HostedAgentDelegationIssuer,
+};
 use crate::daemon::invocation::admission::hosted_agent_publication::HostedAgentPublication;
 use crate::daemon::invocation::admission::list_user_pubkeys::handle as handle_list_user_pubkeys;
 use crate::daemon::invocation::admission::owner_projection_publication::OwnerProjectionPublicationAuthority;
@@ -836,7 +838,7 @@ impl UnaryDispatcher {
                 let metadata = match HostedAgentDelegationIssuer::materialize_request_metadata(
                     &request.metadata,
                     &envelope,
-                    true,
+                    HostedAgentDelegationIngress::TrustedLocalSystem,
                     ability,
                 ) {
                     Ok(metadata) => metadata,
@@ -853,7 +855,7 @@ impl UnaryDispatcher {
                 let metadata = match HostedAgentDelegationIssuer::materialize_request_metadata(
                     &request.metadata,
                     &envelope,
-                    false,
+                    HostedAgentDelegationIngress::ExternalSigned,
                     ability,
                 ) {
                     Ok(metadata) => metadata,
