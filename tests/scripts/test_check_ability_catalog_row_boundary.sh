@@ -35,18 +35,25 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "non-Result projector should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
-perl -0pi -e 's/reject_retired_catalogue_fields\(value\)\?;//' "$SB/src/cli/commands/ability_catalog_row.rs"
+perl -0pi -e 's/#\[serde\(deny_unknown_fields\)\]/#[serde(default)]/' "$SB/src/cli/commands/ability_catalog_row.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
-[[ "$rc" == "1" ]] || fail "missing retired-field rejection should exit 1 (got $rc)"
+[[ "$rc" == "1" ]] || fail "missing exact schema DTO should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
-perl -0pi -e 's/projection_rejects_retired_ability_name_and_tool_name_fields/projection_ignores_legacy_aliases_as_label_fallback/' "$SB/src/cli/commands/ability_catalog_row.rs"
+perl -0pi -e 's/projection_rejects_non_canonical_catalogue_alias_fields/projection_ignores_legacy_aliases_as_label_fallback/' "$SB/src/cli/commands/ability_catalog_row.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "retired alias regression name should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+perl -0pi -e 's/struct AbilityCatalogueRowWire/const RETIRED_CATALOGUE_FIELDS: &[&str] = &["ability_name", "tool_name"];\\n\\nfn reject_retired_catalogue_fields(_: &Value) -> anyhow::Result<()> { Ok(()) }\\n\\nstruct AbilityCatalogueRowWire/' "$SB/src/cli/commands/ability_catalog_row.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "retired-field branch should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
 perl -0pi -e 's/AbilityCatalogueRow::from_value\(a\)\?/AbilityCatalogueRow::from_value(a)/' "$SB/src/cli/commands/groups/device.rs"

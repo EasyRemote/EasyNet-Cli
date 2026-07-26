@@ -7,14 +7,15 @@
 // Protocol Responsibility
 // -----------------------
 // Treat `ability_ura` as the only identity-bearing field. Human labels
-// may use owner-local `name` / `public_name`. Retired alias fields such
-// as `ability_name` and `tool_name` are rejected so stale read-model rows
-// cannot be rendered as canonical catalogue state.
+// may use owner-local `name` / `public_name`. Non-canonical row fields
+// fail at the DTO boundary so stale read-model rows cannot be rendered as
+// canonical catalogue state.
 //
 // Implementation Approach
 // -----------------------
-// Parse only through Axon's URA helpers. The CLI does not reconstruct
-// or infer owners from dotted names.
+// Parse through a presentation-local DTO with `deny_unknown_fields`, then
+// through Axon's URA helpers. The CLI does not reconstruct or infer owners
+// from dotted names.
 //
 // Usage Contract
 // --------------
@@ -27,9 +28,8 @@
 // CLI facade only. Runtime catalogue generation lives under
 // `daemon::ability::builtins::governance::meta` / owner projections.
 
+use serde::Deserialize;
 use serde_json::Value;
-
-const RETIRED_CATALOGUE_FIELDS: &[&str] = &["ability_name", "tool_name"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AbilityCatalogueRow {
@@ -40,13 +40,14 @@ pub(crate) struct AbilityCatalogueRow {
 
 impl AbilityCatalogueRow {
     pub(crate) fn from_value(value: &Value) -> anyhow::Result<Self> {
-        reject_retired_catalogue_fields(value)?;
-
-        let ability_ura = string_field(value, "ability_ura");
-        let owner_ura = string_field(value, "owner_ura")
+        let row = AbilityCatalogueRowWire::from_value(value)?;
+        let ability_ura = row.ability_ura;
+        let owner_ura = row
+            .owner_ura
             .or_else(|| ability_ura.as_deref().and_then(owner_ura_from_ability_ura));
-        let label = string_field(value, "public_name")
-            .or_else(|| string_field(value, "name"))
+        let label = row
+            .public_name
+            .or(row.name)
             .or_else(|| ability_ura.clone())
             .unwrap_or_else(|| "-".to_string());
         Ok(Self {
@@ -69,31 +70,68 @@ impl AbilityCatalogueRow {
     }
 }
 
-fn reject_retired_catalogue_fields(value: &Value) -> anyhow::Result<()> {
-    let Some(object) = value.as_object() else {
-        return Ok(());
-    };
-    let retired = RETIRED_CATALOGUE_FIELDS
-        .iter()
-        .copied()
-        .filter(|field| object.contains_key(*field))
-        .collect::<Vec<_>>();
-    if retired.is_empty() {
-        return Ok(());
-    }
-    anyhow::bail!(
-        "ability catalogue row contains retired field(s): {}",
-        retired.join(", ")
-    )
+#[allow(dead_code)]
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AbilityCatalogueRowWire {
+    #[serde(default, deserialize_with = "optional_trimmed_string")]
+    name: Option<String>,
+    #[serde(default, deserialize_with = "optional_trimmed_string")]
+    public_name: Option<String>,
+    #[serde(default, deserialize_with = "optional_trimmed_string")]
+    ability_ura: Option<String>,
+    #[serde(default, deserialize_with = "optional_trimmed_string")]
+    owner_ura: Option<String>,
+    #[serde(default)]
+    version: Option<Value>,
+    #[serde(default)]
+    schema_hash: Option<Value>,
+    #[serde(default)]
+    descriptor_hash: Option<Value>,
+    #[serde(default)]
+    descriptor_ref: Option<Value>,
+    #[serde(default)]
+    call_mode: Option<Value>,
+    #[serde(default)]
+    admission_action: Option<Value>,
+    #[serde(default)]
+    receipt_semantics: Option<Value>,
+    #[serde(default)]
+    visibility: Option<Value>,
+    #[serde(default)]
+    scope_subjects: Option<Value>,
+    #[serde(default)]
+    scope_agents: Option<Value>,
+    #[serde(default)]
+    denied_agents: Option<Value>,
+    #[serde(default)]
+    description: Option<Value>,
+    #[serde(default)]
+    source: Option<Value>,
+    #[serde(default)]
+    schema_summary: Option<Value>,
+    #[serde(default)]
+    hints: Option<Value>,
+    #[serde(default)]
+    metadata: Option<Value>,
 }
 
-fn string_field(value: &Value, key: &str) -> Option<String> {
-    value
-        .get(key)
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
+impl AbilityCatalogueRowWire {
+    fn from_value(value: &Value) -> anyhow::Result<Self> {
+        serde_json::from_value(value.clone())
+            .map_err(|error| anyhow::anyhow!("ability catalogue row is not canonical: {error}"))
+    }
+}
+
+fn optional_trimmed_string<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer).map(|value| {
+        value
+            .map(|raw| raw.trim().to_string())
+            .filter(|trimmed| !trimmed.is_empty())
+    })
 }
 
 fn owner_ura_from_ability_ura(ability_ura: &str) -> Option<String> {
@@ -149,16 +187,19 @@ mod tests {
     }
 
     #[test]
-    fn projection_rejects_retired_ability_name_and_tool_name_fields() {
+    fn projection_rejects_non_canonical_catalogue_alias_fields() {
         let error = AbilityCatalogueRow::from_value(&json!({
             "ability_name": "legacy.name",
             "tool_name": "legacy.tool",
             "ability_ura": "easynet:///r/acme/ability/device.dev-1.fs.read"
         }))
-        .expect_err("retired aliases must fail closed");
+        .expect_err("non-canonical aliases must fail closed");
 
         let message = error.to_string();
         assert!(message.contains("ability_name"), "{message}");
-        assert!(message.contains("tool_name"), "{message}");
+        assert!(
+            message.contains("unknown field") || message.contains("tool_name"),
+            "{message}"
+        );
     }
 }
