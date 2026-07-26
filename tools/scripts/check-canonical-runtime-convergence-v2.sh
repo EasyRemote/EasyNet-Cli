@@ -9578,6 +9578,57 @@ for doc_name, doc in (("parser", parser), ("ir", ir)):
 PY
 }
 
+check_mission_ability_strict_ingress_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local mission="$cli_root/src/daemon/ability/builtins/automation/mission.rs"
+  [[ -f "$mission" ]] || fail "mission ability source is missing: ${mission#$cli_root/}"
+
+  "$PYTHON_BIN" - "$mission" <<'PY'
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+production = text.split("\n#[cfg(test)]", 1)[0]
+
+for required in (
+    "fn mission_args_object",
+    "args must be a JSON object",
+    "unknown argument",
+    "fn mission_required_string_arg",
+    "fn mission_optional_string_arg",
+    'mission_args_object("mission.run", &args, &["source", "label"])',
+    'mission_args_object("mission.track", &args, &["run_id"])',
+    'mission_args_object("mission.cancel", &args, &["run_id"])',
+):
+    if required not in production:
+        raise SystemExit(f"mission_ability_strict_ingress:missing:{required}")
+
+for retired in (
+    '.get("source")\n        .and_then(Value::as_str)',
+    '.get("label")\n        .and_then(Value::as_str)',
+    '.get("run_id")\n        .and_then(Value::as_str)',
+    'Falls back to `"mission.run"`',
+):
+    if retired in production:
+        raise SystemExit(f"mission_ability_strict_ingress:retired_compat_parser:{retired}")
+
+tests = text.split("\n#[cfg(test)]", 1)[1] if "\n#[cfg(test)]" in text else ""
+for test_name in (
+    "run_rejects_non_object_args",
+    "run_rejects_unknown_argument",
+    "run_rejects_non_string_label_instead_of_defaulting",
+    "track_rejects_non_object_args",
+    "track_rejects_unknown_argument",
+    "track_rejects_non_string_run_id",
+    "cancel_rejects_non_object_args",
+    "cancel_rejects_unknown_argument",
+    "cancel_rejects_non_string_run_id",
+):
+    if test_name not in tests:
+        raise SystemExit(f"mission_ability_strict_ingress:test_missing:{test_name}")
+PY
+}
+
 check_eal_device_target_identity_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local dispatch="$cli_root/src/eal/interpreter/dispatch.rs"
@@ -22575,6 +22626,43 @@ EOF
   if ( check_mission_traditional_target_conflict_contract "$tmp/mission-implicit-fallback" ) >/dev/null 2>&1; then
     fail "self-test expected Mission implicit fallback naming gate to fail"
   fi
+  mkdir -p "$tmp/mission-ability-strict-ingress-legacy/src/daemon/ability/builtins/automation"
+  cat >"$tmp/mission-ability-strict-ingress-legacy/src/daemon/ability/builtins/automation/mission.rs" <<'EOF'
+fn run_handler(args: Value) -> anyhow::Result<Value> {
+    let source = args
+        .get("source")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| anyhow::anyhow!("mission.run: `source` must be a non-empty string"))?;
+    let label = args
+        .get("label")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .unwrap_or_else(|| "mission.run".to_string());
+    Ok(json!({ "source": source, "label": label }))
+}
+
+fn track_handler(args: Value) -> anyhow::Result<Value> {
+    let run_id = args
+        .get("run_id")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| anyhow::anyhow!("mission.track: `run_id` must be a non-empty string"))?;
+    Ok(json!({ "run_id": run_id }))
+}
+
+fn cancel_handler(args: Value) -> anyhow::Result<Value> {
+    let run_id = args
+        .get("run_id")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| anyhow::anyhow!("mission.cancel: `run_id` must be a non-empty string"))?;
+    Ok(json!({ "run_id": run_id }))
+}
+EOF
+  if ( check_mission_ability_strict_ingress_contract "$tmp/mission-ability-strict-ingress-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected Mission ability strict ingress gate to fail"
+  fi
   mkdir -p "$tmp/eal-device-target-identity-legacy/src/eal/interpreter"
   cat >"$tmp/eal-device-target-identity-legacy/src/eal/interpreter/dispatch.rs" <<'EOF'
 fn device_request(tenant: &str, node_id: &str, ability: &str, arguments: Value) -> Result<MissionInvocationRequest, EalError> {
@@ -24961,14 +25049,15 @@ EOF
   check_federation_discover_caller_scope_contract
   check_device_settings_loader_contract
   check_mission_traditional_target_conflict_contract
+  check_mission_ability_strict_ingress_contract
   check_eal_device_target_identity_contract
   check_remote_device_ingress_ura_only_contract
   check_mission_workspace_easynet_binary_contract
   check_mission_agent_trace_sink_cutover_contract
-	  check_mission_dispatch_audit_authority_contract
-	  check_driver_command_state_contract
-	  check_mission_runtime_meta_identity_schema_contract
-	  check_mission_token_usage_authority_contract
+  check_mission_dispatch_audit_authority_contract
+  check_driver_command_state_contract
+  check_mission_runtime_meta_identity_schema_contract
+  check_mission_token_usage_authority_contract
 	  check_mission_orchestration_persistence_authority_contract
 	  check_mission_terminal_receipt_projection_contract
   check_retired_edge_adapter_policy_absence_contract
@@ -25213,6 +25302,7 @@ check_federation_revoke_ingress_strict_contract
 check_federation_discover_caller_scope_contract
 check_device_settings_loader_contract
 check_mission_traditional_target_conflict_contract
+check_mission_ability_strict_ingress_contract
 check_eal_device_target_identity_contract
 check_remote_device_ingress_ura_only_contract
 check_mission_workspace_easynet_binary_contract

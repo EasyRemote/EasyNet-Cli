@@ -41,6 +41,7 @@
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
+use serde_json::Map;
 use serde_json::{json, Value};
 
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
@@ -97,7 +98,7 @@ pub fn register(reg: &mut AxonAbilityCatalog) {
 ///                  `let r = claude.weather(location: "Beijing")`
 ///                  `print(r)`
 ///   `label`   — optional human-readable label baked into the
-///                run-dir name. Falls back to `"mission.run"` so
+///                run-dir name. Defaults to `"mission.run"` so
 ///                two LLM-driven invocations land in distinct dirs
 ///                without the LLM having to mint an id.
 ///
@@ -132,18 +133,9 @@ fn run_handler(
     env: crate::daemon::ability::dispatch::EnvelopeContext,
     args: Value,
 ) -> anyhow::Result<Value> {
-    let source = args
-        .get("source")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .ok_or_else(|| anyhow::anyhow!("mission.run: `source` must be a non-empty string"))?;
-    if source.trim().is_empty() {
-        anyhow::bail!("mission.run: `source` must be a non-empty string");
-    }
-    let label = args
-        .get("label")
-        .and_then(Value::as_str)
-        .map(str::to_string)
+    let args = mission_args_object("mission.run", &args, &["source", "label"])?;
+    let source = mission_required_string_arg("mission.run", args, "source")?;
+    let label = mission_optional_string_arg("mission.run", args, "label")?
         .unwrap_or_else(|| "mission.run".to_string());
 
     let opts = crate::daemon::execution::mission::orchestration::MissionRunOpts {
@@ -186,14 +178,8 @@ fn run_handler(
 /// includes a short list of the closest matches (find_run already
 /// surfaces those) so the LLM can self-correct.
 fn track_handler(args: Value) -> anyhow::Result<Value> {
-    let run_id = args
-        .get("run_id")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .ok_or_else(|| anyhow::anyhow!("mission.track: `run_id` must be a non-empty string"))?;
-    if run_id.trim().is_empty() {
-        anyhow::bail!("mission.track: `run_id` must be a non-empty string");
-    }
+    let args = mission_args_object("mission.track", &args, &["run_id"])?;
+    let run_id = mission_required_string_arg("mission.track", args, "run_id")?;
     let summary = crate::daemon::execution::mission::orchestration::find_run(&run_id)?;
     let meta_json = serde_json::to_value(&summary.meta).unwrap_or(Value::Null);
     Ok(json!({
@@ -222,14 +208,8 @@ fn track_handler(args: Value) -> anyhow::Result<Value> {
 /// finish on their own and their results are discarded by the
 /// "cancelled" status.
 fn cancel_handler(args: Value) -> anyhow::Result<Value> {
-    let run_id = args
-        .get("run_id")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .ok_or_else(|| anyhow::anyhow!("mission.cancel: `run_id` must be a non-empty string"))?;
-    if run_id.trim().is_empty() {
-        anyhow::bail!("mission.cancel: `run_id` must be a non-empty string");
-    }
+    let args = mission_args_object("mission.cancel", &args, &["run_id"])?;
+    let run_id = mission_required_string_arg("mission.cancel", args, "run_id")?;
     let outcome = crate::daemon::execution::mission::orchestration::cancel_run(&run_id)?;
     let (cancelled, summary) = match outcome {
         crate::daemon::execution::mission::orchestration::CancelOutcome::Cancelled(s) => (true, s),
@@ -243,6 +223,51 @@ fn cancel_handler(args: Value) -> anyhow::Result<Value> {
         "cancelled": cancelled,
         "meta":      meta_json,
     }))
+}
+
+fn mission_args_object<'a>(
+    ability: &str,
+    args: &'a Value,
+    allowed_fields: &[&str],
+) -> anyhow::Result<&'a Map<String, Value>> {
+    let object = args
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("{ability}: args must be a JSON object"))?;
+    for key in object.keys() {
+        if !allowed_fields.contains(&key.as_str()) {
+            anyhow::bail!("{ability}: unknown argument `{key}`");
+        }
+    }
+    Ok(object)
+}
+
+fn mission_required_string_arg(
+    ability: &str,
+    args: &Map<String, Value>,
+    field: &str,
+) -> anyhow::Result<String> {
+    let value = args
+        .get(field)
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("{ability}: `{field}` must be a non-empty string"))?;
+    if value.trim().is_empty() {
+        anyhow::bail!("{ability}: `{field}` must be a non-empty string");
+    }
+    Ok(value.to_string())
+}
+
+fn mission_optional_string_arg(
+    ability: &str,
+    args: &Map<String, Value>,
+    field: &str,
+) -> anyhow::Result<Option<String>> {
+    let Some(value) = args.get(field) else {
+        return Ok(None);
+    };
+    let value = value
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("{ability}: `{field}` must be a string"))?;
+    Ok(Some(value.to_string()))
 }
 
 // ── Discovery surfaces ──────────────────────────────────────────
@@ -352,6 +377,25 @@ mod tests {
         assert!(err.to_string().contains("`source`"));
     }
 
+    #[test]
+    fn run_rejects_non_object_args() {
+        let err = run_handler(test_envelope(), json!("source text")).unwrap_err();
+        assert!(err.to_string().contains("JSON object"));
+    }
+
+    #[test]
+    fn run_rejects_unknown_argument() {
+        let err = run_handler(
+            test_envelope(),
+            json!({
+                "source": "let r = agent.echo()",
+                "action": "legacy-carrier"
+            }),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("unknown argument `action`"));
+    }
+
     /// Whitespace-only source must fail the same way as missing.
     #[test]
     fn rejects_blank_source() {
@@ -365,6 +409,16 @@ mod tests {
     fn rejects_non_string_source() {
         let err = run_handler(test_envelope(), json!({"source": 42})).unwrap_err();
         assert!(err.to_string().contains("non-empty string"));
+    }
+
+    #[test]
+    fn run_rejects_non_string_label_instead_of_defaulting() {
+        let err = run_handler(
+            test_envelope(),
+            json!({"source": "let r = agent.echo()", "label": 42}),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("`label` must be a string"));
     }
 
     /// Live happy path is covered by the e2e cross-agent test —
@@ -390,6 +444,28 @@ mod tests {
     }
 
     #[test]
+    fn track_rejects_non_object_args() {
+        let err = track_handler(json!("run-id")).unwrap_err();
+        assert!(err.to_string().contains("JSON object"));
+    }
+
+    #[test]
+    fn track_rejects_unknown_argument() {
+        let err = track_handler(json!({
+            "run_id": "run-1",
+            "action": "legacy-carrier"
+        }))
+        .unwrap_err();
+        assert!(err.to_string().contains("unknown argument `action`"));
+    }
+
+    #[test]
+    fn track_rejects_non_string_run_id() {
+        let err = track_handler(json!({"run_id": 42})).unwrap_err();
+        assert!(err.to_string().contains("`run_id`"));
+    }
+
+    #[test]
     fn track_rejects_blank_run_id() {
         let err = track_handler(json!({"run_id": "   "})).unwrap_err();
         assert!(err.to_string().contains("`run_id`"));
@@ -408,6 +484,28 @@ mod tests {
     #[test]
     fn cancel_rejects_missing_run_id() {
         let err = cancel_handler(json!({})).unwrap_err();
+        assert!(err.to_string().contains("`run_id`"));
+    }
+
+    #[test]
+    fn cancel_rejects_non_object_args() {
+        let err = cancel_handler(json!("run-id")).unwrap_err();
+        assert!(err.to_string().contains("JSON object"));
+    }
+
+    #[test]
+    fn cancel_rejects_unknown_argument() {
+        let err = cancel_handler(json!({
+            "run_id": "run-1",
+            "action": "legacy-carrier"
+        }))
+        .unwrap_err();
+        assert!(err.to_string().contains("unknown argument `action`"));
+    }
+
+    #[test]
+    fn cancel_rejects_non_string_run_id() {
+        let err = cancel_handler(json!({"run_id": false})).unwrap_err();
         assert!(err.to_string().contains("`run_id`"));
     }
 
