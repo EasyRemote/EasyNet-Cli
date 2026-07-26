@@ -19,6 +19,11 @@ from .authority import (
 from .bidi import BidiSession, BidiStreamDescriptor
 from .errors import ErrorCode, RetryHint, SDKError
 from .invocation import InvocationBuilder, InvocationDraft
+from ._runtime_governance import (
+    ABILITY_DESCRIPTOR_PROVIDER,
+    RECEIPT_HISTORY_PROVIDER,
+    is_runtime_governance_read_ability,
+)
 from .runtime import (
     InvocationCancel,
     InvocationHandle,
@@ -51,12 +56,12 @@ class _RuntimeAbilityDispatchPolicy:
 _PUBLIC_ACTION_POLICY = _RuntimeAbilityDispatchPolicy()
 _GOVERNANCE_READ_POLICY = _RuntimeAbilityDispatchPolicy(
     allow_governance_read=True,
-    descriptor_provider="receipt_history",
+    descriptor_provider=RECEIPT_HISTORY_PROVIDER,
 )
 _CATALOGUE_READ_POLICY = _RuntimeAbilityDispatchPolicy(
     allow_governance_read=True,
     subject_policy="runtime_owner",
-    descriptor_provider="ability_descriptor",
+    descriptor_provider=ABILITY_DESCRIPTOR_PROVIDER,
 )
 
 
@@ -154,7 +159,7 @@ class RuntimeAbilityClient:
     ) -> InvocationDraft:
         _validate_call(call)
         ability_name = _required_text(ability_name, "ability name")
-        if not policy.allow_governance_read and _is_runtime_governance_read_ability(
+        if not policy.allow_governance_read and is_runtime_governance_read_ability(
             ability_name
         ):
             raise _invalid(
@@ -343,15 +348,6 @@ def _validate_runtime_call_context(call: RuntimeCallContext) -> None:
             raise _invalid(f"{field_name} must not be all-zero")
     if not isinstance(call.causal_context, Mapping):
         raise _invalid("causal_context is required")
-
-
-def _is_runtime_governance_read_ability(ability_name: str) -> bool:
-    ability_name = ability_name.strip()
-    return (
-        ability_name == "meta.list_abilities"
-        or ability_name.startswith("invocation.history.")
-        or ability_name.startswith("invocation.trace.")
-    )
 
 
 def _runtime_ability_object_output(result: InvocationResult) -> dict[str, object]:

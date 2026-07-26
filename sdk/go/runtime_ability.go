@@ -54,7 +54,7 @@ func runtimeAbilityGovernanceReadPolicy() runtimeAbilityDispatchPolicy {
 	return runtimeAbilityDispatchPolicy{
 		allowGovernanceRead: true,
 		subjectPolicy:       runtimeAbilitySubjectDescriptorBound,
-		descriptorProvider:  "receipt_history",
+		descriptorProvider:  runtimeReceiptHistoryProvider,
 	}
 }
 
@@ -62,7 +62,7 @@ func runtimeAbilityCatalogueReadPolicy() runtimeAbilityDispatchPolicy {
 	return runtimeAbilityDispatchPolicy{
 		allowGovernanceRead: true,
 		subjectPolicy:       runtimeAbilitySubjectRuntimeOwner,
-		descriptorProvider:  "ability_descriptor",
+		descriptorProvider:  runtimeAbilityDescriptorProvider,
 	}
 }
 
@@ -257,11 +257,6 @@ func (c *RuntimeAbilityClient) buildWithCallModePolicy(ctx context.Context, call
 		WithContentType("application/json").
 		WithMetadata(metadata).
 		Build()
-}
-
-func isRuntimeGovernanceReadAbility(abilityName string) bool {
-	abilityName = strings.TrimSpace(abilityName)
-	return abilityName == "meta.list_abilities" || strings.HasPrefix(abilityName, "invocation.history.") || strings.HasPrefix(abilityName, "invocation.trace.")
 }
 
 // Invoke executes one addressed ability and returns its object result without

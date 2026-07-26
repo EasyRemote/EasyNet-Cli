@@ -10,6 +10,7 @@ from typing import Any, Mapping, Protocol, cast
 from .bidi import BidiSession, BidiStreamDescriptor
 from .errors import ErrorCode, RetryHint, SDKError
 from .axon_addressing import AddressingClient
+from ._runtime_governance import is_runtime_governance_read_ability
 from .invocation import InvocationBuilder, InvocationDraft, InvocationSignature
 from .runtime import (
     InvocationCancel,
@@ -198,10 +199,16 @@ class AbilityInvocationClient:
             ability_ura = descriptor_projection.ability_ura
             version = descriptor_projection.descriptor_version
             ability_projection = self.addressing.project_ability_ura(ability_ura)
+            _reject_governance_read_action(
+                ability_projection.public_name, ability_ura
+            )
         elif selector == "ability_ura":
             ability_ura = _required_string(request.ability_ura, "ability_ura")
             ability_projection = self.addressing.project_ability_ura(ability_ura)
             ability_ura = ability_projection.ura
+            _reject_governance_read_action(
+                ability_projection.public_name, ability_ura
+            )
             descriptor_ref = self.runtime.resolve_descriptor_ref(
                 callee_ura=ability_projection.owner_ura,
                 ability=ability_ura,
@@ -726,7 +733,11 @@ def _addressing_descriptor_ref(
             "exactly one of descriptor_ref or ability_ura is required"
         )
     if descriptor_ref:
-        return addressing.canonical_ability_descriptor_ref(descriptor_ref)
+        projection = addressing.project_descriptor_ref(descriptor_ref)
+        _reject_governance_read_action(
+            projection.public_name, projection.ability_ura
+        )
+        return projection.descriptor_ref
     return addressing.canonical_ability_descriptor_ref(
         ability_ura,
         _required_string(request.descriptor_version, "descriptor_version"),
@@ -748,9 +759,13 @@ def _provider_descriptor_ref(
         _require_matching_callee(
             request.callee_ura, projection.owner_ura, "descriptor_ref"
         )
+        _reject_governance_read_action(
+            projection.public_name, projection.ability_ura
+        )
         return projection.descriptor_ref
     projection = addressing.project_ability_ura(ability_ura)
     _require_matching_callee(request.callee_ura, projection.owner_ura, "ability_ura")
+    _reject_governance_read_action(projection.public_name, projection.ura)
     return runtime.resolve_descriptor_ref(
         callee_ura=_required_string(request.callee_ura, "callee_ura"),
         ability=projection.ura,
@@ -758,6 +773,13 @@ def _provider_descriptor_ref(
         caller_ura=request.caller_ura,
         subject_ura=request.subject_ura,
     )
+
+
+def _reject_governance_read_action(public_name: str, ability_ura: str) -> None:
+    if is_runtime_governance_read_ability(public_name, ability_ura=ability_ura):
+        raise _invalid_ability_invocation(
+            "runtime governance receipt/history/catalogue abilities must use RuntimeReceiptProvider or RuntimeAbilityDescriptorProvider"
+        )
 
 
 def _call_mode(value: object) -> str:

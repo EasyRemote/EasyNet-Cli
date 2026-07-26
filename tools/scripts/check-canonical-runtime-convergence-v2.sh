@@ -4763,19 +4763,23 @@ PY
 check_sdk_go_python_history_public_route_cutover_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local go_runtime="$cli_root/sdk/go/runtime_ability.go"
+  local go_governance="$cli_root/sdk/go/runtime_governance.go"
   local go_receipt="$cli_root/sdk/go/receipt.go"
   local go_descriptor="$cli_root/sdk/go/ability_descriptor.go"
   local go_test="$cli_root/sdk/go/runtime_ability_test.go"
   local go_descriptor_test="$cli_root/sdk/go/ability_descriptor_test.go"
   local go_receipt_test="$cli_root/sdk/go/receipt_test.go"
   local py_runtime="$cli_root/sdk/python/easynet_sdk/runtime_ability.py"
+  local py_governance="$cli_root/sdk/python/easynet_sdk/_runtime_governance.py"
+  local py_ability_invocation="$cli_root/sdk/python/easynet_sdk/ability_invocation.py"
   local py_receipt="$cli_root/sdk/python/easynet_sdk/receipt.py"
   local py_descriptor="$cli_root/sdk/python/easynet_sdk/ability_descriptor.py"
   local py_test="$cli_root/sdk/python/tests/test_runtime_ability.py"
+  local py_ability_invocation_test="$cli_root/sdk/python/tests/test_ability_invocation.py"
   local py_descriptor_test="$cli_root/sdk/python/tests/test_ability_descriptor.py"
   local py_receipt_test="$cli_root/sdk/python/tests/test_receipt.py"
 
-  "$PYTHON_BIN" - "$go_runtime" "$go_receipt" "$go_descriptor" "$go_test" "$go_descriptor_test" "$go_receipt_test" "$py_runtime" "$py_receipt" "$py_descriptor" "$py_test" "$py_descriptor_test" "$py_receipt_test" <<'PY'
+  "$PYTHON_BIN" - "$go_runtime" "$go_governance" "$go_receipt" "$go_descriptor" "$go_test" "$go_descriptor_test" "$go_receipt_test" "$py_runtime" "$py_governance" "$py_ability_invocation" "$py_receipt" "$py_descriptor" "$py_test" "$py_ability_invocation_test" "$py_descriptor_test" "$py_receipt_test" <<'PY'
 import sys
 from pathlib import Path
 
@@ -4784,7 +4788,7 @@ for path in paths:
     if not path.exists():
         raise SystemExit(f"sdk_history_public_route_cutover:missing:{path}")
 
-go_runtime, go_receipt, go_descriptor, go_test, go_descriptor_test, go_receipt_test, py_runtime, py_receipt, py_descriptor, py_test, py_descriptor_test, py_receipt_test = [
+go_runtime, go_governance, go_receipt, go_descriptor, go_test, go_descriptor_test, go_receipt_test, py_runtime, py_governance, py_ability_invocation, py_receipt, py_descriptor, py_test, py_ability_invocation_test, py_descriptor_test, py_receipt_test = [
     path.read_text(encoding="utf-8", errors="replace") for path in paths
 ]
 
@@ -4798,14 +4802,10 @@ for required in (
     "func (c *RuntimeAbilityClient) buildGovernanceRead(",
     "func (c *RuntimeAbilityClient) buildCatalogueRead(",
     "func (c *RuntimeAbilityClient) buildWithCallModePolicy(",
-    "func isRuntimeGovernanceReadAbility(abilityName string) bool",
     "descriptorProvider  string",
-    'descriptorProvider:  "receipt_history"',
-    'descriptorProvider:  "ability_descriptor"',
+    "descriptorProvider:  runtimeReceiptHistoryProvider",
+    "descriptorProvider:  runtimeAbilityDescriptorProvider",
     "Provider:   policy.descriptorProvider",
-    'abilityName == "meta.list_abilities"',
-    "strings.HasPrefix(abilityName, \"invocation.history.\")",
-    "strings.HasPrefix(abilityName, \"invocation.trace.\")",
     "runtime governance receipt/history/catalogue abilities must use RuntimeReceiptProvider or RuntimeAbilityDescriptorProvider",
     "func (c *RuntimeAbilityClient) invokeGovernanceRead(",
     "func (c *RuntimeAbilityClient) invokeCatalogueRead(",
@@ -4814,6 +4814,17 @@ for required in (
         raise SystemExit(f"sdk_history_public_route_cutover:go_runtime_missing:{required}")
 if "return c.buildWithCallModePolicy(ctx, call, abilityName, args, callMode, runtimeAbilityPublicPolicy())" not in go_runtime:
     raise SystemExit("sdk_history_public_route_cutover:go_public_policy_not_bound")
+for required in (
+    'runtimeAbilityDescriptorProvider = "ability_descriptor"',
+    'runtimeReceiptHistoryProvider    = "receipt_history"',
+    "func runtimeGovernanceDescriptorProviderForAbility(abilityName string) string",
+    "func isRuntimeGovernanceReadAbility(abilityName string) bool",
+    'abilityName == "meta.list_abilities"',
+    "strings.HasPrefix(abilityName, \"invocation.history.\")",
+    "strings.HasPrefix(abilityName, \"invocation.trace.\")",
+):
+    if required not in go_governance:
+        raise SystemExit(f"sdk_history_public_route_cutover:go_governance_missing:{required}")
 if "ability.Invoke(ctx, call, r.listAbility, args)" in go_receipt or "ability.Invoke(ctx, call, r.getAbility, args)" in go_receipt:
     raise SystemExit("sdk_history_public_route_cutover:go_receipt_uses_public_invoke")
 if "ability.invokeGovernanceRead(ctx, call, r.listAbility, args)" not in go_receipt:
@@ -4832,7 +4843,7 @@ if 'Provider:   policy.descriptorProvider' not in go_runtime:
     raise SystemExit("sdk_history_public_route_cutover:go_descriptor_provider_not_forwarded")
 if '"ability_descriptor"' not in go_descriptor_test:
     raise SystemExit("sdk_history_public_route_cutover:go_descriptor_provider_test_missing")
-if '"receipt_history"' not in go_runtime or '"receipt_history"' not in go_receipt_test:
+if "runtimeReceiptHistoryProvider" not in go_runtime or '"receipt_history"' not in go_receipt_test:
     raise SystemExit("sdk_history_public_route_cutover:go_receipt_provider_evidence_missing")
 
 for required in (
@@ -4841,23 +4852,38 @@ for required in (
     'descriptor_provider: str = ""',
     "_PUBLIC_ACTION_POLICY = _RuntimeAbilityDispatchPolicy()",
     "_GOVERNANCE_READ_POLICY = _RuntimeAbilityDispatchPolicy(",
-    'descriptor_provider="receipt_history"',
+    "descriptor_provider=RECEIPT_HISTORY_PROVIDER",
     "_CATALOGUE_READ_POLICY = _RuntimeAbilityDispatchPolicy(",
-    'descriptor_provider="ability_descriptor"',
+    "descriptor_provider=ABILITY_DESCRIPTOR_PROVIDER",
     "policy: _RuntimeAbilityDispatchPolicy = _PUBLIC_ACTION_POLICY",
     "provider=policy.descriptor_provider",
     "def _build_governance_read(",
     "def _build_catalogue_read(",
     "def _invoke_governance_read(",
     "def _invoke_catalogue_read(",
-    "def _is_runtime_governance_read_ability(ability_name: str) -> bool:",
-    'ability_name == "meta.list_abilities"',
-    'ability_name.startswith("invocation.history.")',
-    'ability_name.startswith("invocation.trace.")',
+    "is_runtime_governance_read_ability",
     "runtime governance receipt/history/catalogue abilities must use RuntimeReceiptProvider or RuntimeAbilityDescriptorProvider",
 ):
     if required not in py_runtime:
         raise SystemExit(f"sdk_history_public_route_cutover:py_runtime_missing:{required}")
+for required in (
+    'ABILITY_DESCRIPTOR_PROVIDER = "ability_descriptor"',
+    'RECEIPT_HISTORY_PROVIDER = "receipt_history"',
+    "def governance_descriptor_provider_for_ability(",
+    "def is_runtime_governance_read_ability(",
+    'value == "meta.list_abilities"',
+    'value.startswith("invocation.history.")',
+    'value.startswith("invocation.trace.")',
+):
+    if required not in py_governance:
+        raise SystemExit(f"sdk_history_public_route_cutover:py_governance_missing:{required}")
+for required in (
+    "def _reject_governance_read_action(",
+    "is_runtime_governance_read_ability(public_name, ability_ura=ability_ura)",
+    "runtime governance receipt/history/catalogue abilities must use RuntimeReceiptProvider or RuntimeAbilityDescriptorProvider",
+):
+    if required not in py_ability_invocation:
+        raise SystemExit(f"sdk_history_public_route_cutover:py_ability_invocation_missing:{required}")
 if "ability.invoke(call, self.list_ability.strip(), dict(arguments))" in py_receipt:
     raise SystemExit("sdk_history_public_route_cutover:py_receipt_uses_public_invoke")
 if "ability._invoke_governance_read(call, self.list_ability.strip(), dict(arguments))" not in py_receipt:
@@ -4870,6 +4896,10 @@ if "test_runtime_ability_rejects_invocation_history_public_route_before_descript
     raise SystemExit("sdk_history_public_route_cutover:py_public_rejection_test_missing")
 if "test_runtime_ability_rejects_catalogue_read_public_route_before_descriptor_resolution" not in py_test:
     raise SystemExit("sdk_history_public_route_cutover:py_catalogue_public_rejection_test_missing")
+if "test_generic_invocation_rejects_governance_read_ability_ura" not in py_ability_invocation_test:
+    raise SystemExit("sdk_history_public_route_cutover:py_generic_governance_rejection_test_missing")
+if "test_generic_invocation_rejects_governance_read_descriptor_ref" not in py_ability_invocation_test:
+    raise SystemExit("sdk_history_public_route_cutover:py_generic_descriptor_rejection_test_missing")
 if 'transport.seen["subject_ura"] == "easynet:///r/example/authority"' not in py_descriptor_test:
     raise SystemExit("sdk_history_public_route_cutover:py_catalogue_subject_test_missing")
 if 'transport.descriptor_requests[-1]["provider"] == "ability_descriptor"' not in py_descriptor_test:

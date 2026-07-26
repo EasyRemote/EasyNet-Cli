@@ -26,6 +26,13 @@ from test_signing import signer_handle
 
 ABILITY_URA = "easynet:///r/example/ability/device.dev-a.observe.health"
 DESCRIPTOR_REF = f"{ABILITY_URA}@1.0.0"
+HISTORY_ABILITY_URA = (
+    "easynet:///r/example/ability/device.dev-a.invocation.history.list"
+)
+HISTORY_DESCRIPTOR_REF = f"{HISTORY_ABILITY_URA}@1.0.0"
+CATALOGUE_ABILITY_URA = (
+    "easynet:///r/example/ability/device.dev-a.meta.list_abilities"
+)
 
 
 class AbilityInvocationClientTests(unittest.TestCase):
@@ -136,6 +143,67 @@ class AbilityInvocationClientTests(unittest.TestCase):
             identity.seen_requests,
             [{"descriptor_ref": (DESCRIPTOR_REF)}],
         )
+
+    def test_generic_invocation_rejects_governance_read_ability_ura(self) -> None:
+        for label, ability_ura, public_name in (
+            ("receipt history", HISTORY_ABILITY_URA, "invocation.history.list"),
+            ("catalogue", CATALOGUE_ABILITY_URA, "meta.list_abilities"),
+        ):
+            with self.subTest(label=label):
+                runtime = MemoryRuntimeTransport()
+                client = AbilityInvocationClient(
+                    runtime=RuntimeClient(runtime),
+                    addressing=AddressingClient(
+                        _identity_transport_for(ability_ura, public_name)
+                    ),
+                )
+
+                with self.assertRaises(SDKError) as caught:
+                    client.build_invocation(_request(ability_ura=ability_ura))
+
+                self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+                self.assertIn("RuntimeReceiptProvider", caught.exception.message)
+                self.assertIsNone(runtime.seen_descriptor_request)
+
+    def test_generic_target_resolution_rejects_governance_read_ability_ura(self) -> None:
+        runtime = MemoryRuntimeTransport()
+        client = AbilityInvocationClient(
+            runtime=RuntimeClient(runtime),
+            addressing=AddressingClient(
+                _identity_transport_for(
+                    HISTORY_ABILITY_URA, "invocation.history.list"
+                )
+            ),
+        )
+
+        with self.assertRaises(SDKError) as caught:
+            client.build_target_invocation(
+                _target_request(ability_ura=HISTORY_ABILITY_URA)
+            )
+
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+        self.assertIn("RuntimeReceiptProvider", caught.exception.message)
+        self.assertIsNone(runtime.seen_descriptor_request)
+
+    def test_generic_invocation_rejects_governance_read_descriptor_ref(self) -> None:
+        runtime = MemoryRuntimeTransport()
+        client = AbilityInvocationClient(
+            runtime=RuntimeClient(runtime),
+            addressing=AddressingClient(
+                _identity_transport_for(
+                    HISTORY_ABILITY_URA,
+                    "invocation.history.list",
+                    descriptor_ref=HISTORY_DESCRIPTOR_REF,
+                )
+            ),
+        )
+
+        with self.assertRaises(SDKError) as caught:
+            client.build_invocation(_request(descriptor_ref=HISTORY_DESCRIPTOR_REF))
+
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+        self.assertIn("RuntimeReceiptProvider", caught.exception.message)
+        self.assertIsNone(runtime.seen_descriptor_request)
 
     def test_build_invocation_rejects_callee_owner_mismatch(self) -> None:
         client = AbilityInvocationClient(
@@ -653,25 +721,55 @@ class ChildDispatchRuntimeTransport(MemoryRuntimeTransport):
 
 
 def _identity_transport() -> MemoryAddressingTransport:
+    return _identity_transport_for(ABILITY_URA, "observe.health")
+
+
+def _identity_transport_for(
+    ability_ura: str,
+    public_name: str,
+    *,
+    descriptor_ref: str | None = None,
+) -> MemoryAddressingTransport:
+    descriptor_ref = descriptor_ref or f"{ability_ura}@1.0.0"
     transport = MemoryAddressingTransport()
-    transport.identity_json = (
-        b'{"kind":"ability","valid":true,'
-        b'"ura":"easynet:///r/example/ability/device.dev-a.observe.health",'
-        b'"profile":"axon-strict-v2",'
-        b'"components":{"owner_ura":"easynet:///r/example/device/dev-a",'
-        b'"owner_kind":"device","public_name":"observe.health",'
-        b'"local_registry_ability":"easynet:///r/example/device/dev-a:observe.health",'
-        b'"namespace":"observe","local_name":"health"},'
-        b'"metadata":{"grammar_owner":"axon"}}'
-    )
-    transport.descriptor_json = (
-        b'{"kind":"descriptor_ref","valid":true,'
-        b'"descriptor_ref":"easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",'
-        b'"ability_ura":"easynet:///r/example/ability/device.dev-a.observe.health",'
-        b'"descriptor_version":"1.0.0","profile":"axon-strict-v2",'
-        b'"components":{"owner_ura":"easynet:///r/example/device/dev-a"},'
-        b'"metadata":{"grammar_owner":"axon"}}'
-    )
+    transport.identity_json = json.dumps(
+        {
+            "kind": "ability",
+            "valid": True,
+            "ura": ability_ura,
+            "profile": "axon-strict-v2",
+            "components": {
+                "owner_ura": "easynet:///r/example/device/dev-a",
+                "owner_kind": "device",
+                "public_name": public_name,
+                "local_registry_ability": (
+                    f"easynet:///r/example/device/dev-a:{public_name}"
+                ),
+                "namespace": public_name.rsplit(".", 1)[0],
+                "local_name": public_name.rsplit(".", 1)[-1],
+            },
+            "metadata": {"grammar_owner": "axon"},
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    transport.descriptor_json = json.dumps(
+        {
+            "kind": "descriptor_ref",
+            "valid": True,
+            "descriptor_ref": descriptor_ref,
+            "ability_ura": ability_ura,
+            "descriptor_version": "1.0.0",
+            "profile": "axon-strict-v2",
+            "components": {
+                "owner_ura": "easynet:///r/example/device/dev-a",
+                "public_name": public_name,
+            },
+            "metadata": {"grammar_owner": "axon"},
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
     return transport
 
 
