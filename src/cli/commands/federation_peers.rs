@@ -68,7 +68,9 @@ use anyhow::Context;
 use clap::Args;
 use serde::Serialize;
 
-use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
+use crate::daemon::trust::anchor::{
+    RealmTrustAnchor, RealmTrustAnchorLoadState, TrustedAgent, TrustedAgentRole,
+};
 use crate::support::platform::output;
 
 /// Default daemon-config.toml location, mirrors
@@ -238,8 +240,12 @@ fn read_trusted_hubs() -> anyhow::Result<Vec<TrustedHubEntry>> {
 }
 
 fn read_trusted_hubs_from_path(path: &Path) -> anyhow::Result<Vec<TrustedHubEntry>> {
-    let anchor = RealmTrustAnchor::load_or_empty(path)
-        .with_context(|| format!("invalid realm trust config {}", path.display()))?;
+    let anchor = match RealmTrustAnchor::load_with_state(path)
+        .with_context(|| format!("invalid realm trust config {}", path.display()))?
+    {
+        RealmTrustAnchorLoadState::Loaded(anchor) => anchor,
+        RealmTrustAnchorLoadState::Missing { .. } => return Ok(Vec::new()),
+    };
     trusted_hubs_from_anchor(anchor)
         .with_context(|| format!("invalid realm trust config {}", path.display()))
 }

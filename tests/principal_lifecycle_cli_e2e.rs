@@ -312,7 +312,7 @@ fn principal_cli_facades_run_through_real_daemon() {
     assert!(bob_snapshot["principal"].get("username").is_none());
     assert!(bob_snapshot["principal"].get("user_id").is_none());
 
-    let trust = RealmTrustAnchor::load_or_empty(&home.trust_path).expect("load trust");
+    let trust = RealmTrustAnchor::try_load_strict(&home.trust_path).expect("load trust");
     let bob_public_key = bob["principal"]["bindings"][0]["public_key_b64"]
         .as_str()
         .expect("bob public key");

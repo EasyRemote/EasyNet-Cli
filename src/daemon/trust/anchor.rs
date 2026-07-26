@@ -13,23 +13,15 @@
 // PR-7 authors `realm-trust.toml` via the device-pairing
 // flow and the backend identity bootstrap. PR-1 (this commit, 7a/9)
 // only reads the file: at daemon boot we either find it and parse
-// every `[[trusted_agent]]` block or we fall back to an empty trust
-// set.
-//
-// The empty-fallback is intentional and is what keeps PR-1 mergeable
-// to `main` without PR-7 also landed: a daemon with an empty trust
-// set rejects every external caller (admission strict-mode default),
-// which is fine for tests and staging but never for production. PR-10
-// production canary checklist gates on the file being non-empty
-// before the binary swap (`pr-drafts/PR-0-spec-daemon-invocation-server.md
-// §5.2 sequencing constraint`).
+// every `[[trusted_agent]]` block or we report an explicit missing
+// storage state to the boot policy boundary.
 //
 // What this module is
 // -------------------
 // - The TOML deserialisation surface (`[[trusted_agent]]` blocks)
 // - The runtime representation (`RealmTrustAnchor` + `TrustedAgent`)
-// - A loader that returns `Self` (empty if missing) plus a
-//   `try_load_strict` variant tests use to assert presence
+// - A loader that reports explicit storage state plus a
+//   `try_load_strict` variant for paths that must exist
 // - `lookup` to answer "do we have a public key for this URA"
 //
 // What this module is NOT
@@ -295,12 +287,10 @@ struct RawTrustAnchor {
 /// because a bare URA lookup is ambiguous when a user has
 /// registered N devices.
 ///
-/// **Empty-fallback semantics**: a missing file maps to an empty
-/// `RealmTrustAnchor`. The dispatcher logs a WARN at boot when the
-/// trust set is empty (the operator runbook in `docs/daemon-config.md`
-/// covers this). Admission strict-mode against an empty trust set
-/// rejects every external caller, which is the safe default before
-/// PR-7 + PR-10 land.
+/// **Load-state semantics**: missing storage is represented explicitly by
+/// `RealmTrustAnchorLoadState::Missing`. The storage model never collapses
+/// that state into an empty trust set; daemon boot, reload, CLI display, and
+/// receipt verification each own their own policy boundary.
 #[derive(Debug, Default)]
 pub struct RealmTrustAnchor {
     /// Hub / Backend / Device entries — single value per URA.
@@ -315,6 +305,12 @@ pub struct RealmTrustAnchor {
     revoked_users: HashMap<String, Vec<RevokedUserPubkey>>,
     /// RFC-014 owner facts for trusted runtime principals.
     principal_owners: HashMap<String, TrustedPrincipalOwner>,
+}
+
+#[derive(Debug)]
+pub enum RealmTrustAnchorLoadState {
+    Loaded(RealmTrustAnchor),
+    Missing { path: PathBuf },
 }
 
 fn role_label(role: TrustedAgentRole) -> &'static str {
@@ -436,14 +432,19 @@ fn canonicalize_revoked_user_key(
 }
 
 impl RealmTrustAnchor {
-    /// Load from `path` and return an empty anchor if the file is
-    /// missing. Use this at daemon boot — staging environments
-    /// commonly lack the file and a missing trust set is a logged
-    /// warning, not a fatal boot error.
-    pub fn load_or_empty(path: &Path) -> Result<Self, RealmTrustError> {
+    /// Load from `path` while preserving the exact storage state.
+    ///
+    /// Missing storage is not an error at this layer and is never projected
+    /// into an empty trust set here. Callers must make that policy decision at
+    /// their own boundary.
+    pub fn load_with_state(path: &Path) -> Result<RealmTrustAnchorLoadState, RealmTrustError> {
         match fs::read_to_string(path) {
-            Ok(raw) => Self::parse(&raw, path),
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
+            Ok(raw) => Self::parse(&raw, path).map(RealmTrustAnchorLoadState::Loaded),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                Ok(RealmTrustAnchorLoadState::Missing {
+                    path: path.to_path_buf(),
+                })
+            }
             Err(source) => Err(RealmTrustError::ReadFailed {
                 path: path.to_path_buf(),
                 source,
@@ -452,7 +453,6 @@ impl RealmTrustAnchor {
     }
 
     /// Load from `path` and return an error if the file is missing.
-    /// Test seam — production daemons use `load_or_empty`.
     pub fn try_load_strict(path: &Path) -> Result<Self, RealmTrustError> {
         let raw = fs::read_to_string(path).map_err(|source| RealmTrustError::ReadFailed {
             path: path.to_path_buf(),
@@ -910,7 +910,7 @@ impl RealmTrustAnchor {
     /// PR-7 commit 5/N's `identity.register_pubkey` ability
     /// calls `save` after each successful `append_agent` and then
     /// signals SIGHUP to the daemon to trigger reload (the daemon
-    /// boot loop's signal handler re-runs `load_or_empty` against
+    /// boot loop's signal handler re-runs `load_with_state` against
     /// the same path).
     ///
     /// Per `RawTrustAnchor`'s sort discipline (entries_sorted), the
@@ -994,9 +994,9 @@ impl RealmTrustAnchor {
 }
 
 /// Every way the loader can fail. `ReadFailed` covers I/O errors
-/// other than NotFound (NotFound maps to `Self::default()` via
-/// `load_or_empty`); `ParseFailed` covers TOML syntax errors;
-/// `DuplicateUra` covers the URA-uniqueness invariant.
+/// other than NotFound (NotFound is an explicit load state);
+/// `ParseFailed` covers TOML syntax errors; `DuplicateUra` covers
+/// the URA-uniqueness invariant.
 #[derive(Debug, Error)]
 pub enum RealmTrustError {
     #[error("failed to read realm trust anchor at {path}: {source}")]
@@ -1082,6 +1082,15 @@ mod tests {
         file
     }
 
+    fn load_existing(path: &Path) -> RealmTrustAnchor {
+        match RealmTrustAnchor::load_with_state(path).expect("load state") {
+            RealmTrustAnchorLoadState::Loaded(anchor) => anchor,
+            RealmTrustAnchorLoadState::Missing { path } => {
+                panic!("expected existing trust anchor at {}", path.display())
+            }
+        }
+    }
+
     fn entry(ura: &str) -> TrustedAgent {
         TrustedAgent {
             agent_ura: ura.to_string(),
@@ -1095,11 +1104,14 @@ mod tests {
     }
 
     #[test]
-    fn missing_file_yields_empty_anchor() {
+    fn missing_file_projects_explicit_load_state() {
         let nonexistent = PathBuf::from("/tmp/easynet-realm-trust-test-does-not-exist");
-        let anchor = RealmTrustAnchor::load_or_empty(&nonexistent).expect("load_or_empty Ok");
-        assert!(anchor.is_empty());
-        assert_eq!(anchor.len(), 0);
+        match RealmTrustAnchor::load_with_state(&nonexistent).expect("load state") {
+            RealmTrustAnchorLoadState::Missing { path } => assert_eq!(path, nonexistent),
+            RealmTrustAnchorLoadState::Loaded(anchor) => {
+                panic!("missing storage must not become empty anchor: {anchor:?}")
+            }
+        }
     }
 
     #[test]
@@ -1114,7 +1126,7 @@ mod tests {
     #[test]
     fn empty_file_yields_empty_anchor() {
         let file = write_temp("");
-        let anchor = RealmTrustAnchor::load_or_empty(file.path()).expect("Ok");
+        let anchor = load_existing(file.path());
         assert!(anchor.is_empty());
     }
 
@@ -1129,7 +1141,7 @@ added_at_unix_ms = 1714492800000
         "#;
 
         let file = write_temp(toml_content);
-        let anchor = RealmTrustAnchor::load_or_empty(file.path()).expect("Ok");
+        let anchor = load_existing(file.path());
         assert_eq!(anchor.len(), 1);
 
         let entry = anchor
@@ -1156,7 +1168,7 @@ added_at_unix_ms = 1714492801234
         "#;
 
         let file = write_temp(toml_content);
-        let anchor = RealmTrustAnchor::load_or_empty(file.path()).expect("Ok");
+        let anchor = load_existing(file.path());
         assert_eq!(anchor.len(), 2);
         assert!(anchor.lookup("easynet:///r/realm/authority").is_some());
         assert!(anchor
@@ -1182,7 +1194,7 @@ added_at_unix_ms = 1714492801234
     #[test]
     fn malformed_toml_is_rejected() {
         let file = write_temp("this is not valid TOML {{{");
-        match RealmTrustAnchor::load_or_empty(file.path()) {
+        match RealmTrustAnchor::load_with_state(file.path()) {
             Err(RealmTrustError::ParseFailed { .. }) => {}
             other => panic!("expected ParseFailed, got {other:?}"),
         }
@@ -1195,10 +1207,10 @@ added_at_unix_ms = 1714492801234
 agent_ura = "easynet:///r/realm/device/n1"
 public_key_b64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 role = "unknown"
-added_at_unix_ms = 1714492800000
+        added_at_unix_ms = 1714492800000
         "#;
         let file = write_temp(toml_content);
-        match RealmTrustAnchor::load_or_empty(file.path()) {
+        match RealmTrustAnchor::load_with_state(file.path()) {
             Err(RealmTrustError::ParseFailed { .. }) => {}
             other => panic!("expected ParseFailed, got {other:?}"),
         }
@@ -1393,11 +1405,10 @@ added_at_unix_ms = 1714492800000
 agent_ura = "easynet:///r/realm/authority"
 public_key_b64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 role = "backend"
-added_at_unix_ms = 1714492800000
+        added_at_unix_ms = 1714492800000
 "#;
         let file = write_temp(toml_content);
-        let anchor = RealmTrustAnchor::load_or_empty(file.path())
-            .expect("schema-A toml must load on a PR-N1 daemon");
+        let anchor = load_existing(file.path());
         let entry = anchor
             .lookup("easynet:///r/realm/authority")
             .expect("schema-A entry present");
@@ -1419,7 +1430,7 @@ hub_endpoint = "https://peer-hub.example:50443"
 tls_ca_pem_path = "/etc/easynet/peer-hub-ca.pem"
 "#;
         let file = write_temp(toml_content);
-        let anchor = RealmTrustAnchor::load_or_empty(file.path()).expect("schema-B loads");
+        let anchor = load_existing(file.path());
         let entry = anchor
             .lookup("easynet:///r/peer-realm/authority")
             .expect("schema-B entry present");
@@ -1562,7 +1573,7 @@ role = "user"
 added_at_unix_ms = 1714492800000
 "#;
         let file = write_temp(toml_content);
-        let anchor = RealmTrustAnchor::load_or_empty(file.path()).expect("user role loads");
+        let anchor = load_existing(file.path());
         let entry = anchor
             .lookup_user_by_pubkey(
                 "easynet:///r/realm/user/alice",

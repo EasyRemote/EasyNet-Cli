@@ -6,12 +6,14 @@ use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use crate::daemon::identity::self_identity::CanonicalSigner;
 use crate::daemon::invocation::admission::usage_quota::SharedUsageQuotaGate;
 use crate::daemon::persistence::daemon_config::DaemonConfig;
-use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
+use crate::daemon::trust::anchor::{
+    RealmTrustAnchor, RealmTrustAnchorLoadState, TrustedAgent, TrustedAgentRole,
+};
 use crate::daemon::trust::cell::SharedTrustAnchor;
 
 pub(super) fn load_trust_anchor_from(path: &Path) -> anyhow::Result<RealmTrustAnchor> {
-    match RealmTrustAnchor::load_or_empty(path) {
-        Ok(anchor) => {
+    match RealmTrustAnchor::load_with_state(path) {
+        Ok(RealmTrustAnchorLoadState::Loaded(anchor)) => {
             let path_display = format!("{}", path.display());
             if anchor.is_empty() {
                 crate::op_event!(
@@ -30,6 +32,16 @@ pub(super) fn load_trust_anchor_from(path: &Path) -> anyhow::Result<RealmTrustAn
                 );
             }
             Ok(anchor)
+        }
+        Ok(RealmTrustAnchorLoadState::Missing { path }) => {
+            let path_display = format!("{}", path.display());
+            crate::op_event!(
+                component = daemon_invocation,
+                kind = realm_trust_anchor_missing_first_run,
+                path = path_display,
+                message = "admission gate will reject every external caller until trust provisioning populates the anchor",
+            );
+            Ok(RealmTrustAnchor::default())
         }
         Err(err) => {
             let path_display = format!("{}", path.display());
@@ -129,8 +141,17 @@ pub(super) fn reload_trust_anchor_cell_from(
     path: &Path,
     trust_anchor_cell: &SharedTrustAnchor,
 ) -> anyhow::Result<usize> {
-    let next = RealmTrustAnchor::load_or_empty(path)
-        .map_err(|err| anyhow::anyhow!("load trust anchor from {}: {err}", path.display()))?;
+    let next = match RealmTrustAnchor::load_with_state(path)
+        .map_err(|err| anyhow::anyhow!("load trust anchor from {}: {err}", path.display()))?
+    {
+        RealmTrustAnchorLoadState::Loaded(anchor) => anchor,
+        RealmTrustAnchorLoadState::Missing { path } => {
+            anyhow::bail!(
+                "reload trust anchor from {}: file is missing; preserving current trust anchor",
+                path.display()
+            );
+        }
+    };
     let len = next.len();
     trust_anchor_cell.replace(Arc::new(next));
     Ok(len)
@@ -177,6 +198,35 @@ mod tests {
         let anchor = load_trust_anchor_from(&path).expect("missing anchor is first-run empty");
 
         assert!(anchor.is_empty());
+    }
+
+    #[test]
+    fn reload_trust_anchor_rejects_missing_file_without_replacing_cell() {
+        let dir = tempdir().expect("tempdir");
+        let missing_path = dir.path().join("missing-realm-trust.toml");
+        let current = RealmTrustAnchor::from_entries(vec![TrustedAgent {
+            agent_ura: "easynet:///r/local/device/current".to_string(),
+            public_key_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
+            role: TrustedAgentRole::Device,
+            added_at_unix_ms: 1,
+            origin_realm: None,
+            hub_endpoint: None,
+            tls_ca_pem_path: None,
+        }])
+        .expect("current anchor");
+        let cell = SharedTrustAnchor::new(Arc::new(current));
+
+        let err = reload_trust_anchor_cell_from(&missing_path, &cell)
+            .expect_err("missing reload must fail closed");
+
+        assert!(
+            err.to_string().contains("file is missing"),
+            "unexpected error: {err}",
+        );
+        assert!(cell
+            .snapshot()
+            .lookup("easynet:///r/local/device/current")
+            .is_some());
     }
 
     #[test]

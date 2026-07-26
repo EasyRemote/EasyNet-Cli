@@ -14771,12 +14771,14 @@ for required in (
     "enum RealmReceiptTrustSource",
     "Loaded(crate::daemon::trust::key_resolver::RealmTrustAnchorKeyResolver)",
     "Empty { path: PathBuf }",
+    "Missing { path: PathBuf }",
     "LoadFailed { path: PathBuf, error: String }",
     "fn unavailable_detail(&self) -> Option<String>",
     "realm_trust: RealmReceiptTrustSource",
     "RealmReceiptTrustSource::load(trust_anchor_path)",
     "RealmReceiptTrustSource::Loaded(resolver)",
     "realm trust anchor at {} is empty",
+    "realm trust anchor at {} is missing",
     "realm trust anchor at {} failed to load: {error}",
 ):
     if required not in production:
@@ -14787,6 +14789,7 @@ for retired in (
     ".ok()\n                .filter(|anchor| !anchor.is_empty())",
     ".ok().filter(|anchor| !anchor.is_empty())",
     "realm trust anchor is empty or unavailable",
+    "RealmTrustAnchor::load_or_empty",
 ):
     if retired in production:
         raise SystemExit(f"canonical_receipt_resolver_trust_source:retired:{retired}")
@@ -14795,6 +14798,75 @@ if "canonical_receipt_resolver_preserves_malformed_realm_trust_source" not in te
     raise SystemExit("canonical_receipt_resolver_trust_source:missing_malformed_source_test")
 if "not_a_role" not in text or "!message.contains(\"empty or unavailable\")" not in text:
     raise SystemExit("canonical_receipt_resolver_trust_source:malformed_test_not_load_bearing")
+if "canonical_receipt_resolver_preserves_missing_realm_trust_source" not in text:
+    raise SystemExit("canonical_receipt_resolver_trust_source:missing_missing_source_test")
+if "message.contains(\"is missing\")" not in text:
+    raise SystemExit("canonical_receipt_resolver_trust_source:missing_test_not_load_bearing")
+PY
+}
+
+check_realm_trust_anchor_explicit_load_state_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local anchor="$cli_root/src/daemon/trust/anchor.rs"
+  local boot_trust="$cli_root/src/daemon/boot/invocation/trust.rs"
+  local mission_gateway="$cli_root/src/daemon/execution/mission/invocation_gateway.rs"
+  local federation_peers="$cli_root/src/cli/commands/federation_peers.rs"
+  local cli_trust="$cli_root/src/cli/commands/groups/trust.rs"
+  for path in "$anchor" "$boot_trust" "$mission_gateway" "$federation_peers" "$cli_trust"; do
+    [[ -f "$path" ]] || fail "realm trust anchor explicit load-state source is missing: ${path#$cli_root/}"
+  done
+
+  "$PYTHON_BIN" - "$anchor" "$boot_trust" "$mission_gateway" "$federation_peers" "$cli_trust" <<'PY'
+import sys
+from pathlib import Path
+
+anchor, boot_trust, mission_gateway, federation_peers, cli_trust = [
+    Path(arg).read_text(encoding="utf-8", errors="replace")
+    for arg in sys.argv[1:]
+]
+all_text = "\n".join((anchor, boot_trust, mission_gateway, federation_peers, cli_trust))
+
+for retired in (
+    "pub fn load_or_empty",
+    "RealmTrustAnchor::load_or_empty",
+    "empty-fallback",
+    "Empty-fallback",
+    "missing_file_yields_empty_anchor",
+):
+    if retired in all_text:
+        raise SystemExit(f"realm_trust_anchor_explicit_load_state:retired:{retired}")
+
+for required in (
+    "pub enum RealmTrustAnchorLoadState",
+    "Loaded(RealmTrustAnchor)",
+    "Missing { path: PathBuf }",
+    "pub fn load_with_state",
+    "missing_file_projects_explicit_load_state",
+):
+    if required not in anchor:
+        raise SystemExit(f"realm_trust_anchor_explicit_load_state:anchor_missing:{required}")
+
+for required in (
+    "realm_trust_anchor_missing_first_run",
+    "reload_trust_anchor_rejects_missing_file_without_replacing_cell",
+    "file is missing; preserving current trust anchor",
+):
+    if required not in boot_trust:
+        raise SystemExit(f"realm_trust_anchor_explicit_load_state:boot_missing:{required}")
+
+for required in (
+    "Mission remote child receipt verification requires realm trust anchor",
+    "RealmTrustAnchorLoadState::Missing",
+):
+    if required not in mission_gateway:
+        raise SystemExit(f"realm_trust_anchor_explicit_load_state:mission_missing:{required}")
+
+for source_name, source in (
+    ("federation_peers", federation_peers),
+    ("cli_trust", cli_trust),
+):
+    if "RealmTrustAnchorLoadState::Missing" not in source:
+        raise SystemExit(f"realm_trust_anchor_explicit_load_state:{source_name}_missing_missing_projection")
 PY
 }
 
@@ -20550,6 +20622,44 @@ EOF
   if ( CLI_ROOT="$tmp/canonical-receipt-resolver-trust-fallback"; check_canonical_receipt_resolver_trust_source_contract ) >/dev/null 2>&1; then
     fail "self-test expected canonical receipt resolver trust-source fallback gate to fail"
   fi
+  mkdir -p "$tmp/realm-trust-anchor-empty-fallback-legacy/src/daemon/trust"
+  mkdir -p "$tmp/realm-trust-anchor-empty-fallback-legacy/src/daemon/boot/invocation"
+  mkdir -p "$tmp/realm-trust-anchor-empty-fallback-legacy/src/daemon/execution/mission"
+  mkdir -p "$tmp/realm-trust-anchor-empty-fallback-legacy/src/cli/commands/groups"
+  mkdir -p "$tmp/realm-trust-anchor-empty-fallback-legacy/src/cli/commands"
+  cat >"$tmp/realm-trust-anchor-empty-fallback-legacy/src/daemon/trust/anchor.rs" <<'EOF'
+pub struct RealmTrustAnchor;
+impl RealmTrustAnchor {
+    pub fn load_or_empty(path: &Path) -> Result<Self, RealmTrustError> {
+        Ok(Self)
+    }
+}
+#[test]
+fn missing_file_yields_empty_anchor() {}
+EOF
+  cat >"$tmp/realm-trust-anchor-empty-fallback-legacy/src/daemon/boot/invocation/trust.rs" <<'EOF'
+fn load_trust_anchor_from(path: &Path) {
+    let _ = RealmTrustAnchor::load_or_empty(path);
+}
+EOF
+  cat >"$tmp/realm-trust-anchor-empty-fallback-legacy/src/daemon/execution/mission/invocation_gateway.rs" <<'EOF'
+fn verify_child(path: &Path) {
+    let _ = RealmTrustAnchor::load_or_empty(path);
+}
+EOF
+  cat >"$tmp/realm-trust-anchor-empty-fallback-legacy/src/cli/commands/federation_peers.rs" <<'EOF'
+fn read(path: &Path) {
+    let _ = RealmTrustAnchor::load_or_empty(path);
+}
+EOF
+  cat >"$tmp/realm-trust-anchor-empty-fallback-legacy/src/cli/commands/groups/trust.rs" <<'EOF'
+fn show(path: &Path) {
+    let _ = RealmTrustAnchor::load_or_empty(path);
+}
+EOF
+  if ( CLI_ROOT="$tmp/realm-trust-anchor-empty-fallback-legacy"; check_realm_trust_anchor_explicit_load_state_contract ) >/dev/null 2>&1; then
+    fail "self-test expected realm trust anchor empty-fallback gate to fail"
+  fi
   mkdir -p "$tmp/remote-failure-caller-signer-projection-legacy/src/daemon/invocation/dispatch"
   cat >"$tmp/remote-failure-caller-signer-projection-legacy/src/daemon/invocation/dispatch/remote_failure.rs" <<'EOF'
 pub(crate) fn status_from_remote_failure(context: &str, raw_error: &str, failure: Option<&SessionFailure>) -> Status {
@@ -25684,6 +25794,7 @@ EOF
   check_runtime_owner_signer_custody_contract
   check_remote_invocation_signer_first_contract
   check_remote_failure_caller_signer_projection_contract
+  check_realm_trust_anchor_explicit_load_state_contract
   check_daemon_runtime_identity_vocabulary_contract
   check_key_custody_boundary_contract
   check_key_service_home_resolution_contract
@@ -25943,6 +26054,7 @@ check_local_session_runtime_assembly_contract
 check_local_session_descriptor_ref_test_authority_contract
 check_local_daemon_loopback_explicit_subject_contract
 check_canonical_receipt_resolver_trust_source_contract
+check_realm_trust_anchor_explicit_load_state_contract
 check_sdk_directory_projection_fail_closed_contract
 check_sdk_runtime_recovery_report_fail_closed_contract
 check_sdk_principal_projection_fail_closed_contract

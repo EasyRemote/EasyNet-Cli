@@ -24,9 +24,9 @@
 //    entering the realm trust set.
 // 3. Loads `/etc/easynet/realm-trust.toml` (or the
 //    daemon-config-supplied override) via
-//    `RealmTrustAnchor::load_or_empty`. Empty fallback is fine for
-//    PR-1; PR-7 populates it via the pairing flow; PR-10 canary
-//    refuses to swap without a non-empty file.
+//    `RealmTrustAnchor::load_with_state`. Missing storage is an
+//    explicit first-run boot state; reloads fail closed instead of
+//    replacing live trust authority with an empty anchor.
 // 3.5 On unix, listens for SIGHUP and reloads the trust anchor from
 //     disk into the shared cell. This is the operator-facing "manual
 //     edit + hup" path PR-7 checklist requires before a future file

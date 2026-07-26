@@ -1009,19 +1009,29 @@ pub(crate) struct CanonicalRuntimeReceiptResolver {
 enum RealmReceiptTrustSource {
     Loaded(crate::daemon::trust::key_resolver::RealmTrustAnchorKeyResolver),
     Empty { path: PathBuf },
+    Missing { path: PathBuf },
     LoadFailed { path: PathBuf, error: String },
 }
 
 #[cfg(feature = "axon-pb")]
 impl RealmReceiptTrustSource {
     fn load(path: PathBuf) -> Self {
-        match crate::daemon::trust::anchor::RealmTrustAnchor::load_or_empty(&path) {
-            Ok(anchor) if anchor.is_empty() => Self::Empty { path },
-            Ok(anchor) => Self::Loaded(
-                crate::daemon::trust::key_resolver::RealmTrustAnchorKeyResolver::new(
-                    crate::daemon::trust::cell::SharedTrustAnchor::new(Arc::new(anchor)),
-                ),
-            ),
+        match crate::daemon::trust::anchor::RealmTrustAnchor::load_with_state(&path) {
+            Ok(crate::daemon::trust::anchor::RealmTrustAnchorLoadState::Loaded(anchor))
+                if anchor.is_empty() =>
+            {
+                Self::Empty { path }
+            }
+            Ok(crate::daemon::trust::anchor::RealmTrustAnchorLoadState::Loaded(anchor)) => {
+                Self::Loaded(
+                    crate::daemon::trust::key_resolver::RealmTrustAnchorKeyResolver::new(
+                        crate::daemon::trust::cell::SharedTrustAnchor::new(Arc::new(anchor)),
+                    ),
+                )
+            }
+            Ok(crate::daemon::trust::anchor::RealmTrustAnchorLoadState::Missing { path }) => {
+                Self::Missing { path }
+            }
             Err(error) => Self::LoadFailed {
                 path,
                 error: error.to_string(),
@@ -1035,6 +1045,10 @@ impl RealmReceiptTrustSource {
             Self::Empty { path } => {
                 Some(format!("realm trust anchor at {} is empty", path.display()))
             }
+            Self::Missing { path } => Some(format!(
+                "realm trust anchor at {} is missing",
+                path.display()
+            )),
             Self::LoadFailed { path, error } => Some(format!(
                 "realm trust anchor at {} failed to load: {error}",
                 path.display()
@@ -2431,6 +2445,35 @@ added_at_unix_ms = 1
         assert!(
             !message.contains("empty or unavailable"),
             "malformed trust source must not collapse to legacy availability wording: {message}"
+        );
+    }
+
+    #[test]
+    fn canonical_receipt_resolver_preserves_missing_realm_trust_source() {
+        let _guard = crate::cli::commands::test_support::env_lock();
+        let previous = std::env::var_os("EASYNET_REALM_TRUST_PATH");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let missing = dir.path().join("missing-realm-trust.toml");
+        std::env::set_var("EASYNET_REALM_TRUST_PATH", &missing);
+
+        let resolver = CanonicalRuntimeReceiptResolver::new();
+        let error =
+            axon_sdk::invocation::KeyResolver::resolve(&resolver, "easynet:///r/local/authority")
+                .expect_err("missing realm trust source must fail closed");
+        let message = error.to_string();
+
+        match previous {
+            Some(value) => std::env::set_var("EASYNET_REALM_TRUST_PATH", value),
+            None => std::env::remove_var("EASYNET_REALM_TRUST_PATH"),
+        }
+
+        assert!(
+            message.contains("realm trust anchor at") && message.contains("is missing"),
+            "missing trust source was not preserved: {message}"
+        );
+        assert!(
+            !message.contains("empty or unavailable"),
+            "missing trust source must not collapse to legacy availability wording: {message}"
         );
     }
 

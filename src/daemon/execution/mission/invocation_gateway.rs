@@ -26,6 +26,9 @@ use crate::daemon::persistence::agent_aggregate::{
     AgentAggregateRepository, HostedAgentNameLookupError,
 };
 use crate::daemon::persistence::daemon_config;
+use crate::daemon::trust::anchor::{
+    trust_anchor_path_from_env_or_default, RealmTrustAnchor, RealmTrustAnchorLoadState,
+};
 /// One child Invocation requested by Mission orchestration.
 ///
 /// Parent identity, subject, cause, trace, deadline ceiling, and cancellation
@@ -642,15 +645,22 @@ impl DaemonMissionInvocationGateway {
                 anyhow::bail!("Mission parent deadline elapsed while remote child {ability} was running")
             }
         };
-        let trust_path = crate::daemon::trust::anchor::trust_anchor_path_from_env_or_default();
+        let trust_path = trust_anchor_path_from_env_or_default();
         let trust_anchor =
-            crate::daemon::trust::anchor::RealmTrustAnchor::load_or_empty(&trust_path)
-                .with_context(|| {
-                    format!(
-                        "load realm trust anchor for Mission remote child: {}",
-                        trust_path.display()
-                    )
-                })?;
+            match RealmTrustAnchor::load_with_state(&trust_path).with_context(|| {
+                format!(
+                    "load realm trust anchor for Mission remote child: {}",
+                    trust_path.display()
+                )
+            })? {
+                RealmTrustAnchorLoadState::Loaded(anchor) => anchor,
+                RealmTrustAnchorLoadState::Missing { path } => {
+                    anyhow::bail!(
+                    "Mission remote child receipt verification requires realm trust anchor at {}",
+                    path.display()
+                );
+                }
+            };
         let resolver = crate::daemon::trust::key_resolver::RealmTrustAnchorKeyResolver::new(
             crate::daemon::trust::cell::SharedTrustAnchor::new(Arc::new(trust_anchor)),
         );

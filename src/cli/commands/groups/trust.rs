@@ -18,7 +18,9 @@ use console::style;
 use serde_json::json;
 
 use crate::daemon::trust::anchor::trust_anchor_path_from_env_or_default;
-use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
+use crate::daemon::trust::anchor::{
+    RealmTrustAnchor, RealmTrustAnchorLoadState, TrustedAgent, TrustedAgentRole,
+};
 use crate::support::platform::output::OutputFormat;
 
 #[derive(Debug, Args)]
@@ -52,8 +54,12 @@ pub fn run(args: TrustArgs) -> anyhow::Result<()> {
 
 fn run_show(args: ShowArgs) -> anyhow::Result<()> {
     let path = trust_anchor_path_from_env_or_default();
-    let anchor = RealmTrustAnchor::load_or_empty(&path)
-        .with_context(|| format!("load trust anchor at {}", path.display()))?;
+    let anchor = match RealmTrustAnchor::load_with_state(&path)
+        .with_context(|| format!("load trust anchor at {}", path.display()))?
+    {
+        RealmTrustAnchorLoadState::Loaded(anchor) => anchor,
+        RealmTrustAnchorLoadState::Missing { .. } => RealmTrustAnchor::default(),
+    };
 
     let entries: Vec<&TrustedAgent> = match args.target_ura.as_deref() {
         Some(target) => {

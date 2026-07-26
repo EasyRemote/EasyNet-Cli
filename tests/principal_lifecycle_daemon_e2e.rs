@@ -194,7 +194,7 @@ fn principal_lifecycle_runs_through_real_daemon_and_survives_restart() {
     );
     drop(restarted);
 
-    let persisted_trust = RealmTrustAnchor::load_or_empty(&home.trust_path).expect("load trust");
+    let persisted_trust = RealmTrustAnchor::try_load_strict(&home.trust_path).expect("load trust");
     assert!(persisted_trust
         .lookup_user_by_pubkey(BOB, &pubkey(21))
         .is_none());

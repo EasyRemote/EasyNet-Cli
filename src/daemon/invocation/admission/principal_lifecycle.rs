@@ -3272,7 +3272,7 @@ mod tests {
         );
 
         let persisted_trust =
-            RealmTrustAnchor::load_or_empty(&ctx.runtime_trust.trust_anchor_path).unwrap();
+            RealmTrustAnchor::try_load_strict(&ctx.runtime_trust.trust_anchor_path).unwrap();
         assert!(persisted_trust
             .lookup_user_by_pubkey(bob, &b64_pubkey(21))
             .is_none());
