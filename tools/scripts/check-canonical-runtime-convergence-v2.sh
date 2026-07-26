@@ -2402,6 +2402,7 @@ end = text.find("#[cfg(test)]", start)
 if start < 0 or end < 0:
     raise SystemExit("shared_node_state_projection:node_state_str_section_missing")
 body = text[start:end]
+prod = text.split("#[cfg(test)]", 1)[0]
 
 for retired in (
     "state.as_u64()",
@@ -2414,11 +2415,28 @@ for retired in (
     if retired in body:
         raise SystemExit(f"shared_node_state_projection:retired_numeric_state_projection:{retired}")
 
+label_start = prod.find("pub fn federation_label")
+label_end = prod.find("pub fn node_state_str", label_start)
+if label_start < 0 or label_end < 0:
+    raise SystemExit("shared_node_state_projection:federation_label_section_missing")
+label_body = prod[label_start:label_end]
+
+for retired in (
+    '"axon.federation.runtime_id"',
+    "runtime_id",
+    "stable id (fallback)",
+    "federation_label_falls_back_to_runtime_id",
+):
+    if retired in label_body or retired in text and retired == "federation_label_falls_back_to_runtime_id":
+        raise SystemExit(f"shared_node_state_projection:retired_runtime_id_label_fallback:{retired}")
+
 for required in (
     "node_state_projection_rejects_numeric_legacy_enum_state",
     'assert_eq!(node_state_str(&n), "UNKNOWN")',
     "assert!(!is_online(&n))",
     "node_state_projection_uses_only_canonical_string_state_for_online",
+    "federation_label_ignores_runtime_id_without_explicit_label",
+    '.get("axon.federation.runtime_label")',
 ):
     if required not in text:
         raise SystemExit(f"shared_node_state_projection:missing_regression_test:{required}")
@@ -21829,6 +21847,15 @@ pub fn is_online(n: &Value) -> bool {
     node_state_str(n) == "HEALTHY"
 }
 
+pub fn federation_label(n: &Value) -> Option<String> {
+    n.get("labels")?
+        .as_object()?
+        .get("axon.federation.runtime_label")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
 pub fn node_state_str(n: &Value) -> Cow<'_, str> {
     let Some(state) = n.get("state") else {
         return Cow::Borrowed("UNKNOWN");
@@ -21844,10 +21871,64 @@ pub fn node_state_str(n: &Value) -> Cow<'_, str> {
 }
 
 #[cfg(test)]
-mod tests {}
+mod tests {
+    fn node_state_projection_rejects_numeric_legacy_enum_state() {
+        assert_eq!(node_state_str(&n), "UNKNOWN");
+        assert!(!is_online(&n));
+    }
+    fn node_state_projection_uses_only_canonical_string_state_for_online() {}
+    fn federation_label_ignores_runtime_id_without_explicit_label() {}
+}
 EOF
   if ( check_shared_node_state_projection_contract "$tmp/shared-node-state-numeric-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected shared node numeric state projection gate to fail"
+  fi
+  mkdir -p "$tmp/shared-node-label-runtime-id-legacy/src/support/platform"
+  cat >"$tmp/shared-node-label-runtime-id-legacy/src/support/platform/node.rs" <<'EOF'
+use std::borrow::Cow;
+use serde_json::Value;
+
+pub fn is_online(n: &Value) -> bool {
+    node_state_str(n) == "HEALTHY"
+}
+
+pub fn federation_label(n: &Value) -> Option<String> {
+    let labels = n.get("labels")?.as_object()?;
+    for key in [
+        "axon.federation.runtime_label",
+        "axon.federation.runtime_id",
+    ] {
+        if let Some(s) = labels.get(key).and_then(Value::as_str) {
+            if !s.is_empty() {
+                return Some(s.to_string());
+            }
+        }
+    }
+    None
+}
+
+pub fn node_state_str(n: &Value) -> Cow<'_, str> {
+    let Some(state) = n.get("state") else {
+        return Cow::Borrowed("UNKNOWN");
+    };
+    if let Some(s) = state.as_str() {
+        return Cow::Borrowed(s);
+    }
+    Cow::Borrowed("UNKNOWN")
+}
+
+#[cfg(test)]
+mod tests {
+    fn node_state_projection_rejects_numeric_legacy_enum_state() {
+        assert_eq!(node_state_str(&n), "UNKNOWN");
+        assert!(!is_online(&n));
+    }
+    fn node_state_projection_uses_only_canonical_string_state_for_online() {}
+    fn federation_label_ignores_runtime_id_without_explicit_label() {}
+}
+EOF
+  if ( check_shared_node_state_projection_contract "$tmp/shared-node-label-runtime-id-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected shared node runtime-id label fallback gate to fail"
   fi
   mkdir -p "$tmp/runtime-state-kind-default-legacy/src/daemon/persistence"
   cat >"$tmp/runtime-state-kind-default-legacy/src/daemon/persistence/config.rs" <<'EOF'

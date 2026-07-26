@@ -70,8 +70,10 @@ pub fn friendly_os(os: &str) -> &str {
 /// not own it), the runtime's `list_nodes` handler stamps the originating
 /// runtime into the node's `labels` map:
 ///
-///   - `axon.federation.runtime_label` — human-readable name (preferred)
-///   - `axon.federation.runtime_id`    — stable id (fallback)
+///   - `axon.federation.runtime_label` — human-readable name
+///
+/// Stable machine identifiers are not product display labels; this projection
+/// intentionally does not promote them into the operator-facing "via" suffix.
 ///
 /// Locally-owned nodes carry neither key and return `None`.
 ///
@@ -80,17 +82,11 @@ pub fn friendly_os(os: &str) -> &str {
 /// be worse than no hint at all.
 pub fn federation_label(n: &Value) -> Option<String> {
     let labels = n.get("labels")?.as_object()?;
-    for key in [
-        "axon.federation.runtime_label",
-        "axon.federation.runtime_id",
-    ] {
-        if let Some(s) = labels.get(key).and_then(Value::as_str) {
-            if !s.is_empty() {
-                return Some(s.to_string());
-            }
-        }
-    }
-    None
+    labels
+        .get("axon.federation.runtime_label")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
 }
 
 pub fn node_state_str(n: &Value) -> Cow<'_, str> {
@@ -125,9 +121,9 @@ mod tests {
     }
 
     #[test]
-    fn federation_label_falls_back_to_runtime_id() {
+    fn federation_label_ignores_runtime_id_without_explicit_label() {
         let n = json!({"labels": {"axon.federation.runtime_id": "runtime-beta"}});
-        assert_eq!(federation_label(&n), Some("runtime-beta".to_string()));
+        assert_eq!(federation_label(&n), None);
     }
 
     #[test]
