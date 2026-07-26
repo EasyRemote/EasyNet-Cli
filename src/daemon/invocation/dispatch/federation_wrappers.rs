@@ -504,11 +504,6 @@ pub struct HeartbeatResponse {
     /// for byte-identical state, MAY-differ field per spec §4.2
     /// (registry may have churned between identical-looking calls).
     pub realm_directory_size: usize,
-    /// Number of `refresh_owner_uras` whose projection lease this
-    /// heartbeat actually renewed (owners without a stored projection are
-    /// skipped). Lets the device detect when it must re-advertise.
-    #[serde(default)]
-    pub refreshed_owner_count: usize,
     /// Explicit Authority-published ability catalog diff since the caller's last
     /// observed revision.
     pub authority_abilities_diff: AuthorityAbilitiesDiff,
@@ -532,19 +527,17 @@ pub(crate) fn handle_heartbeat(
     // so its device/hosted-agent abilities stay resolvable between full
     // re-advertise cycles. Unknown owners are skipped (the device must
     // `advertise_abilities` before its first projection exists).
-    let mut refreshed_owner_count = 0_usize;
     let new_expiry =
         crate::daemon::federation::read_model::owner_projection::lease_expiry_from_now(now_unix_ms);
     for owner_ura in &request.refresh_owner_uras {
         let owner_ura = owner_ura.trim();
-        if !owner_ura.is_empty() && catalog.refresh_lease(owner_ura, new_expiry) {
-            refreshed_owner_count += 1;
+        if !owner_ura.is_empty() {
+            catalog.refresh_lease(owner_ura, new_expiry);
         }
     }
     HeartbeatResponse {
         membership_status: "active".to_string(),
         realm_directory_size: registry.online_count(),
-        refreshed_owner_count,
         authority_abilities_diff: AuthorityAbilitiesDiff::empty_at(
             request.since_abilities_revision,
         ),
@@ -1783,10 +1776,21 @@ mod tests {
         let resp = handle_heartbeat(&req, &registry, &catalog, 1_000);
         assert_eq!(resp.membership_status, "active");
         assert_eq!(resp.realm_directory_size, 2);
-        assert_eq!(resp.refreshed_owner_count, 0);
         assert_eq!(resp.authority_abilities_diff.revision, 9);
         assert!(resp.authority_abilities_diff.added.is_empty());
         assert!(resp.authority_abilities_diff.removed.is_empty());
+        let wire = serde_json::to_value(&resp).expect("heartbeat response serializes");
+        let mut keys = wire.as_object().expect("heartbeat response object").keys();
+        assert_eq!(
+            keys.next().map(String::as_str),
+            Some("authority_abilities_diff")
+        );
+        assert_eq!(keys.next().map(String::as_str), Some("membership_status"));
+        assert_eq!(
+            keys.next().map(String::as_str),
+            Some("realm_directory_size")
+        );
+        assert!(keys.next().is_none());
     }
 
     #[test]
@@ -1845,7 +1849,6 @@ mod tests {
             refresh_owner_uras: vec![owner_ura.to_string()],
         };
         let resp = handle_heartbeat(&req, &registry, &catalog, after_expiry);
-        assert_eq!(resp.refreshed_owner_count, 1);
         assert_eq!(resp.authority_abilities_diff.revision, 11);
 
         // ...and the device-owned ability is resolvable again, with its
@@ -1869,8 +1872,13 @@ mod tests {
             since_abilities_revision: 0,
             refresh_owner_uras: vec!["easynet:///r/realm/device/never-published".to_string()],
         };
-        let resp = handle_heartbeat(&req, &registry, &catalog, 5_000);
-        assert_eq!(resp.refreshed_owner_count, 0);
+        let _ = handle_heartbeat(&req, &registry, &catalog, 5_000);
+        assert!(
+            catalog
+                .projection_for_owner("easynet:///r/realm/device/never-published")
+                .is_none(),
+            "heartbeat must not synthesize missing owner projections"
+        );
     }
 
     #[test]

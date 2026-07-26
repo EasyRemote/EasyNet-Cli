@@ -8296,7 +8296,7 @@ if '&["user_ura", "public_key_b64"]' not in revoke_schema:
 for label, source in (("cli_user", cli_user), ("prelude", prelude)):
     if '"identity.register_pubkey"' not in source:
         continue
-    if '"principal_ura"' not in source:
+    if '"principal_ura"' not in source and "RegisterPubkeyRequest::new(" not in source:
         raise SystemExit(f"runtime_trust_write_scope:{label}_register_missing_principal_field")
     if re.search(r'"agent_ura"\s*:\s*user_ura\b', source):
         raise SystemExit(f"runtime_trust_write_scope:{label}_register_uses_retired_agent_field")
@@ -9756,6 +9756,8 @@ heartbeat_match = re.search(r"pub struct HeartbeatReceipt \{(?P<body>.*?)\n\}", 
 if heartbeat_match is None:
     raise SystemExit("federation_receipt_facts:heartbeat_receipt_missing")
 heartbeat_body = heartbeat_match.group("body")
+if "refreshed_owner_count" in wrappers or "refreshed_owner_count" in heartbeat_body:
+    raise SystemExit("federation_receipt_facts:retired_heartbeat_refreshed_owner_count")
 hub_diff_match = re.search(r"(?P<prefix>(?:\s*///[^\n]*\n|\s*#\[[^\]]*\]\n|\s*)*)\s*pub authority_abilities_diff: AuthorityAbilitiesDiff,", heartbeat_body)
 if hub_diff_match is None:
     raise SystemExit("federation_receipt_facts:heartbeat_diff_missing")

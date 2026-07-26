@@ -878,14 +878,13 @@ async fn sync_realm_hub_trust_prelude(
     }
 
     for pubkey_b64 in pubkeys {
-        let register_args = match serde_json::to_vec(&serde_json::json!({
-            "agent_ura": hub_ura,
-            "public_key_b64": pubkey_b64,
-            "role": "hub",
-        })) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
+        let register_args =
+            match RegisterPubkeyRequest::new(hub_ura.as_str(), pubkey_b64, TrustedAgentRole::Hub)
+                .to_arguments_bytes()
+            {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
         match crate::daemon::invocation::admission::register_device_pubkey::handle(
             &register_args,
             &sync.daemon_realm,
@@ -1019,14 +1018,13 @@ async fn sync_paired_user_trust_prelude(
     let mut accepted_key_count = 0_usize;
     let mut last_import_error = None;
     for pubkey_b64 in pubkeys {
-        let register_args = match serde_json::to_vec(&serde_json::json!({
-            "principal_ura": user_ura,
-            "public_key_b64": pubkey_b64,
-            "role": "user",
-        })) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
+        let register_args =
+            match RegisterPubkeyRequest::new(user_ura.as_str(), pubkey_b64, TrustedAgentRole::User)
+                .to_arguments_bytes()
+            {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
         match crate::daemon::invocation::admission::register_device_pubkey::handle(
             &register_args,
             &sync.daemon_realm,
