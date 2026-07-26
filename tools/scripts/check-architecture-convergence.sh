@@ -11284,6 +11284,59 @@ if all(path.exists() for path in agent_session_inventory_sources):
             )
 
 
+media_resource_bootstrap = (
+    cli_root / "src/daemon/ability/builtins/resources/media/resource_bootstrap.rs"
+)
+if media_resource_bootstrap.exists():
+    media_bootstrap_text = source(media_resource_bootstrap)
+    raw_media_bootstrap_text = media_resource_bootstrap.read_text(
+        encoding="utf-8", errors="replace"
+    )
+    for token, detail in (
+        (
+            "fn display_hardware_id_from_monitor_id(",
+            "media display bootstrap must route display identity through a stable monitor-id projector",
+        ),
+        (
+            "display_without_stable_identity_skipped",
+            "media display bootstrap must make missing stable monitor identity an explicit omitted state",
+        ),
+        (
+            "display_hardware_identity_does_not_synthesize_index_size_name_fallback",
+            "media display bootstrap must pin the no synthetic display hardware-id fallback contract",
+        ),
+    ):
+        if token not in raw_media_bootstrap_text:
+            add(
+                "R97_MEDIA_DISPLAY_STABLE_IDENTITY",
+                media_resource_bootstrap,
+                1,
+                detail,
+            )
+    for token, detail in (
+        (
+            "display:xcap:{idx}",
+            "display hardware_id must not include enumeration index fallback",
+        ),
+        (
+            "let fallback_id = format!",
+            "display bootstrap must not construct a fallback hardware_id",
+        ),
+        (
+            "unwrap_or(fallback_id)",
+            "display hardware_id must not fall back from missing monitor id",
+        ),
+    ):
+        offset = raw_media_bootstrap_text.find(token)
+        if offset != -1:
+            add(
+                "R97_MEDIA_DISPLAY_STABLE_IDENTITY",
+                media_resource_bootstrap,
+                line_number(raw_media_bootstrap_text, offset),
+                detail,
+            )
+
+
 if violations:
     for violation in sorted(violations):
         print(

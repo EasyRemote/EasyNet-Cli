@@ -197,8 +197,20 @@ fn discover_displays() -> Vec<DiscoveredResource> {
     monitors
         .into_iter()
         .enumerate()
-        .map(|(idx, monitor)| {
+        .filter_map(|(idx, monitor)| {
             let id = monitor.id().ok();
+            let id_string = id.as_ref().map(ToString::to_string);
+            let hardware_id = match display_hardware_id_from_monitor_id(id_string.as_deref()) {
+                Some(hardware_id) => hardware_id,
+                None => {
+                    crate::op_event!(
+                        component = media_resource_bootstrap,
+                        kind = display_without_stable_identity_skipped,
+                        monitor_index = idx,
+                    );
+                    return None;
+                }
+            };
             let name = monitor
                 .name()
                 .ok()
@@ -209,21 +221,15 @@ fn discover_displays() -> Vec<DiscoveredResource> {
             let x = monitor.x().ok();
             let y = monitor.y().ok();
             let is_primary = monitor.is_primary().ok();
-            let fallback_id = format!(
-                "display:xcap:{idx}:{}x{}:{name}",
-                width.unwrap_or(0),
-                height.unwrap_or(0)
-            );
-            DiscoveredResource {
+            Some(DiscoveredResource {
                 kind: ResourceType::Display,
-                hardware_id: id
-                    .map(|v| format!("display:xcap:{v}"))
-                    .unwrap_or(fallback_id),
+                hardware_id,
                 display_name: name,
                 metadata: json!({
                     "backend": "xcap",
                     "monitor_index": idx,
                     "monitor_id": id,
+                    "hardware_identity_source": "xcap_monitor_id",
                     "x": x,
                     "y": y,
                     "width": width,
@@ -232,9 +238,16 @@ fn discover_displays() -> Vec<DiscoveredResource> {
                     "discovery_source": "auto_bootstrap",
                     "auto_prune": true,
                 }),
-            }
+            })
         })
         .collect()
+}
+
+fn display_hardware_id_from_monitor_id(monitor_id: Option<&str>) -> Option<String> {
+    monitor_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| format!("display:xcap:{value}"))
 }
 
 #[cfg(target_os = "macos")]
@@ -860,6 +873,32 @@ mod tests {
         assert_eq!(file.resources.len(), 1);
         assert_eq!(file.resources[0].resource_ura, first);
         assert_eq!(file.resources[0].display_name, "Renamed camera");
+    }
+
+    #[test]
+    fn display_hardware_identity_requires_non_empty_platform_monitor_id() {
+        assert_eq!(
+            display_hardware_id_from_monitor_id(Some("42")),
+            Some("display:xcap:42".to_string())
+        );
+        assert_eq!(
+            display_hardware_id_from_monitor_id(Some("  42  ")),
+            Some("display:xcap:42".to_string())
+        );
+        assert_eq!(display_hardware_id_from_monitor_id(None), None);
+        assert_eq!(display_hardware_id_from_monitor_id(Some("")), None);
+        assert_eq!(display_hardware_id_from_monitor_id(Some("   ")), None);
+    }
+
+    #[test]
+    fn display_hardware_identity_does_not_synthesize_index_size_name_fallback() {
+        let fallback_shape = "display:xcap:0:1920x1080:Built-in Display";
+
+        assert_ne!(
+            display_hardware_id_from_monitor_id(None).as_deref(),
+            Some(fallback_shape),
+            "missing monitor id must not become a synthetic persisted hardware id"
+        );
     }
 
     #[test]
