@@ -1,6 +1,9 @@
 package easynet
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestDecodeTransportErrorJSONDecodesFixtureShape(t *testing.T) {
 	err, decodeErr := decodeRuntimeErrorJSON([]byte(`{
@@ -61,6 +64,46 @@ func TestDecodeTransportErrorJSONPreservesRuntimeRefsAndRetryability(t *testing.
 	}
 	if err.Class() != ErrorClassTimeout {
 		t.Fatalf("class = %s, want %s", err.Class(), ErrorClassTimeout)
+	}
+}
+
+func TestDecodeTransportErrorJSONCanonicalizesCallerSignerCustodyDetail(t *testing.T) {
+	err, decodeErr := decodeRuntimeErrorJSON([]byte(
+		"{\n" +
+			`"code":"CALLER_SIGNER_UNAVAILABLE",` + "\n" +
+			`"stage":"caller_identity",` + "\n" +
+			`"message":"easynet_runtime_resolve_descriptor_ref: remote invocation requires a caller signer for ` +
+			"`easynet:///r/localhost/user/alice`" +
+			`; load or provision that identity in the local key service: self-identity: keyring rejected request: kind=not_found, msg=keyring entry not found: easynet:///r/localhost/user/alice",` + "\n" +
+			`"retry":"never",` + "\n" +
+			`"source":"c_abi",` + "\n" +
+			`"invocation_id":"inv-1",` + "\n" +
+			`"receipt_ura":null,` + "\n" +
+			`"details":{"abi_symbol":"ERR_PERMISSION_DENIED"}` + "\n" +
+			"}",
+	))
+	if decodeErr != nil {
+		t.Fatalf("decodeRuntimeErrorJSON: %v", decodeErr)
+	}
+	if err == nil {
+		t.Fatalf("decodeRuntimeErrorJSON returned nil")
+	}
+	if err.Code != ErrCallerSignerUnavailable {
+		t.Fatalf("code = %s, want %s", err.Code, ErrCallerSignerUnavailable)
+	}
+	if err.Message != "CALLER_SIGNER_UNAVAILABLE: remote invocation requires a caller signer for `easynet:///r/localhost/user/alice`; load or provision that identity in the local key service" {
+		t.Fatalf("message = %q", err.Message)
+	}
+	for _, leaked := range []string{"keyring entry not found", "keyring rejected request", "self-identity:"} {
+		if strings.Contains(err.Message, leaked) {
+			t.Fatalf("caller signer message leaked %q: %s", leaked, err.Message)
+		}
+	}
+	if err.Stage != "caller_identity" || err.Source != "c_abi" || err.InvocationID != "inv-1" {
+		t.Fatalf("structured error facts changed: %#v", err)
+	}
+	if err.Details["abi_symbol"] != "ERR_PERMISSION_DENIED" {
+		t.Fatalf("details not preserved: %#v", err.Details)
 	}
 }
 

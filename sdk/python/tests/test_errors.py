@@ -54,6 +54,38 @@ class ErrorTests(unittest.TestCase):
         self.assertEqual(error.details["abi_symbol"], "ERR_TIMEOUT")
         self.assertEqual(error.error_class, ErrorClass.TIMEOUT)
 
+    def test_from_json_canonicalizes_caller_signer_custody_detail(self) -> None:
+        error = SDKError.from_json(
+            b"""{
+                "code": "CALLER_SIGNER_UNAVAILABLE",
+                "stage": "caller_identity",
+                "message": "easynet_runtime_resolve_descriptor_ref: remote invocation requires a caller signer for `easynet:///r/localhost/user/alice`; load or provision that identity in the local key service: self-identity: keyring rejected request: kind=not_found, msg=keyring entry not found: easynet:///r/localhost/user/alice",
+                "retry": "never",
+                "source": "c_abi",
+                "invocation_id": "inv-1",
+                "receipt_ura": null,
+                "details": {"abi_symbol": "ERR_PERMISSION_DENIED"}
+            }"""
+        )
+
+        self.assertIsNotNone(error)
+        assert error is not None
+        self.assertEqual(error.code, ErrorCode.CALLER_SIGNER_UNAVAILABLE)
+        self.assertEqual(
+            error.message,
+            "CALLER_SIGNER_UNAVAILABLE: remote invocation requires a caller signer for `easynet:///r/localhost/user/alice`; load or provision that identity in the local key service",
+        )
+        for leaked in (
+            "keyring entry not found",
+            "keyring rejected request",
+            "self-identity:",
+        ):
+            self.assertNotIn(leaked, error.message)
+        self.assertEqual(error.stage, "caller_identity")
+        self.assertEqual(error.source, "c_abi")
+        self.assertEqual(error.invocation_id, "inv-1")
+        self.assertEqual(error.details["abi_symbol"], "ERR_PERMISSION_DENIED")
+
     def test_normalize_error_code_accepts_only_canonical_schema_values(self) -> None:
         cases = {
             "VERSION_INCOMPATIBLE": ErrorCode.VERSION_INCOMPATIBLE,

@@ -231,12 +231,13 @@ func decodeRuntimeErrorJSON(raw []byte) (*SDKError, error) {
 	if err != nil {
 		return nil, err
 	}
+	message := canonicalRuntimeErrorMessage(code, *dto.Message, details)
 	return &SDKError{
 		Code:         code,
 		Stage:        dto.Stage,
 		Retry:        retry,
 		Retryable:    RetryableForHint(retry),
-		Message:      *dto.Message,
+		Message:      message,
 		Source:       optionalString(dto.Source),
 		InvocationID: optionalString(dto.InvocationID),
 		ReceiptURA:   optionalString(dto.ReceiptURA),
@@ -360,6 +361,35 @@ func runtimeFailureCode(code string) ErrorCode {
 		return ErrorCode(code)
 	}
 	return ErrProtocolMismatch
+}
+
+func canonicalRuntimeErrorMessage(code ErrorCode, message string, details map[string]any) string {
+	if code != ErrCallerSignerUnavailable {
+		return message
+	}
+	callerURA := callerURAFromSignerErrorMessage(message)
+	if callerURA == "" {
+		callerURA = detailString(details, "caller_ura")
+	}
+	if strings.TrimSpace(callerURA) != "" {
+		return fmt.Sprintf(
+			"CALLER_SIGNER_UNAVAILABLE: remote invocation requires a caller signer for `%s`; load or provision that identity in the local key service",
+			strings.TrimSpace(callerURA),
+		)
+	}
+	return "CALLER_SIGNER_UNAVAILABLE: remote invocation requires a caller signer; load or provision that identity in the local key service"
+}
+
+func callerURAFromSignerErrorMessage(message string) string {
+	_, tail, ok := strings.Cut(message, "for `")
+	if !ok {
+		return ""
+	}
+	callerURA, _, ok := strings.Cut(tail, "`")
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(callerURA)
 }
 
 func isCanonicalExtensionErrorCode(code string) bool {

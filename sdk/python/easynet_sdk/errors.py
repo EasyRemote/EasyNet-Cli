@@ -167,8 +167,10 @@ class SDKError(Exception):
         if not isinstance(details, dict):
             raise _invalid_runtime_error("details must be an object")
 
+        normalized_code = normalize_error_code(code)
+        message = _canonical_runtime_error_message(normalized_code, message, details)
         return cls(
-            code=normalize_error_code(code),
+            code=normalized_code,
             stage=stage,
             retry=retry,
             retryable=retryable_for_hint(retry),
@@ -287,6 +289,38 @@ def canonical_failure_code(code: str | None = None) -> RuntimeFailureCode:
                 return code
             return ErrorCode.PROTOCOL_MISMATCH
     return ErrorCode.PROTOCOL_MISMATCH
+
+
+def _canonical_runtime_error_message(
+    code: ErrorCode, message: str, details: Mapping[str, object]
+) -> str:
+    if code != ErrorCode.CALLER_SIGNER_UNAVAILABLE:
+        return message
+    caller_ura = _caller_ura_from_signer_error_message(message) or _detail_string(
+        details, "caller_ura"
+    )
+    if caller_ura.strip():
+        return (
+            "CALLER_SIGNER_UNAVAILABLE: remote invocation requires a caller signer "
+            f"for `{caller_ura.strip()}`; load or provision that identity in the "
+            "local key service"
+        )
+    return (
+        "CALLER_SIGNER_UNAVAILABLE: remote invocation requires a caller signer; "
+        "load or provision that identity in the local key service"
+    )
+
+
+def _caller_ura_from_signer_error_message(message: str) -> str:
+    marker = "for `"
+    marker_index = message.find(marker)
+    if marker_index < 0:
+        return ""
+    tail = message[marker_index + len(marker) :]
+    end_index = tail.find("`")
+    if end_index < 0:
+        return ""
+    return tail[:end_index].strip()
 
 
 def canonical_terminal_state_code(state: str) -> ErrorCode:
