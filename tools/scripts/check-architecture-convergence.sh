@@ -904,7 +904,10 @@ if ffi_invocation.exists():
     production = text.split("\n#[cfg(all(test, feature = \"axon-pb\"))]\nmod tests", 1)[0]
     required_ffi_tuple_gate_tokens = (
         "fn validate_public_invocation_tuple(",
-        "validate_public_invocation_tuple(&caller_ura, &callee_ura, &subject_ura, &metadata)?",
+        "validate_public_invocation_tuple(",
+        "&descriptor_ref,",
+        "validate_public_invocation_descriptor_ref(descriptor_ref)?",
+        "ReceiptHistoryReadDescriptor",
         "project_invocation_authority_metadata_shape(metadata)",
         "session_authority_admits_subject(&payload, subject_ura)",
         "AuthoritySubjectMismatch",
@@ -920,7 +923,9 @@ if ffi_invocation.exists():
             )
     for test_name in (
         "parse_invocation_json_rejects_all_zero_subject_before_daemon_io",
+        "parse_invocation_json_rejects_receipt_history_descriptor_before_daemon_io",
         "parse_invocation_json_rejects_session_authority_subject_mismatch_before_daemon_io",
+        "builder_rejects_receipt_history_descriptor_before_daemon_io",
     ):
         if test_name not in raw_text:
             add(

@@ -187,22 +187,6 @@
     },
     {
       "language": "go",
-      "case_id": "backend/hub_route_family_coverage",
-      "selector": "TestConformanceBackendHubRouteFamilyCoverage",
-      "evidence": [
-        "sdk/go/conformance_test.go"
-      ]
-    },
-    {
-      "language": "go",
-      "case_id": "backend/import_ban",
-      "selector": "TestConformanceBackendSDKOnlyImportBan",
-      "evidence": [
-        "sdk/go/conformance_test.go"
-      ]
-    },
-    {
-      "language": "go",
       "case_id": "bidi/cancel_request",
       "selector": "TestCABIRuntimeProviderRequestsBidiCancelBeforeCanonicalTerminal",
       "evidence": [

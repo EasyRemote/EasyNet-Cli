@@ -1240,11 +1240,16 @@ class _CABIStreamTransport:
     def close(self) -> None:
         if self._terminal_action_done:
             return
-        self.owner.lib.invocation_stream_close(
-            self.owner._handle_if_open(), self.stream_id
-        )
-        self._terminal_action_done = True
-        self.owner._remove_stream(self.stream_id, self.callback_token)
+        try:
+            self.owner.lib.invocation_stream_close(
+                self.owner._handle_if_open(), self.stream_id
+            )
+        except SDKError as exc:
+            if exc.code != ErrorCode.INVALID_HANDLE:
+                raise
+        finally:
+            self._terminal_action_done = True
+            self.owner._remove_stream(self.stream_id, self.callback_token)
 
     def _allocate_sequence(self, observed: int | None) -> int:
         if observed is not None and observed >= self._next_sequence:
@@ -1299,9 +1304,14 @@ class _CABIBidiTransport:
     def close(self) -> None:
         if self._terminal_action_done:
             return
-        self.owner.lib.invocation_bidi_close(self.owner._handle_if_open(), self.bidi_id)
-        self._terminal_action_done = True
-        self.owner._remove_bidi(self.bidi_id, self.callback_token)
+        try:
+            self.owner.lib.invocation_bidi_close(self.owner._handle_if_open(), self.bidi_id)
+        except SDKError as exc:
+            if exc.code != ErrorCode.INVALID_HANDLE:
+                raise
+        finally:
+            self._terminal_action_done = True
+            self.owner._remove_bidi(self.bidi_id, self.callback_token)
 
     def cancel(self, reason: str) -> bytes:
         if not self._terminal_action_done and not self._cancel_sent:

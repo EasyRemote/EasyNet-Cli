@@ -158,8 +158,8 @@
           "ref": "sdk/conformance/cases/stream-order-terminal.yaml"
         },
         {
-          "kind": "sdk_conformance_case",
-          "ref": "sdk/conformance/cases/backend-sdk-only-import-ban.yaml"
+          "kind": "static_gate",
+          "ref": "tools/scripts/check-backend-sdk-only-boundary.sh"
         }
       ],
       "sdk_primitives": [

@@ -115,7 +115,7 @@ from easynet_sdk import (
     RuntimeHandleEventProvider,
     RuntimeLifecycle,
 )
-from easynet_sdk._cabi import CABIRuntimeLifecycleTransport, CLILibrary
+from easynet_sdk._cabi import CABIRuntimeLifecycleTransport, RuntimeCABILibrary
 from easynet_sdk.errors import SDKError
 from easynet_sdk.providers.runtime.lifecycle import (
     RuntimeHostMode,
@@ -210,7 +210,7 @@ os.environ["HOME"] = smoke_home
 os.environ["EASYNET_REALM_TRUST_PATH"] = trust_path
 os.environ["EASYNET_PAGES_PORT"] = str(19000 + (os.getpid() % 1000))
 
-transport = CABIRuntimeLifecycleTransport(CLILibrary.load(os.environ["LIB_PATH"]))
+transport = CABIRuntimeLifecycleTransport(RuntimeCABILibrary.load(os.environ["LIB_PATH"]))
 control = RuntimeLifecycle(transport)
 handle = None
 runtime = None
@@ -243,7 +243,8 @@ try:
     assert unary.ok is True, unary
     assert unary.terminal_state == "Completed", unary
     assert unary.output_json["status"] == "healthy", unary.output_json
-    assert unary.output_json["echo"]["smoke"] == "python-sdk", unary.output_json
+    assert unary.output_json["components"]["local_runtime"] == "healthy", unary.output_json
+    assert "echo" not in unary.output_json, unary.output_json
     print("[python-sdk-live-smoke] unary RuntimeClient.invoke OK")
 
     try:

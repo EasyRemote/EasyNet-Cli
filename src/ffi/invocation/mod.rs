@@ -5081,7 +5081,13 @@ impl InvocationJson {
         )?;
         let (args, content_type) = parse_arguments(obj)?;
         let metadata = parse_metadata(obj)?;
-        validate_public_invocation_tuple(&caller_ura, &callee_ura, &subject_ura, &metadata)?;
+        validate_public_invocation_tuple(
+            &caller_ura,
+            &callee_ura,
+            &descriptor_ref,
+            &subject_ura,
+            &metadata,
+        )?;
         let caller_signature = parse_caller_signature(obj)?;
         let bidi_streams = parse_bidi_streams(obj)?;
         let timeout_seconds = parse_timeout_seconds(obj)?;
@@ -5159,6 +5165,12 @@ enum InvocationJsonError {
     InvalidString(&'static str),
     #[error("field `{field}` must be a canonical URA: {reason}")]
     InvalidUra { field: &'static str, reason: String },
+    #[error("descriptor_ref is not a public invocation descriptor: {0}")]
+    InvalidDescriptorRef(String),
+    #[error(
+        "receipt history ability `{0}` is not a public invocation action; use the canonical invocation history read path"
+    )]
+    ReceiptHistoryReadDescriptor(String),
     #[error("field `{0}` must not contain the all-zero principal placeholder")]
     AllZeroPrincipal(&'static str),
     #[error("authority metadata is invalid: {0}")]
@@ -5352,8 +5364,14 @@ impl InvocationBuilderState {
             .args
             .clone()
             .ok_or_else(|| missing_builder_field("args or arguments_base64"))?;
-        validate_public_invocation_tuple(&caller_ura, &callee_ura, &subject_ura, &self.metadata)
-            .map_err(|error| crate::daemon::DaemonError::InvalidInvocation(error.to_string()))?;
+        validate_public_invocation_tuple(
+            &caller_ura,
+            &callee_ura,
+            &descriptor_ref,
+            &subject_ura,
+            &self.metadata,
+        )
+        .map_err(|error| crate::daemon::DaemonError::InvalidInvocation(error.to_string()))?;
 
         let derivation_policy =
             axon_sdk::invocation::InvocationDerivationPolicy::try_explicit_from_wire_causal_context(
@@ -5818,13 +5836,30 @@ fn parse_metadata(
 fn validate_public_invocation_tuple(
     caller_ura: &str,
     callee_ura: &str,
+    descriptor_ref: &str,
     subject_ura: &str,
     metadata: &std::collections::HashMap<String, String>,
 ) -> Result<(), InvocationJsonError> {
     validate_public_tuple_ura("caller_ura", caller_ura)?;
     validate_public_tuple_ura("callee_ura", callee_ura)?;
     validate_public_tuple_ura("subject_ura", subject_ura)?;
+    validate_public_invocation_descriptor_ref(descriptor_ref)?;
     validate_public_authority_binding(caller_ura, callee_ura, subject_ura, metadata)
+}
+
+#[cfg(feature = "axon-pb")]
+fn validate_public_invocation_descriptor_ref(
+    descriptor_ref: &str,
+) -> Result<(), InvocationJsonError> {
+    let public_ability =
+        crate::daemon::ability::public_route_ability_from_descriptor_ref(descriptor_ref)
+            .map_err(|error| InvocationJsonError::InvalidDescriptorRef(error.to_string()))?;
+    if crate::daemon::ability::names::governance::is_invocation_history_read(&public_ability) {
+        return Err(InvocationJsonError::ReceiptHistoryReadDescriptor(
+            public_ability,
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(feature = "axon-pb")]
@@ -6323,6 +6358,7 @@ fn explicit_terminal_phase(state: &str) -> Option<InvocationHandlePhase> {
 fn receipt_summary_dto_json(receipt: crate::daemon::ReceiptSummary) -> serde_json::Value {
     serde_json::json!({
         "verification": receipt.verification,
+        "receipt_ura": receipt.receipt_ura,
         "index": receipt.index,
         "invocation_id": receipt.invocation_id,
         "receipt_type": receipt.receipt_type,
@@ -6916,6 +6952,36 @@ mod tests {
     }
 
     #[test]
+    fn parse_invocation_json_rejects_receipt_history_descriptor_before_daemon_io() {
+        let callee_ura = "easynet:///r/acme/device/dev-a";
+        let history_descriptor_ref = format!(
+            "{}@1.0.0#{}!read",
+            crate::core::ura::owner_ability_ura(
+                callee_ura,
+                crate::daemon::ability::names::governance::INVOCATION_HISTORY_LIST
+            )
+            .expect("history ability URA"),
+            "aa".repeat(32)
+        );
+
+        let err = InvocationJson::parse(&canonical_invocation_json(serde_json::json!({
+            "descriptor_ref": history_descriptor_ref,
+            "subject_ura": "easynet:///r/acme/resource/user.alice/runtime-state/read"
+        })))
+        .expect_err("receipt history must not enter generic public invocation ingress");
+
+        assert!(
+            matches!(&err, InvocationJsonError::ReceiptHistoryReadDescriptor(name) if name == crate::daemon::ability::names::governance::INVOCATION_HISTORY_LIST),
+            "unexpected history descriptor rejection: {err}"
+        );
+        assert!(
+            err.to_string()
+                .contains("canonical invocation history read path"),
+            "error should direct callers to the canonical read path: {err}"
+        );
+    }
+
+    #[test]
     fn parse_invocation_json_rejects_session_authority_subject_mismatch_before_daemon_io() {
         let session_authority = signed_authority_metadata_value(serde_json::json!({
             "issuer_ura": "easynet:///r/acme/device/dev-a",
@@ -7399,6 +7465,12 @@ mod tests {
             .is_some_and(|value| !value.is_empty()));
         assert_eq!(json["admission_receipt"]["index"], admission_index);
         assert_eq!(json["terminal_receipt"]["index"], terminal_index);
+        assert!(json["admission_receipt"]["receipt_ura"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty()));
+        assert!(json["terminal_receipt"]["receipt_ura"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty()));
         assert!(
             json.get("receipt").is_none(),
             "unary result JSON must expose terminal_receipt, not the retired receipt alias"
@@ -7661,6 +7733,44 @@ mod tests {
         assert_eq!(second_code, ERR_INVALID_HANDLE);
         assert!(second_ptr.is_null());
         assert_typed_last_error("INVALID_HANDLE", ERR_INVALID_HANDLE, "builder handle");
+    }
+
+    #[test]
+    fn builder_rejects_receipt_history_descriptor_before_daemon_io() {
+        let builder_id = new_builder_handle();
+        set_complete_builder(builder_id);
+        let history_descriptor_ref = CString::new(format!(
+            "{}@1.0.0#{}!read",
+            crate::core::ura::owner_ability_ura(
+                "easynet:///r/acme/device/dev-a",
+                crate::daemon::ability::names::governance::INVOCATION_HISTORY_LIST
+            )
+            .expect("history ability URA"),
+            "aa".repeat(32)
+        ))
+        .unwrap();
+        assert_eq!(
+            unsafe {
+                runtime_invocation_builder_set_descriptor_ref(
+                    builder_id,
+                    history_descriptor_ref.as_ptr(),
+                )
+            },
+            RUNTIME_OK
+        );
+
+        let mut out: *mut c_char = std::ptr::dangling_mut();
+        let code = unsafe { runtime_invocation_builder_build(builder_id, &mut out) };
+
+        assert_eq!(code, ERR_INVALID_ARG);
+        assert!(out.is_null());
+        assert!(get_builder(builder_id).is_some());
+        assert_typed_last_error(
+            "INVALID_ARGUMENT",
+            ERR_INVALID_ARG,
+            "canonical invocation history read path",
+        );
+        assert_eq!(runtime_invocation_builder_free(builder_id), RUNTIME_OK);
     }
 
     #[test]

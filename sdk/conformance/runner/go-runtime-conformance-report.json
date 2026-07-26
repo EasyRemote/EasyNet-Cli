@@ -41,7 +41,7 @@
         {
           "kind": "go_test",
           "ref_path": "sdk/go/conformance_test.go",
-          "sha256": "a435f5c596b0bbb14bc6c2725b866c2f7e121330ef4831191aad6b8915358905"
+          "sha256": "25398659cc3e903eee0915b2f968fa3f307729fff61184778dd804f2ef032514"
         }
       ],
       "profile": "conformance"
@@ -89,28 +89,6 @@
         }
       ],
       "profile": "runtime_core"
-    },
-    {
-      "case_id": "backend/hub_route_family_coverage",
-      "evidence": [
-        {
-          "kind": "go_test",
-          "ref_path": "sdk/go/conformance_test.go",
-          "sha256": "a435f5c596b0bbb14bc6c2725b866c2f7e121330ef4831191aad6b8915358905"
-        }
-      ],
-      "profile": "backend_cutover"
-    },
-    {
-      "case_id": "backend/import_ban",
-      "evidence": [
-        {
-          "kind": "go_test",
-          "ref_path": "sdk/go/conformance_test.go",
-          "sha256": "a435f5c596b0bbb14bc6c2725b866c2f7e121330ef4831191aad6b8915358905"
-        }
-      ],
-      "profile": "backend_cutover"
     },
     {
       "case_id": "bidi/close_send_not_cancel",
@@ -371,7 +349,7 @@
         {
           "kind": "go_test",
           "ref_path": "sdk/go/conformance_test.go",
-          "sha256": "a435f5c596b0bbb14bc6c2725b866c2f7e121330ef4831191aad6b8915358905"
+          "sha256": "25398659cc3e903eee0915b2f968fa3f307729fff61184778dd804f2ef032514"
         }
       ],
       "profile": "sdk_parity"

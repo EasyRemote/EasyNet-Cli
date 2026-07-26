@@ -74,6 +74,31 @@ python_runtime_control_product_state_dir_violations() {
   rg -n '(\.easynet|\.easy["'\''][[:space:]]*\+[[:space:]]*["'\'']net|easy["'\''][[:space:]]*\+[[:space:]]*["'\'']net|EASYNET_[A-Z0-9_]*CONTROL)' "$control"
 }
 
+sdk_conformance_backend_case_violations() {
+  local scan_root="${1:-$ROOT}"
+  local output
+  output="$(
+    {
+      if [[ -d "$scan_root/sdk/conformance/cases" ]]; then
+        find "$scan_root/sdk/conformance/cases" -maxdepth 1 -type f -name '*.yaml' -print0 \
+          | xargs -0 rg -n '(^id:[[:space:]]*backend/|^profile:[[:space:]]*backend_cutover|backend_cutover)' \
+          || true
+      fi
+      for file in \
+        "$scan_root/sdk/conformance/canonical-public-api.json" \
+        "$scan_root/sdk/conformance/sdk-parity-matrix.json" \
+        "$scan_root/sdk/conformance/runner/go-runtime-conformance-report.json" \
+        "$scan_root/sdk/conformance/runner/execution-manifest.json"
+      do
+        [[ -f "$file" ]] || continue
+        rg -n '("backend/|backend_cutover)' "$file" || true
+      done
+    } 2>/dev/null
+  )"
+  [[ -z "$output" ]] && return 1
+  printf '%s\n' "$output"
+}
+
 python_runtime_admin_session_projection_violations() {
   local runtime_admin="${1:-sdk/python/easynet_sdk/runtime_admin.py}"
   [[ -f "$runtime_admin" ]] || return 0
@@ -431,6 +456,16 @@ PY
   fi
   grep -Fq 'unclassified_package_roots:go' "$tmp/unclassified-root.out" \
     || fail "self-test unclassified Go package failure was not specific"
+  mkdir -p "$tmp/sdk/conformance/cases" "$tmp/sdk/conformance/runner"
+  printf 'id: backend/import_ban\nprofile: backend_cutover\n' \
+    >"$tmp/sdk/conformance/cases/backend-negative.yaml"
+  printf '{"case_ids":["backend/import_ban"]}\n' \
+    >"$tmp/sdk/conformance/canonical-public-api.json"
+  if ! sdk_conformance_backend_case_violations "$tmp" >/dev/null; then
+    fail "self-test failed to detect backend case ownership inside SDK conformance"
+  fi
+  rm -f "$tmp/sdk/conformance/cases/backend-negative.yaml" \
+    "$tmp/sdk/conformance/canonical-public-api.json"
   echo "sdk-product-neutrality self-test: OK"
   exit 0
 fi
@@ -689,6 +724,10 @@ if find sdk/conformance/cases -maxdepth 1 -type f \( \
     -name 'wrapper-*' -o -name 'runtime-companion-*' \
   \) -print >&2
   fail "product conformance cases remain in the runtime SDK"
+fi
+
+if sdk_conformance_backend_case_violations "$ROOT"; then
+  fail "backend/product migration gate leaked into SDK conformance ownership"
 fi
 
 if jq -e '.capability_ids[] | select(. == "mission" or . == "admin_gateway" or . == "directory_identity" or . == "publication" or . == "host_binding" or . == "events" or . == "surface" or . == "compatibility" or . == "wrappers" or . == "runtime_companion_control")' sdk/conformance/sdk-parity-matrix.json >/dev/null; then

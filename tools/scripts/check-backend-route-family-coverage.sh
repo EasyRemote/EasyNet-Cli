@@ -3,7 +3,7 @@ set -euo pipefail
 
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SELF_DIR/../.." && pwd)"
-DEFAULT_MANIFEST="$REPO_ROOT/sdk/conformance/backend-route-family-coverage.json"
+DEFAULT_MANIFEST="$REPO_ROOT/tools/sdk-product-boundary/backend-route-family-coverage.json"
 
 run_validator() {
   local manifest="$1"

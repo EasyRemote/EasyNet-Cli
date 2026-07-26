@@ -651,6 +651,7 @@ fn invocation_state_name(state: i32) -> String {
 #[derive(Debug, Clone, Eq, PartialEq, serde::Serialize)]
 pub struct ReceiptSummary {
     pub verification: ReceiptVerification,
+    pub receipt_ura: String,
     pub index: u64,
     pub invocation_id: String,
     pub receipt_type: String,
@@ -692,14 +693,19 @@ impl ReceiptSummary {
     pub(crate) fn from_signed(
         receipt: &axon_sdk::invocation::SignedInvocationReceipt,
     ) -> Result<Self> {
+        let receipt_ura = receipt_summary_ura(receipt)?;
         let wire = axon_sdk::invocation::wire::receipt_to_wire(receipt)
             .map_err(|error| DaemonError::InvalidInvocation(error.to_string()))?;
-        Ok(Self::from_verified_wire(&wire))
+        Ok(Self::from_verified_wire(&wire, receipt_ura))
     }
 
-    fn from_verified_wire(receipt: &axon_sdk::pb::axon::v1::InvocationReceipt) -> Self {
+    fn from_verified_wire(
+        receipt: &axon_sdk::pb::axon::v1::InvocationReceipt,
+        receipt_ura: String,
+    ) -> Self {
         Self {
             verification: ReceiptVerification::Verified,
+            receipt_ura,
             index: receipt.index,
             invocation_id: receipt.invocation_id.clone(),
             receipt_type: receipt.receipt_type.clone(),
@@ -751,6 +757,29 @@ impl ReceiptSummary {
                 .collect(),
         }
     }
+}
+
+fn receipt_summary_ura(receipt: &axon_sdk::invocation::SignedInvocationReceipt) -> Result<String> {
+    let binding = receipt.axiom_binding();
+    axon_sdk::ura::invocation_record_ura_for_binding(
+        &binding.subject.ura,
+        &binding.callee.ura,
+        &binding.caller.ura,
+        receipt.invocation_id(),
+    )
+    .map(|invocation_ura| {
+        format!(
+            "{}/receipt/{}",
+            invocation_ura.trim_end_matches('/'),
+            receipt.index()
+        )
+    })
+    .ok_or_else(|| {
+        DaemonError::InvalidInvocation(format!(
+            "verified receipt has no canonical invocation URA anchor: invocation_id={}",
+            receipt.invocation_id()
+        ))
+    })
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, serde::Serialize)]

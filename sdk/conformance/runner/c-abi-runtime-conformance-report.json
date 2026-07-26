@@ -8,7 +8,7 @@
         {
           "kind": "c_abi_test",
           "ref_path": "src/ffi/invocation/mod.rs",
-          "sha256": "dd384952d01a3c852109dbd15000a30c731ef724c24c11d66434d28c061cabb5"
+          "sha256": "f268bc1e8e62702ae69317964d7609e424c76a438c01cfd98d9cb33ea6f4b495"
         }
       ],
       "profile": "runtime_core"
@@ -19,7 +19,7 @@
         {
           "kind": "c_abi_test",
           "ref_path": "src/ffi/invocation/mod.rs",
-          "sha256": "dd384952d01a3c852109dbd15000a30c731ef724c24c11d66434d28c061cabb5"
+          "sha256": "f268bc1e8e62702ae69317964d7609e424c76a438c01cfd98d9cb33ea6f4b495"
         }
       ],
       "profile": "runtime_core"
@@ -41,7 +41,7 @@
         {
           "kind": "c_abi_test",
           "ref_path": "src/ffi/invocation/mod.rs",
-          "sha256": "dd384952d01a3c852109dbd15000a30c731ef724c24c11d66434d28c061cabb5"
+          "sha256": "f268bc1e8e62702ae69317964d7609e424c76a438c01cfd98d9cb33ea6f4b495"
         }
       ],
       "profile": "runtime_core"
@@ -74,7 +74,7 @@
         {
           "kind": "c_abi_test",
           "ref_path": "src/ffi/invocation/mod.rs",
-          "sha256": "dd384952d01a3c852109dbd15000a30c731ef724c24c11d66434d28c061cabb5"
+          "sha256": "f268bc1e8e62702ae69317964d7609e424c76a438c01cfd98d9cb33ea6f4b495"
         }
       ],
       "profile": "health"
@@ -85,7 +85,7 @@
         {
           "kind": "c_abi_test",
           "ref_path": "src/ffi/invocation/mod.rs",
-          "sha256": "dd384952d01a3c852109dbd15000a30c731ef724c24c11d66434d28c061cabb5"
+          "sha256": "f268bc1e8e62702ae69317964d7609e424c76a438c01cfd98d9cb33ea6f4b495"
         }
       ],
       "profile": "runtime_core"
@@ -96,7 +96,7 @@
         {
           "kind": "c_abi_test",
           "ref_path": "src/ffi/invocation/mod.rs",
-          "sha256": "dd384952d01a3c852109dbd15000a30c731ef724c24c11d66434d28c061cabb5"
+          "sha256": "f268bc1e8e62702ae69317964d7609e424c76a438c01cfd98d9cb33ea6f4b495"
         }
       ],
       "profile": "runtime_core"
@@ -107,7 +107,7 @@
         {
           "kind": "c_abi_test",
           "ref_path": "src/ffi/invocation/mod.rs",
-          "sha256": "dd384952d01a3c852109dbd15000a30c731ef724c24c11d66434d28c061cabb5"
+          "sha256": "f268bc1e8e62702ae69317964d7609e424c76a438c01cfd98d9cb33ea6f4b495"
         }
       ],
       "profile": "runtime_core"
@@ -118,7 +118,7 @@
         {
           "kind": "c_abi_test",
           "ref_path": "src/ffi/invocation/mod.rs",
-          "sha256": "dd384952d01a3c852109dbd15000a30c731ef724c24c11d66434d28c061cabb5"
+          "sha256": "f268bc1e8e62702ae69317964d7609e424c76a438c01cfd98d9cb33ea6f4b495"
         }
       ],
       "profile": "runtime_core"
@@ -129,7 +129,7 @@
         {
           "kind": "c_abi_test",
           "ref_path": "src/ffi/invocation/mod.rs",
-          "sha256": "dd384952d01a3c852109dbd15000a30c731ef724c24c11d66434d28c061cabb5"
+          "sha256": "f268bc1e8e62702ae69317964d7609e424c76a438c01cfd98d9cb33ea6f4b495"
         }
       ],
       "profile": "runtime_core"
@@ -140,7 +140,7 @@
         {
           "kind": "c_abi_test",
           "ref_path": "src/ffi/invocation/mod.rs",
-          "sha256": "dd384952d01a3c852109dbd15000a30c731ef724c24c11d66434d28c061cabb5"
+          "sha256": "f268bc1e8e62702ae69317964d7609e424c76a438c01cfd98d9cb33ea6f4b495"
         }
       ],
       "profile": "runtime_core"
@@ -151,7 +151,7 @@
         {
           "kind": "c_abi_test",
           "ref_path": "src/ffi/invocation/mod.rs",
-          "sha256": "dd384952d01a3c852109dbd15000a30c731ef724c24c11d66434d28c061cabb5"
+          "sha256": "f268bc1e8e62702ae69317964d7609e424c76a438c01cfd98d9cb33ea6f4b495"
         }
       ],
       "profile": "runtime_core"
@@ -162,7 +162,7 @@
         {
           "kind": "c_abi_test",
           "ref_path": "src/ffi/invocation/mod.rs",
-          "sha256": "dd384952d01a3c852109dbd15000a30c731ef724c24c11d66434d28c061cabb5"
+          "sha256": "f268bc1e8e62702ae69317964d7609e424c76a438c01cfd98d9cb33ea6f4b495"
         }
       ],
       "profile": "conformance"
@@ -184,7 +184,7 @@
         {
           "kind": "c_abi_test",
           "ref_path": "src/ffi/invocation/mod.rs",
-          "sha256": "dd384952d01a3c852109dbd15000a30c731ef724c24c11d66434d28c061cabb5"
+          "sha256": "f268bc1e8e62702ae69317964d7609e424c76a438c01cfd98d9cb33ea6f4b495"
         }
       ],
       "profile": "runtime_core"

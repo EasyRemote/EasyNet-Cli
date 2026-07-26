@@ -22,14 +22,6 @@ func runRepositoryGate(t *testing.T, script string, args ...string) {
 	}
 }
 
-func TestConformanceBackendHubRouteFamilyCoverage(t *testing.T) {
-	runRepositoryGate(t, "check-backend-route-family-coverage.sh")
-}
-
-func TestConformanceBackendSDKOnlyImportBan(t *testing.T) {
-	runRepositoryGate(t, "check-backend-sdk-only-boundary.sh", "--self-test")
-}
-
 func TestConformanceSDKProductNeutrality(t *testing.T) {
 	runRepositoryGate(t, "check-sdk-product-neutrality.sh")
 }

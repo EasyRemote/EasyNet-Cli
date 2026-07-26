@@ -139,6 +139,7 @@ pub(crate) fn rpc_dispatch_outcome_response(
             )
         }
     };
+    let result_content_type = rpc_result_content_type(&payload_bytes).to_string();
     (
         Ok(Response::new(InvokeResponse {
             header: invocation_id.map(|request_id| ResponseHeader {
@@ -147,7 +148,7 @@ pub(crate) fn rpc_dispatch_outcome_response(
                 ..ResponseHeader::default()
             }),
             result: payload_bytes,
-            result_content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
+            result_content_type,
             state: state.to_wire_i32(),
             error: error
                 .as_ref()
@@ -158,6 +159,14 @@ pub(crate) fn rpc_dispatch_outcome_response(
         })),
         axon_started,
     )
+}
+
+fn rpc_result_content_type(payload: &[u8]) -> &'static str {
+    if payload.is_empty() {
+        "application/octet-stream"
+    } else {
+        FEDERATION_RESULT_CONTENT_TYPE
+    }
 }
 
 #[cfg(test)]
@@ -187,6 +196,7 @@ mod rpc_dispatch_outcome_response_tests {
         let response = response.into_inner();
         assert!(!axon_started);
         assert_eq!(response.state, InvocationState::Failed.to_wire_i32());
+        assert_eq!(response.result_content_type, "application/octet-stream");
         assert!(response.admission_receipt.is_none());
         assert!(response.terminal_receipt.is_none());
         let error = response.error.expect("typed rejection");
