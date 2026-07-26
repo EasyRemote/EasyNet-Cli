@@ -161,7 +161,7 @@ impl DurableManifestBatch {
                 }
                 if !overwrite {
                     let retain = matches!(conflict_policy, ConflictPolicy::RetainSameBinding)
-                        && existing_binding_matches(prior, &manifest);
+                        && existing_binding_matches(prior, &manifest, &path)?;
                     if retain {
                         skipped.push(manifest.name().to_string());
                         continue;
@@ -483,12 +483,24 @@ fn parse_manifests(bodies: Vec<String>) -> anyhow::Result<Vec<AbilityManifest>> 
     Ok(manifests)
 }
 
-fn existing_binding_matches(prior: &[u8], proposed: &AbilityManifest) -> bool {
-    std::str::from_utf8(prior)
-        .ok()
-        .and_then(|body| AbilityManifest::from_toml_str(body).ok())
-        .and_then(|manifest| manifest.exec().cloned())
-        == proposed.exec().cloned()
+fn existing_binding_matches(
+    prior: &[u8],
+    proposed: &AbilityManifest,
+    path: &std::path::Path,
+) -> anyhow::Result<bool> {
+    let body = std::str::from_utf8(prior).map_err(|error| {
+        anyhow::anyhow!(
+            "agent.ability.put: existing manifest {} is not UTF-8: {error}",
+            path.display()
+        )
+    })?;
+    let manifest = AbilityManifest::from_toml_str(body).map_err(|error| {
+        anyhow::anyhow!(
+            "agent.ability.put: parse existing manifest {} for binding comparison: {error:#}",
+            path.display()
+        )
+    })?;
+    Ok(manifest.exec().cloned() == proposed.exec().cloned())
 }
 
 fn authorize_local_authoring(envelope: &EnvelopeContext) -> anyhow::Result<()> {
@@ -775,5 +787,38 @@ mod tests {
         assert!(batch.written_names().is_empty());
         batch.apply().unwrap();
         assert_eq!(std::fs::read_to_string(path).unwrap(), original);
+    }
+
+    #[test]
+    fn retain_same_binding_rejects_corrupt_existing_manifest() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let directory = AgentDirectory::create(
+            &Location::Global {
+                name: "authoring-corrupt-retain".to_string(),
+            },
+            AgentSpec::new("authoring-corrupt-retain", RuntimeKind::ClaudeCode),
+        )
+        .unwrap();
+        let path = directory
+            .abilities_dir()
+            .join(format!("echo{ABILITY_MANIFEST_SUFFIX}"));
+        config::atomic_write(&path, b"this is not valid toml @@@").unwrap();
+
+        let error = DurableManifestBatch::prepare(
+            &directory,
+            vec![shell_manifest("echo", "same-command")],
+            false,
+            ConflictPolicy::RetainSameBinding,
+        )
+        .expect_err("corrupt prior manifest must fail closed before retain decision");
+        let message = error.to_string();
+        assert!(
+            message.contains("parse existing manifest"),
+            "unexpected error: {message}"
+        );
+        assert!(
+            message.contains(&path.display().to_string()),
+            "error must identify corrupt manifest path: {message}"
+        );
     }
 }

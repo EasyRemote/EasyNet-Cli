@@ -1137,7 +1137,9 @@ fn existing_mcp_binding_extracts_server_and_tool() {
         cost: None,
     };
     let body = mcp_manifest_for(&plan).unwrap().to_toml_string().unwrap();
-    let binding = existing_mcp_binding(&body).expect("manifest declares an mcp binding");
+    let binding = existing_mcp_binding(&body)
+        .expect("manifest must parse")
+        .expect("manifest declares an mcp binding");
     assert_eq!(binding, ("echo".to_string(), "ping".to_string()));
 }
 
@@ -1154,15 +1156,20 @@ description = "Operator-authored manifest."
 [input_schema]
 type = "object"
 "#;
-    assert_eq!(existing_mcp_binding(manifest_toml), None);
+    assert_eq!(
+        existing_mcp_binding(manifest_toml).expect("valid non-MCP manifest must parse"),
+        None
+    );
 }
 
 #[test]
-fn existing_mcp_binding_returns_none_for_malformed_toml() {
-    // Don't panic on garbage on disk; the caller will then fall
-    // through to the "refuse to overwrite without --overwrite"
-    // branch, which is the safer disposition.
-    assert_eq!(existing_mcp_binding("this is not valid toml @@@"), None);
+fn existing_mcp_binding_rejects_malformed_toml() {
+    let error = existing_mcp_binding("this is not valid toml @@@")
+        .expect_err("malformed existing manifest must fail closed");
+    assert!(
+        error.to_string().contains("failed to parse ability.toml"),
+        "unexpected error: {error}"
+    );
 }
 
 #[test]

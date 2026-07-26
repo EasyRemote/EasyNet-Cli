@@ -11164,6 +11164,69 @@ if bridge_lib_resolver.exists():
             )
 
 
+agent_mcp_authoring_sources = (
+    cli_root / "src/cli/commands/agent/mcp.rs",
+    cli_root / "src/daemon/ability/builtins/agents/authoring.rs",
+)
+if all(path.exists() for path in agent_mcp_authoring_sources):
+    cli_mcp_text = source(agent_mcp_authoring_sources[0])
+    daemon_authoring_text = source(agent_mcp_authoring_sources[1])
+    raw_sources = [
+        path.read_text(encoding="utf-8", errors="replace")
+        for path in agent_mcp_authoring_sources
+    ]
+    for path, text, token, detail in (
+        (
+            agent_mcp_authoring_sources[0],
+            cli_mcp_text,
+            "pub(super) fn existing_mcp_binding(body: &str) -> anyhow::Result<Option<(String, String)>>",
+            "CLI MCP binding projection must distinguish non-MCP manifests from corrupt manifests",
+        ),
+        (
+            agent_mcp_authoring_sources[0],
+            cli_mcp_text,
+            "fn existing_mcp_binding_from_path(",
+            "CLI MCP dry-run must read existing manifests through a path-qualified fail-closed adapter",
+        ),
+        (
+            agent_mcp_authoring_sources[1],
+            daemon_authoring_text,
+            "fn existing_binding_matches(\n    prior: &[u8],\n    proposed: &AbilityManifest,\n    path: &std::path::Path,\n) -> anyhow::Result<bool>",
+            "daemon authoring retain-same-binding must fail closed on corrupt existing manifests",
+        ),
+    ):
+        if token not in text:
+            add(
+                "R95_AGENT_MCP_BINDING_FAIL_CLOSED",
+                path,
+                1,
+                detail,
+            )
+    for path, raw_text in zip(agent_mcp_authoring_sources, raw_sources):
+        for token, detail in (
+            (
+                "AbilityManifest::from_toml_str(body).ok()",
+                "ability manifest parse errors must not be erased while comparing existing bindings",
+            ),
+            (
+                "existing_mcp_binding(body: &str) -> Option",
+                "CLI MCP binding projection must not collapse parse errors into None",
+            ),
+            (
+                "std::fs::read_to_string(&path).ok()",
+                "CLI MCP dry-run must not erase existing manifest read errors",
+            ),
+        ):
+            offset = raw_text.find(token)
+            if offset != -1:
+                add(
+                    "R95_AGENT_MCP_BINDING_FAIL_CLOSED",
+                    path,
+                    line_number(raw_text, offset),
+                    detail,
+                )
+
+
 if violations:
     for violation in sorted(violations):
         print(

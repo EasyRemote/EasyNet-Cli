@@ -2,7 +2,7 @@
 // Split from cli/agent.rs (F-033 / T4.6); bodies are move-only.
 
 use serde_json::Value;
-use std::time::Duration;
+use std::{path::Path, time::Duration};
 
 use crate::daemon::execution::mission::directory::AgentDirectory;
 use crate::support::platform::output;
@@ -237,8 +237,7 @@ fn preview_mcp_additions(
             .join(format!("{}.ability.toml", manifest.name()));
 
         if path.exists() && !overwrite {
-            let existing = std::fs::read_to_string(&path).ok();
-            if existing.as_deref().and_then(existing_mcp_binding).as_ref()
+            if existing_mcp_binding_from_path(&path)?.as_ref()
                 == proposed_mcp_binding(manifest).as_ref()
             {
                 outcome.skipped += 1;
@@ -464,13 +463,25 @@ pub(super) fn mcp_manifest_for(
     Ok(manifest)
 }
 
-pub(super) fn existing_mcp_binding(body: &str) -> Option<(String, String)> {
+fn existing_mcp_binding_from_path(path: &Path) -> anyhow::Result<Option<(String, String)>> {
+    let body = std::fs::read_to_string(path).map_err(|error| {
+        anyhow::anyhow!("read existing ability manifest {}: {error}", path.display())
+    })?;
+    existing_mcp_binding(&body).map_err(|error| {
+        anyhow::anyhow!(
+            "parse existing ability manifest {} for MCP binding: {error:#}",
+            path.display()
+        )
+    })
+}
+
+pub(super) fn existing_mcp_binding(body: &str) -> anyhow::Result<Option<(String, String)>> {
     use crate::daemon::ability::manifest::AbilityExec;
-    let manifest = crate::daemon::ability::manifest::AbilityManifest::from_toml_str(body).ok()?;
-    match manifest.exec()? {
-        AbilityExec::Mcp(exec) => Some((exec.server.clone(), exec.tool.clone())),
+    let manifest = crate::daemon::ability::manifest::AbilityManifest::from_toml_str(body)?;
+    Ok(match manifest.exec() {
+        Some(AbilityExec::Mcp(exec)) => Some((exec.server.clone(), exec.tool.clone())),
         _ => None,
-    }
+    })
 }
 
 fn proposed_mcp_binding(
