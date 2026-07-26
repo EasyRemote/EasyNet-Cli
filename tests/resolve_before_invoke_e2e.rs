@@ -66,7 +66,7 @@ use tokio::net::UnixListener;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tokio_stream::wrappers::UnixListenerStream;
-use tonic::transport::{Channel, Endpoint, Server, Uri};
+use tonic::transport::{Channel, Endpoint, Server, Uri as GrpcEndpointLocator};
 use tonic::Request;
 
 const REALM: &str = "test-realm";
@@ -248,7 +248,7 @@ async fn connect(socket_path: &std::path::Path) -> Channel {
     let socket_path = socket_path.to_path_buf();
     Endpoint::try_from("http://[::]:50051")
         .expect("dummy endpoint")
-        .connect_with_connector(tower::service_fn(move |_: Uri| {
+        .connect_with_connector(tower::service_fn(move |_: GrpcEndpointLocator| {
             let path = socket_path.clone();
             async move {
                 let stream = tokio::net::UnixStream::connect(path).await?;

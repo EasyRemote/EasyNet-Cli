@@ -54,7 +54,7 @@ use serde_json::{json, Value};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::oneshot;
 use tokio_stream::wrappers::UnixListenerStream;
-use tonic::transport::{Channel, Endpoint, Server, Uri};
+use tonic::transport::{Channel, Endpoint, Server, Uri as GrpcEndpointLocator};
 
 pub const TESTBOT_ECHO_DESCRIPTOR_VERSION: &str = "2.3.0";
 
@@ -605,7 +605,7 @@ async fn connect_to_daemon(socket_path: &Path) -> Channel {
     let path = socket_path.to_path_buf();
     Endpoint::try_from("http://[::]:50051")
         .expect("valid endpoint")
-        .connect_with_connector(tower::service_fn(move |_: Uri| {
+        .connect_with_connector(tower::service_fn(move |_: GrpcEndpointLocator| {
             let path = path.clone();
             async move {
                 let stream = UnixStream::connect(path).await?;

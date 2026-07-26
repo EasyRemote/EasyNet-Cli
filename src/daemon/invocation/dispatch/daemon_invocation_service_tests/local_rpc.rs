@@ -739,7 +739,7 @@ async fn simple_uds_invocation_concurrency_probe() {
     use axon_sdk::pb::axon::v1::invocation_server::InvocationServer;
     use tokio::task::JoinSet;
     use tokio_stream::wrappers::UnixListenerStream;
-    use tonic::transport::{Endpoint, Server, Uri};
+    use tonic::transport::{Endpoint, Server, Uri as GrpcEndpointLocator};
 
     fn percentile(sorted: &[u128], pct: usize) -> u128 {
         if sorted.is_empty() {
@@ -801,7 +801,7 @@ async fn simple_uds_invocation_concurrency_probe() {
     let connector_path = socket_path.clone();
     let channel = Endpoint::try_from("http://[::]:50051")
         .expect("dummy endpoint")
-        .connect_with_connector(tower::service_fn(move |_: Uri| {
+        .connect_with_connector(tower::service_fn(move |_: GrpcEndpointLocator| {
             let path = connector_path.clone();
             async move {
                 let stream = tokio::net::UnixStream::connect(path).await?;

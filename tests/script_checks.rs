@@ -594,3 +594,10 @@ fn runtime_stop_lifecycle_boundary_script_holds() {
     // or pgrep process lifecycle transitions.
     run_bash_script("tests/scripts/test_check_runtime_stop_lifecycle_boundary.sh");
 }
+
+#[test]
+fn transport_locator_terminology_boundary_script_holds() {
+    // Pins transport-library locator names behind explicit aliases so transport
+    // vocabulary cannot leak back into runtime identity/addressing code.
+    run_bash_script("tests/scripts/test_check_transport_locator_terminology_boundary.sh");
+}
