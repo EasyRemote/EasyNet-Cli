@@ -12246,28 +12246,50 @@ PY
 check_ffi_descriptor_runtime_owner_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local ffi_invocation="$cli_root/src/ffi/invocation/mod.rs"
+  local descriptor_provider="$cli_root/src/daemon/axon_bridge/runtime_descriptor_provider.rs"
   [[ -f "$ffi_invocation" ]] || return 0
+  [[ -f "$descriptor_provider" ]] || fail "runtime descriptor provider source is missing: ${descriptor_provider#$cli_root/}"
 
-  "$PYTHON_BIN" - "$ffi_invocation" <<'PY'
+  "$PYTHON_BIN" - "$ffi_invocation" "$descriptor_provider" <<'PY'
 import re
 import sys
 from pathlib import Path
 
-path = Path(sys.argv[1])
-text = path.read_text(encoding="utf-8")
+ffi_path = Path(sys.argv[1])
+provider_path = Path(sys.argv[2])
+text = ffi_path.read_text(encoding="utf-8")
+provider = provider_path.read_text(encoding="utf-8")
 production = text.split("\nmod tests {", 1)[0].split("\n#[cfg(test)]", 1)[0]
+provider_production = provider.split("\n#[cfg(test)]", 1)[0]
+combined_production = production + "\n" + provider_production
+for retired_ffi_authority in (
+    "build_system_registry(",
+    "runtime_descriptor_catalog_entries(",
+    "runtime_system_descriptor_catalog_entries(",
+    "descriptor_catalog_entry_from_descriptor(",
+    "descriptor_catalog_resolution_from_entries(",
+    "descriptor_catalog_required_string(",
+    "dedupe_descriptor_catalog_entries(",
+    "descriptor_catalog_dedupe_required_string(",
+):
+    if retired_ffi_authority in production:
+        raise SystemExit(
+            f"ffi_descriptor_runtime_owner:ffi_retains_descriptor_authority:{retired_ffi_authority}"
+        )
+if "RuntimeDescriptorResolutionProvider::resolve_json" not in production:
+    raise SystemExit("ffi_descriptor_runtime_owner:ffi_not_delegating_to_runtime_provider")
 
 resolve = re.search(
-    r"fn runtime_resolve_descriptor_ref_json\([^)]*\)\s*->\s*Result<serde_json::Value,\s*DescriptorResolutionError>\s*\{(?P<body>.*?)\n\}\n\n#\[cfg\(feature = \"axon-pb\"\)\]\nfn runtime_system_descriptor_catalog_entries",
-    text,
+    r"fn runtime_resolve_descriptor_ref_json\((?P<signature>.*?)\)\s*->\s*Result<Value,\s*DescriptorResolutionError>\s*\{(?P<body>.*?)\n\}\n\nfn descriptor_ability_error",
+    provider,
     re.S,
 )
 if resolve is None:
-    raise SystemExit("ffi_descriptor_runtime_owner:resolve_function_missing")
+    raise SystemExit("ffi_descriptor_runtime_owner:provider_resolve_function_missing")
 resolve_body = resolve.group("body")
 if "runtime_owner_ura_from_session(session).ok()" in resolve_body:
     raise SystemExit("ffi_descriptor_runtime_owner:runtime_owner_error_collapsed")
-if ".map_err(DescriptorResolutionError::runtime_owner_unavailable)" not in resolve_body:
+if ".map_err(DescriptorResolutionError::runtime_owner_unavailable)" not in provider:
     raise SystemExit("ffi_descriptor_runtime_owner:runtime_owner_typed_error_mapping_missing")
 owner = re.search(
     r"fn runtime_owner_ura_from_session\([^)]*\)\s*->\s*std::result::Result<String,\s*String>\s*\{(?P<body>.*?)\n\}\n\n/// Binds unsigned native-runtime calls",
@@ -12302,15 +12324,15 @@ for retired in (
     "descriptor_catalog_entry_from_value",
     "runtime_meta_list_abilities",
 ):
-    if retired in production:
+    if retired in combined_production:
         raise SystemExit(f"ffi_descriptor_runtime_owner:retired_remote_probe_path:{retired}")
 catalog_entry = re.search(
-    r"fn descriptor_catalog_entry_from_descriptor\([^)]*\)\s*->\s*std::result::Result<serde_json::Value,\s*String>\s*\{(?P<body>.*?)\n\}\n\n#\[cfg\(feature = \"axon-pb\"\)\]\nfn descriptor_catalog_resolution_from_entries",
-    text,
+    r"fn descriptor_catalog_entry_from_descriptor\([^)]*\)\s*->\s*std::result::Result<Value,\s*String>\s*\{(?P<body>.*?)\n\}\n\n#\[derive\(Debug\)\]\nenum CatalogResolution",
+    provider,
     re.S,
 )
 if catalog_entry is None:
-    raise SystemExit("ffi_descriptor_runtime_owner:catalog_entry_function_missing")
+    raise SystemExit("ffi_descriptor_runtime_owner:provider_catalog_entry_function_missing")
 catalog_entry_body = catalog_entry.group("body")
 if "descriptor.descriptor_ref()" not in catalog_entry_body:
     raise SystemExit("ffi_descriptor_runtime_owner:catalog_entry_not_using_descriptor_owner")
@@ -12327,7 +12349,9 @@ if "owner_ability_ura(callee_ura, ability)" in resolve_body:
 if "derive ability URA for" in resolve_body:
     raise SystemExit("ffi_descriptor_runtime_owner:retired_local_ability_projection_error")
 if "descriptor_ref::ability_ura_for_wire(\n        callee_ura, ability," not in resolve_body:
-    raise SystemExit("ffi_descriptor_runtime_owner:callee_bound_ability_resolver_missing")
+    compact_resolve = re.sub(r"\s+", "", resolve_body)
+    if "descriptor_ref::ability_ura_for_wire(callee_ura,ability)" not in compact_resolve:
+        raise SystemExit("ffi_descriptor_runtime_owner:callee_bound_ability_resolver_missing")
 for required in (
     "fn validate_ability_descriptor_catalogue_subject(",
     "Self::AbilityDescriptor => validate_ability_descriptor_catalogue_subject(object)",
@@ -12345,13 +12369,19 @@ for required in (
     "fn receipt_history_descriptor_subject_error(",
     "RuntimeStateReadSubjectError::NotUserOwnedRuntimeStateRead",
 ):
-    if required not in text:
+    if required not in provider and required not in text:
         raise SystemExit(f"ffi_descriptor_runtime_owner:receipt_history_subject_gate_missing:{required}")
 receipt_subject_validator = re.search(
     r"fn validate_receipt_history_descriptor_subject\([^)]*\)\s*->\s*Result<\(\),\s*DescriptorResolutionError>\s*\{(?P<body>.*?)\n\}\n\n#\[cfg\(feature = \"axon-pb\"\)\]\nfn receipt_history_descriptor_subject_error",
-    text,
+    provider,
     re.S,
 )
+if receipt_subject_validator is None:
+    receipt_subject_validator = re.search(
+        r"fn validate_receipt_history_descriptor_subject\([^)]*\)\s*->\s*Result<\(\),\s*DescriptorResolutionError>\s*\{(?P<body>.*?)\n\}\n\nfn receipt_history_descriptor_subject_error",
+        provider,
+        re.S,
+    )
 if receipt_subject_validator is None:
     raise SystemExit("ffi_descriptor_runtime_owner:receipt_history_subject_validator_missing")
 receipt_subject_body = receipt_subject_validator.group("body")
@@ -12384,12 +12414,12 @@ for required in (
     "RuntimeOwnerUnavailable(String)",
     "DescriptorNotFound(String)",
     "descriptor resolution requires a caller signer",
-    "fn abi_projection(&self) -> (i32, ErrorProjection)",
+    "fn descriptor_resolution_abi_projection(",
     'code: CALLER_SIGNER_UNAVAILABLE_CODE',
     'code: "DESCRIPTOR_NOT_FOUND"',
-    "error.abi_projection()",
+    "descriptor_resolution_abi_projection(&error)",
 ):
-    if required not in text:
+    if required not in text and required not in provider:
         raise SystemExit(f"ffi_descriptor_runtime_owner:typed_projection_missing:{required}")
 entry = text[text.find("pub unsafe extern \"C\" fn runtime_resolve_descriptor_ref("):]
 entry = entry[: entry.find("/// Allocate a mutable Invocation builder handle.") if "/// Allocate a mutable Invocation builder handle." in entry else len(entry)]
@@ -12416,28 +12446,33 @@ PY
 check_ffi_descriptor_probe_not_found_vocabulary_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local ffi_invocation="$cli_root/src/ffi/invocation/mod.rs"
+  local descriptor_provider="$cli_root/src/daemon/axon_bridge/runtime_descriptor_provider.rs"
   [[ -f "$ffi_invocation" ]] || return 0
+  [[ -f "$descriptor_provider" ]] || fail "runtime descriptor provider source is missing: ${descriptor_provider#$cli_root/}"
 
-  "$PYTHON_BIN" - "$ffi_invocation" <<'PY'
+  "$PYTHON_BIN" - "$ffi_invocation" "$descriptor_provider" <<'PY'
 import re
 import sys
 from pathlib import Path
 
 path = Path(sys.argv[1])
+provider_path = Path(sys.argv[2])
 text = path.read_text(encoding="utf-8")
+provider = provider_path.read_text(encoding="utf-8")
 production = text.split("\nmod tests {", 1)[0].split("\n#[cfg(test)]", 1)[0]
-resolver_start = production.find("fn runtime_resolve_descriptor_ref_json(")
-resolver_end = production.find("\nfn runtime_system_descriptor_catalog_entries(", resolver_start)
+provider_production = provider.split("\n#[cfg(test)]", 1)[0]
+resolver_start = provider_production.find("fn runtime_resolve_descriptor_ref_json(")
+resolver_end = provider_production.find("\nfn descriptor_ability_error(", resolver_start)
 if resolver_start < 0 or resolver_end < 0:
     raise SystemExit("ffi_descriptor_probe_not_found_vocabulary:descriptor_resolver_section_missing")
-resolver = production[resolver_start:resolver_end]
+resolver = provider_production[resolver_start:resolver_end]
 
 for retired in (
     "fn from_remote_probe_rejection(",
     "RemoteInvocationFailure::",
     "Self::OwnerOffline(",
 ):
-    if retired in production:
+    if retired in production or retired in provider_production:
         raise SystemExit(f"ffi_descriptor_probe_not_found_vocabulary:retired_remote_probe_classifier:{retired}")
 for retired in (
     '"ROUTE_NEGATIVE"',
@@ -12446,7 +12481,7 @@ for retired in (
 ):
     if retired in resolver:
         raise SystemExit(f"ffi_descriptor_probe_not_found_vocabulary:retired_remote_probe_classifier:{retired}")
-if "descriptor_ref not found in runtime realm catalog" not in production:
+if "descriptor_ref not found in runtime realm catalog" not in provider_production:
     raise SystemExit("ffi_descriptor_probe_not_found_vocabulary:realm_catalog_miss_missing")
 for required_test in (
     "descriptor_resolution_errors_project_canonical_runtime_codes",
@@ -12770,6 +12805,7 @@ check_canonical_ability_catalog_projection_contract() {
   local meta="$cli_root/src/daemon/ability/builtins/governance/meta.rs"
   local catalog_meta="$cli_root/src/daemon/ability/catalog/catalog_metadata.rs"
   local ffi_invocation="$cli_root/src/ffi/invocation/mod.rs"
+  local descriptor_provider="$cli_root/src/daemon/axon_bridge/runtime_descriptor_provider.rs"
   local cli_catalog="$cli_root/src/cli/daemon_client/ability_catalog.rs"
   local cli_ability="$cli_root/src/cli/commands/groups/ability.rs"
   [[ -f "$descriptor" ]] || fail "AbilityDescriptor source is missing: $descriptor"
@@ -12778,10 +12814,11 @@ check_canonical_ability_catalog_projection_contract() {
   [[ -f "$meta" ]] || fail "meta.list_abilities source is missing: $meta"
   [[ -f "$catalog_meta" ]] || fail "catalog metadata source is missing: $catalog_meta"
   [[ -f "$ffi_invocation" ]] || fail "FFI invocation source is missing: $ffi_invocation"
+  [[ -f "$descriptor_provider" ]] || fail "runtime descriptor provider source is missing: $descriptor_provider"
   [[ -f "$cli_catalog" ]] || fail "CLI ability catalogue client is missing: $cli_catalog"
   [[ -f "$cli_ability" ]] || fail "CLI ability command source is missing: $cli_ability"
 
-  "$PYTHON_BIN" - "$descriptor" "$store" "$meta" "$catalog_meta" "$ffi_invocation" "$cli_catalog" "$cli_ability" <<'PY'
+  "$PYTHON_BIN" - "$descriptor" "$store" "$meta" "$catalog_meta" "$ffi_invocation" "$cli_catalog" "$cli_ability" "$descriptor_provider" <<'PY'
 import re
 import sys
 from pathlib import Path
@@ -12793,6 +12830,7 @@ catalog_meta = Path(sys.argv[4]).read_text(encoding="utf-8")
 ffi = Path(sys.argv[5]).read_text(encoding="utf-8")
 cli_catalog = Path(sys.argv[6]).read_text(encoding="utf-8")
 cli_ability = Path(sys.argv[7]).read_text(encoding="utf-8")
+descriptor_provider = Path(sys.argv[8]).read_text(encoding="utf-8")
 
 descriptor_production = descriptor.split("\n#[cfg(test)]\nmod tests", 1)[0]
 production_store = store.split("\n#[cfg(test)]\nmod tests", 1)[0]
@@ -12884,19 +12922,19 @@ if 'Value::String("hub:broadcast".to_string())' in realm_body:
     raise SystemExit("meta_list_abilities:retired_hub_broadcast_source")
 
 dedupe = re.search(
-    r"fn dedupe_descriptor_catalog_entries\([^)]*\)\s*->\s*std::result::Result<Vec<serde_json::Value>, String>\s*\{(?P<body>.*?)\n\}\n\n#\[cfg\(feature = \"axon-pb\"\)\]\nfn descriptor_catalog_dedupe_required_string",
-    ffi,
+    r"fn dedupe_descriptor_catalog_entries\([^)]*\)\s*->\s*std::result::Result<Vec<Value>, String>\s*\{(?P<body>.*?)\n\}\n\nfn descriptor_catalog_dedupe_required_string",
+    descriptor_provider,
     re.S,
 )
 if dedupe is None:
-    raise SystemExit("ffi_descriptor_catalog:dedupe_not_fallible")
+    raise SystemExit("runtime_descriptor_provider:dedupe_not_fallible")
 dedupe_body = dedupe.group("body")
 if re.search(r"\bcontinue\s*;", dedupe_body):
-    raise SystemExit("ffi_descriptor_catalog:dedupe_silent_drop")
+    raise SystemExit("runtime_descriptor_provider:dedupe_silent_drop")
 if "descriptor_catalog_dedupe_required_string" not in dedupe_body:
-    raise SystemExit("ffi_descriptor_catalog:dedupe_required_fields_missing")
+    raise SystemExit("runtime_descriptor_provider:dedupe_required_fields_missing")
 if "descriptor_catalog_dedupe_rejects_schema_incomplete_rows" not in ffi:
-    raise SystemExit("ffi_descriptor_catalog:missing_schema_incomplete_dedupe_test")
+    raise SystemExit("runtime_descriptor_provider:missing_schema_incomplete_dedupe_test")
 
 if "fn schema_bound_catalogue_entry" not in cli_catalog_production:
     raise SystemExit("cli_ability_catalog:schema_bound_entry_missing")

@@ -6122,20 +6122,28 @@ if go_cabi_runtime.exists():
                 1,
                 "Go C ABI diagnostics resolver must require request call_mode",
             )
-if rust_ffi_invocation.exists():
-    text = source(rust_ffi_invocation)
+runtime_descriptor_provider = cli_root / "src/daemon/axon_bridge/runtime_descriptor_provider.rs"
+if rust_ffi_invocation.exists() or runtime_descriptor_provider.exists():
+    text = source(rust_ffi_invocation) if rust_ffi_invocation.exists() else ""
+    provider_text = source(runtime_descriptor_provider) if runtime_descriptor_provider.exists() else ""
+    combined = text + "\n" + provider_text
     for token, detail in (
         (
             'descriptor_ref request missing call_mode',
             "Rust FFI descriptor resolver must require request call_mode",
         ),
     ):
-        if token not in text:
-            add("R60_SDK_DESCRIPTOR_CALL_MODE_NORMALIZATION_FORK", rust_ffi_invocation, 1, detail)
-    if '.unwrap_or("rpc")' in text:
+        if token not in combined:
+            add(
+                "R60_SDK_DESCRIPTOR_CALL_MODE_NORMALIZATION_FORK",
+                runtime_descriptor_provider if runtime_descriptor_provider.exists() else rust_ffi_invocation,
+                1,
+                detail,
+            )
+    if '.unwrap_or("rpc")' in combined:
         add(
             "R60_SDK_DESCRIPTOR_CALL_MODE_NORMALIZATION_FORK",
-            rust_ffi_invocation,
+            runtime_descriptor_provider if runtime_descriptor_provider.exists() else rust_ffi_invocation,
             1,
             "Rust FFI descriptor resolver/catalog path must not default missing call_mode to rpc",
         )
@@ -8913,9 +8921,12 @@ for path, missing_token, forbidden_pattern in (
 # Rule 94: FFI descriptor catalog projection must fail closed for the explicit
 # system catalog and must not keep a hidden meta.list_abilities provider probe.
 ffi_invocation = cli_root / "src/ffi/invocation/mod.rs"
-if ffi_invocation.exists():
-    text = source(ffi_invocation)
+runtime_descriptor_provider = cli_root / "src/daemon/axon_bridge/runtime_descriptor_provider.rs"
+if ffi_invocation.exists() or runtime_descriptor_provider.exists():
+    text = source(ffi_invocation) if ffi_invocation.exists() else ""
+    provider_text = source(runtime_descriptor_provider) if runtime_descriptor_provider.exists() else ""
     production = text.split("\nmod tests {", 1)[0].split("\n#[cfg(test)]", 1)[0]
+    provider_production = provider_text.split("\n#[cfg(test)]", 1)[0]
     for token, detail in (
         (
             "runtime_meta_descriptor_catalog_entries",
@@ -8926,11 +8937,13 @@ if ffi_invocation.exists():
             "FFI descriptor resolver must not keep a generic provider-row parser without an explicit provider seam",
         ),
     ):
-        if token in production:
+        if token in production or token in provider_production:
+            source_text = text if token in production else provider_text
+            source_path = ffi_invocation if token in production else runtime_descriptor_provider
             add(
                 "R94_FFI_DESCRIPTOR_CATALOG_FAIL_CLOSED",
-                ffi_invocation,
-                line_number(text, text.find(token)),
+                source_path,
+                line_number(source_text, source_text.find(token)),
                 detail,
             )
     for fn_name, signature, details in (
@@ -8944,46 +8957,46 @@ if ffi_invocation.exists():
             ),
         ),
     ):
-        body_info = rust_method_body(text, fn_name)
+        body_info = rust_method_body(provider_text, fn_name)
         if body_info is None:
             add(
                 "R94_FFI_DESCRIPTOR_CATALOG_FAIL_CLOSED",
-                ffi_invocation,
+                runtime_descriptor_provider,
                 1,
                 f"{fn_name} must remain an inspectable fallible descriptor catalog parser",
             )
             continue
         offset, body = body_info
-        if signature not in text[offset : offset + 400]:
+        if signature not in provider_text[offset : offset + 400] and "std::result::Result<Value, String>" not in provider_text[offset : offset + 400]:
             add(
                 "R94_FFI_DESCRIPTOR_CATALOG_FAIL_CLOSED",
-                ffi_invocation,
-                line_number(text, offset),
+                runtime_descriptor_provider,
+                line_number(provider_text, offset),
                 f"{fn_name} must return Result instead of Option",
             )
         for token in details:
             if token not in body:
                 add(
                     "R94_FFI_DESCRIPTOR_CATALOG_FAIL_CLOSED",
-                    ffi_invocation,
-                    line_number(text, offset),
+                    runtime_descriptor_provider,
+                    line_number(provider_text, offset),
                     f"{fn_name} must preserve provider payload error detail `{token}`",
                 )
-    system_body = rust_method_body(text, "runtime_system_descriptor_catalog_entries")
+    system_body = rust_method_body(provider_text, "runtime_system_descriptor_catalog_entries")
     if system_body is not None:
         offset, body = system_body
         if "filter_map" in body:
             add(
                 "R94_FFI_DESCRIPTOR_CATALOG_FAIL_CLOSED",
-                ffi_invocation,
-                line_number(text, offset + body.find("filter_map")),
+                runtime_descriptor_provider,
+                line_number(provider_text, offset + body.find("filter_map")),
                 "runtime system descriptor catalog must not skip malformed system rows",
             )
         if "descriptor_catalog_entry_from_descriptor(descriptor)?" not in body:
             add(
                 "R94_FFI_DESCRIPTOR_CATALOG_FAIL_CLOSED",
-                ffi_invocation,
-                line_number(text, offset),
+                runtime_descriptor_provider,
+                line_number(provider_text, offset),
                 "runtime system descriptor catalog must propagate descriptor projection failures",
             )
 
@@ -8993,9 +9006,13 @@ if ffi_invocation.exists():
 # catalog miss is reclassified as signer custody, owner-offline, route, or
 # timeout state.
 ffi_invocation = cli_root / "src/ffi/invocation/mod.rs"
-if ffi_invocation.exists():
-    text = source(ffi_invocation)
+runtime_descriptor_provider = cli_root / "src/daemon/axon_bridge/runtime_descriptor_provider.rs"
+if ffi_invocation.exists() or runtime_descriptor_provider.exists():
+    text = source(ffi_invocation) if ffi_invocation.exists() else ""
+    provider_text = source(runtime_descriptor_provider) if runtime_descriptor_provider.exists() else ""
     production = text.split("\nmod tests {", 1)[0].split("\n#[cfg(test)]", 1)[0]
+    provider_production = provider_text.split("\n#[cfg(test)]", 1)[0]
+    combined_production = production + "\n" + provider_production
     if "fn descriptor_resolution_error_projection(" in production:
         add(
             "R95_DESCRIPTOR_RESOLVER_BOUNDED_CATALOG",
@@ -9069,11 +9086,13 @@ if ffi_invocation.exists():
             "descriptor resolver must not expose remote transport failures as catalog lookup state",
         ),
     ):
-        if token in production:
+        if token in combined_production:
+            source_text = text if token in production else provider_text
+            source_path = ffi_invocation if token in production else runtime_descriptor_provider
             add(
                 "R95_DESCRIPTOR_RESOLVER_BOUNDED_CATALOG",
-                ffi_invocation,
-                line_number(text, text.find(token)),
+                source_path,
+                line_number(source_text, source_text.find(token)),
                 detail,
             )
     for token, detail in (
@@ -9082,11 +9101,11 @@ if ffi_invocation.exists():
             "descriptor resolver must expose typed failure states",
         ),
         (
-            "fn abi_projection(&self) -> (i32, ErrorProjection)",
+            "fn descriptor_resolution_abi_projection(",
             "descriptor resolver typed failures must own ABI projection",
         ),
         (
-            "error.abi_projection()",
+            "descriptor_resolution_abi_projection(&error)",
             "FFI descriptor resolver must project from typed error variants",
         ),
         (
@@ -9094,9 +9113,14 @@ if ffi_invocation.exists():
             "descriptor resolver must fail closed as a realm catalog miss",
         ),
     ):
-        if token not in text:
-            add("R95_DESCRIPTOR_RESOLVER_BOUNDED_CATALOG", ffi_invocation, 1, detail)
-    resolve_body = rust_method_body(text, "runtime_resolve_descriptor_ref_json")
+        if token not in combined_production:
+            add(
+                "R95_DESCRIPTOR_RESOLVER_BOUNDED_CATALOG",
+                ffi_invocation if token == "descriptor_resolution_abi_projection(&error)" else runtime_descriptor_provider,
+                1,
+                detail,
+            )
+    resolve_body = rust_method_body(provider_text, "runtime_resolve_descriptor_ref_json")
     if resolve_body is not None:
         offset, body = resolve_body
         for token, detail in (
@@ -9116,21 +9140,21 @@ if ffi_invocation.exists():
             if token in body:
                 add(
                     "R95_DESCRIPTOR_RESOLVER_BOUNDED_CATALOG",
-                    ffi_invocation,
-                    line_number(text, offset + body.find(token)),
+                    runtime_descriptor_provider,
+                    line_number(provider_text, offset + body.find(token)),
                     detail,
                 )
         if 'descriptor_ref_request_required_string(object, "caller_ura")' in body:
             add(
                 "R95_DESCRIPTOR_RESOLVER_BOUNDED_CATALOG",
-                ffi_invocation,
-                line_number(text, offset + body.find('descriptor_ref_request_required_string(object, "caller_ura")')),
+                runtime_descriptor_provider,
+                line_number(provider_text, offset + body.find('descriptor_ref_request_required_string(object, "caller_ura")')),
                 "descriptor resolver must not require caller_ura for hidden remote probe fallback",
             )
-    elif "runtime_resolve_descriptor_ref_json" in text:
+    elif "runtime_resolve_descriptor_ref_json" in combined_production:
         add(
             "R95_DESCRIPTOR_RESOLVER_BOUNDED_CATALOG",
-            ffi_invocation,
+            runtime_descriptor_provider if runtime_descriptor_provider.exists() else ffi_invocation,
             1,
             "runtime_resolve_descriptor_ref_json must remain inspectable",
         )

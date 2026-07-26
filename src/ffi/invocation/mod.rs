@@ -38,6 +38,10 @@ mod backpressure;
 #[cfg(feature = "axon-pb")]
 use self::backpressure::{bidi_callback_backpressure_frame, stream_callback_backpressure_event};
 #[cfg(feature = "axon-pb")]
+use crate::daemon::axon_bridge::runtime_descriptor_provider::{
+    DescriptorResolutionError, RuntimeDescriptorResolutionProvider,
+};
+#[cfg(feature = "axon-pb")]
 use crate::ffi::client::handle::{binding_for_handle, lib_runtime, ClientSessionBinding};
 use crate::ffi::client::handle::{get, RuntimeHandle};
 #[cfg(not(feature = "axon-pb"))]
@@ -426,7 +430,7 @@ pub unsafe extern "C" fn runtime_resolve_descriptor_ref(
                 RUNTIME_OK
             }
             Err(error) => {
-                let (abi_code, projection) = error.abi_projection();
+                let (abi_code, projection) = descriptor_resolution_abi_projection(&error);
                 let message = format!("runtime_resolve_descriptor_ref: {error}");
                 record_invocation_projected_error(abi_code, projection, message)
             }
@@ -435,264 +439,51 @@ pub unsafe extern "C" fn runtime_resolve_descriptor_ref(
 }
 
 #[cfg(feature = "axon-pb")]
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum DescriptorResolutionError {
-    InvalidRequest(String),
-    InvalidCatalogPayload(String),
-    RuntimeOwnerUnavailable(String),
-    DescriptorNotFound(String),
-}
-
-#[cfg(feature = "axon-pb")]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RuntimeDescriptorProviderKind {
-    Generic,
-    AbilityDescriptor,
-    ReceiptHistory,
-}
-
-#[cfg(feature = "axon-pb")]
-impl RuntimeDescriptorProviderKind {
-    fn parse(raw: Option<&str>) -> Result<Self, DescriptorResolutionError> {
-        let Some(raw) = raw.map(str::trim).filter(|value| !value.is_empty()) else {
-            return Ok(Self::Generic);
-        };
-        match raw {
-            "ability_descriptor" => Ok(Self::AbilityDescriptor),
-            "receipt_history" => Ok(Self::ReceiptHistory),
-            other => Err(DescriptorResolutionError::invalid_request(format!(
-                "descriptor_ref request provider {other:?} is not supported"
-            ))),
-        }
-    }
-
-    fn source(self) -> &'static str {
-        match self {
-            Self::Generic => "runtime_descriptor_catalog",
-            Self::AbilityDescriptor => "runtime_ability_descriptor_provider",
-            Self::ReceiptHistory => "runtime_receipt_provider",
-        }
-    }
-
-    fn require_ability(self, ability: &str) -> Result<(), DescriptorResolutionError> {
-        match self {
-            Self::Generic => Ok(()),
-            Self::AbilityDescriptor
-                if crate::daemon::ability::names::governance::is_runtime_catalogue_read(ability) =>
-            {
-                Ok(())
-            }
-            Self::ReceiptHistory
-                if crate::daemon::ability::names::governance::is_invocation_history_read(
-                    ability,
-                ) =>
-            {
-                Ok(())
-            }
-            Self::AbilityDescriptor => Err(DescriptorResolutionError::invalid_request(format!(
-                "descriptor_ref provider ability_descriptor cannot resolve non-catalogue ability {ability:?}"
-            ))),
-            Self::ReceiptHistory => Err(DescriptorResolutionError::invalid_request(format!(
-                "descriptor_ref provider receipt_history cannot resolve non-receipt ability {ability:?}"
-            ))),
-        }
-    }
-
-    fn validate_request_subject(
-        self,
-        object: &serde_json::Map<String, serde_json::Value>,
-    ) -> Result<(), DescriptorResolutionError> {
-        match self {
-            Self::AbilityDescriptor => validate_ability_descriptor_catalogue_subject(object),
-            Self::ReceiptHistory => validate_receipt_history_descriptor_subject(object),
-            Self::Generic => Ok(()),
-        }
-    }
-
-    fn is_explicit(self) -> bool {
-        !matches!(self, Self::Generic)
-    }
-}
-
-#[cfg(feature = "axon-pb")]
-fn descriptor_request_required_text<'a>(
-    object: &'a serde_json::Map<String, serde_json::Value>,
-    field: &str,
-    missing_message: &'static str,
-) -> Result<&'a str, DescriptorResolutionError> {
-    object
-        .get(field)
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| DescriptorResolutionError::invalid_request(missing_message))
-}
-
-#[cfg(feature = "axon-pb")]
-fn validate_ability_descriptor_catalogue_subject(
-    object: &serde_json::Map<String, serde_json::Value>,
-) -> Result<(), DescriptorResolutionError> {
-    let subject_ura = descriptor_request_required_text(
-        object,
-        "subject_ura",
-        "descriptor_ref provider ability_descriptor requires subject_ura",
-    )?;
-    if crate::core::identity::contains_all_zero_principal_placeholder(subject_ura) {
-        return Err(DescriptorResolutionError::invalid_request(
-            "descriptor_ref provider ability_descriptor subject_ura must not be all-zero",
-        ));
-    }
-    let callee_ura = descriptor_request_required_text(
-        object,
-        "callee_ura",
-        "descriptor_ref provider ability_descriptor requires callee_ura",
-    )?;
-    let subject = crate::core::ura::parse_ura(subject_ura).map_err(|error| {
-        DescriptorResolutionError::invalid_request(format!(
-            "descriptor_ref provider ability_descriptor subject_ura must be canonical: {error}"
-        ))
-    })?;
-    if subject.kind != crate::core::ura::URAKind::Authority {
-        return Err(DescriptorResolutionError::invalid_request(
-            "descriptor_ref provider ability_descriptor subject_ura must be an Authority URA",
-        ));
-    }
-    let callee = crate::core::ura::parse_ura(callee_ura).map_err(|error| {
-        DescriptorResolutionError::invalid_request(format!(
-            "descriptor_ref provider ability_descriptor callee_ura must be canonical: {error}"
-        ))
-    })?;
-    let expected_subject = crate::core::ura::hub_ura(&callee.realm);
-    if subject.realm != callee.realm || subject_ura != expected_subject {
-        return Err(DescriptorResolutionError::invalid_request(
-            "descriptor_ref provider ability_descriptor subject_ura must be the callee realm authority subject",
-        ));
-    }
-    Ok(())
-}
-
-#[cfg(feature = "axon-pb")]
-fn validate_receipt_history_descriptor_subject(
-    object: &serde_json::Map<String, serde_json::Value>,
-) -> Result<(), DescriptorResolutionError> {
-    let subject_ura = descriptor_request_required_text(
-        object,
-        "subject_ura",
-        "descriptor_ref provider receipt_history requires subject_ura",
-    )?;
-    crate::core::identity::RuntimeStateReadSubject::parse(subject_ura)
-        .map(|_| ())
-        .map_err(receipt_history_descriptor_subject_error)
-}
-
-#[cfg(feature = "axon-pb")]
-fn receipt_history_descriptor_subject_error(
-    error: crate::core::identity::RuntimeStateReadSubjectError,
-) -> DescriptorResolutionError {
-    use crate::core::identity::RuntimeStateReadSubjectError;
-
+fn descriptor_resolution_abi_projection(
+    error: &DescriptorResolutionError,
+) -> (i32, ErrorProjection) {
     match error {
-        RuntimeStateReadSubjectError::Empty => DescriptorResolutionError::invalid_request(
-            "descriptor_ref provider receipt_history requires subject_ura",
+        DescriptorResolutionError::InvalidRequest(_)
+        | DescriptorResolutionError::OwnerMismatch(_) => (
+            ERR_INVALID_ARG,
+            ErrorProjection {
+                code: "INVALID_ARGUMENT",
+                stage: "sdk",
+                retry: "never",
+            },
         ),
-        RuntimeStateReadSubjectError::EmptyRealm | RuntimeStateReadSubjectError::EmptyUserId => {
-            DescriptorResolutionError::invalid_request(
-                "descriptor_ref provider receipt_history subject_ura must be a user-owned runtime-state read subject",
-            )
-        }
-        RuntimeStateReadSubjectError::AllZeroPrincipalPlaceholder => {
-            DescriptorResolutionError::invalid_request(
-                "descriptor_ref provider receipt_history subject_ura must not be all-zero",
-            )
-        }
-        RuntimeStateReadSubjectError::InvalidSyntax(error) => {
-            DescriptorResolutionError::invalid_request(format!(
-                "descriptor_ref provider receipt_history subject_ura must be canonical: {error}"
-            ))
-        }
-        RuntimeStateReadSubjectError::NotResource => DescriptorResolutionError::invalid_request(
-            "descriptor_ref provider receipt_history subject_ura must be a Resource URA",
+        DescriptorResolutionError::InvalidCatalogPayload(_) => (
+            ERR_INVALID_ARG,
+            ErrorProjection {
+                code: "INVALID_ARGUMENT",
+                stage: "provider_payload",
+                retry: "never",
+            },
         ),
-        RuntimeStateReadSubjectError::NotUserOwnedRuntimeStateRead => {
-            DescriptorResolutionError::invalid_request(
-                "descriptor_ref provider receipt_history subject_ura must be a user-owned runtime-state read subject",
-            )
-        }
-    }
-}
-
-#[cfg(feature = "axon-pb")]
-impl DescriptorResolutionError {
-    fn invalid_request(message: impl Into<String>) -> Self {
-        Self::InvalidRequest(message.into())
-    }
-
-    fn invalid_catalog_payload(message: impl Into<String>) -> Self {
-        Self::InvalidCatalogPayload(message.into())
-    }
-
-    fn runtime_owner_unavailable(_detail: impl Into<String>) -> Self {
-        Self::RuntimeOwnerUnavailable(format!(
-            "{CALLER_SIGNER_UNAVAILABLE_CODE}: descriptor resolution requires a caller signer; \
-             load or provision that identity in the local key service"
-        ))
-    }
-
-    fn descriptor_not_found(message: impl Into<String>) -> Self {
-        Self::DescriptorNotFound(message.into())
-    }
-
-    fn message(&self) -> &str {
-        match self {
-            Self::InvalidRequest(message)
-            | Self::InvalidCatalogPayload(message)
-            | Self::RuntimeOwnerUnavailable(message)
-            | Self::DescriptorNotFound(message) => message,
-        }
-    }
-
-    fn abi_projection(&self) -> (i32, ErrorProjection) {
-        match self {
-            Self::InvalidRequest(_) => (
-                ERR_INVALID_ARG,
-                ErrorProjection {
-                    code: "INVALID_ARGUMENT",
-                    stage: "sdk",
-                    retry: "never",
-                },
-            ),
-            Self::InvalidCatalogPayload(_) => (
-                ERR_INVALID_ARG,
-                ErrorProjection {
-                    code: "INVALID_ARGUMENT",
-                    stage: "provider_payload",
-                    retry: "never",
-                },
-            ),
-            Self::RuntimeOwnerUnavailable(_) => (
-                ERR_PERMISSION_DENIED,
-                ErrorProjection {
-                    code: CALLER_SIGNER_UNAVAILABLE_CODE,
-                    stage: "caller_identity",
-                    retry: "never",
-                },
-            ),
-            Self::DescriptorNotFound(_) => (
-                ERR_NOT_FOUND,
-                ErrorProjection {
-                    code: "DESCRIPTOR_NOT_FOUND",
-                    stage: "routing",
-                    retry: "never",
-                },
-            ),
-        }
-    }
-}
-
-#[cfg(feature = "axon-pb")]
-impl std::fmt::Display for DescriptorResolutionError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.message())
+        DescriptorResolutionError::RuntimeOwnerUnavailable(_) => (
+            ERR_PERMISSION_DENIED,
+            ErrorProjection {
+                code: CALLER_SIGNER_UNAVAILABLE_CODE,
+                stage: "caller_identity",
+                retry: "never",
+            },
+        ),
+        DescriptorResolutionError::DescriptorNotFound(_) => (
+            ERR_NOT_FOUND,
+            ErrorProjection {
+                code: "DESCRIPTOR_NOT_FOUND",
+                stage: "routing",
+                retry: "never",
+            },
+        ),
+        DescriptorResolutionError::CallModeUnsupported(_) => (
+            ERR_NOT_FOUND,
+            ErrorProjection {
+                code: "DESCRIPTOR_CALL_MODE_UNSUPPORTED",
+                stage: "routing",
+                retry: "never",
+            },
+        ),
     }
 }
 
@@ -1873,7 +1664,7 @@ fn runtime_descriptor_catalog_json(
 ) -> serde_json::Value {
     match runtime_owner_ura_from_session(session) {
         Ok(owner_ura) => {
-            let catalog = runtime_descriptor_catalog_entries(&owner_ura);
+            let catalog = RuntimeDescriptorResolutionProvider::catalog_entries(&owner_ura);
             serde_json::json!({
                 "owner_ura": owner_ura,
                 "source": "runtime_descriptor_catalog",
@@ -2079,303 +1870,13 @@ impl<'a> SessionInvocationAuthority<'a> {
 }
 
 #[cfg(feature = "axon-pb")]
-struct RuntimeDescriptorCatalog {
-    entries: Vec<serde_json::Value>,
-    diagnostics: Vec<String>,
-}
-
-#[cfg(feature = "axon-pb")]
-fn runtime_descriptor_catalog_entries(owner_ura: &str) -> RuntimeDescriptorCatalog {
-    let mut entries = Vec::new();
-    let mut diagnostics = Vec::new();
-    match runtime_system_descriptor_catalog_entries(owner_ura) {
-        Ok(mut system_entries) => entries.append(&mut system_entries),
-        Err(error) => diagnostics.push(error),
-    }
-    match dedupe_descriptor_catalog_entries(entries) {
-        Ok(entries) => RuntimeDescriptorCatalog {
-            entries,
-            diagnostics,
-        },
-        Err(error) => {
-            diagnostics.push(error);
-            RuntimeDescriptorCatalog {
-                entries: Vec::new(),
-                diagnostics,
-            }
-        }
-    }
-}
-
-#[cfg(feature = "axon-pb")]
 fn runtime_resolve_descriptor_ref_json(
     session: &crate::ffi::client::handle::ClientSession,
     request_json: &str,
 ) -> Result<serde_json::Value, DescriptorResolutionError> {
-    let request: serde_json::Value = serde_json::from_str(request_json).map_err(|error| {
-        DescriptorResolutionError::invalid_request(format!(
-            "decode descriptor_ref request: {error}"
-        ))
-    })?;
-    let object = request.as_object().ok_or_else(|| {
-        DescriptorResolutionError::invalid_request("descriptor_ref request must be a JSON object")
-    })?;
-    let callee_ura = object
-        .get("callee_ura")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| {
-            DescriptorResolutionError::invalid_request("descriptor_ref request missing callee_ura")
-        })?;
-    let ability = object
-        .get("ability")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| {
-            DescriptorResolutionError::invalid_request("descriptor_ref request missing ability")
-        })?;
-    let call_mode = object
-        .get("call_mode")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| {
-            DescriptorResolutionError::invalid_request("descriptor_ref request missing call_mode")
-        })?;
-    let provider = RuntimeDescriptorProviderKind::parse(
-        object.get("provider").and_then(serde_json::Value::as_str),
-    )?;
-    let ability_ura = crate::daemon::axon_bridge::descriptor_ref::ability_ura_for_wire(
-        callee_ura, ability,
-    )
-    .map_err(|error| {
-        DescriptorResolutionError::invalid_request(format!(
-            "resolve descriptor_ref ability for callee_ura={callee_ura:?} ability={ability:?}: {error}"
-        ))
-    })?;
-    let public_ability = crate::core::ura::AbilitySelector::parse(&ability_ura)
-        .map(|selector| selector.public_name().to_string())
-        .map_err(|error| {
-            DescriptorResolutionError::invalid_request(format!(
-                "resolve descriptor_ref public ability for ability_ura={ability_ura:?}: {error}"
-            ))
-        })?;
-    provider.require_ability(&public_ability)?;
-    provider.validate_request_subject(object)?;
-    let runtime_owner_ura = runtime_owner_ura_from_session(session)
-        .map_err(DescriptorResolutionError::runtime_owner_unavailable)?;
-    if runtime_owner_ura == callee_ura {
-        let catalog = runtime_descriptor_catalog_entries(callee_ura);
-        if let Some(resolution) = descriptor_catalog_resolution_from_entries(
-            &catalog.entries,
-            &ability_ura,
-            call_mode,
-            "runtime_local_descriptor_catalog",
-        )
-        .map_err(|error| DescriptorResolutionError::invalid_catalog_payload(error.to_string()))?
-        {
-            return Ok(resolution);
-        }
-        return Err(DescriptorResolutionError::descriptor_not_found(format!(
-            "descriptor_ref not found in local runtime catalog for callee_ura={callee_ura:?} ability={ability_ura:?} call_mode={call_mode:?}"
-        )));
-    }
-    if provider.is_explicit() {
-        let catalog = runtime_descriptor_catalog_entries(callee_ura);
-        if let Some(resolution) = descriptor_catalog_resolution_from_entries(
-            &catalog.entries,
-            &ability_ura,
-            call_mode,
-            provider.source(),
-        )
-        .map_err(|error| DescriptorResolutionError::invalid_catalog_payload(error.to_string()))?
-        {
-            return Ok(resolution);
-        }
-        return Err(DescriptorResolutionError::descriptor_not_found(format!(
-            "descriptor_ref not found in {} for callee_ura={callee_ura:?} ability={ability_ura:?} call_mode={call_mode:?}",
-            provider.source()
-        )));
-    }
-    let catalog = runtime_descriptor_catalog_entries(&runtime_owner_ura);
-    if let Some(resolution) = descriptor_catalog_resolution_from_entries(
-        &catalog.entries,
-        &ability_ura,
-        call_mode,
-        "runtime_realm_descriptor_catalog",
-    )
-    .map_err(|error| DescriptorResolutionError::invalid_catalog_payload(error.to_string()))?
-    {
-        return Ok(resolution);
-    }
-    Err(DescriptorResolutionError::descriptor_not_found(format!(
-        "descriptor_ref not found in runtime realm catalog for callee_ura={callee_ura:?} ability={ability_ura:?} call_mode={call_mode:?}"
-    )))
-}
-
-#[cfg(feature = "axon-pb")]
-fn runtime_system_descriptor_catalog_entries(
-    owner_ura: &str,
-) -> std::result::Result<Vec<serde_json::Value>, String> {
-    let owner = crate::daemon::axon_bridge::descriptor_ref::catalog_owner_kind_for_wire(owner_ura)
-        .map_err(|error| error.to_string())?;
-    let catalog = crate::daemon::ability::catalog::build_system_registry();
-    let mut entries = Vec::new();
-    for row in catalog
-        .authority_ability_catalog_snapshot()
-        .into_iter()
-        .filter(|row| row.owner == owner)
-    {
-        let descriptor = row
-            .descriptor
-            .rebind_owner_ura(owner_ura)
-            .map_err(|error| format!("system descriptor catalog rebind failed: {error}"))?;
-        entries.push(descriptor_catalog_entry_from_descriptor(descriptor)?);
-    }
-    Ok(entries)
-}
-
-#[cfg(feature = "axon-pb")]
-fn descriptor_catalog_entry_from_descriptor(
-    descriptor: crate::daemon::ability::descriptors::AbilityDescriptor,
-) -> std::result::Result<serde_json::Value, String> {
-    let name = descriptor.public_name();
-    let ability_ura = descriptor.canonical_ability_ura().ok_or_else(|| {
-        format!("system descriptor catalog row {name:?} missing canonical ability URA")
-    })?;
-    let descriptor_hash = descriptor.descriptor_hash_prefixed();
-    let descriptor_hash_hex = descriptor_hash.strip_prefix("sha256:").ok_or_else(|| {
-        format!(
-            "system descriptor catalog row {ability_ura:?} descriptor_hash missing sha256 prefix"
-        )
-    })?;
-    if descriptor_hash_hex.len() != 64 || hex::decode(descriptor_hash_hex).is_err() {
-        return Err(format!(
-            "system descriptor catalog row {ability_ura:?} descriptor_hash is not canonical hex"
-        ));
-    }
-    let owner_ura = descriptor.owner_ura.clone();
-    let version = descriptor.version.clone();
-    let call_mode = descriptor.call_mode().as_str();
-    let admission_action = descriptor.admission_action().as_str();
-    let descriptor_ref = descriptor.descriptor_ref().map_err(|error| {
-        format!(
-            "system descriptor catalog row {ability_ura:?} descriptor_ref is not canonical: {error}"
-        )
-    })?;
-    Ok(serde_json::json!({
-        "name": name,
-        "owner_ura": owner_ura,
-        "ability_ura": ability_ura,
-        "descriptor_ref": descriptor_ref,
-        "version": version,
-        "descriptor_hash": descriptor_hash,
-        "call_mode": call_mode,
-        "admission_action": admission_action,
-    }))
-}
-
-#[cfg(feature = "axon-pb")]
-fn descriptor_catalog_resolution_from_entries(
-    entries: &[serde_json::Value],
-    ability_ura: &str,
-    call_mode: &str,
-    source: &str,
-) -> anyhow::Result<Option<serde_json::Value>> {
-    for entry in entries {
-        let entry_ability = entry
-            .get("ability_ura")
-            .and_then(serde_json::Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty());
-        if entry_ability != Some(ability_ura) {
-            continue;
-        }
-        let entry_call_mode = entry
-            .get("call_mode")
-            .and_then(serde_json::Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "descriptor catalog row for ability {ability_ura:?} from {source} missing call_mode"
-                )
-            })?;
-        if entry_call_mode != call_mode {
-            continue;
-        }
-        let descriptor_ref =
-            descriptor_catalog_required_string(entry, "descriptor_ref", ability_ura, source)?;
-        let owner_ura =
-            descriptor_catalog_required_string(entry, "owner_ura", ability_ura, source)?;
-        let name = descriptor_catalog_required_string(entry, "name", ability_ura, source)?;
-        return Ok(Some(serde_json::json!({
-            "descriptor_ref": descriptor_ref,
-            "ability_ura": ability_ura,
-            "owner_ura": owner_ura,
-            "name": name,
-            "call_mode": call_mode,
-            "source": source,
-        })));
-    }
-    Ok(None)
-}
-
-#[cfg(feature = "axon-pb")]
-fn descriptor_catalog_required_string<'a>(
-    entry: &'a serde_json::Value,
-    field: &'static str,
-    ability_ura: &str,
-    source: &str,
-) -> anyhow::Result<&'a str> {
-    entry
-        .get(field)
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "descriptor catalog row for ability {ability_ura:?} from {source} missing {field}"
-            )
-        })
-}
-
-#[cfg(feature = "axon-pb")]
-fn dedupe_descriptor_catalog_entries(
-    entries: Vec<serde_json::Value>,
-) -> std::result::Result<Vec<serde_json::Value>, String> {
-    let mut catalog = std::collections::BTreeMap::new();
-    for (index, entry) in entries.into_iter().enumerate() {
-        let owner_ura = descriptor_catalog_dedupe_required_string(&entry, "owner_ura", index)?;
-        let ability_ura = descriptor_catalog_dedupe_required_string(&entry, "ability_ura", index)?;
-        let call_mode = descriptor_catalog_dedupe_required_string(&entry, "call_mode", index)?;
-        let descriptor_ref =
-            descriptor_catalog_dedupe_required_string(&entry, "descriptor_ref", index)?;
-        let key = (
-            owner_ura.to_string(),
-            ability_ura.to_string(),
-            call_mode.to_string(),
-            descriptor_ref.to_string(),
-        );
-        catalog.entry(key).or_insert(entry);
-    }
-    Ok(catalog.into_values().collect())
-}
-
-#[cfg(feature = "axon-pb")]
-fn descriptor_catalog_dedupe_required_string<'a>(
-    entry: &'a serde_json::Value,
-    field: &'static str,
-    index: usize,
-) -> std::result::Result<&'a str, String> {
-    entry
-        .get(field)
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| format!("descriptor catalog row {index} missing {field} before dedupe"))
+    RuntimeDescriptorResolutionProvider::resolve_json(request_json, || {
+        runtime_owner_ura_from_session(session)
+    })
 }
 
 #[cfg(feature = "axon-pb")]
@@ -9722,7 +9223,7 @@ mod tests {
             "call_mode": "rpc"
         })];
 
-        let error = descriptor_catalog_resolution_from_entries(
+        let error = RuntimeDescriptorResolutionProvider::resolve_catalog_entries_for_test(
             &entries,
             ability_ura,
             "rpc",
@@ -9745,7 +9246,7 @@ mod tests {
             "call_mode": "rpc"
         })];
 
-        let error = dedupe_descriptor_catalog_entries(entries)
+        let error = RuntimeDescriptorResolutionProvider::dedupe_catalog_entries_for_test(entries)
             .expect_err("dedupe must not silently drop schema-incomplete descriptor rows");
 
         assert!(
@@ -9872,27 +9373,50 @@ mod tests {
     }
 
     #[cfg(feature = "axon-pb")]
+    fn runtime_descriptor_resolution_missing_owner_error_message() -> String {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let missing_control_path = dir.path().join("missing-control.json");
+        let remote_device_ura = crate::core::ura::device_ura("localhost", "remote-runtime-node");
+        let session = crate::ffi::client::handle::ClientSession::with_control_path_only(
+            missing_control_path.display().to_string(),
+            Some(dir.path().join("offline-daemon.sock").display().to_string()),
+        );
+        runtime_resolve_descriptor_ref_json(
+            &session,
+            &serde_json::json!({
+                "callee_ura": remote_device_ura,
+                "caller_ura": "easynet:///r/localhost/device/local-runtime-node",
+                "subject_ura": remote_device_ura,
+                "ability": "custom.not.system",
+                "call_mode": "rpc",
+            })
+            .to_string(),
+        )
+        .expect_err("missing runtime owner must fail closed")
+        .to_string()
+    }
+
+    #[cfg(feature = "axon-pb")]
     #[test]
     fn descriptor_resolution_errors_project_canonical_runtime_codes() {
-        let (abi_code, projection) = DescriptorResolutionError::descriptor_not_found(
-            "descriptor_ref not found in local runtime catalog",
-        )
-        .abi_projection();
+        let not_found = DescriptorResolutionError::DescriptorNotFound(
+            "descriptor_ref not found in local runtime catalog".to_string(),
+        );
+        let (abi_code, projection) = descriptor_resolution_abi_projection(&not_found);
         assert_eq!(abi_code, ERR_NOT_FOUND);
         assert_eq!(projection.code, "DESCRIPTOR_NOT_FOUND");
         assert_eq!(projection.stage, "routing");
 
-        let (abi_code, projection) = DescriptorResolutionError::runtime_owner_unavailable(
-            "control discovery /tmp/control.json does not exist",
-        )
-        .abi_projection();
+        let runtime_owner_unavailable = DescriptorResolutionError::RuntimeOwnerUnavailable(
+            format!("{CALLER_SIGNER_UNAVAILABLE_CODE}: descriptor resolution requires a caller signer; load or provision that identity in the local key service"),
+        );
+        let (abi_code, projection) =
+            descriptor_resolution_abi_projection(&runtime_owner_unavailable);
         assert_eq!(abi_code, ERR_PERMISSION_DENIED);
         assert_eq!(projection.code, CALLER_SIGNER_UNAVAILABLE_CODE);
         assert_eq!(projection.stage, "caller_identity");
 
-        let message =
-            DescriptorResolutionError::runtime_owner_unavailable("keyring entry not found")
-                .to_string();
+        let message = runtime_descriptor_resolution_missing_owner_error_message();
         assert!(message.contains(CALLER_SIGNER_UNAVAILABLE_CODE));
         assert!(
             !message.contains("resolve descriptor_ref runtime owner")
@@ -9900,11 +9424,10 @@ mod tests {
             "descriptor resolver must not expose signer custody internals: {message}"
         );
 
-        let (abi_code, projection) =
-            DescriptorResolutionError::invalid_catalog_payload(
-                "descriptor catalog row for ability \"easynet:///r/localhost/ability/device.dev-a.observe.health\" from runtime_local_descriptor_catalog missing descriptor_ref",
-            )
-            .abi_projection();
+        let invalid_catalog_payload = DescriptorResolutionError::InvalidCatalogPayload(
+            "descriptor catalog row for ability \"easynet:///r/localhost/ability/device.dev-a.observe.health\" from runtime_local_descriptor_catalog missing descriptor_ref".to_string(),
+        );
+        let (abi_code, projection) = descriptor_resolution_abi_projection(&invalid_catalog_payload);
         assert_eq!(abi_code, ERR_INVALID_ARG);
         assert_eq!(projection.code, "INVALID_ARGUMENT");
         assert_eq!(projection.stage, "provider_payload");
@@ -10316,8 +9839,9 @@ mod tests {
     #[test]
     fn runtime_system_descriptor_catalog_includes_authority_daemon_invocation_contracts() {
         let authority = crate::core::ura::hub_ura("localhost");
-        let entries = runtime_system_descriptor_catalog_entries(&authority)
-            .expect("Authority system descriptor catalog");
+        let entries =
+            RuntimeDescriptorResolutionProvider::system_catalog_entries_for_test(&authority)
+                .expect("Authority system descriptor catalog");
         let principal_create = entries
             .iter()
             .find(|entry| entry["name"] == "principal.lifecycle.create")
@@ -10360,7 +9884,7 @@ mod tests {
     #[test]
     fn runtime_system_descriptor_catalog_keeps_user_files_out_of_system_plane() {
         let device = crate::core::ura::device_ura("localhost", "host-a");
-        let entries = runtime_system_descriptor_catalog_entries(&device)
+        let entries = RuntimeDescriptorResolutionProvider::system_catalog_entries_for_test(&device)
             .expect("Device system descriptor catalog");
         let names = entries
             .iter()

@@ -1,0 +1,6 @@
+- [x] Add daemon-owned runtime descriptor provider module.
+- [x] Move descriptor request validation and catalog selection out of FFI.
+- [x] Change FFI to delegate to provider and map typed errors.
+- [x] Add boundary gate rejecting FFI-local catalog authority.
+- [x] Migrate existing tests through provider test hooks instead of FFI-local helpers.
+- [x] Run fmt, focused Rust tests, and SPEC gates.
