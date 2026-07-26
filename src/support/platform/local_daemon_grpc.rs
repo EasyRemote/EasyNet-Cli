@@ -35,6 +35,8 @@ use crate::daemon::invocation::dispatch::invocation_wire::{
 };
 #[cfg(feature = "axon-pb")]
 use crate::daemon::persistence::daemon_config;
+#[cfg(feature = "axon-pb")]
+use tonic::transport::{Channel, Endpoint, Uri as GrpcEndpointLocator};
 
 /// Best-effort local liveness probe used by `runtime start` to avoid
 /// racing a second daemon process against an already-live listener.
@@ -79,15 +81,15 @@ pub(crate) async fn connect_channel(
     path: PathBuf,
     timeout: Duration,
     connect_timeout: Duration,
-) -> anyhow::Result<tonic::transport::Channel> {
-    let endpoint = tonic::transport::Endpoint::try_from("http://[::1]:50051")?
+) -> anyhow::Result<Channel> {
+    let endpoint = Endpoint::try_from("http://[::1]:50051")?
         .timeout(timeout)
         .connect_timeout(connect_timeout);
 
     #[cfg(unix)]
     {
         return endpoint
-            .connect_with_connector(tower::service_fn(move |_: tonic::transport::Uri| {
+            .connect_with_connector(tower::service_fn(move |_: GrpcEndpointLocator| {
                 let path = path.clone();
                 async move {
                     let stream = tokio::net::UnixStream::connect(path).await?;
@@ -105,7 +107,7 @@ pub(crate) async fn connect_channel(
             .ok_or_else(|| anyhow::anyhow!("named-pipe path is not valid UTF-8"))?
             .to_string();
         return endpoint
-            .connect_with_connector(tower::service_fn(move |_: tonic::transport::Uri| {
+            .connect_with_connector(tower::service_fn(move |_: GrpcEndpointLocator| {
                 let pipe_name = pipe_name.clone();
                 async move {
                     let stream = crate::support::platform::named_pipe::connect_with_retry(

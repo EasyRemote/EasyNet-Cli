@@ -795,6 +795,25 @@ for path in sorted(semantic_ura_factory_files):
             "semantic URA factory result must not be bound to a URI-named variable",
         )
 
+local_daemon_grpc_transport = cli_root / "src/support/platform/local_daemon_grpc.rs"
+if local_daemon_grpc_transport.exists():
+    text = source(local_daemon_grpc_transport)
+    direct_locator = "tonic::transport::Uri"
+    if direct_locator in text:
+        add(
+            "R4_LOCAL_DAEMON_TRANSPORT_LOCATOR_TERMINOLOGY",
+            local_daemon_grpc_transport,
+            line_number(text, text.find(direct_locator)),
+            "local daemon transport must alias tonic endpoint locators instead of exposing URI terminology",
+        )
+    if "Uri as GrpcEndpointLocator" not in text:
+        add(
+            "R4_LOCAL_DAEMON_TRANSPORT_LOCATOR_TERMINOLOGY",
+            local_daemon_grpc_transport,
+            1,
+            "local daemon transport must name tonic connector endpoint placeholders as GrpcEndpointLocator",
+        )
+
 current_identity_docs = (
     cli_root / "docs/AXON-RFC-006-stateful-easynet.tex",
     cli_root / "docs/rfc/AXON-RFC-003-invokebidi-protocol.md",
