@@ -107,6 +107,34 @@ func TestDecodeTransportErrorJSONCanonicalizesCallerSignerCustodyDetail(t *testi
 	}
 }
 
+func TestDecodeTransportErrorJSONCanonicalizesRouteOwnerOffline(t *testing.T) {
+	err, decodeErr := decodeRuntimeErrorJSON([]byte(`{
+		"code": "ABILITY_NOT_FOUND",
+		"stage": "runtime",
+		"message": "invocation.history.list failed: ROUTE_NEGATIVE: namespace.resolve negative for ` + "`" + `easynet:///r/localhost/ability/device.dev-a.invocation.history.list` + "`" + `: NEGATIVE_REASON_NXDOMAIN: owner is not online",
+		"retry": "never",
+		"source": "c_abi",
+		"invocation_id": null,
+		"receipt_ura": null,
+		"details": {}
+	}`))
+	if decodeErr != nil {
+		t.Fatalf("decodeRuntimeErrorJSON: %v", decodeErr)
+	}
+	if err == nil {
+		t.Fatalf("decodeRuntimeErrorJSON returned nil")
+	}
+	if err.Code != ErrDescriptorOwnerOffline {
+		t.Fatalf("code = %s, want %s", err.Code, ErrDescriptorOwnerOffline)
+	}
+	if err.Message != "DESCRIPTOR_OWNER_OFFLINE: descriptor owner is not online" {
+		t.Fatalf("message = %q", err.Message)
+	}
+	if err.Class() != ErrorClassRouting {
+		t.Fatalf("class = %s, want %s", err.Class(), ErrorClassRouting)
+	}
+}
+
 func TestParseErrorCodeAcceptsOnlyCanonicalSchemaValues(t *testing.T) {
 	cases := map[string]ErrorCode{
 		"RUNTIME_OFFLINE":      ErrRuntimeOffline,

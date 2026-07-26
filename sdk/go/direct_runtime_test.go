@@ -507,6 +507,34 @@ func TestDirectRuntimeGRPCErrorProjectsProviderNotFoundAsDescriptorNotFound(t *t
 	}
 }
 
+func TestDirectRuntimeGRPCErrorProjectsOwnerOfflineAsDescriptorOwnerOffline(t *testing.T) {
+	for _, grpcCode := range []codes.Code{codes.NotFound, codes.Unavailable} {
+		err := directRuntimeGRPCError(
+			status.Error(
+				grpcCode,
+				"ROUTE_NEGATIVE: namespace.resolve negative for `easynet:///r/localhost/ability/device.dev-a.meta.list_abilities`: NEGATIVE_REASON_NXDOMAIN: owner is not online",
+			),
+			"unix:///tmp/easynet-daemon.sock",
+		)
+		if !IsCode(err, ErrDescriptorOwnerOffline) {
+			t.Fatalf("directRuntimeGRPCError(%s) = %#v, want DESCRIPTOR_OWNER_OFFLINE", grpcCode, err)
+		}
+		var sdkErr *SDKError
+		if !errors.As(err, &sdkErr) {
+			t.Fatalf("directRuntimeGRPCError(%s) = %#v, want SDKError", grpcCode, err)
+		}
+		if sdkErr.Message != "DESCRIPTOR_OWNER_OFFLINE: descriptor owner is not online" {
+			t.Fatalf("message = %q", sdkErr.Message)
+		}
+		if sdkErr.Retry != RetrySafe || !sdkErr.Retryable {
+			t.Fatalf("retry = %s retryable=%v, want safe retryable", sdkErr.Retry, sdkErr.Retryable)
+		}
+		if sdkErr.Class() != ErrorClassRouting {
+			t.Fatalf("class = %s, want %s", sdkErr.Class(), ErrorClassRouting)
+		}
+	}
+}
+
 func TestDirectRuntimeTransportUsesAxonCanonicalPublicRoute(t *testing.T) {
 	transport, daemon, cleanup := openDirectRuntimeTestTransportWithOptions(t, directRuntimeOptions{
 		DialTimeoutMS: 3000,

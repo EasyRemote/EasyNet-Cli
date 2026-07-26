@@ -35,6 +35,9 @@ pub(crate) fn is_admission_denial_message(message: &str) -> bool {
 
 fn status_code_for_failure(raw_code: &str, detail: &str) -> Code {
     let code = raw_code.trim().to_ascii_uppercase();
+    if is_descriptor_owner_offline_message(&code, detail) {
+        return Code::Unavailable;
+    }
     if is_route_unavailable_message(&code, detail) {
         return Code::Unavailable;
     }
@@ -115,7 +118,20 @@ fn canonical_remote_failure_detail(detail: &str) -> String {
     if is_caller_signer_unavailable_message("", detail) {
         return canonical_caller_signer_unavailable_detail(detail);
     }
+    if is_descriptor_owner_offline_message("", detail) {
+        return "DESCRIPTOR_OWNER_OFFLINE: descriptor owner is not online".to_string();
+    }
     detail.to_string()
+}
+
+fn is_descriptor_owner_offline_message(code: &str, detail: &str) -> bool {
+    let code = code.trim().to_ascii_uppercase();
+    let detail = detail.to_ascii_uppercase();
+    (code == "DESCRIPTOR_OWNER_OFFLINE"
+        || detail.contains("ROUTE_NEGATIVE")
+        || detail.contains("NEGATIVE_REASON_NXDOMAIN")
+        || detail.contains("NEGATIVE_REASON_NOROUTE"))
+        && detail.contains("OWNER IS NOT ONLINE")
 }
 
 fn canonical_caller_signer_unavailable_detail(detail: &str) -> String {
@@ -196,8 +212,14 @@ mod tests {
         let status = status_from_remote_failure("remote Invoke", "ignored", Some(&failure));
 
         assert_eq!(status.code(), Code::Unavailable);
-        assert!(status.message().contains("ROUTE_NEGATIVE"));
-        assert!(status.message().contains("owner is not online"));
+        assert!(
+            status
+                .message()
+                .contains("DESCRIPTOR_OWNER_OFFLINE: descriptor owner is not online"),
+            "owner-offline route failure must be canonicalized: {}",
+            status.message()
+        );
+        assert!(!status.message().contains("ABILITY_NOT_FOUND"));
     }
 
     #[test]

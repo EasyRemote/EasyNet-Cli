@@ -231,6 +231,7 @@ func decodeRuntimeErrorJSON(raw []byte) (*SDKError, error) {
 	if err != nil {
 		return nil, err
 	}
+	code = canonicalRuntimeErrorCode(code, *dto.Message, details)
 	message := canonicalRuntimeErrorMessage(code, *dto.Message, details)
 	return &SDKError{
 		Code:         code,
@@ -364,6 +365,9 @@ func runtimeFailureCode(code string) ErrorCode {
 }
 
 func canonicalRuntimeErrorMessage(code ErrorCode, message string, details map[string]any) string {
+	if code == ErrDescriptorOwnerOffline {
+		return "DESCRIPTOR_OWNER_OFFLINE: descriptor owner is not online"
+	}
 	if code != ErrCallerSignerUnavailable {
 		return message
 	}
@@ -380,6 +384,13 @@ func canonicalRuntimeErrorMessage(code ErrorCode, message string, details map[st
 	return "CALLER_SIGNER_UNAVAILABLE: remote invocation requires a caller signer; load or provision that identity in the local key service"
 }
 
+func canonicalRuntimeErrorCode(code ErrorCode, message string, details map[string]any) ErrorCode {
+	if isDescriptorOwnerOfflineMessage(message) || isDescriptorOwnerOfflineMessage(detailString(details, "detail")) {
+		return ErrDescriptorOwnerOffline
+	}
+	return code
+}
+
 func callerURAFromSignerErrorMessage(message string) string {
 	_, tail, ok := strings.Cut(message, "for `")
 	if !ok {
@@ -390,6 +401,14 @@ func callerURAFromSignerErrorMessage(message string) string {
 		return ""
 	}
 	return strings.TrimSpace(callerURA)
+}
+
+func isDescriptorOwnerOfflineMessage(message string) bool {
+	upper := strings.ToUpper(message)
+	return strings.Contains(upper, "OWNER IS NOT ONLINE") &&
+		(strings.Contains(upper, "ROUTE_NEGATIVE") ||
+			strings.Contains(upper, "NEGATIVE_REASON_NXDOMAIN") ||
+			strings.Contains(upper, "NEGATIVE_REASON_NOROUTE"))
 }
 
 func isCanonicalExtensionErrorCode(code string) bool {

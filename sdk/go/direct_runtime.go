@@ -1734,6 +1734,19 @@ func directRuntimeGRPCError(err error, endpoint string) error {
 	}
 	code, retry := ErrRouteUnavailable, RetryUnknown
 	retryable := false
+	message := statusValue.Message()
+	if isDescriptorOwnerOfflineMessage(message) {
+		code, retry, retryable = ErrDescriptorOwnerOffline, RetrySafe, true
+		return &SDKError{
+			Code:      code,
+			Stage:     "direct_runtime",
+			Retry:     retry,
+			Retryable: retryable,
+			Message:   canonicalRuntimeErrorMessage(code, message, nil),
+			Details:   map[string]any{"endpoint": endpoint, "grpc_status": statusValue.Code().String()},
+			Cause:     err,
+		}
+	}
 	switch statusValue.Code() {
 	case codes.Canceled:
 		code, retry, retryable = ErrCancelled, RetryUnknown, false
@@ -1757,7 +1770,7 @@ func directRuntimeGRPCError(err error, endpoint string) error {
 		Stage:     "direct_runtime",
 		Retry:     retry,
 		Retryable: retryable,
-		Message:   statusValue.Message(),
+		Message:   canonicalRuntimeErrorMessage(code, message, nil),
 		Details:   map[string]any{"endpoint": endpoint, "grpc_status": statusValue.Code().String()},
 		Cause:     err,
 	}

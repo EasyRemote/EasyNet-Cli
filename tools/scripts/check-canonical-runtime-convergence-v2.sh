@@ -373,10 +373,12 @@ from pathlib import Path
 text = Path(sys.argv[1]).read_text()
 required = {
     "fn is_route_unavailable_message": "route_unavailable_helper_missing",
+    "fn is_descriptor_owner_offline_message": "descriptor_owner_offline_helper_missing",
     "fn is_caller_signer_unavailable_message": "caller_signer_helper_missing",
     "detail.contains(\"ROUTE_NEGATIVE\")": "route_negative_detail_missing",
     "detail.contains(\"NEGATIVE_REASON_NXDOMAIN\")": "nxdomain_detail_missing",
     "detail.contains(\"OWNER IS NOT ONLINE\")": "owner_offline_detail_missing",
+    "DESCRIPTOR_OWNER_OFFLINE: descriptor owner is not online": "descriptor_owner_offline_projection_missing",
     "detail.contains(\"REQUIRES A CALLER SIGNER\")": "caller_signer_detail_missing",
     "detail.contains(\"KEYRING ENTRY NOT FOUND\")": "keyring_not_found_detail_missing",
     "detail.contains(\"SELF-IDENTITY:\")": "self_identity_detail_missing",
@@ -386,13 +388,43 @@ required = {
 for needle, marker in required.items():
     if needle not in text:
         raise SystemExit(f"remote_failure_route_negative:{marker}")
+owner_index = text.find("is_descriptor_owner_offline_message(&code, detail)")
 route_index = text.find("is_route_unavailable_message(&code, detail)")
 signer_index = text.find("is_caller_signer_unavailable_message(&code, detail)")
 not_found_index = text.find('matches!(code.as_str(), "NOT_FOUND" | "ABILITY_NOT_FOUND")')
+if owner_index < 0 or not_found_index < 0 or owner_index > not_found_index:
+    raise SystemExit("remote_failure_route_negative:not_found_checked_before_descriptor_owner_offline")
 if route_index < 0 or not_found_index < 0 or route_index > not_found_index:
     raise SystemExit("remote_failure_route_negative:not_found_checked_before_route_negative")
 if signer_index < 0 or signer_index > not_found_index:
     raise SystemExit("remote_failure_route_negative:not_found_checked_before_caller_signer")
+PY
+}
+
+check_route_negative_owner_offline_status_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local target_gate="$cli_root/src/daemon/invocation/admission/target_gate.rs"
+  [[ -f "$target_gate" ]] || fail "target gate source is missing: ${target_gate#$cli_root/}"
+
+  "$PYTHON_BIN" - "$target_gate" <<'PY'
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text()
+required = {
+    "fn route_negative_owner_offline(": "owner_offline_helper_missing",
+    "Status::unavailable(message)": "owner_offline_unavailable_status_missing",
+    "resolver_owner_offline_maps_to_availability_not_absence": "owner_offline_test_missing",
+    "NegativeReason::Nxdomain | NegativeReason::Noroute": "owner_offline_reasons_missing",
+    "eq_ignore_ascii_case(\"owner is not online\")": "owner_offline_detail_gate_missing",
+}
+for needle, marker in required.items():
+    if needle not in text:
+        raise SystemExit(f"route_negative_owner_offline_status:{marker}")
+owner_index = text.find("route_negative_owner_offline(&failure)")
+absence_index = text.find("NegativeReason::Nxdomain | NegativeReason::Nodata => Status::not_found(message)")
+if owner_index < 0 or absence_index < 0 or owner_index > absence_index:
+    raise SystemExit("route_negative_owner_offline_status:owner_offline_checked_after_absence")
 PY
 }
 
@@ -6244,9 +6276,13 @@ if re.search(r"case\s+codes\.NotFound:\s*code,\s*retry,\s*retryable\s*=\s*ErrAbi
     raise SystemExit("sdk_go_direct_runtime_not_found_legacy_ability_projection")
 if "case codes.NotFound:" not in go_body or "ErrDescriptorNotFound" not in go_body:
     raise SystemExit("sdk_go_direct_runtime_not_found_descriptor_projection_missing")
+if "isDescriptorOwnerOfflineMessage(message)" not in go_body or "ErrDescriptorOwnerOffline" not in go_body:
+    raise SystemExit("sdk_go_direct_runtime_owner_offline_projection_missing")
 go_tests = read(go_direct_test_path)
 if "TestDirectRuntimeGRPCErrorProjectsProviderNotFoundAsDescriptorNotFound" not in go_tests:
     raise SystemExit("sdk_go_direct_runtime_not_found_descriptor_test_missing")
+if "TestDirectRuntimeGRPCErrorProjectsOwnerOfflineAsDescriptorOwnerOffline" not in go_tests:
+    raise SystemExit("sdk_go_direct_runtime_owner_offline_descriptor_test_missing")
 
 py_direct = read(py_direct_path)
 py_body = section(py_direct, "def _grpc_error(", "def _direct_error(")
@@ -6254,9 +6290,13 @@ if re.search(r"grpc\.StatusCode\.NOT_FOUND:\s*\(\s*ErrorCode\.ABILITY_NOT_FOUND"
     raise SystemExit("sdk_python_direct_runtime_not_found_legacy_ability_projection")
 if "grpc.StatusCode.NOT_FOUND" not in py_body or "ErrorCode.DESCRIPTOR_NOT_FOUND" not in py_body:
     raise SystemExit("sdk_python_direct_runtime_not_found_descriptor_projection_missing")
+if "is_descriptor_owner_offline_message(message)" not in py_body or "ErrorCode.DESCRIPTOR_OWNER_OFFLINE" not in py_body:
+    raise SystemExit("sdk_python_direct_runtime_owner_offline_projection_missing")
 py_tests = read(py_direct_test_path)
 if "test_direct_runtime_grpc_not_found_projects_descriptor_not_found" not in py_tests:
     raise SystemExit("sdk_python_direct_runtime_not_found_descriptor_test_missing")
+if "test_direct_runtime_grpc_owner_offline_projects_descriptor_owner_offline" not in py_tests:
+    raise SystemExit("sdk_python_direct_runtime_owner_offline_descriptor_test_missing")
 PY
 }
 
@@ -25873,6 +25913,7 @@ check_ffi_init_typed_connect_error_contract
 check_failure_code_default_policy_contract
 check_bidi_dispatch_default_code_policy_contract
 check_remote_failure_route_negative_classification_contract
+check_route_negative_owner_offline_status_contract
 check_bidi_reverse_unary_terminal_state_contract
 check_cabi_bidi_cancel_reason_contract
 check_ffi_unknown_invocation_resource_terminality_contract

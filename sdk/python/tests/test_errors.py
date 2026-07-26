@@ -86,6 +86,29 @@ class ErrorTests(unittest.TestCase):
         self.assertEqual(error.invocation_id, "inv-1")
         self.assertEqual(error.details["abi_symbol"], "ERR_PERMISSION_DENIED")
 
+    def test_from_json_canonicalizes_route_owner_offline(self) -> None:
+        error = SDKError.from_json(
+            b"""{
+                "code": "ABILITY_NOT_FOUND",
+                "stage": "runtime",
+                "message": "invocation.history.list failed: ROUTE_NEGATIVE: namespace.resolve negative for `easynet:///r/localhost/ability/device.dev-a.invocation.history.list`: NEGATIVE_REASON_NXDOMAIN: owner is not online",
+                "retry": "never",
+                "source": "c_abi",
+                "invocation_id": null,
+                "receipt_ura": null,
+                "details": {}
+            }"""
+        )
+
+        self.assertIsNotNone(error)
+        assert error is not None
+        self.assertEqual(error.code, ErrorCode.DESCRIPTOR_OWNER_OFFLINE)
+        self.assertEqual(
+            error.message,
+            "DESCRIPTOR_OWNER_OFFLINE: descriptor owner is not online",
+        )
+        self.assertEqual(error.error_class, ErrorClass.ROUTING)
+
     def test_normalize_error_code_accepts_only_canonical_schema_values(self) -> None:
         cases = {
             "VERSION_INCOMPATIBLE": ErrorCode.VERSION_INCOMPATIBLE,

@@ -525,6 +525,9 @@ pub(crate) fn route_negative_status(failure: ResolveRouteFailure) -> Status {
     use NegativeReason;
 
     let message = route_negative_message(&failure);
+    if route_negative_owner_offline(&failure) {
+        return Status::unavailable(message);
+    }
     match failure.reason {
         NegativeReason::Nxdomain | NegativeReason::Nodata => Status::not_found(message),
         NegativeReason::Unauthorized => Status::permission_denied(message),
@@ -536,6 +539,16 @@ pub(crate) fn route_negative_status(failure: ResolveRouteFailure) -> Status {
         | NegativeReason::Stale
         | NegativeReason::Loop => Status::failed_precondition(message),
     }
+}
+
+fn route_negative_owner_offline(failure: &ResolveRouteFailure) -> bool {
+    matches!(
+        failure.reason,
+        NegativeReason::Nxdomain | NegativeReason::Noroute
+    ) && failure
+        .detail
+        .trim()
+        .eq_ignore_ascii_case("owner is not online")
 }
 
 pub(crate) fn route_profile_blocked_message(selected_route: &SelectedInvokeRoute) -> String {
@@ -675,15 +688,19 @@ fn status_from_child_invocation_failure(failure: ChildInvocationBuildFailure) ->
 
 #[cfg(test)]
 mod tests {
-    use super::{local_runtime_authority_ura, route_negative_status};
+    use super::{local_runtime_authority_ura, route_negative_status, ROUTE_NEGATIVE_CODE};
     use crate::daemon::federation::resolver_contract::NegativeReason;
     use crate::daemon::invocation::routing::route_resolver::ResolveRouteFailure;
 
     fn negative_status(reason: NegativeReason) -> tonic::Status {
+        negative_status_with_detail(reason, "test negative")
+    }
+
+    fn negative_status_with_detail(reason: NegativeReason, detail: &str) -> tonic::Status {
         route_negative_status(ResolveRouteFailure {
             query_name: "easynet:///r/acme/device/node-a#skill.list".to_string(),
             reason,
-            detail: "test negative".to_string(),
+            detail: detail.to_string(),
         })
     }
 
@@ -691,6 +708,21 @@ mod tests {
     fn resolver_absence_maps_to_not_found() {
         for reason in [NegativeReason::Nxdomain, NegativeReason::Nodata] {
             assert_eq!(negative_status(reason).code(), tonic::Code::NotFound);
+        }
+    }
+
+    #[test]
+    fn resolver_owner_offline_maps_to_availability_not_absence() {
+        for reason in [NegativeReason::Nxdomain, NegativeReason::Noroute] {
+            let status = negative_status_with_detail(reason, "owner is not online");
+
+            assert_eq!(status.code(), tonic::Code::Unavailable);
+            assert!(status.message().contains(ROUTE_NEGATIVE_CODE));
+            assert!(
+                status.message().contains("owner is not online"),
+                "owner-offline route negative must remain diagnosable: {}",
+                status.message()
+            );
         }
     }
 

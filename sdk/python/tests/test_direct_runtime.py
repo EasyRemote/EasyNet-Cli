@@ -23,6 +23,7 @@ from easynet_sdk import (
     ErrorClass,
     InvocationHandle,
     InvocationSignature,
+    RetryHint,
     RuntimeClient,
     RuntimeReceipt,
     SDKError,
@@ -332,6 +333,28 @@ class DirectRuntimeTests(unittest.TestCase):
         self.assertEqual(error.code, ErrorCode.DESCRIPTOR_NOT_FOUND)
         self.assertEqual(error.error_class, ErrorClass.ROUTING)
         self.assertEqual(error.stage, "direct_runtime")
+
+    def test_direct_runtime_grpc_owner_offline_projects_descriptor_owner_offline(
+        self,
+    ) -> None:
+        for status_code in (grpc.StatusCode.NOT_FOUND, grpc.StatusCode.UNAVAILABLE):
+            with self.subTest(status_code=status_code):
+                error = _grpc_error(
+                    _FakeRpcError(
+                        status_code,
+                        "ROUTE_NEGATIVE: namespace.resolve negative for `easynet:///r/localhost/ability/device.dev-a.meta.list_abilities`: NEGATIVE_REASON_NXDOMAIN: owner is not online",
+                    ),
+                    endpoint="unix:///tmp/easynet-daemon.sock",
+                )
+
+                self.assertEqual(error.code, ErrorCode.DESCRIPTOR_OWNER_OFFLINE)
+                self.assertEqual(
+                    error.message,
+                    "DESCRIPTOR_OWNER_OFFLINE: descriptor owner is not online",
+                )
+                self.assertEqual(error.error_class, ErrorClass.ROUTING)
+                self.assertEqual(error.retry, RetryHint.SAFE)
+                self.assertTrue(error.retryable)
 
     def test_direct_connector_resolves_invocation_endpoint_from_discovery(self) -> None:
         connector = DirectRuntimeConnector(
