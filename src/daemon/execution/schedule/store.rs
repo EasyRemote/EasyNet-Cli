@@ -142,20 +142,18 @@ fn parse_on_disk_schedule(input: &str) -> anyhow::Result<OnDisk> {
             "schedule record schema_version {schema_version} is not supported by this runtime"
         );
     }
-    if !object.contains_key("prompt") {
-        anyhow::bail!("schedule record missing explicit prompt field");
+    let prompt = object
+        .get("prompt")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("schedule record missing explicit prompt string"))?;
+    if prompt.trim().is_empty() {
+        anyhow::bail!("schedule record prompt must be non-empty");
     }
     Ok(serde_json::from_value(value)?)
 }
 
 fn serialize_on_disk_schedule(on_disk: &OnDisk) -> anyhow::Result<String> {
-    let mut value = serde_json::to_value(on_disk)?;
-    let object = value
-        .as_object_mut()
-        .ok_or_else(|| anyhow::anyhow!("schedule record serialization must produce an object"))?;
-    object
-        .entry("prompt".to_string())
-        .or_insert(serde_json::Value::Null);
+    let value = serde_json::to_value(on_disk)?;
     Ok(serde_json::to_string_pretty(&value)?)
 }
 
@@ -183,7 +181,7 @@ mod tests {
             misfire_policy: MisfirePolicy::Skip,
             catch_up_window_secs: None,
             enabled: true,
-            prompt: None,
+            prompt: "Run {{target_agent}} for {{schedule_id}}".to_string(),
         }
     }
 
@@ -198,8 +196,8 @@ mod tests {
         store.save(&e).unwrap();
         let raw = std::fs::read_to_string(store.dir().join("rt-1.json")).unwrap();
         assert!(
-            raw.contains("\"prompt\": null"),
-            "current schedule schema must write explicit prompt null: {raw}"
+            raw.contains("\"prompt\": \"Run {{target_agent}} for {{schedule_id}}\""),
+            "current schedule schema must write explicit prompt string: {raw}"
         );
         let loaded = store.load_all().unwrap();
         assert_eq!(loaded.len(), 1);
@@ -242,6 +240,39 @@ mod tests {
         std::fs::write(
             store.dir().join("missing-prompt.json"),
             serde_json::to_string_pretty(&missing_prompt).unwrap(),
+        )
+        .unwrap();
+
+        let mut null_prompt = serde_json::to_value(OnDisk {
+            schema_version: SCHEMA_VERSION,
+            entry: entry("null-prompt"),
+        })
+        .unwrap()
+        .as_object()
+        .unwrap()
+        .clone();
+        null_prompt.insert("prompt".to_string(), serde_json::Value::Null);
+        std::fs::write(
+            store.dir().join("null-prompt.json"),
+            serde_json::to_string_pretty(&null_prompt).unwrap(),
+        )
+        .unwrap();
+
+        let mut blank_prompt = serde_json::to_value(OnDisk {
+            schema_version: SCHEMA_VERSION,
+            entry: entry("blank-prompt"),
+        })
+        .unwrap()
+        .as_object()
+        .unwrap()
+        .clone();
+        blank_prompt.insert(
+            "prompt".to_string(),
+            serde_json::Value::String("  ".to_string()),
+        );
+        std::fs::write(
+            store.dir().join("blank-prompt.json"),
+            serde_json::to_string_pretty(&blank_prompt).unwrap(),
         )
         .unwrap();
 

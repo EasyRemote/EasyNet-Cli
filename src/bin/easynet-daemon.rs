@@ -914,23 +914,15 @@ fn spawn_schedule_tick(
                     }
                 };
                 let agent = entry.target_agent.as_str().to_string();
-                // Use the schedule's prompt template if present;
-                // otherwise fall back to a heartbeat-style placeholder.
                 // The template renderer substitutes {{schedule_id}},
                 // {{fire_at_iso}}, {{catch_up}}, {{target_agent}}.
-                let prompt = match &entry.prompt {
-                    Some(template) => easynet_cli::daemon::execution::schedule::render_prompt(
-                        template,
-                        fire.schedule_id.as_str(),
-                        &fire.fire_at,
-                        fire.catch_up,
-                        &agent,
-                    ),
-                    None => format!(
-                        "Scheduled fire of {} at {} (catch_up={})",
-                        fire.schedule_id, fire.fire_at, fire.catch_up
-                    ),
-                };
+                let prompt = easynet_cli::daemon::execution::schedule::render_prompt(
+                    &entry.prompt,
+                    fire.schedule_id.as_str(),
+                    &fire.fire_at,
+                    fire.catch_up,
+                    &agent,
+                );
                 let (local_device_ura, schedule_subject_ura) =
                     schedule_tick_invocation_uras(&identity, &entry.target_node, &fire.schedule_id);
                 let payload = match serde_json::to_vec(&serde_json::json!({"prompt": prompt})) {

@@ -75,9 +75,10 @@ fn add_handler(svc: &ScheduleService, args: Value) -> anyhow::Result<Value> {
     };
     let catch_up_window_secs = args.get("catch_up_window_secs").and_then(Value::as_u64);
     let enabled = args.get("enabled").and_then(Value::as_bool).unwrap_or(true);
-    // Optional prompt template — see ScheduleEntry::prompt for
-    // supported template variables.
-    let prompt = args.get("prompt").and_then(Value::as_str).map(String::from);
+    let prompt = required_str(&args, "prompt")?;
+    if prompt.trim().is_empty() {
+        anyhow::bail!("schedule.add: prompt must be non-empty");
+    }
     let spec = ScheduleCreateSpec::new(
         NodeId::new(target_node),
         AgentId::new(target_agent),
@@ -125,7 +126,7 @@ fn required_str<'a>(args: &'a Value, key: &str) -> anyhow::Result<&'a str> {
 pub fn add_input_schema() -> Value {
     json!({
         "type": "object",
-        "required": ["target_node", "target_agent", "cron_expr", "misfire_policy"],
+        "required": ["target_node", "target_agent", "cron_expr", "misfire_policy", "prompt"],
         "properties": {
             "target_node": {"type": "string"},
             "target_agent": {"type": "string"},
@@ -207,7 +208,8 @@ mod tests {
                 "target_node": "self",
                 "target_agent": "alice",
                 "cron_expr": "0 9 * * *",
-                "misfire_policy": "skip"
+                "misfire_policy": "skip",
+                "prompt": "Daily task for {{target_agent}}"
             }),
         )
         .unwrap();
@@ -225,7 +227,8 @@ mod tests {
                 "target_node": "self",
                 "target_agent": "alice",
                 "cron_expr": "0 9 * * *",
-                "misfire_policy": "yolo"
+                "misfire_policy": "yolo",
+                "prompt": "Daily task for {{target_agent}}"
             }),
         )
         .unwrap_err();
@@ -241,7 +244,8 @@ mod tests {
                 "target_node": "self",
                 "target_agent": "alice",
                 "cron_expr": "0 9 * * *",
-                "misfire_policy": "fire_once"
+                "misfire_policy": "fire_once",
+                "prompt": "Daily task for {{target_agent}}"
             }),
         )
         .unwrap();
@@ -260,7 +264,8 @@ mod tests {
                 "target_node": "self",
                 "target_agent": "alice",
                 "cron_expr": "0 9 * * *",
-                "misfire_policy": "skip"
+                "misfire_policy": "skip",
+                "prompt": "Daily task for {{target_agent}}"
             }),
         )
         .unwrap();
@@ -276,5 +281,34 @@ mod tests {
         let svc = fresh();
         let err = add_handler(&svc, json!({"target_node": "x"})).unwrap_err();
         assert!(format!("{err}").contains("target_agent"));
+    }
+
+    #[test]
+    fn add_requires_explicit_non_empty_prompt() {
+        let svc = fresh();
+        let missing = add_handler(
+            &svc,
+            json!({
+                "target_node": "self",
+                "target_agent": "alice",
+                "cron_expr": "0 9 * * *",
+                "misfire_policy": "skip"
+            }),
+        )
+        .unwrap_err();
+        assert!(format!("{missing}").contains("prompt"));
+
+        let blank = add_handler(
+            &svc,
+            json!({
+                "target_node": "self",
+                "target_agent": "alice",
+                "cron_expr": "0 9 * * *",
+                "misfire_policy": "skip",
+                "prompt": "  "
+            }),
+        )
+        .unwrap_err();
+        assert!(format!("{blank}").contains("prompt must be non-empty"));
     }
 }

@@ -88,7 +88,7 @@ impl ContextLoader for ScheduleLoader {
         let now = Utc::now();
         let horizon_end = now + chrono::Duration::from_std(self.horizon)?;
 
-        let mut upcoming: Vec<(DateTime<Utc>, String, Option<String>)> = Vec::new();
+        let mut upcoming: Vec<(DateTime<Utc>, String, String)> = Vec::new();
         for entry in self.svc.list()? {
             if !entry.enabled {
                 continue;
@@ -127,13 +127,11 @@ impl ContextLoader for ScheduleLoader {
             // across daemon hosts; ISO UTC is unambiguous and the
             // LLM can convert if asked.
             out.push_str(&format!("- **{}** (cron `{}`)", when.to_rfc3339(), cron));
-            if let Some(p) = prompt {
-                let preview: String = p.chars().take(80).collect();
-                out.push_str(": ");
-                out.push_str(&preview);
-                if p.chars().count() > 80 {
-                    out.push('…');
-                }
+            let preview: String = prompt.chars().take(80).collect();
+            out.push_str(": ");
+            out.push_str(&preview);
+            if prompt.chars().count() > 80 {
+                out.push('…');
             }
             out.push('\n');
         }
@@ -165,7 +163,7 @@ mod tests {
             misfire_policy: MisfirePolicy::Skip,
             catch_up_window_secs: None,
             enabled,
-            prompt: None,
+            prompt: "Summarize schedule {{schedule_id}}".to_string(),
         }
     }
 

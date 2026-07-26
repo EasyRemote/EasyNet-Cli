@@ -10591,18 +10591,27 @@ for retired in (
 for required in (
     "fn parse_on_disk_schedule(",
     "schedule record missing explicit schema_version",
-    "schedule record missing explicit prompt field",
+    "schedule record missing explicit prompt string",
+    "schedule record prompt must be non-empty",
     "schema_version {schema_version} is not supported",
     "fn serialize_on_disk_schedule(",
-    ".entry(\"prompt\".to_string())",
-    ".or_insert(serde_json::Value::Null)",
 ):
     if required not in store:
         raise SystemExit(f"schedule_store_current_schema_missing:{required}")
 
+for retired in (
+    ".entry(\"prompt\".to_string())",
+    ".or_insert(serde_json::Value::Null)",
+    "\"prompt\": null",
+):
+    if retired in store_prod:
+        raise SystemExit(f"schedule_store_current_schema_retired_prompt_null:{retired}")
+
 for required_test in (
     "load_all_skips_records_missing_current_schema_facts",
     "parse_on_disk_schedule_rejects_unsupported_schema_version",
+    "null-prompt",
+    "blank-prompt",
 ):
     if required_test not in store:
         raise SystemExit(f"schedule_store_current_schema_missing_test:{required_test}")

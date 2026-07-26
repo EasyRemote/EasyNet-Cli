@@ -60,7 +60,7 @@ pub struct ScheduleCreateSpec {
     pub misfire_policy: MisfirePolicy,
     pub catch_up_window_secs: Option<u64>,
     pub enabled: bool,
-    pub prompt: Option<String>,
+    pub prompt: String,
 }
 
 impl ScheduleCreateSpec {
@@ -77,7 +77,7 @@ impl ScheduleCreateSpec {
             misfire_policy,
             catch_up_window_secs: None,
             enabled: true,
-            prompt: None,
+            prompt: String::new(),
         }
     }
 
@@ -91,8 +91,8 @@ impl ScheduleCreateSpec {
         self
     }
 
-    pub fn with_prompt(mut self, prompt: Option<String>) -> Self {
-        self.prompt = prompt;
+    pub fn with_prompt(mut self, prompt: impl Into<String>) -> Self {
+        self.prompt = prompt.into();
         self
     }
 
@@ -195,6 +195,7 @@ impl ScheduleService {
         // Validate cron BEFORE assigning id so the caller's id is
         // not consumed by a malformed entry.
         validate_cron(&entry.cron_expr)?;
+        validate_schedule_prompt(&entry.prompt)?;
         entry.tenant = tenant;
         if entry.id.as_str().is_empty() {
             entry.id = ScheduleId::new(format!("sched-{}", Uuid::new_v4()));
@@ -412,6 +413,13 @@ fn validate_cron(expr: &str) -> anyhow::Result<()> {
     parse_cron(expr).map(|_| ())
 }
 
+fn validate_schedule_prompt(prompt: &str) -> anyhow::Result<()> {
+    if prompt.trim().is_empty() {
+        anyhow::bail!("schedule prompt must be non-empty");
+    }
+    Ok(())
+}
+
 fn parse_entry_cron(entry: &ScheduleEntry) -> anyhow::Result<CronSchedule> {
     parse_cron(&entry.cron_expr)
         .map_err(|err| anyhow::anyhow!("schedule {} has invalid cron: {err:#}", entry.id))
@@ -462,7 +470,7 @@ pub fn make_entry(
         misfire_policy: misfire,
         catch_up_window_secs: None,
         enabled: true,
-        prompt: None,
+        prompt: "Run scheduled task {{schedule_id}}".to_string(),
     }
 }
 
@@ -525,6 +533,15 @@ mod tests {
             .add(entry("totally not cron", MisfirePolicy::Skip))
             .unwrap_err();
         assert!(format!("{err}").contains("invalid cron"));
+    }
+
+    #[test]
+    fn add_rejects_blank_prompt_at_domain_boundary() {
+        let svc = bound_service();
+        let mut entry = entry("0 9 * * *", MisfirePolicy::Skip);
+        entry.prompt = " \t ".to_string();
+        let err = svc.add(entry).unwrap_err();
+        assert!(format!("{err}").contains("schedule prompt must be non-empty"));
     }
 
     #[test]
@@ -724,13 +741,13 @@ mod tests {
     #[test]
     fn schedule_entry_round_trips_with_prompt_field() {
         // Verify the new ScheduleEntry.prompt field serialises
-        // and deserialises as Option<String>. Disk store schema
-        // validation owns missing-field rejection.
+        // and deserialises as a required runtime fact. Disk store
+        // schema validation owns missing-field rejection.
         let mut e = entry("0 9 * * *", MisfirePolicy::Skip);
-        e.prompt = Some("hi {{target_agent}}".into());
+        e.prompt = "hi {{target_agent}}".into();
         let json = serde_json::to_string(&e).unwrap();
         assert!(json.contains("\"prompt\":\"hi {{target_agent}}\""));
         let back: ScheduleEntry = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.prompt.as_deref(), Some("hi {{target_agent}}"));
+        assert_eq!(back.prompt, "hi {{target_agent}}");
     }
 }
