@@ -11747,6 +11747,17 @@ if "derive ability URA for" in resolve_body:
     raise SystemExit("ffi_descriptor_runtime_owner:retired_local_ability_projection_error")
 if "descriptor_ref::ability_ura_for_wire(\n        callee_ura, ability," not in resolve_body:
     raise SystemExit("ffi_descriptor_runtime_owner:callee_bound_ability_resolver_missing")
+for required in (
+    "fn validate_receipt_history_descriptor_subject(",
+    "provider.validate_request_subject(object)?",
+    "Self::ReceiptHistory => validate_receipt_history_descriptor_subject(object)",
+    "descriptor_ref provider receipt_history requires subject_ura",
+    "descriptor_ref provider receipt_history subject_ura must be a user-owned runtime-state read subject",
+    "parsed.resource_owner_id()",
+    'parsed.resource_path() != Some("runtime-state/read")',
+):
+    if required not in text:
+        raise SystemExit(f"ffi_descriptor_runtime_owner:receipt_history_subject_gate_missing:{required}")
 
 if "fn descriptor_resolution_error_projection(" in production:
     raise SystemExit("ffi_descriptor_runtime_owner:retired_message_projection_classifier")
@@ -11787,6 +11798,8 @@ for required_test in (
     "runtime owner failure must not expose custody implementation details",
     "runtime_descriptor_resolver_does_not_remote_probe_realm_catalog_miss",
     "runtime_descriptor_resolver_rejects_ability_owner_mismatch_before_catalog_lookup",
+    "runtime_descriptor_resolver_rejects_receipt_provider_non_runtime_state_subjects",
+    "runtime_descriptor_resolver_uses_explicit_provider_for_remote_receipt_read",
     "runtime_owner_resolution_rejects_relative_control_endpoint_before_cwd_lookup",
     "descriptor_resolution_errors_project_canonical_runtime_codes",
 ):

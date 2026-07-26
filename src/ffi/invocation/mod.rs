@@ -483,9 +483,61 @@ impl RuntimeDescriptorProviderKind {
         }
     }
 
+    fn validate_request_subject(
+        self,
+        object: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<(), DescriptorResolutionError> {
+        match self {
+            Self::ReceiptHistory => validate_receipt_history_descriptor_subject(object),
+            Self::Generic | Self::AbilityDescriptor => Ok(()),
+        }
+    }
+
     fn is_explicit(self) -> bool {
         !matches!(self, Self::Generic)
     }
+}
+
+#[cfg(feature = "axon-pb")]
+fn validate_receipt_history_descriptor_subject(
+    object: &serde_json::Map<String, serde_json::Value>,
+) -> Result<(), DescriptorResolutionError> {
+    let subject_ura = object
+        .get("subject_ura")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            DescriptorResolutionError::invalid_request(
+                "descriptor_ref provider receipt_history requires subject_ura",
+            )
+        })?;
+    if crate::core::identity::contains_all_zero_principal_placeholder(subject_ura) {
+        return Err(DescriptorResolutionError::invalid_request(
+            "descriptor_ref provider receipt_history subject_ura must not be all-zero",
+        ));
+    }
+    let parsed = crate::core::ura::parse_ura(subject_ura).map_err(|error| {
+        DescriptorResolutionError::invalid_request(format!(
+            "descriptor_ref provider receipt_history subject_ura must be canonical: {error}"
+        ))
+    })?;
+    if parsed.kind != crate::core::ura::URAKind::Resource {
+        return Err(DescriptorResolutionError::invalid_request(
+            "descriptor_ref provider receipt_history subject_ura must be a Resource URA",
+        ));
+    }
+    let owner = parsed.resource_owner_id().unwrap_or_default();
+    let user_id = owner.strip_prefix("user.").unwrap_or_default();
+    if user_id.trim().is_empty()
+        || crate::core::identity::contains_all_zero_principal_placeholder(user_id)
+        || parsed.resource_path() != Some("runtime-state/read")
+    {
+        return Err(DescriptorResolutionError::invalid_request(
+            "descriptor_ref provider receipt_history subject_ura must be a user-owned runtime-state read subject",
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(feature = "axon-pb")]
@@ -2030,6 +2082,7 @@ fn runtime_resolve_descriptor_ref_json(
             ))
         })?;
     provider.require_ability(&public_ability)?;
+    provider.validate_request_subject(object)?;
     let runtime_owner_ura = runtime_owner_ura_from_session(session)
         .map_err(DescriptorResolutionError::runtime_owner_unavailable)?;
     if runtime_owner_ura == callee_ura {
@@ -9902,6 +9955,7 @@ mod tests {
         let remote_node_id = "a364ba18-8961-4b31-838a-31c7d776c709";
         let local_device_ura = crate::core::ura::device_ura("localhost", local_node_id);
         let remote_device_ura = crate::core::ura::device_ura("localhost", remote_node_id);
+        let runtime_state_subject = "easynet:///r/localhost/resource/user.alice/runtime-state/read";
         let ability_ura = format!(
             "easynet:///r/localhost/ability/device.{remote_node_id}.{}",
             crate::daemon::ability::names::governance::INVOCATION_HISTORY_LIST
@@ -9937,7 +9991,7 @@ mod tests {
             &serde_json::json!({
                 "callee_ura": remote_device_ura,
                 "caller_ura": local_device_ura,
-                "subject_ura": remote_device_ura,
+                "subject_ura": runtime_state_subject,
                 "ability": crate::daemon::ability::names::governance::INVOCATION_HISTORY_LIST,
                 "call_mode": "rpc",
                 "provider": "receipt_history",
@@ -9959,6 +10013,90 @@ mod tests {
                 |descriptor_ref| descriptor_ref.starts_with(&format!("{ability_ura}@"))
                     && descriptor_ref.ends_with("!read")
             ));
+    }
+
+    #[cfg(feature = "axon-pb")]
+    #[test]
+    fn runtime_descriptor_resolver_rejects_receipt_provider_non_runtime_state_subjects() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let control_path = dir.path().join("control.json");
+        let local_node_id = "local-runtime-node";
+        let remote_node_id = "a364ba18-8961-4b31-838a-31c7d776c709";
+        let local_device_ura = crate::core::ura::device_ura("localhost", local_node_id);
+        let remote_device_ura = crate::core::ura::device_ura("localhost", remote_node_id);
+        crate::daemon::control::discovery::write(
+            &control_path,
+            &crate::daemon::control::discovery::ControlDiscovery {
+                socket_path: Some(dir.path().join("control.sock")),
+                pipe_name: None,
+                invocation_endpoint: Some(dir.path().join("daemon.sock")),
+                daemon_identity: Some(crate::daemon::control::discovery::DaemonIdentity {
+                    mode: "device".to_string(),
+                    realm: "localhost".to_string(),
+                    node_id: Some(local_node_id.to_string()),
+                }),
+                pid: 1,
+                daemon_version: env!("CARGO_PKG_VERSION").to_string(),
+                supported_ipc_versions: crate::daemon::control::discovery::IpcVersionRange::single(
+                    1,
+                ),
+                capability_flags: Vec::new(),
+                pages_port: None,
+            },
+        )
+        .expect("write control discovery");
+        let session = crate::ffi::client::handle::ClientSession::with_control_path_only(
+            control_path.display().to_string(),
+            Some(dir.path().join("offline-daemon.sock").display().to_string()),
+        );
+
+        for (case, subject_ura, expected) in [
+            (
+                "missing subject",
+                None,
+                "provider receipt_history requires subject_ura",
+            ),
+            (
+                "device subject",
+                Some(remote_device_ura.as_str()),
+                "subject_ura must be a Resource URA",
+            ),
+            (
+                "retired session subject",
+                Some("easynet:///r/localhost/resource/user.alice/session/invocation_history"),
+                "runtime-state read subject",
+            ),
+            (
+                "all-zero runtime-state subject",
+                Some("easynet:///r/localhost/resource/user.00000000-0000-0000-0000-000000000000/runtime-state/read"),
+                "subject_ura must not be all-zero",
+            ),
+        ] {
+            let mut request = serde_json::json!({
+                "callee_ura": remote_device_ura,
+                "caller_ura": local_device_ura,
+                "ability": crate::daemon::ability::names::governance::INVOCATION_HISTORY_LIST,
+                "call_mode": "rpc",
+                "provider": "receipt_history",
+            });
+            if let Some(subject_ura) = subject_ura {
+                request
+                    .as_object_mut()
+                    .expect("descriptor request object")
+                    .insert("subject_ura".to_string(), serde_json::json!(subject_ura));
+            }
+            let error = runtime_resolve_descriptor_ref_json(&session, &request.to_string())
+                .expect_err(&format!("{case} must be rejected"));
+            let message = error.to_string();
+            assert!(
+                message.contains(expected),
+                "{case} error must contain {expected:?}, got {message}"
+            );
+            assert!(
+                !message.contains("descriptor_ref not found") && !message.contains("ROUTE_NEGATIVE"),
+                "{case} must fail before catalog or route state: {message}"
+            );
+        }
     }
 
     #[cfg(feature = "axon-pb")]
