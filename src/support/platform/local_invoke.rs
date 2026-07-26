@@ -449,10 +449,10 @@ impl LocalRuntimeStateReadIssuer {
     }
 
     fn subject_ura() -> anyhow::Result<String> {
-        LocalRuntimeStateReadSubject::from_runtime_attachment_file(
+        LocalRuntimeStateReadAttachment::from_runtime_attachment_file(
             &KeyServiceRuntimeStateReadSignerCustody,
         )
-        .map(|subject| subject.into_ura())
+        .and_then(|attachment| attachment.into_subject_ura())
     }
 }
 
@@ -473,21 +473,21 @@ impl RuntimeStateReadSignerCustody for KeyServiceRuntimeStateReadSignerCustody {
     }
 }
 
-/// Canonical subject for daemon-local runtime-state read projections.
+/// Active attachment facts for daemon-local runtime-state read projections.
 ///
 /// Runtime-state reads are user-owned resource observations over the running
 /// daemon, not actions performed as the daemon/device identity itself. Binding
 /// them to a user-owned Resource URA lets the existing session-authority
 /// admission rule prove ownership without reintroducing a device-subject
-/// fallback.
+/// fallback. Subject grammar is owned by `RuntimeStateReadSubject`; this object
+/// owns only Ready discovery, paired credentials, and signer-custody checks.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct LocalRuntimeStateReadSubject {
-    ura: String,
+struct LocalRuntimeStateReadAttachment {
+    realm: String,
+    user_id: String,
 }
 
-impl LocalRuntimeStateReadSubject {
-    const RESOURCE_PATH: &'static str = "runtime-state/read";
-
+impl LocalRuntimeStateReadAttachment {
     fn from_runtime_attachment_file(
         signer_custody: &dyn RuntimeStateReadSignerCustody,
     ) -> anyhow::Result<Self> {
@@ -552,15 +552,19 @@ impl LocalRuntimeStateReadSubject {
         let user_id = credentials
             .user_id()
             .map_err(|error| anyhow::anyhow!("runtime-state read subject unavailable: {error}"))?;
-        let owner = format!("user.{user_id}");
-        let ura = crate::core::ura::resource_dot_ura(realm, &owner, Self::RESOURCE_PATH);
-        crate::core::ura::parse_ura(&ura)
-            .map_err(|error| anyhow::anyhow!("runtime-state read subject is invalid: {error}"))?;
-        Ok(Self { ura })
+        Ok(Self {
+            realm: realm.to_string(),
+            user_id: user_id.to_string(),
+        })
     }
 
-    fn into_ura(self) -> String {
-        self.ura
+    fn subject(&self) -> anyhow::Result<crate::core::identity::RuntimeStateReadSubject> {
+        crate::core::identity::RuntimeStateReadSubject::new(&self.realm, &self.user_id)
+            .map_err(|error| anyhow::anyhow!("runtime-state read subject is invalid: {error}"))
+    }
+
+    fn into_subject_ura(self) -> anyhow::Result<String> {
+        self.subject().map(|subject| subject.into_string())
     }
 }
 
@@ -1063,13 +1067,14 @@ mod tests {
 
     #[test]
     fn runtime_state_read_subject_uses_user_owned_resource_not_daemon_identity() {
-        let subject = LocalRuntimeStateReadSubject::from_runtime_attachment(
+        let subject = LocalRuntimeStateReadAttachment::from_runtime_attachment(
             &runtime_state_read_credentials(),
             &runtime_state_read_discovery("acme", Some("dev-a"), paired_user_runtime_signer_flag()),
             &ReadyRuntimeStateReadSignerCustody,
         )
         .expect("runtime-state read subject from ready runtime attachment")
-        .into_ura();
+        .into_subject_ura()
+        .expect("canonical runtime-state read subject");
 
         assert_eq!(
             subject,
@@ -1080,7 +1085,7 @@ mod tests {
 
     #[test]
     fn runtime_state_read_subject_requires_ready_signer_capability() {
-        let error = LocalRuntimeStateReadSubject::from_runtime_attachment(
+        let error = LocalRuntimeStateReadAttachment::from_runtime_attachment(
             &runtime_state_read_credentials(),
             &runtime_state_read_discovery("acme", Some("dev-a"), vec![]),
             &ReadyRuntimeStateReadSignerCustody,
@@ -1095,7 +1100,7 @@ mod tests {
 
     #[test]
     fn runtime_state_read_subject_rejects_stale_runtime_attachment() {
-        let error = LocalRuntimeStateReadSubject::from_runtime_attachment(
+        let error = LocalRuntimeStateReadAttachment::from_runtime_attachment(
             &runtime_state_read_credentials(),
             &runtime_state_read_discovery(
                 "acme",
@@ -1116,7 +1121,7 @@ mod tests {
 
     #[test]
     fn runtime_state_read_subject_rejects_missing_live_signer_custody() {
-        let error = LocalRuntimeStateReadSubject::from_runtime_attachment(
+        let error = LocalRuntimeStateReadAttachment::from_runtime_attachment(
             &runtime_state_read_credentials(),
             &runtime_state_read_discovery("acme", Some("dev-a"), paired_user_runtime_signer_flag()),
             &FailedRuntimeStateReadSignerCustody,
@@ -1145,7 +1150,7 @@ mod tests {
             join_receipt_hash: None,
         };
 
-        let error = LocalRuntimeStateReadSubject::from_runtime_attachment(
+        let error = LocalRuntimeStateReadAttachment::from_runtime_attachment(
             &credentials,
             &runtime_state_read_discovery("acme", Some("dev-a"), paired_user_runtime_signer_flag()),
             &ReadyRuntimeStateReadSignerCustody,

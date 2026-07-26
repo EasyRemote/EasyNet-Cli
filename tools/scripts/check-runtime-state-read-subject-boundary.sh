@@ -30,8 +30,12 @@ if ! rg -n 'struct LocalRuntimeStateReadIssuer' "$ISSUER" >/dev/null; then
   fail "runtime-state reads must use a named issuer"
 fi
 
-if ! rg -n 'struct LocalRuntimeStateReadSubject' "$ISSUER" >/dev/null; then
-  fail "runtime-state read issuer must own an explicit read-subject value object"
+if ! rg -n 'struct LocalRuntimeStateReadAttachment' "$ISSUER" >/dev/null; then
+  fail "runtime-state read issuer must own explicit runtime attachment state"
+fi
+
+if ! rg -n 'RuntimeStateReadSubject::new' "$ISSUER" >/dev/null; then
+  fail "runtime-state read issuer must delegate subject construction to core identity"
 fi
 
 if ! rg -n '/// Invoke a canonical local target with public-ingress tuple facts\.' "$ISSUER" >/dev/null; then
@@ -42,8 +46,8 @@ runtime_state_issuer_section="$(
   sed -n '/pub struct LocalRuntimeStateReadIssuer/,/\/\/\/ Invoke a canonical local target with public-ingress tuple facts\./p' "$ISSUER"
 )"
 
-if ! rg -n 'runtime-state/read' "$ISSUER" >/dev/null; then
-  fail "runtime-state read issuer must bind a dedicated runtime-state resource subject"
+if rg -n 'const RESOURCE_PATH:.*runtime-state/read|resource_dot_ura\(realm|struct LocalRuntimeStateReadSubject' "$ISSUER"; then
+  fail "runtime-state read issuer must not own a duplicate subject grammar"
 fi
 
 if ! rg -n 'user-owned Resource URA' "$ISSUER" >/dev/null; then

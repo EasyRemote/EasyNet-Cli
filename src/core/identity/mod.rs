@@ -132,6 +132,29 @@ pub struct RuntimeStateReadSubject {
 impl RuntimeStateReadSubject {
     pub const RESOURCE_PATH: &'static str = "runtime-state/read";
 
+    pub fn new(
+        realm: impl AsRef<str>,
+        user_id: impl AsRef<str>,
+    ) -> Result<Self, RuntimeStateReadSubjectError> {
+        let realm = realm.as_ref().trim();
+        if realm.is_empty() {
+            return Err(RuntimeStateReadSubjectError::EmptyRealm);
+        }
+        let user_id = user_id.as_ref().trim();
+        if user_id.is_empty() {
+            return Err(RuntimeStateReadSubjectError::EmptyUserId);
+        }
+        if contains_all_zero_principal_placeholder(user_id) {
+            return Err(RuntimeStateReadSubjectError::AllZeroPrincipalPlaceholder);
+        }
+        let subject_ura = crate::core::ura::resource_dot_ura(
+            realm,
+            &format!("user.{user_id}"),
+            Self::RESOURCE_PATH,
+        );
+        Self::parse(subject_ura)
+    }
+
     pub fn parse(value: impl AsRef<str>) -> Result<Self, RuntimeStateReadSubjectError> {
         let subject_ura = value.as_ref().trim();
         if subject_ura.is_empty() {
@@ -192,6 +215,8 @@ impl RuntimeStateReadSubject {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeStateReadSubjectError {
     Empty,
+    EmptyRealm,
+    EmptyUserId,
     AllZeroPrincipalPlaceholder,
     InvalidSyntax(String),
     NotResource,
@@ -202,6 +227,8 @@ impl std::fmt::Display for RuntimeStateReadSubjectError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Empty => formatter.write_str("must not be empty"),
+            Self::EmptyRealm => formatter.write_str("realm must not be empty"),
+            Self::EmptyUserId => formatter.write_str("user_id must not be empty"),
             Self::AllZeroPrincipalPlaceholder => {
                 formatter.write_str("must not contain the all-zero principal placeholder")
             }
@@ -273,10 +300,8 @@ mod tests {
 
     #[test]
     fn runtime_state_read_subject_projects_user_owned_read_facts() {
-        let subject = RuntimeStateReadSubject::parse(
-            "  easynet:///r/acme/resource/user.alice/runtime-state/read  ",
-        )
-        .expect("canonical runtime-state read subject");
+        let subject = RuntimeStateReadSubject::new(" acme ", " alice ")
+            .expect("canonical runtime-state read subject");
 
         assert_eq!(
             subject.as_str(),
@@ -288,10 +313,24 @@ mod tests {
             subject.clone().into_string(),
             "easynet:///r/acme/resource/user.alice/runtime-state/read"
         );
+
+        let parsed = RuntimeStateReadSubject::parse(
+            "  easynet:///r/acme/resource/user.alice/runtime-state/read  ",
+        )
+        .expect("canonical runtime-state read subject parse");
+        assert_eq!(parsed, subject);
     }
 
     #[test]
     fn runtime_state_read_subject_rejects_defaulted_or_retired_subjects() {
+        assert_eq!(
+            RuntimeStateReadSubject::new(" ", "alice"),
+            Err(RuntimeStateReadSubjectError::EmptyRealm)
+        );
+        assert_eq!(
+            RuntimeStateReadSubject::new("acme", " "),
+            Err(RuntimeStateReadSubjectError::EmptyUserId)
+        );
         assert_eq!(
             RuntimeStateReadSubject::parse(" "),
             Err(RuntimeStateReadSubjectError::Empty)

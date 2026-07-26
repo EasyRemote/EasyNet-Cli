@@ -2288,10 +2288,10 @@ if start < 0 or end < 0:
 body = text[start:end]
 
 for required in (
-    "struct LocalRuntimeStateReadSubject",
-    "const RESOURCE_PATH: &'static str = \"runtime-state/read\"",
+    "struct LocalRuntimeStateReadAttachment",
+    "crate::core::identity::RuntimeStateReadSubject::new(&self.realm, &self.user_id)",
     "crate::daemon::persistence::config::load_credentials()",
-    "crate::core::ura::resource_dot_ura(realm, &owner, Self::RESOURCE_PATH)",
+    "into_subject_ura",
     "runtime_state_read_subject_uses_user_owned_resource_not_daemon_identity",
     "runtime_state_read_subject_rejects_missing_user_id_before_device_fallback",
 ):
@@ -2307,6 +2307,9 @@ for retired in (
     "control_discovery_daemon_ura()",
     "UNPAIRED_LOCAL_REALM",
     "UNPAIRED_LOCAL_DEVICE_ID",
+    "struct LocalRuntimeStateReadSubject",
+    "const RESOURCE_PATH: &'static str = \"runtime-state/read\"",
+    "resource_dot_ura(realm",
     "resource/user.00000000-0000-0000-0000-000000000000",
 ):
     if retired in body:

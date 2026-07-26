@@ -595,6 +595,11 @@ fn receipt_history_descriptor_subject_error(
         RuntimeStateReadSubjectError::Empty => DescriptorResolutionError::invalid_request(
             "descriptor_ref provider receipt_history requires subject_ura",
         ),
+        RuntimeStateReadSubjectError::EmptyRealm | RuntimeStateReadSubjectError::EmptyUserId => {
+            DescriptorResolutionError::invalid_request(
+                "descriptor_ref provider receipt_history subject_ura must be a user-owned runtime-state read subject",
+            )
+        }
         RuntimeStateReadSubjectError::AllZeroPrincipalPlaceholder => {
             DescriptorResolutionError::invalid_request(
                 "descriptor_ref provider receipt_history subject_ura must not be all-zero",
