@@ -115,6 +115,7 @@ impl serde::Serialize for ResolverConfig {
 impl<'de> serde::Deserialize<'de> for ResolverConfig {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
         struct Helper {
             #[serde(default)]
             easynet_rendezvous: Vec<String>,
@@ -240,6 +241,42 @@ mod tests {
         let r = resolve("alice.xyz", &cfg()).expect("fqdn realm");
         assert_eq!(r.mode, AdmissionMode::Federated);
         assert!(r.hub_endpoints.is_empty());
+    }
+
+    #[test]
+    fn resolver_config_deserializes_current_fields() {
+        let config: ResolverConfig = serde_json::from_value(serde_json::json!({
+            "easynet_rendezvous": ["https://rendezvous.example"],
+            "static_hubs": {
+                "acme.com": ["https://hub.acme.example"]
+            }
+        }))
+        .expect("current resolver config fields deserialize");
+
+        assert_eq!(
+            config.easynet_rendezvous,
+            vec!["https://rendezvous.example".to_string()]
+        );
+        assert_eq!(
+            config.static_hubs.get("acme.com").expect("static hub"),
+            &vec!["https://hub.acme.example".to_string()]
+        );
+    }
+
+    #[test]
+    fn resolver_config_rejects_unknown_fields_before_route_resolution() {
+        let error = serde_json::from_value::<ResolverConfig>(serde_json::json!({
+            "easynet_rendezvous": [],
+            "static_hubs": {},
+            "tenant_id": "legacy-carrier"
+        }))
+        .expect_err("legacy resolver config fields must fail closed");
+
+        let message = error.to_string();
+        assert!(
+            message.contains("unknown field `tenant_id`"),
+            "unknown resolver config field must be named: {message}"
+        );
     }
 
     #[test]
