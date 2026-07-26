@@ -11,6 +11,8 @@
   "files": [
     "index.js",
     "index.d.ts",
+    "runtime-principals.js",
+    "runtime-subjects.js",
     "provider",
     "README.md"
   ],

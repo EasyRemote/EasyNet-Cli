@@ -4806,9 +4806,11 @@ check_sdk_history_authority_subject_contract() {
   local py_receipt_guard="$cli_root/sdk/python/easynet_sdk/_receipt_history_admission.py"
   local py_receipt_test="$cli_root/sdk/python/tests/test_receipt.py"
   local node="$cli_root/sdk/node/index.js"
+  local node_subjects="$cli_root/sdk/node/runtime-subjects.js"
+  local node_principals="$cli_root/sdk/node/runtime-principals.js"
   local node_test="$cli_root/sdk/node/test/runtime-core.test.mjs"
 
-  "$PYTHON_BIN" - "$go" "$go_runtime" "$go_helper" "$go_subjects" "$go_test" "$go_receipt" "$go_receipt_test" "$py" "$py_authority" "$py_helper" "$py_subjects" "$py_test" "$py_authority_test" "$py_receipt" "$py_receipt_guard" "$py_receipt_test" "$node" "$node_test" <<'PY'
+  "$PYTHON_BIN" - "$go" "$go_runtime" "$go_helper" "$go_subjects" "$go_test" "$go_receipt" "$go_receipt_test" "$py" "$py_authority" "$py_helper" "$py_subjects" "$py_test" "$py_authority_test" "$py_receipt" "$py_receipt_guard" "$py_receipt_test" "$node" "$node_subjects" "$node_principals" "$node_test" <<'PY'
 import sys
 from pathlib import Path
 
@@ -4830,6 +4832,8 @@ from pathlib import Path
     py_receipt_guard_path,
     py_receipt_test_path,
     node_path,
+    node_subjects_path,
+    node_principals_path,
     node_test_path,
 ) = map(Path, sys.argv[1:])
 
@@ -5159,6 +5163,8 @@ if py:
 
 node = read(node_path)
 if node:
+    node_subjects = read(node_subjects_path)
+    node_principals = read(node_principals_path)
     node_test = read(node_test_path)
     for token in (
         "export class SessionHistoryOperations",
@@ -5167,21 +5173,44 @@ if node:
         "function validateSessionHistoryRequest(request)",
         "function validateSessionHistoryFilterBinding(call, filter)",
         "function validateSessionHistorySessionBinding(",
-        "function isRuntimeStateReadSubjectURA(subjectURA)",
+        "isRuntimeStateReadSubjectURA,",
+        "isRetiredInvocationHistorySubjectURA,",
+        "canonicalResourceSubject,",
         "isRuntimeStateReadSubjectURA(call.subjectURA)",
         "sessionAuthorityAdmitsSubject(authority, subjectURA)",
         "export function runtimeStateReadSubjectURA(",
-        "const RUNTIME_STATE_READ_SUBJECT_PATH = \"runtime-state/read\"",
-        "runtimeStateSubjectSegment(realm, \"realm\")",
-        "runtimeStateSubjectSegment(userID, \"user_id\")",
-        "containsAllZeroPrincipal(cleanUserID)",
-        "containsAllZeroPrincipal(ownerUserID)",
+        "buildRuntimeStateReadSubjectURA(realm, userID",
         "session authority subject does not admit receipt query subject_ura",
         "receipt filter caller_ura does not match receipt query caller_ura",
         "receipt filter callee_ura does not match receipt query callee_ura",
     ):
         if token not in node:
             raise SystemExit(f"sdk_node_history_authority_subject_missing:{token}")
+    for token in (
+        "export function runtimeStateReadSubjectURA(",
+        "export function isRuntimeStateReadSubjectURA(subjectURA)",
+        "export function isRetiredInvocationHistorySubjectURA(subjectURA)",
+        "export function canonicalResourceSubject(subjectURA)",
+        'const RUNTIME_STATE_READ_SUBJECT_PATH = "runtime-state/read"',
+        'const RETIRED_INVOCATION_HISTORY_SUBJECT_PATH = "session/invocation_history"',
+        "runtimeStateSubjectSegment(realm, \"realm\"",
+        "runtimeStateSubjectSegment(userID, \"user_id\"",
+        "containsAllZeroPrincipal(cleanUserID)",
+        "containsAllZeroPrincipal(ownerUserID)",
+    ):
+        if token not in node_subjects:
+            raise SystemExit(f"sdk_node_history_authority_subject_missing:{token}")
+    if "export function containsAllZeroPrincipal(value)" not in node_principals:
+        raise SystemExit("sdk_node_history_authority_subject_missing:runtime_principal_guard")
+    for retired in (
+        "const RUNTIME_STATE_READ_SUBJECT_PATH",
+        "function canonicalResourceSubject(subjectURA)",
+        "function isRetiredInvocationHistorySubjectURA(subjectURA)",
+        "function isRuntimeStateReadSubjectURA(subjectURA)",
+        "function containsAllZeroPrincipal(value)",
+    ):
+        if retired in node:
+            raise SystemExit(f"sdk_node_history_authority_subject_embeds_runtime_boundary:{retired}")
     body = section(
         node,
         "export class SessionHistoryOperations",
@@ -8841,16 +8870,18 @@ PY
 check_node_session_authority_subject_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local node="$cli_root/sdk/node/index.js"
+  local node_subjects="$cli_root/sdk/node/runtime-subjects.js"
   local test="$cli_root/sdk/node/test/runtime-core.test.mjs"
   [[ -f "$node" ]] || return 0
 
-  "$PYTHON_BIN" - "$node" "$test" <<'PY'
+  "$PYTHON_BIN" - "$node" "$node_subjects" "$test" <<'PY'
 import re
 import sys
 from pathlib import Path
 
 node = Path(sys.argv[1]).read_text()
-test = Path(sys.argv[2]).read_text() if Path(sys.argv[2]).exists() else ""
+node_subjects = Path(sys.argv[2]).read_text() if Path(sys.argv[2]).exists() else ""
+test = Path(sys.argv[3]).read_text() if Path(sys.argv[3]).exists() else ""
 
 for required in (
     "function validateSessionAuthoritySubjectBinding(",
@@ -8858,7 +8889,7 @@ for required in (
     "function sessionOwnerURAFromSubject(",
     "function userIDFromUserURA(",
     "function canonicalAuthoritySubject(",
-    "function canonicalResourceSubject(",
+    "canonicalResourceSubject,",
     "session_owner_ura",
     "creator_principal_ura",
     "session authority subject_ura must be a canonical user or session subject",
@@ -8870,12 +8901,15 @@ for required in (
     if required not in node:
         raise SystemExit(f"node_session_authority_subject_contract_missing:{required}")
 
-def body_after(marker: str, next_marker: str) -> str:
-    start = node.find(marker)
+def body_after_in(source: str, marker: str, next_marker: str) -> str:
+    start = source.find(marker)
     if start < 0:
         raise SystemExit(f"node_session_authority_subject_contract_missing:{marker}")
-    end = node.find(next_marker, start + len(marker))
-    return node[start : end if end >= 0 else len(node)]
+    end = source.find(next_marker, start + len(marker))
+    return source[start : end if end >= 0 else len(source)]
+
+def body_after(marker: str, next_marker: str) -> str:
+    return body_after_in(node, marker, next_marker)
 
 authority_body = body_after(
     "function validateSessionAuthority(authority)",
@@ -8909,9 +8943,10 @@ for token in (
     if token not in subject_body:
         raise SystemExit(f"node_session_authority_subject_classifier_missing:{token}")
 
-resource_body = body_after(
-    "function canonicalResourceSubject(subjectURA)",
-    "function authorityAudienceAdmits",
+resource_body = body_after_in(
+    node_subjects,
+    "export function canonicalResourceSubject(subjectURA)",
+    "function runtimeStateSubjectString",
 )
 for token in (
     'parsed.path.startsWith("resource/")',

@@ -1,4 +1,11 @@
 import { createHash } from "node:crypto";
+import { containsAllZeroPrincipal } from "./runtime-principals.js";
+import {
+  canonicalResourceSubject,
+  isRetiredInvocationHistorySubjectURA,
+  isRuntimeStateReadSubjectURA,
+  runtimeStateReadSubjectURA as buildRuntimeStateReadSubjectURA,
+} from "./runtime-subjects.js";
 
 const INVOCATION_CONTROL_RUNTIME_TOKEN = Symbol("invocation-control-runtime-token");
 
@@ -81,8 +88,6 @@ export const DELEGATION_METADATA_KEY = "x-runtime-delegation";
 export const SESSION_AUTHORITY_METADATA_KEY = "x-runtime-session-authority";
 export const MAX_STREAM_BUFFERED_EVENTS = 1024;
 export const MAX_BIDI_BUFFERED_FRAMES = 1024;
-const RUNTIME_STATE_READ_SUBJECT_PATH = "runtime-state/read";
-const RETIRED_INVOCATION_HISTORY_SUBJECT_PATH = "session/invocation_history";
 const RUNTIME_GOVERNANCE_READ_ABILITIES = Object.freeze([
   "meta.list_abilities",
   "invocation.history.list",
@@ -2713,56 +2718,10 @@ export function profileErrorDetails(profile, details = {}) {
 }
 
 export function runtimeStateReadSubjectURA(realm, userID) {
-  const cleanRealm = runtimeStateSubjectSegment(realm, "realm");
-  const cleanUserID = runtimeStateSubjectSegment(userID, "user_id");
-  if (containsAllZeroPrincipal(cleanUserID)) {
-    throw invalidInvocation("runtime-state read subject user_id must not be all-zero");
-  }
-  const subject = `easynet:///r/${cleanRealm}/resource/user.${cleanUserID}/${RUNTIME_STATE_READ_SUBJECT_PATH}`;
-  parseCanonicalURA(subject, "runtime-state read subject_ura");
-  return subject;
-}
-
-function isRuntimeStateReadSubjectURA(subjectURA) {
-  const subject = canonicalResourceSubject(subjectURA);
-  if (!subject || !subject.ownerID.startsWith("user.")) {
-    return false;
-  }
-  const ownerUserID = subject.ownerID.slice("user.".length).trim();
-  return (
-    ownerUserID !== "" &&
-    !containsAllZeroPrincipal(ownerUserID) &&
-    subject.resourcePath === RUNTIME_STATE_READ_SUBJECT_PATH
-  );
-}
-
-function isRetiredInvocationHistorySubjectURA(subjectURA) {
-  const subject = canonicalResourceSubject(subjectURA);
-  if (!subject || !subject.ownerID.startsWith("user.")) {
-    return false;
-  }
-  const ownerUserID = subject.ownerID.slice("user.".length).trim();
-  return (
-    ownerUserID !== "" &&
-    !ownerUserID.includes(".") &&
-    !containsAllZeroPrincipal(ownerUserID) &&
-    subject.resourcePath === RETIRED_INVOCATION_HISTORY_SUBJECT_PATH
-  );
-}
-
-function runtimeStateSubjectString(value, field) {
-  if (typeof value !== "string" || value.trim() === "") {
-    throw invalidInvocation(`runtime-state read subject ${field} is required`);
-  }
-  return value.trim();
-}
-
-function runtimeStateSubjectSegment(value, field) {
-  const clean = runtimeStateSubjectString(value, field);
-  if (clean.includes("/") || clean.includes("?") || clean.includes("#")) {
-    throw invalidInvocation(`runtime-state read subject ${field} is not canonical`);
-  }
-  return clean;
+  return buildRuntimeStateReadSubjectURA(realm, userID, {
+    invalidInvocation,
+    invalidRuntime,
+  });
 }
 
 function detailString(details, key) {
@@ -3360,10 +3319,6 @@ function rejectAllZeroAuthorityFields(fields) {
   }
 }
 
-function containsAllZeroPrincipal(value) {
-  return String(value ?? "").trim().toLowerCase().includes("00000000-0000-0000-0000-000000000000");
-}
-
 function rejectAuthorityPrivateKeyMetadata(metadata) {
   for (const key of Object.keys(metadata ?? {})) {
     switch (key.trim().toLowerCase()) {
@@ -3744,33 +3699,6 @@ function sessionAuthorityAdmitsSubject(authority, subjectURA) {
   const rest = resource.ownerID.slice("agent.".length);
   const dot = rest.indexOf(".");
   return dot > 0 && rest.slice(0, dot) === ownerUserID;
-}
-
-function canonicalResourceSubject(subjectURA) {
-  if (containsAllZeroPrincipal(subjectURA)) {
-    return null;
-  }
-  const parsed = parseCanonicalURANullable(subjectURA);
-  if (!parsed || !parsed.path.startsWith("resource/")) {
-    return null;
-  }
-  const resource = parsed.path.slice("resource/".length);
-  const slash = resource.indexOf("/");
-  if (slash <= 0 || slash === resource.length - 1) {
-    return null;
-  }
-  const ownerID = resource.slice(0, slash).trim();
-  const resourcePath = resource.slice(slash + 1).trim();
-  if (
-    ownerID === "" ||
-    ownerID.includes("/") ||
-    resourcePath === "" ||
-    resourcePath.startsWith("/") ||
-    resourcePath.includes("//")
-  ) {
-    return null;
-  }
-  return { ownerID, resourcePath };
 }
 
 function authorityAudienceAdmits(audience, calleeURA) {
