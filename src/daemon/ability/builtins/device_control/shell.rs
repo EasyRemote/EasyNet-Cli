@@ -416,17 +416,31 @@ fn run_pipeline(req: &ShellRunRequest) -> std::result::Result<PipelinePass, Pipe
             write_allowed_roots: roots.clone(),
             cwd,
         };
-        if let PathVerdict::Rejected {
-            argv_index,
-            target,
-            op,
-        } = pathconstraints::evaluate(&commands, &constraints)
-        {
-            return Err(PipelineRejection::Path {
+        match pathconstraints::evaluate(&commands, &constraints) {
+            PathVerdict::Ok => {}
+            PathVerdict::Rejected {
                 argv_index,
-                target: target.to_string_lossy().into_owned(),
+                target,
                 op,
-            });
+            } => {
+                return Err(PipelineRejection::Path {
+                    argv_index,
+                    target: target.to_string_lossy().into_owned(),
+                    op,
+                });
+            }
+            PathVerdict::InvalidTarget {
+                argv_index,
+                target,
+                op,
+                reason,
+            } => {
+                return Err(PipelineRejection::Path {
+                    argv_index,
+                    target: format!("{target} ({reason})"),
+                    op,
+                });
+            }
         }
     }
     // Stage 7: readonly.

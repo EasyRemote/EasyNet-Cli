@@ -119,6 +119,39 @@ check_ffi_runtime_sizing_policy_contract() {
   fi
 }
 
+check_shellguard_path_normalization_fail_closed_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local pathconstraints="$cli_root/src/support/shellguard/pathconstraints.rs"
+  [[ -f "$pathconstraints" ]] || fail "ShellGuard pathconstraints source is missing: ${pathconstraints#$cli_root/}"
+
+  "$PYTHON_BIN" - "$pathconstraints" <<'PY'
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+production = text.split("#[cfg(test)]", 1)[0]
+
+for required in (
+    "InvalidTarget {",
+    "fn normalise_target(target: &str, cwd: &Path) -> Result<PathBuf, String>",
+    "fn fold_dot_dots(p: &Path) -> Result<PathBuf, String>",
+    'return Err("normalized redirect target is empty".to_string());',
+    "empty_cwd_and_empty_target_fail_closed_instead_of_root_fallback",
+    "fold_dot_dots_rejects_empty_projection",
+):
+    if required not in text:
+        raise SystemExit(f"shellguard_path_normalization_fail_closed_missing:{required}")
+
+for retired in (
+    "safe fallback",
+    'buf.push("/")',
+    "return `/`",
+):
+    if retired in production:
+        raise SystemExit(f"shellguard_path_normalization_retired_fallback:{retired}")
+PY
+}
+
 check_ffi_init_typed_connect_error_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local ffi_mod="$cli_root/src/ffi/mod.rs"
@@ -24477,6 +24510,7 @@ EOF
   check_mcp_reflection_async_bridge_contract
   check_runtime_session_projection_accessor_contract
   check_ffi_runtime_sizing_policy_contract
+  check_shellguard_path_normalization_fail_closed_contract
   check_ffi_init_typed_connect_error_contract
   check_failure_code_default_policy_contract
   check_bidi_dispatch_default_code_policy_contract
@@ -24732,6 +24766,7 @@ check_manifest_contract
 check_mcp_reflection_async_bridge_contract
 check_runtime_session_projection_accessor_contract
 check_ffi_runtime_sizing_policy_contract
+check_shellguard_path_normalization_fail_closed_contract
 check_ffi_init_typed_connect_error_contract
 check_failure_code_default_policy_contract
 check_bidi_dispatch_default_code_policy_contract
