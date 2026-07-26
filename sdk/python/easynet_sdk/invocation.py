@@ -18,6 +18,7 @@ if TYPE_CHECKING:
 
 from .authority import AuthorityMetadata, validate_authority_metadata
 from .errors import ErrorCode, RetryHint, SDKError
+from ._identity_guards import contains_all_zero_principal
 
 
 def new_invocation_nonce_base64() -> str:
@@ -282,6 +283,9 @@ class InvocationBuilder:
         subject_ura = _required_builder_string(self._subject_ura, "subject_ura")
         nonce_base64 = _required_builder_string(self._nonce_base64, "nonce_base64")
         content_type = _required_builder_string(self._content_type, "content_type")
+        _reject_all_zero_principal(caller_ura, "caller_ura")
+        _reject_all_zero_principal(callee_ura, "callee_ura")
+        _reject_all_zero_principal(subject_ura, "subject_ura")
         if self._causal_context is None:
             raise _invalid_invocation("causal_context is required")
         _validate_nonce_base64(nonce_base64)
@@ -335,6 +339,11 @@ def _required_builder_string(value: Optional[str], field_name: str) -> str:
     if value is None or value.strip() == "":
         raise _invalid_invocation(f"{field_name} is required")
     return value
+
+
+def _reject_all_zero_principal(value: str, field_name: str) -> None:
+    if contains_all_zero_principal(value):
+        raise _invalid_invocation(f"{field_name} must not be all-zero")
 
 
 def _required_string(decoded: Mapping[str, object], field_name: str) -> str:

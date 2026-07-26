@@ -103,6 +103,23 @@ class InvocationTests(unittest.TestCase):
 
         self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
 
+    def test_builder_rejects_all_zero_principals(self) -> None:
+        placeholder = (
+            "easynet:///r/example/resource/"
+            "user.00000000-0000-0000-0000-000000000000/runtime-state/read"
+        )
+        cases = {
+            "caller": lambda: complete_builder().with_caller_ura(placeholder),
+            "callee": lambda: complete_builder().with_callee_ura(placeholder),
+            "subject": lambda: complete_builder().with_subject_ura(placeholder),
+        }
+        for name, build in cases.items():
+            with self.subTest(name=name):
+                with self.assertRaises(SDKError) as caught:
+                    build().build()
+                self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+                self.assertIn("must not be all-zero", str(caught.exception))
+
     def test_builder_rejects_dual_argument_carriers(self) -> None:
         with self.assertRaises(SDKError) as caught:
             (
@@ -180,6 +197,23 @@ class InvocationTests(unittest.TestCase):
             )
 
         self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+
+
+def complete_builder() -> InvocationBuilder:
+    return (
+        InvocationBuilder()
+        .with_caller_ura("easynet:///r/example/agent/alice.sdk")
+        .with_callee_ura("easynet:///r/example/device/dev-a")
+        .with_descriptor_ref(
+            "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"
+        )
+        .with_subject_ura("easynet:///r/example/device/dev-a")
+        .with_nonce_base64("AQIDBAUGBwgJCgsMDQ4PEA==")
+        .with_causal_context({"form": "none"})
+        .with_json_args({})
+        .with_content_type("application/json")
+    )
+
 
 if __name__ == "__main__":
     unittest.main()

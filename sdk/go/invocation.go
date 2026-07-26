@@ -324,6 +324,18 @@ func (b *InvocationBuilder) inspectDraft() (InvocationDraft, error) {
 			return InvocationDraft{}, invalidInvocation(fmt.Sprintf("%s is required", field.name), nil)
 		}
 	}
+	for _, field := range []struct {
+		name  string
+		value string
+	}{
+		{"caller_ura", b.callerURA},
+		{"callee_ura", b.calleeURA},
+		{"subject_ura", b.subjectURA},
+	} {
+		if containsAllZeroPrincipal(field.value) {
+			return InvocationDraft{}, invalidInvocation(fmt.Sprintf("%s must not be all-zero", field.name), nil)
+		}
+	}
 	// DescriptorRef canonical validation belongs to the Addressing provider
 	// and runtime identity boundary. Runtime Core validates tuple completeness here.
 	if b.causalContext == nil {

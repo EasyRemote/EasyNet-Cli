@@ -3,6 +3,7 @@ package easynet
 import (
 	"encoding/base64"
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -150,6 +151,46 @@ func TestInvocationBuilderRejectsMissingTupleField(t *testing.T) {
 	}
 }
 
+func TestInvocationBuilderRejectsAllZeroPrincipals(t *testing.T) {
+	placeholder := "easynet:///r/example/resource/user.00000000-0000-0000-0000-000000000000/runtime-state/read"
+	for _, tc := range []struct {
+		name  string
+		build func() *InvocationBuilder
+	}{
+		{
+			name: "caller",
+			build: func() *InvocationBuilder {
+				return completeInvocationBuilder().WithCallerURA(placeholder)
+			},
+		},
+		{
+			name: "callee",
+			build: func() *InvocationBuilder {
+				return completeInvocationBuilder().WithCalleeURA(placeholder)
+			},
+		},
+		{
+			name: "subject",
+			build: func() *InvocationBuilder {
+				return completeInvocationBuilder().WithSubjectURA(placeholder)
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := tc.build().Build()
+			if err == nil {
+				t.Fatalf("Build succeeded, want invalid argument")
+			}
+			if !IsCode(err, ErrInvalidArgument) {
+				t.Fatalf("error code = %v, want %s", err, ErrInvalidArgument)
+			}
+			if !strings.Contains(err.Error(), "must not be all-zero") {
+				t.Fatalf("error = %v, want all-zero rejection", err)
+			}
+		})
+	}
+}
+
 func TestInvocationBuilderRejectsDualArgumentCarriers(t *testing.T) {
 	_, err := NewInvocationBuilder().
 		WithCallerURA("easynet:///r/example/agent/alice.sdk").
@@ -227,6 +268,18 @@ func TestInvocationBuilderDoesNotOwnDescriptorRefGrammar(t *testing.T) {
 	if draft.DescriptorRef() != "opaque-descriptor-ref-from-addressing-provider" {
 		t.Fatalf("descriptor_ref = %q", draft.DescriptorRef())
 	}
+}
+
+func completeInvocationBuilder() *InvocationBuilder {
+	return NewInvocationBuilder().
+		WithCallerURA("easynet:///r/example/agent/alice.sdk").
+		WithCalleeURA("easynet:///r/example/device/dev-a").
+		WithDescriptorRef("easynet:///r/example/ability/device.dev-a.observe.health@1.0.0").
+		WithSubjectURA("easynet:///r/example/device/dev-a").
+		WithNonceBase64("AQIDBAUGBwgJCgsMDQ4PEA==").
+		WithCausalContext(map[string]any{"form": "none"}).
+		WithJSONArgs(map[string]any{}).
+		WithContentType("application/json")
 }
 
 func TestInvocationDraftFromJSONRejectsUnknownField(t *testing.T) {
