@@ -12306,16 +12306,26 @@ parser_body = production[parser_start:candidate_start]
 candidate_body = production[candidate_start:production.find("/// Typed projection", candidate_start)]
 if 'let scope = required_row_string(row, "scope_matched")?;' not in production:
     raise SystemExit("cli_discover_candidate_projection:scope_not_required")
+if "callable: bool" not in production:
+    raise SystemExit("cli_discover_candidate_projection:callable_not_typed_required")
+if 'callable: required_row_bool(row, "callable")?' not in parser_body:
+    raise SystemExit("cli_discover_candidate_projection:callable_not_required")
 for forbidden, label in {
     '.unwrap_or("device")': "scope_literal_default",
     '.unwrap_or_else(|| "device"': "scope_lazy_default",
     '.and_then(Value::as_bool)': "callable_type_downgrade",
+    'callable: Option<bool>': "callable_optional_fact",
+    'optional_row_bool(row, "callable")?': "callable_optional_parser",
+    'row.callable.unwrap_or(false)': "callable_missing_default",
+    'callable status missing from discovery row; treating as non-callable': "callable_missing_diagnostic_fallback",
 }.items():
     if forbidden in parser_body or forbidden in candidate_body:
         raise SystemExit(f"cli_discover_candidate_projection:{label}")
 for required in (
     "fn optional_row_bool(",
     "discover candidate row field {field} must be a boolean",
+    "fn required_row_bool(",
+    "discover candidate row missing boolean {field}",
     "fn required_row_string(",
     "discover candidate row missing non-empty {field}",
 ):
@@ -12324,6 +12334,8 @@ for required in (
 for required_test in (
     "ladder_row_missing_scope_fails_closed_instead_of_defaulting_to_device",
     "ladder_row_malformed_callable_fails_closed_instead_of_downgrading",
+    "minted_rows_without_callable_are_fail_closed",
+    "unminted_identity_rows_require_explicit_callable_fact",
 ):
     if required_test not in discover:
         raise SystemExit(f"cli_discover_candidate_projection:missing_test:{required_test}")

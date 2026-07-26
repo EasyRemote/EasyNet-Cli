@@ -189,7 +189,7 @@ struct DiscoverCandidateRow {
     ability: String,
     description: String,
     scope: String,
-    callable: Option<bool>,
+    callable: bool,
     diagnostic: Option<String>,
 }
 
@@ -231,7 +231,7 @@ impl DiscoverCandidateRow {
             ability,
             description: optional_row_string(row, "description")?.unwrap_or_default(),
             scope,
-            callable: optional_row_bool(row, "callable")?,
+            callable: required_row_bool(row, "callable")?,
             diagnostic: optional_row_string(row, "diagnostic")?,
         })
     }
@@ -265,21 +265,13 @@ impl Candidate {
         if score == 0 {
             return Ok(None);
         }
-        let mut diagnostic = row.diagnostic;
+        let diagnostic = row.diagnostic;
         let (owner_kind, owner_ura, callable) = match row.selector.as_ref() {
-            Some(selector) => {
-                if row.callable.is_none() {
-                    diagnostic.get_or_insert_with(|| {
-                        "callable status missing from discovery row; treating as non-callable"
-                            .to_string()
-                    });
-                }
-                (
-                    selector.owner_kind(),
-                    selector.owner_ura().to_string(),
-                    row.callable.unwrap_or(false),
-                )
-            }
+            Some(selector) => (
+                selector.owner_kind(),
+                selector.owner_ura().to_string(),
+                row.callable,
+            ),
             None if row.identity_state != "minted" => {
                 ("agent", format!("unminted-agent:{}", row.owner), false)
             }
@@ -319,6 +311,11 @@ fn optional_row_bool(row: &Value, field: &'static str) -> anyhow::Result<Option<
         Some(Value::Bool(value)) => Ok(Some(*value)),
         Some(_) => anyhow::bail!("discover candidate row field {field} must be a boolean"),
     }
+}
+
+fn required_row_bool(row: &Value, field: &'static str) -> anyhow::Result<bool> {
+    optional_row_bool(row, field)?
+        .ok_or_else(|| anyhow::anyhow!("discover candidate row missing boolean {field}"))
 }
 
 /// Typed projection of the ladder's federation error envelope.
@@ -1274,14 +1271,33 @@ mod tests {
         let mut row = agent_row("acme");
         row.as_object_mut().expect("row object").remove("callable");
 
-        let c = Candidate::from_ladder_row(&row, &toks)
-            .unwrap()
-            .expect("scores > 0");
+        let err = Candidate::from_ladder_row(&row, &toks)
+            .expect_err("missing callable fact must fail closed");
 
-        assert!(!c.callable, "missing callability must not fail open");
-        assert_eq!(
-            c.diagnostic.as_deref(),
-            Some("callable status missing from discovery row; treating as non-callable")
+        assert!(
+            err.to_string().contains("missing boolean callable"),
+            "missing callable fact must fail before ranking: {err:#}"
+        );
+    }
+
+    #[test]
+    fn unminted_identity_rows_require_explicit_callable_fact() {
+        let toks = vec!["chat".to_string()];
+        let mut row = json!({
+            "identity_state": "identity_not_minted",
+            "owner": "acme",
+            "ability": "chat",
+            "description": "Chat",
+            "scope_matched": "agent",
+        });
+        row.as_object_mut().expect("row object").remove("callable");
+
+        let err = Candidate::from_ladder_row(&row, &toks)
+            .expect_err("unminted rows must still carry explicit callable facts");
+
+        assert!(
+            err.to_string().contains("missing boolean callable"),
+            "missing unminted callable fact must fail before candidate projection: {err:#}"
         );
     }
 
