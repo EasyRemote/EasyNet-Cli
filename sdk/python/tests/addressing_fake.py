@@ -6,6 +6,7 @@ class MemoryAddressingTransport:
         self.descriptor_json = b"{}"
         self.identity_json = b"{}"
         self.identity_jsons: list[bytes] = []
+        self.expected_identity_ura: str | None = None
         self.seen_request: dict[str, object] | None = None
         self.seen_requests: list[dict[str, object]] = []
         self.close_calls = 0
@@ -24,6 +25,12 @@ class MemoryAddressingTransport:
 
     def project_identity(self, request_json: bytes) -> bytes:
         self._record(request_json)
+        if (
+            self.expected_identity_ura is not None
+            and self.seen_request is not None
+            and self.seen_request.get("ura") != self.expected_identity_ura
+        ):
+            raise ValueError("projected URA is not the configured ability identity")
         return self._identity_json()
 
     def build_ura(self, request_json: bytes) -> bytes:

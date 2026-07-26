@@ -490,6 +490,7 @@ class InvocationWireProjector:
         return _build_direct_ability_invocation(
             self.addressing,
             _object_ability_request(
+                self.addressing,
                 tuple_,
                 metadata=metadata,
                 caller_signature=caller_signature,
@@ -547,6 +548,7 @@ class InvocationObjectAdapter:
         self.invoker._require_open()
         return self.invoker.build_invocation(
             _object_ability_request(
+                self.invoker.addressing,
                 tuple_,
                 metadata=metadata,
                 caller_signature=caller_signature,
@@ -649,7 +651,9 @@ class InvocationObjectAdapter:
             self.descriptor_version,
         )
 
+
 def _object_ability_request(
+    addressing: AddressingClient,
     tuple_: object,
     *,
     metadata: Mapping[str, object] | None,
@@ -660,11 +664,7 @@ def _object_ability_request(
     arguments = _tuple_value(tuple_, "arguments")
     argument_kwargs = _argument_kwargs(arguments)
     ability = _required_string(_tuple_value(tuple_, "ability"), "ability")
-    selector_kwargs: dict[str, str] = {}
-    if _is_ability_ura_text(ability):
-        selector_kwargs["ability_ura"] = ability
-    else:
-        selector_kwargs["descriptor_ref"] = ability
+    selector_kwargs = _project_tuple_ability_selector(addressing, ability)
     return AbilityCallRequest(
         caller_ura=_required_string(_tuple_value(tuple_, "caller"), "caller"),
         callee_ura=_required_string(_tuple_value(tuple_, "callee"), "callee"),
@@ -681,6 +681,18 @@ def _object_ability_request(
         arguments_base64=cast(str | None, argument_kwargs.get("arguments_base64")),
         content_type=cast(str, argument_kwargs.get("content_type", "application/json")),
     )
+
+
+def _project_tuple_ability_selector(
+    addressing: AddressingClient, ability: str
+) -> dict[str, str]:
+    try:
+        projection = addressing.project_ability_ura(ability)
+    except SDKError as exc:
+        if exc.code != ErrorCode.INVALID_ARGUMENT:
+            raise
+        return {"descriptor_ref": ability}
+    return {"ability_ura": projection.ura}
 
 
 def _build_direct_ability_invocation(
@@ -832,10 +844,6 @@ def _selector_string(value: object, field_name: str) -> str:
             f"{field_name} must not contain surrounding whitespace"
         )
     return value
-
-
-def _is_ability_ura_text(value: str) -> bool:
-    return value.startswith("easynet:///") and "/ability/" in value and "@" not in value
 
 
 def _required_mapping(

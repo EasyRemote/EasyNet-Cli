@@ -4971,9 +4971,18 @@ for required in (
     "def _reject_governance_read_action(",
     "is_runtime_governance_read_ability(public_name, ability_ura=ability_ura)",
     "runtime governance receipt/history/catalogue abilities must use RuntimeReceiptProvider or RuntimeAbilityDescriptorProvider",
+    "def _project_tuple_ability_selector(",
+    "projection = addressing.project_ability_ura(ability)",
 ):
     if required not in py_ability_invocation:
         raise SystemExit(f"sdk_history_public_route_cutover:py_ability_invocation_missing:{required}")
+for forbidden in (
+    "def _is_ability_ura_text(",
+    'startswith("easynet:///")',
+    '"/ability/" in',
+):
+    if forbidden in py_ability_invocation:
+        raise SystemExit(f"sdk_history_public_route_cutover:py_ability_invocation_tuple_selector_text_sniff:{forbidden}")
 if "ability.invoke(call, self.list_ability.strip(), dict(arguments))" in py_receipt:
     raise SystemExit("sdk_history_public_route_cutover:py_receipt_uses_public_invoke")
 if "ability._invoke_governance_read(call, self.list_ability.strip(), dict(arguments))" not in py_receipt:
@@ -4990,6 +4999,8 @@ if "test_generic_invocation_rejects_governance_read_ability_ura" not in py_abili
     raise SystemExit("sdk_history_public_route_cutover:py_generic_governance_rejection_test_missing")
 if "test_generic_invocation_rejects_governance_read_descriptor_ref" not in py_ability_invocation_test:
     raise SystemExit("sdk_history_public_route_cutover:py_generic_descriptor_rejection_test_missing")
+if "test_tuple_ability_selector_delegates_to_addressing_projection" not in py_ability_invocation_test:
+    raise SystemExit("sdk_history_public_route_cutover:py_tuple_selector_addressing_projection_test_missing")
 if 'transport.seen["subject_ura"] == "easynet:///r/example/authority"' not in py_descriptor_test:
     raise SystemExit("sdk_history_public_route_cutover:py_catalogue_subject_test_missing")
 if 'transport.descriptor_requests[-1]["provider"] == "ability_descriptor"' not in py_descriptor_test:

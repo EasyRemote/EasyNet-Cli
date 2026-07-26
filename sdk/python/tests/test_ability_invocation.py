@@ -56,7 +56,35 @@ class AbilityInvocationClientTests(unittest.TestCase):
         self.assertEqual(wire["args"], {"city": "Singapore"})
         self.assertEqual(
             identity.seen_requests,
-            [{"ability_ura": ABILITY_URA, "descriptor_version": "1.0.0"}],
+            [
+                {"ura": ABILITY_URA},
+                {"ability_ura": ABILITY_URA, "descriptor_version": "1.0.0"},
+            ],
+        )
+
+    def test_tuple_ability_selector_delegates_to_addressing_projection(self) -> None:
+        identity = _identity_transport()
+        projector = InvocationWireProjector(AddressingClient(identity))
+
+        wire = projector.to_wire_dict(
+            {
+                "caller": "easynet:///r/example/agent/alice.sdk",
+                "callee": "easynet:///r/example/device/dev-a",
+                "ability": DESCRIPTOR_REF,
+                "subject": "easynet:///r/example/device/dev-a",
+                "nonce": bytes(range(1, 17)),
+                "causal": None,
+                "arguments": {"args": {"city": "Singapore"}},
+            }
+        )
+
+        self.assertEqual(wire["descriptor_ref"], DESCRIPTOR_REF)
+        self.assertEqual(
+            identity.seen_requests,
+            [
+                {"ura": DESCRIPTOR_REF},
+                {"descriptor_ref": DESCRIPTOR_REF},
+            ],
         )
 
     def test_runtime_adapter_keeps_its_lifecycle_guard(self) -> None:
@@ -732,6 +760,7 @@ def _identity_transport_for(
 ) -> MemoryAddressingTransport:
     descriptor_ref = descriptor_ref or f"{ability_ura}@1.0.0"
     transport = MemoryAddressingTransport()
+    transport.expected_identity_ura = ability_ura
     transport.identity_json = json.dumps(
         {
             "kind": "ability",
