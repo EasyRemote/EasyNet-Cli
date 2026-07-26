@@ -70,7 +70,6 @@ impl AdmissionAction {
 /// Per RFC §1.6, an Ability has one of three visibility levels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "UPPERCASE")]
-#[derive(Default)]
 pub enum Visibility {
     /// Returned by every `federation.resolve` / `meta.list_abilities`
     /// regardless of caller. Default for `observe.*`, `meta.describe`.
@@ -83,7 +82,6 @@ pub enum Visibility {
     /// Returned only when caller is the owner Agent's signing
     /// authority (its hosting device-profile) OR subject is the
     /// host operator. PRIVATE is a degenerate SCOPED case.
-    #[default]
     Private,
 }
 
@@ -259,7 +257,6 @@ fn validate_transition_id(transition_id: &str) -> Result<(), StateTransitionErro
 /// for the OnlyMatching variant.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "uras", rename_all = "snake_case")]
-#[derive(Default)]
 pub enum ScopeRule {
     /// No restriction on this axis. Used together with the visibility
     /// gate; SCOPED + Any on both axes degrades to "any caller, any
@@ -273,7 +270,6 @@ pub enum ScopeRule {
     OnlyMatching(Vec<String>),
     /// Explicit deny-all. Use when a SCOPED ability is intentionally
     /// off-limits on this axis pending an operator gesture.
-    #[default]
     None,
 }
 

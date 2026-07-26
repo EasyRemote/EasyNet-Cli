@@ -220,6 +220,40 @@ if "AbilityCallableSummary::default()" in owner_projection:
 PY
 }
 
+check_descriptor_policy_explicit_facts_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local surface="$cli_root/src/daemon/ability/descriptors/surface.rs"
+  [[ -f "$surface" ]] || fail "ability descriptor surface source is missing: ${surface#$cli_root/}"
+
+  "$PYTHON_BIN" - "$surface" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+
+def enum_block(name: str) -> tuple[str, str]:
+    pattern = rf"(?P<attrs>(?:#\[[^\n]+\]\n)+)pub enum {name} \{{(?P<body>.*?)\n\}}"
+    match = re.search(pattern, text, re.S)
+    if not match:
+        raise SystemExit(f"descriptor_policy_enum_missing:{name}")
+    return match.group("attrs"), match.group("body")
+
+for name, variants in {
+    "Visibility": ("Public", "Scoped", "Private"),
+    "ScopeRule": ("Any", "OnlyMatching", "None"),
+}.items():
+    attrs, body = enum_block(name)
+    if "Default" in attrs:
+        raise SystemExit(f"descriptor_policy_default_impl_retired:{name}")
+    if "#[default]" in body:
+        raise SystemExit(f"descriptor_policy_default_variant_retired:{name}")
+    for variant in variants:
+        if not re.search(rf"\b{variant}\b", body):
+            raise SystemExit(f"descriptor_policy_variant_missing:{name}:{variant}")
+PY
+}
+
 check_ffi_init_typed_connect_error_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local ffi_mod="$cli_root/src/ffi/mod.rs"
@@ -24586,6 +24620,7 @@ EOF
   check_shellguard_path_normalization_fail_closed_contract
   check_ability_authority_context_explicit_construction_contract
   check_descriptor_call_mode_explicit_transport_contract
+  check_descriptor_policy_explicit_facts_contract
   check_ffi_init_typed_connect_error_contract
   check_failure_code_default_policy_contract
   check_bidi_dispatch_default_code_policy_contract
@@ -24844,6 +24879,7 @@ check_ffi_runtime_sizing_policy_contract
 check_shellguard_path_normalization_fail_closed_contract
 check_ability_authority_context_explicit_construction_contract
 check_descriptor_call_mode_explicit_transport_contract
+check_descriptor_policy_explicit_facts_contract
 check_ffi_init_typed_connect_error_contract
 check_failure_code_default_policy_contract
 check_bidi_dispatch_default_code_policy_contract
