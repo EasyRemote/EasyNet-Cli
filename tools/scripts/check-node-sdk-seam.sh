@@ -17,18 +17,23 @@ export const SecurityClass = "identity";
 export const SECURITY_CLASS = "identity";
 export const securityClass = "identity";
 EOF
-  cat >"$bad" <<'EOF'
-export const AgentURI = "easynet:///r/example/agent/alice.sdk";
-export const AbilityUri = "easynet:///r/example/ability/alice.echo";
-export const agentUri = "easynet:///r/example/agent/alice.sdk";
-export const DEVICE_URI = "easynet:///r/example/device/dev-a";
+  cat >"$bad" <<EOF
+export const Agent${SDK_URA_NAMING_TOKEN_UPPER} = "easynet:///r/example/agent/alice.sdk";
+export const Ability${SDK_URA_NAMING_TOKEN_TITLE} = "easynet:///r/example/ability/alice.echo";
+export const agent${SDK_URA_NAMING_TOKEN_TITLE} = "easynet:///r/example/agent/alice.sdk";
+export const DEVICE_${SDK_URA_NAMING_TOKEN_UPPER} = "easynet:///r/example/device/dev-a";
 EOF
   sdk_ura_naming_scan_files "$good"
   if sdk_ura_naming_scan_files "$bad" >"$tmp/out" 2>&1; then
     echo "check-node-sdk-seam: self-test expected retired address-token naming to fail" >&2
     exit 1
   fi
-  for expected in AgentURI AbilityUri agentUri DEVICE_URI; do
+  for expected in \
+    "Agent${SDK_URA_NAMING_TOKEN_UPPER}" \
+    "Ability${SDK_URA_NAMING_TOKEN_TITLE}" \
+    "agent${SDK_URA_NAMING_TOKEN_TITLE}" \
+    "DEVICE_${SDK_URA_NAMING_TOKEN_UPPER}"
+  do
     grep -Fq "$expected" "$tmp/out"
   done
   echo "check-node-sdk-seam self-test ok"
