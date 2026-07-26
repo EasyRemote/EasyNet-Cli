@@ -10721,6 +10721,7 @@ for required in (
 for required in (
     "pub(crate) fn is_runtime_catalogue_read(ability: &str) -> bool",
     "META_LIST_ABILITIES",
+    "META_LIST_RESOURCES",
 ):
     if required not in governance:
         raise SystemExit(f"selected_governance_read_route_admission:missing_catalogue_governance:{required}")

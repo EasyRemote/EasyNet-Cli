@@ -589,10 +589,11 @@ pub fn invoke_local_target_explicit_root_timeout(
 
 /// Named issuer for runtime-owner catalogue reads.
 ///
-/// `meta.list_abilities` is the LocalRuntime catalogue projection, not a
-/// user-owned ledger/status observation. Its subject is the runtime owner being
-/// read so catalogue admission and descriptor proof facts are checked against
-/// the same authority that owns the registered ability table.
+/// `meta.list_abilities` and `meta.list_resources` are LocalRuntime catalogue
+/// projections, not user-owned ledger/status observations. Their subject is
+/// the runtime owner being read so catalogue admission and descriptor proof
+/// facts are checked against the same authority that owns the registered
+/// ability/resource table.
 pub struct LocalRuntimeCatalogueReadIssuer;
 
 impl LocalRuntimeCatalogueReadIssuer {
@@ -1191,6 +1192,25 @@ mod tests {
         assert!(
             message.contains("missing user_id"),
             "runtime-state read must fail on user custody, not derive a device subject: {message}"
+        );
+    }
+
+    #[test]
+    fn resource_catalogue_read_uses_catalogue_subject_policy() {
+        assert!(
+            crate::daemon::ability::names::governance::is_runtime_catalogue_read(
+                crate::daemon::ability::names::governance::META_LIST_ABILITIES,
+            )
+        );
+        assert!(
+            crate::daemon::ability::names::governance::is_runtime_catalogue_read(
+                crate::daemon::ability::names::resources::META_LIST_RESOURCES,
+            )
+        );
+        assert!(
+            !crate::daemon::ability::names::governance::is_runtime_catalogue_read(
+                crate::daemon::ability::names::governance::INVOCATION_HISTORY_LIST,
+            )
         );
     }
 }

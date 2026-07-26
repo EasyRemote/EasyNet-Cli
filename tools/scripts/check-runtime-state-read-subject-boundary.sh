@@ -11,7 +11,6 @@ fail() {
 
 ISSUER="src/support/platform/local_invoke.rs"
 TARGETS=(
-  "src/cli/commands/ability_record.rs"
   "src/cli/commands/discover.rs"
   "src/cli/commands/doctor.rs"
   "src/cli/commands/groups/mcp.rs"
@@ -24,6 +23,7 @@ TARGETS=(
 
 CATALOGUE_TARGETS=(
   "src/cli/daemon_client/ability_catalog.rs"
+  "src/cli/commands/ability_record.rs"
   "src/daemon/ability/catalog/profiles/mcp.rs"
 )
 

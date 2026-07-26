@@ -44,7 +44,10 @@ pub(crate) fn is_invocation_history_read(ability: &str) -> bool {
 /// governance ability names so remote issuers and direct dispatch admission do
 /// not maintain parallel string lists.
 pub(crate) fn is_runtime_catalogue_read(ability: &str) -> bool {
-    ability.trim() == META_LIST_ABILITIES
+    matches!(
+        ability.trim(),
+        META_LIST_ABILITIES | crate::daemon::ability::names::resources::META_LIST_RESOURCES
+    )
 }
 
 pub const AUTHORITY_BINDING_GRANT: &str =

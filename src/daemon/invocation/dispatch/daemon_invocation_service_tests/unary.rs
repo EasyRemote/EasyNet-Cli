@@ -3252,6 +3252,61 @@ async fn dispatch_remote_rpc_rejects_catalogue_read_with_public_action_subject()
 }
 
 #[tokio::test]
+async fn dispatch_remote_rpc_rejects_resource_catalogue_read_with_public_action_subject() {
+    const REMOTE_DEVICE_URA: &str = "easynet:///r/test-realm/device/remote-device";
+    const RESOURCE_CATALOGUE_READ: &str =
+        crate::daemon::ability::names::resources::META_LIST_RESOURCES;
+
+    let pending = Arc::new(PendingDispatchMap::new());
+    let svc = make_service().with_pending(Arc::clone(&pending));
+    let (remote_tx, mut remote_rx) = mpsc::channel(8);
+    svc.directory
+        .presence
+        .insert(REMOTE_DEVICE_URA.to_string(), remote_tx)
+        .expect("canonical presence key");
+    publish_test_route(&svc, REMOTE_DEVICE_URA, RESOURCE_CATALOGUE_READ);
+
+    let ability_ura =
+        crate::core::ura::owner_ability_ura(REMOTE_DEVICE_URA, RESOURCE_CATALOGUE_READ)
+            .expect("remote device resource catalogue Ability URA");
+    let selected_route = svc
+        .target_gate()
+        .route_resolver()
+        .await
+        .resolve_route(&ability_ura, "")
+        .expect("resolver selects the remote-device resource catalogue route");
+
+    let request = invoke_request_for_callee(
+        REMOTE_DEVICE_URA,
+        RESOURCE_CATALOGUE_READ,
+        r#"{"types":["mic"]}"#,
+    )
+    .into_inner();
+    let err = svc
+        .unary_dispatcher()
+        .dispatch_remote_rpc_selected_route(&request, &selected_route, CallMode::Rpc)
+        .await
+        .expect_err("resource catalogue read must require runtime-read subject");
+
+    assert_eq!(err.code(), tonic::Code::FailedPrecondition);
+    assert!(
+        err.message().contains("CANONICAL_CATALOGUE_READ_REQUIRED")
+            && err.message().contains(RESOURCE_CATALOGUE_READ)
+            && err.message().contains(REMOTE_DEVICE_URA)
+            && err
+                .message()
+                .contains("canonical remote catalogue read path"),
+        "unexpected resource catalogue subject denial: {}",
+        err.message()
+    );
+    assert!(
+        remote_rx.try_recv().is_err(),
+        "resource catalogue read with public-action subject must not be forwarded"
+    );
+    assert_eq!(pending.outstanding(), 0);
+}
+
+#[tokio::test]
 async fn dispatch_remote_rpc_allows_catalogue_read_with_runtime_read_subject() {
     const REMOTE_DEVICE_URA: &str = "easynet:///r/test-realm/device/remote-device";
     const CATALOGUE_READ: &str = crate::daemon::ability::names::governance::META_LIST_ABILITIES;
