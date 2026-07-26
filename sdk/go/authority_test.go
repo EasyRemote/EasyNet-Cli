@@ -93,6 +93,16 @@ func TestSessionAuthorityBindsCanonicalSubject(t *testing.T) {
 	}
 
 	payload = sessionAuthorityPayloadFixture()
+	payload["session_id"] = "invocation_history"
+	payload["subject_ura"] = "easynet:///r/example/resource/user.alice/session/invocation_history"
+	value = authorityMetadataFixture(t, payload, []byte("session-signature"))
+
+	_, err = NewSessionAuthorityFromMetadata(value)
+	if err == nil || !strings.Contains(err.Error(), "retired invocation-history subject") {
+		t.Fatalf("retired subject error = %v", err)
+	}
+
+	payload = sessionAuthorityPayloadFixture()
 	payload["session_owner_user_id"] = "teamalice"
 	payload["subject_ura"] = "easynet:///r/example/resource/user.team.alice/session/session-1"
 	value = authorityMetadataFixture(t, payload, []byte("session-signature"))

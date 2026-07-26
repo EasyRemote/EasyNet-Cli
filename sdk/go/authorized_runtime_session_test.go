@@ -50,6 +50,44 @@ func TestAuthorizedRuntimeSessionRejectsPathSubstringOwnerSubjectBeforeDispatch(
 	}
 }
 
+func TestAuthorizedRuntimeSessionRejectsRetiredInvocationHistorySubjectExactAuthorityBeforeDispatch(t *testing.T) {
+	session := newAuthorizedRuntimeSessionFixture(t)
+	retiredSubject := "easynet:///r/example/resource/user.alice/session/invocation_history"
+	session.authorization.authority = SessionAuthority{
+		IssuerURA:                "easynet:///r/example/agent/backend",
+		SessionID:                "invocation_history",
+		SessionOwnerUserID:       "alice",
+		SessionOwnerURA:          "easynet:///r/example/user/alice",
+		CreatorPrincipalID:       "easynet:///r/example/agent/backend",
+		CreatorPrincipalURA:      "easynet:///r/example/agent/backend",
+		CalleeURA:                "easynet:///r/example/device/dev-a",
+		SubjectURA:               retiredSubject,
+		Audience:                 "easynet:///r/example/device/dev-a",
+		Scopes:                   []string{"observe.health"},
+		AllowedActions:           []string{"invoke"},
+		AllowedFollowupAbilities: []string{"observe.health"},
+		IssuedAtMS:               1000,
+		ExpiresAtMS:              2000,
+		Signature:                []byte("signature"),
+	}
+	intent := canonicalSessionIntentFixture()
+	intent.Subject = IntentSubjectRef{
+		URA:            retiredSubject,
+		DerivationRule: "fixture",
+	}
+
+	_, err := session.sdk.Invoke().Submit(context.Background(), intent, PrepareOptions{})
+	if err == nil {
+		t.Fatalf("expected retired subject authority mismatch")
+	}
+	if !IsCode(err, ErrAuthoritySubjectMismatch) {
+		t.Fatalf("error = %v", err)
+	}
+	if session.runtime.prepareCalls != 0 || session.runtime.submitCalls != 0 {
+		t.Fatalf("remote path attempted after retired subject: prepare=%d submit=%d", session.runtime.prepareCalls, session.runtime.submitCalls)
+	}
+}
+
 func TestAuthorizedRuntimeSessionRejectsMissingCallerIdentityBeforeDescriptor(t *testing.T) {
 	session := newAuthorizedRuntimeSessionFixture(t)
 	session.identity.caller = CallerIdentityRef{}

@@ -958,7 +958,7 @@ test("authority metadata is typed, delegated, and mutually exclusive", async () 
     .withCallerURA(caller)
     .withCalleeURA(callee)
     .withDescriptorRef(descriptor)
-    .withSubjectURA("easynet:///r/example/resource/user.alice/session/invocation_history")
+    .withSubjectURA("easynet:///r/example/resource/user.alice/session/session-1")
     .withNonceBase64(nonce)
     .withCausalContext({ form: "none" })
     .withJSONArgs({})
@@ -966,6 +966,25 @@ test("authority metadata is typed, delegated, and mutually exclusive", async () 
     .withAuthorityMetadata(userResourceSession.metadata())
     .build();
   assert.equal(resourceAuthorized.metadata[sdk.SESSION_AUTHORITY_METADATA_KEY], userResourceSession.metadataValue);
+
+  assert.throws(
+    () =>
+      new sdk.InvocationBuilder()
+        .withCallerURA(caller)
+        .withCalleeURA(callee)
+        .withDescriptorRef(descriptor)
+        .withSubjectURA("easynet:///r/example/resource/user.alice/session/invocation_history")
+        .withNonceBase64(nonce)
+        .withCausalContext({ form: "none" })
+        .withJSONArgs({})
+        .withContentType("application/json")
+        .withAuthorityMetadata(userResourceSession.metadata())
+        .build(),
+    (error) =>
+      error instanceof sdk.SDKError &&
+      error.code === sdk.ErrorCode.AUTHORITY_SUBJECT_MISMATCH &&
+      error.stage === "authorize",
+  );
 
   assert.throws(
     () =>
@@ -1312,6 +1331,27 @@ test("authority metadata binds session subject to owner and session id", () => {
       }),
     ),
     /session authority subject_ura owner\/session must match session_owner_user_id and session_id/,
+  );
+
+  assert.throws(
+    () =>
+      sdk.SessionAuthority.fromMetadata(
+        authorityValue({
+          issuer_ura: caller,
+          session_id: "invocation_history",
+          session_owner_user_id: "alice",
+          creator_principal_id: caller,
+          callee_ura: callee,
+          subject_ura: "easynet:///r/example/resource/user.alice/session/invocation_history",
+          audience: callee,
+          scopes: ["invoke"],
+          allowed_actions: ["invoke"],
+          allowed_followup_abilities: ["observe.health"],
+          issued_at_ms: 10,
+          expires_at_ms: 20,
+        }),
+      ),
+    /retired invocation-history subject/,
   );
 
   assert.throws(

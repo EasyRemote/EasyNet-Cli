@@ -82,6 +82,7 @@ export const SESSION_AUTHORITY_METADATA_KEY = "x-runtime-session-authority";
 export const MAX_STREAM_BUFFERED_EVENTS = 1024;
 export const MAX_BIDI_BUFFERED_FRAMES = 1024;
 const RUNTIME_STATE_READ_SUBJECT_PATH = "runtime-state/read";
+const RETIRED_INVOCATION_HISTORY_SUBJECT_PATH = "session/invocation_history";
 const RUNTIME_GOVERNANCE_READ_ABILITIES = Object.freeze([
   "meta.list_abilities",
   "invocation.history.list",
@@ -2735,6 +2736,20 @@ function isRuntimeStateReadSubjectURA(subjectURA) {
   );
 }
 
+function isRetiredInvocationHistorySubjectURA(subjectURA) {
+  const subject = canonicalResourceSubject(subjectURA);
+  if (!subject || !subject.ownerID.startsWith("user.")) {
+    return false;
+  }
+  const ownerUserID = subject.ownerID.slice("user.".length).trim();
+  return (
+    ownerUserID !== "" &&
+    !ownerUserID.includes(".") &&
+    !containsAllZeroPrincipal(ownerUserID) &&
+    subject.resourcePath === RETIRED_INVOCATION_HISTORY_SUBJECT_PATH
+  );
+}
+
 function runtimeStateSubjectString(value, field) {
   if (typeof value !== "string" || value.trim() === "") {
     throw invalidInvocation(`runtime-state read subject ${field} is required`);
@@ -3266,6 +3281,9 @@ function parseCanonicalURA(raw, field) {
 }
 
 function validateSessionAuthoritySubjectBinding(subjectURA, sessionOwnerUserID, sessionID) {
+  if (isRetiredInvocationHistorySubjectURA(subjectURA)) {
+    throw invalidAuthority("session authority subject_ura uses retired invocation-history subject; use runtime-state/read");
+  }
   const subject = canonicalAuthoritySubject(subjectURA);
   if (!subject || (subject.kind !== "user" && subject.kind !== "session")) {
     throw invalidAuthority("session authority subject_ura must be a canonical user or session subject");
@@ -3703,6 +3721,9 @@ function runtimeCallDetails(call) {
 
 function sessionAuthorityAdmitsSubject(authority, subjectURA) {
   const subject = subjectURA.trim();
+  if (isRetiredInvocationHistorySubjectURA(subject)) {
+    return false;
+  }
   if (authority.subjectURA.trim() === subject) {
     return true;
   }

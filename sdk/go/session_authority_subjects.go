@@ -3,6 +3,7 @@ package easynet
 import "strings"
 
 const runtimeStateReadSubjectPath = "runtime-state/read"
+const retiredInvocationHistorySubjectPath = "session/invocation_history"
 
 // RuntimeStateReadSubjectURA builds the canonical subject for runtime-state
 // read projections owned by one authenticated user.
@@ -43,6 +44,20 @@ func isRuntimeStateReadSubjectURA(subjectURA string) bool {
 		strings.TrimSpace(parts.Path) == runtimeStateReadSubjectPath
 }
 
+func isRetiredInvocationHistorySubjectURA(subjectURA string) bool {
+	parts, err := ParseURAParts(strings.TrimSpace(subjectURA))
+	if err != nil || parts.Kind != URAKindResource {
+		return false
+	}
+	ownerID := strings.TrimSpace(parts.OwnerID)
+	userID := strings.TrimPrefix(ownerID, "user.")
+	return strings.HasPrefix(ownerID, "user.") &&
+		strings.TrimSpace(userID) != "" &&
+		!strings.Contains(userID, ".") &&
+		!containsAllZeroPrincipal(userID) &&
+		strings.TrimSpace(parts.Path) == retiredInvocationHistorySubjectPath
+}
+
 // runtimeSessionAuthorityAdmitsSubject is the Go SDK's canonical
 // session-authority subject admission predicate. Runtime ability calls and
 // invocation-history queries both consume this helper; neither path owns a
@@ -52,6 +67,9 @@ func runtimeSessionAuthorityAdmitsSubject(
 	subjectURA string,
 ) bool {
 	if authority == nil {
+		return false
+	}
+	if isRetiredInvocationHistorySubjectURA(subjectURA) {
 		return false
 	}
 	if strings.TrimSpace(authority.SubjectURA) == strings.TrimSpace(subjectURA) {

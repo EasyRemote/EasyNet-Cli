@@ -787,6 +787,9 @@ type sessionAuthoritySubject struct {
 }
 
 func validateSessionAuthoritySubjectBinding(subjectURA string, sessionOwnerUserID string, sessionID string) error {
+	if isRetiredInvocationHistorySubjectURA(subjectURA) {
+		return invalidInvocation("session authority subject_ura uses retired invocation-history subject; use runtime-state/read", nil)
+	}
 	subject, err := canonicalSessionAuthoritySubject(subjectURA)
 	if err != nil {
 		return err

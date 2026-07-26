@@ -4,6 +4,7 @@ public let authorityProfile = "authority"
 public let delegationMetadataKey = "x-runtime-delegation"
 public let sessionAuthorityMetadataKey = "x-runtime-session-authority"
 private let runtimeStateReadSubjectPath = "runtime-state/read"
+private let retiredInvocationHistorySubjectPath = "session/invocation_history"
 
 public func runtimeStateReadSubjectURA(realm: String, userID: String) throws -> String {
     let cleanRealm = try requiredAuthorityString(realm, "realm")
@@ -482,6 +483,9 @@ private struct AuthoritySubject {
 }
 
 private func validateSessionAuthoritySubjectBinding(subjectURA: String, sessionOwnerUserID: String, sessionID: String) throws {
+    if isRetiredInvocationHistorySubject(subjectURA) {
+        throw invalidAuthority("session authority subject_ura uses retired invocation-history subject; use runtime-state/read")
+    }
     guard let subject = try canonicalAuthoritySubject(subjectURA) else {
         throw invalidAuthority("session authority subject_ura must be a canonical user or session subject")
     }
@@ -498,6 +502,9 @@ private func validateSessionAuthoritySubjectBinding(subjectURA: String, sessionO
 }
 
 private func sessionAuthorityAdmitsSubject(_ authority: SessionAuthority, _ subjectURA: String) -> Bool {
+    if isRetiredInvocationHistorySubject(subjectURA) {
+        return false
+    }
     if authority.subjectURA.trimmingCharacters(in: .whitespacesAndNewlines) ==
         subjectURA.trimmingCharacters(in: .whitespacesAndNewlines) {
         return true
@@ -556,6 +563,19 @@ private func canonicalAuthoritySubject(_ subjectURA: String) throws -> Authority
         return nil
     }
     return AuthoritySubject(kind: "session", ownerUserID: ownerUserID, sessionID: authoritySessionID)
+}
+
+private func isRetiredInvocationHistorySubject(_ subjectURA: String) -> Bool {
+    guard let subject = canonicalResourceSubject(subjectURA),
+          subject.ownerID.hasPrefix("user.")
+    else {
+        return false
+    }
+    let ownerUserID = String(subject.ownerID.dropFirst("user.".count)).trimmingCharacters(in: .whitespacesAndNewlines)
+    return !ownerUserID.isEmpty &&
+        !ownerUserID.contains(".") &&
+        !containsAllZeroPrincipal(ownerUserID) &&
+        subject.path == retiredInvocationHistorySubjectPath
 }
 
 private struct ResourceSubject {

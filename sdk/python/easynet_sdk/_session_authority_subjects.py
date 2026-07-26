@@ -6,6 +6,7 @@ from .authority import SessionAuthority
 from .axon_addressing import AddressingProjection, parse_ura, resource_ura, user_ura
 from .errors import SDKError
 from ._identity_guards import contains_all_zero_principal
+from ._runtime_subjects import is_retired_invocation_history_subject_ura
 
 _RUNTIME_STATE_READ_SUBJECT_PATH = "runtime-state/read"
 
@@ -35,7 +36,7 @@ def runtime_state_read_subject_ura(realm: str, user_id: str) -> str:
 
 def is_runtime_state_read_subject_ura(subject_ura: str) -> bool:
     try:
-        subject = parse_ura(str(subject_ura).strip())
+        subject = parse_ura(subject_ura.strip())
     except SDKError:
         return False
     owner_id = subject.components.get("owner_id")
@@ -78,6 +79,8 @@ def session_authority_admits_subject(
     from the canonical URA projection's `owner_id` component.
     """
 
+    if is_retired_invocation_history_subject_ura(subject_ura):
+        return False
     if authority.subject_ura.strip() == subject_ura.strip():
         return True
     if subject is None:

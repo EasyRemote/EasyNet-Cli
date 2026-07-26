@@ -297,6 +297,12 @@ pub(crate) fn validate_session_authority_payload_shape(
             ("audience", &payload.audience),
         ],
     )?;
+    if crate::core::identity::is_retired_invocation_history_subject(&payload.subject_ura) {
+        return Err(AuthorityMetadataError::new(
+            REASON_AUTHORITY_FORMAT_INVALID,
+            "session authority subject_ura uses retired invocation-history subject; use runtime-state/read",
+        ));
+    }
     let subject_kind = authority_subject_kind(&payload.subject_ura);
     if !matches!(
         subject_kind,
@@ -374,6 +380,9 @@ fn reject_all_zero_authority_fields(
 }
 
 pub(crate) fn authority_subject_kind(subject_ura: &str) -> AuthoritySubjectKind {
+    if crate::core::identity::is_retired_invocation_history_subject(subject_ura) {
+        return AuthoritySubjectKind::Other;
+    }
     let Ok(parsed) = crate::core::ura::parse_ura(subject_ura.trim()) else {
         return AuthoritySubjectKind::Other;
     };
@@ -407,6 +416,9 @@ pub(crate) fn session_authority_admits_subject(
     payload: &SessionAuthorityPayload,
     subject: &str,
 ) -> bool {
+    if crate::core::identity::is_retired_invocation_history_subject(subject) {
+        return false;
+    }
     if payload.subject_ura == subject {
         return true;
     }
@@ -716,6 +728,27 @@ mod tests {
     }
 
     #[test]
+    fn session_authority_rejects_retired_invocation_history_subject_carrier() {
+        let mut payload = session_payload();
+        payload.session_id = "invocation_history".into();
+        payload.subject_ura =
+            "easynet:///r/example/resource/user.alice/session/invocation_history".into();
+
+        let err = validate_session_authority_payload_shape(&payload, None)
+            .expect_err("retired invocation-history subject carrier must fail closed");
+        assert_eq!(err.reason(), REASON_AUTHORITY_FORMAT_INVALID);
+        assert!(
+            err.to_string()
+                .contains("retired invocation-history subject"),
+            "{err}"
+        );
+        assert!(
+            !session_authority_admits_subject(&payload, &payload.subject_ura),
+            "exact-match admission must not revive the retired carrier"
+        );
+    }
+
+    #[test]
     fn session_authority_rejects_all_zero_owner_before_subject_admission() {
         let all_zero = "00000000-0000-0000-0000-000000000000";
         let mut payload = session_payload();
@@ -753,6 +786,13 @@ mod tests {
         assert_eq!(
             authority_subject_kind("easynet:///r/example/resource/user.alice/session/session-1"),
             AuthoritySubjectKind::Session
+        );
+        assert_eq!(
+            authority_subject_kind(
+                "easynet:///r/example/resource/user.alice/session/invocation_history"
+            ),
+            AuthoritySubjectKind::Other,
+            "retired invocation-history carrier must not classify as a live session subject"
         );
         assert_eq!(
             authority_subject_kind("easynet:///r/example/session/session-1"),

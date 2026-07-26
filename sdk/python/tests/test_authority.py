@@ -136,6 +136,19 @@ class AuthorityTests(unittest.TestCase):
             SessionAuthority.from_metadata(value)
 
         payload = _session_authority_payload()
+        payload["session_id"] = "invocation_history"
+        payload["subject_ura"] = (
+            "easynet:///r/example/resource/user.alice/session/invocation_history"
+        )
+        value = _authority_metadata(payload, b"session-signature")
+
+        with self.assertRaisesRegex(
+            SDKError,
+            "retired invocation-history subject",
+        ):
+            SessionAuthority.from_metadata(value)
+
+        payload = _session_authority_payload()
         payload["session_owner_user_id"] = "teamalice"
         payload["subject_ura"] = (
             "easynet:///r/example/resource/user.team.alice/session/session-1"

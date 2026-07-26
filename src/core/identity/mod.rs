@@ -129,6 +129,37 @@ pub struct RuntimeStateReadSubject {
     user_id: String,
 }
 
+/// Retired subject path formerly used by invocation-history read sessions.
+///
+/// The canonical runtime model now represents user-owned read projections with
+/// [`RuntimeStateReadSubject::RESOURCE_PATH`]. Keeping this retired carrier
+/// admissible at generic authority boundaries would let old metadata bypass the
+/// canonical runtime-state subject model.
+pub const RETIRED_INVOCATION_HISTORY_SUBJECT_PATH: &str = "session/invocation_history";
+
+#[must_use]
+pub fn is_retired_invocation_history_subject(value: &str) -> bool {
+    let value = value.trim();
+    if value.is_empty() || contains_all_zero_principal_placeholder(value) {
+        return false;
+    }
+    let Ok(parsed) = crate::core::ura::parse_ura(value) else {
+        return false;
+    };
+    if parsed.kind != crate::core::ura::URAKind::Resource {
+        return false;
+    }
+    let Some(owner) = parsed.resource_owner_id() else {
+        return false;
+    };
+    let Some(user_id) = owner.strip_prefix("user.") else {
+        return false;
+    };
+    !user_id.trim().is_empty()
+        && !user_id.contains('.')
+        && parsed.resource_path() == Some(RETIRED_INVOCATION_HISTORY_SUBJECT_PATH)
+}
+
 impl RuntimeStateReadSubject {
     pub const RESOURCE_PATH: &'static str = "runtime-state/read";
 
@@ -360,6 +391,19 @@ mod tests {
         assert!(matches!(
             RuntimeStateReadSubject::parse("not-a-ura"),
             Err(RuntimeStateReadSubjectError::InvalidSyntax(_))
+        ));
+    }
+
+    #[test]
+    fn retired_invocation_history_subject_predicate_is_specific_to_old_user_carrier() {
+        assert!(is_retired_invocation_history_subject(
+            "  easynet:///r/acme/resource/user.alice/session/invocation_history  "
+        ));
+        assert!(!is_retired_invocation_history_subject(
+            "easynet:///r/acme/resource/user.alice/runtime-state/read"
+        ));
+        assert!(!is_retired_invocation_history_subject(
+            "easynet:///r/acme/resource/agent.alice.reader/session/invocation_history"
         ));
     }
 }

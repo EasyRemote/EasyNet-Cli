@@ -910,6 +910,30 @@ final class RuntimeCoreSeamTests: XCTestCase {
         }
     }
 
+    func testCompleteTupleRejectsRetiredInvocationHistorySubjectAuthorityCarrier() throws {
+        let retiredSubject = "easynet:///r/example/resource/user.alice/session/invocation_history"
+        let metadata = try authorityMetadataValue([
+            "issuer_ura": caller,
+            "session_id": "invocation_history",
+            "session_owner_user_id": "alice",
+            "creator_principal_id": caller,
+            "callee_ura": callee,
+            "subject_ura": retiredSubject,
+            "audience": callee,
+            "scopes": ["observe.health"],
+            "allowed_actions": ["invoke"],
+            "allowed_followup_abilities": ["observe.health"],
+            "issued_at_ms": 10,
+            "expires_at_ms": 20,
+        ])
+        expectSyncSDKError(.invalidArgument, "retired invocation-history subject") {
+            _ = try completeBuilder()
+                .withSubjectURA(retiredSubject)
+                .withMetadata([sessionAuthorityMetadataKey: .string(metadata)])
+                .inspect()
+        }
+    }
+
     func testCompleteTupleRejectsReceiptHistoryPublicInvocation() {
         let historyDescriptor = "easynet:///r/example/ability/device.dev-a.invocation.history.list@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read"
         expectSyncSDKError(.invalidArgument, "RuntimeReceiptProvider") {

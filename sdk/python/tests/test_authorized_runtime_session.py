@@ -70,6 +70,39 @@ class AuthorizedRuntimeSessionTests(unittest.TestCase):
         self.assertEqual(fixture.runtime.prepare_calls, 0)
         self.assertEqual(fixture.runtime.submit_calls, 0)
 
+    def test_rejects_retired_invocation_history_subject_exact_authority_before_dispatch(
+        self,
+    ) -> None:
+        fixture = _SessionFixture()
+        retired_subject = (
+            "easynet:///r/example/resource/user.alice/session/invocation_history"
+        )
+        fixture.authorization.authority = SessionAuthority(
+            issuer_ura="easynet:///r/example/agent/backend",
+            session_id="invocation_history",
+            session_owner_user_id="alice",
+            session_owner_ura="easynet:///r/example/user/alice",
+            creator_principal_id="easynet:///r/example/agent/backend",
+            creator_principal_ura="easynet:///r/example/agent/backend",
+            callee_ura="easynet:///r/example/device/dev-a",
+            subject_ura=retired_subject,
+            audience="easynet:///r/example/device/dev-a",
+            scopes=("observe.health",),
+            allowed_actions=("invoke",),
+            allowed_followup_abilities=("observe.health",),
+            issued_at_ms=1000,
+            expires_at_ms=2000,
+            signature=b"signature",
+        )
+        intent = replace(_intent(), subject=SubjectRef(retired_subject, "fixture"))
+
+        with self.assertRaises(SDKError) as caught:
+            fixture.session.invoke.submit(intent, PrepareOptions())
+
+        self.assertTrue(is_code(caught.exception, ErrorCode.AUTHORITY_SUBJECT_MISMATCH))
+        self.assertEqual(fixture.runtime.prepare_calls, 0)
+        self.assertEqual(fixture.runtime.submit_calls, 0)
+
     def test_rejects_missing_caller_identity_before_descriptor(self) -> None:
         fixture = _SessionFixture(identity=StaticCallerIdentityProvider(CallerIdentityRef(PrincipalRef(""))))
         intent = _intent(caller="")

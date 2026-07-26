@@ -5021,6 +5021,8 @@ enum InvocationJsonError {
     ReceiptHistoryReadDescriptor(String),
     #[error("field `{0}` must not contain the all-zero principal placeholder")]
     AllZeroPrincipal(&'static str),
+    #[error("field `{0}` uses retired invocation-history subject; use runtime-state/read")]
+    RetiredInvocationHistorySubject(&'static str),
     #[error("authority metadata is invalid: {0}")]
     AuthorityMetadata(String),
     #[error("authority metadata subject does not admit invocation subject_ura: {0}")]
@@ -5714,6 +5716,10 @@ fn validate_public_invocation_descriptor_ref(
 fn validate_public_tuple_ura(field: &'static str, value: &str) -> Result<(), InvocationJsonError> {
     if crate::core::identity::contains_all_zero_principal_placeholder(value) {
         return Err(InvocationJsonError::AllZeroPrincipal(field));
+    }
+    if field == "subject_ura" && crate::core::identity::is_retired_invocation_history_subject(value)
+    {
+        return Err(InvocationJsonError::RetiredInvocationHistorySubject(field));
     }
     crate::core::ura::parse_ura(value.trim())
         .map(|_| ())
@@ -6859,14 +6865,30 @@ mod tests {
     }
 
     #[test]
+    fn parse_invocation_json_rejects_retired_invocation_history_subject_before_daemon_io() {
+        let err = InvocationJson::parse(&canonical_invocation_json(serde_json::json!({
+            "subject_ura": "easynet:///r/acme/resource/user.alice/session/invocation_history"
+        })))
+        .expect_err("retired invocation-history subjects must fail at public FFI ingress");
+
+        assert!(
+            matches!(
+                err,
+                InvocationJsonError::RetiredInvocationHistorySubject("subject_ura")
+            ),
+            "unexpected retired subject rejection: {err}"
+        );
+    }
+
+    #[test]
     fn parse_invocation_json_rejects_session_authority_subject_mismatch_before_daemon_io() {
         let session_authority = signed_authority_metadata_value(serde_json::json!({
             "issuer_ura": "easynet:///r/acme/device/dev-a",
-            "session_id": "invocation_history",
+            "session_id": "session-1",
             "session_owner_user_id": "alice",
             "creator_principal_id": "easynet:///r/acme/device/dev-a",
             "callee_ura": "easynet:///r/acme/device/dev-a",
-            "subject_ura": "easynet:///r/acme/resource/user.alice/session/invocation_history",
+            "subject_ura": "easynet:///r/acme/resource/user.alice/session/session-1",
             "audience": "easynet:///r/acme/device/dev-a",
             "scopes": ["invocation.history.list"],
             "allowed_actions": ["invoke"],

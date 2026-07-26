@@ -47,6 +47,7 @@ public final class RuntimeCoreSeamTest {
           "preparedInvocationRejectsRequestIDOnlyAlias",
           "completeTupleRejectsMissingCaller",
           "completeTupleRejectsAllZeroPrincipals",
+          "completeTupleRejectsRetiredInvocationHistorySubjectAuthorityCarrier",
           "completeTupleRejectsReceiptHistoryPublicInvocation",
           "completeTupleRejectsCatalogueReadPublicInvocation",
           "preparedInvocationCannotBeSubmitted",
@@ -117,6 +118,8 @@ public final class RuntimeCoreSeamTest {
           preparedInvocationRejectsRequestIDOnlyAlias();
       case "completeTupleRejectsMissingCaller" -> completeTupleRejectsMissingCaller();
       case "completeTupleRejectsAllZeroPrincipals" -> completeTupleRejectsAllZeroPrincipals();
+      case "completeTupleRejectsRetiredInvocationHistorySubjectAuthorityCarrier" ->
+          completeTupleRejectsRetiredInvocationHistorySubjectAuthorityCarrier();
       case "completeTupleRejectsReceiptHistoryPublicInvocation" ->
           completeTupleRejectsReceiptHistoryPublicInvocation();
       case "completeTupleRejectsCatalogueReadPublicInvocation" ->
@@ -1276,6 +1279,36 @@ public final class RuntimeCoreSeamTest {
     expectSDKError(
         ErrorCode.INVALID_ARGUMENT,
         () -> completeBuilder().subject(placeholder).inspect());
+  }
+
+  private static void completeTupleRejectsRetiredInvocationHistorySubjectAuthorityCarrier() {
+    String retiredSubject =
+        "easynet:///r/example/resource/user.alice/session/invocation_history";
+    Map<String, Object> payload = new LinkedHashMap<>();
+    payload.put("issuer_ura", CALLER);
+    payload.put("session_id", "invocation_history");
+    payload.put("session_owner_user_id", "alice");
+    payload.put("creator_principal_id", CALLER);
+    payload.put("callee_ura", CALLEE);
+    payload.put("subject_ura", retiredSubject);
+    payload.put("audience", CALLEE);
+    payload.put("scopes", List.of("observe.health"));
+    payload.put("allowed_actions", List.of("invoke"));
+    payload.put("allowed_followup_abilities", List.of("observe.health"));
+    payload.put("issued_at_ms", 10);
+    payload.put("expires_at_ms", 20);
+
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        "retired invocation-history subject",
+        () ->
+            completeBuilder()
+                .subject(retiredSubject)
+                .metadata(
+                    Map.of(
+                        AuthoritySupport.SESSION_AUTHORITY_METADATA_KEY,
+                        authorityMetadataValue(payload)))
+                .inspect());
   }
 
   private static void completeTupleRejectsReceiptHistoryPublicInvocation() {

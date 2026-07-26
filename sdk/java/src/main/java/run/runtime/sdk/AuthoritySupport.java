@@ -12,6 +12,7 @@ final class AuthoritySupport {
   static final String DELEGATION_KIND = "delegation";
   static final String SESSION_AUTHORITY_KIND = "session_authority";
   static final String RUNTIME_STATE_READ_SUBJECT_PATH = "runtime-state/read";
+  private static final String RETIRED_INVOCATION_HISTORY_SUBJECT_PATH = "session/invocation_history";
   private static final String ALL_ZERO_PRINCIPAL_ID = "00000000-0000-0000-0000-000000000000";
 
   private AuthoritySupport() {}
@@ -133,6 +134,9 @@ final class AuthoritySupport {
 
   static void validateSessionAuthoritySubjectBinding(
       String subjectURA, String sessionOwnerUserID, String sessionID) {
+    if (isRetiredInvocationHistorySubject(subjectURA)) {
+      throw invalid("session authority subject_ura uses retired invocation-history subject; use runtime-state/read");
+    }
     AuthoritySubject subject = canonicalAuthoritySubject(subjectURA);
     if (subject == null) {
       throw invalid("session authority subject_ura must be a canonical user or session subject");
@@ -153,6 +157,9 @@ final class AuthoritySupport {
       return false;
     }
     String subject = subjectURA.trim();
+    if (isRetiredInvocationHistorySubject(subject)) {
+      return false;
+    }
     if (authority.subjectURA().trim().equals(subject)) {
       return true;
     }
@@ -183,6 +190,18 @@ final class AuthoritySupport {
 
   static boolean containsAllZeroPrincipal(String value) {
     return value != null && value.trim().toLowerCase().contains(ALL_ZERO_PRINCIPAL_ID);
+  }
+
+  private static boolean isRetiredInvocationHistorySubject(String subjectURA) {
+    ResourceSubject subject = canonicalResourceSubject(subjectURA);
+    if (subject == null || !subject.ownerID.startsWith("user.")) {
+      return false;
+    }
+    String ownerUserID = subject.ownerID.substring("user.".length()).trim();
+    return !ownerUserID.isEmpty()
+        && !ownerUserID.contains(".")
+        && !containsAllZeroPrincipal(ownerUserID)
+        && subject.path.equals(RETIRED_INVOCATION_HISTORY_SUBJECT_PATH);
   }
 
   static String requiredBase64(String value, String field) {
