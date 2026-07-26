@@ -143,6 +143,7 @@ if [[ "$SELF_TEST" == "1" ]]; then
   grep -q "media_stream_unique_invocation_records" "$0"
   grep -q "media_bidi_unique_invocation_records" "$0"
   grep -q "media_product_operations_have_verified_single_terminal_receipt_chains" "$0"
+  grep -q -- "--proof-ref 'bootstrap-admin-" "$0"
   grep -q "completed_chain_facts" "$0"
   grep -q "caller_cli_must_fail" "$0"
   grep -q "provider_media_plugin_removed" "$0"
@@ -150,6 +151,7 @@ if [[ "$SELF_TEST" == "1" ]]; then
   grep -q "resolve_docker" "$0"
   grep -q "extend_tool_path" "$0"
   grep -q "random_nonce_hex" "$0"
+  grep -q "wait_device_online provider /home/provider" "$0"
   grep -q "docker compose" "$0"
   echo "docker-media-bidi-e2e self-test ok"
   exit 0
@@ -292,18 +294,30 @@ PY" >/dev/null 2>&1; then
   return 1
 }
 
-wait_hub_device() {
-  local node_id="$1"
+wait_device_online() {
+  local service="$1"
+  local home="$2"
+  local label="$3"
+  local node_id="$4"
+  local out="$OUT_DIR/status-${label}-online.latest.json"
+  local err="$OUT_DIR/status-${label}-online.latest.err"
   for _ in $(seq 1 120); do
-    if hub_cli "device list --state all --format json" >"$OUT_DIR/hub-device-list.json" 2>"$OUT_DIR/hub-device-list.err"; then
-      if jq -e --arg node "$node_id" '(.nodes // []) | any(.node_id == $node)' "$OUT_DIR/hub-device-list.json" >/dev/null; then
+    if service_exec "$service" "HOME='$home' EASYNET_CLI_LIB=/usr/local/lib/libeasynet_cli.so easynet status --json" \
+      >"$out" 2>"$err"; then
+      if jq -e --arg node "$node_id" '
+        .runtime_status == "running"
+        and (.connection.node_id // "") == $node
+        and (.connection.state_code // "") == "J800"
+        and (.product_presence.directory_status // "") == "online"
+        and (.product_presence.session_admitted // false) == true
+      ' "$out" >/dev/null; then
         return 0
       fi
     fi
     sleep 0.5
   done
-  cat "$OUT_DIR/hub-device-list.json" >&2 2>/dev/null || true
-  cat "$OUT_DIR/hub-device-list.err" >&2 2>/dev/null || true
+  cat "$out" >&2 2>/dev/null || true
+  cat "$err" >&2 2>/dev/null || true
   return 1
 }
 
@@ -588,7 +602,7 @@ wait_hub_port_from caller
 wait_runtime hub /srv/easynet hub
 
 echo "==> bootstrapping PrincipalLifecycle"
-hub_cli "principal bootstrap --principal-ura '$ADMIN_URA' --create-idempotency-key admin-create-$TIMESTAMP --bind-idempotency-key admin-bind-$TIMESTAMP --json" \
+hub_cli "principal bootstrap --principal-ura '$ADMIN_URA' --proof-ref 'bootstrap-admin-$TIMESTAMP' --create-idempotency-key admin-create-$TIMESTAMP --bind-idempotency-key admin-bind-$TIMESTAMP --json" \
   >"$OUT_DIR/principal-admin.json"
 ADMIN_BINDING="$(jq -r '.principal.bindings[0].binding_id' "$OUT_DIR/principal-admin.json")"
 hub_cli "principal issue-enrollment --issuer-ura '$ADMIN_URA' --subject-principal-ura '$USER_URA' --proof-ref '$ADMIN_BINDING' --idempotency-key alice-principal-$TIMESTAMP --json" \
@@ -616,8 +630,8 @@ provider_cli "runtime start" >"$OUT_DIR/provider-start.txt" 2>"$OUT_DIR/provider
 caller_cli "runtime start" >"$OUT_DIR/caller-start.txt" 2>"$OUT_DIR/caller-start.err"
 wait_runtime provider /home/provider provider
 wait_runtime caller /home/caller caller
-wait_hub_device "$PROVIDER_NODE"
-wait_hub_device "$CALLER_NODE"
+wait_device_online provider /home/provider provider "$PROVIDER_NODE"
+wait_device_online caller /home/caller caller "$CALLER_NODE"
 
 echo "==> creating user-installed synthetic media sidecar plugin"
 MEDIA_PLUGIN_ID="e2e.synthetic_media_bidi"
