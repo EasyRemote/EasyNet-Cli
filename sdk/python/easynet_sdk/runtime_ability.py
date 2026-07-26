@@ -45,13 +45,18 @@ RuntimeInvocationAuthority: TypeAlias = DelegationProof | SessionAuthority
 class _RuntimeAbilityDispatchPolicy:
     allow_governance_read: bool = False
     subject_policy: str = "descriptor_bound"
+    descriptor_provider: str = ""
 
 
 _PUBLIC_ACTION_POLICY = _RuntimeAbilityDispatchPolicy()
-_GOVERNANCE_READ_POLICY = _RuntimeAbilityDispatchPolicy(allow_governance_read=True)
+_GOVERNANCE_READ_POLICY = _RuntimeAbilityDispatchPolicy(
+    allow_governance_read=True,
+    descriptor_provider="receipt_history",
+)
 _CATALOGUE_READ_POLICY = _RuntimeAbilityDispatchPolicy(
     allow_governance_read=True,
     subject_policy="runtime_owner",
+    descriptor_provider="ability_descriptor",
 )
 
 
@@ -164,6 +169,7 @@ class RuntimeAbilityClient:
             subject_ura=self._descriptor_resolution_subject_ura(
                 call, subject_ura, policy
             ),
+            provider=policy.descriptor_provider,
         )
         ability = _RuntimeAbilityProjection.from_descriptor_ref(
             self._addressing,

@@ -22,10 +22,12 @@ from test_runtime import canonical_runtime_receipt_pair
 class RuntimeTransportFake:
     def __init__(self) -> None:
         self.seen: dict[str, object] = {}
+        self.descriptor_requests: list[dict[str, object]] = []
         self.output_json: dict[str, object] = {"abilities": []}
 
     def resolve_descriptor_ref(self, request_json: bytes) -> bytes:
         request = json.loads(request_json)
+        self.descriptor_requests.append(request)
         return json.dumps(
             {
                 "descriptor_ref": (
@@ -132,6 +134,7 @@ def test_runtime_ability_descriptor_provider_lists_runtime_descriptors() -> None
     assert transport.seen["descriptor_ref"] == (
         "easynet:///r/example/ability/authority.meta.list_abilities@1.0.0"
     )
+    assert transport.descriptor_requests[-1]["provider"] == "ability_descriptor"
     assert transport.seen["subject_ura"] == "easynet:///r/example/authority"
     assert transport.seen["args"] == {
         "scope": "realm",

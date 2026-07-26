@@ -194,6 +194,7 @@ def test_runtime_receipt_list_projects_typed_query_and_axon_record() -> None:
     assert len(page.records) == 1
     assert isinstance(page.records[0], InvocationLedgerRecord)
     assert page.records[0].receipt_chain.anchors == ()
+    assert transport.descriptor_requests[-1]["provider"] == "receipt_history"
     assert transport.seen["args"] == {
         "key": {"trace_id": "trace-1"},
         "filter": {

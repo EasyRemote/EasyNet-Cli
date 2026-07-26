@@ -15,13 +15,14 @@ pub(crate) fn require_remote_governance_read_route(
     route: &SelectedInvokeRoute,
     envelope: &Envelope,
 ) -> Result<(), Status> {
-    reject_receipt_history_action(surface, route)?;
+    require_receipt_history_read_subject(surface, route, envelope)?;
     require_catalogue_read_subject(surface, route, envelope)
 }
 
-fn reject_receipt_history_action(
+fn require_receipt_history_read_subject(
     surface: &'static str,
     route: &SelectedInvokeRoute,
+    envelope: &Envelope,
 ) -> Result<(), Status> {
     let history_ability = selected_route_public_ability(route).filter(|ability| {
         crate::daemon::ability::names::governance::is_invocation_history_read(ability)
@@ -30,10 +31,41 @@ fn reject_receipt_history_action(
     let Some(history_ability) = history_ability else {
         return Ok(());
     };
+    if surface != "Invoke" {
+        return Err(Status::failed_precondition(format!(
+            "CANONICAL_HISTORY_READ_REQUIRED: {surface} remote receipt-history ability \
+             `{history_ability}` must enter through canonical unary Invoke receipt-history path"
+        )));
+    }
+
+    let subject_ura = envelope
+        .subject
+        .as_ref()
+        .map(|subject| subject.ura.trim())
+        .filter(|subject| !subject.is_empty())
+        .ok_or_else(|| {
+            Status::invalid_argument(format!(
+                "{surface} receipt-history read envelope is missing read-model subject"
+            ))
+        })?;
+    if subject_ura == route.callee_ura {
+        return Err(Status::failed_precondition(format!(
+            "CANONICAL_HISTORY_READ_REQUIRED: {surface} receipt-history ability \
+             `{history_ability}` must not use target-owned subject `{}`; use the canonical \
+             receipt-history read path",
+            route.callee_ura
+        )));
+    }
+    let subject = crate::core::identity::RuntimeIdentityUra::parse(subject_ura).map_err(|err| {
+        Status::invalid_argument(format!("{surface} receipt-history read subject_ura {err}"))
+    })?;
+    if subject.kind() == crate::core::ura::URAKind::Resource {
+        return Ok(());
+    }
 
     Err(Status::failed_precondition(format!(
         "CANONICAL_HISTORY_READ_REQUIRED: {surface} receipt history ability `{history_ability}` \
-         is not a public remote action; use the canonical invocation history read path"
+         must use a resource read-model subject; use the canonical invocation history read path"
     )))
 }
 

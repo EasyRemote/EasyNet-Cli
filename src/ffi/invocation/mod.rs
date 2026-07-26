@@ -429,6 +429,66 @@ enum DescriptorResolutionError {
 }
 
 #[cfg(feature = "axon-pb")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RuntimeDescriptorProviderKind {
+    Generic,
+    AbilityDescriptor,
+    ReceiptHistory,
+}
+
+#[cfg(feature = "axon-pb")]
+impl RuntimeDescriptorProviderKind {
+    fn parse(raw: Option<&str>) -> Result<Self, DescriptorResolutionError> {
+        let Some(raw) = raw.map(str::trim).filter(|value| !value.is_empty()) else {
+            return Ok(Self::Generic);
+        };
+        match raw {
+            "ability_descriptor" => Ok(Self::AbilityDescriptor),
+            "receipt_history" => Ok(Self::ReceiptHistory),
+            other => Err(DescriptorResolutionError::invalid_request(format!(
+                "descriptor_ref request provider {other:?} is not supported"
+            ))),
+        }
+    }
+
+    fn source(self) -> &'static str {
+        match self {
+            Self::Generic => "runtime_descriptor_catalog",
+            Self::AbilityDescriptor => "runtime_ability_descriptor_provider",
+            Self::ReceiptHistory => "runtime_receipt_provider",
+        }
+    }
+
+    fn require_ability(self, ability: &str) -> Result<(), DescriptorResolutionError> {
+        match self {
+            Self::Generic => Ok(()),
+            Self::AbilityDescriptor
+                if crate::daemon::ability::names::governance::is_runtime_catalogue_read(ability) =>
+            {
+                Ok(())
+            }
+            Self::ReceiptHistory
+                if crate::daemon::ability::names::governance::is_invocation_history_read(
+                    ability,
+                ) =>
+            {
+                Ok(())
+            }
+            Self::AbilityDescriptor => Err(DescriptorResolutionError::invalid_request(format!(
+                "descriptor_ref provider ability_descriptor cannot resolve non-catalogue ability {ability:?}"
+            ))),
+            Self::ReceiptHistory => Err(DescriptorResolutionError::invalid_request(format!(
+                "descriptor_ref provider receipt_history cannot resolve non-receipt ability {ability:?}"
+            ))),
+        }
+    }
+
+    fn is_explicit(self) -> bool {
+        !matches!(self, Self::Generic)
+    }
+}
+
+#[cfg(feature = "axon-pb")]
 impl DescriptorResolutionError {
     fn invalid_request(message: impl Into<String>) -> Self {
         Self::InvalidRequest(message.into())
@@ -1951,6 +2011,9 @@ fn runtime_resolve_descriptor_ref_json(
         .ok_or_else(|| {
             DescriptorResolutionError::invalid_request("descriptor_ref request missing call_mode")
         })?;
+    let provider = RuntimeDescriptorProviderKind::parse(
+        object.get("provider").and_then(serde_json::Value::as_str),
+    )?;
     let ability_ura = crate::daemon::axon_bridge::descriptor_ref::ability_ura_for_wire(
         callee_ura, ability,
     )
@@ -1959,6 +2022,14 @@ fn runtime_resolve_descriptor_ref_json(
             "resolve descriptor_ref ability for callee_ura={callee_ura:?} ability={ability:?}: {error}"
         ))
     })?;
+    let public_ability = crate::core::ura::AbilitySelector::parse(&ability_ura)
+        .map(|selector| selector.public_name().to_string())
+        .map_err(|error| {
+            DescriptorResolutionError::invalid_request(format!(
+                "resolve descriptor_ref public ability for ability_ura={ability_ura:?}: {error}"
+            ))
+        })?;
+    provider.require_ability(&public_ability)?;
     let runtime_owner_ura = runtime_owner_ura_from_session(session)
         .map_err(DescriptorResolutionError::runtime_owner_unavailable)?;
     if runtime_owner_ura == callee_ura {
@@ -1975,6 +2046,23 @@ fn runtime_resolve_descriptor_ref_json(
         }
         return Err(DescriptorResolutionError::descriptor_not_found(format!(
             "descriptor_ref not found in local runtime catalog for callee_ura={callee_ura:?} ability={ability_ura:?} call_mode={call_mode:?}"
+        )));
+    }
+    if provider.is_explicit() {
+        let catalog = runtime_descriptor_catalog_entries(callee_ura);
+        if let Some(resolution) = descriptor_catalog_resolution_from_entries(
+            &catalog.entries,
+            &ability_ura,
+            call_mode,
+            provider.source(),
+        )
+        .map_err(|error| DescriptorResolutionError::invalid_catalog_payload(error.to_string()))?
+        {
+            return Ok(resolution);
+        }
+        return Err(DescriptorResolutionError::descriptor_not_found(format!(
+            "descriptor_ref not found in {} for callee_ura={callee_ura:?} ability={ability_ura:?} call_mode={call_mode:?}",
+            provider.source()
         )));
     }
     let catalog = runtime_descriptor_catalog_entries(&runtime_owner_ura);
@@ -9734,6 +9822,202 @@ mod tests {
                 && !message.contains("requires a caller signer")
                 && !message.contains("ROUTE_NEGATIVE"),
             "remote descriptor resolution must report only the requested catalog miss: {message}"
+        );
+    }
+
+    #[cfg(feature = "axon-pb")]
+    #[test]
+    fn runtime_descriptor_resolver_uses_explicit_provider_for_remote_catalogue_read() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let control_path = dir.path().join("control.json");
+        let local_node_id = "local-runtime-node";
+        let remote_node_id = "a364ba18-8961-4b31-838a-31c7d776c709";
+        let local_device_ura = crate::core::ura::device_ura("localhost", local_node_id);
+        let remote_device_ura = crate::core::ura::device_ura("localhost", remote_node_id);
+        let ability_ura = format!(
+            "easynet:///r/localhost/ability/device.{remote_node_id}.{}",
+            crate::daemon::ability::names::governance::META_LIST_ABILITIES
+        );
+        crate::daemon::control::discovery::write(
+            &control_path,
+            &crate::daemon::control::discovery::ControlDiscovery {
+                socket_path: Some(dir.path().join("control.sock")),
+                pipe_name: None,
+                invocation_endpoint: Some(dir.path().join("daemon.sock")),
+                daemon_identity: Some(crate::daemon::control::discovery::DaemonIdentity {
+                    mode: "device".to_string(),
+                    realm: "localhost".to_string(),
+                    node_id: Some(local_node_id.to_string()),
+                }),
+                pid: 1,
+                daemon_version: env!("CARGO_PKG_VERSION").to_string(),
+                supported_ipc_versions: crate::daemon::control::discovery::IpcVersionRange::single(
+                    1,
+                ),
+                capability_flags: Vec::new(),
+                pages_port: None,
+            },
+        )
+        .expect("write control discovery");
+        let session = crate::ffi::client::handle::ClientSession::with_control_path_only(
+            control_path.display().to_string(),
+            Some(dir.path().join("offline-daemon.sock").display().to_string()),
+        );
+
+        let resolved = runtime_resolve_descriptor_ref_json(
+            &session,
+            &serde_json::json!({
+                "callee_ura": remote_device_ura,
+                "caller_ura": local_device_ura,
+                "subject_ura": remote_device_ura,
+                "ability": crate::daemon::ability::names::governance::META_LIST_ABILITIES,
+                "call_mode": "rpc",
+                "provider": "ability_descriptor",
+            })
+            .to_string(),
+        )
+        .expect("explicit ability descriptor provider resolves remote catalogue descriptor");
+
+        assert_eq!(resolved["ability_ura"], ability_ura);
+        assert_eq!(resolved["owner_ura"], remote_device_ura);
+        assert_eq!(
+            resolved["name"],
+            crate::daemon::ability::names::governance::META_LIST_ABILITIES
+        );
+        assert_eq!(resolved["source"], "runtime_ability_descriptor_provider");
+        assert!(resolved["descriptor_ref"]
+            .as_str()
+            .is_some_and(
+                |descriptor_ref| descriptor_ref.starts_with(&format!("{ability_ura}@"))
+                    && descriptor_ref.ends_with("!read")
+            ));
+    }
+
+    #[cfg(feature = "axon-pb")]
+    #[test]
+    fn runtime_descriptor_resolver_uses_explicit_provider_for_remote_receipt_read() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let control_path = dir.path().join("control.json");
+        let local_node_id = "local-runtime-node";
+        let remote_node_id = "a364ba18-8961-4b31-838a-31c7d776c709";
+        let local_device_ura = crate::core::ura::device_ura("localhost", local_node_id);
+        let remote_device_ura = crate::core::ura::device_ura("localhost", remote_node_id);
+        let ability_ura = format!(
+            "easynet:///r/localhost/ability/device.{remote_node_id}.{}",
+            crate::daemon::ability::names::governance::INVOCATION_HISTORY_LIST
+        );
+        crate::daemon::control::discovery::write(
+            &control_path,
+            &crate::daemon::control::discovery::ControlDiscovery {
+                socket_path: Some(dir.path().join("control.sock")),
+                pipe_name: None,
+                invocation_endpoint: Some(dir.path().join("daemon.sock")),
+                daemon_identity: Some(crate::daemon::control::discovery::DaemonIdentity {
+                    mode: "device".to_string(),
+                    realm: "localhost".to_string(),
+                    node_id: Some(local_node_id.to_string()),
+                }),
+                pid: 1,
+                daemon_version: env!("CARGO_PKG_VERSION").to_string(),
+                supported_ipc_versions: crate::daemon::control::discovery::IpcVersionRange::single(
+                    1,
+                ),
+                capability_flags: Vec::new(),
+                pages_port: None,
+            },
+        )
+        .expect("write control discovery");
+        let session = crate::ffi::client::handle::ClientSession::with_control_path_only(
+            control_path.display().to_string(),
+            Some(dir.path().join("offline-daemon.sock").display().to_string()),
+        );
+
+        let resolved = runtime_resolve_descriptor_ref_json(
+            &session,
+            &serde_json::json!({
+                "callee_ura": remote_device_ura,
+                "caller_ura": local_device_ura,
+                "subject_ura": remote_device_ura,
+                "ability": crate::daemon::ability::names::governance::INVOCATION_HISTORY_LIST,
+                "call_mode": "rpc",
+                "provider": "receipt_history",
+            })
+            .to_string(),
+        )
+        .expect("explicit receipt provider resolves remote history descriptor");
+
+        assert_eq!(resolved["ability_ura"], ability_ura);
+        assert_eq!(resolved["owner_ura"], remote_device_ura);
+        assert_eq!(
+            resolved["name"],
+            crate::daemon::ability::names::governance::INVOCATION_HISTORY_LIST
+        );
+        assert_eq!(resolved["source"], "runtime_receipt_provider");
+        assert!(resolved["descriptor_ref"]
+            .as_str()
+            .is_some_and(
+                |descriptor_ref| descriptor_ref.starts_with(&format!("{ability_ura}@"))
+                    && descriptor_ref.ends_with("!read")
+            ));
+    }
+
+    #[cfg(feature = "axon-pb")]
+    #[test]
+    fn runtime_descriptor_resolver_rejects_provider_ability_family_mismatch() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let control_path = dir.path().join("control.json");
+        let local_node_id = "local-runtime-node";
+        let remote_node_id = "a364ba18-8961-4b31-838a-31c7d776c709";
+        let local_device_ura = crate::core::ura::device_ura("localhost", local_node_id);
+        let remote_device_ura = crate::core::ura::device_ura("localhost", remote_node_id);
+        crate::daemon::control::discovery::write(
+            &control_path,
+            &crate::daemon::control::discovery::ControlDiscovery {
+                socket_path: Some(dir.path().join("control.sock")),
+                pipe_name: None,
+                invocation_endpoint: Some(dir.path().join("daemon.sock")),
+                daemon_identity: Some(crate::daemon::control::discovery::DaemonIdentity {
+                    mode: "device".to_string(),
+                    realm: "localhost".to_string(),
+                    node_id: Some(local_node_id.to_string()),
+                }),
+                pid: 1,
+                daemon_version: env!("CARGO_PKG_VERSION").to_string(),
+                supported_ipc_versions: crate::daemon::control::discovery::IpcVersionRange::single(
+                    1,
+                ),
+                capability_flags: Vec::new(),
+                pages_port: None,
+            },
+        )
+        .expect("write control discovery");
+        let session = crate::ffi::client::handle::ClientSession::with_control_path_only(
+            control_path.display().to_string(),
+            Some(dir.path().join("offline-daemon.sock").display().to_string()),
+        );
+
+        let error = runtime_resolve_descriptor_ref_json(
+            &session,
+            &serde_json::json!({
+                "callee_ura": remote_device_ura,
+                "caller_ura": local_device_ura,
+                "subject_ura": remote_device_ura,
+                "ability": crate::daemon::ability::names::governance::META_LIST_ABILITIES,
+                "call_mode": "rpc",
+                "provider": "receipt_history",
+            })
+            .to_string(),
+        )
+        .expect_err("receipt provider must not resolve catalogue ability");
+
+        let message = error.to_string();
+        assert!(
+            message.contains("provider receipt_history cannot resolve non-receipt ability"),
+            "unexpected provider mismatch error: {message}"
+        );
+        assert!(
+            !message.contains("descriptor_ref not found") && !message.contains("ROUTE_NEGATIVE"),
+            "provider family mismatch must fail before catalog or route state: {message}"
         );
     }
 

@@ -96,6 +96,7 @@ type RuntimeDescriptorRefRequest struct {
 	CallMode   string `json:"call_mode"`
 	CallerURA  string `json:"caller_ura,omitempty"`
 	SubjectURA string `json:"subject_ura,omitempty"`
+	Provider   string `json:"provider,omitempty"`
 }
 
 // RuntimeTransportFunc adapts functions into a RuntimeTransport.

@@ -3027,6 +3027,76 @@ async fn dispatch_remote_rpc_rejects_receipt_history_as_public_remote_action() {
 }
 
 #[tokio::test]
+async fn dispatch_remote_rpc_allows_receipt_history_with_resource_read_subject() {
+    const REMOTE_DEVICE_URA: &str = "easynet:///r/test-realm/device/remote-device";
+    const HISTORY_READ: &str = crate::daemon::ability::names::governance::INVOCATION_HISTORY_LIST;
+    const READ_SUBJECT_URA: &str = "easynet:///r/test-realm/resource/user.alice/runtime-state/read";
+
+    let pending = Arc::new(PendingDispatchMap::new());
+    let svc = make_service().with_pending(Arc::clone(&pending));
+    let (remote_tx, mut remote_rx) = mpsc::channel(8);
+    svc.directory
+        .presence
+        .insert_negotiated(
+            REMOTE_DEVICE_URA.to_string(),
+            remote_tx,
+            crate::daemon::invocation::bidi::state::presence::SessionContract {
+                version: 1,
+                claimant_boot_nonce: vec![13; 16],
+            },
+        )
+        .expect("canonical presence key");
+    publish_test_route(&svc, REMOTE_DEVICE_URA, HISTORY_READ);
+
+    let ability_ura = crate::core::ura::owner_ability_ura(REMOTE_DEVICE_URA, HISTORY_READ)
+        .expect("remote device history Ability URA");
+    let selected_route = svc
+        .target_gate()
+        .route_resolver()
+        .await
+        .resolve_route(&ability_ura, "")
+        .expect("resolver selects the remote-device history route");
+    let request = signed_invoke_request(
+        TEST_DAEMON_URA,
+        REMOTE_DEVICE_URA,
+        READ_SUBJECT_URA,
+        HISTORY_READ,
+        r#"{"limit":5}"#,
+        &test_device_signing_key(),
+    )
+    .into_inner();
+
+    let dispatcher = svc.unary_dispatcher();
+    let dispatch_task = tokio::spawn(async move {
+        dispatcher
+            .dispatch_remote_rpc_selected_route(&request, &selected_route, CallMode::Rpc)
+            .await
+    });
+    let frame = remote_rx
+        .recv()
+        .await
+        .expect("receipt-history read carrier frame delivered to v1 presence target")
+        .expect("presence dispatch frame ok")
+        .frame;
+    dispatch_task.abort();
+
+    let call = match frame.payload {
+        Some(axon_sdk::pb::axon::v1::invoke_bidi_down::Payload::DispatchCall(call)) => call,
+        other => panic!("expected carrier-v1 DispatchCall, got {other:?}"),
+    };
+    let request = call.request.expect("carrier-v1 request");
+    assert_eq!(invocation_function_name(&request), HISTORY_READ);
+    assert_eq!(
+        request
+            .envelope
+            .as_ref()
+            .and_then(|envelope| envelope.subject.as_ref())
+            .map(|subject| subject.ura.as_str()),
+        Some(READ_SUBJECT_URA)
+    );
+}
+
+#[tokio::test]
 async fn dispatch_remote_rpc_rejects_catalogue_read_with_public_action_subject() {
     const REMOTE_DEVICE_URA: &str = "easynet:///r/test-realm/device/remote-device";
     const CATALOGUE_READ: &str = crate::daemon::ability::names::governance::META_LIST_ABILITIES;

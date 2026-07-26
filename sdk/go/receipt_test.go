@@ -38,6 +38,7 @@ func TestReceiptRoutesGeneratedFromManifest(t *testing.T) {
 
 func TestRuntimeReceiptProviderUsesCanonicalHistoryAndTraceAbilities(t *testing.T) {
 	var invocations []map[string]any
+	var descriptorRequests []RuntimeDescriptorRefRequest
 	transport := RuntimeTransportFunc{InvokeFunc: func(_ context.Context, raw []byte) ([]byte, error) {
 		var draft map[string]any
 		if err := json.Unmarshal(raw, &draft); err != nil {
@@ -73,7 +74,14 @@ func TestRuntimeReceiptProviderUsesCanonicalHistoryAndTraceAbilities(t *testing.
 			return nil, err
 		}
 		return runtimeAbilityResultJSON(true, string(encoded), "", false), nil
-	}, ResolveDescriptorRefFunc: testResolveDescriptorRef(t)}
+	}, ResolveDescriptorRefFunc: func(ctx context.Context, requestJSON []byte) ([]byte, error) {
+		var request RuntimeDescriptorRefRequest
+		if err := json.Unmarshal(requestJSON, &request); err != nil {
+			return nil, err
+		}
+		descriptorRequests = append(descriptorRequests, request)
+		return testResolveDescriptorRef(t)(ctx, requestJSON)
+	}}
 	runtime, _ := NewRuntimeClient(transport)
 	ability, _ := NewRuntimeAbilityClient(runtime, NewCanonicalAddressing())
 	provider, _ := NewRuntimeReceiptProvider(ability)
@@ -108,6 +116,14 @@ func TestRuntimeReceiptProviderUsesCanonicalHistoryAndTraceAbilities(t *testing.
 	}
 	if len(invocations) != 3 {
 		t.Fatalf("invocation count = %d", len(invocations))
+	}
+	if len(descriptorRequests) != 3 {
+		t.Fatalf("descriptor resolver calls = %d, want 3", len(descriptorRequests))
+	}
+	for _, request := range descriptorRequests {
+		if request.Provider != "receipt_history" {
+			t.Fatalf("receipt descriptor provider = %q, want receipt_history in %#v", request.Provider, request)
+		}
 	}
 	listArgs := invocations[0]["args"].(map[string]any)
 	if listArgs["limit"] != float64(5) {

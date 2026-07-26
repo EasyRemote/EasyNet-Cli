@@ -43,6 +43,7 @@ type RuntimeAbilityClient struct {
 type runtimeAbilityDispatchPolicy struct {
 	allowGovernanceRead bool
 	subjectPolicy       runtimeAbilitySubjectPolicy
+	descriptorProvider  string
 }
 
 func runtimeAbilityPublicPolicy() runtimeAbilityDispatchPolicy {
@@ -53,6 +54,7 @@ func runtimeAbilityGovernanceReadPolicy() runtimeAbilityDispatchPolicy {
 	return runtimeAbilityDispatchPolicy{
 		allowGovernanceRead: true,
 		subjectPolicy:       runtimeAbilitySubjectDescriptorBound,
+		descriptorProvider:  "receipt_history",
 	}
 }
 
@@ -60,6 +62,7 @@ func runtimeAbilityCatalogueReadPolicy() runtimeAbilityDispatchPolicy {
 	return runtimeAbilityDispatchPolicy{
 		allowGovernanceRead: true,
 		subjectPolicy:       runtimeAbilitySubjectRuntimeOwner,
+		descriptorProvider:  "ability_descriptor",
 	}
 }
 
@@ -230,6 +233,7 @@ func (c *RuntimeAbilityClient) buildWithCallModePolicy(ctx context.Context, call
 		CallMode:   mode,
 		CallerURA:  strings.TrimSpace(call.CallerURA),
 		SubjectURA: policy.descriptorResolutionSubjectURA(call, subjectURA),
+		Provider:   policy.descriptorProvider,
 	})
 	if err != nil {
 		return InvocationDraft{}, err

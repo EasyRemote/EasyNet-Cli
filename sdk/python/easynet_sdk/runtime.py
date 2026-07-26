@@ -1105,6 +1105,7 @@ class RuntimeClient:
         call_mode: str,
         caller_ura: str = "",
         subject_ura: str = "",
+        provider: str = "",
     ) -> str:
         """Resolve a runtime-governed AbilityDescriptorRef through the provider."""
 
@@ -1125,6 +1126,8 @@ class RuntimeClient:
             request["caller_ura"] = caller_ura
         if subject_ura:
             request["subject_ura"] = subject_ura
+        if provider:
+            request["provider"] = provider
         try:
             raw = transport.resolve_descriptor_ref(
                 json.dumps(request, separators=(",", ":"), sort_keys=True).encode(

@@ -97,6 +97,7 @@ func TestParseAbilityDescriptorRefUsesCanonicalAxonProjection(t *testing.T) {
 
 func TestRuntimeAbilityDescriptorProviderListsRuntimeDescriptors(t *testing.T) {
 	var seen map[string]any
+	var descriptorRequests []RuntimeDescriptorRefRequest
 	transport := RuntimeTransportFunc{InvokeFunc: func(_ context.Context, raw []byte) ([]byte, error) {
 		if err := json.Unmarshal(raw, &seen); err != nil {
 			return nil, err
@@ -123,7 +124,14 @@ func TestRuntimeAbilityDescriptorProviderListsRuntimeDescriptors(t *testing.T) {
 			"schema_summary":{"input":{"type":"object"}},
 			"metadata":{"stable":"true"}
 		}]}`, "", false), nil
-	}, ResolveDescriptorRefFunc: testResolveDescriptorRef(t)}
+	}, ResolveDescriptorRefFunc: func(ctx context.Context, requestJSON []byte) ([]byte, error) {
+		var request RuntimeDescriptorRefRequest
+		if err := json.Unmarshal(requestJSON, &request); err != nil {
+			return nil, err
+		}
+		descriptorRequests = append(descriptorRequests, request)
+		return testResolveDescriptorRef(t)(ctx, requestJSON)
+	}}
 	runtime, err := NewRuntimeClient(transport)
 	if err != nil {
 		t.Fatalf("NewRuntimeClient: %v", err)
@@ -149,6 +157,12 @@ func TestRuntimeAbilityDescriptorProviderListsRuntimeDescriptors(t *testing.T) {
 	}
 	if seen["subject_ura"] != "easynet:///r/example/authority" {
 		t.Fatalf("catalogue read subject_ura = %q", seen["subject_ura"])
+	}
+	if len(descriptorRequests) != 1 {
+		t.Fatalf("descriptor resolver calls = %d, want 1", len(descriptorRequests))
+	}
+	if got := descriptorRequests[0].Provider; got != "ability_descriptor" {
+		t.Fatalf("catalogue descriptor provider = %q, want ability_descriptor", got)
 	}
 	if len(page.Descriptors) != 1 {
 		t.Fatalf("descriptor count = %d", len(page.Descriptors))

@@ -4473,13 +4473,15 @@ check_sdk_go_python_history_public_route_cutover_contract() {
   local go_descriptor="$cli_root/sdk/go/ability_descriptor.go"
   local go_test="$cli_root/sdk/go/runtime_ability_test.go"
   local go_descriptor_test="$cli_root/sdk/go/ability_descriptor_test.go"
+  local go_receipt_test="$cli_root/sdk/go/receipt_test.go"
   local py_runtime="$cli_root/sdk/python/easynet_sdk/runtime_ability.py"
   local py_receipt="$cli_root/sdk/python/easynet_sdk/receipt.py"
   local py_descriptor="$cli_root/sdk/python/easynet_sdk/ability_descriptor.py"
   local py_test="$cli_root/sdk/python/tests/test_runtime_ability.py"
   local py_descriptor_test="$cli_root/sdk/python/tests/test_ability_descriptor.py"
+  local py_receipt_test="$cli_root/sdk/python/tests/test_receipt.py"
 
-  "$PYTHON_BIN" - "$go_runtime" "$go_receipt" "$go_descriptor" "$go_test" "$go_descriptor_test" "$py_runtime" "$py_receipt" "$py_descriptor" "$py_test" "$py_descriptor_test" <<'PY'
+  "$PYTHON_BIN" - "$go_runtime" "$go_receipt" "$go_descriptor" "$go_test" "$go_descriptor_test" "$go_receipt_test" "$py_runtime" "$py_receipt" "$py_descriptor" "$py_test" "$py_descriptor_test" "$py_receipt_test" <<'PY'
 import sys
 from pathlib import Path
 
@@ -4488,7 +4490,7 @@ for path in paths:
     if not path.exists():
         raise SystemExit(f"sdk_history_public_route_cutover:missing:{path}")
 
-go_runtime, go_receipt, go_descriptor, go_test, go_descriptor_test, py_runtime, py_receipt, py_descriptor, py_test, py_descriptor_test = [
+go_runtime, go_receipt, go_descriptor, go_test, go_descriptor_test, go_receipt_test, py_runtime, py_receipt, py_descriptor, py_test, py_descriptor_test, py_receipt_test = [
     path.read_text(encoding="utf-8", errors="replace") for path in paths
 ]
 
@@ -4503,6 +4505,10 @@ for required in (
     "func (c *RuntimeAbilityClient) buildCatalogueRead(",
     "func (c *RuntimeAbilityClient) buildWithCallModePolicy(",
     "func isRuntimeGovernanceReadAbility(abilityName string) bool",
+    "descriptorProvider  string",
+    'descriptorProvider:  "receipt_history"',
+    'descriptorProvider:  "ability_descriptor"',
+    "Provider:   policy.descriptorProvider",
     'abilityName == "meta.list_abilities"',
     "strings.HasPrefix(abilityName, \"invocation.history.\")",
     "strings.HasPrefix(abilityName, \"invocation.trace.\")",
@@ -4528,14 +4534,24 @@ if "TestRuntimeAbilityClientRejectsCatalogueReadPublicRouteBeforeDescriptorResol
     raise SystemExit("sdk_history_public_route_cutover:go_catalogue_public_rejection_test_missing")
 if 'seen["subject_ura"] != "easynet:///r/example/authority"' not in go_descriptor_test:
     raise SystemExit("sdk_history_public_route_cutover:go_catalogue_subject_test_missing")
+if 'Provider:   policy.descriptorProvider' not in go_runtime:
+    raise SystemExit("sdk_history_public_route_cutover:go_descriptor_provider_not_forwarded")
+if '"ability_descriptor"' not in go_descriptor_test:
+    raise SystemExit("sdk_history_public_route_cutover:go_descriptor_provider_test_missing")
+if '"receipt_history"' not in go_runtime or '"receipt_history"' not in go_receipt_test:
+    raise SystemExit("sdk_history_public_route_cutover:go_receipt_provider_evidence_missing")
 
 for required in (
     "class _RuntimeAbilityDispatchPolicy",
     'subject_policy: str = "descriptor_bound"',
+    'descriptor_provider: str = ""',
     "_PUBLIC_ACTION_POLICY = _RuntimeAbilityDispatchPolicy()",
-    "_GOVERNANCE_READ_POLICY = _RuntimeAbilityDispatchPolicy(allow_governance_read=True)",
+    "_GOVERNANCE_READ_POLICY = _RuntimeAbilityDispatchPolicy(",
+    'descriptor_provider="receipt_history"',
     "_CATALOGUE_READ_POLICY = _RuntimeAbilityDispatchPolicy(",
+    'descriptor_provider="ability_descriptor"',
     "policy: _RuntimeAbilityDispatchPolicy = _PUBLIC_ACTION_POLICY",
+    "provider=policy.descriptor_provider",
     "def _build_governance_read(",
     "def _build_catalogue_read(",
     "def _invoke_governance_read(",
@@ -4562,6 +4578,10 @@ if "test_runtime_ability_rejects_catalogue_read_public_route_before_descriptor_r
     raise SystemExit("sdk_history_public_route_cutover:py_catalogue_public_rejection_test_missing")
 if 'transport.seen["subject_ura"] == "easynet:///r/example/authority"' not in py_descriptor_test:
     raise SystemExit("sdk_history_public_route_cutover:py_catalogue_subject_test_missing")
+if 'transport.descriptor_requests[-1]["provider"] == "ability_descriptor"' not in py_descriptor_test:
+    raise SystemExit("sdk_history_public_route_cutover:py_descriptor_provider_test_missing")
+if 'transport.descriptor_requests[-1]["provider"] == "receipt_history"' not in py_receipt_test:
+    raise SystemExit("sdk_history_public_route_cutover:py_receipt_provider_test_missing")
 PY
 }
 
@@ -9635,14 +9655,15 @@ if "pub(crate) mod remote_governance_read;" not in dispatch_mod:
 
 for required in (
     "pub(crate) fn require_remote_governance_read_route(",
-    "fn reject_receipt_history_action(",
+    "fn require_receipt_history_read_subject(",
     "CANONICAL_HISTORY_READ_REQUIRED",
     "is_invocation_history_read(",
     "selected_route_public_ability(route)",
     "fn selected_route_public_ability(route: &SelectedInvokeRoute) -> Option<String>",
     "AbilitySelector::parse(&route.ability_ura)",
-    "receipt history ability `{history_ability}`",
-    "is not a public remote action",
+    "receipt-history ability",
+    "must not use target-owned subject",
+    "must use a resource read-model subject",
     "canonical invocation history read path",
 ):
     if required not in shared_gate:
@@ -9710,12 +9731,14 @@ require_before(
 
 for required_test in (
     "dispatch_remote_rpc_rejects_receipt_history_as_public_remote_action",
+    "dispatch_remote_rpc_allows_receipt_history_with_resource_read_subject",
     "dispatch_remote_rpc_rejects_catalogue_read_with_public_action_subject",
     "dispatch_remote_rpc_allows_catalogue_read_with_runtime_read_subject",
     "CANONICAL_HISTORY_READ_REQUIRED",
     "CANONICAL_CATALOGUE_READ_REQUIRED",
     "AUTHORITY_SUBJECT_MISMATCH",
     "receipt history must fail before remote carrier dispatch",
+    "receipt-history read carrier frame delivered to v1 presence target",
     "catalogue read must require runtime-read subject",
     "catalogue read carrier frame delivered to v1 presence target",
     "remote_rx.try_recv().is_err()",
