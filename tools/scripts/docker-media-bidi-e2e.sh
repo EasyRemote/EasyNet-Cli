@@ -148,6 +148,8 @@ if [[ "$SELF_TEST" == "1" ]]; then
   grep -q "caller_cli_must_fail" "$0"
   grep -q "provider_media_plugin_removed" "$0"
   grep -q "provider_removed_media_routes_reject_invocation" "$0"
+  grep -q "def candidates(row):" "$0"
+  grep -q "ability_ura.endswith(f\".{ability_name}\")" "$0"
   grep -q "resolve_docker" "$0"
   grep -q "extend_tool_path" "$0"
   grep -q "random_nonce_hex" "$0"
@@ -384,10 +386,32 @@ elif isinstance(data, list):
     rows = data
 else:
     rows = []
+
+def candidates(row):
+    values = {
+        str(row.get("name") or ""),
+        str(row.get("ability_name") or ""),
+        str(row.get("public_name") or ""),
+        str(row.get("qualified_name") or ""),
+    }
+    owner = str(row.get("owner_ura") or "")
+    if "/agent/" in owner:
+        owner_tail = owner.rsplit("/agent/", 1)[1]
+        name = str(row.get("name") or "")
+        if name:
+            values.add(f"{owner_tail}.{name}")
+            if "." in owner_tail:
+                values.add(f"{owner_tail.split('.', 1)[1]}.{name}")
+    return values
+
+def matches(row):
+    ability_ura = str(row.get("ability_ura") or "")
+    return ability_name in candidates(row) or ability_ura.endswith(f".{ability_name}")
+
 for row in rows:
     if not isinstance(row, dict):
         continue
-    if row.get("name") != ability_name:
+    if not matches(row):
         continue
     ref = str(row.get("descriptor_ref") or "")
     if not ref:
