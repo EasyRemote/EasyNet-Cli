@@ -1007,15 +1007,15 @@ retired_receipt_alias_rejection_markers = (
     ),
     (
         cli_root / "sdk/python/easynet_sdk/runtime.py",
-        '_reject_retired_top_level_receipt_alias(decoded, "invocation result")',
+        'reject_retired_top_level_receipt_alias(',
     ),
     (
         cli_root / "sdk/python/easynet_sdk/stream.py",
-        '_reject_retired_top_level_receipt_alias(decoded, "stream event")',
+        'reject_retired_top_level_receipt_alias(',
     ),
     (
         cli_root / "sdk/python/easynet_sdk/bidi.py",
-        '_reject_retired_top_level_receipt_alias(decoded, "bidi frame")',
+        'reject_retired_top_level_receipt_alias(',
     ),
 )
 for path, marker in retired_receipt_alias_rejection_markers:
@@ -1029,6 +1029,42 @@ for path, marker in retired_receipt_alias_rejection_markers:
             1,
             "SDK runtime result/frame decoders must reject the retired top-level receipt alias",
         )
+
+python_receipt_projection = cli_root / "sdk/python/easynet_sdk/_receipt_projection.py"
+if not python_receipt_projection.exists():
+    add(
+        "R64_SDK_RETIRED_RECEIPT_ALIAS_REJECTION",
+        python_receipt_projection,
+        1,
+        "Python SDK receipt alias rejection must be owned by one shared wire projection guard",
+    )
+else:
+    text = source(python_receipt_projection)
+    for marker in (
+        "def reject_retired_top_level_receipt_alias(",
+        "retired receipt alias is not accepted",
+        "stage=stage",
+    ):
+        if marker not in text:
+            add(
+                "R64_SDK_RETIRED_RECEIPT_ALIAS_REJECTION",
+                python_receipt_projection,
+                1,
+                "Python SDK receipt alias rejection must be owned by one shared wire projection guard",
+            )
+    for path in (
+        cli_root / "sdk/python/easynet_sdk/runtime.py",
+        cli_root / "sdk/python/easynet_sdk/stream.py",
+        cli_root / "sdk/python/easynet_sdk/bidi.py",
+    ):
+        text = source(path)
+        if "def _reject_retired_top_level_receipt_alias(" in text:
+            add(
+                "R64_SDK_RETIRED_RECEIPT_ALIAS_REJECTION",
+                path,
+                1,
+                "Python SDK facades must not duplicate the retired receipt alias guard",
+            )
 
 runtime_failure_extension_markers = (
     (

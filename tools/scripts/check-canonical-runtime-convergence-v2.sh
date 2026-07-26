@@ -17851,15 +17851,21 @@ PY
 check_python_sdk_runtime_receipt_projection_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local runtime="$cli_root/sdk/python/easynet_sdk/runtime.py"
+  local stream="$cli_root/sdk/python/easynet_sdk/stream.py"
+  local bidi="$cli_root/sdk/python/easynet_sdk/bidi.py"
+  local receipt_projection="$cli_root/sdk/python/easynet_sdk/_receipt_projection.py"
   local tests="$cli_root/sdk/python/tests/test_runtime.py"
   [[ -f "$runtime" ]] || fail "Python Runtime source is missing: ${runtime#$cli_root/}"
+  [[ -f "$stream" ]] || fail "Python Stream source is missing: ${stream#$cli_root/}"
+  [[ -f "$bidi" ]] || fail "Python Bidi source is missing: ${bidi#$cli_root/}"
+  [[ -f "$receipt_projection" ]] || fail "Python receipt projection source is missing: ${receipt_projection#$cli_root/}"
   [[ -f "$tests" ]] || fail "Python runtime tests are missing: ${tests#$cli_root/}"
 
-  "$PYTHON_BIN" - "$runtime" "$tests" <<'PY'
+  "$PYTHON_BIN" - "$runtime" "$stream" "$bidi" "$receipt_projection" "$tests" <<'PY'
 import sys
 from pathlib import Path
 
-runtime, tests = [Path(path).read_text(encoding="utf-8") for path in sys.argv[1:]]
+runtime, stream, bidi, receipt_projection, tests = [Path(path).read_text(encoding="utf-8") for path in sys.argv[1:]]
 
 for fragment, label in {
     "MappingProxyType": "deep_immutable_mapping_missing",
@@ -17882,6 +17888,25 @@ for fragment, label in {
 }.items():
     if fragment not in runtime:
         raise SystemExit(f"python_runtime_receipt_projection:{label}")
+
+for fragment, label in {
+    "def reject_retired_top_level_receipt_alias(": "shared_receipt_alias_guard_missing",
+    "retired receipt alias is not accepted": "shared_receipt_alias_error_missing",
+    "stage=stage": "shared_receipt_alias_stage_missing",
+}.items():
+    if fragment not in receipt_projection:
+        raise SystemExit(f"python_runtime_receipt_projection:{label}")
+if "reject_retired_top_level_receipt_alias(" not in runtime:
+    raise SystemExit("python_runtime_receipt_projection:invocation_result_not_using_shared_receipt_alias_guard")
+for name, source in {
+    "runtime": runtime,
+    "stream": stream,
+    "bidi": bidi,
+}.items():
+    if "reject_retired_top_level_receipt_alias(" not in source:
+        raise SystemExit(f"python_runtime_receipt_projection:{name}_not_using_shared_receipt_alias_guard")
+    if "def _reject_retired_top_level_receipt_alias(" in source:
+        raise SystemExit(f"python_runtime_receipt_projection:{name}_facade_duplicates_receipt_alias_guard")
 
 for forbidden, label in {
     "raw=dict(decoded)": "runtime_receipt_shallow_copy_bypass",
@@ -19080,6 +19105,12 @@ EOF
     "$tmp/cli-python-receipt-proof-shape-legacy/sdk/python/tests"
   cp "$ROOT/sdk/python/easynet_sdk/runtime.py" \
     "$tmp/cli-python-receipt-proof-shape-legacy/sdk/python/easynet_sdk/runtime.py"
+  cp "$ROOT/sdk/python/easynet_sdk/stream.py" \
+    "$tmp/cli-python-receipt-proof-shape-legacy/sdk/python/easynet_sdk/stream.py"
+  cp "$ROOT/sdk/python/easynet_sdk/bidi.py" \
+    "$tmp/cli-python-receipt-proof-shape-legacy/sdk/python/easynet_sdk/bidi.py"
+  cp "$ROOT/sdk/python/easynet_sdk/_receipt_projection.py" \
+    "$tmp/cli-python-receipt-proof-shape-legacy/sdk/python/easynet_sdk/_receipt_projection.py"
   cp "$ROOT/sdk/python/tests/test_runtime.py" \
     "$tmp/cli-python-receipt-proof-shape-legacy/sdk/python/tests/test_runtime.py"
   perl -0pi -e 's/_require_runtime_receipt_exact_keys/_require_runtime_receipt_wide_keys/g' \
@@ -19091,6 +19122,12 @@ EOF
     "$tmp/cli-python-receipt-shallow-copy-legacy/sdk/python/tests"
   cp "$ROOT/sdk/python/easynet_sdk/runtime.py" \
     "$tmp/cli-python-receipt-shallow-copy-legacy/sdk/python/easynet_sdk/runtime.py"
+  cp "$ROOT/sdk/python/easynet_sdk/stream.py" \
+    "$tmp/cli-python-receipt-shallow-copy-legacy/sdk/python/easynet_sdk/stream.py"
+  cp "$ROOT/sdk/python/easynet_sdk/bidi.py" \
+    "$tmp/cli-python-receipt-shallow-copy-legacy/sdk/python/easynet_sdk/bidi.py"
+  cp "$ROOT/sdk/python/easynet_sdk/_receipt_projection.py" \
+    "$tmp/cli-python-receipt-shallow-copy-legacy/sdk/python/easynet_sdk/_receipt_projection.py"
   cp "$ROOT/sdk/python/tests/test_runtime.py" \
     "$tmp/cli-python-receipt-shallow-copy-legacy/sdk/python/tests/test_runtime.py"
   perl -0pi -e 's/raw = _immutable_runtime_receipt_projection\(decoded, "runtime receipt"\)\n        projection = _decode_runtime_receipt_mapping\(\n            _mutable_runtime_receipt_projection\(raw\)\n        \)\n        return cls\(raw=raw, \*\*vars\(projection\)\)/projection = _decode_runtime_receipt_mapping(decoded)\n        return cls(raw=dict(decoded), **vars(projection))/s' \
