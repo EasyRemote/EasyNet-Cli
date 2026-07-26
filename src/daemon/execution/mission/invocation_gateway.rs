@@ -449,6 +449,8 @@ impl DaemonMissionInvocationGateway {
             .await
             .map_err(|error| anyhow::anyhow!("derive Mission child from parent: {error}"))?;
         let signed_child = prepared.signed_envelope().clone();
+        let child_admission_request_id =
+            mission_child_admission_request_id(&signed_child.envelope)?;
         let inherited_deadline = prepared.inherited_absolute_deadline();
         let mut descriptor_request = prepared.into_descriptor_request();
         let trace_id = trace_id.as_deref().or(self.trace_id.as_deref());
@@ -483,7 +485,7 @@ impl DaemonMissionInvocationGateway {
                                 &signed_child,
                                 descriptor_request.payload().to_vec(),
                                 request_metadata,
-                                trace_id.unwrap_or_default().to_string(),
+                                child_admission_request_id,
                                 &ability,
                                 CallMode::Rpc,
                             )
@@ -732,6 +734,22 @@ fn canonical_invocation_ura(
     })
 }
 
+fn mission_child_admission_request_id(
+    envelope: &axon_sdk::invocation::InvocationEnvelope,
+) -> anyhow::Result<String> {
+    let material = serde_json::to_vec(&serde_json::json!({
+        "caller_ura": envelope.caller.ura.as_str(),
+        "callee_ura": envelope.callee.ura.as_str(),
+        "ability": envelope.ability.as_str(),
+        "subject_ura": envelope.subject.ura.as_str(),
+        "invocation_nonce": hex::encode(envelope.invocation_nonce),
+        "args_digest": hex::encode(envelope.args_digest),
+    }))
+    .context("encode Mission child admission request identity")?;
+    let digest = axon_sdk::invocation::sha256(&material);
+    Ok(format!("mission-child-{}", hex::encode(digest)))
+}
+
 async fn wait_for_deadline(deadline: Option<tokio::time::Instant>) {
     match deadline {
         Some(deadline) => tokio::time::sleep_until(deadline).await,
@@ -884,6 +902,52 @@ mod tests {
             &descriptor_binding,
         )
         .expect("canonical descriptor ref")
+    }
+
+    fn child_envelope_with_nonce(nonce: [u8; 16]) -> axon_sdk::invocation::InvocationEnvelope {
+        let caller = identity("easynet:///r/mission-test/agent/root.parent");
+        let callee = identity("easynet:///r/mission-test/agent/worker.child");
+        let payload =
+            serde_json::to_vec(&serde_json::json!({"child": true})).expect("encode child payload");
+        DescriptorBoundEnvelope::from_parts(DescriptorBoundEnvelopeParts {
+            caller,
+            callee: callee.clone(),
+            ability: descriptor_ref(&callee, "child.observe"),
+            subject: subject("mission-run/17"),
+            invocation_nonce: nonce,
+            causal_context: CausalContext::None,
+            args_bytes: &payload,
+        })
+        .expect("construct descriptor-bound child envelope")
+        .envelope()
+        .clone()
+    }
+
+    #[test]
+    fn mission_child_admission_request_id_is_signed_tuple_identity_not_trace() {
+        let first = child_envelope_with_nonce([0x11; 16]);
+        let repeated = child_envelope_with_nonce([0x11; 16]);
+        let different_nonce = child_envelope_with_nonce([0x12; 16]);
+
+        let first_id =
+            mission_child_admission_request_id(&first).expect("derive child admission request id");
+        let repeated_id = mission_child_admission_request_id(&repeated)
+            .expect("derive repeated child admission request id");
+        let different_id = mission_child_admission_request_id(&different_nonce)
+            .expect("derive distinct child admission request id");
+
+        assert!(
+            first_id.starts_with("mission-child-") && first_id.len() > "mission-child-".len(),
+            "Mission child admission request id must be explicit and non-empty: {first_id}"
+        );
+        assert_eq!(
+            first_id, repeated_id,
+            "same signed tuple facts should produce the same admission request id"
+        );
+        assert_ne!(
+            first_id, different_id,
+            "changing signed tuple facts should change the admission request id"
+        );
     }
 
     fn proof_options() -> AbilityOptions {

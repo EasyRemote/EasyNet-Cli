@@ -11851,6 +11851,46 @@ for required in (
 PY
 }
 
+check_mission_child_admission_identity_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local gateway="$cli_root/src/daemon/execution/mission/invocation_gateway.rs"
+  [[ -f "$gateway" ]] || fail "mission invocation gateway source is missing: ${gateway#$cli_root/}"
+
+  "$PYTHON_BIN" - "$gateway" <<'PY'
+import sys
+from pathlib import Path
+
+gateway = Path(sys.argv[1]).read_text(encoding="utf-8")
+if "fn mission_child_admission_request_id(" not in gateway:
+    raise SystemExit("mission_child_admission_identity:helper_missing")
+helper = gateway.split("fn mission_child_admission_request_id(", 1)[1].split("async fn wait_for_deadline", 1)[0]
+for required in (
+    "axon_sdk::invocation::sha256(&material)",
+    '"caller_ura": envelope.caller.ura.as_str()',
+    '"callee_ura": envelope.callee.ura.as_str()',
+    '"ability": envelope.ability.as_str()',
+    '"subject_ura": envelope.subject.ura.as_str()',
+    '"invocation_nonce": hex::encode(envelope.invocation_nonce)',
+    '"args_digest": hex::encode(envelope.args_digest)',
+    'format!("mission-child-{}"',
+):
+    if required not in helper:
+        raise SystemExit(f"mission_child_admission_identity:helper_missing:{required}")
+if "mission_child_admission_request_id(&signed_child.envelope)?" not in gateway:
+    raise SystemExit("mission_child_admission_identity:not_derived_from_signed_child")
+stage_index = gateway.find(".stage_child(")
+if stage_index < 0:
+    raise SystemExit("mission_child_admission_identity:stage_child_missing")
+stage_call = gateway[stage_index:gateway.find("&ability", stage_index)]
+if "child_admission_request_id" not in stage_call:
+    raise SystemExit("mission_child_admission_identity:stage_child_not_using_child_identity")
+if "trace_id.unwrap_or_default()" in stage_call:
+    raise SystemExit("mission_child_admission_identity:trace_id_fallback_used_as_request_id")
+if "mission_child_admission_request_id_is_signed_tuple_identity_not_trace" not in gateway:
+    raise SystemExit("mission_child_admission_identity:regression_test_missing")
+PY
+}
+
 check_retired_federation_directory_v1_stream_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   "$PYTHON_BIN" - "$cli_root/src" "$cli_root/tests" "$cli_root/ability-descriptors/system/federation" <<'PY'
@@ -26665,6 +26705,7 @@ EOF
   check_mission_token_usage_authority_contract
 	  check_mission_orchestration_persistence_authority_contract
 	  check_mission_terminal_receipt_projection_contract
+	  check_mission_child_admission_identity_contract
   check_retired_edge_adapter_policy_absence_contract
   check_sdk_product_neutrality_contract
   check_python_sdk_bytecode_index_contract
@@ -26924,6 +26965,7 @@ check_mission_runtime_meta_identity_schema_contract
 check_mission_token_usage_authority_contract
 check_mission_orchestration_persistence_authority_contract
 check_mission_terminal_receipt_projection_contract
+check_mission_child_admission_identity_contract
 check_retired_edge_adapter_policy_absence_contract
 check_sdk_product_neutrality_contract
 check_python_sdk_bytecode_index_contract
