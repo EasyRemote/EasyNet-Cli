@@ -115,16 +115,16 @@ public struct RuntimeReceipt {
     }
 
     static func canonicalLifecycleState(_ value: String) throws -> String {
-        switch value.trimmingCharacters(in: .whitespacesAndNewlines) {
-        case "accepted", "Accepted", "ACCEPTED": return "ACCEPTED"
-        case "admitted", "Admitted", "ADMITTED": return "ADMITTED"
-        case "dispatched", "Dispatched", "DISPATCHED": return "DISPATCHED"
-        case "running", "Running", "RUNNING": return "RUNNING"
-        case "completed", "Completed", "COMPLETED": return "COMPLETED"
-        case "failed", "Failed", "FAILED": return "FAILED"
-        case "timed_out", "TimedOut", "TIMED_OUT": return "TIMED_OUT"
-        case "cancelled", "Cancelled", "CANCELLED": return "CANCELLED"
-        case "unspecified", "Unspecified", "UNSPECIFIED": return "UNSPECIFIED"
+        switch value {
+        case "Accepted": return "ACCEPTED"
+        case "Admitted": return "ADMITTED"
+        case "Dispatched": return "DISPATCHED"
+        case "Running": return "RUNNING"
+        case "Completed": return "COMPLETED"
+        case "Failed": return "FAILED"
+        case "TimedOut": return "TIMED_OUT"
+        case "Cancelled": return "CANCELLED"
+        case "Unspecified": return "UNSPECIFIED"
         default: throw SDKError.validation("runtime_receipt", "unknown receipt state \(value)")
         }
     }

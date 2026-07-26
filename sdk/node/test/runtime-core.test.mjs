@@ -444,6 +444,23 @@ test("runtime receipt proof facts are mandatory", () => {
   assert.equal(receipt.lifecycleState(), "COMPLETED");
   assert.equal(receipt.invocationId, "inv-proof");
 
+  for (const retiredState of ["completed", "COMPLETED", "TIMED_OUT", " Completed "]) {
+    assert.throws(
+      () => sdk.RuntimeReceipt.fromObject({ ...complete, state: retiredState }),
+      (error) =>
+        error instanceof sdk.SDKError
+        && error.code === sdk.ErrorCode.INVALID_ARGUMENT
+        && error.message.includes("unknown receipt state"),
+    );
+  }
+  assert.throws(
+    () => sdk.RuntimeReceipt.fromObject({ ...complete, state: "Unspecified" }),
+    (error) =>
+      error instanceof sdk.SDKError
+      && error.code === sdk.ErrorCode.INVALID_ARGUMENT
+      && error.message.includes("runtime receipt lifecycle state must not be UNSPECIFIED"),
+  );
+
   const missingProof = { ...complete };
   delete missingProof.authority_proof;
   assert.throws(

@@ -66,16 +66,16 @@ public final class RuntimeReceipt {
   }
 
   private static String canonicalLifecycleState(String value) {
-    return switch (value.trim()) {
-      case "accepted", "Accepted", "ACCEPTED" -> "ACCEPTED";
-      case "admitted", "Admitted", "ADMITTED" -> "ADMITTED";
-      case "dispatched", "Dispatched", "DISPATCHED" -> "DISPATCHED";
-      case "running", "Running", "RUNNING" -> "RUNNING";
-      case "completed", "Completed", "COMPLETED" -> "COMPLETED";
-      case "failed", "Failed", "FAILED" -> "FAILED";
-      case "timed_out", "TimedOut", "TIMED_OUT" -> "TIMED_OUT";
-      case "cancelled", "Cancelled", "CANCELLED" -> "CANCELLED";
-      case "unspecified", "Unspecified", "UNSPECIFIED" -> "UNSPECIFIED";
+    return switch (value) {
+      case "Accepted" -> "ACCEPTED";
+      case "Admitted" -> "ADMITTED";
+      case "Dispatched" -> "DISPATCHED";
+      case "Running" -> "RUNNING";
+      case "Completed" -> "COMPLETED";
+      case "Failed" -> "FAILED";
+      case "TimedOut" -> "TIMED_OUT";
+      case "Cancelled" -> "CANCELLED";
+      case "Unspecified" -> "UNSPECIFIED";
       default -> throw SDKError.validation("runtime_receipt", "unknown receipt state " + value);
     };
   }

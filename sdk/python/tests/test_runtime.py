@@ -844,17 +844,17 @@ class RuntimeTests(unittest.TestCase):
         self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
 
     def test_runtime_receipt_proof_facts_required(self) -> None:
-        complete = canonical_runtime_receipt("inv-1", "completed", "completed", 1)
+        complete = canonical_runtime_receipt("inv-1", "completed", "Completed", 1)
         complete["self_hash_hex"] = "aa" * 32
         receipt = RuntimeReceipt.from_required_mapping(complete)
 
         self.assertEqual(receipt.receipt_type, "completed")
-        self.assertEqual(receipt.state, "completed")
+        self.assertEqual(receipt.state, "Completed")
         self.assertEqual(receipt.prev_receipt_hash(), bytes(32))
         self.assertEqual(receipt.self_receipt_hash(), b"\xaa" * 32)
 
         with self.assertRaises(SDKError) as caught:
-            incomplete = canonical_runtime_receipt("inv-1", "completed", "completed", 1)
+            incomplete = canonical_runtime_receipt("inv-1", "completed", "Completed", 1)
             incomplete.pop("authority_proof")
             RuntimeReceipt.from_required_mapping(incomplete)
 
@@ -862,7 +862,7 @@ class RuntimeTests(unittest.TestCase):
 
     def test_runtime_receipt_projection_is_deep_immutable(self) -> None:
         complete = canonical_runtime_receipt(
-            "inv-proof-immutable", "completed", "completed", 1
+            "inv-proof-immutable", "completed", "Completed", 1
         )
         receipt = RuntimeReceipt.from_mapping(complete)
 
@@ -907,17 +907,27 @@ class RuntimeTests(unittest.TestCase):
 
     def test_runtime_receipt_owns_fail_closed_lifecycle_projection(self) -> None:
         receipt = RuntimeReceipt.from_required_mapping(
-            canonical_runtime_receipt("inv-state", "completed", "completed", 1)
+            canonical_runtime_receipt("inv-state", "completed", "Completed", 1)
         )
 
         self.assertIs(receipt.lifecycle_state, InvocationLifecycleState.COMPLETED)
         self.assertTrue(receipt.lifecycle_state.is_terminal)
 
-        for invalid in ("invented_state", " completed ", "5", "UNSPECIFIED", 5):
+        for invalid in (
+            "invented_state",
+            " completed ",
+            "5",
+            "Unspecified",
+            "UNSPECIFIED",
+            "completed",
+            "COMPLETED",
+            "TIMED_OUT",
+            5,
+        ):
             malformed = canonical_runtime_receipt(
                 "inv-state",
                 "completed",
-                "completed",
+                "Completed",
                 1,
             )
             malformed["state"] = invalid
@@ -929,7 +939,7 @@ class RuntimeTests(unittest.TestCase):
             malformed = canonical_runtime_receipt(
                 "inv-state",
                 invalid,
-                "completed",
+                "Completed",
                 1,
             )
             with self.subTest(receipt_type=invalid), self.assertRaises(SDKError) as caught:
@@ -937,7 +947,7 @@ class RuntimeTests(unittest.TestCase):
             self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
 
     def test_runtime_receipt_projects_complete_typed_facts(self) -> None:
-        complete = canonical_runtime_receipt("inv-typed", "completed", "completed", 1)
+        complete = canonical_runtime_receipt("inv-typed", "completed", "Completed", 1)
         proof_payload = b"typed-proof"
         delegation_signature = base64.b64encode(bytes([0x73]) * 64).decode()
         strict_profile = "axon-strict-v2"
@@ -1071,7 +1081,7 @@ class RuntimeTests(unittest.TestCase):
         self,
     ) -> None:
         complete = canonical_runtime_receipt(
-            "inv-empty-proof", "completed", "completed", 1
+            "inv-empty-proof", "completed", "Completed", 1
         )
         proof = complete["authority_proof"]
         assert isinstance(proof, dict)
@@ -1152,7 +1162,7 @@ class RuntimeTests(unittest.TestCase):
         )
 
     def test_runtime_receipt_required_summary_rejects_malformed_hash(self) -> None:
-        malformed = canonical_runtime_receipt("inv-1", "completed", "completed", 1)
+        malformed = canonical_runtime_receipt("inv-1", "completed", "Completed", 1)
         malformed["self_hash_hex"] = "aa"
         with self.assertRaises(SDKError) as caught:
             RuntimeReceipt.from_required_mapping(malformed)

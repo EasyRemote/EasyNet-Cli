@@ -2120,42 +2120,24 @@ function validateRuntimeReceiptAuthorityProofHash(proofPayload, proofBinding, pr
 }
 
 function canonicalRuntimeReceiptState(value) {
-  switch (requiredRuntimeString(value, "state").trim()) {
-    case "accepted":
+  switch (requiredRuntimeString(value, "state")) {
     case "Accepted":
-    case "ACCEPTED":
       return "ACCEPTED";
-    case "admitted":
     case "Admitted":
-    case "ADMITTED":
       return "ADMITTED";
-    case "dispatched":
     case "Dispatched":
-    case "DISPATCHED":
       return "DISPATCHED";
-    case "running":
     case "Running":
-    case "RUNNING":
       return "RUNNING";
-    case "completed":
     case "Completed":
-    case "COMPLETED":
       return "COMPLETED";
-    case "failed":
     case "Failed":
-    case "FAILED":
       return "FAILED";
-    case "timed_out":
     case "TimedOut":
-    case "TIMED_OUT":
       return "TIMED_OUT";
-    case "cancelled":
     case "Cancelled":
-    case "CANCELLED":
       return "CANCELLED";
-    case "unspecified":
     case "Unspecified":
-    case "UNSPECIFIED":
       return "UNSPECIFIED";
     default:
       throw invalidRuntime(`unknown receipt state ${value}`);

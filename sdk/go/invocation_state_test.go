@@ -4,11 +4,12 @@ import "testing"
 
 func TestInvocationLifecycleStateParsesFiniteWireVocabulary(t *testing.T) {
 	tests := map[string]InvocationLifecycleState{
-		"accepted":  InvocationLifecycleAccepted,
-		"Admitted":  InvocationLifecycleAdmitted,
-		"RUNNING":   InvocationLifecycleRunning,
-		"TimedOut":  InvocationLifecycleTimedOut,
-		"cancelled": InvocationLifecycleCancelled,
+		"Accepted":    InvocationLifecycleAccepted,
+		"Admitted":    InvocationLifecycleAdmitted,
+		"Running":     InvocationLifecycleRunning,
+		"TimedOut":    InvocationLifecycleTimedOut,
+		"Cancelled":   InvocationLifecycleCancelled,
+		"Unspecified": InvocationLifecycleUnspecified,
 	}
 	for raw, expected := range tests {
 		actual, err := ParseInvocationLifecycleState(raw)
@@ -22,7 +23,7 @@ func TestInvocationLifecycleStateParsesFiniteWireVocabulary(t *testing.T) {
 }
 
 func TestInvocationLifecycleStateRejectsInventedNormalization(t *testing.T) {
-	for _, raw := range []string{"", "8", " timed_out ", "timed-out", "invented"} {
+	for _, raw := range []string{"", "8", " timed_out ", "timed-out", "invented", "completed", "COMPLETED", "TIMED_OUT"} {
 		if _, err := ParseInvocationLifecycleState(raw); !IsCode(err, ErrInvalidArgument) {
 			t.Fatalf("ParseInvocationLifecycleState(%q) = %v, want %s", raw, err, ErrInvalidArgument)
 		}

@@ -190,6 +190,20 @@ final class RuntimeCoreSeamTests: XCTestCase {
         }
         XCTAssertEqual(projectedAuthorityBinding["principal_ura"], .string(callee))
 
+        for retiredState in ["completed", "COMPLETED", "TIMED_OUT", " Completed "] {
+            var legacyStateReceipt = terminal
+            legacyStateReceipt["state"] = retiredState
+            expectSyncSDKError(.invalidArgument, "unknown receipt state") {
+                _ = try RuntimeReceipt(legacyStateReceipt)
+            }
+        }
+
+        var unspecifiedStateReceipt = terminal
+        unspecifiedStateReceipt["state"] = "Unspecified"
+        expectSyncSDKError(.invalidArgument, "runtime receipt lifecycle state must not be UNSPECIFIED") {
+            _ = try RuntimeReceipt(unspecifiedStateReceipt)
+        }
+
         var topLevelLegacyField = terminal
         topLevelLegacyField["legacy_receipt_canonicalizer"] = "java-compatible-raw"
         expectSyncSDKError(.invalidArgument, "runtime_receipt contains noncanonical field legacy_receipt_canonicalizer") {

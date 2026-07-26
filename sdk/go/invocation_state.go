@@ -18,27 +18,28 @@ const (
 	InvocationLifecycleCancelled   InvocationLifecycleState = "CANCELLED"
 )
 
-// ParseInvocationLifecycleState decodes the finite canonical wire vocabulary.
-// It rejects numeric values, punctuation folding, and unknown states.
+// ParseInvocationLifecycleState decodes the finite canonical carrier vocabulary.
+// It rejects case folding, whitespace trimming, punctuation folding, numeric
+// values, and unknown states.
 func ParseInvocationLifecycleState(value string) (InvocationLifecycleState, error) {
 	switch value {
-	case "unspecified", "Unspecified", "UNSPECIFIED":
+	case "Unspecified":
 		return InvocationLifecycleUnspecified, nil
-	case "accepted", "Accepted", "ACCEPTED":
+	case "Accepted":
 		return InvocationLifecycleAccepted, nil
-	case "admitted", "Admitted", "ADMITTED":
+	case "Admitted":
 		return InvocationLifecycleAdmitted, nil
-	case "dispatched", "Dispatched", "DISPATCHED":
+	case "Dispatched":
 		return InvocationLifecycleDispatched, nil
-	case "running", "Running", "RUNNING":
+	case "Running":
 		return InvocationLifecycleRunning, nil
-	case "completed", "Completed", "COMPLETED":
+	case "Completed":
 		return InvocationLifecycleCompleted, nil
-	case "failed", "Failed", "FAILED":
+	case "Failed":
 		return InvocationLifecycleFailed, nil
-	case "timed_out", "TimedOut", "TIMED_OUT":
+	case "TimedOut":
 		return InvocationLifecycleTimedOut, nil
-	case "cancelled", "Cancelled", "CANCELLED":
+	case "Cancelled":
 		return InvocationLifecycleCancelled, nil
 	default:
 		return InvocationLifecycleUnspecified, invalidRuntimePayload(

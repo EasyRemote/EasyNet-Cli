@@ -454,7 +454,7 @@ func TestRuntimeReceiptProofFactsRequired(t *testing.T) {
 }
 
 func TestRuntimeReceiptOwnsFailClosedLifecycleProjection(t *testing.T) {
-	complete := canonicalRuntimeReceiptFixture("inv-state", "completed", "completed", 1)
+	complete := canonicalRuntimeReceiptFixture("inv-state", "completed", "Completed", 1)
 	receipt, err := NewRuntimeReceiptFromJSON(mustJSON(complete))
 	if err != nil {
 		t.Fatalf("NewRuntimeReceiptFromJSON: %v", err)
@@ -467,8 +467,8 @@ func TestRuntimeReceiptOwnsFailClosedLifecycleProjection(t *testing.T) {
 		t.Fatalf("LifecycleState = %q, want terminal %q", state, InvocationLifecycleCompleted)
 	}
 
-	for _, invalid := range []any{"invented_state", " completed ", "5", 5, "UNSPECIFIED"} {
-		malformed := canonicalRuntimeReceiptFixture("inv-state", "completed", "completed", 1)
+	for _, invalid := range []any{"invented_state", " completed ", "5", 5, "Unspecified", "UNSPECIFIED", "completed", "COMPLETED", "TIMED_OUT"} {
+		malformed := canonicalRuntimeReceiptFixture("inv-state", "completed", "Completed", 1)
 		malformed["state"] = invalid
 		if _, err := NewRuntimeReceiptFromJSON(mustJSON(malformed)); !IsCode(err, ErrInvalidArgument) {
 			t.Fatalf("NewRuntimeReceiptFromJSON(state=%v) = %v, want %s", invalid, err, ErrInvalidArgument)
@@ -476,7 +476,7 @@ func TestRuntimeReceiptOwnsFailClosedLifecycleProjection(t *testing.T) {
 	}
 
 	for _, invalid := range []string{"terminal", "failed", "Completed"} {
-		malformed := canonicalRuntimeReceiptFixture("inv-state", invalid, "completed", 1)
+		malformed := canonicalRuntimeReceiptFixture("inv-state", invalid, "Completed", 1)
 		if _, err := NewRuntimeReceiptFromJSON(mustJSON(malformed)); !IsCode(err, ErrInvalidArgument) {
 			t.Fatalf("NewRuntimeReceiptFromJSON(receipt_type=%q) = %v, want %s", invalid, err, ErrInvalidArgument)
 		}

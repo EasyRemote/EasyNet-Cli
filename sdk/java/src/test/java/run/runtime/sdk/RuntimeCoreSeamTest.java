@@ -373,6 +373,22 @@ public final class RuntimeCoreSeamTest {
     RuntimeReceipt receipt = RuntimeReceipt.fromMap(complete);
     check("COMPLETED".equals(receipt.lifecycleState()), "canonical receipt lifecycle state");
 
+    for (String retiredState : List.of("completed", "COMPLETED", "TIMED_OUT", " Completed ")) {
+      Map<String, Object> legacyStateReceipt = new LinkedHashMap<>(complete);
+      legacyStateReceipt.put("state", retiredState);
+      expectSDKError(
+          ErrorCode.INVALID_ARGUMENT,
+          "unknown receipt state",
+          () -> RuntimeReceipt.fromMap(legacyStateReceipt));
+    }
+
+    Map<String, Object> unspecifiedStateReceipt = new LinkedHashMap<>(complete);
+    unspecifiedStateReceipt.put("state", "Unspecified");
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        "runtime receipt lifecycle state must not be UNSPECIFIED",
+        () -> RuntimeReceipt.fromMap(unspecifiedStateReceipt));
+
     Map<String, Object> mismatchedType = new LinkedHashMap<>(complete);
     mismatchedType.put("receipt_type", "terminal");
     expectSDKError(
