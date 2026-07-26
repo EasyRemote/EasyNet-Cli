@@ -2613,17 +2613,24 @@ for retired in (
     "back-compat parse",
     "pre-existing index files",
     "serde default = empty string",
+    "Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(SessionIndex::default())",
 ):
     if retired in text:
         raise SystemExit(f"chat_session_index_schema:retired_compat:{retired}")
 for required in (
+    "pub enum SessionIndexLoadState",
+    "Loaded(SessionIndex)",
+    "Missing { path: PathBuf }",
+    "pub fn load_index_with_state",
+    "fn load_index_for_fresh_agent",
+    "missing_index_projects_explicit_load_state",
+    "write_turn_initializes_index_from_explicit_missing_state",
     "existing_index_without_lifelong_field_fails_closed",
     "missing field `lifelong`",
     "existing_index_without_latest_field_fails_closed",
     "missing field `latest`",
     "existing_index_without_sessions_field_fails_closed",
     "missing field `sessions`",
-    "Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(SessionIndex::default())",
 ):
     if required not in text:
         raise SystemExit(f"chat_session_index_schema:missing:{required}")

@@ -144,6 +144,12 @@ pub struct SessionIndex {
     pub sessions: Vec<SessionDescriptor>,
 }
 
+#[derive(Debug, Clone)]
+pub enum SessionIndexLoadState {
+    Loaded(SessionIndex),
+    Missing { path: PathBuf },
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionDescriptor {
     pub session_id: String,
@@ -225,16 +231,35 @@ fn index_file(agent: &str) -> PathBuf {
     sessions_dir(agent).join("index.json")
 }
 
-/// Read the canonical session index. Missing index means the agent
-/// has no recorded sessions yet; malformed or unreadable index state
-/// is rejected instead of reconstructed from transcript files.
-pub fn load_index(agent: &str) -> anyhow::Result<SessionIndex> {
+/// Read the canonical session index while preserving exact storage state.
+///
+/// Missing storage is not an error at this layer and is not projected into an
+/// empty index here. Callers decide whether missing state is a fresh-agent read
+/// projection or a write initializer.
+pub fn load_index_with_state(agent: &str) -> anyhow::Result<SessionIndexLoadState> {
     let path = index_file(agent);
     match fs::read_to_string(&path) {
         Ok(raw) => serde_json::from_str(&raw)
+            .map(SessionIndexLoadState::Loaded)
             .with_context(|| format!("parse session index {}", path.display())),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(SessionIndex::default()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Ok(SessionIndexLoadState::Missing { path })
+        }
         Err(error) => Err(error).with_context(|| format!("read session index {}", path.display())),
+    }
+}
+
+/// Public read projection for callers that only need the stable fresh-agent
+/// inventory shape. Production internals use the more explicit helper below so
+/// missing state remains visible at the policy boundary.
+pub fn load_index(agent: &str) -> anyhow::Result<SessionIndex> {
+    load_index_for_fresh_agent(agent)
+}
+
+fn load_index_for_fresh_agent(agent: &str) -> anyhow::Result<SessionIndex> {
+    match load_index_with_state(agent)? {
+        SessionIndexLoadState::Loaded(index) => Ok(index),
+        SessionIndexLoadState::Missing { .. } => Ok(SessionIndex::default()),
     }
 }
 
@@ -253,7 +278,7 @@ fn save_index(agent: &str, index: &SessionIndex) -> anyhow::Result<()> {
 /// Latest session id for `agent`, or `None` when nothing has been
 /// written yet. Backs `easynet agent send --follow`.
 pub fn latest_session(agent: &str) -> anyhow::Result<Option<String>> {
-    let idx = load_index(agent)?;
+    let idx = load_index_for_fresh_agent(agent)?;
     if idx.latest.is_empty() {
         Ok(None)
     } else {
@@ -265,7 +290,7 @@ pub fn latest_session(agent: &str) -> anyhow::Result<Option<String>> {
 /// inventory only. Transcript JSONL files are loaded only after the
 /// caller names a session id from this index.
 pub fn list_sessions(agent: &str) -> anyhow::Result<Vec<SessionDescriptor>> {
-    Ok(load_index(agent)?.sessions)
+    Ok(load_index_for_fresh_agent(agent)?.sessions)
 }
 
 /// Validated session inventory for product read views.
@@ -273,7 +298,7 @@ pub fn list_sessions(agent: &str) -> anyhow::Result<Vec<SessionDescriptor>> {
 /// Unlike [`list_sessions`] + [`latest_session`], this reads the index once and
 /// validates that marker state and rendered rows belong to the same snapshot.
 pub fn load_session_inventory(agent: &str) -> anyhow::Result<SessionInventory> {
-    SessionInventory::from_index(agent, load_index(agent)?)
+    SessionInventory::from_index(agent, load_index_for_fresh_agent(agent)?)
 }
 
 /// Read every JSONL line of one session. Used by
@@ -347,7 +372,7 @@ fn write_turn_inner(
     let path = session_file(agent, session_id);
     let now = chrono::Utc::now().to_rfc3339();
     let is_new_file = !path.exists();
-    let mut idx = load_index(agent)?;
+    let mut idx = load_index_for_fresh_agent(agent)?;
 
     // Append the meta row on first write.
     let mut buf = String::new();
@@ -419,7 +444,7 @@ fn write_turn_inner(
 /// lifelong turn has been recorded yet. The chat ability resolves
 /// the `lifelong` sentinel through this before dispatch.
 pub fn lifelong_session(agent: &str) -> anyhow::Result<Option<String>> {
-    let idx = load_index(agent)?;
+    let idx = load_index_for_fresh_agent(agent)?;
     if idx.lifelong.is_empty() {
         Ok(None)
     } else {
@@ -433,7 +458,7 @@ pub fn lifelong_session(agent: &str) -> anyhow::Result<Option<String>> {
 /// refresh in `write_turn` this must not fail the in-flight reply,
 /// hence the best-effort wrapper below.
 pub fn set_lifelong_session(agent: &str, session_id: &str) -> anyhow::Result<()> {
-    let mut idx = load_index(agent)?;
+    let mut idx = load_index_for_fresh_agent(agent)?;
     let known = idx.sessions.iter().any(|s| s.session_id == session_id);
     if !known {
         anyhow::bail!(
@@ -465,7 +490,7 @@ pub fn set_lifelong_session_best_effort(agent: &str, session_id: &str) {
 /// unknown id is treated as an error so `--resume` doesn't
 /// accidentally create a placeholder index row.
 pub fn set_latest_session(agent: &str, session_id: &str) -> anyhow::Result<()> {
-    let mut idx = load_index(agent)?;
+    let mut idx = load_index_for_fresh_agent(agent)?;
     let known = idx.sessions.iter().any(|s| s.session_id == session_id);
     if !known {
         anyhow::bail!(
@@ -531,6 +556,47 @@ fn make_preview(s: &str) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn missing_index_projects_explicit_load_state() {
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
+
+        match load_index_with_state("demot").expect("load state") {
+            SessionIndexLoadState::Missing { path } => {
+                assert_eq!(path, index_file("demot"));
+            }
+            SessionIndexLoadState::Loaded(index) => {
+                panic!("missing index must not become loaded empty index: {index:?}")
+            }
+        }
+
+        let projected = load_index("demot").expect("fresh-agent projection");
+        assert!(projected.latest.is_empty());
+        assert!(projected.lifelong.is_empty());
+        assert!(projected.sessions.is_empty());
+    }
+
+    #[test]
+    fn write_turn_initializes_index_from_explicit_missing_state() {
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
+        assert!(matches!(
+            load_index_with_state("demot").expect("initial state"),
+            SessionIndexLoadState::Missing { .. }
+        ));
+
+        write_turn("demot", "sess-1", "hi", "hello", &[], &json!({})).expect("write");
+
+        match load_index_with_state("demot").expect("post-write state") {
+            SessionIndexLoadState::Loaded(index) => {
+                assert_eq!(index.latest, "sess-1");
+                assert_eq!(index.sessions.len(), 1);
+                assert_eq!(index.sessions[0].session_id, "sess-1");
+            }
+            SessionIndexLoadState::Missing { path } => {
+                panic!("write_turn must materialize index at {}", path.display())
+            }
+        }
+    }
 
     #[test]
     fn write_then_load_round_trip() {
