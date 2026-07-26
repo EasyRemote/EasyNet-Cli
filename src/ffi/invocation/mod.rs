@@ -580,32 +580,40 @@ fn validate_receipt_history_descriptor_subject(
         "subject_ura",
         "descriptor_ref provider receipt_history requires subject_ura",
     )?;
-    if crate::core::identity::contains_all_zero_principal_placeholder(subject_ura) {
-        return Err(DescriptorResolutionError::invalid_request(
-            "descriptor_ref provider receipt_history subject_ura must not be all-zero",
-        ));
-    }
-    let parsed = crate::core::ura::parse_ura(subject_ura).map_err(|error| {
-        DescriptorResolutionError::invalid_request(format!(
-            "descriptor_ref provider receipt_history subject_ura must be canonical: {error}"
-        ))
-    })?;
-    if parsed.kind != crate::core::ura::URAKind::Resource {
-        return Err(DescriptorResolutionError::invalid_request(
+    crate::core::identity::RuntimeStateReadSubject::parse(subject_ura)
+        .map(|_| ())
+        .map_err(receipt_history_descriptor_subject_error)
+}
+
+#[cfg(feature = "axon-pb")]
+fn receipt_history_descriptor_subject_error(
+    error: crate::core::identity::RuntimeStateReadSubjectError,
+) -> DescriptorResolutionError {
+    use crate::core::identity::RuntimeStateReadSubjectError;
+
+    match error {
+        RuntimeStateReadSubjectError::Empty => DescriptorResolutionError::invalid_request(
+            "descriptor_ref provider receipt_history requires subject_ura",
+        ),
+        RuntimeStateReadSubjectError::AllZeroPrincipalPlaceholder => {
+            DescriptorResolutionError::invalid_request(
+                "descriptor_ref provider receipt_history subject_ura must not be all-zero",
+            )
+        }
+        RuntimeStateReadSubjectError::InvalidSyntax(error) => {
+            DescriptorResolutionError::invalid_request(format!(
+                "descriptor_ref provider receipt_history subject_ura must be canonical: {error}"
+            ))
+        }
+        RuntimeStateReadSubjectError::NotResource => DescriptorResolutionError::invalid_request(
             "descriptor_ref provider receipt_history subject_ura must be a Resource URA",
-        ));
+        ),
+        RuntimeStateReadSubjectError::NotUserOwnedRuntimeStateRead => {
+            DescriptorResolutionError::invalid_request(
+                "descriptor_ref provider receipt_history subject_ura must be a user-owned runtime-state read subject",
+            )
+        }
     }
-    let owner = parsed.resource_owner_id().unwrap_or_default();
-    let user_id = owner.strip_prefix("user.").unwrap_or_default();
-    if user_id.trim().is_empty()
-        || crate::core::identity::contains_all_zero_principal_placeholder(user_id)
-        || parsed.resource_path() != Some("runtime-state/read")
-    {
-        return Err(DescriptorResolutionError::invalid_request(
-            "descriptor_ref provider receipt_history subject_ura must be a user-owned runtime-state read subject",
-        ));
-    }
-    Ok(())
 }
 
 #[cfg(feature = "axon-pb")]

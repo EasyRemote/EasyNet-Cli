@@ -11969,11 +11969,28 @@ for required in (
     "Self::ReceiptHistory => validate_receipt_history_descriptor_subject(object)",
     "descriptor_ref provider receipt_history requires subject_ura",
     "descriptor_ref provider receipt_history subject_ura must be a user-owned runtime-state read subject",
-    "parsed.resource_owner_id()",
-    'parsed.resource_path() != Some("runtime-state/read")',
+    "crate::core::identity::RuntimeStateReadSubject::parse(subject_ura)",
+    "fn receipt_history_descriptor_subject_error(",
+    "RuntimeStateReadSubjectError::NotUserOwnedRuntimeStateRead",
 ):
     if required not in text:
         raise SystemExit(f"ffi_descriptor_runtime_owner:receipt_history_subject_gate_missing:{required}")
+receipt_subject_validator = re.search(
+    r"fn validate_receipt_history_descriptor_subject\([^)]*\)\s*->\s*Result<\(\),\s*DescriptorResolutionError>\s*\{(?P<body>.*?)\n\}\n\n#\[cfg\(feature = \"axon-pb\"\)\]\nfn receipt_history_descriptor_subject_error",
+    text,
+    re.S,
+)
+if receipt_subject_validator is None:
+    raise SystemExit("ffi_descriptor_runtime_owner:receipt_history_subject_validator_missing")
+receipt_subject_body = receipt_subject_validator.group("body")
+for retired in (
+    "parse_ura(subject_ura)",
+    "parsed.resource_owner_id()",
+    "parsed.resource_path()",
+    "unwrap_or_default()",
+):
+    if retired in receipt_subject_body:
+        raise SystemExit(f"ffi_descriptor_runtime_owner:receipt_history_private_subject_parser_retired:{retired}")
 
 if "fn descriptor_resolution_error_projection(" in production:
     raise SystemExit("ffi_descriptor_runtime_owner:retired_message_projection_classifier")

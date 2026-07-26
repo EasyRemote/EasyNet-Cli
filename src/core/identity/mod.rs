@@ -117,6 +117,105 @@ impl std::fmt::Display for RuntimeIdentityUraError {
 
 impl std::error::Error for RuntimeIdentityUraError {}
 
+/// Canonical subject for user-owned runtime-state read projections.
+///
+/// This is a runtime identity value object, not a product receipt type. History,
+/// catalogue, and status reads may all use this subject shape when they need a
+/// user-scoped read subject instead of a target-owned caller/callee subject.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeStateReadSubject {
+    subject_ura: String,
+    realm: String,
+    user_id: String,
+}
+
+impl RuntimeStateReadSubject {
+    pub const RESOURCE_PATH: &'static str = "runtime-state/read";
+
+    pub fn parse(value: impl AsRef<str>) -> Result<Self, RuntimeStateReadSubjectError> {
+        let subject_ura = value.as_ref().trim();
+        if subject_ura.is_empty() {
+            return Err(RuntimeStateReadSubjectError::Empty);
+        }
+        if contains_all_zero_principal_placeholder(subject_ura) {
+            return Err(RuntimeStateReadSubjectError::AllZeroPrincipalPlaceholder);
+        }
+        let parsed = crate::core::ura::parse_ura(subject_ura)
+            .map_err(|error| RuntimeStateReadSubjectError::InvalidSyntax(error.to_string()))?;
+        if parsed.kind != crate::core::ura::URAKind::Resource {
+            return Err(RuntimeStateReadSubjectError::NotResource);
+        }
+        let Some(owner) = parsed.resource_owner_id() else {
+            return Err(RuntimeStateReadSubjectError::NotUserOwnedRuntimeStateRead);
+        };
+        let Some(user_id) = owner.strip_prefix("user.") else {
+            return Err(RuntimeStateReadSubjectError::NotUserOwnedRuntimeStateRead);
+        };
+        if user_id.trim().is_empty()
+            || user_id.contains('.')
+            || contains_all_zero_principal_placeholder(user_id)
+        {
+            return Err(RuntimeStateReadSubjectError::NotUserOwnedRuntimeStateRead);
+        }
+        if parsed.resource_path() != Some(Self::RESOURCE_PATH) {
+            return Err(RuntimeStateReadSubjectError::NotUserOwnedRuntimeStateRead);
+        }
+        let user_id = user_id.to_string();
+        Ok(Self {
+            subject_ura: subject_ura.to_string(),
+            realm: parsed.realm,
+            user_id,
+        })
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.subject_ura
+    }
+
+    #[must_use]
+    pub fn realm(&self) -> &str {
+        &self.realm
+    }
+
+    #[must_use]
+    pub fn user_id(&self) -> &str {
+        &self.user_id
+    }
+
+    #[must_use]
+    pub fn into_string(self) -> String {
+        self.subject_ura
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RuntimeStateReadSubjectError {
+    Empty,
+    AllZeroPrincipalPlaceholder,
+    InvalidSyntax(String),
+    NotResource,
+    NotUserOwnedRuntimeStateRead,
+}
+
+impl std::fmt::Display for RuntimeStateReadSubjectError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Empty => formatter.write_str("must not be empty"),
+            Self::AllZeroPrincipalPlaceholder => {
+                formatter.write_str("must not contain the all-zero principal placeholder")
+            }
+            Self::InvalidSyntax(error) => write!(formatter, "is not a valid URA: {error}"),
+            Self::NotResource => formatter.write_str("must be a Resource URA"),
+            Self::NotUserOwnedRuntimeStateRead => {
+                formatter.write_str("must be a user-owned runtime-state read subject")
+            }
+        }
+    }
+}
+
+impl std::error::Error for RuntimeStateReadSubjectError {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -169,6 +268,59 @@ mod tests {
         assert!(matches!(
             RuntimeIdentityUra::parse("not-a-ura"),
             Err(RuntimeIdentityUraError::InvalidSyntax(_))
+        ));
+    }
+
+    #[test]
+    fn runtime_state_read_subject_projects_user_owned_read_facts() {
+        let subject = RuntimeStateReadSubject::parse(
+            "  easynet:///r/acme/resource/user.alice/runtime-state/read  ",
+        )
+        .expect("canonical runtime-state read subject");
+
+        assert_eq!(
+            subject.as_str(),
+            "easynet:///r/acme/resource/user.alice/runtime-state/read"
+        );
+        assert_eq!(subject.realm(), "acme");
+        assert_eq!(subject.user_id(), "alice");
+        assert_eq!(
+            subject.clone().into_string(),
+            "easynet:///r/acme/resource/user.alice/runtime-state/read"
+        );
+    }
+
+    #[test]
+    fn runtime_state_read_subject_rejects_defaulted_or_retired_subjects() {
+        assert_eq!(
+            RuntimeStateReadSubject::parse(" "),
+            Err(RuntimeStateReadSubjectError::Empty)
+        );
+        assert_eq!(
+            RuntimeStateReadSubject::parse(
+                "easynet:///r/acme/resource/user.00000000-0000-0000-0000-000000000000/runtime-state/read"
+            ),
+            Err(RuntimeStateReadSubjectError::AllZeroPrincipalPlaceholder)
+        );
+        assert_eq!(
+            RuntimeStateReadSubject::parse("easynet:///r/acme/device/dev-a"),
+            Err(RuntimeStateReadSubjectError::NotResource)
+        );
+        assert_eq!(
+            RuntimeStateReadSubject::parse(
+                "easynet:///r/acme/resource/user.alice/session/invocation_history"
+            ),
+            Err(RuntimeStateReadSubjectError::NotUserOwnedRuntimeStateRead)
+        );
+        assert_eq!(
+            RuntimeStateReadSubject::parse(
+                "easynet:///r/acme/resource/agent.alice.reader/runtime-state/read"
+            ),
+            Err(RuntimeStateReadSubjectError::NotUserOwnedRuntimeStateRead)
+        );
+        assert!(matches!(
+            RuntimeStateReadSubject::parse("not-a-ura"),
+            Err(RuntimeStateReadSubjectError::InvalidSyntax(_))
         ));
     }
 }
