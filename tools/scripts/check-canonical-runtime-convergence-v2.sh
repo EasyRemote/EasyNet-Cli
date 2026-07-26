@@ -11748,6 +11748,13 @@ if "derive ability URA for" in resolve_body:
 if "descriptor_ref::ability_ura_for_wire(\n        callee_ura, ability," not in resolve_body:
     raise SystemExit("ffi_descriptor_runtime_owner:callee_bound_ability_resolver_missing")
 for required in (
+    "fn validate_ability_descriptor_catalogue_subject(",
+    "Self::AbilityDescriptor => validate_ability_descriptor_catalogue_subject(object)",
+    "descriptor_ref provider ability_descriptor requires subject_ura",
+    "descriptor_ref provider ability_descriptor subject_ura must be an Authority URA",
+    "descriptor_ref provider ability_descriptor subject_ura must be the callee realm authority subject",
+    "crate::core::ura::hub_ura(&callee.realm)",
+    "runtime_descriptor_resolver_rejects_ability_descriptor_non_authority_subjects",
     "fn validate_receipt_history_descriptor_subject(",
     "provider.validate_request_subject(object)?",
     "Self::ReceiptHistory => validate_receipt_history_descriptor_subject(object)",

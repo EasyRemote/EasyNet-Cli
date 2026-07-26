@@ -488,8 +488,9 @@ impl RuntimeDescriptorProviderKind {
         object: &serde_json::Map<String, serde_json::Value>,
     ) -> Result<(), DescriptorResolutionError> {
         match self {
+            Self::AbilityDescriptor => validate_ability_descriptor_catalogue_subject(object),
             Self::ReceiptHistory => validate_receipt_history_descriptor_subject(object),
-            Self::Generic | Self::AbilityDescriptor => Ok(()),
+            Self::Generic => Ok(()),
         }
     }
 
@@ -499,19 +500,71 @@ impl RuntimeDescriptorProviderKind {
 }
 
 #[cfg(feature = "axon-pb")]
-fn validate_receipt_history_descriptor_subject(
-    object: &serde_json::Map<String, serde_json::Value>,
-) -> Result<(), DescriptorResolutionError> {
-    let subject_ura = object
-        .get("subject_ura")
+fn descriptor_request_required_text<'a>(
+    object: &'a serde_json::Map<String, serde_json::Value>,
+    field: &str,
+    missing_message: &'static str,
+) -> Result<&'a str, DescriptorResolutionError> {
+    object
+        .get(field)
         .and_then(serde_json::Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| {
-            DescriptorResolutionError::invalid_request(
-                "descriptor_ref provider receipt_history requires subject_ura",
-            )
-        })?;
+        .ok_or_else(|| DescriptorResolutionError::invalid_request(missing_message))
+}
+
+#[cfg(feature = "axon-pb")]
+fn validate_ability_descriptor_catalogue_subject(
+    object: &serde_json::Map<String, serde_json::Value>,
+) -> Result<(), DescriptorResolutionError> {
+    let subject_ura = descriptor_request_required_text(
+        object,
+        "subject_ura",
+        "descriptor_ref provider ability_descriptor requires subject_ura",
+    )?;
+    if crate::core::identity::contains_all_zero_principal_placeholder(subject_ura) {
+        return Err(DescriptorResolutionError::invalid_request(
+            "descriptor_ref provider ability_descriptor subject_ura must not be all-zero",
+        ));
+    }
+    let callee_ura = descriptor_request_required_text(
+        object,
+        "callee_ura",
+        "descriptor_ref provider ability_descriptor requires callee_ura",
+    )?;
+    let subject = crate::core::ura::parse_ura(subject_ura).map_err(|error| {
+        DescriptorResolutionError::invalid_request(format!(
+            "descriptor_ref provider ability_descriptor subject_ura must be canonical: {error}"
+        ))
+    })?;
+    if subject.kind != crate::core::ura::URAKind::Authority {
+        return Err(DescriptorResolutionError::invalid_request(
+            "descriptor_ref provider ability_descriptor subject_ura must be an Authority URA",
+        ));
+    }
+    let callee = crate::core::ura::parse_ura(callee_ura).map_err(|error| {
+        DescriptorResolutionError::invalid_request(format!(
+            "descriptor_ref provider ability_descriptor callee_ura must be canonical: {error}"
+        ))
+    })?;
+    let expected_subject = crate::core::ura::hub_ura(&callee.realm);
+    if subject.realm != callee.realm || subject_ura != expected_subject {
+        return Err(DescriptorResolutionError::invalid_request(
+            "descriptor_ref provider ability_descriptor subject_ura must be the callee realm authority subject",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(feature = "axon-pb")]
+fn validate_receipt_history_descriptor_subject(
+    object: &serde_json::Map<String, serde_json::Value>,
+) -> Result<(), DescriptorResolutionError> {
+    let subject_ura = descriptor_request_required_text(
+        object,
+        "subject_ura",
+        "descriptor_ref provider receipt_history requires subject_ura",
+    )?;
     if crate::core::identity::contains_all_zero_principal_placeholder(subject_ura) {
         return Err(DescriptorResolutionError::invalid_request(
             "descriptor_ref provider receipt_history subject_ura must not be all-zero",
@@ -9887,6 +9940,7 @@ mod tests {
         let remote_node_id = "a364ba18-8961-4b31-838a-31c7d776c709";
         let local_device_ura = crate::core::ura::device_ura("localhost", local_node_id);
         let remote_device_ura = crate::core::ura::device_ura("localhost", remote_node_id);
+        let authority_subject = crate::core::ura::hub_ura("localhost");
         let ability_ura = format!(
             "easynet:///r/localhost/ability/device.{remote_node_id}.{}",
             crate::daemon::ability::names::governance::META_LIST_ABILITIES
@@ -9922,7 +9976,7 @@ mod tests {
             &serde_json::json!({
                 "callee_ura": remote_device_ura,
                 "caller_ura": local_device_ura,
-                "subject_ura": remote_device_ura,
+                "subject_ura": authority_subject,
                 "ability": crate::daemon::ability::names::governance::META_LIST_ABILITIES,
                 "call_mode": "rpc",
                 "provider": "ability_descriptor",
@@ -9944,6 +9998,56 @@ mod tests {
                 |descriptor_ref| descriptor_ref.starts_with(&format!("{ability_ura}@"))
                     && descriptor_ref.ends_with("!read")
             ));
+    }
+
+    #[cfg(feature = "axon-pb")]
+    #[test]
+    fn runtime_descriptor_resolver_rejects_ability_descriptor_non_authority_subjects() {
+        let session = test_session();
+        let local_device_ura = crate::core::ura::device_ura("localhost", "local-runtime-node");
+        let remote_device_ura =
+            crate::core::ura::device_ura("localhost", "a364ba18-8961-4b31-838a-31c7d776c709");
+        let cases = [
+            (
+                Some(remote_device_ura.as_str()),
+                "descriptor_ref provider ability_descriptor subject_ura must be an Authority URA",
+            ),
+            (
+                Some("easynet:///r/other/authority"),
+                "descriptor_ref provider ability_descriptor subject_ura must be the callee realm authority subject",
+            ),
+            (
+                None,
+                "descriptor_ref provider ability_descriptor requires subject_ura",
+            ),
+        ];
+
+        for (subject_ura, expected) in cases {
+            let mut request = serde_json::json!({
+                "callee_ura": remote_device_ura,
+                "caller_ura": local_device_ura,
+                "ability": crate::daemon::ability::names::governance::META_LIST_ABILITIES,
+                "call_mode": "rpc",
+                "provider": "ability_descriptor",
+            });
+            if let Some(subject_ura) = subject_ura {
+                request["subject_ura"] = serde_json::Value::String(subject_ura.to_string());
+            }
+
+            let error = runtime_resolve_descriptor_ref_json(&session, &request.to_string())
+                .expect_err("invalid ability descriptor catalogue subject must fail closed");
+            let message = error.to_string();
+            assert!(
+                message.contains(expected),
+                "unexpected ability descriptor subject error: {message}"
+            );
+            assert!(
+                !message.contains("ROUTE_NEGATIVE")
+                    && !message.contains("owner is not online")
+                    && !message.contains("requires a caller signer"),
+                "subject validation must fail before route/signer resolution: {message}"
+            );
+        }
     }
 
     #[cfg(feature = "axon-pb")]
