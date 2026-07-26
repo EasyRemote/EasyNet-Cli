@@ -10098,6 +10098,49 @@ for test in (
 PY
 }
 
+check_cli_mcp_install_runtime_tenant_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local install="$cli_root/src/cli/mcp/install.rs"
+  [[ -f "$install" ]] || fail "CLI MCP install source is missing: ${install#$cli_root/}"
+
+  "$PYTHON_BIN" - "$install" <<'PY'
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+production = text.split("\n#[cfg(test)]", 1)[0]
+
+for required in (
+    "let tenant = resolve_runtime_tenant(args.tenant.as_deref())?;",
+    "fn resolve_runtime_tenant(tenant: Option<&str>) -> anyhow::Result<String>",
+    "config::load_optional_runtime_state()?",
+    "mcp install requires --tenant when no runtime session is available",
+    "runtime session projection is missing tenant",
+):
+    if required not in production:
+        raise SystemExit(f"cli_mcp_install_runtime_tenant:missing:{required}")
+
+for retired in (
+    'else default to "default"',
+    'Some("default".to_string())',
+    'unwrap_or_else(|| "default".to_string())',
+    "config::load()",
+):
+    if retired in production:
+        raise SystemExit(f"cli_mcp_install_runtime_tenant:retired_fallback:{retired}")
+
+for required_test in (
+    "resolve_runtime_tenant_uses_explicit_tenant_without_runtime_projection",
+    "resolve_runtime_tenant_rejects_blank_explicit_tenant",
+    "resolve_runtime_tenant_uses_runtime_projection_tenant",
+    "resolve_runtime_tenant_rejects_missing_runtime_projection_instead_of_defaulting",
+    "resolve_runtime_tenant_rejects_runtime_projection_without_tenant",
+):
+    if required_test not in text:
+        raise SystemExit(f"cli_mcp_install_runtime_tenant:missing_test:{required_test}")
+PY
+}
+
 check_mission_agent_trace_sink_cutover_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local agent_mod="$cli_root/src/cli/commands/agent/mod.rs"
@@ -23820,6 +23863,32 @@ EOF
   if ( check_mission_workspace_easynet_binary_contract "$tmp/mission-workspace-codex-driver-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected Mission workspace Codex driver fallible entry gate to fail"
   fi
+  mkdir -p "$tmp/cli-mcp-install-tenant-fallback/src/cli/mcp"
+  cat >"$tmp/cli-mcp-install-tenant-fallback/src/cli/mcp/install.rs" <<'EOF'
+fn run(args: McpInstallArgs) -> anyhow::Result<()> {
+    let tenant = resolve_runtime_tenant(args.tenant.as_deref());
+    Ok(())
+}
+
+fn resolve_runtime_tenant(tenant: Option<&str>) -> String {
+    let mut resolved_tenant = tenant.map(|s| s.to_string());
+    if let Ok(state) = config::load() {
+        if resolved_tenant.is_none() {
+            resolved_tenant = state.tenant.clone().or_else(|| Some("default".to_string()));
+        }
+    }
+    resolved_tenant.unwrap_or_else(|| "default".to_string())
+}
+
+fn resolve_runtime_tenant_uses_explicit_tenant_without_runtime_projection() {}
+fn resolve_runtime_tenant_rejects_blank_explicit_tenant() {}
+fn resolve_runtime_tenant_uses_runtime_projection_tenant() {}
+fn resolve_runtime_tenant_rejects_missing_runtime_projection_instead_of_defaulting() {}
+fn resolve_runtime_tenant_rejects_runtime_projection_without_tenant() {}
+EOF
+  if ( check_cli_mcp_install_runtime_tenant_contract "$tmp/cli-mcp-install-tenant-fallback" ) >/dev/null 2>&1; then
+    fail "self-test expected CLI MCP install tenant fallback gate to fail"
+  fi
   mkdir -p "$tmp/mission-agent-trace-sink-legacy/src/cli/commands/agent" \
     "$tmp/mission-agent-trace-sink-legacy/src/daemon/execution/mission/executors" \
     "$tmp/mission-agent-trace-sink-legacy/src/daemon/ability/builtins/automation"
@@ -26134,6 +26203,7 @@ EOF
   check_eal_device_target_identity_contract
   check_remote_device_ingress_ura_only_contract
   check_mission_workspace_easynet_binary_contract
+  check_cli_mcp_install_runtime_tenant_contract
   check_mission_agent_trace_sink_cutover_contract
   check_mission_dispatch_audit_authority_contract
   check_driver_command_state_contract
@@ -26391,6 +26461,7 @@ check_mission_ability_strict_ingress_contract
 check_eal_device_target_identity_contract
 check_remote_device_ingress_ura_only_contract
 check_mission_workspace_easynet_binary_contract
+check_cli_mcp_install_runtime_tenant_contract
 check_mission_agent_trace_sink_cutover_contract
 check_mission_dispatch_audit_authority_contract
 check_driver_command_state_contract
