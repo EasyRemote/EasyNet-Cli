@@ -405,19 +405,17 @@ pub struct DaemonConfig {
     /// **PR-N1 commit 3a/N**. Operator-curated `realm → hub_endpoint`
     /// map the federation dispatcher consults when `federation.
     /// canonical_invoke` targets a realm that is not local.
-    /// Empty = no cross-realm routing configured (legacy
-    /// `target_online: false` fallback). PR-N3 will replace this
-    /// hand-curated map with the auto-discovered cross-realm
-    /// directory; until then the map is the operator's manual
-    /// statement of "these are the peer realms I federate with".
+    /// Empty = no cross-realm dispatch endpoint is configured. The
+    /// route resolver then returns a typed no-route/offline answer for
+    /// cross-realm invocation targets. Federated-directory snapshots are
+    /// observability read models and do not synthesize dispatch endpoints;
+    /// the map remains the operator's manual statement of "these are the
+    /// peer realms I federate with".
     ///
     /// `BTreeMap` over `HashMap` for stable iteration order (TOML
     /// dump in operator audit + `cargo test` byte-stable
     /// expectation).
     federated_peers: BTreeMap<String, String>,
-    /// **PR-N3 / 2026-05-25 hardening**. When `true`, the federation
-    /// dispatcher is allowed to dial a peer hub whose endpoint comes
-    /// from an observed `federated_directory` entry (hub-to-hub
     /// #185: per-consumer invocation quota policy (caps applied per
     /// ability per window — see [`QuotaConfig`]). `None` = the feature
     /// is off and every caller is unmetered. `Some` even with no caps
@@ -582,10 +580,9 @@ impl DaemonConfig {
     }
 
     /// **PR-N1 commit 3a/N**. Operator-curated cross-realm
-    /// dispatch map. Empty when the operator did not configure
-    /// any federation peers — the federation dispatcher then
-    /// falls back to the legacy `target_online: false` shape
-    /// for cross-realm `Invocation::Invoke` calls.
+    /// dispatch map. Empty when the operator did not configure any
+    /// federation peers — the federation dispatcher then returns typed
+    /// no-route/offline for cross-realm `Invocation::Invoke` calls.
     pub fn federated_peers(&self) -> &BTreeMap<String, String> {
         &self.federated_peers
     }

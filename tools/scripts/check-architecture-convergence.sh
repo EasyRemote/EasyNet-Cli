@@ -2628,6 +2628,7 @@ if principal_cli.exists():
 # must never synthesize Invocation dispatch routes.
 hub_resolver = cli_root / "src/daemon/invocation/routing/hub_resolver.rs"
 route_resolver = cli_root / "src/daemon/invocation/routing/route_resolver.rs"
+daemon_config = cli_root / "src/daemon/persistence/daemon_config.rs"
 if hub_resolver.exists():
     text = source(hub_resolver)
     hub_requirements = (
@@ -2734,6 +2735,43 @@ else:
         1,
         "RouteResolver must consume HubResolver route authority",
     )
+
+if daemon_config.exists():
+    text = daemon_config.read_text(encoding="utf-8", errors="replace")
+    config_requirements = (
+        (
+            "no cross-realm dispatch endpoint is configured",
+            "DaemonConfig must model empty federated_peers as typed no-route state",
+        ),
+        (
+            "Federated-directory snapshots",
+            "DaemonConfig must keep federated directory out of dispatch endpoint authority",
+        ),
+        (
+            "do not synthesize dispatch endpoints",
+            "DaemonConfig must reject directory-backed route synthesis semantics",
+        ),
+    )
+    for token, detail in config_requirements:
+        if token not in text:
+            add("R34_HUB_RESOLVER_ROUTE_AUTHORITY_FORK", daemon_config, 1, detail)
+    for token in (
+        "target_online: false",
+        "auto-discovered cross-realm directory",
+        "directory route fallback",
+        "allow_federated_directory_route_fallback",
+        "allow_directory_fallback",
+        "fallback to the legacy",
+        "falls back to the legacy",
+    ):
+        pos = text.find(token)
+        if pos >= 0:
+            add(
+                "R34_HUB_RESOLVER_ROUTE_AUTHORITY_FORK",
+                daemon_config,
+                line_number(text, pos),
+                f"DaemonConfig must not preserve retired route fallback token `{token}`",
+            )
 
 
 # Rule 32: Agent destructive lifecycle has one public boundary. `agent.stop`
