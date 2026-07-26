@@ -136,3 +136,109 @@ pub enum DaemonError {
     #[error("daemon bidi session for {ability} is closed")]
     InvokeBidiClosed { ability: String },
 }
+
+/// Typed daemon invocation failure projection for adapter boundaries.
+///
+/// FFI and language bindings consume this enum instead of inspecting
+/// `DaemonError` display strings. The daemon SDK boundary owns the small
+/// amount of transport-detail classification needed to preserve canonical
+/// runtime readiness states across the process boundary.
+#[cfg(feature = "axon-pb")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DaemonInvocationErrorProjection {
+    DaemonDown,
+    CallerSignerUnavailable,
+    DescriptorOwnerOffline,
+    Status(tonic::Code),
+    InvalidInvocation,
+    Cancelled,
+    Generic,
+}
+
+#[cfg(feature = "axon-pb")]
+impl DaemonError {
+    pub fn invocation_error_projection(&self) -> DaemonInvocationErrorProjection {
+        match self {
+            Self::InvocationEndpointDown { .. }
+            | Self::InvocationEndpointMissing { .. }
+            | Self::Connect { .. } => DaemonInvocationErrorProjection::DaemonDown,
+            Self::InvokeStatus { code, message, .. }
+            | Self::InvokeStreamStatus { code, message, .. }
+            | Self::InvokeBidiStatus { code, message, .. }
+                if daemon_message_is_descriptor_owner_offline(*code, message) =>
+            {
+                DaemonInvocationErrorProjection::DescriptorOwnerOffline
+            }
+            Self::InvokeStatus { code, .. }
+            | Self::InvokeStreamStatus { code, .. }
+            | Self::InvokeBidiStatus { code, .. } => DaemonInvocationErrorProjection::Status(*code),
+            Self::InvalidInvocation(message)
+                if daemon_message_is_caller_signer_unavailable(message) =>
+            {
+                DaemonInvocationErrorProjection::CallerSignerUnavailable
+            }
+            Self::InvalidInvocation(_) => DaemonInvocationErrorProjection::InvalidInvocation,
+            Self::InvokeBidiClosed { .. } => DaemonInvocationErrorProjection::Cancelled,
+            _ => DaemonInvocationErrorProjection::Generic,
+        }
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+fn daemon_message_is_caller_signer_unavailable(message: &str) -> bool {
+    message.contains("CALLER_SIGNER_UNAVAILABLE")
+}
+
+#[cfg(feature = "axon-pb")]
+fn daemon_message_is_descriptor_owner_offline(code: tonic::Code, message: &str) -> bool {
+    let upper = message.to_ascii_uppercase();
+    upper.contains("DESCRIPTOR_OWNER_OFFLINE")
+        || (code == tonic::Code::Unavailable && upper.contains("OWNER IS NOT ONLINE"))
+}
+
+#[cfg(all(test, feature = "axon-pb"))]
+mod tests {
+    use super::{DaemonError, DaemonInvocationErrorProjection};
+
+    #[test]
+    fn projects_caller_signer_unavailable_without_adapter_message_parsing() {
+        let error = DaemonError::InvalidInvocation(
+            "CALLER_SIGNER_UNAVAILABLE: remote invocation requires a caller signer".to_string(),
+        );
+
+        assert_eq!(
+            error.invocation_error_projection(),
+            DaemonInvocationErrorProjection::CallerSignerUnavailable
+        );
+    }
+
+    #[test]
+    fn projects_descriptor_owner_offline_without_adapter_message_parsing() {
+        let error = DaemonError::InvokeStatus {
+            ability: "meta.list_abilities".to_string(),
+            code: tonic::Code::Unavailable,
+            message: "ROUTE_NEGATIVE: namespace.resolve negative: \
+                 NEGATIVE_REASON_NXDOMAIN: owner is not online"
+                .to_string(),
+        };
+
+        assert_eq!(
+            error.invocation_error_projection(),
+            DaemonInvocationErrorProjection::DescriptorOwnerOffline
+        );
+    }
+
+    #[test]
+    fn preserves_plain_unavailable_as_daemon_down_projection() {
+        let error = DaemonError::InvokeStatus {
+            ability: "observe.health".to_string(),
+            code: tonic::Code::Unavailable,
+            message: "transport unavailable".to_string(),
+        };
+
+        assert_eq!(
+            error.invocation_error_projection(),
+            DaemonInvocationErrorProjection::Status(tonic::Code::Unavailable)
+        );
+    }
+}

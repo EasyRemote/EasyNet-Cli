@@ -4527,67 +4527,39 @@ fn remove_bidi_for_handle(
 fn ffi_daemon_error(context: &str, err: crate::daemon::DaemonError) -> i32 {
     let code = ffi_code_for_daemon_error(&err);
     let message = format!("{context}: {err}");
-    if is_caller_signer_unavailable_daemon_error(&err) {
-        return record_caller_signer_unavailable_error(message);
+    match err.invocation_error_projection() {
+        crate::daemon::DaemonInvocationErrorProjection::CallerSignerUnavailable => {
+            record_caller_signer_unavailable_error(message)
+        }
+        crate::daemon::DaemonInvocationErrorProjection::DescriptorOwnerOffline => {
+            record_descriptor_owner_offline_error(message)
+        }
+        _ => record_invocation_error(code, message),
     }
-    if is_descriptor_owner_offline_daemon_error(&err) {
-        return record_descriptor_owner_offline_error(message);
-    }
-    record_invocation_error(code, message)
 }
 
 #[cfg(feature = "axon-pb")]
 fn ffi_code_for_daemon_error(err: &crate::daemon::DaemonError) -> i32 {
-    match err {
-        crate::daemon::DaemonError::InvocationEndpointDown { .. }
-        | crate::daemon::DaemonError::InvocationEndpointMissing { .. }
-        | crate::daemon::DaemonError::Connect { .. } => ERR_DAEMON_DOWN,
-        crate::daemon::DaemonError::InvokeStatus { code, .. }
-        | crate::daemon::DaemonError::InvokeStreamStatus { code, .. }
-        | crate::daemon::DaemonError::InvokeBidiStatus { code, .. } => {
-            ffi_status_code_to_error(*code)
-        }
-        crate::daemon::DaemonError::InvalidInvocation(message)
-            if is_caller_signer_unavailable_message(message) =>
-        {
+    ffi_code_for_daemon_error_projection(err.invocation_error_projection())
+}
+
+#[cfg(feature = "axon-pb")]
+fn ffi_code_for_daemon_error_projection(
+    projection: crate::daemon::DaemonInvocationErrorProjection,
+) -> i32 {
+    match projection {
+        crate::daemon::DaemonInvocationErrorProjection::DaemonDown
+        | crate::daemon::DaemonInvocationErrorProjection::DescriptorOwnerOffline => ERR_DAEMON_DOWN,
+        crate::daemon::DaemonInvocationErrorProjection::CallerSignerUnavailable => {
             ERR_PERMISSION_DENIED
         }
-        crate::daemon::DaemonError::InvalidInvocation(_) => ERR_INVALID_ARG,
-        crate::daemon::DaemonError::InvokeBidiClosed { .. } => ERR_CANCELLED,
-        _ => ERR_GENERIC,
+        crate::daemon::DaemonInvocationErrorProjection::Status(code) => {
+            ffi_status_code_to_error(code)
+        }
+        crate::daemon::DaemonInvocationErrorProjection::InvalidInvocation => ERR_INVALID_ARG,
+        crate::daemon::DaemonInvocationErrorProjection::Cancelled => ERR_CANCELLED,
+        crate::daemon::DaemonInvocationErrorProjection::Generic => ERR_GENERIC,
     }
-}
-
-#[cfg(feature = "axon-pb")]
-fn is_caller_signer_unavailable_daemon_error(err: &crate::daemon::DaemonError) -> bool {
-    matches!(
-        err,
-        crate::daemon::DaemonError::InvalidInvocation(message)
-            if is_caller_signer_unavailable_message(message)
-    )
-}
-
-#[cfg(feature = "axon-pb")]
-fn is_caller_signer_unavailable_message(message: &str) -> bool {
-    message.contains(CALLER_SIGNER_UNAVAILABLE_CODE)
-}
-
-#[cfg(feature = "axon-pb")]
-fn is_descriptor_owner_offline_daemon_error(err: &crate::daemon::DaemonError) -> bool {
-    matches!(
-        err,
-        crate::daemon::DaemonError::InvokeStatus { code, message, .. }
-            | crate::daemon::DaemonError::InvokeStreamStatus { code, message, .. }
-            | crate::daemon::DaemonError::InvokeBidiStatus { code, message, .. }
-            if is_descriptor_owner_offline_message(*code, message)
-    )
-}
-
-#[cfg(feature = "axon-pb")]
-fn is_descriptor_owner_offline_message(code: tonic::Code, message: &str) -> bool {
-    let upper = message.to_ascii_uppercase();
-    upper.contains(DESCRIPTOR_OWNER_OFFLINE_CODE)
-        || (code == tonic::Code::Unavailable && upper.contains("OWNER IS NOT ONLINE"))
 }
 
 #[cfg(feature = "axon-pb")]

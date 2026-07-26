@@ -9074,15 +9074,15 @@ if ffi_invocation.exists() or runtime_descriptor_provider.exists():
             "descriptor resolver must not classify remote invocation failures",
         ),
         (
-            "CallerSignerUnavailable",
+            "Self::CallerSignerUnavailable(",
             "descriptor resolver must not expose signer failures as catalog lookup state",
         ),
         (
-            "OwnerOffline",
+            "Self::OwnerOffline(",
             "descriptor resolver must not expose owner-offline failures as catalog lookup state",
         ),
         (
-            "RuntimeOffline",
+            "Self::RuntimeOffline(",
             "descriptor resolver must not expose remote transport failures as catalog lookup state",
         ),
     ):

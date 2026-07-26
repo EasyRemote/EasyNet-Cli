@@ -48,6 +48,8 @@ pub mod trust;
 
 pub use boot::lifecycle;
 pub use boot::DaemonError;
+#[cfg(feature = "axon-pb")]
+pub use boot::DaemonInvocationErrorProjection;
 pub use boot::{
     start_daemon, stop_daemon, DaemonEndpoints, DaemonHandle, DaemonStartConfig, DaemonStatus,
 };

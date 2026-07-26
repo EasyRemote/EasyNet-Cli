@@ -10,6 +10,8 @@ pub mod lifecycle;
 mod process;
 
 pub use error::DaemonError;
+#[cfg(feature = "axon-pb")]
+pub use error::DaemonInvocationErrorProjection;
 pub use process::{
     start_daemon, stop_daemon, DaemonEndpoints, DaemonHandle, DaemonStartConfig, DaemonStatus,
 };

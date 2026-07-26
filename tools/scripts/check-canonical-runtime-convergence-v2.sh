@@ -12403,9 +12403,9 @@ for retired in (
     'contains("NEGATIVE_REASON_NXDOMAIN")',
     'contains("ROUTE_NEGATIVE")',
     'contains("requires a caller signer")',
-    "CallerSignerUnavailable",
-    "OwnerOffline",
-    "RuntimeOffline",
+    "Self::CallerSignerUnavailable(",
+    "Self::OwnerOffline(",
+    "Self::RuntimeOffline(",
 ):
     if retired in production:
         raise SystemExit(f"ffi_descriptor_runtime_owner:retired_remote_probe_classifier:{retired}")
@@ -15871,14 +15871,17 @@ PY
 check_ffi_native_runtime_signer_projection_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local ffi_invocation="$cli_root/src/ffi/invocation/mod.rs"
+  local daemon_error="$cli_root/src/daemon/boot/error.rs"
   [[ -f "$ffi_invocation" ]] || fail "FFI invocation source is missing: ${ffi_invocation#$cli_root/}"
+  [[ -f "$daemon_error" ]] || fail "Daemon error source is missing: ${daemon_error#$cli_root/}"
 
-  "$PYTHON_BIN" - "$ffi_invocation" <<'PY'
+  "$PYTHON_BIN" - "$ffi_invocation" "$daemon_error" <<'PY'
 import re
 import sys
 from pathlib import Path
 
 text = Path(sys.argv[1]).read_text(encoding="utf-8")
+daemon_error = Path(sys.argv[2]).read_text(encoding="utf-8")
 production = text.split("\nmod tests {", 1)[0]
 for required in (
     'const CALLER_SIGNER_UNAVAILABLE_CODE: &str = "CALLER_SIGNER_UNAVAILABLE"',
@@ -15891,13 +15894,31 @@ for required in (
     'stage: "routing"',
     'retry: "safe"',
     "fn caller_signer_unavailable_error(owner_ura: &str)",
+    "DaemonInvocationErrorProjection::CallerSignerUnavailable",
+    "DaemonInvocationErrorProjection::DescriptorOwnerOffline",
+    "err.invocation_error_projection()",
+    "fn ffi_code_for_daemon_error_projection(",
+):
+    if required not in production:
+        raise SystemExit(f"ffi_native_runtime_signer_projection:missing:{required}")
+
+for retired in (
     "fn is_caller_signer_unavailable_daemon_error(",
     "fn is_caller_signer_unavailable_message(message: &str)",
     "fn is_descriptor_owner_offline_daemon_error(",
     "fn is_descriptor_owner_offline_message(code: tonic::Code, message: &str)",
 ):
-    if required not in production:
-        raise SystemExit(f"ffi_native_runtime_signer_projection:missing:{required}")
+    if retired in production:
+        raise SystemExit(f"ffi_native_runtime_signer_projection:ffi_retired_message_classifier:{retired}")
+
+for required in (
+    "pub enum DaemonInvocationErrorProjection",
+    "pub fn invocation_error_projection(&self) -> DaemonInvocationErrorProjection",
+    "DaemonInvocationErrorProjection::CallerSignerUnavailable",
+    "DaemonInvocationErrorProjection::DescriptorOwnerOffline",
+):
+    if required not in daemon_error:
+        raise SystemExit(f"ffi_native_runtime_signer_projection:daemon_projection_missing:{required}")
 
 load_start = production.find("async fn load_owner_signer(")
 load_end = production.find("\n    fn caller_signer_unavailable_error(", load_start)
@@ -15920,9 +15941,9 @@ ffi_error = re.search(
 )
 if ffi_error is None:
     raise SystemExit("ffi_native_runtime_signer_projection:ffi_daemon_error_missing")
-if "is_caller_signer_unavailable_daemon_error(&err)" not in ffi_error.group("body"):
+if "invocation_error_projection()" not in ffi_error.group("body"):
     raise SystemExit("ffi_native_runtime_signer_projection:ffi_daemon_error_projection_missing")
-if "is_descriptor_owner_offline_daemon_error(&err)" not in ffi_error.group("body"):
+if "record_descriptor_owner_offline_error(message)" not in ffi_error.group("body"):
     raise SystemExit("ffi_native_runtime_signer_projection:ffi_daemon_error_owner_offline_projection_missing")
 
 for required_test in (
