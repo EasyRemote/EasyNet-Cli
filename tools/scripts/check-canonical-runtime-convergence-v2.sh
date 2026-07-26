@@ -8803,6 +8803,8 @@ if ready is None:
 ready_body = ready.group("body")
 for required in (
     "capability_flags",
+    "ReadyRuntimeCapabilities::new(capability_flags)",
+    "capabilities.validate_for_mode(config.mode())",
     "ready_daemon_identity(&config)",
 ):
     if required not in ready_body:
@@ -8821,7 +8823,8 @@ if "fn ready_daemon_identity(" not in daemon_bin or "config::load_credentials()"
     raise SystemExit("start_attach_user_signer_readiness:ready_identity_credentials_helper_missing")
 for required_test in (
     "ready_discovery_uses_paired_credentials_node_id_not_env",
-    "ready_discovery_does_not_infer_signer_readiness_from_device_mode",
+    "ready_discovery_rejects_device_without_paired_user_signer_proof",
+    "ready_discovery_keeps_hub_independent_from_paired_user_signer_proof",
     "ready_discovery_rejects_credentials_realm_mismatch",
 ):
     if required_test not in daemon_bin:
@@ -10473,19 +10476,17 @@ check_ready_capability_proof_contract() {
   [[ -f "$invocation" ]] || fail "invocation boot source is missing: $invocation"
 
   "$PYTHON_BIN" - "$daemon" "$invocation" <<'PY'
+import re
 import sys
 from pathlib import Path
 
 daemon = Path(sys.argv[1]).read_text(encoding="utf-8")
 invocation = Path(sys.argv[2]).read_text(encoding="utf-8")
 
-start = daemon.find("fn ready_runtime_discovery(")
-if start < 0:
-    raise SystemExit("ready_capability_proof:ready_runtime_discovery_missing")
-end = daemon.find("\nfn ready_daemon_identity", start)
-if end < 0:
+ready = re.search(r"fn ready_runtime_discovery\(\s*capability_flags: Vec<String>,\s*\) -> anyhow::Result<server::ControlRuntimeDiscovery> \{(?P<body>.*?)\n\}", daemon, re.DOTALL)
+if ready is None:
     raise SystemExit("ready_capability_proof:ready_runtime_discovery_section_missing")
-body = daemon[start:end]
+body = ready.group("body")
 
 for retired in (
     "DaemonMode::Device",
@@ -10498,11 +10499,15 @@ for retired in (
 
 for required in (
     "fn ready_runtime_discovery(",
+    "struct ReadyRuntimeCapabilities",
+    "fn validate_for_mode(&self, mode: DaemonMode) -> anyhow::Result<()>",
+    "refusing to advertise Ready before paired User caller-signer custody is available",
     "capability_flags: Vec<String>",
-    "capability_flags,",
+    "capability_flags: capabilities.into_flags()",
     "let invocation_capability_flags = session_shutdown.capability_flags().to_vec();",
     "ready_runtime_discovery(invocation_capability_flags)",
-    "ready_discovery_does_not_infer_signer_readiness_from_device_mode",
+    "ready_discovery_rejects_device_without_paired_user_signer_proof",
+    "ready_discovery_keeps_hub_independent_from_paired_user_signer_proof",
 ):
     if required not in daemon:
         raise SystemExit(f"ready_capability_proof:daemon_contract_missing:{required}")

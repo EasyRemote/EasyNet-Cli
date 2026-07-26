@@ -726,11 +726,50 @@ fn ready_runtime_discovery(
 ) -> anyhow::Result<server::ControlRuntimeDiscovery> {
     let config = DaemonConfig::load(&default_config_path())?;
     let daemon_identity = ready_daemon_identity(&config)?;
+    let capabilities = ReadyRuntimeCapabilities::new(capability_flags);
+    capabilities.validate_for_mode(config.mode())?;
     Ok(server::ControlRuntimeDiscovery {
         invocation_endpoint: resolved_local_uds_path_with_env_override(),
         daemon_identity,
-        capability_flags,
+        capability_flags: capabilities.into_flags(),
     })
+}
+
+#[derive(Debug, Clone)]
+struct ReadyRuntimeCapabilities {
+    flags: Vec<String>,
+}
+
+impl ReadyRuntimeCapabilities {
+    fn new(flags: Vec<String>) -> Self {
+        Self { flags }
+    }
+
+    fn contains(&self, flag: &str) -> bool {
+        self.flags.iter().any(|candidate| candidate == flag)
+    }
+
+    fn validate_for_mode(&self, mode: DaemonMode) -> anyhow::Result<()> {
+        match mode {
+            DaemonMode::Hub => Ok(()),
+            DaemonMode::Device | DaemonMode::Both => {
+                if self.contains(discovery::flags::PAIRED_USER_RUNTIME_SIGNER) {
+                    Ok(())
+                } else {
+                    anyhow::bail!(
+                        "{} daemon ready discovery requires invocation boot proof `{}`; \
+                         refusing to advertise Ready before paired User caller-signer custody is available",
+                        mode.as_str(),
+                        discovery::flags::PAIRED_USER_RUNTIME_SIGNER
+                    )
+                }
+            }
+        }
+    }
+
+    fn into_flags(self) -> Vec<String> {
+        self.flags
+    }
 }
 
 fn ready_daemon_identity(config: &DaemonConfig) -> anyhow::Result<DaemonIdentity> {
@@ -1138,7 +1177,7 @@ hub_endpoint = "https://hub.example:50443"
     }
 
     #[test]
-    fn ready_discovery_does_not_infer_signer_readiness_from_device_mode() {
+    fn ready_discovery_rejects_device_without_paired_user_signer_proof() {
         let _home = TestHomeGuard::new();
         write_daemon_config(
             r#"[daemon]
@@ -1150,13 +1189,34 @@ hub_endpoint = "https://hub.example:50443"
         config::save_credentials(&paired_credentials("tenant-a", "credential-node"))
             .expect("save paired credentials");
 
-        let discovery = ready_runtime_discovery(Vec::new()).expect("ready discovery");
+        let error =
+            ready_runtime_discovery(Vec::new()).expect_err("device Ready requires signer proof");
 
         assert!(
-            !discovery.capability_flags.iter().any(|flag| {
-                flag == easynet_cli::daemon::control::discovery::flags::PAIRED_USER_RUNTIME_SIGNER
-            }),
-            "ready discovery must publish capability flags from invocation boot proof, not daemon mode"
+            error.to_string().contains(
+                easynet_cli::daemon::control::discovery::flags::PAIRED_USER_RUNTIME_SIGNER
+            ),
+            "missing paired signer proof must be explicit: {error:#}"
+        );
+    }
+
+    #[test]
+    fn ready_discovery_keeps_hub_independent_from_paired_user_signer_proof() {
+        let _home = TestHomeGuard::new();
+        write_daemon_config(
+            r#"[daemon]
+mode = "hub"
+realm = "tenant-a"
+"#,
+        );
+
+        let discovery = ready_runtime_discovery(Vec::new()).expect("hub ready discovery");
+
+        assert_eq!(discovery.daemon_identity.mode, "hub");
+        assert!(discovery.daemon_identity.node_id.is_none());
+        assert!(
+            discovery.capability_flags.is_empty(),
+            "hub ready discovery must not invent device paired-user signer proof"
         );
     }
 
