@@ -542,13 +542,7 @@ pub(crate) fn route_negative_status(failure: ResolveRouteFailure) -> Status {
 }
 
 fn route_negative_owner_offline(failure: &ResolveRouteFailure) -> bool {
-    matches!(
-        failure.reason,
-        NegativeReason::Nxdomain | NegativeReason::Noroute
-    ) && failure
-        .detail
-        .trim()
-        .eq_ignore_ascii_case("owner is not online")
+    failure.is_owner_offline()
 }
 
 pub(crate) fn route_profile_blocked_message(selected_route: &SelectedInvokeRoute) -> String {
@@ -697,11 +691,18 @@ mod tests {
     }
 
     fn negative_status_with_detail(reason: NegativeReason, detail: &str) -> tonic::Status {
-        route_negative_status(ResolveRouteFailure {
-            query_name: "easynet:///r/acme/device/node-a#skill.list".to_string(),
+        route_negative_status(ResolveRouteFailure::new(
+            "easynet:///r/acme/device/node-a#skill.list",
             reason,
-            detail: detail.to_string(),
-        })
+            detail,
+        ))
+    }
+
+    fn owner_offline_status(reason: NegativeReason) -> tonic::Status {
+        route_negative_status(ResolveRouteFailure::owner_offline(
+            "easynet:///r/acme/device/node-a#skill.list",
+            reason,
+        ))
     }
 
     #[test]
@@ -714,7 +715,7 @@ mod tests {
     #[test]
     fn resolver_owner_offline_maps_to_availability_not_absence() {
         for reason in [NegativeReason::Nxdomain, NegativeReason::Noroute] {
-            let status = negative_status_with_detail(reason, "owner is not online");
+            let status = owner_offline_status(reason);
 
             assert_eq!(status.code(), tonic::Code::Unavailable);
             assert!(status.message().contains(ROUTE_NEGATIVE_CODE));
@@ -724,6 +725,13 @@ mod tests {
                 status.message()
             );
         }
+    }
+
+    #[test]
+    fn resolver_owner_offline_detail_is_not_semantic_authority() {
+        let status = negative_status_with_detail(NegativeReason::Nxdomain, "owner is not online");
+
+        assert_eq!(status.code(), tonic::Code::NotFound);
     }
 
     #[test]

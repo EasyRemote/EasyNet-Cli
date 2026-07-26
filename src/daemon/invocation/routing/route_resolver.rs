@@ -464,10 +464,48 @@ impl DelegatedPeerEndpoint {
 pub(crate) struct ResolveRouteFailure {
     pub query_name: String,
     pub reason: NegativeReason,
+    pub kind: ResolveRouteFailureKind,
     pub detail: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ResolveRouteFailureKind {
+    Generic,
+    OwnerOffline,
+}
+
 impl ResolveRouteFailure {
+    pub(crate) fn new(
+        query_name: impl Into<String>,
+        reason: NegativeReason,
+        detail: impl Into<String>,
+    ) -> Self {
+        Self {
+            query_name: query_name.into(),
+            reason,
+            kind: ResolveRouteFailureKind::Generic,
+            detail: detail.into(),
+        }
+    }
+
+    pub(crate) fn owner_offline(query_name: impl Into<String>, reason: NegativeReason) -> Self {
+        debug_assert!(
+            matches!(reason, NegativeReason::Nxdomain | NegativeReason::Noroute),
+            "owner-offline route negatives must preserve absence/placement reason"
+        );
+        Self {
+            query_name: query_name.into(),
+            reason,
+            kind: ResolveRouteFailureKind::OwnerOffline,
+            detail: "owner is not online".to_string(),
+        }
+    }
+
+    #[must_use]
+    pub(crate) fn is_owner_offline(&self) -> bool {
+        self.kind == ResolveRouteFailureKind::OwnerOffline
+    }
+
     #[must_use]
     pub(crate) fn answer_json(&self) -> Value {
         negative_answer_json(&self.query_name, self.reason, Some(self.detail.as_str()))
@@ -730,13 +768,11 @@ impl<'a> DaemonRouteResolver<'a> {
         ability_name: &str,
     ) -> Result<SelectedInvokeRoute, ResolveRouteFailure> {
         let selector = route_selector_from_query(query_name, ability_name)?.ok_or_else(|| {
-            ResolveRouteFailure {
-                query_name: query_name.to_string(),
-                reason: NegativeReason::Refused,
-                detail:
-                    "route query must provide an owner URA plus ability_name or a full ability URA"
-                        .to_string(),
-            }
+            ResolveRouteFailure::new(
+                query_name,
+                NegativeReason::Refused,
+                "route query must provide an owner URA plus ability_name or a full ability URA",
+            )
         })?;
 
         // RFC-005 §4 / D105: this daemon is authoritative for the
@@ -813,21 +849,20 @@ impl<'a> DaemonRouteResolver<'a> {
         if !crate::daemon::ability::catalog::is_local_runtime_routable_catalog_name(
             &selector.public_name,
         ) {
-            return Err(ResolveRouteFailure {
-                query_name: selector.query_name.clone(),
-                reason: NegativeReason::Nodata,
-                detail:
-                    "daemon-local ability is not routable through the public Invocation surface"
-                        .to_string(),
-            });
+            return Err(ResolveRouteFailure::new(
+                selector.query_name.clone(),
+                NegativeReason::Nodata,
+                "daemon-local ability is not routable through the public Invocation surface",
+            ));
         }
         let ability = device_local
             .resolve_owner_ability(&selector.owner_ura, &selector.public_name)
-            .ok_or_else(|| ResolveRouteFailure {
-                query_name: selector.query_name.clone(),
-                reason: NegativeReason::Nodata,
-                detail: "local runtime does not register a dispatchable route for this ability"
-                    .to_string(),
+            .ok_or_else(|| {
+                ResolveRouteFailure::new(
+                    selector.query_name.clone(),
+                    NegativeReason::Nodata,
+                    "local runtime does not register a dispatchable route for this ability",
+                )
             })?;
 
         let route_ura = format!("route-ref::{}", selector.ability_ura);
@@ -873,11 +908,11 @@ impl<'a> DaemonRouteResolver<'a> {
             return Ok(None);
         }
         let parsed = crate::core::ura::parse_ura(&selector.owner_ura).map_err(|err| {
-            ResolveRouteFailure {
-                query_name: selector.query_name.clone(),
-                reason: NegativeReason::Refused,
-                detail: format!("selector owner URA is invalid: {err}"),
-            }
+            ResolveRouteFailure::new(
+                selector.query_name.clone(),
+                NegativeReason::Refused,
+                format!("selector owner URA is invalid: {err}"),
+            )
         })?;
 
         if let Some(placement) = device_local
@@ -920,10 +955,12 @@ impl<'a> DaemonRouteResolver<'a> {
             self.device_local.as_ref().map(|source| &source.authority),
             self.now_unix_ms,
         )
-        .map_err(|detail| ResolveRouteFailure {
-            query_name: selector.query_name.clone(),
-            reason: NegativeReason::Refused,
-            detail: format!("ability projection unavailable: {detail}"),
+        .map_err(|detail| {
+            ResolveRouteFailure::new(
+                selector.query_name.clone(),
+                NegativeReason::Refused,
+                format!("ability projection unavailable: {detail}"),
+            )
         })?;
 
         let owner = directory
@@ -939,11 +976,7 @@ impl<'a> DaemonRouteResolver<'a> {
                     } else {
                         NegativeReason::Nxdomain
                     };
-                ResolveRouteFailure {
-                    query_name: selector.query_name.clone(),
-                    reason,
-                    detail: "owner is not online".to_string(),
-                }
+                ResolveRouteFailure::owner_offline(selector.query_name.clone(), reason)
             })?;
 
         let summary = owner
@@ -957,10 +990,12 @@ impl<'a> DaemonRouteResolver<'a> {
                     || summary_public_name(summary).as_deref()
                         == Some(selector.public_name.as_str())
             })
-            .ok_or_else(|| ResolveRouteFailure {
-                query_name: selector.query_name.clone(),
-                reason: NegativeReason::Nodata,
-                detail: "owner is online but does not publish the requested ability".to_string(),
+            .ok_or_else(|| {
+                ResolveRouteFailure::new(
+                    selector.query_name.clone(),
+                    NegativeReason::Nodata,
+                    "owner is online but does not publish the requested ability",
+                )
             })?;
 
         let selected = SelectedAbilityRoute::from_owner_summary(
@@ -975,11 +1010,11 @@ impl<'a> DaemonRouteResolver<'a> {
         let owner_record = id_record(&selector.owner_ura, self.now_unix_ms);
         let ability_record =
             ability_record_from_summary(summary, self.now_unix_ms).ok_or_else(|| {
-                ResolveRouteFailure {
-                    query_name: selector.query_name.clone(),
-                    reason: NegativeReason::Noroute,
-                    detail: "ability projection is missing canonical ability_ura".to_string(),
-                }
+                ResolveRouteFailure::new(
+                    selector.query_name.clone(),
+                    NegativeReason::Noroute,
+                    "ability projection is missing canonical ability_ura",
+                )
             })?;
         let route_record = selected.route_record(self.now_unix_ms);
 
@@ -1014,23 +1049,21 @@ impl<'a> DaemonRouteResolver<'a> {
         ability_name: &str,
     ) -> Result<Option<DelegatedInvokeRoute>, ResolveRouteFailure> {
         let selector = route_selector_from_query(query_name, ability_name)?.ok_or_else(|| {
-            ResolveRouteFailure {
-                query_name: query_name.to_string(),
-                reason: NegativeReason::Refused,
-                detail:
-                    "route query must provide an owner URA plus ability_name or a full ability URA"
-                        .to_string(),
-            }
+            ResolveRouteFailure::new(
+                query_name,
+                NegativeReason::Refused,
+                "route query must provide an owner URA plus ability_name or a full ability URA",
+            )
         })?;
         let Some(peer_source) = self.peer_delegation.as_ref() else {
             return Ok(None);
         };
         let parsed_owner = crate::core::ura::parse_ura(&selector.owner_ura).map_err(|err| {
-            ResolveRouteFailure {
-                query_name: selector.query_name.clone(),
-                reason: NegativeReason::Refused,
-                detail: format!("owner URA is invalid: {err}"),
-            }
+            ResolveRouteFailure::new(
+                selector.query_name.clone(),
+                NegativeReason::Refused,
+                format!("owner URA is invalid: {err}"),
+            )
         })?;
         if parsed_owner.realm == peer_source.local_realm {
             return Ok(None);
@@ -1042,14 +1075,14 @@ impl<'a> DaemonRouteResolver<'a> {
                 DelegatedPeerEndpoint::new(hub_endpoint, "federated_peers", None)
             }
             HubResolution::Offline => {
-                return Err(ResolveRouteFailure {
-                    query_name: selector.query_name,
-                    reason: NegativeReason::Noroute,
-                    detail: format!(
+                return Err(ResolveRouteFailure::new(
+                    selector.query_name,
+                    NegativeReason::Noroute,
+                    format!(
                         "remote realm `{}` has no configured peer hub route",
                         parsed_owner.realm
                     ),
-                });
+                ));
             }
         };
 
@@ -1072,23 +1105,20 @@ impl<'a> DaemonRouteResolver<'a> {
         let selector = match route_selector_from_query(ability_ura, "")? {
             Some(selector) => selector,
             None => route_selector_from_query(target_ura, ability_ura)?.ok_or_else(|| {
-                ResolveRouteFailure {
-                    query_name: ability_ura.to_string(),
-                    reason: NegativeReason::Refused,
-                    detail: "Invoke requires a full canonical ability URA, descriptor ref, or an owner-local ability name with an explicit callee"
-                        .to_string(),
-                }
+                ResolveRouteFailure::new(
+                    ability_ura,
+                    NegativeReason::Refused,
+                    "Invoke requires a full canonical ability URA, descriptor ref, or an owner-local ability name with an explicit callee",
+                )
             })?,
         };
         let owner_is_agent = selector.owner_kind == RouteOwnerKind::Agent;
         if selector.owner_ura != target_ura && !owner_is_agent {
-            return Err(ResolveRouteFailure {
-                query_name: selector.query_name,
-                reason: NegativeReason::Refused,
-                detail: format!(
-                    "ability_ura `{ability_ura}` does not belong to target `{target_ura}`",
-                ),
-            });
+            return Err(ResolveRouteFailure::new(
+                selector.query_name,
+                NegativeReason::Refused,
+                format!("ability_ura `{ability_ura}` does not belong to target `{target_ura}`",),
+            ));
         }
 
         let canonical_query = selector.ability_ura.clone();
@@ -1097,15 +1127,15 @@ impl<'a> DaemonRouteResolver<'a> {
                 let target_matches = selected_route.owner_ura == target_ura
                     || selected_route.execution_host_ura == target_ura;
                 if !target_matches {
-                    return Err(ResolveRouteFailure {
-                        query_name: selected_route.query_name.clone(),
-                        reason: NegativeReason::Refused,
-                        detail: route_owner_mismatch_detail(
+                    return Err(ResolveRouteFailure::new(
+                        selected_route.query_name.clone(),
+                        NegativeReason::Refused,
+                        route_owner_mismatch_detail(
                             &selected_route.execution_host_ura,
                             &canonical_query,
                             target_ura,
                         ),
-                    });
+                    ));
                 }
                 Ok(CanonicalRouteSelection::local(call_mode, selected_route))
             }
@@ -1115,21 +1145,23 @@ impl<'a> DaemonRouteResolver<'a> {
                 };
                 let parsed_owner =
                     crate::core::ura::parse_ura(&selector.owner_ura).map_err(|err| {
-                        ResolveRouteFailure {
-                            query_name: selector.query_name.clone(),
-                            reason: NegativeReason::Refused,
-                            detail: format!("owner URA is invalid: {err}"),
-                        }
+                        ResolveRouteFailure::new(
+                            selector.query_name.clone(),
+                            NegativeReason::Refused,
+                            format!("owner URA is invalid: {err}"),
+                        )
                     })?;
                 if parsed_owner.realm == peer_source.local_realm {
                     return Err(local_failure);
                 }
                 self.resolve_delegation(&canonical_query, "")?
                     .map(|route| CanonicalRouteSelection::peer(call_mode, route))
-                    .ok_or(ResolveRouteFailure {
-                        query_name: selector.query_name,
-                        reason: NegativeReason::Noroute,
-                        detail: "cross-realm Invoke had no peer delegation route".to_string(),
+                    .ok_or_else(|| {
+                        ResolveRouteFailure::new(
+                            selector.query_name,
+                            NegativeReason::Noroute,
+                            "cross-realm Invoke had no peer delegation route",
+                        )
                     })
             }
         }
@@ -1341,11 +1373,11 @@ impl RouteOwnerKind {
             "device" => Ok(Self::Device),
             "authority" => Ok(Self::Authority),
             "agent" => Ok(Self::Agent),
-            other => Err(ResolveRouteFailure {
-                query_name: query_name.to_string(),
-                reason: NegativeReason::Refused,
-                detail: format!("ability selector owner kind `{other}` is not routable"),
-            }),
+            other => Err(ResolveRouteFailure::new(
+                query_name,
+                NegativeReason::Refused,
+                format!("ability selector owner kind `{other}` is not routable"),
+            )),
         }
     }
 }
@@ -1380,11 +1412,11 @@ fn route_selector_from_query(
         if is_ability_ura(query_name) {
             let selector =
                 crate::core::ura::AbilitySelector::parse(query_name).map_err(|error| {
-                    ResolveRouteFailure {
-                        query_name: query_name.to_string(),
-                        reason: NegativeReason::Refused,
-                        detail: format!("ability URA selector parse failed: {error}"),
-                    }
+                    ResolveRouteFailure::new(
+                        query_name,
+                        NegativeReason::Refused,
+                        format!("ability URA selector parse failed: {error}"),
+                    )
                 })?;
             return route_selector_from_ability_selector(query_name.to_string(), selector)
                 .map(Some);
@@ -1400,11 +1432,11 @@ fn route_selector_from_query(
     }
     if is_ability_ura(ability_name) {
         let selector = crate::core::ura::AbilitySelector::parse(ability_name).map_err(|error| {
-            ResolveRouteFailure {
-                query_name: ability_name.to_string(),
-                reason: NegativeReason::Refused,
-                detail: format!("ability URA selector parse failed: {error}"),
-            }
+            ResolveRouteFailure::new(
+                ability_name,
+                NegativeReason::Refused,
+                format!("ability URA selector parse failed: {error}"),
+            )
         })?;
         if selector.owner_ura() != owner_ura {
             return Ok(None);
@@ -1415,18 +1447,18 @@ fn route_selector_from_query(
     let public_name = crate::core::ura::owner_local_ability_name(owner_ura, ability_name);
     let ability_ura =
         crate::core::ura::owner_ability_ura(owner_ura, &public_name).ok_or_else(|| {
-            ResolveRouteFailure {
-                query_name: format!("{owner_ura}#{public_name}"),
-                reason: NegativeReason::Refused,
-                detail: "owner-local ability URA build failed".to_string(),
-            }
+            ResolveRouteFailure::new(
+                format!("{owner_ura}#{public_name}"),
+                NegativeReason::Refused,
+                "owner-local ability URA build failed",
+            )
         })?;
     let selector = crate::core::ura::AbilitySelector::parse(&ability_ura).map_err(|error| {
-        ResolveRouteFailure {
-            query_name: format!("{owner_ura}#{public_name}"),
-            reason: NegativeReason::Refused,
-            detail: format!("owner-local ability selector parse failed: {error}"),
-        }
+        ResolveRouteFailure::new(
+            format!("{owner_ura}#{public_name}"),
+            NegativeReason::Refused,
+            format!("owner-local ability selector parse failed: {error}"),
+        )
     })?;
     route_selector_from_ability_selector(format!("{owner_ura}#{public_name}"), selector).map(Some)
 }
@@ -1437,14 +1469,14 @@ fn route_selector_from_descriptor_ref(
 ) -> Result<RouteSelector, ResolveRouteFailure> {
     let selector = ability_selector_from_descriptor_ref(descriptor_ref)?;
     if selector.owner_ura() != owner_ura {
-        return Err(ResolveRouteFailure {
-            query_name: descriptor_ref.trim().to_string(),
-            reason: NegativeReason::Refused,
-            detail: format!(
+        return Err(ResolveRouteFailure::new(
+            descriptor_ref.trim(),
+            NegativeReason::Refused,
+            format!(
                 "descriptor_ref ability owner `{}` does not match target owner `{owner_ura}`",
                 selector.owner_ura()
             ),
-        });
+        ));
     }
     let public_name = selector.public_name().to_string();
     route_selector_from_ability_selector(format!("{owner_ura}#{public_name}"), selector)
@@ -1455,10 +1487,12 @@ fn ability_selector_from_descriptor_ref(
 ) -> Result<crate::core::ura::AbilitySelector, ResolveRouteFailure> {
     let query_name = descriptor_ref.trim().to_string();
     crate::daemon::axon_bridge::descriptor_ref::ability_selector_from_descriptor_ref(descriptor_ref)
-        .map_err(|error| ResolveRouteFailure {
-            query_name,
-            reason: NegativeReason::Refused,
-            detail: format!("descriptor_ref selector projection failed: {error}"),
+        .map_err(|error| {
+            ResolveRouteFailure::new(
+                query_name,
+                NegativeReason::Refused,
+                format!("descriptor_ref selector projection failed: {error}"),
+            )
         })
 }
 
@@ -1485,11 +1519,11 @@ fn selected_execution_for_owner(
         Ok(crate::core::ura::URAKind::Agent) => {
             let Some(host_device_ura) = advertised_agent_host_ura(advertised_agents, owner_ura)
             else {
-                return Err(ResolveRouteFailure {
-                    query_name: query_name.to_string(),
-                    reason: NegativeReason::Noroute,
-                    detail: "hosted agent has no resolver-selected host device".to_string(),
-                });
+                return Err(ResolveRouteFailure::new(
+                    query_name,
+                    NegativeReason::Noroute,
+                    "hosted agent has no resolver-selected host device",
+                ));
             };
             Ok((
                 SelectedRouteKind::HostedAgent,
@@ -1506,11 +1540,11 @@ fn selected_execution_for_owner(
             owner_ura.to_string(),
             None,
         )),
-        _ => Err(ResolveRouteFailure {
-            query_name: query_name.to_string(),
-            reason: NegativeReason::Refused,
-            detail: "route owner must be a canonical hub, device, or agent URA".to_string(),
-        }),
+        _ => Err(ResolveRouteFailure::new(
+            query_name,
+            NegativeReason::Refused,
+            "route owner must be a canonical hub, device, or agent URA",
+        )),
     }
 }
 
@@ -1545,20 +1579,24 @@ impl SelectedAbilityRoute {
             .get("ability_ura")
             .and_then(Value::as_str)
             .filter(|value| !value.is_empty())
-            .ok_or_else(|| ResolveRouteFailure {
-                query_name: query_name.to_string(),
-                reason: NegativeReason::Noroute,
-                detail: "ability projection is missing canonical ability_ura".to_string(),
+            .ok_or_else(|| {
+                ResolveRouteFailure::new(
+                    query_name,
+                    NegativeReason::Noroute,
+                    "ability projection is missing canonical ability_ura",
+                )
             })?
             .to_string();
         let route_ura = summary
             .get("route_summary_ref")
             .and_then(Value::as_str)
             .filter(|value| !value.is_empty())
-            .ok_or_else(|| ResolveRouteFailure {
-                query_name: query_name.to_string(),
-                reason: NegativeReason::Noroute,
-                detail: "ability projection is missing executable route_summary_ref".to_string(),
+            .ok_or_else(|| {
+                ResolveRouteFailure::new(
+                    query_name,
+                    NegativeReason::Noroute,
+                    "ability projection is missing executable route_summary_ref",
+                )
             })?
             .to_string();
         let (kind, callee_ura, execution_host_ura, host_node_id) = selected_execution_for_owner(

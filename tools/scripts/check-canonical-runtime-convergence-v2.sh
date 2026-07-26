@@ -405,25 +405,44 @@ PY
 check_route_negative_owner_offline_status_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local target_gate="$cli_root/src/daemon/invocation/admission/target_gate.rs"
+  local route_resolver="$cli_root/src/daemon/invocation/routing/route_resolver.rs"
   [[ -f "$target_gate" ]] || fail "target gate source is missing: ${target_gate#$cli_root/}"
+  [[ -f "$route_resolver" ]] || fail "route resolver source is missing: ${route_resolver#$cli_root/}"
 
-  "$PYTHON_BIN" - "$target_gate" <<'PY'
+  "$PYTHON_BIN" - "$target_gate" "$route_resolver" <<'PY'
 import sys
 from pathlib import Path
 
-text = Path(sys.argv[1]).read_text()
-required = {
+target_gate = Path(sys.argv[1]).read_text()
+route_resolver = Path(sys.argv[2]).read_text()
+target_required = {
     "fn route_negative_owner_offline(": "owner_offline_helper_missing",
+    "failure.is_owner_offline()": "owner_offline_typed_predicate_missing",
     "Status::unavailable(message)": "owner_offline_unavailable_status_missing",
     "resolver_owner_offline_maps_to_availability_not_absence": "owner_offline_test_missing",
-    "NegativeReason::Nxdomain | NegativeReason::Noroute": "owner_offline_reasons_missing",
-    "eq_ignore_ascii_case(\"owner is not online\")": "owner_offline_detail_gate_missing",
+    "resolver_owner_offline_detail_is_not_semantic_authority": "owner_offline_detail_regression_missing",
 }
-for needle, marker in required.items():
-    if needle not in text:
+resolver_required = {
+    "pub(crate) enum ResolveRouteFailureKind": "owner_offline_kind_missing",
+    "OwnerOffline": "owner_offline_kind_variant_missing",
+    "pub(crate) fn owner_offline": "owner_offline_constructor_missing",
+    "kind: ResolveRouteFailureKind::OwnerOffline": "owner_offline_kind_assignment_missing",
+    "NegativeReason::Nxdomain | NegativeReason::Noroute": "owner_offline_reason_guard_missing",
+}
+for needle, marker in target_required.items():
+    if needle not in target_gate:
         raise SystemExit(f"route_negative_owner_offline_status:{marker}")
-owner_index = text.find("route_negative_owner_offline(&failure)")
-absence_index = text.find("NegativeReason::Nxdomain | NegativeReason::Nodata => Status::not_found(message)")
+for needle, marker in resolver_required.items():
+    if needle not in route_resolver:
+        raise SystemExit(f"route_negative_owner_offline_status:{marker}")
+for legacy in (
+    "eq_ignore_ascii_case(\"owner is not online\")",
+    ".detail.trim().eq_ignore_ascii_case",
+):
+    if legacy in target_gate:
+        raise SystemExit("route_negative_owner_offline_status:legacy_detail_predicate_present")
+owner_index = target_gate.find("route_negative_owner_offline(&failure)")
+absence_index = target_gate.find("NegativeReason::Nxdomain | NegativeReason::Nodata => Status::not_found(message)")
 if owner_index < 0 or absence_index < 0 or owner_index > absence_index:
     raise SystemExit("route_negative_owner_offline_status:owner_offline_checked_after_absence")
 PY
