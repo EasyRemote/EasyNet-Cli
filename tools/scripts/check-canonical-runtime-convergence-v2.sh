@@ -14786,13 +14786,16 @@ for retired in (
     'n.get("os")',
     'n.get("arch")',
     '"last_heartbeat_unix_ms"',
+    'row["tenant_id"]',
 ):
     if retired in production:
         raise SystemExit(f"cli_device_directory_projection:retired_alias:{retired}")
 
 for required in (
+    'row["origin_realm"]',
     "renderer_ignores_legacy_top_level_platform_aliases",
     "renderer_ignores_legacy_last_heartbeat_alias",
+    "device directory projection must not emit retired tenant alias",
 ):
     if required not in text:
         raise SystemExit(f"cli_device_directory_projection:missing_test:{required}")
@@ -24429,6 +24432,10 @@ fn device_platform_info(n: &Value) {
 fn device_last_active(n: &Value) {
     let last_seen = n.get("last_seen_unix_ms")
         .or_else(|| n.get("last_heartbeat_unix_ms"));
+}
+
+fn project_directory_entry(row: &mut Value, origin_realm: String) {
+    row["tenant_id"] = Value::String(origin_realm);
 }
 EOF
   if ( CLI_ROOT="$tmp/cli-device-directory-alias-legacy"; check_cli_device_directory_projection_contract ) >/dev/null 2>&1; then

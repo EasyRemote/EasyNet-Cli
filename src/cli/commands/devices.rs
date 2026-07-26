@@ -226,7 +226,7 @@ fn project_directory_entry(entry: Value, self_ura: Option<&str>) -> anyhow::Resu
         row["last_seen_unix_ms"] = v;
     }
     if let Some(realm) = origin_realm {
-        row["tenant_id"] = Value::String(realm);
+        row["origin_realm"] = Value::String(realm);
     }
     if let Some(endpoint) = hub_endpoint {
         row["hub_endpoint"] = Value::String(endpoint);
@@ -410,7 +410,11 @@ mod tests {
         assert_eq!(row["state"], "HEALTHY");
         assert_eq!(row["online"], true);
         assert_eq!(row["is_self"], true);
-        assert_eq!(row["tenant_id"], "r1");
+        assert_eq!(row["origin_realm"], "r1");
+        assert!(
+            row.get("tenant_id").is_none(),
+            "device directory projection must not emit retired tenant alias"
+        );
     }
 
     #[test]
