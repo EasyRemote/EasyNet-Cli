@@ -4,7 +4,7 @@
 // File: src/daemon/ability/builtins/device_control/terminal/io.rs
 //
 // The unary-RPC half of the PTY data-plane. Pairs with
-// `pty_lifecycle_ability` (create / close) and `pty_attach_ability`
+// `terminal_lifecycle_ability` (create / close) and `terminal_attach_ability`
 // (bidi attach). Backend's PTYDriver — the production path used by
 // every Frontend Terminal session before the WS bidi optimisation
 // lands — depends on this trio:
@@ -13,7 +13,7 @@
 //   * `terminal.read`   (RPC) — drain stdout up to timeout
 //   * `terminal.resize` (RPC) — set cols × rows
 //
-// Why a separate file from `pty_lifecycle_ability`
+// Why a separate file from `terminal_lifecycle_ability`
 // ------------------------------------------------
 // Lifecycle owns the session-table mutations (create row / drop
 // row). I/O owns the per-session continuous reader thread + the
@@ -31,24 +31,24 @@
 //   * a dedicated std::thread that loops `Read::read` on the
 //     PTY master fd and pushes chunks into a `VecDeque<u8>`
 //     guarded by a Mutex + Condvar.
-//   * `pty_session_read` waits on the Condvar with a timeout;
+//   * `terminal.read` waits on the Condvar with a timeout;
 //     returns the drained bytes (or empty if the timeout hit).
 //
 // The thread is created lazily on the first read call so a
-// session that's only ever attached via `pty_session_attach`
+// session that's only ever attached via `terminal.attach`
 // (bidi mode) never spins up a competing reader. Once started,
-// the buffer collects until `pty_session_close` fires (which
+// the buffer collects until `terminal.close` fires (which
 // purges the I/O state row).
 //
 // Coexistence rule
 // ----------------
-// `pty_session_attach` (bidi) and the unary read path are
+// `terminal.attach` (bidi) and the unary read path are
 // MUTUALLY EXCLUSIVE per session. portable-pty's
 // `try_clone_reader` returns a fresh fd dup, so two readers
 // would race for incoming bytes — each would see ~half. We
 // document that constraint here and rely on the operator picking
 // one mode per session. A future axis-tagged mode field on
-// `pty_session_create` could enforce it; v1 ships the
+// `terminal.create` could enforce it; v1 ships the
 // documentation gate.
 //
 // Why a writer cache (instead of `take_writer()` per call)
@@ -75,11 +75,11 @@ use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 use crate::daemon::ability::dispatch::OwnerKind;
 use crate::daemon::execution::pty::{PtyService, PtySessionId};
 
-pub const ABILITY_PTY_SESSION_INPUT: &str =
+pub const ABILITY_TERMINAL_INPUT: &str =
     crate::daemon::ability::names::device_control::TERMINAL_INPUT;
-pub const ABILITY_PTY_SESSION_READ: &str =
+pub const ABILITY_TERMINAL_READ: &str =
     crate::daemon::ability::names::device_control::TERMINAL_READ;
-pub const ABILITY_PTY_SESSION_RESIZE: &str =
+pub const ABILITY_TERMINAL_RESIZE: &str =
     crate::daemon::ability::names::device_control::TERMINAL_RESIZE;
 
 /// Default per-call read budget when the caller doesn't supply one.
@@ -92,7 +92,7 @@ const DEFAULT_READ_TIMEOUT_SECS: f64 = 5.0;
 /// a worker thread for hours. 60s is plenty for any legitimate
 /// poll; longer sessions repeat the call.
 const MAX_READ_TIMEOUT_SECS: f64 = 60.0;
-/// Maximum bytes a single `pty_session_read` call returns. Prevents
+/// Maximum bytes a single `terminal.read` call returns. Prevents
 /// a runaway producer (a `yes` loop, e.g.) from generating multi-MB
 /// payloads inside one Invoke envelope. The buffer keeps growing
 /// in memory; the next read drains the rest.
@@ -102,16 +102,16 @@ const MAX_READ_CHUNK_BYTES: usize = 256 * 1024;
 /// and OOM the daemon. When the buffer is full, the reader thread
 /// drops the oldest bytes — same policy `tail -f` survivors use.
 const OUTPUT_BUFFER_CAP_BYTES: usize = 4 * 1024 * 1024;
-/// Per-thread read chunk. Mirrors pty_attach_ability::READ_CHUNK_SIZE
+/// Per-thread read chunk. Mirrors terminal_attach_ability::READ_CHUNK_SIZE
 /// so behaviour is consistent across the two surfaces.
 const READ_CHUNK_BYTES: usize = 64 * 1024;
 
 /// Per-session I/O state. One row per session that has had an
-/// input or read call (lazy init). Removed by `pty_session_close`
+/// input or read call (lazy init). Removed by `terminal.close`
 /// — see `register`'s wrapper around the lifecycle close handler.
 struct SessionIo {
     /// Output buffer + Condvar. The reader thread pushes here;
-    /// `pty_session_read` waits on `cv` with a timeout. The buffer
+    /// `terminal.read` waits on `cv` with a timeout. The buffer
     /// also stores a "PTY ended" flag so the read handler can
     /// surface session_dead to the backend's typed-error path.
     output: Arc<(Mutex<OutputState>, Condvar)>,
@@ -272,7 +272,7 @@ impl PtyIoService {
                             Ok(n) => n,
                             Err(_) => {
                                 // I/O error → treat as EOF. Same
-                                // policy as pty_attach_ability.
+                                // policy as terminal_attach_ability.
                                 let (lock, cv) = &*output;
                                 if let Ok(mut s) = lock.lock() {
                                     s.closed = true;
@@ -719,13 +719,9 @@ mod tests {
         let mut reg = metadata_test_catalog();
         let (pty, io) = fresh();
         register(&mut reg, pty, io);
-        assert!(reg
-            .resolve_rpc_with_env(ABILITY_PTY_SESSION_INPUT)
-            .is_some());
-        assert!(reg.resolve_rpc_with_env(ABILITY_PTY_SESSION_READ).is_some());
-        assert!(reg
-            .resolve_rpc_with_env(ABILITY_PTY_SESSION_RESIZE)
-            .is_some());
+        assert!(reg.resolve_rpc_with_env(ABILITY_TERMINAL_INPUT).is_some());
+        assert!(reg.resolve_rpc_with_env(ABILITY_TERMINAL_READ).is_some());
+        assert!(reg.resolve_rpc_with_env(ABILITY_TERMINAL_RESIZE).is_some());
     }
 
     #[test]

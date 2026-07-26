@@ -78,7 +78,8 @@ use crate::daemon::ability::builtins::{
     device_control::{
         file_transfer as file_transfer_ability, session as session_ability,
         terminal::{
-            attach as pty_attach_ability, io as pty_io_ability, lifecycle as pty_lifecycle_ability,
+            attach as terminal_attach_ability, io as terminal_io_ability,
+            lifecycle as terminal_lifecycle_ability,
         },
     },
     governance::consent as permission_ability,
@@ -2816,12 +2817,12 @@ fn real_device_terminal_create_then_close_round_trip() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
     let pty = Arc::new(crate::daemon::execution::pty::PtyService::new());
     let mut reg = runtime_attached_catalog();
-    pty_lifecycle_ability::register(&mut reg, Arc::clone(&pty), None);
+    terminal_lifecycle_ability::register(&mut reg, Arc::clone(&pty), None);
     let d = dispatcher_for(Arc::new(reg));
 
     let create = d
         .execute_rpc(target("terminal.create", json!({})))
-        .expect("pty_session_create");
+        .expect("terminal.create");
     let session_id = create["session_id"]
         .as_str()
         .expect("session_id in response")
@@ -2846,7 +2847,7 @@ fn real_device_terminal_create_then_close_round_trip() {
             &session_id,
             "manage",
         ))
-        .expect("pty_session_close");
+        .expect("terminal.close");
     assert_eq!(close["ack"], json!(true));
 }
 
@@ -2863,15 +2864,15 @@ fn real_device_terminal_create_then_close_round_trip() {
 fn real_device_terminal_input_read_resize_round_trip() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
     let pty = Arc::new(crate::daemon::execution::pty::PtyService::new());
-    let io = pty_io_ability::PtyIoService::new();
+    let io = terminal_io_ability::PtyIoService::new();
     let mut reg = runtime_attached_catalog();
-    pty_lifecycle_ability::register(&mut reg, Arc::clone(&pty), Some(io.clone()));
-    pty_io_ability::register(&mut reg, Arc::clone(&pty), io);
+    terminal_lifecycle_ability::register(&mut reg, Arc::clone(&pty), Some(io.clone()));
+    terminal_io_ability::register(&mut reg, Arc::clone(&pty), io);
     let d = dispatcher_for(Arc::new(reg));
 
     let create = d
         .execute_rpc(target("terminal.create", json!({})))
-        .expect("pty_session_create");
+        .expect("terminal.create");
     let sid = create["session_id"].as_str().unwrap().to_string();
 
     // terminal.resize — exercise it before any I/O so
@@ -2883,7 +2884,7 @@ fn real_device_terminal_input_read_resize_round_trip() {
             &sid,
             "stream",
         ))
-        .expect("pty_session_resize");
+        .expect("terminal.resize");
     assert_eq!(resize["ack"], json!(true));
 
     // terminal.input — push a printf line that produces
@@ -2898,7 +2899,7 @@ fn real_device_terminal_input_read_resize_round_trip() {
             &sid,
             "stream",
         ))
-        .expect("pty_session_input");
+        .expect("terminal.input");
     assert_eq!(input["ack"], json!(true));
 
     // terminal.read — drain output up to a timeout
@@ -2914,7 +2915,7 @@ fn real_device_terminal_input_read_resize_round_trip() {
                 &sid,
                 "stream",
             ))
-            .expect("pty_session_read");
+            .expect("terminal.read");
         if let Some(b64) = resp["output"].as_str() {
             if !b64.is_empty() {
                 let raw = base64::engine::general_purpose::STANDARD
@@ -2938,7 +2939,7 @@ fn real_device_terminal_input_read_resize_round_trip() {
     ));
 }
 
-// pty_session_attach spawns three tokio tasks (reader / writer /
+// terminal.attach spawns three tokio tasks (reader / writer /
 // exit-watcher) inside the bidi handler, so the test needs a
 // live runtime.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -2946,13 +2947,13 @@ async fn real_device_terminal_attach_returns_a_bidi_source() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
     let pty = Arc::new(crate::daemon::execution::pty::PtyService::new());
     let mut reg = runtime_attached_catalog();
-    pty_lifecycle_ability::register(&mut reg, Arc::clone(&pty), None);
-    pty_attach_ability::register(&mut reg, Arc::clone(&pty));
+    terminal_lifecycle_ability::register(&mut reg, Arc::clone(&pty), None);
+    terminal_attach_ability::register(&mut reg, Arc::clone(&pty));
     let d = dispatcher_for(Arc::new(reg));
 
     let create = d
         .execute_rpc(target("terminal.create", json!({})))
-        .expect("pty_session_create");
+        .expect("terminal.create");
     let sid = create["session_id"].as_str().unwrap().to_string();
 
     let mut t = terminal_followup_target(
@@ -2962,7 +2963,7 @@ async fn real_device_terminal_attach_returns_a_bidi_source() {
         "stream",
     );
     t.call_mode = CallMode::Bidi;
-    let _bidi = d.execute_bidi(t).expect("pty_session_attach bidi");
+    let _bidi = d.execute_bidi(t).expect("terminal.attach bidi");
 
     // Cleanup.
     let _ = d.execute_rpc(terminal_followup_target(
@@ -3523,7 +3524,7 @@ fn real_device_terminal_create_close_round_trip_via_v2_alias() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
     let pty = Arc::new(crate::daemon::execution::pty::PtyService::new());
     let mut reg = runtime_attached_catalog();
-    pty_lifecycle_ability::register(&mut reg, Arc::clone(&pty), None);
+    terminal_lifecycle_ability::register(&mut reg, Arc::clone(&pty), None);
     let d = dispatcher_for(Arc::new(reg));
 
     let create = d
@@ -3553,10 +3554,10 @@ fn real_device_terminal_input_read_resize_via_v2_alias() {
     // wiring; same printf marker pattern.
     let _g = crate::cli::commands::test_support::HomeGuard::new();
     let pty = Arc::new(crate::daemon::execution::pty::PtyService::new());
-    let io = pty_io_ability::PtyIoService::new();
+    let io = terminal_io_ability::PtyIoService::new();
     let mut reg = runtime_attached_catalog();
-    pty_lifecycle_ability::register(&mut reg, Arc::clone(&pty), Some(io.clone()));
-    pty_io_ability::register(&mut reg, Arc::clone(&pty), io);
+    terminal_lifecycle_ability::register(&mut reg, Arc::clone(&pty), Some(io.clone()));
+    terminal_io_ability::register(&mut reg, Arc::clone(&pty), io);
     let d = dispatcher_for(Arc::new(reg));
 
     let create = d
@@ -3623,7 +3624,7 @@ fn real_device_terminal_attach_is_registered_as_bidi() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
     let pty = Arc::new(crate::daemon::execution::pty::PtyService::new());
     let mut reg = runtime_attached_catalog();
-    pty_attach_ability::register(&mut reg, pty);
+    terminal_attach_ability::register(&mut reg, pty);
     assert!(
         reg.resolve_bidi_with_env("terminal.attach").is_some(),
         "terminal.attach (v2 alias) must be registered as bidi"

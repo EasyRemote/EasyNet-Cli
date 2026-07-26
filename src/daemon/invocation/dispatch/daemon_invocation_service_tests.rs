@@ -1176,7 +1176,8 @@ fn make_descriptor_ref_envelope_open(descriptor_ref: &str, initial_args: Vec<u8>
 }
 
 fn make_envelope_open_with_callee(callee_ura: &str) -> EnvelopeOpen {
-    let ability = crate::daemon::ability::builtins::device_control::terminal::attach::ABILITY_PTY_SESSION_ATTACH;
+    let ability =
+        crate::daemon::ability::builtins::device_control::terminal::attach::ABILITY_TERMINAL_ATTACH;
     let signing_key = test_device_signing_key();
     let descriptor_ref = test_descriptor_ref(callee_ura, ability);
     EnvelopeOpen {

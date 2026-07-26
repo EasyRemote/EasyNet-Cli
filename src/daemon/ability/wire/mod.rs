@@ -129,7 +129,7 @@ impl Default for AbilityWireRegistry {
 }
 
 pub(crate) fn core_bidi_wire_kind_for(ability: &str) -> Option<AbilityBidiWireKind> {
-    if ability == crate::daemon::ability::builtins::device_control::terminal::attach::ABILITY_PTY_SESSION_ATTACH {
+    if ability == crate::daemon::ability::builtins::device_control::terminal::attach::ABILITY_TERMINAL_ATTACH {
         return Some(AbilityBidiWireKind::Pty);
     }
     if ability
@@ -156,7 +156,7 @@ mod tests {
         let registry = AbilityWireRegistry::core();
         assert_eq!(
             registry.bidi_wire_kind_for(
-                crate::daemon::ability::builtins::device_control::terminal::attach::ABILITY_PTY_SESSION_ATTACH
+                crate::daemon::ability::builtins::device_control::terminal::attach::ABILITY_TERMINAL_ATTACH
             ),
             Some(AbilityBidiWireKind::Pty)
         );

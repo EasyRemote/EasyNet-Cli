@@ -617,6 +617,69 @@ for required in (
 PY
 }
 
+check_terminal_canonical_vocabulary_contract() {
+  local cli_root="${1:-$ROOT}"
+
+  "$PYTHON_BIN" - "$cli_root" <<'PY'
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+source_files = [
+    "src/daemon/ability/builtins/device_control/terminal/lifecycle.rs",
+    "src/daemon/ability/builtins/device_control/terminal/io.rs",
+    "src/daemon/ability/builtins/device_control/terminal/attach.rs",
+    "src/daemon/ability/builtins/device_control/file_transfer.rs",
+    "src/daemon/ability/builtins/real_invoke_tests.rs",
+    "src/daemon/ability/catalog/build.rs",
+    "src/daemon/ability/catalog/catalog_metadata.rs",
+    "src/daemon/ability/wire/mod.rs",
+    "src/daemon/invocation/bidi/bidi_dispatcher.rs",
+    "src/daemon/invocation/dispatch/local_session_dispatcher.rs",
+    "src/daemon/invocation/dispatch/daemon_invocation_service_tests.rs",
+]
+
+combined = []
+for rel in source_files:
+    path = root / rel
+    if not path.exists():
+        raise SystemExit(f"terminal_canonical_vocabulary:source_missing:{rel}")
+    combined.append(f"// {rel}\n{path.read_text(encoding='utf-8', errors='replace')}")
+text = "\n".join(combined)
+
+for required in (
+    "ABILITY_TERMINAL_CREATE",
+    "ABILITY_TERMINAL_LIST",
+    "ABILITY_TERMINAL_CLOSE",
+    "ABILITY_TERMINAL_INPUT",
+    "ABILITY_TERMINAL_READ",
+    "ABILITY_TERMINAL_RESIZE",
+    "ABILITY_TERMINAL_ATTACH",
+    "terminal_lifecycle_ability",
+    "terminal_io_ability",
+    "terminal_attach_ability",
+):
+    if required not in text:
+        raise SystemExit(f"terminal_canonical_vocabulary:missing:{required}")
+
+for retired in (
+    "ABILITY_PTY_SESSION_",
+    "pty_session_create",
+    "pty_session_list",
+    "pty_session_close",
+    "pty_session_input",
+    "pty_session_read",
+    "pty_session_resize",
+    "pty_session_attach",
+    "pty_lifecycle_ability",
+    "pty_io_ability",
+    "pty_attach_ability",
+):
+    if retired in text:
+        raise SystemExit(f"terminal_canonical_vocabulary:retired:{retired}")
+PY
+}
+
 check_session_failure_wire_facts_contract() {
   local cli_root="${1:-$ROOT}"
   local failure="$cli_root/src/daemon/invocation/bidi/state/session_failure.rs"
@@ -24577,6 +24640,43 @@ EOF
   if ( check_terminal_lifecycle_args_contract "$tmp/terminal-lifecycle-args-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected terminal lifecycle args compatibility gate to fail"
   fi
+  mkdir -p "$tmp/terminal-canonical-vocabulary-legacy/src/daemon/ability/builtins/device_control/terminal" \
+    "$tmp/terminal-canonical-vocabulary-legacy/src/daemon/ability/builtins/device_control" \
+    "$tmp/terminal-canonical-vocabulary-legacy/src/daemon/ability/builtins" \
+    "$tmp/terminal-canonical-vocabulary-legacy/src/daemon/ability/catalog" \
+    "$tmp/terminal-canonical-vocabulary-legacy/src/daemon/ability/wire" \
+    "$tmp/terminal-canonical-vocabulary-legacy/src/daemon/invocation/bidi" \
+    "$tmp/terminal-canonical-vocabulary-legacy/src/daemon/invocation/dispatch"
+  cat >"$tmp/terminal-canonical-vocabulary-legacy/src/daemon/ability/builtins/device_control/terminal/lifecycle.rs" <<'EOF'
+pub const ABILITY_PTY_SESSION_CREATE: &str = "terminal.create";
+pub const ABILITY_TERMINAL_LIST: &str = "terminal.list";
+pub const ABILITY_TERMINAL_CLOSE: &str = "terminal.close";
+EOF
+  cat >"$tmp/terminal-canonical-vocabulary-legacy/src/daemon/ability/builtins/device_control/terminal/io.rs" <<'EOF'
+pub const ABILITY_TERMINAL_INPUT: &str = "terminal.input";
+pub const ABILITY_TERMINAL_READ: &str = "terminal.read";
+pub const ABILITY_TERMINAL_RESIZE: &str = "terminal.resize";
+fn read() { let _ = "pty_session_read"; }
+EOF
+  cat >"$tmp/terminal-canonical-vocabulary-legacy/src/daemon/ability/builtins/device_control/terminal/attach.rs" <<'EOF'
+pub const ABILITY_TERMINAL_ATTACH: &str = "terminal.attach";
+fn attach() { let _ = "pty_session_attach"; }
+EOF
+  cat >"$tmp/terminal-canonical-vocabulary-legacy/src/daemon/ability/catalog/build.rs" <<'EOF'
+use terminal::{attach as pty_attach_ability, io as terminal_io_ability, lifecycle as terminal_lifecycle_ability};
+EOF
+  cat >"$tmp/terminal-canonical-vocabulary-legacy/src/daemon/ability/catalog/catalog_metadata.rs" <<'EOF'
+use terminal::{attach as terminal_attach_ability, io as pty_io_ability, lifecycle as terminal_lifecycle_ability};
+EOF
+  touch "$tmp/terminal-canonical-vocabulary-legacy/src/daemon/ability/builtins/device_control/file_transfer.rs" \
+    "$tmp/terminal-canonical-vocabulary-legacy/src/daemon/ability/builtins/real_invoke_tests.rs" \
+    "$tmp/terminal-canonical-vocabulary-legacy/src/daemon/ability/wire/mod.rs" \
+    "$tmp/terminal-canonical-vocabulary-legacy/src/daemon/invocation/bidi/bidi_dispatcher.rs" \
+    "$tmp/terminal-canonical-vocabulary-legacy/src/daemon/invocation/dispatch/local_session_dispatcher.rs" \
+    "$tmp/terminal-canonical-vocabulary-legacy/src/daemon/invocation/dispatch/daemon_invocation_service_tests.rs"
+  if ( check_terminal_canonical_vocabulary_contract "$tmp/terminal-canonical-vocabulary-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected terminal canonical vocabulary gate to fail"
+  fi
   mkdir -p "$tmp/session-failure-wire-facts-legacy/src/daemon/invocation/bidi/state"
   cat >"$tmp/session-failure-wire-facts-legacy/src/daemon/invocation/bidi/state/session_failure.rs" <<'EOF'
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -24728,6 +24828,7 @@ EOF
   check_cabi_bidi_cancel_reason_contract
   check_ffi_unknown_invocation_resource_terminality_contract
   check_terminal_lifecycle_args_contract
+  check_terminal_canonical_vocabulary_contract
   check_session_failure_wire_facts_contract
   check_catalog_schema_projection_boundary_contract
   check_catalog_description_projection_boundary_contract
@@ -24988,6 +25089,8 @@ check_remote_failure_route_negative_classification_contract
 check_bidi_reverse_unary_terminal_state_contract
 check_cabi_bidi_cancel_reason_contract
 check_ffi_unknown_invocation_resource_terminality_contract
+check_terminal_lifecycle_args_contract
+check_terminal_canonical_vocabulary_contract
 check_session_failure_wire_facts_contract
 check_active_source_contract
 check_sdk_root_runtime_description_contract

@@ -86,7 +86,7 @@ use crate::daemon::ability::dispatch::{
 };
 use crate::daemon::execution::pty::{PtyService, PtySessionId};
 
-pub const ABILITY_PTY_SESSION_ATTACH: &str =
+pub const ABILITY_TERMINAL_ATTACH: &str =
     crate::daemon::ability::names::device_control::TERMINAL_ATTACH;
 
 /// Description published by the dispatcher's `description_for`
@@ -137,7 +137,7 @@ pub fn register(reg: &mut AxonAbilityCatalog, pty: Arc<PtyService>) {
         let session_id = args
             .get("session_id")
             .and_then(Value::as_str)
-            .ok_or_else(|| anyhow::anyhow!("pty_session_attach: `session_id` required"))?;
+            .ok_or_else(|| anyhow::anyhow!("terminal.attach: `session_id` required"))?;
         super::authority::require_session_authority(&env, session_id, "terminal.attach", "stream")?;
         attach_handler(&pty_for_attach, args)
     });
@@ -148,12 +148,12 @@ fn attach_handler(pty: &Arc<PtyService>, args: Value) -> anyhow::Result<BidiSour
     let session_id = args
         .get("session_id")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow::anyhow!("pty_session_attach: `session_id` required"))?
+        .ok_or_else(|| anyhow::anyhow!("terminal.attach: `session_id` required"))?
         .to_string();
     let id = PtySessionId::new(&session_id);
     let session = pty
         .get(&id)
-        .ok_or_else(|| anyhow::anyhow!("pty_session_attach: unknown session_id `{session_id}`"))?;
+        .ok_or_else(|| anyhow::anyhow!("terminal.attach: unknown session_id `{session_id}`"))?;
 
     // Channel halves are transport-axis per BidiSource's contract:
     //   xport_to_handler_tx  — IPC pushes here (SendBidi);
@@ -494,8 +494,7 @@ mod tests {
         let mut reg = metadata_test_catalog();
         register(&mut reg, fresh_service());
         assert!(
-            reg.resolve_bidi_with_env(ABILITY_PTY_SESSION_ATTACH)
-                .is_some(),
+            reg.resolve_bidi_with_env(ABILITY_TERMINAL_ATTACH).is_some(),
             "attach must register as a BIDI handler, not RPC/Stream"
         );
         assert!(

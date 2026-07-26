@@ -27,7 +27,8 @@ use crate::daemon::ability::builtins::{
         http as http_request_ability, process as process_exec_ability, session as session_ability,
         shell as shell_run_ability,
         terminal::{
-            attach as pty_attach_ability, io as pty_io_ability, lifecycle as pty_lifecycle_ability,
+            attach as terminal_attach_ability, io as terminal_io_ability,
+            lifecycle as terminal_lifecycle_ability,
         },
     },
     governance::{
@@ -674,9 +675,9 @@ fn build_registry_with_services_result_inner(
     // so the three abilities cohere even though they're three
     // separate handlers.
     let pty = Arc::new(PtyService::new());
-    let pty_io = pty_io_ability::PtyIoService::new();
-    pty_lifecycle_ability::register(&mut reg, Arc::clone(&pty), Some(pty_io.clone()));
-    pty_attach_ability::register(&mut reg, Arc::clone(&pty));
+    let terminal_io = terminal_io_ability::PtyIoService::new();
+    terminal_lifecycle_ability::register(&mut reg, Arc::clone(&pty), Some(terminal_io.clone()));
+    terminal_attach_ability::register(&mut reg, Arc::clone(&pty));
     // terminal.input / _read / _resize — unary-RPC data
     // plane. The backend's PTYDriver invokes these for the
     // production HTTP-session terminal flow before the WebSocket
@@ -684,7 +685,7 @@ fn build_registry_with_services_result_inner(
     // the lifecycle + attach handlers means a session created by
     // …_create is reachable through all three surfaces (unary,
     // bidi, lifecycle) — operators choose one mode per session.
-    pty_io_ability::register(&mut reg, pty, pty_io);
+    terminal_io_ability::register(&mut reg, pty, terminal_io);
     // fs.transfer — bidi chunked file upload/download.
     // Pairs with the EasyNet backend's /api/v1/files/{upload,
     // download} routes. No shared service state needed; the

@@ -991,7 +991,7 @@ impl BidiDispatcher {
                     }
                     UpPayload::Control(control)
                         if ability_owned
-                            == crate::daemon::ability::builtins::device_control::terminal::attach::ABILITY_PTY_SESSION_ATTACH =>
+                            == crate::daemon::ability::builtins::device_control::terminal::attach::ABILITY_TERMINAL_ATTACH =>
                     {
                         let Some(axon_sdk::pb::axon::v1::bidi_control::Control::PtyResize(
                             resize,
@@ -3623,7 +3623,7 @@ fn build_remote_bidi_input_frame_for_ability(
     if eof {
         return Ok(build_remote_bidi_input_dispatch_frame(call_id, &[], true));
     }
-    if ability == crate::daemon::ability::builtins::device_control::terminal::attach::ABILITY_PTY_SESSION_ATTACH {
+    if ability == crate::daemon::ability::builtins::device_control::terminal::attach::ABILITY_TERMINAL_ATTACH {
         use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
         let frame = if let Some((cols, rows)) = pty_resize {
             serde_json::json!({"type": "resize", "cols": cols, "rows": rows})

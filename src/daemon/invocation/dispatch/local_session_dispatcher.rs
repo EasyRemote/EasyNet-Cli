@@ -992,7 +992,7 @@ impl LocalAxonSessionDispatcher {
         ability: &str,
         value: &Value,
     ) -> Result<Option<BidiOutputProjection>, SessionDispatchError> {
-        if ability == crate::daemon::ability::builtins::device_control::terminal::attach::ABILITY_PTY_SESSION_ATTACH {
+        if ability == crate::daemon::ability::builtins::device_control::terminal::attach::ABILITY_TERMINAL_ATTACH {
             return Self::map_remote_pty_output(call_id, value);
         }
         if Self::is_json_frame_bidi_with(registry, ability) {
@@ -1601,7 +1601,7 @@ impl LocalAxonSessionDispatcher {
                 json!({"type": "eof"})
             }
         } else if active.ability
-            == crate::daemon::ability::builtins::device_control::terminal::attach::ABILITY_PTY_SESSION_ATTACH
+            == crate::daemon::ability::builtins::device_control::terminal::attach::ABILITY_TERMINAL_ATTACH
             || self.is_json_frame_bidi(&active.ability)
         {
             serde_json::from_slice::<Value>(&payload).map_err(|err| {

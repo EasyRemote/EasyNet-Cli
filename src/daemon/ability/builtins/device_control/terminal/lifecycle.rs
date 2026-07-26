@@ -41,11 +41,11 @@ use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 use crate::daemon::ability::dispatch::OwnerKind;
 use crate::daemon::execution::pty::{PtyCreateSpec, PtyService, PtySessionId};
 
-pub const ABILITY_PTY_SESSION_CREATE: &str =
+pub const ABILITY_TERMINAL_CREATE: &str =
     crate::daemon::ability::names::device_control::TERMINAL_CREATE;
-pub const ABILITY_PTY_SESSION_LIST: &str =
+pub const ABILITY_TERMINAL_LIST: &str =
     crate::daemon::ability::names::device_control::TERMINAL_LIST;
-pub const ABILITY_PTY_SESSION_CLOSE: &str =
+pub const ABILITY_TERMINAL_CLOSE: &str =
     crate::daemon::ability::names::device_control::TERMINAL_CLOSE;
 
 /// Description published by the dispatcher's `description_for`
@@ -121,7 +121,7 @@ const DEFAULT_ROWS: u16 = 24;
 /// service handle is shared with the future `_attach` registration
 /// so the three handlers see the same session table.
 ///
-/// `io` is the optional companion I/O service (`pty_io_ability::
+/// `io` is the optional companion I/O service (`terminal_io_ability::
 /// PtyIoService`). When `Some`, the close handler also drops the
 /// session's I/O row — releasing the cached writer fd and the
 /// reader thread. None is acceptable for tests / fixtures that
@@ -425,11 +425,9 @@ mod tests {
     fn registration_makes_both_dispatchable() {
         let mut reg = metadata_test_catalog();
         register(&mut reg, fresh_service(), None);
-        assert!(reg.get_rpc(ABILITY_PTY_SESSION_CREATE).is_some());
-        assert!(reg.get_rpc(ABILITY_PTY_SESSION_LIST).is_some());
-        assert!(reg
-            .resolve_rpc_with_env(ABILITY_PTY_SESSION_CLOSE)
-            .is_some());
+        assert!(reg.get_rpc(ABILITY_TERMINAL_CREATE).is_some());
+        assert!(reg.get_rpc(ABILITY_TERMINAL_LIST).is_some());
+        assert!(reg.resolve_rpc_with_env(ABILITY_TERMINAL_CLOSE).is_some());
     }
 
     #[test]

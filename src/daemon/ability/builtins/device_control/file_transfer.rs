@@ -96,7 +96,7 @@ pub const FILE_TRANSFER_BYTE_CAP: u64 = 1024 * 1024 * 1024;
 /// convention sets us up for it).
 const DOWNLOAD_CHUNK_BYTES: usize = 64 * 1024;
 
-/// Channel bound for the bidi pipes. Same as pty_attach_ability's
+/// Channel bound for the bidi pipes. Same as terminal.attach's
 /// BIDI_CHANNEL_BOUND so the IPC layer's sizing assumptions hold.
 const BIDI_CHANNEL_BOUND: usize = 64;
 
@@ -107,7 +107,7 @@ const BIDI_CHANNEL_BOUND: usize = 64;
 const UPLOAD_RECV_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Register the bidi handler on the dispatcher. Mirrors
-/// pty_attach_ability::register's signature so the daemon-boot
+/// terminal_attach_ability::register's signature so the daemon-boot
 /// path stays uniform.
 pub fn register(reg: &mut AxonAbilityCatalog) {
     reg.register_bidi_with_owner(
@@ -589,7 +589,7 @@ mod tests {
 
     /// Drain frames from the handler-emit channel up to `max`
     /// frames or `timeout`, whichever comes first. Mirrors the
-    /// helper in pty_attach_ability tests.
+    /// helper in terminal.attach tests.
     async fn drain_handler_emit(
         rx: &mut mpsc::Receiver<BidiOutputFrame>,
         max: usize,
