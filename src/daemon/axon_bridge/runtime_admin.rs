@@ -106,9 +106,8 @@ impl RuntimeBootstrapIdentityProvider {
                 .owner_by_node
                 .insert(args.node_id.clone(), args.owner_id.clone());
         }
-        for ura in bootstrap_aliases(&args.realm, &args.node_id, &args.owner_id) {
-            insert_unique_key(state.keys_by_ura.entry(ura).or_default(), key);
-        }
+        let identity_ura = bootstrap_identity_ura(&args.realm, &args.node_id);
+        insert_unique_key(state.keys_by_ura.entry(identity_ura).or_default(), key);
 
         Ok(BootstrapSelfIdentityReceipt {
             ack: true,
@@ -116,29 +115,32 @@ impl RuntimeBootstrapIdentityProvider {
         })
     }
 
-    pub(crate) fn keys_for(&self, agent_ura: &str) -> Result<Option<Vec<VerifyingKey>>, AxonError> {
+    pub(crate) fn keys_for(
+        &self,
+        identity_ura: &str,
+    ) -> Result<Option<Vec<VerifyingKey>>, AxonError> {
         Ok(self
             .state
             .read()
             .map_err(|_| AxonError::internal("bootstrap_identity_lock_poisoned"))?
             .keys_by_ura
-            .get(agent_ura)
+            .get(identity_ura)
             .cloned()
             .filter(|keys| !keys.is_empty()))
     }
 }
 
 impl KeyResolver for RuntimeBootstrapIdentityProvider {
-    fn resolve(&self, agent_ura: &str) -> Result<VerifyingKey, AxonError> {
-        self.resolve_all(agent_ura)?
+    fn resolve(&self, identity_ura: &str) -> Result<VerifyingKey, AxonError> {
+        self.resolve_all(identity_ura)?
             .into_iter()
             .next()
-            .ok_or_else(|| unknown_bootstrap_key(agent_ura))
+            .ok_or_else(|| unknown_bootstrap_key(identity_ura))
     }
 
-    fn resolve_all(&self, agent_ura: &str) -> Result<Vec<VerifyingKey>, AxonError> {
-        self.keys_for(agent_ura)?
-            .ok_or_else(|| unknown_bootstrap_key(agent_ura))
+    fn resolve_all(&self, identity_ura: &str) -> Result<Vec<VerifyingKey>, AxonError> {
+        self.keys_for(identity_ura)?
+            .ok_or_else(|| unknown_bootstrap_key(identity_ura))
     }
 }
 
@@ -366,11 +368,8 @@ fn decode_public_key_b64(public_key_b64: &str) -> Result<VerifyingKey, AxonError
         .map_err(|error| AxonError::invalid_argument(format!("public_key_parse_failed:{error}")))
 }
 
-fn bootstrap_aliases(realm: &str, node_id: &str, owner_id: &str) -> [String; 2] {
-    [
-        crate::core::ura::device_ura(realm, node_id),
-        crate::core::ura::agent_ura(realm, owner_id, node_id),
-    ]
+fn bootstrap_identity_ura(realm: &str, node_id: &str) -> String {
+    crate::core::ura::device_ura(realm, node_id)
 }
 
 fn insert_unique_key(keys: &mut Vec<VerifyingKey>, key: VerifyingKey) {
@@ -379,8 +378,8 @@ fn insert_unique_key(keys: &mut Vec<VerifyingKey>, key: VerifyingKey) {
     }
 }
 
-fn unknown_bootstrap_key(agent_ura: &str) -> AxonError {
-    AxonError::permission_denied(format!("bootstrap_identity_key_not_found:{agent_ura}"))
+fn unknown_bootstrap_key(identity_ura: &str) -> AxonError {
+    AxonError::permission_denied(format!("bootstrap_identity_key_not_found:{identity_ura}"))
 }
 
 #[cfg(test)]
@@ -403,7 +402,7 @@ mod tests {
     }
 
     #[test]
-    fn bootstrap_provider_is_bounded_and_partitions_aliases() {
+    fn bootstrap_provider_is_bounded_and_binds_device_identity_only() {
         let provider = RuntimeBootstrapIdentityProvider::default();
         let first = SigningKey::from_bytes(&[1; 32]);
         let second = SigningKey::from_bytes(&[2; 32]);
@@ -425,6 +424,9 @@ mod tests {
                 .unwrap(),
             vec![first.verifying_key(), second.verifying_key()]
         );
+        assert!(provider
+            .resolve(&crate::core::ura::agent_ura("realm", "owner", "node"))
+            .is_err());
         assert!(provider
             .resolve(&crate::core::ura::hub_ura("realm"))
             .is_err());

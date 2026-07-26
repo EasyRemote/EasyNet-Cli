@@ -9154,8 +9154,10 @@ for required in (
     'validate_non_empty(&args.realm, "realm")?',
     "node_id_already_bootstrapped_for_realm",
     "state.realm_by_node",
-    "bootstrap_aliases(&args.realm, &args.node_id, &args.owner_id)",
-    "fn bootstrap_aliases(realm: &str, node_id: &str, owner_id: &str)",
+    "let identity_ura = bootstrap_identity_ura(&args.realm, &args.node_id)",
+    "fn bootstrap_identity_ura(realm: &str, node_id: &str) -> String",
+    "crate::core::ura::device_ura(realm, node_id)",
+    "bootstrap_provider_is_bounded_and_binds_device_identity_only",
     "bootstrap_args_reject_retired_tenant_id_alias_and_display_name",
 ):
     if required not in runtime_admin:
@@ -9165,6 +9167,8 @@ for retired in (
     "node_id_already_bootstrapped_for_tenant",
     "hub_ura: &str",
     "Hub owner",
+    "bootstrap_aliases",
+    "crate::core::ura::agent_ura(realm, owner_id, node_id)",
 ):
     if retired in runtime_admin:
         raise SystemExit(f"runtime_bootstrap_self_identity_ingress:runtime_retired:{retired}")
