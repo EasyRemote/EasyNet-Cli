@@ -320,6 +320,38 @@ pub fn descriptor_public_ability_name(owner_ura: &str, ability_name: &str) -> St
     }
 }
 
+/// Return whether an Ability URA is canonically published under `owner_ura`.
+///
+/// For ordinary User-Agent, Device, and Authority owners, this is a direct
+/// inverse check against Axon's Ability owner token. Device-sponsored Agents
+/// are the one intentional split in the Axon URA grammar: their Agent identity
+/// is represented by `owner_ura`, while the Ability owner token is the
+/// sponsoring Device (`/ability/device.<device-id>.<agent>.<verb>`). Keeping
+/// that rule here prevents catalogue, projection, and SDK-facing validators
+/// from either rejecting valid hosted-agent rows or silently erasing the Agent
+/// owner fact.
+pub fn ability_ura_matches_owner_ura(owner_ura: &str, ability_ura: &str) -> bool {
+    let Ok(owner) = parse_ura(owner_ura) else {
+        return false;
+    };
+    let Ok(ability) = parse_ura(ability_ura) else {
+        return false;
+    };
+    if ability.kind != URAKind::Ability {
+        return false;
+    }
+
+    if ability_owner_identity_ura(ability_ura).as_deref() == Some(owner_ura) {
+        return true;
+    }
+
+    let Some((device_id, _agent_id)) = owner.device_agent_ids() else {
+        return false;
+    };
+    ability_owner_identity_ura(ability_ura).as_deref()
+        == Some(device_ura(&owner.realm, device_id).as_str())
+}
+
 /// Convert an owner-local ability name back to the daemon registry key
 /// used for local dispatch.
 ///
@@ -496,6 +528,26 @@ mod tests {
             .as_deref(),
             Some("easynet:///r/localhost/ability/device.dev-1.terminal.screenshot")
         );
+    }
+
+    #[test]
+    fn ability_ura_owner_match_accepts_device_sponsored_agent_owner() {
+        let owner = "easynet:///r/localhost/agent/device.dev-1.terminal";
+        let ability = "easynet:///r/localhost/ability/device.dev-1.terminal.screenshot";
+
+        assert!(ability_ura_matches_owner_ura(owner, ability));
+        assert!(ability_ura_matches_owner_ura(
+            "easynet:///r/localhost/device/dev-1",
+            "easynet:///r/localhost/ability/device.dev-1.fs.read"
+        ));
+        assert!(!ability_ura_matches_owner_ura(
+            "easynet:///r/localhost/agent/alice.terminal",
+            ability
+        ));
+        assert!(!ability_ura_matches_owner_ura(
+            owner,
+            "easynet:///r/localhost/ability/device.dev-2.terminal.screenshot"
+        ));
     }
 
     #[test]

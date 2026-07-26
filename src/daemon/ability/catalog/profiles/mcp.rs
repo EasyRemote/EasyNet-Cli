@@ -771,11 +771,12 @@ impl AbilityCatalogReader for DaemonAbilityCatalogReader {
     fn read(&self) -> anyhow::Result<Vec<crate::daemon::ability::descriptors::AbilityDescriptor>> {
         use anyhow::Context;
 
-        let response = crate::support::platform::local_invoke::LocalRuntimeStateReadIssuer::invoke(
-            "meta.list_abilities",
-            serde_json::json!({"scope": "local"}),
-        )
-        .context("read live daemon ability catalog for MCP")?;
+        let response =
+            crate::support::platform::local_invoke::LocalRuntimeCatalogueReadIssuer::invoke(
+                "meta.list_abilities",
+                serde_json::json!({"scope": "local"}),
+            )
+            .context("read live daemon ability catalog for MCP")?;
         let rows = response
             .get("abilities")
             .and_then(serde_json::Value::as_array)

@@ -12,7 +12,7 @@ use serde_json::Value;
 
 use crate::cli::daemon_client::remote_system_ability::invoke_remote_device_catalogue_read;
 use crate::core::ura::{parse_ura, AbilitySelector, URAKind};
-use crate::support::platform::local_invoke::LocalRuntimeStateReadIssuer;
+use crate::support::platform::local_invoke::LocalRuntimeCatalogueReadIssuer;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct AbilityCatalogueQuery {
@@ -62,7 +62,7 @@ impl AbilityCatalogueClient {
     }
 
     pub(crate) fn fetch_local_value(&self) -> anyhow::Result<Value> {
-        LocalRuntimeStateReadIssuer::invoke("meta.list_abilities", self.query.to_request())
+        LocalRuntimeCatalogueReadIssuer::invoke("meta.list_abilities", self.query.to_request())
     }
 
     pub(crate) fn fetch_local_abilities(&self) -> anyhow::Result<Vec<Value>> {
@@ -122,7 +122,7 @@ fn schema_bound_catalogue_entry(entry: &Value, index: usize) -> anyhow::Result<V
             "meta.list_abilities row #{index} owner_ura must be an Agent, Device, or Authority URA"
         );
     }
-    if owner_ura != selector.owner_ura() {
+    if !crate::core::ura::ability_ura_matches_owner_ura(owner_ura, ability_ura) {
         anyhow::bail!(
             "meta.list_abilities row #{index} owner_ura {owner_ura:?} does not match \
              ability_ura owner {:?}",
@@ -256,6 +256,32 @@ mod tests {
         assert!(
             err.contains("owner_ura") && err.contains("does not match"),
             "got {err}"
+        );
+    }
+
+    #[test]
+    fn abilities_from_value_accepts_device_sponsored_agent_owner() {
+        let descriptor_ref = "easynet:///r/acme/ability/device.dev-1.mcp-default.search@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!stream";
+        let value = serde_json::json!({
+            "abilities": [{
+                "ability_ura": "easynet:///r/acme/ability/device.dev-1.mcp-default.search",
+                "owner_ura": "easynet:///r/acme/agent/device.dev-1.mcp-default",
+                "name": "mcp-default.search",
+                "version": "1.0.0",
+                "descriptor_ref": descriptor_ref
+            }]
+        });
+
+        let abilities = AbilityCatalogueClient::abilities_from_value(&value)
+            .expect("device-sponsored Agent catalogue row must stay canonical");
+
+        assert_eq!(
+            abilities[0]["owner_ura"],
+            value["abilities"][0]["owner_ura"]
+        );
+        assert_eq!(
+            abilities[0]["ability_ura"],
+            value["abilities"][0]["ability_ura"]
         );
     }
 

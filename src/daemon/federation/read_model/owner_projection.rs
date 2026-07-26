@@ -241,7 +241,10 @@ impl OwnerProjectionPublication {
             }
             let selector = crate::core::ura::AbilitySelector::parse(&summary.ability_ura)
                 .map_err(|err| format!("invalid ability_ura `{}`: {err}", summary.ability_ura))?;
-            if selector.owner_ura() != self.owner_ura {
+            if !crate::core::ura::ability_ura_matches_owner_ura(
+                &self.owner_ura,
+                &summary.ability_ura,
+            ) {
                 return Err(format!(
                     "ability_ura `{}` belongs to `{}`, not projection owner `{}`",
                     summary.ability_ura,

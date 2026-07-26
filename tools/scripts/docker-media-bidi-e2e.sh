@@ -707,20 +707,13 @@ schema_version = "2"
 name = "media.synthetic_stream"
 descriptor_version = "1.0.0"
 description = "Emit bounded synthetic audio/video/screen BinaryChunk-shaped JSON frames for Docker media E2E."
-call_mode = "stream"
-capability_state = "provider_backed"
 admission_action = "stream"
-visibility = "SCOPED"
-scope_subjects_kind = "any"
-scope_subjects_uras = []
-scope_agents_kind = "any"
-scope_agents_uras = []
-denied_agents = []
-output_receipt_schema_json = "{}"
-hints_json = "{\"read_only\":true,\"destructive\":false,\"idempotent\":false,\"streaming_only\":true,\"bidi_only\":false}"
-receipt_semantics = "operational"
 
 [input_schema]
+type = "object"
+additionalProperties = true
+
+[output_schema]
 type = "object"
 additionalProperties = true
 EOF
@@ -729,20 +722,13 @@ schema_version = "2"
 name = "media.synthetic_bidi"
 descriptor_version = "1.0.0"
 description = "Echo synthetic audio/video/control JSON frames over InvokeBidi for Docker media E2E."
-call_mode = "bidi"
-capability_state = "provider_backed"
 admission_action = "stream"
-visibility = "SCOPED"
-scope_subjects_kind = "any"
-scope_subjects_uras = []
-scope_agents_kind = "any"
-scope_agents_uras = []
-denied_agents = []
-output_receipt_schema_json = "{}"
-hints_json = "{\"read_only\":false,\"destructive\":false,\"idempotent\":false,\"streaming_only\":false,\"bidi_only\":true}"
-receipt_semantics = "operational"
 
 [input_schema]
+type = "object"
+additionalProperties = true
+
+[output_schema]
 type = "object"
 additionalProperties = true
 EOF
@@ -798,10 +784,10 @@ for raw in sys.stdin:
         emit({"type": "stream_item", "call_id": call_id, "value": {
             "kind": "stream_opened",
             "session_id": session_id,
-            "caller": invocation.get("caller"),
-            "callee": invocation.get("callee"),
-            "subject": invocation.get("subject"),
-            "ability": invocation.get("ability"),
+            "caller_ura": invocation.get("caller_ura"),
+            "callee_ura": invocation.get("callee_ura"),
+            "subject_ura": invocation.get("subject_ura"),
+            "ability_ura": invocation.get("ability_ura"),
             "nonce_bytes": len(invocation.get("invocation_nonce") or []),
         }})
         for frame_kind, count in (("audio", 2), ("video", 2), ("screen", 1)):
@@ -815,10 +801,10 @@ for raw in sys.stdin:
         session = {
             "call_id": call_id,
             "session_id": args.get("session_id") or "bidi",
-            "caller": invocation.get("caller"),
-            "callee": invocation.get("callee"),
-            "subject": invocation.get("subject"),
-            "ability": invocation.get("ability"),
+            "caller_ura": invocation.get("caller_ura"),
+            "callee_ura": invocation.get("callee_ura"),
+            "subject_ura": invocation.get("subject_ura"),
+            "ability_ura": invocation.get("ability_ura"),
             "nonce_bytes": len(invocation.get("invocation_nonce") or []),
         }
         emit({"type": "bidi_output", "call_id": call_id, "frame": {"kind": "session_established", **session}})
@@ -1104,10 +1090,10 @@ assertions = {
     "provider_media_stream_preserved_invocation_tuple": any(
         isinstance(p, dict)
         and p.get("kind") == "stream_opened"
-        and p.get("caller")
-        and p.get("callee")
-        and p.get("subject")
-        and p.get("ability")
+        and p.get("caller_ura")
+        and p.get("callee_ura")
+        and p.get("subject_ura")
+        and p.get("ability_ura") == stream_ura
         and p.get("nonce_bytes") == 16
         for p in stream_payloads
     ),
@@ -1135,10 +1121,10 @@ assertions = {
     "caller_remote_media_stream_preserved_invocation_tuple": any(
         isinstance(p, dict)
         and p.get("kind") == "stream_opened"
-        and p.get("caller")
-        and p.get("callee")
-        and p.get("subject")
-        and p.get("ability")
+        and p.get("caller_ura")
+        and p.get("callee_ura")
+        and p.get("subject_ura")
+        and p.get("ability_ura") == stream_ura
         and p.get("nonce_bytes") == 16
         for p in caller_remote_stream_payloads
     ),

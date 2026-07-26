@@ -21,7 +21,9 @@ use crate::core::ura;
 use crate::daemon::boot::join_connection_state;
 use crate::daemon::lifecycle::{RuntimeLifecycleService, RuntimeLifecycleStatus};
 use crate::daemon::persistence::config;
-use crate::support::platform::local_invoke::LocalRuntimeStateReadIssuer;
+use crate::support::platform::local_invoke::{
+    LocalRuntimeCatalogueReadIssuer, LocalRuntimeStateReadIssuer,
+};
 use crate::support::platform::output;
 
 #[derive(Debug, Args)]
@@ -186,7 +188,7 @@ pub fn run(args: StatusArgs) -> anyhow::Result<()> {
     // returns the full local catalogue). Cheaper than the legacy
     // O(N) per-node fan-out and matches what `easynet ability list`
     // reports.
-    match LocalRuntimeStateReadIssuer::invoke("meta.list_abilities", serde_json::json!({})) {
+    match LocalRuntimeCatalogueReadIssuer::invoke("meta.list_abilities", serde_json::json!({})) {
         Ok(v) => {
             let count = v
                 .get("abilities")

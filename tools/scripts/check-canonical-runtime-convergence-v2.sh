@@ -12962,7 +12962,7 @@ for field in ("ability_ura", "owner_ura", "name", "version"):
         raise SystemExit(f"cli_ability_catalog:required_field_missing:{field}")
 for token, code in (
     ("AbilitySelector::parse(ability_ura)", "ability_selector_missing"),
-    ("owner_ura != selector.owner_ura()", "owner_binding_missing"),
+    ("ability_ura_matches_owner_ura(owner_ura, ability_ura)", "owner_binding_missing"),
     ("name != selector.public_name()", "public_name_binding_missing"),
     ("ability_ura_from_descriptor_ref(descriptor_ref)", "descriptor_ref_ability_binding_missing"),
     ('descriptor_ref.starts_with(&format!("{ability_ura}@{version}#"))', "descriptor_ref_version_binding_missing"),
@@ -13586,7 +13586,10 @@ for key in required_tuple_keys:
         raise SystemExit(f"plugin_sidecar_daemon_frame_missing:{key}")
     if f'"{key}"' not in host_api:
         raise SystemExit(f"plugin_sidecar_host_api_context_missing:{key}")
-if "ability_ura: ability_ura.to_string()" not in sidecar_projection:
+if (
+    "canonical_sidecar_ability_ura(&env, dispatch_ability)?" not in sidecar_projection
+    or "ability_ura," not in sidecar_projection
+):
     raise SystemExit("plugin_sidecar_projection_ignores_selected_ability_ura")
 for getter in ("env.caller().to_string()", "env.callee().to_string()", "env.subject().to_string()"):
     if getter not in sidecar_projection:

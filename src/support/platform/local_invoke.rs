@@ -418,15 +418,13 @@ impl LocalDaemonSystemAbilityIssuer {
     }
 }
 
-/// Named issuer for daemon-local runtime-state reads.
+/// Named issuer for user-owned daemon-local runtime-state reads.
 ///
 /// These reads are product/operator projections over the running LocalRuntime
-/// state: ability catalogue, health/status probes, and invocation ledger views.
-/// They must not enter transport through the generic daemon-self subject
-/// shortcut because that hides the semantic subject until admission fails. The
-/// issuer binds every read to a user-owned Resource URA derived from paired
-/// credentials and requires active daemon Ready discovery plus paired User
-/// signer custody before crossing the local Axon gRPC boundary.
+/// state whose subject is the paired user's runtime-state Resource URA:
+/// health/status probes and invocation ledger views. Catalogue reads are a
+/// distinct runtime-owner projection and intentionally use
+/// `LocalRuntimeCatalogueReadIssuer` instead of this user-resource issuer.
 pub struct LocalRuntimeStateReadIssuer;
 
 impl LocalRuntimeStateReadIssuer {
@@ -587,6 +585,35 @@ pub fn invoke_local_target_explicit_root_timeout(
         invocation_nonce,
         timeout,
     )
+}
+
+/// Named issuer for runtime-owner catalogue reads.
+///
+/// `meta.list_abilities` is the LocalRuntime catalogue projection, not a
+/// user-owned ledger/status observation. Its subject is the runtime owner being
+/// read so catalogue admission and descriptor proof facts are checked against
+/// the same authority that owns the registered ability table.
+pub struct LocalRuntimeCatalogueReadIssuer;
+
+impl LocalRuntimeCatalogueReadIssuer {
+    pub fn invoke(ability: &str, args: Value) -> anyhow::Result<Value> {
+        Self::invoke_timeout(ability, args, std::time::Duration::from_secs(30))
+    }
+
+    pub fn invoke_timeout(
+        ability: &str,
+        args: Value,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<Value> {
+        if !crate::daemon::ability::names::governance::is_runtime_catalogue_read(ability.trim()) {
+            anyhow::bail!(
+                "LocalRuntimeCatalogueReadIssuer only admits runtime catalogue reads, got {ability:?}"
+            );
+        }
+        LocalDaemonSystemAbilityIssuer::invoke_root_for_local_daemon_identity_timeout(
+            ability, args, timeout,
+        )
+    }
 }
 
 /// Stream a canonical local Ability URA target with public-ingress tuple facts.
