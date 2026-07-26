@@ -11,11 +11,16 @@ use crate::daemon::persistence::agent_registry::AgentRegistry;
 use std::sync::Arc;
 
 fn registry_config_for_agents(agents: &AgentRegistry) -> RegistryBuildConfig<'_> {
-    let authority_context =
-        crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root(
-            crate::core::ura::device_ura("localhost", "dev"),
-        )
-        .expect("build explicit assembly-test Device authority");
+    let hosted_agent_roots = agents.agents.keys().map(|key| {
+        let agent_id = crate::core::agent::id::AgentId::parse(key)
+            .expect("assembly-test AgentRegistry keys must be canonical AgentId values");
+        crate::core::ura::agent_ura("localhost", "dev", &agent_id.name)
+    });
+    let authority_context = crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root_with_hosted_agents(
+        crate::core::ura::device_ura("localhost", "dev"),
+        hosted_agent_roots,
+    )
+    .expect("build explicit assembly-test Device authority with hosted Agent inventory");
     registry_config_for_agents_with_authority(agents, authority_context)
 }
 
@@ -86,12 +91,27 @@ fn seed_hosted_agents_for_chat(agent_names: &[&str]) {
         let agent_ura = crate::core::ura::agent_ura("localhost", "dev", name);
         upsert_hosted_agent(&mut local, "llm", name, &agent_ura);
         durable.agents.insert(
-            (*name).to_string(),
-            agent_registry::AgentEntry::new(agent_registry::AgentType::ClaudeCode, None),
+            canonical_test_agent_registry_key(name),
+            test_agent_entry(name),
         );
     }
     save(&local).expect("seed local-agents.json for chat handlers");
     agent_registry::save_agents(&durable).expect("seed durable Agent registry");
+}
+
+fn canonical_test_agent_registry_key(name: &str) -> String {
+    crate::core::agent::id::AgentId::parse(name)
+        .expect("test agent id must be canonicalizable")
+        .to_string()
+}
+
+fn test_agent_entry(name: &str) -> crate::daemon::persistence::agent_registry::AgentEntry {
+    let mut entry = crate::daemon::persistence::agent_registry::AgentEntry::new(
+        crate::daemon::persistence::agent_registry::AgentType::ClaudeCode,
+        None,
+    );
+    entry.root_path = Some(crate::daemon::persistence::config::agents_root().join(name));
+    entry
 }
 
 #[test]
@@ -1366,11 +1386,11 @@ fn published_abilities_marks_bidi_routes_as_bidi_only() {
 fn discovery_hints_leave_agent_chat_on_unary_control_plane_path() {
     let _home = crate::cli::commands::test_support::HomeGuard::new();
     seed_hosted_agents_for_chat(&["alice"]);
-    use crate::daemon::persistence::agent_registry::{AgentEntry, AgentType};
     let mut agents = AgentRegistry::default();
-    agents
-        .agents
-        .insert("alice".into(), AgentEntry::new(AgentType::ClaudeCode, None));
+    agents.agents.insert(
+        canonical_test_agent_registry_key("alice"),
+        test_agent_entry("alice"),
+    );
     let reg = build_registry_with_services_result(registry_config_for_agents(&agents))
         .expect("assemble registry")
         .catalog;
@@ -1386,13 +1406,13 @@ fn discovery_hints_leave_agent_chat_on_unary_control_plane_path() {
 fn published_abilities_excludes_per_agent_chat_handlers() {
     // Deterministic system metadata excludes dynamic hosted-Agent rows. Live
     // daemon publication captures those rows from the committed control plane.
-    use crate::daemon::persistence::agent_registry::{AgentEntry, AgentType};
     let _home = crate::cli::commands::test_support::HomeGuard::new();
     seed_hosted_agents_for_chat(&["alice"]);
     let mut agents = AgentRegistry::default();
-    agents
-        .agents
-        .insert("alice".into(), AgentEntry::new(AgentType::ClaudeCode, None));
+    agents.agents.insert(
+        canonical_test_agent_registry_key("alice"),
+        test_agent_entry("alice"),
+    );
     let reg = build_registry_with_services_result(registry_config_for_agents(&agents))
         .expect("assemble registry")
         .catalog;
@@ -1505,12 +1525,15 @@ fn registry_includes_chat_handler_per_registered_agent() {
     let _home = crate::cli::commands::test_support::HomeGuard::new();
     seed_hosted_agents_for_chat(&["alice", "bob"]);
     let mut agents = AgentRegistry::default();
+    agents.agents.insert(
+        canonical_test_agent_registry_key("alice"),
+        test_agent_entry("alice"),
+    );
+    let mut bob = AgentEntry::new(AgentType::Codex, None);
+    bob.root_path = Some(crate::daemon::persistence::config::agents_root().join("bob"));
     agents
         .agents
-        .insert("alice".into(), AgentEntry::new(AgentType::ClaudeCode, None));
-    agents
-        .agents
-        .insert("bob".into(), AgentEntry::new(AgentType::Codex, None));
+        .insert(canonical_test_agent_registry_key("bob"), bob);
     let reg = build_registry_with_services_result(registry_config_for_agents(&agents))
         .expect("assemble registry")
         .catalog;

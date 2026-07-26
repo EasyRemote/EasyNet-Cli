@@ -1936,12 +1936,6 @@ pub struct AbilityAuthorityContext {
     declared_agent_roots: BTreeMap<String, String>,
 }
 
-impl Default for AbilityAuthorityContext {
-    fn default() -> Self {
-        Self::from_local_environment()
-    }
-}
-
 impl AbilityAuthorityContext {
     pub fn from_local_environment() -> Self {
         let device = CanonicalDeviceAuthority::parse(
@@ -2434,7 +2428,6 @@ pub(crate) enum PublicDescriptorLookupError {
 /// (`authority_root`, `ability`) and tagged with its lifecycle origin
 /// (`Static` or `Dynamic`). `RegistryRefreshSink` can mutate dynamic rows
 /// through `&self`, while boot-time rows remain immutable by origin guard.
-#[derive(Default)]
 pub struct AxonAbilityCatalog {
     /// Shared Axon runtime that owns the live invocation surface.
     ///
@@ -3597,19 +3590,7 @@ impl std::fmt::Debug for AxonAbilityCatalog {
 }
 
 impl AxonAbilityCatalog {
-    pub fn new() -> Self {
-        #[cfg(test)]
-        let authority_context = AbilityAuthorityContext::for_combined_authority_roots(
-            local_device_authority_root().expect("test Device authority must be available"),
-        )
-        .expect("test Device authority root must be canonical");
-        #[cfg(not(test))]
-        let authority_context = AbilityAuthorityContext::from_local_environment();
-
-        Self::new_metadata_only_with_authority_context(authority_context)
-    }
-
-    pub(crate) fn new_metadata_only_with_authority_context(
+    pub fn new_metadata_only_with_authority_context(
         authority_context: AbilityAuthorityContext,
     ) -> Self {
         Self {

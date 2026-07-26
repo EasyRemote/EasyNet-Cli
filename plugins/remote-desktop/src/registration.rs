@@ -305,7 +305,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn contribute_with_screen_backend
 mod tests {
     use super::*;
     use crate::daemon::ability::builtins::resources::media::screen_snapshot::SyntheticScreenBackend;
-    use crate::daemon::ability::dispatch::AxonAbilityCatalog;
+    use crate::daemon::ability::dispatch::{AbilityAuthorityContext, AxonAbilityCatalog};
     use crate::daemon::ability::CallMode as DescriptorCallMode;
     use crate::daemon::plugins::{
         DaemonPluginBinder, PluginContributionSet, PluginKind, PluginRequirementSet,
@@ -352,7 +352,12 @@ mod tests {
             .finish()
             .expect("remote desktop package contribution");
         let contributions = PluginContributionSet::new(vec![contribution]);
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = AxonAbilityCatalog::new_metadata_only_with_authority_context(
+            AbilityAuthorityContext::for_device_authority_root(
+                "easynet:///r/acme/device/test-remote-desktop",
+            )
+            .expect("test Device authority root must be canonical"),
+        );
         DaemonPluginBinder::static_catalog(&mut reg)
             .bind_set(&contributions)
             .expect("bind remote desktop contribution");

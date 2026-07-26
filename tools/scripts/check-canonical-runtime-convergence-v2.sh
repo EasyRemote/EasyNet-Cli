@@ -152,6 +152,35 @@ for retired in (
 PY
 }
 
+check_ability_authority_context_explicit_construction_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local dispatch_rs="$cli_root/src/daemon/ability/dispatch.rs"
+  [[ -f "$dispatch_rs" ]] || fail "ability dispatch source is missing: ${dispatch_rs#$cli_root/}"
+
+  "$PYTHON_BIN" - "$dispatch_rs" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+if re.search(r"impl\s+Default\s+for\s+AbilityAuthorityContext\b", text):
+    raise SystemExit("ability_authority_context_default_impl_retired")
+if "#[derive(Default)]\npub struct AxonAbilityCatalog" in text:
+    raise SystemExit("axon_ability_catalog_derive_default_retired")
+if re.search(r"pub\s+fn\s+new\s*\(\s*\)\s*->\s*Self\s*\{", text):
+    raise SystemExit("axon_ability_catalog_ambient_new_retired")
+for required in (
+    "pub fn from_local_environment() -> Self",
+    "pub fn for_device_authority_root(",
+    "pub fn for_realm_authority_root(",
+    "AbilityAuthoritySet::Device",
+    "pub fn new_metadata_only_with_authority_context(",
+):
+    if required not in text:
+        raise SystemExit(f"ability_authority_context_explicit_constructor_missing:{required}")
+PY
+}
+
 check_ffi_init_typed_connect_error_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local ffi_mod="$cli_root/src/ffi/mod.rs"
@@ -1180,7 +1209,9 @@ import re
 import sys
 
 text = pathlib.Path(sys.argv[1]).read_text()
-impl_marker = "impl AxonAbilityCatalog {\n    pub fn new() -> Self {"
+if re.search(r"pub\s+fn\s+new\s*\(\s*\)\s*->\s*Self\s*\{", text):
+    raise SystemExit("AxonAbilityCatalog ambient metadata constructor must stay retired")
+impl_marker = "impl AxonAbilityCatalog {"
 impl_start = text.find(impl_marker)
 if impl_start == -1:
     raise SystemExit("missing AxonAbilityCatalog constructor impl")
@@ -1201,14 +1232,17 @@ def body(name: str) -> str:
                 return text[match.end():index]
     raise SystemExit(f"unterminated AxonAbilityCatalog::{name}")
 
-new_body = body("new")
+metadata_body = body("new_metadata_only_with_authority_context")
 runtime_body = body("new_with_runtime")
 required = "AbilityAuthorityContext::from_local_environment()"
-if required not in new_body:
-    raise SystemExit("AxonAbilityCatalog::new must bind the non-test default Device authority context")
+if required in metadata_body:
+    raise SystemExit("AxonAbilityCatalog::new_metadata_only_with_authority_context must not consult local environment")
 if required not in runtime_body:
     raise SystemExit("AxonAbilityCatalog::new_with_runtime must bind the non-test default Device authority context")
-for constructor, source in [("new", new_body), ("new_with_runtime", runtime_body)]:
+for constructor, source in [
+    ("new_metadata_only_with_authority_context", metadata_body),
+    ("new_with_runtime", runtime_body),
+]:
     if "for_local_combined_environment" in source:
         raise SystemExit(f"AxonAbilityCatalog::{constructor} preserves implicit combined authority")
 PY
@@ -24511,6 +24545,7 @@ EOF
   check_runtime_session_projection_accessor_contract
   check_ffi_runtime_sizing_policy_contract
   check_shellguard_path_normalization_fail_closed_contract
+  check_ability_authority_context_explicit_construction_contract
   check_ffi_init_typed_connect_error_contract
   check_failure_code_default_policy_contract
   check_bidi_dispatch_default_code_policy_contract
@@ -24767,6 +24802,7 @@ check_mcp_reflection_async_bridge_contract
 check_runtime_session_projection_accessor_contract
 check_ffi_runtime_sizing_policy_contract
 check_shellguard_path_normalization_fail_closed_contract
+check_ability_authority_context_explicit_construction_contract
 check_ffi_init_typed_connect_error_contract
 check_failure_code_default_policy_contract
 check_bidi_dispatch_default_code_policy_contract

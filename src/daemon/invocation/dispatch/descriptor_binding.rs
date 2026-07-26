@@ -641,7 +641,7 @@ mod tests {
             ),
             (crate::daemon::ability::CallMode::Bidi, "test.selected_bidi"),
         ] {
-            let catalog = AxonAbilityCatalog::new();
+            let catalog = AxonAbilityCatalog::new_test_metadata_for_device_authority(&callee_ura);
             let runtime = crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
                 crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
                 None,
@@ -706,7 +706,9 @@ mod tests {
         let err = RuntimeBoundAbility::from_selected_route(
             "test selected route",
             &runtime,
-            Some(&AxonAbilityCatalog::new()),
+            Some(&AxonAbilityCatalog::new_test_metadata_for_device_authority(
+                &callee_ura,
+            )),
             &route_for(&callee_ura, ability),
             AxonCallMode::Rpc,
         )
@@ -725,7 +727,7 @@ mod tests {
     async fn selected_route_rejects_runtime_proof_that_drifted_from_catalog() {
         let callee_ura = local_callee();
         let ability = "test.drifted_runtime_proof";
-        let catalog = AxonAbilityCatalog::new();
+        let catalog = AxonAbilityCatalog::new_test_metadata_for_device_authority(&callee_ura);
         let runtime = crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
             crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
             None,

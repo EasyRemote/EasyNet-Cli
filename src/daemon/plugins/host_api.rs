@@ -532,13 +532,15 @@ mod tests {
         PluginLoadPlanner, PluginPackageIndex, PluginRuntimeManager, PluginRuntimeState,
     };
 
+    const TEST_PLUGIN_HOST_DEVICE_URA: &str = "easynet:///r/acme/device/test-plugin-host";
+
     fn executable_test_catalog() -> AxonAbilityCatalog {
         AxonAbilityCatalog::new_test_runtime_for_device_authority(
             crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
                 crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
                 None,
             ),
-            "easynet:///r/acme/device/test-plugin-host",
+            TEST_PLUGIN_HOST_DEVICE_URA,
         )
     }
 
@@ -790,7 +792,8 @@ mod tests {
         write_sidecar_package(root.path(), "device.test.hot_reload_remove");
         let package = Arc::new(PluginPackage::from_installed(root.path(), None).expect("package"));
         let index = PluginPackageIndex::from_packages(vec![package]).expect("index");
-        let mut catalog = AxonAbilityCatalog::new();
+        let mut catalog =
+            AxonAbilityCatalog::new_test_metadata_for_device_authority(TEST_PLUGIN_HOST_DEVICE_URA);
         let manager = manager_from_index(index);
 
         manager
@@ -819,7 +822,8 @@ mod tests {
         write_realtime_sidecar_package(root.path());
         let package = Arc::new(PluginPackage::from_installed(root.path(), None).expect("package"));
         let index = PluginPackageIndex::from_packages(vec![package]).expect("index");
-        let catalog = AxonAbilityCatalog::new();
+        let catalog =
+            AxonAbilityCatalog::new_test_metadata_for_device_authority(TEST_PLUGIN_HOST_DEVICE_URA);
 
         let report = PluginRuntimeManager::from_state(empty_state())
             .reload_plugins_from_state(planned_state(index), &catalog)
