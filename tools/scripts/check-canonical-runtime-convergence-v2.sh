@@ -1351,6 +1351,69 @@ check_admission_owner_authority_source_contract() {
   fi
 }
 
+check_reset_local_state_purge_boundary_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local reset="$cli_root/src/cli/commands/reset.rs"
+
+  [[ -f "$reset" ]] || fail "reset local-state purge source is missing: ${reset#$cli_root/}"
+
+  "$PYTHON_BIN" - "$reset" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+text = path.read_text()
+production = text.split("\n#[cfg(test)]", 1)[0]
+
+for required in (
+    "pub purge_local_state: bool",
+    "enum LocalResetScope",
+    "LocalStateRoot",
+    "purge_local_state_root()",
+    "validate_local_state_purge_root",
+    "std::fs::remove_dir_all(&root)",
+    'Some(".easynet")',
+    "metadata.file_type().is_symlink()",
+):
+    if required not in text:
+        raise SystemExit(f"reset_local_state_purge_missing:{required}")
+
+scope_execute = re.search(
+    r"fn execute\(self\) -> anyhow::Result<\(\)> \{(?P<body>.*?)\n\s*\}",
+    production,
+    re.S,
+)
+if scope_execute is None:
+    raise SystemExit("reset_scope_execute_missing")
+body = scope_execute.group("body")
+if "Self::CredentialsOnly => config::delete_credentials()" not in body:
+    raise SystemExit("reset_credentials_scope_no_longer_deletes_credentials")
+if "Self::LocalStateRoot => purge_local_state_root()" not in body:
+    raise SystemExit("reset_purge_scope_must_delete_state_root")
+
+purge = re.search(
+    r"fn purge_local_state_root\(\) -> anyhow::Result<\(\)> \{(?P<body>.*?)\n\}",
+    production,
+    re.S,
+)
+if purge is None:
+    raise SystemExit("purge_local_state_root_missing")
+purge_body = purge.group("body")
+if "config::delete_credentials()" in purge_body:
+    raise SystemExit("purge_must_not_be_credentials_only_cleanup")
+if "state_dir().join" in purge_body:
+    raise SystemExit("purge_must_not_enumerate_legacy_state_files")
+
+for test in (
+    "reset_purge_local_state_removes_keyring_descriptor_and_registry_root",
+    "local_state_purge_root_rejects_relative_and_non_easynet_paths",
+):
+    if test not in text:
+        raise SystemExit(f"missing_reset_purge_regression_test:{test}")
+PY
+}
+
 check_voice_realm_authority_vocabulary_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local voice="$cli_root/src/daemon/ability/builtins/resources/voice.rs"
@@ -26937,6 +27000,7 @@ check_public_descriptor_authority_vocabulary_contract
 check_runtime_authority_vocabulary_contract
 check_principal_owner_alias_retirement_contract
 check_admission_owner_authority_source_contract
+check_reset_local_state_purge_boundary_contract
 check_voice_realm_authority_vocabulary_contract
 check_route_kind_realm_authority_vocabulary_contract
 check_session_open_authority_vocabulary_contract

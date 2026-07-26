@@ -2,11 +2,16 @@
 // ===========
 //
 // File: src/cli/reset.rs
-// Description: `easynet reset` — sever the trust relationship between this device and the Hub
-//              by deleting locally stored credentials.
+// Description: `easynet reset` — sever the trust relationship between this
+//              device and the Hub by deleting local runtime state at the
+//              configured lifecycle boundary.
 //
 // Protocol Responsibility:
-// - Removes ~/.easynet/credentials.json (node_id, credential_token, deploy_signature).
+// - Default scope removes ~/.easynet/credentials.json (node_id,
+//   credential_token, deploy_signature).
+// - Explicit purge scope removes the whole ~/.easynet local state root, so
+//   stale keyring, descriptor, registry, and discovery state cannot pressure
+//   canonical invocation paths into compatibility fallback.
 // - Does NOT notify the Hub — the device will appear as "offline" until the Hub's
 //   heartbeat timeout expires, then transition to REMOVED.
 // - Removes stale runtime.json only through the lifecycle status report.
@@ -18,7 +23,8 @@
 //   are deleted.
 //
 // Usage Contract:
-// - Irreversible locally: re-pairing requires a new token from the Hub dashboard.
+// - Irreversible locally: re-pairing requires a new token from the Hub
+//   dashboard.
 // - Safe to run while disconnected. Should NOT be run while
 //   `easynet runtime start` is active.
 //   (the running heartbeat will fail on next cycle since credentials are gone).
@@ -31,6 +37,7 @@
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 use clap::Args;
+use std::path::Path;
 
 use crate::daemon::lifecycle::{RuntimeLifecycleService, RuntimeLifecycleStatus};
 use crate::daemon::persistence::config;
@@ -51,9 +58,17 @@ pub struct ResetArgs {
     /// guard.
     #[arg(long, short = 'y')]
     pub yes: bool,
+    /// Remove the entire local EasyNet state root (`~/.easynet`) instead of
+    /// only the pairing credentials. This is the clean cutover path for
+    /// incompatible local keyring, descriptor/read-model, registry, and daemon
+    /// discovery state; invocation/resolver code must remain fail-closed rather
+    /// than repairing those files through compatibility fallback.
+    #[arg(long)]
+    pub purge_local_state: bool,
 }
 
 pub fn run(args: ResetArgs) -> anyhow::Result<()> {
+    let reset_scope = LocalResetScope::from_args(&args);
     // Guard 1: refuse if runtime is active (heartbeat would break).
     // Also capture the lifecycle report for best-effort deregister before cleanup.
     let lifecycle_report = RuntimeLifecycleService::new().status()?;
@@ -77,11 +92,7 @@ pub fn run(args: ResetArgs) -> anyhow::Result<()> {
     // confirmation vs. ignore the running-runtime guard) cannot be
     // conflated by either readers or accidental invocations.
     if !args.yes {
-        let node_id = credential_state.prompt_subject_label();
-        let prompt = format!(
-            "This will delete local credentials for node '{node_id}'. \
-             Re-pairing requires a fresh token from the Hub. Continue?"
-        );
+        let prompt = reset_scope.confirmation_prompt(&credential_state);
         if !output::confirm(&prompt)? {
             output::info("Cancelled.");
             return Ok(());
@@ -126,12 +137,112 @@ pub fn run(args: ResetArgs) -> anyhow::Result<()> {
     if matches!(
         lifecycle_report.status(),
         RuntimeLifecycleStatus::ProjectionPresentProcessMissing
-    ) {
+    ) && matches!(reset_scope, LocalResetScope::CredentialsOnly)
+    {
         config::remove()?;
     }
 
-    config::delete_credentials()?;
-    output::success("Device credentials removed");
+    reset_scope.execute()?;
+    output::success(reset_scope.success_message());
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LocalResetScope {
+    CredentialsOnly,
+    LocalStateRoot,
+}
+
+impl LocalResetScope {
+    fn from_args(args: &ResetArgs) -> Self {
+        if args.purge_local_state {
+            Self::LocalStateRoot
+        } else {
+            Self::CredentialsOnly
+        }
+    }
+
+    fn confirmation_prompt(self, credential_state: &ResetCredentialState) -> String {
+        let node_id = credential_state.prompt_subject_label();
+        match self {
+            Self::CredentialsOnly => format!(
+                "This will delete local credentials for node '{node_id}'. \
+                 Re-pairing requires a fresh token from the Hub. Continue?"
+            ),
+            Self::LocalStateRoot => format!(
+                "This will permanently delete the local EasyNet state root '{}' \
+                 for node '{node_id}', including credentials, keyring, descriptors, \
+                 registry, discovery, logs, and local daemon state. Re-pairing \
+                 requires a fresh token from the Hub. Continue?",
+                config::state_dir().display()
+            ),
+        }
+    }
+
+    fn execute(self) -> anyhow::Result<()> {
+        match self {
+            Self::CredentialsOnly => config::delete_credentials(),
+            Self::LocalStateRoot => purge_local_state_root(),
+        }
+    }
+
+    fn success_message(self) -> &'static str {
+        match self {
+            Self::CredentialsOnly => "Device credentials removed",
+            Self::LocalStateRoot => "Local EasyNet state root removed",
+        }
+    }
+}
+
+fn purge_local_state_root() -> anyhow::Result<()> {
+    let root = config::state_dir();
+    validate_local_state_purge_root(&root)?;
+    let metadata = match std::fs::symlink_metadata(&root) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(anyhow::anyhow!(
+                "inspect local EasyNet state root {}: {error}",
+                root.display()
+            ));
+        }
+    };
+    if metadata.file_type().is_symlink() {
+        anyhow::bail!(
+            "refusing to purge symlinked EasyNet state root {}",
+            root.display()
+        );
+    }
+    if metadata.is_dir() {
+        std::fs::remove_dir_all(&root)
+            .map_err(|error| anyhow::anyhow!("remove {}: {error}", root.display()))?;
+    } else {
+        std::fs::remove_file(&root)
+            .map_err(|error| anyhow::anyhow!("remove {}: {error}", root.display()))?;
+    }
+    config::sync_parent_dir(&root)?;
+    Ok(())
+}
+
+fn validate_local_state_purge_root(root: &Path) -> anyhow::Result<()> {
+    if !root.is_absolute() {
+        anyhow::bail!(
+            "refusing to purge non-absolute EasyNet state root {}",
+            root.display()
+        );
+    }
+    if root.file_name().and_then(|name| name.to_str()) != Some(".easynet") {
+        anyhow::bail!(
+            "refusing to purge unexpected EasyNet state root {}",
+            root.display()
+        );
+    }
+    if root.parent().is_none() {
+        anyhow::bail!(
+            "refusing to purge parentless EasyNet state root {}",
+            root.display()
+        );
+    }
     Ok(())
 }
 
@@ -316,6 +427,7 @@ mod tests {
         let error = run(ResetArgs {
             force: true,
             yes: true,
+            purge_local_state: false,
         })
         .expect_err("malformed runtime projection must block reset");
 
@@ -345,6 +457,7 @@ mod tests {
         run(ResetArgs {
             force: false,
             yes: true,
+            purge_local_state: false,
         })
         .expect("reset should remove malformed local credentials");
 
@@ -363,6 +476,7 @@ mod tests {
         run(ResetArgs {
             force: false,
             yes: true,
+            purge_local_state: false,
         })
         .expect("stale projection reset");
 
@@ -373,6 +487,53 @@ mod tests {
         assert!(
             config::load_credentials().is_err(),
             "credentials must be removed after successful reset"
+        );
+    }
+
+    #[test]
+    fn reset_purge_local_state_removes_keyring_descriptor_and_registry_root() {
+        let _home = HomeGuard::new();
+        config::save_credentials(&paired_credentials()).expect("credentials");
+        let state_dir = config::state_dir();
+        std::fs::write(state_dir.join("keyring.enc"), "stale-keyring").expect("stale keyring");
+        std::fs::create_dir_all(state_dir.join("agents/agent-a/descriptors"))
+            .expect("descriptor dir");
+        std::fs::write(
+            state_dir.join("agents/agent-a/descriptors/meta.list_abilities.json"),
+            "{}",
+        )
+        .expect("stale descriptor");
+        std::fs::write(state_dir.join("control.json"), "{}").expect("stale discovery");
+
+        run(ResetArgs {
+            force: true,
+            yes: true,
+            purge_local_state: true,
+        })
+        .expect("purge local state reset");
+
+        assert!(
+            !state_dir.exists(),
+            "purge reset must remove the local state root instead of preserving stale subtrees"
+        );
+    }
+
+    #[test]
+    fn local_state_purge_root_rejects_relative_and_non_easynet_paths() {
+        let relative = Path::new(".easynet");
+        let error = validate_local_state_purge_root(relative)
+            .expect_err("relative purge root must fail closed");
+        assert!(
+            error.to_string().contains("non-absolute"),
+            "wrong relative-root error: {error:#}"
+        );
+
+        let unexpected = std::env::temp_dir().join("not-easynet-state");
+        let error = validate_local_state_purge_root(&unexpected)
+            .expect_err("unexpected purge root must fail closed");
+        assert!(
+            error.to_string().contains("unexpected EasyNet state root"),
+            "wrong unexpected-root error: {error:#}"
         );
     }
 }
