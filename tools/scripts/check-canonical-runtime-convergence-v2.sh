@@ -16165,11 +16165,19 @@ for fragment, label in {
         raise SystemExit(f"java_runtime_receipt_projection:{label}")
 for fragment, label in {
     'RuntimeReceiptProofFacts.immutableObject(raw, "runtime receipt")': "runtime_receipt_not_deep_immutable",
-    "RuntimeReceiptProofFacts.validate(raw)": "runtime_receipt_not_using_proof_fact_validator",
+    "RuntimeReceiptProofFacts.validate(this.raw)": "runtime_receipt_not_using_proof_fact_validator",
     "canonicalLifecycleState": "lifecycle_state_machine_missing",
 }.items():
     if fragment not in receipt:
         raise SystemExit(f"java_runtime_receipt_projection:{label}")
+proof_offset = receipt.find("RuntimeReceiptProofFacts.validate(this.raw)")
+summary_offset = receipt.find('requiredString(this.raw, "invocation_id")')
+if proof_offset < 0 or summary_offset < 0 or proof_offset > summary_offset:
+    raise SystemExit("java_runtime_receipt_projection:proof_fact_validation_after_summary_parse")
+if "SDKError.receiptProofFactsMissing(" not in proof:
+    raise SystemExit("java_runtime_receipt_projection:missing_proof_fact_error_constructor_missing")
+if "RECEIPT_PROOF_FACTS_MISSING" not in tests:
+    raise SystemExit("java_runtime_receipt_projection:missing_proof_fact_error_code_test_missing")
 
 if "terminalReceipt = validatedTerminalReceipt(terminalReceipt, terminalState, ok);" not in result:
     raise SystemExit("java_runtime_receipt_projection:invocation_result_not_using_validated_projection")
@@ -16208,7 +16216,6 @@ for required_test in (
     "canonicalRuntimeReceiptFixture",
     "missingProof.remove(\"authority_proof\")",
     "missingAuthorityProofFact",
-    "runtime receipt summary is missing authority_proof.",
     "legacyAuthorityBinding.put(\"legacy_authority\"",
     "authority_binding contains noncanonical field legacy_authority",
     "legacyAuthorityProofFact.put(\"legacy_proof_fact\"",
@@ -16217,6 +16224,9 @@ for required_test in (
     "legacyProofIssuer.put(\"issuer\", issuer)",
     "authority_proof.issuer contains noncanonical field legacy_profile",
     "missingTopLevelFact",
+    "mandatoryRuntimeReceiptProofFactFields",
+    "runtime receipt proof facts are missing runtime_receipt.",
+    "runtime receipt proof facts are missing authority_proof.",
     "payload_base64",
     "payload_content_type",
     "host_attestation_base64",

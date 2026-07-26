@@ -7765,6 +7765,43 @@ for language, marker in required_profile_markers.items():
             f"{language} receipt proof-fact validator must fail closed to axon-strict-v2 only",
         )
 
+java_receipt = cli_root / "sdk/java/src/main/java/run/runtime/sdk/RuntimeReceipt.java"
+java_proof = cli_root / "sdk/java/src/main/java/run/runtime/sdk/RuntimeReceiptProofFacts.java"
+java_tests = cli_root / "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
+if java_receipt.exists() and java_proof.exists():
+    receipt_text = source(java_receipt)
+    proof_text = source(java_proof)
+    proof_offset = receipt_text.find("RuntimeReceiptProofFacts.validate(this.raw)")
+    summary_offset = receipt_text.find('requiredString(this.raw, "invocation_id")')
+    if proof_offset < 0 or summary_offset < 0 or proof_offset > summary_offset:
+        add(
+            "R71C_JAVA_RECEIPT_PROOF_FACTS_MANDATORY",
+            java_receipt,
+            1,
+            "Java RuntimeReceipt must validate mandatory proof facts before summary projection",
+        )
+    if "SDKError.receiptProofFactsMissing(" not in proof_text:
+        add(
+            "R71C_JAVA_RECEIPT_PROOF_FACTS_MANDATORY",
+            java_proof,
+            1,
+            "Java missing receipt proof facts must use RECEIPT_PROOF_FACTS_MISSING",
+        )
+if java_tests.exists():
+    tests_text = source(java_tests)
+    for marker, detail in (
+        (
+            "mandatoryRuntimeReceiptProofFactFields",
+            "Java tests must cover the complete mandatory receipt proof-fact omission matrix",
+        ),
+        (
+            "RECEIPT_PROOF_FACTS_MISSING",
+            "Java tests must assert the canonical missing-proof-facts error code",
+        ),
+    ):
+        if marker not in tests_text:
+            add("R71C_JAVA_RECEIPT_PROOF_FACTS_MANDATORY", java_tests, 1, detail)
+
 
 # Rule 72: Sidecar stderr is plugin failure evidence. The host must preserve
 # binary stderr lossily and capture reader failures explicitly; it must not

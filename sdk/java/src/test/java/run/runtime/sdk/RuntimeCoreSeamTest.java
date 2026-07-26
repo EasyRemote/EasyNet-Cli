@@ -374,11 +374,11 @@ public final class RuntimeCoreSeamTest {
     Map<String, Object> missingProof = new LinkedHashMap<>(complete);
     missingProof.remove("authority_proof");
     expectSDKError(
-        ErrorCode.INVALID_ARGUMENT,
+        ErrorCode.RECEIPT_PROOF_FACTS_MISSING,
         "authority_proof",
         () -> RuntimeReceipt.fromMap(missingProof));
     expectSDKError(
-        ErrorCode.INVALID_ARGUMENT,
+        ErrorCode.RECEIPT_PROOF_FACTS_MISSING,
         "authority_proof",
         () -> new InvocationResult(true, InvocationTerminalState.COMPLETED, "", null, missingProof));
 
@@ -396,18 +396,17 @@ public final class RuntimeCoreSeamTest {
           mutableAuthorityProof(missingAuthorityProofFactReceipt);
       missingAuthorityProofFact.remove(missingProofFact);
       expectSDKError(
-          ErrorCode.INVALID_ARGUMENT,
-          "runtime receipt summary is missing authority_proof." + missingProofFact,
+          ErrorCode.RECEIPT_PROOF_FACTS_MISSING,
+          "runtime receipt proof facts are missing authority_proof." + missingProofFact,
           () -> RuntimeReceipt.fromMap(missingAuthorityProofFactReceipt));
     }
 
-    for (String missingField :
-        List.of("payload_base64", "payload_content_type", "host_attestation_base64", "usage")) {
+    for (String missingField : mandatoryRuntimeReceiptProofFactFields()) {
       Map<String, Object> missingTopLevelFact = new LinkedHashMap<>(complete);
       missingTopLevelFact.remove(missingField);
       expectSDKError(
-          ErrorCode.INVALID_ARGUMENT,
-          "runtime receipt summary is missing runtime_receipt." + missingField,
+          ErrorCode.RECEIPT_PROOF_FACTS_MISSING,
+          "runtime receipt proof facts are missing runtime_receipt." + missingField,
           () -> RuntimeReceipt.fromMap(missingTopLevelFact));
     }
 
@@ -450,7 +449,7 @@ public final class RuntimeCoreSeamTest {
     Map<String, Object> missingProofPayload = mutableAuthorityProof(missingProofPayloadReceipt);
     missingProofPayload.remove("proof_payload_base64");
     expectSDKError(
-        ErrorCode.INVALID_ARGUMENT,
+        ErrorCode.RECEIPT_PROOF_FACTS_MISSING,
         "proof_payload_base64",
         () -> RuntimeReceipt.fromMap(missingProofPayloadReceipt));
 
@@ -581,7 +580,7 @@ public final class RuntimeCoreSeamTest {
         () -> RuntimeReceipt.fromMap(selfSignerWithAttestation));
 
     expectSDKError(
-        ErrorCode.INVALID_ARGUMENT,
+        ErrorCode.RECEIPT_PROOF_FACTS_MISSING,
         "authority_proof",
         () ->
             InvocationResult.fromJSON(
@@ -593,6 +592,43 @@ public final class RuntimeCoreSeamTest {
                         "Completed",
                         "terminal_receipt",
                         missingProof))));
+  }
+
+  private static List<String> mandatoryRuntimeReceiptProofFactFields() {
+    return List.of(
+        "receipt_ura",
+        "invocation_id",
+        "receipt_type",
+        "state",
+        "index",
+        "timestamp_unix_ms",
+        "prev_receipt_hash_hex",
+        "self_hash_hex",
+        "payload_base64",
+        "payload_content_type",
+        "cleanup_complete",
+        "caller_binding",
+        "callee_binding",
+        "subject_binding",
+        "invocation_nonce_base64",
+        "causal_binding_kind",
+        "causal_binding",
+        "callee_signature",
+        "signer_binding",
+        "host_attestation_base64",
+        "authority_binding_kind",
+        "authority_binding",
+        "ability_binding",
+        "usage",
+        "subject_ref",
+        "descriptor_version",
+        "schema_hash_hex",
+        "impl_hash_hex",
+        "runtime_env",
+        "authority_proof",
+        "input_hash_hex",
+        "output_hash_hex",
+        "parent_receipts");
   }
 
   private static void runtimeReceiptProjectionIsDeepImmutable() {

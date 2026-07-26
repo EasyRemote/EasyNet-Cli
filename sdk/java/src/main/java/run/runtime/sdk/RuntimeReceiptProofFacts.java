@@ -537,8 +537,8 @@ final class RuntimeReceiptProofFacts {
   private static void requirePresentKeys(Map<String, Object> object, String field, String... keys) {
     for (String key : keys) {
       if (!object.containsKey(key)) {
-        throw SDKError.validation(
-            "runtime_receipt", "runtime receipt summary is missing " + field + "." + key);
+        throw SDKError.receiptProofFactsMissing(
+            "runtime receipt proof facts are missing " + field + "." + key);
       }
     }
   }

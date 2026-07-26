@@ -51,6 +51,20 @@ public final class SDKError extends RuntimeException {
         null);
   }
 
+  public static SDKError receiptProofFactsMissing(String message) {
+    return new SDKError(
+        ErrorCode.RECEIPT_PROOF_FACTS_MISSING,
+        "receipt",
+        RetryHint.NEVER,
+        false,
+        required(message, "message"),
+        "",
+        "",
+        "",
+        Map.of(),
+        null);
+  }
+
   public static SDKError closed(String stage) {
     return new SDKError(
         ErrorCode.INVALID_HANDLE,

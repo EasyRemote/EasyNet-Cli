@@ -10,6 +10,7 @@ public final class RuntimeReceipt {
 
   private RuntimeReceipt(Map<String, Object> raw) {
     this.raw = RuntimeReceiptProofFacts.immutableObject(raw, "runtime receipt");
+    RuntimeReceiptProofFacts.validate(this.raw);
     this.invocationId = requiredString(this.raw, "invocation_id");
     this.receiptType = requiredString(this.raw, "receipt_type");
     this.state = requiredString(this.raw, "state");
@@ -62,9 +63,6 @@ public final class RuntimeReceipt {
       throw SDKError.validation(
           "runtime_receipt", "runtime receipt receipt_type does not match its lifecycle state");
     }
-    RuntimeReceiptProofFacts.receiptHash(raw, "prev_receipt_hash_hex", true);
-    RuntimeReceiptProofFacts.receiptHash(raw, "self_hash_hex", false);
-    RuntimeReceiptProofFacts.validate(raw);
   }
 
   private static String canonicalLifecycleState(String value) {
