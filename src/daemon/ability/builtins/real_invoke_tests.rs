@@ -341,7 +341,7 @@ fn materialise_skill_fixture(
         None,
     );
     entry.root_path = Some(root);
-    registry.agents.insert(owner.clone(), entry);
+    registry.agents.insert(format!("default/{owner}"), entry);
     crate::daemon::persistence::agent_registry::save_agents(&registry)
         .expect("save skill fixture agent");
     (owner, skill_dir)

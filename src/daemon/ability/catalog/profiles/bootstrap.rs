@@ -36,6 +36,8 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+use crate::core::agent::id::AgentId;
+use crate::daemon::persistence::agent_registry::AgentRegistry;
 use crate::daemon::persistence::local_agents::{
     upsert_hosted_agent, HostedAgentEntry, LocalAgentsFile,
 };
@@ -85,6 +87,23 @@ pub struct LlmSubAgent {
     pub model: Option<String>,
 }
 
+pub fn llm_sub_agents_from_registry(registry: &AgentRegistry) -> anyhow::Result<Vec<LlmSubAgent>> {
+    registry
+        .agents
+        .iter()
+        .map(|(key, entry)| {
+            let agent_id = AgentId::parse(key).map_err(|error| {
+                anyhow::anyhow!("hosted-agent bootstrap registry key {key:?} is invalid: {error}")
+            })?;
+            Ok(LlmSubAgent {
+                name: agent_id.name,
+                agent_type_display: entry.agent_type.to_string(),
+                model: entry.model.clone(),
+            })
+        })
+        .collect()
+}
+
 /// Build the daemon bootstrap plan from credentials-derived identity
 /// plus the persisted hosted-agent registry.
 ///
@@ -102,15 +121,7 @@ pub fn build_plan_from_registry(
             crate::daemon::persistence::agent_aggregate::AgentRegistryProjectionLoadError::into_source_or_self,
         )
         .map_err(|err| anyhow::anyhow!("load agent registry: {err}"))?;
-    let llm_sub_agents: Vec<LlmSubAgent> = registry
-        .agents
-        .iter()
-        .map(|(name, entry)| LlmSubAgent {
-            name: name.clone(),
-            agent_type_display: entry.agent_type.to_string(),
-            model: entry.model.clone(),
-        })
-        .collect();
+    let llm_sub_agents = llm_sub_agents_from_registry(&registry)?;
 
     Ok(BootstrapPlan {
         realm: tenant_id.to_string(),
@@ -369,6 +380,25 @@ mod tests {
                 })
                 .collect(),
         }
+    }
+
+    #[test]
+    fn registry_projection_uses_canonical_key_as_storage_not_hosted_name() {
+        let mut registry = AgentRegistry::default();
+        registry.agents.insert(
+            "default/claude".to_string(),
+            crate::daemon::persistence::agent_registry::AgentEntry::new(
+                crate::daemon::persistence::agent_registry::AgentType::ClaudeCode,
+                Some("sonnet".to_string()),
+            ),
+        );
+
+        let agents =
+            llm_sub_agents_from_registry(&registry).expect("canonical registry projection");
+        assert_eq!(agents.len(), 1);
+        assert_eq!(agents[0].name, "claude");
+        assert_eq!(agents[0].agent_type_display, "claude-code");
+        assert_eq!(agents[0].model.as_deref(), Some("sonnet"));
     }
 
     #[test]

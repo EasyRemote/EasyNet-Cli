@@ -37,6 +37,7 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
+use crate::core::agent::id::AgentId;
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 use crate::daemon::persistence::agent_aggregate::AgentAggregateSnapshot;
 
@@ -70,8 +71,12 @@ fn list_agents_handler(
 fn agent_rows(snapshot: &AgentAggregateSnapshot) -> anyhow::Result<Vec<Value>> {
     let rows: Vec<Value> = snapshot
         .registered_agents()
-        .map(|(name, e)| -> anyhow::Result<Value> {
-            let root = e.required_root_path(name, "agent.list")?;
+        .map(|(registry_key, e)| -> anyhow::Result<Value> {
+            let agent_id = AgentId::parse(registry_key).map_err(|error| {
+                anyhow::anyhow!("agent.list: invalid registry key {registry_key:?}: {error}")
+            })?;
+            let name = agent_id.name.as_str();
+            let root = e.required_root_path(registry_key, "agent.list")?;
             let ura = snapshot.hosted_llm_agent_ura(name);
             Ok(json!({
                 "name": name,
@@ -160,7 +165,7 @@ mod tests {
         let mut entry =
             registered_entry(AgentType::ClaudeCode, Some("sonnet".to_string()), "claude");
         entry.with_label(Some("primary".to_string()));
-        registry.agents.insert("claude".to_string(), entry);
+        registry.agents.insert("default/claude".to_string(), entry);
 
         let mut reg = agent_list_test_catalog();
         let registry_snapshot = registry.clone();
@@ -180,7 +185,7 @@ mod tests {
     fn list_agents_projects_hosted_agent_ura_from_local_agents() {
         let mut registry = AgentRegistry::default();
         registry.agents.insert(
-            "claude".to_string(),
+            "default/claude".to_string(),
             registered_entry(AgentType::ClaudeCode, Some("sonnet".to_string()), "claude"),
         );
         let mut local_agents = crate::daemon::persistence::local_agents::LocalAgentsFile::default();
@@ -201,7 +206,7 @@ mod tests {
     fn list_agents_renders_unset_optional_fields_as_null() {
         let mut registry = AgentRegistry::default();
         registry.agents.insert(
-            "minimal".to_string(),
+            "default/minimal".to_string(),
             registered_entry(AgentType::Codex, None, "minimal"),
         );
 

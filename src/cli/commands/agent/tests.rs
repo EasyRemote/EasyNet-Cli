@@ -436,7 +436,10 @@ fn run_add_writes_v2_row_and_materializes_agent_directory() {
     run_add(add_args("alice", "claude-code", Some("claude-opus-4-7"))).unwrap();
 
     let registry = agents::load_agents().unwrap();
-    let alice = registry.agents.get("alice").expect("alice registered");
+    let alice = registry
+        .agents
+        .get("default/alice")
+        .expect("alice registered");
     assert_eq!(alice.schema_version, CURRENT_REGISTRY_SCHEMA);
     assert!(alice.root_path.is_some());
     // Fat-field cleanliness: fresh v2 row must not carry
@@ -466,7 +469,11 @@ fn run_add_update_preserves_operator_edits_to_agent_toml() {
     run_add(add_args("alice", "claude-code", Some("old-model"))).unwrap();
 
     let registry = agents::load_agents().unwrap();
-    let root = registry.agents["alice"].root_path.as_ref().unwrap().clone();
+    let root = registry.agents["default/alice"]
+        .root_path
+        .as_ref()
+        .unwrap()
+        .clone();
 
     // Hand-edit agent.toml to add a description.
     let mut spec =
@@ -495,7 +502,7 @@ fn run_remove_default_keeps_the_on_disk_root() {
     // legitimately want the old history back.
     let _g = joined_home();
     run_add(add_args("alice", "claude-code", None)).unwrap();
-    let root = agents::load_agents().unwrap().agents["alice"]
+    let root = agents::load_agents().unwrap().agents["default/alice"]
         .root_path
         .clone()
         .unwrap();
@@ -508,7 +515,10 @@ fn run_remove_default_keeps_the_on_disk_root() {
     .unwrap();
 
     // Registry row gone.
-    assert!(!agents::load_agents().unwrap().agents.contains_key("alice"));
+    assert!(!agents::load_agents()
+        .unwrap()
+        .agents
+        .contains_key("default/alice"));
     // Directory still present.
     assert!(
         root.join("agent.toml").exists(),
@@ -522,7 +532,7 @@ fn run_remove_with_purge_deletes_the_on_disk_root() {
     // This is the explicit destructive path.
     let _g = joined_home();
     run_add(add_args("alice", "claude-code", None)).unwrap();
-    let root = agents::load_agents().unwrap().agents["alice"]
+    let root = agents::load_agents().unwrap().agents["default/alice"]
         .root_path
         .clone()
         .unwrap();
@@ -649,7 +659,7 @@ fn run_set_changes_model_in_both_agent_toml_and_registry_row() {
     run_set(set_args("alice", Some("opus"))).unwrap();
 
     // Registry row updated.
-    let entry = agents::load_agents().unwrap().agents["alice"].clone();
+    let entry = agents::load_agents().unwrap().agents["default/alice"].clone();
     assert_eq!(entry.model.as_deref(), Some("opus"));
 
     // agent.toml on disk updated.
@@ -683,12 +693,12 @@ fn run_set_preserves_project_local_root_path() {
     .unwrap();
 
     let mut registry = agents::load_agents().unwrap();
-    registry.agents.get_mut("alice").unwrap().root_path = Some(custom_root.clone());
+    registry.agents.get_mut("default/alice").unwrap().root_path = Some(custom_root.clone());
     agents::save_agents(&registry).unwrap();
 
     run_set(set_args("alice", Some("opus"))).unwrap();
 
-    let entry = agents::load_agents().unwrap().agents["alice"].clone();
+    let entry = agents::load_agents().unwrap().agents["default/alice"].clone();
     let canonical_root = std::fs::canonicalize(&custom_root).unwrap();
     assert_eq!(entry.root_path.as_deref(), Some(canonical_root.as_path()));
     let spec =
@@ -709,7 +719,7 @@ fn run_set_with_empty_model_string_clears_the_field() {
 
     run_set(set_args("alice", Some(""))).unwrap();
 
-    let entry = agents::load_agents().unwrap().agents["alice"].clone();
+    let entry = agents::load_agents().unwrap().agents["default/alice"].clone();
     assert!(
         entry.model.is_none(),
         "empty-string --model must clear; got {:?}",
@@ -777,7 +787,7 @@ fn run_set_does_not_validate_model_string_against_any_allow_list() {
     let _g = joined_home();
     run_add(add_args("alice", "claude-code", None)).unwrap();
     run_set(set_args("alice", Some("definitely-not-a-real-model-xyz"))).unwrap();
-    let entry = agents::load_agents().unwrap().agents["alice"].clone();
+    let entry = agents::load_agents().unwrap().agents["default/alice"].clone();
     assert_eq!(
         entry.model.as_deref(),
         Some("definitely-not-a-real-model-xyz")
@@ -795,7 +805,7 @@ fn run_prune_removes_orphaned_rows_only() {
     run_add(add_args("bob", "codex", None)).unwrap();
 
     // Orphan bob by deleting its root.
-    let bob_root = agents::load_agents().unwrap().agents["bob"]
+    let bob_root = agents::load_agents().unwrap().agents["default/bob"]
         .root_path
         .clone()
         .unwrap();
@@ -804,8 +814,14 @@ fn run_prune_removes_orphaned_rows_only() {
     run_prune(PruneArgs { dry_run: false }).unwrap();
 
     let registry = agents::load_agents().unwrap();
-    assert!(registry.agents.contains_key("alice"), "alice must survive");
-    assert!(!registry.agents.contains_key("bob"), "bob must be pruned");
+    assert!(
+        registry.agents.contains_key("default/alice"),
+        "alice must survive"
+    );
+    assert!(
+        !registry.agents.contains_key("default/bob"),
+        "bob must be pruned"
+    );
 }
 
 #[test]
@@ -815,7 +831,7 @@ fn run_prune_dry_run_leaves_registry_unchanged() {
     // the registry after the command returns.
     let _g = joined_home();
     run_add(add_args("alice", "claude-code", None)).unwrap();
-    let root = agents::load_agents().unwrap().agents["alice"]
+    let root = agents::load_agents().unwrap().agents["default/alice"]
         .root_path
         .clone()
         .unwrap();
@@ -827,7 +843,10 @@ fn run_prune_dry_run_leaves_registry_unchanged() {
     // mutate the registry. This is the load-bearing
     // property that makes `prune --dry-run` safe to run
     // as a recon step.
-    assert!(agents::load_agents().unwrap().agents.contains_key("alice"));
+    assert!(agents::load_agents()
+        .unwrap()
+        .agents
+        .contains_key("default/alice"));
 }
 
 // ── abilities / publish dry-run ─────────────────────────────────────
@@ -875,7 +894,7 @@ fn run_abilities_reports_missing_root_as_an_error() {
     // to see the true cause.
     let _g = joined_home();
     run_add(add_args("alice", "claude-code", None)).unwrap();
-    let root = agents::load_agents().unwrap().agents["alice"]
+    let root = agents::load_agents().unwrap().agents["default/alice"]
         .root_path
         .clone()
         .unwrap();
@@ -894,7 +913,7 @@ fn run_abilities_handles_empty_abilities_directory_without_error() {
     // no panic, no error — just an empty-list signal.
     let _g = joined_home();
     run_add(add_args("alice", "claude-code", None)).unwrap();
-    let root = agents::load_agents().unwrap().agents["alice"]
+    let root = agents::load_agents().unwrap().agents["default/alice"]
         .root_path
         .clone()
         .unwrap();
@@ -914,7 +933,7 @@ fn run_abilities_surfaces_manifest_parse_errors() {
     // ability set before a publish.
     let _g = joined_home();
     run_add(add_args("alice", "claude-code", None)).unwrap();
-    let root = agents::load_agents().unwrap().agents["alice"]
+    let root = agents::load_agents().unwrap().agents["default/alice"]
         .root_path
         .clone()
         .unwrap();
@@ -975,7 +994,7 @@ fn run_publish_reports_unknown_agent_before_checking_flags() {
 fn run_publish_dry_run_reads_live_baseline_after_manifest_directory_is_empty() {
     let _g = joined_home();
     run_add(add_args("alice", "claude-code", None)).unwrap();
-    let root = agents::load_agents().unwrap().agents["alice"]
+    let root = agents::load_agents().unwrap().agents["default/alice"]
         .root_path
         .clone()
         .unwrap();
@@ -996,7 +1015,7 @@ fn run_publish_dry_run_does_not_mutate_registry_or_filesystem() {
     // abilities directory modtime before/after.
     let _g = joined_home();
     run_add(add_args("alice", "claude-code", None)).unwrap();
-    let root = agents::load_agents().unwrap().agents["alice"]
+    let root = agents::load_agents().unwrap().agents["default/alice"]
         .root_path
         .clone()
         .unwrap();

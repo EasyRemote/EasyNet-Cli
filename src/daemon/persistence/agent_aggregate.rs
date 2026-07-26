@@ -78,7 +78,10 @@ impl AgentAggregateSnapshot {
     }
 
     pub(crate) fn has_registered_agent(&self, agent: &str) -> bool {
-        self.registry.agents.contains_key(agent)
+        let Ok(registry_key) = AgentId::parse(agent).map(|agent_id| agent_id.to_string()) else {
+            return false;
+        };
+        self.registry.agents.contains_key(&registry_key)
     }
 
     pub(crate) fn registered_agents(&self) -> impl Iterator<Item = (&str, &AgentEntry)> {
@@ -853,6 +856,20 @@ mod tests {
                 hosted_agents: entries,
             },
         )
+    }
+
+    #[test]
+    fn registered_agent_lookup_canonicalizes_surface_name() {
+        let mut registry = AgentRegistry::default();
+        registry.agents.insert(
+            "default/claude".to_string(),
+            AgentEntry::new(AgentType::ClaudeCode, None),
+        );
+        let snapshot = AgentAggregateSnapshot::new(registry, LocalAgentsFile::default());
+
+        assert!(snapshot.has_registered_agent("claude"));
+        assert!(snapshot.has_registered_agent("default/claude"));
+        assert!(!snapshot.has_registered_agent("Claude"));
     }
 
     #[test]

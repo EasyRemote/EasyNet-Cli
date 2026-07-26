@@ -64,10 +64,9 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
+use crate::core::agent::id::AgentId;
 use crate::core::agent::spec::{AgentSpec, RuntimeKind};
-use crate::daemon::ability::catalog::profiles::bootstrap::{
-    self, BootstrapPlan, LlmSubAgent, UuidMinter,
-};
+use crate::daemon::ability::catalog::profiles::bootstrap::{self, BootstrapPlan, UuidMinter};
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 use crate::daemon::axon_bridge::hot_agent_registrar::{
     block_on_hot_registrar, HotAgentAdvertiseRequest, HotAgentAdvertiseState, HotAgentRegistrar,
@@ -773,12 +772,27 @@ fn start_agent_locked(
     args: Value,
     hot_registrar: &SharedHotRegistrarCell,
 ) -> anyhow::Result<Value> {
-    let name = args
+    let requested_name = args
         .get("name")
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
         .ok_or_else(|| anyhow::anyhow!("agent.start: `name` (non-empty string) required"))?
         .to_string();
+    // DEC-F048: hosted user agent ≠ device-sponsored System Agent.
+    if crate::daemon::axon_bridge::hot_agent_registrar::name_claims_reserved_device_owner(
+        &requested_name,
+    ) {
+        anyhow::bail!(
+            "agent.start: `device.` is the reserved owner token for \
+             device-sponsored System Agents (RFC-005 §3.1.2, DEC-F048); \
+             hosted user agents cannot take a device-owned identity — \
+             choose a name that is not `device` and does not begin with `device.`"
+        );
+    }
+    let agent_id = AgentId::parse(&requested_name)
+        .map_err(|error| anyhow::anyhow!("agent.start: invalid `name`: {error}"))?;
+    let name = agent_id.name.clone();
+    let registry_key = agent_id.to_string();
     if let Some(pending) = lifecycle_store::load_publication_outbox()?
         .entries
         .into_iter()
@@ -787,15 +801,6 @@ fn start_agent_locked(
         anyhow::bail!(
             "agent.start: `{name}` still has durable purge publication transaction `{}` pending; identity reuse is fenced until the tombstone/revoke outbox drains",
             pending.transaction_id
-        );
-    }
-    // DEC-F048: hosted user agent ≠ device-sponsored System Agent.
-    if crate::daemon::axon_bridge::hot_agent_registrar::name_claims_reserved_device_owner(&name) {
-        anyhow::bail!(
-            "agent.start: `device.` is the reserved owner token for \
-             device-sponsored System Agents (RFC-005 §3.1.2, DEC-F048); \
-             hosted user agents cannot take a device-owned identity — \
-             choose a name that is not `device` and does not begin with `device.`"
         );
     }
     let model = args
@@ -891,7 +896,7 @@ fn start_agent_locked(
         original_local_agents.clone(),
     );
     let mut registry = original_registry;
-    let existing_entry = registry.agents.get(&name).cloned();
+    let existing_entry = registry.agents.get(&registry_key).cloned();
     let replaced_prior = existing_entry.is_some();
     if agent_type == AgentType::External {
         let command = custom_command
@@ -1037,7 +1042,7 @@ fn start_agent_locked(
     if label.is_some() {
         entry.with_label(label.clone());
     }
-    registry.agents.insert(name.clone(), entry.clone());
+    registry.agents.insert(registry_key.clone(), entry.clone());
     let identities = match hosted_agents_for_registry(&registry, original_local_agents) {
         Ok(identities) => identities,
         Err(error) => {
@@ -1902,10 +1907,11 @@ impl PlatformTreeDeletion {
 
 fn finalize_committed_purge(journal: &AgentPurgeJournal) -> anyhow::Result<PurgeFinalizeOutcome> {
     let registry = agents::load_agents()?;
-    if registry.agents.contains_key(&journal.name) {
+    let registry_key = canonical_agent_registry_key(&journal.name, "agent.purge.finalize")?;
+    if registry.agents.contains_key(&registry_key) {
         anyhow::bail!(
             "agent.purge committed journal conflicts with agents.json row `{}`",
-            journal.name
+            registry_key
         );
     }
     let identities = local_agents::load()?;
@@ -2419,9 +2425,10 @@ fn purge_agent_locked(
     hot_registrar: &SharedHotRegistrarCell,
 ) -> anyhow::Result<CommittedPurgeResponse> {
     let name = agent_name_from_lifecycle_args(&args, "agent.purge")?;
+    let registry_key = canonical_agent_registry_key(&name, "agent.purge")?;
     let original_registry = agents::load_agents()
         .map_err(|error| anyhow::anyhow!("agent.purge: load agents.json: {error:#}"))?;
-    let Some(removed_entry) = original_registry.agents.get(&name).cloned() else {
+    let Some(removed_entry) = original_registry.agents.get(&registry_key).cloned() else {
         return Ok(CommittedPurgeResponse {
             response: json!({
                 "ack": false,
@@ -2616,7 +2623,8 @@ fn stop_agent_locked(
     let original_registry = agents::load_agents()
         .map_err(|error| anyhow::anyhow!("{operation}: load durable agent registry: {error:#}"))?;
     let name = agent_name_from_lifecycle_args(&args, operation)?;
-    let Some(removed_entry) = original_registry.agents.get(&name).cloned() else {
+    let registry_key = canonical_agent_registry_key(&name, operation)?;
+    let Some(removed_entry) = original_registry.agents.get(&registry_key).cloned() else {
         return Ok(json!({
             "ack": false,
             "runtime_removed": 0,
@@ -2666,7 +2674,7 @@ fn stop_agent_locked(
     }
 
     let mut registry = original_registry.clone();
-    registry.agents.remove(&name);
+    registry.agents.remove(&registry_key);
     let mut identities = original_local_agents.clone();
     identities
         .hosted_agents
@@ -2913,7 +2921,8 @@ fn refresh_agents_locked(
     })?;
     let rows: Vec<(String, AgentEntry)> = match requested_name.as_ref() {
         Some(name) => {
-            let entry = registry.agents.get(name).cloned().ok_or_else(|| {
+            let registry_key = canonical_agent_registry_key(name, "agent.refresh")?;
+            let entry = registry.agents.get(&registry_key).cloned().ok_or_else(|| {
                 anyhow::anyhow!("agent.refresh: agent {name:?} is not registered")
             })?;
             vec![(name.clone(), entry)]
@@ -2921,8 +2930,13 @@ fn refresh_agents_locked(
         None => registry
             .agents
             .iter()
-            .map(|(name, entry)| (name.clone(), entry.clone()))
-            .collect(),
+            .map(|(key, entry)| {
+                let agent_id = AgentId::parse(key).map_err(|error| {
+                    anyhow::anyhow!("agent.refresh: invalid registry key {key:?}: {error}")
+                })?;
+                Ok((agent_id.name, entry.clone()))
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?,
     };
 
     let registrar = require_hot_registrar(hot_registrar, "agent.refresh")?;
@@ -3041,16 +3055,14 @@ fn hosted_agent_bootstrap_plan(registry: &AgentRegistry) -> anyhow::Result<Boots
         host_device_ura,
         consent: true,
         mcp: false,
-        llm_sub_agents: registry
-            .agents
-            .iter()
-            .map(|(name, entry)| LlmSubAgent {
-                name: name.clone(),
-                agent_type_display: entry.agent_type.to_string(),
-                model: entry.model.clone(),
-            })
-            .collect(),
+        llm_sub_agents: bootstrap::llm_sub_agents_from_registry(registry)?,
     })
+}
+
+fn canonical_agent_registry_key(name: &str, operation: &'static str) -> anyhow::Result<String> {
+    AgentId::parse(name)
+        .map(|agent_id| agent_id.to_string())
+        .map_err(|error| anyhow::anyhow!("{operation}: invalid agent name {name:?}: {error}"))
 }
 
 fn agent_name_from_lifecycle_args(args: &Value, operation: &'static str) -> anyhow::Result<String> {
@@ -3253,6 +3265,7 @@ pub fn refresh_agents_description() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::daemon::ability::catalog::profiles::bootstrap::LlmSubAgent;
 
     const TEST_DEVICE_URA: &str = "easynet:///r/test/device/local";
 
@@ -3860,7 +3873,10 @@ mod tests {
             );
 
             let registry = agents::load_agents().unwrap();
-            let root = registry.agents["anthropic"].root_path.clone().unwrap();
+            let root = registry.agents["default/anthropic"]
+                .root_path
+                .clone()
+                .unwrap();
             assert!(
                 root.join("abilities").join("chat.ability.toml").exists(),
                 "agent add must seed the default chat ability manifest"
@@ -3917,7 +3933,7 @@ mod tests {
 
             let mut registry = AgentRegistry::default();
             registry.agents.insert(
-                "forged".to_string(),
+                "default/forged".to_string(),
                 AgentEntry::new(AgentType::ClaudeCode, None),
             );
             agents::save_agents(&registry).unwrap();
@@ -3954,7 +3970,7 @@ mod tests {
             assert!(!agents::load_agents()
                 .unwrap()
                 .agents
-                .contains_key("rollback-worker"));
+                .contains_key("default/rollback-worker"));
             assert_eq!(
                 local_agents::lookup_hosted_ura(
                     &local_agents::load().unwrap(),
@@ -4081,7 +4097,7 @@ mod tests {
             // is runtime-registration-only.
             let registry = agents::load_agents().unwrap();
             assert_eq!(
-                registry.agents.get("claude").unwrap().agent_type,
+                registry.agents.get("default/claude").unwrap().agent_type,
                 AgentType::ClaudeCode,
                 "second start of same name MUST NOT overwrite the stored row's agent_type"
             );
@@ -4112,7 +4128,7 @@ mod tests {
             .unwrap();
             assert_eq!(resp["agent_type"], "external");
             let registry = agents::load_agents().unwrap();
-            let stored = registry.agents.get("semop").unwrap();
+            let stored = registry.agents.get("default/semop").unwrap();
             assert_eq!(stored.agent_type, AgentType::External);
             assert_eq!(stored.command, "/bin/cat");
             assert_eq!(stored.args, vec!["--number".to_string()]);
@@ -4156,7 +4172,7 @@ mod tests {
             assert_eq!(resp["model"], "gpt-5");
 
             let registry = agents::load_agents().unwrap();
-            let stored = registry.agents.get("codex-rich").unwrap();
+            let stored = registry.agents.get("default/codex-rich").unwrap();
             assert_eq!(stored.agent_type, AgentType::Codex);
             assert_eq!(stored.model.as_deref(), Some("gpt-5"));
         });
@@ -4218,7 +4234,7 @@ mod tests {
             )
             .unwrap();
 
-            let stored_root = agents::load_agents().unwrap().agents["claude"]
+            let stored_root = agents::load_agents().unwrap().agents["default/claude"]
                 .root_path
                 .clone()
                 .unwrap();
@@ -5169,7 +5185,7 @@ mod tests {
                 hosted_agent_ura_from_file(&identities, "claude").unwrap(),
                 root.clone(),
                 quarantine.clone(),
-                registry.agents["claude"].clone(),
+                registry.agents["default/claude"].clone(),
                 registry,
                 identities,
             );
@@ -5213,7 +5229,7 @@ mod tests {
             let root = std::path::PathBuf::from(response["root_path"].as_str().unwrap());
             let parent = root.parent().unwrap().to_path_buf();
             let mut registry = agents::load_agents().unwrap();
-            let removed_entry = registry.agents["claude"].clone();
+            let removed_entry = registry.agents["default/claude"].clone();
             let mut identities = local_agents::load().unwrap();
             let quarantine = parent.join(".claude.easynet-purge-finalize-failure");
             let mut journal = AgentPurgeJournal::new(
@@ -5227,7 +5243,7 @@ mod tests {
                 identities.clone(),
             );
             quarantine_registered_root(&mut journal).unwrap();
-            registry.agents.remove("claude");
+            registry.agents.remove("default/claude");
             agents::save_agents(&registry).unwrap();
             identities
                 .hosted_agents
@@ -5272,7 +5288,7 @@ mod tests {
             let root = std::path::PathBuf::from(response["root_path"].as_str().unwrap());
             let parent = root.parent().unwrap().to_path_buf();
             let mut registry = agents::load_agents().unwrap();
-            let removed_entry = registry.agents["claude"].clone();
+            let removed_entry = registry.agents["default/claude"].clone();
             let mut identities = local_agents::load().unwrap();
             let quarantine = parent.join(".claude.easynet-purge-finalize-swap");
             let moved_claim = parent.join(".claude.easynet-purge-open-inode");
@@ -5287,7 +5303,7 @@ mod tests {
                 identities.clone(),
             );
             quarantine_registered_root(&mut journal).unwrap();
-            registry.agents.remove("claude");
+            registry.agents.remove("default/claude");
             agents::save_agents(&registry).unwrap();
             identities
                 .hosted_agents
@@ -5405,8 +5421,8 @@ mod tests {
             stop.join().unwrap().unwrap();
 
             let registry = agents::load_agents().unwrap();
-            assert!(registry.agents.contains_key("new"));
-            assert!(!registry.agents.contains_key("old"));
+            assert!(registry.agents.contains_key("default/new"));
+            assert!(!registry.agents.contains_key("default/old"));
             let identities = local_agents::load().unwrap();
             assert!(local_agents::lookup_hosted_ura(&identities, "llm", "new").is_some());
             assert!(local_agents::lookup_hosted_ura(&identities, "llm", "old").is_none());

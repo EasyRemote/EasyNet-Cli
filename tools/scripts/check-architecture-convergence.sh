@@ -4090,6 +4090,110 @@ if ability_dispatch.exists():
             if token in body:
                 add("R34_HOT_AUTHORITY_AGGREGATE_SNAPSHOT_FORK", ability_dispatch, 1, detail)
 
+# Rule 34c: lifecycle registry persistence uses canonical AgentId keys. Public
+# lifecycle selectors may remain shorthand (`alice`), but durable agents.json
+# rows must be keyed by canonical `default/alice`-style AgentIds, and hosted
+# Agent bootstrap must project those keys back to local hosted names explicitly.
+agent_lifecycle = cli_root / "src/daemon/ability/builtins/agents/lifecycle.rs"
+bootstrap_profile = cli_root / "src/daemon/ability/catalog/profiles/bootstrap.rs"
+agent_aggregate = cli_root / "src/daemon/persistence/agent_aggregate.rs"
+agent_list = cli_root / "src/daemon/ability/builtins/agents/list.rs"
+if agent_lifecycle.exists():
+    text = source(agent_lifecycle)
+    for token, detail in (
+        (
+            "let registry_key = agent_id.to_string();",
+            "agent.start must derive a canonical durable registry key from AgentId",
+        ),
+        (
+            "registry.agents.insert(registry_key.clone(), entry.clone())",
+            "agent.start must persist under the canonical registry key",
+        ),
+        (
+            "fn canonical_agent_registry_key(",
+            "agent lifecycle stop/purge/refresh must share canonical registry key derivation",
+        ),
+        (
+            "registry.agents.remove(&registry_key)",
+            "agent.stop must remove by canonical registry key",
+        ),
+    ):
+        if token not in text:
+            add("R34C_AGENT_LIFECYCLE_CANONICAL_REGISTRY_KEY", agent_lifecycle, 1, detail)
+    for token, detail in (
+        (
+            "registry.agents.insert(name.clone(), entry.clone())",
+            "agent.start must not persist the public selector as the durable registry key",
+        ),
+        (
+            "original_registry.agents.get(&name).cloned()",
+            "agent.stop/purge must not lookup durable rows by public selector",
+        ),
+        (
+            "registry.agents.remove(&name)",
+            "agent.stop must not remove durable rows by public selector",
+        ),
+    ):
+        if token in text:
+            add(
+                "R34C_AGENT_LIFECYCLE_CANONICAL_REGISTRY_KEY",
+                agent_lifecycle,
+                line_number(text, text.find(token)),
+                detail,
+            )
+if bootstrap_profile.exists():
+    text = source(bootstrap_profile)
+    for token, detail in (
+        (
+            "pub fn llm_sub_agents_from_registry(",
+            "hosted-agent bootstrap must centralize canonical registry key projection",
+        ),
+        (
+            "AgentId::parse(key)",
+            "hosted-agent bootstrap must parse registry keys as canonical AgentIds",
+        ),
+    ):
+        if token not in text:
+            add("R34C_AGENT_LIFECYCLE_CANONICAL_REGISTRY_KEY", bootstrap_profile, 1, detail)
+if agent_aggregate.exists():
+    text = source(agent_aggregate)
+    body = rust_method_body(text, "has_registered_agent")
+    if body is None:
+        add(
+            "R34C_AGENT_LIFECYCLE_CANONICAL_REGISTRY_KEY",
+            agent_aggregate,
+            1,
+            "AgentAggregateSnapshot must retain a canonicalizing registered-agent lookup",
+        )
+    else:
+        _, fn_body = body
+        for token, detail in (
+            (
+                "AgentId::parse(agent)",
+                "registered-agent lookup must parse public selectors into canonical AgentIds",
+            ),
+            (
+                "contains_key(&registry_key)",
+                "registered-agent lookup must query durable storage by canonical registry key",
+            ),
+        ):
+            if token not in fn_body:
+                add("R34C_AGENT_LIFECYCLE_CANONICAL_REGISTRY_KEY", agent_aggregate, 1, detail)
+if agent_list.exists():
+    text = source(agent_list)
+    for token, detail in (
+        (
+            "AgentId::parse(registry_key)",
+            "agent.list must parse durable registry keys before projecting display names",
+        ),
+        (
+            "let name = agent_id.name.as_str();",
+            "agent.list must expose hosted local names, not durable registry keys",
+        ),
+    ):
+        if token not in text:
+            add("R34C_AGENT_LIFECYCLE_CANONICAL_REGISTRY_KEY", agent_list, 1, detail)
+
 # Rule 34b: hot Agent runtime row materialization must consume the authority
 # root allocated by the catalogue enrollment transaction. The registrar owns
 # runtime transactions; it must not re-open local-agents.json display-name

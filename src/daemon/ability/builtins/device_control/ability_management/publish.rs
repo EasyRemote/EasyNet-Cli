@@ -551,7 +551,7 @@ mod tests {
         let mut registry = agents::load_agents().unwrap_or_else(|_| AgentRegistry::default());
         let mut entry = AgentEntry::new(AgentType::ClaudeCode, None);
         entry.root_path = Some(agent_root.clone());
-        registry.agents.insert(name.clone(), entry);
+        registry.agents.insert(format!("default/{name}"), entry);
         agents::save_agents(&registry).unwrap();
         name
     }
@@ -598,7 +598,7 @@ type = "object"
         let entry = agents::load_agents()
             .unwrap()
             .agents
-            .get(&name)
+            .get(&format!("default/{name}"))
             .cloned()
             .unwrap();
         let manifests =
