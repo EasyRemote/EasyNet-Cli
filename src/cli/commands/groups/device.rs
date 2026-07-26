@@ -42,7 +42,8 @@ use serde_json::{json, Value};
 use crate::cli::commands::ability_catalog_row::AbilityCatalogueRow;
 use crate::cli::commands::{config_cmd, devices, join, reset};
 use crate::cli::daemon_client::remote_system_ability::{
-    invoke_remote_device_system_ability, RemoteDeviceSystemAbility,
+    invoke_remote_device_system_ability, invoke_remote_device_system_ability_as_caller,
+    RemoteDeviceSystemAbility,
 };
 use crate::support::platform::output::{self, OutputFormat};
 
@@ -75,6 +76,10 @@ pub enum DeviceAction {
 pub struct ShowArgs {
     /// Target substrate node id.
     pub node_id: String,
+    /// Resolve the target through the local realm Authority instead of local
+    /// device credentials.
+    #[arg(long)]
+    pub authority: bool,
     /// Output format. 'table' emits the human-readable view; 'json'
     /// emits the raw substrate record + abilities array. Aligned with
     /// every other list/show command — see 'support::output::OutputFormat'.
@@ -86,6 +91,10 @@ pub struct ShowArgs {
 pub struct RemoveArgs {
     /// Target substrate node id.
     pub node_id: String,
+    /// Revoke the target through the local realm Authority instead of local
+    /// device credentials.
+    #[arg(long)]
+    pub authority: bool,
     /// Skip the interactive confirmation.
     #[arg(long, short = 'y')]
     pub yes: bool,
@@ -110,7 +119,7 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
     // CLI accepts two target states only: local/self, or an explicit canonical
     // Device URA. Bare remote ids are not enough material to construct a
     // descriptor-bound route.
-    let node = describe_target(&args.node_id)
+    let node = describe_target(&args.node_id, args.authority)
         .with_context(|| format!("describe node {}", args.node_id))?;
 
     let abilities = device_show_abilities(&node)?;
@@ -222,30 +231,13 @@ fn run_remove(args: RemoveArgs) -> anyhow::Result<()> {
     // advertised-agent store so downstream `device list` / `auth
     // devices` immediately stop returning the entry.
 
-    // Block self-removal — the operator should use
-    // `easynet device reset` for that (the local side of the same
-    // operation, which also clears `~/.easynet/credentials.json`).
-    let local_identity = load_local_device_identity("device remove")?;
-
     let trimmed = args.node_id.trim();
-    if trimmed == local_identity.node_id {
-        anyhow::bail!(
-            "refusing to revoke this device's own node id ({}); use \
-             `easynet device reset` to clear local credentials and \
-             deregister cleanly.",
-            local_identity.node_id
-        );
-    }
-    let target_ura = canonicalize_remove_target_ura(trimmed)?;
-
-    let local_ura = local_identity.device_ura();
-    if local_ura == target_ura {
-        anyhow::bail!(
-            "refusing to revoke this device's own URA ({local_ura}); use \
-             `easynet device reset` to clear local credentials and \
-             deregister cleanly."
-        );
-    }
+    let scope = if args.authority {
+        DeviceRemoveInvocationScope::load_local_authority("device remove")?
+    } else {
+        DeviceRemoveInvocationScope::LocalDevice(load_local_device_identity("device remove")?)
+    };
+    let (target_ura, caller_ura) = scope.target_and_caller(trimmed)?;
 
     if !args.yes {
         let prompt = format!(
@@ -258,11 +250,72 @@ fn run_remove(args: RemoveArgs) -> anyhow::Result<()> {
         }
     }
 
-    invoke_revoke(&target_ura, &args.reason, local_ura.as_str())
+    invoke_revoke(&target_ura, &args.reason, caller_ura.as_str())
         .with_context(|| format!("revoke {target_ura}"))?;
 
     output::success(&format!("removed {}", args.node_id));
     Ok(())
+}
+
+enum DeviceRemoveInvocationScope {
+    LocalDevice(DeviceLocalIdentity),
+    LocalAuthority {
+        authority_ura: String,
+        realm: String,
+    },
+}
+
+impl DeviceRemoveInvocationScope {
+    fn load_local_authority(operation: &str) -> anyhow::Result<Self> {
+        let authority_ura = crate::daemon::identity::local_invocation::local_daemon_ura()
+            .with_context(|| {
+                format!("{operation} --authority requires a local Authority daemon")
+            })?;
+        let parsed = crate::core::ura::parse_ura(&authority_ura)
+            .with_context(|| format!("{operation} --authority local daemon URA is invalid"))?;
+        if parsed.kind != crate::core::ura::URAKind::Authority {
+            bail!(
+                "{operation} --authority requires a local Authority daemon, got kind={}",
+                parsed.kind
+            );
+        }
+        Ok(Self::LocalAuthority {
+            authority_ura,
+            realm: parsed.realm,
+        })
+    }
+
+    fn target_and_caller(&self, raw_target: &str) -> anyhow::Result<(String, String)> {
+        match self {
+            Self::LocalDevice(local_identity) => {
+                if raw_target == local_identity.node_id {
+                    anyhow::bail!(
+                        "refusing to revoke this device's own node id ({}); use \
+                         `easynet device reset` to clear local credentials and \
+                         deregister cleanly.",
+                        local_identity.node_id
+                    );
+                }
+                let target_ura = canonicalize_remove_target_ura(raw_target)?;
+                let local_ura = local_identity.device_ura();
+                if local_ura == target_ura {
+                    anyhow::bail!(
+                        "refusing to revoke this device's own URA ({local_ura}); use \
+                         `easynet device reset` to clear local credentials and \
+                         deregister cleanly."
+                    );
+                }
+                Ok((target_ura, local_ura))
+            }
+            Self::LocalAuthority {
+                authority_ura,
+                realm,
+            } => Ok((
+                authority_realm_device_target_ura(raw_target, realm)?,
+                authority_ura.clone(),
+            )),
+        }
+    }
 }
 
 fn canonicalize_remove_target_ura(ura: &str) -> anyhow::Result<String> {
@@ -309,8 +362,11 @@ fn invoke_revoke(target_ura: &str, _reason: &str, _caller_ura: &str) -> anyhow::
 ///     `node.describe` locally over the control socket.
 ///   * canonical URA pointing at a remote device → canonical_invoke
 ///     `node.describe` against that URA.
-fn describe_target(node_id: &str) -> anyhow::Result<Value> {
+fn describe_target(node_id: &str, authority: bool) -> anyhow::Result<Value> {
     let trimmed = node_id.trim();
+    if authority {
+        return describe_target_from_local_authority(trimmed);
+    }
     if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("local") {
         return crate::support::platform::local_invoke::LocalRuntimeStateReadIssuer::invoke(
             "node.describe",
@@ -339,6 +395,48 @@ fn invoke_remote_describe(node: &str) -> anyhow::Result<Value> {
         serde_json::json!({"node_id": "local"}),
         &format!("describing remote device {node:?}"),
     )
+}
+
+fn invoke_remote_describe_as_caller(target_ura: &str, caller_ura: &str) -> anyhow::Result<Value> {
+    invoke_remote_device_system_ability_as_caller(
+        target_ura,
+        RemoteDeviceSystemAbility::NodeDescribe,
+        serde_json::json!({"node_id": "local"}),
+        caller_ura,
+    )
+}
+
+fn describe_target_from_local_authority(raw: &str) -> anyhow::Result<Value> {
+    let authority_ura = crate::daemon::identity::local_invocation::local_daemon_ura()
+        .context("device show --authority requires a local Authority daemon")?;
+    let authority = crate::core::ura::parse_ura(&authority_ura)
+        .context("device show --authority local daemon URA is invalid")?;
+    if authority.kind != crate::core::ura::URAKind::Authority {
+        bail!(
+            "device show --authority requires a local Authority daemon, got kind={}",
+            authority.kind
+        );
+    }
+    let target_ura = authority_realm_device_target_ura(raw, &authority.realm)?;
+    invoke_remote_describe_as_caller(&target_ura, &authority_ura)
+}
+
+fn authority_realm_device_target_ura(raw: &str, realm: &str) -> anyhow::Result<String> {
+    let target = raw.trim();
+    if target.is_empty() || target.eq_ignore_ascii_case("local") {
+        bail!("hub operator device show requires a target Device URA or node id");
+    }
+    if crate::core::ura::parse_ura(target).is_ok() {
+        let parsed = crate::core::ura::parse_ura(target)?;
+        if parsed.kind != crate::core::ura::URAKind::Device {
+            bail!(
+                "device show target {target:?} must be a canonical Device URA, got kind={}",
+                parsed.kind
+            );
+        }
+        return Ok(target.to_string());
+    }
+    Ok(crate::core::ura::device_ura(realm, target))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -496,6 +594,27 @@ mod tests {
             classify_device_show_target("easynet:///r/acme/device/dev-b", &identity)
                 .expect("remote"),
             DeviceShowTarget::RemoteDevice("easynet:///r/acme/device/dev-b".to_string())
+        );
+    }
+
+    #[test]
+    fn hub_operator_device_show_projects_bare_id_into_authority_realm_device_ura() {
+        assert_eq!(
+            authority_realm_device_target_ura("386b1258-3c89-494a-90a2-2321c29bf992", "localhost",)
+                .expect("authority-local device target"),
+            "easynet:///r/localhost/device/386b1258-3c89-494a-90a2-2321c29bf992"
+        );
+    }
+
+    #[test]
+    fn hub_operator_device_show_rejects_non_device_ura() {
+        let error =
+            authority_realm_device_target_ura("easynet:///r/localhost/authority", "localhost")
+                .expect_err("authority target is not a device");
+
+        assert!(
+            error.to_string().contains("must be a canonical Device URA"),
+            "wrong error: {error}"
         );
     }
 

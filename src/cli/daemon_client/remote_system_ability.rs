@@ -91,6 +91,19 @@ pub(crate) fn invoke_remote_device_system_ability(
 }
 
 #[cfg(feature = "axon-pb")]
+pub(crate) fn invoke_remote_device_system_ability_as_caller(
+    target_ura: &str,
+    ability: RemoteDeviceSystemAbility,
+    args: Value,
+    caller_ura: &str,
+) -> anyhow::Result<Value> {
+    let target_ura = remote_invoke::parse_node_ura(target_ura)?;
+    let selector = ability.as_str();
+    invoke_target_owned_system_ability(&target_ura, ability, args, caller_ura)
+        .with_context(|| format!("forward {selector} to remote device target={target_ura}"))
+}
+
+#[cfg(feature = "axon-pb")]
 pub(crate) fn invoke_remote_device_catalogue_read(
     node: &str,
     args: Value,
@@ -118,6 +131,20 @@ pub(crate) fn invoke_remote_device_system_ability(
         action_label.to_string()
     };
     Err(crate::support::platform::local_invoke::federation_capability_unsupported_error(&label))
+}
+
+#[cfg(not(feature = "axon-pb"))]
+pub(crate) fn invoke_remote_device_system_ability_as_caller(
+    target_ura: &str,
+    _ability: RemoteDeviceSystemAbility,
+    _args: Value,
+    _caller_ura: &str,
+) -> anyhow::Result<Value> {
+    Err(
+        crate::support::platform::local_invoke::federation_capability_unsupported_error(&format!(
+            "invoking a remote system ability on node {target_ura:?}"
+        )),
+    )
 }
 
 #[cfg(not(feature = "axon-pb"))]

@@ -237,6 +237,13 @@ else:
 PY
 }
 
+nonce_hex() {
+  python3 - "$TIMESTAMP" "$1" <<'PY'
+import hashlib, sys
+print(hashlib.sha256(f"{sys.argv[1]}:{sys.argv[2]}".encode("utf-8")).hexdigest()[:32])
+PY
+}
+
 run_load() {
   local label="$1"
   local home="$2"
@@ -421,8 +428,8 @@ wait_runtime "$DEV2_HOME" device-b
 
 echo "==> querying device online state"
 wait_hub_devices "$DEV1_NODE" "$DEV2_NODE"
-cli_home "$HUB_HOME" device show "$DEV1_NODE" --format json >"$OUT_DIR/hub-device-a-show.json" 2>"$OUT_DIR/hub-device-a-show.err"
-cli_home "$HUB_HOME" device show "$DEV2_NODE" --format json >"$OUT_DIR/hub-device-b-show.json" 2>"$OUT_DIR/hub-device-b-show.err"
+cli_home "$HUB_HOME" device show "$DEV1_NODE" --authority --format json >"$OUT_DIR/hub-device-a-show.json" 2>"$OUT_DIR/hub-device-a-show.err"
+cli_home "$HUB_HOME" device show "$DEV2_NODE" --authority --format json >"$OUT_DIR/hub-device-b-show.json" 2>"$OUT_DIR/hub-device-b-show.err"
 
 FAKE_AGENT="$WORK_ROOT/fake-agent.sh"
 cat >"$FAKE_AGENT" <<'EOF'
@@ -457,12 +464,14 @@ cli_home "$DEV1_HOME" agent remove "$TMP_AGENT" --purge >"$OUT_DIR/agent-temp-re
 
 echo "==> ability and skill publish/query/invoke/delete"
 cli_home "$DEV1_HOME" ability invoke "$DEV1_ABILITY_PUBLISH" \
+  --subject "$OWNER_A" --nonce-hex "$(nonce_hex ability-publish)" --causal-root \
   --args "$(json_arg ability-publish "$OWNER_A" "$ABILITY_A")" --raw >"$OUT_DIR/ability-publish.json" 2>"$OUT_DIR/ability-publish.err"
 cli_home "$DEV1_HOME" agent refresh --agent "$AGENT_A" >"$OUT_DIR/agent-a-refresh.txt" 2>&1 || true
 cli_home "$DEV1_HOME" agent abilities "$AGENT_A" >"$OUT_DIR/agent-a-abilities.after-publish.txt" 2>&1
 cli_home "$DEV1_HOME" ability list --agent "$AGENT_A" --format json >"$OUT_DIR/ability-list-agent-a.json" 2>"$OUT_DIR/ability-list-agent-a.err"
 
 cli_home "$DEV1_HOME" ability invoke "$DEV1_SKILL_PUBLISH" \
+  --subject "$OWNER_A" --nonce-hex "$(nonce_hex skill-publish)" --causal-root \
   --args "$(json_arg skill-publish "$AGENT_A" "$SKILL_A")" --raw >"$OUT_DIR/skill-publish.json" 2>"$OUT_DIR/skill-publish.err"
 cli_home "$DEV1_HOME" skill list --agent "$AGENT_A" --json >"$OUT_DIR/skill-list-agent-a.json" 2>"$OUT_DIR/skill-list-agent-a.err"
 
@@ -490,11 +499,14 @@ print(walk(payload) or f"easynet:///r/localhost/ability/{sys.argv[2]}.{sys.argv[
 PY
 )"
 cli_home "$DEV1_HOME" ability invoke "$CHAT_URA" \
+  --subject "$OWNER_A" --nonce-hex "$(nonce_hex chat-ability-invoke)" --causal-root \
   --args "$(json_arg chat "hello through ability invoke")" --raw >"$OUT_DIR/chat-ability-invoke.json" 2>"$OUT_DIR/chat-ability-invoke.err"
 
 cli_home "$DEV1_HOME" ability invoke "$DEV1_ABILITY_UNPUBLISH" \
+  --subject "$CUSTOM_ABILITY_URA" --nonce-hex "$(nonce_hex ability-unpublish)" --causal-root \
   --args "$(json_arg ability-unpublish "$CUSTOM_ABILITY_URA")" --raw >"$OUT_DIR/ability-unpublish.json" 2>"$OUT_DIR/ability-unpublish.err"
 cli_home "$DEV1_HOME" ability invoke "$DEV1_SKILL_UNPUBLISH" \
+  --subject "$OWNER_A" --nonce-hex "$(nonce_hex skill-unpublish)" --causal-root \
   --args "$(json_arg skill-unpublish "$AGENT_A" "$SKILL_A")" --raw >"$OUT_DIR/skill-unpublish.json" 2>"$OUT_DIR/skill-unpublish.err"
 cli_home "$DEV1_HOME" agent abilities "$AGENT_A" >"$OUT_DIR/agent-a-abilities.after-delete.txt" 2>&1
 cli_home "$DEV1_HOME" skill list --agent "$AGENT_A" --json >"$OUT_DIR/skill-list-agent-a.after-delete.json" 2>"$OUT_DIR/skill-list-agent-a.after-delete.err"
@@ -508,7 +520,7 @@ run_load "device-a-skill-list" "$DEV1_HOME" skill list --agent "$AGENT_A" --json
 
 echo "==> removing second device through CLI hub"
 DEVICE_B_URA="easynet:///r/${REALM}/device/${DEV2_NODE}"
-cli_home "$HUB_HOME" device remove "$DEVICE_B_URA" --yes --reason "cli daemon e2e cleanup" >"$OUT_DIR/device-b-remove.txt" 2>"$OUT_DIR/device-b-remove.err"
+cli_home "$HUB_HOME" device remove "$DEVICE_B_URA" --authority --yes --reason "cli daemon e2e cleanup" >"$OUT_DIR/device-b-remove.txt" 2>"$OUT_DIR/device-b-remove.err"
 cli_home "$HUB_HOME" device list --state all --format json >"$OUT_DIR/hub-device-list.after-remove.json" 2>"$OUT_DIR/hub-device-list.after-remove.err"
 
 python3 - "$OUT_DIR" "$DEV1_NODE" "$DEV2_NODE" "$USERNAME" "$AGENT_A" "$AGENT_B" "$CHAT_URA" <<'PY' >"$OUT_DIR/report.json"

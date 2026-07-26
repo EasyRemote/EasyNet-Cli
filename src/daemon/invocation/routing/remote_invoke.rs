@@ -1450,7 +1450,7 @@ fn invoke_federation_discover_with_scope(
         runtime.block_on(async move {
             let request = request_envelope
                 .signed_descriptor_ref_invoke_request_with_signer(
-                    target.as_str(),
+                    target.route_function_name(),
                     target.descriptor_ref(),
                     arg_bytes,
                     &signer,
@@ -1565,7 +1565,7 @@ pub fn invoke_federation_revoke(
     runtime.block_on(async move {
         let request = request_envelope
             .signed_descriptor_ref_invoke_request_with_signer(
-                target.as_str(),
+                target.route_function_name(),
                 target.descriptor_ref(),
                 arg_bytes,
                 &signer,
@@ -1668,6 +1668,16 @@ mod tests {
 
             assert_eq!(target.callee_ura(), hub);
             assert_eq!(target.descriptor_ref(), expected);
+            assert_eq!(
+                target.route_function_name(),
+                ability,
+                "federation system ability dispatch must carry the public route function, not the Ability URA"
+            );
+            assert_ne!(
+                target.route_function_name(),
+                target.as_str(),
+                "route table function_name must not be the canonical Ability URA"
+            );
             assert_ne!(target.descriptor_ref(), ability);
             assert!(
                 target.descriptor_ref().contains('@'),

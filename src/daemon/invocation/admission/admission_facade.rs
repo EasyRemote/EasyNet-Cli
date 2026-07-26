@@ -783,7 +783,6 @@ impl AdmissionFacade {
                 "ADMISSION_DESCRIPTOR_CATALOG_UNAVAILABLE: admission has no live ability catalog",
             )
         })?;
-        let public_ability = public_ability_name_from_route(ability);
         let signed_ability_ura =
             crate::daemon::axon_bridge::descriptor_ref::ability_ura_from_descriptor_ref(
                 descriptor_ref,
@@ -794,6 +793,8 @@ impl AdmissionFacade {
                 "ADMISSION_DESCRIPTOR_ROUTE_MISMATCH: signed descriptor ability `{signed_ability_ura}` is not canonical: {error}"
             ))
         })?;
+        let public_ability =
+            public_ability_name_from_route_for_owner(selector.owner_ura(), ability);
         if selector.public_name() != public_ability {
             return Err(Status::invalid_argument(format!(
                 "ADMISSION_DESCRIPTOR_ROUTE_MISMATCH: signed descriptor public ability `{}` does not match bound public route `{public_ability}`",
@@ -2101,7 +2102,7 @@ fn bootstrap_authority_ability(ability: &str) -> bool {
     )
 }
 
-fn public_ability_name_from_route(ability: &str) -> String {
+fn public_ability_name_from_route_for_owner(owner_ura: &str, ability: &str) -> String {
     let trimmed = ability.trim();
     let ability_ura = trimmed
         .split_once('@')
@@ -2109,7 +2110,7 @@ fn public_ability_name_from_route(ability: &str) -> String {
         .unwrap_or(trimmed);
     AbilitySelector::parse(ability_ura)
         .map(|selector| selector.public_name().to_string())
-        .unwrap_or_else(|_| trimmed.to_string())
+        .unwrap_or_else(|_| crate::core::ura::owner_local_ability_name(owner_ura, trimmed))
 }
 
 #[derive(Debug, Deserialize)]
@@ -3306,5 +3307,13 @@ mod tests {
                 &descriptor_ref,
             )
             .expect("public discover route must bind the qualified execution descriptor");
+
+        facade
+            .bound_admission_descriptor(
+                "testbot.discover",
+                crate::daemon::ability::CallMode::Rpc,
+                &descriptor_ref,
+            )
+            .expect("hosted Agent dispatch key must normalize to owner-local public descriptor");
     }
 }

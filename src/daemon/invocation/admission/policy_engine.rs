@@ -26,6 +26,7 @@ pub struct PolicyInput {
     pub action: AccessAction,
     pub safe_read: bool,
     pub authority_self_read: bool,
+    pub authority_self_manage: bool,
     pub interactive_context_available: bool,
     pub canonical_hash: Option<String>,
     pub signature_key_id: Option<String>,
@@ -46,6 +47,15 @@ impl PolicyEngine {
             .clone()
             .filter(|owner| !owner.trim().is_empty());
         let matcher = PermissionGrantMatcher::new(&input.grants);
+
+        if input.authority_self_manage && input.action == AccessAction::Manage {
+            return decision(
+                &input,
+                PolicyDecisionOutcome::Allow,
+                PolicyDecisionReason::ExplicitGrantAllow,
+                None,
+            );
+        }
 
         if let Some(owner_user_id) = owner_user_id.as_deref() {
             let grant_input = GrantMatchInput {
@@ -235,6 +245,7 @@ mod tests {
             action: AccessAction::Read,
             safe_read: true,
             authority_self_read: false,
+            authority_self_manage: false,
             interactive_context_available: false,
             canonical_hash: Some("sha256:test".to_string()),
             signature_key_id: Some("ed25519:key".to_string()),
@@ -295,6 +306,7 @@ mod tests {
         input.subject_ura = "easynet:///r/test/ability/authority.federation.discover".to_string();
         input.ability_ura = "easynet:///r/test/ability/authority.federation.discover".to_string();
         input.authority_self_read = true;
+        input.authority_self_manage = false;
 
         let got = PolicyEngine::check(input);
         assert_eq!(got.decision, PolicyDecisionOutcome::Allow);
@@ -314,6 +326,7 @@ mod tests {
         input.subject_ura = "easynet:///r/test/ability/authority.federation.discover".to_string();
         input.ability_ura = "easynet:///r/test/ability/authority.federation.discover".to_string();
         input.authority_self_read = true;
+        input.authority_self_manage = false;
 
         let got = PolicyEngine::check(input);
         assert_eq!(got.decision, PolicyDecisionOutcome::Allow);
@@ -333,10 +346,32 @@ mod tests {
         input.action = AccessAction::Invoke;
         input.safe_read = false;
         input.authority_self_read = true;
+        input.authority_self_manage = false;
 
         let got = PolicyEngine::check(input);
         assert_eq!(got.decision, PolicyDecisionOutcome::Deny);
         assert_eq!(got.reason, PolicyDecisionReason::OwnerUnresolved);
+    }
+
+    #[test]
+    fn authority_self_manage_allows_realm_authority_before_user_token_scope_rules() {
+        let mut input = base_input();
+        input.caller_ura = "easynet:///r/test/authority".to_string();
+        input.principal_kind = PrincipalKind::Token;
+        input.principal_id = "easynet:///r/test/authority".to_string();
+        input.token_id = Some("easynet:///r/test/authority".to_string());
+        input.token_class = Some(TokenClass::HubLink);
+        input.callee_ura = "easynet:///r/test/authority".to_string();
+        input.subject_ura = "easynet:///r/test/device/dev".to_string();
+        input.ability_ura = "easynet:///r/test/ability/authority.federation.revoke".to_string();
+        input.action = AccessAction::Manage;
+        input.safe_read = false;
+        input.authority_self_manage = true;
+
+        let got = PolicyEngine::check(input);
+        assert_eq!(got.decision, PolicyDecisionOutcome::Allow);
+        assert_eq!(got.reason, PolicyDecisionReason::ExplicitGrantAllow);
+        assert_eq!(got.owner_user_id.as_deref(), Some("alice"));
     }
 
     #[test]

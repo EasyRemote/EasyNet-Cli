@@ -56,6 +56,15 @@ impl AdmissionPolicyGate {
             context.daemon_ura,
             context.trusted_role,
         );
+        let authority_self_manage = authority_self_manage_scope(
+            &caller_ura,
+            &callee_ura,
+            &subject_ura,
+            &ability_ura,
+            context.daemon_ura,
+            context.trusted_role,
+            context.action,
+        );
         if remote_owner_forward_allowed(
             &caller_ura,
             &callee_ura,
@@ -110,6 +119,7 @@ impl AdmissionPolicyGate {
             action: context.action,
             safe_read: context.safe_read,
             authority_self_read,
+            authority_self_manage,
             interactive_context_available: false,
             canonical_hash: context.canonical_hash,
             signature_key_id: context.signature_key_id,
@@ -338,6 +348,33 @@ fn authority_self_read_scope(
     subject_ura == callee_ura || is_authority_owned_ura_in_realm(subject_ura, &callee.realm)
 }
 
+fn authority_self_manage_scope(
+    caller_ura: &str,
+    callee_ura: &str,
+    subject_ura: &str,
+    ability_ura: &str,
+    daemon_ura: Option<&str>,
+    trusted_role: TrustedAgentRole,
+    action: AccessAction,
+) -> bool {
+    if action != AccessAction::Manage || trusted_role != TrustedAgentRole::Hub {
+        return false;
+    }
+    if Some(callee_ura) != daemon_ura || caller_ura != callee_ura {
+        return false;
+    }
+    let Ok(callee) = parse_ura(callee_ura) else {
+        return false;
+    };
+    if callee.kind != URAKind::Authority {
+        return false;
+    }
+    if !is_authority_owned_ura_in_realm(ability_ura, &callee.realm) {
+        return false;
+    }
+    ura_is_in_realm(subject_ura, &callee.realm)
+}
+
 fn is_authority_owned_ura_in_realm(ura: &str, realm: &str) -> bool {
     let Ok(parsed) = parse_ura(ura) else {
         return false;
@@ -347,6 +384,12 @@ fn is_authority_owned_ura_in_realm(ura: &str, realm: &str) -> bool {
         && parsed
             .ability()
             .is_some_and(|ability| ability.owner == AbilityOwner::Authority)
+}
+
+fn ura_is_in_realm(ura: &str, realm: &str) -> bool {
+    parse_ura(ura)
+        .map(|parsed| parsed.realm == realm)
+        .unwrap_or(false)
 }
 
 pub(crate) fn ability_ura_for(callee_ura: &str, ability: &str) -> Result<String, Status> {
@@ -764,6 +807,83 @@ mod tests {
         assert_eq!(
             decision.ability_ura,
             "easynet:///r/hub/ability/authority.federation.discover"
+        );
+    }
+
+    #[test]
+    fn local_authority_self_manage_can_revoke_owned_device_directory_entry() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let stores = AccessControlStoreRegistry::ephemeral();
+        let authority = "easynet:///r/test/authority";
+        let envelope = Envelope {
+            caller: Some(identity(authority)),
+            callee: Some(identity(authority)),
+            subject: Some(SubjectIdentity {
+                ura: "easynet:///r/test/device/dev-1".to_string(),
+                profile: String::new(),
+            }),
+            ..Envelope::default()
+        };
+        let decision = AdmissionPolicyGate::verify(AdmissionPolicyContext {
+            envelope: &envelope,
+            ability: "federation.revoke",
+            action: AccessAction::Manage,
+            safe_read: false,
+            trusted_role: TrustedAgentRole::Hub,
+            daemon_ura: Some(authority),
+            trust_anchor: &anchor_with_device_owner(),
+            access_control_stores: &stores,
+            canonical_hash: Some("sha256:test".to_string()),
+            signature_key_id: None,
+            verified_authority_id: None,
+            rejector_ura: Some(authority.to_string()),
+        })
+        .expect("realm authority must manage its own federation directory");
+
+        assert_eq!(decision.decision, PolicyDecisionOutcome::Allow);
+        assert_eq!(decision.reason, PolicyDecisionReason::ExplicitGrantAllow);
+        assert_eq!(decision.owner_user_id.as_deref(), Some("alice"));
+        assert_eq!(
+            decision.ability_ura,
+            "easynet:///r/test/ability/authority.federation.revoke"
+        );
+    }
+
+    #[test]
+    fn local_authority_self_manage_rejects_cross_realm_subject() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let stores = AccessControlStoreRegistry::ephemeral();
+        let authority = "easynet:///r/test/authority";
+        let envelope = Envelope {
+            caller: Some(identity(authority)),
+            callee: Some(identity(authority)),
+            subject: Some(SubjectIdentity {
+                ura: "easynet:///r/other/device/dev-1".to_string(),
+                profile: String::new(),
+            }),
+            ..Envelope::default()
+        };
+        let err = AdmissionPolicyGate::verify(AdmissionPolicyContext {
+            envelope: &envelope,
+            ability: "federation.revoke",
+            action: AccessAction::Manage,
+            safe_read: false,
+            trusted_role: TrustedAgentRole::Hub,
+            daemon_ura: Some(authority),
+            trust_anchor: &empty_anchor(),
+            access_control_stores: &stores,
+            canonical_hash: Some("sha256:test".to_string()),
+            signature_key_id: None,
+            verified_authority_id: None,
+            rejector_ura: Some(authority.to_string()),
+        })
+        .expect_err("authority self-manage must stay realm-bounded");
+
+        assert_eq!(err.code(), tonic::Code::PermissionDenied);
+        assert!(
+            err.message().contains("\"reason\":\"OWNER_UNRESOLVED\""),
+            "expected owner unresolved after authority self-manage gate rejects cross-realm subject, got: {}",
+            err.message()
         );
     }
 

@@ -70,17 +70,13 @@ pub struct DevicesArgs {
 }
 
 pub fn run(args: DevicesArgs) -> anyhow::Result<()> {
-    let creds = config::load_credentials()
-        .context("device list requires paired credentials for user-scoped federation.discover")?;
-    let current_node_id = creds.node_id.clone();
-    let current_user_id = creds.user_id()?;
-    let self_ura = crate::core::ura::device_ura(&creds.realm, &creds.node_id);
+    let read = DeviceDirectoryRead::load()?;
 
-    let entries = fetch_directory_entries(current_user_id)?;
+    let entries = fetch_directory_entries(&read)?;
     let nodes: Vec<Value> = entries
         .into_iter()
         .filter(is_device_entry)
-        .map(|e| project_directory_entry(e, Some(self_ura.as_str())))
+        .map(|e| project_directory_entry(e, read.self_ura.as_deref()))
         .collect::<anyhow::Result<Vec<_>>>()?;
 
     let filtered: Vec<Value> = nodes
@@ -134,23 +130,89 @@ pub fn run(args: DevicesArgs) -> anyhow::Result<()> {
     println!();
 
     for n in &filtered {
-        print_device(n, &current_node_id);
+        print_device(n, &read.current_node_id);
     }
 
     Ok(())
 }
 
+struct DeviceDirectoryRead {
+    scope: DeviceDirectoryReadScope,
+    current_node_id: String,
+    self_ura: Option<String>,
+}
+
+enum DeviceDirectoryReadScope {
+    User { local_user_id: String },
+    OperatorAudit,
+}
+
+impl DeviceDirectoryRead {
+    fn load() -> anyhow::Result<Self> {
+        match config::load_credentials() {
+            Ok(creds) => {
+                let current_node_id = creds.node_id.clone();
+                let local_user_id = creds.user_id()?.to_string();
+                let self_ura = crate::core::ura::device_ura(&creds.realm, &creds.node_id);
+                Ok(Self {
+                    scope: DeviceDirectoryReadScope::User { local_user_id },
+                    current_node_id,
+                    self_ura: Some(self_ura),
+                })
+            }
+            Err(error) => Self::load_operator_audit_for_local_authority(error),
+        }
+    }
+
+    fn load_operator_audit_for_local_authority(
+        credentials_error: anyhow::Error,
+    ) -> anyhow::Result<Self> {
+        let local_daemon_ura = match crate::daemon::identity::local_invocation::local_daemon_ura() {
+            Ok(value) => value,
+            Err(_) => {
+                return Err(credentials_error).context(
+                    "device list requires paired credentials for user-scoped federation.discover",
+                );
+            }
+        };
+        let parsed = match crate::core::ura::parse_ura(&local_daemon_ura) {
+            Ok(parsed) => parsed,
+            Err(_) => return Err(credentials_error),
+        };
+        if parsed.kind != crate::core::ura::URAKind::Authority {
+            return Err(credentials_error).context(
+                "device list requires paired credentials for user-scoped federation.discover",
+            );
+        }
+        Ok(Self {
+            scope: DeviceDirectoryReadScope::OperatorAudit,
+            current_node_id: String::new(),
+            self_ura: None,
+        })
+    }
+}
+
 #[cfg(feature = "axon-pb")]
-fn fetch_directory_entries(current_user_id: &str) -> anyhow::Result<Vec<Value>> {
-    crate::daemon::federation::directory_reader::read_federated_directory_for_user(
-        None,
-        current_user_id,
-    )
-    .context("invoke federation.discover for device list")
+fn fetch_directory_entries(read: &DeviceDirectoryRead) -> anyhow::Result<Vec<Value>> {
+    match &read.scope {
+        DeviceDirectoryReadScope::User { local_user_id } => {
+            crate::daemon::federation::directory_reader::read_federated_directory_for_user(
+                None,
+                local_user_id,
+            )
+            .context("invoke user-scoped federation.discover for device list")
+        }
+        DeviceDirectoryReadScope::OperatorAudit => {
+            crate::daemon::federation::directory_reader::read_federated_directory_for_operator_audit(
+                None,
+            )
+            .context("invoke operator/audit federation.discover for hub device list")
+        }
+    }
 }
 
 #[cfg(not(feature = "axon-pb"))]
-fn fetch_directory_entries(_current_user_id: &str) -> anyhow::Result<Vec<Value>> {
+fn fetch_directory_entries(_read: &DeviceDirectoryRead) -> anyhow::Result<Vec<Value>> {
     Err(
         crate::support::platform::local_invoke::federation_capability_unsupported_error(
             "listing devices via federation.discover",

@@ -231,6 +231,7 @@ fn check_handler(args: Value, stores: &AccessControlStoreRegistry) -> anyhow::Re
         action: request.action,
         safe_read: request.safe_read,
         authority_self_read: false,
+        authority_self_manage: false,
         interactive_context_available: request.interactive_context_available,
         canonical_hash: request.canonical_hash,
         signature_key_id: request.signature_key_id,
