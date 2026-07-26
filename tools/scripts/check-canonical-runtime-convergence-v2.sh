@@ -3516,17 +3516,26 @@ for retired in (
     "forward_compat",
     "Older daemons must still parse",
     "ignore unknown fields",
+    "return Ok(LocalAgentsFile::default())",
 ):
     if retired in text:
         raise SystemExit(f"local_agents_schema:retired_compat:{retired}")
 for required in (
+    "pub enum LocalAgentsLoadState",
+    "Loaded(LocalAgentsFile)",
+    "Missing { path: PathBuf }",
+    "pub fn load_with_state",
+    "pub fn load_for_fresh_host_projection",
+    "missing_file_projects_explicit_load_state",
+    "first_boot_projection_returns_empty_identity_registry",
+    "existing_file_projects_loaded_state",
+    "existing_malformed_file_fails_closed",
     "deserialize_rejects_unknown_fields",
     "unknown local-agents fields must fail closed",
     "deserialize_rejects_missing_host_device_agent_ura",
     "missing field `host_device_agent_ura`",
     "deserialize_rejects_missing_hosted_agents",
     "missing field `hosted_agents`",
-    "return Ok(LocalAgentsFile::default())",
 ):
     if required not in text:
         raise SystemExit(f"local_agents_schema:missing:{required}")

@@ -828,7 +828,7 @@ impl AgentAggregateRepository {
 
     fn load_hosted_identity_projection() -> Result<LocalAgentsFile, AgentAggregateSnapshotLoadError>
     {
-        local_agents::load()
+        local_agents::load_for_fresh_host_projection()
             .map_err(|source| AgentAggregateSnapshotLoadError::IdentityUnreadable { source })
     }
 }

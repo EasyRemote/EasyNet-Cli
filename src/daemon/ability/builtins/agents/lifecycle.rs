@@ -888,7 +888,7 @@ fn start_agent_locked(
     let registrar = require_hot_registrar(hot_registrar, "agent.start")?;
     let original_registry = agents::load_agents()
         .map_err(|error| anyhow::anyhow!("agent.start: load durable agent registry: {error:#}"))?;
-    let original_local_agents = local_agents::load()
+    let original_local_agents = local_agents::load_for_fresh_host_projection()
         .map_err(|error| anyhow::anyhow!("agent.start: load hosted-Agent identities: {error:#}"))?;
     let mut transaction = AgentLifecycleTransaction::for_start(
         "agent.start",
@@ -1599,7 +1599,7 @@ pub(crate) fn bootstrap_local_agent_projection(
     let _mutation_guard = AgentLifecycleMutationGuard::acquire().map_err(|error| {
         anyhow::anyhow!("agent.bootstrap: acquire lifecycle transaction: {error:#}")
     })?;
-    let mut identities = local_agents::load()
+    let mut identities = local_agents::load_for_fresh_host_projection()
         .map_err(|error| anyhow::anyhow!("agent.bootstrap: load hosted identities: {error:#}"))?;
     let outcomes = bootstrap::bootstrap_local_agents(plan, &mut identities, &UuidMinter);
     AgentLifecycleProjectionStore::default()
@@ -1914,7 +1914,7 @@ fn finalize_committed_purge(journal: &AgentPurgeJournal) -> anyhow::Result<Purge
             registry_key
         );
     }
-    let identities = local_agents::load()?;
+    let identities = local_agents::load_for_fresh_host_projection()?;
     if local_agents::lookup_hosted_ura(&identities, "llm", &journal.name).is_some() {
         anyhow::bail!(
             "agent.purge committed journal conflicts with local-agents.json entry `{}`",
@@ -2452,7 +2452,7 @@ fn purge_agent_locked(
             root_path.display()
         )
     })?;
-    let original_local_agents = local_agents::load()
+    let original_local_agents = local_agents::load_for_fresh_host_projection()
         .map_err(|error| anyhow::anyhow!("agent.purge: load local-agents.json: {error:#}"))?;
     let agent_ura = hosted_agent_ura_from_file(&original_local_agents, &name)
         .map_err(|error| anyhow::anyhow!("agent.purge: {error:#}"))?;
@@ -2634,7 +2634,7 @@ fn stop_agent_locked(
         }));
     };
     let registrar = require_hot_registrar(hot_registrar, operation)?;
-    let original_local_agents = local_agents::load()
+    let original_local_agents = local_agents::load_for_fresh_host_projection()
         .map_err(|error| anyhow::anyhow!("{operation}: load hosted-Agent identities: {error:#}"))?;
     let agent_ura = hosted_agent_ura_from_file(&original_local_agents, &name)
         .map_err(|error| anyhow::anyhow!("{operation}: {error:#}"))?;
@@ -3109,7 +3109,7 @@ fn agent_name_from_ura(ura: &str, operation: &'static str) -> anyhow::Result<Str
              lifecycle-managed as hosted agents on this surface"
         );
     }
-    let identities = crate::daemon::persistence::local_agents::load()
+    let identities = crate::daemon::persistence::local_agents::load_for_fresh_host_projection()
         .map_err(|error| anyhow::anyhow!("{operation}: load hosted-Agent identities: {error:#}"))?;
     if let Some(entry) = identities
         .hosted_agents

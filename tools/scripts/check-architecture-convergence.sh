@@ -3987,8 +3987,8 @@ if agent_aggregate.exists():
             "Agent aggregate repository must load the durable registry projection",
         ),
         (
-            "local_agents::load()",
-            "Agent aggregate repository must load the hosted-Agent identity projection",
+            "local_agents::load_for_fresh_host_projection()",
+            "Agent aggregate repository must load the hosted-Agent identity projection through the explicit first-boot projection boundary",
         ),
     )
     for token, detail in aggregate_requirements:

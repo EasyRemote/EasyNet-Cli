@@ -90,6 +90,12 @@ pub struct HostedAgentEntry {
     pub first_seen_at: String,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum LocalAgentsLoadState {
+    Loaded(LocalAgentsFile),
+    Missing { path: PathBuf },
+}
+
 /// Resolve the on-disk path. Public so an integration test can
 /// override `state_dir` via `XDG_CONFIG_HOME` without re-deriving
 /// the layout.
@@ -97,16 +103,37 @@ pub fn path() -> PathBuf {
     state_dir().join(FILE_NAME)
 }
 
-/// Read the file. Returns an empty `LocalAgentsFile` if the file
-/// does not exist (first-boot case). Returns Err only on parse
-/// failure or unrecoverable I/O.
-pub fn load() -> anyhow::Result<LocalAgentsFile> {
+/// Read the hosted-agent identity projection while preserving storage state.
+///
+/// Missing storage is not an error at this layer and is not projected into an
+/// empty registry here. Callers decide whether missing state is a first-boot
+/// identity projection.
+pub fn load_with_state() -> anyhow::Result<LocalAgentsLoadState> {
     let p = path();
-    if !p.exists() {
-        return Ok(LocalAgentsFile::default());
+    match fs::read(&p) {
+        Ok(bytes) => serde_json::from_slice(&bytes)
+            .map(LocalAgentsLoadState::Loaded)
+            .map_err(|e| anyhow::anyhow!("parse {}: {e}", p.display())),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Ok(LocalAgentsLoadState::Missing { path: p })
+        }
+        Err(error) => Err(anyhow::anyhow!("read {}: {error}", p.display())),
     }
-    let bytes = fs::read(&p).map_err(|e| anyhow::anyhow!("read {}: {e}", p.display()))?;
-    serde_json::from_slice(&bytes).map_err(|e| anyhow::anyhow!("parse {}: {e}", p.display()))
+}
+
+/// Stable read projection for callers that need first-boot empty identity
+/// state. Production lifecycle paths use this named helper instead of hiding
+/// the policy inside the storage reader.
+pub fn load_for_fresh_host_projection() -> anyhow::Result<LocalAgentsFile> {
+    match load_with_state()? {
+        LocalAgentsLoadState::Loaded(file) => Ok(file),
+        LocalAgentsLoadState::Missing { .. } => Ok(LocalAgentsFile::default()),
+    }
+}
+
+/// Public read projection preserving the existing API shape.
+pub fn load() -> anyhow::Result<LocalAgentsFile> {
+    load_for_fresh_host_projection()
 }
 
 /// Atomically write the file with mode 0600.
@@ -170,13 +197,55 @@ mod tests {
     use super::*;
 
     #[test]
-    fn load_missing_file_returns_default() {
-        // A guaranteed-nonexistent path. We exercise the in-memory
-        // default rather than touching state_dir() so the test does
-        // not depend on the user's $HOME.
-        let f = LocalAgentsFile::default();
+    fn missing_file_projects_explicit_load_state() {
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
+        match load_with_state().expect("load state") {
+            LocalAgentsLoadState::Missing { path: missing } => assert_eq!(missing, path()),
+            LocalAgentsLoadState::Loaded(file) => {
+                panic!("missing local-agents storage must not become loaded default: {file:?}")
+            }
+        }
+    }
+
+    #[test]
+    fn first_boot_projection_returns_empty_identity_registry() {
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
+        let f = load_for_fresh_host_projection().expect("first boot projection");
         assert!(f.host_device_agent_ura.is_empty());
         assert!(f.hosted_agents.is_empty());
+    }
+
+    #[test]
+    fn existing_file_projects_loaded_state() {
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
+        let mut f = LocalAgentsFile {
+            host_device_agent_ura: "easynet:///r/acme/device/01DEV".into(),
+            hosted_agents: Vec::new(),
+        };
+        upsert_hosted_agent(&mut f, "mcp", "default", "easynet:///r/acme/agent/mcp");
+        save(&f).expect("save local agents");
+
+        match load_with_state().expect("load state") {
+            LocalAgentsLoadState::Loaded(loaded) => assert_eq!(loaded, f),
+            LocalAgentsLoadState::Missing { path: missing } => {
+                panic!(
+                    "saved local-agents file must load from {}",
+                    missing.display()
+                )
+            }
+        }
+    }
+
+    #[test]
+    fn existing_malformed_file_fails_closed() {
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
+        let p = path();
+        std::fs::create_dir_all(p.parent().expect("state dir")).expect("create state dir");
+        std::fs::write(&p, b"{not-json").expect("write malformed local-agents");
+
+        let err = load_with_state().expect_err("malformed existing file must fail");
+
+        assert!(err.to_string().contains("parse"), "unexpected error: {err}");
     }
 
     #[test]
