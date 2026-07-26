@@ -12499,6 +12499,8 @@ for retired_ffi_authority in (
     "descriptor_catalog_required_string(",
     "dedupe_descriptor_catalog_entries(",
     "descriptor_catalog_dedupe_required_string(",
+    "RuntimeDescriptorResolutionProvider::catalog_entries(",
+    "RuntimeDescriptorCatalog",
 ):
     if retired_ffi_authority in production:
         raise SystemExit(

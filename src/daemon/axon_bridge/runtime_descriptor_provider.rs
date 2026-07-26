@@ -136,22 +136,40 @@ impl RuntimeDescriptorProviderKind {
 }
 
 pub(crate) struct RuntimeDescriptorCatalog {
-    pub(crate) entries: Vec<Value>,
-    pub(crate) diagnostics: Vec<String>,
+    entries: Vec<Value>,
+    diagnostics: Vec<String>,
 }
 
 pub(crate) struct RuntimeDescriptorResolutionProvider;
 
 impl RuntimeDescriptorResolutionProvider {
-    pub(crate) fn catalog_entries(owner_ura: &str) -> RuntimeDescriptorCatalog {
-        runtime_descriptor_catalog_entries(owner_ura)
-    }
-
     pub(crate) fn resolve_json(
         request_json: &str,
         runtime_owner_ura: impl FnOnce() -> std::result::Result<String, String>,
     ) -> Result<Value, DescriptorResolutionError> {
         runtime_resolve_descriptor_ref_json(request_json, runtime_owner_ura)
+    }
+
+    pub(crate) fn diagnostics_catalog_json(
+        runtime_owner_ura: std::result::Result<String, String>,
+    ) -> Value {
+        match runtime_owner_ura {
+            Ok(owner_ura) => {
+                let catalog = runtime_descriptor_catalog_entries(&owner_ura);
+                serde_json::json!({
+                    "owner_ura": owner_ura,
+                    "source": "runtime_descriptor_catalog",
+                    "entries": catalog.entries,
+                    "diagnostics": catalog.diagnostics,
+                })
+            }
+            Err(error) => serde_json::json!({
+                "owner_ura": null,
+                "source": "control.json",
+                "entries": [],
+                "diagnostics": [error],
+            }),
+        }
     }
 
     #[cfg(test)]
@@ -620,4 +638,49 @@ fn descriptor_catalog_dedupe_required_string<'a>(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| format!("descriptor catalog row {index} missing {field} before dedupe"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn diagnostics_catalog_json_projects_runtime_owned_catalog() {
+        let owner_ura =
+            crate::core::ura::device_ura("localhost", "386b1258-3c89-494a-90a2-2321c29bf992");
+        let catalog =
+            RuntimeDescriptorResolutionProvider::diagnostics_catalog_json(Ok(owner_ura.clone()));
+
+        assert_eq!(catalog["owner_ura"], owner_ura);
+        assert_eq!(catalog["source"], "runtime_descriptor_catalog");
+        assert!(catalog["diagnostics"].as_array().is_some_and(Vec::is_empty));
+        let entries = catalog["entries"].as_array().expect("catalog entries");
+        assert!(
+            entries.iter().any(|entry| {
+                entry["owner_ura"] == owner_ura
+                    && entry["name"]
+                        == crate::daemon::ability::names::governance::META_LIST_ABILITIES
+                    && entry["call_mode"] == "rpc"
+                    && entry["descriptor_ref"]
+                        .as_str()
+                        .is_some_and(|descriptor_ref| descriptor_ref.ends_with("!read"))
+            }),
+            "runtime provider diagnostics catalog must include device meta.list_abilities: {entries:?}"
+        );
+    }
+
+    #[test]
+    fn diagnostics_catalog_json_projects_runtime_owner_failure() {
+        let catalog = RuntimeDescriptorResolutionProvider::diagnostics_catalog_json(Err(
+            "control discovery missing daemon_identity".to_string(),
+        ));
+
+        assert!(catalog["owner_ura"].is_null());
+        assert_eq!(catalog["source"], "control.json");
+        assert_eq!(catalog["entries"].as_array().map(Vec::len), Some(0));
+        assert_eq!(
+            catalog["diagnostics"][0],
+            "control discovery missing daemon_identity"
+        );
+    }
 }

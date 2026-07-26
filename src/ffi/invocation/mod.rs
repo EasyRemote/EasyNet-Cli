@@ -1662,23 +1662,9 @@ fn runtime_diagnostics_json(
 fn runtime_descriptor_catalog_json(
     session: &crate::ffi::client::handle::ClientSession,
 ) -> serde_json::Value {
-    match runtime_owner_ura_from_session(session) {
-        Ok(owner_ura) => {
-            let catalog = RuntimeDescriptorResolutionProvider::catalog_entries(&owner_ura);
-            serde_json::json!({
-                "owner_ura": owner_ura,
-                "source": "runtime_descriptor_catalog",
-                "entries": catalog.entries,
-                "diagnostics": catalog.diagnostics,
-            })
-        }
-        Err(error) => serde_json::json!({
-            "owner_ura": null,
-            "source": "control.json",
-            "entries": [],
-            "diagnostics": [error],
-        }),
-    }
+    RuntimeDescriptorResolutionProvider::diagnostics_catalog_json(runtime_owner_ura_from_session(
+        session,
+    ))
 }
 
 #[cfg(feature = "axon-pb")]
