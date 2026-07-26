@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct DirectoryEntry {
     pub agent_ura: String,
     pub node_id: String,
@@ -23,13 +24,14 @@ pub struct DirectoryEntry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum SigningAuthority {
     SelfSigned,
     HostedBy { host_ura: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct DirectoryAgentSummary {
     pub agent_ura: String,
     pub signing_authority: SigningAuthority,
@@ -38,7 +40,7 @@ pub struct DirectoryAgentSummary {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum DirectoryEvent {
     Snapshot {
         agents: Vec<DirectoryAgentSummary>,
@@ -79,11 +81,13 @@ pub struct ListUserDevicesRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct ListUserDevicesResponse {
     pub devices: Vec<DirectoryEntry>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct DiscoverRequest {
     #[serde(default)]
     pub agent_ura: Option<String>,
@@ -92,11 +96,13 @@ pub struct DiscoverRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct DiscoverResponse {
     pub entries: Vec<DirectoryEntry>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct ResolveFilterRequest {
     #[serde(default)]
     pub agent_ura_prefix: Option<String>,
@@ -105,6 +111,7 @@ pub struct ResolveFilterRequest {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct ResolveRequest {
     #[serde(default)]
     pub ura_prefix: Option<String>,
@@ -135,6 +142,7 @@ impl ResolveRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct ResolveAgentSummary {
     pub ura: String,
     pub status: String,
@@ -145,11 +153,13 @@ pub struct ResolveAgentSummary {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct ResolveResponse {
     pub agents: Vec<ResolveAgentSummary>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct ResolveKeyRequest {
     pub agent_ura: String,
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -183,6 +193,7 @@ impl ResolveKeyRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct ResolveKeyResponse {
     pub public_key_b64: String,
     pub public_key_hex: String,
@@ -199,6 +210,21 @@ pub struct ResolveKeyResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn assert_unknown_field_rejected<T>(value: serde_json::Value, field: &str)
+    where
+        T: for<'de> Deserialize<'de>,
+    {
+        let error = match serde_json::from_value::<T>(value) {
+            Ok(_) => panic!("unknown field {field:?} must fail closed"),
+            Err(error) => error,
+        };
+        let message = error.to_string();
+        assert!(
+            message.contains(&format!("unknown field `{field}`")),
+            "unknown field {field:?} must be named in parse error: {message}"
+        );
+    }
 
     fn sample_summary() -> DirectoryAgentSummary {
         DirectoryAgentSummary {
@@ -294,6 +320,78 @@ mod tests {
                 event
             );
         }
+    }
+
+    #[test]
+    fn federation_wire_requests_reject_retired_fields() {
+        assert_unknown_field_rejected::<DiscoverRequest>(
+            serde_json::json!({
+                "agent_ura": "easynet:///r/acme/device/dev-1",
+                "target_ura": "easynet:///r/acme/device/dev-1"
+            }),
+            "target_ura",
+        );
+        assert_unknown_field_rejected::<ResolveRequest>(
+            serde_json::json!({
+                "ura_prefix": "easynet:///r/acme",
+                "legacy_prefix": "easynet:///r/acme"
+            }),
+            "legacy_prefix",
+        );
+        assert_unknown_field_rejected::<ResolveFilterRequest>(
+            serde_json::json!({
+                "agent_ura_prefix": "easynet:///r/acme/device",
+                "include_abilities": true,
+                "include_legacy_rows": true
+            }),
+            "include_legacy_rows",
+        );
+        assert_unknown_field_rejected::<ResolveKeyRequest>(
+            serde_json::json!({
+                "agent_ura": "easynet:///r/acme/user/alice",
+                "retired_agent_locator": "easynet:///r/acme/user/alice"
+            }),
+            "retired_agent_locator",
+        );
+    }
+
+    #[test]
+    fn federation_wire_responses_reject_retired_fields() {
+        assert_unknown_field_rejected::<DirectoryEntry>(
+            serde_json::json!({
+                "agent_ura": "easynet:///r/acme/device/dev-1",
+                "node_id": "dev-1",
+                "status": "online",
+                "retired_agent_locator": "easynet:///r/acme/device/dev-1"
+            }),
+            "retired_agent_locator",
+        );
+        assert_unknown_field_rejected::<DirectoryAgentSummary>(
+            serde_json::json!({
+                "agent_ura": "easynet:///r/acme/device/dev-1",
+                "signing_authority": {"kind": "self_signed"},
+                "status": "active",
+                "ability_count": 3,
+                "legacy_status": "active"
+            }),
+            "legacy_status",
+        );
+        assert_unknown_field_rejected::<DirectoryEvent>(
+            serde_json::json!({
+                "type": "heartbeat",
+                "unix_ms": 103,
+                "legacy_keepalive": true
+            }),
+            "legacy_keepalive",
+        );
+        assert_unknown_field_rejected::<ResolveKeyResponse>(
+            serde_json::json!({
+                "public_key_b64": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+                "public_key_hex": "00",
+                "public_key": "legacy"
+            }),
+            "public_key",
+        );
     }
 
     #[test]
