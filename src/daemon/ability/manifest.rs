@@ -234,13 +234,12 @@ pub struct AbilityManifest {
     /// every advertised ability with a `cost_kind` + `cost_label`
     /// pair so an operator (or an LLM choosing between two tools)
     /// can see at a glance whether a call is free, LLM-billed,
-    /// upstream-metered, or unknown. When this field is present the
-    /// declared values are authoritative; when absent the runtime
-    /// falls back to an exec-kind heuristic — `unknown` for any path
-    /// it cannot prove is local. Per plan §"Cost is static catalog
-    /// metadata", this manifest field is the single source of truth
-    /// for catalog-level cost; runtime usage accounting (per-call
-    /// token counts, vendor-reported $) is a different surface that
+    /// upstream-metered, or unknown. Declared values are authoritative.
+    /// Absence means cost is undeclared and projects as `unknown`; neither
+    /// source strings nor executor kind may infer a billing class. Per plan
+    /// §"Cost is static catalog metadata", this manifest field is the single
+    /// source of truth for catalog-level cost; runtime usage accounting
+    /// (per-call token counts, vendor-reported $) is a different surface that
     /// flows through telemetry, not this struct.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     cost: Option<CostMeta>,
@@ -813,9 +812,8 @@ impl AbilityManifest {
         self.health.as_ref()
     }
 
-    /// Attach a cost declaration. Optional; absence falls back to the
-    /// exec-kind heuristic at metadata-emit time (see
-    /// `profiles::mcp::inferred_cost_kind`). Returns the manifest for
+    /// Attach a cost declaration. Optional; absence projects as explicit
+    /// undeclared/unknown cost at metadata-emit time. Returns the manifest for
     /// builder chaining.
     pub fn with_cost(mut self, cost: CostMeta) -> anyhow::Result<Self> {
         self.cost = Some(cost);
@@ -824,8 +822,8 @@ impl AbilityManifest {
     }
 
     /// The declared cost meta, if any. `None` means the author has
-    /// not declared cost; consumers should fall back to the
-    /// exec-kind inference rather than assume a default bucket.
+    /// not declared cost; consumers must project explicit uncertainty rather
+    /// than infer a bucket from owner/source/executor facts.
     pub fn cost(&self) -> Option<&CostMeta> {
         self.cost.as_ref()
     }

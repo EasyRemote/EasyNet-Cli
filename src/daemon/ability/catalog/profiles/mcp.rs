@@ -276,13 +276,9 @@ fn parsed_owner_label(owner_ura: &str) -> Option<String> {
 /// **Honesty rule (load-bearing).** Advisory cost lives in the
 /// descriptor metadata produced by the ability manifest. Rows without
 /// declared cost are not labelled free; they project as `unknown`.
-/// The only special undeclared state is built-in agent chat:
-/// `source = "agent:…"` and no `exec_kind`, which is known to be an
-/// LLM dispatch path by construction.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum CostMetadataProjection {
     Declared { kind: String, label: String },
-    UndeclaredKnownLlm,
     Undeclared,
 }
 
@@ -310,17 +306,12 @@ impl CostMetadataProjection {
                 label,
             };
         }
-        if descriptor.source.starts_with("agent:") && !descriptor.metadata.contains_key("exec_kind")
-        {
-            return Self::UndeclaredKnownLlm;
-        }
         Self::Undeclared
     }
 
     fn kind(&self) -> &str {
         match self {
             Self::Declared { kind, .. } => kind.as_str(),
-            Self::UndeclaredKnownLlm => "llm_metered",
             Self::Undeclared => "unknown",
         }
     }
@@ -328,7 +319,6 @@ impl CostMetadataProjection {
     fn label(&self) -> &str {
         match self {
             Self::Declared { label, .. } => label.as_str(),
-            Self::UndeclaredKnownLlm => "LLM token billing may apply",
             Self::Undeclared => "cost not declared",
         }
     }
@@ -1183,7 +1173,7 @@ mod tests {
     }
 
     #[test]
-    fn mcp_cost_projection_marks_known_agent_chat_as_llm_metered() {
+    fn mcp_cost_projection_marks_agent_owned_undeclared_rows_unknown() {
         let desc = AbilityDescriptor::new(
             "chat",
             TEST_AGENT_OWNER,
@@ -1193,9 +1183,9 @@ mod tests {
         .unwrap()
         .with_source("agent:claude");
         let cost = CostMetadataProjection::from_descriptor(&desc);
-        assert_eq!(cost, CostMetadataProjection::UndeclaredKnownLlm);
-        assert_eq!(cost.kind(), "llm_metered");
-        assert_eq!(cost.label(), "LLM token billing may apply");
+        assert_eq!(cost, CostMetadataProjection::Undeclared);
+        assert_eq!(cost.kind(), "unknown");
+        assert_eq!(cost.label(), "cost not declared");
     }
 
     #[test]

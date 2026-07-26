@@ -11427,6 +11427,79 @@ if python_access_control.exists():
         )
 
 
+mcp_profile = cli_root / "src/daemon/ability/catalog/profiles/mcp.rs"
+ability_manifest = cli_root / "src/daemon/ability/manifest.rs"
+if mcp_profile.exists():
+    text = mcp_profile.read_text(encoding="utf-8", errors="replace")
+    for token, detail in (
+        (
+            "enum CostMetadataProjection",
+            "MCP cost projection must stay centralized in CostMetadataProjection",
+        ),
+        (
+            'Self::Undeclared => "unknown"',
+            "undeclared MCP cost must project as unknown",
+        ),
+        (
+            'Self::Undeclared => "cost not declared"',
+            "undeclared MCP cost label must remain explicit",
+        ),
+        (
+            "mcp_cost_projection_marks_agent_owned_undeclared_rows_unknown",
+            "MCP tests must prove agent-owned undeclared cost is not inferred",
+        ),
+    ):
+        if token not in text:
+            add("R99_MCP_COST_NO_SOURCE_HEURISTIC", mcp_profile, 1, detail)
+    for token, detail in (
+        (
+            "UndeclaredKnownLlm",
+            "MCP cost projection must not infer LLM billing from agent source",
+        ),
+        (
+            'source.starts_with("agent:")',
+            "MCP cost projection must not branch on source metadata for billing",
+        ),
+        (
+            "known to be an LLM dispatch path",
+            "MCP cost comments must not preserve source-based billing inference",
+        ),
+    ):
+        offset = text.find(token)
+        if offset != -1:
+            add(
+                "R99_MCP_COST_NO_SOURCE_HEURISTIC",
+                mcp_profile,
+                line_number(text, offset),
+                detail,
+            )
+
+if ability_manifest.exists():
+    text = ability_manifest.read_text(encoding="utf-8", errors="replace")
+    for token, detail in (
+        (
+            "falls back to an exec-kind heuristic",
+            "ability manifest cost docs must not describe retired exec-kind cost inference",
+        ),
+        (
+            "profiles::mcp::inferred_cost_kind",
+            "ability manifest cost docs must not reference retired inferred cost helper",
+        ),
+        (
+            "exec-kind inference",
+            "ability manifest cost docs must not instruct consumers to infer cost from exec kind",
+        ),
+    ):
+        offset = text.find(token)
+        if offset != -1:
+            add(
+                "R99_MCP_COST_NO_SOURCE_HEURISTIC",
+                ability_manifest,
+                line_number(text, offset),
+                detail,
+            )
+
+
 if violations:
     for violation in sorted(violations):
         print(

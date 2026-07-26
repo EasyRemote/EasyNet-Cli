@@ -16,21 +16,25 @@ if ! rg -n 'enum CostMetadataProjection' "$MCP_PROFILE" >/dev/null; then
   fail "MCP profile must use CostMetadataProjection for tool cost display"
 fi
 
-for state in 'Declared \{' 'UndeclaredKnownLlm' 'Undeclared'; do
+for state in 'Declared \{' 'Undeclared'; do
   if ! rg -n "$state" "$MCP_PROFILE" >/dev/null; then
     fail "CostMetadataProjection is missing state: $state"
   fi
 done
 
+if rg -n 'UndeclaredKnownLlm|known.*LLM|agent:.*llm_metered|source\.starts_with\("agent:"\).*cost|metadata\.contains_key\("exec_kind"\).*cost' "$MCP_PROFILE"; then
+  fail "MCP cost projection must not infer billing class from source/exec heuristics"
+fi
+
 if ! rg -n 'CostMetadataProjection::from_descriptor\(descriptor\)' "$MCP_PROFILE" >/dev/null; then
   fail "MCP tool projection must derive cost through CostMetadataProjection"
 fi
 
-if ! rg -n '"cost_kind": cost\.kind\(\)' "$MCP_PROFILE" >/dev/null; then
+if ! rg -n 'extension\.insert\("cost_kind"\.to_string\(\), cost\.kind\(\)\.into\(\)\)' "$MCP_PROFILE" >/dev/null; then
   fail "MCP x-easynet.cost_kind must come from CostMetadataProjection"
 fi
 
-if ! rg -n '"cost_label": cost\.label\(\)' "$MCP_PROFILE" >/dev/null; then
+if ! rg -n 'extension\.insert\("cost_label"\.to_string\(\), cost\.label\(\)\.into\(\)\)' "$MCP_PROFILE" >/dev/null; then
   fail "MCP x-easynet.cost_label must come from CostMetadataProjection"
 fi
 
