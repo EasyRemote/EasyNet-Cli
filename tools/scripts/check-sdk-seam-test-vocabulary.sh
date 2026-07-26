@@ -56,7 +56,7 @@ for symbol in \
     "ApplicationLifecycleClient" \
     "ApplicationDirectoryView" \
     "ApplicationReceiptPage" \
-    "CompatibilityAdapter" \
+    "TranslationLayer" \
     "ConvenienceWrapperClient" \
     "ProfileBundle"
 do

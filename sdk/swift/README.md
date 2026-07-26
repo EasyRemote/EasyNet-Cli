@@ -15,7 +15,7 @@ public model is limited to:
 map. It does not expose receipt history or interpret product receipt policy.
 
 Downstream workflow profiles are deliberately absent. Product administration,
-gateway, application lifecycle, compatibility adapters, directory views,
+gateway, application lifecycle, translation layers, directory views,
 identity projections, event feeds, host binding, orchestration, publication,
 receipt-history pages, page/model/file helpers, and wrapper behavior belong to
 downstream products. The Swift module provides no aliases or empty transport

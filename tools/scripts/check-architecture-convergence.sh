@@ -7463,7 +7463,7 @@ if node_types_test.exists():
         "ApplicationLifecycleClient",
         "ApplicationDirectoryView",
         "ApplicationReceiptPage",
-        "CompatibilityAdapter",
+        "TranslationLayer",
         "ConvenienceWrapperClient",
         "ProfileBundle",
     )

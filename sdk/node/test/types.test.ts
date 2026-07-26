@@ -24,7 +24,7 @@ const downstreamProfileSymbols = [
   "ApplicationLifecycleClient",
   "ApplicationDirectoryView",
   "ApplicationReceiptPage",
-  "CompatibilityAdapter",
+  "TranslationLayer",
   "ConvenienceWrapperClient",
   "ProfileBundle",
 ];

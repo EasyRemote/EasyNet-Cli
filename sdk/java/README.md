@@ -16,7 +16,7 @@ model is limited to:
 does not expose a receipt-history client or interpret product receipt policy.
 
 Downstream workflow profiles are deliberately absent. Product administration,
-gateway, application lifecycle, compatibility adapters, directory views,
+gateway, application lifecycle, translation layers, directory views,
 identity projections, event feeds, host binding, orchestration, publication,
 receipt-history pages, page/model/file helpers, and wrapper behavior belong to
 downstream products. The Java SDK provides no aliases or empty transport

@@ -44,7 +44,7 @@ final class RuntimeCoreSeamTests: XCTestCase {
             "ApplicationEventClient",
             "HostIntegrationClient",
             "PublicationWorkflowClient",
-            "CompatibilityAdapter",
+            "TranslationLayer",
             "ConvenienceWrapperClient",
             "ProfileBundle",
             "ServiceLocator",

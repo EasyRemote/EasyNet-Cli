@@ -66,7 +66,7 @@ const downstreamProfileSymbols = [
   "ApplicationEventClient",
   "HostIntegrationClient",
   "PublicationWorkflowClient",
-  "CompatibilityAdapter",
+  "TranslationLayer",
   "ConvenienceWrapperClient",
   "ProfileBundle",
   "ServiceLocator",

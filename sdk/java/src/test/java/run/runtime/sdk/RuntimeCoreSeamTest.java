@@ -139,7 +139,7 @@ public final class RuntimeCoreSeamTest {
             "ApplicationEventClient",
             "HostIntegrationClient",
             "PublicationWorkflowClient",
-            "CompatibilityAdapter",
+            "TranslationLayer",
             "ConvenienceWrapperClient",
             "ProfileBundle",
             "ServiceLocator");

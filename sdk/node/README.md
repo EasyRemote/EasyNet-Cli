@@ -16,7 +16,7 @@ Invocation results preserve runtime-provided receipt facts as opaque objects. Th
 package does not expose receipt history or interpret product receipt policy.
 
 Downstream workflow profiles are deliberately absent. Product administration,
-gateway, application lifecycle, compatibility adapters, directory views,
+gateway, application lifecycle, translation layers, directory views,
 identity projections, event feeds, host binding, orchestration, publication,
 receipt-history pages, page/model/file helpers, and wrapper behavior belong to
 downstream products. `index.js` and `index.d.ts` provide no aliases or empty
