@@ -204,35 +204,6 @@ type RevokeGrantRequest struct {
 	GrantID      string           `json:"grant_id"`
 }
 
-type PrincipalProvider interface {
-	Create(context.Context, CreatePrincipalRequest) (PrincipalSnapshot, error)
-	BindFirstKey(context.Context, BindPrincipalKeyRequest) (PrincipalSnapshot, error)
-	AddKey(context.Context, BindPrincipalKeyRequest) (PrincipalSnapshot, error)
-	RotateKey(context.Context, RotatePrincipalKeyRequest) (PrincipalSnapshot, error)
-	RevokeKey(context.Context, RevokePrincipalKeyRequest) (PrincipalSnapshot, error)
-	ConfigureRecovery(context.Context, ConfigureRecoveryRequest) (PrincipalSnapshot, error)
-	Recover(context.Context, RecoverPrincipalRequest) (PrincipalSnapshot, error)
-	Suspend(context.Context, ChangePrincipalStateRequest) (PrincipalSnapshot, error)
-	Reactivate(context.Context, ChangePrincipalStateRequest) (PrincipalSnapshot, error)
-	Delete(context.Context, ChangePrincipalStateRequest) (PrincipalSnapshot, error)
-	IssueEnrollment(context.Context, IssueEnrollmentRequest) (PrincipalSnapshot, error)
-	RevokeEnrollment(context.Context, RevokeEnrollmentRequest) (PrincipalSnapshot, error)
-	IssueGrant(context.Context, IssueGrantRequest) (PrincipalSnapshot, error)
-	RevokeGrant(context.Context, RevokeGrantRequest) (PrincipalSnapshot, error)
-	Get(context.Context, string) (PrincipalSnapshot, error)
-}
-
-type PrincipalClient struct {
-	provider PrincipalProvider
-}
-
-func NewPrincipalClient(provider PrincipalProvider) (*PrincipalClient, error) {
-	if provider == nil {
-		return nil, invalidPrincipal("Principal provider is required", nil)
-	}
-	return &PrincipalClient{provider: provider}, nil
-}
-
 // PrincipalLifecycle is the product-neutral seam for the one authoritative
 // principal aggregate. Implementations must commit state atomically, enforce
 // proof replay protection and emit a receipt only after commit.
@@ -254,111 +225,122 @@ type PrincipalLifecycle interface {
 	Get(context.Context, string) (PrincipalSnapshot, error)
 }
 
+type PrincipalClient struct {
+	lifecycle PrincipalLifecycle
+}
+
+func NewPrincipalClient(lifecycle PrincipalLifecycle) (*PrincipalClient, error) {
+	if lifecycle == nil {
+		return nil, invalidPrincipal("Principal lifecycle is required", nil)
+	}
+	return &PrincipalClient{lifecycle: lifecycle}, nil
+}
+
 var _ PrincipalLifecycle = (*PrincipalClient)(nil)
 
 func (c *PrincipalClient) Create(ctx context.Context, request CreatePrincipalRequest) (PrincipalSnapshot, error) {
-	if c == nil || c.provider == nil {
+	if c == nil || c.lifecycle == nil {
 		return PrincipalSnapshot{}, invalidPrincipal("Principal client is not initialized", nil)
 	}
-	return c.provider.Create(ctx, request)
+	return c.lifecycle.Create(ctx, request)
 }
 
 func (c *PrincipalClient) BindFirstKey(ctx context.Context, request BindPrincipalKeyRequest) (PrincipalSnapshot, error) {
-	if c == nil || c.provider == nil {
+	if c == nil || c.lifecycle == nil {
 		return PrincipalSnapshot{}, invalidPrincipal("Principal client is not initialized", nil)
 	}
-	return c.provider.BindFirstKey(ctx, request)
+	return c.lifecycle.BindFirstKey(ctx, request)
 }
 
 func (c *PrincipalClient) AddKey(ctx context.Context, request BindPrincipalKeyRequest) (PrincipalSnapshot, error) {
-	if c == nil || c.provider == nil {
+	if c == nil || c.lifecycle == nil {
 		return PrincipalSnapshot{}, invalidPrincipal("Principal client is not initialized", nil)
 	}
-	return c.provider.AddKey(ctx, request)
+	return c.lifecycle.AddKey(ctx, request)
 }
 
 func (c *PrincipalClient) RotateKey(ctx context.Context, request RotatePrincipalKeyRequest) (PrincipalSnapshot, error) {
-	if c == nil || c.provider == nil {
+	if c == nil || c.lifecycle == nil {
 		return PrincipalSnapshot{}, invalidPrincipal("Principal client is not initialized", nil)
 	}
-	return c.provider.RotateKey(ctx, request)
+	return c.lifecycle.RotateKey(ctx, request)
 }
 
 func (c *PrincipalClient) RevokeKey(ctx context.Context, request RevokePrincipalKeyRequest) (PrincipalSnapshot, error) {
-	if c == nil || c.provider == nil {
+	if c == nil || c.lifecycle == nil {
 		return PrincipalSnapshot{}, invalidPrincipal("Principal client is not initialized", nil)
 	}
-	return c.provider.RevokeKey(ctx, request)
+	return c.lifecycle.RevokeKey(ctx, request)
 }
 
 func (c *PrincipalClient) ConfigureRecovery(ctx context.Context, request ConfigureRecoveryRequest) (PrincipalSnapshot, error) {
-	if c == nil || c.provider == nil {
+	if c == nil || c.lifecycle == nil {
 		return PrincipalSnapshot{}, invalidPrincipal("Principal client is not initialized", nil)
 	}
-	return c.provider.ConfigureRecovery(ctx, request)
+	return c.lifecycle.ConfigureRecovery(ctx, request)
 }
 
 func (c *PrincipalClient) Recover(ctx context.Context, request RecoverPrincipalRequest) (PrincipalSnapshot, error) {
-	if c == nil || c.provider == nil {
+	if c == nil || c.lifecycle == nil {
 		return PrincipalSnapshot{}, invalidPrincipal("Principal client is not initialized", nil)
 	}
-	return c.provider.Recover(ctx, request)
+	return c.lifecycle.Recover(ctx, request)
 }
 
 func (c *PrincipalClient) Suspend(ctx context.Context, request ChangePrincipalStateRequest) (PrincipalSnapshot, error) {
-	if c == nil || c.provider == nil {
+	if c == nil || c.lifecycle == nil {
 		return PrincipalSnapshot{}, invalidPrincipal("Principal client is not initialized", nil)
 	}
-	return c.provider.Suspend(ctx, request)
+	return c.lifecycle.Suspend(ctx, request)
 }
 
 func (c *PrincipalClient) Reactivate(ctx context.Context, request ChangePrincipalStateRequest) (PrincipalSnapshot, error) {
-	if c == nil || c.provider == nil {
+	if c == nil || c.lifecycle == nil {
 		return PrincipalSnapshot{}, invalidPrincipal("Principal client is not initialized", nil)
 	}
-	return c.provider.Reactivate(ctx, request)
+	return c.lifecycle.Reactivate(ctx, request)
 }
 
 func (c *PrincipalClient) Delete(ctx context.Context, request ChangePrincipalStateRequest) (PrincipalSnapshot, error) {
-	if c == nil || c.provider == nil {
+	if c == nil || c.lifecycle == nil {
 		return PrincipalSnapshot{}, invalidPrincipal("Principal client is not initialized", nil)
 	}
-	return c.provider.Delete(ctx, request)
+	return c.lifecycle.Delete(ctx, request)
 }
 
 func (c *PrincipalClient) IssueEnrollment(ctx context.Context, request IssueEnrollmentRequest) (PrincipalSnapshot, error) {
-	if c == nil || c.provider == nil {
+	if c == nil || c.lifecycle == nil {
 		return PrincipalSnapshot{}, invalidPrincipal("Principal client is not initialized", nil)
 	}
-	return c.provider.IssueEnrollment(ctx, request)
+	return c.lifecycle.IssueEnrollment(ctx, request)
 }
 
 func (c *PrincipalClient) RevokeEnrollment(ctx context.Context, request RevokeEnrollmentRequest) (PrincipalSnapshot, error) {
-	if c == nil || c.provider == nil {
+	if c == nil || c.lifecycle == nil {
 		return PrincipalSnapshot{}, invalidPrincipal("Principal client is not initialized", nil)
 	}
-	return c.provider.RevokeEnrollment(ctx, request)
+	return c.lifecycle.RevokeEnrollment(ctx, request)
 }
 
 func (c *PrincipalClient) IssueGrant(ctx context.Context, request IssueGrantRequest) (PrincipalSnapshot, error) {
-	if c == nil || c.provider == nil {
+	if c == nil || c.lifecycle == nil {
 		return PrincipalSnapshot{}, invalidPrincipal("Principal client is not initialized", nil)
 	}
-	return c.provider.IssueGrant(ctx, request)
+	return c.lifecycle.IssueGrant(ctx, request)
 }
 
 func (c *PrincipalClient) RevokeGrant(ctx context.Context, request RevokeGrantRequest) (PrincipalSnapshot, error) {
-	if c == nil || c.provider == nil {
+	if c == nil || c.lifecycle == nil {
 		return PrincipalSnapshot{}, invalidPrincipal("Principal client is not initialized", nil)
 	}
-	return c.provider.RevokeGrant(ctx, request)
+	return c.lifecycle.RevokeGrant(ctx, request)
 }
 
 func (c *PrincipalClient) Get(ctx context.Context, principalURA string) (PrincipalSnapshot, error) {
-	if c == nil || c.provider == nil {
+	if c == nil || c.lifecycle == nil {
 		return PrincipalSnapshot{}, invalidPrincipal("Principal client is not initialized", nil)
 	}
-	return c.provider.Get(ctx, principalURA)
+	return c.lifecycle.Get(ctx, principalURA)
 }
 
 type principalAbilityInvoker interface {
@@ -369,6 +351,8 @@ type RuntimePrincipalProvider struct {
 	ability principalAbilityInvoker
 	call    RuntimeCallContext
 }
+
+var _ PrincipalLifecycle = (*RuntimePrincipalProvider)(nil)
 
 func NewRuntimePrincipalProvider(ability principalAbilityInvoker, call RuntimeCallContext) (*RuntimePrincipalProvider, error) {
 	if ability == nil {

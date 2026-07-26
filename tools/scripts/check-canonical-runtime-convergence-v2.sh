@@ -125,6 +125,7 @@ check_shellguard_path_normalization_fail_closed_contract() {
   [[ -f "$pathconstraints" ]] || fail "ShellGuard pathconstraints source is missing: ${pathconstraints#$cli_root/}"
 
   "$PYTHON_BIN" - "$pathconstraints" <<'PY'
+import re
 import sys
 from pathlib import Path
 
@@ -15496,6 +15497,7 @@ check_sdk_principal_projection_fail_closed_contract() {
   done
 
   "$PYTHON_BIN" - "$go_principal" "$py_principal" "$go_test" "$py_test" <<'PY'
+import re
 import sys
 from pathlib import Path
 
@@ -15503,6 +15505,11 @@ go_principal = Path(sys.argv[1]).read_text(encoding="utf-8")
 py_principal = Path(sys.argv[2]).read_text(encoding="utf-8")
 go_test = Path(sys.argv[3]).read_text(encoding="utf-8")
 py_test = Path(sys.argv[4]).read_text(encoding="utf-8")
+
+if re.search(r"\bPrincipalProvider\b", go_principal):
+    raise SystemExit("go_principal_public_seam_duplicate_provider_present")
+if re.search(r"\bPrincipalProvider\b", py_principal):
+    raise SystemExit("python_principal_public_seam_duplicate_provider_present")
 
 for token in (
     "func principalStringFromMap",

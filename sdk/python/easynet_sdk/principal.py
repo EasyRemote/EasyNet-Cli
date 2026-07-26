@@ -1,6 +1,6 @@
 """Product-neutral principal lifecycle contracts.
 
-The module exposes immutable public projections and a provider protocol. It
+The module exposes immutable public projections and a lifecycle protocol. It
 does not own account login, private-key custody, or a product-specific user
 directory.
 """
@@ -46,7 +46,6 @@ __all__ = [
     "PrincipalCommand",
     "PrincipalClient",
     "PrincipalLifecycle",
-    "PrincipalProvider",
     "PrincipalProofKind",
     "PrincipalProofRef",
     "PrincipalSnapshot",
@@ -249,7 +248,7 @@ class RevokeGrantRequest:
     grant_id: str
 
 
-class PrincipalProvider(Protocol):
+class PrincipalLifecycle(Protocol):
     def create(self, request: CreatePrincipalRequest) -> PrincipalSnapshot: ...
     def bind_first_key(self, request: BindPrincipalKeyRequest) -> PrincipalSnapshot: ...
     def add_key(self, request: BindPrincipalKeyRequest) -> PrincipalSnapshot: ...
@@ -267,59 +266,56 @@ class PrincipalProvider(Protocol):
     def get(self, principal_ura: str) -> PrincipalSnapshot: ...
 
 
-PrincipalLifecycle = PrincipalProvider
-
-
 class PrincipalClient:
-    def __init__(self, provider: PrincipalProvider) -> None:
-        if provider is None:
-            raise _invalid("Principal provider is required")
-        self._provider = provider
+    def __init__(self, lifecycle: PrincipalLifecycle) -> None:
+        if lifecycle is None:
+            raise _invalid("Principal lifecycle is required")
+        self._lifecycle = lifecycle
 
     def create(self, request: CreatePrincipalRequest) -> PrincipalSnapshot:
-        return self._provider.create(request)
+        return self._lifecycle.create(request)
 
     def bind_first_key(self, request: BindPrincipalKeyRequest) -> PrincipalSnapshot:
-        return self._provider.bind_first_key(request)
+        return self._lifecycle.bind_first_key(request)
 
     def add_key(self, request: BindPrincipalKeyRequest) -> PrincipalSnapshot:
-        return self._provider.add_key(request)
+        return self._lifecycle.add_key(request)
 
     def rotate_key(self, request: RotatePrincipalKeyRequest) -> PrincipalSnapshot:
-        return self._provider.rotate_key(request)
+        return self._lifecycle.rotate_key(request)
 
     def revoke_key(self, request: RevokePrincipalKeyRequest) -> PrincipalSnapshot:
-        return self._provider.revoke_key(request)
+        return self._lifecycle.revoke_key(request)
 
     def configure_recovery(self, request: ConfigureRecoveryRequest) -> PrincipalSnapshot:
-        return self._provider.configure_recovery(request)
+        return self._lifecycle.configure_recovery(request)
 
     def recover(self, request: RecoverPrincipalRequest) -> PrincipalSnapshot:
-        return self._provider.recover(request)
+        return self._lifecycle.recover(request)
 
     def suspend(self, request: ChangePrincipalStateRequest) -> PrincipalSnapshot:
-        return self._provider.suspend(request)
+        return self._lifecycle.suspend(request)
 
     def reactivate(self, request: ChangePrincipalStateRequest) -> PrincipalSnapshot:
-        return self._provider.reactivate(request)
+        return self._lifecycle.reactivate(request)
 
     def delete(self, request: ChangePrincipalStateRequest) -> PrincipalSnapshot:
-        return self._provider.delete(request)
+        return self._lifecycle.delete(request)
 
     def issue_enrollment(self, request: IssueEnrollmentRequest) -> PrincipalSnapshot:
-        return self._provider.issue_enrollment(request)
+        return self._lifecycle.issue_enrollment(request)
 
     def revoke_enrollment(self, request: RevokeEnrollmentRequest) -> PrincipalSnapshot:
-        return self._provider.revoke_enrollment(request)
+        return self._lifecycle.revoke_enrollment(request)
 
     def issue_grant(self, request: IssueGrantRequest) -> PrincipalSnapshot:
-        return self._provider.issue_grant(request)
+        return self._lifecycle.issue_grant(request)
 
     def revoke_grant(self, request: RevokeGrantRequest) -> PrincipalSnapshot:
-        return self._provider.revoke_grant(request)
+        return self._lifecycle.revoke_grant(request)
 
     def get(self, principal_ura: str) -> PrincipalSnapshot:
-        return self._provider.get(principal_ura)
+        return self._lifecycle.get(principal_ura)
 
 
 class _RuntimeAbilityInvoker(Protocol):

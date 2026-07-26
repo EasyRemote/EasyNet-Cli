@@ -67,6 +67,7 @@ class PrincipalTests(unittest.TestCase):
         self.assertNotIn("dataclass", principal_module.__all__)
         self.assertNotIn("Protocol", principal_module.__all__)
         self.assertNotIn("Sequence", principal_module.__all__)
+        self.assertNotIn("PrincipalProvider", principal_module.__all__)
 
     def test_runtime_principal_provider_lowers_lifecycle_transitions(self) -> None:
         ability = _MemoryAbility()
