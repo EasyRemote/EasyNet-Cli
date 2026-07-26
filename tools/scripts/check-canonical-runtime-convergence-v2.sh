@@ -13801,6 +13801,25 @@ for required in (
 ):
     if required not in cli:
         raise SystemExit(f"plugin_realtime_output_read_model:cli_strict_projection_missing:{required}")
+
+broker = Path(sys.argv[3]).read_text(encoding="utf-8")
+broker_production = broker.split("\n#[cfg(test)]", 1)[0]
+permission_status = re.search(
+    r"pub\s+enum\s+PluginRealtimePermissionStatus\s*\{(?P<body>.*?)\n\}",
+    broker_production,
+    re.S,
+)
+if permission_status is None:
+    raise SystemExit("plugin_realtime_output_read_model:permission_status_enum_missing")
+permission_status_body = permission_status.group("body")
+if "ActionUnavailable" not in permission_status_body:
+    raise SystemExit("plugin_realtime_output_read_model:permission_action_unavailable_missing")
+if "Unknown" in permission_status_body:
+    raise SystemExit("plugin_realtime_output_read_model:permission_unknown_state_retired")
+if "PluginRealtimePermissionStatus::ActionUnavailable" not in broker_production:
+    raise SystemExit("plugin_realtime_output_read_model:permission_action_unavailable_mapping_missing")
+if "policy_broker_reports_missing_permission_action_path_as_action_unavailable" not in broker:
+    raise SystemExit("plugin_realtime_output_read_model:missing_permission_action_unavailable_test")
 PY
 }
 
@@ -19846,6 +19865,17 @@ fn invoke_plugin_activate_realtime(value: serde_json::Value) -> anyhow::Result<P
 EOF
   if ( CLI_ROOT="$tmp/plugin-realtime-read-model-legacy"; check_plugin_realtime_output_read_model_contract ) >/dev/null 2>&1; then
     fail "self-test expected plugin realtime output read model gate to fail"
+  fi
+  mkdir -p "$tmp/plugin-permission-unknown-state/src/daemon/plugins" \
+    "$tmp/plugin-permission-unknown-state/src/cli/commands/groups"
+  cp "$ROOT/src/daemon/plugins/realtime.rs" "$tmp/plugin-permission-unknown-state/src/daemon/plugins/realtime.rs"
+  cp "$ROOT/src/daemon/plugins/surface.rs" "$tmp/plugin-permission-unknown-state/src/daemon/plugins/surface.rs"
+  cp "$ROOT/src/daemon/plugins/broker.rs" "$tmp/plugin-permission-unknown-state/src/daemon/plugins/broker.rs"
+  cp "$ROOT/src/cli/commands/groups/plugin.rs" "$tmp/plugin-permission-unknown-state/src/cli/commands/groups/plugin.rs"
+  perl -0pi -e 's/ActionUnavailable/Unknown/g; s/policy_broker_reports_missing_permission_action_path_as_action_unavailable/policy_broker_reports_missing_permission_action_path_as_unknown/g' \
+    "$tmp/plugin-permission-unknown-state/src/daemon/plugins/broker.rs"
+  if ( CLI_ROOT="$tmp/plugin-permission-unknown-state"; check_plugin_realtime_output_read_model_contract ) >/dev/null 2>&1; then
+    fail "self-test expected plugin permission unknown state gate to fail"
   fi
   mkdir -p "$tmp/plugin-cli-projection-fallback-legacy/src/daemon/plugins" \
     "$tmp/plugin-cli-projection-fallback-legacy/src/cli/commands/groups"

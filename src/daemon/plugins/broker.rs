@@ -171,7 +171,7 @@ impl PluginPolicyBroker {
         } else if !request_abilities.is_empty() {
             PluginRealtimePermissionStatus::RequestAbilityAvailable
         } else {
-            PluginRealtimePermissionStatus::Unknown
+            PluginRealtimePermissionStatus::ActionUnavailable
         };
         PluginRealtimePermissionReadiness {
             required,
@@ -213,7 +213,7 @@ pub enum PluginRealtimePermissionStatus {
     NotRequired,
     StatusAbilityAvailable,
     RequestAbilityAvailable,
-    Unknown,
+    ActionUnavailable,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -417,6 +417,53 @@ permissions = ["camera"]
             PluginRealtimePermissionStatus::StatusAbilityAvailable
         );
         assert_eq!(readiness.status_abilities, vec!["test.permission_status"]);
+    }
+
+    #[test]
+    fn policy_broker_reports_missing_permission_action_path_as_action_unavailable() {
+        let manifest = PluginPackageManifest::parse(
+            "plugins/test/plugin.toml",
+            r#"
+schema_version = "1"
+id = "test.permissions"
+version = "0.1.0"
+kind = "sidecar"
+entrypoint = "bin/plugin"
+abilities = ["abilities/*.ability.toml"]
+permissions = []
+resources = []
+platforms = []
+
+[limits]
+max_sessions = 1
+max_frame_queue = 1
+
+[[ability_metadata]]
+name = "test.camera.open"
+layer = "operational"
+call_mode = "stream"
+
+[[realtime_capability]]
+kind = "camera"
+modes = ["snapshot"]
+transport = "invoke_stream"
+activation_abilities = ["test.camera.open"]
+permissions = ["camera"]
+"#,
+        )
+        .expect("manifest");
+        let daemon = BTreeSet::from(["test.camera.open".to_string()]);
+        let plans =
+            activation_plans_for_manifest("test.permissions", "0.1.0", &manifest, Some(&daemon));
+
+        let readiness = PluginPolicyBroker.readiness(&["camera".to_string()], &plans[0]);
+
+        assert_eq!(
+            readiness.status,
+            PluginRealtimePermissionStatus::ActionUnavailable
+        );
+        assert!(readiness.status_abilities.is_empty());
+        assert!(readiness.request_abilities.is_empty());
     }
 
     #[test]
