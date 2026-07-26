@@ -2,27 +2,27 @@
 // ==============================================
 //
 // File: src/daemon/federation/receipt_contract.rs
-// Description: Shared federation receipt fact DTOs for hub producers and
-//              device consumers.
+// Description: Shared federation receipt fact DTOs for Authority producers
+//              and device consumers.
 //
 // Protocol Responsibility
 // -----------------------
-// These types define the explicit runtime facts a hub must emit for a device
-// to seed and advance its realm Authority-published ability catalog. They are not product
-// defaults and they are not optional enrichments.
+// These types define the explicit runtime facts a realm Authority must emit
+// for a device to seed and advance its Authority-published ability catalog.
+// They are not product defaults and they are not optional enrichments.
 //
 // Implementation Approach
 // -----------------------
 // Keep the structs serde-only and fail-closed by construction: required facts
 // have no serde defaults. Empty catalog/diff states remain valid only when the
-// hub explicitly serializes the empty arrays and revision value.
+// Authority explicitly serializes the empty arrays and revision value.
 //
 // Usage Contract
 // --------------
-// Hub-side wrappers construct these facts. Device-side clients deserialize the
-// same shapes. A missing field is a protocol error because the receiver cannot
-// distinguish "hub deliberately published nothing" from "old/incorrect hub
-// omitted the route facts".
+// Authority-side wrappers construct these facts. Device-side clients
+// deserialize the same shapes. A missing field is a protocol error because
+// the receiver cannot distinguish "Authority deliberately published nothing"
+// from "old/incorrect Authority omitted the route facts".
 //
 // Architectural Position
 // ----------------------
@@ -39,20 +39,20 @@ pub struct JoinReceipt {
     pub membership_ura: String,
     pub realm: String,
     pub join_receipt_hash: String,
-    pub hub_published_abilities: Vec<HubAbilityEntry>,
-    pub hub_abilities_revision: u64,
+    pub authority_published_abilities: Vec<AuthorityAbilityEntry>,
+    pub authority_abilities_revision: u64,
     pub advertise_contract: AdvertiseContract,
 }
 
 /// One Authority-published ability descriptor as broadcast by the realm
 /// Authority.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-pub struct HubAbilityEntry {
+pub struct AuthorityAbilityEntry {
     pub name: String,
     pub descriptor: Value,
 }
 
-/// Bound on what a device may advertise at this hub.
+/// Bound on what a device may advertise to this realm Authority.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct AdvertiseContract {
     pub allowed_owner_prefixes: Vec<String>,
@@ -69,15 +69,15 @@ impl AdvertiseContract {
     }
 }
 
-/// Hub-broadcast contract diff returned in `HeartbeatReceipt`.
+/// Authority broadcast contract diff returned in `HeartbeatReceipt`.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-pub struct HubAbilitiesDiff {
+pub struct AuthorityAbilitiesDiff {
     pub revision: u64,
-    pub added: Vec<HubAbilityEntry>,
+    pub added: Vec<AuthorityAbilityEntry>,
     pub removed: Vec<String>,
 }
 
-impl HubAbilitiesDiff {
+impl AuthorityAbilitiesDiff {
     #[must_use]
     pub fn empty_at(revision: u64) -> Self {
         Self {

@@ -558,7 +558,10 @@ fn apply_federation_join_receipt(
         tonic::Status::failed_precondition(format!("federation.join receipt invalid: {error}"))
     })?;
     authority_published_abilities
-        .seed_from_snapshot(body.hub_abilities_revision, body.hub_published_abilities)
+        .seed_from_snapshot(
+            body.authority_abilities_revision,
+            body.authority_published_abilities,
+        )
         .map_err(|error| {
             tonic::Status::failed_precondition(format!(
                 "federation.join Authority-published ability catalog invalid: {error}"
@@ -566,7 +569,7 @@ fn apply_federation_join_receipt(
         })?;
     Ok(FederationJoinReceiptProjection {
         seeded_ability_count: authority_published_abilities.len(),
-        authority_abilities_revision: body.hub_abilities_revision,
+        authority_abilities_revision: body.authority_abilities_revision,
     })
 }
 
@@ -1233,7 +1236,7 @@ mod tests {
         UserTrustSync,
     };
     use crate::daemon::ability::descriptors::{AbilityDescriptor, AdmissionAction, Visibility};
-    use crate::daemon::federation::client::ability_contract::HubAbilityEntry;
+    use crate::daemon::federation::client::ability_contract::AuthorityAbilityEntry;
     use crate::daemon::federation::read_model::authority_published_abilities::AuthorityPublishedAbilityStore;
     use crate::daemon::identity::self_identity::TestCanonicalSigner;
     use crate::daemon::persistence::config::{save_credentials, state_dir, Credentials};
@@ -1243,8 +1246,8 @@ mod tests {
     use std::sync::Arc;
     use tonic::transport::Channel;
 
-    fn canonical_authority_entry(name: &str) -> HubAbilityEntry {
-        HubAbilityEntry {
+    fn canonical_authority_entry(name: &str) -> AuthorityAbilityEntry {
+        AuthorityAbilityEntry {
             name: name.to_string(),
             descriptor: serde_json::to_value(
                 AbilityDescriptor::new(
@@ -1339,8 +1342,8 @@ mod tests {
             "membership_ura": "easynet:///r/realm/device/n1",
             "realm": "realm",
             "join_receipt_hash": "a".repeat(64),
-            "hub_abilities_revision": 17,
-            "hub_published_abilities": [canonical_authority_entry("test.scope")],
+            "authority_abilities_revision": 17,
+            "authority_published_abilities": [canonical_authority_entry("test.scope")],
             "advertise_contract": {
                 "allowed_owner_prefixes": ["device."],
                 "allows_hosted_agents": true

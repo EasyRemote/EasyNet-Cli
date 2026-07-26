@@ -1077,7 +1077,7 @@ mod tests {
         // passes `scope = "realm"`, the merged catalogue includes entries
         // cached from federation joins and heartbeats. The default-local path
         // stays disjoint — pin both axes.
-        use crate::daemon::federation::client::ability_contract::HubAbilityEntry;
+        use crate::daemon::federation::client::ability_contract::AuthorityAbilityEntry;
         let authority_published_abilities = AuthorityPublishedAbilityStore::new();
 
         let mut reg = metadata_test_catalog();
@@ -1090,9 +1090,9 @@ mod tests {
         );
         authority_published_abilities
             .apply_diff(
-                crate::daemon::federation::client::ability_contract::HubAbilitiesDiff {
+                crate::daemon::federation::client::ability_contract::AuthorityAbilitiesDiff {
                     revision: 99,
-                    added: vec![HubAbilityEntry {
+                    added: vec![AuthorityAbilityEntry {
                         name: "test.scope".to_string(),
                         descriptor: serde_json::to_value(
                             AbilityDescriptor::new(

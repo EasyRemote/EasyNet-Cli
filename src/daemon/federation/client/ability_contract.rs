@@ -42,7 +42,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub use crate::daemon::federation::receipt_contract::{
-    AdvertiseContract, HubAbilitiesDiff, HubAbilityEntry, JoinReceipt,
+    AdvertiseContract, AuthorityAbilitiesDiff, AuthorityAbilityEntry, JoinReceipt,
 };
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
@@ -95,7 +95,7 @@ pub struct PrincipalProofRef {
     pub reference: String,
 }
 
-// JoinReceipt, HubAbilityEntry, AdvertiseContract, and HubAbilitiesDiff are
+// JoinReceipt, AuthorityAbilityEntry, AdvertiseContract, and AuthorityAbilitiesDiff are
 // re-exported from `daemon::federation::receipt_contract` so hub producers and
 // device consumers bind to one required-facts receipt shape.
 
@@ -183,7 +183,7 @@ pub struct HeartbeatReceipt {
     /// update of realm Authority-published abilities since the caller's
     /// `since_abilities_revision`. Empty `added` and `removed` arrays are
     /// valid only when the realm Authority serializes this diff with a revision.
-    pub hub_abilities_diff: HubAbilitiesDiff,
+    pub authority_abilities_diff: AuthorityAbilitiesDiff,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -496,8 +496,8 @@ mod tests {
             "membership_ura": "easynet:///r/acme/device/01DEV",
             "realm": "acme",
             "join_receipt_hash": "abc123",
-            "hub_published_abilities": [],
-            "hub_abilities_revision": 0,
+            "authority_published_abilities": [],
+            "authority_abilities_revision": 0,
             "advertise_contract": {
                 "allowed_owner_prefixes": ["device."],
                 "allows_hosted_agents": true
@@ -507,8 +507,8 @@ mod tests {
         assert_eq!(parsed.membership_ura, "easynet:///r/acme/device/01DEV");
         assert_eq!(parsed.realm, "acme");
         assert_eq!(parsed.join_receipt_hash, "abc123");
-        assert_eq!(parsed.hub_abilities_revision, 0);
-        assert!(parsed.hub_published_abilities.is_empty());
+        assert_eq!(parsed.authority_abilities_revision, 0);
+        assert!(parsed.authority_published_abilities.is_empty());
         assert_eq!(
             parsed.advertise_contract.allowed_owner_prefixes,
             vec!["device.".to_string()]
@@ -516,7 +516,7 @@ mod tests {
     }
 
     #[test]
-    fn join_receipt_rejects_missing_hub_runtime_facts() {
+    fn join_receipt_rejects_missing_authority_runtime_facts() {
         let body = json!({
             "membership_ura": "easynet:///r/acme/device/01DEV",
             "realm": "acme",
@@ -524,8 +524,8 @@ mod tests {
         });
         let err = parse_receipt_value::<JoinReceipt>(&body).unwrap_err();
         assert!(
-            err.to_string().contains("hub_published_abilities"),
-            "missing hub snapshot must fail closed: {err}"
+            err.to_string().contains("authority_published_abilities"),
+            "missing Authority snapshot must fail closed: {err}"
         );
     }
 
@@ -564,11 +564,11 @@ mod tests {
     }
 
     #[test]
-    fn heartbeat_receipt_parses_explicit_empty_hub_diff() {
+    fn heartbeat_receipt_parses_explicit_empty_authority_diff() {
         let body = json!({
             "membership_status": "active",
             "realm_directory_size": 3,
-            "hub_abilities_diff": {
+            "authority_abilities_diff": {
                 "revision": 0,
                 "added": [],
                 "removed": []
@@ -577,20 +577,20 @@ mod tests {
         let parsed: HeartbeatReceipt = parse_receipt_value(&body).unwrap();
         assert_eq!(parsed.membership_status, "active");
         assert_eq!(parsed.realm_directory_size, 3);
-        assert_eq!(parsed.hub_abilities_diff.revision, 0);
-        assert!(parsed.hub_abilities_diff.added.is_empty());
+        assert_eq!(parsed.authority_abilities_diff.revision, 0);
+        assert!(parsed.authority_abilities_diff.added.is_empty());
     }
 
     #[test]
-    fn heartbeat_receipt_rejects_missing_hub_diff() {
+    fn heartbeat_receipt_rejects_missing_authority_diff() {
         let body = json!({
             "membership_status": "active",
             "realm_directory_size": 3
         });
         let err = parse_receipt_value::<HeartbeatReceipt>(&body).unwrap_err();
         assert!(
-            err.to_string().contains("hub_abilities_diff"),
-            "missing hub ability diff must fail closed: {err}"
+            err.to_string().contains("authority_abilities_diff"),
+            "missing Authority ability diff must fail closed: {err}"
         );
     }
 
@@ -601,7 +601,7 @@ mod tests {
             body.insert("membership_status".to_string(), json!("active"));
             body.insert("realm_directory_size".to_string(), json!(3));
             body.insert(
-                "hub_abilities_diff".to_string(),
+                "authority_abilities_diff".to_string(),
                 json!({
                     "revision": 0,
                     "added": [],

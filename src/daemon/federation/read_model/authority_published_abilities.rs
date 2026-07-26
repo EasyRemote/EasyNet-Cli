@@ -14,7 +14,7 @@
 // offers without an extra round-trip per query.
 //
 // This store is the schema gate between federation wire JSON and the canonical
-// runtime read model. Federation broadcasts enter as `HubAbilityEntry { name,
+// runtime read model. Federation broadcasts enter as `AuthorityAbilityEntry { name,
 // descriptor: Value }` for wire compatibility, but only parsed, validated
 // `AbilityDescriptor` values may be cached or returned. That keeps
 // `meta.list_abilities` from exposing names without `ability_ura` /
@@ -42,7 +42,9 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
 
 use crate::daemon::ability::descriptors::AbilityDescriptor;
-use crate::daemon::federation::client::ability_contract::{HubAbilitiesDiff, HubAbilityEntry};
+use crate::daemon::federation::client::ability_contract::{
+    AuthorityAbilitiesDiff, AuthorityAbilityEntry,
+};
 
 /// In-memory cache of Authority-published ability descriptors, scoped
 /// to one realm session. The store lives behind an `Arc` so the
@@ -78,7 +80,7 @@ impl AuthorityPublishedAbilityStore {
     pub fn seed_from_snapshot(
         &self,
         revision: u64,
-        abilities: Vec<HubAbilityEntry>,
+        abilities: Vec<AuthorityAbilityEntry>,
     ) -> Result<(), String> {
         let entries = validate_authority_ability_entries(abilities)?;
         let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
@@ -96,7 +98,7 @@ impl AuthorityPublishedAbilityStore {
     /// `revision` advances the cache's tracked rev so the next
     /// heartbeat asks for "what's changed since the new value".
     /// Idempotent: replaying the same diff is a no-op.
-    pub fn apply_diff(&self, diff: HubAbilitiesDiff) -> Result<(), String> {
+    pub fn apply_diff(&self, diff: AuthorityAbilitiesDiff) -> Result<(), String> {
         let added = validate_authority_ability_entries(diff.added)?;
         let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
         for descriptor in added {
@@ -155,7 +157,7 @@ impl AuthorityPublishedAbilityStore {
 }
 
 fn validate_authority_ability_entries(
-    entries: Vec<HubAbilityEntry>,
+    entries: Vec<AuthorityAbilityEntry>,
 ) -> Result<Vec<AbilityDescriptor>, String> {
     entries
         .into_iter()
@@ -166,7 +168,7 @@ fn validate_authority_ability_entries(
 
 fn validate_authority_ability_entry(
     index: usize,
-    entry: HubAbilityEntry,
+    entry: AuthorityAbilityEntry,
 ) -> Result<AbilityDescriptor, String> {
     let descriptor: AbilityDescriptor =
         serde_json::from_value(entry.descriptor).map_err(|error| {
@@ -207,9 +209,9 @@ mod tests {
         .expect("canonical realm Authority descriptor")
     }
 
-    fn entry(name: &str) -> HubAbilityEntry {
+    fn entry(name: &str) -> AuthorityAbilityEntry {
         let descriptor = descriptor(name);
-        HubAbilityEntry {
+        AuthorityAbilityEntry {
             name: name.to_string(),
             descriptor: serde_json::to_value(descriptor).expect("descriptor wire json"),
         }
@@ -236,7 +238,7 @@ mod tests {
     fn apply_diff_adds_new_entries() {
         let store = AuthorityPublishedAbilityStore::new();
         store
-            .apply_diff(HubAbilitiesDiff {
+            .apply_diff(AuthorityAbilitiesDiff {
                 revision: 1,
                 added: vec![entry("test.a")],
                 removed: vec![],
@@ -253,7 +255,7 @@ mod tests {
             .seed_from_snapshot(1, vec![entry("test.a"), entry("test.b")])
             .expect("canonical snapshot");
         store
-            .apply_diff(HubAbilitiesDiff {
+            .apply_diff(AuthorityAbilitiesDiff {
                 revision: 2,
                 added: vec![],
                 removed: vec!["test.a".to_string()],
@@ -267,7 +269,7 @@ mod tests {
     #[test]
     fn apply_diff_idempotent_when_replayed() {
         let store = AuthorityPublishedAbilityStore::new();
-        let diff = HubAbilitiesDiff {
+        let diff = AuthorityAbilitiesDiff {
             revision: 3,
             added: vec![entry("test.a")],
             removed: vec![],
@@ -290,7 +292,7 @@ mod tests {
             .seed_from_snapshot(10, vec![])
             .expect("canonical snapshot");
         store
-            .apply_diff(HubAbilitiesDiff {
+            .apply_diff(AuthorityAbilitiesDiff {
                 revision: 5,
                 added: vec![entry("test.late")],
                 removed: vec![],
@@ -308,7 +310,7 @@ mod tests {
         let error = store
             .seed_from_snapshot(
                 7,
-                vec![HubAbilityEntry {
+                vec![AuthorityAbilityEntry {
                     name: "hub.bad".to_string(),
                     descriptor: json!({"name": "hub.bad"}),
                 }],
@@ -331,9 +333,9 @@ mod tests {
             .expect("canonical seed");
 
         let error = store
-            .apply_diff(HubAbilitiesDiff {
+            .apply_diff(AuthorityAbilitiesDiff {
                 revision: 11,
-                added: vec![HubAbilityEntry {
+                added: vec![AuthorityAbilityEntry {
                     name: "hub.bad".to_string(),
                     descriptor: json!({"name": "hub.bad"}),
                 }],

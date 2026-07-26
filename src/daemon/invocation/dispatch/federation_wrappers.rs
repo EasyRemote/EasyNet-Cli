@@ -53,7 +53,7 @@ use crate::daemon::federation::read_model::advertised_agents::{
     AdvertisedAgentRecord, AdvertisedAgentSigningAuthority, AdvertisedAgentStore,
 };
 use crate::daemon::federation::receipt_contract::{
-    AdvertiseContract, HubAbilitiesDiff, HubAbilityEntry,
+    AdvertiseContract, AuthorityAbilitiesDiff, AuthorityAbilityEntry,
 };
 #[cfg(test)]
 use crate::daemon::federation::resolver_contract::{GateResult, RecordType};
@@ -298,9 +298,9 @@ pub struct JoinResponse {
     /// schema-compat.
     pub join_receipt_hash: String,
     /// Explicit Authority-published ability catalog snapshot published at join time.
-    pub hub_published_abilities: Vec<HubAbilityEntry>,
+    pub authority_published_abilities: Vec<AuthorityAbilityEntry>,
     /// Monotonic revision for the Authority-published ability snapshot.
-    pub hub_abilities_revision: u64,
+    pub authority_abilities_revision: u64,
     /// Explicit advertise policy fact for this membership.
     pub advertise_contract: AdvertiseContract,
 }
@@ -315,8 +315,8 @@ pub fn handle_join(request: &JoinRequest) -> JoinResponse {
         membership_ura: request.membership_ura.clone(),
         realm: request.realm.clone(),
         join_receipt_hash: derive_join_receipt_hash(&request.membership_ura, &request.realm),
-        hub_published_abilities: Vec::new(),
-        hub_abilities_revision: 0,
+        authority_published_abilities: Vec::new(),
+        authority_abilities_revision: 0,
         advertise_contract: AdvertiseContract::device_default(),
     }
 }
@@ -511,7 +511,7 @@ pub struct HeartbeatResponse {
     pub refreshed_owner_count: usize,
     /// Explicit Authority-published ability catalog diff since the caller's last
     /// observed revision.
-    pub hub_abilities_diff: HubAbilitiesDiff,
+    pub authority_abilities_diff: AuthorityAbilitiesDiff,
 }
 
 /// Handle a `federation.heartbeat` invocation.
@@ -545,7 +545,9 @@ pub(crate) fn handle_heartbeat(
         membership_status: "active".to_string(),
         realm_directory_size: registry.online_count(),
         refreshed_owner_count,
-        hub_abilities_diff: HubAbilitiesDiff::empty_at(request.since_abilities_revision),
+        authority_abilities_diff: AuthorityAbilitiesDiff::empty_at(
+            request.since_abilities_revision,
+        ),
     }
 }
 
@@ -1587,8 +1589,8 @@ mod tests {
         assert_eq!(resp.membership_ura, req.membership_ura);
         assert_eq!(resp.realm, req.realm);
         assert_eq!(resp.join_receipt_hash.len(), 64);
-        assert!(resp.hub_published_abilities.is_empty());
-        assert_eq!(resp.hub_abilities_revision, 0);
+        assert!(resp.authority_published_abilities.is_empty());
+        assert_eq!(resp.authority_abilities_revision, 0);
         assert_eq!(
             resp.advertise_contract.allowed_owner_prefixes,
             vec!["device.".to_string()]
@@ -1782,9 +1784,9 @@ mod tests {
         assert_eq!(resp.membership_status, "active");
         assert_eq!(resp.realm_directory_size, 2);
         assert_eq!(resp.refreshed_owner_count, 0);
-        assert_eq!(resp.hub_abilities_diff.revision, 9);
-        assert!(resp.hub_abilities_diff.added.is_empty());
-        assert!(resp.hub_abilities_diff.removed.is_empty());
+        assert_eq!(resp.authority_abilities_diff.revision, 9);
+        assert!(resp.authority_abilities_diff.added.is_empty());
+        assert!(resp.authority_abilities_diff.removed.is_empty());
     }
 
     #[test]
@@ -1844,7 +1846,7 @@ mod tests {
         };
         let resp = handle_heartbeat(&req, &registry, &catalog, after_expiry);
         assert_eq!(resp.refreshed_owner_count, 1);
-        assert_eq!(resp.hub_abilities_diff.revision, 11);
+        assert_eq!(resp.authority_abilities_diff.revision, 11);
 
         // ...and the device-owned ability is resolvable again, with its
         // contents and revision unchanged (lease-only refresh).

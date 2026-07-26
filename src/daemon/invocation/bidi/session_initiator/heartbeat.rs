@@ -168,7 +168,7 @@ fn apply_federation_heartbeat_receipt(
         tonic::Status::failed_precondition(format!("federation.heartbeat receipt invalid: {error}"))
     })?;
     authority_published_abilities
-        .apply_diff(receipt.hub_abilities_diff)
+        .apply_diff(receipt.authority_abilities_diff)
         .map_err(|error| {
             tonic::Status::failed_precondition(format!(
                 "federation.heartbeat Authority-published ability catalog invalid: {error}"
@@ -180,14 +180,14 @@ fn apply_federation_heartbeat_receipt(
 mod tests {
     use super::{apply_federation_heartbeat_receipt, heartbeat_refresh_owner_uras_for_caller};
     use crate::daemon::ability::descriptors::{AbilityDescriptor, AdmissionAction, Visibility};
-    use crate::daemon::federation::client::ability_contract::HubAbilityEntry;
+    use crate::daemon::federation::client::ability_contract::AuthorityAbilityEntry;
     use crate::daemon::federation::read_model::authority_published_abilities::AuthorityPublishedAbilityStore;
     use crate::daemon::persistence::owner_projections::{
         self, OwnerProjectionCursor, OwnerProjectionCursorFile, OwnerProjectionCursorLifecycle,
     };
 
-    fn canonical_authority_entry(name: &str) -> HubAbilityEntry {
-        HubAbilityEntry {
+    fn canonical_authority_entry(name: &str) -> AuthorityAbilityEntry {
+        AuthorityAbilityEntry {
             name: name.to_string(),
             descriptor: serde_json::to_value(
                 AbilityDescriptor::new(
@@ -224,7 +224,7 @@ mod tests {
         let body = serde_json::to_vec(&serde_json::json!({
             "membership_status": "active",
             "realm_directory_size": 1,
-            "hub_abilities_diff": {
+            "authority_abilities_diff": {
                 "revision": 21,
                 "added": [],
                 "removed": []
@@ -245,7 +245,7 @@ mod tests {
         let body = serde_json::to_vec(&serde_json::json!({
             "membership_status": "active",
             "realm_directory_size": 1,
-            "hub_abilities_diff": {
+            "authority_abilities_diff": {
                 "revision": 22,
                 "added": [canonical_authority_entry("test.scope")],
                 "removed": []
