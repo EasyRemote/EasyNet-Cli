@@ -12,7 +12,7 @@ fn request_frame() -> String {
             "callee_ura": "easynet:///r/hub/device/provider",
             "ability_ura": "demo.echo",
             "subject_ura": "easynet:///r/hub/resource/demo",
-            "invocation_nonce": [1, 2, 3, 4],
+            "invocation_nonce": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
             "causal_context": {"form": "none"},
             "args": {"message": "hello"}
         }
@@ -31,7 +31,10 @@ fn sidecar_invocation_projects_runtime_frame() {
     assert_eq!(invocation.callee_ura, "easynet:///r/hub/device/provider");
     assert_eq!(invocation.ability_ura, "demo.echo");
     assert_eq!(invocation.subject_ura, "easynet:///r/hub/resource/demo");
-    assert_eq!(invocation.invocation_nonce, vec![1, 2, 3, 4]);
+    assert_eq!(
+        invocation.invocation_nonce,
+        vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+    );
     assert_eq!(invocation.causal_context, json!({"form": "none"}));
     assert_eq!(invocation.args["message"], json!("hello"));
 }
@@ -56,7 +59,7 @@ fn serve_exec_plugin_writes_result_frame() {
         json!({
             "type": "result",
             "call_id": "call-1",
-            "value": {"ok": true, "message": "hello", "nonce_len": 4}
+            "value": {"ok": true, "message": "hello", "nonce_len": 16}
         })
     );
 }
@@ -104,7 +107,7 @@ fn sidecar_invocation_rejects_retired_tuple_aliases() {
             "callee_ura": "easynet:///r/hub/device/provider",
             "ability_ura": "demo.echo",
             "subject_ura": "easynet:///r/hub/resource/demo",
-            "invocation_nonce": [1, 2, 3, 4],
+            "invocation_nonce": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
             "args": {}
         }
     });
@@ -123,7 +126,7 @@ fn sidecar_invocation_rejects_unknown_invocation_fields() {
             "callee_ura": "easynet:///r/hub/device/provider",
             "ability_ura": "demo.echo",
             "subject_ura": "easynet:///r/hub/resource/demo",
-            "invocation_nonce": [1, 2, 3, 4],
+            "invocation_nonce": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
             "descriptor_ref": "retired-provider-leak",
             "args": {}
         }
@@ -144,13 +147,36 @@ fn sidecar_invocation_rejects_unknown_request_fields() {
             "callee_ura": "easynet:///r/hub/device/provider",
             "ability_ura": "demo.echo",
             "subject_ura": "easynet:///r/hub/resource/demo",
-            "invocation_nonce": [1, 2, 3, 4],
+            "invocation_nonce": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
             "args": {}
         }
     });
 
     let error = SidecarInvocation::from_frame(frame).expect_err("unknown field");
     assert!(error.to_string().contains("canonical request frame"));
+}
+
+#[test]
+fn sidecar_invocation_rejects_non_canonical_nonce_length() {
+    let frame = json!({
+        "type": "invoke",
+        "call_id": "call-1",
+        "invocation": {
+            "caller_ura": "easynet:///r/hub/user/alice",
+            "callee_ura": "easynet:///r/hub/device/provider",
+            "ability_ura": "demo.echo",
+            "subject_ura": "easynet:///r/hub/resource/demo",
+            "invocation_nonce": [1, 2, 3, 4],
+            "causal_context": {"form": "none"},
+            "args": {"message": "hello"}
+        }
+    });
+
+    let error = SidecarInvocation::from_frame(frame).expect_err("short nonce");
+    assert!(
+        error.to_string().contains("exactly 16 bytes"),
+        "unexpected nonce length error: {error}"
+    );
 }
 
 #[test]

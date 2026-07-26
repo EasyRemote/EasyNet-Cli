@@ -6,6 +6,8 @@
 
 import { createInterface } from "node:readline/promises";
 
+const CANONICAL_INVOCATION_NONCE_BYTES = 16;
+
 export class SidecarProtocolError extends Error {
   constructor(message) {
     super(message);
@@ -175,6 +177,11 @@ function requireObject(value, field) {
 function requireNonce(value, field) {
   if (!Array.isArray(value) || value.length === 0) {
     throw new SidecarProtocolError(`sidecar frame field ${JSON.stringify(field)} must be a byte array`);
+  }
+  if (value.length !== CANONICAL_INVOCATION_NONCE_BYTES) {
+    throw new SidecarProtocolError(
+      `sidecar frame field ${JSON.stringify(field)} must contain exactly ${CANONICAL_INVOCATION_NONCE_BYTES} bytes`,
+    );
   }
   return value.map((item) => {
     if (!Number.isInteger(item) || item < 0 || item > 255) {

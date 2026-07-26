@@ -31,6 +31,7 @@ _CANONICAL_INVOCATION_FIELDS = frozenset(
     }
 )
 _CANONICAL_REQUEST_FIELDS = frozenset({"type", "call_id", "invocation"})
+_CANONICAL_INVOCATION_NONCE_BYTES = 16
 
 
 @dataclass(frozen=True)
@@ -213,6 +214,11 @@ def _required_nonce(frame: Mapping[str, Any], field: str) -> tuple[int, ...]:
     if not isinstance(value, list) or not value:
         raise SidecarProtocolError(
             f"sidecar frame field {field!r} must be a byte array"
+        )
+    if len(value) != _CANONICAL_INVOCATION_NONCE_BYTES:
+        raise SidecarProtocolError(
+            f"sidecar frame field {field!r} must contain exactly "
+            f"{_CANONICAL_INVOCATION_NONCE_BYTES} bytes"
         )
     nonce: list[int] = []
     for item in value:

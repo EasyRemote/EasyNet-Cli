@@ -13,6 +13,8 @@ use std::io::{self, BufRead, Write};
 use serde::Serialize;
 use serde_json::{Map, Value};
 
+const CANONICAL_INVOCATION_NONCE_BYTES: usize = 16;
+
 /// Handler-facing view of one runtime-admitted sidecar invocation.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SidecarInvocation {
@@ -274,6 +276,11 @@ fn take_required_nonce(
     if items.is_empty() {
         return Err(SidecarProtocolError::new(format!(
             "sidecar frame field {field:?} must be a byte array"
+        )));
+    }
+    if items.len() != CANONICAL_INVOCATION_NONCE_BYTES {
+        return Err(SidecarProtocolError::new(format!(
+            "sidecar frame field {field:?} must contain exactly {CANONICAL_INVOCATION_NONCE_BYTES} bytes"
         )));
     }
     let mut nonce = Vec::with_capacity(items.len());

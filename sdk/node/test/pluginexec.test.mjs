@@ -8,6 +8,8 @@ import {
   serveExecPlugin,
 } from "../provider/runtime/pluginexec.js";
 
+const canonicalNonce = Object.freeze(Array.from({ length: 16 }, (_, index) => index + 1));
+
 function requestFrame() {
   return {
     type: "invoke",
@@ -17,7 +19,7 @@ function requestFrame() {
       callee_ura: "easynet:///r/hub/device/provider",
       ability_ura: "demo.echo",
       subject_ura: "easynet:///r/hub/resource/demo",
-      invocation_nonce: [1, 2, 3, 4],
+      invocation_nonce: [...canonicalNonce],
       causal_context: { form: "none" },
       args: { message: "hello" },
     },
@@ -52,7 +54,7 @@ test("SidecarInvocation projects daemon frame", () => {
   assert.equal(invocation.calleeURA, "easynet:///r/hub/device/provider");
   assert.equal(invocation.abilityURA, "demo.echo");
   assert.equal(invocation.subjectURA, "easynet:///r/hub/resource/demo");
-  assert.deepEqual(invocation.invocationNonce, [1, 2, 3, 4]);
+  assert.deepEqual(invocation.invocationNonce, canonicalNonce);
   assert.deepEqual(invocation.causalContext, { form: "none" });
   assert.deepEqual(invocation.args, { message: "hello" });
 });
@@ -91,7 +93,7 @@ test("serveExecPlugin writes result frame", async () => {
   assert.deepEqual(capture.json(), {
     type: "result",
     call_id: "call-1",
-    value: { ok: true, message: "hello", nonce_len: 4 },
+    value: { ok: true, message: "hello", nonce_len: 16 },
   });
 });
 
@@ -170,4 +172,14 @@ test("SidecarInvocation rejects missing canonical invocation objects", () => {
       /must be an object/,
     );
   }
+});
+
+test("SidecarInvocation rejects non-canonical nonce length", () => {
+  const frame = requestFrame();
+  frame.invocation.invocation_nonce = [1, 2, 3, 4];
+
+  assert.throws(
+    () => SidecarInvocation.fromFrame(frame),
+    /exactly 16 bytes/,
+  );
 });

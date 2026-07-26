@@ -16,6 +16,7 @@ public final class SidecarRuntimeTest {
     sidecarInvocationRejectsUnknownInvocationFields();
     sidecarInvocationRejectsUnknownRequestFields();
     sidecarInvocationRejectsMissingCanonicalInvocationObjects();
+    sidecarInvocationRejectsNonCanonicalNonceLength();
   }
 
   static void sidecarInvocationProjectsDaemonFrame() {
@@ -26,7 +27,7 @@ public final class SidecarRuntimeTest {
     check("easynet:///r/hub/device/provider".equals(invocation.calleeURA()), "callee_ura");
     check("demo.echo".equals(invocation.abilityURA()), "ability_ura");
     check("easynet:///r/hub/resource/demo".equals(invocation.subjectURA()), "subject_ura");
-    check(invocation.invocationNonce().equals(java.util.List.of(1, 2, 3, 4)), "nonce");
+    check(invocation.invocationNonce().equals(canonicalNonce()), "nonce");
     check("none".equals(invocation.causalContext().get("form")), "causal_context");
     check("hello".equals(invocation.args().get("message")), "args");
     try {
@@ -75,7 +76,7 @@ public final class SidecarRuntimeTest {
     check(response.contains("\"type\":\"result\""), "result type");
     check(response.contains("\"call_id\":\"call-1\""), "call id");
     check(response.contains("\"message\":\"hello\""), "message");
-    check(response.contains("\"nonce_len\":4"), "nonce len");
+    check(response.contains("\"nonce_len\":16"), "nonce len");
   }
 
   static void serveWritesErrorFrameForHandlerFailure() throws Exception {
@@ -112,7 +113,7 @@ public final class SidecarRuntimeTest {
     invocation.put("callee_ura", "easynet:///r/hub/device/provider");
     invocation.put("ability_ura", "demo.echo");
     invocation.put("subject_ura", "easynet:///r/hub/resource/demo");
-    invocation.put("invocation_nonce", java.util.List.of(1, 2, 3, 4));
+    invocation.put("invocation_nonce", canonicalNonce());
     java.util.Map<String, Object> frame = new java.util.LinkedHashMap<>();
     frame.put("type", "invoke");
     frame.put("call_id", "call-1");
@@ -131,7 +132,7 @@ public final class SidecarRuntimeTest {
     invocation.put("callee_ura", "easynet:///r/hub/device/provider");
     invocation.put("ability_ura", "demo.echo");
     invocation.put("subject_ura", "easynet:///r/hub/resource/demo");
-    invocation.put("invocation_nonce", java.util.List.of(1, 2, 3, 4));
+    invocation.put("invocation_nonce", canonicalNonce());
     invocation.put("descriptor_ref", "retired-provider-leak");
     java.util.Map<String, Object> frame = new java.util.LinkedHashMap<>();
     frame.put("type", "invoke");
@@ -151,7 +152,7 @@ public final class SidecarRuntimeTest {
     invocation.put("callee_ura", "easynet:///r/hub/device/provider");
     invocation.put("ability_ura", "demo.echo");
     invocation.put("subject_ura", "easynet:///r/hub/resource/demo");
-    invocation.put("invocation_nonce", java.util.List.of(1, 2, 3, 4));
+    invocation.put("invocation_nonce", canonicalNonce());
     java.util.Map<String, Object> frame = new java.util.LinkedHashMap<>();
     frame.put("type", "invoke");
     frame.put("call_id", "call-1");
@@ -194,6 +195,21 @@ public final class SidecarRuntimeTest {
     }
   }
 
+  static void sidecarInvocationRejectsNonCanonicalNonceLength() {
+    java.util.Map<String, Object> invocation = canonicalInvocation();
+    invocation.put("invocation_nonce", java.util.List.of(1, 2, 3, 4));
+    java.util.Map<String, Object> frame = new java.util.LinkedHashMap<>();
+    frame.put("type", "invoke");
+    frame.put("call_id", "call-1");
+    frame.put("invocation", invocation);
+    try {
+      SidecarInvocation.fromFrame(frame);
+      throw new AssertionError("non-canonical invocation nonce length must fail");
+    } catch (SidecarProtocolError expected) {
+      check(expected.getMessage().contains("exactly 16 bytes"), "nonce length error");
+    }
+  }
+
   private static Map<String, Object> frame() {
     return Map.of(
         "type",
@@ -223,7 +239,7 @@ public final class SidecarRuntimeTest {
     invocation.put("callee_ura", "easynet:///r/hub/device/provider");
     invocation.put("ability_ura", "demo.echo");
     invocation.put("subject_ura", "easynet:///r/hub/resource/demo");
-    invocation.put("invocation_nonce", java.util.List.of(1, 2, 3, 4));
+    invocation.put("invocation_nonce", canonicalNonce());
     invocation.put("causal_context", Map.of("form", "none"));
     invocation.put("args", Map.of("message", "hello"));
     return invocation;
@@ -231,8 +247,12 @@ public final class SidecarRuntimeTest {
 
   private static String frameJSON() {
     return """
-        {"type":"invoke","call_id":"call-1","invocation":{"caller_ura":"easynet:///r/hub/user/alice","callee_ura":"easynet:///r/hub/device/provider","ability_ura":"demo.echo","subject_ura":"easynet:///r/hub/resource/demo","invocation_nonce":[1,2,3,4],"causal_context":{"form":"none"},"args":{"message":"hello"}}}
+        {"type":"invoke","call_id":"call-1","invocation":{"caller_ura":"easynet:///r/hub/user/alice","callee_ura":"easynet:///r/hub/device/provider","ability_ura":"demo.echo","subject_ura":"easynet:///r/hub/resource/demo","invocation_nonce":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16],"causal_context":{"form":"none"},"args":{"message":"hello"}}}
         """;
+  }
+
+  private static java.util.List<Integer> canonicalNonce() {
+    return java.util.List.of(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16);
   }
 
   private static void check(boolean condition, String label) {

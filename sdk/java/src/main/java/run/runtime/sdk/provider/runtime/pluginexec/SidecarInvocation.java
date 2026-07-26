@@ -10,6 +10,8 @@ import java.util.Set;
 
 /** Handler-facing view of one runtime-admitted declarative exec sidecar call. */
 public final class SidecarInvocation {
+  private static final int CANONICAL_INVOCATION_NONCE_BYTES = 16;
+
   private final String callId;
   private final String callerURA;
   private final String calleeURA;
@@ -190,6 +192,14 @@ public final class SidecarInvocation {
     Object value = object.get(field);
     if (!(value instanceof List<?> raw) || raw.isEmpty()) {
       throw new SidecarProtocolError("sidecar frame field \"" + field + "\" must be a byte array");
+    }
+    if (raw.size() != CANONICAL_INVOCATION_NONCE_BYTES) {
+      throw new SidecarProtocolError(
+          "sidecar frame field \""
+              + field
+              + "\" must contain exactly "
+              + CANONICAL_INVOCATION_NONCE_BYTES
+              + " bytes");
     }
     List<Integer> nonce = new ArrayList<>(raw.size());
     for (Object item : raw) {

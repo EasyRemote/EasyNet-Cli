@@ -40,7 +40,7 @@ func TestServeIOWritesResultFrame(t *testing.T) {
 		t.Fatalf("unexpected response: %#v", decoded)
 	}
 	value := decoded["value"].(map[string]any)
-	if value["message"] != "hello" || value["nonce_len"] != float64(4) {
+	if value["message"] != "hello" || value["nonce_len"] != float64(16) {
 		t.Fatalf("unexpected value: %#v", value)
 	}
 }
@@ -51,7 +51,7 @@ func TestSidecarInvocationOwnsHandlerProjection(t *testing.T) {
 		CalleeURA:       "easynet:///r/hub/device/provider",
 		AbilityURA:      "demo.echo",
 		SubjectURA:      "easynet:///r/hub/resource/demo",
-		InvocationNonce: []int{1, 2, 3, 4},
+		InvocationNonce: testNonce(),
 		CausalContext:   map[string]any{"form": "none"},
 		Args: map[string]any{
 			"message": "hello",
@@ -126,7 +126,7 @@ func TestServeIOWritesErrorFrameForProtocolFailure(t *testing.T) {
 
 func TestServeIORejectsRetiredTupleAliases(t *testing.T) {
 	var output bytes.Buffer
-	frame := `{"type":"invoke","call_id":"call-1","invocation":{"caller_ura":"easynet:///r/hub/user/alice","caller":"easynet:///r/hub/user/bob","callee_ura":"easynet:///r/hub/device/provider","ability_ura":"demo.echo","subject_ura":"easynet:///r/hub/resource/demo","invocation_nonce":[1,2,3,4],"args":{}}}`
+	frame := `{"type":"invoke","call_id":"call-1","invocation":{"caller_ura":"easynet:///r/hub/user/alice","caller":"easynet:///r/hub/user/bob","callee_ura":"easynet:///r/hub/device/provider","ability_ura":"demo.echo","subject_ura":"easynet:///r/hub/resource/demo","invocation_nonce":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16],"args":{}}}`
 	err := ServeIO(
 		context.Background(),
 		bytes.NewBufferString(frame+"\n"),
@@ -153,7 +153,7 @@ func TestServeIORejectsRetiredTupleAliases(t *testing.T) {
 
 func TestServeIORejectsUnknownInvocationFields(t *testing.T) {
 	var output bytes.Buffer
-	frame := `{"type":"invoke","call_id":"call-1","invocation":{"caller_ura":"easynet:///r/hub/user/alice","callee_ura":"easynet:///r/hub/device/provider","ability_ura":"demo.echo","subject_ura":"easynet:///r/hub/resource/demo","invocation_nonce":[1,2,3,4],"descriptor_ref":"retired-provider-leak","args":{}}}`
+	frame := `{"type":"invoke","call_id":"call-1","invocation":{"caller_ura":"easynet:///r/hub/user/alice","callee_ura":"easynet:///r/hub/device/provider","ability_ura":"demo.echo","subject_ura":"easynet:///r/hub/resource/demo","invocation_nonce":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16],"descriptor_ref":"retired-provider-leak","args":{}}}`
 	err := ServeIO(
 		context.Background(),
 		bytes.NewBufferString(frame+"\n"),
@@ -180,7 +180,7 @@ func TestServeIORejectsUnknownInvocationFields(t *testing.T) {
 
 func TestServeIORejectsUnknownRequestFields(t *testing.T) {
 	var output bytes.Buffer
-	frame := `{"type":"invoke","call_id":"call-1","retired_mode":"json","invocation":{"caller_ura":"easynet:///r/hub/user/alice","callee_ura":"easynet:///r/hub/device/provider","ability_ura":"demo.echo","subject_ura":"easynet:///r/hub/resource/demo","invocation_nonce":[1,2,3,4],"args":{}}}`
+	frame := `{"type":"invoke","call_id":"call-1","retired_mode":"json","invocation":{"caller_ura":"easynet:///r/hub/user/alice","callee_ura":"easynet:///r/hub/device/provider","ability_ura":"demo.echo","subject_ura":"easynet:///r/hub/resource/demo","invocation_nonce":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16],"args":{}}}`
 	err := ServeIO(
 		context.Background(),
 		bytes.NewBufferString(frame+"\n"),
@@ -254,7 +254,7 @@ func TestServeIORejectsMissingCanonicalInvocationObjects(t *testing.T) {
 }
 
 func TestSidecarInvocationProjectionCopiesNonceAndRejectsMutation(t *testing.T) {
-	nonce := []int{1, 2, 3, 4}
+	nonce := testNonce()
 	projection := sidecarInvocationProjection{
 		frameType: "invoke",
 		callID:    "call-1",
@@ -280,9 +280,9 @@ func TestSidecarInvocationProjectionCopiesNonceAndRejectsMutation(t *testing.T) 
 	}
 }
 
-func TestSidecarInvocationProjectionRejectsNonInvokeFrame(t *testing.T) {
+func TestSidecarInvocationProjectionRejectsNonCanonicalNonceLength(t *testing.T) {
 	_, err := sidecarInvocationProjection{
-		frameType: "stream_open",
+		frameType: "invoke",
 		callID:    "call-1",
 		frame: sidecarInvocationFrame{
 			CallerURA:       "easynet:///r/hub/user/alice",
@@ -295,11 +295,35 @@ func TestSidecarInvocationProjectionRejectsNonInvokeFrame(t *testing.T) {
 		},
 	}.project()
 
+	if err == nil || !strings.Contains(err.Error(), "exactly 16 bytes") {
+		t.Fatalf("expected canonical nonce length rejection, got %v", err)
+	}
+}
+
+func TestSidecarInvocationProjectionRejectsNonInvokeFrame(t *testing.T) {
+	_, err := sidecarInvocationProjection{
+		frameType: "stream_open",
+		callID:    "call-1",
+		frame: sidecarInvocationFrame{
+			CallerURA:       "easynet:///r/hub/user/alice",
+			CalleeURA:       "easynet:///r/hub/device/provider",
+			AbilityURA:      "demo.echo",
+			SubjectURA:      "easynet:///r/hub/resource/demo",
+			InvocationNonce: testNonce(),
+			CausalContext:   map[string]any{"form": "none"},
+			Args:            map[string]any{"message": "hello"},
+		},
+	}.project()
+
 	if err == nil || !strings.Contains(err.Error(), "expected invoke frame") {
 		t.Fatalf("expected non-invoke frame rejection, got %v", err)
 	}
 }
 
 func testFrame() string {
-	return `{"type":"invoke","call_id":"call-1","invocation":{"caller_ura":"easynet:///r/hub/user/alice","callee_ura":"easynet:///r/hub/device/provider","ability_ura":"demo.echo","subject_ura":"easynet:///r/hub/resource/demo","invocation_nonce":[1,2,3,4],"causal_context":{"form":"none"},"args":{"message":"hello"}}}`
+	return `{"type":"invoke","call_id":"call-1","invocation":{"caller_ura":"easynet:///r/hub/user/alice","callee_ura":"easynet:///r/hub/device/provider","ability_ura":"demo.echo","subject_ura":"easynet:///r/hub/resource/demo","invocation_nonce":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16],"causal_context":{"form":"none"},"args":{"message":"hello"}}}`
+}
+
+func testNonce() []int {
+	return []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
 }

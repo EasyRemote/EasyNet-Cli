@@ -10,6 +10,8 @@ from easynet_sdk.providers.runtime.plugin_exec import (
     serve_exec_plugin,
 )
 
+CANONICAL_NONCE = list(range(1, 17))
+
 
 def _frame() -> dict[str, object]:
     return {
@@ -20,7 +22,7 @@ def _frame() -> dict[str, object]:
             "callee_ura": "easynet:///r/hub/device/provider",
             "ability_ura": "demo.echo",
             "subject_ura": "easynet:///r/hub/resource/demo",
-            "invocation_nonce": [1, 2, 3, 4],
+            "invocation_nonce": CANONICAL_NONCE.copy(),
             "causal_context": {"form": "none"},
             "args": {"message": "hello"},
         },
@@ -36,7 +38,7 @@ class PluginExecTests(unittest.TestCase):
         self.assertEqual(invocation.callee_ura, "easynet:///r/hub/device/provider")
         self.assertEqual(invocation.ability_ura, "demo.echo")
         self.assertEqual(invocation.subject_ura, "easynet:///r/hub/resource/demo")
-        self.assertEqual(invocation.invocation_nonce, (1, 2, 3, 4))
+        self.assertEqual(invocation.invocation_nonce, tuple(CANONICAL_NONCE))
         self.assertEqual(invocation.causal_context, {"form": "none"})
         self.assertEqual(invocation.args, {"message": "hello"})
 
@@ -81,7 +83,7 @@ class PluginExecTests(unittest.TestCase):
             {
                 "type": "result",
                 "call_id": "call-1",
-                "value": {"ok": True, "message": "hello", "nonce_len": 4},
+                "value": {"ok": True, "message": "hello", "nonce_len": 16},
             },
         )
 
@@ -159,6 +161,15 @@ class PluginExecTests(unittest.TestCase):
 
                 with self.assertRaisesRegex(SidecarProtocolError, "object"):
                     SidecarInvocation.from_frame(frame)
+
+    def test_plugin_invocation_rejects_non_canonical_nonce_length(self) -> None:
+        frame = _frame()
+        invocation = frame["invocation"]
+        assert isinstance(invocation, dict)
+        invocation["invocation_nonce"] = [1, 2, 3, 4]
+
+        with self.assertRaisesRegex(SidecarProtocolError, "exactly 16 bytes"):
+            SidecarInvocation.from_frame(frame)
 
 
 if __name__ == "__main__":

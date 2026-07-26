@@ -16,6 +16,8 @@ import (
 	"os"
 )
 
+const canonicalInvocationNonceBytes = 16
+
 // SidecarInvocation is the handler-facing view of one runtime-admitted sidecar call.
 type SidecarInvocation struct {
 	CallID          string
@@ -299,6 +301,9 @@ func (p sidecarInvocationProjection) validateTupleStrings() error {
 func (p sidecarInvocationProjection) validateNonce() error {
 	if len(p.frame.InvocationNonce) == 0 {
 		return protocolError("sidecar frame field \"invocation_nonce\" must be a byte array")
+	}
+	if len(p.frame.InvocationNonce) != canonicalInvocationNonceBytes {
+		return protocolError("sidecar frame field \"invocation_nonce\" must contain exactly %d bytes", canonicalInvocationNonceBytes)
 	}
 	for _, item := range p.frame.InvocationNonce {
 		if item < 0 || item > 255 {
