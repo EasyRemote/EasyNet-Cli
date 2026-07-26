@@ -471,7 +471,6 @@ const DEVICE_BASELINE: &[BaselineAbility] = &[
     local_rpc!("camera.snapshot", DeviceMedia),
     local_stream!("screen.subscribe", DeviceMedia),
     local_rpc!("screen.snapshot", DeviceMedia),
-    local_bidi!("speaker.publish", DeviceMedia),
     local_rpc!("openai.chat_completions", DeviceOpenAiCompat),
     local_rpc!("openai.list_models", DeviceOpenAiCompat),
     local_rpc!("openai.files.upload", DeviceOpenAiCompat),

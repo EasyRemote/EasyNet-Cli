@@ -3120,23 +3120,6 @@ async fn real_device_fs_transfer_downloads_a_round_trip_through_dispatcher() {
 // scanner sees it.
 // ════════════════════════════════════════════════════════════════
 
-/// Helper: for the seven stubs, the expected behaviour is a
-/// terminal error whose message reaches the stub body. Match on
-/// either `"device backend not yet wired"` (PR2 stub default) or
-/// the INV-SUBJECT-ENVELOPE rejection — anything else means the
-/// ability didn't route to its handler at all.
-fn assert_routed_to_media_stub(ability: &str, err: &anyhow::Error) {
-    let msg = err.to_string();
-    let routed = msg.contains("device backend not yet wired")
-        || msg.contains("INV-SUBJECT-ENVELOPE")
-        || msg.contains("subject_required")
-        || msg.contains("subject_in_args");
-    assert!(
-        routed,
-        "{ability}: error did not look like the PR2 media stub: {msg}"
-    );
-}
-
 fn seed_real_invoke_display_resource(hardware_id: &str) -> String {
     let mut file = crate::daemon::persistence::resources::ResourcesFile::default();
     let ura = crate::daemon::persistence::resources::upsert_resource(
@@ -3454,14 +3437,19 @@ fn real_remote_desktop_attach_reaches_session_gate_without_starting_capture() {
 }
 
 #[test]
-fn real_speaker_publish_routes_to_media_stub() {
+fn real_speaker_publish_is_not_published_without_media_provider() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
     let reg = build_registry_for_test_execution().expect("build executable test registry");
-    let d = dispatcher_for(reg);
-    let mut t = target("speaker.publish", json!({}));
-    t.call_mode = CallMode::Bidi;
-    let err = d.execute_bidi(t).expect_err("PR2 stub must reject");
-    assert_routed_to_media_stub("speaker.publish", &err);
+    assert!(
+        !reg.has_bidi("speaker.publish"),
+        "speaker.publish must remain absent until a provider-backed media module registers it"
+    );
+    assert!(
+        reg.authority_ability_catalog_snapshot()
+            .iter()
+            .all(|row| row.name != "speaker.publish"),
+        "speaker.publish must not publish descriptor rows from an unimplemented stub"
+    );
 }
 
 #[test]

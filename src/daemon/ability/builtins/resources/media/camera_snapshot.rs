@@ -3,9 +3,9 @@
 //
 // File: src/daemon/ability/builtins/resources/media/camera_snapshot.rs
 //
-// Replaces the `query_stub` entries in the media metadata table for
-// `camera.snapshot`, `camera.subscribe`, `camera.record_start`, and
-// `camera.record_stop` with envelope-aware real handlers that:
+// Binds the metadata-only media capability contracts for `camera.snapshot`,
+// `camera.subscribe`, `camera.record_start`, and `camera.record_stop` to
+// envelope-aware real handlers that:
 //
 //   1. Reads `EnvelopeContext.subject` (per **INV-SUBJECT-ENVELOPE**:
 //      handler MUST get subject from the envelope, NOT from args).

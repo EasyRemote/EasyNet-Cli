@@ -3,9 +3,8 @@
 //
 // File: src/daemon/ability/builtins/resources/media/mic_subscribe.rs
 //
-// PR3 server-stream slice. Replaces the `stream_stub` in
-// the media metadata table for the `mic.subscribe` name with a real
-// envelope-aware handler that:
+// Provider-backed server-stream slice. Binds the metadata-only
+// `mic.subscribe` capability contract to a real envelope-aware handler that:
 //
 //   1. Reads `EnvelopeContext.subject` (per INV-SUBJECT-ENVELOPE)
 //   2. Resolves subject → `ResourceEntry`, rejects mismatched

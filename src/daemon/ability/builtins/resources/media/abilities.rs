@@ -20,57 +20,38 @@
 //
 // Single source of truth: a const `ABILITIES` table holds every
 // ability's name + description + input_schema + transport mode +
-// receipt semantics, in declaration order. The `register` fn iterates
-// it; descriptor projections query the same rows. Adding a media
-// ability requires touching exactly one place.
+// receipt semantics, in declaration order. Descriptor projections query
+// the same rows. Adding a media descriptor requires touching exactly
+// one place.
 //
-// PR2 scope (this file)
-// ---------------------
-// This module owns the metadata for all eight handlers and the
-// temporary stubs for abilities that still have no real module in
-// `media/`. What ships in PR2:
+// Capability contract scope (this file)
+// -------------------------------------
+// This module owns media descriptor metadata only. It does not bind any
+// live runtime route for abilities whose `AbilityImpl` is absent. A
+// media route becomes callable only when a provider-backed,
+// envelope-aware handler module registers it directly.
 //
-//   - metadata for all eight names, so `meta.list_abilities` and
-//     `gen-ability-tomls` see them
-//   - registration of only the still-unwired stubs; real media
-//     modules register their own envelope-aware handlers and must
-//     not share the same dispatch slot with an args-only stub
-//   - description / input_schema / receipt metadata so each descriptor
-//     materialises with orthogonal transport and state semantics
-//   - validation skeleton enforcing **INV-SUBJECT-ENVELOPE**: the
-//     handler MUST reject `args` containing a key named `subject`
-//     before any other arg parsing, even when the body is stubbed.
-//     This pins the rule from day one so a future contributor
-//     cannot accidentally land a real handler that accepts
-//     `args.subject`.
+// That separation is load-bearing:
 //
-// Real media backend scope (NOT in this file yet)
-// ------------------------------------------------
-// Real device IO (cpal mic capture, nokhwa camera capture, screen
-// capture), plus realm Authority TTS/ASR providers. Authority voice rows remain descriptor
-// metadata only until such a provider is explicitly assembled; this module
-// does not publish an unavailable handler. Physical media stubs remain
-// Device-owned and never act as a voice proxy or fallback.
+//   - `ABILITIES` records the canonical media capability matrix facts.
+//   - real media modules own `AbilityImpl` registration and subject
+//     validation.
+//   - unsupported/seam capabilities remain absent from the runtime
+//     catalog instead of routing to "not wired" compatibility stubs.
 //
 // INV-RESOURCE-VALIDITY
 // ---------------------
-// `resource_not_found` vs `resource_unavailable` — split error
-// codes per the binding invariants. PR2 stubs only return
-// `unimplemented!()` for the device IO branch; PR3 wires the
-// distinction (look up `subject` in `resources.rs` → if absent,
-// `resource_not_found`; if present but binding dead,
-// `resource_unavailable`).
+// `resource_not_found` vs `resource_unavailable` belongs to real
+// provider-backed handlers. This metadata module must not synthesize
+// runtime errors for absent providers.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet.
 
-use std::sync::Arc;
-
 use serde_json::{json, Value};
 
 use crate::daemon::ability::descriptors::{CallMode, ReceiptSemantics, TransitionClass};
-use crate::daemon::ability::dispatch::OwnerKind;
-use crate::daemon::ability::dispatch::{AxonAbilityCatalog, BidiSource, StreamSource};
+use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 
 // ── Ability names (exported so registration + descriptor sites
 //    pull from one place) ──────────────────────────────────────
@@ -98,12 +79,6 @@ pub const ABILITY_VOICE_SUBSCRIBE: &str = crate::daemon::ability::names::resourc
 /// text vs text → audio); both live on the llm-profile.
 pub const ABILITY_VOICE_TRANSCRIBE: &str =
     crate::daemon::ability::names::resources::VOICE_TRANSCRIBE;
-
-/// String literal used inside `reject_subject_in_args` errors and
-/// matched by the dispatcher's terminal-receipt path. Pinned as a
-/// const so a rename trips a compile error rather than silently
-/// drifting from the consumer-side string match.
-pub const REASON_SUBJECT_IN_ARGS: &str = "subject_in_args";
 
 // ── Dispatch shape + metadata table ──────────────────────────
 
@@ -313,132 +288,15 @@ fn row(name: &str) -> Option<&'static AbilityRow> {
 
 // ── Registration ─────────────────────────────────────────────
 
-/// Register only media abilities that still do not have a real
-/// envelope-aware handler module. The full eight-ability metadata
-/// remains in `ABILITIES`; handler registration is intentionally
-/// narrower so the registry never relies on "real handler overrides
-/// stub" precedence.
+/// Register no runtime routes from the metadata table.
 ///
-/// Each closure captures `row: &'static AbilityRow` by value
-/// (the reference is `Copy + 'static`); no rebinding to `let
-/// name = row.name;` is needed.
-pub fn register(reg: &mut AxonAbilityCatalog) {
-    for row in ABILITIES {
-        if has_real_media_handler(row.name) || is_unprovided_realm_authority_voice(row.name) {
-            continue;
-        }
-        let owner = OwnerKind::Device;
-        // Post-M3 of the system-namespace migration: `row.name` is
-        // already canonical (`device.<segment>.<verb>`). Earlier
-        // revisions stored the legacy form in the table and
-        // prepended `device.` at registration; the M5 cleanup
-        // promoted the table itself, so the registration site
-        // passes `row.name` verbatim.
-        match row.call_mode {
-            CallMode::Rpc => {
-                reg.register_rpc_with_spec_and_semantics(
-                    row.name,
-                    owner.clone(),
-                    registry_manifest(row.name),
-                    (row.receipt_semantics)(),
-                    Arc::new(|args| query_stub(row.name, args)),
-                );
-            }
-            CallMode::Stream => {
-                reg.register_stream_with_spec_and_semantics(
-                    row.name,
-                    owner,
-                    registry_manifest(row.name),
-                    (row.receipt_semantics)(),
-                    Arc::new(|args| stream_stub(row.name, args)),
-                );
-            }
-            CallMode::Bidi => {
-                reg.register_bidi_with_spec_and_semantics(
-                    row.name,
-                    owner,
-                    registry_manifest(row.name),
-                    (row.receipt_semantics)(),
-                    Arc::new(|args| bidi_stub(row.name, args)),
-                );
-            }
-        }
-    }
-}
-
-fn is_unprovided_realm_authority_voice(name: &str) -> bool {
-    matches!(name, ABILITY_VOICE_SUBSCRIBE | ABILITY_VOICE_TRANSCRIBE)
-}
-
-fn has_real_media_handler(name: &str) -> bool {
-    has_native_media_handler(name)
-}
-
-#[cfg(feature = "native-media")]
-fn has_native_media_handler(name: &str) -> bool {
-    matches!(
-        name,
-        ABILITY_MIC_SUBSCRIBE
-            | ABILITY_CAMERA_SUBSCRIBE
-            | ABILITY_CAMERA_SNAPSHOT
-            | ABILITY_CAMERA_RECORD_START
-            | ABILITY_CAMERA_RECORD_STOP
-            | ABILITY_SCREEN_SUBSCRIBE
-            | ABILITY_SCREEN_SNAPSHOT
-    )
-}
-
-#[cfg(not(feature = "native-media"))]
-fn has_native_media_handler(_name: &str) -> bool {
-    false
-}
-
-// ── INV-SUBJECT-ENVELOPE enforcement ─────────────────────────
-
-/// Reject any args object that carries a `subject` key. The
-/// invocation `subject` MUST come from the envelope, not from
-/// args — see plan v3.2 INV-SUBJECT-ENVELOPE. This guard runs
-/// first, before any other arg parsing, so a misuse fails fast
-/// with a clear error code rather than silently being accepted.
-///
-/// Returns `Ok(())` when args do not contain `subject`. Returns
-/// an `anyhow::Error` carrying `REASON_SUBJECT_IN_ARGS` so the
-/// dispatcher's terminal-receipt path can match on the reason
-/// string via the same const.
-fn reject_subject_in_args(ability: &str, args: &Value) -> anyhow::Result<()> {
-    if let Value::Object(map) = args {
-        if map.contains_key("subject") {
-            anyhow::bail!(
-                "{ability}: `subject` MUST come from the invocation envelope, \
-                 not from args (INV-SUBJECT-ENVELOPE; reason={REASON_SUBJECT_IN_ARGS})"
-            );
-        }
-    }
-    Ok(())
-}
-
-// ── Stub bodies ──────────────────────────────────────────────
-
-fn stream_stub(ability: &str, args: Value) -> anyhow::Result<StreamSource> {
-    reject_subject_in_args(ability, &args)?;
-    // PR3: resolve envelope.subject → resources.json entry, open
-    // the device, encode frames, return SnapshotThenLive(..., rx).
-    anyhow::bail!("{ability}: device backend not yet wired (PR3 lands cpal/nokhwa/screen)")
-}
-
-fn query_stub(ability: &str, args: Value) -> anyhow::Result<Value> {
-    reject_subject_in_args(ability, &args)?;
-    // PR3: resolve envelope.subject → device → capture single
-    // frame → encode → return { image_bytes_b64 OR
-    //                           payloadstore_ura, captured_at }.
-    anyhow::bail!("{ability}: device backend not yet wired (PR3 lands snapshot capture)")
-}
-
-fn bidi_stub(ability: &str, args: Value) -> anyhow::Result<BidiSource> {
-    reject_subject_in_args(ability, &args)?;
-    // PR3: resolve envelope.subject → audio device, consume speaker.publish
-    // up-frames, decode them, and write them to the cpal output stream.
-    anyhow::bail!("{ability}: device backend not yet wired (PR3 lands bidi audio)")
+/// The method is intentionally a no-op because descriptor facts and executable
+/// bindings are separate architectural concepts. Provider-backed media modules
+/// such as `camera_snapshot`, `screen_snapshot`, and `mic_subscribe` register
+/// their own envelope-aware handlers. Absent providers remain unsupported/seam
+/// capabilities and must not appear as callable runtime routes.
+pub fn register(_reg: &mut AxonAbilityCatalog) {
+    // Metadata-only contract owner. Do not add fallback handlers here.
 }
 
 // ── Schema fragments ─────────────────────────────────────────
@@ -612,69 +470,55 @@ mod tests {
     }
 
     #[test]
-    fn registration_dispatches_unwired_stubs_to_the_shape_they_declare() {
-        // Two-way pin between the `ABILITIES` table and stub
-        // registration: rows without real modules must resolve to
-        // a registered handler of their declared dispatch type;
-        // rows with real modules must remain unregistered here so
-        // one dispatch slot never has both an args-only stub and an
-        // envelope-aware handler.
-        let mut reg = metadata_test_catalog();
-        register(&mut reg);
-        for row in ABILITIES {
-            if has_real_media_handler(row.name) || is_unprovided_realm_authority_voice(row.name) {
-                assert!(
-                    reg.get_rpc(row.name).is_none()
-                        && reg.get_stream(row.name).is_none()
-                        && reg.get_bidi(row.name).is_none(),
-                    "{} must not be stub-registered",
-                    row.name
-                );
-                continue;
-            }
-            match row.call_mode {
-                CallMode::Rpc => assert!(
-                    reg.get_rpc(row.name).is_some(),
-                    "{} declared call_mode=Rpc but not registered as RPC",
-                    row.name
-                ),
-                CallMode::Stream => assert!(
-                    reg.has_stream(row.name),
-                    "{} declared call_mode=Stream but not registered as Stream",
-                    row.name
-                ),
-                CallMode::Bidi => assert!(
-                    reg.has_bidi(row.name),
-                    "{} declared call_mode=Bidi but not registered as Bidi",
-                    row.name
-                ),
-            }
-        }
-
-        assert!(!reg.has_stream(ABILITY_VOICE_SUBSCRIBE));
-        assert!(!reg.has_bidi(ABILITY_VOICE_TRANSCRIBE));
-        assert!(reg.get_bidi(ABILITY_SPEAKER_PUBLISH).is_some());
-        assert!(reg.resolve_bidi_with_env(ABILITY_SPEAKER_PUBLISH).is_none());
-    }
-
-    #[test]
-    fn stub_registration_publishes_media_descriptors() {
+    fn register_does_not_publish_unimplemented_media_stubs() {
+        // The media metadata table is a capability contract, not an
+        // executable binding table. Calling this module's register function
+        // must not publish any route by itself; real provider-backed media
+        // modules own live handler registration directly.
         let mut reg = metadata_test_catalog();
         register(&mut reg);
         let rows = reg.authority_ability_catalog_snapshot();
-
         for row in ABILITIES {
-            if has_real_media_handler(row.name) || is_unprovided_realm_authority_voice(row.name) {
-                continue;
-            }
-            let descriptor = rows
-                .iter()
-                .find(|catalog_row| catalog_row.name == row.name)
-                .map(|catalog_row| &catalog_row.descriptor)
-                .unwrap_or_else(|| panic!("{} must publish a media descriptor", row.name));
-            assert_eq!(descriptor.description, row.description);
-            assert_eq!(descriptor.input_schema(), &(row.input_schema)());
+            assert!(
+                reg.get_rpc(row.name).is_none()
+                    && reg.get_stream(row.name).is_none()
+                    && reg.get_bidi(row.name).is_none(),
+                "{} must not be stub-registered",
+                row.name
+            );
+            assert!(
+                !rows.iter().any(|catalog_row| catalog_row.name == row.name),
+                "{} must not publish a descriptor without a provider-backed implementation",
+                row.name
+            );
         }
+    }
+
+    #[test]
+    fn provider_registration_must_use_registry_manifest_from_media_contract() {
+        let mut reg = metadata_test_catalog();
+        reg.register_bidi_with_spec_and_semantics(
+            ABILITY_SPEAKER_PUBLISH,
+            crate::daemon::ability::dispatch::OwnerKind::Device,
+            registry_manifest(ABILITY_SPEAKER_PUBLISH),
+            receipt_semantics(ABILITY_SPEAKER_PUBLISH).expect("speaker semantics"),
+            std::sync::Arc::new(|_| anyhow::bail!("test handler")),
+        );
+        let rows = reg.authority_ability_catalog_snapshot();
+
+        let descriptor = rows
+            .iter()
+            .find(|catalog_row| catalog_row.name == ABILITY_SPEAKER_PUBLISH)
+            .map(|catalog_row| &catalog_row.descriptor)
+            .expect("provider-backed registration must publish descriptor");
+        assert_eq!(
+            descriptor.description,
+            description(ABILITY_SPEAKER_PUBLISH).expect("speaker description")
+        );
+        assert_eq!(
+            descriptor.input_schema(),
+            &input_schema(ABILITY_SPEAKER_PUBLISH).expect("speaker schema")
+        );
     }
 
     #[test]
@@ -710,72 +554,21 @@ mod tests {
     }
 
     #[test]
-    fn handlers_with_subject_in_args_are_rejected_per_inv_subject_envelope() {
-        // INV-SUBJECT-ENVELOPE: every media handler MUST reject
-        // args.subject before any other parsing. Tested for every
-        // dispatch shape (rpc, stream, bidi) so a future stub
-        // copy-paste cannot accidentally drop the guard.
-        let bad = json!({"subject": "easynet:///r/x/resource/y"});
-
-        for ability in [
-            ABILITY_CAMERA_SNAPSHOT,
-            ABILITY_CAMERA_RECORD_START,
-            ABILITY_CAMERA_RECORD_STOP,
-            ABILITY_SCREEN_SNAPSHOT,
-        ] {
-            let err = query_stub(ability, bad.clone()).unwrap_err().to_string();
-            assert!(
-                err.contains(REASON_SUBJECT_IN_ARGS),
-                "{ability} did not enforce INV-SUBJECT-ENVELOPE: {err}"
-            );
-        }
-        for ability in [
-            ABILITY_MIC_SUBSCRIBE,
-            ABILITY_CAMERA_SUBSCRIBE,
-            ABILITY_SCREEN_SUBSCRIBE,
-        ] {
-            let err = stream_stub(ability, bad.clone()).unwrap_err().to_string();
-            assert!(
-                err.contains(REASON_SUBJECT_IN_ARGS),
-                "{ability} did not enforce INV-SUBJECT-ENVELOPE: {err}"
-            );
-        }
-        for ability in [ABILITY_SPEAKER_PUBLISH] {
-            let err = bidi_stub(ability, bad.clone()).unwrap_err().to_string();
-            assert!(
-                err.contains(REASON_SUBJECT_IN_ARGS),
-                "{ability} did not enforce INV-SUBJECT-ENVELOPE: {err}"
-            );
-        }
-
-        let _ = bad;
-    }
-
-    #[test]
-    fn unprovided_realm_authority_voice_geometries_are_not_registered_or_published() {
+    fn unsupported_media_geometries_are_not_registered_or_published_by_metadata_owner() {
         let mut reg = metadata_test_catalog();
         register(&mut reg);
         let rows = reg.authority_ability_catalog_snapshot();
-        for voice in [ABILITY_VOICE_SUBSCRIBE, ABILITY_VOICE_TRANSCRIBE] {
-            assert!(reg.control_plane_owner(voice).is_none());
-            assert!(!rows.iter().any(|row| row.name == voice));
+        for ability in [
+            ABILITY_SPEAKER_PUBLISH,
+            ABILITY_VOICE_SUBSCRIBE,
+            ABILITY_VOICE_TRANSCRIBE,
+        ] {
+            assert!(reg.control_plane_owner(ability).is_none());
+            assert!(!rows.iter().any(|row| row.name == ability));
         }
+        assert_eq!(call_mode(ABILITY_SPEAKER_PUBLISH), Some(CallMode::Bidi));
         assert_eq!(call_mode(ABILITY_VOICE_SUBSCRIBE), Some(CallMode::Stream));
         assert_eq!(call_mode(ABILITY_VOICE_TRANSCRIBE), Some(CallMode::Bidi));
-    }
-
-    #[test]
-    fn handlers_without_subject_in_args_reach_unimplemented_branch() {
-        // Without the subject-in-args poison, the still-unwired
-        // stubs fall through to the "not yet wired" error. Real
-        // camera handlers are skipped by the stub registrar.
-        let err = query_stub(ABILITY_SPEAKER_PUBLISH, json!({}))
-            .unwrap_err()
-            .to_string();
-        assert!(
-            err.contains("device backend not yet wired"),
-            "expected stub fall-through, got: {err}"
-        );
     }
 
     #[test]

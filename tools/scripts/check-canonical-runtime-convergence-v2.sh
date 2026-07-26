@@ -11254,6 +11254,63 @@ for required_test in (
 PY
 }
 
+check_media_unsupported_stub_retirement_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local media="$cli_root/src/daemon/ability/builtins/resources/media/abilities.rs"
+  local registry="$cli_root/src/daemon/ability/catalog/build.rs"
+  local conformance="$cli_root/src/daemon/ability/conformance.rs"
+  local real_tests="$cli_root/src/daemon/ability/builtins/real_invoke_tests.rs"
+  [[ -f "$media" ]] || fail "media ability metadata source is missing: $media"
+
+  "$PYTHON_BIN" - "$media" "$registry" "$conformance" "$real_tests" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+media = Path(sys.argv[1]).read_text(encoding="utf-8")
+registry = Path(sys.argv[2]).read_text(encoding="utf-8")
+conformance = Path(sys.argv[3]).read_text(encoding="utf-8")
+real_tests = Path(sys.argv[4]).read_text(encoding="utf-8")
+production = media.split("\n#[cfg(test)]", 1)[0]
+
+for required in (
+    "This module owns media descriptor metadata only",
+    "Provider-backed media modules",
+    "pub fn register(_reg: &mut AxonAbilityCatalog)",
+    "register_does_not_publish_unimplemented_media_stubs",
+    "provider_registration_must_use_registry_manifest_from_media_contract",
+):
+    if required not in media:
+        raise SystemExit(f"media_unsupported_stub_retirement_missing:{required}")
+
+for retired in (
+    "device backend not yet wired",
+    "temporary stubs",
+    "stream_stub",
+    "query_stub",
+    "bidi_stub",
+    "has_real_media_handler",
+    "is_unprovided_realm_authority_voice",
+):
+    if retired in production:
+        raise SystemExit(f"media_unsupported_stub_retirement_retired_production:{retired}")
+
+if re.search(r"register_(rpc|stream|bidi)_with_spec_and_semantics\s*\(", production):
+    raise SystemExit("media_unsupported_stub_retirement_metadata_owner_registers_live_route")
+
+if "Unsupported/seam rows" not in registry:
+    raise SystemExit("media_registry_comment_must_state_unsupported_seams_absent")
+
+if 'local_bidi!("speaker.publish"' in conformance:
+    raise SystemExit("media_conformance_speaker_publish_stub_baseline_retired")
+
+if "real_speaker_publish_is_not_published_without_media_provider" not in real_tests:
+    raise SystemExit("media_speaker_publish_negative_real_invoke_test_missing")
+if "real_speaker_publish_routes_to_media_stub" in real_tests:
+    raise SystemExit("media_speaker_publish_stub_real_invoke_test_retired")
+PY
+}
+
 check_kernel_runtime_session_read_model_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local kernel="$cli_root/src/daemon/boot/kernel/mod.rs"
@@ -26979,6 +27036,7 @@ check_daemon_local_device_identity_contract
 check_daemon_credentials_identity_contract
 check_filesystem_resource_owner_contract
 check_media_resource_subject_projection_contract
+check_media_unsupported_stub_retirement_contract
 check_federation_probe_local_identity_contract
 check_ready_capability_proof_contract
 check_daemon_local_runtime_identity_contract

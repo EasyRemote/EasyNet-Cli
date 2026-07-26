@@ -1360,7 +1360,7 @@ fn published_abilities_marks_server_stream_routes_as_streaming_only() {
 fn published_abilities_marks_bidi_routes_as_bidi_only() {
     let _home = crate::cli::commands::test_support::HomeGuard::new();
     let metas = published_abilities();
-    let expected = ["fs.transfer", "terminal.attach", "speaker.publish"];
+    let expected = ["fs.transfer", "terminal.attach"];
     #[cfg(feature = "remote-desktop")]
     let expected = {
         let mut expected = expected.to_vec();

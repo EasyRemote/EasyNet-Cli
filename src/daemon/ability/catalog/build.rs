@@ -694,10 +694,9 @@ fn build_registry_with_services_result_inner(
     file_transfer_ability::register(&mut reg);
     // RFC-005 v3.2 — physical-channel media abilities (A1–A8)
     // plus meta.list_resources (A9). `resources::media` owns the
-    // shared metadata and only registers still-unwired stubs; real
-    // modules own their names directly. This keeps each ability +
-    // call-mode slot single-owner and avoids precedence-based
-    // replacement semantics.
+    // shared metadata contract only; real provider-backed modules
+    // own live route registration directly. Unsupported/seam rows
+    // must not publish args-only compatibility stubs.
     media::register(&mut reg);
     #[cfg(feature = "native-media")]
     {
