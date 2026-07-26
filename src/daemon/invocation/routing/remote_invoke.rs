@@ -62,6 +62,7 @@ pub(crate) enum RemoteInvocationFailure {
         code: String,
         message: String,
     },
+    ProtocolViolation(String),
     ResultDecode(String),
 }
 
@@ -88,6 +89,7 @@ impl std::fmt::Display for RemoteInvocationFailure {
                 f,
                 "remote Invoke did not complete: state={state} code={code} message={message}"
             ),
+            Self::ProtocolViolation(message) => write!(f, "{message}"),
             Self::ResultDecode(message) => write!(f, "{message}"),
         }
     }
@@ -1149,9 +1151,7 @@ pub(crate) fn ensure_completed_invoke_response(
         return Ok(());
     }
 
-    let state = WireInvocationState::try_from(body.state)
-        .map(|state| state.as_str_name().to_string())
-        .unwrap_or_else(|_| format!("UNKNOWN_STATE_{}", body.state));
+    let state = remote_invoke_response_state_name(body.state)?;
     let error = body.error.as_ref();
     let (code, message) = error
         .map(|error| {
@@ -1189,9 +1189,7 @@ fn ensure_completed_invoke_response_typed(
         return Ok(());
     }
 
-    let state = WireInvocationState::try_from(body.state)
-        .map(|state| state.as_str_name().to_string())
-        .unwrap_or_else(|_| format!("UNKNOWN_STATE_{}", body.state));
+    let state = remote_invoke_response_state_name_typed(body.state)?;
     let error = body.error.as_ref();
     let (code, message) = error
         .map(|error| {
@@ -1219,6 +1217,20 @@ fn ensure_completed_invoke_response_typed(
             message
         },
     })
+}
+
+fn remote_invoke_response_state_name(state: i32) -> anyhow::Result<String> {
+    remote_invoke_response_state_name_typed(state).map_err(anyhow::Error::from)
+}
+
+fn remote_invoke_response_state_name_typed(state: i32) -> Result<String, RemoteInvocationFailure> {
+    WireInvocationState::try_from(state)
+        .map(|state| state.as_str_name().to_string())
+        .map_err(|_| {
+            RemoteInvocationFailure::ProtocolViolation(format!(
+                "remote InvokeResponse carried unknown InvocationState wire value `{state}`"
+            ))
+        })
 }
 
 fn decode_invoke_result_bytes(result_bytes: &[u8]) -> anyhow::Result<Value> {
@@ -1797,6 +1809,50 @@ mod tests {
                 && message.contains("not a public remote action")
                 && message.contains("canonical invocation history read path"),
             "wrong error: {message}"
+        );
+    }
+
+    #[test]
+    fn remote_invoke_response_rejects_unknown_wire_state_without_fallback_label() {
+        let body = InvokeResponse {
+            state: 440,
+            ..InvokeResponse::default()
+        };
+
+        let error = ensure_completed_invoke_response("remote.test", &body)
+            .expect_err("unknown wire state must fail as a protocol violation");
+        let message = error.to_string();
+        assert!(
+            message.contains("unknown InvocationState wire value `440`"),
+            "unexpected error: {message}"
+        );
+        assert!(
+            !message.contains("UNKNOWN_STATE_"),
+            "unknown wire state must not be projected as a product state: {message}"
+        );
+    }
+
+    #[test]
+    fn typed_remote_invoke_response_rejects_unknown_wire_state_without_fallback_label() {
+        let body = InvokeResponse {
+            state: 440,
+            ..InvokeResponse::default()
+        };
+
+        let error = ensure_completed_invoke_response_typed(&body)
+            .expect_err("unknown wire state must fail as a protocol violation");
+        assert!(
+            matches!(error, RemoteInvocationFailure::ProtocolViolation(_)),
+            "unexpected typed failure: {error:?}"
+        );
+        let message = error.to_string();
+        assert!(
+            message.contains("unknown InvocationState wire value `440`"),
+            "unexpected error: {message}"
+        );
+        assert!(
+            !message.contains("UNKNOWN_STATE_"),
+            "unknown wire state must not be projected as a product state: {message}"
         );
     }
 

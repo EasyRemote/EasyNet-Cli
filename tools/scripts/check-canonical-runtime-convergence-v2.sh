@@ -15125,6 +15125,45 @@ for required_test in (
 PY
 }
 
+check_remote_invoke_unknown_state_fail_closed_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local remote_invoke="$cli_root/src/daemon/invocation/routing/remote_invoke.rs"
+  [[ -f "$remote_invoke" ]] || fail "remote invocation source is missing: ${remote_invoke#$cli_root/}"
+
+  "$PYTHON_BIN" - "$remote_invoke" <<'PY'
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+production = text.split("\n#[cfg(test)]", 1)[0]
+
+for required in (
+    "ProtocolViolation(String)",
+    "fn remote_invoke_response_state_name_typed(",
+    "remote_invoke_response_state_name(body.state)?",
+    "remote_invoke_response_state_name_typed(body.state)?",
+    "RemoteInvocationFailure::ProtocolViolation(format!(",
+    "unknown InvocationState wire value",
+):
+    if required not in production:
+        raise SystemExit(f"remote_invoke_unknown_state_fail_closed:missing:{required}")
+
+if "UNKNOWN_STATE_" in production:
+    raise SystemExit("remote_invoke_unknown_state_fail_closed:synthetic_unknown_state_label_in_production")
+if ".unwrap_or_else(|_| format!(\"UNKNOWN_STATE_" in production:
+    raise SystemExit("remote_invoke_unknown_state_fail_closed:wire_state_fallback_projection")
+
+for required_test in (
+    "remote_invoke_response_rejects_unknown_wire_state_without_fallback_label",
+    "typed_remote_invoke_response_rejects_unknown_wire_state_without_fallback_label",
+    "matches!(error, RemoteInvocationFailure::ProtocolViolation(_))",
+    "!message.contains(\"UNKNOWN_STATE_\")",
+):
+    if required_test not in text:
+        raise SystemExit(f"remote_invoke_unknown_state_fail_closed:missing_test:{required_test}")
+PY
+}
+
 check_remote_failure_caller_signer_projection_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local remote_failure="$cli_root/src/daemon/invocation/dispatch/remote_failure.rs"
@@ -20366,6 +20405,37 @@ fn checked_remote_invocation_ura() {}
 EOF
   if ( CLI_ROOT="$tmp/remote-invocation-signer-first-legacy"; check_remote_invocation_signer_first_contract ) >/dev/null 2>&1; then
     fail "self-test expected remote invocation signer-first gate to fail"
+  fi
+  mkdir -p "$tmp/remote-invoke-unknown-state-legacy/src/daemon/invocation/routing"
+  cat >"$tmp/remote-invoke-unknown-state-legacy/src/daemon/invocation/routing/remote_invoke.rs" <<'EOF'
+enum RemoteInvocationFailure {
+    InvocationRejected {
+        state: String,
+        code: String,
+        message: String,
+    },
+}
+
+pub(crate) fn ensure_completed_invoke_response(surface: &str, body: &InvokeResponse) -> anyhow::Result<()> {
+    let state = WireInvocationState::try_from(body.state)
+        .map(|state| state.as_str_name().to_string())
+        .unwrap_or_else(|_| format!("UNKNOWN_STATE_{}", body.state));
+    anyhow::bail!("{surface} did not complete: state={state}");
+}
+
+fn ensure_completed_invoke_response_typed(body: &InvokeResponse) -> Result<(), RemoteInvocationFailure> {
+    let state = WireInvocationState::try_from(body.state)
+        .map(|state| state.as_str_name().to_string())
+        .unwrap_or_else(|_| format!("UNKNOWN_STATE_{}", body.state));
+    Err(RemoteInvocationFailure::InvocationRejected {
+        state,
+        code: "INVOKE_NOT_COMPLETED".to_string(),
+        message: "InvokeResponse did not carry an error message".to_string(),
+    })
+}
+EOF
+  if ( CLI_ROOT="$tmp/remote-invoke-unknown-state-legacy"; check_remote_invoke_unknown_state_fail_closed_contract ) >/dev/null 2>&1; then
+    fail "self-test expected remote invoke unknown state fallback gate to fail"
   fi
   mkdir -p "$tmp/remote-failure-caller-signer-projection-legacy/src/daemon/invocation/dispatch"
   cat >"$tmp/remote-failure-caller-signer-projection-legacy/src/daemon/invocation/dispatch/remote_failure.rs" <<'EOF'
@@ -25764,6 +25834,7 @@ check_sdk_runtime_recovery_report_fail_closed_contract
 check_sdk_principal_projection_fail_closed_contract
 check_runtime_owner_signer_custody_contract
 check_remote_invocation_signer_first_contract
+check_remote_invoke_unknown_state_fail_closed_contract
 check_remote_failure_caller_signer_projection_contract
 check_ffi_native_runtime_signer_projection_contract
 check_daemon_runtime_identity_vocabulary_contract
