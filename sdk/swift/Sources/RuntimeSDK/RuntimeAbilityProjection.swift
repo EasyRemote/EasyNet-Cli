@@ -3,6 +3,13 @@ import Foundation
 struct RuntimeAbilityProjection: Sendable, Equatable {
     private static let abilityPathMarker = "/ability/"
     private static let realmPrefix = "easynet:///r/"
+    private static let receiptHistoryReadAbilities = [
+        "invocation.history.list",
+        "invocation.history.get",
+        "invocation.history.path",
+        "invocation.record.get",
+        "invocation.trace.get",
+    ]
 
     let abilityURA: String
     let publicName: String
@@ -11,6 +18,13 @@ struct RuntimeAbilityProjection: Sendable, Equatable {
         let abilityURA = try Self.descriptorAbilityURA(tuple.descriptorRef)
         self.abilityURA = abilityURA
         self.publicName = Self.publicAbilityName(calleeURA: tuple.callee, abilityURA: abilityURA)
+    }
+
+    static func receiptHistoryReadAbility(calleeURA: String, descriptorRef: String) throws -> String? {
+        let abilityURA = try descriptorAbilityURA(descriptorRef)
+        let publicName = publicAbilityName(calleeURA: calleeURA, abilityURA: abilityURA)
+        let wireName = descriptorWireAbility(abilityURA)
+        return receiptHistoryReadAbility(publicName) ?? receiptHistoryReadAbility(wireName)
     }
 
     private static func descriptorAbilityURA(_ descriptorRef: String) throws -> String {
@@ -41,6 +55,13 @@ struct RuntimeAbilityProjection: Sendable, Equatable {
             return abilityURA.trimmingCharacters(in: .whitespacesAndNewlines)
         }
         return String(abilityURA[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func receiptHistoryReadAbility(_ value: String) -> String? {
+        let clean = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return receiptHistoryReadAbilities.first { ability in
+            clean == ability || clean.hasSuffix(".\(ability)")
+        }
     }
 
     private static func publicAbilityName(calleeURA: String, abilityURA: String) -> String {

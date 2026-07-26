@@ -47,6 +47,7 @@ public final class RuntimeCoreSeamTest {
           "preparedInvocationRejectsRequestIDOnlyAlias",
           "completeTupleRejectsMissingCaller",
           "completeTupleRejectsAllZeroPrincipals",
+          "completeTupleRejectsReceiptHistoryPublicInvocation",
           "preparedInvocationCannotBeSubmitted",
           "streamAndBidiBackpressureAreBounded",
           "streamOrderAndTerminalArePreserved");
@@ -115,6 +116,8 @@ public final class RuntimeCoreSeamTest {
           preparedInvocationRejectsRequestIDOnlyAlias();
       case "completeTupleRejectsMissingCaller" -> completeTupleRejectsMissingCaller();
       case "completeTupleRejectsAllZeroPrincipals" -> completeTupleRejectsAllZeroPrincipals();
+      case "completeTupleRejectsReceiptHistoryPublicInvocation" ->
+          completeTupleRejectsReceiptHistoryPublicInvocation();
       case "preparedInvocationCannotBeSubmitted" -> preparedInvocationCannotBeSubmitted();
       case "streamAndBidiBackpressureAreBounded" -> streamAndBidiBackpressureAreBounded();
       case "streamOrderAndTerminalArePreserved" -> streamOrderAndTerminalArePreserved();
@@ -1190,6 +1193,15 @@ public final class RuntimeCoreSeamTest {
     expectSDKError(
         ErrorCode.INVALID_ARGUMENT,
         () -> completeBuilder().subject(placeholder).inspect());
+  }
+
+  private static void completeTupleRejectsReceiptHistoryPublicInvocation() {
+    String historyDescriptor =
+        "easynet:///r/example/ability/device.dev-a.invocation.history.list@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read";
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        "RuntimeReceiptProvider",
+        () -> completeBuilder().descriptor(historyDescriptor).inspect());
   }
 
   private static void preparedInvocationCannotBeSubmitted() {

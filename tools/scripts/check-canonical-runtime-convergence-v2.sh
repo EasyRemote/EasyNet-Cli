@@ -4489,6 +4489,114 @@ if "test_runtime_ability_rejects_invocation_history_public_route_before_descript
 PY
 }
 
+check_sdk_cross_language_history_public_ingress_cutover_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local node="$cli_root/sdk/node/index.js"
+  local node_test="$cli_root/sdk/node/test/runtime-core.test.mjs"
+  local java_builder="$cli_root/sdk/java/src/main/java/run/runtime/sdk/InvocationBuilder.java"
+  local java_projection="$cli_root/sdk/java/src/main/java/run/runtime/sdk/RuntimeAbilityProjection.java"
+  local java_test="$cli_root/sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
+  local swift_invocation="$cli_root/sdk/swift/Sources/RuntimeSDK/Invocation.swift"
+  local swift_projection="$cli_root/sdk/swift/Sources/RuntimeSDK/RuntimeAbilityProjection.swift"
+  local swift_test="$cli_root/sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift"
+
+  "$PYTHON_BIN" - "$node" "$node_test" "$java_builder" "$java_projection" "$java_test" "$swift_invocation" "$swift_projection" "$swift_test" <<'PY'
+import sys
+from pathlib import Path
+
+paths = [Path(arg) for arg in sys.argv[1:]]
+for path in paths:
+    if not path.exists():
+        raise SystemExit(f"sdk_history_public_ingress_cutover:missing:{path}")
+
+node, node_test, java_builder, java_projection, java_test, swift_invocation, swift_projection, swift_test = [
+    path.read_text(encoding="utf-8", errors="replace") for path in paths
+]
+
+for required in (
+    "const RECEIPT_HISTORY_READ_ABILITIES",
+    "function rejectReceiptHistoryPublicInvocationDescriptor",
+    "RuntimeAbilityProjection.descriptorAbilityURA(descriptorRef)",
+    "receiptHistoryReadAbility(publicName)",
+    "receiptHistoryReadAbility(wireName)",
+    "use RuntimeReceiptProvider or SessionHistoryOperations as the canonical invocation history read path",
+):
+    if required not in node:
+        raise SystemExit(f"sdk_history_public_ingress_cutover:node_missing:{required}")
+for required in (
+    "public invocation builder rejects receipt history descriptor before dispatch",
+    "device.dev-a.invocation.history.list@1.0.0#",
+    "SessionHistoryOperations",
+):
+    if required not in node_test:
+        raise SystemExit(f"sdk_history_public_ingress_cutover:node_test_missing:{required}")
+
+for required in (
+    "rejectReceiptHistoryPublicInvocation(tuple);",
+    "private static void rejectReceiptHistoryPublicInvocation(InvocationTuple tuple)",
+    "RuntimeAbilityProjection.receiptHistoryReadAbility(tuple.callee(), tuple.descriptor())",
+    "use RuntimeReceiptProvider as the canonical invocation history read path",
+):
+    if required not in java_builder:
+        raise SystemExit(f"sdk_history_public_ingress_cutover:java_builder_missing:{required}")
+for required in (
+    "private static final String[] RECEIPT_HISTORY_READ_ABILITIES",
+    "static String receiptHistoryReadAbility(String calleeURA, String descriptorRef)",
+    "receiptHistoryReadAbility(publicName)",
+    "receiptHistoryReadAbility(wireName)",
+):
+    if required not in java_projection:
+        raise SystemExit(f"sdk_history_public_ingress_cutover:java_projection_missing:{required}")
+for required in (
+    '"completeTupleRejectsReceiptHistoryPublicInvocation"',
+    "private static void completeTupleRejectsReceiptHistoryPublicInvocation()",
+    "device.dev-a.invocation.history.list@1.0.0#",
+    "RuntimeReceiptProvider",
+):
+    if required not in java_test:
+        raise SystemExit(f"sdk_history_public_ingress_cutover:java_test_missing:{required}")
+
+for required in (
+    "try rejectReceiptHistoryPublicInvocation(tuple)",
+    "private func rejectReceiptHistoryPublicInvocation(_ tuple: InvocationTuple) throws",
+    "RuntimeAbilityProjection.receiptHistoryReadAbility(",
+    "use RuntimeReceiptProvider as the canonical invocation history read path",
+):
+    if required not in swift_invocation:
+        raise SystemExit(f"sdk_history_public_ingress_cutover:swift_invocation_missing:{required}")
+for required in (
+    "private static let receiptHistoryReadAbilities",
+    "static func receiptHistoryReadAbility(calleeURA: String, descriptorRef: String) throws -> String?",
+    "receiptHistoryReadAbility(publicName)",
+    "receiptHistoryReadAbility(wireName)",
+):
+    if required not in swift_projection:
+        raise SystemExit(f"sdk_history_public_ingress_cutover:swift_projection_missing:{required}")
+for required in (
+    "testCompleteTupleRejectsReceiptHistoryPublicInvocation",
+    "device.dev-a.invocation.history.list@1.0.0#",
+    "RuntimeReceiptProvider",
+):
+    if required not in swift_test:
+        raise SystemExit(f"sdk_history_public_ingress_cutover:swift_test_missing:{required}")
+
+for corpus, label in (
+    (node, "node"),
+    (java_projection, "java_projection"),
+    (swift_projection, "swift_projection"),
+):
+    for ability in (
+        "invocation.history.list",
+        "invocation.history.get",
+        "invocation.history.path",
+        "invocation.record.get",
+        "invocation.trace.get",
+    ):
+        if ability not in corpus:
+            raise SystemExit(f"sdk_history_public_ingress_cutover:{label}_ability_missing:{ability}")
+PY
+}
+
 check_sdk_prepared_descriptor_ref_required_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local go_src="$cli_root/sdk/go/signing.go"
@@ -24219,6 +24327,7 @@ EOF
   check_daemon_lifecycle_control_vocabulary_contract
   check_sdk_history_authority_subject_contract
   check_sdk_go_python_history_public_route_cutover_contract
+  check_sdk_cross_language_history_public_ingress_cutover_contract
 	  check_sdk_descriptor_resolution_error_vocabulary_contract
 	  check_sdk_runtime_client_provider_readiness_contract
 	  check_sdk_ability_descriptor_not_found_vocabulary_contract
@@ -24460,6 +24569,7 @@ check_control_frame_schema_contract
 check_daemon_lifecycle_control_vocabulary_contract
 check_sdk_history_authority_subject_contract
 check_sdk_go_python_history_public_route_cutover_contract
+check_sdk_cross_language_history_public_ingress_cutover_contract
 check_sdk_prepared_descriptor_ref_required_contract
 check_sdk_descriptor_resolution_error_vocabulary_contract
 check_sdk_runtime_client_provider_readiness_contract

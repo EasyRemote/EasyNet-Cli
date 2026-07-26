@@ -3,6 +3,13 @@ package run.runtime.sdk;
 final class RuntimeAbilityProjection {
   private static final String ABILITY_PATH_MARKER = "/ability/";
   private static final String REALM_PREFIX = "easynet:///r/";
+  private static final String[] RECEIPT_HISTORY_READ_ABILITIES = {
+    "invocation.history.list",
+    "invocation.history.get",
+    "invocation.history.path",
+    "invocation.record.get",
+    "invocation.trace.get"
+  };
 
   private final String abilityURA;
   private final String publicName;
@@ -26,6 +33,17 @@ final class RuntimeAbilityProjection {
     return publicName;
   }
 
+  static String receiptHistoryReadAbility(String calleeURA, String descriptorRef) {
+    String abilityURA = descriptorAbilityURA(descriptorRef);
+    String publicName = publicAbilityName(calleeURA, abilityURA);
+    String wireName = descriptorWireAbility(abilityURA);
+    String matched = receiptHistoryReadAbility(publicName);
+    if (!matched.isBlank()) {
+      return matched;
+    }
+    return receiptHistoryReadAbility(wireName);
+  }
+
   private static String descriptorAbilityURA(String descriptorRef) {
     String clean = descriptorRef == null ? "" : descriptorRef.trim();
     int hash = clean.indexOf('#');
@@ -44,6 +62,16 @@ final class RuntimeAbilityProjection {
       throw SDKError.validation("authority", "descriptor_ref must contain a canonical Ability URA");
     }
     return ability;
+  }
+
+  private static String receiptHistoryReadAbility(String value) {
+    String clean = value == null ? "" : value.trim();
+    for (String ability : RECEIPT_HISTORY_READ_ABILITIES) {
+      if (clean.equals(ability) || clean.endsWith("." + ability)) {
+        return ability;
+      }
+    }
+    return "";
   }
 
   private static String descriptorWireAbility(String abilityURA) {

@@ -1359,6 +1359,30 @@ test("runtime authority rejects path-substring owner subject before dispatch", (
   );
 });
 
+test("public invocation builder rejects receipt history descriptor before dispatch", () => {
+  const historyDescriptor =
+    "easynet:///r/example/ability/device.dev-a.invocation.history.list@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read";
+
+  assert.throws(
+    () =>
+      new sdk.InvocationBuilder()
+        .withCallerURA(caller)
+        .withCalleeURA(callee)
+        .withDescriptorRef(historyDescriptor)
+        .withSubjectURA(callee)
+        .withNonceBase64(nonce)
+        .withCausalContext({ form: "none" })
+        .withJSONArgs({ probe: true })
+        .withContentType("application/json")
+        .build(),
+    (error) =>
+      error instanceof sdk.SDKError &&
+      error.code === sdk.ErrorCode.INVALID_ARGUMENT &&
+      /receipt history ability `invocation\.history\.list`/.test(error.message) &&
+      /SessionHistoryOperations/.test(error.message),
+  );
+});
+
 test("session history preflight rejects authority subject mismatch before receipt provider", async () => {
   let providerCalls = 0;
   const history = new sdk.SessionHistoryOperations({

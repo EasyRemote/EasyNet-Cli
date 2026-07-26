@@ -896,6 +896,15 @@ final class RuntimeCoreSeamTests: XCTestCase {
         }
     }
 
+    func testCompleteTupleRejectsReceiptHistoryPublicInvocation() {
+        let historyDescriptor = "easynet:///r/example/ability/device.dev-a.invocation.history.list@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read"
+        expectSyncSDKError(.invalidArgument, "RuntimeReceiptProvider") {
+            _ = try completeBuilder()
+                .withDescriptorRef(historyDescriptor)
+                .inspect()
+        }
+    }
+
     func testPreparedInvocationCannotBeSubmitted() async throws {
         let runtime = RuntimeClient(transport: MemoryRuntimeTransport(callee: callee, descriptor: descriptor))
         let prepared = try await runtime.prepare(completeDraft(runtime), options: ["deadline_ms": 1000])
