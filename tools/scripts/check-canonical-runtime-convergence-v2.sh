@@ -5701,6 +5701,9 @@ for retired in (
     "wire: str",
     "self.wire",
     "self.public_name, self.ability_ura, self.wire",
+    "def _descriptor_wire_ability(",
+    'marker = "/ability/"',
+    "or wire",
 ):
     if retired in py:
         raise SystemExit(f"sdk_python_runtime_ability_owner_unbound_scope_projection:{retired}")

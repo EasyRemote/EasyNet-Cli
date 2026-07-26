@@ -110,10 +110,9 @@ class _RuntimeAbilityProjection:
                 "descriptor_ref must contain a canonical Ability URA",
                 exc,
             ) from exc
-        wire = _descriptor_wire_ability(ability_ura)
         public_name = ""
         if ability.owner_ura.strip() == callee_ura.strip():
-            public_name = ability.public_name.strip() or wire
+            public_name = ability.public_name.strip()
         return cls(
             descriptor_ref=canonical_ref,
             ability_ura=ability_ura,
@@ -437,17 +436,6 @@ def _validate_runtime_authority_binding(
         )
     if not ability.matches_scope(authority.matches_scope):
         raise _invalid("runtime session authority scopes do not admit ability")
-
-
-def _descriptor_wire_ability(ability_ura: str) -> str:
-    marker = "/ability/"
-    clean = ability_ura.strip()
-    if marker not in clean:
-        raise _invalid("descriptor_ref must contain a canonical Ability URA")
-    wire = clean.split(marker, 1)[1].strip()
-    if not wire:
-        raise _invalid("descriptor_ref must contain a canonical Ability URA")
-    return wire
 
 
 def _required_text(value: object, field_name: str) -> str:
