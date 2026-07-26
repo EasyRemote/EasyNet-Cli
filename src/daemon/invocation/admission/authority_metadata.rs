@@ -61,6 +61,7 @@ impl std::fmt::Display for AuthorityMetadataError {
 impl std::error::Error for AuthorityMetadataError {}
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct DelegationPayload {
     pub(crate) issuer_ura: String,
     pub(crate) subject_ura: String,
@@ -72,6 +73,7 @@ pub(crate) struct DelegationPayload {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct SessionAuthorityPayload {
     pub(crate) issuer_ura: String,
     pub(crate) session_id: String,
@@ -88,12 +90,14 @@ pub(crate) struct SessionAuthorityPayload {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct SignedSessionAuthorityWire {
     payload: SessionAuthorityPayload,
     signature: String,
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct SignedDelegationAuthorityWire {
     payload: DelegationPayload,
     signature: String,
@@ -513,17 +517,26 @@ mod tests {
         }
     }
 
-    #[test]
-    fn delegation_payload_has_one_canonical_signing_representation() {
-        let payload = DelegationPayload {
+    fn delegation_payload() -> DelegationPayload {
+        DelegationPayload {
             issuer_ura: "easynet:///r/example/user/alice".into(),
             subject_ura: "easynet:///r/example/user/alice".into(),
             caller_ura: "easynet:///r/example/agent/backend".into(),
             audience: "easynet:///r/example/device/dev-a".into(),
             scopes: vec!["device.observe.*".into()],
             issued_at_ms: 1000,
-            expires_at_ms: 2000,
-        };
+            expires_at_ms: 4_102_444_800_000,
+        }
+    }
+
+    fn encode_authority_wire(wire: serde_json::Value) -> String {
+        BASE64_STANDARD.encode(serde_json::to_vec(&wire).expect("authority wire serializes"))
+    }
+
+    #[test]
+    fn delegation_payload_has_one_canonical_signing_representation() {
+        let mut payload = delegation_payload();
+        payload.expires_at_ms = 2000;
         validate_delegation_payload_shape(&payload, None).unwrap();
         let canonical = canonical_authority_payload_bytes(&payload).unwrap();
         assert_eq!(
@@ -570,6 +583,110 @@ mod tests {
             .unwrap()
             .expect("session authority must be projected");
         assert_eq!(projected, expected);
+    }
+
+    #[test]
+    fn session_authority_rejects_unknown_payload_fields() {
+        let mut payload =
+            serde_json::to_value(session_payload()).expect("session authority payload serializes");
+        payload
+            .as_object_mut()
+            .expect("session authority payload is object")
+            .insert(
+                "retired_subject_locator".to_string(),
+                serde_json::json!("compat-carrier"),
+            );
+        let wire = serde_json::json!({
+            "payload": payload,
+            "signature": "c2Vzc2lvbi1zaWduYXR1cmU="
+        });
+        let metadata = HashMap::from([(
+            SESSION_AUTHORITY_METADATA_KEY.to_string(),
+            encode_authority_wire(wire),
+        )]);
+
+        let err = project_admitted_session_authority(&metadata)
+            .expect_err("unknown session payload fields must fail closed");
+        assert_eq!(err.reason(), REASON_AUTHORITY_FORMAT_INVALID);
+        assert!(
+            err.to_string()
+                .contains("unknown field `retired_subject_locator`"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn session_authority_rejects_unknown_wire_fields() {
+        let wire = serde_json::json!({
+            "payload": session_payload(),
+            "signature": "c2Vzc2lvbi1zaWduYXR1cmU=",
+            "retired_signature_carrier": "compat-carrier"
+        });
+        let metadata = HashMap::from([(
+            SESSION_AUTHORITY_METADATA_KEY.to_string(),
+            encode_authority_wire(wire),
+        )]);
+
+        let err = project_admitted_session_authority(&metadata)
+            .expect_err("unknown session wire fields must fail closed");
+        assert_eq!(err.reason(), REASON_AUTHORITY_FORMAT_INVALID);
+        assert!(
+            err.to_string()
+                .contains("unknown field `retired_signature_carrier`"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn delegation_authority_rejects_unknown_payload_fields() {
+        let mut payload =
+            serde_json::to_value(delegation_payload()).expect("delegation payload serializes");
+        payload
+            .as_object_mut()
+            .expect("delegation payload is object")
+            .insert(
+                "retired_scope_carrier".to_string(),
+                serde_json::json!("compat-carrier"),
+            );
+        let wire = serde_json::json!({
+            "payload": payload,
+            "signature": "ZGVsZWdhdGlvbi1zaWduYXR1cmU="
+        });
+        let metadata = HashMap::from([(
+            DELEGATION_METADATA_KEY.to_string(),
+            encode_authority_wire(wire),
+        )]);
+
+        let err = project_invocation_authority_metadata_shape(&metadata)
+            .expect_err("unknown delegation payload fields must fail closed");
+        assert_eq!(err.reason(), REASON_AUTHORITY_FORMAT_INVALID);
+        assert!(
+            err.to_string()
+                .contains("unknown field `retired_scope_carrier`"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn delegation_authority_rejects_unknown_wire_fields() {
+        let wire = serde_json::json!({
+            "payload": delegation_payload(),
+            "signature": "ZGVsZWdhdGlvbi1zaWduYXR1cmU=",
+            "retired_signature_carrier": "compat-carrier"
+        });
+        let metadata = HashMap::from([(
+            DELEGATION_METADATA_KEY.to_string(),
+            encode_authority_wire(wire),
+        )]);
+
+        let err = project_invocation_authority_metadata_shape(&metadata)
+            .expect_err("unknown delegation wire fields must fail closed");
+        assert_eq!(err.reason(), REASON_AUTHORITY_FORMAT_INVALID);
+        assert!(
+            err.to_string()
+                .contains("unknown field `retired_signature_carrier`"),
+            "{err}"
+        );
     }
 
     #[test]
