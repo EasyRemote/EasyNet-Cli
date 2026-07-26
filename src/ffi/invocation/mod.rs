@@ -1796,18 +1796,31 @@ impl<'a> SessionInvocationAuthority<'a> {
     async fn cancellation_authority_for_signed(
         &self,
         signed: &crate::daemon::SignedInvocation,
-    ) -> crate::daemon::Result<Option<crate::daemon::InvocationCancellationAuthority>> {
+    ) -> InvocationCancellationGate {
         let owner_ura = match self.owner_ura() {
             Ok(owner_ura) => owner_ura,
-            Err(_) => return Ok(None),
+            Err(error) => {
+                return InvocationCancellationGate::Unavailable {
+                    reason: format!("resolve session owner for cancellation authority: {error}"),
+                };
+            }
         };
         if signed.prepared().tuple().caller_ura != owner_ura {
-            return Ok(None);
+            return InvocationCancellationGate::Unavailable {
+                reason: format!(
+                    "signed invocation caller `{}` does not match session owner `{owner_ura}`",
+                    signed.prepared().tuple().caller_ura
+                ),
+            };
         }
-        let signer = Self::load_owner_signer(owner_ura).await?;
-        Ok(Some(crate::daemon::InvocationCancellationAuthority::new(
-            signer,
-        )))
+        match Self::load_owner_signer(owner_ura).await {
+            Ok(signer) => InvocationCancellationGate::Available(
+                crate::daemon::InvocationCancellationAuthority::new(signer),
+            ),
+            Err(error) => InvocationCancellationGate::Unavailable {
+                reason: format!("load cancellation authority signer: {error}"),
+            },
+        }
     }
 
     async fn bind_with_owner_signer(
@@ -2483,20 +2496,18 @@ fn submit_signed_handle_with_axon_pb(
             );
         }
     };
-    let cancellation_authority = match rt.block_on(
+    let cancellation_gate = rt.block_on(
         SessionInvocationAuthority::new(session.as_ref())
             .cancellation_authority_for_signed(&signed),
-    ) {
-        Ok(authority) => authority,
-        Err(err) => {
-            return ffi_daemon_error("runtime_invocation_submit_signed_handle", err);
-        }
-    };
+    );
 
     let tuple_json = invocation_json(signed.prepared().draft().invocation());
     let owner_binding = registration.binding();
-    let (active, cancel_requests) =
-        ActiveInvocationHandle::with_cancel_channel(owner_binding, tuple_json.clone());
+    let (active, cancel_requests) = ActiveInvocationHandle::with_cancel_channel(
+        owner_binding,
+        tuple_json.clone(),
+        cancellation_gate.clone(),
+    );
     let shared = active.shared.clone();
     let invocation_handle_id = insert_invocation_handle(active);
     let submitted = match get_invocation_handle_for_owner(owner_binding, invocation_handle_id) {
@@ -2531,7 +2542,7 @@ fn submit_signed_handle_with_axon_pb(
     rt.spawn(run_invocation_handle_task(
         endpoint,
         signed,
-        cancellation_authority,
+        cancellation_gate.into_authority(),
         shared,
         cancel_requests,
     ));
@@ -2626,6 +2637,7 @@ fn invocation_handle_cancel_with_axon_pb(
         "cancelled": outcome.cancelled,
         "state": outcome.state.as_str(),
         "terminal": outcome.terminal,
+        "rejection": outcome.rejection,
     })
     .to_string();
     let ptr = alloc_output_cstring(json);
@@ -3538,9 +3550,47 @@ impl ProviderCancellableResource for ActiveInvocationStream {
 }
 
 #[cfg(feature = "axon-pb")]
+#[derive(Clone)]
+enum InvocationCancellationGate {
+    Available(crate::daemon::InvocationCancellationAuthority),
+    Unavailable { reason: String },
+}
+
+#[cfg(feature = "axon-pb")]
+impl InvocationCancellationGate {
+    fn unavailable_reason(&self) -> Option<&str> {
+        match self {
+            Self::Available(_) => None,
+            Self::Unavailable { reason } => Some(reason),
+        }
+    }
+
+    fn into_authority(self) -> Option<crate::daemon::InvocationCancellationAuthority> {
+        match self {
+            Self::Available(authority) => Some(authority),
+            Self::Unavailable { .. } => None,
+        }
+    }
+
+    fn to_json(&self) -> serde_json::Value {
+        match self {
+            Self::Available(authority) => serde_json::json!({
+                "state": "available",
+                "owner_ura": authority.owner_ura(),
+            }),
+            Self::Unavailable { reason } => serde_json::json!({
+                "state": "unavailable",
+                "reason": reason,
+            }),
+        }
+    }
+}
+
+#[cfg(feature = "axon-pb")]
 struct ActiveInvocationHandle {
     owner: ClientSessionBinding,
     cancel_requests: tokio::sync::mpsc::UnboundedSender<String>,
+    cancellation_gate: InvocationCancellationGate,
     shared: Arc<InvocationHandleShared>,
 }
 
@@ -3549,11 +3599,13 @@ impl ActiveInvocationHandle {
     fn with_cancel_channel(
         owner: ClientSessionBinding,
         tuple_json: serde_json::Value,
+        cancellation_gate: InvocationCancellationGate,
     ) -> (Self, tokio::sync::mpsc::UnboundedReceiver<String>) {
         let (cancel_requests, receiver) = tokio::sync::mpsc::unbounded_channel();
         let handle = Self {
             owner,
             cancel_requests,
+            cancellation_gate,
             shared: Arc::new(InvocationHandleShared::new(tuple_json)),
         };
         (handle, receiver)
@@ -3563,7 +3615,8 @@ impl ActiveInvocationHandle {
         &self,
         invocation_handle_id: InvocationHandleId,
     ) -> Result<serde_json::Value, InvocationObservationFailure> {
-        self.shared.snapshot_json(invocation_handle_id)
+        self.shared
+            .snapshot_json(invocation_handle_id, &self.cancellation_gate)
     }
 
     #[cfg(test)]
@@ -3583,6 +3636,11 @@ impl ActiveInvocationHandle {
 
     fn cancel(&self, reason: Option<String>) -> InvocationHandleCancelOutcome {
         let reason = reason.unwrap_or_else(|| "user_request".to_string());
+        if let Some(unavailable) = self.cancellation_gate.unavailable_reason() {
+            return self
+                .shared
+                .reject_cancel_unavailable(reason, unavailable.to_string());
+        }
         let outcome = self.shared.request_cancel(reason.clone());
         if outcome.dispatch_request && self.cancel_requests.send(reason).is_err() {
             self.shared
@@ -3598,7 +3656,8 @@ impl ActiveInvocationHandle {
         &self,
         invocation_handle_id: InvocationHandleId,
     ) -> Result<serde_json::Value, InvocationObservationFailure> {
-        self.shared.snapshot_json(invocation_handle_id)
+        self.shared
+            .snapshot_json(invocation_handle_id, &self.cancellation_gate)
     }
 }
 
@@ -3664,6 +3723,7 @@ impl InvocationHandleShared {
                 cancelled: state.phase == InvocationHandlePhase::Cancelled,
                 state: state.phase,
                 terminal: true,
+                rejection: None,
             };
         }
         let deduplicated = state.phase == InvocationHandlePhase::CancelRequested;
@@ -3680,6 +3740,31 @@ impl InvocationHandleShared {
             cancelled: false,
             state: InvocationHandlePhase::CancelRequested,
             terminal: false,
+            rejection: None,
+        }
+    }
+
+    fn reject_cancel_unavailable(
+        &self,
+        reason: String,
+        unavailable: String,
+    ) -> InvocationHandleCancelOutcome {
+        let mut state = self.lock();
+        if !state.phase.is_terminal() && !state.has_event_kind("cancel_unavailable") {
+            state.push_event(
+                "cancel_unavailable",
+                Some(format!("{reason}: {unavailable}")),
+                None,
+            );
+        }
+        InvocationHandleCancelOutcome {
+            request_accepted: false,
+            deduplicated: true,
+            dispatch_request: false,
+            cancelled: state.phase == InvocationHandlePhase::Cancelled,
+            state: state.phase,
+            terminal: state.phase.is_terminal(),
+            rejection: Some(unavailable),
         }
     }
 
@@ -3751,9 +3836,10 @@ impl InvocationHandleShared {
     fn snapshot_json(
         &self,
         invocation_handle_id: InvocationHandleId,
+        cancellation_gate: &InvocationCancellationGate,
     ) -> Result<serde_json::Value, InvocationObservationFailure> {
         let state = self.lock();
-        state.snapshot_json(invocation_handle_id)
+        state.snapshot_json(invocation_handle_id, cancellation_gate)
     }
 }
 
@@ -3826,9 +3912,14 @@ impl InvocationHandleState {
         self.terminal_outcome = Some(outcome);
     }
 
+    fn has_event_kind(&self, kind: &str) -> bool {
+        self.events.iter().any(|event| event.kind == kind)
+    }
+
     fn snapshot_json(
         &self,
         invocation_handle_id: InvocationHandleId,
+        cancellation_gate: &InvocationCancellationGate,
     ) -> Result<serde_json::Value, InvocationObservationFailure> {
         let events = self
             .events
@@ -3850,6 +3941,7 @@ impl InvocationHandleState {
             "terminal": self.phase.is_terminal(),
             "events": events,
             "result": result,
+            "cancellation_authority": cancellation_gate.to_json(),
             "observation_error": self.observation_failure.as_ref().map(|failure| serde_json::json!({
                 "abi_code": failure.abi_code,
                 "message": failure.message,
@@ -3946,6 +4038,7 @@ struct InvocationHandleCancelOutcome {
     cancelled: bool,
     state: InvocationHandlePhase,
     terminal: bool,
+    rejection: Option<String>,
 }
 
 #[cfg(feature = "axon-pb")]
@@ -6821,6 +6914,24 @@ mod tests {
         obj.to_string()
     }
 
+    #[cfg(feature = "axon-pb")]
+    fn test_cancellation_gate(owner_ura: &str) -> InvocationCancellationGate {
+        InvocationCancellationGate::Available(crate::daemon::InvocationCancellationAuthority::new(
+            Arc::new(
+                crate::daemon::identity::self_identity::TestCanonicalSigner::new(
+                    owner_ura, [0x42; 32],
+                ),
+            ),
+        ))
+    }
+
+    #[cfg(feature = "axon-pb")]
+    fn unavailable_cancellation_gate(reason: impl Into<String>) -> InvocationCancellationGate {
+        InvocationCancellationGate::Unavailable {
+            reason: reason.into(),
+        }
+    }
+
     fn now_ms() -> i64 {
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -8265,10 +8376,15 @@ mod tests {
         let cancel_json: serde_json::Value =
             unsafe { serde_json::from_str(CStr::from_ptr(cancel_ptr).to_str().unwrap()).unwrap() };
         unsafe { crate::ffi::strings::runtime_string_free(cancel_ptr) };
-        assert_eq!(cancel_json["request_accepted"], true);
+        assert_eq!(cancel_json["request_accepted"], false);
+        assert_eq!(cancel_json["deduplicated"], true);
         assert_eq!(cancel_json["cancelled"], false);
-        assert_eq!(cancel_json["state"], "CancelRequested");
+        assert_eq!(cancel_json["state"], "Submitted");
         assert_eq!(cancel_json["terminal"], false);
+        assert!(cancel_json["rejection"]
+            .as_str()
+            .expect("cancel rejection")
+            .contains("resolve session owner for cancellation authority"));
 
         let mut events_ptr: *mut c_char = std::ptr::null_mut();
         assert_eq!(
@@ -8286,6 +8402,11 @@ mod tests {
         unsafe { crate::ffi::strings::runtime_string_free(events_ptr) };
         assert_eq!(events_json["terminal"], false);
         assert!(events_json["result"].is_null());
+        assert_eq!(
+            events_json["cancellation_authority"]["state"],
+            "unavailable"
+        );
+        assert_eq!(events_json["events"][2]["kind"], "cancel_unavailable");
         assert_eq!(
             runtime_invocation_handle_free(client_handle, invocation_handle_id),
             RUNTIME_OK
@@ -8338,8 +8459,16 @@ mod tests {
         let owner = owner_session.binding(owner_handle);
         let tuple_json: serde_json::Value =
             serde_json::from_str(&canonical_invocation_json(serde_json::json!({}))).unwrap();
-        let (first, _) = ActiveInvocationHandle::with_cancel_channel(owner, tuple_json.clone());
-        let (second, _) = ActiveInvocationHandle::with_cancel_channel(owner, tuple_json);
+        let (first, _) = ActiveInvocationHandle::with_cancel_channel(
+            owner,
+            tuple_json.clone(),
+            test_cancellation_gate("easynet:///r/acme/device/dev-a"),
+        );
+        let (second, _) = ActiveInvocationHandle::with_cancel_channel(
+            owner,
+            tuple_json,
+            test_cancellation_gate("easynet:///r/acme/device/dev-a"),
+        );
 
         let first_id = insert_invocation_handle(first);
         let second_id = insert_invocation_handle(second);
@@ -8375,7 +8504,11 @@ mod tests {
         let stale_same_handle = registry_owner(77, 8800);
         let tuple_json: serde_json::Value =
             serde_json::from_str(&canonical_invocation_json(serde_json::json!({}))).unwrap();
-        let (active, _) = ActiveInvocationHandle::with_cancel_channel(owner, tuple_json);
+        let (active, _) = ActiveInvocationHandle::with_cancel_channel(
+            owner,
+            tuple_json,
+            test_cancellation_gate("easynet:///r/acme/device/dev-a"),
+        );
         let invocation_handle_id = insert_invocation_handle(active);
 
         assert!(matches!(
@@ -8399,7 +8532,11 @@ mod tests {
         let owner = owner_session.binding(owner_handle);
         let tuple_json: serde_json::Value =
             serde_json::from_str(&canonical_invocation_json(serde_json::json!({}))).unwrap();
-        let (active, _) = ActiveInvocationHandle::with_cancel_channel(owner, tuple_json);
+        let (active, _) = ActiveInvocationHandle::with_cancel_channel(
+            owner,
+            tuple_json,
+            test_cancellation_gate("easynet:///r/acme/device/dev-a"),
+        );
         let invocation_handle_id = insert_invocation_handle(active);
 
         assert_eq!(
@@ -8447,7 +8584,11 @@ mod tests {
         let stale_same_handle = registry_owner(515, 2);
         let tuple_json: serde_json::Value =
             serde_json::from_str(&canonical_invocation_json(serde_json::json!({}))).unwrap();
-        let (active, _) = ActiveInvocationHandle::with_cancel_channel(owner, tuple_json);
+        let (active, _) = ActiveInvocationHandle::with_cancel_channel(
+            owner,
+            tuple_json,
+            test_cancellation_gate("easynet:///r/acme/device/dev-a"),
+        );
         let stale_id = insert_invocation_handle(active);
         assert!(matches!(
             get_invocation_handle_for_owner(stale_same_handle, stale_id),
@@ -8558,11 +8699,15 @@ mod tests {
         let cancel_json: serde_json::Value =
             unsafe { serde_json::from_str(CStr::from_ptr(cancel_ptr).to_str().unwrap()).unwrap() };
         unsafe { crate::ffi::strings::runtime_string_free(cancel_ptr) };
-        assert_eq!(cancel_json["request_accepted"], true);
-        assert_eq!(cancel_json["deduplicated"], false);
+        assert_eq!(cancel_json["request_accepted"], false);
+        assert_eq!(cancel_json["deduplicated"], true);
         assert_eq!(cancel_json["cancelled"], false);
-        assert_eq!(cancel_json["state"], "CancelRequested");
+        assert_eq!(cancel_json["state"], "Submitted");
         assert_eq!(cancel_json["terminal"], false);
+        assert!(cancel_json["rejection"]
+            .as_str()
+            .expect("cancel rejection")
+            .contains("resolve session owner for cancellation authority"));
 
         assert_eq!(
             runtime_invocation_handle_free(owner_handle, invocation_handle_id),
@@ -8648,7 +8793,12 @@ mod tests {
         .expect("receipt-free pre-admission rejection");
 
         assert!(shared.observe_canonical_outcome(outcome).unwrap());
-        let snapshot = shared.snapshot_json(41).unwrap();
+        let snapshot = shared
+            .snapshot_json(
+                41,
+                &test_cancellation_gate("easynet:///r/acme/device/dev-a"),
+            )
+            .unwrap();
         assert_eq!(snapshot["terminal"], true);
         assert_eq!(snapshot["state"], "Failed");
         assert_eq!(snapshot["events"][1]["kind"], "failed");
@@ -8669,8 +8819,11 @@ mod tests {
             canonical_finalized_response(axon_sdk::invocation::InvocationState::Cancelled);
         let tuple_json: serde_json::Value =
             serde_json::from_str(&canonical_invocation_json(serde_json::json!({}))).unwrap();
-        let (active, _cancel_requests) =
-            ActiveInvocationHandle::with_cancel_channel(owner, tuple_json);
+        let (active, _cancel_requests) = ActiveInvocationHandle::with_cancel_channel(
+            owner,
+            tuple_json,
+            test_cancellation_gate("easynet:///r/acme/device/dev-a"),
+        );
         let shared = active.shared.clone();
         let invocation_handle_id = insert_invocation_handle(active);
         let handle = get_invocation_handle_for_owner(owner, invocation_handle_id)
@@ -8704,11 +8857,23 @@ mod tests {
             .observe_cancel_command_outcome(command_outcome)
             .expect("cancel command has canonical completion");
         assert_eq!(
-            handle.shared.snapshot_json(invocation_handle_id).unwrap()["terminal"],
+            handle
+                .shared
+                .snapshot_json(
+                    invocation_handle_id,
+                    &test_cancellation_gate("easynet:///r/acme/device/dev-a"),
+                )
+                .unwrap()["terminal"],
             false
         );
         assert_eq!(
-            handle.shared.snapshot_json(invocation_handle_id).unwrap()["state"],
+            handle
+                .shared
+                .snapshot_json(
+                    invocation_handle_id,
+                    &test_cancellation_gate("easynet:///r/acme/device/dev-a"),
+                )
+                .unwrap()["state"],
             "CancelRequested"
         );
 
@@ -8738,6 +8903,68 @@ mod tests {
         assert_eq!(events_json["events"][3]["state"], "Cancelled");
         assert_eq!(events_json["events"][3]["terminal"], true);
         assert!(events_json["result"]["terminal_receipt"].is_object());
+        assert_eq!(
+            runtime_invocation_handle_free(owner_handle, invocation_handle_id),
+            RUNTIME_OK
+        );
+        crate::ffi::client::handle::release(owner_handle);
+    }
+
+    #[test]
+    fn invocation_handle_cancel_unavailable_is_explicit_non_terminal_state() {
+        let (owner_handle, owner_session) = alloc(test_session());
+        let owner = owner_session.binding(owner_handle);
+        let tuple_json: serde_json::Value =
+            serde_json::from_str(&canonical_invocation_json(serde_json::json!({}))).unwrap();
+        let (active, mut cancel_requests) = ActiveInvocationHandle::with_cancel_channel(
+            owner,
+            tuple_json,
+            unavailable_cancellation_gate("session owner unavailable"),
+        );
+        let invocation_handle_id = insert_invocation_handle(active);
+        let handle = get_invocation_handle_for_owner(owner, invocation_handle_id)
+            .unwrap()
+            .unwrap();
+
+        let outcome = handle.cancel(Some("client stop".to_string()));
+        assert!(!outcome.request_accepted);
+        assert!(outcome.deduplicated);
+        assert!(!outcome.dispatch_request);
+        assert!(!outcome.cancelled);
+        assert!(!outcome.terminal);
+        assert_eq!(outcome.state, InvocationHandlePhase::Submitted);
+        assert_eq!(
+            outcome.rejection.as_deref(),
+            Some("session owner unavailable")
+        );
+        assert!(cancel_requests.try_recv().is_err());
+
+        let duplicate = handle.cancel(Some("client stop again".to_string()));
+        assert!(!duplicate.request_accepted);
+        assert!(duplicate.deduplicated);
+        assert!(!duplicate.dispatch_request);
+        assert!(!duplicate.terminal);
+        assert_eq!(
+            duplicate.rejection.as_deref(),
+            Some("session owner unavailable")
+        );
+        assert!(cancel_requests.try_recv().is_err());
+
+        let events_json = handle.events_json(invocation_handle_id).unwrap();
+        assert_eq!(events_json["state"], "Submitted");
+        assert_eq!(events_json["terminal"], false);
+        assert_eq!(
+            events_json["cancellation_authority"]["state"],
+            "unavailable"
+        );
+        assert_eq!(
+            events_json["cancellation_authority"]["reason"],
+            "session owner unavailable"
+        );
+        assert_eq!(events_json["events"][1]["kind"], "cancel_unavailable");
+        assert_eq!(events_json["events"][1]["terminal"], false);
+        assert_eq!(events_json["events"].as_array().unwrap().len(), 2);
+
         assert_eq!(
             runtime_invocation_handle_free(owner_handle, invocation_handle_id),
             RUNTIME_OK
