@@ -11227,6 +11227,63 @@ if all(path.exists() for path in agent_mcp_authoring_sources):
                 )
 
 
+agent_session_inventory_sources = (
+    cli_root / "src/daemon/persistence/chat_sessions.rs",
+    cli_root / "src/cli/commands/agent/history.rs",
+)
+if all(path.exists() for path in agent_session_inventory_sources):
+    chat_sessions_text = source(agent_session_inventory_sources[0])
+    agent_history_text = source(agent_session_inventory_sources[1])
+    raw_history_text = agent_session_inventory_sources[1].read_text(
+        encoding="utf-8", errors="replace"
+    )
+    for path, text, token, detail in (
+        (
+            agent_session_inventory_sources[0],
+            chat_sessions_text,
+            "pub struct SessionInventory",
+            "chat session list views must consume a validated inventory projection",
+        ),
+        (
+            agent_session_inventory_sources[0],
+            chat_sessions_text,
+            "pub fn load_session_inventory(agent: &str) -> anyhow::Result<SessionInventory>",
+            "chat session inventory loader must validate latest marker state",
+        ),
+        (
+            agent_session_inventory_sources[1],
+            agent_history_text,
+            "chat_sessions::load_session_inventory(agent)?",
+            "agent chat-history list must render from one validated index snapshot",
+        ),
+    ):
+        if token not in text:
+            add(
+                "R96_AGENT_SESSION_INVENTORY_FAIL_CLOSED",
+                path,
+                1,
+                detail,
+            )
+    for token, detail in (
+        (
+            "latest_session(agent)?.unwrap_or_default()",
+            "agent chat-history list must not silently erase missing latest marker state",
+        ),
+        (
+            "let latest = chat_sessions::latest_session(agent)?",
+            "agent chat-history list must not load latest pointer separately from sessions",
+        ),
+    ):
+        offset = raw_history_text.find(token)
+        if offset != -1:
+            add(
+                "R96_AGENT_SESSION_INVENTORY_FAIL_CLOSED",
+                agent_session_inventory_sources[1],
+                line_number(raw_history_text, offset),
+                detail,
+            )
+
+
 if violations:
     for violation in sorted(violations):
         print(

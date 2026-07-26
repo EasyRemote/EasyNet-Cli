@@ -157,6 +157,61 @@ pub struct SessionDescriptor {
     pub prompt_preview: String,
 }
 
+/// Validated read projection over [`SessionIndex`].
+///
+/// `SessionIndex` is the on-disk serde shape and may represent invalid pointer
+/// state if the file was edited or partially migrated. `SessionInventory` is
+/// the product read model: a non-empty inventory must prove exactly which
+/// session is latest before callers render markers or offer follow semantics.
+#[derive(Debug, Clone)]
+pub struct SessionInventory {
+    latest: Option<String>,
+    sessions: Vec<SessionDescriptor>,
+}
+
+impl SessionInventory {
+    fn from_index(agent: &str, index: SessionIndex) -> anyhow::Result<Self> {
+        let latest = index.latest.trim();
+        if index.sessions.is_empty() {
+            if !latest.is_empty() {
+                anyhow::bail!(
+                    "session index for agent {agent:?} has latest session {latest:?} but no sessions"
+                );
+            }
+            return Ok(Self {
+                latest: None,
+                sessions: index.sessions,
+            });
+        }
+        if latest.is_empty() {
+            anyhow::bail!(
+                "session index for agent {agent:?} has sessions but no latest session pointer"
+            );
+        }
+        if !index
+            .sessions
+            .iter()
+            .any(|session| session.session_id == latest)
+        {
+            anyhow::bail!(
+                "session index for agent {agent:?} latest session {latest:?} is not listed"
+            );
+        }
+        Ok(Self {
+            latest: Some(latest.to_string()),
+            sessions: index.sessions,
+        })
+    }
+
+    pub fn sessions(&self) -> &[SessionDescriptor] {
+        &self.sessions
+    }
+
+    pub fn latest_session(&self) -> Option<&str> {
+        self.latest.as_deref()
+    }
+}
+
 /// `<agents_root>/<agent>/sessions/`.
 fn sessions_dir(agent: &str) -> PathBuf {
     agents_root().join(agent).join("sessions")
@@ -211,6 +266,14 @@ pub fn latest_session(agent: &str) -> anyhow::Result<Option<String>> {
 /// caller names a session id from this index.
 pub fn list_sessions(agent: &str) -> anyhow::Result<Vec<SessionDescriptor>> {
     Ok(load_index(agent)?.sessions)
+}
+
+/// Validated session inventory for product read views.
+///
+/// Unlike [`list_sessions`] + [`latest_session`], this reads the index once and
+/// validates that marker state and rendered rows belong to the same snapshot.
+pub fn load_session_inventory(agent: &str) -> anyhow::Result<SessionInventory> {
+    SessionInventory::from_index(agent, load_index(agent)?)
 }
 
 /// Read every JSONL line of one session. Used by
@@ -556,6 +619,50 @@ mod tests {
         assert!(
             sessions.is_empty(),
             "JSONL transcript files must not reconstruct session inventory"
+        );
+    }
+
+    #[test]
+    fn session_inventory_missing_index_is_empty() {
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
+        let inventory = load_session_inventory("demot").expect("missing index is empty inventory");
+        assert!(inventory.sessions().is_empty());
+        assert_eq!(inventory.latest_session(), None);
+    }
+
+    #[test]
+    fn session_inventory_rejects_sessions_without_latest_pointer() {
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
+        write_turn("demot", "scratch", "hi", "ok", &[], &json!({})).unwrap();
+        let mut index = load_index("demot").unwrap();
+        index.latest.clear();
+        save_index("demot", &index).unwrap();
+
+        let error = load_session_inventory("demot")
+            .expect_err("non-empty inventory without latest pointer must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("sessions but no latest session pointer"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn session_inventory_rejects_unknown_latest_pointer() {
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
+        write_turn("demot", "scratch", "hi", "ok", &[], &json!({})).unwrap();
+        let mut index = load_index("demot").unwrap();
+        index.latest = "ghost".to_string();
+        save_index("demot", &index).unwrap();
+
+        let error = load_session_inventory("demot")
+            .expect_err("latest pointer must reference one listed session");
+        assert!(
+            error
+                .to_string()
+                .contains("latest session \"ghost\" is not listed"),
+            "unexpected error: {error}"
         );
     }
 

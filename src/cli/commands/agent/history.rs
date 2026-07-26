@@ -20,9 +20,10 @@ pub(super) fn run_sessions(args: ChatHistoryArgs) -> anyhow::Result<()> {
 
 pub(super) fn run_sessions_list(agent: &str, args: ChatHistoryListArgs) -> anyhow::Result<()> {
     use crate::daemon::persistence::chat_sessions;
-    let sessions = chat_sessions::list_sessions(agent)?;
+    let inventory = chat_sessions::load_session_inventory(agent)?;
+    let sessions = inventory.sessions();
     if args.json {
-        println!("{}", serde_json::to_string_pretty(&sessions)?);
+        println!("{}", serde_json::to_string_pretty(sessions)?);
         return Ok(());
     }
     if sessions.is_empty() {
@@ -32,12 +33,14 @@ pub(super) fn run_sessions_list(agent: &str, args: ChatHistoryListArgs) -> anyho
         );
         return Ok(());
     }
-    let latest = chat_sessions::latest_session(agent)?.unwrap_or_default();
+    let latest = inventory
+        .latest_session()
+        .expect("non-empty session inventory validates latest marker");
     println!(
         "{:<38} {:<22} {:>6}  PROMPT",
         "SESSION_ID", "LAST_TURN_AT", "TURNS"
     );
-    for s in &sessions {
+    for s in sessions {
         let marker = if s.session_id == latest { "*" } else { " " };
         println!(
             "{}{:<37} {:<22} {:>6}  {}",
