@@ -2,6 +2,7 @@ package run.runtime.sdk.provider.runtime.pluginexec;
 
 import java.io.BufferedReader;
 import java.io.IOException;
+import java.lang.reflect.Array;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -95,8 +96,23 @@ final class JsonFrameCodec {
       }
       return builder.append(']').toString();
     }
+    if (value.getClass().isArray()) {
+      return writeArray(value);
+    }
     throw new SidecarProtocolError(
         "sidecar response contains unsupported value type " + value.getClass().getName());
+  }
+
+  private static String writeArray(Object array) {
+    StringBuilder builder = new StringBuilder("[");
+    int length = Array.getLength(array);
+    for (int i = 0; i < length; i++) {
+      if (i > 0) {
+        builder.append(',');
+      }
+      builder.append(write(Array.get(array, i)));
+    }
+    return builder.append(']').toString();
   }
 
   private Object readComplete() {

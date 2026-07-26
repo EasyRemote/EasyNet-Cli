@@ -13809,6 +13809,7 @@ expected_helper_files = {
     "java": [
         "sdk/java/src/main/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarRuntime.java",
         "sdk/java/src/main/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarInvocation.java",
+        "sdk/java/src/main/java/run/runtime/sdk/provider/runtime/pluginexec/JsonFrameCodec.java",
         "sdk/java/src/test/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarRuntimeTest.java",
     ],
     "node": [
@@ -13830,6 +13831,7 @@ expected_helper_production_files = {
     "java": [
         "sdk/java/src/main/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarRuntime.java",
         "sdk/java/src/main/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarInvocation.java",
+        "sdk/java/src/main/java/run/runtime/sdk/provider/runtime/pluginexec/JsonFrameCodec.java",
     ],
     "node": [
         "sdk/node/provider/runtime/pluginexec.js",
@@ -14053,6 +14055,9 @@ required_helper_tokens = {
         "private static void rejectUnknownRequestFields(",
         "private static Map<String, Object> immutableObject(",
         "private static Object immutableValue(",
+        "java.lang.reflect.Array",
+        "value.getClass().isArray()",
+        "writeArray(",
         "private static final int CANONICAL_INVOCATION_NONCE_BYTES = 16;",
         "raw.size() != CANONICAL_INVOCATION_NONCE_BYTES",
         'requiredObject(invocation, "causal_context")',
@@ -14118,6 +14123,7 @@ required_helper_tests = {
         "sidecarInvocationRejectsUnknownRequestFields",
         "sidecarInvocationRejectsMissingCanonicalInvocationObjects",
         "sidecarInvocationRejectsNonCanonicalNonceLength",
+        "serveWritesArrayResultFrame",
         "frameWithMutableArgs",
     ],
 }
@@ -20650,6 +20656,7 @@ EOF
     sdk/rust/provider/runtime/pluginexec/tests/pluginexec.rs \
     sdk/java/src/main/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarRuntime.java \
     sdk/java/src/main/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarInvocation.java \
+    sdk/java/src/main/java/run/runtime/sdk/provider/runtime/pluginexec/JsonFrameCodec.java \
     sdk/java/src/test/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarRuntimeTest.java \
     sdk/node/provider/runtime/pluginexec.js \
     sdk/node/provider/runtime/pluginexec.d.ts \
@@ -20676,6 +20683,7 @@ EOF
     sdk/rust/provider/runtime/pluginexec/tests/pluginexec.rs \
     sdk/java/src/main/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarRuntime.java \
     sdk/java/src/main/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarInvocation.java \
+    sdk/java/src/main/java/run/runtime/sdk/provider/runtime/pluginexec/JsonFrameCodec.java \
     sdk/java/src/test/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarRuntimeTest.java \
     sdk/node/provider/runtime/pluginexec.js \
     sdk/node/provider/runtime/pluginexec.d.ts \
@@ -20703,6 +20711,7 @@ EOF
     sdk/rust/provider/runtime/pluginexec/tests/pluginexec.rs \
     sdk/java/src/main/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarRuntime.java \
     sdk/java/src/main/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarInvocation.java \
+    sdk/java/src/main/java/run/runtime/sdk/provider/runtime/pluginexec/JsonFrameCodec.java \
     sdk/java/src/test/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarRuntimeTest.java \
     sdk/node/provider/runtime/pluginexec.js \
     sdk/node/provider/runtime/pluginexec.d.ts \
@@ -20730,6 +20739,7 @@ EOF
     sdk/rust/provider/runtime/pluginexec/tests/pluginexec.rs \
     sdk/java/src/main/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarRuntime.java \
     sdk/java/src/main/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarInvocation.java \
+    sdk/java/src/main/java/run/runtime/sdk/provider/runtime/pluginexec/JsonFrameCodec.java \
     sdk/java/src/test/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarRuntimeTest.java \
     sdk/node/provider/runtime/pluginexec.js \
     sdk/node/provider/runtime/pluginexec.d.ts \
@@ -20757,6 +20767,7 @@ EOF
     sdk/rust/provider/runtime/pluginexec/tests/pluginexec.rs \
     sdk/java/src/main/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarRuntime.java \
     sdk/java/src/main/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarInvocation.java \
+    sdk/java/src/main/java/run/runtime/sdk/provider/runtime/pluginexec/JsonFrameCodec.java \
     sdk/java/src/test/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarRuntimeTest.java \
     sdk/node/provider/runtime/pluginexec.js \
     sdk/node/provider/runtime/pluginexec.d.ts \
@@ -20789,6 +20800,7 @@ EOF
     sdk/rust/provider/runtime/pluginexec/tests/pluginexec.rs \
     sdk/java/src/main/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarRuntime.java \
     sdk/java/src/main/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarInvocation.java \
+    sdk/java/src/main/java/run/runtime/sdk/provider/runtime/pluginexec/JsonFrameCodec.java \
     sdk/java/src/test/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarRuntimeTest.java \
     sdk/node/provider/runtime/pluginexec.js \
     sdk/node/provider/runtime/pluginexec.d.ts \
@@ -20816,6 +20828,7 @@ EOF
     sdk/rust/provider/runtime/pluginexec/tests/pluginexec.rs \
     sdk/java/src/main/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarRuntime.java \
     sdk/java/src/main/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarInvocation.java \
+    sdk/java/src/main/java/run/runtime/sdk/provider/runtime/pluginexec/JsonFrameCodec.java \
     sdk/java/src/test/java/run/runtime/sdk/provider/runtime/pluginexec/SidecarRuntimeTest.java \
     sdk/node/provider/runtime/pluginexec.js \
     sdk/node/provider/runtime/pluginexec.d.ts \

@@ -7,9 +7,14 @@ import java.io.StringWriter;
 import java.util.Map;
 
 public final class SidecarRuntimeTest {
+  public static void main(String[] args) throws Exception {
+    new SidecarRuntimeTest().testSidecarRuntimeHelper();
+  }
+
   public void testSidecarRuntimeHelper() throws Exception {
     sidecarInvocationProjectsDaemonFrame();
     serveWritesResultFrame();
+    serveWritesArrayResultFrame();
     serveWritesErrorFrameForHandlerFailure();
     sidecarInvocationRejectsNonInvokeFrame();
     sidecarInvocationRejectsNonCanonicalTupleAliases();
@@ -77,6 +82,23 @@ public final class SidecarRuntimeTest {
     check(response.contains("\"call_id\":\"call-1\""), "call id");
     check(response.contains("\"message\":\"hello\""), "message");
     check(response.contains("\"nonce_len\":16"), "nonce len");
+  }
+
+  static void serveWritesArrayResultFrame() throws Exception {
+    StringWriter output = new StringWriter();
+
+    SidecarRuntime.serve(
+        new BufferedReader(new StringReader(frameJSON())),
+        new BufferedWriter(output),
+        invocation ->
+            Map.of(
+                "channels", new String[] {"audio", "video"},
+                "samples", new int[] {1, 2, 3}));
+
+    String response = output.toString();
+    check(response.contains("\"type\":\"result\""), "array result type");
+    check(response.contains("\"channels\":[\"audio\",\"video\"]"), "string array result");
+    check(response.contains("\"samples\":[1,2,3]"), "primitive array result");
   }
 
   static void serveWritesErrorFrameForHandlerFailure() throws Exception {
