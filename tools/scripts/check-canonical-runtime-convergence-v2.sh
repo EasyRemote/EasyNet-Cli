@@ -17357,12 +17357,16 @@ if "SDKError.receiptProofFactsMissing(" not in proof:
 if "RECEIPT_PROOF_FACTS_MISSING" not in tests:
     raise SystemExit("java_runtime_receipt_projection:missing_proof_fact_error_code_test_missing")
 
-if "terminalReceipt = validatedTerminalReceipt(terminalReceipt, terminalState, ok);" not in result:
+if "RuntimeReceipt receipt = validatedRuntimeReceipt(terminalReceipt, terminalState, ok);" not in result:
     raise SystemExit("java_runtime_receipt_projection:invocation_result_not_using_validated_projection")
 if "RuntimeReceipt.fromMap(terminalReceipt)" not in result:
     raise SystemExit("java_runtime_receipt_projection:invocation_result_not_using_receipt_validator")
-if "return receipt.rawProjection();" not in result:
+if "terminalReceipt = receipt.rawProjection();" not in result:
     raise SystemExit("java_runtime_receipt_projection:invocation_result_not_using_receipt_owned_projection")
+if "public RuntimeReceipt runtimeReceipt()" not in result:
+    raise SystemExit("java_runtime_receipt_projection:typed_runtime_receipt_accessor_missing")
+if "private static RuntimeReceipt validatedRuntimeReceipt(" not in result:
+    raise SystemExit("java_runtime_receipt_projection:typed_runtime_receipt_validator_missing")
 if "requiredTerminalReceipt(fields)" not in result:
     raise SystemExit("java_runtime_receipt_projection:terminal_receipt_not_required")
 if "terminal_receipt is required" not in result:
@@ -17390,6 +17394,9 @@ for required_test in (
     "raw projection must expose deeply immutable proof fact maps",
     "InvocationResult terminalReceipt must detach from mutable caller input after proof validation",
     "InvocationResult terminalReceipt projection must expose deeply immutable proof fact maps",
+    "InvocationResult exposes a typed RuntimeReceipt aggregate",
+    "InvocationResult typed RuntimeReceipt and raw terminalReceipt projection share the validated receipt",
+    "InvocationResult direct constructor validates terminal receipt through RuntimeReceipt",
     "raw-projection-mutation",
     "canonicalRuntimeReceiptFixture",
     "missingProof.remove(\"authority_proof\")",
@@ -18668,11 +18675,11 @@ EOF
     "$tmp/cli-java-invocation-result-shallow-copy-legacy/sdk/java/src/main/java/run/runtime/sdk/RuntimeReceiptProofFacts.java"
   cp "$ROOT/sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java" \
     "$tmp/cli-java-invocation-result-shallow-copy-legacy/sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
-  perl -0pi -e 's/terminalReceipt = validatedTerminalReceipt\(terminalReceipt, terminalState, ok\);/terminalReceipt = Map.copyOf(terminalReceipt);\n    validateTerminalReceipt(terminalReceipt, terminalState, ok);/' \
+  perl -0pi -e 's/RuntimeReceipt receipt = validatedRuntimeReceipt\(terminalReceipt, terminalState, ok\);\n    terminalReceipt = receipt\.rawProjection\(\);/terminalReceipt = Map.copyOf(terminalReceipt);\n    validateTerminalReceipt(terminalReceipt, terminalState, ok);/' \
     "$tmp/cli-java-invocation-result-shallow-copy-legacy/sdk/java/src/main/java/run/runtime/sdk/InvocationResult.java"
-  perl -0pi -e 's/private static Map<String, Object> validatedTerminalReceipt/private static void validateTerminalReceipt/' \
+  perl -0pi -e 's/private static RuntimeReceipt validatedRuntimeReceipt/private static void validateTerminalReceipt/' \
     "$tmp/cli-java-invocation-result-shallow-copy-legacy/sdk/java/src/main/java/run/runtime/sdk/InvocationResult.java"
-  perl -0pi -e 's/\n    return receipt\.rawProjection\(\);//' \
+  perl -0pi -e 's/\n    return receipt;//' \
     "$tmp/cli-java-invocation-result-shallow-copy-legacy/sdk/java/src/main/java/run/runtime/sdk/InvocationResult.java"
   if ( CLI_ROOT="$tmp/cli-java-invocation-result-shallow-copy-legacy"; check_java_sdk_runtime_receipt_projection_contract ) >/dev/null 2>&1; then
     fail "self-test expected Java SDK invocation result shallow-copy mutability gate to fail"

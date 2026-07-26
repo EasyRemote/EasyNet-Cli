@@ -265,6 +265,12 @@ public final class RuntimeCoreSeamTest {
     check(
         "inv-result".equals(canonical.terminalReceipt().get("invocation_id")),
         "terminal_receipt populates terminalReceipt");
+    check(
+        "COMPLETED".equals(canonical.runtimeReceipt().lifecycleState()),
+        "InvocationResult exposes a typed RuntimeReceipt aggregate");
+    check(
+        canonical.runtimeReceipt().rawProjection().equals(canonical.terminalReceipt()),
+        "InvocationResult typed RuntimeReceipt and raw terminalReceipt projection share the validated receipt");
 
     Map<String, Object> mutableTerminal =
         new LinkedHashMap<>(
@@ -282,6 +288,9 @@ public final class RuntimeCoreSeamTest {
     check(
         !projectedAuthorityBinding.containsKey("legacy_authority"),
         "InvocationResult terminalReceipt must detach from mutable caller input after proof validation");
+    check(
+        "COMPLETED".equals(owned.runtimeReceipt().lifecycleState()),
+        "InvocationResult direct constructor validates terminal receipt through RuntimeReceipt");
     boolean rejectedInvocationResultNestedMutation = false;
     try {
       projectedAuthorityBinding.put("legacy_authority", "raw-projection-mutation");

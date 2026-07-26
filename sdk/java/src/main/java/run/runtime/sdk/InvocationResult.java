@@ -15,7 +15,8 @@ public record InvocationResult(
     if (terminalReceipt == null || terminalReceipt.isEmpty()) {
       throw SDKError.validation("invocation_result", "terminal_receipt is required");
     }
-    terminalReceipt = validatedTerminalReceipt(terminalReceipt, terminalState, ok);
+    RuntimeReceipt receipt = validatedRuntimeReceipt(terminalReceipt, terminalState, ok);
+    terminalReceipt = receipt.rawProjection();
     if (ok && error != null) {
       throw SDKError.validation("runtime", "ok result must not carry error");
     }
@@ -44,6 +45,10 @@ public record InvocationResult(
         terminalReceipt);
   }
 
+  public RuntimeReceipt runtimeReceipt() {
+    return RuntimeReceipt.fromMap(terminalReceipt);
+  }
+
   private static Map<String, Object> requiredTerminalReceipt(Map<String, Object> fields) {
     if (!fields.containsKey("terminal_receipt") || fields.get("terminal_receipt") == null) {
       throw SDKError.validation("invocation_result", "terminal_receipt is required");
@@ -55,7 +60,7 @@ public record InvocationResult(
     return copyStringMap(map);
   }
 
-  private static Map<String, Object> validatedTerminalReceipt(
+  private static RuntimeReceipt validatedRuntimeReceipt(
       Map<String, Object> terminalReceipt, InvocationTerminalState terminalState, boolean ok) {
     RuntimeReceipt receipt = RuntimeReceipt.fromMap(terminalReceipt);
     String receiptState = receipt.lifecycleState();
@@ -74,7 +79,7 @@ public record InvocationResult(
       throw SDKError.validation(
           "terminal_receipt", "invocation result ok flag does not match terminal receipt state");
     }
-    return receipt.rawProjection();
+    return receipt;
   }
 
   private static boolean bool(Map<String, Object> fields, String field) {
