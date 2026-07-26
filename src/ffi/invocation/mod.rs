@@ -6057,16 +6057,12 @@ fn canonical_terminal_phase(
 
 #[cfg(feature = "axon-pb")]
 fn explicit_terminal_phase(state: &str) -> Option<InvocationHandlePhase> {
-    if state.eq_ignore_ascii_case("Completed") {
-        Some(InvocationHandlePhase::Completed)
-    } else if state.eq_ignore_ascii_case("Failed") {
-        Some(InvocationHandlePhase::Failed)
-    } else if state.eq_ignore_ascii_case("TimedOut") || state.eq_ignore_ascii_case("TIMED_OUT") {
-        Some(InvocationHandlePhase::TimedOut)
-    } else if state.eq_ignore_ascii_case("Cancelled") {
-        Some(InvocationHandlePhase::Cancelled)
-    } else {
-        None
+    match state {
+        "Completed" => Some(InvocationHandlePhase::Completed),
+        "Failed" => Some(InvocationHandlePhase::Failed),
+        "TimedOut" => Some(InvocationHandlePhase::TimedOut),
+        "Cancelled" => Some(InvocationHandlePhase::Cancelled),
+        _ => None,
     }
 }
 
@@ -6443,6 +6439,39 @@ mod tests {
 
     unsafe extern "C" fn ignore_stream_chunk(_: *mut c_void, _: *const c_char) {}
     unsafe extern "C" fn ignore_bidi_frame(_: *mut c_void, _: *const c_char) {}
+
+    #[test]
+    fn explicit_terminal_phase_accepts_only_canonical_public_states() {
+        for (state, expected) in [
+            ("Completed", InvocationHandlePhase::Completed),
+            ("Failed", InvocationHandlePhase::Failed),
+            ("TimedOut", InvocationHandlePhase::TimedOut),
+            ("Cancelled", InvocationHandlePhase::Cancelled),
+        ] {
+            assert_eq!(explicit_terminal_phase(state), Some(expected), "{state}");
+        }
+    }
+
+    #[test]
+    fn explicit_terminal_phase_rejects_retired_case_variants() {
+        for state in [
+            "completed",
+            "COMPLETED",
+            "failed",
+            "FAILED",
+            "timed_out",
+            "TIMED_OUT",
+            "timedout",
+            "cancelled",
+            "CANCELLED",
+        ] {
+            assert_eq!(
+                explicit_terminal_phase(state),
+                None,
+                "non-canonical terminal state must fail closed: {state}"
+            );
+        }
+    }
 
     struct AcceptingCancellationCommandSubmitter;
 
