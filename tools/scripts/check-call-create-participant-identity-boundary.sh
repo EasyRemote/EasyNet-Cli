@@ -41,8 +41,12 @@ if ! rg -n 'invoke_current_realm_hub_system_ability\(ability, args\.clone\(\)\)'
   fail "call signaling must preserve the current-realm Hub route before local signaling"
 fi
 
-if ! rg -n -U 'LocalDaemonSystemAbilityIssuer::invoke_root_for_subject\(\s*ability,\s*args,\s*&subject_ura' "$TARGET" >/dev/null; then
-  fail "local call signaling must bind an explicit local daemon subject"
+if ! rg -n 'LocalDaemonSystemAbilityIssuer::invoke_root_for_local_daemon_identity\(ability, args\)' "$TARGET" >/dev/null; then
+  fail "local call signaling must delegate local daemon subject policy to LocalDaemonSystemAbilityIssuer"
+fi
+
+if rg -n 'LocalDaemonSystemAbilityIssuer::local_daemon_identity_subject_ura|let subject_ura\s*=' "$TARGET"; then
+  fail "call signaling must not derive local daemon subject in the product command"
 fi
 
 if rg -n '\binvoke_local_ability\s*\(' "$TARGET"; then

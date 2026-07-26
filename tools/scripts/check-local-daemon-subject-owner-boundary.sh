@@ -19,8 +19,14 @@ IDENTITY_RS="src/daemon/identity/local_invocation.rs"
 [[ -f "$TRANSPORT_RS" ]] || fail "missing $TRANSPORT_RS"
 [[ -f "$IDENTITY_RS" ]] || fail "missing $IDENTITY_RS"
 
-grep -Fq 'pub fn local_daemon_identity_subject_ura() -> anyhow::Result<String>' "$ISSUER_RS" \
+grep -Fq 'fn local_daemon_identity_subject_ura() -> anyhow::Result<String>' "$ISSUER_RS" \
     || fail "LocalDaemonSystemAbilityIssuer must own the local daemon subject helper"
+
+grep -Fq 'pub fn invoke_root_for_local_daemon_identity(' "$ISSUER_RS" \
+    || fail "LocalDaemonSystemAbilityIssuer must expose a named local-daemon-identity root issuer"
+
+grep -Fq 'pub fn invoke_root_for_local_daemon_identity_timeout(' "$ISSUER_RS" \
+    || fail "LocalDaemonSystemAbilityIssuer must expose a timeout-aware local-daemon-identity root issuer"
 
 grep -Fq 'crate::daemon::identity::local_invocation::local_daemon_ura()' "$ISSUER_RS" \
     || fail "LocalDaemonSystemAbilityIssuer must source subject identity from daemon::identity::local_invocation"
@@ -41,6 +47,11 @@ fi
 if rg -n 'local_daemon_grpc::local_daemon_identity_subject_ura' "$ISSUER_RS" src \
     --glob '!src/support/platform/local_daemon_grpc.rs' 2>/dev/null; then
     fail "callers must not source authority subjects from the gRPC transport module"
+fi
+
+if rg -n 'LocalDaemonSystemAbilityIssuer::local_daemon_identity_subject_ura' src/cli \
+    --glob '*.rs' 2>/dev/null; then
+    fail "product CLI modules must not derive local daemon identity subjects directly"
 fi
 
 if rg -n 'requires the `axon-pb` feature|rebuild with `cargo build --features axon-pb`' "$ISSUER_RS" 2>/dev/null; then

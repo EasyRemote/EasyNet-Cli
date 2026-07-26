@@ -2,7 +2,6 @@
 
 use std::sync::Arc;
 
-use anyhow::Context;
 use serde_json::Value;
 
 /// The only dependency Agent CLI commands have on the daemon invocation plane.
@@ -31,13 +30,9 @@ struct DaemonAgentStateReadGateway;
 
 impl AgentCommandGateway for DaemonAgentCommandGateway {
     fn invoke(&self, ability: &str, args: Value) -> anyhow::Result<Value> {
-        let subject_ura =
-            crate::support::platform::local_invoke::LocalDaemonSystemAbilityIssuer::local_daemon_identity_subject_ura()
-                .with_context(|| format!("resolve local agent command subject for {ability}"))?;
-        crate::support::platform::local_invoke::LocalDaemonSystemAbilityIssuer::invoke_root_for_subject(
+        crate::support::platform::local_invoke::LocalDaemonSystemAbilityIssuer::invoke_root_for_local_daemon_identity(
             ability,
             args,
-            &subject_ura,
         )
         .map_err(|error| anyhow::anyhow!("{ability} failed: {error}"))
     }

@@ -142,12 +142,9 @@ fn chat_completions_payload(model: &str, messages: Vec<Value>, token: Option<&st
 }
 
 fn invoke_openai_chat_completions(args: Value) -> anyhow::Result<Value> {
-    let subject_ura = LocalDaemonSystemAbilityIssuer::local_daemon_identity_subject_ura()
-        .context("resolve local openai.chat_completions subject")?;
-    LocalDaemonSystemAbilityIssuer::invoke_root_for_subject(
+    LocalDaemonSystemAbilityIssuer::invoke_root_for_local_daemon_identity(
         "openai.chat_completions",
         args,
-        &subject_ura,
     )
     .context("invoke openai.chat_completions")
 }

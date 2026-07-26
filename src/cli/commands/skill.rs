@@ -201,9 +201,7 @@ fn run_remove(args: RemoveArgs) -> anyhow::Result<()> {
 }
 
 fn invoke_daemon_skill_mutation(ability: &str, args: Value) -> anyhow::Result<Value> {
-    let subject_ura = LocalDaemonSystemAbilityIssuer::local_daemon_identity_subject_ura()
-        .with_context(|| format!("resolve local skill mutation subject for {ability}"))?;
-    LocalDaemonSystemAbilityIssuer::invoke_root_for_subject(ability, args, &subject_ura)
+    LocalDaemonSystemAbilityIssuer::invoke_root_for_local_daemon_identity(ability, args)
         .with_context(|| format!("invoke {ability}"))
 }
 

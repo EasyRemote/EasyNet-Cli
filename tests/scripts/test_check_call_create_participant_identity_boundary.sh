@@ -39,8 +39,7 @@ impl CallSignalingIssuer {
     }
 
     fn invoke_local(ability: &str, args: Value) -> anyhow::Result<Value> {
-        let subject_ura = LocalDaemonSystemAbilityIssuer::local_daemon_identity_subject_ura()?;
-        LocalDaemonSystemAbilityIssuer::invoke_root_for_subject(ability, args, &subject_ura)
+        LocalDaemonSystemAbilityIssuer::invoke_root_for_local_daemon_identity(ability, args)
     }
 }
 
@@ -143,8 +142,7 @@ impl CallSignalingIssuer {
     }
 
     fn invoke_local(ability: &str, args: Value) -> anyhow::Result<Value> {
-        let subject_ura = LocalDaemonSystemAbilityIssuer::local_daemon_identity_subject_ura()?;
-        LocalDaemonSystemAbilityIssuer::invoke_root_for_subject(ability, args, &subject_ura)
+        LocalDaemonSystemAbilityIssuer::invoke_root_for_local_daemon_identity(ability, args)
     }
 }
 

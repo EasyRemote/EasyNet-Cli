@@ -284,9 +284,7 @@ fn run_uninstall(args: UninstallArgs) -> anyhow::Result<()> {
 }
 
 fn invoke_ability_uninstall(args: Value) -> anyhow::Result<Value> {
-    let subject_ura = LocalDaemonSystemAbilityIssuer::local_daemon_identity_subject_ura()
-        .context("resolve local ability.uninstall subject")?;
-    LocalDaemonSystemAbilityIssuer::invoke_root_for_subject("ability.uninstall", args, &subject_ura)
+    LocalDaemonSystemAbilityIssuer::invoke_root_for_local_daemon_identity("ability.uninstall", args)
         .context("invoke ability.uninstall")
 }
 

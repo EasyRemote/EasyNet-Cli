@@ -161,11 +161,9 @@ struct DaemonAgentStateReadGateway;
 
 impl AgentCommandGateway for DaemonAgentCommandGateway {
     fn invoke(&self, ability: &str, args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
-        let subject_ura = crate::support::platform::local_invoke::LocalDaemonSystemAbilityIssuer::local_daemon_identity_subject_ura()?;
-        crate::support::platform::local_invoke::LocalDaemonSystemAbilityIssuer::invoke_root_for_subject(
+        crate::support::platform::local_invoke::LocalDaemonSystemAbilityIssuer::invoke_root_for_local_daemon_identity(
             ability,
             args,
-            &subject_ura,
         )
     }
 }
@@ -205,8 +203,7 @@ fn run(adapter_args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
 }
 
 fn invoke_openai_chat_completions(args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
-    let subject_ura = LocalDaemonSystemAbilityIssuer::local_daemon_identity_subject_ura()?;
-    LocalDaemonSystemAbilityIssuer::invoke_root_for_subject("openai.chat_completions", args, &subject_ura)
+    LocalDaemonSystemAbilityIssuer::invoke_root_for_local_daemon_identity("openai.chat_completions", args)
 }
 RS
 
@@ -230,8 +227,7 @@ fn remove() -> anyhow::Result<serde_json::Value> {
 }
 
 fn invoke_daemon_skill_mutation(ability: &str, args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
-    let subject_ura = LocalDaemonSystemAbilityIssuer::local_daemon_identity_subject_ura()?;
-    LocalDaemonSystemAbilityIssuer::invoke_root_for_subject(ability, args, &subject_ura)
+    LocalDaemonSystemAbilityIssuer::invoke_root_for_local_daemon_identity(ability, args)
 }
 RS
 
@@ -273,8 +269,7 @@ fn run_uninstall(args: UninstallArgs) -> anyhow::Result<serde_json::Value> {
 }
 
 fn invoke_ability_uninstall(args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
-    let subject_ura = LocalDaemonSystemAbilityIssuer::local_daemon_identity_subject_ura()?;
-    LocalDaemonSystemAbilityIssuer::invoke_root_for_subject("ability.uninstall", args, &subject_ura)
+    LocalDaemonSystemAbilityIssuer::invoke_root_for_local_daemon_identity("ability.uninstall", args)
 }
 
 fn ability_uninstall_payload(_args: &UninstallArgs) -> serde_json::Value {

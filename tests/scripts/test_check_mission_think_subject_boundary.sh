@@ -40,8 +40,7 @@ struct MissionThinkIssuer;
 
 impl MissionThinkIssuer {
     fn invoke(args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
-        let subject_ura = LocalDaemonSystemAbilityIssuer::local_daemon_identity_subject_ura()?;
-        LocalDaemonSystemAbilityIssuer::invoke_root_for_subject("mission.think", args, &subject_ura)
+        LocalDaemonSystemAbilityIssuer::invoke_root_for_local_daemon_identity("mission.think", args)
     }
 }
 

@@ -309,15 +309,35 @@ pub struct LocalDaemonSystemAbilityIssuer;
 
 impl LocalDaemonSystemAbilityIssuer {
     #[cfg(feature = "axon-pb")]
-    pub fn local_daemon_identity_subject_ura() -> anyhow::Result<String> {
+    fn local_daemon_identity_subject_ura() -> anyhow::Result<String> {
         crate::daemon::identity::local_invocation::local_daemon_ura()
     }
 
     #[cfg(not(feature = "axon-pb"))]
-    pub fn local_daemon_identity_subject_ura() -> anyhow::Result<String> {
+    fn local_daemon_identity_subject_ura() -> anyhow::Result<String> {
         Err(local_invocation_capability_unsupported_error(
             "resolve local daemon identity subject",
         ))
+    }
+
+    pub fn invoke_root_for_local_daemon_identity(
+        ability: &str,
+        args: Value,
+    ) -> anyhow::Result<Value> {
+        Self::invoke_root_for_local_daemon_identity_timeout(
+            ability,
+            args,
+            std::time::Duration::from_secs(30),
+        )
+    }
+
+    pub fn invoke_root_for_local_daemon_identity_timeout(
+        ability: &str,
+        args: Value,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<Value> {
+        let subject_ura = Self::local_daemon_identity_subject_ura()?;
+        Self::invoke_root_for_subject_timeout(ability, args, &subject_ura, timeout)
     }
 
     pub fn invoke_root_for_subject(

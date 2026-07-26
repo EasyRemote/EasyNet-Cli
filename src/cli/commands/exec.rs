@@ -115,9 +115,7 @@ fn decode_exec_stream(result: &Value, field: &str) -> Vec<u8> {
 }
 
 fn invoke_local_process_exec(payload: Value) -> anyhow::Result<Value> {
-    let subject_ura = LocalDaemonSystemAbilityIssuer::local_daemon_identity_subject_ura()
-        .context("resolve local process.exec subject")?;
-    LocalDaemonSystemAbilityIssuer::invoke_root_for_subject("process.exec", payload, &subject_ura)
+    LocalDaemonSystemAbilityIssuer::invoke_root_for_local_daemon_identity("process.exec", payload)
         .context("invoke process.exec")
 }
 

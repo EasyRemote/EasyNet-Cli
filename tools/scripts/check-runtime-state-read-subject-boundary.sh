@@ -166,8 +166,12 @@ if ! rg -n 'LocalRuntimeStateReadIssuer::invoke' "$AGENT_GATEWAY" >/dev/null; th
   fail "production AgentStateReadGateway must use LocalRuntimeStateReadIssuer"
 fi
 
-if ! rg -n -U 'LocalDaemonSystemAbilityIssuer::invoke_root_for_subject\(\s*ability,\s*args,\s*&subject_ura' "$AGENT_GATEWAY" >/dev/null; then
-  fail "production AgentCommandGateway must bind explicit local daemon system issuer subject"
+if ! rg -n 'LocalDaemonSystemAbilityIssuer::invoke_root_for_local_daemon_identity' "$AGENT_GATEWAY" >/dev/null; then
+  fail "production AgentCommandGateway must delegate local daemon identity subject policy to the system issuer"
+fi
+
+if rg -n 'LocalDaemonSystemAbilityIssuer::local_daemon_identity_subject_ura|let subject_ura\s*=' "$AGENT_GATEWAY"; then
+  fail "production AgentCommandGateway must not derive local daemon subject in the product gateway"
 fi
 
 if rg -n '\binvoke_local_ability\s*\(' "$AGENT_GATEWAY"; then
@@ -198,8 +202,8 @@ if rg -n '\binvoke_local_ability\s*\(' "$LLM_API"; then
   fail "llm-api must not use generic invoke_local_ability"
 fi
 
-if ! rg -n 'LocalDaemonSystemAbilityIssuer::invoke_root_for_subject' "$LLM_API" >/dev/null; then
-  fail "llm-api chat completions must use explicit local daemon system issuer subject"
+if ! rg -n 'LocalDaemonSystemAbilityIssuer::invoke_root_for_local_daemon_identity' "$LLM_API" >/dev/null; then
+  fail "llm-api chat completions must delegate local daemon identity subject policy to the system issuer"
 fi
 
 if ! rg -n -F 'invoke_openai_chat_completions(adapter_args)' "$LLM_API" >/dev/null; then
@@ -224,8 +228,8 @@ if rg -n -U '\binvoke_local_ability\s*\(' "$SKILL_CLI"; then
   fail "skill CLI must not use generic invoke_local_ability"
 fi
 
-if ! rg -n -U 'LocalDaemonSystemAbilityIssuer::invoke_root_for_subject\(\s*ability,\s*args,\s*&subject_ura' "$SKILL_CLI" >/dev/null; then
-  fail "skill mutations must use explicit local daemon system issuer subject"
+if ! rg -n 'LocalDaemonSystemAbilityIssuer::invoke_root_for_local_daemon_identity\(ability, args\)' "$SKILL_CLI" >/dev/null; then
+  fail "skill mutations must delegate local daemon identity subject policy to the system issuer"
 fi
 
 if ! rg -n -U 'LocalRuntimeStateReadIssuer::invoke\(&ability,\s*(serde_json::)?json!\(\{\}\)' "$API_KEY_CLI" >/dev/null; then
@@ -256,8 +260,8 @@ if rg -n -U '\binvoke_local_ability\s*\(' "$ABILITY_GROUP"; then
   fail "ability CLI must not use generic invoke_local_ability"
 fi
 
-if ! rg -n -U 'LocalDaemonSystemAbilityIssuer::invoke_root_for_subject\(\s*"ability\.uninstall",\s*args,\s*&subject_ura' "$ABILITY_GROUP" >/dev/null; then
-  fail "ability.uninstall must use explicit local daemon system issuer subject"
+if ! rg -n 'LocalDaemonSystemAbilityIssuer::invoke_root_for_local_daemon_identity\("ability\.uninstall", args\)' "$ABILITY_GROUP" >/dev/null; then
+  fail "ability.uninstall must delegate local daemon identity subject policy to the system issuer"
 fi
 
 if ! rg -n -F 'invoke_ability_uninstall(ability_uninstall_payload(&args))' "$ABILITY_GROUP" >/dev/null; then

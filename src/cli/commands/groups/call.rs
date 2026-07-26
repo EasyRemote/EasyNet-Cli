@@ -174,9 +174,7 @@ impl CallSignalingIssuer {
 
     fn invoke_local(ability: RealmHubSystemAbility, args: Value) -> anyhow::Result<Value> {
         let ability = ability.as_str();
-        let subject_ura = LocalDaemonSystemAbilityIssuer::local_daemon_identity_subject_ura()
-            .with_context(|| format!("resolve local call signaling subject for {ability}"))?;
-        LocalDaemonSystemAbilityIssuer::invoke_root_for_subject(ability, args, &subject_ura)
+        LocalDaemonSystemAbilityIssuer::invoke_root_for_local_daemon_identity(ability, args)
             .with_context(|| format!("invoke {ability} locally"))
     }
 }

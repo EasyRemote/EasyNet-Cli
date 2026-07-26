@@ -31,12 +31,12 @@ if ! rg -n 'struct MissionDiscussIssuer' "$TARGET" >/dev/null; then
   fail "mission discuss CLI must use a named subject-bound issuer"
 fi
 
-if ! rg -n 'LocalDaemonSystemAbilityIssuer::local_daemon_identity_subject_ura' "$TARGET" >/dev/null; then
-  fail "mission discuss issuer must resolve the local daemon identity subject"
+if ! rg -n 'LocalDaemonSystemAbilityIssuer::invoke_root_for_local_daemon_identity' "$TARGET" >/dev/null; then
+  fail "mission discuss issuer must delegate local daemon identity subject policy to LocalDaemonSystemAbilityIssuer"
 fi
 
-if ! rg -n -U 'LocalDaemonSystemAbilityIssuer::invoke_root_for_subject\(\s*ability,\s*args,\s*&subject_ura' "$TARGET" >/dev/null; then
-  fail "mission discuss issuer must bind explicit local daemon subject"
+if rg -n 'LocalDaemonSystemAbilityIssuer::local_daemon_identity_subject_ura|let subject_ura\s*=' "$TARGET"; then
+  fail "mission discuss issuer must not derive local daemon subject in the product command"
 fi
 
 if rg -n '\binvoke_local_ability\s*\(' "$TARGET"; then
