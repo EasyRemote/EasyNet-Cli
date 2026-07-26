@@ -1459,6 +1459,47 @@ class RuntimeTests(unittest.TestCase):
             "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
         )
 
+    def test_open_signed_stream_preserves_signature(self) -> None:
+        transport = MemoryRuntimeTransport()
+        client = RuntimeClient(transport)
+
+        stream = client.open_signed_stream(signed_fixture())
+
+        self.assertEqual(stream.stream_id, "stream-1")
+        assert transport.seen_draft is not None
+        self.assertEqual(transport.seen_draft["signer_id"], "caller-key")
+        self.assertEqual(
+            transport.seen_draft["signature"]["signature_base64"],
+            "c2lnbmF0dXJl",
+        )
+
+    def test_open_signed_bidi_preserves_signature_and_streams(self) -> None:
+        transport = MemoryRuntimeTransport()
+        client = RuntimeClient(transport)
+
+        session = client.open_signed_bidi(
+            signed_fixture(),
+            (
+                BidiStreamDescriptor(
+                    stream_id=9,
+                    content_type="application/json",
+                    ordering="ordered",
+                ),
+            ),
+        )
+
+        self.assertEqual(session.session_id, "bidi-1")
+        assert transport.seen_draft is not None
+        self.assertEqual(transport.seen_draft["signer_id"], "caller-key")
+        self.assertEqual(
+            transport.seen_draft["signature"]["signature_base64"],
+            "c2lnbmF0dXJl",
+        )
+        self.assertEqual(
+            transport.seen_streams,
+            [{"content_type": "application/json", "ordering": "ordered", "stream_id": 9}],
+        )
+
     def test_public_handle_json_does_not_grant_control_authority(self) -> None:
         transport = MemoryRuntimeTransport()
         client = RuntimeClient(transport)

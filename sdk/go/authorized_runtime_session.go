@@ -579,34 +579,19 @@ func (p RuntimeClientSessionRuntimeProvider) AwaitTerminal(ctx context.Context, 
 }
 
 func (p RuntimeClientSessionRuntimeProvider) OpenStream(ctx context.Context, signed SignedInvocation) (*StreamHandle, error) {
-	_ = ctx
-	_ = signed
-	if _, err := p.requireClient("stream"); err != nil {
+	client, err := p.requireClient("stream")
+	if err != nil {
 		return nil, err
 	}
-	return nil, v3SessionError(
-		ErrProviderUnavailable,
-		"stream",
-		"runtime client adapter does not expose signed stream submission",
-		nil,
-		nil,
-	)
+	return client.OpenSignedStream(ctx, signed)
 }
 
 func (p RuntimeClientSessionRuntimeProvider) OpenBidi(ctx context.Context, signed SignedInvocation, streams []BidiStreamDescriptor) (*BidiSession, error) {
-	_ = ctx
-	_ = signed
-	_ = streams
-	if _, err := p.requireClient("bidi"); err != nil {
+	client, err := p.requireClient("bidi")
+	if err != nil {
 		return nil, err
 	}
-	return nil, v3SessionError(
-		ErrProviderUnavailable,
-		"bidi",
-		"runtime client adapter does not expose signed bidi submission",
-		nil,
-		nil,
-	)
+	return client.OpenSignedBidi(ctx, signed, streams)
 }
 
 func (p RuntimeClientSessionRuntimeProvider) Cancel(ctx context.Context, handle InvocationHandle, reason string) (InvocationCancel, error) {

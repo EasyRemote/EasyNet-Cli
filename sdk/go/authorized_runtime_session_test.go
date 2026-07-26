@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -414,14 +415,53 @@ func TestAuthorizedRuntimeSessionHistoryAllowsSessionAuthorityWithExactDeviceSub
 	}
 }
 
-func TestRuntimeClientSessionRuntimeProviderRejectsUnsignedStreamDowngrade(t *testing.T) {
-	provider := NewRuntimeClientSessionRuntimeProvider(&RuntimeClient{})
-
-	if _, err := provider.OpenStream(context.Background(), SignedInvocation{}); !IsCode(err, ErrProviderUnavailable) {
-		t.Fatalf("OpenStream error = %v", err)
+func TestRuntimeClientSessionRuntimeProviderOpensSignedStreamAndBidi(t *testing.T) {
+	var streamSigned map[string]any
+	var bidiSigned map[string]any
+	client, err := NewRuntimeClient(RuntimeTransportFunc{
+		OpenStreamFunc: func(ctx context.Context, signedJSON []byte) (StreamTransport, []byte, error) {
+			if err := json.Unmarshal(signedJSON, &streamSigned); err != nil {
+				t.Fatalf("stream signed JSON: %v", err)
+			}
+			return StreamTransportFunc{
+				RecvFunc: func(context.Context) ([]byte, error) {
+					return nil, errors.New("unused")
+				},
+			}, []byte(`{"stream_id":"provider-stream-1","state":"Open","max_buffered_events":4}`), nil
+		},
+		OpenBidiFunc: func(ctx context.Context, signedJSON []byte, streamsJSON []byte) (BidiTransport, []byte, error) {
+			if err := json.Unmarshal(signedJSON, &bidiSigned); err != nil {
+				t.Fatalf("bidi signed JSON: %v", err)
+			}
+			return &memoryBidiTransport{}, []byte(`{"session_id":"provider-bidi-1","state":"Open","max_buffered_frames":4}`), nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
 	}
-	if _, err := provider.OpenBidi(context.Background(), SignedInvocation{}, nil); !IsCode(err, ErrProviderUnavailable) {
-		t.Fatalf("OpenBidi error = %v", err)
+	provider := NewRuntimeClientSessionRuntimeProvider(client)
+	signed := signedForRuntimeTest(t)
+
+	stream, err := provider.OpenStream(context.Background(), signed)
+	if err != nil {
+		t.Fatalf("OpenStream: %v", err)
+	}
+	if stream.StreamID() != "provider-stream-1" {
+		t.Fatalf("stream id = %q", stream.StreamID())
+	}
+	if streamSigned["signer_id"] != "caller-key" {
+		t.Fatalf("stream signed envelope not forwarded: %#v", streamSigned)
+	}
+
+	session, err := provider.OpenBidi(context.Background(), signed, []BidiStreamDescriptor{{StreamID: 1}})
+	if err != nil {
+		t.Fatalf("OpenBidi: %v", err)
+	}
+	if session.SessionID() != "provider-bidi-1" {
+		t.Fatalf("bidi session id = %q", session.SessionID())
+	}
+	if bidiSigned["signer_id"] != "caller-key" {
+		t.Fatalf("bidi signed envelope not forwarded: %#v", bidiSigned)
 	}
 }
 

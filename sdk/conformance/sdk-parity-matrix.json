@@ -142293,7 +142293,7 @@
         },
         {
           "item": "RuntimeClientSessionRuntimeProvider",
-          "sha256": "91d6d526c85d7e102ace8524fff679723c7402a70b0c7623f17ceb13f2120826"
+          "sha256": "e82bd5855bb05cc866d5ad1c956dfe64c2f742b4954170464f42e3c5c0e667d6"
         },
         {
           "item": "RuntimeSessionState",
@@ -142497,11 +142497,11 @@
         },
         {
           "item": "RuntimeClientSessionRuntimeProvider.open_bidi",
-          "sha256": "4e604048216313a264f07f89f20fc45f47fb238036e6663c2660006bc8196694"
+          "sha256": "69ef13c8c1ba5565b90e255c116f1a071e0997acaea94346c58d644273f8d7f0"
         },
         {
           "item": "RuntimeClientSessionRuntimeProvider.open_stream",
-          "sha256": "737acf5daa45fffc66705e656a64901406603b6e38abe3e7c40be314171ef6fc"
+          "sha256": "0f4520737100b7ac2bf85224cc8800050b174768aed6e78e5c20c2e001eb266a"
         },
         {
           "item": "RuntimeClientSessionRuntimeProvider.prepare_for_signing",
@@ -142708,7 +142708,7 @@
             },
             {
               "item": "RuntimeClientSessionRuntimeProvider",
-              "sha256": "91d6d526c85d7e102ace8524fff679723c7402a70b0c7623f17ceb13f2120826"
+              "sha256": "e82bd5855bb05cc866d5ad1c956dfe64c2f742b4954170464f42e3c5c0e667d6"
             },
             {
               "item": "RuntimeSessionState",
@@ -142912,11 +142912,11 @@
             },
             {
               "item": "RuntimeClientSessionRuntimeProvider.open_bidi",
-              "sha256": "4e604048216313a264f07f89f20fc45f47fb238036e6663c2660006bc8196694"
+              "sha256": "69ef13c8c1ba5565b90e255c116f1a071e0997acaea94346c58d644273f8d7f0"
             },
             {
               "item": "RuntimeClientSessionRuntimeProvider.open_stream",
-              "sha256": "737acf5daa45fffc66705e656a64901406603b6e38abe3e7c40be314171ef6fc"
+              "sha256": "0f4520737100b7ac2bf85224cc8800050b174768aed6e78e5c20c2e001eb266a"
             },
             {
               "item": "RuntimeClientSessionRuntimeProvider.prepare_for_signing",
@@ -143123,7 +143123,7 @@
             },
             {
               "item": "RuntimeClientSessionRuntimeProvider",
-              "sha256": "91d6d526c85d7e102ace8524fff679723c7402a70b0c7623f17ceb13f2120826"
+              "sha256": "e82bd5855bb05cc866d5ad1c956dfe64c2f742b4954170464f42e3c5c0e667d6"
             },
             {
               "item": "RuntimeSessionState",
@@ -143327,11 +143327,11 @@
             },
             {
               "item": "RuntimeClientSessionRuntimeProvider.open_bidi",
-              "sha256": "4e604048216313a264f07f89f20fc45f47fb238036e6663c2660006bc8196694"
+              "sha256": "69ef13c8c1ba5565b90e255c116f1a071e0997acaea94346c58d644273f8d7f0"
             },
             {
               "item": "RuntimeClientSessionRuntimeProvider.open_stream",
-              "sha256": "737acf5daa45fffc66705e656a64901406603b6e38abe3e7c40be314171ef6fc"
+              "sha256": "0f4520737100b7ac2bf85224cc8800050b174768aed6e78e5c20c2e001eb266a"
             },
             {
               "item": "RuntimeClientSessionRuntimeProvider.prepare_for_signing",
@@ -143538,7 +143538,7 @@
             },
             {
               "item": "RuntimeClientSessionRuntimeProvider",
-              "sha256": "91d6d526c85d7e102ace8524fff679723c7402a70b0c7623f17ceb13f2120826"
+              "sha256": "e82bd5855bb05cc866d5ad1c956dfe64c2f742b4954170464f42e3c5c0e667d6"
             },
             {
               "item": "RuntimeSessionState",
@@ -143742,11 +143742,11 @@
             },
             {
               "item": "RuntimeClientSessionRuntimeProvider.open_bidi",
-              "sha256": "4e604048216313a264f07f89f20fc45f47fb238036e6663c2660006bc8196694"
+              "sha256": "69ef13c8c1ba5565b90e255c116f1a071e0997acaea94346c58d644273f8d7f0"
             },
             {
               "item": "RuntimeClientSessionRuntimeProvider.open_stream",
-              "sha256": "737acf5daa45fffc66705e656a64901406603b6e38abe3e7c40be314171ef6fc"
+              "sha256": "0f4520737100b7ac2bf85224cc8800050b174768aed6e78e5c20c2e001eb266a"
             },
             {
               "item": "RuntimeClientSessionRuntimeProvider.prepare_for_signing",
@@ -143953,7 +143953,7 @@
             },
             {
               "item": "RuntimeClientSessionRuntimeProvider",
-              "sha256": "91d6d526c85d7e102ace8524fff679723c7402a70b0c7623f17ceb13f2120826"
+              "sha256": "e82bd5855bb05cc866d5ad1c956dfe64c2f742b4954170464f42e3c5c0e667d6"
             },
             {
               "item": "RuntimeSessionState",
@@ -144157,11 +144157,11 @@
             },
             {
               "item": "RuntimeClientSessionRuntimeProvider.open_bidi",
-              "sha256": "4e604048216313a264f07f89f20fc45f47fb238036e6663c2660006bc8196694"
+              "sha256": "69ef13c8c1ba5565b90e255c116f1a071e0997acaea94346c58d644273f8d7f0"
             },
             {
               "item": "RuntimeClientSessionRuntimeProvider.open_stream",
-              "sha256": "737acf5daa45fffc66705e656a64901406603b6e38abe3e7c40be314171ef6fc"
+              "sha256": "0f4520737100b7ac2bf85224cc8800050b174768aed6e78e5c20c2e001eb266a"
             },
             {
               "item": "RuntimeClientSessionRuntimeProvider.prepare_for_signing",
@@ -144368,7 +144368,7 @@
             },
             {
               "item": "RuntimeClientSessionRuntimeProvider",
-              "sha256": "91d6d526c85d7e102ace8524fff679723c7402a70b0c7623f17ceb13f2120826"
+              "sha256": "e82bd5855bb05cc866d5ad1c956dfe64c2f742b4954170464f42e3c5c0e667d6"
             },
             {
               "item": "RuntimeSessionState",
@@ -144572,11 +144572,11 @@
             },
             {
               "item": "RuntimeClientSessionRuntimeProvider.open_bidi",
-              "sha256": "4e604048216313a264f07f89f20fc45f47fb238036e6663c2660006bc8196694"
+              "sha256": "69ef13c8c1ba5565b90e255c116f1a071e0997acaea94346c58d644273f8d7f0"
             },
             {
               "item": "RuntimeClientSessionRuntimeProvider.open_stream",
-              "sha256": "737acf5daa45fffc66705e656a64901406603b6e38abe3e7c40be314171ef6fc"
+              "sha256": "0f4520737100b7ac2bf85224cc8800050b174768aed6e78e5c20c2e001eb266a"
             },
             {
               "item": "RuntimeClientSessionRuntimeProvider.prepare_for_signing",
@@ -144783,7 +144783,7 @@
             },
             {
               "item": "RuntimeClientSessionRuntimeProvider",
-              "sha256": "91d6d526c85d7e102ace8524fff679723c7402a70b0c7623f17ceb13f2120826"
+              "sha256": "e82bd5855bb05cc866d5ad1c956dfe64c2f742b4954170464f42e3c5c0e667d6"
             },
             {
               "item": "RuntimeSessionState",
@@ -144987,11 +144987,11 @@
             },
             {
               "item": "RuntimeClientSessionRuntimeProvider.open_bidi",
-              "sha256": "4e604048216313a264f07f89f20fc45f47fb238036e6663c2660006bc8196694"
+              "sha256": "69ef13c8c1ba5565b90e255c116f1a071e0997acaea94346c58d644273f8d7f0"
             },
             {
               "item": "RuntimeClientSessionRuntimeProvider.open_stream",
-              "sha256": "737acf5daa45fffc66705e656a64901406603b6e38abe3e7c40be314171ef6fc"
+              "sha256": "0f4520737100b7ac2bf85224cc8800050b174768aed6e78e5c20c2e001eb266a"
             },
             {
               "item": "RuntimeClientSessionRuntimeProvider.prepare_for_signing",
@@ -145198,7 +145198,7 @@
             },
             {
               "item": "RuntimeClientSessionRuntimeProvider",
-              "sha256": "91d6d526c85d7e102ace8524fff679723c7402a70b0c7623f17ceb13f2120826"
+              "sha256": "e82bd5855bb05cc866d5ad1c956dfe64c2f742b4954170464f42e3c5c0e667d6"
             },
             {
               "item": "RuntimeSessionState",
@@ -145402,11 +145402,11 @@
             },
             {
               "item": "RuntimeClientSessionRuntimeProvider.open_bidi",
-              "sha256": "4e604048216313a264f07f89f20fc45f47fb238036e6663c2660006bc8196694"
+              "sha256": "69ef13c8c1ba5565b90e255c116f1a071e0997acaea94346c58d644273f8d7f0"
             },
             {
               "item": "RuntimeClientSessionRuntimeProvider.open_stream",
-              "sha256": "737acf5daa45fffc66705e656a64901406603b6e38abe3e7c40be314171ef6fc"
+              "sha256": "0f4520737100b7ac2bf85224cc8800050b174768aed6e78e5c20c2e001eb266a"
             },
             {
               "item": "RuntimeClientSessionRuntimeProvider.prepare_for_signing",
@@ -145613,7 +145613,7 @@
             },
             {
               "item": "RuntimeClientSessionRuntimeProvider",
-              "sha256": "91d6d526c85d7e102ace8524fff679723c7402a70b0c7623f17ceb13f2120826"
+              "sha256": "e82bd5855bb05cc866d5ad1c956dfe64c2f742b4954170464f42e3c5c0e667d6"
             },
             {
               "item": "RuntimeSessionState",
@@ -145817,11 +145817,11 @@
             },
             {
               "item": "RuntimeClientSessionRuntimeProvider.open_bidi",
-              "sha256": "4e604048216313a264f07f89f20fc45f47fb238036e6663c2660006bc8196694"
+              "sha256": "69ef13c8c1ba5565b90e255c116f1a071e0997acaea94346c58d644273f8d7f0"
             },
             {
               "item": "RuntimeClientSessionRuntimeProvider.open_stream",
-              "sha256": "737acf5daa45fffc66705e656a64901406603b6e38abe3e7c40be314171ef6fc"
+              "sha256": "0f4520737100b7ac2bf85224cc8800050b174768aed6e78e5c20c2e001eb266a"
             },
             {
               "item": "RuntimeClientSessionRuntimeProvider.prepare_for_signing",
@@ -273135,6 +273135,14 @@
           "sha256": "6d0ab477bde8c68fe8814e49842754993830ea398d8a3d78e6b353180d11756a"
         },
         {
+          "item": "RuntimeClient.OpenSignedBidi",
+          "sha256": "93f1d25a4d410adc7899448a2ac95be6eb7b015a2d4d14ef45ad5a5e37ded1cc"
+        },
+        {
+          "item": "RuntimeClient.OpenSignedStream",
+          "sha256": "123d47591fd518cf1b9fdc737b635b7182f9169d6be2ac40dfe6bc2f697ec71b"
+        },
+        {
           "item": "RuntimeClient.Recover",
           "sha256": "c4b88f02606c054bcb352cebb0d118b87768bafbe5e27cad69dc2d80e55f35b9"
         },
@@ -273518,6 +273526,14 @@
               "sha256": "6d0ab477bde8c68fe8814e49842754993830ea398d8a3d78e6b353180d11756a"
             },
             {
+              "item": "RuntimeClient.OpenSignedBidi",
+              "sha256": "93f1d25a4d410adc7899448a2ac95be6eb7b015a2d4d14ef45ad5a5e37ded1cc"
+            },
+            {
+              "item": "RuntimeClient.OpenSignedStream",
+              "sha256": "123d47591fd518cf1b9fdc737b635b7182f9169d6be2ac40dfe6bc2f697ec71b"
+            },
+            {
               "item": "RuntimeClient.Recover",
               "sha256": "c4b88f02606c054bcb352cebb0d118b87768bafbe5e27cad69dc2d80e55f35b9"
             },
@@ -273899,6 +273915,14 @@
             {
               "item": "RuntimeClient.Invoke",
               "sha256": "6d0ab477bde8c68fe8814e49842754993830ea398d8a3d78e6b353180d11756a"
+            },
+            {
+              "item": "RuntimeClient.OpenSignedBidi",
+              "sha256": "93f1d25a4d410adc7899448a2ac95be6eb7b015a2d4d14ef45ad5a5e37ded1cc"
+            },
+            {
+              "item": "RuntimeClient.OpenSignedStream",
+              "sha256": "123d47591fd518cf1b9fdc737b635b7182f9169d6be2ac40dfe6bc2f697ec71b"
             },
             {
               "item": "RuntimeClient.Recover",
@@ -274284,6 +274308,14 @@
               "sha256": "6d0ab477bde8c68fe8814e49842754993830ea398d8a3d78e6b353180d11756a"
             },
             {
+              "item": "RuntimeClient.OpenSignedBidi",
+              "sha256": "93f1d25a4d410adc7899448a2ac95be6eb7b015a2d4d14ef45ad5a5e37ded1cc"
+            },
+            {
+              "item": "RuntimeClient.OpenSignedStream",
+              "sha256": "123d47591fd518cf1b9fdc737b635b7182f9169d6be2ac40dfe6bc2f697ec71b"
+            },
+            {
               "item": "RuntimeClient.Recover",
               "sha256": "c4b88f02606c054bcb352cebb0d118b87768bafbe5e27cad69dc2d80e55f35b9"
             },
@@ -274665,6 +274697,14 @@
             {
               "item": "RuntimeClient.Invoke",
               "sha256": "6d0ab477bde8c68fe8814e49842754993830ea398d8a3d78e6b353180d11756a"
+            },
+            {
+              "item": "RuntimeClient.OpenSignedBidi",
+              "sha256": "93f1d25a4d410adc7899448a2ac95be6eb7b015a2d4d14ef45ad5a5e37ded1cc"
+            },
+            {
+              "item": "RuntimeClient.OpenSignedStream",
+              "sha256": "123d47591fd518cf1b9fdc737b635b7182f9169d6be2ac40dfe6bc2f697ec71b"
             },
             {
               "item": "RuntimeClient.Recover",
@@ -275050,6 +275090,14 @@
               "sha256": "6d0ab477bde8c68fe8814e49842754993830ea398d8a3d78e6b353180d11756a"
             },
             {
+              "item": "RuntimeClient.OpenSignedBidi",
+              "sha256": "93f1d25a4d410adc7899448a2ac95be6eb7b015a2d4d14ef45ad5a5e37ded1cc"
+            },
+            {
+              "item": "RuntimeClient.OpenSignedStream",
+              "sha256": "123d47591fd518cf1b9fdc737b635b7182f9169d6be2ac40dfe6bc2f697ec71b"
+            },
+            {
               "item": "RuntimeClient.Recover",
               "sha256": "c4b88f02606c054bcb352cebb0d118b87768bafbe5e27cad69dc2d80e55f35b9"
             },
@@ -275431,6 +275479,14 @@
             {
               "item": "RuntimeClient.Invoke",
               "sha256": "6d0ab477bde8c68fe8814e49842754993830ea398d8a3d78e6b353180d11756a"
+            },
+            {
+              "item": "RuntimeClient.OpenSignedBidi",
+              "sha256": "93f1d25a4d410adc7899448a2ac95be6eb7b015a2d4d14ef45ad5a5e37ded1cc"
+            },
+            {
+              "item": "RuntimeClient.OpenSignedStream",
+              "sha256": "123d47591fd518cf1b9fdc737b635b7182f9169d6be2ac40dfe6bc2f697ec71b"
             },
             {
               "item": "RuntimeClient.Recover",
@@ -275816,6 +275872,14 @@
               "sha256": "6d0ab477bde8c68fe8814e49842754993830ea398d8a3d78e6b353180d11756a"
             },
             {
+              "item": "RuntimeClient.OpenSignedBidi",
+              "sha256": "93f1d25a4d410adc7899448a2ac95be6eb7b015a2d4d14ef45ad5a5e37ded1cc"
+            },
+            {
+              "item": "RuntimeClient.OpenSignedStream",
+              "sha256": "123d47591fd518cf1b9fdc737b635b7182f9169d6be2ac40dfe6bc2f697ec71b"
+            },
+            {
               "item": "RuntimeClient.Recover",
               "sha256": "c4b88f02606c054bcb352cebb0d118b87768bafbe5e27cad69dc2d80e55f35b9"
             },
@@ -276197,6 +276261,14 @@
             {
               "item": "RuntimeClient.Invoke",
               "sha256": "6d0ab477bde8c68fe8814e49842754993830ea398d8a3d78e6b353180d11756a"
+            },
+            {
+              "item": "RuntimeClient.OpenSignedBidi",
+              "sha256": "93f1d25a4d410adc7899448a2ac95be6eb7b015a2d4d14ef45ad5a5e37ded1cc"
+            },
+            {
+              "item": "RuntimeClient.OpenSignedStream",
+              "sha256": "123d47591fd518cf1b9fdc737b635b7182f9169d6be2ac40dfe6bc2f697ec71b"
             },
             {
               "item": "RuntimeClient.Recover",
@@ -276582,6 +276654,14 @@
               "sha256": "6d0ab477bde8c68fe8814e49842754993830ea398d8a3d78e6b353180d11756a"
             },
             {
+              "item": "RuntimeClient.OpenSignedBidi",
+              "sha256": "93f1d25a4d410adc7899448a2ac95be6eb7b015a2d4d14ef45ad5a5e37ded1cc"
+            },
+            {
+              "item": "RuntimeClient.OpenSignedStream",
+              "sha256": "123d47591fd518cf1b9fdc737b635b7182f9169d6be2ac40dfe6bc2f697ec71b"
+            },
+            {
               "item": "RuntimeClient.Recover",
               "sha256": "c4b88f02606c054bcb352cebb0d118b87768bafbe5e27cad69dc2d80e55f35b9"
             },
@@ -276963,6 +277043,14 @@
             {
               "item": "RuntimeClient.Invoke",
               "sha256": "6d0ab477bde8c68fe8814e49842754993830ea398d8a3d78e6b353180d11756a"
+            },
+            {
+              "item": "RuntimeClient.OpenSignedBidi",
+              "sha256": "93f1d25a4d410adc7899448a2ac95be6eb7b015a2d4d14ef45ad5a5e37ded1cc"
+            },
+            {
+              "item": "RuntimeClient.OpenSignedStream",
+              "sha256": "123d47591fd518cf1b9fdc737b635b7182f9169d6be2ac40dfe6bc2f697ec71b"
             },
             {
               "item": "RuntimeClient.Recover",
@@ -277348,6 +277436,14 @@
               "sha256": "6d0ab477bde8c68fe8814e49842754993830ea398d8a3d78e6b353180d11756a"
             },
             {
+              "item": "RuntimeClient.OpenSignedBidi",
+              "sha256": "93f1d25a4d410adc7899448a2ac95be6eb7b015a2d4d14ef45ad5a5e37ded1cc"
+            },
+            {
+              "item": "RuntimeClient.OpenSignedStream",
+              "sha256": "123d47591fd518cf1b9fdc737b635b7182f9169d6be2ac40dfe6bc2f697ec71b"
+            },
+            {
               "item": "RuntimeClient.Recover",
               "sha256": "c4b88f02606c054bcb352cebb0d118b87768bafbe5e27cad69dc2d80e55f35b9"
             },
@@ -277729,6 +277825,14 @@
             {
               "item": "RuntimeClient.Invoke",
               "sha256": "6d0ab477bde8c68fe8814e49842754993830ea398d8a3d78e6b353180d11756a"
+            },
+            {
+              "item": "RuntimeClient.OpenSignedBidi",
+              "sha256": "93f1d25a4d410adc7899448a2ac95be6eb7b015a2d4d14ef45ad5a5e37ded1cc"
+            },
+            {
+              "item": "RuntimeClient.OpenSignedStream",
+              "sha256": "123d47591fd518cf1b9fdc737b635b7182f9169d6be2ac40dfe6bc2f697ec71b"
             },
             {
               "item": "RuntimeClient.Recover",
@@ -278114,6 +278218,14 @@
               "sha256": "6d0ab477bde8c68fe8814e49842754993830ea398d8a3d78e6b353180d11756a"
             },
             {
+              "item": "RuntimeClient.OpenSignedBidi",
+              "sha256": "93f1d25a4d410adc7899448a2ac95be6eb7b015a2d4d14ef45ad5a5e37ded1cc"
+            },
+            {
+              "item": "RuntimeClient.OpenSignedStream",
+              "sha256": "123d47591fd518cf1b9fdc737b635b7182f9169d6be2ac40dfe6bc2f697ec71b"
+            },
+            {
               "item": "RuntimeClient.Recover",
               "sha256": "c4b88f02606c054bcb352cebb0d118b87768bafbe5e27cad69dc2d80e55f35b9"
             },
@@ -278277,7 +278389,7 @@
         },
         {
           "item": "RuntimeClient",
-          "sha256": "01a3e6636ea132d417e940421eabf83cdce6549195e0835b74824ea7d3130fc8"
+          "sha256": "bbb90e0ed984a9cc739b9618e9c62cf9d87999dfee124fc911912aec45a47404"
         },
         {
           "item": "RuntimeTransport",
@@ -278596,6 +278708,14 @@
           "sha256": "c57f480644f2ce091b448e6e4ae863a666445793553b6a85b38e7a23b15f9510"
         },
         {
+          "item": "RuntimeClient.open_signed_bidi",
+          "sha256": "36b222286270c05ae70a2441d539cb72e8edcc6c7d77230d4fec0789b47e0cb2"
+        },
+        {
+          "item": "RuntimeClient.open_signed_stream",
+          "sha256": "6c45a5c2fc10de3fa8bedbfc328cfbeed75972498f9eb094371cc17cb6de3a65"
+        },
+        {
           "item": "RuntimeClient.recover",
           "sha256": "03c89ddc18535c43a1bf737b6f0fee53631ed8b655267475eb6b8b40c7f47f8f"
         },
@@ -278708,7 +278828,7 @@
             },
             {
               "item": "RuntimeClient",
-              "sha256": "01a3e6636ea132d417e940421eabf83cdce6549195e0835b74824ea7d3130fc8"
+              "sha256": "bbb90e0ed984a9cc739b9618e9c62cf9d87999dfee124fc911912aec45a47404"
             },
             {
               "item": "RuntimeTransport",
@@ -279025,6 +279145,14 @@
             {
               "item": "RuntimeClient.new_invocation",
               "sha256": "c57f480644f2ce091b448e6e4ae863a666445793553b6a85b38e7a23b15f9510"
+            },
+            {
+              "item": "RuntimeClient.open_signed_bidi",
+              "sha256": "36b222286270c05ae70a2441d539cb72e8edcc6c7d77230d4fec0789b47e0cb2"
+            },
+            {
+              "item": "RuntimeClient.open_signed_stream",
+              "sha256": "6c45a5c2fc10de3fa8bedbfc328cfbeed75972498f9eb094371cc17cb6de3a65"
             },
             {
               "item": "RuntimeClient.recover",
@@ -279139,7 +279267,7 @@
             },
             {
               "item": "RuntimeClient",
-              "sha256": "01a3e6636ea132d417e940421eabf83cdce6549195e0835b74824ea7d3130fc8"
+              "sha256": "bbb90e0ed984a9cc739b9618e9c62cf9d87999dfee124fc911912aec45a47404"
             },
             {
               "item": "RuntimeTransport",
@@ -279456,6 +279584,14 @@
             {
               "item": "RuntimeClient.new_invocation",
               "sha256": "c57f480644f2ce091b448e6e4ae863a666445793553b6a85b38e7a23b15f9510"
+            },
+            {
+              "item": "RuntimeClient.open_signed_bidi",
+              "sha256": "36b222286270c05ae70a2441d539cb72e8edcc6c7d77230d4fec0789b47e0cb2"
+            },
+            {
+              "item": "RuntimeClient.open_signed_stream",
+              "sha256": "6c45a5c2fc10de3fa8bedbfc328cfbeed75972498f9eb094371cc17cb6de3a65"
             },
             {
               "item": "RuntimeClient.recover",
@@ -279570,7 +279706,7 @@
             },
             {
               "item": "RuntimeClient",
-              "sha256": "01a3e6636ea132d417e940421eabf83cdce6549195e0835b74824ea7d3130fc8"
+              "sha256": "bbb90e0ed984a9cc739b9618e9c62cf9d87999dfee124fc911912aec45a47404"
             },
             {
               "item": "RuntimeTransport",
@@ -279887,6 +280023,14 @@
             {
               "item": "RuntimeClient.new_invocation",
               "sha256": "c57f480644f2ce091b448e6e4ae863a666445793553b6a85b38e7a23b15f9510"
+            },
+            {
+              "item": "RuntimeClient.open_signed_bidi",
+              "sha256": "36b222286270c05ae70a2441d539cb72e8edcc6c7d77230d4fec0789b47e0cb2"
+            },
+            {
+              "item": "RuntimeClient.open_signed_stream",
+              "sha256": "6c45a5c2fc10de3fa8bedbfc328cfbeed75972498f9eb094371cc17cb6de3a65"
             },
             {
               "item": "RuntimeClient.recover",
@@ -280001,7 +280145,7 @@
             },
             {
               "item": "RuntimeClient",
-              "sha256": "01a3e6636ea132d417e940421eabf83cdce6549195e0835b74824ea7d3130fc8"
+              "sha256": "bbb90e0ed984a9cc739b9618e9c62cf9d87999dfee124fc911912aec45a47404"
             },
             {
               "item": "RuntimeTransport",
@@ -280318,6 +280462,14 @@
             {
               "item": "RuntimeClient.new_invocation",
               "sha256": "c57f480644f2ce091b448e6e4ae863a666445793553b6a85b38e7a23b15f9510"
+            },
+            {
+              "item": "RuntimeClient.open_signed_bidi",
+              "sha256": "36b222286270c05ae70a2441d539cb72e8edcc6c7d77230d4fec0789b47e0cb2"
+            },
+            {
+              "item": "RuntimeClient.open_signed_stream",
+              "sha256": "6c45a5c2fc10de3fa8bedbfc328cfbeed75972498f9eb094371cc17cb6de3a65"
             },
             {
               "item": "RuntimeClient.recover",
@@ -280432,7 +280584,7 @@
             },
             {
               "item": "RuntimeClient",
-              "sha256": "01a3e6636ea132d417e940421eabf83cdce6549195e0835b74824ea7d3130fc8"
+              "sha256": "bbb90e0ed984a9cc739b9618e9c62cf9d87999dfee124fc911912aec45a47404"
             },
             {
               "item": "RuntimeTransport",
@@ -280749,6 +280901,14 @@
             {
               "item": "RuntimeClient.new_invocation",
               "sha256": "c57f480644f2ce091b448e6e4ae863a666445793553b6a85b38e7a23b15f9510"
+            },
+            {
+              "item": "RuntimeClient.open_signed_bidi",
+              "sha256": "36b222286270c05ae70a2441d539cb72e8edcc6c7d77230d4fec0789b47e0cb2"
+            },
+            {
+              "item": "RuntimeClient.open_signed_stream",
+              "sha256": "6c45a5c2fc10de3fa8bedbfc328cfbeed75972498f9eb094371cc17cb6de3a65"
             },
             {
               "item": "RuntimeClient.recover",
@@ -280863,7 +281023,7 @@
             },
             {
               "item": "RuntimeClient",
-              "sha256": "01a3e6636ea132d417e940421eabf83cdce6549195e0835b74824ea7d3130fc8"
+              "sha256": "bbb90e0ed984a9cc739b9618e9c62cf9d87999dfee124fc911912aec45a47404"
             },
             {
               "item": "RuntimeTransport",
@@ -281180,6 +281340,14 @@
             {
               "item": "RuntimeClient.new_invocation",
               "sha256": "c57f480644f2ce091b448e6e4ae863a666445793553b6a85b38e7a23b15f9510"
+            },
+            {
+              "item": "RuntimeClient.open_signed_bidi",
+              "sha256": "36b222286270c05ae70a2441d539cb72e8edcc6c7d77230d4fec0789b47e0cb2"
+            },
+            {
+              "item": "RuntimeClient.open_signed_stream",
+              "sha256": "6c45a5c2fc10de3fa8bedbfc328cfbeed75972498f9eb094371cc17cb6de3a65"
             },
             {
               "item": "RuntimeClient.recover",
@@ -281294,7 +281462,7 @@
             },
             {
               "item": "RuntimeClient",
-              "sha256": "01a3e6636ea132d417e940421eabf83cdce6549195e0835b74824ea7d3130fc8"
+              "sha256": "bbb90e0ed984a9cc739b9618e9c62cf9d87999dfee124fc911912aec45a47404"
             },
             {
               "item": "RuntimeTransport",
@@ -281611,6 +281779,14 @@
             {
               "item": "RuntimeClient.new_invocation",
               "sha256": "c57f480644f2ce091b448e6e4ae863a666445793553b6a85b38e7a23b15f9510"
+            },
+            {
+              "item": "RuntimeClient.open_signed_bidi",
+              "sha256": "36b222286270c05ae70a2441d539cb72e8edcc6c7d77230d4fec0789b47e0cb2"
+            },
+            {
+              "item": "RuntimeClient.open_signed_stream",
+              "sha256": "6c45a5c2fc10de3fa8bedbfc328cfbeed75972498f9eb094371cc17cb6de3a65"
             },
             {
               "item": "RuntimeClient.recover",
@@ -281725,7 +281901,7 @@
             },
             {
               "item": "RuntimeClient",
-              "sha256": "01a3e6636ea132d417e940421eabf83cdce6549195e0835b74824ea7d3130fc8"
+              "sha256": "bbb90e0ed984a9cc739b9618e9c62cf9d87999dfee124fc911912aec45a47404"
             },
             {
               "item": "RuntimeTransport",
@@ -282042,6 +282218,14 @@
             {
               "item": "RuntimeClient.new_invocation",
               "sha256": "c57f480644f2ce091b448e6e4ae863a666445793553b6a85b38e7a23b15f9510"
+            },
+            {
+              "item": "RuntimeClient.open_signed_bidi",
+              "sha256": "36b222286270c05ae70a2441d539cb72e8edcc6c7d77230d4fec0789b47e0cb2"
+            },
+            {
+              "item": "RuntimeClient.open_signed_stream",
+              "sha256": "6c45a5c2fc10de3fa8bedbfc328cfbeed75972498f9eb094371cc17cb6de3a65"
             },
             {
               "item": "RuntimeClient.recover",
@@ -282156,7 +282340,7 @@
             },
             {
               "item": "RuntimeClient",
-              "sha256": "01a3e6636ea132d417e940421eabf83cdce6549195e0835b74824ea7d3130fc8"
+              "sha256": "bbb90e0ed984a9cc739b9618e9c62cf9d87999dfee124fc911912aec45a47404"
             },
             {
               "item": "RuntimeTransport",
@@ -282473,6 +282657,14 @@
             {
               "item": "RuntimeClient.new_invocation",
               "sha256": "c57f480644f2ce091b448e6e4ae863a666445793553b6a85b38e7a23b15f9510"
+            },
+            {
+              "item": "RuntimeClient.open_signed_bidi",
+              "sha256": "36b222286270c05ae70a2441d539cb72e8edcc6c7d77230d4fec0789b47e0cb2"
+            },
+            {
+              "item": "RuntimeClient.open_signed_stream",
+              "sha256": "6c45a5c2fc10de3fa8bedbfc328cfbeed75972498f9eb094371cc17cb6de3a65"
             },
             {
               "item": "RuntimeClient.recover",
@@ -282587,7 +282779,7 @@
             },
             {
               "item": "RuntimeClient",
-              "sha256": "01a3e6636ea132d417e940421eabf83cdce6549195e0835b74824ea7d3130fc8"
+              "sha256": "bbb90e0ed984a9cc739b9618e9c62cf9d87999dfee124fc911912aec45a47404"
             },
             {
               "item": "RuntimeTransport",
@@ -282904,6 +283096,14 @@
             {
               "item": "RuntimeClient.new_invocation",
               "sha256": "c57f480644f2ce091b448e6e4ae863a666445793553b6a85b38e7a23b15f9510"
+            },
+            {
+              "item": "RuntimeClient.open_signed_bidi",
+              "sha256": "36b222286270c05ae70a2441d539cb72e8edcc6c7d77230d4fec0789b47e0cb2"
+            },
+            {
+              "item": "RuntimeClient.open_signed_stream",
+              "sha256": "6c45a5c2fc10de3fa8bedbfc328cfbeed75972498f9eb094371cc17cb6de3a65"
             },
             {
               "item": "RuntimeClient.recover",
@@ -283018,7 +283218,7 @@
             },
             {
               "item": "RuntimeClient",
-              "sha256": "01a3e6636ea132d417e940421eabf83cdce6549195e0835b74824ea7d3130fc8"
+              "sha256": "bbb90e0ed984a9cc739b9618e9c62cf9d87999dfee124fc911912aec45a47404"
             },
             {
               "item": "RuntimeTransport",
@@ -283335,6 +283535,14 @@
             {
               "item": "RuntimeClient.new_invocation",
               "sha256": "c57f480644f2ce091b448e6e4ae863a666445793553b6a85b38e7a23b15f9510"
+            },
+            {
+              "item": "RuntimeClient.open_signed_bidi",
+              "sha256": "36b222286270c05ae70a2441d539cb72e8edcc6c7d77230d4fec0789b47e0cb2"
+            },
+            {
+              "item": "RuntimeClient.open_signed_stream",
+              "sha256": "6c45a5c2fc10de3fa8bedbfc328cfbeed75972498f9eb094371cc17cb6de3a65"
             },
             {
               "item": "RuntimeClient.recover",
@@ -283449,7 +283657,7 @@
             },
             {
               "item": "RuntimeClient",
-              "sha256": "01a3e6636ea132d417e940421eabf83cdce6549195e0835b74824ea7d3130fc8"
+              "sha256": "bbb90e0ed984a9cc739b9618e9c62cf9d87999dfee124fc911912aec45a47404"
             },
             {
               "item": "RuntimeTransport",
@@ -283766,6 +283974,14 @@
             {
               "item": "RuntimeClient.new_invocation",
               "sha256": "c57f480644f2ce091b448e6e4ae863a666445793553b6a85b38e7a23b15f9510"
+            },
+            {
+              "item": "RuntimeClient.open_signed_bidi",
+              "sha256": "36b222286270c05ae70a2441d539cb72e8edcc6c7d77230d4fec0789b47e0cb2"
+            },
+            {
+              "item": "RuntimeClient.open_signed_stream",
+              "sha256": "6c45a5c2fc10de3fa8bedbfc328cfbeed75972498f9eb094371cc17cb6de3a65"
             },
             {
               "item": "RuntimeClient.recover",
@@ -283880,7 +284096,7 @@
             },
             {
               "item": "RuntimeClient",
-              "sha256": "01a3e6636ea132d417e940421eabf83cdce6549195e0835b74824ea7d3130fc8"
+              "sha256": "bbb90e0ed984a9cc739b9618e9c62cf9d87999dfee124fc911912aec45a47404"
             },
             {
               "item": "RuntimeTransport",
@@ -284197,6 +284413,14 @@
             {
               "item": "RuntimeClient.new_invocation",
               "sha256": "c57f480644f2ce091b448e6e4ae863a666445793553b6a85b38e7a23b15f9510"
+            },
+            {
+              "item": "RuntimeClient.open_signed_bidi",
+              "sha256": "36b222286270c05ae70a2441d539cb72e8edcc6c7d77230d4fec0789b47e0cb2"
+            },
+            {
+              "item": "RuntimeClient.open_signed_stream",
+              "sha256": "6c45a5c2fc10de3fa8bedbfc328cfbeed75972498f9eb094371cc17cb6de3a65"
             },
             {
               "item": "RuntimeClient.recover",

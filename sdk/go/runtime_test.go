@@ -784,6 +784,73 @@ func TestRuntimeClientSubmitSignedPreservesSignature(t *testing.T) {
 	}
 }
 
+func TestRuntimeClientOpenSignedStreamPreservesSignature(t *testing.T) {
+	var seenSigned map[string]any
+	client, err := NewRuntimeClient(RuntimeTransportFunc{
+		OpenStreamFunc: func(ctx context.Context, signedJSON []byte) (StreamTransport, []byte, error) {
+			if err := json.Unmarshal(signedJSON, &seenSigned); err != nil {
+				t.Fatalf("signed stream JSON: %v", err)
+			}
+			return StreamTransportFunc{
+				RecvFunc: func(context.Context) ([]byte, error) {
+					return nil, errors.New("unused")
+				},
+			}, []byte(`{"stream_id":"stream-signed-1","state":"Open","max_buffered_events":4}`), nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
+	}
+
+	stream, err := client.OpenSignedStream(context.Background(), signedForRuntimeTest(t))
+	if err != nil {
+		t.Fatalf("OpenSignedStream: %v", err)
+	}
+	if stream.StreamID() != "stream-signed-1" || stream.State() != StreamOpen {
+		t.Fatalf("unexpected stream: id=%q state=%s", stream.StreamID(), stream.State())
+	}
+	signature := seenSigned["signature"].(map[string]any)
+	if signature["signature_base64"] != "c2lnbmF0dXJl" {
+		t.Fatalf("signature not preserved: %#v", seenSigned)
+	}
+}
+
+func TestRuntimeClientOpenSignedBidiPreservesSignatureAndStreams(t *testing.T) {
+	var seenSigned map[string]any
+	var seenStreams []map[string]any
+	client, err := NewRuntimeClient(RuntimeTransportFunc{
+		OpenBidiFunc: func(ctx context.Context, signedJSON []byte, streamsJSON []byte) (BidiTransport, []byte, error) {
+			if err := json.Unmarshal(signedJSON, &seenSigned); err != nil {
+				t.Fatalf("signed bidi JSON: %v", err)
+			}
+			if err := json.Unmarshal(streamsJSON, &seenStreams); err != nil {
+				t.Fatalf("streams JSON: %v", err)
+			}
+			return &memoryBidiTransport{}, []byte(`{"session_id":"bidi-signed-1","state":"Open","max_buffered_frames":4}`), nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
+	}
+
+	session, err := client.OpenSignedBidi(context.Background(), signedForRuntimeTest(t), []BidiStreamDescriptor{
+		{StreamID: 9, ContentType: "application/json", Ordering: "ordered"},
+	})
+	if err != nil {
+		t.Fatalf("OpenSignedBidi: %v", err)
+	}
+	if session.SessionID() != "bidi-signed-1" || session.State() != BidiOpen {
+		t.Fatalf("unexpected bidi session: id=%q state=%s", session.SessionID(), session.State())
+	}
+	signature := seenSigned["signature"].(map[string]any)
+	if signature["signature_base64"] != "c2lnbmF0dXJl" {
+		t.Fatalf("signature not preserved: %#v", seenSigned)
+	}
+	if len(seenStreams) != 1 || seenStreams[0]["stream_id"] != float64(9) {
+		t.Fatalf("streams not preserved: %#v", seenStreams)
+	}
+}
+
 func TestRuntimeClientPrepareWrapsTransportFailure(t *testing.T) {
 	down := errors.New("daemon unavailable")
 	client, err := NewRuntimeClient(RuntimeTransportFunc{

@@ -379,6 +379,30 @@ func (c *RuntimeClient) InvokeStream(ctx context.Context, draft InvocationDraft)
 	return NewStreamHandleFromJSON(streamTransport, rawOpen)
 }
 
+// OpenSignedStream opens a server stream over an immutable signed envelope.
+func (c *RuntimeClient) OpenSignedStream(ctx context.Context, signed SignedInvocation) (*StreamHandle, error) {
+	transport, err := c.runtimeTransport(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !signed.SubmitReady() {
+		return nil, invalidRuntimePayload("signed invocation is not submit-ready", nil)
+	}
+	signedJSON, err := json.Marshal(signed)
+	if err != nil {
+		return nil, invalidRuntimePayload(fmt.Sprintf("encode signed invocation: %v", err), err)
+	}
+	streamTransport, rawOpen, err := transport.OpenStream(ctx, signedJSON)
+	if err != nil {
+		var sdkErr *SDKError
+		if errors.As(err, &sdkErr) {
+			return nil, sdkErr
+		}
+		return nil, transportRuntimeError("open signed stream transport failed", err)
+	}
+	return NewStreamHandleFromJSON(streamTransport, rawOpen)
+}
+
 // OpenBidi opens a bidirectional session over a complete Invocation tuple.
 func (c *RuntimeClient) OpenBidi(ctx context.Context, draft InvocationDraft, streams []BidiStreamDescriptor) (*BidiSession, error) {
 	transport, err := c.runtimeTransport(ctx)
@@ -400,6 +424,34 @@ func (c *RuntimeClient) OpenBidi(ctx context.Context, draft InvocationDraft, str
 			return nil, sdkErr
 		}
 		return nil, transportRuntimeError("open bidi transport failed", err)
+	}
+	return NewBidiSessionFromJSON(bidiTransport, rawOpen)
+}
+
+// OpenSignedBidi opens a bidirectional session over an immutable signed envelope.
+func (c *RuntimeClient) OpenSignedBidi(ctx context.Context, signed SignedInvocation, streams []BidiStreamDescriptor) (*BidiSession, error) {
+	transport, err := c.runtimeTransport(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !signed.SubmitReady() {
+		return nil, invalidRuntimePayload("signed invocation is not submit-ready", nil)
+	}
+	signedJSON, err := json.Marshal(signed)
+	if err != nil {
+		return nil, invalidRuntimePayload(fmt.Sprintf("encode signed invocation: %v", err), err)
+	}
+	streamsJSON, err := json.Marshal(streams)
+	if err != nil {
+		return nil, invalidRuntimePayload(fmt.Sprintf("encode bidi stream descriptors: %v", err), err)
+	}
+	bidiTransport, rawOpen, err := transport.OpenBidi(ctx, signedJSON, streamsJSON)
+	if err != nil {
+		var sdkErr *SDKError
+		if errors.As(err, &sdkErr) {
+			return nil, sdkErr
+		}
+		return nil, transportRuntimeError("open signed bidi transport failed", err)
 	}
 	return NewBidiSessionFromJSON(bidiTransport, rawOpen)
 }

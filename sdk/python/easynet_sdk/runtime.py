@@ -1177,6 +1177,20 @@ class RuntimeClient:
             raise _transport_error("open stream transport failed", exc) from exc
         return StreamHandle.from_json(stream_transport, open_json)
 
+    def open_signed_stream(self, signed: SignedInvocation) -> StreamHandle:
+        transport = self._require_open()
+        if not signed.submit_ready():
+            raise _invalid_runtime("signed invocation is not submit-ready")
+        try:
+            stream_transport, open_json = transport.open_stream(
+                signed.to_json().encode("utf-8")
+            )
+        except SDKError:
+            raise
+        except Exception as exc:
+            raise _transport_error("open signed stream transport failed", exc) from exc
+        return StreamHandle.from_json(stream_transport, open_json)
+
     def open_bidi(
         self,
         draft: InvocationDraft,
@@ -1197,6 +1211,30 @@ class RuntimeClient:
             raise
         except Exception as exc:
             raise _transport_error("open bidi transport failed", exc) from exc
+        return BidiSession.from_json(bidi_transport, open_json)
+
+    def open_signed_bidi(
+        self,
+        signed: SignedInvocation,
+        streams: tuple[BidiStreamDescriptor, ...],
+    ) -> BidiSession:
+        transport = self._require_open()
+        if not signed.submit_ready():
+            raise _invalid_runtime("signed invocation is not submit-ready")
+        try:
+            streams_json = json.dumps(
+                [stream.to_json_dict() for stream in streams],
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8")
+            bidi_transport, open_json = transport.open_bidi(
+                signed.to_json().encode("utf-8"),
+                streams_json,
+            )
+        except SDKError:
+            raise
+        except Exception as exc:
+            raise _transport_error("open signed bidi transport failed", exc) from exc
         return BidiSession.from_json(bidi_transport, open_json)
 
     def prepare(

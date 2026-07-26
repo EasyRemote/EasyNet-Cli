@@ -582,20 +582,12 @@ class RuntimeClientSessionRuntimeProvider:
         return self._client.await_result(handle)
 
     def open_stream(self, signed: SignedInvocation) -> StreamHandle:
-        raise _session_error(
-            ErrorCode.PROVIDER_UNAVAILABLE,
-            "runtime",
-            "runtime client adapter does not expose signed stream submission",
-        )
+        return self._client.open_signed_stream(signed)
 
     def open_bidi(
         self, signed: SignedInvocation, streams: tuple[BidiStreamDescriptor, ...]
     ) -> BidiSession:
-        raise _session_error(
-            ErrorCode.PROVIDER_UNAVAILABLE,
-            "runtime",
-            "runtime client adapter does not expose signed bidi submission",
-        )
+        return self._client.open_signed_bidi(signed, streams)
 
     def cancel(self, handle: InvocationHandle, reason: str = "") -> InvocationCancel:
         return self._client.cancel(handle, reason)

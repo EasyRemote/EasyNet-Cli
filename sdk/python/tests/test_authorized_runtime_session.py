@@ -19,6 +19,7 @@ from easynet_sdk import (
     ReceiptListRequest,
     PrincipalRef,
     RuntimeCallContext,
+    RuntimeClient,
     RuntimeClientDescriptorProvider,
     RuntimeTargetRef,
     RuntimeClientSessionRuntimeProvider,
@@ -340,16 +341,25 @@ class AuthorizedRuntimeSessionTests(unittest.TestCase):
 
         self.assertEqual(fixture.receipts.list_calls, 1)
 
-    def test_runtime_client_provider_rejects_unsigned_stream_downgrade(self) -> None:
-        provider = RuntimeClientSessionRuntimeProvider(object())
+    def test_runtime_client_provider_opens_signed_stream_and_bidi(self) -> None:
+        from test_runtime import MemoryRuntimeTransport, signed_fixture
 
-        with self.assertRaises(SDKError) as stream_error:
-            provider.open_stream(object())
-        self.assertTrue(is_code(stream_error.exception, ErrorCode.PROVIDER_UNAVAILABLE))
+        transport = MemoryRuntimeTransport()
+        provider = RuntimeClientSessionRuntimeProvider(RuntimeClient(transport))
+        signed = signed_fixture()
 
-        with self.assertRaises(SDKError) as bidi_error:
-            provider.open_bidi(object(), ())
-        self.assertTrue(is_code(bidi_error.exception, ErrorCode.PROVIDER_UNAVAILABLE))
+        stream = provider.open_stream(signed)
+        self.assertEqual(stream.stream_id, "stream-1")
+        assert transport.seen_draft is not None
+        self.assertEqual(transport.seen_draft["signer_id"], "caller-key")
+
+        bidi = provider.open_bidi(signed, ())
+        self.assertEqual(bidi.session_id, "bidi-1")
+        assert transport.seen_draft is not None
+        self.assertEqual(
+            transport.seen_draft["signature"]["signature_base64"],
+            "c2lnbmF0dXJl",
+        )
 
     def test_runtime_client_providers_reject_missing_client_at_construction(self) -> None:
         with self.assertRaises(SDKError) as runtime_error:
