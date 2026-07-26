@@ -23,7 +23,7 @@ use std::time::Duration;
 #[cfg(feature = "axon-pb")]
 use std::collections::{HashSet, VecDeque};
 #[cfg(feature = "axon-pb")]
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 #[cfg(feature = "axon-pb")]
 use crate::daemon::ability::{
@@ -1001,8 +1001,46 @@ impl axon_sdk::invocation::KeyResolver for LocalKeyServiceReceiptResolver {
 
 #[cfg(feature = "axon-pb")]
 pub(crate) struct CanonicalRuntimeReceiptResolver {
-    realm_trust: Option<crate::daemon::trust::key_resolver::RealmTrustAnchorKeyResolver>,
+    realm_trust: RealmReceiptTrustSource,
     local_self_identity: LocalKeyServiceReceiptResolver,
+}
+
+#[cfg(feature = "axon-pb")]
+enum RealmReceiptTrustSource {
+    Loaded(crate::daemon::trust::key_resolver::RealmTrustAnchorKeyResolver),
+    Empty { path: PathBuf },
+    LoadFailed { path: PathBuf, error: String },
+}
+
+#[cfg(feature = "axon-pb")]
+impl RealmReceiptTrustSource {
+    fn load(path: PathBuf) -> Self {
+        match crate::daemon::trust::anchor::RealmTrustAnchor::load_or_empty(&path) {
+            Ok(anchor) if anchor.is_empty() => Self::Empty { path },
+            Ok(anchor) => Self::Loaded(
+                crate::daemon::trust::key_resolver::RealmTrustAnchorKeyResolver::new(
+                    crate::daemon::trust::cell::SharedTrustAnchor::new(Arc::new(anchor)),
+                ),
+            ),
+            Err(error) => Self::LoadFailed {
+                path,
+                error: error.to_string(),
+            },
+        }
+    }
+
+    fn unavailable_detail(&self) -> Option<String> {
+        match self {
+            Self::Loaded(_) => None,
+            Self::Empty { path } => {
+                Some(format!("realm trust anchor at {} is empty", path.display()))
+            }
+            Self::LoadFailed { path, error } => Some(format!(
+                "realm trust anchor at {} failed to load: {error}",
+                path.display()
+            )),
+        }
+    }
 }
 
 #[cfg(feature = "axon-pb")]
@@ -1010,19 +1048,8 @@ impl CanonicalRuntimeReceiptResolver {
     pub(crate) fn new() -> Self {
         let trust_anchor_path =
             crate::daemon::trust::anchor::trust_anchor_path_from_env_or_default();
-        let realm_trust =
-            crate::daemon::trust::anchor::RealmTrustAnchor::load_or_empty(&trust_anchor_path)
-                .ok()
-                .filter(|anchor| !anchor.is_empty())
-                .map(|anchor| {
-                    crate::daemon::trust::key_resolver::RealmTrustAnchorKeyResolver::new(
-                        crate::daemon::trust::cell::SharedTrustAnchor::new(std::sync::Arc::new(
-                            anchor,
-                        )),
-                    )
-                });
         Self {
-            realm_trust,
+            realm_trust: RealmReceiptTrustSource::load(trust_anchor_path),
             local_self_identity: LocalKeyServiceReceiptResolver::new(),
         }
     }
@@ -1040,8 +1067,8 @@ impl axon_sdk::invocation::KeyResolver for CanonicalRuntimeReceiptResolver {
                 Ok(key) => return Ok(key),
                 Err(error) => error.to_string(),
             };
-        match self.realm_trust.as_ref() {
-            Some(resolver) => {
+        match &self.realm_trust {
+            RealmReceiptTrustSource::Loaded(resolver) => {
                 match axon_sdk::invocation::KeyResolver::resolve(resolver, signer_ura) {
                     Ok(key) => return Ok(key),
                     Err(realm_error) => Err(axon_sdk::invocation::AxonError::permission_denied(
@@ -1053,13 +1080,18 @@ impl axon_sdk::invocation::KeyResolver for CanonicalRuntimeReceiptResolver {
                     ))),
                 }
             }
-            None => Err(axon_sdk::invocation::AxonError::permission_denied(
-                "runtime_receipt_signer_key_untrusted",
-            )
-            .with_message(format!(
-                "canonical runtime trust cannot resolve receipt signer {signer_ura:?}: \
-                 local_self_identity={local_error}; realm_trust=realm trust anchor is empty or unavailable"
-            ))),
+            source => {
+                let realm_detail = source
+                    .unavailable_detail()
+                    .expect("non-loaded realm trust source must explain unavailability");
+                Err(axon_sdk::invocation::AxonError::permission_denied(
+                    "runtime_receipt_signer_key_untrusted",
+                )
+                .with_message(format!(
+                    "canonical runtime trust cannot resolve receipt signer {signer_ura:?}: \
+                     local_self_identity={local_error}; realm_trust={realm_detail}"
+                )))
+            }
         }
     }
 }
@@ -2359,6 +2391,47 @@ mod tests {
         assert!(error
             .to_string()
             .contains("was not cryptographically verified"));
+    }
+
+    #[test]
+    fn canonical_receipt_resolver_preserves_malformed_realm_trust_source() {
+        let _guard = crate::cli::commands::test_support::env_lock();
+        let previous = std::env::var_os("EASYNET_REALM_TRUST_PATH");
+        let trust = tempfile::NamedTempFile::new().expect("trust file");
+        std::fs::write(
+            trust.path(),
+            r#"
+[[trusted_agent]]
+agent_ura = "easynet:///r/local/authority"
+public_key_b64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+role = "not_a_role"
+added_at_unix_ms = 1
+"#,
+        )
+        .expect("write malformed trust anchor");
+        std::env::set_var("EASYNET_REALM_TRUST_PATH", trust.path());
+
+        let resolver = CanonicalRuntimeReceiptResolver::new();
+        let error =
+            axon_sdk::invocation::KeyResolver::resolve(&resolver, "easynet:///r/local/authority")
+                .expect_err("malformed realm trust source must fail closed");
+        let message = error.to_string();
+
+        match previous {
+            Some(value) => std::env::set_var("EASYNET_REALM_TRUST_PATH", value),
+            None => std::env::remove_var("EASYNET_REALM_TRUST_PATH"),
+        }
+
+        assert!(
+            message.contains("realm trust anchor at")
+                && message.contains("failed to load")
+                && message.contains("not_a_role"),
+            "malformed trust source was not preserved: {message}"
+        );
+        assert!(
+            !message.contains("empty or unavailable"),
+            "malformed trust source must not collapse to legacy availability wording: {message}"
+        );
     }
 
     #[test]

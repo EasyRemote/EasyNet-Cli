@@ -14754,6 +14754,50 @@ for token, code in (
 PY
 }
 
+check_canonical_receipt_resolver_trust_source_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local grpc="$cli_root/src/support/platform/local_daemon_grpc.rs"
+  [[ -f "$grpc" ]] || fail "local daemon gRPC source is missing: ${grpc#$cli_root/}"
+
+  "$PYTHON_BIN" - "$grpc" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+production = text.split("\n#[cfg(all(test, feature = \"axon-pb\"))]", 1)[0]
+
+for required in (
+    "enum RealmReceiptTrustSource",
+    "Loaded(crate::daemon::trust::key_resolver::RealmTrustAnchorKeyResolver)",
+    "Empty { path: PathBuf }",
+    "LoadFailed { path: PathBuf, error: String }",
+    "fn unavailable_detail(&self) -> Option<String>",
+    "realm_trust: RealmReceiptTrustSource",
+    "RealmReceiptTrustSource::load(trust_anchor_path)",
+    "RealmReceiptTrustSource::Loaded(resolver)",
+    "realm trust anchor at {} is empty",
+    "realm trust anchor at {} failed to load: {error}",
+):
+    if required not in production:
+        raise SystemExit(f"canonical_receipt_resolver_trust_source:missing:{required}")
+
+for retired in (
+    "realm_trust: Option<crate::daemon::trust::key_resolver::RealmTrustAnchorKeyResolver>",
+    ".ok()\n                .filter(|anchor| !anchor.is_empty())",
+    ".ok().filter(|anchor| !anchor.is_empty())",
+    "realm trust anchor is empty or unavailable",
+):
+    if retired in production:
+        raise SystemExit(f"canonical_receipt_resolver_trust_source:retired:{retired}")
+
+if "canonical_receipt_resolver_preserves_malformed_realm_trust_source" not in text:
+    raise SystemExit("canonical_receipt_resolver_trust_source:missing_malformed_source_test")
+if "not_a_role" not in text or "!message.contains(\"empty or unavailable\")" not in text:
+    raise SystemExit("canonical_receipt_resolver_trust_source:malformed_test_not_load_bearing")
+PY
+}
+
 check_local_ability_target_subject_policy_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local target="$cli_root/src/daemon/invocation/routing/target.rs"
@@ -20467,6 +20511,45 @@ EOF
   if ( CLI_ROOT="$tmp/remote-invoke-unknown-state-legacy"; check_remote_invoke_unknown_state_fail_closed_contract ) >/dev/null 2>&1; then
     fail "self-test expected remote invoke unknown state fallback gate to fail"
   fi
+  mkdir -p "$tmp/canonical-receipt-resolver-trust-fallback/src/support/platform"
+  cat >"$tmp/canonical-receipt-resolver-trust-fallback/src/support/platform/local_daemon_grpc.rs" <<'EOF'
+pub(crate) struct CanonicalRuntimeReceiptResolver {
+    realm_trust: Option<crate::daemon::trust::key_resolver::RealmTrustAnchorKeyResolver>,
+    local_self_identity: LocalKeyServiceReceiptResolver,
+}
+
+impl CanonicalRuntimeReceiptResolver {
+    pub(crate) fn new() -> Self {
+        let trust_anchor_path =
+            crate::daemon::trust::anchor::trust_anchor_path_from_env_or_default();
+        let realm_trust =
+            crate::daemon::trust::anchor::RealmTrustAnchor::load_or_empty(&trust_anchor_path)
+                .ok()
+                .filter(|anchor| !anchor.is_empty())
+                .map(|anchor| {
+                    crate::daemon::trust::key_resolver::RealmTrustAnchorKeyResolver::new(
+                        crate::daemon::trust::cell::SharedTrustAnchor::new(std::sync::Arc::new(
+                            anchor,
+                        )),
+                    )
+                });
+        Self {
+            realm_trust,
+            local_self_identity: LocalKeyServiceReceiptResolver::new(),
+        }
+    }
+}
+
+impl axon_sdk::invocation::KeyResolver for CanonicalRuntimeReceiptResolver {
+    fn resolve(&self, signer_ura: &str) -> Result<ed25519_dalek::VerifyingKey, axon_sdk::invocation::AxonError> {
+        Err(axon_sdk::invocation::AxonError::permission_denied("runtime_receipt_signer_key_untrusted")
+            .with_message(format!("canonical runtime trust cannot resolve receipt signer {signer_ura:?}: local_self_identity=missing; realm_trust=realm trust anchor is empty or unavailable")))
+    }
+}
+EOF
+  if ( CLI_ROOT="$tmp/canonical-receipt-resolver-trust-fallback"; check_canonical_receipt_resolver_trust_source_contract ) >/dev/null 2>&1; then
+    fail "self-test expected canonical receipt resolver trust-source fallback gate to fail"
+  fi
   mkdir -p "$tmp/remote-failure-caller-signer-projection-legacy/src/daemon/invocation/dispatch"
   cat >"$tmp/remote-failure-caller-signer-projection-legacy/src/daemon/invocation/dispatch/remote_failure.rs" <<'EOF'
 pub(crate) fn status_from_remote_failure(context: &str, raw_error: &str, failure: Option<&SessionFailure>) -> Status {
@@ -25859,6 +25942,7 @@ check_invocation_wire_callee_target_contract
 check_local_session_runtime_assembly_contract
 check_local_session_descriptor_ref_test_authority_contract
 check_local_daemon_loopback_explicit_subject_contract
+check_canonical_receipt_resolver_trust_source_contract
 check_sdk_directory_projection_fail_closed_contract
 check_sdk_runtime_recovery_report_fail_closed_contract
 check_sdk_principal_projection_fail_closed_contract
