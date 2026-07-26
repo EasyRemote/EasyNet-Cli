@@ -4792,12 +4792,14 @@ check_sdk_history_authority_subject_contract() {
   local go="$cli_root/sdk/go/authorized_runtime_session.go"
   local go_runtime="$cli_root/sdk/go/runtime_ability.go"
   local go_helper="$cli_root/sdk/go/session_authority_subjects.go"
+  local go_subjects="$cli_root/sdk/go/runtime_subjects.go"
   local go_test="$cli_root/sdk/go/authorized_runtime_session_test.go"
   local go_receipt="$cli_root/sdk/go/receipt.go"
   local go_receipt_test="$cli_root/sdk/go/receipt_test.go"
   local py="$cli_root/sdk/python/easynet_sdk/authorized_runtime_session.py"
   local py_authority="$cli_root/sdk/python/easynet_sdk/authority.py"
   local py_helper="$cli_root/sdk/python/easynet_sdk/_session_authority_subjects.py"
+  local py_subjects="$cli_root/sdk/python/easynet_sdk/_runtime_subjects.py"
   local py_test="$cli_root/sdk/python/tests/test_authorized_runtime_session.py"
   local py_authority_test="$cli_root/sdk/python/tests/test_authority.py"
   local py_receipt="$cli_root/sdk/python/easynet_sdk/receipt.py"
@@ -4806,7 +4808,7 @@ check_sdk_history_authority_subject_contract() {
   local node="$cli_root/sdk/node/index.js"
   local node_test="$cli_root/sdk/node/test/runtime-core.test.mjs"
 
-  "$PYTHON_BIN" - "$go" "$go_runtime" "$go_helper" "$go_test" "$go_receipt" "$go_receipt_test" "$py" "$py_authority" "$py_helper" "$py_test" "$py_authority_test" "$py_receipt" "$py_receipt_guard" "$py_receipt_test" "$node" "$node_test" <<'PY'
+  "$PYTHON_BIN" - "$go" "$go_runtime" "$go_helper" "$go_subjects" "$go_test" "$go_receipt" "$go_receipt_test" "$py" "$py_authority" "$py_helper" "$py_subjects" "$py_test" "$py_authority_test" "$py_receipt" "$py_receipt_guard" "$py_receipt_test" "$node" "$node_test" <<'PY'
 import sys
 from pathlib import Path
 
@@ -4814,12 +4816,14 @@ from pathlib import Path
     go_path,
     go_runtime_path,
     go_helper_path,
+    go_subjects_path,
     go_test_path,
     go_receipt_path,
     go_receipt_test_path,
     py_path,
     py_authority_path,
     py_helper_path,
+    py_subjects_path,
     py_test_path,
     py_authority_test_path,
     py_receipt_path,
@@ -4847,6 +4851,7 @@ go = read(go_path)
 if go:
     go_runtime = read(go_runtime_path)
     go_helper = read(go_helper_path)
+    go_subjects = read(go_subjects_path)
     go_receipt = read(go_receipt_path)
     require(
         go_helper_path,
@@ -4854,22 +4859,22 @@ if go:
         "sdk_go_authority_subject_shared_helper_missing",
     )
     require(
-        go_helper_path,
+        go_subjects_path,
         "func RuntimeStateReadSubjectURA(",
         "sdk_go_runtime_state_read_subject_constructor_missing",
     )
     require(
-        go_helper_path,
+        go_subjects_path,
         "func isRuntimeStateReadSubjectURA(",
         "sdk_go_runtime_state_read_subject_predicate_missing",
     )
     require(
-        go_helper_path,
+        go_subjects_path,
         'const runtimeStateReadSubjectPath = "runtime-state/read"',
         "sdk_go_runtime_state_read_subject_path_missing",
     )
     require(
-        go_helper_path,
+        go_subjects_path,
         'containsAllZeroPrincipal(userID)',
         "sdk_go_runtime_state_read_subject_all_zero_guard_missing",
     )
@@ -4886,8 +4891,15 @@ if go:
         "strings.TrimPrefix(ownerID, \"user.\")",
         "!containsAllZeroPrincipal(userID)",
     ):
-        if token not in go_helper:
+        if token not in go_subjects:
             raise SystemExit(f"sdk_go_runtime_state_read_subject_predicate_missing:{token}")
+    for retired in (
+        "func RuntimeStateReadSubjectURA(",
+        "func isRuntimeStateReadSubjectURA(",
+        'const runtimeStateReadSubjectPath = "runtime-state/read"',
+    ):
+        if retired in go_helper:
+            raise SystemExit(f"sdk_go_authority_subject_embeds_runtime_subject_boundary:{retired}")
     if "func runtimeSessionAuthorityAdmitsSubject(" in go_runtime:
         raise SystemExit("sdk_go_runtime_ability_owns_authority_subject_helper")
     call_body = section(
@@ -4966,6 +4978,7 @@ if py:
     py_authority = read(py_authority_path)
     py_authority_test = read(py_authority_test_path)
     py_helper = read(py_helper_path)
+    py_subjects = read(py_subjects_path)
     py_receipt = read(py_receipt_path)
     py_guard = read(py_receipt_guard_path)
     if "validate_receipt_history_request" not in py:
@@ -4978,34 +4991,34 @@ if py:
         "sdk_python_authority_subject_shared_helper_missing",
     )
     require(
-        py_helper_path,
+        py_subjects_path,
         "def runtime_state_read_subject_ura(",
         "sdk_python_runtime_state_read_subject_constructor_missing",
     )
     require(
-        py_helper_path,
+        py_subjects_path,
         "def is_runtime_state_read_subject_ura(",
         "sdk_python_runtime_state_read_subject_predicate_missing",
     )
     require(
-        py_helper_path,
-        '_RUNTIME_STATE_READ_SUBJECT_PATH = "runtime-state/read"',
+        py_subjects_path,
+        'RUNTIME_STATE_READ_SUBJECT_PATH = "runtime-state/read"',
         "sdk_python_runtime_state_read_subject_path_missing",
     )
     require(
-        py_helper_path,
+        py_subjects_path,
         "contains_all_zero_principal(clean_user_id)",
         "sdk_python_runtime_state_read_subject_all_zero_guard_missing",
     )
     for token in (
-        "from .axon_addressing import AddressingProjection, parse_ura, resource_ura, user_ura",
+        "from .axon_addressing import parse_ura, resource_ura, user_ura",
         "owner_ura = user_ura(clean_realm, clean_user_id)",
-        "subject = resource_ura(owner_ura, _RUNTIME_STATE_READ_SUBJECT_PATH)",
+        "subject = resource_ura(owner_ura, RUNTIME_STATE_READ_SUBJECT_PATH)",
     ):
-        if token not in py_helper:
+        if token not in py_subjects:
             raise SystemExit(f"sdk_python_runtime_state_read_subject_addressing_builder_missing:{token}")
     runtime_state_subject_body = section(
-        py_helper,
+        py_subjects,
         "def runtime_state_read_subject_ura(",
         "def is_runtime_state_read_subject_ura(",
     )
@@ -5018,7 +5031,6 @@ if py:
             raise SystemExit(f"sdk_python_runtime_state_read_subject_raw_builder_retired:{retired}")
     for token in (
         "subject.components.get(\"owner_id\")",
-        "subject.components.get(\"path\")",
         "parse_ura(subject_ura.strip())",
         "owner_id == f\"user.{owner_user_id}\"",
         "owner_id.startswith(\"agent.\")",
@@ -5026,17 +5038,29 @@ if py:
         if token not in py_helper:
             raise SystemExit(f"sdk_python_authority_subject_structured_owner_missing:{token}")
     for token in (
-        "path == _RUNTIME_STATE_READ_SUBJECT_PATH",
+        "subject.components.get(\"path\")",
+        "path == RUNTIME_STATE_READ_SUBJECT_PATH",
         "owner_id.removeprefix(\"user.\").strip() != \"\"",
         "not contains_all_zero_principal(owner_id.removeprefix(\"user.\"))",
     ):
-        if token not in py_helper:
+        if token not in py_subjects:
             raise SystemExit(f"sdk_python_runtime_state_read_subject_predicate_missing:{token}")
+    for retired in (
+        "def runtime_state_read_subject_ura(",
+        "def is_runtime_state_read_subject_ura(",
+        "is_runtime_state_read_subject_ura",
+        "runtime_state_read_subject_ura",
+        '_RUNTIME_STATE_READ_SUBJECT_PATH = "runtime-state/read"',
+        "resource_ura(owner_ura",
+    ):
+        if retired in py_helper:
+            raise SystemExit(f"sdk_python_authority_subject_embeds_runtime_subject_boundary:{retired}")
     for token in (
         "def validate_receipt_history_request(",
         "def _validate_receipt_history_call(",
         "def _validate_receipt_history_filter_binding(",
         "def _validate_receipt_history_authority_binding(",
+        "from ._runtime_subjects import is_runtime_state_read_subject_ura",
         "is_runtime_state_read_subject_ura(call.subject_ura)",
         "session_authority_admits_subject(authority, subject_ura)",
     ):

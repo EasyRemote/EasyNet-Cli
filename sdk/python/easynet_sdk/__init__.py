@@ -68,7 +68,7 @@ from .authority import (
     new_canonical_authority_client,
     validate_authority_metadata,
 )
-from ._session_authority_subjects import runtime_state_read_subject_ura
+from ._runtime_subjects import runtime_state_read_subject_ura
 from .authorized_runtime_session import (
     AbilityRef,
     ActingPrincipalRef,

@@ -33,7 +33,7 @@ from easynet_sdk import (
     runtime_state_read_subject_ura,
 )
 from easynet_sdk.authorized_runtime_session import _descriptor_resolution_from_error
-from easynet_sdk._session_authority_subjects import is_runtime_state_read_subject_ura
+from easynet_sdk._runtime_subjects import is_runtime_state_read_subject_ura
 
 
 class AuthorizedRuntimeSessionTests(unittest.TestCase):

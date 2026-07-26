@@ -10,7 +10,7 @@ import pytest
 
 import easynet_sdk.receipt as receipt_module
 from easynet_sdk._receipt_routes import _RECEIPT_ROUTE_MANIFEST_SHA256
-from easynet_sdk._session_authority_subjects import runtime_state_read_subject_ura
+from easynet_sdk._runtime_subjects import runtime_state_read_subject_ura
 from easynet_sdk.authority import SessionAuthority
 from easynet_sdk.axon_addressing import AddressingClient, AxonAddressingTransport
 from easynet_sdk.errors import ErrorCode, SDKError

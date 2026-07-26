@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from typing import Mapping
 
-from ._session_authority_subjects import is_runtime_state_read_subject_ura, session_authority_admits_subject
+from ._runtime_subjects import is_runtime_state_read_subject_ura
+from ._session_authority_subjects import session_authority_admits_subject
 from .authority import (
     DELEGATION_METADATA_KEY,
     SESSION_AUTHORITY_METADATA_KEY,
