@@ -113,7 +113,7 @@ public record InvocationTuple(
 
   private static String requiredPrincipal(String value, String field) {
     String cleaned = required(value, field);
-    if (AuthoritySupport.containsAllZeroPrincipal(cleaned)) {
+    if (RuntimePrincipals.containsAllZeroPrincipal(cleaned)) {
       throw SDKError.validation("invocation", field + " must not be all-zero");
     }
     return cleaned;

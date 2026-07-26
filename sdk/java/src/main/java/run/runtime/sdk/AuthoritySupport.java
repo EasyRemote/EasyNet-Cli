@@ -11,9 +11,6 @@ final class AuthoritySupport {
   static final String SESSION_AUTHORITY_METADATA_KEY = "x-runtime-session-authority";
   static final String DELEGATION_KIND = "delegation";
   static final String SESSION_AUTHORITY_KIND = "session_authority";
-  static final String RUNTIME_STATE_READ_SUBJECT_PATH = "runtime-state/read";
-  private static final String RETIRED_INVOCATION_HISTORY_SUBJECT_PATH = "session/invocation_history";
-  private static final String ALL_ZERO_PRINCIPAL_ID = "00000000-0000-0000-0000-000000000000";
 
   private AuthoritySupport() {}
 
@@ -88,33 +85,8 @@ final class AuthoritySupport {
     return SDKError.validation("authority", message);
   }
 
-  static String runtimeStateReadSubjectURA(String realm, String userID) {
-    String cleanRealm = requiredString(realm, "realm");
-    String cleanUserID = requiredPrincipalID(userID, "user_id");
-    if (cleanRealm.contains("/") || cleanRealm.contains("?") || cleanRealm.contains("#")) {
-      throw invalid("runtime-state read subject realm is not canonical");
-    }
-    if (cleanUserID.contains("/") || cleanUserID.contains("?") || cleanUserID.contains("#")) {
-      throw invalid("runtime-state read subject user_id is not canonical");
-    }
-    String subject =
-        "easynet:///r/"
-            + cleanRealm
-            + "/resource/user."
-            + cleanUserID
-            + "/"
-            + RUNTIME_STATE_READ_SUBJECT_PATH;
-    if (canonicalResourceSubject(subject) == null) {
-      throw invalid("runtime-state read subject_ura must be canonical");
-    }
-    return subject;
-  }
-
   static String requiredString(Object value, String field) {
-    if (!(value instanceof String string) || string.isBlank() || !string.equals(string.trim())) {
-      throw invalid(field + " is required");
-    }
-    return string;
+    return RuntimePrincipals.requiredString(value, field, "authority");
   }
 
   static String requiredURA(String value, String field) {
@@ -127,14 +99,12 @@ final class AuthoritySupport {
   }
 
   static String requiredPrincipalID(String value, String field) {
-    String cleaned = requiredString(value, field);
-    rejectAllZero(cleaned, field);
-    return cleaned;
+    return RuntimePrincipals.requiredPrincipalID(value, field, "authority");
   }
 
   static void validateSessionAuthoritySubjectBinding(
       String subjectURA, String sessionOwnerUserID, String sessionID) {
-    if (isRetiredInvocationHistorySubject(subjectURA)) {
+    if (RuntimeSubjects.isRetiredInvocationHistorySubject(subjectURA)) {
       throw invalid("session authority subject_ura uses retired invocation-history subject; use runtime-state/read");
     }
     AuthoritySubject subject = canonicalAuthoritySubject(subjectURA);
@@ -157,13 +127,13 @@ final class AuthoritySupport {
       return false;
     }
     String subject = subjectURA.trim();
-    if (isRetiredInvocationHistorySubject(subject)) {
+    if (RuntimeSubjects.isRetiredInvocationHistorySubject(subject)) {
       return false;
     }
     if (authority.subjectURA().trim().equals(subject)) {
       return true;
     }
-    ResourceSubject resource = canonicalResourceSubject(subject);
+    RuntimeSubjects.ResourceSubject resource = RuntimeSubjects.canonicalResourceSubject(subject);
     if (resource == null) {
       return false;
     }
@@ -171,37 +141,21 @@ final class AuthoritySupport {
     if (ownerUserID.isBlank()) {
       return false;
     }
-    if (resource.ownerID.equals("user." + ownerUserID)) {
+    if (resource.ownerID().equals("user." + ownerUserID)) {
       return true;
     }
-    if (!resource.ownerID.startsWith("agent.")) {
+    if (!resource.ownerID().startsWith("agent.")) {
       return false;
     }
-    String agentOwner = resource.ownerID.substring("agent.".length());
+    String agentOwner = resource.ownerID().substring("agent.".length());
     int dot = agentOwner.indexOf('.');
     return dot > 0 && agentOwner.substring(0, dot).equals(ownerUserID);
   }
 
   private static void rejectAllZero(String value, String field) {
-    if (containsAllZeroPrincipal(value)) {
+    if (RuntimePrincipals.containsAllZeroPrincipal(value)) {
       throw invalid(field + " must not be all-zero");
     }
-  }
-
-  static boolean containsAllZeroPrincipal(String value) {
-    return value != null && value.trim().toLowerCase().contains(ALL_ZERO_PRINCIPAL_ID);
-  }
-
-  private static boolean isRetiredInvocationHistorySubject(String subjectURA) {
-    ResourceSubject subject = canonicalResourceSubject(subjectURA);
-    if (subject == null || !subject.ownerID.startsWith("user.")) {
-      return false;
-    }
-    String ownerUserID = subject.ownerID.substring("user.".length()).trim();
-    return !ownerUserID.isEmpty()
-        && !ownerUserID.contains(".")
-        && !containsAllZeroPrincipal(ownerUserID)
-        && subject.path.equals(RETIRED_INVOCATION_HISTORY_SUBJECT_PATH);
   }
 
   static String requiredBase64(String value, String field) {
@@ -314,45 +268,7 @@ final class AuthoritySupport {
     return new AuthoritySubject("session", ownerUserID, authoritySessionID);
   }
 
-  private static ResourceSubject canonicalResourceSubject(String subjectURA) {
-    if (subjectURA == null || containsAllZeroPrincipal(subjectURA)) {
-      return null;
-    }
-    String raw = subjectURA.trim();
-    String prefix = "easynet:///r/";
-    if (!raw.startsWith(prefix)) {
-      return null;
-    }
-    String rest = raw.substring(prefix.length());
-    int slash = rest.indexOf('/');
-    if (slash <= 0) {
-      return null;
-    }
-    String path = rest.substring(slash + 1);
-    String resourcePrefix = "resource/";
-    if (!path.startsWith(resourcePrefix)) {
-      return null;
-    }
-    String resource = path.substring(resourcePrefix.length());
-    int pathSlash = resource.indexOf('/');
-    if (pathSlash <= 0 || pathSlash == resource.length() - 1) {
-      return null;
-    }
-    String ownerID = resource.substring(0, pathSlash).trim();
-    String resourcePath = resource.substring(pathSlash + 1).trim();
-    if (ownerID.isEmpty()
-        || ownerID.contains("/")
-        || resourcePath.isEmpty()
-        || resourcePath.startsWith("/")
-        || resourcePath.contains("//")) {
-      return null;
-    }
-    return new ResourceSubject(ownerID, resourcePath);
-  }
-
   private record AuthoritySubject(String kind, String ownerUserID, String sessionID) {}
-
-  private record ResourceSubject(String ownerID, String path) {}
 
   record DecodedAuthority(Map<String, Object> payload, String signatureBase64) {}
 }

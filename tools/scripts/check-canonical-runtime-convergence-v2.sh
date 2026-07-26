@@ -17400,18 +17400,22 @@ check_java_sdk_invocation_authority_binding_contract() {
   local validator="$cli_root/sdk/java/src/main/java/run/runtime/sdk/InvocationAuthorityBindingValidator.java"
   local projection="$cli_root/sdk/java/src/main/java/run/runtime/sdk/RuntimeAbilityProjection.java"
   local support="$cli_root/sdk/java/src/main/java/run/runtime/sdk/AuthoritySupport.java"
+  local subjects="$cli_root/sdk/java/src/main/java/run/runtime/sdk/RuntimeSubjects.java"
   local tests="$cli_root/sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
   [[ -f "$builder" ]] || fail "Java InvocationBuilder source is missing: ${builder#$cli_root/}"
   [[ -f "$validator" ]] || fail "Java InvocationAuthorityBindingValidator source is missing: ${validator#$cli_root/}"
   [[ -f "$projection" ]] || fail "Java RuntimeAbilityProjection source is missing: ${projection#$cli_root/}"
   [[ -f "$support" ]] || fail "Java AuthoritySupport source is missing: ${support#$cli_root/}"
+  [[ -f "$subjects" ]] || fail "Java RuntimeSubjects source is missing: ${subjects#$cli_root/}"
   [[ -f "$tests" ]] || fail "Java RuntimeCoreSeamTest source is missing: ${tests#$cli_root/}"
 
-  "$PYTHON_BIN" - "$builder" "$validator" "$projection" "$support" "$tests" <<'PY'
+  "$PYTHON_BIN" - "$builder" "$validator" "$projection" "$support" "$subjects" "$tests" <<'PY'
 import sys
 from pathlib import Path
 
-builder, validator, projection, support, tests = [Path(path).read_text(encoding="utf-8") for path in sys.argv[1:]]
+builder, validator, projection, support, subjects, tests = [
+    Path(path).read_text(encoding="utf-8") for path in sys.argv[1:]
+]
 
 if "InvocationAuthorityBindingValidator.validate(tuple);" not in builder:
     raise SystemExit("java_invocation_authority_binding:builder_validator_missing")
@@ -17479,11 +17483,20 @@ required_support = {
     "static String authorityMetadataValue": "authority_metadata_value_missing",
     "static SDKError authorityBindingError": "authority_binding_error_missing",
     "static boolean sessionAuthorityAdmitsSubject": "shared_session_subject_predicate_missing",
-    "canonicalResourceSubject": "structured_resource_subject_parser_missing",
-    "private record ResourceSubject": "resource_subject_value_object_missing",
+    "RuntimeSubjects.canonicalResourceSubject": "runtime_subject_parser_consumer_missing",
+    "RuntimeSubjects.ResourceSubject": "runtime_subject_value_object_consumer_missing",
+    "RuntimeSubjects.isRetiredInvocationHistorySubject": "retired_subject_predicate_consumer_missing",
 }
 for needle, label in required_support.items():
     if needle not in support:
+        raise SystemExit(f"java_invocation_authority_binding:{label}")
+required_subjects = {
+    "static ResourceSubject canonicalResourceSubject": "structured_resource_subject_parser_missing",
+    "record ResourceSubject": "resource_subject_value_object_missing",
+    "static boolean isRetiredInvocationHistorySubject": "retired_subject_predicate_missing",
+}
+for needle, label in required_subjects.items():
+    if needle not in subjects:
         raise SystemExit(f"java_invocation_authority_binding:{label}")
 for forbidden, label in {
     "resourceOwnerID": "validator_owns_resource_owner_parser",
@@ -17539,20 +17552,30 @@ java_support, java_subjects, java_tests, swift_authority, swift_tests = [
 ]
 
 for token, label in {
-    'static final String RUNTIME_STATE_READ_SUBJECT_PATH = "runtime-state/read"': "java_path_missing",
-    "static String runtimeStateReadSubjectURA": "java_support_helper_missing",
-    "requiredPrincipalID(userID, \"user_id\")": "java_user_guard_missing",
-    "containsAllZeroPrincipal": "java_all_zero_guard_missing",
-    "canonicalResourceSubject(subject) == null": "java_canonical_resource_guard_missing",
+    "RuntimeSubjects.isRetiredInvocationHistorySubject": "java_retired_subject_predicate_consumer_missing",
+    "RuntimeSubjects.canonicalResourceSubject": "java_resource_subject_parser_consumer_missing",
 }.items():
     if token not in java_support:
         raise SystemExit(f"runtime_state_subject_parity:{label}")
 for token, label in {
     "public final class RuntimeSubjects": "java_public_subjects_class_missing",
+    'static final String RUNTIME_STATE_READ_SUBJECT_PATH = "runtime-state/read"': "java_path_missing",
     "public static String runtimeStateReadSubjectURA": "java_public_helper_missing",
-    "AuthoritySupport.runtimeStateReadSubjectURA(realm, userID)": "java_public_delegation_missing",
+    "requiredPrincipalID(userID, \"user_id\", \"runtime\")": "java_user_guard_missing",
+    "RuntimePrincipals.containsAllZeroPrincipal": "java_all_zero_guard_missing",
+    "canonicalResourceSubject(subject) == null": "java_canonical_resource_guard_missing",
+    "static ResourceSubject canonicalResourceSubject": "java_resource_subject_parser_missing",
+    "record ResourceSubject": "java_resource_subject_value_object_missing",
 }.items():
     if token not in java_subjects:
+        raise SystemExit(f"runtime_state_subject_parity:{label}")
+for token, label in {
+    "AuthoritySupport.runtimeStateReadSubjectURA": "java_public_helper_delegates_to_authority",
+    "static String runtimeStateReadSubjectURA": "java_authority_owns_runtime_subject_helper",
+    "RUNTIME_STATE_READ_SUBJECT_PATH": "java_authority_owns_runtime_subject_path",
+    "private record ResourceSubject": "java_authority_owns_resource_subject_value_object",
+}.items():
+    if token in java_support:
         raise SystemExit(f"runtime_state_subject_parity:{label}")
 for token, label in {
     "runtimeStateReadSubjectHelperBuildsUserOwnedResourceSubject": "java_test_selector_missing",
