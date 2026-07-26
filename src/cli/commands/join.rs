@@ -316,7 +316,7 @@ fn run_resolved(args: JoinArgs, target: ResolvedJoinTarget) -> anyhow::Result<()
         // these credentials. Re-pairing mints a FRESH hub-reserved node_id (the
         // pairing protocol has no stable per-machine id to reuse), so the old
         // device is otherwise abandoned: once its node_id is gone from local
-        // credentials, neither `easynet reset` nor the shutdown hook (both keyed
+        // credentials, neither `easynet device reset` nor the shutdown hook (both keyed
         // on `creds.node_id`) can ever revoke it. It then zombies on the hub
         // until the heartbeat-timeout sweep, stranding its trust/pubkey row —
         // which is what breaks user-trust resync and forces credential churn on
@@ -1327,7 +1327,9 @@ fn pairing_status_error_message(code: u16, body: &str) -> String {
     match code {
         404 => "pairing token expired or already used — create a new token from the Hub dashboard"
             .into(),
-        409 => "device already paired — run 'easynet reset' first to un-pair, then retry".into(),
+        409 => {
+            "device already paired — run 'easynet device reset' first to un-pair, then retry".into()
+        }
         _ => format!("Hub rejected pairing (HTTP {code}): {body}"),
     }
 }

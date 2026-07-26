@@ -382,7 +382,7 @@ pub fn load_agents() -> anyhow::Result<AgentRegistry> {
         return Ok(registry);
     }
     // Read directly and classify the error, rather than `exists()`-then-
-    // `read_to_string()`. The two-step form races with `easynet reset`
+    // `read_to_string()`. The two-step form races with `easynet device reset`
     // and `easynet agent remove` running in another terminal: the file
     // disappears between the exists check and the read, producing a
     // misleading "read failed" error when the correct answer is "no

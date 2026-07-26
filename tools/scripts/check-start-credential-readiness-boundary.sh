@@ -29,6 +29,7 @@ for required_test in \
   start_credential_readiness_reports_ready_credentials \
   start_credential_readiness_reports_missing_only_for_absent_credentials \
   start_credential_readiness_reports_invalid_existing_credentials \
+  start_after_local_state_purge_fails_without_runtime_projection_side_effect \
   load_and_verify_credentials_rejects_invalid_credentials_before_verify
 do
   if ! rg -n "$required_test" "$TARGET" >/dev/null; then

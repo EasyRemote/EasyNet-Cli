@@ -2,7 +2,7 @@
 // ===========
 //
 // File: src/cli/reset.rs
-// Description: `easynet reset` — sever the trust relationship between this
+// Description: `easynet device reset` — sever the trust relationship between this
 //              device and the Hub by deleting local runtime state at the
 //              configured lifecycle boundary.
 //
@@ -74,14 +74,14 @@ pub fn run(args: ResetArgs) -> anyhow::Result<()> {
     let lifecycle_report = RuntimeLifecycleService::new().status()?;
     if !args.force && reset_runtime_is_active(lifecycle_report.status()) {
         anyhow::bail!(
-            "runtime is currently running — run 'easynet runtime stop' first, or use 'easynet reset --force'"
+            "runtime is currently running — run 'easynet runtime stop' first, or use 'easynet device reset --force'"
         );
     }
     let credential_state = ResetCredentialState::load();
 
     // Guard 2: interactive confirmation before destroying credentials.
     //
-    // `easynet reset` deletes ~/.easynet/credentials.json, after which
+    // `easynet device reset` deletes ~/.easynet/credentials.json, after which
     // the ONLY way to re-pair this device is to request a fresh pairing
     // token from the Hub dashboard — there is no local undo. A single
     // mistyped command or shell-history replay would silently sever the

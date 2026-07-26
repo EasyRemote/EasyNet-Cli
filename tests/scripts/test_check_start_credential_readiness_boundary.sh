@@ -42,6 +42,9 @@ fn start_credential_readiness_reports_missing_only_for_absent_credentials() {}
 fn start_credential_readiness_reports_invalid_existing_credentials() {}
 
 #[test]
+fn start_after_local_state_purge_fails_without_runtime_projection_side_effect() {}
+
+#[test]
 fn load_and_verify_credentials_rejects_invalid_credentials_before_verify() {}
 RS
 

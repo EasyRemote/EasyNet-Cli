@@ -254,7 +254,7 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
     let tenant = creds.realm.clone();
     if args.hub != config::DEFAULT_HUB && args.hub != hub {
         output::warn(&format!(
-            "--hub {} ignored; using {} from credentials. Run 'easynet reset' to un-pair first.",
+            "--hub {} ignored; using {} from credentials. Run 'easynet device reset' to un-pair first.",
             args.hub, hub
         ));
     }
@@ -1351,6 +1351,48 @@ mod tests {
         let _g = HomeGuard::new();
         let err = load_and_verify_credentials().expect_err("missing credentials must fail");
         assert!(err.to_string().contains("no credentials"));
+    }
+
+    #[test]
+    fn start_after_local_state_purge_fails_without_runtime_projection_side_effect() {
+        let _g = HomeGuard::new();
+        let creds = test_creds();
+        config::save_credentials(&creds).expect("save test credentials");
+        let state_dir = config::state_dir();
+        std::fs::write(state_dir.join("keyring.enc"), "stale-keyring")
+            .expect("write stale keyring");
+        std::fs::create_dir_all(state_dir.join("agents/agent-a/descriptors"))
+            .expect("create descriptor dir");
+        std::fs::write(
+            state_dir.join("agents/agent-a/descriptors/meta.list_abilities.json"),
+            "{}",
+        )
+        .expect("write stale descriptor");
+
+        crate::cli::commands::reset::run(crate::cli::commands::reset::ResetArgs {
+            force: true,
+            yes: true,
+            purge_local_state: true,
+        })
+        .expect("purge local runtime state");
+
+        let err = load_and_verify_credentials_with(|_| {
+            panic!("start credential verifier must not run after local state purge")
+        })
+        .expect_err("purged device start must fail as unpaired");
+
+        assert!(
+            err.to_string().contains("no credentials"),
+            "purged start must surface missing credentials, got: {err:#}"
+        );
+        assert!(
+            config::load().is_err(),
+            "start preflight after purge must not recreate runtime projection"
+        );
+        assert!(
+            !config::runtime_state_path().exists(),
+            "start preflight after purge must not leave runtime.json"
+        );
     }
 
     #[test]

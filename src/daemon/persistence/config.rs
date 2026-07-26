@@ -14,7 +14,7 @@
 //      Fields: endpoint (required), pid, hub, tenant, label, started_at.
 //
 //   2. `Credentials` (credentials.json) — long-lived, survives reboots:
-//      `easynet join` → save_credentials()  |  `easynet reset` → delete_credentials()
+//      `easynet join` → save_credentials()  |  `easynet device reset` → delete_credentials()
 //      Fields: node_id, credential_token/join_receipt_hash, hub_endpoint,
 //      realm, user_id, username, deploy_signature.
 //      Unix permissions: 0o600 (contains credential_token and deploy_signature).
@@ -687,7 +687,7 @@ pub struct DeviceSettings {
     #[serde(default)]
     pub session_bridge_exec_enabled: bool,
     /// Stable per-machine install id. Generated once and persisted in
-    /// `device_settings.json` (which survives `easynet reset`, unlike
+    /// `device_settings.json` (which survives `easynet device reset`, unlike
     /// `credentials.json`), so the hub can recognise a returning machine on
     /// re-pair and reuse its `node_id` + keypair + trust row instead of
     /// minting a fresh identity each time (device-id churn). `None` until the
@@ -701,7 +701,7 @@ fn device_settings_path() -> PathBuf {
 }
 
 /// Return this machine's stable install id, generating and persisting one on
-/// first use. Survives `easynet reset` (it lives in `device_settings.json`,
+/// first use. Survives `easynet device reset` (it lives in `device_settings.json`,
 /// not `credentials.json`), so re-pairing the same host presents the same
 /// install id and the hub can reuse the prior `node_id`.
 pub fn load_or_create_install_id() -> anyhow::Result<String> {

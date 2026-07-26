@@ -13,6 +13,10 @@ TARGET="src/cli/commands/reset.rs"
 
 [[ -f "$TARGET" ]] || fail "missing $TARGET"
 
+if rg -n '`easynet reset`|'"'easynet reset'" src >/dev/null; then
+  fail "reset product lifecycle entrypoint must be spelled 'easynet device reset' in source"
+fi
+
 if ! rg -n 'enum ResetCredentialState' "$TARGET" >/dev/null; then
   fail "reset credentials must be represented as an explicit state enum"
 fi
