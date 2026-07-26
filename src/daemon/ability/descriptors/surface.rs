@@ -167,10 +167,9 @@ impl StateTransition {
 /// terminal receipt is canonical or operational. Neither variant implies a
 /// transport mode; [`AbilityDescriptor::call_mode`] is the sole transport
 /// source of truth.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "transition", rename_all = "snake_case")]
 pub enum ReceiptSemantics {
-    #[default]
     Operational,
     StateTransition(StateTransition),
 }

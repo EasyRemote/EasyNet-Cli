@@ -1,7 +1,7 @@
 schema_version = "2"
 name = "voice.transcribe"
 descriptor_version = "1.0.0"
-description = "Stream audio in, receive transcription text out. True bidi: caller pushes audio BinaryChunk UP, callee returns text BinaryChunk (or structured JSON) DOWN. Subject MUST be an ASR-model resource_ura governed by the realm Hub."
+description = "Stream audio in, receive transcription text out. True bidi: caller pushes audio BinaryChunk UP, callee returns text BinaryChunk (or structured JSON) DOWN. Subject MUST be an ASR-model resource_ura governed by the realm Authority."
 call_mode = "bidi"
 capability_state = "unsupported"
 admission_action = "stream"

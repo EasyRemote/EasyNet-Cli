@@ -1,7 +1,7 @@
 schema_version = "2"
 name = "voice.subscribe"
 descriptor_version = "1.0.0"
-description = "Subscribe to a realm Hub voice-synthesis resource. Returns a server-pushed stream of TTS audio BinaryChunk frames. Subject MUST be a voice resource_ura (one Hub may expose multiple voice profiles)."
+description = "Subscribe to a realm Authority voice-synthesis resource. Returns a server-pushed stream of TTS audio BinaryChunk frames. Subject MUST be a voice resource_ura (one realm Authority may expose multiple voice profiles)."
 call_mode = "stream"
 capability_state = "unsupported"
 admission_action = "stream"

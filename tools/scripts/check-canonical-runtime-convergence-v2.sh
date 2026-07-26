@@ -254,6 +254,33 @@ for name, variants in {
 PY
 }
 
+check_descriptor_receipt_semantics_explicit_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local surface="$cli_root/src/daemon/ability/descriptors/surface.rs"
+  [[ -f "$surface" ]] || fail "ability descriptor surface source is missing: ${surface#$cli_root/}"
+
+  "$PYTHON_BIN" - "$surface" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+pattern = r"#\[derive\((?P<derive>[^\)]*)\)\]\s*#\[serde\(tag = \"kind\", content = \"transition\", rename_all = \"snake_case\"\)\]\s*pub enum ReceiptSemantics \{(?P<body>.*?)\n\}"
+match = re.search(pattern, text, re.S)
+if not match:
+    raise SystemExit("descriptor_receipt_semantics_enum_missing")
+if "Default" in match.group("derive"):
+    raise SystemExit("descriptor_receipt_semantics_default_impl_retired")
+if "#[default]" in match.group("body"):
+    raise SystemExit("descriptor_receipt_semantics_default_variant_retired")
+for variant in ("Operational", "StateTransition"):
+    if not re.search(rf"\b{variant}\b", match.group("body")):
+        raise SystemExit(f"descriptor_receipt_semantics_variant_missing:{variant}")
+if "receipt_semantics: ReceiptSemantics::Operational" not in text:
+    raise SystemExit("descriptor_constructor_explicit_operational_semantics_missing")
+PY
+}
+
 check_ffi_init_typed_connect_error_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local ffi_mod="$cli_root/src/ffi/mod.rs"
@@ -24621,6 +24648,7 @@ EOF
   check_ability_authority_context_explicit_construction_contract
   check_descriptor_call_mode_explicit_transport_contract
   check_descriptor_policy_explicit_facts_contract
+  check_descriptor_receipt_semantics_explicit_contract
   check_ffi_init_typed_connect_error_contract
   check_failure_code_default_policy_contract
   check_bidi_dispatch_default_code_policy_contract
@@ -24880,6 +24908,7 @@ check_shellguard_path_normalization_fail_closed_contract
 check_ability_authority_context_explicit_construction_contract
 check_descriptor_call_mode_explicit_transport_contract
 check_descriptor_policy_explicit_facts_contract
+check_descriptor_receipt_semantics_explicit_contract
 check_ffi_init_typed_connect_error_contract
 check_failure_code_default_policy_contract
 check_bidi_dispatch_default_code_policy_contract

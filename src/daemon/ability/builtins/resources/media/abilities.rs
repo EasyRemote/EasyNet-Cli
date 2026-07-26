@@ -12,8 +12,8 @@
 //   A3 camera.snapshot      Rpc     operational       device
 //   A4 screen.subscribe     Stream  operational       device
 //   A5 speaker.publish      Bidi    operational       device
-//   A6 voice.subscribe      Stream  provider seam     hub
-//   A7 voice.transcribe     Bidi    provider seam     hub
+//   A6 voice.subscribe      Stream  provider seam     realm Authority
+//   A7 voice.transcribe     Bidi    provider seam     realm Authority
 //   A8 screen.snapshot      Rpc     operational       device
 //   A9 camera.record_start  Rpc     state-transition  device
 //   A10 camera.record_stop  Rpc     state-transition  device
@@ -324,7 +324,7 @@ fn row(name: &str) -> Option<&'static AbilityRow> {
 /// name = row.name;` is needed.
 pub fn register(reg: &mut AxonAbilityCatalog) {
     for row in ABILITIES {
-        if has_real_media_handler(row.name) || is_unprovided_hub_voice(row.name) {
+        if has_real_media_handler(row.name) || is_unprovided_realm_authority_voice(row.name) {
             continue;
         }
         let owner = OwnerKind::Device;
@@ -366,7 +366,7 @@ pub fn register(reg: &mut AxonAbilityCatalog) {
     }
 }
 
-fn is_unprovided_hub_voice(name: &str) -> bool {
+fn is_unprovided_realm_authority_voice(name: &str) -> bool {
     matches!(name, ABILITY_VOICE_SUBSCRIBE | ABILITY_VOICE_TRANSCRIBE)
 }
 
@@ -622,7 +622,7 @@ mod tests {
         let mut reg = metadata_test_catalog();
         register(&mut reg);
         for row in ABILITIES {
-            if has_real_media_handler(row.name) || is_unprovided_hub_voice(row.name) {
+            if has_real_media_handler(row.name) || is_unprovided_realm_authority_voice(row.name) {
                 assert!(
                     reg.get_rpc(row.name).is_none()
                         && reg.get_stream(row.name).is_none()
@@ -664,7 +664,7 @@ mod tests {
         let rows = reg.authority_ability_catalog_snapshot();
 
         for row in ABILITIES {
-            if has_real_media_handler(row.name) || is_unprovided_hub_voice(row.name) {
+            if has_real_media_handler(row.name) || is_unprovided_realm_authority_voice(row.name) {
                 continue;
             }
             let descriptor = rows
@@ -752,7 +752,7 @@ mod tests {
     }
 
     #[test]
-    fn unprovided_hub_voice_geometries_are_not_registered_or_published() {
+    fn unprovided_realm_authority_voice_geometries_are_not_registered_or_published() {
         let mut reg = metadata_test_catalog();
         register(&mut reg);
         let rows = reg.authority_ability_catalog_snapshot();

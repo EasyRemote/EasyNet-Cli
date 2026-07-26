@@ -179,7 +179,7 @@ mod tests {
         assert!(is_llm_dynamic_ability("skill.design"));
         assert!(!is_llm_dynamic_ability("skill.list"));
         assert!(!is_llm_dynamic_ability("skill.tree"));
-        // voice.* is Hub-owned post-truth-table cutover.
+        // voice.* is realm Authority-owned post-truth-table cutover.
         assert!(!is_llm_dynamic_ability("voice.subscribe"));
         // meta.* is NOT llm-owned post-M2.
         assert!(!is_llm_dynamic_ability("meta.describe"));

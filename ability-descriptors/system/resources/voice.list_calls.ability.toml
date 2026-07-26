@@ -1,7 +1,7 @@
 schema_version = "2"
 name = "voice.list_calls"
 descriptor_version = "1.0.0"
-description = "List the call signaling sessions currently owned by this realm Hub. Returns each call's state plus the current participant snapshot."
+description = "List the call signaling sessions currently owned by this realm Authority. Returns each call's state plus the current participant snapshot."
 call_mode = "rpc"
 capability_state = "seam"
 admission_action = "read"
