@@ -1316,9 +1316,9 @@ pub enum OwnerKind {
     ///
     /// Product packages may still use product-prefixed ability names such as
     /// `hub.openai.chat_completions`, but the canonical owner root is the
-    /// realm Authority URA. The control-plane projection string remains
-    /// `"hub"` for persisted/public compatibility; this enum variant is the
-    /// internal runtime state and must use canonical runtime vocabulary.
+    /// realm Authority URA. The control-plane projection string is
+    /// `"authority"`; product Hub vocabulary must not enter this runtime owner
+    /// state.
     RealmAuthority,
     /// Hosted by a sub-agent on this device. The contained string is
     /// the sub-agent's `agent_id` (e.g. `"codex"`, `"web-builder"`,
@@ -1338,7 +1338,7 @@ impl OwnerKind {
     fn authority_projection(&self) -> String {
         match self {
             OwnerKind::Device => "device".to_string(),
-            OwnerKind::RealmAuthority => "hub".to_string(),
+            OwnerKind::RealmAuthority => "authority".to_string(),
             OwnerKind::Agent(agent_id) => format!("agent:{agent_id}"),
             OwnerKind::User(user_id) => format!("user:{user_id}"),
         }
@@ -1354,14 +1354,14 @@ impl OwnerKind {
 
 /// Inverse of [`OwnerKind::authority_scope`]'s `owner_projection` encoding:
 /// reconstruct the `OwnerKind` from the canonical projection string a
-/// control-plane record stores (`device` / `hub` / `agent:<id>` /
+/// control-plane record stores (`device` / `authority` / `agent:<id>` /
 /// `user:<id>`). Kept adjacent to the forward mapping so the two cannot
 /// drift. Returns `None` for an unrecognized projection rather than
 /// guessing — an owner the registry never wrote is not an owner.
 fn owner_kind_from_projection(owner_projection: &str) -> Option<OwnerKind> {
     match owner_projection {
         "device" => Some(OwnerKind::Device),
-        "hub" => Some(OwnerKind::RealmAuthority),
+        "authority" => Some(OwnerKind::RealmAuthority),
         other => {
             if let Some(agent_id) = other.strip_prefix("agent:") {
                 Some(OwnerKind::Agent(agent_id.to_string()))
@@ -6573,7 +6573,7 @@ mod tests {
         assert_eq!(rows[0].descriptor.owner_ura, device_ura);
         assert_eq!(
             catalog.static_authority_exclusion_snapshot(),
-            BTreeMap::from([("hub".to_string(), 1)])
+            BTreeMap::from([("authority".to_string(), 1)])
         );
 
         let device_runtime_key =
@@ -6721,7 +6721,7 @@ mod tests {
             AbilityAuthorityContext::for_realm_authority_root(&hub_ura)
                 .expect("realm authority context"),
         );
-        let foreign_scope = AuthorityScope::new("hub", crate::core::ura::hub_ura("foreign"))
+        let foreign_scope = AuthorityScope::new("authority", crate::core::ura::hub_ura("foreign"))
             .expect("foreign RealmAuthority scope is structurally valid");
 
         let error = DynamicRegistration::rpc_with_spec(
@@ -6847,7 +6847,7 @@ mod tests {
     }
 
     #[test]
-    fn combined_authority_set_accepts_exact_explicit_device_and_hub_scopes() {
+    fn combined_authority_set_accepts_exact_explicit_device_and_authority_scopes() {
         let device_ura = crate::core::ura::device_ura("scope-test", "dev-1");
         let hub_ura = crate::core::ura::hub_ura("scope-test");
         let mut catalog = AxonAbilityCatalog::new_with_runtime_and_authority_context(
@@ -6858,7 +6858,7 @@ mod tests {
 
         for (owner, projection, authority_root) in [
             (OwnerKind::Device, "device", device_ura.as_str()),
-            (OwnerKind::RealmAuthority, "hub", hub_ura.as_str()),
+            (OwnerKind::RealmAuthority, "authority", hub_ura.as_str()),
         ] {
             catalog
                 .register_static(
@@ -6885,6 +6885,19 @@ mod tests {
             .iter()
             .any(|row| row.descriptor.owner_ura == device_ura));
         assert!(rows.iter().any(|row| row.descriptor.owner_ura == hub_ura));
+    }
+
+    #[test]
+    fn owner_kind_projection_rejects_retired_hub_marker() {
+        assert_eq!(
+            OwnerKind::RealmAuthority.authority_projection(),
+            "authority"
+        );
+        assert_eq!(
+            owner_kind_from_projection("authority"),
+            Some(OwnerKind::RealmAuthority)
+        );
+        assert_eq!(owner_kind_from_projection("hub"), None);
     }
 
     #[test]

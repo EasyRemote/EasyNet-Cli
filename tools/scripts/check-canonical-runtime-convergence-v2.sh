@@ -1367,7 +1367,7 @@ PY
     "struct CanonicalRealmAuthority" \
     "RealmAuthority," \
     "OwnerKind::RealmAuthority" \
-    '"hub" => Some(OwnerKind::RealmAuthority)' \
+    '"authority" => Some(OwnerKind::RealmAuthority)' \
     "RealmAuthority {" \
     "DeviceAndRealmAuthority {" \
     "fn realm_authority(&self)" \
@@ -1379,6 +1379,12 @@ PY
       fail "authority context model is missing canonical runtime vocabulary: $required"
     fi
   done
+  if rg -F -q '"hub" => Some(OwnerKind::RealmAuthority)' "$dispatch"; then
+    fail "authority context model must not preserve retired hub owner-kind parser"
+  fi
+  if ! rg -q 'owner_kind_projection_rejects_retired_hub_marker' "$dispatch"; then
+    fail "authority context model must test retired hub owner-kind rejection"
+  fi
 
   if ! rg -q 'InvalidRealmAuthorityRoot' "$errors"; then
     fail "ability control-plane errors must expose InvalidRealmAuthorityRoot"

@@ -427,28 +427,28 @@ pub struct AbilitySchemaSummary {
 /// facts: transport selection never implies a state transition.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AbilityDescriptor {
-    /// Callable owner-local public ability name. Device and hub abilities
+    /// Callable owner-local public ability name. Device and realm Authority abilities
     /// use a namespaced public name such as `agent.list` or
     /// `federation.resolve`; agent-owned abilities use the local verb scoped
     /// by `owner_ura`, such as `chat`.
     pub name: String,
     /// Canonical URA of the entity that publishes this ability — the
     /// `callee` in any Invoke targeting this name. Per AXON-RFC-001
-    /// v4.1.5 §9 (AXIOM seven-tuple), `callee ∈ {hub, device, agent}`,
+    /// v4.1.5 §9 (AXIOM seven-tuple), `callee ∈ {authority, device, agent}`,
     /// and this field accepts any of those shapes:
     ///
     ///   * `agent/<user-uuid>.<agent-id>` — hosted user agent
     ///     (consent / policy / mcp / llm sub-agent abilities).
     ///   * `device/<device-uuid>`         — device-built-ins
     ///     (`shell.run`, `fs.read`, `agent.list`, …).
-    ///   * `hub`                          — hub-published abilities
+    ///   * `authority`                    — realm Authority-published abilities
     ///     (`federation.advertise_*`, `voice.list_calls`, …).
     ///
     /// Field name kept as `owner_ura` for wire-compat with
     /// every existing daemon. §A.URA-5's agent-scoped ability URA
     /// rule applies to `/ability/<...>`-shaped URAs — it does not
     /// constrain who may publish a descriptor for a
-    /// device-built-in or hub-built-in verb. A device publishing
+    /// device-built-in or realm Authority-built-in verb. A device publishing
     /// `shell.run` is the canonical pattern, not a violation.
     pub owner_ura: String,
     /// Governed interface version. This is distinct from
