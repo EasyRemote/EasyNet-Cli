@@ -45,4 +45,7 @@ pub use projection::{RuntimeProjectionStore, RuntimeSessionProjection};
 pub use service::RuntimeLifecycleService;
 pub use start::{RuntimeStartPreflightAction, RuntimeStartPreflightReport, RuntimeStartRequest};
 pub use status::{RuntimeLifecycleStatus, RuntimeStatusReport};
-pub use stop::{RuntimeStopPlan, RuntimeStopShape};
+pub use stop::{
+    LiveProcessStopOutcome, PidfileStopOutcome, RuntimeStopPlan, RuntimeStopProcessController,
+    RuntimeStopShape,
+};

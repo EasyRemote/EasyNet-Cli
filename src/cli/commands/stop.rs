@@ -7,11 +7,9 @@
 //
 // Shape — what changed and why
 // -----------------------------
-// Before this rewrite, `stop::run` was a tangle of three conditional
-// branches (no-state fallback / DaemonOnly / full runtime), each
-// open-coding its own subset of the same six operations. Operators
-// saw a different log shape per branch and the maintainer paid a
-// branch-tax every time a step was added.
+// `stop::run` renders one staged lifecycle. `daemon::lifecycle` owns
+// runtime shape selection and OS-facing process-stop transitions; this file
+// maps typed outcomes to operator-visible progress.
 //
 // The current version keeps the same stage object, but feeds it from
 // `daemon::lifecycle::RuntimeStatusReport` instead of treating
@@ -39,9 +37,11 @@
 use clap::Args;
 
 use crate::daemon::control::discovery;
-use crate::daemon::lifecycle::{RuntimeLifecycleService, RuntimeStopPlan, RuntimeStopShape};
+use crate::daemon::lifecycle::{
+    LiveProcessStopOutcome, PidfileStopOutcome, RuntimeLifecycleService, RuntimeStopPlan,
+    RuntimeStopProcessController, RuntimeStopShape,
+};
 use crate::daemon::persistence::config;
-use crate::support::platform::net;
 
 use crate::cli::presentation::stage::StageRenderer;
 
@@ -70,13 +70,14 @@ pub(crate) fn run_with_options(_args: StopArgs, options: StopOptions) -> anyhow:
 /// Bundle the shape decision and stage execution. Methods on
 /// `StopPlan` are the single sanctioned way to render any stop
 /// stage; nothing outside this file should call StageRenderer or
-/// the low-level `stop_*` helpers directly.
+/// process-stop lifecycle logic directly.
 struct StopPlan {
     shape: RuntimeStopShape,
     discovery_pid: Option<u32>,
     cleanup_runtime_projection: bool,
     stop_timed_out: bool,
     options: StopOptions,
+    process_controller: RuntimeStopProcessController,
     renderer: StageRenderer,
 }
 
@@ -88,6 +89,7 @@ impl StopPlan {
             cleanup_runtime_projection: plan.should_cleanup_runtime_projection(),
             stop_timed_out: false,
             options,
+            process_controller: RuntimeStopProcessController::new(),
             renderer: StageRenderer::new(),
         }
     }
@@ -179,7 +181,10 @@ impl StopPlan {
     /// Pidfile-driven SIGTERM on the easynet-daemon child.
     fn stage_stop_daemon(&mut self) {
         self.renderer.set_active("stop-daemon");
-        match stop_pidfile_process(&config::easynet_daemon_pid_path()) {
+        match self
+            .process_controller
+            .stop_pidfile_process(&config::easynet_daemon_pid_path())
+        {
             PidfileStopOutcome::Stopped { pid } => {
                 self.renderer.stage_ok(&format!("stop-daemon (pid {pid})"))
             }
@@ -211,7 +216,7 @@ impl StopPlan {
                 .stage_skipped("stop-discovered-daemon", "(no discovery pid)");
             return;
         };
-        match stop_discovered_daemon_process(pid) {
+        match self.process_controller.stop_discovered_daemon_process(pid) {
             LiveProcessStopOutcome::Stopped { pid } => self
                 .renderer
                 .stage_ok(&format!("stop-discovered-daemon (pid {pid})")),
@@ -239,7 +244,7 @@ impl StopPlan {
     /// manually without going through `easynet runtime start`.
     fn stage_sweep_daemons(&mut self) {
         self.renderer.set_active("sweep-daemons");
-        let swept = sweep_stray_easynet_daemons();
+        let swept = self.process_controller.sweep_stray_easynet_daemons();
         if swept.is_empty() {
             self.renderer.stage_skipped("sweep-daemons", "(none found)");
         } else {
@@ -313,104 +318,4 @@ impl StopPlan {
             }
         }
     }
-}
-
-// ── Low-level helpers ────────────────────────────────────────────
-
-/// Result of attempting to stop a process named by a pidfile.
-/// Returned by [`stop_pidfile_process`]; the staged caller maps
-/// each variant onto a `stage_ok` / `stage_skipped` / `stage_failed`
-/// rendering. Splitting the outcome from the rendering keeps the
-/// signaling logic free of UI concerns.
-enum PidfileStopOutcome {
-    NoPidfile,
-    StalePidfile { pid: u32 },
-    PidReuseRefused { pid: u32 },
-    Stopped { pid: u32 },
-    TimedOut { pid: u32 },
-}
-
-/// Result of stopping a live process discovered outside a pidfile.
-enum LiveProcessStopOutcome {
-    StalePid { pid: u32 },
-    PidReuseRefused { pid: u32 },
-    Stopped { pid: u32 },
-    TimedOut { pid: u32 },
-}
-
-/// Pidfile -> liveness check -> easynet-process check -> SIGTERM
-/// with a 3-second wait. Removes the pidfile after the attempt
-/// regardless of outcome so a stale file from a crashed daemon
-/// does not block the next `easynet runtime start`.
-///
-/// The pidfile race window between `read` and `kill` is narrow but
-/// not zero; the `is_easynet_process` check after liveness mitigates
-/// pid reuse on busy hosts. A production daemon would use pidfd or
-/// a lockfile to close the window entirely — out of scope here.
-fn stop_pidfile_process(pid_path: &std::path::Path) -> PidfileStopOutcome {
-    let pid: u32 = match std::fs::read_to_string(pid_path)
-        .ok()
-        .and_then(|s| s.trim().parse().ok())
-    {
-        Some(p) => p,
-        None => return PidfileStopOutcome::NoPidfile,
-    };
-    if !net::is_pid_alive(pid) {
-        let _ = std::fs::remove_file(pid_path);
-        return PidfileStopOutcome::StalePidfile { pid };
-    }
-    if !net::is_easynet_process(pid) {
-        let _ = std::fs::remove_file(pid_path);
-        return PidfileStopOutcome::PidReuseRefused { pid };
-    }
-    let stopped = net::kill_and_wait(pid, std::time::Duration::from_secs(3));
-    let _ = std::fs::remove_file(pid_path);
-    if stopped {
-        PidfileStopOutcome::Stopped { pid }
-    } else {
-        PidfileStopOutcome::TimedOut { pid }
-    }
-}
-
-fn stop_discovered_daemon_process(pid: u32) -> LiveProcessStopOutcome {
-    if !net::is_pid_alive(pid) {
-        return LiveProcessStopOutcome::StalePid { pid };
-    }
-    if !net::is_easynet_process(pid) {
-        return LiveProcessStopOutcome::PidReuseRefused { pid };
-    }
-    if net::kill_and_wait(pid, std::time::Duration::from_secs(3)) {
-        LiveProcessStopOutcome::Stopped { pid }
-    } else {
-        LiveProcessStopOutcome::TimedOut { pid }
-    }
-}
-
-/// Pgrep-style sweep that SIGTERMs every alive `easynet-daemon`
-/// process other than this CLI itself. Returns the PIDs that were
-/// successfully signalled, in pgrep iteration order. Best-effort:
-/// silently skips PIDs that fail the easynet-process guard or that
-/// did not exit within 3 seconds.
-fn sweep_stray_easynet_daemons() -> Vec<u32> {
-    let output_res = std::process::Command::new("pgrep")
-        .args(["-f", "easynet-daemon"])
-        .output();
-    let candidates: Vec<u32> = match output_res {
-        Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout)
-            .lines()
-            .filter_map(|l| l.trim().parse::<u32>().ok())
-            .filter(|pid| *pid != std::process::id())
-            .collect(),
-        _ => return Vec::new(),
-    };
-    let mut swept = Vec::new();
-    for pid in candidates {
-        if !net::is_pid_alive(pid) || !net::is_easynet_process(pid) {
-            continue;
-        }
-        if net::kill_and_wait(pid, std::time::Duration::from_secs(3)) {
-            swept.push(pid);
-        }
-    }
-    swept
 }

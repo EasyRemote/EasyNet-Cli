@@ -586,3 +586,11 @@ fn mcp_reflection_concurrency_resolution_boundary_script_holds() {
     // procedural fallback helpers.
     run_bash_script("tests/scripts/test_check_mcp_reflection_concurrency_resolution_boundary.sh");
 }
+
+#[test]
+fn runtime_stop_lifecycle_boundary_script_holds() {
+    // Pins daemon process-stop probing/signaling to the lifecycle module.
+    // CLI stop may render typed outcomes, but must not own pidfile/discovery
+    // or pgrep process lifecycle transitions.
+    run_bash_script("tests/scripts/test_check_runtime_stop_lifecycle_boundary.sh");
+}
