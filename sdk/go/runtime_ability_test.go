@@ -29,6 +29,165 @@ func TestRuntimeClientResolveDescriptorRefRequiresCallMode(t *testing.T) {
 	}
 }
 
+func TestRuntimeClientResolveDescriptorRefAdmitsCompleteGenericRequest(t *testing.T) {
+	var seen map[string]any
+	runtime, err := NewRuntimeClient(RuntimeTransportFunc{
+		ResolveDescriptorRefFunc: func(_ context.Context, requestJSON []byte) ([]byte, error) {
+			if err := json.Unmarshal(requestJSON, &seen); err != nil {
+				t.Fatalf("request JSON: %v", err)
+			}
+			return []byte(`{"descriptor_ref":"easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read"}`), nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
+	}
+
+	ref, err := runtime.ResolveDescriptorRef(context.Background(), RuntimeDescriptorRefRequest{
+		CalleeURA: " easynet:///r/example/device/dev-a ",
+		Ability:   " observe.health ",
+		CallMode:  " read ",
+	})
+	if err != nil {
+		t.Fatalf("ResolveDescriptorRef: %v", err)
+	}
+	if ref == "" {
+		t.Fatal("ResolveDescriptorRef returned empty descriptor_ref")
+	}
+	if seen["callee_ura"] != "easynet:///r/example/device/dev-a" ||
+		seen["ability"] != "observe.health" ||
+		seen["call_mode"] != "read" {
+		t.Fatalf("descriptor_ref request was not normalized: %#v", seen)
+	}
+	if _, ok := seen["caller_ura"]; ok {
+		t.Fatalf("generic descriptor_ref request unexpectedly carried caller_ura: %#v", seen)
+	}
+}
+
+func TestRuntimeClientResolveDescriptorRefRejectsIncompleteRequestBeforeTransport(t *testing.T) {
+	tests := []struct {
+		name string
+		req  RuntimeDescriptorRefRequest
+		want string
+	}{
+		{
+			name: "missing callee",
+			req: RuntimeDescriptorRefRequest{
+				Ability:  "observe.health",
+				CallMode: "read",
+			},
+			want: "callee_ura is required",
+		},
+		{
+			name: "missing ability",
+			req: RuntimeDescriptorRefRequest{
+				CalleeURA: "easynet:///r/example/device/dev-a",
+				CallMode:  "read",
+			},
+			want: "ability is required",
+		},
+		{
+			name: "missing call mode",
+			req: RuntimeDescriptorRefRequest{
+				CalleeURA: "easynet:///r/example/device/dev-a",
+				Ability:   "observe.health",
+			},
+			want: "call_mode is required",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runtime, err := NewRuntimeClient(RuntimeTransportFunc{
+				ResolveDescriptorRefFunc: func(context.Context, []byte) ([]byte, error) {
+					t.Fatal("descriptor resolver transport must not be called for incomplete descriptor request")
+					return nil, nil
+				},
+			})
+			if err != nil {
+				t.Fatalf("NewRuntimeClient: %v", err)
+			}
+
+			_, err = runtime.ResolveDescriptorRef(context.Background(), tt.req)
+			if err == nil || !IsCode(err, ErrInvalidArgument) || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("ResolveDescriptorRef error = %v, want invalid argument containing %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestRuntimeClientResolveDescriptorRefRejectsIncompleteProviderRequestBeforeTransport(t *testing.T) {
+	tests := []struct {
+		name string
+		req  RuntimeDescriptorRefRequest
+		want string
+	}{
+		{
+			name: "missing caller",
+			req: RuntimeDescriptorRefRequest{
+				CalleeURA:  "easynet:///r/example/device/dev-a",
+				Ability:    "invocation.history.list",
+				CallMode:   "read",
+				SubjectURA: "easynet:///r/example/device/dev-a",
+				Provider:   "receipt_history",
+			},
+			want: "requires caller_ura",
+		},
+		{
+			name: "missing subject",
+			req: RuntimeDescriptorRefRequest{
+				CalleeURA: "easynet:///r/example/device/dev-a",
+				Ability:   "meta.list_abilities",
+				CallMode:  "read",
+				CallerURA: "easynet:///r/example/user/alice",
+				Provider:  "ability_descriptor",
+			},
+			want: "requires subject_ura",
+		},
+		{
+			name: "all-zero caller",
+			req: RuntimeDescriptorRefRequest{
+				CalleeURA:  "easynet:///r/example/device/dev-a",
+				Ability:    "meta.list_abilities",
+				CallMode:   "read",
+				CallerURA:  "easynet:///r/example/resource/user.00000000-0000-0000-0000-000000000000/session/request",
+				SubjectURA: "easynet:///r/example/device/dev-a",
+				Provider:   "ability_descriptor",
+			},
+			want: "caller_ura must not be all-zero",
+		},
+		{
+			name: "all-zero subject",
+			req: RuntimeDescriptorRefRequest{
+				CalleeURA:  "easynet:///r/example/device/dev-a",
+				Ability:    "invocation.history.list",
+				CallMode:   "read",
+				CallerURA:  "easynet:///r/example/user/alice",
+				SubjectURA: "easynet:///r/example/resource/user.00000000-0000-0000-0000-000000000000/session/invocation_history",
+				Provider:   "receipt_history",
+			},
+			want: "subject_ura must not be all-zero",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runtime, err := NewRuntimeClient(RuntimeTransportFunc{
+				ResolveDescriptorRefFunc: func(context.Context, []byte) ([]byte, error) {
+					t.Fatal("descriptor resolver transport must not be called for incomplete provider-backed descriptor request")
+					return nil, nil
+				},
+			})
+			if err != nil {
+				t.Fatalf("NewRuntimeClient: %v", err)
+			}
+
+			_, err = runtime.ResolveDescriptorRef(context.Background(), tt.req)
+			if err == nil || !IsCode(err, ErrInvalidArgument) || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("ResolveDescriptorRef error = %v, want invalid argument containing %q", err, tt.want)
+			}
+		})
+	}
+}
+
 func TestRuntimeAbilityClientBuildRequiresExplicitCallMode(t *testing.T) {
 	runtime, err := NewRuntimeClient(RuntimeTransportFunc{
 		ResolveDescriptorRefFunc: func(context.Context, []byte) ([]byte, error) {

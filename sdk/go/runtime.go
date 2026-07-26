@@ -273,8 +273,9 @@ func (c *RuntimeClient) ResolveDescriptorRef(ctx context.Context, req RuntimeDes
 	if !ok {
 		return "", invalidRuntimeClient("runtime transport does not expose descriptor resolution")
 	}
-	if strings.TrimSpace(req.CallMode) == "" {
-		return "", invalidRuntimeClient("descriptor_ref call_mode is required")
+	req, err = admitRuntimeDescriptorRefRequest(req)
+	if err != nil {
+		return "", err
 	}
 	requestJSON, err := json.Marshal(req)
 	if err != nil {
@@ -297,6 +298,49 @@ func (c *RuntimeClient) ResolveDescriptorRef(ctx context.Context, req RuntimeDes
 		return "", invalidRuntimePayload("descriptor_ref resolution omitted descriptor_ref", nil)
 	}
 	return descriptorRef, nil
+}
+
+func admitRuntimeDescriptorRefRequest(req RuntimeDescriptorRefRequest) (RuntimeDescriptorRefRequest, error) {
+	req.CalleeURA = strings.TrimSpace(req.CalleeURA)
+	req.Ability = strings.TrimSpace(req.Ability)
+	req.CallMode = strings.TrimSpace(req.CallMode)
+	req.CallerURA = strings.TrimSpace(req.CallerURA)
+	req.SubjectURA = strings.TrimSpace(req.SubjectURA)
+	req.Provider = strings.TrimSpace(req.Provider)
+
+	for _, field := range []struct {
+		name  string
+		value string
+	}{
+		{name: "callee_ura", value: req.CalleeURA},
+		{name: "ability", value: req.Ability},
+		{name: "call_mode", value: req.CallMode},
+	} {
+		if field.value == "" {
+			if field.name == "call_mode" {
+				return RuntimeDescriptorRefRequest{}, invalidRuntimeClient("descriptor_ref call_mode is required")
+			}
+			return RuntimeDescriptorRefRequest{}, invalidRuntimeClient("descriptor_ref " + field.name + " is required")
+		}
+	}
+	if req.Provider == "" {
+		return req, nil
+	}
+	for _, field := range []struct {
+		name  string
+		value string
+	}{
+		{name: "caller_ura", value: req.CallerURA},
+		{name: "subject_ura", value: req.SubjectURA},
+	} {
+		if field.value == "" {
+			return RuntimeDescriptorRefRequest{}, invalidRuntimeClient("descriptor_ref provider request requires " + field.name)
+		}
+		if containsAllZeroPrincipal(field.value) {
+			return RuntimeDescriptorRefRequest{}, invalidRuntimeClient("descriptor_ref provider request " + field.name + " must not be all-zero")
+		}
+	}
+	return req, nil
 }
 
 // PrepareOptions are runtime prepare policy knobs.

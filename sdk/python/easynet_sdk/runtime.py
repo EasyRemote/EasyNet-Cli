@@ -25,6 +25,7 @@ from axon_sdk.invocation import (
 )
 
 from .errors import ErrorCode, RetryHint, SDKError
+from ._identity_guards import contains_all_zero_principal
 from .bidi import BidiSession, BidiStreamDescriptor, BidiTransport
 from .invocation import InvocationBuilder, InvocationDraft
 from .invocation_state import InvocationLifecycleState
@@ -1114,20 +1115,14 @@ class RuntimeClient:
             raise _invalid_runtime_client(
                 "runtime transport does not expose descriptor resolution"
             )
-        call_mode = call_mode.strip()
-        if not call_mode:
-            raise _invalid_runtime_client("descriptor_ref call_mode is required")
-        request = {
-            "callee_ura": callee_ura,
-            "ability": ability,
-            "call_mode": call_mode,
-        }
-        if caller_ura:
-            request["caller_ura"] = caller_ura
-        if subject_ura:
-            request["subject_ura"] = subject_ura
-        if provider:
-            request["provider"] = provider
+        request = _admitted_descriptor_ref_request(
+            callee_ura=callee_ura,
+            ability=ability,
+            call_mode=call_mode,
+            caller_ura=caller_ura,
+            subject_ura=subject_ura,
+            provider=provider,
+        )
         try:
             raw = transport.resolve_descriptor_ref(
                 json.dumps(request, separators=(",", ":"), sort_keys=True).encode(
@@ -1477,6 +1472,64 @@ def _required_string(decoded: Mapping[str, object], field_name: str) -> str:
     if not isinstance(value, str) or value.strip() == "":
         raise _invalid_runtime(f"{field_name} is required")
     return value
+
+
+def _admitted_descriptor_ref_request(
+    *,
+    callee_ura: str,
+    ability: str,
+    call_mode: str,
+    caller_ura: str,
+    subject_ura: str,
+    provider: str,
+) -> dict[str, object]:
+    callee_ura = _required_runtime_client_text(callee_ura, "callee_ura")
+    ability = _required_runtime_client_text(ability, "ability")
+    call_mode = _required_runtime_client_text(call_mode, "call_mode")
+    caller_ura = _optional_runtime_client_text(caller_ura)
+    subject_ura = _optional_runtime_client_text(subject_ura)
+    provider = _optional_runtime_client_text(provider)
+
+    if provider:
+        for field_name, value in (
+            ("caller_ura", caller_ura),
+            ("subject_ura", subject_ura),
+        ):
+            if not value:
+                raise _invalid_runtime_client(
+                    f"descriptor_ref provider request requires {field_name}"
+                )
+            if contains_all_zero_principal(value):
+                raise _invalid_runtime_client(
+                    f"descriptor_ref provider request {field_name} must not be all-zero"
+                )
+
+    request: dict[str, object] = {
+        "callee_ura": callee_ura,
+        "ability": ability,
+        "call_mode": call_mode,
+    }
+    if caller_ura:
+        request["caller_ura"] = caller_ura
+    if subject_ura:
+        request["subject_ura"] = subject_ura
+    if provider:
+        request["provider"] = provider
+    return request
+
+
+def _required_runtime_client_text(value: object, field_name: str) -> str:
+    if not isinstance(value, str) or value.strip() == "":
+        if field_name == "call_mode":
+            raise _invalid_runtime_client("descriptor_ref call_mode is required")
+        raise _invalid_runtime_client(f"descriptor_ref {field_name} is required")
+    return value.strip()
+
+
+def _optional_runtime_client_text(value: object) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
 
 
 def _required_text(value: object, field_name: str) -> str:

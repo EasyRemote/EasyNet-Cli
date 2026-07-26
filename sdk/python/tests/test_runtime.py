@@ -370,6 +370,129 @@ class RuntimeTests(unittest.TestCase):
         self.assertIn("call_mode is required", raised.exception.message)
         self.assertIsNone(transport.seen_descriptor_request)
 
+    def test_descriptor_resolution_admits_complete_generic_request(self) -> None:
+        transport = MemoryRuntimeTransport()
+        client = RuntimeClient(transport)
+
+        descriptor_ref = client.resolve_descriptor_ref(
+            callee_ura=" easynet:///r/example/device/dev-a ",
+            ability=" observe.health ",
+            call_mode=" read ",
+        )
+
+        self.assertEqual(
+            descriptor_ref,
+            "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+        )
+        self.assertEqual(
+            transport.seen_descriptor_request,
+            {
+                "callee_ura": "easynet:///r/example/device/dev-a",
+                "ability": "observe.health",
+                "call_mode": "read",
+            },
+        )
+
+    def test_descriptor_resolution_rejects_incomplete_request_before_transport(
+        self,
+    ) -> None:
+        cases = [
+            (
+                {"ability": "observe.health", "call_mode": "read"},
+                "callee_ura is required",
+            ),
+            (
+                {
+                    "callee_ura": "easynet:///r/example/device/dev-a",
+                    "call_mode": "read",
+                },
+                "ability is required",
+            ),
+            (
+                {
+                    "callee_ura": "easynet:///r/example/device/dev-a",
+                    "ability": "observe.health",
+                },
+                "call_mode is required",
+            ),
+        ]
+
+        for request, message in cases:
+            with self.subTest(message=message):
+                transport = MemoryRuntimeTransport()
+                client = RuntimeClient(transport)
+
+                with self.assertRaises(SDKError) as raised:
+                    client.resolve_descriptor_ref(
+                        callee_ura=request.get("callee_ura", ""),
+                        ability=request.get("ability", ""),
+                        call_mode=request.get("call_mode", ""),
+                    )
+
+                self.assertEqual(raised.exception.code, ErrorCode.INVALID_ARGUMENT)
+                self.assertIn(message, raised.exception.message)
+                self.assertIsNone(transport.seen_descriptor_request)
+
+    def test_descriptor_resolution_rejects_incomplete_provider_request_before_transport(
+        self,
+    ) -> None:
+        cases = [
+            (
+                {
+                    "callee_ura": "easynet:///r/example/device/dev-a",
+                    "ability": "invocation.history.list",
+                    "call_mode": "read",
+                    "subject_ura": "easynet:///r/example/device/dev-a",
+                    "provider": "receipt_history",
+                },
+                "requires caller_ura",
+            ),
+            (
+                {
+                    "callee_ura": "easynet:///r/example/device/dev-a",
+                    "ability": "meta.list_abilities",
+                    "call_mode": "read",
+                    "caller_ura": "easynet:///r/example/user/alice",
+                    "provider": "ability_descriptor",
+                },
+                "requires subject_ura",
+            ),
+            (
+                {
+                    "callee_ura": "easynet:///r/example/device/dev-a",
+                    "ability": "meta.list_abilities",
+                    "call_mode": "read",
+                    "caller_ura": "easynet:///r/example/resource/user.00000000-0000-0000-0000-000000000000/session/request",
+                    "subject_ura": "easynet:///r/example/device/dev-a",
+                    "provider": "ability_descriptor",
+                },
+                "caller_ura must not be all-zero",
+            ),
+            (
+                {
+                    "callee_ura": "easynet:///r/example/device/dev-a",
+                    "ability": "invocation.history.list",
+                    "call_mode": "read",
+                    "caller_ura": "easynet:///r/example/user/alice",
+                    "subject_ura": "easynet:///r/example/resource/user.00000000-0000-0000-0000-000000000000/session/request",
+                    "provider": "receipt_history",
+                },
+                "subject_ura must not be all-zero",
+            ),
+        ]
+
+        for request, message in cases:
+            with self.subTest(message=message):
+                transport = MemoryRuntimeTransport()
+                client = RuntimeClient(transport)
+
+                with self.assertRaises(SDKError) as raised:
+                    client.resolve_descriptor_ref(**request)
+
+                self.assertEqual(raised.exception.code, ErrorCode.INVALID_ARGUMENT)
+                self.assertIn(message, raised.exception.message)
+                self.assertIsNone(transport.seen_descriptor_request)
+
     def test_invoke_returns_typed_result(self) -> None:
         transport = MemoryRuntimeTransport()
         client = RuntimeClient(transport)
