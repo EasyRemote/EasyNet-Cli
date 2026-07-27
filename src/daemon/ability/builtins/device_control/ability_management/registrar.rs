@@ -29,6 +29,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock, Weak};
 
+use anyhow::Context;
 use axon_sdk::invocation::{
     AbilityCallModes, AbilityDescriptor, AbilityFn, AbilityOptions, CallMode as AxonCallMode,
     LocalRuntime,
@@ -442,15 +443,15 @@ pub struct DeviceAbilityRegistrar {
 }
 
 impl DeviceAbilityRegistrar {
-    #[must_use]
-    pub fn new_pending() -> Arc<Self> {
-        Arc::new(Self {
+    pub fn try_new_pending() -> anyhow::Result<Arc<Self>> {
+        Ok(Arc::new(Self {
             runtime: OnceLock::new(),
             control_plane_catalog: OnceLock::new(),
-            store: DeviceAbilityStore::open_default(),
+            store: DeviceAbilityStore::try_open_default()
+                .context("open canonical device ability store")?,
             #[cfg(test)]
             fail_next_runtime_replace: AtomicBool::new(false),
-        })
+        }))
     }
 
     /// Test seam: explicit store path.
@@ -1449,7 +1450,7 @@ mod tests {
 
     #[test]
     fn registrar_rejects_duplicate_runtime_wiring() {
-        let registrar = DeviceAbilityRegistrar::new_pending();
+        let registrar = pending_registrar_for_test();
         let first = crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
             crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
             None,
@@ -1467,7 +1468,7 @@ mod tests {
 
     #[test]
     fn registrar_rejects_duplicate_control_plane_wiring() {
-        let registrar = DeviceAbilityRegistrar::new_pending();
+        let registrar = pending_registrar_for_test();
         let rt = crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
             crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
             None,
@@ -1566,6 +1567,13 @@ mod tests {
             runtime,
             TEST_DEVICE_URA,
         ))
+    }
+
+    fn pending_registrar_for_test() -> Arc<DeviceAbilityRegistrar> {
+        let directory = tempfile::tempdir().expect("create device ability registrar test store");
+        let store = DeviceAbilityStore::open_at(directory.path().join("device-abilities.json"));
+        std::mem::forget(directory);
+        DeviceAbilityRegistrar::new_pending_with_store(store)
     }
 
     fn stream_control_plane_record(catalog: &AxonAbilityCatalog) -> AbilityControlPlaneRecord {

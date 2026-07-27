@@ -738,29 +738,23 @@ fn build_registry_with_services_result_inner(
     // HotAgentRegistrar; `agent.stop` removes the same dynamic catalogue
     // rows. There is no static hosted-agent fallback path.
     agent_lifecycle_ability::register(&mut reg, Arc::clone(&hot_agent_registrar_cell));
-    // device-hosted node/ability operations (list_nodes, describe_node,
-    // remove_node, deploy_ability, uninstall_ability). These are the
-    // canonical ability surfaces backing the CLI's device + ability
-    // subcommands.
-    //
-    // Construct the device-ability registrar pending (runtime attached
-    // by boot) and stash it in the cell `ability.deploy`'s handler
-    // closes over — the install transaction reads it. Same late-wiring
-    // pattern as `hot_agent_registrar_cell`.
+    // Device-hosted node/ability operations (list_nodes, describe_node,
+    // remove_node, deploy_ability, uninstall_ability). Hub-only assembly must
+    // not open or infer Device product state, so this registrar exists only
+    // when this daemon hosts a Device authority root.
     let device_registrar_cell: Arc<device_ops_ability::SharedDeviceRegistrarCell> =
         Arc::new(std::sync::OnceLock::new());
-    if device_registrar_cell
-        .set(device_ability_registrar::DeviceAbilityRegistrar::new_pending())
-        .is_err()
-    {
-        panic!("device registrar cell must be written exactly once during registry build");
+    if hosts_device_authority {
+        device_registrar_cell
+            .set(device_ability_registrar::DeviceAbilityRegistrar::try_new_pending()?)
+            .map_err(|_| anyhow::anyhow!("device registrar cell was already initialized"))?;
+        device_ops_ability::register(
+            &mut reg,
+            Arc::clone(&device_registrar_cell),
+            Arc::clone(&local_registry_handle),
+            Arc::clone(&discover_federation_resolver),
+        );
     }
-    device_ops_ability::register(
-        &mut reg,
-        Arc::clone(&device_registrar_cell),
-        Arc::clone(&local_registry_handle),
-        Arc::clone(&discover_federation_resolver),
-    );
     // voice.* call signaling abilities — `easynet call …`
     // subcommand surface routes through these via the same
     // ability-only invocation path every other CLI surface uses.

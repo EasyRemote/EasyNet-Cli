@@ -303,12 +303,11 @@ struct DeviceAbilityStoreWriteLock {
 }
 
 impl DeviceAbilityStore {
-    /// Open the store at the default location (`~/.easynet/`).
-    #[must_use]
-    pub fn open_default() -> Self {
-        Self {
-            path: crate::daemon::persistence::config::state_dir().join(STORE_FILE),
-        }
+    /// Open the store at the canonical daemon state root.
+    pub fn try_open_default() -> anyhow::Result<Self> {
+        Ok(Self {
+            path: crate::daemon::persistence::config::try_state_dir()?.join(STORE_FILE),
+        })
     }
 
     /// Open the store at an explicit path (tests).

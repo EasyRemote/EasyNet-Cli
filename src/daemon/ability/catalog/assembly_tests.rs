@@ -797,9 +797,12 @@ fn combined_registry_binds_local_introspection_to_distinct_device_and_realm_auth
         )
         .expect("combined authority context");
     let config = registry_config_for_agents_with_authority(&agents, authority_context);
-    let registry = build_registry_with_services_result(config)
-        .expect("assemble registry")
-        .catalog;
+    let built = build_registry_with_services_result(config).expect("assemble registry");
+    assert!(
+        built.device_registrar_cell.get().is_none(),
+        "RealmAuthority registry assembly must not initialize the Device ability store registrar"
+    );
+    let registry = built.catalog;
 
     assert!(
         registry.static_authority_exclusion_snapshot().is_empty(),
@@ -1164,6 +1167,8 @@ fn realm_authority_daemon_builder_does_not_read_device_agent_transaction_state()
     std::fs::create_dir_all(&state_dir).expect("create isolated state directory");
     std::fs::write(state_dir.join("agents.json"), b"not-json")
         .expect("write invalid Device agent registry sentinel");
+    std::fs::write(state_dir.join("device-abilities.json"), b"not-json")
+        .expect("write invalid Device ability store sentinel");
     std::fs::write(
         crate::daemon::persistence::teach_grants::path(),
         b"not-json",
@@ -1185,8 +1190,13 @@ fn realm_authority_daemon_builder_does_not_read_device_agent_transaction_state()
             None,
         ),
     );
-    let built = build_registry_for_daemon_result(config)
-        .expect("RealmAuthority daemon builder must not parse Device agent transaction state");
+    let built = build_registry_for_daemon_result(config).expect(
+        "RealmAuthority daemon builder must not parse Device agent/ability transaction state",
+    );
+    assert!(
+        built.device_registrar_cell.get().is_none(),
+        "RealmAuthority daemon builder must not initialize the Device ability registrar"
+    );
     let rows = built.catalog.authority_ability_catalog_snapshot();
     assert!(
         rows.iter()
