@@ -1012,11 +1012,11 @@ impl<'a> DaemonRouteResolver<'a> {
 
         let owner_record = id_record(&selector.owner_ura, self.now_unix_ms);
         let ability_record =
-            ability_record_from_summary(summary, self.now_unix_ms).ok_or_else(|| {
+            ability_record_from_summary(summary, self.now_unix_ms).map_err(|detail| {
                 ResolveRouteFailure::new(
                     selector.query_name.clone(),
                     NegativeReason::Noroute,
-                    "ability projection is missing canonical ability_ura",
+                    detail,
                 )
             })?;
         let route_record = selected.route_record(self.now_unix_ms);
@@ -1228,9 +1228,15 @@ impl<'a> DaemonRouteResolver<'a> {
                 }
             }
             for summary in &agent.abilities {
-                let Some(ability_record) = ability_record_from_summary(summary, self.now_unix_ms)
-                else {
-                    continue;
+                let ability_record = match ability_record_from_summary(summary, self.now_unix_ms) {
+                    Ok(record) => record,
+                    Err(detail) => {
+                        return negative_answer_json(
+                            query_name,
+                            NegativeReason::Refused,
+                            Some(&detail),
+                        )
+                    }
                 };
                 records.push(ability_record);
                 // Emit the resolver-selected ROUTE record alongside the
@@ -1767,24 +1773,50 @@ fn hosted_by_record(
     })
 }
 
-fn ability_record_from_summary(summary: &Value, now_unix_ms: i64) -> Option<Value> {
+fn ability_record_from_summary(summary: &Value, now_unix_ms: i64) -> Result<Value, String> {
     let ability_ura = summary
         .get("ability_ura")
         .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())?;
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "ability projection is missing canonical ability_ura".to_string())?;
     let owner_ura = summary
         .get("owner_ura")
         .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())?;
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "ability projection is missing canonical owner_ura".to_string())?;
     let namespace = summary
         .get("namespace")
         .and_then(Value::as_str)
-        .unwrap_or_default();
+        .ok_or_else(|| "ability projection is missing namespace".to_string())?;
     let local_name = summary
         .get("local_name")
         .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())?;
-    Some(json!({
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "ability projection is missing local_name".to_string())?;
+    let descriptor_revision = summary
+        .get("descriptor_revision")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "ability projection is missing descriptor_revision".to_string())?;
+    let policy_ref = summary
+        .get("policy_ref")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "ability projection is missing policy_ref".to_string())?;
+    let route_summary_ref = match summary.get("route_summary_ref") {
+        Some(Value::Null) | None => Value::Null,
+        Some(Value::String(value)) if !value.is_empty() => Value::String(value.clone()),
+        Some(Value::String(_)) => {
+            return Err("ability projection route_summary_ref must not be empty".to_string())
+        }
+        Some(_) => return Err("ability projection route_summary_ref must be a string".to_string()),
+    };
+    let tags = match summary.get("tags") {
+        Some(Value::Array(_)) => summary.get("tags").cloned().expect("tags present"),
+        Some(_) => return Err("ability projection tags must be an array".to_string()),
+        None => return Err("ability projection is missing tags".to_string()),
+    };
+    Ok(json!({
         "name": ability_ura,
         "record_type": RecordType::Ability.as_str_name(),
         "authority": authority_for_query(ability_ura),
@@ -1802,18 +1834,12 @@ fn ability_record_from_summary(summary: &Value, now_unix_ms: i64) -> Option<Valu
                     "owner_ura": owner_ura,
                     "namespace": namespace,
                     "local_name": local_name,
-                    "descriptor_revision": summary
-                        .get("descriptor_revision")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default(),
+                    "descriptor_revision": descriptor_revision,
                     "schema_ref": summary.get("schema_ref").cloned().unwrap_or(Value::Null),
                     "schema_hash": summary.get("schema_hash").cloned().unwrap_or(Value::Null),
-                    "policy_ref": summary
-                        .get("policy_ref")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default(),
-                    "route_summary_ref": summary.get("route_summary_ref").cloned().unwrap_or(Value::Null),
-                    "tags": summary.get("tags").cloned().unwrap_or_else(|| json!([])),
+                    "policy_ref": policy_ref,
+                    "route_summary_ref": route_summary_ref,
+                    "tags": tags,
                 }
             }
         }
@@ -1973,10 +1999,7 @@ fn ura_kind_name(ura: &str) -> &'static str {
 }
 
 fn summary_public_name(summary: &Value) -> Option<String> {
-    let namespace = summary
-        .get("namespace")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
+    let namespace = summary.get("namespace").and_then(Value::as_str)?;
     let local = summary.get("local_name").and_then(Value::as_str)?;
     if namespace.is_empty() {
         Some(local.to_string())
@@ -2101,6 +2124,76 @@ mod tests {
             }],
         ));
         ability_ura
+    }
+
+    fn publish_ability_with_descriptor_revision(
+        catalog: &AbilityCatalogStore,
+        owner_ura: &str,
+        host_device_ura: &str,
+        descriptor_revision: &str,
+    ) -> String {
+        let namespace = "agent";
+        let local_name = "list";
+        let public_name = format!("{namespace}.{local_name}");
+        let ability_ura = crate::core::ura::owner_ability_ura(owner_ura, &public_name)
+            .expect("owner ability ura");
+        catalog.upsert_projection(OwnerAbilityProjectionRow::new(
+            owner_ura.to_string(),
+            host_device_ura.to_string(),
+            1,
+            1,
+            "sha256:test".to_string(),
+            LEASE_EXPIRES_MS,
+            vec![crate::daemon::federation::read_model::owner_projection::AbilityProjectionSummary {
+                ability_ura: ability_ura.clone(),
+                owner_ura: owner_ura.to_string(),
+                namespace: namespace.to_string(),
+                local_name: local_name.to_string(),
+                descriptor_revision: descriptor_revision.to_string(),
+                schema_ref: None,
+                schema_hash: None,
+                policy_ref: "visibility:PUBLIC".to_string(),
+                route_summary_ref: Some(format!("route-ref::{ability_ura}")),
+                tags: vec!["class:unary".to_string()],
+                callable_summary: crate::daemon::federation::read_model::owner_projection::AbilityCallableSummary::minimal(
+                    public_name,
+                ),
+            }],
+        ));
+        ability_ura
+    }
+
+    #[test]
+    fn ability_record_projection_rejects_missing_descriptor_and_tags_before_empty_defaults() {
+        let summary = json!({
+            "ability_ura": "easynet:///r/test-realm/ability/device.test-daemon.agent.list",
+            "owner_ura": device_owner_ura(),
+            "namespace": "agent",
+            "local_name": "list",
+            "policy_ref": "visibility:PUBLIC",
+            "route_summary_ref": "route-ref::easynet:///r/test-realm/ability/device.test-daemon.agent.list"
+        });
+
+        let error = ability_record_from_summary(&summary, TEST_NOW_MS)
+            .expect_err("missing descriptor_revision must fail closed");
+        assert!(
+            error.contains("descriptor_revision"),
+            "wrong error: {error}"
+        );
+
+        let summary = json!({
+            "ability_ura": "easynet:///r/test-realm/ability/device.test-daemon.agent.list",
+            "owner_ura": device_owner_ura(),
+            "namespace": "agent",
+            "local_name": "list",
+            "descriptor_revision": "sha256:descriptor",
+            "policy_ref": "visibility:PUBLIC",
+            "route_summary_ref": "route-ref::easynet:///r/test-realm/ability/device.test-daemon.agent.list"
+        });
+
+        let error = ability_record_from_summary(&summary, TEST_NOW_MS)
+            .expect_err("missing tags must fail closed");
+        assert!(error.contains("tags"), "wrong error: {error}");
     }
 
     #[test]
@@ -2968,6 +3061,37 @@ mod tests {
                     || record["value"]["route"]["ability_ura"] != ability_ura.as_str()
             }),
             "directory listing must not manufacture a ROUTE record without route_summary_ref"
+        );
+    }
+
+    #[test]
+    fn directory_listing_rejects_incomplete_ability_summary_before_empty_descriptor_default() {
+        let registry = PresenceRegistry::new();
+        let catalog = AbilityCatalogStore::new();
+        let owner_ura = device_owner_ura();
+        mark_online(&registry, &owner_ura);
+        publish_ability_with_descriptor_revision(&catalog, &owner_ura, &owner_ura, "");
+
+        let answer = DaemonRouteResolver::new(&registry, None, &catalog)
+            .at(TEST_NOW_MS)
+            .resolve_query_json(&json!({
+                "qtype": ResolveType::DirectoryListing.as_str_name(),
+                "query_name": owner_ura,
+            }));
+
+        assert_eq!(
+            answer["answer_kind"],
+            ResolveAnswerKind::Negative.as_str_name()
+        );
+        assert_eq!(
+            answer["negative"]["reason"],
+            NegativeReason::Refused.as_str_name()
+        );
+        assert!(
+            answer["negative"]["detail"]
+                .as_str()
+                .is_some_and(|detail| detail.contains("descriptor_revision")),
+            "wrong negative answer: {answer}"
         );
     }
 
