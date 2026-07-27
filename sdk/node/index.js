@@ -90,12 +90,17 @@ export const MAX_STREAM_BUFFERED_EVENTS = 1024;
 export const MAX_BIDI_BUFFERED_FRAMES = 1024;
 const RUNTIME_GOVERNANCE_READ_ABILITIES = Object.freeze([
   "meta.list_abilities",
+  "runtime.catalog.list",
   "invocation.history.list",
   "invocation.history.get",
   "invocation.history.path",
   "invocation.record.get",
   "invocation.trace.get",
+  "receipt.catalog.list",
+  "receipt.catalog.get",
+  "receipt.catalog.trace",
 ]);
+const RUNTIME_ABILITY_DESCRIPTOR_PROVIDER = "ability_descriptor";
 const RUNTIME_RECEIPT_HISTORY_PROVIDER = "receipt_history";
 const CANONICAL_SESSION_AUTHORITY_ID = /^[A-Za-z0-9.-]+$/u;
 
@@ -3567,12 +3572,54 @@ function rejectGovernanceReadPublicInvocationDescriptor(calleeURA, descriptorRef
 
 function runtimeGovernanceReadAbility(value) {
   const clean = String(value ?? "").trim();
+  const explicit = runtimeExplicitGovernanceReadAbility(clean) || clean;
+  if (runtimeCatalogueReadAbility(explicit)) {
+    return "meta.list_abilities";
+  }
+  if (runtimeReceiptReadAbility(explicit)) {
+    return "invocation.history.list";
+  }
+  return "";
+}
+
+function runtimeExplicitGovernanceReadAbility(value) {
   for (const ability of RUNTIME_GOVERNANCE_READ_ABILITIES) {
-    if (clean === ability || clean.endsWith(`.${ability}`)) {
+    if (value === ability || value.endsWith(`.${ability}`)) {
       return ability;
     }
   }
   return "";
+}
+
+function runtimeGovernanceDescriptorProviderForAbility(value) {
+  const clean = String(value ?? "").trim();
+  if (runtimeCatalogueReadAbility(clean)) {
+    return RUNTIME_ABILITY_DESCRIPTOR_PROVIDER;
+  }
+  if (runtimeReceiptReadAbility(clean)) {
+    return RUNTIME_RECEIPT_HISTORY_PROVIDER;
+  }
+  return "";
+}
+
+function runtimeCatalogueReadAbility(value) {
+  return (
+    value === "meta.list_abilities" ||
+    value === "runtime.catalog.list" ||
+    value.endsWith(".meta.list_abilities") ||
+    value.includes(".runtime.catalog.")
+  );
+}
+
+function runtimeReceiptReadAbility(value) {
+  return (
+    value.startsWith("invocation.history.") ||
+    value.startsWith("invocation.trace.") ||
+    value.startsWith("receipt.catalog.") ||
+    value.includes(".invocation.history.") ||
+    value.includes(".invocation.trace.") ||
+    value.includes(".receipt.catalog.")
+  );
 }
 
 class InvocationAuthorityBindingValidator {
@@ -4050,7 +4097,84 @@ function runtimeDescriptorRefRequest(request) {
   if (caller.trim()) out.caller_ura = caller.trim();
   if (subject.trim()) out.subject_ura = subject.trim();
   if (provider.trim()) out.provider = provider.trim();
+  admitRuntimeDescriptorRefRequest(out);
   return out;
+}
+
+function admitRuntimeDescriptorRefRequest(request) {
+  const expectedProvider = runtimeGovernanceDescriptorProviderForAbility(request.ability);
+  if (!request.provider) {
+    if (expectedProvider) {
+      throw invalidRuntime(
+        `descriptor_ref provider request for ability ${request.ability} requires provider ${expectedProvider}`,
+      );
+    }
+    return;
+  }
+  if (
+    request.provider !== RUNTIME_ABILITY_DESCRIPTOR_PROVIDER &&
+    request.provider !== RUNTIME_RECEIPT_HISTORY_PROVIDER
+  ) {
+    throw invalidRuntime(`descriptor_ref request provider ${request.provider} is not supported`);
+  }
+  if (expectedProvider !== request.provider) {
+    if (!expectedProvider) {
+      throw invalidRuntime(
+        `descriptor_ref provider ${request.provider} cannot resolve non-governance ability ${request.ability}`,
+      );
+    }
+    throw invalidRuntime(
+      `descriptor_ref provider ${request.provider} cannot resolve ability ${request.ability}; use provider ${expectedProvider}`,
+    );
+  }
+  for (const field of ["caller_ura", "subject_ura"]) {
+    if (!request[field]) {
+      throw invalidRuntime(`descriptor_ref provider request requires ${field}`);
+    }
+    if (containsAllZeroPrincipal(request[field])) {
+      throw invalidRuntime(`descriptor_ref provider request ${field} must not be all-zero`);
+    }
+  }
+  admitRuntimeDescriptorRefProviderSubject(request);
+}
+
+function admitRuntimeDescriptorRefProviderSubject(request) {
+  switch (request.provider) {
+    case RUNTIME_ABILITY_DESCRIPTOR_PROVIDER:
+      admitAbilityDescriptorProviderSubject(request.callee_ura, request.subject_ura);
+      return;
+    case RUNTIME_RECEIPT_HISTORY_PROVIDER:
+      if (
+        !isRuntimeStateReadSubjectURA(request.subject_ura) &&
+        !isRuntimeOwnerReadSubjectURA(request.subject_ura, request.callee_ura)
+      ) {
+        throw invalidRuntime(
+          "descriptor_ref provider receipt_history subject_ura must be a runtime governance read subject",
+        );
+      }
+      return;
+    default:
+      throw invalidRuntime(`descriptor_ref request provider ${request.provider} is not supported`);
+  }
+}
+
+function admitAbilityDescriptorProviderSubject(calleeURA, subjectURA) {
+  const callee = parseCanonicalURANullable(calleeURA);
+  if (!callee) {
+    throw invalidRuntime("descriptor_ref provider ability_descriptor callee_ura must be canonical");
+  }
+  const subject = parseCanonicalURANullable(subjectURA);
+  if (!subject) {
+    throw invalidRuntime("descriptor_ref provider ability_descriptor subject_ura must be canonical");
+  }
+  if (subject.path !== "authority") {
+    throw invalidRuntime("descriptor_ref provider ability_descriptor subject_ura must be an Authority URA");
+  }
+  if (subject.realm !== callee.realm || subjectURA !== `easynet:///r/${callee.realm}/authority`) {
+    throw invalidRuntime(
+      "descriptor_ref provider ability_descriptor subject_ura must be the callee realm authority subject",
+    );
+  }
 }
 
 function runtimeDescriptorRefResponse(raw) {

@@ -1509,6 +1509,140 @@ test("runtime ability public path rejects receipt history before descriptor reso
   assert.equal(resolverCalls, 0);
 });
 
+test("runtime descriptor resolver rejects provider mismatches before transport", async () => {
+  const cases = [
+    {
+      name: "unknown provider",
+      request: {
+        callee_ura: callee,
+        ability: "meta.list_abilities",
+        call_mode: "rpc",
+        caller_ura: caller,
+        subject_ura: "easynet:///r/example/authority",
+        provider: "legacy_catalog",
+      },
+      message: /provider legacy_catalog is not supported/,
+    },
+    {
+      name: "governance ability missing provider",
+      request: {
+        callee_ura: callee,
+        ability: "meta.list_abilities",
+        call_mode: "rpc",
+        caller_ura: caller,
+        subject_ura: "easynet:///r/example/authority",
+      },
+      message: /requires provider ability_descriptor/,
+    },
+    {
+      name: "wrong provider for catalogue read",
+      request: {
+        callee_ura: callee,
+        ability: "meta.list_abilities",
+        call_mode: "rpc",
+        caller_ura: caller,
+        subject_ura: "easynet:///r/example/authority",
+        provider: "receipt_history",
+      },
+      message: /use provider ability_descriptor/,
+    },
+    {
+      name: "provider for non-governance ability",
+      request: {
+        callee_ura: callee,
+        ability: "observe.health",
+        call_mode: "rpc",
+        caller_ura: caller,
+        subject_ura: callee,
+        provider: "ability_descriptor",
+      },
+      message: /cannot resolve non-governance ability/,
+    },
+    {
+      name: "catalogue provider rejects device subject",
+      request: {
+        callee_ura: callee,
+        ability: "meta.list_abilities",
+        call_mode: "rpc",
+        caller_ura: caller,
+        subject_ura: callee,
+        provider: "ability_descriptor",
+      },
+      message: /subject_ura must be an Authority URA/,
+    },
+    {
+      name: "receipt provider rejects catalogue authority subject",
+      request: {
+        callee_ura: callee,
+        ability: "invocation.history.list",
+        call_mode: "rpc",
+        caller_ura: caller,
+        subject_ura: "easynet:///r/example/authority",
+        provider: "receipt_history",
+      },
+      message: /subject_ura must be a runtime governance read subject/,
+    },
+  ];
+
+  for (const { name, request, message } of cases) {
+    let resolverCalls = 0;
+    const runtime = new sdk.RuntimeClient({
+      invoke: () => {
+        throw new Error("invoke must not run");
+      },
+      resolveDescriptorRef: () => {
+        resolverCalls += 1;
+        throw new Error(`transport must not run for ${name}`);
+      },
+    });
+
+    await assert.rejects(
+      () => runtime.resolveDescriptorRef(request),
+      (error) =>
+        error instanceof sdk.SDKError &&
+        error.code === sdk.ErrorCode.INVALID_ARGUMENT &&
+        error.stage === "runtime" &&
+        message.test(error.message),
+      name,
+    );
+    assert.equal(resolverCalls, 0, name);
+  }
+});
+
+test("runtime descriptor resolver admits authority catalogue provider tuple", async () => {
+  let resolverRequest;
+  const catalogueDescriptor =
+    "easynet:///r/example/ability/device.dev-a.meta.list_abilities@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read";
+  const runtime = new sdk.RuntimeClient({
+    invoke: () => {
+      throw new Error("invoke must not run");
+    },
+    resolveDescriptorRef: (requestJSON) => {
+      resolverRequest = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      return JSON.stringify({ descriptor_ref: catalogueDescriptor });
+    },
+  });
+
+  const resolved = await runtime.resolveDescriptorRef({
+    callee_ura: callee,
+    ability: "meta.list_abilities",
+    call_mode: "rpc",
+    caller_ura: caller,
+    subject_ura: "easynet:///r/example/authority",
+    provider: "ability_descriptor",
+  });
+
+  assert.equal(resolved, catalogueDescriptor);
+  assert.deepEqual(resolverRequest, {
+    callee_ura: callee,
+    ability: "meta.list_abilities",
+    call_mode: "rpc",
+    caller_ura: caller,
+    subject_ura: "easynet:///r/example/authority",
+    provider: "ability_descriptor",
+  });
+});
+
 test("runtime receipt provider uses governance descriptor provider and complete tuple", async () => {
   const calls = [];
   const historyDescriptor =
