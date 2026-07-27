@@ -10,11 +10,10 @@
 //
 // Execution Model:
 //   Phases execute sequentially (data-flow barriers between them).
-//   Steps within a phase execute in parallel via rayon work-stealing threadpool.
-//   When a dispatcher cannot be cloned across worker threads, falls back to sequential.
+//   Steps within a phase execute under the dispatcher's declared concurrency policy.
 //
 // Core Capabilities:
-//   1. True parallel dispatch — rayon::scope + clone_for_thread() per step.
+//   1. Declared parallel dispatch — rayon::scope + clone_for_thread() per step.
 //   2. Structured ExecutionTrace — per-step audit log with timestamps, result hashes, retry history.
 //   3. Retry with exponential backoff — delay = min(base * 2^attempt, max) + deterministic jitter.
 //   4. Cross-phase data flow — results captured in HashMap, substituted into downstream input_refs.
@@ -127,6 +126,10 @@ impl StepDispatcher for AgentAwareDispatcher {
             value: outcome.value,
             invocation: outcome.invocation,
         })
+    }
+
+    fn dispatch_concurrency(&self) -> StepDispatchConcurrency {
+        StepDispatchConcurrency::Parallel
     }
 
     fn clone_for_thread(&self) -> Result<Box<dyn StepDispatcher + Send>, EalError> {

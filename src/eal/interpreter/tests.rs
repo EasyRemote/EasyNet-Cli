@@ -110,6 +110,10 @@ mod cases {
             .into())
         }
 
+        fn dispatch_concurrency(&self) -> StepDispatchConcurrency {
+            StepDispatchConcurrency::Parallel
+        }
+
         fn clone_for_thread(&self) -> Result<Box<dyn StepDispatcher + Send>, EalError> {
             Ok(Box::new(MockDispatcher {
                 delay_ms: self.delay_ms,
@@ -360,6 +364,10 @@ mod cases {
                 );
                 Ok(StepDispatchOutcome::from(serde_json::json!({})))
             }
+            fn dispatch_concurrency(&self) -> StepDispatchConcurrency {
+                StepDispatchConcurrency::Parallel
+            }
+
             fn clone_for_thread(&self) -> Result<Box<dyn StepDispatcher + Send>, EalError> {
                 Ok(Box::new(ContextProbe {
                     seen: Arc::clone(&self.seen),
@@ -792,12 +800,13 @@ mod cases {
         );
     }
 
-    // ── Test 11: Graceful fallback to sequential when clone_for_thread fails ──
+    // ── Test 11: Explicit sequential dispatch policy ──
 
     #[test]
-    fn fallback_to_sequential_when_not_cloneable() {
-        // Non-cloneable dispatcher simulates a production dispatcher that
-        // cannot safely cross rayon worker threads.
+    fn declared_sequential_dispatcher_runs_phase_without_thread_clone() {
+        // Sequential dispatcher declares its concurrency policy up-front.
+        // `clone_for_thread` is not a capability probe and must never be
+        // consulted for this phase.
         struct SeqOnlyDispatcher(Arc<AtomicU32>);
         impl StepDispatcher for SeqOnlyDispatcher {
             fn dispatch(
@@ -812,8 +821,12 @@ mod cases {
                 self.0.fetch_add(1, Ordering::SeqCst);
                 Ok(serde_json::json!({"ok": true, "function": ability.as_str()}).into())
             }
+            fn dispatch_concurrency(&self) -> StepDispatchConcurrency {
+                StepDispatchConcurrency::Sequential
+            }
+
             fn clone_for_thread(&self) -> Result<Box<dyn StepDispatcher + Send>, EalError> {
-                Err(EalError::Internal("not cloneable".into()))
+                panic!("sequential dispatcher must not be cloned for worker threads")
             }
         }
 
@@ -905,6 +918,10 @@ mod cases {
             Ok(serde_json::json!({"ok": true}).into())
         }
 
+        fn dispatch_concurrency(&self) -> StepDispatchConcurrency {
+            StepDispatchConcurrency::Parallel
+        }
+
         fn clone_for_thread(&self) -> Result<Box<dyn StepDispatcher + Send>, EalError> {
             Ok(Box::new(ShapeRecordingDispatcher {
                 seen: Arc::clone(&self.seen),
@@ -934,6 +951,10 @@ mod cases {
             ) -> Result<StepDispatchOutcome, EalError> {
                 Err(EalError::NotFound("device 'node-x' not registered".into()))
             }
+            fn dispatch_concurrency(&self) -> StepDispatchConcurrency {
+                StepDispatchConcurrency::Parallel
+            }
+
             fn clone_for_thread(&self) -> Result<Box<dyn StepDispatcher + Send>, EalError> {
                 Ok(Box::new(CategorisedDispatcher))
             }
@@ -1361,12 +1382,12 @@ mod cases {
             }
             Ok(self.default.clone().into())
         }
+        fn dispatch_concurrency(&self) -> StepDispatchConcurrency {
+            StepDispatchConcurrency::Sequential
+        }
+
         fn clone_for_thread(&self) -> Result<Box<dyn StepDispatcher + Send>, EalError> {
-            // Loops are sequential by design — no thread cloning needed
-            // for these tests. Signal "fall back to sequential" via Err.
-            Err(EalError::Internal(
-                "scripted dispatcher is single-thread".into(),
-            ))
+            panic!("scripted dispatcher is declared sequential")
         }
     }
 
@@ -1440,8 +1461,12 @@ mod cases {
                     invocation: ChildInvocationRecord::for_test(&qualified, 0xab),
                 })
             }
+            fn dispatch_concurrency(&self) -> StepDispatchConcurrency {
+                StepDispatchConcurrency::Sequential
+            }
+
             fn clone_for_thread(&self) -> Result<Box<dyn StepDispatcher + Send>, EalError> {
-                Err(EalError::Internal("single-thread".into()))
+                panic!("recording dispatcher is declared sequential")
             }
         }
 
@@ -1515,6 +1540,10 @@ mod cases {
                     value: serde_json::json!({"ability": ability.as_str()}),
                     invocation: ChildInvocationRecord::for_test(ability.as_str(), marker),
                 })
+            }
+
+            fn dispatch_concurrency(&self) -> StepDispatchConcurrency {
+                StepDispatchConcurrency::Parallel
             }
 
             fn clone_for_thread(&self) -> Result<Box<dyn StepDispatcher + Send>, EalError> {
@@ -1618,8 +1647,12 @@ mod cases {
                     invocation: ChildInvocationRecord::for_test(&qualified, 0xab),
                 })
             }
+            fn dispatch_concurrency(&self) -> StepDispatchConcurrency {
+                StepDispatchConcurrency::Sequential
+            }
+
             fn clone_for_thread(&self) -> Result<Box<dyn StepDispatcher + Send>, EalError> {
-                Err(EalError::Internal("single-thread".into()))
+                panic!("argument recording dispatcher is declared sequential")
             }
         }
 

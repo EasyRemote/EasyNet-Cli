@@ -11,11 +11,10 @@
 //
 // Execution Model:
 //   Phases execute sequentially (data-flow barriers between them).
-//   Steps within a phase execute in parallel via rayon work-stealing threadpool.
-//   When a dispatcher cannot be cloned across worker threads, falls back to sequential.
+//   Steps within a phase execute under the dispatcher's declared concurrency policy.
 //
 // Core Capabilities:
-//   1. True parallel dispatch — rayon::scope + clone_for_thread() per step.
+//   1. Declared parallel dispatch — rayon::scope + clone_for_thread() per step.
 //   2. Structured ExecutionTrace — per-step audit log with timestamps, result hashes, retry history.
 //   3. Retry with exponential backoff — delay = min(base * 2^attempt, max) + deterministic jitter.
 //   4. Cross-phase data flow — results captured in HashMap, substituted into downstream input_refs.
@@ -94,6 +93,17 @@ pub(crate) struct RunContext<'a> {
     pub deadline: Option<Instant>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StepDispatchConcurrency {
+    // The production Agent-aware dispatcher is parallel-capable today;
+    // test and future single-thread dispatchers still need an explicit
+    // sequential state so scheduling never infers capability from a
+    // failed clone attempt.
+    #[allow(dead_code)]
+    Sequential,
+    Parallel,
+}
+
 pub(crate) trait StepDispatcher {
     /// Dispatch one step. The runtime sees only the resolved
     /// `IrTarget` enum and the typed `AbilityName` — there is no
@@ -119,8 +129,14 @@ pub(crate) trait StepDispatcher {
         dependency_receipts: &[ChildInvocationReceiptAnchor],
     ) -> Result<StepDispatchOutcome, EalError>;
 
-    /// Create an independent clone for parallel dispatch.
-    /// Each thread in a phase needs its own dispatcher.
+    /// Declares whether this dispatcher can run phase steps in
+    /// parallel. This is capability state, not an error side effect.
+    fn dispatch_concurrency(&self) -> StepDispatchConcurrency;
+
+    /// Create an independent clone for parallel dispatch. Called only
+    /// when `dispatch_concurrency()` returns `Parallel`; any error is a
+    /// structural runtime failure for that step, not a sequential
+    /// downgrade signal.
     fn clone_for_thread(&self) -> Result<Box<dyn StepDispatcher + Send>, EalError>;
 }
 

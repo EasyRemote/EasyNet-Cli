@@ -1,0 +1,7 @@
+- [x] Add explicit dispatch concurrency type.
+- [x] Update production dispatcher to declare parallel capability.
+- [x] Update phase scheduling to use declared policy.
+- [x] Update tests and test dispatchers to declare policy explicitly.
+- [x] Remove stale fallback wording from interpreter headers/tests.
+- [x] Run focused EAL tests.
+- [x] Run architecture/SPEC gates.

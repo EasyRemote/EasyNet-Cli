@@ -11,11 +11,10 @@
 //
 // Execution Model:
 //   Phases execute sequentially (data-flow barriers between them).
-//   Steps within a phase execute in parallel via rayon work-stealing threadpool.
-//   When a dispatcher cannot be cloned across worker threads, falls back to sequential.
+//   Steps within a phase execute under the dispatcher's declared concurrency policy.
 //
 // Core Capabilities:
-//   1. True parallel dispatch — rayon::scope + clone_for_thread() per step.
+//   1. Declared parallel dispatch — rayon::scope + clone_for_thread() per step.
 //   2. Structured ExecutionTrace — per-step audit log with timestamps, result hashes, retry history.
 //   3. Retry with exponential backoff — delay = min(base * 2^attempt, max) + deterministic jitter.
 //   4. Cross-phase data flow — results captured in HashMap, substituted into downstream input_refs.
@@ -243,12 +242,11 @@ fn dispatch_batch(request: BatchDispatchRequest<'_>) -> Vec<(usize, StepExecResu
             let thread_dispatcher = match dispatcher.clone_for_thread() {
                 Ok(d) => d,
                 Err(e) => {
-                    // Non-cloneable dispatchers return `EalError::Internal`
-                    // to signal "fall back to sequential". Reaching that
-                    // branch here means a structural setup error: a dispatcher
-                    // that cannot cross worker threads reached the parallel path.
-                    // Render to display form (preserves error_code in
-                    // the trace) and surface it as a step error.
+                    // Reaching this branch means a structural setup error: a
+                    // dispatcher declared `Parallel` but could not produce a
+                    // worker-local dispatcher. Render to display form
+                    // (preserves error_code in the trace) and surface it as
+                    // a step error.
                     collector.push((
                         local_idx,
                         StepExecResult::Error {
@@ -422,7 +420,8 @@ pub(super) fn execute_calls_phase_partition(
         return;
     }
     let wants_parallel = steps.len() > 1;
-    let can_parallel = wants_parallel && dispatcher.clone_for_thread().is_ok();
+    let can_parallel =
+        wants_parallel && dispatcher.dispatch_concurrency() == StepDispatchConcurrency::Parallel;
     let phase_label = if can_parallel {
         format!("phase {phase_idx}  parallel")
     } else {
