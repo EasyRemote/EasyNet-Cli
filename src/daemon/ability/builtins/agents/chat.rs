@@ -1576,12 +1576,12 @@ impl ChatArgs {
         let session_id = optional_string_field(obj, "session_id")?;
         let skills = obj
             .get("skills")
-            .map(Selection::parse)
+            .map(|value| Selection::parse(value, "skills"))
             .transpose()?
             .unwrap_or_default();
         let context_loaders = obj
             .get("context_loaders")
-            .map(Selection::parse)
+            .map(|value| Selection::parse(value, "context_loaders"))
             .transpose()?
             .unwrap_or_default();
         let driver = obj
@@ -1770,21 +1770,23 @@ struct Selection {
 }
 
 impl Selection {
-    fn parse(value: &Value) -> anyhow::Result<Self> {
+    fn parse(value: &Value, field: &'static str) -> anyhow::Result<Self> {
         let obj = value
             .as_object()
-            .ok_or_else(|| anyhow::anyhow!("chat: skills/context_loaders must be an object"))?;
-        let mode = match obj.get("mode").and_then(Value::as_str) {
+            .ok_or_else(|| anyhow::anyhow!("chat: {field} must be an object"))?;
+        reject_unknown_fields(
+            obj,
+            &format!("chat: {field}"),
+            &["mode", "include", "exclude"],
+        )?;
+        let mode = match optional_selection_mode_field(obj, field)? {
             None => SelectionMode::Auto,
-            Some("auto") => SelectionMode::Auto,
-            Some("none") => SelectionMode::None,
-            Some("explicit") => SelectionMode::Explicit,
-            Some(other) => anyhow::bail!(
-                "chat: invalid mode {other:?}; expected one of \"auto\", \"none\", \"explicit\""
-            ),
+            Some(SelectionMode::Auto) => SelectionMode::Auto,
+            Some(SelectionMode::None) => SelectionMode::None,
+            Some(SelectionMode::Explicit) => SelectionMode::Explicit,
         };
-        let include = string_array(obj.get("include"), "include")?;
-        let exclude = string_array(obj.get("exclude"), "exclude")?;
+        let include = string_array(obj.get("include"), &format!("{field}.include"))?;
+        let exclude = string_array(obj.get("exclude"), &format!("{field}.exclude"))?;
         Ok(Self {
             mode,
             include,
@@ -1806,6 +1808,26 @@ impl Selection {
             SelectionMode::None => false,
             SelectionMode::Explicit => self.include.iter().any(|i| i == name),
         }
+    }
+}
+
+fn optional_selection_mode_field(
+    obj: &Map<String, Value>,
+    field: &'static str,
+) -> anyhow::Result<Option<SelectionMode>> {
+    match obj.get("mode") {
+        None => Ok(None),
+        Some(value) => match value
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("chat: {field}.mode must be a string"))?
+        {
+            "auto" => Ok(Some(SelectionMode::Auto)),
+            "none" => Ok(Some(SelectionMode::None)),
+            "explicit" => Ok(Some(SelectionMode::Explicit)),
+            other => anyhow::bail!(
+                "chat: invalid {field}.mode {other:?}; expected one of \"auto\", \"none\", \"explicit\""
+            ),
+        },
     }
 }
 
@@ -2414,6 +2436,41 @@ mod tests {
         }))
         .unwrap_err();
         assert!(format!("{err}").contains("mode"));
+    }
+
+    #[test]
+    fn parse_rejects_wrongly_typed_selection_mode() {
+        for field in ["skills", "context_loaders"] {
+            let mut payload = serde_json::Map::new();
+            payload.insert("prompt".to_string(), json!("hi"));
+            payload.insert(field.to_string(), json!({"mode": 123}));
+            let err = ChatArgs::parse(&Value::Object(payload)).unwrap_err();
+            let msg = format!("{err}");
+            assert!(
+                msg.contains(&format!("{field}.mode must be a string")),
+                "wrong error for {field}: {msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_rejects_unknown_selection_fields() {
+        for field in ["skills", "context_loaders"] {
+            let mut payload = serde_json::Map::new();
+            payload.insert("prompt".to_string(), json!("hi"));
+            payload.insert(
+                field.to_string(),
+                json!({"mode": "auto", "legacy_filter": true}),
+            );
+            let err = ChatArgs::parse(&Value::Object(payload)).unwrap_err();
+            let msg = format!("{err}");
+            assert!(
+                msg.contains(&format!("chat: {field}")),
+                "wrong context: {msg}"
+            );
+            assert!(msg.contains("unsupported field"), "wrong error: {msg}");
+            assert!(msg.contains("legacy_filter"), "wrong field: {msg}");
+        }
     }
 
     #[test]

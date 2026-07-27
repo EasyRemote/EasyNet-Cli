@@ -76,7 +76,9 @@ fi
 for test_name in \
   parse_rejects_unknown_top_level_fields \
   parse_rejects_wrongly_typed_optional_string_fields \
-  parse_rejects_wrongly_typed_stream_flag
+  parse_rejects_wrongly_typed_stream_flag \
+  parse_rejects_wrongly_typed_selection_mode \
+  parse_rejects_unknown_selection_fields
 do
   if ! rg -q "$test_name" "$CHAT_RS"; then
     fail "agents.chat parser tests must include $test_name"
@@ -85,6 +87,10 @@ done
 
 if ! rg -q 'reject_unknown_fields' "$CHAT_RS"; then
   fail "agents.chat parser must reject unknown top-level fields in production code"
+fi
+
+if ! rg -q 'optional_selection_mode_field' "$CHAT_RS"; then
+  fail "agents.chat selection parser must reject wrongly typed skills/context_loaders mode"
 fi
 
 for test_name in \
