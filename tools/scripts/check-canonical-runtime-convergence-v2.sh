@@ -15602,6 +15602,7 @@ import sys
 from pathlib import Path
 
 text = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+production = text.split("\n#[cfg(all(test, feature = \"axon-pb\"))]", 1)[0]
 
 for token, code in (
     ("LocalDaemonSelf", "self_subject_policy_present"),
@@ -15614,6 +15615,14 @@ for token, code in (
 ):
     if token in text:
         raise SystemExit(f"local_daemon_system_explicit_subject:{code}")
+
+for token in (
+    "local Axon daemon",
+    "Axon daemon gRPC",
+    "local Axon gRPC",
+):
+    if token in production:
+        raise SystemExit(f"local_daemon_system_explicit_subject:retired_axon_daemon_wording:{token}")
 
 subject_resolver = re.search(
     r"impl LocalDaemonSystemSubjectPolicy\s*\{(?P<body>.*?)\n\}",

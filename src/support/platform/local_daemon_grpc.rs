@@ -384,7 +384,7 @@ fn local_daemon_connect_error(
 ) -> anyhow::Error {
     anyhow::Error::new(
         crate::support::platform::local_invoke::LocalInvokeFailure::DaemonOffline(format!(
-            "connect to local Axon daemon gRPC endpoint at {}: {source:#}",
+            "connect to local daemon Invocation endpoint at {}: {source:#}",
             socket_path.display()
         )),
     )
@@ -394,7 +394,7 @@ fn local_daemon_connect_error(
 fn local_daemon_offline_error(socket_path: &std::path::Path) -> anyhow::Error {
     anyhow::Error::new(
         crate::support::platform::local_invoke::LocalInvokeFailure::DaemonOffline(format!(
-            "daemon not running (local Axon gRPC listener unreachable at {}). \
+            "daemon not running (local daemon Invocation endpoint unreachable at {}). \
              Start it with `easynet runtime start`.",
             socket_path.display()
         )),
@@ -574,7 +574,7 @@ fn invoke_local_daemon_ability_stream_with_tuple_plan(
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-        .context("build tokio runtime for local Axon daemon stream invoke")?;
+        .context("build tokio runtime for local daemon Invocation stream invoke")?;
 
     runtime.block_on(async move {
         let channel = connect_channel(socket_path.clone(), timeout, Duration::from_secs(10))
@@ -661,7 +661,7 @@ fn invoke_local_daemon_ability_bidi_json_frames_with_tuple_plan(
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-        .context("build tokio runtime for local Axon daemon bidi invoke")?;
+        .context("build tokio runtime for local daemon Invocation bidi invoke")?;
 
     runtime.block_on(async move {
         let channel = connect_channel(socket_path.clone(), timeout, Duration::from_secs(10))
@@ -745,7 +745,7 @@ pub(crate) fn invoke_local_daemon_system_ability_targeted_stream_root(
     _max_frames: Option<usize>,
 ) -> anyhow::Result<Vec<crate::support::platform::local_invoke::LocalStreamFrame>> {
     anyhow::bail!(
-        "streaming `{}` through the local Axon daemon requires the `axon-pb` feature; \
+        "streaming `{}` through the local daemon Invocation endpoint requires the `axon-pb` feature; \
          rebuild with `cargo build --features axon-pb`",
         function_name
     )
@@ -762,7 +762,7 @@ pub(crate) fn invoke_local_daemon_ability_targeted_stream_explicit_root(
     _max_frames: Option<usize>,
 ) -> anyhow::Result<Vec<crate::support::platform::local_invoke::LocalStreamFrame>> {
     anyhow::bail!(
-        "streaming `{}` through the local Axon daemon requires the `axon-pb` feature; \
+        "streaming `{}` through the local daemon Invocation endpoint requires the `axon-pb` feature; \
          rebuild with `cargo build --features axon-pb`",
         function_name
     )
@@ -774,7 +774,7 @@ pub(crate) fn invoke_local_daemon_ability_targeted_bidi_json_frames_explicit_roo
 ) -> anyhow::Result<Vec<crate::support::platform::local_invoke::LocalBidiFrame>> {
     let function_name = request.function_name;
     anyhow::bail!(
-        "bidirectional `{}` through the local Axon daemon requires the `axon-pb` feature; \
+        "bidirectional `{}` through the local daemon Invocation endpoint requires the `axon-pb` feature; \
          rebuild with `cargo build --features axon-pb`",
         function_name
     )
@@ -796,7 +796,7 @@ fn invoke_local_daemon_ability_with_tuple_plan(
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-        .context("build tokio runtime for local Axon daemon invoke")?;
+        .context("build tokio runtime for local daemon Invocation invoke")?;
 
     runtime.block_on(async move {
         let channel = connect_channel(socket_path.clone(), timeout, Duration::from_secs(10))
@@ -1552,7 +1552,7 @@ fn invoke_local_daemon_ability_with_invocation_meta_inner(
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-        .context("build tokio runtime for local Axon daemon invoke")?;
+        .context("build tokio runtime for local daemon Invocation invoke")?;
 
     // The channel timeout is per-request: it must cover the step's own
     // execution budget (the daemon-side executor enforces the manifest
@@ -1721,7 +1721,7 @@ pub(crate) fn invoke_local_daemon_system_ability_root_for_subject_timeout(
 ) -> anyhow::Result<serde_json::Value> {
     Err(anyhow::Error::new(
         crate::support::platform::local_invoke::LocalInvokeFailure::DaemonOffline(format!(
-            "invoking daemon-system `{function_name}` through the local Axon daemon requires the \
+            "invoking daemon-system `{function_name}` through the local daemon Invocation endpoint requires the \
              `axon-pb` feature; rebuild with `cargo build --features axon-pb`"
         )),
     ))
@@ -1737,7 +1737,7 @@ pub(crate) fn invoke_local_daemon_system_ability_targeted_root_timeout(
 ) -> anyhow::Result<serde_json::Value> {
     Err(anyhow::Error::new(
         crate::support::platform::local_invoke::LocalInvokeFailure::DaemonOffline(format!(
-            "invoking targeted `{function_name}` through the local Axon daemon requires the \
+            "invoking targeted `{function_name}` through the local daemon Invocation endpoint requires the \
              `axon-pb` feature; rebuild with `cargo build --features axon-pb`"
         )),
     ))
@@ -1754,7 +1754,7 @@ pub(crate) fn invoke_local_daemon_ability_targeted_explicit_root_timeout(
 ) -> anyhow::Result<serde_json::Value> {
     Err(anyhow::Error::new(
         crate::support::platform::local_invoke::LocalInvokeFailure::DaemonOffline(format!(
-            "invoking explicit-root `{function_name}` through the local Axon daemon requires the \
+            "invoking explicit-root `{function_name}` through the local daemon Invocation endpoint requires the \
              `axon-pb` feature; rebuild with `cargo build --features axon-pb`"
         )),
     ))
