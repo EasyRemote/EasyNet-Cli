@@ -2701,6 +2701,12 @@ impl ExecutionIndex {
             .unwrap_or_default()
     }
 
+    fn resolve_rpc_for_key(&self, key: &ControlPlaneAbilityKey) -> Option<LocalRpcHandler> {
+        self.entries
+            .get(key)
+            .and_then(|entry| entry.handlers.resolve_rpc())
+    }
+
     fn unique_handler_slot<T>(
         &self,
         ability: &str,
@@ -5692,6 +5698,38 @@ impl AxonAbilityCatalog {
             .read()
             .expect("execution_index RwLock poisoned")
             .resolve_rpc(ability)
+    }
+
+    /// Resolve an RPC handler for the exact authority-scoped runtime key.
+    ///
+    /// This is the production surface for callers that have already resolved a
+    /// descriptor under a concrete authority root. It intentionally does not
+    /// fall back to a same-name handler under any other authority: same public
+    /// ability name across Device, RealmAuthority, User, and Agent roots is a
+    /// normal catalogue state, not an ambiguity the execution index may repair.
+    pub fn resolve_rpc_for_authority(
+        &self,
+        authority_root: &str,
+        ability: &str,
+    ) -> anyhow::Result<Option<LocalRpcHandler>> {
+        if self
+            .control_plane_record_for_authority_mode(
+                authority_root,
+                ability,
+                DescriptorCallMode::Rpc,
+            )?
+            .is_none()
+        {
+            anyhow::bail!(
+                "RPC ability {ability:?} is not registered under authority {authority_root:?}"
+            );
+        }
+        let key = ControlPlaneAbilityKey::new(authority_root, ability);
+        Ok(self
+            .execution_index
+            .read()
+            .expect("execution_index RwLock poisoned")
+            .resolve_rpc_for_key(&key))
     }
 
     /// Owned-clone counterpart of `get_stream` that also consults

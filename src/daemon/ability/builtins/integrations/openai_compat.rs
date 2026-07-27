@@ -775,21 +775,10 @@ fn invoke_user_owned_rpc(
 ) -> anyhow::Result<Value> {
     let ability = ability.into();
     let subject_ura = subject_ura.into();
-    registry
-        .control_plane_record_for_authority_mode(
-            authority_root,
-            &ability,
-            crate::daemon::ability::CallMode::Rpc,
-        )?
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "user-owned ability {ability:?} is not registered under authority {authority_root:?}"
-            )
-        })?;
     crate::core::ura::parse_ura(&subject_ura)
         .map_err(|err| anyhow::anyhow!("user-owned ability subject is not a valid URA: {err}"))?;
     let handler = registry
-        .resolve_rpc(&ability)
+        .resolve_rpc_for_authority(authority_root, &ability)?
         .ok_or_else(|| anyhow::anyhow!("user-owned ability {ability:?} has no RPC handler"))?;
     handler(args)
 }
@@ -1253,6 +1242,46 @@ mod tests {
             error.to_string().contains("explicit realm"),
             "unexpected error: {error}"
         );
+    }
+
+    #[test]
+    fn user_owned_rpc_dispatch_uses_exact_authority_handler() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let mut reg = executable_test_catalog("example");
+        register_test_files_rpc(
+            &mut reg,
+            "example",
+            "alice",
+            "files.put",
+            "invoke",
+            Arc::new(|_args: Value| Ok(json!({"owner": "user"}))) as LocalRpcHandler,
+        );
+        register_test_rpc(
+            &mut reg,
+            "files.put",
+            OwnerKind::Device,
+            "invoke",
+            Arc::new(|_args: Value| Ok(json!({"owner": "device"}))) as LocalRpcHandler,
+        );
+
+        assert!(
+            reg.resolve_rpc("files.put").is_none(),
+            "bare ability-name resolution must fail closed across authority roots"
+        );
+        let files_authority =
+            crate::daemon::ability::builtins::resources::files_store::management_agent_ura(
+                "example", "alice",
+            );
+        let got = invoke_user_owned_rpc(
+            &reg,
+            &files_authority,
+            "files.put",
+            files_authority.clone(),
+            json!({}),
+        )
+        .expect("user-owned OpenAI compatibility dispatch must use the exact User authority key");
+
+        assert_eq!(got, json!({"owner": "user"}));
     }
 
     #[test]
