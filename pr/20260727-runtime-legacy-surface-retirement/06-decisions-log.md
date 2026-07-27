@@ -48,3 +48,15 @@ Decision: make Java `RuntimeReceipt.canonicalReceiptType` throw on unknown canon
 Reason: Java had the same internal fail-open sentinel as Swift. Even if current construction validates `state` before binding `receipt_type`, proof-fact validation helpers should not encode unknown lifecycle states as data. Receipt type derivation must be total only over known lifecycle states and explicit-failing otherwise.
 
 Boundary: no new Java public API was introduced. The regression test reaches the private helper by reflection only to lock the internal invariant; valid receipt behavior and public interfaces remain unchanged.
+
+## Device directory user-binding state machine
+
+Decision: model `device list` directory reads as three explicit states:
+
+- bound user credentials: read `federation.discover` through the user-scoped directory path;
+- unbound federation-native credentials: fail closed at the CLI boundary because no user-scoped directory principal exists;
+- local Authority daemon: read the operator/audit directory path.
+
+Reason: a clean Hub-URA join can intentionally produce a federation-native device credential without a user binding. Treating that as a missing legacy `user_id` sent the product path into an unauthorized operator/audit invocation from a Device daemon and surfaced daemon-internal `AUTHORITY_DENIED`/`LOCAL_BOOTSTRAP_OWNER_UNAVAILABLE`. The runtime state itself is valid; the unsupported capability is the user-scoped product directory read.
+
+Boundary: this does not add a compatibility fallback, does not synthesize a user id, and does not allow a Device daemon to use the Authority operator/audit directory. A user-facing product device directory still requires either a bound User principal or an Authority daemon.

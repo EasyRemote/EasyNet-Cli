@@ -44,3 +44,13 @@
 - [x] Add Java regression coverage for the private helper's unknown lifecycle-state branch without exposing new public API.
 - [x] Run focused Java tests and repository gates.
 - [x] Commit if stable.
+
+## Iteration 6 — Device directory user-binding state machine
+
+- [x] Reproduce clean hub + clean federation-native device join after user authorized clearing old runtime state.
+- [x] Verify `meta.list_abilities` and `invocation.history.list` succeed on the clean paired device with descriptor refs and verified receipt chains.
+- [x] Identify `device list` as a product boundary that treated unbound federation-native credentials as a missing legacy user id.
+- [x] Refactor device directory read selection into explicit bound-user, unbound-federation-native, and local-authority states.
+- [x] Fail closed at the CLI boundary for unbound federation-native device directory reads instead of sending an unauthorized operator/audit request to the daemon.
+- [x] Add regression coverage for bound and unbound credential states.
+- [x] Run focused tests and clean-state command verification.

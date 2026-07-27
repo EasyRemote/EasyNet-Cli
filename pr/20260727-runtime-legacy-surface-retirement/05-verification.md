@@ -56,3 +56,29 @@
 - `cargo fmt --check`
 - `git diff --check`
 - `/Users/macbook.silan.tech/.local/bin/codegraph sync`
+
+## Iteration 6
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph --version`
+  - verified codegraph `1.4.1`.
+- `/Users/macbook.silan.tech/.local/bin/codegraph query "LocalRuntime catalogue descriptor provider remote meta.list_abilities invocation.history.list authority subject key service"`
+- Clean hub/runtime verification:
+  - stopped existing daemon if present.
+  - moved prior runtime state aside after user authorization.
+  - generated local CA:FALSE SAN cert for localhost hub testing.
+  - `./target/debug/easynet runtime start --as-hub --tenant localhost --bind 0.0.0.0:50443 --cert /Users/macbook.silan.tech/.easynet/dev-certs/hub.cert.pem --key /Users/macbook.silan.tech/.easynet/dev-certs/hub.key.pem`
+- Clean federation-native device verification:
+  - `HOME=/tmp/easynet-device-clean-... ./target/debug/easynet device join easynet:///r/localhost/authority --hub-ca /Users/macbook.silan.tech/.easynet/dev-certs/hub.cert.pem --hub-port 50443 --peer-hub https://127.0.0.1:50443 --boot no --yes`
+  - `HOME=/tmp/easynet-device-clean-... ./target/debug/easynet runtime start`
+  - `HOME=/tmp/easynet-device-clean-... ./target/debug/easynet status`
+  - `HOME=/tmp/easynet-device-clean-... ./target/debug/easynet ability list --format json`
+    - verified exactly one `meta.list_abilities` descriptor for the clean device.
+    - verified exactly one `invocation.history.list` descriptor for the clean device.
+    - verified no `browser.open_session` ability is present in this daemon catalogue.
+  - `HOME=/tmp/easynet-device-clean-... ./target/debug/easynet invocation list --format json`
+    - verified local history read succeeds and receipt chains are `verified=true`.
+  - `HOME=/tmp/easynet-device-clean-... ./target/debug/easynet device list --format json`
+    - verified failure is now a CLI boundary state: unbound federation-native device requires a user-bound runtime identity or local Authority daemon.
+- `cargo fmt --check`
+- `cargo test cli::commands::devices::tests::`
+- `cargo build --bin easynet`

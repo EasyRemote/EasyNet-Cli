@@ -144,24 +144,36 @@ struct DeviceDirectoryRead {
 
 enum DeviceDirectoryReadScope {
     User { local_user_id: String },
+    UnboundFederationNative { reason: String },
     OperatorAudit,
 }
 
 impl DeviceDirectoryRead {
     fn load() -> anyhow::Result<Self> {
         match config::load_credentials() {
-            Ok(creds) => {
-                let current_node_id = creds.node_id.clone();
-                let local_user_id = creds.user_id()?.to_string();
-                let self_ura = crate::core::ura::device_ura(&creds.realm, &creds.node_id);
-                Ok(Self {
-                    scope: DeviceDirectoryReadScope::User { local_user_id },
-                    current_node_id,
-                    self_ura: Some(self_ura),
-                })
-            }
+            Ok(creds) => Self::from_credentials(creds),
             Err(error) => Self::load_operator_audit_for_local_authority(error),
         }
+    }
+
+    fn from_credentials(creds: config::Credentials) -> anyhow::Result<Self> {
+        let current_node_id = creds.node_id.clone();
+        let self_ura = crate::core::ura::device_ura(&creds.realm, &creds.node_id);
+        let scope = match creds.runtime_user_binding()? {
+            config::RuntimeUserBinding::Bound { .. } => DeviceDirectoryReadScope::User {
+                local_user_id: creds.user_id()?.to_string(),
+            },
+            config::RuntimeUserBinding::Unbound { reason } => {
+                DeviceDirectoryReadScope::UnboundFederationNative {
+                    reason: reason.to_string(),
+                }
+            }
+        };
+        Ok(Self {
+            scope,
+            current_node_id,
+            self_ura: Some(self_ura),
+        })
     }
 
     fn load_operator_audit_for_local_authority(
@@ -201,6 +213,12 @@ fn fetch_directory_entries(read: &DeviceDirectoryRead) -> anyhow::Result<Vec<Val
                 local_user_id,
             )
             .context("invoke user-scoped federation.discover for device list")
+        }
+        DeviceDirectoryReadScope::UnboundFederationNative { reason } => {
+            anyhow::bail!(
+                "device list requires a user-bound runtime identity; current device is {reason}. \
+                 Bind a user principal during join, or run device list from a local Authority daemon."
+            )
         }
         DeviceDirectoryReadScope::OperatorAudit => {
             crate::daemon::federation::directory_reader::read_federated_directory_for_operator_audit(
@@ -552,6 +570,69 @@ mod tests {
             error.to_string().contains("does not match Device URA id"),
             "wrong error: {error}"
         );
+    }
+
+    #[test]
+    fn directory_read_uses_user_scope_for_bound_credentials() {
+        let read = DeviceDirectoryRead::from_credentials(test_credentials(Some("alice"), None))
+            .expect("bound credentials");
+
+        assert_eq!(read.current_node_id, "dev-a");
+        assert_eq!(
+            read.self_ura.as_deref(),
+            Some("easynet:///r/r1/device/dev-a")
+        );
+        match read.scope {
+            DeviceDirectoryReadScope::User { local_user_id } => {
+                assert_eq!(local_user_id, "alice");
+            }
+            DeviceDirectoryReadScope::UnboundFederationNative { .. }
+            | DeviceDirectoryReadScope::OperatorAudit => {
+                panic!("bound credentials must keep user-scoped directory read");
+            }
+        }
+    }
+
+    #[test]
+    fn directory_read_marks_unbound_federation_native_credentials_unsupported_for_user_directory() {
+        let read = DeviceDirectoryRead::from_credentials(test_credentials(
+            None,
+            Some("join-receipt-hash"),
+        ))
+        .expect("unbound federation-native credentials");
+
+        assert_eq!(read.current_node_id, "dev-a");
+        assert_eq!(
+            read.self_ura.as_deref(),
+            Some("easynet:///r/r1/device/dev-a")
+        );
+        match read.scope {
+            DeviceDirectoryReadScope::UnboundFederationNative { reason } => {
+                assert!(reason.contains("federation-native device credential"));
+            }
+            DeviceDirectoryReadScope::User { .. } | DeviceDirectoryReadScope::OperatorAudit => {
+                panic!("unbound federation-native device must not enter a directory read scope");
+            }
+        }
+    }
+
+    fn test_credentials(
+        user_id: Option<&str>,
+        join_receipt_hash: Option<&str>,
+    ) -> config::Credentials {
+        config::Credentials {
+            node_id: "dev-a".to_string(),
+            credential_token: "token".to_string(),
+            hub_endpoint: "https://hub.example".to_string(),
+            realm: "r1".to_string(),
+            deploy_signature: "sig".to_string(),
+            hub_api_base: None,
+            username: user_id.map(str::to_string),
+            user_id: user_id.map(str::to_string),
+            hub_pubkey_b64: None,
+            hub_tls_ca_pem_b64: None,
+            join_receipt_hash: join_receipt_hash.map(str::to_string),
+        }
     }
 
     #[test]
