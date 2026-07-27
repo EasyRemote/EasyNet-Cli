@@ -36,7 +36,9 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+#[cfg(feature = "native-media")]
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -86,8 +88,10 @@ pub trait MicBackend: Send + Sync {
 /// shaped frame on the broadcast channel, and ends when the
 /// channel's last receiver drops.
 #[derive(Debug, Default)]
+#[cfg(feature = "native-media")]
 pub struct CpalMicBackend;
 
+#[cfg(feature = "native-media")]
 impl MicBackend for CpalMicBackend {
     fn open(&self, entry: &ResourceEntry) -> anyhow::Result<broadcast::Receiver<Value>> {
         use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -187,6 +191,7 @@ impl MicBackend for CpalMicBackend {
     }
 }
 
+#[cfg(feature = "native-media")]
 struct MicInputStreamParams {
     tx: broadcast::Sender<Value>,
     seq: Arc<AtomicU64>,
@@ -199,6 +204,7 @@ struct MicInputStreamParams {
 /// Build a cpal input stream for sample type `T`. Each callback
 /// converts the buffer to S16LE PCM and broadcasts a JSON frame.
 /// `Send`-bound on `T` so the closure can be moved into cpal.
+#[cfg(feature = "native-media")]
 fn build_input_stream<T>(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
@@ -265,10 +271,12 @@ fn build_frame(
 /// PCM sample → S16LE conversion helper. Implemented for the
 /// three cpal default sample formats we route in
 /// `CpalMicBackend::open`.
+#[cfg(feature = "native-media")]
 trait ToS16Pcm {
     fn to_s16(&self) -> i16;
 }
 
+#[cfg(feature = "native-media")]
 impl ToS16Pcm for f32 {
     fn to_s16(&self) -> i16 {
         let v = (*self * i16::MAX as f32).clamp(i16::MIN as f32, i16::MAX as f32);
@@ -276,12 +284,14 @@ impl ToS16Pcm for f32 {
     }
 }
 
+#[cfg(feature = "native-media")]
 impl ToS16Pcm for i16 {
     fn to_s16(&self) -> i16 {
         *self
     }
 }
 
+#[cfg(feature = "native-media")]
 impl ToS16Pcm for u16 {
     fn to_s16(&self) -> i16 {
         // Map [0, 65535] → [-32768, 32767]
@@ -320,7 +330,10 @@ pub fn register_with_backend(reg: &mut AxonAbilityCatalog, backend: Arc<dyn MicB
 }
 
 pub fn register(reg: &mut AxonAbilityCatalog) {
+    #[cfg(feature = "native-media")]
     register_with_backend(reg, Arc::new(CpalMicBackend));
+    #[cfg(all(not(feature = "native-media"), feature = "headless-media"))]
+    register_with_backend(reg, Arc::new(SyntheticMicBackend));
 }
 
 // ── Handler core ─────────────────────────────────────────────
@@ -751,6 +764,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "native-media")]
     #[test]
     fn s16_conversions_are_correct() {
         assert_eq!(0.0f32.to_s16(), 0);

@@ -69,6 +69,12 @@ native-media = [
     "dep:xcap",
 ]
 
+# Compile provider-backed synthetic media handlers for headless Docker/CI
+# runtime artifacts. This keeps canonical media routes and receipt chains
+# present without linking native camera/screen/mic stacks into Linux images
+# that cannot access physical devices.
+headless-media = []
+
 # v10.5 R1 (PR-DAEMON): split historical binary-only crate into a
 # library + multiple bins. The library target carries all the
 # business modules and (future) C ABI exports; bins are thin entry

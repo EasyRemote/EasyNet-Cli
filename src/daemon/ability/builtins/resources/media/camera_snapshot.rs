@@ -53,7 +53,7 @@ use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(feature = "native-media", not(target_os = "macos")))]
 use std::sync::atomic::AtomicU64;
 
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
@@ -91,7 +91,7 @@ const DEFAULT_RECORDING_MAX_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_RECORDING_MAX_BYTES: u64 = 256 * 1024 * 1024;
 const RECORDING_STOP_TIMEOUT: Duration = Duration::from_secs(5);
 const RECORDING_BOUNDARY: &str = "easynet-camera-frame";
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(feature = "native-media", not(target_os = "macos")))]
 const NOKHWA_CAPTURE_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Reason strings the handler emits on terminal failures. Pinned
@@ -233,8 +233,10 @@ fn recording_sessions() -> &'static Mutex<HashMap<String, CameraRecordingSession
 /// `resource_not_found` (handled by the dispatch layer above)
 /// and `resource_unavailable` (this branch).
 #[derive(Debug, Default)]
+#[cfg(feature = "native-media")]
 pub struct NokhwaBackend;
 
+#[cfg(feature = "native-media")]
 impl SnapshotBackend for NokhwaBackend {
     fn capture_jpeg(&self, entry: &ResourceEntry) -> anyhow::Result<EncodedFrame> {
         #[cfg(target_os = "macos")]
@@ -261,7 +263,7 @@ impl SnapshotBackend for NokhwaBackend {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(feature = "native-media", not(target_os = "macos")))]
 fn capture_jpeg_with_nokhwa_with_timeout(entry: &ResourceEntry) -> anyhow::Result<EncodedFrame> {
     let entry = entry.clone();
     let (tx, rx) = std::sync::mpsc::channel();
@@ -278,7 +280,7 @@ fn capture_jpeg_with_nokhwa_with_timeout(entry: &ResourceEntry) -> anyhow::Resul
     })?
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(feature = "native-media", not(target_os = "macos")))]
 fn capture_jpeg_with_nokhwa(entry: &ResourceEntry) -> anyhow::Result<EncodedFrame> {
     let mut cam =
         open_camera_with_nokhwa(entry, ABILITY_CAMERA_SNAPSHOT, None, DEFAULT_CAMERA_FPS)?;
@@ -287,7 +289,7 @@ fn capture_jpeg_with_nokhwa(entry: &ResourceEntry) -> anyhow::Result<EncodedFram
     capture_open_nokhwa_frame(&mut cam, ABILITY_CAMERA_SNAPSHOT, true)
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(feature = "native-media", not(target_os = "macos")))]
 fn open_camera_with_nokhwa(
     entry: &ResourceEntry,
     ability: &'static str,
@@ -353,7 +355,7 @@ fn open_camera_with_nokhwa(
     Ok(cam)
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(feature = "native-media", not(target_os = "macos")))]
 fn open_nokhwa_stream(cam: &mut nokhwa::Camera, ability: &'static str) -> anyhow::Result<()> {
     cam.open_stream().map_err(|e| {
         anyhow::anyhow!(
@@ -363,7 +365,7 @@ fn open_nokhwa_stream(cam: &mut nokhwa::Camera, ability: &'static str) -> anyhow
     })
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(feature = "native-media", not(target_os = "macos")))]
 fn capture_open_nokhwa_frame(
     cam: &mut nokhwa::Camera,
     ability: &'static str,
@@ -409,7 +411,7 @@ fn capture_open_nokhwa_frame(
     })
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(feature = "native-media", not(target_os = "macos")))]
 fn open_stream_with_nokhwa(
     entry: ResourceEntry,
     options: CameraStreamOptions,
@@ -662,7 +664,10 @@ pub fn register_with_backend(reg: &mut AxonAbilityCatalog, backend: Arc<dyn Snap
 /// instead — the trait keeps the dispatch / receipt code
 /// backend-agnostic.
 pub fn register(reg: &mut AxonAbilityCatalog) {
+    #[cfg(feature = "native-media")]
     register_with_backend(reg, Arc::new(NokhwaBackend));
+    #[cfg(all(not(feature = "native-media"), feature = "headless-media"))]
+    register_with_backend(reg, Arc::new(SyntheticBackend));
 }
 
 // ── Handler core ─────────────────────────────────────────────

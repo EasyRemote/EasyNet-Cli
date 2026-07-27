@@ -720,7 +720,7 @@ fn build_registry_with_services_result_inner(
     // own live route registration directly. Unsupported/seam rows
     // must not publish args-only compatibility stubs.
     media::register(&mut reg);
-    #[cfg(feature = "native-media")]
+    #[cfg(any(feature = "native-media", feature = "headless-media"))]
     {
         media::camera_snapshot::register(&mut reg);
         media::screen_snapshot::register(&mut reg);

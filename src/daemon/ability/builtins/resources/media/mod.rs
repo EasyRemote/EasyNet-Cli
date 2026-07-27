@@ -35,7 +35,7 @@ pub use abilities::*;
 /// native AVFoundation still capture on macOS and nokhwa-backed
 /// camera IO on other platforms; tests use `SyntheticBackend` so the
 /// suite remains hardware-free.
-#[cfg(feature = "native-media")]
+#[cfg(any(feature = "native-media", feature = "headless-media"))]
 pub mod camera_snapshot;
 
 #[cfg(all(target_os = "macos", feature = "native-media"))]
@@ -45,7 +45,7 @@ mod avfoundation_camera;
 /// vertical slice mirroring `camera_snapshot`'s shape. Real
 /// backend (`XcapBackend`) captures the primary monitor; tests
 /// use `SyntheticScreenBackend` so the suite runs hardware-free.
-#[cfg(feature = "native-media")]
+#[cfg(any(feature = "native-media", feature = "headless-media"))]
 pub mod screen_snapshot;
 
 /// `mic.subscribe` (RFC-005 v3.2 A1) — real handler. cpal-backed
@@ -53,7 +53,7 @@ pub mod screen_snapshot;
 /// dedicated thread and broadcasts S16LE PCM frames through a
 /// `tokio::sync::broadcast`. Tests use `SyntheticMicBackend`
 /// which emits a single zero-filled frame.
-#[cfg(feature = "native-media")]
+#[cfg(any(feature = "native-media", feature = "headless-media"))]
 pub mod mic_subscribe;
 #[cfg(feature = "native-media")]
 pub mod resource_bootstrap;

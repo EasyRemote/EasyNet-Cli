@@ -26,8 +26,10 @@
 // Copyright (c) 2026 EasyNet.
 
 use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(feature = "native-media")]
 use std::sync::mpsc::Receiver;
 use std::sync::Arc;
+#[cfg(feature = "native-media")]
 use std::time::{Duration, Instant};
 
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
@@ -142,8 +144,10 @@ pub trait ScreenSnapshotBackend: Send + Sync {
 /// to the primary monitor. Window/application captures select an xcap window
 /// by recorded id, pid, title, or application name.
 #[derive(Debug, Default)]
+#[cfg(feature = "native-media")]
 pub struct XcapBackend;
 
+#[cfg(feature = "native-media")]
 impl ScreenSnapshotBackend for XcapBackend {
     fn capture_jpeg(
         &self,
@@ -203,6 +207,7 @@ impl ScreenSnapshotBackend for XcapBackend {
     }
 }
 
+#[cfg(feature = "native-media")]
 fn capture_screen_with_xcap(
     entry: &ResourceEntry,
     options: &ScreenCaptureOptions,
@@ -216,6 +221,7 @@ fn capture_screen_with_xcap(
     })
 }
 
+#[cfg(feature = "native-media")]
 pub fn capture_rgb_with_xcap(
     entry: &ResourceEntry,
     options: &ScreenCaptureOptions,
@@ -233,6 +239,7 @@ pub fn capture_rgb_with_xcap(
     }
 }
 
+#[cfg(feature = "native-media")]
 fn capture_display_rgb_with_xcap(
     entry: &ResourceEntry,
     options: &ScreenCaptureOptions,
@@ -254,6 +261,7 @@ fn capture_display_rgb_with_xcap(
     rgba_image_to_rgb_frame(rgba, options)
 }
 
+#[cfg(feature = "native-media")]
 fn capture_window_rgb_with_xcap(
     entry: &ResourceEntry,
     options: &ScreenCaptureOptions,
@@ -268,6 +276,7 @@ fn capture_window_rgb_with_xcap(
     rgba_image_to_rgb_frame(rgba, options)
 }
 
+#[cfg(feature = "native-media")]
 fn rgba_image_to_rgb_frame(
     rgba: xcap::image::RgbaImage,
     options: &ScreenCaptureOptions,
@@ -305,6 +314,7 @@ pub fn rgba_bytes_to_rgb_frame(
     })
 }
 
+#[cfg(feature = "native-media")]
 fn select_monitor(
     monitors: Vec<xcap::Monitor>,
     entry: &ResourceEntry,
@@ -337,6 +347,7 @@ fn select_monitor(
     })
 }
 
+#[cfg(feature = "native-media")]
 pub fn open_display_recorder_with_xcap(
     entry: &ResourceEntry,
 ) -> anyhow::Result<(xcap::VideoRecorder, Receiver<xcap::Frame>)> {
@@ -362,6 +373,7 @@ pub fn open_display_recorder_with_xcap(
     })
 }
 
+#[cfg(feature = "native-media")]
 fn select_window(entry: &ResourceEntry) -> anyhow::Result<xcap::Window> {
     let windows = xcap::Window::all().map_err(|e| {
         anyhow::anyhow!(
@@ -376,6 +388,7 @@ fn select_window(entry: &ResourceEntry) -> anyhow::Result<xcap::Window> {
     }
 }
 
+#[cfg(feature = "native-media")]
 fn select_window_by_id_or_name(
     windows: Vec<xcap::Window>,
     entry: &ResourceEntry,
@@ -428,6 +441,7 @@ fn select_window_by_id_or_name(
         })
 }
 
+#[cfg(feature = "native-media")]
 fn select_application_window(
     windows: Vec<xcap::Window>,
     entry: &ResourceEntry,
@@ -754,7 +768,7 @@ impl ScreenSnapshotBackend for SyntheticScreenBackend {
         entry: ResourceEntry,
         options: ScreenCaptureOptions,
     ) -> anyhow::Result<broadcast::Receiver<Value>> {
-        let (tx, rx) = broadcast::channel::<Value>(8);
+        let (tx, rx) = broadcast::channel::<Value>(BROADCAST_CAPACITY);
         let seq = Arc::new(AtomicU64::new(0));
         let frame = self.capture_jpeg(&entry, &options)?;
         let _ = tx.send(build_screen_frame(&seq, &entry.hardware_id, frame));
@@ -792,7 +806,10 @@ pub fn register_with_backend(
 /// `register_with_backend(reg, Arc::new(SyntheticScreenBackend))`
 /// instead.
 pub fn register(reg: &mut AxonAbilityCatalog) {
+    #[cfg(feature = "native-media")]
     register_with_backend(reg, Arc::new(XcapBackend));
+    #[cfg(all(not(feature = "native-media"), feature = "headless-media"))]
+    register_with_backend(reg, Arc::new(SyntheticScreenBackend));
 }
 
 // ── Handler core ─────────────────────────────────────────────

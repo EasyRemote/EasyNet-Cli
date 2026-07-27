@@ -153,6 +153,7 @@ if [[ "$SELF_TEST" == "1" ]]; then
   grep -q "resolve_docker" "$0"
   grep -q "extend_tool_path" "$0"
   grep -q "random_nonce_hex" "$0"
+  grep -q "headless-media" "$SELF_DIR/build-linux-cli-artifact-bundle.sh"
   grep -q "wait_device_online provider /home/provider" "$0"
   grep -q "docker compose" "$0"
   echo "docker-media-bidi-e2e self-test ok"
