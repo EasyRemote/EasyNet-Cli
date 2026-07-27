@@ -817,6 +817,7 @@ max_frame_queue = 1
 [[ability_metadata]]
 name = "test.echo"
 layer = "control"
+call_mode = "rpc"
 "#;
 
         let err = match PluginPackage::from_builtin(BuiltinPluginBinding::new(
@@ -1068,6 +1069,7 @@ max_frame_queue = 1
 [[ability_metadata]]
 name = "test.echo"
 layer = "control"
+call_mode = "rpc"
 "#,
         )
         .expect("manifest");
@@ -1121,6 +1123,7 @@ max_frame_queue = 1
 [[ability_metadata]]
 name = "test.echo"
 layer = "control"
+call_mode = "rpc"
 "#
             ),
         )

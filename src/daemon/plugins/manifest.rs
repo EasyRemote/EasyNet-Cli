@@ -570,7 +570,6 @@ struct RawPluginToml {
 struct RawPluginAbilityMetadata {
     name: String,
     layer: PluginAbilityLayer,
-    #[serde(default = "default_call_mode")]
     call_mode: CallMode,
     #[serde(default)]
     bidi_wire_kind: Option<PluginBidiWireKind>,
@@ -1000,10 +999,6 @@ fn descriptor_dir_from_ability_patterns(
     Ok(format!("{package_dir}/{relative_dir}"))
 }
 
-fn default_call_mode() -> CallMode {
-    CallMode::Rpc
-}
-
 fn validate_ability_name(name: &str) -> Result<()> {
     let valid = name
         .bytes()
@@ -1186,6 +1181,7 @@ max_frame_queue = 1
 [[ability_metadata]]
 name = "test.echo"
 layer = "operational"
+call_mode = "rpc"
 "#,
             "retired_kind_alias",
         );
@@ -1198,6 +1194,7 @@ layer = "operational"
 [[ability_metadata]]
 name = "test.echo"
 layer = "operational"
+call_mode = "rpc"
 "#,
         )
         .replace("kind = \"sidecar\"", "kind = \"stateful-device-plugin\"");
@@ -1221,10 +1218,35 @@ layer = "operational"
 [[ability_metadata]]
 name = "test.echo"
 layer = "operational"
+call_mode = "rpc"
 retired_call_mode = "rpc"
 "#,
             ),
             "retired_call_mode",
+        );
+    }
+
+    #[test]
+    fn manifest_rejects_missing_ability_call_mode() {
+        let err = PluginPackageManifest::parse(
+            "plugins/test/plugin.toml",
+            &test_manifest(
+                r#"
+[[ability_metadata]]
+name = "test.echo"
+layer = "operational"
+"#,
+            ),
+        )
+        .expect_err("ability call_mode must be explicit");
+
+        assert!(
+            matches!(err, PluginHostError::ManifestParseFailed { .. }),
+            "missing call_mode must fail at typed parse, got: {err}"
+        );
+        assert!(
+            format!("{err}").contains("missing field `call_mode`"),
+            "missing call_mode rejection should name field: {err}"
         );
     }
 
@@ -1272,6 +1294,7 @@ retired_queue = 1024
 [[ability_metadata]]
 name = "test.echo"
 layer = "operational"
+call_mode = "rpc"
 "#,
             "retired_queue",
         );
@@ -1303,6 +1326,7 @@ retired_shell = true
 [[ability_metadata]]
 name = "test.echo"
 layer = "operational"
+call_mode = "rpc"
 "#,
             "retired_shell",
         );

@@ -331,10 +331,12 @@ mod tests {
 [[ability_metadata]]
 name = "test.echo"
 layer = "control"
+call_mode = "rpc"
 
 [[ability_metadata]]
 name = "test.echo"
 layer = "observation"
+call_mode = "rpc"
 "#,
         );
         assert_eq!(
@@ -350,6 +352,7 @@ layer = "observation"
 [[ability_metadata]]
 name = "../device.test.escape"
 layer = "control"
+call_mode = "rpc"
 "#,
         );
         assert_eq!(
@@ -380,6 +383,7 @@ max_frame_queue = 1
 [[ability_metadata]]
 name = "test.echo"
 layer = "control"
+call_mode = "rpc"
 "#;
         assert_eq!(
             PluginPackageManifest::parse("plugins/test/plugin.toml", raw),

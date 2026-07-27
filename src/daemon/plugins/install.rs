@@ -994,6 +994,7 @@ max_frame_queue = 1
 [[ability_metadata]]
 name = "{ability}"
 layer = "control"
+call_mode = "rpc"
 "#
             ),
         )
@@ -1034,6 +1035,7 @@ argv = ["bin/exec-plugin"]
 [[ability_metadata]]
 name = "test.declarative_echo"
 layer = "control"
+call_mode = "rpc"
 "#
             ),
         )
@@ -1073,6 +1075,7 @@ program = "mission \"noop\" {{}}"
 [[ability_metadata]]
 name = "test.declarative_eal"
 layer = "control"
+call_mode = "rpc"
 "#
             ),
         )
@@ -1164,6 +1167,7 @@ tool = "test-tool"
 [[ability_metadata]]
 name = "test.declarative_mcp"
 layer = "control"
+call_mode = "rpc"
 "#
             ),
         )

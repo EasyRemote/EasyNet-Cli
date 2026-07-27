@@ -189,6 +189,7 @@ max_frame_queue = 1
 [[ability_metadata]]
 name = "test.echo"
 layer = "control"
+call_mode = "rpc"
 "#
         )
     }

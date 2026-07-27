@@ -885,6 +885,7 @@ argv = ["bin/exec-plugin"]
 [[ability_metadata]]
 name = "test.declarative_echo"
 layer = "control"
+call_mode = "rpc"
 "#,
         )
         .expect("manifest");
@@ -935,6 +936,7 @@ program = "mission \"{{ name }}\" {}"
 [[ability_metadata]]
 name = "test.declarative_eal"
 layer = "control"
+call_mode = "rpc"
 "#,
         )
         .expect("manifest");
@@ -972,6 +974,7 @@ tool = "test-tool"
 [[ability_metadata]]
 name = "test.declarative_mcp"
 layer = "control"
+call_mode = "rpc"
 "#,
         )
         .expect("manifest");
@@ -1006,6 +1009,7 @@ max_frame_queue = 1
 [[ability_metadata]]
 name = "{ability}"
 layer = "control"
+call_mode = "rpc"
 "#
             ),
         )
