@@ -459,7 +459,8 @@ mod tests {
             CallMode::Rpc,
             subject,
             CausalContext::None,
-        );
+        )
+        .expect("valid public tuple target");
 
         let error = match local_system_request(
             &runtime,

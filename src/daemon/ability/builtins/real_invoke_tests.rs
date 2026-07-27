@@ -383,6 +383,7 @@ fn explicit_target(
         subject,
         causal_context,
     )
+    .expect("real invoke test explicit target must be canonical")
 }
 
 fn terminal_followup_target(

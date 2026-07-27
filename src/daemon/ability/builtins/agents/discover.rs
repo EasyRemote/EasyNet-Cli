@@ -578,8 +578,9 @@ fn delegate_to_provider(
     })?;
     let provider = DiscoverProviderTarget::resolve(provider_name, &agents, registry)?;
     let provider_registry_name = provider.registry_name().to_string();
+    let provider_target = provider.into_invocation_target(args)?;
     registry
-        .invoke_rpc_target_json(provider.into_invocation_target(args))
+        .invoke_rpc_target_json(provider_target)
         .map_err(|err| {
             anyhow::anyhow!(
                 "discover: provider {provider_registry_name:?} is not registered or failed. Pick a registered \
@@ -634,7 +635,7 @@ impl DiscoverProviderTarget {
         &self.registry_name
     }
 
-    fn into_invocation_target(self, args: Value) -> InvocationTarget {
+    fn into_invocation_target(self, args: Value) -> anyhow::Result<InvocationTarget> {
         PublicInvocationTargetIssuer::local_explicit_tuple(
             self.ability_ura,
             args,
@@ -2086,7 +2087,9 @@ mod tests {
 
         let target =
             DiscoverProviderTarget::resolve("userx.discover", &agents, &reg).expect("provider");
-        let invocation_target = target.into_invocation_target(json!({"query": "weather"}));
+        let invocation_target = target
+            .into_invocation_target(json!({"query": "weather"}))
+            .expect("valid provider invocation target");
 
         assert!(
             crate::core::ura::AbilitySelector::parse(&invocation_target.ability).is_ok(),

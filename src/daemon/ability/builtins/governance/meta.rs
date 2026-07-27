@@ -727,7 +727,7 @@ mod tests {
             ABILITY_LIST_ABILITIES,
             callee_ura,
             args,
-        ))
+        )?)
     }
 
     fn invoke_describe_targeted(
@@ -738,14 +738,14 @@ mod tests {
             ABILITY_DESCRIBE,
             callee_ura,
             json!({}),
-        ))
+        )?)
     }
 
     fn explicit_meta_target(
         ability: &str,
         callee_ura: &str,
         args: Value,
-    ) -> crate::daemon::invocation::routing::target::InvocationTarget {
+    ) -> anyhow::Result<crate::daemon::invocation::routing::target::InvocationTarget> {
         let ability_ura = crate::core::ura::owner_ability_ura(callee_ura, ability)
             .expect("canonical meta ability URA for explicit target");
         let callee = crate::core::ura::parse_ura(callee_ura)

@@ -593,21 +593,21 @@ impl SystemInvocationTargetIssuer {
 pub struct PublicInvocationTargetIssuer;
 
 impl PublicInvocationTargetIssuer {
-    #[must_use]
     pub fn local_explicit_tuple(
         ability: impl Into<String>,
         normalized_args: Value,
         call_mode: CallMode,
         subject: impl Into<String>,
         causal_context: CausalContext,
-    ) -> InvocationTarget {
-        InvocationTarget::local_explicit_tuple(
+    ) -> anyhow::Result<InvocationTarget> {
+        let subject = checked_public_subject(subject.into())?;
+        Ok(InvocationTarget::local_explicit_tuple(
             ability,
             normalized_args,
             call_mode,
             subject,
             causal_context,
-        )
+        ))
     }
 }
 
@@ -910,13 +910,14 @@ mod tests {
     #[test]
     fn local_explicit_tuple_constructor_preserves_causal_context() {
         let causal_context = CausalContext::None;
-        let target = InvocationTarget::local_explicit_tuple(
+        let target = PublicInvocationTargetIssuer::local_explicit_tuple(
             "camera.snapshot",
             json!({}),
             CallMode::Rpc,
             "easynet:///r/acme/resource/camera.1",
             causal_context.clone(),
-        );
+        )
+        .expect("valid public tuple target");
 
         assert_eq!(
             target.subject.as_deref(),
@@ -925,6 +926,24 @@ mod tests {
         assert_eq!(
             target.causal_context,
             InvocationCausalContext::explicit(causal_context)
+        );
+    }
+
+    #[test]
+    fn public_explicit_tuple_issuer_rejects_invalid_subject_before_target_construction() {
+        let error = PublicInvocationTargetIssuer::local_explicit_tuple(
+            "camera.snapshot",
+            json!({}),
+            CallMode::Rpc,
+            "not-a-ura",
+            CausalContext::None,
+        )
+        .expect_err("public ingress subject must fail before target construction");
+        assert!(
+            error
+                .to_string()
+                .contains("public invocation ingress subject"),
+            "issuer must report the public ingress boundary: {error}"
         );
     }
 
