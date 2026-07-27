@@ -1029,7 +1029,7 @@ mod tests {
     use crate::core::agent::spec::{AgentSpec, RuntimeKind};
     use crate::daemon::execution::mission::directory::{AgentDirectory, Location};
     use crate::daemon::persistence::agent_registry as agents;
-    use crate::daemon::persistence::agent_registry::{AgentEntry, AgentRegistry, AgentType};
+    use crate::daemon::persistence::agent_registry::{AgentEntry, AgentType};
 
     fn materialise_agent(tag: &str, _guard: &HomeGuard) -> String {
         materialise_agent_with_runtime(tag, RuntimeKind::ClaudeCode, AgentType::ClaudeCode)
@@ -1055,7 +1055,8 @@ mod tests {
             spec,
         )
         .unwrap();
-        let mut registry = agents::load_agents().unwrap_or_else(|_| AgentRegistry::default());
+        let mut registry = agents::load_agents()
+            .expect("skill publish test fixture must not hide malformed agent registry state");
         let mut entry = AgentEntry::new(agent_type, None);
         entry.root_path = Some(agent_root.clone());
         registry.agents.insert(format!("default/{name}"), entry);
@@ -1167,6 +1168,32 @@ mod tests {
         }))
         .unwrap_err();
         assert!(format!("{err}").contains("already exists"));
+    }
+
+    #[test]
+    fn publish_rejects_malformed_agent_registry_before_defaulting_empty() {
+        let _g = HomeGuard::new();
+        let agents_path = crate::daemon::persistence::config::state_dir().join("agents.json");
+        std::fs::create_dir_all(
+            agents_path
+                .parent()
+                .expect("canonical agents registry path has parent"),
+        )
+        .expect("create state dir");
+        std::fs::write(&agents_path, b"{not-json")
+            .expect("write malformed agents registry sentinel");
+
+        let err = publish_handler(json!({
+            "owner_agent_id": "publish-corrupt-registry",
+            "skill_name": "summarise-niche",
+            "skill_md": "# Skill\n\nDo the thing.\n",
+        }))
+        .expect_err("malformed agent registry must fail closed before empty-registry fallback");
+        let message = err.to_string();
+        assert!(
+            message.contains("parse") && message.contains("agents.json"),
+            "expected malformed registry parse error, got: {message}"
+        );
     }
 
     #[test]

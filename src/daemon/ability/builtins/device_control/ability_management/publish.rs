@@ -548,7 +548,7 @@ mod tests {
             spec,
         )
         .unwrap();
-        let mut registry = agents::load_agents().unwrap_or_else(|_| AgentRegistry::default());
+        let mut registry = AgentRegistry::default();
         let mut entry = AgentEntry::new(AgentType::ClaudeCode, None);
         entry.root_path = Some(agent_root.clone());
         registry.agents.insert(format!("default/{name}"), entry);
@@ -654,6 +654,31 @@ type = "object"
         }))
         .unwrap_err();
         assert!(format!("{err}").contains("not registered"));
+    }
+
+    #[test]
+    fn publish_rejects_malformed_agent_registry_before_defaulting_empty() {
+        let _g = HomeGuard::new();
+        let agents_path = crate::daemon::persistence::config::state_dir().join("agents.json");
+        std::fs::create_dir_all(
+            agents_path
+                .parent()
+                .expect("canonical agents registry path has parent"),
+        )
+        .expect("create state dir");
+        std::fs::write(&agents_path, b"{not-json")
+            .expect("write malformed agents registry sentinel");
+
+        let err = publish_handler(json!({
+            "owner_ura": owner_ura("publish-corrupt-registry"),
+            "manifest_toml": well_formed_manifest_toml("foo"),
+        }))
+        .expect_err("malformed agent registry must fail closed before empty-registry fallback");
+        let message = err.to_string();
+        assert!(
+            message.contains("parse") && message.contains("agents.json"),
+            "expected malformed registry parse error, got: {message}"
+        );
     }
 
     #[test]
