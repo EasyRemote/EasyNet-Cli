@@ -13107,6 +13107,10 @@ for required in (
     "crate::core::identity::RuntimeGovernanceReadSubject::parse_for_callee(subject_ura, callee_ura)",
     "fn receipt_history_descriptor_subject_error(",
     "RuntimeGovernanceReadSubjectError::NotRuntimeGovernanceRead",
+    "descriptor_ref generic provider cannot resolve runtime catalogue read ability",
+    "descriptor_ref generic provider cannot resolve receipt history read ability",
+    'use provider \\"ability_descriptor\\"',
+    'use provider \\"receipt_history\\"',
 ):
     if required not in provider and required not in text:
         raise SystemExit(f"ffi_descriptor_runtime_owner:receipt_history_subject_gate_missing:{required}")
@@ -13174,6 +13178,7 @@ for required_test in (
     "runtime_descriptor_resolver_rejects_ability_owner_mismatch_before_catalog_lookup",
     "runtime_descriptor_resolver_rejects_receipt_provider_non_runtime_state_subjects",
     "runtime_descriptor_resolver_uses_explicit_provider_for_remote_receipt_read",
+    "runtime_descriptor_resolver_rejects_generic_remote_governance_read",
     "runtime_owner_resolution_rejects_relative_control_endpoint_before_cwd_lookup",
     "descriptor_resolution_errors_project_canonical_runtime_codes",
 ):

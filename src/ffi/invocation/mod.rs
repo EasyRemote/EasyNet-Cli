@@ -9572,13 +9572,14 @@ mod tests {
             &serde_json::json!({
                 "callee_ura": device_ura,
                 "caller_ura": device_ura,
-                "subject_ura": device_ura,
+                "subject_ura": crate::core::ura::hub_ura("localhost"),
                 "ability": ability_ura,
                 "call_mode": "rpc",
+                "provider": "ability_descriptor",
             })
             .to_string(),
         )
-        .expect("local runtime owner descriptor resolves without remote presence");
+        .expect("local runtime owner catalogue descriptor resolves through explicit provider");
 
         assert_eq!(resolved["ability_ura"], ability_ura);
         assert_eq!(resolved["owner_ura"], device_ura);
@@ -9965,17 +9966,13 @@ mod tests {
 
     #[cfg(feature = "axon-pb")]
     #[test]
-    fn runtime_descriptor_resolver_does_not_synthesize_remote_system_ability() {
+    fn runtime_descriptor_resolver_rejects_generic_remote_governance_read() {
         let dir = tempfile::tempdir().expect("tempdir");
         let control_path = dir.path().join("control.json");
         let local_node_id = "local-runtime-node";
         let remote_node_id = "a364ba18-8961-4b31-838a-31c7d776c709";
         let local_device_ura = crate::core::ura::device_ura("localhost", local_node_id);
         let remote_device_ura = crate::core::ura::device_ura("localhost", remote_node_id);
-        let ability_ura = format!(
-            "easynet:///r/localhost/ability/device.{remote_node_id}.{}",
-            crate::daemon::ability::builtins::governance::invocation_history::ABILITY_HISTORY_LIST
-        );
         crate::daemon::control::discovery::write(
             &control_path,
             &crate::daemon::control::discovery::ControlDiscovery {
@@ -10013,23 +10010,20 @@ mod tests {
             })
             .to_string(),
         )
-        .expect_err("remote system descriptors must not be synthesized from static catalog shape");
+        .expect_err("governance read descriptors must declare the canonical provider");
 
         let message = error.to_string();
         assert!(
-            message.contains("descriptor_ref not found in runtime realm catalog"),
-            "remote descriptor resolution must fail as a bounded realm catalog miss, got: {message}"
+            message.contains("generic provider cannot resolve receipt history read ability")
+                && message.contains("provider \"receipt_history\""),
+            "generic governance descriptor resolution must fail at provider boundary, got: {message}"
         );
         assert!(
-            !message.contains("runtime_system_descriptor_catalog"),
-            "remote descriptor resolution must not report static system-catalog success: {message}"
-        );
-        assert!(
-            message.contains(&ability_ura)
+            !message.contains("descriptor_ref not found")
                 && !message.contains("meta.list_abilities")
                 && !message.contains("requires a caller signer")
                 && !message.contains("ROUTE_NEGATIVE"),
-            "remote descriptor resolution must report only the requested catalog miss: {message}"
+            "generic governance read must not fall through to catalog/route/signer state: {message}"
         );
     }
 

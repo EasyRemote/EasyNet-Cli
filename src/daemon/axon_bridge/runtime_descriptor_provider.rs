@@ -97,6 +97,22 @@ impl RuntimeDescriptorProviderKind {
 
     fn require_ability(self, ability: &str) -> Result<(), DescriptorResolutionError> {
         match self {
+            Self::Generic
+                if crate::daemon::ability::names::governance::is_runtime_catalogue_read(ability) =>
+            {
+                Err(DescriptorResolutionError::invalid_request(format!(
+                    "descriptor_ref generic provider cannot resolve runtime catalogue read ability {ability:?}; use provider \"ability_descriptor\""
+                )))
+            }
+            Self::Generic
+                if crate::daemon::ability::names::governance::is_invocation_history_read(
+                    ability,
+                ) =>
+            {
+                Err(DescriptorResolutionError::invalid_request(format!(
+                    "descriptor_ref generic provider cannot resolve receipt history read ability {ability:?}; use provider \"receipt_history\""
+                )))
+            }
             Self::Generic => Ok(()),
             Self::AbilityDescriptor
                 if crate::daemon::ability::names::governance::is_runtime_catalogue_read(ability) =>
