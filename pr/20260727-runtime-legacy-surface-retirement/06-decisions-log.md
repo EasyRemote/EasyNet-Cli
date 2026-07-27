@@ -354,3 +354,25 @@ Boundary: this does not implement HMAC key derivation in the product bridge and
 does not claim end-to-end frame verification. It removes the compatibility
 default and forces callers that send data or EOF through FFI to provide the
 explicit frame-chain tag through the canonical send path.
+
+## Clean-state product route verification
+
+Decision: stale local runtime state is not a supported compatibility surface for
+the canonical runtime convergence cutover. When descriptor, signer, route, or
+authority-subject errors appear after broad identity/catalogue refactors, the
+first production-grade diagnostic is to purge the local state root through the
+canonical reset command and reprovision identity through Hub/device enrollment.
+
+Reason: the runtime model requires one coherent generation of credentials,
+keyring custody, descriptor catalogue, route projection, and receipt/admission
+facts. A mixed-generation `~/.easynet` tree can make the daemon present a valid
+device URA while the signer inventory, runtime catalogue, or authority subject
+projection belongs to an older generation. Repairing those files through hidden
+fallbacks would reintroduce the exact second-source architecture this work is
+removing.
+
+Boundary: this is not a waiver for product E2E coverage. Clean local
+hub/device E2E and Docker hub/provider/caller media stream+bidi E2E remain the
+acceptance evidence. Clean-state success means the current checkout does not
+need a compatibility patch for stale state; it does not prove all future
+frontend/backend paths are covered.

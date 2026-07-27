@@ -357,3 +357,31 @@
   - passed.
 - `/Users/macbook.silan.tech/.local/bin/codegraph sync`
   - passed; synced 2 changed code files.
+
+## Iteration 23
+
+- `target/debug/easynet device reset --purge-local-state --force --yes`
+  - passed; removed the approved local `~/.easynet` state root so stale
+    credentials, keyring, descriptor/read-model, registry, and daemon
+    discovery files cannot influence verification.
+- `cargo build --bins`
+  - passed.
+- `target/debug/easynet start`
+  - failed closed with `no credentials — cannot start device agent` after the
+    purge, proving device start does not silently fabricate or repair identity
+    state.
+- `tools/scripts/cli-hub-device-daemon-e2e.sh --skip-build --requests 3 --concurrency 2 --out-dir target/e2e/cli-hub-device-daemon/codex-clean-repro`
+  - passed.
+  - verified local hub/device principal enrollment, device join, daemon start,
+    `meta.list_abilities`-backed ability discovery, ability/skill
+    publish/invoke/delete, and concurrent query paths.
+- `tools/scripts/docker-media-bidi-e2e.sh --out-dir target/e2e/docker-media-bidi/codex-clean-repro`
+  - passed.
+  - verified Docker hub/provider/caller stream and bidi topology, provider and
+    caller descriptor refs, tuple preservation, two product operations mapping
+    to two unique invocation receipt chains, single terminal head receipts,
+    reverse bidi input, plugin removal, and route rejection after removal.
+- `tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - passed at baseline before clean-state product verification.
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync`
+  - passed at baseline before product verification.

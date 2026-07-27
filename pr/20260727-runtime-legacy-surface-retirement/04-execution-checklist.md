@@ -210,3 +210,17 @@
       provide a canonical frame-chain tag.
 - [x] Update tests and SPEC v2 gate to reject empty-MAC default paths.
 - [x] Run focused tests/gates.
+
+## Iteration 23 — Clean-state product route verification
+
+- [x] Purge local `~/.easynet` state through the canonical reset command after
+      explicit operator approval.
+- [x] Rebuild the current checkout binaries and verify stale credentials are no
+      longer silently repaired by device start.
+- [x] Run clean isolated CLI hub/device daemon E2E for principal enrollment,
+      device join, catalogue reads, ability invocation, and query load.
+- [x] Run Docker hub/provider/caller media stream+bidi E2E for descriptor refs,
+      remote route visibility, tuple preservation, plugin removal, and single
+      terminal receipt chains.
+- [x] Confirm the observed `descriptor_ref`, caller signer, and authority
+      subject errors do not reproduce from clean state on the current checkout.
