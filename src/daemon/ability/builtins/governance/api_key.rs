@@ -77,20 +77,24 @@ pub struct ApiKeyStore {
     pub keys: Vec<ApiKeyEntry>,
 }
 
-fn store_path() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-    PathBuf::from(home).join(".easynet").join("api_keys.toml")
+fn api_key_state_dir() -> anyhow::Result<PathBuf> {
+    let home = std::env::var("HOME").context("HOME is required for API key state paths")?;
+    if home.trim().is_empty() {
+        anyhow::bail!("HOME is required for API key state paths");
+    }
+    Ok(PathBuf::from(home).join(".easynet"))
+}
+
+fn store_path() -> anyhow::Result<PathBuf> {
+    Ok(api_key_state_dir()?.join("api_keys.toml"))
 }
 
 fn local_default_token_path() -> anyhow::Result<PathBuf> {
-    let home = std::env::var("HOME").context("HOME unset for local API key cache")?;
-    Ok(PathBuf::from(home)
-        .join(".easynet")
-        .join("api_keys.local.toml"))
+    Ok(api_key_state_dir()?.join("api_keys.local.toml"))
 }
 
 fn load_store() -> anyhow::Result<ApiKeyStore> {
-    let path = store_path();
+    let path = store_path()?;
     let text = match fs::read_to_string(&path) {
         Ok(text) => text,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -104,7 +108,7 @@ fn load_store() -> anyhow::Result<ApiKeyStore> {
 }
 
 fn save_store(store: &ApiKeyStore) -> anyhow::Result<()> {
-    let path = store_path();
+    let path = store_path()?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -337,18 +341,18 @@ pub fn register(reg: &mut AxonAbilityCatalog, user: &str, realm: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cli::commands::test_support::HomeGuard;
+    use crate::cli::commands::test_support::{env_lock, HomeGuard};
     use serde_json::json;
 
     fn seed_malformed_store() {
-        let path = store_path();
+        let path = store_path().expect("api key store path");
         std::fs::create_dir_all(path.parent().expect("api key store parent"))
             .expect("create isolated api key state dir");
         std::fs::write(path, "keys = [").expect("write malformed api key store");
     }
 
     fn write_store_body(body: &str) {
-        let path = store_path();
+        let path = store_path().expect("api key store path");
         std::fs::create_dir_all(path.parent().expect("api key store parent"))
             .expect("create isolated api key state dir");
         std::fs::write(path, body).expect("write api key store");
@@ -378,6 +382,14 @@ mod tests {
         assert!(
             message.contains(expected),
             "expected {expected:?} in error: {message}"
+        );
+    }
+
+    fn assert_home_precondition(error: anyhow::Error) {
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("HOME is required for API key state paths"),
+            "unexpected error: {message}"
         );
     }
 
@@ -450,8 +462,41 @@ legacy_scope = "all"
             .expect_err("malformed store must fail create");
 
         assert_store_parse_failure(error);
-        let body = std::fs::read_to_string(store_path()).expect("malformed store still present");
+        let body = std::fs::read_to_string(store_path().expect("api key store path"))
+            .expect("malformed store still present");
         assert_eq!(body, "keys = [");
+    }
+
+    #[test]
+    fn api_key_store_rejects_missing_home_before_tmp_fallback() {
+        let _guard = env_lock();
+        let previous_home = std::env::var("HOME").ok();
+        std::env::remove_var("HOME");
+
+        let error = handle_list("alice", "example", json!({}))
+            .expect_err("missing HOME must not fall back to /tmp");
+
+        if let Some(home) = previous_home {
+            std::env::set_var("HOME", home);
+        }
+        assert_home_precondition(error);
+    }
+
+    #[test]
+    fn api_key_store_rejects_blank_home_before_relative_state_path() {
+        let _guard = env_lock();
+        let previous_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", " ");
+
+        let error = handle_create("alice", "example", json!({}))
+            .expect_err("blank HOME must not resolve API key state relative to cwd");
+
+        if let Some(home) = previous_home {
+            std::env::set_var("HOME", home);
+        } else {
+            std::env::remove_var("HOME");
+        }
+        assert_home_precondition(error);
     }
 
     #[test]
