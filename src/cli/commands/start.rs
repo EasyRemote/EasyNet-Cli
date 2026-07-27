@@ -204,8 +204,21 @@ fn ensure_desktop_companions_after_ready() {
     let Ok(state) = crate::daemon::plugins::default_state() else {
         return;
     };
-    let failures = crate::daemon::plugins::DesktopCompanionManager::current()
-        .ensure_running_after_daemon_ready(state.index().packages());
+    let manager = match crate::daemon::plugins::DesktopCompanionManager::current() {
+        Ok(manager) => manager,
+        Err(error) => {
+            let reason = error.to_string();
+            crate::op_event!(
+                component = desktop_companion,
+                kind = post_ready_reconcile_failed,
+                code = "manager_unavailable",
+                reason = reason,
+            );
+            output::warn(&format!("desktop companion reconcile warning: {error}"));
+            return;
+        }
+    };
+    let failures = manager.ensure_running_after_daemon_ready(state.index().packages());
     for failure in failures {
         crate::op_event!(
             component = desktop_companion,

@@ -186,8 +186,11 @@ impl PluginSurfaceProjector {
             let has_abilities = !package.manifest().abilities().is_empty();
             let (companion, companion_error) =
                 if package.manifest().kind() == PluginKind::DesktopCompanion {
-                    match companion_manager.status_json(package) {
-                        Ok(status) => (Some(status), None),
+                    match companion_manager.as_ref() {
+                        Ok(manager) => match manager.status_json(package) {
+                            Ok(status) => (Some(status), None),
+                            Err(error) => (None, Some(error.to_string())),
+                        },
                         Err(error) => (None, Some(error.to_string())),
                     }
                 } else {

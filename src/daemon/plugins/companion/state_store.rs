@@ -43,10 +43,23 @@ pub struct DesktopCompanionStateStore {
 }
 
 impl DesktopCompanionStateStore {
-    pub fn default_path() -> PathBuf {
-        dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(".easynet/companions/state.toml")
+    pub fn default_path() -> Result<PathBuf> {
+        Self::default_path_for_home(dirs::home_dir())
+    }
+
+    fn default_path_for_home(home: Option<PathBuf>) -> Result<PathBuf> {
+        let home = home.ok_or_else(|| PluginHostError::InvalidCompanionManifest {
+            id: "state_store".to_string(),
+            reason: "desktop companion state store requires an OS home directory".to_string(),
+        })?;
+        if home.as_os_str().is_empty() {
+            return Err(PluginHostError::InvalidCompanionManifest {
+                id: "state_store".to_string(),
+                reason: "desktop companion state store home directory must not be empty"
+                    .to_string(),
+            });
+        }
+        Ok(home.join(".easynet/companions/state.toml"))
     }
 
     pub fn new(path: impl Into<PathBuf>) -> Self {
@@ -296,6 +309,25 @@ desired_state = "disabled"
                 .desired_state("easynet.desktop.menubar", "0.1.0")
                 .expect("missing state file is fresh-install empty"),
             CompanionDesiredState::Disabled
+        );
+    }
+
+    #[test]
+    fn default_path_rejects_missing_home_before_cwd_fallback() {
+        let error = DesktopCompanionStateStore::default_path_for_home(None)
+            .expect_err("missing home must fail before cwd fallback")
+            .to_string();
+        assert!(
+            error.contains("requires an OS home directory"),
+            "wrong error: {error}"
+        );
+
+        let error = DesktopCompanionStateStore::default_path_for_home(Some(PathBuf::new()))
+            .expect_err("empty home must fail before cwd fallback")
+            .to_string();
+        assert!(
+            error.contains("home directory must not be empty"),
+            "wrong error: {error}"
         );
     }
 }

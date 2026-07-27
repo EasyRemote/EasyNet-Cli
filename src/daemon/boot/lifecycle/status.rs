@@ -242,7 +242,15 @@ pub(super) fn desktop_companion_statuses() -> DesktopCompanionStatusObservation 
             );
         }
     };
-    let manager = crate::daemon::plugins::DesktopCompanionManager::current();
+    let manager = match crate::daemon::plugins::DesktopCompanionManager::current() {
+        Ok(manager) => manager,
+        Err(error) => {
+            return DesktopCompanionStatusObservation::from_parts(
+                Vec::new(),
+                vec![format!("desktop companion manager unavailable: {error}")],
+            );
+        }
+    };
     let mut observation = DesktopCompanionStatusObservation::default();
     for package in state.index().packages().iter().filter(|package| {
         package.manifest().kind() == crate::daemon::plugins::PluginKind::DesktopCompanion

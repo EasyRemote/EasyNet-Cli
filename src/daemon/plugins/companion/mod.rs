@@ -146,12 +146,12 @@ pub struct DesktopCompanionManager {
 }
 
 impl DesktopCompanionManager {
-    pub fn current() -> Self {
-        Self::new(
+    pub fn current() -> Result<Self> {
+        Ok(Self::new(
             DesktopCompanionPlanner::current(),
             current_supervisor(),
-            DesktopCompanionStateStore::new(DesktopCompanionStateStore::default_path()),
-        )
+            DesktopCompanionStateStore::new(DesktopCompanionStateStore::default_path()?),
+        ))
     }
 
     pub fn new(

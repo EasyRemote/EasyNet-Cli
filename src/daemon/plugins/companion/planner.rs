@@ -83,17 +83,58 @@ pub struct DesktopCompanionPlan {
 #[derive(Clone, Debug)]
 pub struct DesktopCompanionPlanner {
     platform: String,
+    user_home: CompanionUserHome,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum CompanionUserHome {
+    CurrentProcess,
+    Explicit(PathBuf),
+    Unavailable,
+}
+
+impl CompanionUserHome {
+    fn resolve(&self) -> Result<PathBuf, String> {
+        match self {
+            Self::CurrentProcess => dirs::home_dir()
+                .ok_or_else(|| "desktop companion user home directory is unavailable".to_string()),
+            Self::Explicit(path) if path.as_os_str().is_empty() => {
+                Err("desktop companion user home directory must not be empty".to_string())
+            }
+            Self::Explicit(path) => Ok(path.clone()),
+            Self::Unavailable => {
+                Err("desktop companion user home directory is unavailable".to_string())
+            }
+        }
+    }
 }
 
 impl DesktopCompanionPlanner {
     pub fn new(platform: impl Into<String>) -> Self {
         Self {
             platform: platform.into(),
+            user_home: CompanionUserHome::CurrentProcess,
         }
     }
 
     pub fn current() -> Self {
         Self::new(current_platform())
+    }
+
+    #[cfg(test)]
+    pub fn with_user_home(platform: impl Into<String>, user_home: impl Into<PathBuf>) -> Self {
+        Self {
+            platform: platform.into(),
+            user_home: CompanionUserHome::Explicit(user_home.into()),
+        }
+    }
+
+    #[cfg(test)]
+    pub fn with_unavailable_user_home(platform: impl Into<String>) -> Self {
+        Self {
+            platform: platform.into(),
+            user_home: CompanionUserHome::Unavailable,
+        }
     }
 
     pub fn platform(&self) -> &str {
@@ -136,7 +177,7 @@ impl DesktopCompanionPlanner {
             package_version: manifest.version().to_string(),
             display_name: companion.display_name().to_string(),
             package_root: package.root().to_path_buf(),
-            user_home: dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")),
+            user_home: self.user_home.resolve()?,
             platform: self.platform.clone(),
             spec,
             boot_policy: companion.boot_policy(),
@@ -179,16 +220,34 @@ mod tests {
     #[test]
     fn planner_resolves_manifest_status_file_into_plan() {
         let root = tempfile::tempdir().expect("package root");
+        let home = tempfile::tempdir().expect("home");
         write_companion_package(root.path());
         let package = Arc::new(PluginPackage::from_installed(root.path(), None).expect("package"));
 
-        let plan = DesktopCompanionPlanner::new("macos")
+        let plan = DesktopCompanionPlanner::with_user_home("macos", home.path())
             .plan_package(&package)
             .expect("plan");
 
         let status_file = plan.status_file.expect("status file");
         assert!(status_file.ends_with("companions/easynet.desktop.menubar/status.json"));
         assert!(!status_file.starts_with(root.path()));
+        assert_eq!(plan.user_home, home.path());
+    }
+
+    #[test]
+    fn planner_rejects_missing_user_home_before_cwd_fallback() {
+        let root = tempfile::tempdir().expect("package root");
+        write_companion_package(root.path());
+        let package = Arc::new(PluginPackage::from_installed(root.path(), None).expect("package"));
+
+        let error = DesktopCompanionPlanner::with_unavailable_user_home("macos")
+            .plan_package(&package)
+            .expect_err("missing home must fail before cwd fallback");
+
+        assert!(
+            error.contains("user home directory is unavailable"),
+            "wrong error: {error}"
+        );
     }
 
     fn write_companion_package(root: &std::path::Path) {

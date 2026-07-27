@@ -266,7 +266,7 @@ fn run_list(args: ListArgs) -> anyhow::Result<()> {
 
 fn run_install(args: PackageSourceArgs) -> anyhow::Result<()> {
     let installer = PluginInstaller::new(default_plugin_root());
-    let companion_manager = DesktopCompanionManager::current();
+    let companion_manager = DesktopCompanionManager::current()?;
     let record = installer.install_with_companion_manager(&args.path, &companion_manager)?;
     output::success(&format!(
         "installed plugin {}@{}",
@@ -279,7 +279,7 @@ fn run_install(args: PackageSourceArgs) -> anyhow::Result<()> {
 
 fn run_update(args: PackageSourceArgs) -> anyhow::Result<()> {
     let installer = PluginInstaller::new(default_plugin_root());
-    let companion_manager = DesktopCompanionManager::current();
+    let companion_manager = DesktopCompanionManager::current()?;
     let record = installer.update_with_companion_manager(&args.path, &companion_manager)?;
     output::success(&format!("updated plugin {}@{}", record.id, record.version));
     output::detail("hash", &record.hash);
@@ -289,7 +289,7 @@ fn run_update(args: PackageSourceArgs) -> anyhow::Result<()> {
 
 fn run_remove(args: RemoveArgs) -> anyhow::Result<()> {
     let installer = PluginInstaller::new(default_plugin_root());
-    let companion_manager = DesktopCompanionManager::current();
+    let companion_manager = DesktopCompanionManager::current()?;
     installer.remove_with_companion_manager(&args.id, &args.version, &companion_manager)?;
     output::success(&format!("removed plugin {}@{}", args.id, args.version));
     notify_daemon_reload()?;
@@ -298,7 +298,7 @@ fn run_remove(args: RemoveArgs) -> anyhow::Result<()> {
 
 fn run_enable(args: CompanionPackageArgs) -> anyhow::Result<()> {
     let package = resolve_package(&args.id, args.version.as_deref())?;
-    let result = DesktopCompanionManager::current().enable(&package)?;
+    let result = DesktopCompanionManager::current()?.enable(&package)?;
     output::success(&format!(
         "enabled companion {}@{}",
         package.id().as_str(),
@@ -311,7 +311,7 @@ fn run_enable(args: CompanionPackageArgs) -> anyhow::Result<()> {
 
 fn run_disable(args: CompanionPackageArgs) -> anyhow::Result<()> {
     let package = resolve_package(&args.id, args.version.as_deref())?;
-    let result = DesktopCompanionManager::current().disable(&package)?;
+    let result = DesktopCompanionManager::current()?.disable(&package)?;
     output::success(&format!(
         "disabled companion {}@{}",
         package.id().as_str(),

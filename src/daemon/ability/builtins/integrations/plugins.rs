@@ -231,7 +231,7 @@ fn companion_status(
         request.package_version.as_deref(),
         COMPANION_STATUS_ABILITY,
     )?;
-    DesktopCompanionManager::current()
+    DesktopCompanionManager::current()?
         .status_json(&package)
         .map_err(Into::into)
 }
@@ -248,7 +248,7 @@ fn companion_reconcile(
         request.package_version.as_deref(),
         COMPANION_RECONCILE_ABILITY,
     )?;
-    DesktopCompanionManager::current()
+    DesktopCompanionManager::current()?
         .reconcile(&package)
         .map_err(Into::into)
 }

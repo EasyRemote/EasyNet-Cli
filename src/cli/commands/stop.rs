@@ -167,8 +167,15 @@ impl StopPlan {
                 .stage_skipped("desktop-companions", "(plugin state unavailable)");
             return;
         };
-        let warnings = crate::daemon::plugins::DesktopCompanionManager::current()
-            .stop_for_runtime_stop(state.index().packages());
+        let manager = match crate::daemon::plugins::DesktopCompanionManager::current() {
+            Ok(manager) => manager,
+            Err(error) => {
+                self.renderer
+                    .stage_skipped("desktop-companions", &format!("({error})"));
+                return;
+            }
+        };
+        let warnings = manager.stop_for_runtime_stop(state.index().packages());
         if warnings.is_empty() {
             self.renderer
                 .stage_skipped("desktop-companions", "(no stop_on_runtime_stop companions)");
