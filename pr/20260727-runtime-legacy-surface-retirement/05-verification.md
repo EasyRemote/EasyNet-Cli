@@ -82,3 +82,17 @@
 - `cargo fmt --check`
 - `cargo test cli::commands::devices::tests::`
 - `cargo build --bin easynet`
+
+## Iteration 7
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph query "legacy compatibility fallback compat deprecated SDK runtime provider receipt descriptor URA product neutral"`
+- `/Users/macbook.silan.tech/.local/bin/codegraph query "local rpc fallback must still be bound exact realm user descriptor"`
+- `cargo test --features axon-pb local_target_projection --lib`
+  - 2 passed.
+- `cargo test --features axon-pb matches_self_target_ura --lib`
+  - 3 passed.
+- `cargo fmt --check`
+- `git diff --check`
+- `tools/scripts/check-canonical-runtime-convergence-v2.sh`
+- `tools/scripts/check-architecture-convergence.sh`
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync`

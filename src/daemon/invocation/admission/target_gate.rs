@@ -320,8 +320,18 @@ impl Default for LocalAgentTargetProjectionState {
 impl LocalAgentTargetProjectionState {
     fn load() -> Self {
         match AgentAggregateRepository::try_load_snapshot() {
-            Ok(snapshot) => Self::Available {
-                projection: snapshot.local_target_projection(),
+            Ok(snapshot) => match snapshot.local_target_projection() {
+                Ok(projection) => Self::Available { projection },
+                Err(error) => {
+                    let reason = format!("{error:#}");
+                    crate::op_event!(
+                        component = daemon_invocation,
+                        kind = agent_local_target_projection_invalid,
+                        error = reason.as_str(),
+                        message = "target_gate: Agent URA self-target matching failed closed because the hosted-Agent target projection is invalid",
+                    );
+                    Self::Unavailable { reason }
+                }
             },
             Err(error) => {
                 let reason = format!("{error:#}");

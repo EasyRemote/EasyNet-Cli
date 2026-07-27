@@ -3975,8 +3975,12 @@ if agent_aggregate.exists():
             "Agent aggregate snapshot must own hosted Agent target parsing",
         ),
         (
-            "fn local_target_projection(&self) -> AgentLocalTargetProjection",
-            "Agent aggregate snapshot must expose local target projection to admission",
+            "Result<AgentLocalTargetProjection, AgentLocalTargetProjectionError>",
+            "Agent aggregate snapshot must expose fail-closed local target projection to admission",
+        ),
+        (
+            "enum AgentLocalTargetProjectionError",
+            "Agent aggregate snapshot must type malformed hosted-Agent target projection",
         ),
         (
             "struct AgentHostedPlacementProjection",

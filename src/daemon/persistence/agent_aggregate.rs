@@ -223,16 +223,19 @@ impl AgentAggregateSnapshot {
             .any(|entry| entry.profile == "llm" && entry.name == agent)
     }
 
-    pub(crate) fn local_target_projection(&self) -> AgentLocalTargetProjection {
-        AgentLocalTargetProjection {
-            hosted_agent_targets: self
-                .local_agents
-                .hosted_agents
-                .iter()
-                .filter_map(|entry| HostedAgentTarget::parse(&entry.agent_ura))
-                .collect(),
+    pub(crate) fn local_target_projection(
+        &self,
+    ) -> Result<AgentLocalTargetProjection, AgentLocalTargetProjectionError> {
+        let hosted_agent_targets = self
+            .local_agents
+            .hosted_agents
+            .iter()
+            .map(HostedAgentTarget::from_entry)
+            .collect::<Result<BTreeSet<_>, _>>()?;
+        Ok(AgentLocalTargetProjection {
+            hosted_agent_targets,
             registered_agent_ids: self.registered_agent_surface_names(),
-        }
+        })
     }
 
     pub(crate) fn hosted_agent_placements(&self) -> AgentHostedPlacementProjection {
@@ -726,6 +729,29 @@ pub(crate) struct AgentLocalTargetProjection {
     pub(crate) registered_agent_ids: BTreeSet<String>,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum AgentLocalTargetProjectionError {
+    #[error("hosted Agent {profile:?}/{name:?} has invalid Agent URA {agent_ura:?}: {reason}")]
+    InvalidHostedAgentUra {
+        profile: String,
+        name: String,
+        agent_ura: String,
+        reason: String,
+    },
+    #[error("hosted Agent {profile:?}/{name:?} resolved to non-Agent URA {agent_ura:?}")]
+    NonAgentHostedIdentity {
+        profile: String,
+        name: String,
+        agent_ura: String,
+    },
+    #[error("hosted Agent {profile:?}/{name:?} has incomplete Agent identity {agent_ura:?}")]
+    IncompleteHostedAgentIdentity {
+        profile: String,
+        name: String,
+        agent_ura: String,
+    },
+}
+
 #[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct HostedAgentTarget {
     pub(crate) realm: String,
@@ -747,21 +773,65 @@ pub(crate) struct AgentHostedPlacement {
 
 impl HostedAgentTarget {
     pub(crate) fn parse(agent_ura: &str) -> Option<Self> {
-        let parsed = crate::core::ura::parse_ura(agent_ura).ok()?;
+        Self::from_ura(agent_ura).ok()
+    }
+
+    fn from_entry(entry: &HostedAgentEntry) -> Result<Self, AgentLocalTargetProjectionError> {
+        Self::from_ura(&entry.agent_ura).map_err(|error| match error {
+            HostedAgentTargetParseError::InvalidUra { reason } => {
+                AgentLocalTargetProjectionError::InvalidHostedAgentUra {
+                    profile: entry.profile.clone(),
+                    name: entry.name.clone(),
+                    agent_ura: entry.agent_ura.clone(),
+                    reason,
+                }
+            }
+            HostedAgentTargetParseError::NonAgentUra => {
+                AgentLocalTargetProjectionError::NonAgentHostedIdentity {
+                    profile: entry.profile.clone(),
+                    name: entry.name.clone(),
+                    agent_ura: entry.agent_ura.clone(),
+                }
+            }
+            HostedAgentTargetParseError::IncompleteAgentIdentity => {
+                AgentLocalTargetProjectionError::IncompleteHostedAgentIdentity {
+                    profile: entry.profile.clone(),
+                    name: entry.name.clone(),
+                    agent_ura: entry.agent_ura.clone(),
+                }
+            }
+        })
+    }
+
+    fn from_ura(agent_ura: &str) -> Result<Self, HostedAgentTargetParseError> {
+        let parsed = crate::core::ura::parse_ura(agent_ura).map_err(|error| {
+            HostedAgentTargetParseError::InvalidUra {
+                reason: error.to_string(),
+            }
+        })?;
         if !matches!(parsed.kind, crate::core::ura::URAKind::Agent) {
-            return None;
+            return Err(HostedAgentTargetParseError::NonAgentUra);
         }
         let realm = parsed.realm.clone();
-        let (user_id, agent_id) = parsed.agent_ids()?;
+        let (user_id, agent_id) = parsed
+            .agent_ids()
+            .ok_or(HostedAgentTargetParseError::IncompleteAgentIdentity)?;
         if realm.is_empty() || user_id.is_empty() || agent_id.is_empty() {
-            return None;
+            return Err(HostedAgentTargetParseError::IncompleteAgentIdentity);
         }
-        Some(Self {
+        Ok(Self {
             realm,
             user_id: user_id.to_string(),
             agent_id: agent_id.to_string(),
         })
     }
+}
+
+#[derive(Debug)]
+enum HostedAgentTargetParseError {
+    InvalidUra { reason: String },
+    NonAgentUra,
+    IncompleteAgentIdentity,
 }
 
 fn device_node_id_from_device_ura(device_ura: &str) -> Option<String> {
@@ -1403,15 +1473,17 @@ mod tests {
             registry,
             LocalAgentsFile {
                 host_device_agent_ura: "easynet:///r/acme/agent/device".to_string(),
-                hosted_agents: vec![
-                    hosted_agent("llm", "claude", "easynet:///r/acme/agent/u1.claude"),
-                    hosted_agent("llm", "malformed", "not-a-ura"),
-                    hosted_agent("consent", "default", "easynet:///r/acme/device/dev-1"),
-                ],
+                hosted_agents: vec![hosted_agent(
+                    "llm",
+                    "claude",
+                    "easynet:///r/acme/agent/u1.claude",
+                )],
             },
         );
 
-        let projection = snapshot.local_target_projection();
+        let projection = snapshot
+            .local_target_projection()
+            .expect("valid local target projection");
 
         assert!(projection
             .hosted_agent_targets
@@ -1423,6 +1495,37 @@ mod tests {
         assert_eq!(projection.hosted_agent_targets.len(), 1);
         assert!(projection.registered_agent_ids.contains("claude"));
         assert!(projection.registered_agent_ids.contains("codex"));
+    }
+
+    #[test]
+    fn local_target_projection_rejects_malformed_hosted_identities() {
+        for (case, entry, expected) in [
+            (
+                "malformed hosted Agent URA",
+                hosted_agent("llm", "malformed", "not-a-ura"),
+                "invalid Agent URA",
+            ),
+            (
+                "non-Agent hosted identity",
+                hosted_agent("consent", "default", "easynet:///r/acme/device/dev-1"),
+                "non-Agent URA",
+            ),
+        ] {
+            let snapshot = AgentAggregateSnapshot::new(
+                AgentRegistry::default(),
+                LocalAgentsFile {
+                    host_device_agent_ura: "easynet:///r/acme/agent/device".to_string(),
+                    hosted_agents: vec![entry],
+                },
+            );
+
+            let error = snapshot.local_target_projection().expect_err(case);
+
+            assert!(
+                error.to_string().contains(expected),
+                "{case} should report {expected:?}, got: {error}"
+            );
+        }
     }
 
     #[test]

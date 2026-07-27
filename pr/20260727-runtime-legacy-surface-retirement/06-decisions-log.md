@@ -60,3 +60,21 @@ Decision: model `device list` directory reads as three explicit states:
 Reason: a clean Hub-URA join can intentionally produce a federation-native device credential without a user binding. Treating that as a missing legacy `user_id` sent the product path into an unauthorized operator/audit invocation from a Device daemon and surfaced daemon-internal `AUTHORITY_DENIED`/`LOCAL_BOOTSTRAP_OWNER_UNAVAILABLE`. The runtime state itself is valid; the unsupported capability is the user-scoped product directory read.
 
 Boundary: this does not add a compatibility fallback, does not synthesize a user id, and does not allow a Device daemon to use the Authority operator/audit directory. A user-facing product device directory still requires either a bound User principal or an Authority daemon.
+
+## Hosted-Agent target projection fail-closed cutover
+
+Decision: self-target Agent URA locality must use a validated aggregate
+projection. A malformed hosted-Agent identity in `local-agents.json` is not the
+same state as "no hosted identity"; silently dropping it lets registry-only
+matching continue and recreates a compatibility-style locality path.
+
+Reason: `matches_self_target_ura()` is a route/admission boundary. If the hosted
+identity projection is structurally invalid, the daemon cannot prove that an
+Agent URA belongs to this runtime owner. The correct state is an unavailable
+projection that fails closed, not a partial projection assembled from whichever
+rows happened to parse.
+
+Boundary: registered Agent names remain useful only when the aggregate
+projection is valid and the credential `(realm,user)` matches the target tuple.
+Malformed hosted identity data never causes route repair, alias matching, or a
+registry-only self-target decision.

@@ -33,9 +33,10 @@ fn test_stream_options() -> axon_sdk::invocation::AbilityOptions {
 async fn matches_self_target_ura_accepts_hot_added_agent_only_for_local_identity() {
     // Hot-added agents can be dispatchable through `agents.json`
     // before publish persists them to `local-agents.json`. The
-    // fallback must still be bound to the daemon's exact realm/user
-    // identity so a peer realm or peer user cannot be collapsed into
-    // this process by sharing the same bare agent name.
+    // aggregate projection must still bind registry-only rows to the
+    // daemon's exact realm/user identity so a peer realm or peer user
+    // cannot be collapsed into this process by sharing the same bare
+    // agent name.
     use crate::daemon::persistence::agent_registry::{
         save_agents, AgentEntry, AgentRegistry, AgentType,
     };
@@ -55,7 +56,7 @@ async fn matches_self_target_ura_accepts_hot_added_agent_only_for_local_identity
 
     let agent_target = "easynet:///r/test-realm/agent/user-dev.liangbing";
 
-    // Pre-write: no agents.json row → slow tier must miss too.
+    // Pre-write: no agents.json row → aggregate projection must miss too.
     assert!(
         !svc.target_gate()
             .matches_self_target_ura(agent_target)
@@ -66,7 +67,7 @@ async fn matches_self_target_ura_accepts_hot_added_agent_only_for_local_identity
     // Stage the hot-added row.
     let mut registry = AgentRegistry::default();
     registry.agents.insert(
-        "liangbing".to_string(),
+        "default/liangbing".to_string(),
         AgentEntry::new(AgentType::ClaudeCode, None),
     );
     save_agents(&registry).expect("stage agents.json under HomeGuard");
@@ -98,7 +99,57 @@ async fn matches_self_target_ura_accepts_hot_added_agent_only_for_local_identity
         !svc.target_gate()
             .matches_self_target_ura("easynet:///r/test-realm/agent/user-dev.unknown")
             .await,
-        "slow tier must only accept agents present in agents.json"
+        "aggregate projection must only accept agents present in agents.json"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn matches_self_target_ura_rejects_registry_only_match_when_hosted_projection_is_invalid() {
+    use crate::daemon::persistence::agent_registry::{
+        save_agents, AgentEntry, AgentRegistry, AgentType,
+    };
+    use crate::daemon::persistence::config::{save_credentials, Credentials};
+    use crate::daemon::persistence::local_agents::{save, HostedAgentEntry, LocalAgentsFile};
+
+    let _hg = crate::cli::commands::test_support::HomeGuard::new();
+    save_credentials(&Credentials {
+        node_id: "dev-1".to_string(),
+        credential_token: "token".to_string(),
+        hub_endpoint: "axon://hub.test:50051".to_string(),
+        realm: "test-realm".to_string(),
+        username: Some("dev".to_string()),
+        user_id: Some("user-dev".to_string()),
+        ..Default::default()
+    })
+    .expect("seed credentials");
+
+    let mut registry = AgentRegistry::default();
+    registry.agents.insert(
+        "default/liangbing".to_string(),
+        AgentEntry::new(AgentType::ClaudeCode, None),
+    );
+    save_agents(&registry).expect("stage agents.json under HomeGuard");
+
+    save(&LocalAgentsFile {
+        host_device_agent_ura: "easynet:///r/test-realm/device/dev-1".to_string(),
+        hosted_agents: vec![HostedAgentEntry {
+            profile: "llm".to_string(),
+            name: "liangbing".to_string(),
+            agent_ura: "not-a-ura".to_string(),
+            signing_authority: "hosted_by:easynet:///r/test-realm/device/dev-1".to_string(),
+            first_seen_at: "2026-07-27T00:00:00Z".to_string(),
+        }],
+    })
+    .expect("seed invalid local-agents.json");
+
+    let svc = make_service().with_session_realm("test-realm");
+
+    assert!(
+        !svc.target_gate()
+            .matches_self_target_ura("easynet:///r/test-realm/agent/user-dev.liangbing")
+            .await,
+        "invalid hosted-Agent identity projection must fail closed instead of using \
+         credentials plus agents.json as a registry-only self-target decision"
     );
 }
 

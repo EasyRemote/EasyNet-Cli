@@ -54,3 +54,11 @@
 - [x] Fail closed at the CLI boundary for unbound federation-native device directory reads instead of sending an unauthorized operator/audit request to the daemon.
 - [x] Add regression coverage for bound and unbound credential states.
 - [x] Run focused tests and clean-state command verification.
+
+## Iteration 7 — Hosted-Agent target projection fail-closed cutover
+
+- [x] Replace silent hosted-Agent target projection drops with an explicit projection result.
+- [x] Make malformed/non-Agent hosted identities move the daemon self-target index into `Unavailable`.
+- [x] Update self-target tests to describe aggregate projection states, not fallback/slow-tier behavior.
+- [x] Add a corruption regression proving registry-only matching is disabled when hosted identity projection is malformed.
+- [x] Run focused daemon target-gate tests and canonical convergence gates.
