@@ -37,13 +37,6 @@ axon-pb = [
     "dep:hyper-util",
 ]
 
-# Demo-only test fixtures compiled into the daemon binary. Off by
-# default so production builds cannot honour `EASYNET_DEMO_PRESENCE_SEED`
-# (or any future demo env var) regardless of operator misconfig.
-# Demo / e2e scripts pass `--features demo-fixture` to opt in. See
-# `daemon::invocation::boot::presence_seed::maybe_seed_demo_presence`.
-demo-fixture = []
-
 # Compile the in-tree remote desktop plugin package and its media transport
 # stack. This is part of the current product surface: Frontend remote desktop,
 # plugin discovery, and typed remote_desktop.* receipts all depend on these

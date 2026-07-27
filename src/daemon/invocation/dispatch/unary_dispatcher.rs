@@ -1612,13 +1612,11 @@ impl UnaryDispatcher {
             Status,
         >,
     ) -> Result<(u64, DispatchResult, u32), Status> {
-        // Self guard: in device mode the boot seed registers a
-        // resolve-only no-op presence entry under the daemon's own URA
-        // (boot/presence_seed.rs) whose drain task accepts every frame
-        // and never completes the pending entry — a frame dispatched
-        // there parks the waiter until the deadline. Self-targeted
-        // invocations belong to the local-runtime arms; refuse loudly
-        // here rather than queue a frame that can never be answered.
+        // Self guard: in device mode the boot seed registers a resolve-only
+        // presence entry under the daemon's own URA (boot/presence_seed.rs).
+        // Self-targeted invocations belong to the local-runtime arms; refuse
+        // loudly here rather than treating local runtime presence as a remote
+        // dispatch channel.
         self.reject_self_presence_host(selected_route, label)?;
         let pending = self.sessions.pending.as_ref().ok_or_else(|| {
             Status::failed_precondition(format!(

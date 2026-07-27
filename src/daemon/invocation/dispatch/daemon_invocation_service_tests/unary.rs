@@ -2900,16 +2900,22 @@ async fn invoke_returns_invalid_argument_on_bad_json() {
 #[tokio::test]
 async fn dispatch_remote_rpc_refuses_self_execution_host() {
     // Device-mode boot seeds a resolve-only presence entry under the
-    // daemon's own URA (boot/presence_seed.rs) whose drain task
-    // accepts frames and never completes the pending entry. A route
-    // whose selected execution host is this daemon must be refused
-    // at the presence-dispatch core — never queued onto that entry.
-    let (self_tx, mut self_rx) = mpsc::channel(8);
+    // daemon's own URA (boot/presence_seed.rs). That row is directory-visible
+    // but deliberately non-dispatchable. A route whose selected execution host
+    // is this daemon must be refused at the presence-dispatch core — never
+    // converted into a dispatch sender.
     let svc = make_service().with_pending(Arc::new(PendingDispatchMap::new()));
     svc.directory
         .presence
-        .insert(TEST_DAEMON_URA.to_string(), self_tx)
-        .expect("canonical presence key");
+        .insert_resolve_only(TEST_DAEMON_URA.to_string())
+        .expect("canonical resolve-only presence key");
+    assert!(
+        svc.directory
+            .presence
+            .lookup_dispatch_session(TEST_DAEMON_URA)
+            .is_none(),
+        "self-presence must stay resolve-only"
+    );
     publish_test_route(&svc, TEST_DAEMON_URA, "observe.health");
 
     let ability_ura = crate::core::ura::owner_ability_ura(TEST_DAEMON_URA, "observe.health")
@@ -2933,10 +2939,6 @@ async fn dispatch_remote_rpc_refuses_self_execution_host() {
         err.message().contains("this daemon itself"),
         "expected the self-host refusal, got: {}",
         err.message()
-    );
-    assert!(
-        self_rx.try_recv().is_err(),
-        "no dispatch frame may reach the resolve-only self entry"
     );
 }
 

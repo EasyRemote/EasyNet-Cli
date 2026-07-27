@@ -12860,9 +12860,22 @@ check_presence_registry_canonical_principal_key_contract() {
   local presence="$cli_root/src/daemon/invocation/bidi/state/presence.rs"
   local wrappers="$cli_root/src/daemon/invocation/dispatch/federation_wrappers.rs"
   local unary_tests="$cli_root/src/daemon/invocation/dispatch/daemon_invocation_service_tests/unary.rs"
+  local boot_seed="$cli_root/src/daemon/boot/invocation/presence_seed.rs"
+  local cargo="$cli_root/Cargo.toml"
+  local artifact_build="$cli_root/tools/scripts/build-linux-cli-artifact-bundle.sh"
   [[ -f "$presence" ]] || fail "presence registry source is missing: $presence"
   [[ -f "$wrappers" ]] || fail "federation wrappers source is missing: $wrappers"
   [[ -f "$unary_tests" ]] || fail "daemon invocation service unary tests are missing: $unary_tests"
+
+  local retired_demo_fixture
+  retired_demo_fixture="$(
+    rg -n 'demo-fixture|EASYNET_DEMO_PRESENCE_SEED|maybe_seed_demo_presence|feature = "demo-fixture"' \
+      "$presence" "$boot_seed" "$cargo" "$artifact_build" 2>/dev/null || true
+  )"
+  if [[ -n "$retired_demo_fixture" ]]; then
+    fail "presence registry must not expose demo-fixture dispatch presence seed:
+$retired_demo_fixture"
+  fi
 
   "$PYTHON_BIN" - "$presence" "$wrappers" "$unary_tests" <<'PY'
 import re

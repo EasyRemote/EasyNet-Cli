@@ -472,12 +472,10 @@ impl PresenceRegistry {
         })
     }
 
-    /// Test/fixture-only dispatch registration for callers that do not exercise
-    /// frame-0 negotiation.
-    ///
-    /// Production session.open paths must call `insert_negotiated*` with the
+    /// Test-only dispatch registration for callers that do not exercise frame-0
+    /// negotiation. Production paths must call `insert_negotiated*` with the
     /// carrier contract obtained from the admitted runtime context.
-    #[cfg(any(test, feature = "demo-fixture"))]
+    #[cfg(test)]
     pub fn insert(
         &self,
         ura: String,
@@ -486,9 +484,9 @@ impl PresenceRegistry {
         Ok(self.insert_fixture_dispatch(ura, sender)?.displaced)
     }
 
-    /// Test/fixture-only dispatch registration returning the registry-owned
+    /// Test-only dispatch registration returning the registry-owned
     /// `session_id` alongside any displaced prior sender.
-    #[cfg(any(test, feature = "demo-fixture"))]
+    #[cfg(test)]
     pub fn insert_tracked(
         &self,
         ura: String,
@@ -497,7 +495,7 @@ impl PresenceRegistry {
         self.insert_fixture_dispatch(ura, sender)
     }
 
-    #[cfg(any(test, feature = "demo-fixture"))]
+    #[cfg(test)]
     pub fn insert_fixture_dispatch(
         &self,
         ura: String,
