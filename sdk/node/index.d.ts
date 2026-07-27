@@ -397,6 +397,8 @@ export interface RuntimeCallContextFields {
   caller_ura: string;
   callee_ura: string;
   subject_ura: string;
+  nonce_base64?: string | null;
+  causal_context?: Record<string, unknown> | null;
   metadata?: Record<string, unknown>;
   authority?: DelegationProof | SessionAuthority | AuthorityMetadata | DelegationProofFields | SessionAuthorityFields | null;
 }
@@ -405,6 +407,8 @@ export class RuntimeCallContext {
   callerURA: string;
   calleeURA: string;
   subjectURA: string;
+  nonceBase64: string;
+  causalContext: Record<string, unknown> | null;
   metadata: Record<string, unknown>;
   authority: DelegationProof | SessionAuthority | null;
   constructor(fields: RuntimeCallContextFields);
@@ -473,6 +477,39 @@ export class SessionHistoryOperations {
   list(request: ReceiptListRequest | ReceiptListRequestFields): Promise<ReceiptHistoryPage>;
 }
 
+export class RuntimeReceiptProvider implements ReceiptProvider {
+  constructor(ability: RuntimeAbilityClient);
+  receiptHistoryListAuthorityScope(): string;
+  list(request: ReceiptListRequest | ReceiptListRequestFields): Promise<ReceiptHistoryPage>;
+}
+
+export class RuntimeAbilityClient {
+  constructor(runtime: RuntimeClient);
+  build(
+    call: RuntimeCallContext | RuntimeCallContextFields,
+    abilityName: string,
+    argumentsValue: unknown,
+    options?: Record<string, unknown>
+  ): Promise<InvocationDraft>;
+  invoke(
+    call: RuntimeCallContext | RuntimeCallContextFields,
+    abilityName: string,
+    argumentsValue: unknown
+  ): Promise<Record<string, unknown>>;
+  buildGovernanceRead(
+    call: RuntimeCallContext | RuntimeCallContextFields,
+    abilityName: string,
+    argumentsValue: unknown,
+    provider?: string
+  ): Promise<InvocationDraft>;
+  invokeGovernanceRead(
+    call: RuntimeCallContext | RuntimeCallContextFields,
+    abilityName: string,
+    argumentsValue: unknown,
+    provider?: string
+  ): Promise<Record<string, unknown>>;
+}
+
 export class InvocationBuilder {
   withCallerURA(value: string): this;
   withCalleeURA(value: string): this;
@@ -491,6 +528,7 @@ export class InvocationBuilder {
 
 export interface RuntimeTransport {
   invoke(draftJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  resolveDescriptorRef?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
   prepare?(draftJSON: Uint8Array, optionsJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
   submitSigned?(signedJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
   awaitHandle?(control: InvocationControlCapability): Promise<Uint8Array | string> | Uint8Array | string;
@@ -635,6 +673,7 @@ export class RuntimeClient {
   constructor(transport: RuntimeTransport);
   newInvocation(): InvocationBuilder;
   invoke(draft: InvocationDraft): Promise<Record<string, unknown>>;
+  resolveDescriptorRef(request: Record<string, unknown>): Promise<string>;
   prepare(draft: InvocationDraft, options?: Record<string, unknown>): Promise<PreparedInvocation>;
   submitSigned(signed: SignedInvocation): Promise<InvocationHandle>;
   awaitResult(handle: InvocationHandle): Promise<Record<string, unknown>>;

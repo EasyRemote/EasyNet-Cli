@@ -119,3 +119,13 @@
 - [x] Introduce a shared `HandlerErrorFrame` value object that requires non-empty `code` and `message` before failure projection.
 - [x] Reuse the value object for file-transfer and JSON-frame bidi output mapping.
 - [x] Add regression coverage for incomplete handler error frames and update convergence gates to reject default error projection helpers.
+
+## Iteration 15 — Node receipt provider cutover
+
+- [x] Clear local `~/.easynet` through `easynet device reset --purge-local-state --force --yes`.
+- [x] Rebuild the CLI and reproduce from a clean isolated Hub/device topology.
+- [x] Verify remote `meta.list_abilities` and `meta.list_resources` succeed through descriptor-bound public ingress.
+- [x] Verify direct remote `invocation.history.list` is rejected as a public action and local canonical history read succeeds with verified receipt chains.
+- [x] Add Node `RuntimeAbilityClient` and `RuntimeReceiptProvider` so products have the same provider-backed history path as Go/Python.
+- [x] Add Node regression tests proving receipt provider uses governance descriptor provider and generic public invoke rejects history.
+- [x] Run Node tests, SDK conformance/gates, fmt/diff checks, then commit if stable.

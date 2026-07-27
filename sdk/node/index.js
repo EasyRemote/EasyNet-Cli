@@ -96,6 +96,7 @@ const RUNTIME_GOVERNANCE_READ_ABILITIES = Object.freeze([
   "invocation.record.get",
   "invocation.trace.get",
 ]);
+const RUNTIME_RECEIPT_HISTORY_PROVIDER = "receipt_history";
 const CANONICAL_SESSION_AUTHORITY_ID = /^[A-Za-z0-9.-]+$/u;
 
 export class SDKError extends Error {
@@ -677,7 +678,10 @@ export class InvocationDraft {
     this.metadata = objectValue(fields.metadata ?? {}, "metadata");
     this.callerSignature = fields.callerSignature ?? null;
     this.hasArgs = Boolean(fields.hasArgs);
-    rejectGovernanceReadPublicInvocationDescriptor(this.calleeURA, this.descriptorRef);
+    this.governanceRead = fields.governanceRead === true;
+    if (!this.governanceRead) {
+      rejectGovernanceReadPublicInvocationDescriptor(this.calleeURA, this.descriptorRef);
+    }
     validateAuthorityMetadata(this.metadata);
     validateInvocationAuthorityBinding(this);
     validateInvocationPayloadChoice(this);
@@ -817,21 +821,43 @@ export class RuntimeReceipt {
 export class RuntimeCallContext {
   constructor(fields) {
     const value = objectValue(fields, "runtime call context");
-    rejectRuntimeFields(value, ["caller_ura", "callee_ura", "subject_ura", "metadata", "authority"]);
+    rejectRuntimeFields(value, [
+      "caller_ura",
+      "callee_ura",
+      "subject_ura",
+      "nonce_base64",
+      "causal_context",
+      "metadata",
+      "authority",
+    ]);
     this.callerURA = requiredHistoryPrincipalString(value.caller_ura, "caller_ura");
     this.calleeURA = requiredHistoryPrincipalString(value.callee_ura, "callee_ura");
     this.subjectURA = requiredHistoryPrincipalString(value.subject_ura, "subject_ura");
+    this.nonceBase64 = optionalRuntimeString(value.nonce_base64, "nonce_base64") ?? "";
+    if (this.nonceBase64) {
+      validateRuntimeBase64(this.nonceBase64, "nonce_base64", 16);
+    }
+    this.causalContext = value.causal_context === undefined || value.causal_context === null
+      ? null
+      : objectValue(value.causal_context, "causal_context");
     this.metadata = objectValue(value.metadata ?? {}, "metadata");
     this.authority = normalizeRuntimeCallAuthority(value.authority ?? null);
   }
 
   toJSON() {
-    return {
+    const value = {
       caller_ura: this.callerURA,
       callee_ura: this.calleeURA,
       subject_ura: this.subjectURA,
       metadata: { ...this.metadata },
     };
+    if (this.nonceBase64) {
+      value.nonce_base64 = this.nonceBase64;
+    }
+    if (this.causalContext !== null) {
+      value.causal_context = { ...this.causalContext };
+    }
+    return value;
   }
 }
 
@@ -937,9 +963,44 @@ export class SessionHistoryOperations {
   }
 }
 
+export class RuntimeReceiptProvider {
+  constructor(ability) {
+    if (!(ability instanceof RuntimeAbilityClient)) {
+      throw invalidHistory("runtime ability client is required");
+    }
+    this.ability = ability;
+  }
+
+  receiptHistoryListAuthorityScope() {
+    return RUNTIME_RECEIPT_HISTORY_PROVIDER === "receipt_history"
+      ? "invocation.history.list"
+      : RUNTIME_RECEIPT_HISTORY_PROVIDER;
+  }
+
+  async list(request) {
+    const payload = request instanceof ReceiptListRequest
+      ? request
+      : new ReceiptListRequest(request);
+    validateSessionHistoryRequest(payload);
+    const args = receiptListArguments(payload);
+    const output = await this.ability.invokeGovernanceRead(
+      payload.call,
+      "invocation.history.list",
+      args,
+      RUNTIME_RECEIPT_HISTORY_PROVIDER,
+    );
+    return new ReceiptHistoryPage({
+      records: historyOutputRecords(output),
+      next_cursor: optionalRuntimeString(output.next_cursor, "next_cursor") ?? "",
+      limit: payload.limit,
+      source: receiptLedgerSource(output),
+    });
+  }
+}
+
 export class InvocationBuilder {
   constructor() {
-    this.fields = { metadata: {} };
+    this.fields = { metadata: {}, governanceRead: false };
     this.hasArgs = false;
     this.hasArguments = false;
     this.consumed = false;
@@ -997,6 +1058,11 @@ export class InvocationBuilder {
     return this;
   }
 
+  withRuntimeGovernanceRead() {
+    this.fields.governanceRead = true;
+    return this;
+  }
+
   withAuthorityMetadata(value) {
     const authority = value instanceof AuthorityMetadata ? value : new AuthorityMetadata(value);
     this.fields.metadata = authority.mergeInto(this.fields.metadata ?? {});
@@ -1008,6 +1074,7 @@ export class InvocationBuilder {
     return new InvocationDraft({
       ...this.fields,
       hasArgs: this.hasArgs,
+      governanceRead: this.fields.governanceRead === true,
     });
   }
 
@@ -1061,6 +1128,17 @@ export class RuntimeClient {
       Buffer.from(JSON.stringify(options ?? {})),
     );
     return PreparedInvocation.fromJSON(raw).bindRuntime(this);
+  }
+
+  async resolveDescriptorRef(request) {
+    const transport = this.requireOpen();
+    if (typeof transport.resolveDescriptorRef !== "function") {
+      throw invalidSDK("runtime descriptor resolver transport function is required");
+    }
+    const raw = await transport.resolveDescriptorRef(
+      Buffer.from(JSON.stringify(runtimeDescriptorRefRequest(request))),
+    );
+    return runtimeDescriptorRefResponse(raw);
   }
 
   async submitSigned(signed) {
@@ -1152,6 +1230,78 @@ export class RuntimeClient {
       throw invalidSDK("runtime client is closed");
     }
     return this.transport;
+  }
+}
+
+export class RuntimeAbilityClient {
+  constructor(runtime) {
+    if (!(runtime instanceof RuntimeClient)) {
+      throw invalidSDK("runtime client is required");
+    }
+    this.runtime = runtime;
+  }
+
+  async build(call, abilityName, argumentsValue, options = {}) {
+    const policy = runtimeAbilityDispatchPolicy(options);
+    return this.buildWithPolicy(call, abilityName, argumentsValue, "rpc", policy);
+  }
+
+  async invoke(call, abilityName, argumentsValue) {
+    const result = await this.runtime.invoke(await this.build(call, abilityName, argumentsValue));
+    return runtimeAbilityObjectOutput(result);
+  }
+
+  async buildGovernanceRead(call, abilityName, argumentsValue, provider = RUNTIME_RECEIPT_HISTORY_PROVIDER) {
+    return this.buildWithPolicy(
+      call,
+      abilityName,
+      argumentsValue,
+      "rpc",
+      runtimeAbilityGovernanceReadPolicy(provider),
+    );
+  }
+
+  async invokeGovernanceRead(call, abilityName, argumentsValue, provider = RUNTIME_RECEIPT_HISTORY_PROVIDER) {
+    const result = await this.runtime.invoke(
+      await this.buildGovernanceRead(call, abilityName, argumentsValue, provider),
+    );
+    return runtimeAbilityObjectOutput(result);
+  }
+
+  async buildWithPolicy(call, abilityName, argumentsValue, callMode, policy) {
+    const context = call instanceof RuntimeCallContext ? call : new RuntimeCallContext(call);
+    validateRuntimeAbilityCallContext(context);
+    const ability = requiredRuntimeText(abilityName, "ability name");
+    if (!policy.allowGovernanceRead && runtimeGovernanceReadAbility(ability)) {
+      throw invalidInvocation(
+        "runtime governance receipt/history/catalogue abilities must use RuntimeReceiptProvider or RuntimeAbilityDescriptorProvider",
+      );
+    }
+    const subjectURA = runtimeAbilitySubjectURA(context, policy);
+    const descriptorRef = await this.runtime.resolveDescriptorRef({
+      callee_ura: context.calleeURA,
+      ability,
+      call_mode: requiredRuntimeText(callMode, "call_mode"),
+      caller_ura: context.callerURA,
+      subject_ura: runtimeAbilityDescriptorResolutionSubjectURA(context, subjectURA, policy),
+      provider: policy.descriptorProvider,
+    });
+    const projection = RuntimeAbilityProjection.fromDescriptorRef(context.calleeURA, descriptorRef);
+    const metadata = runtimeAbilityMetadata(context, projection, subjectURA);
+    const builder = new InvocationBuilder()
+      .withCallerURA(context.callerURA)
+      .withCalleeURA(context.calleeURA)
+      .withDescriptorRef(descriptorRef)
+      .withSubjectURA(subjectURA)
+      .withNonceBase64(context.nonceBase64)
+      .withCausalContext(context.causalContext)
+      .withJSONArgs(argumentsValue)
+      .withContentType("application/json")
+      .withMetadata(metadata);
+    if (policy.allowGovernanceRead) {
+      builder.withRuntimeGovernanceRead();
+    }
+    return builder.build();
   }
 }
 
@@ -3818,6 +3968,150 @@ class RuntimeAbilityProjection {
     }
     return "";
   }
+}
+
+function runtimeDescriptorRefRequest(request) {
+  const value = objectValue(request, "descriptor ref request");
+  rejectRuntimeFields(value, [
+    "callee_ura",
+    "ability",
+    "call_mode",
+    "caller_ura",
+    "subject_ura",
+    "provider",
+  ]);
+  const out = {
+    callee_ura: requiredHistoryPrincipalString(value.callee_ura, "callee_ura"),
+    ability: requiredRuntimeText(value.ability, "ability"),
+    call_mode: requiredRuntimeText(value.call_mode, "call_mode"),
+  };
+  const caller = optionalRuntimeString(value.caller_ura, "caller_ura") ?? "";
+  const subject = optionalRuntimeString(value.subject_ura, "subject_ura") ?? "";
+  const provider = optionalRuntimeString(value.provider, "provider") ?? "";
+  if (caller.trim()) out.caller_ura = caller.trim();
+  if (subject.trim()) out.subject_ura = subject.trim();
+  if (provider.trim()) out.provider = provider.trim();
+  return out;
+}
+
+function runtimeDescriptorRefResponse(raw) {
+  const text = decodeText(raw).trim();
+  if (text.startsWith("{")) {
+    const value = parseJSON(text, "descriptor ref response");
+    return requiredRuntimeText(value.descriptor_ref, "descriptor_ref");
+  }
+  return requiredRuntimeText(text, "descriptor_ref");
+}
+
+function runtimeAbilityDispatchPolicy(options = {}) {
+  const value = objectValue(options ?? {}, "runtime ability dispatch policy");
+  return {
+    allowGovernanceRead: value.allow_governance_read === true,
+    subjectPolicy: optionalRuntimeString(value.subject_policy, "subject_policy") ?? "descriptor_bound",
+    descriptorProvider: optionalRuntimeString(value.descriptor_provider, "descriptor_provider") ?? "",
+  };
+}
+
+function runtimeAbilityGovernanceReadPolicy(provider) {
+  return {
+    allowGovernanceRead: true,
+    subjectPolicy: "descriptor_bound",
+    descriptorProvider: requiredRuntimeText(provider, "descriptor_provider"),
+  };
+}
+
+function validateRuntimeAbilityCallContext(call) {
+  if (!(call instanceof RuntimeCallContext)) {
+    throw invalidInvocation("runtime call context is required");
+  }
+  if (!call.nonceBase64) {
+    throw invalidInvocation("nonce_base64 is required");
+  }
+  if (call.causalContext === null) {
+    throw invalidInvocation("causal_context is required");
+  }
+}
+
+function runtimeAbilitySubjectURA(call, policy) {
+  switch (policy.subjectPolicy) {
+    case "descriptor_bound":
+      return call.subjectURA.trim();
+    case "runtime_owner":
+      return call.calleeURA.trim();
+    default:
+      throw invalidInvocation("runtime ability subject policy is unsupported");
+  }
+}
+
+function runtimeAbilityDescriptorResolutionSubjectURA(call, subjectURA, policy) {
+  if (policy.subjectPolicy === "runtime_owner") {
+    return subjectURA.trim();
+  }
+  return call.subjectURA.trim();
+}
+
+function runtimeAbilityMetadata(call, ability, subjectURA) {
+  const metadata = { ...objectValue(call.metadata ?? {}, "metadata") };
+  if (call.authority !== null) {
+    Object.assign(metadata, call.authority.metadata().toMetadata());
+  }
+  validateAuthorityMetadata(metadata);
+  const draft = {
+    callerURA: call.callerURA,
+    calleeURA: call.calleeURA,
+    subjectURA,
+    descriptorRef: ability.abilityURA,
+    metadata,
+  };
+  validateInvocationAuthorityBinding(draft);
+  return metadata;
+}
+
+function runtimeAbilityObjectOutput(result) {
+  const value = objectValue(result, "invocation result");
+  if (value.ok !== true) {
+    throw new SDKError({
+      code: ErrorCode.ABILITY_FAILED,
+      stage: "runtime",
+      retry: RetryHint.NEVER,
+      message: "runtime ability invocation failed",
+      details: value,
+    });
+  }
+  const output = value.output ?? {};
+  return objectValue(output, "invocation output");
+}
+
+function receiptListArguments(request) {
+  const args = {};
+  if (request.filter !== null) {
+    Object.assign(args, request.filter.toJSON());
+  }
+  args.limit = request.limit;
+  if (request.cursor) {
+    args.cursor = request.cursor;
+  }
+  return args;
+}
+
+function historyOutputRecords(output) {
+  const records = output.records ?? [];
+  if (!Array.isArray(records)) {
+    throw invalidHistory("records must be an array");
+  }
+  return records.map((record, index) => objectValue(record, `records[${index}]`));
+}
+
+function receiptLedgerSource(output) {
+  const source = output.source;
+  if (typeof source === "string" && source.trim()) {
+    return source.trim();
+  }
+  const ledgerURA = output.ledger_ura;
+  if (typeof ledgerURA === "string" && ledgerURA.trim()) {
+    return ledgerURA.trim();
+  }
+  return "invocation.history.list";
 }
 
 function authorityMetadataValue(metadata, key) {

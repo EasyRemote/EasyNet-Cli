@@ -168,3 +168,33 @@
   - passed.
 - `/Users/macbook.silan.tech/.local/bin/codegraph sync`
   - passed; synced 1 changed code file.
+
+## Iteration 15
+
+- `target/debug/easynet device reset --purge-local-state --force --yes`
+  - removed local EasyNet state root.
+- `cargo build --bin easynet`
+  - passed.
+- `EASYNET_E2E_REQUESTS=2 EASYNET_E2E_CONCURRENCY=1 tools/scripts/cli-hub-device-daemon-e2e.sh --skip-build --keep --out-dir target/e2e/codex-clean-repro`
+  - passed; kept isolated work root `/tmp/easynet-chd.RjQzVJ`.
+- Remote public invoke checks from the isolated topology:
+  - `meta.list_abilities`: passed.
+  - `meta.list_resources`: passed.
+  - `invocation.history.list` via public remote invoke: rejected before dispatch with canonical-history-read-path guidance.
+  - local canonical invocation history read: passed and returned verified receipt chains.
+- `npm test --prefix sdk/node -- --test-name-pattern "runtime receipt provider|runtime ability public path|public invocation builder rejects receipt history|session history preflight"`
+  - 10 passed.
+- `npm test --prefix sdk/node`
+  - 71 passed.
+- `node --check sdk/node/index.js`
+  - passed.
+- `git diff --check`
+  - passed.
+- `tools/scripts/check-architecture-convergence.sh`
+  - passed.
+- `tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - passed.
+- `cargo fmt --check`
+  - passed.
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync`
+  - passed; synced 3 changed files.

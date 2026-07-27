@@ -201,3 +201,23 @@ Boundary: complete handler error frames still project to typed data until the
 runtime terminal receipt closes the invocation lifecycle. Incomplete handler
 error frames now fail the dispatch mapping as protocol/schema violations; the
 daemon does not synthesize business failure codes or messages for them.
+
+## Node runtime receipt provider cutover
+
+Decision: Node SDK must expose a provider-backed `RuntimeReceiptProvider`
+composed over a generic `RuntimeAbilityClient`, matching Go and Python. Receipt
+history reads resolve descriptors through the receipt-history provider and
+dispatch through the governance-read seam, not through public descriptor-bound
+action ingress.
+
+Reason: clean Hub/device testing shows remote catalog/resource public ingress is
+healthy, while direct remote `invocation.history.list` is correctly rejected.
+The remaining product failure mode is an SDK/product boundary gap: Node-facing
+product code can still lack a canonical receipt provider and therefore rebuild a
+history invocation by hand, producing descriptor/admission/session-subject
+errors downstream.
+
+Boundary: the generic public `InvocationBuilder` and public action path continue
+to reject runtime governance read descriptors. The new provider path does not
+add a compatibility alias; callers must provide explicit caller, callee,
+subject, nonce, causal context, and authority facts before dispatch.

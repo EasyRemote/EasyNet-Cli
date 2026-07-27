@@ -39,10 +39,12 @@ const expectedExports = [
   "ReceiptHistoryPage",
   "ReceiptListRequest",
   "RetryHint",
+  "RuntimeAbilityClient",
   "RuntimeCallContext",
   "RuntimeClient",
   "RuntimeHealth",
   "RuntimeReceipt",
+  "RuntimeReceiptProvider",
   "SDKError",
   "SESSION_AUTHORITY_METADATA_KEY",
   "SessionAuthority",
@@ -1462,6 +1464,104 @@ test("public invocation builder rejects runtime catalogue descriptor before disp
       /runtime governance read ability `meta\.list_abilities`/.test(error.message) &&
       /catalogue provider/.test(error.message),
   );
+});
+
+test("runtime ability public path rejects receipt history before descriptor resolution", async () => {
+  let resolverCalls = 0;
+  const runtime = new sdk.RuntimeClient({
+    invoke: () => {
+      throw new Error("invoke must not run");
+    },
+    resolveDescriptorRef: () => {
+      resolverCalls += 1;
+      return descriptor;
+    },
+  });
+  const ability = new sdk.RuntimeAbilityClient(runtime);
+
+  await assert.rejects(
+    () =>
+      ability.build(
+        {
+          caller_ura: caller,
+          callee_ura: callee,
+          subject_ura: callee,
+          nonce_base64: nonce,
+          causal_context: { form: "none" },
+        },
+        "invocation.history.list",
+        { limit: 5 },
+      ),
+    (error) =>
+      error instanceof sdk.SDKError &&
+      error.code === sdk.ErrorCode.INVALID_ARGUMENT &&
+      /RuntimeReceiptProvider/.test(error.message),
+  );
+  assert.equal(resolverCalls, 0);
+});
+
+test("runtime receipt provider uses governance descriptor provider and complete tuple", async () => {
+  const calls = [];
+  const historyDescriptor =
+    "easynet:///r/example/ability/device.dev-a.invocation.history.list@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read";
+  const runtime = new sdk.RuntimeClient({
+    resolveDescriptorRef: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      calls.push(["resolve", request]);
+      return JSON.stringify({ descriptor_ref: historyDescriptor });
+    },
+    invoke: (draftJSON) => {
+      const draft = JSON.parse(Buffer.from(draftJSON).toString("utf8"));
+      calls.push(["invoke", draft]);
+      return JSON.stringify({
+        ok: true,
+        terminal_state: "Completed",
+        output: {
+          records: [{ request_id: "req-1" }],
+          next_cursor: "",
+          ledger_ura: "easynet:///r/example/resource/device.dev-a/billing/invocations",
+        },
+        terminal_receipt: canonicalRuntimeReceipt("inv-history", "completed", "Completed", 1),
+      });
+    },
+  });
+  const history = new sdk.SessionHistoryOperations(
+    new sdk.RuntimeReceiptProvider(new sdk.RuntimeAbilityClient(runtime)),
+  );
+
+  const page = await history.list({
+    call: {
+      caller_ura: caller,
+      callee_ura: callee,
+      subject_ura: callee,
+      nonce_base64: nonce,
+      causal_context: { form: "none" },
+      metadata: {
+        [sdk.DELEGATION_METADATA_KEY]: delegationValue(["invocation.history.*"]),
+      },
+    },
+    limit: 5,
+  });
+
+  assert.equal(page.records.length, 1);
+  assert.equal(page.source, "easynet:///r/example/resource/device.dev-a/billing/invocations");
+  assert.deepEqual(calls[0], [
+    "resolve",
+    {
+      callee_ura: callee,
+      ability: "invocation.history.list",
+      call_mode: "rpc",
+      caller_ura: caller,
+      subject_ura: callee,
+      provider: "receipt_history",
+    },
+  ]);
+  assert.equal(calls[1][1].descriptor_ref, historyDescriptor);
+  assert.equal(calls[1][1].caller_ura, caller);
+  assert.equal(calls[1][1].callee_ura, callee);
+  assert.equal(calls[1][1].subject_ura, callee);
+  assert.equal(calls[1][1].nonce_base64, nonce);
+  assert.deepEqual(calls[1][1].causal_context, { form: "none" });
 });
 
 test("session history preflight rejects authority subject mismatch before receipt provider", async () => {

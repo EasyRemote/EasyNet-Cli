@@ -34,3 +34,8 @@
   projects them into `SessionFailure`. Missing handler error facts are dispatch
   protocol violations, not product failures with synthesized default codes or
   messages.
+- SDK receipt history reads are provider-backed governance reads in every
+  language. Product code must not invoke `invocation.history.list` through the
+  public descriptor-bound action ingress, and SDKs must expose a runtime receipt
+  provider that owns descriptor-provider selection, tuple construction, and
+  authority/subject preflight.
