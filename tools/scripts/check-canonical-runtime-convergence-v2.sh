@@ -10798,6 +10798,46 @@ check_driver_command_state_contract() {
   bash "$ROOT/tools/scripts/check-driver-command-state-boundary.sh" >/dev/null
 }
 
+check_claude_driver_terminal_result_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local driver="$cli_root/src/daemon/execution/mission/drivers/claude_code.rs"
+  [[ -f "$driver" ]] || fail "Claude mission driver source is missing"
+
+  "$PYTHON_BIN" - "$driver" <<'PY'
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+production = text.split("\n#[cfg(test)]", 1)[0]
+tests = text.split("\n#[cfg(test)]", 1)[1] if "\n#[cfg(test)]" in text else ""
+
+for retired in (
+    "Ok((result.stdout, final_stats))",
+    "stream didn't yield a result event",
+    "raw stdout so the caller still sees something useful",
+):
+    if retired in production:
+        raise SystemExit(f"claude_driver_terminal_result:retired_stdout_success_fallback:{retired}")
+
+for required in (
+    "let final_text = Arc::new(Mutex::new(None::<String>));",
+    "format_missing_final_result_event_error(&binary, &result)",
+    "bounded_stdout_preview(&result.stdout",
+    "process exited successfully but stream-json output did not",
+    "include a terminal result event",
+):
+    if required not in production:
+        raise SystemExit(f"claude_driver_terminal_result:missing:{required}")
+
+for required_test in (
+    "claude_driver_rejects_missing_final_result_event_with_bounded_stdout",
+    "stream_result_event_records_empty_terminal_result",
+):
+    if required_test not in tests:
+        raise SystemExit(f"claude_driver_terminal_result:test_missing:{required_test}")
+PY
+}
+
 check_retired_edge_adapter_policy_absence_contract() {
   local policy_py="$ROOT/sdk/conformance/edge_adapter_policy.py"
   local policy_json="$ROOT/sdk/conformance/edge-adapter-policy.v1.json"
@@ -27611,6 +27651,7 @@ EOF
   check_mission_agent_trace_sink_cutover_contract
   check_mission_dispatch_audit_authority_contract
   check_driver_command_state_contract
+  check_claude_driver_terminal_result_contract
   check_mission_runtime_meta_identity_schema_contract
   check_mission_token_usage_authority_contract
 	  check_mission_orchestration_persistence_authority_contract
@@ -27874,6 +27915,7 @@ check_cli_mcp_install_runtime_tenant_contract
 check_mission_agent_trace_sink_cutover_contract
 check_mission_dispatch_audit_authority_contract
 check_driver_command_state_contract
+check_claude_driver_terminal_result_contract
 check_mission_runtime_meta_identity_schema_contract
 check_mission_token_usage_authority_contract
 check_mission_orchestration_persistence_authority_contract

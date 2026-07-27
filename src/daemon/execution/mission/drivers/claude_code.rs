@@ -247,7 +247,7 @@ pub fn invoke(prompt: &str, opts: ClaudeOptions) -> anyhow::Result<(String, RunS
     let run_start = std::time::Instant::now();
 
     // Shared state assembled from the stream.
-    let final_text = Arc::new(Mutex::new(String::new()));
+    let final_text = Arc::new(Mutex::new(None::<String>));
     let stats = Arc::new(Mutex::new(RunStats::default()));
     let final_text_cb = Arc::clone(&final_text);
     let stats_cb = Arc::clone(&stats);
@@ -317,7 +317,11 @@ pub fn invoke(prompt: &str, opts: ClaudeOptions) -> anyhow::Result<(String, RunS
     let text = lock_or_recover(&final_text).clone();
 
     if result.exit_code != 0 {
-        anyhow::bail!(format_child_exit_error(&binary, &result, &text));
+        anyhow::bail!(format_child_exit_error(
+            &binary,
+            &result,
+            text.as_deref().unwrap_or("")
+        ));
     }
 
     let mut final_stats = lock_or_recover(&stats).clone();
@@ -325,13 +329,10 @@ pub fn invoke(prompt: &str, opts: ClaudeOptions) -> anyhow::Result<(String, RunS
         final_stats.duration_ms = run_start.elapsed().as_millis() as u64;
     }
 
-    if text.is_empty() {
-        // Fallback: stream didn't yield a result event (unexpected). Return
-        // raw stdout so the caller still sees something useful.
-        Ok((result.stdout, final_stats))
-    } else {
-        Ok((text, final_stats))
-    }
+    let Some(text) = text else {
+        anyhow::bail!(format_missing_final_result_event_error(&binary, &result));
+    };
+    Ok((text, final_stats))
 }
 
 fn append_claude_workspace_plugin_dirs(args: &mut Vec<String>, cwd: &Path) {
@@ -399,10 +400,38 @@ fn format_child_exit_error(
     format!("{binary} exited with code {}", result.exit_code)
 }
 
+const MISSING_RESULT_STDOUT_PREVIEW_CHARS: usize = 1024;
+
+fn format_missing_final_result_event_error(
+    binary: &str,
+    result: &process_runner::ChildResult,
+) -> String {
+    let stdout_preview =
+        bounded_stdout_preview(&result.stdout, MISSING_RESULT_STDOUT_PREVIEW_CHARS);
+    format!(
+        "{binary} protocol error: process exited successfully but stream-json output did not \
+         include a terminal result event; stdout_preview={stdout_preview:?}"
+    )
+}
+
+fn bounded_stdout_preview(stdout: &str, max_chars: usize) -> String {
+    let trimmed = stdout.trim();
+    if trimmed.is_empty() || max_chars == 0 {
+        return String::new();
+    }
+    let mut chars = trimmed.chars();
+    let preview: String = chars.by_ref().take(max_chars).collect();
+    if chars.next().is_some() {
+        format!("{preview}…")
+    } else {
+        preview
+    }
+}
+
 /// Parse one stream-json line and print a trace event to stderr.
 fn handle_stream_line(
     line: &str,
-    final_text: &Arc<Mutex<String>>,
+    final_text: &Arc<Mutex<Option<String>>>,
     stats: &Arc<Mutex<RunStats>>,
     run_start: std::time::Instant,
 ) {
@@ -534,9 +563,12 @@ fn handle_stream_line(
         "result" => {
             // Final result event — capture the assistant's final text plus
             // aggregate usage and cost metrics.
-            if let Some(text) = v.get("result").and_then(Value::as_str) {
-                *lock_or_recover(final_text) = text.to_string();
-            }
+            *lock_or_recover(final_text) = Some(
+                v.get("result")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+            );
             let mut s = lock_or_recover(stats);
             if let Some(n) = v.get("num_turns").and_then(Value::as_u64) {
                 s.num_turns = n;
@@ -717,7 +749,8 @@ fn run_stats_to_usage(s: &RunStats) -> AgentUsage {
 #[cfg(test)]
 mod tests {
     use super::{
-        append_claude_workspace_plugin_dirs, format_child_exit_error, handle_stream_line, RunStats,
+        append_claude_workspace_plugin_dirs, format_child_exit_error,
+        format_missing_final_result_event_error, handle_stream_line, RunStats,
     };
     use crate::daemon::execution::mission::process_runner::ChildResult;
     use std::sync::{Arc, Mutex};
@@ -766,6 +799,48 @@ mod tests {
     }
 
     #[test]
+    fn claude_driver_rejects_missing_final_result_event_with_bounded_stdout() {
+        let long_stdout = format!("{}\n{}", "x".repeat(1500), "tail");
+        let msg = format_missing_final_result_event_error("claude", &child(&long_stdout, "", 0));
+
+        assert!(
+            msg.contains("protocol error"),
+            "missing terminal event must be a protocol error: {msg}"
+        );
+        assert!(
+            msg.contains("terminal result event"),
+            "error must name the missing terminal fact: {msg}"
+        );
+        assert!(
+            msg.contains('…'),
+            "long stdout diagnostics must be visibly truncated: {msg}"
+        );
+        assert!(
+            !msg.contains("tail"),
+            "bounded diagnostic must not expose unbounded raw stdout: {msg}"
+        );
+    }
+
+    #[test]
+    fn stream_result_event_records_empty_terminal_result() {
+        let final_text = Arc::new(Mutex::new(None::<String>));
+        let stats = Arc::new(Mutex::new(RunStats::default()));
+        handle_stream_line(
+            r#"{"type":"result","result":"","num_turns":1}"#,
+            &final_text,
+            &stats,
+            std::time::Instant::now(),
+        );
+
+        assert_eq!(
+            final_text.lock().unwrap().as_deref(),
+            Some(""),
+            "empty result event is still a terminal result fact"
+        );
+        assert_eq!(stats.lock().unwrap().num_turns, 1);
+    }
+
+    #[test]
     fn plugin_dirs_use_claude_project_skill_root_only() {
         let workspace = tempfile::tempdir().expect("workspace");
 
@@ -798,7 +873,7 @@ mod tests {
 
     #[test]
     fn stream_tool_result_backfills_easynet_invocation_identity() {
-        let final_text = Arc::new(Mutex::new(String::new()));
+        let final_text = Arc::new(Mutex::new(None::<String>));
         let stats = Arc::new(Mutex::new(RunStats::default()));
         let start = std::time::Instant::now();
         handle_stream_line(
@@ -837,7 +912,7 @@ mod tests {
 
     #[test]
     fn stream_tool_result_ignores_trace_metadata_for_non_easynet_tool() {
-        let final_text = Arc::new(Mutex::new(String::new()));
+        let final_text = Arc::new(Mutex::new(None::<String>));
         let stats = Arc::new(Mutex::new(RunStats::default()));
         let start = std::time::Instant::now();
         handle_stream_line(
