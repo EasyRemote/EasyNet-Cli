@@ -104,8 +104,8 @@ final class AuthoritySupport {
 
   static void validateSessionAuthoritySubjectBinding(
       String subjectURA, String sessionOwnerUserID, String sessionID) {
-    if (RuntimeSubjects.isRetiredInvocationHistorySubject(subjectURA)) {
-      throw invalid("session authority subject_ura uses retired invocation-history subject; use runtime-state/read");
+    if (!RuntimeSubjects.canonicalSessionAuthorityID(sessionID)) {
+      throw invalid("session authority session_id is not canonical");
     }
     AuthoritySubject subject = canonicalAuthoritySubject(subjectURA);
     if (subject == null) {
@@ -127,7 +127,7 @@ final class AuthoritySupport {
       return false;
     }
     String subject = subjectURA.trim();
-    if (RuntimeSubjects.isRetiredInvocationHistorySubject(subject)) {
+    if (!RuntimeSubjects.canonicalSessionAuthorityID(authority.sessionID())) {
       return false;
     }
     if (authority.subjectURA().trim().equals(subject)) {
@@ -135,6 +135,11 @@ final class AuthoritySupport {
     }
     RuntimeSubjects.ResourceSubject resource = RuntimeSubjects.canonicalResourceSubject(subject);
     if (resource == null) {
+      return false;
+    }
+    if (resource.path().startsWith("session/")
+        && !RuntimeSubjects.canonicalSessionAuthorityID(
+            resource.path().substring("session/".length()))) {
       return false;
     }
     String ownerUserID = authority.sessionOwnerUserID().trim();
@@ -261,8 +266,7 @@ final class AuthoritySupport {
     if (ownerUserID.isEmpty()
         || ownerUserID.contains(".")
         || ownerUserID.contains("/")
-        || authoritySessionID.isEmpty()
-        || authoritySessionID.contains("/")) {
+        || !RuntimeSubjects.canonicalSessionAuthorityID(authoritySessionID)) {
       return null;
     }
     return new AuthoritySubject("session", ownerUserID, authoritySessionID);

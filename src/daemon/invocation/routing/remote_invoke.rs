@@ -362,7 +362,7 @@ impl RemoteRootAbilityAdmission {
 /// invocations. Receipt/history abilities are governance read-model routes
 /// with their own caller, subject, authority, and filter semantics. Admitting
 /// them here lets product callers bypass the canonical history read issuer and
-/// recreate the legacy `/session/invocation_history` subject path.
+/// mint noncanonical session subjects outside the history read authority.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RemotePublicAbilityAdmission {
     Accepted,

@@ -141,46 +141,27 @@ pub enum RuntimeGovernanceReadSubject {
     RuntimeOwner { subject_ura: String, realm: String },
 }
 
-/// Retired subject path formerly used by invocation-history read sessions.
-///
-/// The canonical runtime model now represents user-owned read projections with
-/// [`RuntimeStateReadSubject::RESOURCE_PATH`]. Keeping this retired carrier
-/// admissible at generic authority boundaries would let old metadata bypass the
-/// canonical runtime-state subject model.
-pub const RETIRED_INVOCATION_HISTORY_SUBJECT_PATH: &str = "session/invocation_history";
+#[must_use]
+pub fn is_canonical_session_authority_id(value: &str) -> bool {
+    let value = value.trim();
+    !value.is_empty()
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '.')
+}
 
 #[must_use]
-pub fn is_retired_invocation_history_subject(value: &str) -> bool {
-    let value = value.trim();
-    if value.is_empty() {
-        return false;
-    }
-    let Ok(parsed) = crate::core::ura::parse_ura(value) else {
+pub fn session_resource_subject_has_noncanonical_session_id(value: &str) -> bool {
+    let Ok(parsed) = crate::core::ura::parse_ura(value.trim()) else {
         return false;
     };
     if parsed.kind != crate::core::ura::URAKind::Resource {
         return false;
     }
-    let Some(owner) = parsed.resource_owner_id() else {
-        return false;
-    };
-    let Some(user_id) = owner.strip_prefix("user.") else {
-        return false;
-    };
-    !user_id.trim().is_empty()
-        && !user_id.contains('.')
-        && parsed
-            .resource_path()
-            .is_some_and(is_retired_invocation_history_resource_path)
-}
-
-#[must_use]
-pub fn is_retired_invocation_history_resource_path(path: &str) -> bool {
-    let path = path.trim();
-    path == RETIRED_INVOCATION_HISTORY_SUBJECT_PATH
-        || path
-            .strip_prefix(RETIRED_INVOCATION_HISTORY_SUBJECT_PATH)
-            .is_some_and(|suffix| suffix.starts_with(':'))
+    parsed
+        .resource_path()
+        .and_then(|path| path.trim().strip_prefix("session/"))
+        .is_some_and(|session_id| !is_canonical_session_authority_id(session_id))
 }
 
 impl RuntimeStateReadSubject {
@@ -541,21 +522,21 @@ mod tests {
     }
 
     #[test]
-    fn retired_invocation_history_subject_predicate_is_specific_to_old_user_carrier() {
-        assert!(is_retired_invocation_history_subject(
+    fn session_resource_subject_rejects_noncanonical_session_ids() {
+        assert!(session_resource_subject_has_noncanonical_session_id(
             "  easynet:///r/acme/resource/user.alice/session/invocation_history  "
         ));
-        assert!(is_retired_invocation_history_subject(
+        assert!(session_resource_subject_has_noncanonical_session_id(
             "easynet:///r/acme/resource/user.alice/session/invocation_history:invocation.history.list:req-123"
         ));
-        assert!(!is_retired_invocation_history_subject(
+        assert!(!session_resource_subject_has_noncanonical_session_id(
             "easynet:///r/acme/resource/user.alice/runtime-state/read"
         ));
-        assert!(!is_retired_invocation_history_subject(
-            "easynet:///r/acme/resource/agent.alice.reader/session/invocation_history"
+        assert!(!session_resource_subject_has_noncanonical_session_id(
+            "easynet:///r/acme/resource/agent.alice.reader/session/session-1"
         ));
-        assert!(!is_retired_invocation_history_subject(
-            "easynet:///r/acme/resource/user.alice/session/invocation_history_v2"
+        assert!(!session_resource_subject_has_noncanonical_session_id(
+            "easynet:///r/acme/resource/user.alice/session/invocation.history.v2"
         ));
     }
 }

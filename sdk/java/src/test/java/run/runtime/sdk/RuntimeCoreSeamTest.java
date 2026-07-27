@@ -47,7 +47,7 @@ public final class RuntimeCoreSeamTest {
           "preparedInvocationRejectsRequestIDOnlyAlias",
           "completeTupleRejectsMissingCaller",
           "completeTupleRejectsAllZeroPrincipals",
-          "completeTupleRejectsRetiredInvocationHistorySubjectAuthorityCarrier",
+          "completeTupleRejectsNoncanonicalSessionSubjectAuthorityCarrier",
           "completeTupleRejectsReceiptHistoryPublicInvocation",
           "completeTupleRejectsCatalogueReadPublicInvocation",
           "preparedInvocationCannotBeSubmitted",
@@ -118,8 +118,8 @@ public final class RuntimeCoreSeamTest {
           preparedInvocationRejectsRequestIDOnlyAlias();
       case "completeTupleRejectsMissingCaller" -> completeTupleRejectsMissingCaller();
       case "completeTupleRejectsAllZeroPrincipals" -> completeTupleRejectsAllZeroPrincipals();
-      case "completeTupleRejectsRetiredInvocationHistorySubjectAuthorityCarrier" ->
-          completeTupleRejectsRetiredInvocationHistorySubjectAuthorityCarrier();
+      case "completeTupleRejectsNoncanonicalSessionSubjectAuthorityCarrier" ->
+          completeTupleRejectsNoncanonicalSessionSubjectAuthorityCarrier();
       case "completeTupleRejectsReceiptHistoryPublicInvocation" ->
           completeTupleRejectsReceiptHistoryPublicInvocation();
       case "completeTupleRejectsCatalogueReadPublicInvocation" ->
@@ -1281,8 +1281,8 @@ public final class RuntimeCoreSeamTest {
         () -> completeBuilder().subject(placeholder).inspect());
   }
 
-  private static void completeTupleRejectsRetiredInvocationHistorySubjectAuthorityCarrier() {
-    String retiredSubject =
+  private static void completeTupleRejectsNoncanonicalSessionSubjectAuthorityCarrier() {
+    String noncanonicalSessionSubject =
         "easynet:///r/example/resource/user.alice/session/invocation_history";
     Map<String, Object> payload = new LinkedHashMap<>();
     payload.put("issuer_ura", CALLER);
@@ -1290,7 +1290,7 @@ public final class RuntimeCoreSeamTest {
     payload.put("session_owner_user_id", "alice");
     payload.put("creator_principal_id", CALLER);
     payload.put("callee_ura", CALLEE);
-    payload.put("subject_ura", retiredSubject);
+    payload.put("subject_ura", noncanonicalSessionSubject);
     payload.put("audience", CALLEE);
     payload.put("scopes", List.of("observe.health"));
     payload.put("allowed_actions", List.of("invoke"));
@@ -1300,10 +1300,10 @@ public final class RuntimeCoreSeamTest {
 
     expectSDKError(
         ErrorCode.INVALID_ARGUMENT,
-        "retired invocation-history subject",
+        "session_id is not canonical",
         () ->
             completeBuilder()
-                .subject(retiredSubject)
+                .subject(noncanonicalSessionSubject)
                 .metadata(
                     Map.of(
                         AuthoritySupport.SESSION_AUTHORITY_METADATA_KEY,

@@ -912,15 +912,15 @@ final class RuntimeCoreSeamTests: XCTestCase {
         }
     }
 
-    func testCompleteTupleRejectsRetiredInvocationHistorySubjectAuthorityCarrier() throws {
-        let retiredSubject = "easynet:///r/example/resource/user.alice/session/invocation_history"
+    func testCompleteTupleRejectsNoncanonicalSessionSubjectAuthorityCarrier() throws {
+        let noncanonicalSessionSubject = "easynet:///r/example/resource/user.alice/session/invocation_history"
         let metadata = try authorityMetadataValue([
             "issuer_ura": caller,
             "session_id": "invocation_history",
             "session_owner_user_id": "alice",
             "creator_principal_id": caller,
             "callee_ura": callee,
-            "subject_ura": retiredSubject,
+            "subject_ura": noncanonicalSessionSubject,
             "audience": callee,
             "scopes": ["observe.health"],
             "allowed_actions": ["invoke"],
@@ -928,9 +928,9 @@ final class RuntimeCoreSeamTests: XCTestCase {
             "issued_at_ms": 10,
             "expires_at_ms": 20,
         ])
-        expectSyncSDKError(.invalidArgument, "retired invocation-history subject") {
+        expectSyncSDKError(.invalidArgument, "session_id is not canonical") {
             _ = try completeBuilder()
-                .withSubjectURA(retiredSubject)
+                .withSubjectURA(noncanonicalSessionSubject)
                 .withMetadata([sessionAuthorityMetadataKey: .string(metadata)])
                 .inspect()
         }

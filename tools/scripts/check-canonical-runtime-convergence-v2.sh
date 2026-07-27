@@ -17717,7 +17717,8 @@ required_support = {
     "static boolean sessionAuthorityAdmitsSubject": "shared_session_subject_predicate_missing",
     "RuntimeSubjects.canonicalResourceSubject": "runtime_subject_parser_consumer_missing",
     "RuntimeSubjects.ResourceSubject": "runtime_subject_value_object_consumer_missing",
-    "RuntimeSubjects.isRetiredInvocationHistorySubject": "retired_subject_predicate_consumer_missing",
+    "RuntimeSubjects.canonicalSessionAuthorityID": "canonical_session_id_consumer_missing",
+    "session authority session_id is not canonical": "canonical_session_id_error_missing",
 }
 for needle, label in required_support.items():
     if needle not in support:
@@ -17725,10 +17726,17 @@ for needle, label in required_support.items():
 required_subjects = {
     "static ResourceSubject canonicalResourceSubject": "structured_resource_subject_parser_missing",
     "record ResourceSubject": "resource_subject_value_object_missing",
-    "static boolean isRetiredInvocationHistorySubject": "retired_subject_predicate_missing",
+    "static boolean canonicalSessionAuthorityID": "canonical_session_id_predicate_missing",
 }
 for needle, label in required_subjects.items():
     if needle not in subjects:
+        raise SystemExit(f"java_invocation_authority_binding:{label}")
+for forbidden, label in {
+    "isRetiredInvocationHistorySubject": "retired_subject_predicate_reintroduced",
+    "RETIRED_INVOCATION_HISTORY_SUBJECT_PATH": "retired_subject_path_reintroduced",
+    "retired invocation-history subject": "retired_subject_error_reintroduced",
+}.items():
+    if forbidden in support or forbidden in subjects:
         raise SystemExit(f"java_invocation_authority_binding:{label}")
 for forbidden, label in {
     "resourceOwnerID": "validator_owns_resource_owner_parser",
@@ -17785,8 +17793,9 @@ java_support, java_subjects, java_tests, swift_authority, swift_subjects, swift_
 ]
 
 for token, label in {
-    "RuntimeSubjects.isRetiredInvocationHistorySubject": "java_retired_subject_predicate_consumer_missing",
     "RuntimeSubjects.canonicalResourceSubject": "java_resource_subject_parser_consumer_missing",
+    "RuntimeSubjects.canonicalSessionAuthorityID": "java_canonical_session_id_consumer_missing",
+    "session authority session_id is not canonical": "java_canonical_session_id_error_missing",
 }.items():
     if token not in java_support:
         raise SystemExit(f"runtime_state_subject_parity:{label}")
@@ -17799,8 +17808,16 @@ for token, label in {
     "canonicalResourceSubject(subject) == null": "java_canonical_resource_guard_missing",
     "static ResourceSubject canonicalResourceSubject": "java_resource_subject_parser_missing",
     "record ResourceSubject": "java_resource_subject_value_object_missing",
+    "static boolean canonicalSessionAuthorityID": "java_canonical_session_id_missing",
 }.items():
     if token not in java_subjects:
+        raise SystemExit(f"runtime_state_subject_parity:{label}")
+for token, label in {
+    "isRetiredInvocationHistorySubject": "java_retired_subject_predicate_reintroduced",
+    "RETIRED_INVOCATION_HISTORY_SUBJECT_PATH": "java_retired_subject_path_reintroduced",
+    "retired invocation-history subject": "java_retired_subject_error_reintroduced",
+}.items():
+    if token in java_support or token in java_subjects:
         raise SystemExit(f"runtime_state_subject_parity:{label}")
 for token, label in {
     "AuthoritySupport.runtimeStateReadSubjectURA": "java_public_helper_delegates_to_authority",
@@ -17821,8 +17838,9 @@ for token, label in {
 
 for token, label in {
     "try RuntimeSubjects.runtimeStateReadSubjectURA(realm: realm, userID: userID)": "swift_public_helper_delegation_missing",
-    "RuntimeSubjects.isRetiredInvocationHistorySubject": "swift_retired_subject_predicate_consumer_missing",
     "RuntimeSubjects.canonicalResourceSubject": "swift_resource_subject_parser_consumer_missing",
+    "RuntimeSubjects.canonicalSessionAuthorityID": "swift_canonical_session_id_consumer_missing",
+    "session authority session_id is not canonical": "swift_canonical_session_id_error_missing",
 }.items():
     if token not in swift_authority:
         raise SystemExit(f"runtime_state_subject_parity:{label}")
@@ -17835,9 +17853,16 @@ for token, label in {
     "canonicalResourceSubject(subject) != nil": "swift_canonical_resource_guard_missing",
     "static func canonicalResourceSubject": "swift_resource_subject_parser_missing",
     "struct ResourceSubject": "swift_resource_subject_value_object_missing",
-    "static func isRetiredInvocationHistorySubject": "swift_retired_subject_predicate_missing",
+    "static func canonicalSessionAuthorityID": "swift_canonical_session_id_missing",
 }.items():
     if token not in swift_subjects:
+        raise SystemExit(f"runtime_state_subject_parity:{label}")
+for token, label in {
+    "isRetiredInvocationHistorySubject": "swift_retired_subject_predicate_reintroduced",
+    "retiredInvocationHistorySubjectPath": "swift_retired_subject_path_reintroduced",
+    "retired invocation-history subject": "swift_retired_subject_error_reintroduced",
+}.items():
+    if token in swift_authority or token in swift_subjects:
         raise SystemExit(f"runtime_state_subject_parity:{label}")
 for token, label in {
     "private let runtimeStateReadSubjectPath": "swift_authority_owns_runtime_subject_path",
@@ -17897,7 +17922,8 @@ required_authority = {
     "sessionAuthorityAdmitsSubject": "session_subject_predicate_missing",
     "RuntimeAbilityProjection(tuple: tuple)": "runtime_ability_projection_missing",
     "RuntimeSubjects.canonicalResourceSubject": "runtime_subject_parser_consumer_missing",
-    "RuntimeSubjects.isRetiredInvocationHistorySubject": "retired_subject_predicate_consumer_missing",
+    "RuntimeSubjects.canonicalSessionAuthorityID": "canonical_session_id_consumer_missing",
+    "session authority session_id is not canonical": "canonical_session_id_error_missing",
 }
 for needle, label in required_authority.items():
     if needle not in authority:
@@ -17906,10 +17932,17 @@ required_subjects = {
     "enum RuntimeSubjects": "runtime_subjects_boundary_missing",
     "static func canonicalResourceSubject": "structured_resource_subject_parser_missing",
     "struct ResourceSubject": "resource_subject_value_object_missing",
-    "static func isRetiredInvocationHistorySubject": "retired_subject_predicate_missing",
+    "static func canonicalSessionAuthorityID": "canonical_session_id_predicate_missing",
 }
 for needle, label in required_subjects.items():
     if needle not in subjects:
+        raise SystemExit(f"swift_invocation_authority_binding:{label}")
+for forbidden, label in {
+    "isRetiredInvocationHistorySubject": "retired_subject_predicate_reintroduced",
+    "retiredInvocationHistorySubjectPath": "retired_subject_path_reintroduced",
+    "retired invocation-history subject": "retired_subject_error_reintroduced",
+}.items():
+    if forbidden in authority or forbidden in subjects:
         raise SystemExit(f"swift_invocation_authority_binding:{label}")
 for forbidden, label in {
     "InvocationAbilityView": "authority_retains_private_ability_view",
@@ -17975,6 +18008,87 @@ required_tests = {
 for needle, label in required_tests.items():
     if needle not in tests:
         raise SystemExit(f"swift_invocation_authority_binding:{label}")
+PY
+}
+
+check_session_authority_canonical_id_convergence_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  "$PYTHON_BIN" - "$cli_root" <<'PY'
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+sources = {
+    "rust_identity": root / "src/core/identity/mod.rs",
+    "rust_authority": root / "src/daemon/invocation/admission/authority_metadata.rs",
+    "rust_ffi": root / "src/ffi/invocation/mod.rs",
+    "java_subjects": root / "sdk/java/src/main/java/run/runtime/sdk/RuntimeSubjects.java",
+    "java_support": root / "sdk/java/src/main/java/run/runtime/sdk/AuthoritySupport.java",
+    "swift_subjects": root / "sdk/swift/Sources/RuntimeSDK/RuntimeSubjects.swift",
+    "swift_authority": root / "sdk/swift/Sources/RuntimeSDK/Authority.swift",
+}
+text = {}
+for name, path in sources.items():
+    if not path.exists():
+        raise SystemExit(f"session_authority_canonical_id_convergence:missing:{name}:{path}")
+    text[name] = path.read_text(encoding="utf-8")
+
+for name, body in text.items():
+    for forbidden in (
+        "is_retired_invocation_history_subject",
+        "is_retired_invocation_history_resource_path",
+        "RETIRED_INVOCATION_HISTORY_SUBJECT_PATH",
+        "isRetiredInvocationHistorySubject",
+        "retiredInvocationHistorySubjectPath",
+        "retired invocation-history subject",
+    ):
+        if forbidden in body:
+            raise SystemExit(
+                f"session_authority_canonical_id_convergence:retired_helper_reintroduced:{name}:{forbidden}"
+            )
+
+requirements = {
+    "rust_identity": (
+        "pub fn is_canonical_session_authority_id(",
+        "session_resource_subject_has_noncanonical_session_id(",
+    ),
+    "rust_authority": (
+        "is_canonical_session_authority_id(&payload.session_id)",
+        "session authority session_id is not canonical",
+        "is_canonical_session_authority_id(session_id)",
+    ),
+    "rust_ffi": (
+        "NoncanonicalSessionSubject",
+        "session_resource_subject_has_noncanonical_session_id(value)",
+    ),
+    "java_subjects": (
+        "static boolean canonicalSessionAuthorityID(",
+        "ch == '-'",
+        "ch == '.'",
+    ),
+    "java_support": (
+        "RuntimeSubjects.canonicalSessionAuthorityID(sessionID)",
+        "session authority session_id is not canonical",
+        "RuntimeSubjects.canonicalSessionAuthorityID(authoritySessionID)",
+    ),
+    "swift_subjects": (
+        "static func canonicalSessionAuthorityID(",
+        "value == 0x2D",
+        "value == 0x2E",
+    ),
+    "swift_authority": (
+        "RuntimeSubjects.canonicalSessionAuthorityID(sessionID)",
+        "session authority session_id is not canonical",
+        "RuntimeSubjects.canonicalSessionAuthorityID(authoritySessionID)",
+    ),
+}
+for name, tokens in requirements.items():
+    body = text[name]
+    for token in tokens:
+        if token not in body:
+            raise SystemExit(
+                f"session_authority_canonical_id_convergence:missing:{name}:{token}"
+            )
 PY
 }
 
@@ -27505,6 +27619,7 @@ check_cli_signed_submission_boundary_contract
 check_receipt_proof_fact_contract
 check_java_sdk_invocation_authority_binding_contract
 check_java_swift_runtime_state_subject_parity_contract
+check_session_authority_canonical_id_convergence_contract
 check_sdk_runtime_host_vocabulary_boundary_contract
 check_swift_sdk_invocation_authority_binding_contract
 check_python_sdk_signed_submission_complete_tuple_contract

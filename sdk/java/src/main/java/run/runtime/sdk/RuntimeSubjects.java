@@ -3,7 +3,6 @@ package run.runtime.sdk;
 /** Canonical runtime subject constructors shared by product facades. */
 public final class RuntimeSubjects {
   static final String RUNTIME_STATE_READ_SUBJECT_PATH = "runtime-state/read";
-  private static final String RETIRED_INVOCATION_HISTORY_SUBJECT_PATH = "session/invocation_history";
 
   private RuntimeSubjects() {}
 
@@ -66,16 +65,26 @@ public final class RuntimeSubjects {
     return new ResourceSubject(ownerID, resourcePath);
   }
 
-  static boolean isRetiredInvocationHistorySubject(String subjectURA) {
-    ResourceSubject subject = canonicalResourceSubject(subjectURA);
-    if (subject == null || !subject.ownerID().startsWith("user.")) {
+  static boolean canonicalSessionAuthorityID(String sessionID) {
+    if (sessionID == null) {
       return false;
     }
-    String ownerUserID = subject.ownerID().substring("user.".length()).trim();
-    return !ownerUserID.isEmpty()
-        && !ownerUserID.contains(".")
-        && !RuntimePrincipals.containsAllZeroPrincipal(ownerUserID)
-        && subject.path().equals(RETIRED_INVOCATION_HISTORY_SUBJECT_PATH);
+    String cleaned = sessionID.trim();
+    if (cleaned.isEmpty()) {
+      return false;
+    }
+    for (int index = 0; index < cleaned.length(); index++) {
+      char ch = cleaned.charAt(index);
+      if ((ch >= 'a' && ch <= 'z')
+          || (ch >= 'A' && ch <= 'Z')
+          || (ch >= '0' && ch <= '9')
+          || ch == '-'
+          || ch == '.') {
+        continue;
+      }
+      return false;
+    }
+    return true;
   }
 
   private static SDKError invalid(String message) {

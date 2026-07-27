@@ -2,7 +2,6 @@ import Foundation
 
 enum RuntimeSubjects {
     private static let runtimeStateReadSubjectPath = "runtime-state/read"
-    private static let retiredInvocationHistorySubjectPath = "session/invocation_history"
 
     static func runtimeStateReadSubjectURA(realm: String, userID: String) throws -> String {
         let cleanRealm = try RuntimePrincipals.requiredString(realm, "realm", stage: "runtime")
@@ -58,17 +57,19 @@ enum RuntimeSubjects {
         return ResourceSubject(ownerID: ownerID, path: resourcePath)
     }
 
-    static func isRetiredInvocationHistorySubject(_ subjectURA: String) -> Bool {
-        guard let subject = canonicalResourceSubject(subjectURA),
-              subject.ownerID.hasPrefix("user.")
-        else {
+    static func canonicalSessionAuthorityID(_ sessionID: String) -> Bool {
+        let cleaned = sessionID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty else {
             return false
         }
-        let ownerUserID = String(subject.ownerID.dropFirst("user.".count)).trimmingCharacters(in: .whitespacesAndNewlines)
-        return !ownerUserID.isEmpty &&
-            !ownerUserID.contains(".") &&
-            !RuntimePrincipals.containsAllZeroPrincipal(ownerUserID) &&
-            subject.path == retiredInvocationHistorySubjectPath
+        return cleaned.unicodeScalars.allSatisfy { scalar in
+            let value = scalar.value
+            return (value >= 0x61 && value <= 0x7A) ||
+                (value >= 0x41 && value <= 0x5A) ||
+                (value >= 0x30 && value <= 0x39) ||
+                value == 0x2D ||
+                value == 0x2E
+        }
     }
 
     struct ResourceSubject {

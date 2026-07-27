@@ -297,10 +297,10 @@ pub(crate) fn validate_session_authority_payload_shape(
             ("audience", &payload.audience),
         ],
     )?;
-    if crate::core::identity::is_retired_invocation_history_subject(&payload.subject_ura) {
+    if !crate::core::identity::is_canonical_session_authority_id(&payload.session_id) {
         return Err(AuthorityMetadataError::new(
             REASON_AUTHORITY_FORMAT_INVALID,
-            "session authority subject_ura uses retired invocation-history subject; use runtime-state/read",
+            "session authority session_id is not canonical",
         ));
     }
     let subject_kind = authority_subject_kind(&payload.subject_ura);
@@ -380,9 +380,6 @@ fn reject_all_zero_authority_fields(
 }
 
 pub(crate) fn authority_subject_kind(subject_ura: &str) -> AuthoritySubjectKind {
-    if crate::core::identity::is_retired_invocation_history_subject(subject_ura) {
-        return AuthoritySubjectKind::Other;
-    }
     let Ok(parsed) = crate::core::ura::parse_ura(subject_ura.trim()) else {
         return AuthoritySubjectKind::Other;
     };
@@ -407,9 +404,10 @@ fn canonical_session_resource_parts(parsed: &crate::core::ura::ParsedURA) -> Opt
 
     let session_id = parsed
         .resource_path()
-        .filter(|path| !crate::core::identity::is_retired_invocation_history_resource_path(path))
         .and_then(|path| path.strip_prefix("session/"))
-        .filter(|session_id| !session_id.is_empty() && !session_id.contains('/'))?;
+        .filter(|session_id| {
+            crate::core::identity::is_canonical_session_authority_id(session_id)
+        })?;
     Some((owner_user_id, session_id))
 }
 
@@ -417,7 +415,7 @@ pub(crate) fn session_authority_admits_subject(
     payload: &SessionAuthorityPayload,
     subject: &str,
 ) -> bool {
-    if crate::core::identity::is_retired_invocation_history_subject(subject) {
+    if !crate::core::identity::is_canonical_session_authority_id(&payload.session_id) {
         return false;
     }
     if payload.subject_ura == subject {
@@ -428,6 +426,14 @@ pub(crate) fn session_authority_admits_subject(
     };
     if parsed.kind != crate::core::ura::URAKind::Resource {
         return false;
+    }
+    if let Some(session_id) = parsed
+        .resource_path()
+        .and_then(|path| path.trim().strip_prefix("session/"))
+    {
+        if !crate::core::identity::is_canonical_session_authority_id(session_id) {
+            return false;
+        }
     }
     let Some(owner_id) = parsed.resource_owner_id() else {
         return false;
@@ -729,49 +735,47 @@ mod tests {
     }
 
     #[test]
-    fn session_authority_rejects_retired_invocation_history_subject_carrier() {
+    fn session_authority_rejects_noncanonical_session_subject_carrier() {
         let mut payload = session_payload();
         payload.session_id = "invocation_history".into();
         payload.subject_ura =
             "easynet:///r/example/resource/user.alice/session/invocation_history".into();
 
         let err = validate_session_authority_payload_shape(&payload, None)
-            .expect_err("retired invocation-history subject carrier must fail closed");
+            .expect_err("noncanonical session carrier must fail closed");
         assert_eq!(err.reason(), REASON_AUTHORITY_FORMAT_INVALID);
         assert!(
-            err.to_string()
-                .contains("retired invocation-history subject"),
+            err.to_string().contains("session_id is not canonical"),
             "{err}"
         );
         assert!(
             !session_authority_admits_subject(&payload, &payload.subject_ura),
-            "exact-match admission must not revive the retired carrier"
+            "exact-match admission must not revive the noncanonical carrier"
         );
     }
 
     #[test]
-    fn session_authority_rejects_request_scoped_retired_invocation_history_subject_carrier() {
+    fn session_authority_rejects_request_scoped_noncanonical_session_subject_carrier() {
         let mut payload = session_payload();
         payload.session_id = "invocation_history:invocation.history.list:req-1".into();
         payload.subject_ura =
             "easynet:///r/example/resource/user.alice/session/invocation_history:invocation.history.list:req-1".into();
 
         let err = validate_session_authority_payload_shape(&payload, None)
-            .expect_err("request-scoped retired invocation-history carrier must fail closed");
+            .expect_err("request-scoped noncanonical session carrier must fail closed");
         assert_eq!(err.reason(), REASON_AUTHORITY_FORMAT_INVALID);
         assert!(
-            err.to_string()
-                .contains("retired invocation-history subject"),
+            err.to_string().contains("session_id is not canonical"),
             "{err}"
         );
         assert_eq!(
             authority_subject_kind(&payload.subject_ura),
             AuthoritySubjectKind::Other,
-            "retired request-scoped carrier must not classify as a live session"
+            "request-scoped noncanonical carrier must not classify as a live session"
         );
         assert!(
             !session_authority_admits_subject(&payload, &payload.subject_ura),
-            "exact-match admission must not revive request-scoped retired carriers"
+            "exact-match admission must not revive request-scoped noncanonical carriers"
         );
     }
 
@@ -819,14 +823,14 @@ mod tests {
                 "easynet:///r/example/resource/user.alice/session/invocation_history"
             ),
             AuthoritySubjectKind::Other,
-            "retired invocation-history carrier must not classify as a live session subject"
+            "noncanonical session carrier must not classify as a live session subject"
         );
         assert_eq!(
             authority_subject_kind(
                 "easynet:///r/example/resource/user.alice/session/invocation_history:invocation.history.list:req-1"
             ),
             AuthoritySubjectKind::Other,
-            "request-scoped retired invocation-history carrier must not classify as a live session subject"
+            "request-scoped noncanonical session carrier must not classify as a live session subject"
         );
         assert_eq!(
             authority_subject_kind("easynet:///r/example/session/session-1"),

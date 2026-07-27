@@ -454,8 +454,8 @@ private struct AuthoritySubject {
 }
 
 private func validateSessionAuthoritySubjectBinding(subjectURA: String, sessionOwnerUserID: String, sessionID: String) throws {
-    if RuntimeSubjects.isRetiredInvocationHistorySubject(subjectURA) {
-        throw invalidAuthority("session authority subject_ura uses retired invocation-history subject; use runtime-state/read")
+    guard RuntimeSubjects.canonicalSessionAuthorityID(sessionID) else {
+        throw invalidAuthority("session authority session_id is not canonical")
     }
     guard let subject = try canonicalAuthoritySubject(subjectURA) else {
         throw invalidAuthority("session authority subject_ura must be a canonical user or session subject")
@@ -473,7 +473,7 @@ private func validateSessionAuthoritySubjectBinding(subjectURA: String, sessionO
 }
 
 private func sessionAuthorityAdmitsSubject(_ authority: SessionAuthority, _ subjectURA: String) -> Bool {
-    if RuntimeSubjects.isRetiredInvocationHistorySubject(subjectURA) {
+    guard RuntimeSubjects.canonicalSessionAuthorityID(authority.sessionID) else {
         return false
     }
     if authority.subjectURA.trimmingCharacters(in: .whitespacesAndNewlines) ==
@@ -482,6 +482,12 @@ private func sessionAuthorityAdmitsSubject(_ authority: SessionAuthority, _ subj
     }
     guard let resource = RuntimeSubjects.canonicalResourceSubject(subjectURA) else {
         return false
+    }
+    if resource.path.hasPrefix("session/") {
+        let sessionID = String(resource.path.dropFirst("session/".count))
+        guard RuntimeSubjects.canonicalSessionAuthorityID(sessionID) else {
+            return false
+        }
     }
     let ownerUserID = authority.sessionOwnerUserID.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !ownerUserID.isEmpty else {
@@ -530,7 +536,7 @@ private func canonicalAuthoritySubject(_ subjectURA: String) throws -> Authority
     }
     let ownerUserID = String(resource[..<markerRange.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
     let authoritySessionID = String(resource[markerRange.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !ownerUserID.isEmpty, !ownerUserID.contains("."), !ownerUserID.contains("/"), !authoritySessionID.isEmpty, !authoritySessionID.contains("/") else {
+    guard !ownerUserID.isEmpty, !ownerUserID.contains("."), !ownerUserID.contains("/"), RuntimeSubjects.canonicalSessionAuthorityID(authoritySessionID) else {
         return nil
     }
     return AuthoritySubject(kind: "session", ownerUserID: ownerUserID, sessionID: authoritySessionID)
