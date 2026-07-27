@@ -76,3 +76,16 @@ The fix must remove the alternate authority path rather than add fallback probes
 - `bash tools/scripts/check-runtime-state-read-subject-boundary.sh`
 - `bash tools/scripts/check-canonical-runtime-convergence-v2.sh`
 - `cargo fmt --check`
+
+### 2026-07-27 Hub authority governance-read subject cutover
+
+- Cleared the local EasyNet state root with `easynet device reset --purge-local-state --force --yes` as allowed by the user.
+- Rebuilt a clean Hub runtime from current source with generated local TLS material.
+- Reproduced a clean-state defect: `easynet invocation list --format json` failed in Hub mode because the CLI history issuer required paired device/user credentials even when the daemon owner was the realm Authority.
+- Added `RuntimeGovernanceReadSubject` as the shared core value object for governance reads. It admits only:
+  - canonical user-owned `runtime-state/read` subjects; or
+  - the callee realm Authority subject for authority-owned Hub reads.
+- Migrated selected-route admission and descriptor-ref receipt-history validation to that shared value object.
+- Added `LocalRuntimeGovernanceReadIssuer` so CLI invocation history reads select Hub authority subject from daemon Ready discovery instead of defaulting a missing/all-zero user.
+- Switched `easynet invocation ...` from `LocalRuntimeStateReadIssuer` to `LocalRuntimeGovernanceReadIssuer`.
+- Verified clean Hub command behavior: `easynet invocation list --limit 5 --format json` now succeeds and returns authority-owned signed receipt chains.

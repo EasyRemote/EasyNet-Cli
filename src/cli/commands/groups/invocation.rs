@@ -18,7 +18,7 @@ use crate::cli::commands::receipt_verification::CliReceiptChainVerification;
 use crate::daemon::ability::builtins::governance::invocation_history::{
     ABILITY_HISTORY_GET, ABILITY_HISTORY_LIST, ABILITY_HISTORY_PATH, ABILITY_TRACE_GET,
 };
-use crate::support::platform::local_invoke::LocalRuntimeStateReadIssuer;
+use crate::support::platform::local_invoke::LocalRuntimeGovernanceReadIssuer;
 use crate::support::platform::output::{self, OutputFormat};
 
 type InvocationRecord = axon_sdk::invocation::InvocationLedgerRecord;
@@ -558,7 +558,7 @@ where
     // Route through the named runtime-state read issuer so the
     // "one CLI subcommand = one ability invoke" rule stays held while
     // the subject is selected explicitly before LocalRuntime admission.
-    let value = LocalRuntimeStateReadIssuer::invoke(ability, args)
+    let value = LocalRuntimeGovernanceReadIssuer::invoke(ability, args)
         .with_context(|| format!("invoke {ability} through local Axon daemon"))?;
     serde_json::from_value(value).with_context(|| format!("decode {ability} response"))
 }

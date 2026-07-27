@@ -9332,7 +9332,7 @@ mod tests {
             crate::daemon::ability::names::resources::META_LIST_RESOURCES
         );
         assert_eq!(resolved["call_mode"], "rpc");
-        assert_eq!(resolved["source"], "runtime_local_descriptor_catalog");
+        assert_eq!(resolved["source"], "runtime_receipt_provider");
         assert!(resolved["descriptor_ref"]
             .as_str()
             .is_some_and(
@@ -9968,6 +9968,62 @@ mod tests {
 
     #[cfg(feature = "axon-pb")]
     #[test]
+    fn runtime_descriptor_resolver_uses_authority_subject_for_hub_receipt_read() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let control_path = dir.path().join("control.json");
+        let authority_ura = crate::core::ura::hub_ura("localhost");
+        let ability_ura = "easynet:///r/localhost/ability/authority.invocation.history.list";
+        crate::daemon::control::discovery::write(
+            &control_path,
+            &crate::daemon::control::discovery::ControlDiscovery {
+                socket_path: Some(dir.path().join("control.sock")),
+                pipe_name: None,
+                invocation_endpoint: Some(dir.path().join("daemon.sock")),
+                daemon_identity: Some(crate::daemon::control::discovery::DaemonIdentity {
+                    mode: "hub".to_string(),
+                    realm: "localhost".to_string(),
+                    node_id: None,
+                }),
+                pid: 1,
+                daemon_version: env!("CARGO_PKG_VERSION").to_string(),
+                supported_ipc_versions: crate::daemon::control::discovery::IpcVersionRange::single(
+                    1,
+                ),
+                capability_flags: Vec::new(),
+                pages_port: None,
+            },
+        )
+        .expect("write control discovery");
+        let session = crate::ffi::client::handle::ClientSession::with_control_path_only(
+            control_path.display().to_string(),
+            Some(dir.path().join("offline-daemon.sock").display().to_string()),
+        );
+
+        let resolved = runtime_resolve_descriptor_ref_json(
+            &session,
+            &serde_json::json!({
+                "callee_ura": authority_ura,
+                "caller_ura": crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
+                "subject_ura": authority_ura,
+                "ability": crate::daemon::ability::names::governance::INVOCATION_HISTORY_LIST,
+                "call_mode": "rpc",
+                "provider": "receipt_history",
+            })
+            .to_string(),
+        )
+        .expect("hub Authority receipt provider resolves local history descriptor");
+
+        assert_eq!(resolved["ability_ura"], ability_ura);
+        assert_eq!(resolved["owner_ura"], authority_ura);
+        assert_eq!(
+            resolved["name"],
+            crate::daemon::ability::names::governance::INVOCATION_HISTORY_LIST
+        );
+        assert_eq!(resolved["source"], "runtime_local_descriptor_catalog");
+    }
+
+    #[cfg(feature = "axon-pb")]
+    #[test]
     fn runtime_descriptor_resolver_rejects_receipt_provider_non_runtime_state_subjects() {
         let dir = tempfile::tempdir().expect("tempdir");
         let control_path = dir.path().join("control.json");
@@ -10010,12 +10066,12 @@ mod tests {
             (
                 "device subject",
                 Some(remote_device_ura.as_str()),
-                "subject_ura must be a Resource URA",
+                "user-owned runtime-state read subject or the callee realm Authority subject",
             ),
             (
                 "retired session subject",
                 Some("easynet:///r/localhost/resource/user.alice/session/invocation_history"),
-                "runtime-state read subject",
+                "user-owned runtime-state read subject or the callee realm Authority subject",
             ),
             (
                 "all-zero runtime-state subject",

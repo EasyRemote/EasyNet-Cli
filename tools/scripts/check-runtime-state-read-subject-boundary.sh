@@ -16,9 +16,12 @@ TARGETS=(
   "src/cli/commands/groups/mcp.rs"
   "src/cli/commands/groups/device.rs"
   "src/cli/commands/status.rs"
-  "src/cli/commands/groups/invocation.rs"
   "src/cli/commands/invocation_watch.rs"
   "src/cli/commands/user_signing_identity.rs"
+)
+
+GOVERNANCE_TARGETS=(
+  "src/cli/commands/groups/invocation.rs"
 )
 
 CATALOGUE_TARGETS=(
@@ -35,6 +38,10 @@ fi
 
 if ! rg -n 'struct LocalRuntimeCatalogueReadIssuer' "$ISSUER" >/dev/null; then
   fail "runtime catalogue reads must use a named issuer"
+fi
+
+if ! rg -n 'struct LocalRuntimeGovernanceReadIssuer' "$ISSUER" >/dev/null; then
+  fail "runtime governance reads must use a named issuer"
 fi
 
 if ! rg -n 'struct LocalRuntimeStateReadAttachment' "$ISSUER" >/dev/null; then
@@ -150,6 +157,16 @@ for target in "${TARGETS[@]}"; do
   fi
   if rg -n '\binvoke_local_ability\s*\(' "$target"; then
     fail "$target must not use generic invoke_local_ability for runtime-state reads"
+  fi
+done
+
+for target in "${GOVERNANCE_TARGETS[@]}"; do
+  [[ -f "$target" ]] || fail "missing $target"
+  if ! rg -n 'LocalRuntimeGovernanceReadIssuer::invoke' "$target" >/dev/null; then
+    fail "$target must enter local runtime through LocalRuntimeGovernanceReadIssuer"
+  fi
+  if rg -n '\binvoke_local_ability\s*\(' "$target"; then
+    fail "$target must not use generic invoke_local_ability for runtime governance reads"
   fi
 done
 

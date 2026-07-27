@@ -48,18 +48,14 @@ fn require_receipt_history_read_subject(
                 "{surface} receipt-history read envelope is missing read-model subject"
             ))
         })?;
-    if subject_ura == route.callee_ura {
-        return Err(Status::failed_precondition(format!(
-            "CANONICAL_HISTORY_READ_REQUIRED: {surface} receipt-history ability \
-             `{history_ability}` must not use target-owned subject `{}`; use the canonical \
-             invocation history read path",
-            route.callee_ura
-        )));
-    }
-    crate::core::identity::RuntimeStateReadSubject::parse(subject_ura).map_err(|err| {
+    crate::core::identity::RuntimeGovernanceReadSubject::parse_for_callee(
+        subject_ura,
+        &route.callee_ura,
+    )
+    .map_err(|err| {
         Status::failed_precondition(format!(
             "CANONICAL_HISTORY_READ_REQUIRED: {surface} receipt history ability \
-             `{history_ability}` must use a user-owned runtime-state read subject; \
+             `{history_ability}` must use a runtime governance read subject; \
              use the canonical invocation history read path: {err}"
         ))
     })?;

@@ -129,6 +129,18 @@ pub struct RuntimeStateReadSubject {
     user_id: String,
 }
 
+/// Canonical subject admitted for runtime governance reads.
+///
+/// Device/user product reads use [`RuntimeStateReadSubject`]. A realm
+/// Authority runtime, however, owns its own local governance ledger before any
+/// user is paired. That path is not a user fallback: it is admissible only when
+/// the subject is the same realm Authority as the callee.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RuntimeGovernanceReadSubject {
+    UserRuntimeState(RuntimeStateReadSubject),
+    RealmAuthority { subject_ura: String, realm: String },
+}
+
 /// Retired subject path formerly used by invocation-history read sessions.
 ///
 /// The canonical runtime model now represents user-owned read projections with
@@ -254,6 +266,50 @@ impl RuntimeStateReadSubject {
     }
 }
 
+impl RuntimeGovernanceReadSubject {
+    pub fn parse_for_callee(
+        subject_ura: impl AsRef<str>,
+        callee_ura: impl AsRef<str>,
+    ) -> Result<Self, RuntimeGovernanceReadSubjectError> {
+        let subject_ura = subject_ura.as_ref().trim();
+        if subject_ura.is_empty() {
+            return Err(RuntimeGovernanceReadSubjectError::Empty);
+        }
+        if contains_all_zero_principal_placeholder(subject_ura) {
+            return Err(RuntimeGovernanceReadSubjectError::AllZeroPrincipalPlaceholder);
+        }
+        if let Ok(subject) = RuntimeStateReadSubject::parse(subject_ura) {
+            return Ok(Self::UserRuntimeState(subject));
+        }
+        let subject = crate::core::ura::parse_ura(subject_ura)
+            .map_err(|error| RuntimeGovernanceReadSubjectError::InvalidSyntax(error.to_string()))?;
+        let callee_ura = callee_ura.as_ref().trim();
+        let callee = crate::core::ura::parse_ura(callee_ura)
+            .map_err(|error| RuntimeGovernanceReadSubjectError::InvalidCallee(error.to_string()))?;
+        let expected_authority = crate::core::ura::hub_ura(&callee.realm);
+        if subject.kind == crate::core::ura::URAKind::Authority
+            && callee.kind == crate::core::ura::URAKind::Authority
+            && subject.realm == callee.realm
+            && subject_ura == expected_authority
+            && callee_ura == expected_authority
+        {
+            return Ok(Self::RealmAuthority {
+                subject_ura: subject_ura.to_string(),
+                realm: subject.realm,
+            });
+        }
+        Err(RuntimeGovernanceReadSubjectError::NotRuntimeGovernanceRead)
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::UserRuntimeState(subject) => subject.as_str(),
+            Self::RealmAuthority { subject_ura, .. } => subject_ura,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeStateReadSubjectError {
     Empty,
@@ -264,6 +320,33 @@ pub enum RuntimeStateReadSubjectError {
     NotResource,
     NotUserOwnedRuntimeStateRead,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RuntimeGovernanceReadSubjectError {
+    Empty,
+    AllZeroPrincipalPlaceholder,
+    InvalidSyntax(String),
+    InvalidCallee(String),
+    NotRuntimeGovernanceRead,
+}
+
+impl std::fmt::Display for RuntimeGovernanceReadSubjectError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Empty => formatter.write_str("must not be empty"),
+            Self::AllZeroPrincipalPlaceholder => {
+                formatter.write_str("must not contain the all-zero principal placeholder")
+            }
+            Self::InvalidSyntax(error) => write!(formatter, "is not a valid URA: {error}"),
+            Self::InvalidCallee(error) => write!(formatter, "callee is not a valid URA: {error}"),
+            Self::NotRuntimeGovernanceRead => formatter.write_str(
+                "must be a user-owned runtime-state read subject or the callee realm Authority subject",
+            ),
+        }
+    }
+}
+
+impl std::error::Error for RuntimeGovernanceReadSubjectError {}
 
 impl std::fmt::Display for RuntimeStateReadSubjectError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -403,6 +486,51 @@ mod tests {
             RuntimeStateReadSubject::parse("not-a-ura"),
             Err(RuntimeStateReadSubjectError::InvalidSyntax(_))
         ));
+    }
+
+    #[test]
+    fn runtime_governance_read_subject_accepts_user_or_matching_authority() {
+        let user_subject = RuntimeGovernanceReadSubject::parse_for_callee(
+            "easynet:///r/acme/resource/user.alice/runtime-state/read",
+            "easynet:///r/acme/device/dev-a",
+        )
+        .expect("user runtime-state governance subject");
+        assert_eq!(
+            user_subject.as_str(),
+            "easynet:///r/acme/resource/user.alice/runtime-state/read"
+        );
+
+        let authority_subject = RuntimeGovernanceReadSubject::parse_for_callee(
+            "easynet:///r/acme/authority",
+            "easynet:///r/acme/authority",
+        )
+        .expect("realm Authority governance subject");
+        assert_eq!(authority_subject.as_str(), "easynet:///r/acme/authority");
+    }
+
+    #[test]
+    fn runtime_governance_read_subject_rejects_device_subject_and_wrong_authority() {
+        assert_eq!(
+            RuntimeGovernanceReadSubject::parse_for_callee(
+                "easynet:///r/acme/device/dev-a",
+                "easynet:///r/acme/device/dev-a"
+            ),
+            Err(RuntimeGovernanceReadSubjectError::NotRuntimeGovernanceRead)
+        );
+        assert_eq!(
+            RuntimeGovernanceReadSubject::parse_for_callee(
+                "easynet:///r/other/authority",
+                "easynet:///r/acme/authority"
+            ),
+            Err(RuntimeGovernanceReadSubjectError::NotRuntimeGovernanceRead)
+        );
+        assert_eq!(
+            RuntimeGovernanceReadSubject::parse_for_callee(
+                "easynet:///r/acme/resource/user.00000000-0000-0000-0000-000000000000/runtime-state/read",
+                "easynet:///r/acme/device/dev-a"
+            ),
+            Err(RuntimeGovernanceReadSubjectError::AllZeroPrincipalPlaceholder)
+        );
     }
 
     #[test]

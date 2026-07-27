@@ -257,46 +257,48 @@ fn validate_ability_descriptor_catalogue_subject(
 fn validate_receipt_history_descriptor_subject(
     object: &serde_json::Map<String, Value>,
 ) -> Result<(), DescriptorResolutionError> {
+    let callee_ura = descriptor_request_required_text(
+        object,
+        "callee_ura",
+        "descriptor_ref provider receipt_history requires callee_ura",
+    )?;
     let subject_ura = descriptor_request_required_text(
         object,
         "subject_ura",
         "descriptor_ref provider receipt_history requires subject_ura",
     )?;
-    crate::core::identity::RuntimeStateReadSubject::parse(subject_ura)
+    crate::core::identity::RuntimeGovernanceReadSubject::parse_for_callee(subject_ura, callee_ura)
         .map(|_| ())
         .map_err(receipt_history_descriptor_subject_error)
 }
 
 fn receipt_history_descriptor_subject_error(
-    error: crate::core::identity::RuntimeStateReadSubjectError,
+    error: crate::core::identity::RuntimeGovernanceReadSubjectError,
 ) -> DescriptorResolutionError {
-    use crate::core::identity::RuntimeStateReadSubjectError;
+    use crate::core::identity::RuntimeGovernanceReadSubjectError;
 
     match error {
-        RuntimeStateReadSubjectError::Empty => DescriptorResolutionError::invalid_request(
+        RuntimeGovernanceReadSubjectError::Empty => DescriptorResolutionError::invalid_request(
             "descriptor_ref provider receipt_history requires subject_ura",
         ),
-        RuntimeStateReadSubjectError::EmptyRealm | RuntimeStateReadSubjectError::EmptyUserId => {
-            DescriptorResolutionError::invalid_request(
-                "descriptor_ref provider receipt_history subject_ura must be a user-owned runtime-state read subject",
-            )
-        }
-        RuntimeStateReadSubjectError::AllZeroPrincipalPlaceholder => {
+        RuntimeGovernanceReadSubjectError::AllZeroPrincipalPlaceholder => {
             DescriptorResolutionError::invalid_request(
                 "descriptor_ref provider receipt_history subject_ura must not be all-zero",
             )
         }
-        RuntimeStateReadSubjectError::InvalidSyntax(error) => {
+        RuntimeGovernanceReadSubjectError::InvalidSyntax(error) => {
             DescriptorResolutionError::invalid_request(format!(
                 "descriptor_ref provider receipt_history subject_ura must be canonical: {error}"
             ))
         }
-        RuntimeStateReadSubjectError::NotResource => DescriptorResolutionError::invalid_request(
-            "descriptor_ref provider receipt_history subject_ura must be a Resource URA",
-        ),
-        RuntimeStateReadSubjectError::NotUserOwnedRuntimeStateRead => {
+        RuntimeGovernanceReadSubjectError::InvalidCallee(error) => {
+            DescriptorResolutionError::invalid_request(format!(
+                "descriptor_ref provider receipt_history callee_ura must be canonical: {error}"
+            ))
+        }
+        RuntimeGovernanceReadSubjectError::NotRuntimeGovernanceRead => {
             DescriptorResolutionError::invalid_request(
-                "descriptor_ref provider receipt_history subject_ura must be a user-owned runtime-state read subject",
+                "descriptor_ref provider receipt_history subject_ura must be a user-owned runtime-state read subject or the callee realm Authority subject",
             )
         }
     }
@@ -453,7 +455,14 @@ fn runtime_system_descriptor_catalog_entries(
 ) -> std::result::Result<Vec<Value>, String> {
     let owner = crate::daemon::axon_bridge::descriptor_ref::catalog_owner_kind_for_wire(owner_ura)
         .map_err(|error| error.to_string())?;
-    let catalog = crate::daemon::ability::catalog::build_system_registry();
+    let catalog = if matches!(
+        owner,
+        crate::daemon::ability::dispatch::OwnerKind::RealmAuthority
+    ) {
+        crate::daemon::ability::catalog::build_system_registry_for_authority_owner(owner_ura)?
+    } else {
+        crate::daemon::ability::catalog::build_system_registry()
+    };
     let mut entries = Vec::new();
     for row in catalog
         .authority_ability_catalog_snapshot()

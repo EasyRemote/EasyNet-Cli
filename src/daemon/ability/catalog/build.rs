@@ -177,6 +177,28 @@ pub(crate) fn build_system_registry() -> Arc<AxonAbilityCatalog> {
     build_system_registry_uncached()
 }
 
+pub(crate) fn build_system_registry_for_authority_owner(
+    authority_ura: &str,
+) -> std::result::Result<Arc<AxonAbilityCatalog>, String> {
+    let authority_context = AbilityAuthorityContext::for_realm_authority_root(authority_ura)
+        .map_err(|error| error.to_string())?;
+    let agents = AgentRegistry::default();
+    let mut config = RegistryBuildConfig::new_with_authority_context(
+        RegistryBuildServices::fresh(),
+        &agents,
+        authority_context,
+    );
+    config.local_runtime = None;
+    build_registry_with_services_result_inner(
+        config,
+        RegistryAssemblyMode::DeterministicSnapshot {
+            plugins: PluginRegistryMode::None,
+        },
+    )
+    .map(|built| built.catalog)
+    .map_err(|error| error.to_string())
+}
+
 fn build_system_registry_uncached() -> Arc<AxonAbilityCatalog> {
     build_registry_with_services_result_inner(
         deterministic_snapshot_build_config_for_profile(

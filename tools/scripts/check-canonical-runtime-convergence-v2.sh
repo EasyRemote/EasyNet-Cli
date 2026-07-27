@@ -2508,8 +2508,8 @@ for retired in (
     if retired in production:
         raise SystemExit(f"cli_invocation_history_read_model_retired_json:{retired}")
 
-if "LocalRuntimeStateReadIssuer::invoke(ability, args)" not in production:
-    raise SystemExit("cli_invocation_history_read_model_not_using_runtime_state_read_issuer")
+if "LocalRuntimeGovernanceReadIssuer::invoke(ability, args)" not in production:
+    raise SystemExit("cli_invocation_history_read_model_not_using_runtime_governance_read_issuer")
 if re.search(r"\binvoke_local_ability\s*\(", production):
     raise SystemExit("cli_invocation_history_read_model_uses_generic_local_invoke")
 
@@ -10821,9 +10821,9 @@ for required in (
     "fn selected_route_public_ability(route: &SelectedInvokeRoute) -> Option<String>",
     "AbilitySelector::parse(&route.ability_ura)",
     "receipt-history ability",
-    "must not use target-owned subject",
-    "RuntimeStateReadSubject::parse(subject_ura)",
-    "must use a user-owned runtime-state read subject",
+    "RuntimeGovernanceReadSubject::parse_for_callee(",
+    "&route.callee_ura",
+    "must use a runtime governance read subject",
     "canonical invocation history read path",
 ):
     if required not in shared_gate:
@@ -12815,10 +12815,10 @@ for required in (
     "provider.validate_request_subject(object)?",
     "Self::ReceiptHistory => validate_receipt_history_descriptor_subject(object)",
     "descriptor_ref provider receipt_history requires subject_ura",
-    "descriptor_ref provider receipt_history subject_ura must be a user-owned runtime-state read subject",
-    "crate::core::identity::RuntimeStateReadSubject::parse(subject_ura)",
+    "descriptor_ref provider receipt_history subject_ura must be a user-owned runtime-state read subject or the callee realm Authority subject",
+    "crate::core::identity::RuntimeGovernanceReadSubject::parse_for_callee(subject_ura, callee_ura)",
     "fn receipt_history_descriptor_subject_error(",
-    "RuntimeStateReadSubjectError::NotUserOwnedRuntimeStateRead",
+    "RuntimeGovernanceReadSubjectError::NotRuntimeGovernanceRead",
 ):
     if required not in provider and required not in text:
         raise SystemExit(f"ffi_descriptor_runtime_owner:receipt_history_subject_gate_missing:{required}")
