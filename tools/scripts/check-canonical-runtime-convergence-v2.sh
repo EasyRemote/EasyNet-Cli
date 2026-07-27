@@ -16548,6 +16548,18 @@ if "fn caller_signer_unavailable_error(label: &str, caller_ura: &str)" not in pr
     raise SystemExit("remote_invocation_signer_first:sanitized_signer_error_helper_missing")
 if "keyring entry not found" in production or "keyring rejected request" in production:
     raise SystemExit("remote_invocation_signer_first:keyring_detail_in_production_error")
+if "fn remote_bidi_frame_chain_mac(" not in production:
+    raise SystemExit("remote_invocation_signer_first:remote_bidi_mac_helper_missing")
+if "let mac = remote_bidi_frame_chain_mac(&envelope_open)?;" not in production:
+    raise SystemExit("remote_invocation_signer_first:remote_bidi_mac_helper_not_used")
+if "remote bidi builder omitted caller signature" not in production:
+    raise SystemExit("remote_invocation_signer_first:remote_bidi_missing_signature_error_missing")
+if re.search(
+    r"caller_signature\s*\.as_ref\(\)\s*\.map\(\|signature\|\s*signature\.signature\.clone\(\)\)\s*\.unwrap_or_default\(\)",
+    production,
+    re.DOTALL,
+):
+    raise SystemExit("remote_invocation_signer_first:remote_bidi_empty_mac_fallback")
 
 unary = fn_body("invoke_remote_target", "load_remote_invocation_caller_signer")
 stream = fn_body("invoke_remote_target_stream", "invoke_remote_target_bidi_json_frames")
@@ -16576,6 +16588,10 @@ for required_test in (
     "remote_unary_loads_caller_signer_before_daemon_socket_probe",
     "remote_stream_loads_caller_signer_before_daemon_socket_probe",
     "remote_bidi_loads_caller_signer_before_daemon_socket_probe",
+    "remote_bidi_frame_chain_mac_rejects_missing_open_envelope",
+    "remote_bidi_frame_chain_mac_rejects_missing_caller_signature",
+    "remote_bidi_frame_chain_mac_rejects_empty_caller_signature",
+    "remote_bidi_frame_chain_mac_uses_caller_signature_bytes",
     "caller signer readiness must not expose keyring implementation details",
 ):
     if required_test not in text:

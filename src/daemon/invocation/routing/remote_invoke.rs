@@ -1046,14 +1046,7 @@ pub(crate) fn invoke_remote_target_bidi_json_frames(
             signer.as_ref(),
         )
         .await?;
-        let mac = envelope_open
-            .envelope
-            .as_ref()
-            .ok_or_else(|| anyhow!("remote bidi builder omitted envelope"))?
-            .caller_signature
-            .as_ref()
-            .map(|signature| signature.signature.clone())
-            .unwrap_or_default();
+        let mac = remote_bidi_frame_chain_mac(&envelope_open)?;
 
         let channel = crate::support::platform::local_daemon_grpc::connect_channel(
             socket_path.clone(),
@@ -1134,6 +1127,23 @@ pub(crate) fn invoke_remote_target_bidi_json_frames(
         }
         Ok::<_, anyhow::Error>(frames)
     })
+}
+
+fn remote_bidi_frame_chain_mac(
+    envelope_open: &axon_sdk::pb::axon::v1::EnvelopeOpen,
+) -> anyhow::Result<Vec<u8>> {
+    let envelope = envelope_open
+        .envelope
+        .as_ref()
+        .ok_or_else(|| anyhow!("remote bidi builder omitted envelope"))?;
+    let signature = envelope
+        .caller_signature
+        .as_ref()
+        .ok_or_else(|| anyhow!("remote bidi builder omitted caller signature"))?;
+    if signature.signature.is_empty() {
+        bail!("remote bidi builder produced empty caller signature");
+    }
+    Ok(signature.signature.clone())
 }
 
 fn checked_remote_invocation_ura(value: String, field: &str) -> anyhow::Result<String> {
@@ -2278,6 +2288,80 @@ mod tests {
         .expect_err("missing signer must fail before bidi daemon socket readiness");
 
         assert_signer_first_error(error, "remote bidi invocation");
+    }
+
+    #[test]
+    fn remote_bidi_frame_chain_mac_rejects_missing_open_envelope() {
+        let error = remote_bidi_frame_chain_mac(&axon_sdk::pb::axon::v1::EnvelopeOpen::default())
+            .expect_err("remote bidi open must contain an envelope before daemon IO");
+
+        assert!(
+            error
+                .to_string()
+                .contains("remote bidi builder omitted envelope"),
+            "wrong error: {error:#}"
+        );
+    }
+
+    #[test]
+    fn remote_bidi_frame_chain_mac_rejects_missing_caller_signature() {
+        let open = axon_sdk::pb::axon::v1::EnvelopeOpen {
+            envelope: Some(axon_sdk::pb::axon::v1::Envelope::default()),
+            ..axon_sdk::pb::axon::v1::EnvelopeOpen::default()
+        };
+
+        let error = remote_bidi_frame_chain_mac(&open)
+            .expect_err("remote bidi open must contain caller signature bytes");
+
+        assert!(
+            error
+                .to_string()
+                .contains("remote bidi builder omitted caller signature"),
+            "wrong error: {error:#}"
+        );
+    }
+
+    #[test]
+    fn remote_bidi_frame_chain_mac_rejects_empty_caller_signature() {
+        let open = axon_sdk::pb::axon::v1::EnvelopeOpen {
+            envelope: Some(axon_sdk::pb::axon::v1::Envelope {
+                caller_signature: Some(axon_sdk::pb::axon::v1::CallerSignature {
+                    algorithm: "ed25519".to_string(),
+                    signature: Vec::new(),
+                    key_id_hint: "test-signer".to_string(),
+                }),
+                ..axon_sdk::pb::axon::v1::Envelope::default()
+            }),
+            ..axon_sdk::pb::axon::v1::EnvelopeOpen::default()
+        };
+
+        let error = remote_bidi_frame_chain_mac(&open)
+            .expect_err("remote bidi open must not use an empty MAC seed");
+
+        assert!(
+            error
+                .to_string()
+                .contains("remote bidi builder produced empty caller signature"),
+            "wrong error: {error:#}"
+        );
+    }
+
+    #[test]
+    fn remote_bidi_frame_chain_mac_uses_caller_signature_bytes() {
+        let signature = vec![0x5a; 64];
+        let open = axon_sdk::pb::axon::v1::EnvelopeOpen {
+            envelope: Some(axon_sdk::pb::axon::v1::Envelope {
+                caller_signature: Some(axon_sdk::pb::axon::v1::CallerSignature {
+                    algorithm: "ed25519".to_string(),
+                    signature: signature.clone(),
+                    key_id_hint: "test-signer".to_string(),
+                }),
+                ..axon_sdk::pb::axon::v1::Envelope::default()
+            }),
+            ..axon_sdk::pb::axon::v1::EnvelopeOpen::default()
+        };
+
+        assert_eq!(remote_bidi_frame_chain_mac(&open).unwrap(), signature);
     }
 
     #[test]
