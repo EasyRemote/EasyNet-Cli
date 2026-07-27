@@ -140,7 +140,7 @@ pub const RETIRED_INVOCATION_HISTORY_SUBJECT_PATH: &str = "session/invocation_hi
 #[must_use]
 pub fn is_retired_invocation_history_subject(value: &str) -> bool {
     let value = value.trim();
-    if value.is_empty() || contains_all_zero_principal_placeholder(value) {
+    if value.is_empty() {
         return false;
     }
     let Ok(parsed) = crate::core::ura::parse_ura(value) else {
@@ -157,7 +157,18 @@ pub fn is_retired_invocation_history_subject(value: &str) -> bool {
     };
     !user_id.trim().is_empty()
         && !user_id.contains('.')
-        && parsed.resource_path() == Some(RETIRED_INVOCATION_HISTORY_SUBJECT_PATH)
+        && parsed
+            .resource_path()
+            .is_some_and(is_retired_invocation_history_resource_path)
+}
+
+#[must_use]
+pub fn is_retired_invocation_history_resource_path(path: &str) -> bool {
+    let path = path.trim();
+    path == RETIRED_INVOCATION_HISTORY_SUBJECT_PATH
+        || path
+            .strip_prefix(RETIRED_INVOCATION_HISTORY_SUBJECT_PATH)
+            .is_some_and(|suffix| suffix.starts_with(':'))
 }
 
 impl RuntimeStateReadSubject {
@@ -399,11 +410,17 @@ mod tests {
         assert!(is_retired_invocation_history_subject(
             "  easynet:///r/acme/resource/user.alice/session/invocation_history  "
         ));
+        assert!(is_retired_invocation_history_subject(
+            "easynet:///r/acme/resource/user.alice/session/invocation_history:invocation.history.list:req-123"
+        ));
         assert!(!is_retired_invocation_history_subject(
             "easynet:///r/acme/resource/user.alice/runtime-state/read"
         ));
         assert!(!is_retired_invocation_history_subject(
             "easynet:///r/acme/resource/agent.alice.reader/session/invocation_history"
+        ));
+        assert!(!is_retired_invocation_history_subject(
+            "easynet:///r/acme/resource/user.alice/session/invocation_history_v2"
         ));
     }
 }

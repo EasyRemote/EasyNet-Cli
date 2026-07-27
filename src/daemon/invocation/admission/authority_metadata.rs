@@ -407,6 +407,7 @@ fn canonical_session_resource_parts(parsed: &crate::core::ura::ParsedURA) -> Opt
 
     let session_id = parsed
         .resource_path()
+        .filter(|path| !crate::core::identity::is_retired_invocation_history_resource_path(path))
         .and_then(|path| path.strip_prefix("session/"))
         .filter(|session_id| !session_id.is_empty() && !session_id.contains('/'))?;
     Some((owner_user_id, session_id))
@@ -749,6 +750,32 @@ mod tests {
     }
 
     #[test]
+    fn session_authority_rejects_request_scoped_retired_invocation_history_subject_carrier() {
+        let mut payload = session_payload();
+        payload.session_id = "invocation_history:invocation.history.list:req-1".into();
+        payload.subject_ura =
+            "easynet:///r/example/resource/user.alice/session/invocation_history:invocation.history.list:req-1".into();
+
+        let err = validate_session_authority_payload_shape(&payload, None)
+            .expect_err("request-scoped retired invocation-history carrier must fail closed");
+        assert_eq!(err.reason(), REASON_AUTHORITY_FORMAT_INVALID);
+        assert!(
+            err.to_string()
+                .contains("retired invocation-history subject"),
+            "{err}"
+        );
+        assert_eq!(
+            authority_subject_kind(&payload.subject_ura),
+            AuthoritySubjectKind::Other,
+            "retired request-scoped carrier must not classify as a live session"
+        );
+        assert!(
+            !session_authority_admits_subject(&payload, &payload.subject_ura),
+            "exact-match admission must not revive request-scoped retired carriers"
+        );
+    }
+
+    #[test]
     fn session_authority_rejects_all_zero_owner_before_subject_admission() {
         let all_zero = "00000000-0000-0000-0000-000000000000";
         let mut payload = session_payload();
@@ -793,6 +820,13 @@ mod tests {
             ),
             AuthoritySubjectKind::Other,
             "retired invocation-history carrier must not classify as a live session subject"
+        );
+        assert_eq!(
+            authority_subject_kind(
+                "easynet:///r/example/resource/user.alice/session/invocation_history:invocation.history.list:req-1"
+            ),
+            AuthoritySubjectKind::Other,
+            "request-scoped retired invocation-history carrier must not classify as a live session subject"
         );
         assert_eq!(
             authority_subject_kind("easynet:///r/example/session/session-1"),
