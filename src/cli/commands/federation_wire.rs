@@ -337,8 +337,16 @@ fn auto_wire_self_realm_trust_with_public_key(
     facts: PairingTrustFacts<'_>,
     public_key_b64: &str,
 ) -> anyhow::Result<()> {
-    let path = realm_trust_path_for_join();
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let path = realm_trust_path_for_join()?;
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "realm-trust auto-wire path must include a parent directory: {}",
+                path.display()
+            )
+        })?;
     if !parent.exists() {
         if let Err(err) = fs::create_dir_all(parent) {
             anyhow::bail!(
@@ -443,14 +451,20 @@ fn auto_wire_self_realm_trust_with_public_key(
 /// the join-time fallback: it requires root and operators on
 /// production deploys go through the backend's
 /// `identity.register_pubkey` writer, not this helper.
-fn realm_trust_path_for_join() -> PathBuf {
+fn realm_trust_path_for_join() -> anyhow::Result<PathBuf> {
     if let Some(override_path) = std::env::var_os("EASYNET_REALM_TRUST_PATH") {
-        return PathBuf::from(override_path);
+        if override_path.to_string_lossy().trim().is_empty() {
+            anyhow::bail!("EASYNET_REALM_TRUST_PATH must not be empty");
+        }
+        return Ok(PathBuf::from(override_path));
     }
     if let Some(home) = std::env::var_os("HOME") {
-        return PathBuf::from(home).join(".easynet/realm-trust.toml");
+        if home.to_string_lossy().trim().is_empty() {
+            anyhow::bail!("HOME is required for realm-trust auto-wire path");
+        }
+        return Ok(PathBuf::from(home).join(".easynet/realm-trust.toml"));
     }
-    PathBuf::from(".easynet/realm-trust.toml")
+    anyhow::bail!("HOME is required for realm-trust auto-wire path")
 }
 
 fn hub_tls_ca_path_for_join(realm: &str) -> PathBuf {
@@ -736,9 +750,37 @@ fn reload_running_daemon_after_join() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsString;
 
     fn endpoint_of(r: &ResolvedPeerHubEndpoint) -> &str {
         r.endpoint()
+    }
+
+    struct RealmTrustEnvGuard {
+        previous_path: Option<OsString>,
+        previous_home: Option<OsString>,
+    }
+
+    impl RealmTrustEnvGuard {
+        fn capture() -> Self {
+            Self {
+                previous_path: std::env::var_os("EASYNET_REALM_TRUST_PATH"),
+                previous_home: std::env::var_os("HOME"),
+            }
+        }
+    }
+
+    impl Drop for RealmTrustEnvGuard {
+        fn drop(&mut self) {
+            match self.previous_path.take() {
+                Some(value) => std::env::set_var("EASYNET_REALM_TRUST_PATH", value),
+                None => std::env::remove_var("EASYNET_REALM_TRUST_PATH"),
+            }
+            match self.previous_home.take() {
+                Some(value) => std::env::set_var("HOME", value),
+                None => std::env::remove_var("HOME"),
+            }
+        }
     }
 
     #[test]
@@ -771,6 +813,41 @@ mod tests {
         assert!(err
             .to_string()
             .contains("--peer-hub must be an https:// endpoint"));
+    }
+
+    #[test]
+    fn realm_trust_join_path_rejects_missing_home_before_cwd_fallback() {
+        let _lock = crate::cli::commands::test_support::env_lock();
+        let _guard = RealmTrustEnvGuard::capture();
+        std::env::remove_var("EASYNET_REALM_TRUST_PATH");
+        std::env::remove_var("HOME");
+
+        let error =
+            realm_trust_path_for_join().expect_err("missing HOME must not resolve under cwd");
+
+        assert!(
+            error
+                .to_string()
+                .contains("HOME is required for realm-trust auto-wire path"),
+            "unexpected error: {error:#}"
+        );
+    }
+
+    #[test]
+    fn realm_trust_join_path_rejects_blank_home_before_relative_state_path() {
+        let _lock = crate::cli::commands::test_support::env_lock();
+        let _guard = RealmTrustEnvGuard::capture();
+        std::env::remove_var("EASYNET_REALM_TRUST_PATH");
+        std::env::set_var("HOME", " ");
+
+        let error = realm_trust_path_for_join().expect_err("blank HOME must not resolve under cwd");
+
+        assert!(
+            error
+                .to_string()
+                .contains("HOME is required for realm-trust auto-wire path"),
+            "unexpected error: {error:#}"
+        );
     }
 
     #[test]

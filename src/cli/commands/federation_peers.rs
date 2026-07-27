@@ -90,20 +90,30 @@ fn daemon_config_path() -> PathBuf {
 /// daemon honours so this subcommand and the daemon stay aligned in
 /// test deployments. Host-mode installs usually cannot write
 /// `/etc/easynet`, so they fall back to `~/.easynet/realm-trust.toml`.
-fn realm_trust_path() -> PathBuf {
+fn realm_trust_path() -> anyhow::Result<PathBuf> {
+    realm_trust_path_with_system_anchor(Path::new("/etc/easynet/realm-trust.toml"))
+}
+
+fn realm_trust_path_with_system_anchor(system_anchor: &Path) -> anyhow::Result<PathBuf> {
     if let Some(p) = std::env::var_os("EASYNET_REALM_TRUST_PATH") {
-        return PathBuf::from(p);
+        if p.to_string_lossy().trim().is_empty() {
+            anyhow::bail!("EASYNET_REALM_TRUST_PATH must not be empty");
+        }
+        return Ok(PathBuf::from(p));
     }
-    let etc = PathBuf::from("/etc/easynet/realm-trust.toml");
+    let etc = system_anchor.to_path_buf();
     if let Ok(meta) = std::fs::metadata(&etc) {
         if meta.is_file() && meta.len() > 0 {
-            return etc;
+            return Ok(etc);
         }
     }
     if let Some(home) = std::env::var_os("HOME") {
-        return PathBuf::from(home).join(".easynet/realm-trust.toml");
+        if home.to_string_lossy().trim().is_empty() {
+            anyhow::bail!("HOME is required for realm-trust inspection path");
+        }
+        return Ok(PathBuf::from(home).join(".easynet/realm-trust.toml"));
     }
-    PathBuf::from(".easynet/realm-trust.toml")
+    anyhow::bail!("HOME is required for realm-trust inspection path")
 }
 
 #[derive(Debug, Args)]
@@ -236,7 +246,8 @@ fn parse_federated_peers_from(raw: &str) -> anyhow::Result<BTreeMap<String, Stri
 }
 
 fn read_trusted_hubs() -> anyhow::Result<Vec<TrustedHubEntry>> {
-    read_trusted_hubs_from_path(&realm_trust_path())
+    let path = realm_trust_path()?;
+    read_trusted_hubs_from_path(&path)
 }
 
 fn read_trusted_hubs_from_path(path: &Path) -> anyhow::Result<Vec<TrustedHubEntry>> {
@@ -298,6 +309,34 @@ fn required_hub_field(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsString;
+
+    struct RealmTrustEnvGuard {
+        previous_path: Option<OsString>,
+        previous_home: Option<OsString>,
+    }
+
+    impl RealmTrustEnvGuard {
+        fn capture() -> Self {
+            Self {
+                previous_path: std::env::var_os("EASYNET_REALM_TRUST_PATH"),
+                previous_home: std::env::var_os("HOME"),
+            }
+        }
+    }
+
+    impl Drop for RealmTrustEnvGuard {
+        fn drop(&mut self) {
+            match self.previous_path.take() {
+                Some(value) => std::env::set_var("EASYNET_REALM_TRUST_PATH", value),
+                None => std::env::remove_var("EASYNET_REALM_TRUST_PATH"),
+            }
+            match self.previous_home.take() {
+                Some(value) => std::env::set_var("HOME", value),
+                None => std::env::remove_var("HOME"),
+            }
+        }
+    }
 
     #[test]
     fn empty_daemon_config_yields_empty_federated_peers() {
@@ -330,6 +369,46 @@ realm = "r1"
         assert_eq!(
             peers.get("user-b").map(String::as_str),
             Some("https://hub-b:50443")
+        );
+    }
+
+    #[test]
+    fn realm_trust_inspection_path_rejects_missing_home_before_cwd_fallback() {
+        let _lock = crate::cli::commands::test_support::env_lock();
+        let _guard = RealmTrustEnvGuard::capture();
+        let dir = tempfile::tempdir().expect("temp dir");
+        let missing_system_anchor = dir.path().join("missing-system-realm-trust.toml");
+        std::env::remove_var("EASYNET_REALM_TRUST_PATH");
+        std::env::remove_var("HOME");
+
+        let error = realm_trust_path_with_system_anchor(&missing_system_anchor)
+            .expect_err("missing HOME must not resolve under cwd");
+
+        assert!(
+            error
+                .to_string()
+                .contains("HOME is required for realm-trust inspection path"),
+            "unexpected error: {error:#}"
+        );
+    }
+
+    #[test]
+    fn realm_trust_inspection_path_rejects_blank_home_before_relative_state_path() {
+        let _lock = crate::cli::commands::test_support::env_lock();
+        let _guard = RealmTrustEnvGuard::capture();
+        let dir = tempfile::tempdir().expect("temp dir");
+        let missing_system_anchor = dir.path().join("missing-system-realm-trust.toml");
+        std::env::remove_var("EASYNET_REALM_TRUST_PATH");
+        std::env::set_var("HOME", " ");
+
+        let error = realm_trust_path_with_system_anchor(&missing_system_anchor)
+            .expect_err("blank HOME must not resolve under cwd");
+
+        assert!(
+            error
+                .to_string()
+                .contains("HOME is required for realm-trust inspection path"),
+            "unexpected error: {error:#}"
         );
     }
 
