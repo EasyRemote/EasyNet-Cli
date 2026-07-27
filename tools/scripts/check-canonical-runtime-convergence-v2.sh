@@ -16498,6 +16498,18 @@ for path in (root / "src/eal/interpreter").glob("**/*.rs"):
 PY
 }
 
+check_process_singleton_product_boundary_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local singleton="$cli_root/src/support/platform/process_singleton.rs"
+  [[ -f "$singleton" ]] || fail "process singleton source is missing: ${singleton#$cli_root/}"
+  if rg -n 'OpenAI-compat|OpenAICompat|openai_compat|compat caller|compat path' "$singleton"; then
+    fail "shared ProcessSingleton helper must not describe its lifecycle contract through product compatibility vocabulary"
+  fi
+  if ! rg -n 'product adapter' "$singleton" >/dev/null; then
+    fail "shared ProcessSingleton helper must describe product consumers generically"
+  fi
+}
+
 check_product_identity_boundary_contract() {
   bash "$ROOT/tools/scripts/check-plugin-control-subject-boundary.sh" >/dev/null
   bash "$ROOT/tools/scripts/check-current-realm-hub-context-boundary.sh" >/dev/null
@@ -27035,6 +27047,7 @@ EOF
   check_key_custody_boundary_contract
   check_key_service_home_resolution_contract
   check_daemon_mission_eal_boundary_contract
+  check_process_singleton_product_boundary_contract
   check_product_identity_boundary_contract
   check_ura_vocabulary_contract
   check_axon_protocol_pack_ura_vector_contract
@@ -27309,6 +27322,7 @@ check_daemon_runtime_identity_vocabulary_contract
 check_key_custody_boundary_contract
 check_key_service_home_resolution_contract
 check_daemon_mission_eal_boundary_contract
+check_process_singleton_product_boundary_contract
 check_product_identity_boundary_contract
 check_ura_vocabulary_contract
 check_axon_protocol_pack_ura_vector_contract
