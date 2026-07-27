@@ -3646,6 +3646,14 @@ function validateSessionHistoryRuntimeCall(call) {
   if (!(call instanceof RuntimeCallContext)) {
     throw historyError(ErrorCode.INVALID_INVOCATION, "runtime call context is required");
   }
+  try {
+    validateRuntimeAbilityCallContext(call);
+  } catch (error) {
+    if (error instanceof SDKError) {
+      throw historyError(ErrorCode.INVALID_INVOCATION, error.message, runtimeCallDetails(call), error);
+    }
+    throw error;
+  }
   if (
     !isRuntimeStateReadSubjectURA(call.subjectURA) &&
     !isRuntimeOwnerReadSubjectURA(call.subjectURA, call.calleeURA)

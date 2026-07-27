@@ -1583,6 +1583,8 @@ test("session history preflight rejects authority subject mismatch before receip
       caller_ura: caller,
       callee_ura: callee,
       subject_ura: sdk.runtimeStateReadSubjectURA("example", "alice"),
+      nonce_base64: nonce,
+      causal_context: { form: "none" },
       metadata: {
         [sdk.SESSION_AUTHORITY_METADATA_KEY]: historySessionValue({
           session_owner_user_id: "bob",
@@ -1604,6 +1606,46 @@ test("session history preflight rejects authority subject mismatch before receip
   assert.equal(providerCalls, 0);
 });
 
+test("session history preflight requires complete call context before authority checks", async () => {
+  for (const omitted of ["nonce_base64", "causal_context"]) {
+    let providerCalls = 0;
+    const history = new sdk.SessionHistoryOperations({
+      list: () => {
+        providerCalls += 1;
+        return {
+          records: [],
+          next_cursor: "",
+          limit: 50,
+          source: "invocation.history.list",
+        };
+      },
+    });
+    const call = {
+      caller_ura: caller,
+      callee_ura: callee,
+      subject_ura: sdk.runtimeStateReadSubjectURA("example", "alice"),
+      nonce_base64: nonce,
+      causal_context: { form: "none" },
+      metadata: {
+        [sdk.SESSION_AUTHORITY_METADATA_KEY]: historySessionValue(),
+      },
+    };
+    delete call[omitted];
+
+    const request = new sdk.ReceiptListRequest({ call, limit: 50 });
+
+    await assert.rejects(
+      () => history.list(request),
+      (error) =>
+        error instanceof sdk.SDKError &&
+        error.code === sdk.ErrorCode.INVALID_INVOCATION &&
+        error.stage === "history" &&
+        error.message === `${omitted} is required`,
+    );
+    assert.equal(providerCalls, 0);
+  }
+});
+
 test("session history preflight rejects path-substring owner subject before receipt provider", async () => {
   let providerCalls = 0;
   const history = new sdk.SessionHistoryOperations({
@@ -1623,6 +1665,8 @@ test("session history preflight rejects path-substring owner subject before rece
       caller_ura: caller,
       callee_ura: callee,
       subject_ura: "easynet:///r/example/device/dev-a/resource/user.alice/runtime-state/read",
+      nonce_base64: nonce,
+      causal_context: { form: "none" },
       metadata: {
         [sdk.SESSION_AUTHORITY_METADATA_KEY]: historySessionValue(),
       },
@@ -1660,6 +1704,8 @@ test("session history preflight rejects retired session subject before receipt p
       caller_ura: caller,
       callee_ura: callee,
       subject_ura: "easynet:///r/example/resource/user.alice/session/invocation_history",
+      nonce_base64: nonce,
+      causal_context: { form: "none" },
       metadata: {
         [sdk.SESSION_AUTHORITY_METADATA_KEY]: historySessionValue(),
       },
@@ -1698,6 +1744,8 @@ test("session history preflight accepts exact runtime-owner subject with delegat
       caller_ura: caller,
       callee_ura: callee,
       subject_ura: deviceSubject,
+      nonce_base64: nonce,
+      causal_context: { form: "none" },
       metadata: {
         [sdk.DELEGATION_METADATA_KEY]: delegationValue(["invocation.history.*"]),
       },
@@ -1730,6 +1778,8 @@ test("session history preflight rejects non-callee runtime-owner subject before 
           caller_ura: caller,
           callee_ura: callee,
           subject_ura: "easynet:///r/example/device/dev-b",
+          nonce_base64: nonce,
+          causal_context: { form: "none" },
           metadata: {
             [sdk.DELEGATION_METADATA_KEY]: delegationValue(["invocation.history.*"]),
           },
@@ -1764,6 +1814,8 @@ test("session history keeps subject filters as ledger predicates", async () => {
       caller_ura: caller,
       callee_ura: callee,
       subject_ura: sdk.runtimeStateReadSubjectURA("example", "alice"),
+      nonce_base64: nonce,
+      causal_context: { form: "none" },
       metadata: {
         [sdk.SESSION_AUTHORITY_METADATA_KEY]: historySessionValue(),
       },
