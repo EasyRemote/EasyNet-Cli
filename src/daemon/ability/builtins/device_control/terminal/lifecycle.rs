@@ -143,12 +143,14 @@ pub fn register(
 
     let pty_for_close = pty;
     let close_h = Arc::new(move |env, args: Value| {
-        let session_id = args
-            .get("session_id")
-            .and_then(Value::as_str)
-            .ok_or_else(|| anyhow::anyhow!("`session_id` required"))?;
-        super::authority::require_session_authority(&env, session_id, "terminal.close", "manage")?;
-        close_handler(&pty_for_close, io.as_ref(), args)
+        let close_args = TerminalCloseArgs::parse(args)?;
+        super::authority::require_session_authority(
+            &env,
+            close_args.session_id(),
+            "terminal.close",
+            "manage",
+        )?;
+        close_session(&pty_for_close, io.as_ref(), close_args)
     });
     reg.register_rpc_with_envelope_and_owner("terminal.close", OwnerKind::Device, close_h);
 }
@@ -205,17 +207,56 @@ fn list_handler(pty: &Arc<PtyService>, args: Value) -> anyhow::Result<Value> {
 ///   * exit_status is the child's exit code when waitable; absent
 ///     when the child was killed before the OS published a status
 ///     OR when ack=false (no child to wait on).
+#[cfg(test)]
 fn close_handler(
     pty: &Arc<PtyService>,
     io: Option<&crate::daemon::ability::builtins::device_control::terminal::io::PtyIoService>,
     args: Value,
 ) -> anyhow::Result<Value> {
-    let args = require_lifecycle_args(&args, "terminal.close", &["session_id"])?;
-    let id = args
-        .get("session_id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow::anyhow!("`session_id` required"))?;
-    let session_id = PtySessionId::new(id);
+    close_session(pty, io, TerminalCloseArgs::parse(args)?)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TerminalCloseArgs {
+    session_id: String,
+}
+
+impl TerminalCloseArgs {
+    fn parse(args: Value) -> anyhow::Result<Self> {
+        let args = require_lifecycle_args(&args, "terminal.close", &["session_id"])?;
+        let session_id = required_non_empty_string(args, "session_id", "terminal.close")?;
+        Ok(Self { session_id })
+    }
+
+    fn session_id(&self) -> &str {
+        &self.session_id
+    }
+}
+
+fn required_non_empty_string(
+    args: &Map<String, Value>,
+    key: &str,
+    ability: &str,
+) -> anyhow::Result<String> {
+    let value = args
+        .get(key)
+        .ok_or_else(|| anyhow::anyhow!("{ability}: `{key}` required"))?;
+    let string = value
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("{ability}: `{key}` must be a string"))?
+        .trim();
+    if string.is_empty() {
+        anyhow::bail!("{ability}: `{key}` must not be empty");
+    }
+    Ok(string.to_string())
+}
+
+fn close_session(
+    pty: &Arc<PtyService>,
+    io: Option<&crate::daemon::ability::builtins::device_control::terminal::io::PtyIoService>,
+    close_args: TerminalCloseArgs,
+) -> anyhow::Result<Value> {
+    let session_id = PtySessionId::new(&close_args.session_id);
     let outcome = pty.close(&session_id);
     // Drop the I/O row AFTER the lifecycle close so the reader
     // thread sees the PTY EOF first (clean exit), then the
@@ -356,7 +397,7 @@ pub fn create_input_schema() -> Value {
         "properties": {
             "cols": {"type": "integer", "minimum": 1, "maximum": 65535},
             "rows": {"type": "integer", "minimum": 1, "maximum": 65535},
-            "command": {"type": "string"},
+            "command": {"type": "string", "minLength": 1},
             "command_args": {"type": "array", "items": {"type": "string"}},
             "cwd": {"type": "string"},
             "env": {
@@ -387,7 +428,7 @@ pub fn close_input_schema() -> Value {
         "type": "object",
         "required": ["session_id"],
         "properties": {
-            "session_id": {"type": "string"},
+            "session_id": {"type": "string", "minLength": 1},
         },
         "additionalProperties": false,
     })
@@ -535,6 +576,17 @@ mod tests {
     }
 
     #[test]
+    fn close_rejects_non_object_args_before_service_lookup() {
+        let svc = fresh_service();
+        let err = close_handler(&svc, None, Value::Null).unwrap_err();
+        let message = format!("{err}");
+        assert!(
+            message.contains("terminal.close: args must be an object"),
+            "unexpected error: {message}"
+        );
+    }
+
+    #[test]
     fn close_rejects_unknown_argument() {
         let svc = fresh_service();
         let err = close_handler(&svc, None, json!({"session_id": "ghost-id", "force": true}))
@@ -542,6 +594,52 @@ mod tests {
         assert!(
             format!("{err}").contains("terminal.close: unknown argument `force`"),
             "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn close_rejects_unknown_argument_before_idempotent_close_lookup() {
+        let svc = fresh_service();
+        let resp = create_handler(&svc, json!({"command": true_command()})).unwrap();
+        let id = resp["session_id"].as_str().unwrap().to_string();
+        let err = close_handler(
+            &svc,
+            None,
+            json!({"session_id": id.clone(), "legacy_mode": true}),
+        )
+        .unwrap_err();
+        let message = format!("{err}");
+        assert!(
+            message.contains("terminal.close: unknown argument `legacy_mode`"),
+            "unexpected error: {message}"
+        );
+        assert_eq!(
+            svc.live_count(),
+            1,
+            "unknown fields must fail before closing a live PTY"
+        );
+        svc.close(&PtySessionId::new(&id));
+    }
+
+    #[test]
+    fn close_rejects_wrong_typed_session_id_before_service_lookup() {
+        let svc = fresh_service();
+        let err = close_handler(&svc, None, json!({"session_id": 42})).unwrap_err();
+        let message = format!("{err}");
+        assert!(
+            message.contains("terminal.close: `session_id` must be a string"),
+            "unexpected error: {message}"
+        );
+    }
+
+    #[test]
+    fn close_rejects_blank_session_id_before_idempotent_close_lookup() {
+        let svc = fresh_service();
+        let err = close_handler(&svc, None, json!({"session_id": "   "})).unwrap_err();
+        let message = format!("{err}");
+        assert!(
+            message.contains("terminal.close: `session_id` must not be empty"),
+            "unexpected error: {message}"
         );
     }
 
@@ -660,6 +758,7 @@ mod tests {
         assert_eq!(s["type"], "object");
         assert_eq!(s["additionalProperties"], false);
         assert_eq!(s["properties"]["cols"]["type"], "integer");
+        assert_eq!(s["properties"]["command"]["minLength"], 1);
         assert_eq!(s["properties"]["env"]["type"], "object");
     }
 
@@ -668,5 +767,6 @@ mod tests {
         let s = close_input_schema();
         let req = s["required"].as_array().unwrap();
         assert!(req.iter().any(|v| v == "session_id"));
+        assert_eq!(s["properties"]["session_id"]["minLength"], 1);
     }
 }
