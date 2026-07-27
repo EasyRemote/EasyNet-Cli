@@ -35,6 +35,18 @@ if ! rg -n 'EntityRefKindResolution::from_ura\(&ura\)\?\.protobuf_kind\(\)' "$WI
   fail "try_entity_ref must project protobuf kind through EntityRefKindResolution"
 fi
 
+if ! rg -n 'URAKind::Authority\) => Ok\(Self::Agent\)' "$WIRE" >/dev/null; then
+  fail "Hub/Authority URAs must project to Axon's generic Agent EntityRef kind"
+fi
+
+if rg -n 'subject_ref_kind_unsupported:Hub' "$WIRE"; then
+  fail "Hub/Authority URAs must not be rejected as unsupported EntityRef subjects"
+fi
+
+if ! rg -n 'subject_ref_kind_unsupported:User' "$WIRE" >/dev/null; then
+  fail "User URAs must remain unsupported as direct EntityRef subjects; user-owned runtime-state reads use Resource subjects"
+fi
+
 if ! rg -n 'fn top_level_subject_resolution\(ura: &str\) -> Option<EntityRefKindResolution>' "$WIRE" >/dev/null; then
   fail "top-level subject form handling must return EntityRefKindResolution"
 fi

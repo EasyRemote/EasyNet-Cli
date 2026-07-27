@@ -672,6 +672,7 @@ impl EntityRefKindResolution {
         }
         match crate::core::ura::parse_ura(ura.trim()).map(|parsed| parsed.kind) {
             Ok(crate::core::ura::URAKind::Agent) => Ok(Self::Agent),
+            Ok(crate::core::ura::URAKind::Authority) => Ok(Self::Agent),
             Ok(crate::core::ura::URAKind::Ability) => Ok(Self::Ability),
             Ok(crate::core::ura::URAKind::Device) => Ok(Self::Device),
             Ok(crate::core::ura::URAKind::Resource) => Ok(Self::Resource),
@@ -1126,16 +1127,23 @@ mod tests {
     }
 
     #[test]
-    fn hub_and_user_subject_refs_are_rejected() {
+    fn hub_subject_ref_projects_to_agent_but_user_subject_is_rejected() {
         let hub = crate::core::ura::hub_ura("acme");
-        let hub_err = ProtoEnvelope::from_target(
+        let hub_env = ProtoEnvelope::from_target(
             "easynet:///r/acme/device/dev-a",
             &hub,
             &hub,
             InvocationDerivationPolicy::FreshRoot,
         )
-        .unwrap_err();
-        assert!(format!("{hub_err}").contains("subject_ref_kind_unsupported:Hub"));
+        .unwrap()
+        .into_inner("meta.list_abilities", b"{}")
+        .unwrap();
+        let hub_subject_ref = try_entity_ref(hub_env.subject.unwrap().ura).unwrap();
+        assert_eq!(
+            hub_subject_ref.kind,
+            EntityRefKind::Agent as i32,
+            "Hub/Authority subjects project to Axon's generic Agent EntityRef kind"
+        );
 
         let user_err = ProtoEnvelope::from_target(
             "easynet:///r/acme/device/dev-a",
@@ -1164,8 +1172,10 @@ mod tests {
 
     #[test]
     fn invocation_wire_entity_ref_kind_resolution_preserves_canonical_kinds() {
+        let hub_ura = crate::core::ura::hub_ura("acme");
         let cases = [
             ("easynet:///r/acme/agent/alice.worker", EntityRefKind::Agent),
+            (hub_ura.as_str(), EntityRefKind::Agent),
             (
                 "easynet:///r/acme/ability/device.dev-a.observe.health",
                 EntityRefKind::Ability,
@@ -1211,10 +1221,6 @@ mod tests {
     fn invocation_wire_entity_ref_kind_resolution_rejects_unsupported_canonical_kinds() {
         let user_err = try_entity_ref("easynet:///r/acme/user/alice".to_string()).unwrap_err();
         assert!(format!("{user_err}").contains("subject_ref_kind_unsupported:User"));
-
-        let hub = crate::core::ura::hub_ura("acme");
-        let hub_err = try_entity_ref(hub).unwrap_err();
-        assert!(format!("{hub_err}").contains("subject_ref_kind_unsupported:Hub"));
     }
 
     #[test]

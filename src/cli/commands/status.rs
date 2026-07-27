@@ -40,7 +40,8 @@ pub fn run(args: StatusArgs) -> anyhow::Result<()> {
     output::info(&format!("EasyNet CLI v{}", env!("CARGO_PKG_VERSION")));
     render_connection_state();
 
-    render_pairing_state(StatusPairingState::load());
+    let pairing_state = StatusPairingState::load();
+    render_pairing_state(&pairing_state);
 
     let lifecycle = RuntimeLifecycleService::new();
     let report = lifecycle.status()?;
@@ -141,48 +142,62 @@ pub fn run(args: StatusArgs) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let health_probe =
-        LocalRuntimeStateReadIssuer::invoke("observe.health", json!({"source": "runtime.status"}));
-    match health_probe {
-        Ok(_) => {}
-        Err(e) => {
-            // The transport layer already converts the common case
-            // (daemon.sock missing/refused because the daemon process
-            // is gone) into an actionable daemon-offline error with a
-            // recovery hint. Surface that one directly; wrapping it in
-            // "despite runtime metadata: …" duplicated the diagnosis
-            // and made the actionable line harder to read. For
-            // genuinely-unexpected failures (permission, protocol
-            // mismatch, etc.) keep the wrapping so the diagnosis
-            // context is preserved.
-            let inner = format!("{e}");
-            if matches!(
-                crate::support::platform::local_invoke::classify_invoke_failure(&e),
-                crate::support::platform::local_invoke::LocalInvokeFailureClass::DaemonOffline
-            ) {
-                output::warn(&inner);
-            } else {
-                output::warn(&format!(
-                    "Local daemon is not responding to observe.health despite runtime metadata: {inner}"
-                ));
+    match StatusRuntimeReadPolicy::for_pairing_state(&pairing_state) {
+        StatusRuntimeReadPolicy::UserRuntimeState => {
+            let health_probe = LocalRuntimeStateReadIssuer::invoke(
+                "observe.health",
+                json!({"source": "runtime.status"}),
+            );
+            match health_probe {
+                Ok(_) => {}
+                Err(e) => {
+                    // The transport layer already converts the common case
+                    // (daemon.sock missing/refused because the daemon process
+                    // is gone) into an actionable daemon-offline error with a
+                    // recovery hint. Surface that one directly; wrapping it in
+                    // "despite runtime metadata: …" duplicated the diagnosis
+                    // and made the actionable line harder to read. For
+                    // genuinely-unexpected failures (permission, protocol
+                    // mismatch, etc.) keep the wrapping so the diagnosis
+                    // context is preserved.
+                    let inner = format!("{e}");
+                    if matches!(
+                        crate::support::platform::local_invoke::classify_invoke_failure(&e),
+                        crate::support::platform::local_invoke::LocalInvokeFailureClass::DaemonOffline
+                    ) {
+                        output::warn(&inner);
+                    } else {
+                        output::warn(&format!(
+                            "Local daemon is not responding to observe.health despite runtime metadata: {inner}"
+                        ));
+                    }
+                    return Ok(());
+                }
             }
-            return Ok(());
+
+            // Fleet view — go through `federation.discover` (the joint-plan
+            // unified path the rest of the CLI uses). DirectoryEntries land
+            // with a `status` field (`active` / `stale` / `draining`); we
+            // count `active` as online so the summary line matches what
+            // `easynet device list` shows.
+            let entries = fetch_directory_entries()?;
+            let total = entries.len();
+            let online = entries
+                .iter()
+                .filter(|e| e.get("status").and_then(Value::as_str) == Some("active"))
+                .count();
+            let offline = total.saturating_sub(online);
+            output::info(&format!("Nodes: {online} online, {offline} offline"));
+        }
+        StatusRuntimeReadPolicy::DaemonOperationalOnly => {
+            output::info(
+                "Runtime health: daemon invocation endpoint accepting (device runtime-state reads require pairing)",
+            );
+            output::info(
+                "Nodes: not queried (user-scoped federation directory requires device pairing)",
+            );
         }
     }
-
-    // Fleet view — go through `federation.discover` (the joint-plan
-    // unified path the rest of the CLI uses). DirectoryEntries land
-    // with a `status` field (`active` / `stale` / `draining`); we
-    // count `active` as online so the summary line matches what
-    // `easynet device list` shows.
-    let entries = fetch_directory_entries()?;
-    let total = entries.len();
-    let online = entries
-        .iter()
-        .filter(|e| e.get("status").and_then(Value::as_str) == Some("active"))
-        .count();
-    let offline = total.saturating_sub(online);
-    output::info(&format!("Nodes: {online} online, {offline} offline"));
 
     // Ability count — go through easynet.discover (one call,
     // returns the full local catalogue). Cheaper than the legacy
@@ -236,9 +251,26 @@ impl StatusPairingState {
     }
 }
 
-fn render_pairing_state(state: StatusPairingState) {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StatusRuntimeReadPolicy {
+    UserRuntimeState,
+    DaemonOperationalOnly,
+}
+
+impl StatusRuntimeReadPolicy {
+    fn for_pairing_state(state: &StatusPairingState) -> Self {
+        match state {
+            StatusPairingState::Paired(_) => Self::UserRuntimeState,
+            StatusPairingState::Unpaired | StatusPairingState::Invalid { .. } => {
+                Self::DaemonOperationalOnly
+            }
+        }
+    }
+}
+
+fn render_pairing_state(state: &StatusPairingState) {
     match state {
-        StatusPairingState::Paired(creds) => render_paired_credentials(&creds),
+        StatusPairingState::Paired(creds) => render_paired_credentials(creds),
         StatusPairingState::Unpaired => {
             output::info("Device: not paired (run 'easynet device join <token>')");
             eprintln!();
@@ -389,6 +421,38 @@ mod tests {
             }
             other => panic!("expected invalid state, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn runtime_read_policy_uses_user_state_for_paired_device() {
+        let state = StatusPairingState::from_credentials_result(Ok(Some(complete_credentials())));
+
+        assert_eq!(
+            StatusRuntimeReadPolicy::for_pairing_state(&state),
+            StatusRuntimeReadPolicy::UserRuntimeState
+        );
+    }
+
+    #[test]
+    fn runtime_read_policy_uses_daemon_operational_probe_without_pairing() {
+        let state = StatusPairingState::from_credentials_result(Ok(None));
+
+        assert_eq!(
+            StatusRuntimeReadPolicy::for_pairing_state(&state),
+            StatusRuntimeReadPolicy::DaemonOperationalOnly
+        );
+    }
+
+    #[test]
+    fn runtime_read_policy_uses_daemon_operational_probe_for_invalid_pairing() {
+        let state = StatusPairingState::from_credentials_result(Err(anyhow::anyhow!(
+            "parse credentials from /tmp/credentials.json: expected value"
+        )));
+
+        assert_eq!(
+            StatusRuntimeReadPolicy::for_pairing_state(&state),
+            StatusRuntimeReadPolicy::DaemonOperationalOnly
+        );
     }
 
     #[test]

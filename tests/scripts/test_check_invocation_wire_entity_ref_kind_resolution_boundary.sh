@@ -30,7 +30,11 @@ enum EntityRefKindResolution {
 
 impl EntityRefKindResolution {
     fn from_ura(ura: &str) -> anyhow::Result<Self> {
-        Ok(Self::Device)
+        match crate::core::ura::parse_ura(ura.trim()).map(|parsed| parsed.kind) {
+            Ok(crate::core::ura::URAKind::Authority) => Ok(Self::Agent),
+            Ok(crate::core::ura::URAKind::Device) => Ok(Self::Device),
+            _ => anyhow::bail!("subject_ref_kind_unsupported:User"),
+        }
     }
 
     fn protobuf_kind(self) -> EntityRefKind {
@@ -44,6 +48,10 @@ fn try_entity_ref(ura: String) {
 
 fn top_level_subject_resolution(ura: &str) -> Option<EntityRefKindResolution> {
     Some(EntityRefKindResolution::Session)
+}
+
+fn user_subject_rejection_probe() {
+    let _ = "subject_ref_kind_unsupported:User";
 }
 RS
 
