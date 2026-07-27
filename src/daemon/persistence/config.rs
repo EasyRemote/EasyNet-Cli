@@ -348,7 +348,23 @@ fn validate_home_path(source: &'static str, path: PathBuf) -> anyhow::Result<Pat
 }
 
 pub fn state_dir() -> PathBuf {
-    home_dir().join(".easynet")
+    try_state_dir().unwrap_or_else(|error| panic!("{error}"))
+}
+
+pub fn try_state_dir() -> anyhow::Result<PathBuf> {
+    resolve_state_dir(
+        std::env::var("HOME").ok(),
+        std::env::var("USERPROFILE").ok(),
+        platform_home_dir(),
+    )
+}
+
+fn resolve_state_dir(
+    home: Option<String>,
+    user_profile: Option<String>,
+    os_home: Option<PathBuf>,
+) -> anyhow::Result<PathBuf> {
+    Ok(resolve_home_dir(home, user_profile, os_home)?.join(".easynet"))
 }
 
 /// Canonical directory that owns all per-agent roots.
@@ -356,8 +372,17 @@ pub fn agents_root() -> PathBuf {
     state_dir().join("agents")
 }
 
+pub fn try_agents_root() -> anyhow::Result<PathBuf> {
+    Ok(try_state_dir()?.join("agents"))
+}
+
+#[cfg(test)]
 fn state_path() -> PathBuf {
     state_dir().join("runtime.json")
+}
+
+fn try_state_path() -> anyhow::Result<PathBuf> {
+    Ok(try_state_dir()?.join("runtime.json"))
 }
 
 #[cfg(test)]
@@ -366,15 +391,15 @@ pub(crate) fn runtime_state_path() -> PathBuf {
 }
 
 pub fn save(state: &RuntimeState) -> anyhow::Result<()> {
-    let dir = state_dir();
+    let dir = try_state_dir()?;
     fs::create_dir_all(&dir)?;
     let json = serde_json::to_string_pretty(state)?;
-    atomic_write(&state_path(), json.as_bytes())?;
+    atomic_write(&try_state_path()?, json.as_bytes())?;
     Ok(())
 }
 
 pub fn load() -> anyhow::Result<RuntimeState> {
-    let path = state_path();
+    let path = try_state_path()?;
     let data = fs::read_to_string(&path)
         .map_err(|_| anyhow::anyhow!("no running runtime — run `easynet start` first"))?;
     let state: RuntimeState = serde_json::from_str(&data)?;
@@ -382,7 +407,7 @@ pub fn load() -> anyhow::Result<RuntimeState> {
 }
 
 pub(crate) fn load_optional_runtime_state() -> anyhow::Result<Option<RuntimeState>> {
-    let path = state_path();
+    let path = try_state_path()?;
     let data = match fs::read_to_string(&path) {
         Ok(data) => data,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -399,7 +424,7 @@ pub(crate) fn load_optional_runtime_state() -> anyhow::Result<Option<RuntimeStat
 }
 
 pub fn remove() -> anyhow::Result<()> {
-    let path = state_path();
+    let path = try_state_path()?;
     if path.exists() {
         fs::remove_file(&path)?;
     }
@@ -659,8 +684,13 @@ fn extract_api_host(endpoint: &str) -> String {
     }
 }
 
+#[cfg(test)]
 fn credentials_path() -> PathBuf {
     state_dir().join("credentials.json")
+}
+
+fn try_credentials_path() -> anyhow::Result<PathBuf> {
+    Ok(try_state_dir()?.join("credentials.json"))
 }
 
 /// Path to the unified EasyNet daemon PID file.
@@ -674,7 +704,7 @@ pub fn easynet_daemon_pid_path() -> PathBuf {
 
 pub fn save_credentials(creds: &Credentials) -> anyhow::Result<()> {
     creds.validate_complete()?;
-    let dir = state_dir();
+    let dir = try_state_dir()?;
     fs::create_dir_all(&dir)?;
     let json = serde_json::to_string_pretty(creds)? + "\n";
     // Owner-only mode is applied to the staged temp file *before* the
@@ -682,7 +712,7 @@ pub fn save_credentials(creds: &Credentials) -> anyhow::Result<()> {
     // at its final path. A post-rename chmod leaves that window open —
     // see `atomic_write_with_permissions` for the full argument.
     atomic_write_with_permissions(
-        &credentials_path(),
+        &try_credentials_path()?,
         json.as_bytes(),
         WritePermissions::OwnerReadWrite,
     )?;
@@ -695,7 +725,7 @@ pub fn load_credentials() -> anyhow::Result<Credentials> {
 }
 
 pub fn load_credentials_optional() -> anyhow::Result<Option<Credentials>> {
-    let path = credentials_path();
+    let path = try_credentials_path()?;
     let data = match fs::read_to_string(&path) {
         Ok(data) => data,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -715,7 +745,7 @@ pub fn load_credentials_optional() -> anyhow::Result<Option<Credentials>> {
 }
 
 pub fn delete_credentials() -> anyhow::Result<()> {
-    let path = credentials_path();
+    let path = try_credentials_path()?;
     if path.exists() {
         fs::remove_file(&path)?;
     }
@@ -739,8 +769,13 @@ pub struct DeviceSettings {
     pub install_id: Option<String>,
 }
 
+#[cfg(test)]
 fn device_settings_path() -> PathBuf {
     state_dir().join("device_settings.json")
+}
+
+fn try_device_settings_path() -> anyhow::Result<PathBuf> {
+    Ok(try_state_dir()?.join("device_settings.json"))
 }
 
 /// Return this machine's stable install id, generating and persisting one on
@@ -764,7 +799,7 @@ pub fn load_or_create_install_id() -> anyhow::Result<String> {
 }
 
 pub fn load_device_settings() -> anyhow::Result<DeviceSettings> {
-    let path = device_settings_path();
+    let path = try_device_settings_path()?;
     let data = match fs::read_to_string(&path) {
         Ok(data) => data,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
@@ -782,10 +817,10 @@ pub fn load_device_settings() -> anyhow::Result<DeviceSettings> {
 }
 
 pub fn save_device_settings(settings: &DeviceSettings) -> anyhow::Result<()> {
-    let dir = state_dir();
+    let dir = try_state_dir()?;
     fs::create_dir_all(&dir)?;
     let json = serde_json::to_string_pretty(settings)? + "\n";
-    atomic_write(&device_settings_path(), json.as_bytes())?;
+    atomic_write(&try_device_settings_path()?, json.as_bytes())?;
     Ok(())
 }
 
@@ -835,6 +870,29 @@ mod tests {
         .expect("blank HOME is unavailable; USERPROFILE is the first absolute source");
 
         assert_eq!(resolved, user_profile);
+    }
+
+    #[test]
+    fn state_resolver_rejects_missing_home_before_current_directory_fallback() {
+        let error = resolve_state_dir(None, None, None)
+            .expect_err("missing home sources must not derive state root from cwd");
+
+        assert!(
+            error
+                .to_string()
+                .contains("refusing to use current directory"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn state_resolver_derives_dot_easynet_from_absolute_home_source() {
+        let home = std::env::temp_dir().join("easynet-state-home");
+
+        let resolved = resolve_state_dir(Some(home.display().to_string()), None, None)
+            .expect("absolute HOME should derive state root");
+
+        assert_eq!(resolved, home.join(".easynet"));
     }
 
     #[test]
