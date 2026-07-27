@@ -474,7 +474,7 @@ pub async fn run_default_key_service() -> Result<(), Box<dyn std::error::Error>>
     };
 
     #[cfg(unix)]
-    install_signal_cleanup(socket_path.clone());
+    install_signal_cleanup();
     let connection_limit = Arc::new(Semaphore::new(MAX_CONCURRENT_KEY_SERVICE_CONNECTIONS));
     let mut fail_stop_rx = runtime.fail_stop_receiver();
     #[cfg(unix)]
@@ -485,7 +485,6 @@ pub async fn run_default_key_service() -> Result<(), Box<dyn std::error::Error>>
         tokio::select! {
             _ = owner_liveness.tick() => {
                 if daemon_owner_exited() {
-                    let _ = std::fs::remove_file(&socket_path);
                     eprintln!("[easynet-keyring] daemon owner exited, shutting down");
                     return Ok(());
                 }
@@ -498,7 +497,6 @@ pub async fn run_default_key_service() -> Result<(), Box<dyn std::error::Error>>
                         .unwrap_or_else(|| "missing fail-stop reason".to_string()),
                     Err(_) => "key-service fail-stop channel closed".to_string(),
                 };
-                let _ = std::fs::remove_file(&socket_path);
                 return Err(format!(
                     "[easynet-keyring] fail-stopped after uncertain vault durability: {reason}"
                 ).into());
@@ -568,7 +566,6 @@ pub async fn run_default_key_service() -> Result<(), Box<dyn std::error::Error>>
 /// A service launched by daemon lifecycle must not survive a daemon crash.
 /// Standalone test/service invocations omit the owner PID and retain their
 /// existing explicit signal lifecycle.
-#[cfg(unix)]
 fn daemon_owner_exited() -> bool {
     let owner_pid = std::env::var_os(KEY_SERVICE_OWNER_PID_ENV)
         .and_then(|raw| raw.into_string().ok())
@@ -647,7 +644,7 @@ pub(crate) fn run_test_unix_key_service_with_purpose(
 }
 
 #[cfg(unix)]
-fn install_signal_cleanup(socket_path: std::path::PathBuf) {
+fn install_signal_cleanup() {
     tokio::spawn(async move {
         let mut sigterm =
             match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
@@ -669,7 +666,10 @@ fn install_signal_cleanup(socket_path: std::path::PathBuf) {
             _ = sigterm.recv() => eprintln!("[easynet-keyring] SIGTERM, shutting down"),
             _ = sigint.recv() => eprintln!("[easynet-keyring] SIGINT, shutting down"),
         }
-        let _ = std::fs::remove_file(socket_path);
+        // Socket namespace cleanup belongs to the lifecycle manager that is
+        // about to spawn a replacement. The service process may be an
+        // ephemeral bootstrap owner; unlinking here can delete a newer
+        // daemon-owned listener bound at the same path.
         std::process::exit(0);
     });
 }

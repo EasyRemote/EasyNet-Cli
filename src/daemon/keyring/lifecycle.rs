@@ -876,6 +876,39 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn lifecycle_spawn_boundary_owns_stale_socket_cleanup() {
+        use std::os::unix::net::UnixListener;
+        use std::path::PathBuf;
+        use std::sync::Mutex;
+
+        let directory = tempfile::tempdir().expect("tempdir");
+        let socket_path = directory.path().join("key-service.sock");
+        let listener = UnixListener::bind(&socket_path).expect("bind stale socket");
+        let manager = KeyServiceManager {
+            lifecycle: KeyServiceLifecycle {
+                socket_path: socket_path.clone(),
+                binary_path: PathBuf::from("unused"),
+                log_path: directory.path().join("key-service.log"),
+                lease_path: directory.path().join("key-service.start.lock"),
+                ready_timeout: Duration::from_secs(1),
+            },
+            state: Mutex::new(KeyServiceManagerState::default()),
+        };
+
+        manager
+            .lifecycle
+            .remove_stale_transport()
+            .expect("lifecycle manager removes stale key-service socket");
+
+        assert!(
+            !socket_path.exists(),
+            "service process exit must leave socket cleanup to the next lifecycle spawn boundary"
+        );
+        drop(listener);
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn unhealthy_owned_service_is_reaped_before_supervised_restart() {
         use std::io::{Read as _, Write as _};
         use std::os::unix::net::UnixListener;
