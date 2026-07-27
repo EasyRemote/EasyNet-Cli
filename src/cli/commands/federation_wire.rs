@@ -54,18 +54,6 @@ use anyhow::Context;
 
 use crate::daemon::persistence::config::{self, Credentials};
 
-/// Default daemon-config.toml location. Mirrors
-/// `persistence::daemon_config::DEFAULT_DAEMON_CONFIG_PATH`. We
-/// re-derive the path here rather than `pub use` the constant so
-/// this module stays a leaf consumer that does not pull in the
-/// `axon-pb`-feature-gated daemon_config module.
-fn daemon_config_path() -> PathBuf {
-    if let Some(home) = std::env::var_os("HOME") {
-        return PathBuf::from(home).join(".easynet/daemon-config.toml");
-    }
-    PathBuf::from(".easynet/daemon-config.toml")
-}
-
 fn required_pairing_fact<'a>(
     value: &'a str,
     field: &str,
@@ -185,7 +173,7 @@ pub fn auto_wire_federated_peer_from_credentials(
     operator_peer_hub: Option<&str>,
 ) -> anyhow::Result<()> {
     let realm = required_pairing_fact(&creds.realm, "realm", "federated_peers auto-wire")?;
-    let path = daemon_config_path();
+    let path = crate::cli::commands::federation_paths::daemon_config_path("auto-wire")?;
     if !path.exists() {
         // No daemon-config means no hub-mode daemon on this
         // device. Nothing to wire; return silently.

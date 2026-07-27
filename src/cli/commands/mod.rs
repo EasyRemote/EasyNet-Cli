@@ -26,6 +26,7 @@ pub(crate) mod exec;
 #[cfg(feature = "axon-pb")]
 pub(crate) mod federation_discover;
 pub(crate) mod federation_gen_cert;
+pub(crate) mod federation_paths;
 pub(crate) mod federation_peers;
 pub(crate) mod federation_wire;
 pub(crate) mod groups;

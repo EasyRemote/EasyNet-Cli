@@ -73,17 +73,6 @@ use crate::daemon::trust::anchor::{
 };
 use crate::support::platform::output;
 
-/// Default daemon-config.toml location, mirrors
-/// `persistence::daemon_config::DEFAULT_DAEMON_CONFIG_PATH`. Re-
-/// derived here so the subcommand doesn't pull in the
-/// `axon-pb`-feature-gated daemon_config module.
-fn daemon_config_path() -> PathBuf {
-    if let Some(home) = std::env::var_os("HOME") {
-        return PathBuf::from(home).join(".easynet/daemon-config.toml");
-    }
-    PathBuf::from(".easynet/daemon-config.toml")
-}
-
 /// Default realm-trust.toml location, mirrors the daemon's
 /// `daemon::boot::invocation::trust_anchor_path_from_env_or_default`.
 /// The `EASYNET_REALM_TRUST_PATH` env override is the same one the
@@ -199,7 +188,8 @@ fn print_plain(federated_peers: &BTreeMap<String, String>, trusted_hubs: &[Trust
 }
 
 fn read_federated_peers() -> anyhow::Result<BTreeMap<String, String>> {
-    read_federated_peers_from_path(&daemon_config_path())
+    let path = crate::cli::commands::federation_paths::daemon_config_path("inspection")?;
+    read_federated_peers_from_path(&path)
 }
 
 fn read_federated_peers_from_path(path: &Path) -> anyhow::Result<BTreeMap<String, String>> {
