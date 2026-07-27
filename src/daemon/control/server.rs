@@ -420,7 +420,7 @@ fn write_discovery_for(
         capability_flags,
         pages_port,
     };
-    discovery::write(&discovery::default_path(), &disc)
+    discovery::write(&discovery::try_default_path()?, &disc)
 }
 
 fn discovery_capability_flags(runtime_flags: Vec<String>) -> Vec<String> {

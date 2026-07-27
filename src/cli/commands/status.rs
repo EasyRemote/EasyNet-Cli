@@ -68,7 +68,7 @@ pub fn run(args: StatusArgs) -> anyhow::Result<()> {
         rows.push(("gRPC socket", state.endpoint.clone()));
         rows.push((
             "Control socket",
-            crate::daemon::control::transport::default_socket_path()
+            crate::daemon::control::transport::try_default_socket_path()?
                 .display()
                 .to_string(),
         ));

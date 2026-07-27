@@ -154,7 +154,13 @@ pub unsafe extern "C" fn runtime_init(
 
     // Resolve control.json path: caller-supplied or default.
     let path = if control_path.is_null() {
-        discovery::default_path()
+        match discovery::try_default_path() {
+            Ok(path) => path,
+            Err(error) => {
+                set_last_error_code(ERR_GENERIC, format!("runtime_init: {error}"));
+                return ERR_GENERIC;
+            }
+        }
     } else {
         match read_cstr(control_path) {
             Ok(s) => std::path::PathBuf::from(s),

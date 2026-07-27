@@ -44,7 +44,7 @@
 use std::path::{Path, PathBuf};
 
 #[cfg(not(windows))]
-use crate::daemon::persistence::config::state_dir;
+use crate::daemon::persistence::config::try_state_dir;
 #[cfg(windows)]
 use crate::support::platform::named_pipe::{scoped_pipe_name, PipeListener};
 
@@ -118,13 +118,17 @@ impl ControlAddress {
 
 /// Default UDS path for the local control plane: `~/.easynet/control.sock`.
 pub fn default_socket_path() -> PathBuf {
+    try_default_socket_path().unwrap_or_else(|error| panic!("{error}"))
+}
+
+pub fn try_default_socket_path() -> anyhow::Result<PathBuf> {
     #[cfg(windows)]
     {
-        return PathBuf::from(scoped_pipe_name("control"));
+        return Ok(PathBuf::from(scoped_pipe_name("control")));
     }
 
     #[cfg(not(windows))]
-    state_dir().join(UDS_FILENAME)
+    Ok(try_state_dir()?.join(UDS_FILENAME))
 }
 
 /// Bind a listener at the default address.
@@ -144,7 +148,7 @@ pub fn default_socket_path() -> PathBuf {
 /// On Windows: returns a clear "not yet implemented" error per the
 /// v1 platform-scope decision.
 pub(crate) fn bind_default() -> anyhow::Result<(ControlListener, ControlAddress)> {
-    let path = default_socket_path();
+    let path = try_default_socket_path()?;
     bind_at(&path)
 }
 
@@ -268,5 +272,34 @@ mod tests {
         assert!(uds.as_pipe_name().is_none());
         assert_eq!(np.as_pipe_name().unwrap(), r"\\.\pipe\easynet-0");
         assert!(np.as_uds_path().is_none());
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn try_default_socket_path_rejects_relative_home_before_os_home_fallback() {
+        let _lock = crate::cli::commands::test_support::env_lock();
+        let previous_home = std::env::var("HOME").ok();
+        let previous_userprofile = std::env::var("USERPROFILE").ok();
+        std::env::set_var("HOME", "relative-home");
+        std::env::remove_var("USERPROFILE");
+
+        let error = try_default_socket_path()
+            .expect_err("relative HOME must not derive control socket through fallback");
+
+        match previous_home {
+            Some(value) => std::env::set_var("HOME", value),
+            None => std::env::remove_var("HOME"),
+        }
+        match previous_userprofile {
+            Some(value) => std::env::set_var("USERPROFILE", value),
+            None => std::env::remove_var("USERPROFILE"),
+        }
+
+        assert!(
+            error
+                .to_string()
+                .contains("HOME must resolve to an absolute path"),
+            "unexpected error: {error:#}"
+        );
     }
 }

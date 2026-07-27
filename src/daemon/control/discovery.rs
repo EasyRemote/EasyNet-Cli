@@ -38,7 +38,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
 
-use crate::daemon::persistence::config::state_dir;
+use crate::daemon::persistence::config::try_state_dir;
 
 /// Filename inside `~/.easynet/`.
 pub const CONTROL_JSON_FILENAME: &str = "control.json";
@@ -168,7 +168,11 @@ pub mod flags {
 /// Default discovery path. Callers should prefer this over rolling
 /// their own join of `state_dir()`.
 pub fn default_path() -> PathBuf {
-    state_dir().join(CONTROL_JSON_FILENAME)
+    try_default_path().unwrap_or_else(|error| panic!("{error}"))
+}
+
+pub fn try_default_path() -> anyhow::Result<PathBuf> {
+    Ok(try_state_dir()?.join(CONTROL_JSON_FILENAME))
 }
 
 /// Resolve a local attach endpoint or explicit discovery path to `control.json`.
@@ -379,6 +383,34 @@ mod tests {
 
         assert!(
             error.to_string().contains("must be absolute"),
+            "unexpected error: {error:#}"
+        );
+    }
+
+    #[test]
+    fn try_default_path_rejects_relative_home_before_os_home_fallback() {
+        let _lock = crate::cli::commands::test_support::env_lock();
+        let previous_home = std::env::var("HOME").ok();
+        let previous_userprofile = std::env::var("USERPROFILE").ok();
+        std::env::set_var("HOME", "relative-home");
+        std::env::remove_var("USERPROFILE");
+
+        let error = try_default_path()
+            .expect_err("relative HOME must not derive control.json through fallback");
+
+        match previous_home {
+            Some(value) => std::env::set_var("HOME", value),
+            None => std::env::remove_var("HOME"),
+        }
+        match previous_userprofile {
+            Some(value) => std::env::set_var("USERPROFILE", value),
+            None => std::env::remove_var("USERPROFILE"),
+        }
+
+        assert!(
+            error
+                .to_string()
+                .contains("HOME must resolve to an absolute path"),
             "unexpected error: {error:#}"
         );
     }
