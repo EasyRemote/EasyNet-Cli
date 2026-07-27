@@ -95,6 +95,7 @@ path = "src/bin/easynet.rs"
 [[bin]]
 name = "easynet-daemon"
 path = "src/bin/easynet-daemon.rs"
+required-features = ["axon-pb"]
 
 # RFC-001 plan v4.1.5 Phase 3A. Long-running per-user vault for
 # the device's Ed25519 keypair. backend / easynet-daemon / CLI all

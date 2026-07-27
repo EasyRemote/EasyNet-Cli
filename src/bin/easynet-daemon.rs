@@ -36,7 +36,6 @@ use easynet_cli::daemon::ability::catalog as ability_catalog;
 use easynet_cli::daemon::ability::conformance::{
     BaselineConformanceReport, DeviceBaseline, HubBaseline, RegistryConformance,
 };
-#[cfg(feature = "axon-pb")]
 use easynet_cli::daemon::ability::conformance::{DaemonInvocationSurface, RuntimeAdminConformance};
 use easynet_cli::daemon::ability::health as ability_health;
 use easynet_cli::daemon::boot::kernel::api::KernelApi;
@@ -117,17 +116,14 @@ fn assert_daemon_baseline_conformance(
     if matches!(mode, DaemonMode::Hub | DaemonMode::Both) {
         let hub = HubBaseline::required_abilities();
         collect_baseline_failure(&mut failures, registry_conformance.check("hub", hub));
-        #[cfg(feature = "axon-pb")]
-        {
-            collect_baseline_failure(
-                &mut failures,
-                DaemonInvocationSurface::from_daemon_surface().check("hub", hub),
-            );
-            collect_baseline_failure(
-                &mut failures,
-                RuntimeAdminConformance::from_daemon_surface().check("hub", hub),
-            );
-        }
+        collect_baseline_failure(
+            &mut failures,
+            DaemonInvocationSurface::from_daemon_surface().check("hub", hub),
+        );
+        collect_baseline_failure(
+            &mut failures,
+            RuntimeAdminConformance::from_daemon_surface().check("hub", hub),
+        );
     }
 
     if failures.is_empty() {
@@ -554,7 +550,6 @@ async fn main() -> anyhow::Result<()> {
     // (F-007 — was Box::leak'd). Bound directly from the boot result:
     // Ok yields the handle, Err returns, so there is no never-read
     // placeholder.
-    #[cfg(feature = "axon-pb")]
     let session_shutdown = {
         boot_bus.emit_started("daemon-invocation-transport");
         let dependencies = easynet_cli::daemon::invocation::InvocationTransportDependencies {
@@ -582,14 +577,7 @@ async fn main() -> anyhow::Result<()> {
             }
         }
     };
-    #[cfg(not(feature = "axon-pb"))]
-    {
-        boot_bus.emit_skipped("daemon-invocation-transport");
-    }
-    #[cfg(feature = "axon-pb")]
     let invocation_capability_flags = session_shutdown.capability_flags().to_vec();
-    #[cfg(not(feature = "axon-pb"))]
-    let invocation_capability_flags = Vec::new();
 
     // Clipboard tracker (Context surface). Always spawned; the thread
     // is inert (config-stat + sleep) until `easynet context clipboard
@@ -687,7 +675,6 @@ async fn main() -> anyhow::Result<()> {
     wait_for_shutdown_signal().await;
     // Cancel the session supervisor (drains the live `session.open`
     // dial -> clean Eof at the hub) before tearing down control sockets.
-    #[cfg(feature = "axon-pb")]
     drop(session_shutdown);
     cleanup_control_discovery();
     Ok(())
