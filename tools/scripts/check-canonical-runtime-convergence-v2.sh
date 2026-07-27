@@ -13569,6 +13569,7 @@ descriptor_provider = Path(sys.argv[8]).read_text(encoding="utf-8")
 
 descriptor_production = descriptor.split("\n#[cfg(test)]\nmod tests", 1)[0]
 production_store = store.split("\n#[cfg(test)]\nmod tests", 1)[0]
+meta_production = meta.split("\n#[cfg(test)]\nmod tests", 1)[0]
 cli_catalog_production = cli_catalog.split("\n#[cfg(test)]\nmod tests", 1)[0]
 cli_ability_production = cli_ability.split("\n#[cfg(test)]\nmod tests", 1)[0]
 if "pub fn descriptor_ref(&self) -> Result<String, DescriptorError>" not in descriptor_production:
@@ -13655,6 +13656,18 @@ if 'Value::String("authority:broadcast".to_string())' not in realm_body:
     raise SystemExit("meta_list_abilities:realm_source_projection_missing")
 if 'Value::String("hub:broadcast".to_string())' in realm_body:
     raise SystemExit("meta_list_abilities:retired_hub_broadcast_source")
+if "fn describe_hosted_agent_count(" not in meta_production:
+    raise SystemExit("meta_describe:hosted_agent_count_helper_missing")
+if re.search(
+    r"load_hosted_identity_status\(\)\s*\.map\(\|status\|\s*status\.hosted_agent_count\(\)\)\s*\.unwrap_or_default\(\)",
+    meta_production,
+    re.S,
+):
+    raise SystemExit("meta_describe:hosted_agent_count_zero_fallback")
+if "meta.describe: load hosted-Agent identity status" not in meta_production:
+    raise SystemExit("meta_describe:hosted_agent_count_error_missing")
+if "device_describe_rejects_corrupt_hosted_agent_projection_before_zero_fallback" not in meta:
+    raise SystemExit("meta_describe:corrupt_hosted_agent_projection_test_missing")
 
 dedupe = re.search(
     r"fn dedupe_descriptor_catalog_entries\([^)]*\)\s*->\s*std::result::Result<Vec<Value>, String>\s*\{(?P<body>.*?)\n\}\n\nfn descriptor_catalog_dedupe_required_string",

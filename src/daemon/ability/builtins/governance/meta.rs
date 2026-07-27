@@ -178,13 +178,7 @@ fn describe_handler(
         *by_namespace.entry(ns).or_insert(0) += 1;
     }
 
-    let hosted_agent_count = if invocation_callee.kind == crate::core::ura::URAKind::Device {
-        AgentAggregateRepository::load_hosted_identity_status()
-            .map(|status| status.hosted_agent_count())
-            .unwrap_or_default()
-    } else {
-        0
-    };
+    let hosted_agent_count = describe_hosted_agent_count(&invocation_callee)?;
 
     Ok(json!({
         "ura": invocation_callee_ura,
@@ -199,6 +193,19 @@ fn describe_handler(
             "hosted_agent_count": hosted_agent_count,
         },
     }))
+}
+
+fn describe_hosted_agent_count(
+    invocation_callee: &crate::core::ura::ParsedURA,
+) -> anyhow::Result<usize> {
+    if invocation_callee.kind != crate::core::ura::URAKind::Device {
+        return Ok(0);
+    }
+    AgentAggregateRepository::load_hosted_identity_status()
+        .map(|status| status.hosted_agent_count())
+        .map_err(|error| {
+            anyhow::anyhow!("meta.describe: load hosted-Agent identity status: {error:#}")
+        })
 }
 
 fn list_abilities_handler(
@@ -912,6 +919,33 @@ mod tests {
         let describe = invoke_describe_targeted(&registry, &hub_ura).expect("Hub describe");
         assert_eq!(describe["abilities_summary"]["total"], 2);
         assert_eq!(provider_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn device_describe_rejects_corrupt_hosted_agent_projection_before_zero_fallback() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let path = crate::daemon::persistence::local_agents::path();
+        std::fs::create_dir_all(path.parent().expect("local-agents parent"))
+            .expect("create local-agents parent");
+        std::fs::write(&path, b"{not-json").expect("write malformed local-agents projection");
+
+        let device_ura = crate::core::ura::device_ura("describe-corrupt", "dev-1");
+        let registry = authority_bound_meta_registry(
+            crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root(
+                &device_ura,
+            )
+            .expect("device authority context"),
+            vec![OwnerKind::Device],
+        );
+
+        let error = invoke_describe_targeted(&registry, &device_ura)
+            .expect_err("device describe must fail closed on corrupt hosted-Agent projection");
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("meta.describe: load hosted-Agent identity status")
+                && message.contains("local-agents.json"),
+            "wrong corrupt projection error: {message}"
+        );
     }
 
     #[test]
