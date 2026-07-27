@@ -54,3 +54,9 @@
   runtime caller signer resolver. FFI must not call runtime-owner-only signer
   loaders for User URAs or treat arbitrary keyring inventory as session
   authority.
+- Local runtime stream projection has one chunk-authority object. Non-terminal
+  frames project to explicit `Running` chunks; successful terminal frames must
+  be backed by canonical `Completed` finalization with no failure; error
+  terminal frames must bind the finalized terminal receipt and a concrete
+  failure fact. The dispatcher loop may await lifecycle events, but it must not
+  reassemble receipt/state/error wire chunks procedurally in multiple branches.

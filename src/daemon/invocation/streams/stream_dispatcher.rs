@@ -23,13 +23,16 @@ use std::sync::{Arc, Weak};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
-use axon_sdk::invocation::{CallMode, KeyResolver, StreamingInvocationHandle};
+use axon_sdk::invocation::{CallMode, InvocationState, KeyResolver, StreamingInvocationHandle};
 use futures::Stream;
 use tokio::sync::{mpsc, watch};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Response, Status};
 
-use axon_sdk::pb::axon::v1::{Error, InvokeServerStreamRequest, InvokeStreamChunk, ResponseHeader};
+use axon_sdk::pb::axon::v1::{
+    Error, InvocationReceipt as WireInvocationReceipt, InvokeServerStreamRequest,
+    InvokeStreamChunk, ResponseHeader,
+};
 
 use crate::daemon::ability::dispatch::StreamSource;
 use crate::daemon::invocation::admission::admission_facade::AdmissionFacade;
@@ -682,70 +685,31 @@ async fn project_local_runtime_stream(
                                 .await;
                         break;
                     }
-                    let frame_admission_receipt = if admission_receipt_sent {
-                        None
-                    } else {
-                        admission_receipt_sent = true;
-                        Some(admission_wire.clone())
+                    let admission_receipt =
+                        take_first_admission_receipt(&mut admission_receipt_sent, &admission_wire);
+                    let projection = match finalized {
+                        Some(finalized) => LocalRuntimeStreamChunkProjection::successful_terminal(
+                            invocation_id.clone(),
+                            sequence,
+                            frame.payload,
+                            frame.content_type,
+                            finalized,
+                            admission_receipt,
+                        ),
+                        None => Ok(LocalRuntimeStreamChunkProjection::progress(
+                            invocation_id.clone(),
+                            sequence,
+                            frame.payload,
+                            frame.content_type,
+                            admission_receipt,
+                        )),
                     };
-                    let state = finalized
-                        .as_ref()
-                        .map(|value| value.terminal_state)
-                        .unwrap_or(axon_sdk::invocation::InvocationState::Running);
-                    let frame_payload = frame.payload;
-                    let frame_content_type = frame.content_type;
-                    let payload = if terminal && frame_payload.is_empty() {
-                        finalized
-                            .as_ref()
-                            .map(|value| value.output().to_vec())
-                            .unwrap_or_default()
-                    } else {
-                        frame_payload
-                    };
-                    let frame_content_type = if frame_content_type.is_empty() {
-                        finalized
-                            .as_ref()
-                            .map(|value| value.output_content_type().to_string())
-                            .unwrap_or_default()
-                    } else {
-                        frame_content_type
-                    };
-                    let content_type = if frame_content_type.is_empty() {
-                        FEDERATION_RESULT_CONTENT_TYPE.to_string()
-                    } else {
-                        frame_content_type
-                    };
-                    let terminal_receipt = match finalized.as_ref() {
-                        Some(value) => match axon_sdk::invocation::wire::receipt_to_wire(
-                            &value.terminal_receipt,
-                        ) {
-                            Ok(receipt) => Some(receipt),
-                            Err(error) => {
-                                let _ = tx
-                                    .send(Err(Status::failed_precondition(format!(
-                                        "CANONICAL_TERMINAL_PROJECTION_FAILED: {error}"
-                                    ))))
-                                    .await;
-                                break;
-                            }
-                        },
-                        None => None,
-                    };
-                    let chunk = InvokeStreamChunk {
-                        header: Some(ResponseHeader {
-                            request_id: invocation_id.clone(),
-                            status: state.as_str().to_string(),
-                            ..ResponseHeader::default()
-                        }),
-                        invocation_id: invocation_id.clone(),
-                        state: state.to_wire_i32(),
-                        content_type,
-                        payload,
-                        sequence,
-                        terminal,
-                        admission_receipt: frame_admission_receipt,
-                        terminal_receipt,
-                        ..InvokeStreamChunk::default()
+                    let chunk = match projection {
+                        Ok(projection) => projection.into_chunk(),
+                        Err(status) => {
+                            let _ = tx.send(Err(status)).await;
+                            break;
+                        }
                     };
                     sequence = sequence.saturating_add(1);
                     if tx.send(Ok(chunk)).await.is_err() {
@@ -776,35 +740,20 @@ async fn project_local_runtime_stream(
                             break;
                         }
                     };
-                    let terminal_error = finalized.failure.as_ref().unwrap_or(&err);
-                    let terminal_receipt = match axon_sdk::invocation::wire::receipt_to_wire(
-                        &finalized.terminal_receipt,
+                    let admission_receipt =
+                        take_first_admission_receipt(&mut admission_receipt_sent, &admission_wire);
+                    let chunk = match LocalRuntimeStreamChunkProjection::failed_terminal(
+                        invocation_id.clone(),
+                        sequence,
+                        finalized,
+                        &err,
+                        admission_receipt,
                     ) {
-                        Ok(receipt) => receipt,
-                        Err(error) => {
-                            let _ = tx
-                                .send(Err(Status::failed_precondition(format!(
-                                    "CANONICAL_TERMINAL_PROJECTION_FAILED: {error}"
-                                ))))
-                                .await;
+                        Ok(projection) => projection.into_chunk(),
+                        Err(status) => {
+                            let _ = tx.send(Err(status)).await;
                             break;
                         }
-                    };
-                    let chunk = InvokeStreamChunk {
-                        header: Some(ResponseHeader {
-                            request_id: invocation_id.clone(),
-                            status: finalized.terminal_state.as_str().to_string(),
-                            ..ResponseHeader::default()
-                        }),
-                        invocation_id: invocation_id.clone(),
-                        state: finalized.terminal_state.to_wire_i32(),
-                        sequence,
-                        terminal: true,
-                        admission_receipt: (!admission_receipt_sent)
-                            .then(|| admission_wire.clone()),
-                        terminal_receipt: Some(terminal_receipt),
-                        error: Some(axon_sdk::invocation::wire::error_to_wire(terminal_error)),
-                        ..InvokeStreamChunk::default()
                     };
                     let _ = tx.send(Ok(chunk)).await;
                     break;
@@ -817,6 +766,203 @@ async fn project_local_runtime_stream(
         Box::pin(DropNotifyingReceiverStream::new(rx, consumer_closed_tx))
             as BoxedDownStream<InvokeStreamChunk>,
     ))
+}
+
+enum LocalRuntimeStreamChunkProjection {
+    Progress {
+        invocation_id: String,
+        sequence: u64,
+        payload: Vec<u8>,
+        content_type: String,
+        admission_receipt: Option<WireInvocationReceipt>,
+    },
+    Terminal {
+        invocation_id: String,
+        sequence: u64,
+        state: InvocationState,
+        payload: Vec<u8>,
+        content_type: String,
+        admission_receipt: Option<WireInvocationReceipt>,
+        terminal_receipt: WireInvocationReceipt,
+        error: Option<Error>,
+    },
+}
+
+impl LocalRuntimeStreamChunkProjection {
+    fn progress(
+        invocation_id: String,
+        sequence: u64,
+        payload: Vec<u8>,
+        content_type: String,
+        admission_receipt: Option<WireInvocationReceipt>,
+    ) -> Self {
+        Self::Progress {
+            invocation_id,
+            sequence,
+            payload,
+            content_type: default_stream_content_type(content_type),
+            admission_receipt,
+        }
+    }
+
+    fn successful_terminal(
+        invocation_id: String,
+        sequence: u64,
+        frame_payload: Vec<u8>,
+        frame_content_type: String,
+        finalized: axon_sdk::invocation::FinalizedInvocation,
+        admission_receipt: Option<WireInvocationReceipt>,
+    ) -> Result<Self, Status> {
+        if finalized.terminal_state != InvocationState::Completed || finalized.failure.is_some() {
+            return Err(Status::failed_precondition(
+                "CANONICAL_FINALIZATION_STATE_MISMATCH: successful stream frame did not finalize Completed",
+            ));
+        }
+        let terminal_receipt = terminal_receipt_to_wire(&finalized)?;
+        let payload = if frame_payload.is_empty() {
+            finalized.output().to_vec()
+        } else {
+            frame_payload
+        };
+        let content_type = if frame_content_type.is_empty() {
+            finalized.output_content_type().to_string()
+        } else {
+            frame_content_type
+        };
+        Ok(Self::Terminal {
+            invocation_id,
+            sequence,
+            state: finalized.terminal_state,
+            payload,
+            content_type: default_stream_content_type(content_type),
+            admission_receipt,
+            terminal_receipt,
+            error: None,
+        })
+    }
+
+    fn failed_terminal(
+        invocation_id: String,
+        sequence: u64,
+        finalized: axon_sdk::invocation::FinalizedInvocation,
+        frame_error: &axon_sdk::invocation::AxonError,
+        admission_receipt: Option<WireInvocationReceipt>,
+    ) -> Result<Self, Status> {
+        let terminal_receipt = terminal_receipt_to_wire(&finalized)?;
+        let terminal_error = finalized.failure.as_ref().unwrap_or(frame_error);
+        Ok(Self::Terminal {
+            invocation_id,
+            sequence,
+            state: finalized.terminal_state,
+            payload: Vec::new(),
+            content_type: String::new(),
+            admission_receipt,
+            terminal_receipt,
+            error: Some(axon_sdk::invocation::wire::error_to_wire(terminal_error)),
+        })
+    }
+
+    fn into_chunk(self) -> InvokeStreamChunk {
+        match self {
+            Self::Progress {
+                invocation_id,
+                sequence,
+                payload,
+                content_type,
+                admission_receipt,
+            } => local_runtime_stream_chunk(LocalRuntimeStreamChunkParts {
+                invocation_id,
+                state: InvocationState::Running,
+                payload,
+                content_type,
+                sequence,
+                terminal: false,
+                admission_receipt,
+                terminal_receipt: None,
+                error: None,
+            }),
+            Self::Terminal {
+                invocation_id,
+                sequence,
+                state,
+                payload,
+                content_type,
+                admission_receipt,
+                terminal_receipt,
+                error,
+            } => local_runtime_stream_chunk(LocalRuntimeStreamChunkParts {
+                invocation_id,
+                state,
+                payload,
+                content_type,
+                sequence,
+                terminal: true,
+                admission_receipt,
+                terminal_receipt: Some(terminal_receipt),
+                error,
+            }),
+        }
+    }
+}
+
+struct LocalRuntimeStreamChunkParts {
+    invocation_id: String,
+    state: InvocationState,
+    payload: Vec<u8>,
+    content_type: String,
+    sequence: u64,
+    terminal: bool,
+    admission_receipt: Option<WireInvocationReceipt>,
+    terminal_receipt: Option<WireInvocationReceipt>,
+    error: Option<Error>,
+}
+
+fn local_runtime_stream_chunk(parts: LocalRuntimeStreamChunkParts) -> InvokeStreamChunk {
+    InvokeStreamChunk {
+        header: Some(ResponseHeader {
+            request_id: parts.invocation_id.clone(),
+            status: parts.state.as_str().to_string(),
+            ..ResponseHeader::default()
+        }),
+        invocation_id: parts.invocation_id,
+        state: parts.state.to_wire_i32(),
+        content_type: parts.content_type,
+        payload: parts.payload,
+        sequence: parts.sequence,
+        terminal: parts.terminal,
+        admission_receipt: parts.admission_receipt,
+        terminal_receipt: parts.terminal_receipt,
+        error: parts.error,
+        ..InvokeStreamChunk::default()
+    }
+}
+
+fn terminal_receipt_to_wire(
+    finalized: &axon_sdk::invocation::FinalizedInvocation,
+) -> Result<WireInvocationReceipt, Status> {
+    axon_sdk::invocation::wire::receipt_to_wire(&finalized.terminal_receipt).map_err(|error| {
+        Status::failed_precondition(format!("CANONICAL_TERMINAL_PROJECTION_FAILED: {error}"))
+    })
+}
+
+fn take_first_admission_receipt(
+    sent: &mut bool,
+    admission_wire: &WireInvocationReceipt,
+) -> Option<WireInvocationReceipt> {
+    if *sent {
+        None
+    } else {
+        *sent = true;
+        Some(admission_wire.clone())
+    }
+}
+
+fn default_stream_content_type(content_type: String) -> String {
+    if content_type.is_empty() {
+        FEDERATION_RESULT_CONTENT_TYPE.to_string()
+    } else {
+        content_type
+    }
 }
 
 struct DropNotifyingReceiverStream<T> {
@@ -1179,6 +1325,33 @@ mod tests {
                 "test resolver should not be reached before remote stream timeout",
             ))
         }
+    }
+
+    #[test]
+    fn local_runtime_stream_progress_projection_is_running_and_nonterminal() {
+        let admission = WireInvocationReceipt {
+            invocation_id: "invocation-1".to_string(),
+            ..WireInvocationReceipt::default()
+        };
+        let chunk = LocalRuntimeStreamChunkProjection::progress(
+            "invocation-1".to_string(),
+            7,
+            b"frame".to_vec(),
+            String::new(),
+            Some(admission),
+        )
+        .into_chunk();
+
+        assert_eq!(chunk.invocation_id, "invocation-1");
+        assert_eq!(chunk.sequence, 7);
+        assert_eq!(chunk.payload, b"frame".to_vec());
+        assert_eq!(chunk.state, InvocationState::Running.to_wire_i32());
+        assert_eq!(chunk.header.as_ref().unwrap().status, "running");
+        assert_eq!(chunk.content_type, FEDERATION_RESULT_CONTENT_TYPE);
+        assert!(!chunk.terminal);
+        assert!(chunk.admission_receipt.is_some());
+        assert!(chunk.terminal_receipt.is_none());
+        assert!(chunk.error.is_none());
     }
 
     fn forwarded_request_for_timeout_test() -> InvokeRequest {

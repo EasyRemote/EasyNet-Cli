@@ -277,3 +277,24 @@ Boundary: explicit caller signatures still pass through without using daemon
 custody. Unsigned foreign callers remain rejected before signing. This is not a
 compatibility fallback; it is the same Ready-proven paired-user authority model
 used by daemon runtime-state reads.
+
+## Local runtime stream chunk projection cutover
+
+Decision: local `InvokeStream` chunk assembly now goes through a dedicated
+`LocalRuntimeStreamChunkProjection` value object with explicit progress,
+successful-terminal, and failed-terminal constructors.
+
+Reason: the previous local stream projection scattered lifecycle-state,
+terminal-receipt, payload/content-type fallback, and error-fact mapping across
+success and error loop branches. Remote stream forwarding already used a
+projection helper, so local runtime streams still had a second procedural path
+for the same terminality and receipt rules. Centralizing the projection keeps
+the loop responsible only for stream consumption and cancellation, while one
+object owns the canonical state/receipt/error wire mapping.
+
+Boundary: public gRPC output is intentionally unchanged. Non-terminal local
+frames still report `Running`; successful terminal frames still require
+canonical `Completed` finalization and use finalized output when the terminal
+frame payload is empty; failed terminal frames still prefer the finalized
+failure over the frame error. No compatibility fallback or product-specific
+stream state was introduced.

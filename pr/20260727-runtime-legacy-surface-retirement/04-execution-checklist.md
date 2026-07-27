@@ -158,3 +158,15 @@
 - [x] Route native unsigned invocation signing through `load_runtime_caller_signer` for both runtime-owner and managed User callers.
 - [x] Preserve fail-closed rejection for unsigned foreign callers and foreign cancellation authority.
 - [x] Add regression coverage for Ready-proven paired User signer binding.
+
+## Iteration 19 — Local runtime stream chunk projection cutover
+
+- [x] Re-run codegraph and targeted stream/default/fallback search.
+- [x] Identify local runtime stream projection as a duplicated procedural
+      state/receipt/error assembly path.
+- [x] Extract local stream progress, successful terminal, and failed terminal
+      chunk mapping into one projection object.
+- [x] Update the canonical convergence gate so the projection object remains
+      the only local stream chunk assembly authority.
+- [x] Run focused stream checks, fmt, architecture/SPEC gates, and codegraph
+      sync.

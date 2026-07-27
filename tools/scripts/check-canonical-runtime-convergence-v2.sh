@@ -119,6 +119,56 @@ check_ffi_runtime_sizing_policy_contract() {
   fi
 }
 
+check_local_runtime_stream_chunk_projection_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local stream="$cli_root/src/daemon/invocation/streams/stream_dispatcher.rs"
+  [[ -f "$stream" ]] || fail "stream dispatcher source is missing: ${stream#$cli_root/}"
+
+  "$PYTHON_BIN" - "$stream" <<'PY'
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+production = text.split("#[cfg(test)]", 1)[0]
+
+for required in (
+    "enum LocalRuntimeStreamChunkProjection",
+    "fn progress(",
+    "fn successful_terminal(",
+    "fn failed_terminal(",
+    "fn terminal_receipt_to_wire(",
+    "fn local_runtime_stream_chunk(",
+    "CANONICAL_FINALIZATION_STATE_MISMATCH: successful stream frame did not finalize Completed",
+    "CANONICAL_TERMINAL_PROJECTION_FAILED",
+    "local_runtime_stream_progress_projection_is_running_and_nonterminal",
+):
+    if required not in text:
+        raise SystemExit(f"local_runtime_stream_chunk_projection_missing:{required}")
+
+try:
+    local_projector = production.split("async fn project_local_runtime_stream", 1)[1].split(
+        "\n\nenum LocalRuntimeStreamChunkProjection", 1
+    )[0]
+except IndexError as exc:
+    raise SystemExit("local_runtime_stream_projector_boundary_missing") from exc
+
+for required in (
+    "LocalRuntimeStreamChunkProjection::progress(",
+    "LocalRuntimeStreamChunkProjection::successful_terminal(",
+    "LocalRuntimeStreamChunkProjection::failed_terminal(",
+    "take_first_admission_receipt(",
+):
+    if required not in local_projector:
+        raise SystemExit(f"local_runtime_stream_projector_usage_missing:{required}")
+
+if "InvokeStreamChunk {" in local_projector:
+    raise SystemExit("local_runtime_stream_projector_manual_chunk_assembly")
+
+if ".unwrap_or(axon_sdk::invocation::InvocationState::Running)" in production:
+    raise SystemExit("local_runtime_stream_projector_retired_running_fallback")
+PY
+}
+
 check_shellguard_path_normalization_fail_closed_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local pathconstraints="$cli_root/src/support/shellguard/pathconstraints.rs"
@@ -27618,6 +27668,7 @@ check_presence_registry_canonical_principal_key_contract
 check_daemon_invocation_service_descriptor_ref_route_projection_contract
 check_ffi_descriptor_runtime_owner_contract
 check_ffi_descriptor_probe_not_found_vocabulary_contract
+check_local_runtime_stream_chunk_projection_contract
 check_cli_discover_candidate_projection_contract
 check_ffi_invocation_json_projection_contract
 check_cli_public_invocation_transport_contract

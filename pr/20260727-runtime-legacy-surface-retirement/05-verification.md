@@ -257,3 +257,25 @@
   - passed.
 - `/Users/macbook.silan.tech/.local/bin/codegraph sync`
   - passed; synced 2 changed files.
+
+## Iteration 19
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync`
+  - already up to date before edits.
+- `/Users/macbook.silan.tech/.local/bin/codegraph query "legacy compatibility fallback compat default product ingress invocation tuple subject nonce causal_context control invoke open_bidi subscribe descriptor signer receipt"`
+  - isolated local runtime stream chunk projection as the next duplicated
+    terminality/receipt assembly path.
+- `cargo test --features axon-pb local_runtime_stream_progress_projection_is_running_and_nonterminal --lib`
+  - passed; 1 passed.
+- `cargo test --features axon-pb daemon::invocation::streams::stream_dispatcher::tests --lib`
+  - passed; 2 passed.
+- `cargo fmt --check`
+  - passed.
+- `git diff --check`
+  - passed.
+- `tools/scripts/check-architecture-convergence.sh`
+  - passed.
+- `tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - passed.
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync`
+  - passed; synced 1 changed file.
