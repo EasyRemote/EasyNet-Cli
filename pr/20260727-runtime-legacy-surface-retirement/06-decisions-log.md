@@ -376,3 +376,23 @@ hub/device E2E and Docker hub/provider/caller media stream+bidi E2E remain the
 acceptance evidence. Clean-state success means the current checkout does not
 need a compatibility patch for stale state; it does not prove all future
 frontend/backend paths are covered.
+
+## A2A target URA ingress cutover
+
+Decision: `a2a.client.send_task` must treat `target_node_ura` as an explicit
+canonical runtime identity, not as an ergonomic node-id slot. The public ability
+boundary must reject bare node ids before routing and must not read local
+credentials to infer a realm or synthesize a device URA.
+
+Reason: outbound A2A now forwards through the daemon-hosted Axon Invocation
+service and builds a descriptor-bound child invocation. If the public adapter
+accepts a bare node id and supplies the realm from local credentials, the
+adapter has silently completed the caller's target identity. That recreates the
+public-ingress defaulting pattern that makes receipt chains difficult to audit
+across products and language bindings.
+
+Boundary: this preserves the public field name and descriptor shape
+(`target_node_ura`) while enforcing its declared semantics. Product callers that
+already pass a canonical Device or Authority URA are unchanged. Callers that
+only know a node id must resolve it through a directory/catalogue provider
+before invoking A2A dispatch.

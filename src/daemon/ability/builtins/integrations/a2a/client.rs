@@ -217,28 +217,11 @@ fn send_task_handler(
 
     #[cfg(feature = "axon-pb")]
     {
-        let target_ura = if crate::core::ura::parse_ura(target_node.trim()).is_ok() {
+        let target_ura =
             match crate::daemon::invocation::routing::remote_invoke::parse_node_ura(&target_node) {
                 Ok(ura) => ura,
                 Err(e) => return Ok(error_response(&format!("parse target_node_ura: {e}"))),
-            }
-        } else {
-            // Bare uuid path: wrap in the local daemon's realm.
-            // Without credentials we cannot do this safely — surface
-            // a structured error so the caller knows to pass a URA.
-            match crate::daemon::persistence::config::load_credentials() {
-                Ok(c) if !c.realm.trim().is_empty() => {
-                    crate::core::ura::device_ura(&c.realm, target_node.trim())
-                }
-                _ => {
-                    return Ok(error_response(
-                        "target_node_ura must be a canonical \
-                         `easynet:///r/<realm>/device/<id>` URA when no local \
-                         credentials are available",
-                    ));
-                }
-            }
-        };
+            };
 
         if let Some(message) = local_daemon_transport_error() {
             return Ok(error_response(&message));
@@ -462,7 +445,21 @@ pub fn send_task_input_schema() -> Value {
 }
 
 fn target_node_field(args: &Value) -> Result<String, String> {
-    required_nonempty_string(args, "target_node_ura")
+    let target = required_nonempty_string(args, "target_node_ura")?;
+    let trimmed = target.trim();
+    let identity = crate::core::identity::RuntimeIdentityUra::parse(trimmed).map_err(|error| {
+        format!(
+            "`target_node_ura` must be a canonical Device or Authority URA, got {trimmed:?}: {error}"
+        )
+    })?;
+    match identity.kind() {
+        crate::core::ura::URAKind::Device | crate::core::ura::URAKind::Authority => {
+            Ok(identity.into_string())
+        }
+        other => Err(format!(
+            "`target_node_ura` must identify a Device or Authority, got kind={other}"
+        )),
+    }
 }
 
 pub fn send_task_description() -> &'static str {
@@ -607,7 +604,7 @@ mod tests {
     fn send_task_missing_agent_name_returns_ok_false() {
         let resp = send_task_handler(
             json!({
-                "target_node_ura": "easynet:///r/acme/node/N1",
+                "target_node_ura": "easynet:///r/acme/device/N1",
                 "skill_name": "chat",
             }),
             &root_env(),
@@ -622,7 +619,7 @@ mod tests {
     fn send_task_missing_skill_name_returns_ok_false() {
         let resp = send_task_handler(
             json!({
-                "target_node_ura": "easynet:///r/acme/node/N1",
+                "target_node_ura": "easynet:///r/acme/device/N1",
                 "agent_name": "claude",
             }),
             &root_env(),
@@ -697,6 +694,44 @@ mod tests {
         assert!(
             msg.contains("`target_node_ura`"),
             "retired aliases must be rejected at validation; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn send_task_rejects_bare_node_id_before_credentials_realm_default() {
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
+        crate::daemon::persistence::config::save_credentials(
+            &crate::daemon::persistence::config::Credentials {
+                node_id: "local-node".to_string(),
+                credential_token: "token".to_string(),
+                hub_endpoint: "https://hub.example".to_string(),
+                realm: "acme".to_string(),
+                username: Some("alice".to_string()),
+                user_id: Some("00000000-0000-0000-0000-000000000001".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("save test credentials");
+
+        let resp = send_task_handler(
+            json!({
+                "target_node_ura": "N1",
+                "agent_name": "claude",
+                "skill_name": "chat",
+            }),
+            &root_env(),
+            &detached_resolver(),
+        )
+        .unwrap();
+        assert_eq!(resp["ok"], false);
+        let msg = resp["error"].as_str().unwrap();
+        assert!(
+            msg.contains("canonical Device or Authority URA"),
+            "bare node ids must fail before credentials can synthesize a realm; got: {msg}"
+        );
+        assert!(
+            !msg.contains("daemon not running"),
+            "bare node id must not reach transport after local-realm synthesis: {msg}"
         );
     }
 

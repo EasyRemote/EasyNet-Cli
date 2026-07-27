@@ -224,3 +224,13 @@
       terminal receipt chains.
 - [x] Confirm the observed `descriptor_ref`, caller signer, and authority
       subject errors do not reproduce from clean state on the current checkout.
+
+## Iteration 24 — A2A target URA ingress cutover
+
+- [x] Re-run codegraph and targeted public-ingress searches for remaining
+      target defaulting.
+- [x] Remove `a2a.client.send_task` support for bare node ids that are wrapped
+      into local-realm device URAs from credentials.
+- [x] Add regression coverage that `target_node_ura` must already be a
+      canonical Device or Authority URA at the public ability boundary.
+- [x] Run focused A2A tests, fmt, architecture/SPEC gates, and codegraph sync.

@@ -385,3 +385,28 @@
   - passed at baseline before clean-state product verification.
 - `/Users/macbook.silan.tech/.local/bin/codegraph sync`
   - passed at baseline before product verification.
+
+## Iteration 24
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync`
+  - already up to date at baseline.
+- `/Users/macbook.silan.tech/.local/bin/codegraph query "public explicit tuple bare ability local device callee fallback daemon invocation route ingress"`
+  - identified public target defaulting as the next convergence surface.
+- `/Users/macbook.silan.tech/.local/bin/codegraph query "A2A legacy node roster query agents/list target_node_legacy schema"`
+  - isolated `a2a.client.send_task` accepting bare node ids despite the public
+    schema naming the field `target_node_ura`.
+- `cargo test --features axon-pb daemon::ability::builtins::integrations::a2a::client --lib`
+  - first run exposed retired `/node/N1` test fixtures in missing-field tests.
+  - second run passed; 11 passed.
+- `cargo fmt --check`
+  - passed.
+- `tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - passed after adding the A2A target URA ingress gate.
+- `tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  - passed.
+- `tools/scripts/check-architecture-convergence.sh`
+  - passed.
+- `git diff --check`
+  - passed.
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync`
+  - passed; synced 1 changed code file.

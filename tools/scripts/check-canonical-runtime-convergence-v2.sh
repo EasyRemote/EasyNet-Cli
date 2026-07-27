@@ -16240,6 +16240,41 @@ if "public_explicit_tuple_rejects_bare_ability_before_local_device_callee_fallba
 PY
 }
 
+check_a2a_target_ura_ingress_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local a2a_client="$cli_root/src/daemon/ability/builtins/integrations/a2a/client.rs"
+  [[ -f "$a2a_client" ]] || fail "A2A client source is missing: ${a2a_client#$cli_root/}"
+
+  "$PYTHON_BIN" - "$a2a_client" <<'PY'
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+production = text.split("\n#[cfg(test)]", 1)[0].split("\nmod tests {", 1)[0]
+
+for retired, code in (
+    ("load_credentials()", "credentials_realm_defaulting"),
+    ("device_ura(&c.realm", "local_realm_device_ura_synthesis"),
+    ("Bare uuid path", "bare_uuid_path"),
+    ("when no local credentials are available", "credential_conditioned_ura_requirement"),
+):
+    if retired in production:
+        raise SystemExit(f"a2a_target_ura_ingress:{code}")
+
+for required, code in (
+    ("fn target_node_field(args: &Value) -> Result<String, String>", "target_parser_missing"),
+    ("RuntimeIdentityUra::parse", "canonical_identity_parser_missing"),
+    ("URAKind::Device", "device_kind_gate_missing"),
+    ("URAKind::Authority", "authority_kind_gate_missing"),
+    ("identity.into_string()", "canonical_identity_projection_missing"),
+    ("send_task_rejects_bare_node_id_before_credentials_realm_default", "bare_node_regression_missing"),
+    ("send_task_input_schema_requires_canonical_target_node_ura", "schema_regression_missing"),
+):
+    if required not in text:
+        raise SystemExit(f"a2a_target_ura_ingress:{code}")
+PY
+}
+
 check_local_daemon_subject_owner_boundary_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local script="$ROOT/tools/scripts/check-local-daemon-subject-owner-boundary.sh"
@@ -27464,6 +27499,7 @@ EOF
   check_peer_envelope_signer_subject_profile_contract
   check_local_ability_target_subject_policy_contract
   check_local_runtime_public_callee_cutover_contract
+  check_a2a_target_ura_ingress_contract
   check_local_daemon_subject_owner_boundary_contract
   check_session_prelude_credentials_contract
   check_session_prelude_receipt_contract
@@ -27725,6 +27761,7 @@ check_admission_authority_ability_projection_contract
 check_peer_envelope_signer_subject_profile_contract
 check_local_ability_target_subject_policy_contract
 check_local_runtime_public_callee_cutover_contract
+check_a2a_target_ura_ingress_contract
 check_local_daemon_subject_owner_boundary_contract
 check_session_prelude_credentials_contract
 check_start_attach_user_signer_readiness_contract
