@@ -18,6 +18,8 @@ pub enum DaemonError {
     EmptyBinaryPath,
     #[error("daemon working directory must not be empty")]
     EmptyWorkingDir,
+    #[error("daemon runtime HOME is required for {context}")]
+    DaemonHomeUnavailable { context: &'static str },
     #[error("failed to create daemon log directory {path}: {source}")]
     CreateLogDir {
         path: PathBuf,

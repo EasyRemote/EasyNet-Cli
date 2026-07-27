@@ -151,7 +151,7 @@ impl DaemonStartConfig {
     /// Start `easynet-daemon`, or return a handle to the already-live
     /// daemon when both control and Invocation endpoints are accepting.
     pub fn start(&self) -> Result<DaemonHandle> {
-        let paths = self.launch_paths();
+        let paths = self.launch_paths()?;
         let endpoints = paths.endpoints.clone();
         if local_daemon_grpc::probe_accepting(&endpoints.control) {
             if !local_daemon_grpc::probe_accepting(&endpoints.invocation) {
@@ -210,52 +210,63 @@ impl DaemonStartConfig {
             .unwrap_or_else(|| PathBuf::from(DEFAULT_DAEMON_BIN))
     }
 
-    fn resolve_log_path(&self) -> PathBuf {
-        self.log_path.clone().unwrap_or_else(|| {
-            self.effective_state_dir()
+    fn resolve_log_path(&self) -> Result<PathBuf> {
+        match self.log_path.clone() {
+            Some(path) => Ok(path),
+            None => Ok(self
+                .effective_state_dir()?
                 .join("logs")
-                .join("easynet-daemon.log")
-        })
+                .join("easynet-daemon.log")),
+        }
     }
 
-    fn launch_paths(&self) -> DaemonLaunchPaths {
-        let state_dir = self.effective_state_dir();
-        DaemonLaunchPaths {
+    fn launch_paths(&self) -> Result<DaemonLaunchPaths> {
+        let state_dir = self.effective_state_dir()?;
+        Ok(DaemonLaunchPaths {
             endpoints: DaemonEndpoints {
                 control: state_dir.join(transport::UDS_FILENAME),
-                invocation: self.resolve_invocation_endpoint(),
+                invocation: self.resolve_invocation_endpoint()?,
             },
             discovery_path: state_dir.join(discovery::CONTROL_JSON_FILENAME),
             pid_path: state_dir.join("easynet-daemon.pid"),
-            log_path: self.resolve_log_path(),
+            log_path: self.resolve_log_path()?,
+        })
+    }
+
+    fn effective_state_dir(&self) -> Result<PathBuf> {
+        Ok(self.effective_home_dir()?.join(".easynet"))
+    }
+
+    fn effective_home_dir(&self) -> Result<PathBuf> {
+        if let Some(value) = self.env.get("HOME") {
+            if value.trim().is_empty() {
+                return Err(DaemonError::DaemonHomeUnavailable {
+                    context: "daemon child HOME override",
+                });
+            }
+            return Ok(PathBuf::from(value));
         }
-    }
 
-    fn effective_state_dir(&self) -> PathBuf {
-        self.effective_home_dir().join(".easynet")
-    }
-
-    fn effective_home_dir(&self) -> PathBuf {
-        self.env
-            .get("HOME")
-            .filter(|value| !value.trim().is_empty())
+        std::env::var_os("HOME")
+            .filter(|value| !value.is_empty())
             .map(PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
-            .unwrap_or_else(|| PathBuf::from("."))
+            .ok_or(DaemonError::DaemonHomeUnavailable {
+                context: "daemon process HOME",
+            })
     }
 
-    fn expand_effective_home(&self, path: impl AsRef<Path>) -> PathBuf {
+    fn expand_effective_home(&self, path: impl AsRef<Path>) -> Result<PathBuf> {
         let path = path.as_ref();
         let Some(raw) = path.to_str() else {
-            return path.to_path_buf();
+            return Ok(path.to_path_buf());
         };
         if let Some(rest) = raw.strip_prefix("~/") {
-            return self.effective_home_dir().join(rest);
+            return Ok(self.effective_home_dir()?.join(rest));
         }
-        path.to_path_buf()
+        Ok(path.to_path_buf())
     }
 
-    fn resolve_invocation_endpoint(&self) -> PathBuf {
+    fn resolve_invocation_endpoint(&self) -> Result<PathBuf> {
         if let Some(raw) = self
             .env
             .get("EASYNET_DAEMON_GRPC_UDS")
@@ -264,7 +275,7 @@ impl DaemonStartConfig {
             return self.expand_effective_home(raw);
         }
 
-        let config_path = self.expand_effective_home(DEFAULT_DAEMON_CONFIG_PATH);
+        let config_path = self.expand_effective_home(DEFAULT_DAEMON_CONFIG_PATH)?;
         match DaemonConfig::load(&config_path) {
             Ok(cfg) => self.expand_effective_home(cfg.uds_path()),
             Err(_) => self.expand_effective_home(DEFAULT_DAEMON_UDS_PATH),
@@ -812,7 +823,7 @@ mod tests {
                 "EASYNET_DAEMON_GRPC_UDS",
                 "~/.easynet/custom-invocation.sock",
             );
-        let paths = config.launch_paths();
+        let paths = config.launch_paths().expect("launch paths");
 
         assert_eq!(
             paths.endpoints.control(),
@@ -830,6 +841,52 @@ mod tests {
             paths.pid_path,
             PathBuf::from("/tmp/easynet-sdk-home/.easynet/easynet-daemon.pid")
         );
+    }
+
+    #[test]
+    fn launch_paths_reject_blank_child_home_instead_of_process_fallback() {
+        let config = DaemonStartConfig::device("node-a")
+            .unwrap()
+            .with_env("HOME", " ");
+        let err = config
+            .launch_paths()
+            .expect_err("blank child HOME must fail closed");
+
+        assert!(matches!(
+            err,
+            DaemonError::DaemonHomeUnavailable {
+                context: "daemon child HOME override"
+            }
+        ));
+    }
+
+    #[test]
+    fn launch_paths_reject_missing_process_home_instead_of_cwd_fallback() {
+        let _lock = crate::cli::commands::test_support::env_lock();
+        let previous_home = std::env::var_os("HOME");
+        struct RestoreHome(Option<std::ffi::OsString>);
+        impl Drop for RestoreHome {
+            fn drop(&mut self) {
+                match self.0.take() {
+                    Some(value) => std::env::set_var("HOME", value),
+                    None => std::env::remove_var("HOME"),
+                }
+            }
+        }
+        let _restore = RestoreHome(previous_home);
+        std::env::remove_var("HOME");
+
+        let config = DaemonStartConfig::device("node-a").unwrap();
+        let err = config
+            .launch_paths()
+            .expect_err("missing HOME must fail closed");
+
+        assert!(matches!(
+            err,
+            DaemonError::DaemonHomeUnavailable {
+                context: "daemon process HOME"
+            }
+        ));
     }
 
     #[test]

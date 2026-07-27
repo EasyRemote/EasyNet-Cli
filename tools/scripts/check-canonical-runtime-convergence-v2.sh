@@ -16851,6 +16851,54 @@ for required_test in (
 PY
 }
 
+check_daemon_start_home_resolution_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local process="$cli_root/src/daemon/boot/process.rs"
+  local error="$cli_root/src/daemon/boot/error.rs"
+  [[ -f "$process" ]] || fail "daemon boot process source is missing: ${process#$cli_root/}"
+  [[ -f "$error" ]] || fail "daemon boot error source is missing: ${error#$cli_root/}"
+
+  "$PYTHON_BIN" - "$process" "$error" <<'PY'
+import sys
+from pathlib import Path
+
+process_path, error_path = map(Path, sys.argv[1:])
+process = process_path.read_text(encoding="utf-8")
+error = error_path.read_text(encoding="utf-8")
+process_prod = process.split("\n#[cfg(test)]", 1)[0]
+error_prod = error.split("\n#[cfg(test)]", 1)[0]
+
+for retired in (
+    'PathBuf::from(".")',
+    'unwrap_or_else(|| PathBuf::from("."))',
+    'std::env::var_os("HOME").map(PathBuf::from)',
+    'fn launch_paths(&self) -> DaemonLaunchPaths',
+    'fn effective_home_dir(&self) -> PathBuf',
+    'fn effective_state_dir(&self) -> PathBuf',
+):
+    if retired in process_prod:
+        raise SystemExit(f"daemon_start_home_resolution:retired_fallback:{retired}")
+
+for required in (
+    "fn launch_paths(&self) -> Result<DaemonLaunchPaths>",
+    "fn effective_home_dir(&self) -> Result<PathBuf>",
+    "fn effective_state_dir(&self) -> Result<PathBuf>",
+    'context: "daemon child HOME override"',
+    'context: "daemon process HOME"',
+):
+    if required not in process_prod:
+        raise SystemExit(f"daemon_start_home_resolution:process_missing:{required}")
+
+for required in (
+    "DaemonHomeUnavailable",
+    "daemon runtime HOME is required",
+    "context: &'static str",
+):
+    if required not in error_prod:
+        raise SystemExit(f"daemon_start_home_resolution:error_missing:{required}")
+PY
+}
+
 check_daemon_mission_eal_boundary_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   bash "$ROOT/tools/scripts/check-dispatch-mission-context-boundary.sh" >/dev/null
@@ -27867,6 +27915,7 @@ check_ffi_native_runtime_signer_projection_contract
 check_daemon_runtime_identity_vocabulary_contract
 check_key_custody_boundary_contract
 check_key_service_home_resolution_contract
+check_daemon_start_home_resolution_contract
 check_daemon_mission_eal_boundary_contract
 check_process_singleton_product_boundary_contract
 check_product_identity_boundary_contract
