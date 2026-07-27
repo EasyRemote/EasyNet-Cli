@@ -310,3 +310,23 @@
   - passed.
 - `/Users/macbook.silan.tech/.local/bin/codegraph sync`
   - passed; synced 3 changed files.
+
+## Iteration 21
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync`
+  - already up to date before edits.
+- `/Users/macbook.silan.tech/.local/bin/codegraph query "PluginTemplateProfile OR PROVIDER_SIDECAR_HELPER_CAPABILITY_MATRIX OR serve_exec_plugin OR sidecar helper"`
+  - isolated plugin template/helper matrix as the next product-facing surface
+    with a separable generation path.
+- `cargo test --features axon-pb plugin_template --lib`
+  - passed; 10 passed.
+- `cargo fmt --check`
+  - passed.
+- `git diff --check`
+  - passed.
+- `tools/scripts/check-architecture-convergence.sh`
+  - passed.
+- `tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - passed.
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync`
+  - passed; synced 1 changed file.

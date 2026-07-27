@@ -182,3 +182,18 @@
       negative legacy trace vector.
 - [x] Update the canonical convergence gate.
 - [x] Run focused tests/gates.
+
+## Iteration 21 — Plugin template helper profile cutover
+
+- [x] Re-run codegraph and targeted plugin template/provider helper search.
+- [x] Identify `plugin init` template generation as carrying a language-only
+      generation path separate from the SDK provider helper matrix.
+- [x] Introduce a `PluginTemplateProfile` generation authority that binds
+      language, exec call mode, helper capability state, and SDK helper package.
+- [x] Route `HelloPluginTemplate` through the profile instead of storing a raw
+      language field.
+- [x] Add regression coverage that generated templates and README output expose
+      the matrix-declared SDK helper package.
+- [x] Update the canonical convergence gate so template generation cannot bypass
+      the profile.
+- [x] Run focused tests/gates.

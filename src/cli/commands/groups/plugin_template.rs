@@ -49,6 +49,19 @@ pub struct ProviderSidecarHelperCapability {
     pub helper_package: Option<&'static str>,
 }
 
+impl ProviderSidecarHelperCapability {
+    fn supports_generated_exec_template(&self) -> bool {
+        self.call_mode == ProviderSidecarCallMode::ExecInvoke
+            && self.template_available
+            && matches!(
+                self.state,
+                ProviderSidecarHelperState::ProviderBacked
+                    | ProviderSidecarHelperState::CutoverReady
+            )
+            && self.helper_package.is_some()
+    }
+}
+
 pub const PROVIDER_SIDECAR_HELPER_CAPABILITY_MATRIX: &[ProviderSidecarHelperCapability] = &[
     ProviderSidecarHelperCapability {
         language: "python",
@@ -198,6 +211,48 @@ impl PluginTemplateLanguage {
             })
             .expect("plugin template language must have an exec-invoke provider helper matrix row")
     }
+
+    fn template_profile(self) -> anyhow::Result<PluginTemplateProfile> {
+        PluginTemplateProfile::for_language(self)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PluginTemplateProfile {
+    language: PluginTemplateLanguage,
+    capability: &'static ProviderSidecarHelperCapability,
+    helper_package: &'static str,
+}
+
+impl PluginTemplateProfile {
+    fn for_language(language: PluginTemplateLanguage) -> anyhow::Result<Self> {
+        let capability = language.sidecar_helper_capability();
+        let helper_package = capability.helper_package.ok_or_else(|| {
+            anyhow!(
+                "{} plugin templates require a provider-backed sidecar helper",
+                language.label()
+            )
+        })?;
+        if !capability.supports_generated_exec_template() {
+            anyhow::bail!(
+                "{} plugin templates require a provider-backed sidecar helper",
+                language.label()
+            );
+        }
+        Ok(Self {
+            language,
+            capability,
+            helper_package,
+        })
+    }
+
+    const fn language(self) -> PluginTemplateLanguage {
+        self.language
+    }
+
+    const fn helper_package(self) -> &'static str {
+        self.helper_package
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -227,7 +282,7 @@ struct HelloPluginTemplate {
     package_version: String,
     ability_name: String,
     descriptor_version: String,
-    language: PluginTemplateLanguage,
+    profile: PluginTemplateProfile,
 }
 
 pub fn init_hello_plugin(init: PluginTemplateInit) -> anyhow::Result<GeneratedPluginProject> {
@@ -241,19 +296,7 @@ impl HelloPluginTemplate {
         let slug = slug_from_path(&target);
         let package_id = init.package_id.unwrap_or_else(|| format!("local.{slug}"));
         let ability_name = init.ability_name.unwrap_or_else(|| format!("{slug}.echo"));
-        let capability = init.language.sidecar_helper_capability();
-        if !capability.template_available
-            || !matches!(
-                capability.state,
-                ProviderSidecarHelperState::ProviderBacked
-                    | ProviderSidecarHelperState::CutoverReady
-            )
-        {
-            anyhow::bail!(
-                "{} plugin templates require a provider-backed sidecar helper",
-                init.language.label()
-            );
-        }
+        let profile = init.language.template_profile()?;
         validate_dotted_identifier(&package_id, "plugin package id")?;
         validate_dotted_identifier(&ability_name, "plugin ability name")?;
         validate_numeric_version(&init.package_version, "plugin package version")?;
@@ -265,7 +308,7 @@ impl HelloPluginTemplate {
             package_version: init.package_version,
             ability_name,
             descriptor_version: init.descriptor_version,
-            language: init.language,
+            profile,
         })
     }
 
@@ -291,12 +334,12 @@ impl HelloPluginTemplate {
             package_version: self.package_version,
             ability_name: self.ability_name,
             descriptor_version: self.descriptor_version,
-            language: self.language,
+            language: self.profile.language(),
         })
     }
 
     fn write_language_files(&self, bin_dir: &Path) -> anyhow::Result<()> {
-        match self.language {
+        match self.profile.language() {
             PluginTemplateLanguage::Python => {
                 let exec_path = bin_dir.join("exec-plugin");
                 write_new_file(&exec_path, PYTHON_EXEC_PLUGIN)?;
@@ -399,7 +442,7 @@ additionalProperties = true
     }
 
     fn readme(&self) -> String {
-        let language_note = match self.language {
+        let language_note = match self.profile.language() {
             PluginTemplateLanguage::Python => {
                 r#"This template uses the Python CLI SDK provider helper:
 
@@ -462,6 +505,7 @@ The daemon runs `bin/exec-plugin`, which executes the checked-in Node module.
             }
         };
         let setup_install_commands = self.setup_install_commands();
+        let helper_package = self.profile.helper_package();
         format!(
             r#"# {package_id}
 
@@ -488,6 +532,8 @@ If the daemon is running, install asks it to reload plugin state. If the daemon
 is offline, the plugin loads on next daemon boot.
 
 ## SDK sidecar helper
+
+Declared provider helper package: `{helper_package}`.
 
 {language_note}
 
@@ -523,14 +569,15 @@ conflicting descriptor facts fail closed before publication.
             package_version = self.package_version,
             descriptor_version = self.descriptor_version,
             ability_name = self.ability_name,
-            language = self.language.label(),
+            language = self.profile.language().label(),
+            helper_package = helper_package,
             language_note = language_note,
             setup_install_commands = setup_install_commands,
         )
     }
 
     fn setup_install_commands(&self) -> &'static str {
-        match self.language {
+        match self.profile.language() {
             PluginTemplateLanguage::Python => "easynet plugin install .",
             PluginTemplateLanguage::Go
             | PluginTemplateLanguage::Rust
@@ -968,6 +1015,9 @@ mod tests {
         );
         let readme = fs::read_to_string(target.join("README.md")).expect("readme");
         assert!(readme.contains("Hello World runtime plugin"));
+        assert!(readme.contains(
+            "Declared provider helper package: `easynet_sdk.providers.runtime.plugin_exec`"
+        ));
         assert!(readme.contains("```bash\neasynet plugin install .\n```"));
         assert!(
             !readme.contains("make build"),
@@ -1016,6 +1066,7 @@ mod tests {
             PluginTemplateLanguage::Node,
         ] {
             let capability = language.sidecar_helper_capability();
+            let profile = language.template_profile().expect("template profile");
             assert!(capability.template_available);
             assert!(matches!(
                 capability.state,
@@ -1027,6 +1078,9 @@ mod tests {
                 "{} template must point at a provider helper",
                 language.label()
             );
+            assert_eq!(profile.language(), language);
+            assert!(std::ptr::eq(profile.capability, capability));
+            assert_eq!(Some(profile.helper_package()), capability.helper_package);
         }
         for language in ["c/c++"] {
             let capability = rows
@@ -1058,6 +1112,47 @@ mod tests {
                 assert!(
                     capability.helper_package.is_none(),
                     "{language}/{call_mode:?} must not claim unary exec helper coverage"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn plugin_template_profiles_are_the_generation_authority() {
+        let supported_profiles: std::collections::BTreeMap<_, _> = [
+            PluginTemplateLanguage::Python,
+            PluginTemplateLanguage::Go,
+            PluginTemplateLanguage::Rust,
+            PluginTemplateLanguage::Java,
+            PluginTemplateLanguage::Node,
+        ]
+        .into_iter()
+        .map(|language| {
+            let profile = language.template_profile().expect("template profile");
+            (language.label(), profile.helper_package())
+        })
+        .collect();
+
+        assert_eq!(
+            supported_profiles,
+            std::collections::BTreeMap::from([
+                ("go", "easynet.run/cli/sdk/go/provider/runtime/pluginexec"),
+                ("java", "run.runtime.sdk.provider.runtime.pluginexec"),
+                ("node", "@runtime/sdk/provider/runtime/pluginexec"),
+                ("python", "easynet_sdk.providers.runtime.plugin_exec"),
+                ("rust", "runtime-provider-pluginexec"),
+            ])
+        );
+
+        for row in PROVIDER_SIDECAR_HELPER_CAPABILITY_MATRIX {
+            if row.template_available {
+                assert!(
+                    row.supports_generated_exec_template(),
+                    "template-open matrix rows must be exec-invoke provider-backed and helper-bound: {row:?}"
+                );
+                assert!(
+                    supported_profiles.contains_key(row.language),
+                    "template-open matrix row must be reachable through PluginTemplateProfile: {row:?}"
                 );
             }
         }
@@ -1096,6 +1191,9 @@ mod tests {
         assert!(go_mod.contains("/sdk/go"));
         let readme = fs::read_to_string(target.join("README.md")).expect("readme");
         assert!(readme.contains("Build the executable before install"));
+        assert!(readme.contains(
+            "Declared provider helper package: `easynet.run/cli/sdk/go/provider/runtime/pluginexec`"
+        ));
         assert!(readme.contains("```bash\nmake build\neasynet plugin install .\n```"));
     }
 
@@ -1133,6 +1231,7 @@ mod tests {
         assert!(cargo_toml.contains("/sdk/rust/provider/runtime/pluginexec"));
         let readme = fs::read_to_string(target.join("README.md")).expect("readme");
         assert!(readme.contains("Build the executable before install"));
+        assert!(readme.contains("Declared provider helper package: `runtime-provider-pluginexec`"));
         assert!(readme.contains("```bash\nmake build\neasynet plugin install .\n```"));
         assert!(readme.contains("runtime_provider_pluginexec"));
     }
@@ -1173,6 +1272,9 @@ mod tests {
         assert!(pom.contains("/sdk/java/target/canonical-runtime-sdk-0.0.0-seam.jar"));
         let readme = fs::read_to_string(target.join("README.md")).expect("readme");
         assert!(readme.contains("Build the executable wrapper target before install"));
+        assert!(readme.contains(
+            "Declared provider helper package: `run.runtime.sdk.provider.runtime.pluginexec`"
+        ));
         assert!(readme.contains("```bash\nmake build\neasynet plugin install .\n```"));
         assert!(readme.contains("run.runtime.sdk.provider.runtime.pluginexec.SidecarRuntime"));
     }
@@ -1204,6 +1306,9 @@ mod tests {
         assert!(package_json.contains("\"@runtime/sdk\": \"file:"));
         assert!(package_json.contains("/sdk/node"));
         let readme = fs::read_to_string(target.join("README.md")).expect("readme");
+        assert!(readme.contains(
+            "Declared provider helper package: `@runtime/sdk/provider/runtime/pluginexec`"
+        ));
         assert!(readme.contains("```bash\nnpm install\neasynet plugin install .\n```"));
         assert!(readme.contains("@runtime/sdk/provider/runtime/pluginexec.js"));
     }

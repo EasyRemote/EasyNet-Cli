@@ -317,3 +317,21 @@ Boundary: trace metadata remains optional and partial for labels such as
 `ability` and `mcp_tool`. This change does not make trace metadata a source of
 receipt truth. It only prevents malformed or legacy URA facts from being merged
 into product observability state.
+
+## Plugin template helper profile cutover
+
+Decision: `easynet plugin init` now routes generated exec templates through a
+`PluginTemplateProfile` that binds the selected language to the exec-invoke row
+in `PROVIDER_SIDECAR_HELPER_CAPABILITY_MATRIX` and to the required SDK provider
+helper package.
+
+Reason: plugin scaffolding is where developers copy the product contract. A
+language enum plus independent template strings can drift from the SDK helper
+capability matrix: a new template could claim support before the helper owns
+canonical sidecar tuple parsing, or could hand-write daemon JSON frames. The
+profile makes helper-backed generation the construction authority rather than a
+post-hoc check.
+
+Boundary: this does not move plugin lifecycle or daemon install policy into the
+SDK. The SDK owns the generic sidecar invocation helper contract; the CLI still
+owns scaffolding, package files, and daemon install/reload collision checks.

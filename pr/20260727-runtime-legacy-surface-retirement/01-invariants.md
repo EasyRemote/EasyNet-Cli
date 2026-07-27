@@ -65,3 +65,9 @@
   canonical runtime URA. Legacy `/invocation/...` trace addresses, malformed
   URAs, and all-zero principal placeholders must be rejected at the trace parser
   boundary instead of being merged into product UI state.
+- Plugin project scaffolding is a developer-facing product surface, but its
+  sidecar execution contract is SDK-owned. `plugin init` must derive every
+  generated exec template through a provider helper profile that binds language,
+  call mode, capability state, and helper package from the canonical capability
+  matrix. Template generation must not keep a separate language-only path that
+  can hand-write daemon sidecar frames or claim helper support independently.

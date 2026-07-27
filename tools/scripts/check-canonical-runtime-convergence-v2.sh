@@ -14052,6 +14052,36 @@ if template_variants != {"Python", "Go", "Rust", "Java", "Node"}:
         "plugin_template_language_surface_not_helper_backed:"
         + ",".join(sorted(template_variants))
     )
+if "struct PluginTemplateProfile" not in text:
+    raise SystemExit("plugin_template_profile_missing")
+if "fn template_profile(self) -> anyhow::Result<PluginTemplateProfile>" not in text:
+    raise SystemExit("plugin_template_profile_entry_missing")
+if "PluginTemplateProfile::for_language(self)" not in text:
+    raise SystemExit("plugin_template_profile_factory_missing")
+hello_template = re.search(
+    r"struct HelloPluginTemplate\s*\{(?P<body>.*?)\n\}",
+    text,
+    re.S,
+)
+if not hello_template:
+    raise SystemExit("plugin_template_hello_model_missing")
+hello_template_body = hello_template.group("body")
+if "profile: PluginTemplateProfile" not in hello_template_body:
+    raise SystemExit("plugin_template_hello_profile_missing")
+if re.search(r"\blanguage:\s*PluginTemplateLanguage\b", hello_template_body):
+    raise SystemExit("plugin_template_hello_language_bypass")
+from_init = re.search(
+    r"fn from_init\(init: PluginTemplateInit\) -> anyhow::Result<Self> \{(?P<body>.*?)\n    \}",
+    text,
+    re.S,
+)
+if not from_init:
+    raise SystemExit("plugin_template_from_init_missing")
+from_init_body = from_init.group("body")
+if "let profile = init.language.template_profile()?;" not in from_init_body:
+    raise SystemExit("plugin_template_generation_bypasses_profile")
+if "profile," not in from_init_body:
+    raise SystemExit("plugin_template_generation_drops_profile")
 
 matrix = re.search(
     r"PROVIDER_SIDECAR_HELPER_CAPABILITY_MATRIX:\s*&\[ProviderSidecarHelperCapability\]\s*=\s*&\[(?P<body>.*?)\n\];",
@@ -14196,6 +14226,8 @@ for language, helper in expected_helpers.items():
         raise SystemExit(f"plugin_template_helper_not_provider_backed:{language}")
     if not row["template_available"]:
         raise SystemExit(f"plugin_template_helper_not_exposed:{language}")
+    if row["helper_package"] is None:
+        raise SystemExit(f"plugin_template_helper_package_missing:{language}")
     if row["helper_package"] != helper:
         raise SystemExit(f"plugin_template_helper_package_mismatch:{language}")
     for rel_path in expected_helper_files[language]:
@@ -14625,6 +14657,8 @@ if "SidecarRuntime.serve" not in text or "run.runtime.sdk.provider.runtime.plugi
     raise SystemExit("plugin_java_template_missing_provider_helper")
 if "serveExecPlugin" not in text:
     raise SystemExit("plugin_node_template_missing_provider_helper")
+if "Declared provider helper package: `{helper_package}`." not in text:
+    raise SystemExit("plugin_template_readme_helper_profile_missing")
 ability_template = re.search(
     r"fn ability_toml\(&self\) -> String \{(?P<body>.*?)\n    \}",
     text,
