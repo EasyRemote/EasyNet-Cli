@@ -2469,12 +2469,13 @@ function requireRuntimeReceiptAuthorityBinding(value, field) {
 
 function requireRuntimeReceiptSignature(value, field) {
   const signature = objectValue(value, field);
-  requireRuntimeReceiptExactKeys(signature, field, ["algorithm", "signature_base64"]);
+  requireRuntimeReceiptExactKeys(signature, field, ["algorithm", "signature_base64", "key_id_hint"]);
   requiredRuntimeString(signature.algorithm, `${field}.algorithm`);
   validateRuntimeBase64(
     requiredRuntimeString(signature.signature_base64, `${field}.signature_base64`),
     `${field}.signature_base64`,
   );
+  optionalRuntimeString(signature.key_id_hint, `${field}.key_id_hint`);
 }
 
 function requireRuntimeReceiptExactKeys(value, field, allowedKeys) {

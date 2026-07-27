@@ -1432,6 +1432,7 @@ private func canonicalRuntimeReceipt(
         "callee_signature": [
             "algorithm": "ed25519",
             "signature_base64": Data(repeating: 0x71, count: 64).base64EncodedString(),
+            "key_id_hint": "callee-receipt-key",
         ],
         "signer_binding": agentBinding(callee),
         "authority_binding_kind": "self",
@@ -1454,6 +1455,7 @@ private func canonicalRuntimeReceipt(
             "signature": [
                 "algorithm": "ed25519",
                 "signature_base64": Data(repeating: 0x72, count: 64).base64EncodedString(),
+                "key_id_hint": "authority-proof-key",
             ],
             "admission_hook": "test.runtime.admission",
         ],

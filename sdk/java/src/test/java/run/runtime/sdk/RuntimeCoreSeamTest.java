@@ -1774,6 +1774,8 @@ public final class RuntimeCoreSeamTest {
         Map.of(
             "algorithm",
             "ed25519",
+            "key_id_hint",
+            "callee-receipt-key",
             "signature_base64",
             Base64.getEncoder().encodeToString(repeatedByte(0x71, 64))));
     receipt.put("signer_binding", agentBinding(CALLEE));
@@ -1808,6 +1810,8 @@ public final class RuntimeCoreSeamTest {
             Map.of(
                 "algorithm",
                 "ed25519",
+                "key_id_hint",
+                "authority-proof-key",
                 "signature_base64",
                 Base64.getEncoder().encodeToString(repeatedByte(0x72, 64))),
             "admission_hook",

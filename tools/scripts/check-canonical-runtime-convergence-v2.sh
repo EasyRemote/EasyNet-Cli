@@ -18602,6 +18602,8 @@ for fragment, label in {
     "AuthorityProofFacts.parse(": "authority_proof_parse_boundary_missing",
     'requirePresentKeys(\n          proof,\n          "authority_proof"': "authority_proof_required_fact_validator_missing",
     'requireSignature(proof.get("signature"), "authority_proof.signature")': "authority_proof_signature_required_missing",
+    'requireExactKeys(signature, field, "algorithm", "signature_base64", "key_id_hint")': "authority_proof_signature_key_id_hint_shape_missing",
+    'requireOptionalString(signature, field, "key_id_hint")': "authority_proof_signature_key_id_hint_validator_missing",
     "static Map<String, Object> immutableObject(": "deep_immutable_object_missing",
     "private static Object immutableValue(": "deep_immutable_value_missing",
     "Collections.unmodifiableMap(out)": "deep_immutable_map_missing",
@@ -18691,6 +18693,7 @@ for required_test in (
     "host_attestation_base64",
     "usage",
     "missingProofSignature",
+    "authority-proof-key",
     "terminal_receipt is required",
     "retired receipt alias",
 ):
@@ -18860,22 +18863,25 @@ check_node_sdk_runtime_receipt_projection_contract() {
   local runtime="$cli_root/sdk/node/index.js"
   local types="$cli_root/sdk/node/index.d.ts"
   local tests="$cli_root/sdk/node/test/runtime-core.test.mjs"
+  local fixtures="$cli_root/sdk/node/test-support/runtime-fixtures.mjs"
   local conformance="$cli_root/sdk/node/test/conformance-cases.test.mjs"
   [[ -f "$runtime" ]] || fail "Node runtime source is missing: ${runtime#$cli_root/}"
   [[ -f "$types" ]] || fail "Node runtime declarations are missing: ${types#$cli_root/}"
   [[ -f "$tests" ]] || fail "Node runtime tests are missing: ${tests#$cli_root/}"
+  [[ -f "$fixtures" ]] || fail "Node runtime fixtures are missing: ${fixtures#$cli_root/}"
   [[ -f "$conformance" ]] || fail "Node conformance tests are missing: ${conformance#$cli_root/}"
 
-  "$PYTHON_BIN" - "$runtime" "$types" "$tests" "$conformance" <<'PY'
+  "$PYTHON_BIN" - "$runtime" "$types" "$tests" "$fixtures" "$conformance" <<'PY'
 import sys
 from pathlib import Path
 
-runtime_path, types_path, tests_path, conformance_path = map(Path, sys.argv[1:])
+runtime_path, types_path, tests_path, fixtures_path, conformance_path = map(Path, sys.argv[1:])
 runtime = runtime_path.read_text(encoding="utf-8")
 types = types_path.read_text(encoding="utf-8")
 tests = tests_path.read_text(encoding="utf-8")
+fixtures = fixtures_path.read_text(encoding="utf-8")
 conformance = conformance_path.read_text(encoding="utf-8")
-test_corpus = tests + "\n" + conformance
+test_corpus = tests + "\n" + fixtures + "\n" + conformance
 
 if "export class RuntimeReceipt" not in runtime:
     raise SystemExit("node_runtime_receipt_projection:runtime_receipt_type_missing")
@@ -18898,6 +18904,8 @@ for fragment, label in {
     "requiredRuntimeStringAllowEmpty": "proof_payload_presence_check_missing",
     "runtime receipt summary is missing authority_proof.proof_payload_base64": "proof_payload_presence_error_missing",
     'requireRuntimeReceiptSignature(proof.signature, "authority_proof.signature")': "authority_proof_signature_required_missing",
+    'requireRuntimeReceiptExactKeys(signature, field, ["algorithm", "signature_base64", "key_id_hint"])': "authority_proof_signature_key_id_hint_shape_missing",
+    "optionalRuntimeString(signature.key_id_hint": "authority_proof_signature_key_id_hint_validator_missing",
     "authority_proof_hash_mismatch": "authority_proof_hash_mismatch_missing",
     "hosted runtime receipt is missing host_attestation_base64": "hosted_signer_attestation_missing",
     "raw.authority_proof": "authority_proof_required_missing",
@@ -18940,6 +18948,7 @@ for required_test in (
     "delete mutableAuthorityProof(missingProofPayload).proof_payload_base64",
     "missingProofSignature",
     "delete mutableAuthorityProof(missingProofSignature).signature",
+    "authority-proof-key",
     "authority_binding contains noncanonical field",
     "receipt_type",
     "missingTopLevelFact",
@@ -18990,6 +18999,8 @@ for fragment, label in {
     "runtimeRequiredStringAllowEmpty": "proof_payload_presence_check_missing",
     "runtime receipt summary is missing authority_proof.proof_payload_base64": "proof_payload_presence_error_missing",
     'runtimeReceiptSignature(proof["signature"], "authority_proof.signature", required: true)': "authority_proof_signature_required_missing",
+    'runtimeRequireExactKeys(object, field, ["algorithm", "signature_base64", "key_id_hint"])': "authority_proof_signature_key_id_hint_shape_missing",
+    'runtimeOptionalString(object, "key_id_hint", "runtime_receipt")': "authority_proof_signature_key_id_hint_validator_missing",
     "authority_proof_hash_mismatch": "authority_proof_hash_mismatch_missing",
     "hosted runtime receipt is missing host_attestation_base64": "hosted_signer_attestation_missing",
     "terminal_receipt state does not match invocation terminal_state": "terminal_state_topology_missing",
@@ -19020,6 +19031,7 @@ for required_test in (
     "proofWithoutPayload.removeValue(forKey: \"proof_payload_base64\")",
     "proofWithoutSignature.removeValue(forKey: \"signature\")",
     "authority_proof.signature must be an object",
+    "authority-proof-key",
     "missingTopLevelFact",
     "payload_base64",
     "payload_content_type",

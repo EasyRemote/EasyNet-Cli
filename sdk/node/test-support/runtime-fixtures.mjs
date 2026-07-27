@@ -30,6 +30,7 @@ export const canonicalRuntimeReceipt = (invocationId, receiptType, state, index)
     callee_signature: {
       algorithm: "ed25519",
       signature_base64: Buffer.alloc(64, 0x71).toString("base64"),
+      key_id_hint: "callee-receipt-key",
     },
     signer_binding: agentBinding(TEST_CALLEE),
     authority_binding_kind: "self",
@@ -52,6 +53,7 @@ export const canonicalRuntimeReceipt = (invocationId, receiptType, state, index)
       signature: {
         algorithm: "ed25519",
         signature_base64: Buffer.alloc(64, 0x72).toString("base64"),
+        key_id_hint: "authority-proof-key",
       },
       admission_hook: "test.runtime.admission",
     },

@@ -925,7 +925,7 @@ private func runtimeReceiptSignature(_ value: Any?, _ field: String, required: B
         return
     }
     let object = try runtimeObject(value, field)
-    try runtimeRequireExactKeys(object, field, ["algorithm", "signature_base64"])
+    try runtimeRequireExactKeys(object, field, ["algorithm", "signature_base64", "key_id_hint"])
     _ = try runtimeRequiredText(object, "algorithm", "runtime_receipt")
     _ = try runtimeBase64(
         try runtimeRequiredText(object, "signature_base64", "runtime_receipt"),
@@ -933,6 +933,7 @@ private func runtimeReceiptSignature(_ value: Any?, _ field: String, required: B
         expectedLength: nil,
         allowEmpty: false
     )
+    _ = try runtimeOptionalString(object, "key_id_hint", "runtime_receipt")
 }
 
 private func runtimeReceiptRef(_ value: Any?, _ field: String) throws {

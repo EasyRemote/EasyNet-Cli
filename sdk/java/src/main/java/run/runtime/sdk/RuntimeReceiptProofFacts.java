@@ -476,13 +476,23 @@ final class RuntimeReceiptProofFacts {
 
   private static void requireSignature(Object value, String field) {
     Map<String, Object> signature = requireObject(value, field);
-    requireExactKeys(signature, field, "algorithm", "signature_base64");
+    requireExactKeys(signature, field, "algorithm", "signature_base64", "key_id_hint");
     requiredString(signature, "algorithm");
     base64Bytes(
         requiredString(signature, "signature_base64"),
         field + ".signature_base64",
         0,
         false);
+    requireOptionalString(signature, field, "key_id_hint");
+  }
+
+  private static void requireOptionalString(
+      Map<String, Object> raw, String field, String optionalField) {
+    Object value = raw.get(optionalField);
+    if (value != null && !(value instanceof String)) {
+      throw SDKError.validation(
+          "runtime_receipt", field + "." + optionalField + " must be a string");
+    }
   }
 
   private static byte[] base64Bytes(
