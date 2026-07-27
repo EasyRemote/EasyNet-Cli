@@ -20,7 +20,7 @@
 
 use std::sync::Arc;
 
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 
 use crate::core::domain::{AgentId, LoopId};
 use crate::daemon::ability::dispatch::OwnerKind;
@@ -59,50 +59,39 @@ pub fn register(reg: &mut AxonAbilityCatalog, svc: Arc<LoopService>) {
 }
 
 fn create_handler(svc: &Arc<LoopService>, args: Value) -> anyhow::Result<Value> {
-    let worker_agent = args
-        .get("worker_agent")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow::anyhow!("loop.create: `worker_agent` required"))?;
-    let verify_expr = args
-        .get("verify_expr")
-        .and_then(Value::as_str)
-        .unwrap_or("true");
-    let max_iters = args
-        .get("max_iters")
-        .and_then(Value::as_u64)
-        .ok_or_else(|| anyhow::anyhow!("loop.create: `max_iters` (positive integer) required"))?;
-    let body_prompt = args
-        .get("body_prompt")
-        .and_then(Value::as_str)
-        .unwrap_or("Continue the loop task and return the current result.");
-    if max_iters > u32::MAX as u64 {
-        anyhow::bail!("loop.create: max_iters too large (≤ u32::MAX)");
-    }
+    let args = loop_args_object(
+        "loop.create",
+        &args,
+        &["worker_agent", "verify_expr", "max_iters", "body_prompt"],
+    )?;
+    let worker_agent = loop_required_string_arg("loop.create", args, "worker_agent")?;
+    let verify_expr = loop_optional_string_arg("loop.create", args, "verify_expr")?
+        .unwrap_or_else(|| "true".to_string());
+    let max_iters = loop_required_positive_u32_arg("loop.create", args, "max_iters")?;
+    let body_prompt = loop_optional_string_arg("loop.create", args, "body_prompt")?
+        .unwrap_or_else(|| "Continue the loop task and return the current result.".to_string());
     let id = svc.create(
         AgentId::new(worker_agent),
-        verify_expr.to_owned(),
-        max_iters as u32,
-        body_prompt.to_owned(),
+        verify_expr,
+        max_iters,
+        body_prompt,
     )?;
     Ok(json!({ "loop_id": id.as_str() }))
 }
 
 fn status_handler(svc: &Arc<LoopService>, args: Value) -> anyhow::Result<Value> {
-    let id = args
-        .get("loop_id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow::anyhow!("loop.status: `loop_id` required"))?;
+    let args = loop_args_object("loop.status", &args, &["loop_id"])?;
+    let id = loop_required_string_arg("loop.status", args, "loop_id")?;
+    let display_id = id.clone();
     match svc.status(&LoopId::new(id))? {
         Some(inst) => Ok(serde_json::to_value(inst)?),
-        None => anyhow::bail!("loop.status: loop {id} not found"),
+        None => anyhow::bail!("loop.status: loop {display_id} not found"),
     }
 }
 
 fn subscribe_handler(svc: &Arc<LoopService>, args: Value) -> anyhow::Result<StreamSource> {
-    let id = args
-        .get("loop_id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow::anyhow!("loop.subscribe: `loop_id` required"))?;
+    let args = loop_args_object("loop.subscribe", &args, &["loop_id"])?;
+    let id = loop_required_string_arg("loop.subscribe", args, "loop_id")?;
     let loop_id = LoopId::new(id);
     let (snapshot, live) = svc.subscribe(&loop_id)?;
     match live {
@@ -112,12 +101,84 @@ fn subscribe_handler(svc: &Arc<LoopService>, args: Value) -> anyhow::Result<Stre
 }
 
 fn cancel_handler(svc: &Arc<LoopService>, args: Value) -> anyhow::Result<Value> {
-    let id = args
-        .get("loop_id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow::anyhow!("loop.cancel: `loop_id` required"))?;
+    let args = loop_args_object("loop.cancel", &args, &["loop_id"])?;
+    let id = loop_required_string_arg("loop.cancel", args, "loop_id")?;
     svc.cancel(&LoopId::new(id))?;
     Ok(json!({ "ok": true }))
+}
+
+fn loop_args_object<'a>(
+    ability: &str,
+    args: &'a Value,
+    allowed_fields: &[&str],
+) -> anyhow::Result<&'a Map<String, Value>> {
+    let object = args
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("{ability}: args must be a JSON object"))?;
+    let mut unknown: Vec<&str> = object
+        .keys()
+        .map(String::as_str)
+        .filter(|field| !allowed_fields.contains(field))
+        .collect();
+    unknown.sort_unstable();
+    if !unknown.is_empty() {
+        anyhow::bail!(
+            "{ability}: unsupported field(s): {}",
+            unknown
+                .iter()
+                .map(|field| format!("`{field}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+    Ok(object)
+}
+
+fn loop_required_string_arg(
+    ability: &str,
+    args: &Map<String, Value>,
+    field: &str,
+) -> anyhow::Result<String> {
+    match args.get(field) {
+        Some(Value::String(value)) if !value.trim().is_empty() => Ok(value.to_string()),
+        Some(Value::String(_)) | None => {
+            anyhow::bail!("{ability}: `{field}` must be a non-empty string")
+        }
+        Some(_) => anyhow::bail!("{ability}: `{field}` must be a string"),
+    }
+}
+
+fn loop_optional_string_arg(
+    ability: &str,
+    args: &Map<String, Value>,
+    field: &str,
+) -> anyhow::Result<Option<String>> {
+    match args.get(field) {
+        None => Ok(None),
+        Some(Value::String(value)) => Ok(Some(value.to_string())),
+        Some(_) => anyhow::bail!("{ability}: `{field}` must be a string"),
+    }
+}
+
+fn loop_required_positive_u32_arg(
+    ability: &str,
+    args: &Map<String, Value>,
+    field: &str,
+) -> anyhow::Result<u32> {
+    let value = match args.get(field) {
+        Some(Value::Number(number)) => number
+            .as_u64()
+            .ok_or_else(|| anyhow::anyhow!("{ability}: `{field}` must be a positive integer"))?,
+        None => anyhow::bail!("{ability}: `{field}` must be a positive integer"),
+        Some(_) => anyhow::bail!("{ability}: `{field}` must be a positive integer"),
+    };
+    if value == 0 {
+        anyhow::bail!("{ability}: `{field}` must be ≥ 1");
+    }
+    if value > u32::MAX as u64 {
+        anyhow::bail!("{ability}: `{field}` too large (≤ u32::MAX)");
+    }
+    Ok(value as u32)
 }
 
 pub fn create_input_schema() -> Value {
@@ -174,9 +235,12 @@ pub fn cancel_description() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::domain::TenantId;
 
     fn fresh() -> Arc<LoopService> {
-        Arc::new(LoopService::new())
+        let svc = Arc::new(LoopService::new());
+        svc.bind_memory_for_test(TenantId::new("tenant-a"));
+        svc
     }
 
     #[test]
@@ -194,6 +258,67 @@ mod tests {
         let svc = fresh();
         let err = create_handler(&svc, json!({"worker_agent": "alice"})).unwrap_err();
         assert!(format!("{err}").contains("max_iters"));
+    }
+
+    #[test]
+    fn loop_handlers_reject_unknown_fields() {
+        let svc = fresh();
+        let cases = [
+            create_handler(
+                &svc,
+                json!({"worker_agent": "alice", "max_iters": 1, "legacy_mode": true}),
+            )
+            .unwrap_err(),
+            status_handler(&svc, json!({"loop_id": "loop-1", "legacy_mode": true})).unwrap_err(),
+            subscribe_handler(&svc, json!({"loop_id": "loop-1", "legacy_mode": true})).unwrap_err(),
+            cancel_handler(&svc, json!({"loop_id": "loop-1", "legacy_mode": true})).unwrap_err(),
+        ];
+        for err in cases {
+            let msg = format!("{err}");
+            assert!(msg.contains("unsupported field"), "wrong error: {msg}");
+            assert!(msg.contains("legacy_mode"), "wrong field: {msg}");
+        }
+    }
+
+    #[test]
+    fn create_rejects_wrongly_typed_optional_strings() {
+        let svc = fresh();
+        for (field, payload) in [
+            (
+                "verify_expr",
+                json!({"worker_agent": "alice", "max_iters": 1, "verify_expr": false}),
+            ),
+            (
+                "body_prompt",
+                json!({"worker_agent": "alice", "max_iters": 1, "body_prompt": 7}),
+            ),
+        ] {
+            let err = create_handler(&svc, payload).unwrap_err();
+            let msg = format!("{err}");
+            assert!(
+                msg.contains(&format!("`{field}` must be a string")),
+                "wrong error for {field}: {msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn create_rejects_non_positive_or_wrongly_typed_max_iters() {
+        let svc = fresh();
+        for payload in [
+            json!({"worker_agent": "alice", "max_iters": 0}),
+            json!({"worker_agent": "alice", "max_iters": "1"}),
+        ] {
+            let err = create_handler(&svc, payload).unwrap_err();
+            assert!(format!("{err}").contains("max_iters"));
+        }
+    }
+
+    #[test]
+    fn loop_handlers_reject_non_object_args() {
+        let svc = fresh();
+        let err = create_handler(&svc, json!(null)).unwrap_err();
+        assert!(format!("{err}").contains("args must be a JSON object"));
     }
 
     #[test]
