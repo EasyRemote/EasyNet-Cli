@@ -2,9 +2,9 @@ import { containsAllZeroPrincipal } from "./runtime-principals.js";
 
 const RUNTIME_STATE_READ_SUBJECT_PATH = "runtime-state/read";
 
-export function runtimeStateReadSubjectURA(realm, userID, errors = {}) {
-  const invalidInvocation = errorFactory(errors.invalidInvocation, TypeError);
-  const invalidRuntime = errorFactory(errors.invalidRuntime, TypeError);
+export function runtimeStateReadSubjectURA(realm, userID, errors) {
+  const invalidInvocation = requiredErrorFactory(errors?.invalidInvocation, "invalidInvocation");
+  const invalidRuntime = requiredErrorFactory(errors?.invalidRuntime, "invalidRuntime");
   const cleanRealm = runtimeStateSubjectSegment(realm, "realm", invalidInvocation);
   const cleanUserID = runtimeStateSubjectSegment(userID, "user_id", invalidInvocation);
   if (containsAllZeroPrincipal(cleanUserID)) {
@@ -125,9 +125,9 @@ function canonicalURAPath(value) {
   };
 }
 
-function errorFactory(factory, fallback) {
+function requiredErrorFactory(factory, name) {
   if (typeof factory === "function") {
     return factory;
   }
-  return (message) => new fallback(message);
+  throw new Error(`runtime subject ${name} error factory is required`);
 }

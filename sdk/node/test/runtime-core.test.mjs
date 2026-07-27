@@ -1798,7 +1798,11 @@ test("runtime-state read subject helper builds user-owned resource subject", () 
 test("runtime-state read subject helper rejects all-zero user before device fallback", () => {
   assert.throws(
     () => sdk.runtimeStateReadSubjectURA("example", "00000000-0000-0000-0000-000000000000"),
-    /user_id must not be all-zero/,
+    (error) =>
+      error instanceof sdk.SDKError &&
+      error.code === sdk.ErrorCode.INVALID_ARGUMENT &&
+      error.stage === "build" &&
+      /user_id must not be all-zero/.test(error.message),
   );
 });
 
@@ -1824,19 +1828,35 @@ test("runtime-state read subject predicate rejects all-zero owner before history
 test("runtime-state read subject helper rejects non-canonical realm and user segments", () => {
   assert.throws(
     () => sdk.runtimeStateReadSubjectURA("example/tenant", "alice"),
-    /realm is not canonical/,
+    (error) =>
+      error instanceof sdk.SDKError &&
+      error.code === sdk.ErrorCode.INVALID_ARGUMENT &&
+      error.stage === "build" &&
+      /realm is not canonical/.test(error.message),
   );
   assert.throws(
     () => sdk.runtimeStateReadSubjectURA("example", "alice/sdk"),
-    /user_id is not canonical/,
+    (error) =>
+      error instanceof sdk.SDKError &&
+      error.code === sdk.ErrorCode.INVALID_ARGUMENT &&
+      error.stage === "build" &&
+      /user_id is not canonical/.test(error.message),
   );
   assert.throws(
     () => sdk.runtimeStateReadSubjectURA("example?tenant", "alice"),
-    /realm is not canonical/,
+    (error) =>
+      error instanceof sdk.SDKError &&
+      error.code === sdk.ErrorCode.INVALID_ARGUMENT &&
+      error.stage === "build" &&
+      /realm is not canonical/.test(error.message),
   );
   assert.throws(
     () => sdk.runtimeStateReadSubjectURA("example", "alice#sdk"),
-    /user_id is not canonical/,
+    (error) =>
+      error instanceof sdk.SDKError &&
+      error.code === sdk.ErrorCode.INVALID_ARGUMENT &&
+      error.stage === "build" &&
+      /user_id is not canonical/.test(error.message),
   );
 });
 
