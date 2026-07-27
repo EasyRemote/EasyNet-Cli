@@ -275,7 +275,10 @@ mod tests {
             .insert_negotiated_with_trust(
                 subject.to_string(),
                 sender(),
-                crate::daemon::invocation::bidi::state::presence::SessionContract::canonical(),
+                crate::daemon::invocation::bidi::state::presence::SessionContract::new(
+                    1,
+                    vec![1; 16],
+                ),
                 crate::daemon::invocation::bidi::state::presence::SessionTrustContext::user_pubkey(
                     "pubkey-a",
                 ),
@@ -299,7 +302,10 @@ mod tests {
             .insert_negotiated_with_trust(
                 subject.to_string(),
                 sender(),
-                crate::daemon::invocation::bidi::state::presence::SessionContract::canonical(),
+                crate::daemon::invocation::bidi::state::presence::SessionContract::new(
+                    1,
+                    vec![1; 16],
+                ),
                 crate::daemon::invocation::bidi::state::presence::SessionTrustContext::user_pubkey(
                     "pubkey-b",
                 ),
@@ -324,7 +330,10 @@ mod tests {
             .insert_negotiated_with_trust(
                 subject.clone(),
                 sender(),
-                crate::daemon::invocation::bidi::state::presence::SessionContract::canonical(),
+                crate::daemon::invocation::bidi::state::presence::SessionContract::new(
+                    1,
+                    vec![1; 16],
+                ),
                 crate::daemon::invocation::bidi::state::presence::SessionTrustContext::user_pubkey(
                     "pubkey-a",
                 ),
@@ -364,7 +373,10 @@ mod tests {
             .insert_negotiated_with_trust(
                 subject.clone(),
                 sender(),
-                crate::daemon::invocation::bidi::state::presence::SessionContract::canonical(),
+                crate::daemon::invocation::bidi::state::presence::SessionContract::new(
+                    1,
+                    vec![1; 16],
+                ),
                 crate::daemon::invocation::bidi::state::presence::SessionTrustContext::user_pubkey(
                     "pubkey-a",
                 ),

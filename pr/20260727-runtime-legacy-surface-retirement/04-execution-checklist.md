@@ -139,3 +139,13 @@
 - [x] Add regression coverage proving invalid runtime state cannot remain a non-terminal attempt.
 - [x] Update convergence gates and run focused tests.
 - [x] Commit if stable.
+
+## Iteration 17 — Presence resolve-only slot cutover
+
+- [x] Re-run codegraph and targeted source search for bidi presence default/legacy session contract paths.
+- [x] Identify device-mode self presence seeding as a resolve-only directory visibility path masquerading as a canonical dispatch session with an empty claimant nonce.
+- [x] Split presence slots into negotiated dispatch sessions and resolve-only visibility rows.
+- [x] Require dispatch-session contracts to carry canonical carrier version and a 16-byte claimant fingerprint.
+- [x] Migrate device-mode self presence seed to the explicit resolve-only registration path.
+- [x] Update convergence gates and run focused tests.
+- [x] Commit if stable.

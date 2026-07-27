@@ -239,3 +239,22 @@ not decode the runtime's terminal fact.
 Boundary: valid runtime responses preserve the existing public attempt-history
 projection. The cutover adds no compatibility alias and no fallback state; it
 only turns malformed protocol data into a deterministic terminal audit failure.
+
+## Presence resolve-only slot cutover
+
+Decision: `PresenceRegistry` now models two explicit slot states:
+negotiated dispatch sessions and resolve-only visibility rows. A dispatch
+session is admitted only with a canonical carrier contract and a 16-byte
+claimant fingerprint. Device-mode self presence seeding uses the resolve-only
+path and therefore cannot expose a dispatch sender.
+
+Reason: device-mode self presence is a directory visibility fact used by local
+backend resolve. It is not a real inbound `session.open` reverse channel.
+Representing it as a no-op dispatch sender with an empty canonical contract made
+presence look like one lifecycle when it actually contained two, and forced
+dispatch code to defend against a fake session that could never complete.
+
+Boundary: directory readers still see resolve-only presence through
+`snapshot/contains/online_count`. Unary, stream, and bidi dispatch continue to
+enter only through `lookup_dispatch_session` and therefore require a negotiated
+session. No product compatibility dispatch path is preserved.

@@ -614,8 +614,8 @@ pub(crate) fn handle_resolve_at(
     if let Some(store) = advertised_agents {
         for record in store.snapshot() {
             let is_online = match record.host_ura() {
-                Some(host_ura) => registry.lookup(host_ura).is_some(),
-                None => registry.lookup(&record.agent_ura).is_some(),
+                Some(host_ura) => registry.contains(host_ura),
+                None => registry.contains(&record.agent_ura),
             };
             if !is_online {
                 continue;
@@ -1316,12 +1316,12 @@ pub fn handle_revoke(
             .as_ref()
             .is_some_and(|record| record.generation == request.generation);
     let was_active = target_generation_is_current
-        && (registry.lookup(target_ura).is_some()
+        && (registry.contains(target_ura)
             || advertised_record
                 .as_ref()
                 .map(|record| match record.host_ura() {
-                    Some(host_ura) => registry.lookup(host_ura).is_some(),
-                    None => registry.lookup(&record.agent_ura).is_some(),
+                    Some(host_ura) => registry.contains(host_ura),
+                    None => registry.contains(&record.agent_ura),
                 })
                 .unwrap_or(false));
     let Some(transaction_id) = request.purge_transaction_id.as_deref() else {
@@ -2974,7 +2974,7 @@ mod tests {
         .unwrap();
         assert!(resp.ack);
         assert!(resp.was_active);
-        assert!(registry.lookup(&ura).is_none(), "must be removed");
+        assert!(!registry.contains(&ura), "must be removed");
     }
 
     #[test]
@@ -3200,7 +3200,7 @@ mod tests {
         );
         assert_eq!(advertised.get(agent_ura).unwrap().generation, 2);
         assert!(catalog.get(agent_ura).is_some());
-        assert!(registry.lookup(agent_ura).is_some());
+        assert!(registry.contains(agent_ura));
     }
 
     #[test]

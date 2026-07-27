@@ -1642,6 +1642,12 @@ pub(crate) fn session_contract_from_ext(
             ext.contract_version, CANONICAL_SESSION_CARRIER_VERSION,
         )));
     }
+    if ext.claimant_boot_nonce.len() != 16 {
+        return Err(Status::failed_precondition(format!(
+            "CANONICAL_CARRIER_REQUIRED: session.open claimant_boot_nonce must be exactly 16 bytes; got {}",
+            ext.claimant_boot_nonce.len()
+        )));
+    }
     Ok(SessionContract {
         version: ext.contract_version,
         claimant_boot_nonce: ext.claimant_boot_nonce.clone(),
@@ -3692,6 +3698,18 @@ mod tests {
             CANONICAL_SESSION_CARRIER_VERSION
         );
         assert_eq!(c.claimant_boot_nonce.len(), 16);
+    }
+
+    #[test]
+    fn v1_ext_rejects_missing_claimant_fingerprint() {
+        let ext = SessionOpenExt {
+            contract_version: CANONICAL_SESSION_CARRIER_VERSION,
+            claimant_boot_nonce: Vec::new(),
+        };
+        let err = session_contract_from_ext(Some(&ext))
+            .expect_err("canonical carrier must include claimant fingerprint");
+        assert_eq!(err.code(), tonic::Code::FailedPrecondition);
+        assert!(err.message().contains("claimant_boot_nonce"));
     }
 
     #[test]

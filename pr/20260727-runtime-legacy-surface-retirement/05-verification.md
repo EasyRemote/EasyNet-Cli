@@ -215,3 +215,26 @@
   - passed.
 - `/Users/macbook.silan.tech/.local/bin/codegraph sync`
   - passed; synced 2 changed files.
+
+## Iteration 17
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph query "legacy compatibility fallback compat default product ingress invocation tuple subject nonce causal_context control invoke open_bidi subscribe"`
+- `/Users/macbook.silan.tech/.local/bin/codegraph query "bidi presence default canonical owner online route negative terminal lifecycle"`
+- `cargo test --features axon-pb presence --lib`
+  - passed.
+- `cargo test --features axon-pb session_contract --lib`
+  - passed.
+- `cargo test --features axon-pb claimant_fingerprint --lib`
+  - passed.
+- `cargo test --features axon-pb handle_revoke --lib`
+  - passed.
+- `cargo fmt --check`
+  - passed.
+- `git diff --check`
+  - passed.
+- `tools/scripts/check-architecture-convergence.sh`
+  - passed.
+- `tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - passed.
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync`
+  - passed; synced 6 changed files.

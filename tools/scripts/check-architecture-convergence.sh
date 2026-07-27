@@ -1436,6 +1436,7 @@ carrier_files = (
 )
 carrier_fallback = re.compile(
     r"SessionContract::legacy\s*\(|"
+    r"SessionContract::canonical\s*\(|"
     r"terminal_receipt\s*\.\s*or\s*\(|"
     r"receipt\s*:\s*legacy_terminal_receipt"
 )
@@ -1450,6 +1451,36 @@ for path in carrier_files:
             line_number(text, match.start()),
             "canonical session/finalization code consumes a retired v0 receipt carrier",
         )
+    if path.name == "presence.rs":
+        for token, detail in (
+            (
+                "enum PresenceSlot",
+                "presence registry must model dispatch and resolve-only slots explicitly",
+            ),
+            (
+                "pub fn insert_resolve_only(",
+                "resolve-only presence must use an explicit registration path",
+            ),
+            (
+                "fn validate_dispatch_session_contract(contract: &SessionContract) -> Result<(), String>",
+                "dispatch session registration must validate carrier contract facts",
+            ),
+            (
+                "contract.claimant_boot_nonce.len() != 16",
+                "dispatch session registration must require a 16-byte claimant fingerprint",
+            ),
+            (
+                "Self::ResolveOnly(_) => None",
+                "resolve-only presence must not expose a dispatch session",
+            ),
+        ):
+            if token not in text:
+                add(
+                    "R10_RETIRED_CARRIER_FALLBACK",
+                    path,
+                    1,
+                    detail,
+                )
 
 for path in (
     axon_root / "core/proto/axon/v1/invoke.proto",

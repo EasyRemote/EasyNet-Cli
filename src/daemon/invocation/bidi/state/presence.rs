@@ -259,7 +259,13 @@ pub enum PresenceEvent {
 }
 
 #[derive(Debug, Clone)]
-struct PresenceSlot {
+enum PresenceSlot {
+    Dispatch(PresenceDispatchSlot),
+    ResolveOnly(PresenceResolveOnlySlot),
+}
+
+#[derive(Debug, Clone)]
+struct PresenceDispatchSlot {
     session_id: PresenceSessionId,
     sender: DispatchSender,
     /// Canonical carrier contract the device declared on frame 0 (DEC-F004).
@@ -268,6 +274,52 @@ struct PresenceSlot {
     /// created this live slot. This is not a second liveness map:
     /// it is metadata on the one canonical presence row.
     trust: SessionTrustContext,
+}
+
+#[derive(Debug, Clone)]
+struct PresenceResolveOnlySlot {
+    session_id: PresenceSessionId,
+}
+
+impl PresenceSlot {
+    fn session_id(&self) -> PresenceSessionId {
+        match self {
+            Self::Dispatch(slot) => slot.session_id,
+            Self::ResolveOnly(slot) => slot.session_id,
+        }
+    }
+
+    fn sender(&self) -> Option<DispatchSender> {
+        match self {
+            Self::Dispatch(slot) => Some(slot.sender.clone()),
+            Self::ResolveOnly(_) => None,
+        }
+    }
+
+    fn claimant_boot_nonce(&self) -> Option<Vec<u8>> {
+        match self {
+            Self::Dispatch(slot) => Some(slot.contract.claimant_boot_nonce.clone()),
+            Self::ResolveOnly(_) => None,
+        }
+    }
+
+    fn dispatch_session(&self) -> Option<PresenceDispatchSession> {
+        match self {
+            Self::Dispatch(slot) => Some(PresenceDispatchSession {
+                session_id: slot.session_id,
+                sender: slot.sender.clone(),
+                contract_version: slot.contract.version,
+            }),
+            Self::ResolveOnly(_) => None,
+        }
+    }
+
+    fn matches_admitted_key(&self, public_key_b64: &str) -> bool {
+        match self {
+            Self::Dispatch(slot) => slot.trust.matches_admitted_key(public_key_b64),
+            Self::ResolveOnly(_) => false,
+        }
+    }
 }
 
 /// Frame-0 session negotiation facts (DEC-F004 / mini-RFC §2): the
@@ -283,17 +335,11 @@ pub struct SessionContract {
 }
 
 impl SessionContract {
-    pub fn canonical() -> Self {
+    pub fn new(version: u32, claimant_boot_nonce: Vec<u8>) -> Self {
         Self {
-            version: CANONICAL_SESSION_CARRIER_VERSION,
-            claimant_boot_nonce: Vec::new(),
+            version,
+            claimant_boot_nonce,
         }
-    }
-}
-
-impl Default for SessionContract {
-    fn default() -> Self {
-        Self::canonical()
     }
 }
 
@@ -402,33 +448,66 @@ impl PresenceRegistry {
         }
     }
 
-    /// Register a new `session.open` for `ura`.
+    /// Register a resolve-only presence row for `ura`.
     ///
-    /// Emits `PresenceEvent::Offline { reason: StreamClosed }` for
-    /// any displaced prior sender, then `PresenceEvent::Online`
-    /// for the newcomer. The invariant ordering (Offline-before-
-    /// Online) means a subscribe_directory_v2 pump that observes both
-    /// events sees a clean transition rather than a duplicated URA.
+    /// This is intentionally not a dispatch session. It exists for
+    /// daemon-owned directory visibility such as device-mode self presence,
+    /// where invocation execution must stay on LocalRuntime.
+    pub fn insert_resolve_only(&self, ura: String) -> Result<PresenceRegistration, String> {
+        validate_presence_principal_ura(&ura)?;
+        let session_id = self.next_session_id.fetch_add(1, Ordering::Relaxed);
+        let prior = self.by_ura.insert(
+            ura.clone(),
+            PresenceSlot::ResolveOnly(PresenceResolveOnlySlot { session_id }),
+        );
+        let displaced = prior.as_ref().and_then(PresenceSlot::sender);
+        if prior.is_some() {
+            self.emit_offline(&ura, OfflineReason::StreamClosed);
+        }
+        self.emit_online(ura);
+        Ok(PresenceRegistration {
+            session_id,
+            displaced,
+            displaced_claimant_nonce: prior.and_then(|slot| slot.claimant_boot_nonce()),
+        })
+    }
+
+    /// Test/fixture-only dispatch registration for callers that do not exercise
+    /// frame-0 negotiation.
     ///
-    /// Returns the displaced sender if any so the caller can observe
-    /// the prior session's state if it cares; production paths
-    /// drop it.
+    /// Production session.open paths must call `insert_negotiated*` with the
+    /// carrier contract obtained from the admitted runtime context.
+    #[cfg(any(test, feature = "demo-fixture"))]
     pub fn insert(
         &self,
         ura: String,
         sender: DispatchSender,
     ) -> Result<Option<DispatchSender>, String> {
-        Ok(self.insert_tracked(ura, sender)?.displaced)
+        Ok(self.insert_fixture_dispatch(ura, sender)?.displaced)
     }
 
-    /// Register a canonical `session.open` and return the registry-owned
+    /// Test/fixture-only dispatch registration returning the registry-owned
     /// `session_id` alongside any displaced prior sender.
+    #[cfg(any(test, feature = "demo-fixture"))]
     pub fn insert_tracked(
         &self,
         ura: String,
         sender: DispatchSender,
     ) -> Result<PresenceRegistration, String> {
-        self.insert_negotiated(ura, sender, SessionContract::canonical())
+        self.insert_fixture_dispatch(ura, sender)
+    }
+
+    #[cfg(any(test, feature = "demo-fixture"))]
+    pub fn insert_fixture_dispatch(
+        &self,
+        ura: String,
+        sender: DispatchSender,
+    ) -> Result<PresenceRegistration, String> {
+        self.insert_negotiated(
+            ura,
+            sender,
+            SessionContract::new(CANONICAL_SESSION_CARRIER_VERSION, vec![0; 16]),
+        )
     }
 
     /// Register a new `session.open` carrying the frame-0 carrier
@@ -455,36 +534,23 @@ impl PresenceRegistry {
         trust: SessionTrustContext,
     ) -> Result<PresenceRegistration, String> {
         validate_presence_principal_ura(&ura)?;
-        assert!(
-            contract.version >= CANONICAL_SESSION_CARRIER_VERSION,
-            "session contract v{} is retired; v{} or newer is required",
-            contract.version,
-            CANONICAL_SESSION_CARRIER_VERSION,
-        );
+        validate_dispatch_session_contract(&contract)?;
         let session_id = self.next_session_id.fetch_add(1, Ordering::Relaxed);
         let prior = self.by_ura.insert(
             ura.clone(),
-            PresenceSlot {
+            PresenceSlot::Dispatch(PresenceDispatchSlot {
                 session_id,
                 sender,
                 contract,
                 trust,
-            },
+            }),
         );
-        let displaced_claimant_nonce = prior
-            .as_ref()
-            .map(|p| p.contract.claimant_boot_nonce.clone());
-        let displaced = prior.map(|prior| prior.sender);
-        if displaced.is_some() {
-            // Always emit Offline for the displaced session before
-            // Online for the newcomer; ignore broadcast send errors
-            // (no subscribers is not an error).
-            let _ = self.events.send(PresenceEvent::Offline {
-                ura: ura.clone(),
-                reason: OfflineReason::StreamClosed,
-            });
+        let displaced_claimant_nonce = prior.as_ref().and_then(PresenceSlot::claimant_boot_nonce);
+        let displaced = prior.as_ref().and_then(PresenceSlot::sender);
+        if prior.is_some() {
+            self.emit_offline(&ura, OfflineReason::StreamClosed);
         }
-        let _ = self.events.send(PresenceEvent::Online { ura });
+        self.emit_online(ura);
         Ok(PresenceRegistration {
             session_id,
             displaced,
@@ -496,12 +562,10 @@ impl PresenceRegistry {
     /// supplied reason. No-op if the URA is not present (the caller
     /// races; idempotent for the registry's lifecycle invariant).
     pub fn remove(&self, ura: &str, reason: OfflineReason) -> Option<DispatchSender> {
-        let prior = self.by_ura.remove(ura).map(|(_k, slot)| slot.sender);
-        if prior.is_some() {
-            let _ = self.events.send(PresenceEvent::Offline {
-                ura: ura.to_string(),
-                reason,
-            });
+        let removed = self.by_ura.remove(ura).map(|(_k, slot)| slot);
+        let prior = removed.as_ref().and_then(PresenceSlot::sender);
+        if removed.is_some() {
+            self.emit_offline(ura, reason);
         }
         prior
     }
@@ -521,15 +585,13 @@ impl PresenceRegistry {
     ) -> Option<DispatchSender> {
         let prior = self
             .by_ura
-            .remove_if(ura, |_ura, slot| slot.session_id == session_id)
-            .map(|(_k, slot)| slot.sender);
+            .remove_if(ura, |_ura, slot| slot.session_id() == session_id)
+            .map(|(_k, slot)| slot);
+        let sender = prior.as_ref().and_then(PresenceSlot::sender);
         if prior.is_some() {
-            let _ = self.events.send(PresenceEvent::Offline {
-                ura: ura.to_string(),
-                reason,
-            });
+            self.emit_offline(ura, reason);
         }
-        prior
+        sender
     }
 
     /// Find the dispatch sender for `ura`, cloning so the caller
@@ -545,11 +607,9 @@ impl PresenceRegistry {
     /// reads so session displacement cannot create a mixed-generation view.
     #[must_use]
     pub fn lookup_dispatch_session(&self, ura: &str) -> Option<PresenceDispatchSession> {
-        self.by_ura.get(ura).map(|entry| PresenceDispatchSession {
-            session_id: entry.session_id,
-            sender: entry.sender.clone(),
-            contract_version: entry.contract.version,
-        })
+        self.by_ura
+            .get(ura)
+            .and_then(|entry| entry.dispatch_session())
     }
 
     /// Find the current `(session_id, sender)` pair for `ura`.
@@ -623,18 +683,41 @@ impl PresenceRegistry {
     ) -> Option<DispatchSender> {
         let prior = self
             .by_ura
-            .remove_if(ura, |_ura, slot| {
-                slot.trust.matches_admitted_key(public_key_b64)
-            })
-            .map(|(_k, slot)| slot.sender);
+            .remove_if(ura, |_ura, slot| slot.matches_admitted_key(public_key_b64))
+            .map(|(_k, slot)| slot);
+        let sender = prior.as_ref().and_then(PresenceSlot::sender);
         if prior.is_some() {
-            let _ = self.events.send(PresenceEvent::Offline {
-                ura: ura.to_string(),
-                reason: OfflineReason::AdminRevoked,
-            });
+            self.emit_offline(ura, OfflineReason::AdminRevoked);
         }
-        prior
+        sender
     }
+
+    fn emit_online(&self, ura: String) {
+        let _ = self.events.send(PresenceEvent::Online { ura });
+    }
+
+    fn emit_offline(&self, ura: &str, reason: OfflineReason) {
+        let _ = self.events.send(PresenceEvent::Offline {
+            ura: ura.to_string(),
+            reason,
+        });
+    }
+}
+
+fn validate_dispatch_session_contract(contract: &SessionContract) -> Result<(), String> {
+    if contract.version < CANONICAL_SESSION_CARRIER_VERSION {
+        return Err(format!(
+            "session contract v{} is retired; v{} or newer is required",
+            contract.version, CANONICAL_SESSION_CARRIER_VERSION,
+        ));
+    }
+    if contract.claimant_boot_nonce.len() != 16 {
+        return Err(format!(
+            "session contract claimant_boot_nonce must be exactly 16 bytes; got {}",
+            contract.claimant_boot_nonce.len()
+        ));
+    }
+    Ok(())
 }
 
 fn validate_presence_principal_ura(ura: &str) -> Result<(), String> {
@@ -730,6 +813,24 @@ mod tests {
     }
 
     #[test]
+    fn negotiated_insert_rejects_missing_claimant_fingerprint() {
+        let reg = PresenceRegistry::new();
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+        let error = reg
+            .insert_negotiated(
+                "easynet:///r/t/device/d1".into(),
+                tx,
+                SessionContract::new(CANONICAL_SESSION_CARRIER_VERSION, Vec::new()),
+            )
+            .expect_err("dispatch session must carry claimant fingerprint");
+        assert!(error.contains("claimant_boot_nonce"), "{error}");
+        assert!(
+            reg.snapshot().is_empty(),
+            "invalid dispatch contract must fail before presence mutation"
+        );
+    }
+
+    #[test]
     fn insert_tracked_registers_canonical_contract() {
         let reg = PresenceRegistry::new();
         let (tx, _rx) = tokio::sync::mpsc::channel(1);
@@ -742,6 +843,57 @@ mod tests {
                 .map(|session| session.contract_version),
             Some(CANONICAL_SESSION_CARRIER_VERSION)
         );
+    }
+
+    #[tokio::test]
+    async fn resolve_only_presence_is_directory_visible_but_not_dispatchable() {
+        let registry = PresenceRegistry::new();
+        let ura = "easynet:///r/realm/device/self".to_string();
+        let mut subscriber = registry.subscribe_events();
+
+        let registration = registry
+            .insert_resolve_only(ura.clone())
+            .expect("canonical resolve-only presence key");
+
+        assert!(registration.displaced.is_none());
+        assert!(registration.displaced_claimant_nonce.is_none());
+        assert!(registry.contains(&ura));
+        assert_eq!(registry.snapshot(), vec![ura.clone()]);
+        assert!(registry.lookup(&ura).is_none());
+        assert!(
+            registry.lookup_dispatch_session(&ura).is_none(),
+            "resolve-only presence must never expose a dispatch session"
+        );
+
+        match subscriber.recv().await.expect("online event") {
+            PresenceEvent::Online { ura: event_ura } => assert_eq!(event_ura, ura),
+            other => panic!("expected Online, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn resolve_only_remove_emits_offline_without_sender() {
+        let registry = PresenceRegistry::new();
+        let ura = "easynet:///r/realm/device/self".to_string();
+        registry
+            .insert_resolve_only(ura.clone())
+            .expect("canonical resolve-only presence key");
+        let mut subscriber = registry.subscribe_events();
+
+        let removed = registry.force_revoke(&ura);
+
+        assert!(removed.is_none());
+        assert!(!registry.contains(&ura));
+        match subscriber.recv().await.expect("offline event") {
+            PresenceEvent::Offline {
+                ura: event_ura,
+                reason,
+            } => {
+                assert_eq!(event_ura, ura);
+                assert_eq!(reason, OfflineReason::AdminRevoked);
+            }
+            other => panic!("expected Offline, got {other:?}"),
+        }
     }
 
     #[test]
@@ -945,7 +1097,7 @@ mod tests {
             .insert_negotiated_with_trust(
                 ura.clone(),
                 make_dispatch_sender(),
-                SessionContract::canonical(),
+                SessionContract::new(CANONICAL_SESSION_CARRIER_VERSION, vec![1; 16]),
                 SessionTrustContext::user_pubkey(key),
             )
             .expect("canonical presence key");
@@ -964,7 +1116,7 @@ mod tests {
             .insert_negotiated_with_trust(
                 ura.clone(),
                 make_dispatch_sender(),
-                SessionContract::canonical(),
+                SessionContract::new(CANONICAL_SESSION_CARRIER_VERSION, vec![1; 16]),
                 SessionTrustContext::user_pubkey("pubkey-b"),
             )
             .expect("canonical presence key");

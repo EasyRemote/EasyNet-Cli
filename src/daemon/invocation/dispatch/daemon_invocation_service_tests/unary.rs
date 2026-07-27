@@ -1379,7 +1379,7 @@ async fn identity_revoke_user_pubkey_removes_matching_presence_after_write() {
         .insert_negotiated_with_trust(
             user_ura.to_string(),
             tx,
-            crate::daemon::invocation::bidi::state::presence::SessionContract::canonical(),
+            crate::daemon::invocation::bidi::state::presence::SessionContract::new(1, vec![1; 16]),
             crate::daemon::invocation::bidi::state::presence::SessionTrustContext::user_pubkey(
                 user_pubkey_b64.clone(),
             ),

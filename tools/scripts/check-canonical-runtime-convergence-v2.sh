@@ -12647,18 +12647,31 @@ unary_tests = unary_tests_path.read_text(encoding="utf-8")
 presence_production = presence.split("\n#[cfg(test)]", 1)[0]
 
 required_presence_tokens = {
+    "enum PresenceSlot": "slot_state_machine_missing",
+    "ResolveOnly(PresenceResolveOnlySlot)": "resolve_only_slot_missing",
+    "Dispatch(PresenceDispatchSlot)": "dispatch_slot_missing",
+    "pub fn insert_resolve_only(": "resolve_only_insert_missing",
     "fn validate_presence_principal_ura(ura: &str) -> Result<(), String>": "validator_missing",
+    "fn validate_dispatch_session_contract(contract: &SessionContract) -> Result<(), String>": "dispatch_contract_validator_missing",
+    "contract.claimant_boot_nonce.len() != 16": "claimant_fingerprint_length_guard_missing",
+    "validate_dispatch_session_contract(&contract)?;": "dispatch_contract_boundary_validation_missing",
     "crate::core::ura::parse_ura(trimmed)": "validator_must_parse_canonical_ura",
     "crate::core::ura::URAKind::Device": "device_principal_missing",
     "crate::core::ura::URAKind::User": "user_principal_missing",
     "crate::core::ura::URAKind::Agent": "agent_principal_missing",
     "validate_presence_principal_ura(&ura)?;": "insert_boundary_validation_missing",
-    "pub fn insert(\n        &self,\n        ura: String,\n        sender: DispatchSender,\n    ) -> Result<Option<DispatchSender>, String>": "insert_result_contract_missing",
     "pub fn insert_negotiated_with_trust(\n        &self,\n        ura: String,\n        sender: DispatchSender,\n        contract: SessionContract,\n        trust: SessionTrustContext,\n    ) -> Result<PresenceRegistration, String>": "trusted_insert_result_contract_missing",
 }
 for token, code in required_presence_tokens.items():
     if token not in presence_production:
         raise SystemExit(f"presence_registry_canonical_principal_key:{code}")
+
+if "SessionContract::canonical()" in presence_production:
+    raise SystemExit("presence_registry_canonical_principal_key:retired_canonical_contract_helper")
+if re.search(r"Self::ResolveOnly\([^)]*\)\s*=>\s*Some\(", presence_production):
+    raise SystemExit("presence_registry_canonical_principal_key:resolve_only_exposes_dispatch_sender")
+if "registry.lookup(host_ura).is_some()" in wrappers or "registry.lookup(&record.agent_ura).is_some()" in wrappers:
+    raise SystemExit("presence_registry_canonical_principal_key:directory_liveness_uses_dispatch_lookup")
 
 for forbidden in (
     "handle_list_user_devices_ignores_legacy_agent_device_shape",
@@ -12673,6 +12686,8 @@ for required_test in (
     "insert_rejects_non_principal_presence_key_before_mutation",
     "handle_list_user_devices_filters_canonical_non_device_principals",
     "presence_registry_rejects_prefix_matched_malformed_device_presence",
+    "resolve_only_presence_is_directory_visible_but_not_dispatchable",
+    "negotiated_insert_rejects_missing_claimant_fingerprint",
 ):
     if required_test not in presence and required_test not in wrappers and required_test not in unary_tests:
         raise SystemExit(f"presence_registry_canonical_principal_key:missing_test:{required_test}")

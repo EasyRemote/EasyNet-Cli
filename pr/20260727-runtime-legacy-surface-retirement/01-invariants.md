@@ -44,3 +44,7 @@
   lifecycle must become an explicit `PROTOCOL_MISMATCH` terminal attempt
   failure; it must never be recorded as `unknown` or left as
   `runtime_started`.
+- Presence has two explicit slot states: negotiated dispatch session and
+  resolve-only directory visibility. A resolve-only row must never expose a
+  dispatch sender or carrier contract, and a dispatch session must carry a
+  validated session contract with a 16-byte claimant fingerprint.
