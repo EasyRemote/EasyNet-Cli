@@ -200,6 +200,25 @@ def test_runtime_ability_builds_complete_canonical_draft() -> None:
     assert draft.metadata == {"request_id": "call-1"}
 
 
+def test_runtime_ability_catalogue_read_resolves_descriptor_with_realm_authority_subject() -> None:
+    client, transport = _client()
+    call = replace(
+        _call(),
+        callee_ura="easynet:///r/example/device/device-1",
+        subject_ura="easynet:///r/example/device/device-1",
+    )
+
+    draft = client._build_catalogue_read(call, "meta.list_abilities", {})
+
+    assert draft.subject_ura == "easynet:///r/example/device/device-1"
+    assert transport.descriptor_requests[-1]["subject_ura"] == (
+        "easynet:///r/example/authority"
+    )
+    assert transport.descriptor_requests[-1]["callee_ura"] == (
+        "easynet:///r/example/device/device-1"
+    )
+
+
 def test_runtime_ability_rejects_all_zero_runtime_call_principal_before_descriptor_resolution() -> None:
     client, transport = _client()
     call = RuntimeCallContext(

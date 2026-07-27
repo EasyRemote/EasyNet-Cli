@@ -8,7 +8,12 @@ from dataclasses import dataclass, field
 from typing import Callable, Mapping, TypeAlias
 
 from ._identity_guards import contains_all_zero_principal
-from .axon_addressing import AddressingClient, AddressingProjection
+from .axon_addressing import (
+    AddressingClient,
+    AddressingProjection,
+    authority_ura,
+    parse_ura,
+)
 from .authority import (
     DELEGATION_METADATA_KEY,
     SESSION_AUTHORITY_METADATA_KEY,
@@ -281,6 +286,8 @@ class RuntimeAbilityClient:
         selected_subject_ura: str,
         policy: _RuntimeAbilityDispatchPolicy,
     ) -> str:
+        if policy.descriptor_provider == ABILITY_DESCRIPTOR_PROVIDER:
+            return authority_ura(parse_ura(call.callee_ura.strip()).realm)
         if policy.subject_policy == "runtime_owner":
             return selected_subject_ura.strip()
         return call.subject_ura.strip()

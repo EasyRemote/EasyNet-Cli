@@ -211,7 +211,7 @@ class AbilityInvocationClient:
             )
             descriptor_ref = self.runtime.resolve_descriptor_ref(
                 callee_ura=ability_projection.owner_ura,
-                ability=ability_ura,
+                ability=ability_projection.public_name,
                 call_mode=_call_mode(request.call_mode),
                 caller_ura=request.caller_ura,
                 subject_ura=explicit_subject_ura,
@@ -780,7 +780,7 @@ def _provider_descriptor_ref(
     _reject_governance_read_action(projection.public_name, projection.ura)
     return runtime.resolve_descriptor_ref(
         callee_ura=_required_string(request.callee_ura, "callee_ura"),
-        ability=projection.ura,
+        ability=projection.public_name,
         call_mode=_call_mode(request.call_mode),
         caller_ura=request.caller_ura,
         subject_ura=request.subject_ura,

@@ -84,11 +84,18 @@ func (policy runtimeAbilityDispatchPolicy) subjectURA(ctx context.Context, addre
 	}
 }
 
-func (policy runtimeAbilityDispatchPolicy) descriptorResolutionSubjectURA(call RuntimeCallContext, selectedSubjectURA string) string {
-	if policy.subjectPolicy == runtimeAbilitySubjectRuntimeOwner {
-		return strings.TrimSpace(selectedSubjectURA)
+func (policy runtimeAbilityDispatchPolicy) descriptorResolutionSubjectURA(call RuntimeCallContext, selectedSubjectURA string) (string, error) {
+	if strings.TrimSpace(policy.descriptorProvider) == runtimeAbilityDescriptorProvider {
+		callee, err := ParseURAParts(strings.TrimSpace(call.CalleeURA))
+		if err != nil {
+			return "", invalidRuntimePayload("callee_ura must be canonical for ability descriptor provider", err)
+		}
+		return AuthorityURA(callee.Realm), nil
 	}
-	return strings.TrimSpace(call.SubjectURA)
+	if policy.subjectPolicy == runtimeAbilitySubjectRuntimeOwner {
+		return strings.TrimSpace(selectedSubjectURA), nil
+	}
+	return strings.TrimSpace(call.SubjectURA), nil
 }
 
 // AbilityChildContext carries the complete child Invocation context derived
@@ -227,12 +234,16 @@ func (c *RuntimeAbilityClient) buildWithCallModePolicy(ctx context.Context, call
 	if err != nil {
 		return InvocationDraft{}, err
 	}
+	descriptorSubjectURA, err := policy.descriptorResolutionSubjectURA(call, subjectURA)
+	if err != nil {
+		return InvocationDraft{}, err
+	}
 	descriptorRef, err := c.runtime.ResolveDescriptorRef(ctx, RuntimeDescriptorRefRequest{
 		CalleeURA:  strings.TrimSpace(call.CalleeURA),
 		Ability:    abilityName,
 		CallMode:   mode,
 		CallerURA:  strings.TrimSpace(call.CallerURA),
-		SubjectURA: policy.descriptorResolutionSubjectURA(call, subjectURA),
+		SubjectURA: descriptorSubjectURA,
 		Provider:   policy.descriptorProvider,
 	})
 	if err != nil {

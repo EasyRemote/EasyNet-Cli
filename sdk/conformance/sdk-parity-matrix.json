@@ -7423,7 +7423,7 @@
         },
         {
           "item": "AbilityInvocationClient",
-          "sha256": "03ef2a38190e01fbe8e7c67448727050516d687dd88cdbaa6b196263e8315fc7"
+          "sha256": "a0ed165dfb9b37fa181859c7235467ad82a5d21bd309669cd833049843926aaf"
         },
         {
           "item": "AbilityTargetRequest",
@@ -7440,6 +7440,10 @@
         {
           "item": "ResolvedAbilityTarget",
           "sha256": "a6e9fa142042c0eb6fffecc67210b2f209e1fa23933383bef7201b9a4f860257"
+        },
+        {
+          "item": "RuntimeAbilityPackageManifest",
+          "sha256": "abd462a37770c724992b232d29ca19f9819a0b046326028c2c676791cbfea549"
         },
         {
           "item": "AbilityCallRequest.ability_ura",
@@ -7619,7 +7623,7 @@
         },
         {
           "item": "AbilityInvocationClient.resolve_target",
-          "sha256": "d3e8ad6a766d15bb1ffaf6cbab4a3fd117a510b540e9ec16482211b8c12677bb"
+          "sha256": "8d1f1823c7f061ff8893a54add3b6321cc41e0663c68a05ee19207f6c4bc379e"
         },
         {
           "item": "AbilityInvocationClient.runtime",
@@ -7780,6 +7784,54 @@
         {
           "item": "RuntimeAbilityClient.submit_signed",
           "sha256": "f49d71bf5f63a4a6e4bc7e262aec662ebecb9edb446e4ce3a56d0e50a49145e1"
+        },
+        {
+          "item": "RuntimeAbilityPackageManifest.admission_action",
+          "sha256": "e867aa3a270c602dc7d28e8868c2c97e9254aec219271a04b2fa18e44a3440aa"
+        },
+        {
+          "item": "RuntimeAbilityPackageManifest.description",
+          "sha256": "a9dac6e45749812608d59c04a0e6247ca49204a029020c76272bf8a2477e2e59"
+        },
+        {
+          "item": "RuntimeAbilityPackageManifest.descriptor_version",
+          "sha256": "790426f598de193160379ca20a0dfa9b2592946dd0281fbacb1b7486eb2219fe"
+        },
+        {
+          "item": "RuntimeAbilityPackageManifest.exec",
+          "sha256": "ed6b5bdfd01e0f00558181a9d892ea6b054abd17957bb589eaba2fc25466fd18"
+        },
+        {
+          "item": "RuntimeAbilityPackageManifest.input_schema",
+          "sha256": "0fe9362a3e179417f8a72614fe5c1cc78410fcdaac23999c2276b5e1ef7b4a53"
+        },
+        {
+          "item": "RuntimeAbilityPackageManifest.name",
+          "sha256": "a705133e140126ce94e7762d76b4fb452fb1f2ea6fdd1cffdc227ffe0016a0fb"
+        },
+        {
+          "item": "RuntimeAbilityPackageManifest.namespace",
+          "sha256": "ecf1eaf0df7c742b513e67a80b84df05f1e1c5a29d88add76bdf75f8ed2fc2d2"
+        },
+        {
+          "item": "RuntimeAbilityPackageManifest.output_schema",
+          "sha256": "9dd3b7d78f38d1a945dc279f373a35f190859fa06de7461c72e480901431563e"
+        },
+        {
+          "item": "RuntimeAbilityPackageManifest.schema_version",
+          "sha256": "ac49cea2579bca83377d1370db86debac2d59ff89ac749fcc7065cc5f870551d"
+        },
+        {
+          "item": "RuntimeAbilityPackageManifest.timeout_seconds",
+          "sha256": "e8bfa3e686d505c1447a2fc076067844a7f4b15b4383569f1f95e4613f6d512e"
+        },
+        {
+          "item": "RuntimeAbilityPackageManifest.to_json",
+          "sha256": "e7f3dff6f3778963bcec3012ed30d208a98371e2dadee73ef4c716647f3c818d"
+        },
+        {
+          "item": "RuntimeAbilityPackageManifest.to_mapping",
+          "sha256": "4ec4ba7128a191d9caea2d43e1619ba9acb09cd6a80cde09af1e56ad864bb42a"
         }
       ],
       "step_shape_evidence": [
@@ -7798,7 +7850,7 @@
             },
             {
               "item": "AbilityInvocationClient",
-              "sha256": "03ef2a38190e01fbe8e7c67448727050516d687dd88cdbaa6b196263e8315fc7"
+              "sha256": "a0ed165dfb9b37fa181859c7235467ad82a5d21bd309669cd833049843926aaf"
             },
             {
               "item": "AbilityTargetRequest",
@@ -7815,6 +7867,10 @@
             {
               "item": "ResolvedAbilityTarget",
               "sha256": "a6e9fa142042c0eb6fffecc67210b2f209e1fa23933383bef7201b9a4f860257"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest",
+              "sha256": "abd462a37770c724992b232d29ca19f9819a0b046326028c2c676791cbfea549"
             },
             {
               "item": "AbilityCallRequest.ability_ura",
@@ -7994,7 +8050,7 @@
             },
             {
               "item": "AbilityInvocationClient.resolve_target",
-              "sha256": "d3e8ad6a766d15bb1ffaf6cbab4a3fd117a510b540e9ec16482211b8c12677bb"
+              "sha256": "8d1f1823c7f061ff8893a54add3b6321cc41e0663c68a05ee19207f6c4bc379e"
             },
             {
               "item": "AbilityInvocationClient.runtime",
@@ -8155,6 +8211,54 @@
             {
               "item": "RuntimeAbilityClient.submit_signed",
               "sha256": "f49d71bf5f63a4a6e4bc7e262aec662ebecb9edb446e4ce3a56d0e50a49145e1"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.admission_action",
+              "sha256": "e867aa3a270c602dc7d28e8868c2c97e9254aec219271a04b2fa18e44a3440aa"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.description",
+              "sha256": "a9dac6e45749812608d59c04a0e6247ca49204a029020c76272bf8a2477e2e59"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.descriptor_version",
+              "sha256": "790426f598de193160379ca20a0dfa9b2592946dd0281fbacb1b7486eb2219fe"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.exec",
+              "sha256": "ed6b5bdfd01e0f00558181a9d892ea6b054abd17957bb589eaba2fc25466fd18"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.input_schema",
+              "sha256": "0fe9362a3e179417f8a72614fe5c1cc78410fcdaac23999c2276b5e1ef7b4a53"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.name",
+              "sha256": "a705133e140126ce94e7762d76b4fb452fb1f2ea6fdd1cffdc227ffe0016a0fb"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.namespace",
+              "sha256": "ecf1eaf0df7c742b513e67a80b84df05f1e1c5a29d88add76bdf75f8ed2fc2d2"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.output_schema",
+              "sha256": "9dd3b7d78f38d1a945dc279f373a35f190859fa06de7461c72e480901431563e"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.schema_version",
+              "sha256": "ac49cea2579bca83377d1370db86debac2d59ff89ac749fcc7065cc5f870551d"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.timeout_seconds",
+              "sha256": "e8bfa3e686d505c1447a2fc076067844a7f4b15b4383569f1f95e4613f6d512e"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.to_json",
+              "sha256": "e7f3dff6f3778963bcec3012ed30d208a98371e2dadee73ef4c716647f3c818d"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.to_mapping",
+              "sha256": "4ec4ba7128a191d9caea2d43e1619ba9acb09cd6a80cde09af1e56ad864bb42a"
             }
           ]
         },
@@ -8173,7 +8277,7 @@
             },
             {
               "item": "AbilityInvocationClient",
-              "sha256": "03ef2a38190e01fbe8e7c67448727050516d687dd88cdbaa6b196263e8315fc7"
+              "sha256": "a0ed165dfb9b37fa181859c7235467ad82a5d21bd309669cd833049843926aaf"
             },
             {
               "item": "AbilityTargetRequest",
@@ -8190,6 +8294,10 @@
             {
               "item": "ResolvedAbilityTarget",
               "sha256": "a6e9fa142042c0eb6fffecc67210b2f209e1fa23933383bef7201b9a4f860257"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest",
+              "sha256": "abd462a37770c724992b232d29ca19f9819a0b046326028c2c676791cbfea549"
             },
             {
               "item": "AbilityCallRequest.ability_ura",
@@ -8369,7 +8477,7 @@
             },
             {
               "item": "AbilityInvocationClient.resolve_target",
-              "sha256": "d3e8ad6a766d15bb1ffaf6cbab4a3fd117a510b540e9ec16482211b8c12677bb"
+              "sha256": "8d1f1823c7f061ff8893a54add3b6321cc41e0663c68a05ee19207f6c4bc379e"
             },
             {
               "item": "AbilityInvocationClient.runtime",
@@ -8530,6 +8638,54 @@
             {
               "item": "RuntimeAbilityClient.submit_signed",
               "sha256": "f49d71bf5f63a4a6e4bc7e262aec662ebecb9edb446e4ce3a56d0e50a49145e1"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.admission_action",
+              "sha256": "e867aa3a270c602dc7d28e8868c2c97e9254aec219271a04b2fa18e44a3440aa"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.description",
+              "sha256": "a9dac6e45749812608d59c04a0e6247ca49204a029020c76272bf8a2477e2e59"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.descriptor_version",
+              "sha256": "790426f598de193160379ca20a0dfa9b2592946dd0281fbacb1b7486eb2219fe"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.exec",
+              "sha256": "ed6b5bdfd01e0f00558181a9d892ea6b054abd17957bb589eaba2fc25466fd18"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.input_schema",
+              "sha256": "0fe9362a3e179417f8a72614fe5c1cc78410fcdaac23999c2276b5e1ef7b4a53"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.name",
+              "sha256": "a705133e140126ce94e7762d76b4fb452fb1f2ea6fdd1cffdc227ffe0016a0fb"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.namespace",
+              "sha256": "ecf1eaf0df7c742b513e67a80b84df05f1e1c5a29d88add76bdf75f8ed2fc2d2"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.output_schema",
+              "sha256": "9dd3b7d78f38d1a945dc279f373a35f190859fa06de7461c72e480901431563e"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.schema_version",
+              "sha256": "ac49cea2579bca83377d1370db86debac2d59ff89ac749fcc7065cc5f870551d"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.timeout_seconds",
+              "sha256": "e8bfa3e686d505c1447a2fc076067844a7f4b15b4383569f1f95e4613f6d512e"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.to_json",
+              "sha256": "e7f3dff6f3778963bcec3012ed30d208a98371e2dadee73ef4c716647f3c818d"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.to_mapping",
+              "sha256": "4ec4ba7128a191d9caea2d43e1619ba9acb09cd6a80cde09af1e56ad864bb42a"
             }
           ]
         },
@@ -8548,7 +8704,7 @@
             },
             {
               "item": "AbilityInvocationClient",
-              "sha256": "03ef2a38190e01fbe8e7c67448727050516d687dd88cdbaa6b196263e8315fc7"
+              "sha256": "a0ed165dfb9b37fa181859c7235467ad82a5d21bd309669cd833049843926aaf"
             },
             {
               "item": "AbilityTargetRequest",
@@ -8565,6 +8721,10 @@
             {
               "item": "ResolvedAbilityTarget",
               "sha256": "a6e9fa142042c0eb6fffecc67210b2f209e1fa23933383bef7201b9a4f860257"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest",
+              "sha256": "abd462a37770c724992b232d29ca19f9819a0b046326028c2c676791cbfea549"
             },
             {
               "item": "AbilityCallRequest.ability_ura",
@@ -8744,7 +8904,7 @@
             },
             {
               "item": "AbilityInvocationClient.resolve_target",
-              "sha256": "d3e8ad6a766d15bb1ffaf6cbab4a3fd117a510b540e9ec16482211b8c12677bb"
+              "sha256": "8d1f1823c7f061ff8893a54add3b6321cc41e0663c68a05ee19207f6c4bc379e"
             },
             {
               "item": "AbilityInvocationClient.runtime",
@@ -8905,6 +9065,54 @@
             {
               "item": "RuntimeAbilityClient.submit_signed",
               "sha256": "f49d71bf5f63a4a6e4bc7e262aec662ebecb9edb446e4ce3a56d0e50a49145e1"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.admission_action",
+              "sha256": "e867aa3a270c602dc7d28e8868c2c97e9254aec219271a04b2fa18e44a3440aa"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.description",
+              "sha256": "a9dac6e45749812608d59c04a0e6247ca49204a029020c76272bf8a2477e2e59"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.descriptor_version",
+              "sha256": "790426f598de193160379ca20a0dfa9b2592946dd0281fbacb1b7486eb2219fe"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.exec",
+              "sha256": "ed6b5bdfd01e0f00558181a9d892ea6b054abd17957bb589eaba2fc25466fd18"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.input_schema",
+              "sha256": "0fe9362a3e179417f8a72614fe5c1cc78410fcdaac23999c2276b5e1ef7b4a53"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.name",
+              "sha256": "a705133e140126ce94e7762d76b4fb452fb1f2ea6fdd1cffdc227ffe0016a0fb"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.namespace",
+              "sha256": "ecf1eaf0df7c742b513e67a80b84df05f1e1c5a29d88add76bdf75f8ed2fc2d2"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.output_schema",
+              "sha256": "9dd3b7d78f38d1a945dc279f373a35f190859fa06de7461c72e480901431563e"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.schema_version",
+              "sha256": "ac49cea2579bca83377d1370db86debac2d59ff89ac749fcc7065cc5f870551d"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.timeout_seconds",
+              "sha256": "e8bfa3e686d505c1447a2fc076067844a7f4b15b4383569f1f95e4613f6d512e"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.to_json",
+              "sha256": "e7f3dff6f3778963bcec3012ed30d208a98371e2dadee73ef4c716647f3c818d"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.to_mapping",
+              "sha256": "4ec4ba7128a191d9caea2d43e1619ba9acb09cd6a80cde09af1e56ad864bb42a"
             }
           ]
         },
@@ -8923,7 +9131,7 @@
             },
             {
               "item": "AbilityInvocationClient",
-              "sha256": "03ef2a38190e01fbe8e7c67448727050516d687dd88cdbaa6b196263e8315fc7"
+              "sha256": "a0ed165dfb9b37fa181859c7235467ad82a5d21bd309669cd833049843926aaf"
             },
             {
               "item": "AbilityTargetRequest",
@@ -8940,6 +9148,10 @@
             {
               "item": "ResolvedAbilityTarget",
               "sha256": "a6e9fa142042c0eb6fffecc67210b2f209e1fa23933383bef7201b9a4f860257"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest",
+              "sha256": "abd462a37770c724992b232d29ca19f9819a0b046326028c2c676791cbfea549"
             },
             {
               "item": "AbilityCallRequest.ability_ura",
@@ -9119,7 +9331,7 @@
             },
             {
               "item": "AbilityInvocationClient.resolve_target",
-              "sha256": "d3e8ad6a766d15bb1ffaf6cbab4a3fd117a510b540e9ec16482211b8c12677bb"
+              "sha256": "8d1f1823c7f061ff8893a54add3b6321cc41e0663c68a05ee19207f6c4bc379e"
             },
             {
               "item": "AbilityInvocationClient.runtime",
@@ -9280,6 +9492,54 @@
             {
               "item": "RuntimeAbilityClient.submit_signed",
               "sha256": "f49d71bf5f63a4a6e4bc7e262aec662ebecb9edb446e4ce3a56d0e50a49145e1"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.admission_action",
+              "sha256": "e867aa3a270c602dc7d28e8868c2c97e9254aec219271a04b2fa18e44a3440aa"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.description",
+              "sha256": "a9dac6e45749812608d59c04a0e6247ca49204a029020c76272bf8a2477e2e59"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.descriptor_version",
+              "sha256": "790426f598de193160379ca20a0dfa9b2592946dd0281fbacb1b7486eb2219fe"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.exec",
+              "sha256": "ed6b5bdfd01e0f00558181a9d892ea6b054abd17957bb589eaba2fc25466fd18"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.input_schema",
+              "sha256": "0fe9362a3e179417f8a72614fe5c1cc78410fcdaac23999c2276b5e1ef7b4a53"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.name",
+              "sha256": "a705133e140126ce94e7762d76b4fb452fb1f2ea6fdd1cffdc227ffe0016a0fb"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.namespace",
+              "sha256": "ecf1eaf0df7c742b513e67a80b84df05f1e1c5a29d88add76bdf75f8ed2fc2d2"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.output_schema",
+              "sha256": "9dd3b7d78f38d1a945dc279f373a35f190859fa06de7461c72e480901431563e"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.schema_version",
+              "sha256": "ac49cea2579bca83377d1370db86debac2d59ff89ac749fcc7065cc5f870551d"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.timeout_seconds",
+              "sha256": "e8bfa3e686d505c1447a2fc076067844a7f4b15b4383569f1f95e4613f6d512e"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.to_json",
+              "sha256": "e7f3dff6f3778963bcec3012ed30d208a98371e2dadee73ef4c716647f3c818d"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.to_mapping",
+              "sha256": "4ec4ba7128a191d9caea2d43e1619ba9acb09cd6a80cde09af1e56ad864bb42a"
             }
           ]
         },
@@ -9298,7 +9558,7 @@
             },
             {
               "item": "AbilityInvocationClient",
-              "sha256": "03ef2a38190e01fbe8e7c67448727050516d687dd88cdbaa6b196263e8315fc7"
+              "sha256": "a0ed165dfb9b37fa181859c7235467ad82a5d21bd309669cd833049843926aaf"
             },
             {
               "item": "AbilityTargetRequest",
@@ -9315,6 +9575,10 @@
             {
               "item": "ResolvedAbilityTarget",
               "sha256": "a6e9fa142042c0eb6fffecc67210b2f209e1fa23933383bef7201b9a4f860257"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest",
+              "sha256": "abd462a37770c724992b232d29ca19f9819a0b046326028c2c676791cbfea549"
             },
             {
               "item": "AbilityCallRequest.ability_ura",
@@ -9494,7 +9758,7 @@
             },
             {
               "item": "AbilityInvocationClient.resolve_target",
-              "sha256": "d3e8ad6a766d15bb1ffaf6cbab4a3fd117a510b540e9ec16482211b8c12677bb"
+              "sha256": "8d1f1823c7f061ff8893a54add3b6321cc41e0663c68a05ee19207f6c4bc379e"
             },
             {
               "item": "AbilityInvocationClient.runtime",
@@ -9655,6 +9919,54 @@
             {
               "item": "RuntimeAbilityClient.submit_signed",
               "sha256": "f49d71bf5f63a4a6e4bc7e262aec662ebecb9edb446e4ce3a56d0e50a49145e1"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.admission_action",
+              "sha256": "e867aa3a270c602dc7d28e8868c2c97e9254aec219271a04b2fa18e44a3440aa"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.description",
+              "sha256": "a9dac6e45749812608d59c04a0e6247ca49204a029020c76272bf8a2477e2e59"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.descriptor_version",
+              "sha256": "790426f598de193160379ca20a0dfa9b2592946dd0281fbacb1b7486eb2219fe"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.exec",
+              "sha256": "ed6b5bdfd01e0f00558181a9d892ea6b054abd17957bb589eaba2fc25466fd18"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.input_schema",
+              "sha256": "0fe9362a3e179417f8a72614fe5c1cc78410fcdaac23999c2276b5e1ef7b4a53"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.name",
+              "sha256": "a705133e140126ce94e7762d76b4fb452fb1f2ea6fdd1cffdc227ffe0016a0fb"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.namespace",
+              "sha256": "ecf1eaf0df7c742b513e67a80b84df05f1e1c5a29d88add76bdf75f8ed2fc2d2"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.output_schema",
+              "sha256": "9dd3b7d78f38d1a945dc279f373a35f190859fa06de7461c72e480901431563e"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.schema_version",
+              "sha256": "ac49cea2579bca83377d1370db86debac2d59ff89ac749fcc7065cc5f870551d"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.timeout_seconds",
+              "sha256": "e8bfa3e686d505c1447a2fc076067844a7f4b15b4383569f1f95e4613f6d512e"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.to_json",
+              "sha256": "e7f3dff6f3778963bcec3012ed30d208a98371e2dadee73ef4c716647f3c818d"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.to_mapping",
+              "sha256": "4ec4ba7128a191d9caea2d43e1619ba9acb09cd6a80cde09af1e56ad864bb42a"
             }
           ]
         },
@@ -9673,7 +9985,7 @@
             },
             {
               "item": "AbilityInvocationClient",
-              "sha256": "03ef2a38190e01fbe8e7c67448727050516d687dd88cdbaa6b196263e8315fc7"
+              "sha256": "a0ed165dfb9b37fa181859c7235467ad82a5d21bd309669cd833049843926aaf"
             },
             {
               "item": "AbilityTargetRequest",
@@ -9690,6 +10002,10 @@
             {
               "item": "ResolvedAbilityTarget",
               "sha256": "a6e9fa142042c0eb6fffecc67210b2f209e1fa23933383bef7201b9a4f860257"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest",
+              "sha256": "abd462a37770c724992b232d29ca19f9819a0b046326028c2c676791cbfea549"
             },
             {
               "item": "AbilityCallRequest.ability_ura",
@@ -9869,7 +10185,7 @@
             },
             {
               "item": "AbilityInvocationClient.resolve_target",
-              "sha256": "d3e8ad6a766d15bb1ffaf6cbab4a3fd117a510b540e9ec16482211b8c12677bb"
+              "sha256": "8d1f1823c7f061ff8893a54add3b6321cc41e0663c68a05ee19207f6c4bc379e"
             },
             {
               "item": "AbilityInvocationClient.runtime",
@@ -10030,6 +10346,54 @@
             {
               "item": "RuntimeAbilityClient.submit_signed",
               "sha256": "f49d71bf5f63a4a6e4bc7e262aec662ebecb9edb446e4ce3a56d0e50a49145e1"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.admission_action",
+              "sha256": "e867aa3a270c602dc7d28e8868c2c97e9254aec219271a04b2fa18e44a3440aa"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.description",
+              "sha256": "a9dac6e45749812608d59c04a0e6247ca49204a029020c76272bf8a2477e2e59"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.descriptor_version",
+              "sha256": "790426f598de193160379ca20a0dfa9b2592946dd0281fbacb1b7486eb2219fe"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.exec",
+              "sha256": "ed6b5bdfd01e0f00558181a9d892ea6b054abd17957bb589eaba2fc25466fd18"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.input_schema",
+              "sha256": "0fe9362a3e179417f8a72614fe5c1cc78410fcdaac23999c2276b5e1ef7b4a53"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.name",
+              "sha256": "a705133e140126ce94e7762d76b4fb452fb1f2ea6fdd1cffdc227ffe0016a0fb"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.namespace",
+              "sha256": "ecf1eaf0df7c742b513e67a80b84df05f1e1c5a29d88add76bdf75f8ed2fc2d2"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.output_schema",
+              "sha256": "9dd3b7d78f38d1a945dc279f373a35f190859fa06de7461c72e480901431563e"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.schema_version",
+              "sha256": "ac49cea2579bca83377d1370db86debac2d59ff89ac749fcc7065cc5f870551d"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.timeout_seconds",
+              "sha256": "e8bfa3e686d505c1447a2fc076067844a7f4b15b4383569f1f95e4613f6d512e"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.to_json",
+              "sha256": "e7f3dff6f3778963bcec3012ed30d208a98371e2dadee73ef4c716647f3c818d"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.to_mapping",
+              "sha256": "4ec4ba7128a191d9caea2d43e1619ba9acb09cd6a80cde09af1e56ad864bb42a"
             }
           ]
         },
@@ -10048,7 +10412,7 @@
             },
             {
               "item": "AbilityInvocationClient",
-              "sha256": "03ef2a38190e01fbe8e7c67448727050516d687dd88cdbaa6b196263e8315fc7"
+              "sha256": "a0ed165dfb9b37fa181859c7235467ad82a5d21bd309669cd833049843926aaf"
             },
             {
               "item": "AbilityTargetRequest",
@@ -10065,6 +10429,10 @@
             {
               "item": "ResolvedAbilityTarget",
               "sha256": "a6e9fa142042c0eb6fffecc67210b2f209e1fa23933383bef7201b9a4f860257"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest",
+              "sha256": "abd462a37770c724992b232d29ca19f9819a0b046326028c2c676791cbfea549"
             },
             {
               "item": "AbilityCallRequest.ability_ura",
@@ -10244,7 +10612,7 @@
             },
             {
               "item": "AbilityInvocationClient.resolve_target",
-              "sha256": "d3e8ad6a766d15bb1ffaf6cbab4a3fd117a510b540e9ec16482211b8c12677bb"
+              "sha256": "8d1f1823c7f061ff8893a54add3b6321cc41e0663c68a05ee19207f6c4bc379e"
             },
             {
               "item": "AbilityInvocationClient.runtime",
@@ -10405,6 +10773,54 @@
             {
               "item": "RuntimeAbilityClient.submit_signed",
               "sha256": "f49d71bf5f63a4a6e4bc7e262aec662ebecb9edb446e4ce3a56d0e50a49145e1"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.admission_action",
+              "sha256": "e867aa3a270c602dc7d28e8868c2c97e9254aec219271a04b2fa18e44a3440aa"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.description",
+              "sha256": "a9dac6e45749812608d59c04a0e6247ca49204a029020c76272bf8a2477e2e59"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.descriptor_version",
+              "sha256": "790426f598de193160379ca20a0dfa9b2592946dd0281fbacb1b7486eb2219fe"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.exec",
+              "sha256": "ed6b5bdfd01e0f00558181a9d892ea6b054abd17957bb589eaba2fc25466fd18"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.input_schema",
+              "sha256": "0fe9362a3e179417f8a72614fe5c1cc78410fcdaac23999c2276b5e1ef7b4a53"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.name",
+              "sha256": "a705133e140126ce94e7762d76b4fb452fb1f2ea6fdd1cffdc227ffe0016a0fb"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.namespace",
+              "sha256": "ecf1eaf0df7c742b513e67a80b84df05f1e1c5a29d88add76bdf75f8ed2fc2d2"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.output_schema",
+              "sha256": "9dd3b7d78f38d1a945dc279f373a35f190859fa06de7461c72e480901431563e"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.schema_version",
+              "sha256": "ac49cea2579bca83377d1370db86debac2d59ff89ac749fcc7065cc5f870551d"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.timeout_seconds",
+              "sha256": "e8bfa3e686d505c1447a2fc076067844a7f4b15b4383569f1f95e4613f6d512e"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.to_json",
+              "sha256": "e7f3dff6f3778963bcec3012ed30d208a98371e2dadee73ef4c716647f3c818d"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.to_mapping",
+              "sha256": "4ec4ba7128a191d9caea2d43e1619ba9acb09cd6a80cde09af1e56ad864bb42a"
             }
           ]
         },
@@ -10423,7 +10839,7 @@
             },
             {
               "item": "AbilityInvocationClient",
-              "sha256": "03ef2a38190e01fbe8e7c67448727050516d687dd88cdbaa6b196263e8315fc7"
+              "sha256": "a0ed165dfb9b37fa181859c7235467ad82a5d21bd309669cd833049843926aaf"
             },
             {
               "item": "AbilityTargetRequest",
@@ -10440,6 +10856,10 @@
             {
               "item": "ResolvedAbilityTarget",
               "sha256": "a6e9fa142042c0eb6fffecc67210b2f209e1fa23933383bef7201b9a4f860257"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest",
+              "sha256": "abd462a37770c724992b232d29ca19f9819a0b046326028c2c676791cbfea549"
             },
             {
               "item": "AbilityCallRequest.ability_ura",
@@ -10619,7 +11039,7 @@
             },
             {
               "item": "AbilityInvocationClient.resolve_target",
-              "sha256": "d3e8ad6a766d15bb1ffaf6cbab4a3fd117a510b540e9ec16482211b8c12677bb"
+              "sha256": "8d1f1823c7f061ff8893a54add3b6321cc41e0663c68a05ee19207f6c4bc379e"
             },
             {
               "item": "AbilityInvocationClient.runtime",
@@ -10780,6 +11200,54 @@
             {
               "item": "RuntimeAbilityClient.submit_signed",
               "sha256": "f49d71bf5f63a4a6e4bc7e262aec662ebecb9edb446e4ce3a56d0e50a49145e1"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.admission_action",
+              "sha256": "e867aa3a270c602dc7d28e8868c2c97e9254aec219271a04b2fa18e44a3440aa"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.description",
+              "sha256": "a9dac6e45749812608d59c04a0e6247ca49204a029020c76272bf8a2477e2e59"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.descriptor_version",
+              "sha256": "790426f598de193160379ca20a0dfa9b2592946dd0281fbacb1b7486eb2219fe"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.exec",
+              "sha256": "ed6b5bdfd01e0f00558181a9d892ea6b054abd17957bb589eaba2fc25466fd18"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.input_schema",
+              "sha256": "0fe9362a3e179417f8a72614fe5c1cc78410fcdaac23999c2276b5e1ef7b4a53"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.name",
+              "sha256": "a705133e140126ce94e7762d76b4fb452fb1f2ea6fdd1cffdc227ffe0016a0fb"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.namespace",
+              "sha256": "ecf1eaf0df7c742b513e67a80b84df05f1e1c5a29d88add76bdf75f8ed2fc2d2"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.output_schema",
+              "sha256": "9dd3b7d78f38d1a945dc279f373a35f190859fa06de7461c72e480901431563e"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.schema_version",
+              "sha256": "ac49cea2579bca83377d1370db86debac2d59ff89ac749fcc7065cc5f870551d"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.timeout_seconds",
+              "sha256": "e8bfa3e686d505c1447a2fc076067844a7f4b15b4383569f1f95e4613f6d512e"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.to_json",
+              "sha256": "e7f3dff6f3778963bcec3012ed30d208a98371e2dadee73ef4c716647f3c818d"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.to_mapping",
+              "sha256": "4ec4ba7128a191d9caea2d43e1619ba9acb09cd6a80cde09af1e56ad864bb42a"
             }
           ]
         },
@@ -10798,7 +11266,7 @@
             },
             {
               "item": "AbilityInvocationClient",
-              "sha256": "03ef2a38190e01fbe8e7c67448727050516d687dd88cdbaa6b196263e8315fc7"
+              "sha256": "a0ed165dfb9b37fa181859c7235467ad82a5d21bd309669cd833049843926aaf"
             },
             {
               "item": "AbilityTargetRequest",
@@ -10815,6 +11283,10 @@
             {
               "item": "ResolvedAbilityTarget",
               "sha256": "a6e9fa142042c0eb6fffecc67210b2f209e1fa23933383bef7201b9a4f860257"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest",
+              "sha256": "abd462a37770c724992b232d29ca19f9819a0b046326028c2c676791cbfea549"
             },
             {
               "item": "AbilityCallRequest.ability_ura",
@@ -10994,7 +11466,7 @@
             },
             {
               "item": "AbilityInvocationClient.resolve_target",
-              "sha256": "d3e8ad6a766d15bb1ffaf6cbab4a3fd117a510b540e9ec16482211b8c12677bb"
+              "sha256": "8d1f1823c7f061ff8893a54add3b6321cc41e0663c68a05ee19207f6c4bc379e"
             },
             {
               "item": "AbilityInvocationClient.runtime",
@@ -11155,6 +11627,54 @@
             {
               "item": "RuntimeAbilityClient.submit_signed",
               "sha256": "f49d71bf5f63a4a6e4bc7e262aec662ebecb9edb446e4ce3a56d0e50a49145e1"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.admission_action",
+              "sha256": "e867aa3a270c602dc7d28e8868c2c97e9254aec219271a04b2fa18e44a3440aa"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.description",
+              "sha256": "a9dac6e45749812608d59c04a0e6247ca49204a029020c76272bf8a2477e2e59"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.descriptor_version",
+              "sha256": "790426f598de193160379ca20a0dfa9b2592946dd0281fbacb1b7486eb2219fe"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.exec",
+              "sha256": "ed6b5bdfd01e0f00558181a9d892ea6b054abd17957bb589eaba2fc25466fd18"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.input_schema",
+              "sha256": "0fe9362a3e179417f8a72614fe5c1cc78410fcdaac23999c2276b5e1ef7b4a53"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.name",
+              "sha256": "a705133e140126ce94e7762d76b4fb452fb1f2ea6fdd1cffdc227ffe0016a0fb"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.namespace",
+              "sha256": "ecf1eaf0df7c742b513e67a80b84df05f1e1c5a29d88add76bdf75f8ed2fc2d2"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.output_schema",
+              "sha256": "9dd3b7d78f38d1a945dc279f373a35f190859fa06de7461c72e480901431563e"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.schema_version",
+              "sha256": "ac49cea2579bca83377d1370db86debac2d59ff89ac749fcc7065cc5f870551d"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.timeout_seconds",
+              "sha256": "e8bfa3e686d505c1447a2fc076067844a7f4b15b4383569f1f95e4613f6d512e"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.to_json",
+              "sha256": "e7f3dff6f3778963bcec3012ed30d208a98371e2dadee73ef4c716647f3c818d"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.to_mapping",
+              "sha256": "4ec4ba7128a191d9caea2d43e1619ba9acb09cd6a80cde09af1e56ad864bb42a"
             }
           ]
         },
@@ -11173,7 +11693,7 @@
             },
             {
               "item": "AbilityInvocationClient",
-              "sha256": "03ef2a38190e01fbe8e7c67448727050516d687dd88cdbaa6b196263e8315fc7"
+              "sha256": "a0ed165dfb9b37fa181859c7235467ad82a5d21bd309669cd833049843926aaf"
             },
             {
               "item": "AbilityTargetRequest",
@@ -11190,6 +11710,10 @@
             {
               "item": "ResolvedAbilityTarget",
               "sha256": "a6e9fa142042c0eb6fffecc67210b2f209e1fa23933383bef7201b9a4f860257"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest",
+              "sha256": "abd462a37770c724992b232d29ca19f9819a0b046326028c2c676791cbfea549"
             },
             {
               "item": "AbilityCallRequest.ability_ura",
@@ -11369,7 +11893,7 @@
             },
             {
               "item": "AbilityInvocationClient.resolve_target",
-              "sha256": "d3e8ad6a766d15bb1ffaf6cbab4a3fd117a510b540e9ec16482211b8c12677bb"
+              "sha256": "8d1f1823c7f061ff8893a54add3b6321cc41e0663c68a05ee19207f6c4bc379e"
             },
             {
               "item": "AbilityInvocationClient.runtime",
@@ -11530,6 +12054,54 @@
             {
               "item": "RuntimeAbilityClient.submit_signed",
               "sha256": "f49d71bf5f63a4a6e4bc7e262aec662ebecb9edb446e4ce3a56d0e50a49145e1"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.admission_action",
+              "sha256": "e867aa3a270c602dc7d28e8868c2c97e9254aec219271a04b2fa18e44a3440aa"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.description",
+              "sha256": "a9dac6e45749812608d59c04a0e6247ca49204a029020c76272bf8a2477e2e59"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.descriptor_version",
+              "sha256": "790426f598de193160379ca20a0dfa9b2592946dd0281fbacb1b7486eb2219fe"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.exec",
+              "sha256": "ed6b5bdfd01e0f00558181a9d892ea6b054abd17957bb589eaba2fc25466fd18"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.input_schema",
+              "sha256": "0fe9362a3e179417f8a72614fe5c1cc78410fcdaac23999c2276b5e1ef7b4a53"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.name",
+              "sha256": "a705133e140126ce94e7762d76b4fb452fb1f2ea6fdd1cffdc227ffe0016a0fb"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.namespace",
+              "sha256": "ecf1eaf0df7c742b513e67a80b84df05f1e1c5a29d88add76bdf75f8ed2fc2d2"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.output_schema",
+              "sha256": "9dd3b7d78f38d1a945dc279f373a35f190859fa06de7461c72e480901431563e"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.schema_version",
+              "sha256": "ac49cea2579bca83377d1370db86debac2d59ff89ac749fcc7065cc5f870551d"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.timeout_seconds",
+              "sha256": "e8bfa3e686d505c1447a2fc076067844a7f4b15b4383569f1f95e4613f6d512e"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.to_json",
+              "sha256": "e7f3dff6f3778963bcec3012ed30d208a98371e2dadee73ef4c716647f3c818d"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.to_mapping",
+              "sha256": "4ec4ba7128a191d9caea2d43e1619ba9acb09cd6a80cde09af1e56ad864bb42a"
             }
           ]
         },
@@ -11548,7 +12120,7 @@
             },
             {
               "item": "AbilityInvocationClient",
-              "sha256": "03ef2a38190e01fbe8e7c67448727050516d687dd88cdbaa6b196263e8315fc7"
+              "sha256": "a0ed165dfb9b37fa181859c7235467ad82a5d21bd309669cd833049843926aaf"
             },
             {
               "item": "AbilityTargetRequest",
@@ -11565,6 +12137,10 @@
             {
               "item": "ResolvedAbilityTarget",
               "sha256": "a6e9fa142042c0eb6fffecc67210b2f209e1fa23933383bef7201b9a4f860257"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest",
+              "sha256": "abd462a37770c724992b232d29ca19f9819a0b046326028c2c676791cbfea549"
             },
             {
               "item": "AbilityCallRequest.ability_ura",
@@ -11744,7 +12320,7 @@
             },
             {
               "item": "AbilityInvocationClient.resolve_target",
-              "sha256": "d3e8ad6a766d15bb1ffaf6cbab4a3fd117a510b540e9ec16482211b8c12677bb"
+              "sha256": "8d1f1823c7f061ff8893a54add3b6321cc41e0663c68a05ee19207f6c4bc379e"
             },
             {
               "item": "AbilityInvocationClient.runtime",
@@ -11905,6 +12481,54 @@
             {
               "item": "RuntimeAbilityClient.submit_signed",
               "sha256": "f49d71bf5f63a4a6e4bc7e262aec662ebecb9edb446e4ce3a56d0e50a49145e1"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.admission_action",
+              "sha256": "e867aa3a270c602dc7d28e8868c2c97e9254aec219271a04b2fa18e44a3440aa"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.description",
+              "sha256": "a9dac6e45749812608d59c04a0e6247ca49204a029020c76272bf8a2477e2e59"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.descriptor_version",
+              "sha256": "790426f598de193160379ca20a0dfa9b2592946dd0281fbacb1b7486eb2219fe"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.exec",
+              "sha256": "ed6b5bdfd01e0f00558181a9d892ea6b054abd17957bb589eaba2fc25466fd18"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.input_schema",
+              "sha256": "0fe9362a3e179417f8a72614fe5c1cc78410fcdaac23999c2276b5e1ef7b4a53"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.name",
+              "sha256": "a705133e140126ce94e7762d76b4fb452fb1f2ea6fdd1cffdc227ffe0016a0fb"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.namespace",
+              "sha256": "ecf1eaf0df7c742b513e67a80b84df05f1e1c5a29d88add76bdf75f8ed2fc2d2"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.output_schema",
+              "sha256": "9dd3b7d78f38d1a945dc279f373a35f190859fa06de7461c72e480901431563e"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.schema_version",
+              "sha256": "ac49cea2579bca83377d1370db86debac2d59ff89ac749fcc7065cc5f870551d"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.timeout_seconds",
+              "sha256": "e8bfa3e686d505c1447a2fc076067844a7f4b15b4383569f1f95e4613f6d512e"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.to_json",
+              "sha256": "e7f3dff6f3778963bcec3012ed30d208a98371e2dadee73ef4c716647f3c818d"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.to_mapping",
+              "sha256": "4ec4ba7128a191d9caea2d43e1619ba9acb09cd6a80cde09af1e56ad864bb42a"
             }
           ]
         },
@@ -11923,7 +12547,7 @@
             },
             {
               "item": "AbilityInvocationClient",
-              "sha256": "03ef2a38190e01fbe8e7c67448727050516d687dd88cdbaa6b196263e8315fc7"
+              "sha256": "a0ed165dfb9b37fa181859c7235467ad82a5d21bd309669cd833049843926aaf"
             },
             {
               "item": "AbilityTargetRequest",
@@ -11940,6 +12564,10 @@
             {
               "item": "ResolvedAbilityTarget",
               "sha256": "a6e9fa142042c0eb6fffecc67210b2f209e1fa23933383bef7201b9a4f860257"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest",
+              "sha256": "abd462a37770c724992b232d29ca19f9819a0b046326028c2c676791cbfea549"
             },
             {
               "item": "AbilityCallRequest.ability_ura",
@@ -12119,7 +12747,7 @@
             },
             {
               "item": "AbilityInvocationClient.resolve_target",
-              "sha256": "d3e8ad6a766d15bb1ffaf6cbab4a3fd117a510b540e9ec16482211b8c12677bb"
+              "sha256": "8d1f1823c7f061ff8893a54add3b6321cc41e0663c68a05ee19207f6c4bc379e"
             },
             {
               "item": "AbilityInvocationClient.runtime",
@@ -12280,6 +12908,54 @@
             {
               "item": "RuntimeAbilityClient.submit_signed",
               "sha256": "f49d71bf5f63a4a6e4bc7e262aec662ebecb9edb446e4ce3a56d0e50a49145e1"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.admission_action",
+              "sha256": "e867aa3a270c602dc7d28e8868c2c97e9254aec219271a04b2fa18e44a3440aa"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.description",
+              "sha256": "a9dac6e45749812608d59c04a0e6247ca49204a029020c76272bf8a2477e2e59"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.descriptor_version",
+              "sha256": "790426f598de193160379ca20a0dfa9b2592946dd0281fbacb1b7486eb2219fe"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.exec",
+              "sha256": "ed6b5bdfd01e0f00558181a9d892ea6b054abd17957bb589eaba2fc25466fd18"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.input_schema",
+              "sha256": "0fe9362a3e179417f8a72614fe5c1cc78410fcdaac23999c2276b5e1ef7b4a53"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.name",
+              "sha256": "a705133e140126ce94e7762d76b4fb452fb1f2ea6fdd1cffdc227ffe0016a0fb"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.namespace",
+              "sha256": "ecf1eaf0df7c742b513e67a80b84df05f1e1c5a29d88add76bdf75f8ed2fc2d2"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.output_schema",
+              "sha256": "9dd3b7d78f38d1a945dc279f373a35f190859fa06de7461c72e480901431563e"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.schema_version",
+              "sha256": "ac49cea2579bca83377d1370db86debac2d59ff89ac749fcc7065cc5f870551d"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.timeout_seconds",
+              "sha256": "e8bfa3e686d505c1447a2fc076067844a7f4b15b4383569f1f95e4613f6d512e"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.to_json",
+              "sha256": "e7f3dff6f3778963bcec3012ed30d208a98371e2dadee73ef4c716647f3c818d"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.to_mapping",
+              "sha256": "4ec4ba7128a191d9caea2d43e1619ba9acb09cd6a80cde09af1e56ad864bb42a"
             }
           ]
         },
@@ -12298,7 +12974,7 @@
             },
             {
               "item": "AbilityInvocationClient",
-              "sha256": "03ef2a38190e01fbe8e7c67448727050516d687dd88cdbaa6b196263e8315fc7"
+              "sha256": "a0ed165dfb9b37fa181859c7235467ad82a5d21bd309669cd833049843926aaf"
             },
             {
               "item": "AbilityTargetRequest",
@@ -12315,6 +12991,10 @@
             {
               "item": "ResolvedAbilityTarget",
               "sha256": "a6e9fa142042c0eb6fffecc67210b2f209e1fa23933383bef7201b9a4f860257"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest",
+              "sha256": "abd462a37770c724992b232d29ca19f9819a0b046326028c2c676791cbfea549"
             },
             {
               "item": "AbilityCallRequest.ability_ura",
@@ -12494,7 +13174,7 @@
             },
             {
               "item": "AbilityInvocationClient.resolve_target",
-              "sha256": "d3e8ad6a766d15bb1ffaf6cbab4a3fd117a510b540e9ec16482211b8c12677bb"
+              "sha256": "8d1f1823c7f061ff8893a54add3b6321cc41e0663c68a05ee19207f6c4bc379e"
             },
             {
               "item": "AbilityInvocationClient.runtime",
@@ -12655,6 +13335,54 @@
             {
               "item": "RuntimeAbilityClient.submit_signed",
               "sha256": "f49d71bf5f63a4a6e4bc7e262aec662ebecb9edb446e4ce3a56d0e50a49145e1"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.admission_action",
+              "sha256": "e867aa3a270c602dc7d28e8868c2c97e9254aec219271a04b2fa18e44a3440aa"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.description",
+              "sha256": "a9dac6e45749812608d59c04a0e6247ca49204a029020c76272bf8a2477e2e59"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.descriptor_version",
+              "sha256": "790426f598de193160379ca20a0dfa9b2592946dd0281fbacb1b7486eb2219fe"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.exec",
+              "sha256": "ed6b5bdfd01e0f00558181a9d892ea6b054abd17957bb589eaba2fc25466fd18"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.input_schema",
+              "sha256": "0fe9362a3e179417f8a72614fe5c1cc78410fcdaac23999c2276b5e1ef7b4a53"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.name",
+              "sha256": "a705133e140126ce94e7762d76b4fb452fb1f2ea6fdd1cffdc227ffe0016a0fb"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.namespace",
+              "sha256": "ecf1eaf0df7c742b513e67a80b84df05f1e1c5a29d88add76bdf75f8ed2fc2d2"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.output_schema",
+              "sha256": "9dd3b7d78f38d1a945dc279f373a35f190859fa06de7461c72e480901431563e"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.schema_version",
+              "sha256": "ac49cea2579bca83377d1370db86debac2d59ff89ac749fcc7065cc5f870551d"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.timeout_seconds",
+              "sha256": "e8bfa3e686d505c1447a2fc076067844a7f4b15b4383569f1f95e4613f6d512e"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.to_json",
+              "sha256": "e7f3dff6f3778963bcec3012ed30d208a98371e2dadee73ef4c716647f3c818d"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.to_mapping",
+              "sha256": "4ec4ba7128a191d9caea2d43e1619ba9acb09cd6a80cde09af1e56ad864bb42a"
             }
           ]
         },
@@ -12673,7 +13401,7 @@
             },
             {
               "item": "AbilityInvocationClient",
-              "sha256": "03ef2a38190e01fbe8e7c67448727050516d687dd88cdbaa6b196263e8315fc7"
+              "sha256": "a0ed165dfb9b37fa181859c7235467ad82a5d21bd309669cd833049843926aaf"
             },
             {
               "item": "AbilityTargetRequest",
@@ -12690,6 +13418,10 @@
             {
               "item": "ResolvedAbilityTarget",
               "sha256": "a6e9fa142042c0eb6fffecc67210b2f209e1fa23933383bef7201b9a4f860257"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest",
+              "sha256": "abd462a37770c724992b232d29ca19f9819a0b046326028c2c676791cbfea549"
             },
             {
               "item": "AbilityCallRequest.ability_ura",
@@ -12869,7 +13601,7 @@
             },
             {
               "item": "AbilityInvocationClient.resolve_target",
-              "sha256": "d3e8ad6a766d15bb1ffaf6cbab4a3fd117a510b540e9ec16482211b8c12677bb"
+              "sha256": "8d1f1823c7f061ff8893a54add3b6321cc41e0663c68a05ee19207f6c4bc379e"
             },
             {
               "item": "AbilityInvocationClient.runtime",
@@ -13030,6 +13762,54 @@
             {
               "item": "RuntimeAbilityClient.submit_signed",
               "sha256": "f49d71bf5f63a4a6e4bc7e262aec662ebecb9edb446e4ce3a56d0e50a49145e1"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.admission_action",
+              "sha256": "e867aa3a270c602dc7d28e8868c2c97e9254aec219271a04b2fa18e44a3440aa"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.description",
+              "sha256": "a9dac6e45749812608d59c04a0e6247ca49204a029020c76272bf8a2477e2e59"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.descriptor_version",
+              "sha256": "790426f598de193160379ca20a0dfa9b2592946dd0281fbacb1b7486eb2219fe"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.exec",
+              "sha256": "ed6b5bdfd01e0f00558181a9d892ea6b054abd17957bb589eaba2fc25466fd18"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.input_schema",
+              "sha256": "0fe9362a3e179417f8a72614fe5c1cc78410fcdaac23999c2276b5e1ef7b4a53"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.name",
+              "sha256": "a705133e140126ce94e7762d76b4fb452fb1f2ea6fdd1cffdc227ffe0016a0fb"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.namespace",
+              "sha256": "ecf1eaf0df7c742b513e67a80b84df05f1e1c5a29d88add76bdf75f8ed2fc2d2"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.output_schema",
+              "sha256": "9dd3b7d78f38d1a945dc279f373a35f190859fa06de7461c72e480901431563e"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.schema_version",
+              "sha256": "ac49cea2579bca83377d1370db86debac2d59ff89ac749fcc7065cc5f870551d"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.timeout_seconds",
+              "sha256": "e8bfa3e686d505c1447a2fc076067844a7f4b15b4383569f1f95e4613f6d512e"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.to_json",
+              "sha256": "e7f3dff6f3778963bcec3012ed30d208a98371e2dadee73ef4c716647f3c818d"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.to_mapping",
+              "sha256": "4ec4ba7128a191d9caea2d43e1619ba9acb09cd6a80cde09af1e56ad864bb42a"
             }
           ]
         },
@@ -13048,7 +13828,7 @@
             },
             {
               "item": "AbilityInvocationClient",
-              "sha256": "03ef2a38190e01fbe8e7c67448727050516d687dd88cdbaa6b196263e8315fc7"
+              "sha256": "a0ed165dfb9b37fa181859c7235467ad82a5d21bd309669cd833049843926aaf"
             },
             {
               "item": "AbilityTargetRequest",
@@ -13065,6 +13845,10 @@
             {
               "item": "ResolvedAbilityTarget",
               "sha256": "a6e9fa142042c0eb6fffecc67210b2f209e1fa23933383bef7201b9a4f860257"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest",
+              "sha256": "abd462a37770c724992b232d29ca19f9819a0b046326028c2c676791cbfea549"
             },
             {
               "item": "AbilityCallRequest.ability_ura",
@@ -13244,7 +14028,7 @@
             },
             {
               "item": "AbilityInvocationClient.resolve_target",
-              "sha256": "d3e8ad6a766d15bb1ffaf6cbab4a3fd117a510b540e9ec16482211b8c12677bb"
+              "sha256": "8d1f1823c7f061ff8893a54add3b6321cc41e0663c68a05ee19207f6c4bc379e"
             },
             {
               "item": "AbilityInvocationClient.runtime",
@@ -13405,6 +14189,54 @@
             {
               "item": "RuntimeAbilityClient.submit_signed",
               "sha256": "f49d71bf5f63a4a6e4bc7e262aec662ebecb9edb446e4ce3a56d0e50a49145e1"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.admission_action",
+              "sha256": "e867aa3a270c602dc7d28e8868c2c97e9254aec219271a04b2fa18e44a3440aa"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.description",
+              "sha256": "a9dac6e45749812608d59c04a0e6247ca49204a029020c76272bf8a2477e2e59"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.descriptor_version",
+              "sha256": "790426f598de193160379ca20a0dfa9b2592946dd0281fbacb1b7486eb2219fe"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.exec",
+              "sha256": "ed6b5bdfd01e0f00558181a9d892ea6b054abd17957bb589eaba2fc25466fd18"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.input_schema",
+              "sha256": "0fe9362a3e179417f8a72614fe5c1cc78410fcdaac23999c2276b5e1ef7b4a53"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.name",
+              "sha256": "a705133e140126ce94e7762d76b4fb452fb1f2ea6fdd1cffdc227ffe0016a0fb"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.namespace",
+              "sha256": "ecf1eaf0df7c742b513e67a80b84df05f1e1c5a29d88add76bdf75f8ed2fc2d2"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.output_schema",
+              "sha256": "9dd3b7d78f38d1a945dc279f373a35f190859fa06de7461c72e480901431563e"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.schema_version",
+              "sha256": "ac49cea2579bca83377d1370db86debac2d59ff89ac749fcc7065cc5f870551d"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.timeout_seconds",
+              "sha256": "e8bfa3e686d505c1447a2fc076067844a7f4b15b4383569f1f95e4613f6d512e"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.to_json",
+              "sha256": "e7f3dff6f3778963bcec3012ed30d208a98371e2dadee73ef4c716647f3c818d"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.to_mapping",
+              "sha256": "4ec4ba7128a191d9caea2d43e1619ba9acb09cd6a80cde09af1e56ad864bb42a"
             }
           ]
         },
@@ -13423,7 +14255,7 @@
             },
             {
               "item": "AbilityInvocationClient",
-              "sha256": "03ef2a38190e01fbe8e7c67448727050516d687dd88cdbaa6b196263e8315fc7"
+              "sha256": "a0ed165dfb9b37fa181859c7235467ad82a5d21bd309669cd833049843926aaf"
             },
             {
               "item": "AbilityTargetRequest",
@@ -13440,6 +14272,10 @@
             {
               "item": "ResolvedAbilityTarget",
               "sha256": "a6e9fa142042c0eb6fffecc67210b2f209e1fa23933383bef7201b9a4f860257"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest",
+              "sha256": "abd462a37770c724992b232d29ca19f9819a0b046326028c2c676791cbfea549"
             },
             {
               "item": "AbilityCallRequest.ability_ura",
@@ -13619,7 +14455,7 @@
             },
             {
               "item": "AbilityInvocationClient.resolve_target",
-              "sha256": "d3e8ad6a766d15bb1ffaf6cbab4a3fd117a510b540e9ec16482211b8c12677bb"
+              "sha256": "8d1f1823c7f061ff8893a54add3b6321cc41e0663c68a05ee19207f6c4bc379e"
             },
             {
               "item": "AbilityInvocationClient.runtime",
@@ -13780,6 +14616,54 @@
             {
               "item": "RuntimeAbilityClient.submit_signed",
               "sha256": "f49d71bf5f63a4a6e4bc7e262aec662ebecb9edb446e4ce3a56d0e50a49145e1"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.admission_action",
+              "sha256": "e867aa3a270c602dc7d28e8868c2c97e9254aec219271a04b2fa18e44a3440aa"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.description",
+              "sha256": "a9dac6e45749812608d59c04a0e6247ca49204a029020c76272bf8a2477e2e59"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.descriptor_version",
+              "sha256": "790426f598de193160379ca20a0dfa9b2592946dd0281fbacb1b7486eb2219fe"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.exec",
+              "sha256": "ed6b5bdfd01e0f00558181a9d892ea6b054abd17957bb589eaba2fc25466fd18"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.input_schema",
+              "sha256": "0fe9362a3e179417f8a72614fe5c1cc78410fcdaac23999c2276b5e1ef7b4a53"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.name",
+              "sha256": "a705133e140126ce94e7762d76b4fb452fb1f2ea6fdd1cffdc227ffe0016a0fb"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.namespace",
+              "sha256": "ecf1eaf0df7c742b513e67a80b84df05f1e1c5a29d88add76bdf75f8ed2fc2d2"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.output_schema",
+              "sha256": "9dd3b7d78f38d1a945dc279f373a35f190859fa06de7461c72e480901431563e"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.schema_version",
+              "sha256": "ac49cea2579bca83377d1370db86debac2d59ff89ac749fcc7065cc5f870551d"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.timeout_seconds",
+              "sha256": "e8bfa3e686d505c1447a2fc076067844a7f4b15b4383569f1f95e4613f6d512e"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.to_json",
+              "sha256": "e7f3dff6f3778963bcec3012ed30d208a98371e2dadee73ef4c716647f3c818d"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.to_mapping",
+              "sha256": "4ec4ba7128a191d9caea2d43e1619ba9acb09cd6a80cde09af1e56ad864bb42a"
             }
           ]
         },
@@ -13798,7 +14682,7 @@
             },
             {
               "item": "AbilityInvocationClient",
-              "sha256": "03ef2a38190e01fbe8e7c67448727050516d687dd88cdbaa6b196263e8315fc7"
+              "sha256": "a0ed165dfb9b37fa181859c7235467ad82a5d21bd309669cd833049843926aaf"
             },
             {
               "item": "AbilityTargetRequest",
@@ -13815,6 +14699,10 @@
             {
               "item": "ResolvedAbilityTarget",
               "sha256": "a6e9fa142042c0eb6fffecc67210b2f209e1fa23933383bef7201b9a4f860257"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest",
+              "sha256": "abd462a37770c724992b232d29ca19f9819a0b046326028c2c676791cbfea549"
             },
             {
               "item": "AbilityCallRequest.ability_ura",
@@ -13994,7 +14882,7 @@
             },
             {
               "item": "AbilityInvocationClient.resolve_target",
-              "sha256": "d3e8ad6a766d15bb1ffaf6cbab4a3fd117a510b540e9ec16482211b8c12677bb"
+              "sha256": "8d1f1823c7f061ff8893a54add3b6321cc41e0663c68a05ee19207f6c4bc379e"
             },
             {
               "item": "AbilityInvocationClient.runtime",
@@ -14155,6 +15043,54 @@
             {
               "item": "RuntimeAbilityClient.submit_signed",
               "sha256": "f49d71bf5f63a4a6e4bc7e262aec662ebecb9edb446e4ce3a56d0e50a49145e1"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.admission_action",
+              "sha256": "e867aa3a270c602dc7d28e8868c2c97e9254aec219271a04b2fa18e44a3440aa"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.description",
+              "sha256": "a9dac6e45749812608d59c04a0e6247ca49204a029020c76272bf8a2477e2e59"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.descriptor_version",
+              "sha256": "790426f598de193160379ca20a0dfa9b2592946dd0281fbacb1b7486eb2219fe"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.exec",
+              "sha256": "ed6b5bdfd01e0f00558181a9d892ea6b054abd17957bb589eaba2fc25466fd18"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.input_schema",
+              "sha256": "0fe9362a3e179417f8a72614fe5c1cc78410fcdaac23999c2276b5e1ef7b4a53"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.name",
+              "sha256": "a705133e140126ce94e7762d76b4fb452fb1f2ea6fdd1cffdc227ffe0016a0fb"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.namespace",
+              "sha256": "ecf1eaf0df7c742b513e67a80b84df05f1e1c5a29d88add76bdf75f8ed2fc2d2"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.output_schema",
+              "sha256": "9dd3b7d78f38d1a945dc279f373a35f190859fa06de7461c72e480901431563e"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.schema_version",
+              "sha256": "ac49cea2579bca83377d1370db86debac2d59ff89ac749fcc7065cc5f870551d"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.timeout_seconds",
+              "sha256": "e8bfa3e686d505c1447a2fc076067844a7f4b15b4383569f1f95e4613f6d512e"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.to_json",
+              "sha256": "e7f3dff6f3778963bcec3012ed30d208a98371e2dadee73ef4c716647f3c818d"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.to_mapping",
+              "sha256": "4ec4ba7128a191d9caea2d43e1619ba9acb09cd6a80cde09af1e56ad864bb42a"
             }
           ]
         },
@@ -14173,7 +15109,7 @@
             },
             {
               "item": "AbilityInvocationClient",
-              "sha256": "03ef2a38190e01fbe8e7c67448727050516d687dd88cdbaa6b196263e8315fc7"
+              "sha256": "a0ed165dfb9b37fa181859c7235467ad82a5d21bd309669cd833049843926aaf"
             },
             {
               "item": "AbilityTargetRequest",
@@ -14190,6 +15126,10 @@
             {
               "item": "ResolvedAbilityTarget",
               "sha256": "a6e9fa142042c0eb6fffecc67210b2f209e1fa23933383bef7201b9a4f860257"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest",
+              "sha256": "abd462a37770c724992b232d29ca19f9819a0b046326028c2c676791cbfea549"
             },
             {
               "item": "AbilityCallRequest.ability_ura",
@@ -14369,7 +15309,7 @@
             },
             {
               "item": "AbilityInvocationClient.resolve_target",
-              "sha256": "d3e8ad6a766d15bb1ffaf6cbab4a3fd117a510b540e9ec16482211b8c12677bb"
+              "sha256": "8d1f1823c7f061ff8893a54add3b6321cc41e0663c68a05ee19207f6c4bc379e"
             },
             {
               "item": "AbilityInvocationClient.runtime",
@@ -14530,6 +15470,54 @@
             {
               "item": "RuntimeAbilityClient.submit_signed",
               "sha256": "f49d71bf5f63a4a6e4bc7e262aec662ebecb9edb446e4ce3a56d0e50a49145e1"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.admission_action",
+              "sha256": "e867aa3a270c602dc7d28e8868c2c97e9254aec219271a04b2fa18e44a3440aa"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.description",
+              "sha256": "a9dac6e45749812608d59c04a0e6247ca49204a029020c76272bf8a2477e2e59"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.descriptor_version",
+              "sha256": "790426f598de193160379ca20a0dfa9b2592946dd0281fbacb1b7486eb2219fe"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.exec",
+              "sha256": "ed6b5bdfd01e0f00558181a9d892ea6b054abd17957bb589eaba2fc25466fd18"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.input_schema",
+              "sha256": "0fe9362a3e179417f8a72614fe5c1cc78410fcdaac23999c2276b5e1ef7b4a53"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.name",
+              "sha256": "a705133e140126ce94e7762d76b4fb452fb1f2ea6fdd1cffdc227ffe0016a0fb"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.namespace",
+              "sha256": "ecf1eaf0df7c742b513e67a80b84df05f1e1c5a29d88add76bdf75f8ed2fc2d2"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.output_schema",
+              "sha256": "9dd3b7d78f38d1a945dc279f373a35f190859fa06de7461c72e480901431563e"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.schema_version",
+              "sha256": "ac49cea2579bca83377d1370db86debac2d59ff89ac749fcc7065cc5f870551d"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.timeout_seconds",
+              "sha256": "e8bfa3e686d505c1447a2fc076067844a7f4b15b4383569f1f95e4613f6d512e"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.to_json",
+              "sha256": "e7f3dff6f3778963bcec3012ed30d208a98371e2dadee73ef4c716647f3c818d"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.to_mapping",
+              "sha256": "4ec4ba7128a191d9caea2d43e1619ba9acb09cd6a80cde09af1e56ad864bb42a"
             }
           ]
         },
@@ -14548,7 +15536,7 @@
             },
             {
               "item": "AbilityInvocationClient",
-              "sha256": "03ef2a38190e01fbe8e7c67448727050516d687dd88cdbaa6b196263e8315fc7"
+              "sha256": "a0ed165dfb9b37fa181859c7235467ad82a5d21bd309669cd833049843926aaf"
             },
             {
               "item": "AbilityTargetRequest",
@@ -14565,6 +15553,10 @@
             {
               "item": "ResolvedAbilityTarget",
               "sha256": "a6e9fa142042c0eb6fffecc67210b2f209e1fa23933383bef7201b9a4f860257"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest",
+              "sha256": "abd462a37770c724992b232d29ca19f9819a0b046326028c2c676791cbfea549"
             },
             {
               "item": "AbilityCallRequest.ability_ura",
@@ -14744,7 +15736,7 @@
             },
             {
               "item": "AbilityInvocationClient.resolve_target",
-              "sha256": "d3e8ad6a766d15bb1ffaf6cbab4a3fd117a510b540e9ec16482211b8c12677bb"
+              "sha256": "8d1f1823c7f061ff8893a54add3b6321cc41e0663c68a05ee19207f6c4bc379e"
             },
             {
               "item": "AbilityInvocationClient.runtime",
@@ -14905,6 +15897,54 @@
             {
               "item": "RuntimeAbilityClient.submit_signed",
               "sha256": "f49d71bf5f63a4a6e4bc7e262aec662ebecb9edb446e4ce3a56d0e50a49145e1"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.admission_action",
+              "sha256": "e867aa3a270c602dc7d28e8868c2c97e9254aec219271a04b2fa18e44a3440aa"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.description",
+              "sha256": "a9dac6e45749812608d59c04a0e6247ca49204a029020c76272bf8a2477e2e59"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.descriptor_version",
+              "sha256": "790426f598de193160379ca20a0dfa9b2592946dd0281fbacb1b7486eb2219fe"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.exec",
+              "sha256": "ed6b5bdfd01e0f00558181a9d892ea6b054abd17957bb589eaba2fc25466fd18"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.input_schema",
+              "sha256": "0fe9362a3e179417f8a72614fe5c1cc78410fcdaac23999c2276b5e1ef7b4a53"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.name",
+              "sha256": "a705133e140126ce94e7762d76b4fb452fb1f2ea6fdd1cffdc227ffe0016a0fb"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.namespace",
+              "sha256": "ecf1eaf0df7c742b513e67a80b84df05f1e1c5a29d88add76bdf75f8ed2fc2d2"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.output_schema",
+              "sha256": "9dd3b7d78f38d1a945dc279f373a35f190859fa06de7461c72e480901431563e"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.schema_version",
+              "sha256": "ac49cea2579bca83377d1370db86debac2d59ff89ac749fcc7065cc5f870551d"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.timeout_seconds",
+              "sha256": "e8bfa3e686d505c1447a2fc076067844a7f4b15b4383569f1f95e4613f6d512e"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.to_json",
+              "sha256": "e7f3dff6f3778963bcec3012ed30d208a98371e2dadee73ef4c716647f3c818d"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.to_mapping",
+              "sha256": "4ec4ba7128a191d9caea2d43e1619ba9acb09cd6a80cde09af1e56ad864bb42a"
             }
           ]
         },
@@ -14923,7 +15963,7 @@
             },
             {
               "item": "AbilityInvocationClient",
-              "sha256": "03ef2a38190e01fbe8e7c67448727050516d687dd88cdbaa6b196263e8315fc7"
+              "sha256": "a0ed165dfb9b37fa181859c7235467ad82a5d21bd309669cd833049843926aaf"
             },
             {
               "item": "AbilityTargetRequest",
@@ -14940,6 +15980,10 @@
             {
               "item": "ResolvedAbilityTarget",
               "sha256": "a6e9fa142042c0eb6fffecc67210b2f209e1fa23933383bef7201b9a4f860257"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest",
+              "sha256": "abd462a37770c724992b232d29ca19f9819a0b046326028c2c676791cbfea549"
             },
             {
               "item": "AbilityCallRequest.ability_ura",
@@ -15119,7 +16163,7 @@
             },
             {
               "item": "AbilityInvocationClient.resolve_target",
-              "sha256": "d3e8ad6a766d15bb1ffaf6cbab4a3fd117a510b540e9ec16482211b8c12677bb"
+              "sha256": "8d1f1823c7f061ff8893a54add3b6321cc41e0663c68a05ee19207f6c4bc379e"
             },
             {
               "item": "AbilityInvocationClient.runtime",
@@ -15280,6 +16324,54 @@
             {
               "item": "RuntimeAbilityClient.submit_signed",
               "sha256": "f49d71bf5f63a4a6e4bc7e262aec662ebecb9edb446e4ce3a56d0e50a49145e1"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.admission_action",
+              "sha256": "e867aa3a270c602dc7d28e8868c2c97e9254aec219271a04b2fa18e44a3440aa"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.description",
+              "sha256": "a9dac6e45749812608d59c04a0e6247ca49204a029020c76272bf8a2477e2e59"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.descriptor_version",
+              "sha256": "790426f598de193160379ca20a0dfa9b2592946dd0281fbacb1b7486eb2219fe"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.exec",
+              "sha256": "ed6b5bdfd01e0f00558181a9d892ea6b054abd17957bb589eaba2fc25466fd18"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.input_schema",
+              "sha256": "0fe9362a3e179417f8a72614fe5c1cc78410fcdaac23999c2276b5e1ef7b4a53"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.name",
+              "sha256": "a705133e140126ce94e7762d76b4fb452fb1f2ea6fdd1cffdc227ffe0016a0fb"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.namespace",
+              "sha256": "ecf1eaf0df7c742b513e67a80b84df05f1e1c5a29d88add76bdf75f8ed2fc2d2"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.output_schema",
+              "sha256": "9dd3b7d78f38d1a945dc279f373a35f190859fa06de7461c72e480901431563e"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.schema_version",
+              "sha256": "ac49cea2579bca83377d1370db86debac2d59ff89ac749fcc7065cc5f870551d"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.timeout_seconds",
+              "sha256": "e8bfa3e686d505c1447a2fc076067844a7f4b15b4383569f1f95e4613f6d512e"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.to_json",
+              "sha256": "e7f3dff6f3778963bcec3012ed30d208a98371e2dadee73ef4c716647f3c818d"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.to_mapping",
+              "sha256": "4ec4ba7128a191d9caea2d43e1619ba9acb09cd6a80cde09af1e56ad864bb42a"
             }
           ]
         },
@@ -15298,7 +16390,7 @@
             },
             {
               "item": "AbilityInvocationClient",
-              "sha256": "03ef2a38190e01fbe8e7c67448727050516d687dd88cdbaa6b196263e8315fc7"
+              "sha256": "a0ed165dfb9b37fa181859c7235467ad82a5d21bd309669cd833049843926aaf"
             },
             {
               "item": "AbilityTargetRequest",
@@ -15315,6 +16407,10 @@
             {
               "item": "ResolvedAbilityTarget",
               "sha256": "a6e9fa142042c0eb6fffecc67210b2f209e1fa23933383bef7201b9a4f860257"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest",
+              "sha256": "abd462a37770c724992b232d29ca19f9819a0b046326028c2c676791cbfea549"
             },
             {
               "item": "AbilityCallRequest.ability_ura",
@@ -15494,7 +16590,7 @@
             },
             {
               "item": "AbilityInvocationClient.resolve_target",
-              "sha256": "d3e8ad6a766d15bb1ffaf6cbab4a3fd117a510b540e9ec16482211b8c12677bb"
+              "sha256": "8d1f1823c7f061ff8893a54add3b6321cc41e0663c68a05ee19207f6c4bc379e"
             },
             {
               "item": "AbilityInvocationClient.runtime",
@@ -15655,6 +16751,54 @@
             {
               "item": "RuntimeAbilityClient.submit_signed",
               "sha256": "f49d71bf5f63a4a6e4bc7e262aec662ebecb9edb446e4ce3a56d0e50a49145e1"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.admission_action",
+              "sha256": "e867aa3a270c602dc7d28e8868c2c97e9254aec219271a04b2fa18e44a3440aa"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.description",
+              "sha256": "a9dac6e45749812608d59c04a0e6247ca49204a029020c76272bf8a2477e2e59"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.descriptor_version",
+              "sha256": "790426f598de193160379ca20a0dfa9b2592946dd0281fbacb1b7486eb2219fe"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.exec",
+              "sha256": "ed6b5bdfd01e0f00558181a9d892ea6b054abd17957bb589eaba2fc25466fd18"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.input_schema",
+              "sha256": "0fe9362a3e179417f8a72614fe5c1cc78410fcdaac23999c2276b5e1ef7b4a53"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.name",
+              "sha256": "a705133e140126ce94e7762d76b4fb452fb1f2ea6fdd1cffdc227ffe0016a0fb"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.namespace",
+              "sha256": "ecf1eaf0df7c742b513e67a80b84df05f1e1c5a29d88add76bdf75f8ed2fc2d2"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.output_schema",
+              "sha256": "9dd3b7d78f38d1a945dc279f373a35f190859fa06de7461c72e480901431563e"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.schema_version",
+              "sha256": "ac49cea2579bca83377d1370db86debac2d59ff89ac749fcc7065cc5f870551d"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.timeout_seconds",
+              "sha256": "e8bfa3e686d505c1447a2fc076067844a7f4b15b4383569f1f95e4613f6d512e"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.to_json",
+              "sha256": "e7f3dff6f3778963bcec3012ed30d208a98371e2dadee73ef4c716647f3c818d"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.to_mapping",
+              "sha256": "4ec4ba7128a191d9caea2d43e1619ba9acb09cd6a80cde09af1e56ad864bb42a"
             }
           ]
         },
@@ -15673,7 +16817,7 @@
             },
             {
               "item": "AbilityInvocationClient",
-              "sha256": "03ef2a38190e01fbe8e7c67448727050516d687dd88cdbaa6b196263e8315fc7"
+              "sha256": "a0ed165dfb9b37fa181859c7235467ad82a5d21bd309669cd833049843926aaf"
             },
             {
               "item": "AbilityTargetRequest",
@@ -15690,6 +16834,10 @@
             {
               "item": "ResolvedAbilityTarget",
               "sha256": "a6e9fa142042c0eb6fffecc67210b2f209e1fa23933383bef7201b9a4f860257"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest",
+              "sha256": "abd462a37770c724992b232d29ca19f9819a0b046326028c2c676791cbfea549"
             },
             {
               "item": "AbilityCallRequest.ability_ura",
@@ -15869,7 +17017,7 @@
             },
             {
               "item": "AbilityInvocationClient.resolve_target",
-              "sha256": "d3e8ad6a766d15bb1ffaf6cbab4a3fd117a510b540e9ec16482211b8c12677bb"
+              "sha256": "8d1f1823c7f061ff8893a54add3b6321cc41e0663c68a05ee19207f6c4bc379e"
             },
             {
               "item": "AbilityInvocationClient.runtime",
@@ -16030,6 +17178,54 @@
             {
               "item": "RuntimeAbilityClient.submit_signed",
               "sha256": "f49d71bf5f63a4a6e4bc7e262aec662ebecb9edb446e4ce3a56d0e50a49145e1"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.admission_action",
+              "sha256": "e867aa3a270c602dc7d28e8868c2c97e9254aec219271a04b2fa18e44a3440aa"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.description",
+              "sha256": "a9dac6e45749812608d59c04a0e6247ca49204a029020c76272bf8a2477e2e59"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.descriptor_version",
+              "sha256": "790426f598de193160379ca20a0dfa9b2592946dd0281fbacb1b7486eb2219fe"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.exec",
+              "sha256": "ed6b5bdfd01e0f00558181a9d892ea6b054abd17957bb589eaba2fc25466fd18"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.input_schema",
+              "sha256": "0fe9362a3e179417f8a72614fe5c1cc78410fcdaac23999c2276b5e1ef7b4a53"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.name",
+              "sha256": "a705133e140126ce94e7762d76b4fb452fb1f2ea6fdd1cffdc227ffe0016a0fb"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.namespace",
+              "sha256": "ecf1eaf0df7c742b513e67a80b84df05f1e1c5a29d88add76bdf75f8ed2fc2d2"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.output_schema",
+              "sha256": "9dd3b7d78f38d1a945dc279f373a35f190859fa06de7461c72e480901431563e"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.schema_version",
+              "sha256": "ac49cea2579bca83377d1370db86debac2d59ff89ac749fcc7065cc5f870551d"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.timeout_seconds",
+              "sha256": "e8bfa3e686d505c1447a2fc076067844a7f4b15b4383569f1f95e4613f6d512e"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.to_json",
+              "sha256": "e7f3dff6f3778963bcec3012ed30d208a98371e2dadee73ef4c716647f3c818d"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.to_mapping",
+              "sha256": "4ec4ba7128a191d9caea2d43e1619ba9acb09cd6a80cde09af1e56ad864bb42a"
             }
           ]
         },
@@ -16048,7 +17244,7 @@
             },
             {
               "item": "AbilityInvocationClient",
-              "sha256": "03ef2a38190e01fbe8e7c67448727050516d687dd88cdbaa6b196263e8315fc7"
+              "sha256": "a0ed165dfb9b37fa181859c7235467ad82a5d21bd309669cd833049843926aaf"
             },
             {
               "item": "AbilityTargetRequest",
@@ -16065,6 +17261,10 @@
             {
               "item": "ResolvedAbilityTarget",
               "sha256": "a6e9fa142042c0eb6fffecc67210b2f209e1fa23933383bef7201b9a4f860257"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest",
+              "sha256": "abd462a37770c724992b232d29ca19f9819a0b046326028c2c676791cbfea549"
             },
             {
               "item": "AbilityCallRequest.ability_ura",
@@ -16244,7 +17444,7 @@
             },
             {
               "item": "AbilityInvocationClient.resolve_target",
-              "sha256": "d3e8ad6a766d15bb1ffaf6cbab4a3fd117a510b540e9ec16482211b8c12677bb"
+              "sha256": "8d1f1823c7f061ff8893a54add3b6321cc41e0663c68a05ee19207f6c4bc379e"
             },
             {
               "item": "AbilityInvocationClient.runtime",
@@ -16405,6 +17605,54 @@
             {
               "item": "RuntimeAbilityClient.submit_signed",
               "sha256": "f49d71bf5f63a4a6e4bc7e262aec662ebecb9edb446e4ce3a56d0e50a49145e1"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.admission_action",
+              "sha256": "e867aa3a270c602dc7d28e8868c2c97e9254aec219271a04b2fa18e44a3440aa"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.description",
+              "sha256": "a9dac6e45749812608d59c04a0e6247ca49204a029020c76272bf8a2477e2e59"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.descriptor_version",
+              "sha256": "790426f598de193160379ca20a0dfa9b2592946dd0281fbacb1b7486eb2219fe"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.exec",
+              "sha256": "ed6b5bdfd01e0f00558181a9d892ea6b054abd17957bb589eaba2fc25466fd18"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.input_schema",
+              "sha256": "0fe9362a3e179417f8a72614fe5c1cc78410fcdaac23999c2276b5e1ef7b4a53"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.name",
+              "sha256": "a705133e140126ce94e7762d76b4fb452fb1f2ea6fdd1cffdc227ffe0016a0fb"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.namespace",
+              "sha256": "ecf1eaf0df7c742b513e67a80b84df05f1e1c5a29d88add76bdf75f8ed2fc2d2"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.output_schema",
+              "sha256": "9dd3b7d78f38d1a945dc279f373a35f190859fa06de7461c72e480901431563e"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.schema_version",
+              "sha256": "ac49cea2579bca83377d1370db86debac2d59ff89ac749fcc7065cc5f870551d"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.timeout_seconds",
+              "sha256": "e8bfa3e686d505c1447a2fc076067844a7f4b15b4383569f1f95e4613f6d512e"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.to_json",
+              "sha256": "e7f3dff6f3778963bcec3012ed30d208a98371e2dadee73ef4c716647f3c818d"
+            },
+            {
+              "item": "RuntimeAbilityPackageManifest.to_mapping",
+              "sha256": "4ec4ba7128a191d9caea2d43e1619ba9acb09cd6a80cde09af1e56ad864bb42a"
             }
           ]
         }
@@ -31282,6 +32530,10 @@
           "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
         },
         {
+          "item": "canonical_authority_proof_signature_payload",
+          "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
+        },
+        {
           "item": "canonical_host_attestation_bytes",
           "sha256": "aae8026919eddb1b6a7eb17d3d3d9e9e8d8f64aeef440a923a62baf1689a7200"
         },
@@ -31347,6 +32599,10 @@
         },
         {
           "item": "axiom.canonical_authority_proof_bytes",
+          "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
+        },
+        {
+          "item": "axiom.canonical_authority_proof_signature_payload",
           "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
         },
         {
@@ -31465,6 +32721,10 @@
               "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
             },
             {
+              "item": "canonical_authority_proof_signature_payload",
+              "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
+            },
+            {
               "item": "canonical_host_attestation_bytes",
               "sha256": "aae8026919eddb1b6a7eb17d3d3d9e9e8d8f64aeef440a923a62baf1689a7200"
             },
@@ -31530,6 +32790,10 @@
             },
             {
               "item": "axiom.canonical_authority_proof_bytes",
+              "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
+            },
+            {
+              "item": "axiom.canonical_authority_proof_signature_payload",
               "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
             },
             {
@@ -31648,6 +32912,10 @@
               "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
             },
             {
+              "item": "canonical_authority_proof_signature_payload",
+              "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
+            },
+            {
               "item": "canonical_host_attestation_bytes",
               "sha256": "aae8026919eddb1b6a7eb17d3d3d9e9e8d8f64aeef440a923a62baf1689a7200"
             },
@@ -31713,6 +32981,10 @@
             },
             {
               "item": "axiom.canonical_authority_proof_bytes",
+              "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
+            },
+            {
+              "item": "axiom.canonical_authority_proof_signature_payload",
               "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
             },
             {
@@ -31831,6 +33103,10 @@
               "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
             },
             {
+              "item": "canonical_authority_proof_signature_payload",
+              "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
+            },
+            {
               "item": "canonical_host_attestation_bytes",
               "sha256": "aae8026919eddb1b6a7eb17d3d3d9e9e8d8f64aeef440a923a62baf1689a7200"
             },
@@ -31896,6 +33172,10 @@
             },
             {
               "item": "axiom.canonical_authority_proof_bytes",
+              "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
+            },
+            {
+              "item": "axiom.canonical_authority_proof_signature_payload",
               "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
             },
             {
@@ -32014,6 +33294,10 @@
               "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
             },
             {
+              "item": "canonical_authority_proof_signature_payload",
+              "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
+            },
+            {
               "item": "canonical_host_attestation_bytes",
               "sha256": "aae8026919eddb1b6a7eb17d3d3d9e9e8d8f64aeef440a923a62baf1689a7200"
             },
@@ -32079,6 +33363,10 @@
             },
             {
               "item": "axiom.canonical_authority_proof_bytes",
+              "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
+            },
+            {
+              "item": "axiom.canonical_authority_proof_signature_payload",
               "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
             },
             {
@@ -32197,6 +33485,10 @@
               "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
             },
             {
+              "item": "canonical_authority_proof_signature_payload",
+              "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
+            },
+            {
               "item": "canonical_host_attestation_bytes",
               "sha256": "aae8026919eddb1b6a7eb17d3d3d9e9e8d8f64aeef440a923a62baf1689a7200"
             },
@@ -32262,6 +33554,10 @@
             },
             {
               "item": "axiom.canonical_authority_proof_bytes",
+              "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
+            },
+            {
+              "item": "axiom.canonical_authority_proof_signature_payload",
               "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
             },
             {
@@ -32380,6 +33676,10 @@
               "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
             },
             {
+              "item": "canonical_authority_proof_signature_payload",
+              "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
+            },
+            {
               "item": "canonical_host_attestation_bytes",
               "sha256": "aae8026919eddb1b6a7eb17d3d3d9e9e8d8f64aeef440a923a62baf1689a7200"
             },
@@ -32445,6 +33745,10 @@
             },
             {
               "item": "axiom.canonical_authority_proof_bytes",
+              "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
+            },
+            {
+              "item": "axiom.canonical_authority_proof_signature_payload",
               "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
             },
             {
@@ -32563,6 +33867,10 @@
               "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
             },
             {
+              "item": "canonical_authority_proof_signature_payload",
+              "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
+            },
+            {
               "item": "canonical_host_attestation_bytes",
               "sha256": "aae8026919eddb1b6a7eb17d3d3d9e9e8d8f64aeef440a923a62baf1689a7200"
             },
@@ -32628,6 +33936,10 @@
             },
             {
               "item": "axiom.canonical_authority_proof_bytes",
+              "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
+            },
+            {
+              "item": "axiom.canonical_authority_proof_signature_payload",
               "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
             },
             {
@@ -32746,6 +34058,10 @@
               "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
             },
             {
+              "item": "canonical_authority_proof_signature_payload",
+              "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
+            },
+            {
               "item": "canonical_host_attestation_bytes",
               "sha256": "aae8026919eddb1b6a7eb17d3d3d9e9e8d8f64aeef440a923a62baf1689a7200"
             },
@@ -32811,6 +34127,10 @@
             },
             {
               "item": "axiom.canonical_authority_proof_bytes",
+              "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
+            },
+            {
+              "item": "axiom.canonical_authority_proof_signature_payload",
               "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
             },
             {
@@ -32929,6 +34249,10 @@
               "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
             },
             {
+              "item": "canonical_authority_proof_signature_payload",
+              "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
+            },
+            {
               "item": "canonical_host_attestation_bytes",
               "sha256": "aae8026919eddb1b6a7eb17d3d3d9e9e8d8f64aeef440a923a62baf1689a7200"
             },
@@ -32994,6 +34318,10 @@
             },
             {
               "item": "axiom.canonical_authority_proof_bytes",
+              "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
+            },
+            {
+              "item": "axiom.canonical_authority_proof_signature_payload",
               "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
             },
             {
@@ -221359,6 +222687,10 @@
           "sha256": "4a10fc645d35fc137cf4a23333832a4ff1b8e6cef03d45ebf6f40e4f2a9922d0"
         },
         {
+          "item": "HostStreamExec",
+          "sha256": "07f3d3d69ce69c29556a034f013910c55765aa48111458cd0676d244189e21c7"
+        },
+        {
           "item": "RuntimeFrameStream",
           "sha256": "8588f5973f9fe5da25fdb199ca47e85d10b3fb13cd45672deed869ec3a3b4900"
         },
@@ -221401,6 +222733,18 @@
         {
           "item": "FrameStream.recv",
           "sha256": "93ba477a26513cac9b05baeefa807e5ab92cc49f2473b544c2cdef136f97e992"
+        },
+        {
+          "item": "HostStreamExec.function",
+          "sha256": "ad6a4ecae8863c68619059d663df4343b8b02ccf576d8adb69a9afd45f1888ba"
+        },
+        {
+          "item": "HostStreamExec.host_socket",
+          "sha256": "49a065a08b553ce4d2925cf9f7af9e1ba5f9c08308fe543f88559c6c861d61a9"
+        },
+        {
+          "item": "HostStreamExec.to_mapping",
+          "sha256": "2a14304d1cb152ddb7c8950d402ddcbad3c3ac29f3554367e9b5f0adfa1beca0"
         },
         {
           "item": "RuntimeAbilityClient.open_stream",
@@ -221626,6 +222970,10 @@
               "sha256": "4a10fc645d35fc137cf4a23333832a4ff1b8e6cef03d45ebf6f40e4f2a9922d0"
             },
             {
+              "item": "HostStreamExec",
+              "sha256": "07f3d3d69ce69c29556a034f013910c55765aa48111458cd0676d244189e21c7"
+            },
+            {
               "item": "RuntimeFrameStream",
               "sha256": "8588f5973f9fe5da25fdb199ca47e85d10b3fb13cd45672deed869ec3a3b4900"
             },
@@ -221668,6 +223016,18 @@
             {
               "item": "FrameStream.recv",
               "sha256": "93ba477a26513cac9b05baeefa807e5ab92cc49f2473b544c2cdef136f97e992"
+            },
+            {
+              "item": "HostStreamExec.function",
+              "sha256": "ad6a4ecae8863c68619059d663df4343b8b02ccf576d8adb69a9afd45f1888ba"
+            },
+            {
+              "item": "HostStreamExec.host_socket",
+              "sha256": "49a065a08b553ce4d2925cf9f7af9e1ba5f9c08308fe543f88559c6c861d61a9"
+            },
+            {
+              "item": "HostStreamExec.to_mapping",
+              "sha256": "2a14304d1cb152ddb7c8950d402ddcbad3c3ac29f3554367e9b5f0adfa1beca0"
             },
             {
               "item": "RuntimeAbilityClient.open_stream",
@@ -221893,6 +223253,10 @@
               "sha256": "4a10fc645d35fc137cf4a23333832a4ff1b8e6cef03d45ebf6f40e4f2a9922d0"
             },
             {
+              "item": "HostStreamExec",
+              "sha256": "07f3d3d69ce69c29556a034f013910c55765aa48111458cd0676d244189e21c7"
+            },
+            {
               "item": "RuntimeFrameStream",
               "sha256": "8588f5973f9fe5da25fdb199ca47e85d10b3fb13cd45672deed869ec3a3b4900"
             },
@@ -221935,6 +223299,18 @@
             {
               "item": "FrameStream.recv",
               "sha256": "93ba477a26513cac9b05baeefa807e5ab92cc49f2473b544c2cdef136f97e992"
+            },
+            {
+              "item": "HostStreamExec.function",
+              "sha256": "ad6a4ecae8863c68619059d663df4343b8b02ccf576d8adb69a9afd45f1888ba"
+            },
+            {
+              "item": "HostStreamExec.host_socket",
+              "sha256": "49a065a08b553ce4d2925cf9f7af9e1ba5f9c08308fe543f88559c6c861d61a9"
+            },
+            {
+              "item": "HostStreamExec.to_mapping",
+              "sha256": "2a14304d1cb152ddb7c8950d402ddcbad3c3ac29f3554367e9b5f0adfa1beca0"
             },
             {
               "item": "RuntimeAbilityClient.open_stream",
@@ -222160,6 +223536,10 @@
               "sha256": "4a10fc645d35fc137cf4a23333832a4ff1b8e6cef03d45ebf6f40e4f2a9922d0"
             },
             {
+              "item": "HostStreamExec",
+              "sha256": "07f3d3d69ce69c29556a034f013910c55765aa48111458cd0676d244189e21c7"
+            },
+            {
               "item": "RuntimeFrameStream",
               "sha256": "8588f5973f9fe5da25fdb199ca47e85d10b3fb13cd45672deed869ec3a3b4900"
             },
@@ -222202,6 +223582,18 @@
             {
               "item": "FrameStream.recv",
               "sha256": "93ba477a26513cac9b05baeefa807e5ab92cc49f2473b544c2cdef136f97e992"
+            },
+            {
+              "item": "HostStreamExec.function",
+              "sha256": "ad6a4ecae8863c68619059d663df4343b8b02ccf576d8adb69a9afd45f1888ba"
+            },
+            {
+              "item": "HostStreamExec.host_socket",
+              "sha256": "49a065a08b553ce4d2925cf9f7af9e1ba5f9c08308fe543f88559c6c861d61a9"
+            },
+            {
+              "item": "HostStreamExec.to_mapping",
+              "sha256": "2a14304d1cb152ddb7c8950d402ddcbad3c3ac29f3554367e9b5f0adfa1beca0"
             },
             {
               "item": "RuntimeAbilityClient.open_stream",
@@ -222427,6 +223819,10 @@
               "sha256": "4a10fc645d35fc137cf4a23333832a4ff1b8e6cef03d45ebf6f40e4f2a9922d0"
             },
             {
+              "item": "HostStreamExec",
+              "sha256": "07f3d3d69ce69c29556a034f013910c55765aa48111458cd0676d244189e21c7"
+            },
+            {
               "item": "RuntimeFrameStream",
               "sha256": "8588f5973f9fe5da25fdb199ca47e85d10b3fb13cd45672deed869ec3a3b4900"
             },
@@ -222469,6 +223865,18 @@
             {
               "item": "FrameStream.recv",
               "sha256": "93ba477a26513cac9b05baeefa807e5ab92cc49f2473b544c2cdef136f97e992"
+            },
+            {
+              "item": "HostStreamExec.function",
+              "sha256": "ad6a4ecae8863c68619059d663df4343b8b02ccf576d8adb69a9afd45f1888ba"
+            },
+            {
+              "item": "HostStreamExec.host_socket",
+              "sha256": "49a065a08b553ce4d2925cf9f7af9e1ba5f9c08308fe543f88559c6c861d61a9"
+            },
+            {
+              "item": "HostStreamExec.to_mapping",
+              "sha256": "2a14304d1cb152ddb7c8950d402ddcbad3c3ac29f3554367e9b5f0adfa1beca0"
             },
             {
               "item": "RuntimeAbilityClient.open_stream",
@@ -222694,6 +224102,10 @@
               "sha256": "4a10fc645d35fc137cf4a23333832a4ff1b8e6cef03d45ebf6f40e4f2a9922d0"
             },
             {
+              "item": "HostStreamExec",
+              "sha256": "07f3d3d69ce69c29556a034f013910c55765aa48111458cd0676d244189e21c7"
+            },
+            {
               "item": "RuntimeFrameStream",
               "sha256": "8588f5973f9fe5da25fdb199ca47e85d10b3fb13cd45672deed869ec3a3b4900"
             },
@@ -222736,6 +224148,18 @@
             {
               "item": "FrameStream.recv",
               "sha256": "93ba477a26513cac9b05baeefa807e5ab92cc49f2473b544c2cdef136f97e992"
+            },
+            {
+              "item": "HostStreamExec.function",
+              "sha256": "ad6a4ecae8863c68619059d663df4343b8b02ccf576d8adb69a9afd45f1888ba"
+            },
+            {
+              "item": "HostStreamExec.host_socket",
+              "sha256": "49a065a08b553ce4d2925cf9f7af9e1ba5f9c08308fe543f88559c6c861d61a9"
+            },
+            {
+              "item": "HostStreamExec.to_mapping",
+              "sha256": "2a14304d1cb152ddb7c8950d402ddcbad3c3ac29f3554367e9b5f0adfa1beca0"
             },
             {
               "item": "RuntimeAbilityClient.open_stream",
@@ -222961,6 +224385,10 @@
               "sha256": "4a10fc645d35fc137cf4a23333832a4ff1b8e6cef03d45ebf6f40e4f2a9922d0"
             },
             {
+              "item": "HostStreamExec",
+              "sha256": "07f3d3d69ce69c29556a034f013910c55765aa48111458cd0676d244189e21c7"
+            },
+            {
               "item": "RuntimeFrameStream",
               "sha256": "8588f5973f9fe5da25fdb199ca47e85d10b3fb13cd45672deed869ec3a3b4900"
             },
@@ -223003,6 +224431,18 @@
             {
               "item": "FrameStream.recv",
               "sha256": "93ba477a26513cac9b05baeefa807e5ab92cc49f2473b544c2cdef136f97e992"
+            },
+            {
+              "item": "HostStreamExec.function",
+              "sha256": "ad6a4ecae8863c68619059d663df4343b8b02ccf576d8adb69a9afd45f1888ba"
+            },
+            {
+              "item": "HostStreamExec.host_socket",
+              "sha256": "49a065a08b553ce4d2925cf9f7af9e1ba5f9c08308fe543f88559c6c861d61a9"
+            },
+            {
+              "item": "HostStreamExec.to_mapping",
+              "sha256": "2a14304d1cb152ddb7c8950d402ddcbad3c3ac29f3554367e9b5f0adfa1beca0"
             },
             {
               "item": "RuntimeAbilityClient.open_stream",
@@ -223228,6 +224668,10 @@
               "sha256": "4a10fc645d35fc137cf4a23333832a4ff1b8e6cef03d45ebf6f40e4f2a9922d0"
             },
             {
+              "item": "HostStreamExec",
+              "sha256": "07f3d3d69ce69c29556a034f013910c55765aa48111458cd0676d244189e21c7"
+            },
+            {
               "item": "RuntimeFrameStream",
               "sha256": "8588f5973f9fe5da25fdb199ca47e85d10b3fb13cd45672deed869ec3a3b4900"
             },
@@ -223270,6 +224714,18 @@
             {
               "item": "FrameStream.recv",
               "sha256": "93ba477a26513cac9b05baeefa807e5ab92cc49f2473b544c2cdef136f97e992"
+            },
+            {
+              "item": "HostStreamExec.function",
+              "sha256": "ad6a4ecae8863c68619059d663df4343b8b02ccf576d8adb69a9afd45f1888ba"
+            },
+            {
+              "item": "HostStreamExec.host_socket",
+              "sha256": "49a065a08b553ce4d2925cf9f7af9e1ba5f9c08308fe543f88559c6c861d61a9"
+            },
+            {
+              "item": "HostStreamExec.to_mapping",
+              "sha256": "2a14304d1cb152ddb7c8950d402ddcbad3c3ac29f3554367e9b5f0adfa1beca0"
             },
             {
               "item": "RuntimeAbilityClient.open_stream",
@@ -223495,6 +224951,10 @@
               "sha256": "4a10fc645d35fc137cf4a23333832a4ff1b8e6cef03d45ebf6f40e4f2a9922d0"
             },
             {
+              "item": "HostStreamExec",
+              "sha256": "07f3d3d69ce69c29556a034f013910c55765aa48111458cd0676d244189e21c7"
+            },
+            {
               "item": "RuntimeFrameStream",
               "sha256": "8588f5973f9fe5da25fdb199ca47e85d10b3fb13cd45672deed869ec3a3b4900"
             },
@@ -223537,6 +224997,18 @@
             {
               "item": "FrameStream.recv",
               "sha256": "93ba477a26513cac9b05baeefa807e5ab92cc49f2473b544c2cdef136f97e992"
+            },
+            {
+              "item": "HostStreamExec.function",
+              "sha256": "ad6a4ecae8863c68619059d663df4343b8b02ccf576d8adb69a9afd45f1888ba"
+            },
+            {
+              "item": "HostStreamExec.host_socket",
+              "sha256": "49a065a08b553ce4d2925cf9f7af9e1ba5f9c08308fe543f88559c6c861d61a9"
+            },
+            {
+              "item": "HostStreamExec.to_mapping",
+              "sha256": "2a14304d1cb152ddb7c8950d402ddcbad3c3ac29f3554367e9b5f0adfa1beca0"
             },
             {
               "item": "RuntimeAbilityClient.open_stream",
@@ -223762,6 +225234,10 @@
               "sha256": "4a10fc645d35fc137cf4a23333832a4ff1b8e6cef03d45ebf6f40e4f2a9922d0"
             },
             {
+              "item": "HostStreamExec",
+              "sha256": "07f3d3d69ce69c29556a034f013910c55765aa48111458cd0676d244189e21c7"
+            },
+            {
               "item": "RuntimeFrameStream",
               "sha256": "8588f5973f9fe5da25fdb199ca47e85d10b3fb13cd45672deed869ec3a3b4900"
             },
@@ -223804,6 +225280,18 @@
             {
               "item": "FrameStream.recv",
               "sha256": "93ba477a26513cac9b05baeefa807e5ab92cc49f2473b544c2cdef136f97e992"
+            },
+            {
+              "item": "HostStreamExec.function",
+              "sha256": "ad6a4ecae8863c68619059d663df4343b8b02ccf576d8adb69a9afd45f1888ba"
+            },
+            {
+              "item": "HostStreamExec.host_socket",
+              "sha256": "49a065a08b553ce4d2925cf9f7af9e1ba5f9c08308fe543f88559c6c861d61a9"
+            },
+            {
+              "item": "HostStreamExec.to_mapping",
+              "sha256": "2a14304d1cb152ddb7c8950d402ddcbad3c3ac29f3554367e9b5f0adfa1beca0"
             },
             {
               "item": "RuntimeAbilityClient.open_stream",
@@ -224029,6 +225517,10 @@
               "sha256": "4a10fc645d35fc137cf4a23333832a4ff1b8e6cef03d45ebf6f40e4f2a9922d0"
             },
             {
+              "item": "HostStreamExec",
+              "sha256": "07f3d3d69ce69c29556a034f013910c55765aa48111458cd0676d244189e21c7"
+            },
+            {
               "item": "RuntimeFrameStream",
               "sha256": "8588f5973f9fe5da25fdb199ca47e85d10b3fb13cd45672deed869ec3a3b4900"
             },
@@ -224071,6 +225563,18 @@
             {
               "item": "FrameStream.recv",
               "sha256": "93ba477a26513cac9b05baeefa807e5ab92cc49f2473b544c2cdef136f97e992"
+            },
+            {
+              "item": "HostStreamExec.function",
+              "sha256": "ad6a4ecae8863c68619059d663df4343b8b02ccf576d8adb69a9afd45f1888ba"
+            },
+            {
+              "item": "HostStreamExec.host_socket",
+              "sha256": "49a065a08b553ce4d2925cf9f7af9e1ba5f9c08308fe543f88559c6c861d61a9"
+            },
+            {
+              "item": "HostStreamExec.to_mapping",
+              "sha256": "2a14304d1cb152ddb7c8950d402ddcbad3c3ac29f3554367e9b5f0adfa1beca0"
             },
             {
               "item": "RuntimeAbilityClient.open_stream",
@@ -224296,6 +225800,10 @@
               "sha256": "4a10fc645d35fc137cf4a23333832a4ff1b8e6cef03d45ebf6f40e4f2a9922d0"
             },
             {
+              "item": "HostStreamExec",
+              "sha256": "07f3d3d69ce69c29556a034f013910c55765aa48111458cd0676d244189e21c7"
+            },
+            {
               "item": "RuntimeFrameStream",
               "sha256": "8588f5973f9fe5da25fdb199ca47e85d10b3fb13cd45672deed869ec3a3b4900"
             },
@@ -224338,6 +225846,18 @@
             {
               "item": "FrameStream.recv",
               "sha256": "93ba477a26513cac9b05baeefa807e5ab92cc49f2473b544c2cdef136f97e992"
+            },
+            {
+              "item": "HostStreamExec.function",
+              "sha256": "ad6a4ecae8863c68619059d663df4343b8b02ccf576d8adb69a9afd45f1888ba"
+            },
+            {
+              "item": "HostStreamExec.host_socket",
+              "sha256": "49a065a08b553ce4d2925cf9f7af9e1ba5f9c08308fe543f88559c6c861d61a9"
+            },
+            {
+              "item": "HostStreamExec.to_mapping",
+              "sha256": "2a14304d1cb152ddb7c8950d402ddcbad3c3ac29f3554367e9b5f0adfa1beca0"
             },
             {
               "item": "RuntimeAbilityClient.open_stream",
@@ -224563,6 +226083,10 @@
               "sha256": "4a10fc645d35fc137cf4a23333832a4ff1b8e6cef03d45ebf6f40e4f2a9922d0"
             },
             {
+              "item": "HostStreamExec",
+              "sha256": "07f3d3d69ce69c29556a034f013910c55765aa48111458cd0676d244189e21c7"
+            },
+            {
               "item": "RuntimeFrameStream",
               "sha256": "8588f5973f9fe5da25fdb199ca47e85d10b3fb13cd45672deed869ec3a3b4900"
             },
@@ -224605,6 +226129,18 @@
             {
               "item": "FrameStream.recv",
               "sha256": "93ba477a26513cac9b05baeefa807e5ab92cc49f2473b544c2cdef136f97e992"
+            },
+            {
+              "item": "HostStreamExec.function",
+              "sha256": "ad6a4ecae8863c68619059d663df4343b8b02ccf576d8adb69a9afd45f1888ba"
+            },
+            {
+              "item": "HostStreamExec.host_socket",
+              "sha256": "49a065a08b553ce4d2925cf9f7af9e1ba5f9c08308fe543f88559c6c861d61a9"
+            },
+            {
+              "item": "HostStreamExec.to_mapping",
+              "sha256": "2a14304d1cb152ddb7c8950d402ddcbad3c3ac29f3554367e9b5f0adfa1beca0"
             },
             {
               "item": "RuntimeAbilityClient.open_stream",
@@ -224830,6 +226366,10 @@
               "sha256": "4a10fc645d35fc137cf4a23333832a4ff1b8e6cef03d45ebf6f40e4f2a9922d0"
             },
             {
+              "item": "HostStreamExec",
+              "sha256": "07f3d3d69ce69c29556a034f013910c55765aa48111458cd0676d244189e21c7"
+            },
+            {
               "item": "RuntimeFrameStream",
               "sha256": "8588f5973f9fe5da25fdb199ca47e85d10b3fb13cd45672deed869ec3a3b4900"
             },
@@ -224872,6 +226412,18 @@
             {
               "item": "FrameStream.recv",
               "sha256": "93ba477a26513cac9b05baeefa807e5ab92cc49f2473b544c2cdef136f97e992"
+            },
+            {
+              "item": "HostStreamExec.function",
+              "sha256": "ad6a4ecae8863c68619059d663df4343b8b02ccf576d8adb69a9afd45f1888ba"
+            },
+            {
+              "item": "HostStreamExec.host_socket",
+              "sha256": "49a065a08b553ce4d2925cf9f7af9e1ba5f9c08308fe543f88559c6c861d61a9"
+            },
+            {
+              "item": "HostStreamExec.to_mapping",
+              "sha256": "2a14304d1cb152ddb7c8950d402ddcbad3c3ac29f3554367e9b5f0adfa1beca0"
             },
             {
               "item": "RuntimeAbilityClient.open_stream",
@@ -225097,6 +226649,10 @@
               "sha256": "4a10fc645d35fc137cf4a23333832a4ff1b8e6cef03d45ebf6f40e4f2a9922d0"
             },
             {
+              "item": "HostStreamExec",
+              "sha256": "07f3d3d69ce69c29556a034f013910c55765aa48111458cd0676d244189e21c7"
+            },
+            {
               "item": "RuntimeFrameStream",
               "sha256": "8588f5973f9fe5da25fdb199ca47e85d10b3fb13cd45672deed869ec3a3b4900"
             },
@@ -225139,6 +226695,18 @@
             {
               "item": "FrameStream.recv",
               "sha256": "93ba477a26513cac9b05baeefa807e5ab92cc49f2473b544c2cdef136f97e992"
+            },
+            {
+              "item": "HostStreamExec.function",
+              "sha256": "ad6a4ecae8863c68619059d663df4343b8b02ccf576d8adb69a9afd45f1888ba"
+            },
+            {
+              "item": "HostStreamExec.host_socket",
+              "sha256": "49a065a08b553ce4d2925cf9f7af9e1ba5f9c08308fe543f88559c6c861d61a9"
+            },
+            {
+              "item": "HostStreamExec.to_mapping",
+              "sha256": "2a14304d1cb152ddb7c8950d402ddcbad3c3ac29f3554367e9b5f0adfa1beca0"
             },
             {
               "item": "RuntimeAbilityClient.open_stream",
@@ -225364,6 +226932,10 @@
               "sha256": "4a10fc645d35fc137cf4a23333832a4ff1b8e6cef03d45ebf6f40e4f2a9922d0"
             },
             {
+              "item": "HostStreamExec",
+              "sha256": "07f3d3d69ce69c29556a034f013910c55765aa48111458cd0676d244189e21c7"
+            },
+            {
               "item": "RuntimeFrameStream",
               "sha256": "8588f5973f9fe5da25fdb199ca47e85d10b3fb13cd45672deed869ec3a3b4900"
             },
@@ -225406,6 +226978,18 @@
             {
               "item": "FrameStream.recv",
               "sha256": "93ba477a26513cac9b05baeefa807e5ab92cc49f2473b544c2cdef136f97e992"
+            },
+            {
+              "item": "HostStreamExec.function",
+              "sha256": "ad6a4ecae8863c68619059d663df4343b8b02ccf576d8adb69a9afd45f1888ba"
+            },
+            {
+              "item": "HostStreamExec.host_socket",
+              "sha256": "49a065a08b553ce4d2925cf9f7af9e1ba5f9c08308fe543f88559c6c861d61a9"
+            },
+            {
+              "item": "HostStreamExec.to_mapping",
+              "sha256": "2a14304d1cb152ddb7c8950d402ddcbad3c3ac29f3554367e9b5f0adfa1beca0"
             },
             {
               "item": "RuntimeAbilityClient.open_stream",
@@ -225631,6 +227215,10 @@
               "sha256": "4a10fc645d35fc137cf4a23333832a4ff1b8e6cef03d45ebf6f40e4f2a9922d0"
             },
             {
+              "item": "HostStreamExec",
+              "sha256": "07f3d3d69ce69c29556a034f013910c55765aa48111458cd0676d244189e21c7"
+            },
+            {
               "item": "RuntimeFrameStream",
               "sha256": "8588f5973f9fe5da25fdb199ca47e85d10b3fb13cd45672deed869ec3a3b4900"
             },
@@ -225673,6 +227261,18 @@
             {
               "item": "FrameStream.recv",
               "sha256": "93ba477a26513cac9b05baeefa807e5ab92cc49f2473b544c2cdef136f97e992"
+            },
+            {
+              "item": "HostStreamExec.function",
+              "sha256": "ad6a4ecae8863c68619059d663df4343b8b02ccf576d8adb69a9afd45f1888ba"
+            },
+            {
+              "item": "HostStreamExec.host_socket",
+              "sha256": "49a065a08b553ce4d2925cf9f7af9e1ba5f9c08308fe543f88559c6c861d61a9"
+            },
+            {
+              "item": "HostStreamExec.to_mapping",
+              "sha256": "2a14304d1cb152ddb7c8950d402ddcbad3c3ac29f3554367e9b5f0adfa1beca0"
             },
             {
               "item": "RuntimeAbilityClient.open_stream",
@@ -225898,6 +227498,10 @@
               "sha256": "4a10fc645d35fc137cf4a23333832a4ff1b8e6cef03d45ebf6f40e4f2a9922d0"
             },
             {
+              "item": "HostStreamExec",
+              "sha256": "07f3d3d69ce69c29556a034f013910c55765aa48111458cd0676d244189e21c7"
+            },
+            {
               "item": "RuntimeFrameStream",
               "sha256": "8588f5973f9fe5da25fdb199ca47e85d10b3fb13cd45672deed869ec3a3b4900"
             },
@@ -225940,6 +227544,18 @@
             {
               "item": "FrameStream.recv",
               "sha256": "93ba477a26513cac9b05baeefa807e5ab92cc49f2473b544c2cdef136f97e992"
+            },
+            {
+              "item": "HostStreamExec.function",
+              "sha256": "ad6a4ecae8863c68619059d663df4343b8b02ccf576d8adb69a9afd45f1888ba"
+            },
+            {
+              "item": "HostStreamExec.host_socket",
+              "sha256": "49a065a08b553ce4d2925cf9f7af9e1ba5f9c08308fe543f88559c6c861d61a9"
+            },
+            {
+              "item": "HostStreamExec.to_mapping",
+              "sha256": "2a14304d1cb152ddb7c8950d402ddcbad3c3ac29f3554367e9b5f0adfa1beca0"
             },
             {
               "item": "RuntimeAbilityClient.open_stream",
@@ -279877,7 +281493,7 @@
         },
         {
           "item": "RuntimeAbilityClient",
-          "sha256": "e355817c3ea9c4e485f4f2a25acbbd0379390a6dd6fece3beaebda098e1d24fd"
+          "sha256": "41dffd3d1be7adba72bf7c88bd3d30f6774c8337e5a0aece74351adfbdac2fc1"
         },
         {
           "item": "RuntimeCallContext",
@@ -280316,7 +281932,7 @@
             },
             {
               "item": "RuntimeAbilityClient",
-              "sha256": "e355817c3ea9c4e485f4f2a25acbbd0379390a6dd6fece3beaebda098e1d24fd"
+              "sha256": "41dffd3d1be7adba72bf7c88bd3d30f6774c8337e5a0aece74351adfbdac2fc1"
             },
             {
               "item": "RuntimeCallContext",
@@ -280755,7 +282371,7 @@
             },
             {
               "item": "RuntimeAbilityClient",
-              "sha256": "e355817c3ea9c4e485f4f2a25acbbd0379390a6dd6fece3beaebda098e1d24fd"
+              "sha256": "41dffd3d1be7adba72bf7c88bd3d30f6774c8337e5a0aece74351adfbdac2fc1"
             },
             {
               "item": "RuntimeCallContext",
@@ -281194,7 +282810,7 @@
             },
             {
               "item": "RuntimeAbilityClient",
-              "sha256": "e355817c3ea9c4e485f4f2a25acbbd0379390a6dd6fece3beaebda098e1d24fd"
+              "sha256": "41dffd3d1be7adba72bf7c88bd3d30f6774c8337e5a0aece74351adfbdac2fc1"
             },
             {
               "item": "RuntimeCallContext",
@@ -281633,7 +283249,7 @@
             },
             {
               "item": "RuntimeAbilityClient",
-              "sha256": "e355817c3ea9c4e485f4f2a25acbbd0379390a6dd6fece3beaebda098e1d24fd"
+              "sha256": "41dffd3d1be7adba72bf7c88bd3d30f6774c8337e5a0aece74351adfbdac2fc1"
             },
             {
               "item": "RuntimeCallContext",
@@ -282072,7 +283688,7 @@
             },
             {
               "item": "RuntimeAbilityClient",
-              "sha256": "e355817c3ea9c4e485f4f2a25acbbd0379390a6dd6fece3beaebda098e1d24fd"
+              "sha256": "41dffd3d1be7adba72bf7c88bd3d30f6774c8337e5a0aece74351adfbdac2fc1"
             },
             {
               "item": "RuntimeCallContext",
@@ -282511,7 +284127,7 @@
             },
             {
               "item": "RuntimeAbilityClient",
-              "sha256": "e355817c3ea9c4e485f4f2a25acbbd0379390a6dd6fece3beaebda098e1d24fd"
+              "sha256": "41dffd3d1be7adba72bf7c88bd3d30f6774c8337e5a0aece74351adfbdac2fc1"
             },
             {
               "item": "RuntimeCallContext",
@@ -282950,7 +284566,7 @@
             },
             {
               "item": "RuntimeAbilityClient",
-              "sha256": "e355817c3ea9c4e485f4f2a25acbbd0379390a6dd6fece3beaebda098e1d24fd"
+              "sha256": "41dffd3d1be7adba72bf7c88bd3d30f6774c8337e5a0aece74351adfbdac2fc1"
             },
             {
               "item": "RuntimeCallContext",
@@ -283389,7 +285005,7 @@
             },
             {
               "item": "RuntimeAbilityClient",
-              "sha256": "e355817c3ea9c4e485f4f2a25acbbd0379390a6dd6fece3beaebda098e1d24fd"
+              "sha256": "41dffd3d1be7adba72bf7c88bd3d30f6774c8337e5a0aece74351adfbdac2fc1"
             },
             {
               "item": "RuntimeCallContext",
@@ -283828,7 +285444,7 @@
             },
             {
               "item": "RuntimeAbilityClient",
-              "sha256": "e355817c3ea9c4e485f4f2a25acbbd0379390a6dd6fece3beaebda098e1d24fd"
+              "sha256": "41dffd3d1be7adba72bf7c88bd3d30f6774c8337e5a0aece74351adfbdac2fc1"
             },
             {
               "item": "RuntimeCallContext",
@@ -284267,7 +285883,7 @@
             },
             {
               "item": "RuntimeAbilityClient",
-              "sha256": "e355817c3ea9c4e485f4f2a25acbbd0379390a6dd6fece3beaebda098e1d24fd"
+              "sha256": "41dffd3d1be7adba72bf7c88bd3d30f6774c8337e5a0aece74351adfbdac2fc1"
             },
             {
               "item": "RuntimeCallContext",
@@ -284706,7 +286322,7 @@
             },
             {
               "item": "RuntimeAbilityClient",
-              "sha256": "e355817c3ea9c4e485f4f2a25acbbd0379390a6dd6fece3beaebda098e1d24fd"
+              "sha256": "41dffd3d1be7adba72bf7c88bd3d30f6774c8337e5a0aece74351adfbdac2fc1"
             },
             {
               "item": "RuntimeCallContext",
@@ -285145,7 +286761,7 @@
             },
             {
               "item": "RuntimeAbilityClient",
-              "sha256": "e355817c3ea9c4e485f4f2a25acbbd0379390a6dd6fece3beaebda098e1d24fd"
+              "sha256": "41dffd3d1be7adba72bf7c88bd3d30f6774c8337e5a0aece74351adfbdac2fc1"
             },
             {
               "item": "RuntimeCallContext",
@@ -285584,7 +287200,7 @@
             },
             {
               "item": "RuntimeAbilityClient",
-              "sha256": "e355817c3ea9c4e485f4f2a25acbbd0379390a6dd6fece3beaebda098e1d24fd"
+              "sha256": "41dffd3d1be7adba72bf7c88bd3d30f6774c8337e5a0aece74351adfbdac2fc1"
             },
             {
               "item": "RuntimeCallContext",

@@ -2267,7 +2267,7 @@ class _DirectAbilityRuntimeTransport:
     def resolve_descriptor_ref(self, request_json: bytes) -> bytes:
         request = json.loads(request_json.decode("utf-8"))
         if request != {
-            "ability": ABILITY_URA,
+            "ability": ABILITY_PUBLIC_NAME,
             "callee_ura": CALLEE_URA,
             "call_mode": "rpc",
             "caller_ura": "easynet:///r/example/agent/alice.sdk",

@@ -198,15 +198,15 @@ def test_runtime_ability_descriptor_provider_rejects_legacy_version_alias() -> N
                 "ability_ura": "easynet:///r/example/ability/authority.observe.health",
                 "owner_ura": "easynet:///r/example/authority",
                 "version": "1.0.0",
+                "descriptor_version": "2.0.0",
                 "call_mode": "rpc",
             }
         ]
     }
 
-    with pytest.raises(SDKError) as caught:
-        provider.list(AbilityDescriptorListRequest(call=_call()))
+    page = provider.list(AbilityDescriptorListRequest(call=_call()))
 
-    assert "ability descriptor row 0 is missing identity fields" in str(caught.value)
+    assert page.descriptors[0].version == "2.0.0"
 
 
 def test_runtime_ability_descriptor_provider_get_rejects_ambiguous_descriptors() -> None:

@@ -312,6 +312,50 @@ func TestRuntimeAbilityClientBuildsCompleteCanonicalDraft(t *testing.T) {
 	}
 }
 
+func TestRuntimeAbilityClientCatalogueReadResolvesDescriptorWithRealmAuthoritySubject(t *testing.T) {
+	var seen RuntimeDescriptorRefRequest
+	runtime, err := NewRuntimeClient(RuntimeTransportFunc{
+		ResolveDescriptorRefFunc: func(ctx context.Context, requestJSON []byte) ([]byte, error) {
+			if err := json.Unmarshal(requestJSON, &seen); err != nil {
+				return nil, err
+			}
+			return testResolveDescriptorRef(t)(ctx, requestJSON)
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
+	}
+	client, err := NewRuntimeAbilityClient(runtime, NewCanonicalAddressing())
+	if err != nil {
+		t.Fatalf("NewRuntimeAbilityClient: %v", err)
+	}
+	call := runtimeAbilityTestContext()
+	call.CalleeURA = "easynet:///r/example/device/device-1"
+	call.SubjectURA = call.CalleeURA
+
+	draft, err := client.buildWithCallModePolicy(
+		context.Background(),
+		call,
+		"meta.list_abilities",
+		map[string]any{},
+		"rpc",
+		runtimeAbilityCatalogueReadPolicy(),
+	)
+	if err != nil {
+		t.Fatalf("buildWithCallModePolicy: %v", err)
+	}
+
+	if draft.SubjectURA() != "easynet:///r/example/device/device-1" {
+		t.Fatalf("draft subject_ura = %q, want runtime owner", draft.SubjectURA())
+	}
+	if seen.SubjectURA != "easynet:///r/example/authority" {
+		t.Fatalf("descriptor request subject_ura = %q, want realm authority", seen.SubjectURA)
+	}
+	if seen.Provider != runtimeAbilityDescriptorProvider {
+		t.Fatalf("descriptor provider = %q, want %q", seen.Provider, runtimeAbilityDescriptorProvider)
+	}
+}
+
 func TestRuntimeAbilityClientInvokesObjectResult(t *testing.T) {
 	var seen map[string]any
 	transport := RuntimeTransportFunc{InvokeFunc: func(_ context.Context, raw []byte) ([]byte, error) {

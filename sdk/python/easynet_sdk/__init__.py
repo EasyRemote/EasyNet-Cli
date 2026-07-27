@@ -13,6 +13,10 @@ from .ability_descriptor import (
     parse_ability_descriptor_ref,
     project_ability_descriptor,
 )
+from .ability_package import (
+    HostStreamExec,
+    RuntimeAbilityPackageManifest,
+)
 from .access_control import (
     AccessControlAbilityCallTrace,
     AccessControlAdmissionExplainRequest,
@@ -390,6 +394,7 @@ __all__ = [
     "AbilityDescriptorProvider",
     "AbilityDescriptorRef",
     "AbilityInvocationClient",
+    "RuntimeAbilityPackageManifest",
     "AbilityRef",
     "AbilityTargetRequest",
     "AccessControlAbilityCallTrace",
@@ -570,6 +575,7 @@ __all__ = [
     "RotatePrincipalKeyRequest",
     "RuntimeAbilityClient",
     "RuntimeAbilityDescriptorProvider",
+    "HostStreamExec",
     "RuntimeAccessControlProvider",
     "RuntimeAdminAbilityClient",
     "RuntimeAdminClient",
@@ -705,6 +711,7 @@ __all__ = [
 _ROOT_MODULE_EXPORTS = (
     "ability_descriptor",
     "ability_invocation",
+    "ability_package",
     "access_control",
     "authority",
     "authorized_runtime_session",

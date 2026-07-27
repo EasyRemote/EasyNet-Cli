@@ -240,6 +240,7 @@ func TestRuntimeAbilityDescriptorProviderRejectsLegacyVersionAlias(t *testing.T)
 			"ability_ura":"easynet:///r/example/ability/authority.observe.health",
 			"owner_ura":"easynet:///r/example/authority",
 			"version":"1.0.0",
+			"descriptor_version":"2.0.0",
 			"call_mode":"rpc"
 		}]}`, "", false), nil
 	}, ResolveDescriptorRefFunc: testResolveDescriptorRef(t)}
@@ -247,11 +248,14 @@ func TestRuntimeAbilityDescriptorProviderRejectsLegacyVersionAlias(t *testing.T)
 	ability, _ := NewRuntimeAbilityClient(runtime, NewCanonicalAddressing())
 	provider, _ := NewRuntimeAbilityDescriptorProvider(ability)
 
-	_, err := provider.List(context.Background(), AbilityDescriptorListRequest{
+	page, err := provider.List(context.Background(), AbilityDescriptorListRequest{
 		Call: runtimeAbilityTestContext(),
 	})
-	if err == nil || !strings.Contains(err.Error(), "ability descriptor row 0 is missing identity fields") {
-		t.Fatalf("legacy version alias error = %v", err)
+	if err != nil {
+		t.Fatalf("List with descriptor_version field: %v", err)
+	}
+	if got := page.Descriptors[0].Version; got != "2.0.0" {
+		t.Fatalf("version = %q, want descriptor_version", got)
 	}
 }
 

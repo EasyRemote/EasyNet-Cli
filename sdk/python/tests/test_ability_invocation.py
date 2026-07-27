@@ -835,7 +835,7 @@ def _descriptor_request(
 ) -> dict[str, object]:
     return {
         "callee_ura": "easynet:///r/example/device/dev-a",
-        "ability": ABILITY_URA,
+        "ability": "observe.health",
         "call_mode": call_mode,
         "caller_ura": "easynet:///r/example/agent/alice.sdk",
         "subject_ura": subject_ura,
