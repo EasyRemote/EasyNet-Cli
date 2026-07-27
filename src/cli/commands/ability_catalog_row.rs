@@ -85,6 +85,8 @@ struct AbilityCatalogueRowWire {
     #[serde(default)]
     version: Option<Value>,
     #[serde(default)]
+    descriptor_version: Option<Value>,
+    #[serde(default)]
     schema_hash: Option<Value>,
     #[serde(default)]
     descriptor_hash: Option<Value>,

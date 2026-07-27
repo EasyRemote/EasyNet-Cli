@@ -6202,6 +6202,9 @@ fn runtime_json_projection(
     if !result_content_type_is_json(content_type) {
         return Ok(None);
     }
+    if payload.is_empty() {
+        return Ok(None);
+    }
     serde_json::from_slice::<serde_json::Value>(payload)
         .map(Some)
         .map_err(|error| {
@@ -7600,6 +7603,18 @@ mod tests {
                 .as_str()
                 .is_some_and(|value| value.len() == 64)
         );
+        assert!(
+            json["admission_receipt"]["authority_proof"]["signature"]["signature_base64"]
+                .as_str()
+                .is_some_and(|value| !value.is_empty()),
+            "admission checkpoint must carry a signed authority proof fact"
+        );
+        assert!(
+            json["terminal_receipt"]["authority_proof"]["signature"]["signature_base64"]
+                .as_str()
+                .is_some_and(|value| !value.is_empty()),
+            "terminal receipt must carry a signed authority proof fact"
+        );
         assert_eq!(
             json["terminal_receipt"]["authority_proof"]["binding"]["kind"],
             "self"
@@ -7626,6 +7641,28 @@ mod tests {
             .expect_err("declared JSON output must fail closed");
         assert!(error.contains("output_json declares JSON content type"));
         assert!(error.contains("payload is not valid JSON"));
+    }
+
+    #[test]
+    fn unary_result_json_projects_empty_declared_json_output_as_no_value() {
+        let result = crate::daemon::InvocationResult {
+            tuple: signed_fixture_tuple(),
+            terminal_state: "Completed".to_string(),
+            output_content_type: "application/json".to_string(),
+            output: Vec::new(),
+            elapsed_ms: 7,
+            receipt: None,
+            error: None,
+        };
+        let outcome = crate::daemon::InvocationOutcome::new(
+            result,
+            crate::daemon::InvocationReceiptStages::default(),
+        );
+
+        let json = invocation_outcome_json_with_tuple(outcome, serde_json::json!({})).unwrap();
+
+        assert_eq!(json["output_base64"], "");
+        assert!(json["output_json"].is_null());
     }
 
     fn active_bidi_session(
@@ -11339,6 +11376,27 @@ mod tests {
             .expect_err("declared JSON stream payload must fail closed");
         assert!(error.contains("payload_json declares JSON content type"));
         assert!(error.contains("payload is not valid JSON"));
+    }
+
+    #[test]
+    fn stream_chunk_json_projects_empty_declared_json_payload_as_no_value() {
+        let chunk = axon_sdk::pb::axon::v1::InvokeStreamChunk {
+            invocation_id: "inv-1".to_string(),
+            state: 2,
+            payload: Vec::new(),
+            content_type: "application/json".to_string(),
+            sequence: 7,
+            terminal: false,
+            ..axon_sdk::pb::axon::v1::InvokeStreamChunk::default()
+        };
+
+        let projection =
+            stream_chunk_json(&mut InboundReceiptCheckpointVerifier::new(), chunk).unwrap();
+        let value = projection.json();
+
+        assert_eq!(value["payload_content_type"], "application/json");
+        assert_eq!(value["payload_base64"], "");
+        assert!(value["payload_json"].is_null());
     }
 
     #[test]

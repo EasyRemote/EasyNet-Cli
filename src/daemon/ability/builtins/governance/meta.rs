@@ -283,7 +283,7 @@ fn list_abilities_handler(
                 }
                 None => d,
             };
-            serde_json::to_value(descriptor).unwrap_or(Value::Null)
+            public_catalog_descriptor_row(&descriptor).unwrap_or(Value::Null)
         })
         .collect();
 
@@ -295,6 +295,7 @@ fn list_abilities_handler(
     if scope.include_realm {
         for descriptor in authority_published_abilities.snapshot() {
             let mut row = serde_json::to_value(descriptor)?;
+            normalize_public_catalog_descriptor_row(&mut row);
             if let Value::Object(ref mut map) = row {
                 let source_is_empty = map
                     .get("source")
@@ -315,6 +316,20 @@ fn list_abilities_handler(
 
     scope.apply(&mut merged);
     Ok(json!({ "abilities": merged }))
+}
+
+fn public_catalog_descriptor_row(descriptor: &AbilityDescriptor) -> anyhow::Result<Value> {
+    let mut row = serde_json::to_value(descriptor)?;
+    normalize_public_catalog_descriptor_row(&mut row);
+    Ok(row)
+}
+
+fn normalize_public_catalog_descriptor_row(row: &mut Value) {
+    if let Value::Object(map) = row {
+        if let Some(version) = map.get("version").cloned() {
+            map.insert("descriptor_version".to_string(), version);
+        }
+    }
 }
 
 fn insert_canonical_descriptor(

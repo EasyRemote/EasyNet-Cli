@@ -144,6 +144,7 @@ if [[ "$SELF_TEST" == "1" ]]; then
   grep -q -- "--format json" "$0"
   grep -q "provider.ability" "$0"
   grep -q "nativeer.native_echo" "$0"
+  grep -q '"schema_version": "1"' "$0"
   grep -q "client.functions(scope=\"user\")" "$0"
   grep -q "canonical_ura_call" "$0"
   grep -q "canonical_ura_stream" "$0"
@@ -153,6 +154,11 @@ if [[ "$SELF_TEST" == "1" ]]; then
   grep -q "user_plugin.echo" "$0"
   grep -q "plugin init" "$0"
   grep -q "PYTHONPATH: /work/EasyRemote:/work/EasyNet-Cli/sdk/python:/work/EasyNet-Axon/sdk/python" "$0"
+  grep -q "project_sdk_runtime_identity" "$0"
+  grep -q "EASYNET_CREDENTIALS=/home/provider/.runtime-host/credentials.json" "$0"
+  grep -q "EASYNET_CONTROL_JSON=/home/provider/.easynet/control.json" "$0"
+  grep -q "EASYNET_CREDENTIALS=/home/caller/.runtime-host/credentials.json" "$0"
+  grep -q "EASYNET_CONTROL_JSON=/home/caller/.easynet/control.json" "$0"
   grep -q "plugin install" "$0"
   grep -q "plugin remove" "$0"
   grep -q "user_plugin_one_invocation_record" "$0"
@@ -464,6 +470,12 @@ wait_file() {
   return 1
 }
 
+project_sdk_runtime_identity() {
+  local service="$1"
+  local home="$2"
+  service_exec "$service" "mkdir -p '$home/.runtime-host' && jq '{realm: .realm, runtime_instance_id: .node_id, principal: (.username // .user_id // \"\"), control_plane_endpoint: (.hub_endpoint // \"\")}' '$home/.easynet/credentials.json' > '$home/.runtime-host/credentials.json'"
+}
+
 json_arg() {
   python3 - "$@" <<'PY'
 import json, sys
@@ -621,6 +633,8 @@ provider_cli "runtime start" >"$OUT_DIR/provider-start.txt" 2>"$OUT_DIR/provider
 caller_cli "runtime start" >"$OUT_DIR/caller-start.txt" 2>"$OUT_DIR/caller-start.err"
 wait_runtime provider /home/provider provider
 wait_runtime caller /home/caller caller
+project_sdk_runtime_identity provider /home/provider
+project_sdk_runtime_identity caller /home/caller
 wait_hub_device "$PROVIDER_NODE"
 wait_hub_device "$CALLER_NODE"
 
@@ -740,6 +754,7 @@ finally:
 PY
 cat >"$SHARED_DIR/native-easynet-ability/ability.json" <<JSON
 {
+  "schema_version": "1",
   "name": "${NATIVE_FUNCTION}",
   "namespace": "${NATIVE_NAMESPACE}",
   "description": "Native EasyNet host_stream ability invoked by EasyRemote.",
@@ -912,7 +927,7 @@ try:
 finally:
     node.stop()
 PY
-service_exec provider "HOME=/home/provider EASYNET_CLI_LIB=/usr/local/lib/libeasynet_cli.so PYTHONPATH=/work/EasyRemote:/work/EasyNet-Cli/sdk/python:/work/EasyNet-Axon/sdk/python nohup python3 -u /shared/easyremote_provider.py > /shared/easyremote-provider.log 2>&1 & echo \$! > /shared/easyremote-provider.pid"
+service_exec provider "HOME=/home/provider EASYNET_CLI_LIB=/usr/local/lib/libeasynet_cli.so EASYNET_CREDENTIALS=/home/provider/.runtime-host/credentials.json EASYNET_CONTROL_JSON=/home/provider/.easynet/control.json PYTHONPATH=/work/EasyRemote:/work/EasyNet-Cli/sdk/python:/work/EasyNet-Axon/sdk/python nohup python3 -u /shared/easyremote_provider.py > /shared/easyremote-provider.log 2>&1 & echo \$! > /shared/easyremote-provider.pid"
 wait_file "$SHARED_DIR/easyremote-ready.json" || die "EasyRemote provider did not publish readiness"
 cp "$SHARED_DIR/easyremote-ready.json" "$OUT_DIR/easyremote-ready.json"
 ADD_URA="$(jq -r '.abilities.add.ura' "$OUT_DIR/easyremote-ready.json")"
@@ -1097,7 +1112,7 @@ results = {
 }
 print(json.dumps(results, indent=2, sort_keys=True))
 PY
-service_exec caller "HOME=/home/caller EASYNET_CLI_LIB=/usr/local/lib/libeasynet_cli.so PYTHONPATH=/work/EasyRemote:/work/EasyNet-Cli/sdk/python:/work/EasyNet-Axon/sdk/python PROVIDER_NODE='$PROVIDER_NODE' PROVIDER_URA='$PROVIDER_URA' NATIVE_ABILITY_URA='$NATIVE_ABILITY_URA' python3 /shared/easyremote_caller.py" \
+service_exec caller "HOME=/home/caller EASYNET_CLI_LIB=/usr/local/lib/libeasynet_cli.so EASYNET_CREDENTIALS=/home/caller/.runtime-host/credentials.json EASYNET_CONTROL_JSON=/home/caller/.easynet/control.json PYTHONPATH=/work/EasyRemote:/work/EasyNet-Cli/sdk/python:/work/EasyNet-Axon/sdk/python PROVIDER_NODE='$PROVIDER_NODE' PROVIDER_URA='$PROVIDER_URA' NATIVE_ABILITY_URA='$NATIVE_ABILITY_URA' python3 /shared/easyremote_caller.py" \
   >"$OUT_DIR/easyremote-remote-results.json" 2>"$SHARED_DIR/easyremote-caller.log"
 cp "$SHARED_DIR/easyremote-caller.log" "$OUT_DIR/easyremote-caller.log"
 provider_cli "invocation list --ability-ura '$NATIVE_ABILITY_URA' --format json" \
