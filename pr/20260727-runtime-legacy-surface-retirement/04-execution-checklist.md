@@ -70,3 +70,11 @@
 - [x] Make route resolver placement state unavailable when `local-agents.json` carries malformed hosted identity rows.
 - [x] Add aggregate regression coverage for malformed placement projection.
 - [x] Run focused placement/route tests and canonical convergence gates.
+
+## Iteration 9 — Registered-Agent registry projection fail-closed cutover
+
+- [x] Replace silent registered-Agent registry key drops with an explicit aggregate projection result.
+- [x] Route admission, Mission target conflict detection, and skill ownership listing through the same checked registry-name projection.
+- [x] Add aggregate regression coverage for malformed registry keys in target projection and registered-name projection.
+- [x] Update convergence gates so the checked projection remains part of the architecture contract.
+- [x] Run focused registry projection tests and canonical convergence gates.

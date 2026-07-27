@@ -120,7 +120,7 @@ impl<'a> SkillInventoryBuilder<'a> {
             return Ok(self.rows);
         }
 
-        for name in self.snapshot.registered_agent_names() {
+        for name in self.snapshot.registered_agent_names()? {
             if !self.scope.includes_agent(&name) {
                 continue;
             }

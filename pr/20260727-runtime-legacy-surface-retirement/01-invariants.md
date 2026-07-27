@@ -6,3 +6,7 @@
   ownership does not become part of canonical SDK concepts.
 - Legacy input shapes are either rejected deterministically or translated at a
   versioned edge into the canonical descriptor-bound request.
+- Agent registry key projections are authoritative inputs to admission,
+  Mission target conflict detection, and skill ownership discovery. A malformed
+  registry key is corrupt aggregate state and must fail closed; product paths
+  must not silently drop the bad row and continue with a partial projection.

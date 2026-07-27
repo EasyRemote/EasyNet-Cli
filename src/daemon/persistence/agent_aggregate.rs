@@ -91,14 +91,15 @@ impl AgentAggregateSnapshot {
             .map(|(name, entry)| (name.as_str(), entry))
     }
 
-    pub(crate) fn registered_agent_names(&self) -> impl Iterator<Item = String> {
-        self.registry
-            .agents
-            .keys()
-            .filter_map(|key| AgentId::parse(key).ok())
-            .map(|agent_id| agent_id.name)
-            .collect::<BTreeSet<_>>()
-            .into_iter()
+    pub(crate) fn registered_agent_names(
+        &self,
+    ) -> Result<BTreeSet<String>, AgentRegisteredIdentityProjectionError> {
+        let mut names = BTreeSet::new();
+        for raw_key in self.registry.agents.keys() {
+            let id = parse_registered_agent_key(raw_key)?;
+            names.insert(id.name);
+        }
+        Ok(names)
     }
 
     pub(crate) fn registered_agent_registry_projection(&self) -> AgentRegistry {
@@ -134,19 +135,20 @@ impl AgentAggregateSnapshot {
         AgentRegisteredAgent::from_registry(&self.registry, owner_id, operation)
     }
 
-    pub(crate) fn registered_agent_surface_names(&self) -> BTreeSet<String> {
+    pub(crate) fn registered_agent_surface_names(
+        &self,
+    ) -> Result<BTreeSet<String>, AgentRegisteredIdentityProjectionError> {
         let mut registered = BTreeSet::new();
         for raw_key in self.registry.agents.keys() {
-            if let Ok(id) = AgentId::parse(raw_key) {
-                registered.insert(id.name.clone());
-                if id.tenant != DEFAULT_TENANT {
-                    registered.insert(format!("{}/{}", id.tenant, id.name));
-                } else {
-                    registered.insert(format!("{}/{}", DEFAULT_TENANT, id.name));
-                }
+            let id = parse_registered_agent_key(raw_key)?;
+            registered.insert(id.name.clone());
+            if id.tenant != DEFAULT_TENANT {
+                registered.insert(format!("{}/{}", id.tenant, id.name));
+            } else {
+                registered.insert(format!("{}/{}", DEFAULT_TENANT, id.name));
             }
         }
-        registered
+        Ok(registered)
     }
 
     pub(crate) fn host_device_agent_ura(&self) -> &str {
@@ -225,7 +227,7 @@ impl AgentAggregateSnapshot {
 
     pub(crate) fn local_target_projection(
         &self,
-    ) -> Result<AgentLocalTargetProjection, HostedAgentIdentityProjectionError> {
+    ) -> Result<AgentLocalTargetProjection, AgentLocalTargetProjectionError> {
         let hosted_agent_targets = self
             .local_agents
             .hosted_agents
@@ -234,7 +236,7 @@ impl AgentAggregateSnapshot {
             .collect::<Result<BTreeSet<_>, _>>()?;
         Ok(AgentLocalTargetProjection {
             hosted_agent_targets,
-            registered_agent_ids: self.registered_agent_surface_names(),
+            registered_agent_ids: self.registered_agent_surface_names()?,
         })
     }
 
@@ -731,6 +733,34 @@ pub(crate) struct AgentLocalTargetProjection {
 }
 
 #[derive(Debug, thiserror::Error)]
+pub(crate) enum AgentLocalTargetProjectionError {
+    #[error(transparent)]
+    HostedIdentity(#[from] HostedAgentIdentityProjectionError),
+    #[error(transparent)]
+    RegisteredIdentity(#[from] AgentRegisteredIdentityProjectionError),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum AgentRegisteredIdentityProjectionError {
+    #[error("registered Agent registry key {registry_key:?} is not canonical: {reason}")]
+    InvalidRegisteredAgentKey {
+        registry_key: String,
+        reason: String,
+    },
+}
+
+fn parse_registered_agent_key(
+    raw_key: &str,
+) -> Result<AgentId, AgentRegisteredIdentityProjectionError> {
+    AgentId::parse(raw_key).map_err(|error| {
+        AgentRegisteredIdentityProjectionError::InvalidRegisteredAgentKey {
+            registry_key: raw_key.to_string(),
+            reason: error.to_string(),
+        }
+    })
+}
+
+#[derive(Debug, thiserror::Error)]
 pub(crate) enum HostedAgentIdentityProjectionError {
     #[error("hosted Agent {profile:?}/{name:?} has invalid Agent URA {agent_ura:?}: {reason}")]
     InvalidHostedAgentUra {
@@ -1028,12 +1058,37 @@ mod tests {
         );
         let snapshot = AgentAggregateSnapshot::new(registry, LocalAgentsFile::default());
 
-        let names = snapshot.registered_agent_surface_names();
+        let names = snapshot
+            .registered_agent_surface_names()
+            .expect("valid registered Agent surface projection");
 
         assert!(names.contains("claude"));
         assert!(names.contains("default/claude"));
         assert!(names.contains("codex"));
         assert!(names.contains("research/codex"));
+    }
+
+    #[test]
+    fn registered_agent_names_reject_malformed_registry_keys() {
+        let mut registry = AgentRegistry::default();
+        registry.agents.insert(
+            "../alice".to_string(),
+            AgentEntry::new(AgentType::ClaudeCode, None),
+        );
+        let snapshot = AgentAggregateSnapshot::new(registry, LocalAgentsFile::default());
+
+        let error = snapshot
+            .registered_agent_names()
+            .expect_err("malformed registry key must fail closed");
+
+        assert!(matches!(
+            error,
+            AgentRegisteredIdentityProjectionError::InvalidRegisteredAgentKey { .. }
+        ));
+        assert!(
+            error.to_string().contains("not canonical"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]
@@ -1527,6 +1582,39 @@ mod tests {
                 "{case} should report {expected:?}, got: {error}"
             );
         }
+    }
+
+    #[test]
+    fn local_target_projection_rejects_malformed_registered_agent_keys() {
+        let mut registry = AgentRegistry::default();
+        registry.agents.insert(
+            "../alice".to_string(),
+            AgentEntry::new(AgentType::ClaudeCode, None),
+        );
+        let snapshot = AgentAggregateSnapshot::new(
+            registry,
+            LocalAgentsFile {
+                host_device_agent_ura: "easynet:///r/acme/agent/device".to_string(),
+                hosted_agents: vec![hosted_agent(
+                    "llm",
+                    "claude",
+                    "easynet:///r/acme/agent/u1.claude",
+                )],
+            },
+        );
+
+        let error = snapshot
+            .local_target_projection()
+            .expect_err("malformed registry key must fail closed");
+
+        assert!(
+            error.to_string().contains("registered Agent registry key"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            error.to_string().contains("not canonical"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]

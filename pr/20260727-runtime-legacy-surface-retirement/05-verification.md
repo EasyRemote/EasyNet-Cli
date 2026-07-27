@@ -109,3 +109,24 @@
 - `tools/scripts/check-canonical-runtime-convergence-v2.sh`
 - `tools/scripts/check-architecture-convergence.sh`
 - `/Users/macbook.silan.tech/.local/bin/codegraph sync`
+
+## Iteration 9
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph query "AgentAggregateSnapshot registered_agent_surface_names filter_map AgentId parse malformed registry fail closed"`
+- `/Users/macbook.silan.tech/.local/bin/codegraph query "registered Agent registry key projection fail closed no filter_map AgentAggregateSnapshot"`
+- `cargo test --features axon-pb local_target_projection --lib`
+  - 3 passed.
+- `cargo test --features axon-pb registered_agent_names --lib`
+  - 1 passed.
+- `cargo test --features axon-pb agent_aggregate --lib`
+  - 32 passed.
+- `tools/scripts/check-architecture-convergence.sh`
+  - passed.
+- `tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - passed.
+- `cargo fmt --check`
+  - passed.
+- `git diff --check`
+  - passed.
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync`
+  - passed; synced 3 changed code files.

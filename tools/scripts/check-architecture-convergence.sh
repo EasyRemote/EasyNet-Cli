@@ -3975,8 +3975,16 @@ if agent_aggregate.exists():
             "Agent aggregate snapshot must own hosted Agent target parsing",
         ),
         (
-            "Result<AgentLocalTargetProjection, HostedAgentIdentityProjectionError>",
+            "Result<AgentLocalTargetProjection, AgentLocalTargetProjectionError>",
             "Agent aggregate snapshot must expose fail-closed local target projection to admission",
+        ),
+        (
+            "enum AgentLocalTargetProjectionError",
+            "Agent aggregate snapshot must type aggregate target projection failures",
+        ),
+        (
+            "enum AgentRegisteredIdentityProjectionError",
+            "Agent aggregate snapshot must type malformed registered-Agent identity projection",
         ),
         (
             "enum HostedAgentIdentityProjectionError",
@@ -4003,8 +4011,8 @@ if agent_aggregate.exists():
             "Agent aggregate snapshot must own hosted Agent identity projection shape",
         ),
         (
-            "fn registered_agent_surface_names(&self) -> BTreeSet<String>",
-            "Agent aggregate snapshot must expose registered Agent surface names",
+            "fn registered_agent_surface_names(",
+            "Agent aggregate snapshot must expose checked registered Agent surface names",
         ),
         (
             "fn registered_agent_registry_projection(&self) -> AgentRegistry",

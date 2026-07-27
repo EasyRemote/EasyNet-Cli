@@ -95,3 +95,19 @@ compatibility-style repair path.
 Boundary: an empty `host_device_agent_ura` remains a valid first-boot empty
 placement state. Malformed hosted Agent URAs and non-Agent hosted identities are
 invalid projection state and fail closed before route selection can use them.
+
+## Registered-Agent registry projection fail-closed cutover
+
+Decision: registered-Agent name and surface projections must parse every
+registry key through the canonical `AgentId` model and return a typed projection
+error on the first malformed key.
+
+Reason: these projections feed admission self-target locality, Mission
+traditional target conflict detection, and skill ownership discovery. Treating a
+bad row as absent lets product code continue from a partial aggregate snapshot,
+which is a compatibility repair path rather than a canonical runtime state.
+
+Boundary: an empty registry remains valid. A malformed key in memory or on disk
+is corrupt aggregate state and must make the dependent projection unavailable or
+return an explicit product-boundary error; no alias matching, default tenant
+repair, or row skipping is introduced.

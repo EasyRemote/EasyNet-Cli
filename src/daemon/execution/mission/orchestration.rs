@@ -846,7 +846,7 @@ fn find_traditional_agent_target_conflict(
 
     let snapshot =
         crate::daemon::persistence::agent_aggregate::AgentAggregateRepository::load_snapshot()?;
-    let registered = snapshot.registered_agent_surface_names();
+    let registered = snapshot.registered_agent_surface_names()?;
 
     // PR-10: traditional target conflict detection only applies to flat
     // `Call` steps. Block variants' targets are resolved inside the block's
