@@ -396,3 +396,24 @@ Boundary: this preserves the public field name and descriptor shape
 already pass a canonical Device or Authority URA are unchanged. Callers that
 only know a node id must resolve it through a directory/catalogue provider
 before invoking A2A dispatch.
+
+## Python runtime lifecycle default-options cutover
+
+Decision: Python runtime lifecycle methods that accept optional `ConnectOptions`,
+`AttachOptions`, `StopOptions`, or discovery options must not store constructed
+option instances in function defaults. They should accept `None` at the boundary
+and materialize the immutable default through a single helper for each value
+type.
+
+Reason: the default option objects are frozen and therefore not an immediate
+mutation bug, but they still encode SDK lifecycle policy as repeated Python
+function-default instances. Go and Java model this seam as explicit provider
+request construction, and the Python SDK should converge on the same lifecycle
+shape: omitted options are a caller state, not a hidden provider object
+preserved on the function definition.
+
+Boundary: this is an internal SDK implementation cleanup. Public behavior
+remains compatible: callers may still omit options or pass an explicit options
+object, and the serialized provider payload for omitted options remains the
+canonical empty object. No product-specific daemon or EasyNet lifecycle policy
+is added to the SDK.

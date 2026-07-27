@@ -79,6 +79,16 @@ class RuntimeConnectionTests(unittest.TestCase):
         })
         self.assertIsNotNone(connection.runtime_client())
 
+    def test_connect_omitted_options_materialize_empty_payload(self) -> None:
+        connector = MemoryRuntimeConnector()
+        connection = RuntimeConnection(connector)
+
+        connection.connect()
+
+        self.assertEqual(connection.state, ConnectionState.READY)
+        self.assertEqual(connector.seen_options, {})
+        self.assertEqual(RuntimeConnection.connect.__defaults__, (None,))
+
     def test_connect_failure_blocks_runtime_client(self) -> None:
         connector = MemoryRuntimeConnector()
         connector.resolve_error = RuntimeError("daemon down")

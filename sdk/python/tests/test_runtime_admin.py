@@ -1,4 +1,5 @@
 import hashlib
+import json
 from pathlib import Path
 
 from easynet_sdk import (
@@ -70,8 +71,13 @@ class MemoryDaemonTransport:
             b'"diagnostics":["status-ok"]}'
         )
         self.stop_json = b'{"handle_id":"daemon-1","state":"Stopped","diagnostics":[]}'
+        self.discover_options: dict[str, object] | None = None
+        self.attach_options: dict[str, object] | None = None
+        self.open_runtime_options: dict[str, object] | None = None
+        self.stop_options: dict[str, object] | None = None
 
     def discover(self, options_json: bytes) -> bytes:
+        self.discover_options = json.loads(options_json.decode("utf-8"))
         return (
             b'{"control_endpoint":"unix:///tmp/control.sock",'
             b'"invocation_endpoint":"unix:///tmp/daemon.sock"}'
@@ -81,6 +87,7 @@ class MemoryDaemonTransport:
         return self.status_json
 
     def attach(self, options_json: bytes) -> bytes:
+        self.attach_options = json.loads(options_json.decode("utf-8"))
         return self.status_json
 
     def status(self, handle_id: str) -> bytes:
@@ -92,9 +99,11 @@ class MemoryDaemonTransport:
     def open_runtime(self, handle_id: str, options_json: bytes):
         from test_runtime import MemoryRuntimeTransport
 
+        self.open_runtime_options = json.loads(options_json.decode("utf-8"))
         return MemoryRuntimeTransport(), b'{"ready":true}'
 
     def stop(self, handle_id: str, options_json: bytes) -> bytes:
+        self.stop_options = json.loads(options_json.decode("utf-8"))
         return self.stop_json
 
     def detach(self, handle_id: str) -> None:
@@ -172,6 +181,26 @@ def test_runtime_admin_readiness_composes_lifecycle_and_health() -> None:
     assert readiness.lifecycle_state == RuntimeLifecycleState.RUNNING
     assert readiness.messages == ("status-ok", "health-ok")
     assert readiness.diagnostics is not None
+
+
+def test_runtime_lifecycle_omitted_options_materialize_empty_provider_payloads() -> None:
+    transport = MemoryDaemonTransport()
+    lifecycle = RuntimeLifecycle(transport)
+    admin = RuntimeAdminClient(lifecycle)
+
+    lifecycle.discover()
+    handle = admin.attach()
+    admin.open_runtime(handle)
+    admin.stop(handle)
+
+    assert transport.discover_options == {}
+    assert transport.attach_options == {}
+    assert transport.open_runtime_options == {}
+    assert transport.stop_options == {}
+    assert RuntimeLifecycle.discover.__defaults__ == (None,)
+    assert RuntimeLifecycle.attach.__defaults__ == (None,)
+    assert RuntimeHandle.open_runtime.__defaults__ == (None,)
+    assert RuntimeHandle.stop.__defaults__ == (None,)
 
 
 def test_runtime_handle_status_rejects_backward_lifecycle_transition() -> None:

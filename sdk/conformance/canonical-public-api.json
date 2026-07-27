@@ -1385,12 +1385,14 @@
       "ReceiveOptions",
       "RetryHint",
       "RetryHintValue",
+      "RuntimeAbilityClient",
       "RuntimeCallContext",
       "RuntimeCallContextFields",
       "RuntimeClient",
       "RuntimeHealth",
       "RuntimeHealthFields",
       "RuntimeReceipt",
+      "RuntimeReceiptProvider",
       "RuntimeTransport",
       "SDKError",
       "SDKErrorOptions",
@@ -4592,7 +4594,6 @@
       "RuntimeConnector.resolve",
       "RuntimeControlDiscovery.capability_flags",
       "RuntimeControlDiscovery.invocation_endpoint",
-      "RuntimeControlDiscovery.pages_port",
       "RuntimeControlDiscovery.pid",
       "RuntimeControlDiscovery.pipe_name",
       "RuntimeControlDiscovery.runtime_host_identity",
@@ -5364,17 +5365,26 @@
       "ReceiptProvider.list",
       "ReceiveOptions.cancelReason",
       "ReceiveOptions.signal",
+      "RuntimeAbilityClient.build",
+      "RuntimeAbilityClient.buildGovernanceRead",
+      "RuntimeAbilityClient.invoke",
+      "RuntimeAbilityClient.invokeGovernanceRead",
+      "RuntimeAbilityClient.new",
       "RuntimeCallContext.authority",
       "RuntimeCallContext.calleeURA",
       "RuntimeCallContext.callerURA",
+      "RuntimeCallContext.causalContext",
       "RuntimeCallContext.metadata",
       "RuntimeCallContext.new",
+      "RuntimeCallContext.nonceBase64",
       "RuntimeCallContext.subjectURA",
       "RuntimeCallContext.toJSON",
       "RuntimeCallContextFields.authority",
       "RuntimeCallContextFields.callee_ura",
       "RuntimeCallContextFields.caller_ura",
+      "RuntimeCallContextFields.causal_context",
       "RuntimeCallContextFields.metadata",
+      "RuntimeCallContextFields.nonce_base64",
       "RuntimeCallContextFields.subject_ura",
       "RuntimeClient.awaitResult",
       "RuntimeClient.cancel",
@@ -5387,6 +5397,7 @@
       "RuntimeClient.newInvocation",
       "RuntimeClient.openBidi",
       "RuntimeClient.prepare",
+      "RuntimeClient.resolveDescriptorRef",
       "RuntimeClient.submitSigned",
       "RuntimeHealth.abiVersion",
       "RuntimeHealth.apiAlive",
@@ -5420,6 +5431,9 @@
       "RuntimeReceipt.receiptType",
       "RuntimeReceipt.state",
       "RuntimeReceipt.validateSummary",
+      "RuntimeReceiptProvider.list",
+      "RuntimeReceiptProvider.new",
+      "RuntimeReceiptProvider.receiptHistoryListAuthorityScope",
       "RuntimeTransport.awaitHandle",
       "RuntimeTransport.cancelHandle",
       "RuntimeTransport.close",
@@ -5429,6 +5443,7 @@
       "RuntimeTransport.openBidi",
       "RuntimeTransport.openStream",
       "RuntimeTransport.prepare",
+      "RuntimeTransport.resolveDescriptorRef",
       "RuntimeTransport.submitSigned",
       "SDKError.code",
       "SDKError.details",
@@ -7221,8 +7236,16 @@
         ]
       },
       "node": {
-        "symbols": [],
-        "members": []
+        "symbols": [
+          "RuntimeAbilityClient"
+        ],
+        "members": [
+          "RuntimeAbilityClient.build",
+          "RuntimeAbilityClient.buildGovernanceRead",
+          "RuntimeAbilityClient.invoke",
+          "RuntimeAbilityClient.invokeGovernanceRead",
+          "RuntimeAbilityClient.new"
+        ]
       },
       "java": {
         "symbols": [
@@ -9965,7 +9988,6 @@
           "NativeRuntimeHandle.health",
           "RuntimeControlDiscovery.capability_flags",
           "RuntimeControlDiscovery.invocation_endpoint",
-          "RuntimeControlDiscovery.pages_port",
           "RuntimeControlDiscovery.pid",
           "RuntimeControlDiscovery.pipe_name",
           "RuntimeControlDiscovery.runtime_host_identity",
@@ -10012,6 +10034,7 @@
           "RuntimeTransport.openBidi",
           "RuntimeTransport.openStream",
           "RuntimeTransport.prepare",
+          "RuntimeTransport.resolveDescriptorRef",
           "RuntimeTransport.submitSigned"
         ]
       },
@@ -11244,7 +11267,8 @@
           "ReceiptListRequest",
           "ReceiptListRequestFields",
           "ReceiptProvider",
-          "RuntimeCallContextFields"
+          "RuntimeCallContextFields",
+          "RuntimeReceiptProvider"
         ],
         "members": [
           "ReceiptFilter.abilityURA",
@@ -11284,8 +11308,13 @@
           "RuntimeCallContextFields.authority",
           "RuntimeCallContextFields.callee_ura",
           "RuntimeCallContextFields.caller_ura",
+          "RuntimeCallContextFields.causal_context",
           "RuntimeCallContextFields.metadata",
-          "RuntimeCallContextFields.subject_ura"
+          "RuntimeCallContextFields.nonce_base64",
+          "RuntimeCallContextFields.subject_ura",
+          "RuntimeReceiptProvider.list",
+          "RuntimeReceiptProvider.new",
+          "RuntimeReceiptProvider.receiptHistoryListAuthorityScope"
         ]
       },
       "java": {
@@ -13984,8 +14013,10 @@
           "RuntimeCallContext.authority",
           "RuntimeCallContext.calleeURA",
           "RuntimeCallContext.callerURA",
+          "RuntimeCallContext.causalContext",
           "RuntimeCallContext.metadata",
           "RuntimeCallContext.new",
+          "RuntimeCallContext.nonceBase64",
           "RuntimeCallContext.subjectURA",
           "RuntimeCallContext.toJSON",
           "RuntimeClient.awaitResult",
@@ -13999,6 +14030,7 @@
           "RuntimeClient.newInvocation",
           "RuntimeClient.openBidi",
           "RuntimeClient.prepare",
+          "RuntimeClient.resolveDescriptorRef",
           "RuntimeClient.submitSigned"
         ]
       },
@@ -14129,7 +14161,7 @@
           "path": "sdk/go/direct_runtime.go",
           "sha256": "69ea5f05d0371f396ce665245e5b25d646f6405a6f84e0983495b4297426be1f",
           "interface": "RuntimeConnector",
-          "revision": "1ce6b68472e8eba06e2e5b31d8c2c1b1c61db55b"
+          "revision": "509ecf550d905ac07655d9cd87962b832811c48e"
         },
         "step_evidence": [
           {
@@ -14181,7 +14213,7 @@
           "path": "sdk/python/easynet_sdk/providers/runtime/direct.py",
           "sha256": "d72a2eca11a7f3d8712101e51b3d38d98dec0c723eb502a93a8c7c6445ef4774",
           "interface": "RuntimeConnector",
-          "revision": "1ce6b68472e8eba06e2e5b31d8c2c1b1c61db55b"
+          "revision": "509ecf550d905ac07655d9cd87962b832811c48e"
         },
         "step_evidence": [
           {
@@ -14235,7 +14267,7 @@
           "path": "sdk/go/direct_runtime.go",
           "sha256": "69ea5f05d0371f396ce665245e5b25d646f6405a6f84e0983495b4297426be1f",
           "interface": "RuntimeConnector",
-          "revision": "1ce6b68472e8eba06e2e5b31d8c2c1b1c61db55b"
+          "revision": "509ecf550d905ac07655d9cd87962b832811c48e"
         },
         "step_evidence": [
           {
@@ -14277,7 +14309,7 @@
           "path": "sdk/python/easynet_sdk/providers/runtime/direct.py",
           "sha256": "d72a2eca11a7f3d8712101e51b3d38d98dec0c723eb502a93a8c7c6445ef4774",
           "interface": "RuntimeConnector",
-          "revision": "1ce6b68472e8eba06e2e5b31d8c2c1b1c61db55b"
+          "revision": "509ecf550d905ac07655d9cd87962b832811c48e"
         },
         "step_evidence": [
           {
@@ -14321,7 +14353,7 @@
           "path": "sdk/go/direct_runtime.go",
           "sha256": "69ea5f05d0371f396ce665245e5b25d646f6405a6f84e0983495b4297426be1f",
           "interface": "RuntimeConnector",
-          "revision": "1ce6b68472e8eba06e2e5b31d8c2c1b1c61db55b"
+          "revision": "509ecf550d905ac07655d9cd87962b832811c48e"
         },
         "step_evidence": [
           {
@@ -14373,7 +14405,7 @@
           "path": "sdk/python/easynet_sdk/providers/runtime/direct.py",
           "sha256": "d72a2eca11a7f3d8712101e51b3d38d98dec0c723eb502a93a8c7c6445ef4774",
           "interface": "RuntimeConnector",
-          "revision": "1ce6b68472e8eba06e2e5b31d8c2c1b1c61db55b"
+          "revision": "509ecf550d905ac07655d9cd87962b832811c48e"
         },
         "step_evidence": [
           {
@@ -14427,7 +14459,7 @@
           "path": "sdk/go/direct_runtime.go",
           "sha256": "69ea5f05d0371f396ce665245e5b25d646f6405a6f84e0983495b4297426be1f",
           "interface": "RuntimeConnector",
-          "revision": "1ce6b68472e8eba06e2e5b31d8c2c1b1c61db55b"
+          "revision": "509ecf550d905ac07655d9cd87962b832811c48e"
         },
         "step_evidence": [
           {
@@ -14504,7 +14536,7 @@
           "path": "sdk/python/easynet_sdk/providers/runtime/direct.py",
           "sha256": "d72a2eca11a7f3d8712101e51b3d38d98dec0c723eb502a93a8c7c6445ef4774",
           "interface": "RuntimeConnector",
-          "revision": "1ce6b68472e8eba06e2e5b31d8c2c1b1c61db55b"
+          "revision": "509ecf550d905ac07655d9cd87962b832811c48e"
         },
         "step_evidence": [
           {
@@ -14583,7 +14615,7 @@
           "path": "sdk/go/cabi_runtime.go",
           "sha256": "02f273f44c655607addfe441be48af9ef1d0d004f36d958a1b101dcc28067029",
           "interface": "RuntimeTransport",
-          "revision": "1ce6b68472e8eba06e2e5b31d8c2c1b1c61db55b"
+          "revision": "509ecf550d905ac07655d9cd87962b832811c48e"
         },
         "step_evidence": [
           {
@@ -14680,7 +14712,7 @@
           "path": "sdk/python/easynet_sdk/_cabi.py",
           "sha256": "ae409ebf4873c007df9989b53f64cfc542299bc89c5d1877513d8b6346724d4c",
           "interface": "CABIRuntimeTransport",
-          "revision": "1ce6b68472e8eba06e2e5b31d8c2c1b1c61db55b"
+          "revision": "509ecf550d905ac07655d9cd87962b832811c48e"
         },
         "step_evidence": [
           {
@@ -14779,7 +14811,7 @@
           "path": "sdk/go/direct_runtime.go",
           "sha256": "69ea5f05d0371f396ce665245e5b25d646f6405a6f84e0983495b4297426be1f",
           "interface": "RuntimeConnector",
-          "revision": "1ce6b68472e8eba06e2e5b31d8c2c1b1c61db55b"
+          "revision": "509ecf550d905ac07655d9cd87962b832811c48e"
         },
         "step_evidence": [
           {
@@ -14856,7 +14888,7 @@
           "path": "sdk/python/easynet_sdk/providers/runtime/direct.py",
           "sha256": "d72a2eca11a7f3d8712101e51b3d38d98dec0c723eb502a93a8c7c6445ef4774",
           "interface": "RuntimeConnector",
-          "revision": "1ce6b68472e8eba06e2e5b31d8c2c1b1c61db55b"
+          "revision": "509ecf550d905ac07655d9cd87962b832811c48e"
         },
         "step_evidence": [
           {
@@ -14935,7 +14967,7 @@
           "path": "sdk/go/cabi_runtime.go",
           "sha256": "02f273f44c655607addfe441be48af9ef1d0d004f36d958a1b101dcc28067029",
           "interface": "RuntimeTransport",
-          "revision": "1ce6b68472e8eba06e2e5b31d8c2c1b1c61db55b"
+          "revision": "509ecf550d905ac07655d9cd87962b832811c48e"
         },
         "step_evidence": [
           {
@@ -15057,7 +15089,7 @@
           "path": "sdk/python/easynet_sdk/_cabi.py",
           "sha256": "ae409ebf4873c007df9989b53f64cfc542299bc89c5d1877513d8b6346724d4c",
           "interface": "CABIRuntimeTransport",
-          "revision": "1ce6b68472e8eba06e2e5b31d8c2c1b1c61db55b"
+          "revision": "509ecf550d905ac07655d9cd87962b832811c48e"
         },
         "step_evidence": [
           {
@@ -15181,7 +15213,7 @@
           "path": "sdk/go/runtime_ability.go",
           "sha256": "b27b27cc8939e880295681af6211e166a1b744f7f2af91b76b0f0e540c5fcf90",
           "interface": "RuntimeAbilityClient",
-          "revision": "1ce6b68472e8eba06e2e5b31d8c2c1b1c61db55b"
+          "revision": "509ecf550d905ac07655d9cd87962b832811c48e"
         },
         "step_evidence": [
           {
@@ -15308,7 +15340,7 @@
           "path": "sdk/python/easynet_sdk/ability_invocation.py",
           "sha256": "2f4577dc6e19b790972aacc060af25478c530d803b83b82794cb28b6f2d791d0",
           "interface": "AbilityInvocationClient",
-          "revision": "1ce6b68472e8eba06e2e5b31d8c2c1b1c61db55b"
+          "revision": "509ecf550d905ac07655d9cd87962b832811c48e"
         },
         "step_evidence": [
           {
@@ -15437,7 +15469,7 @@
           "path": "sdk/go/direct_runtime.go",
           "sha256": "69ea5f05d0371f396ce665245e5b25d646f6405a6f84e0983495b4297426be1f",
           "interface": "RuntimeConnector",
-          "revision": "1ce6b68472e8eba06e2e5b31d8c2c1b1c61db55b"
+          "revision": "509ecf550d905ac07655d9cd87962b832811c48e"
         },
         "step_evidence": [
           {
@@ -15479,7 +15511,7 @@
           "path": "sdk/python/easynet_sdk/providers/runtime/direct.py",
           "sha256": "d72a2eca11a7f3d8712101e51b3d38d98dec0c723eb502a93a8c7c6445ef4774",
           "interface": "RuntimeConnector",
-          "revision": "1ce6b68472e8eba06e2e5b31d8c2c1b1c61db55b"
+          "revision": "509ecf550d905ac07655d9cd87962b832811c48e"
         },
         "step_evidence": [
           {
@@ -19260,10 +19292,10 @@
       "InvocationResult.terminal_receipt_summary": "365860c4165f7da9c208c44c362f46df65b50738dce0bdb95eeb19e42893c0ce",
       "InvocationResult.terminal_state": "581e74ca679636d7050aad38d0b30ed5bf3722be174304aed98e1eb0f4a8c4a5",
       "InvocationResult.tuple": "42dbd5dd94e4ffc73dc8674108974d6c7cc1ffbc28b245a4da68dfcfda555512",
-      "InvocationResultAdapter": "aef55a1b28397ce691139bd669e5295fcce388405434a87bde3d92be0fa479c8",
+      "InvocationResultAdapter": "52a272e2f537ca73096b88211296fc4feefb89c2117acae67acb3ef3115f68b7",
       "InvocationResultAdapter.bidi": "31be7ec0551b1ad480770bfa8db56e0b1784ec9e8e11a681eee90cd6a686ded1",
       "InvocationResultAdapter.close": "e4272dcf8f0a41d1c6bdf2a6673bcc6003da47fe3f8ac2c0f8deaec2e5c7e9b3",
-      "InvocationResultAdapter.connect": "5b9f7fd971cb1ccfd3a44d7caddd404e591348e1f029c0a76510e069f0b264d4",
+      "InvocationResultAdapter.connect": "60be8e67c4f3b9c1b02eaaf64d31f72ae02cad92c3e242eea9e9746d88faeb86",
       "InvocationResultAdapter.from_runtime_client": "64c50ff13f582b3d7dccdf63df84e1691d4f39e6e1a1b370e70c813e0372539a",
       "InvocationResultAdapter.invoke": "0a66eddeff91bafd47bd151f562b2ed3a379bcf1643a99f48d852acfa224e9dd",
       "InvocationResultAdapter.invoke_signed": "25c6fbf635074b55c12b530adc6c737a92de7741cc99b48e05c64611db9f5a47",
@@ -19608,17 +19640,17 @@
       "RuntimeAccessControlProvider.revoke": "efb62499a9f6dee6488ea1a9251b711b733b0d623f99ef52b1d22983a6e47abb",
       "RuntimeAdminAbilityClient": "1858f6759d3075e21152f7fa1417f096010c55b9fdc4971971654aaceb67fa7c",
       "RuntimeAdminAbilityClient.list_sessions": "a4cc3ec50bac4b0e704b5faee56b44504e760ac050f8d7377890b9ad48df79de",
-      "RuntimeAdminClient": "fbc9f5bbb5fd133a6410acab1ea1d047d568b7ad1e92c05beed5d62f385f5717",
-      "RuntimeAdminClient.attach": "d68cfa64569bea42382e4af25163846325d613365871bf5a868cadf73e84735b",
+      "RuntimeAdminClient": "6857a9e427fd9954218ff8c0bf1abd449127615a3d525eb1dc4b8aff6a20f435",
+      "RuntimeAdminClient.attach": "7918475b7a3a6c5c70fde913b4adefa1e6fef85ad63cf2036205aa7ffdf51380",
       "RuntimeAdminClient.detach": "b68d38fb4f67a654619995d2e3553f9f0b3a620d7613b6860aac6e83c37ad41b",
       "RuntimeAdminClient.diagnostics": "c968f46b57f9af05fe1518d3e33e7a7eb2c4a06deef9d151cbedc55487136f2b",
-      "RuntimeAdminClient.discover": "df10098e7e511f0b243459b87b1cf23947915388187fb8e8c8764234cd905fa0",
+      "RuntimeAdminClient.discover": "9833b478860d187231e02dffac00443b3df5b79fd83144d5c8c75160cb6b2d86",
       "RuntimeAdminClient.health": "8729273141151a0cc5f645381c6441c1e1bac728d5a7abb20c44f013051e777d",
-      "RuntimeAdminClient.open_runtime": "972171056215df43bfbf65f10b7ac7811ea3a037f42703f73ec48cc1fef3c400",
+      "RuntimeAdminClient.open_runtime": "1c943fe1a1143047c46ee1560bc5f41d2a6cd336cc5f54166c79696c2a585dcf",
       "RuntimeAdminClient.readiness": "90dd81ea7fdac7e5a95917324d90dd35a1e9c1cffbeb27a9eb09d042097f1815",
       "RuntimeAdminClient.start": "7a87e05a44c060e7a744fcc602f0a9a0cb68e3237765c19e4199d72274342808",
       "RuntimeAdminClient.status": "9cdc1f7f702e3e940a142edcfd642611559cd33b8b4521d6e8880d53b3ce9906",
-      "RuntimeAdminClient.stop": "10c76842907e80ba023c512e1644c7737fba24b9542f0df66043393b2f53d1b5",
+      "RuntimeAdminClient.stop": "fbc1bb5b2451492d64ebbed4ecae0326dba9783d8acc41e66ad851510940057d",
       "RuntimeAdminCommand": "210391a45177b93bae8f9ba190d7b0c4b85e1c57d3179f6f7be3e2ed53acb342",
       "RuntimeAdminCommand.ATTACH": "6a51a46575b927ab6512d59eb2cdb0ca5be0269df71e7162ec8d82b1e6a1f0b4",
       "RuntimeAdminCommand.DETACH": "b5a28b981d020301584ddbcff62d2321f56e4bc00aeaec5f1efa38555e489ef4",
@@ -19677,9 +19709,9 @@
       "RuntimeClientSessionRuntimeProvider.open_stream": "0f4520737100b7ac2bf85224cc8800050b174768aed6e78e5c20c2e001eb266a",
       "RuntimeClientSessionRuntimeProvider.prepare_for_signing": "65951ce07bad25c494572676be34aa9ecffabc19eaaa171d9144f7e4750f1099",
       "RuntimeClientSessionRuntimeProvider.submit_signed": "d8838253d0eddc3a832a6c5a6dd82e7343204742041085db412f075225250de3",
-      "RuntimeConnection": "cee46717269741c3efd0db80625590c47676a25f948fa489c203d91a23fa4a39",
+      "RuntimeConnection": "1e1caeb7917e69bddb98314c6936f55177aaa36d8f10c49c48839111028d7dce",
       "RuntimeConnection.close": "a6a07f096066226888aa02a87d79e86c5d25d1934ab425e1b1cad5bb21526e45",
-      "RuntimeConnection.connect": "deb40e55745da8a4db5f2e617810491dcd2d5d9c03ec2df9f47d617f59b68d7a",
+      "RuntimeConnection.connect": "d5d6f75845c80a6c9a8fb64cac0213f1018764e9b6e3730b37e0d7467f5be228",
       "RuntimeConnection.connector": "2fa04701be37c72aa17ebf57ccc2cc0e20abe0fc7934ab8f34e99bb45a4dc7b7",
       "RuntimeConnection.endpoint": "eb16fb0efe09a35704f7d3fc8fc710713f96d5ffca41cc7775c1cbe0d49e8398",
       "RuntimeConnection.handshake_facts": "d39211aade330b14d4e352c86e96e993b61bd456aa5024c3d09b797890a86d3a",
@@ -19690,10 +19722,9 @@
       "RuntimeConnector.close": "d9010a8907ca26c80bff5cf9680aecb1d68a0786897cf2f722e0c5132ad31faa",
       "RuntimeConnector.handshake": "376e21b22efc4e3288a5154148b7185c3d9ab245d289e4d4aae1eb0a49e51020",
       "RuntimeConnector.resolve": "cfa4d6e6d8e66927c497aad2363716c743ae0a314c77e317ee1e03811e44b1e5",
-      "RuntimeControlDiscovery": "ef1f1cddc31d783f6488c2d2868c7af4b65cff469bc6e914952abf42c7a46941",
+      "RuntimeControlDiscovery": "f506b854d55ba3b34e9575290f36e2e120a4a92f26aee40ca61cf7f42510cf2d",
       "RuntimeControlDiscovery.capability_flags": "d8738c5d2b8110f4d7ea70bc077c99f0ad865660b67131f5c7937ed29e3d9109",
       "RuntimeControlDiscovery.invocation_endpoint": "1f763c96fe70e7ef696ae38c064ed0c3800e4a509309234bc68289f345ecc864",
-      "RuntimeControlDiscovery.pages_port": "40d2dc846bfaba462bbdc3fc6c5fac3ab0636a019e7ecc5b28330e57d08d7c6c",
       "RuntimeControlDiscovery.pid": "8e3fb1dc14c2c06b2a8a38d72b55d06debbc5bde3e2e5d1ed0f944060d48d3fd",
       "RuntimeControlDiscovery.pipe_name": "3f382775650d03b1ea4609bc24ec1d2798070f16dd20d130868cc3c90c72d23c",
       "RuntimeControlDiscovery.runtime_host_identity": "22040fbf0f8254cf00809ebb359b8c389f2c553d9db180280584f8c8274f8136",
@@ -19743,16 +19774,16 @@
       "RuntimeFrameStream.close": "6641ba90578238e4f768cf4d870f618643b3ec44a4dad728f7dcfec5e05ef37d",
       "RuntimeFrameStream.handle": "e884878e346c4ec79c767afcb2e65fc1ab92058575625e152e8760cb70b3c63b",
       "RuntimeFrameStream.recv": "9e0326c06afe9ba778862ee5f18643757bcb51f4f23cb50b0c0cc3f476d8fbdf",
-      "RuntimeHandle": "fae81e0862741b55ff35d1c2b6ca0b83bdf9f2a8ed7dc4695aeb3326951600fa",
+      "RuntimeHandle": "9455600245455442361db1d65a2b89f160249edb2d017c0bdaf3a8bb1b7486f6",
       "RuntimeHandle.detach": "a7d041c5aaab8433f6cc8dfa98d773f977c2f4830f07834cde68eebf500578e0",
       "RuntimeHandle.endpoints": "406767a02f0a8dadfe105f568d3a8351dfc06eb66af2435c25e0b5e3594f812f",
       "RuntimeHandle.handle_id": "f6f2c4de38918488b29401fe493ed088135334b8032a624034ec74156645902d",
       "RuntimeHandle.invocation_endpoint": "8b8197de61cdcc49d1785113cef3a2ba86de2afbf7373c6cea21545fc7140f7d",
-      "RuntimeHandle.open_runtime": "510863aea19cf848ad7133361f716ebd44b638f9b0312795cb0b1119c69aecf1",
-      "RuntimeHandle.runtime": "7ee2bc08d61d116851621924241794f673173f3ba9116595f4154af68cf46db9",
+      "RuntimeHandle.open_runtime": "4e9b9155bb460cb86efff1de18b56e651d45c30249ff0a89dbe921cfc6e0c6cb",
+      "RuntimeHandle.runtime": "296bbbd51ddfa007628fe8d3cb7ffa9e303c6a11e39b02ed49a14c4675ccd724",
       "RuntimeHandle.state": "e40d9b9ababe4eda1ac97ff863a318d7eb39aab34534d3a296485930bf9ef227",
       "RuntimeHandle.status": "6a07b0fe5b4b8a887da633f46ca23173d773f65fd648ce7be2fd81c30664c6f1",
-      "RuntimeHandle.stop": "360d89fec154c27ac827bccb6df28c7b79c29bc9e7062992acf9794eb6c679e8",
+      "RuntimeHandle.stop": "b8d8072c037d474a5e4b3119aedfae1254c687e07ca4c09860a3a82f40ee8ff7",
       "RuntimeHandle.transport": "0fcf3d639dad1fac81081b618ea86c58239d840dfcf54595ba2bd58629069aab",
       "RuntimeHandleEventProvider": "fe24d9d0d8b993f0bb06fe1a8e6944da349dea0a6d96f3f82a0030606497aedd",
       "RuntimeHandleEventProvider.read_events": "1d53c0cd12c530d4cef5d4f58607cf785eefe1f699b145e68d0672b502af7854",
@@ -19793,11 +19824,11 @@
       "RuntimeIdentityProjection.realm": "0a3d7b981b82a1edb44838b24f850004aa388144dac7bb232b9ce89150822d77",
       "RuntimeIdentityProjection.runtime_instance_id": "5e8da839f8063ae2bc96c1aa382338fe83ac8535fd2b293fd9038f5f59df3acd",
       "RuntimeInvocationAuthority": "c10f6f372783544cd3c2ba186fbd994b2b1d54060757c0aa7c567e1dd0658939",
-      "RuntimeInvocationTransport": "29aaaec97abd5053be4f964a42b503cf6a52a305c3041c1c9b2b7c832fa2394a",
+      "RuntimeInvocationTransport": "cf908a9e893f878ad866cdccb94eab06dbdd9f955ba414e8bb963e4749115671",
       "RuntimeInvocationTransport.bidi": "22929be5b8d90510f5956998ca34a40da70c721d56c2d52645060e66b08abf68",
       "RuntimeInvocationTransport.close": "f02d77c46a2b2b224d46d0b267e78a380edd87b3fbd3b510ecdc2a97b064df0d",
-      "RuntimeInvocationTransport.connect": "c007bc17bf4520d055ae2fdc9119b188da7a296f0a131d745060f94afceb9923",
-      "RuntimeInvocationTransport.connect_direct": "bdbb49c2c8ae9a34e2ad40383b16575f52decd6e4bc41663a55d456fe9294845",
+      "RuntimeInvocationTransport.connect": "9c7cfd998ad7b0769f346ea1accb75848b402cc61b45a1c2435248aea96dbbc8",
+      "RuntimeInvocationTransport.connect_direct": "fd18d0a9df4d797655fb56c5b1aa440a778f1bea219614c0e4b2de933770f56f",
       "RuntimeInvocationTransport.connection": "3e4965531d48cf91a6500ff3c079c96329be788e8095e237a65088c30965aa76",
       "RuntimeInvocationTransport.from_runtime_client": "f551f510fda937a9626bf71ce0a1a3a3d8b1124ef02eaac07c4188673901cde5",
       "RuntimeInvocationTransport.invoke": "5eb5de6618520428e17dd9afd28c812637ed135882eced19decf736eafcd1053",
@@ -19807,10 +19838,10 @@
       "RuntimeIpcVersionRange": "bc393320e99152c4a05314b0e94aacd4182aa519027508545a6101094462aa73",
       "RuntimeIpcVersionRange.max": "bb01326e8309aaac56d27a8eb7a37976bd495244a3254c01d0edb8e5c6948bf4",
       "RuntimeIpcVersionRange.min": "5d54b6f8b844d6db792ae4fb36dc66bd3c8fff2e998ff8f4b7bd692142b88917",
-      "RuntimeLifecycle": "9cf7dfe55eaba9fa624ca1bc7f968dd84f37b32a51c9234cccd362dc00bb1446",
-      "RuntimeLifecycle.attach": "01f76e998ac0bd3385494fecbd31033ff1925fbaebdfd917d47439e3f500422d",
-      "RuntimeLifecycle.connect_local": "9b4b1a061b2f07d2cbe3c93214178e00f9ddb7519e786dae7dd66ce6151a210e",
-      "RuntimeLifecycle.discover": "8455c0ce10ad71045f3b777ba66af4214c0a02a128b199a99252aa4a3472062e",
+      "RuntimeLifecycle": "11350c2feced93ff5f322a6d294bbae596b4079203dda95561a9e8534cd55bd3",
+      "RuntimeLifecycle.attach": "138dae8cc726cfa81d328204a51c120b737829e6f761e00036352afd836b8ad3",
+      "RuntimeLifecycle.connect_local": "00579d1c762221138f4f55f833e716fea04273f93bc04389c804f56b0a32cafe",
+      "RuntimeLifecycle.discover": "b58ec49f0a17f338e13e3cbbac3058476709a6d2784702246971c4542cba03d5",
       "RuntimeLifecycle.start": "e4bcf17da80090aa59db269acb773b212dad81f3bf2cae895253c09b8c5e48dc",
       "RuntimeLifecycle.transport": "0fcf3d639dad1fac81081b618ea86c58239d840dfcf54595ba2bd58629069aab",
       "RuntimeLifecycleState": "9127a5b5b481cb5d50a74fa36ebdfe74a55178910d9c0ba4e8355cefbae54a95",
@@ -20050,24 +20081,24 @@
       "SDKError.source_ref": "fa58a379b962fc590c976789c8fb8cbb968f0a1305b24f6623f16567984e9bd1",
       "SDKError.stage": "8de6c67a6a5fce1debb9a33593857a48da49a61b26d4a3e08b61d3d4f5621cd7",
       "SESSION_AUTHORITY_METADATA_KEY": "68e4a16e5b13c9e5bfae50b1e42182d6b777a5e96474049841f2d15c736ada6e",
-      "SdkEnvironment": "61e77df9f256d4d1dbf9e40294dbe7d4f14168435c9ffaa038c3ef5691364a4e",
+      "SdkEnvironment": "f640ac2128d3025c554d421bfe8fb71aacc4d9c45a6170c56ddb47e6d92d8699",
       "SdkEnvironment.ability_invocation_client": "f47b3671b4b8b8e41b688b74212a584bc462f52d9696c21e12fd3de3524a2afb",
       "SdkEnvironment.addressing_client": "a0c9cf052c5d9c91d2f52045681ae7e54e155492d263dd68fed3c585e2a5d046",
       "SdkEnvironment.client": "86f07d3aaedda3ccf88479a9b921acbf0f657f0c482bfe911ffeb1dfdc4c4ccf",
       "SdkEnvironment.close": "671c4534682c492f1c3cb0544b56a74cc69fe5eedd7e0c47c368a123f1b36fcd",
-      "SdkEnvironment.connect_local": "f0295785e21c25fb333d99a6203a923bbb52a57d860f2b4aa9736ee9243cbd96",
+      "SdkEnvironment.connect_local": "ecccdb8d9bfa0f5c47d7b58a78194f6dd70d91ceaf4f2ecb0a5468cd2a83b5a1",
       "SdkEnvironment.control_path": "a8d3140bdabc6ed6cadf524fa80b7b5f399776465c825b9b3b9a2149aa270bd5",
       "SdkEnvironment.feature_set": "2fbf0bfca44cd007599c175a89a70a5f909282ab981f32be8014cd5054bd47d1",
       "SdkEnvironment.health_client": "f6b401b3f6bea7052fb84b1e0bc90680ab0b15a87de70003f8204a6014cb351c",
       "SdkEnvironment.invocation_transport": "8379abfc80df250f0d8dc75fc4363a032ac1ba2bb4caa4f6bb680c287ca63903",
-      "SdkEnvironment.invocation_transport_direct": "12bb8e7e2251b339607614ed3abca91c1a02591abbdce59f14d2d478b91105bc",
+      "SdkEnvironment.invocation_transport_direct": "cb90364f633a5508271ce1a186f0a41f90c453853a7d8535582bfd35264c880a",
       "SdkEnvironment.library_path": "1a560110d65f07c5ff70c428d1bc68b0268046e632b77809001b6fcb070ac342",
-      "SdkEnvironment.native_runtime": "63e5976f44c3c9cc8da6526609f3a0e8d28933612277ec34ca469061d4738f28",
+      "SdkEnvironment.native_runtime": "860a69d6291c505472e0bc1daa2f274256bc7deb3111340f4522aac163c0cfce",
       "SdkEnvironment.resolved_control_path": "478fd8dfd7f90136169cfc1c56bbbe921ea6541965672ef5f6a44a7ea98eff9e",
       "SdkEnvironment.runtime_client": "5709ee3c5aea42588d89cfeedc553880d371eff5886c4c2424f803702ef84634",
-      "SdkEnvironment.runtime_client_direct": "66b5fd1e973fd139654f85d5c5bfca71210d441fb9db76cfc04b4d51238b20e8",
-      "SdkEnvironment.runtime_connection": "55203ac56668fed6fa8a7199f6d48254187dc91d66593433dbd7427ef79b1262",
-      "SdkEnvironment.runtime_connection_direct": "37405d7a7c583a53f3bef0284b7e72add73ebd203f23372aeacceee451ec939f",
+      "SdkEnvironment.runtime_client_direct": "59c35f3594fffa6c97e596539c1f2e222b64e67b9d38280f43006775899c692f",
+      "SdkEnvironment.runtime_connection": "5d273c42dc5fc22d40d1a5a26598248c3e8a82e7febe570de7708787b583a99c",
+      "SdkEnvironment.runtime_connection_direct": "9466877a38d12683842db44aeedaae8ea1c69f72fdcc23a3ab9fdffc7d1e6cde",
       "SdkEnvironment.runtime_credentials_path": "84a51a05852d370d6c6a398767bd9d231a65f3817094bef48de37dbfa67290d9",
       "SdkEnvironment.runtime_identity_projection": "b50598beccdc353f8cc04998ef8d3f6182041a1d0fdea715a8b6e158347422fd",
       "SdkEnvironment.runtime_lifecycle": "47acf9382b984f55ec5e44024bc50201a6e3e2a15db530dc4077c12623225422",
@@ -20238,7 +20269,7 @@
       "TerminalReceipt.receipt": "d368d2c1bca71d7c4876c72f7f514cae5b1c9aab5ce462b8194fa7356265d869",
       "TerminalReceipt.result": "7f31c3027f75dfde2be4b42c07487e654a92089e8d5fd3371c6477253090f94c",
       "TerminalReceipt.submitted": "d8a8bccc0f906d13c0abc34b12ae75b9afb62fbd3f8fcae664bccce183d651f0",
-      "UnaryDispatchPool": "3e4c10f136927a57f46abcc59605dbd27c44f00b392eb5151329cd37d22699c4",
+      "UnaryDispatchPool": "669e9626e2569abf4800d2e8937204785c3f537bfc733ca4e5d134d7ae5edc9d",
       "UnaryDispatchPool.close": "c5114b7ac37835287549ee8f81cadc64cf6b11f6d8b692482364a6b1fd3c13e6",
       "UnaryDispatchPool.connected_transport": "cd0a0d7928c45e982f9558518d78299cdc791d98ee90580f47c920462b26132c",
       "UnaryDispatchPool.current_transport": "ca77641bdc0758f3a0679a15a0ac5283793b4a09e27b108557c932ba32987d9a",
@@ -20258,17 +20289,17 @@
       "Version.abi_version": "15399f644b0b0b61ddba04c0dee9ee7fd03864cdf6dfb765d13c8d7c805c49f6",
       "Version.sdk_version": "3fa6075676e1acfa9483a09e912abb6a781c31972c23a481b2a64d59cd28093b",
       "agent_ura": "30375140fabb499795be4d3a3cea1351f7be87c1a289e1c3353ebfd1e7d9b9eb",
-      "attach_runtime_host": "08437d5b74ed3647c34abab57ec6f4b107c850fdd582cdf71727a36664519f58",
+      "attach_runtime_host": "39a056ebcbf31fe16c86e89adc40e0cbbdb2654e1bf63049f9720b48cf05d346",
       "authority_ura": "bcee6a0ded4e7c48300c0d3f36f0afa4f777d1f672053f0c02f613b332599d01",
       "canonical_ability_descriptor_ref": "33f40bbb040585dd985aa00b6dd52782dc865f5a5d0cb0d9c6af32154a451ca7",
       "canonical_failure_code": "6c80833c6170caf21bc32d07cff8d224839d6bd36a1e3bdd6c2590e11ae66868",
       "canonical_terminal_state_code": "39877d5b08b70679af690249c6cd2919e37fddaff2f923c2e1fbb250a8224a49",
-      "connect_runtime_local": "8743952092591cbbc3115cd6dec4b8563b80fce69dc6e5c8f995990fe3ea21fe",
+      "connect_runtime_local": "26ab3a254b93e54df1020a16be8b1b0d627e46ff36415daea9e5feb82bf27644",
       "default_environment": "7aba5c300a4b369c79777d057e52a0f2a5de5d96a7de8e4b3ab0e8b5624d2740",
       "device_ability_ura": "12678b9119540fab65243e0f589444d4e478046588a36bc30a17aa312fb8a454",
       "device_agent_ura": "8d7be845e4e8f50960c85dac158554057de56782c87fa727d637ce47819119f4",
       "device_ura": "c57a7de94ea13133b5a30c7874899c3502879f709042c3571d02a0b2cd578038",
-      "discover_runtime_host": "ec83bf7e829fe65c32cc28971a2726958d4986f13536d35f7c0de3b1869bb3d0",
+      "discover_runtime_host": "9aa8ab29b9deec9c190d152d24c4c2a83aa3d4ac6cbfb582ff41b8373acb31ab",
       "error_class_for_code": "5f96beff1e9c6e65c795ae6a5ffbc21bc127c597f85f055553666ca30a94b13f",
       "grant_actions": "628b35234cfa844607289b11e553665280b53c76024547eeca4d4c855ccc476c",
       "is_code": "829e5d5ca2c9a1f74bfe8991f70a59404bbedafb63ed8dd5fdccef156b5739d9",
@@ -20283,7 +20314,7 @@
       "profile_source_ref": "da6b1b2f0f183291bfc844994a060602d341d7ebc468e9d0c8997cffd8f2936c",
       "project_ability_descriptor": "26ce75b308f3f0d5df60f0613396224dfe5097f3d0cad4e38d7dcbf6022b4825",
       "project_descriptor_ref": "2049bd597bc2126054ec2d65688332af034698ea65643594c0e9fa8c7e996178",
-      "read_runtime_control_discovery": "7ce2b63fb9226bba7f929b5f46ca8a8091a6d6dd32b730a44e40dc6c46b2840a",
+      "read_runtime_control_discovery": "e782a15fa33b528dba74c6313e3282f7109d5a24946f3a3543a624ac6698287a",
       "read_runtime_identity_projection": "2cb1ed29c80c0cc687a2aad79d30279cd4477cd4adcc7c9c5375662a3d74ba72",
       "resource_ura": "9023d498e3f1a8d68e3979df8aa1d496f1b70aadb8e75ae2cc1036bbbb004a0a",
       "retryable_for_hint": "a40a2da8049667e10c4c894f7520a59e71afbfce282f40eb308cb9968d49a6cd",
@@ -20637,21 +20668,31 @@
       "ReceiveOptions.signal": "11a40cfa52f90ffb45e5a43f04f9dc659ca02b69efc96c8dde16ea07e5cbb668",
       "RetryHint": "ed69de81e0d647461b01d5c782b274c7948b2a749f22e0806151376015078cd7",
       "RetryHintValue": "2ec13cd98dc961b3c1d192b2acf57df8c91a5a34f9b20a56db9e675e8e720c19",
-      "RuntimeCallContext": "27bb5ea668ee1ffcf1e1a881d7012fa0ef0410bed31ff3b12a0183211d400719",
+      "RuntimeAbilityClient": "3cf34ce33638b7961cee63a1f7307cd21b96df1f450bc60ce6bfb2c0ea8fadc0",
+      "RuntimeAbilityClient.build": "727c7a61e13b645d7ad53f8de14827f5138de4443a87306ddcb1fbe98ce4fc22",
+      "RuntimeAbilityClient.buildGovernanceRead": "2690265e54058d912c43044921fabf60455e0c161314fec4978d413222997449",
+      "RuntimeAbilityClient.invoke": "6ae0763b7ac297b2499e67c95139807041fab896f445b04e8c4ce25004ff1787",
+      "RuntimeAbilityClient.invokeGovernanceRead": "117ec8bec2c04a77b5303c91bf33c7bfc9018a254b9b70f2cd0356ddc5cbb96c",
+      "RuntimeAbilityClient.new": "68ccc6debedcdd10ae419c7946e51c7795f2141e4de84ae60219e3ec5a4d6a5a",
+      "RuntimeCallContext": "4078bd40b994626d22207f0bca7eefcc9874bf43183805965de2340ca42a89a2",
       "RuntimeCallContext.authority": "40c27834011e8ff0e0a4ffe63057293eef2f4d34878dca3e9fd2f6bca66110dd",
       "RuntimeCallContext.calleeURA": "97355a18210bebde8537dc36e06ec6e52b32515dfbcd48d7e7c8e4f3c5642a27",
       "RuntimeCallContext.callerURA": "ca14060ffd8a04a3ee939472d51cd901afb51cd7ac75acaf288de38f292b32f7",
+      "RuntimeCallContext.causalContext": "922c2d7088a129e0252e0c8b405c4a9175fff8a6ffdd98eee21c0615cc16b614",
       "RuntimeCallContext.metadata": "19493dbe75a5c364aa5ca2d2d276f647cb47a684d84b40710627eba3ecafb2ed",
       "RuntimeCallContext.new": "d616e372836b28045033e63389efcb2f34ed6c01dbc03f3422e253fe178a4d71",
+      "RuntimeCallContext.nonceBase64": "5ad9339529fcf99041d22e8cf8876c56bd729408bad9a77cc8054541fcb2a008",
       "RuntimeCallContext.subjectURA": "aa326540be478c3b73ce7678d46ca9fd5be3dfb792750bb59fcc21d4cdfd3b37",
       "RuntimeCallContext.toJSON": "b0a84eb88b09d35a9954879512128aae5ad7dccb04d8a7a703a86858f3f4e68d",
-      "RuntimeCallContextFields": "d9d8263e0558d96cba926daf9a2174f673e0dc9159e534ecd48425e9cb25959e",
+      "RuntimeCallContextFields": "389eb999694227b66ca26cb0898c290e670b3d62a940735abd8fb84603095422",
       "RuntimeCallContextFields.authority": "a4d67c476516f09a64b8cfc76e07f79228f9a5d5d2a3078aa2aeb25c5161bf43",
       "RuntimeCallContextFields.callee_ura": "9151892692d93a3be649b4add650bf10467a5d403532d8979dcfc0c90b14f5ae",
       "RuntimeCallContextFields.caller_ura": "34500a0f6b10e5053b6517ab45502564d77b89d1d449cd6322b1579faa0aad4d",
+      "RuntimeCallContextFields.causal_context": "a292adc7b759cb26eeb079f288fef5b33b985c1e28e411b8f64e869f775e1f6a",
       "RuntimeCallContextFields.metadata": "beb12eebef827e580e6bc721995f2c981ae685e6e9794f489a5f65a9f096186f",
+      "RuntimeCallContextFields.nonce_base64": "a8548a2f5fdc2762e595b47c08539512b495c04ee407eca12bda0ab581d78622",
       "RuntimeCallContextFields.subject_ura": "20dda8e773fb018befd87ef84ce2e6840dc3630aadc90147363a3cc58c6ed492",
-      "RuntimeClient": "a8b338cc619b0e25118e3aa634cde4441998775d437d6210830b87b37759686c",
+      "RuntimeClient": "4cacd1d638310f06cb9544d489333ca7885623e20769258fcb3cb80d069de13c",
       "RuntimeClient.awaitResult": "c1343ad059a374c2e15bc240d599304a8d8c5b84e88eaac78844e41dc963ddcf",
       "RuntimeClient.cancel": "74c85d621266bca2e56097cac58cb533fbb29394de9e2575e95c82fd572a03f7",
       "RuntimeClient.close": "e5d761b09d440a9809ebba209ecf1dd77e4f54528840476d0b95cdfab9467f1e",
@@ -20663,6 +20704,7 @@
       "RuntimeClient.newInvocation": "9459a531a8755925404d015440f590b60a50e27f81d7c7dc1e348f75eacd8c75",
       "RuntimeClient.openBidi": "ee109f38d17c60bf20a9a95baa15d83ff1cd1c8dd63966f869c5f86bcbff439f",
       "RuntimeClient.prepare": "b906c5be57f3d6221fa2a6d709992cb9a89a357b0ada2ed1fa1c9818942f4f23",
+      "RuntimeClient.resolveDescriptorRef": "9f0ed7e7917a86dedf8b6d50ed977d83996fa654932122421d779e6f9c5e898c",
       "RuntimeClient.submitSigned": "5f3db0e7245eab58c36444e6fea13baa159d57cb37eeac42675b1f9964d9164e",
       "RuntimeHealth": "6fd8527a12bb6bfd844a7bd32fef3296fc5cf794b77e0a6ae2f034e3893882e5",
       "RuntimeHealth.abiVersion": "25df6111f168322a8d6e661529383889ae9bdb96dc1e3ffc23701540921df994",
@@ -20699,7 +20741,11 @@
       "RuntimeReceipt.receiptType": "3e0d0d09a91be25e1ab9c81f49ed8aea9577e10deb77ad0a1c1237a5ee90321e",
       "RuntimeReceipt.state": "f0370be83f78d63e2b0840d73e4e50c5cfb3ff2a869410d44b55617fa4e9ec43",
       "RuntimeReceipt.validateSummary": "68494ca9fbab5820f521a7fa2c00996fbb5e1606acc423699dc5f2a43a06c67b",
-      "RuntimeTransport": "cbd6b65fecd8a78c4c00a65f3717d2b34985f896cc84305dfc2242e0e6903d5e",
+      "RuntimeReceiptProvider": "49b8476e56a1aa74c6e8d931183a3200568ed1252aded876e3f6e71d854a932b",
+      "RuntimeReceiptProvider.list": "cd4aa81929843ea82d718949bfb7f9a3e9a8416473734d723bc3b426cf0c9373",
+      "RuntimeReceiptProvider.new": "b7367684668f1dbe7ed4335e40057130c909fec7058f0384ec1b7eedec8e2605",
+      "RuntimeReceiptProvider.receiptHistoryListAuthorityScope": "e835e054d55afbeb3faae7ac033cd160d29fe62d6857a55b0bfd907b13a52b9e",
+      "RuntimeTransport": "9becb67e6293068647406202b8114d729b82ff587522ba3ca5223e13b6c56c94",
       "RuntimeTransport.awaitHandle": "a63f15e44c8292c8ebec607f901a7cb813ed4c64333a8a18c31bb941b3cb86aa",
       "RuntimeTransport.cancelHandle": "9cbb2e132a3c03d712d422176b9c1517ece6ec1f8ae93c3b796f3b5cff03690d",
       "RuntimeTransport.close": "79868c4e8cb0b57aaeb70c2775e3e0f52fa05d22ce42f9fb1388772cd7fd9373",
@@ -20709,6 +20755,7 @@
       "RuntimeTransport.openBidi": "b93d47171a9c43572b97b263deeedc1c0188acfd37f8e72266c9f7c6624d5af6",
       "RuntimeTransport.openStream": "a579d52ff0e2bd078a6385ee88a0194b9b8b8334b13ef83e704c9a917f67c8a8",
       "RuntimeTransport.prepare": "70e66f2f2f3a89c777514c4ef99799b89ff2c42e94637310dde035ef7872743d",
+      "RuntimeTransport.resolveDescriptorRef": "bde55611023f8621bc854d624910db7d6ba9fd290a01f2554e1601ca426b47e5",
       "RuntimeTransport.submitSigned": "f21cd74e5a5d045376ad2d0ef2f02a5771401a046a0d95037a7044c88a92891b",
       "SDKError": "f5d03230ffb8e76c4830b7acb6153f3180c99fba9601697e3f7898d98a80cfe3",
       "SDKError.code": "0265102e331b5a48a3421c416cee001760b1257ba4766be196c396646802f4d0",
@@ -22407,7 +22454,7 @@
     }
   ],
   "dependency_revisions": {
-    "axon_sdk": "1ce6b68472e8eba06e2e5b31d8c2c1b1c61db55b"
+    "axon_sdk": "509ecf550d905ac07655d9cd87962b832811c48e"
   },
   "provider_implementations": [
     {
@@ -22428,7 +22475,7 @@
         "terminal_receipt_facts",
         "unary_invoke"
       ],
-      "axon_revision": "1ce6b68472e8eba06e2e5b31d8c2c1b1c61db55b"
+      "axon_revision": "509ecf550d905ac07655d9cd87962b832811c48e"
     },
     {
       "language": "python",
@@ -22439,7 +22486,7 @@
       "sha256": "d72a2eca11a7f3d8712101e51b3d38d98dec0c723eb502a93a8c7c6445ef4774",
       "interface": "RuntimeConnector",
       "interface_path": "sdk/python/easynet_sdk/connection.py",
-      "interface_sha256": "d4fdab0b8853f8c558cbf23f3bfd0743b2577ae9aba8abea63c9d8d7f9f55a6f",
+      "interface_sha256": "5d82a7eaf3e772d951b9e80eb7ce03a205a584a1920a79ad5243f2e2aa857f8f",
       "capability_ids": [
         "native_runtime",
         "runtime_environment",
@@ -22448,7 +22495,7 @@
         "terminal_receipt_facts",
         "unary_invoke"
       ],
-      "axon_revision": "1ce6b68472e8eba06e2e5b31d8c2c1b1c61db55b"
+      "axon_revision": "509ecf550d905ac07655d9cd87962b832811c48e"
     },
     {
       "language": "go",
@@ -22464,7 +22511,7 @@
         "stream",
         "bidi"
       ],
-      "axon_revision": "1ce6b68472e8eba06e2e5b31d8c2c1b1c61db55b"
+      "axon_revision": "509ecf550d905ac07655d9cd87962b832811c48e"
     },
     {
       "language": "python",
@@ -22480,7 +22527,7 @@
         "stream",
         "bidi"
       ],
-      "axon_revision": "1ce6b68472e8eba06e2e5b31d8c2c1b1c61db55b"
+      "axon_revision": "509ecf550d905ac07655d9cd87962b832811c48e"
     },
     {
       "language": "go",
@@ -22495,7 +22542,7 @@
       "capability_ids": [
         "ability_invocation_facade"
       ],
-      "axon_revision": "1ce6b68472e8eba06e2e5b31d8c2c1b1c61db55b"
+      "axon_revision": "509ecf550d905ac07655d9cd87962b832811c48e"
     },
     {
       "language": "python",
@@ -22510,14 +22557,14 @@
       "capability_ids": [
         "ability_invocation_facade"
       ],
-      "axon_revision": "1ce6b68472e8eba06e2e5b31d8c2c1b1c61db55b"
+      "axon_revision": "509ecf550d905ac07655d9cd87962b832811c48e"
     }
   ],
   "inventory_source_revisions": {
-    "rust": "1ce6b68472e8eba06e2e5b31d8c2c1b1c61db55b",
+    "rust": "509ecf550d905ac07655d9cd87962b832811c48e",
     "c_abi": "current_checkout",
     "go": "current_checkout",
-    "python": "1ce6b68472e8eba06e2e5b31d8c2c1b1c61db55b",
+    "python": "509ecf550d905ac07655d9cd87962b832811c48e",
     "node": "current_checkout",
     "java": "current_checkout",
     "swift": "current_checkout"

@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Mapping
 
-from .connection import ConnectOptions
+from .connection import ConnectOptions, _connect_options_or_default
 from .runtime_lifecycle import (
     AttachOptions,
     Endpoints,
@@ -17,7 +17,10 @@ from .runtime_lifecycle import (
     RuntimeLifecycleState,
     RuntimeStatus,
     StopOptions,
+    _attach_options_or_default,
+    _discover_options_or_default,
     _runtime_ready as _runtime_lifecycle_ready,
+    _stop_options_or_default,
 )
 from .errors import ErrorCode, RetryHint, SDKError
 from .health import DiagnosticsReport, HealthClient, RuntimeHealth
@@ -101,15 +104,15 @@ class RuntimeAdminClient:
         self._health = health
 
     def discover(
-        self, options: RuntimeHostDiscoverOptions = RuntimeHostDiscoverOptions()
+        self, options: RuntimeHostDiscoverOptions | None = None
     ) -> Endpoints:
-        return self._lifecycle.discover(options)
+        return self._lifecycle.discover(_discover_options_or_default(options))
 
     def start(self, config: RuntimeHostStartRequest) -> RuntimeHandle:
         return self._lifecycle.start(config)
 
-    def attach(self, options: AttachOptions = AttachOptions()) -> RuntimeHandle:
-        return self._lifecycle.attach(options)
+    def attach(self, options: AttachOptions | None = None) -> RuntimeHandle:
+        return self._lifecycle.attach(_attach_options_or_default(options))
 
     def status(self, handle: RuntimeHandle) -> RuntimeStatus:
         if handle is None:
@@ -119,18 +122,18 @@ class RuntimeAdminClient:
     def open_runtime(
         self,
         handle: RuntimeHandle,
-        options: ConnectOptions = ConnectOptions(),
+        options: ConnectOptions | None = None,
     ) -> RuntimeClient:
         if handle is None:
             raise _invalid_admin("runtime handle is required")
-        return handle.open_runtime(options)
+        return handle.open_runtime(_connect_options_or_default(options))
 
     def stop(
-        self, handle: RuntimeHandle, options: StopOptions = StopOptions()
+        self, handle: RuntimeHandle, options: StopOptions | None = None
     ) -> None:
         if handle is None:
             raise _invalid_admin("runtime handle is required")
-        handle.stop(options)
+        handle.stop(_stop_options_or_default(options))
 
     def detach(self, handle: RuntimeHandle) -> None:
         if handle is None:

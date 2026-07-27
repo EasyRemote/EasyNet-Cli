@@ -9,6 +9,7 @@ from ... import transport as canonical_transport
 from ...connection import (
     ConnectOptions,
     _ControlDiscoveryRuntimeConnector,
+    _connect_options_or_default,
     RuntimeConnection,
 )
 from ...errors import ErrorCode, RetryHint, SDKError
@@ -18,10 +19,11 @@ def connect_invocation_transport(
     *,
     control_path: str = "",
     library_path: str | None = None,
-    options: ConnectOptions = ConnectOptions(),
+    options: ConnectOptions | None = None,
 ) -> canonical_transport.RuntimeInvocationTransport:
     """Connect through the explicit local runtime C ABI provider."""
 
+    options = _connect_options_or_default(options)
     resolved_control_path = options.control_path or control_path
     connection = RuntimeConnection(
         _ControlDiscoveryRuntimeConnector(
@@ -39,11 +41,12 @@ def connect_direct_invocation_transport(
     *,
     control_path: str = "",
     library_path: str | None = None,
-    options: ConnectOptions = ConnectOptions(),
+    options: ConnectOptions | None = None,
     identity: Any | None = None,
 ) -> canonical_transport.RuntimeInvocationTransport:
     """Connect to the local runtime direct Axon gRPC-over-UDS endpoint."""
 
+    options = _connect_options_or_default(options)
     if identity is None:
         raise SDKError(
             code=ErrorCode.NOT_IMPLEMENTED,

@@ -234,3 +234,19 @@
 - [x] Add regression coverage that `target_node_ura` must already be a
       canonical Device or Authority URA at the public ability boundary.
 - [x] Run focused A2A tests, fmt, architecture/SPEC gates, and codegraph sync.
+
+## Iteration 25 — Python runtime lifecycle default-options cutover
+
+- [x] Purge the local state root through the product reset command after
+      explicit operator approval and confirm no daemon/key-service process
+      remains.
+- [x] Run the SPEC v2 gate from clean state to establish the current checkout
+      baseline.
+- [x] Re-run codegraph and targeted SDK lifecycle searches for language
+      divergence around runtime host options.
+- [x] Replace shared Python SDK default option instances with one canonical
+      default-options helper per value type.
+- [x] Add regression coverage that omitted options still serialize to the same
+      empty provider payload without relying on shared default objects.
+- [x] Run focused Python lifecycle tests, SPEC/architecture gates, fmt, and
+      codegraph sync.

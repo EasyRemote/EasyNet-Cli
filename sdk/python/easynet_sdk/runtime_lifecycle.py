@@ -7,7 +7,7 @@ from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Mapping, Protocol, runtime_checkable
 
-from .connection import ConnectOptions
+from .connection import ConnectOptions, _connect_options_or_default
 from .errors import ErrorCode, RetryHint, SDKError
 from .runtime import RuntimeClient, RuntimeTransport
 
@@ -99,6 +99,26 @@ class StopOptions:
                 "force": self.force,
             }
         )
+
+
+def _attach_options_or_default(options: AttachOptions | None) -> AttachOptions:
+    """Materialize omitted attach options at the lifecycle boundary."""
+
+    return options if options is not None else AttachOptions()
+
+
+def _discover_options_or_default(
+    options: RuntimeHostDiscoverRequest | None,
+) -> RuntimeHostDiscoverRequest:
+    """Materialize omitted discover options at the lifecycle boundary."""
+
+    return options if options is not None else RuntimeHostDiscoverOptions()
+
+
+def _stop_options_or_default(options: StopOptions | None) -> StopOptions:
+    """Materialize omitted stop options at the lifecycle boundary."""
+
+    return options if options is not None else StopOptions()
 
 
 @dataclass(frozen=True)
@@ -223,8 +243,9 @@ class RuntimeLifecycle:
 
     def discover(
         self,
-        options: RuntimeHostDiscoverRequest = RuntimeHostDiscoverOptions(),
+        options: RuntimeHostDiscoverRequest | None = None,
     ) -> Endpoints:
+        options = _discover_options_or_default(options)
         try:
             raw = self.transport.discover(options.to_json_bytes())
         except SDKError:
@@ -247,7 +268,8 @@ class RuntimeLifecycle:
         _require_runtime_ready(status)
         return RuntimeHandle(self.transport, status)
 
-    def attach(self, options: AttachOptions = AttachOptions()) -> "RuntimeHandle":
+    def attach(self, options: AttachOptions | None = None) -> "RuntimeHandle":
+        options = _attach_options_or_default(options)
         try:
             raw = self.transport.attach(options.to_json_bytes())
         except SDKError:
@@ -259,8 +281,9 @@ class RuntimeLifecycle:
         return RuntimeHandle(self.transport, status)
 
     def connect_local(
-        self, options: ConnectOptions = ConnectOptions()
+        self, options: ConnectOptions | None = None
     ) -> RuntimeClient:
+        options = _connect_options_or_default(options)
         endpoints = self.discover(
             RuntimeHostDiscoverOptions(control_path=options.control_path)
         )
@@ -402,10 +425,11 @@ class RuntimeHandle:
         self._status = status
         return self._status
 
-    def open_runtime(self, options: ConnectOptions = ConnectOptions()) -> RuntimeClient:
+    def open_runtime(self, options: ConnectOptions | None = None) -> RuntimeClient:
         self._require_attached()
         if not _runtime_ready(self.state):
             raise _invalid_runtime_lifecycle("runtime invocation endpoint is not ready")
+        options = _connect_options_or_default(options)
         try:
             transport, _facts = self.transport.open_runtime(
                 self.handle_id, options.to_json_bytes()
@@ -418,15 +442,16 @@ class RuntimeHandle:
             raise _invalid_runtime_lifecycle("runtime transport is required")
         return RuntimeClient(transport)
 
-    def runtime(self, options: ConnectOptions = ConnectOptions()) -> RuntimeClient:
+    def runtime(self, options: ConnectOptions | None = None) -> RuntimeClient:
         """Open a Runtime Core client from this runtime host handle."""
 
         return self.open_runtime(options)
 
-    def stop(self, options: StopOptions = StopOptions()) -> None:
+    def stop(self, options: StopOptions | None = None) -> None:
         self._require_attached()
         if self.state == RuntimeLifecycleState.STOPPED:
             return
+        options = _stop_options_or_default(options)
         try:
             raw = self.transport.stop(self.handle_id, options.to_json_bytes())
         except SDKError:
@@ -472,7 +497,7 @@ def start_runtime_host(
 
 
 def attach_runtime_host(
-    transport: RuntimeLifecycleTransport, options: AttachOptions = AttachOptions()
+    transport: RuntimeLifecycleTransport, options: AttachOptions | None = None
 ) -> RuntimeHandle:
     """Attach to an existing runtime host through an explicit lifecycle transport."""
 
@@ -481,7 +506,7 @@ def attach_runtime_host(
 
 def discover_runtime_host(
     transport: RuntimeLifecycleTransport,
-    options: RuntimeHostDiscoverRequest = RuntimeHostDiscoverOptions(),
+    options: RuntimeHostDiscoverRequest | None = None,
 ) -> Endpoints:
     """Return runtime-host-advertised endpoints through an explicit transport."""
 
@@ -489,7 +514,7 @@ def discover_runtime_host(
 
 
 def connect_runtime_local(
-    transport: RuntimeLifecycleTransport, options: ConnectOptions = ConnectOptions()
+    transport: RuntimeLifecycleTransport, options: ConnectOptions | None = None
 ) -> RuntimeClient:
     """Discover, attach, open, and detach a local runtime host."""
 

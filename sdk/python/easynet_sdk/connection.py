@@ -58,6 +58,12 @@ class ConnectOptions:
         ).encode("utf-8")
 
 
+def _connect_options_or_default(options: ConnectOptions | None) -> ConnectOptions:
+    """Materialize omitted connection options at the call boundary."""
+
+    return options if options is not None else ConnectOptions()
+
+
 @dataclass(frozen=True)
 class RuntimeEndpoint:
     """Resolved runtime invocation endpoint projection."""
@@ -185,9 +191,10 @@ class RuntimeConnection:
         if self.connector is None:
             raise _invalid_connection("runtime connector is required")
 
-    def connect(self, options: ConnectOptions = ConnectOptions()) -> None:
+    def connect(self, options: ConnectOptions | None = None) -> None:
         if self.state == ConnectionState.CLOSED:
             raise _invalid_connection("runtime connection is closed")
+        options = _connect_options_or_default(options)
         options_json = options.to_json_bytes()
         attempts = 2 if options.reconnect else 1
         for attempt in range(attempts):

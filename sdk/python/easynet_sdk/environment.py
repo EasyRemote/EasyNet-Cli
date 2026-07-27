@@ -12,6 +12,7 @@ from .client import Client, FeatureSet
 from .connection import (
     ConnectOptions,
     _ControlDiscoveryRuntimeConnector,
+    _connect_options_or_default,
     RuntimeConnection,
 )
 from .providers.runtime.control import _ControlIpcClient, _default_control_path
@@ -191,22 +192,23 @@ class SdkEnvironment:
         )
 
     def connect_local(
-        self, options: ConnectOptions = ConnectOptions()
+        self, options: ConnectOptions | None = None
     ) -> RuntimeClient:
         """Discover, attach, open, and detach a local runtime host client."""
 
+        options = _connect_options_or_default(options)
         client = self.runtime_lifecycle().connect_local(self._connect_options(options))
         return self._track(client)
 
     def runtime_connection(
-        self, options: ConnectOptions = ConnectOptions()
+        self, options: ConnectOptions | None = None
     ) -> RuntimeConnection:
         """Open a stateful RuntimeConnection over the SDK default connector."""
 
         self._require_open()
         from . import _cabi
 
-        options = self._connect_options(options)
+        options = self._connect_options(_connect_options_or_default(options))
         connector = _ControlDiscoveryRuntimeConnector(
             _cabi.open_cabi_runtime_connector(library_path=self.library_path),
             control_path=options.control_path,
@@ -216,7 +218,7 @@ class SdkEnvironment:
         return self._track(connection)
 
     def runtime_connection_direct(
-        self, options: ConnectOptions = ConnectOptions()
+        self, options: ConnectOptions | None = None
     ) -> RuntimeConnection:
         """Open a direct Axon runtime connection with canonical Addressing."""
 
@@ -230,7 +232,7 @@ class SdkEnvironment:
             close_identity=True,
         )
         connection = RuntimeConnection(connector)
-        connection.connect(self._connect_options(options))
+        connection.connect(self._connect_options(_connect_options_or_default(options)))
         return self._track(connection)
 
     def runtime_client(self) -> RuntimeClient:
@@ -246,14 +248,14 @@ class SdkEnvironment:
         return self._track(RuntimeClient(transport))
 
     def native_runtime(
-        self, options: ConnectOptions = ConnectOptions()
+        self, options: ConnectOptions | None = None
     ) -> NativeRuntimeHandle:
         """Open one owned native Runtime and Health provider."""
 
         self._require_open()
         from . import _cabi
 
-        resolved = self._connect_options(options)
+        resolved = self._connect_options(_connect_options_or_default(options))
         runtime_transport = _cabi.open_cabi_runtime_transport(
             control_path=resolved.control_path,
             library_path=self.library_path,
@@ -264,7 +266,7 @@ class SdkEnvironment:
         return self._track(NativeRuntimeHandle(runtime, health, addressing))
 
     def runtime_client_direct(
-        self, options: ConnectOptions = ConnectOptions()
+        self, options: ConnectOptions | None = None
     ) -> RuntimeClient:
         """Open a direct Axon gRPC-over-UDS runtime client."""
 
@@ -282,7 +284,7 @@ class SdkEnvironment:
         )
 
     def invocation_transport_direct(
-        self, options: ConnectOptions = ConnectOptions()
+        self, options: ConnectOptions | None = None
     ) -> RuntimeInvocationTransport:
         """Open the JSON-friendly Runtime Invocation facade over direct UDS."""
 
@@ -291,7 +293,7 @@ class SdkEnvironment:
             RuntimeInvocationTransport.connect_direct(
                 control_path=self.resolved_control_path(),
                 library_path=self.library_path,
-                options=self._connect_options(options),
+                options=self._connect_options(_connect_options_or_default(options)),
             )
         )
 

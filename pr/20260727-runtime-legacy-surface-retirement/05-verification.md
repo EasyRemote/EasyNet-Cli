@@ -410,3 +410,45 @@
   - passed.
 - `/Users/macbook.silan.tech/.local/bin/codegraph sync`
   - passed; synced 1 changed code file.
+
+## Iteration 25
+
+- `target/debug/easynet runtime stop || true`
+  - completed without a live runtime to stop.
+- `target/debug/easynet device reset --purge-local-state --force -y`
+  - passed; removed the approved local state root through the product reset
+    lifecycle.
+- `pgrep -fl 'easynet|keyring|key-service' || true`
+  - passed; no stale daemon/key-service process remained after purge.
+- `cargo test --features axon-pb cli::commands::reset --lib`
+  - passed; 8 reset lifecycle tests passed.
+- `tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - passed at clean-state baseline before SDK lifecycle edits.
+- `/Users/macbook.silan.tech/.local/bin/codegraph query "Python runtime_lifecycle ConnectOptions default RuntimeHostStartRequest lifecycle provider parity Go Java Node Swift"`
+  - identified Python SDK lifecycle default option instances as the next
+    cross-language convergence cleanup surface.
+- `sdk/python/.venv/bin/python -m pytest -q sdk/python/tests/test_connection.py sdk/python/tests/test_runtime_admin.py sdk/python/tests/test_transport.py sdk/python/tests/test_environment.py`
+  - first run exposed an incorrect regression expectation for the canonical
+    empty Attach/Stop payload.
+  - second run passed; 95 passed and 4 subtests passed.
+- `rg -n "= (ConnectOptions|AttachOptions|StopOptions|RuntimeHostDiscoverOptions)\(\)" sdk/python/easynet_sdk sdk/python/tests --glob '!**/node_modules/**'`
+  - passed; no Python SDK shared option-instance defaults remain.
+- `sdk/python/.venv/bin/python -m compileall -q sdk/python/easynet_sdk sdk/python/tests/test_connection.py sdk/python/tests/test_runtime_admin.py sdk/python/tests/test_transport.py sdk/python/tests/test_environment.py`
+  - passed.
+- `sdk/python/.venv/bin/python -m ruff check ...`
+  - passed.
+- `python3 sdk/conformance/rebuild_public_api_model.py --write`
+  - refreshed the canonical public API and SDK parity matrix after the Python
+    source/interface hash changed.
+- `tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - passed after manifest refresh.
+- `tools/scripts/check-sdk-canonical-public-api.sh`
+  - passed.
+- `tools/scripts/check-architecture-convergence.sh`
+  - passed.
+- `cargo fmt --check`
+  - passed.
+- `git diff --check`
+  - passed.
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync`
+  - passed; synced 8 changed code files.

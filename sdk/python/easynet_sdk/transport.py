@@ -14,6 +14,7 @@ from typing import Any, Callable, Iterable, Iterator, Mapping, Protocol, cast
 from .bidi import BidiFrame, BidiOutcome, BidiSession, BidiState, BidiStreamDescriptor
 from .connection import (
     ConnectOptions,
+    _connect_options_or_default,
     RuntimeConnection,
 )
 from .errors import ErrorCode, RetryHint, SDKError, canonical_failure_code
@@ -106,7 +107,7 @@ class RuntimeInvocationTransport:
         *,
         control_path: str = "",
         library_path: str | None = None,
-        options: ConnectOptions = ConnectOptions(),
+        options: ConnectOptions | None = None,
     ) -> "RuntimeInvocationTransport":
         """REQ-LANG-5 delegate to the explicit runtime C ABI provider."""
 
@@ -115,7 +116,7 @@ class RuntimeInvocationTransport:
         return connect_invocation_transport(
             control_path=control_path,
             library_path=library_path,
-            options=options,
+            options=_connect_options_or_default(options),
         )
 
     @classmethod
@@ -124,7 +125,7 @@ class RuntimeInvocationTransport:
         *,
         control_path: str = "",
         library_path: str | None = None,
-        options: ConnectOptions = ConnectOptions(),
+        options: ConnectOptions | None = None,
         identity: Any | None = None,
     ) -> "RuntimeInvocationTransport":
         """REQ-LANG-5 delegate to the explicit runtime direct provider."""
@@ -134,7 +135,7 @@ class RuntimeInvocationTransport:
         return connect_direct_invocation_transport(
             control_path=control_path,
             library_path=library_path,
-            options=options,
+            options=_connect_options_or_default(options),
             identity=identity,
         )
 
@@ -347,13 +348,13 @@ class InvocationResultAdapter:
         *,
         control_path: str = "",
         library_path: str | None = None,
-        options: ConnectOptions = ConnectOptions(),
+        options: ConnectOptions | None = None,
     ) -> "InvocationResultAdapter":
         return cls(
             RuntimeInvocationTransport.connect(
                 control_path=control_path,
                 library_path=library_path,
-                options=options,
+                options=_connect_options_or_default(options),
             )
         )
 
