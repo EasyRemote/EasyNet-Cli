@@ -89,7 +89,9 @@ pub struct DesktopCompanionPlanner {
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum CompanionUserHome {
     CurrentProcess,
+    #[cfg(test)]
     Explicit(PathBuf),
+    #[cfg(test)]
     Unavailable,
 }
 
@@ -98,10 +100,13 @@ impl CompanionUserHome {
         match self {
             Self::CurrentProcess => dirs::home_dir()
                 .ok_or_else(|| "desktop companion user home directory is unavailable".to_string()),
+            #[cfg(test)]
             Self::Explicit(path) if path.as_os_str().is_empty() => {
                 Err("desktop companion user home directory must not be empty".to_string())
             }
+            #[cfg(test)]
             Self::Explicit(path) => Ok(path.clone()),
+            #[cfg(test)]
             Self::Unavailable => {
                 Err("desktop companion user home directory is unavailable".to_string())
             }

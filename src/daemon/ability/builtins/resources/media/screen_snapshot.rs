@@ -353,6 +353,7 @@ fn select_monitor(
     }
 }
 
+#[cfg(feature = "native-media")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DisplayMonitorSelector {
     PlatformId(u64),
@@ -360,6 +361,7 @@ enum DisplayMonitorSelector {
     PrimaryUnpinned,
 }
 
+#[cfg(feature = "native-media")]
 fn display_monitor_selector(entry: &ResourceEntry) -> anyhow::Result<DisplayMonitorSelector> {
     if let Some(value) = entry.metadata.get("monitor_id") {
         return value
@@ -384,6 +386,7 @@ fn display_monitor_selector(entry: &ResourceEntry) -> anyhow::Result<DisplayMoni
     Ok(DisplayMonitorSelector::PrimaryUnpinned)
 }
 
+#[cfg(feature = "native-media")]
 fn display_monitor_unavailable(detail: &str) -> anyhow::Error {
     anyhow::anyhow!("{ABILITY_SCREEN_SNAPSHOT}: {detail}; reason={REASON_RESOURCE_UNAVAILABLE}")
 }
