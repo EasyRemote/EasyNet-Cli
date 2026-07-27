@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -310,17 +311,52 @@ func TestDirectRuntimeStreamSeparatesCanonicalAndTransportTerminality(t *testing
 }
 
 func TestDirectRuntimeBidiRejectsCallbackCarrierWithoutTerminalClaim(t *testing.T) {
-	raw, err := directBidiDownJSON(&axonpb.InvokeBidiDown{
-		Sequence: 1,
-		Payload: &axonpb.InvokeBidiDown_DispatchCall{
-			DispatchCall: &axonpb.DispatchCall{CallId: 1},
+	for _, tc := range []struct {
+		name  string
+		frame *axonpb.InvokeBidiDown
+	}{
+		{
+			name: "dispatch call",
+			frame: &axonpb.InvokeBidiDown{
+				Sequence: 1,
+				Payload: &axonpb.InvokeBidiDown_DispatchCall{
+					DispatchCall: &axonpb.DispatchCall{CallId: 1},
+				},
+			},
 		},
-	}, nil)
+		{
+			name: "reverse dispatch result",
+			frame: &axonpb.InvokeBidiDown{
+				Sequence: 1,
+				Payload: &axonpb.InvokeBidiDown_ReverseDispatchResult{
+					ReverseDispatchResult: &axonpb.ReverseDispatchResult{CallId: []byte{1}},
+				},
+			},
+		},
+	} {
+		raw, err := directBidiDownJSON(tc.frame, nil)
+		if !IsCode(err, ErrProtocol) {
+			t.Fatalf("%s callback frame error = %v, want %s", tc.name, err, ErrProtocol)
+		}
+		if len(raw) != 0 {
+			t.Fatalf("%s callback frame produced synthetic lifecycle JSON: %s", tc.name, raw)
+		}
+		if strings.Contains(fmt.Sprint(err), fmt.Sprintf("unsupported_%s", "frame")) || strings.Contains(fmt.Sprint(err), "unknown") {
+			t.Fatalf("%s callback frame leaked retired event kind: %v", tc.name, err)
+		}
+	}
+}
+
+func TestDirectRuntimeBidiRejectsMissingPayloadWithoutUnknownEvent(t *testing.T) {
+	raw, err := directBidiDownJSON(&axonpb.InvokeBidiDown{Sequence: 1}, nil)
 	if !IsCode(err, ErrProtocol) {
-		t.Fatalf("callback frame error = %v, want %s", err, ErrProtocol)
+		t.Fatalf("missing payload error = %v, want %s", err, ErrProtocol)
 	}
 	if len(raw) != 0 {
-		t.Fatalf("callback frame produced synthetic lifecycle JSON: %s", raw)
+		t.Fatalf("missing payload produced synthetic lifecycle JSON: %s", raw)
+	}
+	if strings.Contains(fmt.Sprint(err), fmt.Sprintf("unsupported_%s", "frame")) || strings.Contains(fmt.Sprint(err), "unknown") {
+		t.Fatalf("missing payload leaked retired event kind: %v", err)
 	}
 }
 

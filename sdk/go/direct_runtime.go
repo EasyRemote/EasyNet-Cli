@@ -1138,9 +1138,13 @@ func directBidiDownJSON(frame *axonpb.InvokeBidiDown, admissionReceipt map[strin
 		return nil, err
 	}
 	terminal := role == directReceiptTerminal
+	kind, err := directBidiDownKind(frame)
+	if err != nil {
+		return nil, err
+	}
 	value := map[string]any{
 		"sequence":  frame.GetSequence() + 1,
-		"kind":      directBidiDownKind(frame),
+		"kind":      kind,
 		"stream_id": uint64(0),
 		"terminal":  terminal,
 	}
@@ -1185,28 +1189,31 @@ func directBidiDownReceiptRole(frame *axonpb.InvokeBidiDown) (directReceiptRole,
 	return directCanonicalReceiptRole(receipt.Receipt, "direct_runtime.bidi")
 }
 
-func directBidiDownKind(frame *axonpb.InvokeBidiDown) string {
+func directBidiDownKind(frame *axonpb.InvokeBidiDown) (string, error) {
 	switch payload := frame.GetPayload().(type) {
 	case *axonpb.InvokeBidiDown_BinaryChunk:
-		return "data"
+		return "data", nil
 	case *axonpb.InvokeBidiDown_Control:
 		if payload.Control.GetEof() {
-			return "remote_close_send"
+			return "remote_close_send", nil
 		}
-		return "control"
+		return "control", nil
 	case *axonpb.InvokeBidiDown_Receipt:
 		role, err := directCanonicalReceiptRole(payload.Receipt, "direct_runtime.bidi")
 		if err != nil {
-			return "invalid_receipt"
+			return "", err
 		}
 		if role == directReceiptTerminal {
-			return "terminal"
+			return "terminal", nil
 		}
-		return "admission"
+		return "admission", nil
 	case *axonpb.InvokeBidiDown_DispatchCall, *axonpb.InvokeBidiDown_ReverseDispatchResult:
-		return "unsupported_frame"
+		return "", directRuntimeProtocolError(
+			"direct_runtime.bidi",
+			"runtime bidi callback frame is unsupported by the direct invocation capability",
+		)
 	default:
-		return "unknown"
+		return "", directRuntimeProtocolError("direct_runtime.bidi", "runtime bidi frame did not include a payload")
 	}
 }
 
