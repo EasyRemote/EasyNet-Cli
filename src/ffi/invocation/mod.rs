@@ -9333,7 +9333,7 @@ mod tests {
             crate::daemon::ability::names::resources::META_LIST_RESOURCES
         );
         assert_eq!(resolved["call_mode"], "rpc");
-        assert_eq!(resolved["source"], "runtime_receipt_provider");
+        assert_eq!(resolved["source"], "runtime_local_descriptor_catalog");
         assert!(resolved["descriptor_ref"]
             .as_str()
             .is_some_and(

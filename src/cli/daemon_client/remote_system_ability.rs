@@ -113,9 +113,21 @@ pub(crate) fn invoke_remote_device_catalogue_read(
     let target_ura = crate::support::platform::remote_device::resolve_target_device_ura(node)?;
     let caller_ura =
         crate::support::platform::remote_device::require_caller_device_ura_from_credentials()?;
-    invoke_remote_catalogue_read_for_target(&target_ura, args, &caller_ura).with_context(|| {
-        format!("forward meta.list_abilities to remote device target={target_ura}")
-    })
+    match CatalogueReadRoute::resolve(target_ura, caller_ura) {
+        CatalogueReadRoute::LocalRuntime { target_ura } => {
+            crate::support::platform::local_invoke::LocalRuntimeCatalogueReadIssuer::invoke(
+                "meta.list_abilities",
+                args,
+            )
+            .with_context(|| format!("read local meta.list_abilities for target={target_ura}"))
+        }
+        CatalogueReadRoute::RemoteTarget {
+            target_ura,
+            caller_ura,
+        } => invoke_remote_catalogue_read_for_target(&target_ura, args, &caller_ura).with_context(
+            || format!("forward meta.list_abilities to remote device target={target_ura}"),
+        ),
+    }
 }
 
 #[cfg(not(feature = "axon-pb"))]
@@ -197,6 +209,32 @@ enum CurrentRealmHubInvocationContext {
 struct ResolvedCurrentRealmHubInvocationContext {
     hub_ura: String,
     caller_ura: String,
+}
+
+#[cfg(feature = "axon-pb")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CatalogueReadRoute {
+    LocalRuntime {
+        target_ura: String,
+    },
+    RemoteTarget {
+        target_ura: String,
+        caller_ura: String,
+    },
+}
+
+#[cfg(feature = "axon-pb")]
+impl CatalogueReadRoute {
+    fn resolve(target_ura: String, caller_ura: String) -> Self {
+        if target_ura == caller_ura {
+            Self::LocalRuntime { target_ura }
+        } else {
+            Self::RemoteTarget {
+                target_ura,
+                caller_ura,
+            }
+        }
+    }
 }
 
 #[cfg(feature = "axon-pb")]
@@ -293,6 +331,32 @@ mod tests {
         assert!(remote_device_abilities
             .iter()
             .all(|ability| ability.as_str() != "meta.list_abilities"));
+    }
+
+    #[test]
+    fn catalogue_read_route_selects_local_runtime_for_self_device() {
+        let local = "easynet:///r/acme/device/dev-a".to_string();
+
+        assert_eq!(
+            CatalogueReadRoute::resolve(local.clone(), local),
+            CatalogueReadRoute::LocalRuntime {
+                target_ura: "easynet:///r/acme/device/dev-a".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn catalogue_read_route_keeps_peer_device_remote() {
+        assert_eq!(
+            CatalogueReadRoute::resolve(
+                "easynet:///r/acme/device/dev-b".to_string(),
+                "easynet:///r/acme/device/dev-a".to_string(),
+            ),
+            CatalogueReadRoute::RemoteTarget {
+                target_ura: "easynet:///r/acme/device/dev-b".to_string(),
+                caller_ura: "easynet:///r/acme/device/dev-a".to_string(),
+            }
+        );
     }
 
     #[test]
