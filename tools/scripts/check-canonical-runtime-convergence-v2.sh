@@ -10603,6 +10603,7 @@ check_retired_edge_adapter_policy_absence_contract() {
 
 check_daemon_tuple_route_contract() {
   bash "$ROOT/tools/scripts/check-daemon-invocation-migration.sh" >/dev/null
+  bash "$ROOT/tools/scripts/check-pending-dispatch-target-boundary.sh" >/dev/null
 }
 
 check_remote_invocation_subject_provenance_contract() {

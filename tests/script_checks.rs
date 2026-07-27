@@ -144,6 +144,15 @@ fn daemon_invocation_migration_script_contract_holds() {
 }
 
 #[test]
+fn pending_dispatch_target_boundary_script_contract_holds() {
+    // Pins remote dispatch terminality: pending unary/stream registrations
+    // must be keyed by the selected execution-host URA so presence-loss
+    // cancellation remains deterministic and no no-target compatibility
+    // registration path can return.
+    run_bash_script("tests/scripts/test_check_pending_dispatch_target_boundary.sh");
+}
+
+#[test]
 fn canonical_runtime_convergence_v2_script_contract_holds() {
     // Pins the SPEC V2 convergence gates that are local to this repository:
     // plain admission helpers remain quarantined, lifecycle states share one
