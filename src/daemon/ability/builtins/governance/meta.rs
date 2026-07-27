@@ -733,7 +733,7 @@ mod tests {
         } else {
             callee_ura.to_string()
         };
-        crate::daemon::invocation::routing::target::InvocationTarget::local_explicit_tuple(
+        crate::daemon::invocation::routing::target::PublicInvocationTargetIssuer::local_explicit_tuple(
             ability_ura,
             args,
             crate::daemon::invocation::routing::target::CallMode::Rpc,

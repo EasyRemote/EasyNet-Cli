@@ -421,7 +421,7 @@ impl InvocationTarget {
     /// Construct a local target from explicit tuple facts already recovered
     /// by an ingress adapter or caller-owned policy object.
     #[must_use]
-    pub fn local_explicit_tuple(
+    fn local_explicit_tuple(
         ability: impl Into<String>,
         normalized_args: Value,
         call_mode: CallMode,
@@ -580,6 +580,34 @@ impl SystemInvocationTargetIssuer {
         call_mode: CallMode,
     ) -> InvocationTarget {
         InvocationTarget::remote_daemon_system(node, ability, normalized_args, call_mode)
+    }
+}
+
+/// Canonical issuer for public-ingress invocation targets.
+///
+/// Public ingress has already supplied explicit tuple facts. This issuer is
+/// the single production boundary that converts those facts into the resolved
+/// local target value object. Keeping the constructor here prevents handlers,
+/// metadata providers, and transport adapters from treating
+/// `InvocationTarget` itself as a public ingress policy factory.
+pub struct PublicInvocationTargetIssuer;
+
+impl PublicInvocationTargetIssuer {
+    #[must_use]
+    pub fn local_explicit_tuple(
+        ability: impl Into<String>,
+        normalized_args: Value,
+        call_mode: CallMode,
+        subject: impl Into<String>,
+        causal_context: CausalContext,
+    ) -> InvocationTarget {
+        InvocationTarget::local_explicit_tuple(
+            ability,
+            normalized_args,
+            call_mode,
+            subject,
+            causal_context,
+        )
     }
 }
 

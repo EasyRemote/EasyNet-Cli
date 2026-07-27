@@ -70,7 +70,9 @@ use serde_json::{json, Value};
 
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 use crate::daemon::ability::manifest::{AbilityManifest, ManifestAccessScope};
-use crate::daemon::invocation::routing::target::{CallMode, InvocationTarget};
+use crate::daemon::invocation::routing::target::{
+    CallMode, InvocationTarget, PublicInvocationTargetIssuer,
+};
 use crate::daemon::persistence::agent_registry::{AgentEntry, AgentRegistry};
 
 /// Verb portion of the per-agent discover ability. Combined with the
@@ -633,7 +635,7 @@ impl DiscoverProviderTarget {
     }
 
     fn into_invocation_target(self, args: Value) -> InvocationTarget {
-        InvocationTarget::local_explicit_tuple(
+        PublicInvocationTargetIssuer::local_explicit_tuple(
             self.ability_ura,
             args,
             CallMode::Rpc,

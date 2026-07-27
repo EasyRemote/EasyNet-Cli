@@ -293,6 +293,8 @@ for token, detail in (
     ("pub fn local_root", "daemon-system local target issuer"),
     ("pub fn local_root_for_subject", "daemon-system local subject target issuer"),
     ("pub fn remote_root", "daemon-system remote target issuer"),
+    ("pub struct PublicInvocationTargetIssuer", "canonical public-ingress target issuer"),
+    ("pub fn local_explicit_tuple", "public-ingress local target issuer"),
     ("InvocationSubject::explicit(subject)", "public subject preservation"),
     ("InvocationCausalContext::explicit(causal_context)", "public causal context preservation"),
 ):
@@ -336,6 +338,10 @@ for path in sorted((root / "src").rglob("*.rs")):
         ):
             violations.append(
                 f"{rel}:{production.count(chr(10), 0, match.start()) + 1}: daemon-system InvocationTarget construction must use SystemInvocationTargetIssuer"
+            )
+        for match in re.finditer(r"InvocationTarget::local_explicit_tuple\s*\(", production):
+            violations.append(
+                f"{rel}:{production.count(chr(10), 0, match.start()) + 1}: public explicit InvocationTarget construction must use PublicInvocationTargetIssuer"
             )
     if rel != "src/daemon/invocation/routing/remote_invoke.rs":
         for match in re.finditer(r"RemoteInvocationRequest::new\s*\(", production):

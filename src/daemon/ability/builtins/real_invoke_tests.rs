@@ -376,7 +376,13 @@ fn explicit_target(
     subject: impl Into<String>,
     causal_context: axon_sdk::invocation::CausalContext,
 ) -> InvocationTarget {
-    InvocationTarget::local_explicit_tuple(name, args, CallMode::Rpc, subject, causal_context)
+    crate::daemon::invocation::routing::target::PublicInvocationTargetIssuer::local_explicit_tuple(
+        name,
+        args,
+        CallMode::Rpc,
+        subject,
+        causal_context,
+    )
 }
 
 fn terminal_followup_target(

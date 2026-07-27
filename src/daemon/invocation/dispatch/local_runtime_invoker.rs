@@ -285,7 +285,7 @@ mod tests {
     use super::*;
     use axon_sdk::invocation::{make_ability, AbilityCallModes, AbilityOptions};
 
-    use crate::daemon::invocation::routing::target::CallMode;
+    use crate::daemon::invocation::routing::target::{CallMode, PublicInvocationTargetIssuer};
     use serde_json::json;
 
     const TEST_DESCRIPTOR_VERSION: &str = "1.0.0";
@@ -453,7 +453,7 @@ mod tests {
         );
         let subject =
             crate::core::ura::resource_dot_ura("acme", "device.dev-a.files", "tmp/report.txt");
-        let target = InvocationTarget::local_explicit_tuple(
+        let target = PublicInvocationTargetIssuer::local_explicit_tuple(
             "fs.read",
             json!({}),
             CallMode::Rpc,

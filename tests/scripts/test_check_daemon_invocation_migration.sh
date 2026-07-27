@@ -459,6 +459,23 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "production daemon-system subject target constructor should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
+cat >"$SB/src/__public_explicit_target_constructor_probe.rs" <<'RS'
+pub fn probe() {
+    let _ = crate::daemon::invocation::routing::target::InvocationTarget::local_explicit_tuple(
+        "easynet:///r/acme/ability/device.dev-a.observe.health",
+        serde_json::Value::Null,
+        crate::daemon::invocation::routing::target::CallMode::Rpc,
+        "easynet:///r/acme/device/dev-a",
+        axon_sdk::invocation::CausalContext::None,
+    );
+}
+RS
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "production public explicit target constructor should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
 cat >"$SB/src/cli/commands/__subject_only_local_ingress_probe.rs" <<'RS'
 #[allow(dead_code)]
 fn probe(target: &crate::support::platform::local_invoke::LocalAbilityTarget) {
