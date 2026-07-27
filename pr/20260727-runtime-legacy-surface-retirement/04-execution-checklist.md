@@ -62,3 +62,11 @@
 - [x] Update self-target tests to describe aggregate projection states, not fallback/slow-tier behavior.
 - [x] Add a corruption regression proving registry-only matching is disabled when hosted identity projection is malformed.
 - [x] Run focused daemon target-gate tests and canonical convergence gates.
+
+## Iteration 8 — Hosted-Agent route placement projection fail-closed cutover
+
+- [x] Reuse the hosted-Agent identity projection error for both target locality and route placement projections.
+- [x] Replace silent hosted-Agent placement drops with a typed projection result.
+- [x] Make route resolver placement state unavailable when `local-agents.json` carries malformed hosted identity rows.
+- [x] Add aggregate regression coverage for malformed placement projection.
+- [x] Run focused placement/route tests and canonical convergence gates.

@@ -225,7 +225,7 @@ impl AgentAggregateSnapshot {
 
     pub(crate) fn local_target_projection(
         &self,
-    ) -> Result<AgentLocalTargetProjection, AgentLocalTargetProjectionError> {
+    ) -> Result<AgentLocalTargetProjection, HostedAgentIdentityProjectionError> {
         let hosted_agent_targets = self
             .local_agents
             .hosted_agents
@@ -238,31 +238,32 @@ impl AgentAggregateSnapshot {
         })
     }
 
-    pub(crate) fn hosted_agent_placements(&self) -> AgentHostedPlacementProjection {
+    pub(crate) fn hosted_agent_placements(
+        &self,
+    ) -> Result<AgentHostedPlacementProjection, HostedAgentIdentityProjectionError> {
         let host_device_ura = self.local_agents.host_device_agent_ura.trim();
         if host_device_ura.is_empty() {
-            return AgentHostedPlacementProjection::default();
+            return Ok(AgentHostedPlacementProjection::default());
         }
         let host_node_id = device_node_id_from_device_ura(host_device_ura);
-        AgentHostedPlacementProjection {
-            by_agent_ura: self
-                .local_agents
-                .hosted_agents
-                .iter()
-                .filter_map(|entry| {
-                    let agent_ura = entry.agent_ura.trim();
-                    HostedAgentTarget::parse(agent_ura)?;
-                    Some((
-                        agent_ura.to_string(),
-                        AgentHostedPlacement {
-                            agent_ura: agent_ura.to_string(),
-                            host_device_ura: host_device_ura.to_string(),
-                            host_node_id: host_node_id.clone(),
-                        },
-                    ))
-                })
-                .collect(),
-        }
+        let by_agent_ura = self
+            .local_agents
+            .hosted_agents
+            .iter()
+            .map(|entry| {
+                HostedAgentTarget::from_entry(entry)?;
+                let agent_ura = entry.agent_ura.trim().to_string();
+                Ok((
+                    agent_ura.clone(),
+                    AgentHostedPlacement {
+                        agent_ura,
+                        host_device_ura: host_device_ura.to_string(),
+                        host_node_id: host_node_id.clone(),
+                    },
+                ))
+            })
+            .collect::<Result<BTreeMap<_, _>, HostedAgentIdentityProjectionError>>()?;
+        Ok(AgentHostedPlacementProjection { by_agent_ura })
     }
 }
 
@@ -730,7 +731,7 @@ pub(crate) struct AgentLocalTargetProjection {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum AgentLocalTargetProjectionError {
+pub(crate) enum HostedAgentIdentityProjectionError {
     #[error("hosted Agent {profile:?}/{name:?} has invalid Agent URA {agent_ura:?}: {reason}")]
     InvalidHostedAgentUra {
         profile: String,
@@ -776,10 +777,10 @@ impl HostedAgentTarget {
         Self::from_ura(agent_ura).ok()
     }
 
-    fn from_entry(entry: &HostedAgentEntry) -> Result<Self, AgentLocalTargetProjectionError> {
+    fn from_entry(entry: &HostedAgentEntry) -> Result<Self, HostedAgentIdentityProjectionError> {
         Self::from_ura(&entry.agent_ura).map_err(|error| match error {
             HostedAgentTargetParseError::InvalidUra { reason } => {
-                AgentLocalTargetProjectionError::InvalidHostedAgentUra {
+                HostedAgentIdentityProjectionError::InvalidHostedAgentUra {
                     profile: entry.profile.clone(),
                     name: entry.name.clone(),
                     agent_ura: entry.agent_ura.clone(),
@@ -787,14 +788,14 @@ impl HostedAgentTarget {
                 }
             }
             HostedAgentTargetParseError::NonAgentUra => {
-                AgentLocalTargetProjectionError::NonAgentHostedIdentity {
+                HostedAgentIdentityProjectionError::NonAgentHostedIdentity {
                     profile: entry.profile.clone(),
                     name: entry.name.clone(),
                     agent_ura: entry.agent_ura.clone(),
                 }
             }
             HostedAgentTargetParseError::IncompleteAgentIdentity => {
-                AgentLocalTargetProjectionError::IncompleteHostedAgentIdentity {
+                HostedAgentIdentityProjectionError::IncompleteHostedAgentIdentity {
                     profile: entry.profile.clone(),
                     name: entry.name.clone(),
                     agent_ura: entry.agent_ura.clone(),
@@ -1534,15 +1535,17 @@ mod tests {
             AgentRegistry::default(),
             LocalAgentsFile {
                 host_device_agent_ura: "easynet:///r/acme/device/dev-1".to_string(),
-                hosted_agents: vec![
-                    hosted_agent("llm", "claude", "easynet:///r/acme/agent/u1.claude"),
-                    hosted_agent("llm", "bad", "not-a-ura"),
-                    hosted_agent("consent", "default", "easynet:///r/acme/device/dev-1"),
-                ],
+                hosted_agents: vec![hosted_agent(
+                    "llm",
+                    "claude",
+                    "easynet:///r/acme/agent/u1.claude",
+                )],
             },
         );
 
-        let projection = snapshot.hosted_agent_placements();
+        let projection = snapshot
+            .hosted_agent_placements()
+            .expect("valid hosted Agent placement projection");
 
         assert_eq!(projection.by_agent_ura.len(), 1);
         let placement = projection
@@ -1569,6 +1572,38 @@ mod tests {
         )
         .hosted_agent_placements();
 
+        let projection = projection.expect("empty host device is first-boot empty placement");
         assert!(projection.by_agent_ura.is_empty());
+    }
+
+    #[test]
+    fn hosted_agent_placements_reject_malformed_hosted_identities() {
+        for (case, entry, expected) in [
+            (
+                "malformed hosted Agent URA",
+                hosted_agent("llm", "bad", "not-a-ura"),
+                "invalid Agent URA",
+            ),
+            (
+                "non-Agent hosted identity",
+                hosted_agent("consent", "default", "easynet:///r/acme/device/dev-1"),
+                "non-Agent URA",
+            ),
+        ] {
+            let error = AgentAggregateSnapshot::new(
+                AgentRegistry::default(),
+                LocalAgentsFile {
+                    host_device_agent_ura: "easynet:///r/acme/device/dev-1".to_string(),
+                    hosted_agents: vec![entry],
+                },
+            )
+            .hosted_agent_placements()
+            .expect_err(case);
+
+            assert!(
+                error.to_string().contains(expected),
+                "{case} should report {expected:?}, got: {error}"
+            );
+        }
     }
 }

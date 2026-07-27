@@ -570,7 +570,10 @@ struct LocalHostedAgentPlacements {
 impl LocalHostedAgentPlacements {
     fn load() -> Self {
         match AgentAggregateRepository::try_load_snapshot() {
-            Ok(snapshot) => Self::from_projection(snapshot.hosted_agent_placements()),
+            Ok(snapshot) => match snapshot.hosted_agent_placements() {
+                Ok(projection) => Self::from_projection(projection),
+                Err(error) => Self::unavailable(format!("{error:#}")),
+            },
             Err(error) => Self::unavailable(format!("{error:#}")),
         }
     }
@@ -599,7 +602,7 @@ impl LocalHostedAgentPlacements {
             component = daemon_invocation,
             kind = route_resolver_agent_placement_projection_unavailable,
             error = reason.as_str(),
-            message = "route_resolver: hosted Agent placement matching failed closed because the Agent aggregate snapshot could not be loaded",
+            message = "route_resolver: hosted Agent placement matching failed closed because the Agent aggregate snapshot could not be loaded or projected",
         );
         Self {
             by_agent_ura: HashMap::new(),

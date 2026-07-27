@@ -96,3 +96,16 @@
 - `tools/scripts/check-canonical-runtime-convergence-v2.sh`
 - `tools/scripts/check-architecture-convergence.sh`
 - `/Users/macbook.silan.tech/.local/bin/codegraph sync`
+
+## Iteration 8
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph query "hosted agent placement projection filter_map malformed local-agents route resolver fail closed"`
+- `cargo test --features axon-pb hosted_agent_placements --lib`
+  - 5 passed, including route resolver hosted placement consume/unavailable regressions.
+- `cargo test --features axon-pb local_hosted_agent_placements --lib`
+  - 0 matched tests; retained as a no-op filter check after the route resolver placement tests matched under `hosted_agent_placements`.
+- `cargo fmt --check`
+- `git diff --check`
+- `tools/scripts/check-canonical-runtime-convergence-v2.sh`
+- `tools/scripts/check-architecture-convergence.sh`
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync`

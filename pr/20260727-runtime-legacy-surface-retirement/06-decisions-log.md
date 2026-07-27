@@ -78,3 +78,20 @@ Boundary: registered Agent names remain useful only when the aggregate
 projection is valid and the credential `(realm,user)` matches the target tuple.
 Malformed hosted identity data never causes route repair, alias matching, or a
 registry-only self-target decision.
+
+## Hosted-Agent route placement projection fail-closed cutover
+
+Decision: route resolver hosted-Agent placement must use the same validated
+hosted identity projection as self-target locality. Malformed hosted-Agent
+identity rows must make placement state unavailable instead of being dropped
+from a partial placement map.
+
+Reason: placement projection decides whether an Agent-owned ability is locally
+hosted or should route through remote presence/directory state. A partial map
+built by silently filtering invalid identities lets one corrupted row disappear
+while the resolver still treats the aggregate as available. That is another
+compatibility-style repair path.
+
+Boundary: an empty `host_device_agent_ura` remains a valid first-boot empty
+placement state. Malformed hosted Agent URAs and non-Agent hosted identities are
+invalid projection state and fail closed before route selection can use them.
