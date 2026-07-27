@@ -1457,13 +1457,15 @@ pub unsafe extern "C" fn runtime_invocation_bidi_open(
 /// `frame_json` must be one of:
 ///
 /// ```text
-/// {"type":"binary_chunk","stream_id":1,"data_base64":"...","pts":0}
-/// {"type":"control","eof":true}
-/// {"type":"control","pty_resize":{"cols":120,"rows":40}}
-/// {"type":"control","pty_signal":2}
+/// {"type":"binary_chunk","stream_id":1,"data_base64":"...","pts":0,"mac_base64":"..."}
+/// {"type":"control","eof":true,"mac_base64":"..."}
+/// {"type":"control","pty_resize":{"cols":120,"rows":40},"mac_base64":"..."}
+/// {"type":"control","pty_signal":2,"mac_base64":"..."}
 /// ```
 ///
-/// The ABI assigns the monotonic up-direction sequence number.
+/// The ABI assigns the monotonic up-direction sequence number. `mac_base64`
+/// is required and must decode to the 32-byte N≥1 frame-chain tag defined by
+/// Axon InvokeBidi.
 ///
 /// # Safety
 /// `frame_json` must be a valid UTF-8 C string.
@@ -1508,15 +1510,16 @@ pub unsafe extern "C" fn runtime_invocation_bidi_send(
     }
 }
 
-/// Half-close the local send side of an InvokeBidi session.
+/// Legacy close-send entry point for an InvokeBidi session.
 ///
-/// The session remains registered so the binding can continue to
-/// receive down-direction frames and then call `runtime_invocation_bidi_close`
-/// or `runtime_invocation_bidi_cancel`.
+/// This ABI shape cannot carry the required N≥1 frame-chain MAC. It therefore
+/// fails closed with `ERR_NOT_IMPLEMENTED`; callers that need graceful EOF must
+/// send an EOF control frame through `runtime_invocation_bidi_send` with
+/// `mac_base64`.
 ///
 /// # Safety
-/// `handle` and `bidi_id` must have been returned by this C ABI. The function
-/// only closes the local send side; callers must still close or cancel the
+/// `handle` and `bidi_id` must have been returned by this C ABI. This function
+/// does not close the local send side. Callers must still close or cancel the
 /// session handle when receive processing is complete.
 #[no_mangle]
 pub unsafe extern "C" fn runtime_invocation_bidi_close_send(
@@ -1542,8 +1545,11 @@ pub unsafe extern "C" fn runtime_invocation_bidi_close_send(
     }
 }
 
-/// Gracefully close an InvokeBidi session by sending EOF, then drop
-/// the local up-direction sender.
+/// Close an InvokeBidi session and drop the local up-direction sender.
+///
+/// This function does not synthesize a graceful EOF because doing so would
+/// require fabricating a frame-chain MAC. Send an explicit EOF control frame
+/// first if graceful half-close is required.
 ///
 /// `bidi_id` must identify a session currently registered to `handle`.
 ///
@@ -3259,7 +3265,7 @@ fn bidi_close_send_with_axon_pb(handle: RuntimeHandle, bidi_id: InvocationBidiId
             format!("runtime_invocation_bidi_close_send: handle {handle} is not registered"),
         );
     };
-    let session = match get_bidi_for_handle(owner, bidi_id) {
+    let _session = match get_bidi_for_handle(owner, bidi_id) {
         Ok(Some(session)) => session,
         Ok(None) => {
             return record_invocation_error(
@@ -3278,33 +3284,10 @@ fn bidi_close_send_with_axon_pb(handle: RuntimeHandle, bidi_id: InvocationBidiId
             );
         }
     };
-    let rt = match lib_runtime() {
-        Ok(rt) => rt,
-        Err(err) => {
-            return record_invocation_error(
-                ERR_GENERIC,
-                format!("runtime_invocation_bidi_close_send: {err}"),
-            );
-        }
-    };
-
-    let Some(up_frame) = session.reserve_close_send_frame() else {
-        clear_last_error();
-        return RUNTIME_OK;
-    };
-    let send_code = send_bidi_up_frame(
-        rt,
-        "runtime_invocation_bidi_close_send",
-        bidi_id,
-        &session,
-        up_frame,
-    );
-    if send_code != RUNTIME_OK {
-        let _ = remove_bidi_for_handle(owner, bidi_id);
-        return send_code;
-    }
-    clear_last_error();
-    RUNTIME_OK
+    record_invocation_error(
+        ERR_NOT_IMPLEMENTED,
+        "runtime_invocation_bidi_close_send: close-send cannot attach the required 32-byte frame-chain MAC; send an EOF control frame through runtime_invocation_bidi_send with mac_base64",
+    )
 }
 
 #[cfg(feature = "axon-pb")]
@@ -3333,32 +3316,9 @@ fn bidi_close_with_axon_pb(handle: RuntimeHandle, bidi_id: InvocationBidiId) -> 
             );
         }
     };
-    let rt = match lib_runtime() {
-        Ok(rt) => rt,
-        Err(err) => {
-            session.reader_cancel.cancel();
-            return record_invocation_error(
-                ERR_GENERIC,
-                format!("runtime_invocation_bidi_close: {err}"),
-            );
-        }
-    };
-
-    let send_code = match session.reserve_close_send_frame() {
-        Some(up_frame) => send_bidi_up_frame(
-            rt,
-            "runtime_invocation_bidi_close",
-            bidi_id,
-            &session,
-            up_frame,
-        ),
-        None => RUNTIME_OK,
-    };
     session.reader_cancel.cancel();
-    if send_code == RUNTIME_OK {
-        clear_last_error();
-    }
-    send_code
+    clear_last_error();
+    RUNTIME_OK
 }
 
 #[cfg(feature = "axon-pb")]
@@ -4197,18 +4157,6 @@ impl ActiveInvocationBidi {
             mac: frame.mac,
             payload: Some(frame.payload),
         })
-    }
-
-    fn reserve_close_send_frame(&self) -> Option<axon_sdk::pb::axon::v1::InvokeBidiUp> {
-        let mut state = self
-            .local_send
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if state.is_half_closed_local() {
-            return None;
-        }
-        state.half_close_local();
-        Some(bidi_eof_up_frame(state.next_sequence()))
     }
 }
 
@@ -5480,27 +5428,41 @@ impl SignatureMaterialJson {
 }
 
 #[cfg(feature = "axon-pb")]
+#[derive(Debug)]
 struct BidiUpFrame {
     mac: Vec<u8>,
     payload: axon_sdk::pb::axon::v1::invoke_bidi_up::Payload,
 }
 
 #[cfg(feature = "axon-pb")]
-fn bidi_eof_up_frame(sequence: u64) -> axon_sdk::pb::axon::v1::InvokeBidiUp {
-    use axon_sdk::pb::axon::v1::{bidi_control, invoke_bidi_up, BidiControl, InvokeBidiUp};
-    InvokeBidiUp {
-        sequence,
-        mac: Vec::new(),
-        payload: Some(invoke_bidi_up::Payload::Control(BidiControl {
-            control: Some(bidi_control::Control::Eof(true)),
-        })),
-    }
-}
-
-#[cfg(feature = "axon-pb")]
 fn bidi_up_payload_is_eof(payload: &axon_sdk::pb::axon::v1::invoke_bidi_up::Payload) -> bool {
     use axon_sdk::pb::axon::v1::invoke_bidi_up::Payload;
     matches!(payload, Payload::Control(control) if bidi_control_is_eof(control))
+}
+
+#[cfg(feature = "axon-pb")]
+const BIDI_FRAME_CHAIN_MAC_BYTES: usize = 32;
+
+#[cfg(feature = "axon-pb")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BidiFrameChainMac(Vec<u8>);
+
+#[cfg(feature = "axon-pb")]
+impl BidiFrameChainMac {
+    fn parse_base64(raw: &str) -> Result<Self, BidiFrameJsonError> {
+        use base64::Engine;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(raw.as_bytes())
+            .map_err(|err| BidiFrameJsonError::InvalidBase64("mac_base64", err))?;
+        if bytes.len() != BIDI_FRAME_CHAIN_MAC_BYTES {
+            return Err(BidiFrameJsonError::InvalidMacLength(bytes.len()));
+        }
+        Ok(Self(bytes))
+    }
+
+    fn into_bytes(self) -> Vec<u8> {
+        self.0
+    }
 }
 
 #[cfg(feature = "axon-pb")]
@@ -5526,6 +5488,8 @@ enum BidiFrameJsonError {
     InvalidObject(&'static str),
     #[error("{0} is not valid base64: {1}")]
     InvalidBase64(&'static str, base64::DecodeError),
+    #[error("mac_base64 must decode to exactly 32 bytes, got {0}")]
+    InvalidMacLength(usize),
     #[error("decode frame_json failed: {0}")]
     Json(#[from] serde_json::Error),
 }
@@ -5537,18 +5501,7 @@ fn parse_bidi_up_frame_json(raw: &str) -> Result<BidiUpFrame, BidiFrameJsonError
         .as_object()
         .ok_or(BidiFrameJsonError::ExpectedObject)?;
     let kind = frame_required_string(obj, "type")?;
-    let mac = match obj.get("mac_base64") {
-        None | Some(serde_json::Value::Null) => Vec::new(),
-        Some(value) => {
-            use base64::Engine;
-            let raw = value
-                .as_str()
-                .ok_or(BidiFrameJsonError::InvalidString("mac_base64"))?;
-            base64::engine::general_purpose::STANDARD
-                .decode(raw.as_bytes())
-                .map_err(|err| BidiFrameJsonError::InvalidBase64("mac_base64", err))?
-        }
-    };
+    let mac = BidiFrameChainMac::parse_base64(&frame_required_string(obj, "mac_base64")?)?;
     let payload = match kind.as_str() {
         "binary_chunk" => {
             use base64::Engine;
@@ -5568,7 +5521,10 @@ fn parse_bidi_up_frame_json(raw: &str) -> Result<BidiUpFrame, BidiFrameJsonError
         }
         other => return Err(BidiFrameJsonError::UnsupportedType(other.to_string())),
     };
-    Ok(BidiUpFrame { mac, payload })
+    Ok(BidiUpFrame {
+        mac: mac.into_bytes(),
+        payload,
+    })
 }
 
 #[cfg(feature = "axon-pb")]
@@ -7728,7 +7684,7 @@ mod tests {
     fn assert_bidi_eof_frame(frame: axon_sdk::pb::axon::v1::InvokeBidiUp, sequence: u64) {
         use axon_sdk::pb::axon::v1::{bidi_control, invoke_bidi_up};
         assert_eq!(frame.sequence, sequence);
-        assert!(frame.mac.is_empty());
+        assert_eq!(frame.mac, vec![0xA5; BIDI_FRAME_CHAIN_MAC_BYTES]);
         match frame.payload {
             Some(invoke_bidi_up::Payload::Control(control)) => {
                 assert!(matches!(
@@ -7738,6 +7694,11 @@ mod tests {
             }
             other => panic!("expected EOF control frame, got {other:?}"),
         }
+    }
+
+    fn test_bidi_mac_base64() -> String {
+        use base64::Engine;
+        base64::engine::general_purpose::STANDARD.encode([0xA5; BIDI_FRAME_CHAIN_MAC_BYTES])
     }
 
     fn read_last_error_json() -> serde_json::Value {
@@ -9362,7 +9323,14 @@ mod tests {
         use axon_sdk::pb::axon::v1::{bidi_control, invoke_bidi_up};
 
         let chunk = parse_bidi_up_frame_json(
-            r#"{"type":"binary_chunk","stream_id":1,"data_base64":"aGVsbG8=","pts":9}"#,
+            &serde_json::json!({
+                "type": "binary_chunk",
+                "stream_id": 1,
+                "data_base64": "aGVsbG8=",
+                "pts": 9,
+                "mac_base64": test_bidi_mac_base64()
+            })
+            .to_string(),
         )
         .unwrap();
         let invoke_bidi_up::Payload::BinaryChunk(chunk) = chunk.payload else {
@@ -9372,9 +9340,15 @@ mod tests {
         assert_eq!(chunk.data, b"hello");
         assert_eq!(chunk.pts, 9);
 
-        let control =
-            parse_bidi_up_frame_json(r#"{"type":"control","media_pts":{"stream_id":2,"pts":123}}"#)
-                .unwrap();
+        let control = parse_bidi_up_frame_json(
+            &serde_json::json!({
+                "type": "control",
+                "media_pts": {"stream_id": 2, "pts": 123},
+                "mac_base64": test_bidi_mac_base64()
+            })
+            .to_string(),
+        )
+        .unwrap();
         let invoke_bidi_up::Payload::Control(control) = control.payload else {
             panic!("expected control");
         };
@@ -9382,6 +9356,29 @@ mod tests {
             control.control,
             Some(bidi_control::Control::MediaPts(media)) if media.stream_id == 2 && media.pts == 123
         ));
+    }
+
+    #[test]
+    fn parse_bidi_up_frame_json_rejects_missing_or_noncanonical_mac() {
+        let missing = parse_bidi_up_frame_json(
+            r#"{"type":"binary_chunk","stream_id":1,"data_base64":"aGVsbG8="}"#,
+        )
+        .expect_err("missing frame-chain MAC must fail closed");
+        assert_eq!(missing.to_string(), "missing field `mac_base64`");
+
+        let short = parse_bidi_up_frame_json(
+            &serde_json::json!({
+                "type": "control",
+                "eof": true,
+                "mac_base64": "AQID"
+            })
+            .to_string(),
+        )
+        .expect_err("noncanonical MAC length must fail closed");
+        assert_eq!(
+            short.to_string(),
+            "mac_base64 must decode to exactly 32 bytes, got 3"
+        );
     }
 
     #[test]
@@ -10954,7 +10951,7 @@ mod tests {
     }
 
     #[test]
-    fn invocation_bidi_close_send_keeps_session_and_blocks_later_send() {
+    fn invocation_bidi_close_send_fails_closed_without_frame_chain_mac() {
         let (handle, client_session) = alloc(test_session());
         let owner = client_session.binding(handle);
         let (session, mut up_rx, _cancel) = active_bidi_session(owner, 4);
@@ -10962,14 +10959,13 @@ mod tests {
 
         assert_eq!(
             unsafe { runtime_invocation_bidi_close_send(handle, bidi_id) },
-            RUNTIME_OK
+            ERR_NOT_IMPLEMENTED
         );
         assert!(get_bidi_for_handle(owner, bidi_id).unwrap().is_some());
-        assert_bidi_eof_frame(up_rx.try_recv().expect("EOF frame must be sent"), 1);
-
-        assert_eq!(
-            unsafe { runtime_invocation_bidi_close_send(handle, bidi_id) },
-            RUNTIME_OK
+        assert_typed_last_error(
+            "NOT_IMPLEMENTED",
+            ERR_NOT_IMPLEMENTED,
+            "close-send cannot attach the required 32-byte frame-chain MAC",
         );
         assert!(matches!(
             up_rx.try_recv(),
@@ -10980,15 +10976,19 @@ mod tests {
             serde_json::json!({
                 "type": "binary_chunk",
                 "stream_id": 1,
-                "data_base64": "aGVsbG8="
+                "data_base64": "aGVsbG8=",
+                "mac_base64": test_bidi_mac_base64()
             })
             .to_string(),
         )
         .unwrap();
         assert_eq!(
             unsafe { runtime_invocation_bidi_send(handle, bidi_id, frame.as_ptr()) },
-            ERR_CANCELLED
+            RUNTIME_OK
         );
+        let sent = up_rx.try_recv().expect("MAC-bound data frame must be sent");
+        assert_eq!(sent.sequence, 1);
+        assert_eq!(sent.mac, vec![0xA5; BIDI_FRAME_CHAIN_MAC_BYTES]);
         assert!(get_bidi_for_handle(owner, bidi_id).unwrap().is_some());
 
         assert_eq!(
@@ -11005,13 +11005,21 @@ mod tests {
         let owner = client_session.binding(handle);
         let (session, mut up_rx, _cancel) = active_bidi_session(owner, 4);
         let bidi_id = insert_bidi(session);
-        let eof =
-            CString::new(serde_json::json!({"type": "control", "eof": true}).to_string()).unwrap();
+        let eof = CString::new(
+            serde_json::json!({
+                "type": "control",
+                "eof": true,
+                "mac_base64": test_bidi_mac_base64()
+            })
+            .to_string(),
+        )
+        .unwrap();
         let frame = CString::new(
             serde_json::json!({
                 "type": "binary_chunk",
                 "stream_id": 1,
-                "data_base64": "aGVsbG8="
+                "data_base64": "aGVsbG8=",
+                "mac_base64": test_bidi_mac_base64()
             })
             .to_string(),
         )

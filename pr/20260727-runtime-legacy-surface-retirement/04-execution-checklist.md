@@ -197,3 +197,16 @@
 - [x] Update the canonical convergence gate so template generation cannot bypass
       the profile.
 - [x] Run focused tests/gates.
+
+## Iteration 22 — FFI bidi frame-chain MAC cutover
+
+- [x] Re-run codegraph and targeted bidi/FFI frame-chain search.
+- [x] Identify FFI bidi send and daemon client convenience send paths as
+      accepting or emitting N≥1 up frames with empty MAC defaults.
+- [x] Record the frame-chain invariant before code changes.
+- [x] Introduce a canonical FFI up-frame MAC value object requiring 32-byte
+      frame-chain tags.
+- [x] Make `runtime_invocation_bidi_close_send` fail closed because it cannot
+      provide a canonical frame-chain tag.
+- [x] Update tests and SPEC v2 gate to reject empty-MAC default paths.
+- [x] Run focused tests/gates.

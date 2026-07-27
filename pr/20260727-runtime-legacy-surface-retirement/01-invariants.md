@@ -71,3 +71,8 @@
   call mode, capability state, and helper package from the canonical capability
   matrix. Template generation must not keep a separate language-only path that
   can hand-write daemon sidecar frames or claim helper support independently.
+- Bidirectional invocation FFI sends are frame-chain ingress. Every caller-sent
+  N≥1 up frame must carry an explicit canonical frame-chain tag before it enters
+  the daemon gRPC stream. The FFI layer must not synthesize an empty MAC for
+  binary/control frames, and convenience close-send APIs that cannot provide a
+  tag must fail closed instead of emitting unsigned EOF frames.

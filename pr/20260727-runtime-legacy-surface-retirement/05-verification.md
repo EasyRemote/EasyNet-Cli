@@ -330,3 +330,30 @@
   - passed.
 - `/Users/macbook.silan.tech/.local/bin/codegraph sync`
   - passed; synced 1 changed file.
+
+## Iteration 22
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync`
+  - already up to date at baseline.
+- `tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - passed at baseline before edits.
+- `/Users/macbook.silan.tech/.local/bin/codegraph query "mac_base64 InvokeBidiUp BidiUp frame chain signature unwrap_or_default"`
+  - isolated FFI and daemon client N≥1 up-frame empty MAC paths.
+- `cargo test --features axon-pb parse_bidi_up_frame_json --lib`
+  - passed; 2 passed.
+- `cargo test --features axon-pb invocation_bidi_close_send --lib`
+  - passed; 3 passed.
+- `cargo test --features axon-pb invocation_bidi_send_eof_also_half_closes_local_send --lib`
+  - passed; 1 passed.
+- `cargo test --features axon-pb daemon::invocation::dispatch::client --lib`
+  - passed; 4 passed.
+- `tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - passed after adding the FFI frame-chain MAC gate.
+- `cargo fmt --check`
+  - passed.
+- `git diff --check`
+  - passed.
+- `tools/scripts/check-architecture-convergence.sh`
+  - passed.
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync`
+  - passed; synced 2 changed code files.

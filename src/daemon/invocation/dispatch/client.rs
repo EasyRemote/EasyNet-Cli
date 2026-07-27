@@ -173,7 +173,6 @@ impl DaemonClient {
             ability,
             up_tx,
             down,
-            next_sequence: 1,
         })
     }
 }
@@ -1192,17 +1191,16 @@ mod invocation_outcome_tests {
 ///
 /// Invariants:
 /// 1. Frame 0 has already been sent before construction.
-/// 2. `next_sequence` starts at 1 and increments exactly once per
-///    up-direction frame sent through this session.
+/// 2. Public convenience send helpers fail closed until a frame-chain-aware
+///    sender can attach canonical N≥1 MACs.
 /// 3. Dropping the session closes the up-direction stream. It does
 ///    not synthesize protocol EOF; callers that need graceful close
-///    should call `send_eof` first.
+///    must use a frame-chain-aware sender.
 #[cfg(feature = "axon-pb")]
 pub struct DaemonBidiSession {
     ability: String,
     up_tx: tokio::sync::mpsc::Sender<axon_sdk::pb::axon::v1::InvokeBidiUp>,
     down: tonic::Streaming<axon_sdk::pb::axon::v1::InvokeBidiDown>,
-    next_sequence: u64,
 }
 
 #[cfg(feature = "axon-pb")]
@@ -1240,53 +1238,30 @@ impl DaemonBidiSession {
     /// Send a binary chunk on the up direction.
     pub async fn send_binary_chunk(
         &mut self,
-        chunk: axon_sdk::pb::axon::v1::BinaryChunk,
+        _chunk: axon_sdk::pb::axon::v1::BinaryChunk,
     ) -> Result<()> {
-        use axon_sdk::pb::axon::v1::{invoke_bidi_up, InvokeBidiUp};
-        let sequence = self.take_next_sequence();
-        self.up_tx
-            .send(InvokeBidiUp {
-                sequence,
-                mac: Vec::new(),
-                payload: Some(invoke_bidi_up::Payload::BinaryChunk(chunk)),
-            })
-            .await
-            .map_err(|_| DaemonError::InvokeBidiClosed {
-                ability: self.ability.clone(),
-            })
+        Err(DaemonError::InvalidInvocation(
+            "bidi binary send requires an explicit frame-chain MAC; use a frame-chain aware sender"
+                .to_string(),
+        ))
     }
 
     /// Send a control frame on the up direction.
     pub async fn send_control(
         &mut self,
-        control: axon_sdk::pb::axon::v1::BidiControl,
+        _control: axon_sdk::pb::axon::v1::BidiControl,
     ) -> Result<()> {
-        use axon_sdk::pb::axon::v1::{invoke_bidi_up, InvokeBidiUp};
-        let sequence = self.take_next_sequence();
-        self.up_tx
-            .send(InvokeBidiUp {
-                sequence,
-                mac: Vec::new(),
-                payload: Some(invoke_bidi_up::Payload::Control(control)),
-            })
-            .await
-            .map_err(|_| DaemonError::InvokeBidiClosed {
-                ability: self.ability.clone(),
-            })
+        Err(DaemonError::InvalidInvocation(
+            "bidi control send requires an explicit frame-chain MAC; use a frame-chain aware sender"
+                .to_string(),
+        ))
     }
 
     /// Send a graceful EOF control frame.
     pub async fn send_eof(&mut self) -> Result<()> {
-        use axon_sdk::pb::axon::v1::{bidi_control, BidiControl};
-        self.send_control(BidiControl {
-            control: Some(bidi_control::Control::Eof(true)),
-        })
-        .await
-    }
-
-    fn take_next_sequence(&mut self) -> u64 {
-        let sequence = self.next_sequence;
-        self.next_sequence = self.next_sequence.saturating_add(1);
-        sequence
+        Err(DaemonError::InvalidInvocation(
+            "bidi EOF send requires an explicit frame-chain MAC; use a frame-chain aware sender"
+                .to_string(),
+        ))
     }
 }

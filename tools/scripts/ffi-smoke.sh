@@ -466,7 +466,11 @@ try:
         lib.runtime_invocation_bidi_send(
             client_from_daemon.value,
             bidi_id.value,
-            json.dumps({"type": "control", "eof": True}).encode("utf-8"),
+            json.dumps({
+                "type": "control",
+                "eof": True,
+                "mac_base64": base64.b64encode(bytes([0xA5]) * 32).decode("ascii"),
+            }).encode("utf-8"),
         ),
         "runtime_invocation_bidi_send download ready/eof hint",
     )

@@ -335,3 +335,22 @@ post-hoc check.
 Boundary: this does not move plugin lifecycle or daemon install policy into the
 SDK. The SDK owns the generic sidecar invocation helper contract; the CLI still
 owns scaffolding, package files, and daemon install/reload collision checks.
+
+## FFI bidi frame-chain MAC cutover
+
+Decision: FFI bidi send must require a caller-supplied 32-byte
+`mac_base64` frame-chain tag for every N≥1 up frame. The legacy
+`runtime_invocation_bidi_close_send` convenience path must fail closed because
+its ABI shape cannot carry the required frame-chain tag.
+
+Reason: Axon `InvokeBidi` defines frame-chain security for N≥1 frames as
+HMAC-SHA256-32 over sequence, previous MAC, and canonical payload. The FFI
+bridge previously accepted missing `mac_base64` as `Vec::new()` and generated
+EOF control frames with empty MACs. That makes an incomplete security fact look
+like an authored protocol frame and weakens downstream terminality/admission
+reasoning.
+
+Boundary: this does not implement HMAC key derivation in the product bridge and
+does not claim end-to-end frame verification. It removes the compatibility
+default and forces callers that send data or EOF through FFI to provide the
+explicit frame-chain tag through the canonical send path.

@@ -17264,6 +17264,36 @@ if "SignedInvocation state" not in signed_envelope:
     raise SystemExit("unsigned_wire_submission_not_rejected")
 if "unwrap_or_default()" in request.split("fn into_bidi_open_frame", 1)[1].split("/// Builder", 1)[0]:
     raise SystemExit("bidi_signature_mac_fallback")
+if "mac: Vec::new()" in client:
+    raise SystemExit("daemon_bidi_client_empty_mac_sender")
+if "BidiFrameChainMac" not in ffi:
+    raise SystemExit("ffi_bidi_frame_chain_mac_value_object_missing")
+if "const BIDI_FRAME_CHAIN_MAC_BYTES: usize = 32;" not in ffi:
+    raise SystemExit("ffi_bidi_frame_chain_mac_length_constant_missing")
+if 'frame_required_string(obj, "mac_base64")' not in ffi:
+    raise SystemExit("ffi_bidi_frame_mac_not_required")
+if "InvalidMacLength" not in ffi:
+    raise SystemExit("ffi_bidi_frame_mac_length_guard_missing")
+for retired in (
+    'obj.get("mac_base64")',
+    "mac: Vec::new()",
+    "fn bidi_eof_up_frame",
+    "reserve_close_send_frame",
+    "assert!(frame.mac.is_empty())",
+    "invocation_bidi_close_send_keeps_session_and_blocks_later_send",
+):
+    if retired in ffi:
+        raise SystemExit(f"ffi_bidi_frame_chain_retired_default:{retired}")
+close_send = re.search(
+    r"fn\s+bidi_close_send_with_axon_pb\s*\(.*?\)\s*->\s*i32\s*\{(?P<body>.*?)\n\}",
+    ffi,
+    re.DOTALL,
+)
+if close_send is None:
+    raise SystemExit("ffi_bidi_close_send_impl_missing")
+close_send_body = close_send.group("body")
+if "ERR_NOT_IMPLEMENTED" not in close_send_body or "mac_base64" not in close_send_body:
+    raise SystemExit("ffi_bidi_close_send_not_fail_closed_for_mac")
 
 bind = re.search(
     r"async\s+fn\s+bind\s*\(.*?\)\s*->\s*"
