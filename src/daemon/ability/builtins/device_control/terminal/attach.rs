@@ -78,7 +78,7 @@
 use std::sync::Arc;
 
 use base64::Engine;
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 
 use crate::daemon::ability::dispatch::OwnerKind;
 use crate::daemon::ability::dispatch::{
@@ -134,22 +134,78 @@ const EXIT_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis
 pub fn register(reg: &mut AxonAbilityCatalog, pty: Arc<PtyService>) {
     let pty_for_attach = Arc::clone(&pty);
     let handler = Arc::new(move |env, args: Value| {
-        let session_id = args
-            .get("session_id")
-            .and_then(Value::as_str)
-            .ok_or_else(|| anyhow::anyhow!("terminal.attach: `session_id` required"))?;
-        super::authority::require_session_authority(&env, session_id, "terminal.attach", "stream")?;
-        attach_handler(&pty_for_attach, args)
+        let attach_args = TerminalAttachArgs::parse(args)?;
+        super::authority::require_session_authority(
+            &env,
+            attach_args.session_id(),
+            "terminal.attach",
+            "stream",
+        )?;
+        attach_session(&pty_for_attach, attach_args)
     });
     reg.register_bidi_with_envelope_and_owner("terminal.attach", OwnerKind::Device, handler);
 }
 
+#[cfg(test)]
 fn attach_handler(pty: &Arc<PtyService>, args: Value) -> anyhow::Result<BidiSource> {
-    let session_id = args
+    attach_session(pty, TerminalAttachArgs::parse(args)?)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TerminalAttachArgs {
+    session_id: String,
+}
+
+impl TerminalAttachArgs {
+    fn parse(args: Value) -> anyhow::Result<Self> {
+        let object = terminal_attach_args_object(&args)?;
+        let session_id = terminal_attach_required_session_id(object)?;
+        Ok(Self { session_id })
+    }
+
+    fn session_id(&self) -> &str {
+        &self.session_id
+    }
+}
+
+fn terminal_attach_args_object(args: &Value) -> anyhow::Result<&Map<String, Value>> {
+    let object = args
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("terminal.attach: args must be a JSON object"))?;
+    let mut unknown = object
+        .keys()
+        .filter(|key| key.as_str() != "session_id")
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    if !unknown.is_empty() {
+        unknown.sort_unstable();
+        anyhow::bail!(
+            "terminal.attach: unsupported argument field(s): {}",
+            unknown.join(", ")
+        );
+    }
+    Ok(object)
+}
+
+fn terminal_attach_required_session_id(args: &Map<String, Value>) -> anyhow::Result<String> {
+    let raw = args
         .get("session_id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow::anyhow!("terminal.attach: `session_id` required"))?
-        .to_string();
+        .ok_or_else(|| anyhow::anyhow!("terminal.attach: `session_id` required"))?;
+    let session_id = raw
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("terminal.attach: `session_id` must be a string"))?
+        .trim();
+    if session_id.is_empty() {
+        anyhow::bail!("terminal.attach: `session_id` must not be empty");
+    }
+    Ok(session_id.to_string())
+}
+
+fn attach_session(
+    pty: &Arc<PtyService>,
+    attach_args: TerminalAttachArgs,
+) -> anyhow::Result<BidiSource> {
+    let session_id = attach_args.session_id;
     let id = PtySessionId::new(&session_id);
     let session = pty
         .get(&id)
@@ -406,7 +462,7 @@ pub fn attach_input_schema() -> Value {
         "type": "object",
         "required": ["session_id"],
         "properties": {
-            "session_id": {"type": "string"},
+            "session_id": {"type": "string", "minLength": 1},
         },
         "additionalProperties": false,
     })
@@ -519,6 +575,70 @@ mod tests {
         let svc = fresh_service();
         let err = attach_handler(&svc, json!({})).unwrap_err();
         assert!(format!("{err}").contains("session_id"));
+    }
+
+    #[tokio::test]
+    async fn attach_rejects_non_object_args_before_lookup() {
+        let svc = fresh_service();
+        let err = attach_handler(&svc, Value::Null).unwrap_err();
+        let message = err.to_string();
+        assert!(
+            message.contains("args must be a JSON object"),
+            "wrong error: {message}"
+        );
+        assert!(
+            !message.contains("unknown session_id"),
+            "non-object input must fail before PTY lookup: {message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn attach_rejects_unknown_argument_fields_before_lookup() {
+        let svc = fresh_service();
+        let err = attach_handler(
+            &svc,
+            json!({"session_id": "not-a-session", "legacy_mode": true}),
+        )
+        .unwrap_err();
+        let message = err.to_string();
+        assert!(
+            message.contains("unsupported argument field(s): legacy_mode"),
+            "wrong error: {message}"
+        );
+        assert!(
+            !message.contains("unknown session_id"),
+            "unknown fields must fail before PTY lookup: {message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn attach_rejects_wrong_typed_session_id_before_lookup() {
+        let svc = fresh_service();
+        let err = attach_handler(&svc, json!({"session_id": 42})).unwrap_err();
+        let message = err.to_string();
+        assert!(
+            message.contains("`session_id` must be a string"),
+            "wrong error: {message}"
+        );
+        assert!(
+            !message.contains("unknown session_id"),
+            "wrong-typed session_id must fail before PTY lookup: {message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn attach_rejects_blank_session_id_before_lookup() {
+        let svc = fresh_service();
+        let err = attach_handler(&svc, json!({"session_id": "   "})).unwrap_err();
+        let message = err.to_string();
+        assert!(
+            message.contains("`session_id` must not be empty"),
+            "wrong error: {message}"
+        );
+        assert!(
+            !message.contains("unknown session_id"),
+            "blank session_id must fail before PTY lookup: {message}"
+        );
     }
 
     #[tokio::test]
