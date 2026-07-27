@@ -53,7 +53,7 @@ impl DesktopCompanionSupervisor for WindowsDesktopCompanionSupervisor {
                 id: plan.package_id.clone(),
                 reason: "Windows companion executable has no parent directory".to_string(),
             })?;
-        let target_dir = installed_windows_app_dir(plan, exe);
+        let target_dir = installed_windows_app_dir(plan, exe)?;
         copy_dir_replacing(source_dir, &target_dir)?;
         Ok(CompanionActionReport::changed(format!(
             "installed Windows companion at {}",
@@ -69,7 +69,7 @@ impl DesktopCompanionSupervisor for WindowsDesktopCompanionSupervisor {
                     "not a Windows companion plan",
                 ));
             };
-            let installed_exe = installed_windows_exe_path(plan, exe);
+            let installed_exe = installed_windows_exe_path(plan, exe)?;
             let installed_exe_arg = installed_exe.display().to_string();
             let status = Command::new("reg")
                 .args([
@@ -111,7 +111,7 @@ impl DesktopCompanionSupervisor for WindowsDesktopCompanionSupervisor {
                     "not a Windows companion plan",
                 ));
             };
-            let expected_exe = installed_windows_exe_path(plan, exe);
+            let expected_exe = installed_windows_exe_path(plan, exe)?;
             if !windows_startup_entry_matches(task_name, &expected_exe) {
                 return Ok(CompanionActionReport::unchanged(
                     "HKCU Run entry already absent or points at a different companion version",
@@ -138,7 +138,7 @@ impl DesktopCompanionSupervisor for WindowsDesktopCompanionSupervisor {
     fn remove(&self, plan: &DesktopCompanionPlan) -> Result<CompanionActionReport> {
         self.disable(plan)?;
         if let PlatformCompanionSpec::Windows { exe, .. } = &plan.spec {
-            let target_dir = installed_windows_app_dir(plan, exe);
+            let target_dir = installed_windows_app_dir(plan, exe)?;
             if target_dir.exists() {
                 std::fs::remove_dir_all(&target_dir).map_err(|source| {
                     PluginHostError::WriteFailed {
@@ -162,7 +162,7 @@ impl DesktopCompanionSupervisor for WindowsDesktopCompanionSupervisor {
                 "not a Windows companion plan",
             ));
         };
-        let installed_exe = installed_windows_exe_path(plan, exe);
+        let installed_exe = installed_windows_exe_path(plan, exe)?;
         Command::new(&installed_exe)
             .spawn()
             .map_err(|source| PluginHostError::WriteFailed {
@@ -205,10 +205,14 @@ impl DesktopCompanionSupervisor for WindowsDesktopCompanionSupervisor {
         let PlatformCompanionSpec::Windows { exe, task_name, .. } = &plan.spec else {
             return CompanionSupervisorState::UnsupportedPlatform;
         };
-        if !installed_windows_exe_path(plan, exe).exists() {
+        let installed_exe = match installed_windows_exe_path(plan, exe) {
+            Ok(path) => path,
+            Err(_) => return CompanionSupervisorState::InstallError,
+        };
+        if !installed_exe.exists() {
             return CompanionSupervisorState::NotInstalled;
         }
-        if windows_startup_entry_matches(task_name, &installed_windows_exe_path(plan, exe)) {
+        if windows_startup_entry_matches(task_name, &installed_exe) {
             CompanionSupervisorState::InstalledEnabled
         } else {
             CompanionSupervisorState::InstalledDisabled
@@ -241,17 +245,37 @@ impl DesktopCompanionSupervisor for WindowsDesktopCompanionSupervisor {
     }
 }
 
-fn installed_windows_exe_path(plan: &DesktopCompanionPlan, source_exe: &Path) -> PathBuf {
-    installed_windows_app_dir(plan, source_exe).join(source_exe.file_name().unwrap_or_default())
+fn installed_windows_exe_path(plan: &DesktopCompanionPlan, source_exe: &Path) -> Result<PathBuf> {
+    let exe_name =
+        source_exe
+            .file_name()
+            .ok_or_else(|| PluginHostError::InvalidCompanionManifest {
+                id: plan.package_id.clone(),
+                reason: format!(
+                    "Windows companion executable `{}` has no artifact name",
+                    source_exe.display()
+                ),
+            })?;
+    Ok(installed_windows_app_dir(plan, source_exe)?.join(exe_name))
 }
 
-fn installed_windows_app_dir(plan: &DesktopCompanionPlan, source_exe: &Path) -> PathBuf {
-    let app_name = source_exe.file_stem().unwrap_or_default();
-    plan.user_home
+fn installed_windows_app_dir(plan: &DesktopCompanionPlan, source_exe: &Path) -> Result<PathBuf> {
+    let app_name =
+        source_exe
+            .file_stem()
+            .ok_or_else(|| PluginHostError::InvalidCompanionManifest {
+                id: plan.package_id.clone(),
+                reason: format!(
+                    "Windows companion executable `{}` has no executable stem",
+                    source_exe.display()
+                ),
+            })?;
+    Ok(plan
+        .user_home
         .join(".easynet/apps")
         .join(&plan.package_id)
         .join(&plan.package_version)
-        .join(app_name)
+        .join(app_name))
 }
 
 #[cfg(target_os = "windows")]
@@ -373,8 +397,8 @@ mod tests {
     fn installed_windows_paths_use_app_directory_by_exe_stem() {
         let source = PathBuf::from("dist/windows/EasyNetTray/EasyNetTray.exe");
         let plan = test_plan("0.1.0", source.clone());
-        let app_dir = installed_windows_app_dir(&plan, &source);
-        let exe_path = installed_windows_exe_path(&plan, &source);
+        let app_dir = installed_windows_app_dir(&plan, &source).expect("app dir");
+        let exe_path = installed_windows_exe_path(&plan, &source).expect("exe path");
 
         assert!(app_dir.ends_with(".easynet/apps/easynet.desktop.menubar/0.1.0/EasyNetTray"));
         assert!(exe_path
@@ -385,14 +409,26 @@ mod tests {
     fn windows_startup_query_match_is_version_specific() {
         let source = PathBuf::from("dist/windows/EasyNetTray/EasyNetTray.exe");
         let plan = test_plan("0.1.0", source.clone());
-        let expected = installed_windows_exe_path(&plan, &source);
+        let expected = installed_windows_exe_path(&plan, &source).expect("expected exe");
         let matching = format!("EasyNetTray    REG_SZ    {}\r\n", expected.display());
         assert!(windows_startup_query_matches(&matching, &expected));
 
         let other_plan = test_plan("0.2.0", source.clone());
-        let other = installed_windows_exe_path(&other_plan, &source);
+        let other = installed_windows_exe_path(&other_plan, &source).expect("other exe");
         let mismatched = format!("EasyNetTray    REG_SZ    {}\r\n", other.display());
         assert!(!windows_startup_query_matches(&mismatched, &expected));
+    }
+
+    #[test]
+    fn installed_exe_path_rejects_missing_executable_name_before_version_dir_fallback() {
+        let plan = test_plan("0.1.0", PathBuf::from("/"));
+        let error = installed_windows_exe_path(&plan, Path::new("/"))
+            .expect_err("executable path without file name must fail closed");
+
+        assert!(
+            error.to_string().contains("has no artifact name"),
+            "wrong error: {error}"
+        );
     }
 
     fn test_plan(version: &str, exe: PathBuf) -> DesktopCompanionPlan {

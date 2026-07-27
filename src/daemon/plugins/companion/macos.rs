@@ -53,7 +53,7 @@ impl DesktopCompanionSupervisor for MacosDesktopCompanionSupervisor {
                 "not a macOS companion plan",
             ));
         };
-        let target = installed_app_path(plan, app_bundle);
+        let target = installed_app_path(plan, app_bundle)?;
         stop_companion_processes(plan);
         copy_dir_replacing(app_bundle, &target)?;
         Ok(CompanionActionReport::changed(format!(
@@ -108,7 +108,7 @@ impl DesktopCompanionSupervisor for MacosDesktopCompanionSupervisor {
                 "not a macOS companion plan",
             ));
         };
-        let target = installed_app_path(plan, app_bundle);
+        let target = installed_app_path(plan, app_bundle)?;
         if target.exists() {
             std::fs::remove_dir_all(&target).map_err(|source| PluginHostError::WriteFailed {
                 path: target.clone(),
@@ -185,7 +185,10 @@ impl DesktopCompanionSupervisor for MacosDesktopCompanionSupervisor {
         let PlatformCompanionSpec::Macos { app_bundle, .. } = &plan.spec else {
             return CompanionSupervisorState::UnsupportedPlatform;
         };
-        let installed_app = installed_app_path(plan, app_bundle);
+        let installed_app = match installed_app_path(plan, app_bundle) {
+            Ok(path) => path,
+            Err(_) => return CompanionSupervisorState::InstallError,
+        };
         let plist = match launch_agent_path(plan) {
             Ok(path) => path,
             Err(_) => return CompanionSupervisorState::InstallError,
@@ -228,7 +231,7 @@ pub(crate) fn render_launch_agent_plist(plan: &DesktopCompanionPlan) -> Result<S
             reason: "not a macOS companion plan".to_string(),
         });
     };
-    let installed_app = installed_app_path(plan, app_bundle);
+    let installed_app = installed_app_path(plan, app_bundle)?;
     Ok(format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -298,25 +301,42 @@ fn launch_agent_path(plan: &DesktopCompanionPlan) -> Result<PathBuf> {
         .join(format!("{}.plist", launch_agent_label(plan)?)))
 }
 
-fn installed_app_path(plan: &DesktopCompanionPlan, source_app_bundle: &Path) -> PathBuf {
-    plan.user_home
+fn installed_app_path(plan: &DesktopCompanionPlan, source_app_bundle: &Path) -> Result<PathBuf> {
+    let bundle_name =
+        source_app_bundle
+            .file_name()
+            .ok_or_else(|| PluginHostError::InvalidCompanionManifest {
+                id: plan.package_id.clone(),
+                reason: format!(
+                    "macOS companion app_bundle `{}` has no artifact name",
+                    source_app_bundle.display()
+                ),
+            })?;
+    Ok(plan
+        .user_home
         .join(".easynet/apps")
         .join(&plan.package_id)
         .join(&plan.package_version)
-        .join(source_app_bundle.file_name().unwrap_or_default())
+        .join(bundle_name))
 }
 
-fn app_executable_path(app_bundle: &Path) -> PathBuf {
+fn app_executable_path(plan: &DesktopCompanionPlan, app_bundle: &Path) -> Result<PathBuf> {
     let stem = app_bundle
         .file_stem()
         .map(|stem| stem.to_os_string())
-        .unwrap_or_default();
-    app_bundle.join("Contents/MacOS").join(stem)
+        .ok_or_else(|| PluginHostError::InvalidCompanionManifest {
+            id: plan.package_id.clone(),
+            reason: format!(
+                "macOS companion app_bundle `{}` has no executable stem",
+                app_bundle.display()
+            ),
+        })?;
+    Ok(app_bundle.join("Contents/MacOS").join(stem))
 }
 
 fn expected_app_bundle_path(plan: &DesktopCompanionPlan) -> Result<PathBuf> {
     match &plan.spec {
-        PlatformCompanionSpec::Macos { app_bundle, .. } => Ok(installed_app_path(plan, app_bundle)),
+        PlatformCompanionSpec::Macos { app_bundle, .. } => installed_app_path(plan, app_bundle),
         _ => Err(PluginHostError::InvalidCompanionManifest {
             id: plan.package_id.clone(),
             reason: "not a macOS companion plan".to_string(),
@@ -337,9 +357,12 @@ fn stop_stale_companion_processes(plan: &DesktopCompanionPlan) {
     let PlatformCompanionSpec::Macos { app_bundle, .. } = &plan.spec else {
         return;
     };
-    let expected = app_executable_path(&installed_app_path(plan, app_bundle))
-        .display()
-        .to_string();
+    let expected = match installed_app_path(plan, app_bundle)
+        .and_then(|installed_app| app_executable_path(plan, &installed_app))
+    {
+        Ok(path) => path.display().to_string(),
+        Err(_) => return,
+    };
     let Some(process_name) = plan.spec.executable_name() else {
         return;
     };
@@ -469,6 +492,18 @@ mod tests {
         )
         .expect("write other plist");
         assert!(!launch_agent_points_at_plan(&other, &plan).expect("no match"));
+    }
+
+    #[test]
+    fn installed_app_path_rejects_missing_bundle_name_before_version_dir_fallback() {
+        let plan = test_plan("0.1.0");
+        let error = installed_app_path(&plan, Path::new("/"))
+            .expect_err("bundle path without file name must fail closed");
+
+        assert!(
+            error.to_string().contains("has no artifact name"),
+            "wrong error: {error}"
+        );
     }
 
     #[test]
