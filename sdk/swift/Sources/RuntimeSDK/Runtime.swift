@@ -106,7 +106,7 @@ public struct RuntimeReceipt {
         guard lifecycleState != "UNSPECIFIED" else {
             throw SDKError.validation("runtime_receipt", "runtime receipt lifecycle state must not be UNSPECIFIED")
         }
-        guard receiptType == RuntimeReceipt.canonicalReceiptType(lifecycleState) else {
+        guard receiptType == (try RuntimeReceipt.canonicalReceiptType(lifecycleState)) else {
             throw SDKError.validation("runtime_receipt", "runtime receipt receipt_type does not match its lifecycle state")
         }
         _ = try runtimeReceiptHash(raw, "prev_receipt_hash_hex", allowZero: true)
@@ -129,7 +129,7 @@ public struct RuntimeReceipt {
         }
     }
 
-    static func canonicalReceiptType(_ lifecycleState: String) -> String {
+    static func canonicalReceiptType(_ lifecycleState: String) throws -> String {
         switch lifecycleState {
         case "ACCEPTED": return "accepted"
         case "ADMITTED": return "admitted"
@@ -139,7 +139,7 @@ public struct RuntimeReceipt {
         case "FAILED": return "failed"
         case "TIMED_OUT": return "timed_out"
         case "CANCELLED": return "cancelled"
-        default: return ""
+        default: throw SDKError.validation("runtime_receipt", "unknown canonical receipt lifecycle state \(lifecycleState)")
         }
     }
 }

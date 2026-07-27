@@ -32,3 +32,11 @@ Decision: align Node SDK receipt-history admission with the Go/Python canonical 
 Reason: product history views sometimes need a device-owned ledger query. Go and Python already admit this when the subject equals the callee runtime owner and authority is bound to that exact tuple. Node only admitted user runtime-state subjects, forcing product code toward placeholder user sessions or divergent provider behavior.
 
 Boundary: this is not a fallback. Non-callee runtime-owner subjects still fail before provider dispatch, all-zero principals remain rejected, and session-authority subject rules remain strict. Device-owned history requires authority that actually admits the device subject, e.g. exact delegation authority.
+
+## Swift receipt canonicalizer fail-closed parity
+
+Decision: make Swift `RuntimeReceipt.canonicalReceiptType` throw on unknown canonical lifecycle states instead of returning an empty string.
+
+Reason: receipt validation is proof-fact validation, not presentation formatting. Returning an empty string leaves a permissive internal helper that can be reused incorrectly even though the current constructor first canonicalizes `state`. Go, Java, Python, and Node either operate on already validated lifecycle state or fail explicitly; Swift should not preserve a silent empty receipt-type sentinel.
+
+Boundary: public receipt behavior remains compatible for valid receipts. Invalid canonical lifecycle states now fail with an explicit `INVALID_ARGUMENT` validation error before any proof-fact path can treat an empty receipt type as data.

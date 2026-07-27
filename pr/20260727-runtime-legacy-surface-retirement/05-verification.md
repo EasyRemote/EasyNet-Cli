@@ -36,3 +36,13 @@
 - `cargo fmt --check`
 - `git diff --check`
 - `/Users/macbook.silan.tech/.local/bin/codegraph sync`
+
+## Iteration 4
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph query "URI terminology URA canonical runtime sdk receipt canonicalizer fail open governance subject"`
+- `swift test` from `sdk/swift`
+- `tools/scripts/check-canonical-runtime-convergence-v2.sh`
+- `tools/scripts/check-architecture-convergence.sh`
+- `cargo fmt --check`
+- `git diff --check`
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync`

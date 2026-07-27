@@ -199,6 +199,9 @@ final class RuntimeCoreSeamTests: XCTestCase {
                 _ = try RuntimeReceipt(legacyStateReceipt)
             }
         }
+        expectSyncSDKError(.invalidArgument, "unknown canonical receipt lifecycle state") {
+            _ = try RuntimeReceipt.canonicalReceiptType("UNKNOWN")
+        }
 
         var unspecifiedStateReceipt = terminal
         unspecifiedStateReceipt["state"] = "Unspecified"

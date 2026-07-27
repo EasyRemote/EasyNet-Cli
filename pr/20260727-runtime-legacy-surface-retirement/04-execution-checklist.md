@@ -26,3 +26,12 @@
 - [x] Clear local EasyNet state through the product purge path after user authorization.
 - [x] Run focused tests and gates.
 - [x] Commit if stable.
+
+## Iteration 4 — Swift receipt canonicalizer fail-closed parity
+
+- [x] Re-run codegraph/search for URI terminology, receipt canonicalizer defaults, and cross-language governance subject parity.
+- [x] Identify Swift `RuntimeReceipt.canonicalReceiptType` as a fail-open helper returning an empty string for unknown canonical lifecycle states.
+- [x] Refactor Swift receipt type binding to throw on unknown canonical lifecycle state.
+- [x] Add direct Swift regression coverage for unknown canonical lifecycle state.
+- [x] Run focused Swift tests and repository gates.
+- [x] Commit if stable.
