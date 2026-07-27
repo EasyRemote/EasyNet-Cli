@@ -121,7 +121,8 @@ pub fn wait_for_daemon_boot(
 }
 
 async fn subscribe_boot_events(renderer: &StageRenderer) -> anyhow::Result<BootProgressOutcome> {
-    let control_json = discovery::default_path();
+    let control_json =
+        discovery::try_default_path().context("resolve boot control discovery path")?;
     let disc = loop {
         match discovery::read(&control_json)? {
             Some(disc) => break disc,
@@ -248,7 +249,9 @@ fn apply_event(
             renderer.stage_ok(&line);
         }
         BootEvent::Ready => {
-            let disc = discovery::read(&discovery::default_path())
+            let path = discovery::try_default_path()
+                .context("resolve daemon ready discovery path after Ready")?;
+            let disc = discovery::read(&path)
                 .context("read daemon ready discovery after Ready")?
                 .ok_or_else(|| anyhow::anyhow!("daemon Ready without control discovery"))?;
             outcome.ready_capability_flags = disc.capability_flags.clone();
@@ -266,7 +269,10 @@ fn apply_event(
 /// Read the final pages port from control.json, falling back to the
 /// value observed in the event stream.
 pub fn final_pages_port(event_port: Option<u16>) -> Option<u16> {
-    let path: PathBuf = discovery::default_path();
+    let path: PathBuf = match discovery::try_default_path() {
+        Ok(path) => path,
+        Err(_) => return event_port,
+    };
     discovery::read(&path)
         .ok()
         .flatten()

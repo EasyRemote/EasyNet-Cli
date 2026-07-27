@@ -864,7 +864,13 @@ async fn wait_for_shutdown_signal() {
 }
 
 fn cleanup_control_discovery() {
-    let path = discovery::default_path();
+    let path = match discovery::try_default_path() {
+        Ok(path) => path,
+        Err(err) => {
+            eprintln!("[daemon] skipped control discovery cleanup: {err:#}");
+            return;
+        }
+    };
     if let Err(err) = discovery::remove(&path) {
         eprintln!(
             "[daemon] failed to remove control discovery file at {}: {err:#}",

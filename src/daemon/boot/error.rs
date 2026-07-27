@@ -20,6 +20,11 @@ pub enum DaemonError {
     EmptyWorkingDir,
     #[error("daemon runtime HOME is required for {context}")]
     DaemonHomeUnavailable { context: &'static str },
+    #[error("daemon state root is unavailable for {context}: {source}")]
+    DaemonStateRootUnavailable {
+        context: &'static str,
+        source: anyhow::Error,
+    },
     #[error("failed to create daemon log directory {path}: {source}")]
     CreateLogDir {
         path: PathBuf,

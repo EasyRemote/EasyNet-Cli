@@ -54,7 +54,7 @@ impl DaemonClient {
 
     /// Build a client for the currently configured local daemon.
     pub fn local() -> Result<Self> {
-        Self::connect(DaemonEndpoints::current().invocation)
+        Self::connect(DaemonEndpoints::try_current()?.invocation)
     }
 
     /// Endpoint this client dials.
@@ -286,7 +286,7 @@ impl RuntimeClient {
 
     /// Connect to the current local daemon Invocation endpoint.
     pub fn local() -> Result<Self> {
-        Self::connect(DaemonEndpoints::current().invocation)
+        Self::connect(DaemonEndpoints::try_current()?.invocation)
     }
 
     /// Current SDK-observed connection state.

@@ -143,10 +143,15 @@ pub(crate) fn preflight_start(
             RuntimeStartPreflightAction::AlreadyRunning
         }
         RuntimeLifecycleStatus::ControlOnlyInvocationDown => {
+            let endpoints = report.daemon().endpoints().ok_or_else(|| {
+                RuntimeLifecycleError::StartRefusedInvalidDaemonDiscovery {
+                    message: "daemon endpoint resolution is unavailable".to_string(),
+                }
+            })?;
             return Err(
                 RuntimeLifecycleError::StartRefusedControlOnlyInvocationDown {
-                    control: report.daemon().endpoints().control().to_path_buf(),
-                    invocation: report.daemon().endpoints().invocation().to_path_buf(),
+                    control: endpoints.control().to_path_buf(),
+                    invocation: endpoints.invocation().to_path_buf(),
                 },
             );
         }

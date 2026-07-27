@@ -702,6 +702,10 @@ pub fn easynet_daemon_pid_path() -> PathBuf {
     state_dir().join("easynet-daemon.pid")
 }
 
+pub fn try_easynet_daemon_pid_path() -> anyhow::Result<PathBuf> {
+    Ok(try_state_dir()?.join("easynet-daemon.pid"))
+}
+
 pub fn save_credentials(creds: &Credentials) -> anyhow::Result<()> {
     creds.validate_complete()?;
     let dir = try_state_dir()?;

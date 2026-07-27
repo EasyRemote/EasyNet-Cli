@@ -577,11 +577,11 @@ impl LocalRuntimeOwnerReadAttachment {
         signer_custody: &dyn RuntimeStateReadSignerCustody,
         error_prefix: &'static str,
     ) -> anyhow::Result<Self> {
-        let discovery = crate::daemon::control::discovery::read(
-            &crate::daemon::control::discovery::default_path(),
-        )
-        .map_err(|error| anyhow::anyhow!("{error_prefix}: {error}"))?
-        .ok_or_else(|| anyhow::anyhow!("{error_prefix}: daemon Ready discovery is missing"))?;
+        let path = crate::daemon::control::discovery::try_default_path()
+            .map_err(|error| anyhow::anyhow!("{error_prefix}: {error}"))?;
+        let discovery = crate::daemon::control::discovery::read(&path)
+            .map_err(|error| anyhow::anyhow!("{error_prefix}: {error}"))?
+            .ok_or_else(|| anyhow::anyhow!("{error_prefix}: daemon Ready discovery is missing"))?;
         Self::from_discovery(&discovery, signer_custody, error_prefix)
     }
 
@@ -716,15 +716,15 @@ impl LocalRuntimeStateReadAttachment {
     ) -> anyhow::Result<Self> {
         let credentials = crate::daemon::persistence::config::load_credentials()
             .map_err(|error| anyhow::anyhow!("runtime-state read subject unavailable: {error}"))?;
-        let discovery = crate::daemon::control::discovery::read(
-            &crate::daemon::control::discovery::default_path(),
-        )
-        .map_err(|error| anyhow::anyhow!("runtime-state read subject unavailable: {error}"))?
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "runtime-state read subject unavailable: daemon Ready discovery is missing"
-            )
-        })?;
+        let path = crate::daemon::control::discovery::try_default_path()
+            .map_err(|error| anyhow::anyhow!("runtime-state read subject unavailable: {error}"))?;
+        let discovery = crate::daemon::control::discovery::read(&path)
+            .map_err(|error| anyhow::anyhow!("runtime-state read subject unavailable: {error}"))?
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "runtime-state read subject unavailable: daemon Ready discovery is missing"
+                )
+            })?;
         Self::from_runtime_attachment(&credentials, &discovery, signer_custody)
     }
 

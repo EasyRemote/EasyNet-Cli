@@ -244,15 +244,16 @@ impl DaemonStartConfig {
                     context: "daemon child HOME override",
                 });
             }
-            return Ok(PathBuf::from(value));
+            return validate_effective_home("daemon child HOME override", PathBuf::from(value));
         }
 
-        std::env::var_os("HOME")
+        let home = std::env::var_os("HOME")
             .filter(|value| !value.is_empty())
             .map(PathBuf::from)
             .ok_or(DaemonError::DaemonHomeUnavailable {
                 context: "daemon process HOME",
-            })
+            })?;
+        validate_effective_home("daemon process HOME", home)
     }
 
     fn expand_effective_home(&self, path: impl AsRef<Path>) -> Result<PathBuf> {
@@ -383,6 +384,19 @@ impl DaemonStartConfig {
     }
 }
 
+fn validate_effective_home(context: &'static str, path: PathBuf) -> Result<PathBuf> {
+    if path.is_absolute() {
+        return Ok(path);
+    }
+    Err(DaemonError::DaemonStateRootUnavailable {
+        context,
+        source: anyhow::anyhow!(
+            "HOME must resolve to an absolute path before deriving .easynet state root, got {}",
+            path.display()
+        ),
+    })
+}
+
 fn mode_matches(requested: DaemonStartMode, actual: &str) -> bool {
     match requested {
         DaemonStartMode::Device => actual == PersistedDaemonMode::Device.as_str(),
@@ -412,10 +426,24 @@ impl DaemonEndpoints {
     /// Resolve endpoints from the current process environment and
     /// daemon configuration files.
     pub fn current() -> Self {
-        Self {
-            control: transport::default_socket_path(),
+        Self::try_current().unwrap_or_else(|error| panic!("{error}"))
+    }
+
+    /// Fallible endpoint resolution for production lifecycle paths.
+    ///
+    /// Endpoint discovery is part of the daemon state-root state machine. A
+    /// missing or invalid state root must surface as a lifecycle error instead
+    /// of panicking or re-deriving paths from the current working directory.
+    pub fn try_current() -> Result<Self> {
+        Ok(Self {
+            control: transport::try_default_socket_path().map_err(|source| {
+                DaemonError::DaemonStateRootUnavailable {
+                    context: "control endpoint discovery",
+                    source,
+                }
+            })?,
             invocation: daemon_config::resolved_local_uds_path_with_env_override(),
-        }
+        })
     }
 
     /// Boot/status control endpoint (`control.sock` or named pipe).
@@ -450,7 +478,7 @@ impl DaemonHandle {
     /// Attach to an already-running daemon without spawning a new
     /// process.
     pub fn attach_current() -> Result<Self> {
-        let endpoints = DaemonEndpoints::current();
+        let endpoints = DaemonEndpoints::try_current()?;
         let control_accepting = local_daemon_grpc::probe_accepting(&endpoints.control);
         let invocation_accepting = local_daemon_grpc::probe_accepting(&endpoints.invocation);
         if control_accepting && !invocation_accepting {
@@ -468,7 +496,12 @@ impl DaemonHandle {
             child: None,
             pid: discover_existing_daemon_pid(),
             endpoints,
-            pid_path: config::easynet_daemon_pid_path(),
+            pid_path: config::try_easynet_daemon_pid_path().map_err(|source| {
+                DaemonError::DaemonStateRootUnavailable {
+                    context: "daemon pidfile discovery",
+                    source,
+                }
+            })?,
         })
     }
 
@@ -547,6 +580,13 @@ impl DaemonStatus {
         Self::from_parts(discover_existing_daemon_pid(), endpoints)
     }
 
+    /// Fallible status resolution for lifecycle paths that must not panic on
+    /// an invalid state root.
+    pub fn try_current() -> Result<Self> {
+        let endpoints = DaemonEndpoints::try_current()?;
+        Ok(Self::from_parts(discover_existing_daemon_pid(), endpoints))
+    }
+
     fn from_parts(pid: Option<u32>, endpoints: DaemonEndpoints) -> Self {
         let pid_alive = pid.is_some_and(net::is_pid_alive);
         let control_accepting = local_daemon_grpc::probe_accepting(&endpoints.control);
@@ -621,7 +661,9 @@ fn write_daemon_pid_at(pid_path: &Path, pid: u32) -> Result<()> {
 }
 
 fn discover_existing_daemon_pid() -> Option<u32> {
-    discover_existing_daemon_pid_at(&config::easynet_daemon_pid_path())
+    config::try_easynet_daemon_pid_path()
+        .ok()
+        .and_then(|path| discover_existing_daemon_pid_at(&path))
 }
 
 fn discover_existing_daemon_pid_at(pid_path: &Path) -> Option<u32> {
@@ -834,6 +876,24 @@ mod tests {
             err,
             DaemonError::DaemonHomeUnavailable {
                 context: "daemon child HOME override"
+            }
+        ));
+    }
+
+    #[test]
+    fn launch_paths_reject_relative_child_home_before_cwd_fallback() {
+        let config = DaemonStartConfig::device("node-a")
+            .unwrap()
+            .with_env("HOME", "relative-home");
+        let err = config
+            .launch_paths()
+            .expect_err("relative child HOME must fail closed");
+
+        assert!(matches!(
+            err,
+            DaemonError::DaemonStateRootUnavailable {
+                context: "daemon child HOME override",
+                ..
             }
         ));
     }

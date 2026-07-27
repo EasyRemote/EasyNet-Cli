@@ -192,7 +192,9 @@ fn persisted_local_device_ura() -> Option<String> {
 }
 
 fn control_discovery_daemon_ura() -> anyhow::Result<Option<String>> {
-    let path = crate::daemon::control::discovery::default_path();
+    let path = crate::daemon::control::discovery::try_default_path().map_err(|error| {
+        anyhow::anyhow!("resolve local daemon identity discovery path: {error}")
+    })?;
     let Some(discovery) = crate::daemon::control::discovery::read(&path).map_err(|error| {
         anyhow::anyhow!(
             "read local daemon identity from {}: {error}",

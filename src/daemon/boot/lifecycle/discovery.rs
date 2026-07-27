@@ -70,27 +70,43 @@ pub struct DaemonDiscoverySnapshot {
     pid_matches_easynet: bool,
     control_accepting: bool,
     invocation_accepting: bool,
-    endpoints: DaemonEndpoints,
+    endpoints: Option<DaemonEndpoints>,
 }
 
 impl DaemonDiscoverySnapshot {
     /// Capture the daemon process facts for the current EasyNet state
     /// directory.
     pub fn capture_current() -> Self {
-        let default_endpoints = DaemonEndpoints::current();
+        let (default_endpoints, endpoint_resolution_error) = match DaemonEndpoints::try_current() {
+            Ok(endpoints) => (Some(endpoints), None),
+            Err(error) => (
+                None,
+                Some(format!("daemon endpoint resolution failed: {error}")),
+            ),
+        };
         let (control_discovery, control_discovery_error) =
-            match discovery::read(&discovery::default_path()) {
-                Ok(discovery) => (discovery, None),
+            match discovery::try_default_path().and_then(|path| discovery::read(&path)) {
+                Ok(discovery) => (discovery, endpoint_resolution_error),
                 Err(error) => (None, Some(error.to_string())),
             };
-        let endpoints = endpoints_from_discovery(&default_endpoints, control_discovery.as_ref());
+        let endpoints =
+            endpoints_from_discovery(default_endpoints.as_ref(), control_discovery.as_ref());
         let discovery_pid = control_discovery.as_ref().map(|disc| disc.pid);
-        let pidfile_pid = read_pidfile(&config::easynet_daemon_pid_path());
+        let pidfile_pid = config::try_easynet_daemon_pid_path()
+            .ok()
+            .and_then(|path| read_pidfile(&path));
         let pid = choose_pid(discovery_pid, pidfile_pid);
         let pid_alive = pid.is_some_and(net::is_pid_alive);
         let pid_matches_easynet = pid.is_some_and(net::is_easynet_process);
-        let control_accepting = local_daemon_grpc::probe_accepting(endpoints.control());
-        let invocation_accepting = local_daemon_grpc::probe_accepting(endpoints.invocation());
+        let can_probe = control_discovery_error.is_none();
+        let control_accepting = can_probe
+            && endpoints
+                .as_ref()
+                .is_some_and(|endpoints| local_daemon_grpc::probe_accepting(endpoints.control()));
+        let invocation_accepting = can_probe
+            && endpoints.as_ref().is_some_and(|endpoints| {
+                local_daemon_grpc::probe_accepting(endpoints.invocation())
+            });
 
         Self {
             control_discovery,
@@ -171,8 +187,8 @@ impl DaemonDiscoverySnapshot {
     }
 
     /// Endpoints used for this snapshot's probes.
-    pub fn endpoints(&self) -> &DaemonEndpoints {
-        &self.endpoints
+    pub fn endpoints(&self) -> Option<&DaemonEndpoints> {
+        self.endpoints.as_ref()
     }
 
     /// JSON representation used by CLI status and FFI-facing reports.
@@ -183,14 +199,22 @@ impl DaemonDiscoverySnapshot {
         {
             return Value::Null;
         }
+        let control_socket = self
+            .endpoints
+            .as_ref()
+            .map(|endpoints| endpoints.control().display().to_string());
+        let invocation_endpoint = self
+            .endpoints
+            .as_ref()
+            .map(|endpoints| endpoints.invocation().display().to_string());
         json!({
             "pid": self.pid,
             "pid_alive": self.pid_alive,
             "pid_matches_easynet": self.pid_matches_easynet,
             "control_accepting": self.control_accepting,
             "invocation_accepting": self.invocation_accepting,
-            "control_socket": self.endpoints.control().display().to_string(),
-            "invocation_endpoint": self.endpoints.invocation().display().to_string(),
+            "control_socket": control_socket,
+            "invocation_endpoint": invocation_endpoint,
             "control_discovery_error": self.control_discovery_error,
             "capability_flags": self.control_discovery.as_ref().map(|disc| disc.capability_flags.clone()).unwrap_or_default(),
             "identity": self.identity().map(|identity| json!({
@@ -241,7 +265,7 @@ impl DaemonDiscoverySnapshot {
             pid_matches_easynet,
             control_accepting,
             invocation_accepting,
-            endpoints,
+            endpoints: Some(endpoints),
         }
     }
 
@@ -258,23 +282,25 @@ impl DaemonDiscoverySnapshot {
             pid_matches_easynet: false,
             control_accepting: false,
             invocation_accepting: false,
-            endpoints,
+            endpoints: Some(endpoints),
         }
     }
 }
 
 fn endpoints_from_discovery(
-    default_endpoints: &DaemonEndpoints,
+    default_endpoints: Option<&DaemonEndpoints>,
     discovery: Option<&ControlDiscovery>,
-) -> DaemonEndpoints {
-    DaemonEndpoints {
-        control: discovery
-            .and_then(|disc| disc.socket_path.clone())
-            .unwrap_or_else(|| default_endpoints.control().to_path_buf()),
-        invocation: discovery
-            .and_then(|disc| disc.invocation_endpoint.clone())
-            .unwrap_or_else(|| default_endpoints.invocation().to_path_buf()),
-    }
+) -> Option<DaemonEndpoints> {
+    let control = discovery
+        .and_then(|disc| disc.socket_path.clone())
+        .or_else(|| default_endpoints.map(|endpoints| endpoints.control().to_path_buf()))?;
+    let invocation = discovery
+        .and_then(|disc| disc.invocation_endpoint.clone())
+        .or_else(|| default_endpoints.map(|endpoints| endpoints.invocation().to_path_buf()))?;
+    Some(DaemonEndpoints {
+        control,
+        invocation,
+    })
 }
 
 fn choose_pid(discovery_pid: Option<u32>, pidfile_pid: Option<u32>) -> Option<u32> {

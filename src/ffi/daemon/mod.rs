@@ -212,7 +212,13 @@ pub unsafe extern "C" fn runtime_host_discover(
             Err(StringError::Null) => {}
         }
     }
-    let status = crate::daemon::DaemonStatus::current();
+    let status = match crate::daemon::DaemonStatus::try_current() {
+        Ok(status) => status,
+        Err(err) => {
+            set_last_error_code(ERR_GENERIC, format!("runtime_host_discover: {err}"));
+            return ERR_GENERIC;
+        }
+    };
     let ptr = alloc_output_cstring(daemon_status_json(&status).to_string());
     if ptr.is_null() {
         set_last_error_code(

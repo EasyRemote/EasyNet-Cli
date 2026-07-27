@@ -270,7 +270,8 @@ impl StopPlan {
     /// remaining process evidence.
     fn stage_cleanup_discovery(&mut self) -> anyhow::Result<()> {
         self.renderer.set_active("cleanup-discovery");
-        let path = discovery::default_path();
+        let path = discovery::try_default_path()
+            .map_err(|error| anyhow::anyhow!("resolve control discovery cleanup path: {error}"))?;
         if !path.exists() {
             self.renderer
                 .stage_skipped("cleanup-discovery", "(no control.json)");
