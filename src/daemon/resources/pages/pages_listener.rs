@@ -373,6 +373,10 @@ fn cors_preflight() -> Response<Body> {
         .expect("preflight response")
 }
 
+fn json_body_bytes(value: &serde_json::Value) -> Vec<u8> {
+    serde_json::to_vec(value).expect("serde_json::Value serializes to JSON")
+}
+
 /// Wrap an api ability's `{status, body, content_type}` shape into
 /// an HTTP response. Adds `Access-Control-Allow-Origin: *` so the
 /// frontend on a sibling subdomain receives the body.
@@ -388,7 +392,7 @@ fn api_response(value: serde_json::Value) -> Response<Body> {
         .unwrap_or("application/json; charset=utf-8")
         .to_string();
     let body = match value.get("body") {
-        Some(b) => serde_json::to_vec(b).unwrap_or_default(),
+        Some(b) => json_body_bytes(b),
         None => Vec::new(),
     };
 
@@ -415,7 +419,7 @@ fn pages_health_response(head_only: bool) -> Response<Body> {
     let body = if head_only {
         Vec::new()
     } else {
-        serde_json::to_vec(&payload).unwrap_or_default()
+        json_body_bytes(&payload)
     };
 
     let mut builder = Response::builder().status(StatusCode::OK);
@@ -673,7 +677,7 @@ fn openai_stream_error(message: String) -> serde_json::Value {
 /// JSON response with CORS open. Used by /v1/models and /v1/chat/completions
 /// (non-streaming).
 fn json_response_with_cors(status: StatusCode, value: serde_json::Value) -> Response<Body> {
-    let body = serde_json::to_vec(&value).unwrap_or_default();
+    let body = json_body_bytes(&value);
     let mut builder = Response::builder().status(status);
     let headers = builder.headers_mut().expect("builder always has headers");
     headers.insert(
@@ -691,7 +695,10 @@ fn json_response_with_cors(status: StatusCode, value: serde_json::Value) -> Resp
 #[cfg(test)]
 mod tests {
     use super::OpenAIStreamProjection;
-    use super::{handle, pages_health_response, parse_pages_api_body, parse_pages_host};
+    use super::{
+        api_response, handle, json_response_with_cors, pages_health_response, parse_pages_api_body,
+        parse_pages_host,
+    };
     use axum::body::{to_bytes, Body};
     use axum::http::{header, Request, StatusCode};
     use serde_json::json;
@@ -740,6 +747,34 @@ mod tests {
             payload.get("pid").and_then(|v| v.as_u64()),
             Some(std::process::id() as u64)
         );
+    }
+
+    #[tokio::test]
+    async fn api_response_materializes_json_body_without_empty_fallback() {
+        let resp = api_response(json!({
+            "status": 201,
+            "content_type": "application/json; charset=utf-8",
+            "body": {"ok": true, "source": "api"}
+        }));
+
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        let body = to_bytes(resp.into_body(), 1024).await.expect("body bytes");
+        let payload: serde_json::Value = serde_json::from_slice(&body).expect("json body");
+        assert_eq!(payload, json!({"ok": true, "source": "api"}));
+    }
+
+    #[tokio::test]
+    async fn json_response_with_cors_materializes_openai_body_without_empty_fallback() {
+        let resp = json_response_with_cors(
+            StatusCode::ACCEPTED,
+            json!({"object": "list", "data": [{"id": "model-a"}]}),
+        );
+
+        assert_eq!(resp.status(), StatusCode::ACCEPTED);
+        let body = to_bytes(resp.into_body(), 1024).await.expect("body bytes");
+        let payload: serde_json::Value = serde_json::from_slice(&body).expect("json body");
+        assert_eq!(payload["object"], "list");
+        assert_eq!(payload["data"][0]["id"], "model-a");
     }
 
     fn publish_temp_project(user: &str, project_id: &str, files: &[(&str, &str)]) -> TempDir {
