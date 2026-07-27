@@ -8336,9 +8336,54 @@ if session_prelude.exists():
 # Rule 74: Pages serve adapter must consume page.fetch output as
 # schema-bound resource evidence. Invalid/missing bytes or metadata must not
 # be projected into a 200 response with empty bytes/default MIME/default sha.
-pages_serve = cli_root / "src/daemon/resources/pages/pages_serve_ability.rs"
+old_pages_serve = cli_root / "src/daemon/resources/pages/pages_serve_ability.rs"
+pages_serve = cli_root / "src/daemon/resources/pages/pages_http_projection.rs"
+pages_listener = cli_root / "src/daemon/resources/pages/pages_listener.rs"
+if old_pages_serve.exists():
+    add(
+        "R74_PAGES_SERVE_FETCH_PROJECTION_SCHEMA",
+        old_pages_serve,
+        1,
+        "Pages HTTP projection must not preserve the retired pages_serve_ability pseudo-ability module",
+    )
+if not pages_serve.exists():
+    add(
+        "R74_PAGES_SERVE_FETCH_PROJECTION_SCHEMA",
+        pages_serve,
+        1,
+        "Pages HTTP projection module is missing",
+    )
 if pages_serve.exists():
     text = source(pages_serve)
+    for token, detail in (
+        (
+            "canonical_invoke",
+            "Pages HTTP projection must not claim canonical Invocation dispatch",
+        ),
+        (
+            "Phase 2",
+            "Pages HTTP projection must not carry staged cutover compatibility prose",
+        ),
+        (
+            "operational receipt",
+            "Pages HTTP projection must not claim receipt emission",
+        ),
+        (
+            "01HUB.pages.serve",
+            "Pages HTTP projection must not preserve the retired pages.serve pseudo-ability name",
+        ),
+        (
+            "pages.serve adapter ability",
+            "Pages HTTP projection must not describe itself as an Ability implementation",
+        ),
+    ):
+        if token in text:
+            add(
+                "R74_PAGES_SERVE_FETCH_PROJECTION_SCHEMA",
+                pages_serve,
+                line_number(text, text.find(token)),
+                detail,
+            )
     bytes_body = rust_method_body(text, "bytes_from_value")
     if bytes_body is None:
         add(
@@ -8403,6 +8448,32 @@ if pages_serve.exists():
         ):
             if token not in body:
                 add("R74_PAGES_SERVE_FETCH_PROJECTION_SCHEMA", pages_serve, line_number(text, offset), detail)
+if pages_listener.exists():
+    listener_text = source(pages_listener)
+    if "pages_serve_ability" in listener_text:
+        add(
+            "R74_PAGES_SERVE_FETCH_PROJECTION_SCHEMA",
+            pages_listener,
+            line_number(listener_text, listener_text.find("pages_serve_ability")),
+            "Pages listener must import the HTTP projection module, not the retired pseudo-ability module",
+        )
+    for token, detail in (
+        (
+            "01HUB.pages.serve",
+            "Pages listener must not preserve the retired pages.serve pseudo-ability shape",
+        ),
+        (
+            "cut-over (Phase 2)",
+            "Pages listener must not carry staged cutover compatibility prose",
+        ),
+    ):
+        if token in listener_text:
+            add(
+                "R74_PAGES_SERVE_FETCH_PROJECTION_SCHEMA",
+                pages_listener,
+                line_number(listener_text, listener_text.find(token)),
+                detail,
+            )
 
 
 # Rule 78: Authority metadata projection must fail closed when the runtime

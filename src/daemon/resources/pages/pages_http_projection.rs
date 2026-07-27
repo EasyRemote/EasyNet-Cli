@@ -1,18 +1,19 @@
-// EasyNet CLI — Hub: pages.serve adapter ability
-// ===============================================
+// EasyNet CLI — Pages HTTP byte projection
+// ========================================
 //
-// File: src/daemon/hub/pages_serve_ability.rs
-// Description: implements the body of `01HUB.pages.serve` —
-//              the pure transport adapter that forwards an HTTP
-//              request into the project's `<user>.<project>.page.fetch`
-//              ability via the standard local dispatch path.
+// File: src/daemon/resources/pages/pages_http_projection.rs
+// Description: HTTP listener adapter that projects the local
+//              `<user>.<project>.page.fetch` result into response
+//              bytes and framing metadata.
 //
-//              The adapter is "pure" per RFC-006-B v0.6 INV-1:
-//              no state mutation, no canonical receipts, no byte
-//              transformation beyond mechanical HTTP framing.
+//              This module is not an Ability implementation and does
+//              not emit invocation receipts. It exists only at the
+//              local HTTP transport boundary: parse a schema-bound
+//              fetch result, verify byte facts, and return HTTP-ready
+//              projection state.
 //
 // Conformance: RFC-006-B v0.6 INV-1 (Adapter Purity), §3.1
-//              (forward via standard canonical_invoke).
+//              (HTTP framing of fetch projection).
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -22,7 +23,7 @@ use sha2::{Digest, Sha256};
 
 use crate::daemon::ability::builtins::resources::pages::fetch;
 
-/// Output of an HTTP serve invocation. The Hub listener consumes
+/// Output of the local Pages HTTP projection. The listener consumes
 /// this and translates each field into HTTP response shape.
 #[derive(Debug, Clone)]
 pub struct ServedBytes {
@@ -33,24 +34,15 @@ pub struct ServedBytes {
     pub sha256: String,
 }
 
-/// Translate an HTTP request triple `(user, project_id, path)` into
-/// the project's `<user>.<project_id>.page.fetch` invocation, run
-/// it through the daemon-internal handler, and return the bytes
-/// + framing metadata.
+/// Translate an HTTP request triple `(user, project_id, path)` into the
+/// local project's fetch projection and return HTTP-ready bytes + framing
+/// metadata.
 ///
-/// In v0 we call `fetch::handle_fetch` directly because the
-/// listener and the fetch handler share the same daemon process —
-/// going through a full `canonical_invoke` round trip with envelope
-/// minting + nonce + receipt would be ceremony without any
-/// adversary-distinguishable benefit at this layer. The contract
-/// (Adapter Purity, INV-1) is unchanged: this function still does
-/// not mutate state and emits no canonical receipts; the operational
-/// receipt for the fetch is recorded by the dispatch path the same
-/// way it would be for any other ability invocation.
-///
-/// Phase 2 promotes this to a real `canonical_invoke` so the same
-/// translation works from the Go backend hub against a remote
-/// daemon's project.
+/// This adapter intentionally consumes the local fetch handler directly because
+/// the local Pages listener is not the public Invocation ingress. The boundary
+/// is explicit: it is a pure HTTP projection with no receipt emission and no
+/// remote routing semantics. Product paths that require canonical receipt
+/// chains must enter through daemon Invocation, not through this listener.
 pub fn serve_bytes(user: &str, project_id: &str, path: &str) -> ServedBytes {
     let args = json!({ "path": path });
     match fetch::handle_fetch(user, project_id, args) {
@@ -68,8 +60,8 @@ pub fn serve_bytes(user: &str, project_id: &str, path: &str) -> ServedBytes {
             // browser sees "not found" regardless of whether the
             // project exists, the path was outside the root, the
             // file was a dotfile, or the file simply did not exist.
-            // (The daemon's operational receipt logs the precise
-            // reason for operators.)
+            // Operator diagnostics remain in daemon logs and fetch errors; the
+            // HTTP surface intentionally exposes only coarse status classes.
             let msg = err.to_string();
             let status = if msg.contains("project not published") {
                 503

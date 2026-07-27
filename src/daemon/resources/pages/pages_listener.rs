@@ -4,15 +4,15 @@
 // File: src/daemon/hub/pages_listener.rs
 // Description: in-daemon axum listener bound to
 //              `127.0.0.1:<port>`. Per-request: parses the Host
-//              header into `(project, user)`, calls the Hub's
-//              `pages.serve` adapter, and frames the result as
+//              header into `(project, user)`, consumes the local
+//              Pages HTTP byte projection, and frames the result as
 //              an HTTP response.
 //
 //              This listener is the MVP's HTTP boundary. Production
-//              traffic enters EasyNet through the Go backend's
-//              wildcard listener at `*.*.pages.easynet.run`; the
-//              cut-over (Phase 2) replaces this listener but
-//              keeps the same `01HUB.pages.serve` ability shape.
+//              traffic can enter EasyNet through a product backend
+//              wildcard listener, but this daemon listener remains
+//              a bounded HTTP adapter rather than a canonical
+//              Invocation/receipt surface.
 //
 // Conformance: RFC-006-B v0.6 §3.2 (URL form),
 //              INV-1 (Adapter Purity), INV-3 (Deterministic
@@ -35,7 +35,7 @@ use std::convert::Infallible;
 use tokio::task::JoinHandle;
 use tokio_stream::wrappers::ReceiverStream;
 
-use super::pages_serve_ability::{serve_bytes, ServedBytes};
+use super::pages_http_projection::{serve_bytes, ServedBytes};
 
 const PAGES_HEALTH_PATH: &str = "/_easynet/pages/health";
 

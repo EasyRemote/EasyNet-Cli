@@ -105,6 +105,47 @@ fn dispatch_step(gateway: &dyn MissionInvocationGateway, request: MissionInvocat
 // A direct executor name in documentation is not an execution edge:
 // run_shell_exec and invoke_direct_with_progress.
 EOF
+  cat >"$CLI/src/daemon/resources/pages/pages_http_projection.rs" <<'EOF'
+use serde_json::Value;
+
+struct ServedBytes {
+    status: u16,
+    bytes: Vec<u8>,
+    content_type: String,
+    force_attachment: bool,
+    sha256: String,
+}
+
+fn bytes_from_value(value: Value) -> anyhow::Result<ServedBytes> {
+    use base64::Engine;
+    let b64 = required_non_empty_string(&value, "bytes_b64")?;
+    let bytes = base64::engine::general_purpose::STANDARD.decode(b64)?;
+    let content_type = required_non_empty_string(&value, "content_type")?.to_string();
+    let force_attachment = value
+        .get("force_attachment")
+        .and_then(Value::as_bool)
+        .ok_or_else(|| anyhow::anyhow!("force_attachment must be a boolean"))?;
+    let sha256 = required_non_empty_string(&value, "sha256")?.to_string();
+    let actual_sha256 = hex_sha256(&bytes);
+    if sha256 != actual_sha256 {
+        anyhow::bail!("sha mismatch");
+    }
+    Ok(ServedBytes {
+        status: 200,
+        bytes,
+        content_type,
+        force_attachment,
+        sha256,
+    })
+}
+EOF
+  cat >"$CLI/src/daemon/resources/pages/pages_listener.rs" <<'EOF'
+use super::pages_http_projection::{serve_bytes, ServedBytes};
+
+fn handle() {
+    let _ = serve_bytes;
+}
+EOF
   cat >"$CLI/src/daemon/ability/builtins/automation/mission.rs" <<'EOF'
 fn register(reg: &mut Catalog) {
     reg.register_rpc_with_owner("mission.run", handler);
@@ -504,8 +545,19 @@ fn stop_agent_locked(registry: &AgentRegistry, identities: &local_agents::LocalA
     if args.get("purge").is_some() {
         anyhow::bail!("agent.stop: `purge` is not accepted; invoke `agent.purge`");
     }
+    let registry_key = canonical_agent_registry_key(&agent_id)?;
+    registry.agents.remove(&registry_key);
     transaction.persist_registry_projection(&registry);
     transaction.persist_identity_projection(&identities);
+}
+
+fn start_agent_locked(registry: &mut AgentRegistry, agent_id: AgentId, entry: AgentEntry) {
+    let registry_key = agent_id.to_string();
+    registry.agents.insert(registry_key.clone(), entry.clone());
+}
+
+fn canonical_agent_registry_key(agent_id: &AgentId) -> anyhow::Result<String> {
+    Ok(agent_id.to_string())
 }
 
 struct PlatformTreeDeletion;
@@ -558,6 +610,13 @@ pub(crate) struct AgentAggregateSnapshot {
     pub(crate) local_agents: local_agents::LocalAgentsFile,
 }
 
+impl AgentAggregateSnapshot {
+    fn has_registered_agent(&self, agent: &str) -> bool {
+        let registry_key = AgentId::parse(agent).unwrap().to_string();
+        self.registry.agents.contains_key(&registry_key)
+    }
+}
+
 enum HostedLlmAgentIdentity<'a> {
     Missing,
     Present(&'a HostedAgentEntry),
@@ -575,6 +634,14 @@ struct HostedAgentIdentityProjection<'a> {
     name: &'a str,
     agent_ura: &'a str,
     signing_authority: &'a str,
+}
+
+impl AgentAggregateRepository {
+    fn load_snapshot() -> anyhow::Result<AgentAggregateSnapshot> {
+        let registry = agent_registry::load_agents()?;
+        let local_agents = local_agents::load_for_fresh_host_projection()?;
+        Ok(AgentAggregateSnapshot { registry, local_agents })
+    }
 }
 
 struct AgentLocalTargetProjection {
@@ -940,7 +1007,9 @@ fn list_agents_handler(
 fn agent_rows(snapshot: &AgentAggregateSnapshot) -> anyhow::Result<Vec<Value>> {
     snapshot
         .registered_agents()
-        .map(|(name, _entry)| {
+        .map(|(registry_key, _entry)| {
+            let agent_id = AgentId::parse(registry_key)?;
+            let name = agent_id.name.as_str();
             let ura = snapshot.hosted_llm_agent_ura(name);
             Ok(json!({ "name": name, "ura": ura }))
         })
@@ -1125,6 +1194,26 @@ fn resolve_owner_root_and_layout(owner_id: &str) -> anyhow::Result<(PathBuf, Age
     }
     Ok((root, owner.skill_layout()))
 }
+
+enum SkillPublishProvenance {
+    DirectPublish,
+}
+
+impl SkillPublishProvenance {
+    fn as_kind(&self) -> &'static str {
+        match self {
+            Self::DirectPublish => "direct_publish",
+        }
+    }
+}
+
+fn publish_handler(args: Value) -> anyhow::Result<Value> {
+    let provenance = SkillPublishProvenance::DirectPublish;
+    Ok(json!({ "provenance": provenance.as_kind() }))
+}
+
+#[test]
+fn publish_without_run_id_records_direct_publish_provenance() {}
 EOF
 	  cat >"$CLI/src/daemon/ability/catalog/catalog_metadata.rs" <<'EOF'
 fn registration_hints(owner_ura: &str, registry_name: &str, call_mode: DescriptorCallMode) -> AbilityHints {
@@ -1336,6 +1425,27 @@ fn route_with_target_context(target: &LocalAbilityTarget) -> anyhow::Result<()> 
     Ok(())
 }
 
+enum CostMetadataProjection {
+    Undeclared,
+}
+
+impl CostMetadataProjection {
+    fn value(&self) -> &'static str {
+        match self {
+            Self::Undeclared => "unknown",
+        }
+    }
+
+    fn label(&self) -> &'static str {
+        match self {
+            Self::Undeclared => "cost not declared",
+        }
+    }
+}
+
+#[test]
+fn mcp_cost_projection_marks_agent_owned_undeclared_rows_unknown() {}
+
 impl McpToolRouteTable {
     pub fn from_descriptors(
         descriptors: &[crate::daemon::ability::descriptors::AbilityDescriptor],
@@ -1486,7 +1596,7 @@ use axon_sdk::{
 };
 
 fn register(reg: &mut Catalog) {
-    reg.register_rpc_with_owner("voice.list_calls", OwnerKind::Hub, handler);
+    reg.register_rpc_with_owner("voice.list_calls", OwnerKind::RealmAuthority, handler);
 }
 EOF
   cat >"$CLI/src/daemon/ability/builtins/governance/access_control.rs" <<'EOF'
@@ -1520,6 +1630,19 @@ fn require_actor_ura(actor_ura: Option<&str>) -> anyhow::Result<&str> {
         .map_err(|err| anyhow::anyhow!("actor_ura must be a canonical URA: {err}"))?;
     Ok(actor_ura)
 }
+
+fn check_handler(args: Value) -> anyhow::Result<Value> {
+    let raw_text = r#""owner_ura", "owner_source", "caller_ura""#;
+    let owner_source = require_owner_source(args.get("owner_source"))?;
+    Ok(json!({ "owner_source": owner_source, "schema": raw_text }))
+}
+
+fn require_owner_source(value: Option<&Value>) -> anyhow::Result<&str> {
+    value.and_then(Value::as_str).ok_or_else(|| anyhow::anyhow!("owner_source required"))
+}
+
+#[test]
+fn authority_binding_check_requires_explicit_owner_source() {}
 EOF
   cat >"$CLI/sdk/go/access_control.go" <<'EOF'
 func accessControlRevokeArgs(request AccessControlRevokeRequest) (AccessControlRevokeRequest, map[string]any, error) {
@@ -1543,6 +1666,16 @@ func accessControlRevokeArgs(request AccessControlRevokeRequest) (AccessControlR
     args := map[string]any{"owner_ura": ownerURA, "grant_id": grantID, "actor_ura": actorURA}
     return request, args, nil
 }
+
+func accessControlCheckArgs(request AccessControlCheckRequest) (map[string]any, error) {
+    ownerSource := strings.TrimSpace(request.OwnerSource)
+    if ownerSource == "" {
+        return nil, invalidAccessControl("owner_source is required", nil)
+    }
+    return map[string]any{
+        "owner_source":                  ownerSource,
+    }, nil
+}
 EOF
   cat >"$CLI/sdk/python/easynet_sdk/access_control.py" <<'EOF'
 def _revoke_args(request: AccessControlRevokeRequest) -> tuple[AccessControlRevokeRequest, dict[str, object]]:
@@ -1556,6 +1689,12 @@ def _revoke_args(request: AccessControlRevokeRequest) -> tuple[AccessControlRevo
         "actor_ura": actor_ura,
     }
     return request, args
+
+def _check_args(request: AccessControlCheckRequest) -> dict[str, object]:
+    owner_source = _required_text(request.owner_source, "owner_source")
+    return {
+        "owner_source": owner_source,
+    }
 EOF
   cat >"$CLI/src/daemon/ability/builtins/resources/voice_contract.rs" <<'EOF'
 use std::sync::Arc;
@@ -1657,7 +1796,8 @@ impl RegistrySharedStores {
 
 fn build_registry(shared_stores: RegistrySharedStores, hosts_hub_authority: bool) {
     let voice_provider_assembly = shared_stores.voice_calls.clone();
-    if hosts_hub_authority {
+    let hosts_realm_authority = hosts_hub_authority;
+    if hosts_realm_authority {
         if let Some(provider) = voice_provider_assembly.as_ref() {
             voice_call_ability::register(&mut reg, provider.clone());
         }
@@ -1705,6 +1845,11 @@ fn declare_daemon_native_agent_authorities(
     }
     Ok(authority_context)
 }
+EOF
+  cat >"$CLI/sdk/python/easynet_sdk/_receipt_projection.py" <<'EOF'
+def reject_retired_top_level_receipt_alias(raw: object, stage: str) -> None:
+    marker = "stage=stage"
+    raise ValueError(f"retired receipt alias is not accepted stage={stage}")
 EOF
   cat >"$CLI/src/daemon/ability/builtins/device_control/files.rs" <<'EOF'
 fn register(reg: &mut AxonAbilityCatalog) {
@@ -1761,6 +1906,10 @@ fn handle_file_upload_with_context(
         files_subject,
         store_args,
     )
+}
+
+fn extract_chat_reply_text(value: Value) -> anyhow::Result<String> {
+    anyhow::bail!("chat-base ability response must be a string or object with string reply, message, or content")
 }
 
 fn handle_file_retrieve_with_context(
@@ -2139,7 +2288,7 @@ EOF
 fn register(reg: &mut AxonAbilityCatalog) {
     reg.register_control_plane_descriptor_with_owner(
         "session.open",
-        &OwnerKind::Hub,
+        &OwnerKind::RealmAuthority,
     );
 }
 EOF
@@ -2852,6 +3001,15 @@ fn build_plan_from_registry() -> anyhow::Result<()> {
     AgentAggregateRepository::load_registered_agent_registry_projection()?;
     Ok(())
 }
+
+pub fn llm_sub_agents_from_registry(registry: &AgentRegistry) -> Vec<String> {
+    registry
+        .agents
+        .keys()
+        .filter_map(|key| AgentId::parse(key).ok())
+        .map(|agent_id| agent_id.name)
+        .collect()
+}
 EOF
   cat >"$CLI/src/daemon/ability/builtins/automation/think.rs" <<'EOF'
 pub(crate) struct CatalogEntry;
@@ -2891,11 +3049,11 @@ pub(crate) fn callee_ura_from_envelope(envelope: &Envelope) -> anyhow::Result<St
     Ok(callee_ura.to_string())
 }
 
-pub(crate) struct LocalDaemonLoopbackInvocation {
+pub(crate) struct LocalDaemonSystemInvocation {
     derivation_policy: InvocationDerivationPolicy,
 }
 
-impl LocalDaemonLoopbackInvocation {
+impl LocalDaemonSystemInvocation {
     pub(crate) fn invoke_request(&self) {
         let _request = InvokeRequest {};
     }
@@ -2917,27 +3075,28 @@ fn callee_ura_from_envelope_extracts_explicit_callee() {}
 fn callee_ura_from_envelope_rejects_caller_only_tuple() {}
 EOF
   cat >"$CLI/src/support/platform/local_daemon_grpc.rs" <<'EOF'
-use crate::daemon::invocation::dispatch::invocation_wire::LocalDaemonLoopbackInvocation;
+use crate::daemon::invocation::dispatch::invocation_wire::LocalDaemonSystemInvocation;
+use tonic::transport::{Channel, Endpoint, Uri as GrpcEndpointLocator};
 
 fn invoke_with_hosted_agent_delegation(hosted_agent_ura: &str) -> anyhow::Result<()> {
     let _delegation = HostedAgentDelegationRequest::new(hosted_agent_ura)?;
     Ok(())
 }
 
-fn local_daemon_loopback_invocation_from_subject_policy() -> LocalDaemonLoopbackInvocation {
-    LocalDaemonLoopbackInvocation::from_target()
+fn local_daemon_system_invocation_from_subject_policy() -> LocalDaemonSystemInvocation {
+    LocalDaemonSystemInvocation::from_target()
 }
 
-struct LocalDaemonLoopbackSubjectPolicy;
+struct LocalDaemonSystemSubjectPolicy;
 
-impl LocalDaemonLoopbackSubjectPolicy {
+impl LocalDaemonSystemSubjectPolicy {
     fn resolve(&self) -> anyhow::Result<String> {
         local_daemon_identity_ura()
     }
 }
 
-fn loopback_invoke_request_does_not_pre_resolve_descriptor_ref() {}
-fn loopback_tuple_plan_requires_explicit_targeted_subject() {}
+fn local_system_invoke_request_does_not_pre_resolve_descriptor_ref() {}
+fn local_system_tuple_plan_requires_explicit_targeted_subject() {}
 EOF
   cat >"$CLI/src/daemon/invocation/routing/target.rs" <<'EOF'
 fn daemon_system_subject_ura_for_descriptor(target: &LocalAbilityTarget) -> anyhow::Result<String> {
@@ -2974,7 +3133,7 @@ fn root_context_for_target(target: &LocalAbilityTarget) -> anyhow::Result<LocalT
 }
 
 fn local_system_context_for_agent_target_uses_agent_owner_subject() {}
-fn local_system_context_for_hub_target_uses_ability_subject() {}
+fn local_system_context_for_realm_authority_target_uses_ability_subject() {}
 
 pub fn project_invoke_bidi_down_frame(frame: InvokeBidiDown) -> anyhow::Result<Option<LocalBidiFrame>> {
     project_receipt_payload_json("application/json", &[])?;
@@ -3759,25 +3918,25 @@ expect_fail \
 
 make_good_fixture
 cat >"$CLI/src/support/platform/local_daemon_grpc.rs" <<'EOF'
-struct LocalDaemonLoopbackInvocation {
+struct LocalDaemonSystemInvocation {
     caller_ura: String,
     callee_ura: String,
     subject_ura: String,
 }
 EOF
 expect_fail \
-  "local loopback support request owner fork" \
-  "R16B_LOCAL_LOOPBACK_INVOCATION_OWNER_FORK"
+  "local daemon-system support request owner fork" \
+  "R16B_LOCAL_DAEMON_SYSTEM_INVOCATION_OWNER_FORK"
 
 make_good_fixture
 cat >"$CLI/src/support/platform/local_daemon_grpc.rs" <<'EOF'
-fn rebuild_loopback_envelope(caller: String, callee: String, subject: String) {
+fn rebuild_daemon_system_envelope(caller: String, callee: String, subject: String) {
     let _envelope = crate::daemon::invocation::ProtoEnvelope::targeted(caller, callee, subject);
 }
 EOF
 expect_fail \
-  "local loopback support envelope owner fork" \
-  "R16B_LOCAL_LOOPBACK_INVOCATION_OWNER_FORK"
+  "local daemon-system support envelope owner fork" \
+  "R16B_LOCAL_DAEMON_SYSTEM_INVOCATION_OWNER_FORK"
 
 make_good_fixture
 cat >"$CLI/src/daemon/axon_bridge/descriptor_bound_dispatch.rs" <<'EOF'
@@ -5784,6 +5943,14 @@ expect_fail \
 make_good_fixture
 mkdir -p "$CLI/src/daemon/resources/pages"
 cat >"$CLI/src/daemon/resources/pages/pages_serve_ability.rs" <<'EOF'
+fn retired_module() {}
+EOF
+expect_fail \
+  "pages serve pseudo ability module retired" \
+  "R74_PAGES_SERVE_FETCH_PROJECTION_SCHEMA"
+
+make_good_fixture
+cat >"$CLI/src/daemon/resources/pages/pages_http_projection.rs" <<'EOF'
 use serde_json::Value;
 
 struct ServedBytes {
@@ -5825,6 +5992,31 @@ fn bytes_from_value(value: Value) -> ServedBytes {
 EOF
 expect_fail \
   "pages serve fetch projection fallback" \
+  "R74_PAGES_SERVE_FETCH_PROJECTION_SCHEMA"
+
+make_good_fixture
+cat >"$CLI/src/daemon/resources/pages/pages_http_projection.rs" <<'EOF'
+fn projection() {
+    let _ = "canonical_invoke";
+}
+
+fn bytes_from_value(value: Value) -> anyhow::Result<ServedBytes> {
+    let b64 = required_non_empty_string(&value, "bytes_b64")?;
+    let content_type = required_non_empty_string(&value, "content_type")?;
+    let sha256 = required_non_empty_string(&value, "sha256")?;
+    if sha256 != actual_sha256 {}
+}
+EOF
+expect_fail \
+  "pages http projection rejects invocation vocabulary" \
+  "R74_PAGES_SERVE_FETCH_PROJECTION_SCHEMA"
+
+make_good_fixture
+cat >"$CLI/src/daemon/resources/pages/pages_listener.rs" <<'EOF'
+use super::pages_serve_ability::{serve_bytes, ServedBytes};
+EOF
+expect_fail \
+  "pages listener rejects retired pseudo ability import" \
   "R74_PAGES_SERVE_FETCH_PROJECTION_SCHEMA"
 
 make_good_fixture

@@ -12,5 +12,5 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+pub mod pages_http_projection;
 pub mod pages_listener;
-pub mod pages_serve_ability;
