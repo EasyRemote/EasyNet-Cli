@@ -94,3 +94,12 @@
 - [x] Add provider-registry failure coverage for mismatched compiled provider entrypoints.
 - [x] Update convergence gates so provider registry cannot project mismatched manifests into package bindings.
 - [x] Run focused plugin provider tests and canonical convergence gates.
+
+## Iteration 12 — Desktop companion daemon lifecycle fail-closed audit
+
+- [x] Replace silent post-ready companion plan/state skips with typed reconcile failures.
+- [x] Replace silent runtime-stop companion plan skips with explicit warnings.
+- [x] Preserve daemon-start public behavior by warning/reporting companion failures rather than blocking runtime readiness.
+- [x] Add failure-path tests for corrupt desired-state store and malformed companion plan.
+- [x] Update convergence gates so daemon lifecycle reconciliation cannot reintroduce `continue`-on-error compatibility skips.
+- [x] Run focused companion tests and canonical convergence gates.

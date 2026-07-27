@@ -12059,6 +12059,81 @@ if bootstrap_authority.exists():
         )
 
 
+companion_manager = cli_root / "src/daemon/plugins/companion/mod.rs"
+if companion_manager.exists():
+    text = companion_manager.read_text(encoding="utf-8", errors="replace")
+    post_ready_start = text.find("pub fn ensure_running_after_daemon_ready")
+    post_ready_end = text.find("pub fn enable", post_ready_start) if post_ready_start != -1 else -1
+    post_ready_body = (
+        text[post_ready_start:post_ready_end]
+        if post_ready_start != -1 and post_ready_end != -1
+        else ""
+    )
+    runtime_stop_start = text.find("pub fn stop_for_runtime_stop")
+    runtime_stop_end = text.find("\n    }\n}", runtime_stop_start) if runtime_stop_start != -1 else -1
+    runtime_stop_body = (
+        text[runtime_stop_start:runtime_stop_end]
+        if runtime_stop_start != -1 and runtime_stop_end != -1
+        else ""
+    )
+    for token, detail in (
+        (
+            "DesktopCompanionReconcileFailure::plan_failed",
+            "desktop companion daemon lifecycle must report plan failures",
+        ),
+        (
+            "DesktopCompanionReconcileFailure::state_store_read_failed",
+            "desktop companion post-ready reconcile must report desired-state read failures",
+        ),
+        (
+            "post_ready_reconcile_reports_corrupt_desired_state_instead_of_skipping",
+            "desktop companion tests must prove corrupt desired-state is not silently skipped",
+        ),
+        (
+            "post_ready_reconcile_reports_plan_failure_instead_of_skipping",
+            "desktop companion tests must prove plan failures are not silently skipped",
+        ),
+        (
+            "runtime_stop_reports_stop_policy_plan_failure_instead_of_skipping",
+            "desktop companion tests must prove runtime-stop plan failures are not silently skipped",
+        ),
+    ):
+        if token not in text:
+            add("R101_COMPANION_RECONCILE_NO_SILENT_SKIP", companion_manager, 1, detail)
+    for token, detail in (
+        (
+            "let Ok(plan) = self.plan_package(package) else",
+            "desktop companion post-ready reconcile must not silently continue on plan failure",
+        ),
+        (
+            "let Ok(desired) = self\n                .state_store\n                .desired_state",
+            "desktop companion post-ready reconcile must not silently continue on desired-state read failure",
+        ),
+    ):
+        offset = post_ready_body.find(token)
+        if offset != -1 and post_ready_start != -1:
+            add(
+                "R101_COMPANION_RECONCILE_NO_SILENT_SKIP",
+                companion_manager,
+                line_number(text, post_ready_start + offset),
+                detail,
+            )
+    for token, detail in (
+        (
+            "let Ok(plan) = self.plan_package(package) else",
+            "desktop companion runtime-stop cleanup must not silently continue on plan failure",
+        ),
+    ):
+        offset = runtime_stop_body.find(token)
+        if offset != -1 and runtime_stop_start != -1:
+            add(
+                "R101_COMPANION_RECONCILE_NO_SILENT_SKIP",
+                companion_manager,
+                line_number(text, runtime_stop_start + offset),
+                detail,
+            )
+
+
 if violations:
     for violation in sorted(violations):
         print(

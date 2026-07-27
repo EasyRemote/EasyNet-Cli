@@ -18,3 +18,9 @@
   package binding exists: provider package id, manifest package id, and manifest
   entrypoint. A provider whose compiled entrypoint does not match its manifest
   is not a partially loadable plugin.
+- Desktop companion daemon lifecycle reconciliation is an audit boundary. It may
+  continue reconciling independent packages after one package fails, but it must
+  emit an explicit failure fact for every malformed package plan or unreadable
+  desired-state store. Corrupt companion state is not equivalent to "disabled",
+  and an unplannable stop-on-runtime-stop companion is not equivalent to "no
+  companion to stop".

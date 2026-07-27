@@ -147,3 +147,23 @@ diagnosis depend on load order.
 Boundary: this reuses the existing manifest-layer builtin entrypoint validator.
 It does not add a new plugin-specific rule or compatibility alias; a mismatched
 entrypoint is a corrupt provider binding and fails closed before projection.
+
+## Desktop companion daemon lifecycle fail-closed audit
+
+Decision: daemon-start companion reconcile remains non-fatal to runtime ready,
+but every package-plan failure and desired-state read failure becomes a typed
+`DesktopCompanionReconcileFailure`. Runtime-stop companion cleanup remains
+best-effort, but a stop-on-runtime-stop companion that cannot be planned emits a
+warning instead of disappearing from the stop stage.
+
+Reason: desktop companions are product/session-adjacent plugins. They must not
+be able to prevent the canonical invocation daemon from becoming ready, but
+their lifecycle state is still durable product state. Silently `continue`-ing
+when a manifest cannot be planned or the companion state store cannot be read
+turns corrupt lifecycle state into an implicit "nothing to do" default, which is
+a compatibility repair path.
+
+Boundary: non-companion packages and disabled companions remain valid no-op
+states. Malformed companion package plans and corrupt desired-state stores are
+reported through existing warning/op-event/stage-warning paths; no new fallback,
+migration, or legacy state translation is introduced.

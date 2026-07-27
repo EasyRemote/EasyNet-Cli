@@ -71,6 +71,16 @@ pub struct DesktopCompanionReconcileFailure {
 }
 
 impl DesktopCompanionReconcileFailure {
+    fn plan_failed(package: &SharedPluginPackage, reason: impl Into<String>) -> Self {
+        Self {
+            package_id: package.id().as_str().to_string(),
+            package_version: package.version().as_str().to_string(),
+            action: "plan",
+            code: "plan_failed",
+            reason: reason.into(),
+        }
+    }
+
     fn start_failed(plan: &DesktopCompanionPlan, reason: impl Into<String>) -> Self {
         Self {
             package_id: plan.package_id.clone(),
@@ -81,11 +91,23 @@ impl DesktopCompanionReconcileFailure {
         }
     }
 
-    fn state_store_failed(plan: &DesktopCompanionPlan, reason: impl Into<String>) -> Self {
+    fn state_store_read_failed(plan: &DesktopCompanionPlan, reason: impl Into<String>) -> Self {
+        Self::state_store_failed(plan, "read", reason)
+    }
+
+    fn state_store_record_failed(plan: &DesktopCompanionPlan, reason: impl Into<String>) -> Self {
+        Self::state_store_failed(plan, "record", reason)
+    }
+
+    fn state_store_failed(
+        plan: &DesktopCompanionPlan,
+        action: &'static str,
+        reason: impl Into<String>,
+    ) -> Self {
         Self {
             package_id: plan.package_id.clone(),
             package_version: plan.package_version.clone(),
-            action: "record",
+            action,
             code: "state_store_failed",
             reason: reason.into(),
         }
@@ -200,17 +222,31 @@ impl DesktopCompanionManager {
             if package.manifest().kind() != PluginKind::DesktopCompanion {
                 continue;
             }
-            let Ok(plan) = self.plan_package(package) else {
-                continue;
+            let plan = match self.plan_package(package) {
+                Ok(plan) => plan,
+                Err(err) => {
+                    failures.push(DesktopCompanionReconcileFailure::plan_failed(
+                        package,
+                        err.to_string(),
+                    ));
+                    continue;
+                }
             };
             if plan.boot_policy != PluginCompanionBootPolicy::EnsureRunningAfterDaemonReady {
                 continue;
             }
-            let Ok(desired) = self
+            let desired = match self
                 .state_store
                 .desired_state(&plan.package_id, &plan.package_version)
-            else {
-                continue;
+            {
+                Ok(desired) => desired,
+                Err(err) => {
+                    failures.push(DesktopCompanionReconcileFailure::state_store_read_failed(
+                        &plan,
+                        err.to_string(),
+                    ));
+                    continue;
+                }
             };
             if desired != CompanionDesiredState::Enabled {
                 continue;
@@ -224,7 +260,7 @@ impl DesktopCompanionManager {
                         "start",
                         None,
                     ) {
-                        failures.push(DesktopCompanionReconcileFailure::state_store_failed(
+                        failures.push(DesktopCompanionReconcileFailure::state_store_record_failed(
                             &plan,
                             err.to_string(),
                         ));
@@ -239,7 +275,7 @@ impl DesktopCompanionManager {
                         "start",
                         Some(reason.clone()),
                     ) {
-                        failures.push(DesktopCompanionReconcileFailure::state_store_failed(
+                        failures.push(DesktopCompanionReconcileFailure::state_store_record_failed(
                             &plan,
                             record_err.to_string(),
                         ));
@@ -531,12 +567,29 @@ impl DesktopCompanionManager {
             if package.manifest().kind() != PluginKind::DesktopCompanion {
                 continue;
             }
-            let Ok(plan) = self.plan_package(package) else {
+            let Some(companion) = package.manifest().companion() else {
+                warnings.push(
+                    DesktopCompanionReconcileFailure::plan_failed(
+                        package,
+                        "desktop_companion package does not declare [companion]",
+                    )
+                    .to_string(),
+                );
                 continue;
             };
-            if plan.stop_policy != PluginCompanionStopPolicy::StopOnRuntimeStop {
+            if companion.stop_policy() != PluginCompanionStopPolicy::StopOnRuntimeStop {
                 continue;
             }
+            let plan = match self.plan_package(package) {
+                Ok(plan) => plan,
+                Err(err) => {
+                    warnings.push(
+                        DesktopCompanionReconcileFailure::plan_failed(package, err.to_string())
+                            .to_string(),
+                    );
+                    continue;
+                }
+            };
             if let Err(err) = self.supervisor.stop(&plan) {
                 warnings.push(format!(
                     "{}@{} stop_failed: {err}",
@@ -779,6 +832,85 @@ mod tests {
     }
 
     #[test]
+    fn post_ready_reconcile_reports_corrupt_desired_state_instead_of_skipping() {
+        let root = tempfile::tempdir().expect("package root");
+        write_companion_test_package(root.path());
+        let package = Arc::new(PluginPackage::from_installed(root.path(), None).expect("package"));
+        let state_root = tempfile::tempdir().expect("state root");
+        let state_path = state_root.path().join("state.toml");
+        std::fs::write(
+            &state_path,
+            r#"[[companion]]
+id = "test.desktop.menubar"
+version = "0.1.0"
+desired_state = "enabled"
+legacy_state = "running"
+"#,
+        )
+        .expect("corrupt desired state");
+        let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let manager = DesktopCompanionManager::new(
+            DesktopCompanionPlanner::new("macos"),
+            Box::new(RecordingSupervisor {
+                calls: Arc::clone(&calls),
+            }),
+            DesktopCompanionStateStore::new(&state_path),
+        );
+
+        let failures = manager.ensure_running_after_daemon_ready(std::slice::from_ref(&package));
+
+        assert_eq!(failures.len(), 1);
+        assert_eq!(failures[0].package_id, "test.desktop.menubar");
+        assert_eq!(failures[0].package_version, "0.1.0");
+        assert_eq!(failures[0].action, "read");
+        assert_eq!(failures[0].code, "state_store_failed");
+        assert!(
+            failures[0].reason.contains("unknown field `legacy_state`"),
+            "corrupt state reason must be preserved: {:?}",
+            failures[0]
+        );
+        assert!(
+            calls.lock().expect("calls").is_empty(),
+            "corrupt desired-state reads must not fall through to supervisor start"
+        );
+    }
+
+    #[test]
+    fn post_ready_reconcile_reports_plan_failure_instead_of_skipping() {
+        let root = tempfile::tempdir().expect("package root");
+        write_companion_test_package(root.path());
+        let package = Arc::new(PluginPackage::from_installed(root.path(), None).expect("package"));
+        let state_root = tempfile::tempdir().expect("state root");
+        let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let manager = DesktopCompanionManager::new(
+            DesktopCompanionPlanner::new("linux"),
+            Box::new(RecordingSupervisor {
+                calls: Arc::clone(&calls),
+            }),
+            DesktopCompanionStateStore::new(state_root.path().join("state.toml")),
+        );
+
+        let failures = manager.ensure_running_after_daemon_ready(std::slice::from_ref(&package));
+
+        assert_eq!(failures.len(), 1);
+        assert_eq!(failures[0].package_id, "test.desktop.menubar");
+        assert_eq!(failures[0].package_version, "0.1.0");
+        assert_eq!(failures[0].action, "plan");
+        assert_eq!(failures[0].code, "plan_failed");
+        assert!(
+            failures[0]
+                .reason
+                .contains("desktop companion does not support linux"),
+            "plan failure reason must be preserved: {:?}",
+            failures[0]
+        );
+        assert!(
+            calls.lock().expect("calls").is_empty(),
+            "unplanned companion packages must not reach supervisor actions"
+        );
+    }
+
+    #[test]
     fn status_file_invalid_error_code_is_preserved() {
         let error = status_error(
             CompanionObservedState::HealthError,
@@ -942,6 +1074,35 @@ mod tests {
 
         assert_eq!(result["action"], "install");
         assert_eq!(*calls.lock().expect("calls"), vec!["install", "enable"]);
+    }
+
+    #[test]
+    fn runtime_stop_reports_stop_policy_plan_failure_instead_of_skipping() {
+        let root = tempfile::tempdir().expect("package root");
+        write_companion_test_package_with_stop_policy(root.path(), "stop_on_runtime_stop");
+        let package = Arc::new(PluginPackage::from_installed(root.path(), None).expect("package"));
+        let state_root = tempfile::tempdir().expect("state root");
+        let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let manager = DesktopCompanionManager::new(
+            DesktopCompanionPlanner::new("linux"),
+            Box::new(RecordingSupervisor {
+                calls: Arc::clone(&calls),
+            }),
+            DesktopCompanionStateStore::new(state_root.path().join("state.toml")),
+        );
+
+        let warnings = manager.stop_for_runtime_stop(std::slice::from_ref(&package));
+
+        assert_eq!(warnings.len(), 1);
+        assert!(
+            warnings[0].contains("test.desktop.menubar@0.1.0 plan_failed")
+                && warnings[0].contains("desktop companion does not support linux"),
+            "plan failure warning must be explicit: {warnings:?}"
+        );
+        assert!(
+            calls.lock().expect("calls").is_empty(),
+            "unplanned companion packages must not reach supervisor stop"
+        );
     }
 
     #[test]
@@ -1120,6 +1281,22 @@ mod tests {
     }
 
     fn write_companion_test_package_with_executable(root: &Path, executable_body: &str) {
+        write_companion_test_package_with_executable_and_stop_policy(
+            root,
+            executable_body,
+            "keep_running",
+        );
+    }
+
+    fn write_companion_test_package_with_stop_policy(root: &Path, stop_policy: &str) {
+        write_companion_test_package_with_executable_and_stop_policy(root, "test", stop_policy);
+    }
+
+    fn write_companion_test_package_with_executable_and_stop_policy(
+        root: &Path,
+        executable_body: &str,
+        stop_policy: &str,
+    ) {
         let executable = root.join("dist/macos/EasyNetMenuBar.app/Contents/MacOS/EasyNetMenuBar");
         std::fs::create_dir_all(executable.parent().expect("executable parent"))
             .expect("app bundle dir");
@@ -1136,7 +1313,8 @@ mod tests {
         }
         std::fs::write(
             root.join("plugin.toml"),
-            r#"
+            format!(
+                r#"
 schema_version = "1"
 id = "test.desktop.menubar"
 version = "0.1.0"
@@ -1155,7 +1333,7 @@ max_frame_queue = 1
 display_name = "EasyNet Menu Bar"
 lifecycle = "user_session"
 boot_policy = "ensure_running_after_daemon_ready"
-stop_policy = "keep_running"
+stop_policy = "{stop_policy}"
 health = "status_file"
 status_file = "companions/test.desktop.menubar/status.json"
 
@@ -1165,7 +1343,8 @@ app_bundle = "dist/macos/EasyNetMenuBar.app"
 supervisor = "launch_agent"
 launch_agent_label = "tech.silan.easynet.menubar"
 session = "aqua"
-"#,
+"#
+            ),
         )
         .expect("manifest");
     }
