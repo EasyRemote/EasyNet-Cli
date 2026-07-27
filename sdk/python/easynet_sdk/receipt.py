@@ -25,6 +25,8 @@ from axon_sdk.invocation import (
     verify_receipt_chain,
 )
 
+from .axon_addressing import parse_ura
+from .authority import DelegationProof, SessionAuthority
 from .errors import ErrorCode, RetryHint, SDKError
 from ._receipt_routes import (
     _RECEIPT_HISTORY_GET,
@@ -32,8 +34,9 @@ from ._receipt_routes import (
     _RECEIPT_TRACE_GET,
 )
 from ._receipt_history_admission import validate_receipt_history_request
+from ._runtime_subjects import runtime_state_read_subject_ura
 from .runtime import RuntimeReceipt
-from .runtime_ability import RuntimeAbilityClient, RuntimeCallContext
+from .runtime_ability import RuntimeAbilityClient, RuntimeCallContext, RuntimeInvocationAuthority
 
 __all__ = [
     "DEFAULT_RECEIPT_PAGE_LIMIT",
@@ -61,6 +64,7 @@ __all__ = [
     "ReceiptTraceResult",
     "RuntimeReceiptProvider",
     "VerifiedReceipt",
+    "receipt_read_call_context",
 ]
 
 DEFAULT_RECEIPT_PAGE_LIMIT = 50
@@ -296,6 +300,51 @@ class ReceiptClient:
         except TypeError as error:
             raise _invalid("Invocation receipt sequence is required", error) from error
         return verify_receipt_chain(ordered)
+
+
+def receipt_read_call_context(
+    *,
+    caller_ura: str,
+    callee_ura: str,
+    authority: RuntimeInvocationAuthority,
+    nonce_base64: str = "",
+    causal_context: Mapping[str, object] | None = None,
+    metadata: Mapping[str, object] | None = None,
+) -> RuntimeCallContext:
+    """Build the canonical runtime call context for receipt history reads."""
+
+    caller = _required_ura(caller_ura, "caller_ura")
+    callee = _required_ura(callee_ura, "callee_ura")
+    return RuntimeCallContext(
+        caller_ura=caller,
+        callee_ura=callee,
+        subject_ura=_receipt_read_subject_ura(callee, authority),
+        nonce_base64=str(nonce_base64).strip(),
+        causal_context=dict(causal_context or {}),
+        metadata=dict(metadata or {}),
+        authority=authority,
+    )
+
+
+def _receipt_read_subject_ura(
+    callee_ura: str,
+    authority: RuntimeInvocationAuthority,
+) -> str:
+    if isinstance(authority, DelegationProof):
+        return _required_ura(authority.subject_ura, "authority.subject_ura")
+    if isinstance(authority, SessionAuthority):
+        callee = parse_ura(callee_ura)
+        return runtime_state_read_subject_ura(
+            callee.realm,
+            authority.session_owner_user_id,
+        )
+    raise SDKError(
+        code=ErrorCode.AUTHORITY_DENIED,
+        stage="receipt",
+        retry=RetryHint.NEVER,
+        retryable=False,
+        message="receipt read call context authority has an unsupported canonical type",
+    )
 
 
 class RuntimeReceiptProvider:

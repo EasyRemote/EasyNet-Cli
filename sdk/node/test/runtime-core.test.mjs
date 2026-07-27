@@ -56,6 +56,7 @@ const expectedExports = [
   "StreamHandle",
   "profileErrorDetails",
   "profileSourceRef",
+  "receiptReadCallContext",
   "runtimeStateReadSubjectURA",
 ];
 
@@ -1570,6 +1571,59 @@ test("runtime receipt provider uses governance descriptor provider and complete 
   assert.equal(calls[1][1].subject_ura, callee);
   assert.equal(calls[1][1].nonce_base64, nonce);
   assert.deepEqual(calls[1][1].causal_context, { form: "none" });
+});
+
+test("receipt read call context derives session runtime-state subject from authority", async () => {
+  const authority = sdk.SessionAuthority.fromMetadata(historySessionValue());
+  const call = sdk.receiptReadCallContext({
+    caller_ura: caller,
+    callee_ura: callee,
+    nonce_base64: nonce,
+    causal_context: { form: "none" },
+    authority,
+  });
+
+  assert.equal(call.subjectURA, sdk.runtimeStateReadSubjectURA("example", "alice"));
+
+  const calls = [];
+  const historyDescriptor =
+    "easynet:///r/example/ability/device.dev-a.invocation.history.list@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read";
+  const runtime = new sdk.RuntimeClient({
+    resolveDescriptorRef: (requestJSON) => {
+      calls.push(["resolve", JSON.parse(Buffer.from(requestJSON).toString("utf8"))]);
+      return JSON.stringify({ descriptor_ref: historyDescriptor });
+    },
+    invoke: (draftJSON) => {
+      calls.push(["invoke", JSON.parse(Buffer.from(draftJSON).toString("utf8"))]);
+      return JSON.stringify({
+        ok: true,
+        terminal_state: "Completed",
+        output: { records: [], next_cursor: "", source: "invocation.history.list" },
+        terminal_receipt: canonicalRuntimeReceipt("inv-history-derived", "completed", "Completed", 1),
+      });
+    },
+  });
+  const history = new sdk.SessionHistoryOperations(
+    new sdk.RuntimeReceiptProvider(new sdk.RuntimeAbilityClient(runtime)),
+  );
+
+  await history.list({ call, limit: 5 });
+
+  assert.equal(calls[0][1].subject_ura, call.subjectURA);
+  assert.equal(calls[1][1].subject_ura, call.subjectURA);
+});
+
+test("receipt read call context keeps delegation subject exact", () => {
+  const authority = sdk.DelegationProof.fromMetadata(delegationValue(["invocation.history.*"]));
+  const call = sdk.receiptReadCallContext({
+    caller_ura: caller,
+    callee_ura: callee,
+    nonce_base64: nonce,
+    causal_context: { form: "none" },
+    authority,
+  });
+
+  assert.equal(call.subjectURA, callee);
 });
 
 test("session history preflight rejects authority subject mismatch before receipt provider", async () => {

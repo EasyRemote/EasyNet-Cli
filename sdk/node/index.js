@@ -861,6 +861,37 @@ export class RuntimeCallContext {
   }
 }
 
+export function receiptReadCallContext(fields) {
+  const value = objectValue(fields, "receipt read call context");
+  rejectRuntimeFields(value, [
+    "caller_ura",
+    "callee_ura",
+    "nonce_base64",
+    "causal_context",
+    "metadata",
+    "authority",
+  ]);
+  const callerURA = requiredHistoryPrincipalString(value.caller_ura, "caller_ura");
+  const calleeURA = requiredHistoryPrincipalString(value.callee_ura, "callee_ura");
+  const authority = normalizeRuntimeCallAuthority(value.authority ?? null);
+  if (authority === null) {
+    throw historyError(
+      ErrorCode.AUTHORITY_DENIED,
+      "receipt read call context requires typed runtime authority",
+      { caller_ura: callerURA, callee_ura: calleeURA },
+    );
+  }
+  return new RuntimeCallContext({
+    caller_ura: callerURA,
+    callee_ura: calleeURA,
+    subject_ura: receiptReadSubjectURA(calleeURA, authority),
+    nonce_base64: value.nonce_base64,
+    causal_context: value.causal_context,
+    metadata: objectValue(value.metadata ?? {}, "metadata"),
+    authority,
+  });
+}
+
 export class ReceiptFilter {
   constructor(fields = {}) {
     const value = objectValue(fields, "receipt filter");
@@ -2872,6 +2903,20 @@ export function runtimeStateReadSubjectURA(realm, userID) {
     invalidInvocation,
     invalidRuntime,
   });
+}
+
+function receiptReadSubjectURA(calleeURA, authority) {
+  if (authority instanceof DelegationProof) {
+    return authority.subjectURA;
+  }
+  if (authority instanceof SessionAuthority) {
+    const callee = parseCanonicalURA(calleeURA, "callee_ura");
+    return runtimeStateReadSubjectURA(callee.realm, authority.sessionOwnerUserID);
+  }
+  throw historyError(
+    ErrorCode.AUTHORITY_DENIED,
+    "receipt read call context authority has an unsupported canonical type",
+  );
 }
 
 function detailString(details, key) {

@@ -415,6 +415,17 @@ export class RuntimeCallContext {
   toJSON(): Record<string, unknown>;
 }
 
+export interface ReceiptReadCallContextFields {
+  caller_ura: string;
+  callee_ura: string;
+  nonce_base64?: string | null;
+  causal_context?: Record<string, unknown> | null;
+  metadata?: Record<string, unknown>;
+  authority: DelegationProof | SessionAuthority | AuthorityMetadata | DelegationProofFields | SessionAuthorityFields;
+}
+
+export declare function receiptReadCallContext(fields: ReceiptReadCallContextFields): RuntimeCallContext;
+
 export declare function runtimeStateReadSubjectURA(realm: string, userID: string): string;
 
 export interface ReceiptFilterFields {

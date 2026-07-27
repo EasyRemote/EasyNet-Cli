@@ -285,6 +285,7 @@ from .receipt import (
     ReceiptTraceResult,
     RuntimeReceiptProvider,
     VerifiedReceipt,
+    receipt_read_call_context,
 )
 from .runtime import (
     InvocationCancel,
@@ -696,6 +697,7 @@ __all__ = [
     "project_descriptor_ref",
     "read_runtime_control_discovery",
     "read_runtime_identity_projection",
+    "receipt_read_call_context",
     "resource_ura",
     "retryable_for_hint",
     "runtime_credentials_path",

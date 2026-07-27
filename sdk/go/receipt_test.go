@@ -302,6 +302,62 @@ func TestRuntimeReceiptProviderRejectsDeviceOwnerSubjectWithSessionAuthority(t *
 	}
 }
 
+func TestNewReceiptReadCallContextDerivesSessionRuntimeStateSubject(t *testing.T) {
+	authority := sessionAuthorityFixture(t, map[string]any{
+		"issuer_ura":                 "easynet:///r/example/agent/alice.backend",
+		"creator_principal_id":       "easynet:///r/example/agent/alice.backend",
+		"scopes":                     []string{"invocation.history.*"},
+		"allowed_followup_abilities": []string{"invocation.history.list"},
+	})
+	call, err := NewReceiptReadCallContext(ReceiptReadCallContextRequest{
+		CallerURA:     "easynet:///r/example/agent/alice.backend",
+		CalleeURA:     "easynet:///r/example/device/dev-a",
+		NonceBase64:   "AQIDBAUGBwgJCgsMDQ4PEA==",
+		CausalContext: map[string]any{"form": "none"},
+		Authority:     authority,
+	})
+	if err != nil {
+		t.Fatalf("NewReceiptReadCallContext: %v", err)
+	}
+	wantSubject, err := RuntimeStateReadSubjectURA("example", "alice")
+	if err != nil {
+		t.Fatalf("RuntimeStateReadSubjectURA: %v", err)
+	}
+	if call.SubjectURA != wantSubject {
+		t.Fatalf("SubjectURA = %q, want %q", call.SubjectURA, wantSubject)
+	}
+	if call.CalleeURA != "easynet:///r/example/device/dev-a" || call.CallerURA != "easynet:///r/example/agent/alice.backend" {
+		t.Fatalf("call tuple = %#v", call)
+	}
+}
+
+func TestNewReceiptReadCallContextKeepsDelegationSubjectExact(t *testing.T) {
+	delegation, err := NewDelegationProofFromMetadata(authorityMetadataFixture(t, map[string]any{
+		"issuer_ura":    "easynet:///r/example/agent/alice.backend",
+		"subject_ura":   "easynet:///r/example/device/dev-a",
+		"caller_ura":    "easynet:///r/example/agent/alice.backend",
+		"audience":      "easynet:///r/example/device/dev-a",
+		"scopes":        []string{"invocation.history.*"},
+		"issued_at_ms":  1000,
+		"expires_at_ms": 2000,
+	}, []byte("delegation-signature")))
+	if err != nil {
+		t.Fatalf("NewDelegationProofFromMetadata: %v", err)
+	}
+	call, err := NewReceiptReadCallContext(ReceiptReadCallContextRequest{
+		CallerURA:   "easynet:///r/example/agent/alice.backend",
+		CalleeURA:   "easynet:///r/example/device/dev-a",
+		NonceBase64: "AQIDBAUGBwgJCgsMDQ4PEA==",
+		Authority:   delegation,
+	})
+	if err != nil {
+		t.Fatalf("NewReceiptReadCallContext: %v", err)
+	}
+	if call.SubjectURA != "easynet:///r/example/device/dev-a" {
+		t.Fatalf("SubjectURA = %q, want exact delegation subject", call.SubjectURA)
+	}
+}
+
 func runtimeReceiptHistoryTestContext(t *testing.T) RuntimeCallContext {
 	return runtimeReceiptHistoryTestContextWithScope(t, "invocation.history.*")
 }

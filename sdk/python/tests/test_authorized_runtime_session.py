@@ -30,6 +30,7 @@ from easynet_sdk import (
     StaticCallerIdentityProvider,
     SubjectRef,
     is_code,
+    receipt_read_call_context,
     runtime_state_read_subject_ura,
 )
 from easynet_sdk.authorized_runtime_session import _descriptor_resolution_from_error
@@ -263,6 +264,29 @@ class AuthorizedRuntimeSessionTests(unittest.TestCase):
 
         fixture.session.history.list(request)
 
+        self.assertEqual(fixture.receipts.list_calls, 1)
+
+    def test_receipt_read_call_context_derives_session_runtime_state_subject(self) -> None:
+        authority = _session_authority(
+            {
+                "issuer_ura": "easynet:///r/example/agent/alice.backend",
+                "creator_principal_id": "easynet:///r/example/agent/alice.backend",
+            }
+        )
+        call = receipt_read_call_context(
+            caller_ura="easynet:///r/example/agent/alice.backend",
+            callee_ura="easynet:///r/example/device/dev-a",
+            nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
+            causal_context={"form": "none"},
+            authority=authority,
+        )
+
+        self.assertEqual(
+            call.subject_ura,
+            runtime_state_read_subject_ura("example", "alice"),
+        )
+        fixture = _SessionFixture()
+        fixture.session.history.list(ReceiptListRequest(call=call, limit=10))
         self.assertEqual(fixture.receipts.list_calls, 1)
 
     def test_history_uses_receipt_provider_authority_scope(self) -> None:

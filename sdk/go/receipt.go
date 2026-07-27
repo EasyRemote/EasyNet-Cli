@@ -188,6 +188,74 @@ type ReceiptListRequest struct {
 	ExcludeAbilityURAs []string           `json:"exclude_ability_uras,omitempty"`
 }
 
+type ReceiptReadCallContextRequest struct {
+	CallerURA     string
+	CalleeURA     string
+	NonceBase64   string
+	CausalContext map[string]any
+	Metadata      map[string]any
+	Authority     RuntimeInvocationAuthority
+}
+
+func NewReceiptReadCallContext(request ReceiptReadCallContextRequest) (RuntimeCallContext, error) {
+	callerURA := strings.TrimSpace(request.CallerURA)
+	calleeURA := strings.TrimSpace(request.CalleeURA)
+	if callerURA == "" {
+		return RuntimeCallContext{}, invalidReceipt("caller_ura is required", nil)
+	}
+	if calleeURA == "" {
+		return RuntimeCallContext{}, invalidReceipt("callee_ura is required", nil)
+	}
+	subjectURA, err := receiptReadSubjectURA(calleeURA, request.Authority)
+	if err != nil {
+		return RuntimeCallContext{}, err
+	}
+	return RuntimeCallContext{
+		CallerURA:     callerURA,
+		CalleeURA:     calleeURA,
+		SubjectURA:    subjectURA,
+		NonceBase64:   strings.TrimSpace(request.NonceBase64),
+		CausalContext: cloneAbilityMetadata(request.CausalContext),
+		Metadata:      cloneAbilityMetadata(request.Metadata),
+		Authority:     request.Authority,
+	}, nil
+}
+
+func receiptReadSubjectURA(calleeURA string, authority RuntimeInvocationAuthority) (string, error) {
+	switch typed := authority.(type) {
+	case DelegationProof:
+		return requiredReceiptURA(typed.SubjectURA, "authority.subject_ura")
+	case *DelegationProof:
+		if typed == nil {
+			return "", invalidReceipt("receipt read call context authority is required", nil)
+		}
+		return requiredReceiptURA(typed.SubjectURA, "authority.subject_ura")
+	case SessionAuthority:
+		return sessionAuthorityReceiptReadSubjectURA(calleeURA, typed)
+	case *SessionAuthority:
+		if typed == nil {
+			return "", invalidReceipt("receipt read call context authority is required", nil)
+		}
+		return sessionAuthorityReceiptReadSubjectURA(calleeURA, *typed)
+	default:
+		return "", v3SessionError(
+			ErrAuthorityDenied,
+			"receipt",
+			"receipt read call context authority has an unsupported canonical type",
+			nil,
+			nil,
+		)
+	}
+}
+
+func sessionAuthorityReceiptReadSubjectURA(calleeURA string, authority SessionAuthority) (string, error) {
+	callee, err := ParseURAParts(strings.TrimSpace(calleeURA))
+	if err != nil {
+		return "", invalidReceipt("callee_ura must be canonical", err)
+	}
+	return RuntimeStateReadSubjectURA(callee.Realm, authority.SessionOwnerUserID)
+}
+
 type ReceiptGetRequest struct {
 	Call   RuntimeCallContext `json:"call"`
 	Lookup ReceiptLookup      `json:"lookup"`
@@ -688,6 +756,17 @@ func putReceiptURA(output map[string]any, key, value string) error {
 	}
 	output[key] = value
 	return nil
+}
+
+func requiredReceiptURA(value, key string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", invalidReceipt(key+" is required", nil)
+	}
+	if _, err := axonsdk.ParseURA(value); err != nil {
+		return "", invalidReceipt(key+" must be a canonical URA", err)
+	}
+	return value, nil
 }
 
 func invalidReceipt(message string, cause error) error {
