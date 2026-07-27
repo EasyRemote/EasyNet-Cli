@@ -167,3 +167,20 @@ Boundary: non-companion packages and disabled companions remain valid no-op
 states. Malformed companion package plans and corrupt desired-state stores are
 reported through existing warning/op-event/stage-warning paths; no new fallback,
 migration, or legacy state translation is introduced.
+
+## Go runtime-host detach provider fail-closed parity
+
+Decision: `RuntimeLifecycleTransportFunc.Detach` must reject a missing
+`DetachFunc` with the same neutral invalid-runtime-client diagnostic style as
+discover/start/attach/status/open-runtime/stop.
+
+Reason: detach is part of the runtime-host lifecycle authority seam. The Python
+SDK already models `detach` as a required transport operation, while the Go
+function adapter silently returned success when a provider omitted it. That made
+`ConnectLocalRuntimeHost` able to open a runtime client and report success
+without proving that the lifecycle handle was detached at the provider boundary.
+
+Boundary: a handle may still make repeated local detach calls idempotent after a
+successful provider detach. `RuntimeTransportFunc.Close` remains an optional
+resource cleanup no-op because it is not the runtime-host lifecycle detach
+authority. No product-specific daemon or EasyNet vocabulary is added to the SDK.

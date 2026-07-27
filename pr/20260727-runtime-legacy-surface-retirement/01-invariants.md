@@ -24,3 +24,8 @@
   desired-state store. Corrupt companion state is not equivalent to "disabled",
   and an unplannable stop-on-runtime-stop companion is not equivalent to "no
   companion to stop".
+- Runtime-host lifecycle detach is a required provider capability in every SDK
+  language. A function adapter with no detach provider is an invalid transport,
+  not a successful no-op. Idempotent local detach state belongs on the handle
+  after a real provider detach succeeds; missing lifecycle authority must fail
+  closed.

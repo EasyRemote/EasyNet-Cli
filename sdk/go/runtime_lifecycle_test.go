@@ -76,3 +76,45 @@ func TestRuntimeLifecycleRejectsUnknownWildcardTransition(t *testing.T) {
 		t.Fatalf("state = %q, want %q", handle.State(), RuntimeUnknown)
 	}
 }
+
+func TestRuntimeLifecycleTransportFuncRequiresDetachFunction(t *testing.T) {
+	transport := RuntimeLifecycleTransportFunc{}
+
+	err := transport.Detach(context.Background(), "daemon-1")
+	if !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("Detach error = %v, want %s", err, ErrInvalidArgument)
+	}
+	if !strings.Contains(err.Error(), "runtime host detach transport function is required") {
+		t.Fatalf("Detach error = %v", err)
+	}
+}
+
+func TestConnectLocalFailsClosedWhenDetachProviderMissing(t *testing.T) {
+	transport := RuntimeLifecycleTransportFunc{
+		DiscoverFunc: func(context.Context, []byte) ([]byte, error) {
+			return []byte(`{"control_endpoint":"unix:///tmp/control.sock","invocation_endpoint":"unix:///tmp/runtime.sock"}`), nil
+		},
+		AttachFunc: func(context.Context, []byte) ([]byte, error) {
+			return []byte(`{
+				"handle_id":"daemon-1",
+				"state":"Running",
+				"mode":"authority",
+				"endpoints":{"invocation_endpoint":"unix:///tmp/runtime.sock"}
+			}`), nil
+		},
+		OpenRuntimeFunc: func(context.Context, string, []byte) (RuntimeTransport, []byte, error) {
+			return RuntimeTransportFunc{}, nil, nil
+		},
+	}
+
+	client, err := ConnectLocalRuntimeHost(context.Background(), transport, ConnectOptions{})
+	if client != nil {
+		t.Fatalf("client = %#v, want nil", client)
+	}
+	if !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("ConnectLocalRuntimeHost error = %v, want %s", err, ErrInvalidArgument)
+	}
+	if !strings.Contains(err.Error(), "runtime host detach transport function is required") {
+		t.Fatalf("ConnectLocalRuntimeHost error = %v", err)
+	}
+}

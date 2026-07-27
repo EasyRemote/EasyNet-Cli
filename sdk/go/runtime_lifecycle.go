@@ -171,7 +171,7 @@ func (f RuntimeLifecycleTransportFunc) Stop(ctx context.Context, handleID string
 
 func (f RuntimeLifecycleTransportFunc) Detach(ctx context.Context, handleID string) error {
 	if f.DetachFunc == nil {
-		return nil
+		return invalidRuntimeClient("runtime host detach transport function is required")
 	}
 	return f.DetachFunc(ctx, handleID)
 }

@@ -103,3 +103,11 @@
 - [x] Add failure-path tests for corrupt desired-state store and malformed companion plan.
 - [x] Update convergence gates so daemon lifecycle reconciliation cannot reintroduce `continue`-on-error compatibility skips.
 - [x] Run focused companion tests and canonical convergence gates.
+
+## Iteration 13 — Go runtime-host detach provider fail-closed parity
+
+- [x] Re-run codegraph and targeted SDK lifecycle search for silent no-op/default provider paths.
+- [x] Identify Go `RuntimeLifecycleTransportFunc.Detach` as a cross-language lifecycle divergence from Python's required transport contract.
+- [x] Replace the nil detach-provider no-op with the same neutral invalid-runtime-client diagnostic pattern used by the other lifecycle provider functions.
+- [x] Add regression coverage for direct adapter detach and `ConnectLocalRuntimeHost` after-open detach failure.
+- [x] Update convergence gates so Go SDK lifecycle neutrality includes the required detach provider diagnostic.

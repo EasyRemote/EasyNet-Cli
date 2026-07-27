@@ -1029,6 +1029,7 @@ check_go_sdk_runtime_lifecycle_neutrality_contract() {
 
   for token in \
     "runtime host discover transport function is required" \
+    "runtime host detach transport function is required" \
     "runtime lifecycle transport is required" \
     "runtime host lifecycle is not initialized" \
     "runtime invocation endpoint is not ready" \
