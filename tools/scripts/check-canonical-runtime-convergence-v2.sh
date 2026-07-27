@@ -6181,6 +6181,51 @@ if "test_runtime_client_providers_reject_missing_client_at_construction" not in 
 PY
 }
 
+check_sdk_python_runtime_control_authority_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local py="$cli_root/sdk/python/easynet_sdk/runtime.py"
+  local py_test="$cli_root/sdk/python/tests/test_runtime.py"
+
+  "$PYTHON_BIN" - "$py" "$py_test" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+py_path, py_test_path = map(Path, sys.argv[1:])
+
+def read(path: Path) -> str:
+    if not path.exists():
+        raise SystemExit(f"sdk_python_runtime_control_authority_source_missing:{path}")
+    return path.read_text()
+
+def method_body(text: str, signature: str) -> str:
+    offset = text.find(signature)
+    if offset < 0:
+        raise SystemExit(f"sdk_python_runtime_control_authority_missing_method:{signature}")
+    match = re.search(r"\n    def ", text[offset + len(signature):])
+    stop = offset + len(signature) + match.start() if match else len(text)
+    return text[offset:stop]
+
+runtime = read(py_path)
+adapter = method_body(runtime, "def _adapter_handle_id(self) -> int:")
+if "if not self._is_runtime_bound():" not in adapter:
+    raise SystemExit("sdk_python_runtime_control_authority:adapter_guard_missing")
+if "runtime-bound invocation control capability is required" not in adapter:
+    raise SystemExit("sdk_python_runtime_control_authority:adapter_error_missing")
+if "return self._handle_id" not in adapter:
+    raise SystemExit("sdk_python_runtime_control_authority:adapter_projection_missing")
+
+tests = read(py_test_path)
+for required in (
+    "test_public_invocation_handle_json_does_not_grant_control_authority",
+    "test_public_invocation_cancel_json_does_not_grant_control_authority",
+    "public snapshot must fail before reaching runtime transport",
+):
+    if required not in tests:
+        raise SystemExit(f"sdk_python_runtime_control_authority:test_missing:{required}")
+PY
+}
+
 check_sdk_ability_descriptor_not_found_vocabulary_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local go="$cli_root/sdk/go/ability_descriptor.go"
@@ -27963,6 +28008,7 @@ check_sdk_cross_language_history_public_ingress_cutover_contract
 check_sdk_prepared_descriptor_ref_required_contract
 check_sdk_descriptor_resolution_error_vocabulary_contract
 check_sdk_runtime_client_provider_readiness_contract
+check_sdk_python_runtime_control_authority_contract
 check_sdk_ability_descriptor_not_found_vocabulary_contract
 check_sdk_ability_descriptor_version_field_contract
 check_sdk_runtime_ability_owner_bound_scope_contract

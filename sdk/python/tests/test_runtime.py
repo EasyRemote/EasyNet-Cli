@@ -10,6 +10,7 @@ from easynet_sdk import (
     BidiStreamDescriptor,
     ErrorCode,
     InvocationBuilder,
+    InvocationCancel,
     InvocationHandle,
     InvocationLifecycleState,
     InvocationResult,
@@ -1418,6 +1419,51 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(handle.control_capability()._adapter_handle_id(), 7)
         assert transport.seen_signed is not None
         self.assertEqual(transport.seen_signed["signer_id"], "signer-alice-key-1")
+
+    def test_public_invocation_handle_json_does_not_grant_control_authority(
+        self,
+    ) -> None:
+        handle = InvocationHandle.from_json(
+            b'{"handle_id":7,"state":"Submitted","terminal":false,'
+            b'"events":[],"result":null}'
+        )
+        self.assertEqual(handle.state, "Submitted")
+        self.assertFalse(handle.terminal)
+        with self.assertRaises(SDKError) as caught:
+            handle.control_capability()
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+        self.assertIn(
+            "runtime-bound invocation control capability is required",
+            str(caught.exception),
+        )
+
+        transport = MemoryRuntimeTransport()
+        client = RuntimeClient(transport)
+        with self.assertRaises(SDKError) as await_caught:
+            client.await_result(handle)
+        self.assertTrue(is_code(await_caught.exception, ErrorCode.INVALID_ARGUMENT))
+        self.assertEqual(
+            transport.seen_await_id,
+            0,
+            "public snapshot must fail before reaching runtime transport",
+        )
+
+    def test_public_invocation_cancel_json_does_not_grant_control_authority(
+        self,
+    ) -> None:
+        cancel = InvocationCancel.from_json(
+            b'{"handle_id":7,"request_accepted":false,"deduplicated":true,'
+            b'"cancelled":false,"state":"Completed","terminal":true}'
+        )
+        self.assertEqual(cancel.state, "Completed")
+        self.assertTrue(cancel.terminal)
+        with self.assertRaises(SDKError) as caught:
+            cancel.control._adapter_handle_id()
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+        self.assertIn(
+            "runtime-bound invocation control capability is required",
+            str(caught.exception),
+        )
 
     def test_bound_object_graph_delegates_full_lifecycle(self) -> None:
         transport = MemoryRuntimeTransport()

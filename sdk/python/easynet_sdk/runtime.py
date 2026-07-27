@@ -226,6 +226,10 @@ class InvocationControlCapability:
         return cls(_handle_id=handle_id, _runtime_bound=False)
 
     def _adapter_handle_id(self) -> int:
+        if not self._is_runtime_bound():
+            raise _invalid_runtime(
+                "runtime-bound invocation control capability is required"
+            )
         return self._handle_id
 
     def _is_runtime_bound(self) -> bool:
