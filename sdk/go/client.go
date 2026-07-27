@@ -151,7 +151,7 @@ func (c *Client) FeatureDiscovery(ctx context.Context) (FeatureSet, error) {
 	return features, nil
 }
 
-// Close releases the SDK discovery boundary without stopping the daemon.
+// Close releases the SDK discovery boundary without stopping the runtime host.
 func (c *Client) Close(ctx context.Context) error {
 	if c == nil {
 		return &SDKError{

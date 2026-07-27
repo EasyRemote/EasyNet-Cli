@@ -70,7 +70,7 @@ type AddressingProjection struct {
 }
 
 // CanonicalAddressing delegates protocol grammar to the Axon Go SDK through
-// the package-level typed URA and descriptor helpers. It has no daemon,
+// the package-level typed URA and descriptor helpers. It has no runtime host,
 // product-profile, service-locator, or signing-key dependency.
 type CanonicalAddressing struct{}
 

@@ -143,7 +143,7 @@ type AuthorityMetadata struct {
 
 // AuthorityTransport mints authority metadata behind the SDK facade.
 //
-// Implementations may call the daemon, C ABI, or an Axon-owned helper. The Go
+// Implementations may call a runtime host, C ABI, or an Axon-owned helper. The Go
 // SDK contract is that callers never import raw Axon packages to mint authority
 // metadata.
 type AuthorityTransport interface {

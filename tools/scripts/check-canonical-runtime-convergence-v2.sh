@@ -1742,6 +1742,11 @@ check_sdk_runtime_admin_authority_session_contract() {
   fi
 }
 
+check_sdk_runtime_host_vocabulary_boundary_contract() {
+  SDK_RUNTIME_HOST_VOCABULARY_ROOT="${1:-${CLI_ROOT:-$ROOT}}" \
+    bash "$ROOT/tools/scripts/check-sdk-runtime-host-vocabulary-boundary.sh" >/dev/null
+}
+
 check_provider_route_manifest_neutrality_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local routes="$cli_root/provider_routes"
@@ -27342,6 +27347,7 @@ check_cli_signed_submission_boundary_contract
 check_receipt_proof_fact_contract
 check_java_sdk_invocation_authority_binding_contract
 check_java_swift_runtime_state_subject_parity_contract
+check_sdk_runtime_host_vocabulary_boundary_contract
 check_swift_sdk_invocation_authority_binding_contract
 check_python_sdk_signed_submission_complete_tuple_contract
 check_java_sdk_signer_policy_custody_contract

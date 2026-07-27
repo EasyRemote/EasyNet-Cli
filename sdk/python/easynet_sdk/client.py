@@ -129,7 +129,7 @@ class Client:
         )
 
     def close(self) -> None:
-        """Release the SDK discovery boundary without stopping the daemon."""
+        """Release the SDK discovery boundary without stopping the runtime host."""
 
         if self._closed:
             return

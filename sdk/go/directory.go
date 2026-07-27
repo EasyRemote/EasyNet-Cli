@@ -243,7 +243,7 @@ func ParseDirectoryEvent(raw []byte) (DirectoryEvent, error) {
 	return DirectoryEvent{Type: eventType, Raw: directoryMap(event)}, nil
 }
 
-// ProjectDirectoryResolution projects a daemon namespace.resolve output object
+// ProjectDirectoryResolution projects a runtime namespace.resolve output object
 // into the SDK's product-neutral DirectoryResolution model.
 func ProjectDirectoryResolution(output map[string]any) (DirectoryResolution, error) {
 	if rawAnswer, present := output["answer"]; present && rawAnswer != nil {

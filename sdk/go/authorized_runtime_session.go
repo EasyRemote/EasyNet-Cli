@@ -937,7 +937,7 @@ func validateSessionHistoryFilterBinding(call RuntimeCallContext, filter Receipt
 		)
 	}
 	// Subject filters are receipt-query predicates, not the authority subject.
-	// The session authority remains bound to call.SubjectURA above; the daemon
+	// The session authority remains bound to call.SubjectURA above; the runtime
 	// receives SubjectURAs only as exact ledger filters after admission.
 	return nil
 }

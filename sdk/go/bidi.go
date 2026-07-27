@@ -140,7 +140,7 @@ type BidiOutcome struct {
 	reason    string
 }
 
-// NewBidiSessionFromJSON decodes daemon open metadata after frame0 acceptance.
+// NewBidiSessionFromJSON decodes runtime open metadata after frame0 acceptance.
 func NewBidiSessionFromJSON(transport BidiTransport, raw []byte) (*BidiSession, error) {
 	if transport == nil {
 		return nil, invalidRuntimeClient("bidi transport is required")

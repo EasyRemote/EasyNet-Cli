@@ -1167,7 +1167,7 @@ class BidiSessionAdapter:
                 retryable=True,
                 message=(
                     f"no bidi frame within {timeout}s - the server-side session "
-                    "is still governed by daemon/ability policy"
+                    "is still governed by runtime/ability policy"
                 ),
                 details={
                     "reason": "client_wait_timeout",

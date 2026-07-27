@@ -1850,8 +1850,8 @@ func directRuntimeDialTarget(endpoint string) (string, []grpc.DialOption, error)
 			return "", nil, invalidRuntimePayload(parsed.Scheme+" runtime invocation endpoint requires host", nil)
 		}
 		// Direct runtime discovery currently does not carry a CA bundle. The
-		// endpoint is read from the local daemon control plane; use TLS for the
-		// transport class and leave endpoint authenticity to daemon discovery.
+		// endpoint is read from the local runtime control plane; use TLS for the
+		// transport class and leave endpoint authenticity to runtime discovery.
 		tlsConfig := &tls.Config{ServerName: parsed.Hostname(), InsecureSkipVerify: true}
 		return target, []grpc.DialOption{grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig))}, nil
 	default:

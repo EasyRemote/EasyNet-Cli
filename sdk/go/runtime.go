@@ -17,7 +17,7 @@ import (
 // InvocationControlCapability is the opaque authority for controlling a
 // submitted Invocation observation lifecycle.
 //
-// The current daemon registry is still backed by a process-local numeric
+// The current runtime registry is still backed by a process-local numeric
 // handle, but that number is adapter-private. SDK consumers operate on
 // InvocationHandle; transport adapters receive this capability object.
 type InvocationControlCapability struct {
@@ -833,7 +833,7 @@ func (e runtimeRecoveryEventDTO) intoPublic() RuntimeRecoveryEvent {
 	}
 }
 
-// Close releases the Runtime Core client transport without stopping the daemon.
+// Close releases the Runtime Core client transport without stopping the runtime host.
 func (c *RuntimeClient) Close(ctx context.Context) error {
 	if c == nil {
 		return invalidRuntimeClient("runtime client is not initialized")
@@ -2194,7 +2194,7 @@ func (f InvocationFailure) Retryable() bool {
 	return f.retryable
 }
 
-// NewInvocationResultFromJSON decodes the daemon unary result projection.
+// NewInvocationResultFromJSON decodes the runtime unary result projection.
 func NewInvocationResultFromJSON(raw []byte) (InvocationResult, error) {
 	var dto struct {
 		OK                *bool           `json:"ok"`

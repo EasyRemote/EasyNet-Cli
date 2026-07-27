@@ -121,7 +121,7 @@ func openNativeRuntimeClients(ctx context.Context, handle *RuntimeHandle, openOp
 	}
 	runtimeTransport, _, err := handle.transport.OpenRuntime(ctx, handle.handleID, optionsJSON)
 	if err != nil {
-		return nil, nil, wrapRuntimeLifecycleTransportError("daemon open runtime failed", err)
+		return nil, nil, wrapRuntimeLifecycleTransportError("runtime host open failed", err)
 	}
 	if runtimeTransport == nil {
 		return nil, nil, invalidRuntimeClient("runtime transport is required")
