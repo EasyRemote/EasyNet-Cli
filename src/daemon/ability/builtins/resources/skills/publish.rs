@@ -24,7 +24,7 @@
 //   <agent-managed-skills-dir>/<skill-name>/
 //       SKILL.md               # the curator-authored description
 //       .easynet/
-//           install.json       # provenance source, content_hash,
+//           install.json       # provenance source, skill_tree_hash,
 //                              # installed_at, size_bytes
 //
 // The provenance source is explicit state: curator publishes carry
@@ -47,8 +47,8 @@
 //   * publish refuses to overwrite an existing skill of the same name
 //   * unpublish hard-deletes the entire managed skill subtree
 //   * daemon log captures `[skill.unpublish] owner=… name=…
-//     content_hash=…` so the body can be reconstructed from any
-//     external backup
+//     content_hash=…` so the canonical skill tree can be identified
+//     against any external backup
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -64,7 +64,9 @@ use crate::daemon::resources::skills::projection::{
     SkillPublishReceipt, SkillReadFileResponse, SkillTreeEntry, SkillTreeResponse,
     SkillUnpublishReceipt, SkillWriteFileReceipt,
 };
-use crate::daemon::resources::skills::store::{managed_skill_dir_for, SkillSource};
+use crate::daemon::resources::skills::store::{
+    managed_skill_dir_for, write_install_record, InstallRecord, SkillSource,
+};
 
 use super::list;
 use crate::daemon::ability::dispatch::OwnerKind;
@@ -184,44 +186,29 @@ fn publish_handler(args: Value) -> anyhow::Result<Value> {
         )
     })?;
     let skill_md_path = skill_dir.join("SKILL.md");
-    let hash = content_hash(&body);
-    let size_bytes = body.len() as u64;
     crate::daemon::persistence::config::atomic_write(&skill_md_path, body.as_bytes())
         .map_err(|e| anyhow::anyhow!("skill.publish: write {}: {e}", skill_md_path.display()))?;
+    let hash = hash_skill_tree(&skill_dir)?;
+    let size_bytes = skill_tree_size_bytes(&skill_dir)?;
 
     let provenance = SkillPublishProvenance::from_mission_run_id(run_id.clone());
     let source = provenance.source();
     let installed_at = chrono::Utc::now().to_rfc3339();
-    // Strip the `sha256:` prefix for the on-disk install.json.
-    // The wire envelope below keeps the prefix because callers
-    // benefit from algorithm tagging.
-    let bare_hash = hash.strip_prefix("sha256:").unwrap_or(&hash).to_string();
-    let record = crate::daemon::resources::skills::store::InstallRecord {
+    let record = InstallRecord {
         name: skill_name.clone(),
         description: crate::daemon::resources::skills::store::skill_description_from_dir(
             &skill_dir,
         ),
         agent_id: owner_id.clone(),
         source,
-        skill_tree_hash: bare_hash,
+        skill_tree_hash: hash.clone(),
         size_bytes,
         installed_at,
         last_checked_at: None,
         upgrade_available: false,
     };
-
-    let meta_dir = skill_dir.join(".easynet");
-    std::fs::create_dir_all(&meta_dir).map_err(|e| {
-        anyhow::anyhow!(
-            "skill.publish: failed to create {}: {e}",
-            meta_dir.display()
-        )
-    })?;
-    let install_path = meta_dir.join("install.json");
-    let install_json = serde_json::to_string_pretty(&record)
-        .map_err(|e| anyhow::anyhow!("skill.publish: failed to serialise install.json: {e}"))?;
-    crate::daemon::persistence::config::atomic_write(&install_path, install_json.as_bytes())
-        .map_err(|e| anyhow::anyhow!("skill.publish: write {}: {e}", install_path.display()))?;
+    write_install_record(&skill_dir, &record)
+        .map_err(|e| anyhow::anyhow!("skill.publish: write canonical install record: {e}"))?;
 
     let dir_display = format!("{}", skill_dir.display());
     crate::op_event!(
@@ -302,9 +289,11 @@ fn unpublish_audit_hash(install_path: &Path) -> String {
     let Ok(body) = std::fs::read_to_string(install_path) else {
         return "unknown".to_string();
     };
-    match serde_json::from_str::<crate::daemon::resources::skills::store::InstallRecord>(&body) {
-        Ok(record) if record.skill_tree_hash.starts_with("sha256:") => record.skill_tree_hash,
-        Ok(record) => format!("sha256:{}", record.skill_tree_hash),
+    match serde_json::from_str::<InstallRecord>(&body) {
+        Ok(record) => match record.validate_canonical_persistence() {
+            Ok(()) => record.skill_tree_hash,
+            Err(_) => "invalid-install-record:data".to_string(),
+        },
         Err(error) => format!(
             "invalid-install-record:{}",
             install_record_error_category(error.classify())
@@ -811,11 +800,9 @@ fn refresh_install_record_hash(skill_dir: &Path) -> anyhow::Result<String> {
             crate::daemon::resources::skills::store::read_install_record(&record_path)?;
         record.skill_tree_hash = hash.clone();
         record.size_bytes = skill_tree_size_bytes(skill_dir)?;
-        let body = serde_json::to_string_pretty(&record)
-            .map_err(|e| anyhow::anyhow!("skill.write_file: serialise install.json: {e}"))?;
-        crate::daemon::persistence::config::atomic_write(&record_path, body.as_bytes()).map_err(
-            |e| anyhow::anyhow!("skill.write_file: write {}: {e}", record_path.display()),
-        )?;
+        write_install_record(skill_dir, &record).map_err(|e| {
+            anyhow::anyhow!("skill.write_file: write canonical install record: {e}")
+        })?;
     }
     Ok(hash)
 }
@@ -867,13 +854,6 @@ fn skill_tree_size_bytes(root: &Path) -> anyhow::Result<u64> {
         total += std::fs::metadata(root.join(rel))?.len();
     }
     Ok(total)
-}
-
-fn content_hash(body: &str) -> String {
-    use sha2::{Digest, Sha256};
-    let mut h = Sha256::new();
-    h.update(body.as_bytes());
-    format!("sha256:{:x}", h.finalize())
 }
 
 pub fn publish_input_schema() -> Value {
@@ -1100,6 +1080,41 @@ mod tests {
     }
 
     #[test]
+    fn publish_writes_canonical_skill_tree_hash_install_record() {
+        let g = HomeGuard::new();
+        let name = materialise_agent("canonical-install-hash", &g);
+        let res = publish_handler(json!({
+            "owner_agent_id": name,
+            "skill_name": "summarise-niche",
+            "skill_md": "# Summarise\nA skill the curator wrote.",
+            "mission_run_id": "mission-think-001",
+        }))
+        .expect("publish ok");
+
+        let dir = PathBuf::from(res["skill_dir"].as_str().unwrap());
+        let install_path = dir.join(".easynet").join("install.json");
+        let body = std::fs::read_to_string(&install_path).expect("install record body");
+        let install: Value = serde_json::from_str(&body).expect("install record json");
+        let skill_tree_hash = install["skill_tree_hash"]
+            .as_str()
+            .expect("canonical skill_tree_hash");
+
+        assert!(
+            skill_tree_hash.starts_with("sha256:"),
+            "install record must persist algorithm-tagged tree hash: {skill_tree_hash}"
+        );
+        assert!(
+            install.get("content_hash").is_none(),
+            "install record must not persist public projection field: {body}"
+        );
+        assert_eq!(
+            res["content_hash"].as_str().unwrap(),
+            skill_tree_hash,
+            "public content_hash projection must reflect canonical skill_tree_hash"
+        );
+    }
+
+    #[test]
     fn publish_writes_codex_skill_to_runtime_project_dir() {
         let _g = HomeGuard::new();
         let name =
@@ -1267,6 +1282,44 @@ mod tests {
         assert!(
             hash.starts_with("invalid-install-record:"),
             "malformed provenance must be explicit in audit output: {hash}"
+        );
+        assert!(!dir.exists());
+    }
+
+    #[test]
+    fn unpublish_rejects_unprefixed_legacy_skill_tree_hash_without_prefix_fallback() {
+        let g = HomeGuard::new();
+        let name = materialise_agent("unpub-unprefixed-install", &g);
+        let pub_res = publish_handler(json!({
+            "owner_agent_id": name,
+            "skill_name": "bare-provenance",
+            "skill_md": "body",
+        }))
+        .unwrap();
+        let dir = PathBuf::from(pub_res["skill_dir"].as_str().unwrap());
+        std::fs::write(
+            dir.join(".easynet").join("install.json"),
+            r#"{
+                "name": "bare-provenance",
+                "agent_id": "agent",
+                "source": {"kind": "curator", "identifier": "mission"},
+                "skill_tree_hash": "deadbeef",
+                "size_bytes": 1,
+                "installed_at": "2026-04-23T00:00:00Z",
+                "upgrade_available": false
+            }"#,
+        )
+        .unwrap();
+
+        let unpub_res = unpublish_handler(json!({
+            "owner_agent_id": name,
+            "skill_name": "bare-provenance",
+        }))
+        .expect("unpublish still removes an existing directory");
+        let hash = unpub_res["content_hash"].as_str().unwrap();
+        assert_eq!(
+            hash, "invalid-install-record:data",
+            "unpublish must not turn legacy bare hashes into canonical provenance"
         );
         assert!(!dir.exists());
     }

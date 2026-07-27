@@ -68,6 +68,25 @@ pub struct InstallRecord {
     pub upgrade_available: bool,
 }
 
+impl InstallRecord {
+    pub(crate) fn validate_canonical_persistence(&self) -> anyhow::Result<()> {
+        let hash = self.skill_tree_hash.trim();
+        anyhow::ensure!(
+            hash == self.skill_tree_hash,
+            "install record skill_tree_hash must be canonical without surrounding whitespace"
+        );
+        anyhow::ensure!(
+            hash.starts_with("sha256:"),
+            "install record skill_tree_hash must include sha256: algorithm prefix"
+        );
+        anyhow::ensure!(
+            hash.len() > "sha256:".len(),
+            "install record skill_tree_hash must include a digest"
+        );
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SkillSource {
@@ -832,15 +851,18 @@ fn parse_source_url(url: &str) -> anyhow::Result<SkillSource> {
 pub(crate) fn read_install_record(path: &Path) -> anyhow::Result<InstallRecord> {
     let text =
         fs::read_to_string(path).map_err(|e| anyhow::anyhow!("read {}: {e}", path.display()))?;
-    Ok(serde_json::from_str(&text)?)
+    let record: InstallRecord = serde_json::from_str(&text)?;
+    record.validate_canonical_persistence()?;
+    Ok(record)
 }
 
-fn write_install_record(skill_dir: &Path, record: &InstallRecord) -> anyhow::Result<()> {
+pub(crate) fn write_install_record(skill_dir: &Path, record: &InstallRecord) -> anyhow::Result<()> {
+    record.validate_canonical_persistence()?;
     let meta_dir = skill_dir.join(".easynet");
     fs::create_dir_all(&meta_dir)?;
     let path = meta_dir.join("install.json");
     let json = serde_json::to_string_pretty(record)?;
-    fs::write(&path, json)?;
+    config::atomic_write(&path, json.as_bytes())?;
     Ok(())
 }
 
@@ -1358,6 +1380,69 @@ mod tests {
         let rec: InstallRecord = serde_json::from_str(wire).unwrap();
         assert_eq!(rec.skill_tree_hash, "sha256:wire");
         assert_eq!(rec.description, "");
+    }
+
+    #[test]
+    fn read_install_record_rejects_unprefixed_skill_tree_hash() {
+        let guard = TempDirGuard::create("install-record-read-unprefixed").unwrap();
+        let path = guard.path().join("install.json");
+        std::fs::write(
+            &path,
+            r#"{
+                "name": "alpha",
+                "agent_id": "alice",
+                "source": {
+                    "kind": "github",
+                    "identifier": "a/b"
+                },
+                "skill_tree_hash": "wire",
+                "size_bytes": 99,
+                "installed_at": "2026-04-23T00:00:00Z",
+                "upgrade_available": false
+            }"#,
+        )
+        .unwrap();
+        let error = read_install_record(&path)
+            .expect_err("canonical read must reject unprefixed skill_tree_hash");
+        assert!(
+            error
+                .to_string()
+                .contains("skill_tree_hash must include sha256:"),
+            "expected canonical hash prefix error: {error}"
+        );
+    }
+
+    #[test]
+    fn write_install_record_rejects_unprefixed_skill_tree_hash() {
+        let guard = TempDirGuard::create("install-record-write-unprefixed").unwrap();
+        let record = InstallRecord {
+            name: "alpha".into(),
+            description: "Alpha skill".into(),
+            agent_id: "alice".into(),
+            source: SkillSource {
+                kind: "github".into(),
+                identifier: "a/b".into(),
+                ref_: None,
+                subpath: None,
+            },
+            skill_tree_hash: "deadbeef".into(),
+            size_bytes: 42,
+            installed_at: "2026-04-23T00:00:00Z".into(),
+            last_checked_at: None,
+            upgrade_available: false,
+        };
+        let error = write_install_record(guard.path(), &record)
+            .expect_err("canonical write must reject unprefixed skill_tree_hash");
+        assert!(
+            error
+                .to_string()
+                .contains("skill_tree_hash must include sha256:"),
+            "expected canonical hash prefix error: {error}"
+        );
+        assert!(
+            !guard.path().join(".easynet").join("install.json").exists(),
+            "invalid records must not be persisted"
+        );
     }
 
     #[test]
