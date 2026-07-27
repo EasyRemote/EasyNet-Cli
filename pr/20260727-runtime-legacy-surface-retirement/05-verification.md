@@ -130,3 +130,22 @@
   - passed.
 - `/Users/macbook.silan.tech/.local/bin/codegraph sync`
   - passed; synced 3 changed code files.
+
+## Iteration 10
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph query "owner_projections default empty owner projection admission receipt authority fail closed"`
+- `/Users/macbook.silan.tech/.local/bin/codegraph query "owner projection cursor host binding validate_owner_projection_host_binding heartbeat_refresh_owner_uras_from_file filter_map return None"`
+- `cargo test --features axon-pb owner_projections --lib`
+  - 8 passed.
+- `cargo test --features axon-pb owner_projection --lib`
+  - 45 passed.
+- `cargo fmt --check`
+  - passed.
+- `git diff --check`
+  - passed.
+- `tools/scripts/check-architecture-convergence.sh`
+  - passed.
+- `tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - passed.
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync`
+  - passed; synced 2 changed code files.

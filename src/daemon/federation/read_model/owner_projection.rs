@@ -208,12 +208,10 @@ impl OwnerProjectionPublication {
     /// prevent internally consistent payloads from smuggling abilities for a
     /// different principal.
     pub(crate) fn validate_integrity(&self) -> Result<(), String> {
-        if self.owner_ura.trim() != self.owner_ura || self.owner_ura.is_empty() {
-            return Err("owner_ura must be non-empty and trimmed".to_string());
-        }
-        if self.host_device_ura.trim() != self.host_device_ura || self.host_device_ura.is_empty() {
-            return Err("host_device_ura must be non-empty and trimmed".to_string());
-        }
+        owner_projections::validate_owner_projection_host_binding(
+            &self.owner_ura,
+            &self.host_device_ura,
+        )?;
         if self.projection_revision == 0 {
             return Err("projection_revision must be greater than zero".to_string());
         }
@@ -387,12 +385,7 @@ fn prepare_at(
 ) -> Result<PreparedProjection, String> {
     let owner_ura = owner_ura.trim();
     let host_device_ura = host_device_ura.trim();
-    if owner_ura.is_empty() {
-        return Err("owner_ura must not be empty".into());
-    }
-    if host_device_ura.is_empty() {
-        return Err("host_device_ura must not be empty".into());
-    }
+    owner_projections::validate_owner_projection_host_binding(owner_ura, host_device_ura)?;
 
     let previous = cursors.cursor_for(owner_ura);
     let generation = match previous {
@@ -480,16 +473,8 @@ fn heartbeat_refresh_owner_uras_from_file(file: &OwnerProjectionCursorFile) -> V
     let owners = file
         .projections
         .iter()
-        .filter_map(|cursor| {
-            if cursor.lifecycle != OwnerProjectionCursorLifecycle::Active {
-                return None;
-            }
-            let owner_ura = cursor.owner_ura.trim();
-            if owner_ura.is_empty() || cursor.host_device_ura.trim().is_empty() {
-                return None;
-            }
-            Some(owner_ura.to_string())
-        })
+        .filter(|cursor| cursor.lifecycle == OwnerProjectionCursorLifecycle::Active)
+        .map(|cursor| cursor.owner_ura.clone())
         .collect::<BTreeSet<_>>();
     owners
         .into_iter()
@@ -1875,21 +1860,68 @@ mod tests {
     #[test]
     fn heartbeat_refresh_owner_uras_are_deduped_stable_and_bounded() {
         let mut file = OwnerProjectionCursorFile::default();
-        file.upsert(cursor("z", "host", 1));
-        file.upsert(cursor("", "host", 1));
-        file.upsert(cursor("a", "", 1));
-        file.upsert(cursor("m", "host", 1));
-        file.upsert(cursor("z", "host", 2));
+        file.upsert(cursor(
+            "easynet:///r/acme/device/z",
+            "easynet:///r/acme/device/z",
+            1,
+        ));
+        file.upsert(cursor(
+            "easynet:///r/acme/device/m",
+            "easynet:///r/acme/device/m",
+            1,
+        ));
+        file.upsert(cursor(
+            "easynet:///r/acme/device/z",
+            "easynet:///r/acme/device/z",
+            2,
+        ));
         for idx in 0..70 {
-            file.upsert(cursor(&format!("owner-{idx:02}"), "host", 1));
+            let owner = format!("easynet:///r/acme/device/owner-{idx:02}");
+            file.upsert(cursor(&owner, &owner, 1));
         }
 
         let owners = heartbeat_refresh_owner_uras_from_file(&file);
 
         assert_eq!(owners.len(), OWNER_PROJECTION_HEARTBEAT_REFRESH_LIMIT);
-        assert_eq!(owners[0], "m");
+        assert_eq!(owners[0], "easynet:///r/acme/device/m");
         assert!(owners.iter().all(|owner| !owner.trim().is_empty()));
         assert!(owners.windows(2).all(|pair| pair[0] < pair[1]));
+    }
+
+    #[test]
+    fn integrity_rejects_non_device_host_for_agent_owner() {
+        let owner = "easynet:///r/acme/agent/alice.bot";
+        let error = prepare_at(
+            owner,
+            "easynet:///r/acme/authority",
+            &[descriptor("chat", owner)],
+            &OwnerProjectionCursorFile::default(),
+            1_000,
+        )
+        .expect_err("Agent projection requires Device host");
+
+        assert!(
+            error.contains("Agent owner projections must be hosted by a Device URA"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn integrity_rejects_device_owner_hosted_by_different_device() {
+        let owner = "easynet:///r/acme/device/dev-1";
+        let error = prepare_at(
+            owner,
+            "easynet:///r/acme/device/dev-2",
+            &[descriptor("fs.read", owner)],
+            &OwnerProjectionCursorFile::default(),
+            1_000,
+        )
+        .expect_err("Device projection requires same Device host");
+
+        assert!(
+            error.contains("Device owner projections must be hosted by the same Device URA"),
+            "{error}"
+        );
     }
 
     /// Guards the SPEC §15.1-2 contract-drift invariant documented on

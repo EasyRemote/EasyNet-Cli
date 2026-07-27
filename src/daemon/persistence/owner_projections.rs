@@ -13,6 +13,8 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use serde::{Deserialize, Serialize};
 
+use crate::core::ura::{parse_ura, URAKind};
+
 use super::config::{atomic_write_with_permissions, state_dir, WritePermissions};
 use super::file_lock::ExclusiveFileLock;
 
@@ -57,6 +59,58 @@ pub(crate) enum OwnerProjectionCursorLifecycle {
 
 pub(crate) fn path() -> PathBuf {
     state_dir().join(FILE_NAME)
+}
+
+pub(crate) fn validate_owner_projection_host_binding(
+    owner_ura: &str,
+    host_device_ura: &str,
+) -> Result<(), String> {
+    if owner_ura.trim() != owner_ura || owner_ura.is_empty() {
+        return Err("owner_ura must be non-empty and trimmed".to_string());
+    }
+    if host_device_ura.trim() != host_device_ura || host_device_ura.is_empty() {
+        return Err("host_device_ura must be non-empty and trimmed".to_string());
+    }
+    let owner_ura = owner_ura.trim();
+    let host_device_ura = host_device_ura.trim();
+
+    let owner = parse_ura(owner_ura)
+        .map_err(|error| format!("owner_ura must be a canonical owner URA: {error}"))?;
+    let host = parse_ura(host_device_ura)
+        .map_err(|error| format!("host_device_ura must be a canonical host URA: {error}"))?;
+    if owner.realm != host.realm {
+        return Err(format!(
+            "owner projection host realm `{}` does not match owner realm `{}`",
+            host.realm, owner.realm
+        ));
+    }
+
+    match owner.kind {
+        URAKind::Agent => {
+            if host.kind != URAKind::Device {
+                return Err("Agent owner projections must be hosted by a Device URA".to_string());
+            }
+            Ok(())
+        }
+        URAKind::Device => {
+            if host.kind != URAKind::Device || owner_ura != host_device_ura {
+                return Err(
+                    "Device owner projections must be hosted by the same Device URA".to_string(),
+                );
+            }
+            Ok(())
+        }
+        URAKind::Authority => {
+            if host.kind != URAKind::Authority || owner_ura != host_device_ura {
+                return Err(
+                    "Authority owner projections must be hosted by the same Authority URA"
+                        .to_string(),
+                );
+            }
+            Ok(())
+        }
+        _ => Err("owner_ura must be a canonical Agent, Device, or Authority URA".to_string()),
+    }
 }
 
 pub(crate) fn load() -> anyhow::Result<OwnerProjectionCursorFile> {
@@ -149,9 +203,10 @@ impl OwnerProjectionCursorFile {
         }
         let mut owners = std::collections::BTreeSet::new();
         for cursor in &self.projections {
-            if cursor.owner_ura.trim().is_empty() || cursor.host_device_ura.trim().is_empty() {
-                anyhow::bail!("owner projection cursor contains an empty owner or host URA");
-            }
+            validate_owner_projection_host_binding(&cursor.owner_ura, &cursor.host_device_ura)
+                .map_err(|error| {
+                    anyhow::anyhow!("owner projection cursor binding invalid: {error}")
+                })?;
             if cursor.generation == 0 || cursor.projection_revision == 0 {
                 anyhow::bail!(
                     "owner projection cursor for `{}` has a zero generation or revision",
@@ -292,8 +347,8 @@ mod tests {
     fn upsert_replaces_by_owner_and_keeps_stable_order() {
         let mut file = OwnerProjectionCursorFile::default();
         file.upsert(OwnerProjectionCursor {
-            owner_ura: "z".into(),
-            host_device_ura: "host".into(),
+            owner_ura: "easynet:///r/acme/device/z".into(),
+            host_device_ura: "easynet:///r/acme/device/z".into(),
             generation: 1,
             lifecycle: OwnerProjectionCursorLifecycle::Active,
             projection_revision: 1,
@@ -303,8 +358,8 @@ mod tests {
             updated_at: "t1".into(),
         });
         file.upsert(OwnerProjectionCursor {
-            owner_ura: "a".into(),
-            host_device_ura: "host".into(),
+            owner_ura: "easynet:///r/acme/device/a".into(),
+            host_device_ura: "easynet:///r/acme/device/a".into(),
             generation: 1,
             lifecycle: OwnerProjectionCursorLifecycle::Active,
             projection_revision: 1,
@@ -314,8 +369,8 @@ mod tests {
             updated_at: "t2".into(),
         });
         file.upsert(OwnerProjectionCursor {
-            owner_ura: "z".into(),
-            host_device_ura: "host".into(),
+            owner_ura: "easynet:///r/acme/device/z".into(),
+            host_device_ura: "easynet:///r/acme/device/z".into(),
             generation: 1,
             lifecycle: OwnerProjectionCursorLifecycle::Active,
             projection_revision: 2,
@@ -326,9 +381,122 @@ mod tests {
         });
 
         assert_eq!(file.projections.len(), 2);
-        assert_eq!(file.projections[0].owner_ura, "a");
+        assert_eq!(file.projections[0].owner_ura, "easynet:///r/acme/device/a");
         assert_eq!(file.projections[1].projection_revision, 2);
-        assert_eq!(file.cursor_for("z").unwrap().projection_digest, "new");
+        assert_eq!(
+            file.cursor_for("easynet:///r/acme/device/z")
+                .unwrap()
+                .projection_digest,
+            "new"
+        );
+    }
+
+    #[test]
+    fn load_rejects_malformed_owner_projection_cursor_uras() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let data_path = path();
+        fs::create_dir_all(data_path.parent().unwrap()).unwrap();
+        fs::write(
+            &data_path,
+            br#"{
+  "schema_version": 2,
+  "projections": [{
+    "owner_ura": "not-a-ura",
+    "host_device_ura": "easynet:///r/acme/device/dev-1",
+    "generation": 1,
+    "lifecycle": "active",
+    "projection_revision": 1,
+    "projection_digest": "digest-1",
+    "content_fingerprint": "fingerprint-1",
+    "lease_expires_unix_ms": 0,
+    "updated_at": "2026-07-01T00:00:00Z"
+  }]
+}"#,
+        )
+        .unwrap();
+
+        let error = load().expect_err("malformed owner URA must fail closed");
+
+        assert!(
+            error
+                .to_string()
+                .contains("owner projection cursor binding invalid"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            error
+                .to_string()
+                .contains("owner_ura must be a canonical owner URA"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn load_rejects_malformed_owner_projection_cursor_host_uras() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let data_path = path();
+        fs::create_dir_all(data_path.parent().unwrap()).unwrap();
+        fs::write(
+            &data_path,
+            br#"{
+  "schema_version": 2,
+  "projections": [{
+    "owner_ura": "easynet:///r/acme/agent/alice.bot",
+    "host_device_ura": "not-a-ura",
+    "generation": 1,
+    "lifecycle": "active",
+    "projection_revision": 1,
+    "projection_digest": "digest-1",
+    "content_fingerprint": "fingerprint-1",
+    "lease_expires_unix_ms": 0,
+    "updated_at": "2026-07-01T00:00:00Z"
+  }]
+}"#,
+        )
+        .unwrap();
+
+        let error = load().expect_err("malformed host URA must fail closed");
+
+        assert!(
+            error
+                .to_string()
+                .contains("host_device_ura must be a canonical host URA"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn load_rejects_contradictory_owner_projection_cursor_host_binding() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let data_path = path();
+        fs::create_dir_all(data_path.parent().unwrap()).unwrap();
+        fs::write(
+            &data_path,
+            br#"{
+  "schema_version": 2,
+  "projections": [{
+    "owner_ura": "easynet:///r/acme/device/dev-1",
+    "host_device_ura": "easynet:///r/acme/device/dev-2",
+    "generation": 1,
+    "lifecycle": "active",
+    "projection_revision": 1,
+    "projection_digest": "digest-1",
+    "content_fingerprint": "fingerprint-1",
+    "lease_expires_unix_ms": 0,
+    "updated_at": "2026-07-01T00:00:00Z"
+  }]
+}"#,
+        )
+        .unwrap();
+
+        let error = load().expect_err("contradictory owner/host binding must fail closed");
+
+        assert!(
+            error
+                .to_string()
+                .contains("Device owner projections must be hosted by the same Device URA"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]

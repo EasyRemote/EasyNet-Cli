@@ -9811,6 +9811,84 @@ if ability_publication.exists():
                     detail,
                 )
 
+# Rule 82: owner projection cursors are canonical lifecycle facts, not
+# arbitrary publication cache rows. Cursor persistence and publication integrity
+# must share one owner/host URA binding state machine so malformed rows fail
+# before heartbeat refresh, purge replay, or authority admission can see them as
+# partial state.
+owner_projection_store = cli_root / "src/daemon/persistence/owner_projections.rs"
+owner_projection_read_model = cli_root / "src/daemon/federation/read_model/owner_projection.rs"
+if owner_projection_store.exists():
+    text = source(owner_projection_store)
+    for token, detail in (
+        (
+            "fn validate_owner_projection_host_binding(",
+            "owner projection cursor store must expose canonical owner/host binding validation",
+        ),
+        (
+            "owner_ura must be a canonical owner URA",
+            "owner projection cursor validation must reject malformed owner URAs",
+        ),
+        (
+            "host_device_ura must be a canonical host URA",
+            "owner projection cursor validation must reject malformed host URAs",
+        ),
+        (
+            "Agent owner projections must be hosted by a Device URA",
+            "owner projection cursor validation must bind Agent owners to Device hosts",
+        ),
+        (
+            "Device owner projections must be hosted by the same Device URA",
+            "owner projection cursor validation must bind Device owners to themselves",
+        ),
+        (
+            "Authority owner projections must be hosted by the same Authority URA",
+            "owner projection cursor validation must bind Authority owners to themselves",
+        ),
+        (
+            "validate_owner_projection_host_binding(&cursor.owner_ura, &cursor.host_device_ura)",
+            "owner projection cursor file validation must call the shared binding guard",
+        ),
+    ):
+        if token not in text:
+            add(
+                "R82_OWNER_PROJECTION_CURSOR_BINDING_FAIL_CLOSED",
+                owner_projection_store,
+                1,
+                detail,
+            )
+if owner_projection_read_model.exists():
+    text = source(owner_projection_read_model)
+    integrity = rust_method_body(text, "validate_integrity")
+    if integrity is None or "validate_owner_projection_host_binding" not in integrity[1]:
+        add(
+            "R82_OWNER_PROJECTION_CURSOR_BINDING_FAIL_CLOSED",
+            owner_projection_read_model,
+            1,
+            "owner projection publication integrity must use the shared owner/host binding guard",
+        )
+    refresh = rust_method_body(text, "heartbeat_refresh_owner_uras_from_file")
+    if refresh is not None:
+        offset, refresh_body = refresh
+        for token, detail in (
+            (
+                "trim().is_empty()",
+                "heartbeat owner refresh must not skip corrupt cursor rows as empty state",
+            ),
+            (
+                "return None",
+                "heartbeat owner refresh must not silently drop active corrupt cursor rows",
+            ),
+        ):
+            match = refresh_body.find(token)
+            if match != -1:
+                add(
+                    "R82_OWNER_PROJECTION_CURSOR_BINDING_FAIL_CLOSED",
+                    owner_projection_read_model,
+                    line_number(text, offset + match),
+                    detail,
+                )
+
 federation_wrappers = cli_root / "src/daemon/invocation/dispatch/federation_wrappers.rs"
 if federation_wrappers.exists():
     text = source(federation_wrappers)

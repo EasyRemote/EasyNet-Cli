@@ -111,3 +111,22 @@ Boundary: an empty registry remains valid. A malformed key in memory or on disk
 is corrupt aggregate state and must make the dependent projection unavailable or
 return an explicit product-boundary error; no alias matching, default tenant
 repair, or row skipping is introduced.
+
+## Owner projection cursor URA binding cutover
+
+Decision: owner projection cursor persistence and publication integrity share
+one canonical owner/host binding rule:
+
+- Agent owner -> same-realm Device host;
+- Device owner -> the same Device URA;
+- Authority owner -> the same Authority URA.
+
+Reason: owner projection cursors are durable lifecycle facts used by
+republication, heartbeat refresh, and purge high-water fencing. Accepting
+arbitrary strings such as `"z"`/`"host"` at the cursor layer lets malformed
+state survive until a later authority boundary rejects it, which recreates a
+second lifecycle authority and makes product failures harder to diagnose.
+
+Boundary: missing cursor store remains the first-boot empty state. A present
+cursor store with malformed or contradictory owner/host URAs is corrupt state
+and fails closed without row skipping or host repair.

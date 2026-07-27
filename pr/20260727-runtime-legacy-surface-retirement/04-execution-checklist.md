@@ -78,3 +78,11 @@
 - [x] Add aggregate regression coverage for malformed registry keys in target projection and registered-name projection.
 - [x] Update convergence gates so the checked projection remains part of the architecture contract.
 - [x] Run focused registry projection tests and canonical convergence gates.
+
+## Iteration 10 — Owner projection cursor URA binding cutover
+
+- [x] Replace non-empty-only owner projection cursor validation with canonical owner/host URA binding validation.
+- [x] Apply the same binding validation to owner projection publication integrity.
+- [x] Remove tests that model cursor ordering with non-URA owner placeholders.
+- [x] Add failure-path coverage for malformed owner URA, malformed host URA, wrong host kind, and contradictory owner/host bindings.
+- [x] Update convergence gates and run focused owner projection tests.

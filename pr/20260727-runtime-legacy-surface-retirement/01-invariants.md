@@ -10,3 +10,7 @@
   Mission target conflict detection, and skill ownership discovery. A malformed
   registry key is corrupt aggregate state and must fail closed; product paths
   must not silently drop the bad row and continue with a partial projection.
+- Owner projection cursors are durable publication lifecycle facts. Each cursor
+  must bind a canonical owner URA to a canonical publisher host state: Agent
+  owners are hosted by a Device in the same realm, Device owners are hosted by
+  themselves, and Authority owners are hosted by themselves.
