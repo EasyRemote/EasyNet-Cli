@@ -14,3 +14,7 @@
   must bind a canonical owner URA to a canonical publisher host state: Agent
   owners are hosted by a Device in the same realm, Device owners are hosted by
   themselves, and Authority owners are hosted by themselves.
+- Builtin plugin provider projection must bind three identity facts before a
+  package binding exists: provider package id, manifest package id, and manifest
+  entrypoint. A provider whose compiled entrypoint does not match its manifest
+  is not a partially loadable plugin.

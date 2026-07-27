@@ -130,3 +130,20 @@ second lifecycle authority and makes product failures harder to diagnose.
 Boundary: missing cursor store remains the first-boot empty state. A present
 cursor store with malformed or contradictory owner/host URAs is corrupt state
 and fails closed without row skipping or host repair.
+
+## Builtin plugin provider entrypoint binding cutover
+
+Decision: validate a provider's compiled entrypoint against its manifest
+entrypoint inside `PluginProviderRegistry::binding_from_provider`, before
+creating a `BuiltinPluginBinding`.
+
+Reason: the provider registry is the daemon-owned list of shipped native-static
+and desktop-companion providers. If it only validates package id, the manifest
+entrypoint remains a second identity fact checked later by package loading. That
+split lets a mismatched provider/manifest pair exist as an apparently valid
+builtin binding, weakening plugin package ownership and making plugin conflict
+diagnosis depend on load order.
+
+Boundary: this reuses the existing manifest-layer builtin entrypoint validator.
+It does not add a new plugin-specific rule or compatibility alias; a mismatched
+entrypoint is a corrupt provider binding and fails closed before projection.

@@ -9889,6 +9889,40 @@ if owner_projection_read_model.exists():
                     detail,
                 )
 
+# Rule 83: builtin plugin provider projection must bind provider identity to the
+# manifest entrypoint before creating a package binding. Package load still
+# validates manifests, but the registry owns the provider -> manifest binding
+# boundary and must not emit a partially-valid builtin binding.
+plugin_provider_registry = cli_root / "src/daemon/plugins/provider_registry.rs"
+if plugin_provider_registry.exists():
+    text = source(plugin_provider_registry)
+    body = rust_method_body(text, "binding_from_provider")
+    if body is None:
+        add(
+            "R83_PLUGIN_PROVIDER_ENTRYPOINT_BINDING",
+            plugin_provider_registry,
+            1,
+            "PluginProviderRegistry must own provider -> builtin binding projection",
+        )
+    else:
+        _, projection_body = body
+        for token, detail in (
+            (
+                "validate_builtin_entrypoint(&manifest, provider.expected_entrypoint())",
+                "provider registry must validate manifest entrypoint against the compiled provider entrypoint",
+            ),
+            (
+                "ProviderManifestMismatch",
+                "provider registry must validate package id before entrypoint projection",
+            ),
+        ):
+            if token not in projection_body:
+                add(
+                    "R83_PLUGIN_PROVIDER_ENTRYPOINT_BINDING",
+                    plugin_provider_registry,
+                    1,
+                    detail,
+                )
 federation_wrappers = cli_root / "src/daemon/invocation/dispatch/federation_wrappers.rs"
 if federation_wrappers.exists():
     text = source(federation_wrappers)

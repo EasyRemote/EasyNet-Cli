@@ -149,3 +149,22 @@
   - passed.
 - `/Users/macbook.silan.tech/.local/bin/codegraph sync`
   - passed; synced 2 changed code files.
+
+## Iteration 11
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph query "PluginProvider provider_registry manifest_body builtin static provider lifecycle compatibility fallback language sidecar helper"`
+- `/Users/macbook.silan.tech/.local/bin/codegraph query "PluginProviderRegistry validate_builtin_entrypoint provider manifest entrypoint binding fail closed"`
+- `cargo test --features axon-pb provider_registry --lib`
+  - 4 passed.
+- `cargo test --features axon-pb plugins::package --lib`
+  - 9 passed.
+- `cargo fmt --check`
+  - passed.
+- `git diff --check`
+  - passed.
+- `tools/scripts/check-architecture-convergence.sh`
+  - passed.
+- `tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - passed.
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync`
+  - passed; synced 1 changed code file.

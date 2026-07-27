@@ -86,3 +86,11 @@
 - [x] Remove tests that model cursor ordering with non-URA owner placeholders.
 - [x] Add failure-path coverage for malformed owner URA, malformed host URA, wrong host kind, and contradictory owner/host bindings.
 - [x] Update convergence gates and run focused owner projection tests.
+
+## Iteration 11 — Builtin plugin provider entrypoint binding cutover
+
+- [x] Move provider/manifest entrypoint identity validation into the provider registry projection.
+- [x] Reuse the manifest-layer `validate_builtin_entrypoint` rule instead of duplicating entrypoint comparison logic.
+- [x] Add provider-registry failure coverage for mismatched compiled provider entrypoints.
+- [x] Update convergence gates so provider registry cannot project mismatched manifests into package bindings.
+- [x] Run focused plugin provider tests and canonical convergence gates.

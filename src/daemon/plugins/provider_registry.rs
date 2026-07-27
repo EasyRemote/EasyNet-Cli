@@ -23,7 +23,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use crate::daemon::plugins::errors::{PluginHostError, Result};
-use crate::daemon::plugins::manifest::PluginPackageManifest;
+use crate::daemon::plugins::manifest::{validate_builtin_entrypoint, PluginPackageManifest};
 use crate::daemon::plugins::package::BuiltinPluginBinding;
 use crate::daemon::plugins::provider::{
     PluginProvider, PluginProviderKind, ProviderBackedBuiltinBinding,
@@ -88,6 +88,7 @@ impl PluginProviderRegistry {
                 provider: provider.package_id(),
             });
         }
+        validate_builtin_entrypoint(&manifest, provider.expected_entrypoint())?;
         if manifest.entrypoint().contains("src/daemon/resources")
             || manifest.entrypoint().contains("daemon::resources::")
         {
@@ -115,6 +116,7 @@ mod tests {
     struct TestProvider {
         package_id: &'static str,
         manifest_body: &'static str,
+        expected_entrypoint: &'static str,
     }
 
     impl PluginProvider for TestProvider {
@@ -135,7 +137,7 @@ mod tests {
         }
 
         fn expected_entrypoint(&self) -> &'static str {
-            "test_plugin::provider"
+            self.expected_entrypoint
         }
 
         fn ability_specs(&self) -> Vec<BuiltinPluginAbilitySpec> {
@@ -152,9 +154,18 @@ mod tests {
     }
 
     fn provider(package_id: &'static str, manifest_body: &'static str) -> Arc<dyn PluginProvider> {
+        provider_with_entrypoint(package_id, manifest_body, "test_plugin::provider")
+    }
+
+    fn provider_with_entrypoint(
+        package_id: &'static str,
+        manifest_body: &'static str,
+        expected_entrypoint: &'static str,
+    ) -> Arc<dyn PluginProvider> {
         Arc::new(TestProvider {
             package_id,
             manifest_body,
+            expected_entrypoint,
         })
     }
 
@@ -203,7 +214,15 @@ layer = "control"
         let body = Box::leak(manifest("other.plugin", "test_plugin::provider").into_boxed_str());
         let mut registry = PluginProviderRegistry::new();
         registry
-            .register(provider("test.plugin", body))
+            .register(provider_with_entrypoint(
+                "test.plugin",
+                body,
+                concat!(
+                    "easynet_cli::daemon::",
+                    "resources::remote_",
+                    "desktop::contribute"
+                ),
+            ))
             .expect("provider registration");
         let err = registry
             .into_builtin_bindings()
@@ -212,6 +231,27 @@ layer = "control"
             err,
             PluginHostError::ProviderManifestMismatch { .. }
         ));
+    }
+
+    #[test]
+    fn rejects_provider_manifest_entrypoint_mismatch() {
+        let body = Box::leak(manifest("test.plugin", "other_plugin::provider").into_boxed_str());
+        let mut registry = PluginProviderRegistry::new();
+        registry
+            .register(provider_with_entrypoint(
+                "test.plugin",
+                body,
+                concat!(
+                    "easynet_cli::daemon::",
+                    "resources::remote_",
+                    "desktop::contribute"
+                ),
+            ))
+            .expect("provider registration");
+        let err = registry
+            .into_builtin_bindings()
+            .expect_err("manifest/provider entrypoint mismatch must fail");
+        assert!(matches!(err, PluginHostError::EntrypointMismatch { .. }));
     }
 
     #[test]
@@ -229,7 +269,15 @@ layer = "control"
         );
         let mut registry = PluginProviderRegistry::new();
         registry
-            .register(provider("test.plugin", body))
+            .register(provider_with_entrypoint(
+                "test.plugin",
+                body,
+                concat!(
+                    "easynet_cli::daemon::",
+                    "resources::remote_",
+                    "desktop::contribute"
+                ),
+            ))
             .expect("provider registration");
         let err = registry
             .into_builtin_bindings()
