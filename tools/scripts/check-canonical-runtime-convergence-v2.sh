@@ -4659,14 +4659,22 @@ check_sdk_control_discovery_strict_wire_contract() {
   local go_test="$cli_root/sdk/go/control_discovery_test.go"
   local py_src="$cli_root/sdk/python/easynet_sdk/providers/runtime/control.py"
   local py_test="$cli_root/sdk/python/tests/test_control_ipc.py"
+  local py_env_src="$cli_root/sdk/python/easynet_sdk/runtime_environment.py"
+  local py_env_test="$cli_root/sdk/python/tests/test_environment.py"
 
-  "$PYTHON_BIN" - "$go_src" "$go_test" "$py_src" "$py_test" <<'PY'
+  "$PYTHON_BIN" - \
+    "$go_src" \
+    "$go_test" \
+    "$py_src" \
+    "$py_test" \
+    "$py_env_src" \
+    "$py_env_test" <<'PY'
 import re
 import sys
 from pathlib import Path
 
-go_src_path, go_test_path, py_src_path, py_test_path = map(Path, sys.argv[1:])
-for path in (go_src_path, go_test_path, py_src_path, py_test_path):
+go_src_path, go_test_path, py_src_path, py_test_path, py_env_src_path, py_env_test_path = map(Path, sys.argv[1:])
+for path in (go_src_path, go_test_path, py_src_path, py_test_path, py_env_src_path, py_env_test_path):
     if not path.exists():
         raise SystemExit(f"sdk_control_discovery_strict_wire:missing:{path}")
 
@@ -4674,12 +4682,17 @@ go_src = go_src_path.read_text(encoding="utf-8")
 go_test = go_test_path.read_text(encoding="utf-8")
 py_src = py_src_path.read_text(encoding="utf-8")
 py_test = py_test_path.read_text(encoding="utf-8")
+py_env_src = py_env_src_path.read_text(encoding="utf-8")
+py_env_test = py_env_test_path.read_text(encoding="utf-8")
 
 for retired in (
     "json.Unmarshal(raw, &wire)",
     "if discovery.capabilityFlags == nil",
     'decoded.get("capability_flags", [])',
     "pages_port=_optional_non_negative_int(decoded.get(\"pages_port\"), \"pages_port\")",
+    "pages_port = _optional_non_negative_int(decoded.get(\"pages_port\"), \"pages_port\")",
+    "control discovery pages_port must be a positive TCP port",
+    "pages_port must be a positive TCP port",
 ):
     if retired in go_src or retired in py_src:
         raise SystemExit(f"sdk_control_discovery_strict_wire:retired_loose_decode:{retired}")
@@ -4687,7 +4700,8 @@ for retired in (
 for token in (
     "decoder.DisallowUnknownFields()",
     "control discovery capability_flags is required",
-    "control discovery pages_port must be a positive TCP port",
+    "PagesPort            *int",
+    '`json:"pages_port,omitempty"`',
 ):
     if token not in go_src:
         raise SystemExit(f"sdk_control_discovery_strict_wire:go_missing:{token}")
@@ -4702,29 +4716,50 @@ for field, ty in (
 for token in (
     "allowed = {",
     '"daemon_identity"',
+    '"pages_port"',
     "unknown = sorted(set(decoded).difference(allowed))",
     "if field_name not in decoded or decoded.get(field_name) is None",
     "control discovery capability_flags is required",
-    "pages_port must be a positive TCP port",
 ):
     if token not in py_src:
         raise SystemExit(f"sdk_control_discovery_strict_wire:python_missing:{token}")
 
+for forbidden in (
+    "pagesPort",
+    "d.pagesPort",
+    "intPointerValue(wire.PagesPort)",
+):
+    if forbidden in go_src:
+        raise SystemExit(f"sdk_control_discovery_strict_wire:go_product_projection:{forbidden}")
+if re.search(r"\bpages_port\s*:", py_src) is not None:
+    raise SystemExit("sdk_control_discovery_strict_wire:python_product_projection:provider_pages_field")
+if re.search(r"\bpages_port\s*:", py_env_src) is not None or "pages_port=" in py_env_src:
+    raise SystemExit("sdk_control_discovery_strict_wire:python_public_projection:pages_port")
+
 for token in (
     "TestFileControlDiscoveryReaderRejectsLooseControlJSON",
+    "TestFileControlDiscoveryReaderIgnoresProviderPagesExtension",
     "retired_attach_hint",
-    '"pages_port":0',
 ):
     if token not in go_test:
         raise SystemExit(f"sdk_control_discovery_strict_wire:go_test_missing:{token}")
+if '"pages_port":0' not in go_test:
+    raise SystemExit("sdk_control_discovery_strict_wire:go_test_missing:provider_pages_extension_fixture")
+if "zero pages port" in go_test:
+    raise SystemExit("sdk_control_discovery_strict_wire:go_test_retired:pages_port_rejection")
 
 for token in (
     "test_discovery_rejects_retired_extension_shape",
+    "test_discovery_accepts_and_ignores_provider_pages_extension",
     "retired_attach_hint",
     '"pages_port": 0',
 ):
     if token not in py_test:
         raise SystemExit(f"sdk_control_discovery_strict_wire:python_test_missing:{token}")
+if 'hasattr(discovery, "pages_port")' not in py_test:
+    raise SystemExit("sdk_control_discovery_strict_wire:python_test_missing:provider_extension_not_projected")
+if 'hasattr(discovery, "pages_port")' not in py_env_test:
+    raise SystemExit("sdk_control_discovery_strict_wire:python_env_test_missing:provider_extension_not_public")
 PY
 }
 

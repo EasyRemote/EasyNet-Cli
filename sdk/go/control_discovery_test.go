@@ -148,6 +148,31 @@ func TestFileControlDiscoveryReaderReadsControlJSON(t *testing.T) {
 	}
 }
 
+func TestFileControlDiscoveryReaderIgnoresProviderPagesExtension(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "control.json")
+	raw := []byte(`{
+		"socket_path":"/tmp/control.sock",
+		"invocation_endpoint":"unix:///tmp/daemon.sock",
+		"pid":42,
+		"daemon_version":"0.91.30",
+		"supported_ipc_versions":{"min":1,"max":1},
+		"capability_flags":["invocation","stream"],
+		"pages_port":0
+	}`)
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	discovery, err := fileControlDiscoveryReader{}.readControlDiscovery(context.Background(), path)
+	if err != nil {
+		t.Fatalf("readControlDiscovery: %v", err)
+	}
+	if discovery.invocationEndpoint != "unix:///tmp/daemon.sock" {
+		t.Fatalf("discovery = %#v", discovery)
+	}
+}
+
 func TestFileControlDiscoveryReaderRejectsLooseControlJSON(t *testing.T) {
 	tests := []struct {
 		name string
@@ -173,18 +198,6 @@ func TestFileControlDiscoveryReaderRejectsLooseControlJSON(t *testing.T) {
 				"pid":42,
 				"daemon_version":"0.91.30",
 				"supported_ipc_versions":{"min":1,"max":1}
-			}`,
-		},
-		{
-			name: "zero pages port",
-			raw: `{
-				"socket_path":"/tmp/control.sock",
-				"invocation_endpoint":"unix:///tmp/daemon.sock",
-				"pid":42,
-				"daemon_version":"0.91.30",
-				"supported_ipc_versions":{"min":1,"max":1},
-				"capability_flags":["invocation"],
-				"pages_port":0
 			}`,
 		},
 	}

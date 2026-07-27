@@ -96,7 +96,6 @@ class _ControlDiscovery:
         default_factory=lambda: _IpcVersionRange(_CONTROL_IPC_VERSION, _CONTROL_IPC_VERSION)
     )
     capability_flags: tuple[str, ...] = ()
-    pages_port: int = 0
 
     @classmethod
     def from_json(cls, raw: bytes | str) -> "_ControlDiscovery":
@@ -152,9 +151,6 @@ class _ControlDiscovery:
                 "control discovery runtime-host version field "
                 f"{_RAW_RUNTIME_HOST_VERSION_FIELD} is required"
             )
-        pages_port = _optional_non_negative_int(decoded.get("pages_port"), "pages_port")
-        if "pages_port" in decoded and (pages_port <= 0 or pages_port > 65535):
-            raise _invalid_control("pages_port must be a positive TCP port")
         return cls(
             socket_path=_optional_string(decoded.get("socket_path"), "socket_path") or "",
             pipe_name=_optional_string(decoded.get("pipe_name"), "pipe_name") or "",
@@ -169,7 +165,6 @@ class _ControlDiscovery:
                 decoded.get("supported_ipc_versions")
             ),
             capability_flags=tuple(flags),
-            pages_port=pages_port,
         )
 
 

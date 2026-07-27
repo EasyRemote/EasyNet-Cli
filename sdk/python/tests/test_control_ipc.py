@@ -94,15 +94,6 @@ class ControlIpcTests(unittest.TestCase):
             {
                 "socket_path": "/tmp/control.sock",
                 "invocation_endpoint": "/tmp/daemon.sock",
-                "pid": 123,
-                "daemon_version": "test",
-                "supported_ipc_versions": {"min": 1, "max": 1},
-                "capability_flags": ["boot_status"],
-                "pages_port": 0,
-            },
-            {
-                "socket_path": "/tmp/control.sock",
-                "invocation_endpoint": "/tmp/daemon.sock",
                 "daemon_identity": {
                     "mode": "device",
                     "realm": "localhost",
@@ -119,6 +110,24 @@ class ControlIpcTests(unittest.TestCase):
                 with self.assertRaises(SDKError) as caught:
                     _ControlDiscovery.from_json(json.dumps(value))
                 self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+
+    def test_discovery_accepts_and_ignores_provider_pages_extension(self) -> None:
+        discovery = _ControlDiscovery.from_json(
+            json.dumps(
+                {
+                    "socket_path": "/tmp/control.sock",
+                    "invocation_endpoint": "/tmp/daemon.sock",
+                    "pid": 123,
+                    "daemon_version": "test",
+                    "supported_ipc_versions": {"min": 1, "max": 1},
+                    "capability_flags": ["boot_status"],
+                    "pages_port": 0,
+                }
+            )
+        )
+
+        self.assertEqual(discovery.invocation_endpoint, "/tmp/daemon.sock")
+        self.assertFalse(hasattr(discovery, "pages_port"))
 
     def test_discovery_missing_raw_version_names_runtime_host_semantic(self) -> None:
         with self.assertRaises(SDKError) as caught:

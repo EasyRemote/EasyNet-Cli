@@ -34,7 +34,6 @@ type controlDiscovery struct {
 	runtimeHostVersion   string
 	supportedIPCVersions IpcVersionRange
 	capabilityFlags      []string
-	pagesPort            int
 }
 
 type controlDiscoveryJSON struct {
@@ -92,9 +91,6 @@ func (d *controlDiscovery) UnmarshalJSON(raw []byte) error {
 			return fmt.Errorf("control discovery capability_flags must contain non-empty strings")
 		}
 	}
-	if wire.PagesPort != nil && (*wire.PagesPort <= 0 || *wire.PagesPort > 65535) {
-		return fmt.Errorf("control discovery pages_port must be a positive TCP port")
-	}
 	d.socketPath = stringPointerValue(wire.SocketPath)
 	d.pipeName = stringPointerValue(wire.PipeName)
 	d.invocationEndpoint = stringPointerValue(wire.InvocationEndpoint)
@@ -102,7 +98,6 @@ func (d *controlDiscovery) UnmarshalJSON(raw []byte) error {
 	d.runtimeHostVersion = *wire.RuntimeHostVersion
 	d.supportedIPCVersions = *wire.SupportedIPCVersions
 	d.capabilityFlags = append([]string(nil), (*wire.CapabilityFlags)...)
-	d.pagesPort = intPointerValue(wire.PagesPort)
 	return nil
 }
 
@@ -170,13 +165,6 @@ func newControlDiscoveryFromJSON(raw []byte) (controlDiscovery, error) {
 func stringPointerValue(value *string) string {
 	if value == nil {
 		return ""
-	}
-	return *value
-}
-
-func intPointerValue(value *int) int {
-	if value == nil {
-		return 0
 	}
 	return *value
 }

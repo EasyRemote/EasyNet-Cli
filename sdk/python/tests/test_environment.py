@@ -164,6 +164,7 @@ class SdkEnvironmentTests(unittest.TestCase):
         self.assertEqual(discovery.supported_ipc_versions.min, 1)
         self.assertEqual(discovery.supported_ipc_versions.max, 1)
         self.assertEqual(discovery.capability_flags, ("invocation",))
+        self.assertFalse(hasattr(discovery, "pages_port"))
 
     def test_default_environment_exposes_no_product_profiles(self) -> None:
         env = SdkEnvironment()

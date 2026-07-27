@@ -61,7 +61,6 @@ class RuntimeControlDiscovery:
     runtime_host_version: str = ""
     supported_ipc_versions: RuntimeIpcVersionRange = RuntimeIpcVersionRange(1, 1)
     capability_flags: tuple[str, ...] = ()
-    pages_port: int = 0
 
 
 def runtime_state_root(control_path: str | Path = "") -> Path:
@@ -104,7 +103,6 @@ def read_runtime_control_discovery(
             discovery.supported_ipc_versions.max,
         ),
         capability_flags=tuple(discovery.capability_flags),
-        pages_port=discovery.pages_port,
     )
 
 
