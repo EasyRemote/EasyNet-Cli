@@ -1090,15 +1090,7 @@ impl UnaryDispatcher {
                     .presented_pubkey_b64
                     .as_deref()
                     .filter(|value| !value.is_empty())
-                    .map(str::to_string)
-                    .or_else(|| {
-                        request
-                            .presented_pubkey_hex
-                            .as_deref()
-                            .filter(|value| !value.is_empty())
-                            .and_then(|hex| hex::decode(hex).ok())
-                            .map(|raw| B64.encode(raw))
-                    });
+                    .map(str::to_string);
                 let resolved = self.admission.resolve_federated_key_b64(
                     &request.agent_ura,
                     presented_pubkey_b64.as_deref(),

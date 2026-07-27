@@ -23,3 +23,7 @@ additionalProperties = false
 [input_schema.properties.agent_ura]
 type = "string"
 description = "Agent, Device, User, or Authority URA whose verifying key is requested."
+
+[input_schema.properties.presented_pubkey_b64]
+type = "string"
+description = "Optional base64 Ed25519 public key observed on the caller envelope; used to pin multi-key principal lookup."

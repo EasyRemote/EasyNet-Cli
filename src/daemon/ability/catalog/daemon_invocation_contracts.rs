@@ -347,7 +347,8 @@ pub(crate) fn input_schema_for(name: &str) -> Option<Value> {
         ),
         ABILITY_FEDERATION_RESOLVE_KEY => object_schema(
             json!({
-                "agent_ura": string_prop("Agent, Device, User, or Authority URA whose verifying key is requested.")
+                "agent_ura": string_prop("Agent, Device, User, or Authority URA whose verifying key is requested."),
+                "presented_pubkey_b64": string_prop("Optional base64 Ed25519 public key observed on the caller envelope; used to pin multi-key principal lookup.")
             }),
             &["agent_ura"],
             false,
@@ -578,6 +579,20 @@ mod tests {
         assert!(
             !properties.contains_key("target_ura") && !properties.contains_key("peers"),
             "proxy schema must not retain retired namespace.resolve/legacy peer fields: {schema}"
+        );
+        assert_eq!(schema["additionalProperties"], false);
+    }
+
+    #[test]
+    fn resolve_key_schema_exposes_only_base64_presented_key_pin() {
+        let schema = input_schema_for(ABILITY_FEDERATION_RESOLVE_KEY).expect("resolve_key schema");
+        assert_schema_requires_only(&schema, &["agent_ura"]);
+        let properties = schema["properties"].as_object().expect("properties");
+        assert!(properties.contains_key("agent_ura"));
+        assert!(properties.contains_key("presented_pubkey_b64"));
+        assert!(
+            !properties.contains_key("presented_pubkey_hex"),
+            "resolve_key schema must not expose retired hex presented-key pin: {schema}"
         );
         assert_eq!(schema["additionalProperties"], false);
     }

@@ -1221,12 +1221,29 @@ check_public_descriptor_authority_vocabulary_contract() {
   if ! rg -q 'Agent, Device, User, or Authority URA whose verifying key is requested\.' "$resolve_key_descriptor"; then
     fail "federation.resolve_key descriptor must describe Authority key targets"
   fi
+  if ! rg -q 'presented_pubkey_b64' "$resolve_key_descriptor"; then
+    fail "federation.resolve_key descriptor must expose canonical presented_pubkey_b64 pin"
+  fi
+  if rg -n 'presented_pubkey_hex' "$resolve_key_descriptor"; then
+    fail "federation.resolve_key descriptor must not expose retired presented_pubkey_hex pin"
+  fi
   if ! rg -q 'Agent or Authority URA that owns the advertised descriptors\.' "$contracts"; then
     fail "daemon catalog schema must describe advertise_abilities Authority owners"
   fi
   if ! rg -q 'Agent, Device, User, or Authority URA whose verifying key is requested\.' "$contracts"; then
     fail "daemon catalog schema must describe resolve_key Authority targets"
   fi
+  "$PYTHON_BIN" - "$contracts" <<'PY'
+import sys
+from pathlib import Path
+
+contracts = Path(sys.argv[1]).read_text(encoding="utf-8")
+production = contracts.split("\n#[cfg(test)]", 1)[0]
+if '"presented_pubkey_b64"' not in production:
+    raise SystemExit("daemon catalog schema must expose canonical presented_pubkey_b64 pin")
+if "presented_pubkey_hex" in production:
+    raise SystemExit("daemon catalog schema must not expose retired presented_pubkey_hex pin")
+PY
   if ! rg -q 'canonical Agent, Device, or Authority URA' "$surface"; then
     fail "descriptor validation error must describe canonical Authority owners"
   fi
@@ -2110,11 +2127,15 @@ check_resolve_key_request_dto_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local wire="$cli_root/src/daemon/federation/wire_contract.rs"
   local resolver="$cli_root/src/daemon/invocation/admission/federated_key_resolver.rs"
+  local wrappers="$cli_root/src/daemon/invocation/dispatch/federation_wrappers.rs"
+  local dispatcher="$cli_root/src/daemon/invocation/dispatch/unary_dispatcher.rs"
   local client_contract="$cli_root/src/daemon/federation/client/ability_contract.rs"
   local join="$cli_root/src/cli/commands/join.rs"
 
   [[ -f "$wire" ]] || fail "federation wire contract source is missing: ${wire#$cli_root/}"
   [[ -f "$resolver" ]] || fail "federated key resolver source is missing: ${resolver#$cli_root/}"
+  [[ -f "$wrappers" ]] || fail "federation wrappers source is missing: ${wrappers#$cli_root/}"
+  [[ -f "$dispatcher" ]] || fail "unary dispatcher source is missing: ${dispatcher#$cli_root/}"
   [[ -f "$client_contract" ]] || fail "federation client ability contract source is missing: ${client_contract#$cli_root/}"
   [[ -f "$join" ]] || fail "join command source is missing: ${join#$cli_root/}"
 
@@ -2136,6 +2157,22 @@ check_resolve_key_request_dto_contract() {
   if rg -n 'presented_pubkey_b64"\]\s*=|insert\("presented_pubkey_b64"' "$resolver"; then
     fail "federated key resolver must not mutate resolve_key presented-key JSON fields"
   fi
+  "$PYTHON_BIN" - "$wire" "$wrappers" "$dispatcher" <<'PY'
+import sys
+from pathlib import Path
+
+wire, wrappers, dispatcher = [Path(arg).read_text(encoding="utf-8") for arg in sys.argv[1:]]
+for name, text in (
+    ("wire_contract", wire),
+    ("federation_wrappers", wrappers),
+    ("unary_dispatcher", dispatcher),
+):
+    production = text.split("\n#[cfg(test)]", 1)[0]
+    if "presented_pubkey_hex" in production:
+        raise SystemExit(f"resolve_key_request_dto:retired_presented_pubkey_hex:{name}")
+if "resolve_key_request_rejects_retired_presented_pubkey_hex" not in wire:
+    raise SystemExit("resolve_key_request_dto:missing_retired_hex_negative_test")
+PY
   if ! rg -q 'ResolveKeyRequest::new\(agent_ura\)' "$resolver"; then
     fail "federated key resolver must construct outbound requests through ResolveKeyRequest"
   fi
@@ -22142,6 +22179,7 @@ EOF
   fi
   mkdir -p "$tmp/resolve-key-request-dto-legacy/src/daemon/federation/client" \
     "$tmp/resolve-key-request-dto-legacy/src/daemon/invocation/admission" \
+    "$tmp/resolve-key-request-dto-legacy/src/daemon/invocation/dispatch" \
     "$tmp/resolve-key-request-dto-legacy/src/cli/commands"
   printf '%s\n' \
     '#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]' \
@@ -22162,6 +22200,12 @@ EOF
     '  if let Some(pk) = pk { args["presented_pubkey_b64"] = serde_json::Value::String(pk.to_string()); }' \
     '}' \
     > "$tmp/resolve-key-request-dto-legacy/src/daemon/invocation/admission/federated_key_resolver.rs"
+  printf '%s\n' \
+    'fn handle_resolve_key() {}' \
+    > "$tmp/resolve-key-request-dto-legacy/src/daemon/invocation/dispatch/federation_wrappers.rs"
+  printf '%s\n' \
+    'fn dispatch_federation_resolve_key() {}' \
+    > "$tmp/resolve-key-request-dto-legacy/src/daemon/invocation/dispatch/unary_dispatcher.rs"
   printf '%s\n' \
     'fn join(target: Target) {' \
     '  let resolve_args = crate::daemon::federation::client::ability_contract::ResolveKeyArgs { agent_ura: target.hub_ura.clone() };' \

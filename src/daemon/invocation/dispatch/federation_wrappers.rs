@@ -901,15 +901,7 @@ pub fn handle_resolve_key(
         .presented_pubkey_b64
         .as_deref()
         .filter(|s| !s.is_empty())
-        .map(str::to_string)
-        .or_else(|| {
-            request
-                .presented_pubkey_hex
-                .as_deref()
-                .filter(|s| !s.is_empty())
-                .and_then(|hex| hex::decode(hex).ok())
-                .map(|raw| BASE64_STANDARD.encode(raw))
-        });
+        .map(str::to_string);
     if let Some(pk) = presented_pubkey_b64.as_deref() {
         if let Some(entry) = trust_anchor.lookup_user_by_pubkey(&request.agent_ura, pk) {
             return resolve_key_response(
@@ -2484,7 +2476,6 @@ mod tests {
             &ResolveKeyRequest {
                 agent_ura: "easynet:///r/realm-a/device/n1".to_string(),
                 presented_pubkey_b64: None,
-                presented_pubkey_hex: None,
             },
             &anchor,
         )
@@ -2513,7 +2504,6 @@ mod tests {
             &ResolveKeyRequest {
                 agent_ura: "easynet:///r/realm-a/device/missing".to_string(),
                 presented_pubkey_b64: None,
-                presented_pubkey_hex: None,
             },
             &anchor,
         );
@@ -2565,7 +2555,6 @@ mod tests {
             &ResolveKeyRequest {
                 agent_ura: alice.to_string(),
                 presented_pubkey_b64: Some(pk_a.to_string()),
-                presented_pubkey_hex: None,
             },
             &anchor,
         )
@@ -2578,7 +2567,6 @@ mod tests {
             &ResolveKeyRequest {
                 agent_ura: alice.to_string(),
                 presented_pubkey_b64: Some(pk_b.to_string()),
-                presented_pubkey_hex: None,
             },
             &anchor,
         )
@@ -2593,7 +2581,6 @@ mod tests {
                 presented_pubkey_b64: Some(
                     "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC=".to_string(),
                 ),
-                presented_pubkey_hex: None,
             },
             &anchor,
         );
@@ -2625,7 +2612,6 @@ mod tests {
             &ResolveKeyRequest {
                 agent_ura: device.to_string(),
                 presented_pubkey_b64: Some(pk.to_string()),
-                presented_pubkey_hex: None,
             },
             &anchor,
         )
@@ -2637,7 +2623,6 @@ mod tests {
             &ResolveKeyRequest {
                 agent_ura: device.to_string(),
                 presented_pubkey_b64: Some(other.to_string()),
-                presented_pubkey_hex: None,
             },
             &anchor,
         );

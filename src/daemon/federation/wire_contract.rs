@@ -164,8 +164,6 @@ pub struct ResolveKeyRequest {
     pub agent_ura: String,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub presented_pubkey_b64: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub presented_pubkey_hex: Option<String>,
 }
 
 impl ResolveKeyRequest {
@@ -174,7 +172,6 @@ impl ResolveKeyRequest {
         Self {
             agent_ura: agent_ura.into(),
             presented_pubkey_b64: None,
-            presented_pubkey_hex: None,
         }
     }
 
@@ -247,7 +244,21 @@ mod tests {
         );
         assert!(
             value.get("presented_pubkey_hex").is_none(),
-            "hex pin is inbound-only unless explicitly supplied by a deserialized caller: {value}"
+            "hex pin must not be serialized as compatibility data: {value}"
+        );
+    }
+
+    #[test]
+    fn resolve_key_request_rejects_retired_presented_pubkey_hex() {
+        let error = serde_json::from_value::<ResolveKeyRequest>(serde_json::json!({
+            "agent_ura": "easynet:///r/acme/user/alice",
+            "presented_pubkey_hex": "00"
+        }))
+        .expect_err("retired hex presented-key pin must fail closed");
+
+        assert!(
+            error.to_string().contains("presented_pubkey_hex"),
+            "rejection must name retired field: {error}"
         );
     }
 
