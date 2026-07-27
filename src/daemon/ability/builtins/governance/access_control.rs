@@ -681,7 +681,8 @@ fn project_failure(
             .get("canonical_hash")
             .and_then(Value::as_str)
             .unwrap_or("");
-        if !canonical_hash.is_empty() {
+        let verifier_ura = projection.rejector_ura.as_deref().unwrap_or("");
+        if !canonical_hash.is_empty() && !verifier_ura.is_empty() {
             projection.signature_decision = Some(SignatureDecision {
                 decision: SignatureDecisionOutcome::Invalid,
                 reason: SignatureDecisionReason::from_admission_detail(reason),
@@ -695,7 +696,7 @@ fn project_failure(
                     .and_then(Value::as_str)
                     .map(str::to_string),
                 presented_pubkey_fingerprint: None,
-                verifier_ura: projection.rejector_ura.clone().unwrap_or_default(),
+                verifier_ura: verifier_ura.to_string(),
             });
         }
     }
@@ -1179,6 +1180,57 @@ mod tests {
     use crate::cli::commands::test_support::HomeGuard;
     use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 
+    fn signature_failure_record() -> axon_sdk::invocation::InvocationLedgerRecord {
+        axon_sdk::invocation::InvocationLedgerRecordBuilder::new()
+            .invocation_ura("easynet:///r/test/resource/alice.invocations/req-signature")
+            .request_id("req-signature")
+            .trace_id("trace-signature")
+            .span_id("span-signature")
+            .caller_ura("easynet:///r/test/user/alice")
+            .callee_ura("easynet:///r/test/device/dev-a")
+            .subject_ura("easynet:///r/test/resource/user.alice/session/session-target")
+            .ability_ura("easynet:///r/test/ability/device.dev-a.terminal.attach")
+            .ability_name("terminal.attach")
+            .descriptor_ref("easynet:///r/test/ability/device.dev-a.terminal.attach@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!stream")
+            .admission_action("stream")
+            .authority_form("self")
+            .safe_read(false)
+            .state("failed")
+            .started_unix_ms(1)
+            .args(axon_sdk::invocation::LedgerEventPayload::digest(
+                "application/json",
+                b"{}",
+            ))
+            .build()
+            .expect("signature failure record")
+    }
+
+    fn signature_failure_error(mut body: Value) -> axon_sdk::invocation::LedgerErrorRecord {
+        let object = body
+            .as_object_mut()
+            .expect("signature failure body must be an object");
+        object.insert("decision".to_string(), Value::String("deny".to_string()));
+        object.insert(
+            "target_reason".to_string(),
+            Value::String("CALLER_SIGNATURE_VERIFY_FAILED".to_string()),
+        );
+        object.insert(
+            "canonical_hash".to_string(),
+            Value::String("sha256:signature".to_string()),
+        );
+        object.insert(
+            "signature_key_id".to_string(),
+            Value::String("ed25519:key".to_string()),
+        );
+        axon_sdk::invocation::LedgerErrorRecord {
+            source: "daemon_invocation_service".to_string(),
+            code: "SIGNATURE_DENIED".to_string(),
+            message: format!("SIGNATURE_DENIED: {body}"),
+            retryable: false,
+            context: std::collections::BTreeMap::new(),
+        }
+    }
+
     #[test]
     fn registration_makes_rfc014_abilities_dispatchable() {
         let mut reg = AxonAbilityCatalog::new_test_metadata_for_device_authority(
@@ -1218,6 +1270,43 @@ mod tests {
         assert_eq!(
             AUTHORITY_BINDING_GRANT,
             crate::daemon::ability::access_control_routes_gen::AUTHORITY_BINDING_GRANT
+        );
+    }
+
+    #[test]
+    fn admission_explain_signature_projection_rejects_missing_verifier_ura() {
+        let record = signature_failure_record();
+        let error = signature_failure_error(json!({}));
+
+        let projection = project_failure(&error, &record);
+
+        assert_eq!(projection.rejector_ura, None);
+        assert!(
+            projection.signature_decision.is_none(),
+            "signature decision must not be projected with an empty verifier_ura"
+        );
+    }
+
+    #[test]
+    fn admission_explain_signature_projection_uses_rejector_as_verifier_ura() {
+        let record = signature_failure_record();
+        let error = signature_failure_error(json!({
+            "rejector_ura": "easynet:///r/test/device/dev-a"
+        }));
+
+        let projection = project_failure(&error, &record);
+        let signature = projection
+            .signature_decision
+            .expect("complete signature failure should project a signature decision");
+
+        assert_eq!(
+            signature.verifier_ura, "easynet:///r/test/device/dev-a",
+            "verifier_ura must be the structured rejector, never a default"
+        );
+        assert_eq!(signature.caller_ura, "easynet:///r/test/user/alice");
+        assert_eq!(
+            signature.reason,
+            SignatureDecisionReason::CallerSignatureVerifyFailed
         );
     }
 

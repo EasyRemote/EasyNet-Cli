@@ -4387,6 +4387,35 @@ for retired in (
 PY
 }
 
+check_access_control_explain_projection_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local access_control="$cli_root/src/daemon/ability/builtins/governance/access_control.rs"
+  [[ -f "$access_control" ]] || fail "access-control governance source is missing: ${access_control#$cli_root/}"
+
+  "$PYTHON_BIN" - "$access_control" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+production = text.split("#[cfg(test)]", 1)[0]
+
+if "projection.rejector_ura.clone().unwrap_or_default()" in production:
+    raise SystemExit("access_control_explain_projection:empty_verifier_ura_fallback")
+if "verifier_ura: verifier_ura.to_string()" not in production:
+    raise SystemExit("access_control_explain_projection:verifier_not_bound_to_rejector")
+if "if !canonical_hash.is_empty() && !verifier_ura.is_empty()" not in production:
+    raise SystemExit("access_control_explain_projection:signature_decision_not_guarded_by_verifier")
+
+for required_test in (
+    "admission_explain_signature_projection_rejects_missing_verifier_ura",
+    "admission_explain_signature_projection_uses_rejector_as_verifier_ura",
+):
+    if required_test not in text:
+        raise SystemExit(f"access_control_explain_projection:test_missing:{required_test}")
+PY
+}
+
 check_access_control_policy_schema_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local grant_matcher="$cli_root/src/daemon/invocation/admission/grant_matcher.rs"
@@ -27591,6 +27620,7 @@ EOF
   check_authority_proof_session_fact_contract
   check_child_invocation_route_ref_traceability_contract
   check_admission_signature_reason_canonicalization_contract
+  check_access_control_explain_projection_contract
   check_access_control_policy_schema_contract
   check_access_control_store_schema_contract
   check_resources_schema_contract
@@ -27853,6 +27883,7 @@ check_auth_session_owner_fact_contract
 check_authority_proof_session_fact_contract
 check_child_invocation_route_ref_traceability_contract
 check_admission_signature_reason_canonicalization_contract
+check_access_control_explain_projection_contract
 check_access_control_policy_schema_contract
 check_access_control_store_schema_contract
 check_resources_schema_contract
