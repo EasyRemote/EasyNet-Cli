@@ -147,16 +147,6 @@ def _history_call(
         "issued_at_ms": 1000,
         "expires_at_ms": 2000,
     }
-    metadata = base64.b64encode(
-        json.dumps(
-            {
-                "payload": payload,
-                "signature": base64.b64encode(b"session-signature").decode("ascii"),
-            },
-            separators=(",", ":"),
-            sort_keys=True,
-        ).encode("utf-8")
-    ).decode("ascii")
     return RuntimeCallContext(
         caller_ura=caller_ura,
         callee_ura=callee_ura,
@@ -164,8 +154,23 @@ def _history_call(
         nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
         causal_context={"form": "none"},
         metadata={"request_id": "call-1"},
-        authority=SessionAuthority.from_metadata(metadata),
+        authority=SessionAuthority.from_metadata(
+            _authority_metadata_value(payload, b"session-signature")
+        ),
     )
+
+
+def _authority_metadata_value(payload: dict[str, object], signature: bytes) -> str:
+    return base64.b64encode(
+        json.dumps(
+            {
+                "payload": payload,
+                "signature": base64.b64encode(signature).decode("ascii"),
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    ).decode("ascii")
 
 
 def test_receipt_reference_uses_canonical_axon_scalar_projection() -> None:
@@ -387,15 +392,19 @@ def test_runtime_receipt_provider_accepts_matching_device_owner_subject() -> Non
         causal_context=call.causal_context,
         descriptor_version=call.descriptor_version,
         metadata={},
-        authority=DelegationProof(
-            issuer_ura=call.caller_ura,
-            subject_ura=device_ura,
-            caller_ura=call.caller_ura,
-            audience=device_ura,
-            scopes=("invocation.history.*",),
-            issued_at_ms=1000,
-            expires_at_ms=2000,
-            signature=b"delegation-signature",
+        authority=DelegationProof.from_metadata(
+            _authority_metadata_value(
+                {
+                    "issuer_ura": call.caller_ura,
+                    "subject_ura": device_ura,
+                    "caller_ura": call.caller_ura,
+                    "audience": device_ura,
+                    "scopes": ["invocation.history.*"],
+                    "issued_at_ms": 1000,
+                    "expires_at_ms": 2000,
+                },
+                b"delegation-signature",
+            )
         ),
     )
     transport.output_json = _output(records=[])
@@ -412,6 +421,27 @@ def test_runtime_receipt_provider_accepts_matching_device_owner_subject() -> Non
             "provider": "receipt_history",
         }
     ]
+
+
+def test_runtime_receipt_provider_rejects_device_owner_subject_with_session_authority() -> None:
+    provider, transport = _provider()
+    device_ura = "easynet:///r/example/device/dev-a"
+    call = _history_call(callee_ura=device_ura)
+    device_call = RuntimeCallContext(
+        caller_ura=call.caller_ura,
+        callee_ura=device_ura,
+        subject_ura=device_ura,
+        nonce_base64=call.nonce_base64,
+        causal_context=call.causal_context,
+        descriptor_version=call.descriptor_version,
+        metadata={},
+        authority=call.authority,
+    )
+
+    with pytest.raises(SDKError, match="runtime-owner receipt history subject") as caught:
+        provider.list(ReceiptListRequest(call=device_call))
+    assert caught.value.code == ErrorCode.AUTHORITY_DENIED
+    assert transport.descriptor_requests == []
 
 
 def test_runtime_receipt_provider_rejects_incomplete_route_set() -> None:

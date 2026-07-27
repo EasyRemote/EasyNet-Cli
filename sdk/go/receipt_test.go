@@ -281,6 +281,27 @@ func TestRuntimeReceiptProviderAcceptsMatchingDeviceOwnerSubject(t *testing.T) {
 	}
 }
 
+func TestRuntimeReceiptProviderRejectsDeviceOwnerSubjectWithSessionAuthority(t *testing.T) {
+	transport := RuntimeTransportFunc{
+		ResolveDescriptorRefFunc: func(context.Context, []byte) ([]byte, error) {
+			t.Fatal("descriptor resolver transport must not run before history authority admission")
+			return nil, nil
+		},
+	}
+	runtime, _ := NewRuntimeClient(transport)
+	ability, _ := NewRuntimeAbilityClient(runtime, NewCanonicalAddressing())
+	provider, _ := NewRuntimeReceiptProvider(ability)
+	call := runtimeReceiptHistoryTestContext(t)
+	call.SubjectURA = call.CalleeURA
+
+	_, err := provider.List(context.Background(), ReceiptListRequest{Call: call})
+	if err == nil ||
+		!IsCode(err, ErrAuthorityDenied) ||
+		!strings.Contains(err.Error(), "runtime-owner receipt history subject") {
+		t.Fatalf("List error = %v, want runtime-owner session authority rejection", err)
+	}
+}
+
 func runtimeReceiptHistoryTestContext(t *testing.T) RuntimeCallContext {
 	return runtimeReceiptHistoryTestContextWithScope(t, "invocation.history.*")
 }

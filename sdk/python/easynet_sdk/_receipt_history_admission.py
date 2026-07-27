@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Mapping
 
 from ._runtime_subjects import is_runtime_governance_read_subject_ura
+from ._runtime_subjects import is_runtime_state_read_subject_ura
 from ._session_authority_subjects import session_authority_admits_subject
 from .authority import (
     DELEGATION_METADATA_KEY,
@@ -166,6 +167,12 @@ def _validate_receipt_history_authority_binding(
             raise _history_error(
                 ErrorCode.AUTHORITY_DENIED,
                 "session authority audience does not admit receipt query callee_ura",
+                details,
+            )
+        if not is_runtime_state_read_subject_ura(subject_ura):
+            raise _history_error(
+                ErrorCode.AUTHORITY_DENIED,
+                "session authority cannot authorize a runtime-owner receipt history subject; use a delegation authority or a user-owned runtime-state read subject",
                 details,
             )
         if not session_authority_admits_subject(authority, subject_ura):

@@ -1031,6 +1031,15 @@ func validateSessionHistorySessionBinding(
 	if !authority.MatchesAudience(calleeURA) {
 		return v3SessionError(ErrAuthorityDenied, "history", "session authority audience does not admit receipt query callee_ura", details, nil)
 	}
+	if !isRuntimeStateReadSubjectURA(subjectURA) {
+		return v3SessionError(
+			ErrAuthorityDenied,
+			"history",
+			"session authority cannot authorize a runtime-owner receipt history subject; use a delegation authority or a user-owned runtime-state read subject",
+			details,
+			nil,
+		)
+	}
 	if !runtimeSessionAuthorityAdmitsSubject(authority, subjectURA) {
 		return v3SessionError(ErrAuthoritySubjectMismatch, "history", "session authority subject does not admit receipt query subject_ura", details, nil)
 	}

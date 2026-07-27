@@ -3816,6 +3816,13 @@ function validateSessionHistorySessionBinding(authority, callerURA, calleeURA, s
       details,
     );
   }
+  if (!isRuntimeStateReadSubjectURA(subjectURA)) {
+    throw historyError(
+      ErrorCode.AUTHORITY_DENIED,
+      "session authority cannot authorize a runtime-owner receipt history subject; use a delegation authority or a user-owned runtime-state read subject",
+      details,
+    );
+  }
   if (!sessionAuthorityAdmitsSubject(authority, subjectURA)) {
     throw historyError(
       ErrorCode.AUTHORITY_SUBJECT_MISMATCH,

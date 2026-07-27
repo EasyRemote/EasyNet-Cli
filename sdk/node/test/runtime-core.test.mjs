@@ -1795,6 +1795,44 @@ test("session history preflight rejects non-callee runtime-owner subject before 
   assert.equal(providerCalls, 0);
 });
 
+test("session history preflight rejects runtime-owner subject with session authority before provider", async () => {
+  let providerCalls = 0;
+  const history = new sdk.SessionHistoryOperations({
+    list: () => {
+      providerCalls += 1;
+      return {
+        records: [],
+        next_cursor: "",
+        limit: 50,
+        source: "invocation.history.list",
+      };
+    },
+  });
+
+  await assert.rejects(
+    () =>
+      history.list({
+        call: {
+          caller_ura: caller,
+          callee_ura: callee,
+          subject_ura: callee,
+          nonce_base64: nonce,
+          causal_context: { form: "none" },
+          metadata: {
+            [sdk.SESSION_AUTHORITY_METADATA_KEY]: historySessionValue(),
+          },
+        },
+        limit: 50,
+      }),
+    (error) =>
+      error instanceof sdk.SDKError &&
+      error.code === sdk.ErrorCode.AUTHORITY_DENIED &&
+      error.stage === "history" &&
+      /session authority cannot authorize a runtime-owner receipt history subject/.test(error.message),
+  );
+  assert.equal(providerCalls, 0);
+});
+
 test("session history keeps subject filters as ledger predicates", async () => {
   let seenRequest = null;
   const history = new sdk.SessionHistoryOperations({
