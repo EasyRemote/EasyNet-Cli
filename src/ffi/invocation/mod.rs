@@ -4876,14 +4876,10 @@ async fn run_bidi_down_reader(
                     next_error_sequence = sequence.saturating_add(1).max(1);
                     let projection = match bidi_down_frame_json(&mut receipt_verifier, frame) {
                         Ok(projection) => projection,
-                        Err(message) => {
-                            let _ = tx.send(serde_json::json!({
-                                "ok": false,
-                                "kind": "receipt_verification_error",
-                                "sequence": sequence,
-                                "message": message,
-                                "terminal": false,
-                            }).to_string().into_bytes()).await;
+                        Err(error) => {
+                            let _ = tx
+                                .send(error.into_json(sequence).to_string().into_bytes())
+                                .await;
                             break;
                         }
                     };
@@ -6313,6 +6309,40 @@ struct CallbackFrameProjection {
 }
 
 #[cfg(feature = "axon-pb")]
+#[derive(Clone, Debug)]
+struct CallbackFrameProjectionError {
+    kind: &'static str,
+    message: String,
+}
+
+#[cfg(feature = "axon-pb")]
+impl CallbackFrameProjectionError {
+    fn receipt_verification(message: impl Into<String>) -> Self {
+        Self {
+            kind: "receipt_verification_error",
+            message: message.into(),
+        }
+    }
+
+    fn protocol(message: impl Into<String>) -> Self {
+        Self {
+            kind: "protocol_error",
+            message: message.into(),
+        }
+    }
+
+    fn into_json(self, sequence: u64) -> serde_json::Value {
+        serde_json::json!({
+            "ok": false,
+            "kind": self.kind,
+            "sequence": sequence,
+            "message": self.message,
+            "terminal": false,
+        })
+    }
+}
+
+#[cfg(feature = "axon-pb")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CallbackFrameLifecycle {
     Continue,
@@ -6403,22 +6433,41 @@ fn stream_status_error_json(status: tonic::Status, sequence: u64) -> serde_json:
 fn bidi_down_frame_json(
     verifier: &mut InboundReceiptCheckpointVerifier,
     frame: axon_sdk::pb::axon::v1::InvokeBidiDown,
-) -> Result<CallbackFrameProjection, String> {
+) -> Result<CallbackFrameProjection, CallbackFrameProjectionError> {
     use axon_sdk::pb::axon::v1::invoke_bidi_down::Payload;
     use base64::Engine;
     let mac_base64 = base64::engine::general_purpose::STANDARD.encode(&frame.mac);
     match frame.payload {
         Some(Payload::Receipt(receipt)) => {
             let state = axon_sdk::invocation::InvocationState::try_from(receipt.state)
-                .map_err(|error| format!("bidi receipt state is invalid: {error}"))?;
-            let (summary, is_admission, is_terminal) =
-                if state == axon_sdk::invocation::InvocationState::Admitted {
-                    (verifier.verify_admission(receipt)?, true, false)
-                } else if state.is_terminal() {
-                    (verifier.verify_terminal(receipt)?, false, true)
-                } else {
-                    return Err("bidi receipt is neither admission nor terminal checkpoint".into());
-                };
+                .map_err(|error| {
+                    CallbackFrameProjectionError::protocol(format!(
+                        "bidi receipt state is invalid: {error}"
+                    ))
+                })?;
+            let (summary, is_admission, is_terminal) = if state
+                == axon_sdk::invocation::InvocationState::Admitted
+            {
+                (
+                    verifier
+                        .verify_admission(receipt)
+                        .map_err(CallbackFrameProjectionError::receipt_verification)?,
+                    true,
+                    false,
+                )
+            } else if state.is_terminal() {
+                (
+                    verifier
+                        .verify_terminal(receipt)
+                        .map_err(CallbackFrameProjectionError::receipt_verification)?,
+                    false,
+                    true,
+                )
+            } else {
+                return Err(CallbackFrameProjectionError::protocol(
+                    "bidi receipt is neither admission nor terminal checkpoint",
+                ));
+            };
             let lifecycle = if is_terminal {
                 CallbackFrameLifecycle::CanonicalTerminal
             } else {
@@ -6470,32 +6519,13 @@ fn bidi_down_frame_json(
                 CallbackFrameLifecycle::Continue,
             ))
         }
-        // Carrier-v1 frames (DEC-F004): the FFI JSON projection learns
-        // these shapes when dual-read lands (T2.1 steps 2-3); until
-        // then they surface as an explicit unsupported event.
         Some(Payload::DispatchCall(_)) | Some(Payload::ReverseDispatchResult(_)) => {
-            Ok(CallbackFrameProjection::new(
-                serde_json::json!({
-                    "ok": false,
-                    "kind": "unsupported_frame",
-                    "sequence": frame.sequence,
-                    "mac_base64": mac_base64,
-                    "message": "carrier-v1 dispatch frame before dual-read support",
-                    "terminal": false,
-                }),
-                CallbackFrameLifecycle::Continue,
+            Err(CallbackFrameProjectionError::protocol(
+                "runtime bidi callback frame is unsupported by the FFI direct invocation capability",
             ))
         }
-        None => Ok(CallbackFrameProjection::new(
-            serde_json::json!({
-                "ok": false,
-                "kind": "unknown",
-                "sequence": frame.sequence,
-                "mac_base64": mac_base64,
-                "message": "InvokeBidiDown frame has no payload",
-                "terminal": false,
-            }),
-            CallbackFrameLifecycle::Continue,
+        None => Err(CallbackFrameProjectionError::protocol(
+            "runtime bidi frame did not include a payload",
         )),
     }
 }
@@ -11516,5 +11546,61 @@ mod tests {
         assert_eq!(value["sequence"], 4);
         assert_eq!(value["control"]["eof"], true);
         assert_eq!(value["terminal"], false);
+    }
+
+    #[test]
+    fn bidi_down_callback_carrier_fails_closed_instead_of_compat_event() {
+        for payload in [
+            axon_sdk::pb::axon::v1::invoke_bidi_down::Payload::DispatchCall(
+                axon_sdk::pb::axon::v1::DispatchCall::default(),
+            ),
+            axon_sdk::pb::axon::v1::invoke_bidi_down::Payload::ReverseDispatchResult(
+                axon_sdk::pb::axon::v1::ReverseDispatchResult::default(),
+            ),
+        ] {
+            let frame = axon_sdk::pb::axon::v1::InvokeBidiDown {
+                sequence: 9,
+                payload: Some(payload),
+                ..axon_sdk::pb::axon::v1::InvokeBidiDown::default()
+            };
+            let error = bidi_down_frame_json(&mut InboundReceiptCheckpointVerifier::new(), frame)
+                .expect_err("callback carrier frames are not direct FFI bidi events");
+            let value = error.into_json(9);
+            assert_eq!(value["ok"], false);
+            assert_eq!(value["kind"], "protocol_error");
+            assert_eq!(value["sequence"], 9);
+            assert_eq!(value["terminal"], false);
+            assert!(value["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("runtime bidi callback frame is unsupported"));
+            assert_ne!(
+                value["kind"],
+                serde_json::Value::String(format!("unsupported_{}", "frame"))
+            );
+        }
+    }
+
+    #[test]
+    fn bidi_down_missing_payload_fails_closed_instead_of_unknown_event() {
+        let frame = axon_sdk::pb::axon::v1::InvokeBidiDown {
+            sequence: 10,
+            payload: None,
+            ..axon_sdk::pb::axon::v1::InvokeBidiDown::default()
+        };
+
+        let error = bidi_down_frame_json(&mut InboundReceiptCheckpointVerifier::new(), frame)
+            .expect_err("missing payload is a protocol error");
+        let value = error.into_json(10);
+
+        assert_eq!(value["ok"], false);
+        assert_eq!(value["kind"], "protocol_error");
+        assert_eq!(value["sequence"], 10);
+        assert_eq!(value["terminal"], false);
+        assert_eq!(
+            value["message"],
+            "runtime bidi frame did not include a payload"
+        );
+        assert_ne!(value["kind"], "unknown");
     }
 }
