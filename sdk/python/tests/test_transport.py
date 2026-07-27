@@ -21,7 +21,6 @@ from easynet_sdk import (
     RetryHint,
     RuntimeClient,
     SDKError,
-    Signer,
     StreamState,
     is_code,
 )
@@ -34,7 +33,7 @@ from test_runtime import (
     canonical_runtime_receipt_pair,
     complete_draft,
 )
-from test_signing import signer_handle, signer_with_signature
+from test_signing import signer_with_signature
 
 
 def _load_patch(raw: FakeRawCABI):

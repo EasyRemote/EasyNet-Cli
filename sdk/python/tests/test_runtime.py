@@ -22,11 +22,10 @@ from easynet_sdk import (
     RuntimeRecoveryRequest,
     RuntimeReceipt,
     SDKError,
-    Signer,
     is_code,
 )
 
-from test_signing import PREPARED_FIXTURE, signer_handle, signer_with_signature
+from test_signing import PREPARED_FIXTURE, signer_with_signature
 
 
 class MemoryRuntimeTransport:

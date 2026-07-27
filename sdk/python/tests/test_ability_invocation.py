@@ -14,14 +14,13 @@ from easynet_sdk import (
     PrepareOptions,
     RuntimeClient,
     SDKError,
-    Signer,
     is_code,
 )
 from easynet_sdk import AddressingClient
 
 from addressing_fake import MemoryAddressingTransport
 from test_runtime import MemoryRuntimeTransport, canonical_runtime_receipt_pair
-from test_signing import signer_handle, signer_with_signature
+from test_signing import signer_with_signature
 
 
 ABILITY_URA = "easynet:///r/example/ability/device.dev-a.observe.health"
