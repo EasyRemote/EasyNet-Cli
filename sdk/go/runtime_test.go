@@ -523,6 +523,10 @@ func TestRuntimeReceiptRejectsMalformedCanonicalProofFacts(t *testing.T) {
 			proof := receipt["authority_proof"].(map[string]any)
 			delete(proof, "proof_payload_base64")
 		},
+		"missing proof signature": func(receipt map[string]any) {
+			proof := receipt["authority_proof"].(map[string]any)
+			delete(proof, "signature")
+		},
 		"legacy proof issuer metadata": func(receipt map[string]any) {
 			proof := receipt["authority_proof"].(map[string]any)
 			issuer := cloneRuntimeTestMap(proof["issuer"].(map[string]any))
@@ -595,7 +599,7 @@ func TestRuntimeReceiptRejectsTypedProjectionThatDiffersFromRaw(t *testing.T) {
 	}
 }
 
-func TestRuntimeReceiptAcceptsBindingHashProofWithoutPayloadOrSignature(t *testing.T) {
+func TestRuntimeReceiptAcceptsBindingHashProofWithoutPayload(t *testing.T) {
 	fixture := canonicalRuntimeReceiptFixture("inv-empty-proof", "completed", "Completed", 1)
 	proof := fixture["authority_proof"].(map[string]any)
 	proof["proof_payload_base64"] = ""
@@ -603,7 +607,6 @@ func TestRuntimeReceiptAcceptsBindingHashProofWithoutPayloadOrSignature(t *testi
 		axoninv.SelfAuthority("easynet:///r/example/device/dev-a"),
 	)
 	proof["proof_hash_hex"] = hex.EncodeToString(proofHash[:])
-	delete(proof, "signature")
 
 	receipt, err := NewRuntimeReceiptFromJSON(mustJSON(fixture))
 	if err != nil {
@@ -612,8 +615,8 @@ func TestRuntimeReceiptAcceptsBindingHashProofWithoutPayloadOrSignature(t *testi
 	if receipt.AuthorityProof == nil || receipt.AuthorityProof.ProofPayloadBase64 != "" {
 		t.Fatalf("unexpected authority proof projection: %#v", receipt.AuthorityProof)
 	}
-	if receipt.AuthorityProof.Signature != nil {
-		t.Fatalf("optional authority proof signature was synthesized: %#v", receipt.AuthorityProof.Signature)
+	if receipt.AuthorityProof.Signature == nil {
+		t.Fatalf("mandatory authority proof signature missing from projection: %#v", receipt.AuthorityProof)
 	}
 }
 
@@ -648,7 +651,6 @@ func TestRuntimeReceiptSessionAuthorityFacadeUsesGenericFields(t *testing.T) {
 		Signature:   bytes.Repeat([]byte{0x73}, 64),
 	}))
 	proof["proof_hash_hex"] = hex.EncodeToString(proofHash[:])
-	delete(proof, "signature")
 
 	if _, err := NewRuntimeReceiptFromJSON(mustJSON(fixture)); err != nil {
 		t.Fatalf("NewRuntimeReceiptFromJSON accepted generic session authority fields: %v", err)

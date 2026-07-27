@@ -327,7 +327,6 @@ final class RuntimeCoreSeamTests: XCTestCase {
         var bindingHashProof = bindingHashReceipt["authority_proof"] as! [String: Any]
         bindingHashProof["proof_payload_base64"] = ""
         bindingHashProof["proof_hash_hex"] = authorityBindingProofHashSelf(callee)
-        bindingHashProof.removeValue(forKey: "signature")
         bindingHashReceipt["authority_proof"] = bindingHashProof
         let bindingHash = try InvocationResult.fromJSON(
             jsonData([
@@ -337,6 +336,20 @@ final class RuntimeCoreSeamTests: XCTestCase {
             ])
         )
         XCTAssertEqual(bindingHash.terminalReceipt["invocation_id"], "inv-result")
+
+        var missingProofSignature = terminal
+        var proofWithoutSignature = missingProofSignature["authority_proof"] as! [String: Any]
+        proofWithoutSignature.removeValue(forKey: "signature")
+        missingProofSignature["authority_proof"] = proofWithoutSignature
+        expectSyncSDKError(.invalidArgument, "authority_proof.signature must be an object") {
+            _ = try InvocationResult.fromJSON(
+                jsonData([
+                    "ok": true,
+                    "terminal_state": "Completed",
+                    "terminal_receipt": missingProofSignature,
+                ])
+            )
+        }
 
         let sessionBinding: [String: Any] = [
             "kind": "session",
@@ -358,7 +371,6 @@ final class RuntimeCoreSeamTests: XCTestCase {
         sessionProof["binding"] = sessionBinding
         sessionProof["proof_payload_base64"] = ""
         sessionProof["proof_hash_hex"] = authorityBindingProofHashSession(sessionBinding)
-        sessionProof.removeValue(forKey: "signature")
         sessionReceipt["authority_proof"] = sessionProof
         let sessionResult = try InvocationResult.fromJSON(
             jsonData([

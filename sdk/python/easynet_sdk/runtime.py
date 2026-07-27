@@ -1914,17 +1914,16 @@ def _validate_runtime_receipt_raw_proof_shape(raw: Mapping[str, object]) -> None
         "ura",
         "profile",
     )
-    if proof.get("signature") is not None:
-        _require_runtime_receipt_exact_keys(
-            _runtime_receipt_raw_mapping(
-                proof.get("signature"),
-                "authority_proof.signature",
-            ),
+    _require_runtime_receipt_exact_keys(
+        _runtime_receipt_raw_mapping(
+            proof.get("signature"),
             "authority_proof.signature",
-            "algorithm",
-            "signature_base64",
-            "key_id_hint",
-        )
+        ),
+        "authority_proof.signature",
+        "algorithm",
+        "signature_base64",
+        "key_id_hint",
+    )
 
     parents = raw.get("parent_receipts")
     for index, parent in enumerate(
@@ -2111,20 +2110,19 @@ def _validate_runtime_receipt_canonical_proof_facts(
             "runtime receipt authority_proof issuer does not match callee_binding"
         )
 
-    proof_signature = None
-    if proof.signature is not None:
-        _required_receipt_signature(
-            proof.signature,
-            "authority_proof.signature",
-        )
-        proof_signature = _AxonCalleeSignature(
-            proof.signature.algorithm,
-            _runtime_receipt_base64(
-                proof.signature.signature_base64,
-                "authority_proof.signature.signature_base64",
-            ),
-            proof.signature.key_id_hint,
-        )
+    _required_receipt_signature(
+        proof.signature,
+        "authority_proof.signature",
+    )
+    assert proof.signature is not None
+    proof_signature = _AxonCalleeSignature(
+        proof.signature.algorithm,
+        _runtime_receipt_base64(
+            proof.signature.signature_base64,
+            "authority_proof.signature.signature_base64",
+        ),
+        proof.signature.key_id_hint,
+    )
 
     subject_kind = {
         1: _AxonEntityRefKind.RESOURCE,

@@ -573,8 +573,17 @@ test("runtime receipt proof facts are mandatory", () => {
   const proof = mutableAuthorityProof(bindingHashProof);
   proof.proof_payload_base64 = "";
   proof.proof_hash_hex = authorityBindingProofHashSelf(callee);
-  delete proof.signature;
   assert.equal(sdk.RuntimeReceipt.fromObject(bindingHashProof).lifecycleState(), "COMPLETED");
+
+  const missingProofSignature = { ...complete };
+  delete mutableAuthorityProof(missingProofSignature).signature;
+  assert.throws(
+    () => sdk.RuntimeReceipt.fromObject(missingProofSignature),
+    (error) =>
+      error instanceof sdk.SDKError
+      && error.code === sdk.ErrorCode.INVALID_ARGUMENT
+      && error.message.includes("authority_proof.signature must be an object"),
+  );
 
   const wrongIssuer = { ...complete };
   mutableAuthorityProof(wrongIssuer).issuer = {
@@ -679,7 +688,6 @@ test("runtime receipt session authority facade uses generic fields", () => {
   proof.binding = { ...sessionBinding };
   proof.proof_payload_base64 = "";
   proof.proof_hash_hex = authorityBindingProofHashSession(sessionBinding);
-  delete proof.signature;
   assert.equal(sdk.RuntimeReceipt.fromObject(complete).lifecycleState(), "COMPLETED");
 
   const retiredBinding = {

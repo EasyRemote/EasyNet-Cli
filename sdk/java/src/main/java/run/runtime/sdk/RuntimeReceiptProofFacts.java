@@ -245,6 +245,7 @@ final class RuntimeReceiptProofFacts {
           "proof_payload_base64",
           "proof_hash_hex",
           "issuer",
+          "signature",
           "admission_hook");
       requiredString(proof, "proof_type");
       String proofBindingKind = requiredString(proof, "binding_kind");
@@ -271,9 +272,7 @@ final class RuntimeReceiptProofFacts {
       validateAuthorityProofHash(proofPayload, proofBinding, proofHash);
       Map<String, Object> issuer =
           requireAgentBinding(proof.get("issuer"), "authority_proof.issuer");
-      if (proof.containsKey("signature") && proof.get("signature") != null) {
-        requireSignature(proof.get("signature"), "authority_proof.signature");
-      }
+      requireSignature(proof.get("signature"), "authority_proof.signature");
       requiredString(proof, "admission_hook");
       return new AuthorityProofFacts(issuer);
     }

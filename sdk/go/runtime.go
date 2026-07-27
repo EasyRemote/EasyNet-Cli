@@ -1543,14 +1543,12 @@ func validateRuntimeReceiptRawProofShape(raw map[string]any) error {
 	if err := requireRuntimeReceiptExactKeys(issuer, "authority_proof.issuer", "ura", "profile"); err != nil {
 		return err
 	}
-	if signatureValue, ok := proof["signature"]; ok && signatureValue != nil {
-		signature, err := runtimeReceiptRawObject(signatureValue, "authority_proof.signature")
-		if err != nil {
-			return err
-		}
-		if err := requireRuntimeReceiptExactKeys(signature, "authority_proof.signature", "algorithm", "signature_base64", "key_id_hint"); err != nil {
-			return err
-		}
+	signature, err := runtimeReceiptRawObject(proof["signature"], "authority_proof.signature")
+	if err != nil {
+		return err
+	}
+	if err := requireRuntimeReceiptExactKeys(signature, "authority_proof.signature", "algorithm", "signature_base64", "key_id_hint"); err != nil {
+		return err
 	}
 	parents, ok := raw["parent_receipts"].([]any)
 	if !ok {
@@ -1734,25 +1732,22 @@ func validateRuntimeReceiptCanonicalProofFacts(r RuntimeReceipt) error {
 		)
 	}
 
-	var proofSignature *axoninv.CalleeSignature
-	if proof.Signature != nil {
-		if err := requireRuntimeReceiptSignature(proof.Signature, "authority_proof.signature"); err != nil {
-			return err
-		}
-		signature, err := runtimeReceiptBase64(
-			proof.Signature.SignatureBase64,
-			"authority_proof.signature.signature_base64",
-			0,
-			false,
-		)
-		if err != nil {
-			return err
-		}
-		proofSignature = &axoninv.CalleeSignature{
-			Algorithm: strings.TrimSpace(proof.Signature.Algorithm),
-			Signature: signature,
-			KeyIDHint: proof.Signature.KeyIDHint,
-		}
+	if err := requireRuntimeReceiptSignature(proof.Signature, "authority_proof.signature"); err != nil {
+		return err
+	}
+	signature, err := runtimeReceiptBase64(
+		proof.Signature.SignatureBase64,
+		"authority_proof.signature.signature_base64",
+		0,
+		false,
+	)
+	if err != nil {
+		return err
+	}
+	proofSignature := &axoninv.CalleeSignature{
+		Algorithm: strings.TrimSpace(proof.Signature.Algorithm),
+		Signature: signature,
+		KeyIDHint: proof.Signature.KeyIDHint,
 	}
 
 	if r.SubjectRef.Kind < int32(axoninv.EntityRefResource) ||

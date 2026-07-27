@@ -2244,9 +2244,7 @@ function validateRuntimeReceiptProofFacts(raw) {
   validateRuntimeReceiptAuthorityProofHash(proofPayload, proofBinding, proofHash);
   const issuer = requireRuntimeReceiptAgentBinding(proof.issuer, "authority_proof.issuer");
   requireRuntimeReceiptSameIdentity(issuer, calleeBinding);
-  if (proof.signature !== undefined && proof.signature !== null) {
-    requireRuntimeReceiptSignature(proof.signature, "authority_proof.signature");
-  }
+  requireRuntimeReceiptSignature(proof.signature, "authority_proof.signature");
   requiredRuntimeString(proof.admission_hook, "authority_proof.admission_hook");
   runtimeReceiptHash(raw.input_hash_hex, "input_hash_hex", false);
   runtimeReceiptHash(raw.output_hash_hex, "output_hash_hex", false);

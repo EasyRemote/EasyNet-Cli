@@ -424,6 +424,7 @@ public final class RuntimeCoreSeamTest {
             "proof_payload_base64",
             "proof_hash_hex",
             "issuer",
+            "signature",
             "admission_hook")) {
       Map<String, Object> missingAuthorityProofFactReceipt = new LinkedHashMap<>(complete);
       Map<String, Object> missingAuthorityProofFact =
@@ -434,6 +435,13 @@ public final class RuntimeCoreSeamTest {
           "runtime receipt proof facts are missing authority_proof." + missingProofFact,
           () -> RuntimeReceipt.fromMap(missingAuthorityProofFactReceipt));
     }
+
+    Map<String, Object> missingProofSignature = new LinkedHashMap<>(complete);
+    mutableAuthorityProof(missingProofSignature).remove("signature");
+    expectSDKError(
+        ErrorCode.RECEIPT_PROOF_FACTS_MISSING,
+        "runtime receipt proof facts are missing authority_proof.signature",
+        () -> RuntimeReceipt.fromMap(missingProofSignature));
 
     for (String missingField : mandatoryRuntimeReceiptProofFactFields()) {
       Map<String, Object> missingTopLevelFact = new LinkedHashMap<>(complete);
@@ -501,11 +509,10 @@ public final class RuntimeCoreSeamTest {
     Map<String, Object> proof = mutableAuthorityProof(bindingHashProof);
     proof.put("proof_payload_base64", "");
     proof.put("proof_hash_hex", authorityBindingProofHashSelf(CALLEE));
-    proof.remove("signature");
     RuntimeReceipt bindingHashReceipt = RuntimeReceipt.fromMap(bindingHashProof);
     check(
         "COMPLETED".equals(bindingHashReceipt.lifecycleState()),
-        "binding-hash proof with explicit empty payload and omitted optional signature is accepted");
+        "binding-hash proof with explicit empty payload and mandatory signature is accepted");
 
     Map<String, Object> sessionBinding =
         nullableMapOf(
@@ -538,7 +545,6 @@ public final class RuntimeCoreSeamTest {
     sessionProof.put("binding", sessionBinding);
     sessionProof.put("proof_payload_base64", "");
     sessionProof.put("proof_hash_hex", authorityBindingProofHashSession(sessionBinding));
-    sessionProof.remove("signature");
     RuntimeReceipt.fromMap(sessionReceipt);
 
     Map<String, Object> retiredSessionBinding =

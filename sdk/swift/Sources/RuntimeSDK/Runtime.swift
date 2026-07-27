@@ -305,7 +305,7 @@ private enum RuntimeReceiptProofFacts {
         guard issuer == calleeBinding else {
             throw SDKError.validation("runtime_receipt", "runtime receipt authority_proof issuer does not match callee_binding")
         }
-        try runtimeReceiptSignature(proof["signature"], "authority_proof.signature", required: false)
+        try runtimeReceiptSignature(proof["signature"], "authority_proof.signature", required: true)
         _ = try runtimeRequiredString(proof, "admission_hook", "runtime_receipt")
 
         _ = try runtimeReceiptHash(raw, "input_hash_hex", allowZero: false)

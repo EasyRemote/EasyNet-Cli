@@ -1156,6 +1156,11 @@ class RuntimeTests(unittest.TestCase):
                         "ura": "easynet:///r/local/agent/callee",
                         "profile": strict_profile,
                     },
+                    "signature": {
+                        "algorithm": "ed25519",
+                        "signature_base64": base64.b64encode(bytes([0x75]) * 64).decode(),
+                        "key_id_hint": "proof-key-1",
+                    },
                     "admission_hook": "policy.check",
                 },
                 "input_hash_hex": "44" * 32,
@@ -1200,7 +1205,7 @@ class RuntimeTests(unittest.TestCase):
         )
         self.assertEqual(receipt.parent_receipts[0].receipt_hash_hex, "66" * 32)
 
-    def test_runtime_receipt_accepts_binding_hash_proof_without_payload_or_signature(
+    def test_runtime_receipt_accepts_binding_hash_proof_without_payload(
         self,
     ) -> None:
         complete = canonical_runtime_receipt(
@@ -1212,13 +1217,27 @@ class RuntimeTests(unittest.TestCase):
         proof["proof_hash_hex"] = authority_binding_proof_hash(
             AuthorityBinding.self_("easynet:///r/example/device/dev-a")
         ).hex()
-        proof.pop("signature")
 
         receipt = RuntimeReceipt.from_mapping(complete)
 
         assert receipt.authority_proof is not None
         self.assertEqual(receipt.authority_proof.proof_payload_base64, "")
-        self.assertIsNone(receipt.authority_proof.signature)
+        self.assertIsNotNone(receipt.authority_proof.signature)
+
+    def test_runtime_receipt_rejects_missing_authority_proof_signature(
+        self,
+    ) -> None:
+        complete = canonical_runtime_receipt(
+            "inv-missing-proof-signature", "completed", "Completed", 1
+        )
+        proof = complete["authority_proof"]
+        assert isinstance(proof, dict)
+        proof.pop("signature")
+
+        with self.assertRaises(SDKError) as raised:
+            RuntimeReceipt.from_mapping(complete)
+
+        self.assertIn("authority_proof.signature", raised.exception.message)
 
     def test_runtime_receipt_session_authority_facade_uses_generic_fields(
         self,
@@ -1248,7 +1267,6 @@ class RuntimeTests(unittest.TestCase):
         proof["binding"] = session_binding
         proof["proof_payload_base64"] = ""
         proof["proof_hash_hex"] = session_authority_binding_hash(session_binding)
-        proof.pop("signature")
 
         RuntimeReceipt.from_mapping(receipt)
 

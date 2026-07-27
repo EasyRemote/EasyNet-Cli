@@ -18601,6 +18601,7 @@ for fragment, label in {
     "private record AuthorityProofFacts": "authority_proof_value_object_missing",
     "AuthorityProofFacts.parse(": "authority_proof_parse_boundary_missing",
     'requirePresentKeys(\n          proof,\n          "authority_proof"': "authority_proof_required_fact_validator_missing",
+    'requireSignature(proof.get("signature"), "authority_proof.signature")': "authority_proof_signature_required_missing",
     "static Map<String, Object> immutableObject(": "deep_immutable_object_missing",
     "private static Object immutableValue(": "deep_immutable_value_missing",
     "Collections.unmodifiableMap(out)": "deep_immutable_map_missing",
@@ -18677,6 +18678,8 @@ for required_test in (
     "legacyAuthorityProofFact.put(\"legacy_proof_fact\"",
     "authority_proof contains noncanonical field legacy_proof_fact",
     "missingProofPayload.remove(\"proof_payload_base64\")",
+    "missingAuthorityProofFact.remove(missingProofFact)",
+    '"signature"',
     "legacyProofIssuer.put(\"issuer\", issuer)",
     "authority_proof.issuer contains noncanonical field legacy_profile",
     "missingTopLevelFact",
@@ -18687,6 +18690,7 @@ for required_test in (
     "payload_content_type",
     "host_attestation_base64",
     "usage",
+    "missingProofSignature",
     "terminal_receipt is required",
     "retired receipt alias",
 ):
@@ -18719,6 +18723,8 @@ for fragment, label in {
     "contains noncanonical field": "noncanonical_field_error_missing",
     'proof["proof_payload_base64"]': "proof_payload_presence_check_missing",
     '"runtime receipt summary is missing authority_proof.proof_payload_base64"': "proof_payload_presence_error_missing",
+    'runtimeReceiptRawObject(proof["signature"], "authority_proof.signature")': "authority_proof_signature_required_shape_missing",
+    'requireRuntimeReceiptSignature(proof.Signature, "authority_proof.signature")': "authority_proof_signature_required_canonical_missing",
 }.items():
     if fragment not in runtime:
         raise SystemExit(f"go_runtime_receipt_projection:{label}")
@@ -18736,6 +18742,7 @@ for required_test in (
     "legacy authority proof metadata",
     "legacy_proof_fact",
     "missing proof payload field",
+    "missing proof signature",
     "legacy proof issuer metadata",
     "legacy_profile",
     "authority_binding contains noncanonical field",
@@ -18787,6 +18794,8 @@ for fragment, label in {
     "contains noncanonical field": "noncanonical_field_error_missing",
     'if "proof_payload_base64" not in proof': "proof_payload_presence_check_missing",
     '"runtime receipt summary is missing authority_proof.proof_payload_base64"': "proof_payload_presence_error_missing",
+    '_runtime_receipt_raw_mapping(\n            proof.get("signature"),\n            "authority_proof.signature",\n        )': "authority_proof_signature_required_shape_missing",
+    '_required_receipt_signature(\n        proof.signature,\n        "authority_proof.signature",\n    )': "authority_proof_signature_required_canonical_missing",
 }.items():
     if fragment not in runtime:
         raise SystemExit(f"python_runtime_receipt_projection:{label}")
@@ -18826,6 +18835,8 @@ for required_test in (
     "legacy_proof_fact",
     "authority_proof contains noncanonical field legacy_proof_fact",
     'proof.pop("proof_payload_base64")',
+    "test_runtime_receipt_rejects_missing_authority_proof_signature",
+    'proof.pop("signature")',
     "legacy_profile",
     "authority_proof.issuer contains noncanonical field legacy_profile",
     "authority_binding contains noncanonical field",
@@ -18886,6 +18897,7 @@ for fragment, label in {
     "contains noncanonical field": "noncanonical_field_error_missing",
     "requiredRuntimeStringAllowEmpty": "proof_payload_presence_check_missing",
     "runtime receipt summary is missing authority_proof.proof_payload_base64": "proof_payload_presence_error_missing",
+    'requireRuntimeReceiptSignature(proof.signature, "authority_proof.signature")': "authority_proof_signature_required_missing",
     "authority_proof_hash_mismatch": "authority_proof_hash_mismatch_missing",
     "hosted runtime receipt is missing host_attestation_base64": "hosted_signer_attestation_missing",
     "raw.authority_proof": "authority_proof_required_missing",
@@ -18926,6 +18938,8 @@ for required_test in (
     "legacy_profile",
     "authority_proof.issuer contains noncanonical field legacy_profile",
     "delete mutableAuthorityProof(missingProofPayload).proof_payload_base64",
+    "missingProofSignature",
+    "delete mutableAuthorityProof(missingProofSignature).signature",
     "authority_binding contains noncanonical field",
     "receipt_type",
     "missingTopLevelFact",
@@ -18975,6 +18989,7 @@ for fragment, label in {
     '"usage"': "usage_required_missing",
     "runtimeRequiredStringAllowEmpty": "proof_payload_presence_check_missing",
     "runtime receipt summary is missing authority_proof.proof_payload_base64": "proof_payload_presence_error_missing",
+    'runtimeReceiptSignature(proof["signature"], "authority_proof.signature", required: true)': "authority_proof_signature_required_missing",
     "authority_proof_hash_mismatch": "authority_proof_hash_mismatch_missing",
     "hosted runtime receipt is missing host_attestation_base64": "hosted_signer_attestation_missing",
     "terminal_receipt state does not match invocation terminal_state": "terminal_state_topology_missing",
@@ -19003,6 +19018,8 @@ for required_test in (
     "authorityBindingProofHashSelf",
     "authority_proof_hash_mismatch",
     "proofWithoutPayload.removeValue(forKey: \"proof_payload_base64\")",
+    "proofWithoutSignature.removeValue(forKey: \"signature\")",
+    "authority_proof.signature must be an object",
     "missingTopLevelFact",
     "payload_base64",
     "payload_content_type",
