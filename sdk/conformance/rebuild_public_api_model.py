@@ -24,6 +24,9 @@ MODEL = ROOT / "sdk/conformance/canonical-public-api.json"
 MATRIX = ROOT / "sdk/conformance/sdk-parity-matrix.json"
 EXECUTION_MANIFEST = ROOT / "sdk/conformance/runner/execution-manifest.json"
 LANGUAGES = ["rust", "c_abi", "go", "python", "node", "java", "swift"]
+RETIRED_MODEL_FIELDS = {
+    "legacy_quarantine": "legacy_quarantine_retired",
+}
 
 # Ordered semantic rules are deliberately narrow. An item matching no rule is an
 # inventory failure, not an implicit public/canonical assumption.
@@ -222,6 +225,12 @@ def support_parent(item: str, classified: str) -> str:
     return classified
 
 
+def reject_retired_model_fields(model: dict[str, Any]) -> None:
+    for field, reason in RETIRED_MODEL_FIELDS.items():
+        if field in model:
+            raise ValueError(reason)
+
+
 def owner_maps(
     model: dict[str, Any],
 ) -> tuple[dict[tuple[str, str], str], dict[str, set[str]]]:
@@ -417,6 +426,7 @@ def main() -> int:
     args = parser.parse_args()
     args.cache.mkdir(parents=True, exist_ok=True)
     model = json.loads(MODEL.read_text(encoding="utf-8"))
+    reject_retired_model_fields(model)
     control_ipc = model.get("capabilities", {}).pop("control_ipc", None)
     if control_ipc is not None:
         runtime_connection = model["capabilities"]["runtime_connection"]
@@ -457,7 +467,6 @@ def main() -> int:
         "languages": {language: [] for language in LANGUAGES},
         "members": {language: [] for language in LANGUAGES},
     }
-    model.pop("legacy_quarantine", None)
     model["shape_sha256"] = {}
     for language, found in inventories.items():
         model["languages"][language] = []

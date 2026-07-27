@@ -6620,6 +6620,11 @@ for rel in (
     ):
         if token in text:
             raise SystemExit(f"sdk_go_easynet_provider_retired:legacy_token:{rel}:{token}")
+rebuild = (root / "sdk/conformance/rebuild_public_api_model.py").read_text(encoding="utf-8")
+if 'pop("legacy_quarantine"' in rebuild or "pop('legacy_quarantine'" in rebuild:
+    raise SystemExit("sdk_public_api_model_rebuild_retired_legacy_quarantine_pop")
+if "reject_retired_model_fields(model)" not in rebuild:
+    raise SystemExit("sdk_public_api_model_rebuild_retired_field_preflight_missing")
 PY
 }
 
