@@ -35,7 +35,7 @@
 
 use std::sync::Arc;
 
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 
 use crate::core::domain::SessionId;
 use crate::daemon::ability::dispatch::OwnerKind;
@@ -74,10 +74,9 @@ pub fn register(reg: &mut AxonAbilityCatalog, sessions: Arc<SessionService>) {
 /// Returns: `{ "sessions": [Session, ...] }` where each Session
 /// matches `core::domain::Session`.
 fn list_handler(svc: &SessionService, args: Value) -> anyhow::Result<Value> {
-    let include_terminated = args
-        .get("include_terminated")
-        .and_then(Value::as_bool)
-        .unwrap_or(true);
+    let args = session_args_object("session.list", &args, &["include_terminated"])?;
+    let include_terminated =
+        session_optional_bool_arg("session.list", args, "include_terminated")?.unwrap_or(true);
     let sessions = svc.list_active()?;
     let filtered: Vec<&_> = sessions
         .iter()
@@ -130,16 +129,9 @@ fn runtime_admin_session_projection(session: &crate::core::domain::Session) -> V
 /// error frame instead would force every stale-id case to surface
 /// as a hard fault, which is too coarse for the timeline view.
 fn attach_handler(svc: &SessionService, args: Value) -> anyhow::Result<StreamSource> {
-    let session_id = args
-        .get("session_id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow::anyhow!("session.attach: `session_id` required"))?
-        .to_string();
-    let since_seq = args
-        .get("since_seq")
-        .and_then(Value::as_i64)
-        .unwrap_or(0)
-        .max(0) as usize;
+    let args = session_args_object("session.attach", &args, &["session_id", "since_seq"])?;
+    let session_id = session_required_string_arg("session.attach", args, "session_id")?;
+    let since_seq = session_optional_usize_arg("session.attach", args, "since_seq")?.unwrap_or(0);
 
     let id = SessionId::new(&session_id);
     if svc.get(&id)?.is_none() {
@@ -147,6 +139,72 @@ fn attach_handler(svc: &SessionService, args: Value) -> anyhow::Result<StreamSou
     }
     let (snapshot, rx) = svc.subscribe_session(&id, since_seq)?;
     Ok(StreamSource::SnapshotThenLive(snapshot, rx))
+}
+
+fn session_args_object<'a>(
+    ability: &str,
+    args: &'a Value,
+    allowed_fields: &[&str],
+) -> anyhow::Result<&'a Map<String, Value>> {
+    let object = args
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("{ability}: args must be a JSON object"))?;
+    let mut unknown = object
+        .keys()
+        .filter(|key| !allowed_fields.contains(&key.as_str()))
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    unknown.sort_unstable();
+    if !unknown.is_empty() {
+        anyhow::bail!("{ability}: unsupported field(s): {}", unknown.join(", "));
+    }
+    Ok(object)
+}
+
+fn session_required_string_arg(
+    ability: &str,
+    args: &Map<String, Value>,
+    field: &str,
+) -> anyhow::Result<String> {
+    let value = args
+        .get(field)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .ok_or_else(|| anyhow::anyhow!("{ability}: `{field}` required"))?;
+    if value.is_empty() {
+        anyhow::bail!("{ability}: {field} must be non-empty");
+    }
+    Ok(value.to_string())
+}
+
+fn session_optional_bool_arg(
+    ability: &str,
+    args: &Map<String, Value>,
+    field: &str,
+) -> anyhow::Result<Option<bool>> {
+    let Some(value) = args.get(field) else {
+        return Ok(None);
+    };
+    value
+        .as_bool()
+        .map(Some)
+        .ok_or_else(|| anyhow::anyhow!("{ability}: `{field}` must be a boolean"))
+}
+
+fn session_optional_usize_arg(
+    ability: &str,
+    args: &Map<String, Value>,
+    field: &str,
+) -> anyhow::Result<Option<usize>> {
+    let Some(value) = args.get(field) else {
+        return Ok(None);
+    };
+    let number = value
+        .as_u64()
+        .ok_or_else(|| anyhow::anyhow!("{ability}: `{field}` must be an integer >= 0"))?;
+    usize::try_from(number)
+        .map(Some)
+        .map_err(|_| anyhow::anyhow!("{ability}: `{field}` does not fit in usize"))
 }
 
 /// Discovery JSON for `session.list`. Mirrors the shape
@@ -224,6 +282,37 @@ mod tests {
     }
 
     #[test]
+    fn list_rejects_non_object_unknown_and_wrong_typed_args_before_service_access() {
+        let svc = svc_with(&["live"]);
+        svc.poison_index_for_test();
+
+        for (case, args, expected) in [
+            ("non-object", json!(null), "JSON object"),
+            (
+                "unknown field",
+                json!({"include_terminated": true, "legacy_mode": true}),
+                "unsupported field(s)",
+            ),
+            (
+                "wrong include_terminated type",
+                json!({"include_terminated": "false"}),
+                "include_terminated",
+            ),
+        ] {
+            let err = list_handler(&svc, args).expect_err(case);
+            let message = format!("{err:#}");
+            assert!(
+                message.contains(expected),
+                "{case} should fail at parser boundary, got {message}"
+            );
+            assert!(
+                !message.contains("session index lock poisoned"),
+                "{case} must not dispatch into SessionService before parser rejection: {message}"
+            );
+        }
+    }
+
+    #[test]
     fn list_projects_generic_runtime_admin_session_rows() {
         let svc = svc_with(&["live"]);
         let resp = list_handler(&svc, json!({})).unwrap();
@@ -291,6 +380,43 @@ mod tests {
         let svc = svc_with(&[]);
         let err = attach_handler(&svc, json!({})).unwrap_err();
         assert!(format!("{err}").contains("session_id"));
+    }
+
+    #[test]
+    fn attach_rejects_non_object_unknown_and_wrong_typed_args_before_service_access() {
+        let svc = svc_with(&["live"]);
+        svc.poison_index_for_test();
+
+        for (case, args, expected) in [
+            ("non-object", json!(false), "JSON object"),
+            (
+                "unknown field",
+                json!({"session_id": "live", "legacy_mode": true}),
+                "unsupported field(s)",
+            ),
+            ("blank session_id", json!({"session_id": "  "}), "non-empty"),
+            (
+                "wrong since_seq type",
+                json!({"session_id": "live", "since_seq": "1"}),
+                "since_seq",
+            ),
+            (
+                "negative since_seq",
+                json!({"session_id": "live", "since_seq": -1}),
+                "integer >= 0",
+            ),
+        ] {
+            let err = attach_handler(&svc, args).expect_err(case);
+            let message = format!("{err:#}");
+            assert!(
+                message.contains(expected),
+                "{case} should fail at parser boundary, got {message}"
+            );
+            assert!(
+                !message.contains("session index lock poisoned"),
+                "{case} must not dispatch into SessionService before parser rejection: {message}"
+            );
+        }
     }
 
     #[test]
