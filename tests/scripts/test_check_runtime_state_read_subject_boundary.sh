@@ -30,8 +30,16 @@ impl LocalRuntimeStateReadIssuer {
     }
 
     fn subject_ura() -> anyhow::Result<String> {
-        LocalRuntimeStateReadSubject::from_runtime_attachment_file(&KeyServiceRuntimeStateReadSignerCustody)
-            .map(|subject| subject.into_ura())
+        LocalRuntimeStateReadAttachment::from_runtime_attachment_file(&KeyServiceRuntimeStateReadSignerCustody)
+            .and_then(|attachment| attachment.into_subject_ura())
+    }
+}
+
+pub struct LocalRuntimeCatalogueReadIssuer;
+
+impl LocalRuntimeCatalogueReadIssuer {
+    fn invoke(_ability: &str, _args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+        Ok(serde_json::json!({}))
     }
 }
 
@@ -48,11 +56,12 @@ impl RuntimeStateReadSignerCustody for KeyServiceRuntimeStateReadSignerCustody {
 }
 
 /// Runtime-state reads bind to a user-owned Resource URA.
-struct LocalRuntimeStateReadSubject {
-    ura: String,
+struct LocalRuntimeStateReadAttachment {
+    realm: String,
+    user_id: String,
 }
 
-impl LocalRuntimeStateReadSubject {
+impl LocalRuntimeStateReadAttachment {
     fn from_runtime_attachment_file(
         signer_custody: &dyn RuntimeStateReadSignerCustody,
     ) -> anyhow::Result<Self> {
@@ -89,12 +98,17 @@ impl LocalRuntimeStateReadSubject {
         signer_custody.prove(&user_ura)?;
         let user_id = credentials.user_id()?;
         Ok(Self {
-            ura: format!("easynet:///r/acme/resource/user.{user_id}/runtime-state/read"),
+            realm: credentials.realm_str().to_string(),
+            user_id,
         })
     }
 
-    fn into_ura(self) -> String {
-        self.ura
+    fn subject(&self) -> anyhow::Result<crate::core::identity::RuntimeStateReadSubject> {
+        crate::core::identity::RuntimeStateReadSubject::new(&self.realm, &self.user_id)
+    }
+
+    fn into_subject_ura(self) -> anyhow::Result<String> {
+        self.subject().map(|subject| subject.into_string())
     }
 }
 
@@ -103,7 +117,7 @@ fn runtime_state_read_subject_uses_user_owned_resource_not_daemon_identity() {}
 
 #[test]
 fn runtime_state_read_subject_rejects_missing_user_id_before_device_fallback() {
-    let _ = LocalRuntimeStateReadSubject::from_runtime_attachment(
+    let _ = LocalRuntimeStateReadAttachment::from_runtime_attachment(
         &credentials,
         &discovery,
         &ReadyRuntimeStateReadSignerCustody,
@@ -125,16 +139,28 @@ RS
 
 for target in \
   "$SB/src/cli/commands/ability_record.rs" \
+  "$SB/src/cli/daemon_client/ability_catalog.rs" \
+  "$SB/src/daemon/ability/catalog/profiles/mcp.rs"
+do
+  mkdir -p "$(dirname "$target")"
+  cat >"$target" <<'RS'
+use crate::support::platform::local_invoke::LocalRuntimeCatalogueReadIssuer;
+
+fn read_runtime_catalogue() {
+    let _ = LocalRuntimeCatalogueReadIssuer::invoke("meta.list_abilities", serde_json::json!({}));
+}
+RS
+done
+
+for target in \
   "$SB/src/cli/commands/discover.rs" \
   "$SB/src/cli/commands/doctor.rs" \
   "$SB/src/cli/commands/groups/mcp.rs" \
   "$SB/src/cli/commands/groups/device.rs" \
   "$SB/src/cli/commands/status.rs" \
-  "$SB/src/cli/daemon_client/ability_catalog.rs" \
   "$SB/src/cli/commands/groups/invocation.rs" \
   "$SB/src/cli/commands/invocation_watch.rs" \
-  "$SB/src/cli/commands/user_signing_identity.rs" \
-  "$SB/src/daemon/ability/catalog/profiles/mcp.rs"
+  "$SB/src/cli/commands/user_signing_identity.rs"
 do
   mkdir -p "$(dirname "$target")"
   cat >"$target" <<'RS'
@@ -282,7 +308,7 @@ RS
   bash tools/scripts/check-runtime-state-read-subject-boundary.sh
 ) >/dev/null || fail "happy path should pass"
 
-perl -0pi -e 's/\n    fn into_ura\(self\)/\n    fn from_credentials(\n        _credentials: &crate::daemon::persistence::config::Credentials,\n    ) -> anyhow::Result<Self> {\n        anyhow::bail!("credentials-only constructor")\n    }\n\n    fn into_ura(self)/' \
+perl -0pi -e 's/\n    fn into_subject_ura\(self\)/\n    fn from_credentials(\n        _credentials: &crate::daemon::persistence::config::Credentials,\n    ) -> anyhow::Result<Self> {\n        anyhow::bail!("credentials-only constructor")\n    }\n\n    fn into_subject_ura(self)/' \
   "$SB/src/support/platform/local_invoke.rs"
 
 set +e
