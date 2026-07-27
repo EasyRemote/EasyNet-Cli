@@ -172,6 +172,14 @@ impl DesktopCompanionPlanner {
         }
         .ok_or_else(|| format!("desktop companion does not support {}", self.platform))?;
 
+        let status_file = companion
+            .status_file()
+            .map(|status_file| {
+                CompanionStatusFilePath::resolve(package.root(), status_file)
+                    .map(|path| path.into_path_buf())
+            })
+            .transpose()?;
+
         Ok(DesktopCompanionPlan {
             package_id: manifest.id().to_string(),
             package_version: manifest.version().to_string(),
@@ -183,9 +191,7 @@ impl DesktopCompanionPlanner {
             boot_policy: companion.boot_policy(),
             stop_policy: companion.stop_policy(),
             health: companion.health(),
-            status_file: companion.status_file().map(|status_file| {
-                CompanionStatusFilePath::resolve(package.root(), status_file).into_path_buf()
-            }),
+            status_file,
         })
     }
 }
