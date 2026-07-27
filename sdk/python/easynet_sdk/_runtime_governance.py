@@ -41,13 +41,20 @@ def _ability_candidates(ability_name: str, ability_ura: str) -> tuple[str, ...]:
 
 
 def _is_catalogue_read(value: str) -> bool:
-    return value == "meta.list_abilities" or value.endswith(".meta.list_abilities")
+    return (
+        value == "meta.list_abilities"
+        or value == "runtime.catalog.list"
+        or value.endswith(".meta.list_abilities")
+        or ".runtime.catalog." in value
+    )
 
 
 def _is_receipt_read(value: str) -> bool:
     return (
         value.startswith("invocation.history.")
         or value.startswith("invocation.trace.")
+        or value.startswith("receipt.catalog.")
         or ".invocation.history." in value
         or ".invocation.trace." in value
+        or ".receipt.catalog." in value
     )

@@ -27,6 +27,13 @@ from axon_sdk.invocation import (
 from .errors import ErrorCode, RetryHint, SDKError
 from ._identity_guards import contains_all_zero_principal
 from ._receipt_projection import reject_retired_top_level_receipt_alias
+from ._runtime_governance import (
+    ABILITY_DESCRIPTOR_PROVIDER,
+    RECEIPT_HISTORY_PROVIDER,
+    governance_descriptor_provider_for_ability,
+)
+from ._runtime_subjects import is_runtime_governance_read_subject_ura
+from .axon_addressing import authority_ura, parse_ura
 from .bidi import BidiSession, BidiStreamDescriptor, BidiTransport
 from .invocation import InvocationBuilder, InvocationDraft
 from .invocation_state import InvocationLifecycleState
@@ -1497,6 +1504,28 @@ def _admitted_descriptor_ref_request(
     subject_ura = _optional_runtime_client_text(subject_ura)
     provider = _optional_runtime_client_text(provider)
 
+    expected_provider = governance_descriptor_provider_for_ability(ability)
+    if not provider:
+        if expected_provider:
+            raise _invalid_runtime_client(
+                f"descriptor_ref provider request for ability {ability} requires "
+                f"provider {expected_provider}"
+            )
+    elif provider not in {ABILITY_DESCRIPTOR_PROVIDER, RECEIPT_HISTORY_PROVIDER}:
+        raise _invalid_runtime_client(
+            f"descriptor_ref request provider {provider} is not supported"
+        )
+    elif expected_provider != provider:
+        if not expected_provider:
+            raise _invalid_runtime_client(
+                f"descriptor_ref provider {provider} cannot resolve "
+                f"non-governance ability {ability}"
+            )
+        raise _invalid_runtime_client(
+            f"descriptor_ref provider {provider} cannot resolve ability {ability}; "
+            f"use provider {expected_provider}"
+        )
+
     if provider:
         for field_name, value in (
             ("caller_ura", caller_ura),
@@ -1510,6 +1539,11 @@ def _admitted_descriptor_ref_request(
                 raise _invalid_runtime_client(
                     f"descriptor_ref provider request {field_name} must not be all-zero"
                 )
+        _admit_descriptor_ref_provider_subject(
+            provider=provider,
+            callee_ura=callee_ura,
+            subject_ura=subject_ura,
+        )
 
     request: dict[str, object] = {
         "callee_ura": callee_ura,
@@ -1523,6 +1557,55 @@ def _admitted_descriptor_ref_request(
     if provider:
         request["provider"] = provider
     return request
+
+
+def _admit_descriptor_ref_provider_subject(
+    *,
+    provider: str,
+    callee_ura: str,
+    subject_ura: str,
+) -> None:
+    if provider == ABILITY_DESCRIPTOR_PROVIDER:
+        _admit_ability_descriptor_provider_subject(callee_ura, subject_ura)
+        return
+    if provider == RECEIPT_HISTORY_PROVIDER:
+        if not is_runtime_governance_read_subject_ura(subject_ura, callee_ura):
+            raise _invalid_runtime_client(
+                "descriptor_ref provider receipt_history subject_ura must be a "
+                "runtime governance read subject"
+            )
+        return
+    raise _invalid_runtime_client(
+        f"descriptor_ref request provider {provider} is not supported"
+    )
+
+
+def _admit_ability_descriptor_provider_subject(
+    callee_ura: str,
+    subject_ura: str,
+) -> None:
+    try:
+        callee = parse_ura(callee_ura)
+    except SDKError as exc:
+        raise _invalid_runtime_client(
+            "descriptor_ref provider ability_descriptor callee_ura must be canonical"
+        ) from exc
+    try:
+        subject = parse_ura(subject_ura)
+    except SDKError as exc:
+        raise _invalid_runtime_client(
+            "descriptor_ref provider ability_descriptor subject_ura must be canonical"
+        ) from exc
+    if subject.kind != "authority":
+        raise _invalid_runtime_client(
+            "descriptor_ref provider ability_descriptor subject_ura must be an Authority URA"
+        )
+    expected_subject = authority_ura(callee.realm)
+    if subject.realm != callee.realm or subject_ura != expected_subject:
+        raise _invalid_runtime_client(
+            "descriptor_ref provider ability_descriptor subject_ura must be the "
+            "callee realm authority subject"
+        )
 
 
 def _required_runtime_client_text(value: object, field_name: str) -> str:

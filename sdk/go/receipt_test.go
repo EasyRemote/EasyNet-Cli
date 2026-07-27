@@ -104,12 +104,12 @@ func TestRuntimeReceiptProviderUsesCanonicalHistoryAndTraceAbilities(t *testing.
 	}
 
 	lookup := ReceiptLookup{RequestID: "req-1"}
-	got, err := client.Get(context.Background(), ReceiptGetRequest{Call: runtimeAbilityTestContext(), Lookup: lookup})
+	got, err := client.Get(context.Background(), ReceiptGetRequest{Call: runtimeReceiptHistoryTestContextWithScope(t, "invocation.history.get"), Lookup: lookup})
 	if err != nil || got.Record == nil || got.Record.InvocationURA == "" {
 		t.Fatalf("Get: result=%#v error=%v", got, err)
 	}
 	trace, err := client.Trace(context.Background(), ReceiptTraceRequest{
-		Call:   runtimeAbilityTestContext(),
+		Call:   runtimeReceiptHistoryTestContextWithScope(t, "invocation.trace.get"),
 		Lookup: ReceiptLookup{TraceID: "trace-1"},
 	})
 	if err != nil || trace.Graph.TraceID != "trace-1" || len(trace.Graph.Records) != 1 {
@@ -195,13 +195,13 @@ func TestRuntimeReceiptProviderUsesExplicitRouteSet(t *testing.T) {
 		t.Fatalf("List: %v", err)
 	}
 	if _, err := provider.Get(context.Background(), ReceiptGetRequest{
-		Call:   runtimeAbilityTestContext(),
+		Call:   runtimeReceiptHistoryTestContextWithScope(t, "receipt.catalog.get"),
 		Lookup: ReceiptLookup{RequestID: "req-1"},
 	}); err != nil {
 		t.Fatalf("Get: %v", err)
 	}
 	if _, err := provider.Trace(context.Background(), ReceiptTraceRequest{
-		Call:   runtimeAbilityTestContext(),
+		Call:   runtimeReceiptHistoryTestContextWithScope(t, "receipt.catalog.trace"),
 		Lookup: ReceiptLookup{TraceID: "trace-1"},
 	}); err != nil {
 		t.Fatalf("Trace: %v", err)
@@ -555,7 +555,7 @@ func TestRuntimeReceiptProviderRejectsMalformedBoundedResults(t *testing.T) {
 	provider = runtimeReceiptProviderWithOutput(t, map[string]any{
 		"ledger_ura": "easynet:///r/example/resource/device.dev-a/billing/invocations",
 	})
-	if _, err := provider.Get(context.Background(), ReceiptGetRequest{Call: runtimeAbilityTestContext(), Lookup: ReceiptLookup{RequestID: "req-1"}}); err == nil || !strings.Contains(err.Error(), "must include record") {
+	if _, err := provider.Get(context.Background(), ReceiptGetRequest{Call: runtimeReceiptHistoryTestContextWithScope(t, "invocation.history.get"), Lookup: ReceiptLookup{RequestID: "req-1"}}); err == nil || !strings.Contains(err.Error(), "must include record") {
 		t.Fatalf("missing record error = %v", err)
 	}
 
@@ -565,7 +565,7 @@ func TestRuntimeReceiptProviderRejectsMalformedBoundedResults(t *testing.T) {
 		"nodes":      "not-an-array",
 		"edges":      []any{},
 	})
-	if _, err := provider.Trace(context.Background(), ReceiptTraceRequest{Call: runtimeAbilityTestContext(), Lookup: ReceiptLookup{TraceID: "trace-1"}}); err == nil || !strings.Contains(err.Error(), "nodes must be an array") {
+	if _, err := provider.Trace(context.Background(), ReceiptTraceRequest{Call: runtimeReceiptHistoryTestContextWithScope(t, "invocation.trace.get"), Lookup: ReceiptLookup{TraceID: "trace-1"}}); err == nil || !strings.Contains(err.Error(), "nodes must be an array") {
 		t.Fatalf("malformed trace error = %v", err)
 	}
 }

@@ -167,6 +167,77 @@ func TestRuntimeClientResolveDescriptorRefRejectsIncompleteProviderRequestBefore
 			},
 			want: "subject_ura must not be all-zero",
 		},
+		{
+			name: "unknown provider",
+			req: RuntimeDescriptorRefRequest{
+				CalleeURA:  "easynet:///r/example/device/dev-a",
+				Ability:    "meta.list_abilities",
+				CallMode:   "read",
+				CallerURA:  "easynet:///r/example/user/alice",
+				SubjectURA: "easynet:///r/example/authority",
+				Provider:   "legacy_catalog",
+			},
+			want: "provider legacy_catalog is not supported",
+		},
+		{
+			name: "governance ability missing provider",
+			req: RuntimeDescriptorRefRequest{
+				CalleeURA:  "easynet:///r/example/device/dev-a",
+				Ability:    "meta.list_abilities",
+				CallMode:   "read",
+				CallerURA:  "easynet:///r/example/user/alice",
+				SubjectURA: "easynet:///r/example/authority",
+			},
+			want: "requires provider ability_descriptor",
+		},
+		{
+			name: "wrong provider for catalogue read",
+			req: RuntimeDescriptorRefRequest{
+				CalleeURA:  "easynet:///r/example/device/dev-a",
+				Ability:    "meta.list_abilities",
+				CallMode:   "read",
+				CallerURA:  "easynet:///r/example/user/alice",
+				SubjectURA: "easynet:///r/example/authority",
+				Provider:   "receipt_history",
+			},
+			want: "use provider ability_descriptor",
+		},
+		{
+			name: "provider for non-governance ability",
+			req: RuntimeDescriptorRefRequest{
+				CalleeURA:  "easynet:///r/example/device/dev-a",
+				Ability:    "observe.health",
+				CallMode:   "read",
+				CallerURA:  "easynet:///r/example/user/alice",
+				SubjectURA: "easynet:///r/example/authority",
+				Provider:   "ability_descriptor",
+			},
+			want: "cannot resolve non-governance ability",
+		},
+		{
+			name: "catalogue provider rejects device subject",
+			req: RuntimeDescriptorRefRequest{
+				CalleeURA:  "easynet:///r/example/device/dev-a",
+				Ability:    "meta.list_abilities",
+				CallMode:   "read",
+				CallerURA:  "easynet:///r/example/user/alice",
+				SubjectURA: "easynet:///r/example/device/dev-a",
+				Provider:   "ability_descriptor",
+			},
+			want: "subject_ura must be an Authority URA",
+		},
+		{
+			name: "receipt provider rejects catalogue authority subject",
+			req: RuntimeDescriptorRefRequest{
+				CalleeURA:  "easynet:///r/example/device/dev-a",
+				Ability:    "invocation.history.list",
+				CallMode:   "read",
+				CallerURA:  "easynet:///r/example/user/alice",
+				SubjectURA: "easynet:///r/example/authority",
+				Provider:   "receipt_history",
+			},
+			want: "subject_ura must be a runtime governance read subject",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

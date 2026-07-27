@@ -479,6 +479,71 @@ class RuntimeTests(unittest.TestCase):
                 },
                 "subject_ura must not be all-zero",
             ),
+            (
+                {
+                    "callee_ura": "easynet:///r/example/device/dev-a",
+                    "ability": "meta.list_abilities",
+                    "call_mode": "read",
+                    "caller_ura": "easynet:///r/example/user/alice",
+                    "subject_ura": "easynet:///r/example/authority",
+                    "provider": "legacy_catalog",
+                },
+                "provider legacy_catalog is not supported",
+            ),
+            (
+                {
+                    "callee_ura": "easynet:///r/example/device/dev-a",
+                    "ability": "meta.list_abilities",
+                    "call_mode": "read",
+                    "caller_ura": "easynet:///r/example/user/alice",
+                    "subject_ura": "easynet:///r/example/authority",
+                },
+                "requires provider ability_descriptor",
+            ),
+            (
+                {
+                    "callee_ura": "easynet:///r/example/device/dev-a",
+                    "ability": "meta.list_abilities",
+                    "call_mode": "read",
+                    "caller_ura": "easynet:///r/example/user/alice",
+                    "subject_ura": "easynet:///r/example/authority",
+                    "provider": "receipt_history",
+                },
+                "use provider ability_descriptor",
+            ),
+            (
+                {
+                    "callee_ura": "easynet:///r/example/device/dev-a",
+                    "ability": "observe.health",
+                    "call_mode": "read",
+                    "caller_ura": "easynet:///r/example/user/alice",
+                    "subject_ura": "easynet:///r/example/authority",
+                    "provider": "ability_descriptor",
+                },
+                "cannot resolve non-governance ability",
+            ),
+            (
+                {
+                    "callee_ura": "easynet:///r/example/device/dev-a",
+                    "ability": "meta.list_abilities",
+                    "call_mode": "read",
+                    "caller_ura": "easynet:///r/example/user/alice",
+                    "subject_ura": "easynet:///r/example/device/dev-a",
+                    "provider": "ability_descriptor",
+                },
+                "subject_ura must be an Authority URA",
+            ),
+            (
+                {
+                    "callee_ura": "easynet:///r/example/device/dev-a",
+                    "ability": "invocation.history.list",
+                    "call_mode": "read",
+                    "caller_ura": "easynet:///r/example/user/alice",
+                    "subject_ura": "easynet:///r/example/authority",
+                    "provider": "receipt_history",
+                },
+                "subject_ura must be a runtime governance read subject",
+            ),
         ]
 
         for request, message in cases:

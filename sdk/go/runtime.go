@@ -324,7 +324,25 @@ func admitRuntimeDescriptorRefRequest(req RuntimeDescriptorRefRequest) (RuntimeD
 		}
 	}
 	if req.Provider == "" {
+		if provider := runtimeGovernanceDescriptorProviderForAbility(req.Ability); provider != "" {
+			return RuntimeDescriptorRefRequest{}, invalidRuntimeClient(
+				"descriptor_ref provider request for ability " + req.Ability + " requires provider " + provider,
+			)
+		}
 		return req, nil
+	}
+	if req.Provider != runtimeAbilityDescriptorProvider && req.Provider != runtimeReceiptHistoryProvider {
+		return RuntimeDescriptorRefRequest{}, invalidRuntimeClient("descriptor_ref request provider " + req.Provider + " is not supported")
+	}
+	if provider := runtimeGovernanceDescriptorProviderForAbility(req.Ability); provider != req.Provider {
+		if provider == "" {
+			return RuntimeDescriptorRefRequest{}, invalidRuntimeClient(
+				"descriptor_ref provider " + req.Provider + " cannot resolve non-governance ability " + req.Ability,
+			)
+		}
+		return RuntimeDescriptorRefRequest{}, invalidRuntimeClient(
+			"descriptor_ref provider " + req.Provider + " cannot resolve ability " + req.Ability + "; use provider " + provider,
+		)
 	}
 	for _, field := range []struct {
 		name  string
@@ -340,7 +358,46 @@ func admitRuntimeDescriptorRefRequest(req RuntimeDescriptorRefRequest) (RuntimeD
 			return RuntimeDescriptorRefRequest{}, invalidRuntimeClient("descriptor_ref provider request " + field.name + " must not be all-zero")
 		}
 	}
+	if err := admitRuntimeDescriptorRefProviderSubject(req); err != nil {
+		return RuntimeDescriptorRefRequest{}, err
+	}
 	return req, nil
+}
+
+func admitRuntimeDescriptorRefProviderSubject(req RuntimeDescriptorRefRequest) error {
+	switch req.Provider {
+	case runtimeAbilityDescriptorProvider:
+		return admitAbilityDescriptorProviderSubject(req.CalleeURA, req.SubjectURA)
+	case runtimeReceiptHistoryProvider:
+		if !isRuntimeGovernanceReadSubjectURA(req.SubjectURA, req.CalleeURA) {
+			return invalidRuntimeClient(
+				"descriptor_ref provider receipt_history subject_ura must be a runtime governance read subject",
+			)
+		}
+		return nil
+	default:
+		return invalidRuntimeClient("descriptor_ref request provider " + req.Provider + " is not supported")
+	}
+}
+
+func admitAbilityDescriptorProviderSubject(calleeURA string, subjectURA string) error {
+	callee, err := ParseURAParts(calleeURA)
+	if err != nil {
+		return invalidRuntimeClient("descriptor_ref provider ability_descriptor callee_ura must be canonical")
+	}
+	subject, err := ParseURAParts(subjectURA)
+	if err != nil {
+		return invalidRuntimeClient("descriptor_ref provider ability_descriptor subject_ura must be canonical")
+	}
+	if subject.Kind != URAKindAuthority {
+		return invalidRuntimeClient("descriptor_ref provider ability_descriptor subject_ura must be an Authority URA")
+	}
+	if subject.Realm != callee.Realm || subjectURA != AuthorityURA(callee.Realm) {
+		return invalidRuntimeClient(
+			"descriptor_ref provider ability_descriptor subject_ura must be the callee realm authority subject",
+		)
+	}
+	return nil
 }
 
 // PrepareOptions are runtime prepare policy knobs.

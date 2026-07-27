@@ -345,7 +345,13 @@ def test_runtime_receipt_provider_uses_explicit_route_set() -> None:
 
     transport.output_json = _output(record=None)
     provider.get(
-        ReceiptGetRequest(call=_call(), lookup=ReceiptLookup(request_id="request-1"))
+        ReceiptGetRequest(
+            call=_history_call(
+                scope="receipt.catalog.get",
+                followup_ability="receipt.catalog.get",
+            ),
+            lookup=ReceiptLookup(request_id="request-1"),
+        )
     )
     assert transport.seen["descriptor_ref"] == (
         "easynet:///r/example/ability/authority.receipt.catalog.get@1.0.0"
@@ -353,7 +359,13 @@ def test_runtime_receipt_provider_uses_explicit_route_set() -> None:
 
     transport.output_json = _output(trace_id="trace-1", nodes=[], edges=[])
     provider.trace(
-        ReceiptTraceRequest(call=_call(), lookup=ReceiptLookup(trace_id="trace-1"))
+        ReceiptTraceRequest(
+            call=_history_call(
+                scope="receipt.catalog.trace",
+                followup_ability="receipt.catalog.trace",
+            ),
+            lookup=ReceiptLookup(trace_id="trace-1"),
+        )
     )
     assert transport.seen["descriptor_ref"] == (
         "easynet:///r/example/ability/authority.receipt.catalog.trace@1.0.0"
@@ -573,7 +585,10 @@ def test_runtime_receipt_get_preserves_explicit_not_found_result() -> None:
     transport.output_json = _output(record=None)
     result = provider.get(
         ReceiptGetRequest(
-            call=_call(),
+            call=_history_call(
+                scope="invocation.history.get",
+                followup_ability="invocation.history.get",
+            ),
             lookup=ReceiptLookup(request_id="request-1"),
         )
     )
@@ -588,7 +603,10 @@ def test_runtime_receipt_get_rejects_missing_record_projection() -> None:
     with pytest.raises(SDKError, match="must include record"):
         provider.get(
             ReceiptGetRequest(
-                call=_call(),
+                call=_history_call(
+                    scope="invocation.history.get",
+                    followup_ability="invocation.history.get",
+                ),
                 lookup=ReceiptLookup(request_id="request-1"),
             )
         )
@@ -604,7 +622,10 @@ def test_runtime_receipt_trace_normalizes_daemon_nodes_through_axon_parser() -> 
     )
     result = provider.trace(
         ReceiptTraceRequest(
-            call=_call(),
+            call=_history_call(
+                scope="invocation.trace.get",
+                followup_ability="invocation.trace.get",
+            ),
             lookup=ReceiptLookup(invocation_ura=_record()["invocation_ura"]),
         )
     )
