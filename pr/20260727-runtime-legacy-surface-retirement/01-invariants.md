@@ -48,3 +48,9 @@
   resolve-only directory visibility. A resolve-only row must never expose a
   dispatch sender or carrier contract, and a dispatch session must carry a
   validated session contract with a 16-byte claimant fingerprint.
+- Native runtime session signing has one caller-authority model. Unsigned FFI
+  invocations may be signed only by the session runtime owner or by the
+  Ready-proven paired User caller; both paths load signers through the canonical
+  runtime caller signer resolver. FFI must not call runtime-owner-only signer
+  loaders for User URAs or treat arbitrary keyring inventory as session
+  authority.

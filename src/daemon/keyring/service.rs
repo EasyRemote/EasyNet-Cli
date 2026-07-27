@@ -594,26 +594,6 @@ fn daemon_owner_exited_for_parent(
 /// vault dispatcher and framed Unix transport. It is test-only so production
 /// lifecycle code cannot acquire a second service entry point.
 #[cfg(all(test, unix))]
-pub(crate) fn run_test_unix_key_service(
-    socket_path: std::path::PathBuf,
-    vault_path: std::path::PathBuf,
-    passphrase: String,
-    caller: String,
-    expected_connections: usize,
-    ready: std::sync::mpsc::Sender<Result<ManagedSigningKeyProjection, String>>,
-) {
-    run_test_unix_key_service_with_purpose(
-        socket_path,
-        vault_path,
-        passphrase,
-        caller,
-        "agent_signing".to_string(),
-        expected_connections,
-        ready,
-    );
-}
-
-#[cfg(all(test, unix))]
 pub(crate) fn run_test_unix_key_service_with_purpose(
     socket_path: std::path::PathBuf,
     vault_path: std::path::PathBuf,

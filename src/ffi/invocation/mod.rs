@@ -1671,24 +1671,36 @@ fn runtime_descriptor_catalog_json(
 fn runtime_owner_ura_from_session(
     session: &crate::ffi::client::handle::ClientSession,
 ) -> std::result::Result<String, String> {
+    let discovery = runtime_discovery_from_session(session)?;
+    runtime_owner_ura_from_discovery(&discovery)
+}
+
+#[cfg(feature = "axon-pb")]
+fn runtime_discovery_from_session(
+    session: &crate::ffi::client::handle::ClientSession,
+) -> std::result::Result<crate::daemon::control::discovery::ControlDiscovery, String> {
     let session_control_path = PathBuf::from(&session.control_path);
     let control_path =
         crate::daemon::control::discovery::resolve_control_json_path(&session_control_path)
             .map_err(|error| format!("resolve control discovery path: {error}"))?;
-    let discovery = crate::daemon::control::discovery::read(&control_path)
+    crate::daemon::control::discovery::read(&control_path)
         .map_err(|error| format!("read control discovery {}: {error}", control_path.display()))?
         .ok_or_else(|| {
             format!(
                 "control discovery {} does not exist",
                 control_path.display()
             )
-        })?;
-    let identity = discovery.daemon_identity.ok_or_else(|| {
-        format!(
-            "control discovery {} has no daemon_identity",
-            control_path.display()
-        )
-    })?;
+        })
+}
+
+#[cfg(feature = "axon-pb")]
+fn runtime_owner_ura_from_discovery(
+    discovery: &crate::daemon::control::discovery::ControlDiscovery,
+) -> std::result::Result<String, String> {
+    let identity = discovery
+        .daemon_identity
+        .as_ref()
+        .ok_or_else(|| "control discovery has no daemon_identity".to_string())?;
     let realm = identity.realm.trim();
     if realm.is_empty() {
         return Err("control discovery daemon_identity.realm is empty".to_string());
@@ -1712,9 +1724,109 @@ fn runtime_owner_ura_from_session(
     }
 }
 
+#[cfg(feature = "axon-pb")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RuntimeSessionCallerAuthority {
+    runtime_owner_ura: String,
+    paired_user_ura: Option<String>,
+}
+
+#[cfg(feature = "axon-pb")]
+impl RuntimeSessionCallerAuthority {
+    fn from_session(
+        session: &crate::ffi::client::handle::ClientSession,
+    ) -> std::result::Result<Self, String> {
+        let discovery = runtime_discovery_from_session(session)?;
+        let runtime_owner_ura = runtime_owner_ura_from_discovery(&discovery)?;
+        let paired_user_ura = paired_user_ura_from_discovery(&discovery)?;
+        Ok(Self {
+            runtime_owner_ura,
+            paired_user_ura,
+        })
+    }
+
+    fn admit_caller(&self, caller_ura: &str) -> crate::daemon::Result<()> {
+        if caller_ura == self.runtime_owner_ura {
+            return Ok(());
+        }
+        if self.paired_user_ura.as_deref() == Some(caller_ura) {
+            return Ok(());
+        }
+        Err(crate::daemon::DaemonError::InvalidInvocation(format!(
+            "native runtime invocation caller `{caller_ura}` is not admitted by session authority \
+             owner `{}`",
+            self.runtime_owner_ura
+        )))
+    }
+
+    fn admitted_owner_label(&self) -> String {
+        match self.paired_user_ura.as_deref() {
+            Some(user_ura) => format!("{} or paired user `{user_ura}`", self.runtime_owner_ura),
+            None => self.runtime_owner_ura.clone(),
+        }
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+fn paired_user_ura_from_discovery(
+    discovery: &crate::daemon::control::discovery::ControlDiscovery,
+) -> std::result::Result<Option<String>, String> {
+    let Some(identity) = discovery.daemon_identity.as_ref() else {
+        return Ok(None);
+    };
+    match identity.mode.trim() {
+        "device" | "both" => {}
+        _ => return Ok(None),
+    }
+    let has_paired_user_signer = discovery
+        .capability_flags
+        .iter()
+        .any(|flag| flag == crate::daemon::control::discovery::flags::PAIRED_USER_RUNTIME_SIGNER);
+    if !has_paired_user_signer {
+        return Ok(None);
+    }
+    let credentials = crate::daemon::persistence::config::load_credentials().map_err(|error| {
+        format!("load paired credentials for session caller authority: {error}")
+    })?;
+    if credentials.realm_str() != identity.realm.trim() {
+        return Err(format!(
+            "paired credentials realm `{}` does not match session realm `{}`",
+            credentials.realm_str(),
+            identity.realm.trim()
+        ));
+    }
+    let Some(node_id) = identity
+        .node_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Err("paired-user session authority requires daemon_identity.node_id".to_string());
+    };
+    if credentials.node_id.trim() != node_id {
+        return Err(format!(
+            "paired credentials node `{}` does not match session node `{node_id}`",
+            credentials.node_id.trim()
+        ));
+    }
+    match credentials
+        .runtime_user_binding()
+        .map_err(|error| format!("read paired runtime user binding: {error}"))?
+    {
+        crate::daemon::persistence::config::RuntimeUserBinding::Bound { user_ura } => {
+            Ok(Some(user_ura))
+        }
+        crate::daemon::persistence::config::RuntimeUserBinding::Unbound { .. } => Err(
+            "session advertises paired_user_runtime_signer without bound User credentials"
+                .to_string(),
+        ),
+    }
+}
+
 /// Binds unsigned native-runtime calls to the daemon identity advertised by
 /// the exact client session. Explicit caller signatures pass through
-/// unchanged; only the session owner may use daemon KeyService signing.
+/// unchanged; only the session owner or the Ready-proven paired User may use
+/// daemon KeyService signing.
 ///
 /// This is the single native-provider authority boundary for unary, stream,
 /// and bidi carriers. It does not generate signer material, infer a caller, or
@@ -1730,21 +1842,21 @@ impl<'a> SessionInvocationAuthority<'a> {
         Self { session }
     }
 
-    fn owner_ura(&self) -> crate::daemon::Result<String> {
-        runtime_owner_ura_from_session(self.session).map_err(|error| {
+    fn caller_authority(&self) -> crate::daemon::Result<RuntimeSessionCallerAuthority> {
+        RuntimeSessionCallerAuthority::from_session(self.session).map_err(|error| {
             crate::daemon::DaemonError::InvalidInvocation(format!(
-                "resolve native runtime session owner: {error}"
+                "resolve native runtime session authority: {error}"
             ))
         })
     }
 
-    async fn load_owner_signer(
-        owner_ura: String,
+    async fn load_admitted_caller_signer(
+        caller_ura: String,
     ) -> crate::daemon::Result<Arc<dyn crate::daemon::identity::self_identity::CanonicalSigner>>
     {
-        let signer_owner_ura = owner_ura.clone();
+        let signer_owner_ura = caller_ura.clone();
         let signer = tokio::task::spawn_blocking(move || {
-            crate::daemon::identity::self_identity::RuntimeSigningIdentity::load_default(
+            crate::daemon::identity::self_identity::load_runtime_caller_signer(
                 signer_owner_ura.clone(),
             )
             .map_err(|_error| Self::caller_signer_unavailable_error(&signer_owner_ura))
@@ -1755,7 +1867,7 @@ impl<'a> SessionInvocationAuthority<'a> {
                 "native runtime caller signer task failed: {error}"
             ))
         })??;
-        Ok(Arc::new(signer))
+        Ok(signer)
     }
 
     fn caller_signer_unavailable_error(owner_ura: &str) -> crate::daemon::DaemonError {
@@ -1770,36 +1882,37 @@ impl<'a> SessionInvocationAuthority<'a> {
         caller_ura: &str,
     ) -> crate::daemon::Result<Arc<dyn crate::daemon::identity::self_identity::CanonicalSigner>>
     {
-        let owner_ura = self.owner_ura()?;
-        if caller_ura != owner_ura {
-            return Err(crate::daemon::DaemonError::InvalidInvocation(format!(
-                "native runtime invocation caller `{caller_ura}` does not match session owner `{owner_ura}`"
-            )));
-        }
-        Self::load_owner_signer(owner_ura).await
+        let authority = self.caller_authority()?;
+        authority.admit_caller(caller_ura)?;
+        Self::load_admitted_caller_signer(caller_ura.to_string()).await
     }
 
     async fn cancellation_authority_for_signed(
         &self,
         signed: &crate::daemon::SignedInvocation,
     ) -> InvocationCancellationGate {
-        let owner_ura = match self.owner_ura() {
-            Ok(owner_ura) => owner_ura,
+        let authority = match self.caller_authority() {
+            Ok(authority) => authority,
             Err(error) => {
                 return InvocationCancellationGate::Unavailable {
-                    reason: format!("resolve session owner for cancellation authority: {error}"),
+                    reason: format!(
+                        "resolve session authority for cancellation authority: {error}"
+                    ),
                 };
             }
         };
-        if signed.prepared().tuple().caller_ura != owner_ura {
+        let caller_ura = signed.prepared().tuple().caller_ura.clone();
+        let caller_ura = caller_ura.as_str();
+        if let Err(error) = authority.admit_caller(caller_ura) {
             return InvocationCancellationGate::Unavailable {
                 reason: format!(
-                    "signed invocation caller `{}` does not match session owner `{owner_ura}`",
-                    signed.prepared().tuple().caller_ura
+                    "signed invocation caller `{}` is not admitted by session authority {}: {error}",
+                    signed.prepared().tuple().caller_ura,
+                    authority.admitted_owner_label()
                 ),
             };
         }
-        match Self::load_owner_signer(owner_ura).await {
+        match Self::load_admitted_caller_signer(caller_ura.to_string()).await {
             Ok(signer) => InvocationCancellationGate::Available(
                 crate::daemon::InvocationCancellationAuthority::new(signer),
             ),
@@ -6716,6 +6829,23 @@ mod tests {
     where
         F: FnOnce(crate::daemon::keyring::ManagedSigningKeyProjection),
     {
+        with_test_key_service_for(
+            "easynet:///r/acme/device/dev-a",
+            "agent_signing",
+            expected_connections,
+            f,
+        )
+    }
+
+    #[cfg(unix)]
+    fn with_test_key_service_for<F>(
+        caller: &'static str,
+        purpose: &'static str,
+        expected_connections: usize,
+        f: F,
+    ) where
+        F: FnOnce(crate::daemon::keyring::ManagedSigningKeyProjection),
+    {
         struct EnvRestore {
             socket: Option<std::ffi::OsString>,
         }
@@ -6736,17 +6866,17 @@ mod tests {
             socket: std::env::var_os("EASYNET_KEYRING_SOCKET_PATH"),
         };
         std::env::set_var("EASYNET_KEYRING_SOCKET_PATH", &socket);
-        let caller = "easynet:///r/acme/device/dev-a";
 
         let (ready_tx, ready_rx) = std::sync::mpsc::channel();
         let socket_path = socket.clone();
         let vault_path = temp.path().join("key-service.enc");
         let server = std::thread::spawn(move || {
-            crate::daemon::keyring::service::run_test_unix_key_service(
+            crate::daemon::keyring::service::run_test_unix_key_service_with_purpose(
                 socket_path,
                 vault_path,
                 "test-passphrase".to_string(),
                 caller.to_string(),
+                purpose.to_string(),
                 expected_connections,
                 ready_tx,
             );
@@ -6966,6 +7096,16 @@ mod tests {
         realm: &str,
         node_id: Option<&str>,
     ) -> std::path::PathBuf {
+        write_runtime_discovery_with_flags(directory, mode, realm, node_id, Vec::new())
+    }
+
+    fn write_runtime_discovery_with_flags(
+        directory: &std::path::Path,
+        mode: &str,
+        realm: &str,
+        node_id: Option<&str>,
+        capability_flags: Vec<String>,
+    ) -> std::path::PathBuf {
         let path = directory.join(crate::daemon::control::discovery::CONTROL_JSON_FILENAME);
         crate::daemon::control::discovery::write(
             &path,
@@ -6983,7 +7123,7 @@ mod tests {
                 supported_ipc_versions: crate::daemon::control::discovery::IpcVersionRange::single(
                     crate::daemon::control::discovery::IPC_VERSION_V1,
                 ),
-                capability_flags: Vec::new(),
+                capability_flags,
                 pages_port: None,
             },
         )
@@ -7057,6 +7197,108 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
+    fn session_invocation_authority_admits_ready_paired_user_signer() {
+        use base64::Engine as _;
+        use ed25519_dalek::Verifier as _;
+
+        let user_ura = "easynet:///r/acme/user/user-alice";
+        with_test_key_service_for(
+            user_ura,
+            crate::daemon::identity::self_identity::USER_SIGNING_CLI_PURPOSE,
+            2,
+            |managed_entry| {
+                struct HomeRestore {
+                    previous_home: Option<std::ffi::OsString>,
+                }
+
+                impl Drop for HomeRestore {
+                    fn drop(&mut self) {
+                        match self.previous_home.take() {
+                            Some(value) => std::env::set_var("HOME", value),
+                            None => std::env::remove_var("HOME"),
+                        }
+                    }
+                }
+
+                let directory = tempfile::tempdir().expect("runtime discovery directory");
+                let _home_restore = HomeRestore {
+                    previous_home: std::env::var_os("HOME"),
+                };
+                std::env::set_var("HOME", directory.path());
+                crate::daemon::persistence::config::save_credentials(
+                    &crate::daemon::persistence::config::Credentials {
+                        node_id: "dev-a".to_string(),
+                        credential_token: "token".to_string(),
+                        hub_endpoint: "https://hub.example:50443".to_string(),
+                        realm: "acme".to_string(),
+                        deploy_signature: String::new(),
+                        hub_api_base: None,
+                        username: Some("alice".to_string()),
+                        user_id: Some("user-alice".to_string()),
+                        hub_pubkey_b64: None,
+                        hub_tls_ca_pem_b64: None,
+                        join_receipt_hash: None,
+                    },
+                )
+                .expect("paired credentials");
+                let control_path = write_runtime_discovery_with_flags(
+                    directory.path(),
+                    "device",
+                    "acme",
+                    Some("dev-a"),
+                    vec![
+                        crate::daemon::control::discovery::flags::PAIRED_USER_RUNTIME_SIGNER
+                            .to_string(),
+                    ],
+                );
+                let session = crate::ffi::client::handle::ClientSession::with_control_path_only(
+                    control_path.display().to_string(),
+                    None,
+                );
+                let invocation =
+                    InvocationJson::parse(&canonical_invocation_json(serde_json::json!({
+                        "caller_ura": user_ura,
+                    })))
+                    .expect("parse paired user invocation")
+                    .into_daemon_invocation()
+                    .expect("build daemon invocation");
+                let canonical_bytes = invocation
+                    .clone()
+                    .into_draft()
+                    .prepare(crate::daemon::PrepareOptions::default())
+                    .expect("prepare signing material")
+                    .signing_material()
+                    .canonical_bytes()
+                    .to_vec();
+
+                let (bound, cancellation_authority) = lib_runtime()
+                    .expect("library runtime")
+                    .block_on(
+                        SessionInvocationAuthority::new(&session).bind_cancellable(invocation),
+                    )
+                    .expect("Ready-proven paired user invocation must bind");
+                assert_eq!(cancellation_authority.owner_ura(), user_ura);
+                let signature = bound.signature();
+                assert_eq!(signature.algorithm, "ed25519");
+                assert_eq!(signature.key_id_hint, managed_entry.public_key_b64);
+                let public_key = base64::engine::general_purpose::STANDARD
+                    .decode(managed_entry.public_key_b64)
+                    .expect("managed public key base64");
+                let public_key = ed25519_dalek::VerifyingKey::from_bytes(
+                    public_key.as_slice().try_into().expect("public key length"),
+                )
+                .expect("managed public key");
+                let signature =
+                    ed25519_dalek::Signature::from_slice(&signature.signature).expect("signature");
+                public_key
+                    .verify(&canonical_bytes, &signature)
+                    .expect("paired user signature must verify over canonical bytes");
+            },
+        );
+    }
+
+    #[test]
     fn session_invocation_authority_rejects_unsigned_non_owner() {
         let directory = tempfile::tempdir().expect("runtime discovery directory");
         let control_path =
@@ -7078,9 +7320,10 @@ mod tests {
             .expect_err("unsigned non-owner must fail closed");
 
         assert!(
-            error
-                .to_string()
-                .contains("does not match session owner `easynet:///r/acme/device/dev-a`"),
+            error.to_string().contains(
+                "caller `easynet:///r/acme/device/dev-b` is not admitted by session authority \
+                     owner `easynet:///r/acme/device/dev-a`",
+            ),
             "unexpected owner binding error: {error}"
         );
     }
@@ -7137,9 +7380,10 @@ mod tests {
             .expect_err("foreign caller must not inherit the session cancellation authority");
 
         assert!(
-            error
-                .to_string()
-                .contains("does not match session owner `easynet:///r/acme/device/dev-a`"),
+            error.to_string().contains(
+                "caller `easynet:///r/acme/device/dev-b` is not admitted by session authority \
+                     owner `easynet:///r/acme/device/dev-a`",
+            ),
             "unexpected cancellation authority error: {error}"
         );
     }

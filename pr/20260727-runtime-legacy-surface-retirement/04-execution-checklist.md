@@ -149,3 +149,12 @@
 - [x] Migrate device-mode self presence seed to the explicit resolve-only registration path.
 - [x] Update convergence gates and run focused tests.
 - [x] Commit if stable.
+
+## Iteration 18 — FFI native session caller-authority cutover
+
+- [x] Re-run codegraph and targeted signer/descriptor search for `keyring entry not found` and caller-signer divergence.
+- [x] Identify FFI native session binding as the remaining runtime-owner-only signer path.
+- [x] Extract explicit session caller authority from daemon discovery and Ready paired-user signer facts.
+- [x] Route native unsigned invocation signing through `load_runtime_caller_signer` for both runtime-owner and managed User callers.
+- [x] Preserve fail-closed rejection for unsigned foreign callers and foreign cancellation authority.
+- [x] Add regression coverage for Ready-proven paired User signer binding.

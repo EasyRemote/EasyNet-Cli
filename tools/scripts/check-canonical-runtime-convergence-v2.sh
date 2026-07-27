@@ -16484,6 +16484,12 @@ for required in (
     'stage: "caller_identity"',
     'stage: "routing"',
     'retry: "safe"',
+    "struct RuntimeSessionCallerAuthority",
+    "fn paired_user_ura_from_discovery(",
+    "PAIRED_USER_RUNTIME_SIGNER",
+    "fn admit_caller(&self, caller_ura: &str)",
+    "async fn load_admitted_caller_signer(",
+    "load_runtime_caller_signer(",
     "fn caller_signer_unavailable_error(owner_ura: &str)",
     "DaemonInvocationErrorProjection::CallerSignerUnavailable",
     "DaemonInvocationErrorProjection::DescriptorOwnerOffline",
@@ -16511,13 +16517,15 @@ for required in (
     if required not in daemon_error:
         raise SystemExit(f"ffi_native_runtime_signer_projection:daemon_projection_missing:{required}")
 
-load_start = production.find("async fn load_owner_signer(")
+load_start = production.find("async fn load_admitted_caller_signer(")
 load_end = production.find("\n    fn caller_signer_unavailable_error(", load_start)
 if load_start < 0 or load_end < 0:
-    raise SystemExit("ffi_native_runtime_signer_projection:load_owner_signer_missing")
+    raise SystemExit("ffi_native_runtime_signer_projection:load_admitted_caller_signer_missing")
 body = production[load_start:load_end]
-if "RuntimeSigningIdentity::load_default" not in body:
-    raise SystemExit("ffi_native_runtime_signer_projection:owner_signer_loader_missing")
+if "load_runtime_caller_signer(" not in body:
+    raise SystemExit("ffi_native_runtime_signer_projection:canonical_caller_signer_loader_missing")
+if "RuntimeSigningIdentity::load_default" in body:
+    raise SystemExit("ffi_native_runtime_signer_projection:runtime_owner_loader_used_for_caller")
 if "Self::caller_signer_unavailable_error(&signer_owner_ura)" not in body:
     raise SystemExit("ffi_native_runtime_signer_projection:sanitized_error_helper_not_used")
 if "bind daemon KeyService signer for session owner" in body:
@@ -16538,6 +16546,7 @@ if "record_descriptor_owner_offline_error(message)" not in ffi_error.group("body
     raise SystemExit("ffi_native_runtime_signer_projection:ffi_daemon_error_owner_offline_projection_missing")
 
 for required_test in (
+    "session_invocation_authority_admits_ready_paired_user_signer",
     "native_runtime_signer_error_records_caller_signer_projection",
     "native_runtime_owner_offline_status_records_descriptor_owner_offline_projection",
     "native_runtime_unavailable_without_owner_offline_remains_runtime_offline",

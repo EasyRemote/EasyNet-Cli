@@ -238,3 +238,22 @@
   - passed.
 - `/Users/macbook.silan.tech/.local/bin/codegraph sync`
   - passed; synced 6 changed files.
+
+## Iteration 18
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync`
+  - already up to date before edits.
+- `/Users/macbook.silan.tech/.local/bin/codegraph query "descriptor_ref not found owner is not online caller signer keyring entry not found invocation history meta list abilities"`
+  - isolated descriptor/signer failure surfaces and FFI native signer fork.
+- `cargo test --features axon-pb session_invocation_authority --lib`
+  - passed; 5 passed.
+- `cargo fmt --check`
+  - passed.
+- `git diff --check`
+  - passed.
+- `tools/scripts/check-architecture-convergence.sh`
+  - passed.
+- `tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - passed.
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync`
+  - passed; synced 2 changed files.

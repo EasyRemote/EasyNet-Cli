@@ -258,3 +258,22 @@ Boundary: directory readers still see resolve-only presence through
 `snapshot/contains/online_count`. Unary, stream, and bidi dispatch continue to
 enter only through `lookup_dispatch_session` and therefore require a negotiated
 session. No product compatibility dispatch path is preserved.
+
+## FFI native session caller-authority cutover
+
+Decision: FFI native invocation binding now resolves a `RuntimeSessionCallerAuthority`
+from the attached daemon discovery and admits exactly two unsigned caller
+classes: the runtime owner URA and the paired User URA proven by daemon Ready.
+Signer loading for both classes goes through `load_runtime_caller_signer`.
+
+Reason: Go/Python daemon paths already distinguish runtime-owner signers from
+managed User signers. The FFI native path still called
+`RuntimeSigningIdentity::load_default`, which is intentionally runtime-owner
+only and therefore cannot load managed User callers. That left language-binding
+traffic able to regress into `keyring entry not found` for User URAs even after
+daemon boot had proven paired-user signer custody.
+
+Boundary: explicit caller signatures still pass through without using daemon
+custody. Unsigned foreign callers remain rejected before signing. This is not a
+compatibility fallback; it is the same Ready-proven paired-user authority model
+used by daemon runtime-state reads.
