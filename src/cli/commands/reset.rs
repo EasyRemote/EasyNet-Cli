@@ -39,6 +39,7 @@
 use clap::Args;
 use std::path::Path;
 
+use crate::cli::commands::stop::{StopArgs, StopOptions};
 use crate::daemon::lifecycle::{RuntimeLifecycleService, RuntimeLifecycleStatus};
 use crate::daemon::persistence::config;
 use crate::support::platform::output;
@@ -133,6 +134,21 @@ pub fn run(args: ResetArgs) -> anyhow::Result<()> {
         }
     }
 
+    if reset_runtime_action(reset_scope, &lifecycle_report)
+        == ResetRuntimeAction::StopBeforePurgingLocalState
+    {
+        output::info("Stopping active runtime before purging local EasyNet state...");
+        crate::cli::commands::stop::run_with_options(
+            StopArgs {},
+            StopOptions { skip_revoke: true },
+        )
+        .map_err(|error| {
+            anyhow::anyhow!(
+                "runtime must reach a terminal stopped state before purging local EasyNet state: {error}"
+            )
+        })?;
+    }
+
     // Clean up stale runtime.json (process dead) after deregister attempt.
     if matches!(
         lifecycle_report.status(),
@@ -145,6 +161,25 @@ pub fn run(args: ResetArgs) -> anyhow::Result<()> {
     reset_scope.execute()?;
     output::success(reset_scope.success_message());
     Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResetRuntimeAction {
+    Noop,
+    StopBeforePurgingLocalState,
+}
+
+fn reset_runtime_action(
+    scope: LocalResetScope,
+    lifecycle_report: &crate::daemon::lifecycle::RuntimeStatusReport,
+) -> ResetRuntimeAction {
+    if matches!(scope, LocalResetScope::LocalStateRoot)
+        && lifecycle_report.daemon().has_daemon_fact()
+    {
+        ResetRuntimeAction::StopBeforePurgingLocalState
+    } else {
+        ResetRuntimeAction::Noop
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -336,6 +371,9 @@ fn invoke_federation_revoke_for_reset(_device_ura: &str) -> anyhow::Result<()> {
 mod tests {
     use super::*;
     use crate::cli::commands::test_support::HomeGuard;
+    use crate::daemon::boot::DaemonEndpoints;
+    use crate::daemon::lifecycle::{DaemonDiscoverySnapshot, RuntimeStatusReport};
+    use std::path::PathBuf;
 
     fn paired_credentials() -> config::Credentials {
         config::Credentials {
@@ -363,6 +401,13 @@ mod tests {
             label: Some("node-reset-test".to_string()),
             started_at: None,
             credential_verified: None,
+        }
+    }
+
+    fn endpoints() -> DaemonEndpoints {
+        DaemonEndpoints {
+            control: PathBuf::from("/tmp/easynet-reset-control.sock"),
+            invocation: PathBuf::from("/tmp/easynet-reset-daemon.sock"),
         }
     }
 
@@ -515,6 +560,46 @@ mod tests {
         assert!(
             !state_dir.exists(),
             "purge reset must remove the local state root instead of preserving stale subtrees"
+        );
+    }
+
+    #[test]
+    fn purge_local_state_requires_runtime_terminal_state_before_delete() {
+        let report = RuntimeStatusReport::from_parts(
+            None,
+            DaemonDiscoverySnapshot::from_parts(
+                None,
+                Some(std::process::id()),
+                true,
+                true,
+                true,
+                endpoints(),
+            ),
+        );
+
+        assert_eq!(
+            reset_runtime_action(LocalResetScope::LocalStateRoot, &report),
+            ResetRuntimeAction::StopBeforePurgingLocalState,
+            "purge reset must not delete ~/.easynet while daemon/key-service state can remain live"
+        );
+        assert_eq!(
+            reset_runtime_action(LocalResetScope::CredentialsOnly, &report),
+            ResetRuntimeAction::Noop,
+            "credentials-only reset keeps the existing force/reset semantics"
+        );
+    }
+
+    #[test]
+    fn purge_local_state_does_not_stop_when_no_runtime_fact_exists() {
+        let report = RuntimeStatusReport::from_parts(
+            None,
+            DaemonDiscoverySnapshot::from_parts(None, None, false, false, false, endpoints()),
+        );
+
+        assert_eq!(
+            reset_runtime_action(LocalResetScope::LocalStateRoot, &report),
+            ResetRuntimeAction::Noop,
+            "fresh clean-state reset should not manufacture lifecycle work"
         );
     }
 
