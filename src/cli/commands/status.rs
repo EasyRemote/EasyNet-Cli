@@ -22,7 +22,7 @@ use crate::daemon::boot::join_connection_state;
 use crate::daemon::lifecycle::{RuntimeLifecycleService, RuntimeLifecycleStatus};
 use crate::daemon::persistence::config;
 use crate::support::platform::local_invoke::{
-    LocalRuntimeCatalogueReadIssuer, LocalRuntimeStateReadIssuer,
+    LocalRuntimeCatalogueReadIssuer, LocalRuntimeOperationalReadIssuer, LocalRuntimeStateReadIssuer,
 };
 use crate::support::platform::output;
 
@@ -189,6 +189,31 @@ pub fn run(args: StatusArgs) -> anyhow::Result<()> {
             let offline = total.saturating_sub(online);
             output::info(&format!("Nodes: {online} online, {offline} offline"));
         }
+        StatusRuntimeReadPolicy::DeviceOwnerOperational => {
+            match LocalRuntimeOperationalReadIssuer::invoke(
+                "observe.health",
+                json!({"source": "runtime.status"}),
+            ) {
+                Ok(_) => output::info("Runtime health: daemon invocation endpoint accepting"),
+                Err(e) => {
+                    let inner = format!("{e}");
+                    if matches!(
+                        crate::support::platform::local_invoke::classify_invoke_failure(&e),
+                        crate::support::platform::local_invoke::LocalInvokeFailureClass::DaemonOffline
+                    ) {
+                        output::warn(&inner);
+                    } else {
+                        output::warn(&format!(
+                            "Local daemon is not responding to observe.health despite runtime metadata: {inner}"
+                        ));
+                    }
+                    return Ok(());
+                }
+            }
+            output::info(
+                "Nodes: not queried (user-scoped federation directory requires a bound user)",
+            );
+        }
         StatusRuntimeReadPolicy::DaemonOperationalOnly => {
             output::info(
                 "Runtime health: daemon invocation endpoint accepting (device runtime-state reads require pairing)",
@@ -254,13 +279,18 @@ impl StatusPairingState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StatusRuntimeReadPolicy {
     UserRuntimeState,
+    DeviceOwnerOperational,
     DaemonOperationalOnly,
 }
 
 impl StatusRuntimeReadPolicy {
     fn for_pairing_state(state: &StatusPairingState) -> Self {
         match state {
-            StatusPairingState::Paired(_) => Self::UserRuntimeState,
+            StatusPairingState::Paired(credentials) => match credentials.runtime_user_binding() {
+                Ok(config::RuntimeUserBinding::Bound { .. }) => Self::UserRuntimeState,
+                Ok(config::RuntimeUserBinding::Unbound { .. }) => Self::DeviceOwnerOperational,
+                Err(_) => Self::DaemonOperationalOnly,
+            },
             StatusPairingState::Unpaired | StatusPairingState::Invalid { .. } => {
                 Self::DaemonOperationalOnly
             }
@@ -391,6 +421,16 @@ mod tests {
         }
     }
 
+    fn device_only_credentials() -> config::Credentials {
+        let mut credentials = complete_credentials();
+        credentials.credential_token.clear();
+        credentials.username = None;
+        credentials.user_id = None;
+        credentials.hub_pubkey_b64 = Some("hub-pubkey".to_string());
+        credentials.join_receipt_hash = Some("sha256:test-join-receipt".to_string());
+        credentials
+    }
+
     #[test]
     fn status_pairing_state_reports_paired_credentials() {
         let state = StatusPairingState::from_credentials_result(Ok(Some(complete_credentials())));
@@ -430,6 +470,17 @@ mod tests {
         assert_eq!(
             StatusRuntimeReadPolicy::for_pairing_state(&state),
             StatusRuntimeReadPolicy::UserRuntimeState
+        );
+    }
+
+    #[test]
+    fn runtime_read_policy_uses_device_owner_operational_probe_for_device_only_credentials() {
+        let state =
+            StatusPairingState::from_credentials_result(Ok(Some(device_only_credentials())));
+
+        assert_eq!(
+            StatusRuntimeReadPolicy::for_pairing_state(&state),
+            StatusRuntimeReadPolicy::DeviceOwnerOperational
         );
     }
 

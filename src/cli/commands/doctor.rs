@@ -25,7 +25,9 @@ use crate::cli::commands::agent_cli_probe::LocalAgentCliProbe;
 use crate::cli::daemon_client::agent_view::{self, AgentRuntimeKind, DaemonAgentRow};
 use crate::daemon::boot::join_connection_state;
 use crate::daemon::persistence::config;
-use crate::support::platform::local_invoke::LocalRuntimeStateReadIssuer;
+use crate::support::platform::local_invoke::{
+    LocalRuntimeOperationalReadIssuer, LocalRuntimeStateReadIssuer,
+};
 
 #[derive(Debug, Args)]
 pub struct DoctorArgs {
@@ -196,6 +198,14 @@ fn check_user_signing_key() -> Check {
             }
         }
     };
+    if let Ok(config::RuntimeUserBinding::Unbound { reason }) = creds.runtime_user_binding() {
+        return Check {
+            name,
+            status: CheckStatus::Warn,
+            detail: format!("{reason}; user-as-caller signing key not applicable"),
+            hint: Some("Bind a product User before invoking user-scoped abilities."),
+        };
+    }
     let user_ura = match creds.user_ura() {
         Ok(u) => u,
         Err(_) => {
@@ -244,9 +254,21 @@ fn check_user_signing_key() -> Check {
     }
 }
 
+fn unbound_runtime_user_reason() -> Option<&'static str> {
+    config::load_credentials_optional()
+        .ok()
+        .flatten()
+        .and_then(
+            |credentials| match credentials.runtime_user_binding().ok()? {
+                config::RuntimeUserBinding::Unbound { reason } => Some(reason),
+                config::RuntimeUserBinding::Bound { .. } => None,
+            },
+        )
+}
+
 fn check_runtime() -> Check {
     match config::load() {
-        Ok(state) => match LocalRuntimeStateReadIssuer::invoke(
+        Ok(state) => match LocalRuntimeOperationalReadIssuer::invoke(
             "observe.health",
             serde_json::json!({"source": "doctor"}),
         ) {
@@ -275,6 +297,14 @@ fn check_runtime() -> Check {
 }
 
 fn check_federation() -> Check {
+    if let Some(reason) = unbound_runtime_user_reason() {
+        return Check {
+            name: "federation".to_string(),
+            status: CheckStatus::Warn,
+            detail: format!("{reason}; user-scoped federation directory not applicable"),
+            hint: Some("Bind a product User before querying user-scoped federation entries."),
+        };
+    }
     // Joint-plan unified path: cross-device enumeration goes through
     // `federation.discover` (the same surface `easynet device list`
     // and `easynet runtime status` use). DirectoryEntries carry a
@@ -359,6 +389,15 @@ fn federation_check_impl() -> Check {
 }
 
 fn check_agents() -> Vec<Check> {
+    if let Some(reason) = unbound_runtime_user_reason() {
+        return vec![Check {
+            name: "agents".to_string(),
+            status: CheckStatus::Warn,
+            detail: format!("{reason}; user-scoped agent registry not applicable"),
+            hint: Some("Bind a product User before checking product agent rows."),
+        }];
+    }
+
     let daemon_rows = match agent_view::list_agents() {
         Ok(rows) => rows,
         Err(err) => return vec![agent_list_unavailable_check(&err)],
@@ -492,6 +531,22 @@ fn check_mcp_clients() -> Check {
 mod tests {
     use super::*;
 
+    fn device_only_credentials() -> config::Credentials {
+        config::Credentials {
+            node_id: "device-a".to_string(),
+            credential_token: String::new(),
+            hub_endpoint: "axon://hub.example:7700".to_string(),
+            realm: "localhost".to_string(),
+            deploy_signature: String::new(),
+            hub_api_base: None,
+            username: None,
+            user_id: None,
+            hub_pubkey_b64: Some("hub-pubkey".to_string()),
+            hub_tls_ca_pem_b64: None,
+            join_receipt_hash: Some("sha256:test-join-receipt".to_string()),
+        }
+    }
+
     fn daemon_row(name: &str, runtime: &str) -> DaemonAgentRow {
         DaemonAgentRow {
             name: name.to_string(),
@@ -512,6 +567,33 @@ mod tests {
         assert_eq!(check.status, CheckStatus::Warn);
         assert!(check.detail.contains("agent.list unavailable"));
         assert!(check.detail.contains("daemon offline"));
+    }
+
+    #[test]
+    fn device_only_runtime_skips_user_scoped_federation_and_agent_checks() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        config::save_credentials(&device_only_credentials()).expect("save device-only credentials");
+
+        let federation = check_federation();
+        assert_eq!(federation.status, CheckStatus::Warn);
+        assert!(
+            federation
+                .detail
+                .contains("user-scoped federation directory not applicable"),
+            "wrong federation detail: {}",
+            federation.detail
+        );
+
+        let agents = check_agents();
+        assert_eq!(agents.len(), 1);
+        assert_eq!(agents[0].status, CheckStatus::Warn);
+        assert!(
+            agents[0]
+                .detail
+                .contains("user-scoped agent registry not applicable"),
+            "wrong agent detail: {}",
+            agents[0].detail
+        );
     }
 
     #[test]

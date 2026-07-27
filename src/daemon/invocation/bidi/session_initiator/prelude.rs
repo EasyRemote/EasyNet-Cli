@@ -288,6 +288,27 @@ async fn run_hosted_agent_advertise_prelude(
             endpoint: hub_endpoint.to_string(),
             reason: format!("signer owner URA `{caller_ura}` is invalid: {error}"),
         })?;
+    if crate::daemon::persistence::config::load_credentials_optional()
+        .map_err(|error| SessionError::HostedAgentPreludeFailed {
+            endpoint: hub_endpoint.to_string(),
+            reason: format!("load credentials for hosted-agent owner projection: {error}"),
+        })?
+        .as_ref()
+        .is_some_and(|credentials| {
+            matches!(
+                credentials.runtime_user_binding(),
+                Ok(crate::daemon::persistence::config::RuntimeUserBinding::Unbound { .. })
+            )
+        })
+    {
+        crate::op_event!(
+            component = session,
+            kind = advertise_agent_prelude_skipped,
+            reason = "runtime_user_unbound",
+            message = "device-only runtime has no user-root hosted-agent owner projection",
+        );
+        return Ok(());
+    }
     // The agent owner-prefix is the USERNAME slug (`<username>.<agent>`, e.g.
     // `dev.pages`), NOT the user UUID. This is the §15.1-3 dual grammar: subject
     // URAs anchor on the stable UUID, but owner-prefixed agent/resource URAs keep
@@ -934,12 +955,16 @@ async fn sync_paired_user_trust_prelude(
     else {
         return Ok(UserTrustBootstrapOutcome::NotRequired);
     };
-    let user_ura =
-        creds
-            .user_ura()
-            .map_err(|error| UserTrustBootstrapError::CredentialsUnavailable {
-                message: format!("project paired user URA: {error:#}"),
-            })?;
+    let user_ura = match creds.runtime_user_binding().map_err(|error| {
+        UserTrustBootstrapError::CredentialsUnavailable {
+            message: format!("project runtime user binding: {error:#}"),
+        }
+    })? {
+        crate::daemon::persistence::config::RuntimeUserBinding::Bound { user_ura } => user_ura,
+        crate::daemon::persistence::config::RuntimeUserBinding::Unbound { .. } => {
+            return Ok(UserTrustBootstrapOutcome::NotRequired);
+        }
+    };
     let realm = creds.realm.trim();
     if realm != sync.daemon_realm {
         return Ok(UserTrustBootstrapOutcome::NotRequired);
@@ -1229,7 +1254,8 @@ pub(super) fn committed_owner_ability_descriptors(
 mod tests {
     use super::{
         apply_federation_join_receipt, paired_user_resolve_key_args, paired_user_trust_present,
-        resolve_hosted_agent_user_segment, resolved_public_keys, sync_paired_user_trust_prelude,
+        resolve_hosted_agent_user_segment, resolved_public_keys,
+        run_hosted_agent_advertise_prelude, sync_paired_user_trust_prelude,
         HostedAgentPreludePublicationPlan, UserTrustBootstrapError, UserTrustBootstrapOutcome,
         UserTrustSync,
     };
@@ -1479,6 +1505,43 @@ mod tests {
             .await
             .expect("missing credentials are the only not-required local state");
         assert_eq!(outcome, UserTrustBootstrapOutcome::NotRequired);
+    }
+
+    #[tokio::test]
+    async fn paired_user_trust_bootstrap_skips_device_only_credentials() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        save_credentials(&federation_native_credentials_without_user_binding())
+            .expect("save federation-native device credential");
+        let sync = user_trust_sync_with_key("easynet:///r/realm/user/user-dev");
+        let mut client =
+            InvocationClient::new(Channel::from_static("http://127.0.0.1:1").connect_lazy());
+        let signer = TestCanonicalSigner::new("easynet:///r/realm/device/n1", [0x11; 32]);
+
+        let outcome = sync_paired_user_trust_prelude(&mut client, &signer, &sync)
+            .await
+            .expect("device-only runtime has no paired-user trust prelude");
+        assert_eq!(outcome, UserTrustBootstrapOutcome::NotRequired);
+    }
+
+    #[tokio::test]
+    async fn hosted_agent_advertise_prelude_skips_device_only_credentials() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        save_credentials(&federation_native_credentials_without_user_binding())
+            .expect("save federation-native device credential");
+        let mut phase = super::SessionPhaseTracker::new();
+        let signer = TestCanonicalSigner::new("easynet:///r/realm/device/n1", [0x11; 32]);
+        let mut client =
+            InvocationClient::new(Channel::from_static("http://127.0.0.1:1").connect_lazy());
+
+        run_hosted_agent_advertise_prelude(
+            &mut client,
+            &mut phase,
+            "https://hub.example:50443",
+            &signer,
+            &[],
+        )
+        .await
+        .expect("device-only runtime must skip user-root hosted-agent publication");
     }
 
     #[tokio::test]

@@ -453,9 +453,14 @@ pub fn start_daemon_invocation_transport(
     runtime_trust_anchor.replace(Arc::new(trust_anchor));
     let trust_anchor_cell = runtime_trust_anchor;
     let mut ready_capability_flags = Vec::new();
-    if capabilities.device_identity {
-        register_paired_user_runtime_signer(&config, &trust_anchor_path, &trust_anchor_cell)
-            .context("register paired User runtime signing identity")?;
+    if capabilities.device_identity
+        && register_paired_user_runtime_signer_if_bound(
+            &config,
+            &trust_anchor_path,
+            &trust_anchor_cell,
+        )
+        .context("register paired User runtime signing identity")?
+    {
         ready_capability_flags
             .push(crate::daemon::control::discovery::flags::PAIRED_USER_RUNTIME_SIGNER.to_string());
     }
@@ -1078,13 +1083,13 @@ async fn publish_dynamic_owner_projection(
     }
 }
 
-fn register_paired_user_runtime_signer(
+fn register_paired_user_runtime_signer_if_bound(
     config: &DaemonConfig,
     trust_anchor_path: &PathBuf,
     trust_anchor_cell: &SharedTrustAnchor,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<bool> {
     if config.mode() == DaemonMode::Hub {
-        return Ok(());
+        return Ok(false);
     }
     let credentials = crate::daemon::persistence::config::load_credentials()
         .context("load paired device credentials for user runtime signer")?;
@@ -1095,9 +1100,11 @@ fn register_paired_user_runtime_signer(
             config.realm()
         );
     }
-    let user_ura = credentials
-        .user_ura()
-        .context("paired device credentials must include a canonical User URA")?;
+    let crate::daemon::persistence::config::RuntimeUserBinding::Bound { user_ura } =
+        credentials.runtime_user_binding()?
+    else {
+        return Ok(false);
+    };
     let client = crate::daemon::identity::self_identity::KeyringClient::default_path();
     let ensured = crate::daemon::identity::self_identity::ensure_user_runtime_signing_identity(
         &client, &user_ura,
@@ -1153,7 +1160,7 @@ fn register_paired_user_runtime_signer(
         user_ura = user_ura.as_str(),
         key_id = projection.key_id.as_str(),
     );
-    Ok(())
+    Ok(true)
 }
 
 fn transport_daemon_ura(

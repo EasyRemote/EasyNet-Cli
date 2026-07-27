@@ -454,13 +454,52 @@ impl LocalRuntimeStateReadIssuer {
     }
 }
 
+/// Named issuer for daemon-local operational health reads.
+///
+/// `observe.health` proves the local runtime invocation path, not a
+/// user-scoped product session. Bound-user runtimes keep the user-owned
+/// runtime-state subject; Hub and federation-native device-only runtimes use
+/// their runtime-owner subject. This keeps health checks available in every
+/// valid runtime mode without minting a placeholder User.
+pub struct LocalRuntimeOperationalReadIssuer;
+
+impl LocalRuntimeOperationalReadIssuer {
+    pub fn invoke(ability: &str, args: Value) -> anyhow::Result<Value> {
+        Self::invoke_timeout(ability, args, std::time::Duration::from_secs(30))
+    }
+
+    pub fn invoke_timeout(
+        ability: &str,
+        args: Value,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<Value> {
+        if ability.trim() != crate::daemon::ability::names::governance::OBSERVE_HEALTH {
+            anyhow::bail!(
+                "LocalRuntimeOperationalReadIssuer only admits observe.health, got {ability:?}"
+            );
+        }
+        let subject_ura = LocalRuntimeOwnerReadAttachment::from_discovery_file(
+            &KeyServiceRuntimeStateReadSignerCustody,
+            "runtime operational read subject unavailable",
+        )
+        .and_then(|attachment| attachment.into_subject_ura())?;
+        LocalDaemonSystemAbilityIssuer::invoke_root_for_subject_timeout(
+            ability,
+            args,
+            &subject_ura,
+            timeout,
+        )
+    }
+}
+
 /// Named issuer for runtime governance ledger reads.
 ///
-/// Device product reads are user-owned runtime-state observations and keep the
-/// stricter paired-user signer custody requirement. Hub-local governance reads
-/// are owned by the realm Authority and are valid before any user/device is
-/// paired. This issuer selects between those two explicit states from daemon
-/// Ready discovery instead of defaulting a placeholder user or a device subject.
+/// Bound-user product reads are user-owned runtime-state observations and keep
+/// the stricter paired-user signer custody requirement. Hub-local governance
+/// reads are owned by the realm Authority; federation-native device-only
+/// governance reads are owned by the local Device. This issuer selects among
+/// those explicit states from daemon Ready discovery instead of defaulting a
+/// placeholder user.
 pub struct LocalRuntimeGovernanceReadIssuer;
 
 impl LocalRuntimeGovernanceReadIssuer {
@@ -488,18 +527,9 @@ impl LocalRuntimeGovernanceReadIssuer {
     }
 
     fn subject_ura() -> anyhow::Result<String> {
-        let discovery = crate::daemon::control::discovery::read(
-            &crate::daemon::control::discovery::default_path(),
-        )
-        .map_err(|error| anyhow::anyhow!("runtime governance read subject unavailable: {error}"))?
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "runtime governance read subject unavailable: daemon Ready discovery is missing"
-            )
-        })?;
-        LocalRuntimeGovernanceReadAttachment::from_discovery(
-            &discovery,
+        LocalRuntimeOwnerReadAttachment::from_discovery_file(
             &KeyServiceRuntimeStateReadSignerCustody,
+            "runtime governance read subject unavailable",
         )
         .and_then(|attachment| attachment.into_subject_ura())
     }
@@ -537,63 +567,38 @@ struct LocalRuntimeStateReadAttachment {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum LocalRuntimeGovernanceReadAttachment {
+enum LocalRuntimeOwnerReadAttachment {
     PairedUser(LocalRuntimeStateReadAttachment),
-    RealmAuthority { realm: String },
+    RuntimeOwner { subject_ura: String },
 }
 
-impl LocalRuntimeGovernanceReadAttachment {
+impl LocalRuntimeOwnerReadAttachment {
+    fn from_discovery_file(
+        signer_custody: &dyn RuntimeStateReadSignerCustody,
+        error_prefix: &'static str,
+    ) -> anyhow::Result<Self> {
+        let discovery = crate::daemon::control::discovery::read(
+            &crate::daemon::control::discovery::default_path(),
+        )
+        .map_err(|error| anyhow::anyhow!("{error_prefix}: {error}"))?
+        .ok_or_else(|| anyhow::anyhow!("{error_prefix}: daemon Ready discovery is missing"))?;
+        Self::from_discovery(&discovery, signer_custody, error_prefix)
+    }
+
     fn from_discovery(
         discovery: &crate::daemon::control::discovery::ControlDiscovery,
         signer_custody: &dyn RuntimeStateReadSignerCustody,
+        error_prefix: &'static str,
     ) -> anyhow::Result<Self> {
         let identity = discovery.daemon_identity.as_ref().ok_or_else(|| {
-            anyhow::anyhow!(
-                "runtime governance read subject unavailable: daemon Ready discovery has no runtime identity"
-            )
+            anyhow::anyhow!("{error_prefix}: daemon Ready discovery has no runtime identity")
         })?;
         match identity.mode.trim() {
             "hub" => {
                 let realm = identity.realm.trim();
                 if realm.is_empty() {
-                    anyhow::bail!(
-                        "runtime governance read subject unavailable: hub daemon identity has empty realm"
-                    );
+                    anyhow::bail!("{error_prefix}: hub daemon identity has empty realm");
                 }
-                let authority = crate::core::ura::hub_ura(realm);
-                crate::core::identity::RuntimeGovernanceReadSubject::parse_for_callee(
-                    &authority,
-                    &authority,
-                )
-                .map_err(|error| {
-                    anyhow::anyhow!("runtime governance read subject is invalid: {error}")
-                })?;
-                Ok(Self::RealmAuthority {
-                    realm: realm.to_string(),
-                })
-            }
-            "device" | "both" => {
-                let credentials = crate::daemon::persistence::config::load_credentials()
-                    .map_err(|error| {
-                        anyhow::anyhow!("runtime governance read subject unavailable: {error}")
-                    })?;
-                let attachment = LocalRuntimeStateReadAttachment::from_runtime_attachment(
-                    &credentials,
-                    discovery,
-                    signer_custody,
-                )?;
-                Ok(Self::PairedUser(attachment))
-            }
-            other => anyhow::bail!(
-                "runtime governance read subject unavailable: daemon mode {other:?} cannot own governance reads"
-            ),
-        }
-    }
-
-    fn subject_ura(&self) -> anyhow::Result<String> {
-        match self {
-            Self::PairedUser(attachment) => attachment.clone().into_subject_ura(),
-            Self::RealmAuthority { realm } => {
                 let authority = crate::core::ura::hub_ura(realm);
                 crate::core::identity::RuntimeGovernanceReadSubject::parse_for_callee(
                     &authority, &authority,
@@ -601,13 +606,107 @@ impl LocalRuntimeGovernanceReadAttachment {
                 .map_err(|error| {
                     anyhow::anyhow!("runtime governance read subject is invalid: {error}")
                 })?;
-                Ok(authority)
+                Ok(Self::RuntimeOwner {
+                    subject_ura: authority,
+                })
             }
+            "device" | "both" => {
+                let credentials = crate::daemon::persistence::config::load_credentials()
+                    .map_err(|error| anyhow::anyhow!("{error_prefix}: {error}"))?;
+                match credentials
+                    .runtime_user_binding()
+                    .map_err(|error| anyhow::anyhow!("{error_prefix}: {error}"))?
+                {
+                    crate::daemon::persistence::config::RuntimeUserBinding::Bound { .. } => {
+                        let attachment = LocalRuntimeStateReadAttachment::from_runtime_attachment(
+                            &credentials,
+                            discovery,
+                            signer_custody,
+                        )?;
+                        Ok(Self::PairedUser(attachment))
+                    }
+                    crate::daemon::persistence::config::RuntimeUserBinding::Unbound { .. } => {
+                        let identity = LocalRuntimeAttachmentIdentity::from_credentials_discovery(
+                            &credentials,
+                            discovery,
+                            error_prefix,
+                        )?;
+                        let device_ura =
+                            crate::core::ura::device_ura(&identity.realm, &identity.node_id);
+                        crate::core::identity::RuntimeGovernanceReadSubject::parse_for_callee(
+                            &device_ura,
+                            &device_ura,
+                        )
+                        .map_err(|error| {
+                            anyhow::anyhow!("runtime governance read subject is invalid: {error}")
+                        })?;
+                        Ok(Self::RuntimeOwner {
+                            subject_ura: device_ura,
+                        })
+                    }
+                }
+            }
+            other => {
+                anyhow::bail!("{error_prefix}: daemon mode {other:?} cannot own runtime reads")
+            }
+        }
+    }
+
+    fn subject_ura(&self) -> anyhow::Result<String> {
+        match self {
+            Self::PairedUser(attachment) => attachment.clone().into_subject_ura(),
+            Self::RuntimeOwner { subject_ura } => Ok(subject_ura.clone()),
         }
     }
 
     fn into_subject_ura(self) -> anyhow::Result<String> {
         self.subject_ura()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LocalRuntimeAttachmentIdentity {
+    realm: String,
+    node_id: String,
+}
+
+impl LocalRuntimeAttachmentIdentity {
+    fn from_credentials_discovery(
+        credentials: &crate::daemon::persistence::config::Credentials,
+        discovery: &crate::daemon::control::discovery::ControlDiscovery,
+        error_prefix: &'static str,
+    ) -> anyhow::Result<Self> {
+        let identity = discovery.daemon_identity.as_ref().ok_or_else(|| {
+            anyhow::anyhow!("{error_prefix}: daemon Ready discovery has no runtime identity")
+        })?;
+        if identity.realm.trim() != credentials.realm_str().trim() {
+            anyhow::bail!(
+                "{error_prefix}: daemon realm `{}` does not match paired credentials realm `{}`",
+                identity.realm.trim(),
+                credentials.realm_str().trim()
+            );
+        }
+        if let Some(node_id) = identity.node_id.as_deref() {
+            if node_id.trim() != credentials.node_id.trim() {
+                anyhow::bail!(
+                    "{error_prefix}: daemon node `{}` does not match paired credentials node `{}`",
+                    node_id.trim(),
+                    credentials.node_id.trim()
+                );
+            }
+        }
+        let realm = credentials.realm_str().trim();
+        if realm.is_empty() {
+            anyhow::bail!("{error_prefix}: credentials file is missing realm");
+        }
+        let node_id = credentials.node_id.trim();
+        if node_id.is_empty() {
+            anyhow::bail!("{error_prefix}: credentials file is missing node_id");
+        }
+        Ok(Self {
+            realm: realm.to_string(),
+            node_id: node_id.to_string(),
+        })
     }
 }
 
@@ -634,11 +733,6 @@ impl LocalRuntimeStateReadAttachment {
         discovery: &crate::daemon::control::discovery::ControlDiscovery,
         signer_custody: &dyn RuntimeStateReadSignerCustody,
     ) -> anyhow::Result<Self> {
-        let identity = discovery.daemon_identity.as_ref().ok_or_else(|| {
-            anyhow::anyhow!(
-                "runtime-state read subject unavailable: daemon Ready discovery has no runtime identity"
-            )
-        })?;
         let has_paired_user_signer = discovery.capability_flags.iter().any(|flag| {
             flag == crate::daemon::control::discovery::flags::PAIRED_USER_RUNTIME_SIGNER
         });
@@ -647,28 +741,11 @@ impl LocalRuntimeStateReadAttachment {
                 "runtime-state read subject unavailable: daemon Ready did not prove paired User caller signer custody"
             );
         }
-        if identity.realm.trim() != credentials.realm_str().trim() {
-            anyhow::bail!(
-                "runtime-state read subject unavailable: daemon realm `{}` does not match paired credentials realm `{}`",
-                identity.realm.trim(),
-                credentials.realm_str().trim()
-            );
-        }
-        if let Some(node_id) = identity.node_id.as_deref() {
-            if node_id.trim() != credentials.node_id.trim() {
-                anyhow::bail!(
-                    "runtime-state read subject unavailable: daemon node `{}` does not match paired credentials node `{}`",
-                    node_id.trim(),
-                    credentials.node_id.trim()
-                );
-            }
-        }
-        let realm = credentials.realm_str().trim();
-        if realm.is_empty() {
-            anyhow::bail!(
-                "runtime-state read subject unavailable: credentials file is missing realm"
-            );
-        }
+        let identity = LocalRuntimeAttachmentIdentity::from_credentials_discovery(
+            credentials,
+            discovery,
+            "runtime-state read subject unavailable",
+        )?;
         let user_ura = credentials
             .user_ura()
             .map_err(|error| anyhow::anyhow!("runtime-state read subject unavailable: {error}"))?;
@@ -677,7 +754,7 @@ impl LocalRuntimeStateReadAttachment {
             .user_id()
             .map_err(|error| anyhow::anyhow!("runtime-state read subject unavailable: {error}"))?;
         Ok(Self {
-            realm: realm.to_string(),
+            realm: identity.realm,
             user_id: user_id.to_string(),
         })
     }
@@ -993,6 +1070,16 @@ mod tests {
             hub_tls_ca_pem_b64: None,
             join_receipt_hash: None,
         }
+    }
+
+    fn device_only_runtime_credentials() -> crate::daemon::persistence::config::Credentials {
+        let mut credentials = runtime_state_read_credentials();
+        credentials.credential_token.clear();
+        credentials.username = None;
+        credentials.user_id = None;
+        credentials.hub_pubkey_b64 = Some("hub-pubkey".to_string());
+        credentials.join_receipt_hash = Some("sha256:test-join-receipt".to_string());
+        credentials
     }
 
     fn runtime_state_read_discovery(
@@ -1345,9 +1432,10 @@ mod tests {
 
     #[test]
     fn runtime_governance_read_subject_uses_realm_authority_in_hub_mode() {
-        let subject = LocalRuntimeGovernanceReadAttachment::from_discovery(
+        let subject = LocalRuntimeOwnerReadAttachment::from_discovery(
             &hub_runtime_governance_discovery("acme"),
             &FailedRuntimeStateReadSignerCustody,
+            "runtime governance read subject unavailable",
         )
         .expect("hub governance read subject must not require paired user signer custody")
         .into_subject_ura()
@@ -1357,17 +1445,51 @@ mod tests {
     }
 
     #[test]
+    fn runtime_governance_read_subject_uses_device_owner_for_device_only_credentials() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        crate::daemon::persistence::config::save_credentials(&device_only_runtime_credentials())
+            .expect("save device-only credentials");
+
+        let subject = LocalRuntimeOwnerReadAttachment::from_discovery(
+            &runtime_state_read_discovery("acme", Some("dev-a"), vec![]),
+            &FailedRuntimeStateReadSignerCustody,
+            "runtime governance read subject unavailable",
+        )
+        .expect("device-only governance read subject must not require paired user signer custody")
+        .into_subject_ura()
+        .expect("device runtime-owner subject");
+
+        assert_eq!(subject, "easynet:///r/acme/device/dev-a");
+    }
+
+    #[test]
+    fn runtime_operational_read_issuer_only_admits_observe_health() {
+        let error = LocalRuntimeOperationalReadIssuer::invoke_timeout(
+            "meta.list_abilities",
+            serde_json::json!({}),
+            std::time::Duration::from_millis(1),
+        )
+        .expect_err("operational issuer must not become a generic local read issuer");
+
+        assert!(
+            error.to_string().contains("only admits observe.health"),
+            "wrong error: {error:#}"
+        );
+    }
+
+    #[test]
     fn runtime_governance_read_subject_rejects_unknown_daemon_mode() {
         let mut discovery = hub_runtime_governance_discovery("acme");
         discovery.daemon_identity.as_mut().expect("identity").mode = "worker".to_string();
 
-        let error = LocalRuntimeGovernanceReadAttachment::from_discovery(
+        let error = LocalRuntimeOwnerReadAttachment::from_discovery(
             &discovery,
             &ReadyRuntimeStateReadSignerCustody,
+            "runtime governance read subject unavailable",
         )
         .expect_err("unknown daemon mode must fail closed");
         assert!(
-            error.to_string().contains("cannot own governance reads"),
+            error.to_string().contains("cannot own runtime reads"),
             "wrong error: {error:#}"
         );
     }

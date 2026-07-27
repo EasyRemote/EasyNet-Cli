@@ -39,6 +39,7 @@ pub struct RuntimeStartRequest {
     mode: RuntimeStartMode,
     realm: String,
     node_id: Option<String>,
+    require_paired_user_runtime_signer: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,6 +55,7 @@ impl RuntimeStartRequest {
             mode: RuntimeStartMode::Device,
             realm: realm.into(),
             node_id: Some(node_id.into()),
+            require_paired_user_runtime_signer: true,
         }
     }
 
@@ -63,7 +65,17 @@ impl RuntimeStartRequest {
             mode: RuntimeStartMode::Hub,
             realm: realm.into(),
             node_id: None,
+            require_paired_user_runtime_signer: false,
         }
+    }
+
+    /// Select whether attaching to an already-running device daemon must prove
+    /// the paired User runtime signer capability. Bound user credentials should
+    /// leave this enabled. Federation-native device-only credentials must turn
+    /// it off explicitly instead of satisfying it with a placeholder User.
+    pub fn with_paired_user_runtime_signer_required(mut self, required: bool) -> Self {
+        self.require_paired_user_runtime_signer = required;
+        self
     }
 
     /// Requested realm.
@@ -184,6 +196,9 @@ fn validate_attach_capabilities(
     report: &RuntimeStatusReport,
 ) -> Result<(), RuntimeLifecycleError> {
     if !matches!(request.mode, RuntimeStartMode::Device) {
+        return Ok(());
+    }
+    if !request.require_paired_user_runtime_signer {
         return Ok(());
     }
     if report
@@ -436,6 +451,7 @@ mod tests {
             mode: RuntimeStartMode::Device,
             realm: "tenant-test".to_string(),
             node_id: None,
+            require_paired_user_runtime_signer: true,
         };
 
         let err =
@@ -449,6 +465,31 @@ mod tests {
                 actual,
             } if requested == "<missing>" && actual == "node-test"
         ));
+    }
+
+    #[test]
+    fn start_preflight_accepts_device_only_attach_without_paired_user_signer_readiness() {
+        let daemon = DaemonDiscoverySnapshot::from_parts(
+            Some(discovery_with_identity_and_flags(identity(), Vec::new())),
+            Some(std::process::id()),
+            true,
+            true,
+            true,
+            endpoints(),
+        );
+        let status = RuntimeStatusReport::from_parts(None, daemon);
+
+        let report = preflight_start(
+            &RuntimeStartRequest::device("tenant-test", "node-test")
+                .with_paired_user_runtime_signer_required(false),
+            &status,
+        )
+        .expect("device-only attach must not require paired user signer readiness");
+
+        assert_eq!(
+            report.action(),
+            RuntimeStartPreflightAction::AttachAndRebuildProjection
+        );
     }
 
     #[test]

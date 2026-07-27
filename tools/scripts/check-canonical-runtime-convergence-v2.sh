@@ -4988,8 +4988,8 @@ if go:
         "func validateSessionHistoryRuntimeCall(",
         "func validateSessionHistoryFilterBinding(",
     )
-    if "isRuntimeStateReadSubjectURA(call.SubjectURA)" not in call_body:
-        raise SystemExit("sdk_go_history_call_subject_not_runtime_state_read")
+    if "isRuntimeGovernanceReadSubjectURA(call.SubjectURA, call.CalleeURA)" not in call_body:
+        raise SystemExit("sdk_go_history_call_subject_not_runtime_governance_read")
     body = section(
         go,
         "func validateSessionHistorySessionBinding(",
@@ -5010,8 +5010,13 @@ if go:
         raise SystemExit("sdk_go_receipt_provider_history_admission_after_route")
     require(
         go_receipt_test_path,
-        "TestRuntimeReceiptProviderRejectsDeviceSubjectBeforeDescriptorResolution",
+        "TestRuntimeReceiptProviderRejectsWrongDeviceOwnerSubjectBeforeDescriptorResolution",
         "sdk_go_receipt_provider_history_subject_guard_test_missing",
+    )
+    require(
+        go_receipt_test_path,
+        "TestRuntimeReceiptProviderAcceptsMatchingDeviceOwnerSubject",
+        "sdk_go_receipt_provider_history_runtime_owner_accept_test_missing",
     )
     require(
         go_test_path,
@@ -5141,8 +5146,8 @@ if py:
         "def _validate_receipt_history_call(",
         "def _validate_receipt_history_filter_binding(",
         "def _validate_receipt_history_authority_binding(",
-        "from ._runtime_subjects import is_runtime_state_read_subject_ura",
-        "is_runtime_state_read_subject_ura(call.subject_ura)",
+        "from ._runtime_subjects import is_runtime_governance_read_subject_ura",
+        "is_runtime_governance_read_subject_ura(call.subject_ura, call.callee_ura)",
         "session_authority_admits_subject(authority, subject_ura)",
     ):
         if token not in py_guard:
@@ -5156,8 +5161,8 @@ if py:
         raise SystemExit("sdk_python_receipt_provider_history_admission_guard_missing")
     if provider_body.find("validate_receipt_history_request(") > provider_body.find("self._routes.list("):
         raise SystemExit("sdk_python_receipt_provider_history_admission_after_route")
-    if "is_runtime_state_read_subject_ura(call.subject_ura)" not in py_guard:
-        raise SystemExit("sdk_python_history_call_subject_not_runtime_state_read")
+    if "is_runtime_governance_read_subject_ura(call.subject_ura, call.callee_ura)" not in py_guard:
+        raise SystemExit("sdk_python_history_call_subject_not_runtime_governance_read")
     for forbidden in (
         "f\"resource/user.{owner_user_id}/\" in subject_ura",
         "f\"resource/agent.{owner_user_id}.\" in subject_ura",
@@ -5194,8 +5199,13 @@ if py:
             raise SystemExit("sdk_python_session_authority_explicit_creator_principal_ura_test_missing")
     require(
         py_receipt_test_path,
-        "test_runtime_receipt_provider_rejects_device_subject_before_descriptor_resolution",
+        "test_runtime_receipt_provider_rejects_wrong_device_owner_subject_before_descriptor_resolution",
         "sdk_python_receipt_provider_history_subject_guard_test_missing",
+    )
+    require(
+        py_receipt_test_path,
+        "test_runtime_receipt_provider_accepts_matching_device_owner_subject",
+        "sdk_python_receipt_provider_history_runtime_owner_accept_test_missing",
     )
     require(
         py_test_path,
@@ -9332,18 +9342,19 @@ required = (
     "load_credentials_optional()",
     "UserTrustBootstrapError::CredentialsUnavailable",
     "load paired credentials",
-    "project paired user URA",
+    "project runtime user binding",
 )
 for token in required:
     if token not in body:
         raise SystemExit(f"session_prelude_credentials_missing_fail_closed_path:{token}")
 
 not_required_count = body.count("return Ok(UserTrustBootstrapOutcome::NotRequired);")
-if not_required_count != 2:
+if not_required_count != 3:
     raise SystemExit(f"session_prelude_credentials_not_required_count:{not_required_count}")
 
 for test in (
     "paired_user_trust_bootstrap_ignores_missing_credentials_only",
+    "paired_user_trust_bootstrap_skips_device_only_credentials",
     "paired_user_trust_bootstrap_rejects_malformed_credentials",
 ):
     if test not in text:
@@ -9439,8 +9450,9 @@ ready_body = ready.group("body")
 for required in (
     "capability_flags",
     "ReadyRuntimeCapabilities::new(capability_flags)",
-    "capabilities.validate_for_mode(config.mode())",
-    "ready_daemon_identity(&config)",
+    "capabilities.validate_for_mode(",
+    "ready_identity.paired_user_runtime_signer_required",
+    "ready_daemon_runtime_identity(&config)",
 ):
     if required not in ready_body:
         raise SystemExit(f"start_attach_user_signer_readiness:ready_discovery_missing:{required}")
@@ -9454,11 +9466,12 @@ for retired in (
         raise SystemExit(f"start_attach_user_signer_readiness:mode_derived_ready_flag:{retired}")
 if 'std::env::var("EASYNET_NODE_ID")' in ready_body:
     raise SystemExit("start_attach_user_signer_readiness:ready_identity_uses_env_node_id")
-if "fn ready_daemon_identity(" not in daemon_bin or "config::load_credentials()" not in daemon_bin:
+if "fn ready_daemon_runtime_identity(" not in daemon_bin or "config::load_credentials()" not in daemon_bin:
     raise SystemExit("start_attach_user_signer_readiness:ready_identity_credentials_helper_missing")
 for required_test in (
     "ready_discovery_uses_paired_credentials_node_id_not_env",
     "ready_discovery_rejects_device_without_paired_user_signer_proof",
+    "ready_discovery_accepts_device_only_credentials_without_paired_user_signer_proof",
     "ready_discovery_keeps_hub_independent_from_paired_user_signer_proof",
     "ready_discovery_rejects_credentials_realm_mismatch",
 ):
@@ -11241,13 +11254,18 @@ for retired in (
 for required in (
     "fn ready_runtime_discovery(",
     "struct ReadyRuntimeCapabilities",
-    "fn validate_for_mode(&self, mode: DaemonMode) -> anyhow::Result<()>",
+    "fn validate_for_mode(",
+    "paired_user_runtime_signer_required: bool",
+    "!paired_user_runtime_signer_required",
     "refusing to advertise Ready before paired User caller-signer custody is available",
     "capability_flags: Vec<String>",
     "capability_flags: capabilities.into_flags()",
+    "ready_identity.paired_user_runtime_signer_required",
+    "ready_daemon_runtime_identity(&config)",
     "let invocation_capability_flags = session_shutdown.capability_flags().to_vec();",
     "ready_runtime_discovery(invocation_capability_flags)",
     "ready_discovery_rejects_device_without_paired_user_signer_proof",
+    "ready_discovery_accepts_device_only_credentials_without_paired_user_signer_proof",
     "ready_discovery_keeps_hub_independent_from_paired_user_signer_proof",
 ):
     if required not in daemon:
@@ -11259,13 +11277,14 @@ for required in (
     "capability_flags: Vec<String>",
     "pub fn capability_flags(&self) -> &[String]",
     "ready_capability_flags",
+    "register_paired_user_runtime_signer_if_bound(",
     "crate::daemon::control::discovery::flags::PAIRED_USER_RUNTIME_SIGNER.to_string()",
     "Ok(InvocationTransportReady::new(",
 ):
     if required not in invocation:
         raise SystemExit(f"ready_capability_proof:transport_contract_missing:{required}")
 
-register_pos = invocation.find("register_paired_user_runtime_signer(")
+register_pos = invocation.find("register_paired_user_runtime_signer_if_bound(")
 flag_pos = invocation.find("PAIRED_USER_RUNTIME_SIGNER.to_string()", register_pos)
 if register_pos < 0 or flag_pos < 0 or flag_pos < register_pos:
     raise SystemExit("ready_capability_proof:flag_not_after_signer_registration")
@@ -12815,7 +12834,7 @@ for required in (
     "provider.validate_request_subject(object)?",
     "Self::ReceiptHistory => validate_receipt_history_descriptor_subject(object)",
     "descriptor_ref provider receipt_history requires subject_ura",
-    "descriptor_ref provider receipt_history subject_ura must be a user-owned runtime-state read subject or the callee realm Authority subject",
+    "descriptor_ref provider receipt_history subject_ura must be a user-owned runtime-state read subject or the callee runtime-owner subject",
     "crate::core::identity::RuntimeGovernanceReadSubject::parse_for_callee(subject_ura, callee_ura)",
     "fn receipt_history_descriptor_subject_error(",
     "RuntimeGovernanceReadSubjectError::NotRuntimeGovernanceRead",

@@ -10064,14 +10064,14 @@ mod tests {
                 "provider receipt_history requires subject_ura",
             ),
             (
-                "device subject",
-                Some(remote_device_ura.as_str()),
-                "user-owned runtime-state read subject or the callee realm Authority subject",
+                "wrong device subject",
+                Some(local_device_ura.as_str()),
+                "user-owned runtime-state read subject or the callee runtime-owner subject",
             ),
             (
                 "retired session subject",
                 Some("easynet:///r/localhost/resource/user.alice/session/invocation_history"),
-                "user-owned runtime-state read subject or the callee realm Authority subject",
+                "user-owned runtime-state read subject or the callee runtime-owner subject",
             ),
             (
                 "all-zero runtime-state subject",

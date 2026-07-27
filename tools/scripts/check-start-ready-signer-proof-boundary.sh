@@ -49,7 +49,7 @@ if rg -n 'fn validate_device_ready_capabilities' "$START" >/dev/null; then
   fail "retired device-ready flag-only validator is still present"
 fi
 
-if ! rg -n 'fn register_paired_user_runtime_signer' "$BOOT_INVOCATION" >/dev/null; then
+if ! rg -n 'fn register_paired_user_runtime_signer_if_bound' "$BOOT_INVOCATION" >/dev/null; then
   fail "daemon boot must centralize paired User runtime signer readiness"
 fi
 
@@ -66,15 +66,15 @@ import pathlib
 import sys
 
 text = pathlib.Path(sys.argv[1]).read_text()
-fn = text.find("fn register_paired_user_runtime_signer")
+fn = text.find("fn register_paired_user_runtime_signer_if_bound")
 if fn == -1:
-    raise SystemExit("missing register_paired_user_runtime_signer")
+    raise SystemExit("missing register_paired_user_runtime_signer_if_bound")
 body = text[fn:text.find("\nfn ", fn + 1) if text.find("\nfn ", fn + 1) != -1 else len(text)]
 ensure = body.find("ensure_user_runtime_signing_identity")
 prove = body.find("prove_user_runtime_signing_projection_custody")
 register = body.find(".register_user_pubkey(")
 flag = text.find("PAIRED_USER_RUNTIME_SIGNER")
-call = text.find("register_paired_user_runtime_signer(&")
+call = text.find("register_paired_user_runtime_signer_if_bound(")
 if ensure == -1 or prove == -1 or register == -1:
     raise SystemExit("paired User signer boot gate must ensure, prove, and register")
 if not (ensure < prove < register):
@@ -107,6 +107,7 @@ PY
 
 for required_test in \
   start_runtime_readiness_accepts_paired_user_signer_custody \
+  start_runtime_readiness_accepts_device_only_unbound_credentials \
   start_runtime_readiness_rejects_missing_paired_user_signer_flag \
   start_runtime_readiness_rejects_missing_credential_user_ura \
   start_runtime_readiness_rejects_failed_signer_custody_proof

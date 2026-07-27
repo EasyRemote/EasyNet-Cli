@@ -65,6 +65,24 @@ impl AdmissionPolicyGate {
             context.trusted_role,
             context.action,
         );
+        let device_self_publication_manage = device_self_publication_manage_scope(
+            &caller_ura,
+            &callee_ura,
+            &subject_ura,
+            &ability_ura,
+            context.daemon_ura,
+            context.trusted_role,
+            context.action,
+        );
+        let device_self_session_stream = device_self_session_stream_scope(
+            &caller_ura,
+            &callee_ura,
+            &subject_ura,
+            &ability_ura,
+            context.daemon_ura,
+            context.trusted_role,
+            context.action,
+        );
         if remote_owner_forward_allowed(
             &caller_ura,
             &callee_ura,
@@ -120,6 +138,8 @@ impl AdmissionPolicyGate {
             safe_read: context.safe_read,
             authority_self_read,
             authority_self_manage,
+            device_self_publication_manage,
+            device_self_session_stream,
             interactive_context_available: false,
             canonical_hash: context.canonical_hash,
             signature_key_id: context.signature_key_id,
@@ -375,6 +395,82 @@ fn authority_self_manage_scope(
     ura_is_in_realm(subject_ura, &callee.realm)
 }
 
+fn device_self_publication_manage_scope(
+    caller_ura: &str,
+    callee_ura: &str,
+    subject_ura: &str,
+    ability_ura: &str,
+    daemon_ura: Option<&str>,
+    trusted_role: TrustedAgentRole,
+    action: AccessAction,
+) -> bool {
+    if action != AccessAction::Manage || trusted_role != TrustedAgentRole::Device {
+        return false;
+    }
+    let Some(daemon_ura) = daemon_ura else {
+        return false;
+    };
+    if caller_ura != subject_ura || callee_ura != daemon_ura {
+        return false;
+    }
+    let Ok(caller) = parse_ura(caller_ura) else {
+        return false;
+    };
+    if caller.kind != URAKind::Device {
+        return false;
+    }
+    let Ok(callee) = parse_ura(callee_ura) else {
+        return false;
+    };
+    if callee.kind != URAKind::Authority || callee.realm != caller.realm {
+        return false;
+    }
+    ability_ura
+        == crate::core::ura::owner_ability_ura(
+            callee_ura,
+            crate::daemon::invocation::dispatch::federation_wrappers::ABILITY_FEDERATION_ADVERTISE_ABILITIES,
+        )
+        .unwrap_or_default()
+}
+
+fn device_self_session_stream_scope(
+    caller_ura: &str,
+    callee_ura: &str,
+    subject_ura: &str,
+    ability_ura: &str,
+    daemon_ura: Option<&str>,
+    trusted_role: TrustedAgentRole,
+    action: AccessAction,
+) -> bool {
+    if action != AccessAction::Stream || trusted_role != TrustedAgentRole::Device {
+        return false;
+    }
+    let Some(daemon_ura) = daemon_ura else {
+        return false;
+    };
+    if caller_ura != subject_ura || callee_ura != daemon_ura {
+        return false;
+    }
+    let Ok(caller) = parse_ura(caller_ura) else {
+        return false;
+    };
+    if caller.kind != URAKind::Device {
+        return false;
+    }
+    let Ok(callee) = parse_ura(callee_ura) else {
+        return false;
+    };
+    if callee.kind != URAKind::Authority || callee.realm != caller.realm {
+        return false;
+    }
+    ability_ura
+        == crate::core::ura::owner_ability_ura(
+            callee_ura,
+            crate::daemon::invocation::bidi::session_initiator::ABILITY_SESSION_OPEN,
+        )
+        .unwrap_or_default()
+}
+
 fn is_authority_owned_ura_in_realm(ura: &str, realm: &str) -> bool {
     let Ok(parsed) = parse_ura(ura) else {
         return false;
@@ -427,7 +523,7 @@ fn subject_ura(
 mod tests {
     use super::*;
     use crate::cli::commands::test_support::HomeGuard;
-    use crate::daemon::invocation::admission::decision::PolicyDecisionReason;
+    use crate::daemon::invocation::admission::decision::{OwnerSource, PolicyDecisionReason};
     use crate::daemon::persistence::config::{save_credentials, Credentials};
     use crate::daemon::trust::anchor::{TrustedAgent, TrustedPrincipalOwner};
     use axon_sdk::pb::axon::v1::{AgentIdentity, SubjectIdentity};
@@ -846,6 +942,90 @@ mod tests {
         assert_eq!(
             decision.ability_ura,
             "easynet:///r/test/ability/authority.federation.revoke"
+        );
+    }
+
+    #[test]
+    fn device_self_publication_manage_can_advertise_authority_scoped_abilities_without_user_owner()
+    {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let stores = AccessControlStoreRegistry::ephemeral();
+        let authority = "easynet:///r/test/authority";
+        let device = "easynet:///r/test/device/dev-1";
+        let envelope = Envelope {
+            caller: Some(identity(device)),
+            callee: Some(identity(authority)),
+            subject: Some(SubjectIdentity {
+                ura: device.to_string(),
+                profile: String::new(),
+            }),
+            ..Envelope::default()
+        };
+        let decision = AdmissionPolicyGate::verify(AdmissionPolicyContext {
+            envelope: &envelope,
+            ability: crate::daemon::invocation::dispatch::federation_wrappers::ABILITY_FEDERATION_ADVERTISE_ABILITIES,
+            action: AccessAction::Manage,
+            safe_read: false,
+            trusted_role: TrustedAgentRole::Device,
+            daemon_ura: Some(authority),
+            trust_anchor: &empty_anchor(),
+            access_control_stores: &stores,
+            canonical_hash: Some("sha256:test".to_string()),
+            signature_key_id: Some("ed25519:device".to_string()),
+            verified_authority_id: None,
+            rejector_ura: Some(authority.to_string()),
+        })
+        .expect("device must advertise its own authority-scoped publication after federation join");
+
+        assert_eq!(decision.decision, PolicyDecisionOutcome::Allow);
+        assert_eq!(decision.reason, PolicyDecisionReason::ExplicitGrantAllow);
+        assert!(decision.owner_user_id.is_none());
+        assert_eq!(decision.owner_source, OwnerSource::Unresolved);
+        assert_eq!(decision.principal_kind, PrincipalKind::Device);
+        assert_eq!(decision.caller_ura, device);
+        assert_eq!(decision.subject_ura, device);
+        assert_eq!(decision.callee_ura, authority);
+    }
+
+    #[test]
+    fn device_self_session_stream_can_open_authority_carrier_without_user_owner() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let stores = AccessControlStoreRegistry::ephemeral();
+        let authority = "easynet:///r/test/authority";
+        let device = "easynet:///r/test/device/dev-1";
+        let envelope = Envelope {
+            caller: Some(identity(device)),
+            callee: Some(identity(authority)),
+            subject: Some(SubjectIdentity {
+                ura: device.to_string(),
+                profile: String::new(),
+            }),
+            ..Envelope::default()
+        };
+        let decision = AdmissionPolicyGate::verify(AdmissionPolicyContext {
+            envelope: &envelope,
+            ability: crate::daemon::invocation::bidi::session_initiator::ABILITY_SESSION_OPEN,
+            action: AccessAction::Stream,
+            safe_read: false,
+            trusted_role: TrustedAgentRole::Device,
+            daemon_ura: Some(authority),
+            trust_anchor: &empty_anchor(),
+            access_control_stores: &stores,
+            canonical_hash: Some("sha256:test".to_string()),
+            signature_key_id: Some("ed25519:device".to_string()),
+            verified_authority_id: None,
+            rejector_ura: Some(authority.to_string()),
+        })
+        .expect("device must open its own authority session carrier after federation join");
+
+        assert_eq!(decision.decision, PolicyDecisionOutcome::Allow);
+        assert_eq!(decision.reason, PolicyDecisionReason::ExplicitGrantAllow);
+        assert!(decision.owner_user_id.is_none());
+        assert_eq!(decision.owner_source, OwnerSource::Unresolved);
+        assert_eq!(decision.principal_kind, PrincipalKind::Device);
+        assert_eq!(
+            decision.ability_ura,
+            "easynet:///r/test/ability/authority.session.open"
         );
     }
 

@@ -44,6 +44,23 @@ func isRuntimeStateReadSubjectURA(subjectURA string) bool {
 		strings.TrimSpace(parts.Path) == runtimeStateReadSubjectPath
 }
 
+func isRuntimeGovernanceReadSubjectURA(subjectURA string, calleeURA string) bool {
+	subjectURA = strings.TrimSpace(subjectURA)
+	calleeURA = strings.TrimSpace(calleeURA)
+	if isRuntimeStateReadSubjectURA(subjectURA) {
+		return true
+	}
+	subject, subjectErr := ParseURAParts(subjectURA)
+	callee, calleeErr := ParseURAParts(calleeURA)
+	if subjectErr != nil || calleeErr != nil {
+		return false
+	}
+	return (subject.Kind == URAKindAuthority || subject.Kind == URAKindDevice) &&
+		subject.Kind == callee.Kind &&
+		subject.Realm == callee.Realm &&
+		subjectURA == calleeURA
+}
+
 func isRetiredInvocationHistorySubjectURA(subjectURA string) bool {
 	parts, err := ParseURAParts(strings.TrimSpace(subjectURA))
 	if err != nil || parts.Kind != URAKindResource {

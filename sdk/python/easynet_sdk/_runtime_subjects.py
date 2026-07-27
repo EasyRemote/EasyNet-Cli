@@ -50,6 +50,26 @@ def is_runtime_state_read_subject_ura(subject_ura: str) -> bool:
     )
 
 
+def is_runtime_governance_read_subject_ura(subject_ura: str, callee_ura: str) -> bool:
+    """Return whether subject is admissible for runtime governance reads."""
+
+    clean_subject = str(subject_ura).strip()
+    clean_callee = str(callee_ura).strip()
+    if is_runtime_state_read_subject_ura(clean_subject):
+        return True
+    try:
+        subject = parse_ura(clean_subject)
+        callee = parse_ura(clean_callee)
+    except SDKError:
+        return False
+    return (
+        subject.kind in {"authority", "device"}
+        and subject.kind == callee.kind
+        and subject.realm == callee.realm
+        and clean_subject == clean_callee
+    )
+
+
 def is_retired_invocation_history_subject_ura(subject_ura: str) -> bool:
     try:
         subject = parse_ura(str(subject_ura).strip())

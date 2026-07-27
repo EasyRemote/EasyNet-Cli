@@ -252,6 +252,7 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
     // Credentials take precedence over CLI args for hub/tenant.
     let hub = creds.hub_endpoint.clone();
     let tenant = creds.realm.clone();
+    let runtime_user_binding = creds.runtime_user_binding()?;
     if args.hub != config::DEFAULT_HUB && args.hub != hub {
         output::warn(&format!(
             "--hub {} ignored; using {} from credentials. Run 'easynet device reset' to un-pair first.",
@@ -260,12 +261,18 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
     }
     let label = args.label.clone().unwrap_or_else(|| creds.node_id.clone());
     let _ = (args.token.as_deref(), args.insecure);
-    preflight_runtime_start(&RuntimeStartRequest::device(&tenant, &creds.node_id))?;
+    let start_request = RuntimeStartRequest::device(&tenant, &creds.node_id)
+        .with_paired_user_runtime_signer_required(matches!(
+            runtime_user_binding,
+            config::RuntimeUserBinding::Bound { .. }
+        ));
+    preflight_runtime_start(&start_request)?;
     crate::daemon::persistence::daemon_config::ensure_minimal_device_config(&creds)
         .context("ensure daemon-config.toml for device mode")?;
     super::federation_wire::auto_wire_self_realm_trust_from_credentials(&creds)
         .context("wire local realm trust for device mode")?;
-    bootstrap_local_agent_projection(&creds).context("sync local agent owner projection")?;
+    bootstrap_local_agent_projection(&creds, &runtime_user_binding)
+        .context("sync local agent owner projection")?;
 
     record_snapshot(JoinConnectionSnapshot::from_credentials(
         JoinConnectionState::RuntimeStarting,
@@ -371,10 +378,13 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
     }
     let control_socket = daemon_handle.control_endpoint().display().to_string();
     let hub_api = creds.api_base();
-    let pages_url_root = format!(
-        "http://<project>.{user}.pages.localhost:{pages_listener_port}/",
-        user = creds.username_slug()?
-    );
+    let pages_url_root = match runtime_user_binding {
+        config::RuntimeUserBinding::Bound { .. } => Some(format!(
+            "http://<project>.{user}.pages.localhost:{pages_listener_port}/",
+            user = creds.username_slug()?
+        )),
+        config::RuntimeUserBinding::Unbound { .. } => None,
+    };
     let pid_display = pid.map(|pid| pid.to_string());
     let mut rows = vec![
         ("daemon_socket", endpoint.as_str()),
@@ -382,24 +392,16 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
         ("hub_session", hub.as_str()),
         ("hub_api", hub_api.as_str()),
         ("realm", tenant.as_str()),
-        ("pages_url_root", pages_url_root.as_str()),
     ];
+    if let Some(ref pages_url_root) = pages_url_root {
+        rows.push(("pages_url_root", pages_url_root.as_str()));
+    }
     if let Some(ref pid) = pid_display {
         rows.push(("pid", pid.as_str()));
     }
     output::kv_section(&rows);
 
-    // Welcome line — surface the human-readable paired account while the
-    // canonical user URA below stays anchored on credentials.user_id.
-    let username = creds.username_slug()?;
-    let user_ura = creds.user_ura()?;
-    eprintln!();
-    eprintln!(
-        "{} {}",
-        console::style("Welcome,").cyan().bold(),
-        console::style(username).cyan().bold(),
-    );
-    eprintln!("  {}", console::style(user_ura).dim());
+    render_runtime_principal_summary(&creds, &runtime_user_binding)?;
 
     if args.foreground {
         run_foreground_with_daemon(&creds, args.no_mcp)
@@ -498,9 +500,38 @@ pub(crate) fn build_bootstrap_plan_from(
 
 fn bootstrap_local_agent_projection(
     creds: &config::Credentials,
+    runtime_user_binding: &config::RuntimeUserBinding,
 ) -> anyhow::Result<Vec<crate::daemon::ability::catalog::profiles::bootstrap::BootstrapOutcome>> {
+    if let config::RuntimeUserBinding::Unbound { .. } = runtime_user_binding {
+        return Ok(Vec::new());
+    }
     let plan = build_bootstrap_plan(creds)?;
     crate::daemon::ability::builtins::agents::lifecycle::bootstrap_local_agent_projection(&plan)
+}
+
+fn render_runtime_principal_summary(
+    creds: &config::Credentials,
+    runtime_user_binding: &config::RuntimeUserBinding,
+) -> anyhow::Result<()> {
+    eprintln!();
+    match runtime_user_binding {
+        config::RuntimeUserBinding::Bound { user_ura } => {
+            let username = creds.username_slug()?;
+            eprintln!(
+                "{} {}",
+                console::style("Welcome,").cyan().bold(),
+                console::style(username).cyan().bold(),
+            );
+            eprintln!("  {}", console::style(user_ura).dim());
+        }
+        config::RuntimeUserBinding::Unbound { reason } => {
+            let device_ura = crate::core::ura::device_ura(creds.realm_str(), &creds.node_id);
+            eprintln!("{}", console::style("Runtime principal").cyan().bold());
+            eprintln!("  {}", console::style(device_ura).dim());
+            eprintln!("  {}", console::style(reason).dim());
+        }
+    }
+    Ok(())
 }
 
 /// Load credentials and verify against Hub. Returns error on revoked/missing credentials.
@@ -650,6 +681,9 @@ fn validate_device_runtime_readiness_with(
     creds: &config::Credentials,
     signer_probe: &dyn RuntimeCallerSignerReadinessProbe,
 ) -> anyhow::Result<()> {
+    let config::RuntimeUserBinding::Bound { user_ura } = creds.runtime_user_binding()? else {
+        return Ok(());
+    };
     let required = crate::daemon::control::discovery::flags::PAIRED_USER_RUNTIME_SIGNER;
     if !boot.has_ready_capability_flag(required) {
         anyhow::bail!(
@@ -657,9 +691,6 @@ fn validate_device_runtime_readiness_with(
              runtime projection because paired User caller signer custody was not proven"
         );
     }
-    let user_ura = creds
-        .user_ura()
-        .context("paired device credentials must include a canonical User URA for runtime caller signer readiness")?;
     signer_probe
         .prove(&user_ura)
         .with_context(|| {
@@ -1000,6 +1031,16 @@ mod tests {
         }
     }
 
+    fn federation_device_only_creds() -> config::Credentials {
+        let mut creds = test_creds();
+        creds.credential_token.clear();
+        creds.username = None;
+        creds.user_id = None;
+        creds.hub_pubkey_b64 = Some("hub-pubkey".into());
+        creds.join_receipt_hash = Some("sha256:test-join-receipt".into());
+        creds
+    }
+
     struct TestRuntimeCallerSignerReadinessProbe {
         result: anyhow::Result<()>,
     }
@@ -1186,6 +1227,21 @@ mod tests {
     }
 
     #[test]
+    fn start_runtime_readiness_accepts_device_only_unbound_credentials() {
+        let boot = super::super::start_boot_watcher::BootProgressOutcome {
+            pages_port: Some(8787),
+            ready_capability_flags: Vec::new(),
+        };
+
+        validate_device_runtime_readiness_with(
+            &boot,
+            &federation_device_only_creds(),
+            &TestRuntimeCallerSignerReadinessProbe::failed("must not prove unbound user signer"),
+        )
+        .expect("device-only federation credentials must not require paired User signer readiness");
+    }
+
+    #[test]
     fn start_runtime_readiness_rejects_missing_credential_user_ura() {
         let boot = super::super::start_boot_watcher::BootProgressOutcome {
             pages_port: Some(8787),
@@ -1204,8 +1260,24 @@ mod tests {
         .expect_err("device runtime readiness requires a concrete paired User URA");
 
         assert!(
-            err.to_string().contains("canonical User URA"),
+            err.to_string().contains("missing user_id"),
             "error must name missing active user binding: {err:#}"
+        );
+    }
+
+    #[test]
+    fn bootstrap_local_agent_projection_skips_device_only_unbound_credentials() {
+        let outcomes = bootstrap_local_agent_projection(
+            &federation_device_only_creds(),
+            &config::RuntimeUserBinding::Unbound {
+                reason: "not bound (federation-native device credential)",
+            },
+        )
+        .expect("device-only credentials must not enter user-owned agent bootstrap");
+
+        assert!(
+            outcomes.is_empty(),
+            "device-only start must not synthesize user-owned local agent projections"
         );
     }
 

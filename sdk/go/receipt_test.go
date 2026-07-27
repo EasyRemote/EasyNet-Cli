@@ -215,7 +215,7 @@ func TestRuntimeReceiptProviderUsesExplicitRouteSet(t *testing.T) {
 	}
 }
 
-func TestRuntimeReceiptProviderRejectsDeviceSubjectBeforeDescriptorResolution(t *testing.T) {
+func TestRuntimeReceiptProviderRejectsWrongDeviceOwnerSubjectBeforeDescriptorResolution(t *testing.T) {
 	transport := RuntimeTransportFunc{
 		ResolveDescriptorRefFunc: func(context.Context, []byte) ([]byte, error) {
 			t.Fatal("descriptor resolver transport must not run before history subject admission")
@@ -226,11 +226,58 @@ func TestRuntimeReceiptProviderRejectsDeviceSubjectBeforeDescriptorResolution(t 
 	ability, _ := NewRuntimeAbilityClient(runtime, NewCanonicalAddressing())
 	provider, _ := NewRuntimeReceiptProvider(ability)
 	call := runtimeReceiptHistoryTestContext(t)
-	call.SubjectURA = "easynet:///r/example/device/dev-a"
+	call.SubjectURA = "easynet:///r/example/device/other-device"
 
 	_, err := provider.List(context.Background(), ReceiptListRequest{Call: call})
 	if err == nil || !IsCode(err, ErrInvalidInvocation) || !strings.Contains(err.Error(), "runtime-state read subject") {
 		t.Fatalf("List error = %v, want runtime-state read subject rejection", err)
+	}
+}
+
+func TestRuntimeReceiptProviderAcceptsMatchingDeviceOwnerSubject(t *testing.T) {
+	var descriptorRequests []RuntimeDescriptorRefRequest
+	transport := RuntimeTransportFunc{InvokeFunc: func(_ context.Context, raw []byte) ([]byte, error) {
+		output := map[string]any{
+			"ledger_ura": "easynet:///r/example/resource/device.dev-a/billing/invocations",
+			"records":    []any{},
+		}
+		encoded, err := json.Marshal(output)
+		if err != nil {
+			return nil, err
+		}
+		return runtimeAbilityResultJSON(true, string(encoded), "", false), nil
+	}, ResolveDescriptorRefFunc: func(ctx context.Context, requestJSON []byte) ([]byte, error) {
+		var request RuntimeDescriptorRefRequest
+		if err := json.Unmarshal(requestJSON, &request); err != nil {
+			return nil, err
+		}
+		descriptorRequests = append(descriptorRequests, request)
+		return testResolveDescriptorRef(t)(ctx, requestJSON)
+	}}
+	runtime, _ := NewRuntimeClient(transport)
+	ability, _ := NewRuntimeAbilityClient(runtime, NewCanonicalAddressing())
+	provider, _ := NewRuntimeReceiptProvider(ability)
+	call := runtimeReceiptHistoryTestContext(t)
+	call.SubjectURA = call.CalleeURA
+	delegation, err := NewDelegationProofFromMetadata(authorityMetadataFixture(t, map[string]any{
+		"issuer_ura":    call.CallerURA,
+		"subject_ura":   call.SubjectURA,
+		"caller_ura":    call.CallerURA,
+		"audience":      call.CalleeURA,
+		"scopes":        []string{"invocation.history.*"},
+		"issued_at_ms":  1000,
+		"expires_at_ms": 2000,
+	}, []byte("delegation-signature")))
+	if err != nil {
+		t.Fatalf("NewDelegationProofFromMetadata: %v", err)
+	}
+	call.Authority = delegation
+
+	if _, err := provider.List(context.Background(), ReceiptListRequest{Call: call}); err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(descriptorRequests) != 1 || descriptorRequests[0].SubjectURA != call.CalleeURA {
+		t.Fatalf("descriptor requests = %#v, want device-owner subject", descriptorRequests)
 	}
 }
 

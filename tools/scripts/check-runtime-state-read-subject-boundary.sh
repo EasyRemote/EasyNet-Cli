@@ -13,11 +13,14 @@ ISSUER="src/support/platform/local_invoke.rs"
 TARGETS=(
   "src/cli/commands/discover.rs"
   "src/cli/commands/doctor.rs"
-  "src/cli/commands/groups/mcp.rs"
   "src/cli/commands/groups/device.rs"
   "src/cli/commands/status.rs"
   "src/cli/commands/invocation_watch.rs"
   "src/cli/commands/user_signing_identity.rs"
+)
+
+OPERATIONAL_TARGETS=(
+  "src/cli/commands/groups/mcp.rs"
 )
 
 GOVERNANCE_TARGETS=(
@@ -42,6 +45,10 @@ fi
 
 if ! rg -n 'struct LocalRuntimeGovernanceReadIssuer' "$ISSUER" >/dev/null; then
   fail "runtime governance reads must use a named issuer"
+fi
+
+if ! rg -n 'struct LocalRuntimeOperationalReadIssuer' "$ISSUER" >/dev/null; then
+  fail "runtime operational reads must use a named issuer"
 fi
 
 if ! rg -n 'struct LocalRuntimeStateReadAttachment' "$ISSUER" >/dev/null; then
@@ -157,6 +164,16 @@ for target in "${TARGETS[@]}"; do
   fi
   if rg -n '\binvoke_local_ability\s*\(' "$target"; then
     fail "$target must not use generic invoke_local_ability for runtime-state reads"
+  fi
+done
+
+for target in "${OPERATIONAL_TARGETS[@]}"; do
+  [[ -f "$target" ]] || fail "missing $target"
+  if ! rg -n 'LocalRuntimeOperationalReadIssuer::invoke' "$target" >/dev/null; then
+    fail "$target must enter local runtime operational health through LocalRuntimeOperationalReadIssuer"
+  fi
+  if rg -n '\binvoke_local_ability\s*\(' "$target"; then
+    fail "$target must not use generic invoke_local_ability for runtime operational reads"
   fi
 done
 

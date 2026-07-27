@@ -27,6 +27,8 @@ pub struct PolicyInput {
     pub safe_read: bool,
     pub authority_self_read: bool,
     pub authority_self_manage: bool,
+    pub device_self_publication_manage: bool,
+    pub device_self_session_stream: bool,
     pub interactive_context_available: bool,
     pub canonical_hash: Option<String>,
     pub signature_key_id: Option<String>,
@@ -48,7 +50,17 @@ impl PolicyEngine {
             .filter(|owner| !owner.trim().is_empty());
         let matcher = PermissionGrantMatcher::new(&input.grants);
 
-        if input.authority_self_manage && input.action == AccessAction::Manage {
+        if input.action == AccessAction::Manage
+            && (input.authority_self_manage || input.device_self_publication_manage)
+        {
+            return decision(
+                &input,
+                PolicyDecisionOutcome::Allow,
+                PolicyDecisionReason::ExplicitGrantAllow,
+                None,
+            );
+        }
+        if input.action == AccessAction::Stream && input.device_self_session_stream {
             return decision(
                 &input,
                 PolicyDecisionOutcome::Allow,
@@ -246,6 +258,8 @@ mod tests {
             safe_read: true,
             authority_self_read: false,
             authority_self_manage: false,
+            device_self_publication_manage: false,
+            device_self_session_stream: false,
             interactive_context_available: false,
             canonical_hash: Some("sha256:test".to_string()),
             signature_key_id: Some("ed25519:key".to_string()),

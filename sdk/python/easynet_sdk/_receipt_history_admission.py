@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Mapping
 
-from ._runtime_subjects import is_runtime_state_read_subject_ura
+from ._runtime_subjects import is_runtime_governance_read_subject_ura
 from ._session_authority_subjects import session_authority_admits_subject
 from .authority import (
     DELEGATION_METADATA_KEY,
@@ -45,10 +45,10 @@ def _validate_receipt_history_call(
             _runtime_call_details(call) if isinstance(call, RuntimeCallContext) else None,
             error,
         ) from error
-    if not is_runtime_state_read_subject_ura(call.subject_ura):
+    if not is_runtime_governance_read_subject_ura(call.subject_ura, call.callee_ura):
         raise _history_error(
             ErrorCode.INVALID_INVOCATION,
-            "session history call.subject_ura must be a user-owned runtime-state read subject",
+            "session history call.subject_ura must be a user-owned runtime-state read subject or the callee runtime-owner subject",
             _runtime_call_details(call),
         )
     authority = _runtime_call_authority(call)

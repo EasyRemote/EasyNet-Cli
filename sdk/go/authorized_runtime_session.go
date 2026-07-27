@@ -887,11 +887,11 @@ func validateSessionHistoryRuntimeCall(call RuntimeCallContext, requiredScope st
 	if err := validateRuntimeCallContext(call); err != nil {
 		return err
 	}
-	if !isRuntimeStateReadSubjectURA(call.SubjectURA) {
+	if !isRuntimeGovernanceReadSubjectURA(call.SubjectURA, call.CalleeURA) {
 		return v3SessionError(
 			ErrInvalidInvocation,
 			"history",
-			"session history call.subject_ura must be a user-owned runtime-state read subject",
+			"session history call.subject_ura must be a user-owned runtime-state read subject or the callee runtime-owner subject",
 			runtimeCallDetails(call),
 			nil,
 		)

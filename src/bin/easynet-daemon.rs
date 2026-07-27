@@ -725,12 +725,15 @@ fn ready_runtime_discovery(
     capability_flags: Vec<String>,
 ) -> anyhow::Result<server::ControlRuntimeDiscovery> {
     let config = DaemonConfig::load(&default_config_path())?;
-    let daemon_identity = ready_daemon_identity(&config)?;
+    let ready_identity = ready_daemon_runtime_identity(&config)?;
     let capabilities = ReadyRuntimeCapabilities::new(capability_flags);
-    capabilities.validate_for_mode(config.mode())?;
+    capabilities.validate_for_mode(
+        config.mode(),
+        ready_identity.paired_user_runtime_signer_required,
+    )?;
     Ok(server::ControlRuntimeDiscovery {
         invocation_endpoint: resolved_local_uds_path_with_env_override(),
-        daemon_identity,
+        daemon_identity: ready_identity.daemon_identity,
         capability_flags: capabilities.into_flags(),
     })
 }
@@ -749,11 +752,17 @@ impl ReadyRuntimeCapabilities {
         self.flags.iter().any(|candidate| candidate == flag)
     }
 
-    fn validate_for_mode(&self, mode: DaemonMode) -> anyhow::Result<()> {
+    fn validate_for_mode(
+        &self,
+        mode: DaemonMode,
+        paired_user_runtime_signer_required: bool,
+    ) -> anyhow::Result<()> {
         match mode {
             DaemonMode::Hub => Ok(()),
             DaemonMode::Device | DaemonMode::Both => {
-                if self.contains(discovery::flags::PAIRED_USER_RUNTIME_SIGNER) {
+                if !paired_user_runtime_signer_required
+                    || self.contains(discovery::flags::PAIRED_USER_RUNTIME_SIGNER)
+                {
                     Ok(())
                 } else {
                     anyhow::bail!(
@@ -772,9 +781,17 @@ impl ReadyRuntimeCapabilities {
     }
 }
 
-fn ready_daemon_identity(config: &DaemonConfig) -> anyhow::Result<DaemonIdentity> {
-    let node_id = match config.mode() {
-        DaemonMode::Hub => None,
+#[derive(Debug, Clone)]
+struct ReadyDaemonRuntimeIdentity {
+    daemon_identity: DaemonIdentity,
+    paired_user_runtime_signer_required: bool,
+}
+
+fn ready_daemon_runtime_identity(
+    config: &DaemonConfig,
+) -> anyhow::Result<ReadyDaemonRuntimeIdentity> {
+    let (node_id, paired_user_runtime_signer_required) = match config.mode() {
+        DaemonMode::Hub => (None, false),
         DaemonMode::Device | DaemonMode::Both => {
             let credentials = config::load_credentials().with_context(|| {
                 format!(
@@ -793,14 +810,27 @@ fn ready_daemon_identity(config: &DaemonConfig) -> anyhow::Result<DaemonIdentity
             if node_id.is_empty() {
                 anyhow::bail!("daemon ready discovery paired credentials node_id is empty");
             }
-            Some(node_id.to_string())
+            (
+                Some(node_id.to_string()),
+                matches!(
+                    credentials.runtime_user_binding()?,
+                    config::RuntimeUserBinding::Bound { .. }
+                ),
+            )
         }
     };
-    Ok(DaemonIdentity {
-        mode: config.mode().as_str().to_string(),
-        realm: config.realm().to_string(),
-        node_id,
+    Ok(ReadyDaemonRuntimeIdentity {
+        daemon_identity: DaemonIdentity {
+            mode: config.mode().as_str().to_string(),
+            realm: config.realm().to_string(),
+            node_id,
+        },
+        paired_user_runtime_signer_required,
     })
+}
+
+fn ready_daemon_identity(config: &DaemonConfig) -> anyhow::Result<DaemonIdentity> {
+    Ok(ready_daemon_runtime_identity(config)?.daemon_identity)
 }
 
 fn local_runtime_invocation_identity(
@@ -1097,6 +1127,19 @@ mod tests {
         }
     }
 
+    fn federation_device_only_credentials(
+        realm: &str,
+        node_id: &str,
+    ) -> easynet_cli::daemon::persistence::config::Credentials {
+        let mut credentials = paired_credentials(realm, node_id);
+        credentials.credential_token.clear();
+        credentials.username = None;
+        credentials.user_id = None;
+        credentials.hub_pubkey_b64 = Some("hub-pubkey".into());
+        credentials.join_receipt_hash = Some("sha256:test-join-receipt".into());
+        credentials
+    }
+
     #[test]
     fn device_replay_boot_policy_rejects_stale_rows() {
         let report = ReplayReport {
@@ -1197,6 +1240,37 @@ hub_endpoint = "https://hub.example:50443"
                 easynet_cli::daemon::control::discovery::flags::PAIRED_USER_RUNTIME_SIGNER
             ),
             "missing paired signer proof must be explicit: {error:#}"
+        );
+    }
+
+    #[test]
+    fn ready_discovery_accepts_device_only_credentials_without_paired_user_signer_proof() {
+        let _home = TestHomeGuard::new();
+        write_daemon_config(
+            r#"[daemon]
+mode = "device"
+realm = "tenant-a"
+hub_endpoint = "https://hub.example:50443"
+"#,
+        );
+        config::save_credentials(&federation_device_only_credentials(
+            "tenant-a",
+            "credential-node",
+        ))
+        .expect("save device-only credentials");
+
+        let discovery = ready_runtime_discovery(Vec::new())
+            .expect("device-only Ready must not require User signer proof");
+
+        assert_eq!(
+            discovery.daemon_identity.node_id.as_deref(),
+            Some("credential-node")
+        );
+        assert!(
+            discovery.capability_flags.iter().all(|flag| {
+                flag != easynet_cli::daemon::control::discovery::flags::PAIRED_USER_RUNTIME_SIGNER
+            }),
+            "device-only Ready must not advertise unproven paired-user signer readiness"
         );
     }
 

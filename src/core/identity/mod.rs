@@ -131,14 +131,14 @@ pub struct RuntimeStateReadSubject {
 
 /// Canonical subject admitted for runtime governance reads.
 ///
-/// Device/user product reads use [`RuntimeStateReadSubject`]. A realm
-/// Authority runtime, however, owns its own local governance ledger before any
+/// Device/user product reads use [`RuntimeStateReadSubject`]. Runtime
+/// governance ledgers, however, are owned by the local runtime owner before any
 /// user is paired. That path is not a user fallback: it is admissible only when
-/// the subject is the same realm Authority as the callee.
+/// the subject is the same Authority or Device URA as the callee.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeGovernanceReadSubject {
     UserRuntimeState(RuntimeStateReadSubject),
-    RealmAuthority { subject_ura: String, realm: String },
+    RuntimeOwner { subject_ura: String, realm: String },
 }
 
 /// Retired subject path formerly used by invocation-history read sessions.
@@ -286,14 +286,14 @@ impl RuntimeGovernanceReadSubject {
         let callee_ura = callee_ura.as_ref().trim();
         let callee = crate::core::ura::parse_ura(callee_ura)
             .map_err(|error| RuntimeGovernanceReadSubjectError::InvalidCallee(error.to_string()))?;
-        let expected_authority = crate::core::ura::hub_ura(&callee.realm);
-        if subject.kind == crate::core::ura::URAKind::Authority
-            && callee.kind == crate::core::ura::URAKind::Authority
+        if matches!(
+            subject.kind,
+            crate::core::ura::URAKind::Authority | crate::core::ura::URAKind::Device
+        ) && subject.kind == callee.kind
             && subject.realm == callee.realm
-            && subject_ura == expected_authority
-            && callee_ura == expected_authority
+            && subject_ura == callee_ura
         {
-            return Ok(Self::RealmAuthority {
+            return Ok(Self::RuntimeOwner {
                 subject_ura: subject_ura.to_string(),
                 realm: subject.realm,
             });
@@ -305,7 +305,7 @@ impl RuntimeGovernanceReadSubject {
     pub fn as_str(&self) -> &str {
         match self {
             Self::UserRuntimeState(subject) => subject.as_str(),
-            Self::RealmAuthority { subject_ura, .. } => subject_ura,
+            Self::RuntimeOwner { subject_ura, .. } => subject_ura,
         }
     }
 }
@@ -340,7 +340,7 @@ impl std::fmt::Display for RuntimeGovernanceReadSubjectError {
             Self::InvalidSyntax(error) => write!(formatter, "is not a valid URA: {error}"),
             Self::InvalidCallee(error) => write!(formatter, "callee is not a valid URA: {error}"),
             Self::NotRuntimeGovernanceRead => formatter.write_str(
-                "must be a user-owned runtime-state read subject or the callee realm Authority subject",
+                "must be a user-owned runtime-state read subject or the callee runtime-owner subject",
             ),
         }
     }
@@ -489,7 +489,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_governance_read_subject_accepts_user_or_matching_authority() {
+    fn runtime_governance_read_subject_accepts_user_or_matching_runtime_owner() {
         let user_subject = RuntimeGovernanceReadSubject::parse_for_callee(
             "easynet:///r/acme/resource/user.alice/runtime-state/read",
             "easynet:///r/acme/device/dev-a",
@@ -506,14 +506,21 @@ mod tests {
         )
         .expect("realm Authority governance subject");
         assert_eq!(authority_subject.as_str(), "easynet:///r/acme/authority");
+
+        let device_subject = RuntimeGovernanceReadSubject::parse_for_callee(
+            "easynet:///r/acme/device/dev-a",
+            "easynet:///r/acme/device/dev-a",
+        )
+        .expect("device runtime-owner governance subject");
+        assert_eq!(device_subject.as_str(), "easynet:///r/acme/device/dev-a");
     }
 
     #[test]
-    fn runtime_governance_read_subject_rejects_device_subject_and_wrong_authority() {
+    fn runtime_governance_read_subject_rejects_wrong_runtime_owner() {
         assert_eq!(
             RuntimeGovernanceReadSubject::parse_for_callee(
                 "easynet:///r/acme/device/dev-a",
-                "easynet:///r/acme/device/dev-a"
+                "easynet:///r/acme/device/dev-b"
             ),
             Err(RuntimeGovernanceReadSubjectError::NotRuntimeGovernanceRead)
         );

@@ -11,7 +11,7 @@ import pytest
 import easynet_sdk.receipt as receipt_module
 from easynet_sdk._receipt_routes import _RECEIPT_ROUTE_MANIFEST_SHA256
 from easynet_sdk._runtime_subjects import runtime_state_read_subject_ura
-from easynet_sdk.authority import SessionAuthority
+from easynet_sdk.authority import DelegationProof, SessionAuthority
 from easynet_sdk.axon_addressing import AddressingClient, AxonAddressingTransport
 from easynet_sdk.errors import ErrorCode, SDKError
 from easynet_sdk.receipt import (
@@ -355,13 +355,13 @@ def test_runtime_receipt_provider_uses_explicit_route_set() -> None:
     )
 
 
-def test_runtime_receipt_provider_rejects_device_subject_before_descriptor_resolution() -> None:
+def test_runtime_receipt_provider_rejects_wrong_device_owner_subject_before_descriptor_resolution() -> None:
     provider, transport = _provider()
-    call = _history_call()
+    call = _history_call(callee_ura="easynet:///r/example/device/dev-a")
     bad_call = RuntimeCallContext(
         caller_ura=call.caller_ura,
         callee_ura=call.callee_ura,
-        subject_ura="easynet:///r/example/device/dev-a",
+        subject_ura="easynet:///r/example/device/other-device",
         nonce_base64=call.nonce_base64,
         causal_context=call.causal_context,
         descriptor_version=call.descriptor_version,
@@ -373,6 +373,45 @@ def test_runtime_receipt_provider_rejects_device_subject_before_descriptor_resol
         provider.list(ReceiptListRequest(call=bad_call))
     assert caught.value.code == ErrorCode.INVALID_INVOCATION
     assert transport.descriptor_requests == []
+
+
+def test_runtime_receipt_provider_accepts_matching_device_owner_subject() -> None:
+    provider, transport = _provider()
+    device_ura = "easynet:///r/example/device/dev-a"
+    call = _history_call(callee_ura=device_ura)
+    device_call = RuntimeCallContext(
+        caller_ura=call.caller_ura,
+        callee_ura=device_ura,
+        subject_ura=device_ura,
+        nonce_base64=call.nonce_base64,
+        causal_context=call.causal_context,
+        descriptor_version=call.descriptor_version,
+        metadata={},
+        authority=DelegationProof(
+            issuer_ura=call.caller_ura,
+            subject_ura=device_ura,
+            caller_ura=call.caller_ura,
+            audience=device_ura,
+            scopes=("invocation.history.*",),
+            issued_at_ms=1000,
+            expires_at_ms=2000,
+            signature=b"delegation-signature",
+        ),
+    )
+    transport.output_json = _output(records=[])
+
+    provider.list(ReceiptListRequest(call=device_call))
+
+    assert transport.descriptor_requests == [
+        {
+            "callee_ura": device_ura,
+            "ability": "invocation.history.list",
+            "call_mode": "rpc",
+            "caller_ura": call.caller_ura,
+            "subject_ura": device_ura,
+            "provider": "receipt_history",
+        }
+    ]
 
 
 def test_runtime_receipt_provider_rejects_incomplete_route_set() -> None:

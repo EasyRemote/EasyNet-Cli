@@ -298,7 +298,7 @@ fn receipt_history_descriptor_subject_error(
         }
         RuntimeGovernanceReadSubjectError::NotRuntimeGovernanceRead => {
             DescriptorResolutionError::invalid_request(
-                "descriptor_ref provider receipt_history subject_ura must be a user-owned runtime-state read subject or the callee realm Authority subject",
+                "descriptor_ref provider receipt_history subject_ura must be a user-owned runtime-state read subject or the callee runtime-owner subject",
             )
         }
     }
