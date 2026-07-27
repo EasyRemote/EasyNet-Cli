@@ -12785,6 +12785,16 @@ wrappers_production = wrappers.split("\n#[cfg(test)]\nmod tests", 1)[0]
 dispatcher_production = dispatcher.split("\n#[cfg(test)]\nmod tests", 1)[0]
 contracts_production = contracts.split("\n#[cfg(test)]\nmod tests", 1)[0]
 
+for forbidden, code in {
+    "schema-compat": "schema_compat_vocabulary_present",
+    "wire-compat": "wire_compat_vocabulary_present",
+    "compat break": "compat_break_vocabulary_present",
+    "legacy federation": "legacy_federation_vocabulary_present",
+    "URA compatibility": "ura_compatibility_section_present",
+}.items():
+    if forbidden in wrappers_production:
+        raise SystemExit(f"federation_list_user_devices_exact_tuple:{code}")
+
 peer_match = re.search(r"pub struct ListUserDevicesRequest\s*\{(?P<body>.*?)\n\}", wire_production, re.S)
 if not peer_match:
     raise SystemExit("federation_list_user_devices_exact_tuple:peer_request_missing")

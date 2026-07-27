@@ -90,16 +90,16 @@ pub const ABILITY_FEDERATION_RESOLVE: &str = conformance::ABILITY_FEDERATION_RES
 
 /// `namespace.resolve` — RFC-005 typed namespace resolver surface.
 /// This is a daemon ability reached through `axon.v1.Invocation`; it
-/// returns an Axon `ResolveAnswer` proto-JSON projection, not legacy
-/// retired directory row shapes.
+/// returns an Axon `ResolveAnswer` proto-JSON projection. Retired directory
+/// row shapes are not accepted as an alternate read model.
 pub const ABILITY_NAMESPACE_RESOLVE: &str = conformance::ABILITY_NAMESPACE_RESOLVE;
 
 /// `namespace.proxy_resolve` — daemon-local typed namespace proxy.
 /// The backend supplies the peer hub set, but the daemon owns trust
 /// filtering, peer dialling, envelope signing, and typed
 /// `ResolveAnswer` aggregation. This is the clean replacement for
-/// backend product paths that previously consumed
-/// legacy federation directory rows.
+/// backend product paths that previously consumed daemon-private directory
+/// rows directly.
 pub const ABILITY_NAMESPACE_PROXY_RESOLVE: &str = conformance::ABILITY_NAMESPACE_PROXY_RESOLVE;
 
 /// `federation.revoke` — operator-driven removal of an agent from
@@ -182,9 +182,8 @@ pub const ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY: &str =
 pub const ABILITY_FEDERATION_STATUS: &str = conformance::ABILITY_FEDERATION_STATUS;
 
 /// All federation.* ability names in deterministic order.
-/// Iteration order is the order PR-4's schema-compat matrix files
-/// land on disk, so changing this slice without updating PR-4
-/// fixtures is a wire-compat break.
+/// Iteration order is part of the canonical publication digest input, so
+/// changing this slice requires an intentional descriptor/projection revision.
 pub const FEDERATION_ABILITIES: &[&str] = &[
     ABILITY_FEDERATION_JOIN,
     ABILITY_FEDERATION_ADVERTISE_AGENT,
@@ -294,8 +293,7 @@ pub struct JoinResponse {
     pub realm: String,
     /// SHA-256 of `caller_ura || realm` as a 64-character lowercase
     /// hex string. Deterministic per spec §5.1 — different from
-    /// axon-runtime's prior nonce-bearing receipt, MAY-differ under
-    /// schema-compat.
+    /// axon-runtime's prior nonce-bearing receipt.
     pub join_receipt_hash: String,
     /// Explicit Authority-published ability catalog snapshot published at join time.
     pub authority_published_abilities: Vec<AuthorityAbilityEntry>,
@@ -1122,7 +1120,7 @@ impl<'de> Deserialize<'de> for ExplicitOptionalAbilityName {
 /// Enriching from the backend's device_pairing table (with
 /// real display_name, last_seen) is N3-6 backend-Go territory.
 ///
-/// URA compatibility:
+/// Canonical device-session projection:
 /// - Canonical v4.1.4 device sessions live under
 ///   `easynet:///r/<realm>/device/<node>`.
 /// - Only canonical device-session URAs (`.../device/<node>`) are
@@ -1502,9 +1500,8 @@ mod tests {
 
     #[test]
     fn ability_name_constants_match_spec_section_4() {
-        // These constants flow into PR-4's baseline capture file
-        // names; changing them without updating PR-4 fixtures is
-        // a wire-compat break.
+        // These constants are canonical descriptor/publication identifiers;
+        // changing them requires an intentional descriptor revision.
         assert_eq!(ABILITY_FEDERATION_JOIN, "federation.join");
         assert_eq!(
             ABILITY_FEDERATION_ADVERTISE_AGENT,
