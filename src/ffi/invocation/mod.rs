@@ -5512,7 +5512,7 @@ fn parse_bidi_up_frame_json(raw: &str) -> Result<BidiUpFrame, BidiFrameJsonError
                 axon_sdk::pb::axon::v1::BinaryChunk {
                     stream_id: frame_u32(obj, "stream_id")?,
                     data,
-                    pts: frame_optional_u64(obj, "pts")?.unwrap_or_default(),
+                    pts: frame_u64(obj, "pts")?,
                 },
             )
         }
@@ -5615,17 +5615,6 @@ fn frame_u64(
     obj.get(field)
         .and_then(serde_json::Value::as_u64)
         .ok_or(BidiFrameJsonError::InvalidU64(field))
-}
-
-#[cfg(feature = "axon-pb")]
-fn frame_optional_u64(
-    obj: &serde_json::Map<String, serde_json::Value>,
-    field: &'static str,
-) -> Result<Option<u64>, BidiFrameJsonError> {
-    match obj.get(field) {
-        None | Some(serde_json::Value::Null) => Ok(None),
-        Some(_) => Ok(Some(frame_u64(obj, field)?)),
-    }
 }
 
 #[cfg(feature = "axon-pb")]
@@ -9356,6 +9345,30 @@ mod tests {
             control.control,
             Some(bidi_control::Control::MediaPts(media)) if media.stream_id == 2 && media.pts == 123
         ));
+    }
+
+    #[test]
+    fn parse_bidi_up_frame_json_rejects_missing_binary_chunk_pts() {
+        for frame in [
+            serde_json::json!({
+                "type": "binary_chunk",
+                "stream_id": 1,
+                "data_base64": "aGVsbG8=",
+                "mac_base64": test_bidi_mac_base64()
+            }),
+            serde_json::json!({
+                "type": "binary_chunk",
+                "stream_id": 1,
+                "data_base64": "aGVsbG8=",
+                "pts": null,
+                "mac_base64": test_bidi_mac_base64()
+            }),
+        ] {
+            let error = parse_bidi_up_frame_json(&frame.to_string())
+                .expect_err("binary_chunk pts must be explicit at the public ABI boundary");
+
+            assert_eq!(error.to_string(), "field `pts` must fit into u64");
+        }
     }
 
     #[test]

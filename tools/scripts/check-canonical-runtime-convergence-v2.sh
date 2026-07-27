@@ -17503,6 +17503,14 @@ if 'frame_required_string(obj, "mac_base64")' not in ffi:
     raise SystemExit("ffi_bidi_frame_mac_not_required")
 if "InvalidMacLength" not in ffi:
     raise SystemExit("ffi_bidi_frame_mac_length_guard_missing")
+if 'pts: frame_u64(obj, "pts")?' not in ffi:
+    raise SystemExit("ffi_bidi_binary_chunk_pts_not_required")
+if re.search(r'frame_optional_u64\(obj,\s*"pts"\)\?\s*\.unwrap_or_default\(\)', ffi):
+    raise SystemExit("ffi_bidi_binary_chunk_pts_zero_fallback")
+if "fn frame_optional_u64(" in ffi:
+    raise SystemExit("ffi_bidi_binary_chunk_optional_pts_helper_not_deleted")
+if "parse_bidi_up_frame_json_rejects_missing_binary_chunk_pts" not in ffi:
+    raise SystemExit("ffi_bidi_binary_chunk_pts_test_missing")
 for retired in (
     'obj.get("mac_base64")',
     "mac: Vec::new()",
