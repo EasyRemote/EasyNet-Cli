@@ -138288,14 +138288,6 @@
           "sha256": "ecf1db79aebd4a2a95a7f2502c83bb62318d85d96463c0095db9ed9fa2de56ba"
         },
         {
-          "item": "NewSignerFromSignature",
-          "sha256": "65e8923a36e571a8df19fce4fee8db9263f2ec9a591cd4952e500938eff0c3f3"
-        },
-        {
-          "item": "NewStaticSignatureProvider",
-          "sha256": "63bc10ca2bb8417bbbb2228b95a00ee86cd3de058e097378bd1b9651d101ba39"
-        },
-        {
           "item": "PrepareOptions",
           "sha256": "527bd756286850ffb5061f31ed7a95ceb90115200fbc71bd1021b7afd05fc8ea"
         },
@@ -138381,10 +138373,6 @@
         },
         {
           "item": "SigningMaterial",
-          "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
-        },
-        {
-          "item": "StaticSignatureProvider",
           "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
         },
         {
@@ -138836,10 +138824,6 @@
           "sha256": "f6f24de5b0dbcf37f95b4d7140b12b365b3959b4bf68919dbea480116e3c902a"
         },
         {
-          "item": "StaticSignatureProvider.Sign",
-          "sha256": "7203e9cc5593b866631b644305983bdd618542c5568e8f7d2a4297d45cfdd40d"
-        },
-        {
           "item": "SubmittedInvocation.Handle",
           "sha256": "50a464844ddfd7ac23e9a4b0d18ff970746a25e2ceefd10472103a69618bd306"
         },
@@ -138885,14 +138869,6 @@
             {
               "item": "NewSigner",
               "sha256": "ecf1db79aebd4a2a95a7f2502c83bb62318d85d96463c0095db9ed9fa2de56ba"
-            },
-            {
-              "item": "NewSignerFromSignature",
-              "sha256": "65e8923a36e571a8df19fce4fee8db9263f2ec9a591cd4952e500938eff0c3f3"
-            },
-            {
-              "item": "NewStaticSignatureProvider",
-              "sha256": "63bc10ca2bb8417bbbb2228b95a00ee86cd3de058e097378bd1b9651d101ba39"
             },
             {
               "item": "PrepareOptions",
@@ -138980,10 +138956,6 @@
             },
             {
               "item": "SigningMaterial",
-              "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
-            },
-            {
-              "item": "StaticSignatureProvider",
               "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
             },
             {
@@ -139433,10 +139405,6 @@
             {
               "item": "SigningMaterial.SignerPolicy",
               "sha256": "f6f24de5b0dbcf37f95b4d7140b12b365b3959b4bf68919dbea480116e3c902a"
-            },
-            {
-              "item": "StaticSignatureProvider.Sign",
-              "sha256": "7203e9cc5593b866631b644305983bdd618542c5568e8f7d2a4297d45cfdd40d"
             },
             {
               "item": "SubmittedInvocation.Handle",
@@ -139486,14 +139454,6 @@
               "sha256": "ecf1db79aebd4a2a95a7f2502c83bb62318d85d96463c0095db9ed9fa2de56ba"
             },
             {
-              "item": "NewSignerFromSignature",
-              "sha256": "65e8923a36e571a8df19fce4fee8db9263f2ec9a591cd4952e500938eff0c3f3"
-            },
-            {
-              "item": "NewStaticSignatureProvider",
-              "sha256": "63bc10ca2bb8417bbbb2228b95a00ee86cd3de058e097378bd1b9651d101ba39"
-            },
-            {
               "item": "PrepareOptions",
               "sha256": "527bd756286850ffb5061f31ed7a95ceb90115200fbc71bd1021b7afd05fc8ea"
             },
@@ -139579,10 +139539,6 @@
             },
             {
               "item": "SigningMaterial",
-              "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
-            },
-            {
-              "item": "StaticSignatureProvider",
               "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
             },
             {
@@ -140032,10 +139988,6 @@
             {
               "item": "SigningMaterial.SignerPolicy",
               "sha256": "f6f24de5b0dbcf37f95b4d7140b12b365b3959b4bf68919dbea480116e3c902a"
-            },
-            {
-              "item": "StaticSignatureProvider.Sign",
-              "sha256": "7203e9cc5593b866631b644305983bdd618542c5568e8f7d2a4297d45cfdd40d"
             },
             {
               "item": "SubmittedInvocation.Handle",
@@ -140085,14 +140037,6 @@
               "sha256": "ecf1db79aebd4a2a95a7f2502c83bb62318d85d96463c0095db9ed9fa2de56ba"
             },
             {
-              "item": "NewSignerFromSignature",
-              "sha256": "65e8923a36e571a8df19fce4fee8db9263f2ec9a591cd4952e500938eff0c3f3"
-            },
-            {
-              "item": "NewStaticSignatureProvider",
-              "sha256": "63bc10ca2bb8417bbbb2228b95a00ee86cd3de058e097378bd1b9651d101ba39"
-            },
-            {
               "item": "PrepareOptions",
               "sha256": "527bd756286850ffb5061f31ed7a95ceb90115200fbc71bd1021b7afd05fc8ea"
             },
@@ -140178,10 +140122,6 @@
             },
             {
               "item": "SigningMaterial",
-              "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
-            },
-            {
-              "item": "StaticSignatureProvider",
               "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
             },
             {
@@ -140631,10 +140571,6 @@
             {
               "item": "SigningMaterial.SignerPolicy",
               "sha256": "f6f24de5b0dbcf37f95b4d7140b12b365b3959b4bf68919dbea480116e3c902a"
-            },
-            {
-              "item": "StaticSignatureProvider.Sign",
-              "sha256": "7203e9cc5593b866631b644305983bdd618542c5568e8f7d2a4297d45cfdd40d"
             },
             {
               "item": "SubmittedInvocation.Handle",
@@ -140684,14 +140620,6 @@
               "sha256": "ecf1db79aebd4a2a95a7f2502c83bb62318d85d96463c0095db9ed9fa2de56ba"
             },
             {
-              "item": "NewSignerFromSignature",
-              "sha256": "65e8923a36e571a8df19fce4fee8db9263f2ec9a591cd4952e500938eff0c3f3"
-            },
-            {
-              "item": "NewStaticSignatureProvider",
-              "sha256": "63bc10ca2bb8417bbbb2228b95a00ee86cd3de058e097378bd1b9651d101ba39"
-            },
-            {
               "item": "PrepareOptions",
               "sha256": "527bd756286850ffb5061f31ed7a95ceb90115200fbc71bd1021b7afd05fc8ea"
             },
@@ -140777,10 +140705,6 @@
             },
             {
               "item": "SigningMaterial",
-              "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
-            },
-            {
-              "item": "StaticSignatureProvider",
               "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
             },
             {
@@ -141230,10 +141154,6 @@
             {
               "item": "SigningMaterial.SignerPolicy",
               "sha256": "f6f24de5b0dbcf37f95b4d7140b12b365b3959b4bf68919dbea480116e3c902a"
-            },
-            {
-              "item": "StaticSignatureProvider.Sign",
-              "sha256": "7203e9cc5593b866631b644305983bdd618542c5568e8f7d2a4297d45cfdd40d"
             },
             {
               "item": "SubmittedInvocation.Handle",
@@ -141283,14 +141203,6 @@
               "sha256": "ecf1db79aebd4a2a95a7f2502c83bb62318d85d96463c0095db9ed9fa2de56ba"
             },
             {
-              "item": "NewSignerFromSignature",
-              "sha256": "65e8923a36e571a8df19fce4fee8db9263f2ec9a591cd4952e500938eff0c3f3"
-            },
-            {
-              "item": "NewStaticSignatureProvider",
-              "sha256": "63bc10ca2bb8417bbbb2228b95a00ee86cd3de058e097378bd1b9651d101ba39"
-            },
-            {
               "item": "PrepareOptions",
               "sha256": "527bd756286850ffb5061f31ed7a95ceb90115200fbc71bd1021b7afd05fc8ea"
             },
@@ -141376,10 +141288,6 @@
             },
             {
               "item": "SigningMaterial",
-              "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
-            },
-            {
-              "item": "StaticSignatureProvider",
               "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
             },
             {
@@ -141829,10 +141737,6 @@
             {
               "item": "SigningMaterial.SignerPolicy",
               "sha256": "f6f24de5b0dbcf37f95b4d7140b12b365b3959b4bf68919dbea480116e3c902a"
-            },
-            {
-              "item": "StaticSignatureProvider.Sign",
-              "sha256": "7203e9cc5593b866631b644305983bdd618542c5568e8f7d2a4297d45cfdd40d"
             },
             {
               "item": "SubmittedInvocation.Handle",
@@ -141882,14 +141786,6 @@
               "sha256": "ecf1db79aebd4a2a95a7f2502c83bb62318d85d96463c0095db9ed9fa2de56ba"
             },
             {
-              "item": "NewSignerFromSignature",
-              "sha256": "65e8923a36e571a8df19fce4fee8db9263f2ec9a591cd4952e500938eff0c3f3"
-            },
-            {
-              "item": "NewStaticSignatureProvider",
-              "sha256": "63bc10ca2bb8417bbbb2228b95a00ee86cd3de058e097378bd1b9651d101ba39"
-            },
-            {
               "item": "PrepareOptions",
               "sha256": "527bd756286850ffb5061f31ed7a95ceb90115200fbc71bd1021b7afd05fc8ea"
             },
@@ -141975,10 +141871,6 @@
             },
             {
               "item": "SigningMaterial",
-              "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
-            },
-            {
-              "item": "StaticSignatureProvider",
               "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
             },
             {
@@ -142428,10 +142320,6 @@
             {
               "item": "SigningMaterial.SignerPolicy",
               "sha256": "f6f24de5b0dbcf37f95b4d7140b12b365b3959b4bf68919dbea480116e3c902a"
-            },
-            {
-              "item": "StaticSignatureProvider.Sign",
-              "sha256": "7203e9cc5593b866631b644305983bdd618542c5568e8f7d2a4297d45cfdd40d"
             },
             {
               "item": "SubmittedInvocation.Handle",
@@ -142481,14 +142369,6 @@
               "sha256": "ecf1db79aebd4a2a95a7f2502c83bb62318d85d96463c0095db9ed9fa2de56ba"
             },
             {
-              "item": "NewSignerFromSignature",
-              "sha256": "65e8923a36e571a8df19fce4fee8db9263f2ec9a591cd4952e500938eff0c3f3"
-            },
-            {
-              "item": "NewStaticSignatureProvider",
-              "sha256": "63bc10ca2bb8417bbbb2228b95a00ee86cd3de058e097378bd1b9651d101ba39"
-            },
-            {
               "item": "PrepareOptions",
               "sha256": "527bd756286850ffb5061f31ed7a95ceb90115200fbc71bd1021b7afd05fc8ea"
             },
@@ -142574,10 +142454,6 @@
             },
             {
               "item": "SigningMaterial",
-              "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
-            },
-            {
-              "item": "StaticSignatureProvider",
               "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
             },
             {
@@ -143027,10 +142903,6 @@
             {
               "item": "SigningMaterial.SignerPolicy",
               "sha256": "f6f24de5b0dbcf37f95b4d7140b12b365b3959b4bf68919dbea480116e3c902a"
-            },
-            {
-              "item": "StaticSignatureProvider.Sign",
-              "sha256": "7203e9cc5593b866631b644305983bdd618542c5568e8f7d2a4297d45cfdd40d"
             },
             {
               "item": "SubmittedInvocation.Handle",
@@ -143080,14 +142952,6 @@
               "sha256": "ecf1db79aebd4a2a95a7f2502c83bb62318d85d96463c0095db9ed9fa2de56ba"
             },
             {
-              "item": "NewSignerFromSignature",
-              "sha256": "65e8923a36e571a8df19fce4fee8db9263f2ec9a591cd4952e500938eff0c3f3"
-            },
-            {
-              "item": "NewStaticSignatureProvider",
-              "sha256": "63bc10ca2bb8417bbbb2228b95a00ee86cd3de058e097378bd1b9651d101ba39"
-            },
-            {
               "item": "PrepareOptions",
               "sha256": "527bd756286850ffb5061f31ed7a95ceb90115200fbc71bd1021b7afd05fc8ea"
             },
@@ -143173,10 +143037,6 @@
             },
             {
               "item": "SigningMaterial",
-              "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
-            },
-            {
-              "item": "StaticSignatureProvider",
               "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
             },
             {
@@ -143626,10 +143486,6 @@
             {
               "item": "SigningMaterial.SignerPolicy",
               "sha256": "f6f24de5b0dbcf37f95b4d7140b12b365b3959b4bf68919dbea480116e3c902a"
-            },
-            {
-              "item": "StaticSignatureProvider.Sign",
-              "sha256": "7203e9cc5593b866631b644305983bdd618542c5568e8f7d2a4297d45cfdd40d"
             },
             {
               "item": "SubmittedInvocation.Handle",
@@ -143700,7 +143556,7 @@
         },
         {
           "item": "Signer",
-          "sha256": "79059014b837a1f4140e10df129c1bf082a7d34edf9de3fdb77f5742b2f9a670"
+          "sha256": "808164075e5c2cee70086f233d964d24a49af347b145599654a18632682750d1"
         },
         {
           "item": "SignerPolicy",
@@ -143713,10 +143569,6 @@
         {
           "item": "SigningMaterial",
           "sha256": "3c52e7fb36d10d8e8e2378d5157b50b6b3ac5262f156b1509272a0e0440aba95"
-        },
-        {
-          "item": "StaticSignatureProvider",
-          "sha256": "c9b04650cf167a4dc80010a3ddb784724a8807d45f3b1efd9dacd31dca4891f4"
         },
         {
           "item": "SubmittedInvocation",
@@ -143979,10 +143831,6 @@
           "sha256": "b5de9021a64144e2df2522daf2933aa8b536a08e479579594934646f4bf05991"
         },
         {
-          "item": "Signer.from_signature",
-          "sha256": "e5edde37b62f9daed0c6859ffe8cb900cff1132f91df35e615bc1abee0c3a094"
-        },
-        {
           "item": "Signer.handle",
           "sha256": "993481c658482616242f1aee3445d68907c819ba20f0dbdc5ce17f68c1bf2915"
         },
@@ -144051,14 +143899,6 @@
           "sha256": "b0a5a66258218832cb966c5fc1d454c3dcaa6a009f9360c7560fc0e46184f8b9"
         },
         {
-          "item": "StaticSignatureProvider.sign",
-          "sha256": "cc3ee8138806f6fb225c509f9493facd17fc6099995300c0e99e4c38f3898b08"
-        },
-        {
-          "item": "StaticSignatureProvider.signature",
-          "sha256": "0f4c0fb58af7febd67f62490bf790ae3e4031e219bad870accb73394a8495b96"
-        },
-        {
           "item": "SubmittedInvocation.handle",
           "sha256": "bb2a56b4cc9a83d988cae0a1aad2a8503a43d8387b7c32a02c00c9f195cc1e61"
         },
@@ -144115,7 +143955,7 @@
             },
             {
               "item": "Signer",
-              "sha256": "79059014b837a1f4140e10df129c1bf082a7d34edf9de3fdb77f5742b2f9a670"
+              "sha256": "808164075e5c2cee70086f233d964d24a49af347b145599654a18632682750d1"
             },
             {
               "item": "SignerPolicy",
@@ -144128,10 +143968,6 @@
             {
               "item": "SigningMaterial",
               "sha256": "3c52e7fb36d10d8e8e2378d5157b50b6b3ac5262f156b1509272a0e0440aba95"
-            },
-            {
-              "item": "StaticSignatureProvider",
-              "sha256": "c9b04650cf167a4dc80010a3ddb784724a8807d45f3b1efd9dacd31dca4891f4"
             },
             {
               "item": "SubmittedInvocation",
@@ -144394,10 +144230,6 @@
               "sha256": "b5de9021a64144e2df2522daf2933aa8b536a08e479579594934646f4bf05991"
             },
             {
-              "item": "Signer.from_signature",
-              "sha256": "e5edde37b62f9daed0c6859ffe8cb900cff1132f91df35e615bc1abee0c3a094"
-            },
-            {
               "item": "Signer.handle",
               "sha256": "993481c658482616242f1aee3445d68907c819ba20f0dbdc5ce17f68c1bf2915"
             },
@@ -144464,14 +144296,6 @@
             {
               "item": "SigningMaterial.signer_policy",
               "sha256": "b0a5a66258218832cb966c5fc1d454c3dcaa6a009f9360c7560fc0e46184f8b9"
-            },
-            {
-              "item": "StaticSignatureProvider.sign",
-              "sha256": "cc3ee8138806f6fb225c509f9493facd17fc6099995300c0e99e4c38f3898b08"
-            },
-            {
-              "item": "StaticSignatureProvider.signature",
-              "sha256": "0f4c0fb58af7febd67f62490bf790ae3e4031e219bad870accb73394a8495b96"
             },
             {
               "item": "SubmittedInvocation.handle",
@@ -144530,7 +144354,7 @@
             },
             {
               "item": "Signer",
-              "sha256": "79059014b837a1f4140e10df129c1bf082a7d34edf9de3fdb77f5742b2f9a670"
+              "sha256": "808164075e5c2cee70086f233d964d24a49af347b145599654a18632682750d1"
             },
             {
               "item": "SignerPolicy",
@@ -144543,10 +144367,6 @@
             {
               "item": "SigningMaterial",
               "sha256": "3c52e7fb36d10d8e8e2378d5157b50b6b3ac5262f156b1509272a0e0440aba95"
-            },
-            {
-              "item": "StaticSignatureProvider",
-              "sha256": "c9b04650cf167a4dc80010a3ddb784724a8807d45f3b1efd9dacd31dca4891f4"
             },
             {
               "item": "SubmittedInvocation",
@@ -144809,10 +144629,6 @@
               "sha256": "b5de9021a64144e2df2522daf2933aa8b536a08e479579594934646f4bf05991"
             },
             {
-              "item": "Signer.from_signature",
-              "sha256": "e5edde37b62f9daed0c6859ffe8cb900cff1132f91df35e615bc1abee0c3a094"
-            },
-            {
               "item": "Signer.handle",
               "sha256": "993481c658482616242f1aee3445d68907c819ba20f0dbdc5ce17f68c1bf2915"
             },
@@ -144879,14 +144695,6 @@
             {
               "item": "SigningMaterial.signer_policy",
               "sha256": "b0a5a66258218832cb966c5fc1d454c3dcaa6a009f9360c7560fc0e46184f8b9"
-            },
-            {
-              "item": "StaticSignatureProvider.sign",
-              "sha256": "cc3ee8138806f6fb225c509f9493facd17fc6099995300c0e99e4c38f3898b08"
-            },
-            {
-              "item": "StaticSignatureProvider.signature",
-              "sha256": "0f4c0fb58af7febd67f62490bf790ae3e4031e219bad870accb73394a8495b96"
             },
             {
               "item": "SubmittedInvocation.handle",
@@ -144945,7 +144753,7 @@
             },
             {
               "item": "Signer",
-              "sha256": "79059014b837a1f4140e10df129c1bf082a7d34edf9de3fdb77f5742b2f9a670"
+              "sha256": "808164075e5c2cee70086f233d964d24a49af347b145599654a18632682750d1"
             },
             {
               "item": "SignerPolicy",
@@ -144958,10 +144766,6 @@
             {
               "item": "SigningMaterial",
               "sha256": "3c52e7fb36d10d8e8e2378d5157b50b6b3ac5262f156b1509272a0e0440aba95"
-            },
-            {
-              "item": "StaticSignatureProvider",
-              "sha256": "c9b04650cf167a4dc80010a3ddb784724a8807d45f3b1efd9dacd31dca4891f4"
             },
             {
               "item": "SubmittedInvocation",
@@ -145224,10 +145028,6 @@
               "sha256": "b5de9021a64144e2df2522daf2933aa8b536a08e479579594934646f4bf05991"
             },
             {
-              "item": "Signer.from_signature",
-              "sha256": "e5edde37b62f9daed0c6859ffe8cb900cff1132f91df35e615bc1abee0c3a094"
-            },
-            {
               "item": "Signer.handle",
               "sha256": "993481c658482616242f1aee3445d68907c819ba20f0dbdc5ce17f68c1bf2915"
             },
@@ -145294,14 +145094,6 @@
             {
               "item": "SigningMaterial.signer_policy",
               "sha256": "b0a5a66258218832cb966c5fc1d454c3dcaa6a009f9360c7560fc0e46184f8b9"
-            },
-            {
-              "item": "StaticSignatureProvider.sign",
-              "sha256": "cc3ee8138806f6fb225c509f9493facd17fc6099995300c0e99e4c38f3898b08"
-            },
-            {
-              "item": "StaticSignatureProvider.signature",
-              "sha256": "0f4c0fb58af7febd67f62490bf790ae3e4031e219bad870accb73394a8495b96"
             },
             {
               "item": "SubmittedInvocation.handle",
@@ -145360,7 +145152,7 @@
             },
             {
               "item": "Signer",
-              "sha256": "79059014b837a1f4140e10df129c1bf082a7d34edf9de3fdb77f5742b2f9a670"
+              "sha256": "808164075e5c2cee70086f233d964d24a49af347b145599654a18632682750d1"
             },
             {
               "item": "SignerPolicy",
@@ -145373,10 +145165,6 @@
             {
               "item": "SigningMaterial",
               "sha256": "3c52e7fb36d10d8e8e2378d5157b50b6b3ac5262f156b1509272a0e0440aba95"
-            },
-            {
-              "item": "StaticSignatureProvider",
-              "sha256": "c9b04650cf167a4dc80010a3ddb784724a8807d45f3b1efd9dacd31dca4891f4"
             },
             {
               "item": "SubmittedInvocation",
@@ -145639,10 +145427,6 @@
               "sha256": "b5de9021a64144e2df2522daf2933aa8b536a08e479579594934646f4bf05991"
             },
             {
-              "item": "Signer.from_signature",
-              "sha256": "e5edde37b62f9daed0c6859ffe8cb900cff1132f91df35e615bc1abee0c3a094"
-            },
-            {
               "item": "Signer.handle",
               "sha256": "993481c658482616242f1aee3445d68907c819ba20f0dbdc5ce17f68c1bf2915"
             },
@@ -145709,14 +145493,6 @@
             {
               "item": "SigningMaterial.signer_policy",
               "sha256": "b0a5a66258218832cb966c5fc1d454c3dcaa6a009f9360c7560fc0e46184f8b9"
-            },
-            {
-              "item": "StaticSignatureProvider.sign",
-              "sha256": "cc3ee8138806f6fb225c509f9493facd17fc6099995300c0e99e4c38f3898b08"
-            },
-            {
-              "item": "StaticSignatureProvider.signature",
-              "sha256": "0f4c0fb58af7febd67f62490bf790ae3e4031e219bad870accb73394a8495b96"
             },
             {
               "item": "SubmittedInvocation.handle",
@@ -145775,7 +145551,7 @@
             },
             {
               "item": "Signer",
-              "sha256": "79059014b837a1f4140e10df129c1bf082a7d34edf9de3fdb77f5742b2f9a670"
+              "sha256": "808164075e5c2cee70086f233d964d24a49af347b145599654a18632682750d1"
             },
             {
               "item": "SignerPolicy",
@@ -145788,10 +145564,6 @@
             {
               "item": "SigningMaterial",
               "sha256": "3c52e7fb36d10d8e8e2378d5157b50b6b3ac5262f156b1509272a0e0440aba95"
-            },
-            {
-              "item": "StaticSignatureProvider",
-              "sha256": "c9b04650cf167a4dc80010a3ddb784724a8807d45f3b1efd9dacd31dca4891f4"
             },
             {
               "item": "SubmittedInvocation",
@@ -146054,10 +145826,6 @@
               "sha256": "b5de9021a64144e2df2522daf2933aa8b536a08e479579594934646f4bf05991"
             },
             {
-              "item": "Signer.from_signature",
-              "sha256": "e5edde37b62f9daed0c6859ffe8cb900cff1132f91df35e615bc1abee0c3a094"
-            },
-            {
               "item": "Signer.handle",
               "sha256": "993481c658482616242f1aee3445d68907c819ba20f0dbdc5ce17f68c1bf2915"
             },
@@ -146124,14 +145892,6 @@
             {
               "item": "SigningMaterial.signer_policy",
               "sha256": "b0a5a66258218832cb966c5fc1d454c3dcaa6a009f9360c7560fc0e46184f8b9"
-            },
-            {
-              "item": "StaticSignatureProvider.sign",
-              "sha256": "cc3ee8138806f6fb225c509f9493facd17fc6099995300c0e99e4c38f3898b08"
-            },
-            {
-              "item": "StaticSignatureProvider.signature",
-              "sha256": "0f4c0fb58af7febd67f62490bf790ae3e4031e219bad870accb73394a8495b96"
             },
             {
               "item": "SubmittedInvocation.handle",
@@ -146190,7 +145950,7 @@
             },
             {
               "item": "Signer",
-              "sha256": "79059014b837a1f4140e10df129c1bf082a7d34edf9de3fdb77f5742b2f9a670"
+              "sha256": "808164075e5c2cee70086f233d964d24a49af347b145599654a18632682750d1"
             },
             {
               "item": "SignerPolicy",
@@ -146203,10 +145963,6 @@
             {
               "item": "SigningMaterial",
               "sha256": "3c52e7fb36d10d8e8e2378d5157b50b6b3ac5262f156b1509272a0e0440aba95"
-            },
-            {
-              "item": "StaticSignatureProvider",
-              "sha256": "c9b04650cf167a4dc80010a3ddb784724a8807d45f3b1efd9dacd31dca4891f4"
             },
             {
               "item": "SubmittedInvocation",
@@ -146469,10 +146225,6 @@
               "sha256": "b5de9021a64144e2df2522daf2933aa8b536a08e479579594934646f4bf05991"
             },
             {
-              "item": "Signer.from_signature",
-              "sha256": "e5edde37b62f9daed0c6859ffe8cb900cff1132f91df35e615bc1abee0c3a094"
-            },
-            {
               "item": "Signer.handle",
               "sha256": "993481c658482616242f1aee3445d68907c819ba20f0dbdc5ce17f68c1bf2915"
             },
@@ -146539,14 +146291,6 @@
             {
               "item": "SigningMaterial.signer_policy",
               "sha256": "b0a5a66258218832cb966c5fc1d454c3dcaa6a009f9360c7560fc0e46184f8b9"
-            },
-            {
-              "item": "StaticSignatureProvider.sign",
-              "sha256": "cc3ee8138806f6fb225c509f9493facd17fc6099995300c0e99e4c38f3898b08"
-            },
-            {
-              "item": "StaticSignatureProvider.signature",
-              "sha256": "0f4c0fb58af7febd67f62490bf790ae3e4031e219bad870accb73394a8495b96"
             },
             {
               "item": "SubmittedInvocation.handle",
@@ -146605,7 +146349,7 @@
             },
             {
               "item": "Signer",
-              "sha256": "79059014b837a1f4140e10df129c1bf082a7d34edf9de3fdb77f5742b2f9a670"
+              "sha256": "808164075e5c2cee70086f233d964d24a49af347b145599654a18632682750d1"
             },
             {
               "item": "SignerPolicy",
@@ -146618,10 +146362,6 @@
             {
               "item": "SigningMaterial",
               "sha256": "3c52e7fb36d10d8e8e2378d5157b50b6b3ac5262f156b1509272a0e0440aba95"
-            },
-            {
-              "item": "StaticSignatureProvider",
-              "sha256": "c9b04650cf167a4dc80010a3ddb784724a8807d45f3b1efd9dacd31dca4891f4"
             },
             {
               "item": "SubmittedInvocation",
@@ -146884,10 +146624,6 @@
               "sha256": "b5de9021a64144e2df2522daf2933aa8b536a08e479579594934646f4bf05991"
             },
             {
-              "item": "Signer.from_signature",
-              "sha256": "e5edde37b62f9daed0c6859ffe8cb900cff1132f91df35e615bc1abee0c3a094"
-            },
-            {
               "item": "Signer.handle",
               "sha256": "993481c658482616242f1aee3445d68907c819ba20f0dbdc5ce17f68c1bf2915"
             },
@@ -146954,14 +146690,6 @@
             {
               "item": "SigningMaterial.signer_policy",
               "sha256": "b0a5a66258218832cb966c5fc1d454c3dcaa6a009f9360c7560fc0e46184f8b9"
-            },
-            {
-              "item": "StaticSignatureProvider.sign",
-              "sha256": "cc3ee8138806f6fb225c509f9493facd17fc6099995300c0e99e4c38f3898b08"
-            },
-            {
-              "item": "StaticSignatureProvider.signature",
-              "sha256": "0f4c0fb58af7febd67f62490bf790ae3e4031e219bad870accb73394a8495b96"
             },
             {
               "item": "SubmittedInvocation.handle",
@@ -147020,7 +146748,7 @@
             },
             {
               "item": "Signer",
-              "sha256": "79059014b837a1f4140e10df129c1bf082a7d34edf9de3fdb77f5742b2f9a670"
+              "sha256": "808164075e5c2cee70086f233d964d24a49af347b145599654a18632682750d1"
             },
             {
               "item": "SignerPolicy",
@@ -147033,10 +146761,6 @@
             {
               "item": "SigningMaterial",
               "sha256": "3c52e7fb36d10d8e8e2378d5157b50b6b3ac5262f156b1509272a0e0440aba95"
-            },
-            {
-              "item": "StaticSignatureProvider",
-              "sha256": "c9b04650cf167a4dc80010a3ddb784724a8807d45f3b1efd9dacd31dca4891f4"
             },
             {
               "item": "SubmittedInvocation",
@@ -147299,10 +147023,6 @@
               "sha256": "b5de9021a64144e2df2522daf2933aa8b536a08e479579594934646f4bf05991"
             },
             {
-              "item": "Signer.from_signature",
-              "sha256": "e5edde37b62f9daed0c6859ffe8cb900cff1132f91df35e615bc1abee0c3a094"
-            },
-            {
               "item": "Signer.handle",
               "sha256": "993481c658482616242f1aee3445d68907c819ba20f0dbdc5ce17f68c1bf2915"
             },
@@ -147369,14 +147089,6 @@
             {
               "item": "SigningMaterial.signer_policy",
               "sha256": "b0a5a66258218832cb966c5fc1d454c3dcaa6a009f9360c7560fc0e46184f8b9"
-            },
-            {
-              "item": "StaticSignatureProvider.sign",
-              "sha256": "cc3ee8138806f6fb225c509f9493facd17fc6099995300c0e99e4c38f3898b08"
-            },
-            {
-              "item": "StaticSignatureProvider.signature",
-              "sha256": "0f4c0fb58af7febd67f62490bf790ae3e4031e219bad870accb73394a8495b96"
             },
             {
               "item": "SubmittedInvocation.handle",

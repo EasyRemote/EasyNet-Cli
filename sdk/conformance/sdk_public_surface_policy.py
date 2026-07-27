@@ -19,9 +19,13 @@ def is_fallback_signer_item(item: str) -> bool:
         "generatedsigner",
         "privatekeyauth",
         "privatekeyauthenticator",
+        "staticsignatureprovider",
+        "newstaticsignatureprovider",
+        "newsignerfromsignature",
     }
     return (
         compact in explicit_names
+        or lowered.endswith(".from_signature")
         or lowered.endswith(".default_auth_for_subject")
         or lowered.endswith(".generate_private_agent_auth")
         or lowered.endswith(".generate_private_hub_auth")
@@ -33,6 +37,8 @@ def is_fallback_signer_item(item: str) -> bool:
         or {"generate", "subject", "auth"}.issubset(tokens)
         or {"process", "local", "signer"}.issubset(tokens)
         or {"private", "key", "auth"}.issubset(tokens)
+        or {"static", "signature", "provider"}.issubset(tokens)
+        or {"signer", "from", "signature"}.issubset(tokens)
     )
 
 

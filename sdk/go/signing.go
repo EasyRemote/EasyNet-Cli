@@ -264,21 +264,6 @@ type SignatureProvider interface {
 	Sign(material SigningMaterial, handle SignerHandle) (InvocationSignature, error)
 }
 
-// StaticSignatureProvider adapts already-produced signatures.
-type StaticSignatureProvider struct {
-	signature InvocationSignature
-}
-
-func NewStaticSignatureProvider(signature InvocationSignature) StaticSignatureProvider {
-	return StaticSignatureProvider{signature: signature}
-}
-
-func (p StaticSignatureProvider) Sign(material SigningMaterial, handle SignerHandle) (InvocationSignature, error) {
-	_ = material
-	_ = handle
-	return p.signature, nil
-}
-
 // Signer binds a provider-authorized handle to a concrete signature provider.
 type Signer struct {
 	handle   SignerHandle
@@ -293,10 +278,6 @@ func NewSigner(handle SignerHandle, provider SignatureProvider) (Signer, error) 
 		return Signer{}, err
 	}
 	return Signer{handle: handle, provider: provider}, nil
-}
-
-func NewSignerFromSignature(handle SignerHandle, signature InvocationSignature) (Signer, error) {
-	return NewSigner(handle, NewStaticSignatureProvider(signature))
 }
 
 func (s Signer) Handle() SignerHandle {

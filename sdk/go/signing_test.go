@@ -634,12 +634,9 @@ func TestSignerRejectsPolicyAndKeyHintMismatch(t *testing.T) {
 		mode:     "provider_managed_signing",
 		signerID: "other-signer",
 	}
-	signer, err := NewSignerFromSignature(
-		signerHandle(""),
-		InvocationSignature{Algorithm: "ed25519", SignatureBase64: "c2lnbmF0dXJl"},
-	)
+	signer, err := NewSigner(signerHandle(""), &memorySignatureProvider{})
 	if err != nil {
-		t.Fatalf("NewSignerFromSignature: %v", err)
+		t.Fatalf("NewSigner: %v", err)
 	}
 	if _, err := signer.Sign(prepared); err == nil || !IsCode(err, ErrInvalidArgument) {
 		t.Fatalf("policy mismatch error = %v, want InvalidArgument", err)

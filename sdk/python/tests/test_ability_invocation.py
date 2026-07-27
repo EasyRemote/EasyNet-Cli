@@ -21,7 +21,7 @@ from easynet_sdk import AddressingClient
 
 from addressing_fake import MemoryAddressingTransport
 from test_runtime import MemoryRuntimeTransport, canonical_runtime_receipt_pair
-from test_signing import signer_handle
+from test_signing import signer_handle, signer_with_signature
 
 
 ABILITY_URA = "easynet:///r/example/ability/device.dev-a.observe.health"
@@ -271,8 +271,7 @@ class AbilityInvocationClientTests(unittest.TestCase):
         bidi.close_send()
         bidi.cancel("done")
         bidi.close()
-        signer = Signer.from_signature(
-            signer_handle(),
+        signer = signer_with_signature(
             InvocationSignature(
                 algorithm="ed25519",
                 signature_base64="c2lnbmF0dXJl",
@@ -454,8 +453,7 @@ class AbilityInvocationClientTests(unittest.TestCase):
             runtime=RuntimeClient(runtime),
             addressing=AddressingClient(identity),
         )
-        signer = Signer.from_signature(
-            signer_handle(),
+        signer = signer_with_signature(
             InvocationSignature(
                 algorithm="ed25519",
                 signature_base64="c2lnbmF0dXJl",

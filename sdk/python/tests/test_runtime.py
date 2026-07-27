@@ -26,7 +26,7 @@ from easynet_sdk import (
     is_code,
 )
 
-from test_signing import PREPARED_FIXTURE, signer_handle
+from test_signing import PREPARED_FIXTURE, signer_handle, signer_with_signature
 
 
 class MemoryRuntimeTransport:
@@ -1395,8 +1395,7 @@ class RuntimeTests(unittest.TestCase):
     def test_prepare_and_sign_returns_inspectable_signed_envelope(self) -> None:
         transport = MemoryRuntimeTransport()
         client = RuntimeClient(transport)
-        signer = Signer.from_signature(
-            signer_handle(),
+        signer = signer_with_signature(
             InvocationSignature(
                 algorithm="ed25519",
                 signature_base64="c2lnbmF0dXJl",
@@ -1468,8 +1467,7 @@ class RuntimeTests(unittest.TestCase):
     def test_bound_object_graph_delegates_full_lifecycle(self) -> None:
         transport = MemoryRuntimeTransport()
         client = RuntimeClient(transport)
-        signer = Signer.from_signature(
-            signer_handle(),
+        signer = signer_with_signature(
             InvocationSignature(
                 algorithm="ed25519",
                 signature_base64="c2lnbmF0dXJl",
@@ -1565,8 +1563,7 @@ class RuntimeTests(unittest.TestCase):
         )
 
     def test_unbound_lifecycle_objects_reject_object_methods(self) -> None:
-        signer = Signer.from_signature(
-            signer_handle(),
+        signer = signer_with_signature(
             InvocationSignature(
                 algorithm="ed25519",
                 signature_base64="c2lnbmF0dXJl",

@@ -98,31 +98,11 @@ class SignatureProvider(Protocol):
 
 
 @dataclass(frozen=True)
-class StaticSignatureProvider:
-    """Adapter for already-produced signatures without exposing envelope logic."""
-
-    signature: InvocationSignature
-
-    def sign(
-        self, material: SigningMaterial, handle: SignerHandle
-    ) -> InvocationSignature:
-        _ = material
-        _ = handle
-        return self.signature
-
-
-@dataclass(frozen=True)
 class Signer:
     """SDK signer workflow object over a provider-authorized signer handle."""
 
     handle: SignerHandle
     provider: SignatureProvider
-
-    @classmethod
-    def from_signature(
-        cls, handle: SignerHandle, signature: InvocationSignature
-    ) -> "Signer":
-        return cls(handle=handle, provider=StaticSignatureProvider(signature))
 
     def sign(self, prepared: PreparedInvocation) -> "SignedInvocation":
         if prepared is None:

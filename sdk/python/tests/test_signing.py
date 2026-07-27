@@ -49,6 +49,24 @@ PREPARED_FIXTURE = b"""{
 }"""
 
 
+class FixedSignatureProvider:
+    def __init__(self, signature: InvocationSignature):
+        self.signature = signature
+        self.material = None
+        self.handle = None
+
+    def sign(self, material, handle) -> InvocationSignature:
+        self.material = material
+        self.handle = handle
+        return self.signature
+
+
+def signer_with_signature(
+    signature: InvocationSignature, handle: SignerHandle | None = None
+) -> Signer:
+    return Signer(handle=handle or signer_handle(), provider=FixedSignatureProvider(signature))
+
+
 class SigningTests(unittest.TestCase):
     def test_prepared_invocation_decodes_signing_material_fixture(self) -> None:
         prepared = PreparedInvocation.from_json(PREPARED_FIXTURE)
@@ -608,8 +626,7 @@ class SigningTests(unittest.TestCase):
                 }
             }"""
         )
-        signer = Signer.from_signature(
-            signer_handle(),
+        signer = signer_with_signature(
             InvocationSignature(
                 algorithm="ed25519",
                 signature_base64="c2lnbmF0dXJl",
@@ -623,8 +640,7 @@ class SigningTests(unittest.TestCase):
 
     def test_signer_rejects_algorithm_mismatch(self) -> None:
         prepared = PreparedInvocation.from_json(PREPARED_FIXTURE)
-        signer = Signer.from_signature(
-            signer_handle(),
+        signer = signer_with_signature(
             InvocationSignature(
                 algorithm="secp256k1",
                 signature_base64="c2lnbmF0dXJl",

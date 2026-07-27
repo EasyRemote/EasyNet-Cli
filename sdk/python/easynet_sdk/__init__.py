@@ -353,7 +353,6 @@ from .signing import (
     Signer,
     SignerPolicy,
     SigningMaterial,
-    StaticSignatureProvider,
 )
 from .stream import (
     MAX_STREAM_BUFFERED_EVENTS,
@@ -647,7 +646,6 @@ __all__ = [
     "SigningMaterial",
     "SignedInvocationState",
     "StaticCallerIdentityProvider",
-    "StaticSignatureProvider",
     "StopOptions",
     "StreamCancel",
     "StreamEvent",

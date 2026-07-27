@@ -34,7 +34,7 @@ from test_runtime import (
     canonical_runtime_receipt_pair,
     complete_draft,
 )
-from test_signing import signer_handle
+from test_signing import signer_handle, signer_with_signature
 
 
 def _load_patch(raw: FakeRawCABI):
@@ -136,8 +136,7 @@ class RuntimeInvocationTransportTests(unittest.TestCase):
     ) -> None:
         runtime = MemoryRuntimeTransport()
         adapter = InvocationResultAdapter.from_runtime_client(RuntimeClient(runtime))
-        signer = Signer.from_signature(
-            signer_handle(),
+        signer = signer_with_signature(
             InvocationSignature(
                 algorithm="ed25519",
                 signature_base64="c2lnbmF0dXJl",
@@ -316,8 +315,7 @@ class RuntimeInvocationTransportTests(unittest.TestCase):
         self.assertFalse(transport._closed)
 
     def test_daemon_transport_close_waits_for_active_operations(self) -> None:
-        signer = Signer.from_signature(
-            signer_handle(),
+        signer = signer_with_signature(
             InvocationSignature(
                 algorithm="ed25519",
                 signature_base64="c2lnbmF0dXJl",
@@ -386,8 +384,7 @@ class RuntimeInvocationTransportTests(unittest.TestCase):
     def test_invoke_signed_retains_failed_handle_cleanup_until_close(self) -> None:
         raw = _HandleCleanupFailsOnceRuntimeTransport()
         transport = RuntimeInvocationTransport.from_runtime_client(RuntimeClient(raw))
-        signer = Signer.from_signature(
-            signer_handle(),
+        signer = signer_with_signature(
             InvocationSignature(
                 algorithm="ed25519",
                 signature_base64="c2lnbmF0dXJl",
@@ -732,8 +729,7 @@ class RuntimeInvocationTransportTests(unittest.TestCase):
     def test_unary_pool_signed_dispatch_reuses_wait_state(self) -> None:
         transport = _SlowUnaryTransport()
         pool = UnaryDispatchPool.from_transport(transport)
-        signer = Signer.from_signature(
-            signer_handle(),
+        signer = signer_with_signature(
             InvocationSignature(
                 algorithm="ed25519",
                 signature_base64="c2lnbmF0dXJl",
