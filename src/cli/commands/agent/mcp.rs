@@ -27,7 +27,8 @@ pub(crate) fn run_mcp_add(args: McpAddArgs) -> anyhow::Result<()> {
     let config_path = args
         .config
         .clone()
-        .unwrap_or_else(crate::daemon::execution::mcp::McpClientService::default_config_path);
+        .map(Ok)
+        .unwrap_or_else(crate::daemon::execution::mcp::McpClientService::default_config_path)?;
     let svc = crate::daemon::execution::mcp::McpClientService::from_path(&config_path)?;
 
     let declared_cost = build_cost_meta(args.cost_kind, args.cost_label.as_deref())?;
@@ -96,7 +97,7 @@ struct McpAdditionOutcome {
 /// Build the manifest plan for one `easynet agent mcp add` invocation.
 ///
 /// Pure-ish: the only side effect is talking to `svc` (which itself
-/// reads the operator's `mcps.json` config). No filesystem
+/// reads the operator's `mcp_clients.json` config). No filesystem
 /// writes happen here — that's phase (4).
 /// Build the `CostMeta` value the manifest writer will stamp on every
 /// generated ability, or `None` when the operator did not pass

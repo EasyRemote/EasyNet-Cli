@@ -670,16 +670,18 @@ impl McpClientService {
     /// Canonical operator config path for outbound MCP clients.
     /// Shared by daemon boot, the MCP executor, and CLI authoring
     /// commands so every surface reads the same server catalogue.
-    pub fn default_config_path() -> PathBuf {
-        std::env::var("EASYNET_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| {
-                std::env::var("HOME")
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|_| PathBuf::from("."))
-                    .join(".easynet")
-            })
-            .join("mcp_clients.json")
+    pub fn default_config_path() -> anyhow::Result<PathBuf> {
+        if let Some(home) = std::env::var_os("EASYNET_HOME").filter(|value| !value.is_empty()) {
+            return Ok(PathBuf::from(home).join("mcp_clients.json"));
+        }
+        if let Some(home) = std::env::var_os("HOME").filter(|value| !value.is_empty()) {
+            return Ok(PathBuf::from(home)
+                .join(".easynet")
+                .join("mcp_clients.json"));
+        }
+        anyhow::bail!(
+            "MCP client config path requires EASYNET_HOME or HOME; refusing current-directory fallback"
+        );
     }
 
     /// Drop every cached upstream connection (stdio child handles,
@@ -1416,6 +1418,90 @@ mod tests {
         std::fs::write(&p, b"not json at all").unwrap();
         let err = McpClientService::from_path(&p).unwrap_err();
         assert!(format!("{err}").contains("parse"));
+    }
+
+    #[test]
+    fn default_config_path_prefers_explicit_easynet_home() {
+        let _env = TestMcpConfigEnv::locked();
+        let directory = tempfile::tempdir().expect("tempdir");
+        std::env::set_var("EASYNET_HOME", directory.path());
+        std::env::set_var("HOME", "/must/not/be/used");
+
+        let path = McpClientService::default_config_path().expect("explicit EASYNET_HOME");
+
+        assert_eq!(path, directory.path().join("mcp_clients.json"));
+    }
+
+    #[test]
+    fn default_config_path_uses_home_state_dir_without_current_directory_fallback() {
+        let _env = TestMcpConfigEnv::locked();
+        let directory = tempfile::tempdir().expect("tempdir");
+        std::env::remove_var("EASYNET_HOME");
+        std::env::set_var("HOME", directory.path());
+
+        let path = McpClientService::default_config_path().expect("HOME path");
+
+        assert_eq!(
+            path,
+            directory.path().join(".easynet").join("mcp_clients.json")
+        );
+        assert!(path.ends_with(".easynet/mcp_clients.json"), "{path:?}");
+        assert!(
+            path.is_absolute(),
+            "default MCP client config path must stay anchored to HOME"
+        );
+    }
+
+    #[test]
+    fn default_config_path_rejects_missing_home_instead_of_current_directory_fallback() {
+        let _env = TestMcpConfigEnv::locked();
+        std::env::remove_var("EASYNET_HOME");
+        std::env::remove_var("HOME");
+
+        let error =
+            McpClientService::default_config_path().expect_err("missing home must fail closed");
+
+        assert!(
+            error
+                .to_string()
+                .contains("refusing current-directory fallback"),
+            "{error:#}"
+        );
+    }
+
+    struct TestMcpConfigEnv {
+        _lock: std::sync::MutexGuard<'static, ()>,
+        easynet_home: Option<std::ffi::OsString>,
+        home: Option<std::ffi::OsString>,
+    }
+
+    impl TestMcpConfigEnv {
+        fn locked() -> Self {
+            static ENV_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+            let lock = ENV_LOCK
+                .get_or_init(|| std::sync::Mutex::new(()))
+                .lock()
+                .expect("mcp config env lock");
+            Self {
+                _lock: lock,
+                easynet_home: std::env::var_os("EASYNET_HOME"),
+                home: std::env::var_os("HOME"),
+            }
+        }
+    }
+
+    impl Drop for TestMcpConfigEnv {
+        fn drop(&mut self) {
+            restore_env_var("EASYNET_HOME", self.easynet_home.take());
+            restore_env_var("HOME", self.home.take());
+        }
+    }
+
+    fn restore_env_var(name: &str, value: Option<std::ffi::OsString>) {
+        match value {
+            Some(value) => std::env::set_var(name, value),
+            None => std::env::remove_var(name),
+        }
     }
 
     #[test]

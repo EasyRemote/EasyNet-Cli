@@ -1020,14 +1020,14 @@ fn build_registry_with_services_result_inner(
     // Invocation service.
     a2a_client_ability::register(&mut reg, Arc::clone(&discover_federation_resolver));
     // mcp.client.{list,call} — outbound MCP. Boots an
-    // McpClientService from ~/.easynet/mcps.json (missing
+    // McpClientService from the canonical EasyNet state directory (missing
     // file → empty service, no upstreams). Each upstream MCP
     // server is spawned lazily on first call; subsequent calls
     // reuse the live connection. Parse errors at boot bubble up
     // because a malformed file is an operator typo, not a "no
     // upstreams" condition.
     let mcp_svc = if hosts_device_authority && daemon_runtime_assembly {
-        let mcps_path = crate::daemon::execution::mcp::McpClientService::default_config_path();
+        let mcps_path = crate::daemon::execution::mcp::McpClientService::default_config_path()?;
         Arc::new(
             crate::daemon::execution::mcp::McpClientService::from_path(&mcps_path)
                 .with_context(|| format!("load MCP client config {}", mcps_path.display()))?,
