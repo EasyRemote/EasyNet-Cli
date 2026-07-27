@@ -86,7 +86,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, StreamSource};
 use crate::daemon::execution::mission::dispatch::{AgentResponse, DriverOverrides, ToolCall};
@@ -1550,6 +1550,20 @@ impl ChatArgs {
         let obj = args
             .as_object()
             .ok_or_else(|| anyhow::anyhow!("chat: arguments must be a JSON object"))?;
+        reject_unknown_fields(
+            obj,
+            "chat",
+            &[
+                "prompt",
+                "context",
+                "session_id",
+                "skills",
+                "context_loaders",
+                "driver",
+                "stream",
+                "attachments",
+            ],
+        )?;
         let prompt = obj
             .get("prompt")
             .and_then(Value::as_str)
@@ -1558,14 +1572,8 @@ impl ChatArgs {
         if prompt.is_empty() {
             anyhow::bail!("chat: `prompt` must not be empty");
         }
-        let context = obj
-            .get("context")
-            .and_then(Value::as_str)
-            .map(str::to_string);
-        let session_id = obj
-            .get("session_id")
-            .and_then(Value::as_str)
-            .map(str::to_string);
+        let context = optional_string_field(obj, "context")?;
+        let session_id = optional_string_field(obj, "session_id")?;
         let skills = obj
             .get("skills")
             .map(Selection::parse)
@@ -1581,7 +1589,7 @@ impl ChatArgs {
             .map(parse_driver_overrides)
             .transpose()?
             .unwrap_or_default();
-        let stream = obj.get("stream").and_then(Value::as_bool).unwrap_or(false);
+        let stream = optional_bool_field(obj, "stream")?.unwrap_or(false);
         let attachments = parse_attachments(obj.get("attachments"))?;
         Ok(Self {
             prompt,
@@ -1593,6 +1601,58 @@ impl ChatArgs {
             stream,
             attachments,
         })
+    }
+}
+
+fn reject_unknown_fields(
+    obj: &Map<String, Value>,
+    context: &str,
+    allowed: &[&str],
+) -> anyhow::Result<()> {
+    let mut unknown: Vec<&str> = obj
+        .keys()
+        .map(String::as_str)
+        .filter(|field| !allowed.contains(field))
+        .collect();
+    unknown.sort_unstable();
+    if unknown.is_empty() {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "{context}: unsupported field(s): {}",
+        unknown
+            .iter()
+            .map(|field| format!("`{field}`"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+}
+
+fn optional_string_field(
+    obj: &Map<String, Value>,
+    field: &'static str,
+) -> anyhow::Result<Option<String>> {
+    match obj.get(field) {
+        None => Ok(None),
+        Some(value) => Ok(Some(
+            value
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("chat: `{field}` must be a string"))?
+                .to_string(),
+        )),
+    }
+}
+
+fn optional_bool_field(
+    obj: &Map<String, Value>,
+    field: &'static str,
+) -> anyhow::Result<Option<bool>> {
+    match obj.get(field) {
+        None => Ok(None),
+        Some(value) => value
+            .as_bool()
+            .ok_or_else(|| anyhow::anyhow!("chat: `{field}` must be a boolean"))
+            .map(Some),
     }
 }
 
@@ -2180,6 +2240,45 @@ mod tests {
     fn parse_rejects_non_object_args() {
         let err = ChatArgs::parse(&json!(["not", "an", "object"])).unwrap_err();
         assert!(format!("{err}").contains("object"));
+    }
+
+    #[test]
+    fn parse_rejects_unknown_top_level_fields() {
+        let err = ChatArgs::parse(&json!({
+            "prompt": "hi",
+            "driver_context": "second-shape"
+        }))
+        .unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("unsupported field"));
+        assert!(msg.contains("driver_context"));
+    }
+
+    #[test]
+    fn parse_rejects_wrongly_typed_optional_string_fields() {
+        for field in ["context", "session_id"] {
+            let mut payload = json!({"prompt": "hi"});
+            payload
+                .as_object_mut()
+                .expect("object payload")
+                .insert(field.to_string(), json!(123));
+            let err = ChatArgs::parse(&payload).unwrap_err();
+            let msg = format!("{err}");
+            assert!(
+                msg.contains(&format!("`{field}` must be a string")),
+                "wrong error for {field}: {msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_rejects_wrongly_typed_stream_flag() {
+        let err = ChatArgs::parse(&json!({
+            "prompt": "hi",
+            "stream": "yes"
+        }))
+        .unwrap_err();
+        assert!(format!("{err}").contains("`stream` must be a boolean"));
     }
 
     #[test]

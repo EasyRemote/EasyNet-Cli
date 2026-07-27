@@ -73,4 +73,18 @@ if ! rg -q 'parse_rejects_non_string_driver_model' "$CHAT_RS"; then
   fail "agents.chat parser tests must reject non-string driver.model instead of treating it as absent"
 fi
 
+for test_name in \
+  parse_rejects_unknown_top_level_fields \
+  parse_rejects_wrongly_typed_optional_string_fields \
+  parse_rejects_wrongly_typed_stream_flag
+do
+  if ! rg -q "$test_name" "$CHAT_RS"; then
+    fail "agents.chat parser tests must include $test_name"
+  fi
+done
+
+if ! rg -q 'reject_unknown_fields' "$CHAT_RS"; then
+  fail "agents.chat parser must reject unknown top-level fields in production code"
+fi
+
 echo "check-chat-ability-input-boundary: OK"
