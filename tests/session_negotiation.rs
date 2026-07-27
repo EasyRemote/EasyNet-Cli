@@ -7,7 +7,9 @@
 
 #![cfg(feature = "axon-pb")]
 
-use easynet_cli::daemon::invocation::bidi::state::presence::{PresenceRegistry, SessionContract};
+use easynet_cli::daemon::invocation::bidi::state::presence::{
+    PresenceRegistry, SessionContract, CANONICAL_SESSION_CARRIER_VERSION,
+};
 
 fn registry() -> PresenceRegistry {
     PresenceRegistry::new()
@@ -16,16 +18,13 @@ fn registry() -> PresenceRegistry {
 #[tokio::test]
 async fn negotiated_insert_remembers_contract_and_surfaces_prior_nonce() {
     let reg = registry();
-    let canonical_version = SessionContract::canonical().version;
+    let canonical_version = CANONICAL_SESSION_CARRIER_VERSION;
     let (tx1, _rx1) = tokio::sync::mpsc::channel(1);
     let first = reg
         .insert_negotiated(
             "easynet:///r/t/device/d1".into(),
             tx1,
-            SessionContract {
-                version: canonical_version,
-                claimant_boot_nonce: vec![1; 16],
-            },
+            SessionContract::new(canonical_version, vec![1; 16]),
         )
         .expect("canonical presence key");
     assert!(first.displaced.is_none());
@@ -44,10 +43,7 @@ async fn negotiated_insert_remembers_contract_and_surfaces_prior_nonce() {
         .insert_negotiated(
             "easynet:///r/t/device/d1".into(),
             tx2,
-            SessionContract {
-                version: canonical_version + 1,
-                claimant_boot_nonce: vec![2; 16],
-            },
+            SessionContract::new(canonical_version + 1, vec![2; 16]),
         )
         .expect("canonical presence key");
     assert!(second.displaced.is_some());
@@ -60,17 +56,21 @@ async fn negotiated_insert_remembers_contract_and_surfaces_prior_nonce() {
 }
 
 #[tokio::test]
-async fn insert_tracked_registers_canonical_contract() {
+async fn negotiated_insert_registers_canonical_contract() {
     let reg = registry();
     let (tx, _rx) = tokio::sync::mpsc::channel(1);
     let r = reg
-        .insert_tracked("easynet:///r/t/device/d2".into(), tx)
+        .insert_negotiated(
+            "easynet:///r/t/device/d2".into(),
+            tx,
+            SessionContract::new(CANONICAL_SESSION_CARRIER_VERSION, vec![0; 16]),
+        )
         .expect("canonical presence key");
     assert!(r.displaced_claimant_nonce.is_none());
     assert_eq!(
         reg.lookup_dispatch_session("easynet:///r/t/device/d2")
             .map(|session| session.contract_version),
-        Some(SessionContract::canonical().version)
+        Some(CANONICAL_SESSION_CARRIER_VERSION)
     );
 }
 

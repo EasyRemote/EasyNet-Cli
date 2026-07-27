@@ -326,7 +326,7 @@ impl PresenceSlot {
 /// dispatch contract version the claimant declared plus its per-boot
 /// claimant fingerprint (T1.2). One value object so registration
 /// sites cannot pass half the negotiation.
-pub(crate) const CANONICAL_SESSION_CARRIER_VERSION: u32 = 1;
+pub const CANONICAL_SESSION_CARRIER_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionContract {

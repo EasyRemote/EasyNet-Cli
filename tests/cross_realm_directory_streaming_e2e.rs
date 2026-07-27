@@ -69,7 +69,9 @@ use easynet_cli::daemon::invocation::admission::decision::{
 use easynet_cli::daemon::invocation::admission::grant_matcher::{
     PermissionEffect, PermissionGrant, PermissionGrantLifetime, PermissionGrantState,
 };
-use easynet_cli::daemon::invocation::bidi::state::presence::PresenceRegistry;
+use easynet_cli::daemon::invocation::bidi::state::presence::{
+    PresenceRegistry, SessionContract, CANONICAL_SESSION_CARRIER_VERSION,
+};
 use easynet_cli::daemon::invocation::dispatch::daemon_invocation_service::DaemonInvocationService;
 use easynet_cli::daemon::invocation::dispatch::federation_wrappers::ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2;
 use easynet_cli::daemon::persistence::access_control::AccessControlStoreRegistry;
@@ -367,7 +369,11 @@ async fn streaming_chain_propagates_presence_event_to_peer_cell() {
         >,
     >(8);
     daemon_a_presence
-        .insert(target_ura.to_string(), tx)
+        .insert_negotiated(
+            target_ura.to_string(),
+            tx,
+            SessionContract::new(CANONICAL_SESSION_CARRIER_VERSION, vec![0; 16]),
+        )
         .expect("canonical presence key");
 
     // ── Assert: daemon B's cell shows the entry within a
@@ -438,7 +444,11 @@ async fn streaming_chain_propagates_presence_remove() {
         >,
     >(8);
     daemon_a_presence
-        .insert(target_ura.to_string(), tx)
+        .insert_negotiated(
+            target_ura.to_string(),
+            tx,
+            SessionContract::new(CANONICAL_SESSION_CARRIER_VERSION, vec![0; 16]),
+        )
         .expect("canonical presence key");
     let mut observed_online = false;
     for _ in 0..40 {

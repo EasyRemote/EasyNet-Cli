@@ -40,7 +40,9 @@ use easynet_cli::daemon::identity::self_identity::{
     CanonicalSigner, KeyringClient, SelfIdentity, SelfIdentityError,
 };
 use easynet_cli::daemon::invocation::admission::admission_facade::AdmissionFacade;
-use easynet_cli::daemon::invocation::bidi::state::presence::PresenceRegistry;
+use easynet_cli::daemon::invocation::bidi::state::presence::{
+    PresenceRegistry, SessionContract, CANONICAL_SESSION_CARRIER_VERSION,
+};
 use easynet_cli::daemon::invocation::dispatch::daemon_invocation_service::DaemonInvocationService;
 use easynet_cli::daemon::invocation::dispatch::invocation_wire::{
     InvocationDerivationPolicy, ProtoEnvelope,
@@ -1109,7 +1111,11 @@ fn start_daemon_at(
             );
             tokio::spawn(async move { while noop_rx.recv().await.is_some() {} });
             presence
-                .insert(daemon_ura_for_presence, noop_tx)
+                .insert_negotiated(
+                    daemon_ura_for_presence,
+                    noop_tx,
+                    SessionContract::new(CANONICAL_SESSION_CARRIER_VERSION, vec![0; 16]),
+                )
                 .expect("canonical presence key");
 
             let listener = UnixListener::bind(&socket).expect("bind test UDS");
