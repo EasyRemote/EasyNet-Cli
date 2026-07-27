@@ -281,11 +281,7 @@ impl PluginPackage {
         let specs = binding.ability_specs();
         validate_builtin_specs(&manifest, &specs)?;
         let descriptors = builtin_descriptors(&manifest, &specs)?;
-        let source_root = Path::new(binding.manifest_path())
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from("."));
-        let root = binding.installable_package_root().unwrap_or(source_root);
+        let root = builtin_package_root(&binding)?;
         let manifest_path = root.join("plugin.toml");
         let hash = hash_installable_surface(&root)?;
         Ok(Self {
@@ -405,6 +401,39 @@ impl PluginPackage {
 
 /// Shared package handle.
 pub type SharedPluginPackage = Arc<PluginPackage>;
+
+fn builtin_package_root(binding: &BuiltinPluginBinding) -> Result<PathBuf> {
+    if let Some(root) = binding.installable_package_root() {
+        if root.as_os_str().is_empty() {
+            return Err(PluginHostError::PluginProjectBoundaryViolation {
+                reason: format!(
+                    "builtin plugin provider for {} returned an empty installable package root",
+                    binding.manifest_path()
+                ),
+            });
+        }
+        return Ok(root);
+    }
+
+    let manifest_path = Path::new(binding.manifest_path());
+    let Some(parent) = manifest_path.parent() else {
+        return Err(PluginHostError::PluginProjectBoundaryViolation {
+            reason: format!(
+                "builtin plugin manifest path {:?} has no package root; provider must declare installable_package_root",
+                binding.manifest_path()
+            ),
+        });
+    };
+    if parent.as_os_str().is_empty() {
+        return Err(PluginHostError::PluginProjectBoundaryViolation {
+            reason: format!(
+                "builtin plugin manifest path {:?} does not declare a package directory; provider must declare installable_package_root",
+                binding.manifest_path()
+            ),
+        });
+    }
+    Ok(parent.to_path_buf())
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -832,6 +861,93 @@ call_mode = "rpc"
         };
 
         assert!(matches!(err, PluginHostError::BuiltinSpecMismatch { .. }));
+    }
+
+    #[test]
+    fn plugin_host_builtin_package_rejects_manifest_path_without_package_root() {
+        struct RootlessProvider {
+            manifest: &'static str,
+        }
+
+        impl PluginProvider for RootlessProvider {
+            fn package_id(&self) -> &'static str {
+                "test.desktop.rootless"
+            }
+
+            fn provider_kind(&self) -> PluginProviderKind {
+                PluginProviderKind::DesktopCompanion
+            }
+
+            fn manifest_body(&self) -> &'static str {
+                self.manifest
+            }
+
+            fn manifest_path(&self) -> &'static str {
+                "plugin.toml"
+            }
+
+            fn expected_entrypoint(&self) -> &'static str {
+                "dist/macos/Test.app"
+            }
+
+            fn ability_specs(&self) -> Vec<BuiltinPluginAbilitySpec> {
+                Vec::new()
+            }
+
+            fn contribute(
+                &self,
+                _: &mut crate::daemon::plugins::PluginContributionBuilder,
+                _: PluginRuntimeLimits,
+            ) -> Result<()> {
+                Ok(())
+            }
+        }
+
+        let manifest = r#"
+schema_version = "1"
+id = "test.desktop.rootless"
+version = "0.1.0"
+kind = "desktop_companion"
+entrypoint = "dist/macos/Test.app"
+abilities = []
+permissions = ["clipboard_read"]
+resources = ["desktop_session"]
+platforms = ["macos"]
+
+[limits]
+max_sessions = 1
+max_frame_queue = 1
+
+[companion]
+display_name = "Rootless Test"
+lifecycle = "user_session"
+boot_policy = "ensure_running_after_daemon_ready"
+stop_policy = "keep_running"
+health = "status_file"
+status_file = "companions/test.desktop.rootless/status.json"
+
+[companion.macos]
+bundle_id = "test.desktop.rootless"
+app_bundle = "dist/macos/Test.app"
+supervisor = "launch_agent"
+launch_agent_label = "test.desktop.rootless"
+session = "aqua"
+"#;
+
+        let err = PluginPackage::from_builtin(BuiltinPluginBinding::new(
+            ProviderBackedBuiltinBinding::new(Arc::new(RootlessProvider {
+                manifest: Box::leak(manifest.to_string().into_boxed_str()),
+            })),
+        ))
+        .expect_err("builtin provider must declare a stable package root");
+
+        assert!(matches!(
+            err,
+            PluginHostError::PluginProjectBoundaryViolation { .. }
+        ));
+        assert!(err
+            .to_string()
+            .contains("provider must declare installable_package_root"));
     }
 
     #[test]
