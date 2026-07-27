@@ -564,22 +564,20 @@ fn streaming_chat_completions_response(
 
         match adapter_result {
             Ok(Ok(value)) => {
-                let chunks = value
-                    .get("chunks")
-                    .and_then(serde_json::Value::as_array)
-                    .cloned()
-                    .unwrap_or_default();
-                let done = value
-                    .get("done_sentinel")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or("[DONE]")
-                    .to_string();
-                for chunk in chunks {
+                let projection = match OpenAIStreamProjection::from_adapter_output(value) {
+                    Ok(projection) => projection,
+                    Err(err) => {
+                        let _ = send_sse_json(&tx, &openai_stream_error(err.to_string())).await;
+                        let _ = send_sse_data(&tx, "[DONE]").await;
+                        return;
+                    }
+                };
+                for chunk in projection.chunks {
                     if send_sse_json(&tx, &chunk).await.is_err() {
                         return;
                     }
                 }
-                let _ = send_sse_data(&tx, &done).await;
+                let _ = send_sse_data(&tx, &projection.done_sentinel).await;
             }
             Ok(Err(err)) => {
                 let _ = send_sse_json(&tx, &openai_stream_error(err.to_string())).await;
@@ -610,11 +608,49 @@ fn streaming_chat_completions_response(
         .expect("sse response build")
 }
 
+#[derive(Debug, Clone, PartialEq)]
+struct OpenAIStreamProjection {
+    chunks: Vec<serde_json::Value>,
+    done_sentinel: String,
+}
+
+impl OpenAIStreamProjection {
+    fn from_adapter_output(value: serde_json::Value) -> anyhow::Result<Self> {
+        let object = value
+            .as_object()
+            .ok_or_else(|| anyhow::anyhow!("OpenAI stream adapter output must be a JSON object"))?;
+        let chunks = object
+            .get("chunks")
+            .ok_or_else(|| anyhow::anyhow!("OpenAI stream adapter output missing `chunks`"))?
+            .as_array()
+            .ok_or_else(|| {
+                anyhow::anyhow!("OpenAI stream adapter output `chunks` must be an array")
+            })?
+            .clone();
+        let done_sentinel = object
+            .get("done_sentinel")
+            .ok_or_else(|| anyhow::anyhow!("OpenAI stream adapter output missing `done_sentinel`"))?
+            .as_str()
+            .map(str::trim)
+            .filter(|done| !done.is_empty())
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "OpenAI stream adapter output `done_sentinel` must be a non-empty string"
+                )
+            })?
+            .to_string();
+        Ok(Self {
+            chunks,
+            done_sentinel,
+        })
+    }
+}
+
 async fn send_sse_json(
     tx: &tokio::sync::mpsc::Sender<Result<Bytes, Infallible>>,
     value: &serde_json::Value,
 ) -> Result<(), tokio::sync::mpsc::error::SendError<Result<Bytes, Infallible>>> {
-    let line = serde_json::to_string(value).unwrap_or_else(|_| "{}".to_string());
+    let line = serde_json::to_string(value).expect("serde_json::Value serializes to JSON");
     send_sse_data(tx, &line).await
 }
 
@@ -654,6 +690,7 @@ fn json_response_with_cors(status: StatusCode, value: serde_json::Value) -> Resp
 
 #[cfg(test)]
 mod tests {
+    use super::OpenAIStreamProjection;
     use super::{handle, pages_health_response, parse_pages_api_body, parse_pages_host};
     use axum::body::{to_bytes, Body};
     use axum::http::{header, Request, StatusCode};
@@ -772,6 +809,54 @@ mod tests {
 
     fn attach_openai_runtime(req: &mut Request<Body>) {
         req.extensions_mut().insert(openai_http_runtime());
+    }
+
+    #[test]
+    fn openai_stream_projection_requires_explicit_chunks() {
+        let error = OpenAIStreamProjection::from_adapter_output(json!({"done_sentinel": "[DONE]"}))
+            .expect_err("missing chunks must fail closed");
+
+        assert!(
+            error.to_string().contains("missing `chunks`"),
+            "wrong error: {error:#}"
+        );
+    }
+
+    #[test]
+    fn openai_stream_projection_rejects_non_array_chunks() {
+        let error = OpenAIStreamProjection::from_adapter_output(json!({
+            "chunks": {},
+            "done_sentinel": "[DONE]"
+        }))
+        .expect_err("non-array chunks must fail closed");
+
+        assert!(
+            error.to_string().contains("`chunks` must be an array"),
+            "wrong error: {error:#}"
+        );
+    }
+
+    #[test]
+    fn openai_stream_projection_requires_explicit_done_sentinel() {
+        let error = OpenAIStreamProjection::from_adapter_output(json!({"chunks": []}))
+            .expect_err("missing done sentinel must fail closed");
+
+        assert!(
+            error.to_string().contains("missing `done_sentinel`"),
+            "wrong error: {error:#}"
+        );
+    }
+
+    #[test]
+    fn openai_stream_projection_accepts_typed_stream_envelope() {
+        let projection = OpenAIStreamProjection::from_adapter_output(json!({
+            "chunks": [{"id": "chunk-1"}],
+            "done_sentinel": "[DONE]"
+        }))
+        .expect("valid stream envelope");
+
+        assert_eq!(projection.chunks, vec![json!({"id": "chunk-1"})]);
+        assert_eq!(projection.done_sentinel, "[DONE]");
     }
 
     #[tokio::test]
