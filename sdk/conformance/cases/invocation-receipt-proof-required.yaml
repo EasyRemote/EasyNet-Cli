@@ -15,4 +15,4 @@ expect:
   authority_proof_required: true
   descriptor_binding_required: true
   parent_receipts_binding_required: true
-  opaque_projection_compatibility: true
+  opaque_projection_proof_boundary: true

@@ -17260,6 +17260,17 @@ check_axon_benchmark_baseline_contract() {
 }
 
 check_receipt_proof_fact_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local receipt_proof_case="$cli_root/sdk/conformance/cases/invocation-receipt-proof-required.yaml"
+  [[ -f "$receipt_proof_case" ]] \
+    || fail "receipt proof conformance case is missing: ${receipt_proof_case#$cli_root/}"
+  if rg -n 'opaque_projection_compatibility|compatibility_exception|compatibility.*proof' "$receipt_proof_case"; then
+    fail "receipt proof conformance case preserves compatibility-shaped proof vocabulary"
+  fi
+  if ! rg -n 'opaque_projection_proof_boundary:[[:space:]]*true' "$receipt_proof_case" >/dev/null; then
+    fail "receipt proof conformance case must name opaque projection as a proof boundary"
+  fi
+
   if [[ ! -d "$AXON_ROOT" ]]; then
     fail "EasyNet-Axon root not found for receipt proof-fact contract: $AXON_ROOT"
   fi
