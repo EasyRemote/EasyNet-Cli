@@ -198,3 +198,20 @@
   - passed.
 - `/Users/macbook.silan.tech/.local/bin/codegraph sync`
   - passed; synced 3 changed files.
+
+## Iteration 16
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph query "unknown fallback runtime state unwrap_or default compatibility receipt history descriptor provider legacy"`
+- `/Users/macbook.silan.tech/.local/bin/codegraph query "invocation state unknown fallback RuntimeStarted PROTOCOL_MISMATCH attempt audit"`
+- `cargo test --features axon-pb invocation_attempt_audit_projects_invalid_runtime_state_as_protocol_mismatch --lib`
+  - passed.
+- `cargo fmt --check`
+  - passed.
+- `git diff --check`
+  - passed.
+- `tools/scripts/check-architecture-convergence.sh`
+  - passed.
+- `tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - passed.
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync`
+  - passed; synced 2 changed files.

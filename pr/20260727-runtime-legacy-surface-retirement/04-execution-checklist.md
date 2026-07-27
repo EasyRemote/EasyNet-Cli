@@ -129,3 +129,13 @@
 - [x] Add Node `RuntimeAbilityClient` and `RuntimeReceiptProvider` so products have the same provider-backed history path as Go/Python.
 - [x] Add Node regression tests proving receipt provider uses governance descriptor provider and generic public invoke rejects history.
 - [x] Run Node tests, SDK conformance/gates, fmt/diff checks, then commit if stable.
+
+## Iteration 16 — Runtime response state projection fail-closed cutover
+
+- [x] Re-run codegraph and targeted source search for runtime response state fallback/default projections.
+- [x] Identify `InvocationAttemptHandle::finalize_response` projecting undecodable `InvokeResponse.state` to `unknown` and then `runtime_started`.
+- [x] Extract runtime response state projection into an explicit value object.
+- [x] Project undecodable wire states as terminal `RuntimeFailed` attempt rows with `PROTOCOL_MISMATCH`.
+- [x] Add regression coverage proving invalid runtime state cannot remain a non-terminal attempt.
+- [x] Update convergence gates and run focused tests.
+- [x] Commit if stable.

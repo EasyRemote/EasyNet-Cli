@@ -221,3 +221,21 @@ Boundary: the generic public `InvocationBuilder` and public action path continue
 to reject runtime governance read descriptors. The new provider path does not
 add a compatibility alias; callers must provide explicit caller, callee,
 subject, nonce, causal context, and authority facts before dispatch.
+
+## Runtime response state projection fail-closed cutover
+
+Decision: attempt audit response finalization now uses a dedicated
+`RuntimeResponseStateProjection` value object. Known Axon lifecycle states map
+to the existing attempt states; undecodable wire values become terminal
+`RuntimeFailed` rows with `PROTOCOL_MISMATCH`, `protocol_decode`, and
+non-retryable diagnostics.
+
+Reason: an invalid `InvokeResponse.state` is a protocol/schema mismatch between
+runtime and daemon, not a valid in-flight lifecycle state. Recording it as
+`unknown` and falling through to `runtime_started` made product diagnostics and
+history views believe an invocation was still live even though the daemon could
+not decode the runtime's terminal fact.
+
+Boundary: valid runtime responses preserve the existing public attempt-history
+projection. The cutover adds no compatibility alias and no fallback state; it
+only turns malformed protocol data into a deterministic terminal audit failure.

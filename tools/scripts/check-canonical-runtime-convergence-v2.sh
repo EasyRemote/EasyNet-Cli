@@ -13278,11 +13278,17 @@ if "pub(crate) mod attempt_audit;" not in dispatch_mod:
     raise SystemExit("invocation_attempt_audit_feature_boundary:ledger_module_missing")
 if "pub(crate) fn reject_diagnostic(" not in attempt_audit:
     raise SystemExit("invocation_attempt_audit_feature_boundary:transport_neutral_rejection_missing")
+if re.search(r'unwrap_or_else\s*\(\s*\|_\|\s*"unknown"\.to_string\(\)\s*\)', attempt_audit):
+    raise SystemExit("invocation_attempt_audit_feature_boundary:runtime_state_unknown_fallback")
 for required in (
     "#[cfg(feature = \"axon-pb\")]\n    pub(crate) fn begin_invoke(",
     "#[cfg(feature = \"axon-pb\")]\n    pub(crate) fn begin_stream(",
     "#[cfg(feature = \"axon-pb\")]\n    pub(crate) fn reject_status(",
     "#[cfg(feature = \"axon-pb\")]\n    pub(crate) fn finalize_response(",
+    "struct RuntimeResponseStateProjection",
+    "fn from_wire_state(raw_state: i32, invocation_ura: Option<&str>) -> Self",
+    "PROTOCOL_MISMATCH",
+    "invocation_attempt_audit_projects_invalid_runtime_state_as_protocol_mismatch",
 ):
     if required not in attempt_audit:
         raise SystemExit(f"invocation_attempt_audit_feature_boundary:protobuf_adapter_cfg_missing:{required.splitlines()[-1]}")

@@ -9602,6 +9602,7 @@ if node_history.exists():
 # and products see false empty history rows.
 attempt_audit = cli_root / "src/daemon/invocation/dispatch/attempt_audit.rs"
 if attempt_audit.exists():
+    raw_text = attempt_audit.read_text(encoding="utf-8", errors="replace")
     text = source(attempt_audit)
     for pattern, detail in (
         (
@@ -9619,6 +9620,10 @@ if attempt_audit.exists():
         (
             r"let\s+_\s*=\s*writeln!\(",
             "invocation attempt audit must not ignore append failures",
+        ),
+        (
+            r"unwrap_or_else\s*\(\s*\|_\|\s*\"unknown\"\.to_string\(\)\s*\)",
+            "runtime response state projection must fail closed instead of recording unknown",
         ),
     ):
         match = re.search(pattern, text, re.DOTALL)
@@ -9642,6 +9647,14 @@ if attempt_audit.exists():
             "decode invocation attempt ledger row",
             "attempt ledger reads must fail closed on corrupt rows",
         ),
+        (
+            "struct RuntimeResponseStateProjection",
+            "attempt audit must use a typed runtime response state projection",
+        ),
+        (
+            "PROTOCOL_MISMATCH",
+            "invalid runtime response state must become an explicit protocol mismatch",
+        ),
     ):
         if token not in text:
             add(
@@ -9650,6 +9663,13 @@ if attempt_audit.exists():
                 1,
                 detail,
             )
+    if "invocation_attempt_audit_projects_invalid_runtime_state_as_protocol_mismatch" not in raw_text:
+        add(
+            "R92_INVOCATION_ATTEMPT_AUDIT_FAIL_CLOSED",
+            attempt_audit,
+            1,
+            "attempt audit must test invalid runtime state projection",
+        )
 
 daemon_service = cli_root / "src/daemon/invocation/dispatch/daemon_invocation_service.rs"
 if daemon_service.exists():

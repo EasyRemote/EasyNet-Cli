@@ -278,9 +278,6 @@ impl InvocationAttemptHandle {
         stage: &str,
         response: &InvokeResponse,
     ) -> anyhow::Result<()> {
-        let state = InvocationState::try_from(response.state)
-            .map(|state| state.as_str().to_string())
-            .unwrap_or_else(|_| "unknown".to_string());
         let error = response.error.as_ref();
         let status_code = error
             .map(|error| error.code.clone())
@@ -297,20 +294,32 @@ impl InvocationAttemptHandle {
             .as_ref()
             .map(|header| header.request_id.trim().to_string())
             .filter(|value| !value.is_empty());
-        let terminal = match state.as_str() {
-            "completed" => AttemptState::RuntimeCompleted,
-            "failed" | "timed_out" | "cancelled" if invocation_ura.is_none() => {
-                AttemptState::RuntimeRejected
-            }
-            "failed" | "timed_out" | "cancelled" => AttemptState::RuntimeFailed,
-            _ => AttemptState::RuntimeStarted,
-        };
+        let state_projection = RuntimeResponseStateProjection::from_wire_state(
+            response.state,
+            invocation_ura.as_deref(),
+        );
+        let status_code = status_code.or_else(|| {
+            state_projection
+                .protocol_error
+                .as_ref()
+                .map(|_| "PROTOCOL_MISMATCH".to_string())
+        });
+        let status_message = status_message.or_else(|| state_projection.protocol_error.clone());
+        let error_stage = error_stage.or_else(|| {
+            state_projection
+                .protocol_error
+                .as_ref()
+                .map(|_| "protocol_decode".to_string())
+        });
+        let retryable =
+            retryable.or_else(|| state_projection.protocol_error.as_ref().map(|_| false));
         let diagnostic_summary = match status_message.as_deref() {
             Some(message) if !message.is_empty() => format!("{stage}: {message}"),
-            _ => format!("{stage}: invocation {state}"),
+            _ => format!("{stage}: invocation {}", state_projection.state_name),
         };
+        let suggested_code = status_code.as_deref().unwrap_or("IN_BAND").to_string();
         self.finish(FinishAttempt {
-            state: terminal,
+            state: state_projection.attempt_state,
             stage,
             invocation_ura,
             status_code,
@@ -318,7 +327,7 @@ impl InvocationAttemptHandle {
             error_stage,
             retryable,
             diagnostic_summary,
-            suggested_action: suggested_action(stage, "IN_BAND"),
+            suggested_action: suggested_action(stage, &suggested_code),
         })
     }
 
@@ -363,6 +372,45 @@ struct FinishAttempt<'a> {
     retryable: Option<bool>,
     diagnostic_summary: String,
     suggested_action: String,
+}
+
+#[cfg(feature = "axon-pb")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RuntimeResponseStateProjection {
+    state_name: String,
+    attempt_state: AttemptState,
+    protocol_error: Option<String>,
+}
+
+#[cfg(feature = "axon-pb")]
+impl RuntimeResponseStateProjection {
+    fn from_wire_state(raw_state: i32, invocation_ura: Option<&str>) -> Self {
+        match InvocationState::try_from(raw_state) {
+            Ok(state) => {
+                let state_name = state.as_str().to_string();
+                let attempt_state = match state_name.as_str() {
+                    "completed" => AttemptState::RuntimeCompleted,
+                    "failed" | "timed_out" | "cancelled" if invocation_ura.is_none() => {
+                        AttemptState::RuntimeRejected
+                    }
+                    "failed" | "timed_out" | "cancelled" => AttemptState::RuntimeFailed,
+                    _ => AttemptState::RuntimeStarted,
+                };
+                Self {
+                    state_name,
+                    attempt_state,
+                    protocol_error: None,
+                }
+            }
+            Err(_) => Self {
+                state_name: format!("invalid({raw_state})"),
+                attempt_state: AttemptState::RuntimeFailed,
+                protocol_error: Some(format!(
+                    "runtime response carried invalid invocation state {raw_state}"
+                )),
+            },
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -579,6 +627,10 @@ fn is_retryable_status(status: &Status) -> bool {
 
 fn suggested_action(stage: &str, code: &str) -> String {
     match stage {
+        _ if code.eq_ignore_ascii_case("PROTOCOL_MISMATCH") => {
+            "Check Axon runtime/daemon protocol schema parity and regenerated protobuf bindings."
+                .to_string()
+        }
         "target" => {
             "Check the typed InvocationTarget and descriptor-bound ability reference.".to_string()
         }
@@ -647,6 +699,53 @@ mod tests {
                 .to_string()
                 .contains("decode invocation attempt ledger row 1"),
             "{error:#}"
+        );
+    }
+
+    #[cfg(feature = "axon-pb")]
+    #[test]
+    fn invocation_attempt_audit_projects_invalid_runtime_state_as_protocol_mismatch() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let ledger = InvocationAttemptLedger::open(temp.path().join("attempts.jsonl"))
+            .expect("attempt ledger");
+        let attempt = ledger
+            .begin("Invoke", AttemptIdentity::default())
+            .expect("begin attempt");
+
+        attempt
+            .finalize_response(
+                "runtime_admission",
+                &InvokeResponse {
+                    state: i32::MAX,
+                    ..Default::default()
+                },
+            )
+            .expect("finalize invalid runtime state");
+
+        let records = ledger.list_recent(1).expect("read attempts");
+        assert_eq!(records.len(), 1);
+        let record = &records[0];
+        assert_eq!(record.state, AttemptState::RuntimeFailed);
+        assert_eq!(record.status_code.as_deref(), Some("PROTOCOL_MISMATCH"));
+        assert_eq!(record.error_stage.as_deref(), Some("protocol_decode"));
+        assert_eq!(record.retryable, Some(false));
+        assert!(
+            record
+                .status_message
+                .as_deref()
+                .unwrap_or_default()
+                .contains("invalid invocation state"),
+            "{record:#?}"
+        );
+        assert!(
+            record
+                .diagnostic_summary
+                .contains("runtime response carried invalid invocation state"),
+            "{record:#?}"
+        );
+        assert!(
+            record.suggested_action.contains("protocol schema parity"),
+            "{record:#?}"
         );
     }
 }

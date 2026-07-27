@@ -39,3 +39,8 @@
   public descriptor-bound action ingress, and SDKs must expose a runtime receipt
   provider that owns descriptor-provider selection, tuple construction, and
   authority/subject preflight.
+- Runtime response state projection is a protocol boundary. A wire-level
+  `InvokeResponse.state` that cannot be decoded into the canonical invocation
+  lifecycle must become an explicit `PROTOCOL_MISMATCH` terminal attempt
+  failure; it must never be recorded as `unknown` or left as
+  `runtime_started`.
