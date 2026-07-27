@@ -16899,6 +16899,49 @@ for required in (
 PY
 }
 
+check_daemon_handle_pidfile_projection_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local process="$cli_root/src/daemon/boot/process.rs"
+  [[ -f "$process" ]] || fail "daemon boot process source is missing: ${process#$cli_root/}"
+
+  "$PYTHON_BIN" - "$process" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+process_path = Path(sys.argv[1])
+process = process_path.read_text(encoding="utf-8")
+process_prod = process.split("\n#[cfg(test)]", 1)[0]
+
+for retired in (
+    'Command::new("pgrep")',
+    '.args(["-f", DEFAULT_DAEMON_BIN])',
+    "String::from_utf8_lossy(&output.stdout)",
+):
+    if retired in process_prod:
+        raise SystemExit(f"daemon_handle_pidfile_projection:retired_process_sweep:{retired}")
+
+match = re.search(
+    r"fn\s+discover_existing_daemon_pid_at\s*\([^)]*\)\s*->\s*Option<u32>\s*\{(?P<body>.*?)\n\}",
+    process_prod,
+    re.S,
+)
+if match is None:
+    raise SystemExit("daemon_handle_pidfile_projection:missing_discover_function")
+
+body = match.group("body")
+if "read_daemon_pid_at(pid_path).filter(|pid| net::is_pid_alive(*pid))" not in body:
+    raise SystemExit("daemon_handle_pidfile_projection:not_pidfile_only")
+
+for required_test in (
+    "discover_existing_daemon_pid_returns_none_for_missing_pidfile",
+    "discover_existing_daemon_pid_returns_none_for_stale_pidfile",
+):
+    if required_test not in process:
+        raise SystemExit(f"daemon_handle_pidfile_projection:test_missing:{required_test}")
+PY
+}
+
 check_daemon_mission_eal_boundary_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   bash "$ROOT/tools/scripts/check-dispatch-mission-context-boundary.sh" >/dev/null
@@ -27916,6 +27959,7 @@ check_daemon_runtime_identity_vocabulary_contract
 check_key_custody_boundary_contract
 check_key_service_home_resolution_contract
 check_daemon_start_home_resolution_contract
+check_daemon_handle_pidfile_projection_contract
 check_daemon_mission_eal_boundary_contract
 check_process_singleton_product_boundary_contract
 check_product_identity_boundary_contract

@@ -1,0 +1,6 @@
+- [x] Remove process-name PID discovery from daemon SDK process layer.
+- [x] Keep pidfile-only live PID projection.
+- [x] Add missing-pidfile and stale-pidfile regression tests.
+- [x] Extend SPEC v2 gate coverage for the retired hidden sweep.
+- [x] Run focused daemon boot/process tests.
+- [x] Run format, diff, codegraph, and convergence gates.

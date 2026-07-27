@@ -625,29 +625,7 @@ fn discover_existing_daemon_pid() -> Option<u32> {
 }
 
 fn discover_existing_daemon_pid_at(pid_path: &Path) -> Option<u32> {
-    if let Some(pid) = read_daemon_pid_at(pid_path).filter(|pid| net::is_pid_alive(*pid)) {
-        return Some(pid);
-    }
-
-    #[cfg(windows)]
-    {
-        None
-    }
-
-    #[cfg(not(windows))]
-    {
-        let output = Command::new("pgrep")
-            .args(["-f", DEFAULT_DAEMON_BIN])
-            .output()
-            .ok()?;
-        if !output.status.success() {
-            return None;
-        }
-        String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .filter_map(|line| line.trim().parse::<u32>().ok())
-            .find(|pid| *pid != std::process::id() && net::is_pid_alive(*pid))
-    }
+    read_daemon_pid_at(pid_path).filter(|pid| net::is_pid_alive(*pid))
 }
 
 fn read_daemon_pid_at(pid_path: &Path) -> Option<u32> {
@@ -887,6 +865,31 @@ mod tests {
                 context: "daemon process HOME"
             }
         ));
+    }
+
+    #[test]
+    fn discover_existing_daemon_pid_returns_none_for_missing_pidfile() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let pid_path = temp.path().join("missing-daemon.pid");
+
+        assert_eq!(
+            discover_existing_daemon_pid_at(&pid_path),
+            None,
+            "missing pidfile must not fall back to global process-name discovery"
+        );
+    }
+
+    #[test]
+    fn discover_existing_daemon_pid_returns_none_for_stale_pidfile() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let pid_path = temp.path().join("stale-daemon.pid");
+        std::fs::write(&pid_path, "999999999").expect("write stale pidfile");
+
+        assert_eq!(
+            discover_existing_daemon_pid_at(&pid_path),
+            None,
+            "stale pidfile must not fall back to global process-name discovery"
+        );
     }
 
     #[test]
