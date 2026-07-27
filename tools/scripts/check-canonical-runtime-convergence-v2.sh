@@ -12311,8 +12311,24 @@ for field in ("query_name", "qtype", "caller_ura", "subject_ura", "realm_hint"):
         raise SystemExit(f"namespace_proxy_resolve_exact_tuple:retired_default:{field}")
 if not re.search(r"#\[serde\(default\)\]\s*pub\s+peer_hub_urls\s*:\s*Vec<String>", request_body):
     raise SystemExit("namespace_proxy_resolve_exact_tuple:peer_hub_urls_default_missing")
-if not re.search(r"#\[serde\(default,\s*rename\s*=\s*\"ability_name\"\)\]\s*pub\s+ability_name\s*:\s*String", request_body):
-    raise SystemExit("namespace_proxy_resolve_exact_tuple:ability_name_optional_default_missing")
+ability_field = re.search(
+    r"(?:#\[[^\n]*\]\n\s*)*pub\s+ability_name\s*:\s*ExplicitOptionalAbilityName",
+    request_body,
+    re.S,
+)
+if not ability_field:
+    raise SystemExit("namespace_proxy_resolve_exact_tuple:explicit_nullable_ability_name_missing")
+if "serde(default" in ability_field.group(0):
+    raise SystemExit("namespace_proxy_resolve_exact_tuple:ability_name_retired_default")
+for required in (
+    "impl<'de> Deserialize<'de> for NamespaceProxyResolveRequest",
+    "pub struct ExplicitOptionalAbilityName(Option<String>);",
+    "impl<'de> Deserialize<'de> for ExplicitOptionalAbilityName",
+    "ability_name must be null or a non-empty string",
+    "pub fn peer_argument(&self) -> Option<String>",
+):
+    if required not in wrappers_production:
+        raise SystemExit(f"namespace_proxy_resolve_exact_tuple:ability_name_value_object_missing:{required}")
 
 def function_body(text: str, name: str) -> str:
     marker = f"fn {name}"
@@ -12362,14 +12378,21 @@ for required in (
     if required not in schema_body:
         raise SystemExit(f"namespace_proxy_resolve_exact_tuple:schema_missing:{required}")
 compact_schema = re.sub(r"\s+", "", schema_body)
-if '&["query_name","qtype","caller_ura","subject_ura","realm_hint",]' not in compact_schema:
+compact_contracts = re.sub(r"\s+", "", contracts)
+if '&["query_name","qtype","caller_ura","subject_ura","realm_hint","ability_name",]' not in compact_schema:
     raise SystemExit("namespace_proxy_resolve_exact_tuple:schema_required_tuple_not_exact")
+if '"ability_name":nullable_string_prop(' not in compact_schema:
+    raise SystemExit("namespace_proxy_resolve_exact_tuple:schema_missing_nullable_ability_name")
+if 'properties["ability_name"]["type"],json!(["string","null"])' not in compact_contracts:
+    raise SystemExit("namespace_proxy_resolve_exact_tuple:schema_test_missing_nullable_ability_name")
 for retired in ('"target_ura"', '"peers"'):
     if retired in schema_body:
         raise SystemExit(f"namespace_proxy_resolve_exact_tuple:schema_retired_field:{retired}")
 
 for required_test in (
     "invoke_rejects_namespace_proxy_resolve_missing_required_tuple_fields",
+    "invoke_rejects_namespace_proxy_resolve_missing_explicit_ability_name_selector",
+    "invoke_rejects_namespace_proxy_resolve_empty_ability_name_selector",
     "invoke_rejects_namespace_proxy_resolve_non_canonical_tuple_uras",
     "namespace_proxy_resolve_schema_requires_explicit_resolver_tuple",
 ):

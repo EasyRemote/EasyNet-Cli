@@ -2124,7 +2124,8 @@ async fn invoke_dispatches_namespace_proxy_resolve_to_typed_peer_surface() {
                 "qtype":"RESOLVE_TYPE_DIRECTORY_LISTING",
                 "caller_ura":"easynet:///r/local-realm/authority",
                 "subject_ura":"easynet:///r/local-realm/user/alice",
-                "realm_hint":"peer-realm"
+                "realm_hint":"peer-realm",
+                "ability_name":null
             }"#,
         ))
         .await
@@ -2151,6 +2152,7 @@ async fn invoke_dispatches_namespace_proxy_resolve_to_typed_peer_surface() {
         serde_json::from_slice(&calls[0].1.arguments).expect("peer args decode");
     assert_eq!(peer_args["query_name"], "easynet:///r/peer-realm/device/");
     assert_eq!(peer_args["qtype"], "RESOLVE_TYPE_DIRECTORY_LISTING");
+    assert!(peer_args["ability_name"].is_null());
 }
 
 #[tokio::test]
@@ -2166,7 +2168,8 @@ async fn invoke_namespace_proxy_resolve_rejects_selected_peers_without_client() 
                 "qtype":"RESOLVE_TYPE_DIRECTORY_LISTING",
                 "caller_ura":"easynet:///r/local-realm/authority",
                 "subject_ura":"easynet:///r/local-realm/user/alice",
-                "realm_hint":"peer-realm"
+                "realm_hint":"peer-realm",
+                "ability_name":null
             }"#,
         ))
         .await
@@ -2252,7 +2255,8 @@ async fn invoke_namespace_proxy_resolve_rejects_malformed_peer_record_schema() {
                 "qtype":"RESOLVE_TYPE_DIRECTORY_LISTING",
                 "caller_ura":"easynet:///r/local-realm/authority",
                 "subject_ura":"easynet:///r/local-realm/user/alice",
-                "realm_hint":"peer-realm"
+                "realm_hint":"peer-realm",
+                "ability_name":null
             }"#,
         ))
         .await
@@ -2293,7 +2297,8 @@ async fn invoke_rejects_namespace_proxy_resolve_legacy_camel_case_input_aliases(
                 "qtype":"RESOLVE_TYPE_DIRECTORY_LISTING",
                 "callerUra":"easynet:///r/local-realm/authority",
                 "subjectUra":"easynet:///r/local-realm/user/alice",
-                "realmHint":"peer-realm"
+                "realmHint":"peer-realm",
+                "ability_name":null
             }"#,
         ))
         .await,
@@ -2319,7 +2324,8 @@ async fn invoke_rejects_namespace_proxy_resolve_missing_qtype() {
                 "query_name":"easynet:///r/peer-realm/device/",
                 "caller_ura":"easynet:///r/local-realm/authority",
                 "subject_ura":"easynet:///r/local-realm/user/alice",
-                "realm_hint":"peer-realm"
+                "realm_hint":"peer-realm",
+                "ability_name":null
             }"#,
         ))
         .await,
@@ -2343,7 +2349,8 @@ async fn invoke_rejects_namespace_proxy_resolve_missing_required_tuple_fields() 
                 "qtype":"RESOLVE_TYPE_DIRECTORY_LISTING",
                 "caller_ura":"easynet:///r/local-realm/authority",
                 "subject_ura":"easynet:///r/local-realm/user/alice",
-                "realm_hint":"peer-realm"
+                "realm_hint":"peer-realm",
+                "ability_name":null
             }"#,
         ),
         (
@@ -2353,7 +2360,8 @@ async fn invoke_rejects_namespace_proxy_resolve_missing_required_tuple_fields() 
                 "query_name":"easynet:///r/peer-realm/device/",
                 "qtype":"RESOLVE_TYPE_DIRECTORY_LISTING",
                 "subject_ura":"easynet:///r/local-realm/user/alice",
-                "realm_hint":"peer-realm"
+                "realm_hint":"peer-realm",
+                "ability_name":null
             }"#,
         ),
         (
@@ -2363,7 +2371,8 @@ async fn invoke_rejects_namespace_proxy_resolve_missing_required_tuple_fields() 
                 "query_name":"easynet:///r/peer-realm/device/",
                 "qtype":"RESOLVE_TYPE_DIRECTORY_LISTING",
                 "caller_ura":"easynet:///r/local-realm/authority",
-                "realm_hint":"peer-realm"
+                "realm_hint":"peer-realm",
+                "ability_name":null
             }"#,
         ),
         (
@@ -2373,7 +2382,8 @@ async fn invoke_rejects_namespace_proxy_resolve_missing_required_tuple_fields() 
                 "query_name":"easynet:///r/peer-realm/device/",
                 "qtype":"RESOLVE_TYPE_DIRECTORY_LISTING",
                 "caller_ura":"easynet:///r/local-realm/authority",
-                "subject_ura":"easynet:///r/local-realm/user/alice"
+                "subject_ura":"easynet:///r/local-realm/user/alice",
+                "ability_name":null
             }"#,
         ),
     ];
@@ -2395,6 +2405,63 @@ async fn invoke_rejects_namespace_proxy_resolve_missing_required_tuple_fields() 
 }
 
 #[tokio::test]
+async fn invoke_rejects_namespace_proxy_resolve_missing_explicit_ability_name_selector() {
+    let svc = make_service();
+
+    let error = expect_canonical_in_band_failure(
+        svc.invoke(invoke_request(
+            ABILITY_NAMESPACE_PROXY_RESOLVE,
+            r#"{
+                "peer_hub_urls":[],
+                "query_name":"easynet:///r/peer-realm/device/",
+                "qtype":"RESOLVE_TYPE_DIRECTORY_LISTING",
+                "caller_ura":"easynet:///r/local-realm/authority",
+                "subject_ura":"easynet:///r/local-realm/user/alice",
+                "realm_hint":"peer-realm"
+            }"#,
+        ))
+        .await,
+        axon_sdk::invocation::ErrorCode::RequestPayloadInvalid,
+        "namespace.proxy_resolve must require explicit nullable ability selector state",
+    );
+    assert!(
+        error.message.contains("ability_name"),
+        "missing selector rejection must name ability_name; got: {}",
+        error.message
+    );
+}
+
+#[tokio::test]
+async fn invoke_rejects_namespace_proxy_resolve_empty_ability_name_selector() {
+    let svc = make_service();
+
+    let error = expect_canonical_in_band_failure(
+        svc.invoke(invoke_request(
+            ABILITY_NAMESPACE_PROXY_RESOLVE,
+            r#"{
+                "peer_hub_urls":[],
+                "query_name":"easynet:///r/peer-realm/device/",
+                "qtype":"RESOLVE_TYPE_DIRECTORY_LISTING",
+                "caller_ura":"easynet:///r/local-realm/authority",
+                "subject_ura":"easynet:///r/local-realm/user/alice",
+                "realm_hint":"peer-realm",
+                "ability_name":""
+            }"#,
+        ))
+        .await,
+        axon_sdk::invocation::ErrorCode::RequestPayloadInvalid,
+        "namespace.proxy_resolve must reject empty ability selectors instead of repairing them to null",
+    );
+    assert!(
+        error
+            .message
+            .contains("ability_name must be null or a non-empty string"),
+        "empty selector rejection must name explicit nullable selector contract; got: {}",
+        error.message
+    );
+}
+
+#[tokio::test]
 async fn invoke_rejects_namespace_proxy_resolve_non_canonical_tuple_uras() {
     let cases = [
         (
@@ -2405,7 +2472,8 @@ async fn invoke_rejects_namespace_proxy_resolve_non_canonical_tuple_uras() {
                 "qtype":"RESOLVE_TYPE_DIRECTORY_LISTING",
                 "caller_ura":"not-a-ura",
                 "subject_ura":"easynet:///r/local-realm/user/alice",
-                "realm_hint":"peer-realm"
+                "realm_hint":"peer-realm",
+                "ability_name":null
             }"#,
         ),
         (
@@ -2416,7 +2484,8 @@ async fn invoke_rejects_namespace_proxy_resolve_non_canonical_tuple_uras() {
                 "qtype":"RESOLVE_TYPE_DIRECTORY_LISTING",
                 "caller_ura":"easynet:///r/local-realm/authority",
                 "subject_ura":"not-a-ura",
-                "realm_hint":"peer-realm"
+                "realm_hint":"peer-realm",
+                "ability_name":null
             }"#,
         ),
     ];

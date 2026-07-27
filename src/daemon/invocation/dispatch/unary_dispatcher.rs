@@ -2044,7 +2044,7 @@ fn namespace_proxy_resolve_peer_arguments(
         "caller_ura": non_empty_json_string(&request.caller_ura),
         "subject_ura": non_empty_json_string(&request.subject_ura),
         "realm_hint": non_empty_json_string(&request.realm_hint),
-        "ability_name": non_empty_json_string(&request.ability_name),
+        "ability_name": request.ability_name.peer_argument(),
     }))
     .map_err(|err| {
         Status::internal(format!(

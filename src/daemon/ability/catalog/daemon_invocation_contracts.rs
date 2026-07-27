@@ -333,7 +333,7 @@ pub(crate) fn input_schema_for(name: &str) -> Option<Value> {
                 "caller_ura": string_prop("Caller URA used for policy-aware resolution."),
                 "subject_ura": string_prop("Subject URA used for policy-aware resolution."),
                 "realm_hint": string_prop("Realm context used by peer namespace resolution."),
-                "ability_name": string_prop("Optional owner-local ability filter.")
+                "ability_name": nullable_string_prop("Explicit owner-local ability selector, or null for directory/listing queries with no separate ability selector.")
             }),
             &[
                 "query_name",
@@ -341,6 +341,7 @@ pub(crate) fn input_schema_for(name: &str) -> Option<Value> {
                 "caller_ura",
                 "subject_ura",
                 "realm_hint",
+                "ability_name",
             ],
             false,
         ),
@@ -498,6 +499,13 @@ fn string_prop(description: &'static str) -> Value {
     })
 }
 
+fn nullable_string_prop(description: &'static str) -> Value {
+    json!({
+        "type": ["string", "null"],
+        "description": description
+    })
+}
+
 fn integer_prop(description: &'static str) -> Value {
     json!({
         "type": "integer",
@@ -553,6 +561,7 @@ mod tests {
             "caller_ura",
             "subject_ura",
             "realm_hint",
+            "ability_name",
         ] {
             assert!(
                 required.iter().any(|value| value.as_str() == Some(field)),
@@ -562,6 +571,10 @@ mod tests {
         let properties = schema["properties"].as_object().expect("properties");
         assert!(properties.contains_key("peer_hub_urls"));
         assert!(properties.contains_key("ability_name"));
+        assert_eq!(
+            properties["ability_name"]["type"],
+            json!(["string", "null"])
+        );
         assert!(
             !properties.contains_key("target_ura") && !properties.contains_key("peers"),
             "proxy schema must not retain retired namespace.resolve/legacy peer fields: {schema}"

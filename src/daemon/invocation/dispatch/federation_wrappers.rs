@@ -43,7 +43,7 @@
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
@@ -1028,8 +1028,7 @@ pub struct ProxyListUserDevicesResponse {
 /// `peer_hub_urls` is product-selected fanout scope. The remaining fields are
 /// forwarded verbatim to each peer's daemon-local `namespace.resolve` surface;
 /// the proxy does not reinterpret resolver semantics.
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, Serialize)]
 pub struct NamespaceProxyResolveRequest {
     #[serde(default)]
     pub peer_hub_urls: Vec<String>,
@@ -1043,8 +1042,78 @@ pub struct NamespaceProxyResolveRequest {
     pub subject_ura: String,
     #[serde(rename = "realm_hint")]
     pub realm_hint: String,
-    #[serde(default, rename = "ability_name")]
-    pub ability_name: String,
+    #[serde(rename = "ability_name")]
+    pub ability_name: ExplicitOptionalAbilityName,
+}
+
+impl<'de> Deserialize<'de> for NamespaceProxyResolveRequest {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Fields {
+            #[serde(default)]
+            peer_hub_urls: Vec<String>,
+            #[serde(rename = "query_name")]
+            query_name: String,
+            #[serde(rename = "qtype")]
+            qtype: String,
+            #[serde(rename = "caller_ura")]
+            caller_ura: String,
+            #[serde(rename = "subject_ura")]
+            subject_ura: String,
+            #[serde(rename = "realm_hint")]
+            realm_hint: String,
+            #[serde(rename = "ability_name")]
+            ability_name: serde_json::Value,
+        }
+
+        let fields = Fields::deserialize(deserializer)?;
+        let ability_name = ExplicitOptionalAbilityName::deserialize(fields.ability_name)
+            .map_err(serde::de::Error::custom)?;
+        Ok(Self {
+            peer_hub_urls: fields.peer_hub_urls,
+            query_name: fields.query_name,
+            qtype: fields.qtype,
+            caller_ura: fields.caller_ura,
+            subject_ura: fields.subject_ura,
+            realm_hint: fields.realm_hint,
+            ability_name,
+        })
+    }
+}
+
+/// Required selector slot for `namespace.proxy_resolve`.
+///
+/// `None` is an explicit `null` selector for directory/listing queries. Missing
+/// fields never deserialize into this type, so public ingress cannot silently
+/// default a resolver selector. Empty strings are rejected; a caller that wants
+/// no separate owner-local ability selector must send JSON `null`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExplicitOptionalAbilityName(Option<String>);
+
+impl ExplicitOptionalAbilityName {
+    #[must_use]
+    pub fn peer_argument(&self) -> Option<String> {
+        self.0.as_deref().map(str::trim).map(str::to_string)
+    }
+}
+
+impl Serialize for ExplicitOptionalAbilityName {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.0.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for ExplicitOptionalAbilityName {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = Option::<String>::deserialize(deserializer)?;
+        if value.as_deref().is_some_and(|raw| raw.trim().is_empty()) {
+            return Err(serde::de::Error::custom(
+                "ability_name must be null or a non-empty string",
+            ));
+        }
+        Ok(Self(value))
+    }
 }
 
 /// Handle a `federation.list_user_devices` invocation. Reads
