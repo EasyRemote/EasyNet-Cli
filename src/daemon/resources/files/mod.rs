@@ -332,7 +332,7 @@ fn relative_path_under_root(path: &Path, root: &Path) -> Result<Option<String>> 
         return relative_path_to_wire(relative).map(Some);
     }
 
-    let existing = nearest_existing_ancestor(&root_spelled_path);
+    let existing = nearest_existing_ancestor(&root_spelled_path)?;
     let canonical_existing = std::fs::canonicalize(&existing)
         .map_err(|e| anyhow!("resource_ref: path ancestor {existing:?} unavailable: {e}"))?;
     if !canonical_existing.starts_with(&canonical_root) {
@@ -471,19 +471,33 @@ fn virtual_root_path(virtual_root: &str) -> Option<PathBuf> {
 
 /// Ensure the nearest existing parent for a future write stays inside `root`.
 pub(crate) fn ensure_write_parent_under_root(path: &Path, root: &Path) -> Result<()> {
-    let parent = path.parent().unwrap_or(root);
-    let existing = nearest_existing_ancestor(parent);
+    if !path.is_absolute() {
+        return Err(anyhow!(
+            "resource_ref: write target {path:?} must be an absolute path resolved from a virtual root"
+        ));
+    }
+    if !root.is_absolute() {
+        return Err(anyhow!(
+            "resource_ref: virtual root mapping {root:?} must be absolute"
+        ));
+    }
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow!("resource_ref: write target {path:?} has no parent"))?;
+    let existing = nearest_existing_ancestor(parent)?;
     ensure_path_under_root(&existing, root)
 }
 
-fn nearest_existing_ancestor(path: &Path) -> PathBuf {
+fn nearest_existing_ancestor(path: &Path) -> Result<PathBuf> {
     let mut current = path.to_path_buf();
     loop {
         if current.exists() {
-            return current;
+            return Ok(current);
         }
         if !current.pop() {
-            return PathBuf::from(".");
+            return Err(anyhow!(
+                "resource_ref: path {path:?} has no existing ancestor"
+            ));
         }
     }
 }
@@ -693,6 +707,34 @@ mod tests {
         assert_eq!(resolved.local_path, local);
         assert_eq!(resolved.display_path, format!("tmp/{rel}"));
         std::fs::remove_dir_all(local.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn write_parent_rejects_relative_target_before_current_directory_fallback() {
+        let root = std::env::current_dir().expect("current directory");
+        let err = ensure_write_parent_under_root(Path::new("missing-parent/write.txt"), &root)
+            .expect_err("relative write target must not be accepted through cwd");
+
+        assert!(
+            err.to_string()
+                .contains("must be an absolute path resolved from a virtual root"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn write_parent_rejects_relative_root_before_current_directory_fallback() {
+        let target = std::env::current_dir()
+            .expect("current directory")
+            .join("missing-parent/write.txt");
+        let err = ensure_write_parent_under_root(&target, Path::new("."))
+            .expect_err("relative root must not be accepted through cwd");
+
+        assert!(
+            err.to_string()
+                .contains("virtual root mapping \".\" must be absolute"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
