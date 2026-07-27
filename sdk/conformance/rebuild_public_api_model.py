@@ -25,6 +25,8 @@ MATRIX = ROOT / "sdk/conformance/sdk-parity-matrix.json"
 EXECUTION_MANIFEST = ROOT / "sdk/conformance/runner/execution-manifest.json"
 LANGUAGES = ["rust", "c_abi", "go", "python", "node", "java", "swift"]
 RETIRED_MODEL_FIELDS = {
+    "lifecycle_actions": "duplicate_lifecycle_contract",
+    "lifecycle_transition_contract": "duplicate_lifecycle_contract",
     "legacy_quarantine": "legacy_quarantine_retired",
 }
 
@@ -451,8 +453,6 @@ def main() -> int:
     model["schema_version"] = 6
     model["status_order"] = STATUSES
     model["status_canonical_names"] = STATUS_CANONICAL_NAMES
-    model.pop("lifecycle_actions", None)
-    model.pop("lifecycle_transition_contract", None)
     model["canonical_lifecycle_contract"] = canonical_lifecycle_reference()
     model["inventory_parsers"] = {
         language: inventories[language]["parser"] for language in LANGUAGES
