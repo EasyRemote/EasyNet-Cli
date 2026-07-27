@@ -66,7 +66,9 @@
 //   * driver overrides: `driver.model` flows through dispatch via
 //     send_external_with_overrides. `driver.temperature` and
 //     `driver.max_tokens` are rejected at parse time (no v1 CLI
-//     driver exposes either knob; see parse_driver_overrides).
+//     driver exposes either knob), and every other driver-shaped
+//     field is rejected instead of becoming a hidden lifecycle
+//     surface (see parse_driver_overrides).
 //   * stream: register_for_agent mounts both an RPC and a Stream
 //     handler; the stream variant emits typed frames. `stream:true`
 //     under the RPC entry point is rejected with a clear error.
@@ -1742,7 +1744,15 @@ fn parse_driver_overrides(value: &Value) -> anyhow::Result<DriverOverrides> {
     let obj = value
         .as_object()
         .ok_or_else(|| anyhow::anyhow!("chat: `driver` must be an object"))?;
-    let model = obj.get("model").and_then(Value::as_str).map(str::to_string);
+    let model = match obj.get("model") {
+        None => None,
+        Some(value) => Some(
+            value
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("chat: driver.model must be a string"))?
+                .to_string(),
+        ),
+    };
     // Validate temperature shape first (so a malformed value still
     // surfaces a precise error) before the unsupported-knob rejection.
     let temperature = match obj.get("temperature") {
@@ -1769,6 +1779,23 @@ fn parse_driver_overrides(value: &Value) -> anyhow::Result<DriverOverrides> {
     if max_tokens.is_some() {
         unsupported.push("max_tokens");
     }
+    let mut unknown: Vec<&str> = obj
+        .keys()
+        .map(String::as_str)
+        .filter(|field| !matches!(*field, "model" | "temperature" | "max_tokens"))
+        .collect();
+    unknown.sort_unstable();
+    if !unknown.is_empty() {
+        anyhow::bail!(
+            "chat: unsupported driver field(s): {}. Canonical chat lifecycle uses top-level \
+             `session_id`; driver-shaped lifecycle or runtime knobs are not accepted.",
+            unknown
+                .iter()
+                .map(|field| format!("driver.{field}"))
+                .collect::<Vec<_>>()
+                .join(", "),
+        );
+    }
     if !unsupported.is_empty() {
         anyhow::bail!(
             "chat: driver.{} not supported by the v1 claude-code / codex CLI drivers \
@@ -1781,13 +1808,10 @@ fn parse_driver_overrides(value: &Value) -> anyhow::Result<DriverOverrides> {
         model,
         temperature,
         max_tokens,
-        // resume_thread_id is not parsed from the `driver` block; it
-        // is set by the chat handler from the caller's top-level
-        // `session_id` argument (see compute_resume_thread_id at
-        // the call site). Keeping it None here means a caller that
-        // tries to set `driver.resume_thread_id` is silently
-        // ignored — the canonical path is `session_id`, not a
-        // driver-shaped knob, and we do not want two surfaces.
+        // Resume state is derived only from the caller's top-level
+        // `session_id`. The parser rejects `driver.resume_thread_id`
+        // above, so this field cannot become a second lifecycle
+        // input surface.
         resume_thread_id: None,
     })
 }
@@ -2217,6 +2241,16 @@ mod tests {
     }
 
     #[test]
+    fn parse_rejects_non_string_driver_model() {
+        let err = ChatArgs::parse(&json!({
+            "prompt": "hi",
+            "driver": {"model": 42}
+        }))
+        .unwrap_err();
+        assert!(format!("{err}").contains("driver.model must be a string"));
+    }
+
+    #[test]
     fn parse_rejects_both_unsupported_knobs_in_one_error() {
         // When the caller sets both, the error must name both — not
         // just the first one we happened to check — so they fix the
@@ -2229,6 +2263,21 @@ mod tests {
         let msg = format!("{err}");
         assert!(msg.contains("temperature"));
         assert!(msg.contains("max_tokens"));
+    }
+
+    #[test]
+    fn parse_rejects_driver_resume_thread_id_as_second_lifecycle_surface() {
+        let err = ChatArgs::parse(&json!({
+            "prompt": "hi",
+            "driver": {"resume_thread_id": "018f14f8-6bd7-7a21-8d25-7e7e3c8f6a11"}
+        }))
+        .unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("driver.resume_thread_id"));
+        assert!(
+            msg.contains("top-level `session_id`"),
+            "error must point at the canonical lifecycle field: {msg}"
+        );
     }
 
     #[test]

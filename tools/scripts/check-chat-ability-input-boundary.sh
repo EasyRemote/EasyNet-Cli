@@ -61,4 +61,16 @@ if rg -n 'fall back to the local|locally-resolved id|session id we report|sessio
   fail "agents.chat session id lifecycle must not be described as fallback compatibility"
 fi
 
+if rg -n 'driver\.resume_thread_id.*silently|silently.*driver\.resume_thread_id|tries to set `driver\.resume_thread_id` is silently' "$CHAT_RS"; then
+  fail "agents.chat must reject driver.resume_thread_id instead of silently ignoring a second lifecycle surface"
+fi
+
+if ! rg -q 'parse_rejects_driver_resume_thread_id_as_second_lifecycle_surface' "$CHAT_RS"; then
+  fail "agents.chat parser tests must reject driver.resume_thread_id as a second lifecycle surface"
+fi
+
+if ! rg -q 'parse_rejects_non_string_driver_model' "$CHAT_RS"; then
+  fail "agents.chat parser tests must reject non-string driver.model instead of treating it as absent"
+fi
+
 echo "check-chat-ability-input-boundary: OK"
