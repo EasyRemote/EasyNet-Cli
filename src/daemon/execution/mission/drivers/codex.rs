@@ -1289,7 +1289,7 @@ mod tests {
             start,
         );
         handle_stream_line(
-            r#"{"type":"event_msg","payload":{"type":"mcp_tool_call_end","call_id":"call_1","duration":{"secs":1,"nanos":731744417},"invocation":{"server":"easynet","tool":"demo_weather","arguments":{"city":"Singapore"}},"result":{"Ok":{"content":[{"type":"text","text":"{\"result\":\"26.5C\",\"x-easynet-invocation\":{\"ability\":\"demo.weather\",\"mcp_tool\":\"demo_weather\",\"request_id\":\"req-1\",\"ability_ura\":\"easynet:///r/localhost/ability/dev.demo.weather\",\"invocation_ura\":\"easynet:///r/localhost/invocation/req-1\",\"callee_ura\":\"easynet:///r/localhost/device/dev\"}}"}]}}}}"#,
+            r#"{"type":"event_msg","payload":{"type":"mcp_tool_call_end","call_id":"call_1","duration":{"secs":1,"nanos":731744417},"invocation":{"server":"easynet","tool":"demo_weather","arguments":{"city":"Singapore"}},"result":{"Ok":{"content":[{"type":"text","text":"{\"result\":\"26.5C\",\"x-easynet-invocation\":{\"ability\":\"demo.weather\",\"mcp_tool\":\"demo_weather\",\"request_id\":\"req-1\",\"ability_ura\":\"easynet:///r/localhost/ability/dev.demo.weather\",\"invocation_ura\":\"easynet:///r/localhost/resource/device.dev/invocation/req-1/history\",\"callee_ura\":\"easynet:///r/localhost/device/dev\"}}"}]}}}}"#,
             &final_text,
             &stats,
             start,
@@ -1312,7 +1312,7 @@ mod tests {
         );
         assert_eq!(
             call.invocation_ura.as_deref(),
-            Some("easynet:///r/localhost/invocation/req-1")
+            Some("easynet:///r/localhost/resource/device.dev/invocation/req-1/history")
         );
         assert_eq!(
             call.callee_ura.as_deref(),
@@ -1354,7 +1354,7 @@ mod tests {
             start,
         );
         handle_stream_line(
-            r#"{"type":"response_item","payload":{"type":"function_call_output","call_id":"call_3","output":"{\"ok\":true,\"x-easynet-invocation\":{\"ability\":\"demo.weather\",\"mcp_tool\":\"demo_weather\",\"invocation_ura\":\"easynet:///r/localhost/invocation/req-3\"}}"}}"#,
+            r#"{"type":"response_item","payload":{"type":"function_call_output","call_id":"call_3","output":"{\"ok\":true,\"x-easynet-invocation\":{\"ability\":\"demo.weather\",\"mcp_tool\":\"demo_weather\",\"invocation_ura\":\"easynet:///r/localhost/resource/device.dev/invocation/req-3/history\"}}"}}"#,
             &final_text,
             &stats,
             start,
@@ -1367,7 +1367,7 @@ mod tests {
         assert_eq!(call.result.as_ref().unwrap()["ok"], true);
         assert_eq!(
             call.invocation_ura.as_deref(),
-            Some("easynet:///r/localhost/invocation/req-3")
+            Some("easynet:///r/localhost/resource/device.dev/invocation/req-3/history")
         );
     }
 

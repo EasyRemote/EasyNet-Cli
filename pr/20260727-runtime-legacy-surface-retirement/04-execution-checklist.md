@@ -170,3 +170,15 @@
       the only local stream chunk assembly authority.
 - [x] Run focused stream checks, fmt, architecture/SPEC gates, and codegraph
       sync.
+
+## Iteration 20 — Driver invocation trace URA cutover
+
+- [x] Re-run codegraph and targeted trace/subject/URA search.
+- [x] Identify driver invocation trace metadata as product observability that
+      accepted legacy `/invocation/...` address strings.
+- [x] Refactor trace parsing so optional URA fields fail closed through the
+      canonical runtime identity value object.
+- [x] Update driver tests to use canonical resource invocation URAs and add a
+      negative legacy trace vector.
+- [x] Update the canonical convergence gate.
+- [x] Run focused tests/gates.

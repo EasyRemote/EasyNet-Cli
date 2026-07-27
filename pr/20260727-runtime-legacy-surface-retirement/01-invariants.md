@@ -60,3 +60,8 @@
   terminal frames must bind the finalized terminal receipt and a concrete
   failure fact. The dispatcher loop may await lifecycle events, but it must not
   reassemble receipt/state/error wire chunks procedurally in multiple branches.
+- Driver invocation trace metadata is product observability, not protocol
+  truth, but every URA field it applies to a tool-call record must still be a
+  canonical runtime URA. Legacy `/invocation/...` trace addresses, malformed
+  URAs, and all-zero principal placeholders must be rejected at the trace parser
+  boundary instead of being merged into product UI state.

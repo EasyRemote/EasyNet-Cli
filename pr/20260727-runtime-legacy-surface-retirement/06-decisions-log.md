@@ -298,3 +298,22 @@ canonical `Completed` finalization and use finalized output when the terminal
 frame payload is empty; failed terminal frames still prefer the finalized
 failure over the frame error. No compatibility fallback or product-specific
 stream state was introduced.
+
+## Driver invocation trace URA fail-closed cutover
+
+Decision: EasyNet-aware driver trace parsing now validates every optional URA
+field through the canonical runtime identity value object before merging trace
+metadata into a product `ToolCall` record.
+
+Reason: the MCP provider emits `x-easynet-invocation` as an observability echo
+derived from verified daemon invocation metadata. The driver parser still
+treated those fields as arbitrary strings, and its tests normalized a retired
+`/invocation/<id>` address shape even though Axon's canonical URA grammar has no
+`invocation` role. That let product-facing tool-call state carry noncanonical
+invocation addresses after the protocol path had already produced a canonical
+resource URA.
+
+Boundary: trace metadata remains optional and partial for labels such as
+`ability` and `mcp_tool`. This change does not make trace metadata a source of
+receipt truth. It only prevents malformed or legacy URA facts from being merged
+into product observability state.

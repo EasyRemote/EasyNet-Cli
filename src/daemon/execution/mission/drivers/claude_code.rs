@@ -808,7 +808,7 @@ mod tests {
             start,
         );
         handle_stream_line(
-            r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_1","content":[{"type":"text","text":"{\"ok\":true,\"x-easynet-invocation\":{\"ability\":\"docetl.code_filter\",\"ability_ura\":\"easynet:///r/localhost/ability/device.dev-1.docetl.code_filter\",\"mcp_tool\":\"docetl_code_filter\",\"invocation_ura\":\"easynet:///r/localhost/invocation/req-1\",\"callee_ura\":\"easynet:///r/localhost/device/dev-1\"}}"}]}]}}"#,
+            r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_1","content":[{"type":"text","text":"{\"ok\":true,\"x-easynet-invocation\":{\"ability\":\"docetl.code_filter\",\"ability_ura\":\"easynet:///r/localhost/ability/device.dev-1.docetl.code_filter\",\"mcp_tool\":\"docetl_code_filter\",\"invocation_ura\":\"easynet:///r/localhost/resource/device.dev-1/invocation/req-1/history\",\"callee_ura\":\"easynet:///r/localhost/device/dev-1\"}}"}]}]}}"#,
             &final_text,
             &stats,
             start,
@@ -827,7 +827,7 @@ mod tests {
         );
         assert_eq!(
             call.invocation_ura.as_deref(),
-            Some("easynet:///r/localhost/invocation/req-1")
+            Some("easynet:///r/localhost/resource/device.dev-1/invocation/req-1/history")
         );
         assert_eq!(
             call.callee_ura.as_deref(),

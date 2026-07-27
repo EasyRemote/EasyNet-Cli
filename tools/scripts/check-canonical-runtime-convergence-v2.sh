@@ -12228,6 +12228,56 @@ if "mission_child_admission_request_id_is_signed_tuple_identity_not_trace" not i
 PY
 }
 
+check_driver_invocation_trace_ura_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local trace="$cli_root/src/daemon/execution/mission/drivers/invocation_trace.rs"
+  local codex="$cli_root/src/daemon/execution/mission/drivers/codex.rs"
+  local claude="$cli_root/src/daemon/execution/mission/drivers/claude_code.rs"
+  [[ -f "$trace" ]] || fail "driver invocation trace source is missing: ${trace#$cli_root/}"
+  [[ -f "$codex" ]] || fail "Codex mission driver source is missing: ${codex#$cli_root/}"
+  [[ -f "$claude" ]] || fail "Claude Code mission driver source is missing: ${claude#$cli_root/}"
+
+  "$PYTHON_BIN" - "$trace" "$codex" "$claude" <<'PY'
+import sys
+from pathlib import Path
+
+trace, codex, claude = [Path(path).read_text(encoding="utf-8", errors="replace") for path in sys.argv[1:]]
+production = trace.split("#[cfg(test)]", 1)[0]
+
+for required in (
+    "use crate::core::identity::RuntimeIdentityUra;",
+    "use crate::core::ura::URAKind;",
+    'let ability_ura = trace_ura_field(meta, "ability_ura", Some(URAKind::Ability))?;',
+    'let invocation_ura = trace_ura_field(meta, "invocation_ura", Some(URAKind::Resource))?;',
+    'let caller_ura = trace_ura_field(meta, "caller_ura", None)?;',
+    'let callee_ura = trace_ura_field(meta, "callee_ura", None)?;',
+    'let subject_ura = trace_ura_field(meta, "subject_ura", None)?;',
+    "fn trace_ura_field(",
+    "RuntimeIdentityUra::parse(&raw).ok()?",
+    "rejects_legacy_invocation_role_trace_ura",
+    "rejects_all_zero_principal_trace_ura",
+):
+    if required not in trace:
+        raise SystemExit(f"driver_invocation_trace_ura:missing:{required}")
+
+for retired in (
+    'ability_ura: json_string(meta.get("ability_ura"))',
+    'invocation_ura: json_string(meta.get("invocation_ura"))',
+    'caller_ura: json_string(meta.get("caller_ura"))',
+    'callee_ura: json_string(meta.get("callee_ura"))',
+    'subject_ura: json_string(meta.get("subject_ura"))',
+):
+    if retired in production:
+        raise SystemExit(f"driver_invocation_trace_ura:retired_untyped_field:{retired}")
+
+for name, text in (("codex", codex), ("claude", claude)):
+    if 'Some("easynet:///r/localhost/invocation/' in text:
+        raise SystemExit(f"driver_invocation_trace_ura:{name}_expects_legacy_invocation_role")
+    if 'invocation_ura' not in text or "easynet:///r/localhost/resource/" not in text:
+        raise SystemExit(f"driver_invocation_trace_ura:{name}_canonical_resource_vector_missing")
+PY
+}
+
 check_retired_federation_directory_v1_stream_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   "$PYTHON_BIN" - "$cli_root/src" "$cli_root/tests" "$cli_root/ability-descriptors/system/federation" <<'PY'
@@ -27637,6 +27687,7 @@ check_mission_token_usage_authority_contract
 check_mission_orchestration_persistence_authority_contract
 check_mission_terminal_receipt_projection_contract
 check_mission_child_admission_identity_contract
+check_driver_invocation_trace_ura_contract
 check_retired_edge_adapter_policy_absence_contract
 check_sdk_product_neutrality_contract
 check_python_sdk_bytecode_index_contract

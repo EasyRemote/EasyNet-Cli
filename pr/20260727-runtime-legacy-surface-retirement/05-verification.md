@@ -279,3 +279,34 @@
   - passed.
 - `/Users/macbook.silan.tech/.local/bin/codegraph sync`
   - passed; synced 1 changed file.
+
+## Iteration 20
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync`
+  - already up to date before edits.
+- `/Users/macbook.silan.tech/.local/bin/codegraph query "legacy compatibility fallback compat default product ingress invocation tuple subject nonce causal_context control invoke open_bidi subscribe descriptor signer receipt"`
+  - isolated driver invocation trace metadata as a product observability surface
+    still accepting legacy/noncanonical invocation address strings.
+- `/Users/macbook.silan.tech/.local/bin/codegraph query "mission invocation gateway subject default nonce causal_context child invocation"`
+  - confirmed Mission child tuple derivation is Axon-owned; test-only
+    `subject()` helper is not a production defaulting path.
+- `cargo test --features axon-pb invocation_trace --lib`
+  - passed; 4 passed.
+- `cargo test --features axon-pb stream_tool_result_backfills_easynet_invocation_identity --lib`
+  - passed; 1 passed.
+- `cargo test --features axon-pb current_codex_function_call_and_mcp_result_capture_easynet_identity --lib`
+  - passed; 1 passed.
+- `cargo test --features axon-pb current_codex_easynet_function_output_preserves_result_without_mcp_end --lib`
+  - passed; 1 passed.
+- `cargo test --features axon-pb daemon::execution::mission::drivers --lib`
+  - passed; 14 passed.
+- `cargo fmt --check`
+  - passed.
+- `git diff --check`
+  - passed.
+- `tools/scripts/check-architecture-convergence.sh`
+  - passed.
+- `tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - passed.
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync`
+  - passed; synced 3 changed files.
