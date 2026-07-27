@@ -903,7 +903,25 @@ impl RealmTrustAnchor {
         // a same-filesystem atomic operation. Different temp dirs
         // (e.g. /tmp vs /etc) cross filesystems, which downgrades
         // the rename to copy-then-unlink and loses atomicity.
-        let parent = path.parent().unwrap_or_else(|| Path::new("."));
+        if !path.is_absolute() {
+            return Err(RealmTrustError::WriteFailed {
+                path: path.to_path_buf(),
+                source: std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "realm trust anchor save path must be absolute",
+                ),
+            });
+        }
+        let parent = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .ok_or_else(|| RealmTrustError::WriteFailed {
+                path: path.to_path_buf(),
+                source: std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "path has no parent directory component",
+                ),
+            })?;
         let tmp_name = match path.file_name() {
             Some(name) => {
                 let mut s = name.to_os_string();
@@ -1236,6 +1254,53 @@ role = "unknown"
         // The map's first entry must still be present unchanged —
         // a failed append doesn't pollute the trust set.
         assert_eq!(anchor.len(), 1);
+    }
+
+    fn assert_absolute_save_path_precondition(error: RealmTrustError) {
+        match error {
+            RealmTrustError::WriteFailed { source, .. } => {
+                assert_eq!(
+                    source.kind(),
+                    std::io::ErrorKind::InvalidInput,
+                    "save path precondition must fail before filesystem mutation"
+                );
+                assert!(
+                    source.to_string().contains("must be absolute"),
+                    "unexpected save path error: {source}"
+                );
+            }
+            other => panic!("expected WriteFailed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn save_rejects_relative_path_before_cwd_tmp_fallback() {
+        let mut anchor = RealmTrustAnchor::default();
+        anchor
+            .append_agent(entry("easynet:///r/realm/device/n1"))
+            .expect("append Ok");
+        let path = Path::new("target/realm-trust-relative-save-test.toml");
+
+        let error = anchor
+            .save(path)
+            .expect_err("relative save path must not depend on cwd");
+
+        assert_absolute_save_path_precondition(error);
+    }
+
+    #[test]
+    fn save_rejects_dot_relative_path_before_cwd_tmp_fallback() {
+        let mut anchor = RealmTrustAnchor::default();
+        anchor
+            .append_agent(entry("easynet:///r/realm/device/n1"))
+            .expect("append Ok");
+        let path = Path::new("./target/realm-trust-dot-relative-save-test.toml");
+
+        let error = anchor
+            .save(path)
+            .expect_err("dot-relative save path must not depend on cwd");
+
+        assert_absolute_save_path_precondition(error);
     }
 
     #[test]
