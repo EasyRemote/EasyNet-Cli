@@ -836,7 +836,7 @@ class RuntimeInvocationTransportTests(unittest.TestCase):
             return transport
 
         pool = UnaryDispatchPool(factory)
-        baseline_workers = _sdk_unary_worker_count()
+        baseline_workers = _runtime_unary_worker_count()
         first_errors: list[SDKError] = []
 
         def invoke_stuck_flight() -> None:
@@ -854,7 +854,7 @@ class RuntimeInvocationTransportTests(unittest.TestCase):
             self.assertEqual(len(first_errors), 1)
             self.assertEqual(first_errors[0].retry, RetryHint.UNKNOWN)
 
-            workers_during_stuck_flight = _sdk_unary_worker_count()
+            workers_during_stuck_flight = _runtime_unary_worker_count()
             self.assertEqual(workers_during_stuck_flight, baseline_workers + 1)
 
             for _ in range(8):
@@ -866,14 +866,16 @@ class RuntimeInvocationTransportTests(unittest.TestCase):
                 )
 
             self.assertEqual(factory_calls, 1)
-            self.assertEqual(_sdk_unary_worker_count(), workers_during_stuck_flight)
+            self.assertEqual(
+                _runtime_unary_worker_count(), workers_during_stuck_flight
+            )
         finally:
             release.set()
 
         _wait_until(lambda: len(transport.invocations) == 1)
-        _wait_until(lambda: _sdk_unary_worker_count() == baseline_workers)
+        _wait_until(lambda: _runtime_unary_worker_count() == baseline_workers)
         self.assertEqual(len(transport.invocations), 1)
-        self.assertEqual(_sdk_unary_worker_count(), baseline_workers)
+        self.assertEqual(_runtime_unary_worker_count(), baseline_workers)
 
     def test_unary_pool_queue_timeout_does_not_retire_active_transport(
         self,
@@ -1059,8 +1061,8 @@ class RuntimeInvocationTransportTests(unittest.TestCase):
         transports = [first, second]
         pool = UnaryDispatchPool(lambda: transports.pop(0))
         results: list[dict[str, object]] = []
-        baseline_operation_workers = _sdk_unary_worker_count()
-        baseline_cleanup_workers = _sdk_unary_cleanup_worker_count()
+        baseline_operation_workers = _runtime_unary_worker_count()
+        baseline_cleanup_workers = _runtime_unary_cleanup_worker_count()
         caller = threading.Thread(
             target=lambda: results.append(
                 pool.invoke(complete_draft().to_json_dict(), timeout=1.0)
@@ -1077,9 +1079,9 @@ class RuntimeInvocationTransportTests(unittest.TestCase):
         self.assertFalse(caller.is_alive())
         self.assertEqual(results, [{"ok": True}])
         self.assertTrue(first.close_started.wait(timeout=1.0))
-        _wait_until(lambda: _sdk_unary_worker_count() == baseline_operation_workers)
+        _wait_until(lambda: _runtime_unary_worker_count() == baseline_operation_workers)
         self.assertEqual(
-            _sdk_unary_cleanup_worker_count(), baseline_cleanup_workers + 1
+            _runtime_unary_cleanup_worker_count(), baseline_cleanup_workers + 1
         )
         self.assertTrue(pool._flight_lock.acquire(blocking=False))
         pool._flight_lock.release()
@@ -1087,7 +1089,7 @@ class RuntimeInvocationTransportTests(unittest.TestCase):
         cleanup_release.set()
         _wait_until(lambda: first.closed)
         _wait_until(
-            lambda: _sdk_unary_cleanup_worker_count() == baseline_cleanup_workers
+            lambda: _runtime_unary_cleanup_worker_count() == baseline_cleanup_workers
         )
         result = pool.invoke(complete_draft().to_json_dict(), timeout=1.0)
         self.assertEqual(result, {"ok": True})
@@ -1303,7 +1305,7 @@ class RuntimeInvocationTransportTests(unittest.TestCase):
             return transport
 
         def delayed_worker_start(worker: threading.Thread) -> None:
-            if worker.name != "easynet-sdk-unary":
+            if worker.name != "runtime-sdk-unary":
                 original_start(worker)
                 return
             worker_ready.set()
@@ -1490,7 +1492,7 @@ class RuntimeInvocationTransportTests(unittest.TestCase):
         if errors:
             self.assertTrue(is_code(errors[0], ErrorCode.CANCELLED))
         _wait_until(lambda: first.close_calls + second.close_calls == 1)
-        _wait_until(lambda: _sdk_unary_cleanup_worker_count() == 0)
+        _wait_until(lambda: _runtime_unary_cleanup_worker_count() == 0)
 
         with self.assertRaises(BaseExceptionGroup) as caught:
             pool.quiesce()
@@ -1529,7 +1531,7 @@ class RuntimeInvocationTransportTests(unittest.TestCase):
         self.assertEqual(len(operation_errors), 1)
         self.assertEqual(str(operation_errors[0]), "operation failed")
         _wait_until(lambda: first.close_calls == 1)
-        _wait_until(lambda: _sdk_unary_cleanup_worker_count() == 0)
+        _wait_until(lambda: _runtime_unary_cleanup_worker_count() == 0)
         self.assertEqual(first.close_calls, 1)
         self.assertFalse(first.closed)
 
@@ -1565,7 +1567,7 @@ class RuntimeInvocationTransportTests(unittest.TestCase):
 
         release.set()
         _wait_until(lambda: transport.close_calls == 1)
-        _wait_until(lambda: _sdk_unary_cleanup_worker_count() == 0)
+        _wait_until(lambda: _runtime_unary_cleanup_worker_count() == 0)
         self.assertEqual(transport.close_calls, 1)
         self.assertFalse(transport.closed)
 
@@ -1990,13 +1992,13 @@ def _wait_for_thread(thread: threading.Thread, *, timeout: float) -> bool:
     return not thread.is_alive()
 
 
-def _sdk_unary_worker_count() -> int:
-    return sum(thread.name == "easynet-sdk-unary" for thread in threading.enumerate())
+def _runtime_unary_worker_count() -> int:
+    return sum(thread.name == "runtime-sdk-unary" for thread in threading.enumerate())
 
 
-def _sdk_unary_cleanup_worker_count() -> int:
+def _runtime_unary_cleanup_worker_count() -> int:
     return sum(
-        thread.name == "easynet-sdk-unary-cleanup" for thread in threading.enumerate()
+        thread.name == "runtime-sdk-unary-cleanup" for thread in threading.enumerate()
     )
 
 

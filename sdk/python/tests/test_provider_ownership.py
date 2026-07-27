@@ -59,6 +59,15 @@ def test_transport_root_exports_only_runtime_transport_names() -> None:
         assert not hasattr(transport, name), name
 
 
+def test_transport_worker_names_are_product_neutral() -> None:
+    root = Path(transport.__file__).resolve()
+    body = root.read_text(encoding="utf-8")
+
+    assert "runtime-sdk-unary" in body
+    assert "runtime-sdk-unary-cleanup" in body
+    assert "easynet-sdk-unary" not in body
+
+
 def test_runtime_key_service_provider_is_not_reexported_as_canonical_root() -> None:
     assert importlib.util.find_spec("easynet_sdk.providers.runtime.keyring") is None
     assert provider_runtime_key_service.RuntimeSigningIdentity.__module__.endswith(

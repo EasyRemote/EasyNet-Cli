@@ -30,6 +30,10 @@ from .signing import Signer
 from .stream import StreamCancel, StreamEvent, StreamHandle
 
 
+_RUNTIME_UNARY_WORKER_THREAD_NAME = "runtime-sdk-unary"
+_RUNTIME_UNARY_CLEANUP_THREAD_NAME = "runtime-sdk-unary-cleanup"
+
+
 class _RuntimeInvocationTransportState(Enum):
     OPEN = "open"
     CLOSING = "closing"
@@ -643,7 +647,7 @@ class UnaryDispatchPool:
 
             worker = threading.Thread(
                 target=invoke_on_transport,
-                name="easynet-sdk-unary",
+                name=_RUNTIME_UNARY_WORKER_THREAD_NAME,
                 daemon=True,
             )
             worker.start()
@@ -862,7 +866,7 @@ class UnaryDispatchPool:
 
         worker = threading.Thread(
             target=self._cleanup_retired,
-            name="easynet-sdk-unary-cleanup",
+            name=_RUNTIME_UNARY_CLEANUP_THREAD_NAME,
             daemon=True,
         )
         try:
