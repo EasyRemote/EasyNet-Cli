@@ -90,7 +90,9 @@ public final class RuntimeReceipt {
       case "FAILED" -> "failed";
       case "TIMED_OUT" -> "timed_out";
       case "CANCELLED" -> "cancelled";
-      default -> "";
+      default ->
+          throw SDKError.validation(
+              "runtime_receipt", "unknown canonical receipt lifecycle state " + lifecycleState);
     };
   }
 

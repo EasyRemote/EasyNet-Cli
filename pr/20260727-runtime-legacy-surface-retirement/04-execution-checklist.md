@@ -35,3 +35,12 @@
 - [x] Add direct Swift regression coverage for unknown canonical lifecycle state.
 - [x] Run focused Swift tests and repository gates.
 - [x] Commit if stable.
+
+## Iteration 5 — Java receipt canonicalizer fail-closed parity
+
+- [x] Re-run codegraph/search for Java receipt proof-fact bypass and canonicalizer fail-open behavior.
+- [x] Identify Java `RuntimeReceipt.canonicalReceiptType` as the same fail-open empty-string sentinel as the retired Swift helper.
+- [x] Refactor Java receipt type binding helper to throw on unknown canonical lifecycle state.
+- [x] Add Java regression coverage for the private helper's unknown lifecycle-state branch without exposing new public API.
+- [x] Run focused Java tests and repository gates.
+- [x] Commit if stable.

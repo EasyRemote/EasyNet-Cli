@@ -46,3 +46,13 @@
 - `cargo fmt --check`
 - `git diff --check`
 - `/Users/macbook.silan.tech/.local/bin/codegraph sync`
+
+## Iteration 5
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph query "Java receipt canonicalizer proof facts bypass fail open runtime governance subject parity"`
+- `mvn test` from `sdk/java`
+- `tools/scripts/check-canonical-runtime-convergence-v2.sh`
+- `tools/scripts/check-architecture-convergence.sh`
+- `cargo fmt --check`
+- `git diff --check`
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync`

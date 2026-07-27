@@ -40,3 +40,11 @@ Decision: make Swift `RuntimeReceipt.canonicalReceiptType` throw on unknown cano
 Reason: receipt validation is proof-fact validation, not presentation formatting. Returning an empty string leaves a permissive internal helper that can be reused incorrectly even though the current constructor first canonicalizes `state`. Go, Java, Python, and Node either operate on already validated lifecycle state or fail explicitly; Swift should not preserve a silent empty receipt-type sentinel.
 
 Boundary: public receipt behavior remains compatible for valid receipts. Invalid canonical lifecycle states now fail with an explicit `INVALID_ARGUMENT` validation error before any proof-fact path can treat an empty receipt type as data.
+
+## Java receipt canonicalizer fail-closed parity
+
+Decision: make Java `RuntimeReceipt.canonicalReceiptType` throw on unknown canonical lifecycle states instead of returning an empty string.
+
+Reason: Java had the same internal fail-open sentinel as Swift. Even if current construction validates `state` before binding `receipt_type`, proof-fact validation helpers should not encode unknown lifecycle states as data. Receipt type derivation must be total only over known lifecycle states and explicit-failing otherwise.
+
+Boundary: no new Java public API was introduced. The regression test reaches the private helper by reflection only to lock the internal invariant; valid receipt behavior and public interfaces remain unchanged.

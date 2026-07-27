@@ -1,6 +1,8 @@
 package run.runtime.sdk;
 
 import java.io.ByteArrayOutputStream;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.nio.ByteBuffer;
@@ -384,6 +386,10 @@ public final class RuntimeCoreSeamTest {
           "unknown receipt state",
           () -> RuntimeReceipt.fromMap(legacyStateReceipt));
     }
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        "unknown canonical receipt lifecycle state",
+        RuntimeCoreSeamTest::invokeUnknownCanonicalReceiptType);
 
     Map<String, Object> unspecifiedStateReceipt = new LinkedHashMap<>(complete);
     unspecifiedStateReceipt.put("state", "Unspecified");
@@ -1480,6 +1486,23 @@ public final class RuntimeCoreSeamTest {
       throw new AssertionError("expected SDKError but got " + error, error);
     }
     throw new AssertionError("expected SDKError " + code);
+  }
+
+  private static void invokeUnknownCanonicalReceiptType() throws Exception {
+    Method method = RuntimeReceipt.class.getDeclaredMethod("canonicalReceiptType", String.class);
+    method.setAccessible(true);
+    try {
+      method.invoke(null, "UNKNOWN");
+    } catch (InvocationTargetException error) {
+      Throwable cause = error.getCause();
+      if (cause instanceof Exception exception) {
+        throw exception;
+      }
+      if (cause instanceof Error fatal) {
+        throw fatal;
+      }
+      throw error;
+    }
   }
 
   private static void check(boolean condition, String message) {
