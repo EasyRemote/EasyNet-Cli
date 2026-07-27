@@ -30,6 +30,22 @@ export function isRuntimeStateReadSubjectURA(subjectURA) {
   );
 }
 
+export function isRuntimeOwnerReadSubjectURA(subjectURA, calleeURA) {
+  const subject = String(subjectURA ?? "").trim();
+  const callee = String(calleeURA ?? "").trim();
+  if (subject === "" || subject !== callee) {
+    return false;
+  }
+  const subjectOwner = canonicalRuntimeOwnerSubject(subject);
+  const calleeOwner = canonicalRuntimeOwnerSubject(callee);
+  return (
+    subjectOwner !== null &&
+    calleeOwner !== null &&
+    subjectOwner.kind === calleeOwner.kind &&
+    subjectOwner.realm === calleeOwner.realm
+  );
+}
+
 export function canonicalResourceSubject(subjectURA) {
   if (containsAllZeroPrincipal(subjectURA)) {
     return null;
@@ -55,6 +71,26 @@ export function canonicalResourceSubject(subjectURA) {
     return null;
   }
   return { ownerID, resourcePath };
+}
+
+function canonicalRuntimeOwnerSubject(subjectURA) {
+  if (containsAllZeroPrincipal(subjectURA)) {
+    return null;
+  }
+  const parsed = canonicalURAPath(subjectURA);
+  if (!parsed) {
+    return null;
+  }
+  if (parsed.path === "authority") {
+    return { kind: "authority", realm: parsed.realm };
+  }
+  if (parsed.path.startsWith("device/")) {
+    const deviceID = parsed.path.slice("device/".length).trim();
+    if (deviceID !== "" && !deviceID.includes("/")) {
+      return { kind: "device", realm: parsed.realm };
+    }
+  }
+  return null;
 }
 
 function runtimeStateSubjectString(value, field, invalidInvocation) {

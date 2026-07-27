@@ -1578,6 +1578,73 @@ test("session history preflight rejects retired session subject before receipt p
   assert.equal(providerCalls, 0);
 });
 
+test("session history preflight accepts exact runtime-owner subject with delegation authority", async () => {
+  let seenRequest = null;
+  const history = new sdk.SessionHistoryOperations({
+    list: (request) => {
+      seenRequest = request;
+      return {
+        records: [],
+        next_cursor: "",
+        limit: 50,
+        source: "invocation.history.list",
+      };
+    },
+  });
+  const deviceSubject = callee;
+
+  const page = await history.list({
+    call: {
+      caller_ura: caller,
+      callee_ura: callee,
+      subject_ura: deviceSubject,
+      metadata: {
+        [sdk.DELEGATION_METADATA_KEY]: delegationValue(["invocation.history.*"]),
+      },
+    },
+    limit: 50,
+  });
+
+  assert.equal(seenRequest.call.subjectURA, deviceSubject);
+  assert.equal(page.source, "invocation.history.list");
+});
+
+test("session history preflight rejects non-callee runtime-owner subject before provider", async () => {
+  let providerCalls = 0;
+  const history = new sdk.SessionHistoryOperations({
+    list: () => {
+      providerCalls += 1;
+      return {
+        records: [],
+        next_cursor: "",
+        limit: 50,
+        source: "invocation.history.list",
+      };
+    },
+  });
+
+  await assert.rejects(
+    () =>
+      history.list({
+        call: {
+          caller_ura: caller,
+          callee_ura: callee,
+          subject_ura: "easynet:///r/example/device/dev-b",
+          metadata: {
+            [sdk.DELEGATION_METADATA_KEY]: delegationValue(["invocation.history.*"]),
+          },
+        },
+        limit: 50,
+      }),
+    (error) =>
+      error instanceof sdk.SDKError &&
+      error.code === sdk.ErrorCode.INVALID_INVOCATION &&
+      error.stage === "history" &&
+      /callee runtime-owner subject/.test(error.message),
+  );
+  assert.equal(providerCalls, 0);
+});
+
 test("session history keeps subject filters as ledger predicates", async () => {
   let seenRequest = null;
   const history = new sdk.SessionHistoryOperations({

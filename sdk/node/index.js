@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { containsAllZeroPrincipal } from "./runtime-principals.js";
 import {
   canonicalResourceSubject,
+  isRuntimeOwnerReadSubjectURA,
   isRuntimeStateReadSubjectURA,
   runtimeStateReadSubjectURA as buildRuntimeStateReadSubjectURA,
 } from "./runtime-subjects.js";
@@ -3495,10 +3496,13 @@ function validateSessionHistoryRuntimeCall(call) {
   if (!(call instanceof RuntimeCallContext)) {
     throw historyError(ErrorCode.INVALID_INVOCATION, "runtime call context is required");
   }
-  if (!isRuntimeStateReadSubjectURA(call.subjectURA)) {
+  if (
+    !isRuntimeStateReadSubjectURA(call.subjectURA) &&
+    !isRuntimeOwnerReadSubjectURA(call.subjectURA, call.calleeURA)
+  ) {
     throw historyError(
       ErrorCode.INVALID_INVOCATION,
-      "session history call.subject_ura must be a user-owned runtime-state read subject",
+      "session history call.subject_ura must be a user-owned runtime-state read subject or the callee runtime-owner subject",
       runtimeCallDetails(call),
     );
   }
