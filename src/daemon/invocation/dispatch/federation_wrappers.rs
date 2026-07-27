@@ -1445,7 +1445,14 @@ mod tests {
 
     fn insert_presence(registry: &PresenceRegistry, ura: impl Into<String>) {
         registry
-            .insert(ura.into(), make_dispatch_sender())
+            .insert_negotiated(
+                ura.into(),
+                make_dispatch_sender(),
+                crate::daemon::invocation::bidi::state::presence::SessionContract::new(
+                    crate::daemon::invocation::bidi::state::presence::CANONICAL_SESSION_CARRIER_VERSION,
+                    vec![0; 16],
+                ),
+            )
             .expect("canonical presence key");
     }
 
@@ -2884,9 +2891,13 @@ mod tests {
     fn presence_registry_rejects_prefix_matched_malformed_device_presence() {
         let registry = PresenceRegistry::new();
         let error = registry
-            .insert(
+            .insert_negotiated(
                 "easynet:///r/realm-a/device/".to_string(),
                 make_dispatch_sender(),
+                crate::daemon::invocation::bidi::state::presence::SessionContract::new(
+                    crate::daemon::invocation::bidi::state::presence::CANONICAL_SESSION_CARRIER_VERSION,
+                    vec![0; 16],
+                ),
             )
             .expect_err("malformed device presence must fail closed before wrapper projection");
 

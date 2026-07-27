@@ -42,8 +42,7 @@ async fn invoke_stream_dispatches_subscribe_directory_v2_emits_directory_events(
     let (sender, _rx) = tokio::sync::mpsc::channel::<
         Result<crate::daemon::invocation::bidi::state::presence::DispatchFrame, tonic::Status>,
     >(1);
-    presence
-        .insert("easynet:///r/test-realm/device/n1".to_string(), sender)
+    insert_test_dispatch_presence(&presence, "easynet:///r/test-realm/device/n1", sender)
         .expect("canonical presence key");
     let second = stream.next().await.expect("second frame").expect("Ok");
     let evt2: DirectoryEvent =
@@ -1109,9 +1108,7 @@ async fn invoke_stream_rejects_governance_catalogue_route_before_presence_forwar
 
     let svc = make_service();
     let (target_tx, mut target_rx) = mpsc::channel(4);
-    svc.directory
-        .presence
-        .insert(TARGET_DEVICE_URA.to_string(), target_tx)
+    insert_test_dispatch_presence(&svc.directory.presence, TARGET_DEVICE_URA, target_tx)
         .expect("canonical presence key");
     publish_test_stream_route(&svc, TARGET_DEVICE_URA, CATALOGUE_READ);
 

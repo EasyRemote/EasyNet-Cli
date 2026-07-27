@@ -105,6 +105,21 @@ fn make_service_with_presence(presence: Arc<PresenceRegistry>) -> DaemonInvocati
     make_service_with_presence_and_heartbeat(presence, None)
 }
 
+fn insert_test_dispatch_presence(
+    presence: &PresenceRegistry,
+    ura: impl Into<String>,
+    sender: crate::daemon::invocation::bidi::state::presence::DispatchSender,
+) -> Result<crate::daemon::invocation::bidi::state::presence::PresenceRegistration, String> {
+    presence.insert_negotiated(
+        ura.into(),
+        sender,
+        crate::daemon::invocation::bidi::state::presence::SessionContract::new(
+            crate::daemon::invocation::bidi::state::presence::CANONICAL_SESSION_CARRIER_VERSION,
+            vec![0; 16],
+        ),
+    )
+}
+
 fn make_service_with_presence_and_heartbeat(
     presence: Arc<PresenceRegistry>,
     heartbeat_interval_ms: Option<std::num::NonZeroU64>,
@@ -466,9 +481,7 @@ fn publish_test_route_hosted_by(
     };
     if svc.directory.presence.lookup(&host_ura).is_none() {
         let (tx, _rx) = tokio::sync::mpsc::channel(1);
-        svc.directory
-            .presence
-            .insert(host_ura.clone(), tx)
+        insert_test_dispatch_presence(&svc.directory.presence, host_ura.clone(), tx)
             .expect("canonical presence key");
     }
     let (namespace, local_name) = public_name

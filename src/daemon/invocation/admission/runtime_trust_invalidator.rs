@@ -198,12 +198,40 @@ mod tests {
     use crate::daemon::federation::read_model::advertised_agents::{
         AdvertisedAgentRecord, AdvertisedAgentSigningAuthority,
     };
-    use crate::daemon::invocation::bidi::state::presence::DISPATCH_CHANNEL_CAPACITY;
+    use crate::daemon::invocation::bidi::state::presence::{
+        SessionContract, SessionTrustContext, CANONICAL_SESSION_CARRIER_VERSION,
+        DISPATCH_CHANNEL_CAPACITY,
+    };
     use crate::daemon::persistence::config::Credentials;
 
     fn sender() -> crate::daemon::invocation::bidi::state::presence::DispatchSender {
         let (tx, _rx) = tokio::sync::mpsc::channel(DISPATCH_CHANNEL_CAPACITY);
         tx
+    }
+
+    fn canonical_test_contract() -> SessionContract {
+        SessionContract::new(CANONICAL_SESSION_CARRIER_VERSION, vec![0; 16])
+    }
+
+    fn insert_test_presence(registry: &PresenceRegistry, ura: impl Into<String>) {
+        registry
+            .insert_negotiated(ura.into(), sender(), canonical_test_contract())
+            .expect("canonical presence key");
+    }
+
+    fn insert_test_presence_with_user_key(
+        registry: &PresenceRegistry,
+        ura: impl Into<String>,
+        public_key_b64: &str,
+    ) {
+        registry
+            .insert_negotiated_with_trust(
+                ura.into(),
+                sender(),
+                canonical_test_contract(),
+                SessionTrustContext::user_pubkey(public_key_b64),
+            )
+            .expect("canonical presence key");
     }
 
     fn credentials(username: &str) -> Credentials {
@@ -255,9 +283,7 @@ mod tests {
         let presence = Arc::new(PresenceRegistry::new());
         let advertised = Arc::new(AdvertisedAgentStore::new());
         let subject = "easynet:///r/local/user/user-1";
-        presence
-            .insert(subject.to_string(), sender())
-            .expect("canonical presence key");
+        insert_test_presence(&presence, subject);
 
         let invalidator = RuntimeTrustInvalidator::new(Arc::clone(&presence), advertised);
         let outcome = invalidator.invalidate_revoked_subject(subject, Some("pubkey-a"), false);
@@ -271,19 +297,7 @@ mod tests {
         let presence = Arc::new(PresenceRegistry::new());
         let advertised = Arc::new(AdvertisedAgentStore::new());
         let subject = "easynet:///r/local/user/user-1";
-        presence
-            .insert_negotiated_with_trust(
-                subject.to_string(),
-                sender(),
-                crate::daemon::invocation::bidi::state::presence::SessionContract::new(
-                    1,
-                    vec![1; 16],
-                ),
-                crate::daemon::invocation::bidi::state::presence::SessionTrustContext::user_pubkey(
-                    "pubkey-a",
-                ),
-            )
-            .expect("canonical presence key");
+        insert_test_presence_with_user_key(&presence, subject, "pubkey-a");
 
         let invalidator = RuntimeTrustInvalidator::new(Arc::clone(&presence), advertised);
         let outcome = invalidator.invalidate_revoked_subject(subject, Some("pubkey-a"), true);
@@ -298,19 +312,7 @@ mod tests {
         let presence = Arc::new(PresenceRegistry::new());
         let advertised = Arc::new(AdvertisedAgentStore::new());
         let subject = "easynet:///r/local/user/user-1";
-        presence
-            .insert_negotiated_with_trust(
-                subject.to_string(),
-                sender(),
-                crate::daemon::invocation::bidi::state::presence::SessionContract::new(
-                    1,
-                    vec![1; 16],
-                ),
-                crate::daemon::invocation::bidi::state::presence::SessionTrustContext::user_pubkey(
-                    "pubkey-b",
-                ),
-            )
-            .expect("canonical presence key");
+        insert_test_presence_with_user_key(&presence, subject, "pubkey-b");
 
         let invalidator = RuntimeTrustInvalidator::new(Arc::clone(&presence), advertised);
         let outcome = invalidator.invalidate_revoked_subject(subject, Some("pubkey-a"), true);
@@ -326,19 +328,7 @@ mod tests {
         let presence = Arc::new(PresenceRegistry::new());
         let advertised = Arc::new(AdvertisedAgentStore::new());
         let subject = crate::core::ura::user_ura("local", "user-alice");
-        presence
-            .insert_negotiated_with_trust(
-                subject.clone(),
-                sender(),
-                crate::daemon::invocation::bidi::state::presence::SessionContract::new(
-                    1,
-                    vec![1; 16],
-                ),
-                crate::daemon::invocation::bidi::state::presence::SessionTrustContext::user_pubkey(
-                    "pubkey-a",
-                ),
-            )
-            .expect("canonical presence key");
+        insert_test_presence_with_user_key(&presence, subject.clone(), "pubkey-a");
 
         let projector =
             RuntimeTrustConnectionStateProjector::from_credentials(credentials("alice"), "test")
@@ -369,19 +359,7 @@ mod tests {
         let presence = Arc::new(PresenceRegistry::new());
         let advertised = Arc::new(AdvertisedAgentStore::new());
         let subject = crate::core::ura::user_ura("local", "user-bob");
-        presence
-            .insert_negotiated_with_trust(
-                subject.clone(),
-                sender(),
-                crate::daemon::invocation::bidi::state::presence::SessionContract::new(
-                    1,
-                    vec![1; 16],
-                ),
-                crate::daemon::invocation::bidi::state::presence::SessionTrustContext::user_pubkey(
-                    "pubkey-a",
-                ),
-            )
-            .expect("canonical presence key");
+        insert_test_presence_with_user_key(&presence, subject.clone(), "pubkey-a");
 
         let projector =
             RuntimeTrustConnectionStateProjector::from_credentials(credentials("alice"), "test")
@@ -404,9 +382,7 @@ mod tests {
         let advertised = Arc::new(AdvertisedAgentStore::new());
         let subject = "easynet:///r/local/agent/alice.helper";
         let host = "easynet:///r/local/device/dev-1";
-        presence
-            .insert(host.to_string(), sender())
-            .expect("canonical presence key");
+        insert_test_presence(&presence, host);
         advertised.upsert(AdvertisedAgentRecord {
             agent_ura: subject.to_string(),
             generation: 1,
@@ -433,9 +409,7 @@ mod tests {
         let advertised = Arc::new(AdvertisedAgentStore::new());
         let user = "easynet:///r/local/user/alice";
         let host = "easynet:///r/local/device/dev-1";
-        presence
-            .insert(host.to_string(), sender())
-            .expect("canonical presence key");
+        insert_test_presence(&presence, host);
         for agent_ura in [
             "easynet:///r/local/agent/alice.helper",
             "easynet:///r/local/agent/alice.researcher",

@@ -12888,6 +12888,14 @@ wrappers = wrappers_path.read_text(encoding="utf-8")
 unary_tests = unary_tests_path.read_text(encoding="utf-8")
 presence_production = presence.split("\n#[cfg(test)]", 1)[0]
 
+for forbidden_token, code in {
+    "pub fn insert(": "legacy_fixture_insert_api_present",
+    "pub fn insert_tracked(": "legacy_fixture_insert_tracked_api_present",
+    "pub fn insert_fixture_dispatch(": "legacy_fixture_dispatch_api_present",
+}.items():
+    if forbidden_token in presence:
+        raise SystemExit(f"presence_registry_canonical_principal_key:{code}")
+
 required_presence_tokens = {
     "enum PresenceSlot": "slot_state_machine_missing",
     "ResolveOnly(PresenceResolveOnlySlot)": "resolve_only_slot_missing",

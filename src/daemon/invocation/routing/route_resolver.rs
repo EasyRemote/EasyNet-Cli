@@ -2043,7 +2043,14 @@ mod tests {
     /// `handle_resolve_at` reads from `registry.snapshot()`).
     fn mark_online(registry: &PresenceRegistry, owner_ura: &str) {
         registry
-            .insert(owner_ura.to_string(), make_dispatch_sender())
+            .insert_negotiated(
+                owner_ura.to_string(),
+                make_dispatch_sender(),
+                crate::daemon::invocation::bidi::state::presence::SessionContract::new(
+                    crate::daemon::invocation::bidi::state::presence::CANONICAL_SESSION_CARRIER_VERSION,
+                    vec![0; 16],
+                ),
+            )
             .expect("canonical presence key");
     }
 
