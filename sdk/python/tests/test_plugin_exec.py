@@ -104,6 +104,22 @@ class PluginExecTests(unittest.TestCase):
             {"type": "error", "call_id": "call-1", "message": "boom"},
         )
 
+    def test_exec_plugin_helper_rejects_uncorrelated_request_without_error_frame(
+        self,
+    ) -> None:
+        output = StringIO()
+        frame = _frame()
+        del frame["call_id"]
+
+        with self.assertRaisesRegex(SidecarProtocolError, "call_id"):
+            serve_exec_plugin(
+                lambda _invocation: {"ok": True},
+                input_stream=StringIO(json.dumps(frame) + "\n"),
+                output_stream=output,
+            )
+
+        self.assertEqual(output.getvalue(), "")
+
     def test_plugin_invocation_rejects_non_invoke_frame(self) -> None:
         frame = _frame()
         frame["type"] = "stream_open"

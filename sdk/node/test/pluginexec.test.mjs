@@ -117,6 +117,26 @@ test("serveExecPlugin writes error frame for handler failure", async () => {
   });
 });
 
+test("serveExecPlugin rejects uncorrelated request without error frame", async () => {
+  const capture = captureOutput();
+  const frame = requestFrame();
+  delete frame.call_id;
+
+  await assert.rejects(
+    () =>
+      serveExecPlugin(
+        () => ({ ok: true }),
+        {
+          input: inputFromFrame(frame),
+          output: capture.output,
+        },
+      ),
+    /call_id/,
+  );
+
+  assert.equal(capture.chunks.length, 0);
+});
+
 test("SidecarInvocation rejects non-invoke frames", () => {
   const frame = requestFrame();
   frame.type = "stream_open";
