@@ -288,20 +288,63 @@ pub struct RuntimeState {
 }
 
 /// Resolve the user's home directory.
-/// Returns the first available of `$HOME`, `$USERPROFILE`, or the OS-provided home.
+/// Returns the first available absolute path from `$HOME`, `$USERPROFILE`, or
+/// the OS-provided home.
 pub fn home_dir() -> PathBuf {
-    if let Ok(h) = std::env::var("HOME") {
-        return PathBuf::from(h);
-    }
-    if let Ok(h) = std::env::var("USERPROFILE") {
-        return PathBuf::from(h);
-    }
-    // Last resort: platform home_dir (works on most systems).
+    try_home_dir().unwrap_or_else(|error| panic!("{error}"))
+}
+
+pub fn try_home_dir() -> anyhow::Result<PathBuf> {
+    resolve_home_dir(
+        std::env::var("HOME").ok(),
+        std::env::var("USERPROFILE").ok(),
+        platform_home_dir(),
+    )
+}
+
+#[allow(deprecated)]
+fn platform_home_dir() -> Option<PathBuf> {
     #[allow(deprecated)]
-    std::env::home_dir().unwrap_or_else(|| {
-        eprintln!("warning: cannot determine home directory; using current directory");
-        PathBuf::from(".")
-    })
+    std::env::home_dir()
+}
+
+fn resolve_home_dir(
+    home: Option<String>,
+    user_profile: Option<String>,
+    os_home: Option<PathBuf>,
+) -> anyhow::Result<PathBuf> {
+    if let Some(path) = env_home_path("HOME", home)? {
+        return Ok(path);
+    }
+    if let Some(path) = env_home_path("USERPROFILE", user_profile)? {
+        return Ok(path);
+    }
+    if let Some(path) = os_home {
+        return validate_home_path("OS home directory", path);
+    }
+    anyhow::bail!(
+        "cannot determine home directory; refusing to use current directory as EasyNet state root"
+    )
+}
+
+fn env_home_path(name: &'static str, value: Option<String>) -> anyhow::Result<Option<PathBuf>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if value.trim().is_empty() {
+        return Ok(None);
+    }
+    validate_home_path(name, PathBuf::from(value)).map(Some)
+}
+
+fn validate_home_path(source: &'static str, path: PathBuf) -> anyhow::Result<PathBuf> {
+    if path.as_os_str().is_empty() {
+        anyhow::bail!("{source} resolved to an empty path");
+    }
+    if !path.is_absolute() {
+        anyhow::bail!("{source} must resolve to an absolute path, got {path:?}");
+    }
+    Ok(path)
 }
 
 pub fn state_dir() -> PathBuf {
@@ -752,6 +795,47 @@ pub fn save_device_settings(settings: &DeviceSettings) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn home_resolver_rejects_missing_sources_before_current_directory_fallback() {
+        let error = resolve_home_dir(None, None, None)
+            .expect_err("missing home sources must not fall back to cwd");
+
+        assert!(
+            error
+                .to_string()
+                .contains("refusing to use current directory"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn home_resolver_rejects_relative_env_source_before_state_root_derivation() {
+        let error = resolve_home_dir(Some("relative-home".to_string()), None, None)
+            .expect_err("relative HOME must not derive a relative state root");
+
+        assert!(
+            error
+                .to_string()
+                .contains("HOME must resolve to an absolute path"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn home_resolver_uses_first_absolute_available_source() {
+        let user_profile = std::env::temp_dir().join("easynet-userprofile-home");
+        let os_home = std::env::temp_dir().join("easynet-os-home");
+
+        let resolved = resolve_home_dir(
+            Some(" ".to_string()),
+            Some(user_profile.display().to_string()),
+            Some(os_home),
+        )
+        .expect("blank HOME is unavailable; USERPROFILE is the first absolute source");
+
+        assert_eq!(resolved, user_profile);
+    }
 
     #[test]
     fn extract_api_host_strips_port_for_axon_scheme() {
