@@ -1261,12 +1261,10 @@ class _UnaryOutcomeCheckpoints:
         terminal_state: str,
         has_proof_error: bool,
     ) -> bool:
-        return (
-            terminal_state == "Failed"
-            and response.HasField("error")
-            and int(response.error.stage) in _PRE_ADMISSION_ERROR_STAGES
-            and not has_proof_error
-        )
+        if terminal_state != "Failed" or not response.HasField("error") or has_proof_error:
+            return False
+        _error_stage(response.error.stage)
+        return int(response.error.stage) in _PRE_ADMISSION_ERROR_STAGES
 
     @staticmethod
     def _validate_pair(
@@ -1460,7 +1458,7 @@ def _bidi_down_json(frame: Any) -> bytes:
         else:
             event["admission_receipt"] = receipt
         if frame.receipt.HasField("failure"):
-            event["error"] = _axon_failure(frame.receipt.failure, "direct_runtime.bidi")
+            event["error"] = _axon_failure(frame.receipt.failure)
     elif payload == "control":
         event["payload_json"] = _bidi_control_json(frame.control)
     else:
@@ -1534,7 +1532,7 @@ def _bidi_control_json(control: Any) -> dict[str, object]:
 
 def _stream_chunk_error(chunk: Any) -> dict[str, object] | None:
     if chunk.HasField("error"):
-        return _axon_failure(chunk.error, _error_stage(chunk.error.stage))
+        return _axon_failure(chunk.error)
     state = _state_name(chunk.state, "direct_runtime.stream")
     if state in {"Failed", "TimedOut", "Cancelled"}:
         code = canonical_terminal_state_code(state)
@@ -1547,11 +1545,11 @@ def _stream_chunk_error(chunk: Any) -> dict[str, object] | None:
     return None
 
 
-def _axon_failure(error: Any, stage: str) -> dict[str, object]:
+def _axon_failure(error: Any) -> dict[str, object]:
     code = _response_error_code(error.code)
     return {
         "code": _failure_code_value(code),
-        "stage": stage,
+        "stage": _error_stage(error.stage),
         "message": error.message,
         "retryable": error.retryable,
     }
@@ -2189,14 +2187,7 @@ def _response_failure(
     terminal_state: str,
 ) -> dict[str, object] | None:
     if response.HasField("error"):
-        error = response.error
-        code = _response_error_code(error.code)
-        return {
-            "code": _failure_code_value(code),
-            "stage": _error_stage(error.stage),
-            "message": error.message,
-            "retryable": error.retryable,
-        }
+        return _axon_failure(response.error)
     if terminal_state in {"Completed", "Accepted", "Admitted", "Dispatched", "Running"}:
         return None
     code = canonical_terminal_state_code(terminal_state)
@@ -2258,9 +2249,22 @@ def _canonical_receipt_state(value: int) -> str:
 def _error_stage(value: int) -> str:
     try:
         name = _types_pb2.ErrorStage.Name(value)
-    except ValueError:
-        return "direct_runtime.invoke"
-    return name.removeprefix("ERROR_STAGE_").lower() or "direct_runtime.invoke"
+    except ValueError as exc:
+        raise _direct_error(
+            f"runtime error stage is unsupported: {int(value)}",
+            code=ErrorCode.PROTOCOL,
+            retry=RetryHint.NEVER,
+            details={"stage": int(value)},
+        ) from exc
+    projected = name.removeprefix("ERROR_STAGE_").lower()
+    if projected == "":
+        raise _direct_error(
+            f"runtime error stage is unsupported: {int(value)}",
+            code=ErrorCode.PROTOCOL,
+            retry=RetryHint.NEVER,
+            details={"stage": int(value)},
+        )
+    return projected
 
 
 def _output_json(payload: bytes, content_type: str) -> object:

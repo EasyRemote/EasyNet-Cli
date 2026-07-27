@@ -894,6 +894,25 @@ class DirectRuntimeTests(unittest.TestCase):
 
         self.assertTrue(is_code(raised.exception, ErrorCode.PROTOCOL))
 
+    def test_direct_runtime_unary_rejects_unknown_provider_error_stage(
+        self,
+    ) -> None:
+        with self.assertRaises(SDKError) as raised:
+            _invoke_response_json(
+                _signed_draft(),
+                invoke_pb2.InvokeResponse(
+                    state=types_pb2.INVOCATION_STATE_FAILED,
+                    error=types_pb2.Error(
+                        code="AXON_ADMISSION_REJECTED",
+                        message="unknown provider stage",
+                        stage=9999,
+                    ),
+                ),
+            )
+
+        self.assertTrue(is_code(raised.exception, ErrorCode.PROTOCOL))
+        self.assertIn("runtime error stage is unsupported", str(raised.exception))
+
     def test_direct_runtime_stream_rejects_unsupported_invocation_state(self) -> None:
         with self.assertRaises(SDKError) as raised:
             _stream_chunk_json(
@@ -903,6 +922,24 @@ class DirectRuntimeTests(unittest.TestCase):
             )
 
         self.assertTrue(is_code(raised.exception, ErrorCode.PROTOCOL))
+
+    def test_direct_runtime_stream_rejects_unknown_provider_error_stage(
+        self,
+    ) -> None:
+        with self.assertRaises(SDKError) as raised:
+            _stream_chunk_json(
+                invoke_pb2.InvokeStreamChunk(
+                    state=types_pb2.INVOCATION_STATE_FAILED,
+                    error=types_pb2.Error(
+                        code="AXON_EXECUTION_FAILED",
+                        message="unknown provider stage",
+                        stage=9999,
+                    ),
+                )
+            )
+
+        self.assertTrue(is_code(raised.exception, ErrorCode.PROTOCOL))
+        self.assertIn("runtime error stage is unsupported", str(raised.exception))
 
     def test_direct_transport_projects_cancelled_terminal_state_to_cancelled(
         self,

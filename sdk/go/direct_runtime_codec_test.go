@@ -207,7 +207,10 @@ func TestDirectRuntimeUnaryRejectsUnsupportedInvocationState(t *testing.T) {
 }
 
 func TestDirectAxonFailureProjectsMissingErrorCodeToProtocolMismatch(t *testing.T) {
-	failure := directAxonFailure(&axonpb.Error{Message: "provider omitted code"}, "direct_runtime.invoke")
+	failure, err := directAxonFailure(&axonpb.Error{Message: "provider omitted code"})
+	if err != nil {
+		t.Fatalf("directAxonFailure: %v", err)
+	}
 	if got := failure["code"]; got != string(ErrProtocolMismatch) {
 		t.Fatalf("directAxonFailure missing code = %v, want %s", got, ErrProtocolMismatch)
 	}
@@ -218,15 +221,41 @@ func TestDirectErrorStageUsesCanonicalProviderProjection(t *testing.T) {
 		axonpb.ErrorStage_ERROR_STAGE_GLOBAL_ADMISSION:      "global_admission",
 		axonpb.ErrorStage_ERROR_STAGE_CALLER_AUTHENTICATION: "caller_authentication",
 		axonpb.ErrorStage_ERROR_STAGE_UNSPECIFIED:           "unspecified",
-		axonpb.ErrorStage(9999):                             "direct_runtime.invoke",
 	}
 	for input, want := range cases {
-		if got := directErrorStage(input); got != want {
+		got, err := directErrorStage(input)
+		if err != nil {
+			t.Fatalf("directErrorStage(%v): %v", input, err)
+		}
+		if got != want {
 			t.Fatalf("directErrorStage(%v) = %q, want %q", input, got, want)
 		}
 	}
-	if directPreAdmissionErrorStage(axonpb.ErrorStage_ERROR_STAGE_UNSPECIFIED) {
+	preAdmission, err := directPreAdmissionErrorStage(axonpb.ErrorStage_ERROR_STAGE_UNSPECIFIED)
+	if err != nil {
+		t.Fatalf("directPreAdmissionErrorStage: %v", err)
+	}
+	if preAdmission {
 		t.Fatalf("unspecified stage must not be accepted as pre-admission")
+	}
+}
+
+func TestDirectErrorStageRejectsUnknownProviderStageWithoutInvokeFallback(t *testing.T) {
+	if stage, err := directErrorStage(axonpb.ErrorStage(9999)); !IsCode(err, ErrProtocol) {
+		t.Fatalf("unknown directErrorStage = %q, %v; want %s", stage, err, ErrProtocol)
+	}
+	_, err := directInvokeResponseJSON(directRuntimeDraft(t), &axonpb.InvokeResponse{
+		State: axonpb.InvocationState_INVOCATION_STATE_FAILED,
+		Error: &axonpb.Error{
+			Code:  string(ErrAdmissionDenied),
+			Stage: axonpb.ErrorStage(9999),
+		},
+	})
+	if !IsCode(err, ErrProtocol) {
+		t.Fatalf("unknown response error stage = %v, want %s", err, ErrProtocol)
+	}
+	if !strings.Contains(fmt.Sprint(err), "runtime error stage is unsupported") {
+		t.Fatalf("unknown stage error should name unsupported provider stage: %v", err)
 	}
 }
 

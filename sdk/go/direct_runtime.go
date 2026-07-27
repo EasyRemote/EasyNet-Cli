@@ -903,15 +903,21 @@ func directInvokeResponseJSON(draft InvocationDraft, response *axonpb.InvokeResp
 	); err != nil {
 		return nil, err
 	}
-	errorValue := directResponseFailure(response.GetError(), stateName, "direct_runtime.invoke")
+	errorValue, err := directResponseFailure(response.GetError(), stateName, "direct_runtime.invoke")
+	if err != nil {
+		return nil, err
+	}
 	if response.GetProofError() != nil {
-		errorValue = directAxonFailure(response.GetProofError(), directErrorStage(response.GetProofError().GetStage()))
+		errorValue, err = directAxonFailure(response.GetProofError())
+		if err != nil {
+			return nil, err
+		}
 	}
 	if errorValue == nil && response.GetTerminalReceipt() != nil && response.GetTerminalReceipt().GetFailure() != nil {
-		errorValue = directAxonFailure(
-			response.GetTerminalReceipt().GetFailure(),
-			directErrorStage(response.GetTerminalReceipt().GetFailure().GetStage()),
-		)
+		errorValue, err = directAxonFailure(response.GetTerminalReceipt().GetFailure())
+		if err != nil {
+			return nil, err
+		}
 	}
 	if response.GetTerminalReceipt() == nil {
 		if err := validateDirectReceiptFreeUnaryRejection(response); err != nil {
@@ -961,7 +967,11 @@ func validateDirectReceiptFreeUnaryRejection(response *axonpb.InvokeResponse) er
 			"receipt-free unary rejection requires a typed pre-admission error",
 		)
 	}
-	if !directPreAdmissionErrorStage(errorValue.GetStage()) {
+	preAdmission, err := directPreAdmissionErrorStage(errorValue.GetStage())
+	if err != nil {
+		return err
+	}
+	if !preAdmission {
 		return directRuntimeProtocolError(
 			"direct_runtime.invoke",
 			"receipt-free unary rejection has a non-admission error stage",
@@ -970,8 +980,12 @@ func validateDirectReceiptFreeUnaryRejection(response *axonpb.InvokeResponse) er
 	return nil
 }
 
-func directPreAdmissionErrorStage(stage axonpb.ErrorStage) bool {
-	return isCanonicalPreAdmissionErrorStage(directErrorStage(stage))
+func directPreAdmissionErrorStage(stage axonpb.ErrorStage) (bool, error) {
+	projected, err := directErrorStage(stage)
+	if err != nil {
+		return false, err
+	}
+	return isCanonicalPreAdmissionErrorStage(projected), nil
 }
 
 func directStreamChunkJSON(chunk *axonpb.InvokeStreamChunk) ([]byte, error) {
@@ -1005,7 +1019,10 @@ func directStreamChunkJSONWithAdmission(
 	if chunk.GetProofError() != nil {
 		errorSource = chunk.GetProofError()
 	}
-	errorValue := directResponseFailure(errorSource, stateName, "direct_runtime.stream")
+	errorValue, err := directResponseFailure(errorSource, stateName, "direct_runtime.stream")
+	if err != nil {
+		return nil, err
+	}
 	terminal := chunk.GetTerminalReceipt() != nil
 	terminalClaim := chunk.GetTerminal() || directStateTerminal(chunk.GetState())
 	transportTerminal := false
@@ -1168,7 +1185,11 @@ func directBidiDownJSON(frame *axonpb.InvokeBidiDown, admissionReceipt map[strin
 			value["admission_receipt"] = receipt
 		}
 		if failure := payload.Receipt.GetFailure(); failure != nil {
-			value["error"] = directAxonFailure(failure, "direct_runtime.bidi")
+			failureValue, err := directAxonFailure(failure)
+			if err != nil {
+				return nil, err
+			}
+			value["error"] = failureValue
 		}
 	case *axonpb.InvokeBidiDown_DispatchCall, *axonpb.InvokeBidiDown_ReverseDispatchResult:
 		return nil, directRuntimeProtocolError(
@@ -1320,25 +1341,29 @@ func directBidiControlJSON(control *axonpb.BidiControl) map[string]any {
 	}
 }
 
-func directResponseFailure(errorValue *axonpb.Error, terminalState string, stage string) map[string]any {
+func directResponseFailure(errorValue *axonpb.Error, terminalState string, stage string) (map[string]any, error) {
 	if errorValue != nil {
-		return directAxonFailure(errorValue, directErrorStage(errorValue.GetStage()))
+		return directAxonFailure(errorValue)
 	}
 	switch terminalState {
 	case "Completed", "Accepted", "Admitted", "Dispatched", "Running":
-		return nil
+		return nil, nil
 	case "TimedOut":
-		return map[string]any{"code": string(ErrTimeout), "stage": stage, "message": "runtime invocation ended in TimedOut", "retryable": true}
+		return map[string]any{"code": string(ErrTimeout), "stage": stage, "message": "runtime invocation ended in TimedOut", "retryable": true}, nil
 	case "Cancelled":
-		return map[string]any{"code": string(ErrCancelled), "stage": stage, "message": "runtime invocation ended in Cancelled", "retryable": false}
+		return map[string]any{"code": string(ErrCancelled), "stage": stage, "message": "runtime invocation ended in Cancelled", "retryable": false}, nil
 	case "Failed":
-		return map[string]any{"code": string(ErrAbilityFailed), "stage": stage, "message": "runtime invocation ended in Failed", "retryable": false}
+		return map[string]any{"code": string(ErrAbilityFailed), "stage": stage, "message": "runtime invocation ended in Failed", "retryable": false}, nil
 	default:
-		return nil
+		return nil, nil
 	}
 }
 
-func directAxonFailure(errorValue *axonpb.Error, stage string) map[string]any {
+func directAxonFailure(errorValue *axonpb.Error) (map[string]any, error) {
+	stage, err := directErrorStage(errorValue.GetStage())
+	if err != nil {
+		return nil, err
+	}
 	code := runtimeFailureCode(errorValue.GetCode())
 	if code == ErrGeneric {
 		code = ErrAdmissionDenied
@@ -1348,19 +1373,25 @@ func directAxonFailure(errorValue *axonpb.Error, stage string) map[string]any {
 		"stage":     stage,
 		"message":   errorValue.GetMessage(),
 		"retryable": errorValue.GetRetryable(),
-	}
+	}, nil
 }
 
-func directErrorStage(stage axonpb.ErrorStage) string {
+func directErrorStage(stage axonpb.ErrorStage) (string, error) {
 	name := axonpb.ErrorStage_name[int32(stage)]
 	if name == "" {
-		return "direct_runtime.invoke"
+		return "", directRuntimeProtocolError(
+			"direct_runtime.invoke",
+			fmt.Sprintf("runtime error stage is unsupported: %d", stage),
+		)
 	}
 	name = strings.TrimPrefix(name, "ERROR_STAGE_")
 	if name == "" {
-		return "direct_runtime.invoke"
+		return "", directRuntimeProtocolError(
+			"direct_runtime.invoke",
+			fmt.Sprintf("runtime error stage is unsupported: %d", stage),
+		)
 	}
-	return strings.ToLower(name)
+	return strings.ToLower(name), nil
 }
 
 func directReceipt(receipt *axonpb.InvocationReceipt, stage string) (map[string]any, error) {
