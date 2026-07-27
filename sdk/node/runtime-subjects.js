@@ -1,7 +1,6 @@
 import { containsAllZeroPrincipal } from "./runtime-principals.js";
 
 const RUNTIME_STATE_READ_SUBJECT_PATH = "runtime-state/read";
-const RETIRED_INVOCATION_HISTORY_SUBJECT_PATH = "session/invocation_history";
 
 export function runtimeStateReadSubjectURA(realm, userID, errors = {}) {
   const invalidInvocation = errorFactory(errors.invalidInvocation, TypeError);
@@ -28,20 +27,6 @@ export function isRuntimeStateReadSubjectURA(subjectURA) {
     ownerUserID !== "" &&
     !containsAllZeroPrincipal(ownerUserID) &&
     subject.resourcePath === RUNTIME_STATE_READ_SUBJECT_PATH
-  );
-}
-
-export function isRetiredInvocationHistorySubjectURA(subjectURA) {
-  const subject = canonicalResourceSubject(subjectURA);
-  if (!subject || !subject.ownerID.startsWith("user.")) {
-    return false;
-  }
-  const ownerUserID = subject.ownerID.slice("user.".length).trim();
-  return (
-    ownerUserID !== "" &&
-    !ownerUserID.includes(".") &&
-    !containsAllZeroPrincipal(ownerUserID) &&
-    subject.resourcePath === RETIRED_INVOCATION_HISTORY_SUBJECT_PATH
   );
 }
 

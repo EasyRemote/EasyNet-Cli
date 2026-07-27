@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import { containsAllZeroPrincipal } from "./runtime-principals.js";
 import {
   canonicalResourceSubject,
-  isRetiredInvocationHistorySubjectURA,
   isRuntimeStateReadSubjectURA,
   runtimeStateReadSubjectURA as buildRuntimeStateReadSubjectURA,
 } from "./runtime-subjects.js";
@@ -96,6 +95,7 @@ const RUNTIME_GOVERNANCE_READ_ABILITIES = Object.freeze([
   "invocation.record.get",
   "invocation.trace.get",
 ]);
+const CANONICAL_SESSION_AUTHORITY_ID = /^[A-Za-z0-9.-]+$/u;
 
 export class SDKError extends Error {
   constructor({
@@ -3240,8 +3240,8 @@ function parseCanonicalURA(raw, field) {
 }
 
 function validateSessionAuthoritySubjectBinding(subjectURA, sessionOwnerUserID, sessionID) {
-  if (isRetiredInvocationHistorySubjectURA(subjectURA)) {
-    throw invalidAuthority("session authority subject_ura uses retired invocation-history subject; use runtime-state/read");
+  if (!canonicalSessionAuthorityID(sessionID)) {
+    throw invalidAuthority("session authority session_id is not canonical");
   }
   const subject = canonicalAuthoritySubject(subjectURA);
   if (!subject || (subject.kind !== "user" && subject.kind !== "session")) {
@@ -3256,6 +3256,10 @@ function validateSessionAuthoritySubjectBinding(subjectURA, sessionOwnerUserID, 
       "session authority subject_ura owner/session must match session_owner_user_id and session_id",
     );
   }
+}
+
+function canonicalSessionAuthorityID(sessionID) {
+  return CANONICAL_SESSION_AUTHORITY_ID.test(String(sessionID ?? "").trim());
 }
 
 function canonicalAuthoritySubject(subjectURA) {
@@ -3676,7 +3680,7 @@ function runtimeCallDetails(call) {
 
 function sessionAuthorityAdmitsSubject(authority, subjectURA) {
   const subject = subjectURA.trim();
-  if (isRetiredInvocationHistorySubjectURA(subject)) {
+  if (!canonicalSessionAuthorityID(authority.sessionID)) {
     return false;
   }
   if (authority.subjectURA.trim() === subject) {
@@ -3684,6 +3688,12 @@ function sessionAuthorityAdmitsSubject(authority, subjectURA) {
   }
   const resource = canonicalResourceSubject(subject);
   if (!resource) {
+    return false;
+  }
+  if (
+    resource.resourcePath.startsWith("session/") &&
+    !canonicalSessionAuthorityID(resource.resourcePath.slice("session/".length))
+  ) {
     return false;
   }
   const ownerUserID = authority.sessionOwnerUserID.trim();

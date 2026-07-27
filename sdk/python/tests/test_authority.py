@@ -144,7 +144,7 @@ class AuthorityTests(unittest.TestCase):
 
         with self.assertRaisesRegex(
             SDKError,
-            "retired invocation-history subject",
+            "session authority session_id is not canonical",
         ):
             SessionAuthority.from_metadata(value)
 

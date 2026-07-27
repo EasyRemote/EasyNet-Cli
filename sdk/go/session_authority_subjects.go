@@ -13,7 +13,7 @@ func runtimeSessionAuthorityAdmitsSubject(
 	if authority == nil {
 		return false
 	}
-	if isRetiredInvocationHistorySubjectURA(subjectURA) {
+	if !canonicalSessionAuthorityID(authority.SessionID) {
 		return false
 	}
 	if strings.TrimSpace(authority.SubjectURA) == strings.TrimSpace(subjectURA) {
@@ -21,6 +21,10 @@ func runtimeSessionAuthorityAdmitsSubject(
 	}
 	parts, err := ParseURAParts(strings.TrimSpace(subjectURA))
 	if err != nil || parts.Kind != URAKindResource {
+		return false
+	}
+	if sessionID, ok := strings.CutPrefix(strings.TrimSpace(parts.Path), "session/"); ok &&
+		!canonicalSessionAuthorityID(sessionID) {
 		return false
 	}
 	ownerID := strings.TrimSpace(parts.OwnerID)
@@ -37,4 +41,29 @@ func runtimeSessionAuthorityAdmitsSubject(
 	agentOwner := strings.TrimPrefix(ownerID, "agent.")
 	userID, _, found := strings.Cut(agentOwner, ".")
 	return found && userID == ownerUserID
+}
+
+func canonicalSessionAuthorityID(sessionID string) bool {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return false
+	}
+	for _, ch := range sessionID {
+		if (ch >= 'a' && ch <= 'z') ||
+			(ch >= 'A' && ch <= 'Z') ||
+			(ch >= '0' && ch <= '9') ||
+			ch == '-' ||
+			ch == '.' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func validateCanonicalSessionAuthorityID(sessionID string) error {
+	if !canonicalSessionAuthorityID(sessionID) {
+		return invalidInvocation("session authority session_id is not canonical", nil)
+	}
+	return nil
 }

@@ -4968,6 +4968,13 @@ if go:
         if token not in go_helper:
             raise SystemExit(f"sdk_go_authority_subject_structured_owner_missing:{token}")
     for token in (
+        "func canonicalSessionAuthorityID(",
+        "session authority session_id is not canonical",
+        "canonicalSessionAuthorityID(authority.SessionID)",
+    ):
+        if token not in go and token not in go_helper:
+            raise SystemExit(f"sdk_go_authority_subject_canonical_session_id_missing:{token}")
+    for token in (
         "strings.TrimSpace(parts.Path) == runtimeStateReadSubjectPath",
         "strings.TrimPrefix(ownerID, \"user.\")",
         "!containsAllZeroPrincipal(userID)",
@@ -4981,6 +4988,14 @@ if go:
     ):
         if retired in go_helper:
             raise SystemExit(f"sdk_go_authority_subject_embeds_runtime_subject_boundary:{retired}")
+    for retired in (
+        "func isRetiredInvocationHistorySubjectURA(",
+        'retiredInvocationHistorySubjectPath = "session/invocation_history"',
+        "isRetiredInvocationHistorySubjectURA(",
+        "retired invocation-history subject",
+    ):
+        if retired in go or retired in go_helper or retired in go_subjects:
+            raise SystemExit(f"sdk_go_retired_history_subject_compat_not_deleted:{retired}")
     if "func runtimeSessionAuthorityAdmitsSubject(" in go_runtime:
         raise SystemExit("sdk_go_runtime_ability_owns_authority_subject_helper")
     call_body = section(
@@ -5124,6 +5139,13 @@ if py:
         if token not in py_helper:
             raise SystemExit(f"sdk_python_authority_subject_structured_owner_missing:{token}")
     for token in (
+        "def canonical_session_authority_id(",
+        "session authority session_id is not canonical",
+        "canonical_session_authority_id(authority.session_id)",
+    ):
+        if token not in py_authority and token not in py_helper:
+            raise SystemExit(f"sdk_python_authority_subject_canonical_session_id_missing:{token}")
+    for token in (
         "subject.components.get(\"path\")",
         "path == RUNTIME_STATE_READ_SUBJECT_PATH",
         "owner_id.removeprefix(\"user.\").strip() != \"\"",
@@ -5141,6 +5163,14 @@ if py:
     ):
         if retired in py_helper:
             raise SystemExit(f"sdk_python_authority_subject_embeds_runtime_subject_boundary:{retired}")
+    for retired in (
+        "def is_retired_invocation_history_subject_ura(",
+        'RETIRED_INVOCATION_HISTORY_SUBJECT_PATH = "session/invocation_history"',
+        "is_retired_invocation_history_subject_ura(",
+        "retired invocation-history subject",
+    ):
+        if retired in py_authority or retired in py_helper or retired in py_subjects or retired in py_guard:
+            raise SystemExit(f"sdk_python_retired_history_subject_compat_not_deleted:{retired}")
     for token in (
         "def validate_receipt_history_request(",
         "def _validate_receipt_history_call(",
@@ -5261,12 +5291,13 @@ if node:
         "function validateSessionHistoryFilterBinding(call, filter)",
         "function validateSessionHistorySessionBinding(",
         "isRuntimeStateReadSubjectURA,",
-        "isRetiredInvocationHistorySubjectURA,",
         "canonicalResourceSubject,",
         "isRuntimeStateReadSubjectURA(call.subjectURA)",
         "sessionAuthorityAdmitsSubject(authority, subjectURA)",
         "export function runtimeStateReadSubjectURA(",
         "buildRuntimeStateReadSubjectURA(realm, userID",
+        "function canonicalSessionAuthorityID(sessionID)",
+        "session authority session_id is not canonical",
         "session authority subject does not admit receipt query subject_ura",
         "receipt filter caller_ura does not match receipt query caller_ura",
         "receipt filter callee_ura does not match receipt query callee_ura",
@@ -5276,10 +5307,8 @@ if node:
     for token in (
         "export function runtimeStateReadSubjectURA(",
         "export function isRuntimeStateReadSubjectURA(subjectURA)",
-        "export function isRetiredInvocationHistorySubjectURA(subjectURA)",
         "export function canonicalResourceSubject(subjectURA)",
         'const RUNTIME_STATE_READ_SUBJECT_PATH = "runtime-state/read"',
-        'const RETIRED_INVOCATION_HISTORY_SUBJECT_PATH = "session/invocation_history"',
         "runtimeStateSubjectSegment(realm, \"realm\"",
         "runtimeStateSubjectSegment(userID, \"user_id\"",
         "containsAllZeroPrincipal(cleanUserID)",
@@ -5298,6 +5327,13 @@ if node:
     ):
         if retired in node:
             raise SystemExit(f"sdk_node_history_authority_subject_embeds_runtime_boundary:{retired}")
+    for retired in (
+        "isRetiredInvocationHistorySubjectURA",
+        'RETIRED_INVOCATION_HISTORY_SUBJECT_PATH = "session/invocation_history"',
+        "retired invocation-history subject",
+    ):
+        if retired in node or retired in node_subjects:
+            raise SystemExit(f"sdk_node_retired_history_subject_compat_not_deleted:{retired}")
     body = section(
         node,
         "export class SessionHistoryOperations",

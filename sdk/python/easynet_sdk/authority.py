@@ -5,16 +5,17 @@ from __future__ import annotations
 import base64
 import binascii
 import json
+import re
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Protocol, cast
 
 from .axon_addressing import parse_ura, user_ura
 from .errors import ErrorCode, RetryHint, SDKError
 from ._identity_guards import contains_all_zero_principal
-from ._runtime_subjects import is_retired_invocation_history_subject_ura
 
 DELEGATION_METADATA_KEY = "x-runtime-delegation"
 SESSION_AUTHORITY_METADATA_KEY = "x-runtime-session-authority"
+_CANONICAL_SESSION_AUTHORITY_ID = re.compile(r"^[A-Za-z0-9.-]+$")
 
 
 @dataclass(frozen=True)
@@ -834,10 +835,8 @@ def _session_owner_ura_from_subject(subject_ura: str, owner_user_id: str) -> str
 def _validate_session_authority_subject_binding(
     subject_ura: str, session_owner_user_id: str, session_id: str
 ) -> None:
-    if is_retired_invocation_history_subject_ura(subject_ura):
-        raise _invalid_authority(
-            "session authority subject_ura uses retired invocation-history subject; use runtime-state/read"
-        )
+    if not canonical_session_authority_id(session_id):
+        raise _invalid_authority("session authority session_id is not canonical")
     kind, owner_user_id, authority_session_id = _canonical_session_authority_subject(
         subject_ura
     )
@@ -882,6 +881,10 @@ def _canonical_session_authority_subject(subject_ura: str) -> tuple[str, str, st
     raise _invalid_authority(
         "session authority subject_ura must be a canonical user or session subject"
     )
+
+
+def canonical_session_authority_id(session_id: str) -> bool:
+    return bool(_CANONICAL_SESSION_AUTHORITY_ID.fullmatch(session_id.strip()))
 
 
 def _user_id_from_user_ura(value: str, field_name: str) -> str:

@@ -3,7 +3,6 @@ package easynet
 import "strings"
 
 const runtimeStateReadSubjectPath = "runtime-state/read"
-const retiredInvocationHistorySubjectPath = "session/invocation_history"
 
 // RuntimeStateReadSubjectURA builds the canonical subject for runtime-state
 // read projections owned by one authenticated user.
@@ -59,18 +58,4 @@ func isRuntimeGovernanceReadSubjectURA(subjectURA string, calleeURA string) bool
 		subject.Kind == callee.Kind &&
 		subject.Realm == callee.Realm &&
 		subjectURA == calleeURA
-}
-
-func isRetiredInvocationHistorySubjectURA(subjectURA string) bool {
-	parts, err := ParseURAParts(strings.TrimSpace(subjectURA))
-	if err != nil || parts.Kind != URAKindResource {
-		return false
-	}
-	ownerID := strings.TrimSpace(parts.OwnerID)
-	userID := strings.TrimPrefix(ownerID, "user.")
-	return strings.HasPrefix(ownerID, "user.") &&
-		strings.TrimSpace(userID) != "" &&
-		!strings.Contains(userID, ".") &&
-		!containsAllZeroPrincipal(userID) &&
-		strings.TrimSpace(parts.Path) == retiredInvocationHistorySubjectPath
 }

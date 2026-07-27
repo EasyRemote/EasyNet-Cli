@@ -98,7 +98,7 @@ func TestSessionAuthorityBindsCanonicalSubject(t *testing.T) {
 	value = authorityMetadataFixture(t, payload, []byte("session-signature"))
 
 	_, err = NewSessionAuthorityFromMetadata(value)
-	if err == nil || !strings.Contains(err.Error(), "retired invocation-history subject") {
+	if err == nil || !strings.Contains(err.Error(), "session authority session_id is not canonical") {
 		t.Fatalf("retired subject error = %v", err)
 	}
 

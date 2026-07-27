@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from .authority import SessionAuthority
+from .authority import SessionAuthority, canonical_session_authority_id
 from .axon_addressing import AddressingProjection, parse_ura
 from .errors import SDKError
-from ._runtime_subjects import is_retired_invocation_history_subject_ura
 
 
 def session_authority_admits_subject(
@@ -25,7 +24,7 @@ def session_authority_admits_subject(
     from the canonical URA projection's `owner_id` component.
     """
 
-    if is_retired_invocation_history_subject_ura(subject_ura):
+    if not canonical_session_authority_id(authority.session_id):
         return False
     if authority.subject_ura.strip() == subject_ura.strip():
         return True
@@ -37,8 +36,13 @@ def session_authority_admits_subject(
     if subject.kind != "resource":
         return False
     owner_id = subject.components.get("owner_id")
+    path = subject.components.get("path")
     if not isinstance(owner_id, str):
         return False
+    if isinstance(path, str) and path.startswith("session/"):
+        session_id = path.removeprefix("session/")
+        if not canonical_session_authority_id(session_id):
+            return False
     owner_user_id = authority.session_owner_user_id.strip()
     if not owner_user_id:
         return False

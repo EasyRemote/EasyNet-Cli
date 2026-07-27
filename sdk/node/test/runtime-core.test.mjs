@@ -1351,7 +1351,7 @@ test("authority metadata binds session subject to owner and session id", () => {
           expires_at_ms: 20,
         }),
       ),
-    /retired invocation-history subject/,
+    /session authority session_id is not canonical/,
   );
 
   assert.throws(
