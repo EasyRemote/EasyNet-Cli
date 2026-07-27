@@ -87,4 +87,18 @@ if ! rg -q 'reject_unknown_fields' "$CHAT_RS"; then
   fail "agents.chat parser must reject unknown top-level fields in production code"
 fi
 
+for test_name in \
+  parse_attachments_rejects_filename_on_path \
+  parse_attachments_rejects_unknown_item_fields \
+  parse_attachments_rejects_wrongly_typed_string_fields
+do
+  if ! rg -q "$test_name" "$CHAT_RS"; then
+    fail "agents.chat attachment parser tests must include $test_name"
+  fi
+done
+
+if ! rg -q 'optional_attachment_string_field' "$CHAT_RS"; then
+  fail "agents.chat attachment parser must reject wrongly typed attachment string fields"
+fi
+
 echo "check-chat-ability-input-boundary: OK"

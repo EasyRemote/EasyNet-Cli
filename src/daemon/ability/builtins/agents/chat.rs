@@ -1656,6 +1656,24 @@ fn optional_bool_field(
     }
 }
 
+fn optional_attachment_string_field(
+    obj: &Map<String, Value>,
+    idx: usize,
+    field: &'static str,
+) -> anyhow::Result<Option<String>> {
+    match obj.get(field) {
+        None => Ok(None),
+        Some(value) => Ok(Some(
+            value
+                .as_str()
+                .ok_or_else(|| {
+                    anyhow::anyhow!("chat: attachments[{idx}].{field} must be a string")
+                })?
+                .to_string(),
+        )),
+    }
+}
+
 /// Parse the optional `attachments` array into typed AttachmentSpecs.
 /// Absent/null → empty Vec; present-but-not-an-array → loud error so
 /// the caller sees the typo at the API boundary. Each entry names its
@@ -1672,9 +1690,14 @@ fn parse_attachments(value: Option<&Value>) -> anyhow::Result<Vec<AttachmentSpec
         let obj = item
             .as_object()
             .ok_or_else(|| anyhow::anyhow!("chat: attachments[{idx}] must be an object"))?;
-        let path = obj.get("path").and_then(Value::as_str);
-        let ura = obj.get("ura").and_then(Value::as_str);
-        match (path, ura) {
+        reject_unknown_fields(
+            obj,
+            &format!("chat: attachments[{idx}]"),
+            &["path", "ura", "filename", "encoding"],
+        )?;
+        let path = optional_attachment_string_field(obj, idx, "path")?;
+        let ura = optional_attachment_string_field(obj, idx, "ura")?;
+        match (path.as_deref(), ura.as_deref()) {
             (Some(_), Some(_)) => {
                 anyhow::bail!("chat: attachments[{idx}] must set `path` or `ura`, not both")
             }
@@ -1682,15 +1705,22 @@ fn parse_attachments(value: Option<&Value>) -> anyhow::Result<Vec<AttachmentSpec
                 if path.is_empty() {
                     anyhow::bail!("chat: attachments[{idx}].path must not be empty");
                 }
-                let encoding = match obj.get("encoding").and_then(Value::as_str) {
-                    None => AttachmentEncoding::default(),
-                    Some("utf8") => AttachmentEncoding::Utf8,
-                    Some("base64") => AttachmentEncoding::Base64,
-                    Some(other) => anyhow::bail!(
-                        "chat: attachments[{idx}].encoding must be \"utf8\" or \"base64\" \
+                if obj.contains_key("filename") {
+                    anyhow::bail!(
+                        "chat: attachments[{idx}].filename is only valid with `ura` — \
+                         path attachments are embedded inline"
+                    );
+                }
+                let encoding =
+                    match optional_attachment_string_field(obj, idx, "encoding")?.as_deref() {
+                        None => AttachmentEncoding::default(),
+                        Some("utf8") => AttachmentEncoding::Utf8,
+                        Some("base64") => AttachmentEncoding::Base64,
+                        Some(other) => anyhow::bail!(
+                            "chat: attachments[{idx}].encoding must be \"utf8\" or \"base64\" \
                          (got {other:?})"
-                    ),
-                };
+                        ),
+                    };
                 out.push(AttachmentSpec::Path {
                     path: path.to_string(),
                     encoding,
@@ -1706,10 +1736,7 @@ fn parse_attachments(value: Option<&Value>) -> anyhow::Result<Vec<AttachmentSpec
                          URA attachments are materialised to disk, not inlined"
                     );
                 }
-                let filename = obj
-                    .get("filename")
-                    .and_then(Value::as_str)
-                    .map(str::to_string);
+                let filename = optional_attachment_string_field(obj, idx, "filename")?;
                 out.push(AttachmentSpec::Ura {
                     ura: ura.to_string(),
                     filename,
@@ -2859,6 +2886,52 @@ mod tests {
         }))
         .unwrap_err();
         assert!(format!("{err}").contains("only valid with `path`"));
+    }
+
+    #[test]
+    fn parse_attachments_rejects_filename_on_path() {
+        let err = ChatArgs::parse(&json!({
+            "prompt": "p",
+            "attachments": [{"path": "/etc/hosts", "filename": "hosts.txt"}]
+        }))
+        .unwrap_err();
+        assert!(format!("{err}").contains("filename is only valid with `ura`"));
+    }
+
+    #[test]
+    fn parse_attachments_rejects_unknown_item_fields() {
+        let err = ChatArgs::parse(&json!({
+            "prompt": "p",
+            "attachments": [{"path": "/etc/hosts", "content_type": "text/plain"}]
+        }))
+        .unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("unsupported field"));
+        assert!(msg.contains("content_type"));
+    }
+
+    #[test]
+    fn parse_attachments_rejects_wrongly_typed_string_fields() {
+        for (field, payload) in [
+            ("path", json!({"path": 123})),
+            ("ura", json!({"ura": 123})),
+            (
+                "filename",
+                json!({"ura": "easynet:///r/x/resource/u.files/a", "filename": 123}),
+            ),
+            ("encoding", json!({"path": "/etc/hosts", "encoding": 123})),
+        ] {
+            let err = ChatArgs::parse(&json!({
+                "prompt": "p",
+                "attachments": [payload]
+            }))
+            .unwrap_err();
+            let msg = format!("{err}");
+            assert!(
+                msg.contains(&format!(".{field} must be a string")),
+                "wrong error for {field}: {msg}"
+            );
+        }
     }
 
     #[test]
