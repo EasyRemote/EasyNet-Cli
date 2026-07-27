@@ -65,6 +65,16 @@ impl AdmissionPolicyGate {
             context.trusted_role,
             context.action,
         );
+        let realm_authority_public_read = realm_authority_public_read_scope(
+            &caller_ura,
+            &callee_ura,
+            &subject_ura,
+            &ability_ura,
+            context.daemon_ura,
+            context.trusted_role,
+            context.action,
+            context.safe_read,
+        );
         let device_self_publication_manage = device_self_publication_manage_scope(
             &caller_ura,
             &callee_ura,
@@ -138,6 +148,7 @@ impl AdmissionPolicyGate {
             safe_read: context.safe_read,
             authority_self_read,
             authority_self_manage,
+            realm_authority_public_read,
             device_self_publication_manage,
             device_self_session_stream,
             interactive_context_available: false,
@@ -395,6 +406,40 @@ fn authority_self_manage_scope(
     ura_is_in_realm(subject_ura, &callee.realm)
 }
 
+fn realm_authority_public_read_scope(
+    caller_ura: &str,
+    callee_ura: &str,
+    subject_ura: &str,
+    ability_ura: &str,
+    daemon_ura: Option<&str>,
+    trusted_role: TrustedAgentRole,
+    action: AccessAction,
+    safe_read: bool,
+) -> bool {
+    if trusted_role != TrustedAgentRole::Hub || action != AccessAction::Read || !safe_read {
+        return false;
+    }
+    if Some(callee_ura) != daemon_ura {
+        return false;
+    }
+    let Ok(caller) = parse_ura(caller_ura) else {
+        return false;
+    };
+    if caller.kind != URAKind::Authority {
+        return false;
+    }
+    let Ok(callee) = parse_ura(callee_ura) else {
+        return false;
+    };
+    if callee.kind != URAKind::Device || callee.realm != caller.realm {
+        return false;
+    }
+    let Some(device_id) = callee.device_id() else {
+        return false;
+    };
+    subject_ura == callee_ura || device_owned_ability_matches(ability_ura, &callee.realm, device_id)
+}
+
 fn device_self_publication_manage_scope(
     caller_ura: &str,
     callee_ura: &str,
@@ -431,6 +476,19 @@ fn device_self_publication_manage_scope(
             crate::daemon::invocation::dispatch::federation_wrappers::ABILITY_FEDERATION_ADVERTISE_ABILITIES,
         )
         .unwrap_or_default()
+}
+
+fn device_owned_ability_matches(ability_ura: &str, realm: &str, device_id: &str) -> bool {
+    let Ok(ability) = parse_ura(ability_ura) else {
+        return false;
+    };
+    if ability.realm != realm || ability.kind != URAKind::Ability {
+        return false;
+    }
+    matches!(
+        ability.ability().map(|ability| ability.owner),
+        Some(AbilityOwner::Device { device_id: owner_device_id }) if owner_device_id == device_id
+    )
 }
 
 fn device_self_session_stream_scope(
@@ -817,6 +875,83 @@ mod tests {
         assert_eq!(
             decision.token_id.as_deref(),
             Some("easynet:///r/test/authority")
+        );
+    }
+
+    #[test]
+    fn realm_authority_can_read_descriptor_safe_device_metadata_before_owner_binding() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let stores = AccessControlStoreRegistry::ephemeral();
+        let device = "easynet:///r/test/device/dev-1";
+        let envelope = Envelope {
+            caller: Some(identity("easynet:///r/test/authority")),
+            callee: Some(identity(device)),
+            subject: Some(SubjectIdentity {
+                ura: device.to_string(),
+                profile: String::new(),
+            }),
+            ..Envelope::default()
+        };
+        let decision = AdmissionPolicyGate::verify(AdmissionPolicyContext {
+            envelope: &envelope,
+            ability: "node.describe",
+            action: AccessAction::Read,
+            safe_read: true,
+            trusted_role: TrustedAgentRole::Hub,
+            daemon_ura: Some(device),
+            trust_anchor: &empty_anchor(),
+            access_control_stores: &stores,
+            canonical_hash: Some("sha256:test".to_string()),
+            signature_key_id: Some("ed25519:key".to_string()),
+            verified_authority_id: None,
+            rejector_ura: Some(device.to_string()),
+        })
+        .expect("realm Authority must read public Device runtime metadata");
+
+        assert_eq!(decision.decision, PolicyDecisionOutcome::Allow);
+        assert_eq!(decision.reason, PolicyDecisionReason::HubTokenReadAllow);
+        assert_eq!(decision.owner_source, OwnerSource::Unresolved);
+        assert!(decision.owner_user_id.is_none());
+        assert_eq!(decision.caller_ura, "easynet:///r/test/authority");
+        assert_eq!(decision.callee_ura, device);
+    }
+
+    #[test]
+    fn realm_authority_public_device_read_stays_bound_to_local_device() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let stores = AccessControlStoreRegistry::ephemeral();
+        let local_device = "easynet:///r/test/device/local-dev";
+        let other_device = "easynet:///r/test/device/other-dev";
+        let envelope = Envelope {
+            caller: Some(identity("easynet:///r/test/authority")),
+            callee: Some(identity(other_device)),
+            subject: Some(SubjectIdentity {
+                ura: other_device.to_string(),
+                profile: String::new(),
+            }),
+            ..Envelope::default()
+        };
+        let err = AdmissionPolicyGate::verify(AdmissionPolicyContext {
+            envelope: &envelope,
+            ability: "node.describe",
+            action: AccessAction::Read,
+            safe_read: true,
+            trusted_role: TrustedAgentRole::Hub,
+            daemon_ura: Some(local_device),
+            trust_anchor: &empty_anchor(),
+            access_control_stores: &stores,
+            canonical_hash: Some("sha256:test".to_string()),
+            signature_key_id: Some("ed25519:key".to_string()),
+            verified_authority_id: None,
+            rejector_ura: Some(local_device.to_string()),
+        })
+        .expect_err("authority public read must not target a different local daemon owner");
+
+        assert_eq!(err.code(), tonic::Code::PermissionDenied);
+        assert!(
+            err.message().contains("\"reason\":\"OWNER_UNRESOLVED\""),
+            "expected owner unresolved outside local daemon scope, got: {}",
+            err.message()
         );
     }
 

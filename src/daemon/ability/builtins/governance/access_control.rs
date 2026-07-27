@@ -232,6 +232,7 @@ fn check_handler(args: Value, stores: &AccessControlStoreRegistry) -> anyhow::Re
         safe_read: request.safe_read,
         authority_self_read: false,
         authority_self_manage: false,
+        realm_authority_public_read: false,
         device_self_publication_manage: false,
         device_self_session_stream: false,
         interactive_context_available: request.interactive_context_available,

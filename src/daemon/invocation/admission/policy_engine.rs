@@ -27,6 +27,7 @@ pub struct PolicyInput {
     pub safe_read: bool,
     pub authority_self_read: bool,
     pub authority_self_manage: bool,
+    pub realm_authority_public_read: bool,
     pub device_self_publication_manage: bool,
     pub device_self_session_stream: bool,
     pub interactive_context_available: bool,
@@ -105,6 +106,17 @@ impl PolicyEngine {
         }
 
         if input.authority_self_read && input.action == AccessAction::Read && input.safe_read {
+            return decision(
+                &input,
+                PolicyDecisionOutcome::Allow,
+                PolicyDecisionReason::HubTokenReadAllow,
+                None,
+            );
+        }
+        if input.realm_authority_public_read
+            && input.action == AccessAction::Read
+            && input.safe_read
+        {
             return decision(
                 &input,
                 PolicyDecisionOutcome::Allow,
@@ -258,6 +270,7 @@ mod tests {
             safe_read: true,
             authority_self_read: false,
             authority_self_manage: false,
+            realm_authority_public_read: false,
             device_self_publication_manage: false,
             device_self_session_stream: false,
             interactive_context_available: false,
@@ -361,6 +374,35 @@ mod tests {
         input.safe_read = false;
         input.authority_self_read = true;
         input.authority_self_manage = false;
+
+        let got = PolicyEngine::check(input);
+        assert_eq!(got.decision, PolicyDecisionOutcome::Deny);
+        assert_eq!(got.reason, PolicyDecisionReason::OwnerUnresolved);
+    }
+
+    #[test]
+    fn realm_authority_public_read_allows_descriptor_safe_device_metadata_without_user_owner() {
+        let mut input = base_input();
+        input.owner.owner_user_id = None;
+        input.owner.owner_ura = Some("easynet:///r/test/device/dev".to_string());
+        input.owner.owner_source = OwnerSource::Unresolved;
+        input.realm_authority_public_read = true;
+
+        let got = PolicyEngine::check(input);
+        assert_eq!(got.decision, PolicyDecisionOutcome::Allow);
+        assert_eq!(got.reason, PolicyDecisionReason::HubTokenReadAllow);
+        assert!(got.owner_user_id.is_none());
+    }
+
+    #[test]
+    fn realm_authority_public_read_does_not_allow_mutation_without_owner() {
+        let mut input = base_input();
+        input.owner.owner_user_id = None;
+        input.owner.owner_ura = Some("easynet:///r/test/device/dev".to_string());
+        input.owner.owner_source = OwnerSource::Unresolved;
+        input.realm_authority_public_read = true;
+        input.action = AccessAction::Invoke;
+        input.safe_read = false;
 
         let got = PolicyEngine::check(input);
         assert_eq!(got.decision, PolicyDecisionOutcome::Deny);
