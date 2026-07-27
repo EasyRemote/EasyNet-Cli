@@ -1430,6 +1430,18 @@ def _bidi_control(payload: object) -> Any:
 
 def _bidi_down_json(frame: Any) -> bytes:
     payload = frame.WhichOneof("payload")
+    if payload in {"dispatch_call", "reverse_dispatch_result"}:
+        raise _direct_error(
+            "runtime bidi callback frame is unsupported by the direct invocation capability",
+            code=ErrorCode.PROTOCOL,
+            retry=RetryHint.NEVER,
+        )
+    if payload is None:
+        raise _direct_error(
+            "runtime bidi frame did not include a payload",
+            code=ErrorCode.PROTOCOL,
+            retry=RetryHint.NEVER,
+        )
     sequence = int(frame.sequence) + 1
     event: dict[str, object] = {
         "sequence": sequence,
@@ -1451,13 +1463,6 @@ def _bidi_down_json(frame: Any) -> bytes:
             event["error"] = _axon_failure(frame.receipt.failure, "direct_runtime.bidi")
     elif payload == "control":
         event["payload_json"] = _bidi_control_json(frame.control)
-    elif payload in {"dispatch_call", "reverse_dispatch_result"}:
-        event["error"] = {
-            "code": ErrorCode.PROTOCOL_MISMATCH.value,
-            "stage": "direct_runtime.bidi",
-            "message": "carrier-v1 dispatch frame before SDK dual-read support",
-            "retryable": False,
-        }
     else:
         raise _direct_error(
             "runtime bidi frame did not include a payload",
@@ -1476,9 +1481,11 @@ def _bidi_down_kind(frame: Any, payload: str | None) -> str:
         return "control"
     if payload == "receipt":
         return "terminal" if _bidi_receipt_terminal(frame.receipt) else "receipt"
-    if payload in {"dispatch_call", "reverse_dispatch_result"}:
-        return "unsupported_frame"
-    return "unknown"
+    raise _direct_error(
+        "runtime bidi frame did not include a payload",
+        code=ErrorCode.PROTOCOL,
+        retry=RetryHint.NEVER,
+    )
 
 
 def _bidi_down_terminal(frame: Any) -> bool:

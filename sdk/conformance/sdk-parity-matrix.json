@@ -175961,6 +175961,10 @@
           "sha256": "49df82dfb080b284335937e444b7260de1734410ec137cfc455f0519b77508c7"
         },
         {
+          "item": "ReceiptReadCallContextRequest",
+          "sha256": "6ab6f04fe0ebb1eaad17d279da2059753d3da14270f3ab7b99b14d1d6428f4fb"
+        },
+        {
           "item": "ReceiptReference",
           "sha256": "867760998298c5f8a4ddbb8d253fff2f7bd371cc817531c5b81516579c0e3c69"
         },
@@ -176121,6 +176125,30 @@
           "sha256": "95a5b8966d26f7dbddffad4370185a3457c729e5484387eb0ae0ca630861e22e"
         },
         {
+          "item": "ReceiptReadCallContextRequest.Authority",
+          "sha256": "82b650c6b4ecbc35ff7c9de1cf67bf602f5ca5fa212c098594a86a4a254514ef"
+        },
+        {
+          "item": "ReceiptReadCallContextRequest.CalleeURA",
+          "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+        },
+        {
+          "item": "ReceiptReadCallContextRequest.CallerURA",
+          "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+        },
+        {
+          "item": "ReceiptReadCallContextRequest.CausalContext",
+          "sha256": "26c0c2adc8ab309ae43ec9e419697304d0c5bc6def3858cf3b609bef3562b415"
+        },
+        {
+          "item": "ReceiptReadCallContextRequest.Metadata",
+          "sha256": "26c0c2adc8ab309ae43ec9e419697304d0c5bc6def3858cf3b609bef3562b415"
+        },
+        {
+          "item": "ReceiptReadCallContextRequest.NonceBase64",
+          "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+        },
+        {
           "item": "ReceiptReference.CausalContext",
           "sha256": "aeacd81d51dbad86a3feeaf53cd8d972b6a5d1a859ea156cce7e1af62d8b40d1"
         },
@@ -176250,6 +176278,10 @@
             {
               "item": "ReceiptProvider",
               "sha256": "49df82dfb080b284335937e444b7260de1734410ec137cfc455f0519b77508c7"
+            },
+            {
+              "item": "ReceiptReadCallContextRequest",
+              "sha256": "6ab6f04fe0ebb1eaad17d279da2059753d3da14270f3ab7b99b14d1d6428f4fb"
             },
             {
               "item": "ReceiptReference",
@@ -176410,6 +176442,30 @@
             {
               "item": "ReceiptProvider.Trace",
               "sha256": "95a5b8966d26f7dbddffad4370185a3457c729e5484387eb0ae0ca630861e22e"
+            },
+            {
+              "item": "ReceiptReadCallContextRequest.Authority",
+              "sha256": "82b650c6b4ecbc35ff7c9de1cf67bf602f5ca5fa212c098594a86a4a254514ef"
+            },
+            {
+              "item": "ReceiptReadCallContextRequest.CalleeURA",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "ReceiptReadCallContextRequest.CallerURA",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "ReceiptReadCallContextRequest.CausalContext",
+              "sha256": "26c0c2adc8ab309ae43ec9e419697304d0c5bc6def3858cf3b609bef3562b415"
+            },
+            {
+              "item": "ReceiptReadCallContextRequest.Metadata",
+              "sha256": "26c0c2adc8ab309ae43ec9e419697304d0c5bc6def3858cf3b609bef3562b415"
+            },
+            {
+              "item": "ReceiptReadCallContextRequest.NonceBase64",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "ReceiptReference.CausalContext",
@@ -176543,6 +176599,10 @@
               "sha256": "49df82dfb080b284335937e444b7260de1734410ec137cfc455f0519b77508c7"
             },
             {
+              "item": "ReceiptReadCallContextRequest",
+              "sha256": "6ab6f04fe0ebb1eaad17d279da2059753d3da14270f3ab7b99b14d1d6428f4fb"
+            },
+            {
               "item": "ReceiptReference",
               "sha256": "867760998298c5f8a4ddbb8d253fff2f7bd371cc817531c5b81516579c0e3c69"
             },
@@ -176701,6 +176761,30 @@
             {
               "item": "ReceiptProvider.Trace",
               "sha256": "95a5b8966d26f7dbddffad4370185a3457c729e5484387eb0ae0ca630861e22e"
+            },
+            {
+              "item": "ReceiptReadCallContextRequest.Authority",
+              "sha256": "82b650c6b4ecbc35ff7c9de1cf67bf602f5ca5fa212c098594a86a4a254514ef"
+            },
+            {
+              "item": "ReceiptReadCallContextRequest.CalleeURA",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "ReceiptReadCallContextRequest.CallerURA",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "ReceiptReadCallContextRequest.CausalContext",
+              "sha256": "26c0c2adc8ab309ae43ec9e419697304d0c5bc6def3858cf3b609bef3562b415"
+            },
+            {
+              "item": "ReceiptReadCallContextRequest.Metadata",
+              "sha256": "26c0c2adc8ab309ae43ec9e419697304d0c5bc6def3858cf3b609bef3562b415"
+            },
+            {
+              "item": "ReceiptReadCallContextRequest.NonceBase64",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "ReceiptReference.CausalContext",
@@ -176834,6 +176918,10 @@
               "sha256": "49df82dfb080b284335937e444b7260de1734410ec137cfc455f0519b77508c7"
             },
             {
+              "item": "ReceiptReadCallContextRequest",
+              "sha256": "6ab6f04fe0ebb1eaad17d279da2059753d3da14270f3ab7b99b14d1d6428f4fb"
+            },
+            {
               "item": "ReceiptReference",
               "sha256": "867760998298c5f8a4ddbb8d253fff2f7bd371cc817531c5b81516579c0e3c69"
             },
@@ -176992,6 +177080,30 @@
             {
               "item": "ReceiptProvider.Trace",
               "sha256": "95a5b8966d26f7dbddffad4370185a3457c729e5484387eb0ae0ca630861e22e"
+            },
+            {
+              "item": "ReceiptReadCallContextRequest.Authority",
+              "sha256": "82b650c6b4ecbc35ff7c9de1cf67bf602f5ca5fa212c098594a86a4a254514ef"
+            },
+            {
+              "item": "ReceiptReadCallContextRequest.CalleeURA",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "ReceiptReadCallContextRequest.CallerURA",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "ReceiptReadCallContextRequest.CausalContext",
+              "sha256": "26c0c2adc8ab309ae43ec9e419697304d0c5bc6def3858cf3b609bef3562b415"
+            },
+            {
+              "item": "ReceiptReadCallContextRequest.Metadata",
+              "sha256": "26c0c2adc8ab309ae43ec9e419697304d0c5bc6def3858cf3b609bef3562b415"
+            },
+            {
+              "item": "ReceiptReadCallContextRequest.NonceBase64",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "ReceiptReference.CausalContext",
@@ -177125,6 +177237,10 @@
               "sha256": "49df82dfb080b284335937e444b7260de1734410ec137cfc455f0519b77508c7"
             },
             {
+              "item": "ReceiptReadCallContextRequest",
+              "sha256": "6ab6f04fe0ebb1eaad17d279da2059753d3da14270f3ab7b99b14d1d6428f4fb"
+            },
+            {
               "item": "ReceiptReference",
               "sha256": "867760998298c5f8a4ddbb8d253fff2f7bd371cc817531c5b81516579c0e3c69"
             },
@@ -177283,6 +177399,30 @@
             {
               "item": "ReceiptProvider.Trace",
               "sha256": "95a5b8966d26f7dbddffad4370185a3457c729e5484387eb0ae0ca630861e22e"
+            },
+            {
+              "item": "ReceiptReadCallContextRequest.Authority",
+              "sha256": "82b650c6b4ecbc35ff7c9de1cf67bf602f5ca5fa212c098594a86a4a254514ef"
+            },
+            {
+              "item": "ReceiptReadCallContextRequest.CalleeURA",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "ReceiptReadCallContextRequest.CallerURA",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "ReceiptReadCallContextRequest.CausalContext",
+              "sha256": "26c0c2adc8ab309ae43ec9e419697304d0c5bc6def3858cf3b609bef3562b415"
+            },
+            {
+              "item": "ReceiptReadCallContextRequest.Metadata",
+              "sha256": "26c0c2adc8ab309ae43ec9e419697304d0c5bc6def3858cf3b609bef3562b415"
+            },
+            {
+              "item": "ReceiptReadCallContextRequest.NonceBase64",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "ReceiptReference.CausalContext",
@@ -177416,6 +177556,10 @@
               "sha256": "49df82dfb080b284335937e444b7260de1734410ec137cfc455f0519b77508c7"
             },
             {
+              "item": "ReceiptReadCallContextRequest",
+              "sha256": "6ab6f04fe0ebb1eaad17d279da2059753d3da14270f3ab7b99b14d1d6428f4fb"
+            },
+            {
               "item": "ReceiptReference",
               "sha256": "867760998298c5f8a4ddbb8d253fff2f7bd371cc817531c5b81516579c0e3c69"
             },
@@ -177574,6 +177718,30 @@
             {
               "item": "ReceiptProvider.Trace",
               "sha256": "95a5b8966d26f7dbddffad4370185a3457c729e5484387eb0ae0ca630861e22e"
+            },
+            {
+              "item": "ReceiptReadCallContextRequest.Authority",
+              "sha256": "82b650c6b4ecbc35ff7c9de1cf67bf602f5ca5fa212c098594a86a4a254514ef"
+            },
+            {
+              "item": "ReceiptReadCallContextRequest.CalleeURA",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "ReceiptReadCallContextRequest.CallerURA",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "ReceiptReadCallContextRequest.CausalContext",
+              "sha256": "26c0c2adc8ab309ae43ec9e419697304d0c5bc6def3858cf3b609bef3562b415"
+            },
+            {
+              "item": "ReceiptReadCallContextRequest.Metadata",
+              "sha256": "26c0c2adc8ab309ae43ec9e419697304d0c5bc6def3858cf3b609bef3562b415"
+            },
+            {
+              "item": "ReceiptReadCallContextRequest.NonceBase64",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "ReceiptReference.CausalContext",
@@ -177707,6 +177875,10 @@
               "sha256": "49df82dfb080b284335937e444b7260de1734410ec137cfc455f0519b77508c7"
             },
             {
+              "item": "ReceiptReadCallContextRequest",
+              "sha256": "6ab6f04fe0ebb1eaad17d279da2059753d3da14270f3ab7b99b14d1d6428f4fb"
+            },
+            {
               "item": "ReceiptReference",
               "sha256": "867760998298c5f8a4ddbb8d253fff2f7bd371cc817531c5b81516579c0e3c69"
             },
@@ -177865,6 +178037,30 @@
             {
               "item": "ReceiptProvider.Trace",
               "sha256": "95a5b8966d26f7dbddffad4370185a3457c729e5484387eb0ae0ca630861e22e"
+            },
+            {
+              "item": "ReceiptReadCallContextRequest.Authority",
+              "sha256": "82b650c6b4ecbc35ff7c9de1cf67bf602f5ca5fa212c098594a86a4a254514ef"
+            },
+            {
+              "item": "ReceiptReadCallContextRequest.CalleeURA",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "ReceiptReadCallContextRequest.CallerURA",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "ReceiptReadCallContextRequest.CausalContext",
+              "sha256": "26c0c2adc8ab309ae43ec9e419697304d0c5bc6def3858cf3b609bef3562b415"
+            },
+            {
+              "item": "ReceiptReadCallContextRequest.Metadata",
+              "sha256": "26c0c2adc8ab309ae43ec9e419697304d0c5bc6def3858cf3b609bef3562b415"
+            },
+            {
+              "item": "ReceiptReadCallContextRequest.NonceBase64",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "ReceiptReference.CausalContext",
@@ -177998,6 +178194,10 @@
               "sha256": "49df82dfb080b284335937e444b7260de1734410ec137cfc455f0519b77508c7"
             },
             {
+              "item": "ReceiptReadCallContextRequest",
+              "sha256": "6ab6f04fe0ebb1eaad17d279da2059753d3da14270f3ab7b99b14d1d6428f4fb"
+            },
+            {
               "item": "ReceiptReference",
               "sha256": "867760998298c5f8a4ddbb8d253fff2f7bd371cc817531c5b81516579c0e3c69"
             },
@@ -178158,6 +178358,30 @@
               "sha256": "95a5b8966d26f7dbddffad4370185a3457c729e5484387eb0ae0ca630861e22e"
             },
             {
+              "item": "ReceiptReadCallContextRequest.Authority",
+              "sha256": "82b650c6b4ecbc35ff7c9de1cf67bf602f5ca5fa212c098594a86a4a254514ef"
+            },
+            {
+              "item": "ReceiptReadCallContextRequest.CalleeURA",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "ReceiptReadCallContextRequest.CallerURA",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "ReceiptReadCallContextRequest.CausalContext",
+              "sha256": "26c0c2adc8ab309ae43ec9e419697304d0c5bc6def3858cf3b609bef3562b415"
+            },
+            {
+              "item": "ReceiptReadCallContextRequest.Metadata",
+              "sha256": "26c0c2adc8ab309ae43ec9e419697304d0c5bc6def3858cf3b609bef3562b415"
+            },
+            {
+              "item": "ReceiptReadCallContextRequest.NonceBase64",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
               "item": "ReceiptReference.CausalContext",
               "sha256": "aeacd81d51dbad86a3feeaf53cd8d972b6a5d1a859ea156cce7e1af62d8b40d1"
             },
@@ -178276,6 +178500,10 @@
         {
           "item": "RuntimeReceiptProvider",
           "sha256": "d3b0b50faa3e959f7aa7583e3fa9b05e6ba39819e6dc037abfe5eb7874d4a2ca"
+        },
+        {
+          "item": "receipt_read_call_context",
+          "sha256": "55914e286a95e26c2dd9aced97fa4c437dcd45a1f45356a72303c97000a424b0"
         },
         {
           "item": "ReceiptClient.get",
@@ -178525,6 +178753,10 @@
               "sha256": "d3b0b50faa3e959f7aa7583e3fa9b05e6ba39819e6dc037abfe5eb7874d4a2ca"
             },
             {
+              "item": "receipt_read_call_context",
+              "sha256": "55914e286a95e26c2dd9aced97fa4c437dcd45a1f45356a72303c97000a424b0"
+            },
+            {
               "item": "ReceiptClient.get",
               "sha256": "2dc035ead64910d97d4e6fac6977b52840089cc8eb63466fe7350b5907250dc3"
             },
@@ -178770,6 +179002,10 @@
             {
               "item": "RuntimeReceiptProvider",
               "sha256": "d3b0b50faa3e959f7aa7583e3fa9b05e6ba39819e6dc037abfe5eb7874d4a2ca"
+            },
+            {
+              "item": "receipt_read_call_context",
+              "sha256": "55914e286a95e26c2dd9aced97fa4c437dcd45a1f45356a72303c97000a424b0"
             },
             {
               "item": "ReceiptClient.get",
@@ -179019,6 +179255,10 @@
               "sha256": "d3b0b50faa3e959f7aa7583e3fa9b05e6ba39819e6dc037abfe5eb7874d4a2ca"
             },
             {
+              "item": "receipt_read_call_context",
+              "sha256": "55914e286a95e26c2dd9aced97fa4c437dcd45a1f45356a72303c97000a424b0"
+            },
+            {
               "item": "ReceiptClient.get",
               "sha256": "2dc035ead64910d97d4e6fac6977b52840089cc8eb63466fe7350b5907250dc3"
             },
@@ -179264,6 +179504,10 @@
             {
               "item": "RuntimeReceiptProvider",
               "sha256": "d3b0b50faa3e959f7aa7583e3fa9b05e6ba39819e6dc037abfe5eb7874d4a2ca"
+            },
+            {
+              "item": "receipt_read_call_context",
+              "sha256": "55914e286a95e26c2dd9aced97fa4c437dcd45a1f45356a72303c97000a424b0"
             },
             {
               "item": "ReceiptClient.get",
@@ -179513,6 +179757,10 @@
               "sha256": "d3b0b50faa3e959f7aa7583e3fa9b05e6ba39819e6dc037abfe5eb7874d4a2ca"
             },
             {
+              "item": "receipt_read_call_context",
+              "sha256": "55914e286a95e26c2dd9aced97fa4c437dcd45a1f45356a72303c97000a424b0"
+            },
+            {
               "item": "ReceiptClient.get",
               "sha256": "2dc035ead64910d97d4e6fac6977b52840089cc8eb63466fe7350b5907250dc3"
             },
@@ -179760,6 +180008,10 @@
               "sha256": "d3b0b50faa3e959f7aa7583e3fa9b05e6ba39819e6dc037abfe5eb7874d4a2ca"
             },
             {
+              "item": "receipt_read_call_context",
+              "sha256": "55914e286a95e26c2dd9aced97fa4c437dcd45a1f45356a72303c97000a424b0"
+            },
+            {
               "item": "ReceiptClient.get",
               "sha256": "2dc035ead64910d97d4e6fac6977b52840089cc8eb63466fe7350b5907250dc3"
             },
@@ -180005,6 +180257,10 @@
             {
               "item": "RuntimeReceiptProvider",
               "sha256": "d3b0b50faa3e959f7aa7583e3fa9b05e6ba39819e6dc037abfe5eb7874d4a2ca"
+            },
+            {
+              "item": "receipt_read_call_context",
+              "sha256": "55914e286a95e26c2dd9aced97fa4c437dcd45a1f45356a72303c97000a424b0"
             },
             {
               "item": "ReceiptClient.get",
@@ -180237,12 +180493,20 @@
           "sha256": "e47d54ddac44f9d9fba37d7b79219aa416cf6cd0239c00f0cb348503c355f28f"
         },
         {
+          "item": "ReceiptReadCallContextFields",
+          "sha256": "cc22eeb651dd6572b75e6512c5136541a59b7d74093b6b0e0264776467180676"
+        },
+        {
           "item": "RuntimeCallContextFields",
           "sha256": "389eb999694227b66ca26cb0898c290e670b3d62a940735abd8fb84603095422"
         },
         {
           "item": "RuntimeReceiptProvider",
           "sha256": "49b8476e56a1aa74c6e8d931183a3200568ed1252aded876e3f6e71d854a932b"
+        },
+        {
+          "item": "receiptReadCallContext",
+          "sha256": "1b62eb90b2fe9b9bf6dabab8a28c0e01e2855255181354d7aa8dab0895a0844f"
         },
         {
           "item": "ReceiptFilter.abilityURA",
@@ -180381,6 +180645,30 @@
           "sha256": "b3412ad9de22c093df4a7a73f486b504b15035efbfa80fddbe3033e174c8307b"
         },
         {
+          "item": "ReceiptReadCallContextFields.authority",
+          "sha256": "664ae852fe1b57858f5739f7f92b81dee79e2752813ad15e1d9745fa7c94ec46"
+        },
+        {
+          "item": "ReceiptReadCallContextFields.callee_ura",
+          "sha256": "9151892692d93a3be649b4add650bf10467a5d403532d8979dcfc0c90b14f5ae"
+        },
+        {
+          "item": "ReceiptReadCallContextFields.caller_ura",
+          "sha256": "34500a0f6b10e5053b6517ab45502564d77b89d1d449cd6322b1579faa0aad4d"
+        },
+        {
+          "item": "ReceiptReadCallContextFields.causal_context",
+          "sha256": "a292adc7b759cb26eeb079f288fef5b33b985c1e28e411b8f64e869f775e1f6a"
+        },
+        {
+          "item": "ReceiptReadCallContextFields.metadata",
+          "sha256": "beb12eebef827e580e6bc721995f2c981ae685e6e9794f489a5f65a9f096186f"
+        },
+        {
+          "item": "ReceiptReadCallContextFields.nonce_base64",
+          "sha256": "a8548a2f5fdc2762e595b47c08539512b495c04ee407eca12bda0ab581d78622"
+        },
+        {
           "item": "RuntimeCallContextFields.authority",
           "sha256": "a4d67c476516f09a64b8cfc76e07f79228f9a5d5d2a3078aa2aeb25c5161bf43"
         },
@@ -180456,12 +180744,20 @@
               "sha256": "e47d54ddac44f9d9fba37d7b79219aa416cf6cd0239c00f0cb348503c355f28f"
             },
             {
+              "item": "ReceiptReadCallContextFields",
+              "sha256": "cc22eeb651dd6572b75e6512c5136541a59b7d74093b6b0e0264776467180676"
+            },
+            {
               "item": "RuntimeCallContextFields",
               "sha256": "389eb999694227b66ca26cb0898c290e670b3d62a940735abd8fb84603095422"
             },
             {
               "item": "RuntimeReceiptProvider",
               "sha256": "49b8476e56a1aa74c6e8d931183a3200568ed1252aded876e3f6e71d854a932b"
+            },
+            {
+              "item": "receiptReadCallContext",
+              "sha256": "1b62eb90b2fe9b9bf6dabab8a28c0e01e2855255181354d7aa8dab0895a0844f"
             },
             {
               "item": "ReceiptFilter.abilityURA",
@@ -180598,6 +180894,30 @@
             {
               "item": "ReceiptProvider.list",
               "sha256": "b3412ad9de22c093df4a7a73f486b504b15035efbfa80fddbe3033e174c8307b"
+            },
+            {
+              "item": "ReceiptReadCallContextFields.authority",
+              "sha256": "664ae852fe1b57858f5739f7f92b81dee79e2752813ad15e1d9745fa7c94ec46"
+            },
+            {
+              "item": "ReceiptReadCallContextFields.callee_ura",
+              "sha256": "9151892692d93a3be649b4add650bf10467a5d403532d8979dcfc0c90b14f5ae"
+            },
+            {
+              "item": "ReceiptReadCallContextFields.caller_ura",
+              "sha256": "34500a0f6b10e5053b6517ab45502564d77b89d1d449cd6322b1579faa0aad4d"
+            },
+            {
+              "item": "ReceiptReadCallContextFields.causal_context",
+              "sha256": "a292adc7b759cb26eeb079f288fef5b33b985c1e28e411b8f64e869f775e1f6a"
+            },
+            {
+              "item": "ReceiptReadCallContextFields.metadata",
+              "sha256": "beb12eebef827e580e6bc721995f2c981ae685e6e9794f489a5f65a9f096186f"
+            },
+            {
+              "item": "ReceiptReadCallContextFields.nonce_base64",
+              "sha256": "a8548a2f5fdc2762e595b47c08539512b495c04ee407eca12bda0ab581d78622"
             },
             {
               "item": "RuntimeCallContextFields.authority",
@@ -180675,12 +180995,20 @@
               "sha256": "e47d54ddac44f9d9fba37d7b79219aa416cf6cd0239c00f0cb348503c355f28f"
             },
             {
+              "item": "ReceiptReadCallContextFields",
+              "sha256": "cc22eeb651dd6572b75e6512c5136541a59b7d74093b6b0e0264776467180676"
+            },
+            {
               "item": "RuntimeCallContextFields",
               "sha256": "389eb999694227b66ca26cb0898c290e670b3d62a940735abd8fb84603095422"
             },
             {
               "item": "RuntimeReceiptProvider",
               "sha256": "49b8476e56a1aa74c6e8d931183a3200568ed1252aded876e3f6e71d854a932b"
+            },
+            {
+              "item": "receiptReadCallContext",
+              "sha256": "1b62eb90b2fe9b9bf6dabab8a28c0e01e2855255181354d7aa8dab0895a0844f"
             },
             {
               "item": "ReceiptFilter.abilityURA",
@@ -180817,6 +181145,30 @@
             {
               "item": "ReceiptProvider.list",
               "sha256": "b3412ad9de22c093df4a7a73f486b504b15035efbfa80fddbe3033e174c8307b"
+            },
+            {
+              "item": "ReceiptReadCallContextFields.authority",
+              "sha256": "664ae852fe1b57858f5739f7f92b81dee79e2752813ad15e1d9745fa7c94ec46"
+            },
+            {
+              "item": "ReceiptReadCallContextFields.callee_ura",
+              "sha256": "9151892692d93a3be649b4add650bf10467a5d403532d8979dcfc0c90b14f5ae"
+            },
+            {
+              "item": "ReceiptReadCallContextFields.caller_ura",
+              "sha256": "34500a0f6b10e5053b6517ab45502564d77b89d1d449cd6322b1579faa0aad4d"
+            },
+            {
+              "item": "ReceiptReadCallContextFields.causal_context",
+              "sha256": "a292adc7b759cb26eeb079f288fef5b33b985c1e28e411b8f64e869f775e1f6a"
+            },
+            {
+              "item": "ReceiptReadCallContextFields.metadata",
+              "sha256": "beb12eebef827e580e6bc721995f2c981ae685e6e9794f489a5f65a9f096186f"
+            },
+            {
+              "item": "ReceiptReadCallContextFields.nonce_base64",
+              "sha256": "a8548a2f5fdc2762e595b47c08539512b495c04ee407eca12bda0ab581d78622"
             },
             {
               "item": "RuntimeCallContextFields.authority",
@@ -180894,12 +181246,20 @@
               "sha256": "e47d54ddac44f9d9fba37d7b79219aa416cf6cd0239c00f0cb348503c355f28f"
             },
             {
+              "item": "ReceiptReadCallContextFields",
+              "sha256": "cc22eeb651dd6572b75e6512c5136541a59b7d74093b6b0e0264776467180676"
+            },
+            {
               "item": "RuntimeCallContextFields",
               "sha256": "389eb999694227b66ca26cb0898c290e670b3d62a940735abd8fb84603095422"
             },
             {
               "item": "RuntimeReceiptProvider",
               "sha256": "49b8476e56a1aa74c6e8d931183a3200568ed1252aded876e3f6e71d854a932b"
+            },
+            {
+              "item": "receiptReadCallContext",
+              "sha256": "1b62eb90b2fe9b9bf6dabab8a28c0e01e2855255181354d7aa8dab0895a0844f"
             },
             {
               "item": "ReceiptFilter.abilityURA",
@@ -181036,6 +181396,30 @@
             {
               "item": "ReceiptProvider.list",
               "sha256": "b3412ad9de22c093df4a7a73f486b504b15035efbfa80fddbe3033e174c8307b"
+            },
+            {
+              "item": "ReceiptReadCallContextFields.authority",
+              "sha256": "664ae852fe1b57858f5739f7f92b81dee79e2752813ad15e1d9745fa7c94ec46"
+            },
+            {
+              "item": "ReceiptReadCallContextFields.callee_ura",
+              "sha256": "9151892692d93a3be649b4add650bf10467a5d403532d8979dcfc0c90b14f5ae"
+            },
+            {
+              "item": "ReceiptReadCallContextFields.caller_ura",
+              "sha256": "34500a0f6b10e5053b6517ab45502564d77b89d1d449cd6322b1579faa0aad4d"
+            },
+            {
+              "item": "ReceiptReadCallContextFields.causal_context",
+              "sha256": "a292adc7b759cb26eeb079f288fef5b33b985c1e28e411b8f64e869f775e1f6a"
+            },
+            {
+              "item": "ReceiptReadCallContextFields.metadata",
+              "sha256": "beb12eebef827e580e6bc721995f2c981ae685e6e9794f489a5f65a9f096186f"
+            },
+            {
+              "item": "ReceiptReadCallContextFields.nonce_base64",
+              "sha256": "a8548a2f5fdc2762e595b47c08539512b495c04ee407eca12bda0ab581d78622"
             },
             {
               "item": "RuntimeCallContextFields.authority",
@@ -181113,12 +181497,20 @@
               "sha256": "e47d54ddac44f9d9fba37d7b79219aa416cf6cd0239c00f0cb348503c355f28f"
             },
             {
+              "item": "ReceiptReadCallContextFields",
+              "sha256": "cc22eeb651dd6572b75e6512c5136541a59b7d74093b6b0e0264776467180676"
+            },
+            {
               "item": "RuntimeCallContextFields",
               "sha256": "389eb999694227b66ca26cb0898c290e670b3d62a940735abd8fb84603095422"
             },
             {
               "item": "RuntimeReceiptProvider",
               "sha256": "49b8476e56a1aa74c6e8d931183a3200568ed1252aded876e3f6e71d854a932b"
+            },
+            {
+              "item": "receiptReadCallContext",
+              "sha256": "1b62eb90b2fe9b9bf6dabab8a28c0e01e2855255181354d7aa8dab0895a0844f"
             },
             {
               "item": "ReceiptFilter.abilityURA",
@@ -181255,6 +181647,30 @@
             {
               "item": "ReceiptProvider.list",
               "sha256": "b3412ad9de22c093df4a7a73f486b504b15035efbfa80fddbe3033e174c8307b"
+            },
+            {
+              "item": "ReceiptReadCallContextFields.authority",
+              "sha256": "664ae852fe1b57858f5739f7f92b81dee79e2752813ad15e1d9745fa7c94ec46"
+            },
+            {
+              "item": "ReceiptReadCallContextFields.callee_ura",
+              "sha256": "9151892692d93a3be649b4add650bf10467a5d403532d8979dcfc0c90b14f5ae"
+            },
+            {
+              "item": "ReceiptReadCallContextFields.caller_ura",
+              "sha256": "34500a0f6b10e5053b6517ab45502564d77b89d1d449cd6322b1579faa0aad4d"
+            },
+            {
+              "item": "ReceiptReadCallContextFields.causal_context",
+              "sha256": "a292adc7b759cb26eeb079f288fef5b33b985c1e28e411b8f64e869f775e1f6a"
+            },
+            {
+              "item": "ReceiptReadCallContextFields.metadata",
+              "sha256": "beb12eebef827e580e6bc721995f2c981ae685e6e9794f489a5f65a9f096186f"
+            },
+            {
+              "item": "ReceiptReadCallContextFields.nonce_base64",
+              "sha256": "a8548a2f5fdc2762e595b47c08539512b495c04ee407eca12bda0ab581d78622"
             },
             {
               "item": "RuntimeCallContextFields.authority",
@@ -181332,12 +181748,20 @@
               "sha256": "e47d54ddac44f9d9fba37d7b79219aa416cf6cd0239c00f0cb348503c355f28f"
             },
             {
+              "item": "ReceiptReadCallContextFields",
+              "sha256": "cc22eeb651dd6572b75e6512c5136541a59b7d74093b6b0e0264776467180676"
+            },
+            {
               "item": "RuntimeCallContextFields",
               "sha256": "389eb999694227b66ca26cb0898c290e670b3d62a940735abd8fb84603095422"
             },
             {
               "item": "RuntimeReceiptProvider",
               "sha256": "49b8476e56a1aa74c6e8d931183a3200568ed1252aded876e3f6e71d854a932b"
+            },
+            {
+              "item": "receiptReadCallContext",
+              "sha256": "1b62eb90b2fe9b9bf6dabab8a28c0e01e2855255181354d7aa8dab0895a0844f"
             },
             {
               "item": "ReceiptFilter.abilityURA",
@@ -181474,6 +181898,30 @@
             {
               "item": "ReceiptProvider.list",
               "sha256": "b3412ad9de22c093df4a7a73f486b504b15035efbfa80fddbe3033e174c8307b"
+            },
+            {
+              "item": "ReceiptReadCallContextFields.authority",
+              "sha256": "664ae852fe1b57858f5739f7f92b81dee79e2752813ad15e1d9745fa7c94ec46"
+            },
+            {
+              "item": "ReceiptReadCallContextFields.callee_ura",
+              "sha256": "9151892692d93a3be649b4add650bf10467a5d403532d8979dcfc0c90b14f5ae"
+            },
+            {
+              "item": "ReceiptReadCallContextFields.caller_ura",
+              "sha256": "34500a0f6b10e5053b6517ab45502564d77b89d1d449cd6322b1579faa0aad4d"
+            },
+            {
+              "item": "ReceiptReadCallContextFields.causal_context",
+              "sha256": "a292adc7b759cb26eeb079f288fef5b33b985c1e28e411b8f64e869f775e1f6a"
+            },
+            {
+              "item": "ReceiptReadCallContextFields.metadata",
+              "sha256": "beb12eebef827e580e6bc721995f2c981ae685e6e9794f489a5f65a9f096186f"
+            },
+            {
+              "item": "ReceiptReadCallContextFields.nonce_base64",
+              "sha256": "a8548a2f5fdc2762e595b47c08539512b495c04ee407eca12bda0ab581d78622"
             },
             {
               "item": "RuntimeCallContextFields.authority",
@@ -181551,12 +181999,20 @@
               "sha256": "e47d54ddac44f9d9fba37d7b79219aa416cf6cd0239c00f0cb348503c355f28f"
             },
             {
+              "item": "ReceiptReadCallContextFields",
+              "sha256": "cc22eeb651dd6572b75e6512c5136541a59b7d74093b6b0e0264776467180676"
+            },
+            {
               "item": "RuntimeCallContextFields",
               "sha256": "389eb999694227b66ca26cb0898c290e670b3d62a940735abd8fb84603095422"
             },
             {
               "item": "RuntimeReceiptProvider",
               "sha256": "49b8476e56a1aa74c6e8d931183a3200568ed1252aded876e3f6e71d854a932b"
+            },
+            {
+              "item": "receiptReadCallContext",
+              "sha256": "1b62eb90b2fe9b9bf6dabab8a28c0e01e2855255181354d7aa8dab0895a0844f"
             },
             {
               "item": "ReceiptFilter.abilityURA",
@@ -181693,6 +182149,30 @@
             {
               "item": "ReceiptProvider.list",
               "sha256": "b3412ad9de22c093df4a7a73f486b504b15035efbfa80fddbe3033e174c8307b"
+            },
+            {
+              "item": "ReceiptReadCallContextFields.authority",
+              "sha256": "664ae852fe1b57858f5739f7f92b81dee79e2752813ad15e1d9745fa7c94ec46"
+            },
+            {
+              "item": "ReceiptReadCallContextFields.callee_ura",
+              "sha256": "9151892692d93a3be649b4add650bf10467a5d403532d8979dcfc0c90b14f5ae"
+            },
+            {
+              "item": "ReceiptReadCallContextFields.caller_ura",
+              "sha256": "34500a0f6b10e5053b6517ab45502564d77b89d1d449cd6322b1579faa0aad4d"
+            },
+            {
+              "item": "ReceiptReadCallContextFields.causal_context",
+              "sha256": "a292adc7b759cb26eeb079f288fef5b33b985c1e28e411b8f64e869f775e1f6a"
+            },
+            {
+              "item": "ReceiptReadCallContextFields.metadata",
+              "sha256": "beb12eebef827e580e6bc721995f2c981ae685e6e9794f489a5f65a9f096186f"
+            },
+            {
+              "item": "ReceiptReadCallContextFields.nonce_base64",
+              "sha256": "a8548a2f5fdc2762e595b47c08539512b495c04ee407eca12bda0ab581d78622"
             },
             {
               "item": "RuntimeCallContextFields.authority",
@@ -181770,12 +182250,20 @@
               "sha256": "e47d54ddac44f9d9fba37d7b79219aa416cf6cd0239c00f0cb348503c355f28f"
             },
             {
+              "item": "ReceiptReadCallContextFields",
+              "sha256": "cc22eeb651dd6572b75e6512c5136541a59b7d74093b6b0e0264776467180676"
+            },
+            {
               "item": "RuntimeCallContextFields",
               "sha256": "389eb999694227b66ca26cb0898c290e670b3d62a940735abd8fb84603095422"
             },
             {
               "item": "RuntimeReceiptProvider",
               "sha256": "49b8476e56a1aa74c6e8d931183a3200568ed1252aded876e3f6e71d854a932b"
+            },
+            {
+              "item": "receiptReadCallContext",
+              "sha256": "1b62eb90b2fe9b9bf6dabab8a28c0e01e2855255181354d7aa8dab0895a0844f"
             },
             {
               "item": "ReceiptFilter.abilityURA",
@@ -181912,6 +182400,30 @@
             {
               "item": "ReceiptProvider.list",
               "sha256": "b3412ad9de22c093df4a7a73f486b504b15035efbfa80fddbe3033e174c8307b"
+            },
+            {
+              "item": "ReceiptReadCallContextFields.authority",
+              "sha256": "664ae852fe1b57858f5739f7f92b81dee79e2752813ad15e1d9745fa7c94ec46"
+            },
+            {
+              "item": "ReceiptReadCallContextFields.callee_ura",
+              "sha256": "9151892692d93a3be649b4add650bf10467a5d403532d8979dcfc0c90b14f5ae"
+            },
+            {
+              "item": "ReceiptReadCallContextFields.caller_ura",
+              "sha256": "34500a0f6b10e5053b6517ab45502564d77b89d1d449cd6322b1579faa0aad4d"
+            },
+            {
+              "item": "ReceiptReadCallContextFields.causal_context",
+              "sha256": "a292adc7b759cb26eeb079f288fef5b33b985c1e28e411b8f64e869f775e1f6a"
+            },
+            {
+              "item": "ReceiptReadCallContextFields.metadata",
+              "sha256": "beb12eebef827e580e6bc721995f2c981ae685e6e9794f489a5f65a9f096186f"
+            },
+            {
+              "item": "ReceiptReadCallContextFields.nonce_base64",
+              "sha256": "a8548a2f5fdc2762e595b47c08539512b495c04ee407eca12bda0ab581d78622"
             },
             {
               "item": "RuntimeCallContextFields.authority",
@@ -237519,6 +238031,10 @@
           "sha256": "71ea8b44f6015d9291f552b2a5df64589e9f0e0eb9802387570535b35ca8cb55"
         },
         {
+          "item": "NewReceiptReadCallContext",
+          "sha256": "498bc888541d070d2c6253adf04d16d405dac728726879ca2bb9f5d4c9e7af80"
+        },
+        {
           "item": "NewRuntimeReceiptFromJSON",
           "sha256": "c459b44b77e24da75178fa2c614db3176774636d6373d0d6f2476c262782d2d0"
         },
@@ -237896,6 +238412,10 @@
             {
               "item": "ErrTerminalReceiptUnavailable",
               "sha256": "71ea8b44f6015d9291f552b2a5df64589e9f0e0eb9802387570535b35ca8cb55"
+            },
+            {
+              "item": "NewReceiptReadCallContext",
+              "sha256": "498bc888541d070d2c6253adf04d16d405dac728726879ca2bb9f5d4c9e7af80"
             },
             {
               "item": "NewRuntimeReceiptFromJSON",
@@ -238277,6 +238797,10 @@
               "sha256": "71ea8b44f6015d9291f552b2a5df64589e9f0e0eb9802387570535b35ca8cb55"
             },
             {
+              "item": "NewReceiptReadCallContext",
+              "sha256": "498bc888541d070d2c6253adf04d16d405dac728726879ca2bb9f5d4c9e7af80"
+            },
+            {
               "item": "NewRuntimeReceiptFromJSON",
               "sha256": "c459b44b77e24da75178fa2c614db3176774636d6373d0d6f2476c262782d2d0"
             },
@@ -238654,6 +239178,10 @@
             {
               "item": "ErrTerminalReceiptUnavailable",
               "sha256": "71ea8b44f6015d9291f552b2a5df64589e9f0e0eb9802387570535b35ca8cb55"
+            },
+            {
+              "item": "NewReceiptReadCallContext",
+              "sha256": "498bc888541d070d2c6253adf04d16d405dac728726879ca2bb9f5d4c9e7af80"
             },
             {
               "item": "NewRuntimeReceiptFromJSON",
@@ -239035,6 +239563,10 @@
               "sha256": "71ea8b44f6015d9291f552b2a5df64589e9f0e0eb9802387570535b35ca8cb55"
             },
             {
+              "item": "NewReceiptReadCallContext",
+              "sha256": "498bc888541d070d2c6253adf04d16d405dac728726879ca2bb9f5d4c9e7af80"
+            },
+            {
               "item": "NewRuntimeReceiptFromJSON",
               "sha256": "c459b44b77e24da75178fa2c614db3176774636d6373d0d6f2476c262782d2d0"
             },
@@ -239414,6 +239946,10 @@
               "sha256": "71ea8b44f6015d9291f552b2a5df64589e9f0e0eb9802387570535b35ca8cb55"
             },
             {
+              "item": "NewReceiptReadCallContext",
+              "sha256": "498bc888541d070d2c6253adf04d16d405dac728726879ca2bb9f5d4c9e7af80"
+            },
+            {
               "item": "NewRuntimeReceiptFromJSON",
               "sha256": "c459b44b77e24da75178fa2c614db3176774636d6373d0d6f2476c262782d2d0"
             },
@@ -239791,6 +240327,10 @@
             {
               "item": "ErrTerminalReceiptUnavailable",
               "sha256": "71ea8b44f6015d9291f552b2a5df64589e9f0e0eb9802387570535b35ca8cb55"
+            },
+            {
+              "item": "NewReceiptReadCallContext",
+              "sha256": "498bc888541d070d2c6253adf04d16d405dac728726879ca2bb9f5d4c9e7af80"
             },
             {
               "item": "NewRuntimeReceiptFromJSON",

@@ -1855,6 +1855,51 @@ class DirectRuntimeTests(unittest.TestCase):
 
         self.assertTrue(is_code(raised.exception, ErrorCode.PROTOCOL))
 
+    def test_bidi_dispatch_call_frame_fails_closed_instead_of_event_projection(
+        self,
+    ) -> None:
+        class DispatchCallServicer(RecordingInvocationServicer):
+            def InvokeBidi(self, request_iterator, context):
+                self.bidi_up_frames.append(next(request_iterator))
+                yield invoke_pb2.InvokeBidiDown(
+                    sequence=0,
+                    receipt=_canonical_receipt(
+                        index=0,
+                        invocation_id="inv-dispatch-call",
+                        receipt_type="admitted",
+                        state=types_pb2.INVOCATION_STATE_ADMITTED,
+                    ),
+                )
+                yield invoke_pb2.InvokeBidiDown(
+                    sequence=1,
+                    dispatch_call=invoke_pb2.DispatchCall(call_id=17),
+                )
+
+        servicer = DispatchCallServicer()
+        streams = b'[{"stream_id":1,"content_type":"application/json"}]'
+        with _fake_daemon(servicer) as endpoint:
+            transport = DirectRuntimeTransport.open(
+                endpoint,
+                dial_timeout_seconds=1,
+                invoke_timeout_seconds=1,
+                identity=_identity(),
+            )
+            try:
+                bidi, _ = transport.open_bidi(
+                    _signed_draft().to_json().encode("utf-8"),
+                    streams,
+                )
+                with self.assertRaises(SDKError) as raised:
+                    bidi.recv(timeout=1)
+            finally:
+                transport.close()
+
+        self.assertTrue(is_code(raised.exception, ErrorCode.PROTOCOL))
+        self.assertIn(
+            "runtime bidi callback frame is unsupported",
+            str(raised.exception),
+        )
+
     def test_direct_runtime_stream_provider_json_uses_terminal_receipt(self) -> None:
         servicer = RecordingInvocationServicer()
         with _fake_daemon(servicer) as endpoint:

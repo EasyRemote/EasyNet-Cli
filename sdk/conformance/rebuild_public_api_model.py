@@ -87,7 +87,7 @@ SEMANTIC_RULES: list[tuple[str, str]] = [
         "receipt_verification",
     ),
     (
-        r"(sessionhistory|runtimecallcontext|receiptfilter|receipthistory|receiptlist|receiptget|receiptquery|receiptanchor|receiptref|tracegraph|traceedge|ledgerrecord|invocationindex|persistentlog|causallink)",
+        r"(sessionhistory|runtimecallcontext|receiptreadcallcontext|receiptfilter|receipthistory|receiptlist|receiptget|receiptquery|receiptanchor|receiptref|tracegraph|traceedge|ledgerrecord|invocationindex|persistentlog|causallink)",
         "receipt_history",
     ),
     (

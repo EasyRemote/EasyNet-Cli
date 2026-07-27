@@ -76,6 +76,8 @@ def test_direct_runtime_has_no_subject_rewrite_or_legacy_receipt_projector() -> 
         "def _receipt(",
         "replace(draft",
         'else b""',
+        "carrier-v1",
+        '"unsupported_frame"',
     ):
         assert retired not in source
 
