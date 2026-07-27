@@ -11631,6 +11631,11 @@ if "real_speaker_publish_routes_to_media_stub" in real_tests:
 PY
 }
 
+check_media_screen_target_provider_boundary_contract() {
+  CHECK_MEDIA_SCREEN_TARGET_PROVIDER_BOUNDARY_ROOT="${1:-${CLI_ROOT:-$ROOT}}" \
+    bash "$ROOT/tools/scripts/check-media-screen-target-provider-boundary.sh" >/dev/null
+}
+
 check_kernel_runtime_session_read_model_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local kernel="$cli_root/src/daemon/boot/kernel/mod.rs"
@@ -27934,6 +27939,7 @@ check_daemon_credentials_identity_contract
 check_filesystem_resource_owner_contract
 check_media_resource_subject_projection_contract
 check_media_unsupported_stub_retirement_contract
+check_media_screen_target_provider_boundary_contract
 check_federation_probe_local_identity_contract
 check_ready_capability_proof_contract
 check_daemon_local_runtime_identity_contract

@@ -18,9 +18,10 @@
 //
 // The backend trait keeps stub / synthetic / real switchable per
 // the AXON-RFC-005-device-backend-selection note. The xcap backend
-// resolves display resources by monitor id/index metadata when
-// present, falls back to the primary monitor, and captures
-// window/application resources through xcap window selection.
+// resolves display resources by one explicit selector state: monitor
+// id, monitor discovery index, or unpinned primary selection. Exact
+// selectors never fall back to another display. Window/application
+// resources are captured through xcap window selection.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet.
@@ -140,9 +141,10 @@ pub trait ScreenSnapshotBackend: Send + Sync {
 // ── XcapBackend (real) ───────────────────────────────────────
 
 /// xcap-backed real backend. Display captures select by resource metadata
-/// (`monitor_id` or `monitor_index`) when available and otherwise fall back
-/// to the primary monitor. Window/application captures select an xcap window
-/// by recorded id, pid, title, or application name.
+/// (`monitor_id` or `monitor_index`) when available and otherwise use the
+/// primary monitor only for intentionally unpinned resources. Window/application
+/// captures select an xcap window by recorded id, pid, title, or application
+/// name.
 #[derive(Debug, Default)]
 #[cfg(feature = "native-media")]
 pub struct XcapBackend;
@@ -319,32 +321,71 @@ fn select_monitor(
     monitors: Vec<xcap::Monitor>,
     entry: &ResourceEntry,
 ) -> anyhow::Result<xcap::Monitor> {
-    let expected_id = entry.metadata.get("monitor_id").and_then(|v| v.as_u64());
-    let expected_index = entry.metadata.get("monitor_index").and_then(|v| v.as_u64());
-    let mut fallback_primary = None;
-    for (idx, monitor) in monitors.into_iter().enumerate() {
-        if expected_id.is_some_and(|expected| {
-            monitor
-                .id()
-                .ok()
-                .map(|actual| actual as u64 == expected)
-                .unwrap_or(false)
-        }) {
-            return Ok(monitor);
+    match display_monitor_selector(entry)? {
+        DisplayMonitorSelector::PlatformId(expected_id) => {
+            for monitor in monitors {
+                if monitor
+                    .id()
+                    .ok()
+                    .is_some_and(|actual| actual as u64 == expected_id)
+                {
+                    return Ok(monitor);
+                }
+            }
+            Err(display_monitor_unavailable(
+                "requested monitor_id is no longer available",
+            ))
         }
-        if expected_index.is_some_and(|expected| idx as u64 == expected) {
-            return Ok(monitor);
+        DisplayMonitorSelector::DiscoveryIndex(expected_index) => {
+            for (idx, monitor) in monitors.into_iter().enumerate() {
+                if idx as u64 == expected_index {
+                    return Ok(monitor);
+                }
+            }
+            Err(display_monitor_unavailable(
+                "requested monitor_index is no longer available",
+            ))
         }
-        if fallback_primary.is_none() && monitor.is_primary().unwrap_or(false) {
-            fallback_primary = Some(monitor);
-        }
+        DisplayMonitorSelector::PrimaryUnpinned => monitors
+            .into_iter()
+            .find(|monitor| monitor.is_primary().unwrap_or(false))
+            .ok_or_else(|| display_monitor_unavailable("no primary monitor reported by xcap")),
     }
-    fallback_primary.ok_or_else(|| {
-        anyhow::anyhow!(
-            "{ABILITY_SCREEN_SNAPSHOT}: no matching or primary monitor reported by \
-             xcap; reason={REASON_RESOURCE_UNAVAILABLE}"
-        )
-    })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DisplayMonitorSelector {
+    PlatformId(u64),
+    DiscoveryIndex(u64),
+    PrimaryUnpinned,
+}
+
+fn display_monitor_selector(entry: &ResourceEntry) -> anyhow::Result<DisplayMonitorSelector> {
+    if let Some(value) = entry.metadata.get("monitor_id") {
+        return value
+            .as_u64()
+            .map(DisplayMonitorSelector::PlatformId)
+            .ok_or_else(|| {
+                display_monitor_unavailable(
+                    "display resource monitor_id metadata must be an integer",
+                )
+            });
+    }
+    if let Some(value) = entry.metadata.get("monitor_index") {
+        return value
+            .as_u64()
+            .map(DisplayMonitorSelector::DiscoveryIndex)
+            .ok_or_else(|| {
+                display_monitor_unavailable(
+                    "display resource monitor_index metadata must be an integer",
+                )
+            });
+    }
+    Ok(DisplayMonitorSelector::PrimaryUnpinned)
+}
+
+fn display_monitor_unavailable(detail: &str) -> anyhow::Error {
+    anyhow::anyhow!("{ABILITY_SCREEN_SNAPSHOT}: {detail}; reason={REASON_RESOURCE_UNAVAILABLE}")
 }
 
 #[cfg(feature = "native-media")]
@@ -920,6 +961,14 @@ mod tests {
     };
 
     fn seed_display(file: &mut ResourcesFile, hardware_id: &str) -> String {
+        seed_display_with_metadata(file, hardware_id, json!({}))
+    }
+
+    fn seed_display_with_metadata(
+        file: &mut ResourcesFile,
+        hardware_id: &str,
+        metadata: Value,
+    ) -> String {
         upsert_resource(
             file,
             ResourceUpsert {
@@ -929,7 +978,7 @@ mod tests {
                 binding: ResourceBinding::LocalDevice,
                 hardware_id,
                 display_name: "Test Display",
-                metadata: json!({}),
+                metadata,
             },
         )
         .expect("seed display resource")
@@ -994,6 +1043,64 @@ mod tests {
             &frame.jpeg_bytes[frame.jpeg_bytes.len() - 2..],
             &[0xff, 0xd9]
         ); // EOI
+    }
+
+    #[test]
+    fn display_monitor_selector_prefers_platform_monitor_id() {
+        let mut file = ResourcesFile::default();
+        seed_display_with_metadata(
+            &mut file,
+            "h-display-selector-id",
+            json!({"monitor_id": 42, "monitor_index": 7}),
+        );
+
+        assert_eq!(
+            display_monitor_selector(&file.resources[0]).unwrap(),
+            DisplayMonitorSelector::PlatformId(42),
+            "platform monitor id is the stable selector and must not fall through to index"
+        );
+    }
+
+    #[test]
+    fn display_monitor_selector_uses_index_only_without_monitor_id() {
+        let mut file = ResourcesFile::default();
+        seed_display_with_metadata(
+            &mut file,
+            "h-display-selector-index",
+            json!({"monitor_index": 2}),
+        );
+
+        assert_eq!(
+            display_monitor_selector(&file.resources[0]).unwrap(),
+            DisplayMonitorSelector::DiscoveryIndex(2)
+        );
+    }
+
+    #[test]
+    fn display_monitor_selector_allows_primary_only_for_unpinned_resource() {
+        let mut file = ResourcesFile::default();
+        seed_display(&mut file, "h-display-selector-unpinned");
+
+        assert_eq!(
+            display_monitor_selector(&file.resources[0]).unwrap(),
+            DisplayMonitorSelector::PrimaryUnpinned
+        );
+    }
+
+    #[test]
+    fn display_monitor_selector_rejects_malformed_metadata_instead_of_primary_fallback() {
+        let mut file = ResourcesFile::default();
+        seed_display_with_metadata(
+            &mut file,
+            "h-display-selector-malformed",
+            json!({"monitor_id": "42"}),
+        );
+
+        let error = display_monitor_selector(&file.resources[0])
+            .expect_err("malformed monitor_id must fail before primary fallback");
+        let message = error.to_string();
+        assert!(message.contains("monitor_id metadata must be an integer"));
+        assert!(message.contains(REASON_RESOURCE_UNAVAILABLE));
     }
 
     #[test]
