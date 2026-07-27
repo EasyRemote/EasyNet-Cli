@@ -195,6 +195,47 @@ struct BidiOutputProjection {
     failure: Option<SessionFailure>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct HandlerErrorFrame {
+    code: String,
+    message: String,
+}
+
+impl HandlerErrorFrame {
+    fn parse(value: &Value, frame_label: &'static str) -> Result<Self, SessionDispatchError> {
+        let code = required_handler_error_text(value, "code", frame_label)?;
+        let message = required_handler_error_text(value, "message", frame_label)?;
+        Ok(Self { code, message })
+    }
+
+    fn reason(&self) -> String {
+        format!("{}: {}", self.code, self.message)
+    }
+
+    fn failure(&self) -> SessionFailure {
+        SessionFailure::from_explicit(&self.code, self.reason(), false)
+    }
+}
+
+fn required_handler_error_text(
+    value: &Value,
+    field: &'static str,
+    frame_label: &'static str,
+) -> Result<String, SessionDispatchError> {
+    let Some(raw) = value.get(field).and_then(Value::as_str) else {
+        return Err(SessionDispatchError::Other(format!(
+            "{frame_label} requires non-empty `{field}`"
+        )));
+    };
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(SessionDispatchError::Other(format!(
+            "{frame_label} requires non-empty `{field}`"
+        )));
+    }
+    Ok(trimmed.to_string())
+}
+
 fn carrier_v1_control_failure(
     call_id: u64,
     code: &'static str,
@@ -665,21 +706,6 @@ impl LocalAxonSessionDispatcher {
         });
     }
 
-    fn session_failure(reason: &str) -> SessionFailure {
-        SessionFailure::from_reason(reason, "INVOCATION_FAILED", false)
-    }
-
-    fn session_failure_from_handler_code(
-        explicit_code: Option<&str>,
-        reason: &str,
-    ) -> SessionFailure {
-        explicit_code
-            .map(str::trim)
-            .filter(|code| !code.is_empty())
-            .map(|code| SessionFailure::from_explicit(code, reason, false))
-            .unwrap_or_else(|| Self::session_failure(reason))
-    }
-
     fn is_json_frame_bidi(&self, ability: &str) -> bool {
         Self::is_json_frame_bidi_with(&self.ability_wire, ability)
     }
@@ -915,17 +941,7 @@ impl LocalAxonSessionDispatcher {
                 }))
             }
             Some("error") => {
-                let code = value.get("code").and_then(Value::as_str);
-                let reason = match (code, value.get("message").and_then(Value::as_str)) {
-                    (Some(code), Some(message))
-                        if !code.trim().is_empty() && !message.trim().is_empty() =>
-                    {
-                        format!("{code}: {message}")
-                    }
-                    (_, Some(message)) if !message.trim().is_empty() => message.to_string(),
-                    (Some(code), _) if !code.trim().is_empty() => code.to_string(),
-                    _ => "file_transfer handler returned error".to_string(),
-                };
+                let error = HandlerErrorFrame::parse(value, "file_transfer error frame")?;
                 let payload = serde_json::to_vec(value).map_err(|err| {
                     SessionDispatchError::Other(format!(
                         "encode file_transfer error payload: {err}"
@@ -934,7 +950,7 @@ impl LocalAxonSessionDispatcher {
                 Ok(Some(BidiOutputProjection {
                     call_id,
                     payload,
-                    failure: Some(Self::session_failure_from_handler_code(code, &reason)),
+                    failure: Some(error.failure()),
                 }))
             }
             Some("warn") => Ok(None),
@@ -1001,9 +1017,7 @@ impl LocalAxonSessionDispatcher {
                 SessionDispatchError::Other(format!("plugin JSON-frame bidi encode failed: {err}"))
             })?;
             let failure = if frame_type == Some("error") {
-                let reason = json_frame_error_reason(value);
-                let code = value.get("code").and_then(Value::as_str);
-                Some(Self::session_failure_from_handler_code(code, &reason))
+                Some(HandlerErrorFrame::parse(value, "JSON-frame bidi error frame")?.failure())
             } else {
                 None
             };
@@ -1639,20 +1653,6 @@ impl LocalAxonSessionDispatcher {
     }
 }
 
-fn json_frame_error_reason(value: &Value) -> String {
-    match (
-        value.get("code").and_then(Value::as_str),
-        value.get("message").and_then(Value::as_str),
-    ) {
-        (Some(code), Some(message)) if !code.trim().is_empty() && !message.trim().is_empty() => {
-            format!("{code}: {message}")
-        }
-        (_, Some(message)) if !message.trim().is_empty() => message.to_string(),
-        (Some(code), _) if !code.trim().is_empty() => code.to_string(),
-        _ => "JSON-frame bidi handler returned error".to_string(),
-    }
-}
-
 impl Default for LocalAxonSessionDispatcher {
     fn default() -> Self {
         Self::new()
@@ -1807,6 +1807,60 @@ mod tests {
             result.failure.as_ref().map(|failure| failure.code.as_str()),
             Some("STREAM_OPEN_FAILED")
         );
+    }
+
+    #[test]
+    fn handler_error_frame_requires_code_and_message_before_failure_projection() {
+        for (payload, expected) in [
+            (
+                json!({"type": "error", "message": "permission denied"}),
+                "`code`",
+            ),
+            (
+                json!({"type": "error", "code": "permission_denied"}),
+                "`message`",
+            ),
+            (
+                json!({"type": "error", "code": " ", "message": "permission denied"}),
+                "`code`",
+            ),
+            (
+                json!({"type": "error", "code": "permission_denied", "message": " "}),
+                "`message`",
+            ),
+        ] {
+            let error = HandlerErrorFrame::parse(&payload, "JSON-frame bidi error frame")
+                .expect_err("incomplete handler error frames must fail closed");
+            match error {
+                SessionDispatchError::Other(message) => {
+                    assert!(
+                        message.contains("JSON-frame bidi error frame requires non-empty")
+                            && message.contains(expected),
+                        "schema failure must name the missing error fact; got: {message}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn file_transfer_error_frame_rejects_missing_message_before_failure_projection() {
+        let error = LocalAxonSessionDispatcher::map_remote_file_transfer_output(
+            7,
+            &json!({
+                "type": "error",
+                "code": "disk_full",
+            }),
+        )
+        .expect_err("file_transfer error frames must carry typed failure facts");
+        match error {
+            SessionDispatchError::Other(message) => {
+                assert!(
+                    message.contains("file_transfer error frame requires non-empty `message`"),
+                    "schema failure must reject missing message before projection; got: {message}"
+                );
+            }
+        }
     }
 
     // Descriptor proof a test ability must carry so Axon's receipt-proof

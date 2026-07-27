@@ -7308,6 +7308,38 @@ if local_session_dispatcher.exists():
     ):
         if token in text:
             add("R64_SESSION_CANONICAL_CARRIER_FORK", local_session_dispatcher, 1, detail)
+    for token, detail in (
+        (
+            "fn json_frame_error_reason",
+            "JSON-frame bidi error projection must not derive default failure reasons from incomplete handler frames",
+        ),
+        (
+            "file_transfer handler returned error",
+            "file_transfer error projection must require explicit handler code/message facts",
+        ),
+        (
+            "JSON-frame bidi handler returned error",
+            "JSON-frame bidi error projection must require explicit handler code/message facts",
+        ),
+    ):
+        if token in text:
+            add("R64_SESSION_CANONICAL_CARRIER_FORK", local_session_dispatcher, 1, detail)
+    for token, detail in (
+        (
+            "struct HandlerErrorFrame",
+            "local session dispatcher must centralize handler error-frame schema validation",
+        ),
+        (
+            "handler_error_frame_requires_code_and_message_before_failure_projection",
+            "local session dispatcher tests must prove incomplete handler error frames fail closed",
+        ),
+        (
+            "file_transfer_error_frame_rejects_missing_message_before_failure_projection",
+            "file_transfer error-frame tests must prove missing message is not projected as default terminal failure",
+        ),
+    ):
+        if token not in text:
+            add("R64_SESSION_CANONICAL_CARRIER_FORK", local_session_dispatcher, 1, detail)
 
     control_failure = rust_method_body(text, "carrier_v1_control_failure")
     if control_failure is None:

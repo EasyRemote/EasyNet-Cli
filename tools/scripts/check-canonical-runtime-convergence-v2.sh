@@ -762,6 +762,39 @@ for needle, label in required.items():
 PY
 }
 
+check_local_session_handler_error_frame_contract() {
+  local cli_root="${1:-$ROOT}"
+  local dispatcher="$cli_root/src/daemon/invocation/dispatch/local_session_dispatcher.rs"
+  [[ -f "$dispatcher" ]] || fail "local session dispatcher source is missing: ${dispatcher#$cli_root/}"
+
+  "$PYTHON_BIN" - "$dispatcher" <<'PY'
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+
+for retired, code in (
+    ("fn json_frame_error_reason", "json_frame_error_reason_helper_present"),
+    ("file_transfer handler returned error", "file_transfer_default_error_message_present"),
+    ("JSON-frame bidi handler returned error", "json_frame_default_error_message_present"),
+):
+    if retired in text:
+        raise SystemExit(f"local_session_handler_error_frame:{code}")
+
+required = {
+    "struct HandlerErrorFrame": "handler_error_frame_value_object_missing",
+    "fn parse(value: &Value, frame_label: &'static str) -> Result<Self, SessionDispatchError>": "handler_error_parse_missing",
+    "required_handler_error_text(value, \"code\", frame_label)?": "code_required_before_projection",
+    "required_handler_error_text(value, \"message\", frame_label)?": "message_required_before_projection",
+    "handler_error_frame_requires_code_and_message_before_failure_projection": "missing_code_message_regression_missing",
+    "file_transfer_error_frame_rejects_missing_message_before_failure_projection": "file_transfer_missing_message_regression_missing",
+}
+for fragment, code in required.items():
+    if fragment not in text:
+        raise SystemExit(f"local_session_handler_error_frame:{code}")
+PY
+}
+
 check_manifest_contract() {
   "$PYTHON_BIN" - \
     "$MANIFEST" \
@@ -27114,6 +27147,7 @@ EOF
   check_terminal_lifecycle_args_contract
   check_terminal_canonical_vocabulary_contract
   check_session_failure_wire_facts_contract
+  check_local_session_handler_error_frame_contract
   check_catalog_schema_projection_boundary_contract
   check_catalog_description_projection_boundary_contract
   check_control_plane_manifest_materialization_boundary_contract
@@ -27386,6 +27420,7 @@ check_ffi_unknown_invocation_resource_terminality_contract
 check_terminal_lifecycle_args_contract
 check_terminal_canonical_vocabulary_contract
 check_session_failure_wire_facts_contract
+check_local_session_handler_error_frame_contract
 check_active_source_contract
 check_sdk_root_runtime_description_contract
 check_sdk_doc_product_vocabulary_contract

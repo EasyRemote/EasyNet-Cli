@@ -184,3 +184,20 @@ Boundary: a handle may still make repeated local detach calls idempotent after a
 successful provider detach. `RuntimeTransportFunc.Close` remains an optional
 resource cleanup no-op because it is not the runtime-host lifecycle detach
 authority. No product-specific daemon or EasyNet vocabulary is added to the SDK.
+
+## Session handler error-frame fact cutover
+
+Decision: remote session handler error frames must deserialize through a shared
+`HandlerErrorFrame` value object requiring non-empty `code` and `message` before
+the daemon projects a `SessionFailure`.
+
+Reason: file-transfer and JSON-frame bidi handlers previously accepted partial
+error frames and filled missing failure facts from default strings. That made a
+malformed handler protocol frame indistinguishable from an authored product
+failure and weakened the terminal failure fact model that receipt/session
+projections rely on.
+
+Boundary: complete handler error frames still project to typed data until the
+runtime terminal receipt closes the invocation lifecycle. Incomplete handler
+error frames now fail the dispatch mapping as protocol/schema violations; the
+daemon does not synthesize business failure codes or messages for them.

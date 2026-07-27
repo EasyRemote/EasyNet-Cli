@@ -29,3 +29,8 @@
   not a successful no-op. Idempotent local detach state belongs on the handle
   after a real provider detach succeeds; missing lifecycle authority must fail
   closed.
+- Remote session handler error frames are schema-bearing terminal failure inputs.
+  They must carry explicit non-empty `code` and `message` facts before the daemon
+  projects them into `SessionFailure`. Missing handler error facts are dispatch
+  protocol violations, not product failures with synthesized default codes or
+  messages.

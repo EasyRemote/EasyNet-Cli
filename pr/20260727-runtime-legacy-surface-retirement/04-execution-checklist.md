@@ -111,3 +111,11 @@
 - [x] Replace the nil detach-provider no-op with the same neutral invalid-runtime-client diagnostic pattern used by the other lifecycle provider functions.
 - [x] Add regression coverage for direct adapter detach and `ConnectLocalRuntimeHost` after-open detach failure.
 - [x] Update convergence gates so Go SDK lifecycle neutrality includes the required detach provider diagnostic.
+
+## Iteration 14 — Session handler error-frame fact cutover
+
+- [x] Re-run codegraph and targeted session/remote-bidi search for legacy/default terminal failure projections.
+- [x] Identify local session dispatcher handler error frames as allowing missing `code` or `message` to become synthesized terminal failure facts.
+- [x] Introduce a shared `HandlerErrorFrame` value object that requires non-empty `code` and `message` before failure projection.
+- [x] Reuse the value object for file-transfer and JSON-frame bidi output mapping.
+- [x] Add regression coverage for incomplete handler error frames and update convergence gates to reject default error projection helpers.
