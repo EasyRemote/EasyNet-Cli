@@ -67,6 +67,10 @@ printf '\n// `easynet.track` polls a long run.\n' >>"$SB/src/daemon/ability/buil
 assert_fails_with "mission-vocabulary-regression" "mission ability surface must use mission.run/mission.track/mission.cancel vocabulary"
 
 write_happy_fixture
+printf '\n// mission.run is a thin shim over a legacy-carrier fallback path.\n' >>"$SB/src/daemon/ability/builtins/automation/mission.rs"
+assert_fails_with "mission-ingress-boundary-regression" "mission ability ingress must not describe canonical mission abilities as legacy, compat, shim, or fallback paths"
+
+write_happy_fixture
 printf '\n// EAL orchestration. easynet.run / mission.run compile programs.\n' >>"$SB/src/daemon/ability/catalog/catalog_metadata.rs"
 assert_fails_with "catalog-vocabulary-regression" "catalog metadata must classify mission abilities by canonical mission.* names"
 

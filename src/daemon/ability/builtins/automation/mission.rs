@@ -22,14 +22,14 @@
 // mission runtime; there is no second path." For that promise to
 // hold from the LLM's seat, the mission runtime must be reachable
 // AS A TOOL — i.e. an ability the MCP catalog exposes. Without
-// this handler, the LLM had to either fall back to direct
-// `mcp.bridge.call_tool` (which loses EAL composition) or hop to
+// this handler, the LLM had to choose a separate direct
+// `mcp.bridge.call_tool` path (which loses EAL composition) or hop to
 // `easynet mission run` via shell (depends on the agent having
 // shell access AND breaks isolation).
 //
 // Implementation note
 // -------------------
-// The handler is a thin shim over the daemon-owned mission application
+// The handler is a thin adapter over the daemon-owned mission application
 // service.
 // All error mapping, persistence, and dispatch invariants live in
 // that single entry point — this file just adapts the JSON-shaped
@@ -114,7 +114,7 @@ pub fn register(reg: &mut AxonAbilityCatalog) {
 ///
 /// Error semantics:
 ///   * Compile failure (EAL parse / planner reject)        → Err
-///   * Implicit-agent-fallback collision                    → Err
+///   * Traditional target ambiguity                         → Err
 ///   * Step dispatch failure inside the mission             → Err
 ///     (MissionRunner bubbles the typed step
 ///     error verbatim)
@@ -389,7 +389,7 @@ mod tests {
             test_envelope(),
             json!({
                 "source": "let r = agent.echo()",
-                "action": "legacy-carrier"
+                "action": "retired-field"
             }),
         )
         .unwrap_err();
@@ -453,7 +453,7 @@ mod tests {
     fn track_rejects_unknown_argument() {
         let err = track_handler(json!({
             "run_id": "run-1",
-            "action": "legacy-carrier"
+            "action": "retired-field"
         }))
         .unwrap_err();
         assert!(err.to_string().contains("unknown argument `action`"));
@@ -497,7 +497,7 @@ mod tests {
     fn cancel_rejects_unknown_argument() {
         let err = cancel_handler(json!({
             "run_id": "run-1",
-            "action": "legacy-carrier"
+            "action": "retired-field"
         }))
         .unwrap_err();
         assert!(err.to_string().contains("unknown argument `action`"));

@@ -22,6 +22,10 @@ if rg -n 'easynet\.(run|track|cancel|invoke)' "$MISSION"; then
   fail "mission ability surface must use mission.run/mission.track/mission.cancel vocabulary"
 fi
 
+if rg -n 'fall back|fallback|legacy-carrier|thin shim|\bshim\b|Implicit-agent-fallback|compat' "$MISSION"; then
+  fail "mission ability ingress must not describe canonical mission abilities as legacy, compat, shim, or fallback paths"
+fi
+
 if rg -n 'easynet\.run /|easynet\.cancel mutates|Same Operational class as easynet\.run' "$CATALOG"; then
   fail "catalog metadata must classify mission abilities by canonical mission.* names"
 fi
