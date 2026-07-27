@@ -71,7 +71,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use base64::Engine;
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use tokio::sync::mpsc;
 
@@ -273,27 +273,8 @@ fn spawn_upload(
                         return;
                     }
                 };
-            let frame_type = frame.get("type").and_then(Value::as_str).unwrap_or("");
-            match frame_type {
-                "chunk" => {
-                    let Some(data_b64) = frame.get("data").and_then(Value::as_str) else {
-                        emit_error(&to_client, "bad_frame", "chunk frame missing `data`").await;
-                        let _ = std::fs::remove_file(&staging);
-                        return;
-                    };
-                    let bytes = match base64::engine::general_purpose::STANDARD.decode(data_b64) {
-                        Ok(b) => b,
-                        Err(e) => {
-                            emit_error(
-                                &to_client,
-                                "bad_frame",
-                                &format!("chunk base64 decode: {e}"),
-                            )
-                            .await;
-                            let _ = std::fs::remove_file(&staging);
-                            return;
-                        }
-                    };
+            match UploadClientFrame::parse(frame) {
+                Ok(UploadClientFrame::Chunk(bytes)) => {
                     total = total.saturating_add(bytes.len() as u64);
                     if total > FILE_TRANSFER_BYTE_CAP {
                         emit_error(
@@ -312,19 +293,16 @@ fn spawn_upload(
                     }
                     hasher.update(&bytes);
                 }
-                "eof" => break,
-                other => {
-                    // Unknown frame type — diagnostic, not fatal,
-                    // mirrors PTY's `warn` channel pattern. We
-                    // ignore unknown types so a forward-compat
-                    // client adding a hint-frame doesn't blow up
-                    // the transfer.
-                    let _ = to_client
-                        .send(BidiOutputFrame::json(json!({
-                            "type": "warn",
-                            "message": format!("unknown frame type {other:?}; ignored"),
-                        })))
-                        .await;
+                Ok(UploadClientFrame::Eof) => break,
+                Err(error) => {
+                    emit_error(
+                        &to_client,
+                        "bad_frame",
+                        &format!("upload frame rejected: {error}"),
+                    )
+                    .await;
+                    let _ = std::fs::remove_file(&staging);
+                    return;
                 }
             }
         }
@@ -356,6 +334,67 @@ fn spawn_upload(
             })))
             .await;
     });
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum UploadClientFrame {
+    Chunk(Vec<u8>),
+    Eof,
+}
+
+impl UploadClientFrame {
+    fn parse(frame: Value) -> anyhow::Result<Self> {
+        let object = upload_frame_object(&frame)?;
+        let frame_type = upload_required_frame_string(object, "type")?;
+        match frame_type {
+            "chunk" => {
+                reject_unknown_upload_frame_fields(object, &["type", "data"])?;
+                let data_b64 = upload_required_frame_string(object, "data")?;
+                let bytes = base64::engine::general_purpose::STANDARD
+                    .decode(data_b64)
+                    .map_err(|error| anyhow::anyhow!("chunk `data` base64 decode: {error}"))?;
+                Ok(Self::Chunk(bytes))
+            }
+            "eof" => {
+                reject_unknown_upload_frame_fields(object, &["type"])?;
+                Ok(Self::Eof)
+            }
+            other => anyhow::bail!("unsupported frame type `{other}`"),
+        }
+    }
+}
+
+fn upload_frame_object(frame: &Value) -> anyhow::Result<&Map<String, Value>> {
+    frame
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("frame must be a JSON object"))
+}
+
+fn upload_required_frame_string<'a>(
+    frame: &'a Map<String, Value>,
+    key: &str,
+) -> anyhow::Result<&'a str> {
+    frame
+        .get(key)
+        .ok_or_else(|| anyhow::anyhow!("`{key}` required"))?
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("`{key}` must be a string"))
+}
+
+fn reject_unknown_upload_frame_fields(
+    frame: &Map<String, Value>,
+    allowed_keys: &[&str],
+) -> anyhow::Result<()> {
+    let mut unknown = frame
+        .keys()
+        .filter(|key| !allowed_keys.iter().any(|allowed| *allowed == key.as_str()))
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    if !unknown.is_empty() {
+        unknown.sort_unstable();
+        anyhow::bail!("unsupported frame field(s): {}", unknown.join(", "));
+    }
+    Ok(())
 }
 
 /// Download pump: open the file, stream chunks, hash on the fly.
@@ -658,8 +697,32 @@ mod tests {
     }
 
     fn transfer_ref(path: &Path, capability: FilesystemResourceCapability) -> Value {
-        crate::daemon::resources::files::resource_ref_for_local_path(path, capability)
-            .expect("local transfer ResourceRef")
+        let tmp_root = std::env::temp_dir();
+        let relative_path = path
+            .strip_prefix(&tmp_root)
+            .expect("file transfer test path must live under temp root")
+            .to_str()
+            .expect("file transfer test path must be UTF-8")
+            .trim_start_matches('/')
+            .to_string();
+        assert!(
+            !relative_path.is_empty(),
+            "file transfer test ResourceRef must target a file"
+        );
+        let owner_ura = crate::core::ura::device_ura("localhost", "file-transfer-test-device");
+        json!({
+            "resource_ura": crate::core::ura::resource_dot_ura(
+                "localhost",
+                "device.file-transfer-test-device",
+                &format!("fs/tmp/{relative_path}")
+            ),
+            "owner_ura": owner_ura,
+            "namespace": "fs",
+            "display_path": format!("tmp/{relative_path}"),
+            "capability": capability.as_str(),
+            "expires_unix_ms": i64::MAX,
+            "revision": "fs-local-mapping-v1",
+        })
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -895,11 +958,8 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn upload_unknown_frame_type_does_not_kill_session() {
-        // Forward-compat: a future client emitting a hint frame
-        // we don't recognise gets a `warn` back, not an error,
-        // and the transfer still succeeds.
-        let path = temp_path("forward_compat.bin");
+    async fn upload_unknown_frame_type_emits_error_and_aborts_transfer() {
+        let path = temp_path("unknown-frame.bin");
         let source = open_handler(json!({
             "mode": "upload",
             "resource_ref": transfer_ref(&path, FilesystemResourceCapability::Write),
@@ -912,19 +972,73 @@ mod tests {
             .send(json!({"type": "future_hint", "x": 42}))
             .await
             .unwrap();
-        // Then a real chunk + eof.
+
+        let frames = drain_handler_emit(&mut from_handler, 4, Duration::from_secs(2)).await;
+        let error = frames
+            .iter()
+            .find(|frame| frame["type"] == "error")
+            .expect("unknown upload frame must emit an error");
+        assert_eq!(error["code"], "bad_frame");
+        assert!(
+            error["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("unsupported frame type")),
+            "unexpected error frame: {error:?}"
+        );
+
         let chunk_b64 = base64::engine::general_purpose::STANDARD.encode(b"abc");
-        to_handler
+        if to_handler
             .send(json!({"type": "chunk", "data": chunk_b64}))
             .await
-            .unwrap();
-        to_handler.send(json!({"type": "eof"})).await.unwrap();
-        let frames = drain_handler_emit(&mut from_handler, 4, Duration::from_secs(2)).await;
-        // We expect at least one warn and one complete.
-        assert!(frames.iter().any(|f| f["type"] == "warn"));
-        assert!(frames.iter().any(|f| f["type"] == "complete"));
-        // File written.
-        assert_eq!(std::fs::read(&path).unwrap(), b"abc");
+            .is_ok()
+        {
+            let _ = to_handler.send(json!({"type": "eof"})).await;
+            let frames = drain_handler_emit(&mut from_handler, 4, Duration::from_millis(500)).await;
+            assert!(
+                !frames.iter().any(|frame| frame["type"] == "complete"),
+                "upload must not complete after protocol rejection: {frames:?}"
+            );
+        }
+        assert!(
+            !path.exists(),
+            "unknown upload frame must not promote a target file"
+        );
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn upload_frame_parser_rejects_non_object_frames() {
+        let err = UploadClientFrame::parse(Value::Null).unwrap_err();
+        assert!(
+            format!("{err}").contains("frame must be a JSON object"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn upload_frame_parser_rejects_unknown_chunk_fields() {
+        let err = UploadClientFrame::parse(json!({
+            "type": "chunk",
+            "data": "YWJj",
+            "legacy_mode": true
+        }))
+        .unwrap_err();
+        assert!(
+            format!("{err}").contains("unsupported frame field(s): legacy_mode"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn upload_frame_parser_rejects_eof_payload_fields() {
+        let err = UploadClientFrame::parse(json!({
+            "type": "eof",
+            "data": ""
+        }))
+        .unwrap_err();
+        assert!(
+            format!("{err}").contains("unsupported frame field(s): data"),
+            "unexpected error: {err}"
+        );
     }
 }
