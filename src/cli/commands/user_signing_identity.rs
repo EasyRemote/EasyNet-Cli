@@ -59,8 +59,7 @@ struct LocalUserPublicKeyRegistry;
 
 impl UserPublicKeyRegistry for LocalUserPublicKeyRegistry {
     fn contains(&self, user_ura: &str, public_key_b64: &str) -> anyhow::Result<bool> {
-        let response = crate::support::platform::local_invoke::LocalRuntimeStateReadIssuer::invoke(
-            "identity.list_user_pubkeys",
+        let response = crate::support::platform::local_invoke::LocalRuntimeIdentityReadIssuer::list_user_pubkeys(
             serde_json::json!({ "user_ura": user_ura }),
         )
         .context("invoke identity.list_user_pubkeys")?;

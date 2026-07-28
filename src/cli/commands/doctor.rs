@@ -26,7 +26,7 @@ use crate::cli::daemon_client::agent_view::{self, AgentRuntimeKind, DaemonAgentR
 use crate::daemon::boot::join_connection_state;
 use crate::daemon::persistence::config;
 use crate::support::platform::local_invoke::{
-    LocalRuntimeOperationalReadIssuer, LocalRuntimeStateReadIssuer,
+    LocalRuntimeIdentityReadIssuer, LocalRuntimeOperationalReadIssuer,
 };
 
 #[derive(Debug, Args)]
@@ -218,8 +218,7 @@ fn check_user_signing_key() -> Check {
         }
     };
 
-    match LocalRuntimeStateReadIssuer::invoke(
-        "identity.list_user_pubkeys",
+    match LocalRuntimeIdentityReadIssuer::list_user_pubkeys(
         serde_json::json!({ "user_ura": user_ura }),
     ) {
         Ok(v) => {

@@ -9210,18 +9210,20 @@ if len(contracts_section) != 2:
 schema_body = contracts_section[1].split("),", 1)[0]
 if '"user_ura"' not in schema_body or '"agent_ura"' in schema_body:
     raise SystemExit("runtime_trust_user_key_inventory:contract_schema_not_user_scoped")
-def list_user_pubkey_calls(source: str):
-    for match in re.finditer(r'"identity\.list_user_pubkeys"', source):
-        start = match.start()
-        end = source.find(";", match.end())
-        yield source[start : end if end >= 0 else min(len(source), match.end() + 240)]
-
 for source, label in ((cli_user, "cli_user"), (doctor, "doctor")):
-    for call in list_user_pubkey_calls(source):
-        if '"agent_ura"' in call:
-            raise SystemExit(f"runtime_trust_user_key_inventory:{label}_uses_retired_agent_field")
-        if '"user_ura"' not in call:
-            raise SystemExit(f"runtime_trust_user_key_inventory:{label}_missing_user_field")
+    if "LocalRuntimeIdentityReadIssuer::list_user_pubkeys(" not in source:
+        raise SystemExit(f"runtime_trust_user_key_inventory:{label}_missing_typed_identity_read_issuer")
+    for retired in (
+        "LocalRuntimeStateReadIssuer::invoke",
+        'invoke_local_ability("identity.list_user_pubkeys"',
+        'LocalDaemonSystemAbilityIssuer::invoke_root_for_subject("identity.list_user_pubkeys"',
+    ):
+        if retired in source:
+            raise SystemExit(f"runtime_trust_user_key_inventory:{label}_uses_retired_dispatch:{retired}")
+    if '"agent_ura"' in source:
+        raise SystemExit(f"runtime_trust_user_key_inventory:{label}_uses_retired_agent_field")
+    if '"user_ura"' not in source:
+        raise SystemExit(f"runtime_trust_user_key_inventory:{label}_missing_user_field")
 for required_test in (
     "list_rejects_retired_agent_ura_request_field",
     "list_rejects_non_user_ura_scope",

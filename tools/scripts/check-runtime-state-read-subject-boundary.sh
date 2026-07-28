@@ -13,14 +13,17 @@ fail() {
 ISSUER="src/support/platform/local_invoke.rs"
 TARGETS=(
   "src/cli/commands/discover.rs"
-  "src/cli/commands/doctor.rs"
   "src/cli/commands/groups/device.rs"
-  "src/cli/commands/user_signing_identity.rs"
 )
 
 OPERATIONAL_TARGETS=(
   "src/cli/commands/groups/mcp.rs"
   "src/cli/commands/status.rs"
+)
+
+IDENTITY_TARGETS=(
+  "src/cli/commands/doctor.rs"
+  "src/cli/commands/user_signing_identity.rs"
 )
 
 GOVERNANCE_TARGETS=(
@@ -52,6 +55,10 @@ fi
 
 if ! rg -n 'struct LocalRuntimeOperationalReadIssuer' "$ISSUER" >/dev/null; then
   fail "runtime operational reads must use a named issuer"
+fi
+
+if ! rg -n 'struct LocalRuntimeIdentityReadIssuer' "$ISSUER" >/dev/null; then
+  fail "runtime identity reads must use a named issuer"
 fi
 
 if ! rg -n 'struct LocalRuntimeStateReadAttachment' "$ISSUER" >/dev/null; then
@@ -202,6 +209,42 @@ for required in ("pub fn observe_health(", "pub fn observe_health_timeout("):
     if required not in body:
         raise SystemExit(f"LocalRuntimeOperationalReadIssuer missing {required}")
 PY
+
+"$PYTHON_BIN" - "$ISSUER" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+match = re.search(
+    r"impl LocalRuntimeIdentityReadIssuer \{(?P<body>.*?)\n\}",
+    text,
+    re.S,
+)
+if not match:
+    raise SystemExit("LocalRuntimeIdentityReadIssuer impl is missing")
+body = match.group("body")
+if "pub fn invoke(" in body or "pub fn invoke_timeout(" in body:
+    raise SystemExit(
+        "LocalRuntimeIdentityReadIssuer must expose typed identity methods, not generic invoke methods"
+    )
+for required in ("pub fn list_user_pubkeys(", "pub fn list_user_pubkeys_timeout("):
+    if required not in body:
+        raise SystemExit(f"LocalRuntimeIdentityReadIssuer missing {required}")
+PY
+
+for target in "${IDENTITY_TARGETS[@]}"; do
+  [[ -f "$target" ]] || fail "missing $target"
+  if ! rg -n 'LocalRuntimeIdentityReadIssuer::list_user_pubkeys' "$target" >/dev/null; then
+    fail "$target must enter local runtime identity trust reads through LocalRuntimeIdentityReadIssuer"
+  fi
+  if rg -n 'LocalRuntimeStateReadIssuer::invoke|identity\.list_user_pubkeys"\s*,' "$target"; then
+    fail "$target must not route identity trust reads through generic runtime-state ability dispatch"
+  fi
+  if rg -n '\binvoke_local_ability\s*\(' "$target"; then
+    fail "$target must not use generic invoke_local_ability for runtime identity reads"
+  fi
+done
 
 for target in "${GOVERNANCE_TARGETS[@]}"; do
   [[ -f "$target" ]] || fail "missing $target"

@@ -506,6 +506,39 @@ impl LocalRuntimeOperationalReadIssuer {
     }
 }
 
+/// Named issuer for runtime identity/trust-anchor reads.
+///
+/// These reads observe daemon runtime trust state: the same authority source
+/// admission uses for user-as-caller verification. They intentionally use the
+/// runtime-owner subject, not the paired user's runtime-state Resource subject,
+/// because callers use this path to discover whether that user's signer is
+/// already trusted. Requiring user runtime-state signer custody before the read
+/// would recreate a compatibility-shaped chicken-and-egg path.
+pub struct LocalRuntimeIdentityReadIssuer;
+
+impl LocalRuntimeIdentityReadIssuer {
+    pub fn list_user_pubkeys(args: Value) -> anyhow::Result<Value> {
+        Self::list_user_pubkeys_timeout(args, std::time::Duration::from_secs(30))
+    }
+
+    pub fn list_user_pubkeys_timeout(
+        args: Value,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<Value> {
+        let subject_ura = LocalRuntimeOwnerReadAttachment::from_discovery_file(
+            &KeyServiceRuntimeStateReadSignerCustody,
+            "runtime identity read subject unavailable",
+        )
+        .and_then(|attachment| attachment.into_subject_ura())?;
+        LocalDaemonSystemAbilityIssuer::invoke_root_for_subject_timeout(
+            crate::daemon::ability::names::federation::IDENTITY_LIST_USER_PUBKEYS,
+            args,
+            &subject_ura,
+            timeout,
+        )
+    }
+}
+
 /// Named issuer for runtime governance ledger reads.
 ///
 /// Bound-user product reads are user-owned runtime-state observations and keep
