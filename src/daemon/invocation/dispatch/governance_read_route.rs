@@ -48,7 +48,7 @@ fn require_receipt_history_read_subject(
                 "{surface} receipt-history read envelope is missing read-model subject"
             ))
         })?;
-    crate::core::identity::RuntimeGovernanceReadSubject::parse_for_callee(
+    let read_subject = crate::core::identity::RuntimeGovernanceReadSubject::parse_for_callee(
         subject_ura,
         &route.callee_ura,
     )
@@ -59,6 +59,20 @@ fn require_receipt_history_read_subject(
              use the canonical invocation history read path: {err}"
         ))
     })?;
+    if read_subject.as_str() == route.callee_ura {
+        let caller_ura = envelope
+            .caller
+            .as_ref()
+            .map(|caller| caller.ura.trim())
+            .unwrap_or_default();
+        if caller_ura != crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA {
+            return Err(Status::failed_precondition(format!(
+                "CANONICAL_HISTORY_READ_REQUIRED: {surface} receipt history ability \
+                 `{history_ability}` must enter runtime-owner reads through the canonical \
+                 local-system governance issuer; use the canonical invocation history read path"
+            )));
+        }
+    }
     Ok(())
 }
 
