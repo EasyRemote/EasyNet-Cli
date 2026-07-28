@@ -1651,16 +1651,6 @@ def _optional_string(value: object, field_name: str) -> Optional[str]:
     return value
 
 
-def _optional_runtime_summary_text(value: object, field_name: str) -> Optional[str]:
-    if value is None:
-        return None
-    if isinstance(value, bool):
-        raise _invalid_runtime(f"{field_name} must be a string, integer, or null")
-    if isinstance(value, (str, int)):
-        return str(value)
-    raise _invalid_runtime(f"{field_name} must be a string, integer, or null")
-
-
 def _decode_runtime_receipt_mapping(
     decoded: Mapping[str, object],
 ) -> _DecodedRuntimeReceipt:
@@ -1671,10 +1661,7 @@ def _decode_runtime_receipt_mapping(
         receipt_ura=_optional_string(decoded.get("receipt_ura"), "receipt_ura") or "",
         invocation_id=_optional_string(decoded.get("invocation_id"), "invocation_id")
         or "",
-        receipt_type=_optional_runtime_summary_text(
-            decoded.get("receipt_type"), "receipt_type"
-        )
-        or "",
+        receipt_type=_optional_string(decoded.get("receipt_type"), "receipt_type") or "",
         state=_optional_string(decoded.get("state"), "state") or "",
         index=_optional_non_negative_int(decoded.get("index"), "index"),
         timestamp_unix_ms=_optional_non_negative_int(

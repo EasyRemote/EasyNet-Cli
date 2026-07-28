@@ -19148,6 +19148,7 @@ for fragment, label in {
     '"runtime receipt summary is missing authority_proof.proof_payload_base64"': "proof_payload_presence_error_missing",
     '_runtime_receipt_raw_mapping(\n            proof.get("signature"),\n            "authority_proof.signature",\n        )': "authority_proof_signature_required_shape_missing",
     '_required_receipt_signature(\n        proof.signature,\n        "authority_proof.signature",\n    )': "authority_proof_signature_required_canonical_missing",
+    'receipt_type=_optional_string(decoded.get("receipt_type"), "receipt_type")': "receipt_type_not_strict_string_fact",
 }.items():
     if fragment not in runtime:
         raise SystemExit(f"python_runtime_receipt_projection:{label}")
@@ -19175,6 +19176,8 @@ for forbidden, label in {
     "raw=dict(decoded)": "runtime_receipt_shallow_copy_bypass",
     "return dict(self.raw)": "runtime_receipt_shallow_projection_bypass",
     'self.assertIn("issuer_ura", raised.exception.message)': "retired_session_field_missing_only_test",
+    "def _optional_runtime_summary_text(": "receipt_type_compatibility_coercion_helper",
+    "string, integer, or null": "receipt_type_accepts_legacy_integer_fact",
 }.items():
     if forbidden in tests:
         raise SystemExit(f"python_runtime_receipt_projection:{label}")
@@ -19201,6 +19204,8 @@ for required_test in (
     "MappingProxyType",
     "post-validation-mutation",
     "raw-projection-mutation",
+    'malformed["receipt_type"] = 5',
+    "receipt_type must be a string or null",
 ):
     if required_test not in tests:
         raise SystemExit(f"python_runtime_receipt_projection:missing_test:{required_test}")

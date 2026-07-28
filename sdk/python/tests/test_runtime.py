@@ -1165,6 +1165,18 @@ class RuntimeTests(unittest.TestCase):
                 RuntimeReceipt.from_required_mapping(malformed)
             self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
 
+        malformed = canonical_runtime_receipt(
+            "inv-state",
+            "completed",
+            "Completed",
+            1,
+        )
+        malformed["receipt_type"] = 5
+        with self.assertRaises(SDKError) as caught:
+            RuntimeReceipt.from_required_mapping(malformed)
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+        self.assertIn("receipt_type must be a string or null", caught.exception.message)
+
     def test_runtime_receipt_projects_complete_typed_facts(self) -> None:
         complete = canonical_runtime_receipt("inv-typed", "completed", "Completed", 1)
         proof_payload = b"typed-proof"
