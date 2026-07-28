@@ -413,18 +413,35 @@ check_bidi_dispatch_default_code_policy_contract() {
 
 check_remote_failure_route_negative_classification_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
-  local classifier="$cli_root/src/daemon/invocation/dispatch/remote_failure.rs"
-  [[ -f "$classifier" ]] || fail "remote failure classifier source is missing: ${classifier#$cli_root/}"
+  local remote_failure="$cli_root/src/daemon/invocation/dispatch/remote_failure.rs"
+  local classifier="$cli_root/src/daemon/runtime_failure.rs"
+  [[ -f "$remote_failure" ]] || fail "remote failure projection source is missing: ${remote_failure#$cli_root/}"
+  [[ -f "$classifier" ]] || fail "runtime failure classifier source is missing: ${classifier#$cli_root/}"
 
-  "$PYTHON_BIN" - "$classifier" <<'PY'
+  "$PYTHON_BIN" - "$remote_failure" "$classifier" <<'PY'
 import sys
 from pathlib import Path
 
-text = Path(sys.argv[1]).read_text()
-required = {
-    "fn is_route_unavailable_message": "route_unavailable_helper_missing",
-    "fn is_descriptor_owner_offline_message": "descriptor_owner_offline_helper_missing",
-    "fn is_caller_signer_unavailable_message": "caller_signer_helper_missing",
+remote = Path(sys.argv[1]).read_text()
+classifier = Path(sys.argv[2]).read_text()
+remote_required = {
+    "RuntimeFailureFacts::new": "remote_projection_not_using_shared_facts",
+    "facts.canonical_detail()": "remote_projection_not_using_canonical_detail",
+    "facts.grpc_status_code()": "remote_projection_not_using_classifier_status",
+    "canonical_untyped_remote_failure_detail": "untyped_remote_projection_not_shared",
+    "route_negative_owner_offline_is_route_unavailable_not_ability_absent": "route_negative_test_missing",
+    "caller_signer_readiness_is_not_downgraded_to_ability_absent": "caller_signer_test_missing",
+}
+for needle, marker in remote_required.items():
+    if needle not in remote:
+        raise SystemExit(f"remote_failure_route_negative:{marker}")
+
+classifier_required = {
+    "enum RuntimeFailureKind": "kind_enum_missing",
+    "RuntimeFailureKind::DescriptorOwnerOffline": "descriptor_owner_offline_kind_missing",
+    "RuntimeFailureKind::RouteUnavailable": "route_unavailable_kind_missing",
+    "RuntimeFailureKind::CallerSignerUnavailable": "caller_signer_kind_missing",
+    "RuntimeFailureKind::NotFound": "not_found_kind_missing",
     "detail.contains(\"ROUTE_NEGATIVE\")": "route_negative_detail_missing",
     "detail.contains(\"NEGATIVE_REASON_NXDOMAIN\")": "nxdomain_detail_missing",
     "detail.contains(\"OWNER IS NOT ONLINE\")": "owner_offline_detail_missing",
@@ -432,16 +449,16 @@ required = {
     "detail.contains(\"REQUIRES A CALLER SIGNER\")": "caller_signer_detail_missing",
     "detail.contains(\"KEYRING ENTRY NOT FOUND\")": "keyring_not_found_detail_missing",
     "detail.contains(\"SELF-IDENTITY:\")": "self_identity_detail_missing",
-    "route_negative_owner_offline_is_route_unavailable_not_ability_absent": "route_negative_test_missing",
-    "caller_signer_readiness_is_not_downgraded_to_ability_absent": "caller_signer_test_missing",
+    "classifies_owner_offline_before_not_found": "owner_offline_classifier_test_missing",
+    "classifies_keyring_detail_as_caller_signer_unavailable": "caller_signer_classifier_test_missing",
 }
-for needle, marker in required.items():
-    if needle not in text:
+for needle, marker in classifier_required.items():
+    if needle not in classifier:
         raise SystemExit(f"remote_failure_route_negative:{marker}")
-owner_index = text.find("is_descriptor_owner_offline_message(&code, detail)")
-route_index = text.find("is_route_unavailable_message(&code, detail)")
-signer_index = text.find("is_caller_signer_unavailable_message(&code, detail)")
-not_found_index = text.find('matches!(code.as_str(), "NOT_FOUND" | "ABILITY_NOT_FOUND")')
+owner_index = classifier.find("self.is_descriptor_owner_offline(&code)")
+route_index = classifier.find("self.is_route_unavailable(&code)")
+signer_index = classifier.find("self.is_caller_signer_unavailable(&code)")
+not_found_index = classifier.find('matches!(code.as_str(), "NOT_FOUND" | "ABILITY_NOT_FOUND")')
 if owner_index < 0 or not_found_index < 0 or owner_index > not_found_index:
     raise SystemExit("remote_failure_route_negative:not_found_checked_before_descriptor_owner_offline")
 if route_index < 0 or not_found_index < 0 or route_index > not_found_index:
@@ -17348,39 +17365,47 @@ PY
 check_remote_failure_caller_signer_projection_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local remote_failure="$cli_root/src/daemon/invocation/dispatch/remote_failure.rs"
+  local classifier="$cli_root/src/daemon/runtime_failure.rs"
   [[ -f "$remote_failure" ]] || fail "remote failure projection source is missing: ${remote_failure#$cli_root/}"
+  [[ -f "$classifier" ]] || fail "runtime failure classifier source is missing: ${classifier#$cli_root/}"
 
-  "$PYTHON_BIN" - "$remote_failure" <<'PY'
+  "$PYTHON_BIN" - "$remote_failure" "$classifier" <<'PY'
 import re
 import sys
 from pathlib import Path
 
-text = Path(sys.argv[1]).read_text(encoding="utf-8")
-production = text.split("\n#[cfg(test)]", 1)[0]
+remote = Path(sys.argv[1]).read_text(encoding="utf-8")
+remote_production = remote.split("\n#[cfg(test)]", 1)[0]
+classifier = Path(sys.argv[2]).read_text(encoding="utf-8")
+classifier_production = classifier.split("\n#[cfg(test)]", 1)[0]
 
 for required in (
-    "fn canonical_remote_failure_detail(",
+    "fn canonical_detail(self) -> String",
     "fn canonical_caller_signer_unavailable_detail(",
     "fn caller_ura_from_signer_detail(",
     "CALLER_SIGNER_UNAVAILABLE: remote invocation requires a caller signer",
 ):
-    if required not in production:
+    if required not in classifier_production:
         raise SystemExit(f"remote_failure_caller_signer_projection:missing:{required}")
 
 status = re.search(
     r"pub\(crate\) fn status_from_remote_failure\([^)]*\) -> Status \{(?P<body>.*?)\n\}",
-    production,
+    remote_production,
     re.S,
 )
 if status is None:
     raise SystemExit("remote_failure_caller_signer_projection:status_function_missing")
 body = status.group("body")
-if "let raw_detail =" not in body or "let detail = canonical_remote_failure_detail(&raw_detail);" not in body:
+if (
+    "let raw_detail =" not in body
+    or "RuntimeFailureFacts::new(&failure.code, &raw_detail)" not in body
+    or "let detail = facts.canonical_detail();" not in body
+):
     raise SystemExit("remote_failure_caller_signer_projection:status_does_not_sanitize_detail")
 if "format!(\"{context}: {raw_detail}\")" in body or "format!(\"{context}: {detail}\"" not in body:
     raise SystemExit("remote_failure_caller_signer_projection:status_uses_unsanitized_detail")
 
-test = text.split("\n#[cfg(test)]", 1)[1] if "\n#[cfg(test)]" in text else ""
+test = remote.split("\n#[cfg(test)]", 1)[1] if "\n#[cfg(test)]" in remote else ""
 for required_test in (
     "caller_signer_readiness_is_not_downgraded_to_ability_absent",
     "status.message().contains(\"CALLER_SIGNER_UNAVAILABLE\")",
@@ -17391,7 +17416,9 @@ for required_test in (
     if required_test not in test:
         raise SystemExit(f"remote_failure_caller_signer_projection:missing_test:{required_test}")
 
-if "assert!(status.message().contains(\"keyring entry not found\"))" in text:
+if "classifies_keyring_detail_as_caller_signer_unavailable" not in classifier:
+    raise SystemExit("remote_failure_caller_signer_projection:missing_classifier_test")
+if "assert!(status.message().contains(\"keyring entry not found\"))" in remote:
     raise SystemExit("remote_failure_caller_signer_projection:retired_keyring_positive_assertion")
 PY
 }

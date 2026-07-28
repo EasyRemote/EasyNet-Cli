@@ -165,6 +165,8 @@ pub enum DaemonInvocationErrorProjection {
 #[cfg(feature = "axon-pb")]
 impl DaemonError {
     pub fn invocation_error_projection(&self) -> DaemonInvocationErrorProjection {
+        use crate::daemon::runtime_failure::RuntimeFailureFacts;
+
         match self {
             Self::InvocationEndpointDown { .. }
             | Self::InvocationEndpointMissing { .. }
@@ -172,7 +174,7 @@ impl DaemonError {
             Self::InvokeStatus { code, message, .. }
             | Self::InvokeStreamStatus { code, message, .. }
             | Self::InvokeBidiStatus { code, message, .. }
-                if daemon_message_is_descriptor_owner_offline(*code, message) =>
+                if RuntimeFailureFacts::is_descriptor_owner_offline_status(*code, message) =>
             {
                 DaemonInvocationErrorProjection::DescriptorOwnerOffline
             }
@@ -180,7 +182,7 @@ impl DaemonError {
             | Self::InvokeStreamStatus { code, .. }
             | Self::InvokeBidiStatus { code, .. } => DaemonInvocationErrorProjection::Status(*code),
             Self::InvalidInvocation(message)
-                if daemon_message_is_caller_signer_unavailable(message) =>
+                if RuntimeFailureFacts::is_caller_signer_unavailable_message(message) =>
             {
                 DaemonInvocationErrorProjection::CallerSignerUnavailable
             }
@@ -189,18 +191,6 @@ impl DaemonError {
             _ => DaemonInvocationErrorProjection::Generic,
         }
     }
-}
-
-#[cfg(feature = "axon-pb")]
-fn daemon_message_is_caller_signer_unavailable(message: &str) -> bool {
-    message.contains("CALLER_SIGNER_UNAVAILABLE")
-}
-
-#[cfg(feature = "axon-pb")]
-fn daemon_message_is_descriptor_owner_offline(code: tonic::Code, message: &str) -> bool {
-    let upper = message.to_ascii_uppercase();
-    upper.contains("DESCRIPTOR_OWNER_OFFLINE")
-        || (code == tonic::Code::Unavailable && upper.contains("OWNER IS NOT ONLINE"))
 }
 
 #[cfg(all(test, feature = "axon-pb"))]

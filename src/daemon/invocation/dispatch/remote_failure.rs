@@ -7,6 +7,9 @@
 use tonic::{Code, Status};
 
 use crate::daemon::invocation::bidi::state::session_failure::SessionFailure;
+use crate::daemon::runtime_failure::{
+    canonical_untyped_remote_failure_detail, RuntimeFailureFacts,
+};
 
 pub(crate) fn status_from_remote_failure(
     context: &str,
@@ -20,176 +23,14 @@ pub(crate) fn status_from_remote_failure(
         ));
     };
     let raw_detail = failure.status_detail();
-    let detail = canonical_remote_failure_detail(&raw_detail);
-    let code = status_code_for_failure(&failure.code, &detail);
+    let facts = RuntimeFailureFacts::new(&failure.code, &raw_detail);
+    let detail = facts.canonical_detail();
+    let code = facts.grpc_status_code();
     Status::new(code, format!("{context}: {detail}"))
 }
 
 pub(crate) fn is_admission_denial_message(message: &str) -> bool {
-    message.contains("POLICY_DENIED")
-        || message.contains("AUTHORITY_DENIED")
-        || message.contains("SIGNATURE_DENIED")
-        || message.contains("AXON_CALLER_SIGNATURE_INVALID")
-        || message.contains("SIGNED_DESCRIPTOR_REF_")
-        || message.contains("SIGNED_ENVELOPE_ROUTE_MUTATION")
-}
-
-fn status_code_for_failure(raw_code: &str, detail: &str) -> Code {
-    let code = raw_code.trim().to_ascii_uppercase();
-    if is_descriptor_owner_offline_message(&code, detail) {
-        return Code::Unavailable;
-    }
-    if is_route_unavailable_message(&code, detail) {
-        return Code::Unavailable;
-    }
-    if is_caller_signer_unavailable_message(&code, detail) {
-        return Code::PermissionDenied;
-    }
-    if is_admission_denial_message(detail)
-        || code == "PERMISSION_DENIED"
-        || code.starts_with("AUTHORITY_")
-        || code.starts_with("POLICY_")
-        || code.starts_with("SIGNATURE_")
-        || (code.starts_with("CALLER_")
-            && !matches!(
-                code.as_str(),
-                "CALLER_URA_MISSING" | "CALLER_URA_INVALID" | "CALLER_NONCE_MISSING"
-            ))
-        || matches!(
-            code.as_str(),
-            "ABILITY_FORBIDDEN" | "ABILITY_ROLE_RESTRICTED" | "ABILITY_REALM_RESTRICTED"
-        )
-    {
-        return Code::PermissionDenied;
-    }
-    if matches!(code.as_str(), "NOT_FOUND" | "ABILITY_NOT_FOUND") {
-        return Code::NotFound;
-    }
-    if code.starts_with("REQUEST_")
-        || matches!(
-            code.as_str(),
-            "CALLER_URA_MISSING" | "CALLER_URA_INVALID" | "CALLER_NONCE_MISSING"
-        )
-    {
-        return Code::InvalidArgument;
-    }
-    if matches!(
-        code.as_str(),
-        "QUOTA_EXCEEDED" | "RATE_LIMITED" | "RESOURCE_EXHAUSTED"
-    ) {
-        return Code::ResourceExhausted;
-    }
-    if code == "UPSTREAM_TIMEOUT" {
-        return Code::DeadlineExceeded;
-    }
-    if matches!(code.as_str(), "UPSTREAM_FAILURE" | "TARGET_OFFLINE") {
-        return Code::Unavailable;
-    }
-    if matches!(
-        code.as_str(),
-        "INTERNAL_ERROR" | "INTERNAL_INVARIANT_VIOLATION"
-    ) {
-        return Code::Internal;
-    }
-    Code::FailedPrecondition
-}
-
-fn is_route_unavailable_message(code: &str, detail: &str) -> bool {
-    let detail = detail.to_ascii_uppercase();
-    code == "ROUTE_UNAVAILABLE"
-        || code == "RUNTIME_ROUTE_UNAVAILABLE"
-        || code == "ROUTE_NEGATIVE"
-        || detail.contains("ROUTE_NEGATIVE")
-        || detail.contains("NEGATIVE_REASON_NXDOMAIN")
-        || detail.contains("OWNER IS NOT ONLINE")
-}
-
-fn is_caller_signer_unavailable_message(code: &str, detail: &str) -> bool {
-    let detail = detail.to_ascii_uppercase();
-    code == "CALLER_SIGNER_UNAVAILABLE"
-        || detail.contains("CALLER_SIGNER_UNAVAILABLE")
-        || detail.contains("CALLER SIGNER UNAVAILABLE")
-        || detail.contains("REQUIRES A CALLER SIGNER")
-        || detail.contains("KEYRING ENTRY NOT FOUND")
-        || detail.contains("SELF-IDENTITY:")
-}
-
-fn canonical_remote_failure_detail(detail: &str) -> String {
-    let detail = detail.trim();
-    if is_caller_signer_unavailable_message("", detail) {
-        return canonical_caller_signer_unavailable_detail(detail);
-    }
-    if is_descriptor_owner_offline_message("", detail) {
-        return "DESCRIPTOR_OWNER_OFFLINE: descriptor owner is not online".to_string();
-    }
-    detail.to_string()
-}
-
-fn canonical_untyped_remote_failure_detail(raw_error: &str) -> String {
-    let detail = raw_error.trim();
-    if detail.is_empty() {
-        return "REMOTE_FAILURE_UNTYPED: remote failure omitted typed failure facts".to_string();
-    }
-    if contains_custody_implementation_detail(detail) {
-        return "REMOTE_FAILURE_UNTYPED: remote failure omitted typed failure facts; \
-                custody detail redacted"
-            .to_string();
-    }
-    format!(
-        "REMOTE_FAILURE_UNTYPED: remote failure omitted typed failure facts; diagnostic={}",
-        bounded_diagnostic(detail)
-    )
-}
-
-fn contains_custody_implementation_detail(detail: &str) -> bool {
-    let detail = detail.to_ascii_uppercase();
-    detail.contains("KEYRING ENTRY NOT FOUND")
-        || detail.contains("KEYRING REJECTED REQUEST")
-        || detail.contains("SELF-IDENTITY:")
-}
-
-fn bounded_diagnostic(detail: &str) -> String {
-    const MAX_DIAGNOSTIC_CHARS: usize = 256;
-    let mut chars = detail.chars();
-    let clipped: String = chars.by_ref().take(MAX_DIAGNOSTIC_CHARS).collect();
-    if chars.next().is_some() {
-        format!("{clipped}…")
-    } else {
-        clipped
-    }
-}
-
-fn is_descriptor_owner_offline_message(code: &str, detail: &str) -> bool {
-    let code = code.trim().to_ascii_uppercase();
-    let detail = detail.to_ascii_uppercase();
-    (code == "DESCRIPTOR_OWNER_OFFLINE"
-        || detail.contains("ROUTE_NEGATIVE")
-        || detail.contains("NEGATIVE_REASON_NXDOMAIN")
-        || detail.contains("NEGATIVE_REASON_NOROUTE"))
-        && detail.contains("OWNER IS NOT ONLINE")
-}
-
-fn canonical_caller_signer_unavailable_detail(detail: &str) -> String {
-    match caller_ura_from_signer_detail(detail) {
-        Some(caller_ura) => format!(
-            "CALLER_SIGNER_UNAVAILABLE: remote invocation requires a caller signer for \
-             `{caller_ura}`; load or provision that identity in the local key service"
-        ),
-        None => "CALLER_SIGNER_UNAVAILABLE: remote invocation requires a caller signer; \
-             load or provision that identity in the local key service"
-            .to_string(),
-    }
-}
-
-fn caller_ura_from_signer_detail(detail: &str) -> Option<&str> {
-    let (_, tail) = detail.split_once("for `")?;
-    let (caller_ura, _) = tail.split_once('`')?;
-    let caller_ura = caller_ura.trim();
-    if caller_ura.is_empty() {
-        None
-    } else {
-        Some(caller_ura)
-    }
+    RuntimeFailureFacts::is_admission_denial_message(message)
 }
 
 #[cfg(test)]

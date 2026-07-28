@@ -43,6 +43,7 @@ pub mod keyring;
 pub mod persistence;
 pub mod plugins;
 pub mod resources;
+pub(crate) mod runtime_failure;
 pub mod telemetry;
 pub mod trust;
 
