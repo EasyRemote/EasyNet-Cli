@@ -1527,7 +1527,7 @@ func validateRuntimeReceiptRawProofShape(raw map[string]any) error {
 	if err != nil {
 		return err
 	}
-	if err := requireRuntimeReceiptExactKeys(usage, "usage", "tokens_in", "tokens_out", "duration_ms", "external_calls"); err != nil {
+	if err := validateRuntimeReceiptUsage(usage); err != nil {
 		return err
 	}
 	for _, field := range []string{
@@ -1669,6 +1669,21 @@ func validateRuntimeReceiptAuthorityBindingShape(binding map[string]any, field s
 	default:
 		return invalidRuntimePayload(fmt.Sprintf("%s is not canonical: %q", field+".kind", kind), nil)
 	}
+}
+
+func validateRuntimeReceiptUsage(usage map[string]any) error {
+	if err := requireRuntimeReceiptExactKeys(usage, "usage", "tokens_in", "tokens_out", "duration_ms", "external_calls"); err != nil {
+		return err
+	}
+	if err := requireRuntimeReceiptRequiredKeys(usage, "usage", "tokens_in", "tokens_out", "duration_ms", "external_calls"); err != nil {
+		return err
+	}
+	for _, field := range []string{"tokens_in", "tokens_out", "duration_ms", "external_calls"} {
+		if _, err := runtimeReceiptNonNegativeInt64(usage[field], "usage."+field); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func runtimeReceiptRawObject(value any, field string) (map[string]any, error) {

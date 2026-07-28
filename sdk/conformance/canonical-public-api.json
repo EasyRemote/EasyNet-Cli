@@ -23349,7 +23349,7 @@
       "sha256": "02f273f44c655607addfe441be48af9ef1d0d004f36d958a1b101dcc28067029",
       "interface": "RuntimeTransport",
       "interface_path": "sdk/go/runtime.go",
-      "interface_sha256": "40bb96e7950620c70e6d588e6758e9d1eab13bc12b433123955c0f8ccb82a0be",
+      "interface_sha256": "84eb8530e00bd0591419a9c189bb835e2e1fe6cf7a13472f7972e24396c3d488",
       "capability_ids": [
         "stream",
         "bidi"

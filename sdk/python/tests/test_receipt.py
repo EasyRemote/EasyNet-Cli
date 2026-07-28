@@ -75,7 +75,12 @@ def _record(
         "receipt_chain": {},
         "visibility": {},
         "authority_form": "self",
-        "usage": {},
+        "usage": {
+            "tokens_in": 0,
+            "tokens_out": 0,
+            "duration_ms": 0,
+            "external_calls": 0,
+        },
     }
 
 

@@ -490,6 +490,33 @@ test("runtime receipt proof facts are mandatory", () => {
         && error.message.includes(`runtime receipt summary is missing runtime_receipt.${missingField}`),
     );
   }
+  for (const missingUsageFact of ["tokens_in", "tokens_out", "duration_ms", "external_calls"]) {
+    const missingUsageReceipt = {
+      ...complete,
+      usage: { ...complete.usage },
+    };
+    delete missingUsageReceipt.usage[missingUsageFact];
+    assert.throws(
+      () => sdk.RuntimeReceipt.fromObject(missingUsageReceipt),
+      (error) =>
+        error instanceof sdk.SDKError
+        && error.code === sdk.ErrorCode.INVALID_ARGUMENT
+        && error.message.includes(`runtime receipt summary is missing usage.${missingUsageFact}`),
+    );
+  }
+  for (const noncanonicalUsageValue of [-1, "0", true]) {
+    const invalidUsageReceipt = {
+      ...complete,
+      usage: { ...complete.usage, tokens_in: noncanonicalUsageValue },
+    };
+    assert.throws(
+      () => sdk.RuntimeReceipt.fromObject(invalidUsageReceipt),
+      (error) =>
+        error instanceof sdk.SDKError
+        && error.code === sdk.ErrorCode.INVALID_ARGUMENT
+        && error.message.includes("usage.tokens_in must be a non-negative integer"),
+    );
+  }
   assert.throws(
     () => sdk.RuntimeReceipt.fromObject({
       ...complete,

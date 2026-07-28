@@ -257,7 +257,12 @@ def canonical_runtime_receipt(
             "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"
         ),
         "host_attestation_base64": "",
-        "usage": {},
+        "usage": {
+            "tokens_in": 0,
+            "tokens_out": 0,
+            "duration_ms": 0,
+            "external_calls": 0,
+        },
         "subject_ref": {
             "kind": 1,
             "ura": "easynet:///r/example/device/dev-a",
@@ -865,6 +870,37 @@ class RuntimeTests(unittest.TestCase):
                     RuntimeReceipt.from_mapping(receipt)
                 self.assertIn(
                     f"runtime receipt summary is missing runtime_receipt.{missing_field}",
+                    raised.exception.message,
+                )
+
+        for missing_usage_fact in (
+            "tokens_in",
+            "tokens_out",
+            "duration_ms",
+            "external_calls",
+        ):
+            receipt = canonical_runtime_receipt("inv-1", "completed", "Completed", 1)
+            usage = receipt["usage"]
+            assert isinstance(usage, dict)
+            usage.pop(missing_usage_fact)
+            with self.subTest(missing_usage_fact=missing_usage_fact):
+                with self.assertRaises(SDKError) as raised:
+                    RuntimeReceipt.from_mapping(receipt)
+                self.assertIn(
+                    f"usage.{missing_usage_fact} is required",
+                    raised.exception.message,
+                )
+
+        for noncanonical_usage_value in (-1, "0", True):
+            receipt = canonical_runtime_receipt("inv-1", "completed", "Completed", 1)
+            usage = receipt["usage"]
+            assert isinstance(usage, dict)
+            usage["tokens_in"] = noncanonical_usage_value
+            with self.subTest(noncanonical_usage_value=noncanonical_usage_value):
+                with self.assertRaises(SDKError) as raised:
+                    RuntimeReceipt.from_mapping(receipt)
+                self.assertIn(
+                    "usage.tokens_in must be a non-negative integer",
                     raised.exception.message,
                 )
 

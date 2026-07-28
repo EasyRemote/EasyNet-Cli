@@ -458,6 +458,27 @@ public final class RuntimeCoreSeamTest {
           () -> RuntimeReceipt.fromMap(missingTopLevelFact));
     }
 
+    for (String missingUsageFact :
+        List.of("tokens_in", "tokens_out", "duration_ms", "external_calls")) {
+      Map<String, Object> missingUsageFactReceipt = new LinkedHashMap<>(complete);
+      Map<String, Object> usage = mutableTopLevelObject(missingUsageFactReceipt, "usage");
+      usage.remove(missingUsageFact);
+      expectSDKError(
+          ErrorCode.RECEIPT_PROOF_FACTS_MISSING,
+          "runtime receipt proof facts are missing usage." + missingUsageFact,
+          () -> RuntimeReceipt.fromMap(missingUsageFactReceipt));
+    }
+
+    for (Object nonCanonicalUsageValue : List.of(-1, "0", true)) {
+      Map<String, Object> invalidUsageFactReceipt = new LinkedHashMap<>(complete);
+      Map<String, Object> usage = mutableTopLevelObject(invalidUsageFactReceipt, "usage");
+      usage.put("tokens_in", nonCanonicalUsageValue);
+      expectSDKError(
+          ErrorCode.INVALID_ARGUMENT,
+          "usage.tokens_in must be a non-negative integer",
+          () -> RuntimeReceipt.fromMap(invalidUsageFactReceipt));
+    }
+
     Map<String, Object> mismatchedProofHash = new LinkedHashMap<>(complete);
     Map<String, Object> mismatchedProof = mutableAuthorityProof(mismatchedProofHash);
     mismatchedProof.put("proof_hash_hex", "ff".repeat(32));
@@ -1886,7 +1907,9 @@ public final class RuntimeCoreSeamTest {
         Map.of("kind", "self", "principal_ura", CALLEE));
     receipt.put("ability_binding", DESCRIPTOR);
     receipt.put("host_attestation_base64", "");
-    receipt.put("usage", Map.of());
+    receipt.put(
+        "usage",
+        Map.of("tokens_in", 0L, "tokens_out", 0L, "duration_ms", 0L, "external_calls", 0L));
     receipt.put("subject_ref", Map.of("kind", 1L, "ura", CALLEE, "profile", "axon-strict-v2"));
     receipt.put("descriptor_version", "1.0.0");
     receipt.put("schema_hash_hex", "11".repeat(32));

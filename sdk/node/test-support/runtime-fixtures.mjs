@@ -37,7 +37,12 @@ export const canonicalRuntimeReceipt = (invocationId, receiptType, state, index)
     authority_binding: { kind: "self", principal_ura: TEST_CALLEE },
     ability_binding: TEST_DESCRIPTOR,
     host_attestation_base64: "",
-    usage: {},
+    usage: {
+      tokens_in: 0,
+      tokens_out: 0,
+      duration_ms: 0,
+      external_calls: 0,
+    },
     subject_ref: { kind: 1, ura: TEST_CALLEE, profile: "axon-strict-v2" },
     descriptor_version: "1.0.0",
     schema_hash_hex: "11".repeat(32),

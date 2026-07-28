@@ -73,7 +73,12 @@ func canonicalRuntimeReceiptFixture(
 		},
 		"ability_binding":         runtimeTestDescriptorRef,
 		"host_attestation_base64": "",
-		"usage":                   map[string]any{},
+		"usage": map[string]any{
+			"tokens_in":      0,
+			"tokens_out":     0,
+			"duration_ms":    0,
+			"external_calls": 0,
+		},
 		"subject_ref": map[string]any{
 			"kind":    1,
 			"ura":     "easynet:///r/example/device/dev-a",
@@ -449,6 +454,22 @@ func TestRuntimeReceiptProofFactsRequired(t *testing.T) {
 		delete(incomplete, missingField)
 		if _, err := NewRuntimeReceiptFromJSON(mustJSON(incomplete)); err == nil || !strings.Contains(err.Error(), "runtime receipt summary is missing runtime_receipt."+missingField) {
 			t.Fatalf("missing %s error = %v, want required top-level receipt fact", missingField, err)
+		}
+	}
+	for _, missingField := range []string{"tokens_in", "tokens_out", "duration_ms", "external_calls"} {
+		incomplete := canonicalRuntimeReceiptFixture("inv-1", "completed", "Completed", 1)
+		usage := incomplete["usage"].(map[string]any)
+		delete(usage, missingField)
+		if _, err := NewRuntimeReceiptFromJSON(mustJSON(incomplete)); err == nil || !strings.Contains(err.Error(), "runtime receipt summary is missing usage."+missingField) {
+			t.Fatalf("missing usage.%s error = %v, want required usage proof fact", missingField, err)
+		}
+	}
+	for _, invalidValue := range []any{-1, "0", true} {
+		invalid := canonicalRuntimeReceiptFixture("inv-1", "completed", "Completed", 1)
+		usage := invalid["usage"].(map[string]any)
+		usage["tokens_in"] = invalidValue
+		if err := validateRuntimeReceiptRawProofShape(invalid); err == nil || !strings.Contains(err.Error(), "usage.tokens_in must be a non-negative integer") {
+			t.Fatalf("invalid usage.tokens_in=%v error = %v, want non-negative integer failure", invalidValue, err)
 		}
 	}
 }

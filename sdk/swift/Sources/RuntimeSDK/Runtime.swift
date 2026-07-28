@@ -233,11 +233,7 @@ private enum RuntimeReceiptProofFacts {
         _ = try runtimeRequiredString(raw, "payload_content_type", "runtime_receipt")
         _ = try runtimeRequiredStringAllowEmpty(raw, "host_attestation_base64", "runtime_receipt")
         let usage = try runtimeRequiredObject(raw, "usage", "runtime_receipt")
-        try runtimeRequireExactKeys(
-            usage,
-            "usage",
-            ["tokens_in", "tokens_out", "duration_ms", "external_calls"]
-        )
+        try runtimeValidateUsage(usage)
         _ = try runtimeReceiptAgentBinding(raw["caller_binding"], "caller_binding")
         let calleeBinding = try runtimeReceiptAgentBinding(raw["callee_binding"], "callee_binding")
         _ = try runtimeReceiptAgentBinding(raw["subject_binding"], "subject_binding")
@@ -813,6 +809,28 @@ private struct RuntimeAuthorityBinding {
         }
         canonicalBytes = bytes
     }
+}
+
+private func runtimeValidateUsage(_ usage: [String: Any]) throws {
+    let fields: Set<String> = ["tokens_in", "tokens_out", "duration_ms", "external_calls"]
+    try runtimeRequireExactKeys(usage, "usage", fields)
+    try runtimeRequireRequiredKeys(usage, "usage", fields)
+    for field in fields {
+        _ = try runtimeRequiredUsageCounter(usage[field], "usage.\(field)")
+    }
+}
+
+private func runtimeRequiredUsageCounter(_ value: Any?, _ field: String) throws -> Int64 {
+    if let number = value as? NSNumber {
+        if String(cString: number.objCType) == "c" {
+            throw SDKError.validation("runtime_receipt", "\(field) must be a non-negative integer")
+        }
+        return try runtimeNonNegativeInt64(number, field)
+    }
+    if value is Bool {
+        throw SDKError.validation("runtime_receipt", "\(field) must be a non-negative integer")
+    }
+    return try runtimeNonNegativeInt64(value, field)
 }
 
 private func runtimeRequiredObject(_ object: [String: Any], _ field: String, _ label: String) throws -> [String: Any] {

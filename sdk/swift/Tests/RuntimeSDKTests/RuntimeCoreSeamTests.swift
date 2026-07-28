@@ -264,6 +264,38 @@ final class RuntimeCoreSeamTests: XCTestCase {
             }
         }
 
+        for missingUsageFact in ["tokens_in", "tokens_out", "duration_ms", "external_calls"] {
+            var missingUsageReceipt = terminal
+            var usage = missingUsageReceipt["usage"] as! [String: Any]
+            usage.removeValue(forKey: missingUsageFact)
+            missingUsageReceipt["usage"] = usage
+            expectSyncSDKError(.invalidArgument, "runtime receipt summary is missing usage.\(missingUsageFact)") {
+                _ = try InvocationResult.fromJSON(
+                    jsonData([
+                        "ok": true,
+                        "terminal_state": "Completed",
+                        "terminal_receipt": missingUsageReceipt,
+                    ])
+                )
+            }
+        }
+
+        for invalidUsageValue in [-1, "0", true] as [Any] {
+            var invalidUsageReceipt = terminal
+            var usage = invalidUsageReceipt["usage"] as! [String: Any]
+            usage["tokens_in"] = invalidUsageValue
+            invalidUsageReceipt["usage"] = usage
+            expectSyncSDKError(.invalidArgument, "usage.tokens_in must be a non-negative integer") {
+                _ = try InvocationResult.fromJSON(
+                    jsonData([
+                        "ok": true,
+                        "terminal_state": "Completed",
+                        "terminal_receipt": invalidUsageReceipt,
+                    ])
+                )
+            }
+        }
+
         var causalLegacyField = terminal
         causalLegacyField["causal_binding"] = ["form": "none", "legacy_parent": "opaque"]
         expectSyncSDKError(.invalidArgument, "causal_binding contains noncanonical field legacy_parent") {
@@ -1582,7 +1614,12 @@ private func canonicalRuntimeReceipt(
         "authority_binding": ["kind": "self", "principal_ura": callee],
         "ability_binding": descriptor,
         "host_attestation_base64": "",
-        "usage": [String: Any](),
+        "usage": [
+            "tokens_in": 0,
+            "tokens_out": 0,
+            "duration_ms": 0,
+            "external_calls": 0,
+        ],
         "subject_ref": ["kind": 1, "ura": callee, "profile": "axon-strict-v2"],
         "descriptor_version": "1.0.0",
         "schema_hash_hex": String(repeating: "11", count: 32),

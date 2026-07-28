@@ -2816,10 +2816,17 @@ function requireRuntimeReceiptUsage(value) {
     "duration_ms",
     "external_calls",
   ]);
-  optionalRuntimeNonNegativeInteger(usage.tokens_in, "usage.tokens_in");
-  optionalRuntimeNonNegativeInteger(usage.tokens_out, "usage.tokens_out");
-  optionalRuntimeNonNegativeInteger(usage.duration_ms, "usage.duration_ms");
-  optionalRuntimeNonNegativeInteger(usage.external_calls, "usage.external_calls");
+  requiredRuntimeReceiptUsageCounter(usage.tokens_in, "usage.tokens_in");
+  requiredRuntimeReceiptUsageCounter(usage.tokens_out, "usage.tokens_out");
+  requiredRuntimeReceiptUsageCounter(usage.duration_ms, "usage.duration_ms");
+  requiredRuntimeReceiptUsageCounter(usage.external_calls, "usage.external_calls");
+}
+
+function requiredRuntimeReceiptUsageCounter(value, field) {
+  if (value === undefined || value === null) {
+    throw invalidRuntime(`runtime receipt summary is missing ${field}`);
+  }
+  return requiredRuntimeNonNegativeInteger(value, field);
 }
 
 function runtimeReceiptHash(value, field, allowZero) {

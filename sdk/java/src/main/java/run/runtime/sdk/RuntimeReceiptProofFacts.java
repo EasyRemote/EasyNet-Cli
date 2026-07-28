@@ -124,13 +124,7 @@ final class RuntimeReceiptProofFacts {
     base64Bytes(requiredStringAllowEmpty(raw, "payload_base64"), "payload_base64", 0, true);
     requiredString(raw, "payload_content_type");
     requiredStringAllowEmpty(raw, "host_attestation_base64");
-    requireExactKeys(
-        requireObject(raw.get("usage"), "usage"),
-        "usage",
-        "tokens_in",
-        "tokens_out",
-        "duration_ms",
-        "external_calls");
+    requireUsage(raw.get("usage"));
     Map<String, Object> callerBinding = requireAgentBinding(raw.get("caller_binding"), "caller_binding");
     Map<String, Object> calleeBinding = requireAgentBinding(raw.get("callee_binding"), "callee_binding");
     requireAgentBinding(raw.get("subject_binding"), "subject_binding");
@@ -394,6 +388,16 @@ final class RuntimeReceiptProofFacts {
     requireExactKeys(ref, field, "receipt_hash_hex", "receipt_ura");
     receiptHash(ref, "receipt_hash_hex", false);
     requiredString(ref, "receipt_ura");
+  }
+
+  private static void requireUsage(Object value) {
+    Map<String, Object> usage = requireObject(value, "usage");
+    requireExactKeys(usage, "usage", "tokens_in", "tokens_out", "duration_ms", "external_calls");
+    requirePresentKeys(usage, "usage", "tokens_in", "tokens_out", "duration_ms", "external_calls");
+    requiredNonNegativeLong(usage.get("tokens_in"), "usage.tokens_in");
+    requiredNonNegativeLong(usage.get("tokens_out"), "usage.tokens_out");
+    requiredNonNegativeLong(usage.get("duration_ms"), "usage.duration_ms");
+    requiredNonNegativeLong(usage.get("external_calls"), "usage.external_calls");
   }
 
   private static void requireParentReceipts(Object value) {

@@ -1474,8 +1474,10 @@ def _optional_non_negative_int(value: object, field_name: str) -> int:
 
 
 def _required_non_negative_int(value: object, field_name: str) -> int:
-    if not isinstance(value, int) or isinstance(value, bool):
+    if value is None:
         raise _invalid_runtime(f"{field_name} is required")
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise _invalid_runtime(f"{field_name} must be a non-negative integer")
     if value < 0:
         raise _invalid_runtime(f"{field_name} must be a non-negative integer")
     return value
@@ -2575,16 +2577,16 @@ def _receipt_usage(value: object, field_name: str) -> Optional[RuntimeReceiptUsa
     if decoded is None:
         return None
     return RuntimeReceiptUsage(
-        tokens_in=_optional_non_negative_int(
+        tokens_in=_required_non_negative_int(
             decoded.get("tokens_in"), f"{field_name}.tokens_in"
         ),
-        tokens_out=_optional_non_negative_int(
+        tokens_out=_required_non_negative_int(
             decoded.get("tokens_out"), f"{field_name}.tokens_out"
         ),
-        duration_ms=_optional_non_negative_int(
+        duration_ms=_required_non_negative_int(
             decoded.get("duration_ms"), f"{field_name}.duration_ms"
         ),
-        external_calls=_optional_non_negative_int(
+        external_calls=_required_non_negative_int(
             decoded.get("external_calls"), f"{field_name}.external_calls"
         ),
     )
