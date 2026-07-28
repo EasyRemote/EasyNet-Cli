@@ -1,14 +1,14 @@
 """Product-neutral canonical runtime SDK.
 
-The top-level package is a lazy export surface. Provider helper modules such as
-``easynet_sdk.providers.runtime.plugin_exec`` must remain importable in minimal
-plugin runtimes without forcing every core runtime dependency to load first.
+The top-level package is a lazy export surface. Provider helper modules must
+remain importable in minimal plugin runtimes without forcing every core runtime
+dependency to load first.
 """
 
 from __future__ import annotations
 
-from importlib import import_module
-from typing import Any
+from importlib import import_module as _import_module
+from typing import Any as _Any
 
 __all__ = [
     'AbilityURA',
@@ -667,12 +667,12 @@ _EXPORT_MODULES: dict[str, tuple[str, str]] = {
 }
 
 
-def __getattr__(name: str) -> Any:
+def __getattr__(name: str) -> _Any:
     target = _EXPORT_MODULES.get(name)
     if target is None:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
     module_name, attr_name = target
-    value = getattr(import_module(module_name, __name__), attr_name)
+    value = getattr(_import_module(module_name, __name__), attr_name)
     globals()[name] = value
     return value
 

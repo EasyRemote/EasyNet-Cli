@@ -89,10 +89,49 @@ def python_inventory() -> dict[str, Any]:
     init = ast.parse(init_path.read_text(encoding="utf-8"))
     exported: list[str] | None = None
     imports: dict[str, tuple[str, str]] = {}
+
+    def record_import(public_name: str, module_name: str, source_name: str) -> None:
+        normalized_module = module_name.lstrip(".")
+        if not normalized_module or not source_name:
+            raise ValueError(f"Python export map is incomplete: {public_name}")
+        existing = imports.get(public_name)
+        value = (normalized_module, source_name)
+        if existing is not None and existing != value:
+            raise ValueError(
+                "Python export has conflicting explicit import targets: "
+                f"{public_name}:{existing}:{value}"
+            )
+        imports[public_name] = value
+
+    def literal_lazy_export_map(node: ast.AST) -> dict[str, tuple[str, str]]:
+        try:
+            value = ast.literal_eval(node)
+        except Exception as exc:  # noqa: BLE001 - report fail-closed inventory cause.
+            raise ValueError("Python _EXPORT_MODULES must be a literal dict") from exc
+        if not isinstance(value, dict):
+            raise ValueError("Python _EXPORT_MODULES must be a literal dict")
+        mapped: dict[str, tuple[str, str]] = {}
+        for key, item in value.items():
+            if (
+                not isinstance(key, str)
+                or not isinstance(item, (list, tuple))
+                or len(item) != 2
+                or not all(isinstance(part, str) for part in item)
+            ):
+                raise ValueError(
+                    "Python _EXPORT_MODULES entries must map string exports "
+                    "to string module/name pairs"
+                )
+            if key in mapped:
+                raise ValueError(f"Python _EXPORT_MODULES duplicate export: {key}")
+            module_name, source_name = item
+            mapped[key] = (module_name.lstrip("."), source_name)
+        return mapped
+
     for node in init.body:
         if isinstance(node, ast.ImportFrom) and node.module:
             for alias in node.names:
-                imports[alias.asname or alias.name] = (node.module, alias.name)
+                record_import(alias.asname or alias.name, node.module, alias.name)
         if isinstance(node, ast.Assign) and any(
             isinstance(target, ast.Name) and target.id == "__all__"
             for target in node.targets
@@ -103,6 +142,12 @@ def python_inventory() -> dict[str, Any]:
             ):
                 raise ValueError("Python __all__ must be a literal string list")
             exported = list(value)
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            if node.target.id == "_EXPORT_MODULES":
+                for public_name, (module_name, source_name) in literal_lazy_export_map(
+                    node.value
+                ).items():
+                    record_import(public_name, module_name, source_name)
     if exported is None:
         raise ValueError("Python public API requires explicit __all__")
     symbols: set[str] = set(exported)
