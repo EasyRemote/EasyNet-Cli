@@ -33,7 +33,25 @@ def test_runtime_identity_projection_rejects_daemon_node_id_alias():
         )
     assert exc_info.value.code == easynet_sdk.ErrorCode.INVALID_ARGUMENT
     assert exc_info.value.stage == "runtime_environment"
-    assert "missing runtime_instance_id" in exc_info.value.message
+    assert "unknown fields: node_id" in exc_info.value.message
+
+
+def test_runtime_identity_projection_rejects_retired_aliases_with_runtime_id():
+    with pytest.raises(easynet_sdk.SDKError) as exc_info:
+        easynet_sdk.runtime_identity_projection_from_json(
+            json.dumps(
+                {
+                    "realm": "acme",
+                    "runtime_instance_id": "runtime-a",
+                    "node_id": "dev-a",
+                    "device_id": "device-a",
+                }
+            )
+        )
+    assert exc_info.value.code == easynet_sdk.ErrorCode.INVALID_ARGUMENT
+    assert exc_info.value.stage == "runtime_environment"
+    assert "device_id" in exc_info.value.message
+    assert "node_id" in exc_info.value.message
 
 
 def test_runtime_credentials_path_derives_from_control_path(tmp_path):
@@ -47,3 +65,24 @@ def test_runtime_identity_projection_rejects_missing_runtime_instance_id():
         easynet_sdk.runtime_identity_projection_from_json('{"realm":"acme"}')
     assert exc_info.value.code == easynet_sdk.ErrorCode.INVALID_ARGUMENT
     assert exc_info.value.stage == "runtime_environment"
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        {"realm": 7, "runtime_instance_id": "runtime-a"},
+        {"realm": "acme", "runtime_instance_id": 7},
+        {"realm": "acme", "runtime_instance_id": "runtime-a", "principal": True},
+        {
+            "realm": "acme",
+            "runtime_instance_id": "runtime-a",
+            "control_plane_endpoint": 443,
+        },
+    ],
+)
+def test_runtime_identity_projection_rejects_non_string_identity_facts(raw):
+    with pytest.raises(easynet_sdk.SDKError) as exc_info:
+        easynet_sdk.runtime_identity_projection_from_json(json.dumps(raw))
+    assert exc_info.value.code == easynet_sdk.ErrorCode.INVALID_ARGUMENT
+    assert exc_info.value.stage == "runtime_environment"
+    assert "must be a string" in exc_info.value.message

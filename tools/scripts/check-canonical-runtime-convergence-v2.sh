@@ -4835,33 +4835,42 @@ check_sdk_control_discovery_strict_wire_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local go_src="$cli_root/sdk/go/control_discovery.go"
   local go_test="$cli_root/sdk/go/control_discovery_test.go"
+  local go_env_src="$cli_root/sdk/go/runtime_environment.go"
+  local go_env_test="$cli_root/sdk/go/runtime_environment_test.go"
   local py_src="$cli_root/sdk/python/easynet_sdk/providers/runtime/control.py"
   local py_test="$cli_root/sdk/python/tests/test_control_ipc.py"
   local py_env_src="$cli_root/sdk/python/easynet_sdk/runtime_environment.py"
   local py_env_test="$cli_root/sdk/python/tests/test_environment.py"
+  local py_runtime_env_test="$cli_root/sdk/python/tests/test_runtime_environment.py"
 
   "$PYTHON_BIN" - \
     "$go_src" \
     "$go_test" \
+    "$go_env_src" \
+    "$go_env_test" \
     "$py_src" \
     "$py_test" \
     "$py_env_src" \
-    "$py_env_test" <<'PY'
+    "$py_env_test" \
+    "$py_runtime_env_test" <<'PY'
 import re
 import sys
 from pathlib import Path
 
-go_src_path, go_test_path, py_src_path, py_test_path, py_env_src_path, py_env_test_path = map(Path, sys.argv[1:])
-for path in (go_src_path, go_test_path, py_src_path, py_test_path, py_env_src_path, py_env_test_path):
+go_src_path, go_test_path, go_env_src_path, go_env_test_path, py_src_path, py_test_path, py_env_src_path, py_env_test_path, py_runtime_env_test_path = map(Path, sys.argv[1:])
+for path in (go_src_path, go_test_path, go_env_src_path, go_env_test_path, py_src_path, py_test_path, py_env_src_path, py_env_test_path, py_runtime_env_test_path):
     if not path.exists():
         raise SystemExit(f"sdk_control_discovery_strict_wire:missing:{path}")
 
 go_src = go_src_path.read_text(encoding="utf-8")
 go_test = go_test_path.read_text(encoding="utf-8")
+go_env_src = go_env_src_path.read_text(encoding="utf-8")
+go_env_test = go_env_test_path.read_text(encoding="utf-8")
 py_src = py_src_path.read_text(encoding="utf-8")
 py_test = py_test_path.read_text(encoding="utf-8")
 py_env_src = py_env_src_path.read_text(encoding="utf-8")
 py_env_test = py_env_test_path.read_text(encoding="utf-8")
+py_runtime_env_test = py_runtime_env_test_path.read_text(encoding="utf-8")
 
 for retired in (
     "json.Unmarshal(raw, &wire)",
@@ -4938,6 +4947,47 @@ if 'hasattr(discovery, "pages_port")' not in py_test:
     raise SystemExit("sdk_control_discovery_strict_wire:python_test_missing:provider_extension_not_projected")
 if 'hasattr(discovery, "pages_port")' not in py_env_test:
     raise SystemExit("sdk_control_discovery_strict_wire:python_env_test_missing:provider_extension_not_public")
+
+if "fmt.Sprint(value)" in go_env_src:
+    raise SystemExit("sdk_control_discovery_strict_wire:go_runtime_identity_loose_stringify")
+if "runtimeIdentityProjectionAllowedFields" not in go_env_src:
+    raise SystemExit("sdk_control_discovery_strict_wire:go_runtime_identity_unknown_field_gate_missing")
+for token in (
+    "runtimeEnvironmentRequiredString",
+    "runtimeEnvironmentOptionalString",
+    "runtime identity projection contains unknown fields",
+    "runtime identity projection \"+key+\" must be a string",
+):
+    if token not in go_env_src:
+        raise SystemExit(f"sdk_control_discovery_strict_wire:go_runtime_identity_missing:{token}")
+for token in (
+    "TestRuntimeIdentityProjectionRejectsRetiredAliasesEvenWithCanonicalRuntimeID",
+    "TestRuntimeIdentityProjectionRejectsNonStringIdentityFacts",
+    "unknown fields: node_id",
+    "must be a string",
+):
+    if token not in go_env_test:
+        raise SystemExit(f"sdk_control_discovery_strict_wire:go_runtime_identity_test_missing:{token}")
+
+if "return str(value).strip()" in py_env_src:
+    raise SystemExit("sdk_control_discovery_strict_wire:python_runtime_identity_loose_stringify")
+for token in (
+    "_RUNTIME_IDENTITY_PROJECTION_FIELDS",
+    "unknown = sorted(set(decoded).difference(_RUNTIME_IDENTITY_PROJECTION_FIELDS))",
+    "def _required_projection_text(",
+    "def _optional_projection_text(",
+    "must be a string",
+):
+    if token not in py_env_src:
+        raise SystemExit(f"sdk_control_discovery_strict_wire:python_runtime_identity_missing:{token}")
+for token in (
+    "test_runtime_identity_projection_rejects_retired_aliases_with_runtime_id",
+    "test_runtime_identity_projection_rejects_non_string_identity_facts",
+    "unknown fields: node_id",
+    "must be a string",
+):
+    if token not in py_runtime_env_test:
+        raise SystemExit(f"sdk_control_discovery_strict_wire:python_runtime_identity_test_missing:{token}")
 PY
 }
 

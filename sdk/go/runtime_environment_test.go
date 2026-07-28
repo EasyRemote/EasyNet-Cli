@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -39,6 +40,9 @@ func TestRuntimeIdentityProjectionRejectsNodeIDAlias(t *testing.T) {
 	if !IsCode(err, ErrInvalidArgument) {
 		t.Fatalf("error = %v, want %s", err, ErrInvalidArgument)
 	}
+	if !strings.Contains(err.Error(), "unknown fields: node_id") {
+		t.Fatalf("error = %v, want unknown node_id rejection", err)
+	}
 }
 
 func TestRuntimeIdentityProjectionRejectsDeviceIDAlias(t *testing.T) {
@@ -48,6 +52,26 @@ func TestRuntimeIdentityProjectionRejectsDeviceIDAlias(t *testing.T) {
 	}
 	if !IsCode(err, ErrInvalidArgument) {
 		t.Fatalf("error = %v, want %s", err, ErrInvalidArgument)
+	}
+	if !strings.Contains(err.Error(), "unknown fields: device_id") {
+		t.Fatalf("error = %v, want unknown device_id rejection", err)
+	}
+}
+
+func TestRuntimeIdentityProjectionRejectsRetiredAliasesEvenWithCanonicalRuntimeID(t *testing.T) {
+	_, err := NewRuntimeIdentityProjectionFromJSON([]byte(`{
+		"realm":"acme",
+		"runtime_instance_id":"runtime-a",
+		"node_id":"dev-a",
+		"device_id":"device-a"
+	}`))
+	if err == nil {
+		t.Fatal("expected retired aliases to fail")
+	}
+	if !IsCode(err, ErrInvalidArgument) ||
+		!strings.Contains(err.Error(), "device_id") ||
+		!strings.Contains(err.Error(), "node_id") {
+		t.Fatalf("error = %v, want unknown retired alias rejection", err)
 	}
 }
 
@@ -68,5 +92,22 @@ func TestRuntimeIdentityProjectionRejectsMissingRuntimeInstanceID(t *testing.T) 
 	}
 	if !IsCode(err, ErrInvalidArgument) {
 		t.Fatalf("error = %v, want %s", err, ErrInvalidArgument)
+	}
+}
+
+func TestRuntimeIdentityProjectionRejectsNonStringIdentityFacts(t *testing.T) {
+	for _, raw := range []string{
+		`{"realm":7,"runtime_instance_id":"runtime-a"}`,
+		`{"realm":"acme","runtime_instance_id":7}`,
+		`{"realm":"acme","runtime_instance_id":"runtime-a","principal":true}`,
+		`{"realm":"acme","runtime_instance_id":"runtime-a","control_plane_endpoint":443}`,
+	} {
+		_, err := NewRuntimeIdentityProjectionFromJSON([]byte(raw))
+		if err == nil {
+			t.Fatalf("expected non-string fact to fail: %s", raw)
+		}
+		if !IsCode(err, ErrInvalidArgument) || !strings.Contains(err.Error(), "must be a string") {
+			t.Fatalf("error = %v, want string type rejection", err)
+		}
 	}
 }

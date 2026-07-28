@@ -6,10 +6,18 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
 const runtimeCredentialsFilename = "credentials.json"
+
+var runtimeIdentityProjectionAllowedFields = map[string]struct{}{
+	"realm":                  {},
+	"runtime_instance_id":    {},
+	"principal":              {},
+	"control_plane_endpoint": {},
+}
 
 // RuntimeIdentityProjection is the public local runtime identity projection.
 // It contains only routable public facts needed by SDK consumers; private-key
@@ -86,17 +94,30 @@ func NewRuntimeIdentityProjectionFromJSON(raw []byte) (RuntimeIdentityProjection
 	if decoded == nil {
 		return RuntimeIdentityProjection{}, invalidRuntimeEnvironment("runtime identity projection must be a JSON object", nil)
 	}
+	if err := rejectUnknownRuntimeIdentityProjectionFields(decoded); err != nil {
+		return RuntimeIdentityProjection{}, err
+	}
+	realm, err := runtimeEnvironmentRequiredString(decoded, "realm")
+	if err != nil {
+		return RuntimeIdentityProjection{}, err
+	}
+	runtimeInstanceID, err := runtimeEnvironmentRequiredString(decoded, "runtime_instance_id")
+	if err != nil {
+		return RuntimeIdentityProjection{}, err
+	}
+	principal, err := runtimeEnvironmentOptionalString(decoded, "principal")
+	if err != nil {
+		return RuntimeIdentityProjection{}, err
+	}
+	controlPlaneEndpoint, err := runtimeEnvironmentOptionalString(decoded, "control_plane_endpoint")
+	if err != nil {
+		return RuntimeIdentityProjection{}, err
+	}
 	projection := RuntimeIdentityProjection{
-		Realm:                runtimeEnvironmentString(decoded, "realm"),
-		RuntimeInstanceID:    runtimeEnvironmentString(decoded, "runtime_instance_id"),
-		Principal:            runtimeEnvironmentString(decoded, "principal"),
-		ControlPlaneEndpoint: runtimeEnvironmentString(decoded, "control_plane_endpoint"),
-	}
-	if projection.Realm == "" {
-		return RuntimeIdentityProjection{}, invalidRuntimeEnvironment("runtime identity projection missing realm", nil)
-	}
-	if projection.RuntimeInstanceID == "" {
-		return RuntimeIdentityProjection{}, invalidRuntimeEnvironment("runtime identity projection missing runtime_instance_id", nil)
+		Realm:                realm,
+		RuntimeInstanceID:    runtimeInstanceID,
+		Principal:            principal,
+		ControlPlaneEndpoint: controlPlaneEndpoint,
 	}
 	return projection, nil
 }
@@ -126,15 +147,48 @@ func (e *SdkEnvironment) ReadRuntimeIdentityProjection(ctx context.Context, cred
 	return ReadRuntimeIdentityProjection(ctx, credentialsPath, e.options.Discover.ControlPath)
 }
 
-func runtimeEnvironmentString(raw map[string]any, key string) string {
+func rejectUnknownRuntimeIdentityProjectionFields(raw map[string]any) error {
+	var unknown []string
+	for key := range raw {
+		if _, ok := runtimeIdentityProjectionAllowedFields[key]; !ok {
+			unknown = append(unknown, key)
+		}
+	}
+	if len(unknown) > 0 {
+		sort.Strings(unknown)
+		return invalidRuntimeEnvironment(
+			"runtime identity projection contains unknown fields: "+strings.Join(unknown, ", "),
+			nil,
+		)
+	}
+	return nil
+}
+
+func runtimeEnvironmentRequiredString(raw map[string]any, key string) (string, error) {
 	value, ok := raw[key]
 	if !ok || value == nil {
-		return ""
+		return "", invalidRuntimeEnvironment("runtime identity projection missing "+key, nil)
+	}
+	text, ok := value.(string)
+	if !ok {
+		return "", invalidRuntimeEnvironment("runtime identity projection "+key+" must be a string", nil)
+	}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return "", invalidRuntimeEnvironment("runtime identity projection missing "+key, nil)
+	}
+	return text, nil
+}
+
+func runtimeEnvironmentOptionalString(raw map[string]any, key string) (string, error) {
+	value, ok := raw[key]
+	if !ok || value == nil {
+		return "", nil
 	}
 	if text, ok := value.(string); ok {
-		return strings.TrimSpace(text)
+		return strings.TrimSpace(text), nil
 	}
-	return strings.TrimSpace(fmt.Sprint(value))
+	return "", invalidRuntimeEnvironment("runtime identity projection "+key+" must be a string", nil)
 }
 
 func invalidRuntimeEnvironment(message string, cause error) error {

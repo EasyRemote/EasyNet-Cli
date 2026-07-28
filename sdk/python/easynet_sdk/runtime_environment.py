@@ -15,6 +15,9 @@ from .providers.runtime.control import _default_control_path
 from .errors import ErrorCode, RetryHint, SDKError
 
 _CREDENTIALS_FILENAME = "credentials.json"
+_RUNTIME_IDENTITY_PROJECTION_FIELDS = frozenset(
+    {"realm", "runtime_instance_id", "principal", "control_plane_endpoint"}
+)
 
 
 @dataclass(frozen=True)
@@ -140,25 +143,43 @@ def runtime_identity_projection_from_json(
         raise _invalid(f"decode runtime identity projection JSON: {exc}", exc) from exc
     if not isinstance(decoded, Mapping):
         raise _invalid("runtime identity projection must be a JSON object")
-    realm = _projection_text(decoded, "realm")
-    runtime_instance_id = _projection_text(decoded, "runtime_instance_id")
-    if not realm:
-        raise _invalid("runtime identity projection missing realm")
-    if not runtime_instance_id:
-        raise _invalid("runtime identity projection missing runtime_instance_id")
+    unknown = sorted(set(decoded).difference(_RUNTIME_IDENTITY_PROJECTION_FIELDS))
+    if unknown:
+        raise _invalid(
+            "runtime identity projection contains unknown fields: " + ", ".join(unknown)
+        )
+    realm = _required_projection_text(decoded, "realm")
+    runtime_instance_id = _required_projection_text(decoded, "runtime_instance_id")
     return RuntimeIdentityProjection(
         realm=realm,
         runtime_instance_id=runtime_instance_id,
-        principal=_projection_text(decoded, "principal"),
-        control_plane_endpoint=_projection_text(decoded, "control_plane_endpoint"),
+        principal=_optional_projection_text(decoded, "principal"),
+        control_plane_endpoint=_optional_projection_text(
+            decoded, "control_plane_endpoint"
+        ),
     )
 
 
-def _projection_text(raw: Mapping[str, object], key: str) -> str:
+def _required_projection_text(raw: Mapping[str, object], key: str) -> str:
+    value = raw.get(key)
+    if value is None:
+        raise _invalid(f"runtime identity projection missing {key}")
+    if not isinstance(value, str):
+        raise _invalid(f"runtime identity projection {key} must be a string")
+    text = value.strip()
+    if not text:
+        raise _invalid(f"runtime identity projection missing {key}")
+    return text
+
+
+def _optional_projection_text(raw: Mapping[str, object], key: str) -> str:
     value = raw.get(key)
     if value is None:
         return ""
-    return str(value).strip()
+    if not isinstance(value, str):
+        raise _invalid(f"runtime identity projection {key} must be a string")
+    return value.strip()
+
 
 def _invalid(message: str, cause: Exception | None = None) -> SDKError:
     return SDKError(

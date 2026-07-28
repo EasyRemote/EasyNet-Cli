@@ -20904,7 +20904,7 @@
       "resource_ura": "9023d498e3f1a8d68e3979df8aa1d496f1b70aadb8e75ae2cc1036bbbb004a0a",
       "retryable_for_hint": "a40a2da8049667e10c4c894f7520a59e71afbfce282f40eb308cb9968d49a6cd",
       "runtime_credentials_path": "6c1ae4611dddb961afae5da922282a2cd85bf764e353fc97e164267305969291",
-      "runtime_identity_projection_from_json": "be857347b4ed0ba5c1cb7afcab41dd17c1fefc435e983f7aae465c9fca2bac7b",
+      "runtime_identity_projection_from_json": "6d22b91fad55114822714b056418dd320d66c714ae81ac824d11d045c70fa5ce",
       "runtime_state_read_subject_ura": "01f174c86edc9af06c5588ef3ce964604b1f52d0e8b5fe7172ee4bfcd2c3ca99",
       "runtime_state_root": "11d059c666917fdd1c911d85554303f9280be712e3daa81967c7965acf3648e0",
       "signer_handle_provenance_error": "4d1e2d8ca981adab29ea68dad83a60124f6d8de16d01dfe9846a5d4a8fee8af4",
