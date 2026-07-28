@@ -64,11 +64,11 @@ pub fn open_beneath(
         }
     }
 
-    open_inner(folder_handle, canonical_root, normalized)
+    open_beneath_platform(folder_handle, canonical_root, normalized)
 }
 
 #[cfg(target_os = "linux")]
-fn open_inner(
+fn open_beneath_platform(
     folder_handle: &PublishedFolderHandle,
     _canonical_root: &Path,
     normalized: &str,
@@ -98,7 +98,7 @@ fn open_inner(
 }
 
 #[cfg(all(unix, not(target_os = "linux")))]
-fn open_inner(
+fn open_beneath_platform(
     _folder_handle: &PublishedFolderHandle,
     canonical_root: &Path,
     normalized: &str,
@@ -110,8 +110,9 @@ fn open_inner(
     // macOS does not expose a stable readable path for an open
     // dirfd. Acknowledged TOCTOU window: a symlink swap between
     // the realpath() check and the open() call could in principle
-    // route the open at a target outside the root. Production
-    // targets Linux; this fallback exists so dev on macOS works.
+    // route the open at a target outside the root. This platform
+    // implementation is intentionally scoped to local macOS/dev use;
+    // production isolation relies on the Linux openat2 strategy above.
     use std::os::fd::FromRawFd;
 
     let candidate = canonical_root.join(normalized);
@@ -148,7 +149,7 @@ fn open_inner(
 }
 
 #[cfg(not(unix))]
-fn open_inner(
+fn open_beneath_platform(
     _folder_handle: &PublishedFolderHandle,
     canonical_root: &Path,
     normalized: &str,
