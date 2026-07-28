@@ -14,16 +14,15 @@
 //   node.list        List device nodes (this device + known peers).
 //   node.describe     Describe one node by id.
 //   node.remove       Remove a node from the realm device registry.
-//   ability.deploy    Publish an ability bundle to a target node.
+//   ability.deploy    Publish an ability bundle to a target Device URA.
 //   ability.uninstall Uninstall a previously deployed ability.
 //
 // Routing model
 // -------------
-// Every mutation handler classifies `node_id` through
-// `DeviceOperationTarget`. `"local"` or the local node id means the
-// current device. Any other id is a remote device target and fails
-// closed as Unsupported rather than attempting a legacy federation
-// compatibility path.
+// Every mutation handler classifies a canonical target identity through
+// `DeviceOperationTarget`. Local mutations require this device's Device URA.
+// Other Device URAs are explicit remote targets and fail closed as Unsupported
+// until the capability matrix marks remote mutation provider-backed.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -83,18 +82,41 @@ impl DeviceOpsClock for SystemDeviceOpsClock {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum DeviceOperationTarget {
     Local,
-    RemoteUnsupported { node_id: String },
+    RemoteUnsupported { target: String },
 }
 
 impl DeviceOperationTarget {
-    fn classify(node_id: &str, local_node_id: &str) -> Self {
+    fn classify_node_id(node_id: &str, local_node_id: &str) -> Self {
         let trimmed = node_id.trim();
         if trimmed.is_empty() || trimmed == "local" || trimmed == local_node_id {
             Self::Local
         } else {
             Self::RemoteUnsupported {
-                node_id: trimmed.to_string(),
+                target: trimmed.to_string(),
             }
+        }
+    }
+
+    fn classify_target_ura(target_ura: &str, local_device_ura: &str) -> anyhow::Result<Self> {
+        let target_ura = target_ura.trim();
+        if target_ura.is_empty() {
+            anyhow::bail!("device mutation target_ura must not be empty");
+        }
+        let parsed = crate::core::ura::parse_ura(target_ura).map_err(|error| {
+            anyhow::anyhow!("device mutation target_ura must be canonical: {error}")
+        })?;
+        if parsed.kind != crate::core::ura::URAKind::Device {
+            anyhow::bail!(
+                "device mutation target_ura must identify a Device, got {:?}",
+                parsed.kind
+            );
+        }
+        if target_ura == local_device_ura {
+            Ok(Self::Local)
+        } else {
+            Ok(Self::RemoteUnsupported {
+                target: target_ura.to_string(),
+            })
         }
     }
 
@@ -105,8 +127,8 @@ impl DeviceOperationTarget {
     fn require_local_mutation(&self, surface: &str) -> anyhow::Result<()> {
         match self {
             Self::Local => Ok(()),
-            Self::RemoteUnsupported { node_id } => Err(anyhow::anyhow!(
-                "{surface}: remote device target {node_id:?} is unsupported by the canonical \
+            Self::RemoteUnsupported { target } => Err(anyhow::anyhow!(
+                "{surface}: remote device target {target:?} is unsupported by the canonical \
                  runtime capability matrix; capability_state=unsupported"
             )),
         }
@@ -283,7 +305,7 @@ fn describe_node_handler(
         anyhow::bail!("node.describe: `node_id` is required");
     }
     let local = local_identity()?;
-    if DeviceOperationTarget::classify(node_id, &local.node_id).is_local() {
+    if DeviceOperationTarget::classify_node_id(node_id, &local.node_id).is_local() {
         let catalog = local_catalog.get().ok_or_else(|| {
             anyhow::anyhow!("node.describe: live ability catalog is not attached")
         })?;
@@ -346,7 +368,7 @@ fn remove_node_handler(args: Value) -> anyhow::Result<Value> {
         anyhow::bail!("node.remove: `node_id` is required");
     }
     let local = local_identity()?;
-    let target = DeviceOperationTarget::classify(node_id, &local.node_id);
+    let target = DeviceOperationTarget::classify_node_id(node_id, &local.node_id);
     match &target {
         DeviceOperationTarget::Local => {
             anyhow::bail!(
@@ -511,15 +533,16 @@ fn deploy_ability_handler_with_clock(
     device_registrar: &SharedDeviceRegistrarCell,
     clock: &dyn DeviceOpsClock,
 ) -> anyhow::Result<Value> {
-    let node_id = args
-        .get("node_id")
+    let target_ura = args
+        .get("target_ura")
         .and_then(Value::as_str)
-        .unwrap_or("local")
-        .trim();
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("ability.deploy: `target_ura` is required"))?;
     let local = local_identity()?;
     let owner_ura = crate::core::ura::device_ura(&local.tenant_id, &local.node_id);
     let mutated_by = require_local_device_authority(&env, &owner_ura, "ability.deploy")?;
-    DeviceOperationTarget::classify(node_id, &local.node_id)
+    DeviceOperationTarget::classify_target_ura(target_ura, &owner_ura)?
         .require_local_mutation("ability.deploy")?;
 
     // ── manifest materialization ────────────────────────────────────
@@ -557,6 +580,7 @@ fn deploy_ability_handler_with_clock(
         "namespace": bundle.namespace.as_str(),
         "ability_ura": ability_ura,
         "node_id": local.node_id,
+        "target_ura": owner_ura,
         "mutated_by": mutated_by,
         "install_id": install_id,
         "bundle": bundle.display_path,
@@ -597,15 +621,16 @@ fn uninstall_ability_handler(
         .filter(|s| !s.is_empty())
         .ok_or_else(|| anyhow::anyhow!("ability.uninstall: `ability_ura` is required"))?;
     let public_name = ability_public_name(ability_ura)?;
-    let node_id = args
-        .get("node_id")
+    let target_ura = args
+        .get("target_ura")
         .and_then(Value::as_str)
-        .unwrap_or("local")
-        .trim();
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("ability.uninstall: `target_ura` is required"))?;
     let local = local_identity()?;
     let owner_ura = crate::core::ura::device_ura(&local.tenant_id, &local.node_id);
     let mutated_by = require_local_device_authority(&env, &owner_ura, "ability.uninstall")?;
-    DeviceOperationTarget::classify(node_id, &local.node_id)
+    DeviceOperationTarget::classify_target_ura(target_ura, &owner_ura)?
         .require_local_mutation("ability.uninstall")?;
 
     let registrar = require_device_registrar(device_registrar, "ability.uninstall")?;
@@ -627,6 +652,7 @@ fn uninstall_ability_handler(
         "public_name": public_name,
         "ability_ura": ability_ura,
         "node_id": local.node_id,
+        "target_ura": owner_ura,
         "mutated_by": mutated_by,
         "install_ids": outcome.install_ids,
         "runtime_removed": outcome.runtime_removed,
@@ -711,7 +737,7 @@ pub fn remove_node_input_schema() -> Value {
 }
 
 pub fn deploy_ability_description() -> &'static str {
-    "Publish a host_stream device ability bundle ResourceRef to a node. Local \
+    "Publish a host_stream device ability bundle ResourceRef to a canonical Device URA. Local \
      target validates the manifest, durably installs it, binds the runtime, \
      and registers the control-plane record. Remote targets are currently \
      unsupported by the canonical runtime capability matrix. Shell and arbitrary \
@@ -722,16 +748,16 @@ pub fn deploy_ability_input_schema() -> Value {
     json!({
         "type": "object",
         "additionalProperties": false,
-        "required": ["resource_ref"],
+        "required": ["resource_ref", "target_ura"],
         "properties": {
             "resource_ref": filesystem::resource_ref_schema(),
-            "node_id": { "type": "string" }
+            "target_ura": { "type": "string" }
         }
     })
 }
 
 pub fn uninstall_ability_description() -> &'static str {
-    "Uninstall an ability from a node. Mirrors `ability.deploy`: \
+    "Uninstall an ability from a canonical Device URA. Mirrors `ability.deploy`: \
      local target removes the durable row, runtime binding, and \
      control-plane record; remote targets are currently unsupported by the \
      canonical runtime capability matrix."
@@ -741,10 +767,10 @@ pub fn uninstall_ability_input_schema() -> Value {
     json!({
         "type": "object",
         "additionalProperties": false,
-        "required": ["ability_ura"],
+        "required": ["ability_ura", "target_ura"],
         "properties": {
             "ability_ura":  { "type": "string" },
-            "node_id":      { "type": "string" },
+            "target_ura":   { "type": "string" },
             "install_id":   { "type": "string" }
         }
     })
@@ -910,9 +936,32 @@ mod tests {
     #[test]
     fn deploy_ability_rejects_missing_resource_ref() {
         let _home = provision_local_device_credentials();
-        let err = deploy_ability_handler(local_device_env(), json!({}), &empty_device_cell())
-            .unwrap_err();
+        let err = deploy_ability_handler(
+            local_device_env(),
+            json!({ "target_ura": TEST_DEVICE_URA }),
+            &empty_device_cell(),
+        )
+        .unwrap_err();
         assert!(format!("{err}").contains("resource_ref"));
+    }
+
+    #[test]
+    fn deploy_ability_requires_canonical_target_ura() {
+        let _home = provision_local_device_credentials();
+        for args in [
+            json!({ "resource_ref": {} }),
+            json!({ "resource_ref": {}, "target_ura": "local" }),
+            json!({ "resource_ref": {}, "target_ura": "remote-a" }),
+            json!({ "resource_ref": {}, "target_ura": crate::core::ura::hub_ura("test") }),
+        ] {
+            let err = deploy_ability_handler(local_device_env(), args, &empty_device_cell())
+                .expect_err("deploy target must be an explicit canonical Device URA");
+            let message = format!("{err}");
+            assert!(
+                message.contains("target_ura"),
+                "target validation must name target_ura: {message}"
+            );
+        }
     }
 
     #[test]
@@ -924,7 +973,7 @@ mod tests {
                 .unwrap();
         let err = deploy_ability_handler(
             local_device_env(),
-            json!({ "resource_ref": resource_ref, "node_id": "local" }),
+            json!({ "resource_ref": resource_ref, "target_ura": TEST_DEVICE_URA }),
             &empty_device_cell(),
         )
         .unwrap_err();
@@ -951,7 +1000,7 @@ mod tests {
                 .unwrap();
         let err = deploy_ability_handler(
             local_device_env(),
-            json!({ "resource_ref": resource_ref, "node_id": "local" }),
+            json!({ "resource_ref": resource_ref, "target_ura": TEST_DEVICE_URA }),
             &empty_device_cell(),
         )
         .unwrap_err();
@@ -966,7 +1015,7 @@ mod tests {
         let _home = provision_local_device_credentials();
         let err = deploy_ability_handler(
             local_device_env(),
-            json!({ "node_id": "remote-a" }),
+            json!({ "target_ura": "easynet:///r/test/device/remote-a" }),
             &empty_device_cell(),
         )
         .unwrap_err();
@@ -993,7 +1042,7 @@ mod tests {
                 .unwrap();
         let err = deploy_ability_handler(
             local_device_env(),
-            json!({ "resource_ref": resource_ref, "node_id": "local" }),
+            json!({ "resource_ref": resource_ref, "target_ura": TEST_DEVICE_URA }),
             &empty_device_cell(),
         )
         .unwrap_err();
@@ -1019,7 +1068,7 @@ mod tests {
                 .unwrap();
         let err = deploy_ability_handler(
             local_device_env(),
-            json!({ "resource_ref": resource_ref, "node_id": "local" }),
+            json!({ "resource_ref": resource_ref, "target_ura": TEST_DEVICE_URA }),
             &empty_device_cell(),
         )
         .unwrap_err();
@@ -1062,7 +1111,7 @@ mod tests {
                 .unwrap();
         let err = deploy_ability_handler(
             local_device_env(),
-            json!({ "resource_ref": resource_ref, "node_id": "local" }),
+            json!({ "resource_ref": resource_ref, "target_ura": TEST_DEVICE_URA }),
             &empty_device_cell(),
         )
         .unwrap_err();
@@ -1079,7 +1128,7 @@ mod tests {
             local_device_env(),
             json!({
                 "ability_ura": "easynet:///r/localhost/ability/alice.claude.weather",
-                "node_id": "local",
+                "target_ura": TEST_DEVICE_URA,
             }),
             &empty_device_cell(),
         )
@@ -1094,7 +1143,7 @@ mod tests {
             local_device_env(),
             json!({
                 "ability_ura": "easynet:///r/localhost/ability/alice.claude.weather",
-                "node_id": "remote-a",
+                "target_ura": "easynet:///r/test/device/remote-a",
             }),
             &empty_device_cell(),
         )
@@ -1147,7 +1196,7 @@ mod tests {
                 assert!(cell.set(registrar).is_ok());
                 deploy_ability_handler(
                     local_device_env(),
-                    json!({ "resource_ref": resource_ref, "node_id": "local" }),
+                    json!({ "resource_ref": resource_ref, "target_ura": TEST_DEVICE_URA }),
                     &cell,
                 )
             });

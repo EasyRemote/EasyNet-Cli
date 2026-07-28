@@ -17,7 +17,7 @@ receipt_semantics = "operational"
 
 [input_schema]
 type = "object"
-required = ["caller_ura", "principal_kind", "callee_ura", "subject_ura", "ability_ura", "action"]
+required = ["owner_ura", "owner_source", "caller_ura", "principal_kind", "callee_ura", "subject_ura", "ability_ura", "action"]
 additionalProperties = false
 
 [input_schema.properties.ability_ura]
@@ -33,9 +33,6 @@ type = "string"
 type = "string"
 
 [input_schema.properties.caller_ura]
-type = "string"
-
-[input_schema.properties.caller_user_id]
 type = "string"
 
 [input_schema.properties.canonical_hash]

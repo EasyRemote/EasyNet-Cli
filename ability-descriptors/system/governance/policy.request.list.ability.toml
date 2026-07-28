@@ -17,7 +17,7 @@ receipt_semantics = "operational"
 
 [input_schema]
 type = "object"
-required = []
+required = ["owner_ura"]
 additionalProperties = false
 
 [input_schema.properties.ability_ura]

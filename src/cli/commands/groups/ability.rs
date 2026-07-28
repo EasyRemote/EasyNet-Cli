@@ -14,7 +14,7 @@
 //   show <ability-ura>          Display one endpoint's contract surface    (NEW)
 //   new <name> [--lang LANG]    Scaffold a new ability project             (-> cli::ability_scaffold)
 //   validate <path>             Lint an ability manifest before deploy     (-> cli::ability_scaffold)
-//   deploy <path> --node <id>   Publish a new ability version              (-> cli::deploy)
+//   deploy <path> --node <ura>  Publish a new ability version              (-> cli::deploy)
 //   uninstall <ability-ura>     Remove a deployed ability                  (NEW)
 //   invoke <ability-ura>       Call a public ability by canonical URA      (-> cli::invoke)
 //   stream <ability-ura>       Call a server-stream ability locally        (-> cli::ability_stream)
@@ -48,14 +48,6 @@
 //               A `pull` verb would imply code installation; the default GET
 //               route is remote `invoke`. See
 //               docs/spec/seven-axes-p0-landing-v1.md §2.5 / §0.1-6.
-//
-// Routing note (transitional misalignment):
-//   `deploy --node <id>` currently takes a *device node id*, not an
-//   agent logical id. Under interpretation C this is a known leak —
-//   the public API should resolve `<tenant>/<agent-name>` to its
-//   hosting device. The migration is tracked as a deferred item; the
-//   CLI shape stays as-is until the SDK exposes agent-id-routed
-//   deploy.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -95,7 +87,7 @@ pub enum AbilityAction {
     /// schema, runtime state, and hosting device. Use `--format json`
     /// to pipe the raw registry record into other tools.
     Show(ShowArgs),
-    /// Publish an ability version to a device (node id today; agent-id routing is planned).
+    /// Publish an ability version to a canonical Device URA.
     Deploy(deploy::DeployArgs),
     /// Uninstall a previously deployed ability.
     Uninstall(UninstallArgs),
@@ -137,10 +129,9 @@ pub struct ShowArgs {
 pub struct UninstallArgs {
     /// Canonical Ability URA to uninstall.
     pub ability_ura: String,
-    /// Target node id. `local` or this device id uninstall locally;
-    /// remote uninstall keeps this CLI shape but currently returns the
-    /// daemon's typed `federation_not_wired` error.
-    #[arg(long, short = 'n', value_name = "NODE_ID")]
+    /// Target device. `local` resolves to this daemon's canonical Device URA;
+    /// remote targets must be canonical Device URAs.
+    #[arg(long, short = 'n', value_name = "DEVICE_URA")]
     pub node: Option<String>,
     /// Install id from the deploy receipt. Narrows uninstall to one
     /// deployed bundle when multiple rows share the same ability URA.
@@ -275,7 +266,8 @@ fn run_uninstall(args: UninstallArgs) -> anyhow::Result<()> {
             return Ok(());
         }
     }
-    let result = invoke_ability_uninstall(ability_uninstall_payload(&args))?;
+    let payload = ability_uninstall_payload(&args)?;
+    let result = invoke_ability_uninstall(payload)?;
     output::success(&format!("uninstalled {}", args.ability_ura));
     if !result.is_null() {
         println!("{}", serde_json::to_string_pretty(&result)?);
@@ -288,15 +280,19 @@ fn invoke_ability_uninstall(args: Value) -> anyhow::Result<Value> {
         .context("invoke ability.uninstall")
 }
 
-fn ability_uninstall_payload(args: &UninstallArgs) -> Value {
-    let mut body = serde_json::json!({ "ability_ura": args.ability_ura.clone() });
-    if let Some(node) = args.node.as_deref().filter(|s| !s.trim().is_empty()) {
-        body["node_id"] = serde_json::json!(node);
-    }
+fn ability_uninstall_payload(args: &UninstallArgs) -> anyhow::Result<Value> {
+    let target_ura = crate::support::platform::remote_device::resolve_cli_device_target_ura(
+        args.node.as_deref(),
+        "ability uninstall",
+    )?;
+    let mut body = serde_json::json!({
+        "ability_ura": args.ability_ura.clone(),
+        "target_ura": target_ura,
+    });
     if let Some(iid) = args.install_id.as_deref().filter(|s| !s.trim().is_empty()) {
         body["install_id"] = serde_json::json!(iid);
     }
-    body
+    Ok(body)
 }
 
 fn ensure_ability_ura(value: &str) -> anyhow::Result<()> {
@@ -313,38 +309,34 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ability_uninstall_payload_preserves_public_wire_shape() {
+    fn ability_uninstall_payload_uses_canonical_target_ura() {
         let payload = ability_uninstall_payload(&UninstallArgs {
             ability_ura: "easynet:///r/test/ability/device.dev.example.run".to_string(),
-            node: Some("dev-node".to_string()),
+            node: Some("easynet:///r/test/device/dev-node".to_string()),
             install_id: Some("install-123".to_string()),
             yes: true,
-        });
+        })
+        .expect("canonical uninstall target");
 
         assert_eq!(
             payload,
             serde_json::json!({
                 "ability_ura": "easynet:///r/test/ability/device.dev.example.run",
-                "node_id": "dev-node",
+                "target_ura": "easynet:///r/test/device/dev-node",
                 "install_id": "install-123",
             })
         );
     }
 
     #[test]
-    fn ability_uninstall_payload_omits_blank_optional_fields() {
-        let payload = ability_uninstall_payload(&UninstallArgs {
+    fn ability_uninstall_payload_rejects_blank_target_before_daemon_payload() {
+        let err = ability_uninstall_payload(&UninstallArgs {
             ability_ura: "easynet:///r/test/ability/device.dev.example.run".to_string(),
             node: Some("  ".to_string()),
             install_id: Some("".to_string()),
             yes: true,
-        });
-
-        assert_eq!(
-            payload,
-            serde_json::json!({
-                "ability_ura": "easynet:///r/test/ability/device.dev.example.run",
-            })
-        );
+        })
+        .expect_err("blank target must fail before daemon payload");
+        assert!(err.to_string().contains("target must not be empty"));
     }
 }

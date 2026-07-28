@@ -69,9 +69,26 @@ pub(crate) fn registration_manifest(ability_key: &str) -> anyhow::Result<Ability
 /// downgraded to a name-only descriptor.
 pub(crate) fn registry_manifest(
     ability_key: &'static str,
-    _description: &'static str,
-    _input_schema: Value,
+    description: &'static str,
+    input_schema: Value,
 ) -> AbilityManifest {
-    registration_manifest(ability_key)
-        .unwrap_or_else(|error| panic!("{ability_key} system manifest must be valid: {error}"))
+    let contract = canonical_registration_contract(ability_key).unwrap_or_else(|error| {
+        panic!("{ability_key} canonical descriptor contract must be valid: {error}")
+    });
+    let manifest_name = ability_key.rsplit('.').next().unwrap_or(ability_key);
+    let mut manifest = AbilityManifest::new(manifest_name, description, input_schema)
+        .unwrap_or_else(|error| panic!("{ability_key} system manifest must be valid: {error}"));
+    if !contract.output_receipt_schema.is_null() {
+        manifest = manifest
+            .with_output_schema(contract.output_receipt_schema.clone())
+            .unwrap_or_else(|error| {
+                panic!("{ability_key} output receipt schema must be valid: {error}")
+            });
+    }
+    manifest
+        .with_descriptor_version(contract.descriptor_version)
+        .and_then(|manifest| manifest.with_admission_action(contract.admission_action.as_str()))
+        .unwrap_or_else(|error| {
+            panic!("{ability_key} governed manifest fields are invalid: {error}")
+        })
 }

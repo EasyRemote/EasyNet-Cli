@@ -593,7 +593,7 @@ if ! rg -n 'LocalDaemonSystemAbilityIssuer::invoke_root_for_local_daemon_identit
   fail "ability.uninstall must delegate local daemon identity subject policy to the system issuer"
 fi
 
-if ! rg -n -F 'invoke_ability_uninstall(ability_uninstall_payload(&args))' "$ABILITY_GROUP" >/dev/null; then
+if ! rg -n -U 'let payload = ability_uninstall_payload\(&args\)\?;\s*let result = invoke_ability_uninstall\(payload\)\?;' "$ABILITY_GROUP" >/dev/null; then
   fail "ability.uninstall must remain on the explicit action issuer path"
 fi
 

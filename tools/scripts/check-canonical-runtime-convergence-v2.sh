@@ -16125,7 +16125,13 @@ check_ability_deploy_product_neutrality_contract() {
 check_device_ability_mutation_target_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local ops="$cli_root/src/daemon/ability/builtins/device_control/ability_management/ops.rs"
+  local deploy_cli="$cli_root/src/cli/commands/deploy.rs"
+  local ability_cli="$cli_root/src/cli/commands/groups/ability.rs"
+  local remote_device="$cli_root/src/support/platform/remote_device.rs"
   [[ -f "$ops" ]] || fail "device ability management source is missing: ${ops#$cli_root/}"
+  [[ -f "$deploy_cli" ]] || fail "ability deploy CLI source is missing: ${deploy_cli#$cli_root/}"
+  [[ -f "$ability_cli" ]] || fail "ability CLI group source is missing: ${ability_cli#$cli_root/}"
+  [[ -f "$remote_device" ]] || fail "remote device target helper is missing: ${remote_device#$cli_root/}"
 
   "$PYTHON_BIN" - "$ops" <<'PY'
 import re
@@ -16142,8 +16148,12 @@ for required, code in (
     ("capability_state=unsupported", "unsupported_state_diagnostic_missing"),
     ("fn require_device_registrar(", "registrar_requirement_missing"),
     ("canonical device ability registrar is unavailable", "registrar_precondition_diagnostic_missing"),
+    ("fn classify_target_ura(", "canonical_target_ura_classifier_missing"),
+    ("ability.deploy: `target_ura` is required", "deploy_target_ura_requirement_missing"),
+    ("ability.uninstall: `target_ura` is required", "uninstall_target_ura_requirement_missing"),
     ("remove_node_remote_target_is_unsupported_capability_state", "remove_remote_test_missing"),
     ("deploy_ability_remote_target_is_unsupported_before_bundle_materialization", "deploy_remote_test_missing"),
+    ("deploy_ability_requires_canonical_target_ura", "deploy_target_ura_test_missing"),
     ("uninstall_ability_remote_target_is_unsupported_capability_state", "uninstall_remote_test_missing"),
 ):
     if required not in text:
@@ -16165,7 +16175,30 @@ for retired in (
 
 if len(re.findall(r"device_registrar\.get\(\)\s*\.cloned\(\)", production)) != 1:
     raise SystemExit("device_ability_mutation_target:registrar_lookup_not_centralized")
+
+for fn_name, code in (
+    ("deploy_ability_handler_with_clock", "deploy"),
+    ("uninstall_ability_handler", "uninstall"),
+):
+    match = re.search(rf"fn {fn_name}\((?P<body>.*?)(?:\nfn |\n// ──|\n#\[cfg\(test\)\])", production, re.S)
+    if not match:
+        raise SystemExit(f"device_ability_mutation_target:{code}_handler_missing")
+    body = match.group("body")
+    if '.get("node_id")' in body or 'unwrap_or("local")' in body:
+        raise SystemExit(f"device_ability_mutation_target:{code}_node_id_payload_fallback_present")
+    if '.get("target_ura")' not in body or "classify_target_ura" not in body:
+        raise SystemExit(f"device_ability_mutation_target:{code}_target_ura_classifier_missing")
 PY
+
+  if ! rg -n 'resolve_cli_device_target_ura' "$remote_device" >/dev/null; then
+    fail "device ability mutation CLI target resolver is missing"
+  fi
+  if rg -n '"node_id"[[:space:]]*:[[:space:]]*args\.node|body\["node_id"\]' "$deploy_cli" "$ability_cli"; then
+    fail "device ability mutation path preserves node_id/local fallback payload construction"
+  fi
+  if ! rg -n '"target_ura"[[:space:]]*:[[:space:]]*target_ura|body\["target_ura"\]|"target_ura"[[:space:]]*:[[:space:]]*TEST_DEVICE_URA' "$deploy_cli" "$ability_cli" "$ops" >/dev/null; then
+    fail "device ability mutation path does not build canonical target_ura payloads"
+  fi
 }
 
 check_invocation_outcome_terminal_result_contract() {

@@ -2,30 +2,28 @@
 // =======================================
 //
 // File: src/cli/deploy.rs
-// Description: Publish an ability bundle to a target node.
+// Description: Publish an ability bundle to a canonical Device URA.
 //
 // Per the ability-only ontology, deploying an ability is itself an
 // ability invocation: the operator invokes `ability.deploy`
 // on the local daemon, passing a short-lived filesystem ResourceRef
-// and target node id. The daemon-side handler reads the bundle,
+// and target Device URA. The daemon-side handler reads the bundle,
 // validates the manifest, computes the integrity digest, and publishes
-// through the federation transport. Single-node case (the only
-// deployable target is `local`) lands the bundle into the local
-// registry; the multi-node fan-out lights up the day federation Invoke
-// ships.
+// through the canonical device ability registrar. Local deploy lands the
+// bundle into the local registry; remote Device URAs fail closed as an
+// Unsupported capability state until the capability matrix marks remote
+// mutation provider-backed.
 //
 // What this CLI shim does
 // -----------------------
-//   1. Validate args locally (path exists, node id non-empty).
+//   1. Validate args locally (path exists, target resolves to a Device URA).
 //   2. Mint a ResourceRef and map args → JSON request body.
 //   3. Invoke `ability.deploy` through LocalDaemonSystemAbilityIssuer with the
 //      minted ResourceRef URA as the daemon-system subject.
 //   4. Print the daemon's response.
 //
 // All policy (manifest validation, signature handling, ordering of
-// publish→install→activate) lives inside the ability handler so
-// the federation Invoke replacement carries the same contract
-// without rewriting the CLI.
+// publish→install→activate) lives inside the ability handler.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -47,14 +45,13 @@ pub struct DeployArgs {
     /// binding is `kind = "host_stream"`; other exec kinds are rejected by
     /// the daemon until their runtime boundaries are implemented.
     pub path: String,
-    /// Target device node id. Defaults to 'local', the only fully
-    /// implemented target in this release. Any other node id requires
-    /// the federation Invoke transport and returns a typed
-    /// 'federation_not_wired' error until that transport ships.
+    /// Target device. Defaults to 'local', which resolves to this daemon's
+    /// canonical Device URA before daemon invocation. Remote targets must be
+    /// canonical Device URAs; bare node ids are rejected before mutation.
     #[arg(
         long = "node",
         short = 'n',
-        value_name = "NODE_ID",
+        value_name = "DEVICE_URA",
         default_value = "local"
     )]
     pub node: String,
@@ -69,13 +66,17 @@ pub fn run(args: DeployArgs) -> anyhow::Result<()> {
     anyhow::ensure!(dir.is_dir(), "{} is not a directory", args.path);
     anyhow::ensure!(
         !args.node.trim().is_empty(),
-        "--node was given but empty; pass `local` for this device or a real node id"
+        "--node was given but empty; pass `local` for this device or a canonical Device URA"
     );
+    let target_ura = crate::support::platform::remote_device::resolve_cli_device_target_ura(
+        Some(&args.node),
+        "ability deploy",
+    )?;
 
     eprint!(
         "  deploying {} to {} ... ",
         style(&args.path).cyan(),
-        style(&args.node).cyan()
+        style(&target_ura).cyan()
     );
     let resource_ref = resource_ref_for_local_path(dir, FilesystemResourceCapability::Read)
         .context("mint ability bundle ResourceRef")?;
@@ -89,7 +90,7 @@ pub fn run(args: DeployArgs) -> anyhow::Result<()> {
         "ability.deploy",
         json!({
             "resource_ref": resource_ref,
-            "node_id": args.node,
+            "target_ura": target_ura,
         }),
         &subject_ura,
     )
@@ -156,5 +157,19 @@ mod tests {
             },
             other => panic!("expected ability command, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn deploy_target_ura_rejects_bare_node_id_before_daemon_payload() {
+        let err = crate::support::platform::remote_device::resolve_cli_device_target_ura(
+            Some("node-a"),
+            "ability deploy",
+        )
+        .expect_err("bare node id must not be accepted");
+        let message = err.to_string();
+        assert!(
+            message.contains("canonical URA") || message.contains("Device URA"),
+            "unexpected target error: {message}"
+        );
     }
 }

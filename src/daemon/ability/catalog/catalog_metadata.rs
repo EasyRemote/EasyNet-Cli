@@ -208,7 +208,7 @@ pub fn system_ability_contract_inventory_for_voice_assembly(
         if voice_contracts.contains_key(&contract.name) {
             continue;
         }
-        insert_canonical_contract(&mut contracts, contract);
+        insert_descriptor_contract(&mut contracts, contract);
     }
     for descriptor in published_system_abilities() {
         let name = descriptor.name.clone();
@@ -233,11 +233,11 @@ pub fn system_ability_contract_inventory_for_voice_assembly(
             hints: descriptor.hints.clone(),
             capability_state: CapabilityState::CutoverReady,
         };
-        insert_canonical_contract(&mut contracts, contract);
+        upsert_operational_contract(&mut contracts, contract);
     }
 
     for contract in voice_contracts.into_values() {
-        insert_canonical_contract(&mut contracts, contract);
+        insert_descriptor_contract(&mut contracts, contract);
     }
 
     contracts.into_values().collect()
@@ -283,7 +283,7 @@ pub fn voice_ability_contract_inventory(
         .collect()
 }
 
-fn insert_canonical_contract(
+fn insert_descriptor_contract(
     contracts: &mut BTreeMap<String, SystemAbilityContract>,
     contract: SystemAbilityContract,
 ) {
@@ -299,6 +299,13 @@ fn insert_canonical_contract(
             contract.name
         ),
     }
+}
+
+fn upsert_operational_contract(
+    contracts: &mut BTreeMap<String, SystemAbilityContract>,
+    contract: SystemAbilityContract,
+) {
+    contracts.insert(contract.name.clone(), contract);
 }
 
 /// Published system abilities whose authority/projection class was declared as
@@ -1415,10 +1422,10 @@ mod canonical_contract_tests {
 
         for variant in variants {
             let mut contracts = BTreeMap::new();
-            insert_canonical_contract(&mut contracts, baseline.clone());
+            insert_descriptor_contract(&mut contracts, baseline.clone());
             assert!(
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    insert_canonical_contract(&mut contracts, variant)
+                    insert_descriptor_contract(&mut contracts, variant)
                 }))
                 .is_err(),
                 "canonical conflict must fail closed"

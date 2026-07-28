@@ -1,7 +1,7 @@
 schema_version = "2"
 name = "invocation.cancel"
 descriptor_version = "1.0.0"
-description = "Request cancellation of one registered unary Invocation lifecycle owned by this authority."
+description = "Request cancellation of one registered Invocation lifecycle owned by this authority."
 call_mode = "rpc"
 capability_state = "cutover_ready"
 admission_action = "manage"

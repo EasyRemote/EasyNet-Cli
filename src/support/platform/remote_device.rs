@@ -16,6 +16,7 @@
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 use anyhow::anyhow;
+use anyhow::Context;
 
 /// Resolve the explicit signing identity for a CLI-originated remote request.
 ///
@@ -61,6 +62,29 @@ pub(crate) fn resolve_target_device_ura(node: &str) -> anyhow::Result<String> {
     crate::daemon::invocation::routing::remote_invoke::parse_node_ura(trimmed)
 }
 
+/// Resolve a CLI device-target flag into a canonical Device URA.
+///
+/// Human-facing commands may keep the ergonomic `local` selector. The selector
+/// is consumed at the CLI boundary and never enters daemon ability arguments.
+/// Remote targets are URA-only; bare node ids are not repaired from directory
+/// state because mutation admission must bind to one explicit runtime owner.
+pub(crate) fn resolve_cli_device_target_ura(
+    raw: Option<&str>,
+    surface: &str,
+) -> anyhow::Result<String> {
+    let target = raw.unwrap_or("local").trim();
+    if target.is_empty() {
+        anyhow::bail!("{surface} target must not be empty; pass `local` or a canonical Device URA");
+    }
+    if target == "local" {
+        return crate::daemon::identity::local_invocation::local_device_ura()
+            .with_context(|| format!("resolve local {surface} target Device URA"));
+    }
+    resolve_target_device_ura(target).map_err(|error| {
+        anyhow!("{surface} target must be a canonical Device URA; failed to resolve {target:?}: {error}")
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -94,6 +118,17 @@ mod tests {
         assert!(
             msg.contains("must not be empty"),
             "empty target failure must remain local, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn cli_device_target_rejects_bare_node_id_before_directory_lookup() {
+        let err = resolve_cli_device_target_ura(Some("node-2"), "ability deploy")
+            .expect_err("bare node id must not be repaired from directory state");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("canonical URA"),
+            "unexpected CLI target error: {msg}"
         );
     }
 }

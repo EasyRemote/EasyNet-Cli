@@ -35,13 +35,9 @@ description = "Canonical Ability URAs. Records match when ability_ura equals any
 minItems = 1
 uniqueItems = true
 
-[input_schema.properties.filter.properties.agent_ura]
-type = "string"
-description = "Ability owner/callee Agent URA. Equivalent to callee_ura for history scope."
-
 [input_schema.properties.filter.properties.callee_ura]
 type = "string"
-description = "Callee/owner Agent URA."
+description = "Callee principal URA."
 
 [input_schema.properties.filter.properties.caller_ura]
 type = "string"
