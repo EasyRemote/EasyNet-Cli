@@ -10838,26 +10838,26 @@ from pathlib import Path
 pairing = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
 join = Path(sys.argv[2]).read_text(encoding="utf-8", errors="replace")
 
-def struct_prefix(name: str) -> str:
-    match = re.search(rf"(?P<prefix>(?:#\[[^\n]+\]\n)*pub\(crate\) struct {name} \{{)", pairing)
+def struct_prefix(source: str, name: str) -> str:
+    match = re.search(rf"(?P<prefix>(?:#\[[^\n]+\]\n)*(?:pub\(crate\) )?struct {name} \{{)", source)
     if not match:
         raise SystemExit(f"pairing_response_strict_schema:missing_struct:{name}")
     return match.group("prefix")
 
-def struct_body(name: str) -> str:
-    match = re.search(rf"pub\(crate\) struct {name} \{{(?P<body>.*?)\n\}}", pairing, re.S)
+def struct_body(source: str, name: str) -> str:
+    match = re.search(rf"(?:pub\(crate\) )?struct {name} \{{(?P<body>.*?)\n\}}", source, re.S)
     if not match:
         raise SystemExit(f"pairing_response_strict_schema:missing_struct:{name}")
     return match.group("body")
 
 for name in ("FederatedPeerEntry", "PairingCredentialEnvelope"):
-    prefix = struct_prefix(name)
+    prefix = struct_prefix(pairing, name)
     if "#[serde(deny_unknown_fields)]" not in prefix:
         raise SystemExit(f"pairing_response_strict_schema:open_schema:{name}")
     derive_line = next((line for line in prefix.splitlines() if line.startswith("#[derive(")), "")
     if "Default" in derive_line:
         raise SystemExit(f"pairing_response_strict_schema:default_derive:{name}")
-    if "#[serde(default" in struct_body(name):
+    if "#[serde(default" in struct_body(pairing, name):
         raise SystemExit(f"pairing_response_strict_schema:default_field:{name}")
 
 for required in (
@@ -10876,6 +10876,25 @@ for retired in (
 
 if "pairing_envelope_fixture() -> PairingCredentialEnvelope" not in join:
     raise SystemExit("pairing_response_strict_schema:join_fixture_missing")
+preflight_prefix = struct_prefix(join, "PairingPreflight")
+if "#[serde(deny_unknown_fields)]" not in preflight_prefix:
+    raise SystemExit("pairing_response_strict_schema:preflight_open_schema")
+preflight_body = struct_body(join, "PairingPreflight")
+for required in (
+    "hub_public_key_b64: String",
+    "hub_tls_ca_pem_b64: Option<String>",
+    "hub_agent_ura: String",
+):
+    if required not in preflight_body:
+        raise SystemExit(f"pairing_response_strict_schema:preflight_field_missing:{required}")
+for retired in (
+    "_hub_agent_ura",
+    '#[serde(default)]\n    hub_public_key_b64',
+    '#[serde(default, rename = "hub_agent_ura")]',
+    "hub_tls_ca_pem_b64: String",
+):
+    if retired in preflight_body:
+        raise SystemExit(f"pairing_response_strict_schema:preflight_retired:{retired}")
 for initializer in re.finditer(r"PairingCredentialEnvelope \{(?P<body>.*?)\n\s*\}", join, re.S):
     if "..Default::default()" in initializer.group("body"):
         raise SystemExit("pairing_response_strict_schema:join_default_envelope_constructor")
@@ -10899,6 +10918,14 @@ for required in (
     "pairing response device_public_key does not match local runtime signer",
     "canonical joined device URA",
     "fn require_pairing_field(value: &str, field: &str) -> anyhow::Result<()>",
+    "validate_pairing_preflight(preflight)",
+    "fn validate_pairing_preflight(mut preflight: PairingPreflight)",
+    'require_pairing_preflight_field(&preflight.hub_public_key_b64, "hub_public_key_b64")?',
+    "decode pairing preflight hub_public_key_b64",
+    "pairing preflight hub_agent_ura",
+    "pairing_preflight_rejects_missing_hub_public_key",
+    "pairing_preflight_rejects_short_hub_public_key",
+    "pairing_preflight_rejects_mismatched_hub_agent_ura",
 ):
     if required not in join:
         raise SystemExit(f"pairing_response_strict_schema:join_validation_missing:{required}")

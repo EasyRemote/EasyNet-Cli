@@ -62,17 +62,14 @@ struct PairingPreflight {
     /// into its local `realm-trust.toml` during join, without
     /// needing on-host access to the hub runtime keyring. Empty
     /// responses are rejected by the trust wiring step.
-    #[serde(default)]
     hub_public_key_b64: String,
     /// Optional base64-encoded PEM trust anchor for the hub's
     /// public TLS listener. Self-hosted hubs populate this so the
     /// join flow can pin the CA locally before runtime start;
     /// publicly-trusted hubs leave it empty and the daemon later
     /// falls back to native roots.
-    #[serde(default)]
-    hub_tls_ca_pem_b64: String,
-    #[serde(default, rename = "hub_agent_ura")]
-    _hub_agent_ura: String,
+    hub_tls_ca_pem_b64: Option<String>,
+    hub_agent_ura: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -1616,13 +1613,51 @@ fn preflight_pairing_token(token: &str, hub_base: &str) -> anyhow::Result<Pairin
              that CLI + Hub versions match; re-run with a fresh pairing token if so.",
         )
     })?;
-    if preflight.realm.is_empty() {
-        anyhow::bail!("pairing preflight response missing realm");
+    validate_pairing_preflight(preflight)
+}
+
+fn validate_pairing_preflight(mut preflight: PairingPreflight) -> anyhow::Result<PairingPreflight> {
+    require_pairing_preflight_field(&preflight.realm, "realm")?;
+    require_pairing_preflight_field(&preflight.node_id, "node_id")?;
+    require_pairing_preflight_field(&preflight.hub_public_key_b64, "hub_public_key_b64")?;
+    require_pairing_preflight_field(&preflight.hub_agent_ura, "hub_agent_ura")?;
+
+    let expected_hub_ura = crate::core::ura::hub_ura(preflight.realm.trim());
+    if preflight.hub_agent_ura.trim() != expected_hub_ura {
+        anyhow::bail!(
+            "pairing preflight hub_agent_ura `{}` does not match canonical Hub authority URA `{expected_hub_ura}`",
+            preflight.hub_agent_ura.trim()
+        );
     }
-    if preflight.node_id.is_empty() {
-        anyhow::bail!("pairing preflight response missing node_id");
+
+    let hub_key = base64::engine::general_purpose::STANDARD
+        .decode(preflight.hub_public_key_b64.trim())
+        .context("decode pairing preflight hub_public_key_b64")?;
+    if hub_key.len() != 32 {
+        anyhow::bail!(
+            "pairing preflight hub_public_key_b64 must decode to 32 bytes, got {}",
+            hub_key.len()
+        );
     }
+
+    preflight.realm = preflight.realm.trim().to_string();
+    preflight.node_id = preflight.node_id.trim().to_string();
+    preflight.hub_public_key_b64 = preflight.hub_public_key_b64.trim().to_string();
+    preflight.hub_agent_ura = preflight.hub_agent_ura.trim().to_string();
+    preflight.hub_tls_ca_pem_b64 = preflight
+        .hub_tls_ca_pem_b64
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
     Ok(preflight)
+}
+
+fn require_pairing_preflight_field(value: &str, field: &str) -> anyhow::Result<()> {
+    if value.trim().is_empty() {
+        anyhow::bail!("pairing preflight response missing {field}");
+    }
+    Ok(())
 }
 
 fn validate_pairing_token(
@@ -1689,12 +1724,8 @@ fn validate_pairing_token(
     // trust synchronization can populate `realm-trust.toml` plus any local
     // pinned CA file without needing on-host access to hub-local files.
     let mut creds = credentials_from_pairing_contract(envelope);
-    if !preflight.hub_public_key_b64.trim().is_empty() {
-        creds.hub_pubkey_b64 = Some(preflight.hub_public_key_b64.trim().to_string());
-    }
-    if !preflight.hub_tls_ca_pem_b64.trim().is_empty() {
-        creds.hub_tls_ca_pem_b64 = Some(preflight.hub_tls_ca_pem_b64.trim().to_string());
-    }
+    creds.hub_pubkey_b64 = Some(preflight.hub_public_key_b64.clone());
+    creds.hub_tls_ca_pem_b64 = preflight.hub_tls_ca_pem_b64.clone();
     Ok(creds)
 }
 
@@ -1801,6 +1832,10 @@ mod tests {
             }
             Ok(())
         }
+    }
+
+    fn test_hub_public_key_b64() -> String {
+        base64::engine::general_purpose::STANDARD.encode([0x11u8; 32])
     }
 
     fn join_identity_test_credentials(
@@ -2286,16 +2321,23 @@ mod tests {
     #[test]
     fn pairing_preflight_accepts_current_realm_schema() {
         let preflight: PairingPreflight = serde_json::from_value(serde_json::json!({
-            "realm": "tenant-a",
-            "node_id": "en-test-node",
-            "hub_public_key_b64": "",
-            "hub_tls_ca_pem_b64": "",
-            "hub_agent_ura": crate::core::ura::hub_ura("tenant-a")
+            "realm": " tenant-a ",
+            "node_id": " en-test-node ",
+            "hub_public_key_b64": test_hub_public_key_b64(),
+            "hub_tls_ca_pem_b64": "  ",
+            "hub_agent_ura": format!(" {} ", crate::core::ura::hub_ura("tenant-a"))
         }))
         .expect("current preflight schema");
+        let preflight = validate_pairing_preflight(preflight).expect("valid preflight facts");
 
         assert_eq!(preflight.realm, "tenant-a");
         assert_eq!(preflight.node_id, "en-test-node");
+        assert_eq!(preflight.hub_public_key_b64, test_hub_public_key_b64());
+        assert_eq!(preflight.hub_tls_ca_pem_b64, None);
+        assert_eq!(
+            preflight.hub_agent_ura,
+            crate::core::ura::hub_ura("tenant-a")
+        );
     }
 
     #[test]
@@ -2314,13 +2356,62 @@ mod tests {
     }
 
     #[test]
+    fn pairing_preflight_rejects_missing_hub_public_key() {
+        let err = serde_json::from_value::<PairingPreflight>(serde_json::json!({
+            "realm": "tenant-a",
+            "node_id": "en-test-node",
+            "hub_agent_ura": crate::core::ura::hub_ura("tenant-a")
+        }))
+        .expect_err("hub public key must not be defaulted");
+
+        assert!(
+            err.to_string().contains("hub_public_key_b64"),
+            "error should name the missing authority fact: {err}"
+        );
+    }
+
+    #[test]
+    fn pairing_preflight_rejects_short_hub_public_key() {
+        let preflight = PairingPreflight {
+            realm: "tenant-a".into(),
+            node_id: "en-test-node".into(),
+            hub_public_key_b64: base64::engine::general_purpose::STANDARD.encode([0x11u8; 31]),
+            hub_tls_ca_pem_b64: None,
+            hub_agent_ura: crate::core::ura::hub_ura("tenant-a"),
+        };
+        let err = validate_pairing_preflight(preflight).expect_err("short hub key must fail");
+
+        assert!(
+            err.to_string().contains("must decode to 32 bytes"),
+            "error should name invalid Hub key length: {err:#}"
+        );
+    }
+
+    #[test]
+    fn pairing_preflight_rejects_mismatched_hub_agent_ura() {
+        let preflight = PairingPreflight {
+            realm: "tenant-a".into(),
+            node_id: "en-test-node".into(),
+            hub_public_key_b64: test_hub_public_key_b64(),
+            hub_tls_ca_pem_b64: None,
+            hub_agent_ura: crate::core::ura::hub_ura("tenant-b"),
+        };
+        let err = validate_pairing_preflight(preflight).expect_err("wrong Hub URA must fail");
+
+        assert!(
+            err.to_string().contains("canonical Hub authority URA"),
+            "error should explain canonical Hub URA mismatch: {err:#}"
+        );
+    }
+
+    #[test]
     fn build_validate_pairing_payload_carries_reserved_identity() {
         let preflight = PairingPreflight {
             realm: "tenant-a".into(),
             node_id: "en-test-node".into(),
-            hub_public_key_b64: String::new(),
-            hub_tls_ca_pem_b64: String::new(),
-            _hub_agent_ura: String::new(),
+            hub_public_key_b64: test_hub_public_key_b64(),
+            hub_tls_ca_pem_b64: None,
+            hub_agent_ura: crate::core::ura::hub_ura("tenant-a"),
         };
         let payload = build_validate_pairing_payload(&preflight, "ab".repeat(32));
         assert_eq!(payload.node_id, "en-test-node");
@@ -2438,9 +2529,9 @@ mod tests {
         let preflight = PairingPreflight {
             realm: "tenant-a".into(),
             node_id: "en-test-node".into(),
-            hub_public_key_b64: String::new(),
-            hub_tls_ca_pem_b64: String::new(),
-            _hub_agent_ura: String::new(),
+            hub_public_key_b64: test_hub_public_key_b64(),
+            hub_tls_ca_pem_b64: None,
+            hub_agent_ura: crate::core::ura::hub_ura("tenant-a"),
         };
         let err = validate_pairing_token("token_1234", &base, &preflight, &"ab".repeat(32))
             .expect_err("transport failure should error");
