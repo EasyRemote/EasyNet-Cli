@@ -10837,26 +10837,36 @@ from pathlib import Path
 pairing = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
 join = Path(sys.argv[2]).read_text(encoding="utf-8", errors="replace")
 
-def struct_prefix(name: str) -> str:
-    match = re.search(rf"(?P<prefix>(?:#\[[^\n]+\]\n)*pub\(crate\) struct {name} \{{)", pairing)
-    if not match:
-        raise SystemExit(f"pairing_response_strict_schema:missing_struct:{name}")
-    return match.group("prefix")
+	def struct_prefix(name: str) -> str:
+	    match = re.search(rf"(?P<prefix>(?:#\[[^\n]+\]\n)*pub\(crate\) struct {name} \{{)", pairing)
+	    if not match:
+	        raise SystemExit(f"pairing_response_strict_schema:missing_struct:{name}")
+	    return match.group("prefix")
 
-for name in ("FederatedPeerEntry", "PairingCredentialEnvelope"):
-    prefix = struct_prefix(name)
-    if "#[serde(deny_unknown_fields)]" not in prefix:
-        raise SystemExit(f"pairing_response_strict_schema:open_schema:{name}")
-    derive_line = next((line for line in prefix.splitlines() if line.startswith("#[derive(")), "")
-    if "Default" in derive_line:
-        raise SystemExit(f"pairing_response_strict_schema:default_derive:{name}")
+	def struct_body(name: str) -> str:
+	    match = re.search(rf"pub\(crate\) struct {name} \{{(?P<body>.*?)\n\}}", pairing, re.S)
+	    if not match:
+	        raise SystemExit(f"pairing_response_strict_schema:missing_struct:{name}")
+	    return match.group("body")
 
-for required in (
-    "pairing_credential_rejects_retired_tenant_id_alias",
-    "pairing_credential_carries_immutable_user_binding",
-):
-    if required not in pairing:
-        raise SystemExit(f"pairing_response_strict_schema:missing_test:{required}")
+	for name in ("FederatedPeerEntry", "PairingCredentialEnvelope"):
+	    prefix = struct_prefix(name)
+	    if "#[serde(deny_unknown_fields)]" not in prefix:
+	        raise SystemExit(f"pairing_response_strict_schema:open_schema:{name}")
+	    derive_line = next((line for line in prefix.splitlines() if line.startswith("#[derive(")), "")
+	    if "Default" in derive_line:
+	        raise SystemExit(f"pairing_response_strict_schema:default_derive:{name}")
+	    if "#[serde(default" in struct_body(name):
+	        raise SystemExit(f"pairing_response_strict_schema:default_field:{name}")
+
+	for required in (
+	    "pairing_credential_rejects_retired_tenant_id_alias",
+	    "pairing_credential_carries_immutable_user_binding",
+	    "pairing_credential_rejects_missing_runtime_custody_facts",
+	    "federated_peer_entry_rejects_missing_peer_hub_url",
+	):
+	    if required not in pairing:
+	        raise SystemExit(f"pairing_response_strict_schema:missing_test:{required}")
 for retired in (
     "pairing_credential_requires_product_realm_key",
 ):
@@ -10868,13 +10878,29 @@ if "pairing_envelope_fixture() -> PairingCredentialEnvelope" not in join:
 for initializer in re.finditer(r"PairingCredentialEnvelope \{(?P<body>.*?)\n\s*\}", join, re.S):
     if "..Default::default()" in initializer.group("body"):
         raise SystemExit("pairing_response_strict_schema:join_default_envelope_constructor")
-for required in (
-    "validate_pairing_response_rejects_missing_username",
-    "validate_pairing_response_rejects_missing_user_id",
-    "validate_pairing_response_rejects_all_zero_user_before_credentials_projection",
-):
-    if required not in join:
-        raise SystemExit(f"pairing_response_strict_schema:join_missing_test:{required}")
+	for required in (
+	    "validate_pairing_response_rejects_missing_username",
+	    "validate_pairing_response_rejects_missing_user_id",
+	    "validate_pairing_response_rejects_all_zero_user_before_credentials_projection",
+	    "validate_pairing_response_requires_provisioned_credential_fact",
+	    "validate_pairing_response_requires_registered_public_key_fact",
+	    "validate_pairing_response_rejects_mismatched_device_public_key",
+	    "validate_pairing_response_rejects_noncanonical_device_ura_fact",
+	    "validate_pairing_response_rejects_empty_deploy_signature",
+	    "validate_pairing_response_rejects_empty_federated_peer_endpoint",
+	):
+	    if required not in join:
+	        raise SystemExit(f"pairing_response_strict_schema:join_missing_test:{required}")
+	for required in (
+	    "validate_pairing_response(envelope, device_public_key)?",
+	    "pairing response credential_provisioned must be true",
+	    "pairing response public_key_registered must be true",
+	    "pairing response device_public_key does not match local runtime signer",
+	    "canonical joined device URA",
+	    "fn require_pairing_field(value: &str, field: &str) -> anyhow::Result<()>",
+	):
+	    if required not in join:
+	        raise SystemExit(f"pairing_response_strict_schema:join_validation_missing:{required}")
 PY
 }
 

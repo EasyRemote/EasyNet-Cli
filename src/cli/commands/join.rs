@@ -1370,18 +1370,48 @@ fn pairing_transport_error_message(base: &str, error: &dyn std::fmt::Display) ->
 
 fn validate_pairing_response(
     envelope: PairingCredentialEnvelope,
+    expected_device_public_key: &str,
 ) -> anyhow::Result<PairingCredentialEnvelope> {
-    if envelope.node_id.is_empty() {
-        anyhow::bail!("pairing response missing node_id");
+    require_pairing_field(&envelope.node_id, "node_id")?;
+    require_pairing_field(&envelope.display_name, "display_name")?;
+    require_pairing_field(&envelope.state, "state")?;
+    require_pairing_field(&envelope.trust_level, "trust_level")?;
+    require_pairing_field(&envelope.device_group, "device_group")?;
+    require_pairing_field(&envelope.os, "os")?;
+    require_pairing_field(&envelope.arch, "arch")?;
+    require_pairing_field(&envelope.auth_binding, "auth_binding")?;
+    require_pairing_field(&envelope.device_public_key, "device_public_key")?;
+    require_pairing_field(
+        &envelope.device_public_key_fingerprint,
+        "device_public_key_fingerprint",
+    )?;
+    require_pairing_field(&envelope.credential_token, "credential_token")?;
+    require_pairing_field(&envelope.hub_endpoint, "hub_endpoint")?;
+    require_pairing_field(&envelope.realm, "realm")?;
+    require_pairing_field(&envelope.deploy_signature, "deploy_signature")?;
+    require_pairing_field(&envelope.ura, "ura")?;
+    if !envelope.credential_provisioned {
+        anyhow::bail!("pairing response credential_provisioned must be true");
     }
-    if envelope.credential_token.is_empty() {
-        anyhow::bail!("pairing response missing credential_token");
+    if !envelope.public_key_registered {
+        anyhow::bail!("pairing response public_key_registered must be true");
     }
-    if envelope.hub_endpoint.is_empty() {
-        anyhow::bail!("pairing response missing hub_endpoint");
+    if envelope.device_public_key.trim() != expected_device_public_key.trim() {
+        anyhow::bail!("pairing response device_public_key does not match local runtime signer");
     }
-    if envelope.realm.is_empty() {
-        anyhow::bail!("pairing response missing realm");
+    let expected_device_ura = crate::core::ura::device_ura(&envelope.realm, &envelope.node_id);
+    if envelope.ura.trim() != expected_device_ura {
+        anyhow::bail!(
+            "pairing response ura `{}` does not match canonical joined device URA `{expected_device_ura}`",
+            envelope.ura.trim()
+        );
+    }
+    for peer in &envelope.federated_peers {
+        require_pairing_field(&peer.realm, "federated_peers[].realm")?;
+        require_pairing_field(&peer.peer_hub_url, "federated_peers[].peer_hub_url")?;
+        if let Some(pubkey) = peer.peer_hub_pubkey.as_deref() {
+            require_pairing_field(pubkey, "federated_peers[].peer_hub_pubkey")?;
+        }
     }
     if envelope
         .username
@@ -1402,6 +1432,13 @@ fn validate_pairing_response(
         anyhow::bail!("pairing response carries all-zero user_id");
     }
     Ok(envelope)
+}
+
+fn require_pairing_field(value: &str, field: &str) -> anyhow::Result<()> {
+    if value.trim().is_empty() {
+        anyhow::bail!("pairing response missing {field}");
+    }
+    Ok(())
 }
 
 fn credentials_from_pairing_contract(envelope: PairingCredentialEnvelope) -> config::Credentials {
@@ -1630,7 +1667,7 @@ fn validate_pairing_token(
         )
     })?;
 
-    let envelope = validate_pairing_response(envelope)?;
+    let envelope = validate_pairing_response(envelope, device_public_key)?;
     if envelope.node_id != preflight.node_id {
         anyhow::bail!(
             "Hub returned node_id {} but pairing preflight reserved {}; aborting to avoid \
@@ -1988,11 +2025,16 @@ mod tests {
         }
     }
 
+    fn expected_pairing_device_public_key() -> &'static str {
+        "device-public-key"
+    }
+
     #[test]
     fn validate_pairing_response_rejects_empty_node_id() {
         let mut envelope = pairing_envelope_fixture();
         envelope.node_id.clear();
-        let err = validate_pairing_response(envelope).expect_err("missing node_id must fail");
+        let err = validate_pairing_response(envelope, expected_pairing_device_public_key())
+            .expect_err("missing node_id must fail");
         assert!(err.to_string().contains("missing node_id"));
     }
 
@@ -2010,7 +2052,8 @@ mod tests {
     fn validate_pairing_response_rejects_missing_username() {
         let mut envelope = pairing_envelope_fixture();
         envelope.username = None;
-        let err = validate_pairing_response(envelope).expect_err("missing username must fail");
+        let err = validate_pairing_response(envelope, expected_pairing_device_public_key())
+            .expect_err("missing username must fail");
         assert!(err.to_string().contains("missing username"));
     }
 
@@ -2018,7 +2061,8 @@ mod tests {
     fn validate_pairing_response_rejects_missing_user_id() {
         let mut envelope = pairing_envelope_fixture();
         envelope.user_id = None;
-        let err = validate_pairing_response(envelope).expect_err("missing user_id must fail");
+        let err = validate_pairing_response(envelope, expected_pairing_device_public_key())
+            .expect_err("missing user_id must fail");
         assert!(err.to_string().contains("missing user_id"));
     }
 
@@ -2026,9 +2070,82 @@ mod tests {
     fn validate_pairing_response_rejects_all_zero_user_before_credentials_projection() {
         let mut envelope = pairing_envelope_fixture();
         envelope.user_id = Some("00000000-0000-0000-0000-000000000000".into());
-        let err =
-            validate_pairing_response(envelope).expect_err("all-zero user_id must fail at pairing");
+        let err = validate_pairing_response(envelope, expected_pairing_device_public_key())
+            .expect_err("all-zero user_id must fail at pairing");
         assert!(err.to_string().contains("all-zero user_id"));
+    }
+
+    #[test]
+    fn validate_pairing_response_requires_provisioned_credential_fact() {
+        let mut envelope = pairing_envelope_fixture();
+        envelope.credential_provisioned = false;
+
+        let err = validate_pairing_response(envelope, expected_pairing_device_public_key())
+            .expect_err("unprovisioned pairing credentials must not be persisted");
+
+        assert!(err.to_string().contains("credential_provisioned"));
+    }
+
+    #[test]
+    fn validate_pairing_response_requires_registered_public_key_fact() {
+        let mut envelope = pairing_envelope_fixture();
+        envelope.public_key_registered = false;
+
+        let err = validate_pairing_response(envelope, expected_pairing_device_public_key())
+            .expect_err("unregistered pairing public key must not be persisted");
+
+        assert!(err.to_string().contains("public_key_registered"));
+    }
+
+    #[test]
+    fn validate_pairing_response_rejects_mismatched_device_public_key() {
+        let mut envelope = pairing_envelope_fixture();
+        envelope.device_public_key = "other-device-public-key".into();
+
+        let err = validate_pairing_response(envelope, expected_pairing_device_public_key())
+            .expect_err("Hub device public key fact must bind to the local runtime signer");
+
+        assert!(err.to_string().contains("device_public_key"));
+        assert!(err.to_string().contains("local runtime signer"));
+    }
+
+    #[test]
+    fn validate_pairing_response_rejects_noncanonical_device_ura_fact() {
+        let mut envelope = pairing_envelope_fixture();
+        envelope.ura = "easynet:///r/tenant/device/other".into();
+
+        let err = validate_pairing_response(envelope, expected_pairing_device_public_key())
+            .expect_err("Hub device URA fact must bind to the joined device identity");
+
+        assert!(err.to_string().contains("canonical joined device URA"));
+    }
+
+    #[test]
+    fn validate_pairing_response_rejects_empty_deploy_signature() {
+        let mut envelope = pairing_envelope_fixture();
+        envelope.deploy_signature.clear();
+
+        let err = validate_pairing_response(envelope, expected_pairing_device_public_key())
+            .expect_err("missing deploy signature must fail before credentials projection");
+
+        assert!(err.to_string().contains("deploy_signature"));
+    }
+
+    #[test]
+    fn validate_pairing_response_rejects_empty_federated_peer_endpoint() {
+        let mut envelope = pairing_envelope_fixture();
+        envelope
+            .federated_peers
+            .push(crate::cli::commands::pairing_contract::FederatedPeerEntry {
+                realm: "peer".into(),
+                peer_hub_url: " ".into(),
+                peer_hub_pubkey: None,
+            });
+
+        let err = validate_pairing_response(envelope, expected_pairing_device_public_key())
+            .expect_err("federated peer endpoint facts must fail closed");
+
+        assert!(err.to_string().contains("federated_peers[].peer_hub_url"));
     }
 
     #[test]

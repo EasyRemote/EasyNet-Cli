@@ -56,6 +56,7 @@
 
 #![cfg(feature = "axon-pb")]
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 #[path = "support/runtime_fixture.rs"]
@@ -93,6 +94,15 @@ use easynet_cli::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgent, Trusted
 use easynet_cli::daemon::trust::cell::SharedTrustAnchor;
 
 const REALM_B_HUB_SIGNING_SEED: [u8; 32] = [0xB0; 32];
+
+fn test_attempt_ledger_path(realm: &str) -> std::path::PathBuf {
+    static SEQ: AtomicU64 = AtomicU64::new(1);
+    std::env::temp_dir().join(format!(
+        "easynet-cross-realm-signed-admission-{realm}-{}-{}.jsonl",
+        std::process::id(),
+        SEQ.fetch_add(1, Ordering::Relaxed)
+    ))
+}
 
 /// In-process federation client that forwards every `invoke`
 /// to a target `DaemonInvocationService`. Used so daemon B's
@@ -189,7 +199,9 @@ async fn hub_service(
     let service = DaemonInvocationService::new(Arc::new(PresenceRegistry::new()), admission)
         .with_session_realm(realm)
         .with_daemon_runtime(daemon_runtime)
-        .with_local_ability_catalog(Arc::clone(&catalog));
+        .with_local_ability_catalog(Arc::clone(&catalog))
+        .with_invocation_attempt_ledger_path(test_attempt_ledger_path(realm))
+        .expect("open cross-realm signed-admission attempt audit ledger");
     service
         .register_daemon_unary_routes(&daemon_ura)
         .await
