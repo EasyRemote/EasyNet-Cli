@@ -16,7 +16,6 @@ TARGETS=(
   "src/cli/commands/doctor.rs"
   "src/cli/commands/groups/device.rs"
   "src/cli/commands/status.rs"
-  "src/cli/commands/invocation_watch.rs"
   "src/cli/commands/user_signing_identity.rs"
 )
 
@@ -26,6 +25,7 @@ OPERATIONAL_TARGETS=(
 
 GOVERNANCE_TARGETS=(
   "src/cli/commands/groups/invocation.rs"
+  "src/cli/commands/invocation_watch.rs"
 )
 
 CATALOGUE_TARGETS=(
@@ -208,6 +208,9 @@ for target in "${GOVERNANCE_TARGETS[@]}"; do
   if ! rg -n 'LocalRuntimeGovernanceReadIssuer::invocation_(history|record|trace)_' "$target" >/dev/null; then
     fail "$target must enter local runtime through LocalRuntimeGovernanceReadIssuer"
   fi
+  if rg -n 'LocalRuntimeStateReadIssuer::invoke' "$target"; then
+    fail "$target must not route governance ledger reads through LocalRuntimeStateReadIssuer"
+  fi
   if rg -n '\binvoke_local_ability\s*\(' "$target"; then
     fail "$target must not use generic invoke_local_ability for runtime governance reads"
   fi
@@ -238,6 +241,8 @@ for required in (
     "pub fn invocation_history_list_timeout(",
     "pub fn invocation_history_get(",
     "pub fn invocation_history_get_timeout(",
+    "pub fn invocation_record_get(",
+    "pub fn invocation_record_get_timeout(",
     "pub fn invocation_trace_get(",
     "pub fn invocation_trace_get_timeout(",
 ):

@@ -562,6 +562,21 @@ impl LocalRuntimeGovernanceReadIssuer {
         )
     }
 
+    pub fn invocation_record_get(args: Value) -> anyhow::Result<Value> {
+        Self::invocation_record_get_timeout(args, std::time::Duration::from_secs(30))
+    }
+
+    pub fn invocation_record_get_timeout(
+        args: Value,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<Value> {
+        Self::invoke_governance_read_timeout(
+            crate::daemon::ability::names::governance::INVOCATION_RECORD_GET,
+            args,
+            timeout,
+        )
+    }
+
     pub fn invocation_trace_get(args: Value) -> anyhow::Result<Value> {
         Self::invocation_trace_get_timeout(args, std::time::Duration::from_secs(30))
     }

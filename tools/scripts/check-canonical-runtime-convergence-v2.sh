@@ -2634,6 +2634,38 @@ for required_test in (
 PY
 }
 
+check_cli_invocation_watch_governance_read_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local watch="$cli_root/src/cli/commands/invocation_watch.rs"
+  [[ -f "$watch" ]] || return 0
+
+  "$PYTHON_BIN" - "$watch" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text()
+
+for issuer_call in (
+    "LocalRuntimeGovernanceReadIssuer::invocation_record_get(",
+    "LocalRuntimeGovernanceReadIssuer::invocation_trace_get(",
+):
+    if issuer_call not in text:
+        raise SystemExit(f"cli_invocation_watch_not_using_runtime_governance_read_issuer:{issuer_call}")
+
+for retired in (
+    "LocalRuntimeStateReadIssuer::invoke",
+    "ABILITY_INVOCATION_RECORD_GET",
+    "ABILITY_TRACE_GET",
+):
+    if retired in text:
+        raise SystemExit(f"cli_invocation_watch_retired_state_read_dispatch:{retired}")
+
+if re.search(r"\binvoke_local_ability\s*\(", text):
+    raise SystemExit("cli_invocation_watch_uses_generic_local_invoke")
+PY
+}
+
 check_agent_purge_publication_state_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local lifecycle="$cli_root/src/daemon/ability/builtins/agents/lifecycle.rs"
@@ -28649,6 +28681,7 @@ check_join_peer_hub_explicit_endpoint_contract
 check_join_user_signer_custody_contract
 check_invocation_history_filter_scope_contract
 check_cli_invocation_history_read_model_contract
+check_cli_invocation_watch_governance_read_contract
 check_selected_governance_read_route_admission_contract
 check_invocation_history_placeholder_negative_only_contract
 check_rust_all_zero_principal_guard_contract
