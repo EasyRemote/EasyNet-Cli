@@ -10155,14 +10155,17 @@ PY
 check_admission_authority_raw_wire_strict_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local facade="$cli_root/src/daemon/invocation/admission/admission_facade.rs"
+  local authority="$cli_root/src/daemon/ability/authority/mod.rs"
   [[ -f "$facade" ]] || fail "admission facade source is missing: ${facade#$cli_root/}"
+  [[ -f "$authority" ]] || fail "authority source is missing: ${authority#$cli_root/}"
 
-  "$PYTHON_BIN" - "$facade" <<'PY'
+  "$PYTHON_BIN" - "$facade" "$authority" <<'PY'
 import re
 import sys
 from pathlib import Path
 
 text = Path(sys.argv[1]).read_text(encoding="utf-8")
+authority = Path(sys.argv[2]).read_text(encoding="utf-8")
 
 for struct_name in ("DelegationProofRaw", "SessionAuthorityRaw"):
     match = re.search(
@@ -10187,6 +10190,21 @@ for required in (
 ):
     if required not in text:
         raise SystemExit(f"admission_authority_raw_wire_strict:test_missing:{required}")
+
+request = re.search(
+    r"(?P<prefix>(?:\s*///[^\n]*\n|\s*#\[[^\]]*\]\n|\s*)*)"
+    r"pub struct HostedAgentDelegationRequest \{(?P<body>.*?)\n\}",
+    authority,
+    re.S,
+)
+if request is None:
+    raise SystemExit("admission_authority_raw_wire_strict:hosted_agent_request_missing")
+if "#[serde(deny_unknown_fields)]" not in request.group("prefix"):
+    raise SystemExit("admission_authority_raw_wire_strict:hosted_agent_request_missing_deny_unknown_fields")
+if "hosted_agent_delegation_request_rejects_unknown_fields" not in authority:
+    raise SystemExit("admission_authority_raw_wire_strict:hosted_agent_request_unknown_field_test_missing")
+if "legacy_scope" not in authority:
+    raise SystemExit("admission_authority_raw_wire_strict:hosted_agent_request_legacy_scope_fixture_missing")
 PY
 }
 
@@ -11012,6 +11030,9 @@ for struct_name, field_names in {
     match = re.search(rf"pub struct {struct_name} \{{(?P<body>.*?)\n\}}", receipt, re.S)
     if match is None:
         raise SystemExit(f"federation_receipt_facts:struct_missing:{struct_name}")
+    prefix_start = max(0, match.start() - 240)
+    if "#[serde(deny_unknown_fields)]" not in receipt[prefix_start:match.start()]:
+        raise SystemExit(f"federation_receipt_facts:missing_deny_unknown_fields:{struct_name}")
     body = match.group("body")
     for field in field_names:
         field_match = re.search(rf"(?P<prefix>(?:\s*///[^\n]*\n|\s*#\[[^\]]*\]\n|\s*)*)\s*pub {field}:", body)
@@ -11042,6 +11063,15 @@ for required in (
 ):
     if required not in client:
         raise SystemExit(f"federation_receipt_facts:client_required_missing:{required}")
+
+for required in (
+    "join_receipt_rejects_shadow_membership_fields",
+    "authority_ability_entry_rejects_shadow_descriptor_fields",
+    "advertise_contract_rejects_shadow_owner_fields",
+    "authority_abilities_diff_rejects_shadow_revision_fields",
+):
+    if required not in receipt:
+        raise SystemExit(f"federation_receipt_facts:receipt_shadow_field_test_missing:{required}")
 
 for required in (
     "pub authority_published_abilities: Vec<AuthorityAbilityEntry>,",

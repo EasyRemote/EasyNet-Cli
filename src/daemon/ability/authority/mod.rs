@@ -210,6 +210,7 @@ impl AuthorityBindingKind {
 /// Invariant 2: serialization is JSON, not a bare string, so the metadata
 /// grammar can evolve without overloading arbitrary URA text.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct HostedAgentDelegationRequest {
     agent_ura: String,
 }
@@ -1026,6 +1027,21 @@ mod tests {
             HostedAgentDelegationRequest::new("easynet:///r/default/device/local").unwrap_err();
 
         assert!(err.to_string().contains("Agent URA"), "{err}");
+    }
+
+    #[test]
+    fn hosted_agent_delegation_request_rejects_unknown_fields() {
+        let agent_ura = crate::core::ura::agent_ura("default", "u", "apprentice");
+        let raw = serde_json::json!({
+            "agent_ura": agent_ura,
+            "legacy_scope": "hosted_by:easynet:///r/default/device/local"
+        })
+        .to_string();
+
+        let err = HostedAgentDelegationRequest::from_metadata_value(&raw)
+            .expect_err("hosted-agent delegation requests must reject shadow authority fields");
+
+        assert!(err.to_string().contains("legacy_scope"), "{err}");
     }
 
     #[test]
