@@ -11,6 +11,8 @@ fail() {
 
 CORE_MOD="src/core/mod.rs"
 [[ -f "$CORE_MOD" ]] || fail "missing $CORE_MOD"
+AGENT_ID="src/core/agent/id.rs"
+[[ -f "$AGENT_ID" ]] || fail "missing $AGENT_ID"
 
 if rg -n 'pub use agent::(id as agent_id|spec as agent_spec)' "$CORE_MOD"; then
   fail "core must not keep pre-structure agent module compatibility aliases"
@@ -22,6 +24,14 @@ fi
 
 if rg -n 'crate::core::agent_(id|spec)|\bcore::agent_(id|spec)' src --glob '!core/mod.rs'; then
   fail "production callers must not use retired core agent module aliases"
+fi
+
+if rg -n '#\[allow\(dead_code\)\]|separate \(future\) layer|Used by tests today|transitional period while|allow can go' "$AGENT_ID"; then
+  fail "core agent identity contract preserves retired transitional/dead-code vocabulary"
+fi
+
+if ! rg -q 'crate::core::ura`, the L3 canonical runtime identity layer' "$AGENT_ID"; then
+  fail "core AgentId docs must point URI-shaped/URA-shaped inputs at the canonical URA layer"
 fi
 
 for token in \

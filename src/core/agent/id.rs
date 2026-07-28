@@ -15,8 +15,8 @@
 //   - `NodeId`         — validated hosting-substrate handle.
 //
 // What this file is NOT:
-//   - Not a URA parser. URA shapes (`easynet://...`) belong to URA L3,
-//     a separate (future) layer.
+//   - Not a URA parser. URA shapes (`easynet://...`) belong to
+//     `crate::core::ura`, the L3 canonical runtime identity layer.
 //   - Not a registry directory. Resolution lives in
 //     `src/daemon/persistence/agent_registry.rs`.
 //   - Not a routing decision. The dispatcher in
@@ -128,9 +128,9 @@ impl AgentId {
     /// Construct an `AgentId` from already-validated parts. Useful when
     /// the caller knows the parts came from a trusted source. Both
     /// segments are still validated — there is no unchecked path.
-    /// Used by tests today; production code constructs `AgentId` via
-    /// `parse` from EAL surface forms.
-    #[allow(dead_code)]
+    /// Used by production code when the tenant and name are already
+    /// separated by an owning parser or projection. Public surface strings
+    /// still enter through `parse`.
     pub fn new(tenant: impl Into<String>, name: impl Into<String>) -> Result<Self, AgentIdError> {
         let tenant = tenant.into();
         let name = name.into();
@@ -323,11 +323,9 @@ impl NodeId {
     /// Borrow the underlying string. As with `AbilityName`, there is
     /// no separate canonical form; the stored bytes *are* the value.
     ///
-    /// `#[allow(dead_code)]` covers the transitional period while
-    /// boundaries are still exchanging `&str`: once CLI parsing and
-    /// bridge payloads also carry `NodeId` end-to-end, this method
-    /// will be called from production code and the allow can go.
-    #[allow(dead_code)]
+    /// Production boundaries still exchange `&str` and explicit wire
+    /// structs; this method is the canonical borrow point for those
+    /// boundaries.
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -335,8 +333,7 @@ impl NodeId {
     /// Consume the `NodeId` and return its inner `String`. Used at
     /// boundaries that cannot accept the newtype (serde fields on
     /// existing wire-schema structs) — internal code should prefer
-    /// `as_str`. Same transitional `#[allow]` as `as_str`.
-    #[allow(dead_code)]
+    /// `as_str`.
     pub fn into_string(self) -> String {
         self.0
     }
