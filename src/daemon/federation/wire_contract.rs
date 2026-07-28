@@ -194,7 +194,6 @@ impl ResolveKeyRequest {
 pub struct ResolveKeyResponse {
     pub public_key_b64: String,
     pub public_key_hex: String,
-    #[serde(default)]
     pub public_keys_b64: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub principal_owner_ura: Option<String>,
@@ -400,6 +399,20 @@ mod tests {
                 "public_key": "legacy"
             }),
             "public_key",
+        );
+    }
+
+    #[test]
+    fn resolve_key_response_requires_schema_bound_key_set() {
+        let err = serde_json::from_value::<ResolveKeyResponse>(serde_json::json!({
+            "public_key_b64": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+            "public_key_hex": "00"
+        }))
+        .expect_err("resolve_key responses must carry public_keys_b64 explicitly");
+
+        assert!(
+            err.to_string().contains("public_keys_b64"),
+            "missing canonical key set must fail closed: {err}"
         );
     }
 
