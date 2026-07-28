@@ -4,6 +4,7 @@ final class RuntimeAbilityProjection {
   private static final String REALM_PREFIX = "easynet:///r/";
   private static final String[] RUNTIME_GOVERNANCE_READ_ABILITIES = {
     "meta.list_abilities",
+    "meta.list_resources",
     "invocation.history.list",
     "invocation.history.get",
     "invocation.history.path",
@@ -122,7 +123,9 @@ final class RuntimeAbilityProjection {
 
   private static boolean runtimeCatalogueReadAbility(String value) {
     return value.equals("meta.list_abilities")
-        || value.endsWith(".meta.list_abilities");
+        || value.equals("meta.list_resources")
+        || value.endsWith(".meta.list_abilities")
+        || value.endsWith(".meta.list_resources");
   }
 
   private static boolean runtimeReceiptReadAbility(String value) {

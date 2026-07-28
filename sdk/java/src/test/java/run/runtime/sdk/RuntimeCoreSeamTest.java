@@ -1360,16 +1360,19 @@ public final class RuntimeCoreSeamTest {
   }
 
   private static void completeTupleRejectsCatalogueReadPublicInvocation() {
-    String catalogueDescriptor =
-        "easynet:///r/example/ability/authority.meta.list_abilities@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read";
-    expectSDKError(
-        ErrorCode.INVALID_ARGUMENT,
-        "RuntimeAbilityDescriptorProvider",
-        () -> completeBuilder()
-            .callee("easynet:///r/example/authority")
-            .subject("easynet:///r/example/authority")
-            .descriptor(catalogueDescriptor)
-            .inspect());
+    for (String catalogueDescriptor :
+        List.of(
+            "easynet:///r/example/ability/authority.meta.list_abilities@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read",
+            "easynet:///r/example/ability/authority.meta.list_resources@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read")) {
+      expectSDKError(
+          ErrorCode.INVALID_ARGUMENT,
+          "RuntimeAbilityDescriptorProvider",
+          () -> completeBuilder()
+              .callee("easynet:///r/example/authority")
+              .subject("easynet:///r/example/authority")
+              .descriptor(catalogueDescriptor)
+              .inspect());
+    }
   }
 
   private static void runtimeAbilityDescriptorProviderUsesCatalogueProvider() {

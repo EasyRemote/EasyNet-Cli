@@ -4,6 +4,7 @@ struct RuntimeAbilityProjection: Sendable, Equatable {
     private static let realmPrefix = "easynet:///r/"
     private static let runtimeGovernanceReadAbilities = [
         "meta.list_abilities",
+        "meta.list_resources",
         "invocation.history.list",
         "invocation.history.get",
         "invocation.history.path",
@@ -32,7 +33,11 @@ struct RuntimeAbilityProjection: Sendable, Equatable {
 
     static func runtimeGovernanceDescriptorProvider(forAbility ability: String) -> String {
         let clean = ability.trimmingCharacters(in: .whitespacesAndNewlines)
-        if clean == "meta.list_abilities" || clean.hasSuffix(".meta.list_abilities") {
+        if clean == "meta.list_abilities" ||
+            clean == "meta.list_resources" ||
+            clean.hasSuffix(".meta.list_abilities") ||
+            clean.hasSuffix(".meta.list_resources")
+        {
             return RuntimeDescriptorRefRequest.abilityDescriptorProvider
         }
         if runtimeGovernanceReadAbility(clean) != nil {

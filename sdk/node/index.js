@@ -90,6 +90,7 @@ export const MAX_STREAM_BUFFERED_EVENTS = 1024;
 export const MAX_BIDI_BUFFERED_FRAMES = 1024;
 const RUNTIME_GOVERNANCE_READ_ABILITIES = Object.freeze([
   "meta.list_abilities",
+  "meta.list_resources",
   "invocation.history.list",
   "invocation.history.get",
   "invocation.history.path",
@@ -3848,11 +3849,16 @@ function rejectGovernanceReadPublicInvocationDescriptor(calleeURA, descriptorRef
 
 function runtimeGovernanceReadAbility(value) {
   const clean = String(value ?? "").trim();
-  const explicit = runtimeExplicitGovernanceReadAbility(clean) || clean;
-  if (runtimeCatalogueReadAbility(explicit)) {
-    return "meta.list_abilities";
+  const explicit = runtimeExplicitGovernanceReadAbility(clean);
+  if (explicit) {
+    return explicit;
   }
-  if (runtimeReceiptReadAbility(explicit)) {
+  if (runtimeCatalogueReadAbility(clean)) {
+    return clean.endsWith(".meta.list_resources")
+      ? "meta.list_resources"
+      : "meta.list_abilities";
+  }
+  if (runtimeReceiptReadAbility(clean)) {
     return "invocation.history.list";
   }
   return "";
@@ -3906,7 +3912,9 @@ function runtimeGovernanceDescriptorProviderForRequest(abilityName, provider) {
 function runtimeCatalogueReadAbility(value) {
   return (
     value === "meta.list_abilities" ||
-    value.endsWith(".meta.list_abilities")
+    value === "meta.list_resources" ||
+    value.endsWith(".meta.list_abilities") ||
+    value.endsWith(".meta.list_resources")
   );
 }
 

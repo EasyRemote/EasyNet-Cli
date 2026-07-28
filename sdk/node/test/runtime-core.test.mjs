@@ -1485,30 +1485,39 @@ test("public invocation builder rejects receipt history descriptor before dispat
 });
 
 test("public invocation builder rejects runtime catalogue descriptor before dispatch", () => {
-  const catalogueDescriptor =
-    "easynet:///r/example/ability/authority.meta.list_abilities@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read";
-
-  assert.throws(
-    () =>
-      new sdk.InvocationBuilder()
-        .withCallerURA(caller)
-        .withCalleeURA("easynet:///r/example/authority")
-        .withDescriptorRef(catalogueDescriptor)
-        .withSubjectURA("easynet:///r/example/authority")
-        .withNonceBase64(nonce)
-        .withCausalContext({ form: "none" })
-        .withJSONArgs({ scope: "realm" })
-        .withContentType("application/json")
-        .build(),
-    (error) =>
-      error instanceof sdk.SDKError &&
-      error.code === sdk.ErrorCode.INVALID_ARGUMENT &&
-      /runtime governance read ability `meta\.list_abilities`/.test(error.message) &&
-      /catalogue provider/.test(error.message),
-  );
+  for (const [abilityName, catalogueDescriptor] of [
+    [
+      "meta.list_abilities",
+      "easynet:///r/example/ability/authority.meta.list_abilities@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read",
+    ],
+    [
+      "meta.list_resources",
+      "easynet:///r/example/ability/authority.meta.list_resources@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read",
+    ],
+  ]) {
+    assert.throws(
+      () =>
+        new sdk.InvocationBuilder()
+          .withCallerURA(caller)
+          .withCalleeURA("easynet:///r/example/authority")
+          .withDescriptorRef(catalogueDescriptor)
+          .withSubjectURA("easynet:///r/example/authority")
+          .withNonceBase64(nonce)
+          .withCausalContext({ form: "none" })
+          .withJSONArgs({ scope: "realm" })
+          .withContentType("application/json")
+          .build(),
+      (error) =>
+        error instanceof sdk.SDKError &&
+        error.code === sdk.ErrorCode.INVALID_ARGUMENT &&
+        error.message.includes(`runtime governance read ability \`${abilityName}\``) &&
+        /catalogue provider/.test(error.message),
+      abilityName,
+    );
+  }
 });
 
-test("runtime ability public path rejects receipt history before descriptor resolution", async () => {
+test("runtime ability public path rejects provider-bound governance reads before descriptor resolution", async () => {
   let resolverCalls = 0;
   const runtime = new sdk.RuntimeClient({
     invoke: () => {
@@ -1539,6 +1548,27 @@ test("runtime ability public path rejects receipt history before descriptor reso
       error.code === sdk.ErrorCode.INVALID_ARGUMENT &&
       /RuntimeReceiptProvider/.test(error.message),
   );
+  for (const abilityName of ["meta.list_abilities", "meta.list_resources"]) {
+    await assert.rejects(
+      () =>
+        ability.build(
+          {
+            caller_ura: caller,
+            callee_ura: callee,
+            subject_ura: callee,
+            nonce_base64: nonce,
+            causal_context: { form: "none" },
+          },
+          abilityName,
+          {},
+        ),
+      (error) =>
+        error instanceof sdk.SDKError &&
+        error.code === sdk.ErrorCode.INVALID_ARGUMENT &&
+        /RuntimeAbilityDescriptorProvider/.test(error.message),
+      abilityName,
+    );
+  }
   assert.equal(resolverCalls, 0);
 });
 
@@ -1572,6 +1602,18 @@ test("runtime descriptor resolver rejects provider mismatches before transport",
       request: {
         callee_ura: callee,
         ability: "meta.list_abilities",
+        call_mode: "rpc",
+        caller_ura: caller,
+        subject_ura: "easynet:///r/example/authority",
+        provider: "receipt_history",
+      },
+      message: /use provider ability_descriptor/,
+    },
+    {
+      name: "wrong provider for resource catalogue read",
+      request: {
+        callee_ura: callee,
+        ability: "meta.list_resources",
         call_mode: "rpc",
         caller_ura: caller,
         subject_ura: "easynet:///r/example/authority",

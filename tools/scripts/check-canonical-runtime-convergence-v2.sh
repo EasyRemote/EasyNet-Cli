@@ -5965,6 +5965,7 @@ for required in (
     "public invocation builder rejects runtime catalogue descriptor before dispatch",
     "device.dev-a.invocation.history.list@1.0.0#",
     "authority.meta.list_abilities@1.0.0#",
+    "authority.meta.list_resources@1.0.0#",
     "SessionHistoryOperations",
 ):
     if required not in node_test:
@@ -6003,6 +6004,7 @@ for required in (
     "private static void completeTupleRejectsCatalogueReadPublicInvocation()",
     "device.dev-a.invocation.history.list@1.0.0#",
     "authority.meta.list_abilities@1.0.0#",
+    "authority.meta.list_resources@1.0.0#",
     "RuntimeReceiptProvider",
     "RuntimeAbilityDescriptorProvider",
 ):
@@ -6040,6 +6042,7 @@ for required in (
     "testCompleteTupleRejectsCatalogueReadPublicInvocation",
     "device.dev-a.invocation.history.list@1.0.0#",
     "authority.meta.list_abilities@1.0.0#",
+    "authority.meta.list_resources@1.0.0#",
     "RuntimeReceiptProvider",
     "RuntimeAbilityDescriptorProvider",
 ):
@@ -6057,6 +6060,7 @@ for corpus, label in (
         raise SystemExit(f"sdk_history_public_ingress_cutover:{label}_runtime_catalog_alias_not_retired")
     for ability in (
         "meta.list_abilities",
+        "meta.list_resources",
         "invocation.history.list",
         "invocation.history.get",
         "invocation.history.path",
