@@ -995,6 +995,7 @@ struct ListRequestsRequest {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ExplainRequest {
     observer_ura: String,
     #[serde(default)]
@@ -1667,16 +1668,14 @@ mod tests {
 
     #[test]
     fn admission_explain_rejects_client_supplied_projection_fields() {
-        let err = ExplainRequest::selector(
-            &serde_json::from_value(json!({
-                "observer_ura": "easynet:///r/test/user/alice",
-                "redacted": true,
-                "authority_reason": "forged"
-            }))
-            .expect("request"),
-        )
-        .expect_err("selector is required");
-        assert!(err.to_string().contains("exactly one"));
+        let err = serde_json::from_value::<ExplainRequest>(json!({
+            "observer_ura": "easynet:///r/test/user/alice",
+            "request_id": "req-1",
+            "redacted": true,
+            "authority_reason": "forged"
+        }))
+        .expect_err("admission.explain must reject client-supplied projection fields");
+        assert!(err.to_string().contains("unknown field"));
     }
 
     #[test]
