@@ -1249,27 +1249,94 @@ pub struct RevokeRequest {
     #[serde(default)]
     pub purge_transaction_id: Option<String>,
     #[serde(default)]
-    pub generation: u64,
+    pub generation: Option<u64>,
     #[serde(default)]
-    pub reason: String,
+    pub reason: Option<String>,
     #[serde(default)]
-    pub authority_ura: String,
+    pub authority_ura: Option<String>,
     #[serde(default)]
-    pub protocol_version: u32,
+    pub protocol_version: Option<u32>,
     #[serde(default)]
-    pub delivery_fence: u64,
+    pub delivery_fence: Option<u64>,
 }
 
 impl RevokeRequest {
-    fn canonical_target_ura(&self) -> anyhow::Result<&str> {
+    fn canonical_target_ura(&self) -> anyhow::Result<String> {
         let target = self.agent_ura.trim();
         if target.is_empty() {
             anyhow::bail!("federation.revoke agent_ura is required");
         }
         crate::core::ura::parse_ura(target)
             .map_err(|error| anyhow::anyhow!("federation.revoke agent_ura is invalid: {error}"))?;
-        Ok(target)
+        Ok(target.to_string())
     }
+
+    fn resolve_intent(&self) -> anyhow::Result<ResolvedRevokeIntent> {
+        let target_ura = self.canonical_target_ura()?;
+        let Some(transaction_id) = self
+            .purge_transaction_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|transaction_id| !transaction_id.is_empty())
+        else {
+            return Ok(ResolvedRevokeIntent::Immediate { target_ura });
+        };
+        Ok(ResolvedRevokeIntent::Purge {
+            target_ura,
+            transaction_id: transaction_id.to_string(),
+            generation: require_purge_revoke_fact(self.generation, "generation")?,
+            reason: require_purge_revoke_text(self.reason.as_deref(), "reason")?,
+            authority_ura: require_purge_revoke_text(
+                self.authority_ura.as_deref(),
+                "authority_ura",
+            )?,
+            protocol_version: require_purge_revoke_fact(self.protocol_version, "protocol_version")?,
+            delivery_fence: require_purge_revoke_fact(self.delivery_fence, "delivery_fence")?,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ResolvedRevokeIntent {
+    Immediate {
+        target_ura: String,
+    },
+    Purge {
+        target_ura: String,
+        transaction_id: String,
+        generation: u64,
+        reason: String,
+        authority_ura: String,
+        protocol_version: u32,
+        delivery_fence: u64,
+    },
+}
+
+impl ResolvedRevokeIntent {
+    fn target_ura(&self) -> &str {
+        match self {
+            Self::Immediate { target_ura } | Self::Purge { target_ura, .. } => target_ura,
+        }
+    }
+
+    fn generation(&self) -> Option<u64> {
+        match self {
+            Self::Immediate { .. } => None,
+            Self::Purge { generation, .. } => Some(*generation),
+        }
+    }
+}
+
+fn require_purge_revoke_fact<T: Copy>(value: Option<T>, field: &str) -> anyhow::Result<T> {
+    value.ok_or_else(|| anyhow::anyhow!("federation.revoke purge requires {field}"))
+}
+
+fn require_purge_revoke_text(value: Option<&str>, field: &str) -> anyhow::Result<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| anyhow::anyhow!("federation.revoke purge requires {field}"))
 }
 
 /// Response payload for `federation.revoke`.
@@ -1303,18 +1370,18 @@ pub fn handle_revoke(
     advertised_agents: Option<&AdvertisedAgentStore>,
     ability_catalog: &AbilityCatalogStore,
 ) -> anyhow::Result<RevokeResponse> {
-    let target_ura = request.canonical_target_ura()?;
+    let intent = request.resolve_intent()?;
+    let target_ura = intent.target_ura().to_string();
+    let purge_generation = intent.generation();
     let advertised_record = advertised_agents
-        .and_then(|store| store.get(target_ura))
-        .filter(|record| {
-            request.purge_transaction_id.is_none() || record.generation == request.generation
-        });
-    let target_generation_is_current = request.purge_transaction_id.is_none()
+        .and_then(|store| store.get(&target_ura))
+        .filter(|record| purge_generation.is_none() || purge_generation == Some(record.generation));
+    let target_generation_is_current = purge_generation.is_none()
         || advertised_record
             .as_ref()
-            .is_some_and(|record| record.generation == request.generation);
+            .is_some_and(|record| purge_generation == Some(record.generation));
     let was_active = target_generation_is_current
-        && (registry.contains(target_ura)
+        && (registry.contains(&target_ura)
             || advertised_record
                 .as_ref()
                 .map(|record| match record.host_ura() {
@@ -1322,12 +1389,21 @@ pub fn handle_revoke(
                     None => registry.contains(&record.agent_ura),
                 })
                 .unwrap_or(false));
-    let Some(transaction_id) = request.purge_transaction_id.as_deref() else {
-        let _displaced = registry.force_revoke(target_ura);
+    let ResolvedRevokeIntent::Purge {
+        transaction_id,
+        generation,
+        reason,
+        authority_ura,
+        protocol_version,
+        delivery_fence,
+        ..
+    } = intent
+    else {
+        let _displaced = registry.force_revoke(&target_ura);
         if let Some(store) = advertised_agents {
-            let _removed = store.remove(target_ura);
+            let _removed = store.remove(&target_ura);
         }
-        let _removed = ability_catalog.remove_owner(target_ura);
+        let _removed = ability_catalog.remove_owner(&target_ura);
         return Ok(RevokeResponse {
             ack: true,
             was_active,
@@ -1337,25 +1413,25 @@ pub fn handle_revoke(
         });
     };
     let command = crate::daemon::persistence::federation_revoke::FederationRevokeCommand {
-        protocol_version: request.protocol_version,
-        transaction_id: transaction_id.to_string(),
-        agent_ura: request.agent_ura.clone(),
-        generation: request.generation,
-        reason: request.reason.clone(),
-        authority_ura: request.authority_ura.clone(),
-        target_ura: target_ura.to_string(),
+        protocol_version,
+        transaction_id: transaction_id.clone(),
+        agent_ura: target_ura.clone(),
+        generation,
+        reason,
+        authority_ura,
+        target_ura: target_ura.clone(),
     };
     let presence_session_id = target_generation_is_current
         .then(|| {
             registry
-                .lookup_tracked(target_ura)
+                .lookup_tracked(&target_ura)
                 .map(|(session_id, _)| session_id)
         })
         .flatten();
     let now = checked_revoke_now_unix_ms()?;
     let prepared = crate::daemon::persistence::federation_revoke::prepare_revoke(
         &command,
-        request.delivery_fence,
+        delivery_fence,
         was_active,
         presence_session_id,
         now,
@@ -1366,8 +1442,8 @@ pub fn handle_revoke(
         }
         crate::daemon::persistence::federation_revoke::PrepareRevokeOutcome::Prepared => {
             crate::daemon::persistence::federation_revoke::apply_prepared_revoke(
-                transaction_id,
-                request.delivery_fence,
+                &transaction_id,
+                delivery_fence,
                 now,
             )?
         }
@@ -1376,12 +1452,12 @@ pub fn handle_revoke(
         != crate::daemon::persistence::federation_revoke::FederationRevokeDisposition::SupersededByNewIncarnation
     {
         if let Some(store) = advertised_agents {
-            let _removed = store.remove_generation(target_ura, request.generation);
+            let _removed = store.remove_generation(&target_ura, generation);
         }
-        let _removed = ability_catalog.remove_generation(target_ura, request.generation);
+        let _removed = ability_catalog.remove_generation(&target_ura, generation);
         if let Some(session_id) = outcome.presence_session_id {
             let _removed = registry.remove_if_session(
-                target_ura,
+                &target_ura,
                 session_id,
                 crate::daemon::invocation::bidi::state::presence::OfflineReason::AdminRevoked,
             );
@@ -1390,7 +1466,7 @@ pub fn handle_revoke(
     Ok(RevokeResponse {
         ack: true,
         was_active: outcome.was_active,
-        purge_transaction_id: Some(transaction_id.to_string()),
+        purge_transaction_id: Some(transaction_id),
         replayed,
         disposition: Some(outcome.disposition),
     })
@@ -2935,11 +3011,11 @@ mod tests {
             &RevokeRequest {
                 agent_ura: ura.clone(),
                 purge_transaction_id: None,
-                generation: 0,
-                reason: String::new(),
-                authority_ura: String::new(),
-                protocol_version: 0,
-                delivery_fence: 0,
+                generation: None,
+                reason: None,
+                authority_ura: None,
+                protocol_version: None,
+                delivery_fence: None,
             },
             &registry,
             None,
@@ -2964,6 +3040,31 @@ mod tests {
     }
 
     #[test]
+    fn purge_revoke_requires_complete_command_facts() {
+        let request = RevokeRequest {
+            agent_ura: "easynet:///r/realm/agent/user.alice".to_string(),
+            purge_transaction_id: Some("11111111111111111111111111111111".to_string()),
+            generation: Some(1),
+            reason: None,
+            authority_ura: Some("easynet:///r/realm/device/dev-1".to_string()),
+            protocol_version: Some(
+                crate::daemon::persistence::federation_revoke::REVOKE_PROTOCOL_VERSION,
+            ),
+            delivery_fence: Some(1),
+        };
+
+        let error = request
+            .resolve_intent()
+            .expect_err("purge revoke must reject incomplete durable command facts");
+        assert!(
+            error
+                .to_string()
+                .contains("federation.revoke purge requires reason"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
     fn handle_revoke_requires_canonical_agent_ura() {
         let registry = PresenceRegistry::new();
         let catalog = AbilityCatalogStore::new();
@@ -2971,11 +3072,11 @@ mod tests {
             &RevokeRequest {
                 agent_ura: String::new(),
                 purge_transaction_id: None,
-                generation: 0,
-                reason: String::new(),
-                authority_ura: String::new(),
-                protocol_version: 0,
-                delivery_fence: 0,
+                generation: None,
+                reason: None,
+                authority_ura: None,
+                protocol_version: None,
+                delivery_fence: None,
             },
             &registry,
             None,
@@ -2988,11 +3089,11 @@ mod tests {
             &RevokeRequest {
                 agent_ura: "not-a-ura".to_string(),
                 purge_transaction_id: None,
-                generation: 0,
-                reason: String::new(),
-                authority_ura: String::new(),
-                protocol_version: 0,
-                delivery_fence: 0,
+                generation: None,
+                reason: None,
+                authority_ura: None,
+                protocol_version: None,
+                delivery_fence: None,
             },
             &registry,
             None,
@@ -3022,11 +3123,11 @@ mod tests {
             &RevokeRequest {
                 agent_ura: agent_ura.to_string(),
                 purge_transaction_id: None,
-                generation: 0,
-                reason: String::new(),
-                authority_ura: String::new(),
-                protocol_version: 0,
-                delivery_fence: 0,
+                generation: None,
+                reason: None,
+                authority_ura: None,
+                protocol_version: None,
+                delivery_fence: None,
             },
             &registry,
             Some(&advertised),
@@ -3080,12 +3181,13 @@ mod tests {
         let request = RevokeRequest {
             agent_ura: agent_ura.to_string(),
             purge_transaction_id: Some("fedcba9876543210fedcba9876543210".to_string()),
-            generation: 1,
-            reason: "test purge".to_string(),
-            authority_ura: host_ura.to_string(),
-            protocol_version:
+            generation: Some(1),
+            reason: Some("test purge".to_string()),
+            authority_ura: Some(host_ura.to_string()),
+            protocol_version: Some(
                 crate::daemon::persistence::federation_revoke::REVOKE_PROTOCOL_VERSION,
-            delivery_fence: 1,
+            ),
+            delivery_fence: Some(1),
         };
 
         let first = handle_revoke(&request, &registry, Some(&advertised), &catalog).unwrap();
@@ -3133,19 +3235,20 @@ mod tests {
         let request = RevokeRequest {
             agent_ura: agent_ura.to_string(),
             purge_transaction_id: Some("11111111111111111111111111111111".into()),
-            generation: 1,
-            reason: "agent.purge".into(),
-            authority_ura: host_ura.into(),
-            protocol_version:
+            generation: Some(1),
+            reason: Some("agent.purge".into()),
+            authority_ura: Some(host_ura.into()),
+            protocol_version: Some(
                 crate::daemon::persistence::federation_revoke::REVOKE_PROTOCOL_VERSION,
-            delivery_fence: 1,
+            ),
+            delivery_fence: Some(1),
         };
         let command = crate::daemon::persistence::federation_revoke::FederationRevokeCommand {
-            protocol_version: request.protocol_version,
+            protocol_version: request.protocol_version.unwrap(),
             transaction_id: request.purge_transaction_id.clone().unwrap(),
             agent_ura: agent_ura.into(),
             generation: 1,
-            reason: request.reason.clone(),
+            reason: request.reason.clone().unwrap(),
             authority_ura: host_ura.into(),
             target_ura: agent_ura.into(),
         };

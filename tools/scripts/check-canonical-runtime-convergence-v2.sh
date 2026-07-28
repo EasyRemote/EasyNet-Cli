@@ -10460,6 +10460,26 @@ if "serde(default" in agent_field.group("prefix"):
 if "target_ura" in body:
     raise SystemExit("federation_revoke_ingress:target_ura_alias_present")
 
+for field, ty in (
+    ("generation", "Option<u64>"),
+    ("reason", "Option<String>"),
+    ("authority_ura", "Option<String>"),
+    ("protocol_version", "Option<u32>"),
+    ("delivery_fence", "Option<u64>"),
+):
+    if f"pub {field}: {ty}" not in body:
+        raise SystemExit(f"federation_revoke_ingress:purge_fact_not_explicit:{field}")
+
+for retired in (
+    "pub generation: u64",
+    "pub reason: String",
+    "pub authority_ura: String",
+    "pub protocol_version: u32",
+    "pub delivery_fence: u64",
+):
+    if retired in body:
+        raise SystemExit(f"federation_revoke_ingress:purge_fact_legacy_default:{retired}")
+
 for retired in (
     "effective_target_ura",
     "Modern callers send `agent_ura`; older callers send",
@@ -10471,11 +10491,18 @@ for retired in (
         raise SystemExit(f"federation_revoke_ingress:retired_alias_logic:{retired}")
 
 for required in (
-    "fn canonical_target_ura(&self) -> anyhow::Result<&str>",
+    "fn canonical_target_ura(&self) -> anyhow::Result<String>",
+    "enum ResolvedRevokeIntent",
+    "ResolvedRevokeIntent::Immediate",
+    "ResolvedRevokeIntent::Purge",
+    "fn resolve_intent(&self) -> anyhow::Result<ResolvedRevokeIntent>",
+    "require_purge_revoke_fact(self.generation, \"generation\")",
+    "require_purge_revoke_text(self.reason.as_deref(), \"reason\")",
+    "purge_revoke_requires_complete_command_facts",
     "federation.revoke agent_ura is required",
     "federation.revoke agent_ura is invalid",
     "crate::core::ura::parse_ura(target)",
-    "let target_ura = request.canonical_target_ura()?",
+    "let intent = request.resolve_intent()?",
     "revoke_request_rejects_retired_target_ura_alias",
     "handle_revoke_requires_canonical_agent_ura",
 ):
