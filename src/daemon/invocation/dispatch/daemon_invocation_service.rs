@@ -1188,7 +1188,7 @@ impl DaemonInvocationService {
             .ok_or_else(missing_invocation_attempt_ledger)?
             .begin(
                 "InvokeBidi",
-                crate::daemon::invocation::dispatch::attempt_audit::AttemptIdentity::default(),
+                crate::daemon::invocation::dispatch::attempt_audit::AttemptIdentity::pending_bidi_open(),
             )
             .map_err(invocation_attempt_audit_status)
     }

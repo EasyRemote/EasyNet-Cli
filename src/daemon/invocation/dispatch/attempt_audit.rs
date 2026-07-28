@@ -413,7 +413,7 @@ impl RuntimeResponseStateProjection {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub(crate) struct AttemptIdentity {
     request_id: Option<String>,
     trace_id: Option<String>,
@@ -426,6 +426,28 @@ pub(crate) struct AttemptIdentity {
 }
 
 impl AttemptIdentity {
+    pub(crate) fn pending_bidi_open() -> Self {
+        Self::empty()
+    }
+
+    fn empty() -> Self {
+        Self {
+            request_id: None,
+            trace_id: None,
+            span_id: None,
+            caller_ura: None,
+            callee_ura: None,
+            subject_ura: None,
+            ability: None,
+            ability_ura: None,
+        }
+    }
+
+    #[cfg(test)]
+    fn for_test_without_tuple() -> Self {
+        Self::empty()
+    }
+
     #[cfg(feature = "axon-pb")]
     fn from_invoke_request(request: &InvokeRequest) -> Self {
         Self::from_parts("Invoke", request.envelope.as_ref(), request.target.as_ref())
@@ -660,13 +682,13 @@ mod tests {
         let ledger = InvocationAttemptLedger::open(temp.path().join("attempts.jsonl"))
             .expect("attempt ledger");
         let first = ledger
-            .begin("Invoke", AttemptIdentity::default())
+            .begin("Invoke", AttemptIdentity::for_test_without_tuple())
             .expect("begin first attempt");
         first
             .reject_diagnostic("target", "invalid_argument", "bad target", None)
             .expect("finish first attempt");
         let second = ledger
-            .begin("Invoke", AttemptIdentity::default())
+            .begin("Invoke", AttemptIdentity::for_test_without_tuple())
             .expect("begin second attempt");
         second
             .reject_diagnostic("routing", "not_found", "missing route", None)
@@ -709,7 +731,7 @@ mod tests {
         let ledger = InvocationAttemptLedger::open(temp.path().join("attempts.jsonl"))
             .expect("attempt ledger");
         let attempt = ledger
-            .begin("Invoke", AttemptIdentity::default())
+            .begin("Invoke", AttemptIdentity::for_test_without_tuple())
             .expect("begin attempt");
 
         attempt
