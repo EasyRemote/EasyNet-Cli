@@ -15719,9 +15719,12 @@ required_helper_tokens = {
     "python": [
         "caller_ura: str",
         "_reject_unknown_invocation_fields(invocation)",
-        "_reject_unknown_request_fields(frame)",
+        "_reject_unknown_open_request_fields(frame)",
         "def _reject_unknown_invocation_fields(",
-        "def _reject_unknown_request_fields(",
+        "def _reject_unknown_open_request_fields(",
+        "def serve_stream_plugin(",
+        "def serve_bidi_plugin(",
+        "def _iter_bidi_input_frames(",
         "def _require_invocation_fields(",
         "MappingProxyType",
         "_CANONICAL_INVOCATION_NONCE_BYTES = 16",
@@ -15819,6 +15822,10 @@ required_helper_tests = {
         "test_plugin_invocation_owns_handler_projection",
         "test_plugin_invocation_rejects_non_canonical_nonce_length",
         "test_plugin_invocation_rejects_boolean_nonce_bytes",
+        "test_stream_plugin_helper_writes_items_and_single_terminal",
+        "test_bidi_plugin_helper_projects_input_frames_until_close",
+        "test_bidi_plugin_helper_rejects_mismatched_input_call_id",
+        "test_generic_plugin_helper_rejects_unconfigured_stream_path",
     ],
     "node": [
         "serveExecPlugin writes terminal error frame for uncorrelated request",
@@ -15985,6 +15992,16 @@ for language in sorted(required_languages - set(expected_helpers)):
 for language in sorted(required_languages):
     for call_mode in ("ExecStream", "ExecBidi"):
         row = rows[(language, call_mode)]
+        if language == "python":
+            if row["state"] != "ProviderBacked":
+                raise SystemExit(
+                    f"plugin_python_streaming_helper_not_provider_backed:{call_mode}:{row['state']}"
+                )
+            if row["template_available"]:
+                raise SystemExit(f"plugin_streaming_template_open_without_helper:{language}:{call_mode}")
+            if row["helper_package"] != "easynet_sdk.providers.runtime.plugin_exec":
+                raise SystemExit(f"plugin_python_streaming_helper_package_missing:{call_mode}")
+            continue
         if row["state"] not in {"Unsupported", "Seam"}:
             raise SystemExit(
                 f"plugin_streaming_helper_state_open_without_contract:{language}:{call_mode}:{row['state']}"

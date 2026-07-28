@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterator, Mapping
 from io import StringIO
 import json
 import unittest
@@ -7,7 +8,10 @@ import unittest
 from easynet_sdk.providers.runtime.plugin_exec import (
     SidecarInvocation,
     SidecarProtocolError,
+    serve_bidi_plugin,
     serve_exec_plugin,
+    serve_plugin,
+    serve_stream_plugin,
 )
 
 CANONICAL_NONCE = list(range(1, 17))
@@ -27,6 +31,12 @@ def _frame() -> dict[str, object]:
             "args": {"message": "hello"},
         },
     }
+
+
+def _open_frame(frame_type: str = "stream_open") -> dict[str, object]:
+    frame = _frame()
+    frame["type"] = frame_type
+    return frame
 
 
 class PluginExecTests(unittest.TestCase):
@@ -221,6 +231,141 @@ class PluginExecTests(unittest.TestCase):
 
         with self.assertRaisesRegex(SidecarProtocolError, "must contain bytes"):
             SidecarInvocation.from_frame(frame)
+
+    def test_stream_plugin_helper_writes_items_and_single_terminal(self) -> None:
+        output = StringIO()
+
+        def handle(invocation: SidecarInvocation) -> list[dict[str, object]]:
+            return [
+                {"kind": "opened", "ability_ura": invocation.ability_ura},
+                {"kind": "payload", "message": invocation.args["message"]},
+            ]
+
+        serve_stream_plugin(
+            handle,
+            input_stream=StringIO(json.dumps(_open_frame("stream_open")) + "\n"),
+            output_stream=output,
+            terminal_reason="done",
+        )
+
+        frames = [json.loads(line) for line in output.getvalue().splitlines()]
+        self.assertEqual(
+            frames,
+            [
+                {
+                    "type": "stream_item",
+                    "call_id": "call-1",
+                    "value": {"kind": "opened", "ability_ura": "demo.echo"},
+                },
+                {
+                    "type": "stream_item",
+                    "call_id": "call-1",
+                    "value": {"kind": "payload", "message": "hello"},
+                },
+                {"type": "terminal", "call_id": "call-1", "reason": "done"},
+            ],
+        )
+
+    def test_bidi_plugin_helper_projects_input_frames_until_close(self) -> None:
+        output = StringIO()
+        input_body = "\n".join(
+            [
+                json.dumps(_open_frame("bidi_open")),
+                json.dumps(
+                    {
+                        "type": "bidi_input",
+                        "call_id": "call-1",
+                        "frame": {"kind": "audio", "seq": 1},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "bidi_input",
+                        "call_id": "call-1",
+                        "frame": {"kind": "control", "body": "close"},
+                    }
+                ),
+                json.dumps({"type": "close", "call_id": "call-1", "reason": "client_closed"}),
+            ]
+        )
+
+        def handle(
+            invocation: SidecarInvocation,
+            frames: Iterator[Mapping[str, object]],
+        ) -> list[dict[str, object]]:
+            del invocation
+            return [{"kind": "ack", "input": frame["kind"]} for frame in frames]
+
+        serve_bidi_plugin(
+            handle,
+            input_stream=StringIO(input_body + "\n"),
+            output_stream=output,
+            terminal_reason="closed",
+        )
+
+        frames = [json.loads(line) for line in output.getvalue().splitlines()]
+        self.assertEqual(
+            frames,
+            [
+                {
+                    "type": "bidi_output",
+                    "call_id": "call-1",
+                    "frame": {"kind": "ack", "input": "audio"},
+                },
+                {
+                    "type": "bidi_output",
+                    "call_id": "call-1",
+                    "frame": {"kind": "ack", "input": "control"},
+                },
+                {"type": "terminal", "call_id": "call-1", "reason": "closed"},
+            ],
+        )
+
+    def test_bidi_plugin_helper_rejects_mismatched_input_call_id(self) -> None:
+        output = StringIO()
+        input_body = "\n".join(
+            [
+                json.dumps(_open_frame("bidi_open")),
+                json.dumps(
+                    {
+                        "type": "bidi_input",
+                        "call_id": "other-call",
+                        "frame": {"kind": "audio"},
+                    }
+                ),
+            ]
+        )
+
+        def handle(
+            _invocation: SidecarInvocation,
+            frames: Iterator[Mapping[str, object]],
+        ) -> list[Mapping[str, object]]:
+            return list(frames)
+
+        serve_bidi_plugin(
+            handle,
+            input_stream=StringIO(input_body + "\n"),
+            output_stream=output,
+        )
+
+        response = json.loads(output.getvalue())
+        self.assertEqual(response["type"], "error")
+        self.assertEqual(response["call_id"], "call-1")
+        self.assertIn("does not match open call_id", response["message"])
+
+    def test_generic_plugin_helper_rejects_unconfigured_stream_path(self) -> None:
+        output = StringIO()
+
+        serve_plugin(
+            invoke_handler=lambda _invocation: {"ok": True},
+            input_stream=StringIO(json.dumps(_open_frame("stream_open")) + "\n"),
+            output_stream=output,
+        )
+
+        response = json.loads(output.getvalue())
+        self.assertEqual(response["type"], "error")
+        self.assertEqual(response["call_id"], "call-1")
+        self.assertIn("stream sidecar helper is not configured", response["message"])
 
 
 if __name__ == "__main__":

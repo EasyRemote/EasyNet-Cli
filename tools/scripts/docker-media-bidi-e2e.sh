@@ -152,6 +152,8 @@ if [[ "$SELF_TEST" == "1" ]]; then
   grep -q "caller_cli_must_fail" "$0"
   grep -q "provider_media_plugin_removed" "$0"
   grep -q "provider_removed_media_routes_reject_invocation" "$0"
+  grep -q "serve_plugin(" "$0"
+  grep -q "sdk-python/easynet_sdk" "$0"
   grep -q "def candidates(row):" "$0"
   grep -q "ability_ura.endswith(f\".{ability_name}\")" "$0"
   grep -q "resolve_docker" "$0"
@@ -677,6 +679,8 @@ MEDIA_STREAM_ABILITY="media.synthetic_stream"
 MEDIA_BIDI_ABILITY="media.synthetic_bidi"
 MEDIA_PLUGIN_ROOT="/shared/synthetic-media-bidi-plugin"
 service_exec provider "rm -rf '$MEDIA_PLUGIN_ROOT' && mkdir -p '$MEDIA_PLUGIN_ROOT/abilities' '$MEDIA_PLUGIN_ROOT/bin'"
+mkdir -p "$SHARED_DIR/synthetic-media-bidi-plugin/sdk-python"
+cp -R "$REPO_ROOT/sdk/python/easynet_sdk" "$SHARED_DIR/synthetic-media-bidi-plugin/sdk-python/easynet_sdk"
 cat >"$SHARED_DIR/synthetic-media-bidi-plugin/plugin.toml" <<'EOF'
 schema_version = "1"
 id = "e2e.synthetic_media_bidi"
@@ -773,12 +777,12 @@ cat >"$SHARED_DIR/synthetic-media-bidi-plugin/bin/synthetic-media-sidecar" <<'PY
 #!/usr/bin/env python3
 import base64
 import hashlib
-import json
 import sys
+from pathlib import Path
 
-def emit(frame):
-    sys.stdout.write(json.dumps(frame, separators=(",", ":")) + "\n")
-    sys.stdout.flush()
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "sdk-python"))
+
+from easynet_sdk.providers.runtime.plugin_exec import SidecarInvocation, serve_plugin
 
 def payload(kind, index, session_id):
     body = f"{kind}:{session_id}:{index}".encode("utf-8")
@@ -803,73 +807,58 @@ def ack(frame):
         "echo_body": frame.get("body"),
     }
 
-session = None
-acks = []
-for raw in sys.stdin:
-    if not raw.strip():
-        continue
-    message = json.loads(raw)
-    kind = message.get("type")
-    call_id = message.get("call_id")
-    if kind == "invoke":
-        emit({"type": "result", "call_id": call_id, "value": {"ok": True}})
-        break
-    if kind == "stream_open":
-        invocation = message["invocation"]
-        args = invocation.get("args") or {}
-        session_id = args.get("session_id") or "stream"
-        emit({"type": "stream_item", "call_id": call_id, "value": {
+def handle_invoke(_invocation: SidecarInvocation):
+    return {"ok": True}
+
+def handle_stream(invocation: SidecarInvocation):
+    session_id = invocation.args.get("session_id") or "stream"
+    yield {
             "kind": "stream_opened",
             "session_id": session_id,
-            "caller_ura": invocation.get("caller_ura"),
-            "callee_ura": invocation.get("callee_ura"),
-            "subject_ura": invocation.get("subject_ura"),
-            "ability_ura": invocation.get("ability_ura"),
-            "nonce_bytes": len(invocation.get("invocation_nonce") or []),
-        }})
-        for frame_kind, count in (("audio", 2), ("video", 2), ("screen", 1)):
-            for index in range(1, count + 1):
-                emit({"type": "stream_item", "call_id": call_id, "value": payload(frame_kind, index, session_id)})
-        emit({"type": "terminal", "call_id": call_id, "reason": "stream_complete"})
-        break
-    if kind == "bidi_open":
-        invocation = message["invocation"]
-        args = invocation.get("args") or {}
-        session = {
-            "call_id": call_id,
-            "session_id": args.get("session_id") or "bidi",
-            "caller_ura": invocation.get("caller_ura"),
-            "callee_ura": invocation.get("callee_ura"),
-            "subject_ura": invocation.get("subject_ura"),
-            "ability_ura": invocation.get("ability_ura"),
-            "nonce_bytes": len(invocation.get("invocation_nonce") or []),
-        }
-        emit({"type": "bidi_output", "call_id": call_id, "frame": {"kind": "session_established", **session}})
-        continue
-    if kind == "bidi_input":
-        frame = message.get("frame") or {}
+            "caller_ura": invocation.caller_ura,
+            "callee_ura": invocation.callee_ura,
+            "subject_ura": invocation.subject_ura,
+            "ability_ura": invocation.ability_ura,
+            "nonce_bytes": len(invocation.invocation_nonce),
+    }
+    for frame_kind, count in (("audio", 2), ("video", 2), ("screen", 1)):
+        for index in range(1, count + 1):
+            yield payload(frame_kind, index, session_id)
+
+def handle_bidi(invocation: SidecarInvocation, input_frames):
+    session = {
+        "session_id": invocation.args.get("session_id") or "bidi",
+        "caller_ura": invocation.caller_ura,
+        "callee_ura": invocation.callee_ura,
+        "subject_ura": invocation.subject_ura,
+        "ability_ura": invocation.ability_ura,
+        "nonce_bytes": len(invocation.invocation_nonce),
+    }
+    yield {"kind": "session_established", **session}
+    acks = []
+    for frame in input_frames:
         if frame.get("kind") in {"audio", "video", "control"}:
             item = ack(frame)
             acks.append(item)
-            emit({"type": "bidi_output", "call_id": call_id, "frame": item})
+            yield item
             if frame.get("kind") == "control" and frame.get("body") == "close":
-                emit({"type": "bidi_output", "call_id": call_id, "frame": {
+                yield {
                     "kind": "summary",
-                    "session_id": (session or {}).get("session_id"),
+                    "session_id": session.get("session_id"),
                     "ack_count": len(acks),
                     "media_kinds": sorted({item.get("media_kind") for item in acks}),
-                }})
-                emit({"type": "terminal", "call_id": call_id, "reason": "client_control_close"})
-                break
+                }
+                return
         else:
-            emit({"type": "error", "call_id": call_id, "message": f"unsupported input frame {frame!r}"})
-            break
-        continue
-    if kind == "close":
-        emit({"type": "terminal", "call_id": call_id, "reason": message.get("reason") or "client_closed"})
-        break
-    emit({"type": "error", "call_id": call_id, "message": f"unsupported request type {kind!r}"})
-    break
+            raise ValueError(f"unsupported input frame {frame!r}")
+
+serve_plugin(
+    invoke_handler=handle_invoke,
+    stream_handler=handle_stream,
+    bidi_handler=handle_bidi,
+    stream_terminal_reason="stream_complete",
+    bidi_terminal_reason="client_control_close",
+)
 PY
 chmod +x "$SHARED_DIR/synthetic-media-bidi-plugin/bin/synthetic-media-sidecar"
 

@@ -108,9 +108,9 @@ pub const PROVIDER_SIDECAR_HELPER_CAPABILITY_MATRIX: &[ProviderSidecarHelperCapa
     ProviderSidecarHelperCapability {
         language: "python",
         call_mode: ProviderSidecarCallMode::ExecStream,
-        state: ProviderSidecarHelperState::Seam,
+        state: ProviderSidecarHelperState::ProviderBacked,
         template_available: false,
-        helper_package: None,
+        helper_package: Some("easynet_sdk.providers.runtime.plugin_exec"),
     },
     ProviderSidecarHelperCapability {
         language: "go",
@@ -150,9 +150,9 @@ pub const PROVIDER_SIDECAR_HELPER_CAPABILITY_MATRIX: &[ProviderSidecarHelperCapa
     ProviderSidecarHelperCapability {
         language: "python",
         call_mode: ProviderSidecarCallMode::ExecBidi,
-        state: ProviderSidecarHelperState::Seam,
+        state: ProviderSidecarHelperState::ProviderBacked,
         template_available: false,
-        helper_package: None,
+        helper_package: Some("easynet_sdk.providers.runtime.plugin_exec"),
     },
     ProviderSidecarHelperCapability {
         language: "go",
@@ -1105,14 +1105,26 @@ mod tests {
                     !capability.template_available,
                     "{language}/{call_mode:?} template must stay closed until its provider helper owns streaming frames"
                 );
-                assert!(matches!(
-                    capability.state,
-                    ProviderSidecarHelperState::Unsupported | ProviderSidecarHelperState::Seam
-                ));
-                assert!(
-                    capability.helper_package.is_none(),
-                    "{language}/{call_mode:?} must not claim unary exec helper coverage"
-                );
+                if language == "python" {
+                    assert!(matches!(
+                        capability.state,
+                        ProviderSidecarHelperState::ProviderBacked
+                    ));
+                    assert_eq!(
+                        capability.helper_package,
+                        Some("easynet_sdk.providers.runtime.plugin_exec"),
+                        "python/{call_mode:?} helper coverage must stay provider-owned"
+                    );
+                } else {
+                    assert!(matches!(
+                        capability.state,
+                        ProviderSidecarHelperState::Unsupported | ProviderSidecarHelperState::Seam
+                    ));
+                    assert!(
+                        capability.helper_package.is_none(),
+                        "{language}/{call_mode:?} must not claim unary exec helper coverage"
+                    );
+                }
             }
         }
     }
