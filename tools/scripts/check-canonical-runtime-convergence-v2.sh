@@ -16519,6 +16519,20 @@ for retired in (
     if retired in production:
         raise SystemExit(f"cli_device_show_projection_error:retired_product_message:{retired}")
 
+if "LocalRuntimeDeviceDirectoryReadIssuer::describe_node(" not in production:
+    raise SystemExit("cli_device_show_projection_error:missing_typed_device_directory_read_issuer")
+
+for retired in (
+    "LocalRuntimeStateReadIssuer::invoke",
+    "LocalRuntimeStateReadIssuer::invoke_timeout",
+    "invoke_local_ability(",
+):
+    if retired in production:
+        raise SystemExit(f"cli_device_show_projection_error:retired_local_dispatch:{retired}")
+
+if '"node.describe",' in production:
+    raise SystemExit("cli_device_show_projection_error:raw_node_describe_dispatch")
+
 for required in (
     "device show requires the canonical describe abilities projection",
     "device show requires the canonical describe state projection",

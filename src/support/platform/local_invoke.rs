@@ -474,6 +474,31 @@ impl LocalRuntimeStateReadIssuer {
     }
 }
 
+/// Named issuer for daemon-local device directory/read-model projections.
+///
+/// `node.describe` is the canonical device-directory projection consumed by
+/// `easynet device show`. The CLI should not know the raw ability string or
+/// keep a generic local dispatch seam; this issuer owns the typed read-model
+/// entry while preserving the existing runtime-state subject custody.
+pub struct LocalRuntimeDeviceDirectoryReadIssuer;
+
+impl LocalRuntimeDeviceDirectoryReadIssuer {
+    pub fn describe_node(args: Value) -> anyhow::Result<Value> {
+        Self::describe_node_timeout(args, std::time::Duration::from_secs(30))
+    }
+
+    pub fn describe_node_timeout(
+        args: Value,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<Value> {
+        LocalRuntimeStateReadIssuer::invoke_state_read_timeout(
+            crate::daemon::ability::names::federation::NODE_DESCRIBE,
+            args,
+            timeout,
+        )
+    }
+}
+
 /// Named issuer for daemon-local operational health reads.
 ///
 /// `observe.health` proves the local runtime invocation path, not a

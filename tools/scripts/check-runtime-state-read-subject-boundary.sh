@@ -13,12 +13,15 @@ fail() {
 ISSUER="src/support/platform/local_invoke.rs"
 TARGETS=(
   "src/cli/commands/discover.rs"
-  "src/cli/commands/groups/device.rs"
 )
 
 OPERATIONAL_TARGETS=(
   "src/cli/commands/groups/mcp.rs"
   "src/cli/commands/status.rs"
+)
+
+DEVICE_DIRECTORY_TARGETS=(
+  "src/cli/commands/groups/device.rs"
 )
 
 IDENTITY_TARGETS=(
@@ -55,6 +58,10 @@ fi
 
 if ! rg -n 'struct LocalRuntimeOperationalReadIssuer' "$ISSUER" >/dev/null; then
   fail "runtime operational reads must use a named issuer"
+fi
+
+if ! rg -n 'struct LocalRuntimeDeviceDirectoryReadIssuer' "$ISSUER" >/dev/null; then
+  fail "runtime device-directory reads must use a named issuer"
 fi
 
 if ! rg -n 'struct LocalRuntimeIdentityReadIssuer' "$ISSUER" >/dev/null; then
@@ -184,6 +191,42 @@ for target in "${OPERATIONAL_TARGETS[@]}"; do
   fi
   if rg -n '\binvoke_local_ability\s*\(' "$target"; then
     fail "$target must not use generic invoke_local_ability for runtime operational reads"
+  fi
+done
+
+"$PYTHON_BIN" - "$ISSUER" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+match = re.search(
+    r"impl LocalRuntimeDeviceDirectoryReadIssuer \{(?P<body>.*?)\n\}",
+    text,
+    re.S,
+)
+if not match:
+    raise SystemExit("LocalRuntimeDeviceDirectoryReadIssuer impl is missing")
+body = match.group("body")
+if "pub fn invoke(" in body or "pub fn invoke_timeout(" in body:
+    raise SystemExit(
+        "LocalRuntimeDeviceDirectoryReadIssuer must expose typed device-directory methods, not generic invoke methods"
+    )
+for required in ("pub fn describe_node(", "pub fn describe_node_timeout("):
+    if required not in body:
+        raise SystemExit(f"LocalRuntimeDeviceDirectoryReadIssuer missing {required}")
+PY
+
+for target in "${DEVICE_DIRECTORY_TARGETS[@]}"; do
+  [[ -f "$target" ]] || fail "missing $target"
+  if ! rg -n 'LocalRuntimeDeviceDirectoryReadIssuer::describe_node' "$target" >/dev/null; then
+    fail "$target must enter local runtime device-directory reads through LocalRuntimeDeviceDirectoryReadIssuer"
+  fi
+  if rg -n 'LocalRuntimeStateReadIssuer::invoke|node\.describe"\s*,' "$target"; then
+    fail "$target must not route node.describe through generic runtime-state ability dispatch"
+  fi
+  if rg -n '\binvoke_local_ability\s*\(' "$target"; then
+    fail "$target must not use generic invoke_local_ability for runtime device-directory reads"
   fi
 done
 

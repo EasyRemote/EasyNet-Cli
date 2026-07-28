@@ -45,6 +45,7 @@ use crate::cli::daemon_client::remote_system_ability::{
     invoke_remote_device_system_ability, invoke_remote_device_system_ability_as_caller,
     RemoteDeviceSystemAbility,
 };
+use crate::support::platform::local_invoke::LocalRuntimeDeviceDirectoryReadIssuer;
 use crate::support::platform::output::{self, OutputFormat};
 
 #[derive(Debug, Args)]
@@ -368,8 +369,7 @@ fn describe_target(node_id: &str, authority: bool) -> anyhow::Result<Value> {
         return describe_target_from_local_authority(trimmed);
     }
     if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("local") {
-        return crate::support::platform::local_invoke::LocalRuntimeStateReadIssuer::invoke(
-            "node.describe",
+        return LocalRuntimeDeviceDirectoryReadIssuer::describe_node(
             serde_json::json!({"node_id": "local"}),
         )
         .context("invoke node.describe (local)");
@@ -377,13 +377,10 @@ fn describe_target(node_id: &str, authority: bool) -> anyhow::Result<Value> {
 
     let local_identity = load_local_device_identity("device show")?;
     match classify_device_show_target(trimmed, &local_identity)? {
-        DeviceShowTarget::Local => {
-            crate::support::platform::local_invoke::LocalRuntimeStateReadIssuer::invoke(
-                "node.describe",
-                serde_json::json!({"node_id": "local"}),
-            )
-            .context("invoke node.describe (local)")
-        }
+        DeviceShowTarget::Local => LocalRuntimeDeviceDirectoryReadIssuer::describe_node(
+            serde_json::json!({"node_id": "local"}),
+        )
+        .context("invoke node.describe (local)"),
         DeviceShowTarget::RemoteDevice(target_ura) => invoke_remote_describe(&target_ura),
     }
 }
