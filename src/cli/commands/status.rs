@@ -22,7 +22,7 @@ use crate::daemon::boot::join_connection_state;
 use crate::daemon::lifecycle::{RuntimeLifecycleService, RuntimeLifecycleStatus};
 use crate::daemon::persistence::config;
 use crate::support::platform::local_invoke::{
-    LocalRuntimeCatalogueReadIssuer, LocalRuntimeOperationalReadIssuer, LocalRuntimeStateReadIssuer,
+    LocalRuntimeCatalogueReadIssuer, LocalRuntimeOperationalReadIssuer,
 };
 use crate::support::platform::output;
 
@@ -144,35 +144,8 @@ pub fn run(args: StatusArgs) -> anyhow::Result<()> {
 
     match StatusRuntimeReadPolicy::for_pairing_state(&pairing_state) {
         StatusRuntimeReadPolicy::UserRuntimeState => {
-            let health_probe = LocalRuntimeStateReadIssuer::invoke(
-                "observe.health",
-                json!({"source": "runtime.status"}),
-            );
-            match health_probe {
-                Ok(_) => {}
-                Err(e) => {
-                    // The transport layer already converts the common case
-                    // (daemon.sock missing/refused because the daemon process
-                    // is gone) into an actionable daemon-offline error with a
-                    // recovery hint. Surface that one directly; wrapping it in
-                    // "despite runtime metadata: …" duplicated the diagnosis
-                    // and made the actionable line harder to read. For
-                    // genuinely-unexpected failures (permission, protocol
-                    // mismatch, etc.) keep the wrapping so the diagnosis
-                    // context is preserved.
-                    let inner = format!("{e}");
-                    if matches!(
-                        crate::support::platform::local_invoke::classify_invoke_failure(&e),
-                        crate::support::platform::local_invoke::LocalInvokeFailureClass::DaemonOffline
-                    ) {
-                        output::warn(&inner);
-                    } else {
-                        output::warn(&format!(
-                            "Local daemon is not responding to observe.health despite runtime metadata: {inner}"
-                        ));
-                    }
-                    return Ok(());
-                }
+            if !probe_runtime_health(false)? {
+                return Ok(());
             }
 
             // Fleet view — go through `federation.discover` (the joint-plan
@@ -190,24 +163,8 @@ pub fn run(args: StatusArgs) -> anyhow::Result<()> {
             output::info(&format!("Nodes: {online} online, {offline} offline"));
         }
         StatusRuntimeReadPolicy::DeviceOwnerOperational => {
-            match LocalRuntimeOperationalReadIssuer::observe_health(
-                json!({"source": "runtime.status"}),
-            ) {
-                Ok(_) => output::info("Runtime health: daemon invocation endpoint accepting"),
-                Err(e) => {
-                    let inner = format!("{e}");
-                    if matches!(
-                        crate::support::platform::local_invoke::classify_invoke_failure(&e),
-                        crate::support::platform::local_invoke::LocalInvokeFailureClass::DaemonOffline
-                    ) {
-                        output::warn(&inner);
-                    } else {
-                        output::warn(&format!(
-                            "Local daemon is not responding to observe.health despite runtime metadata: {inner}"
-                        ));
-                    }
-                    return Ok(());
-                }
+            if !probe_runtime_health(true)? {
+                return Ok(());
             }
             output::info(
                 "Nodes: not queried (user-scoped federation directory requires a bound user)",
@@ -241,6 +198,39 @@ pub fn run(args: StatusArgs) -> anyhow::Result<()> {
         Err(e) => output::info(&format!("Abilities: cannot query ('{e}')")),
     }
     Ok(())
+}
+
+fn probe_runtime_health(print_success: bool) -> anyhow::Result<bool> {
+    match LocalRuntimeOperationalReadIssuer::observe_health(json!({"source": "runtime.status"})) {
+        Ok(_) => {
+            if print_success {
+                output::info("Runtime health: daemon invocation endpoint accepting");
+            }
+            Ok(true)
+        }
+        Err(error) => {
+            // The transport layer already converts the common case
+            // (daemon.sock missing/refused because the daemon process is gone)
+            // into an actionable daemon-offline error with a recovery hint.
+            // Surface that one directly; wrapping it in "despite runtime
+            // metadata: …" duplicated the diagnosis and made the actionable
+            // line harder to read. For genuinely-unexpected failures
+            // (permission, protocol mismatch, etc.) keep the wrapping so the
+            // diagnosis context is preserved.
+            let inner = format!("{error}");
+            if matches!(
+                crate::support::platform::local_invoke::classify_invoke_failure(&error),
+                crate::support::platform::local_invoke::LocalInvokeFailureClass::DaemonOffline
+            ) {
+                output::warn(&inner);
+            } else {
+                output::warn(&format!(
+                    "Local daemon is not responding to observe.health despite runtime metadata: {inner}"
+                ));
+            }
+            Ok(false)
+        }
+    }
 }
 
 #[derive(Debug)]

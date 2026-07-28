@@ -15,12 +15,12 @@ TARGETS=(
   "src/cli/commands/discover.rs"
   "src/cli/commands/doctor.rs"
   "src/cli/commands/groups/device.rs"
-  "src/cli/commands/status.rs"
   "src/cli/commands/user_signing_identity.rs"
 )
 
 OPERATIONAL_TARGETS=(
   "src/cli/commands/groups/mcp.rs"
+  "src/cli/commands/status.rs"
 )
 
 GOVERNANCE_TARGETS=(
