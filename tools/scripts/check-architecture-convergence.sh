@@ -2552,7 +2552,7 @@ if access_control.exists():
     text = source(access_control)
     access_requirements = (
         (
-            "fn require_actor_ura(actor_ura: Option<&str>) -> anyhow::Result<&str>",
+            "fn require_actor_ura(actor_ura: &str) -> anyhow::Result<&str>",
             "access-control mutations need one actor URA validator",
         ),
         (
@@ -2564,7 +2564,7 @@ if access_control.exists():
             "scalar actor IDs must not be persisted as audit URAs",
         ),
         (
-            "let actor_ura = require_actor_ura(request.actor_ura.as_deref())?",
+            "let actor_ura = require_actor_ura(request.actor_ura.as_str())?",
             "revoke must validate actor_ura through the shared boundary validator",
         ),
         (
@@ -2600,6 +2600,14 @@ if access_control.exists():
                 line_number(text, revoke_match.start()),
                 "revoke request must not expose scalar identity fields",
             )
+        for field in ("owner_ura", "actor_ura"):
+            if re.search(rf"#\[serde\(default\)\]\s*{field}\s*:\s*Option<", revoke_match.group("body")):
+                add(
+                    "R18_ACCESS_CONTROL_ACTOR_URA_FORK",
+                    access_control,
+                    line_number(text, revoke_match.start()),
+                    f"revoke request must require {field} at typed ingress",
+                )
 
     for pattern in (
         r"request\.actor_ura[\s\S]{0,120}(?:unwrap_or|unwrap_or_else|or_else)\s*\(",
@@ -11923,8 +11931,8 @@ if access_control_governance.exists():
     raw_text = access_control_governance.read_text(encoding="utf-8", errors="replace")
     for token, detail in (
         (
-            "fn require_owner_source(",
-            "access-control check must make owner-source provenance explicit",
+            "owner_source: OwnerSource",
+            "access-control check must make owner-source provenance a required request fact",
         ),
         (
             '"owner_ura", "owner_source", "caller_ura"',

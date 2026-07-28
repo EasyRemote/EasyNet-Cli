@@ -141,10 +141,10 @@ fn grant_handler(args: Value, stores: &AccessControlStoreRegistry) -> anyhow::Re
     let request: GrantRequest = serde_json::from_value(args)?;
     let grant = grant_from_wire_mutation_boundary(
         request.grant,
-        request.owner_ura.as_deref(),
+        request.owner_ura.as_str(),
         request.principal_ura.as_deref(),
     )?;
-    let actor_ura = require_actor_ura(request.actor_ura.as_deref())?;
+    let actor_ura = require_actor_ura(request.actor_ura.as_str())?;
     let owner_user_id = grant.owner_user_id.clone();
     let result =
         stores.with_store(&owner_user_id, |store| store.create_grant(grant, actor_ura))??;
@@ -153,8 +153,8 @@ fn grant_handler(args: Value, stores: &AccessControlStoreRegistry) -> anyhow::Re
 
 fn revoke_handler(args: Value, stores: &AccessControlStoreRegistry) -> anyhow::Result<Value> {
     let request: RevokeRequest = serde_json::from_value(args)?;
-    let owner_user_id = owner_user_id_from_mutation_boundary(request.owner_ura.as_deref())?;
-    let actor_ura = require_actor_ura(request.actor_ura.as_deref())?;
+    let owner_user_id = owner_user_id_from_mutation_boundary(request.owner_ura.as_str())?;
+    let actor_ura = require_actor_ura(request.actor_ura.as_str())?;
     let grant = stores.with_store(&owner_user_id, |store| {
         store.revoke_grant(&request.grant_id, &owner_user_id, actor_ura, request.reason)
     })??;
@@ -163,7 +163,7 @@ fn revoke_handler(args: Value, stores: &AccessControlStoreRegistry) -> anyhow::R
 
 fn list_grants_handler(args: Value, stores: &AccessControlStoreRegistry) -> anyhow::Result<Value> {
     let request: ListGrantsRequest = serde_json::from_value(args)?;
-    let owner_user_id = owner_user_id_from_boundary(request.owner_ura.as_deref())?;
+    let owner_user_id = owner_user_id_from_boundary(request.owner_ura.as_str())?;
     let principal_id = principal_id_from_boundary(
         request.principal_kind,
         request.principal_ura.as_deref(),
@@ -203,7 +203,7 @@ fn list_grants_handler(args: Value, stores: &AccessControlStoreRegistry) -> anyh
 
 fn check_handler(args: Value, stores: &AccessControlStoreRegistry) -> anyhow::Result<Value> {
     let request: CheckRequest = serde_json::from_value(args)?;
-    let owner_user_id = owner_user_id_from_boundary(request.owner_ura.as_deref())?;
+    let owner_user_id = owner_user_id_from_boundary(request.owner_ura.as_str())?;
     let principal_id = principal_id_from_boundary(
         Some(request.principal_kind),
         request.principal_ura.as_deref(),
@@ -213,8 +213,8 @@ fn check_handler(args: Value, stores: &AccessControlStoreRegistry) -> anyhow::Re
     let grants = stores.with_store(&owner_user_id, |store| store.grants())?;
     let owner = OwnerResolution {
         owner_user_id: Some(owner_user_id),
-        owner_ura: request.owner_ura,
-        owner_source: require_owner_source(request.owner_source)?,
+        owner_ura: Some(request.owner_ura),
+        owner_source: request.owner_source,
         audit_warnings: vec![],
     };
     let decision = PolicyEngine::check(PolicyInput {
@@ -253,10 +253,10 @@ fn request_create_handler(
     let request: PermissionRequestEnvelope = serde_json::from_value(args)?;
     let permission_request = permission_request_from_wire_mutation_boundary(
         request.request,
-        request.owner_ura.as_deref(),
+        request.owner_ura.as_str(),
         request.principal_ura.as_deref(),
     )?;
-    let actor_ura = require_actor_ura(request.actor_ura.as_deref())?;
+    let actor_ura = require_actor_ura(request.actor_ura.as_str())?;
     let owner_user_id = permission_request.owner_user_id.clone();
     let request = stores.with_store(&owner_user_id, |store| {
         store.upsert_permission_request(permission_request, actor_ura)
@@ -271,17 +271,17 @@ fn request_resolve_handler(
     let request: PermissionRequestResolutionEnvelope = serde_json::from_value(args)?;
     let permission_request = permission_request_from_wire_mutation_boundary(
         request.request,
-        request.owner_ura.as_deref(),
+        request.owner_ura.as_str(),
         request.principal_ura.as_deref(),
     )?;
-    let actor_ura = require_actor_ura(request.actor_ura.as_deref())?;
+    let actor_ura = require_actor_ura(request.actor_ura.as_str())?;
     let owner_user_id = permission_request.owner_user_id.clone();
     stores.with_store(&owner_user_id, |store| {
         if permission_request.status == PermissionRequestStatus::Approved {
             if let Some(grant) = request.created_grant {
                 let grant = grant_from_wire_mutation_boundary(
                     grant,
-                    request.owner_ura.as_deref(),
+                    request.owner_ura.as_str(),
                     request.principal_ura.as_deref(),
                 )?;
                 let result = store.resolve_permission_request_with_grant(
@@ -307,7 +307,7 @@ fn request_resolve_handler(
 
 fn request_list_handler(args: Value, stores: &AccessControlStoreRegistry) -> anyhow::Result<Value> {
     let request: ListRequestsRequest = serde_json::from_value(args)?;
-    let owner_user_id = owner_user_id_from_boundary(request.owner_ura.as_deref())?;
+    let owner_user_id = owner_user_id_from_boundary(request.owner_ura.as_str())?;
     let principal_id = principal_id_from_boundary(
         request.principal_kind,
         request.principal_ura.as_deref(),
@@ -397,7 +397,7 @@ fn creation_time_matches(
 
 fn grant_from_wire_mutation_boundary(
     grant: WirePermissionGrant,
-    owner_ura: Option<&str>,
+    owner_ura: &str,
     principal_ura: Option<&str>,
 ) -> anyhow::Result<crate::daemon::invocation::admission::grant_matcher::PermissionGrant> {
     let owner_user_id = owner_user_id_from_mutation_boundary(owner_ura)?;
@@ -412,7 +412,7 @@ fn grant_from_wire_mutation_boundary(
 
 fn permission_request_from_wire_mutation_boundary(
     request: WirePermissionRequest,
-    owner_ura: Option<&str>,
+    owner_ura: &str,
     principal_ura: Option<&str>,
 ) -> anyhow::Result<crate::daemon::invocation::admission::decision::PermissionRequest> {
     let owner_user_id = owner_user_id_from_mutation_boundary(owner_ura)?;
@@ -425,10 +425,11 @@ fn permission_request_from_wire_mutation_boundary(
     Ok(request.into_permission_request(owner_user_id, principal_id))
 }
 
-fn owner_user_id_from_boundary(owner_ura: Option<&str>) -> anyhow::Result<String> {
-    let Some(owner_ura) = owner_ura.map(str::trim).filter(|value| !value.is_empty()) else {
+fn owner_user_id_from_boundary(owner_ura: &str) -> anyhow::Result<String> {
+    let owner_ura = owner_ura.trim();
+    if owner_ura.is_empty() {
         anyhow::bail!("owner_ura is required");
-    };
+    }
     let parsed = RuntimeIdentityUra::parse(owner_ura)
         .map_err(|err| anyhow::anyhow!("owner_ura must be an admissible User URA: {err}"))?;
     if parsed.kind() != URAKind::User {
@@ -442,23 +443,19 @@ fn owner_user_id_from_boundary(owner_ura: Option<&str>) -> anyhow::Result<String
     Ok(derived.to_string())
 }
 
-fn owner_user_id_from_mutation_boundary(owner_ura: Option<&str>) -> anyhow::Result<String> {
-    let owner_ura = owner_ura
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| anyhow::anyhow!("owner_ura is required for a policy mutation"))?;
-    owner_user_id_from_boundary(Some(owner_ura))
+fn owner_user_id_from_mutation_boundary(owner_ura: &str) -> anyhow::Result<String> {
+    let owner_ura = owner_ura.trim();
+    if owner_ura.is_empty() {
+        anyhow::bail!("owner_ura is required for a policy mutation");
+    }
+    owner_user_id_from_boundary(owner_ura)
 }
 
-fn require_owner_source(owner_source: Option<OwnerSource>) -> anyhow::Result<OwnerSource> {
-    owner_source.ok_or_else(|| anyhow::anyhow!("owner_source is required for policy checks"))
-}
-
-fn require_actor_ura(actor_ura: Option<&str>) -> anyhow::Result<&str> {
-    let actor_ura = actor_ura
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| anyhow::anyhow!("actor_ura is required for an audited mutation"))?;
+fn require_actor_ura(actor_ura: &str) -> anyhow::Result<&str> {
+    let actor_ura = actor_ura.trim();
+    if actor_ura.is_empty() {
+        anyhow::bail!("actor_ura is required for an audited mutation");
+    }
     RuntimeIdentityUra::parse(actor_ura).map_err(|err| {
         anyhow::anyhow!("actor_ura must be a canonical URA and admissible runtime identity: {err}")
     })?;
@@ -718,12 +715,10 @@ fn trace_stage_for(state: &str) -> TraceStage {
 #[serde(deny_unknown_fields)]
 struct GrantRequest {
     grant: WirePermissionGrant,
-    #[serde(default)]
-    owner_ura: Option<String>,
+    owner_ura: String,
     #[serde(default)]
     principal_ura: Option<String>,
-    #[serde(default)]
-    actor_ura: Option<String>,
+    actor_ura: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -803,19 +798,16 @@ impl WirePermissionGrant {
 #[serde(deny_unknown_fields)]
 struct RevokeRequest {
     grant_id: String,
-    #[serde(default)]
-    owner_ura: Option<String>,
+    owner_ura: String,
     #[serde(default)]
     reason: Option<String>,
-    #[serde(default)]
-    actor_ura: Option<String>,
+    actor_ura: String,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ListGrantsRequest {
-    #[serde(default)]
-    owner_ura: Option<String>,
+    owner_ura: String,
     #[serde(default)]
     principal_kind: Option<crate::daemon::invocation::admission::decision::PrincipalKind>,
     #[serde(default)]
@@ -839,10 +831,8 @@ struct ListGrantsRequest {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CheckRequest {
-    #[serde(default)]
-    owner_ura: Option<String>,
-    #[serde(default)]
-    owner_source: Option<OwnerSource>,
+    owner_ura: String,
+    owner_source: OwnerSource,
     caller_ura: String,
     principal_kind: crate::daemon::invocation::admission::decision::PrincipalKind,
     #[serde(default)]
@@ -873,28 +863,24 @@ struct CheckRequest {
 #[serde(deny_unknown_fields)]
 struct PermissionRequestEnvelope {
     request: WirePermissionRequest,
-    #[serde(default)]
-    owner_ura: Option<String>,
+    owner_ura: String,
     #[serde(default)]
     principal_ura: Option<String>,
-    #[serde(default)]
-    actor_ura: Option<String>,
+    actor_ura: String,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PermissionRequestResolutionEnvelope {
     request: WirePermissionRequest,
-    #[serde(default)]
-    owner_ura: Option<String>,
+    owner_ura: String,
     #[serde(default)]
     principal_ura: Option<String>,
     #[serde(default)]
     created_grant: Option<WirePermissionGrant>,
     #[serde(default)]
     authority_proof: Option<crate::daemon::invocation::admission::authority_proof::AuthorityProof>,
-    #[serde(default)]
-    actor_ura: Option<String>,
+    actor_ura: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -970,8 +956,7 @@ impl WirePermissionRequest {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ListRequestsRequest {
-    #[serde(default)]
-    owner_ura: Option<String>,
+    owner_ura: String,
     #[serde(default)]
     principal_kind: Option<crate::daemon::invocation::admission::decision::PrincipalKind>,
     #[serde(default)]
@@ -1362,9 +1347,7 @@ mod tests {
             &stores,
         )
         .expect_err("policy checks must not infer owner_source from subject");
-        assert!(missing
-            .to_string()
-            .contains("owner_source is required for policy checks"));
+        assert!(missing.to_string().contains("missing field `owner_source`"));
 
         let schema = input_schema_for(AUTHORITY_BINDING_CHECK);
         let required = schema["required"].as_array().expect("required array");
@@ -1383,7 +1366,7 @@ mod tests {
             &stores,
         )
         .expect_err("an audited revoke cannot infer its actor from owner_user_id");
-        assert!(missing.to_string().contains("actor_ura is required"));
+        assert!(missing.to_string().contains("missing field `actor_ura`"));
 
         let invalid = revoke_handler(
             json!({
@@ -1413,7 +1396,7 @@ mod tests {
         .expect_err("owner_user_id must not replace owner_ura on a mutation");
         assert!(missing_owner
             .to_string()
-            .contains("owner_ura is required for a policy mutation"));
+            .contains("missing field `owner_ura`"));
 
         let missing_principal = grant_handler(
             json!({
@@ -1815,14 +1798,14 @@ mod tests {
     #[test]
     fn policy_boundaries_reject_all_zero_user_uras() {
         let all_zero_user = "easynet:///r/example/user/00000000-0000-0000-0000-000000000000";
-        assert!(owner_user_id_from_boundary(Some(all_zero_user)).is_err());
+        assert!(owner_user_id_from_boundary(all_zero_user).is_err());
         assert!(principal_id_from_boundary(
             Some(crate::daemon::invocation::admission::decision::PrincipalKind::User),
             Some(all_zero_user),
             None,
         )
         .is_err());
-        assert!(require_actor_ura(Some(all_zero_user)).is_err());
+        assert!(require_actor_ura(all_zero_user).is_err());
     }
 
     #[test]
