@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 
-def is_fallback_signer_item(item: str) -> bool:
+def is_process_local_signer_item(item: str) -> bool:
     lowered = item.lower()
     tokens = semantic_tokens(item)
     compact = re.sub(r"[^a-z0-9]", "", lowered)
@@ -75,8 +75,8 @@ def non_canonical_public_reason(item: str) -> str | None:
     root = public_root(item)
     tokens = semantic_tokens(item)
     lowered = item.lower()
-    if is_fallback_signer_item(item):
-        return "Process-local signer fallback is prohibited; canonical SDK signing uses an explicit signer handle or daemon KeyService authority."
+    if is_process_local_signer_item(item):
+        return "Process-local signer helper is prohibited; canonical SDK signing uses an explicit signer handle or daemon KeyService authority."
     if root in {
         "canonical_invocation_bytes",
         "sign_invocation",

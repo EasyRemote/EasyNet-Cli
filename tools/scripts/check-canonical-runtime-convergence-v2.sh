@@ -932,7 +932,7 @@ plain_helpers = {
     "admission.verify_phase",
     "admission.verify_signature",
 }
-fallback_signer_helpers = {
+process_local_signer_helpers = {
     "default_auth_for_subject",
     "GeneratedSubjectAuth",
     "generate_private_agent_auth",
@@ -957,10 +957,10 @@ for section in ("languages", "members"):
         leaked = sorted(plain_helpers & set(values))
         if leaked:
             raise SystemExit(f"canonical_plain_helper_leak:{language}:{section}:{','.join(leaked)}")
-        fallback_leaked = sorted(fallback_signer_helpers & set(values))
-        if fallback_leaked:
+        process_local_signer_leaked = sorted(process_local_signer_helpers & set(values))
+        if process_local_signer_leaked:
             raise SystemExit(
-                f"fallback_signer_helper_leak:{language}:{section}:{','.join(fallback_leaked)}"
+                f"process_local_signer_helper_leak:{language}:{section}:{','.join(process_local_signer_leaked)}"
             )
 
 non_canonical = manifest.get("non_canonical", {})
@@ -975,8 +975,8 @@ for section in ("languages", "members"):
 for section in ("languages", "members"):
     graph = non_canonical.get(section, {})
     for language, values in graph.items():
-        for helper in sorted(fallback_signer_helpers & set(values)):
-            raise SystemExit(f"fallback_signer_retired_export:{language}:{section}:{helper}")
+        for helper in sorted(process_local_signer_helpers & set(values)):
+            raise SystemExit(f"process_local_signer_retired_export:{language}:{section}:{helper}")
 PY
 }
 
@@ -995,7 +995,7 @@ check_active_source_contract() {
     --glob '!target/**' \
     --glob '!sdk/go/internal/axonpb/**' \
     --glob '!sdk/python/easynet_sdk/_axon_pb/**'; then
-    fail "process-local fallback signer path is present"
+    fail "process-local signer helper path is present"
   fi
 
   if rg -n '\b(MissionState|MissionControl)\b' "$ROOT/src" "$ROOT/sdk" "$ROOT/include" \
@@ -20452,8 +20452,8 @@ PY
   then
     fail "self-test expected retired plain helper export to fail"
   fi
-  cp "$MANIFEST" "$tmp/fallback-manifest.json"
-  "$PYTHON_BIN" - "$tmp/fallback-manifest.json" <<'PY'
+  cp "$MANIFEST" "$tmp/process-local-signer-manifest.json"
+  "$PYTHON_BIN" - "$tmp/process-local-signer-manifest.json" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -20463,20 +20463,20 @@ data["languages"]["go"].append("GeneratedSubjectAuth")
 data["languages"]["go"].sort()
 path.write_text(json.dumps(data))
 PY
-  if "$PYTHON_BIN" - "$tmp/fallback-manifest.json" "$tmp/matrix.json" <<'PY' >/dev/null 2>&1
+  if "$PYTHON_BIN" - "$tmp/process-local-signer-manifest.json" "$tmp/matrix.json" <<'PY' >/dev/null 2>&1
 import json
 import sys
 from pathlib import Path
 manifest = json.loads(Path(sys.argv[1]).read_text())
-fallback = {"GeneratedSubjectAuth"}
-if fallback & set(manifest["languages"]["go"]):
-    raise SystemExit("fallback_signer_helper_leak")
+process_local_signer = {"GeneratedSubjectAuth"}
+if process_local_signer & set(manifest["languages"]["go"]):
+    raise SystemExit("process_local_signer_helper_leak")
 PY
   then
-    fail "self-test expected fallback signer leak to fail"
+    fail "self-test expected process-local signer leak to fail"
   fi
-  cp "$MANIFEST" "$tmp/fallback-retired-manifest.json"
-  "$PYTHON_BIN" - "$tmp/fallback-retired-manifest.json" <<'PY'
+  cp "$MANIFEST" "$tmp/process-local-signer-retired-manifest.json"
+  "$PYTHON_BIN" - "$tmp/process-local-signer-retired-manifest.json" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -20486,17 +20486,17 @@ data["non_canonical"]["languages"]["go"].append("GeneratedSubjectAuth")
 data["non_canonical"]["languages"]["go"].sort()
 path.write_text(json.dumps(data))
 PY
-  if "$PYTHON_BIN" - "$tmp/fallback-retired-manifest.json" "$tmp/matrix.json" <<'PY' >/dev/null 2>&1
+  if "$PYTHON_BIN" - "$tmp/process-local-signer-retired-manifest.json" "$tmp/matrix.json" <<'PY' >/dev/null 2>&1
 import json
 import sys
 from pathlib import Path
 manifest = json.loads(Path(sys.argv[1]).read_text())
-fallback = {"GeneratedSubjectAuth"}
-if fallback & set(manifest["non_canonical"]["languages"]["go"]):
-    raise SystemExit("fallback_signer_retired_export")
+process_local_signer = {"GeneratedSubjectAuth"}
+if process_local_signer & set(manifest["non_canonical"]["languages"]["go"]):
+    raise SystemExit("process_local_signer_retired_export")
 PY
   then
-    fail "self-test expected fallback signer retired export to fail"
+    fail "self-test expected process-local signer retired export to fail"
   fi
   mkdir -p "$tmp/axon/sdk/node/src/invocation"
   mkdir -p "$tmp/axon/sdk/java/src/main/java/run/axon/sdk/invocation"
