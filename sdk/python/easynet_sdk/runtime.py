@@ -33,7 +33,6 @@ from ._runtime_governance import (
     governance_descriptor_provider_for_ability,
 )
 from ._runtime_subjects import is_runtime_governance_read_subject_ura
-from .axon_addressing import authority_ura, parse_ura
 from .bidi import BidiSession, BidiStreamDescriptor, BidiTransport
 from .invocation import InvocationBuilder, InvocationDraft
 from .invocation_state import InvocationLifecycleState
@@ -1586,27 +1585,9 @@ def _admit_ability_descriptor_provider_subject(
     callee_ura: str,
     subject_ura: str,
 ) -> None:
-    try:
-        callee = parse_ura(callee_ura)
-    except SDKError as exc:
+    if not is_runtime_governance_read_subject_ura(subject_ura, callee_ura):
         raise _invalid_runtime_client(
-            "descriptor_ref provider ability_descriptor callee_ura must be canonical"
-        ) from exc
-    try:
-        subject = parse_ura(subject_ura)
-    except SDKError as exc:
-        raise _invalid_runtime_client(
-            "descriptor_ref provider ability_descriptor subject_ura must be canonical"
-        ) from exc
-    if subject.kind != "authority":
-        raise _invalid_runtime_client(
-            "descriptor_ref provider ability_descriptor subject_ura must be an Authority URA"
-        )
-    expected_subject = authority_ura(callee.realm)
-    if subject.realm != callee.realm or subject_ura != expected_subject:
-        raise _invalid_runtime_client(
-            "descriptor_ref provider ability_descriptor subject_ura must be the "
-            "callee realm authority subject"
+            "descriptor_ref provider ability_descriptor subject_ura must be a runtime governance read subject"
         )
 
 

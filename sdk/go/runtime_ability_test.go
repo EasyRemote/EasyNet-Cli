@@ -238,16 +238,16 @@ func TestRuntimeClientResolveDescriptorRefRejectsIncompleteProviderRequestBefore
 			want: "cannot resolve non-governance ability",
 		},
 		{
-			name: "catalogue provider rejects device subject",
+			name: "catalogue provider rejects non-callee authority subject",
 			req: RuntimeDescriptorRefRequest{
 				CalleeURA:  "easynet:///r/example/device/dev-a",
 				Ability:    "meta.list_abilities",
 				CallMode:   "read",
 				CallerURA:  "easynet:///r/example/user/alice",
-				SubjectURA: "easynet:///r/example/device/dev-a",
+				SubjectURA: "easynet:///r/example/authority",
 				Provider:   "ability_descriptor",
 			},
-			want: "subject_ura must be an Authority URA",
+			want: "subject_ura must be a runtime governance read subject",
 		},
 		{
 			name: "receipt provider rejects catalogue authority subject",
@@ -410,7 +410,7 @@ func TestRuntimeAbilityClientBuildsCompleteCanonicalDraft(t *testing.T) {
 	}
 }
 
-func TestRuntimeAbilityClientCatalogueReadResolvesDescriptorWithRealmAuthoritySubject(t *testing.T) {
+func TestRuntimeAbilityClientCatalogueReadResolvesDescriptorWithRuntimeOwnerSubject(t *testing.T) {
 	var seen RuntimeDescriptorRefRequest
 	runtime, err := NewRuntimeClient(RuntimeTransportFunc{
 		ResolveDescriptorRefFunc: func(ctx context.Context, requestJSON []byte) ([]byte, error) {
@@ -446,8 +446,8 @@ func TestRuntimeAbilityClientCatalogueReadResolvesDescriptorWithRealmAuthoritySu
 	if draft.SubjectURA() != "easynet:///r/example/device/device-1" {
 		t.Fatalf("draft subject_ura = %q, want runtime owner", draft.SubjectURA())
 	}
-	if seen.SubjectURA != "easynet:///r/example/authority" {
-		t.Fatalf("descriptor request subject_ura = %q, want realm authority", seen.SubjectURA)
+	if seen.SubjectURA != "easynet:///r/example/device/device-1" {
+		t.Fatalf("descriptor request subject_ura = %q, want runtime owner", seen.SubjectURA)
 	}
 	if seen.Provider != runtimeAbilityDescriptorProvider {
 		t.Fatalf("descriptor provider = %q, want %q", seen.Provider, runtimeAbilityDescriptorProvider)

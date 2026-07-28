@@ -11,8 +11,6 @@ from ._identity_guards import contains_all_zero_principal
 from .axon_addressing import (
     AddressingClient,
     AddressingProjection,
-    authority_ura,
-    parse_ura,
 )
 from .authority import (
     DELEGATION_METADATA_KEY,
@@ -287,7 +285,9 @@ class RuntimeAbilityClient:
         policy: _RuntimeAbilityDispatchPolicy,
     ) -> str:
         if policy.descriptor_provider == ABILITY_DESCRIPTOR_PROVIDER:
-            return authority_ura(parse_ura(call.callee_ura.strip()).realm)
+            if policy.subject_policy == "runtime_owner":
+                return selected_subject_ura.strip()
+            return call.subject_ura.strip()
         if policy.subject_policy == "runtime_owner":
             return selected_subject_ura.strip()
         return call.subject_ura.strip()

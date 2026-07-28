@@ -254,43 +254,51 @@ fn descriptor_request_required_text<'a>(
 fn validate_ability_descriptor_catalogue_subject(
     object: &serde_json::Map<String, Value>,
 ) -> Result<(), DescriptorResolutionError> {
-    let subject_ura = descriptor_request_required_text(
-        object,
-        "subject_ura",
-        "descriptor_ref provider ability_descriptor requires subject_ura",
-    )?;
-    if crate::core::identity::contains_all_zero_principal_placeholder(subject_ura) {
-        return Err(DescriptorResolutionError::invalid_request(
-            "descriptor_ref provider ability_descriptor subject_ura must not be all-zero",
-        ));
-    }
     let callee_ura = descriptor_request_required_text(
         object,
         "callee_ura",
         "descriptor_ref provider ability_descriptor requires callee_ura",
     )?;
-    let subject = crate::core::ura::parse_ura(subject_ura).map_err(|error| {
-        DescriptorResolutionError::invalid_request(format!(
-            "descriptor_ref provider ability_descriptor subject_ura must be canonical: {error}"
-        ))
-    })?;
-    if subject.kind != crate::core::ura::URAKind::Authority {
-        return Err(DescriptorResolutionError::invalid_request(
-            "descriptor_ref provider ability_descriptor subject_ura must be an Authority URA",
-        ));
+    let subject_ura = descriptor_request_required_text(
+        object,
+        "subject_ura",
+        "descriptor_ref provider ability_descriptor requires subject_ura",
+    )?;
+    crate::core::identity::RuntimeGovernanceReadSubject::parse_for_callee(subject_ura, callee_ura)
+        .map(|_| ())
+        .map_err(ability_descriptor_catalogue_subject_error)
+}
+
+fn ability_descriptor_catalogue_subject_error(
+    error: crate::core::identity::RuntimeGovernanceReadSubjectError,
+) -> DescriptorResolutionError {
+    use crate::core::identity::RuntimeGovernanceReadSubjectError;
+
+    match error {
+        RuntimeGovernanceReadSubjectError::Empty => DescriptorResolutionError::invalid_request(
+            "descriptor_ref provider ability_descriptor requires subject_ura",
+        ),
+        RuntimeGovernanceReadSubjectError::AllZeroPrincipalPlaceholder => {
+            DescriptorResolutionError::invalid_request(
+                "descriptor_ref provider ability_descriptor subject_ura must not be all-zero",
+            )
+        }
+        RuntimeGovernanceReadSubjectError::InvalidSyntax(error) => {
+            DescriptorResolutionError::invalid_request(format!(
+                "descriptor_ref provider ability_descriptor subject_ura must be canonical: {error}"
+            ))
+        }
+        RuntimeGovernanceReadSubjectError::InvalidCallee(error) => {
+            DescriptorResolutionError::invalid_request(format!(
+                "descriptor_ref provider ability_descriptor callee_ura must be canonical: {error}"
+            ))
+        }
+        RuntimeGovernanceReadSubjectError::NotRuntimeGovernanceRead => {
+            DescriptorResolutionError::invalid_request(
+                "descriptor_ref provider ability_descriptor subject_ura must be a user-owned runtime-state read subject or the callee runtime-owner subject",
+            )
+        }
     }
-    let callee = crate::core::ura::parse_ura(callee_ura).map_err(|error| {
-        DescriptorResolutionError::invalid_request(format!(
-            "descriptor_ref provider ability_descriptor callee_ura must be canonical: {error}"
-        ))
-    })?;
-    let expected_subject = crate::core::ura::hub_ura(&callee.realm);
-    if subject.realm != callee.realm || subject_ura != expected_subject {
-        return Err(DescriptorResolutionError::invalid_request(
-            "descriptor_ref provider ability_descriptor subject_ura must be the callee realm authority subject",
-        ));
-    }
-    Ok(())
 }
 
 fn validate_receipt_history_descriptor_subject(

@@ -554,10 +554,10 @@ class RuntimeTests(unittest.TestCase):
                     "ability": "meta.list_abilities",
                     "call_mode": "read",
                     "caller_ura": "easynet:///r/example/user/alice",
-                    "subject_ura": "easynet:///r/example/device/dev-a",
+                    "subject_ura": "easynet:///r/example/authority",
                     "provider": "ability_descriptor",
                 },
-                "subject_ura must be an Authority URA",
+                "subject_ura must be a runtime governance read subject",
             ),
             (
                 {

@@ -381,20 +381,9 @@ func admitRuntimeDescriptorRefProviderSubject(req RuntimeDescriptorRefRequest) e
 }
 
 func admitAbilityDescriptorProviderSubject(calleeURA string, subjectURA string) error {
-	callee, err := ParseURAParts(calleeURA)
-	if err != nil {
-		return invalidRuntimeClient("descriptor_ref provider ability_descriptor callee_ura must be canonical")
-	}
-	subject, err := ParseURAParts(subjectURA)
-	if err != nil {
-		return invalidRuntimeClient("descriptor_ref provider ability_descriptor subject_ura must be canonical")
-	}
-	if subject.Kind != URAKindAuthority {
-		return invalidRuntimeClient("descriptor_ref provider ability_descriptor subject_ura must be an Authority URA")
-	}
-	if subject.Realm != callee.Realm || subjectURA != AuthorityURA(callee.Realm) {
+	if !isRuntimeGovernanceReadSubjectURA(subjectURA, calleeURA) {
 		return invalidRuntimeClient(
-			"descriptor_ref provider ability_descriptor subject_ura must be the callee realm authority subject",
+			"descriptor_ref provider ability_descriptor subject_ura must be a runtime governance read subject",
 		)
 	}
 	return nil

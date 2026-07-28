@@ -1592,16 +1592,16 @@ test("runtime descriptor resolver rejects provider mismatches before transport",
       message: /cannot resolve non-governance ability/,
     },
     {
-      name: "catalogue provider rejects device subject",
+      name: "catalogue provider rejects non-callee authority subject",
       request: {
         callee_ura: callee,
         ability: "meta.list_abilities",
         call_mode: "rpc",
         caller_ura: caller,
-        subject_ura: callee,
+        subject_ura: "easynet:///r/example/authority",
         provider: "ability_descriptor",
       },
-      message: /subject_ura must be an Authority URA/,
+      message: /subject_ura must be a runtime governance read subject/,
     },
     {
       name: "receipt provider rejects catalogue authority subject",
@@ -1642,7 +1642,7 @@ test("runtime descriptor resolver rejects provider mismatches before transport",
   }
 });
 
-test("runtime descriptor resolver admits authority catalogue provider tuple", async () => {
+test("runtime descriptor resolver admits runtime-owner catalogue provider tuple", async () => {
   let resolverRequest;
   const catalogueDescriptor =
     "easynet:///r/example/ability/device.dev-a.meta.list_abilities@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read";
@@ -1661,7 +1661,7 @@ test("runtime descriptor resolver admits authority catalogue provider tuple", as
     ability: "meta.list_abilities",
     call_mode: "rpc",
     caller_ura: caller,
-    subject_ura: "easynet:///r/example/authority",
+    subject_ura: callee,
     provider: "ability_descriptor",
   });
 
@@ -1671,7 +1671,7 @@ test("runtime descriptor resolver admits authority catalogue provider tuple", as
     ability: "meta.list_abilities",
     call_mode: "rpc",
     caller_ura: caller,
-    subject_ura: "easynet:///r/example/authority",
+    subject_ura: callee,
     provider: "ability_descriptor",
   });
 });
@@ -1735,7 +1735,7 @@ test("runtime ability descriptor provider uses catalogue provider and runtime-ow
       ability: "meta.list_abilities",
       call_mode: "rpc",
       caller_ura: caller,
-      subject_ura: "easynet:///r/example/authority",
+      subject_ura: callee,
       provider: "ability_descriptor",
     },
   ]);
@@ -1865,7 +1865,7 @@ test("runtime ability governance read auto-selects catalogue provider", async ()
   );
 
   assert.equal(seen[0].provider, "ability_descriptor");
-  assert.equal(seen[0].subject_ura, "easynet:///r/example/authority");
+  assert.equal(seen[0].subject_ura, callee);
 });
 
 test("ability descriptor client normalizes provider projections", async () => {

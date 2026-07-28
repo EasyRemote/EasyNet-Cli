@@ -4438,7 +4438,14 @@ function admitRuntimeDescriptorRefRequest(request) {
 function admitRuntimeDescriptorRefProviderSubject(request) {
   switch (request.provider) {
     case RUNTIME_ABILITY_DESCRIPTOR_PROVIDER:
-      admitAbilityDescriptorProviderSubject(request.callee_ura, request.subject_ura);
+      if (
+        !isRuntimeStateReadSubjectURA(request.subject_ura) &&
+        !isRuntimeOwnerReadSubjectURA(request.subject_ura, request.callee_ura)
+      ) {
+        throw invalidRuntime(
+          "descriptor_ref provider ability_descriptor subject_ura must be a runtime governance read subject",
+        );
+      }
       return;
     case RUNTIME_RECEIPT_HISTORY_PROVIDER:
       if (
@@ -4452,25 +4459,6 @@ function admitRuntimeDescriptorRefProviderSubject(request) {
       return;
     default:
       throw invalidRuntime(`descriptor_ref request provider ${request.provider} is not supported`);
-  }
-}
-
-function admitAbilityDescriptorProviderSubject(calleeURA, subjectURA) {
-  const callee = parseCanonicalURANullable(calleeURA);
-  if (!callee) {
-    throw invalidRuntime("descriptor_ref provider ability_descriptor callee_ura must be canonical");
-  }
-  const subject = parseCanonicalURANullable(subjectURA);
-  if (!subject) {
-    throw invalidRuntime("descriptor_ref provider ability_descriptor subject_ura must be canonical");
-  }
-  if (subject.path !== "authority") {
-    throw invalidRuntime("descriptor_ref provider ability_descriptor subject_ura must be an Authority URA");
-  }
-  if (subject.realm !== callee.realm || subjectURA !== `easynet:///r/${callee.realm}/authority`) {
-    throw invalidRuntime(
-      "descriptor_ref provider ability_descriptor subject_ura must be the callee realm authority subject",
-    );
   }
 }
 
@@ -4527,11 +4515,10 @@ function runtimeAbilitySubjectURA(call, policy) {
 
 function runtimeAbilityDescriptorResolutionSubjectURA(call, subjectURA, policy) {
   if (policy.descriptorProvider === RUNTIME_ABILITY_DESCRIPTOR_PROVIDER) {
-    const callee = parseCanonicalURANullable(call.calleeURA);
-    if (!callee) {
-      throw invalidInvocation("callee_ura must be canonical for runtime catalogue reads");
+    if (policy.subjectPolicy === "runtime_owner") {
+      return subjectURA.trim();
     }
-    return `easynet:///r/${callee.realm}/authority`;
+    return call.subjectURA.trim();
   }
   if (policy.subjectPolicy === "runtime_owner") {
     return subjectURA.trim();

@@ -200,7 +200,7 @@ def test_runtime_ability_builds_complete_canonical_draft() -> None:
     assert draft.metadata == {"request_id": "call-1"}
 
 
-def test_runtime_ability_catalogue_read_resolves_descriptor_with_realm_authority_subject() -> None:
+def test_runtime_ability_catalogue_read_resolves_descriptor_with_runtime_owner_subject() -> None:
     client, transport = _client()
     call = replace(
         _call(),
@@ -212,7 +212,7 @@ def test_runtime_ability_catalogue_read_resolves_descriptor_with_realm_authority
 
     assert draft.subject_ura == "easynet:///r/example/device/device-1"
     assert transport.descriptor_requests[-1]["subject_ura"] == (
-        "easynet:///r/example/authority"
+        "easynet:///r/example/device/device-1"
     )
     assert transport.descriptor_requests[-1]["callee_ura"] == (
         "easynet:///r/example/device/device-1"

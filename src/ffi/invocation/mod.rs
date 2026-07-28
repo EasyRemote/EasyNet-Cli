@@ -9666,7 +9666,7 @@ mod tests {
             &serde_json::json!({
                 "callee_ura": device_ura,
                 "caller_ura": device_ura,
-                "subject_ura": crate::core::ura::hub_ura("localhost"),
+                "subject_ura": device_ura,
                 "ability": ability_ura,
                 "call_mode": "rpc",
                 "provider": "ability_descriptor",
@@ -9957,7 +9957,6 @@ mod tests {
         let remote_node_id = "remote-runtime-node";
         let local_device_ura = crate::core::ura::device_ura("localhost", local_node_id);
         let remote_device_ura = crate::core::ura::device_ura("localhost", remote_node_id);
-        let authority_subject = crate::core::ura::hub_ura("localhost");
         let ability_ura = format!(
             "easynet:///r/localhost/ability/device.{remote_node_id}.{}",
             crate::daemon::ability::names::resources::META_LIST_RESOURCES
@@ -9993,7 +9992,7 @@ mod tests {
             &serde_json::json!({
                 "callee_ura": remote_device_ura,
                 "caller_ura": local_device_ura,
-                "subject_ura": authority_subject,
+                "subject_ura": remote_device_ura,
                 "ability": crate::daemon::ability::names::resources::META_LIST_RESOURCES,
                 "call_mode": "rpc",
                 "provider": "ability_descriptor",
@@ -10307,7 +10306,6 @@ mod tests {
         let remote_node_id = "a364ba18-8961-4b31-838a-31c7d776c709";
         let local_device_ura = crate::core::ura::device_ura("localhost", local_node_id);
         let remote_device_ura = crate::core::ura::device_ura("localhost", remote_node_id);
-        let authority_subject = crate::core::ura::hub_ura("localhost");
         let ability_ura = format!(
             "easynet:///r/localhost/ability/device.{remote_node_id}.{}",
             crate::daemon::ability::names::governance::META_LIST_ABILITIES
@@ -10343,7 +10341,7 @@ mod tests {
             &serde_json::json!({
                 "callee_ura": remote_device_ura,
                 "caller_ura": local_device_ura,
-                "subject_ura": authority_subject,
+                "subject_ura": remote_device_ura,
                 "ability": crate::daemon::ability::names::governance::META_LIST_ABILITIES,
                 "call_mode": "rpc",
                 "provider": "ability_descriptor",
@@ -10369,19 +10367,19 @@ mod tests {
 
     #[cfg(feature = "axon-pb")]
     #[test]
-    fn runtime_descriptor_resolver_rejects_ability_descriptor_non_authority_subjects() {
+    fn runtime_descriptor_resolver_rejects_ability_descriptor_non_governance_subjects() {
         let session = test_session();
         let local_device_ura = crate::core::ura::device_ura("localhost", "local-runtime-node");
         let remote_device_ura =
             crate::core::ura::device_ura("localhost", "a364ba18-8961-4b31-838a-31c7d776c709");
         let cases = [
             (
-                Some(remote_device_ura.as_str()),
-                "descriptor_ref provider ability_descriptor subject_ura must be an Authority URA",
+                Some(local_device_ura.as_str()),
+                "descriptor_ref provider ability_descriptor subject_ura must be a user-owned runtime-state read subject or the callee runtime-owner subject",
             ),
             (
                 Some("easynet:///r/other/authority"),
-                "descriptor_ref provider ability_descriptor subject_ura must be the callee realm authority subject",
+                "descriptor_ref provider ability_descriptor subject_ura must be a user-owned runtime-state read subject or the callee runtime-owner subject",
             ),
             (
                 None,

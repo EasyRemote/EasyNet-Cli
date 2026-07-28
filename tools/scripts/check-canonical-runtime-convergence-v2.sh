@@ -14094,10 +14094,9 @@ for required in (
     "fn validate_ability_descriptor_catalogue_subject(",
     "Self::AbilityDescriptor => validate_ability_descriptor_catalogue_subject(object)",
     "descriptor_ref provider ability_descriptor requires subject_ura",
-    "descriptor_ref provider ability_descriptor subject_ura must be an Authority URA",
-    "descriptor_ref provider ability_descriptor subject_ura must be the callee realm authority subject",
-    "crate::core::ura::hub_ura(&callee.realm)",
-    "runtime_descriptor_resolver_rejects_ability_descriptor_non_authority_subjects",
+    "descriptor_ref provider ability_descriptor subject_ura must be a user-owned runtime-state read subject or the callee runtime-owner subject",
+    "fn ability_descriptor_catalogue_subject_error(",
+    "runtime_descriptor_resolver_rejects_ability_descriptor_non_governance_subjects",
     "fn validate_receipt_history_descriptor_subject(",
     "provider.validate_request_subject(object)?",
     "Self::ReceiptHistory => validate_receipt_history_descriptor_subject(object)",
@@ -14113,6 +14112,14 @@ for required in (
 ):
     if required not in provider and required not in text:
         raise SystemExit(f"ffi_descriptor_runtime_owner:receipt_history_subject_gate_missing:{required}")
+for retired in (
+    "descriptor_ref provider ability_descriptor subject_ura must be an Authority URA",
+    "descriptor_ref provider ability_descriptor subject_ura must be the callee realm authority subject",
+    "crate::core::ura::hub_ura(&callee.realm)",
+    "runtime_descriptor_resolver_rejects_ability_descriptor_non_authority_subjects",
+):
+    if retired in provider or retired in text:
+        raise SystemExit(f"ffi_descriptor_runtime_owner:retired_ability_descriptor_authority_subject:{retired}")
 receipt_subject_validator = re.search(
     r"fn validate_receipt_history_descriptor_subject\([^)]*\)\s*->\s*Result<\(\),\s*DescriptorResolutionError>\s*\{(?P<body>.*?)\n\}\n\n#\[cfg\(feature = \"axon-pb\"\)\]\nfn receipt_history_descriptor_subject_error",
     provider,

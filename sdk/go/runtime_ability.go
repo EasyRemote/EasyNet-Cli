@@ -86,11 +86,10 @@ func (policy runtimeAbilityDispatchPolicy) subjectURA(ctx context.Context, addre
 
 func (policy runtimeAbilityDispatchPolicy) descriptorResolutionSubjectURA(call RuntimeCallContext, selectedSubjectURA string) (string, error) {
 	if strings.TrimSpace(policy.descriptorProvider) == runtimeAbilityDescriptorProvider {
-		callee, err := ParseURAParts(strings.TrimSpace(call.CalleeURA))
-		if err != nil {
-			return "", invalidRuntimePayload("callee_ura must be canonical for ability descriptor provider", err)
+		if policy.subjectPolicy == runtimeAbilitySubjectRuntimeOwner {
+			return strings.TrimSpace(selectedSubjectURA), nil
 		}
-		return AuthorityURA(callee.Realm), nil
+		return strings.TrimSpace(call.SubjectURA), nil
 	}
 	if policy.subjectPolicy == runtimeAbilitySubjectRuntimeOwner {
 		return strings.TrimSpace(selectedSubjectURA), nil
