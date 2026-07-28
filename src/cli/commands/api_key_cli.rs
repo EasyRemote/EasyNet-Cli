@@ -22,7 +22,7 @@ use serde_json::{json, Value};
 use crate::daemon::ability::builtins::governance::api_key;
 use crate::daemon::ability::builtins::resources::pages::{PagesIdentity, PagesUserRootIdentity};
 use crate::support::platform::local_invoke::{
-    LocalDaemonSystemAbilityIssuer, LocalRuntimeStateReadIssuer,
+    LocalDaemonSystemAbilityIssuer, LocalRuntimeApiKeyInventoryReadIssuer,
 };
 
 #[derive(Debug, Args)]
@@ -154,7 +154,7 @@ fn run_create(a: CreateArgs) -> anyhow::Result<()> {
 fn run_list(a: ListArgs) -> anyhow::Result<()> {
     let principal = current_api_key_principal()?;
     let ability = principal.ability("list");
-    let result = LocalRuntimeStateReadIssuer::invoke(&ability, json!({}))?;
+    let result = LocalRuntimeApiKeyInventoryReadIssuer::list_api_keys(&ability, json!({}))?;
     if a.json {
         println!("{}", serde_json::to_string_pretty(&result)?);
         return Ok(());

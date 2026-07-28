@@ -8263,6 +8263,8 @@ body = fn.group("body")
 for retired in (
     "fn current_user(",
     "invoke_local_ability",
+    "LocalRuntimeStateReadIssuer::invoke",
+    "LocalRuntimeStateReadIssuer::invoke_timeout",
     "load_credentials().ok()",
     ".and_then(|c| c.username)",
     ".and_then(|credentials| credentials.username)",
@@ -8288,7 +8290,7 @@ for required in (
     "principal.ability(\"create\")",
     "principal.ability(\"list\")",
     "principal.ability(\"revoke\")",
-    "LocalRuntimeStateReadIssuer::invoke(&ability",
+    "LocalRuntimeApiKeyInventoryReadIssuer::list_api_keys(&ability",
 ):
     if required not in text:
         raise SystemExit(f"api_key_cli_identity:missing_canonical_abstraction:{required}")

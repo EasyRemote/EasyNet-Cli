@@ -433,26 +433,14 @@ impl LocalRuntimeStateReadIssuer {
     }
 
     pub fn agent_list_timeout(args: Value, timeout: std::time::Duration) -> anyhow::Result<Value> {
-        Self::invoke_state_read_timeout(
+        Self::read_state_timeout(
             crate::daemon::ability::names::agents::AGENT_LIST,
             args,
             timeout,
         )
     }
 
-    pub fn invoke(ability: &str, args: Value) -> anyhow::Result<Value> {
-        Self::invoke_timeout(ability, args, std::time::Duration::from_secs(30))
-    }
-
-    pub fn invoke_timeout(
-        ability: &str,
-        args: Value,
-        timeout: std::time::Duration,
-    ) -> anyhow::Result<Value> {
-        Self::invoke_state_read_timeout(ability, args, timeout)
-    }
-
-    fn invoke_state_read_timeout(
+    fn read_state_timeout(
         ability: &str,
         args: Value,
         timeout: std::time::Duration,
@@ -474,6 +462,28 @@ impl LocalRuntimeStateReadIssuer {
     }
 }
 
+/// Named issuer for user-rooted API-key inventory reads.
+///
+/// `<user>.api_key.list` is dynamically named by the current user root, but it
+/// remains one semantic read model: API-key metadata inventory. Callers pass the
+/// governed ability name selected from their principal and do not receive a
+/// generic runtime-state dispatch method.
+pub struct LocalRuntimeApiKeyInventoryReadIssuer;
+
+impl LocalRuntimeApiKeyInventoryReadIssuer {
+    pub fn list_api_keys(ability: &str, args: Value) -> anyhow::Result<Value> {
+        Self::list_api_keys_timeout(ability, args, std::time::Duration::from_secs(30))
+    }
+
+    pub fn list_api_keys_timeout(
+        ability: &str,
+        args: Value,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<Value> {
+        LocalRuntimeStateReadIssuer::read_state_timeout(ability, args, timeout)
+    }
+}
+
 /// Named issuer for daemon-local device directory/read-model projections.
 ///
 /// `node.describe` is the canonical device-directory projection consumed by
@@ -491,7 +501,7 @@ impl LocalRuntimeDeviceDirectoryReadIssuer {
         args: Value,
         timeout: std::time::Duration,
     ) -> anyhow::Result<Value> {
-        LocalRuntimeStateReadIssuer::invoke_state_read_timeout(
+        LocalRuntimeStateReadIssuer::read_state_timeout(
             crate::daemon::ability::names::federation::NODE_DESCRIBE,
             args,
             timeout,
@@ -515,7 +525,7 @@ impl LocalRuntimeModelCatalogueReadIssuer {
         args: Value,
         timeout: std::time::Duration,
     ) -> anyhow::Result<Value> {
-        LocalRuntimeStateReadIssuer::invoke_state_read_timeout(
+        LocalRuntimeStateReadIssuer::read_state_timeout(
             crate::daemon::ability::names::integrations::OPENAI_LIST_MODELS,
             args,
             timeout,
@@ -540,7 +550,7 @@ impl LocalRuntimeSkillCatalogueReadIssuer {
         args: Value,
         timeout: std::time::Duration,
     ) -> anyhow::Result<Value> {
-        LocalRuntimeStateReadIssuer::invoke_state_read_timeout(
+        LocalRuntimeStateReadIssuer::read_state_timeout(
             crate::daemon::ability::names::resources::SKILL_LIST,
             args,
             timeout,

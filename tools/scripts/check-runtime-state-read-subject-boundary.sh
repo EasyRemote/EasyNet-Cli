@@ -48,6 +48,10 @@ if ! rg -n 'struct LocalRuntimeStateReadIssuer' "$ISSUER" >/dev/null; then
   fail "runtime-state reads must use a named issuer"
 fi
 
+if ! rg -n 'struct LocalRuntimeApiKeyInventoryReadIssuer' "$ISSUER" >/dev/null; then
+  fail "runtime API-key inventory reads must use a named issuer"
+fi
+
 if ! rg -n 'struct LocalRuntimeCatalogueReadIssuer' "$ISSUER" >/dev/null; then
   fail "runtime catalogue reads must use a named issuer"
 fi
@@ -91,6 +95,10 @@ fi
 runtime_state_issuer_section="$(
   sed -n '/pub struct LocalRuntimeStateReadIssuer/,/\/\/\/ Invoke a canonical local target with public-ingress tuple facts\./p' "$ISSUER"
 )"
+
+if printf '%s\n' "$runtime_state_issuer_section" | rg -n 'pub fn invoke(_timeout)?\('; then
+  fail "runtime-state read issuer must not expose public generic invoke methods"
+fi
 
 if rg -n 'const RESOURCE_PATH:.*runtime-state/read|resource_dot_ura\(realm|struct LocalRuntimeStateReadSubject' "$ISSUER"; then
   fail "runtime-state read issuer must not own a duplicate subject grammar"
@@ -237,6 +245,29 @@ for target in "${DEVICE_DIRECTORY_TARGETS[@]}"; do
     fail "$target must not use generic invoke_local_ability for runtime device-directory reads"
   fi
 done
+
+"$PYTHON_BIN" - "$ISSUER" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+match = re.search(
+    r"impl LocalRuntimeApiKeyInventoryReadIssuer \{(?P<body>.*?)\n\}",
+    text,
+    re.S,
+)
+if not match:
+    raise SystemExit("LocalRuntimeApiKeyInventoryReadIssuer impl is missing")
+body = match.group("body")
+if "pub fn invoke(" in body or "pub fn invoke_timeout(" in body:
+    raise SystemExit(
+        "LocalRuntimeApiKeyInventoryReadIssuer must expose typed API-key inventory methods, not generic invoke methods"
+    )
+for required in ("pub fn list_api_keys(", "pub fn list_api_keys_timeout("):
+    if required not in body:
+        raise SystemExit(f"LocalRuntimeApiKeyInventoryReadIssuer missing {required}")
+PY
 
 "$PYTHON_BIN" - "$ISSUER" <<'PY'
 import re
@@ -530,12 +561,12 @@ if ! rg -n 'LocalDaemonSystemAbilityIssuer::invoke_root_for_local_daemon_identit
   fail "skill mutations must delegate local daemon identity subject policy to the system issuer"
 fi
 
-if ! rg -n -U 'LocalRuntimeStateReadIssuer::invoke\(&ability,\s*(serde_json::)?json!\(\{\}\)' "$API_KEY_CLI" >/dev/null; then
-  fail "api-key list must use LocalRuntimeStateReadIssuer"
+if ! rg -n 'LocalRuntimeApiKeyInventoryReadIssuer::list_api_keys' "$API_KEY_CLI" >/dev/null; then
+  fail "api-key list must use LocalRuntimeApiKeyInventoryReadIssuer"
 fi
 
-if rg -n -U '\binvoke_local_ability\s*\(&ability,\s*(serde_json::)?json!\(\{\}\)' "$API_KEY_CLI"; then
-  fail "api-key list must not use generic invoke_local_ability"
+if rg -n -U 'LocalRuntimeStateReadIssuer::invoke|LocalRuntimeStateReadIssuer::invoke_timeout' "$API_KEY_CLI"; then
+  fail "api-key list must not use raw runtime-state dispatch"
 fi
 
 if rg -n -U '\binvoke_local_ability\s*\(' "$API_KEY_CLI"; then
