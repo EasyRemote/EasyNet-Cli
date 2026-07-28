@@ -175,7 +175,6 @@ check_shellguard_path_normalization_fail_closed_contract() {
   [[ -f "$pathconstraints" ]] || fail "ShellGuard pathconstraints source is missing: ${pathconstraints#$cli_root/}"
 
   "$PYTHON_BIN" - "$pathconstraints" <<'PY'
-import re
 import sys
 from pathlib import Path
 
@@ -5849,6 +5848,50 @@ for corpus, label in (
     ):
         if ability not in corpus:
             raise SystemExit(f"sdk_history_public_ingress_cutover:{label}_ability_missing:{ability}")
+PY
+}
+
+check_sdk_node_stream_bidi_explicit_terminality_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local node="$cli_root/sdk/node/index.js"
+  local node_test="$cli_root/sdk/node/test/runtime-core.test.mjs"
+  [[ -f "$node" ]] || fail "Node SDK source is missing: ${node#$cli_root/}"
+  [[ -f "$node_test" ]] || fail "Node SDK runtime-core tests are missing: ${node_test#$cli_root/}"
+
+  "$PYTHON_BIN" - "$node" "$node_test" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+node = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+node_test = Path(sys.argv[2]).read_text(encoding="utf-8", errors="replace")
+
+if "function terminalToken" in node:
+    raise SystemExit("sdk_node_stream_bidi_explicit_terminality:terminal_token_alias_classifier_present")
+canonical = """function isTerminalFrame(value) {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  return value.terminal === true;
+}"""
+if canonical not in node:
+    raise SystemExit("sdk_node_stream_bidi_explicit_terminality:is_terminal_frame_missing")
+if "terminalToken(" in node:
+    raise SystemExit("sdk_node_stream_bidi_explicit_terminality:event_kind_terminality_inference")
+for alias in ('kind: "completed"', 'kind: "closed"', 'kind: "done"', 'kind: "cancelled"', 'kind: "timedout"'):
+    if alias not in node_test:
+        raise SystemExit(f"sdk_node_stream_bidi_explicit_terminality:alias_fixture_missing:{alias}")
+for required in (
+    "stream and bidi terminality is explicit and ignores event-kind aliases",
+    "assert.equal(stream.terminal, false)",
+    "assert.equal(stream.terminalEvent(), null)",
+    "assert.equal(bidi.terminal, false)",
+    "assert.equal(bidi.terminalFrame(), null)",
+    "assert.equal(streamTerminal.terminal, true)",
+    "assert.equal(bidiTerminal.terminal, true)",
+):
+    if required not in node_test:
+        raise SystemExit(f"sdk_node_stream_bidi_explicit_terminality:test_missing:{required}")
 PY
 }
 
@@ -27841,6 +27884,7 @@ EOF
   check_sdk_history_authority_subject_contract
   check_sdk_go_python_history_public_route_cutover_contract
   check_sdk_cross_language_history_public_ingress_cutover_contract
+  check_sdk_node_stream_bidi_explicit_terminality_contract
 	  check_sdk_descriptor_resolution_error_vocabulary_contract
 	  check_sdk_runtime_client_provider_readiness_contract
 	  check_sdk_ability_descriptor_not_found_vocabulary_contract
@@ -28104,6 +28148,7 @@ check_daemon_lifecycle_control_vocabulary_contract
 check_sdk_history_authority_subject_contract
 check_sdk_go_python_history_public_route_cutover_contract
 check_sdk_cross_language_history_public_ingress_cutover_contract
+check_sdk_node_stream_bidi_explicit_terminality_contract
 check_sdk_prepared_descriptor_ref_required_contract
 check_sdk_descriptor_resolution_error_vocabulary_contract
 check_sdk_runtime_client_provider_readiness_contract

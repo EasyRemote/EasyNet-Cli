@@ -2323,16 +2323,20 @@ test("stream and bidi state machines retain bounded history", async () => {
   assert.equal(bidi.terminalFrame().error.details.direction, "send");
 });
 
-test("stream and bidi terminality ignore retired event-kind aliases", async () => {
+test("stream and bidi terminality is explicit and ignores event-kind aliases", async () => {
   const streamFrames = [
     { sequence: 1, frame_type: "terminal", state: "Running", terminal: false },
     { sequence: 2, kind: "terminal", state: "Completed", terminal: false },
+    { sequence: 3, kind: "completed", state: "Completed", terminal: false },
+    { sequence: 4, kind: "closed", state: "Completed", terminal: false },
+    { sequence: 5, kind: "done", state: "Completed", terminal: false },
+    { sequence: 6, kind: "terminal", state: "Completed", terminal: true },
   ];
   const stream = new sdk.StreamHandle(
     {
       receive: () => JSON.stringify(streamFrames.shift()),
     },
-    { stream_id: "stream-alias-cutover", max_buffered_events: 4 },
+    { stream_id: "stream-alias-cutover", max_buffered_events: 8 },
   );
 
   const aliasStreamEvent = await stream.receive();
@@ -2341,18 +2345,30 @@ test("stream and bidi terminality ignore retired event-kind aliases", async () =
   assert.equal(stream.terminalEvent(), null);
 
   await stream.receive();
+  await stream.receive();
+  await stream.receive();
+  await stream.receive();
+  assert.equal(stream.terminal, false);
+  assert.equal(stream.terminalEvent(), null);
+
+  const streamTerminal = await stream.receive();
+  assert.equal(streamTerminal.terminal, true);
   assert.equal(stream.terminal, true);
+  assert.equal(stream.terminalEvent().sequence, 6);
 
   const bidiFrames = [
     { sequence: 1, event_type: "terminal", state: "Running", terminal: false },
     { sequence: 2, kind: "completed", state: "Completed", terminal: false },
+    { sequence: 3, kind: "cancelled", state: "Cancelled", terminal: false },
+    { sequence: 4, kind: "timedout", state: "TimedOut", terminal: false },
+    { sequence: 5, kind: "terminal", state: "Completed", terminal: true },
   ];
   const bidi = new sdk.BidiSession(
     {
       send: () => {},
       receive: () => JSON.stringify(bidiFrames.shift()),
     },
-    { session_id: "bidi-alias-cutover", max_buffered_frames: 4 },
+    { session_id: "bidi-alias-cutover", max_buffered_frames: 8 },
   );
 
   const aliasBidiFrame = await bidi.receive();
@@ -2361,7 +2377,15 @@ test("stream and bidi terminality ignore retired event-kind aliases", async () =
   assert.equal(bidi.terminalFrame(), null);
 
   await bidi.receive();
+  await bidi.receive();
+  await bidi.receive();
+  assert.equal(bidi.terminal, false);
+  assert.equal(bidi.terminalFrame(), null);
+
+  const bidiTerminal = await bidi.receive();
+  assert.equal(bidiTerminal.terminal, true);
   assert.equal(bidi.terminal, true);
+  assert.equal(bidi.terminalFrame().sequence, 5);
 });
 
 test("typed errors preserve stable categories and source refs", () => {

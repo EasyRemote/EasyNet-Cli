@@ -4596,27 +4596,7 @@ function isTerminalFrame(value) {
   if (!value || typeof value !== "object") {
     return false;
   }
-  if (value.terminal === true) {
-    return true;
-  }
-  return terminalToken(value.kind);
-}
-
-function terminalToken(value) {
-  if (typeof value !== "string") {
-    return false;
-  }
-  const token = value.toLowerCase().replace(/[^a-z]/g, "");
-  return [
-    "terminal",
-    "closed",
-    "completed",
-    "failed",
-    "cancelled",
-    "canceled",
-    "timedout",
-    "done",
-  ].includes(token);
+  return value.terminal === true;
 }
 
 function invalidSDK(message) {
