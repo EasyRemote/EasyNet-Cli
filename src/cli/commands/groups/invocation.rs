@@ -15,9 +15,6 @@ use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
 use crate::cli::commands::receipt_verification::CliReceiptChainVerification;
-use crate::daemon::ability::builtins::governance::invocation_history::{
-    ABILITY_HISTORY_GET, ABILITY_HISTORY_LIST, ABILITY_HISTORY_PATH, ABILITY_TRACE_GET,
-};
 use crate::support::platform::local_invoke::LocalRuntimeGovernanceReadIssuer;
 use crate::support::platform::output::{self, OutputFormat};
 
@@ -553,14 +550,14 @@ fn invoke_invocation_history_read<T>(read: InvocationHistoryRead) -> anyhow::Res
 where
     T: DeserializeOwned,
 {
-    let ability = read.ability();
-    let args = read.into_args();
+    let operation = read.operation_label();
     // Route through the named runtime-state read issuer so the
     // "one CLI subcommand = one ability invoke" rule stays held while
     // the subject is selected explicitly before LocalRuntime admission.
-    let value = LocalRuntimeGovernanceReadIssuer::invoke(ability, args)
-        .with_context(|| format!("invoke {ability} through local Axon daemon"))?;
-    serde_json::from_value(value).with_context(|| format!("decode {ability} response"))
+    let value = read
+        .invoke()
+        .with_context(|| format!("invoke {operation} through local Axon daemon"))?;
+    serde_json::from_value(value).with_context(|| format!("decode {operation} response"))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -572,20 +569,29 @@ enum InvocationHistoryRead {
 }
 
 impl InvocationHistoryRead {
-    fn ability(&self) -> &'static str {
+    fn operation_label(&self) -> &'static str {
         match self {
-            Self::Path => ABILITY_HISTORY_PATH,
-            Self::List(_) => ABILITY_HISTORY_LIST,
-            Self::Get(_) => ABILITY_HISTORY_GET,
-            Self::Trace(_) => ABILITY_TRACE_GET,
+            Self::Path => "invocation history path read",
+            Self::List(_) => "invocation history list read",
+            Self::Get(_) => "invocation history get read",
+            Self::Trace(_) => "invocation trace get read",
         }
     }
 
-    fn into_args(self) -> Value {
+    fn invoke(self) -> anyhow::Result<Value> {
         match self {
-            Self::Path => Value::Object(Map::new()),
-            Self::List(query) => query.into_args(),
-            Self::Get(key) | Self::Trace(key) => json!({ "key": key.into_args() }),
+            Self::Path => {
+                LocalRuntimeGovernanceReadIssuer::invocation_history_path(Value::Object(Map::new()))
+            }
+            Self::List(query) => {
+                LocalRuntimeGovernanceReadIssuer::invocation_history_list(query.into_args())
+            }
+            Self::Get(key) => LocalRuntimeGovernanceReadIssuer::invocation_history_get(
+                json!({ "key": key.into_args() }),
+            ),
+            Self::Trace(key) => LocalRuntimeGovernanceReadIssuer::invocation_trace_get(
+                json!({ "key": key.into_args() }),
+            ),
         }
     }
 }
@@ -746,9 +752,19 @@ fn short_ura(ura: &str) -> String {
 mod tests {
     use super::*;
 
+    fn read_test_args(read: InvocationHistoryRead) -> Value {
+        match read {
+            InvocationHistoryRead::Path => Value::Object(Map::new()),
+            InvocationHistoryRead::List(query) => query.into_args(),
+            InvocationHistoryRead::Get(key) | InvocationHistoryRead::Trace(key) => {
+                json!({ "key": key.into_args() })
+            }
+        }
+    }
+
     #[test]
     fn invocation_history_read_list_emits_explicit_ura_scope_fields() {
-        let body = InvocationHistoryRead::List(
+        let body = read_test_args(InvocationHistoryRead::List(
             InvocationHistoryListQuery::from_list_args(&ListArgs {
                 limit: 25,
                 state: Some("completed".into()),
@@ -760,8 +776,7 @@ mod tests {
                 format: OutputFormat::Json,
             })
             .unwrap(),
-        )
-        .into_args();
+        ));
 
         assert_eq!(body["limit"], 25);
         assert_eq!(
@@ -786,7 +801,7 @@ mod tests {
 
     #[test]
     fn invocation_history_read_list_omits_blank_filter_values() {
-        let body = InvocationHistoryRead::List(
+        let body = read_test_args(InvocationHistoryRead::List(
             InvocationHistoryListQuery::from_list_args(&ListArgs {
                 limit: 25,
                 state: Some(" ".into()),
@@ -798,8 +813,7 @@ mod tests {
                 format: OutputFormat::Json,
             })
             .unwrap(),
-        )
-        .into_args();
+        ));
 
         assert_eq!(body["limit"], 25);
         assert!(body.get("filter").is_none());
@@ -893,39 +907,36 @@ mod tests {
     }
 
     #[test]
-    fn invocation_history_read_projects_path_get_and_trace_queries() {
-        assert_eq!(InvocationHistoryRead::Path.ability(), ABILITY_HISTORY_PATH);
-        assert_eq!(InvocationHistoryRead::Path.into_args(), json!({}));
+    fn invocation_history_read_projects_path_get_and_trace_arguments() {
+        assert_eq!(read_test_args(InvocationHistoryRead::Path), json!({}));
 
         let by_ura = InvocationHistoryRead::Get(InvocationHistoryKey::for_record_lookup(
             "easynet:///r/test/resource/invocation.i-1",
         ));
-        assert_eq!(by_ura.ability(), ABILITY_HISTORY_GET);
         assert_eq!(
-            by_ura.into_args(),
+            read_test_args(by_ura),
             json!({ "key": { "ura": "easynet:///r/test/resource/invocation.i-1" } })
         );
 
         let by_request =
             InvocationHistoryRead::Get(InvocationHistoryKey::for_record_lookup("req-1"));
-        assert_eq!(by_request.ability(), ABILITY_HISTORY_GET);
         assert_eq!(
-            by_request.into_args(),
+            read_test_args(by_request),
             json!({ "key": { "request_id": "req-1" } })
         );
 
         let trace = InvocationHistoryRead::Trace(InvocationHistoryKey::TraceId("trace-1".into()));
-        assert_eq!(trace.ability(), ABILITY_TRACE_GET);
         assert_eq!(
-            trace.into_args(),
+            read_test_args(trace),
             json!({ "key": { "trace_id": "trace-1" } })
         );
     }
 
     #[test]
     fn invocation_history_stats_uses_list_query_without_scope_filter() {
-        let body =
-            InvocationHistoryRead::List(InvocationHistoryListQuery::for_stats(500)).into_args();
+        let body = read_test_args(InvocationHistoryRead::List(
+            InvocationHistoryListQuery::for_stats(500),
+        ));
 
         assert_eq!(body, json!({ "limit": 500 }));
     }

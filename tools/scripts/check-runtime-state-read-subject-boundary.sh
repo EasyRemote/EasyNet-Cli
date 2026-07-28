@@ -205,13 +205,45 @@ PY
 
 for target in "${GOVERNANCE_TARGETS[@]}"; do
   [[ -f "$target" ]] || fail "missing $target"
-  if ! rg -n 'LocalRuntimeGovernanceReadIssuer::invoke' "$target" >/dev/null; then
+  if ! rg -n 'LocalRuntimeGovernanceReadIssuer::invocation_(history|record|trace)_' "$target" >/dev/null; then
     fail "$target must enter local runtime through LocalRuntimeGovernanceReadIssuer"
   fi
   if rg -n '\binvoke_local_ability\s*\(' "$target"; then
     fail "$target must not use generic invoke_local_ability for runtime governance reads"
   fi
 done
+
+"$PYTHON_BIN" - "$ISSUER" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+issuer = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+match = re.search(
+    r"impl LocalRuntimeGovernanceReadIssuer \{(?P<body>.*?)\n\}",
+    issuer,
+    re.S,
+)
+if not match:
+    raise SystemExit("LocalRuntimeGovernanceReadIssuer impl is missing")
+body = match.group("body")
+if "pub fn invoke(" in body or "pub fn invoke_timeout(" in body:
+    raise SystemExit(
+        "LocalRuntimeGovernanceReadIssuer must expose typed governance methods, not generic invoke methods"
+    )
+for required in (
+    "pub fn invocation_history_path(",
+    "pub fn invocation_history_path_timeout(",
+    "pub fn invocation_history_list(",
+    "pub fn invocation_history_list_timeout(",
+    "pub fn invocation_history_get(",
+    "pub fn invocation_history_get_timeout(",
+    "pub fn invocation_trace_get(",
+    "pub fn invocation_trace_get_timeout(",
+):
+    if required not in body:
+        raise SystemExit(f"LocalRuntimeGovernanceReadIssuer missing {required}")
+PY
 
 for target in "${CATALOGUE_TARGETS[@]}"; do
   [[ -f "$target" ]] || fail "missing $target"

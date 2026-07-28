@@ -497,20 +497,71 @@ impl LocalRuntimeOperationalReadIssuer {
 pub struct LocalRuntimeGovernanceReadIssuer;
 
 impl LocalRuntimeGovernanceReadIssuer {
-    pub fn invoke(ability: &str, args: Value) -> anyhow::Result<Value> {
-        Self::invoke_timeout(ability, args, std::time::Duration::from_secs(30))
+    pub fn invocation_history_path(args: Value) -> anyhow::Result<Value> {
+        Self::invocation_history_path_timeout(args, std::time::Duration::from_secs(30))
     }
 
-    pub fn invoke_timeout(
-        ability: &str,
+    pub fn invocation_history_path_timeout(
         args: Value,
         timeout: std::time::Duration,
     ) -> anyhow::Result<Value> {
-        if !crate::daemon::ability::names::governance::is_invocation_history_read(ability.trim()) {
-            anyhow::bail!(
-                "LocalRuntimeGovernanceReadIssuer only admits invocation history reads, got {ability:?}"
-            );
-        }
+        Self::invoke_governance_read_timeout(
+            crate::daemon::ability::names::governance::INVOCATION_HISTORY_PATH,
+            args,
+            timeout,
+        )
+    }
+
+    pub fn invocation_history_list(args: Value) -> anyhow::Result<Value> {
+        Self::invocation_history_list_timeout(args, std::time::Duration::from_secs(30))
+    }
+
+    pub fn invocation_history_list_timeout(
+        args: Value,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<Value> {
+        Self::invoke_governance_read_timeout(
+            crate::daemon::ability::names::governance::INVOCATION_HISTORY_LIST,
+            args,
+            timeout,
+        )
+    }
+
+    pub fn invocation_history_get(args: Value) -> anyhow::Result<Value> {
+        Self::invocation_history_get_timeout(args, std::time::Duration::from_secs(30))
+    }
+
+    pub fn invocation_history_get_timeout(
+        args: Value,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<Value> {
+        Self::invoke_governance_read_timeout(
+            crate::daemon::ability::names::governance::INVOCATION_HISTORY_GET,
+            args,
+            timeout,
+        )
+    }
+
+    pub fn invocation_trace_get(args: Value) -> anyhow::Result<Value> {
+        Self::invocation_trace_get_timeout(args, std::time::Duration::from_secs(30))
+    }
+
+    pub fn invocation_trace_get_timeout(
+        args: Value,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<Value> {
+        Self::invoke_governance_read_timeout(
+            crate::daemon::ability::names::governance::INVOCATION_TRACE_GET,
+            args,
+            timeout,
+        )
+    }
+
+    fn invoke_governance_read_timeout(
+        ability: &'static str,
+        args: Value,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<Value> {
         let subject_ura = Self::subject_ura()?;
         LocalDaemonSystemAbilityIssuer::invoke_root_for_subject_timeout(
             ability,

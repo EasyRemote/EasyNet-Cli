@@ -2612,15 +2612,21 @@ for retired in (
     if retired in production:
         raise SystemExit(f"cli_invocation_history_read_model_retired_json:{retired}")
 
-if "LocalRuntimeGovernanceReadIssuer::invoke(ability, args)" not in production:
-    raise SystemExit("cli_invocation_history_read_model_not_using_runtime_governance_read_issuer")
+for issuer_call in (
+    "LocalRuntimeGovernanceReadIssuer::invocation_history_path(",
+    "LocalRuntimeGovernanceReadIssuer::invocation_history_list(",
+    "LocalRuntimeGovernanceReadIssuer::invocation_history_get(",
+    "LocalRuntimeGovernanceReadIssuer::invocation_trace_get(",
+):
+    if issuer_call not in production:
+        raise SystemExit(f"cli_invocation_history_read_model_not_using_runtime_governance_read_issuer:{issuer_call}")
 if re.search(r"\binvoke_local_ability\s*\(", production):
     raise SystemExit("cli_invocation_history_read_model_uses_generic_local_invoke")
 
 for required_test in (
     "invocation_history_read_list_emits_explicit_ura_scope_fields",
     "invocation_history_read_list_omits_blank_filter_values",
-    "invocation_history_read_projects_path_get_and_trace_queries",
+    "invocation_history_read_projects_path_get_and_trace_arguments",
     "invocation_history_stats_uses_list_query_without_scope_filter",
 ):
     if required_test not in text:
