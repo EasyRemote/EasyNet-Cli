@@ -8126,6 +8126,43 @@ if cli_pages:
 PY
 }
 
+check_skill_cli_read_dispatch_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local skill_cli="$cli_root/src/cli/commands/skill.rs"
+  [[ -f "$skill_cli" ]] || fail "skill CLI source is missing: $skill_cli"
+
+  "$PYTHON_BIN" - "$skill_cli" <<'PY'
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+production = text.split("\n#[cfg(test)]", 1)[0]
+
+if "LocalRuntimeSkillCatalogueReadIssuer::list_installed_skills(" not in production:
+    raise SystemExit("skill_cli_read_dispatch:missing_typed_skill_catalogue_read_issuer")
+
+for retired in (
+    "LocalRuntimeStateReadIssuer::invoke",
+    "LocalRuntimeStateReadIssuer::invoke_timeout",
+    "invoke_local_ability(",
+):
+    if retired in production:
+        raise SystemExit(f"skill_cli_read_dispatch:retired_local_dispatch:{retired}")
+
+if '"skill.list",' in production:
+    raise SystemExit("skill_cli_read_dispatch:raw_skill_list_dispatch")
+
+for required in (
+    'invoke_daemon_skill_mutation("skill.install"',
+    'invoke_daemon_skill_mutation("skill.upgrade"',
+    'invoke_daemon_skill_mutation("skill.remove"',
+    "LocalDaemonSystemAbilityIssuer::invoke_root_for_local_daemon_identity(ability, args)",
+):
+    if required not in production:
+        raise SystemExit(f"skill_cli_read_dispatch:mutation_path_missing:{required}")
+PY
+}
+
 check_local_api_key_cache_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local api_key="$cli_root/src/daemon/ability/builtins/governance/api_key.rs"
@@ -28452,6 +28489,7 @@ EOF
   check_skill_install_record_schema_contract
   check_skill_record_projection_boundary_contract
   check_managed_skill_directory_projection_contract
+  check_skill_cli_read_dispatch_contract
   check_resource_list_projection_boundary_contract
   check_files_store_response_projection_contract
   check_files_store_persistence_cutover_contract
@@ -28720,6 +28758,7 @@ check_federation_realm_resolver_contract
 check_skill_install_record_schema_contract
 check_skill_record_projection_boundary_contract
 check_managed_skill_directory_projection_contract
+check_skill_cli_read_dispatch_contract
 check_resource_list_projection_boundary_contract
 check_files_store_response_projection_contract
 check_files_store_persistence_cutover_contract

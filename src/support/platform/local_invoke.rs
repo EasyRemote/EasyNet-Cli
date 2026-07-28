@@ -523,6 +523,31 @@ impl LocalRuntimeModelCatalogueReadIssuer {
     }
 }
 
+/// Named issuer for daemon-local installed skill catalogue/read-model
+/// projections.
+///
+/// `skill.list` is the canonical inventory of skill package resources hosted
+/// by local agents. CLI callers should depend on this typed read model instead
+/// of issuing a raw runtime-state ability name.
+pub struct LocalRuntimeSkillCatalogueReadIssuer;
+
+impl LocalRuntimeSkillCatalogueReadIssuer {
+    pub fn list_installed_skills(args: Value) -> anyhow::Result<Value> {
+        Self::list_installed_skills_timeout(args, std::time::Duration::from_secs(30))
+    }
+
+    pub fn list_installed_skills_timeout(
+        args: Value,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<Value> {
+        LocalRuntimeStateReadIssuer::invoke_state_read_timeout(
+            crate::daemon::ability::names::resources::SKILL_LIST,
+            args,
+            timeout,
+        )
+    }
+}
+
 /// Named issuer for daemon-local operational health reads.
 ///
 /// `observe.health` proves the local runtime invocation path, not a

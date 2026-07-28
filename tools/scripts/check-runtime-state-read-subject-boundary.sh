@@ -68,6 +68,10 @@ if ! rg -n 'struct LocalRuntimeModelCatalogueReadIssuer' "$ISSUER" >/dev/null; t
   fail "runtime model-catalogue reads must use a named issuer"
 fi
 
+if ! rg -n 'struct LocalRuntimeSkillCatalogueReadIssuer' "$ISSUER" >/dev/null; then
+  fail "runtime skill-catalogue reads must use a named issuer"
+fi
+
 if ! rg -n 'struct LocalRuntimeIdentityReadIssuer' "$ISSUER" >/dev/null; then
   fail "runtime identity reads must use a named issuer"
 fi
@@ -233,6 +237,29 @@ for target in "${DEVICE_DIRECTORY_TARGETS[@]}"; do
     fail "$target must not use generic invoke_local_ability for runtime device-directory reads"
   fi
 done
+
+"$PYTHON_BIN" - "$ISSUER" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+match = re.search(
+    r"impl LocalRuntimeSkillCatalogueReadIssuer \{(?P<body>.*?)\n\}",
+    text,
+    re.S,
+)
+if not match:
+    raise SystemExit("LocalRuntimeSkillCatalogueReadIssuer impl is missing")
+body = match.group("body")
+if "pub fn invoke(" in body or "pub fn invoke_timeout(" in body:
+    raise SystemExit(
+        "LocalRuntimeSkillCatalogueReadIssuer must expose typed skill-catalogue methods, not generic invoke methods"
+    )
+for required in ("pub fn list_installed_skills(", "pub fn list_installed_skills_timeout("):
+    if required not in body:
+        raise SystemExit(f"LocalRuntimeSkillCatalogueReadIssuer missing {required}")
+PY
 
 "$PYTHON_BIN" - "$ISSUER" <<'PY'
 import re
@@ -481,12 +508,12 @@ if ! rg -n -F 'invoke_openai_chat_completions(adapter_args)' "$LLM_API" >/dev/nu
   fail "llm-api chat completions must remain on the explicit action issuer path"
 fi
 
-if ! rg -n -U 'LocalRuntimeStateReadIssuer::invoke\(\s*"skill\.list"' "$SKILL_CLI" >/dev/null; then
-  fail "skill.list must use LocalRuntimeStateReadIssuer"
+if ! rg -n 'LocalRuntimeSkillCatalogueReadIssuer::list_installed_skills' "$SKILL_CLI" >/dev/null; then
+  fail "skill.list must use LocalRuntimeSkillCatalogueReadIssuer"
 fi
 
-if rg -n -U '\binvoke_local_ability\s*\(\s*"skill\.list"' "$SKILL_CLI"; then
-  fail "skill.list must not use generic invoke_local_ability"
+if rg -n -U 'LocalRuntimeStateReadIssuer::invoke|skill\.list"\s*,' "$SKILL_CLI"; then
+  fail "skill.list must not use raw runtime-state dispatch"
 fi
 
 for action in skill.install skill.upgrade skill.remove; do

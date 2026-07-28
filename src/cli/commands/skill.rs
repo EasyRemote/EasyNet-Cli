@@ -20,7 +20,7 @@ use crate::daemon::resources::skills::projection::{
 };
 use crate::daemon::resources::skills::store::format_bytes;
 use crate::support::platform::local_invoke::{
-    LocalDaemonSystemAbilityIssuer, LocalRuntimeStateReadIssuer,
+    LocalDaemonSystemAbilityIssuer, LocalRuntimeSkillCatalogueReadIssuer,
 };
 use crate::support::platform::output;
 
@@ -163,14 +163,11 @@ fn run_list(args: ListArgs) -> anyhow::Result<()> {
 }
 
 fn invoke_daemon_skill_list(args: &ListArgs) -> anyhow::Result<Vec<InstalledSkillProjection>> {
-    let response = LocalRuntimeStateReadIssuer::invoke(
-        "skill.list",
-        json!({
-            "owner_agent_id": args.agent,
-            "agent_ura": args.agent_ura,
-            "subject_ura": args.subject_ura,
-        }),
-    )?;
+    let response = LocalRuntimeSkillCatalogueReadIssuer::list_installed_skills(json!({
+        "owner_agent_id": args.agent,
+        "agent_ura": args.agent_ura,
+        "subject_ura": args.subject_ura,
+    }))?;
     let decoded: SkillListResponse = serde_json::from_value(response)
         .map_err(|err| anyhow::anyhow!("skill.list returned invalid payload: {err}"))?;
     Ok(decoded.items)
