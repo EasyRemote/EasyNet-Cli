@@ -257,20 +257,23 @@ def receipt_read_call_context(
     caller_ura: str,
     callee_ura: str,
     authority: RuntimeInvocationAuthority,
-    nonce_base64: str = "",
-    causal_context: Mapping[str, object] | None = None,
+    nonce_base64: str,
+    causal_context: Mapping[str, object],
     metadata: Mapping[str, object] | None = None,
 ) -> RuntimeCallContext:
     """Build the canonical runtime call context for receipt history reads."""
 
     caller = _required_ura(caller_ura, "caller_ura")
     callee = _required_ura(callee_ura, "callee_ura")
+    nonce = _required_text(nonce_base64, "nonce_base64")
+    if not isinstance(causal_context, Mapping):
+        raise _invalid("causal_context is required")
     return RuntimeCallContext(
         caller_ura=caller,
         callee_ura=callee,
         subject_ura=_receipt_read_subject_ura(callee, authority),
-        nonce_base64=str(nonce_base64).strip(),
-        causal_context=dict(causal_context or {}),
+        nonce_base64=nonce,
+        causal_context=dict(causal_context),
         metadata=dict(metadata or {}),
         authority=authority,
     )

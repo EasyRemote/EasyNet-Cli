@@ -2019,6 +2019,27 @@ test("receipt read call context keeps delegation subject exact", () => {
   assert.equal(call.subjectURA, callee);
 });
 
+test("receipt read call context requires complete tuple fields", () => {
+  const authority = sdk.DelegationProof.fromMetadata(delegationValue(["invocation.history.*"]));
+  for (const omitted of ["nonce_base64", "causal_context"]) {
+    const fields = {
+      caller_ura: caller,
+      callee_ura: callee,
+      nonce_base64: nonce,
+      causal_context: { form: "none" },
+      authority,
+    };
+    delete fields[omitted];
+
+    assert.throws(
+      () => sdk.receiptReadCallContext(fields),
+      (error) =>
+        error instanceof sdk.SDKError &&
+        new RegExp(`${omitted} must be (a non-empty string|an object)`).test(error.message),
+    );
+  }
+});
+
 test("session history preflight rejects authority subject mismatch before receipt provider", async () => {
   let providerCalls = 0;
   const history = new sdk.SessionHistoryOperations({
@@ -2061,20 +2082,8 @@ test("session history preflight rejects authority subject mismatch before receip
   assert.equal(providerCalls, 0);
 });
 
-test("session history preflight requires complete call context before authority checks", async () => {
+test("receipt list request requires complete call context before history provider", () => {
   for (const omitted of ["nonce_base64", "causal_context"]) {
-    let providerCalls = 0;
-    const history = new sdk.SessionHistoryOperations({
-      list: () => {
-        providerCalls += 1;
-        return {
-          records: [],
-          next_cursor: "",
-          limit: 50,
-          source: "invocation.history.list",
-        };
-      },
-    });
     const call = {
       caller_ura: caller,
       callee_ura: callee,
@@ -2087,17 +2096,13 @@ test("session history preflight requires complete call context before authority 
     };
     delete call[omitted];
 
-    const request = new sdk.ReceiptListRequest({ call, limit: 50 });
-
-    await assert.rejects(
-      () => history.list(request),
+    assert.throws(
+      () => new sdk.ReceiptListRequest({ call, limit: 50 }),
       (error) =>
         error instanceof sdk.SDKError &&
-        error.code === sdk.ErrorCode.INVALID_INVOCATION &&
-        error.stage === "history" &&
-        error.message === `${omitted} is required`,
+        error.code === sdk.ErrorCode.INVALID_ARGUMENT &&
+        new RegExp(`${omitted} must be (a non-empty string|an object)`).test(error.message),
     );
-    assert.equal(providerCalls, 0);
   }
 });
 

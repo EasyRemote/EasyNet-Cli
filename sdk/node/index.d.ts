@@ -397,8 +397,8 @@ export interface RuntimeCallContextFields {
   caller_ura: string;
   callee_ura: string;
   subject_ura: string;
-  nonce_base64?: string | null;
-  causal_context?: Record<string, unknown> | null;
+  nonce_base64: string;
+  causal_context: Record<string, unknown>;
   metadata?: Record<string, unknown>;
   authority?: DelegationProof | SessionAuthority | AuthorityMetadata | DelegationProofFields | SessionAuthorityFields | null;
 }
@@ -418,8 +418,8 @@ export class RuntimeCallContext {
 export interface ReceiptReadCallContextFields {
   caller_ura: string;
   callee_ura: string;
-  nonce_base64?: string | null;
-  causal_context?: Record<string, unknown> | null;
+  nonce_base64: string;
+  causal_context: Record<string, unknown>;
   metadata?: Record<string, unknown>;
   authority: DelegationProof | SessionAuthority | AuthorityMetadata | DelegationProofFields | SessionAuthorityFields;
 }

@@ -5130,11 +5130,12 @@ check_sdk_history_authority_subject_contract() {
   local py_receipt_guard="$cli_root/sdk/python/easynet_sdk/_receipt_history_admission.py"
   local py_receipt_test="$cli_root/sdk/python/tests/test_receipt.py"
   local node="$cli_root/sdk/node/index.js"
+  local node_dts="$cli_root/sdk/node/index.d.ts"
   local node_subjects="$cli_root/sdk/node/runtime-subjects.js"
   local node_principals="$cli_root/sdk/node/runtime-principals.js"
   local node_test="$cli_root/sdk/node/test/runtime-core.test.mjs"
 
-  "$PYTHON_BIN" - "$go" "$go_runtime" "$go_helper" "$go_subjects" "$go_test" "$go_receipt" "$go_receipt_test" "$py" "$py_runtime" "$py_authority" "$py_helper" "$py_subjects" "$py_test" "$py_authority_test" "$py_receipt" "$py_receipt_guard" "$py_receipt_test" "$node" "$node_subjects" "$node_principals" "$node_test" <<'PY'
+  "$PYTHON_BIN" - "$go" "$go_runtime" "$go_helper" "$go_subjects" "$go_test" "$go_receipt" "$go_receipt_test" "$py" "$py_runtime" "$py_authority" "$py_helper" "$py_subjects" "$py_test" "$py_authority_test" "$py_receipt" "$py_receipt_guard" "$py_receipt_test" "$node" "$node_dts" "$node_subjects" "$node_principals" "$node_test" <<'PY'
 import sys
 from pathlib import Path
 
@@ -5157,6 +5158,7 @@ from pathlib import Path
     py_receipt_guard_path,
     py_receipt_test_path,
     node_path,
+    node_dts_path,
     node_subjects_path,
     node_principals_path,
     node_test_path,
@@ -5345,6 +5347,23 @@ if py:
         raise SystemExit("sdk_python_session_history_not_using_shared_receipt_guard")
     if "validate_receipt_history_request" not in py_receipt:
         raise SystemExit("sdk_python_receipt_provider_not_using_shared_history_guard")
+    for retired in (
+        'nonce_base64: str = ""',
+        "causal_context: Mapping[str, object] | None = None",
+        "causal_context=dict(causal_context or {})",
+    ):
+        if retired in py_receipt:
+            raise SystemExit(f"sdk_python_receipt_read_call_context_tuple_default_retired:{retired}")
+    for required in (
+        "nonce_base64: str,",
+        "causal_context: Mapping[str, object],",
+        'nonce = _required_text(nonce_base64, "nonce_base64")',
+        'raise _invalid("causal_context is required")',
+    ):
+        if required not in py_receipt:
+            raise SystemExit(f"sdk_python_receipt_read_call_context_complete_tuple_missing:{required}")
+    if "test_receipt_read_call_context_requires_complete_tuple_fields" not in read(py_receipt_test_path):
+        raise SystemExit("sdk_python_receipt_read_call_context_complete_tuple_test_missing")
     require(
         py_helper_path,
         "def session_authority_admits_subject(",
@@ -5567,6 +5586,7 @@ if py:
 
 node = read(node_path)
 if node:
+    node_dts = read(node_dts_path)
     node_subjects = read(node_subjects_path)
     node_principals = read(node_principals_path)
     node_test = read(node_test_path)
@@ -5605,6 +5625,46 @@ if node:
             raise SystemExit(f"sdk_node_history_authority_subject_missing:{token}")
     if "export function containsAllZeroPrincipal(value)" not in node_principals:
         raise SystemExit("sdk_node_history_authority_subject_missing:runtime_principal_guard")
+    runtime_call_context_impl = section(
+        node,
+        "export class RuntimeCallContext",
+        "export function receiptReadCallContext",
+    )
+    for retired in (
+        'optionalRuntimeString(value.nonce_base64, "nonce_base64") ?? ""',
+        "value.causal_context === undefined || value.causal_context === null",
+    ):
+        if retired in runtime_call_context_impl:
+            raise SystemExit(f"sdk_node_receipt_read_call_context_tuple_default_retired:{retired}")
+    for required in (
+        'this.nonceBase64 = requiredRuntimeString(value.nonce_base64, "nonce_base64")',
+        'this.causalContext = objectValue(value.causal_context, "causal_context")',
+    ):
+        if required not in runtime_call_context_impl:
+            raise SystemExit(f"sdk_node_receipt_read_call_context_complete_tuple_missing:{required}")
+    if 'test("receipt read call context requires complete tuple fields"' not in node_test:
+        raise SystemExit("sdk_node_receipt_read_call_context_complete_tuple_test_missing")
+    runtime_call_fields = section(
+        node_dts,
+        "export interface RuntimeCallContextFields",
+        "export class RuntimeCallContext",
+    )
+    receipt_read_fields = section(
+        node_dts,
+        "export interface ReceiptReadCallContextFields",
+        "export declare function receiptReadCallContext",
+    )
+    for section_name, body in (
+        ("runtime_call", runtime_call_fields),
+        ("receipt_read", receipt_read_fields),
+    ):
+        if (
+            "nonce_base64?: string | null" in body
+            or "causal_context?: Record<string, unknown> | null" in body
+        ):
+            raise SystemExit(f"sdk_node_receipt_read_call_context_optional_tuple_type_retired:{section_name}")
+        if "nonce_base64: string;" not in body or "causal_context: Record<string, unknown>;" not in body:
+            raise SystemExit(f"sdk_node_receipt_read_call_context_required_tuple_type_missing:{section_name}")
     for retired in (
         "const RUNTIME_STATE_READ_SUBJECT_PATH",
         "function canonicalResourceSubject(subjectURA)",

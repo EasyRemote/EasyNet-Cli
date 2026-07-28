@@ -834,13 +834,9 @@ export class RuntimeCallContext {
     this.callerURA = requiredHistoryPrincipalString(value.caller_ura, "caller_ura");
     this.calleeURA = requiredHistoryPrincipalString(value.callee_ura, "callee_ura");
     this.subjectURA = requiredHistoryPrincipalString(value.subject_ura, "subject_ura");
-    this.nonceBase64 = optionalRuntimeString(value.nonce_base64, "nonce_base64") ?? "";
-    if (this.nonceBase64) {
-      validateRuntimeBase64(this.nonceBase64, "nonce_base64", 16);
-    }
-    this.causalContext = value.causal_context === undefined || value.causal_context === null
-      ? null
-      : objectValue(value.causal_context, "causal_context");
+    this.nonceBase64 = requiredRuntimeString(value.nonce_base64, "nonce_base64");
+    validateRuntimeBase64(this.nonceBase64, "nonce_base64", 16);
+    this.causalContext = objectValue(value.causal_context, "causal_context");
     this.metadata = objectValue(value.metadata ?? {}, "metadata");
     this.authority = normalizeRuntimeCallAuthority(value.authority ?? null);
   }
@@ -850,14 +846,10 @@ export class RuntimeCallContext {
       caller_ura: this.callerURA,
       callee_ura: this.calleeURA,
       subject_ura: this.subjectURA,
+      nonce_base64: this.nonceBase64,
+      causal_context: { ...this.causalContext },
       metadata: { ...this.metadata },
     };
-    if (this.nonceBase64) {
-      value.nonce_base64 = this.nonceBase64;
-    }
-    if (this.causalContext !== null) {
-      value.causal_context = { ...this.causalContext };
-    }
     return value;
   }
 }

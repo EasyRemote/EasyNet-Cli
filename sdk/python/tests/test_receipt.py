@@ -27,6 +27,7 @@ from easynet_sdk.receipt import (
     ReceiptReference,
     ReceiptTraceRequest,
     RuntimeReceiptProvider,
+    receipt_read_call_context,
 )
 from easynet_sdk.runtime import RuntimeClient
 from easynet_sdk.runtime_ability import RuntimeAbilityClient, RuntimeCallContext
@@ -303,6 +304,43 @@ def test_runtime_receipt_list_projects_typed_query_and_axon_record() -> None:
             "easynet:///r/example/ability/authority.invocation.history.list"
         ],
     }
+
+
+def test_receipt_read_call_context_requires_complete_tuple_fields() -> None:
+    authority = DelegationProof.from_metadata(
+        _authority_metadata_value(
+            {
+                "issuer_ura": "easynet:///r/example/user/backend",
+                "subject_ura": "easynet:///r/example/device/dev-a",
+                "caller_ura": "easynet:///r/example/user/backend",
+                "audience": "easynet:///r/example/device/dev-a",
+                "scopes": ["invocation.history.*"],
+                "issued_at_ms": 1000,
+                "expires_at_ms": 2000,
+            },
+            b"delegation-signature",
+        )
+    )
+    required = {
+        "caller_ura": "easynet:///r/example/user/backend",
+        "callee_ura": "easynet:///r/example/device/dev-a",
+        "authority": authority,
+        "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+        "causal_context": {"form": "none"},
+    }
+    for omitted in ("nonce_base64", "causal_context"):
+        fields = dict(required)
+        del fields[omitted]
+        with pytest.raises(TypeError, match=omitted):
+            receipt_read_call_context(**fields)  # type: ignore[arg-type]
+    with pytest.raises(SDKError, match="causal_context is required"):
+        receipt_read_call_context(
+            caller_ura=str(required["caller_ura"]),
+            callee_ura=str(required["callee_ura"]),
+            authority=authority,
+            nonce_base64=str(required["nonce_base64"]),
+            causal_context=None,  # type: ignore[arg-type]
+        )
 
 
 def test_runtime_receipt_provider_rejects_wrong_device_owner_subject_before_descriptor_resolution() -> None:
