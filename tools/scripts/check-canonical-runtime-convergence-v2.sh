@@ -6531,7 +6531,7 @@ for retired in (
 ):
     if retired in go:
         raise SystemExit(f"sdk_go_ability_descriptor_version_alias:{retired}")
-if "strings.TrimSpace(projection.Version) == \"\"" not in go:
+if "projection.Version == \"\"" not in go:
     raise SystemExit("sdk_go_ability_descriptor_version_not_required_at_provider_boundary")
 go_tests = read(go_test_path)
 if "TestRuntimeAbilityDescriptorProviderRejectsLegacyVersionAlias" not in go_tests:
@@ -6556,6 +6556,99 @@ if "test_runtime_ability_descriptor_provider_rejects_legacy_version_alias" not i
     raise SystemExit("sdk_python_ability_descriptor_version_alias_negative_test_missing")
 if '"version": "1.0.0"' not in py_tests or '"descriptor_version": "2.0.0"' not in py_tests:
     raise SystemExit("sdk_python_ability_descriptor_version_vectors_missing")
+PY
+}
+
+check_sdk_ability_descriptor_projection_strict_wire_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local go="$cli_root/sdk/go/ability_descriptor.go"
+  local go_test="$cli_root/sdk/go/ability_descriptor_test.go"
+  local py="$cli_root/sdk/python/easynet_sdk/ability_descriptor.py"
+  local py_test="$cli_root/sdk/python/tests/test_ability_descriptor.py"
+  local java="$cli_root/sdk/java/src/main/java/run/runtime/sdk/AbilityDescriptorProjection.java"
+  local java_test="$cli_root/sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
+  local swift="$cli_root/sdk/swift/Sources/RuntimeSDK/AbilityDescriptor.swift"
+  local swift_test="$cli_root/sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift"
+
+  "$PYTHON_BIN" - "$go" "$go_test" "$py" "$py_test" "$java" "$java_test" "$swift" "$swift_test" <<'PY'
+import sys
+from pathlib import Path
+
+go_path, go_test_path, py_path, py_test_path, java_path, java_test_path, swift_path, swift_test_path = map(Path, sys.argv[1:])
+
+def read(path: Path) -> str:
+    if not path.exists():
+        raise SystemExit(f"sdk_ability_descriptor_projection_source_missing:{path}")
+    return path.read_text()
+
+go = read(go_path)
+if "joinAbilityDescriptorName" in go or 'descriptorString(raw["namespace"])' in go or 'descriptorString(raw["local_name"])' in go:
+    raise SystemExit("sdk_go_ability_descriptor_retired_name_alias")
+if 'descriptorMap(schema["input"])' in go:
+    raise SystemExit("sdk_go_ability_descriptor_retired_schema_summary_input_alias")
+if "projectRuntimeAbilityDescriptor(row, i)" not in go:
+    raise SystemExit("sdk_go_ability_descriptor_provider_not_strict_projector")
+for token in (
+    "field schema_hash must be a string",
+    "field input_schema must be an object",
+    "field hints.read_only must be a boolean",
+):
+    if token not in go:
+        raise SystemExit(f"sdk_go_ability_descriptor_strict_wire_missing:{token}")
+go_tests = read(go_test_path)
+for token in (
+    "TestProjectAbilityDescriptorDoesNotDeriveRetiredNameOrInputSchemaAliases",
+    "TestRuntimeAbilityDescriptorProviderRejectsRetiredNameAndInputSchemaAliases",
+    "TestRuntimeAbilityDescriptorProviderRejectsTypedDescriptorProjectionFields",
+):
+    if token not in go_tests:
+        raise SystemExit(f"sdk_go_ability_descriptor_strict_test_missing:{token}")
+
+py = read(py_path)
+if "_join_name" in py or 'raw.get("namespace")' in py or 'raw.get("local_name")' in py:
+    raise SystemExit("sdk_python_ability_descriptor_retired_name_alias")
+if "schema.get(\"input\")" in py:
+    raise SystemExit("sdk_python_ability_descriptor_retired_schema_summary_input_alias")
+if "_project_runtime_ability_descriptor(raw, index)" not in py:
+    raise SystemExit("sdk_python_ability_descriptor_provider_not_strict_projector")
+for token in (
+    "field {field_name} must be a string",
+    "field {field_name} must be an object",
+    "field {field_name} must be a boolean",
+):
+    if token not in py:
+        raise SystemExit(f"sdk_python_ability_descriptor_strict_wire_missing:{token}")
+py_tests = read(py_test_path)
+for token in (
+    "test_project_ability_descriptor_does_not_derive_retired_name_or_input_schema_aliases",
+    "test_runtime_ability_descriptor_provider_rejects_retired_name_and_input_schema_aliases",
+    "test_runtime_ability_descriptor_provider_rejects_typed_descriptor_projection_fields",
+):
+    if token not in py_tests:
+        raise SystemExit(f"sdk_python_ability_descriptor_strict_test_missing:{token}")
+
+java = read(java_path)
+if "field + \" must be a string or null\"" not in java:
+    raise SystemExit("sdk_java_ability_descriptor_optional_string_not_strict")
+java_tests = read(java_test_path)
+if "schema_hash must be a string or null" not in java_tests:
+    raise SystemExit("sdk_java_ability_descriptor_strict_test_missing")
+
+swift = read(swift_path)
+for token in (
+    "requiredDescriptorString(",
+    "optionalDescriptorString(",
+    "optionalDescriptorObject(",
+    "optionalDescriptorBool(",
+    "AbilityDescriptorProjection.fromObject(object, rowIndex: index)",
+):
+    if token not in swift:
+        raise SystemExit(f"sdk_swift_ability_descriptor_strict_wire_missing:{token}")
+if 'raw["version"]' in swift:
+    raise SystemExit("sdk_swift_ability_descriptor_version_alias")
+swift_tests = read(swift_test_path)
+if "schema_hash must be a string" not in swift_tests:
+    raise SystemExit("sdk_swift_ability_descriptor_strict_test_missing")
 PY
 }
 
@@ -28175,6 +28268,7 @@ EOF
 	  check_sdk_runtime_client_provider_readiness_contract
 	  check_sdk_ability_descriptor_not_found_vocabulary_contract
 	  check_sdk_ability_descriptor_version_field_contract
+	  check_sdk_ability_descriptor_projection_strict_wire_contract
 	  check_sdk_runtime_ability_owner_bound_scope_contract
 	  check_runtime_descriptor_catalog_scope_contract
   check_sdk_runtime_identity_signer_not_found_contract

@@ -369,13 +369,13 @@ public struct AbilityDescriptorHints: Sendable, Equatable {
         self.bidiOnly = bidiOnly
     }
 
-    static func fromObject(_ raw: [String: JSONValue]) -> AbilityDescriptorHints {
-        AbilityDescriptorHints(
-            readOnly: raw["read_only"]?.boolValue ?? false,
-            destructive: raw["destructive"]?.boolValue ?? false,
-            idempotent: raw["idempotent"]?.boolValue ?? false,
-            streamingOnly: raw["streaming_only"]?.boolValue ?? false,
-            bidiOnly: raw["bidi_only"]?.boolValue ?? false
+    static func fromObject(_ raw: [String: JSONValue], rowIndex: Int) throws -> AbilityDescriptorHints {
+        try AbilityDescriptorHints(
+            readOnly: optionalDescriptorBool(raw, "hints.read_only", rowIndex: rowIndex),
+            destructive: optionalDescriptorBool(raw, "hints.destructive", rowIndex: rowIndex),
+            idempotent: optionalDescriptorBool(raw, "hints.idempotent", rowIndex: rowIndex),
+            streamingOnly: optionalDescriptorBool(raw, "hints.streaming_only", rowIndex: rowIndex),
+            bidiOnly: optionalDescriptorBool(raw, "hints.bidi_only", rowIndex: rowIndex)
         )
     }
 }
@@ -444,26 +444,29 @@ public struct AbilityDescriptorProjection: Sendable, Equatable {
         }
     }
 
-    static func fromObject(_ raw: [String: JSONValue]) throws -> AbilityDescriptorProjection {
-        let version = raw["descriptor_version"]?.stringValue ?? raw["version"]?.stringValue ?? ""
+    static func fromObject(_ raw: [String: JSONValue], rowIndex: Int = 0) throws -> AbilityDescriptorProjection {
+        let version = try requiredDescriptorString(raw, "descriptor_version", rowIndex: rowIndex)
         return try AbilityDescriptorProjection(
-            abilityURA: raw["ability_ura"]?.stringValue ?? "",
-            descriptorRef: raw["descriptor_ref"]?.stringValue ?? "",
-            name: raw["name"]?.stringValue ?? "",
-            ownerURA: raw["owner_ura"]?.stringValue ?? "",
+            abilityURA: try requiredDescriptorString(raw, "ability_ura", rowIndex: rowIndex),
+            descriptorRef: try requiredDescriptorString(raw, "descriptor_ref", rowIndex: rowIndex),
+            name: try requiredDescriptorString(raw, "name", rowIndex: rowIndex),
+            ownerURA: try requiredDescriptorString(raw, "owner_ura", rowIndex: rowIndex),
             version: version,
-            schemaHash: raw["schema_hash"]?.stringValue ?? "",
-            descriptorHash: raw["descriptor_hash"]?.stringValue ?? "",
-            callMode: raw["call_mode"]?.stringValue ?? "",
-            className: raw["class"]?.stringValue ?? "",
-            receiptSemantics: raw["receipt_semantics"]?.objectValue ?? [:],
-            visibility: raw["visibility"]?.stringValue ?? "",
-            source: raw["source"]?.stringValue ?? "",
-            description: raw["description"]?.stringValue ?? "",
-            hints: AbilityDescriptorHints.fromObject(raw["hints"]?.objectValue ?? [:]),
-            schemaSummary: raw["schema_summary"]?.objectValue ?? [:],
-            inputSchema: raw["input_schema"]?.objectValue ?? [:],
-            metadata: raw["metadata"]?.objectValue ?? [:]
+            schemaHash: try optionalDescriptorString(raw, "schema_hash", rowIndex: rowIndex),
+            descriptorHash: try optionalDescriptorString(raw, "descriptor_hash", rowIndex: rowIndex),
+            callMode: try optionalDescriptorString(raw, "call_mode", rowIndex: rowIndex),
+            className: try optionalDescriptorString(raw, "class", rowIndex: rowIndex),
+            receiptSemantics: try optionalDescriptorObject(raw, "receipt_semantics", rowIndex: rowIndex),
+            visibility: try optionalDescriptorString(raw, "visibility", rowIndex: rowIndex),
+            source: try optionalDescriptorString(raw, "source", rowIndex: rowIndex),
+            description: try optionalDescriptorString(raw, "description", rowIndex: rowIndex),
+            hints: AbilityDescriptorHints.fromObject(
+                try optionalDescriptorObject(raw, "hints", rowIndex: rowIndex),
+                rowIndex: rowIndex
+            ),
+            schemaSummary: try optionalDescriptorObject(raw, "schema_summary", rowIndex: rowIndex),
+            inputSchema: try optionalDescriptorObject(raw, "input_schema", rowIndex: rowIndex),
+            metadata: try optionalDescriptorObject(raw, "metadata", rowIndex: rowIndex)
         )
     }
 }
@@ -579,7 +582,7 @@ public final class RuntimeAbilityDescriptorProvider: AbilityDescriptorProvider, 
                     "ability descriptor row \(index) must be an object"
                 )
             }
-            descriptors.append(try AbilityDescriptorProjection.fromObject(object))
+            descriptors.append(try AbilityDescriptorProjection.fromObject(object, rowIndex: index))
         }
         return AbilityDescriptorPage(descriptors: descriptors)
     }
@@ -671,6 +674,75 @@ private func requiredText(_ value: String, _ field: String, stage: String) throw
         throw SDKError.validation(stage, "\(field) is required")
     }
     return clean
+}
+
+private func requiredDescriptorString(
+    _ raw: [String: JSONValue],
+    _ field: String,
+    rowIndex: Int
+) throws -> String {
+    guard let value = raw[field] else {
+        return ""
+    }
+    guard case let .string(string) = value else {
+        throw SDKError.validation(
+            "ability_descriptor",
+            "ability descriptor row \(rowIndex) field \(field) must be a string"
+        )
+    }
+    return string.trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
+private func optionalDescriptorString(
+    _ raw: [String: JSONValue],
+    _ field: String,
+    rowIndex: Int
+) throws -> String {
+    guard let value = raw[field], value != .null else {
+        return ""
+    }
+    guard case let .string(string) = value else {
+        throw SDKError.validation(
+            "ability_descriptor",
+            "ability descriptor row \(rowIndex) field \(field) must be a string"
+        )
+    }
+    return string.trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
+private func optionalDescriptorObject(
+    _ raw: [String: JSONValue],
+    _ field: String,
+    rowIndex: Int
+) throws -> [String: JSONValue] {
+    guard let value = raw[field], value != .null else {
+        return [:]
+    }
+    guard case let .object(object) = value else {
+        throw SDKError.validation(
+            "ability_descriptor",
+            "ability descriptor row \(rowIndex) field \(field) must be an object"
+        )
+    }
+    return object
+}
+
+private func optionalDescriptorBool(
+    _ raw: [String: JSONValue],
+    _ field: String,
+    rowIndex: Int
+) throws -> Bool {
+    let key = field.split(separator: ".").last.map(String.init) ?? field
+    guard let value = raw[key], value != .null else {
+        return false
+    }
+    guard case let .bool(bool) = value else {
+        throw SDKError.validation(
+            "ability_descriptor",
+            "ability descriptor row \(rowIndex) field \(field) must be a boolean"
+        )
+    }
+    return bool
 }
 
 private extension JSONValue {

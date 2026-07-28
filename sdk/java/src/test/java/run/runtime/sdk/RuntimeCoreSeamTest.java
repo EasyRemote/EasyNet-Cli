@@ -1399,6 +1399,12 @@ public final class RuntimeCoreSeamTest {
         JsonValueReader.object(transport.seenInvokeTuple.argsJson().getBytes(StandardCharsets.UTF_8), "catalogue args");
     check(args.get("scope").equals("owner"), "catalogue scope argument");
     check(args.get("owner_ura").equals(CALLEE), "catalogue owner argument");
+    Map<String, Object> typedScalarRow = new LinkedHashMap<>(browserRow);
+    typedScalarRow.put("schema_hash", 42);
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        "schema_hash must be a string or null",
+        () -> AbilityDescriptorProjection.fromMap(typedScalarRow));
   }
 
   private static void runtimeAbilityClientRejectsCatalogueReadPublicBuild() {

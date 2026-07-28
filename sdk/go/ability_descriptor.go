@@ -2,7 +2,6 @@ package easynet
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -147,12 +146,9 @@ func (p *RuntimeAbilityDescriptorProvider) List(ctx context.Context, request Abi
 		if !ok {
 			return AbilityDescriptorPage{}, invalidAbilityDescriptor(fmt.Sprintf("ability descriptor row %d must be an object", i), nil)
 		}
-		projection := ProjectAbilityDescriptor(row)
-		if strings.TrimSpace(projection.AbilityURA) == "" ||
-			strings.TrimSpace(projection.OwnerURA) == "" ||
-			strings.TrimSpace(projection.Name) == "" ||
-			strings.TrimSpace(projection.Version) == "" {
-			return AbilityDescriptorPage{}, invalidAbilityDescriptor(fmt.Sprintf("ability descriptor row %d is missing identity fields", i), nil)
+		projection, err := projectRuntimeAbilityDescriptor(row, i)
+		if err != nil {
+			return AbilityDescriptorPage{}, err
 		}
 		descriptors = append(descriptors, projection)
 	}
@@ -237,12 +233,6 @@ func ProjectAbilityDescriptor(raw map[string]any) AbilityDescriptorProjection {
 		Description:      descriptorString(raw["description"]),
 		Metadata:         descriptorMap(raw["metadata"]),
 	}
-	if projection.Name == "" {
-		projection.Name = joinAbilityDescriptorName(
-			descriptorString(raw["namespace"]),
-			descriptorString(raw["local_name"]),
-		)
-	}
 	if hints := descriptorMap(raw["hints"]); hints != nil {
 		projection.Hints = AbilityDescriptorHints{
 			ReadOnly:      descriptorBool(hints["read_only"]),
@@ -254,22 +244,111 @@ func ProjectAbilityDescriptor(raw map[string]any) AbilityDescriptorProjection {
 	}
 	if schema := descriptorMap(raw["schema_summary"]); schema != nil {
 		projection.SchemaSummary = schema
-		projection.InputSchema = descriptorMap(schema["input"])
 	}
+	projection.InputSchema = descriptorMap(raw["input_schema"])
 	return projection
 }
 
-func joinAbilityDescriptorName(namespace string, localName string) string {
-	namespace = strings.TrimSpace(namespace)
-	localName = strings.TrimSpace(localName)
-	switch {
-	case namespace == "":
-		return localName
-	case localName == "":
-		return namespace
-	default:
-		return namespace + "." + localName
+func projectRuntimeAbilityDescriptor(raw map[string]any, index int) (AbilityDescriptorProjection, error) {
+	projection := AbilityDescriptorProjection{
+		AbilityURA:       "",
+		DescriptorRef:    "",
+		Name:             "",
+		OwnerURA:         "",
+		Version:          "",
+		SchemaHash:       "",
+		DescriptorHash:   "",
+		CallMode:         "",
+		Class:            "",
+		ReceiptSemantics: nil,
+		Visibility:       "",
+		Source:           "",
+		Description:      "",
+		Metadata:         nil,
 	}
+	var err error
+	if projection.AbilityURA, err = requiredDescriptorString(raw, "ability_ura", index); err != nil {
+		return AbilityDescriptorProjection{}, err
+	}
+	if projection.DescriptorRef, err = requiredDescriptorString(raw, "descriptor_ref", index); err != nil {
+		return AbilityDescriptorProjection{}, err
+	}
+	if projection.Name, err = requiredDescriptorString(raw, "name", index); err != nil {
+		return AbilityDescriptorProjection{}, err
+	}
+	if projection.OwnerURA, err = requiredDescriptorString(raw, "owner_ura", index); err != nil {
+		return AbilityDescriptorProjection{}, err
+	}
+	if projection.Version, err = requiredDescriptorString(raw, "descriptor_version", index); err != nil {
+		return AbilityDescriptorProjection{}, err
+	}
+	if projection.SchemaHash, err = optionalDescriptorString(raw, "schema_hash", index); err != nil {
+		return AbilityDescriptorProjection{}, err
+	}
+	if projection.DescriptorHash, err = optionalDescriptorString(raw, "descriptor_hash", index); err != nil {
+		return AbilityDescriptorProjection{}, err
+	}
+	if projection.CallMode, err = optionalDescriptorString(raw, "call_mode", index); err != nil {
+		return AbilityDescriptorProjection{}, err
+	}
+	if projection.Class, err = optionalDescriptorString(raw, "class", index); err != nil {
+		return AbilityDescriptorProjection{}, err
+	}
+	if projection.Visibility, err = optionalDescriptorString(raw, "visibility", index); err != nil {
+		return AbilityDescriptorProjection{}, err
+	}
+	if projection.Source, err = optionalDescriptorString(raw, "source", index); err != nil {
+		return AbilityDescriptorProjection{}, err
+	}
+	if projection.Description, err = optionalDescriptorString(raw, "description", index); err != nil {
+		return AbilityDescriptorProjection{}, err
+	}
+	if projection.ReceiptSemantics, err = optionalDescriptorMapWithErr(raw, "receipt_semantics", index); err != nil {
+		return AbilityDescriptorProjection{}, err
+	}
+	if projection.Metadata, err = optionalDescriptorMapWithErr(raw, "metadata", index); err != nil {
+		return AbilityDescriptorProjection{}, err
+	}
+	if projection.AbilityURA == "" ||
+		projection.DescriptorRef == "" ||
+		projection.Name == "" ||
+		projection.OwnerURA == "" ||
+		projection.Version == "" {
+		return AbilityDescriptorProjection{}, invalidAbilityDescriptor(fmt.Sprintf("ability descriptor row %d is missing identity fields", index), nil)
+	}
+	if hints, err := optionalDescriptorMapWithErr(raw, "hints", index); err != nil {
+		return AbilityDescriptorProjection{}, err
+	} else if hints != nil {
+		projection.Hints = AbilityDescriptorHints{
+			ReadOnly:      false,
+			Destructive:   false,
+			Idempotent:    false,
+			StreamingOnly: false,
+			BidiOnly:      false,
+		}
+		if projection.Hints.ReadOnly, err = optionalDescriptorBool(hints, "hints.read_only", index); err != nil {
+			return AbilityDescriptorProjection{}, err
+		}
+		if projection.Hints.Destructive, err = optionalDescriptorBool(hints, "hints.destructive", index); err != nil {
+			return AbilityDescriptorProjection{}, err
+		}
+		if projection.Hints.Idempotent, err = optionalDescriptorBool(hints, "hints.idempotent", index); err != nil {
+			return AbilityDescriptorProjection{}, err
+		}
+		if projection.Hints.StreamingOnly, err = optionalDescriptorBool(hints, "hints.streaming_only", index); err != nil {
+			return AbilityDescriptorProjection{}, err
+		}
+		if projection.Hints.BidiOnly, err = optionalDescriptorBool(hints, "hints.bidi_only", index); err != nil {
+			return AbilityDescriptorProjection{}, err
+		}
+	}
+	if projection.SchemaSummary, err = optionalDescriptorMapWithErr(raw, "schema_summary", index); err != nil {
+		return AbilityDescriptorProjection{}, err
+	}
+	if projection.InputSchema, err = optionalDescriptorMapWithErr(raw, "input_schema", index); err != nil {
+		return AbilityDescriptorProjection{}, err
+	}
+	return projection, nil
 }
 
 func descriptorString(value any) string {
@@ -296,13 +375,59 @@ func descriptorMap(value any) map[string]any {
 		}
 		return mapped
 	}
-	if raw, err := json.Marshal(value); err == nil {
-		var mapped map[string]any
-		if json.Unmarshal(raw, &mapped) == nil {
-			return mapped
-		}
-	}
 	return nil
+}
+
+func requiredDescriptorString(raw map[string]any, field string, index int) (string, error) {
+	value, ok := raw[field]
+	if !ok || value == nil {
+		return "", nil
+	}
+	typed, ok := value.(string)
+	if !ok {
+		return "", invalidAbilityDescriptor(fmt.Sprintf("ability descriptor row %d field %s must be a string", index, field), nil)
+	}
+	return strings.TrimSpace(typed), nil
+}
+
+func optionalDescriptorString(raw map[string]any, field string, index int) (string, error) {
+	value, ok := raw[field]
+	if !ok || value == nil {
+		return "", nil
+	}
+	typed, ok := value.(string)
+	if !ok {
+		return "", invalidAbilityDescriptor(fmt.Sprintf("ability descriptor row %d field %s must be a string", index, field), nil)
+	}
+	return strings.TrimSpace(typed), nil
+}
+
+func optionalDescriptorMapWithErr(raw map[string]any, field string, index int) (map[string]any, error) {
+	value, ok := raw[field]
+	if !ok || value == nil {
+		return nil, nil
+	}
+	mapped := descriptorMap(value)
+	if mapped == nil {
+		return nil, invalidAbilityDescriptor(fmt.Sprintf("ability descriptor row %d field %s must be an object", index, field), nil)
+	}
+	return mapped, nil
+}
+
+func optionalDescriptorBool(raw map[string]any, field string, index int) (bool, error) {
+	key := field
+	if dot := strings.LastIndex(field, "."); dot >= 0 {
+		key = field[dot+1:]
+	}
+	value, ok := raw[key]
+	if !ok || value == nil {
+		return false, nil
+	}
+	typed, ok := value.(bool)
+	if !ok {
+		return false, invalidAbilityDescriptor(fmt.Sprintf("ability descriptor row %d field %s must be a boolean", index, field), nil)
+	}
+	return typed, nil
 }
 
 func invalidAbilityDescriptor(message string, cause error) error {

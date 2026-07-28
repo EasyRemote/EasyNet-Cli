@@ -39,8 +39,7 @@ func TestProjectAbilityDescriptorReadsSummaryNameHintsAndSchema(t *testing.T) {
 	projection := ProjectAbilityDescriptor(map[string]any{
 		"ability_ura": "easynet:///r/localhost/ability/device.node-a.agent.list",
 		"owner_ura":   "easynet:///r/localhost/device/node-a",
-		"namespace":   "agent",
-		"local_name":  "list",
+		"name":        "agent.list",
 		"description": "List agents",
 		"hints": map[string]any{
 			"read_only":      true,
@@ -50,7 +49,10 @@ func TestProjectAbilityDescriptorReadsSummaryNameHintsAndSchema(t *testing.T) {
 			"bidi_only":      true,
 		},
 		"schema_summary": map[string]any{
-			"input": map[string]any{"type": "object"},
+			"title": "Agent list input",
+		},
+		"input_schema": map[string]any{
+			"type": "object",
 		},
 	})
 
@@ -65,6 +67,25 @@ func TestProjectAbilityDescriptorReadsSummaryNameHintsAndSchema(t *testing.T) {
 	}
 	if projection.InputSchema["type"] != "object" {
 		t.Fatalf("input schema = %#v", projection.InputSchema)
+	}
+}
+
+func TestProjectAbilityDescriptorDoesNotDeriveRetiredNameOrInputSchemaAliases(t *testing.T) {
+	projection := ProjectAbilityDescriptor(map[string]any{
+		"ability_ura": "easynet:///r/localhost/ability/device.node-a.agent.list",
+		"owner_ura":   "easynet:///r/localhost/device/node-a",
+		"namespace":   "agent",
+		"local_name":  "list",
+		"schema_summary": map[string]any{
+			"input": map[string]any{"type": "object"},
+		},
+	})
+
+	if projection.Name != "" {
+		t.Fatalf("retired namespace/local_name alias derived name %q", projection.Name)
+	}
+	if projection.InputSchema != nil {
+		t.Fatalf("retired schema_summary.input alias derived input schema %#v", projection.InputSchema)
 	}
 }
 
@@ -122,6 +143,7 @@ func TestRuntimeAbilityDescriptorProviderListsRuntimeDescriptors(t *testing.T) {
 			"source":"kernel:built-in",
 			"hints":{"read_only":true,"idempotent":true},
 			"schema_summary":{"input":{"type":"object"}},
+			"input_schema":{"type":"object"},
 			"metadata":{"stable":"true"}
 		}]}`, "", false), nil
 	}, ResolveDescriptorRefFunc: func(ctx context.Context, requestJSON []byte) ([]byte, error) {
@@ -224,11 +246,61 @@ func TestRuntimeAbilityDescriptorProviderRejectsNestedDescriptorRows(t *testing.
 	}
 }
 
+func TestRuntimeAbilityDescriptorProviderRejectsRetiredNameAndInputSchemaAliases(t *testing.T) {
+	transport := RuntimeTransportFunc{InvokeFunc: func(_ context.Context, _ []byte) ([]byte, error) {
+		return runtimeAbilityResultJSON(true, `{"abilities":[{
+			"namespace":"observe",
+			"local_name":"health",
+			"ability_ura":"easynet:///r/example/ability/authority.observe.health",
+			"descriptor_ref":"easynet:///r/example/ability/authority.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read",
+			"owner_ura":"easynet:///r/example/authority",
+			"descriptor_version":"1.0.0",
+			"schema_summary":{"input":{"type":"object"}},
+			"call_mode":"rpc"
+		}]}`, "", false), nil
+	}, ResolveDescriptorRefFunc: testResolveDescriptorRef(t)}
+	runtime, _ := NewRuntimeClient(transport)
+	ability, _ := NewRuntimeAbilityClient(runtime, NewCanonicalAddressing())
+	provider, _ := NewRuntimeAbilityDescriptorProvider(ability)
+
+	_, err := provider.List(context.Background(), AbilityDescriptorListRequest{
+		Call: runtimeAbilityTestContext(),
+	})
+	if err == nil || !strings.Contains(err.Error(), "ability descriptor row 0 is missing identity fields") {
+		t.Fatalf("retired alias descriptor row error = %v", err)
+	}
+}
+
+func TestRuntimeAbilityDescriptorProviderRejectsTypedDescriptorProjectionFields(t *testing.T) {
+	transport := RuntimeTransportFunc{InvokeFunc: func(_ context.Context, _ []byte) ([]byte, error) {
+		return runtimeAbilityResultJSON(true, `{"abilities":[{
+			"name":"observe.health",
+			"ability_ura":"easynet:///r/example/ability/authority.observe.health",
+			"descriptor_ref":"easynet:///r/example/ability/authority.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read",
+			"owner_ura":"easynet:///r/example/authority",
+			"descriptor_version":"1.0.0",
+			"schema_hash":42,
+			"call_mode":"rpc"
+		}]}`, "", false), nil
+	}, ResolveDescriptorRefFunc: testResolveDescriptorRef(t)}
+	runtime, _ := NewRuntimeClient(transport)
+	ability, _ := NewRuntimeAbilityClient(runtime, NewCanonicalAddressing())
+	provider, _ := NewRuntimeAbilityDescriptorProvider(ability)
+
+	_, err := provider.List(context.Background(), AbilityDescriptorListRequest{
+		Call: runtimeAbilityTestContext(),
+	})
+	if err == nil || !strings.Contains(err.Error(), "ability descriptor row 0 field schema_hash must be a string") {
+		t.Fatalf("typed descriptor projection error = %v", err)
+	}
+}
+
 func TestRuntimeAbilityDescriptorProviderRejectsLegacyVersionAlias(t *testing.T) {
 	transport := RuntimeTransportFunc{InvokeFunc: func(_ context.Context, _ []byte) ([]byte, error) {
 		return runtimeAbilityResultJSON(true, `{"abilities":[{
 			"name":"observe.health",
 			"ability_ura":"easynet:///r/example/ability/authority.observe.health",
+			"descriptor_ref":"easynet:///r/example/ability/authority.observe.health@2.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!rpc",
 			"owner_ura":"easynet:///r/example/authority",
 			"version":"1.0.0",
 			"descriptor_version":"2.0.0",
@@ -253,8 +325,8 @@ func TestRuntimeAbilityDescriptorProviderRejectsLegacyVersionAlias(t *testing.T)
 func TestRuntimeAbilityDescriptorProviderGetRejectsAmbiguousDescriptors(t *testing.T) {
 	transport := RuntimeTransportFunc{InvokeFunc: func(_ context.Context, _ []byte) ([]byte, error) {
 		return runtimeAbilityResultJSON(true, `{"abilities":[
-			{"name":"observe.health","ability_ura":"easynet:///r/example/ability/authority.observe.health","owner_ura":"easynet:///r/example/authority","descriptor_version":"1.0.0","call_mode":"rpc"},
-			{"name":"observe.health","ability_ura":"easynet:///r/example/ability/authority.observe.health","owner_ura":"easynet:///r/example/authority","descriptor_version":"2.0.0","call_mode":"rpc"}
+			{"name":"observe.health","ability_ura":"easynet:///r/example/ability/authority.observe.health","descriptor_ref":"easynet:///r/example/ability/authority.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!rpc","owner_ura":"easynet:///r/example/authority","descriptor_version":"1.0.0","call_mode":"rpc"},
+			{"name":"observe.health","ability_ura":"easynet:///r/example/ability/authority.observe.health","descriptor_ref":"easynet:///r/example/ability/authority.observe.health@2.0.0#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb!rpc","owner_ura":"easynet:///r/example/authority","descriptor_version":"2.0.0","call_mode":"rpc"}
 		]}`, "", false), nil
 	}, ResolveDescriptorRefFunc: testResolveDescriptorRef(t)}
 	runtime, _ := NewRuntimeClient(transport)

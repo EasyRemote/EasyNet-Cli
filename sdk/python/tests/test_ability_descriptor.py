@@ -114,6 +114,7 @@ def test_runtime_ability_descriptor_provider_lists_runtime_descriptors() -> None
                 "source": "kernel:built-in",
                 "hints": {"read_only": True, "idempotent": True},
                 "schema_summary": {"input": {"type": "object"}},
+                "input_schema": {"type": "object"},
                 "metadata": {"stable": "true"},
             }
         ]
@@ -185,6 +186,72 @@ def test_runtime_ability_descriptor_provider_rejects_nested_descriptor_rows() ->
         provider.list(AbilityDescriptorListRequest(call=_call()))
 
     assert "ability descriptor row 0 is missing identity fields" in str(caught.value)
+
+
+def test_project_ability_descriptor_does_not_derive_retired_name_or_input_schema_aliases() -> None:
+    projection = project_ability_descriptor(
+        {
+            "ability_ura": "easynet:///r/example/ability/authority.observe.health",
+            "owner_ura": "easynet:///r/example/authority",
+            "namespace": "observe",
+            "local_name": "health",
+            "schema_summary": {"input": {"type": "object"}},
+        }
+    )
+
+    assert projection.name == ""
+    assert projection.input_schema == {}
+
+
+def test_runtime_ability_descriptor_provider_rejects_retired_name_and_input_schema_aliases() -> None:
+    provider, transport = _provider()
+    transport.output_json = {
+        "abilities": [
+            {
+                "namespace": "observe",
+                "local_name": "health",
+                "ability_ura": "easynet:///r/example/ability/authority.observe.health",
+                "descriptor_ref": (
+                    "easynet:///r/example/ability/authority.observe.health@1.0.0"
+                ),
+                "owner_ura": "easynet:///r/example/authority",
+                "descriptor_version": "1.0.0",
+                "schema_summary": {"input": {"type": "object"}},
+                "call_mode": "rpc",
+            }
+        ]
+    }
+
+    with pytest.raises(SDKError) as caught:
+        provider.list(AbilityDescriptorListRequest(call=_call()))
+
+    assert "ability descriptor row 0 is missing identity fields" in str(caught.value)
+
+
+def test_runtime_ability_descriptor_provider_rejects_typed_descriptor_projection_fields() -> None:
+    provider, transport = _provider()
+    transport.output_json = {
+        "abilities": [
+            {
+                "name": "observe.health",
+                "ability_ura": "easynet:///r/example/ability/authority.observe.health",
+                "descriptor_ref": (
+                    "easynet:///r/example/ability/authority.observe.health@1.0.0"
+                ),
+                "owner_ura": "easynet:///r/example/authority",
+                "descriptor_version": "1.0.0",
+                "schema_hash": 42,
+                "call_mode": "rpc",
+            }
+        ]
+    }
+
+    with pytest.raises(SDKError) as caught:
+        provider.list(AbilityDescriptorListRequest(call=_call()))
+
+    assert "ability descriptor row 0 field schema_hash must be a string" in str(
+        caught.value
+    )
 
 
 def test_runtime_ability_descriptor_provider_rejects_legacy_version_alias() -> None:

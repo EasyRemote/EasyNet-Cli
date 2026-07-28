@@ -151,7 +151,7 @@ class RuntimeAbilityDescriptorProvider:
                 raise _invalid_descriptor(
                     f"ability descriptor row {index} must be an object"
                 )
-            projection = project_ability_descriptor(raw)
+            projection = _project_runtime_ability_descriptor(raw, index)
             if (
                 not projection.ability_ura
                 or not projection.owner_ura
@@ -237,15 +237,12 @@ def parse_ability_descriptor_ref(
 def project_ability_descriptor(raw: Mapping[str, object]) -> AbilityDescriptorProjection:
     """Project one runtime descriptor row without deriving governed facts."""
 
-    name = _text(raw.get("name"))
-    if not name:
-        name = _join_name(_text(raw.get("namespace")), _text(raw.get("local_name")))
     hints = _mapping(raw.get("hints"))
     schema = _mapping(raw.get("schema_summary"))
     return AbilityDescriptorProjection(
         ability_ura=_text(raw.get("ability_ura")),
         descriptor_ref=_text(raw.get("descriptor_ref")),
-        name=name,
+        name=_text(raw.get("name")),
         owner_ura=_text(raw.get("owner_ura")),
         version=_text(raw.get("descriptor_version")),
         schema_hash=_text(raw.get("schema_hash")),
@@ -264,8 +261,42 @@ def project_ability_descriptor(raw: Mapping[str, object]) -> AbilityDescriptorPr
             bidi_only=_bool(hints.get("bidi_only")),
         ),
         schema_summary=schema,
-        input_schema=_mapping(schema.get("input")),
+        input_schema=_mapping(raw.get("input_schema")),
         metadata=_mapping(raw.get("metadata")),
+    )
+
+
+def _project_runtime_ability_descriptor(
+    raw: Mapping[str, object], index: int
+) -> AbilityDescriptorProjection:
+    hints = _optional_mapping(raw, "hints", index)
+    schema_summary = _optional_mapping(raw, "schema_summary", index)
+    return AbilityDescriptorProjection(
+        ability_ura=_required_descriptor_text(raw, "ability_ura", index),
+        descriptor_ref=_required_descriptor_text(raw, "descriptor_ref", index),
+        name=_required_descriptor_text(raw, "name", index),
+        owner_ura=_required_descriptor_text(raw, "owner_ura", index),
+        version=_required_descriptor_text(raw, "descriptor_version", index),
+        schema_hash=_optional_descriptor_text(raw, "schema_hash", index),
+        descriptor_hash=_optional_descriptor_text(raw, "descriptor_hash", index),
+        call_mode=_optional_descriptor_text(raw, "call_mode", index),
+        class_=_optional_descriptor_text(raw, "class", index),
+        receipt_semantics=_optional_mapping(raw, "receipt_semantics", index),
+        visibility=_optional_descriptor_text(raw, "visibility", index),
+        source=_optional_descriptor_text(raw, "source", index),
+        description=_optional_descriptor_text(raw, "description", index),
+        hints=AbilityDescriptorHints(
+            read_only=_optional_descriptor_bool(hints, "hints.read_only", index),
+            destructive=_optional_descriptor_bool(hints, "hints.destructive", index),
+            idempotent=_optional_descriptor_bool(hints, "hints.idempotent", index),
+            streaming_only=_optional_descriptor_bool(
+                hints, "hints.streaming_only", index
+            ),
+            bidi_only=_optional_descriptor_bool(hints, "hints.bidi_only", index),
+        ),
+        schema_summary=schema_summary,
+        input_schema=_optional_mapping(raw, "input_schema", index),
+        metadata=_optional_mapping(raw, "metadata", index),
     )
 
 
@@ -282,12 +313,6 @@ def _invalid_descriptor_ref(
     )
 
 
-def _join_name(namespace: str, local_name: str) -> str:
-    if namespace and local_name:
-        return f"{namespace}.{local_name}"
-    return namespace or local_name
-
-
 def _text(value: object) -> str:
     return value.strip() if isinstance(value, str) else ""
 
@@ -298,6 +323,59 @@ def _bool(value: object) -> bool:
 
 def _mapping(value: object) -> dict[str, object]:
     return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _required_descriptor_text(
+    raw: Mapping[str, object], field_name: str, index: int
+) -> str:
+    value = raw.get(field_name)
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise _invalid_descriptor(
+            f"ability descriptor row {index} field {field_name} must be a string"
+        )
+    return value.strip()
+
+
+def _optional_descriptor_text(
+    raw: Mapping[str, object], field_name: str, index: int
+) -> str:
+    value = raw.get(field_name)
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise _invalid_descriptor(
+            f"ability descriptor row {index} field {field_name} must be a string"
+        )
+    return value.strip()
+
+
+def _optional_descriptor_bool(
+    raw: Mapping[str, object], field_name: str, index: int
+) -> bool:
+    key = field_name.rsplit(".", 1)[-1]
+    value = raw.get(key)
+    if value is None:
+        return False
+    if not isinstance(value, bool):
+        raise _invalid_descriptor(
+            f"ability descriptor row {index} field {field_name} must be a boolean"
+        )
+    return value
+
+
+def _optional_mapping(
+    raw: Mapping[str, object], field_name: str, index: int
+) -> dict[str, object]:
+    value = raw.get(field_name)
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise _invalid_descriptor(
+            f"ability descriptor row {index} field {field_name} must be an object"
+        )
+    return dict(value)
 
 
 def _required_text(value: object, field_name: str) -> str:

@@ -100,7 +100,13 @@ public record AbilityDescriptorProjection(
 
   private static String optionalString(Map<String, Object> fields, String field) {
     Object value = fields.get(field);
-    return value instanceof String string ? string : "";
+    if (value == null) {
+      return "";
+    }
+    if (!(value instanceof String string)) {
+      throw SDKError.validation("ability_descriptor", field + " must be a string or null");
+    }
+    return string;
   }
 
   private static Map<String, Object> object(Object value, String field) {

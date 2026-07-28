@@ -1031,6 +1031,18 @@ final class RuntimeCoreSeamTests: XCTestCase {
             )
         )
         XCTAssertEqual(descriptor.descriptorRef, "easynet:///r/example/ability/device.dev-a.browser.open_session@1.0.0#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb!rpc")
+        var typedScalarRow: [String: JSONValue] = [
+            "ability_ura": .string("easynet:///r/example/ability/device.dev-a.browser.open_session"),
+            "descriptor_ref": .string("easynet:///r/example/ability/device.dev-a.browser.open_session@1.0.0#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb!rpc"),
+            "name": .string("browser.open_session"),
+            "owner_ura": .string(callee),
+            "descriptor_version": .string("1.0.0"),
+            "call_mode": .string("rpc"),
+        ]
+        typedScalarRow["schema_hash"] = .number(42)
+        expectSyncSDKError(.invalidArgument, "schema_hash must be a string") {
+            _ = try AbilityDescriptorProjection.fromObject(typedScalarRow)
+        }
     }
 
     func testPreparedInvocationCannotBeSubmitted() async throws {
