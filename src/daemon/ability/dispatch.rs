@@ -306,7 +306,7 @@ impl EnvelopeContext {
             ability,
             subject,
             invocation_nonce: vec![0xA5; 16],
-            causal_context: serde_json::json!({"kind": "none"}),
+            causal_context: serde_json::json!({"form": "none"}),
             caller_signature: EnvelopeCallerSignature::deterministic_test(),
         })
         .expect("test EnvelopeContext must be complete")
@@ -950,7 +950,10 @@ async fn envelope_context_from_axon(
         ability,
         subject: envelope_subject,
         invocation_nonce: invocation_nonce.to_vec(),
-        causal_context: causal_context_to_json(&envelope.causal_context),
+        causal_context:
+            crate::daemon::invocation::causal_context_projection::causal_context_projection(
+                &envelope.causal_context,
+            ),
         caller_signature,
     })
     .map(|context| {
@@ -971,38 +974,6 @@ async fn envelope_context_from_axon(
             "local_runtime_adapter: incomplete Axon envelope projection: {err}"
         ))
     })
-}
-
-fn causal_context_to_json(causal: &axon_sdk::invocation::CausalContext) -> serde_json::Value {
-    match causal {
-        axon_sdk::invocation::CausalContext::None => {
-            serde_json::json!({"kind": "none"})
-        }
-        axon_sdk::invocation::CausalContext::Scalar(receipt) => serde_json::json!({
-            "kind": "scalar",
-            "receipt_hash": hex::encode(receipt.receipt_hash),
-            "receipt_ura": receipt.receipt_ura,
-        }),
-        axon_sdk::invocation::CausalContext::List(receipts) => {
-            let receipts: Vec<_> = receipts
-                .iter()
-                .map(|receipt| {
-                    serde_json::json!({
-                        "receipt_hash": hex::encode(receipt.receipt_hash),
-                        "receipt_ura": receipt.receipt_ura,
-                    })
-                })
-                .collect();
-            serde_json::json!({"kind": "list", "receipts": receipts})
-        }
-        axon_sdk::invocation::CausalContext::Merkle { root, proof_ura } => {
-            serde_json::json!({
-                "kind": "merkle",
-                "root": hex::encode(root),
-                "proof_ura": proof_ura,
-            })
-        }
-    }
 }
 
 fn rpc_env_handler_to_ability_fn(

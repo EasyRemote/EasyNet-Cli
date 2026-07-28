@@ -528,6 +528,6 @@ func accessControlCallFixture() RuntimeCallContext {
 		CalleeURA:     "easynet:///r/example/device/dev-a",
 		SubjectURA:    "easynet:///r/example/resource/user.alice/access-control",
 		NonceBase64:   "bm9uY2U=",
-		CausalContext: map[string]any{"kind": "none"},
+		CausalContext: map[string]any{"form": "none"},
 	}
 }

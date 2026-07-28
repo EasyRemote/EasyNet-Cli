@@ -74,6 +74,7 @@ pub mod admission;
 pub mod bidi;
 #[cfg(feature = "axon-pb")]
 pub(crate) mod caller_signature;
+pub(crate) mod causal_context_projection;
 pub mod dispatch;
 pub mod receipts;
 pub mod routing;

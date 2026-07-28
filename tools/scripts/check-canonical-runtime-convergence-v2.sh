@@ -7608,6 +7608,72 @@ for required in (
 PY
 }
 
+check_daemon_causal_context_projection_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local projection="$cli_root/src/daemon/invocation/causal_context_projection.rs"
+  local dispatch="$cli_root/src/daemon/ability/dispatch.rs"
+  local child="$cli_root/src/daemon/execution/child_invocation.rs"
+  local a2a="$cli_root/src/daemon/ability/builtins/integrations/a2a/client.rs"
+  local remote_desktop="$cli_root/plugins/remote-desktop/src/session_consent.rs"
+
+  "$PYTHON_BIN" - "$projection" "$dispatch" "$child" "$a2a" "$remote_desktop" <<'PY'
+import sys
+from pathlib import Path
+
+projection_path, dispatch_path, child_path, a2a_path, remote_desktop_path = map(Path, sys.argv[1:])
+
+def read(path: Path) -> str:
+    if not path.exists():
+        raise SystemExit(f"daemon_causal_context_projection_source_missing:{path}")
+    return path.read_text()
+
+projection = read(projection_path)
+for required in (
+    'pub(crate) fn causal_context_projection',
+    '{"form": "none"}',
+    '"form": "scalar"',
+    '"form": "list"',
+    '"form": "merkle"',
+    "projection_uses_canonical_form_field",
+):
+    if required not in projection:
+        raise SystemExit(f"daemon_causal_context_projection_required_missing:{required}")
+for retired in ('{"kind": "none"}', '"kind": "scalar"', '"kind": "list"', '"kind": "merkle"'):
+    if retired in projection:
+        raise SystemExit(f"daemon_causal_context_projection_retired_kind:{retired}")
+
+for path in (dispatch_path, child_path):
+    text = read(path)
+    if "causal_context_projection::causal_context_projection" not in text:
+        raise SystemExit(f"daemon_causal_context_projection_not_reused:{path}")
+    for retired in ('{"kind": "none"}', '"kind": "scalar"', '"kind": "list"', '"kind": "merkle"'):
+        if retired in text:
+            raise SystemExit(f"daemon_causal_context_projection_consumer_retired_kind:{path}:{retired}")
+
+a2a = read(a2a_path)
+for required in (
+    'projection.get("form")',
+    "causal context uses retired kind field; use form",
+    "retired_causal_context_kind_is_rejected_instead_of_becoming_root",
+):
+    if required not in a2a:
+        raise SystemExit(f"a2a_causal_context_form_gate_missing:{required}")
+if 'projection.get("kind").and_then(Value::as_str)' in a2a:
+    raise SystemExit("a2a_causal_context_reads_retired_kind")
+
+remote_desktop = read(remote_desktop_path)
+for required in (
+    'value.get("form")',
+    "causal_context uses retired kind field; use form",
+    "causal_context_receipt_projection_rejects_retired_kind_field",
+):
+    if required not in remote_desktop:
+        raise SystemExit(f"remote_desktop_causal_context_form_gate_missing:{required}")
+if 'value.get("kind").and_then(Value::as_str)' in remote_desktop:
+    raise SystemExit("remote_desktop_causal_context_reads_retired_kind")
+PY
+}
+
 check_sdk_direct_runtime_descriptor_not_found_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local go_direct="$cli_root/sdk/go/direct_runtime.go"
@@ -28813,6 +28879,7 @@ EOF
 	  check_sdk_direct_runtime_state_projection_contract
 	  check_sdk_direct_runtime_metadata_string_map_contract
 	  check_sdk_causal_context_dag_alias_contract
+	  check_daemon_causal_context_projection_contract
 	  check_sdk_direct_runtime_descriptor_not_found_contract
   check_sdk_cabi_descriptor_error_projection_contract
   check_principal_lifecycle_cli_schema_contract
@@ -29085,6 +29152,7 @@ check_sdk_runtime_failure_code_contract
 check_sdk_direct_runtime_state_projection_contract
 check_sdk_direct_runtime_metadata_string_map_contract
 check_sdk_causal_context_dag_alias_contract
+check_daemon_causal_context_projection_contract
 check_sdk_direct_runtime_descriptor_not_found_contract
 check_sdk_cabi_descriptor_error_projection_contract
 check_principal_lifecycle_cli_schema_contract

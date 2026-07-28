@@ -426,6 +426,6 @@ func principalCallFixture() RuntimeCallContext {
 		CalleeURA:     "easynet:///r/example/authority",
 		SubjectURA:    "easynet:///r/example/user/alice",
 		NonceBase64:   "bm9uY2U=",
-		CausalContext: map[string]any{"kind": "none"},
+		CausalContext: map[string]any{"form": "none"},
 	}
 }

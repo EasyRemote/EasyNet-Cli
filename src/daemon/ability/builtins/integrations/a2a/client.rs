@@ -106,7 +106,7 @@ fn causal_context_from_env(
     use axon_sdk::invocation::CausalContext;
 
     let projection = env.causal_context();
-    match projection.get("kind").and_then(Value::as_str) {
+    match projection.get("form").and_then(Value::as_str) {
         Some("none") => Ok(CausalContext::None),
         Some("scalar") => Ok(CausalContext::Scalar(receipt_ref_from_projection(
             projection,
@@ -134,8 +134,11 @@ fn causal_context_from_env(
             let proof_ura = required_ura(projection, "proof_ura", "merkle causal context")?;
             Ok(CausalContext::Merkle { root, proof_ura })
         }
-        Some(kind) => anyhow::bail!("unsupported causal context kind {kind:?}"),
-        None => anyhow::bail!("causal context is missing kind"),
+        Some(form) => anyhow::bail!("unsupported causal context form {form:?}"),
+        None if projection.get("kind").is_some() => {
+            anyhow::bail!("causal context uses retired kind field; use form")
+        }
+        None => anyhow::bail!("causal context is missing form"),
     }
 }
 
@@ -530,14 +533,14 @@ mod tests {
             ABILITY_SEND_TASK,
             "easynet:///r/acme/device/local",
         )
-        .with_causal_context(json!({"kind": "none"}));
+        .with_causal_context(json!({"form": "none"}));
         assert_eq!(
             causal_context_from_env(&none_env).expect("root context"),
             CausalContext::None
         );
 
         let scalar_env = none_env.clone().with_causal_context(json!({
-            "kind": "scalar",
+            "form": "scalar",
             "receipt_ura": "easynet:///r/acme/resource/agent.a2a.forwarder/invocation/r1/receipt",
             "receipt_hash": "aa".repeat(32),
         }));
@@ -549,7 +552,7 @@ mod tests {
         assert_eq!(scalar.receipt_hash, [0xaa; 32]);
 
         let list_env = none_env.with_causal_context(json!({
-            "kind": "list",
+            "form": "list",
             "receipts": [
                 {"receipt_ura": "easynet:///r/acme/resource/agent.a2a.forwarder/invocation/r1/receipt", "receipt_hash": "aa".repeat(32)},
                 {"receipt_ura": "easynet:///r/acme/resource/agent.a2a.forwarder/invocation/r2/receipt", "receipt_hash": "bb".repeat(32)},
@@ -573,12 +576,25 @@ mod tests {
             ABILITY_SEND_TASK,
             "easynet:///r/acme/device/local",
         )
-        .with_causal_context(json!({"kind": "future-form"}));
+        .with_causal_context(json!({"form": "future-form"}));
 
         let error = causal_context_from_env(&env).expect_err("unknown causal form must fail");
         assert!(error
             .to_string()
-            .contains("unsupported causal context kind"));
+            .contains("unsupported causal context form"));
+    }
+
+    #[test]
+    fn retired_causal_context_kind_is_rejected_instead_of_becoming_root() {
+        let env = crate::daemon::ability::dispatch::EnvelopeContext::for_test_ability(
+            "easynet:///r/acme/device/local",
+            ABILITY_SEND_TASK,
+            "easynet:///r/acme/device/local",
+        )
+        .with_causal_context(json!({"kind": "none"}));
+
+        let error = causal_context_from_env(&env).expect_err("retired kind field must fail");
+        assert!(error.to_string().contains("retired kind field"));
     }
 
     #[test]

@@ -354,7 +354,7 @@ def _call() -> RuntimeCallContext:
         callee_ura="easynet:///r/example/authority",
         subject_ura="easynet:///r/example/user/alice",
         nonce_base64="bm9uY2U=",
-        causal_context={"kind": "none"},
+        causal_context={"form": "none"},
     )
 
 

@@ -78,7 +78,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn env_for_caller_with_causal(
 // exists yet; canonicalization tracked by RFC-007/008 (F-042).
 fn default_consent_receipt() -> serde_json::Value {
     json!({
-        "kind": "scalar",
+        "form": "scalar",
         "receipt_ura": "easynet:///r/acme/resource/alice.invocations/test-local-consent",
         "receipt_hash": "4242424242424242424242424242424242424242424242424242424242424242",
     })

@@ -1392,7 +1392,7 @@ mod tests {
             subject_ura: "easynet:///r/acme/ability/mentor.quote".to_string(),
             envelope_ability: "meta.teach".to_string(),
             invocation_nonce_hex: hex::encode([0xA5; 16]),
-            causal_context: serde_json::json!({"kind": "none"}),
+            causal_context: serde_json::json!({"form": "none"}),
             authority: TeachGrantAuthoritySnapshot::direct_owner("easynet:///r/acme/agent/mentor"),
             granted_ability: "mentor.quote".to_string(),
             granted_ability_ura: "easynet:///r/acme/ability/mentor.quote".to_string(),
@@ -1523,7 +1523,7 @@ mod tests {
                     subject_ura: "easynet:///r/acme/ability/mentor.quote".to_string(),
                     envelope_ability: "meta.teach".to_string(),
                     invocation_nonce_hex: hex::encode([0xB6; 16]),
-                    causal_context: serde_json::json!({"kind": "none"}),
+                    causal_context: serde_json::json!({"form": "none"}),
                     authority: TeachGrantAuthoritySnapshot::hosted_agent_delegation(
                         owner,
                         host,
@@ -1571,7 +1571,7 @@ mod tests {
                     subject_ura: "easynet:///r/acme/ability/testbot.weather-probe".to_string(),
                     envelope_ability: "meta.teach".to_string(),
                     invocation_nonce_hex: hex::encode([0xA5; 16]),
-                    causal_context: serde_json::json!({"kind": "none"}),
+                    causal_context: serde_json::json!({"form": "none"}),
                     authority: TeachGrantAuthoritySnapshot::direct_owner(
                         "easynet:///r/acme/agent/testbot",
                     ),

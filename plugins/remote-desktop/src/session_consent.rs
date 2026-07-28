@@ -144,7 +144,7 @@ fn receipts_from_causal_context(
     ability: &'static str,
     value: &Value,
 ) -> RemoteDesktopResult<Vec<RemoteDesktopConsentReceipt>> {
-    match value.get("kind").and_then(Value::as_str) {
+    match value.get("form").and_then(Value::as_str) {
         Some("none" | "merkle") => Ok(Vec::new()),
         Some("scalar") => Ok(vec![RemoteDesktopConsentReceipt::from_value(
             ability, value,
@@ -164,11 +164,14 @@ fn receipts_from_causal_context(
                 .map(|receipt| RemoteDesktopConsentReceipt::from_value(ability, receipt))
                 .collect()
         }
-        None if value.is_null() => Ok(Vec::new()),
+        None if value.get("kind").is_some() => Err(RemoteDesktopError::InvalidArgument {
+            ability,
+            detail: "causal_context uses retired kind field; use form".to_string(),
+        }),
         other => Err(RemoteDesktopError::InvalidArgument {
             ability,
             detail: format!(
-                "unsupported causal_context kind {:?} for remote desktop consent receipt",
+                "unsupported causal_context form {:?} for remote desktop consent receipt",
                 other.unwrap_or("<missing>")
             ),
         }),
@@ -202,7 +205,7 @@ mod tests {
         // `resource/<owner>.invocations/<id>`) — no production
         // builder yet; RFC-007/008 tracks canonicalization (F-042).
         let scalar = json!({
-            "kind": "scalar",
+            "form": "scalar",
             "receipt_ura": "easynet:///r/acme/resource/alice.invocations/1",
             "receipt_hash": "ab",
         });
@@ -212,7 +215,7 @@ mod tests {
         assert!(causal_context_contains_receipt("rd.test", Some(&scalar), &expected).unwrap());
 
         let list = json!({
-            "kind": "list",
+            "form": "list",
             "receipts": [
                 {"receipt_ura": "other", "receipt_hash": "00"},
                 expected.to_value(),
@@ -228,7 +231,7 @@ mod tests {
             receipt_hash: "ab".to_string(),
         };
         let list = json!({
-            "kind": "list",
+            "form": "list",
             "receipts": [
                 expected.to_value(),
                 {"receipt_ura": "easynet:///r/acme/resource/alice.invocations/2"}
@@ -243,6 +246,23 @@ mod tests {
     }
 
     #[test]
+    fn causal_context_receipt_projection_rejects_retired_kind_field() {
+        let expected = RemoteDesktopConsentReceipt {
+            receipt_ura: "easynet:///r/acme/resource/alice.invocations/1".to_string(),
+            receipt_hash: "ab".to_string(),
+        };
+        let retired = json!({
+            "kind": "scalar",
+            "receipt_ura": expected.receipt_ura(),
+            "receipt_hash": "ab",
+        });
+
+        let err = causal_context_contains_receipt("rd.test", Some(&retired), &expected)
+            .expect_err("retired causal-context kind field must fail closed");
+        assert!(err.to_string().contains("retired kind field"));
+    }
+
+    #[test]
     fn malformed_causal_context_rejects_before_consent_policy() {
         let _g = crate::cli::commands::test_support::HomeGuard::new();
         pair_device("acme", "dev-1", "alice");
@@ -251,7 +271,7 @@ mod tests {
             "easynet:///r/acme/user/user-alice",
         )
         .with_causal_context(json!({
-            "kind": "scalar",
+            "form": "scalar",
             "receipt_ura": "easynet:///r/acme/resource/user-alice.invocations/1"
         }));
 
@@ -358,7 +378,7 @@ mod tests {
             "easynet:///r/acme/user/user-alice",
         )
         .with_causal_context(json!({
-            "kind": "scalar",
+            "form": "scalar",
             "receipt_ura": "easynet:///r/acme/resource/user-alice.invocations/1",
             "receipt_hash": "ab",
         }));

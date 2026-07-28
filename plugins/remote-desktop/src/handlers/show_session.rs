@@ -156,7 +156,7 @@ mod tests {
         // Borrowed receipt-URA shape (ledger.rs test convention) —
         // no production builder yet; RFC-007/008 (F-042).
         let consent_receipt = json!({
-            "kind": "scalar",
+            "form": "scalar",
             "receipt_ura": "easynet:///r/acme/resource/alice.invocations/approve-rd",
             "receipt_hash": "aa",
         });

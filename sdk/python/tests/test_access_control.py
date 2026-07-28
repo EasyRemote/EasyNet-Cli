@@ -468,7 +468,7 @@ def _call() -> RuntimeCallContext:
         callee_ura="easynet:///r/example/device/dev-a",
         subject_ura="easynet:///r/example/resource/user.alice/access-control",
         nonce_base64="bm9uY2U=",
-        causal_context={"kind": "none"},
+        causal_context={"form": "none"},
     )
 
 
