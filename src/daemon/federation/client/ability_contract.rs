@@ -50,7 +50,6 @@ pub use crate::daemon::federation::receipt_contract::{
 pub struct ResolveKeyReceipt {
     pub public_key_b64: String,
     pub public_key_hex: String,
-    #[serde(default)]
     pub public_keys_b64: Vec<String>,
     #[serde(default)]
     pub principal_owner_ura: Option<String>,
@@ -390,6 +389,22 @@ mod tests {
             Some("easynet:///r/acme/user/alice")
         );
         assert_eq!(parsed.principal_owner_user_id.as_deref(), Some("alice"));
+    }
+
+    #[test]
+    fn resolve_key_receipt_requires_schema_bound_key_set() {
+        let body = json!({
+            "public_key_b64": "pub-b64",
+            "public_key_hex": "707562"
+        });
+
+        let err = parse_receipt_value::<ResolveKeyReceipt>(&body)
+            .expect_err("resolve_key receipt must not repair legacy single-key facts");
+
+        assert!(
+            err.to_string().contains("public_keys_b64"),
+            "missing canonical key set must fail closed: {err}"
+        );
     }
 
     #[test]
