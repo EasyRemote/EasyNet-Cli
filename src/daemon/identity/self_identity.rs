@@ -46,8 +46,8 @@ use crate::daemon::keyring::Vault;
 use crate::daemon::keyring::{
     default_socket_path, managed_signer_policy_ref, KeyringRequest, KeyringResponse, ManagedPeer,
     ManagedSigningKeyProjection, ManagedSigningStatus, KEY_SERVICE_PROTOCOL_VERSION,
-    MAX_KEY_SERVICE_AUTO_ITEMS, MAX_KEY_SERVICE_AUTO_PAGES, MAX_KEY_SERVICE_CANONICAL_BYTES,
-    MAX_KEY_SERVICE_FRAME_BYTES, MAX_MANAGED_SIGNING_PAGE_SIZE,
+    MAX_KEY_SERVICE_CANONICAL_BYTES, MAX_KEY_SERVICE_COLLECTION_ITEMS,
+    MAX_KEY_SERVICE_COLLECTION_PAGES, MAX_KEY_SERVICE_FRAME_BYTES, MAX_MANAGED_SIGNING_PAGE_SIZE,
 };
 
 mod managed_user_signing;
@@ -708,7 +708,7 @@ impl KeyringClient {
     pub fn list(&self) -> Result<Vec<String>, SelfIdentityError> {
         let mut entries = Vec::new();
         let mut cursor = None;
-        for _page in 0..MAX_KEY_SERVICE_AUTO_PAGES {
+        for _page in 0..MAX_KEY_SERVICE_COLLECTION_PAGES {
             match self.rpc(&KeyringRequest::RuntimeList {
                 limit: Some(MAX_MANAGED_SIGNING_PAGE_SIZE),
                 cursor: cursor.clone(),
@@ -717,7 +717,7 @@ impl KeyringClient {
                     entries: page,
                     next_cursor,
                 } => {
-                    if entries.len().saturating_add(page.len()) > MAX_KEY_SERVICE_AUTO_ITEMS {
+                    if entries.len().saturating_add(page.len()) > MAX_KEY_SERVICE_COLLECTION_ITEMS {
                         return Err(SelfIdentityError::Unexpected(
                             "runtime owner inventory exceeded bounded collection limit".into(),
                         ));
@@ -771,7 +771,7 @@ impl KeyringClient {
     ) -> Result<Vec<ManagedSigningKeyProjection>, SelfIdentityError> {
         let mut entries = Vec::new();
         let mut cursor = None;
-        for _page_index in 0..MAX_KEY_SERVICE_AUTO_PAGES {
+        for _page_index in 0..MAX_KEY_SERVICE_COLLECTION_PAGES {
             match self.rpc(&KeyringRequest::InventoryList {
                 purpose: purpose.clone(),
                 status,
@@ -782,7 +782,7 @@ impl KeyringClient {
                     entries: page,
                     next_cursor,
                 } => {
-                    if entries.len().saturating_add(page.len()) > MAX_KEY_SERVICE_AUTO_ITEMS {
+                    if entries.len().saturating_add(page.len()) > MAX_KEY_SERVICE_COLLECTION_ITEMS {
                         return Err(SelfIdentityError::Unexpected(
                             "managed signing inventory exceeded bounded collection limit".into(),
                         ));
@@ -968,7 +968,7 @@ impl KeyringClient {
     pub fn inventory_peer_list(&self) -> Result<Vec<ManagedPeer>, SelfIdentityError> {
         let mut peers = Vec::new();
         let mut cursor = None;
-        for _page_index in 0..MAX_KEY_SERVICE_AUTO_PAGES {
+        for _page_index in 0..MAX_KEY_SERVICE_COLLECTION_PAGES {
             match self.rpc(&KeyringRequest::InventoryPeerList {
                 limit: Some(MAX_MANAGED_SIGNING_PAGE_SIZE),
                 cursor: cursor.clone(),
@@ -977,7 +977,7 @@ impl KeyringClient {
                     peers: page,
                     next_cursor,
                 } => {
-                    if peers.len().saturating_add(page.len()) > MAX_KEY_SERVICE_AUTO_ITEMS {
+                    if peers.len().saturating_add(page.len()) > MAX_KEY_SERVICE_COLLECTION_ITEMS {
                         return Err(SelfIdentityError::Unexpected(
                             "managed peer inventory exceeded bounded collection limit".into(),
                         ));

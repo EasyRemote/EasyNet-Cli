@@ -110,6 +110,13 @@ if rg -n --glob '*.rs' \
   exit 1
 fi
 
+if rg -n --glob '*.rs' \
+  'SDK compatibility helpers|Compatibility collectors|MAX_KEY_SERVICE_AUTO_(PAGES|ITEMS)' \
+  src/daemon/keyring src/daemon/identity; then
+  echo "daemon key-service boundary violation: bounded collection is still modeled as compatibility plumbing" >&2
+  exit 1
+fi
+
 # FFI local-sign tests must cross the same framed daemon endpoint as
 # production. They may assert on public projections, but must not construct or
 # mutate an in-process Vault as a fake service.

@@ -121,13 +121,14 @@ pub const MAX_KEY_SERVICE_CANONICAL_BYTES: usize = 64 * 1024 * 1024;
 pub const MAX_KEY_SERVICE_FRAME_BYTES: usize = 90 * 1024 * 1024;
 
 /// Every inventory response is a bounded page even when the caller omits a
-/// limit. SDK compatibility helpers may walk pages explicitly.
+/// limit. Runtime clients may collect pages explicitly through the same
+/// canonical pagination contract.
 pub const MAX_MANAGED_SIGNING_PAGE_SIZE: usize = 16;
 
-/// Compatibility collectors are bounded even when a peer keeps returning
-/// advancing cursors. Page APIs remain the canonical surface.
-pub const MAX_KEY_SERVICE_AUTO_PAGES: usize = 1024;
-pub const MAX_KEY_SERVICE_AUTO_ITEMS: usize = 16_384;
+/// Bounded collectors are capped even when a peer keeps returning advancing
+/// cursors. Page APIs remain the canonical key-service surface.
+pub const MAX_KEY_SERVICE_COLLECTION_PAGES: usize = 1024;
+pub const MAX_KEY_SERVICE_COLLECTION_ITEMS: usize = 16_384;
 
 /// Key-service wire protocol. Version 2 binds managed signing intents to the
 /// expected key purpose and rejects the former purpose-blind request shape.

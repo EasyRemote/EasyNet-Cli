@@ -1510,7 +1510,7 @@ pub unsafe extern "C" fn runtime_invocation_bidi_send(
     }
 }
 
-/// Legacy close-send entry point for an InvokeBidi session.
+/// MAC-less close-send entry point for an InvokeBidi session.
 ///
 /// This ABI shape cannot carry the required N≥1 frame-chain MAC. It therefore
 /// fails closed with `ERR_NOT_IMPLEMENTED`; callers that need graceful EOF must
