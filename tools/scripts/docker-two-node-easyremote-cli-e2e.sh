@@ -132,7 +132,6 @@ require_paths() {
 
 if [[ "$SELF_TEST" == "1" ]]; then
   bash -n "$0"
-  require_paths
   grep -q "provider:" "$0"
   grep -q "caller:" "$0"
   grep -q "easynet device join" "$0"

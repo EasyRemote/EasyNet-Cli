@@ -123,6 +123,7 @@ if [[ "${1:-}" == "--self-test" ]]; then
   run_gate "standalone Hub PrincipalLifecycle E2E self-test" bash "$SELF_DIR/standalone-hub-principal-lifecycle-e2e.sh" --self-test
   run_gate "CLI Hub/Device daemon E2E self-test" bash "$SELF_DIR/cli-hub-device-daemon-e2e.sh" --self-test
   run_gate "Docker two-node EasyRemote CLI E2E self-test" bash "$SELF_DIR/docker-two-node-easyremote-cli-e2e.sh" --self-test
+  run_gate "Docker media/bidi E2E self-test" bash "$SELF_DIR/docker-media-bidi-e2e.sh" --self-test
   run_gate "Python SDK live smoke self-test" bash "$SELF_DIR/python-sdk-live-smoke.sh" --self-test
   run_gate "Go SDK live smoke self-test" bash "$SELF_DIR/go-sdk-live-smoke.sh" --self-test
   run_gate "Python SDK static contract self-test" bash "$SELF_DIR/check-python-sdk-static-contract.sh" --self-test
@@ -223,6 +224,8 @@ run_gate "product smokes" env EASYNET_BACKEND_ROOT="$BACKEND_MODULE_ROOT" bash "
 run_gate "runtime events cross-repo gate" env EASYNET_BACKEND_ROOT="$BACKEND_MODULE_ROOT" bash "$SELF_DIR/runtime-events-cross-repo-e2e.sh" || status=1
 run_gate "runtime events live daemon E2E" bash "$SELF_DIR/runtime-events-live-daemon-e2e.sh" || status=1
 run_gate "standalone Hub PrincipalLifecycle E2E" env EASYNET_BACKEND_ROOT="$BACKEND_MODULE_ROOT" bash "$SELF_DIR/standalone-hub-principal-lifecycle-e2e.sh" || status=1
+run_gate "Docker two-node EasyRemote CLI E2E source contract" bash "$SELF_DIR/docker-two-node-easyremote-cli-e2e.sh" --self-test || status=1
+run_gate "Docker media/bidi E2E source contract" bash "$SELF_DIR/docker-media-bidi-e2e.sh" --self-test || status=1
 run_gate "Python SDK live smoke" bash "$SELF_DIR/python-sdk-live-smoke.sh" || status=1
 run_gate "Go SDK live smoke" bash "$SELF_DIR/go-sdk-live-smoke.sh" || status=1
 
