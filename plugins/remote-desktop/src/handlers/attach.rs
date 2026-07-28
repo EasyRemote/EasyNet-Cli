@@ -144,11 +144,13 @@ mod tests {
             .finish()
             .expect("remote desktop contribution finish");
         let contributions = PluginContributionSet::new(vec![contribution]);
-        let mut reg = AxonAbilityCatalog::new_with_runtime(
-            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
-                crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
-                None,
-            ),
+        let runtime = crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+            crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+            None,
+        );
+        let mut reg = AxonAbilityCatalog::new_test_runtime_for_device_authority(
+            runtime,
+            "easynet:///r/acme/device/01DEV",
         );
         DaemonPluginBinder::static_catalog(&mut reg)
             .bind_set(&contributions)
