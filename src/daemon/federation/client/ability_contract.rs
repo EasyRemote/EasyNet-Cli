@@ -148,18 +148,14 @@ pub struct AdvertiseAgentReceipt {
 #[derive(Debug, Clone, Default, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct HeartbeatResponseHeader {
-    #[serde(default)]
     pub status: String,
-    #[serde(default)]
     pub permanent: bool,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct HeartbeatRejectedNode {
-    #[serde(default)]
     pub node_id: String,
-    #[serde(default)]
     pub message: String,
 }
 
@@ -631,6 +627,58 @@ mod tests {
             assert!(
                 err.to_string().contains(missing),
                 "missing field {missing:?} must fail closed: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn heartbeat_receipt_rejects_incomplete_status_header() {
+        for (missing, header) in [
+            ("status", json!({"permanent": false})),
+            ("permanent", json!({"status": "active"})),
+        ] {
+            let body = json!({
+                "membership_status": "active",
+                "realm_directory_size": 3,
+                "header": header,
+                "authority_abilities_diff": {
+                    "revision": 0,
+                    "added": [],
+                    "removed": []
+                }
+            });
+
+            let err = parse_receipt_value::<HeartbeatReceipt>(&body)
+                .expect_err("heartbeat status header must not synthesize missing facts");
+            assert!(
+                err.to_string().contains(missing),
+                "missing header field {missing:?} must fail closed: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn heartbeat_receipt_rejects_incomplete_rejected_node_rows() {
+        for (missing, row) in [
+            ("node_id", json!({"message": "revoked"})),
+            ("message", json!({"node_id": "dev-a"})),
+        ] {
+            let body = json!({
+                "membership_status": "active",
+                "realm_directory_size": 3,
+                "rejected_nodes": [row],
+                "authority_abilities_diff": {
+                    "revision": 0,
+                    "added": [],
+                    "removed": []
+                }
+            });
+
+            let err = parse_receipt_value::<HeartbeatReceipt>(&body)
+                .expect_err("heartbeat rejected-node rows must carry complete facts");
+            assert!(
+                err.to_string().contains(missing),
+                "missing rejected-node field {missing:?} must fail closed: {err}"
             );
         }
     }
