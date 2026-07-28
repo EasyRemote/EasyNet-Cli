@@ -229,7 +229,7 @@ openh264 = { version = "0.9", optional = true }
 # Remote desktop production media transport. This is Rust-native WebRTC
 # signaling/media glue for device-side RTP/SRTP; EasyNet invocation carries
 # SDP/ICE only, not desktop media frames.
-webrtc = { version = "0.20.0-alpha.1", optional = true }
+webrtc = { version = "=0.20.0-rc.1", optional = true }
 rtc = { version = "0.20.0-alpha.1", optional = true }
 toml = "0.8"
 toml_edit = "0.23"
