@@ -7,7 +7,6 @@
 use serde_json::Value;
 
 use crate::daemon::ability::descriptors::AbilityHints;
-use crate::daemon::ability::CallMode;
 use crate::daemon::plugins::errors::PluginHostError;
 use crate::daemon::plugins::errors::Result;
 use crate::daemon::plugins::index::PluginPackageIndex;
@@ -20,6 +19,7 @@ pub struct PluginAbilityMetadata {
     pub description: String,
     pub input_schema: Value,
     pub output_schema: Option<Value>,
+    pub call_mode: crate::daemon::ability::CallMode,
     pub hints: AbilityHints,
     pub admission_action: crate::daemon::ability::descriptors::AdmissionAction,
 }
@@ -47,27 +47,14 @@ impl PluginDescriptorProjector {
                     description: descriptor.description().to_string(),
                     input_schema: descriptor.input_schema().clone(),
                     output_schema: descriptor.output_schema().cloned(),
-                    hints: hints_for_call_mode(ability.call_mode()),
+                    call_mode: ability.call_mode(),
+                    hints: AbilityHints::default(),
                     admission_action: descriptor.admission_action(),
                 });
             }
         }
         out.sort_by(|a, b| a.name.cmp(&b.name));
         Ok(out)
-    }
-}
-
-fn hints_for_call_mode(call_mode: CallMode) -> AbilityHints {
-    match call_mode {
-        CallMode::Rpc => AbilityHints::default(),
-        CallMode::Stream => AbilityHints {
-            streaming_only: true,
-            ..AbilityHints::default()
-        },
-        CallMode::Bidi => AbilityHints {
-            bidi_only: true,
-            ..AbilityHints::default()
-        },
     }
 }
 
@@ -95,6 +82,7 @@ mod tests {
         assert_eq!(descriptor.description, "test descriptor for test.echo");
         assert_eq!(descriptor.descriptor_version, "1.2.3");
         assert_eq!(descriptor.input_schema["type"], "object");
+        assert_eq!(descriptor.call_mode, crate::daemon::ability::CallMode::Rpc);
         assert_eq!(descriptor.hints, AbilityHints::default());
         assert!(descriptor.output_schema.is_none());
     }
@@ -105,6 +93,15 @@ mod tests {
         let index = crate::daemon::plugins::PluginPackageIndex::builtin()
             .expect("builtin plugin index loads");
         let descriptors = PluginDescriptorProjector::project(&index).expect("descriptors");
+        descriptors
+            .iter()
+            .find(|descriptor| descriptor.name == "remote_desktop.watch_events")
+            .expect("remote desktop watch_events descriptor");
+        descriptors
+            .iter()
+            .find(|descriptor| descriptor.name == "remote_desktop.attach")
+            .expect("remote desktop attach descriptor");
+
         let watch_events = descriptors
             .iter()
             .find(|descriptor| descriptor.name == "remote_desktop.watch_events")
@@ -113,14 +110,10 @@ mod tests {
             .iter()
             .find(|descriptor| descriptor.name == "remote_desktop.attach")
             .expect("remote desktop attach descriptor");
-
-        assert!(
-            watch_events.hints.streaming_only,
-            "InvokeStream plugin abilities must advertise streaming_only"
+        assert_eq!(
+            watch_events.call_mode,
+            crate::daemon::ability::CallMode::Stream
         );
-        assert!(
-            attach.hints.bidi_only,
-            "InvokeBidi plugin abilities must advertise bidi_only"
-        );
+        assert_eq!(attach.call_mode, crate::daemon::ability::CallMode::Bidi);
     }
 }

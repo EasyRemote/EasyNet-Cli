@@ -203,15 +203,6 @@ fn plugin_contract(
 ) -> easynet_cli::daemon::ability::catalog::SystemAbilityContract {
     use easynet_cli::daemon::ability::conformance::CapabilityState;
     use easynet_cli::daemon::ability::descriptors::{ReceiptSemantics, ScopeRule, Visibility};
-    use easynet_cli::daemon::ability::CallMode;
-
-    let call_mode = if meta.hints.bidi_only {
-        CallMode::Bidi
-    } else if meta.hints.streaming_only {
-        CallMode::Stream
-    } else {
-        CallMode::Rpc
-    };
     easynet_cli::daemon::ability::catalog::SystemAbilityContract {
         name: meta.name.clone(),
         descriptor_version: easynet_cli::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION
@@ -222,7 +213,7 @@ fn plugin_contract(
             .output_schema
             .clone()
             .unwrap_or_else(|| serde_json::json!({})),
-        call_mode,
+        call_mode: meta.call_mode,
         admission_action: meta.admission_action,
         receipt_semantics: ReceiptSemantics::Operational,
         visibility: Visibility::Scoped,

@@ -24,7 +24,7 @@
 //     name, owner_ura, visibility, scope_subjects[],
 //     scope_agents[], source, schema_summary{input,
 //     output_receipt_body}, hints{read_only, destructive,
-//     idempotent, streaming_only, bidi_only}
+//     idempotent}
 //   }
 //
 // We model all fields. The visibility filter logic (PUBLIC always /
@@ -347,20 +347,71 @@ pub struct AbilityHints {
     pub destructive: bool,
     #[serde(default)]
     pub idempotent: bool,
-    #[serde(default)]
-    pub streaming_only: bool,
-    #[serde(default)]
-    pub bidi_only: bool,
 }
 
-fn synchronize_transport_hints(hints: &mut AbilityHints, call_mode: CallMode) {
-    hints.streaming_only = call_mode == CallMode::Stream;
-    hints.bidi_only = call_mode == CallMode::Bidi;
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+struct AbilityDescriptorWireHints {
+    #[serde(default)]
+    read_only: bool,
+    #[serde(default)]
+    destructive: bool,
+    #[serde(default)]
+    idempotent: bool,
+    #[serde(default)]
+    streaming_only: bool,
+    #[serde(default)]
+    bidi_only: bool,
 }
 
-fn transport_hints_match_call_mode(hints: &AbilityHints, call_mode: CallMode) -> bool {
-    hints.streaming_only == (call_mode == CallMode::Stream)
-        && hints.bidi_only == (call_mode == CallMode::Bidi)
+impl AbilityDescriptorWireHints {
+    fn from_hints_and_call_mode(hints: &AbilityHints, call_mode: CallMode) -> Self {
+        Self {
+            read_only: hints.read_only,
+            destructive: hints.destructive,
+            idempotent: hints.idempotent,
+            streaming_only: call_mode == CallMode::Stream,
+            bidi_only: call_mode == CallMode::Bidi,
+        }
+    }
+
+    fn into_canonical_hints(self, call_mode: CallMode) -> Result<AbilityHints, String> {
+        if self.streaming_only != (call_mode == CallMode::Stream)
+            || self.bidi_only != (call_mode == CallMode::Bidi)
+        {
+            return Err(format!(
+                "wire transport hints conflict with canonical call_mode {:?}",
+                call_mode
+            ));
+        }
+        Ok(AbilityHints {
+            read_only: self.read_only,
+            destructive: self.destructive,
+            idempotent: self.idempotent,
+        })
+    }
+}
+
+pub(crate) fn ability_hints_wire_value(hints: &AbilityHints, call_mode: CallMode) -> Value {
+    serde_json::to_value(AbilityDescriptorWireHints::from_hints_and_call_mode(
+        hints, call_mode,
+    ))
+    .expect("ability descriptor wire hints serialize")
+}
+
+pub(crate) fn ability_hints_wire_json(hints: &AbilityHints, call_mode: CallMode) -> String {
+    serde_json::to_string(&AbilityDescriptorWireHints::from_hints_and_call_mode(
+        hints, call_mode,
+    ))
+    .expect("ability descriptor wire hints serialize")
+}
+
+pub(crate) fn ability_hints_from_wire_json(
+    raw: &str,
+    call_mode: CallMode,
+) -> Result<AbilityHints, String> {
+    serde_json::from_str::<AbilityDescriptorWireHints>(raw)
+        .map_err(|error| format!("invalid hints_json: {error}"))?
+        .into_canonical_hints(call_mode)
 }
 
 /// Canonical locator for an ability descriptor.
@@ -455,10 +506,8 @@ pub struct AbilityDescriptor {
     /// `AbilityManifest.schema_version`, which versions the TOML file
     /// format rather than the callable interface contract.
     pub version: String,
-    /// Canonical invocation transport. This is the only field used by
-    /// descriptor hashing and routing projections; the legacy
-    /// `streaming_only` / `bidi_only` hints are synchronized presentation
-    /// flags, not a second selector.
+    /// Canonical invocation transport. This is the only transport authority
+    /// used by descriptor hashing, routing, and public projection.
     call_mode: CallMode,
     admission_action: AdmissionAction,
     /// Receipt/state-machine classification, independent of transport.
@@ -547,7 +596,7 @@ struct AbilityDescriptorWire {
     #[serde(default)]
     schema_summary: AbilitySchemaSummary,
     #[serde(default)]
-    hints: AbilityHints,
+    hints: AbilityDescriptorWireHints,
     #[serde(default)]
     metadata: HashMap<String, String>,
 }
@@ -595,7 +644,7 @@ impl AbilityDescriptorWire {
             description: d.description.clone(),
             source: d.source.clone(),
             schema_summary: d.schema_summary.clone(),
-            hints: d.hints.clone(),
+            hints: AbilityDescriptorWireHints::from_hints_and_call_mode(&d.hints, d.call_mode),
             metadata: d.metadata.clone(),
         })
     }
@@ -623,12 +672,7 @@ impl AbilityDescriptorWire {
         if normalized_denied_agents != self.denied_agents {
             return Err("wire denied_agents must be sorted, deduplicated, and non-empty".into());
         }
-        if !transport_hints_match_call_mode(&self.hints, self.call_mode) {
-            return Err(format!(
-                "wire transport hints conflict with canonical call_mode {:?}",
-                self.call_mode
-            ));
-        }
+        let hints = self.hints.into_canonical_hints(self.call_mode)?;
 
         // Wire identity/hash fields are independently validated below.
         let descriptor = AbilityDescriptor {
@@ -645,7 +689,7 @@ impl AbilityDescriptorWire {
             description: self.description,
             source: self.source,
             schema_summary: self.schema_summary,
-            hints: self.hints,
+            hints,
             metadata: self.metadata,
         };
 
@@ -898,22 +942,17 @@ impl AbilityDescriptor {
         self
     }
 
-    /// Attach advisory hints without allowing them to select transport.
-    ///
-    /// `call_mode` is the sole routing and descriptor-hash authority. Transport
-    /// hints are synchronized from the existing canonical call mode so callers
-    /// cannot treat advisory UI fields as a second transport selector.
+    /// Attach advisory behavior hints. Transport is not represented here;
+    /// `call_mode` is the sole routing and descriptor-hash authority.
     pub fn with_hints(mut self, hints: AbilityHints) -> Self {
         self.hints = hints;
-        synchronize_transport_hints(&mut self.hints, self.call_mode);
         self
     }
 
-    /// Select the invocation transport and synchronize the presentation hints
-    /// so callers cannot observe a contradictory descriptor.
+    /// Select the invocation transport. Public transport hints are derived
+    /// from this value at projection boundaries.
     pub fn with_call_mode(mut self, call_mode: CallMode) -> Self {
         self.call_mode = call_mode;
-        synchronize_transport_hints(&mut self.hints, call_mode);
         self
     }
 
@@ -1016,7 +1055,7 @@ impl AbilityDescriptor {
                 input: &self.schema_summary.input,
                 output: &self.schema_summary.output_receipt_body,
                 access_policy: self.governed_access_policy_summary(),
-                hints: serde_json::to_value(&self.hints).expect("ability hints serialize"),
+                hints: ability_hints_wire_value(&self.hints, self.call_mode),
                 receipt_semantics: serde_json::to_value(&self.receipt_semantics)
                     .expect("receipt semantics serialize"),
                 admission_action: serde_json::to_value(self.admission_action)
@@ -1367,7 +1406,10 @@ mod tests {
             rebound.output_receipt_schema(),
             &serde_json::json!({"type": "string"})
         );
-        assert!(rebound.hints.streaming_only);
+        assert_eq!(
+            serde_json::to_value(&rebound).unwrap()["hints"]["streaming_only"],
+            serde_json::json!(true)
+        );
         assert_eq!(rebound.denied_agents(), &["mallory"]);
         assert_eq!(
             rebound.metadata.get("runtime").map(String::as_str),
@@ -1738,7 +1780,7 @@ mod tests {
     }
 
     #[test]
-    fn transport_hints_do_not_select_call_mode() {
+    fn behavior_hints_do_not_select_call_mode() {
         let rpc = must(
             "agent.list",
             "easynet:///r/acme/device/dev-1",
@@ -1748,14 +1790,13 @@ mod tests {
 
         let hinted = rpc.clone().with_hints(AbilityHints {
             read_only: true,
-            streaming_only: true,
-            bidi_only: true,
             ..Default::default()
         });
         assert_eq!(hinted.call_mode(), CallMode::Rpc);
         assert!(hinted.hints.read_only);
-        assert!(!hinted.hints.streaming_only);
-        assert!(!hinted.hints.bidi_only);
+        let wire = serde_json::to_value(&hinted).unwrap();
+        assert_eq!(wire["hints"]["streaming_only"], serde_json::json!(false));
+        assert_eq!(wire["hints"]["bidi_only"], serde_json::json!(false));
     }
 
     #[test]
@@ -1788,8 +1829,9 @@ mod tests {
                 .transition_class(),
             TransitionClass::Canonical
         );
-        assert!(descriptor.hints.streaming_only);
-        assert!(!descriptor.hints.bidi_only);
+        let wire = serde_json::to_value(&descriptor).unwrap();
+        assert_eq!(wire["hints"]["streaming_only"], serde_json::json!(true));
+        assert_eq!(wire["hints"]["bidi_only"], serde_json::json!(false));
     }
 
     #[test]
@@ -2087,19 +2129,19 @@ mod tests {
     }
 
     #[test]
-    fn with_call_mode_synchronizes_transport_hints() {
+    fn with_call_mode_derives_wire_transport_hints() {
         let owner = "easynet:///r/acme/device/dev-1";
         let descriptor = must("agent.list", owner, Visibility::Scoped)
             .with_hints(AbilityHints {
                 read_only: true,
-                streaming_only: true,
                 ..Default::default()
             })
             .with_call_mode(CallMode::Bidi);
         assert_eq!(descriptor.call_mode(), CallMode::Bidi);
         assert!(descriptor.hints.read_only);
-        assert!(!descriptor.hints.streaming_only);
-        assert!(descriptor.hints.bidi_only);
+        let wire = serde_json::to_value(&descriptor).unwrap();
+        assert_eq!(wire["hints"]["streaming_only"], serde_json::json!(false));
+        assert_eq!(wire["hints"]["bidi_only"], serde_json::json!(true));
     }
 
     #[test]

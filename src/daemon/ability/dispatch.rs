@@ -3825,7 +3825,6 @@ impl AxonAbilityCatalog {
         .with_descriptor_hints(crate::daemon::ability::catalog::registration_hints(
             &authority_root,
             request.ability,
-            request.call_mode,
         ));
         if let Some(impl_content_hash) = request.implementation.impl_content_hash {
             registration = registration.with_impl_content_hash(impl_content_hash);

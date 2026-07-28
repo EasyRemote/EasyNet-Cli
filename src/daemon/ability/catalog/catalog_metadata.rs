@@ -398,11 +398,7 @@ pub(crate) fn discovery_hints_for(registry: &AxonAbilityCatalog, name: &str) -> 
 /// This function is pure and does not build or inspect a registry. Static and
 /// dynamic registration can therefore attach hints before committing the
 /// canonical descriptor without creating a catalogue-read recursion.
-pub(crate) fn registration_hints(
-    owner_ura: &str,
-    registry_name: &str,
-    call_mode: DescriptorCallMode,
-) -> AbilityHints {
+pub(crate) fn registration_hints(owner_ura: &str, registry_name: &str) -> AbilityHints {
     // Derive the purity hints from the ability's semantic layer — one
     // source of truth (classify_ability). Introspection/Observation are
     // pure reads (read_only + idempotent: re-issuing yields the same
@@ -423,9 +419,6 @@ pub(crate) fn registration_hints(
         read_only,
         destructive: public_name == agent_names::AGENT_PURGE,
         idempotent,
-        streaming_only: call_mode == DescriptorCallMode::Stream,
-        bidi_only: call_mode == DescriptorCallMode::Bidi,
-        ..Default::default()
     }
 }
 

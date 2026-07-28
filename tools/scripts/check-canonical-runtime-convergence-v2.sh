@@ -14215,6 +14215,33 @@ for required_test in (
 ):
     if required_test not in descriptor:
         raise SystemExit(f"ability_descriptor:missing_wire_version_test:{required_test}")
+ability_hints = re.search(
+    r"pub struct AbilityHints \{(?P<body>.*?)\n\}",
+    descriptor_production,
+    re.S,
+)
+if ability_hints is None:
+    raise SystemExit("ability_descriptor:ability_hints_struct_missing")
+for retired in ("streaming_only", "bidi_only"):
+    if retired in ability_hints.group("body"):
+        raise SystemExit(f"ability_descriptor:transport_hint_retained_in_canonical_hints:{retired}")
+for required in (
+    "struct AbilityDescriptorWireHints",
+    "fn from_hints_and_call_mode(",
+    "fn into_canonical_hints(",
+    "ability_hints_wire_value(",
+    "ability_hints_wire_json(",
+    "ability_hints_from_wire_json(",
+):
+    if required not in descriptor_production:
+        raise SystemExit(f"ability_descriptor:wire_transport_hint_projection_missing:{required}")
+for required_test in (
+    "behavior_hints_do_not_select_call_mode",
+    "with_call_mode_derives_wire_transport_hints",
+    "descriptor_wire_rejects_transport_hint_call_mode_conflicts",
+):
+    if required_test not in descriptor:
+        raise SystemExit(f"ability_descriptor:transport_hint_projection_test_missing:{required_test}")
 inventory = re.search(
     r"pub fn system_ability_contract_inventory_for_voice_assembly\([^)]*\)\s*->\s*Vec<SystemAbilityContract>\s*\{(?P<body>.*?)\n\}\n\n/// Voice static contracts",
     catalog_meta,

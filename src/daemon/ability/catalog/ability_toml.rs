@@ -143,7 +143,10 @@ pub fn render_ability_contract_toml(contract: &SystemAbilityContract) -> String 
     out.push_str(&format!(
         "hints_json = \"{}\"\n",
         escape_toml_basic(
-            &serde_json::to_string(&contract.hints).expect("descriptor hints serialize")
+            &crate::daemon::ability::descriptors::ability_hints_wire_json(
+                &contract.hints,
+                contract.call_mode,
+            )
         )
     ));
     match &contract.receipt_semantics {
@@ -261,7 +264,11 @@ pub fn parse_ability_contract_toml(body: &str) -> anyhow::Result<SystemAbilityCo
         scope_subjects: parse_scope(raw.scope_subjects_kind, raw.scope_subjects_uras)?,
         scope_agents: parse_scope(raw.scope_agents_kind, raw.scope_agents_uras)?,
         denied_agents,
-        hints: serde_json::from_str(&raw.hints_json)?,
+        hints: crate::daemon::ability::descriptors::ability_hints_from_wire_json(
+            &raw.hints_json,
+            call_mode,
+        )
+        .map_err(|error| anyhow::anyhow!(error))?,
         capability_state,
     })
 }

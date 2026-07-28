@@ -508,7 +508,7 @@ fn every_published_ability_resolves_to_a_handler() {
     let mut unresolved: Vec<String> = Vec::new();
     let mut wrong_mode: Vec<String> = Vec::new();
     for metadata in published_system_abilities() {
-        let name = metadata.name;
+        let name = metadata.name.clone();
         if daemon_invocation_surface.contains(name.as_str()) {
             continue;
         }
@@ -520,24 +520,16 @@ fn every_published_ability_resolves_to_a_handler() {
             continue;
         }
 
-        let expected_mode_is_registered = if metadata.hints.streaming_only {
-            has_stream
-        } else if metadata.hints.bidi_only {
-            has_bidi
-        } else {
-            has_rpc
+        let expected_mode_is_registered = match metadata.call_mode() {
+            crate::daemon::ability::CallMode::Rpc => has_rpc,
+            crate::daemon::ability::CallMode::Stream => has_stream,
+            crate::daemon::ability::CallMode::Bidi => has_bidi,
         };
         if !expected_mode_is_registered {
             wrong_mode.push(format!(
                 "{}: expected={}, registered=[rpc:{has_rpc}, stream:{has_stream}, bidi:{has_bidi}]",
                 name,
-                if metadata.hints.streaming_only {
-                    "stream"
-                } else if metadata.hints.bidi_only {
-                    "bidi"
-                } else {
-                    "rpc"
-                }
+                metadata.call_mode().as_str()
             ));
         }
     }
@@ -1313,10 +1305,10 @@ fn published_abilities_includes_skill_list_with_real_metadata() {
         "input schema must declare type:object; got {:?}",
         skill.input_schema()
     );
-    assert!(
-        !skill.hints.streaming_only && !skill.hints.bidi_only,
-        "skill.list must stay unary-only; got hints {:?}",
-        skill.hints
+    assert_eq!(
+        skill.call_mode(),
+        crate::daemon::ability::CallMode::Rpc,
+        "skill.list must stay unary-only"
     );
 }
 
@@ -1358,11 +1350,11 @@ fn published_abilities_marks_server_stream_routes_as_streaming_only() {
             .iter()
             .find(|m| m.name == name)
             .unwrap_or_else(|| panic!("{name} must be published"));
-        assert!(
-            meta.hints.streaming_only,
-            "{name} must advertise streaming_only so callers use InvokeStream"
+        assert_eq!(
+            meta.call_mode(),
+            crate::daemon::ability::CallMode::Stream,
+            "{name} must bind InvokeStream call_mode"
         );
-        assert!(!meta.hints.bidi_only, "{name} is server-stream, not bidi");
     }
 }
 
@@ -1384,10 +1376,10 @@ fn published_abilities_marks_bidi_routes_as_bidi_only() {
             .iter()
             .find(|m| m.name == name)
             .unwrap_or_else(|| panic!("{name} must be published"));
-        assert!(meta.hints.bidi_only, "{name} must advertise bidi_only");
-        assert!(
-            !meta.hints.streaming_only,
-            "{name} must not masquerade as server-stream"
+        assert_eq!(
+            meta.call_mode(),
+            crate::daemon::ability::CallMode::Bidi,
+            "{name} must bind InvokeBidi call_mode"
         );
     }
 }
@@ -1404,11 +1396,14 @@ fn discovery_hints_leave_agent_chat_on_unary_control_plane_path() {
     let reg = build_registry_with_services_result(registry_config_for_agents(&agents))
         .expect("assemble registry")
         .catalog;
-    let hints = discovery_hints_for(&reg, "alice.chat");
-    assert!(
-        !hints.streaming_only && !hints.bidi_only,
-        "alice.chat must stay on the unary/OpenAI path until generic InvokeStream support lands; got {:?}",
-        hints
+    let descriptor = reg
+        .control_plane_record_for_mode("alice.chat", crate::daemon::ability::CallMode::Rpc)
+        .expect("chat descriptor lookup")
+        .expect("chat descriptor");
+    assert_eq!(
+        descriptor.descriptor().call_mode(),
+        crate::daemon::ability::CallMode::Rpc,
+        "alice.chat must stay on the unary/OpenAI path until generic InvokeStream support lands"
     );
 }
 

@@ -23,56 +23,56 @@ additionalProperties = false
 type = "object"
 additionalProperties = false
 
-[input_schema.properties.input.properties.keyboard_enabled]
-type = "boolean"
-
-[input_schema.properties.input.properties.keyboard]
-type = "boolean"
-
-[input_schema.properties.input.properties.pointer_enabled]
-type = "boolean"
-
-[input_schema.properties.input.properties.pointer]
+[input_schema.properties.input.properties.clipboard]
 type = "boolean"
 
 [input_schema.properties.input.properties.clipboard_enabled]
 type = "boolean"
 
-[input_schema.properties.input.properties.clipboard]
+[input_schema.properties.input.properties.file_drop]
 type = "boolean"
 
 [input_schema.properties.input.properties.file_drop_enabled]
 type = "boolean"
 
-[input_schema.properties.input.properties.file_drop]
+[input_schema.properties.input.properties.keyboard]
+type = "boolean"
+
+[input_schema.properties.input.properties.keyboard_enabled]
+type = "boolean"
+
+[input_schema.properties.input.properties.pointer]
+type = "boolean"
+
+[input_schema.properties.input.properties.pointer_enabled]
 type = "boolean"
 
 [input_schema.properties.input_policy]
 type = "object"
 additionalProperties = false
 
-[input_schema.properties.input_policy.properties.keyboard_enabled]
-type = "boolean"
-
-[input_schema.properties.input_policy.properties.keyboard]
-type = "boolean"
-
-[input_schema.properties.input_policy.properties.pointer_enabled]
-type = "boolean"
-
-[input_schema.properties.input_policy.properties.pointer]
+[input_schema.properties.input_policy.properties.clipboard]
 type = "boolean"
 
 [input_schema.properties.input_policy.properties.clipboard_enabled]
 type = "boolean"
 
-[input_schema.properties.input_policy.properties.clipboard]
+[input_schema.properties.input_policy.properties.file_drop]
 type = "boolean"
 
 [input_schema.properties.input_policy.properties.file_drop_enabled]
 type = "boolean"
 
-[input_schema.properties.input_policy.properties.file_drop]
+[input_schema.properties.input_policy.properties.keyboard]
+type = "boolean"
+
+[input_schema.properties.input_policy.properties.keyboard_enabled]
+type = "boolean"
+
+[input_schema.properties.input_policy.properties.pointer]
+type = "boolean"
+
+[input_schema.properties.input_policy.properties.pointer_enabled]
 type = "boolean"
 
 [input_schema.properties.lease_ttl_ms]
@@ -100,49 +100,49 @@ items = { enum = ["webrtc", "invoke_bidi", "preview_stream"], type = "string" }
 type = "object"
 additionalProperties = false
 
-[input_schema.properties.video.properties.max_width]
-type = "integer"
-minimum = 1
-maximum = 8192
+[input_schema.properties.video.properties.codec_preferences]
+type = "array"
+items = { enum = ["h264", "hevc", "av1", "vp9", "vp8"], type = "string" }
+minItems = 1
 
-[input_schema.properties.video.properties.max_height]
-type = "integer"
-minimum = 1
-maximum = 8192
+[input_schema.properties.video.properties.drop_stale_frames]
+type = "boolean"
 
-[input_schema.properties.video.properties.max_fps]
-type = "integer"
-minimum = 1
-maximum = 144
+[input_schema.properties.video.properties.hardware_acceleration_required]
+type = "boolean"
 
 [input_schema.properties.video.properties.max_bitrate_kbps]
 type = "integer"
 minimum = 1
 maximum = 250000
 
-[input_schema.properties.video.properties.scale_mode]
-type = "string"
-
-[input_schema.properties.video.properties.region]
-type = "string"
-
-[input_schema.properties.video.properties.codec_preferences]
-type = "array"
-minItems = 1
-items = { enum = ["h264", "hevc", "av1", "vp9", "vp8"], type = "string" }
-
-[input_schema.properties.video.properties.target_latency_ms]
+[input_schema.properties.video.properties.max_fps]
 type = "integer"
 minimum = 1
-maximum = 1000
-
-[input_schema.properties.video.properties.hardware_acceleration_required]
-type = "boolean"
+maximum = 144
 
 [input_schema.properties.video.properties.max_frame_queue_depth]
 type = "integer"
 minimum = 1
 maximum = 1
 
-[input_schema.properties.video.properties.drop_stale_frames]
-type = "boolean"
+[input_schema.properties.video.properties.max_height]
+type = "integer"
+minimum = 1
+maximum = 8192
+
+[input_schema.properties.video.properties.max_width]
+type = "integer"
+minimum = 1
+maximum = 8192
+
+[input_schema.properties.video.properties.region]
+type = "string"
+
+[input_schema.properties.video.properties.scale_mode]
+type = "string"
+
+[input_schema.properties.video.properties.target_latency_ms]
+type = "integer"
+minimum = 1
+maximum = 1000

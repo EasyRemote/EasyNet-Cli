@@ -20,13 +20,13 @@ type = "object"
 required = ["principal_ura", "public_key_b64", "role"]
 additionalProperties = false
 
-[input_schema.properties.principal_ura]
-type = "string"
-description = "Agent, Device, User, or Authority URA to trust."
-
 [input_schema.properties.principal_owner_ura]
 type = "string"
 description = "Optional canonical owner User URA."
+
+[input_schema.properties.principal_ura]
+type = "string"
+description = "Agent, Device, User, or Authority URA to trust."
 
 [input_schema.properties.public_key_b64]
 type = "string"

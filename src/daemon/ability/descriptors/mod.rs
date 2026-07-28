@@ -16,6 +16,7 @@ use super::AbilityControlPlaneError;
 
 mod surface;
 
+pub(crate) use surface::{ability_hints_from_wire_json, ability_hints_wire_json};
 pub use surface::{
     AbilityDescriptor, AbilityHints, AbilityIdentity, AbilitySchemaSummary, AdmissionAction,
     DescriptorError, ReceiptSemantics, ScopeRule, StateTransition, StateTransitionError,
