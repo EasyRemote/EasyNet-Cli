@@ -248,8 +248,9 @@ def test_runtime_ability_rejects_invocation_history_public_route_before_descript
 def test_runtime_ability_rejects_catalogue_read_public_route_before_descriptor_resolution() -> None:
     client, transport = _client()
 
-    with pytest.raises(SDKError, match="RuntimeAbilityDescriptorProvider"):
-        client.build(_call(), "meta.list_abilities", {})
+    for ability_name in ("meta.list_abilities", "meta.list_resources"):
+        with pytest.raises(SDKError, match="RuntimeAbilityDescriptorProvider"):
+            client.build(_call(), ability_name, {})
 
     assert transport.descriptor_requests == []
 

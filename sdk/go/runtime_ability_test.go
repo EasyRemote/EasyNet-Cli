@@ -191,10 +191,33 @@ func TestRuntimeClientResolveDescriptorRefRejectsIncompleteProviderRequestBefore
 			want: "requires provider ability_descriptor",
 		},
 		{
+			name: "resource catalogue missing provider",
+			req: RuntimeDescriptorRefRequest{
+				CalleeURA:  "easynet:///r/example/device/dev-a",
+				Ability:    "meta.list_resources",
+				CallMode:   "read",
+				CallerURA:  "easynet:///r/example/user/alice",
+				SubjectURA: "easynet:///r/example/authority",
+			},
+			want: "requires provider ability_descriptor",
+		},
+		{
 			name: "wrong provider for catalogue read",
 			req: RuntimeDescriptorRefRequest{
 				CalleeURA:  "easynet:///r/example/device/dev-a",
 				Ability:    "meta.list_abilities",
+				CallMode:   "read",
+				CallerURA:  "easynet:///r/example/user/alice",
+				SubjectURA: "easynet:///r/example/authority",
+				Provider:   "receipt_history",
+			},
+			want: "use provider ability_descriptor",
+		},
+		{
+			name: "wrong provider for resource catalogue read",
+			req: RuntimeDescriptorRefRequest{
+				CalleeURA:  "easynet:///r/example/device/dev-a",
+				Ability:    "meta.list_resources",
 				CallMode:   "read",
 				CallerURA:  "easynet:///r/example/user/alice",
 				SubjectURA: "easynet:///r/example/authority",
@@ -346,9 +369,13 @@ func TestRuntimeAbilityClientRejectsCatalogueReadPublicRouteBeforeDescriptorReso
 		t.Fatalf("NewRuntimeAbilityClient: %v", err)
 	}
 
-	_, err = client.Build(context.Background(), runtimeAbilityTestContext(), "meta.list_abilities", map[string]any{})
-	if err == nil || !IsCode(err, ErrInvalidArgument) || !strings.Contains(err.Error(), "RuntimeAbilityDescriptorProvider") {
-		t.Fatalf("Build error = %v, want descriptor provider public-route rejection", err)
+	for _, abilityName := range []string{"meta.list_abilities", "meta.list_resources"} {
+		t.Run(abilityName, func(t *testing.T) {
+			_, err = client.Build(context.Background(), runtimeAbilityTestContext(), abilityName, map[string]any{})
+			if err == nil || !IsCode(err, ErrInvalidArgument) || !strings.Contains(err.Error(), "RuntimeAbilityDescriptorProvider") {
+				t.Fatalf("Build error = %v, want descriptor provider public-route rejection", err)
+			}
+		})
 	}
 }
 
@@ -407,7 +434,7 @@ func TestRuntimeAbilityClientCatalogueReadResolvesDescriptorWithRealmAuthoritySu
 	draft, err := client.buildWithCallModePolicy(
 		context.Background(),
 		call,
-		"meta.list_abilities",
+		"meta.list_resources",
 		map[string]any{},
 		"rpc",
 		runtimeAbilityCatalogueReadPolicy(),

@@ -423,16 +423,16 @@ fn runtime_resolve_descriptor_ref_json(
             ),
         );
     }
-    let catalog = runtime_descriptor_catalog_entries(&runtime_owner_ura);
+    let catalog = runtime_descriptor_catalog_entries(callee_ura);
     descriptor_resolution_or_not_found(
         descriptor_catalog_resolution_from_entries(
             &catalog.entries,
             &ability_ura,
             call_mode,
-            "runtime_realm_descriptor_catalog",
+            "runtime_remote_descriptor_catalog",
         )?,
         format!(
-            "descriptor_ref not found in runtime realm catalog for callee_ura={callee_ura:?} ability={ability_ura:?} call_mode={call_mode:?}"
+            "descriptor_ref not found in remote runtime catalog for callee_ura={callee_ura:?} ability={ability_ura:?} call_mode={call_mode:?}"
         ),
     )
 }

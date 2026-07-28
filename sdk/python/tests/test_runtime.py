@@ -508,7 +508,28 @@ class RuntimeTests(unittest.TestCase):
             (
                 {
                     "callee_ura": "easynet:///r/example/device/dev-a",
+                    "ability": "meta.list_resources",
+                    "call_mode": "read",
+                    "caller_ura": "easynet:///r/example/user/alice",
+                    "subject_ura": "easynet:///r/example/authority",
+                },
+                "requires provider ability_descriptor",
+            ),
+            (
+                {
+                    "callee_ura": "easynet:///r/example/device/dev-a",
                     "ability": "meta.list_abilities",
+                    "call_mode": "read",
+                    "caller_ura": "easynet:///r/example/user/alice",
+                    "subject_ura": "easynet:///r/example/authority",
+                    "provider": "receipt_history",
+                },
+                "use provider ability_descriptor",
+            ),
+            (
+                {
+                    "callee_ura": "easynet:///r/example/device/dev-a",
+                    "ability": "meta.list_resources",
                     "call_mode": "read",
                     "caller_ura": "easynet:///r/example/user/alice",
                     "subject_ura": "easynet:///r/example/authority",

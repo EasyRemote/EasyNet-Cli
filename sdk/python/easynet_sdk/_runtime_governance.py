@@ -44,6 +44,8 @@ def _is_catalogue_read(value: str) -> bool:
     return (
         value == "meta.list_abilities"
         or value.endswith(".meta.list_abilities")
+        or value == "meta.list_resources"
+        or value.endswith(".meta.list_resources")
     )
 
 

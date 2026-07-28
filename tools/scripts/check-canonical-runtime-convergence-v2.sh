@@ -5714,6 +5714,7 @@ for required in (
     "func runtimeGovernanceDescriptorProviderForAbility(abilityName string) string",
     "func isRuntimeGovernanceReadAbility(abilityName string) bool",
     'abilityName == "meta.list_abilities"',
+    'abilityName == "meta.list_resources"',
     "strings.HasPrefix(abilityName, \"invocation.history.\")",
     "strings.HasPrefix(abilityName, \"invocation.trace.\")",
 ):
@@ -5752,6 +5753,8 @@ if "TestRuntimeAbilityClientRejectsInvocationHistoryPublicRouteBeforeDescriptorR
     raise SystemExit("sdk_history_public_route_cutover:go_public_rejection_test_missing")
 if "TestRuntimeAbilityClientRejectsCatalogueReadPublicRouteBeforeDescriptorResolution" not in go_test:
     raise SystemExit("sdk_history_public_route_cutover:go_catalogue_public_rejection_test_missing")
+if '"meta.list_resources"' not in go_test:
+    raise SystemExit("sdk_history_public_route_cutover:go_resource_catalogue_read_test_missing")
 if 'seen["subject_ura"] != "easynet:///r/example/authority"' not in go_descriptor_test:
     raise SystemExit("sdk_history_public_route_cutover:go_catalogue_subject_test_missing")
 if 'Provider:   policy.descriptorProvider' not in go_runtime:
@@ -5787,6 +5790,7 @@ for required in (
     "def governance_descriptor_provider_for_ability(",
     "def is_runtime_governance_read_ability(",
     'value == "meta.list_abilities"',
+    'value == "meta.list_resources"',
     'value.startswith("invocation.history.")',
     'value.startswith("invocation.trace.")',
 ):
@@ -5837,6 +5841,8 @@ if "test_runtime_ability_rejects_invocation_history_public_route_before_descript
     raise SystemExit("sdk_history_public_route_cutover:py_public_rejection_test_missing")
 if "test_runtime_ability_rejects_catalogue_read_public_route_before_descriptor_resolution" not in py_test:
     raise SystemExit("sdk_history_public_route_cutover:py_catalogue_public_rejection_test_missing")
+if '"meta.list_resources"' not in py_test:
+    raise SystemExit("sdk_history_public_route_cutover:py_resource_catalogue_read_test_missing")
 if "test_generic_invocation_rejects_governance_read_ability_ura" not in py_ability_invocation_test:
     raise SystemExit("sdk_history_public_route_cutover:py_generic_governance_rejection_test_missing")
 if "test_generic_invocation_rejects_governance_read_descriptor_ref" not in py_ability_invocation_test:
@@ -7757,7 +7763,7 @@ for required in (
     "ErrDescriptorNotFound",
     'sdkErr.Stage != "routing"',
     "DESCRIPTOR_NOT_FOUND",
-    "descriptor_ref not found in runtime realm catalog",
+    "descriptor_ref not found in remote runtime catalog",
     "missing.descriptor",
 ):
     if required not in go_test_body:
@@ -13920,8 +13926,14 @@ if "descriptor.descriptor_ref()" not in catalog_entry_body:
     raise SystemExit("ffi_descriptor_runtime_owner:catalog_entry_not_using_descriptor_owner")
 if "canonical_ability_descriptor_ref(&format!(" in catalog_entry_body:
     raise SystemExit("ffi_descriptor_runtime_owner:catalog_entry_recomputes_descriptor_ref")
-if "descriptor_ref not found in runtime realm catalog" not in resolve_body:
-    raise SystemExit("ffi_descriptor_runtime_owner:realm_catalog_miss_error_missing")
+if "descriptor_ref not found in remote runtime catalog" not in resolve_body:
+    raise SystemExit("ffi_descriptor_runtime_owner:remote_catalog_miss_error_missing")
+if '"runtime_remote_descriptor_catalog"' not in resolve_body:
+    raise SystemExit("ffi_descriptor_runtime_owner:remote_catalog_source_missing")
+if "runtime_descriptor_catalog_entries(callee_ura)" not in resolve_body:
+    compact_resolve = re.sub(r"\s+", "", resolve_body)
+    if "runtime_descriptor_catalog_entries(callee_ura)" not in compact_resolve:
+        raise SystemExit("ffi_descriptor_runtime_owner:remote_descriptor_catalog_not_callee_bound")
 if "target_owned_descriptor_catalog_subject_ura" in production:
     raise SystemExit("ffi_descriptor_runtime_owner:retired_target_owned_subject_helper")
 if "AbilitySelector::parse(ability)" in resolve_body:
@@ -14015,9 +14027,11 @@ if "format!(\"runtime_resolve_descriptor_ref: {error:#}\")" in entry:
     raise SystemExit("ffi_descriptor_runtime_owner:ffi_entry_formats_error_before_projection")
 
 for required_test in (
-    "runtime_descriptor_resolver_requires_runtime_owner_for_realm_catalog",
+    "runtime_descriptor_resolver_requires_runtime_owner_for_remote_catalog",
     "runtime owner failure must not expose custody implementation details",
-    "runtime_descriptor_resolver_does_not_remote_probe_realm_catalog_miss",
+    "runtime_descriptor_resolver_rebinds_remote_system_action_descriptor_to_callee",
+    "runtime_descriptor_resolver_uses_explicit_provider_for_remote_resource_catalogue_read",
+    "runtime_descriptor_resolver_does_not_remote_probe_remote_catalog_miss",
     "runtime_descriptor_resolver_rejects_ability_owner_mismatch_before_catalog_lookup",
     "runtime_descriptor_resolver_rejects_receipt_provider_non_runtime_state_subjects",
     "runtime_descriptor_resolver_uses_explicit_provider_for_remote_receipt_read",
@@ -14068,11 +14082,17 @@ for retired in (
 ):
     if retired in resolver:
         raise SystemExit(f"ffi_descriptor_probe_not_found_vocabulary:retired_remote_probe_classifier:{retired}")
-if "descriptor_ref not found in runtime realm catalog" not in provider_production:
-    raise SystemExit("ffi_descriptor_probe_not_found_vocabulary:realm_catalog_miss_missing")
+if "descriptor_ref not found in remote runtime catalog" not in provider_production:
+    raise SystemExit("ffi_descriptor_probe_not_found_vocabulary:remote_catalog_miss_missing")
+if '"runtime_remote_descriptor_catalog"' not in provider_production:
+    raise SystemExit("ffi_descriptor_probe_not_found_vocabulary:remote_catalog_source_missing")
+if "runtime_descriptor_catalog_entries(callee_ura)" not in provider_production:
+    raise SystemExit("ffi_descriptor_probe_not_found_vocabulary:remote_descriptor_catalog_not_callee_bound")
 for required_test in (
     "descriptor_resolution_errors_project_canonical_runtime_codes",
-    "runtime_descriptor_resolver_does_not_remote_probe_realm_catalog_miss",
+    "runtime_descriptor_resolver_rebinds_remote_system_action_descriptor_to_callee",
+    "runtime_descriptor_resolver_uses_explicit_provider_for_remote_resource_catalogue_read",
+    "runtime_descriptor_resolver_does_not_remote_probe_remote_catalog_miss",
 ):
     if required_test not in text:
         raise SystemExit(f"ffi_descriptor_probe_not_found_vocabulary:missing_test:{required_test}")
@@ -22019,7 +22039,7 @@ fn runtime_resolve_descriptor_ref_json(
         ))
     })?;
     Err(DescriptorResolutionError::DescriptorNotFound(
-        "descriptor_ref not found in runtime realm catalog".to_string(),
+        "descriptor_ref not found in remote runtime catalog".to_string(),
     ))
 }
 
@@ -22028,9 +22048,9 @@ fn runtime_system_descriptor_catalog_entries() {}
 fn runtime_meta_descriptor_catalog_entries() {}
 
 #[test]
-fn runtime_descriptor_resolver_requires_runtime_owner_for_realm_catalog() {}
+fn runtime_descriptor_resolver_requires_runtime_owner_for_remote_catalog() {}
 #[test]
-fn runtime_descriptor_resolver_does_not_remote_probe_realm_catalog_miss() {}
+fn runtime_descriptor_resolver_does_not_remote_probe_remote_catalog_miss() {}
 #[test]
 fn descriptor_resolution_errors_project_canonical_runtime_codes() {}
 EOF
@@ -22077,7 +22097,7 @@ fn runtime_resolve_descriptor_ref_json(
         ))
     })?;
     Err(DescriptorResolutionError::DescriptorNotFound(format!(
-        "descriptor_ref not found in runtime realm catalog for ability={ability_ura:?}"
+        "descriptor_ref not found in remote runtime catalog for ability={ability_ura:?}"
     )))
 }
 
@@ -22085,9 +22105,9 @@ fn runtime_resolve_descriptor_ref_json(
 fn runtime_system_descriptor_catalog_entries() {}
 
 #[test]
-fn runtime_descriptor_resolver_requires_runtime_owner_for_realm_catalog() {}
+fn runtime_descriptor_resolver_requires_runtime_owner_for_remote_catalog() {}
 #[test]
-fn runtime_descriptor_resolver_does_not_remote_probe_realm_catalog_miss() {}
+fn runtime_descriptor_resolver_does_not_remote_probe_remote_catalog_miss() {}
 #[test]
 fn runtime_descriptor_resolver_rejects_ability_owner_mismatch_before_catalog_lookup() {}
 #[test]
@@ -26894,7 +26914,7 @@ func TestCABIRuntimeProviderProjectsDescriptorResolverLastError(t *testing.T) {
   _ = ErrDescriptorNotFound
   _ = sdkErr.Stage != "routing"
   _ = "DESCRIPTOR_NOT_FOUND"
-  _ = "descriptor_ref not found in runtime realm catalog"
+  _ = "descriptor_ref not found in remote runtime catalog"
   _ = "missing.descriptor"
 }
 EOF

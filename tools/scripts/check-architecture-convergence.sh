@@ -9428,8 +9428,8 @@ if ffi_invocation.exists() or runtime_descriptor_provider.exists():
             "FFI descriptor resolver must project from typed error variants",
         ),
         (
-            "descriptor_ref not found in runtime realm catalog",
-            "descriptor resolver must fail closed as a realm catalog miss",
+            "descriptor_ref not found in remote runtime catalog",
+            "descriptor resolver must fail closed as a remote catalog miss",
         ),
     ):
         if token not in combined_production:

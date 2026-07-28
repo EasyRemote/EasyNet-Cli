@@ -1165,7 +1165,7 @@ int32_t runtime_diagnostics(uint64_t handle, char **out_diagnostics_json) {
 int32_t runtime_resolve_descriptor_ref(uint64_t handle, const char *request_json, char **out_descriptor_json) {
 	(void)handle;
 	if (strstr(request_json, "missing.descriptor") != 0) {
-		last_error_json = "{\"code\":\"DESCRIPTOR_NOT_FOUND\",\"stage\":\"routing\",\"message\":\"descriptor_ref not found in runtime realm catalog\",\"retry\":\"never\",\"details\":{\"source\":\"fake_native_provider\"}}";
+		last_error_json = "{\"code\":\"DESCRIPTOR_NOT_FOUND\",\"stage\":\"routing\",\"message\":\"descriptor_ref not found in remote runtime catalog\",\"retry\":\"never\",\"details\":{\"source\":\"fake_native_provider\"}}";
 		return 4;
 	}
 	*out_descriptor_json = dup_json("{\"descriptor_ref\":\"easynet:///r/example/ability/device.dev-a.meta.list_resources@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read\",\"ability_ura\":\"easynet:///r/example/ability/device.dev-a.meta.list_resources\",\"owner_ura\":\"easynet:///r/example/device/dev-a\",\"name\":\"meta.list_resources\",\"call_mode\":\"rpc\",\"source\":\"fake_native_provider\"}");
