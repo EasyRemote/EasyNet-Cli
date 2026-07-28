@@ -45,4 +45,11 @@ if rg -n 'platforms/(macos/EasyNetMenuBar|windows/EasyNetTray)' plugins tools sr
   fail "active source must not point companion ownership at platforms/"
 fi
 
+if rg -n 'PluginProviderKind::DesktopCompanion|\bDesktopCompanion,\s*$' \
+  src/daemon/plugins/provider.rs src/daemon/plugins/provider_registry.rs src/daemon/plugins/mod.rs src/daemon/plugins/package.rs \
+  >/tmp/easynet-plugin-boundary-rg.txt; then
+  cat /tmp/easynet-plugin-boundary-rg.txt >&2
+  fail "provider kind classification must stay product-neutral; desktop companion is a package kind, not a provider kind"
+fi
+
 printf 'plugin-independent-project boundary checks passed\n'

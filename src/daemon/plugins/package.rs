@@ -875,7 +875,7 @@ call_mode = "rpc"
             }
 
             fn provider_kind(&self) -> PluginProviderKind {
-                PluginProviderKind::DesktopCompanion
+                PluginProviderKind::InstallablePackage
             }
 
             fn manifest_body(&self) -> &'static str {
@@ -963,7 +963,7 @@ session = "aqua"
             }
 
             fn provider_kind(&self) -> PluginProviderKind {
-                PluginProviderKind::DesktopCompanion
+                PluginProviderKind::InstallablePackage
             }
 
             fn manifest_body(&self) -> &'static str {

@@ -408,6 +408,13 @@ fn companion_status_package_version_boundary_script_holds() {
 }
 
 #[test]
+fn plugin_independent_project_boundary_script_holds() {
+    // Pins package-owned plugin projects to provider-neutral registration.
+    // Desktop companion remains a manifest package kind, not a provider kind.
+    run_bash_script("tests/scripts/test_check_plugin_independent_project_boundary.sh");
+}
+
+#[test]
 fn namespace_resolve_qtype_boundary_script_holds() {
     // Pins local namespace.resolve ingress to canonical ResolveType enum
     // strings. It must not guess qtype from query shape or accept short/numeric

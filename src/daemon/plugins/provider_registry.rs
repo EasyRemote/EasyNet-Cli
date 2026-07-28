@@ -41,7 +41,7 @@ impl PluginProviderRegistry {
 
     pub fn register(&mut self, provider: Arc<dyn PluginProvider>) -> Result<()> {
         if provider.provider_kind() != PluginProviderKind::NativeStatic
-            && provider.provider_kind() != PluginProviderKind::DesktopCompanion
+            && provider.provider_kind() != PluginProviderKind::InstallablePackage
         {
             return Err(PluginHostError::PluginProjectBoundaryViolation {
                 reason: format!(

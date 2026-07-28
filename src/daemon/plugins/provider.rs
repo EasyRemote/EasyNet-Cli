@@ -43,7 +43,9 @@ pub enum PluginProviderKind {
     NativeStatic,
     Sidecar,
     Declarative,
-    DesktopCompanion,
+    /// Linked package materialized by the daemon plugin host without carrying
+    /// plugin product lifecycle semantics in the provider abstraction.
+    InstallablePackage,
 }
 
 pub trait PluginProvider: Send + Sync {
