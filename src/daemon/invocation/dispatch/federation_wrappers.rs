@@ -63,7 +63,7 @@ use crate::daemon::federation::resolver_contract::{
 pub use crate::daemon::federation::wire_contract::{
     DiscoverRequest, DiscoverResponse, ListUserDevicesRequest, ListUserDevicesResponse,
     ResolveAgentSummary, ResolveFilterRequest, ResolveKeyRequest, ResolveKeyResponse,
-    ResolveRequest, ResolveRequestIngressV1, ResolveResponse,
+    ResolveRequest, ResolveResponse,
 };
 use crate::daemon::invocation::bidi::state::presence::PresenceRegistry;
 

@@ -13673,6 +13673,67 @@ for required_test in (
 PY
 }
 
+check_federation_resolve_canonical_filter_ingress_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local wire="$cli_root/src/daemon/federation/wire_contract.rs"
+  local wrappers="$cli_root/src/daemon/invocation/dispatch/federation_wrappers.rs"
+  local dispatcher="$cli_root/src/daemon/invocation/dispatch/unary_dispatcher.rs"
+  [[ -f "$wire" ]] || fail "federation wire contract source is missing: $wire"
+  [[ -f "$wrappers" ]] || fail "federation wrappers source is missing: $wrappers"
+  [[ -f "$dispatcher" ]] || fail "unary dispatcher source is missing: $dispatcher"
+
+  "$PYTHON_BIN" - "$wire" "$wrappers" "$dispatcher" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+wire_path, wrappers_path, dispatcher_path = map(Path, sys.argv[1:])
+wire = wire_path.read_text(encoding="utf-8")
+wrappers = wrappers_path.read_text(encoding="utf-8")
+dispatcher = dispatcher_path.read_text(encoding="utf-8")
+wire_production = wire.split("\n#[cfg(test)]", 1)[0]
+wrappers_production = wrappers.split("\n#[cfg(test)]", 1)[0]
+dispatcher_production = dispatcher.split("\n#[cfg(test)]\nmod tests", 1)[0]
+
+for name, text in (
+    ("wire", wire_production),
+    ("wrappers", wrappers_production),
+    ("dispatcher", dispatcher_production),
+):
+    for retired in (
+        "ResolveRequestIngressV1",
+        "into_canonical(",
+        "ingress adapter accepts v1 flat selector",
+        "normalizes flat selector",
+    ):
+        if retired in text:
+            raise SystemExit(f"federation_resolve_canonical_filter:retired_ingress:{name}:{retired}")
+
+resolve_match = re.search(r"pub struct ResolveRequest\s*\{(?P<body>.*?)\n\}", wire_production, re.S)
+if not resolve_match:
+    raise SystemExit("federation_resolve_canonical_filter:resolve_request_missing")
+resolve_body = resolve_match.group("body")
+if "pub filter: Option<ResolveFilterRequest>" not in resolve_body:
+    raise SystemExit("federation_resolve_canonical_filter:canonical_filter_missing")
+for retired in ("pub ura_prefix", "pub include_abilities"):
+    if retired in resolve_body:
+        raise SystemExit(f"federation_resolve_canonical_filter:flat_field_on_request:{retired}")
+
+if not re.search(
+    r"parse_json_args::<\s*federation_wrappers::ResolveRequest\s*>\s*\(\s*arguments\s*\)\?",
+    dispatcher_production,
+):
+    raise SystemExit("federation_resolve_canonical_filter:dispatcher_not_parsing_canonical_request")
+if "ResolveRequestIngressV1" in wrappers:
+    raise SystemExit("federation_resolve_canonical_filter:wrapper_reexports_retired_ingress")
+if "resolve_request_canonical_shape_rejects_flat_selector_fields" not in wire:
+    raise SystemExit("federation_resolve_canonical_filter:flat_selector_negative_test_missing")
+for required in ('"ura_prefix"', '"include_abilities"', "assert_unknown_field_rejected::<ResolveRequest>"):
+    if required not in wire:
+        raise SystemExit(f"federation_resolve_canonical_filter:negative_test_token_missing:{required}")
+PY
+}
+
 check_federation_list_user_devices_exact_tuple_ingress_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local wire="$cli_root/src/daemon/federation/wire_contract.rs"
@@ -29048,6 +29109,7 @@ EOF
   check_route_resolver_descriptor_ref_selector_contract
   check_namespace_resolver_authority_projection_contract
   check_namespace_proxy_resolve_exact_tuple_ingress_contract
+  check_federation_resolve_canonical_filter_ingress_contract
   check_federation_list_user_devices_exact_tuple_ingress_contract
   check_presence_registry_canonical_principal_key_contract
   check_daemon_invocation_service_descriptor_ref_route_projection_contract
@@ -29327,6 +29389,7 @@ check_retired_federation_directory_v1_stream_contract
 check_route_resolver_descriptor_ref_selector_contract
 check_namespace_resolver_authority_projection_contract
 check_namespace_proxy_resolve_exact_tuple_ingress_contract
+check_federation_resolve_canonical_filter_ingress_contract
 check_federation_list_user_devices_exact_tuple_ingress_contract
 check_presence_registry_canonical_principal_key_contract
 check_daemon_invocation_service_descriptor_ref_route_projection_contract
