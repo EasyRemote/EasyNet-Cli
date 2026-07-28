@@ -2099,6 +2099,15 @@ impl AbilityAuthorityContext {
         self.authorities.device().is_some()
     }
 
+    pub(crate) fn owns_device_product_state(&self) -> bool {
+        self.authorities.device().is_some_and(|(_, source)| {
+            matches!(
+                source,
+                DeviceSubordinateAuthoritySource::ExplicitHostedAgentRoots(_)
+            )
+        })
+    }
+
     pub(crate) fn hosts_realm_authority(&self) -> bool {
         self.authorities.realm_authority().is_some()
     }

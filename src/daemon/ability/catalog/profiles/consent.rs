@@ -12,10 +12,9 @@
 //! projection class is `OwnerKind::Agent(DEFAULT_CONSENT_AGENT_ID)`. This file
 //! does not infer ownership from ability name prefixes.
 //!
-//! Currently wired in agents/permission_ability.rs (which renames to
-//! consent_ability.rs in a follow-up cleanup; for now the file name
-//! is legacy but the registered ability strings are the new
-//! `consent.*` per P2.2).
+//! Currently wired in governance/consent.rs. The execution broker still uses
+//! permission-domain nouns internally, but the catalog and public descriptor
+//! namespace are consent-owned.
 
 /// AbilityDescriptors for every consent ability in the system registry,
 /// anchored to the consent-profile's canonical URA. Per RFC §18,

@@ -14413,9 +14413,12 @@ runtime_factory = Path(sys.argv[3]).read_text(encoding="utf-8")
 if "fn replays_hosted_agent_runtime(self) -> bool" not in catalog:
     raise SystemExit("daemon_runtime_assembly:hosted_agent_replay_mode_missing")
 
+if "fn owns_device_product_state(&self) -> bool" not in catalog and "owns_device_product_state()" not in catalog:
+    raise SystemExit("daemon_runtime_assembly:device_product_state_owner_missing")
+
 if not re.search(
     r"let\s+replay_hosted_agent_runtime\s*=\s*"
-    r"hosts_device_authority\s*&&\s*assembly_mode\.replays_hosted_agent_runtime\(\)\s*;",
+    r"owns_device_product_state\s*&&\s*assembly_mode\.replays_hosted_agent_runtime\(\)\s*;",
     catalog,
     re.S,
 ):
@@ -14426,6 +14429,12 @@ if not re.search(r"if\s+replay_hosted_agent_runtime\s*\{\s*if\s+let\s+Some\(hot_
 
 if re.search(r"if\s+hosts_device_authority\s*\{\s*if\s+let\s+Some\(hot_registrar\)", catalog, re.S):
     raise SystemExit("daemon_runtime_assembly:hosted_agent_replay_bound_to_device_authority_only")
+
+if "let stateful_device_runtime = owns_device_product_state && daemon_runtime_assembly;" not in catalog:
+    raise SystemExit("daemon_runtime_assembly:stateful_device_runtime_guard_missing")
+
+if re.search(r"if\s+hosts_device_authority\s*\{\s*device_registrar_cell\s*\.", catalog, re.S):
+    raise SystemExit("daemon_runtime_assembly:device_registrar_bound_to_authority_rows")
 
 if "fn deterministic_registry_snapshot_does_not_replay_hosted_agent_runtime" not in tests:
     raise SystemExit("daemon_runtime_assembly:deterministic_snapshot_replay_regression_test_missing")

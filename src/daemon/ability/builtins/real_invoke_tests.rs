@@ -82,7 +82,7 @@ use crate::daemon::ability::builtins::{
             lifecycle as terminal_lifecycle_ability,
         },
     },
-    governance::consent as permission_ability,
+    governance::consent as consent_ability,
 };
 use crate::daemon::ability::catalog::{
     build_registry, build_registry_for_test_execution, is_publishable_catalog_name,
@@ -1434,7 +1434,7 @@ fn real_consent_decide_records_a_decision() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
     let perms = Arc::new(crate::daemon::execution::permission::PermissionService::new());
     let mut reg = runtime_attached_catalog();
-    permission_ability::register(&mut reg, perms);
+    consent_ability::register(&mut reg, perms);
     let d = dispatcher_for(Arc::new(reg));
     let result = d.execute_rpc(target(
         "consent.decide",
@@ -1463,7 +1463,7 @@ fn real_consent_list_pending_returns_empty_on_fresh_service() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
     let perms = Arc::new(crate::daemon::execution::permission::PermissionService::new());
     let mut reg = runtime_attached_catalog_for_realm("example");
-    permission_ability::register(&mut reg, perms);
+    consent_ability::register(&mut reg, perms);
     let d = dispatcher_for(Arc::new(reg));
     let resp = d
         .execute_rpc(target("consent.list_pending", json!({})))
@@ -2749,7 +2749,7 @@ fn real_consent_subscribe_returns_a_stream_source() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
     let perms = Arc::new(crate::daemon::execution::permission::PermissionService::new());
     let mut reg = runtime_attached_catalog();
-    permission_ability::register(&mut reg, perms);
+    consent_ability::register(&mut reg, perms);
     let d = dispatcher_for(Arc::new(reg));
     let mut t = target("consent.subscribe", json!({}));
     t.call_mode = CallMode::Stream;

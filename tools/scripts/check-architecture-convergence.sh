@@ -176,6 +176,113 @@ def line_number(text: str, offset: int) -> int:
     return text.count("\n", 0, offset) + 1
 
 
+# Rule 0a: the consent ability family is the governed public catalog surface.
+# The execution broker may keep permission-domain nouns for local approval
+# decisions, but catalog assembly/metadata/profiles must not preserve the old
+# permission_ability compatibility alias or stale follow-up rename language.
+consent_catalog_files = (
+    cli_root / "src/daemon/ability/catalog/build.rs",
+    cli_root / "src/daemon/ability/catalog/catalog_metadata.rs",
+    cli_root / "src/daemon/ability/catalog/profiles/consent.rs",
+)
+for consent_catalog_file in consent_catalog_files:
+    if not consent_catalog_file.exists():
+        continue
+    raw_text = consent_catalog_file.read_text(encoding="utf-8", errors="replace")
+    production_text = source(consent_catalog_file)
+    for token in (
+        "consent as permission_ability",
+        "permission_ability::",
+    ):
+        pos = production_text.find(token)
+        if pos >= 0:
+            add(
+                "R0A_CONSENT_CATALOG_NAMING_CUTOVER",
+                consent_catalog_file,
+                line_number(production_text, pos),
+                f"catalog-owned consent surface must not use retired permission ability alias `{token}`",
+            )
+    for token in (
+        "agents/permission_ability.rs",
+        "renames to\n//! consent_ability.rs in a follow-up cleanup",
+    ):
+        pos = raw_text.find(token)
+        if pos >= 0:
+            add(
+                "R0A_CONSENT_CATALOG_NAMING_CUTOVER",
+                consent_catalog_file,
+                line_number(raw_text, pos),
+                f"consent profile must not preserve stale permission ability migration language `{token}`",
+            )
+
+
+# Rule 0b: Device authority-row projection is not permission to open Device
+# product state. Combined Device+RealmAuthority descriptor inventories may
+# need Device rows without owning the local ability deployment store, MCP
+# config, plugin package state, or hosted-agent replay lifecycle.
+ability_dispatch = cli_root / "src/daemon/ability/dispatch.rs"
+catalog_build = cli_root / "src/daemon/ability/catalog/build.rs"
+if ability_dispatch.exists():
+    text = source(ability_dispatch)
+    if "fn owns_device_product_state(&self) -> bool" not in text:
+        add(
+            "R0B_DEVICE_PRODUCT_STATE_OWNER_FORK",
+            ability_dispatch,
+            1,
+            "AbilityAuthorityContext must expose an explicit Device product-state ownership predicate",
+        )
+    if "DeviceSubordinateAuthoritySource::ExplicitHostedAgentRoots" not in text:
+        add(
+            "R0B_DEVICE_PRODUCT_STATE_OWNER_FORK",
+            ability_dispatch,
+            1,
+            "Device product-state ownership must be bound to explicit hosted-agent authority inventory",
+        )
+if catalog_build.exists():
+    text = source(catalog_build)
+    requirements = (
+        (
+            "let owns_device_product_state = authority_context.owns_device_product_state();",
+            "catalog assembly must derive Device product-state ownership from authority context",
+        ),
+        (
+            "let stateful_device_runtime = owns_device_product_state && daemon_runtime_assembly;",
+            "catalog assembly must name the stateful Device runtime transition explicitly",
+        ),
+        (
+            "let plugin_registry_mode = match (owns_device_product_state, plugin_registry_mode)",
+            "catalog assembly must not open daemon plugin package state from DeviceScoped descriptor inventories",
+        ),
+        (
+            "if stateful_device_runtime {\n        device_registrar_cell",
+            "Device ability registrar must be initialized only for stateful Device runtime assembly",
+        ),
+        (
+            "let mcp_svc = if stateful_device_runtime",
+            "MCP client config must be opened only for stateful Device runtime assembly",
+        ),
+        (
+            "let reflection_plan = if stateful_device_runtime",
+            "MCP reflection lifecycle must be planned only for stateful Device runtime assembly",
+        ),
+    )
+    for token, detail in requirements:
+        if token not in text:
+            add("R0B_DEVICE_PRODUCT_STATE_OWNER_FORK", catalog_build, 1, detail)
+    for token in (
+        "hosts_device_authority && daemon_runtime_assembly",
+        "hosts_device_authority && assembly_mode.replays_hosted_agent_runtime()",
+    ):
+        pos = text.find(token)
+        if pos >= 0:
+            add(
+                "R0B_DEVICE_PRODUCT_STATE_OWNER_FORK",
+                catalog_build,
+                line_number(text, pos),
+                f"stateful Device lifecycle must not be gated by authority-row presence alone: `{token}`",
+            )
+
+
 def rust_method_body(text: str, name: str) -> tuple[int, str] | None:
     match = re.search(
         rf"(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+{re.escape(name)}\s*\([^)]*\)\s*(?:->\s*[^\{{]+)?\{{",

@@ -33,7 +33,7 @@ use crate::daemon::ability::builtins::{
     },
     governance::{
         access_control as access_control_ability, admin_status as admin_status_ability,
-        api_key as api_key_ability, consent as permission_ability, health as ping,
+        api_key as api_key_ability, consent as consent_ability, health as ping,
         invocation_history as invocation_history_ability, meta as meta_ability,
         network_health as network_health_ability, teach as teach_ability,
     },
@@ -582,10 +582,12 @@ fn build_registry_with_services_result_inner(
         );
 
     let hosts_device_authority = authority_context.hosts_device_authority();
+    let owns_device_product_state = authority_context.owns_device_product_state();
     let hosts_realm_authority = authority_context.hosts_realm_authority();
     let daemon_runtime_assembly = assembly_mode.starts_runtime_services();
+    let stateful_device_runtime = owns_device_product_state && daemon_runtime_assembly;
     let replay_hosted_agent_runtime =
-        hosts_device_authority && assembly_mode.replays_hosted_agent_runtime();
+        owns_device_product_state && assembly_mode.replays_hosted_agent_runtime();
     let plugin_registry_mode = assembly_mode.plugin_registry_mode();
     let authority_context =
         declare_daemon_native_agent_authorities(authority_context, &pages_identity)?;
@@ -603,10 +605,14 @@ fn build_registry_with_services_result_inner(
     } else {
         PagesIdentity::default()
     };
-    let plugin_registry_mode = if hosts_device_authority {
-        plugin_registry_mode
-    } else {
-        PluginRegistryMode::None
+    let plugin_registry_mode = match (owns_device_product_state, plugin_registry_mode) {
+        (true, mode) => mode,
+        (false, PluginRegistryMode::BuiltinOnlyDeterministic) => {
+            PluginRegistryMode::BuiltinOnlyDeterministic
+        }
+        (false, PluginRegistryMode::None | PluginRegistryMode::DefaultDaemon) => {
+            PluginRegistryMode::None
+        }
     };
     let local_runtime_owners = authority_context.local_runtime_owners();
     let voice_provider_assembly = shared_stores.voice_calls.clone();
@@ -744,10 +750,12 @@ fn build_registry_with_services_result_inner(
     // when this daemon hosts a Device authority root.
     let device_registrar_cell: Arc<device_ops_ability::SharedDeviceRegistrarCell> =
         Arc::new(std::sync::OnceLock::new());
-    if hosts_device_authority {
+    if stateful_device_runtime {
         device_registrar_cell
             .set(device_ability_registrar::DeviceAbilityRegistrar::try_new_pending()?)
             .map_err(|_| anyhow::anyhow!("device registrar cell was already initialized"))?;
+    }
+    if hosts_device_authority {
         device_ops_ability::register(
             &mut reg,
             Arc::clone(&device_registrar_cell),
@@ -787,7 +795,7 @@ fn build_registry_with_services_result_inner(
     // context.* — device-global clipboard history, mapped project
     // folders, and favorites (the Frontend Context page surface).
     context_ability::register(&mut reg);
-    permission_ability::register(&mut reg, perms);
+    consent_ability::register(&mut reg, perms);
     discuss_ability::register(&mut reg, Arc::clone(&discuss));
     schedule_ability::register(&mut reg, schedule);
     loop_ability::register(&mut reg, loop_svc);
@@ -1020,7 +1028,7 @@ fn build_registry_with_services_result_inner(
     // reuse the live connection. Parse errors at boot bubble up
     // because a malformed file is an operator typo, not a "no
     // upstreams" condition.
-    let mcp_svc = if hosts_device_authority && daemon_runtime_assembly {
+    let mcp_svc = if stateful_device_runtime {
         let mcps_path = crate::daemon::execution::mcp::McpClientService::default_config_path()?;
         Arc::new(
             crate::daemon::execution::mcp::McpClientService::from_path(&mcps_path)
@@ -1038,7 +1046,7 @@ fn build_registry_with_services_result_inner(
     // `mcp.client.*`, reflective registry below, and exec —
     // shares one connection pool, one config snapshot, one `next_id`
     // sequence per upstream. No silent divergence between surfaces.
-    if hosts_device_authority && daemon_runtime_assembly {
+    if stateful_device_runtime {
         crate::daemon::ability::builtins::integrations::mcp::executor::set_process_client(
             mcp_svc.clone(),
         );
@@ -1073,7 +1081,7 @@ fn build_registry_with_services_result_inner(
     // exclusive-pair-of-Option threading across the Arc::new(reg)
     // boundary — every branch is a named variant carrying exactly
     // the data the apply step needs.
-    let reflection_plan = if hosts_device_authority && daemon_runtime_assembly {
+    let reflection_plan = if stateful_device_runtime {
         let user_root_identity = pages_identity.user_root_identity()?;
         let (reflection_user, reflection_realm) = user_root_identity
             .as_ref()

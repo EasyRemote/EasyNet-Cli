@@ -34,7 +34,7 @@ use crate::daemon::ability::builtins::{
     },
     governance::{
         access_control as access_control_ability, admin_status as admin_status_ability,
-        consent as permission_ability, health as ping,
+        consent as consent_ability, health as ping,
         invocation_history as invocation_history_ability, meta as meta_ability,
         network_health as network_health_ability, teach as teach_ability,
     },
@@ -449,9 +449,9 @@ pub fn description_for(name: &str) -> &'static str {
         name if name.starts_with("context.") => {
             context_ability::description_for(name).unwrap_or("Context surface ability.")
         }
-        governance_names::CONSENT_SUBSCRIBE => permission_ability::subscribe_description(),
-        governance_names::CONSENT_DECIDE => permission_ability::decide_description(),
-        governance_names::CONSENT_LIST_PENDING => permission_ability::list_pending_description(),
+        governance_names::CONSENT_SUBSCRIBE => consent_ability::subscribe_description(),
+        governance_names::CONSENT_DECIDE => consent_ability::decide_description(),
+        governance_names::CONSENT_LIST_PENDING => consent_ability::list_pending_description(),
         automation_names::DISCUSS_CREATE => discuss_ability::create_description(),
         automation_names::DISCUSS_POST => discuss_ability::post_description(),
         automation_names::DISCUSS_SUBSCRIBE => discuss_ability::subscribe_description(),
@@ -703,9 +703,9 @@ fn authored_static_input_schema(name: &str) -> Option<serde_json::Value> {
         agent_names::CHAT_HISTORY_LIST => chat_history_ability::list_input_schema(),
         agent_names::CHAT_HISTORY_GET => chat_history_ability::get_input_schema(),
         name if name.starts_with("context.") => return context_ability::input_schema_for(name),
-        governance_names::CONSENT_SUBSCRIBE => permission_ability::subscribe_input_schema(),
-        governance_names::CONSENT_DECIDE => permission_ability::decide_input_schema(),
-        governance_names::CONSENT_LIST_PENDING => permission_ability::list_pending_input_schema(),
+        governance_names::CONSENT_SUBSCRIBE => consent_ability::subscribe_input_schema(),
+        governance_names::CONSENT_DECIDE => consent_ability::decide_input_schema(),
+        governance_names::CONSENT_LIST_PENDING => consent_ability::list_pending_input_schema(),
         automation_names::DISCUSS_CREATE => discuss_ability::create_input_schema(),
         automation_names::DISCUSS_POST => discuss_ability::post_input_schema(),
         automation_names::DISCUSS_SUBSCRIBE => discuss_ability::subscribe_input_schema(),
