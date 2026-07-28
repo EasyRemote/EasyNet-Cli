@@ -149,7 +149,7 @@ fn render_agent_stop_runtime_outcome(name: &str, resp: &serde_json::Value) {
 }
 
 pub(super) fn run_list() -> anyhow::Result<()> {
-    let gateway = agent_state_read_gateway();
+    let gateway = agent_read_gateway();
     let rows = invoke_daemon_agent_list_required(gateway.as_ref())?;
 
     if rows.is_empty() {
@@ -279,7 +279,7 @@ pub(super) fn run_remove(args: RemoveArgs) -> anyhow::Result<()> {
 /// they never completed a v2 save.
 pub(super) fn run_prune(args: PruneArgs) -> anyhow::Result<()> {
     let action_gateway = agent_command_gateway();
-    let state_gateway = agent_state_read_gateway();
+    let state_gateway = agent_read_gateway();
 
     // Identify rows whose daemon-projected registered root is missing.
     // A row without root_path is rejected by daemon_row_root below; the CLI
@@ -373,7 +373,7 @@ pub(super) fn run_prune(args: PruneArgs) -> anyhow::Result<()> {
 /// EasyNet to chase upstream releases. Validation belongs at
 /// invocation time. See `SetArgs::model` doc.
 pub(super) fn run_set(args: SetArgs) -> anyhow::Result<()> {
-    let state_gateway = agent_state_read_gateway();
+    let state_gateway = agent_read_gateway();
     let action_gateway = agent_command_gateway();
     let row = daemon_agent_row(state_gateway.as_ref(), &args.name)?;
 

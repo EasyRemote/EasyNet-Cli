@@ -939,7 +939,7 @@ fn resolve_ladder_target(as_agent: Option<&str>) -> anyhow::Result<DiscoverLadde
     let Some(requested_agent) = as_agent.map(str::trim).filter(|agent| !agent.is_empty()) else {
         return DiscoverLadderTarget::device_aggregate();
     };
-    let value = LocalRuntimeStateReadIssuer::invoke("agent.list", json!({}))
+    let value = LocalRuntimeStateReadIssuer::agent_list(json!({}))
         .context("resolve discover entry from the agent registry")?;
     let agent_ura = value
         .get("agents")

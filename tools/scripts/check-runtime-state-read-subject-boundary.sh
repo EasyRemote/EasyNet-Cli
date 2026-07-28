@@ -162,7 +162,7 @@ fi
 
 for target in "${TARGETS[@]}"; do
   [[ -f "$target" ]] || fail "missing $target"
-  if ! rg -n 'LocalRuntimeStateReadIssuer::invoke' "$target" >/dev/null; then
+  if ! rg -n 'LocalRuntimeStateReadIssuer::' "$target" >/dev/null; then
     fail "$target must enter local runtime through LocalRuntimeStateReadIssuer"
   fi
   if rg -n '\binvoke_local_ability\s*\(' "$target"; then
@@ -299,12 +299,20 @@ ABILITY_GROUP="src/cli/commands/groups/ability.rs"
 [[ -f "$API_KEY_CLI" ]] || fail "missing $API_KEY_CLI"
 [[ -f "$ABILITY_GROUP" ]] || fail "missing $ABILITY_GROUP"
 
-if ! rg -n 'trait AgentStateReadGateway' "$AGENT_GATEWAY" >/dev/null; then
-  fail "agent.list must have a dedicated AgentStateReadGateway"
+if ! rg -n 'trait AgentReadGateway' "$AGENT_GATEWAY" >/dev/null; then
+  fail "agent projections must have a dedicated AgentReadGateway"
 fi
 
-if ! rg -n 'LocalRuntimeStateReadIssuer::invoke' "$AGENT_GATEWAY" >/dev/null; then
-  fail "production AgentStateReadGateway must use LocalRuntimeStateReadIssuer"
+if ! rg -n 'LocalRuntimeStateReadIssuer::agent_list' "$AGENT_GATEWAY" >/dev/null; then
+  fail "production AgentReadGateway must use typed LocalRuntimeStateReadIssuer::agent_list"
+fi
+
+if ! rg -n 'LocalRuntimeCatalogueReadIssuer::list_abilities' "$AGENT_GATEWAY" >/dev/null; then
+  fail "production AgentReadGateway must use typed LocalRuntimeCatalogueReadIssuer::list_abilities"
+fi
+
+if rg -n 'fn invoke_read|LocalRuntimeStateReadIssuer::invoke\([^)]*"agent\.list"|meta\.list_abilities' "$AGENT_GATEWAY"; then
+  fail "AgentReadGateway must not expose generic read dispatch or hard-code read ability names outside typed issuers"
 fi
 
 if ! rg -n 'LocalDaemonSystemAbilityIssuer::invoke_root_for_local_daemon_identity' "$AGENT_GATEWAY" >/dev/null; then
@@ -319,16 +327,20 @@ if rg -n '\binvoke_local_ability\s*\(' "$AGENT_GATEWAY"; then
   fail "agent command gateway must not use generic invoke_local_ability"
 fi
 
-if ! rg -n 'AgentStateReadGateway' "$AGENT_VIEW" >/dev/null; then
-  fail "agent view must depend on AgentStateReadGateway, not AgentCommandGateway"
+if ! rg -n 'AgentReadGateway' "$AGENT_VIEW" >/dev/null; then
+  fail "agent view must depend on AgentReadGateway, not AgentCommandGateway"
 fi
 
 if rg -n 'AgentCommandGateway|agent_command_gateway|\.invoke\s*\(\s*"agent\.list"' "$AGENT_VIEW"; then
   fail "agent view must not read agent.list through the command gateway"
 fi
 
-if rg -n '\.invoke\s*\(\s*"(agent\.list|meta\.list_abilities)"' "$AGENT_PUBLISH"; then
-  fail "agent publish read projections must not use the command gateway"
+if ! rg -n 'list_agent_abilities' "$AGENT_PUBLISH" >/dev/null; then
+  fail "agent publish must read agent abilities through AgentReadGateway::list_agent_abilities"
+fi
+
+if rg -n '\.invoke(_read)?\s*\(\s*"(agent\.list|meta\.list_abilities)"' "$AGENT_PUBLISH"; then
+  fail "agent publish read projections must not use generic command/read dispatch"
 fi
 
 if ! rg -n 'LocalRuntimeStateReadIssuer::invoke\("openai\.list_models"' "$LLM_API" >/dev/null; then

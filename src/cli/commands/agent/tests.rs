@@ -53,13 +53,19 @@ impl AgentCommandGateway for AgentCommandFixtureGateway {
     }
 }
 
-impl AgentStateReadGateway for AgentCommandFixtureGateway {
-    fn invoke_read(
-        &self,
-        ability: &str,
-        args: serde_json::Value,
-    ) -> anyhow::Result<serde_json::Value> {
-        invoke_agent_command_fixture(ability, args)
+impl AgentReadGateway for AgentCommandFixtureGateway {
+    fn list_agents(&self) -> anyhow::Result<serde_json::Value> {
+        invoke_agent_command_fixture("agent.list", serde_json::json!({}))
+    }
+
+    fn list_agent_abilities(&self, agent_ura: &str) -> anyhow::Result<serde_json::Value> {
+        invoke_agent_command_fixture(
+            "meta.list_abilities",
+            serde_json::json!({
+                "scope": "local",
+                "agent_ura": agent_ura,
+            }),
+        )
     }
 }
 
@@ -173,7 +179,7 @@ fn invoke_agent_command_fixture(
 struct JoinedHome {
     _home: HomeGuard,
     _gateway: crate::cli::daemon_client::agent_gateway::TestAgentCommandGatewayGuard,
-    _state_gateway: crate::cli::daemon_client::agent_gateway::TestAgentStateReadGatewayGuard,
+    _state_gateway: crate::cli::daemon_client::agent_gateway::TestAgentReadGatewayGuard,
 }
 
 /// Build the AddArgs shape the CLI surface would construct
@@ -214,9 +220,7 @@ fn joined_home() -> JoinedHome {
         fixture_gateway.clone(),
     );
     let state_gateway =
-        crate::cli::daemon_client::agent_gateway::install_test_agent_state_read_gateway(
-            fixture_gateway,
-        );
+        crate::cli::daemon_client::agent_gateway::install_test_agent_read_gateway(fixture_gateway);
     JoinedHome {
         _home: home,
         _gateway: gateway,
@@ -621,28 +625,25 @@ fn set_args(name: &str, model: Option<&str>) -> SetArgs {
 }
 
 #[derive(Default)]
-struct MissingRootAgentStateReadGateway {
-    calls: std::sync::Mutex<Vec<(String, serde_json::Value)>>,
+struct MissingRootAgentReadGateway {
+    calls: std::sync::Mutex<Vec<&'static str>>,
 }
 
-impl AgentStateReadGateway for MissingRootAgentStateReadGateway {
-    fn invoke_read(
-        &self,
-        ability: &str,
-        args: serde_json::Value,
-    ) -> anyhow::Result<serde_json::Value> {
-        self.calls.lock().unwrap().push((ability.to_string(), args));
-        match ability {
-            "agent.list" => Ok(serde_json::json!({
-                "agents": [{
-                    "name": "alice",
-                    "runtime": "claude-code",
-                    "model": "sonnet",
-                    "root_exists": null
-                }]
-            })),
-            other => anyhow::bail!("unexpected daemon mutation `{other}`"),
-        }
+impl AgentReadGateway for MissingRootAgentReadGateway {
+    fn list_agents(&self) -> anyhow::Result<serde_json::Value> {
+        self.calls.lock().unwrap().push("list_agents");
+        Ok(serde_json::json!({
+            "agents": [{
+                "name": "alice",
+                "runtime": "claude-code",
+                "model": "sonnet",
+                "root_exists": null
+            }]
+        }))
+    }
+
+    fn list_agent_abilities(&self, _agent_ura: &str) -> anyhow::Result<serde_json::Value> {
+        anyhow::bail!("unexpected agent ability catalogue read")
     }
 }
 
@@ -750,11 +751,9 @@ fn run_set_rejects_unknown_agent_with_actionable_message() {
 #[test]
 fn run_set_missing_root_path_fails_before_agent_start_is_sent() {
     let _home = HomeGuard::new();
-    let gateway = Arc::new(MissingRootAgentStateReadGateway::default());
+    let gateway = Arc::new(MissingRootAgentReadGateway::default());
     let _state_gateway_guard =
-        crate::cli::daemon_client::agent_gateway::install_test_agent_state_read_gateway(
-            gateway.clone(),
-        );
+        crate::cli::daemon_client::agent_gateway::install_test_agent_read_gateway(gateway.clone());
 
     let error = run_set(set_args("alice", Some("opus")))
         .expect_err("missing daemon root projection must block set");
@@ -762,7 +761,7 @@ fn run_set_missing_root_path_fails_before_agent_start_is_sent() {
     assert!(error.to_string().contains("omitted root_path"));
     let calls = gateway.calls.lock().unwrap();
     assert_eq!(calls.len(), 1, "agent.start must not be sent");
-    assert_eq!(calls[0].0, "agent.list");
+    assert_eq!(calls[0], "list_agents");
 }
 
 #[test]

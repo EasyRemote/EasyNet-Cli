@@ -167,7 +167,7 @@ fn relative_age(ts: &str) -> String {
 pub(super) fn run_send(args: SendArgs) -> anyhow::Result<()> {
     // Validate through the daemon's Axon ability surface so the CLI
     // does not own a parallel registry read path.
-    let gateway = agent_state_read_gateway();
+    let gateway = agent_read_gateway();
     let _row = daemon_agent_row(gateway.as_ref(), &args.name)?;
 
     // `--resume` is picker-only — single job, no prompt allowed.

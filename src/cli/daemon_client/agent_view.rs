@@ -60,12 +60,12 @@ struct DaemonAgentListResponse {
 }
 
 pub(crate) fn list_agents() -> anyhow::Result<Vec<DaemonAgentRow>> {
-    let gateway = crate::cli::daemon_client::agent_gateway::agent_state_read_gateway();
+    let gateway = crate::cli::daemon_client::agent_gateway::agent_read_gateway();
     list_agents_with_gateway(gateway.as_ref())
 }
 
 pub(crate) fn list_agents_with_gateway(
-    gateway: &dyn crate::cli::daemon_client::agent_gateway::AgentStateReadGateway,
+    gateway: &dyn crate::cli::daemon_client::agent_gateway::AgentReadGateway,
 ) -> anyhow::Result<Vec<DaemonAgentRow>> {
     let response = gateway.list_agents()?;
     decode_agent_list_response(response)

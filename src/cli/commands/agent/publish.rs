@@ -11,18 +11,12 @@ use super::*;
 
 pub(super) fn run_publish(args: PublishArgs) -> anyhow::Result<()> {
     let action_gateway = agent_command_gateway();
-    let state_gateway = agent_state_read_gateway();
-    let owner_ura = resolve_agent_owner_ura(state_gateway.as_ref(), &args.name)?;
+    let read_gateway = agent_read_gateway();
+    let owner_ura = resolve_agent_owner_ura(read_gateway.as_ref(), &args.name)?;
     if !args.dry_run {
         action_gateway.invoke("agent.refresh", json!({"name": &args.name}))?;
     }
-    let response = state_gateway.invoke_read(
-        "meta.list_abilities",
-        json!({
-            "scope": "local",
-            "agent_ura": owner_ura,
-        }),
-    )?;
+    let response = read_gateway.list_agent_abilities(&owner_ura)?;
     let mut abilities = response
         .get("abilities")
         .and_then(Value::as_array)
@@ -107,10 +101,7 @@ pub(super) fn run_publish(args: PublishArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn resolve_agent_owner_ura(
-    gateway: &dyn AgentStateReadGateway,
-    name: &str,
-) -> anyhow::Result<String> {
+fn resolve_agent_owner_ura(gateway: &dyn AgentReadGateway, name: &str) -> anyhow::Result<String> {
     let response = gateway.list_agents()?;
     response
         .get("agents")

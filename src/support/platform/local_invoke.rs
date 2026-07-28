@@ -428,11 +428,31 @@ impl LocalDaemonSystemAbilityIssuer {
 pub struct LocalRuntimeStateReadIssuer;
 
 impl LocalRuntimeStateReadIssuer {
+    pub fn agent_list(args: Value) -> anyhow::Result<Value> {
+        Self::agent_list_timeout(args, std::time::Duration::from_secs(30))
+    }
+
+    pub fn agent_list_timeout(args: Value, timeout: std::time::Duration) -> anyhow::Result<Value> {
+        Self::invoke_state_read_timeout(
+            crate::daemon::ability::names::agents::AGENT_LIST,
+            args,
+            timeout,
+        )
+    }
+
     pub fn invoke(ability: &str, args: Value) -> anyhow::Result<Value> {
         Self::invoke_timeout(ability, args, std::time::Duration::from_secs(30))
     }
 
     pub fn invoke_timeout(
+        ability: &str,
+        args: Value,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<Value> {
+        Self::invoke_state_read_timeout(ability, args, timeout)
+    }
+
+    fn invoke_state_read_timeout(
         ability: &str,
         args: Value,
         timeout: std::time::Duration,

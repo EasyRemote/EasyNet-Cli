@@ -9,7 +9,7 @@ use crate::cli::daemon_client::agent_view::AgentRuntimeKind;
 use super::*;
 
 pub(super) fn run_doctor(args: DoctorArgs) -> anyhow::Result<()> {
-    let gateway = agent_state_read_gateway();
+    let gateway = agent_read_gateway();
     let rows = invoke_daemon_agent_list_required(gateway.as_ref())?;
 
     let agents_to_check: Vec<(String, AgentRuntimeKind)> = match args.name {
