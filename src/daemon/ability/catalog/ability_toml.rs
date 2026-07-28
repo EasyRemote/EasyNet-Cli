@@ -182,6 +182,7 @@ fn scope_parts(
 }
 
 #[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RawAbilityContractToml {
     schema_version: String,
     name: String,
@@ -614,6 +615,25 @@ additionalProperties = false
         assert_eq!(
             parsed.capability_state,
             crate::daemon::ability::conformance::CapabilityState::Seam
+        );
+    }
+
+    #[test]
+    fn governed_contract_rejects_unknown_top_level_fields() {
+        let contract = super::super::system_ability_contract_inventory()
+            .into_iter()
+            .find(|contract| contract.name == "voice.report_metrics")
+            .expect("voice report metrics contract");
+        let body = render_ability_contract_toml(&contract).replacen(
+            "\n[input_schema]",
+            "\nlegacy_transport_hint = \"streaming_only\"\n\n[input_schema]",
+            1,
+        );
+        let error =
+            parse_ability_contract_toml(&body).expect_err("unknown descriptor fields fail closed");
+        assert!(
+            error.to_string().contains("legacy_transport_hint"),
+            "unknown field error should name the rejected field: {error}"
         );
     }
 }

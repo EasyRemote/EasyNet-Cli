@@ -14157,6 +14157,7 @@ check_canonical_ability_catalog_projection_contract() {
   local retired_store="$cli_root/src/daemon/federation/read_model/hub_published_abilities.rs"
   local meta="$cli_root/src/daemon/ability/builtins/governance/meta.rs"
   local catalog_meta="$cli_root/src/daemon/ability/catalog/catalog_metadata.rs"
+  local ability_toml="$cli_root/src/daemon/ability/catalog/ability_toml.rs"
   local ffi_invocation="$cli_root/src/ffi/invocation/mod.rs"
   local descriptor_provider="$cli_root/src/daemon/axon_bridge/runtime_descriptor_provider.rs"
   local cli_catalog="$cli_root/src/cli/daemon_client/ability_catalog.rs"
@@ -14166,12 +14167,13 @@ check_canonical_ability_catalog_projection_contract() {
   [[ ! -e "$retired_store" ]] || fail "retired hub-published ability store remains: $retired_store"
   [[ -f "$meta" ]] || fail "meta.list_abilities source is missing: $meta"
   [[ -f "$catalog_meta" ]] || fail "catalog metadata source is missing: $catalog_meta"
+  [[ -f "$ability_toml" ]] || fail "ability TOML contract source is missing: $ability_toml"
   [[ -f "$ffi_invocation" ]] || fail "FFI invocation source is missing: $ffi_invocation"
   [[ -f "$descriptor_provider" ]] || fail "runtime descriptor provider source is missing: $descriptor_provider"
   [[ -f "$cli_catalog" ]] || fail "CLI ability catalogue client is missing: $cli_catalog"
   [[ -f "$cli_ability" ]] || fail "CLI ability command source is missing: $cli_ability"
 
-  "$PYTHON_BIN" - "$descriptor" "$store" "$meta" "$catalog_meta" "$ffi_invocation" "$cli_catalog" "$cli_ability" "$descriptor_provider" <<'PY'
+  "$PYTHON_BIN" - "$descriptor" "$store" "$meta" "$catalog_meta" "$ability_toml" "$ffi_invocation" "$cli_catalog" "$cli_ability" "$descriptor_provider" <<'PY'
 import re
 import sys
 from pathlib import Path
@@ -14180,10 +14182,11 @@ descriptor = Path(sys.argv[1]).read_text(encoding="utf-8")
 store = Path(sys.argv[2]).read_text(encoding="utf-8")
 meta = Path(sys.argv[3]).read_text(encoding="utf-8")
 catalog_meta = Path(sys.argv[4]).read_text(encoding="utf-8")
-ffi = Path(sys.argv[5]).read_text(encoding="utf-8")
-cli_catalog = Path(sys.argv[6]).read_text(encoding="utf-8")
-cli_ability = Path(sys.argv[7]).read_text(encoding="utf-8")
-descriptor_provider = Path(sys.argv[8]).read_text(encoding="utf-8")
+ability_toml = Path(sys.argv[5]).read_text(encoding="utf-8")
+ffi = Path(sys.argv[6]).read_text(encoding="utf-8")
+cli_catalog = Path(sys.argv[7]).read_text(encoding="utf-8")
+cli_ability = Path(sys.argv[8]).read_text(encoding="utf-8")
+descriptor_provider = Path(sys.argv[9]).read_text(encoding="utf-8")
 
 descriptor_production = descriptor.split("\n#[cfg(test)]\nmod tests", 1)[0]
 production_store = store.split("\n#[cfg(test)]\nmod tests", 1)[0]
@@ -14235,6 +14238,14 @@ for forbidden, code in (
 ):
     if forbidden in inventory_body:
         raise SystemExit(f"system_ability_contract_inventory:{code}")
+raw_contract = re.search(
+    r"#\[derive\(serde::Deserialize\)\]\s*#\[serde\(deny_unknown_fields\)\]\s*struct RawAbilityContractToml \{",
+    ability_toml,
+)
+if raw_contract is None:
+    raise SystemExit("ability_toml:raw_contract_top_level_unknown_fields_not_denied")
+if "governed_contract_rejects_unknown_top_level_fields" not in ability_toml:
+    raise SystemExit("ability_toml:unknown_top_level_field_negative_test_missing")
 if "pub struct AuthorityPublishedAbilityStore" not in production_store:
     raise SystemExit("authority_published_store:canonical_type_missing")
 if "HubPublishedAbilityStore" in production_store:
