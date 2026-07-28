@@ -16,6 +16,7 @@ DOCS=(
     "sdk/README.md"
     "sdk/SDK_PARITY.md"
     "sdk/SDK_INTERFACE_SPEC.md"
+    "sdk/go/doc.go"
     "sdk/go/README.md"
     "sdk/python/README.md"
     "sdk/node/README.md"

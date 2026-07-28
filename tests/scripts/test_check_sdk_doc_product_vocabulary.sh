@@ -17,6 +17,7 @@ make_sandbox() {
     cp "$REPO_ROOT/sdk/README.md" "$sandbox/sdk/README.md"
     cp "$REPO_ROOT/sdk/SDK_PARITY.md" "$sandbox/sdk/SDK_PARITY.md"
     cp "$REPO_ROOT/sdk/SDK_INTERFACE_SPEC.md" "$sandbox/sdk/SDK_INTERFACE_SPEC.md"
+    cp "$REPO_ROOT/sdk/go/doc.go" "$sandbox/sdk/go/doc.go"
     cp "$REPO_ROOT/sdk/go/README.md" "$sandbox/sdk/go/README.md"
     cp "$REPO_ROOT/sdk/python/README.md" "$sandbox/sdk/python/README.md"
     cp "$REPO_ROOT/sdk/node/README.md" "$sandbox/sdk/node/README.md"
@@ -55,6 +56,15 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "workflow-specific product examples should exit 1 (got $rc)"
 grep -Fq "product vocabulary" /tmp/check-sdk-doc-product-vocabulary.out \
     || fail "workflow-specific product failure should name product vocabulary"
+
+SB="$(make_sandbox)"
+printf '\n// EasyNet provider docs must not live in SDK Godoc.\n' >>"$SB/sdk/go/doc.go"
+rc=0
+run_check "$SB" >/tmp/check-sdk-doc-product-vocabulary.out 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "Go SDK Godoc product vocabulary should exit 1 (got $rc)"
+grep -Fq "sdk/go/doc.go" /tmp/check-sdk-doc-product-vocabulary.out \
+    || fail "Go SDK Godoc failure should point at sdk/go/doc.go"
 
 SB="$(make_sandbox)"
 perl -0pi -e 's/Downstream applications build typed local facades/Applications build local facades/' "$SB/sdk/README.md"
