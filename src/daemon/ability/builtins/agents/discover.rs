@@ -242,11 +242,10 @@ impl DiscoverFederationResolver for LocalDirectoryDiscoverFederationResolver {
         DiscoverFederationResolveError,
     > {
         let ura_prefix = local_resolve_prefix(tenant, realm, tenant_filter.as_deref())?;
-        let request = crate::daemon::invocation::dispatch::federation_wrappers::ResolveRequest {
-            ura_prefix,
-            include_abilities: true,
-            filter: None,
-        };
+        let request =
+            crate::daemon::invocation::dispatch::federation_wrappers::ResolveRequest::with_filter(
+                ura_prefix, true,
+            );
         let response = crate::daemon::invocation::dispatch::federation_wrappers::handle_resolve(
             &request,
             &self.presence,

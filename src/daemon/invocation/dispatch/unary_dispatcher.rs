@@ -1034,7 +1034,9 @@ impl UnaryDispatcher {
     }
 
     pub(crate) fn dispatch_federation_resolve(&self, arguments: &[u8]) -> Result<Vec<u8>, Status> {
-        let request: federation_wrappers::ResolveRequest = parse_json_args(arguments)?;
+        let request: federation_wrappers::ResolveRequest =
+            parse_json_args::<federation_wrappers::ResolveRequestIngressV1>(arguments)?
+                .into_canonical();
         let response = federation_wrappers::handle_resolve(
             &request,
             &self.directory.presence,

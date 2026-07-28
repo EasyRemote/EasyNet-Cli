@@ -947,11 +947,7 @@ impl<'a> DaemonRouteResolver<'a> {
         selector: &RouteSelector,
     ) -> Result<SelectedInvokeRoute, ResolveRouteFailure> {
         let directory = federation_wrappers::handle_resolve_at(
-            &ResolveRequest {
-                ura_prefix: Some(selector.owner_ura.clone()),
-                include_abilities: true,
-                filter: None,
-            },
+            &ResolveRequest::with_filter(Some(selector.owner_ura.clone()), true),
             self.registry,
             self.advertised_agents,
             self.catalog,
@@ -1187,11 +1183,7 @@ impl<'a> DaemonRouteResolver<'a> {
         };
         let include_abilities = json_bool(query, "include_abilities").unwrap_or(true);
         let directory = federation_wrappers::handle_resolve_at(
-            &ResolveRequest {
-                ura_prefix: prefix,
-                include_abilities,
-                filter: None,
-            },
+            &ResolveRequest::with_filter(prefix, include_abilities),
             self.registry,
             self.advertised_agents,
             self.catalog,

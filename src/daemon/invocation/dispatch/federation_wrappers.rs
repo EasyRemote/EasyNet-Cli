@@ -63,7 +63,7 @@ use crate::daemon::federation::resolver_contract::{
 pub use crate::daemon::federation::wire_contract::{
     DiscoverRequest, DiscoverResponse, ListUserDevicesRequest, ListUserDevicesResponse,
     ResolveAgentSummary, ResolveFilterRequest, ResolveKeyRequest, ResolveKeyResponse,
-    ResolveRequest, ResolveResponse,
+    ResolveRequest, ResolveRequestIngressV1, ResolveResponse,
 };
 use crate::daemon::invocation::bidi::state::presence::PresenceRegistry;
 
@@ -547,8 +547,8 @@ pub(crate) fn handle_heartbeat(
 /// Handle a `federation.resolve` invocation.
 ///
 /// `catalog` is the mandatory owner projection read model the daemon
-/// constructs at boot. When `request.include_abilities` is true and
-/// the store has a row for an in-presence owner URA, the response
+/// constructs at boot. When the canonical request filter asks for abilities
+/// and the store has a row for an in-presence owner URA, the response
 /// carries namespace-safe projection summaries in the historical
 /// `abilities` output field. An empty catalog is the canonical "no published
 /// abilities" fact; a missing catalog is a daemon construction error.
@@ -1997,18 +1997,8 @@ mod tests {
         let catalog =
             crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore::new();
 
-        let resp = handle_resolve(
-            &ResolveRequest {
-                ura_prefix: None,
-                include_abilities: false,
-                filter: None,
-            },
-            &registry,
-            None,
-            &catalog,
-            None,
-        )
-        .expect("resolve");
+        let resp = handle_resolve(&ResolveRequest::all(), &registry, None, &catalog, None)
+            .expect("resolve");
         let uras: Vec<&str> = resp.agents.iter().map(|a| a.ura.as_str()).collect();
         assert_eq!(
             uras,
@@ -2032,11 +2022,7 @@ mod tests {
             crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore::new();
 
         let resp = handle_resolve(
-            &ResolveRequest {
-                ura_prefix: Some("easynet:///r/realm-a".to_string()),
-                include_abilities: false,
-                filter: None,
-            },
+            &ResolveRequest::with_filter(Some("easynet:///r/realm-a".to_string()), false),
             &registry,
             None,
             &catalog,
@@ -2060,11 +2046,7 @@ mod tests {
         let catalog =
             crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore::new();
         let resp = handle_resolve_at(
-            &ResolveRequest {
-                ura_prefix: Some("easynet:///r/realm/device/".to_string()),
-                include_abilities: true,
-                filter: None,
-            },
+            &ResolveRequest::with_filter(Some("easynet:///r/realm/device/".to_string()), true),
             &registry,
             None,
             &catalog,
@@ -2108,11 +2090,7 @@ mod tests {
             crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore::new();
 
         let resp = handle_resolve(
-            &ResolveRequest {
-                ura_prefix: Some("easynet:///r/realm/device/".to_string()),
-                include_abilities: true,
-                filter: None,
-            },
+            &ResolveRequest::with_filter(Some("easynet:///r/realm/device/".to_string()), true),
             &registry,
             None,
             &catalog,
@@ -2155,11 +2133,7 @@ mod tests {
         });
 
         let resp = handle_resolve(
-            &ResolveRequest {
-                ura_prefix: Some("easynet:///r/realm/agent/".to_string()),
-                include_abilities: true,
-                filter: None,
-            },
+            &ResolveRequest::with_filter(Some("easynet:///r/realm/agent/".to_string()), true),
             &registry,
             Some(&advertised),
             &catalog,
@@ -2200,11 +2174,7 @@ mod tests {
         );
 
         let live = handle_resolve_at(
-            &ResolveRequest {
-                ura_prefix: Some("easynet:///r/realm/device/".to_string()),
-                include_abilities: true,
-                filter: None,
-            },
+            &ResolveRequest::with_filter(Some("easynet:///r/realm/device/".to_string()), true),
             &registry,
             None,
             &catalog,
@@ -2216,11 +2186,7 @@ mod tests {
         assert_eq!(live.agents[0].abilities.len(), 1);
 
         let expired = handle_resolve_at(
-            &ResolveRequest {
-                ura_prefix: Some("easynet:///r/realm/device/".to_string()),
-                include_abilities: true,
-                filter: None,
-            },
+            &ResolveRequest::with_filter(Some("easynet:///r/realm/device/".to_string()), true),
             &registry,
             None,
             &catalog,
