@@ -43,6 +43,32 @@ impl LocalRuntimeCatalogueReadIssuer {
     }
 }
 
+pub struct LocalRuntimeGovernanceReadIssuer;
+
+impl LocalRuntimeGovernanceReadIssuer {
+    fn invoke(_ability: &str, _args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+        let _ = LocalRuntimeOwnerReadAttachment::from_discovery_file(
+            &KeyServiceRuntimeStateReadSignerCustody,
+            "runtime governance read subject unavailable",
+        )
+        .and_then(|attachment| attachment.into_subject_ura())?;
+        Ok(serde_json::json!({}))
+    }
+}
+
+pub struct LocalRuntimeOperationalReadIssuer;
+
+impl LocalRuntimeOperationalReadIssuer {
+    fn invoke(_ability: &str, _args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+        let _ = LocalRuntimeOwnerReadAttachment::from_discovery_file(
+            &KeyServiceRuntimeStateReadSignerCustody,
+            "runtime operational read subject unavailable",
+        )
+        .and_then(|attachment| attachment.into_subject_ura())?;
+        Ok(serde_json::json!({}))
+    }
+}
+
 trait RuntimeStateReadSignerCustody {
     fn prove(&self, user_ura: &str) -> anyhow::Result<()>;
 }
@@ -59,6 +85,50 @@ impl RuntimeStateReadSignerCustody for KeyServiceRuntimeStateReadSignerCustody {
 struct LocalRuntimeStateReadAttachment {
     realm: String,
     user_id: String,
+}
+
+enum LocalRuntimeOwnerReadAttachment {
+    PairedUser(LocalRuntimeStateReadAttachment),
+    RuntimeOwner { subject_ura: String },
+}
+
+impl LocalRuntimeOwnerReadAttachment {
+    fn from_discovery_file(
+        signer_custody: &dyn RuntimeStateReadSignerCustody,
+        error_prefix: &'static str,
+    ) -> anyhow::Result<Self> {
+        let credentials = crate::daemon::persistence::config::load_credentials()?;
+        let discovery = crate::daemon::control::discovery::read(
+            &crate::daemon::control::discovery::default_path(),
+        )?
+        .ok_or_else(|| anyhow::anyhow!("{error_prefix}: daemon Ready discovery is missing"))?;
+        let identity = discovery.daemon_identity.as_ref().ok_or_else(|| {
+            anyhow::anyhow!("{error_prefix}: daemon Ready discovery has no runtime identity")
+        })?;
+        if identity.mode == "hub" {
+            let authority = crate::core::ura::hub_ura(identity.realm.trim());
+            crate::core::identity::RuntimeGovernanceReadSubject::parse_for_callee(
+                &authority,
+                &authority,
+            )?;
+            return Ok(Self::RuntimeOwner {
+                subject_ura: authority,
+            });
+        }
+        let attachment = LocalRuntimeStateReadAttachment::from_runtime_attachment(
+            &credentials,
+            &discovery,
+            signer_custody,
+        )?;
+        Ok(Self::PairedUser(attachment))
+    }
+
+    fn into_subject_ura(self) -> anyhow::Result<String> {
+        match self {
+            Self::PairedUser(attachment) => attachment.into_subject_ura(),
+            Self::RuntimeOwner { subject_ura } => Ok(subject_ura),
+        }
+    }
 }
 
 impl LocalRuntimeStateReadAttachment {
@@ -155,10 +225,8 @@ done
 for target in \
   "$SB/src/cli/commands/discover.rs" \
   "$SB/src/cli/commands/doctor.rs" \
-  "$SB/src/cli/commands/groups/mcp.rs" \
   "$SB/src/cli/commands/groups/device.rs" \
   "$SB/src/cli/commands/status.rs" \
-  "$SB/src/cli/commands/groups/invocation.rs" \
   "$SB/src/cli/commands/invocation_watch.rs" \
   "$SB/src/cli/commands/user_signing_identity.rs"
 do
@@ -171,6 +239,23 @@ fn read_runtime_state() {
 }
 RS
 done
+
+mkdir -p "$SB/src/cli/commands/groups"
+cat >"$SB/src/cli/commands/groups/mcp.rs" <<'RS'
+use crate::support::platform::local_invoke::LocalRuntimeOperationalReadIssuer;
+
+fn read_runtime_health() {
+    let _ = LocalRuntimeOperationalReadIssuer::invoke("observe.health", serde_json::json!({}));
+}
+RS
+
+cat >"$SB/src/cli/commands/groups/invocation.rs" <<'RS'
+use crate::support::platform::local_invoke::LocalRuntimeGovernanceReadIssuer;
+
+fn read_runtime_governance() {
+    let _ = LocalRuntimeGovernanceReadIssuer::invoke("invocation.history.list", serde_json::json!({}));
+}
+RS
 
 mkdir -p "$SB/src/cli/commands/agent" "$SB/src/cli/daemon_client"
 cat >"$SB/src/cli/daemon_client/agent_gateway.rs" <<'RS'

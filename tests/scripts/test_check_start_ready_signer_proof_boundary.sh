@@ -77,6 +77,9 @@ impl RuntimeCallerSignerReadinessProbe for KeyServiceRuntimeCallerSignerReadines
 fn start_runtime_readiness_accepts_paired_user_signer_custody() {}
 
 #[test]
+fn start_runtime_readiness_accepts_device_only_unbound_credentials() {}
+
+#[test]
 fn start_runtime_readiness_rejects_missing_paired_user_signer_flag() {}
 
 #[test]
@@ -88,12 +91,12 @@ RS
 
 cat >"$SB/src/daemon/boot/invocation/mod.rs" <<'RS'
 fn boot() -> anyhow::Result<()> {
-    register_paired_user_runtime_signer(&config, &trust_anchor_path, &trust_anchor_cell)?;
+    register_paired_user_runtime_signer_if_bound(&config, &trust_anchor_path, &trust_anchor_cell)?;
     ready_capability_flags.push(crate::daemon::control::discovery::flags::PAIRED_USER_RUNTIME_SIGNER.to_string());
     Ok(())
 }
 
-fn register_paired_user_runtime_signer(
+fn register_paired_user_runtime_signer_if_bound(
     config: &DaemonConfig,
     trust_anchor_path: &PathBuf,
     trust_anchor_cell: &SharedTrustAnchor,
