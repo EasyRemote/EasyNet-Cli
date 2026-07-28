@@ -8,7 +8,6 @@ from easynet_sdk.ability_descriptor import (
     AbilityDescriptorGetRequest,
     AbilityDescriptorListRequest,
     RuntimeAbilityDescriptorProvider,
-    _RuntimeAbilityDescriptorRoute,
     project_ability_descriptor,
 )
 from easynet_sdk.axon_addressing import AddressingClient, AxonAddressingTransport
@@ -76,7 +75,7 @@ def _call() -> RuntimeCallContext:
     )
 
 
-def test_project_ability_descriptor_merges_nested_descriptor() -> None:
+def test_project_ability_descriptor_ignores_nested_descriptor_compatibility_shape() -> None:
     projection = project_ability_descriptor(
         {
             "descriptor": {
@@ -90,12 +89,9 @@ def test_project_ability_descriptor_merges_nested_descriptor() -> None:
     )
 
     assert projection.name == "agent.list"
-    assert projection.owner_ura == "easynet:///r/localhost/device/node-a"
-    assert (
-        projection.ability_ura
-        == "easynet:///r/localhost/ability/device.node-a.skill.list"
-    )
-    assert projection.metadata["tool_name"] == "skill.list"
+    assert projection.owner_ura == ""
+    assert projection.ability_ura == ""
+    assert projection.metadata == {}
 
 
 def test_runtime_ability_descriptor_provider_lists_runtime_descriptors() -> None:
@@ -157,25 +153,6 @@ def test_runtime_ability_descriptor_provider_lists_runtime_descriptors() -> None
     assert descriptor.metadata["stable"] == "true"
 
 
-def test_runtime_ability_descriptor_provider_uses_explicit_route() -> None:
-    transport = RuntimeTransportFake()
-    ability = RuntimeAbilityClient(
-        RuntimeClient(transport),  # type: ignore[arg-type]
-        AddressingClient(AxonAddressingTransport()),
-    )
-    provider = RuntimeAbilityDescriptorProvider(
-        ability,
-        route=_RuntimeAbilityDescriptorRoute("runtime.catalog.list"),
-    )
-
-    provider.list(AbilityDescriptorListRequest(call=_call()))
-
-    assert transport.seen["descriptor_ref"] == (
-        "easynet:///r/example/ability/authority.runtime.catalog.list@1.0.0"
-    )
-    assert transport.seen["subject_ura"] == "easynet:///r/example/authority"
-
-
 def test_runtime_ability_descriptor_provider_uses_generic_catalog_error() -> None:
     provider, transport = _provider()
     transport.output_json = {"items": []}
@@ -187,6 +164,27 @@ def test_runtime_ability_descriptor_provider_uses_generic_catalog_error() -> Non
         caught.value
     )
     assert "meta.list_abilities" not in str(caught.value)
+
+
+def test_runtime_ability_descriptor_provider_rejects_nested_descriptor_rows() -> None:
+    provider, transport = _provider()
+    transport.output_json = {
+        "abilities": [
+            {
+                "descriptor": {
+                    "name": "observe.health",
+                    "ability_ura": "easynet:///r/example/ability/authority.observe.health",
+                    "owner_ura": "easynet:///r/example/authority",
+                    "descriptor_version": "1.0.0",
+                }
+            }
+        ]
+    }
+
+    with pytest.raises(SDKError) as caught:
+        provider.list(AbilityDescriptorListRequest(call=_call()))
+
+    assert "ability descriptor row 0 is missing identity fields" in str(caught.value)
 
 
 def test_runtime_ability_descriptor_provider_rejects_legacy_version_alias() -> None:

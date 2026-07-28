@@ -5555,7 +5555,9 @@ if "ability.invokeGovernanceRead(ctx, call, r.listAbility, args)" not in go_rece
     raise SystemExit("sdk_history_public_route_cutover:go_receipt_governance_entry_missing")
 if "ability.Invoke(ctx, call, r.listAbility, args)" in go_descriptor:
     raise SystemExit("sdk_history_public_route_cutover:go_descriptor_uses_public_invoke")
-if "ability.invokeCatalogueRead(ctx, call, r.listAbility, args)" not in go_descriptor:
+if "runtimeAbilityDescriptorRoute" in go_descriptor or "newRuntimeAbilityDescriptorProviderWithRoute" in go_descriptor:
+    raise SystemExit("sdk_history_public_route_cutover:go_descriptor_route_override_not_retired")
+if "p.ability.invokeCatalogueRead(ctx, request.Call, runtimeAbilityDescriptorListRoute, args)" not in go_descriptor:
     raise SystemExit("sdk_history_public_route_cutover:go_descriptor_catalogue_entry_missing")
 if "TestRuntimeAbilityClientRejectsInvocationHistoryPublicRouteBeforeDescriptorResolution" not in go_test:
     raise SystemExit("sdk_history_public_route_cutover:go_public_rejection_test_missing")
@@ -5623,7 +5625,9 @@ if "ability._invoke_governance_read(call, self.list_ability.strip(), dict(argume
     raise SystemExit("sdk_history_public_route_cutover:py_receipt_governance_entry_missing")
 if "ability.invoke(call, self.list_ability.strip(), dict(args))" in py_descriptor:
     raise SystemExit("sdk_history_public_route_cutover:py_descriptor_uses_public_invoke")
-if "ability._invoke_catalogue_read(call, self.list_ability.strip(), dict(args))" not in py_descriptor:
+if "_RuntimeAbilityDescriptorRoute" in py_descriptor or "route:" in py_descriptor:
+    raise SystemExit("sdk_history_public_route_cutover:py_descriptor_route_override_not_retired")
+if "self._ability._invoke_catalogue_read(" not in py_descriptor or "_RUNTIME_ABILITY_DESCRIPTOR_LIST_ROUTE" not in py_descriptor:
     raise SystemExit("sdk_history_public_route_cutover:py_descriptor_catalogue_entry_missing")
 if "test_runtime_ability_rejects_invocation_history_public_route_before_descriptor_resolution" not in py_test:
     raise SystemExit("sdk_history_public_route_cutover:py_public_rejection_test_missing")
@@ -6296,11 +6300,12 @@ def read(path: Path) -> str:
     return path.read_text()
 
 go = read(go_path)
-if 'Version:          descriptorString(values["descriptor_version"])' not in go:
+if 'Version:          descriptorString(raw["descriptor_version"])' not in go:
     raise SystemExit("sdk_go_ability_descriptor_version_not_descriptor_version_owned")
 for retired in (
     "firstDescriptorString(",
     'values["version"]',
+    'raw["version"]',
 ):
     if retired in go:
         raise SystemExit(f"sdk_go_ability_descriptor_version_alias:{retired}")
@@ -6313,11 +6318,12 @@ if '"version":"1.0.0"' not in go_tests or '"descriptor_version":"2.0.0"' not in 
     raise SystemExit("sdk_go_ability_descriptor_version_vectors_missing")
 
 py = read(py_path)
-if 'version=_text(values.get("descriptor_version"))' not in py:
+if 'version=_text(raw.get("descriptor_version"))' not in py:
     raise SystemExit("sdk_python_ability_descriptor_version_not_descriptor_version_owned")
 for retired in (
     "_first_text(",
     'values.get("version")',
+    'raw.get("version")',
 ):
     if retired in py:
         raise SystemExit(f"sdk_python_ability_descriptor_version_alias:{retired}")

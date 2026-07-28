@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestProjectAbilityDescriptorMergesNestedDescriptorWithTopLevelOverride(t *testing.T) {
+func TestProjectAbilityDescriptorIgnoresNestedDescriptorCompatibilityShape(t *testing.T) {
 	projection := ProjectAbilityDescriptor(map[string]any{
 		"descriptor": map[string]any{
 			"name":        "skill.list",
@@ -22,16 +22,16 @@ func TestProjectAbilityDescriptorMergesNestedDescriptorWithTopLevelOverride(t *t
 	})
 
 	if projection.Name != "agent.list" {
-		t.Fatalf("top-level name must override nested descriptor name, got %q", projection.Name)
+		t.Fatalf("top-level name = %q", projection.Name)
 	}
-	if projection.OwnerURA != "easynet:///r/localhost/device/node-a" {
-		t.Fatalf("owner ura = %q", projection.OwnerURA)
+	if projection.OwnerURA != "" {
+		t.Fatalf("nested owner ura must not be projected, got %q", projection.OwnerURA)
 	}
-	if projection.AbilityURA != "easynet:///r/localhost/ability/device.node-a.skill.list" {
-		t.Fatalf("ability ura = %q", projection.AbilityURA)
+	if projection.AbilityURA != "" {
+		t.Fatalf("nested ability ura must not be projected, got %q", projection.AbilityURA)
 	}
-	if projection.Metadata["host_node_id"] != "node-a" {
-		t.Fatalf("metadata host node id = %#v", projection.Metadata["host_node_id"])
+	if projection.Metadata != nil {
+		t.Fatalf("nested metadata must not be projected, got %#v", projection.Metadata)
 	}
 }
 
@@ -182,38 +182,6 @@ func TestRuntimeAbilityDescriptorProviderListsRuntimeDescriptors(t *testing.T) {
 	}
 }
 
-func TestRuntimeAbilityDescriptorProviderUsesExplicitRoute(t *testing.T) {
-	var seen map[string]any
-	transport := RuntimeTransportFunc{InvokeFunc: func(_ context.Context, raw []byte) ([]byte, error) {
-		if err := json.Unmarshal(raw, &seen); err != nil {
-			return nil, err
-		}
-		return runtimeAbilityResultJSON(true, `{"abilities":[]}`, "", false), nil
-	}, ResolveDescriptorRefFunc: testResolveDescriptorRef(t)}
-	runtime, _ := NewRuntimeClient(transport)
-	ability, _ := NewRuntimeAbilityClient(runtime, NewCanonicalAddressing())
-	route, err := newRuntimeAbilityDescriptorRoute("runtime.catalog.list")
-	if err != nil {
-		t.Fatalf("newRuntimeAbilityDescriptorRoute: %v", err)
-	}
-	provider, err := newRuntimeAbilityDescriptorProviderWithRoute(ability, route)
-	if err != nil {
-		t.Fatalf("newRuntimeAbilityDescriptorProviderWithRoute: %v", err)
-	}
-
-	if _, err := provider.List(context.Background(), AbilityDescriptorListRequest{
-		Call: runtimeAbilityTestContext(),
-	}); err != nil {
-		t.Fatalf("List through explicit route: %v", err)
-	}
-	if seen["descriptor_ref"] != "easynet:///r/example/ability/authority.runtime.catalog.list@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read" {
-		t.Fatalf("descriptor_ref = %q", seen["descriptor_ref"])
-	}
-	if seen["subject_ura"] != "easynet:///r/example/authority" {
-		t.Fatalf("catalogue read subject_ura = %q", seen["subject_ura"])
-	}
-}
-
 func TestRuntimeAbilityDescriptorProviderUsesGenericCatalogError(t *testing.T) {
 	transport := RuntimeTransportFunc{InvokeFunc: func(_ context.Context, _ []byte) ([]byte, error) {
 		return runtimeAbilityResultJSON(true, `{"items":[]}`, "", false), nil
@@ -230,6 +198,29 @@ func TestRuntimeAbilityDescriptorProviderUsesGenericCatalogError(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "meta.list_abilities") {
 		t.Fatalf("generic descriptor catalog error leaked provider route: %v", err)
+	}
+}
+
+func TestRuntimeAbilityDescriptorProviderRejectsNestedDescriptorRows(t *testing.T) {
+	transport := RuntimeTransportFunc{InvokeFunc: func(_ context.Context, _ []byte) ([]byte, error) {
+		return runtimeAbilityResultJSON(true, `{"abilities":[{
+			"descriptor":{
+				"name":"observe.health",
+				"ability_ura":"easynet:///r/example/ability/authority.observe.health",
+				"owner_ura":"easynet:///r/example/authority",
+				"descriptor_version":"1.0.0"
+			}
+		}]}`, "", false), nil
+	}, ResolveDescriptorRefFunc: testResolveDescriptorRef(t)}
+	runtime, _ := NewRuntimeClient(transport)
+	ability, _ := NewRuntimeAbilityClient(runtime, NewCanonicalAddressing())
+	provider, _ := NewRuntimeAbilityDescriptorProvider(ability)
+
+	_, err := provider.List(context.Background(), AbilityDescriptorListRequest{
+		Call: runtimeAbilityTestContext(),
+	})
+	if err == nil || !strings.Contains(err.Error(), "ability descriptor row 0 is missing identity fields") {
+		t.Fatalf("nested descriptor row error = %v", err)
 	}
 }
 

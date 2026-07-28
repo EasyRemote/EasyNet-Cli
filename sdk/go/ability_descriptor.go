@@ -106,66 +106,17 @@ func (c *AbilityDescriptorClient) Get(ctx context.Context, request AbilityDescri
 	return c.provider.Get(ctx, request)
 }
 
-type runtimeAbilityDescriptorRoute struct {
-	listAbility string
-	rowsField   string
-}
-
-func defaultRuntimeAbilityDescriptorRoute() runtimeAbilityDescriptorRoute {
-	return runtimeAbilityDescriptorRoute{
-		listAbility: runtimeAbilityDescriptorListRoute,
-		rowsField:   "abilities",
-	}
-}
-
-func newRuntimeAbilityDescriptorRoute(listAbility string) (runtimeAbilityDescriptorRoute, error) {
-	route := runtimeAbilityDescriptorRoute{
-		listAbility: strings.TrimSpace(listAbility),
-		rowsField:   "abilities",
-	}
-	if route.listAbility == "" {
-		return runtimeAbilityDescriptorRoute{}, invalidAbilityDescriptor("descriptor catalog route ability is required", nil)
-	}
-	return route, nil
-}
-
-func (r runtimeAbilityDescriptorRoute) list(ctx context.Context, ability *RuntimeAbilityClient, call RuntimeCallContext, args map[string]any) (map[string]any, error) {
-	if strings.TrimSpace(r.listAbility) == "" {
-		return nil, invalidAbilityDescriptor("descriptor catalog route ability is required", nil)
-	}
-	if strings.TrimSpace(r.rowsField) == "" {
-		return nil, invalidAbilityDescriptor("descriptor catalog route rows field is required", nil)
-	}
-	return ability.invokeCatalogueRead(ctx, call, r.listAbility, args)
-}
-
-func (r runtimeAbilityDescriptorRoute) rows(output map[string]any) ([]any, error) {
-	rawRows, ok := output[r.rowsField].([]any)
-	if !ok {
-		return nil, invalidAbilityDescriptor("runtime descriptor catalog output must include descriptor rows", nil)
-	}
-	return rawRows, nil
-}
-
-// RuntimeAbilityDescriptorProvider reads the runtime descriptor catalog through
-// an explicit provider route and the generic RuntimeAbilityClient.
+// RuntimeAbilityDescriptorProvider reads canonical runtime descriptor catalog
+// facts through the generic RuntimeAbilityClient.
 type RuntimeAbilityDescriptorProvider struct {
 	ability *RuntimeAbilityClient
-	route   runtimeAbilityDescriptorRoute
 }
 
 func NewRuntimeAbilityDescriptorProvider(ability *RuntimeAbilityClient) (*RuntimeAbilityDescriptorProvider, error) {
-	return newRuntimeAbilityDescriptorProviderWithRoute(ability, defaultRuntimeAbilityDescriptorRoute())
-}
-
-func newRuntimeAbilityDescriptorProviderWithRoute(ability *RuntimeAbilityClient, route runtimeAbilityDescriptorRoute) (*RuntimeAbilityDescriptorProvider, error) {
 	if ability == nil {
 		return nil, invalidAbilityDescriptor("runtime ability client is required", nil)
 	}
-	if strings.TrimSpace(route.listAbility) == "" || strings.TrimSpace(route.rowsField) == "" {
-		return nil, invalidAbilityDescriptor("descriptor catalog route is incomplete", nil)
-	}
-	return &RuntimeAbilityDescriptorProvider{ability: ability, route: route}, nil
+	return &RuntimeAbilityDescriptorProvider{ability: ability}, nil
 }
 
 func (p *RuntimeAbilityDescriptorProvider) List(ctx context.Context, request AbilityDescriptorListRequest) (AbilityDescriptorPage, error) {
@@ -182,13 +133,13 @@ func (p *RuntimeAbilityDescriptorProvider) List(ctx context.Context, request Abi
 	if abilityURA := strings.TrimSpace(request.AbilityURA); abilityURA != "" {
 		args["ability_ura"] = abilityURA
 	}
-	output, err := p.route.list(ctx, p.ability, request.Call, args)
+	output, err := p.ability.invokeCatalogueRead(ctx, request.Call, runtimeAbilityDescriptorListRoute, args)
 	if err != nil {
 		return AbilityDescriptorPage{}, err
 	}
-	rawAbilities, err := p.route.rows(output)
-	if err != nil {
-		return AbilityDescriptorPage{}, err
+	rawAbilities, ok := output["abilities"].([]any)
+	if !ok {
+		return AbilityDescriptorPage{}, invalidAbilityDescriptor("runtime descriptor catalog output must include descriptor rows", nil)
 	}
 	descriptors := make([]AbilityDescriptorProjection, 0, len(rawAbilities))
 	for i, raw := range rawAbilities {
@@ -270,30 +221,29 @@ func ProjectAbilityDescriptorRef(ctx context.Context, addressing Addressing, raw
 }
 
 func ProjectAbilityDescriptor(raw map[string]any) AbilityDescriptorProjection {
-	values := mergeAbilityDescriptorMap(raw)
 	projection := AbilityDescriptorProjection{
-		AbilityURA:       descriptorString(values["ability_ura"]),
-		DescriptorRef:    descriptorString(values["descriptor_ref"]),
-		Name:             descriptorString(values["name"]),
-		OwnerURA:         descriptorString(values["owner_ura"]),
-		Version:          descriptorString(values["descriptor_version"]),
-		SchemaHash:       descriptorString(values["schema_hash"]),
-		DescriptorHash:   descriptorString(values["descriptor_hash"]),
-		CallMode:         descriptorString(values["call_mode"]),
-		Class:            descriptorString(values["class"]),
-		ReceiptSemantics: descriptorMap(values["receipt_semantics"]),
-		Visibility:       descriptorString(values["visibility"]),
-		Source:           descriptorString(values["source"]),
-		Description:      descriptorString(values["description"]),
-		Metadata:         descriptorMap(values["metadata"]),
+		AbilityURA:       descriptorString(raw["ability_ura"]),
+		DescriptorRef:    descriptorString(raw["descriptor_ref"]),
+		Name:             descriptorString(raw["name"]),
+		OwnerURA:         descriptorString(raw["owner_ura"]),
+		Version:          descriptorString(raw["descriptor_version"]),
+		SchemaHash:       descriptorString(raw["schema_hash"]),
+		DescriptorHash:   descriptorString(raw["descriptor_hash"]),
+		CallMode:         descriptorString(raw["call_mode"]),
+		Class:            descriptorString(raw["class"]),
+		ReceiptSemantics: descriptorMap(raw["receipt_semantics"]),
+		Visibility:       descriptorString(raw["visibility"]),
+		Source:           descriptorString(raw["source"]),
+		Description:      descriptorString(raw["description"]),
+		Metadata:         descriptorMap(raw["metadata"]),
 	}
 	if projection.Name == "" {
 		projection.Name = joinAbilityDescriptorName(
-			descriptorString(values["namespace"]),
-			descriptorString(values["local_name"]),
+			descriptorString(raw["namespace"]),
+			descriptorString(raw["local_name"]),
 		)
 	}
-	if hints := descriptorMap(values["hints"]); hints != nil {
+	if hints := descriptorMap(raw["hints"]); hints != nil {
 		projection.Hints = AbilityDescriptorHints{
 			ReadOnly:      descriptorBool(hints["read_only"]),
 			Destructive:   descriptorBool(hints["destructive"]),
@@ -302,31 +252,11 @@ func ProjectAbilityDescriptor(raw map[string]any) AbilityDescriptorProjection {
 			BidiOnly:      descriptorBool(hints["bidi_only"]),
 		}
 	}
-	if schema := descriptorMap(values["schema_summary"]); schema != nil {
+	if schema := descriptorMap(raw["schema_summary"]); schema != nil {
 		projection.SchemaSummary = schema
 		projection.InputSchema = descriptorMap(schema["input"])
 	}
 	return projection
-}
-
-func mergeAbilityDescriptorMap(raw map[string]any) map[string]any {
-	if raw == nil {
-		return map[string]any{}
-	}
-	nested := descriptorMap(raw["descriptor"])
-	if nested == nil {
-		return raw
-	}
-	merged := make(map[string]any, len(nested)+len(raw))
-	for key, value := range nested {
-		merged[key] = value
-	}
-	for key, value := range raw {
-		if key != "descriptor" {
-			merged[key] = value
-		}
-	}
-	return merged
 }
 
 func joinAbilityDescriptorName(namespace string, localName string) string {

@@ -119,50 +119,13 @@ class AbilityDescriptorClient:
         return self._provider.get(request)
 
 
-@dataclass(frozen=True)
-class _RuntimeAbilityDescriptorRoute:
-    list_ability: str
-    rows_field: str = "abilities"
-
-    @classmethod
-    def default(cls) -> "_RuntimeAbilityDescriptorRoute":
-        return cls(_RUNTIME_ABILITY_DESCRIPTOR_LIST_ROUTE)
-
-    def __post_init__(self) -> None:
-        if not self.list_ability.strip():
-            raise _invalid_descriptor("descriptor catalog route ability is required")
-        if not self.rows_field.strip():
-            raise _invalid_descriptor("descriptor catalog route rows field is required")
-
-    def list(
-        self,
-        ability: RuntimeAbilityClient,
-        call: RuntimeCallContext,
-        args: Mapping[str, object],
-    ) -> dict[str, object]:
-        return ability._invoke_catalogue_read(call, self.list_ability.strip(), dict(args))
-
-    def rows(self, output: Mapping[str, object]) -> list[object]:
-        raw_rows = output.get(self.rows_field)
-        if not isinstance(raw_rows, list):
-            raise _invalid_descriptor(
-                "runtime descriptor catalog output must include descriptor rows"
-            )
-        return raw_rows
-
-
 class RuntimeAbilityDescriptorProvider:
-    """Provider-backed descriptor catalog over an explicit runtime route."""
+    """Provider-backed descriptor catalog over the canonical runtime route."""
 
-    def __init__(
-        self,
-        ability: RuntimeAbilityClient,
-        route: _RuntimeAbilityDescriptorRoute | None = None,
-    ) -> None:
+    def __init__(self, ability: RuntimeAbilityClient) -> None:
         if ability is None:
             raise _invalid_descriptor("runtime ability client is required")
         self._ability = ability
-        self._route = route or _RuntimeAbilityDescriptorRoute.default()
 
     def list(self, request: AbilityDescriptorListRequest) -> AbilityDescriptorPage:
         if not isinstance(request, AbilityDescriptorListRequest):
@@ -174,8 +137,14 @@ class RuntimeAbilityDescriptorProvider:
             args["owner_ura"] = request.owner_ura.strip()
         if request.ability_ura.strip():
             args["ability_ura"] = request.ability_ura.strip()
-        output = self._route.list(self._ability, request.call, args)
-        raw_abilities = self._route.rows(output)
+        output = self._ability._invoke_catalogue_read(
+            request.call, _RUNTIME_ABILITY_DESCRIPTOR_LIST_ROUTE, args
+        )
+        raw_abilities = output.get("abilities")
+        if not isinstance(raw_abilities, list):
+            raise _invalid_descriptor(
+                "runtime descriptor catalog output must include descriptor rows"
+            )
         descriptors: list[AbilityDescriptorProjection] = []
         for index, raw in enumerate(raw_abilities):
             if not isinstance(raw, Mapping):
@@ -268,26 +237,25 @@ def parse_ability_descriptor_ref(
 def project_ability_descriptor(raw: Mapping[str, object]) -> AbilityDescriptorProjection:
     """Project one runtime descriptor row without deriving governed facts."""
 
-    values = _merge_descriptor(raw)
-    name = _text(values.get("name"))
+    name = _text(raw.get("name"))
     if not name:
-        name = _join_name(_text(values.get("namespace")), _text(values.get("local_name")))
-    hints = _mapping(values.get("hints"))
-    schema = _mapping(values.get("schema_summary"))
+        name = _join_name(_text(raw.get("namespace")), _text(raw.get("local_name")))
+    hints = _mapping(raw.get("hints"))
+    schema = _mapping(raw.get("schema_summary"))
     return AbilityDescriptorProjection(
-        ability_ura=_text(values.get("ability_ura")),
-        descriptor_ref=_text(values.get("descriptor_ref")),
+        ability_ura=_text(raw.get("ability_ura")),
+        descriptor_ref=_text(raw.get("descriptor_ref")),
         name=name,
-        owner_ura=_text(values.get("owner_ura")),
-        version=_text(values.get("descriptor_version")),
-        schema_hash=_text(values.get("schema_hash")),
-        descriptor_hash=_text(values.get("descriptor_hash")),
-        call_mode=_text(values.get("call_mode")),
-        class_=_text(values.get("class")),
-        receipt_semantics=_mapping(values.get("receipt_semantics")),
-        visibility=_text(values.get("visibility")),
-        source=_text(values.get("source")),
-        description=_text(values.get("description")),
+        owner_ura=_text(raw.get("owner_ura")),
+        version=_text(raw.get("descriptor_version")),
+        schema_hash=_text(raw.get("schema_hash")),
+        descriptor_hash=_text(raw.get("descriptor_hash")),
+        call_mode=_text(raw.get("call_mode")),
+        class_=_text(raw.get("class")),
+        receipt_semantics=_mapping(raw.get("receipt_semantics")),
+        visibility=_text(raw.get("visibility")),
+        source=_text(raw.get("source")),
+        description=_text(raw.get("description")),
         hints=AbilityDescriptorHints(
             read_only=_bool(hints.get("read_only")),
             destructive=_bool(hints.get("destructive")),
@@ -297,7 +265,7 @@ def project_ability_descriptor(raw: Mapping[str, object]) -> AbilityDescriptorPr
         ),
         schema_summary=schema,
         input_schema=_mapping(schema.get("input")),
-        metadata=_mapping(values.get("metadata")),
+        metadata=_mapping(raw.get("metadata")),
     )
 
 
@@ -312,15 +280,6 @@ def _invalid_descriptor_ref(
         message=message,
         cause=cause,
     )
-
-
-def _merge_descriptor(raw: Mapping[str, object]) -> Mapping[str, object]:
-    nested = _mapping(raw.get("descriptor"))
-    if not nested:
-        return dict(raw)
-    merged = dict(nested)
-    merged.update({key: value for key, value in raw.items() if key != "descriptor"})
-    return merged
 
 
 def _join_name(namespace: str, local_name: str) -> str:
