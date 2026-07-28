@@ -240787,6 +240787,14 @@
           "sha256": "b706a38978a4cac5263253b6c7e42565feaac2e4fc14762e2fa41d5a74fcfe37"
         },
         {
+          "item": "try_canonical_receipt_bytes",
+          "sha256": "19279fc24ba3dfa1b4de5de0c79f35d75c48457764ad92280a30702d5440fb21"
+        },
+        {
+          "item": "try_canonical_receipt_bytes_with_hosted",
+          "sha256": "00054b7a62c7732edad59bfbdc438a36254014d26cc47aed592a3e35f6214cbb"
+        },
+        {
           "item": "try_canonical_receipt_proof_facts",
           "sha256": "275e572c3c8a4226999803b6d41d3f9cdf5aa99c998f3c7fe2eb7f91a6dc9369"
         },
@@ -240821,6 +240829,14 @@
         {
           "item": "axiom.canonical_receipt_proof_facts",
           "sha256": "b706a38978a4cac5263253b6c7e42565feaac2e4fc14762e2fa41d5a74fcfe37"
+        },
+        {
+          "item": "axiom.try_canonical_receipt_bytes",
+          "sha256": "19279fc24ba3dfa1b4de5de0c79f35d75c48457764ad92280a30702d5440fb21"
+        },
+        {
+          "item": "axiom.try_canonical_receipt_bytes_with_hosted",
+          "sha256": "00054b7a62c7732edad59bfbdc438a36254014d26cc47aed592a3e35f6214cbb"
         },
         {
           "item": "axiom.try_canonical_receipt_proof_facts",
@@ -240922,6 +240938,14 @@
               "sha256": "b706a38978a4cac5263253b6c7e42565feaac2e4fc14762e2fa41d5a74fcfe37"
             },
             {
+              "item": "try_canonical_receipt_bytes",
+              "sha256": "19279fc24ba3dfa1b4de5de0c79f35d75c48457764ad92280a30702d5440fb21"
+            },
+            {
+              "item": "try_canonical_receipt_bytes_with_hosted",
+              "sha256": "00054b7a62c7732edad59bfbdc438a36254014d26cc47aed592a3e35f6214cbb"
+            },
+            {
               "item": "try_canonical_receipt_proof_facts",
               "sha256": "275e572c3c8a4226999803b6d41d3f9cdf5aa99c998f3c7fe2eb7f91a6dc9369"
             },
@@ -240956,6 +240980,14 @@
             {
               "item": "axiom.canonical_receipt_proof_facts",
               "sha256": "b706a38978a4cac5263253b6c7e42565feaac2e4fc14762e2fa41d5a74fcfe37"
+            },
+            {
+              "item": "axiom.try_canonical_receipt_bytes",
+              "sha256": "19279fc24ba3dfa1b4de5de0c79f35d75c48457764ad92280a30702d5440fb21"
+            },
+            {
+              "item": "axiom.try_canonical_receipt_bytes_with_hosted",
+              "sha256": "00054b7a62c7732edad59bfbdc438a36254014d26cc47aed592a3e35f6214cbb"
             },
             {
               "item": "axiom.try_canonical_receipt_proof_facts",
@@ -241057,6 +241089,14 @@
               "sha256": "b706a38978a4cac5263253b6c7e42565feaac2e4fc14762e2fa41d5a74fcfe37"
             },
             {
+              "item": "try_canonical_receipt_bytes",
+              "sha256": "19279fc24ba3dfa1b4de5de0c79f35d75c48457764ad92280a30702d5440fb21"
+            },
+            {
+              "item": "try_canonical_receipt_bytes_with_hosted",
+              "sha256": "00054b7a62c7732edad59bfbdc438a36254014d26cc47aed592a3e35f6214cbb"
+            },
+            {
               "item": "try_canonical_receipt_proof_facts",
               "sha256": "275e572c3c8a4226999803b6d41d3f9cdf5aa99c998f3c7fe2eb7f91a6dc9369"
             },
@@ -241091,6 +241131,14 @@
             {
               "item": "axiom.canonical_receipt_proof_facts",
               "sha256": "b706a38978a4cac5263253b6c7e42565feaac2e4fc14762e2fa41d5a74fcfe37"
+            },
+            {
+              "item": "axiom.try_canonical_receipt_bytes",
+              "sha256": "19279fc24ba3dfa1b4de5de0c79f35d75c48457764ad92280a30702d5440fb21"
+            },
+            {
+              "item": "axiom.try_canonical_receipt_bytes_with_hosted",
+              "sha256": "00054b7a62c7732edad59bfbdc438a36254014d26cc47aed592a3e35f6214cbb"
             },
             {
               "item": "axiom.try_canonical_receipt_proof_facts",
@@ -241192,6 +241240,14 @@
               "sha256": "b706a38978a4cac5263253b6c7e42565feaac2e4fc14762e2fa41d5a74fcfe37"
             },
             {
+              "item": "try_canonical_receipt_bytes",
+              "sha256": "19279fc24ba3dfa1b4de5de0c79f35d75c48457764ad92280a30702d5440fb21"
+            },
+            {
+              "item": "try_canonical_receipt_bytes_with_hosted",
+              "sha256": "00054b7a62c7732edad59bfbdc438a36254014d26cc47aed592a3e35f6214cbb"
+            },
+            {
               "item": "try_canonical_receipt_proof_facts",
               "sha256": "275e572c3c8a4226999803b6d41d3f9cdf5aa99c998f3c7fe2eb7f91a6dc9369"
             },
@@ -241226,6 +241282,14 @@
             {
               "item": "axiom.canonical_receipt_proof_facts",
               "sha256": "b706a38978a4cac5263253b6c7e42565feaac2e4fc14762e2fa41d5a74fcfe37"
+            },
+            {
+              "item": "axiom.try_canonical_receipt_bytes",
+              "sha256": "19279fc24ba3dfa1b4de5de0c79f35d75c48457764ad92280a30702d5440fb21"
+            },
+            {
+              "item": "axiom.try_canonical_receipt_bytes_with_hosted",
+              "sha256": "00054b7a62c7732edad59bfbdc438a36254014d26cc47aed592a3e35f6214cbb"
             },
             {
               "item": "axiom.try_canonical_receipt_proof_facts",
@@ -241327,6 +241391,14 @@
               "sha256": "b706a38978a4cac5263253b6c7e42565feaac2e4fc14762e2fa41d5a74fcfe37"
             },
             {
+              "item": "try_canonical_receipt_bytes",
+              "sha256": "19279fc24ba3dfa1b4de5de0c79f35d75c48457764ad92280a30702d5440fb21"
+            },
+            {
+              "item": "try_canonical_receipt_bytes_with_hosted",
+              "sha256": "00054b7a62c7732edad59bfbdc438a36254014d26cc47aed592a3e35f6214cbb"
+            },
+            {
               "item": "try_canonical_receipt_proof_facts",
               "sha256": "275e572c3c8a4226999803b6d41d3f9cdf5aa99c998f3c7fe2eb7f91a6dc9369"
             },
@@ -241361,6 +241433,14 @@
             {
               "item": "axiom.canonical_receipt_proof_facts",
               "sha256": "b706a38978a4cac5263253b6c7e42565feaac2e4fc14762e2fa41d5a74fcfe37"
+            },
+            {
+              "item": "axiom.try_canonical_receipt_bytes",
+              "sha256": "19279fc24ba3dfa1b4de5de0c79f35d75c48457764ad92280a30702d5440fb21"
+            },
+            {
+              "item": "axiom.try_canonical_receipt_bytes_with_hosted",
+              "sha256": "00054b7a62c7732edad59bfbdc438a36254014d26cc47aed592a3e35f6214cbb"
             },
             {
               "item": "axiom.try_canonical_receipt_proof_facts",
@@ -241462,6 +241542,14 @@
               "sha256": "b706a38978a4cac5263253b6c7e42565feaac2e4fc14762e2fa41d5a74fcfe37"
             },
             {
+              "item": "try_canonical_receipt_bytes",
+              "sha256": "19279fc24ba3dfa1b4de5de0c79f35d75c48457764ad92280a30702d5440fb21"
+            },
+            {
+              "item": "try_canonical_receipt_bytes_with_hosted",
+              "sha256": "00054b7a62c7732edad59bfbdc438a36254014d26cc47aed592a3e35f6214cbb"
+            },
+            {
               "item": "try_canonical_receipt_proof_facts",
               "sha256": "275e572c3c8a4226999803b6d41d3f9cdf5aa99c998f3c7fe2eb7f91a6dc9369"
             },
@@ -241496,6 +241584,14 @@
             {
               "item": "axiom.canonical_receipt_proof_facts",
               "sha256": "b706a38978a4cac5263253b6c7e42565feaac2e4fc14762e2fa41d5a74fcfe37"
+            },
+            {
+              "item": "axiom.try_canonical_receipt_bytes",
+              "sha256": "19279fc24ba3dfa1b4de5de0c79f35d75c48457764ad92280a30702d5440fb21"
+            },
+            {
+              "item": "axiom.try_canonical_receipt_bytes_with_hosted",
+              "sha256": "00054b7a62c7732edad59bfbdc438a36254014d26cc47aed592a3e35f6214cbb"
             },
             {
               "item": "axiom.try_canonical_receipt_proof_facts",
@@ -241597,6 +241693,14 @@
               "sha256": "b706a38978a4cac5263253b6c7e42565feaac2e4fc14762e2fa41d5a74fcfe37"
             },
             {
+              "item": "try_canonical_receipt_bytes",
+              "sha256": "19279fc24ba3dfa1b4de5de0c79f35d75c48457764ad92280a30702d5440fb21"
+            },
+            {
+              "item": "try_canonical_receipt_bytes_with_hosted",
+              "sha256": "00054b7a62c7732edad59bfbdc438a36254014d26cc47aed592a3e35f6214cbb"
+            },
+            {
               "item": "try_canonical_receipt_proof_facts",
               "sha256": "275e572c3c8a4226999803b6d41d3f9cdf5aa99c998f3c7fe2eb7f91a6dc9369"
             },
@@ -241631,6 +241735,14 @@
             {
               "item": "axiom.canonical_receipt_proof_facts",
               "sha256": "b706a38978a4cac5263253b6c7e42565feaac2e4fc14762e2fa41d5a74fcfe37"
+            },
+            {
+              "item": "axiom.try_canonical_receipt_bytes",
+              "sha256": "19279fc24ba3dfa1b4de5de0c79f35d75c48457764ad92280a30702d5440fb21"
+            },
+            {
+              "item": "axiom.try_canonical_receipt_bytes_with_hosted",
+              "sha256": "00054b7a62c7732edad59bfbdc438a36254014d26cc47aed592a3e35f6214cbb"
             },
             {
               "item": "axiom.try_canonical_receipt_proof_facts",

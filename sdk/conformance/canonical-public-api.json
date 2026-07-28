@@ -367,6 +367,8 @@
       "streams",
       "supervisor",
       "to_jcs_bytes",
+      "try_canonical_receipt_bytes",
+      "try_canonical_receipt_bytes_with_hosted",
       "try_canonical_receipt_proof_facts",
       "ura",
       "validate_hosted_attestation_authority",
@@ -1633,6 +1635,8 @@
       "axiom.sha256",
       "axiom.sign_host_attestation",
       "axiom.signing_key_from_bytes",
+      "axiom.try_canonical_receipt_bytes",
+      "axiom.try_canonical_receipt_bytes_with_hosted",
       "axiom.try_canonical_receipt_proof_facts",
       "axiom.validate_hosted_attestation_authority",
       "axiom.verify_host_attestation",
@@ -13483,6 +13487,8 @@
           "canonical_receipt_bytes",
           "canonical_receipt_bytes_with_hosted",
           "canonical_receipt_proof_facts",
+          "try_canonical_receipt_bytes",
+          "try_canonical_receipt_bytes_with_hosted",
           "try_canonical_receipt_proof_facts",
           "validate_receipt_fact_semantics"
         ],
@@ -13494,6 +13500,8 @@
           "axiom.canonical_receipt_bytes",
           "axiom.canonical_receipt_bytes_with_hosted",
           "axiom.canonical_receipt_proof_facts",
+          "axiom.try_canonical_receipt_bytes",
+          "axiom.try_canonical_receipt_bytes_with_hosted",
           "axiom.try_canonical_receipt_proof_facts",
           "bundle.InvocationReceiptJson",
           "bundle.ReceiptJson",
@@ -14726,7 +14734,7 @@
           "path": "sdk/go/direct_runtime.go",
           "sha256": "1938645e4f08a20fe8024179843c1428edab242d736cfe78cf29756fc27505bd",
           "interface": "RuntimeConnector",
-          "revision": "7e59fc75e73f4c77aefc00a05f6330922ad47227"
+          "revision": "48dac330760e5508d04f48f5bffbd9013beb53f0"
         },
         "step_evidence": [
           {
@@ -14778,7 +14786,7 @@
           "path": "sdk/python/easynet_sdk/providers/runtime/direct.py",
           "sha256": "0ccff58079e7cbec5d9615a12ab46a845a55bdc0ea10d3955826efa15a5910fc",
           "interface": "RuntimeConnector",
-          "revision": "7e59fc75e73f4c77aefc00a05f6330922ad47227"
+          "revision": "48dac330760e5508d04f48f5bffbd9013beb53f0"
         },
         "step_evidence": [
           {
@@ -14832,7 +14840,7 @@
           "path": "sdk/go/direct_runtime.go",
           "sha256": "1938645e4f08a20fe8024179843c1428edab242d736cfe78cf29756fc27505bd",
           "interface": "RuntimeConnector",
-          "revision": "7e59fc75e73f4c77aefc00a05f6330922ad47227"
+          "revision": "48dac330760e5508d04f48f5bffbd9013beb53f0"
         },
         "step_evidence": [
           {
@@ -14874,7 +14882,7 @@
           "path": "sdk/python/easynet_sdk/providers/runtime/direct.py",
           "sha256": "0ccff58079e7cbec5d9615a12ab46a845a55bdc0ea10d3955826efa15a5910fc",
           "interface": "RuntimeConnector",
-          "revision": "7e59fc75e73f4c77aefc00a05f6330922ad47227"
+          "revision": "48dac330760e5508d04f48f5bffbd9013beb53f0"
         },
         "step_evidence": [
           {
@@ -14918,7 +14926,7 @@
           "path": "sdk/go/direct_runtime.go",
           "sha256": "1938645e4f08a20fe8024179843c1428edab242d736cfe78cf29756fc27505bd",
           "interface": "RuntimeConnector",
-          "revision": "7e59fc75e73f4c77aefc00a05f6330922ad47227"
+          "revision": "48dac330760e5508d04f48f5bffbd9013beb53f0"
         },
         "step_evidence": [
           {
@@ -14970,7 +14978,7 @@
           "path": "sdk/python/easynet_sdk/providers/runtime/direct.py",
           "sha256": "0ccff58079e7cbec5d9615a12ab46a845a55bdc0ea10d3955826efa15a5910fc",
           "interface": "RuntimeConnector",
-          "revision": "7e59fc75e73f4c77aefc00a05f6330922ad47227"
+          "revision": "48dac330760e5508d04f48f5bffbd9013beb53f0"
         },
         "step_evidence": [
           {
@@ -15024,7 +15032,7 @@
           "path": "sdk/go/direct_runtime.go",
           "sha256": "1938645e4f08a20fe8024179843c1428edab242d736cfe78cf29756fc27505bd",
           "interface": "RuntimeConnector",
-          "revision": "7e59fc75e73f4c77aefc00a05f6330922ad47227"
+          "revision": "48dac330760e5508d04f48f5bffbd9013beb53f0"
         },
         "step_evidence": [
           {
@@ -15101,7 +15109,7 @@
           "path": "sdk/python/easynet_sdk/providers/runtime/direct.py",
           "sha256": "0ccff58079e7cbec5d9615a12ab46a845a55bdc0ea10d3955826efa15a5910fc",
           "interface": "RuntimeConnector",
-          "revision": "7e59fc75e73f4c77aefc00a05f6330922ad47227"
+          "revision": "48dac330760e5508d04f48f5bffbd9013beb53f0"
         },
         "step_evidence": [
           {
@@ -15180,7 +15188,7 @@
           "path": "sdk/go/cabi_runtime.go",
           "sha256": "5c634ba833247892569034a65994503df3f8c9f02a34e14a72cb2c1525638c5d",
           "interface": "RuntimeTransport",
-          "revision": "7e59fc75e73f4c77aefc00a05f6330922ad47227"
+          "revision": "48dac330760e5508d04f48f5bffbd9013beb53f0"
         },
         "step_evidence": [
           {
@@ -15277,7 +15285,7 @@
           "path": "sdk/python/easynet_sdk/_cabi.py",
           "sha256": "d9adc702e09dce8b4514c7b46e40924dacad1a8bcfa569db1e1d3d809b4b3749",
           "interface": "CABIRuntimeTransport",
-          "revision": "7e59fc75e73f4c77aefc00a05f6330922ad47227"
+          "revision": "48dac330760e5508d04f48f5bffbd9013beb53f0"
         },
         "step_evidence": [
           {
@@ -15376,7 +15384,7 @@
           "path": "sdk/go/direct_runtime.go",
           "sha256": "1938645e4f08a20fe8024179843c1428edab242d736cfe78cf29756fc27505bd",
           "interface": "RuntimeConnector",
-          "revision": "7e59fc75e73f4c77aefc00a05f6330922ad47227"
+          "revision": "48dac330760e5508d04f48f5bffbd9013beb53f0"
         },
         "step_evidence": [
           {
@@ -15453,7 +15461,7 @@
           "path": "sdk/python/easynet_sdk/providers/runtime/direct.py",
           "sha256": "0ccff58079e7cbec5d9615a12ab46a845a55bdc0ea10d3955826efa15a5910fc",
           "interface": "RuntimeConnector",
-          "revision": "7e59fc75e73f4c77aefc00a05f6330922ad47227"
+          "revision": "48dac330760e5508d04f48f5bffbd9013beb53f0"
         },
         "step_evidence": [
           {
@@ -15532,7 +15540,7 @@
           "path": "sdk/go/cabi_runtime.go",
           "sha256": "5c634ba833247892569034a65994503df3f8c9f02a34e14a72cb2c1525638c5d",
           "interface": "RuntimeTransport",
-          "revision": "7e59fc75e73f4c77aefc00a05f6330922ad47227"
+          "revision": "48dac330760e5508d04f48f5bffbd9013beb53f0"
         },
         "step_evidence": [
           {
@@ -15654,7 +15662,7 @@
           "path": "sdk/python/easynet_sdk/_cabi.py",
           "sha256": "d9adc702e09dce8b4514c7b46e40924dacad1a8bcfa569db1e1d3d809b4b3749",
           "interface": "CABIRuntimeTransport",
-          "revision": "7e59fc75e73f4c77aefc00a05f6330922ad47227"
+          "revision": "48dac330760e5508d04f48f5bffbd9013beb53f0"
         },
         "step_evidence": [
           {
@@ -15778,7 +15786,7 @@
           "path": "sdk/go/runtime_ability.go",
           "sha256": "0c1b099c8239b05503275af7207b023beeb4d3d97fff5a2f0c2cb67d2d72432c",
           "interface": "RuntimeAbilityClient",
-          "revision": "7e59fc75e73f4c77aefc00a05f6330922ad47227"
+          "revision": "48dac330760e5508d04f48f5bffbd9013beb53f0"
         },
         "step_evidence": [
           {
@@ -15905,7 +15913,7 @@
           "path": "sdk/python/easynet_sdk/ability_invocation.py",
           "sha256": "359b3be181ae968aa12e14ec907a17b9d247d02de351bbd9b1179a636d7d8990",
           "interface": "AbilityInvocationClient",
-          "revision": "7e59fc75e73f4c77aefc00a05f6330922ad47227"
+          "revision": "48dac330760e5508d04f48f5bffbd9013beb53f0"
         },
         "step_evidence": [
           {
@@ -16034,7 +16042,7 @@
           "path": "sdk/go/direct_runtime.go",
           "sha256": "1938645e4f08a20fe8024179843c1428edab242d736cfe78cf29756fc27505bd",
           "interface": "RuntimeConnector",
-          "revision": "7e59fc75e73f4c77aefc00a05f6330922ad47227"
+          "revision": "48dac330760e5508d04f48f5bffbd9013beb53f0"
         },
         "step_evidence": [
           {
@@ -16076,7 +16084,7 @@
           "path": "sdk/python/easynet_sdk/providers/runtime/direct.py",
           "sha256": "0ccff58079e7cbec5d9615a12ab46a845a55bdc0ea10d3955826efa15a5910fc",
           "interface": "RuntimeConnector",
-          "revision": "7e59fc75e73f4c77aefc00a05f6330922ad47227"
+          "revision": "48dac330760e5508d04f48f5bffbd9013beb53f0"
         },
         "step_evidence": [
           {
@@ -16399,6 +16407,8 @@
       "axiom.sha256": "b6997e074b35d495e4711db6fec94d905378b2940501c73f822c5b045641afea",
       "axiom.sign_host_attestation": "22835db997358363e107310b9a860a22f9b0b80aa6e7491ccacb6948e17fc074",
       "axiom.signing_key_from_bytes": "1d3d60d6b28b430af3e6aee8648a595adec7c58bd3330b390d5aef3e6fbc0b72",
+      "axiom.try_canonical_receipt_bytes": "19279fc24ba3dfa1b4de5de0c79f35d75c48457764ad92280a30702d5440fb21",
+      "axiom.try_canonical_receipt_bytes_with_hosted": "00054b7a62c7732edad59bfbdc438a36254014d26cc47aed592a3e35f6214cbb",
       "axiom.try_canonical_receipt_proof_facts": "275e572c3c8a4226999803b6d41d3f9cdf5aa99c998f3c7fe2eb7f91a6dc9369",
       "axiom.validate_hosted_attestation_authority": "2ee4d3e175a1112f0f1e219a907d1d306afdbf4e5363d7665b486cb66d32f29c",
       "axiom.verify_host_attestation": "679e648c816b29f742f8e3c25a1f717ede0c589bce47a89957b2ac079fbecb9f",
@@ -16632,6 +16642,8 @@
       "supervisor.SupervisorSpec": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29",
       "supervisor.reap_orphans": "9f64cf9981ea33da720d01886e4611fadb8d002b6f4dc8fde74adb25a6574552",
       "to_jcs_bytes": "e55c19a93cefdfc768f110c09f0fc7f6cceb3952e45013319a013633d3b21fb2",
+      "try_canonical_receipt_bytes": "19279fc24ba3dfa1b4de5de0c79f35d75c48457764ad92280a30702d5440fb21",
+      "try_canonical_receipt_bytes_with_hosted": "00054b7a62c7732edad59bfbdc438a36254014d26cc47aed592a3e35f6214cbb",
       "try_canonical_receipt_proof_facts": "275e572c3c8a4226999803b6d41d3f9cdf5aa99c998f3c7fe2eb7f91a6dc9369",
       "ura": "b3a7a9f8e8333d4277abc0df2440fdcdd38860267cd9ff3f56e8212fb634d75f",
       "validate_hosted_attestation_authority": "2ee4d3e175a1112f0f1e219a907d1d306afdbf4e5363d7665b486cb66d32f29c",
@@ -23297,7 +23309,7 @@
     }
   ],
   "dependency_revisions": {
-    "axon_sdk": "7e59fc75e73f4c77aefc00a05f6330922ad47227"
+    "axon_sdk": "48dac330760e5508d04f48f5bffbd9013beb53f0"
   },
   "provider_implementations": [
     {
@@ -23318,7 +23330,7 @@
         "terminal_receipt_facts",
         "unary_invoke"
       ],
-      "axon_revision": "7e59fc75e73f4c77aefc00a05f6330922ad47227"
+      "axon_revision": "48dac330760e5508d04f48f5bffbd9013beb53f0"
     },
     {
       "language": "python",
@@ -23338,7 +23350,7 @@
         "terminal_receipt_facts",
         "unary_invoke"
       ],
-      "axon_revision": "7e59fc75e73f4c77aefc00a05f6330922ad47227"
+      "axon_revision": "48dac330760e5508d04f48f5bffbd9013beb53f0"
     },
     {
       "language": "go",
@@ -23354,7 +23366,7 @@
         "stream",
         "bidi"
       ],
-      "axon_revision": "7e59fc75e73f4c77aefc00a05f6330922ad47227"
+      "axon_revision": "48dac330760e5508d04f48f5bffbd9013beb53f0"
     },
     {
       "language": "python",
@@ -23370,7 +23382,7 @@
         "stream",
         "bidi"
       ],
-      "axon_revision": "7e59fc75e73f4c77aefc00a05f6330922ad47227"
+      "axon_revision": "48dac330760e5508d04f48f5bffbd9013beb53f0"
     },
     {
       "language": "go",
@@ -23385,7 +23397,7 @@
       "capability_ids": [
         "ability_invocation_facade"
       ],
-      "axon_revision": "7e59fc75e73f4c77aefc00a05f6330922ad47227"
+      "axon_revision": "48dac330760e5508d04f48f5bffbd9013beb53f0"
     },
     {
       "language": "python",
@@ -23400,14 +23412,14 @@
       "capability_ids": [
         "ability_invocation_facade"
       ],
-      "axon_revision": "7e59fc75e73f4c77aefc00a05f6330922ad47227"
+      "axon_revision": "48dac330760e5508d04f48f5bffbd9013beb53f0"
     }
   ],
   "inventory_source_revisions": {
-    "rust": "7e59fc75e73f4c77aefc00a05f6330922ad47227",
+    "rust": "48dac330760e5508d04f48f5bffbd9013beb53f0",
     "c_abi": "current_checkout",
     "go": "current_checkout",
-    "python": "7e59fc75e73f4c77aefc00a05f6330922ad47227",
+    "python": "48dac330760e5508d04f48f5bffbd9013beb53f0",
     "node": "current_checkout",
     "java": "current_checkout",
     "swift": "current_checkout"
