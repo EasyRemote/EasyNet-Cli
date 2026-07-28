@@ -24,7 +24,22 @@ cat >"$SB/src/support/platform/local_invoke.rs" <<'RS'
 pub struct LocalRuntimeStateReadIssuer;
 
 impl LocalRuntimeStateReadIssuer {
-    fn invoke(_ability: &str, _args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+    pub fn agent_list(args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+        Self::agent_list_timeout(args, std::time::Duration::from_secs(30))
+    }
+
+    pub fn agent_list_timeout(
+        args: serde_json::Value,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<serde_json::Value> {
+        Self::read_state_timeout("agent.list", args, timeout)
+    }
+
+    fn read_state_timeout(
+        _ability: &str,
+        _args: serde_json::Value,
+        _timeout: std::time::Duration,
+    ) -> anyhow::Result<serde_json::Value> {
         let _ = Self::subject_ura()?;
         Ok(serde_json::json!({}))
     }
@@ -35,10 +50,97 @@ impl LocalRuntimeStateReadIssuer {
     }
 }
 
+pub struct LocalRuntimeApiKeyInventoryReadIssuer;
+
+impl LocalRuntimeApiKeyInventoryReadIssuer {
+    pub fn list_api_keys(ability: &str, args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+        Self::list_api_keys_timeout(ability, args, std::time::Duration::from_secs(30))
+    }
+
+    pub fn list_api_keys_timeout(
+        ability: &str,
+        args: serde_json::Value,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<serde_json::Value> {
+        LocalRuntimeStateReadIssuer::read_state_timeout(ability, args, timeout)
+    }
+}
+
+pub struct LocalRuntimeDeviceDirectoryReadIssuer;
+
+impl LocalRuntimeDeviceDirectoryReadIssuer {
+    pub fn describe_node(args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+        Self::describe_node_timeout(args, std::time::Duration::from_secs(30))
+    }
+
+    pub fn describe_node_timeout(
+        args: serde_json::Value,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<serde_json::Value> {
+        LocalRuntimeStateReadIssuer::read_state_timeout("node.describe", args, timeout)
+    }
+}
+
+pub struct LocalRuntimeModelCatalogueReadIssuer;
+
+impl LocalRuntimeModelCatalogueReadIssuer {
+    pub fn list_openai_models(args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+        Self::list_openai_models_timeout(args, std::time::Duration::from_secs(30))
+    }
+
+    pub fn list_openai_models_timeout(
+        args: serde_json::Value,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<serde_json::Value> {
+        LocalRuntimeStateReadIssuer::read_state_timeout("openai.list_models", args, timeout)
+    }
+}
+
+pub struct LocalRuntimeSkillCatalogueReadIssuer;
+
+impl LocalRuntimeSkillCatalogueReadIssuer {
+    pub fn list_installed_skills(args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+        Self::list_installed_skills_timeout(args, std::time::Duration::from_secs(30))
+    }
+
+    pub fn list_installed_skills_timeout(
+        args: serde_json::Value,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<serde_json::Value> {
+        LocalRuntimeStateReadIssuer::read_state_timeout("skill.list", args, timeout)
+    }
+}
+
 pub struct LocalRuntimeCatalogueReadIssuer;
 
 impl LocalRuntimeCatalogueReadIssuer {
-    fn invoke(_ability: &str, _args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+    pub fn list_abilities(args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+        Self::list_abilities_timeout(args, std::time::Duration::from_secs(30))
+    }
+
+    pub fn list_abilities_timeout(
+        args: serde_json::Value,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<serde_json::Value> {
+        Self::invoke_catalogue_read_timeout("meta.list_abilities", args, timeout)
+    }
+
+    pub fn list_resources(args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+        Self::list_resources_timeout(args, std::time::Duration::from_secs(30))
+    }
+
+    pub fn list_resources_timeout(
+        args: serde_json::Value,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<serde_json::Value> {
+        Self::invoke_catalogue_read_timeout("meta.list_resources", args, timeout)
+    }
+
+    fn invoke_catalogue_read_timeout(
+        _ability: &str,
+        _args: serde_json::Value,
+        _timeout: std::time::Duration,
+    ) -> anyhow::Result<serde_json::Value> {
         Ok(serde_json::json!({}))
     }
 }
@@ -46,7 +148,66 @@ impl LocalRuntimeCatalogueReadIssuer {
 pub struct LocalRuntimeGovernanceReadIssuer;
 
 impl LocalRuntimeGovernanceReadIssuer {
-    fn invoke(_ability: &str, _args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+    pub fn invocation_history_path(args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+        Self::invocation_history_path_timeout(args, std::time::Duration::from_secs(30))
+    }
+
+    pub fn invocation_history_path_timeout(
+        args: serde_json::Value,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<serde_json::Value> {
+        Self::invoke_governance_read_timeout("invocation.history.path", args, timeout)
+    }
+
+    pub fn invocation_history_list(args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+        Self::invocation_history_list_timeout(args, std::time::Duration::from_secs(30))
+    }
+
+    pub fn invocation_history_list_timeout(
+        args: serde_json::Value,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<serde_json::Value> {
+        Self::invoke_governance_read_timeout("invocation.history.list", args, timeout)
+    }
+
+    pub fn invocation_history_get(args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+        Self::invocation_history_get_timeout(args, std::time::Duration::from_secs(30))
+    }
+
+    pub fn invocation_history_get_timeout(
+        args: serde_json::Value,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<serde_json::Value> {
+        Self::invoke_governance_read_timeout("invocation.history.get", args, timeout)
+    }
+
+    pub fn invocation_record_get(args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+        Self::invocation_record_get_timeout(args, std::time::Duration::from_secs(30))
+    }
+
+    pub fn invocation_record_get_timeout(
+        args: serde_json::Value,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<serde_json::Value> {
+        Self::invoke_governance_read_timeout("invocation.record.get", args, timeout)
+    }
+
+    pub fn invocation_trace_get(args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+        Self::invocation_trace_get_timeout(args, std::time::Duration::from_secs(30))
+    }
+
+    pub fn invocation_trace_get_timeout(
+        args: serde_json::Value,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<serde_json::Value> {
+        Self::invoke_governance_read_timeout("invocation.trace.get", args, timeout)
+    }
+
+    fn invoke_governance_read_timeout(
+        _ability: &str,
+        _args: serde_json::Value,
+        _timeout: std::time::Duration,
+    ) -> anyhow::Result<serde_json::Value> {
         let _ = LocalRuntimeOwnerReadAttachment::from_discovery_file(
             &KeyServiceRuntimeStateReadSignerCustody,
             "runtime governance read subject unavailable",
@@ -59,10 +220,37 @@ impl LocalRuntimeGovernanceReadIssuer {
 pub struct LocalRuntimeOperationalReadIssuer;
 
 impl LocalRuntimeOperationalReadIssuer {
-    fn invoke(_ability: &str, _args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+    pub fn observe_health(args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+        Self::observe_health_timeout(args, std::time::Duration::from_secs(30))
+    }
+
+    pub fn observe_health_timeout(
+        _args: serde_json::Value,
+        _timeout: std::time::Duration,
+    ) -> anyhow::Result<serde_json::Value> {
         let _ = LocalRuntimeOwnerReadAttachment::from_discovery_file(
             &KeyServiceRuntimeStateReadSignerCustody,
             "runtime operational read subject unavailable",
+        )
+        .and_then(|attachment| attachment.into_subject_ura())?;
+        Ok(serde_json::json!({}))
+    }
+}
+
+pub struct LocalRuntimeIdentityReadIssuer;
+
+impl LocalRuntimeIdentityReadIssuer {
+    pub fn list_user_pubkeys(args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+        Self::list_user_pubkeys_timeout(args, std::time::Duration::from_secs(30))
+    }
+
+    pub fn list_user_pubkeys_timeout(
+        _args: serde_json::Value,
+        _timeout: std::time::Duration,
+    ) -> anyhow::Result<serde_json::Value> {
+        let _ = LocalRuntimeOwnerReadAttachment::from_discovery_file(
+            &KeyServiceRuntimeStateReadSignerCustody,
+            "runtime identity read subject unavailable",
         )
         .and_then(|attachment| attachment.into_subject_ura())?;
         Ok(serde_json::json!({}))
@@ -210,6 +398,7 @@ RS
 for target in \
   "$SB/src/cli/commands/ability_record.rs" \
   "$SB/src/cli/daemon_client/ability_catalog.rs" \
+  "$SB/src/cli/daemon_client/remote_system_ability.rs" \
   "$SB/src/daemon/ability/catalog/profiles/mcp.rs"
 do
   mkdir -p "$(dirname "$target")"
@@ -217,35 +406,72 @@ do
 use crate::support::platform::local_invoke::LocalRuntimeCatalogueReadIssuer;
 
 fn read_runtime_catalogue() {
-    let _ = LocalRuntimeCatalogueReadIssuer::invoke("meta.list_abilities", serde_json::json!({}));
+    let _ = LocalRuntimeCatalogueReadIssuer::list_abilities(serde_json::json!({}));
 }
 RS
 done
 
 for target in \
-  "$SB/src/cli/commands/discover.rs" \
-  "$SB/src/cli/commands/doctor.rs" \
-  "$SB/src/cli/commands/groups/device.rs" \
-  "$SB/src/cli/commands/status.rs" \
-  "$SB/src/cli/commands/invocation_watch.rs" \
-  "$SB/src/cli/commands/user_signing_identity.rs"
+  "$SB/src/cli/commands/discover.rs"
 do
   mkdir -p "$(dirname "$target")"
   cat >"$target" <<'RS'
 use crate::support::platform::local_invoke::LocalRuntimeStateReadIssuer;
 
 fn read_runtime_state() {
-    let _ = LocalRuntimeStateReadIssuer::invoke("meta.list_abilities", serde_json::json!({}));
+    let _ = LocalRuntimeStateReadIssuer::agent_list(serde_json::json!({}));
 }
 RS
 done
+
+cat >"$SB/src/cli/commands/status.rs" <<'RS'
+use crate::support::platform::local_invoke::{
+    LocalRuntimeCatalogueReadIssuer,
+    LocalRuntimeOperationalReadIssuer,
+};
+
+fn read_status() {
+    let _ = LocalRuntimeOperationalReadIssuer::observe_health(serde_json::json!({}));
+    let _ = LocalRuntimeCatalogueReadIssuer::list_abilities(serde_json::json!({}));
+}
+RS
+
+cat >"$SB/src/cli/commands/groups/device.rs" <<'RS'
+use crate::support::platform::local_invoke::LocalRuntimeDeviceDirectoryReadIssuer;
+
+fn read_device_directory() {
+    let _ = LocalRuntimeDeviceDirectoryReadIssuer::describe_node(serde_json::json!({}));
+}
+RS
+
+for target in \
+  "$SB/src/cli/commands/doctor.rs" \
+  "$SB/src/cli/commands/user_signing_identity.rs"
+do
+  mkdir -p "$(dirname "$target")"
+  cat >"$target" <<'RS'
+use crate::support::platform::local_invoke::LocalRuntimeIdentityReadIssuer;
+
+fn read_identity() {
+    let _ = LocalRuntimeIdentityReadIssuer::list_user_pubkeys(serde_json::json!({}));
+}
+RS
+done
+
+cat >"$SB/src/cli/commands/invocation_watch.rs" <<'RS'
+use crate::support::platform::local_invoke::LocalRuntimeGovernanceReadIssuer;
+
+fn watch_governance() {
+    let _ = LocalRuntimeGovernanceReadIssuer::invocation_record_get(serde_json::json!({}));
+}
+RS
 
 mkdir -p "$SB/src/cli/commands/groups"
 cat >"$SB/src/cli/commands/groups/mcp.rs" <<'RS'
 use crate::support::platform::local_invoke::LocalRuntimeOperationalReadIssuer;
 
 fn read_runtime_health() {
-    let _ = LocalRuntimeOperationalReadIssuer::invoke("observe.health", serde_json::json!({}));
+    let _ = LocalRuntimeOperationalReadIssuer::observe_health(serde_json::json!({}));
 }
 RS
 
@@ -253,7 +479,7 @@ cat >"$SB/src/cli/commands/groups/invocation.rs" <<'RS'
 use crate::support::platform::local_invoke::LocalRuntimeGovernanceReadIssuer;
 
 fn read_runtime_governance() {
-    let _ = LocalRuntimeGovernanceReadIssuer::invoke("invocation.history.list", serde_json::json!({}));
+    let _ = LocalRuntimeGovernanceReadIssuer::invocation_history_list(serde_json::json!({}));
 }
 RS
 
@@ -263,12 +489,14 @@ pub trait AgentCommandGateway {
     fn invoke(&self, ability: &str, args: serde_json::Value) -> anyhow::Result<serde_json::Value>;
 }
 
-pub trait AgentStateReadGateway {
-    fn invoke_read(&self, ability: &str, args: serde_json::Value) -> anyhow::Result<serde_json::Value>;
+pub trait AgentReadGateway {
+    fn list_agents(&self) -> anyhow::Result<serde_json::Value>;
+
+    fn list_agent_abilities(&self, agent_ura: &str) -> anyhow::Result<serde_json::Value>;
 }
 
 struct DaemonAgentCommandGateway;
-struct DaemonAgentStateReadGateway;
+struct DaemonAgentReadGateway;
 
 impl AgentCommandGateway for DaemonAgentCommandGateway {
     fn invoke(&self, ability: &str, args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
@@ -279,26 +507,37 @@ impl AgentCommandGateway for DaemonAgentCommandGateway {
     }
 }
 
-impl AgentStateReadGateway for DaemonAgentStateReadGateway {
-    fn invoke_read(&self, ability: &str, args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
-        crate::support::platform::local_invoke::LocalRuntimeStateReadIssuer::invoke(ability, args)
+impl AgentReadGateway for DaemonAgentReadGateway {
+    fn list_agents(&self) -> anyhow::Result<serde_json::Value> {
+        crate::support::platform::local_invoke::LocalRuntimeStateReadIssuer::agent_list(
+            serde_json::json!({}),
+        )
+    }
+
+    fn list_agent_abilities(&self, agent_ura: &str) -> anyhow::Result<serde_json::Value> {
+        crate::support::platform::local_invoke::LocalRuntimeCatalogueReadIssuer::list_abilities(
+            serde_json::json!({
+                "scope": "local",
+                "agent_ura": agent_ura,
+            }),
+        )
     }
 }
 RS
 
 cat >"$SB/src/cli/daemon_client/agent_view.rs" <<'RS'
-use crate::cli::daemon_client::agent_gateway::AgentStateReadGateway;
+use crate::cli::daemon_client::agent_gateway::AgentReadGateway;
 
-fn read_agents(gateway: &dyn AgentStateReadGateway) -> anyhow::Result<serde_json::Value> {
-    gateway.invoke_read("agent.list", serde_json::json!({}))
+fn read_agents(gateway: &dyn AgentReadGateway) -> anyhow::Result<serde_json::Value> {
+    gateway.list_agents()
 }
 RS
 
 cat >"$SB/src/cli/commands/agent/publish.rs" <<'RS'
-use crate::cli::daemon_client::agent_gateway::AgentStateReadGateway;
+use crate::cli::daemon_client::agent_gateway::AgentReadGateway;
 
-fn publish_view(gateway: &dyn AgentStateReadGateway) -> anyhow::Result<serde_json::Value> {
-    gateway.invoke_read("meta.list_abilities", serde_json::json!({}))
+fn publish_view(gateway: &dyn AgentReadGateway) -> anyhow::Result<serde_json::Value> {
+    gateway.list_agent_abilities("easynet:///r/acme/agent/alice.helper")
 }
 RS
 
@@ -306,7 +545,7 @@ cat >"$SB/src/cli/commands/llm_api.rs" <<'RS'
 use crate::support::platform::local_invoke::{LocalDaemonSystemAbilityIssuer, LocalRuntimeStateReadIssuer};
 
 fn pick_model() -> anyhow::Result<serde_json::Value> {
-    LocalRuntimeStateReadIssuer::invoke("openai.list_models", serde_json::json!({}))
+    crate::support::platform::local_invoke::LocalRuntimeModelCatalogueReadIssuer::list_openai_models(serde_json::json!({}))
 }
 
 fn run(adapter_args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
@@ -319,14 +558,14 @@ fn invoke_openai_chat_completions(args: serde_json::Value) -> anyhow::Result<ser
 RS
 
 cat >"$SB/src/cli/commands/skill.rs" <<'RS'
-use crate::support::platform::local_invoke::{LocalDaemonSystemAbilityIssuer, LocalRuntimeStateReadIssuer};
+use crate::support::platform::local_invoke::{LocalDaemonSystemAbilityIssuer, LocalRuntimeSkillCatalogueReadIssuer};
 
 fn install() -> anyhow::Result<serde_json::Value> {
     invoke_daemon_skill_mutation("skill.install", serde_json::json!({}))
 }
 
 fn list() -> anyhow::Result<serde_json::Value> {
-    LocalRuntimeStateReadIssuer::invoke("skill.list", serde_json::json!({}))
+    LocalRuntimeSkillCatalogueReadIssuer::list_installed_skills(serde_json::json!({}))
 }
 
 fn upgrade() -> anyhow::Result<serde_json::Value> {
@@ -343,7 +582,7 @@ fn invoke_daemon_skill_mutation(ability: &str, args: serde_json::Value) -> anyho
 RS
 
 cat >"$SB/src/cli/commands/api_key_cli.rs" <<'RS'
-use crate::support::platform::local_invoke::{LocalDaemonSystemAbilityIssuer, LocalRuntimeStateReadIssuer};
+use crate::support::platform::local_invoke::{LocalDaemonSystemAbilityIssuer, LocalRuntimeApiKeyInventoryReadIssuer};
 
 struct Principal {
     subject_ura: String,
@@ -354,7 +593,7 @@ fn create(principal: Principal, ability: String, args: serde_json::Value) -> any
 }
 
 fn list(ability: String) -> anyhow::Result<serde_json::Value> {
-    LocalRuntimeStateReadIssuer::invoke(&ability, serde_json::json!({}))
+    LocalRuntimeApiKeyInventoryReadIssuer::list_api_keys(&ability, serde_json::json!({}))
 }
 
 fn revoke(principal: Principal, ability: String) -> anyhow::Result<serde_json::Value> {
@@ -376,15 +615,17 @@ use crate::support::platform::local_invoke::LocalDaemonSystemAbilityIssuer;
 struct UninstallArgs;
 
 fn run_uninstall(args: UninstallArgs) -> anyhow::Result<serde_json::Value> {
-    invoke_ability_uninstall(ability_uninstall_payload(&args))
+    let payload = ability_uninstall_payload(&args)?;
+    let result = invoke_ability_uninstall(payload)?;
+    Ok(result)
 }
 
 fn invoke_ability_uninstall(args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
     LocalDaemonSystemAbilityIssuer::invoke_root_for_local_daemon_identity("ability.uninstall", args)
 }
 
-fn ability_uninstall_payload(_args: &UninstallArgs) -> serde_json::Value {
-    serde_json::json!({})
+fn ability_uninstall_payload(_args: &UninstallArgs) -> anyhow::Result<serde_json::Value> {
+    Ok(serde_json::json!({}))
 }
 RS
 
@@ -441,7 +682,7 @@ set -e
 perl -0pi -e 's/\nfn legacy_read\(\) \{\n    let _ = invoke_local_ability\("invocation\.history\.list", serde_json::json!\(\{\}\)\);\n\}\n//' \
   "$SB/src/cli/commands/groups/invocation.rs"
 
-perl -0pi -e 's/\Qgateway.invoke_read("agent.list"\E/gateway.invoke("agent.list"/' \
+perl -0pi -e 's/AgentReadGateway/AgentCommandGateway/g; s/gateway\.list_agents\(\)/gateway.invoke("agent.list", serde_json::json!({}))/g' \
   "$SB/src/cli/daemon_client/agent_view.rs"
 
 set +e
@@ -453,7 +694,7 @@ rc=$?
 set -e
 [[ "$rc" == "1" ]] || fail "agent.list command-gateway regression should exit 1 (got $rc)"
 
-perl -0pi -e 's/\Qgateway.invoke("agent.list"\E/gateway.invoke_read("agent.list"/' \
+perl -0pi -e 's/AgentCommandGateway/AgentReadGateway/g; s/gateway\.invoke\("agent\.list", serde_json::json!\(\{\}\)\)/gateway.list_agents()/g' \
   "$SB/src/cli/daemon_client/agent_view.rs"
 
 cat >>"$SB/src/cli/daemon_client/agent_gateway.rs" <<'RS'
@@ -474,7 +715,7 @@ set -e
 perl -0pi -e 's/\nfn legacy_agent_command\(ability: &str, args: serde_json::Value\) -> anyhow::Result<serde_json::Value> \{\n    crate::support::platform::local_invoke::invoke_local_ability\(ability, args\)\n\}\n//' \
   "$SB/src/cli/daemon_client/agent_gateway.rs"
 
-perl -0pi -e 's/\QLocalRuntimeStateReadIssuer::invoke("openai.list_models"\E/invoke_local_ability("openai.list_models"/' \
+perl -0pi -e 's/\Qcrate::support::platform::local_invoke::LocalRuntimeModelCatalogueReadIssuer::list_openai_models(\E/invoke_local_ability("openai.list_models", /' \
   "$SB/src/cli/commands/llm_api.rs"
 
 set +e
@@ -486,10 +727,10 @@ rc=$?
 set -e
 [[ "$rc" == "1" ]] || fail "llm-api model read regression should exit 1 (got $rc)"
 
-perl -0pi -e 's/\Qinvoke_local_ability("openai.list_models"\E/LocalRuntimeStateReadIssuer::invoke("openai.list_models"/' \
+perl -0pi -e 's/\Qinvoke_local_ability("openai.list_models", \E/crate::support::platform::local_invoke::LocalRuntimeModelCatalogueReadIssuer::list_openai_models(/' \
   "$SB/src/cli/commands/llm_api.rs"
 
-perl -0pi -e 's/\QLocalRuntimeStateReadIssuer::invoke("skill.list"\E/invoke_local_ability("skill.list"/' \
+perl -0pi -e 's/\QLocalRuntimeSkillCatalogueReadIssuer::list_installed_skills(\E/invoke_local_ability("skill.list", /' \
   "$SB/src/cli/commands/skill.rs"
 
 set +e
@@ -501,10 +742,10 @@ rc=$?
 set -e
 [[ "$rc" == "1" ]] || fail "skill.list read regression should exit 1 (got $rc)"
 
-perl -0pi -e 's/\Qinvoke_local_ability("skill.list"\E/LocalRuntimeStateReadIssuer::invoke("skill.list"/' \
+perl -0pi -e 's/\Qinvoke_local_ability("skill.list", \E/LocalRuntimeSkillCatalogueReadIssuer::list_installed_skills(/' \
   "$SB/src/cli/commands/skill.rs"
 
-perl -0pi -e 's/\QLocalRuntimeStateReadIssuer::invoke(&ability, serde_json::json!({})\E/invoke_local_ability(&ability, serde_json::json!({})/' \
+perl -0pi -e 's/\QLocalRuntimeApiKeyInventoryReadIssuer::list_api_keys(&ability, serde_json::json!({})\E/invoke_local_ability(&ability, serde_json::json!({})/' \
   "$SB/src/cli/commands/api_key_cli.rs"
 
 set +e
