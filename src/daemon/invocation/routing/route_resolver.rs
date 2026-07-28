@@ -53,6 +53,51 @@ const MAX_DIRECTORY_LIMIT: usize = 500;
 const DIRECTORY_CURSOR_PREFIX: &str = "directory:v1:";
 const MAX_DIRECTORY_CURSOR_LEN: usize = 4096;
 
+/// Canonical typed request consumed by the daemon namespace resolver.
+///
+/// JSON is a public transport shape; it is parsed once into this object before
+/// route selection so the resolver does not silently default tuple selectors
+/// such as `query_name` to empty strings.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct NamespaceResolveQuery {
+    query_name: String,
+    ability_name: String,
+    qtype: ResolveType,
+    include_abilities: bool,
+    limit: Option<u64>,
+    cursor: Option<String>,
+}
+
+impl NamespaceResolveQuery {
+    pub(crate) fn from_json(value: &Value) -> Result<Self, String> {
+        let object = value
+            .as_object()
+            .ok_or_else(|| "namespace.resolve request must be a JSON object".to_string())?;
+        let query_name = required_string(object, "query_name")?;
+        let qtype_text = required_qtype_string(object)?;
+        let qtype = ResolveType::from_str_name(&qtype_text).ok_or_else(|| {
+            format!(
+                "namespace.resolve qtype {qtype_text:?} is not a canonical ResolveType enum string"
+            )
+        })?;
+        if qtype == ResolveType::Unspecified {
+            return Err("namespace.resolve qtype must not be RESOLVE_TYPE_UNSPECIFIED".to_string());
+        }
+        let ability_name = optional_string(object, "ability_name")?.unwrap_or_default();
+        let include_abilities = optional_bool(object, "include_abilities")?.unwrap_or(true);
+        let limit = optional_u64(object, "limit")?;
+        let cursor = optional_string(object, "cursor")?;
+        Ok(Self {
+            query_name,
+            ability_name,
+            qtype,
+            include_abilities,
+            limit,
+            cursor,
+        })
+    }
+}
+
 /// An ability proven from the local runtime dispatch table.
 ///
 /// `dispatch_name` is the implementation-local registry key the runtime
@@ -728,37 +773,45 @@ impl<'a> DaemonRouteResolver<'a> {
     }
 
     pub(crate) fn resolve_query_json(&self, query: &Value) -> Value {
-        let query_name = json_string(query, "query_name");
-        let ability_name = json_string(query, "ability_name");
-        let qtype = match json_resolve_type(query) {
-            Ok(qtype) => qtype,
+        let query = match NamespaceResolveQuery::from_json(query) {
+            Ok(query) => query,
             Err(detail) => {
-                return negative_answer_json(&query_name, NegativeReason::Refused, Some(detail));
+                let query_name = query
+                    .get("query_name")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .unwrap_or_default();
+                return negative_answer_json(query_name, NegativeReason::Refused, Some(&detail));
             }
         };
+        self.resolve_query(&query)
+    }
 
-        match qtype {
+    pub(crate) fn resolve_query(&self, query: &NamespaceResolveQuery) -> Value {
+        match query.qtype {
             ResolveType::Route | ResolveType::Ability => {
-                if let Some(answer) = self.delegation_answer_or_negative(&query_name, &ability_name)
+                if let Some(answer) =
+                    self.delegation_answer_or_negative(&query.query_name, &query.ability_name)
                 {
                     answer
                 } else {
-                    self.resolve_route(&query_name, &ability_name).map_or_else(
-                        |failure| failure.answer_json(),
-                        |route| route.final_route_answer_json(),
-                    )
+                    self.resolve_route(&query.query_name, &query.ability_name)
+                        .map_or_else(
+                            |failure| failure.answer_json(),
+                            |route| route.final_route_answer_json(),
+                        )
                 }
             }
             ResolveType::DirectoryListing | ResolveType::CanonicalIdentity | ResolveType::Owner => {
-                self.directory_answer_json(query, &query_name)
+                self.directory_answer(query)
             }
             ResolveType::Key | ResolveType::Service => negative_answer_json(
-                &query_name,
+                &query.query_name,
                 NegativeReason::Nodata,
                 Some("daemon namespace.resolve does not serve this qtype yet"),
             ),
             ResolveType::Unspecified => negative_answer_json(
-                &query_name,
+                &query.query_name,
                 NegativeReason::Refused,
                 Some("resolve qtype is unspecified"),
             ),
@@ -1174,16 +1227,11 @@ impl<'a> DaemonRouteResolver<'a> {
         }
     }
 
-    fn directory_answer_json(&self, query: &Value, query_name: &str) -> Value {
-        let prefix = if query_name.is_empty() {
-            let realm_hint = json_string(query, "realm_hint");
-            (!realm_hint.is_empty()).then_some(realm_hint)
-        } else {
-            Some(query_name.to_string())
-        };
-        let include_abilities = json_bool(query, "include_abilities").unwrap_or(true);
+    fn directory_answer(&self, query: &NamespaceResolveQuery) -> Value {
+        let query_name = query.query_name.as_str();
+        let prefix = Some(query.query_name.clone());
         let directory = federation_wrappers::handle_resolve_at(
-            &ResolveRequest::with_filter(prefix, include_abilities),
+            &ResolveRequest::with_filter(prefix, query.include_abilities),
             self.registry,
             self.advertised_agents,
             self.catalog,
@@ -1201,14 +1249,13 @@ impl<'a> DaemonRouteResolver<'a> {
             Ok(directory) => directory,
             Err(answer) => return answer,
         };
-        let requested_limit = directory_page_limit(query.get("limit").and_then(Value::as_u64));
-        let cursor_anchor =
-            match directory_cursor_anchor(query.get("cursor").and_then(Value::as_str)) {
-                Ok(anchor) => anchor,
-                Err(detail) => {
-                    return negative_answer_json(query_name, NegativeReason::Refused, Some(&detail))
-                }
-            };
+        let requested_limit = directory_page_limit(query.limit);
+        let cursor_anchor = match directory_cursor_anchor(query.cursor.as_deref()) {
+            Ok(anchor) => anchor,
+            Err(detail) => {
+                return negative_answer_json(query_name, NegativeReason::Refused, Some(&detail))
+            }
+        };
         let mut records = Vec::new();
         for agent in &directory.agents {
             records.push(id_record(&agent.ura, self.now_unix_ms));
@@ -1639,32 +1686,68 @@ fn looks_like_descriptor_ref(value: &str) -> bool {
     value.contains('@') || value.contains('#') || value.contains('!')
 }
 
-fn json_string(value: &Value, key: &str) -> String {
-    value
-        .get(key)
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .trim()
-        .to_string()
+fn required_string(object: &serde_json::Map<String, Value>, field: &str) -> Result<String, String> {
+    optional_string(object, field)?
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| format!("namespace.resolve request missing canonical {field}"))
 }
 
-fn json_bool(value: &Value, key: &str) -> Option<bool> {
-    value.get(key).and_then(Value::as_bool)
-}
-
-fn json_resolve_type(value: &Value) -> Result<ResolveType, &'static str> {
-    let raw = value
-        .get("qtype")
-        .ok_or("resolve query missing canonical qtype")?;
-    let text = raw
-        .as_str()
-        .ok_or("resolve qtype must be a canonical ResolveType enum string")?
-        .trim();
-    if text.is_empty() {
-        return Err("resolve qtype must be a non-empty canonical ResolveType enum string");
+fn required_qtype_string(object: &serde_json::Map<String, Value>) -> Result<String, String> {
+    match object.get("qtype") {
+        Some(Value::String(value)) => {
+            let value = value.trim();
+            if value.is_empty() {
+                Err(
+                    "namespace.resolve qtype must be a non-empty canonical ResolveType enum string"
+                        .to_string(),
+                )
+            } else {
+                Ok(value.to_string())
+            }
+        }
+        Some(_) => {
+            Err("namespace.resolve qtype must be a canonical ResolveType enum string".to_string())
+        }
+        None => Err("namespace.resolve request missing canonical qtype".to_string()),
     }
-    ResolveType::from_str_name(text)
-        .ok_or("resolve qtype must be a canonical ResolveType enum string")
+}
+
+fn optional_string(
+    object: &serde_json::Map<String, Value>,
+    field: &str,
+) -> Result<Option<String>, String> {
+    match object.get(field) {
+        Some(Value::String(value)) => Ok(Some(value.trim().to_string())),
+        Some(_) => Err(format!("namespace.resolve {field} must be a string")),
+        None => Ok(None),
+    }
+}
+
+fn optional_bool(
+    object: &serde_json::Map<String, Value>,
+    field: &str,
+) -> Result<Option<bool>, String> {
+    match object.get(field) {
+        Some(Value::Bool(value)) => Ok(Some(*value)),
+        Some(_) => Err(format!("namespace.resolve {field} must be a boolean")),
+        None => Ok(None),
+    }
+}
+
+fn optional_u64(
+    object: &serde_json::Map<String, Value>,
+    field: &str,
+) -> Result<Option<u64>, String> {
+    match object.get(field) {
+        Some(Value::Number(value)) => value
+            .as_u64()
+            .map(Some)
+            .ok_or_else(|| format!("namespace.resolve {field} must be an unsigned integer")),
+        Some(_) => Err(format!(
+            "namespace.resolve {field} must be an unsigned integer"
+        )),
+        None => Ok(None),
+    }
 }
 
 fn advertised_agent_host_ura(
@@ -3178,6 +3261,38 @@ mod tests {
                 .is_some_and(|detail| detail.contains("missing canonical qtype")),
             "missing qtype must fail before route/directory guessing: {answer}"
         );
+    }
+
+    #[test]
+    fn resolve_query_json_rejects_missing_query_name_before_empty_selector_default() {
+        let registry = PresenceRegistry::new();
+        let catalog = AbilityCatalogStore::new();
+        let owner_ura = device_owner_ura();
+        mark_online(&registry, &owner_ura);
+        publish_ability(&catalog, &owner_ura, &owner_ura, "agent", "list");
+
+        let answer = DaemonRouteResolver::new(&registry, None, &catalog)
+            .at(TEST_NOW_MS)
+            .resolve_query_json(&json!({
+                "qtype": ResolveType::Route.as_str_name(),
+                "ability_name": "agent.list",
+            }));
+
+        assert_eq!(
+            answer["answer_kind"],
+            ResolveAnswerKind::Negative.as_str_name()
+        );
+        assert_eq!(
+            answer["negative"]["reason"],
+            NegativeReason::Refused.as_str_name()
+        );
+        assert!(
+            answer["negative"]["detail"]
+                .as_str()
+                .is_some_and(|detail| detail.contains("missing canonical query_name")),
+            "missing query_name must fail before empty-selector route lookup: {answer}"
+        );
+        assert_eq!(answer["negative"]["query_name"], "");
     }
 
     #[test]

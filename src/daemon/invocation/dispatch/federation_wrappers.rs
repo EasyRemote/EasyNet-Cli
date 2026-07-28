@@ -58,7 +58,7 @@ use crate::daemon::federation::receipt_contract::{
 #[cfg(test)]
 use crate::daemon::federation::resolver_contract::{GateResult, RecordType};
 use crate::daemon::federation::resolver_contract::{
-    NegativeReason, ResolveAnswerKind, ResolveType, ResolverReleaseProfile,
+    NegativeReason, ResolveAnswerKind, ResolverReleaseProfile,
 };
 pub use crate::daemon::federation::wire_contract::{
     DiscoverRequest, DiscoverResponse, ListUserDevicesRequest, ListUserDevicesResponse,
@@ -66,6 +66,7 @@ pub use crate::daemon::federation::wire_contract::{
     ResolveRequest, ResolveResponse,
 };
 use crate::daemon::invocation::bidi::state::presence::PresenceRegistry;
+use crate::daemon::invocation::routing::route_resolver::NamespaceResolveQuery;
 
 const ED25519_PUBLIC_KEY_LEN: usize = 32;
 
@@ -697,22 +698,7 @@ pub(crate) fn handle_namespace_resolve_at(
 }
 
 fn validate_namespace_resolve_query(query: &Value) -> Result<(), String> {
-    let object = query
-        .as_object()
-        .ok_or_else(|| "namespace.resolve request must be a JSON object".to_string())?;
-    let qtype = object
-        .get("qtype")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|qtype| !qtype.is_empty())
-        .ok_or_else(|| "namespace.resolve request missing canonical qtype".to_string())?;
-    let parsed = ResolveType::from_str_name(qtype).ok_or_else(|| {
-        format!("namespace.resolve qtype {qtype:?} is not a canonical ResolveType enum string")
-    })?;
-    if parsed == ResolveType::Unspecified {
-        return Err("namespace.resolve qtype must not be RESOLVE_TYPE_UNSPECIFIED".to_string());
-    }
-    Ok(())
+    NamespaceResolveQuery::from_json(query).map(|_| ())
 }
 
 fn namespace_resolve_input_failure(query: &Value, detail: &str) -> Value {

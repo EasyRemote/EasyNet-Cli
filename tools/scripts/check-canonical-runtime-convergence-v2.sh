@@ -13537,6 +13537,74 @@ if '"query_name is not a canonical URA, route-ref, or descriptor ref"' not in co
 PY
 }
 
+check_namespace_resolver_typed_query_ingress_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local route_resolver="$cli_root/src/daemon/invocation/routing/route_resolver.rs"
+  local wrappers="$cli_root/src/daemon/invocation/dispatch/federation_wrappers.rs"
+  [[ -f "$route_resolver" ]] || fail "route resolver source is missing: $route_resolver"
+  [[ -f "$wrappers" ]] || fail "federation wrappers source is missing: $wrappers"
+
+  "$PYTHON_BIN" - "$route_resolver" "$wrappers" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+route_path, wrappers_path = map(Path, sys.argv[1:])
+route = route_path.read_text(encoding="utf-8")
+wrappers = wrappers_path.read_text(encoding="utf-8")
+route_production = route.split("\n#[cfg(test)]\nmod tests", 1)[0]
+wrappers_production = wrappers.split("\n#[cfg(test)]\nmod tests", 1)[0]
+
+for retired in (
+    "fn json_string(",
+    "fn json_bool(",
+    "fn json_resolve_type(",
+    'unwrap_or_default()\n        .trim()\n        .to_string()',
+):
+    if retired in route_production:
+        raise SystemExit(f"namespace_resolver_typed_query:retired_loose_helper:{retired}")
+
+for required in (
+    "pub(crate) struct NamespaceResolveQuery",
+    "pub(crate) fn from_json(value: &Value) -> Result<Self, String>",
+    'required_string(object, "query_name")?',
+    "required_qtype_string(object)?",
+    "ResolveType::from_str_name(&qtype_text)",
+    "pub(crate) fn resolve_query(&self, query: &NamespaceResolveQuery) -> Value",
+    "self.resolve_query(&query)",
+    "fn directory_answer(&self, query: &NamespaceResolveQuery) -> Value",
+):
+    if required not in route_production:
+        raise SystemExit(f"namespace_resolver_typed_query:missing:{required}")
+
+resolve_json = re.search(
+    r"pub\(crate\) fn resolve_query_json\(&self, query: &Value\) -> Value \{(?P<body>.*?)\n    \}",
+    route_production,
+    re.S,
+)
+if not resolve_json:
+    raise SystemExit("namespace_resolver_typed_query:resolve_query_json_missing")
+if "NamespaceResolveQuery::from_json(query)" not in resolve_json.group("body"):
+    raise SystemExit("namespace_resolver_typed_query:json_entry_not_parsing_typed_query")
+
+if "use crate::daemon::invocation::routing::route_resolver::NamespaceResolveQuery;" not in wrappers_production:
+    raise SystemExit("namespace_resolver_typed_query:wrapper_not_importing_value_object")
+if "NamespaceResolveQuery::from_json(query).map(|_| ())" not in wrappers_production:
+    raise SystemExit("namespace_resolver_typed_query:wrapper_duplicates_validation")
+if "ResolveType::from_str_name(qtype)" in wrappers_production:
+    raise SystemExit("namespace_resolver_typed_query:wrapper_manual_qtype_validation")
+
+for required_test in (
+    "resolve_query_json_rejects_missing_query_name_before_empty_selector_default",
+    "resolve_query_json_rejects_missing_qtype_instead_of_shape_guessing",
+    "resolve_query_json_rejects_short_qtype_aliases",
+    "resolve_query_json_ignores_retired_camel_case_input_aliases",
+):
+    if required_test not in route:
+        raise SystemExit(f"namespace_resolver_typed_query:missing_test:{required_test}")
+PY
+}
+
 check_namespace_proxy_resolve_exact_tuple_ingress_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local wrappers="$cli_root/src/daemon/invocation/dispatch/federation_wrappers.rs"
@@ -29108,6 +29176,7 @@ EOF
   check_eal_trace_schema_version_strict_contract
   check_route_resolver_descriptor_ref_selector_contract
   check_namespace_resolver_authority_projection_contract
+  check_namespace_resolver_typed_query_ingress_contract
   check_namespace_proxy_resolve_exact_tuple_ingress_contract
   check_federation_resolve_canonical_filter_ingress_contract
   check_federation_list_user_devices_exact_tuple_ingress_contract
@@ -29388,6 +29457,7 @@ check_eal_trace_schema_version_strict_contract
 check_retired_federation_directory_v1_stream_contract
 check_route_resolver_descriptor_ref_selector_contract
 check_namespace_resolver_authority_projection_contract
+check_namespace_resolver_typed_query_ingress_contract
 check_namespace_proxy_resolve_exact_tuple_ingress_contract
 check_federation_resolve_canonical_filter_ingress_contract
 check_federation_list_user_devices_exact_tuple_ingress_contract
