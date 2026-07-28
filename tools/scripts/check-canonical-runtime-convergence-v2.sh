@@ -9691,6 +9691,45 @@ for expected in (
 PY
 }
 
+check_product_media_bidi_e2e_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local script="$cli_root/tools/scripts/docker-media-bidi-e2e.sh"
+  [[ -x "$script" ]] || fail "docker media/bidi e2e script is missing or not executable: $script"
+
+  if ! "$PYTHON_BIN" - "$script" <<'PY'
+import sys
+from pathlib import Path
+
+script = Path(sys.argv[1]).read_text(encoding="utf-8")
+for required in (
+    "synthetic media stream and bidirectional multimodal transfer",
+    "kind = \"sidecar\"",
+    "sdk-python/easynet_sdk",
+    "serve_plugin(",
+    "media.synthetic_stream",
+    "media.synthetic_bidi",
+    "ability stream",
+    "ability bidi",
+    "caller_media_bidi_descriptor_ref",
+    "caller_remote_media_stream_succeeded",
+    "caller_remote_media_bidi_succeeded",
+    "media_stream_unique_invocation_records",
+    "media_bidi_unique_invocation_records",
+    "media_product_operations_have_verified_single_terminal_receipt_chains",
+    "provider_media_plugin_removed",
+    "provider_removed_media_routes_reject_invocation",
+):
+    if required not in script:
+        raise SystemExit(f"product_media_bidi_e2e:missing:{required}")
+if ("fallback_" + "transport") in script:
+    raise SystemExit("product_media_bidi_e2e:retired_fallback_transport")
+PY
+  then
+    return 1
+  fi
+  bash "$script" --self-test >/dev/null || return 1
+}
+
 check_device_trust_sync_caller_classification_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local device_sync="$cli_root/src/daemon/invocation/admission/device_trust_sync.rs"
@@ -26366,6 +26405,20 @@ EOF
   if ( check_product_e2e_invocation_history_exact_scope_contract "$tmp/product-e2e-history-fallback" ) >/dev/null 2>&1; then
     fail "self-test expected product e2e invocation history fallback gate to fail"
   fi
+  mkdir -p "$tmp/product-media-bidi-e2e-incomplete/tools/scripts"
+  printf '%s\n' \
+    '#!/usr/bin/env bash' \
+    'set -euo pipefail' \
+    'if [[ "${1:-}" == "--self-test" ]]; then' \
+    '  bash -n "$0"' \
+    '  echo "docker-media-bidi-e2e self-test ok"' \
+    '  exit 0' \
+    'fi' \
+    > "$tmp/product-media-bidi-e2e-incomplete/tools/scripts/docker-media-bidi-e2e.sh"
+  chmod +x "$tmp/product-media-bidi-e2e-incomplete/tools/scripts/docker-media-bidi-e2e.sh"
+  if ( check_product_media_bidi_e2e_contract "$tmp/product-media-bidi-e2e-incomplete" ) >/dev/null 2>&1; then
+    fail "self-test expected product media/bidi e2e missing assertion gate to fail"
+  fi
   mkdir -p "$tmp/observe-health-legacy/src/daemon/ability/builtins/governance"
   cat >"$tmp/observe-health-legacy/src/daemon/ability/builtins/governance/health.rs" <<'EOF'
 fn handler(args: Value) -> anyhow::Result<Value> {
@@ -29336,6 +29389,7 @@ EOF
   check_runtime_trust_user_key_write_scope_contract
   check_device_trust_sync_caller_classification_contract
   check_product_e2e_invocation_history_exact_scope_contract
+  check_product_media_bidi_e2e_contract
   check_observe_health_contract_projection_contract
   check_ability_health_store_recovery_contract
   check_admission_owner_credentials_contract
@@ -29611,6 +29665,7 @@ check_runtime_trust_user_key_inventory_scope_contract
 check_runtime_trust_user_key_write_scope_contract
 check_device_trust_sync_caller_classification_contract
 check_product_e2e_invocation_history_exact_scope_contract
+check_product_media_bidi_e2e_contract
 check_observe_health_contract_projection_contract
 check_ability_health_store_recovery_contract
 check_admission_owner_credentials_contract

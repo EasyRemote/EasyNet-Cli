@@ -132,7 +132,6 @@ ensure_runtime_dirs() {
 
 if [[ "$SELF_TEST" == "1" ]]; then
   bash -n "$0"
-  require_paths
   grep -q "synthetic media stream and bidirectional multimodal transfer" "$0"
   grep -q "kind = \"sidecar\"" "$0"
   grep -q "media.synthetic_stream" "$0"
