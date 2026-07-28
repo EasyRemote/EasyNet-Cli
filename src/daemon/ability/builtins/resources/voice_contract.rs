@@ -53,7 +53,7 @@ pub(crate) enum VoiceEndReason {
 }
 
 impl VoiceEndReason {
-    pub(super) fn wire_name(self) -> &'static str {
+    pub(crate) fn wire_name(self) -> &'static str {
         match self {
             Self::Unspecified => "VOICE_END_UNSPECIFIED",
             Self::CallerHangup => "VOICE_END_CALLER_HANGUP",
@@ -64,7 +64,7 @@ impl VoiceEndReason {
         }
     }
 
-    pub(super) fn to_wire_i32(self) -> i32 {
+    pub(crate) fn to_wire_i32(self) -> i32 {
         match self {
             Self::Unspecified => 0,
             Self::CallerHangup => 1,
@@ -75,7 +75,7 @@ impl VoiceEndReason {
         }
     }
 
-    pub(super) fn from_wire(raw: i64) -> anyhow::Result<Self> {
+    pub(crate) fn from_wire(raw: i64) -> anyhow::Result<Self> {
         match raw {
             0 => Ok(Self::Unspecified),
             1 => Ok(Self::CallerHangup),
@@ -84,6 +84,20 @@ impl VoiceEndReason {
             4 => Ok(Self::PolicyDenied),
             5 => Ok(Self::AdminForced),
             _ => anyhow::bail!("unknown VoiceEndReason wire value {raw}"),
+        }
+    }
+
+    pub(crate) fn from_cli_token(raw: &str) -> anyhow::Result<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "caller_hangup" | "voice_end_caller_hangup" => Ok(Self::CallerHangup),
+            "timeout" | "voice_end_timeout" => Ok(Self::Timeout),
+            "media_failure" | "voice_end_media_failure" => Ok(Self::MediaFailure),
+            "policy_denied" | "voice_end_policy_denied" => Ok(Self::PolicyDenied),
+            "admin_forced" | "voice_end_admin_forced" => Ok(Self::AdminForced),
+            "" => anyhow::bail!("voice end reason must not be empty"),
+            other => anyhow::bail!(
+                "unknown voice end reason {other:?}; expected one of caller_hangup, timeout, media_failure, policy_denied, admin_forced"
+            ),
         }
     }
 }
@@ -619,9 +633,15 @@ impl VoiceCallAggregate {
         at_ms: u64,
     ) -> anyhow::Result<VoiceEndOutcome> {
         if self.state.is_terminal() {
+            let recorded_reason = self.end_reason.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "voice aggregate {:?} is terminal without recorded end_reason",
+                    self.call_id
+                )
+            })?;
             return Ok(VoiceEndOutcome {
                 state: self.state,
-                end_reason: self.end_reason.unwrap_or(end_reason),
+                end_reason: recorded_reason,
                 already_ended: true,
             });
         }
@@ -1307,5 +1327,33 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("event sequence"));
+    }
+
+    #[test]
+    fn terminal_aggregate_without_end_reason_does_not_repair_on_duplicate_end() {
+        const AUTHORITY: &str = "easynet:///r/voice-terminal-repair/authority";
+        let mut encoded = serde_json::to_value(VoiceCallAggregate::new(
+            AUTHORITY.to_string(),
+            "call-terminal-missing-reason".to_string(),
+            None,
+            10,
+        ))
+        .expect("serialize aggregate");
+        encoded["state"] = json!("ended");
+        encoded["ended_at_ms"] = json!(20);
+        encoded["end_reason"] = Value::Null;
+
+        let mut aggregate: VoiceCallAggregate =
+            serde_json::from_value(encoded).expect("decode malformed terminal fixture");
+        let error = aggregate
+            .end("duplicate-end", VoiceEndReason::CallerHangup, 30)
+            .expect_err("duplicate end must not repair missing terminal reason");
+
+        assert!(
+            error
+                .to_string()
+                .contains("terminal without recorded end_reason"),
+            "unexpected error: {error}"
+        );
     }
 }

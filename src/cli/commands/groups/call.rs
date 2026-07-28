@@ -27,6 +27,7 @@ use serde_json::{json, Value};
 use crate::cli::daemon_client::remote_system_ability::{
     invoke_current_realm_hub_system_ability, RealmHubSystemAbility,
 };
+use crate::daemon::ability::builtins::resources::voice_contract::VoiceEndReason;
 use crate::support::platform::local_invoke::LocalDaemonSystemAbilityIssuer;
 use crate::support::platform::output::{self, OutputFormat};
 
@@ -340,6 +341,32 @@ mod tests {
             "wrong error: {error}"
         );
     }
+
+    #[test]
+    fn call_end_args_preserve_explicit_reason() {
+        let args = end_call_args(EndArgs {
+            call_id: "call-1".to_string(),
+            reason: "policy_denied".to_string(),
+        })
+        .expect("build explicit end args");
+
+        assert_eq!(args["call_id"], "call-1");
+        assert_eq!(args["end_reason"], 4);
+    }
+
+    #[test]
+    fn call_end_args_reject_unknown_reason_before_invoke() {
+        let error = end_call_args(EndArgs {
+            call_id: "call-1".to_string(),
+            reason: "just_because".to_string(),
+        })
+        .expect_err("unknown call end reason must fail before invocation");
+
+        assert!(
+            error.to_string().contains("unknown voice end reason"),
+            "unexpected error: {error}"
+        );
+    }
 }
 
 fn run_show(args: ShowArgs) -> anyhow::Result<()> {
@@ -400,16 +427,27 @@ fn run_leave(args: LeaveArgs) -> anyhow::Result<()> {
 }
 
 fn run_end(args: EndArgs) -> anyhow::Result<()> {
-    let result = invoke_call_signaling(
-        RealmHubSystemAbility::VoiceEndCall,
-        json!({"call_id": args.call_id, "end_reason": 1}),
-    )?;
-    output::success(&format!("Call {} ended", args.call_id));
+    let call_id = args.call_id.clone();
+    let result = invoke_call_signaling(RealmHubSystemAbility::VoiceEndCall, end_call_args(args)?)?;
+    output::success(&format!("Call {call_id} ended"));
     if let Some(state) = result.get("state").and_then(Value::as_str) {
         output::detail("terminal_state", state);
     }
-    let _ = &args.reason; // surfaced in the ability args for forward-compat
+    if let Some(reason) = result.get("end_reason").and_then(Value::as_str) {
+        output::detail("end_reason", reason);
+    }
+    if let Some(code) = result.get("end_reason_code").and_then(Value::as_i64) {
+        output::detail("end_reason_code", &code.to_string());
+    }
     Ok(())
+}
+
+fn end_call_args(args: EndArgs) -> anyhow::Result<Value> {
+    let end_reason = VoiceEndReason::from_cli_token(&args.reason)?;
+    Ok(json!({
+        "call_id": args.call_id,
+        "end_reason": end_reason.to_wire_i32(),
+    }))
 }
 
 fn run_watch(args: WatchArgs) -> anyhow::Result<()> {

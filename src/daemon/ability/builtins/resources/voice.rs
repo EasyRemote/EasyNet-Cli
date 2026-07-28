@@ -256,6 +256,18 @@ fn require_str<'a>(args: &'a Value, key: &str, ability: &str) -> anyhow::Result<
         .ok_or_else(|| anyhow::anyhow!("{ability}: `{key}` is required"))
 }
 
+fn require_voice_end_reason(args: &Value) -> anyhow::Result<VoiceEndReason> {
+    let raw = args
+        .get("end_reason")
+        .and_then(Value::as_i64)
+        .ok_or_else(|| anyhow::anyhow!("voice.end_call requires explicit `end_reason`"))?;
+    let reason = VoiceEndReason::from_wire(raw)?;
+    if reason == VoiceEndReason::Unspecified {
+        anyhow::bail!("voice.end_call `end_reason` must not be VOICE_END_UNSPECIFIED");
+    }
+    Ok(reason)
+}
+
 fn signaling_authority(envelope: &EnvelopeContext) -> anyhow::Result<&str> {
     let authority = crate::core::ura::parse_ura(envelope.callee()).map_err(|error| {
         anyhow::anyhow!(
@@ -395,12 +407,7 @@ impl VoiceCallService {
         args: Value,
     ) -> anyhow::Result<Value> {
         let call_id = require_str(&args, "call_id", "voice.end_call")?.to_string();
-        let end_reason = args
-            .get("end_reason")
-            .and_then(Value::as_i64)
-            .map(VoiceEndReason::from_wire)
-            .transpose()?
-            .unwrap_or(VoiceEndReason::CallerHangup);
+        let end_reason = require_voice_end_reason(&args)?;
         let outcome = self.update(authority_ura, &call_id, command_id, |call, command_id| {
             call.end(command_id, end_reason, now_ms())
         })?;
@@ -409,6 +416,8 @@ impl VoiceCallService {
                 "call_id": call_id,
                 "state": outcome.state.wire_name(),
                 "state_code": outcome.state.to_wire_i32(),
+                "end_reason": outcome.end_reason.wire_name(),
+                "end_reason_code": outcome.end_reason.to_wire_i32(),
                 "already_ended": true,
             }));
         }
@@ -734,6 +743,10 @@ mod tests {
         VoiceCallService::new(Arc::new(TestVoiceCallRepository::default()))
     }
 
+    fn end_args(call_id: &str, reason: VoiceEndReason) -> Value {
+        json!({"call_id": call_id, "end_reason": reason.to_wire_i32()})
+    }
+
     #[derive(Debug, Clone, Default)]
     struct ConflictOnceRepository {
         inner: TestVoiceCallRepository,
@@ -1002,7 +1015,11 @@ mod tests {
         );
 
         service
-            .end_call(HUB_AUTHORITY, "round-trip:end", json!({"call_id": cid}))
+            .end_call(
+                HUB_AUTHORITY,
+                "round-trip:end",
+                end_args(&cid, VoiceEndReason::CallerHangup),
+            )
             .expect("end");
         let s3 = service
             .show_call(HUB_AUTHORITY, json!({"call_id": cid}))
@@ -1030,12 +1047,85 @@ mod tests {
             .create_call(HUB_AUTHORITY, json!({"call_id": cid}))
             .unwrap();
         service
-            .end_call(HUB_AUTHORITY, "idempotent:end", json!({"call_id": cid}))
+            .end_call(
+                HUB_AUTHORITY,
+                "idempotent:end",
+                end_args(&cid, VoiceEndReason::MediaFailure),
+            )
             .unwrap();
         let r = service
-            .end_call(HUB_AUTHORITY, "idempotent:end", json!({"call_id": cid}))
+            .end_call(
+                HUB_AUTHORITY,
+                "idempotent:end",
+                end_args(&cid, VoiceEndReason::AdminForced),
+            )
             .unwrap();
         assert_eq!(r.get("already_ended"), Some(&json!(true)));
+        assert_eq!(r.get("end_reason"), Some(&json!("VOICE_END_MEDIA_FAILURE")));
+        assert_eq!(r.get("end_reason_code"), Some(&json!(3)));
+    }
+
+    #[test]
+    fn end_call_rejects_missing_end_reason_before_defaulting() {
+        let service = service();
+        let cid = fresh_call_id("missing-end-reason");
+        service
+            .create_call(HUB_AUTHORITY, json!({"call_id": cid}))
+            .unwrap();
+        let error = service
+            .end_call(
+                HUB_AUTHORITY,
+                "missing-end-reason:end",
+                json!({"call_id": cid}),
+            )
+            .expect_err("voice.end_call must not default a missing reason");
+        assert!(
+            error.to_string().contains("requires explicit `end_reason`"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn end_call_rejects_unspecified_end_reason() {
+        let service = service();
+        let cid = fresh_call_id("unspecified-end-reason");
+        service
+            .create_call(HUB_AUTHORITY, json!({"call_id": cid}))
+            .unwrap();
+        let error = service
+            .end_call(
+                HUB_AUTHORITY,
+                "unspecified-end-reason:end",
+                end_args(&cid, VoiceEndReason::Unspecified),
+            )
+            .expect_err("voice.end_call must not accept unspecified terminal reason");
+        assert!(
+            error
+                .to_string()
+                .contains("must not be VOICE_END_UNSPECIFIED"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn end_call_preserves_explicit_non_default_reason() {
+        let service = service();
+        let cid = fresh_call_id("policy-end");
+        service
+            .create_call(HUB_AUTHORITY, json!({"call_id": cid}))
+            .unwrap();
+        let response = service
+            .end_call(
+                HUB_AUTHORITY,
+                "policy-end:end",
+                end_args(&cid, VoiceEndReason::PolicyDenied),
+            )
+            .unwrap();
+        assert_eq!(
+            response.get("end_reason"),
+            Some(&json!("VOICE_END_POLICY_DENIED"))
+        );
+        assert_eq!(response.get("end_reason_code"), Some(&json!(4)));
     }
 
     #[test]
@@ -1046,7 +1136,11 @@ mod tests {
             .create_call(HUB_AUTHORITY, json!({"call_id": cid}))
             .unwrap();
         service
-            .end_call(HUB_AUTHORITY, "after-end:end", json!({"call_id": cid}))
+            .end_call(
+                HUB_AUTHORITY,
+                "after-end:end",
+                end_args(&cid, VoiceEndReason::CallerHangup),
+            )
             .unwrap();
         let err = service
             .join_call(
@@ -1073,7 +1167,11 @@ mod tests {
             )
             .expect("create");
         service
-            .end_call(HUB_AUTHORITY, "terminal:end", json!({"call_id": call_id}))
+            .end_call(
+                HUB_AUTHORITY,
+                "terminal:end",
+                end_args(&call_id, VoiceEndReason::CallerHangup),
+            )
             .expect("end");
         let terminal = provider
             .load(HUB_AUTHORITY, &call_id)
