@@ -12,6 +12,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -380,7 +381,7 @@ func TestDirectRuntimeTransportInvokesOverUnixSocket(t *testing.T) {
 	}
 }
 
-func TestDirectRuntimeTransportStringifiesTypedMetadata(t *testing.T) {
+func TestDirectRuntimeTransportRejectsTypedMetadata(t *testing.T) {
 	transport, daemon, cleanup := openDirectRuntimeTestTransport(t)
 	defer cleanup()
 
@@ -389,30 +390,14 @@ func TestDirectRuntimeTransportStringifiesTypedMetadata(t *testing.T) {
 		t.Fatalf("NewRuntimeClient: %v", err)
 	}
 	_, err = client.Invoke(context.Background(), directRuntimeDraftWithMetadata(t, map[string]any{
-		"trace_id":    "direct-test",
-		"timeout_ms":  int64(1500),
-		"system":      true,
-		"authority":   map[string]any{"subject_ura": "easynet:///r/example/device/dev-a"},
-		"empty_value": nil,
+		"trace_id":   "direct-test",
+		"timeout_ms": int64(1500),
 	}))
-	if err != nil {
-		t.Fatalf("Invoke: %v", err)
+	if !IsCode(err, ErrInvalidArgument) || !strings.Contains(err.Error(), `metadata["timeout_ms"] must be a string for Axon InvokeRequest`) {
+		t.Fatalf("Invoke typed metadata error = %v, want invalid string-map rejection", err)
 	}
-	metadata := daemon.seenInvoke.GetMetadata()
-	if metadata["trace_id"] != "direct-test" {
-		t.Fatalf("trace_id metadata = %q", metadata["trace_id"])
-	}
-	if metadata["timeout_ms"] != "1500" {
-		t.Fatalf("timeout_ms metadata = %q", metadata["timeout_ms"])
-	}
-	if metadata["system"] != "true" {
-		t.Fatalf("system metadata = %q", metadata["system"])
-	}
-	if metadata["authority"] != `{"subject_ura":"easynet:///r/example/device/dev-a"}` {
-		t.Fatalf("authority metadata = %q", metadata["authority"])
-	}
-	if _, ok := metadata["empty_value"]; ok {
-		t.Fatalf("nil metadata value should be omitted: %#v", metadata)
+	if daemon.seenInvoke != nil {
+		t.Fatalf("typed metadata must fail before daemon dispatch: %#v", daemon.seenInvoke)
 	}
 }
 

@@ -994,9 +994,9 @@ class DirectRuntimeTests(unittest.TestCase):
             try:
                 draft = _signed_draft().to_json_dict()
                 draft["metadata"] = {
-                    "attempt": 1,
-                    "dry_run": False,
-                    "shape": {"b": 2, "a": 1},
+                    "attempt": "1",
+                    "dry_run": "false",
+                    "shape": '{"a":1,"b":2}',
                     "empty": None,
                 }
                 transport.invoke(
@@ -1018,6 +1018,34 @@ class DirectRuntimeTests(unittest.TestCase):
             "x-easynet-signed-descriptor-ref",
             servicer.requests[0].metadata,
         )
+
+    def test_direct_transport_rejects_typed_metadata_before_dispatch(
+        self,
+    ) -> None:
+        servicer = RecordingInvocationServicer()
+        with _fake_daemon(servicer) as endpoint:
+            transport = DirectRuntimeTransport.open(
+                endpoint,
+                dial_timeout_seconds=1,
+                invoke_timeout_seconds=1,
+                identity=_identity(),
+            )
+            try:
+                draft = _signed_draft().to_json_dict()
+                draft["metadata"] = {"attempt": 1}
+                with self.assertRaises(SDKError) as raised:
+                    transport.invoke(
+                        json.dumps(draft, separators=(",", ":")).encode("utf-8")
+                    )
+            finally:
+                transport.close()
+
+        self.assertTrue(is_code(raised.exception, ErrorCode.INVALID_INVOCATION))
+        self.assertIn(
+            "metadata must be a string-to-string map for Axon InvokeRequest",
+            raised.exception.message,
+        )
+        self.assertEqual(servicer.requests, [])
 
     def test_direct_transport_projects_daemon_stream_events_over_axon_grpc_uds(
         self,

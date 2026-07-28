@@ -5,10 +5,8 @@ package easynet
 import (
 	"context"
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"math"
-	"strconv"
 	"strings"
 	"time"
 
@@ -319,38 +317,8 @@ func directMetadataValueString(key string, value any) (string, bool, error) {
 		return "", false, nil
 	case string:
 		return typed, true, nil
-	case bool:
-		return strconv.FormatBool(typed), true, nil
-	case int:
-		return strconv.FormatInt(int64(typed), 10), true, nil
-	case int8:
-		return strconv.FormatInt(int64(typed), 10), true, nil
-	case int16:
-		return strconv.FormatInt(int64(typed), 10), true, nil
-	case int32:
-		return strconv.FormatInt(int64(typed), 10), true, nil
-	case int64:
-		return strconv.FormatInt(typed, 10), true, nil
-	case uint:
-		return strconv.FormatUint(uint64(typed), 10), true, nil
-	case uint8:
-		return strconv.FormatUint(uint64(typed), 10), true, nil
-	case uint16:
-		return strconv.FormatUint(uint64(typed), 10), true, nil
-	case uint32:
-		return strconv.FormatUint(uint64(typed), 10), true, nil
-	case uint64:
-		return strconv.FormatUint(typed, 10), true, nil
-	case float32:
-		return strconv.FormatFloat(float64(typed), 'f', -1, 32), true, nil
-	case float64:
-		return strconv.FormatFloat(typed, 'f', -1, 64), true, nil
 	default:
-		raw, err := json.Marshal(typed)
-		if err != nil {
-			return "", false, invalidRuntimePayload(fmt.Sprintf("metadata[%q] must be JSON-encodable for Axon InvokeRequest: %v", key, err), err)
-		}
-		return string(raw), true, nil
+		return "", false, invalidRuntimePayload(fmt.Sprintf("metadata[%q] must be a string for Axon InvokeRequest", key), nil)
 	}
 }
 

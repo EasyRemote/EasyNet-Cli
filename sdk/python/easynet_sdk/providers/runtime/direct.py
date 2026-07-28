@@ -1615,11 +1615,12 @@ def _metadata_value(value: object) -> str | None:
         return None
     if isinstance(value, str):
         return value
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if isinstance(value, int | float):
-        return str(value)
-    return json.dumps(value, separators=(",", ":"), sort_keys=True)
+    raise _direct_error(
+        "metadata must be a string-to-string map for Axon InvokeRequest",
+        code=ErrorCode.INVALID_INVOCATION,
+        retry=RetryHint.NEVER,
+        details={"field": "metadata"},
+    )
 
 
 def _canonical_receipt_projection(receipt: Any) -> dict[str, object]:

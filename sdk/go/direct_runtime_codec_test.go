@@ -530,7 +530,7 @@ func directRuntimeSignedDraft(t *testing.T) InvocationDraft {
 		"args":         map[string]any{"city": "Singapore"},
 		"content_type": "application/json",
 		"metadata": map[string]any{
-			"timeout_ms": int64(1500),
+			"timeout_ms": "1500",
 			"trace_id":   "codec-test",
 		},
 		"caller_signature": map[string]any{

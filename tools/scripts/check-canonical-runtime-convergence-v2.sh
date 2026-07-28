@@ -7211,6 +7211,95 @@ for required in (
 PY
 }
 
+check_sdk_direct_runtime_metadata_string_map_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local go_codec="$cli_root/sdk/go/direct_runtime_codec.go"
+  local go_test="$cli_root/sdk/go/direct_runtime_test.go"
+  local go_codec_test="$cli_root/sdk/go/direct_runtime_codec_test.go"
+  local py_direct="$cli_root/sdk/python/easynet_sdk/providers/runtime/direct.py"
+  local py_test="$cli_root/sdk/python/tests/test_direct_runtime.py"
+
+  "$PYTHON_BIN" - \
+    "$go_codec" \
+    "$go_test" \
+    "$go_codec_test" \
+    "$py_direct" \
+    "$py_test" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+go_codec_path, go_test_path, go_codec_test_path, py_direct_path, py_test_path = map(Path, sys.argv[1:])
+
+def read(path: Path) -> str:
+    if not path.exists():
+        raise SystemExit(f"sdk_direct_runtime_metadata_string_map_source_missing:{path}")
+    return path.read_text()
+
+def section(text: str, start: str, end: str) -> str:
+    offset = text.find(start)
+    if offset < 0:
+        raise SystemExit(f"sdk_direct_runtime_metadata_string_map_section_missing:{start}")
+    stop = text.find(end, offset + len(start))
+    return text[offset : stop if stop >= 0 else len(text)]
+
+go_codec = read(go_codec_path)
+go_metadata = section(go_codec, "func directMetadataValueString(", "func directWireTimeoutSeconds(")
+for retired in (
+    "strconv.Format",
+    "json.Marshal(typed)",
+    "must be JSON-encodable for Axon InvokeRequest",
+):
+    if retired in go_metadata:
+        raise SystemExit(f"sdk_go_direct_runtime_metadata_retired_stringify:{retired}")
+for required in (
+    "case string:",
+    'metadata[%q] must be a string for Axon InvokeRequest',
+):
+    if required not in go_metadata:
+        raise SystemExit(f"sdk_go_direct_runtime_metadata_required_missing:{required}")
+
+go_tests = read(go_test_path) + "\n" + read(go_codec_test_path)
+if "TestDirectRuntimeTransportStringifiesTypedMetadata" in go_tests:
+    raise SystemExit("sdk_go_direct_runtime_metadata_stringify_test_retired")
+for required in (
+    "TestDirectRuntimeTransportRejectsTypedMetadata",
+    'metadata["timeout_ms"] must be a string for Axon InvokeRequest',
+    "typed metadata must fail before daemon dispatch",
+    '"timeout_ms": "1500"',
+):
+    if required not in go_tests:
+        raise SystemExit(f"sdk_go_direct_runtime_metadata_test_missing:{required}")
+
+py_direct = read(py_direct_path)
+py_metadata = section(py_direct, "def _metadata_value(", "def _canonical_receipt_projection(")
+for retired in (
+    "json.dumps(value",
+    "isinstance(value, bool)",
+    "isinstance(value, int | float)",
+):
+    if retired in py_metadata:
+        raise SystemExit(f"sdk_python_direct_runtime_metadata_retired_stringify:{retired}")
+for required in (
+    "if isinstance(value, str):",
+    "metadata must be a string-to-string map for Axon InvokeRequest",
+    "raise _direct_error(",
+):
+    if required not in py_metadata:
+        raise SystemExit(f"sdk_python_direct_runtime_metadata_required_missing:{required}")
+
+py_tests = read(py_test_path)
+for required in (
+    "test_direct_transport_rejects_typed_metadata_before_dispatch",
+    'draft["metadata"] = {"attempt": 1}',
+    "metadata must be a string-to-string map for Axon InvokeRequest",
+    "self.assertEqual(servicer.requests, [])",
+):
+    if required not in py_tests:
+        raise SystemExit(f"sdk_python_direct_runtime_metadata_test_missing:{required}")
+PY
+}
+
 check_sdk_causal_context_dag_alias_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local go_signing="$cli_root/sdk/go/runtime_signing.go"
@@ -26017,11 +26106,46 @@ EOF
     > "$tmp/sdk-direct-runtime-state-fallback/sdk/python/easynet_sdk/providers/runtime/direct.py"
   printf 'def test_direct_runtime_projects_unspecified_invocation_state(): pass\n' \
     > "$tmp/sdk-direct-runtime-state-fallback/sdk/python/tests/test_direct_runtime.py"
-  if ( check_sdk_direct_runtime_state_projection_contract "$tmp/sdk-direct-runtime-state-fallback" ) >/dev/null 2>&1; then
-    fail "self-test expected SDK direct runtime state fallback gate to fail"
-  fi
-  mkdir -p "$tmp/sdk-causal-context-dag-alias/sdk/go" \
-    "$tmp/sdk-causal-context-dag-alias/sdk/python/easynet_sdk" \
+	  if ( check_sdk_direct_runtime_state_projection_contract "$tmp/sdk-direct-runtime-state-fallback" ) >/dev/null 2>&1; then
+	    fail "self-test expected SDK direct runtime state fallback gate to fail"
+	  fi
+	  mkdir -p "$tmp/sdk-direct-runtime-metadata-stringify/sdk/go" \
+	    "$tmp/sdk-direct-runtime-metadata-stringify/sdk/python/easynet_sdk/providers/runtime" \
+	    "$tmp/sdk-direct-runtime-metadata-stringify/sdk/python/tests"
+	  printf '%s\n' \
+	    'func directMetadataValueString(key string, value any) (string, bool, error) {' \
+	    '  switch typed := value.(type) {' \
+	    '  case string:' \
+	    '    return typed, true, nil' \
+	    '  default:' \
+	    '    raw, err := json.Marshal(typed)' \
+	    '    if err != nil { return "", false, invalidRuntimePayload(fmt.Sprintf("metadata[%q] must be JSON-encodable for Axon InvokeRequest: %v", key, err), err) }' \
+	    '    return string(raw), true, nil' \
+	    '  }' \
+	    '}' \
+	    'func directWireTimeoutSeconds() {}' \
+	    > "$tmp/sdk-direct-runtime-metadata-stringify/sdk/go/direct_runtime_codec.go"
+	  printf 'func TestDirectRuntimeTransportStringifiesTypedMetadata(t *testing.T) {}\n' \
+	    > "$tmp/sdk-direct-runtime-metadata-stringify/sdk/go/direct_runtime_test.go"
+	  printf 'func directRuntimeSignedDraft() { _ = map[string]any{"timeout_ms": int64(1500)} }\n' \
+	    > "$tmp/sdk-direct-runtime-metadata-stringify/sdk/go/direct_runtime_codec_test.go"
+	  printf '%s\n' \
+	    'def _metadata_value(value: object) -> str | None:' \
+	    '    if isinstance(value, str):' \
+	    '        return value' \
+	    '    if isinstance(value, bool):' \
+	    '        return "true" if value else "false"' \
+	    '    return json.dumps(value, separators=(",", ":"), sort_keys=True)' \
+	    '' \
+	    'def _canonical_receipt_projection(receipt): pass' \
+	    > "$tmp/sdk-direct-runtime-metadata-stringify/sdk/python/easynet_sdk/providers/runtime/direct.py"
+	  printf 'def test_direct_transport_projects_metadata_to_axon_string_map(): pass\n' \
+	    > "$tmp/sdk-direct-runtime-metadata-stringify/sdk/python/tests/test_direct_runtime.py"
+	  if ( check_sdk_direct_runtime_metadata_string_map_contract "$tmp/sdk-direct-runtime-metadata-stringify" ) >/dev/null 2>&1; then
+	    fail "self-test expected SDK direct runtime metadata stringify gate to fail"
+	  fi
+	  mkdir -p "$tmp/sdk-causal-context-dag-alias/sdk/go" \
+	    "$tmp/sdk-causal-context-dag-alias/sdk/python/easynet_sdk" \
     "$tmp/sdk-causal-context-dag-alias/sdk/python/easynet_sdk/providers/runtime" \
     "$tmp/sdk-causal-context-dag-alias/sdk/python/tests"
   printf '%s\n' \
@@ -28057,11 +28181,12 @@ EOF
   check_sdk_go_easynet_provider_retired_contract
   check_sdk_python_easynet_provider_retired_contract
   check_sdk_python_transport_stream_event_projection_contract
-  check_sdk_python_invocation_result_adapter_projection_contract
-  check_sdk_runtime_failure_code_contract
-  check_sdk_direct_runtime_state_projection_contract
-  check_sdk_causal_context_dag_alias_contract
-  check_sdk_direct_runtime_descriptor_not_found_contract
+	  check_sdk_python_invocation_result_adapter_projection_contract
+	  check_sdk_runtime_failure_code_contract
+	  check_sdk_direct_runtime_state_projection_contract
+	  check_sdk_direct_runtime_metadata_string_map_contract
+	  check_sdk_causal_context_dag_alias_contract
+	  check_sdk_direct_runtime_descriptor_not_found_contract
   check_sdk_cabi_descriptor_error_projection_contract
   check_principal_lifecycle_cli_schema_contract
   check_principal_lifecycle_store_idempotency_schema_contract
@@ -28326,6 +28451,7 @@ check_sdk_python_transport_stream_event_projection_contract
 check_sdk_python_invocation_result_adapter_projection_contract
 check_sdk_runtime_failure_code_contract
 check_sdk_direct_runtime_state_projection_contract
+check_sdk_direct_runtime_metadata_string_map_contract
 check_sdk_causal_context_dag_alias_contract
 check_sdk_direct_runtime_descriptor_not_found_contract
 check_sdk_cabi_descriptor_error_projection_contract
