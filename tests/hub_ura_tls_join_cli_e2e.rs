@@ -13,6 +13,7 @@
 use std::fs::File;
 use std::io::Read as _;
 use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
@@ -743,8 +744,8 @@ impl HubDaemon {
     fn shutdown_for_restart(mut self) {
         self.stop_child();
         assert!(
-            self.wait_for_keyring_shutdown(Duration::from_secs(10)),
-            "Hub key service did not release {} after daemon shutdown\nkey-service:\n{}",
+            self.wait_for_keyring_endpoint_closed(Duration::from_secs(10)),
+            "Hub key service endpoint stayed reachable at {} after daemon shutdown\nkey-service:\n{}",
             self.keyring_socket.display(),
             read_to_string(&self.keyring_log),
         );
@@ -757,9 +758,9 @@ impl HubDaemon {
         let _ = self.child.wait();
     }
 
-    fn wait_for_keyring_shutdown(&self, timeout: Duration) -> bool {
+    fn wait_for_keyring_endpoint_closed(&self, timeout: Duration) -> bool {
         let deadline = Instant::now() + timeout;
-        while self.keyring_socket.exists() {
+        while UnixStream::connect(&self.keyring_socket).is_ok() {
             if Instant::now() >= deadline {
                 return false;
             }
@@ -772,7 +773,7 @@ impl HubDaemon {
 impl Drop for HubDaemon {
     fn drop(&mut self) {
         self.stop_child();
-        let _ = self.wait_for_keyring_shutdown(Duration::from_secs(10));
+        let _ = self.wait_for_keyring_endpoint_closed(Duration::from_secs(10));
     }
 }
 
