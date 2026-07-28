@@ -1500,9 +1500,9 @@ def _admitted_descriptor_ref_request(
     callee_ura = _required_runtime_client_text(callee_ura, "callee_ura")
     ability = _required_runtime_client_text(ability, "ability")
     call_mode = _required_runtime_client_text(call_mode, "call_mode")
-    caller_ura = _optional_runtime_client_text(caller_ura)
-    subject_ura = _optional_runtime_client_text(subject_ura)
-    provider = _optional_runtime_client_text(provider)
+    caller_ura = _optional_runtime_client_text(caller_ura, "caller_ura")
+    subject_ura = _optional_runtime_client_text(subject_ura, "subject_ura")
+    provider = _optional_runtime_client_text(provider, "provider")
 
     expected_provider = governance_descriptor_provider_for_ability(ability)
     if not provider:
@@ -1616,10 +1616,10 @@ def _required_runtime_client_text(value: object, field_name: str) -> str:
     return value.strip()
 
 
-def _optional_runtime_client_text(value: object) -> str:
-    if value is None:
-        return ""
-    return str(value).strip()
+def _optional_runtime_client_text(value: object, field_name: str) -> str:
+    if not isinstance(value, str):
+        raise _invalid_runtime_client(f"descriptor_ref {field_name} must be a string")
+    return value.strip()
 
 
 def _required_text(value: object, field_name: str) -> str:

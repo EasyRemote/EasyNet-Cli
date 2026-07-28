@@ -6411,6 +6411,14 @@ def method_body(text: str, signature: str) -> str:
     stop = offset + len(signature) + match.start() if match else len(text)
     return text[offset:stop]
 
+def top_level_function_body(text: str, signature: str) -> str:
+    offset = text.find(signature)
+    if offset < 0:
+        raise SystemExit(f"sdk_python_runtime_control_authority_missing_function:{signature}")
+    match = re.search(r"\ndef ", text[offset + len(signature):])
+    stop = offset + len(signature) + match.start() if match else len(text)
+    return text[offset:stop]
+
 runtime = read(py_path)
 adapter = method_body(runtime, "def _adapter_handle_id(self) -> int:")
 if "if not self._is_runtime_bound():" not in adapter:
@@ -6420,11 +6428,28 @@ if "runtime-bound invocation control capability is required" not in adapter:
 if "return self._handle_id" not in adapter:
     raise SystemExit("sdk_python_runtime_control_authority:adapter_projection_missing")
 
+descriptor_ref_text = top_level_function_body(runtime, "def _optional_runtime_client_text(")
+if "str(value)" in descriptor_ref_text:
+    raise SystemExit("sdk_python_descriptor_ref_optional_fact_loose_stringify")
+if "descriptor_ref {field_name} must be a string" not in descriptor_ref_text:
+    raise SystemExit("sdk_python_descriptor_ref_optional_fact_strict_error_missing")
+for required_call in (
+    '_optional_runtime_client_text(caller_ura, "caller_ura")',
+    '_optional_runtime_client_text(subject_ura, "subject_ura")',
+    '_optional_runtime_client_text(provider, "provider")',
+):
+    if required_call not in runtime:
+        raise SystemExit(f"sdk_python_descriptor_ref_optional_fact_field_gate_missing:{required_call}")
+
 tests = read(py_test_path)
 for required in (
     "test_public_invocation_handle_json_does_not_grant_control_authority",
     "test_public_invocation_cancel_json_does_not_grant_control_authority",
     "public snapshot must fail before reaching runtime transport",
+    "test_descriptor_resolution_rejects_non_string_provider_facts_before_transport",
+    "descriptor_ref caller_ura must be a string",
+    "descriptor_ref subject_ura must be a string",
+    "descriptor_ref provider must be a string",
 ):
     if required not in tests:
         raise SystemExit(f"sdk_python_runtime_control_authority:test_missing:{required}")

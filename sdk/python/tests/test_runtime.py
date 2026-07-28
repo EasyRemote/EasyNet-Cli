@@ -558,6 +558,37 @@ class RuntimeTests(unittest.TestCase):
                 self.assertIn(message, raised.exception.message)
                 self.assertIsNone(transport.seen_descriptor_request)
 
+    def test_descriptor_resolution_rejects_non_string_provider_facts_before_transport(
+        self,
+    ) -> None:
+        base_request: dict[str, object] = {
+            "callee_ura": "easynet:///r/example/device/dev-a",
+            "ability": "invocation.history.list",
+            "call_mode": "read",
+            "caller_ura": "easynet:///r/example/user/alice",
+            "subject_ura": "easynet:///r/example/resource/user.alice/runtime-state/read",
+            "provider": "receipt_history",
+        }
+        cases: tuple[tuple[str, object, str], ...] = (
+            ("caller_ura", 7, "descriptor_ref caller_ura must be a string"),
+            ("subject_ura", True, "descriptor_ref subject_ura must be a string"),
+            ("provider", {"kind": "receipt_history"}, "descriptor_ref provider must be a string"),
+        )
+
+        for field_name, value, message in cases:
+            with self.subTest(field_name=field_name):
+                transport = MemoryRuntimeTransport()
+                client = RuntimeClient(transport)
+                request = dict(base_request)
+                request[field_name] = value
+
+                with self.assertRaises(SDKError) as raised:
+                    client.resolve_descriptor_ref(**request)  # type: ignore[arg-type]
+
+                self.assertEqual(raised.exception.code, ErrorCode.INVALID_ARGUMENT)
+                self.assertIn(message, raised.exception.message)
+                self.assertIsNone(transport.seen_descriptor_request)
+
     def test_invoke_returns_typed_result(self) -> None:
         transport = MemoryRuntimeTransport()
         client = RuntimeClient(transport)
