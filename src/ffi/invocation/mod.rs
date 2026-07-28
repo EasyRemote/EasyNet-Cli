@@ -8654,7 +8654,7 @@ mod tests {
         assert!(cancel_json["rejection"]
             .as_str()
             .expect("cancel rejection")
-            .contains("resolve session owner for cancellation authority"));
+            .contains("resolve session authority for cancellation authority"));
 
         let mut events_ptr: *mut c_char = std::ptr::null_mut();
         assert_eq!(
@@ -8977,7 +8977,7 @@ mod tests {
         assert!(cancel_json["rejection"]
             .as_str()
             .expect("cancel rejection")
-            .contains("resolve session owner for cancellation authority"));
+            .contains("resolve session authority for cancellation authority"));
 
         assert_eq!(
             runtime_invocation_handle_free(owner_handle, invocation_handle_id),
@@ -11051,6 +11051,7 @@ mod tests {
                 "type": "binary_chunk",
                 "stream_id": 1,
                 "data_base64": "aGVsbG8=",
+                "pts": 0,
                 "mac_base64": test_bidi_mac_base64()
             })
             .to_string(),
@@ -11093,6 +11094,7 @@ mod tests {
                 "type": "binary_chunk",
                 "stream_id": 1,
                 "data_base64": "aGVsbG8=",
+                "pts": 0,
                 "mac_base64": test_bidi_mac_base64()
             })
             .to_string(),

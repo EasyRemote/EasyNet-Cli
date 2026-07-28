@@ -4,7 +4,7 @@
     {
       "language": "c_abi",
       "case_id": "bidi/close_send_not_cancel",
-      "selector": "invocation_bidi_close_send_keeps_session_and_blocks_later_send",
+      "selector": "invocation_bidi_send_eof_also_half_closes_local_send",
       "evidence": [
         "src/ffi/invocation/mod.rs"
       ]
@@ -1252,7 +1252,7 @@
     {
       "language": "rust",
       "case_id": "bidi/close_send_not_cancel",
-      "selector": "invocation_bidi_close_send_keeps_session_and_blocks_later_send",
+      "selector": "invocation_bidi_send_eof_also_half_closes_local_send",
       "evidence": [
         "src/ffi/invocation/mod.rs"
       ]

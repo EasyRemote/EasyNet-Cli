@@ -8,7 +8,7 @@
         {
           "kind": "rust_test",
           "ref_path": "src/ffi/invocation/mod.rs",
-          "sha256": "21473d9656dee19597b3cc8752c4e866f393775114e806f5a3235c4aa6385f86"
+          "sha256": "63416b9483295de67987ef343d39166661d9de0aacca239cba098e8e510e45d9"
         }
       ],
       "profile": "runtime_core"
@@ -19,7 +19,7 @@
         {
           "kind": "rust_test",
           "ref_path": "src/ffi/invocation/mod.rs",
-          "sha256": "21473d9656dee19597b3cc8752c4e866f393775114e806f5a3235c4aa6385f86"
+          "sha256": "63416b9483295de67987ef343d39166661d9de0aacca239cba098e8e510e45d9"
         }
       ],
       "profile": "runtime_core"
@@ -30,7 +30,7 @@
         {
           "kind": "rust_test",
           "ref_path": "src/ffi/mod.rs",
-          "sha256": "c780c52f62570401fd3b23430f7fc092131d7c3f583cd79babc06e23f1887528"
+          "sha256": "cdae1b1506a3bd4933843c2ead2780167536c4ca8b72bcd0d3b47b657888dcac"
         }
       ],
       "profile": "runtime_core"
@@ -41,7 +41,7 @@
         {
           "kind": "rust_test",
           "ref_path": "src/daemon/invocation/dispatch/daemon_invocation_service_tests/unary.rs",
-          "sha256": "22f422f4a656127e21716f6060d19d763b3f934473e76e9bed77b4e24f6ad429"
+          "sha256": "b1495edc24228b83ab093a632d44c6514020d9f121e692b2a4f7d8983e22c07c"
         }
       ],
       "profile": "runtime_core"
@@ -74,7 +74,7 @@
         {
           "kind": "rust_test",
           "ref_path": "src/ffi/invocation/mod.rs",
-          "sha256": "21473d9656dee19597b3cc8752c4e866f393775114e806f5a3235c4aa6385f86"
+          "sha256": "63416b9483295de67987ef343d39166661d9de0aacca239cba098e8e510e45d9"
         }
       ],
       "profile": "health"
@@ -85,7 +85,7 @@
         {
           "kind": "rust_test",
           "ref_path": "src/ffi/invocation/mod.rs",
-          "sha256": "21473d9656dee19597b3cc8752c4e866f393775114e806f5a3235c4aa6385f86"
+          "sha256": "63416b9483295de67987ef343d39166661d9de0aacca239cba098e8e510e45d9"
         }
       ],
       "profile": "runtime_core"
@@ -107,7 +107,7 @@
         {
           "kind": "rust_test",
           "ref_path": "src/ffi/invocation/mod.rs",
-          "sha256": "21473d9656dee19597b3cc8752c4e866f393775114e806f5a3235c4aa6385f86"
+          "sha256": "63416b9483295de67987ef343d39166661d9de0aacca239cba098e8e510e45d9"
         }
       ],
       "profile": "runtime_core"
@@ -129,7 +129,7 @@
         {
           "kind": "rust_test",
           "ref_path": "src/ffi/invocation/mod.rs",
-          "sha256": "21473d9656dee19597b3cc8752c4e866f393775114e806f5a3235c4aa6385f86"
+          "sha256": "63416b9483295de67987ef343d39166661d9de0aacca239cba098e8e510e45d9"
         }
       ],
       "profile": "runtime_core"
@@ -151,7 +151,7 @@
         {
           "kind": "rust_test",
           "ref_path": "src/ffi/invocation/mod.rs",
-          "sha256": "21473d9656dee19597b3cc8752c4e866f393775114e806f5a3235c4aa6385f86"
+          "sha256": "63416b9483295de67987ef343d39166661d9de0aacca239cba098e8e510e45d9"
         }
       ],
       "profile": "runtime_core"
@@ -173,7 +173,7 @@
         {
           "kind": "rust_test",
           "ref_path": "src/ffi/invocation/mod.rs",
-          "sha256": "21473d9656dee19597b3cc8752c4e866f393775114e806f5a3235c4aa6385f86"
+          "sha256": "63416b9483295de67987ef343d39166661d9de0aacca239cba098e8e510e45d9"
         }
       ],
       "profile": "runtime_core"
@@ -184,7 +184,7 @@
         {
           "kind": "rust_test",
           "ref_path": "src/ffi/mod.rs",
-          "sha256": "c780c52f62570401fd3b23430f7fc092131d7c3f583cd79babc06e23f1887528"
+          "sha256": "cdae1b1506a3bd4933843c2ead2780167536c4ca8b72bcd0d3b47b657888dcac"
         }
       ],
       "profile": "runtime_core"
@@ -195,7 +195,7 @@
         {
           "kind": "rust_test",
           "ref_path": "src/ffi/mod.rs",
-          "sha256": "c780c52f62570401fd3b23430f7fc092131d7c3f583cd79babc06e23f1887528"
+          "sha256": "cdae1b1506a3bd4933843c2ead2780167536c4ca8b72bcd0d3b47b657888dcac"
         }
       ],
       "profile": "runtime_core"
