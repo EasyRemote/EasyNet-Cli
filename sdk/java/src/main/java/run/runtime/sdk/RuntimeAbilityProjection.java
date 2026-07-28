@@ -72,19 +72,6 @@ final class RuntimeAbilityProjection {
     return "";
   }
 
-  static String authorityURAForRealmOf(String ura) {
-    String clean = ura == null ? "" : ura.trim();
-    if (!clean.startsWith(REALM_PREFIX)) {
-      throw SDKError.validation("runtime", "callee_ura must be canonical");
-    }
-    String rest = clean.substring(REALM_PREFIX.length());
-    int slash = rest.indexOf('/');
-    if (slash <= 0) {
-      throw SDKError.validation("runtime", "callee_ura must be canonical");
-    }
-    return REALM_PREFIX + rest.substring(0, slash) + "/authority";
-  }
-
   private static DescriptorAbilityProjection descriptorAbilityProjection(String descriptorRef) {
     String clean = descriptorRef == null ? "" : descriptorRef.trim();
     int hash = clean.indexOf('#');

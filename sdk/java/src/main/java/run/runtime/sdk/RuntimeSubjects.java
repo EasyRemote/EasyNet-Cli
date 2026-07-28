@@ -65,6 +65,59 @@ public final class RuntimeSubjects {
     return new ResourceSubject(ownerID, resourcePath);
   }
 
+  static boolean isRuntimeGovernanceReadSubject(String subjectURA, String calleeURA) {
+    String subject = subjectURA == null ? "" : subjectURA.trim();
+    if (subject.isEmpty() || RuntimePrincipals.containsAllZeroPrincipal(subject)) {
+      return false;
+    }
+    ResourceSubject resource = canonicalResourceSubject(subject);
+    if (resource != null) {
+      String userOwner = resource.ownerID().startsWith("user.")
+          ? resource.ownerID().substring("user.".length()).trim()
+          : "";
+      return !userOwner.isEmpty()
+          && !userOwner.contains(".")
+          && !RuntimePrincipals.containsAllZeroPrincipal(userOwner)
+          && RUNTIME_STATE_READ_SUBJECT_PATH.equals(resource.path());
+    }
+    RuntimeOwnerSubject parsedSubject = runtimeOwnerSubject(subject);
+    RuntimeOwnerSubject parsedCallee = runtimeOwnerSubject(calleeURA);
+    return parsedSubject != null
+        && parsedCallee != null
+        && parsedSubject.kind().equals(parsedCallee.kind())
+        && parsedSubject.realm().equals(parsedCallee.realm())
+        && subject.equals(calleeURA == null ? "" : calleeURA.trim());
+  }
+
+  private static RuntimeOwnerSubject runtimeOwnerSubject(String ura) {
+    String raw = ura == null ? "" : ura.trim();
+    String prefix = "easynet:///r/";
+    if (!raw.startsWith(prefix) || RuntimePrincipals.containsAllZeroPrincipal(raw)) {
+      return null;
+    }
+    String rest = raw.substring(prefix.length());
+    int slash = rest.indexOf('/');
+    if (slash <= 0 || slash == rest.length() - 1) {
+      return null;
+    }
+    String realm = rest.substring(0, slash).trim();
+    String path = rest.substring(slash + 1).trim();
+    if (realm.isEmpty() || realm.contains("/")) {
+      return null;
+    }
+    if (path.startsWith("authority") && path.equals("authority")) {
+      return new RuntimeOwnerSubject("authority", realm);
+    }
+    if (path.startsWith("device/")) {
+      String deviceID = path.substring("device/".length()).trim();
+      if (deviceID.isEmpty() || deviceID.contains("/")) {
+        return null;
+      }
+      return new RuntimeOwnerSubject("device", realm);
+    }
+    return null;
+  }
+
   static boolean canonicalSessionAuthorityID(String sessionID) {
     if (sessionID == null) {
       return false;
@@ -92,4 +145,6 @@ public final class RuntimeSubjects {
   }
 
   record ResourceSubject(String ownerID, String path) {}
+
+  private record RuntimeOwnerSubject(String kind, String realm) {}
 }

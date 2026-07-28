@@ -46,22 +46,6 @@ struct RuntimeAbilityProjection: Sendable, Equatable {
         return ""
     }
 
-    static func authorityURAForRealmOf(_ ura: String) throws -> String {
-        let clean = ura.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard clean.hasPrefix(realmPrefix) else {
-            throw SDKError.validation("runtime", "callee_ura must be canonical for ability descriptor provider")
-        }
-        let rest = String(clean.dropFirst(realmPrefix.count))
-        guard let slash = rest.firstIndex(of: "/"), slash != rest.startIndex else {
-            throw SDKError.validation("runtime", "callee_ura must be canonical for ability descriptor provider")
-        }
-        let realm = String(rest[..<slash]).trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !realm.isEmpty, !realm.contains("/") else {
-            throw SDKError.validation("runtime", "callee_ura must be canonical for ability descriptor provider")
-        }
-        return "\(realmPrefix)\(realm)/authority"
-    }
-
     static func abilityURAForDescriptorRef(_ descriptorRef: String) throws -> String {
         let projection = try descriptorAbilityProjection(descriptorRef)
         return projection.abilityURA

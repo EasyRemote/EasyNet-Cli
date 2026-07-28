@@ -1012,12 +1012,63 @@ final class RuntimeCoreSeamTests: XCTestCase {
         let runtime = RuntimeClient(transport: MemoryRuntimeTransport(callee: callee, descriptor: descriptor))
         let ability = RuntimeAbilityClient(runtime: runtime)
         let call = try runtimeCallContext()
-        do {
-            _ = try await ability.build(call: call, abilityName: "meta.list_abilities")
-            XCTFail("expected RuntimeAbilityClient to reject public catalogue read")
-        } catch let error as SDKError {
-            XCTAssertEqual(error.code, .invalidArgument)
-            XCTAssertTrue(error.message.contains("RuntimeAbilityDescriptorProvider"))
+        for abilityName in ["meta.list_abilities", "meta.list_resources"] {
+            do {
+                _ = try await ability.build(call: call, abilityName: abilityName)
+                XCTFail("expected RuntimeAbilityClient to reject public catalogue read")
+            } catch let error as SDKError {
+                XCTAssertEqual(error.code, .invalidArgument)
+                XCTAssertTrue(error.message.contains("RuntimeAbilityDescriptorProvider"))
+            }
+        }
+    }
+
+    func testRuntimeDescriptorProviderSubjectValidationUsesRuntimeGovernanceSubjects() throws {
+        let runtimeStateSubject = try RuntimeSubjects.runtimeStateReadSubjectURA(realm: "example", userID: "alice")
+        _ = try RuntimeDescriptorRefRequest(
+            calleeURA: callee,
+            ability: "meta.list_abilities",
+            callMode: "rpc",
+            callerURA: caller,
+            subjectURA: callee,
+            provider: RuntimeDescriptorRefRequest.abilityDescriptorProvider
+        )
+        _ = try RuntimeDescriptorRefRequest(
+            calleeURA: callee,
+            ability: "meta.list_resources",
+            callMode: "rpc",
+            callerURA: caller,
+            subjectURA: runtimeStateSubject,
+            provider: RuntimeDescriptorRefRequest.abilityDescriptorProvider
+        )
+        _ = try RuntimeDescriptorRefRequest(
+            calleeURA: callee,
+            ability: "invocation.history.list",
+            callMode: "rpc",
+            callerURA: caller,
+            subjectURA: runtimeStateSubject,
+            provider: RuntimeDescriptorRefRequest.receiptHistoryProvider
+        )
+
+        expectSyncSDKError(.invalidArgument, "runtime governance read subject") {
+            _ = try RuntimeDescriptorRefRequest(
+                calleeURA: callee,
+                ability: "meta.list_abilities",
+                callMode: "rpc",
+                callerURA: caller,
+                subjectURA: "easynet:///r/example/authority",
+                provider: RuntimeDescriptorRefRequest.abilityDescriptorProvider
+            )
+        }
+        expectSyncSDKError(.invalidArgument, "runtime governance read subject") {
+            _ = try RuntimeDescriptorRefRequest(
+                calleeURA: callee,
+                ability: "meta.list_resources",
+                callMode: "rpc",
+                callerURA: caller,
+                subjectURA: "easynet:///r/example/device/dev-a/resource/user.alice/runtime-state/read",
+                provider: RuntimeDescriptorRefRequest.abilityDescriptorProvider
+            )
         }
     }
 
@@ -1046,7 +1097,7 @@ final class RuntimeCoreSeamTests: XCTestCase {
         XCTAssertEqual(abilityField, "meta.list_abilities")
         XCTAssertEqual(callModeField, "rpc")
         XCTAssertEqual(callerField, caller)
-        XCTAssertEqual(resolverSubjectField, "easynet:///r/example/authority")
+        XCTAssertEqual(resolverSubjectField, callee)
 
         let invokedCalleeField = await transport.lastInvokedTupleField("callee_ura")
         let invokedSubjectField = await transport.lastInvokedTupleField("subject_ura")

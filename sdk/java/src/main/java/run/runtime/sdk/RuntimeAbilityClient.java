@@ -146,7 +146,7 @@ public final class RuntimeAbilityClient {
 
     String descriptorResolutionSubjectURA(RuntimeCallContext call, String selectedSubjectURA) {
       if (RuntimeDescriptorRefRequest.ABILITY_DESCRIPTOR_PROVIDER.equals(descriptorProvider)) {
-        return RuntimeAbilityProjection.authorityURAForRealmOf(call.calleeURA());
+        return selectedSubjectURA;
       }
       if ("runtime_owner".equals(subjectPolicy)) {
         return selectedSubjectURA;

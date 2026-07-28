@@ -92,14 +92,11 @@ public struct RuntimeDescriptorRefRequest: Sendable, Equatable {
                 "descriptor_ref provider requests require caller_ura and subject_ura"
             )
         }
-        if provider == abilityDescriptorProvider {
-            let authority = try RuntimeAbilityProjection.authorityURAForRealmOf(calleeURA)
-            guard subjectURA == authority else {
-                throw SDKError.validation(
-                    "runtime",
-                    "ability_descriptor provider descriptor resolution subject must be the callee realm Authority"
-                )
-            }
+        if !RuntimeSubjects.isRuntimeGovernanceReadSubject(subjectURA, calleeURA: calleeURA) {
+            throw SDKError.validation(
+                "runtime",
+                "descriptor_ref provider \(provider) subject_ura must be a runtime governance read subject"
+            )
         }
     }
 
@@ -333,7 +330,7 @@ public final class RuntimeAbilityClient: @unchecked Sendable {
             selectedSubjectURA: String
         ) throws -> String {
             if descriptorProvider == RuntimeDescriptorRefRequest.abilityDescriptorProvider {
-                return try RuntimeAbilityProjection.authorityURAForRealmOf(call.calleeURA)
+                return selectedSubjectURA
             }
             if subjectPolicy == .runtimeOwner {
                 return selectedSubjectURA

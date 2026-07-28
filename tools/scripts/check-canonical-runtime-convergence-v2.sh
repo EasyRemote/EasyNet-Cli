@@ -5924,12 +5924,17 @@ check_sdk_cross_language_history_public_ingress_cutover_contract() {
   local node_test="$cli_root/sdk/node/test/runtime-core.test.mjs"
   local java_builder="$cli_root/sdk/java/src/main/java/run/runtime/sdk/InvocationBuilder.java"
   local java_projection="$cli_root/sdk/java/src/main/java/run/runtime/sdk/RuntimeAbilityProjection.java"
+  local java_request="$cli_root/sdk/java/src/main/java/run/runtime/sdk/RuntimeDescriptorRefRequest.java"
+  local java_runtime="$cli_root/sdk/java/src/main/java/run/runtime/sdk/RuntimeAbilityClient.java"
+  local java_subjects="$cli_root/sdk/java/src/main/java/run/runtime/sdk/RuntimeSubjects.java"
   local java_test="$cli_root/sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
   local swift_invocation="$cli_root/sdk/swift/Sources/RuntimeSDK/Invocation.swift"
   local swift_projection="$cli_root/sdk/swift/Sources/RuntimeSDK/RuntimeAbilityProjection.swift"
+  local swift_ability="$cli_root/sdk/swift/Sources/RuntimeSDK/AbilityDescriptor.swift"
+  local swift_subjects="$cli_root/sdk/swift/Sources/RuntimeSDK/RuntimeSubjects.swift"
   local swift_test="$cli_root/sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift"
 
-  "$PYTHON_BIN" - "$node" "$node_test" "$java_builder" "$java_projection" "$java_test" "$swift_invocation" "$swift_projection" "$swift_test" <<'PY'
+  "$PYTHON_BIN" - "$node" "$node_test" "$java_builder" "$java_projection" "$java_request" "$java_runtime" "$java_subjects" "$java_test" "$swift_invocation" "$swift_projection" "$swift_ability" "$swift_subjects" "$swift_test" <<'PY'
 import sys
 from pathlib import Path
 
@@ -5938,7 +5943,7 @@ for path in paths:
     if not path.exists():
         raise SystemExit(f"sdk_history_public_ingress_cutover:missing:{path}")
 
-node, node_test, java_builder, java_projection, java_test, swift_invocation, swift_projection, swift_test = [
+node, node_test, java_builder, java_projection, java_request, java_runtime, java_subjects, java_test, swift_invocation, swift_projection, swift_ability, swift_subjects, swift_test = [
     path.read_text(encoding="utf-8", errors="replace") for path in paths
 ]
 
@@ -5994,19 +5999,50 @@ for retired in (
     "descriptorAbilityURA(",
     "descriptorWireAbility(",
     "ABILITY_PATH_MARKER",
+    "authorityURAForRealmOf(",
 ):
     if retired in java_projection:
         raise SystemExit(f"sdk_history_public_ingress_cutover:java_projection_retired:{retired}")
 for required in (
+    "RuntimeSubjects.isRuntimeGovernanceReadSubject(subjectURA, calleeURA)",
+    "descriptor_ref provider ",
+    "subject_ura must be a runtime governance read subject",
+):
+    if required not in java_request:
+        raise SystemExit(f"sdk_history_public_ingress_cutover:java_request_provider_subject_missing:{required}")
+for retired in (
+    "callee realm Authority",
+    "authorityURAForRealmOf(calleeURA)",
+):
+    if retired in java_request:
+        raise SystemExit(f"sdk_history_public_ingress_cutover:java_request_retired_authority_subject:{retired}")
+if "return selectedSubjectURA;" not in java_runtime:
+    raise SystemExit("sdk_history_public_ingress_cutover:java_catalogue_resolver_subject_not_runtime_owner")
+if "return RuntimeAbilityProjection.authorityURAForRealmOf(call.calleeURA())" in java_runtime:
+    raise SystemExit("sdk_history_public_ingress_cutover:java_catalogue_resolver_uses_authority_subject")
+for required in (
+    "static boolean isRuntimeGovernanceReadSubject(String subjectURA, String calleeURA)",
+    'RUNTIME_STATE_READ_SUBJECT_PATH.equals(resource.path())',
+    'new RuntimeOwnerSubject("authority", realm)',
+    'new RuntimeOwnerSubject("device", realm)',
+):
+    if required not in java_subjects:
+        raise SystemExit(f"sdk_history_public_ingress_cutover:java_runtime_subject_missing:{required}")
+for required in (
     '"completeTupleRejectsReceiptHistoryPublicInvocation"',
     '"completeTupleRejectsCatalogueReadPublicInvocation"',
+    '"runtimeDescriptorProviderSubjectValidationUsesRuntimeGovernanceSubjects"',
     "private static void completeTupleRejectsReceiptHistoryPublicInvocation()",
     "private static void completeTupleRejectsCatalogueReadPublicInvocation()",
+    "private static void runtimeDescriptorProviderSubjectValidationUsesRuntimeGovernanceSubjects()",
     "device.dev-a.invocation.history.list@1.0.0#",
     "authority.meta.list_abilities@1.0.0#",
     "authority.meta.list_resources@1.0.0#",
     "RuntimeReceiptProvider",
     "RuntimeAbilityDescriptorProvider",
+    "RuntimeSubjects.runtimeStateReadSubjectURA(\"example\", \"alice\")",
+    "easynet:///r/example/device/dev-a/resource/user.alice/runtime-state/read",
+    "catalogue descriptor resolution subject is runtime owner",
 ):
     if required not in java_test:
         raise SystemExit(f"sdk_history_public_ingress_cutover:java_test_missing:{required}")
@@ -6034,17 +6070,43 @@ for retired in (
     "descriptorAbilityURA(",
     "descriptorWireAbility(",
     "abilityPathMarker",
+    "authorityURAForRealmOf(",
 ):
     if retired in swift_projection:
         raise SystemExit(f"sdk_history_public_ingress_cutover:swift_projection_retired:{retired}")
 for required in (
+    "RuntimeSubjects.isRuntimeGovernanceReadSubject(subjectURA, calleeURA: calleeURA)",
+    "subject_ura must be a runtime governance read subject",
+    "return selectedSubjectURA",
+):
+    if required not in swift_ability:
+        raise SystemExit(f"sdk_history_public_ingress_cutover:swift_ability_provider_subject_missing:{required}")
+for retired in (
+    "callee realm Authority",
+    "RuntimeAbilityProjection.authorityURAForRealmOf(call.calleeURA)",
+):
+    if retired in swift_ability:
+        raise SystemExit(f"sdk_history_public_ingress_cutover:swift_ability_retired_authority_subject:{retired}")
+for required in (
+    "static func isRuntimeGovernanceReadSubject(_ subjectURA: String, calleeURA: String) -> Bool",
+    "resource.path == runtimeStateReadSubjectPath",
+    'RuntimeOwnerSubject(kind: "authority", realm: realm)',
+    'RuntimeOwnerSubject(kind: "device", realm: realm)',
+):
+    if required not in swift_subjects:
+        raise SystemExit(f"sdk_history_public_ingress_cutover:swift_runtime_subject_missing:{required}")
+for required in (
     "testCompleteTupleRejectsReceiptHistoryPublicInvocation",
     "testCompleteTupleRejectsCatalogueReadPublicInvocation",
+    "testRuntimeDescriptorProviderSubjectValidationUsesRuntimeGovernanceSubjects",
     "device.dev-a.invocation.history.list@1.0.0#",
     "authority.meta.list_abilities@1.0.0#",
     "authority.meta.list_resources@1.0.0#",
     "RuntimeReceiptProvider",
     "RuntimeAbilityDescriptorProvider",
+    'RuntimeSubjects.runtimeStateReadSubjectURA(realm: "example", userID: "alice")',
+    "easynet:///r/example/device/dev-a/resource/user.alice/runtime-state/read",
+    "XCTAssertEqual(resolverSubjectField, callee)",
 ):
     if required not in swift_test:
         raise SystemExit(f"sdk_history_public_ingress_cutover:swift_test_missing:{required}")

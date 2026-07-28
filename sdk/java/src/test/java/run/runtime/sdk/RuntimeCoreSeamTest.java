@@ -52,6 +52,7 @@ public final class RuntimeCoreSeamTest {
           "completeTupleRejectsNoncanonicalSessionSubjectAuthorityCarrier",
           "completeTupleRejectsReceiptHistoryPublicInvocation",
           "completeTupleRejectsCatalogueReadPublicInvocation",
+          "runtimeDescriptorProviderSubjectValidationUsesRuntimeGovernanceSubjects",
           "runtimeAbilityDescriptorProviderUsesCatalogueProvider",
           "runtimeAbilityClientRejectsCatalogueReadPublicBuild",
           "preparedInvocationCannotBeSubmitted",
@@ -128,6 +129,8 @@ public final class RuntimeCoreSeamTest {
           completeTupleRejectsReceiptHistoryPublicInvocation();
       case "completeTupleRejectsCatalogueReadPublicInvocation" ->
           completeTupleRejectsCatalogueReadPublicInvocation();
+      case "runtimeDescriptorProviderSubjectValidationUsesRuntimeGovernanceSubjects" ->
+          runtimeDescriptorProviderSubjectValidationUsesRuntimeGovernanceSubjects();
       case "runtimeAbilityDescriptorProviderUsesCatalogueProvider" ->
           runtimeAbilityDescriptorProviderUsesCatalogueProvider();
       case "runtimeAbilityClientRejectsCatalogueReadPublicBuild" ->
@@ -1375,6 +1378,54 @@ public final class RuntimeCoreSeamTest {
     }
   }
 
+  private static void runtimeDescriptorProviderSubjectValidationUsesRuntimeGovernanceSubjects() {
+    String runtimeStateSubject = RuntimeSubjects.runtimeStateReadSubjectURA("example", "alice");
+    new RuntimeDescriptorRefRequest(
+        CALLEE,
+        "meta.list_abilities",
+        "rpc",
+        CALLER,
+        CALLEE,
+        RuntimeDescriptorRefRequest.ABILITY_DESCRIPTOR_PROVIDER);
+    new RuntimeDescriptorRefRequest(
+        CALLEE,
+        "meta.list_resources",
+        "rpc",
+        CALLER,
+        runtimeStateSubject,
+        RuntimeDescriptorRefRequest.ABILITY_DESCRIPTOR_PROVIDER);
+    new RuntimeDescriptorRefRequest(
+        CALLEE,
+        "invocation.history.list",
+        "rpc",
+        CALLER,
+        runtimeStateSubject,
+        RuntimeDescriptorRefRequest.RECEIPT_HISTORY_PROVIDER);
+
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        "runtime governance read subject",
+        () ->
+            new RuntimeDescriptorRefRequest(
+                CALLEE,
+                "meta.list_abilities",
+                "rpc",
+                CALLER,
+                "easynet:///r/example/authority",
+                RuntimeDescriptorRefRequest.ABILITY_DESCRIPTOR_PROVIDER));
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        "runtime governance read subject",
+        () ->
+            new RuntimeDescriptorRefRequest(
+                CALLEE,
+                "meta.list_resources",
+                "rpc",
+                CALLER,
+                "easynet:///r/example/device/dev-a/resource/user.alice/runtime-state/read",
+                RuntimeDescriptorRefRequest.ABILITY_DESCRIPTOR_PROVIDER));
+  }
+
   private static void runtimeAbilityDescriptorProviderUsesCatalogueProvider() {
     MemoryRuntimeTransport transport = new MemoryRuntimeTransport();
     String catalogueDescriptor =
@@ -1411,8 +1462,8 @@ public final class RuntimeCoreSeamTest {
         transport.seenDescriptorRequest.get("provider").equals("ability_descriptor"),
         "catalogue descriptor provider");
     check(
-        transport.seenDescriptorRequest.get("subject_ura").equals("easynet:///r/example/authority"),
-        "catalogue descriptor resolution subject");
+        transport.seenDescriptorRequest.get("subject_ura").equals(CALLEE),
+        "catalogue descriptor resolution subject is runtime owner");
     check(
         transport.seenInvokeTuple.descriptor().equals(catalogueDescriptor),
         "catalogue invocation descriptor");

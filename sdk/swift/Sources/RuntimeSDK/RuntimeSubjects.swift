@@ -57,6 +57,64 @@ enum RuntimeSubjects {
         return ResourceSubject(ownerID: ownerID, path: resourcePath)
     }
 
+    static func isRuntimeGovernanceReadSubject(_ subjectURA: String, calleeURA: String) -> Bool {
+        let subject = subjectURA.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !subject.isEmpty, !RuntimePrincipals.containsAllZeroPrincipal(subject) else {
+            return false
+        }
+        if let resource = canonicalResourceSubject(subject) {
+            let userPrefix = "user."
+            guard resource.ownerID.hasPrefix(userPrefix) else {
+                return false
+            }
+            let userID = String(resource.ownerID.dropFirst(userPrefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+            return !userID.isEmpty &&
+                !userID.contains(".") &&
+                !RuntimePrincipals.containsAllZeroPrincipal(userID) &&
+                resource.path == runtimeStateReadSubjectPath
+        }
+        guard let parsedSubject = runtimeOwnerSubject(subject),
+              let parsedCallee = runtimeOwnerSubject(calleeURA)
+        else {
+            return false
+        }
+        return parsedSubject.kind == parsedCallee.kind &&
+            parsedSubject.realm == parsedCallee.realm &&
+            subject == calleeURA.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func runtimeOwnerSubject(_ ura: String) -> RuntimeOwnerSubject? {
+        let raw = ura.trimmingCharacters(in: .whitespacesAndNewlines)
+        let realmPrefix = "easynet:///r/"
+        guard raw.hasPrefix(realmPrefix), !RuntimePrincipals.containsAllZeroPrincipal(raw) else {
+            return nil
+        }
+        let rest = String(raw.dropFirst(realmPrefix.count))
+        guard let slash = rest.firstIndex(of: "/"),
+              slash != rest.startIndex,
+              slash != rest.index(before: rest.endIndex)
+        else {
+            return nil
+        }
+        let realm = String(rest[..<slash]).trimmingCharacters(in: .whitespacesAndNewlines)
+        let path = String(rest[rest.index(after: slash)...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !realm.isEmpty, !realm.contains("/") else {
+            return nil
+        }
+        if path == "authority" {
+            return RuntimeOwnerSubject(kind: "authority", realm: realm)
+        }
+        let devicePrefix = "device/"
+        if path.hasPrefix(devicePrefix) {
+            let deviceID = String(path.dropFirst(devicePrefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !deviceID.isEmpty, !deviceID.contains("/") else {
+                return nil
+            }
+            return RuntimeOwnerSubject(kind: "device", realm: realm)
+        }
+        return nil
+    }
+
     static func canonicalSessionAuthorityID(_ sessionID: String) -> Bool {
         let cleaned = sessionID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleaned.isEmpty else {
@@ -75,6 +133,11 @@ enum RuntimeSubjects {
     struct ResourceSubject {
         let ownerID: String
         let path: String
+    }
+
+    private struct RuntimeOwnerSubject {
+        let kind: String
+        let realm: String
     }
 
     private static func invalidRuntime(_ message: String) -> SDKError {
