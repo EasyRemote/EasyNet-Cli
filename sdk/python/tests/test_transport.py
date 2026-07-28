@@ -58,7 +58,7 @@ class RuntimeInvocationTransportTests(unittest.TestCase):
         assert runtime.seen_draft is not None
         self.assertEqual(
             runtime.seen_draft["descriptor_ref"],
-            "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+            "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
         )
 
     def test_invocation_result_adapter_projects_runtime_result_shape(self) -> None:

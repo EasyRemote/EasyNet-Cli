@@ -61,11 +61,13 @@ class AbilityDescriptorProjection:
 
 @dataclass(frozen=True)
 class AbilityDescriptorRef:
-    """Descriptor identity split into ability URA and descriptor version."""
+    """Descriptor identity split into canonical descriptor-bound facts."""
 
     raw: str
     ability_ura: str
     version: str
+    descriptor_hash: str
+    action: str
 
 
 @dataclass(frozen=True)
@@ -225,12 +227,16 @@ def parse_ability_descriptor_ref(
     descriptor_ref = getattr(projection, "descriptor_ref", "")
     ability_ura = getattr(projection, "ability_ura", "")
     version = getattr(projection, "descriptor_version", "")
-    if not descriptor_ref or not ability_ura or not version:
+    descriptor_hash = getattr(projection, "descriptor_hash", "")
+    action = getattr(projection, "action", "")
+    if not descriptor_ref or not ability_ura or not version or not descriptor_hash or not action:
         raise _invalid_descriptor_ref("descriptor_ref projection is incomplete")
     return AbilityDescriptorRef(
         raw=descriptor_ref,
         ability_ura=ability_ura,
         version=version,
+        descriptor_hash=descriptor_hash,
+        action=action,
     )
 
 

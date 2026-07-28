@@ -93,25 +93,30 @@ func TestProjectAbilityDescriptorRefDelegatesToAddressing(t *testing.T) {
 	ref, err := ProjectAbilityDescriptorRef(
 		context.Background(),
 		NewCanonicalAddressing(),
-		"easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+		"easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
 	)
 	if err != nil {
 		t.Fatalf("ProjectAbilityDescriptorRef: %v", err)
 	}
 
-	if ref.AbilityURA != "easynet:///r/example/ability/device.dev-a.observe.health" || ref.Version != "1.0.0" {
+	if ref.AbilityURA != "easynet:///r/example/ability/device.dev-a.observe.health" ||
+		ref.Version != "1.0.0" ||
+		ref.DescriptorHash != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" ||
+		ref.Action != "invoke" {
 		t.Fatalf("descriptor projection = %#v", ref)
 	}
 }
 
 func TestParseAbilityDescriptorRefUsesCanonicalAxonProjection(t *testing.T) {
-	ref, err := ParseAbilityDescriptorRef("easynet:///r/example/ability/device.dev-a.observe.health@1.0.0")
+	ref, err := ParseAbilityDescriptorRef("easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke")
 	if err != nil {
 		t.Fatalf("ParseAbilityDescriptorRef: %v", err)
 	}
-	if ref.Raw != "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0" ||
+	if ref.Raw != "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke" ||
 		ref.AbilityURA != "easynet:///r/example/ability/device.dev-a.observe.health" ||
-		ref.Version != "1.0.0" {
+		ref.Version != "1.0.0" ||
+		ref.DescriptorHash != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" ||
+		ref.Action != "invoke" {
 		t.Fatalf("descriptor ref projection = %#v", ref)
 	}
 }

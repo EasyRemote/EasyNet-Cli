@@ -88,8 +88,10 @@ class AxonAddressingProviderTests(unittest.TestCase):
                 "easynet:///r/example/device/dev-a",
                 "observe.health",
                 "1.0.0",
+                descriptor_hash="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                action="invoke",
             ),
-            "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+            "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
         )
         self.assertEqual(
             addressing.descriptor_bound_resource_subject_ura(
@@ -99,9 +101,15 @@ class AxonAddressingProviderTests(unittest.TestCase):
             "easynet:///r/example/resource/user.alice/invoke/observe.health",
         )
         descriptor = addressing.project_descriptor_ref(
-            "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"
+            "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
         )
         self.assertEqual(descriptor.profile, "axon-strict-v2")
+        self.assertEqual(descriptor.descriptor_version, "1.0.0")
+        self.assertEqual(
+            descriptor.descriptor_hash,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        )
+        self.assertEqual(descriptor.action, "invoke")
         self.assertEqual(
             descriptor.components,
             {
@@ -109,6 +117,10 @@ class AxonAddressingProviderTests(unittest.TestCase):
                     "easynet:///r/example/ability/device.dev-a.observe.health"
                 ),
                 "descriptor_version": "1.0.0",
+                "descriptor_hash": (
+                    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                ),
+                "action": "invoke",
                 "owner_ura": "easynet:///r/example/device/dev-a",
                 "owner_kind": "device",
                 "public_name": "observe.health",
@@ -130,6 +142,8 @@ class AxonAddressingProviderTests(unittest.TestCase):
                 "easynet:///r/example/authority",
                 "network.health",
                 "1.0.0",
+                descriptor_hash="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                action="invoke",
             )
         )
         self.assertEqual(descriptor.components["owner_kind"], "authority")

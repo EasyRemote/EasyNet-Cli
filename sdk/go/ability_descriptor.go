@@ -46,9 +46,11 @@ type AbilityDescriptorProjection struct {
 // runtime identity profile boundary; this value object only carries the
 // projected fields.
 type AbilityDescriptorRef struct {
-	Raw        string
-	AbilityURA string
-	Version    string
+	Raw            string
+	AbilityURA     string
+	Version        string
+	DescriptorHash string
+	Action         string
 }
 
 // AbilityDescriptorListRequest asks the runtime catalog for
@@ -210,9 +212,11 @@ func ProjectAbilityDescriptorRef(ctx context.Context, addressing Addressing, raw
 		return AbilityDescriptorRef{}, invalidProfilePayload(addressingProfile, "descriptor_ref projection is incomplete", nil)
 	}
 	return AbilityDescriptorRef{
-		Raw:        projection.DescriptorRef,
-		AbilityURA: projection.AbilityURA,
-		Version:    projection.DescriptorVersion,
+		Raw:            projection.DescriptorRef,
+		AbilityURA:     projection.AbilityURA,
+		Version:        projection.DescriptorVersion,
+		DescriptorHash: projection.DescriptorHash,
+		Action:         projection.Action,
 	}, nil
 }
 

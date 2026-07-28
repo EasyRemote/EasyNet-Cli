@@ -24,7 +24,7 @@ class InvocationTests(unittest.TestCase):
             .with_caller_ura("easynet:///r/example/agent/alice.sdk")
             .with_callee_ura("easynet:///r/example/device/dev-a")
             .with_descriptor_ref(
-                "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"
+                "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
             )
             .with_subject_ura("easynet:///r/example/device/dev-a")
             .with_nonce_base64("AQIDBAUGBwgJCgsMDQ4PEA==")
@@ -47,7 +47,7 @@ class InvocationTests(unittest.TestCase):
             .with_caller_ura("easynet:///r/example/agent/alice.sdk")
             .with_callee_ura("easynet:///r/example/device/dev-a")
             .with_descriptor_ref(
-                "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"
+                "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
             )
             .with_subject_ura("easynet:///r/example/device/dev-a")
             .with_nonce_base64("AQIDBAUGBwgJCgsMDQ4PEA==")
@@ -73,7 +73,7 @@ class InvocationTests(unittest.TestCase):
             b"""{
                 "caller_ura": "easynet:///r/example/agent/alice.sdk",
                 "callee_ura": "easynet:///r/example/device/dev-a",
-                "descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+                "descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
                 "subject_ura": "easynet:///r/example/device/dev-a",
                 "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
                 "causal_context": {"form": "none"},
@@ -113,7 +113,7 @@ class InvocationTests(unittest.TestCase):
                 InvocationBuilder()
                 .with_callee_ura("easynet:///r/example/device/dev-a")
                 .with_descriptor_ref(
-                    "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"
+                    "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
                 )
                 .with_subject_ura("easynet:///r/example/device/dev-a")
                 .with_nonce_base64("AQIDBAUGBwgJCgsMDQ4PEA==")
@@ -149,7 +149,7 @@ class InvocationTests(unittest.TestCase):
                 .with_caller_ura("easynet:///r/example/agent/alice.sdk")
                 .with_callee_ura("easynet:///r/example/device/dev-a")
                 .with_descriptor_ref(
-                    "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"
+                    "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
                 )
                 .with_subject_ura("easynet:///r/example/device/dev-a")
                 .with_nonce_base64("AQIDBAUGBwgJCgsMDQ4PEA==")
@@ -171,7 +171,7 @@ class InvocationTests(unittest.TestCase):
                         .with_caller_ura("easynet:///r/example/agent/alice.sdk")
                         .with_callee_ura("easynet:///r/example/device/dev-a")
                         .with_descriptor_ref(
-                            "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"
+                            "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
                         )
                         .with_subject_ura("easynet:///r/example/device/dev-a")
                         .with_nonce_base64(nonce)
@@ -190,7 +190,7 @@ class InvocationTests(unittest.TestCase):
                 .with_caller_ura("easynet:///r/example/agent/alice.sdk")
                 .with_callee_ura("easynet:///r/example/device/dev-a")
                 .with_descriptor_ref(
-                    "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"
+                    "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
                 )
                 .with_subject_ura("easynet:///r/example/device/dev-a")
                 .with_nonce_base64("AQIDBAUGBwgJCgsMDQ4PEA==")
@@ -208,7 +208,7 @@ class InvocationTests(unittest.TestCase):
                 b"""{
                     "caller_ura": "easynet:///r/example/agent/alice.sdk",
                     "callee_ura": "easynet:///r/example/device/dev-a",
-                    "descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+                    "descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
                     "subject_ura": "easynet:///r/example/device/dev-a",
                     "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
                     "causal_context": {"form": "none"},
@@ -227,7 +227,7 @@ def complete_builder() -> InvocationBuilder:
         .with_caller_ura("easynet:///r/example/agent/alice.sdk")
         .with_callee_ura("easynet:///r/example/device/dev-a")
         .with_descriptor_ref(
-            "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"
+            "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
         )
         .with_subject_ura("easynet:///r/example/device/dev-a")
         .with_nonce_base64("AQIDBAUGBwgJCgsMDQ4PEA==")

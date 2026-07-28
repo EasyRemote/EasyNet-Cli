@@ -2425,7 +2425,7 @@
         },
         {
           "item": "AbilityDescriptorRef",
-          "sha256": "472f080da357d2b2c38b85d9bf3aabc9e0aeed6401e267536810433bd3b38656"
+          "sha256": "2d9401909b3222c5e7f91ad819b20e57f56b53f21e0f4997e2c81169d1f850ab"
         },
         {
           "item": "DescriptorModeUnsupported",
@@ -2672,6 +2672,14 @@
           "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
         },
         {
+          "item": "AbilityDescriptorRef.Action",
+          "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+        },
+        {
+          "item": "AbilityDescriptorRef.DescriptorHash",
+          "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+        },
+        {
           "item": "AbilityDescriptorRef.Raw",
           "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
         },
@@ -2828,7 +2836,7 @@
             },
             {
               "item": "AbilityDescriptorRef",
-              "sha256": "472f080da357d2b2c38b85d9bf3aabc9e0aeed6401e267536810433bd3b38656"
+              "sha256": "2d9401909b3222c5e7f91ad819b20e57f56b53f21e0f4997e2c81169d1f850ab"
             },
             {
               "item": "DescriptorModeUnsupported",
@@ -3072,6 +3080,14 @@
             },
             {
               "item": "AbilityDescriptorRef.AbilityURA",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "AbilityDescriptorRef.Action",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "AbilityDescriptorRef.DescriptorHash",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
@@ -3231,7 +3247,7 @@
             },
             {
               "item": "AbilityDescriptorRef",
-              "sha256": "472f080da357d2b2c38b85d9bf3aabc9e0aeed6401e267536810433bd3b38656"
+              "sha256": "2d9401909b3222c5e7f91ad819b20e57f56b53f21e0f4997e2c81169d1f850ab"
             },
             {
               "item": "DescriptorModeUnsupported",
@@ -3475,6 +3491,14 @@
             },
             {
               "item": "AbilityDescriptorRef.AbilityURA",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "AbilityDescriptorRef.Action",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "AbilityDescriptorRef.DescriptorHash",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
@@ -3643,7 +3667,7 @@
         },
         {
           "item": "AbilityDescriptorRef",
-          "sha256": "bfca104acd5141644095a14afecb28ad44ae999d879f329898b209b5e99f08e4"
+          "sha256": "4a69342d43dcff14dd98f2ed8def20c9d0eb9804dce43b084b428a6de531135b"
         },
         {
           "item": "DescriptorProvider",
@@ -3671,7 +3695,7 @@
         },
         {
           "item": "parse_ability_descriptor_ref",
-          "sha256": "8c862cf58edf02b2d2858ee5be3fb6809adbc17934e512aae596e24a4cb60d5c"
+          "sha256": "2eae73a540aa34e105e3d89aef6e22b58e7d5cb355baa7d8175223de7eb22099"
         },
         {
           "item": "project_ability_descriptor",
@@ -3826,6 +3850,14 @@
           "sha256": "806f5961440fe858381c9a0720eb0b39b6fb2f79d37b137bdce0671df653bfdd"
         },
         {
+          "item": "AbilityDescriptorRef.action",
+          "sha256": "8fd27e4e3e337d3230d10a04161ef98e64679a157a927fdb2f9fe95255a53cf8"
+        },
+        {
+          "item": "AbilityDescriptorRef.descriptor_hash",
+          "sha256": "86836a48aae0ad14a6efb4476b17a31454e89a3df57477faf4338abf7fde6b27"
+        },
+        {
           "item": "AbilityDescriptorRef.raw",
           "sha256": "f575b575d8f4875502c1f79820ccb96cbacc838e2c4c7ede57cea69a0c47b428"
         },
@@ -3970,7 +4002,7 @@
             },
             {
               "item": "AbilityDescriptorRef",
-              "sha256": "bfca104acd5141644095a14afecb28ad44ae999d879f329898b209b5e99f08e4"
+              "sha256": "4a69342d43dcff14dd98f2ed8def20c9d0eb9804dce43b084b428a6de531135b"
             },
             {
               "item": "DescriptorProvider",
@@ -3998,7 +4030,7 @@
             },
             {
               "item": "parse_ability_descriptor_ref",
-              "sha256": "8c862cf58edf02b2d2858ee5be3fb6809adbc17934e512aae596e24a4cb60d5c"
+              "sha256": "2eae73a540aa34e105e3d89aef6e22b58e7d5cb355baa7d8175223de7eb22099"
             },
             {
               "item": "project_ability_descriptor",
@@ -4151,6 +4183,14 @@
             {
               "item": "AbilityDescriptorRef.ability_ura",
               "sha256": "806f5961440fe858381c9a0720eb0b39b6fb2f79d37b137bdce0671df653bfdd"
+            },
+            {
+              "item": "AbilityDescriptorRef.action",
+              "sha256": "8fd27e4e3e337d3230d10a04161ef98e64679a157a927fdb2f9fe95255a53cf8"
+            },
+            {
+              "item": "AbilityDescriptorRef.descriptor_hash",
+              "sha256": "86836a48aae0ad14a6efb4476b17a31454e89a3df57477faf4338abf7fde6b27"
             },
             {
               "item": "AbilityDescriptorRef.raw",
@@ -4297,7 +4337,7 @@
             },
             {
               "item": "AbilityDescriptorRef",
-              "sha256": "bfca104acd5141644095a14afecb28ad44ae999d879f329898b209b5e99f08e4"
+              "sha256": "4a69342d43dcff14dd98f2ed8def20c9d0eb9804dce43b084b428a6de531135b"
             },
             {
               "item": "DescriptorProvider",
@@ -4325,7 +4365,7 @@
             },
             {
               "item": "parse_ability_descriptor_ref",
-              "sha256": "8c862cf58edf02b2d2858ee5be3fb6809adbc17934e512aae596e24a4cb60d5c"
+              "sha256": "2eae73a540aa34e105e3d89aef6e22b58e7d5cb355baa7d8175223de7eb22099"
             },
             {
               "item": "project_ability_descriptor",
@@ -4478,6 +4518,14 @@
             {
               "item": "AbilityDescriptorRef.ability_ura",
               "sha256": "806f5961440fe858381c9a0720eb0b39b6fb2f79d37b137bdce0671df653bfdd"
+            },
+            {
+              "item": "AbilityDescriptorRef.action",
+              "sha256": "8fd27e4e3e337d3230d10a04161ef98e64679a157a927fdb2f9fe95255a53cf8"
+            },
+            {
+              "item": "AbilityDescriptorRef.descriptor_hash",
+              "sha256": "86836a48aae0ad14a6efb4476b17a31454e89a3df57477faf4338abf7fde6b27"
             },
             {
               "item": "AbilityDescriptorRef.raw",
@@ -89459,7 +89507,7 @@
         },
         {
           "item": "AddressingProjection",
-          "sha256": "e369d6ab0854dfea2d4624c8e54a5e97556b16ca41af0fd17ca0bb2ecc1860a1"
+          "sha256": "3e4f71fc4b0ac380c8f913e1841e30855e927fc92be6332dd29932cf9fdce5d7"
         },
         {
           "item": "AgentURA",
@@ -89471,7 +89519,7 @@
         },
         {
           "item": "CanonicalDescriptorRefBuildRequest",
-          "sha256": "ab8e8357d28400d39e55ea5c7e958a9260b6e88c8d551dd157089418c176daab"
+          "sha256": "a1d53a9a22620f922e4c2360effdc3bc6d744eee0eac6a889974ed128f7318f0"
         },
         {
           "item": "CanonicalDescriptorRefRequest",
@@ -89702,8 +89750,16 @@
           "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
         },
         {
+          "item": "AddressingProjection.Action",
+          "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+        },
+        {
           "item": "AddressingProjection.Components",
           "sha256": "26c0c2adc8ab309ae43ec9e419697304d0c5bc6def3858cf3b609bef3562b415"
+        },
+        {
+          "item": "AddressingProjection.DescriptorHash",
+          "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
         },
         {
           "item": "AddressingProjection.DescriptorRef",
@@ -89787,6 +89843,14 @@
         },
         {
           "item": "CanonicalDescriptorRefBuildRequest.AbilityURA",
+          "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+        },
+        {
+          "item": "CanonicalDescriptorRefBuildRequest.Action",
+          "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+        },
+        {
+          "item": "CanonicalDescriptorRefBuildRequest.DescriptorHash",
           "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
         },
         {
@@ -89978,7 +90042,7 @@
             },
             {
               "item": "AddressingProjection",
-              "sha256": "e369d6ab0854dfea2d4624c8e54a5e97556b16ca41af0fd17ca0bb2ecc1860a1"
+              "sha256": "3e4f71fc4b0ac380c8f913e1841e30855e927fc92be6332dd29932cf9fdce5d7"
             },
             {
               "item": "AgentURA",
@@ -89990,7 +90054,7 @@
             },
             {
               "item": "CanonicalDescriptorRefBuildRequest",
-              "sha256": "ab8e8357d28400d39e55ea5c7e958a9260b6e88c8d551dd157089418c176daab"
+              "sha256": "a1d53a9a22620f922e4c2360effdc3bc6d744eee0eac6a889974ed128f7318f0"
             },
             {
               "item": "CanonicalDescriptorRefRequest",
@@ -90221,8 +90285,16 @@
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
+              "item": "AddressingProjection.Action",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
               "item": "AddressingProjection.Components",
               "sha256": "26c0c2adc8ab309ae43ec9e419697304d0c5bc6def3858cf3b609bef3562b415"
+            },
+            {
+              "item": "AddressingProjection.DescriptorHash",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "AddressingProjection.DescriptorRef",
@@ -90306,6 +90378,14 @@
             },
             {
               "item": "CanonicalDescriptorRefBuildRequest.AbilityURA",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "CanonicalDescriptorRefBuildRequest.Action",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "CanonicalDescriptorRefBuildRequest.DescriptorHash",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
@@ -90486,11 +90566,11 @@
         },
         {
           "item": "AddressingClient",
-          "sha256": "31838c4ceecf3375891df5e7f96b7131cb811c0b14b4e27d598411002708209f"
+          "sha256": "f7a426d8adc2ef5d33bc64b6917368db6270a664f60cf8cd68360a5d2e1dfd48"
         },
         {
           "item": "AddressingProjection",
-          "sha256": "bafe660e92be0b84fcce3386901fe5aa1f0771df5f323e13f2185c0b1525c240"
+          "sha256": "300871db8d58c0c284d07535e14d247b781947af79bbce9adfaaded277439b40"
         },
         {
           "item": "AddressingTransport",
@@ -90498,7 +90578,7 @@
         },
         {
           "item": "AxonAddressingTransport",
-          "sha256": "6c7a1cbf1ea66c17004c976a9317449d18819cdabc542e9171ced6c9359c7885"
+          "sha256": "759f75342f1479ab56afe7fc9e571580504935576848a3b6c1963d68048a6e1b"
         },
         {
           "item": "agent_ura",
@@ -90506,7 +90586,7 @@
         },
         {
           "item": "canonical_ability_descriptor_ref",
-          "sha256": "33f40bbb040585dd985aa00b6dd52782dc865f5a5d0cb0d9c6af32154a451ca7"
+          "sha256": "76caefcea46521862e4f12a3a55dd843f85657bb89b8cb997be2a2936c5ba958"
         },
         {
           "item": "device_ability_ura",
@@ -90602,7 +90682,7 @@
         },
         {
           "item": "AddressingClient.canonical_ability_descriptor_ref",
-          "sha256": "336594e10f2aba08ca4bf1de825bb977f09fe882e2e9c0569e2fdf7fdcad8c5e"
+          "sha256": "6d28a9d947651f2f95e4f129d6692c942b2461a38bd4b1c50db44c396ef42a37"
         },
         {
           "item": "AddressingClient.close",
@@ -90626,7 +90706,7 @@
         },
         {
           "item": "AddressingClient.owner_ability_descriptor_ref",
-          "sha256": "7a640cfb32416419b0441740ab63f239365d730863bdc29626aad509e503d8e6"
+          "sha256": "d6bc4403841f9dfcfa7fa7d728069ef677a0c0041516c7decb65ef80a2e53b03"
         },
         {
           "item": "AddressingClient.owner_ability_ura",
@@ -90665,8 +90745,16 @@
           "sha256": "bf2f1a9b279ffd577124165d1325f6a897e19910a9ad89dca3543259b131c5a6"
         },
         {
+          "item": "AddressingProjection.action",
+          "sha256": "4937aacc67f68a5c5cfd2d7ef517e6c47e6556f6d63ce762b066c710bf45bccf"
+        },
+        {
           "item": "AddressingProjection.components",
           "sha256": "c77a5091eaa62fa9f929920c2ab10a1d8d1ccde0ffb3cf4e2e154f28f2ef5048"
+        },
+        {
+          "item": "AddressingProjection.descriptor_hash",
+          "sha256": "591f2c8d2191acb3eeedb2e29fada11f24f4e73ca0c98d47517f8ff0444c312c"
         },
         {
           "item": "AddressingProjection.descriptor_ref",
@@ -90734,7 +90822,7 @@
         },
         {
           "item": "AxonAddressingTransport.build_descriptor_ref",
-          "sha256": "123bbcafebad6921ba3719ecfd773e3638254f5bc48ff6092e414c3077703dcf"
+          "sha256": "65ff13b62167159885c3cd00772c679e2363e7938261cea8003c0a4f5f9a8527"
         },
         {
           "item": "AxonAddressingTransport.build_ura",
@@ -90765,11 +90853,11 @@
             },
             {
               "item": "AddressingClient",
-              "sha256": "31838c4ceecf3375891df5e7f96b7131cb811c0b14b4e27d598411002708209f"
+              "sha256": "f7a426d8adc2ef5d33bc64b6917368db6270a664f60cf8cd68360a5d2e1dfd48"
             },
             {
               "item": "AddressingProjection",
-              "sha256": "bafe660e92be0b84fcce3386901fe5aa1f0771df5f323e13f2185c0b1525c240"
+              "sha256": "300871db8d58c0c284d07535e14d247b781947af79bbce9adfaaded277439b40"
             },
             {
               "item": "AddressingTransport",
@@ -90777,7 +90865,7 @@
             },
             {
               "item": "AxonAddressingTransport",
-              "sha256": "6c7a1cbf1ea66c17004c976a9317449d18819cdabc542e9171ced6c9359c7885"
+              "sha256": "759f75342f1479ab56afe7fc9e571580504935576848a3b6c1963d68048a6e1b"
             },
             {
               "item": "agent_ura",
@@ -90785,7 +90873,7 @@
             },
             {
               "item": "canonical_ability_descriptor_ref",
-              "sha256": "33f40bbb040585dd985aa00b6dd52782dc865f5a5d0cb0d9c6af32154a451ca7"
+              "sha256": "76caefcea46521862e4f12a3a55dd843f85657bb89b8cb997be2a2936c5ba958"
             },
             {
               "item": "device_ability_ura",
@@ -90881,7 +90969,7 @@
             },
             {
               "item": "AddressingClient.canonical_ability_descriptor_ref",
-              "sha256": "336594e10f2aba08ca4bf1de825bb977f09fe882e2e9c0569e2fdf7fdcad8c5e"
+              "sha256": "6d28a9d947651f2f95e4f129d6692c942b2461a38bd4b1c50db44c396ef42a37"
             },
             {
               "item": "AddressingClient.close",
@@ -90905,7 +90993,7 @@
             },
             {
               "item": "AddressingClient.owner_ability_descriptor_ref",
-              "sha256": "7a640cfb32416419b0441740ab63f239365d730863bdc29626aad509e503d8e6"
+              "sha256": "d6bc4403841f9dfcfa7fa7d728069ef677a0c0041516c7decb65ef80a2e53b03"
             },
             {
               "item": "AddressingClient.owner_ability_ura",
@@ -90944,8 +91032,16 @@
               "sha256": "bf2f1a9b279ffd577124165d1325f6a897e19910a9ad89dca3543259b131c5a6"
             },
             {
+              "item": "AddressingProjection.action",
+              "sha256": "4937aacc67f68a5c5cfd2d7ef517e6c47e6556f6d63ce762b066c710bf45bccf"
+            },
+            {
               "item": "AddressingProjection.components",
               "sha256": "c77a5091eaa62fa9f929920c2ab10a1d8d1ccde0ffb3cf4e2e154f28f2ef5048"
+            },
+            {
+              "item": "AddressingProjection.descriptor_hash",
+              "sha256": "591f2c8d2191acb3eeedb2e29fada11f24f4e73ca0c98d47517f8ff0444c312c"
             },
             {
               "item": "AddressingProjection.descriptor_ref",
@@ -91013,7 +91109,7 @@
             },
             {
               "item": "AxonAddressingTransport.build_descriptor_ref",
-              "sha256": "123bbcafebad6921ba3719ecfd773e3638254f5bc48ff6092e414c3077703dcf"
+              "sha256": "65ff13b62167159885c3cd00772c679e2363e7938261cea8003c0a4f5f9a8527"
             },
             {
               "item": "AxonAddressingTransport.build_ura",

@@ -80,8 +80,10 @@ class SdkEnvironmentTests(unittest.TestCase):
                     "easynet:///r/example/device/dev-a",
                     "observe.health",
                     "1.0.0",
+                    descriptor_hash="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    action="invoke",
                 ),
-                "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+                "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
             )
 
             provider.close()

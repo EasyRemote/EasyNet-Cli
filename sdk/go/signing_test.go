@@ -363,7 +363,7 @@ func TestPreparedInvocationRejectsSigningMaterialDescriptorMismatch(t *testing.T
 		"signing_material": {
 			"canonical_bytes_base64": "ZXhhbXBsZQ==",
 			"args_digest_hex": "00",
-			"descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.status@1.0.0",
+			"descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.status@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
 			"expires_at_unix_ms": 1783000000000
 		}
 	}`))

@@ -206,7 +206,7 @@ class AuthorityTests(unittest.TestCase):
             .with_caller_ura("easynet:///r/example/agent/backend")
             .with_callee_ura("easynet:///r/example/device/dev-a")
             .with_descriptor_ref(
-                "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"
+                "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
             )
             .with_subject_ura("easynet:///r/example/user/alice")
             .with_nonce_base64("AQIDBAUGBwgJCgsMDQ4PEA==")
@@ -228,7 +228,7 @@ class AuthorityTests(unittest.TestCase):
                 .with_caller_ura("easynet:///r/example/agent/backend")
                 .with_callee_ura("easynet:///r/example/device/dev-a")
                 .with_descriptor_ref(
-                    "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"
+                    "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
                 )
                 .with_subject_ura("easynet:///r/example/user/alice")
                 .with_nonce_base64("AQIDBAUGBwgJCgsMDQ4PEA==")

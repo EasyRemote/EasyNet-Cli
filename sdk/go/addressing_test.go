@@ -12,19 +12,23 @@ func TestCanonicalAddressingBuildsDescriptorAndSubjectWithoutIdentityProfile(t *
 	addressing := NewCanonicalAddressing()
 	ctx := context.Background()
 
-	descriptorRef, err := addressing.OwnerAbilityDescriptorRef(
+	descriptorProjection, err := addressing.BuildDescriptorRef(
 		ctx,
-		"easynet:///r/example/device/dev-a",
-		"observe.health",
-		"1.0.0",
+		CanonicalDescriptorRefBuildRequest{
+			AbilityURA:        "easynet:///r/example/ability/device.dev-a.observe.health",
+			DescriptorVersion: "1.0.0",
+			DescriptorHash:    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			Action:            "invoke",
+		},
 	)
 	if err != nil {
-		t.Fatalf("OwnerAbilityDescriptorRef: %v", err)
+		t.Fatalf("BuildDescriptorRef: %v", err)
 	}
-	if descriptorRef != "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0" {
+	descriptorRef := descriptorProjection.DescriptorRef
+	if descriptorRef != "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke" {
 		t.Fatalf("descriptor_ref = %q", descriptorRef)
 	}
-	descriptorProjection, err := addressing.ProjectDescriptorRef(
+	descriptorProjection, err = addressing.ProjectDescriptorRef(
 		ctx,
 		CanonicalDescriptorRefRequest{DescriptorRef: descriptorRef},
 	)
@@ -33,6 +37,11 @@ func TestCanonicalAddressingBuildsDescriptorAndSubjectWithoutIdentityProfile(t *
 	}
 	if descriptorProjection.Profile != uraProfileStrictV2 {
 		t.Fatalf("descriptor profile = %q", descriptorProjection.Profile)
+	}
+	if descriptorProjection.DescriptorVersion != "1.0.0" ||
+		descriptorProjection.DescriptorHash != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" ||
+		descriptorProjection.Action != "invoke" {
+		t.Fatalf("descriptor proof facts = %#v", descriptorProjection)
 	}
 
 	subject, err := addressing.DescriptorBoundResourceSubjectURA(

@@ -517,7 +517,7 @@ class _DescriptorProvider:
         self.calls += 1
         return DescriptorResolution(
             state=DescriptorResolutionState.RESOLVED,
-            descriptor_ref="easynet:///r/example/ability/invocation.history.list@1.0.0",
+            descriptor_ref="easynet:///r/example/ability/invocation.history.list@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
             descriptor_fingerprint="descriptor-fingerprint",
             owner_principal=PrincipalRef("easynet:///r/example/user/alice"),
         )

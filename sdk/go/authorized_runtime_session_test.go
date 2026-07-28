@@ -711,7 +711,7 @@ func (p *sessionDescriptorProviderFixture) ResolveDescriptor(context.Context, De
 	p.calls++
 	return DescriptorResolution{
 		State:                 DescriptorResolved,
-		DescriptorRef:         "easynet:///r/example/ability/invocation.history.list@1.0.0",
+		DescriptorRef:         "easynet:///r/example/ability/invocation.history.list@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
 		DescriptorFingerprint: "descriptor-fingerprint",
 		OwnerPrincipal:        PrincipalRef{URA: "easynet:///r/example/user/alice"},
 	}, nil

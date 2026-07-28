@@ -24,11 +24,11 @@ from test_signing import signer_with_signature
 
 
 ABILITY_URA = "easynet:///r/example/ability/device.dev-a.observe.health"
-DESCRIPTOR_REF = f"{ABILITY_URA}@1.0.0"
+DESCRIPTOR_REF = f"{ABILITY_URA}@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
 HISTORY_ABILITY_URA = (
     "easynet:///r/example/ability/device.dev-a.invocation.history.list"
 )
-HISTORY_DESCRIPTOR_REF = f"{HISTORY_ABILITY_URA}@1.0.0"
+HISTORY_DESCRIPTOR_REF = f"{HISTORY_ABILITY_URA}@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
 CATALOGUE_ABILITY_URA = (
     "easynet:///r/example/ability/device.dev-a.meta.list_abilities"
 )
@@ -43,7 +43,7 @@ class AbilityInvocationClientTests(unittest.TestCase):
             {
                 "caller": "easynet:///r/example/agent/alice.sdk",
                 "callee": "easynet:///r/example/device/dev-a",
-                "ability": ABILITY_URA,
+                "ability": DESCRIPTOR_REF,
                 "subject": "easynet:///r/example/device/dev-a",
                 "nonce": bytes(range(1, 17)),
                 "causal": None,
@@ -56,8 +56,8 @@ class AbilityInvocationClientTests(unittest.TestCase):
         self.assertEqual(
             identity.seen_requests,
             [
-                {"ura": ABILITY_URA},
-                {"ability_ura": ABILITY_URA, "descriptor_version": "1.0.0"},
+                {"ura": DESCRIPTOR_REF},
+                {"descriptor_ref": DESCRIPTOR_REF},
             ],
         )
 
@@ -755,7 +755,7 @@ def _identity_transport_for(
     *,
     descriptor_ref: str | None = None,
 ) -> MemoryAddressingTransport:
-    descriptor_ref = descriptor_ref or f"{ability_ura}@1.0.0"
+    descriptor_ref = descriptor_ref or f"{ability_ura}@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
     transport = MemoryAddressingTransport()
     transport.expected_identity_ura = ability_ura
     transport.identity_json = json.dumps(
@@ -880,7 +880,7 @@ def _parent_result_with_receipt() -> InvocationResult:
                     "caller_ura": "easynet:///r/example/agent/alice.sdk",
                     "callee_ura": "easynet:///r/example/device/dev-a",
                     "descriptor_ref": (
-                        "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"
+                        "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
                     ),
                     "subject_ura": "easynet:///r/example/device/dev-a",
                     "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",

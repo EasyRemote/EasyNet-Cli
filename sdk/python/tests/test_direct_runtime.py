@@ -54,7 +54,7 @@ invoke_pb2: Any = _invoke_pb2
 invoke_pb2_grpc: Any = _invoke_pb2_grpc
 types_pb2: Any = _types_pb2
 
-DESCRIPTOR_REF = "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"
+DESCRIPTOR_REF = "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
 ABILITY_URA = "easynet:///r/example/ability/device.dev-a.observe.health"
 ABILITY_PUBLIC_NAME = "observe.health"
 CALLEE_URA = "easynet:///r/example/device/dev-a"
@@ -2405,7 +2405,7 @@ def _ability_addressing_transport() -> MemoryAddressingTransport:
     )
     transport.descriptor_json = (
         b'{"kind":"descriptor_ref","valid":true,'
-        b'"descriptor_ref":"easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",'
+        b'"descriptor_ref":"easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",'
         b'"ability_ura":"easynet:///r/example/ability/device.dev-a.observe.health",'
         b'"descriptor_version":"1.0.0","profile":"axon-strict-v2",'
         b'"components":{"owner_ura":"easynet:///r/example/device/dev-a"},'

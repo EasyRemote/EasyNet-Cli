@@ -72,7 +72,7 @@ class MemoryRuntimeTransport:
 
     def resolve_descriptor_ref(self, request_json: bytes) -> bytes:
         self.seen_descriptor_request = json.loads(request_json.decode("utf-8"))
-        return b'{"descriptor_ref":"easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"}'
+        return b'{"descriptor_ref":"easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"}'
 
     def open_stream(self, draft_json: bytes):
         self.seen_draft = json.loads(draft_json.decode("utf-8"))
@@ -192,7 +192,7 @@ def complete_draft():
         .with_caller_ura("easynet:///r/example/agent/alice.sdk")
         .with_callee_ura("easynet:///r/example/device/dev-a")
         .with_descriptor_ref(
-            "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"
+            "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
         )
         .with_subject_ura("easynet:///r/example/device/dev-a")
         .with_nonce_base64("AQIDBAUGBwgJCgsMDQ4PEA==")
@@ -254,7 +254,7 @@ def canonical_runtime_receipt(
             "principal_ura": "easynet:///r/example/device/dev-a",
         },
         "ability_binding": (
-            "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"
+            "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
         ),
         "host_attestation_base64": "",
         "usage": {
@@ -387,7 +387,7 @@ class RuntimeTests(unittest.TestCase):
 
         self.assertEqual(
             descriptor_ref,
-            "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+            "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
         )
         self.assertEqual(
             transport.seen_descriptor_request,
@@ -631,7 +631,7 @@ class RuntimeTests(unittest.TestCase):
         assert transport.seen_draft is not None
         self.assertEqual(
             transport.seen_draft["descriptor_ref"],
-            "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+            "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
         )
 
     def test_invocation_result_derives_json_output_from_canonical_payload(self) -> None:
@@ -1414,7 +1414,7 @@ class RuntimeTests(unittest.TestCase):
             "session_id": "session-1",
             "scopes": ["invoke"],
             "audiences": [
-                "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"
+                "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
             ],
             "issued_at_ms": 1,
             "expires_at_ms": 2,
@@ -1442,7 +1442,7 @@ class RuntimeTests(unittest.TestCase):
             "session_id": "session-1",
             "scopes": ["invoke"],
             "audiences": [
-                "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"
+                "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
             ],
             "issued_at_ms": 1,
             "expires_at_ms": 2,
@@ -1642,7 +1642,7 @@ class RuntimeTests(unittest.TestCase):
             .with_caller_ura("easynet:///r/example/agent/alice.sdk")
             .with_callee_ura("easynet:///r/example/device/dev-a")
             .with_descriptor_ref(
-                "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"
+                "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
             )
             .with_subject_ura("easynet:///r/example/device/dev-a")
             .with_nonce_base64("AQIDBAUGBwgJCgsMDQ4PEA==")
@@ -1686,7 +1686,7 @@ class RuntimeTests(unittest.TestCase):
             .with_caller_ura("easynet:///r/example/agent/alice.sdk")
             .with_callee_ura("easynet:///r/example/device/dev-a")
             .with_descriptor_ref(
-                "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"
+                "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
             )
             .with_subject_ura("easynet:///r/example/device/dev-a")
             .with_nonce_base64("AQIDBAUGBwgJCgsMDQ4PEA==")
@@ -1752,7 +1752,7 @@ class RuntimeTests(unittest.TestCase):
             .with_caller_ura("easynet:///r/example/agent/alice.sdk")
             .with_callee_ura("easynet:///r/example/device/dev-a")
             .with_descriptor_ref(
-                "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"
+                "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
             )
             .with_subject_ura("easynet:///r/example/device/dev-a")
             .with_nonce_base64("AQIDBAUGBwgJCgsMDQ4PEA==")
@@ -1778,7 +1778,7 @@ class RuntimeTests(unittest.TestCase):
             .with_caller_ura("easynet:///r/example/agent/alice.sdk")
             .with_callee_ura("easynet:///r/example/device/dev-a")
             .with_descriptor_ref(
-                "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"
+                "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
             )
             .with_subject_ura("easynet:///r/example/device/dev-a")
             .with_nonce_base64("AQIDBAUGBwgJCgsMDQ4PEA==")
@@ -1814,7 +1814,7 @@ class RuntimeTests(unittest.TestCase):
         )
         self.assertEqual(
             transport.seen_signed["prepared"]["tuple"]["descriptor_ref"],
-            "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+            "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
         )
 
     def test_open_signed_stream_preserves_signature(self) -> None:

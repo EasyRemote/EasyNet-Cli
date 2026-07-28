@@ -11,7 +11,7 @@ func TestInvocationBuilderBuildsCompleteTuple(t *testing.T) {
 	draft, err := NewInvocationBuilder().
 		WithCallerURA("easynet:///r/example/agent/alice.sdk").
 		WithCalleeURA("easynet:///r/example/device/dev-a").
-		WithDescriptorRef("easynet:///r/example/ability/device.dev-a.observe.health@1.0.0").
+		WithDescriptorRef("easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke").
 		WithSubjectURA("easynet:///r/example/device/dev-a").
 		WithNonceBase64("AQIDBAUGBwgJCgsMDQ4PEA==").
 		WithCausalContext(map[string]any{"form": "none"}).
@@ -57,7 +57,7 @@ func TestInvocationBuilderInspectDoesNotConsumeAndBuildConsumes(t *testing.T) {
 	builder := NewInvocationBuilder().
 		WithCallerURA("easynet:///r/example/agent/alice.sdk").
 		WithCalleeURA("easynet:///r/example/device/dev-a").
-		WithDescriptorRef("easynet:///r/example/ability/device.dev-a.observe.health@1.0.0").
+		WithDescriptorRef("easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke").
 		WithSubjectURA("easynet:///r/example/device/dev-a").
 		WithNonceBase64("AQIDBAUGBwgJCgsMDQ4PEA==").
 		WithCausalContext(map[string]any{"form": "none"}).
@@ -85,7 +85,7 @@ func TestInvocationDraftFromJSONDecodesFixtureShape(t *testing.T) {
 	draft, err := NewInvocationDraftFromJSON([]byte(`{
 		"caller_ura": "easynet:///r/example/agent/alice.sdk",
 		"callee_ura": "easynet:///r/example/device/dev-a",
-		"descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+		"descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
 		"subject_ura": "easynet:///r/example/device/dev-a",
 		"nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
 		"causal_context": {"form": "none"},
@@ -109,7 +109,7 @@ func TestInvocationDraftRejectsSignerPubkeyWithoutKeyHint(t *testing.T) {
 	_, err := NewInvocationDraftFromJSON([]byte(`{
 		"caller_ura": "easynet:///r/example/user/alice",
 		"callee_ura": "easynet:///r/example/device/dev-a",
-		"descriptor_ref": "easynet:///r/example/ability/device.dev-a.meta.list_resources@1.0.0",
+		"descriptor_ref": "easynet:///r/example/ability/device.dev-a.meta.list_resources@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
 		"subject_ura": "easynet:///r/example/user/alice",
 		"nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
 		"causal_context": {"form": "none"},
@@ -129,7 +129,7 @@ func TestInvocationDraftRejectsSignerPubkeyWithoutKeyHint(t *testing.T) {
 func TestInvocationBuilderRejectsMissingTupleField(t *testing.T) {
 	_, err := NewInvocationBuilder().
 		WithCalleeURA("easynet:///r/example/device/dev-a").
-		WithDescriptorRef("easynet:///r/example/ability/device.dev-a.observe.health@1.0.0").
+		WithDescriptorRef("easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke").
 		WithSubjectURA("easynet:///r/example/device/dev-a").
 		WithNonceBase64("AQIDBAUGBwgJCgsMDQ4PEA==").
 		WithCausalContext(map[string]any{"form": "none"}).
@@ -188,7 +188,7 @@ func TestInvocationBuilderRejectsDualArgumentCarriers(t *testing.T) {
 	_, err := NewInvocationBuilder().
 		WithCallerURA("easynet:///r/example/agent/alice.sdk").
 		WithCalleeURA("easynet:///r/example/device/dev-a").
-		WithDescriptorRef("easynet:///r/example/ability/device.dev-a.observe.health@1.0.0").
+		WithDescriptorRef("easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke").
 		WithSubjectURA("easynet:///r/example/device/dev-a").
 		WithNonceBase64("AQIDBAUGBwgJCgsMDQ4PEA==").
 		WithCausalContext(map[string]any{"form": "none"}).
@@ -209,7 +209,7 @@ func TestInvocationBuilderRejectsMalformedNonce(t *testing.T) {
 		_, err := NewInvocationBuilder().
 			WithCallerURA("easynet:///r/example/agent/alice.sdk").
 			WithCalleeURA("easynet:///r/example/device/dev-a").
-			WithDescriptorRef("easynet:///r/example/ability/device.dev-a.observe.health@1.0.0").
+			WithDescriptorRef("easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke").
 			WithSubjectURA("easynet:///r/example/device/dev-a").
 			WithNonceBase64(nonce).
 			WithCausalContext(map[string]any{"form": "none"}).
@@ -229,7 +229,7 @@ func TestInvocationBuilderRejectsMalformedRawPayload(t *testing.T) {
 	_, err := NewInvocationBuilder().
 		WithCallerURA("easynet:///r/example/agent/alice.sdk").
 		WithCalleeURA("easynet:///r/example/device/dev-a").
-		WithDescriptorRef("easynet:///r/example/ability/device.dev-a.observe.health@1.0.0").
+		WithDescriptorRef("easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke").
 		WithSubjectURA("easynet:///r/example/device/dev-a").
 		WithNonceBase64("AQIDBAUGBwgJCgsMDQ4PEA==").
 		WithCausalContext(map[string]any{"form": "none"}).
@@ -267,7 +267,7 @@ func completeInvocationBuilder() *InvocationBuilder {
 	return NewInvocationBuilder().
 		WithCallerURA("easynet:///r/example/agent/alice.sdk").
 		WithCalleeURA("easynet:///r/example/device/dev-a").
-		WithDescriptorRef("easynet:///r/example/ability/device.dev-a.observe.health@1.0.0").
+		WithDescriptorRef("easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke").
 		WithSubjectURA("easynet:///r/example/device/dev-a").
 		WithNonceBase64("AQIDBAUGBwgJCgsMDQ4PEA==").
 		WithCausalContext(map[string]any{"form": "none"}).
@@ -279,7 +279,7 @@ func TestInvocationDraftFromJSONRejectsUnknownField(t *testing.T) {
 	_, err := NewInvocationDraftFromJSON([]byte(`{
 		"caller_ura": "easynet:///r/example/agent/alice.sdk",
 		"callee_ura": "easynet:///r/example/device/dev-a",
-		"descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+		"descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
 		"subject_ura": "easynet:///r/example/device/dev-a",
 		"nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
 		"causal_context": {"form": "none"},
