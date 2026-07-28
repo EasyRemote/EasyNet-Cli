@@ -930,6 +930,24 @@ mod tests {
     }
 
     #[test]
+    fn public_explicit_tuple_resolution_preserves_non_root_causal_context() {
+        let causal_context = CausalContext::Scalar(axon_sdk::invocation::ReceiptRef {
+            receipt_hash: [0x42; 32],
+            receipt_ura: "easynet:///r/acme/resource/runtime/invocation/parent/receipt/1".into(),
+        });
+        let target = PublicInvocationTargetIssuer::local_explicit_tuple(
+            "camera.snapshot",
+            json!({}),
+            CallMode::Rpc,
+            "easynet:///r/acme/resource/camera.1",
+            causal_context.clone(),
+        )
+        .expect("valid public tuple target");
+
+        assert_eq!(target.resolved_causal_context(), causal_context);
+    }
+
+    #[test]
     fn public_explicit_tuple_issuer_rejects_invalid_subject_before_target_construction() {
         let error = PublicInvocationTargetIssuer::local_explicit_tuple(
             "camera.snapshot",

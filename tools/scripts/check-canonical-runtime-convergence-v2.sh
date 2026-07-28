@@ -17198,6 +17198,8 @@ for token, code in (
     ("local_system_context_for_realm_authority_target_uses_ability_subject", "realm_authority_subject_regression_missing"),
     ("daemon_system_subject_policy_names_callee_owner_subject", "callee_policy_state_test_missing"),
     ("daemon_system_subject_policy_names_realm_authority_ability_subject", "realm_authority_policy_state_test_missing"),
+    ("public_explicit_tuple_resolution_preserves_non_root_causal_context", "public_causal_context_resolution_test_missing"),
+    ("target.resolved_causal_context()", "public_causal_context_resolution_not_exercised"),
 ):
     if token not in local_invoke and token not in target:
         raise SystemExit(f"local_ability_target_subject_policy:{code}")

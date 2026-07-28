@@ -76,8 +76,6 @@ fn advertise_remote_user_tier_ability(
         read_only: true,
         destructive: false,
         idempotent: true,
-        streaming_only: false,
-        bidi_only: false,
     });
     let ability_summary =
         easynet_cli::daemon::federation::read_model::owner_projection::
