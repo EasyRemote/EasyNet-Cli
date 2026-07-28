@@ -13,6 +13,7 @@ public final class InvocationBuilder {
   private String argsJson;
   private Map<String, Object> metadata = Map.of();
   private SDKError authorityError;
+  private boolean runtimeGovernanceRead;
 
   public InvocationBuilder caller(String value) {
     caller = value;
@@ -63,6 +64,11 @@ public final class InvocationBuilder {
     return this;
   }
 
+  InvocationBuilder runtimeGovernanceRead() {
+    runtimeGovernanceRead = true;
+    return this;
+  }
+
   public InvocationDraft inspect() {
     if (authorityError != null) {
       throw authorityError;
@@ -70,7 +76,9 @@ public final class InvocationBuilder {
     AuthoritySupport.validateAuthorityMetadata(metadata);
     InvocationTuple tuple =
         new InvocationTuple(caller, callee, descriptor, subject, nonce, causalContext, argsJson, metadata);
-    rejectGovernanceReadPublicInvocation(tuple);
+    if (!runtimeGovernanceRead) {
+      rejectGovernanceReadPublicInvocation(tuple);
+    }
     InvocationAuthorityBindingValidator.validate(tuple);
     return new InvocationDraft(tuple);
   }

@@ -34,6 +34,19 @@ public final class RuntimeClient implements AutoCloseable {
     return PreparedInvocation.fromJSON(raw).bindRuntime(this);
   }
 
+  public String resolveDescriptorRef(RuntimeDescriptorRefRequest request) {
+    requireOpen();
+    byte[] raw =
+        transport.resolveDescriptorRef(
+            JsonValueWriter.object(Objects.requireNonNull(request, "request").toWireObject()));
+    Map<String, Object> response = JsonValueReader.object(raw, "descriptor resolver response");
+    Object descriptor = response.get("descriptor_ref");
+    if (!(descriptor instanceof String value) || value.isBlank()) {
+      throw SDKError.validation("runtime", "descriptor resolver response missing descriptor_ref");
+    }
+    return value;
+  }
+
   public InvocationHandle submitSigned(SignedInvocation signed) {
     requireOpen();
     byte[] raw = transport.submitSigned(Objects.requireNonNull(signed, "signed").toJSON());

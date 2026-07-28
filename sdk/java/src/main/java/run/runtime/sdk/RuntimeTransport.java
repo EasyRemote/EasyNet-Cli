@@ -87,6 +87,20 @@ public interface RuntimeTransport extends AutoCloseable {
         null);
   }
 
+  default byte[] resolveDescriptorRef(byte[] requestJson) {
+    throw new SDKError(
+        ErrorCode.NOT_IMPLEMENTED,
+        "runtime",
+        RetryHint.NEVER,
+        false,
+        "runtime descriptor resolver transport is not implemented",
+        "",
+        "",
+        "",
+        java.util.Map.of(),
+        null);
+  }
+
   StreamSource openStream(InvocationDraft draft);
 
   BidiSource openBidi(InvocationDraft draft, BidiFrame frame0);

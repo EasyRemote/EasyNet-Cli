@@ -46,13 +46,45 @@ final class RuntimeAbilityProjection {
     return runtimeGovernanceReadAbility(ability.intrinsicName());
   }
 
+  static RuntimeAbilityProjection fromResolvedDescriptorRef(String calleeURA, String descriptorRef) {
+    return fromDescriptorRef(calleeURA, descriptorRef);
+  }
+
+  static String abilityURAForDescriptorRef(String calleeURA, String descriptorRef) {
+    return fromDescriptorRef(calleeURA, descriptorRef).abilityURA();
+  }
+
   private static RuntimeAbilityProjection fromDescriptorRef(String calleeURA, String descriptorRef) {
-    AbilityDescriptorProjection projection = descriptorAbilityProjection(descriptorRef);
+    DescriptorAbilityProjection projection = descriptorAbilityProjection(descriptorRef);
     String publicName = publicAbilityName(calleeURA, projection.intrinsicName());
     return new RuntimeAbilityProjection(projection.abilityURA(), publicName, projection.intrinsicName());
   }
 
-  private static AbilityDescriptorProjection descriptorAbilityProjection(String descriptorRef) {
+  static String runtimeGovernanceDescriptorProviderForAbility(String ability) {
+    String clean = ability == null ? "" : ability.trim();
+    if (runtimeCatalogueReadAbility(clean)) {
+      return RuntimeDescriptorRefRequest.ABILITY_DESCRIPTOR_PROVIDER;
+    }
+    if (runtimeReceiptReadAbility(clean)) {
+      return RuntimeDescriptorRefRequest.RECEIPT_HISTORY_PROVIDER;
+    }
+    return "";
+  }
+
+  static String authorityURAForRealmOf(String ura) {
+    String clean = ura == null ? "" : ura.trim();
+    if (!clean.startsWith(REALM_PREFIX)) {
+      throw SDKError.validation("runtime", "callee_ura must be canonical");
+    }
+    String rest = clean.substring(REALM_PREFIX.length());
+    int slash = rest.indexOf('/');
+    if (slash <= 0) {
+      throw SDKError.validation("runtime", "callee_ura must be canonical");
+    }
+    return REALM_PREFIX + rest.substring(0, slash) + "/authority";
+  }
+
+  private static DescriptorAbilityProjection descriptorAbilityProjection(String descriptorRef) {
     String clean = descriptorRef == null ? "" : descriptorRef.trim();
     int hash = clean.indexOf('#');
     int bang = clean.indexOf('!');
@@ -75,7 +107,7 @@ final class RuntimeAbilityProjection {
     if (intrinsicName.isBlank() || intrinsicName.contains("/")) {
       throw SDKError.validation("authority", "descriptor_ref must contain a canonical Ability URA");
     }
-    return new AbilityDescriptorProjection(ability, intrinsicName);
+    return new DescriptorAbilityProjection(ability, intrinsicName);
   }
 
   private static String runtimeGovernanceReadAbility(String value) {
@@ -86,6 +118,22 @@ final class RuntimeAbilityProjection {
       }
     }
     return "";
+  }
+
+  private static boolean runtimeCatalogueReadAbility(String value) {
+    return value.equals("meta.list_abilities")
+        || value.equals("runtime.catalog.list")
+        || value.endsWith(".meta.list_abilities")
+        || value.contains(".runtime.catalog.");
+  }
+
+  private static boolean runtimeReceiptReadAbility(String value) {
+    return value.startsWith("invocation.history.")
+        || value.startsWith("invocation.trace.")
+        || value.startsWith("receipt.catalog.")
+        || value.contains(".invocation.history.")
+        || value.contains(".invocation.trace.")
+        || value.contains(".receipt.catalog.");
   }
 
   private static String publicAbilityName(String calleeURA, String intrinsicName) {
@@ -124,5 +172,5 @@ final class RuntimeAbilityProjection {
     return rest.substring(slash + 1).trim();
   }
 
-  private record AbilityDescriptorProjection(String abilityURA, String intrinsicName) {}
+  private record DescriptorAbilityProjection(String abilityURA, String intrinsicName) {}
 }

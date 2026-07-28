@@ -52,6 +52,8 @@ public final class RuntimeCoreSeamTest {
           "completeTupleRejectsNoncanonicalSessionSubjectAuthorityCarrier",
           "completeTupleRejectsReceiptHistoryPublicInvocation",
           "completeTupleRejectsCatalogueReadPublicInvocation",
+          "runtimeAbilityDescriptorProviderUsesCatalogueProvider",
+          "runtimeAbilityClientRejectsCatalogueReadPublicBuild",
           "preparedInvocationCannotBeSubmitted",
           "streamAndBidiBackpressureAreBounded",
           "streamOrderAndTerminalArePreserved");
@@ -126,6 +128,10 @@ public final class RuntimeCoreSeamTest {
           completeTupleRejectsReceiptHistoryPublicInvocation();
       case "completeTupleRejectsCatalogueReadPublicInvocation" ->
           completeTupleRejectsCatalogueReadPublicInvocation();
+      case "runtimeAbilityDescriptorProviderUsesCatalogueProvider" ->
+          runtimeAbilityDescriptorProviderUsesCatalogueProvider();
+      case "runtimeAbilityClientRejectsCatalogueReadPublicBuild" ->
+          runtimeAbilityClientRejectsCatalogueReadPublicBuild();
       case "preparedInvocationCannotBeSubmitted" -> preparedInvocationCannotBeSubmitted();
       case "streamAndBidiBackpressureAreBounded" -> streamAndBidiBackpressureAreBounded();
       case "streamOrderAndTerminalArePreserved" -> streamOrderAndTerminalArePreserved();
@@ -1345,6 +1351,65 @@ public final class RuntimeCoreSeamTest {
             .inspect());
   }
 
+  private static void runtimeAbilityDescriptorProviderUsesCatalogueProvider() {
+    MemoryRuntimeTransport transport = new MemoryRuntimeTransport();
+    String catalogueDescriptor =
+        "easynet:///r/example/ability/device.dev-a.meta.list_abilities@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read";
+    String browserDescriptor =
+        "easynet:///r/example/ability/device.dev-a.browser.open_session@1.0.0#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb!invoke";
+    Map<String, Object> browserRow = new LinkedHashMap<>();
+    browserRow.put("ability_ura", "easynet:///r/example/ability/device.dev-a.browser.open_session");
+    browserRow.put("descriptor_ref", browserDescriptor);
+    browserRow.put("name", "browser.open_session");
+    browserRow.put("owner_ura", CALLEE);
+    browserRow.put("version", "1.0.0");
+    browserRow.put("call_mode", "rpc");
+    browserRow.put("receipt_semantics", Map.of("kind", "operational"));
+    browserRow.put("hints", Map.of("read_only", false));
+    browserRow.put("schema_summary", Map.of());
+    browserRow.put("input_schema", Map.of());
+    browserRow.put("metadata", Map.of());
+    transport.resolvedDescriptorRef = catalogueDescriptor;
+    transport.nextOutput = Map.of("abilities", List.of(browserRow));
+    RuntimeClient runtime = new RuntimeClient(transport);
+    RuntimeAbilityClient ability = new RuntimeAbilityClient(runtime);
+    AbilityDescriptorClient descriptors =
+        new AbilityDescriptorClient(new RuntimeAbilityDescriptorProvider(ability));
+
+    AbilityDescriptorPage page =
+        descriptors.list(new AbilityDescriptorListRequest(runtimeCallContext(), "owner", CALLEE, ""));
+
+    check(page.descriptors().size() == 1, "descriptor page size");
+    check(
+        page.descriptors().get(0).name().equals("browser.open_session"),
+        "descriptor projection name");
+    check(
+        transport.seenDescriptorRequest.get("provider").equals("ability_descriptor"),
+        "catalogue descriptor provider");
+    check(
+        transport.seenDescriptorRequest.get("subject_ura").equals("easynet:///r/example/authority"),
+        "catalogue descriptor resolution subject");
+    check(
+        transport.seenInvokeTuple.descriptor().equals(catalogueDescriptor),
+        "catalogue invocation descriptor");
+    check(
+        transport.seenInvokeTuple.subject().equals(CALLEE),
+        "catalogue invocation subject is runtime owner");
+    Map<String, Object> args =
+        JsonValueReader.object(transport.seenInvokeTuple.argsJson().getBytes(StandardCharsets.UTF_8), "catalogue args");
+    check(args.get("scope").equals("owner"), "catalogue scope argument");
+    check(args.get("owner_ura").equals(CALLEE), "catalogue owner argument");
+  }
+
+  private static void runtimeAbilityClientRejectsCatalogueReadPublicBuild() {
+    RuntimeClient runtime = new RuntimeClient(new MemoryRuntimeTransport());
+    RuntimeAbilityClient ability = new RuntimeAbilityClient(runtime);
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        "RuntimeAbilityDescriptorProvider",
+        () -> ability.build(runtimeCallContext(), "meta.list_abilities", Map.of()));
+  }
+
   private static void preparedInvocationCannotBeSubmitted() {
     RuntimeClient runtime = new RuntimeClient(new MemoryRuntimeTransport());
     PreparedInvocation prepared = runtime.prepare(completeDraft(runtime), Map.of("deadline_ms", 1000));
@@ -1401,6 +1466,16 @@ public final class RuntimeCoreSeamTest {
         .causalContext("{\"form\":\"none\"}")
         .argsJson("{\"probe\":true}")
         .metadata(Map.of("trace_id", "trace-1"));
+  }
+
+  private static RuntimeCallContext runtimeCallContext() {
+    return new RuntimeCallContext(
+        CALLER,
+        CALLEE,
+        CALLEE,
+        NONCE,
+        Map.of("form", "none"),
+        Map.of("trace_id", "trace-1"));
   }
 
   private static InvocationDraft complete(InvocationBuilder builder) {
@@ -1564,18 +1639,29 @@ public final class RuntimeCoreSeamTest {
   private static final class MemoryRuntimeTransport implements RuntimeTransport {
     private String submittedSigner = "";
     private Map<String, Object> submittedPolicy = Map.of();
+    private String resolvedDescriptorRef = DESCRIPTOR;
+    private Map<String, Object> seenDescriptorRequest = Map.of();
+    private InvocationTuple seenInvokeTuple = null;
+    private Map<String, Object> nextOutput = Map.of("ok", true);
     private long eventHandleId = 7;
     private int openedBidi = 0;
 
     @Override
     public InvocationResult invoke(InvocationDraft draft) {
       check(draft.inspectTuple().caller().equals(CALLER), "runtime caller preserved");
+      seenInvokeTuple = draft.inspectTuple();
       return new InvocationResult(
           true,
           InvocationTerminalState.COMPLETED,
-          "{\"ok\":true}",
+          JsonValueWriter.write(nextOutput),
           null,
           canonicalRuntimeReceiptFixture("inv-direct", "completed", "Completed", 1));
+    }
+
+    @Override
+    public byte[] resolveDescriptorRef(byte[] requestJson) {
+      seenDescriptorRequest = JsonValueReader.object(requestJson, "descriptor request");
+      return JsonValueWriter.object(Map.of("descriptor_ref", resolvedDescriptorRef));
     }
 
     @Override
