@@ -15447,6 +15447,12 @@ if "fn template_profile(self) -> anyhow::Result<PluginTemplateProfile>" not in t
     raise SystemExit("plugin_template_profile_entry_missing")
 if "PluginTemplateProfile::for_language(self)" not in text:
     raise SystemExit("plugin_template_profile_factory_missing")
+if "generated_exec_templates_parse_as_plugin_packages_for_every_open_language" not in text:
+    raise SystemExit("plugin_template_installable_matrix_test_missing")
+if "PluginPackage::from_installed" not in text:
+    raise SystemExit("plugin_template_installable_package_parser_not_exercised")
+if "for language in languages" not in text:
+    raise SystemExit("plugin_template_installable_matrix_not_language_iterated")
 hello_template = re.search(
     r"struct HelloPluginTemplate\s*\{(?P<body>.*?)\n\}",
     text,
