@@ -616,16 +616,6 @@ export class RuntimeAbilityClient {
     argumentsValue: unknown,
     provider?: string
   ): Promise<Record<string, unknown>>;
-  buildCatalogueRead(
-    call: RuntimeCallContext | RuntimeCallContextFields,
-    abilityName: string,
-    argumentsValue: unknown
-  ): Promise<InvocationDraft>;
-  invokeCatalogueRead(
-    call: RuntimeCallContext | RuntimeCallContextFields,
-    abilityName: string,
-    argumentsValue: unknown
-  ): Promise<Record<string, unknown>>;
 }
 
 export class InvocationBuilder {

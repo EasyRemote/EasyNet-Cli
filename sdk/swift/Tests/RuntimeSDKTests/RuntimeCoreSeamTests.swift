@@ -22,6 +22,7 @@ final class RuntimeCoreSeamTests: XCTestCase {
         XCTAssertEqual(
             sourceNames,
             Set([
+                "AbilityDescriptor.swift",
                 "Authority.swift",
                 "Bidi.swift",
                 "Client.swift",
@@ -971,6 +972,67 @@ final class RuntimeCoreSeamTests: XCTestCase {
         }
     }
 
+    func testRuntimeAbilityClientRejectsCatalogueReadPublicBuild() async throws {
+        let runtime = RuntimeClient(transport: MemoryRuntimeTransport(callee: callee, descriptor: descriptor))
+        let ability = RuntimeAbilityClient(runtime: runtime)
+        let call = try runtimeCallContext()
+        do {
+            _ = try await ability.build(call: call, abilityName: "meta.list_abilities")
+            XCTFail("expected RuntimeAbilityClient to reject public catalogue read")
+        } catch let error as SDKError {
+            XCTAssertEqual(error.code, .invalidArgument)
+            XCTAssertTrue(error.message.contains("RuntimeAbilityDescriptorProvider"))
+        }
+    }
+
+    func testRuntimeAbilityDescriptorProviderUsesCatalogueProvider() async throws {
+        let transport = MemoryRuntimeTransport(callee: callee, descriptor: descriptor)
+        let runtime = RuntimeClient(transport: transport)
+        let ability = RuntimeAbilityClient(runtime: runtime)
+        let provider = RuntimeAbilityDescriptorProvider(ability: ability)
+        let call = try runtimeCallContext()
+
+        let page = try await provider.list(
+            AbilityDescriptorListRequest(call: call, scope: "all", ownerURA: callee)
+        )
+        XCTAssertEqual(page.descriptors.count, 1)
+        XCTAssertEqual(page.descriptors[0].name, "browser.open_session")
+        XCTAssertEqual(page.descriptors[0].ownerURA, callee)
+        XCTAssertEqual(page.descriptors[0].version, "1.0.0")
+        XCTAssertEqual(page.descriptors[0].callMode, "rpc")
+
+        let providerField = await transport.lastDescriptorRequestField("provider")
+        let abilityField = await transport.lastDescriptorRequestField("ability")
+        let callModeField = await transport.lastDescriptorRequestField("call_mode")
+        let callerField = await transport.lastDescriptorRequestField("caller_ura")
+        let resolverSubjectField = await transport.lastDescriptorRequestField("subject_ura")
+        XCTAssertEqual(providerField, RuntimeDescriptorRefRequest.abilityDescriptorProvider)
+        XCTAssertEqual(abilityField, "meta.list_abilities")
+        XCTAssertEqual(callModeField, "rpc")
+        XCTAssertEqual(callerField, caller)
+        XCTAssertEqual(resolverSubjectField, "easynet:///r/example/authority")
+
+        let invokedCalleeField = await transport.lastInvokedTupleField("callee_ura")
+        let invokedSubjectField = await transport.lastInvokedTupleField("subject_ura")
+        let scopeField = await transport.lastInvokedArgumentField("scope")
+        let ownerField = await transport.lastInvokedArgumentField("owner_ura")
+        let metadataAbilityField = await transport.lastInvokedMetadataField("ability_ura")
+        XCTAssertEqual(invokedCalleeField, callee)
+        XCTAssertEqual(invokedSubjectField, callee)
+        XCTAssertEqual(scopeField, "all")
+        XCTAssertEqual(ownerField, callee)
+        XCTAssertEqual(metadataAbilityField, "easynet:///r/example/ability/device.dev-a.meta.list_abilities")
+
+        let descriptor = try await provider.get(
+            AbilityDescriptorGetRequest(
+                call: call,
+                abilityURA: "easynet:///r/example/ability/device.dev-a.browser.open_session",
+                callMode: "rpc"
+            )
+        )
+        XCTAssertEqual(descriptor.descriptorRef, "easynet:///r/example/ability/device.dev-a.browser.open_session@1.0.0#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb!rpc")
+    }
+
     func testPreparedInvocationCannotBeSubmitted() async throws {
         let runtime = RuntimeClient(transport: MemoryRuntimeTransport(callee: callee, descriptor: descriptor))
         let prepared = try await runtime.prepare(completeDraft(runtime), options: ["deadline_ms": 1000])
@@ -1021,6 +1083,17 @@ final class RuntimeCoreSeamTests: XCTestCase {
             .withArgsJSON("{\"probe\":true}")
             .withMetadata(["trace_id": .string("trace-1")])
             .build()
+    }
+
+    private func runtimeCallContext() throws -> RuntimeCallContext {
+        try RuntimeCallContext(
+            callerURA: caller,
+            calleeURA: callee,
+            subjectURA: callee,
+            nonceBase64: nonce,
+            causalContext: ["form": .string("none")],
+            metadata: ["trace_id": .string("trace-1")]
+        )
     }
 
     private func delegationMetadataValue() throws -> String {
@@ -1155,10 +1228,13 @@ actor MemoryHealthTransport: HealthTransport, DiagnosticsTransport {
 
 actor MemoryRuntimeTransport: RuntimeTransport {
     private let descriptor: String
+    private let catalogueDescriptor = "easynet:///r/example/ability/device.dev-a.meta.list_abilities@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read"
     private var signer = ""
     private var policyRef = ""
     private var eventHandleId: Int64 = 7
     private var openedBidi = 0
+    private var descriptorRequests: [[String: Any]] = []
+    private var invokedTuples: [[String: Any]] = []
 
     private let callee: String
 
@@ -1168,6 +1244,32 @@ actor MemoryRuntimeTransport: RuntimeTransport {
     }
 
     func invoke(_ draft: InvocationDraft) throws -> InvocationResult {
+        let tuple = try draft.inspectTuple().wireObject()
+        invokedTuples.append(tuple)
+        let outputJSON: String
+        if draft.inspectTuple().descriptorRef == catalogueDescriptor {
+            outputJSON = """
+            {
+              "abilities": [
+                {
+                  "ability_ura": "easynet:///r/example/ability/device.dev-a.browser.open_session",
+                  "descriptor_ref": "easynet:///r/example/ability/device.dev-a.browser.open_session@1.0.0#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb!rpc",
+                  "name": "browser.open_session",
+                  "owner_ura": "easynet:///r/example/device/dev-a",
+                  "descriptor_version": "1.0.0",
+                  "call_mode": "rpc",
+                  "receipt_semantics": {},
+                  "hints": {},
+                  "schema_summary": {},
+                  "input_schema": {},
+                  "metadata": {}
+                }
+              ]
+            }
+            """
+        } else {
+            outputJSON = "{\"ok\":true}"
+        }
         let receipt = try RuntimeReceipt(
             canonicalRuntimeReceipt(
                 invocationId: "inv-direct",
@@ -1181,9 +1283,20 @@ actor MemoryRuntimeTransport: RuntimeTransport {
         return try InvocationResult(
             ok: true,
             terminalState: .completed,
-            outputJSON: "{\"ok\":true}",
+            outputJSON: outputJSON,
             terminalReceiptProjection: receipt.rawProjection(),
             terminalReceipt: receipt.projection()
+        )
+    }
+
+    func resolveDescriptorRef(_ requestJSON: Data) throws -> Data {
+        let request = try object(requestJSON)
+        descriptorRequests.append(request)
+        let ability = request["ability"] as? String
+        let resolved = ability == "meta.list_abilities" ? catalogueDescriptor : descriptor
+        return try JSONSerialization.data(
+            withJSONObject: ["descriptor_ref": resolved],
+            options: [.sortedKeys]
         )
     }
 
@@ -1305,6 +1418,24 @@ actor MemoryRuntimeTransport: RuntimeTransport {
 
     func openedBidiCount() -> Int {
         openedBidi
+    }
+
+    func lastDescriptorRequestField(_ field: String) -> String {
+        descriptorRequests.last?[field] as? String ?? ""
+    }
+
+    func lastInvokedTupleField(_ field: String) -> String {
+        invokedTuples.last?[field] as? String ?? ""
+    }
+
+    func lastInvokedArgumentField(_ field: String) -> String {
+        let args = invokedTuples.last?["args"] as? [String: Any]
+        return args?[field] as? String ?? ""
+    }
+
+    func lastInvokedMetadataField(_ field: String) -> String {
+        let metadata = invokedTuples.last?["metadata"] as? [String: Any]
+        return metadata?[field] as? String ?? ""
     }
 }
 

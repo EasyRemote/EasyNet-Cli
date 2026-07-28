@@ -510,6 +510,7 @@ public final class InvocationBuilder {
     private var causalContext: String?
     private var argsJSON: String?
     private var metadata: [String: JSONValue] = [:]
+    private var allowsRuntimeGovernanceRead = false
 
     public init() {}
 
@@ -567,6 +568,12 @@ public final class InvocationBuilder {
         return self
     }
 
+    @discardableResult
+    func runtimeGovernanceRead() -> InvocationBuilder {
+        allowsRuntimeGovernanceRead = true
+        return self
+    }
+
     public func inspect() throws -> InvocationDraft {
         let tuple = try InvocationTuple(
             caller: caller,
@@ -578,7 +585,9 @@ public final class InvocationBuilder {
             argsJSON: argsJSON,
             metadata: metadata
         )
-        try rejectGovernanceReadPublicInvocation(tuple)
+        if !allowsRuntimeGovernanceRead {
+            try rejectGovernanceReadPublicInvocation(tuple)
+        }
         try validateInvocationAuthorityBinding(tuple)
         return InvocationDraft(tuple: tuple)
     }

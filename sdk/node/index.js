@@ -1188,10 +1188,11 @@ export class RuntimeAbilityDescriptorProvider {
     if (payload.scope) args.scope = payload.scope;
     if (payload.ownerURA) args.owner_ura = payload.ownerURA;
     if (payload.abilityURA) args.ability_ura = payload.abilityURA;
-    const output = await this.ability.invokeCatalogueRead(
+    const output = await this.ability.invokeGovernanceRead(
       payload.call,
       "meta.list_abilities",
       args,
+      RUNTIME_ABILITY_DESCRIPTOR_PROVIDER,
     );
     const rows = output.abilities;
     if (!Array.isArray(rows)) {
@@ -1506,23 +1507,6 @@ export class RuntimeAbilityClient {
   async invokeGovernanceRead(call, abilityName, argumentsValue, provider = "") {
     const result = await this.runtime.invoke(
       await this.buildGovernanceRead(call, abilityName, argumentsValue, provider),
-    );
-    return runtimeAbilityObjectOutput(result);
-  }
-
-  async buildCatalogueRead(call, abilityName, argumentsValue) {
-    return this.buildWithPolicy(
-      call,
-      abilityName,
-      argumentsValue,
-      "rpc",
-      runtimeAbilityCatalogueReadPolicy(),
-    );
-  }
-
-  async invokeCatalogueRead(call, abilityName, argumentsValue) {
-    const result = await this.runtime.invoke(
-      await this.buildCatalogueRead(call, abilityName, argumentsValue),
     );
     return runtimeAbilityObjectOutput(result);
   }
@@ -4450,14 +4434,6 @@ function runtimeAbilityGovernanceReadPolicy(provider) {
       ? "runtime_owner"
       : "descriptor_bound",
     descriptorProvider: requiredRuntimeText(provider, "descriptor_provider"),
-  };
-}
-
-function runtimeAbilityCatalogueReadPolicy() {
-  return {
-    allowGovernanceRead: true,
-    subjectPolicy: "runtime_owner",
-    descriptorProvider: RUNTIME_ABILITY_DESCRIPTOR_PROVIDER,
   };
 }
 

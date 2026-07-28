@@ -450,6 +450,7 @@ public struct InvocationCancel: Sendable {
 
 public protocol RuntimeTransport: AnyObject, Sendable {
     func invoke(_ draft: InvocationDraft) async throws -> InvocationResult
+    func resolveDescriptorRef(_ requestJSON: Data) async throws -> Data
     func prepare(_ draftJSON: Data, optionsJSON: Data) async throws -> Data
     func submitSigned(_ signedJSON: Data) async throws -> Data
     func awaitHandle(_ control: InvocationControlCapability) async throws -> Data
@@ -462,6 +463,16 @@ public protocol RuntimeTransport: AnyObject, Sendable {
 }
 
 public extension RuntimeTransport {
+    func resolveDescriptorRef(_ requestJSON: Data) async throws -> Data {
+        throw SDKError(
+            code: .notImplemented,
+            stage: "runtime",
+            retryHint: .never,
+            retryable: false,
+            message: "runtime descriptor resolver transport is not implemented"
+        )
+    }
+
     func prepare(_ draftJSON: Data, optionsJSON: Data) async throws -> Data {
         throw SDKError(
             code: .notImplemented,
@@ -541,6 +552,12 @@ public final class RuntimeClient: @unchecked Sendable {
     public func invoke(_ draft: InvocationDraft) async throws -> InvocationResult {
         try requireOpen()
         return try await transport.invoke(draft)
+    }
+
+    public func resolveDescriptorRef(_ request: RuntimeDescriptorRefRequest) async throws -> String {
+        try requireOpen()
+        let raw = try await transport.resolveDescriptorRef(try request.jsonData())
+        return try RuntimeDescriptorRefResponse.fromJSON(raw)
     }
 
     public func prepare(_ draft: InvocationDraft, options: [String: Any] = [:]) async throws -> PreparedInvocation {
