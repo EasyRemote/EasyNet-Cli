@@ -538,9 +538,9 @@ pub fn description_for(name: &str) -> &'static str {
         }
         agent_names::AGENT_REFRESH => agent_lifecycle_ability::refresh_agents_description(),
         agent_authoring_ability::ABILITY_PUT_AGENT_ABILITY => agent_authoring_ability::DESCRIPTION,
-        federation_names::NODE_LIST => device_ops_ability::list_nodes_description(),
-        federation_names::NODE_DESCRIBE => device_ops_ability::describe_node_description(),
-        federation_names::NODE_REMOVE => device_ops_ability::remove_node_description(),
+        device_names::NODE_LIST => device_ops_ability::list_nodes_description(),
+        device_names::NODE_DESCRIBE => device_ops_ability::describe_node_description(),
+        device_names::NODE_REMOVE => device_ops_ability::remove_node_description(),
         federation_names::ABILITY_DEPLOY => device_ops_ability::deploy_ability_description(),
         federation_names::ABILITY_UNINSTALL => device_ops_ability::uninstall_ability_description(),
         automation_names::MISSION_DISCUSS_ROUND => {
@@ -794,9 +794,9 @@ fn authored_static_input_schema(name: &str) -> Option<serde_json::Value> {
         agent_authoring_ability::ABILITY_PUT_AGENT_ABILITY => {
             agent_authoring_ability::input_schema()
         }
-        federation_names::NODE_LIST => device_ops_ability::list_nodes_input_schema(),
-        federation_names::NODE_DESCRIBE => device_ops_ability::describe_node_input_schema(),
-        federation_names::NODE_REMOVE => device_ops_ability::remove_node_input_schema(),
+        device_names::NODE_LIST => device_ops_ability::list_nodes_input_schema(),
+        device_names::NODE_DESCRIBE => device_ops_ability::describe_node_input_schema(),
+        device_names::NODE_REMOVE => device_ops_ability::remove_node_input_schema(),
         federation_names::ABILITY_DEPLOY => device_ops_ability::deploy_ability_input_schema(),
         federation_names::ABILITY_UNINSTALL => device_ops_ability::uninstall_ability_input_schema(),
         automation_names::MISSION_DISCUSS_ROUND => {
@@ -1150,9 +1150,9 @@ pub(crate) fn classify_ability(name: &str) -> Option<AbilityLayer> {
         // describe daemon-managed state. The remaining
         // verbs (remove_node, deploy_ability, uninstall_ability)
         // mutate state — Operational unambiguous.
-        | federation_names::NODE_LIST
-        | federation_names::NODE_DESCRIBE
-        | federation_names::NODE_REMOVE
+        | device_names::NODE_LIST
+        | device_names::NODE_DESCRIBE
+        | device_names::NODE_REMOVE
         | federation_names::ABILITY_DEPLOY
         | federation_names::ABILITY_UNINSTALL
         // terminal.* shell-session lifecycle abilities.

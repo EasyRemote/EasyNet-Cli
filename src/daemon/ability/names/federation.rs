@@ -1,7 +1,3 @@
-pub const NODE_LIST: &str = "node.list";
-pub const NODE_DESCRIBE: &str = "node.describe";
-pub const NODE_REMOVE: &str = "node.remove";
-
 pub const ABILITY_DEPLOY: &str = "ability.deploy";
 pub const ABILITY_UNINSTALL: &str = "ability.uninstall";
 pub const ABILITY_PUBLISH: &str = "ability.publish";

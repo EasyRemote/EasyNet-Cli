@@ -56,9 +56,10 @@ use crate::support::async_bridge::{run_blocking, SyncBridgeRuntimePolicy};
 /// `agent_lifecycle_ability::SharedHotRegistrarCell`.
 pub type SharedDeviceRegistrarCell = OnceLock<Arc<DeviceAbilityRegistrar>>;
 
-pub const ABILITY_LIST_NODES: &str = crate::daemon::ability::names::federation::NODE_LIST;
-pub const ABILITY_DESCRIBE_NODE: &str = crate::daemon::ability::names::federation::NODE_DESCRIBE;
-pub const ABILITY_REMOVE_NODE: &str = crate::daemon::ability::names::federation::NODE_REMOVE;
+pub const ABILITY_LIST_NODES: &str = crate::daemon::ability::names::device_control::NODE_LIST;
+pub const ABILITY_DESCRIBE_NODE: &str =
+    crate::daemon::ability::names::device_control::NODE_DESCRIBE;
+pub const ABILITY_REMOVE_NODE: &str = crate::daemon::ability::names::device_control::NODE_REMOVE;
 pub const ABILITY_DEPLOY_ABILITY: &str = crate::daemon::ability::names::federation::ABILITY_DEPLOY;
 pub const ABILITY_UNINSTALL_ABILITY: &str =
     crate::daemon::ability::names::federation::ABILITY_UNINSTALL;

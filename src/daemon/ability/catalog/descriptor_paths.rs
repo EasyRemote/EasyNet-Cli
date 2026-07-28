@@ -99,9 +99,9 @@ impl SystemAbilityDescriptorGroup {
             | device_control::TERMINAL_INPUT
             | device_control::TERMINAL_READ
             | device_control::TERMINAL_RESIZE
-            | federation::NODE_LIST
-            | federation::NODE_DESCRIBE
-            | federation::NODE_REMOVE
+            | device_control::NODE_LIST
+            | device_control::NODE_DESCRIBE
+            | device_control::NODE_REMOVE
             | federation::ABILITY_DEPLOY
             | federation::ABILITY_UNINSTALL
             | federation::ABILITY_PUBLISH

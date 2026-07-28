@@ -502,7 +502,7 @@ impl LocalRuntimeDeviceDirectoryReadIssuer {
         timeout: std::time::Duration,
     ) -> anyhow::Result<Value> {
         LocalRuntimeStateReadIssuer::read_state_timeout(
-            crate::daemon::ability::names::federation::NODE_DESCRIBE,
+            crate::daemon::ability::names::device_control::NODE_DESCRIBE,
             args,
             timeout,
         )

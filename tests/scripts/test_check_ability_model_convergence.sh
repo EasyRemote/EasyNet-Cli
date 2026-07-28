@@ -17,6 +17,7 @@ mkdir -p "$SB/tools/scripts" \
   "$SB/src/daemon/ability/descriptors" \
   "$SB/src/daemon/ability/catalog" \
   "$SB/src/daemon/ability/builtins/resources/pages" \
+  "$SB/src/daemon/ability/names" \
   "$SB/src/daemon/ability" \
   "$SB/src/daemon/plugins" \
   "$SB/plugins" \
@@ -35,6 +36,16 @@ RS
 
 cat >"$SB/src/daemon/ability/catalog/build.rs" <<'RS'
 pub fn build_registry_for_daemon_result() {}
+RS
+
+cat >"$SB/src/daemon/ability/names/federation.rs" <<'RS'
+pub const RESOLVE: &str = "federation.resolve";
+RS
+
+cat >"$SB/src/daemon/ability/names/device_control.rs" <<'RS'
+pub const NODE_LIST: &str = "node.list";
+pub const NODE_DESCRIBE: &str = "node.describe";
+pub const NODE_REMOVE: &str = "node.remove";
 RS
 
 cat >"$SB/src/daemon/plugins/manifest.rs" <<'RS'
@@ -113,5 +124,45 @@ set -e
 grep -Fq "plugin module must not re-export descriptor CallMode" \
   /tmp/check-ability-model-convergence.out \
   || fail "module re-export failure should name plugins module ownership"
+
+cat >"$SB/src/daemon/plugins/mod.rs" <<'RS'
+pub use manifest::{PluginAbilityLayer, PluginPackageManifest};
+RS
+cat >"$SB/src/daemon/ability/names/federation.rs" <<'RS'
+pub const NODE_LIST: &str = "node.list";
+RS
+
+set +e
+(
+  cd "$SB"
+  bash tools/scripts/check-ability-model-convergence.sh
+) >/tmp/check-ability-model-convergence.out 2>&1
+rc=$?
+set -e
+[[ "$rc" == "1" ]] || fail "federation-owned node.list should exit 1 (got $rc)"
+grep -Fq "device lifecycle ability names must be owned by names::device_control" \
+  /tmp/check-ability-model-convergence.out \
+  || fail "node ownership failure should name device_control ownership"
+
+cat >"$SB/src/daemon/ability/names/federation.rs" <<'RS'
+pub const RESOLVE: &str = "federation.resolve";
+RS
+cat >"$SB/src/daemon/ability/catalog/build.rs" <<'RS'
+fn bad() {
+    let _ = crate::daemon::ability::names::federation::NODE_LIST;
+}
+RS
+
+set +e
+(
+  cd "$SB"
+  bash tools/scripts/check-ability-model-convergence.sh
+) >/tmp/check-ability-model-convergence.out 2>&1
+rc=$?
+set -e
+[[ "$rc" == "1" ]] || fail "federation node constant import should exit 1 (got $rc)"
+grep -Fq "device lifecycle callers must import node.* constants from names::device_control" \
+  /tmp/check-ability-model-convergence.out \
+  || fail "node import failure should name device_control import"
 
 echo "test_check_ability_model_convergence.sh: all cases passed"

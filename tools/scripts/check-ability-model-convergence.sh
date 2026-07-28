@@ -65,6 +65,16 @@ if rg -n '\bAbilityDescriptorRecord\b|\bAuthorityBindingRecord\b' src -g '*.rs';
     violations=$((violations + 1))
 fi
 
+if rg -n 'pub const NODE_(LIST|DESCRIBE|REMOVE):' src/daemon/ability/names/federation.rs; then
+    echo "ERROR: device lifecycle ability names must be owned by names::device_control, not names::federation"
+    violations=$((violations + 1))
+fi
+
+if rg -n 'names::federation::NODE_(LIST|DESCRIBE|REMOVE)|federation_names::NODE_(LIST|DESCRIBE|REMOVE)|federation::NODE_(LIST|DESCRIBE|REMOVE)' src -g '*.rs'; then
+    echo "ERROR: device lifecycle callers must import node.* constants from names::device_control"
+    violations=$((violations + 1))
+fi
+
 if rg -n '^\s*pub fn (register_rpc|register_stream|register_bidi|register_rpc_with_envelope|register_stream_with_envelope|register_bidi_with_envelope)\(' \
     src/daemon/ability/dispatch.rs; then
     echo "ERROR: catalog registration must require an explicit owner"

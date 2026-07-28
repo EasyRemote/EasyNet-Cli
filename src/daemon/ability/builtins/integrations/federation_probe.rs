@@ -31,7 +31,7 @@ use std::time::Instant;
 use serde_json::{json, Value};
 
 use crate::daemon::ability::builtins::agents::discover::DiscoverFederationResolver;
-use crate::daemon::ability::names::{federation, governance};
+use crate::daemon::ability::names::{device_control, governance};
 use crate::daemon::federation::client::ability_contract::ResolvedAgent;
 #[cfg(feature = "axon-pb")]
 use crate::daemon::invocation::routing::remote_invoke::{
@@ -40,7 +40,7 @@ use crate::daemon::invocation::routing::remote_invoke::{
 use crate::daemon::persistence::config;
 
 const DEVICE_HEALTH_ABILITY: &str = governance::OBSERVE_HEALTH;
-const DEVICE_NODE_LIST_ABILITY: &str = federation::NODE_LIST;
+const DEVICE_NODE_LIST_ABILITY: &str = device_control::NODE_LIST;
 const DEVICE_NETWORK_HEALTH_ABILITY: &str = governance::OBSERVE_NETWORK_HEALTH;
 const MAX_DEVICE_PROBES: usize = 64;
 
@@ -637,7 +637,7 @@ mod tests {
     #[test]
     fn node_id_from_agent_ura_rejects_non_device_shapes() {
         assert_eq!(
-            node_id_from_agent_ura("easynet:///r/acme/agent/01DEV"),
+            node_id_from_agent_ura("easynet:///r/acme/agent/dev-a"),
             None,
             "agent URAs must not project as devices"
         );
@@ -647,7 +647,7 @@ mod tests {
             "real agent URAs must not parse as devices"
         );
         assert_eq!(
-            node_id_from_agent_ura("easynet:///r/acme/ability/device.01DEV.federation.probe"),
+            node_id_from_agent_ura("easynet:///r/acme/ability/device.dev-a.federation.probe"),
             None,
             "ability URAs must not project as devices"
         );
@@ -655,7 +655,7 @@ mod tests {
 
     #[test]
     fn device_profile_detection_requires_health_plus_device_surface() {
-        let device_ura = "easynet:///r/acme/device/01DEV";
+        let device_ura = "easynet:///r/acme/device/dev-a";
         let device = ResolvedAgent {
             ura: device_ura.into(),
             status: "active".into(),
@@ -679,9 +679,9 @@ mod tests {
     #[test]
     fn node_to_json_preserves_explicit_online_flag() {
         let node = DeviceNodeSnapshot {
-            node_id: "01DEV".into(),
+            node_id: "dev-a".into(),
             tenant_id: "acme".into(),
-            agent_ura: Some("easynet:///r/acme/device/01DEV".into()),
+            agent_ura: Some("easynet:///r/acme/device/dev-a".into()),
             is_self: false,
             paired: true,
             hub_endpoint: None,
@@ -787,7 +787,7 @@ mod tests {
 
     #[test]
     fn resolved_device_record_keeps_cross_tenant_realm_and_abilities() {
-        let device_ura = "easynet:///r/realm-b/device/01DEV";
+        let device_ura = "easynet:///r/realm-b/device/dev-a";
         let agent = ResolvedAgent {
             ura: device_ura.into(),
             status: "active".into(),
@@ -823,7 +823,7 @@ mod tests {
 
     #[test]
     fn device_profile_detection_uses_ability_ura_not_summary_names() {
-        let device_ura = "easynet:///r/acme/device/01DEV";
+        let device_ura = "easynet:///r/acme/device/dev-a";
         let mut health = ability_summary(device_ura, "wrong", "health");
         health["ability_ura"] =
             json!(crate::core::ura::owner_ability_ura(device_ura, "observe.health").unwrap());
@@ -842,8 +842,8 @@ mod tests {
 
     #[test]
     fn device_profile_detection_rejects_wrong_owner_ability_uras() {
-        let device_ura = "easynet:///r/acme/device/01DEV";
-        let other_device_ura = "easynet:///r/acme/device/01OTHER";
+        let device_ura = "easynet:///r/acme/device/dev-a";
+        let other_device_ura = "easynet:///r/acme/device/dev-b";
         let device = ResolvedAgent {
             ura: device_ura.into(),
             status: "active".into(),
@@ -859,7 +859,7 @@ mod tests {
 
     #[test]
     fn device_profile_detection_rejects_missing_ability_ura() {
-        let device_ura = "easynet:///r/acme/device/01DEV";
+        let device_ura = "easynet:///r/acme/device/dev-a";
         let mut health = ability_summary(device_ura, "observe", "health");
         health["ability_ura"] = Value::Null;
         let device = ResolvedAgent {
@@ -880,6 +880,10 @@ mod tests {
         };
         let ability_ura = crate::core::ura::owner_ability_ura(owner_ura, &public_name)
             .expect("owner ability URA");
+        let callable_summary =
+            crate::daemon::federation::read_model::owner_projection::AbilityCallableSummary::minimal(
+                &public_name,
+            );
         json!({
             "ability_ura": ability_ura,
             "owner_ura": owner_ura,
@@ -891,6 +895,7 @@ mod tests {
             "policy_ref": "visibility:PUBLIC",
             "route_summary_ref": Value::Null,
             "tags": ["class:unary"],
+            "callable_summary": callable_summary,
         })
     }
 }
