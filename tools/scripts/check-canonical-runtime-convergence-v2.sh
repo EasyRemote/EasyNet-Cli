@@ -14095,10 +14095,18 @@ for required in (
     "enum DescriptorResolutionError",
     "RuntimeOwnerUnavailable(String)",
     "DescriptorNotFound(String)",
+    "use crate::daemon::runtime_failure::{RuntimeFailureFacts, RuntimeFailureKind};",
+    "pub(crate) fn runtime_failure_kind(&self) -> RuntimeFailureKind",
+    "pub(crate) fn canonical_detail(&self) -> String",
+    "RuntimeFailureFacts::new(self.runtime_failure_code(), self.message())",
     "descriptor resolution requires a caller signer",
     "fn descriptor_resolution_abi_projection(",
+    "error.runtime_failure_kind()",
+    "RuntimeFailureKind::CallerSignerUnavailable",
+    "RuntimeFailureKind::DescriptorOwnerOffline",
     'code: CALLER_SIGNER_UNAVAILABLE_CODE',
     'code: "DESCRIPTOR_NOT_FOUND"',
+    'code: "DESCRIPTOR_OWNER_OFFLINE"',
     "descriptor_resolution_abi_projection(&error)",
 ):
     if required not in text and required not in provider:
@@ -14109,10 +14117,15 @@ if "descriptor_resolution_error_projection(&message)" in entry:
     raise SystemExit("ffi_descriptor_runtime_owner:ffi_entry_uses_message_classifier")
 if "format!(\"runtime_resolve_descriptor_ref: {error:#}\")" in entry:
     raise SystemExit("ffi_descriptor_runtime_owner:ffi_entry_formats_error_before_projection")
+if "error.canonical_detail()" not in entry:
+    raise SystemExit("ffi_descriptor_runtime_owner:ffi_entry_does_not_sanitize_descriptor_error")
 
 for required_test in (
     "runtime_descriptor_resolver_requires_runtime_owner_for_remote_catalog",
     "runtime owner failure must not expose custody implementation details",
+    "leaked_remote_probe",
+    "descriptor resolver must sanitize leaked signer custody detail",
+    "DESCRIPTOR_OWNER_OFFLINE",
     "runtime_descriptor_resolver_rebinds_remote_system_action_descriptor_to_callee",
     "runtime_descriptor_resolver_uses_explicit_provider_for_remote_resource_catalogue_read",
     "runtime_descriptor_resolver_does_not_remote_probe_remote_catalog_miss",

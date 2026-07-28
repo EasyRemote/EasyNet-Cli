@@ -9,6 +9,8 @@
 
 use serde_json::Value;
 
+use crate::daemon::runtime_failure::{RuntimeFailureFacts, RuntimeFailureKind};
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum DescriptorResolutionError {
     InvalidRequest(String),
@@ -56,6 +58,27 @@ impl DescriptorResolutionError {
             | Self::DescriptorNotFound(message)
             | Self::OwnerMismatch(message)
             | Self::CallModeUnsupported(message) => message,
+        }
+    }
+
+    pub(crate) fn runtime_failure_kind(&self) -> RuntimeFailureKind {
+        self.runtime_failure_facts().classify()
+    }
+
+    pub(crate) fn canonical_detail(&self) -> String {
+        self.runtime_failure_facts().canonical_detail()
+    }
+
+    fn runtime_failure_facts(&self) -> RuntimeFailureFacts<'_> {
+        RuntimeFailureFacts::new(self.runtime_failure_code(), self.message())
+    }
+
+    fn runtime_failure_code(&self) -> &'static str {
+        match self {
+            Self::InvalidRequest(_) | Self::OwnerMismatch(_) => "INVALID_ARGUMENT",
+            Self::InvalidCatalogPayload(_) => "INVALID_CATALOG_PAYLOAD",
+            Self::RuntimeOwnerUnavailable(_) => "CALLER_SIGNER_UNAVAILABLE",
+            Self::DescriptorNotFound(_) | Self::CallModeUnsupported(_) => "ABILITY_NOT_FOUND",
         }
     }
 }
