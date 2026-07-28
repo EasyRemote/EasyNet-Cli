@@ -20396,6 +20396,8 @@ targets = [
     "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java",
     "sdk/node/index.js",
     "sdk/node/test/runtime-core.test.mjs",
+    "sdk/swift/Sources/RuntimeSDK/Invocation.swift",
+    "sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift",
     "sdk/schemas/authority.schema.json",
     "sdk/conformance/canonical-public-api.json",
     "sdk/conformance/sdk-parity-matrix.json",
@@ -20479,6 +20481,11 @@ language_checks = {
         "provider-managed signer_policy requires signer_id",
         "provider-managed signer_policy requires policy_ref",
     ),
+    "sdk/swift/Sources/RuntimeSDK/Invocation.swift": (
+        'mode.trimmingCharacters(in: .whitespacesAndNewlines) == "provider_managed_signing"',
+        "provider-managed signer_policy requires signer_id",
+        "provider-managed signer_policy requires policy_ref",
+    ),
 }
 for rel, tokens in language_checks.items():
     text = (root / rel).read_text(encoding="utf-8", errors="replace")
@@ -20491,6 +20498,7 @@ for rel in (
     "sdk/python/tests/test_signing.py",
     "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java",
     "sdk/node/test/runtime-core.test.mjs",
+    "sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift",
 ):
     text = (root / rel).read_text(encoding="utf-8", errors="replace")
     if "providerManagedSignerPolicyRequiresCustodyFacts" not in text and "provider_managed_signer_policy_requires_custody_facts" not in text and "provider-managed signer policy requires custody facts" not in text and "ProviderManagedSignerPolicyRequiresCustodyFacts" not in text:

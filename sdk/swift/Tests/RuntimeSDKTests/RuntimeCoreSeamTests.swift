@@ -1083,6 +1083,37 @@ final class RuntimeCoreSeamTests: XCTestCase {
         await expectSDKError(.invalidArgument) { _ = try await runtime.submitSigned(prepared) }
     }
 
+    func testProviderManagedSignerPolicyRequiresCustodyFacts() throws {
+        let cases: [(label: String, policy: [String: Any], expected: String)] = [
+            (
+                "missing signer_id",
+                ["mode": "provider_managed_signing", "policy_ref": "policy/local"],
+                "signer_id"
+            ),
+            (
+                "blank signer_id",
+                ["mode": "provider_managed_signing", "signer_id": " ", "policy_ref": "policy/local"],
+                "signer_id"
+            ),
+            (
+                "missing policy_ref",
+                ["mode": "provider_managed_signing", "signer_id": "signer-key-1"],
+                "policy_ref"
+            ),
+            (
+                "blank policy_ref",
+                ["mode": "provider_managed_signing", "signer_id": "signer-key-1", "policy_ref": " "],
+                "policy_ref"
+            ),
+        ]
+
+        for item in cases {
+            expectSyncSDKError(.invalidArgument, item.expected) {
+                _ = try SignerPolicy.fromObject(item.policy)
+            }
+        }
+    }
+
     func testStreamAndBidiBackpressureAreBounded() async throws {
         let stream = StreamHandle(source: CountingStreamSource())
         for _ in 0...StreamHandle.maxRetainedEvents { _ = try await stream.next() }

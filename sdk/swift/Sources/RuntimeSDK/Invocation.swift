@@ -166,6 +166,14 @@ public struct SignerPolicy: Sendable, Equatable {
         guard expiresAtUnixMS >= 0 else {
             throw SDKError.validation("signer_policy", "expires_at_unix_ms must be non-negative")
         }
+        if mode.trimmingCharacters(in: .whitespacesAndNewlines) == "provider_managed_signing" {
+            if signerId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                throw SDKError.validation("signer_policy", "provider-managed signer_policy requires signer_id")
+            }
+            if policyRef.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                throw SDKError.validation("signer_policy", "provider-managed signer_policy requires policy_ref")
+            }
+        }
         self.mode = mode
         self.signerId = signerId
         self.policyRef = policyRef
