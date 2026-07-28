@@ -126,6 +126,10 @@ require_paths() {
   [[ -x "$EASYNET_ROOT/scripts/docker-build-images.sh" ]] || die "missing EasyNet image build script"
 }
 
+ensure_runtime_dirs() {
+  mkdir -p "$SHARED_DIR" "$CERT_DIR"
+}
+
 if [[ "$SELF_TEST" == "1" ]]; then
   bash -n "$0"
   require_paths
@@ -152,6 +156,7 @@ if [[ "$SELF_TEST" == "1" ]]; then
   grep -q "ability_ura.endswith(f\".{ability_name}\")" "$0"
   grep -q "resolve_docker" "$0"
   grep -q "extend_tool_path" "$0"
+  grep -q "ensure_runtime_dirs" "$0"
   grep -q "random_nonce_hex" "$0"
   grep -q "headless-media" "$SELF_DIR/build-linux-cli-artifact-bundle.sh"
   grep -q "wait_device_online provider /home/provider" "$0"
@@ -172,7 +177,7 @@ mkdir -p "$OUT_DIR"
 WORK_ROOT="$(mktemp -d "/tmp/easynet-media-bidi.XXXXXX")"
 SHARED_DIR="$WORK_ROOT/shared"
 CERT_DIR="$WORK_ROOT/certs"
-mkdir -p "$SHARED_DIR" "$CERT_DIR"
+ensure_runtime_dirs
 COMPOSE_FILE="$OUT_DIR/docker-compose.yml"
 printf '%s\n' "$WORK_ROOT" >"$OUT_DIR/work-root.txt"
 
@@ -184,7 +189,9 @@ cleanup() {
     fi
   fi
   if [[ "$KEEP" != "1" ]]; then
-    "$DOCKER_BIN" compose -p "$PROJECT" -f "$COMPOSE_FILE" down -v --remove-orphans >/dev/null 2>&1 || true
+    if [[ -f "$COMPOSE_FILE" ]]; then
+      "$DOCKER_BIN" compose -p "$PROJECT" -f "$COMPOSE_FILE" down -v --remove-orphans >/dev/null 2>&1 || true
+    fi
     rm -rf "$WORK_ROOT"
   else
     echo "kept work root: $WORK_ROOT" >&2
@@ -208,6 +215,7 @@ if [[ "$SKIP_BUILD" != "1" ]]; then
     EASYNET_HUB_IMAGE="$RUNTIME_IMAGE" \
     "$EASYNET_ROOT/scripts/docker-build-images.sh"
 fi
+ensure_runtime_dirs
 
 compose() {
   "$DOCKER_BIN" compose -p "$PROJECT" -f "$COMPOSE_FILE" "$@"
@@ -257,7 +265,11 @@ caller_cli_must_fail() {
 
 dump_logs() {
   echo "==> docker compose logs" >&2
-  compose logs --no-color hub provider caller >&2 || true
+  if [[ -f "$COMPOSE_FILE" ]]; then
+    compose logs --no-color hub provider caller >&2 || true
+  else
+    echo "compose file has not been generated: $COMPOSE_FILE" >&2
+  fi
   echo "==> daemon logs" >&2
   service_exec hub "find /srv/easynet/.easynet -maxdepth 4 -type f -name '*.log' -print -exec tail -120 {} \\;" >&2 || true
   service_exec provider "find /home/provider/.easynet -maxdepth 4 -type f -name '*.log' -print -exec tail -180 {} \\;" >&2 || true
