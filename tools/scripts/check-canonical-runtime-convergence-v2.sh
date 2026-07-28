@@ -2126,7 +2126,7 @@ import sys
 from pathlib import Path
 
 text = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
-production = text.split("\n#[cfg(test)]", 1)[0]
+production = text.split("\n#[cfg(test)]\nmod tests", 1)[0]
 arm = re.search(
     r"AbilityOwner::Authority\s*=>\s*\{(?P<body>.*?)\n\s*\}",
     production,
@@ -8136,7 +8136,7 @@ import sys
 from pathlib import Path
 
 text = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
-production = text.split("\n#[cfg(test)]", 1)[0]
+production = text.split("\n#[cfg(test)]\nmod tests", 1)[0]
 
 if "LocalRuntimeSkillCatalogueReadIssuer::list_installed_skills(" not in production:
     raise SystemExit("skill_cli_read_dispatch:missing_typed_skill_catalogue_read_issuer")
@@ -11021,6 +11021,9 @@ for required in (
     "fn user(local_daemon_ura: &str, local_user_id_filter: &str) -> anyhow::Result<Self>",
     "fn validate_federation_discover_local_user_id(local_user_id: &str) -> anyhow::Result<&str>",
     "fn invoke_federation_discover_with_scope(",
+    "fn load_federation_caller_signer(",
+    "-> anyhow::Result<RemoteInvocationCallerSigner>",
+    "load_runtime_caller_signer(caller_ura.to_string())",
     "scope.write_request_args(&mut req_args)",
     'load_federation_caller_signer(scope.caller_ura(), "federation.discover")',
     "ProtoEnvelope::from_target(\n        scope.caller_ura(),",
@@ -11033,6 +11036,8 @@ for required in (
 for retired in (
     "fn invoke_federation_discover_with_user_filter(",
     "local_user_id_filter: Option<&str>",
+    "RuntimeSigningIdentity::load_default(caller_ura)",
+    "-> anyhow::Result<crate::daemon::identity::self_identity::RuntimeSigningIdentity>",
     'local_daemon_federation_signer(&local_daemon_ura, "federation.discover")',
     'load_federation_caller_signer(&local_daemon_ura, "federation.discover")',
     "ProtoEnvelope::from_target(\n        local_daemon_ura.as_str(),",
@@ -11040,7 +11045,7 @@ for retired in (
     if retired in production:
         raise SystemExit(f"federation_discover_caller_scope:retired:{retired}")
 
-tests = text.split("\n#[cfg(test)]", 1)[1] if "\n#[cfg(test)]" in text else ""
+tests = text.split("\n#[cfg(test)]\nmod tests", 1)[1] if "\n#[cfg(test)]\nmod tests" in text else ""
 for required_test in (
     "federation_discover_user_scope_binds_user_caller_before_daemon_io",
     "federation_discover_operator_scope_binds_daemon_caller_without_user_filter",
@@ -11048,6 +11053,134 @@ for required_test in (
 ):
     if required_test not in tests:
         raise SystemExit(f"federation_discover_caller_scope:test_missing:{required_test}")
+PY
+}
+
+check_federated_key_resolver_user_keyset_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local resolver="$cli_root/src/daemon/invocation/admission/federated_key_resolver.rs"
+  [[ -f "$resolver" ]] || fail "federated key resolver source is missing: ${resolver#$cli_root/}"
+
+  "$PYTHON_BIN" - "$resolver" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+production = text.split("\n#[cfg(test)]\nmod tests", 1)[0]
+
+impl_start = production.find("impl KeyResolver for FederatedKeyResolver {")
+if impl_start == -1:
+    raise SystemExit("federated_key_resolver_user_keyset:impl_missing")
+next_item = production.find("\n/// Wrap a federated-resolve failure", impl_start)
+if next_item == -1:
+    raise SystemExit("federated_key_resolver_user_keyset:impl_end_missing")
+impl_body = production[impl_start:next_item]
+
+for required in (
+    "fn resolve_all(&self, agent_ura: &str) -> Result<Vec<VerifyingKey>, AxonError>",
+    "self.resolve_local_all(agent_ura)",
+    "self.resolve_federated(agent_ura).map(|key| vec![key])",
+):
+    if required not in impl_body:
+        raise SystemExit(f"federated_key_resolver_user_keyset:resolve_all_missing:{required}")
+
+for required in (
+    "fn resolve_local_all(",
+    "self.is_same_realm_user(agent_ura)",
+    "lookup_user_all(agent_ura)",
+    "resolve_principal_lifecycle_local_public_keys(agent_ura)",
+    "Self::append_unique(",
+    "axon_sdk::invocation::MAX_KEYS_PER_AGENT_URA",
+):
+    if required not in production:
+        raise SystemExit(f"federated_key_resolver_user_keyset:local_all_missing:{required}")
+
+for retired in (
+    "fn resolve_all(&self, agent_ura: &str) -> Result<Vec<VerifyingKey>, AxonError> {\n        self.resolve(agent_ura).map(|key| vec![key])",
+    "match self.presented_pubkey_b64.as_deref() {\n            Some(pk) => trust_anchor.lookup_user_by_pubkey(agent_ura, pk),\n            None => trust_anchor.lookup(agent_ura),\n        }\n        .map(|entry| vec![",
+):
+    if retired in production:
+        raise SystemExit(f"federated_key_resolver_user_keyset:retired_single_key_path:{retired[:80]}")
+
+tests = text.split("\n#[cfg(test)]\nmod tests", 1)[1] if "\n#[cfg(test)]\nmod tests" in text else ""
+for required_test in (
+    "same_realm_user_resolve_all_returns_all_trust_anchor_keys_without_dial",
+    "same_realm_principal_lifecycle_resolve_all_returns_all_active_user_keys_without_dial",
+):
+    if required_test not in tests:
+        raise SystemExit(f"federated_key_resolver_user_keyset:test_missing:{required_test}")
+PY
+}
+
+check_admission_facade_user_role_projection_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local facade="$cli_root/src/daemon/invocation/admission/admission_facade.rs"
+  [[ -f "$facade" ]] || fail "admission facade source is missing: ${facade#$cli_root/}"
+
+  "$PYTHON_BIN" - "$facade" <<'PY'
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+production = text.split("\n#[cfg(test)]\nmod tests", 1)[0]
+
+for required in (
+    "fn trust_anchor_user_role_for_caller(",
+    "caller.kind != URAKind::User",
+    "caller.realm == daemon_realm && !trust_anchor.lookup_user_all(caller_ura).is_empty()",
+    "self.trust_anchor_user_role_for_caller(caller_ura, trust_anchor)",
+):
+    if required not in production:
+        raise SystemExit(f"admission_facade_user_role_projection:missing:{required}")
+
+role_start = production.find("fn trusted_role_for_caller(")
+role_end = production.find("\n    fn trust_anchor_user_role_for_caller(", role_start)
+if role_start == -1 or role_end == -1:
+    raise SystemExit("admission_facade_user_role_projection:trusted_role_body_missing")
+role_body = production[role_start:role_end]
+if "trust_anchor.lookup(caller_ura)" not in role_body:
+    raise SystemExit("admission_facade_user_role_projection:non_user_lookup_missing")
+if "principal_lifecycle_role_for_caller" not in role_body:
+    raise SystemExit("admission_facade_user_role_projection:principal_lifecycle_role_missing")
+if role_body.find("trust_anchor.lookup(caller_ura)") > role_body.find("trust_anchor_user_role_for_caller"):
+    raise SystemExit("admission_facade_user_role_projection:user_bucket_checked_before_non_user_lookup")
+
+tests = text.split("\n#[cfg(test)]\nmod tests", 1)[1] if "\n#[cfg(test)]\nmod tests" in text else ""
+if "caller_role_resolves_same_realm_user_from_trust_anchor_user_bucket" not in tests:
+    raise SystemExit("admission_facade_user_role_projection:test_missing")
+PY
+}
+
+check_invocation_boot_federated_bindings_store_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local boot="$cli_root/src/daemon/boot/invocation/mod.rs"
+  [[ -f "$boot" ]] || fail "invocation boot source is missing: ${boot#$cli_root/}"
+
+  "$PYTHON_BIN" - "$boot" <<'PY'
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+production = text.split("\n#[cfg(test)]\nmod tests", 1)[0]
+
+for required in (
+    ".with_session_realm(config.realm().to_string())",
+    ".with_federated_bindings_store(Arc::new(",
+    "FederatedBindingsStore::open_or_create(",
+    'expand_home("~/.easynet/federated_bindings.json")',
+    'context("open canonical federated user bindings store")?',
+):
+    if required not in production:
+        raise SystemExit(f"invocation_boot_federated_bindings_store:missing:{required}")
+
+service_start = production.find("let mut service = DaemonInvocationService::new(")
+service_end = production.find("\n    // ── Invocation ledger", service_start)
+if service_start == -1 or service_end == -1:
+    raise SystemExit("invocation_boot_federated_bindings_store:service_assembly_missing")
+body = production[service_start:service_end]
+if body.find(".with_federated_bindings_store(") < body.find(".with_session_realm("):
+    raise SystemExit("invocation_boot_federated_bindings_store:binding_store_before_session_realm")
 PY
 }
 
@@ -28582,6 +28715,9 @@ EOF
   check_federation_receipt_facts_strict_contract
   check_federation_revoke_ingress_strict_contract
   check_federation_discover_caller_scope_contract
+  check_federated_key_resolver_user_keyset_contract
+  check_admission_facade_user_role_projection_contract
+  check_invocation_boot_federated_bindings_store_contract
   check_device_settings_loader_contract
   check_mission_traditional_target_conflict_contract
   check_mission_ability_strict_ingress_contract
@@ -28852,6 +28988,9 @@ check_runtime_bootstrap_self_identity_ingress_contract
 check_federation_receipt_facts_strict_contract
 check_federation_revoke_ingress_strict_contract
 check_federation_discover_caller_scope_contract
+check_federated_key_resolver_user_keyset_contract
+check_admission_facade_user_role_projection_contract
+check_invocation_boot_federated_bindings_store_contract
 check_device_settings_loader_contract
 check_mission_traditional_target_conflict_contract
 check_mission_ability_strict_ingress_contract

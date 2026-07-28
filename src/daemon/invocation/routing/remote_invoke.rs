@@ -1463,7 +1463,7 @@ fn invoke_federation_discover_with_scope(
                     target.route_function_name(),
                     target.descriptor_ref(),
                     arg_bytes,
-                    &signer,
+                    signer.as_ref(),
                 )
                 .await
                 .context("build descriptor-bound federation.discover request")?;
@@ -1510,8 +1510,8 @@ fn federation_discover_subject_ura(callee_ura: &str) -> anyhow::Result<String> {
 fn load_federation_caller_signer(
     caller_ura: &str,
     ability: &str,
-) -> anyhow::Result<crate::daemon::identity::self_identity::RuntimeSigningIdentity> {
-    crate::daemon::identity::self_identity::RuntimeSigningIdentity::load_default(caller_ura)
+) -> anyhow::Result<RemoteInvocationCallerSigner> {
+    crate::daemon::identity::self_identity::load_runtime_caller_signer(caller_ura.to_string())
         .map_err(|_err| caller_signer_unavailable_error(ability, caller_ura))
 }
 
@@ -1578,7 +1578,7 @@ pub fn invoke_federation_revoke(
                 target.route_function_name(),
                 target.descriptor_ref(),
                 arg_bytes,
-                &signer,
+                signer.as_ref(),
             )
             .await
             .context("build descriptor-bound federation.revoke request")?;

@@ -56,6 +56,21 @@ for forbidden in [
     if forbidden in body:
         raise SystemExit(f"invoke_federation_revoke still reselects ambient caller: {forbidden}")
 
+loader_start = text.find("fn load_federation_caller_signer(")
+loader_end = text.find("\n/// `federation.revoke`", loader_start)
+if loader_start == -1 or loader_end == -1:
+    raise SystemExit("cannot extract load_federation_caller_signer body")
+loader = text[loader_start:loader_end]
+for needle in [
+    "-> anyhow::Result<RemoteInvocationCallerSigner>",
+    "load_runtime_caller_signer(caller_ura.to_string())",
+    "caller_signer_unavailable_error(ability, caller_ura)",
+]:
+    if needle not in loader:
+        raise SystemExit(f"federation caller signer loader missing canonical boundary: {needle}")
+if "RuntimeSigningIdentity::load_default" in loader:
+    raise SystemExit("federation caller signer loader must not use runtime-owner-only signer resolution")
+
 validator = text[end:text.find("\n#[cfg(test)]", end)]
 for needle in [
     "caller != local",

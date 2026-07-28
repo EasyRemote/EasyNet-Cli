@@ -584,6 +584,12 @@ pub fn start_daemon_invocation_transport(
         .with_pending(Arc::clone(&pending))
         .with_pending_stream(Arc::clone(&pending_stream))
         .with_session_realm(config.realm().to_string())
+        .with_federated_bindings_store(Arc::new(
+            crate::daemon::keyring::federated_bindings::FederatedBindingsStore::open_or_create(
+                expand_home("~/.easynet/federated_bindings.json"),
+            )
+            .context("open canonical federated user bindings store")?,
+        ))
         .with_register_pubkey(
             config.realm().to_string(),
             trust_anchor_path.clone(),

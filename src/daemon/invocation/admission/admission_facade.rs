@@ -1129,6 +1129,9 @@ impl AdmissionFacade {
         if let Some(entry) = trust_anchor.lookup(caller_ura) {
             return Ok(entry.role);
         }
+        if self.trust_anchor_user_role_for_caller(caller_ura, trust_anchor) {
+            return Ok(TrustedAgentRole::User);
+        }
         if let Some(role) = self.principal_lifecycle_role_for_caller(caller_ura)? {
             return Ok(role);
         }
@@ -1137,6 +1140,28 @@ impl AdmissionFacade {
                 .ok_or_else(|| permission_denied_unknown_caller(caller_ura));
         }
         Err(permission_denied_unknown_caller(caller_ura))
+    }
+
+    fn trust_anchor_user_role_for_caller(
+        &self,
+        caller_ura: &str,
+        trust_anchor: &RealmTrustAnchor,
+    ) -> bool {
+        let Ok(caller) = parse_ura(caller_ura) else {
+            return false;
+        };
+        if caller.kind != URAKind::User {
+            return false;
+        }
+        let Some(daemon_realm) = self
+            .daemon_ura
+            .as_deref()
+            .and_then(|daemon_ura| parse_ura(daemon_ura).ok())
+            .map(|daemon| daemon.realm)
+        else {
+            return false;
+        };
+        caller.realm == daemon_realm && !trust_anchor.lookup_user_all(caller_ura).is_empty()
     }
 
     fn principal_lifecycle_role_for_caller(
@@ -2759,6 +2784,7 @@ mod tests {
         AgentIdentity as PbAgentIdentity, InvokeRequest, InvokeResponse,
         SubjectIdentity as PbSubjectIdentity,
     };
+    use ed25519_dalek::SigningKey;
     use serde_json::json;
     use std::collections::BTreeMap;
     use tempfile::tempdir;
@@ -3179,6 +3205,35 @@ mod tests {
             Some(crate::core::ura::hub_ura("self-realm")),
         )
         .with_federated_key_resolver(resolver)
+    }
+
+    #[test]
+    fn caller_role_resolves_same_realm_user_from_trust_anchor_user_bucket() {
+        let user = "easynet:///r/self-realm/user/alice";
+        let signing_key = SigningKey::from_bytes(&[0x61; 32]);
+        let user_row = crate::daemon::trust::anchor::TrustedAgent {
+            agent_ura: user.to_string(),
+            public_key_b64: BASE64_STANDARD.encode(signing_key.verifying_key().to_bytes()),
+            role: TrustedAgentRole::User,
+            added_at_unix_ms: 1_700_000_000_000,
+            origin_realm: None,
+            hub_endpoint: None,
+            tls_ca_pem_path: None,
+        };
+        let anchor = Arc::new(
+            RealmTrustAnchor::from_entries(vec![user_row]).expect("user trust bucket anchor"),
+        );
+        let facade = AdmissionFacade::with_trust_anchor_cell(
+            SharedTrustAnchor::new(Arc::clone(&anchor)),
+            Some(crate::core::ura::hub_ura("self-realm")),
+        );
+
+        assert_eq!(
+            facade
+                .trusted_role_for_caller(user, anchor.as_ref())
+                .expect("same-realm trust-anchor User bucket should classify as User"),
+            TrustedAgentRole::User
+        );
     }
 
     #[test]
