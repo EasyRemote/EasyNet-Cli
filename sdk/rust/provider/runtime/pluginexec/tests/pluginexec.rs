@@ -86,6 +86,44 @@ fn serve_exec_plugin_writes_error_frame_for_handler_failure() {
 }
 
 #[test]
+fn serve_exec_plugin_writes_error_frame_for_protocol_failure() {
+    let mut input = Cursor::new(
+        json!({
+            "type": "invoke",
+            "call_id": "call-1",
+            "invocation": {
+                "caller_ura": "easynet:///r/hub/user/alice",
+                "callee_ura": "easynet:///r/hub/device/provider",
+                "ability_ura": "demo.echo",
+                "subject_ura": "easynet:///r/hub/resource/demo",
+                "invocation_nonce": [1, 2, 3, 4],
+                "causal_context": {"form": "none"},
+                "args": {"message": "hello"}
+            }
+        })
+        .to_string()
+            + "\n",
+    );
+    let mut output = Vec::new();
+
+    serve_exec_plugin_io(&mut input, &mut output, |_invocation| {
+        Ok::<_, std::convert::Infallible>(json!({"ok": true}))
+    })
+    .expect("serve");
+
+    let response: Value = serde_json::from_slice(&output).expect("response");
+    assert_eq!(response["type"], json!("error"));
+    assert_eq!(response["call_id"], json!(""));
+    assert!(
+        response["message"]
+            .as_str()
+            .expect("message string")
+            .contains("exactly 16 bytes"),
+        "unexpected protocol error frame: {response}"
+    );
+}
+
+#[test]
 fn sidecar_invocation_rejects_non_invoke_frame() {
     let frame = json!({
         "type": "stream_open",

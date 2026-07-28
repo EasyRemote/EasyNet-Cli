@@ -67,9 +67,12 @@ export class SidecarInvocation {
 export async function serveExecPlugin(handler, options = {}) {
   const input = options.input ?? process.stdin;
   const output = options.output ?? process.stdout;
-  const frame = await readFrame(input);
-  const invocation = SidecarInvocation.fromFrame(frame);
+  let callID = "";
+  let invocation = null;
   try {
+    const frame = await readFrame(input);
+    callID = sidecarFrameCallID(frame);
+    invocation = SidecarInvocation.fromFrame(frame);
     const value = await handler(invocation);
     writeFrame(output, {
       type: "result",
@@ -79,10 +82,14 @@ export async function serveExecPlugin(handler, options = {}) {
   } catch (error) {
     writeFrame(output, {
       type: "error",
-      call_id: invocation.callID,
+      call_id: invocation?.callID ?? callID,
       message: error instanceof Error ? error.message : String(error),
     });
   }
+}
+
+function sidecarFrameCallID(frame) {
+  return frame && typeof frame.call_id === "string" ? frame.call_id : "";
 }
 
 async function readFrame(input) {

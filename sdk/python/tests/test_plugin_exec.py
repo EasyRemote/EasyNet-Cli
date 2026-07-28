@@ -104,21 +104,47 @@ class PluginExecTests(unittest.TestCase):
             {"type": "error", "call_id": "call-1", "message": "boom"},
         )
 
-    def test_exec_plugin_helper_rejects_uncorrelated_request_without_error_frame(
+    def test_exec_plugin_helper_writes_terminal_error_frame_for_uncorrelated_request(
         self,
     ) -> None:
         output = StringIO()
         frame = _frame()
         del frame["call_id"]
 
-        with self.assertRaisesRegex(SidecarProtocolError, "call_id"):
-            serve_exec_plugin(
-                lambda _invocation: {"ok": True},
-                input_stream=StringIO(json.dumps(frame) + "\n"),
-                output_stream=output,
-            )
+        serve_exec_plugin(
+            lambda _invocation: {"ok": True},
+            input_stream=StringIO(json.dumps(frame) + "\n"),
+            output_stream=output,
+        )
 
-        self.assertEqual(output.getvalue(), "")
+        self.assertEqual(
+            json.loads(output.getvalue()),
+            {
+                "type": "error",
+                "call_id": "",
+                "message": "sidecar frame field 'call_id' must be a string",
+            },
+        )
+
+    def test_exec_plugin_helper_writes_terminal_error_frame_for_malformed_invocation(
+        self,
+    ) -> None:
+        output = StringIO()
+        frame = _frame()
+        invocation = frame["invocation"]
+        assert isinstance(invocation, dict)
+        invocation["descriptor_ref"] = "retired-provider-leak"
+
+        serve_exec_plugin(
+            lambda _invocation: {"ok": True},
+            input_stream=StringIO(json.dumps(frame) + "\n"),
+            output_stream=output,
+        )
+
+        response = json.loads(output.getvalue())
+        self.assertEqual(response["type"], "error")
+        self.assertEqual(response["call_id"], "call-1")
+        self.assertIn("canonical invocation frame", response["message"])
 
     def test_plugin_invocation_rejects_non_invoke_frame(self) -> None:
         frame = _frame()

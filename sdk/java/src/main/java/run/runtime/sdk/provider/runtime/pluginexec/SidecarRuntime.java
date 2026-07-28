@@ -26,14 +26,21 @@ public final class SidecarRuntime {
   /** Run one declarative exec plugin invocation over explicit streams. */
   public static void serve(BufferedReader input, BufferedWriter output, SidecarHandler handler)
       throws IOException {
-    Map<String, Object> frame = JsonFrameCodec.readObjectLine(input);
-    SidecarInvocation invocation = SidecarInvocation.fromFrame(frame);
+    String callId = "";
     try {
+      Map<String, Object> frame = JsonFrameCodec.readObjectLine(input);
+      callId = frameCallId(frame);
+      SidecarInvocation invocation = SidecarInvocation.fromFrame(frame);
       Object value = handler.handle(invocation);
       writeFrame(output, resultFrame(invocation.callId(), value));
     } catch (Exception error) {
-      writeFrame(output, errorFrame(invocation.callId(), error.getMessage()));
+      writeFrame(output, errorFrame(callId, error.getMessage()));
     }
+  }
+
+  private static String frameCallId(Map<String, Object> frame) {
+    Object value = frame.get("call_id");
+    return value instanceof String text ? text : "";
   }
 
   private static Map<String, Object> resultFrame(String callId, Object value) {

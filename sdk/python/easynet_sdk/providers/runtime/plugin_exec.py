@@ -98,9 +98,11 @@ def serve_exec_plugin(
 
     input_stream = input_stream or sys.stdin
     output_stream = output_stream or sys.stdout
-    frame = _read_frame(input_stream)
-    invocation = SidecarInvocation.from_frame(frame)
+    call_id = ""
     try:
+        frame = _read_frame(input_stream)
+        call_id = _frame_call_id(frame)
+        invocation = SidecarInvocation.from_frame(frame)
         value = handler(invocation)
         _write_frame(
             {"type": "result", "call_id": invocation.call_id, "value": value},
@@ -108,9 +110,14 @@ def serve_exec_plugin(
         )
     except Exception as exc:  # noqa: BLE001 - plugin boundary must become a frame.
         _write_frame(
-            {"type": "error", "call_id": invocation.call_id, "message": str(exc)},
+            {"type": "error", "call_id": call_id, "message": str(exc)},
             output_stream,
         )
+
+
+def _frame_call_id(frame: Mapping[str, Any]) -> str:
+    value = frame.get("call_id")
+    return value if isinstance(value, str) else ""
 
 
 def _read_frame(input_stream: TextIO) -> Mapping[str, Any]:

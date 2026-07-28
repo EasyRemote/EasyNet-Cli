@@ -117,24 +117,42 @@ test("serveExecPlugin writes error frame for handler failure", async () => {
   });
 });
 
-test("serveExecPlugin rejects uncorrelated request without error frame", async () => {
+test("serveExecPlugin writes terminal error frame for uncorrelated request", async () => {
   const capture = captureOutput();
   const frame = requestFrame();
   delete frame.call_id;
 
-  await assert.rejects(
-    () =>
-      serveExecPlugin(
-        () => ({ ok: true }),
-        {
-          input: inputFromFrame(frame),
-          output: capture.output,
-        },
-      ),
-    /call_id/,
+  await serveExecPlugin(
+    () => ({ ok: true }),
+    {
+      input: inputFromFrame(frame),
+      output: capture.output,
+    },
   );
 
-  assert.equal(capture.chunks.length, 0);
+  assert.deepEqual(capture.json(), {
+    type: "error",
+    call_id: "",
+    message: 'sidecar frame field "call_id" must be a string',
+  });
+});
+
+test("serveExecPlugin writes terminal error frame for malformed invocation frame", async () => {
+  const capture = captureOutput();
+  const frame = requestFrame();
+  frame.invocation.descriptor_ref = "retired-provider-leak";
+
+  await serveExecPlugin(
+    () => ({ ok: true }),
+    {
+      input: inputFromFrame(frame),
+      output: capture.output,
+    },
+  );
+
+  assert.equal(capture.json().type, "error");
+  assert.equal(capture.json().call_id, "call-1");
+  assert.match(capture.json().message, /canonical invocation frame/);
 });
 
 test("SidecarInvocation rejects non-invoke frames", () => {

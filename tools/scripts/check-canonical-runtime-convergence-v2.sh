@@ -15421,6 +15421,7 @@ for language, source in helper_production_sources.items():
 
 required_helper_tests = {
     "rust": [
+        "serve_exec_plugin_writes_error_frame_for_protocol_failure",
         "sidecar_invocation_rejects_non_canonical_tuple_aliases",
         "sidecar_invocation_rejects_unknown_invocation_fields",
         "sidecar_invocation_rejects_unknown_request_fields",
@@ -15436,6 +15437,8 @@ required_helper_tests = {
         "TestSidecarInvocationProjectionRejectsNonCanonicalNonceLength",
     ],
     "python": [
+        "test_exec_plugin_helper_writes_terminal_error_frame_for_uncorrelated_request",
+        "test_exec_plugin_helper_writes_terminal_error_frame_for_malformed_invocation",
         "test_plugin_invocation_rejects_non_canonical_tuple_aliases",
         "test_plugin_invocation_rejects_unknown_invocation_fields",
         "test_plugin_invocation_rejects_unknown_request_fields",
@@ -15445,6 +15448,8 @@ required_helper_tests = {
         "test_plugin_invocation_rejects_boolean_nonce_bytes",
     ],
     "node": [
+        "serveExecPlugin writes terminal error frame for uncorrelated request",
+        "serveExecPlugin writes terminal error frame for malformed invocation frame",
         "SidecarInvocation rejects non-canonical tuple aliases",
         "SidecarInvocation rejects unknown invocation fields",
         "SidecarInvocation rejects unknown request fields",
@@ -15453,6 +15458,8 @@ required_helper_tests = {
         "SidecarInvocation rejects non-canonical nonce length",
     ],
     "java": [
+        "serveWritesTerminalErrorFrameForUncorrelatedRequest",
+        "serveWritesTerminalErrorFrameForMalformedInvocation",
         "sidecarInvocationRejectsNonCanonicalTupleAliases",
         "sidecarInvocationRejectsUnknownInvocationFields",
         "sidecarInvocationRejectsUnknownRequestFields",
@@ -15466,6 +15473,21 @@ for language, test_names in required_helper_tests.items():
     for test_name in test_names:
         if test_name not in helper_sources[language]:
             raise SystemExit(f"plugin_sidecar_helper_unknown_field_test_missing:{language}:{test_name}")
+for language, source in helper_sources.items():
+    if "without error frame" in source:
+        raise SystemExit(f"plugin_sidecar_helper_retired_open_protocol_failure:{language}")
+terminal_error_frame_tokens = {
+    "rust": ('frame_type: "error"', "call_id: &call_id", "message: Some(error.to_string())"),
+    "go": ('Type:    "error"', "CallID:  callID", "Message: err.Error()"),
+    "python": ('"type": "error"', '"call_id": call_id', '"message": str(exc)'),
+    "node": ('type: "error"', 'call_id: invocation?.callID ?? callID', "message: error instanceof Error"),
+    "java": ('frame.put("type", "error")', 'frame.put("call_id", callId)', 'frame.put("message", message == null ? "" : message)'),
+}
+for language, tokens in terminal_error_frame_tokens.items():
+    source = helper_production_sources[language]
+    for required in tokens:
+        if required not in source:
+            raise SystemExit(f"plugin_sidecar_helper_terminal_error_frame_missing:{language}:{required}")
 
 strict_tuple_default_patterns = {
     "rust": [

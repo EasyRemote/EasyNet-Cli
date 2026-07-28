@@ -16,7 +16,8 @@ public final class SidecarRuntimeTest {
     serveWritesResultFrame();
     serveWritesArrayResultFrame();
     serveWritesErrorFrameForHandlerFailure();
-    serveRejectsUncorrelatedRequestWithoutErrorFrame();
+    serveWritesTerminalErrorFrameForUncorrelatedRequest();
+    serveWritesTerminalErrorFrameForMalformedInvocation();
     sidecarInvocationRejectsNonInvokeFrame();
     sidecarInvocationRejectsNonCanonicalTupleAliases();
     sidecarInvocationRejectsUnknownInvocationFields();
@@ -118,24 +119,40 @@ public final class SidecarRuntimeTest {
     check(response.contains("\"message\":\"boom\""), "message");
   }
 
-  static void serveRejectsUncorrelatedRequestWithoutErrorFrame() throws Exception {
+  static void serveWritesTerminalErrorFrameForUncorrelatedRequest() throws Exception {
     StringWriter output = new StringWriter();
     String frame =
         """
         {"type":"invoke","invocation":{"caller_ura":"easynet:///r/hub/user/alice","callee_ura":"easynet:///r/hub/device/provider","ability_ura":"demo.echo","subject_ura":"easynet:///r/hub/resource/demo","invocation_nonce":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16],"causal_context":{"form":"none"},"args":{"message":"hello"}}}
         """;
 
-    try {
-      SidecarRuntime.serve(
-          new BufferedReader(new StringReader(frame)),
-          new BufferedWriter(output),
-          invocation -> Map.of("ok", true));
-      throw new AssertionError("missing call_id must fail before error-frame emission");
-    } catch (SidecarProtocolError expected) {
-      check(expected.getMessage().contains("call_id"), "missing call_id error");
-    }
+    SidecarRuntime.serve(
+        new BufferedReader(new StringReader(frame)),
+        new BufferedWriter(output),
+        invocation -> Map.of("ok", true));
 
-    check(output.toString().isEmpty(), "uncorrelated request must not emit an error frame");
+    String response = output.toString();
+    check(response.contains("\"type\":\"error\""), "protocol error type");
+    check(response.contains("\"call_id\":\"\""), "empty call id");
+    check(response.contains("\"message\":\"sidecar frame field \\\"call_id\\\" must be a string\""), "missing call_id message");
+  }
+
+  static void serveWritesTerminalErrorFrameForMalformedInvocation() throws Exception {
+    StringWriter output = new StringWriter();
+    String frame =
+        """
+        {"type":"invoke","call_id":"call-1","invocation":{"caller_ura":"easynet:///r/hub/user/alice","callee_ura":"easynet:///r/hub/device/provider","ability_ura":"demo.echo","subject_ura":"easynet:///r/hub/resource/demo","invocation_nonce":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16],"causal_context":{"form":"none"},"args":{"message":"hello"},"descriptor_ref":"retired-provider-leak"}}
+        """;
+
+    SidecarRuntime.serve(
+        new BufferedReader(new StringReader(frame)),
+        new BufferedWriter(output),
+        invocation -> Map.of("ok", true));
+
+    String response = output.toString();
+    check(response.contains("\"type\":\"error\""), "malformed invocation error type");
+    check(response.contains("\"call_id\":\"call-1\""), "malformed invocation call id");
+    check(response.contains("canonical invocation frame"), "malformed invocation message");
   }
 
   static void sidecarInvocationRejectsNonInvokeFrame() {
