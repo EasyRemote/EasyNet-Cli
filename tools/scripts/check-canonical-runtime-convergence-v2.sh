@@ -4268,6 +4268,23 @@ if child:
 
 if "request_scoped_one_time_authority_proof" not in facade:
     raise SystemExit("authority_proof_scope_classifier:facade_missing_domain_predicate")
+for required in (
+    "fn authority_proof_audience_ura(&self) -> Result<&str, Status>",
+    "AUTHORITY_PROOF_AUDIENCE_MISSING",
+    "refusing to infer proof audience from callee",
+    "let audience_ura = self.authority_proof_audience_ura()?",
+    "authority_proof_admission_requires_daemon_audience",
+):
+    if required not in facade:
+        raise SystemExit(f"authority_proof_audience:facade_missing:{required}")
+facade_production = facade.split("#[cfg(test)]", 1)[0]
+for forbidden in (
+    "self.daemon_ura.as_deref().unwrap_or(callee_ura)",
+    ".daemon_ura.as_deref().unwrap_or(callee_ura)",
+    "unwrap_or(callee_ura)",
+):
+    if forbidden in facade_production:
+        raise SystemExit(f"authority_proof_audience:facade_legacy_fallback:{forbidden}")
 facade_funcs = re.findall(
     r"fn\s+(?P<name>\w*request_scoped\w*authority_proof\w*)\([^)]*\)\s*->\s*bool\s*\{(?P<body>.*?)\n\}",
     facade,

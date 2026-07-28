@@ -711,7 +711,9 @@ impl AdmissionFacade {
     /// Construct a facade against the supplied trust anchor and
     /// daemon URA. Production callers thread the daemon's
     /// `credentials.json`-derived URA through; tests typically pass
-    /// `None`.
+    /// `None`. AuthorityProof-bearing admission is stricter: the proof
+    /// audience is the daemon URA and therefore requires this field to be
+    /// present instead of inferring an audience from the selected callee.
     ///
     /// The trust anchor is wrapped in a fresh `SharedTrustAnchor`
     /// cell — every `verify_*` call snapshots the current anchor,
@@ -930,6 +932,19 @@ impl AdmissionFacade {
     #[must_use]
     pub fn daemon_ura(&self) -> Option<&str> {
         self.daemon_ura.as_deref()
+    }
+
+    fn authority_proof_audience_ura(&self) -> Result<&str, Status> {
+        self.daemon_ura
+            .as_deref()
+            .map(str::trim)
+            .filter(|daemon_ura| !daemon_ura.is_empty())
+            .ok_or_else(|| {
+                Status::failed_precondition(
+                    "AUTHORITY_PROOF_AUDIENCE_MISSING: AuthorityProof admission requires \
+                     a daemon URA audience; refusing to infer proof audience from callee",
+                )
+            })
     }
 
     /// Set the transport boundary that governs local self admission. Boot
@@ -1534,7 +1549,7 @@ impl AdmissionFacade {
             )))
         );
         let invocation_nonce = invocation_nonce_for_proof(envelope);
-        let audience_ura = self.daemon_ura.as_deref().unwrap_or(callee_ura);
+        let audience_ura = self.authority_proof_audience_ura()?;
         let now = Utc::now();
         self.access_control_stores
             .with_store(&proof.owner_user_id, |store| {
@@ -3217,6 +3232,25 @@ mod tests {
                 Some("easynet:///r/test/device/daemon"),
                 "easynet:///r/test/device/daemon",
             )
+        );
+    }
+
+    #[test]
+    fn authority_proof_admission_requires_daemon_audience() {
+        let facade = AdmissionFacade::new(Arc::new(RealmTrustAnchor::default()), None);
+
+        let error = facade
+            .authority_proof_audience_ura()
+            .expect_err("authority proof admission must not infer audience from callee");
+
+        assert_eq!(error.code(), tonic::Code::FailedPrecondition);
+        assert!(
+            error.message().contains("AUTHORITY_PROOF_AUDIENCE_MISSING"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            error.message().contains("refusing to infer proof audience"),
+            "unexpected error: {error}"
         );
     }
 
