@@ -1673,7 +1673,7 @@ test("runtime ability descriptor provider uses catalogue provider and runtime-ow
                 "easynet:///r/example/ability/device.dev-a.browser.open_session@1.0.0#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb!invoke",
               name: "browser.open_session",
               owner_ura: callee,
-              version: "1.0.0",
+              descriptor_version: "1.0.0",
               call_mode: "rpc",
               hints: { read_only: false },
               metadata: {},
@@ -1715,6 +1715,95 @@ test("runtime ability descriptor provider uses catalogue provider and runtime-ow
   assert.equal(calls[1][1].descriptor_ref, catalogueDescriptor);
   assert.equal(calls[1][1].subject_ura, callee);
   assert.deepEqual(calls[1][1].args, { scope: "device", owner_ura: callee });
+});
+
+test("runtime ability descriptor provider rejects retired version alias", async () => {
+  const catalogueDescriptor =
+    "easynet:///r/example/ability/device.dev-a.meta.list_abilities@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read";
+  const runtime = new sdk.RuntimeClient({
+    resolveDescriptorRef: () => JSON.stringify({ descriptor_ref: catalogueDescriptor }),
+    invoke: () =>
+      JSON.stringify({
+        ok: true,
+        terminal_state: "Completed",
+        output: {
+          abilities: [
+            {
+              ability_ura: "easynet:///r/example/ability/device.dev-a.browser.open_session",
+              descriptor_ref:
+                "easynet:///r/example/ability/device.dev-a.browser.open_session@1.0.0#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb!invoke",
+              name: "browser.open_session",
+              owner_ura: callee,
+              version: "1.0.0",
+            },
+          ],
+        },
+        terminal_receipt: canonicalRuntimeReceipt("catalogue-read-legacy-version", "completed", "Completed", 1),
+      }),
+  });
+  const provider = new sdk.RuntimeAbilityDescriptorProvider(new sdk.RuntimeAbilityClient(runtime));
+
+  await assert.rejects(
+    () =>
+      provider.list({
+        call: {
+          caller_ura: caller,
+          callee_ura: callee,
+          subject_ura: callee,
+          nonce_base64: nonce,
+          causal_context: { form: "none" },
+        },
+      }),
+    (error) =>
+      error instanceof sdk.SDKError &&
+      error.code === sdk.ErrorCode.INVALID_ARGUMENT &&
+      error.message.includes("ability descriptor row 0 field descriptor_version is required"),
+  );
+});
+
+test("runtime ability descriptor provider rejects typed descriptor projection fields", async () => {
+  const catalogueDescriptor =
+    "easynet:///r/example/ability/device.dev-a.meta.list_abilities@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read";
+  const runtime = new sdk.RuntimeClient({
+    resolveDescriptorRef: () => JSON.stringify({ descriptor_ref: catalogueDescriptor }),
+    invoke: () =>
+      JSON.stringify({
+        ok: true,
+        terminal_state: "Completed",
+        output: {
+          abilities: [
+            {
+              ability_ura: "easynet:///r/example/ability/device.dev-a.browser.open_session",
+              descriptor_ref:
+                "easynet:///r/example/ability/device.dev-a.browser.open_session@1.0.0#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb!invoke",
+              name: "browser.open_session",
+              owner_ura: callee,
+              descriptor_version: "1.0.0",
+              schema_hash: 42,
+            },
+          ],
+        },
+        terminal_receipt: canonicalRuntimeReceipt("catalogue-read-typed-field", "completed", "Completed", 1),
+      }),
+  });
+  const provider = new sdk.RuntimeAbilityDescriptorProvider(new sdk.RuntimeAbilityClient(runtime));
+
+  await assert.rejects(
+    () =>
+      provider.list({
+        call: {
+          caller_ura: caller,
+          callee_ura: callee,
+          subject_ura: callee,
+          nonce_base64: nonce,
+          causal_context: { form: "none" },
+        },
+      }),
+    (error) =>
+      error instanceof sdk.SDKError &&
+      error.code === sdk.ErrorCode.INVALID_ARGUMENT &&
+      error.message.includes("ability descriptor row 0 field schema_hash must be a string"),
+  );
 });
 
 test("runtime ability governance read auto-selects catalogue provider", async () => {

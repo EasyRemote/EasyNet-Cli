@@ -42,7 +42,7 @@ public final class RuntimeAbilityDescriptorProvider implements AbilityDescriptor
         throw SDKError.validation(
             "ability_descriptor", "ability descriptor row " + index + " must be an object");
       }
-      descriptors.add(AbilityDescriptorProjection.fromMap(copyStringMap(rawMap, index)));
+      descriptors.add(AbilityDescriptorProjection.fromRuntimeMap(copyStringMap(rawMap, index), index));
     }
     return new AbilityDescriptorPage(descriptors);
   }

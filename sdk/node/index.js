@@ -1196,9 +1196,7 @@ export class RuntimeAbilityDescriptorProvider {
     }
     return new AbilityDescriptorPage({
       descriptors: rows.map((row, index) => {
-        const descriptor = new AbilityDescriptorProjection(
-          objectValue(row, `ability descriptor row ${index}`),
-        );
+        const descriptor = projectRuntimeAbilityDescriptor(row, index);
         if (payload.abilityURA && descriptor.abilityURA !== payload.abilityURA) {
           throw invalidRuntime("runtime returned descriptor outside requested ability_ura");
         }
@@ -1234,6 +1232,82 @@ export class RuntimeAbilityDescriptorProvider {
     }
     throw invalidRuntime("ability descriptor query is ambiguous");
   }
+}
+
+function projectRuntimeAbilityDescriptor(row, index) {
+  const value = runtimeDescriptorRowObject(row, index);
+  const hints = runtimeDescriptorOptionalObject(value, "hints", index);
+  for (const field of ["read_only", "destructive", "idempotent", "streaming_only", "bidi_only"]) {
+    runtimeDescriptorOptionalBoolean(hints, `hints.${field}`, index);
+  }
+  return new AbilityDescriptorProjection({
+    ability_ura: runtimeDescriptorRequiredString(value, "ability_ura", index),
+    descriptor_ref: runtimeDescriptorRequiredString(value, "descriptor_ref", index),
+    name: runtimeDescriptorRequiredString(value, "name", index),
+    owner_ura: runtimeDescriptorRequiredString(value, "owner_ura", index),
+    version: runtimeDescriptorRequiredString(value, "descriptor_version", index),
+    schema_hash: runtimeDescriptorOptionalString(value, "schema_hash", index),
+    descriptor_hash: runtimeDescriptorOptionalString(value, "descriptor_hash", index),
+    call_mode: runtimeDescriptorOptionalString(value, "call_mode", index),
+    class: runtimeDescriptorOptionalString(value, "class", index),
+    receipt_semantics: runtimeDescriptorOptionalObject(value, "receipt_semantics", index),
+    visibility: runtimeDescriptorOptionalString(value, "visibility", index),
+    source: runtimeDescriptorOptionalString(value, "source", index),
+    description: runtimeDescriptorOptionalString(value, "description", index),
+    hints,
+    schema_summary: runtimeDescriptorOptionalObject(value, "schema_summary", index),
+    input_schema: runtimeDescriptorOptionalObject(value, "input_schema", index),
+    metadata: runtimeDescriptorOptionalObject(value, "metadata", index),
+  });
+}
+
+function runtimeDescriptorRowObject(row, index) {
+  if (!row || typeof row !== "object" || Array.isArray(row)) {
+    throw invalidRuntime(`ability descriptor row ${index} must be an object`);
+  }
+  return { ...row };
+}
+
+function runtimeDescriptorRequiredString(row, field, index) {
+  const value = row[field];
+  if (typeof value !== "string" || value.trim() === "") {
+    throw invalidRuntime(`ability descriptor row ${index} field ${field} is required`);
+  }
+  return value.trim();
+}
+
+function runtimeDescriptorOptionalString(row, field, index) {
+  const value = row[field];
+  if (value === undefined || value === null) {
+    return "";
+  }
+  if (typeof value !== "string") {
+    throw invalidRuntime(`ability descriptor row ${index} field ${field} must be a string`);
+  }
+  return value;
+}
+
+function runtimeDescriptorOptionalObject(row, field, index) {
+  const value = row[field];
+  if (value === undefined || value === null) {
+    return {};
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw invalidRuntime(`ability descriptor row ${index} field ${field} must be an object`);
+  }
+  return { ...value };
+}
+
+function runtimeDescriptorOptionalBoolean(row, field, index) {
+  const key = field.includes(".") ? field.slice(field.lastIndexOf(".") + 1) : field;
+  const value = row[key];
+  if (value === undefined || value === null) {
+    return false;
+  }
+  if (typeof value !== "boolean") {
+    throw invalidRuntime(`ability descriptor row ${index} field ${field} must be a boolean`);
+  }
+  return value;
 }
 
 export class InvocationBuilder {

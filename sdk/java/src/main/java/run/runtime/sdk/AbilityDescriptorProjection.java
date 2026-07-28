@@ -68,6 +68,27 @@ public record AbilityDescriptorProjection(
         object(fields.get("metadata"), "metadata"));
   }
 
+  static AbilityDescriptorProjection fromRuntimeMap(Map<String, Object> fields, int index) {
+    return new AbilityDescriptorProjection(
+        string(fields, runtimeRowField(index, "ability_ura"), "ability_ura"),
+        string(fields, runtimeRowField(index, "descriptor_ref"), "descriptor_ref"),
+        string(fields, runtimeRowField(index, "name"), "name"),
+        string(fields, runtimeRowField(index, "owner_ura"), "owner_ura"),
+        string(fields, runtimeRowField(index, "descriptor_version"), "descriptor_version"),
+        optionalString(fields, runtimeRowField(index, "schema_hash"), "schema_hash"),
+        optionalString(fields, runtimeRowField(index, "descriptor_hash"), "descriptor_hash"),
+        optionalString(fields, runtimeRowField(index, "call_mode"), "call_mode"),
+        optionalString(fields, runtimeRowField(index, "class"), "class"),
+        object(fields.get("receipt_semantics"), runtimeRowField(index, "receipt_semantics")),
+        optionalString(fields, runtimeRowField(index, "visibility"), "visibility"),
+        optionalString(fields, runtimeRowField(index, "source"), "source"),
+        optionalString(fields, runtimeRowField(index, "description"), "description"),
+        object(fields.get("hints"), runtimeRowField(index, "hints")),
+        object(fields.get("schema_summary"), runtimeRowField(index, "schema_summary")),
+        object(fields.get("input_schema"), runtimeRowField(index, "input_schema")),
+        object(fields.get("metadata"), runtimeRowField(index, "metadata")));
+  }
+
   public Map<String, Object> toWireObject() {
     Map<String, Object> out = new LinkedHashMap<>();
     out.put("ability_ura", abilityURA);
@@ -91,7 +112,11 @@ public record AbilityDescriptorProjection(
   }
 
   private static String string(Map<String, Object> fields, String field) {
-    Object value = fields.get(field);
+    return string(fields, field, field);
+  }
+
+  private static String string(Map<String, Object> fields, String field, String sourceField) {
+    Object value = fields.get(sourceField);
     if (!(value instanceof String string) || string.isBlank()) {
       throw SDKError.validation("ability_descriptor", field + " is required");
     }
@@ -99,7 +124,11 @@ public record AbilityDescriptorProjection(
   }
 
   private static String optionalString(Map<String, Object> fields, String field) {
-    Object value = fields.get(field);
+    return optionalString(fields, field, field);
+  }
+
+  private static String optionalString(Map<String, Object> fields, String field, String sourceField) {
+    Object value = fields.get(sourceField);
     if (value == null) {
       return "";
     }
@@ -107,6 +136,10 @@ public record AbilityDescriptorProjection(
       throw SDKError.validation("ability_descriptor", field + " must be a string or null");
     }
     return string;
+  }
+
+  private static String runtimeRowField(int index, String field) {
+    return "ability descriptor row " + index + " " + field;
   }
 
   private static Map<String, Object> object(Object value, String field) {

@@ -6509,12 +6509,27 @@ check_sdk_ability_descriptor_version_field_contract() {
   local go_test="$cli_root/sdk/go/ability_descriptor_test.go"
   local py="$cli_root/sdk/python/easynet_sdk/ability_descriptor.py"
   local py_test="$cli_root/sdk/python/tests/test_ability_descriptor.py"
+  local java_provider="$cli_root/sdk/java/src/main/java/run/runtime/sdk/RuntimeAbilityDescriptorProvider.java"
+  local java_projection="$cli_root/sdk/java/src/main/java/run/runtime/sdk/AbilityDescriptorProjection.java"
+  local java_test="$cli_root/sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
+  local node="$cli_root/sdk/node/index.js"
+  local node_test="$cli_root/sdk/node/test/runtime-core.test.mjs"
 
-  "$PYTHON_BIN" - "$go" "$go_test" "$py" "$py_test" <<'PY'
+  "$PYTHON_BIN" - "$go" "$go_test" "$py" "$py_test" "$java_provider" "$java_projection" "$java_test" "$node" "$node_test" <<'PY'
 import sys
 from pathlib import Path
 
-go_path, go_test_path, py_path, py_test_path = map(Path, sys.argv[1:])
+(
+    go_path,
+    go_test_path,
+    py_path,
+    py_test_path,
+    java_provider_path,
+    java_projection_path,
+    java_test_path,
+    node_path,
+    node_test_path,
+) = map(Path, sys.argv[1:])
 
 def read(path: Path) -> str:
     if not path.exists():
@@ -6556,6 +6571,29 @@ if "test_runtime_ability_descriptor_provider_rejects_legacy_version_alias" not i
     raise SystemExit("sdk_python_ability_descriptor_version_alias_negative_test_missing")
 if '"version": "1.0.0"' not in py_tests or '"descriptor_version": "2.0.0"' not in py_tests:
     raise SystemExit("sdk_python_ability_descriptor_version_vectors_missing")
+
+java_provider = read(java_provider_path)
+java_projection = read(java_projection_path)
+if "AbilityDescriptorProjection.fromRuntimeMap(copyStringMap(rawMap, index), index)" not in java_provider:
+    raise SystemExit("sdk_java_ability_descriptor_provider_not_descriptor_version_projector")
+if 'string(fields, runtimeRowField(index, "descriptor_version"), "descriptor_version")' not in java_projection:
+    raise SystemExit("sdk_java_ability_descriptor_runtime_version_not_descriptor_version_owned")
+java_tests = read(java_test_path)
+if 'browserRow.put("descriptor_version", "1.0.0")' not in java_tests:
+    raise SystemExit("sdk_java_ability_descriptor_runtime_descriptor_version_vector_missing")
+if 'legacyVersionRow.put("version", "1.0.0")' not in java_tests:
+    raise SystemExit("sdk_java_ability_descriptor_legacy_version_alias_negative_test_missing")
+
+node = read(node_path)
+if 'version: runtimeDescriptorRequiredString(value, "descriptor_version", index)' not in node:
+    raise SystemExit("sdk_node_ability_descriptor_runtime_version_not_descriptor_version_owned")
+if "projectRuntimeAbilityDescriptor(row, index)" not in node:
+    raise SystemExit("sdk_node_ability_descriptor_provider_not_strict_projector")
+node_tests = read(node_test_path)
+if 'descriptor_version: "1.0.0"' not in node_tests:
+    raise SystemExit("sdk_node_ability_descriptor_runtime_descriptor_version_vector_missing")
+if 'runtime ability descriptor provider rejects retired version alias' not in node_tests:
+    raise SystemExit("sdk_node_ability_descriptor_legacy_version_alias_negative_test_missing")
 PY
 }
 
@@ -6566,15 +6604,30 @@ check_sdk_ability_descriptor_projection_strict_wire_contract() {
   local py="$cli_root/sdk/python/easynet_sdk/ability_descriptor.py"
   local py_test="$cli_root/sdk/python/tests/test_ability_descriptor.py"
   local java="$cli_root/sdk/java/src/main/java/run/runtime/sdk/AbilityDescriptorProjection.java"
+  local java_provider="$cli_root/sdk/java/src/main/java/run/runtime/sdk/RuntimeAbilityDescriptorProvider.java"
   local java_test="$cli_root/sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
   local swift="$cli_root/sdk/swift/Sources/RuntimeSDK/AbilityDescriptor.swift"
   local swift_test="$cli_root/sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift"
+  local node="$cli_root/sdk/node/index.js"
+  local node_test="$cli_root/sdk/node/test/runtime-core.test.mjs"
 
-  "$PYTHON_BIN" - "$go" "$go_test" "$py" "$py_test" "$java" "$java_test" "$swift" "$swift_test" <<'PY'
+  "$PYTHON_BIN" - "$go" "$go_test" "$py" "$py_test" "$java" "$java_provider" "$java_test" "$swift" "$swift_test" "$node" "$node_test" <<'PY'
 import sys
 from pathlib import Path
 
-go_path, go_test_path, py_path, py_test_path, java_path, java_test_path, swift_path, swift_test_path = map(Path, sys.argv[1:])
+(
+    go_path,
+    go_test_path,
+    py_path,
+    py_test_path,
+    java_path,
+    java_provider_path,
+    java_test_path,
+    swift_path,
+    swift_test_path,
+    node_path,
+    node_test_path,
+) = map(Path, sys.argv[1:])
 
 def read(path: Path) -> str:
     if not path.exists():
@@ -6630,6 +6683,9 @@ for token in (
 java = read(java_path)
 if "field + \" must be a string or null\"" not in java:
     raise SystemExit("sdk_java_ability_descriptor_optional_string_not_strict")
+java_provider = read(java_provider_path)
+if "AbilityDescriptorProjection.fromRuntimeMap(copyStringMap(rawMap, index), index)" not in java_provider:
+    raise SystemExit("sdk_java_ability_descriptor_provider_not_strict_runtime_projector")
 java_tests = read(java_test_path)
 if "schema_hash must be a string or null" not in java_tests:
     raise SystemExit("sdk_java_ability_descriptor_strict_test_missing")
@@ -6649,6 +6705,27 @@ if 'raw["version"]' in swift:
 swift_tests = read(swift_test_path)
 if "schema_hash must be a string" not in swift_tests:
     raise SystemExit("sdk_swift_ability_descriptor_strict_test_missing")
+
+node = read(node_path)
+for token in (
+    "function projectRuntimeAbilityDescriptor(",
+    "runtimeDescriptorRequiredString(value, \"descriptor_version\", index)",
+    "runtimeDescriptorOptionalString(value, \"schema_hash\", index)",
+    "runtimeDescriptorOptionalObject(value, \"input_schema\", index)",
+    "runtimeDescriptorOptionalBoolean(hints, `hints.${field}`, index)",
+):
+    if token not in node:
+        raise SystemExit(f"sdk_node_ability_descriptor_strict_wire_missing:{token}")
+if "new AbilityDescriptorProjection(\n          objectValue(row" in node:
+    raise SystemExit("sdk_node_ability_descriptor_provider_uses_public_projection_directly")
+node_tests = read(node_test_path)
+for token in (
+    "runtime ability descriptor provider rejects retired version alias",
+    "runtime ability descriptor provider rejects typed descriptor projection fields",
+    "schema_hash must be a string",
+):
+    if token not in node_tests:
+        raise SystemExit(f"sdk_node_ability_descriptor_strict_test_missing:{token}")
 PY
 }
 

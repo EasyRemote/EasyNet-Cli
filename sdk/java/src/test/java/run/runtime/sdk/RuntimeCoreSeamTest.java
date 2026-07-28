@@ -1362,7 +1362,7 @@ public final class RuntimeCoreSeamTest {
     browserRow.put("descriptor_ref", browserDescriptor);
     browserRow.put("name", "browser.open_session");
     browserRow.put("owner_ura", CALLEE);
-    browserRow.put("version", "1.0.0");
+    browserRow.put("descriptor_version", "1.0.0");
     browserRow.put("call_mode", "rpc");
     browserRow.put("receipt_semantics", Map.of("kind", "operational"));
     browserRow.put("hints", Map.of("read_only", false));
@@ -1400,11 +1400,20 @@ public final class RuntimeCoreSeamTest {
     check(args.get("scope").equals("owner"), "catalogue scope argument");
     check(args.get("owner_ura").equals(CALLEE), "catalogue owner argument");
     Map<String, Object> typedScalarRow = new LinkedHashMap<>(browserRow);
+    typedScalarRow.put("version", "1.0.0");
     typedScalarRow.put("schema_hash", 42);
     expectSDKError(
         ErrorCode.INVALID_ARGUMENT,
         "schema_hash must be a string or null",
         () -> AbilityDescriptorProjection.fromMap(typedScalarRow));
+    Map<String, Object> legacyVersionRow = new LinkedHashMap<>(browserRow);
+    legacyVersionRow.remove("descriptor_version");
+    legacyVersionRow.put("version", "1.0.0");
+    transport.nextOutput = Map.of("abilities", List.of(legacyVersionRow));
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        "ability descriptor row 0 descriptor_version is required",
+        () -> descriptors.list(new AbilityDescriptorListRequest(runtimeCallContext(), "owner", CALLEE, "")));
   }
 
   private static void runtimeAbilityClientRejectsCatalogueReadPublicBuild() {
