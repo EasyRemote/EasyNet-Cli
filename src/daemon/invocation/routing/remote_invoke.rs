@@ -471,10 +471,6 @@ pub(crate) struct RemoteInvocationTuplePlan<'a> {
     timeout: Duration,
 }
 
-pub(crate) fn declared_root_causal_context() -> CausalContext {
-    CausalContext::None
-}
-
 impl<'a> RemoteInvocationTuplePlan<'a> {
     pub(crate) fn public_explicit(
         target: &'a RemoteAbilityInvocationTarget,

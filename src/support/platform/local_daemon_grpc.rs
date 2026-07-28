@@ -172,6 +172,7 @@ pub(crate) struct LocalDaemonTargetedBidiRequest<'a> {
     pub callee_ura: &'a str,
     pub subject_ura: &'a str,
     pub invocation_nonce: [u8; 16],
+    pub causal_context: axon_sdk::invocation::CausalContext,
     pub timeout: Duration,
     pub input_frames: Vec<serde_json::Value>,
     pub max_frames: Option<usize>,
@@ -445,12 +446,13 @@ pub(crate) fn invoke_local_daemon_system_ability_targeted_root_timeout(
 }
 
 #[cfg(feature = "axon-pb")]
-pub(crate) fn invoke_local_daemon_ability_targeted_explicit_root_timeout(
+pub(crate) fn invoke_local_daemon_ability_targeted_explicit_causal_timeout(
     function_name: &str,
     payload_json: serde_json::Value,
     callee_ura: &str,
     subject_ura: &str,
     invocation_nonce: [u8; 16],
+    causal_context: axon_sdk::invocation::CausalContext,
     timeout: Duration,
 ) -> anyhow::Result<serde_json::Value> {
     let tuple_plan = LocalDaemonSystemTuplePlan::targeted_explicit_causal(
@@ -459,11 +461,7 @@ pub(crate) fn invoke_local_daemon_ability_targeted_explicit_root_timeout(
         callee_ura,
         subject_ura,
         invocation_nonce,
-        axon_sdk::pb::axon::v1::CausalContext {
-            form: Some(axon_sdk::pb::axon::v1::causal_context::Form::None(
-                axon_sdk::pb::axon::v1::Empty {},
-            )),
-        },
+        public_causal_context_to_wire(&causal_context),
         timeout,
     )?;
     invoke_local_daemon_ability_with_tuple_plan(tuple_plan)
@@ -496,12 +494,13 @@ pub(crate) fn invoke_local_daemon_system_ability_targeted_stream_root(
 }
 
 #[cfg(feature = "axon-pb")]
-pub(crate) fn invoke_local_daemon_ability_targeted_stream_explicit_root(
+pub(crate) fn invoke_local_daemon_ability_targeted_stream_explicit_causal(
     function_name: &str,
     payload_json: serde_json::Value,
     callee_ura: &str,
     subject_ura: &str,
     invocation_nonce: [u8; 16],
+    causal_context: axon_sdk::invocation::CausalContext,
     timeout: Duration,
     max_frames: Option<usize>,
 ) -> anyhow::Result<Vec<crate::support::platform::local_invoke::LocalStreamFrame>> {
@@ -511,11 +510,7 @@ pub(crate) fn invoke_local_daemon_ability_targeted_stream_explicit_root(
         callee_ura,
         subject_ura,
         invocation_nonce,
-        axon_sdk::pb::axon::v1::CausalContext {
-            form: Some(axon_sdk::pb::axon::v1::causal_context::Form::None(
-                axon_sdk::pb::axon::v1::Empty {},
-            )),
-        },
+        public_causal_context_to_wire(&causal_context),
         timeout,
     )?;
     invoke_local_daemon_ability_stream_with_tuple_plan(tuple_plan, max_frames)
@@ -524,7 +519,7 @@ pub(crate) fn invoke_local_daemon_ability_targeted_stream_explicit_root(
 /// Open a daemon-hosted bidirectional ability through Axon's local
 /// Invocation gRPC transport and drain JSON-frame down output.
 #[cfg(feature = "axon-pb")]
-pub(crate) fn invoke_local_daemon_ability_targeted_bidi_json_frames_explicit_root(
+pub(crate) fn invoke_local_daemon_ability_targeted_bidi_json_frames_explicit_causal(
     request: LocalDaemonTargetedBidiRequest<'_>,
 ) -> anyhow::Result<Vec<crate::support::platform::local_invoke::LocalBidiFrame>> {
     let LocalDaemonTargetedBidiRequest {
@@ -533,6 +528,7 @@ pub(crate) fn invoke_local_daemon_ability_targeted_bidi_json_frames_explicit_roo
         callee_ura,
         subject_ura,
         invocation_nonce,
+        causal_context,
         timeout,
         input_frames,
         max_frames,
@@ -543,11 +539,7 @@ pub(crate) fn invoke_local_daemon_ability_targeted_bidi_json_frames_explicit_roo
         callee_ura,
         subject_ura,
         invocation_nonce,
-        axon_sdk::pb::axon::v1::CausalContext {
-            form: Some(axon_sdk::pb::axon::v1::causal_context::Form::None(
-                axon_sdk::pb::axon::v1::Empty {},
-            )),
-        },
+        public_causal_context_to_wire(&causal_context),
         timeout,
     )?;
     invoke_local_daemon_ability_bidi_json_frames_with_tuple_plan(
@@ -735,6 +727,37 @@ fn invoke_local_daemon_ability_bidi_json_frames_with_tuple_plan(
     })
 }
 
+#[cfg(feature = "axon-pb")]
+fn public_causal_context_to_wire(
+    causal_context: &axon_sdk::invocation::CausalContext,
+) -> axon_sdk::pb::axon::v1::CausalContext {
+    use axon_sdk::invocation::CausalContext;
+    use axon_sdk::pb::axon::v1 as pb;
+
+    let receipt_ref_to_wire = |reference: &axon_sdk::invocation::ReceiptRef| pb::ReceiptRef {
+        receipt_hash: reference.receipt_hash.to_vec(),
+        receipt_ura: reference.receipt_ura.clone(),
+    };
+
+    pb::CausalContext {
+        form: Some(match causal_context {
+            CausalContext::None => pb::causal_context::Form::None(pb::Empty {}),
+            CausalContext::Scalar(reference) => {
+                pb::causal_context::Form::Scalar(receipt_ref_to_wire(reference))
+            }
+            CausalContext::List(prior) => pb::causal_context::Form::List(pb::ReceiptList {
+                prior: prior.iter().map(receipt_ref_to_wire).collect(),
+            }),
+            CausalContext::Merkle { root, proof_ura } => {
+                pb::causal_context::Form::Merkle(pb::MerkleRoot {
+                    root: root.to_vec(),
+                    proof_ura: proof_ura.clone(),
+                })
+            }
+        }),
+    }
+}
+
 #[cfg(not(feature = "axon-pb"))]
 pub(crate) fn invoke_local_daemon_system_ability_targeted_stream_root(
     function_name: &str,
@@ -752,12 +775,13 @@ pub(crate) fn invoke_local_daemon_system_ability_targeted_stream_root(
 }
 
 #[cfg(not(feature = "axon-pb"))]
-pub(crate) fn invoke_local_daemon_ability_targeted_stream_explicit_root(
+pub(crate) fn invoke_local_daemon_ability_targeted_stream_explicit_causal(
     function_name: &str,
     _payload_json: serde_json::Value,
     _callee_ura: &str,
     _subject_ura: &str,
     _invocation_nonce: [u8; 16],
+    _causal_context: axon_sdk::invocation::CausalContext,
     _timeout: Duration,
     _max_frames: Option<usize>,
 ) -> anyhow::Result<Vec<crate::support::platform::local_invoke::LocalStreamFrame>> {
@@ -769,7 +793,7 @@ pub(crate) fn invoke_local_daemon_ability_targeted_stream_explicit_root(
 }
 
 #[cfg(not(feature = "axon-pb"))]
-pub(crate) fn invoke_local_daemon_ability_targeted_bidi_json_frames_explicit_root(
+pub(crate) fn invoke_local_daemon_ability_targeted_bidi_json_frames_explicit_causal(
     request: LocalDaemonTargetedBidiRequest<'_>,
 ) -> anyhow::Result<Vec<crate::support::platform::local_invoke::LocalBidiFrame>> {
     let function_name = request.function_name;
@@ -1744,12 +1768,13 @@ pub(crate) fn invoke_local_daemon_system_ability_targeted_root_timeout(
 }
 
 #[cfg(not(feature = "axon-pb"))]
-pub(crate) fn invoke_local_daemon_ability_targeted_explicit_root_timeout(
+pub(crate) fn invoke_local_daemon_ability_targeted_explicit_causal_timeout(
     function_name: &str,
     _payload_json: serde_json::Value,
     _callee_ura: &str,
     _subject_ura: &str,
     _invocation_nonce: [u8; 16],
+    _causal_context: axon_sdk::invocation::CausalContext,
     _timeout: Duration,
 ) -> anyhow::Result<serde_json::Value> {
     Err(anyhow::Error::new(

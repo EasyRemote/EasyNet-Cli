@@ -45,10 +45,10 @@ use serde_json::Value;
 #[cfg(not(feature = "axon-pb"))]
 use crate::cli::commands::invocation_tuple::remote_invocation_transport_unsupported;
 use crate::cli::commands::invocation_tuple::{
-    require_causal_root, required_nonce_hex, required_subject, AbilityInvocationRef,
+    required_causal_context, required_nonce_hex, required_subject, AbilityInvocationRef,
 };
 use crate::support::platform::local_invoke::{
-    invoke_local_target_explicit_root_timeout, LocalAbilityTarget,
+    invoke_local_target_explicit_causal_timeout, LocalAbilityTarget,
 };
 use crate::support::platform::{output, timeouts};
 
@@ -103,10 +103,16 @@ pub struct InvokeArgs {
     #[arg(long, value_name = "32_HEX")]
     pub nonce_hex: Option<String>,
     /// Declare that this public invocation has no causal parent. Required for
-    /// `--node` root calls; future child/resume surfaces should pass an
-    /// explicit non-root causal context instead of this flag.
+    /// root calls. Mutually exclusive with --causal-context-json.
     #[arg(long)]
     pub causal_root: bool,
+    /// Explicit non-root causal context JSON. Accepted forms are:
+    /// {"form":"scalar","receipt_hash_hex":"<64_HEX>","receipt_ura":"<URA>"},
+    /// {"form":"list","prior":[...]}, or
+    /// {"form":"merkle","root_hex":"<64_HEX>","proof_ura":"<URA>"}.
+    /// Root calls must use --causal-root so root placement has one encoding.
+    #[arg(long, value_name = "JSON")]
+    pub causal_context_json: Option<String>,
 }
 
 pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
@@ -161,13 +167,17 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
             let surface = "remote ability invoke with --node";
             let subject = required_subject(invoke_args.subject.as_deref(), surface)?.to_string();
             let invocation_nonce = required_nonce_hex(invoke_args.nonce_hex.as_deref(), surface)?;
-            require_causal_root(invoke_args.causal_root, surface)?;
+            let causal_context = required_causal_context(
+                invoke_args.causal_root,
+                invoke_args.causal_context_json.as_deref(),
+                surface,
+            )?;
             let request = crate::daemon::invocation::routing::remote_invoke::RemoteInvocationTuplePlan::public_explicit(
                 &target_call,
                 caller_ura,
                 subject,
                 invocation_nonce,
-                crate::daemon::invocation::routing::remote_invoke::declared_root_causal_context(),
+                causal_context,
                 arguments,
                 timeout,
             )?
@@ -196,15 +206,20 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
             let surface = "local ability invoke";
             let subject = required_subject(invoke_args.subject.as_deref(), surface)?;
             let invocation_nonce = required_nonce_hex(invoke_args.nonce_hex.as_deref(), surface)?;
-            require_causal_root(invoke_args.causal_root, surface)?;
+            let causal_context = required_causal_context(
+                invoke_args.causal_root,
+                invoke_args.causal_context_json.as_deref(),
+                surface,
+            )?;
             let dispatch_name = ability_selector.local_registry_ability();
             let target = LocalAbilityTarget::from_selector(ability_selector);
             debug_assert_eq!(target.dispatch_name(), dispatch_name);
-            let value = invoke_local_target_explicit_root_timeout(
+            let value = invoke_local_target_explicit_causal_timeout(
                 &target,
                 arguments,
                 subject,
                 invocation_nonce,
+                causal_context,
                 timeout,
             )?;
             (value, "local daemon".to_string())
@@ -307,6 +322,7 @@ mod tests {
             subject: None,
             nonce_hex: None,
             causal_root: false,
+            causal_context_json: None,
         });
         let err = res.expect_err("must reject non-canonical --node");
         let msg = format!("{err}");
@@ -338,6 +354,7 @@ mod tests {
             subject: None,
             nonce_hex: None,
             causal_root: false,
+            causal_context_json: None,
         });
         let err = res.expect_err("must reject empty --node");
         assert!(format!("{err}").contains("empty"));
@@ -356,6 +373,7 @@ mod tests {
             subject: None,
             nonce_hex: None,
             causal_root: false,
+            causal_context_json: None,
         });
         let err = res.expect_err("must reject malformed JSON");
         assert!(format!("{err:#}").contains("parse --args JSON"));

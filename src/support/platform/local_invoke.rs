@@ -968,21 +968,23 @@ impl LocalRuntimeStateReadAttachment {
 
 /// Invoke a canonical local target with public-ingress tuple facts.
 ///
-/// This is the user-facing ability-invoke path: subject, nonce, and root
-/// causal placement are declared by the caller before daemon transport entry.
-pub fn invoke_local_target_explicit_root_timeout(
+/// This is the user-facing ability-invoke path: subject, nonce, and causal
+/// placement are declared by the caller before daemon transport entry.
+pub fn invoke_local_target_explicit_causal_timeout(
     target: &LocalAbilityTarget,
     args: Value,
     subject_ura: &str,
     invocation_nonce: [u8; 16],
+    causal_context: axon_sdk::invocation::CausalContext,
     timeout: std::time::Duration,
 ) -> anyhow::Result<Value> {
-    crate::support::platform::local_daemon_grpc::invoke_local_daemon_ability_targeted_explicit_root_timeout(
+    crate::support::platform::local_daemon_grpc::invoke_local_daemon_ability_targeted_explicit_causal_timeout(
         target.dispatch_name(),
         args,
         target.callee_ura(),
         subject_ura,
         invocation_nonce,
+        causal_context,
         timeout,
     )
 }
@@ -1039,20 +1041,22 @@ impl LocalRuntimeCatalogueReadIssuer {
 }
 
 /// Stream a canonical local Ability URA target with public-ingress tuple facts.
-pub fn invoke_local_target_stream_explicit_root(
+pub fn invoke_local_target_stream_explicit_causal(
     target: &LocalAbilityTarget,
     args: Value,
     subject_ura: &str,
     invocation_nonce: [u8; 16],
+    causal_context: axon_sdk::invocation::CausalContext,
     timeout: std::time::Duration,
     max_frames: Option<usize>,
 ) -> anyhow::Result<Vec<LocalStreamFrame>> {
-    crate::support::platform::local_daemon_grpc::invoke_local_daemon_ability_targeted_stream_explicit_root(
+    crate::support::platform::local_daemon_grpc::invoke_local_daemon_ability_targeted_stream_explicit_causal(
         target.dispatch_name(),
         args,
         target.callee_ura(),
         subject_ura,
         invocation_nonce,
+        causal_context,
         timeout,
         max_frames,
     )
@@ -1060,22 +1064,24 @@ pub fn invoke_local_target_stream_explicit_root(
 
 /// Open a canonical local Ability URA target as an InvokeBidi JSON-frame
 /// session and drain a bounded number of down frames.
-pub fn invoke_local_target_bidi_json_frames_explicit_root(
+pub fn invoke_local_target_bidi_json_frames_explicit_causal(
     target: &LocalAbilityTarget,
     args: Value,
     subject_ura: &str,
     invocation_nonce: [u8; 16],
+    causal_context: axon_sdk::invocation::CausalContext,
     timeout: std::time::Duration,
     input_frames: Vec<Value>,
     max_frames: Option<usize>,
 ) -> anyhow::Result<Vec<LocalBidiFrame>> {
-    crate::support::platform::local_daemon_grpc::invoke_local_daemon_ability_targeted_bidi_json_frames_explicit_root(
+    crate::support::platform::local_daemon_grpc::invoke_local_daemon_ability_targeted_bidi_json_frames_explicit_causal(
         crate::support::platform::local_daemon_grpc::LocalDaemonTargetedBidiRequest {
             function_name: target.dispatch_name(),
             payload_json: args,
             callee_ura: target.callee_ura(),
             subject_ura,
             invocation_nonce,
+            causal_context,
             timeout,
             input_frames,
             max_frames,
