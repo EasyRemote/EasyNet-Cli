@@ -1,4 +1,5 @@
 import base64
+import inspect
 import json
 import unittest
 from dataclasses import replace
@@ -35,6 +36,7 @@ from easynet_sdk import (
 )
 from easynet_sdk.authorized_runtime_session import _descriptor_resolution_from_error
 from easynet_sdk._runtime_subjects import is_runtime_state_read_subject_ura
+from easynet_sdk._session_authority_subjects import session_authority_admits_subject
 
 
 class AuthorizedRuntimeSessionTests(unittest.TestCase):
@@ -355,6 +357,14 @@ class AuthorizedRuntimeSessionTests(unittest.TestCase):
             is_runtime_state_read_subject_ura(
                 "easynet:///r/example/resource/user.00000000-0000-0000-0000-000000000000/runtime-state/read"
             )
+        )
+
+    def test_session_authority_subject_helper_has_single_subject_interpreter(
+        self,
+    ) -> None:
+        self.assertEqual(
+            tuple(inspect.signature(session_authority_admits_subject).parameters),
+            ("authority", "subject_ura"),
         )
 
     def test_history_rejects_path_substring_owner_subject_before_receipt_provider(self) -> None:

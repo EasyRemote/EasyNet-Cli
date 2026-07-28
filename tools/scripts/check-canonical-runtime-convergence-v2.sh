@@ -5015,6 +5015,7 @@ check_sdk_history_authority_subject_contract() {
   local go_receipt="$cli_root/sdk/go/receipt.go"
   local go_receipt_test="$cli_root/sdk/go/receipt_test.go"
   local py="$cli_root/sdk/python/easynet_sdk/authorized_runtime_session.py"
+  local py_runtime="$cli_root/sdk/python/easynet_sdk/runtime_ability.py"
   local py_authority="$cli_root/sdk/python/easynet_sdk/authority.py"
   local py_helper="$cli_root/sdk/python/easynet_sdk/_session_authority_subjects.py"
   local py_subjects="$cli_root/sdk/python/easynet_sdk/_runtime_subjects.py"
@@ -5028,7 +5029,7 @@ check_sdk_history_authority_subject_contract() {
   local node_principals="$cli_root/sdk/node/runtime-principals.js"
   local node_test="$cli_root/sdk/node/test/runtime-core.test.mjs"
 
-  "$PYTHON_BIN" - "$go" "$go_runtime" "$go_helper" "$go_subjects" "$go_test" "$go_receipt" "$go_receipt_test" "$py" "$py_authority" "$py_helper" "$py_subjects" "$py_test" "$py_authority_test" "$py_receipt" "$py_receipt_guard" "$py_receipt_test" "$node" "$node_subjects" "$node_principals" "$node_test" <<'PY'
+  "$PYTHON_BIN" - "$go" "$go_runtime" "$go_helper" "$go_subjects" "$go_test" "$go_receipt" "$go_receipt_test" "$py" "$py_runtime" "$py_authority" "$py_helper" "$py_subjects" "$py_test" "$py_authority_test" "$py_receipt" "$py_receipt_guard" "$py_receipt_test" "$node" "$node_subjects" "$node_principals" "$node_test" <<'PY'
 import sys
 from pathlib import Path
 
@@ -5041,6 +5042,7 @@ from pathlib import Path
     go_receipt_path,
     go_receipt_test_path,
     py_path,
+    py_runtime_path,
     py_authority_path,
     py_helper_path,
     py_subjects_path,
@@ -5227,6 +5229,7 @@ if go:
 
 py = read(py_path)
 if py:
+    py_runtime = read(py_runtime_path)
     py_authority = read(py_authority_path)
     py_authority_test = read(py_authority_test_path)
     py_helper = read(py_helper_path)
@@ -5242,6 +5245,19 @@ if py:
         "def session_authority_admits_subject(",
         "sdk_python_authority_subject_shared_helper_missing",
     )
+    py_helper_signature = section(
+        py_helper,
+        "def session_authority_admits_subject(",
+        ") -> bool:",
+    )
+    if "AddressingProjection" in py_helper:
+        raise SystemExit("sdk_python_authority_subject_preparsed_projection_seam")
+    if "subject:" in py_helper_signature:
+        raise SystemExit("sdk_python_authority_subject_extra_projection_parameter")
+    if "subject_ura: str" not in py_helper_signature:
+        raise SystemExit("sdk_python_authority_subject_ura_parameter_not_typed")
+    if "session_authority_admits_subject(\n        authority,\n        envelope_subject_ura,\n        envelope_subject," in py_runtime:
+        raise SystemExit("sdk_python_runtime_ability_passes_preparsed_subject_projection")
     require(
         py_subjects_path,
         "def runtime_state_read_subject_ura(",
@@ -5437,6 +5453,11 @@ if py:
         py_test_path,
         "test_rejects_path_substring_owner_subject_before_dispatch",
         "sdk_python_authority_path_substring_regression_test_missing",
+    )
+    require(
+        py_test_path,
+        "test_session_authority_subject_helper_has_single_subject_interpreter",
+        "sdk_python_authority_subject_single_interpreter_test_missing",
     )
 
 node = read(node_path)

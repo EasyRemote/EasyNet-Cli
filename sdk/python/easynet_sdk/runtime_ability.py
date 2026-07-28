@@ -436,7 +436,6 @@ def _validate_runtime_authority_binding(
     if not session_authority_admits_subject(
         authority,
         envelope_subject_ura,
-        envelope_subject,
     ):
         raise _invalid(
             "runtime session authority does not admit descriptor-bound subject_ura"

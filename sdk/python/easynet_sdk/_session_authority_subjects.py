@@ -3,18 +3,17 @@
 from __future__ import annotations
 
 from .authority import SessionAuthority, canonical_session_authority_id
-from .axon_addressing import AddressingProjection, parse_ura
+from .axon_addressing import parse_ura
 from .errors import SDKError
 
 
 def session_authority_admits_subject(
     authority: SessionAuthority,
     subject_ura: str,
-    subject: AddressingProjection | None = None,
 ) -> bool:
     """Return whether a session authority admits one descriptor-bound subject.
 
-    The rule mirrors the Go SDK helper:
+    The shared SDK predicate parses the canonical `subject_ura` itself:
     - exact `subject_ura` equality is always accepted;
     - a user session authority may admit resources owned by that user;
     - an agent-owned resource is admitted only when the agent owner is the same
@@ -28,11 +27,10 @@ def session_authority_admits_subject(
         return False
     if authority.subject_ura.strip() == subject_ura.strip():
         return True
-    if subject is None:
-        try:
-            subject = parse_ura(subject_ura.strip())
-        except SDKError:
-            return False
+    try:
+        subject = parse_ura(subject_ura.strip())
+    except SDKError:
+        return False
     if subject.kind != "resource":
         return False
     owner_id = subject.components.get("owner_id")
