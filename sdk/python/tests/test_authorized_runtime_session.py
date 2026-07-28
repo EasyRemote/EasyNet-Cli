@@ -291,7 +291,7 @@ class AuthorizedRuntimeSessionTests(unittest.TestCase):
 
     def test_history_uses_receipt_provider_authority_scope(self) -> None:
         fixture = _SessionFixture()
-        fixture.receipts.history_list_scope = "receipt.catalog.list"
+        fixture.receipts.history_list_scope = "invocation.history.list"
         request = ReceiptListRequest(
             call=RuntimeCallContext(
                 caller_ura="easynet:///r/example/agent/backend",
@@ -301,8 +301,8 @@ class AuthorizedRuntimeSessionTests(unittest.TestCase):
                 causal_context={"form": "none"},
                 authority=_session_authority(
                     {
-                        "scopes": ["receipt.catalog.list"],
-                        "allowed_followup_abilities": ["receipt.catalog.list"],
+                        "scopes": ["invocation.history.list"],
+                        "allowed_followup_abilities": ["invocation.history.list"],
                     }
                 ),
             ),

@@ -96,9 +96,6 @@ const RUNTIME_GOVERNANCE_READ_ABILITIES = Object.freeze([
   "invocation.history.path",
   "invocation.record.get",
   "invocation.trace.get",
-  "receipt.catalog.list",
-  "receipt.catalog.get",
-  "receipt.catalog.trace",
 ]);
 const RUNTIME_ABILITY_DESCRIPTOR_PROVIDER = "ability_descriptor";
 const RUNTIME_RECEIPT_HISTORY_PROVIDER = "receipt_history";
@@ -3847,10 +3844,8 @@ function runtimeReceiptReadAbility(value) {
   return (
     value.startsWith("invocation.history.") ||
     value.startsWith("invocation.trace.") ||
-    value.startsWith("receipt.catalog.") ||
     value.includes(".invocation.history.") ||
-    value.includes(".invocation.trace.") ||
-    value.includes(".receipt.catalog.")
+    value.includes(".invocation.trace.")
   );
 }
 

@@ -139,82 +139,6 @@ func TestRuntimeReceiptProviderUsesCanonicalHistoryAndTraceAbilities(t *testing.
 	}
 }
 
-func TestRuntimeReceiptProviderUsesExplicitRouteSet(t *testing.T) {
-	var descriptors []string
-	transport := RuntimeTransportFunc{InvokeFunc: func(_ context.Context, raw []byte) ([]byte, error) {
-		var draft map[string]any
-		if err := json.Unmarshal(raw, &draft); err != nil {
-			return nil, err
-		}
-		descriptor, _ := draft["descriptor_ref"].(string)
-		descriptors = append(descriptors, descriptor)
-		var output map[string]any
-		switch {
-		case strings.Contains(descriptor, "receipt.catalog.list"):
-			output = map[string]any{
-				"ledger_ura": "easynet:///r/example/resource/device.dev-a/billing/invocations",
-				"records":    []any{},
-			}
-		case strings.Contains(descriptor, "receipt.catalog.get"):
-			output = map[string]any{
-				"ledger_ura": "easynet:///r/example/resource/device.dev-a/billing/invocations",
-				"record":     nil,
-			}
-		case strings.Contains(descriptor, "receipt.catalog.trace"):
-			output = map[string]any{
-				"ledger_ura": "easynet:///r/example/resource/device.dev-a/billing/invocations",
-				"trace_id":   "trace-1",
-				"nodes":      []any{},
-				"edges":      []any{},
-			}
-		default:
-			t.Fatalf("unexpected receipt route descriptor_ref: %s", descriptor)
-		}
-		encoded, err := json.Marshal(output)
-		if err != nil {
-			return nil, err
-		}
-		return runtimeAbilityResultJSON(true, string(encoded), "", false), nil
-	}, ResolveDescriptorRefFunc: testResolveDescriptorRef(t)}
-	runtime, _ := NewRuntimeClient(transport)
-	ability, _ := NewRuntimeAbilityClient(runtime, NewCanonicalAddressing())
-	routes, err := newRuntimeReceiptRouteSet(
-		"receipt.catalog.list",
-		"receipt.catalog.get",
-		"receipt.catalog.trace",
-	)
-	if err != nil {
-		t.Fatalf("newRuntimeReceiptRouteSet: %v", err)
-	}
-	provider, err := newRuntimeReceiptProviderWithRoutes(ability, routes)
-	if err != nil {
-		t.Fatalf("newRuntimeReceiptProviderWithRoutes: %v", err)
-	}
-
-	if _, err := provider.List(context.Background(), ReceiptListRequest{Call: runtimeReceiptHistoryTestContextWithScope(t, "receipt.catalog.list")}); err != nil {
-		t.Fatalf("List: %v", err)
-	}
-	if _, err := provider.Get(context.Background(), ReceiptGetRequest{
-		Call:   runtimeReceiptHistoryTestContextWithScope(t, "receipt.catalog.get"),
-		Lookup: ReceiptLookup{RequestID: "req-1"},
-	}); err != nil {
-		t.Fatalf("Get: %v", err)
-	}
-	if _, err := provider.Trace(context.Background(), ReceiptTraceRequest{
-		Call:   runtimeReceiptHistoryTestContextWithScope(t, "receipt.catalog.trace"),
-		Lookup: ReceiptLookup{TraceID: "trace-1"},
-	}); err != nil {
-		t.Fatalf("Trace: %v", err)
-	}
-
-	if len(descriptors) != 3 ||
-		!strings.Contains(descriptors[0], "receipt.catalog.list") ||
-		!strings.Contains(descriptors[1], "receipt.catalog.get") ||
-		!strings.Contains(descriptors[2], "receipt.catalog.trace") {
-		t.Fatalf("route set descriptors = %#v", descriptors)
-	}
-}
-
 func TestRuntimeReceiptProviderRejectsWrongDeviceOwnerSubjectBeforeDescriptorResolution(t *testing.T) {
 	transport := RuntimeTransportFunc{
 		ResolveDescriptorRefFunc: func(context.Context, []byte) ([]byte, error) {
@@ -379,19 +303,6 @@ func runtimeReceiptHistoryTestContextWithScope(t *testing.T, scope string) Runti
 			"scopes":                     []string{scope},
 			"allowed_followup_abilities": []string{scope},
 		}),
-	}
-}
-
-func TestRuntimeReceiptProviderRejectsIncompleteRouteSet(t *testing.T) {
-	runtime, _ := NewRuntimeClient(RuntimeTransportFunc{ResolveDescriptorRefFunc: testResolveDescriptorRef(t)})
-	ability, _ := NewRuntimeAbilityClient(runtime, NewCanonicalAddressing())
-
-	_, err := newRuntimeReceiptProviderWithRoutes(ability, runtimeReceiptRouteSet{
-		listAbility:  "receipt.catalog.list",
-		traceAbility: "receipt.catalog.trace",
-	})
-	if err == nil || !strings.Contains(err.Error(), "runtime receipt get route ability is required") {
-		t.Fatalf("incomplete route set error = %v", err)
 	}
 }
 

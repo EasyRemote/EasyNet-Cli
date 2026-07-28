@@ -17,10 +17,8 @@ func runtimeGovernanceDescriptorProviderForAbility(abilityName string) string {
 		return runtimeAbilityDescriptorProvider
 	case strings.HasPrefix(abilityName, "invocation.history."),
 		strings.HasPrefix(abilityName, "invocation.trace."),
-		strings.HasPrefix(abilityName, "receipt.catalog."),
 		strings.Contains(abilityName, ".invocation.history."),
-		strings.Contains(abilityName, ".invocation.trace."),
-		strings.Contains(abilityName, ".receipt.catalog."):
+		strings.Contains(abilityName, ".invocation.trace."):
 		return runtimeReceiptHistoryProvider
 	default:
 		return ""

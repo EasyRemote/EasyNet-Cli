@@ -308,7 +308,7 @@ func TestAuthorizedRuntimeSessionHistoryAllowsUserOwnedResourceSubjectBeforeRece
 
 func TestAuthorizedRuntimeSessionHistoryUsesReceiptProviderAuthorityScope(t *testing.T) {
 	session := newAuthorizedRuntimeSessionFixture(t)
-	session.receipts.historyListScope = "receipt.catalog.list"
+	session.receipts.historyListScope = "invocation.history.list"
 	subject, err := RuntimeStateReadSubjectURA("example", "alice")
 	if err != nil {
 		t.Fatalf("runtime-state read subject: %v", err)
@@ -321,8 +321,8 @@ func TestAuthorizedRuntimeSessionHistoryUsesReceiptProviderAuthorityScope(t *tes
 			NonceBase64:   "AQIDBAUGBwgJCgsMDQ4PEA==",
 			CausalContext: map[string]any{"form": "none"},
 			Authority: sessionAuthorityFixture(t, map[string]any{
-				"scopes":                     []string{"receipt.catalog.list"},
-				"allowed_followup_abilities": []string{"receipt.catalog.list"},
+				"scopes":                     []string{"invocation.history.list"},
+				"allowed_followup_abilities": []string{"invocation.history.list"},
 			}),
 		},
 		Limit: 10,

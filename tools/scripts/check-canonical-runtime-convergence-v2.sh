@@ -5138,8 +5138,18 @@ if go:
     )
     if "validateSessionHistoryRequest(request, scope)" not in provider_body:
         raise SystemExit("sdk_go_receipt_provider_history_admission_guard_missing")
-    if provider_body.find("validateSessionHistoryRequest(request, scope)") > provider_body.find("p.routes.list("):
+    direct_go_receipt_list = "p.ability.invokeGovernanceRead(ctx, request.Call, receiptHistoryListAbility, args)"
+    if direct_go_receipt_list not in provider_body:
+        raise SystemExit("sdk_go_receipt_provider_canonical_list_route_missing")
+    if provider_body.find("validateSessionHistoryRequest(request, scope)") > provider_body.find(direct_go_receipt_list):
         raise SystemExit("sdk_go_receipt_provider_history_admission_after_route")
+    for retired in (
+        "runtimeReceiptRouteSet",
+        "newRuntimeReceiptProviderWithRoutes",
+        "newRuntimeReceiptRouteSet",
+    ):
+        if retired in go_receipt:
+            raise SystemExit(f"sdk_go_receipt_route_override_not_retired:{retired}")
     require(
         go_receipt_test_path,
         "TestRuntimeReceiptProviderRejectsWrongDeviceOwnerSubjectBeforeDescriptorResolution",
@@ -5306,8 +5316,18 @@ if py:
     )
     if "validate_receipt_history_request(" not in provider_body:
         raise SystemExit("sdk_python_receipt_provider_history_admission_guard_missing")
-    if provider_body.find("validate_receipt_history_request(") > provider_body.find("self._routes.list("):
+    direct_py_receipt_list = "self._ability._invoke_governance_read(\n            request.call,\n            _RECEIPT_HISTORY_LIST,\n            arguments,"
+    if direct_py_receipt_list not in provider_body:
+        raise SystemExit("sdk_python_receipt_provider_canonical_list_route_missing")
+    if provider_body.find("validate_receipt_history_request(") > provider_body.find(direct_py_receipt_list):
         raise SystemExit("sdk_python_receipt_provider_history_admission_after_route")
+    for retired in (
+        "_RuntimeReceiptRouteSet",
+        "routes:",
+        "self._routes",
+    ):
+        if retired in py_receipt:
+            raise SystemExit(f"sdk_python_receipt_route_override_not_retired:{retired}")
     if "is_runtime_governance_read_subject_ura(call.subject_ura, call.callee_ura)" not in py_guard:
         raise SystemExit("sdk_python_history_call_subject_not_runtime_governance_read")
     for forbidden in (
@@ -5549,9 +5569,26 @@ for required in (
 ):
     if required not in go_governance:
         raise SystemExit(f"sdk_history_public_route_cutover:go_governance_missing:{required}")
+if "receipt.catalog" in go_governance:
+    raise SystemExit("sdk_history_public_route_cutover:go_receipt_catalog_alias_not_retired")
 if "ability.Invoke(ctx, call, r.listAbility, args)" in go_receipt or "ability.Invoke(ctx, call, r.getAbility, args)" in go_receipt:
     raise SystemExit("sdk_history_public_route_cutover:go_receipt_uses_public_invoke")
-if "ability.invokeGovernanceRead(ctx, call, r.listAbility, args)" not in go_receipt:
+for required in (
+    "p.ability.invokeGovernanceRead(ctx, request.Call, receiptHistoryListAbility, args)",
+    "p.ability.invokeGovernanceRead(ctx, request.Call, receiptHistoryGetAbility, args)",
+    "p.ability.invokeGovernanceRead(ctx, request.Call, receiptTraceGetAbility, args)",
+):
+    if required not in go_receipt:
+        raise SystemExit(f"sdk_history_public_route_cutover:go_receipt_governance_entry_missing:{required}")
+for retired in (
+    "runtimeReceiptRouteSet",
+    "newRuntimeReceiptProviderWithRoutes",
+    "newRuntimeReceiptRouteSet",
+    "p.routes",
+):
+    if retired in go_receipt:
+        raise SystemExit(f"sdk_history_public_route_cutover:go_receipt_route_override_not_retired:{retired}")
+if "ability.invokeGovernanceRead(ctx, call, r.listAbility, args)" in go_receipt:
     raise SystemExit("sdk_history_public_route_cutover:go_receipt_governance_entry_missing")
 if "ability.Invoke(ctx, call, r.listAbility, args)" in go_descriptor:
     raise SystemExit("sdk_history_public_route_cutover:go_descriptor_uses_public_invoke")
@@ -5603,6 +5640,8 @@ for required in (
 ):
     if required not in py_governance:
         raise SystemExit(f"sdk_history_public_route_cutover:py_governance_missing:{required}")
+if "receipt.catalog" in py_governance:
+    raise SystemExit("sdk_history_public_route_cutover:py_receipt_catalog_alias_not_retired")
 for required in (
     "def _reject_governance_read_action(",
     "is_runtime_governance_read_ability(public_name, ability_ura=ability_ura)",
@@ -5621,8 +5660,19 @@ for forbidden in (
         raise SystemExit(f"sdk_history_public_route_cutover:py_ability_invocation_tuple_selector_text_sniff:{forbidden}")
 if "ability.invoke(call, self.list_ability.strip(), dict(arguments))" in py_receipt:
     raise SystemExit("sdk_history_public_route_cutover:py_receipt_uses_public_invoke")
-if "ability._invoke_governance_read(call, self.list_ability.strip(), dict(arguments))" not in py_receipt:
-    raise SystemExit("sdk_history_public_route_cutover:py_receipt_governance_entry_missing")
+for required in (
+    "self._ability._invoke_governance_read(\n            request.call,\n            _RECEIPT_HISTORY_LIST,\n            arguments,",
+    "self._ability._invoke_governance_read(\n            request.call,\n            _RECEIPT_HISTORY_GET,",
+    "self._ability._invoke_governance_read(\n            request.call,\n            _RECEIPT_TRACE_GET,",
+):
+    if required not in py_receipt:
+        raise SystemExit(f"sdk_history_public_route_cutover:py_receipt_governance_entry_missing:{required}")
+for retired in (
+    "_RuntimeReceiptRouteSet",
+    "self._routes",
+):
+    if retired in py_receipt:
+        raise SystemExit(f"sdk_history_public_route_cutover:py_receipt_route_override_not_retired:{retired}")
 if "ability.invoke(call, self.list_ability.strip(), dict(args))" in py_descriptor:
     raise SystemExit("sdk_history_public_route_cutover:py_descriptor_uses_public_invoke")
 if "_RuntimeAbilityDescriptorRoute" in py_descriptor or "route:" in py_descriptor:
@@ -5781,6 +5831,8 @@ for corpus, label in (
     (java_projection, "java_projection"),
     (swift_projection, "swift_projection"),
 ):
+    if "receipt.catalog" in corpus:
+        raise SystemExit(f"sdk_history_public_ingress_cutover:{label}_receipt_catalog_alias_not_retired")
     for ability in (
         "meta.list_abilities",
         "invocation.history.list",

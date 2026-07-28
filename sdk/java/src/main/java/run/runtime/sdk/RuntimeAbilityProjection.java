@@ -130,10 +130,8 @@ final class RuntimeAbilityProjection {
   private static boolean runtimeReceiptReadAbility(String value) {
     return value.startsWith("invocation.history.")
         || value.startsWith("invocation.trace.")
-        || value.startsWith("receipt.catalog.")
         || value.contains(".invocation.history.")
-        || value.contains(".invocation.trace.")
-        || value.contains(".receipt.catalog.");
+        || value.contains(".invocation.trace.");
   }
 
   private static String publicAbilityName(String calleeURA, String intrinsicName) {

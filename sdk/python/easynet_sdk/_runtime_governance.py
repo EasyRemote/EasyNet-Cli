@@ -53,8 +53,6 @@ def _is_receipt_read(value: str) -> bool:
     return (
         value.startswith("invocation.history.")
         or value.startswith("invocation.trace.")
-        or value.startswith("receipt.catalog.")
         or ".invocation.history." in value
         or ".invocation.trace." in value
-        or ".receipt.catalog." in value
     )

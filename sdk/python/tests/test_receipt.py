@@ -27,7 +27,6 @@ from easynet_sdk.receipt import (
     ReceiptReference,
     ReceiptTraceRequest,
     RuntimeReceiptProvider,
-    _RuntimeReceiptRouteSet,
 )
 from easynet_sdk.runtime import RuntimeClient
 from easynet_sdk.runtime_ability import RuntimeAbilityClient, RuntimeCallContext
@@ -301,77 +300,6 @@ def test_runtime_receipt_list_projects_typed_query_and_axon_record() -> None:
     }
 
 
-def test_runtime_receipt_provider_uses_explicit_route_set() -> None:
-    class RouteAwareTransport(RuntimeTransportFake):
-        def resolve_descriptor_ref(self, request_json: bytes) -> bytes:
-            import json
-
-            request = json.loads(request_json)
-            return json.dumps(
-                {
-                    "descriptor_ref": (
-                        "easynet:///r/example/ability/authority."
-                        f"{request['ability']}@1.0.0"
-                    )
-                }
-            ).encode()
-
-    transport = RouteAwareTransport()
-    ability = RuntimeAbilityClient(
-        RuntimeClient(transport),  # type: ignore[arg-type]
-        AddressingClient(AxonAddressingTransport()),
-    )
-    provider = RuntimeReceiptProvider(
-        ability,
-        routes=_RuntimeReceiptRouteSet(
-            "receipt.catalog.list",
-            "receipt.catalog.get",
-            "receipt.catalog.trace",
-        ),
-    )
-
-    transport.output_json = _output(records=[])
-    provider.list(
-        ReceiptListRequest(
-            call=_history_call(
-                scope="receipt.catalog.list",
-                followup_ability="receipt.catalog.list",
-            )
-        )
-    )
-    assert transport.seen["descriptor_ref"] == (
-        "easynet:///r/example/ability/authority.receipt.catalog.list@1.0.0"
-    )
-
-    transport.output_json = _output(record=None)
-    provider.get(
-        ReceiptGetRequest(
-            call=_history_call(
-                scope="receipt.catalog.get",
-                followup_ability="receipt.catalog.get",
-            ),
-            lookup=ReceiptLookup(request_id="request-1"),
-        )
-    )
-    assert transport.seen["descriptor_ref"] == (
-        "easynet:///r/example/ability/authority.receipt.catalog.get@1.0.0"
-    )
-
-    transport.output_json = _output(trace_id="trace-1", nodes=[], edges=[])
-    provider.trace(
-        ReceiptTraceRequest(
-            call=_history_call(
-                scope="receipt.catalog.trace",
-                followup_ability="receipt.catalog.trace",
-            ),
-            lookup=ReceiptLookup(trace_id="trace-1"),
-        )
-    )
-    assert transport.seen["descriptor_ref"] == (
-        "easynet:///r/example/ability/authority.receipt.catalog.trace@1.0.0"
-    )
-
-
 def test_runtime_receipt_provider_rejects_wrong_device_owner_subject_before_descriptor_resolution() -> None:
     provider, transport = _provider()
     call = _history_call(callee_ura="easynet:///r/example/device/dev-a")
@@ -454,15 +382,6 @@ def test_runtime_receipt_provider_rejects_device_owner_subject_with_session_auth
         provider.list(ReceiptListRequest(call=device_call))
     assert caught.value.code == ErrorCode.AUTHORITY_DENIED
     assert transport.descriptor_requests == []
-
-
-def test_runtime_receipt_provider_rejects_incomplete_route_set() -> None:
-    with pytest.raises(SDKError, match="runtime receipt get route ability is required"):
-        _RuntimeReceiptRouteSet(
-            "receipt.catalog.list",
-            "",
-            "receipt.catalog.trace",
-        )
 
 
 def test_runtime_receipt_list_accepts_maximum_bound() -> None:
