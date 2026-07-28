@@ -64,6 +64,10 @@ if ! rg -n 'struct LocalRuntimeDeviceDirectoryReadIssuer' "$ISSUER" >/dev/null; 
   fail "runtime device-directory reads must use a named issuer"
 fi
 
+if ! rg -n 'struct LocalRuntimeModelCatalogueReadIssuer' "$ISSUER" >/dev/null; then
+  fail "runtime model-catalogue reads must use a named issuer"
+fi
+
 if ! rg -n 'struct LocalRuntimeIdentityReadIssuer' "$ISSUER" >/dev/null; then
   fail "runtime identity reads must use a named issuer"
 fi
@@ -229,6 +233,29 @@ for target in "${DEVICE_DIRECTORY_TARGETS[@]}"; do
     fail "$target must not use generic invoke_local_ability for runtime device-directory reads"
   fi
 done
+
+"$PYTHON_BIN" - "$ISSUER" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+match = re.search(
+    r"impl LocalRuntimeModelCatalogueReadIssuer \{(?P<body>.*?)\n\}",
+    text,
+    re.S,
+)
+if not match:
+    raise SystemExit("LocalRuntimeModelCatalogueReadIssuer impl is missing")
+body = match.group("body")
+if "pub fn invoke(" in body or "pub fn invoke_timeout(" in body:
+    raise SystemExit(
+        "LocalRuntimeModelCatalogueReadIssuer must expose typed model-catalogue methods, not generic invoke methods"
+    )
+for required in ("pub fn list_openai_models(", "pub fn list_openai_models_timeout("):
+    if required not in body:
+        raise SystemExit(f"LocalRuntimeModelCatalogueReadIssuer missing {required}")
+PY
 
 "$PYTHON_BIN" - "$ISSUER" <<'PY'
 import re
@@ -434,12 +461,12 @@ if rg -n '\.invoke(_read)?\s*\(\s*"(agent\.list|meta\.list_abilities)"' "$AGENT_
   fail "agent publish read projections must not use generic command/read dispatch"
 fi
 
-if ! rg -n 'LocalRuntimeStateReadIssuer::invoke\("openai\.list_models"' "$LLM_API" >/dev/null; then
-  fail "llm-api model catalogue discovery must use LocalRuntimeStateReadIssuer"
+if ! rg -n 'LocalRuntimeModelCatalogueReadIssuer::list_openai_models' "$LLM_API" >/dev/null; then
+  fail "llm-api model catalogue discovery must use LocalRuntimeModelCatalogueReadIssuer"
 fi
 
-if rg -n '\binvoke_local_ability\s*\(\s*"openai\.list_models"' "$LLM_API"; then
-  fail "llm-api model catalogue discovery must not use generic invoke_local_ability"
+if rg -n 'LocalRuntimeStateReadIssuer::invoke|openai\.list_models"\s*,' "$LLM_API"; then
+  fail "llm-api model catalogue discovery must not use raw runtime-state dispatch"
 fi
 
 if rg -n '\binvoke_local_ability\s*\(' "$LLM_API"; then

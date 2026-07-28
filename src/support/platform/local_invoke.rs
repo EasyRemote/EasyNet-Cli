@@ -499,6 +499,30 @@ impl LocalRuntimeDeviceDirectoryReadIssuer {
     }
 }
 
+/// Named issuer for daemon-local model catalogue/read-model projections.
+///
+/// `openai.list_models` is the OpenAI compatibility view over local
+/// chat-capable ability descriptors. Product callers should ask for this typed
+/// catalogue projection instead of issuing a raw runtime-state ability name.
+pub struct LocalRuntimeModelCatalogueReadIssuer;
+
+impl LocalRuntimeModelCatalogueReadIssuer {
+    pub fn list_openai_models(args: Value) -> anyhow::Result<Value> {
+        Self::list_openai_models_timeout(args, std::time::Duration::from_secs(30))
+    }
+
+    pub fn list_openai_models_timeout(
+        args: Value,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<Value> {
+        LocalRuntimeStateReadIssuer::invoke_state_read_timeout(
+            crate::daemon::ability::names::integrations::OPENAI_LIST_MODELS,
+            args,
+            timeout,
+        )
+    }
+}
+
 /// Named issuer for daemon-local operational health reads.
 ///
 /// `observe.health` proves the local runtime invocation path, not a

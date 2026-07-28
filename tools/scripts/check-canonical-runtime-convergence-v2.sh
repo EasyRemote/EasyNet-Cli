@@ -8182,6 +8182,17 @@ if llm_api:
         raise SystemExit("llm_api_pick_token_not_fallible")
     if "let token = pick_token(args.key)?" not in llm_api:
         raise SystemExit("llm_api_not_propagating_local_cache_error")
+    if "LocalRuntimeModelCatalogueReadIssuer::list_openai_models(" not in llm_api:
+        raise SystemExit("llm_api_missing_typed_model_catalogue_read_issuer")
+    for retired in (
+        "LocalRuntimeStateReadIssuer::invoke",
+        "LocalRuntimeStateReadIssuer::invoke_timeout",
+        "invoke_local_ability(",
+    ):
+        if retired in llm_api:
+            raise SystemExit(f"llm_api_retired_model_catalogue_dispatch:{retired}")
+    if '"openai.list_models",' in llm_api:
+        raise SystemExit("llm_api_raw_openai_list_models_dispatch")
 for test in (
     "missing_local_default_token_cache_is_no_default_token_state",
     "local_default_token_cache_rejects_malformed_toml",

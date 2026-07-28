@@ -29,7 +29,7 @@ use serde_json::{json, Value};
 
 use crate::daemon::ability::builtins::governance::api_key;
 use crate::support::platform::local_invoke::{
-    LocalDaemonSystemAbilityIssuer, LocalRuntimeStateReadIssuer,
+    LocalDaemonSystemAbilityIssuer, LocalRuntimeModelCatalogueReadIssuer,
 };
 
 #[derive(Debug, Args)]
@@ -72,7 +72,7 @@ fn pick_model(arg: Option<String>) -> anyhow::Result<String> {
     }
     // Ask the device-local OpenAI shim what chat-base abilities
     // this host advertises; pick first.
-    let result = LocalRuntimeStateReadIssuer::invoke("openai.list_models", json!({}))
+    let result = LocalRuntimeModelCatalogueReadIssuer::list_openai_models(json!({}))
         .map_err(|e| anyhow::anyhow!("could not list models: {e}"))?;
     let data = result
         .get("data")
