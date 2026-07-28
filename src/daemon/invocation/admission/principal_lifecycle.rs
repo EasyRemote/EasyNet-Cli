@@ -497,11 +497,6 @@ impl<'a> PrincipalLifecycle<'a> {
             ABILITY_PRINCIPAL_CONFIGURE_RECOVERY,
             &request.principal_ura,
         )?;
-        if request.policy_ref.is_empty() {
-            return Err(Status::invalid_argument(
-                "principal.lifecycle.configure_recovery: policy_ref is required",
-            ));
-        }
         principal.recovery = Some(RecoveryPolicy {
             policy_ref: request.policy_ref,
             enabled: true,
@@ -738,11 +733,6 @@ impl<'a> PrincipalLifecycle<'a> {
         )?;
         let principal =
             active_principal_mut(store, ABILITY_PRINCIPAL_ISSUE_GRANT, &request.principal_ura)?;
-        if request.actions.is_empty() {
-            return Err(Status::invalid_argument(
-                "principal.lifecycle.issue_grant: actions must not be empty",
-            ));
-        }
         let now = now_unix_ms() as i64;
         principal.grants.push(AuthorizationGrant {
             grant_id: grant_id(&request.principal_ura, &request.command.idempotency_key),
@@ -1106,38 +1096,36 @@ struct PrincipalRequest {
     principal_ura: String,
     #[serde(default)]
     key_id: String,
-    #[serde(default)]
-    public_key_b64: String,
+    public_key_b64: Option<String>,
     #[serde(default)]
     expires_unix_ms: Option<i64>,
-    #[serde(default)]
-    binding_id: String,
+    binding_id: Option<String>,
     #[serde(default)]
     replacement: Option<Box<PrincipalRequest>>,
     #[serde(default)]
     replacement_key: Option<Box<PrincipalRequest>>,
-    #[serde(default)]
-    policy_ref: String,
-    #[serde(default)]
-    actions: Vec<String>,
-    #[serde(default)]
-    grant_id: String,
-    #[serde(default)]
-    subject_principal_ura: String,
-    #[serde(default)]
-    enrollment_id: String,
+    policy_ref: Option<String>,
+    actions: Option<Vec<String>>,
+    grant_id: Option<String>,
+    subject_principal_ura: Option<String>,
+    enrollment_id: Option<String>,
 }
 
 impl PrincipalRequest {
     fn normalize(&mut self) {
         self.principal_ura = self.principal_ura.trim().to_string();
         self.key_id = self.key_id.trim().to_string();
-        self.public_key_b64 = self.public_key_b64.trim().to_string();
-        self.binding_id = self.binding_id.trim().to_string();
-        self.policy_ref = self.policy_ref.trim().to_string();
-        self.grant_id = self.grant_id.trim().to_string();
-        self.subject_principal_ura = self.subject_principal_ura.trim().to_string();
-        self.enrollment_id = self.enrollment_id.trim().to_string();
+        trim_optional_text(&mut self.public_key_b64);
+        trim_optional_text(&mut self.binding_id);
+        trim_optional_text(&mut self.policy_ref);
+        trim_optional_text(&mut self.grant_id);
+        trim_optional_text(&mut self.subject_principal_ura);
+        trim_optional_text(&mut self.enrollment_id);
+        if let Some(actions) = self.actions.as_mut() {
+            actions
+                .iter_mut()
+                .for_each(|action| *action = action.trim().to_string());
+        }
         self.command.normalize();
         if let Some(replacement) = self.replacement.as_mut() {
             replacement.normalize();
@@ -1148,16 +1136,15 @@ impl PrincipalRequest {
     }
 
     fn into_bind_key(self) -> Result<BindKeyRequest, Status> {
-        if self.public_key_b64.is_empty() {
-            return Err(Status::invalid_argument(
-                "principal lifecycle key transition requires public_key_b64",
-            ));
-        }
         Ok(BindKeyRequest {
             command: self.command,
             principal_ura: self.principal_ura,
             key_id: self.key_id,
-            public_key_b64: self.public_key_b64,
+            public_key_b64: required_text(
+                "principal lifecycle key transition",
+                "public_key_b64",
+                self.public_key_b64,
+            )?,
             expires_unix_ms: self.expires_unix_ms,
         })
     }
@@ -1197,7 +1184,11 @@ impl PrincipalRequest {
         Ok(RecoveryConfigRequest {
             command: self.command,
             principal_ura: self.principal_ura,
-            policy_ref: self.policy_ref,
+            policy_ref: required_text(
+                "principal.lifecycle.configure_recovery",
+                "policy_ref",
+                self.policy_ref,
+            )?,
         })
     }
 
@@ -1219,7 +1210,11 @@ impl PrincipalRequest {
         Ok(IssueGrantRequest {
             command: self.command,
             principal_ura: self.principal_ura,
-            actions: self.actions,
+            actions: required_non_empty_list(
+                "principal.lifecycle.issue_grant",
+                "actions",
+                self.actions,
+            )?,
             expires_unix_ms: self.expires_unix_ms,
         })
     }
@@ -1368,6 +1363,12 @@ fn decode_args<T: for<'de> Deserialize<'de>>(
 fn encode_snapshot(ability: &'static str, principal: &PrincipalRecord) -> Result<Vec<u8>, Status> {
     serde_json::to_vec(&serde_json::json!({ "principal": principal }))
         .map_err(|err| Status::internal(format!("{ability}: response JSON encode failed: {err}")))
+}
+
+fn trim_optional_text(value: &mut Option<String>) {
+    if let Some(raw) = value.as_mut() {
+        *raw = raw.trim().to_string();
+    }
 }
 
 fn deserialize_required_option<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
@@ -1816,14 +1817,27 @@ fn recovery_proof_hash(principal_ura: &str, proof_reference: &str) -> String {
 fn required_text(
     ability: &'static str,
     field: &'static str,
-    value: String,
+    value: Option<String>,
 ) -> Result<String, Status> {
-    if value.is_empty() {
-        return Err(Status::invalid_argument(format!(
+    match value {
+        Some(value) if !value.is_empty() => Ok(value),
+        _ => Err(Status::invalid_argument(format!(
             "{ability}: {field} is required"
-        )));
+        ))),
     }
-    Ok(value)
+}
+
+fn required_non_empty_list(
+    ability: &'static str,
+    field: &'static str,
+    value: Option<Vec<String>>,
+) -> Result<Vec<String>, Status> {
+    match value {
+        Some(value) if !value.is_empty() && value.iter().all(|item| !item.is_empty()) => Ok(value),
+        _ => Err(Status::invalid_argument(format!(
+            "{ability}: {field} must contain at least one non-empty value"
+        ))),
+    }
 }
 
 #[cfg(test)]
@@ -1976,6 +1990,73 @@ mod tests {
         assert!(
             !ctx.store_path.exists(),
             "malformed request must not create the lifecycle store"
+        );
+    }
+
+    #[test]
+    fn principal_lifecycle_request_keeps_absent_branch_facts_absent() {
+        let envelope: RequestEnvelope = serde_json::from_value(json!({
+            "request": {
+                "command": command("create-absent-branch-facts", "bootstrap", None),
+                "principal_ura": "easynet:///r/realm/user/alice"
+            }
+        }))
+        .expect("principal request without branch-specific facts parses");
+
+        let request = envelope.request;
+        assert!(
+            request.public_key_b64.is_none(),
+            "missing public_key_b64 must stay absent, not become an empty string sentinel"
+        );
+        assert!(
+            request.binding_id.is_none(),
+            "missing binding_id must stay absent, not become an empty string sentinel"
+        );
+        assert!(
+            request.policy_ref.is_none(),
+            "missing policy_ref must stay absent, not become an empty string sentinel"
+        );
+        assert!(
+            request.actions.is_none(),
+            "missing actions must stay absent, not become an empty collection sentinel"
+        );
+        assert!(
+            request.grant_id.is_none(),
+            "missing grant_id must stay absent, not become an empty string sentinel"
+        );
+        assert!(
+            request.subject_principal_ura.is_none(),
+            "missing subject_principal_ura must stay absent, not become an empty string sentinel"
+        );
+        assert!(
+            request.enrollment_id.is_none(),
+            "missing enrollment_id must stay absent, not become an empty string sentinel"
+        );
+    }
+
+    #[test]
+    fn principal_lifecycle_issue_grant_rejects_empty_action_facts() {
+        let envelope: RequestEnvelope = serde_json::from_value(json!({
+            "request": {
+                "command": command_with_ref("grant-empty-action", "active_key", "binding-1", None),
+                "principal_ura": "easynet:///r/realm/user/alice",
+                "actions": ["  "]
+            }
+        }))
+        .expect("principal request with blank action parses");
+
+        let mut request = envelope.request;
+        request.normalize();
+        let error = request
+            .into_issue_grant()
+            .expect_err("blank action facts must not become authorization facts");
+        assert_eq!(error.code(), tonic::Code::InvalidArgument);
+        assert!(
+            error.message().contains(
+                "principal.lifecycle.issue_grant: actions must contain at least one non-empty value"
+            ),
+            "unexpected error: {}",
+            error.message()
         );
     }
 
