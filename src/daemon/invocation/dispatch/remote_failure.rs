@@ -4,7 +4,7 @@
 //! daemon must preserve that semantic class instead of flattening every
 //! pre-finalization rejection into FAILED_PRECONDITION or UNAVAILABLE.
 
-use tonic::{Code, Status};
+use tonic::Status;
 
 use crate::daemon::invocation::bidi::state::session_failure::SessionFailure;
 use crate::daemon::runtime_failure::{
@@ -36,6 +36,7 @@ pub(crate) fn is_admission_denial_message(message: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tonic::Code;
 
     fn failure(code: &str, message: &str) -> SessionFailure {
         SessionFailure::new(code, message, false, 0, 0)
