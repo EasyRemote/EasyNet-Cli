@@ -166,9 +166,7 @@ pub struct HeartbeatRejectedNode {
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct HeartbeatReceipt {
-    #[serde(default)]
     pub membership_status: String,
-    #[serde(default)]
     pub realm_directory_size: u64,
     /// Axon proto-compatible response header. This is the only status header
     /// projection accepted by the federation client contract.
@@ -600,6 +598,41 @@ mod tests {
             err.to_string().contains("authority_abilities_diff"),
             "missing Authority ability diff must fail closed: {err}"
         );
+    }
+
+    #[test]
+    fn heartbeat_receipt_rejects_missing_membership_facts() {
+        for (missing, body) in [
+            (
+                "membership_status",
+                json!({
+                    "realm_directory_size": 3,
+                    "authority_abilities_diff": {
+                        "revision": 0,
+                        "added": [],
+                        "removed": []
+                    }
+                }),
+            ),
+            (
+                "realm_directory_size",
+                json!({
+                    "membership_status": "active",
+                    "authority_abilities_diff": {
+                        "revision": 0,
+                        "added": [],
+                        "removed": []
+                    }
+                }),
+            ),
+        ] {
+            let err = parse_receipt_value::<HeartbeatReceipt>(&body)
+                .expect_err("heartbeat receipt must not synthesize required membership facts");
+            assert!(
+                err.to_string().contains(missing),
+                "missing field {missing:?} must fail closed: {err}"
+            );
+        }
     }
 
     #[test]
