@@ -6763,9 +6763,9 @@ if 'descriptorMap(schema["input"])' in go:
 if "projectRuntimeAbilityDescriptor(row, i)" not in go:
     raise SystemExit("sdk_go_ability_descriptor_provider_not_strict_projector")
 for token in (
-    "field schema_hash must be a string",
-    "field input_schema must be an object",
-    "field hints.read_only must be a boolean",
+    "field %s must be a string",
+    "field %s must be an object",
+    "field %s must be a boolean",
 ):
     if token not in go:
         raise SystemExit(f"sdk_go_ability_descriptor_strict_wire_missing:{token}")
@@ -6774,6 +6774,7 @@ for token in (
     "TestProjectAbilityDescriptorDoesNotDeriveRetiredNameOrInputSchemaAliases",
     "TestRuntimeAbilityDescriptorProviderRejectsRetiredNameAndInputSchemaAliases",
     "TestRuntimeAbilityDescriptorProviderRejectsTypedDescriptorProjectionFields",
+    "ability descriptor row 0 field schema_hash must be a string",
 ):
     if token not in go_tests:
         raise SystemExit(f"sdk_go_ability_descriptor_strict_test_missing:{token}")
@@ -10837,36 +10838,36 @@ from pathlib import Path
 pairing = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
 join = Path(sys.argv[2]).read_text(encoding="utf-8", errors="replace")
 
-	def struct_prefix(name: str) -> str:
-	    match = re.search(rf"(?P<prefix>(?:#\[[^\n]+\]\n)*pub\(crate\) struct {name} \{{)", pairing)
-	    if not match:
-	        raise SystemExit(f"pairing_response_strict_schema:missing_struct:{name}")
-	    return match.group("prefix")
+def struct_prefix(name: str) -> str:
+    match = re.search(rf"(?P<prefix>(?:#\[[^\n]+\]\n)*pub\(crate\) struct {name} \{{)", pairing)
+    if not match:
+        raise SystemExit(f"pairing_response_strict_schema:missing_struct:{name}")
+    return match.group("prefix")
 
-	def struct_body(name: str) -> str:
-	    match = re.search(rf"pub\(crate\) struct {name} \{{(?P<body>.*?)\n\}}", pairing, re.S)
-	    if not match:
-	        raise SystemExit(f"pairing_response_strict_schema:missing_struct:{name}")
-	    return match.group("body")
+def struct_body(name: str) -> str:
+    match = re.search(rf"pub\(crate\) struct {name} \{{(?P<body>.*?)\n\}}", pairing, re.S)
+    if not match:
+        raise SystemExit(f"pairing_response_strict_schema:missing_struct:{name}")
+    return match.group("body")
 
-	for name in ("FederatedPeerEntry", "PairingCredentialEnvelope"):
-	    prefix = struct_prefix(name)
-	    if "#[serde(deny_unknown_fields)]" not in prefix:
-	        raise SystemExit(f"pairing_response_strict_schema:open_schema:{name}")
-	    derive_line = next((line for line in prefix.splitlines() if line.startswith("#[derive(")), "")
-	    if "Default" in derive_line:
-	        raise SystemExit(f"pairing_response_strict_schema:default_derive:{name}")
-	    if "#[serde(default" in struct_body(name):
-	        raise SystemExit(f"pairing_response_strict_schema:default_field:{name}")
+for name in ("FederatedPeerEntry", "PairingCredentialEnvelope"):
+    prefix = struct_prefix(name)
+    if "#[serde(deny_unknown_fields)]" not in prefix:
+        raise SystemExit(f"pairing_response_strict_schema:open_schema:{name}")
+    derive_line = next((line for line in prefix.splitlines() if line.startswith("#[derive(")), "")
+    if "Default" in derive_line:
+        raise SystemExit(f"pairing_response_strict_schema:default_derive:{name}")
+    if "#[serde(default" in struct_body(name):
+        raise SystemExit(f"pairing_response_strict_schema:default_field:{name}")
 
-	for required in (
-	    "pairing_credential_rejects_retired_tenant_id_alias",
-	    "pairing_credential_carries_immutable_user_binding",
-	    "pairing_credential_rejects_missing_runtime_custody_facts",
-	    "federated_peer_entry_rejects_missing_peer_hub_url",
-	):
-	    if required not in pairing:
-	        raise SystemExit(f"pairing_response_strict_schema:missing_test:{required}")
+for required in (
+    "pairing_credential_rejects_retired_tenant_id_alias",
+    "pairing_credential_carries_immutable_user_binding",
+    "pairing_credential_rejects_missing_runtime_custody_facts",
+    "federated_peer_entry_rejects_missing_peer_hub_url",
+):
+    if required not in pairing:
+        raise SystemExit(f"pairing_response_strict_schema:missing_test:{required}")
 for retired in (
     "pairing_credential_requires_product_realm_key",
 ):
@@ -10878,29 +10879,29 @@ if "pairing_envelope_fixture() -> PairingCredentialEnvelope" not in join:
 for initializer in re.finditer(r"PairingCredentialEnvelope \{(?P<body>.*?)\n\s*\}", join, re.S):
     if "..Default::default()" in initializer.group("body"):
         raise SystemExit("pairing_response_strict_schema:join_default_envelope_constructor")
-	for required in (
-	    "validate_pairing_response_rejects_missing_username",
-	    "validate_pairing_response_rejects_missing_user_id",
-	    "validate_pairing_response_rejects_all_zero_user_before_credentials_projection",
-	    "validate_pairing_response_requires_provisioned_credential_fact",
-	    "validate_pairing_response_requires_registered_public_key_fact",
-	    "validate_pairing_response_rejects_mismatched_device_public_key",
-	    "validate_pairing_response_rejects_noncanonical_device_ura_fact",
-	    "validate_pairing_response_rejects_empty_deploy_signature",
-	    "validate_pairing_response_rejects_empty_federated_peer_endpoint",
-	):
-	    if required not in join:
-	        raise SystemExit(f"pairing_response_strict_schema:join_missing_test:{required}")
-	for required in (
-	    "validate_pairing_response(envelope, device_public_key)?",
-	    "pairing response credential_provisioned must be true",
-	    "pairing response public_key_registered must be true",
-	    "pairing response device_public_key does not match local runtime signer",
-	    "canonical joined device URA",
-	    "fn require_pairing_field(value: &str, field: &str) -> anyhow::Result<()>",
-	):
-	    if required not in join:
-	        raise SystemExit(f"pairing_response_strict_schema:join_validation_missing:{required}")
+for required in (
+    "validate_pairing_response_rejects_missing_username",
+    "validate_pairing_response_rejects_missing_user_id",
+    "validate_pairing_response_rejects_all_zero_user_before_credentials_projection",
+    "validate_pairing_response_requires_provisioned_credential_fact",
+    "validate_pairing_response_requires_registered_public_key_fact",
+    "validate_pairing_response_rejects_mismatched_device_public_key",
+    "validate_pairing_response_rejects_noncanonical_device_ura_fact",
+    "validate_pairing_response_rejects_empty_deploy_signature",
+    "validate_pairing_response_rejects_empty_federated_peer_endpoint",
+):
+    if required not in join:
+        raise SystemExit(f"pairing_response_strict_schema:join_missing_test:{required}")
+for required in (
+    "validate_pairing_response(envelope, device_public_key)?",
+    "pairing response credential_provisioned must be true",
+    "pairing response public_key_registered must be true",
+    "pairing response device_public_key does not match local runtime signer",
+    "canonical joined device URA",
+    "fn require_pairing_field(value: &str, field: &str) -> anyhow::Result<()>",
+):
+    if required not in join:
+        raise SystemExit(f"pairing_response_strict_schema:join_validation_missing:{required}")
 PY
 }
 
@@ -20075,6 +20076,45 @@ for required_test in (
 PY
 }
 
+check_java_sdk_runtime_receipt_seam_tests_execute_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local java_root="$cli_root/sdk/java"
+  local pom="$java_root/pom.xml"
+  local runtime_report="$java_root/target/surefire-reports/TEST-run.runtime.sdk.RuntimeCoreSeamTest.xml"
+  local sidecar_report="$java_root/target/surefire-reports/TEST-run.runtime.sdk.provider.runtime.pluginexec.SidecarRuntimeTest.xml"
+
+  [[ -f "$pom" ]] || fail "Java SDK Maven project is missing: ${pom#$cli_root/}"
+  command -v mvn >/dev/null 2>&1 || fail "Java SDK receipt seam gate requires Maven"
+
+  local log
+  log="$(mktemp -t easynet-java-sdk-receipt-seam.XXXXXX.log)"
+  if ! (cd "$java_root" && mvn -q clean test) >"$log" 2>&1; then
+    sed -n '1,220p' "$log" >&2 || true
+    fail "Java SDK receipt proof-fact seam tests failed from a clean Maven build"
+  fi
+
+  "$PYTHON_BIN" - "$runtime_report" "$sidecar_report" <<'PY'
+import sys
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+runtime_report, sidecar_report = map(Path, sys.argv[1:])
+for report, suite in (
+    (runtime_report, "run.runtime.sdk.RuntimeCoreSeamTest"),
+    (sidecar_report, "run.runtime.sdk.provider.runtime.pluginexec.SidecarRuntimeTest"),
+):
+    if not report.is_file():
+        raise SystemExit(f"java_runtime_receipt_seam_tests:missing_report:{report}")
+    root = ET.parse(report).getroot()
+    if root.attrib.get("name") != suite:
+        raise SystemExit(f"java_runtime_receipt_seam_tests:wrong_suite:{report}")
+    if int(root.attrib.get("tests", "0")) < 1:
+        raise SystemExit(f"java_runtime_receipt_seam_tests:no_tests:{suite}")
+    if int(root.attrib.get("failures", "0")) != 0 or int(root.attrib.get("errors", "0")) != 0:
+        raise SystemExit(f"java_runtime_receipt_seam_tests:failed:{suite}")
+PY
+}
+
 check_go_sdk_runtime_receipt_projection_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local runtime="$cli_root/sdk/go/runtime.go"
@@ -21443,6 +21483,18 @@ EOF
     "$tmp/cli-java-receipt-shallow-copy-legacy/sdk/java/src/main/java/run/runtime/sdk/RuntimeReceipt.java"
   if ( CLI_ROOT="$tmp/cli-java-receipt-shallow-copy-legacy"; check_java_sdk_runtime_receipt_projection_contract ) >/dev/null 2>&1; then
     fail "self-test expected Java SDK receipt shallow-copy mutability gate to fail"
+  fi
+  mkdir -p "$tmp/cli-java-receipt-seam-no-pom/sdk/java"
+  if ( CLI_ROOT="$tmp/cli-java-receipt-seam-no-pom"; check_java_sdk_runtime_receipt_seam_tests_execute_contract ) >/dev/null 2>&1; then
+    fail "self-test expected Java SDK receipt seam test binding gate to fail without Maven project"
+  fi
+  mkdir -p "$tmp/cli-java-receipt-seam-compile-fail/sdk/java"
+  cp "$ROOT/sdk/java/pom.xml" "$tmp/cli-java-receipt-seam-compile-fail/sdk/java/pom.xml"
+  cp -R "$ROOT/sdk/java/src" "$tmp/cli-java-receipt-seam-compile-fail/sdk/java/src"
+  printf '\n  private void canonicalReceiptValidatorBrokenForSelfTest() {}\n' \
+    >> "$tmp/cli-java-receipt-seam-compile-fail/sdk/java/src/main/java/run/runtime/sdk/RuntimeReceiptProofFacts.java"
+  if ( CLI_ROOT="$tmp/cli-java-receipt-seam-compile-fail"; check_java_sdk_runtime_receipt_seam_tests_execute_contract ) >/dev/null 2>&1; then
+    fail "self-test expected Java SDK receipt seam clean compile gate to fail"
   fi
   mkdir -p "$tmp/cli-go-receipt-proof-shape-legacy/sdk/go"
   cp "$ROOT/sdk/go/runtime.go" "$tmp/cli-go-receipt-proof-shape-legacy/sdk/go/runtime.go"
@@ -29615,6 +29667,7 @@ check_python_sdk_signed_submission_complete_tuple_contract
 check_java_sdk_signer_policy_custody_contract
 check_swift_sdk_signer_policy_custody_contract
 check_java_sdk_runtime_receipt_projection_contract
+check_java_sdk_runtime_receipt_seam_tests_execute_contract
 check_go_sdk_runtime_receipt_projection_contract
 check_python_sdk_runtime_receipt_projection_contract
 check_node_sdk_runtime_receipt_projection_contract
