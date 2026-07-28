@@ -608,7 +608,7 @@ pub(crate) fn signed_envelope_for_selected_route(
     let route = SelectedChildRoute::descriptor_bound(
         selected_route.route_ura.clone(),
         selected_route.callee_ura.clone(),
-        Some(selected_route.execution_host_ura.clone()),
+        selected_route.execution_host_ura.clone(),
         selected_route.ability_ura.clone(),
         selected_route.dispatch_name.clone(),
         signed_descriptor_ref.clone(),

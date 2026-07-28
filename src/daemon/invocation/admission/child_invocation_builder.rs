@@ -41,7 +41,7 @@ pub struct ChildInvocationBuildInput {
 pub struct SelectedChildRoute {
     pub route_ref: String,
     pub selected_callee_ura: String,
-    pub execution_host_ura: Option<String>,
+    pub execution_host_ura: String,
     pub public_ability: String,
     pub dispatch_key: String,
     pub descriptor_version: String,
@@ -52,13 +52,14 @@ impl SelectedChildRoute {
     pub(crate) fn descriptor_bound(
         route_ref: impl Into<String>,
         selected_callee_ura: impl Into<String>,
-        execution_host_ura: Option<String>,
+        execution_host_ura: impl Into<String>,
         public_ability: impl Into<String>,
         dispatch_key: impl Into<String>,
         selected_descriptor_ref: impl Into<String>,
     ) -> Result<Self, ChildInvocationBuildFailure> {
         let route_ref = route_ref.into();
         let selected_callee_ura = selected_callee_ura.into();
+        let execution_host_ura = execution_host_ura.into();
         let public_ability = public_ability.into();
         let dispatch_key = dispatch_key.into();
         let selected_descriptor_ref = selected_descriptor_ref.into();
@@ -124,8 +125,7 @@ pub struct BuiltChildInvocation {
     pub descriptor_version: String,
     pub dispatch_key: String,
     pub route_ref: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub execution_host_ura: Option<String>,
+    pub execution_host_ura: String,
     pub args_hash: String,
     pub authority_shape: ChildAuthorityShape,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -265,6 +265,16 @@ impl ChildInvocationBuilder {
 }
 
 fn validate_route_shape(route: &SelectedChildRoute) -> Result<(), ChildInvocationBuildFailure> {
+    if route.execution_host_ura.trim().is_empty() {
+        return Err(failure(
+            route,
+            TraceStage::SignatureDenied,
+            ChildInvocationBuildFailureCode::DescriptorBindingMissing,
+            "selected route lacks execution host",
+            Some(SignatureDecisionReason::SignedDescriptorRefMissing),
+            None,
+        ));
+    }
     if route.route_ref.trim().is_empty()
         || route.selected_callee_ura.trim().is_empty()
         || route.public_ability.trim().is_empty()
@@ -351,15 +361,11 @@ fn validate_authority_proof_binding(
     proof: &AuthorityProof,
 ) -> Result<(), ChildInvocationBuildFailure> {
     let ability_ura = ability_ura(route)?;
-    let audience_ura = route
-        .execution_host_ura
-        .as_deref()
-        .unwrap_or(route.selected_callee_ura.as_str());
     let route_binding = AuthorityProofRouteBinding {
         callee_ura: &route.selected_callee_ura,
         subject_ura,
         ability_ura: &ability_ura,
-        audience_ura,
+        audience_ura: route.execution_host_ura.as_str(),
     };
     if !proof.matches_route_binding(&route_binding) {
         return Err(failure(
@@ -432,7 +438,7 @@ mod tests {
         SelectedChildRoute {
             route_ref: "route-ref::test".to_string(),
             selected_callee_ura: callee,
-            execution_host_ura: Some("easynet:///r/test/device/dev-a".to_string()),
+            execution_host_ura: "easynet:///r/test/device/dev-a".to_string(),
             public_ability: "meta.list_resources".to_string(),
             dispatch_key: "meta.list_resources".to_string(),
             descriptor_version,
@@ -472,7 +478,7 @@ mod tests {
         let mut selected = route();
         let signed_descriptor_ref = selected.selected_descriptor_ref.clone();
         selected.selected_callee_ura = "easynet:///r/test/device/other".to_string();
-        selected.execution_host_ura = Some(selected.selected_callee_ura.clone());
+        selected.execution_host_ura = selected.selected_callee_ura.clone();
 
         let err = ChildInvocationBuilder::build(ChildInvocationBuildInput {
             route: selected,
@@ -503,7 +509,7 @@ mod tests {
     fn internal_child_rejects_descriptor_owner_binding_mismatch() {
         let mut selected = route();
         selected.selected_callee_ura = "easynet:///r/test/device/other".to_string();
-        selected.execution_host_ura = Some(selected.selected_callee_ura.clone());
+        selected.execution_host_ura = selected.selected_callee_ura.clone();
 
         let err = ChildInvocationBuilder::build(ChildInvocationBuildInput {
             route: selected,
@@ -549,6 +555,34 @@ mod tests {
             err.reason
         );
         assert!(err.route_ref.is_none());
+    }
+
+    #[test]
+    fn child_route_requires_selected_execution_host() {
+        let mut selected = route();
+        selected.execution_host_ura.clear();
+
+        let err = ChildInvocationBuilder::build(ChildInvocationBuildInput {
+            route: selected,
+            child_subject_ura: "easynet:///r/test/device/dev-a".to_string(),
+            args: b"{}".to_vec(),
+            authority: ChildInvocationAuthority::DaemonInternalSystem,
+        })
+        .expect_err("child invocation without selected execution host must fail closed");
+
+        assert_eq!(
+            err.code,
+            ChildInvocationBuildFailureCode::DescriptorBindingMissing
+        );
+        assert_eq!(
+            err.signature_reason,
+            Some(SignatureDecisionReason::SignedDescriptorRefMissing)
+        );
+        assert!(
+            err.reason.contains("execution host"),
+            "route-shape failure must name missing execution host: {}",
+            err.reason
+        );
     }
 
     #[test]

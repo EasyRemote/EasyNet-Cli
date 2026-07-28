@@ -4245,6 +4245,11 @@ if child:
         "AuthorityProofRouteBinding",
         "let route_binding = AuthorityProofRouteBinding {",
         "!proof.matches_route_binding(&route_binding)",
+        "pub execution_host_ura: String",
+        "audience_ura: route.execution_host_ura.as_str()",
+        "child_route_requires_selected_execution_host",
+        "selected.execution_host_ura.clear()",
+        "child invocation without selected execution host must fail closed",
     ):
         if required not in child:
             raise SystemExit(f"authority_proof_route_binding:child_missing:{required}")
@@ -4254,6 +4259,9 @@ if child:
         r"proof\.subject_ura\s*!=",
         r"proof\.ability_ura\s*!=",
         r"proof\.audience_ura\s*!=",
+        r"execution_host_ura:\s*Option<String>",
+        r"execution_host_ura\.as_deref\(\)\.unwrap_or",
+        r"unwrap_or\(route\.selected_callee_ura\.as_str\(\)\)",
     ):
         if re.search(forbidden, child_production):
             raise SystemExit(f"authority_proof_route_binding:child_duplicate:{forbidden}")
