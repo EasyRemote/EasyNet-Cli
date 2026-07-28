@@ -86,7 +86,7 @@ fn serve_exec_plugin_writes_error_frame_for_handler_failure() {
 }
 
 #[test]
-fn serve_exec_plugin_writes_error_frame_for_protocol_failure() {
+fn serve_exec_plugin_preserves_call_id_for_protocol_failure() {
     let mut input = Cursor::new(
         json!({
             "type": "invoke",
@@ -113,7 +113,7 @@ fn serve_exec_plugin_writes_error_frame_for_protocol_failure() {
 
     let response: Value = serde_json::from_slice(&output).expect("response");
     assert_eq!(response["type"], json!("error"));
-    assert_eq!(response["call_id"], json!(""));
+    assert_eq!(response["call_id"], json!("call-1"));
     assert!(
         response["message"]
             .as_str()

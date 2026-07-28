@@ -113,31 +113,45 @@ where
     R: Serialize,
     E: fmt::Display,
 {
-    let mut call_id = String::new();
-    match read_invocation(input) {
-        Ok(invocation) => {
-            call_id.clone_from(&invocation.call_id);
-            match handler(invocation) {
-                Ok(value) => write_response(
-                    output,
-                    &ResponseFrame {
-                        frame_type: "result",
-                        call_id: &call_id,
-                        value: Some(serde_json::to_value(value).map_err(io::Error::other)?),
-                        message: None,
-                    },
-                ),
-                Err(error) => write_response(
-                    output,
-                    &ResponseFrame {
-                        frame_type: "error",
-                        call_id: &call_id,
-                        value: None,
-                        message: Some(error.to_string()),
-                    },
-                ),
-            }
+    let frame = match SidecarRequestFrame::read(input) {
+        Ok(frame) => frame,
+        Err(error) => {
+            return write_response(
+                output,
+                &ResponseFrame {
+                    frame_type: "error",
+                    call_id: "",
+                    value: None,
+                    message: Some(error.to_string()),
+                },
+            );
         }
+    };
+    let call_id = frame.call_id().to_string();
+    let invocation = match frame.project_invocation() {
+        Ok(invocation) => invocation,
+        Err(error) => {
+            return write_response(
+                output,
+                &ResponseFrame {
+                    frame_type: "error",
+                    call_id: &call_id,
+                    value: None,
+                    message: Some(error.to_string()),
+                },
+            );
+        }
+    };
+    match handler(invocation) {
+        Ok(value) => write_response(
+            output,
+            &ResponseFrame {
+                frame_type: "result",
+                call_id: &call_id,
+                value: Some(serde_json::to_value(value).map_err(io::Error::other)?),
+                message: None,
+            },
+        ),
         Err(error) => write_response(
             output,
             &ResponseFrame {
@@ -150,18 +164,44 @@ where
     }
 }
 
-fn read_invocation(input: &mut impl BufRead) -> Result<SidecarInvocation, SidecarProtocolError> {
-    let mut line = String::new();
-    let bytes = input.read_line(&mut line).map_err(|error| {
-        SidecarProtocolError::new(format!("read sidecar request frame: {error}"))
-    })?;
-    if bytes == 0 {
-        return Err(SidecarProtocolError::new("missing sidecar request frame"));
+#[derive(Debug, Clone)]
+struct SidecarRequestFrame {
+    raw: Value,
+    call_id: String,
+}
+
+impl SidecarRequestFrame {
+    fn read(input: &mut impl BufRead) -> Result<Self, SidecarProtocolError> {
+        let mut line = String::new();
+        let bytes = input.read_line(&mut line).map_err(|error| {
+            SidecarProtocolError::new(format!("read sidecar request frame: {error}"))
+        })?;
+        if bytes == 0 {
+            return Err(SidecarProtocolError::new("missing sidecar request frame"));
+        }
+        let raw = serde_json::from_str::<Value>(&line).map_err(|error| {
+            SidecarProtocolError::new(format!("invalid sidecar request JSON: {error}"))
+        })?;
+        let call_id = sidecar_frame_call_id(&raw);
+        Ok(Self { raw, call_id })
     }
-    let decoded = serde_json::from_str::<Value>(&line).map_err(|error| {
-        SidecarProtocolError::new(format!("invalid sidecar request JSON: {error}"))
-    })?;
-    SidecarInvocation::from_frame(decoded)
+
+    fn call_id(&self) -> &str {
+        &self.call_id
+    }
+
+    fn project_invocation(self) -> Result<SidecarInvocation, SidecarProtocolError> {
+        SidecarInvocation::from_frame(self.raw)
+    }
+}
+
+fn sidecar_frame_call_id(frame: &Value) -> String {
+    frame
+        .as_object()
+        .and_then(|object| object.get("call_id"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string()
 }
 
 #[derive(Serialize)]

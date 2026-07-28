@@ -15309,6 +15309,10 @@ for retired_causal_fixture in (
 
 required_helper_tokens = {
     "rust": [
+        "struct SidecarRequestFrame",
+        "impl SidecarRequestFrame",
+        "fn project_invocation(self) -> Result<SidecarInvocation, SidecarProtocolError>",
+        "fn sidecar_frame_call_id(",
         "pub caller_ura: String",
         "reject_unknown_invocation_fields(&invocation)?",
         "reject_unknown_request_fields(&object)?",
@@ -15421,7 +15425,7 @@ for language, source in helper_production_sources.items():
 
 required_helper_tests = {
     "rust": [
-        "serve_exec_plugin_writes_error_frame_for_protocol_failure",
+        "serve_exec_plugin_preserves_call_id_for_protocol_failure",
         "sidecar_invocation_rejects_non_canonical_tuple_aliases",
         "sidecar_invocation_rejects_unknown_invocation_fields",
         "sidecar_invocation_rejects_unknown_request_fields",
