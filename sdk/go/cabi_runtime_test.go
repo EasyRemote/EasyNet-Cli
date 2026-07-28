@@ -385,7 +385,11 @@ func TestCABIPreparedAndSignedEnvelopeKeys(t *testing.T) {
 
 	providerFields, err := signedInvocationCABIFields([]byte(`{
 		"prepared":{"prepared_id":"prep-provider","request_id":"req-local"},
-		"policy":{"mode":"provider_managed_signing","signer_id":"signer-alice-key-1"}
+		"policy":{
+			"mode":"provider_managed_signing",
+			"signer_id":"signer-alice-key-1",
+			"policy_ref":"provider-key-inventory:alice:signer-alice-key-1"
+		}
 	}`))
 	if err != nil {
 		t.Fatalf("signedInvocationCABIFields local failed: %v", err)
@@ -399,6 +403,49 @@ func TestCABIPreparedAndSignedEnvelopeKeys(t *testing.T) {
 		"signature":{"algorithm":"ed25519","signature_base64":"abc"}
 	}`)); !IsCode(err, ErrInvalidArgument) {
 		t.Fatalf("request_id-only prepared key error = %v, want %s", err, ErrInvalidArgument)
+	}
+}
+
+func TestCABIProviderManagedSignedInvocationRequiresCustodyFacts(t *testing.T) {
+	tests := []struct {
+		name    string
+		policy  string
+		message string
+	}{
+		{
+			name:    "missing signer_id",
+			policy:  `{"mode":"provider_managed_signing","policy_ref":"provider-key-inventory:alice:signer-alice-key-1"}`,
+			message: "provider-managed signed invocation policy requires signer_id",
+		},
+		{
+			name:    "blank signer_id",
+			policy:  `{"mode":"provider_managed_signing","signer_id":"   ","policy_ref":"provider-key-inventory:alice:signer-alice-key-1"}`,
+			message: "provider-managed signed invocation policy requires signer_id",
+		},
+		{
+			name:    "missing policy_ref",
+			policy:  `{"mode":"provider_managed_signing","signer_id":"signer-alice-key-1"}`,
+			message: "provider-managed signed invocation policy requires policy_ref",
+		},
+		{
+			name:    "blank policy_ref",
+			policy:  `{"mode":"provider_managed_signing","signer_id":"signer-alice-key-1","policy_ref":"   "}`,
+			message: "provider-managed signed invocation policy requires policy_ref",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := signedInvocationCABIFields([]byte(fmt.Sprintf(`{
+				"prepared":{"prepared_id":"prep-provider","request_id":"req-local"},
+				"policy":%s
+			}`, tt.policy)))
+			if !IsCode(err, ErrInvalidArgument) {
+				t.Fatalf("error = %v, want %s", err, ErrInvalidArgument)
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.message) {
+				t.Fatalf("error = %v, want message %q", err, tt.message)
+			}
+		})
 	}
 }
 

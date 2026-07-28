@@ -1824,7 +1824,48 @@ def _signed_invocation_uses_provider_managed_signing(
             retry=RetryHint.NEVER,
             message="policy.mode must be a string",
         )
-    return mode == "provider_managed_signing"
+    if mode.strip() != "provider_managed_signing":
+        return False
+    _required_provider_managed_signed_invocation_policy_string(policy, "signer_id")
+    _required_provider_managed_signed_invocation_policy_string(policy, "policy_ref")
+    return True
+
+
+_PROVIDER_MANAGED_SIGNED_INVOCATION_POLICY_REQUIRED_MESSAGES = {
+    "signer_id": "provider-managed signed invocation policy requires signer_id",
+    "policy_ref": "provider-managed signed invocation policy requires policy_ref",
+}
+
+
+def _required_provider_managed_signed_invocation_policy_string(
+    policy: dict[object, object], name: str
+) -> str:
+    required_message = _PROVIDER_MANAGED_SIGNED_INVOCATION_POLICY_REQUIRED_MESSAGES.get(
+        name, f"provider-managed signed invocation policy requires {name}"
+    )
+    value = policy.get(name)
+    if value is None:
+        raise SDKError(
+            code=ErrorCode.INVALID_ARGUMENT,
+            stage="sdk",
+            retry=RetryHint.NEVER,
+            message=required_message,
+        )
+    if not isinstance(value, str):
+        raise SDKError(
+            code=ErrorCode.INVALID_ARGUMENT,
+            stage="sdk",
+            retry=RetryHint.NEVER,
+            message=f"policy.{name} must be a string",
+        )
+    if value.strip() == "":
+        raise SDKError(
+            code=ErrorCode.INVALID_ARGUMENT,
+            stage="sdk",
+            retry=RetryHint.NEVER,
+            message=required_message,
+        )
+    return value
 
 
 def _profile_stream_protocol_error(message: str, details: object) -> SDKError:

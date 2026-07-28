@@ -123,6 +123,8 @@ class FakeRawCABI:
         self.runtime_requests: list[tuple[str, object]] = []
         self.prepared_frees: list[int] = []
         self.signed_frees: list[int] = []
+        self.sign_prepared_requests: list[tuple[int, dict[str, object]]] = []
+        self.sign_prepared_local_requests: list[int] = []
         self.handle_frees: list[tuple[int, int]] = []
         self.stream_closes: list[int] = []
         self.stream_cancels: list[int] = []
@@ -399,12 +401,17 @@ class FakeRawCABI:
     def _invocation_sign_prepared(
         self, prepared_id, signature_json, out_id, out_ptr
     ) -> int:
-        _ = prepared_id, signature_json
+        self.sign_prepared_requests.append(
+            (
+                int(prepared_id.value),
+                json.loads(signature_json.value.decode("utf-8")),
+            )
+        )
         out_id._obj.value = 2001
         return self._write(out_ptr, b'{"signed_id":"signed-1"}')
 
     def _invocation_sign_prepared_local(self, prepared_id, out_id, out_ptr) -> int:
-        _ = prepared_id
+        self.sign_prepared_local_requests.append(int(prepared_id.value))
         out_id._obj.value = 2002
         return self._write(out_ptr, b'{"signed_id":"signed-local"}')
 
@@ -867,6 +874,122 @@ class CABITransportTests(unittest.TestCase):
             )
 
         self.assertEqual(caught.exception.code, ErrorCode.INVALID_ARGUMENT)
+
+    def test_submit_signed_provider_managed_uses_canonical_custody_facts(self) -> None:
+        raw = FakeRawCABI()
+        transport = CABIRuntimeTransport(RuntimeCABILibrary(raw), 42, owns_handle=False)
+        prepared = json.loads(transport.prepare(b"{}", b"{}").decode("utf-8"))
+
+        submitted = json.loads(
+            transport.submit_signed(
+                json.dumps(
+                    {
+                        "prepared": prepared,
+                        "policy": {
+                            "mode": "provider_managed_signing",
+                            "signer_id": "signer-alice-key-1",
+                            "policy_ref": "provider-key-inventory:alice:signer-alice-key-1",
+                        },
+                    },
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ).encode("utf-8")
+            ).decode("utf-8")
+        )
+
+        self.assertEqual(submitted, {"handle_id": 3001, "state": "Submitted"})
+        self.assertEqual(
+            raw.sign_prepared_local_requests, [int(prepared["prepared_id"])]
+        )
+        self.assertEqual(raw.sign_prepared_requests, [])
+        self.assertEqual(transport._prepared_handles.keys(), set())
+
+    def test_submit_signed_provider_managed_signed_invocation_requires_custody_facts(
+        self,
+    ) -> None:
+        cases = (
+            (
+                "missing signer_id",
+                {
+                    "mode": "provider_managed_signing",
+                    "policy_ref": "provider-key-inventory:alice:signer-alice-key-1",
+                },
+                "provider-managed signed invocation policy requires signer_id",
+            ),
+            (
+                "blank signer_id",
+                {
+                    "mode": "provider_managed_signing",
+                    "signer_id": "   ",
+                    "policy_ref": "provider-key-inventory:alice:signer-alice-key-1",
+                },
+                "provider-managed signed invocation policy requires signer_id",
+            ),
+            (
+                "missing policy_ref",
+                {
+                    "mode": "provider_managed_signing",
+                    "signer_id": "signer-alice-key-1",
+                },
+                "provider-managed signed invocation policy requires policy_ref",
+            ),
+            (
+                "blank policy_ref",
+                {
+                    "mode": "provider_managed_signing",
+                    "signer_id": "signer-alice-key-1",
+                    "policy_ref": "   ",
+                },
+                "provider-managed signed invocation policy requires policy_ref",
+            ),
+        )
+        for name, policy, message in cases:
+            with self.subTest(name=name):
+                raw = FakeRawCABI()
+                transport = CABIRuntimeTransport(
+                    RuntimeCABILibrary(raw), 42, owns_handle=False
+                )
+                prepared = json.loads(transport.prepare(b"{}", b"{}").decode("utf-8"))
+
+                with self.assertRaises(SDKError) as caught:
+                    transport.submit_signed(
+                        json.dumps(
+                            {"prepared": prepared, "policy": policy},
+                            separators=(",", ":"),
+                            sort_keys=True,
+                        ).encode("utf-8")
+                    )
+
+                self.assertEqual(caught.exception.code, ErrorCode.INVALID_ARGUMENT)
+                self.assertIn(message, caught.exception.message)
+                self.assertEqual(raw.sign_prepared_local_requests, [])
+                self.assertEqual(raw.sign_prepared_requests, [])
+                self.assertEqual(
+                    transport._prepared_handles.keys(), {prepared["prepared_id"]}
+                )
+
+                transport.submit_signed(
+                    json.dumps(
+                        {
+                            "prepared": prepared,
+                            "signature": {
+                                "algorithm": "ed25519",
+                                "signature_base64": "abc",
+                            },
+                        },
+                        separators=(",", ":"),
+                        sort_keys=True,
+                    ).encode("utf-8")
+                )
+                self.assertEqual(
+                    raw.sign_prepared_requests,
+                    [
+                        (
+                            int(prepared["prepared_id"]),
+                            {"algorithm": "ed25519", "signature_base64": "abc"},
+                        )
+                    ],
+                )
 
     def test_cabi_provider_requests_stream_cancel_before_canonical_terminal(
         self,

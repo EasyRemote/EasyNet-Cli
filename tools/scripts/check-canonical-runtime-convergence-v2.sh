@@ -20461,10 +20461,18 @@ for token, code in (
         raise SystemExit(f"sdk_provider_managed_signing_custody:{code}")
 
 language_checks = {
+    "sdk/go/cabi_runtime.go": (
+        "provider-managed signed invocation policy requires signer_id",
+        "provider-managed signed invocation policy requires policy_ref",
+    ),
     "sdk/go/signing.go": (
         "optionalSignerPolicy(fields map[string]json.RawMessage, name string) (*SignerPolicy, error)",
         "provider-managed signer_policy requires signer_id",
         "provider-managed signer_policy requires policy_ref",
+    ),
+    "sdk/python/easynet_sdk/_cabi.py": (
+        "provider-managed signed invocation policy requires signer_id",
+        "provider-managed signed invocation policy requires policy_ref",
     ),
     "sdk/python/easynet_sdk/signing.py": (
         "def _signer_policy(value: object) -> SignerPolicy:",
@@ -20494,7 +20502,9 @@ for rel, tokens in language_checks.items():
             raise SystemExit(f"sdk_provider_managed_signing_custody:language_policy_missing:{rel}:{token}")
 
 for rel in (
+    "sdk/go/cabi_runtime_test.go",
     "sdk/go/signing_test.go",
+    "sdk/python/tests/test_cabi.py",
     "sdk/python/tests/test_signing.py",
     "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java",
     "sdk/node/test/runtime-core.test.mjs",
@@ -20502,7 +20512,8 @@ for rel in (
 ):
     text = (root / rel).read_text(encoding="utf-8", errors="replace")
     if "providerManagedSignerPolicyRequiresCustodyFacts" not in text and "provider_managed_signer_policy_requires_custody_facts" not in text and "provider-managed signer policy requires custody facts" not in text and "ProviderManagedSignerPolicyRequiresCustodyFacts" not in text:
-        raise SystemExit(f"sdk_provider_managed_signing_custody:language_policy_regression_missing:{rel}")
+        if "ProviderManagedSignedInvocationRequiresCustodyFacts" not in text and "provider_managed_signed_invocation_requires_custody_facts" not in text:
+            raise SystemExit(f"sdk_provider_managed_signing_custody:language_policy_regression_missing:{rel}")
 
 prepared_expiry_forbidden = {
     "sdk/go/signing.go": (

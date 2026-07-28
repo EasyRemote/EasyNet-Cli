@@ -1734,6 +1734,11 @@ type cabiSignedInvocationFields struct {
 	providerManagedSigning bool
 }
 
+const (
+	providerManagedSignedInvocationPolicySignerIDRequired  = "provider-managed signed invocation policy requires signer_id"
+	providerManagedSignedInvocationPolicyPolicyRefRequired = "provider-managed signed invocation policy requires policy_ref"
+)
+
 func signedInvocationCABIFields(raw []byte) (cabiSignedInvocationFields, error) {
 	var decoded map[string]any
 	if err := json.Unmarshal(raw, &decoded); err != nil {
@@ -1782,7 +1787,43 @@ func signedInvocationUsesProviderManagedSigning(decoded map[string]any) (bool, e
 	if !ok {
 		return false, invalidRuntimePayload("signed invocation policy mode must be a string", nil)
 	}
-	return modeString == "provider_managed_signing", nil
+	if strings.TrimSpace(modeString) != "provider_managed_signing" {
+		return false, nil
+	}
+	if _, err := requiredProviderManagedSignedInvocationPolicyString(policy, "signer_id"); err != nil {
+		return false, err
+	}
+	if _, err := requiredProviderManagedSignedInvocationPolicyString(policy, "policy_ref"); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func requiredProviderManagedSignedInvocationPolicyString(policy map[string]any, name string) (string, error) {
+	requiredMessage := providerManagedSignedInvocationPolicyRequiredMessage(name)
+	value, ok := policy[name]
+	if !ok || value == nil {
+		return "", invalidRuntimePayload(requiredMessage, nil)
+	}
+	text, ok := value.(string)
+	if !ok {
+		return "", invalidRuntimePayload(fmt.Sprintf("signed invocation policy %s must be a string", name), nil)
+	}
+	if strings.TrimSpace(text) == "" {
+		return "", invalidRuntimePayload(requiredMessage, nil)
+	}
+	return text, nil
+}
+
+func providerManagedSignedInvocationPolicyRequiredMessage(name string) string {
+	switch name {
+	case "signer_id":
+		return providerManagedSignedInvocationPolicySignerIDRequired
+	case "policy_ref":
+		return providerManagedSignedInvocationPolicyPolicyRefRequired
+	default:
+		return fmt.Sprintf("provider-managed signed invocation policy requires %s", name)
+	}
 }
 
 func mergeBidiStreamsForCABI(draftJSON []byte, streamsJSON []byte) ([]byte, error) {
