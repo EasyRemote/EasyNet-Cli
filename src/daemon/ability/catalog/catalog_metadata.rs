@@ -545,7 +545,6 @@ pub fn description_for(name: &str) -> &'static str {
         }
         agent_names::AGENT_REFRESH => agent_lifecycle_ability::refresh_agents_description(),
         agent_authoring_ability::ABILITY_PUT_AGENT_ABILITY => agent_authoring_ability::DESCRIPTION,
-        device_names::NODE_LIST => device_ops_ability::list_nodes_description(),
         device_names::NODE_DESCRIBE => device_ops_ability::describe_node_description(),
         device_names::NODE_REMOVE => device_ops_ability::remove_node_description(),
         federation_names::ABILITY_DEPLOY => device_ops_ability::deploy_ability_description(),
@@ -801,7 +800,6 @@ fn authored_static_input_schema(name: &str) -> Option<serde_json::Value> {
         agent_authoring_ability::ABILITY_PUT_AGENT_ABILITY => {
             agent_authoring_ability::input_schema()
         }
-        device_names::NODE_LIST => device_ops_ability::list_nodes_input_schema(),
         device_names::NODE_DESCRIBE => device_ops_ability::describe_node_input_schema(),
         device_names::NODE_REMOVE => device_ops_ability::remove_node_input_schema(),
         federation_names::ABILITY_DEPLOY => device_ops_ability::deploy_ability_input_schema(),
@@ -1148,16 +1146,11 @@ pub(crate) fn classify_ability(name: &str) -> Option<AbilityLayer> {
         | resource_names::SKILL_INSTALL
         | resource_names::SKILL_REMOVE
         | resource_names::SKILL_UPGRADE
-        // device-hosted node/ability/remote operations. list_nodes /
-        // describe_node read state but conceptually they sit
-        // with the federation-tier *operations* (peer
-        // enumeration, network health) — Operational by
-        // intent, mirroring how schedule.list / loop.status
-        // got bumped into the introspection layer because they
-        // describe daemon-managed state. The remaining
-        // verbs (remove_node, deploy_ability, uninstall_ability)
-        // mutate state — Operational unambiguous.
-        | device_names::NODE_LIST
+        // device-hosted node/ability/remote operations. `node.describe` reads
+        // the canonical federation-backed device view for one device; fleet
+        // enumeration belongs to `federation.discover`, not a second
+        // device-owned route. The remaining verbs (remove_node, deploy_ability,
+        // uninstall_ability) mutate state — Operational unambiguous.
         | device_names::NODE_DESCRIBE
         | device_names::NODE_REMOVE
         | federation_names::ABILITY_DEPLOY

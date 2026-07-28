@@ -745,19 +745,6 @@ fn real_mission_cancel_returns_an_error_for_an_unknown_run_id() {
 // the registration site + name + arg shape line up.
 
 #[test]
-fn real_device_node_list_returns_local_view_envelope() {
-    let (reg, _g) = registry_with_joined_device_home();
-    let resp = dispatcher_for(reg)
-        .execute_rpc(target("node.list", json!({})))
-        .expect("node.list");
-    let nodes = resp.get("nodes").and_then(Value::as_array).unwrap();
-    assert!(
-        nodes.iter().any(|n| n.get("is_self") == Some(&json!(true))),
-        "node.list must include the local device entry: {resp}"
-    );
-}
-
-#[test]
 fn real_device_node_describe_via_invoke_helper_returns_self_envelope() {
     let (reg, _g) = registry_with_joined_device_home();
     let resp = dispatcher_for(reg)

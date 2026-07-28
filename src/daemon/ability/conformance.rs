@@ -385,7 +385,6 @@ const DEVICE_BASELINE: &[BaselineAbility] = &[
     local_rpc!("meta.describe", DeviceHealth),
     local_rpc!("meta.list_abilities", DeviceHealth),
     local_rpc!("meta.list_resources", DeviceHealth),
-    local_rpc!("node.list", DeviceLifecycle),
     local_rpc!("node.describe", DeviceLifecycle),
     local_rpc!("node.remove", DeviceLifecycle),
     local_rpc!("ability.deploy", DeviceLifecycle),

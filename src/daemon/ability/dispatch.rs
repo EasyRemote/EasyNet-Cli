@@ -1281,7 +1281,7 @@ pub enum OwnerKind {
     /// anchored to the device URA.
     ///
     /// Examples: `fs.read`, `terminal.create`, `session.list`,
-    /// `node.list`, `skill.list`, `device.keyring.sign`.
+    /// `node.describe`, `skill.list`, `device.keyring.sign`.
     Device,
     /// Hosted by the realm Authority plane.
     ///

@@ -6,9 +6,8 @@
 //              unified path: cross-device enumeration goes through
 //              `federation.discover` (the same surface
 //              `easynet device list` uses); ability count goes
-//              through `easynet.discover`. No more
-//              `node.list` — that handler is on the phase 4
-//              cull list.
+//              through `easynet.discover`. There is no separate
+//              device-owned fleet listing route.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.

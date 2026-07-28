@@ -536,8 +536,9 @@ pub fn run_pair(args: PairArgs) -> anyhow::Result<()> {
 //
 // Why not under `easynet device` (the existing group)?
 // `easynet device list` already exists and talks to the LOCAL
-// daemon UDS via `node.list` (device-mode CLI: "what does
-// THIS device see in its hub federation?"). Operator-mode HTTP
+// daemon through the canonical federation discovery path
+// (device-mode CLI: "what does THIS device see in its hub federation?").
+// Operator-mode HTTP
 // is a different lens entirely: "what does the BACKEND know about
 // the realm, viewed as the logged-in user?". Keeping the two
 // surfaces separate avoids overloading verbs that already have a

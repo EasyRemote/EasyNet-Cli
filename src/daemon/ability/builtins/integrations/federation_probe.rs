@@ -3,7 +3,7 @@
 //
 // File: src/daemon/ability/builtins/integrations/federation_probe.rs
 // Description: Shared device-discovery + direct-probe helpers used by
-//              node.list and observe.network_health.
+//              node.describe and observe.network_health.
 //
 // Why this module exists
 // ----------------------
@@ -31,7 +31,7 @@ use std::time::Instant;
 use serde_json::{json, Value};
 
 use crate::daemon::ability::builtins::agents::discover::DiscoverFederationResolver;
-use crate::daemon::ability::names::{device_control, governance};
+use crate::daemon::ability::names::governance;
 use crate::daemon::federation::client::ability_contract::ResolvedAgent;
 #[cfg(feature = "axon-pb")]
 use crate::daemon::invocation::routing::remote_invoke::{
@@ -40,7 +40,6 @@ use crate::daemon::invocation::routing::remote_invoke::{
 use crate::daemon::persistence::config;
 
 const DEVICE_HEALTH_ABILITY: &str = governance::OBSERVE_HEALTH;
-const DEVICE_NODE_LIST_ABILITY: &str = device_control::NODE_LIST;
 const DEVICE_NETWORK_HEALTH_ABILITY: &str = governance::OBSERVE_NETWORK_HEALTH;
 const MAX_DEVICE_PROBES: usize = 64;
 
@@ -147,20 +146,18 @@ impl DeviceProbe for RemoteDeviceProbe {
 #[derive(Debug, Default)]
 struct DeviceProfileAbilitySet {
     has_health: bool,
-    has_fleet: bool,
     has_network: bool,
 }
 
 impl DeviceProfileAbilitySet {
     fn observe(&mut self, public_name: &str) {
         self.has_health |= public_name == expected_device_public_ability(DEVICE_HEALTH_ABILITY);
-        self.has_fleet |= public_name == expected_device_public_ability(DEVICE_NODE_LIST_ABILITY);
         self.has_network |=
             public_name == expected_device_public_ability(DEVICE_NETWORK_HEALTH_ABILITY);
     }
 
     fn is_device_profile(&self) -> bool {
-        self.has_health && (self.has_fleet || self.has_network)
+        self.has_health && self.has_network
     }
 }
 
@@ -533,7 +530,7 @@ fn probe_remote_device(agent_ura: &str) -> ProbeOutcome {
             &target,
             crate::daemon::identity::local_invocation::local_daemon_ura()?,
             json!({
-                "source": "node.list",
+                "source": "observe.network_health",
                 "probe": "alive",
             }),
             Duration::from_secs(30),
@@ -827,9 +824,11 @@ mod tests {
         let mut health = ability_summary(device_ura, "wrong", "health");
         health["ability_ura"] =
             json!(crate::core::ura::owner_ability_ura(device_ura, "observe.health").unwrap());
-        let mut fleet = ability_summary(device_ura, "wrong", "list");
+        let mut fleet = ability_summary(device_ura, "wrong", "network_health");
         fleet["ability_ura"] =
-            json!(crate::core::ura::owner_ability_ura(device_ura, "node.list").unwrap());
+            json!(
+                crate::core::ura::owner_ability_ura(device_ura, "observe.network_health").unwrap()
+            );
         let device = ResolvedAgent {
             ura: device_ura.into(),
             status: "active".into(),

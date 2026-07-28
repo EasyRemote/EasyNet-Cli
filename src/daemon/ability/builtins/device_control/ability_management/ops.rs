@@ -11,7 +11,6 @@
 //
 // Abilities registered here
 // -------------------------
-//   node.list        List device nodes (this device + known peers).
 //   node.describe     Describe one node by id.
 //   node.remove       Remove a node from the realm device registry.
 //   ability.deploy    Publish an ability bundle to a target Device URA.
@@ -55,7 +54,6 @@ use crate::support::async_bridge::{run_blocking, SyncBridgeRuntimePolicy};
 /// `agent_lifecycle_ability::SharedHotRegistrarCell`.
 pub type SharedDeviceRegistrarCell = OnceLock<Arc<DeviceAbilityRegistrar>>;
 
-pub const ABILITY_LIST_NODES: &str = crate::daemon::ability::names::device_control::NODE_LIST;
 pub const ABILITY_DESCRIBE_NODE: &str =
     crate::daemon::ability::names::device_control::NODE_DESCRIBE;
 pub const ABILITY_REMOVE_NODE: &str = crate::daemon::ability::names::device_control::NODE_REMOVE;
@@ -143,17 +141,6 @@ pub fn register(
     local_catalog: Arc<OnceLock<Arc<AxonAbilityCatalog>>>,
     resolver: SharedDiscoverFederationResolver,
 ) {
-    let list_resolver = Arc::clone(&resolver);
-    reg.register_rpc_with_spec(
-        ABILITY_LIST_NODES,
-        OwnerKind::Device,
-        crate::daemon::ability::catalog::system_manifest::registry_manifest(
-            ABILITY_LIST_NODES,
-            list_nodes_description(),
-            list_nodes_input_schema(),
-        ),
-        Arc::new(move |args| list_nodes_handler(args, list_resolver.as_ref())),
-    );
     let describe_resolver = Arc::clone(&resolver);
     let describe_catalog = Arc::clone(&local_catalog);
     reg.register_rpc_with_spec(
@@ -259,34 +246,6 @@ fn require_device_registrar(
              daemon runtime assembly has not completed"
         )
     })
-}
-
-// ── node.list ─────────────────────────────────────────────
-
-/// List every node visible from this device through the canonical
-/// federation read model resolver.
-fn list_nodes_handler(
-    _args: Value,
-    resolver: &dyn DiscoverFederationResolver,
-) -> anyhow::Result<Value> {
-    let view = federation_probe::collect_device_view(resolver);
-    let nodes: Vec<Value> = view
-        .nodes
-        .iter()
-        .map(federation_probe::node_to_json)
-        .collect();
-    let unavailable_nodes: Vec<Value> = view
-        .unavailable_nodes
-        .iter()
-        .map(federation_probe::node_to_json)
-        .collect();
-    Ok(json!({
-        "nodes": nodes,
-        "unavailable_nodes": unavailable_nodes,
-        "federation_view": view.federation_view,
-        "federation_view_reason": view.federation_view_reason,
-        "resolve_latency_ms": view.resolve_latency_ms,
-    }))
 }
 
 // ── node.describe ──────────────────────────────────────────
@@ -693,25 +652,9 @@ fn ability_public_name(ability_ura: &str) -> anyhow::Result<String> {
 
 // ── Discovery surfaces ───────────────────────────────────────────
 
-pub fn list_nodes_description() -> &'static str {
-    "List device nodes visible from this daemon. The handler resolves \
-     the realm directory through federation.resolve and then directly \
-     probes each discovered device-profile Agent with observe.health, \
-     so callers can distinguish a local-only view, a directory-only view, \
-     and a directly reachable peer."
-}
-
-pub fn list_nodes_input_schema() -> Value {
-    json!({
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {}
-    })
-}
-
 pub fn describe_node_description() -> &'static str {
     "Describe one node by id from the same live federation-backed view \
-     used by node.list. Accepts `local`, this device's actual \
+     used by federation.discover. Accepts `local`, this device's actual \
      node id, or any resolved peer node id."
 }
 
@@ -796,19 +739,6 @@ mod tests {
     }
 
     #[test]
-    fn list_nodes_returns_at_least_self() {
-        let _home = provision_local_device_credentials();
-        let resolver = detached_resolver();
-        let resp = list_nodes_handler(json!({}), resolver.as_ref()).unwrap();
-        let nodes = resp.get("nodes").and_then(Value::as_array).unwrap();
-        assert!(
-            nodes.iter().any(|n| n.get("is_self") == Some(&json!(true))),
-            "node.list must include the local device entry: {resp}"
-        );
-        assert!(resp.get("federation_view").is_some());
-    }
-
-    #[test]
     fn registration_publishes_device_ops_manifests() {
         let _home = provision_local_device_credentials();
         let mut reg = metadata_test_catalog();
@@ -820,7 +750,6 @@ mod tests {
         );
 
         for ability in [
-            ABILITY_LIST_NODES,
             ABILITY_DESCRIBE_NODE,
             ABILITY_REMOVE_NODE,
             ABILITY_DEPLOY_ABILITY,

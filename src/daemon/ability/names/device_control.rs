@@ -13,7 +13,6 @@ pub const SESSION_LIST: &str = crate::daemon::ability::runtime_admin_routes_gen:
 pub const SESSION_ATTACH: &str = "session.attach";
 pub const SESSION_OPEN: &str = "session.open";
 
-pub const NODE_LIST: &str = "node.list";
 pub const NODE_DESCRIBE: &str = "node.describe";
 pub const NODE_REMOVE: &str = "node.remove";
 

@@ -43,7 +43,6 @@ pub const RESOLVE: &str = "federation.resolve";
 RS
 
 cat >"$SB/src/daemon/ability/names/device_control.rs" <<'RS'
-pub const NODE_LIST: &str = "node.list";
 pub const NODE_DESCRIBE: &str = "node.describe";
 pub const NODE_REMOVE: &str = "node.remove";
 RS
@@ -146,6 +145,28 @@ grep -Fq "device lifecycle ability names must be owned by names::device_control"
 
 cat >"$SB/src/daemon/ability/names/federation.rs" <<'RS'
 pub const RESOLVE: &str = "federation.resolve";
+RS
+cat >"$SB/src/daemon/ability/names/device_control.rs" <<'RS'
+pub const NODE_LIST: &str = "node.list";
+pub const NODE_DESCRIBE: &str = "node.describe";
+pub const NODE_REMOVE: &str = "node.remove";
+RS
+
+set +e
+(
+  cd "$SB"
+  bash tools/scripts/check-ability-model-convergence.sh
+) >/tmp/check-ability-model-convergence.out 2>&1
+rc=$?
+set -e
+[[ "$rc" == "1" ]] || fail "retired device-owned node.list should exit 1 (got $rc)"
+grep -Fq "retired node.list fleet route must not re-enter" \
+  /tmp/check-ability-model-convergence.out \
+  || fail "retired node.list failure should name catalogue route retirement"
+
+cat >"$SB/src/daemon/ability/names/device_control.rs" <<'RS'
+pub const NODE_DESCRIBE: &str = "node.describe";
+pub const NODE_REMOVE: &str = "node.remove";
 RS
 cat >"$SB/src/daemon/ability/catalog/build.rs" <<'RS'
 fn bad() {

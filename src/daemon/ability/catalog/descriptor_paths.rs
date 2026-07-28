@@ -99,7 +99,6 @@ impl SystemAbilityDescriptorGroup {
             | device_control::TERMINAL_INPUT
             | device_control::TERMINAL_READ
             | device_control::TERMINAL_RESIZE
-            | device_control::NODE_LIST
             | device_control::NODE_DESCRIBE
             | device_control::NODE_REMOVE
             | federation::ABILITY_DEPLOY
