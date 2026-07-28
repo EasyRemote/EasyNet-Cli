@@ -227,7 +227,7 @@ pub fn run(args: StatusArgs) -> anyhow::Result<()> {
     // returns the full local catalogue). Cheaper than the legacy
     // O(N) per-node fan-out and matches what `easynet ability list`
     // reports.
-    match LocalRuntimeCatalogueReadIssuer::invoke("meta.list_abilities", serde_json::json!({})) {
+    match LocalRuntimeCatalogueReadIssuer::list_abilities(serde_json::json!({})) {
         Ok(v) => {
             let count = v
                 .get("abilities")

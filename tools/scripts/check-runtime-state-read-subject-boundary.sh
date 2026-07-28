@@ -30,7 +30,9 @@ GOVERNANCE_TARGETS=(
 
 CATALOGUE_TARGETS=(
   "src/cli/daemon_client/ability_catalog.rs"
+  "src/cli/daemon_client/remote_system_ability.rs"
   "src/cli/commands/ability_record.rs"
+  "src/cli/commands/status.rs"
   "src/daemon/ability/catalog/profiles/mcp.rs"
 )
 
@@ -213,13 +215,41 @@ done
 
 for target in "${CATALOGUE_TARGETS[@]}"; do
   [[ -f "$target" ]] || fail "missing $target"
-  if ! rg -n 'LocalRuntimeCatalogueReadIssuer::invoke' "$target" >/dev/null; then
+  if ! rg -n 'LocalRuntimeCatalogueReadIssuer::list_(abilities|resources)' "$target" >/dev/null; then
     fail "$target must enter local runtime catalogue through LocalRuntimeCatalogueReadIssuer"
   fi
   if rg -n '\binvoke_local_ability\s*\(' "$target"; then
     fail "$target must not use generic invoke_local_ability for runtime catalogue reads"
   fi
 done
+
+"$PYTHON_BIN" - "$ISSUER" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+issuer = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+match = re.search(
+    r"impl LocalRuntimeCatalogueReadIssuer \{(?P<body>.*?)\n\}",
+    issuer,
+    re.S,
+)
+if not match:
+    raise SystemExit("LocalRuntimeCatalogueReadIssuer impl is missing")
+body = match.group("body")
+if "pub fn invoke(" in body or "pub fn invoke_timeout(" in body:
+    raise SystemExit(
+        "LocalRuntimeCatalogueReadIssuer must expose typed catalogue methods, not generic invoke methods"
+    )
+for required in (
+    "pub fn list_abilities(",
+    "pub fn list_abilities_timeout(",
+    "pub fn list_resources(",
+    "pub fn list_resources_timeout(",
+):
+    if required not in body:
+        raise SystemExit(f"LocalRuntimeCatalogueReadIssuer missing {required}")
+PY
 
 AGENT_GATEWAY="src/cli/daemon_client/agent_gateway.rs"
 AGENT_VIEW="src/cli/daemon_client/agent_view.rs"

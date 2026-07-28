@@ -62,7 +62,7 @@ impl AbilityCatalogueClient {
     }
 
     pub(crate) fn fetch_local_value(&self) -> anyhow::Result<Value> {
-        LocalRuntimeCatalogueReadIssuer::invoke("meta.list_abilities", self.query.to_request())
+        LocalRuntimeCatalogueReadIssuer::list_abilities(self.query.to_request())
     }
 
     pub(crate) fn fetch_local_abilities(&self) -> anyhow::Result<Vec<Value>> {

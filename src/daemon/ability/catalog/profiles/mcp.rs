@@ -772,8 +772,7 @@ impl AbilityCatalogReader for DaemonAbilityCatalogReader {
         use anyhow::Context;
 
         let response =
-            crate::support::platform::local_invoke::LocalRuntimeCatalogueReadIssuer::invoke(
-                "meta.list_abilities",
+            crate::support::platform::local_invoke::LocalRuntimeCatalogueReadIssuer::list_abilities(
                 serde_json::json!({"scope": "local"}),
             )
             .context("read live daemon ability catalog for MCP")?;

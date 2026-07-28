@@ -794,20 +794,41 @@ pub fn invoke_local_target_explicit_root_timeout(
 pub struct LocalRuntimeCatalogueReadIssuer;
 
 impl LocalRuntimeCatalogueReadIssuer {
-    pub fn invoke(ability: &str, args: Value) -> anyhow::Result<Value> {
-        Self::invoke_timeout(ability, args, std::time::Duration::from_secs(30))
+    pub fn list_abilities(args: Value) -> anyhow::Result<Value> {
+        Self::list_abilities_timeout(args, std::time::Duration::from_secs(30))
     }
 
-    pub fn invoke_timeout(
-        ability: &str,
+    pub fn list_abilities_timeout(
         args: Value,
         timeout: std::time::Duration,
     ) -> anyhow::Result<Value> {
-        if !crate::daemon::ability::names::governance::is_runtime_catalogue_read(ability.trim()) {
-            anyhow::bail!(
-                "LocalRuntimeCatalogueReadIssuer only admits runtime catalogue reads, got {ability:?}"
-            );
-        }
+        Self::invoke_catalogue_read_timeout(
+            crate::daemon::ability::names::governance::META_LIST_ABILITIES,
+            args,
+            timeout,
+        )
+    }
+
+    pub fn list_resources(args: Value) -> anyhow::Result<Value> {
+        Self::list_resources_timeout(args, std::time::Duration::from_secs(30))
+    }
+
+    pub fn list_resources_timeout(
+        args: Value,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<Value> {
+        Self::invoke_catalogue_read_timeout(
+            crate::daemon::ability::names::resources::META_LIST_RESOURCES,
+            args,
+            timeout,
+        )
+    }
+
+    fn invoke_catalogue_read_timeout(
+        ability: &'static str,
+        args: Value,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<Value> {
         LocalDaemonSystemAbilityIssuer::invoke_root_for_local_daemon_identity_timeout(
             ability, args, timeout,
         )

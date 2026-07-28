@@ -310,11 +310,9 @@ fn camera_start_arguments(plan: &RecordingPlan) -> anyhow::Result<Value> {
 
 fn default_resource_ura(kind: MediaRecordingKind) -> anyhow::Result<String> {
     let resource_type = kind.resource_type();
-    let response = LocalRuntimeCatalogueReadIssuer::invoke(
-        "meta.list_resources",
-        json!({"types": [resource_type]}),
-    )
-    .with_context(|| format!("invoke meta.list_resources(types=[\"{resource_type}\"])"))?;
+    let response =
+        LocalRuntimeCatalogueReadIssuer::list_resources(json!({"types": [resource_type]}))
+            .with_context(|| format!("invoke meta.list_resources(types=[\"{resource_type}\"])"))?;
     select_default_resource_ura(kind, &response)
 }
 

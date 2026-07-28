@@ -115,8 +115,7 @@ pub(crate) fn invoke_remote_device_catalogue_read(
         crate::support::platform::remote_device::require_caller_device_ura_from_credentials()?;
     match CatalogueReadRoute::resolve(target_ura, caller_ura) {
         CatalogueReadRoute::LocalRuntime { target_ura } => {
-            crate::support::platform::local_invoke::LocalRuntimeCatalogueReadIssuer::invoke(
-                "meta.list_abilities",
+            crate::support::platform::local_invoke::LocalRuntimeCatalogueReadIssuer::list_abilities(
                 args,
             )
             .with_context(|| format!("read local meta.list_abilities for target={target_ura}"))
