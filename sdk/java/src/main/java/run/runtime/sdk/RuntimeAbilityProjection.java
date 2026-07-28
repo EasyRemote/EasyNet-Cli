@@ -122,9 +122,7 @@ final class RuntimeAbilityProjection {
 
   private static boolean runtimeCatalogueReadAbility(String value) {
     return value.equals("meta.list_abilities")
-        || value.equals("runtime.catalog.list")
-        || value.endsWith(".meta.list_abilities")
-        || value.contains(".runtime.catalog.");
+        || value.endsWith(".meta.list_abilities");
   }
 
   private static boolean runtimeReceiptReadAbility(String value) {

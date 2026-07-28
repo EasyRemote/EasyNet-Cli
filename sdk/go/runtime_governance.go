@@ -11,9 +11,7 @@ func runtimeGovernanceDescriptorProviderForAbility(abilityName string) string {
 	abilityName = strings.TrimSpace(abilityName)
 	switch {
 	case abilityName == "meta.list_abilities",
-		abilityName == "runtime.catalog.list",
-		strings.HasSuffix(abilityName, ".meta.list_abilities"),
-		strings.Contains(abilityName, ".runtime.catalog."):
+		strings.HasSuffix(abilityName, ".meta.list_abilities"):
 		return runtimeAbilityDescriptorProvider
 	case strings.HasPrefix(abilityName, "invocation.history."),
 		strings.HasPrefix(abilityName, "invocation.trace."),

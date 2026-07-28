@@ -5571,6 +5571,8 @@ for required in (
         raise SystemExit(f"sdk_history_public_route_cutover:go_governance_missing:{required}")
 if "receipt.catalog" in go_governance:
     raise SystemExit("sdk_history_public_route_cutover:go_receipt_catalog_alias_not_retired")
+if "runtime.catalog" in go_governance:
+    raise SystemExit("sdk_history_public_route_cutover:go_runtime_catalog_alias_not_retired")
 if "ability.Invoke(ctx, call, r.listAbility, args)" in go_receipt or "ability.Invoke(ctx, call, r.getAbility, args)" in go_receipt:
     raise SystemExit("sdk_history_public_route_cutover:go_receipt_uses_public_invoke")
 for required in (
@@ -5642,6 +5644,8 @@ for required in (
         raise SystemExit(f"sdk_history_public_route_cutover:py_governance_missing:{required}")
 if "receipt.catalog" in py_governance:
     raise SystemExit("sdk_history_public_route_cutover:py_receipt_catalog_alias_not_retired")
+if "runtime.catalog" in py_governance:
+    raise SystemExit("sdk_history_public_route_cutover:py_runtime_catalog_alias_not_retired")
 for required in (
     "def _reject_governance_read_action(",
     "is_runtime_governance_read_ability(public_name, ability_ura=ability_ura)",
@@ -5833,6 +5837,8 @@ for corpus, label in (
 ):
     if "receipt.catalog" in corpus:
         raise SystemExit(f"sdk_history_public_ingress_cutover:{label}_receipt_catalog_alias_not_retired")
+    if "runtime.catalog" in corpus:
+        raise SystemExit(f"sdk_history_public_ingress_cutover:{label}_runtime_catalog_alias_not_retired")
     for ability in (
         "meta.list_abilities",
         "invocation.history.list",

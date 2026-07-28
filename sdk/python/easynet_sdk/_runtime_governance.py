@@ -43,9 +43,7 @@ def _ability_candidates(ability_name: str, ability_ura: str) -> tuple[str, ...]:
 def _is_catalogue_read(value: str) -> bool:
     return (
         value == "meta.list_abilities"
-        or value == "runtime.catalog.list"
         or value.endswith(".meta.list_abilities")
-        or ".runtime.catalog." in value
     )
 
 

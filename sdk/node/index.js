@@ -90,7 +90,6 @@ export const MAX_STREAM_BUFFERED_EVENTS = 1024;
 export const MAX_BIDI_BUFFERED_FRAMES = 1024;
 const RUNTIME_GOVERNANCE_READ_ABILITIES = Object.freeze([
   "meta.list_abilities",
-  "runtime.catalog.list",
   "invocation.history.list",
   "invocation.history.get",
   "invocation.history.path",
@@ -3834,9 +3833,7 @@ function runtimeGovernanceDescriptorProviderForRequest(abilityName, provider) {
 function runtimeCatalogueReadAbility(value) {
   return (
     value === "meta.list_abilities" ||
-    value === "runtime.catalog.list" ||
-    value.endsWith(".meta.list_abilities") ||
-    value.includes(".runtime.catalog.")
+    value.endsWith(".meta.list_abilities")
   );
 }
 
