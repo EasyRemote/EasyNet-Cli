@@ -153,19 +153,19 @@ func TestRuntimeSigningTransportRejectsUnsignedDraftForDifferentCaller(t *testin
 	}
 }
 
-func TestRuntimeSigningCausalContextRejectsRetiredDAGProofAliases(t *testing.T) {
+func TestRuntimeSigningCausalContextRejectsRetiredAliases(t *testing.T) {
 	canonical, err := causalContextForInvocationDraft(map[string]any{
-		"form":      "dag",
+		"form":      "merkle",
 		"root_hex":  strings.Repeat("ab", 32),
 		"proof_ura": "easynet:///r/example/resource/agent.alice/proof/causal",
 	})
 	if err != nil {
-		t.Fatalf("canonical DAG causal context: %v", err)
+		t.Fatalf("canonical merkle causal context: %v", err)
 	}
 	if canonical.Kind != CausalContextDAG ||
 		canonical.DAGRootHex != strings.Repeat("ab", 32) ||
 		canonical.DAGProofURA != "easynet:///r/example/resource/agent.alice/proof/causal" {
-		t.Fatalf("canonical DAG causal context = %#v", canonical)
+		t.Fatalf("canonical merkle causal context = %#v", canonical)
 	}
 
 	for _, test := range []struct {
@@ -173,9 +173,56 @@ func TestRuntimeSigningCausalContextRejectsRetiredDAGProofAliases(t *testing.T) 
 		value map[string]any
 	}{
 		{
+			name: "retired kind selector",
+			value: map[string]any{
+				"kind": "none",
+			},
+		},
+		{
+			name: "retired empty form",
+			value: map[string]any{
+				"form": "empty",
+			},
+		},
+		{
+			name: "retired null form",
+			value: map[string]any{
+				"form": "null",
+			},
+		},
+		{
+			name: "retired vector form",
+			value: map[string]any{
+				"form": "vector",
+				"vector": []any{
+					map[string]any{
+						"receipt_hash_hex": strings.Repeat("cd", 32),
+						"receipt_ura":      "easynet:///r/example/resource/receipt/1",
+					},
+				},
+			},
+		},
+		{
+			name: "retired receipt ura alias",
+			value: map[string]any{
+				"form":     "scalar",
+				"ura":      "easynet:///r/example/resource/receipt/1",
+				"hash_hex": strings.Repeat("cd", 32),
+			},
+		},
+		{
+			name: "unknown scalar field",
+			value: map[string]any{
+				"form":             "scalar",
+				"receipt_hash_hex": strings.Repeat("cd", 32),
+				"receipt_ura":      "easynet:///r/example/resource/receipt/1",
+				"receipt_hash":     strings.Repeat("ef", 32),
+			},
+		},
+		{
 			name: "retired proof alias",
 			value: map[string]any{
-				"form":          "dag",
+				"form":          "merkle",
 				"root_hex":      strings.Repeat("ab", 32),
 				"dag_proof_ura": "easynet:///r/example/resource/agent.alice/proof/causal",
 			},
@@ -183,16 +230,24 @@ func TestRuntimeSigningCausalContextRejectsRetiredDAGProofAliases(t *testing.T) 
 		{
 			name: "retired root alias",
 			value: map[string]any{
-				"form":         "dag",
+				"form":         "merkle",
 				"dag_root_hex": strings.Repeat("ab", 32),
 				"proof_ura":    "easynet:///r/example/resource/agent.alice/proof/causal",
+			},
+		},
+		{
+			name: "retired dag form",
+			value: map[string]any{
+				"form":      "dag",
+				"root_hex":  strings.Repeat("ab", 32),
+				"proof_ura": "easynet:///r/example/resource/agent.alice/proof/causal",
 			},
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			_, err := causalContextForInvocationDraft(test.value)
 			if !IsCode(err, ErrInvalidArgument) {
-				t.Fatalf("retired DAG alias error = %v, want %s", err, ErrInvalidArgument)
+				t.Fatalf("retired causal context alias error = %v, want %s", err, ErrInvalidArgument)
 			}
 		})
 	}

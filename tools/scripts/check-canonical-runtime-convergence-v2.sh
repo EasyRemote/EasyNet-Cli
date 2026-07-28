@@ -7550,23 +7550,41 @@ def read(path: Path) -> str:
     return path.read_text()
 
 go = read(go_path)
-for retired in ("dag_root_hex", "dag_proof_ura"):
+for retired in (
+    'causalString(value, "kind")',
+    'case "list", "vector"',
+    'case "merkle", "dag"',
+    'value["vector"]',
+    'causalString(item, "ura")',
+    'causalString(item, "hash_hex")',
+    "dag_root_hex",
+    "dag_proof_ura",
+):
     if retired in go:
-        raise SystemExit(f"sdk_go_causal_context_retired_dag_alias:{retired}")
+        raise SystemExit(f"sdk_go_causal_context_retired_alias:{retired}")
 if 'causalString(value, "root_hex")' not in go:
     raise SystemExit("sdk_go_causal_context_root_hex_missing")
 if 'causalString(value, "proof_ura")' not in go:
     raise SystemExit("sdk_go_causal_context_proof_ura_missing")
-if "causal_context DAG requires root_hex and proof_ura" not in go:
-    raise SystemExit("sdk_go_causal_context_canonical_dag_error_missing")
+if "causal_context merkle requires root_hex and proof_ura" not in go:
+    raise SystemExit("sdk_go_causal_context_canonical_merkle_error_missing")
+if "requireCausalExactKeys" not in go:
+    raise SystemExit("sdk_go_causal_context_exact_key_gate_missing")
 go_tests = read(go_test_path)
 for required in (
-    "TestRuntimeSigningCausalContextRejectsRetiredDAGProofAliases",
+    "TestRuntimeSigningCausalContextRejectsRetiredAliases",
+    '"merkle"',
+    '"kind"',
+    '"none"',
+    '"vector"',
+    '"dag"',
+    '"ura"',
+    '"hash_hex"',
     "dag_root_hex",
     "dag_proof_ura",
 ):
     if required not in go_tests:
-        raise SystemExit(f"sdk_go_causal_context_dag_alias_test_missing:{required}")
+        raise SystemExit(f"sdk_go_causal_context_alias_test_missing:{required}")
 
 py = read(py_path)
 for retired in ("dag_root_hex", "dag_proof_ura"):
