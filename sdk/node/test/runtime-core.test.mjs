@@ -13,6 +13,11 @@ import {
 
 const expectedExports = [
   "AUTHORITY_PROFILE",
+  "AbilityDescriptorClient",
+  "AbilityDescriptorGetRequest",
+  "AbilityDescriptorListRequest",
+  "AbilityDescriptorPage",
+  "AbilityDescriptorProjection",
   "AuthorityClient",
   "AuthorityMetadata",
   "BidiSession",
@@ -40,6 +45,7 @@ const expectedExports = [
   "ReceiptListRequest",
   "RetryHint",
   "RuntimeAbilityClient",
+  "RuntimeAbilityDescriptorProvider",
   "RuntimeCallContext",
   "RuntimeClient",
   "RuntimeHealth",
@@ -1641,6 +1647,143 @@ test("runtime descriptor resolver admits authority catalogue provider tuple", as
     subject_ura: "easynet:///r/example/authority",
     provider: "ability_descriptor",
   });
+});
+
+test("runtime ability descriptor provider uses catalogue provider and runtime-owner envelope", async () => {
+  const calls = [];
+  const catalogueDescriptor =
+    "easynet:///r/example/ability/device.dev-a.meta.list_abilities@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read";
+  const runtime = new sdk.RuntimeClient({
+    resolveDescriptorRef: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      calls.push(["resolve", request]);
+      return JSON.stringify({ descriptor_ref: catalogueDescriptor });
+    },
+    invoke: (draftJSON) => {
+      const draft = JSON.parse(Buffer.from(draftJSON).toString("utf8"));
+      calls.push(["invoke", draft]);
+      return JSON.stringify({
+        ok: true,
+        terminal_state: "Completed",
+        output: {
+          abilities: [
+            {
+              ability_ura: "easynet:///r/example/ability/device.dev-a.browser.open_session",
+              descriptor_ref:
+                "easynet:///r/example/ability/device.dev-a.browser.open_session@1.0.0#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb!invoke",
+              name: "browser.open_session",
+              owner_ura: callee,
+              version: "1.0.0",
+              call_mode: "rpc",
+              hints: { read_only: false },
+              metadata: {},
+            },
+          ],
+        },
+        terminal_receipt: canonicalRuntimeReceipt("catalogue-read", "completed", "Completed", 1),
+      });
+    },
+  });
+  const provider = new sdk.RuntimeAbilityDescriptorProvider(new sdk.RuntimeAbilityClient(runtime));
+  const client = new sdk.AbilityDescriptorClient(provider);
+
+  const page = await client.list({
+    call: {
+      caller_ura: caller,
+      callee_ura: callee,
+      subject_ura: "easynet:///r/example/resource/ignored-product-subject",
+      nonce_base64: nonce,
+      causal_context: { form: "none" },
+    },
+    scope: "device",
+    owner_ura: callee,
+  });
+
+  assert.equal(page.descriptors.length, 1);
+  assert.equal(page.descriptors[0].name, "browser.open_session");
+  assert.deepEqual(calls[0], [
+    "resolve",
+    {
+      callee_ura: callee,
+      ability: "meta.list_abilities",
+      call_mode: "rpc",
+      caller_ura: caller,
+      subject_ura: "easynet:///r/example/authority",
+      provider: "ability_descriptor",
+    },
+  ]);
+  assert.equal(calls[1][1].descriptor_ref, catalogueDescriptor);
+  assert.equal(calls[1][1].subject_ura, callee);
+  assert.deepEqual(calls[1][1].args, { scope: "device", owner_ura: callee });
+});
+
+test("runtime ability governance read auto-selects catalogue provider", async () => {
+  const seen = [];
+  const catalogueDescriptor =
+    "easynet:///r/example/ability/device.dev-a.meta.list_abilities@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read";
+  const runtime = new sdk.RuntimeClient({
+    resolveDescriptorRef: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push(request);
+      return JSON.stringify({ descriptor_ref: catalogueDescriptor });
+    },
+    invoke: () =>
+      JSON.stringify({
+        ok: true,
+        terminal_state: "Completed",
+        output: { abilities: [] },
+        terminal_receipt: canonicalRuntimeReceipt("catalogue-read-auto", "completed", "Completed", 1),
+      }),
+  });
+
+  await new sdk.RuntimeAbilityClient(runtime).invokeGovernanceRead(
+    {
+      caller_ura: caller,
+      callee_ura: callee,
+      subject_ura: callee,
+      nonce_base64: nonce,
+      causal_context: { form: "none" },
+    },
+    "meta.list_abilities",
+    {},
+  );
+
+  assert.equal(seen[0].provider, "ability_descriptor");
+  assert.equal(seen[0].subject_ura, "easynet:///r/example/authority");
+});
+
+test("ability descriptor client normalizes provider projections", async () => {
+  const descriptorRow = {
+    ability_ura: "easynet:///r/example/ability/device.dev-a.browser.open_session",
+    descriptor_ref:
+      "easynet:///r/example/ability/device.dev-a.browser.open_session@1.0.0#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb!invoke",
+    name: "browser.open_session",
+    owner_ura: callee,
+    version: "1.0.0",
+  };
+  const client = new sdk.AbilityDescriptorClient({
+    list: () => ({ descriptors: [descriptorRow] }),
+    get: () => descriptorRow,
+  });
+  const call = {
+    caller_ura: caller,
+    callee_ura: callee,
+    subject_ura: callee,
+    nonce_base64: nonce,
+    causal_context: { form: "none" },
+  };
+
+  const page = await client.list({
+    call,
+  });
+  const descriptor = await client.get({
+    call,
+    ability_ura: descriptorRow.ability_ura,
+  });
+
+  assert.ok(page instanceof sdk.AbilityDescriptorPage);
+  assert.ok(page.descriptors[0] instanceof sdk.AbilityDescriptorProjection);
+  assert.ok(descriptor instanceof sdk.AbilityDescriptorProjection);
 });
 
 test("runtime receipt provider uses governance descriptor provider and complete tuple", async () => {

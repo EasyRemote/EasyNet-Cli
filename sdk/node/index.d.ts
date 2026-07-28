@@ -494,6 +494,103 @@ export class RuntimeReceiptProvider implements ReceiptProvider {
   list(request: ReceiptListRequest | ReceiptListRequestFields): Promise<ReceiptHistoryPage>;
 }
 
+export interface AbilityDescriptorProjectionFields {
+  ability_ura: string;
+  descriptor_ref: string;
+  name: string;
+  owner_ura: string;
+  version: string;
+  schema_hash?: string | null;
+  descriptor_hash?: string | null;
+  call_mode?: string | null;
+  class?: string | null;
+  receipt_semantics?: Record<string, unknown> | null;
+  visibility?: string | null;
+  source?: string | null;
+  description?: string | null;
+  hints?: Record<string, unknown> | null;
+  schema_summary?: Record<string, unknown> | null;
+  input_schema?: Record<string, unknown> | null;
+  metadata?: Record<string, unknown> | null;
+}
+
+export class AbilityDescriptorProjection {
+  abilityURA: string;
+  descriptorRef: string;
+  name: string;
+  ownerURA: string;
+  version: string;
+  schemaHash: string;
+  descriptorHash: string;
+  callMode: string;
+  className: string;
+  receiptSemantics: Record<string, unknown>;
+  visibility: string;
+  source: string;
+  description: string;
+  hints: Record<string, unknown>;
+  schemaSummary: Record<string, unknown>;
+  inputSchema: Record<string, unknown>;
+  metadata: Record<string, unknown>;
+  constructor(fields: AbilityDescriptorProjectionFields);
+  toJSON(): AbilityDescriptorProjectionFields;
+}
+
+export interface AbilityDescriptorListRequestFields {
+  call: RuntimeCallContext | RuntimeCallContextFields;
+  scope?: string | null;
+  owner_ura?: string | null;
+  ability_ura?: string | null;
+}
+
+export class AbilityDescriptorListRequest {
+  call: RuntimeCallContext;
+  scope: string;
+  ownerURA: string;
+  abilityURA: string;
+  constructor(fields: AbilityDescriptorListRequestFields);
+  toJSON(): Record<string, unknown>;
+}
+
+export interface AbilityDescriptorGetRequestFields {
+  call: RuntimeCallContext | RuntimeCallContextFields;
+  ability_ura: string;
+  descriptor_version?: string | null;
+  call_mode?: string | null;
+  scope?: string | null;
+}
+
+export class AbilityDescriptorGetRequest {
+  call: RuntimeCallContext;
+  abilityURA: string;
+  descriptorVersion: string;
+  callMode: string;
+  scope: string;
+  constructor(fields: AbilityDescriptorGetRequestFields);
+}
+
+export class AbilityDescriptorPage {
+  descriptors: AbilityDescriptorProjection[];
+  constructor(fields: { descriptors: Array<AbilityDescriptorProjection | AbilityDescriptorProjectionFields> });
+}
+
+export interface AbilityDescriptorProvider {
+  list(request: AbilityDescriptorListRequest): Promise<AbilityDescriptorPage | { descriptors: Array<AbilityDescriptorProjection | AbilityDescriptorProjectionFields> }> | AbilityDescriptorPage | { descriptors: Array<AbilityDescriptorProjection | AbilityDescriptorProjectionFields> };
+  get(request: AbilityDescriptorGetRequest): Promise<AbilityDescriptorProjection | AbilityDescriptorProjectionFields> | AbilityDescriptorProjection | AbilityDescriptorProjectionFields;
+}
+
+export class AbilityDescriptorClient {
+  constructor(provider: AbilityDescriptorProvider);
+  list(request: AbilityDescriptorListRequest | AbilityDescriptorListRequestFields): Promise<AbilityDescriptorPage>;
+  get(request: AbilityDescriptorGetRequest | AbilityDescriptorGetRequestFields): Promise<AbilityDescriptorProjection>;
+}
+
+export class RuntimeAbilityDescriptorProvider implements AbilityDescriptorProvider {
+  constructor(ability: RuntimeAbilityClient);
+  list(request: AbilityDescriptorListRequest | AbilityDescriptorListRequestFields): Promise<AbilityDescriptorPage>;
+  get(request: AbilityDescriptorGetRequest | AbilityDescriptorGetRequestFields): Promise<AbilityDescriptorProjection>;
+}
+
 export class RuntimeAbilityClient {
   constructor(runtime: RuntimeClient);
   build(
@@ -518,6 +615,16 @@ export class RuntimeAbilityClient {
     abilityName: string,
     argumentsValue: unknown,
     provider?: string
+  ): Promise<Record<string, unknown>>;
+  buildCatalogueRead(
+    call: RuntimeCallContext | RuntimeCallContextFields,
+    abilityName: string,
+    argumentsValue: unknown
+  ): Promise<InvocationDraft>;
+  invokeCatalogueRead(
+    call: RuntimeCallContext | RuntimeCallContextFields,
+    abilityName: string,
+    argumentsValue: unknown
   ): Promise<Record<string, unknown>>;
 }
 

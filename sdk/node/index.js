@@ -1034,6 +1034,211 @@ export class RuntimeReceiptProvider {
   }
 }
 
+export class AbilityDescriptorProjection {
+  constructor(fields = {}) {
+    const value = objectValue(fields, "ability descriptor");
+    this.abilityURA = requiredRuntimeText(value.ability_ura, "ability_ura");
+    this.descriptorRef = requiredRuntimeText(value.descriptor_ref, "descriptor_ref");
+    this.name = requiredRuntimeText(value.name, "name");
+    this.ownerURA = requiredRuntimeText(value.owner_ura, "owner_ura");
+    this.version = requiredRuntimeText(value.version, "version");
+    this.schemaHash = optionalRuntimeString(value.schema_hash, "schema_hash") ?? "";
+    this.descriptorHash = optionalRuntimeString(value.descriptor_hash, "descriptor_hash") ?? "";
+    this.callMode = optionalRuntimeString(value.call_mode, "call_mode") ?? "";
+    this.className = optionalRuntimeString(value.class, "class") ?? "";
+    this.receiptSemantics = objectValue(value.receipt_semantics ?? {}, "receipt_semantics");
+    this.visibility = optionalRuntimeString(value.visibility, "visibility") ?? "";
+    this.source = optionalRuntimeString(value.source, "source") ?? "";
+    this.description = optionalRuntimeString(value.description, "description") ?? "";
+    this.hints = objectValue(value.hints ?? {}, "hints");
+    this.schemaSummary = objectValue(value.schema_summary ?? {}, "schema_summary");
+    this.inputSchema = objectValue(value.input_schema ?? {}, "input_schema");
+    this.metadata = objectValue(value.metadata ?? {}, "metadata");
+    validateAbilityDescriptorProjection(this);
+    Object.freeze(this);
+  }
+
+  toJSON() {
+    return {
+      ability_ura: this.abilityURA,
+      descriptor_ref: this.descriptorRef,
+      name: this.name,
+      owner_ura: this.ownerURA,
+      version: this.version,
+      schema_hash: this.schemaHash,
+      descriptor_hash: this.descriptorHash,
+      call_mode: this.callMode,
+      class: this.className,
+      receipt_semantics: { ...this.receiptSemantics },
+      visibility: this.visibility,
+      source: this.source,
+      description: this.description,
+      hints: { ...this.hints },
+      schema_summary: { ...this.schemaSummary },
+      input_schema: { ...this.inputSchema },
+      metadata: { ...this.metadata },
+    };
+  }
+}
+
+export class AbilityDescriptorListRequest {
+  constructor(fields) {
+    const value = objectValue(fields, "ability descriptor list request");
+    rejectRuntimeFields(value, ["call", "scope", "owner_ura", "ability_ura"]);
+    this.call = value.call instanceof RuntimeCallContext
+      ? value.call
+      : new RuntimeCallContext(objectValue(value.call, "call"));
+    this.scope = optionalRuntimeString(value.scope, "scope") ?? "";
+    this.ownerURA = optionalRuntimeString(value.owner_ura, "owner_ura") ?? "";
+    this.abilityURA = optionalRuntimeString(value.ability_ura, "ability_ura") ?? "";
+    Object.freeze(this);
+  }
+
+  toJSON() {
+    const value = { call: this.call.toJSON() };
+    if (this.scope) value.scope = this.scope;
+    if (this.ownerURA) value.owner_ura = this.ownerURA;
+    if (this.abilityURA) value.ability_ura = this.abilityURA;
+    return value;
+  }
+}
+
+export class AbilityDescriptorGetRequest {
+  constructor(fields) {
+    const value = objectValue(fields, "ability descriptor get request");
+    rejectRuntimeFields(value, [
+      "call",
+      "ability_ura",
+      "descriptor_version",
+      "call_mode",
+      "scope",
+    ]);
+    this.call = value.call instanceof RuntimeCallContext
+      ? value.call
+      : new RuntimeCallContext(objectValue(value.call, "call"));
+    this.abilityURA = requiredRuntimeText(value.ability_ura, "ability_ura");
+    this.descriptorVersion = optionalRuntimeString(value.descriptor_version, "descriptor_version") ?? "";
+    this.callMode = optionalRuntimeString(value.call_mode, "call_mode") ?? "";
+    this.scope = optionalRuntimeString(value.scope, "scope") ?? "";
+    Object.freeze(this);
+  }
+}
+
+export class AbilityDescriptorPage {
+  constructor(fields) {
+    const value = objectValue(fields, "ability descriptor page");
+    const rawDescriptors = value.descriptors ?? [];
+    if (!Array.isArray(rawDescriptors)) {
+      throw invalidRuntime("ability descriptor page descriptors must be an array");
+    }
+    this.descriptors = rawDescriptors.map((descriptor) =>
+      descriptor instanceof AbilityDescriptorProjection
+        ? descriptor
+        : new AbilityDescriptorProjection(descriptor),
+    );
+    Object.freeze(this.descriptors);
+    Object.freeze(this);
+  }
+}
+
+export class AbilityDescriptorClient {
+  constructor(provider) {
+    if (!provider || typeof provider.list !== "function" || typeof provider.get !== "function") {
+      throw invalidRuntime("AbilityDescriptor provider is required");
+    }
+    this.provider = provider;
+  }
+
+  async list(request) {
+    const result = await this.provider.list(
+      request instanceof AbilityDescriptorListRequest
+        ? request
+        : new AbilityDescriptorListRequest(request),
+    );
+    return result instanceof AbilityDescriptorPage
+      ? result
+      : new AbilityDescriptorPage(result);
+  }
+
+  async get(request) {
+    const result = await this.provider.get(
+      request instanceof AbilityDescriptorGetRequest
+        ? request
+        : new AbilityDescriptorGetRequest(request),
+    );
+    return result instanceof AbilityDescriptorProjection
+      ? result
+      : new AbilityDescriptorProjection(result);
+  }
+}
+
+export class RuntimeAbilityDescriptorProvider {
+  constructor(ability) {
+    if (!(ability instanceof RuntimeAbilityClient)) {
+      throw invalidRuntime("runtime ability client is required");
+    }
+    this.ability = ability;
+  }
+
+  async list(request) {
+    const payload = request instanceof AbilityDescriptorListRequest
+      ? request
+      : new AbilityDescriptorListRequest(request);
+    const args = {};
+    if (payload.scope) args.scope = payload.scope;
+    if (payload.ownerURA) args.owner_ura = payload.ownerURA;
+    if (payload.abilityURA) args.ability_ura = payload.abilityURA;
+    const output = await this.ability.invokeCatalogueRead(
+      payload.call,
+      "meta.list_abilities",
+      args,
+    );
+    const rows = output.abilities;
+    if (!Array.isArray(rows)) {
+      throw invalidRuntime("runtime descriptor catalog output must include descriptor rows");
+    }
+    return new AbilityDescriptorPage({
+      descriptors: rows.map((row, index) => {
+        const descriptor = new AbilityDescriptorProjection(
+          objectValue(row, `ability descriptor row ${index}`),
+        );
+        if (payload.abilityURA && descriptor.abilityURA !== payload.abilityURA) {
+          throw invalidRuntime("runtime returned descriptor outside requested ability_ura");
+        }
+        return descriptor;
+      }),
+    });
+  }
+
+  async get(request) {
+    const payload = request instanceof AbilityDescriptorGetRequest
+      ? request
+      : new AbilityDescriptorGetRequest(request);
+    const page = await this.list(new AbilityDescriptorListRequest({
+      call: payload.call,
+      scope: payload.scope,
+      ability_ura: payload.abilityURA,
+    }));
+    const matches = page.descriptors.filter((descriptor) => {
+      if (descriptor.abilityURA !== payload.abilityURA) return false;
+      if (payload.descriptorVersion && descriptor.version !== payload.descriptorVersion) {
+        return false;
+      }
+      if (payload.callMode && descriptor.callMode !== payload.callMode) {
+        return false;
+      }
+      return true;
+    });
+    if (matches.length === 1) {
+      return matches[0];
+    }
+    if (matches.length === 0) {
+      throw invalidRuntime("ability descriptor not found");
+    }
+    throw invalidRuntime("ability descriptor query is ambiguous");
+  }
+}
+
 export class InvocationBuilder {
   constructor() {
     this.fields = { metadata: {}, governanceRead: false };
@@ -1287,19 +1492,37 @@ export class RuntimeAbilityClient {
     return runtimeAbilityObjectOutput(result);
   }
 
-  async buildGovernanceRead(call, abilityName, argumentsValue, provider = RUNTIME_RECEIPT_HISTORY_PROVIDER) {
+  async buildGovernanceRead(call, abilityName, argumentsValue, provider = "") {
+    const selectedProvider = runtimeGovernanceDescriptorProviderForRequest(abilityName, provider);
     return this.buildWithPolicy(
       call,
       abilityName,
       argumentsValue,
       "rpc",
-      runtimeAbilityGovernanceReadPolicy(provider),
+      runtimeAbilityGovernanceReadPolicy(selectedProvider),
     );
   }
 
-  async invokeGovernanceRead(call, abilityName, argumentsValue, provider = RUNTIME_RECEIPT_HISTORY_PROVIDER) {
+  async invokeGovernanceRead(call, abilityName, argumentsValue, provider = "") {
     const result = await this.runtime.invoke(
       await this.buildGovernanceRead(call, abilityName, argumentsValue, provider),
+    );
+    return runtimeAbilityObjectOutput(result);
+  }
+
+  async buildCatalogueRead(call, abilityName, argumentsValue) {
+    return this.buildWithPolicy(
+      call,
+      abilityName,
+      argumentsValue,
+      "rpc",
+      runtimeAbilityCatalogueReadPolicy(),
+    );
+  }
+
+  async invokeCatalogueRead(call, abilityName, argumentsValue) {
+    const result = await this.runtime.invoke(
+      await this.buildCatalogueRead(call, abilityName, argumentsValue),
     );
     return runtimeAbilityObjectOutput(result);
   }
@@ -3602,6 +3825,31 @@ function runtimeGovernanceDescriptorProviderForAbility(value) {
   return "";
 }
 
+function runtimeGovernanceDescriptorProviderForRequest(abilityName, provider) {
+  const ability = requiredRuntimeText(abilityName, "ability name");
+  const expectedProvider = runtimeGovernanceDescriptorProviderForAbility(ability);
+  const requestedProvider = optionalRuntimeString(provider, "descriptor_provider") ?? "";
+  if (!expectedProvider) {
+    if (requestedProvider) {
+      throw invalidInvocation(
+        `descriptor_ref provider ${requestedProvider} cannot resolve non-governance ability ${ability}`,
+      );
+    }
+    throw invalidInvocation(
+      "runtime governance read requires a runtime governance ability",
+    );
+  }
+  if (!requestedProvider) {
+    return expectedProvider;
+  }
+  if (requestedProvider !== expectedProvider) {
+    throw invalidInvocation(
+      `descriptor_ref provider ${requestedProvider} cannot resolve ability ${ability}; use provider ${expectedProvider}`,
+    );
+  }
+  return requestedProvider;
+}
+
 function runtimeCatalogueReadAbility(value) {
   return (
     value === "meta.list_abilities" ||
@@ -4198,8 +4446,18 @@ function runtimeAbilityDispatchPolicy(options = {}) {
 function runtimeAbilityGovernanceReadPolicy(provider) {
   return {
     allowGovernanceRead: true,
-    subjectPolicy: "descriptor_bound",
+    subjectPolicy: provider === RUNTIME_ABILITY_DESCRIPTOR_PROVIDER
+      ? "runtime_owner"
+      : "descriptor_bound",
     descriptorProvider: requiredRuntimeText(provider, "descriptor_provider"),
+  };
+}
+
+function runtimeAbilityCatalogueReadPolicy() {
+  return {
+    allowGovernanceRead: true,
+    subjectPolicy: "runtime_owner",
+    descriptorProvider: RUNTIME_ABILITY_DESCRIPTOR_PROVIDER,
   };
 }
 
@@ -4227,6 +4485,13 @@ function runtimeAbilitySubjectURA(call, policy) {
 }
 
 function runtimeAbilityDescriptorResolutionSubjectURA(call, subjectURA, policy) {
+  if (policy.descriptorProvider === RUNTIME_ABILITY_DESCRIPTOR_PROVIDER) {
+    const callee = parseCanonicalURANullable(call.calleeURA);
+    if (!callee) {
+      throw invalidInvocation("callee_ura must be canonical for runtime catalogue reads");
+    }
+    return `easynet:///r/${callee.realm}/authority`;
+  }
   if (policy.subjectPolicy === "runtime_owner") {
     return subjectURA.trim();
   }
@@ -4263,6 +4528,24 @@ function runtimeAbilityObjectOutput(result) {
   }
   const output = value.output ?? {};
   return objectValue(output, "invocation output");
+}
+
+function validateAbilityDescriptorProjection(descriptor) {
+  const ability = parseCanonicalURANullable(descriptor.abilityURA);
+  if (!ability || !ability.path.startsWith("ability/")) {
+    throw invalidRuntime("ability descriptor ability_ura must be canonical");
+  }
+  const owner = parseCanonicalURANullable(descriptor.ownerURA);
+  if (!owner) {
+    throw invalidRuntime("ability descriptor owner_ura must be canonical");
+  }
+  const projected = RuntimeAbilityProjection.fromDescriptorRef(
+    descriptor.ownerURA,
+    descriptor.descriptorRef,
+  );
+  if (projected.abilityURA !== descriptor.abilityURA) {
+    throw invalidRuntime("ability descriptor descriptor_ref does not bind ability_ura");
+  }
 }
 
 function receiptListArguments(request) {
