@@ -268,8 +268,7 @@ fn unbound_runtime_user_reason() -> Option<&'static str> {
 
 fn check_runtime() -> Check {
     match config::load() {
-        Ok(state) => match LocalRuntimeOperationalReadIssuer::invoke(
-            "observe.health",
+        Ok(state) => match LocalRuntimeOperationalReadIssuer::observe_health(
             serde_json::json!({"source": "doctor"}),
         ) {
             Ok(_) => Check {

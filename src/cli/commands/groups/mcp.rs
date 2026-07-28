@@ -70,10 +70,7 @@ pub fn run(args: McpArgs) -> anyhow::Result<()> {
 
 fn run_status() -> anyhow::Result<()> {
     let report = crate::daemon::lifecycle::RuntimeLifecycleService::new().status()?;
-    match LocalRuntimeOperationalReadIssuer::invoke(
-        "observe.health",
-        json!({"source": "mcp.status"}),
-    ) {
+    match LocalRuntimeOperationalReadIssuer::observe_health(json!({"source": "mcp.status"})) {
         Ok(_) => {
             output::success("local daemon MCP surface reachable");
             render_lifecycle_details(&report);

@@ -464,27 +464,21 @@ impl LocalRuntimeStateReadIssuer {
 pub struct LocalRuntimeOperationalReadIssuer;
 
 impl LocalRuntimeOperationalReadIssuer {
-    pub fn invoke(ability: &str, args: Value) -> anyhow::Result<Value> {
-        Self::invoke_timeout(ability, args, std::time::Duration::from_secs(30))
+    pub fn observe_health(args: Value) -> anyhow::Result<Value> {
+        Self::observe_health_timeout(args, std::time::Duration::from_secs(30))
     }
 
-    pub fn invoke_timeout(
-        ability: &str,
+    pub fn observe_health_timeout(
         args: Value,
         timeout: std::time::Duration,
     ) -> anyhow::Result<Value> {
-        if ability.trim() != crate::daemon::ability::names::governance::OBSERVE_HEALTH {
-            anyhow::bail!(
-                "LocalRuntimeOperationalReadIssuer only admits observe.health, got {ability:?}"
-            );
-        }
         let subject_ura = LocalRuntimeOwnerReadAttachment::from_discovery_file(
             &KeyServiceRuntimeStateReadSignerCustody,
             "runtime operational read subject unavailable",
         )
         .and_then(|attachment| attachment.into_subject_ura())?;
         LocalDaemonSystemAbilityIssuer::invoke_root_for_subject_timeout(
-            ability,
+            crate::daemon::ability::names::governance::OBSERVE_HEALTH,
             args,
             &subject_ura,
             timeout,
@@ -1460,21 +1454,6 @@ mod tests {
         .expect("device runtime-owner subject");
 
         assert_eq!(subject, "easynet:///r/acme/device/dev-a");
-    }
-
-    #[test]
-    fn runtime_operational_read_issuer_only_admits_observe_health() {
-        let error = LocalRuntimeOperationalReadIssuer::invoke_timeout(
-            "meta.list_abilities",
-            serde_json::json!({}),
-            std::time::Duration::from_millis(1),
-        )
-        .expect_err("operational issuer must not become a generic local read issuer");
-
-        assert!(
-            error.to_string().contains("only admits observe.health"),
-            "wrong error: {error:#}"
-        );
     }
 
     #[test]

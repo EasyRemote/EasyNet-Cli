@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
+PYTHON_BIN="${PYTHON_BIN:-python3}"
 
 fail() {
   printf '%s\n' "$1" >&2
@@ -169,13 +170,36 @@ done
 
 for target in "${OPERATIONAL_TARGETS[@]}"; do
   [[ -f "$target" ]] || fail "missing $target"
-  if ! rg -n 'LocalRuntimeOperationalReadIssuer::invoke' "$target" >/dev/null; then
+  if ! rg -n 'LocalRuntimeOperationalReadIssuer::observe_health' "$target" >/dev/null; then
     fail "$target must enter local runtime operational health through LocalRuntimeOperationalReadIssuer"
   fi
   if rg -n '\binvoke_local_ability\s*\(' "$target"; then
     fail "$target must not use generic invoke_local_ability for runtime operational reads"
   fi
 done
+
+"$PYTHON_BIN" - "$ISSUER" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+match = re.search(
+    r"impl LocalRuntimeOperationalReadIssuer \{(?P<body>.*?)\n\}",
+    text,
+    re.S,
+)
+if not match:
+    raise SystemExit("LocalRuntimeOperationalReadIssuer impl is missing")
+body = match.group("body")
+if "pub fn invoke(" in body or "pub fn invoke_timeout(" in body:
+    raise SystemExit(
+        "LocalRuntimeOperationalReadIssuer must expose observe_health methods, not generic invoke methods"
+    )
+for required in ("pub fn observe_health(", "pub fn observe_health_timeout("):
+    if required not in body:
+        raise SystemExit(f"LocalRuntimeOperationalReadIssuer missing {required}")
+PY
 
 for target in "${GOVERNANCE_TARGETS[@]}"; do
   [[ -f "$target" ]] || fail "missing $target"

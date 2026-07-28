@@ -190,8 +190,7 @@ pub fn run(args: StatusArgs) -> anyhow::Result<()> {
             output::info(&format!("Nodes: {online} online, {offline} offline"));
         }
         StatusRuntimeReadPolicy::DeviceOwnerOperational => {
-            match LocalRuntimeOperationalReadIssuer::invoke(
-                "observe.health",
+            match LocalRuntimeOperationalReadIssuer::observe_health(
                 json!({"source": "runtime.status"}),
             ) {
                 Ok(_) => output::info("Runtime health: daemon invocation endpoint accepting"),
