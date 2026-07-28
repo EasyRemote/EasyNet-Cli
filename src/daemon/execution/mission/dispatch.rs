@@ -14,7 +14,7 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::daemon::persistence::agent_registry::AgentEntry;
 
-use super::adapter::{AdapterOutput, DriverCommand, InvokeOpts};
+use super::adapter::{AdapterOutput, DriverCommand, DriverIsolation, InvokeOpts};
 use super::context::{self, DispatchContext};
 use super::drivers::adapter_for;
 use super::run_store::{RunDir, RunMeta};
@@ -32,6 +32,21 @@ use super::{directory::AgentDirectory, workspace};
 
 /// Maximum recursion depth for agent dispatch (prevents infinite loops).
 const MAX_AGENT_DEPTH: u32 = 2;
+
+/// Hard upper bound for a caller-selected one-shot agent timeout. Persistent
+/// agent configuration may still choose its existing runtime timeout; this cap
+/// applies only to the new per-invocation execution contract.
+pub const MAX_INVOCATION_TIMEOUT_MS: u64 = 900_000;
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AgentExecution {
+    /// Agent-root-relative working directory. `None` preserves the registered
+    /// agent root used by legacy prompt calls.
+    pub cwd: Option<PathBuf>,
+    /// Daemon-enforced child process timeout.
+    pub timeout: Option<Duration>,
+    pub isolation: DriverIsolation,
+}
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AgentUsage {
@@ -147,6 +162,8 @@ pub struct AgentDispatchRequest<'a> {
     pub entry: &'a AgentEntry,
     pub prompt: &'a str,
     pub context: Option<&'a str>,
+    pub system_prompt: Option<&'a str>,
+    pub execution: Option<&'a AgentExecution>,
     pub depth_override: Option<u32>,
     pub overrides: Option<&'a DriverOverrides>,
     pub progress_tx: Option<Arc<dyn Fn(serde_json::Value) + Send + Sync>>,
@@ -169,6 +186,150 @@ pub(crate) fn resolve_timeout(spec_timeout_secs: Option<u64>) -> Duration {
             crate::daemon::persistence::agent_registry::default_timeout_for_new_rows,
         ),
     )
+}
+
+fn resolve_execution_timeout(
+    spec_timeout_secs: Option<u64>,
+    execution: Option<&AgentExecution>,
+) -> anyhow::Result<Duration> {
+    let Some(timeout) = execution.and_then(|value| value.timeout) else {
+        return Ok(resolve_timeout(spec_timeout_secs));
+    };
+    let timeout_ms = u64::try_from(timeout.as_millis())
+        .map_err(|_| anyhow::anyhow!("agent execution timeout is too large"))?;
+    if timeout_ms == 0 || timeout_ms > MAX_INVOCATION_TIMEOUT_MS {
+        anyhow::bail!(
+            "agent execution timeout_ms must be between 1 and {MAX_INVOCATION_TIMEOUT_MS}"
+        );
+    }
+    Ok(timeout)
+}
+
+fn resolve_execution_cwd(
+    agent_root: &Path,
+    execution: Option<&AgentExecution>,
+) -> anyhow::Result<PathBuf> {
+    let Some(execution) = execution else {
+        return Ok(agent_root.to_path_buf());
+    };
+    let Some(relative) = execution.cwd.as_deref() else {
+        if execution.isolation == DriverIsolation::Strict {
+            anyhow::bail!("strict agent execution requires a relative cwd");
+        }
+        return Ok(agent_root.to_path_buf());
+    };
+    if relative.as_os_str().is_empty()
+        || relative
+            .components()
+            .any(|part| !matches!(part, Component::Normal(_)))
+    {
+        anyhow::bail!("agent execution cwd must be a non-empty relative descendant path");
+    }
+
+    let root = std::fs::canonicalize(agent_root).map_err(|error| {
+        anyhow::anyhow!(
+            "canonicalize registered agent root {}: {error}",
+            agent_root.display()
+        )
+    })?;
+    let mut candidate = root.clone();
+    for component in relative.components() {
+        let Component::Normal(component) = component else {
+            unreachable!("execution cwd components were validated above");
+        };
+        candidate.push(component);
+        match std::fs::symlink_metadata(&candidate) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                anyhow::bail!(
+                    "agent execution cwd {} contains a symbolic link",
+                    candidate.display()
+                );
+            }
+            Ok(metadata) if metadata.is_dir() => {}
+            Ok(_) => {
+                anyhow::bail!(
+                    "agent execution cwd component {} is not a directory",
+                    candidate.display()
+                );
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                std::fs::create_dir(&candidate).map_err(|error| {
+                    anyhow::anyhow!(
+                        "create agent execution cwd component {}: {error}",
+                        candidate.display()
+                    )
+                })?;
+            }
+            Err(error) => {
+                return Err(anyhow::anyhow!(
+                    "inspect agent execution cwd component {}: {error}",
+                    candidate.display()
+                ));
+            }
+        }
+        let resolved = std::fs::canonicalize(&candidate).map_err(|error| {
+            anyhow::anyhow!(
+                "canonicalize agent execution cwd component {}: {error}",
+                candidate.display()
+            )
+        })?;
+        if !resolved.starts_with(&root) || resolved == root {
+            anyhow::bail!(
+                "agent execution cwd {} escapes the registered agent root",
+                resolved.display()
+            );
+        }
+        candidate = resolved;
+    }
+    let candidate = std::fs::canonicalize(&candidate).map_err(|error| {
+        anyhow::anyhow!(
+            "canonicalize agent execution cwd {}: {error}",
+            candidate.display()
+        )
+    })?;
+    if !candidate.starts_with(&root) || candidate == root {
+        anyhow::bail!(
+            "agent execution cwd {} escapes the registered agent root",
+            candidate.display()
+        );
+    }
+
+    if execution.isolation == DriverIsolation::Strict && !candidate.join(".git").exists() {
+        let output = std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&candidate)
+            .output()
+            .map_err(|error| {
+                anyhow::anyhow!(
+                    "create strict execution repository boundary at {}: {error}",
+                    candidate.display()
+                )
+            })?;
+        if !output.status.success() {
+            anyhow::bail!(
+                "create strict execution repository boundary at {} failed: {}",
+                candidate.display(),
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+    }
+    Ok(candidate)
+}
+
+fn structured_audit_prompt(
+    system_prompt: Option<&str>,
+    user_prompt: &str,
+) -> anyhow::Result<String> {
+    let Some(system_prompt) = system_prompt else {
+        return Ok(user_prompt.to_string());
+    };
+    serde_json::to_string_pretty(&serde_json::json!({
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ]
+    }))
+    .map_err(Into::into)
 }
 
 /// Resolve the dispatch model from invocation override + spec precedence.
@@ -267,6 +428,31 @@ pub fn send_external_with_overrides(
     send_to_agent_with_depth(agent_name, entry, prompt, context, Some(0), overrides)
 }
 
+/// Dispatch a structured single-turn request. The system/developer content is
+/// carried independently from the user prompt all the way to the runtime
+/// driver, and the execution policy is enforced inside the daemon.
+pub fn send_external_structured(
+    agent_name: &str,
+    entry: &AgentEntry,
+    user_prompt: &str,
+    system_prompt: Option<&str>,
+    overrides: Option<&DriverOverrides>,
+    execution: &AgentExecution,
+    progress_tx: Option<Arc<dyn Fn(serde_json::Value) + Send + Sync>>,
+) -> anyhow::Result<AgentResponse> {
+    send_to_agent_with_depth_and_progress(AgentDispatchRequest {
+        agent_name,
+        entry,
+        prompt: user_prompt,
+        context: None,
+        system_prompt,
+        execution: Some(execution),
+        depth_override: Some(0),
+        overrides,
+        progress_tx,
+    })
+}
+
 /// Same as `send_external_with_overrides` but threads a
 /// per-token progress callback through to the driver. Used by
 /// the chat ability's stream_handler to forward live LLM
@@ -284,6 +470,8 @@ pub fn send_external_with_overrides_and_progress(
         entry,
         prompt,
         context,
+        system_prompt: None,
+        execution: None,
         depth_override: Some(0),
         overrides,
         progress_tx,
@@ -330,6 +518,8 @@ pub fn send_to_agent_with_depth(
         entry,
         prompt,
         context,
+        system_prompt: None,
+        execution: None,
         depth_override,
         overrides,
         progress_tx: None,
@@ -353,6 +543,8 @@ pub fn send_to_agent_with_depth_and_progress(
         entry,
         prompt,
         context,
+        system_prompt,
+        execution,
         depth_override,
         overrides,
         progress_tx,
@@ -393,8 +585,19 @@ pub fn send_to_agent_with_depth_and_progress(
         );
     }
 
-    // Build full prompt with context.
-    let full_prompt = compose_prompt(prompt, context);
+    if system_prompt.is_some() && context.is_some() {
+        anyhow::bail!("agent dispatch cannot combine legacy context with a system prompt");
+    }
+
+    // Legacy callers keep their established context composition. Structured
+    // callers preserve role separation and send only the user content as the
+    // driver prompt.
+    let driver_prompt = if system_prompt.is_some() {
+        prompt.to_string()
+    } else {
+        compose_prompt(prompt, context)
+    };
+    let audit_prompt = structured_audit_prompt(system_prompt, &driver_prompt)?;
 
     // ── Project the registered AgentDirectory ──
     //
@@ -415,7 +618,8 @@ pub fn send_to_agent_with_depth_and_progress(
             directory.spec().name
         );
     }
-    let cwd = workspace::ensure_from_directory(&directory)?;
+    let agent_root = workspace::ensure_from_directory(&directory)?;
+    let cwd = resolve_execution_cwd(&agent_root, execution)?;
     let spec_source = directory.spec().clone();
     // ── Resolve dispatch knobs from canonical runtime config ──
     //
@@ -452,7 +656,7 @@ pub fn send_to_agent_with_depth_and_progress(
     // and tests bound to the same code path: a refactor that
     // inverts the order must touch the function, and the test
     // calling that function breaks.
-    let timeout = resolve_timeout(spec_source.timeout_secs);
+    let timeout = resolve_execution_timeout(spec_source.timeout_secs, execution)?;
     let max_output = entry.max_output_bytes;
     // Per-call overrides win over spec defaults. The chat
     // ability handler threads its `driver.model` arg through here so
@@ -498,7 +702,7 @@ pub fn send_to_agent_with_depth_and_progress(
             root.display()
         )
     })?);
-    run_dir.write_prompt(&full_prompt).map_err(|e| {
+    run_dir.write_prompt(&audit_prompt).map_err(|e| {
         anyhow::anyhow!(
             "agent dispatch requires prompt persistence at {}: {e}",
             run_dir.path().display()
@@ -525,7 +729,7 @@ pub fn send_to_agent_with_depth_and_progress(
     let admitted_payload = serde_json::json!({
         "agent": agent_name,
         "depth": current_depth,
-        "prompt_len": full_prompt.len(),
+        "prompt_len": driver_prompt.len(),
         // `origin_agent` names the root of the dispatch chain
         // when one is active; absent otherwise. "local" for a
         // CLI-direct invocation (`agent send`) with no mission
@@ -533,6 +737,11 @@ pub fn send_to_agent_with_depth_and_progress(
         "origin_agent": active.origin_agent.clone(),
         "mission_id": active.mission_id.clone(),
         "context_present": context.is_some(),
+        "system_prompt_present": system_prompt.is_some(),
+        "isolation": match execution.map(|value| value.isolation).unwrap_or_default() {
+            DriverIsolation::Agent => "agent",
+            DriverIsolation::Strict => "strict",
+        },
     });
     session
         .writer()
@@ -559,12 +768,14 @@ pub fn send_to_agent_with_depth_and_progress(
     entry_for_adapter.model = effective_model.clone();
     let run_result = adapter.invoke(
         &entry_for_adapter,
-        &full_prompt,
+        &driver_prompt,
         InvokeOpts {
             timeout,
             max_output_bytes: max_output,
             env,
             cwd: cwd.clone(),
+            system_prompt: system_prompt.map(str::to_string),
+            isolation: execution.map(|value| value.isolation).unwrap_or_default(),
             // Commit 2: the driver emits mid-stream progress
             // events through the Timeline instead of (previously)
             // through run_dir/trace.jsonl. The writer_arc is the
@@ -1307,6 +1518,8 @@ mod tests {
             max_output_bytes: 1024,
             env: std::collections::BTreeMap::new(),
             cwd: std::path::PathBuf::from("."),
+            system_prompt: None,
+            isolation: DriverIsolation::Agent,
             timeline: None,
             progress_tx: None,
             command: DriverCommand::Default,
@@ -1338,6 +1551,8 @@ mod tests {
             max_output_bytes: 64,
             env: std::collections::BTreeMap::new(),
             cwd: std::path::PathBuf::from("."),
+            system_prompt: None,
+            isolation: DriverIsolation::Agent,
             timeline: None,
             progress_tx: None,
             command: DriverCommand::Default,
@@ -1378,6 +1593,8 @@ mod tests {
             max_output_bytes: 64,
             env: std::collections::BTreeMap::new(),
             cwd: std::path::PathBuf::from("."),
+            system_prompt: None,
+            isolation: DriverIsolation::Agent,
             timeline: None,
             progress_tx: None,
             command: DriverCommand::Default,
@@ -1608,6 +1825,84 @@ mod tests {
     fn resolve_timeout_has_no_entry_timeout_fallback() {
         let t = resolve_timeout(Some(600));
         assert_eq!(t, Duration::from_secs(600));
+    }
+
+    #[test]
+    fn execution_timeout_overrides_spec_within_daemon_bound() {
+        let execution = AgentExecution {
+            timeout: Some(Duration::from_millis(300_000)),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            resolve_execution_timeout(Some(1), Some(&execution)).unwrap(),
+            Duration::from_millis(300_000)
+        );
+    }
+
+    #[test]
+    fn execution_timeout_rejects_zero_and_values_above_daemon_bound() {
+        for timeout in [
+            Duration::ZERO,
+            Duration::from_millis(MAX_INVOCATION_TIMEOUT_MS + 1),
+        ] {
+            let execution = AgentExecution {
+                timeout: Some(timeout),
+                ..Default::default()
+            };
+            assert!(resolve_execution_timeout(None, Some(&execution)).is_err());
+        }
+    }
+
+    #[test]
+    fn execution_cwd_rejects_absolute_and_parent_paths() {
+        let root = tempfile::tempdir().unwrap();
+        for cwd in [PathBuf::from("/tmp/outside"), PathBuf::from("../outside")] {
+            let execution = AgentExecution {
+                cwd: Some(cwd),
+                isolation: DriverIsolation::Strict,
+                ..Default::default()
+            };
+            assert!(resolve_execution_cwd(root.path(), Some(&execution)).is_err());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn execution_cwd_rejects_symlink_escape() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        symlink(outside.path(), root.path().join("escaped")).unwrap();
+        let execution = AgentExecution {
+            cwd: Some(PathBuf::from("escaped/must-not-be-created")),
+            isolation: DriverIsolation::Strict,
+            ..Default::default()
+        };
+
+        assert!(resolve_execution_cwd(root.path(), Some(&execution)).is_err());
+        assert!(!outside.path().join("must-not-be-created").exists());
+    }
+
+    #[test]
+    fn strict_execution_cwd_creates_nested_repository_boundary() {
+        let root = tempfile::tempdir().unwrap();
+        let execution = AgentExecution {
+            cwd: Some(PathBuf::from("benchmark/case-1")),
+            isolation: DriverIsolation::Strict,
+            ..Default::default()
+        };
+
+        let resolved = resolve_execution_cwd(root.path(), Some(&execution)).unwrap();
+
+        assert_eq!(
+            resolved,
+            std::fs::canonicalize(root.path())
+                .unwrap()
+                .join("benchmark/case-1")
+        );
+        assert!(resolved.join(".git").is_dir());
     }
 
     #[test]

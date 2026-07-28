@@ -463,7 +463,7 @@ mod tests {
     }
 
     #[test]
-    fn chat_manifest_schema_is_object_with_required_prompt() {
+    fn chat_manifest_schema_is_object_with_typed_entry_shapes() {
         let entry = entry_named("claude", AgentType::ClaudeCode);
         let manifests = manifests_for("claude", &entry);
         let params = manifests[0].input_schema();
@@ -476,14 +476,18 @@ mod tests {
             Some("object"),
             "schema top-level type must be \"object\""
         );
-        let required = params
-            .get("required")
+        let one_of = params
+            .get("oneOf")
             .and_then(Value::as_array)
-            .expect("required must be an array");
-        assert!(
-            required.iter().any(|v| v.as_str() == Some("prompt")),
-            "prompt must appear in `required`"
-        );
+            .expect("oneOf entry-shape guard must be an array");
+        assert_eq!(one_of.len(), 2);
+        let properties = params
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("properties must be an object");
+        assert!(properties.contains_key("prompt"));
+        assert!(properties.contains_key("messages"));
+        assert!(properties.contains_key("execution"));
         // `additionalProperties: false` is load-bearing — it turns
         // callers sending unexpected args into a schema error rather
         // than silently dropping them, which makes debugging "why
@@ -496,7 +500,7 @@ mod tests {
     }
 
     #[test]
-    fn chat_manifest_parameters_declare_both_prompt_and_optional_context() {
+    fn chat_manifest_parameters_declare_prompt_and_structured_inputs() {
         let entry = entry_named("codex", AgentType::Codex);
         let manifests = manifests_for("codex", &entry);
         let props = manifests[0]
@@ -505,6 +509,7 @@ mod tests {
             .and_then(Value::as_object)
             .expect("properties must be an object");
         assert!(props.contains_key("prompt"));
+        assert!(props.contains_key("messages"));
         assert!(props.contains_key("context"));
         assert_eq!(
             props

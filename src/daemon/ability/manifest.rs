@@ -1331,8 +1331,11 @@ impl McpExec {
 /// fail loud.
 pub fn default_chat_manifest() -> AbilityManifest {
     // The schema below is the wire contract for the chat ability. It
-    // keeps `prompt` as the only required request field while the
-    // optional fields model the current canonical chat runtime:
+    // exposes two first-class entry shapes: the canonical minimal
+    // prompt payload and the strict structured single-turn payload.
+    // The canonical minimal `{"prompt": "..."}` payload remains a
+    // first-class product contract, not a compatibility alias.
+    // Optional fields model the current canonical chat runtime:
     // (1) resume a multi-turn session via
     // `session_id`, (2) decide which other abilities of the same agent
     // to expose to the LLM as tools (`skills`), (3) decide which
@@ -1351,7 +1354,28 @@ pub fn default_chat_manifest() -> AbilityManifest {
         "properties": {
             "prompt": {
                 "type": "string",
-                "description": "The user prompt sent to the agent."
+                "description": "The canonical minimal `{\"prompt\": \"...\"}` payload. Exactly one of `prompt` or `messages` is required."
+            },
+            "messages": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 2,
+                "description": "Structured fresh single-turn input: one user message with one optional preceding system message. Unsupported roles or multi-turn history fail closed.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "role": {
+                            "type": "string",
+                            "enum": ["system", "user"]
+                        },
+                        "content": {
+                            "type": "string",
+                            "minLength": 1
+                        }
+                    },
+                    "required": ["role", "content"],
+                    "additionalProperties": false
+                }
             },
             "context": {
                 "type": "string",
@@ -1490,9 +1514,38 @@ pub fn default_chat_manifest() -> AbilityManifest {
                     },
                     "additionalProperties": false
                 }
+            },
+            "execution": {
+                "type": "object",
+                "description": "Per-invocation daemon execution policy. cwd is relative to the registered agent root, never a host-absolute path.",
+                "properties": {
+                    "cwd": {
+                        "type": "string",
+                        "minLength": 1
+                    },
+                    "timeout_ms": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 900000
+                    },
+                    "isolation": {
+                        "type": "string",
+                        "enum": ["agent", "strict"]
+                    }
+                },
+                "additionalProperties": false
             }
         },
-        "required": ["prompt"],
+        "oneOf": [
+            {
+                "required": ["prompt"],
+                "not": {"required": ["messages"]}
+            },
+            {
+                "required": ["messages"],
+                "not": {"required": ["prompt"]}
+            }
+        ],
         "additionalProperties": false,
     });
 
@@ -1731,13 +1784,14 @@ tool_name = "legacy-provider-field"
             .and_then(Value::as_object)
             .expect("properties must be an object");
         assert!(props.contains_key("prompt"));
+        assert!(props.contains_key("messages"));
         assert!(props.contains_key("context"));
-        let required = m
+        let one_of = m
             .input_schema()
-            .get("required")
+            .get("oneOf")
             .and_then(Value::as_array)
-            .expect("required is an array");
-        assert!(required.iter().any(|v| v.as_str() == Some("prompt")));
+            .expect("oneOf entry-shape guard is an array");
+        assert_eq!(one_of.len(), 2);
         assert_eq!(
             m.input_schema().get("additionalProperties"),
             Some(&Value::Bool(false)),
@@ -1759,6 +1813,7 @@ tool_name = "legacy-provider-field"
             .expect("properties must be an object");
         for required_key in [
             "prompt",
+            "messages",
             "context",
             "session_id",
             "skills",
@@ -1766,6 +1821,7 @@ tool_name = "legacy-provider-field"
             "driver",
             "stream",
             "attachments",
+            "execution",
         ] {
             assert!(
                 props.contains_key(required_key),
@@ -1773,15 +1829,15 @@ tool_name = "legacy-provider-field"
                 props.keys().collect::<Vec<_>>()
             );
         }
-        // Only `prompt` is required. Every extended field is optional so the
-        // canonical minimal `{"prompt": "..."}` payload remains valid.
-        let required = m
+        // JSON Schema discovery exposes both entry shapes and pins their
+        // mutual exclusion so product clients can reject malformed requests
+        // before dispatching them to the daemon.
+        let one_of = m
             .input_schema()
-            .get("required")
+            .get("oneOf")
             .and_then(Value::as_array)
-            .expect("required is an array");
-        assert_eq!(required.len(), 1);
-        assert_eq!(required[0].as_str(), Some("prompt"));
+            .expect("oneOf entry-shape guard is an array");
+        assert_eq!(one_of.len(), 2);
     }
 
     #[test]

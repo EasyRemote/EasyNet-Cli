@@ -59,6 +59,19 @@ pub enum DriverCommand {
     Explicit(String),
 }
 
+/// Per-invocation ambient-context policy selected by the chat boundary.
+///
+/// `Agent` preserves the registered agent's normal workspace projection,
+/// skills, MCP servers, and runtime defaults. `Strict` is the benchmark-safe
+/// profile: drivers must suppress ambient instructions and tools so the model
+/// can observe only the structured request supplied for this invocation.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum DriverIsolation {
+    #[default]
+    Agent,
+    Strict,
+}
+
 impl DriverCommand {
     pub fn from_registry_value(value: &str) -> Self {
         let value = value.trim();
@@ -98,6 +111,13 @@ pub struct InvokeOpts {
     pub max_output_bytes: usize,
     pub env: BTreeMap<String, String>,
     pub cwd: PathBuf,
+    /// Optional system/developer content carried separately from the user
+    /// prompt. Drivers must project this through their native role surface;
+    /// they must not concatenate it into `prompt`.
+    pub system_prompt: Option<String>,
+    /// Whether the driver may load registered-agent ambient state for this
+    /// invocation.
+    pub isolation: DriverIsolation,
     /// PR-7 Commit 2: Timeline writer for this invocation. When
     /// `Some`, the driver's stdout-line callback emits a
     /// `progress` event per stream chunk, fsynced to disk and
