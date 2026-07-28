@@ -1107,7 +1107,7 @@ impl<'a> DaemonRouteResolver<'a> {
                 ResolveRouteFailure::new(
                     ability_ura,
                     NegativeReason::Refused,
-                    "Invoke requires a full canonical ability URA, descriptor ref, or an owner-local ability name with an explicit callee",
+                    "Invoke requires a full canonical ability URA, target-bound descriptor ref, or an owner-local ability name with an explicit callee",
                 )
             })?,
         };
@@ -1403,12 +1403,11 @@ fn route_selector_from_query(
 ) -> Result<Option<RouteSelector>, ResolveRouteFailure> {
     if ability_name.trim().is_empty() {
         if looks_like_descriptor_ref(query_name) {
-            let selector = ability_selector_from_descriptor_ref(query_name)?;
-            return route_selector_from_ability_selector(
-                selector.ability_ura().to_string(),
-                selector,
-            )
-            .map(Some);
+            return Err(ResolveRouteFailure::new(
+                query_name.trim(),
+                NegativeReason::Refused,
+                "descriptor_ref cannot stand in for an owner query; provide an explicit target owner URA plus descriptor_ref",
+            ));
         }
         if is_ability_ura(query_name) {
             let selector =
@@ -2417,7 +2416,7 @@ mod tests {
     }
 
     #[test]
-    fn descriptor_ref_query_without_ability_resolves_same_final_route() {
+    fn descriptor_ref_query_without_owner_is_rejected() {
         let registry = PresenceRegistry::new();
         let catalog = AbilityCatalogStore::new();
         let owner_ura = device_owner_ura();
@@ -2427,16 +2426,20 @@ mod tests {
         let descriptor_ref = descriptor_ref_for_test(&ability_ura);
         let authority = FakeLocalRuntimeAuthority::with_owner_keys(&owner_ura, &["agent.list"]);
 
-        let route = DaemonRouteResolver::new(&registry, None, &catalog)
+        let failure = DaemonRouteResolver::new(&registry, None, &catalog)
             .with_local_catalog_authority(owner_ura.clone(), authority)
             .at(TEST_NOW_MS)
             .resolve_route(&descriptor_ref, "")
-            .expect("descriptor-bound ability query must resolve through the same route gate");
+            .expect_err("descriptor_ref must not be accepted as an owner query");
 
-        assert_eq!(route.kind(), SelectedRouteKind::LocalDevice);
-        assert_eq!(route.owner_ura, owner_ura);
-        assert_eq!(route.ability_ura, ability_ura);
-        assert_eq!(route.dispatch_name, "agent.list");
+        assert_eq!(failure.reason, NegativeReason::Refused);
+        assert!(
+            failure
+                .detail
+                .contains("cannot stand in for an owner query"),
+            "unexpected detail: {}",
+            failure.detail
+        );
     }
 
     #[test]
@@ -2503,22 +2506,31 @@ mod tests {
             .with_local_catalog_authority(owner_ura.clone(), authority)
             .at(TEST_NOW_MS);
 
-        for (query_name, ability_name) in [
-            (owner_ura.as_str(), old_short_descriptor_ref.as_str()),
-            (old_short_descriptor_ref.as_str(), ""),
-        ] {
-            let failure = resolver
-                .resolve_route(query_name, ability_name)
-                .expect_err("malformed descriptor refs must fail before public-name fallback");
-            assert_eq!(failure.reason, NegativeReason::Refused);
-            assert!(
-                failure
-                    .detail
-                    .contains("descriptor_ref selector projection failed"),
-                "unexpected failure detail: {}",
-                failure.detail
+        let target_bound_failure = resolver
+            .resolve_route(owner_ura.as_str(), old_short_descriptor_ref.as_str())
+            .expect_err(
+                "target-bound malformed descriptor refs must fail before public-name fallback",
             );
-        }
+        assert_eq!(target_bound_failure.reason, NegativeReason::Refused);
+        assert!(
+            target_bound_failure
+                .detail
+                .contains("descriptor_ref selector projection failed"),
+            "unexpected failure detail: {}",
+            target_bound_failure.detail
+        );
+
+        let owner_query_failure = resolver
+            .resolve_route(old_short_descriptor_ref.as_str(), "")
+            .expect_err("descriptor-like input must not be accepted as an owner query");
+        assert_eq!(owner_query_failure.reason, NegativeReason::Refused);
+        assert!(
+            owner_query_failure
+                .detail
+                .contains("cannot stand in for an owner query"),
+            "unexpected failure detail: {}",
+            owner_query_failure.detail
+        );
     }
 
     #[test]

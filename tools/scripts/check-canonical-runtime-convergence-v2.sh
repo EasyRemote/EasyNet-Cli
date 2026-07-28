@@ -12612,8 +12612,16 @@ for required_selector_state in (
         raise SystemExit(f"route_resolver:descriptor_ref_selector:owner_kind_state_missing:{required_selector_state}")
 if '"hub" => Ok(Self::Authority)' in production:
     raise SystemExit("route_resolver:descriptor_ref_selector:product_hub_owner_kind_mapping")
-if "ability_selector_from_descriptor_ref(query_name)?" not in route_body:
-    raise SystemExit("route_resolver:descriptor_ref_selector:query_parse_not_propagated")
+if "ability_selector_from_descriptor_ref(query_name)?" in route_body:
+    raise SystemExit("route_resolver:descriptor_ref_selector:descriptor_ref_owner_query_shortcut")
+for required_owner_query_rejection in (
+    "looks_like_descriptor_ref(query_name)",
+    "descriptor_ref cannot stand in for an owner query",
+):
+    if required_owner_query_rejection not in route_body:
+        raise SystemExit(
+            f"route_resolver:descriptor_ref_selector:owner_query_rejection_missing:{required_owner_query_rejection}"
+        )
 if "route_selector_from_descriptor_ref(owner_ura, ability_name).map(Some)" not in route_body:
     raise SystemExit("route_resolver:descriptor_ref_selector:owner_parse_not_propagated")
 if "Result<crate::core::ura::AbilitySelector, ResolveRouteFailure>" not in descriptor_signature:
@@ -12639,6 +12647,7 @@ for pattern, label in {
         raise SystemExit(f"route_resolver:descriptor_ref_selector:{label}")
 
 for required_test in (
+    "descriptor_ref_query_without_owner_is_rejected",
     "malformed_descriptor_ref_does_not_fall_through_as_public_name",
     "descriptor_ref_owner_mismatch_fails_before_route_lookup",
     "route_selector_carries_owner_kind_from_ability_selector",

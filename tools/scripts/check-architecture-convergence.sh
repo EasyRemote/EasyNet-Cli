@@ -4556,13 +4556,34 @@ if route_resolver.exists():
                 line_number(production_text, offset),
                 "route selector must preserve descriptor-ref parse failures as typed route failures",
             )
-        if "ability_selector_from_descriptor_ref(query_name)?" not in body:
+        if "ability_selector_from_descriptor_ref(query_name)?" in body:
             add(
                 "R37_ROUTE_RESOLVER_AGENT_PLACEMENT_AGGREGATE_FORK",
                 route_resolver,
                 line_number(production_text, offset),
-                "descriptor-ref query parsing must propagate selector failures",
+                "descriptor-ref must not stand in for an owner query",
             )
+        for token, detail in (
+            (
+                "looks_like_descriptor_ref(query_name)",
+                "route selector must recognize descriptor-like owner queries explicitly",
+            ),
+            (
+                "descriptor_ref cannot stand in for an owner query",
+                "descriptor-like owner queries must fail closed instead of resolving as routes",
+            ),
+            (
+                "route_selector_from_descriptor_ref(owner_ura, ability_name).map(Some)",
+                "target-bound descriptor-ref parsing must still propagate selector failures",
+            ),
+        ):
+            if token not in body:
+                add(
+                    "R37_ROUTE_RESOLVER_AGENT_PLACEMENT_AGGREGATE_FORK",
+                    route_resolver,
+                    line_number(production_text, offset),
+                    detail,
+                )
     descriptor_body = rust_method_body(production_text, "ability_selector_from_descriptor_ref")
     if descriptor_body is None:
         add(
