@@ -1102,8 +1102,33 @@ removed_stream_error = load_text(out / "caller-removed-media-stream.stderr") + l
 removed_bidi_error = load_text(out / "caller-removed-media-bidi.stderr") + load_text(out / "caller-removed-media-bidi.stdout")
 plugin_after_remove_blob = json.dumps(plugin_list_after_remove, sort_keys=True)
 
-def rejected_without_harness_timeout(exit_code, text):
-    return exit_code not in (None, 0, 124) and bool(text.strip()) and "success" not in text.lower()
+def rejected_with_semantic_route_failure(exit_code, text):
+    if exit_code in (None, 0, 124):
+        return False
+    if not text.strip() or "success" in text.lower():
+        return False
+    lower = text.lower()
+    timeout_markers = (
+        "remote_stream_terminal_timeout",
+        "deadlineexceeded",
+        "deadline exceeded",
+        "timeout expired",
+        "cancelled",
+        "canceled",
+    )
+    if any(marker in lower for marker in timeout_markers):
+        return False
+    semantic_markers = (
+        "ability_resolution_failed",
+        "ability_bidi_not_supported",
+        "ability_not_found",
+        "descriptor_not_found",
+        "route_negative",
+        "no route",
+        "not published",
+        "not registered in axon localruntime",
+    )
+    return any(marker in lower for marker in semantic_markers)
 
 status_blob = json.dumps(plugin_status, sort_keys=True)
 assertions = {
@@ -1199,11 +1224,11 @@ assertions = {
             bidi_ura,
             "media.synthetic_bidi",
         ),
-    "provider_removed_media_routes_reject_invocation": rejected_without_harness_timeout(
+    "provider_removed_media_routes_reject_invocation": rejected_with_semantic_route_failure(
         removed_stream_exit,
         removed_stream_error,
     )
-        and rejected_without_harness_timeout(removed_bidi_exit, removed_bidi_error),
+        and rejected_with_semantic_route_failure(removed_bidi_exit, removed_bidi_error),
 }
 assertions["media_product_operations_have_verified_single_terminal_receipt_chains"] = (
     assertions["media_stream_unique_invocation_records"]
@@ -1242,6 +1267,14 @@ report = {
     "plugin_removal_facts": {
         "stream_route_exit_code": removed_stream_exit,
         "bidi_route_exit_code": removed_bidi_exit,
+        "stream_route_rejected_semantically": rejected_with_semantic_route_failure(
+            removed_stream_exit,
+            removed_stream_error,
+        ),
+        "bidi_route_rejected_semantically": rejected_with_semantic_route_failure(
+            removed_bidi_exit,
+            removed_bidi_error,
+        ),
         "stream_error_excerpt": removed_stream_error.strip()[:800],
         "bidi_error_excerpt": removed_bidi_error.strip()[:800],
         "provider_catalog_exposes_stream_after_remove": catalog_exposes_ability(
@@ -1302,6 +1335,8 @@ print()
 removal = report["plugin_removal_facts"]
 print(f"- stream_route_exit_code: `{removal['stream_route_exit_code']}`")
 print(f"- bidi_route_exit_code: `{removal['bidi_route_exit_code']}`")
+print(f"- stream_route_rejected_semantically: `{str(removal['stream_route_rejected_semantically']).lower()}`")
+print(f"- bidi_route_rejected_semantically: `{str(removal['bidi_route_rejected_semantically']).lower()}`")
 print(f"- provider_catalog_exposes_stream_after_remove: `{str(removal['provider_catalog_exposes_stream_after_remove']).lower()}`")
 print(f"- provider_catalog_exposes_bidi_after_remove: `{str(removal['provider_catalog_exposes_bidi_after_remove']).lower()}`")
 PY

@@ -281,13 +281,21 @@ impl LocalAxonSessionDispatcher {
                 .handle_carrier_v1_bidi_open(call_id, request, outbound)
                 .await;
         }
-        let function_name =
-            crate::daemon::invocation::dispatch::invocation_wire::function_name_from_invocation_target(
+        let function_name = match crate::daemon::invocation::dispatch::invocation_wire::function_name_from_invocation_target(
                 "carrier-v1 DispatchCall",
                 request.target.as_ref(),
-            )
-            .map_err(|status| SessionDispatchError::Other(status.message().to_string()))?
-            .to_string();
+            ) {
+            Ok(function_name) => function_name.to_string(),
+            Err(status) => {
+                return Self::send_carrier_v1_control_failure(
+                    outbound,
+                    call_id,
+                    "CARRIER_TARGET_INVALID",
+                    status.message(),
+                )
+                .await;
+            }
+        };
         crate::op_event!(
             component = local_session_dispatcher,
             kind = received_carrier_v1_dispatch,
@@ -295,22 +303,67 @@ impl LocalAxonSessionDispatcher {
             ability = function_name,
         );
         let Some(envelope) = request.envelope else {
-            return Err(SessionDispatchError::Other(
-                "carrier-v1 DispatchCall request missing envelope".to_string(),
-            ));
+            return Self::send_carrier_v1_control_failure(
+                outbound,
+                call_id,
+                "ENVELOPE_INCOMPLETE",
+                "carrier-v1 DispatchCall request missing envelope",
+            )
+            .await;
         };
-        let runtime = self.require_local_runtime("carrier-v1 dispatch")?;
-        let target_ura = callee_ura_from_envelope(Some(&envelope), "carrier-v1 DispatchCall")
-            .map_err(|status| SessionDispatchError::Other(status.message().to_string()))?;
-        self.sync_external_signed_caller_key(&envelope).await?;
-        let bound_ability = RuntimeBoundAbility::from_wire_target(
+        let runtime = match self.require_local_runtime("carrier-v1 dispatch") {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                return Self::send_carrier_v1_control_failure(
+                    outbound,
+                    call_id,
+                    "RUNTIME_UNAVAILABLE",
+                    error.to_string(),
+                )
+                .await;
+            }
+        };
+        let target_ura = match callee_ura_from_envelope(Some(&envelope), "carrier-v1 DispatchCall")
+        {
+            Ok(target_ura) => target_ura,
+            Err(status) => {
+                return Self::send_carrier_v1_control_failure(
+                    outbound,
+                    call_id,
+                    "ENVELOPE_INCOMPLETE",
+                    status.message(),
+                )
+                .await;
+            }
+        };
+        if let Err(error) = self.sync_external_signed_caller_key(&envelope).await {
+            return Self::send_carrier_v1_control_failure(
+                outbound,
+                call_id,
+                "CALLER_KEY_SYNC_FAILED",
+                error.to_string(),
+            )
+            .await;
+        }
+        let bound_ability = match RuntimeBoundAbility::from_wire_target(
             "carrier-v1 DispatchCall",
             &runtime,
             &target_ura,
             &function_name,
         )
         .await
-        .map_err(|status| SessionDispatchError::Other(status.message().to_string()))?;
+        {
+            Ok(bound_ability) => bound_ability,
+            Err(status) => {
+                return Self::send_carrier_v1_control_failure(
+                    outbound,
+                    call_id,
+                    "ABILITY_RESOLUTION_FAILED",
+                    status.message(),
+                )
+                .await;
+            }
+        };
         let carrier_v1_stream = bound_ability.supports_mode(axon_sdk::invocation::CallMode::Stream)
             && !bound_ability.supports_mode(axon_sdk::invocation::CallMode::Rpc);
         let call_mode = if carrier_v1_stream {
@@ -318,25 +371,53 @@ impl LocalAxonSessionDispatcher {
         } else {
             axon_sdk::invocation::CallMode::Rpc
         };
-        let descriptor_ref = bound_ability
-            .signed_descriptor_ref_from_target(
-                "carrier-v1 DispatchCall",
-                &target_ura,
-                call_mode,
-                request.target.as_ref(),
-            )
-            .map_err(|status| SessionDispatchError::Other(status.message().to_string()))?;
-        let wire =
-            crate::daemon::axon_bridge::descriptor_bound_dispatch::external_signed_from_wire_parts(
+        let descriptor_ref = match bound_ability.signed_descriptor_ref_from_target(
+            "carrier-v1 DispatchCall",
+            &target_ura,
+            call_mode,
+            request.target.as_ref(),
+        ) {
+            Ok(descriptor_ref) => descriptor_ref,
+            Err(status) => {
+                return Self::send_carrier_v1_control_failure(
+                    outbound,
+                    call_id,
+                    "DESCRIPTOR_BINDING_FAILED",
+                    status.message(),
+                )
+                .await;
+            }
+        };
+        let wire = match crate::daemon::axon_bridge::descriptor_bound_dispatch::external_signed_from_wire_parts(
                 envelope,
                 descriptor_ref.into_descriptor_ref(),
                 request.arguments,
                 request.metadata,
-            )
-            .map_err(|err| {
-                SessionDispatchError::Other(format!("build carrier-v1 signed dispatch: {err}"))
-            })?;
-        let runtime_admission = self.stage_runtime_admission(&wire, &function_name, call_mode)?;
+            ) {
+            Ok(wire) => wire,
+            Err(error) => {
+                return Self::send_carrier_v1_control_failure(
+                    outbound,
+                    call_id,
+                    "DISPATCH_WIRE_INVALID",
+                    format!("build carrier-v1 signed dispatch: {error}"),
+                )
+                .await;
+            }
+        };
+        let runtime_admission = match self.stage_runtime_admission(&wire, &function_name, call_mode)
+        {
+            Ok(runtime_admission) => runtime_admission,
+            Err(error) => {
+                return Self::send_carrier_v1_control_failure(
+                    outbound,
+                    call_id,
+                    "RUNTIME_ADMISSION_FAILED",
+                    error.to_string(),
+                )
+                .await;
+            }
+        };
 
         // ── step-3c: server-stream over carrier ──────────────────────
         // A stream-mode ability (modes.stream && !modes.rpc) emits many
@@ -1204,13 +1285,13 @@ impl LocalAxonSessionDispatcher {
             .await
     }
 
-    async fn send_carrier_v1_bidi_result(
+    async fn send_carrier_v1_dispatch_result(
         outbound: &SessionUpSender,
         result: axon_sdk::pb::axon::v1::DispatchResult,
     ) -> Result<(), SessionDispatchError> {
         if !outbound.carrier_v1() {
             return Err(SessionDispatchError::Other(
-                "canonical bidi result requires negotiated session carrier v1".to_string(),
+                "canonical dispatch result requires negotiated session carrier v1".to_string(),
             ));
         }
         outbound
@@ -1219,17 +1300,26 @@ impl LocalAxonSessionDispatcher {
             .map_err(|_| SessionDispatchError::Other("session up channel closed".to_string()))
     }
 
+    async fn send_carrier_v1_control_failure(
+        outbound: &SessionUpSender,
+        call_id: u64,
+        code: &'static str,
+        message: impl Into<String>,
+    ) -> Result<(), SessionDispatchError> {
+        Self::send_carrier_v1_dispatch_result(
+            outbound,
+            carrier_v1_control_failure(call_id, code, message),
+        )
+        .await
+    }
+
     async fn send_bidi_control_failure(
         outbound: &SessionUpSender,
         call_id: u64,
         code: &'static str,
         message: impl Into<String>,
     ) -> Result<(), SessionDispatchError> {
-        Self::send_carrier_v1_bidi_result(
-            outbound,
-            carrier_v1_control_failure(call_id, code, message),
-        )
-        .await
+        Self::send_carrier_v1_control_failure(outbound, call_id, code, message).await
     }
 
     async fn send_bidi_admission(
@@ -1237,7 +1327,7 @@ impl LocalAxonSessionDispatcher {
         call_id: u64,
         receipt: &axon_sdk::invocation::SignedInvocationReceipt,
     ) -> Result<(), SessionDispatchError> {
-        Self::send_carrier_v1_bidi_result(
+        Self::send_carrier_v1_dispatch_result(
             outbound,
             axon_sdk::pb::axon::v1::DispatchResult {
                 call_id,
@@ -1260,7 +1350,7 @@ impl LocalAxonSessionDispatcher {
                 retryable: failure.retryable,
                 ..Default::default()
             });
-        Self::send_carrier_v1_bidi_result(
+        Self::send_carrier_v1_dispatch_result(
             outbound,
             axon_sdk::pb::axon::v1::DispatchResult {
                 call_id: projection.call_id,
@@ -1277,7 +1367,7 @@ impl LocalAxonSessionDispatcher {
         call_id: u64,
         finalized: &axon_sdk::invocation::FinalizedInvocation,
     ) -> Result<(), SessionDispatchError> {
-        Self::send_carrier_v1_bidi_result(
+        Self::send_carrier_v1_dispatch_result(
             outbound,
             axon_sdk::pb::axon::v1::DispatchResult {
                 call_id,
@@ -2319,6 +2409,53 @@ mod tests {
                 let failure = r.failure.expect("typed failure");
                 assert!(
                     failure.message.contains("not published"),
+                    "unexpected failure: {}",
+                    failure.message
+                );
+            }
+            other => panic!("expected proto DispatchResult, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn carrier_v1_stream_dispatch_of_unpublished_ability_fails_proto_without_timeout() {
+        let rt = executable_runtime();
+        let disp = LocalAxonSessionDispatcher::new().with_local_runtime(rt);
+        let (tx, mut rx) = mpsc::channel::<InvokeBidiUp>(4);
+        let session_tx = SessionUpSender::new(tx);
+        session_tx.set_negotiated_contract(1);
+
+        disp.handle_down(
+            carrier_v1_explicit_test_call_with_mode(
+                17,
+                "screen.removed",
+                b"{}".to_vec(),
+                axon_sdk::invocation::CallMode::Stream,
+            ),
+            &session_tx,
+        )
+        .await
+        .expect("stream publication miss replies as a frame, not a task error");
+
+        let reply = tokio::time::timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("unpublished stream must not wait for invocation timeout")
+            .expect("reply produced");
+        match reply.payload {
+            Some(UpPayload::DispatchResult(result)) => {
+                assert_eq!(result.call_id, 17);
+                assert!(
+                    !result.terminal,
+                    "control failure must not synthesize canonical stream terminality"
+                );
+                assert!(result.admission_receipt.is_none());
+                assert!(result.terminal_receipt.is_none());
+                let failure = result.failure.expect("typed failure");
+                assert_eq!(failure.code, "ABILITY_RESOLUTION_FAILED");
+                assert!(
+                    failure
+                        .message
+                        .contains("is not registered in Axon LocalRuntime"),
                     "unexpected failure: {}",
                     failure.message
                 );
