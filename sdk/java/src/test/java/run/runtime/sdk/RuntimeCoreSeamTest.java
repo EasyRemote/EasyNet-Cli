@@ -1026,6 +1026,29 @@ public final class RuntimeCoreSeamTest {
     check(
         transport.seenDescriptorRequest.get("subject_ura").equals("easynet:///r/example/user/alice"),
         "descriptor resolution must use caller-declared subject before descriptor-bound projection");
+
+    transport.resolvedDescriptorRef =
+        "easynet:///r/example/ability/authority.namespace.resolve@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read";
+    RuntimeCallContext authorityCall =
+        new RuntimeCallContext(
+            CALLER,
+            "easynet:///r/example/authority",
+            "easynet:///r/example/authority",
+            NONCE,
+            Map.of("form", "none"),
+            Map.of("trace_id", "trace-1"));
+    InvocationDraft authorityDraft =
+        ability.build(authorityCall, "namespace.resolve", Map.of("name", "alice"));
+
+    check(
+        authorityDraft
+            .inspectTuple()
+            .subject()
+            .equals("easynet:///r/example/resource/authority/invoke/namespace.resolve"),
+        "runtime ability public path must descriptor-bind authority subjects");
+    check(
+        transport.seenDescriptorRequest.get("subject_ura").equals("easynet:///r/example/authority"),
+        "authority descriptor resolution must use caller-declared subject before projection");
   }
 
   private static void runtimeStateReadSubjectHelperBuildsUserOwnedResourceSubject() {

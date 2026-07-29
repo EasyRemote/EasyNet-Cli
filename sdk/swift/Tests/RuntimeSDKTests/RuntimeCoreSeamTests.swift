@@ -1252,6 +1252,27 @@ final class RuntimeCoreSeamTests: XCTestCase {
         )
         let resolverSubjectField = await transport.lastDescriptorRequestField("subject_ura")
         XCTAssertEqual(resolverSubjectField, subject)
+
+        let authorityCall = try RuntimeCallContext(
+            callerURA: caller,
+            calleeURA: "easynet:///r/example/authority",
+            subjectURA: "easynet:///r/example/authority",
+            nonceBase64: nonce,
+            causalContext: ["form": .string("none")],
+            metadata: ["trace_id": .string("trace-1")]
+        )
+        let authorityDraft = try await ability.build(
+            call: authorityCall,
+            abilityName: "namespace.resolve",
+            arguments: ["name": .string("alice")]
+        )
+
+        XCTAssertEqual(
+            authorityDraft.inspectTuple().subject,
+            "easynet:///r/example/resource/authority/invoke/namespace.resolve"
+        )
+        let authorityResolverSubject = await transport.lastDescriptorRequestField("subject_ura")
+        XCTAssertEqual(authorityResolverSubject, "easynet:///r/example/authority")
     }
 
     func testPreparedInvocationCannotBeSubmitted() async throws {
@@ -1549,7 +1570,15 @@ actor MemoryRuntimeTransport: RuntimeTransport {
         let request = try object(requestJSON)
         descriptorRequests.append(request)
         let ability = request["ability"] as? String
-        let resolved = ability == "meta.list_abilities" ? catalogueDescriptor : descriptor
+        let calleeURA = request["callee_ura"] as? String
+        let resolved: String
+        if ability == "meta.list_abilities" {
+            resolved = catalogueDescriptor
+        } else if calleeURA == "easynet:///r/example/authority" {
+            resolved = "easynet:///r/example/ability/authority.namespace.resolve@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read"
+        } else {
+            resolved = descriptor
+        }
         return try JSONSerialization.data(
             withJSONObject: ["descriptor_ref": resolved],
             options: [.sortedKeys]

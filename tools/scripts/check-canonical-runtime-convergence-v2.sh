@@ -6148,6 +6148,146 @@ for corpus, label in (
 PY
 }
 
+check_sdk_runtime_ability_descriptor_bound_subject_parity_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local go_runtime="$cli_root/sdk/go/runtime_ability.go"
+  local go_subject="$cli_root/sdk/go/runtime_subject.go"
+  local go_runtime_test="$cli_root/sdk/go/runtime_ability_test.go"
+  local go_subject_test="$cli_root/sdk/go/runtime_subject_test.go"
+  local py_runtime="$cli_root/sdk/python/easynet_sdk/runtime_ability.py"
+  local py_test="$cli_root/sdk/python/tests/test_runtime_ability.py"
+  local node="$cli_root/sdk/node/index.js"
+  local node_test="$cli_root/sdk/node/test/runtime-core.test.mjs"
+  local java_runtime="$cli_root/sdk/java/src/main/java/run/runtime/sdk/RuntimeAbilityClient.java"
+  local java_subjects="$cli_root/sdk/java/src/main/java/run/runtime/sdk/RuntimeSubjects.java"
+  local java_test="$cli_root/sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
+  local swift_ability="$cli_root/sdk/swift/Sources/RuntimeSDK/AbilityDescriptor.swift"
+  local swift_subjects="$cli_root/sdk/swift/Sources/RuntimeSDK/RuntimeSubjects.swift"
+  local swift_test="$cli_root/sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift"
+
+  "$PYTHON_BIN" - \
+    "$go_runtime" "$go_subject" "$go_runtime_test" "$go_subject_test" \
+    "$py_runtime" "$py_test" \
+    "$node" "$node_test" \
+    "$java_runtime" "$java_subjects" "$java_test" \
+    "$swift_ability" "$swift_subjects" "$swift_test" <<'PY'
+import sys
+from pathlib import Path
+
+paths = [Path(arg) for arg in sys.argv[1:]]
+for path in paths:
+    if not path.exists():
+        raise SystemExit(f"sdk_runtime_ability_descriptor_bound_subject_parity:missing:{path}")
+
+(
+    go_runtime,
+    go_subject,
+    go_runtime_test,
+    go_subject_test,
+    py_runtime,
+    py_test,
+    node,
+    node_test,
+    java_runtime,
+    java_subjects,
+    java_test,
+    swift_ability,
+    swift_subjects,
+    swift_test,
+) = [path.read_text(encoding="utf-8", errors="replace") for path in paths]
+
+for required in (
+    "func descriptorBoundSubjectURA(",
+    "case URAKindUser, URAKindAuthority:",
+    'addressing.DescriptorBoundResourceSubjectURA(ctx, subjectURA, "invoke/"+strings.TrimSpace(abilityName))',
+):
+    if required not in go_subject:
+        raise SystemExit(f"sdk_runtime_ability_descriptor_bound_subject_parity:go_subject_missing:{required}")
+if "return descriptorBoundSubjectURA(ctx, addressing, call.SubjectURA, abilityName)" not in go_runtime:
+    raise SystemExit("sdk_runtime_ability_descriptor_bound_subject_parity:go_runtime_not_using_helper")
+for required in (
+    "easynet:///r/example/resource/user.alice/invoke/namespace.resolve",
+    "TestDescriptorBoundSubjectURAProjectsAuthoritySubjectBeforeSigning",
+    "easynet:///r/example/resource/authority/invoke/namespace.resolve",
+):
+    if required not in go_runtime_test and required not in go_subject_test:
+        raise SystemExit(f"sdk_runtime_ability_descriptor_bound_subject_parity:go_test_missing:{required}")
+
+for required in (
+    'if subject.kind in {"user", "authority"}:',
+    "self._addressing.descriptor_bound_resource_subject_ura(",
+    'subject.ura, f"invoke/{ability_name}"',
+):
+    if required not in py_runtime:
+        raise SystemExit(f"sdk_runtime_ability_descriptor_bound_subject_parity:python_runtime_missing:{required}")
+for required in (
+    "test_runtime_ability_descriptor_binds_authority_subject",
+    "easynet:///r/example/resource/user.alice/invoke/namespace.resolve",
+    "easynet:///r/example/resource/authority/invoke/namespace.resolve",
+):
+    if required not in py_test:
+        raise SystemExit(f"sdk_runtime_ability_descriptor_bound_subject_parity:python_test_missing:{required}")
+
+for required in (
+    "function descriptorBoundRuntimeSubjectURA(subjectURA, abilityName)",
+    'return `easynet:///r/${realm}/resource/authority/invoke/${ability}`;',
+    'return `easynet:///r/${realm}/resource/user.${userID}/invoke/${ability}`;',
+    "runtimeAbilitySubjectURA(context, ability, policy)",
+):
+    if required not in node:
+        raise SystemExit(f"sdk_runtime_ability_descriptor_bound_subject_parity:node_missing:{required}")
+for required in (
+    "runtime ability public path descriptor-binds user subjects",
+    "easynet:///r/example/resource/user.alice/invoke/observe.health",
+    "easynet:///r/example/resource/authority/invoke/namespace.resolve",
+):
+    if required not in node_test:
+        raise SystemExit(f"sdk_runtime_ability_descriptor_bound_subject_parity:node_test_missing:{required}")
+
+for required in (
+    "RuntimeSubjects.descriptorBoundSubjectURA(call.subjectURA(), abilityName)",
+    "subjectURA(call, ability)",
+):
+    if required not in java_runtime:
+        raise SystemExit(f"sdk_runtime_ability_descriptor_bound_subject_parity:java_runtime_missing:{required}")
+for required in (
+    "static String descriptorBoundSubjectURA(String subjectURA, String abilityName)",
+    'return "easynet:///r/" + parsed.realm() + "/resource/authority/invoke/" + ability;',
+    'return "easynet:///r/" + parsed.realm() + "/resource/user." + userID + "/invoke/" + ability;',
+):
+    if required not in java_subjects:
+        raise SystemExit(f"sdk_runtime_ability_descriptor_bound_subject_parity:java_subjects_missing:{required}")
+for required in (
+    "runtimeAbilityPublicPathDescriptorBindsUserSubjects",
+    "easynet:///r/example/resource/user.alice/invoke/observe.health",
+    "easynet:///r/example/resource/authority/invoke/namespace.resolve",
+):
+    if required not in java_test:
+        raise SystemExit(f"sdk_runtime_ability_descriptor_bound_subject_parity:java_test_missing:{required}")
+
+for required in (
+    "RuntimeSubjects.descriptorBoundSubjectURA(call.subjectURA, abilityName: abilityName)",
+    "subjectURA(call, abilityName: ability)",
+):
+    if required not in swift_ability:
+        raise SystemExit(f"sdk_runtime_ability_descriptor_bound_subject_parity:swift_ability_missing:{required}")
+for required in (
+    "static func descriptorBoundSubjectURA(_ subjectURA: String, abilityName: String) throws -> String",
+    'return "easynet:///r/\\(parsed.realm)/resource/authority/invoke/\\(ability)"',
+    'return "easynet:///r/\\(parsed.realm)/resource/user.\\(userID)/invoke/\\(ability)"',
+):
+    if required not in swift_subjects:
+        raise SystemExit(f"sdk_runtime_ability_descriptor_bound_subject_parity:swift_subjects_missing:{required}")
+for required in (
+    "testRuntimeAbilityPublicPathDescriptorBindsUserSubjects",
+    "easynet:///r/example/resource/user.alice/invoke/observe.health",
+    "easynet:///r/example/resource/authority/invoke/namespace.resolve",
+):
+    if required not in swift_test:
+        raise SystemExit(f"sdk_runtime_ability_descriptor_bound_subject_parity:swift_test_missing:{required}")
+PY
+}
+
 check_sdk_node_stream_bidi_explicit_terminality_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local node="$cli_root/sdk/node/index.js"
@@ -29737,6 +29877,7 @@ check_daemon_lifecycle_control_vocabulary_contract
 check_sdk_history_authority_subject_contract
 check_sdk_go_python_history_public_route_cutover_contract
 check_sdk_cross_language_history_public_ingress_cutover_contract
+check_sdk_runtime_ability_descriptor_bound_subject_parity_contract
 check_sdk_node_stream_bidi_explicit_terminality_contract
 check_sdk_prepared_descriptor_ref_required_contract
 check_sdk_descriptor_resolution_error_vocabulary_contract

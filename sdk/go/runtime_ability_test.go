@@ -401,8 +401,8 @@ func TestRuntimeAbilityClientBuildsCompleteCanonicalDraft(t *testing.T) {
 	if draft.DescriptorRef() != "easynet:///r/example/ability/authority.namespace.resolve@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read" {
 		t.Fatalf("descriptor_ref = %q", draft.DescriptorRef())
 	}
-	if draft.SubjectURA() == call.SubjectURA {
-		t.Fatalf("user subject was not descriptor-bound: %q", draft.SubjectURA())
+	if draft.SubjectURA() != "easynet:///r/example/resource/user.alice/invoke/namespace.resolve" {
+		t.Fatalf("subject_ura = %q, want descriptor-bound user subject", draft.SubjectURA())
 	}
 	call.Metadata["request_id"] = "mutated"
 	if draft.Metadata()["request_id"] != "call-1" {

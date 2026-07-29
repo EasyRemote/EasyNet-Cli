@@ -196,8 +196,26 @@ def test_runtime_ability_builds_complete_canonical_draft() -> None:
             "subject_ura": _call().subject_ura,
         }
     ]
-    assert draft.subject_ura != _call().subject_ura
+    assert (
+        draft.subject_ura
+        == "easynet:///r/example/resource/user.alice/invoke/namespace.resolve"
+    )
     assert draft.metadata == {"request_id": "call-1"}
+
+
+def test_runtime_ability_descriptor_binds_authority_subject() -> None:
+    client, transport = _client()
+    call = replace(_call(), subject_ura="easynet:///r/example/authority")
+
+    draft = client.build(call, "namespace.resolve", {"name": "alice"})
+
+    assert (
+        draft.subject_ura
+        == "easynet:///r/example/resource/authority/invoke/namespace.resolve"
+    )
+    assert transport.descriptor_requests[-1]["subject_ura"] == (
+        "easynet:///r/example/authority"
+    )
 
 
 def test_runtime_ability_catalogue_read_resolves_descriptor_with_runtime_owner_subject() -> None:

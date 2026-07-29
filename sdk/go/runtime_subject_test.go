@@ -37,6 +37,24 @@ func TestDescriptorBoundSubjectURAProjectsUserSubjectBeforeSigning(t *testing.T)
 	}
 }
 
+func TestDescriptorBoundSubjectURAProjectsAuthoritySubjectBeforeSigning(t *testing.T) {
+	identity := newRuntimeSubjectIdentity(t)
+
+	subjectURA, err := descriptorBoundSubjectURA(
+		context.Background(),
+		identity,
+		"easynet:///r/example/authority",
+		"namespace.resolve",
+	)
+	if err != nil {
+		t.Fatalf("descriptorBoundSubjectURA: %v", err)
+	}
+	want := "easynet:///r/example/resource/authority/invoke/namespace.resolve"
+	if subjectURA != want {
+		t.Fatalf("subject = %q, want %q", subjectURA, want)
+	}
+}
+
 func TestDescriptorBoundInvocationBytesRejectUnprojectedUserSubject(t *testing.T) {
 	_, err := canonicalDescriptorBoundInvocationBytes(Envelope{
 		Caller:        AgentRef{URA: "easynet:///r/example/agent/backend.sdk"},

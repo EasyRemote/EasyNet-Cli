@@ -1765,6 +1765,9 @@ test("runtime ability public path descriptor-binds user subjects", async () => {
     },
     resolveDescriptorRef: (requestJSON) => {
       seenDescriptorRequest = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      if (seenDescriptorRequest.callee_ura === "easynet:///r/example/authority") {
+        return "easynet:///r/example/ability/authority.namespace.resolve@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read";
+      }
       return descriptor;
     },
   });
@@ -1785,6 +1788,24 @@ test("runtime ability public path descriptor-binds user subjects", async () => {
 
   assert.equal(draft.subjectURA, "easynet:///r/example/resource/user.alice/invoke/observe.health");
   assert.equal(seenDescriptorRequest.subject_ura, subject);
+
+  const authorityDraft = await ability.build(
+    {
+      caller_ura: caller,
+      callee_ura: "easynet:///r/example/authority",
+      subject_ura: "easynet:///r/example/authority",
+      nonce_base64: nonce,
+      causal_context: { form: "none" },
+    },
+    "namespace.resolve",
+    { name: "alice" },
+  );
+
+  assert.equal(
+    authorityDraft.subjectURA,
+    "easynet:///r/example/resource/authority/invoke/namespace.resolve",
+  );
+  assert.equal(seenDescriptorRequest.subject_ura, "easynet:///r/example/authority");
 });
 
 test("runtime descriptor resolver rejects provider mismatches before transport", async () => {
