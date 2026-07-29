@@ -662,8 +662,8 @@ func TestRuntimeReceiptSessionAuthorityFacadeUsesGenericFields(t *testing.T) {
 	proof["binding"] = sessionBinding
 	proof["proof_payload_base64"] = ""
 	proofHash := axoninv.AuthorityBindingProofHash(axoninv.SessionAuthority(axoninv.SessionAuthorityBody{
-		BackendURA:  "easynet:///r/example/agent/backend",
-		UserURA:     "easynet:///r/example/agent/alice",
+		IssuerURA:   "easynet:///r/example/agent/backend",
+		SubjectURA:  "easynet:///r/example/agent/alice",
 		SessionID:   "session-1",
 		Scopes:      []string{"invoke"},
 		Audiences:   []string{runtimeTestDescriptorRef},

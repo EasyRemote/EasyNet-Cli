@@ -2021,8 +2021,8 @@ func runtimeReceiptAuthorityBinding(value map[string]any, field string) (axoninv
 			return axoninv.AuthorityBinding{}, err
 		}
 		return axoninv.SessionAuthority(axoninv.SessionAuthorityBody{
-			BackendURA:  issuer,
-			UserURA:     subject,
+			IssuerURA:   issuer,
+			SubjectURA:  subject,
 			SessionID:   sessionID,
 			Scopes:      scopes,
 			Audiences:   audiences,
