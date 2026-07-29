@@ -133,6 +133,21 @@ const SESSION_AUTHORITY_REQUEST_FIELDS = new Set([
   "creator_principal_ura",
   "metadata",
 ]);
+const INVOCATION_DRAFT_FIELDS = new Set([
+  "callerURA",
+  "calleeURA",
+  "descriptorRef",
+  "subjectURA",
+  "nonceBase64",
+  "causalContext",
+  "contentType",
+  "args",
+  "argumentsBase64",
+  "metadata",
+  "callerSignature",
+  "hasArgs",
+  "governanceRead",
+]);
 export const MAX_STREAM_BUFFERED_EVENTS = 1024;
 export const MAX_BIDI_BUFFERED_FRAMES = 1024;
 const RUNTIME_GOVERNANCE_READ_ABILITIES = Object.freeze([
@@ -728,19 +743,21 @@ export class AuthorityClient {
 
 export class InvocationDraft {
   constructor(fields) {
-    this.callerURA = requiredBuilderPrincipalString(fields.callerURA, "caller_ura");
-    this.calleeURA = requiredBuilderPrincipalString(fields.calleeURA, "callee_ura");
-    this.descriptorRef = requiredBuilderString(fields.descriptorRef, "descriptor_ref");
-    this.subjectURA = requiredBuilderPrincipalString(fields.subjectURA, "subject_ura");
-    this.nonceBase64 = requiredBuilderString(fields.nonceBase64, "nonce_base64");
-    this.causalContext = objectValue(fields.causalContext, "causal_context");
-    this.contentType = requiredBuilderString(fields.contentType, "content_type");
-    this.args = fields.args;
-    this.argumentsBase64 = fields.argumentsBase64 || "";
-    this.metadata = objectValue(fields.metadata ?? {}, "metadata");
-    this.callerSignature = fields.callerSignature ?? null;
-    this.hasArgs = Boolean(fields.hasArgs);
-    this.governanceRead = fields.governanceRead === true;
+    const value = objectValue(fields, "invocation draft");
+    rejectNoncanonicalAuthorityFields(value, INVOCATION_DRAFT_FIELDS, "invocation draft");
+    this.callerURA = requiredBuilderPrincipalString(value.callerURA, "caller_ura");
+    this.calleeURA = requiredBuilderPrincipalString(value.calleeURA, "callee_ura");
+    this.descriptorRef = requiredBuilderString(value.descriptorRef, "descriptor_ref");
+    this.subjectURA = requiredBuilderPrincipalString(value.subjectURA, "subject_ura");
+    this.nonceBase64 = requiredBuilderString(value.nonceBase64, "nonce_base64");
+    this.causalContext = objectValue(value.causalContext, "causal_context");
+    this.contentType = requiredBuilderString(value.contentType, "content_type");
+    this.args = value.args;
+    this.argumentsBase64 = value.argumentsBase64 || "";
+    this.metadata = objectValue(value.metadata ?? {}, "metadata");
+    this.callerSignature = value.callerSignature ?? null;
+    this.hasArgs = Boolean(value.hasArgs);
+    this.governanceRead = value.governanceRead === true;
     if (!this.governanceRead) {
       rejectGovernanceReadPublicInvocationDescriptor(this.calleeURA, this.descriptorRef);
     }

@@ -1461,6 +1461,44 @@ test("authority DTO constructors reject noncanonical product fields", () => {
   );
 });
 
+test("invocation draft constructor rejects noncanonical tuple aliases", () => {
+  assert.throws(
+    () =>
+      new sdk.InvocationDraft({
+        callerURA: caller,
+        calleeURA: callee,
+        descriptorRef: descriptor,
+        subjectURA: callee,
+        nonceBase64: nonce,
+        causalContext: { form: "none" },
+        contentType: "application/json",
+        args: { probe: true },
+        hasArgs: true,
+        metadata: {},
+        subject_ura: callee,
+      }),
+    /invocation draft contains noncanonical field subject_ura/,
+  );
+
+  assert.throws(
+    () =>
+      new sdk.InvocationDraft({
+        callerURA: caller,
+        calleeURA: callee,
+        descriptorRef: descriptor,
+        subjectURA: callee,
+        nonceBase64: nonce,
+        causalContext: { form: "none" },
+        contentType: "application/json",
+        args: { probe: true },
+        hasArgs: true,
+        metadata: {},
+        legacy_subject: callee,
+      }),
+    /invocation draft contains noncanonical field legacy_subject/,
+  );
+});
+
 test("authority metadata rejects all-zero session owners", () => {
   assert.throws(
     () => sdk.SessionAuthority.fromMetadata(
