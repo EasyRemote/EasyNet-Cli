@@ -44,7 +44,6 @@ from ...errors import (
     SDKError,
     canonical_failure_code,
     canonical_terminal_state_code,
-    is_descriptor_owner_offline_message,
 )
 from ...invocation import InvocationDraft
 from ...axon_addressing import AddressingProjection
@@ -2330,7 +2329,7 @@ def _close_identity_projector(
 def _grpc_error(error: grpc.RpcError, *, endpoint: str) -> SDKError:
     code = error.code()
     message = error.details() or str(error)
-    if is_descriptor_owner_offline_message(message):
+    if _canonical_error_code_from_message_prefix(message) == ErrorCode.DESCRIPTOR_OWNER_OFFLINE:
         return _direct_error(
             "DESCRIPTOR_OWNER_OFFLINE: descriptor owner is not online",
             code=ErrorCode.DESCRIPTOR_OWNER_OFFLINE,
@@ -2376,6 +2375,16 @@ def _grpc_error(error: grpc.RpcError, *, endpoint: str) -> SDKError:
         details={"endpoint": endpoint, "grpc_status": str(code)},
         cause=error,
     )
+
+
+def _canonical_error_code_from_message_prefix(message: str) -> ErrorCode | None:
+    prefix, separator, _ = message.strip().partition(":")
+    if not separator:
+        return None
+    try:
+        return ErrorCode(prefix.strip())
+    except ValueError:
+        return None
 
 
 def _unsupported(message: str) -> SDKError:

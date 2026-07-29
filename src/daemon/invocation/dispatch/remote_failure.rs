@@ -102,9 +102,9 @@ mod tests {
     }
 
     #[test]
-    fn route_negative_owner_offline_is_route_unavailable_not_ability_absent() {
+    fn typed_owner_offline_is_route_unavailable_not_ability_absent() {
         let failure = failure(
-            "ABILITY_NOT_FOUND",
+            "DESCRIPTOR_OWNER_OFFLINE",
             "ROUTE_NEGATIVE: namespace.resolve negative for \
              `easynet:///r/localhost/ability/device.dev-a.meta.list_abilities`: \
              NEGATIVE_REASON_NXDOMAIN: owner is not online",
@@ -124,9 +124,25 @@ mod tests {
     }
 
     #[test]
-    fn caller_signer_readiness_is_not_downgraded_to_ability_absent() {
+    fn route_text_does_not_gain_owner_offline_state() {
         let failure = failure(
             "ABILITY_NOT_FOUND",
+            "ROUTE_NEGATIVE: namespace.resolve negative for \
+             `easynet:///r/localhost/ability/device.dev-a.meta.list_abilities`: \
+             NEGATIVE_REASON_NXDOMAIN: owner is not online",
+        );
+
+        let status = status_from_remote_failure("remote Invoke", "ignored", Some(&failure));
+
+        assert_eq!(status.code(), Code::NotFound);
+        assert!(status.message().contains("ROUTE_NEGATIVE"));
+        assert!(!status.message().contains("DESCRIPTOR_OWNER_OFFLINE"));
+    }
+
+    #[test]
+    fn typed_caller_signer_readiness_is_not_downgraded_to_ability_absent() {
+        let failure = failure(
+            "CALLER_SIGNER_UNAVAILABLE",
             "easynet_runtime_resolve_descriptor_ref: remote invocation requires a caller signer \
              for `easynet:///r/localhost/user/alice`; load or provision that identity in the \
              local key service: self-identity: keyring rejected request: kind=not_found, \
@@ -148,5 +164,21 @@ mod tests {
             "remote failure must not expose keyring implementation detail: {}",
             status.message()
         );
+    }
+
+    #[test]
+    fn keyring_text_does_not_gain_caller_signer_state() {
+        let failure = failure(
+            "ABILITY_NOT_FOUND",
+            "easynet_runtime_resolve_descriptor_ref: remote invocation requires a caller signer \
+             for `easynet:///r/localhost/user/alice`; load or provision that identity in the \
+             local key service: self-identity: keyring rejected request: kind=not_found, \
+             msg=keyring entry not found: easynet:///r/localhost/user/alice",
+        );
+
+        let status = status_from_remote_failure("remote Invoke", "ignored", Some(&failure));
+
+        assert_eq!(status.code(), Code::NotFound);
+        assert!(!status.message().contains("CALLER_SIGNER_UNAVAILABLE"));
     }
 }

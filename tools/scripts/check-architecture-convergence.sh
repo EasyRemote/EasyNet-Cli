@@ -3336,6 +3336,7 @@ ffi_v5_spec = cli_root / "docs/spec/ffi-abi-v6.md"
 ffi_invocation = cli_root / "src/ffi/invocation/mod.rs"
 go_cabi_runtime = cli_root / "sdk/go/cabi_runtime.go"
 go_errors = cli_root / "sdk/go/errors.go"
+python_errors = cli_root / "sdk/python/easynet_sdk/errors.py"
 python_cabi_runtime = cli_root / "sdk/python/easynet_sdk/_cabi.py"
 go_direct_runtime = cli_root / "sdk/go/direct_runtime.go"
 python_direct_runtime = cli_root / "sdk/python/easynet_sdk/providers/runtime/direct.py"
@@ -3351,6 +3352,7 @@ go_direct_runtime_tests = cli_root / "sdk/go/direct_runtime_test.go"
 python_stream_tests = cli_root / "sdk/python/tests/test_stream.py"
 python_bidi_tests = cli_root / "sdk/python/tests/test_bidi.py"
 python_direct_runtime_tests = cli_root / "sdk/python/tests/test_direct_runtime.py"
+python_errors_tests = cli_root / "sdk/python/tests/test_errors.py"
 
 if ffi_v5_spec.exists():
     text = ffi_v5_spec.read_text(encoding="utf-8", errors="replace")
@@ -3636,8 +3638,56 @@ if go_errors.exists():
                 "Go error DTO decoding must test that route diagnostic text is not a descriptor owner-offline state",
             )
 
+if python_errors.exists():
+    text = source(python_errors)
+    if "is_descriptor_owner_offline_message" in text or "_is_descriptor_owner_offline_message" in text:
+        add(
+            "R95_DESCRIPTOR_RESOLVER_BOUNDED_CATALOG",
+            python_errors,
+            line_number(
+                text,
+                max(
+                    text.find("is_descriptor_owner_offline_message"),
+                    text.find("_is_descriptor_owner_offline_message"),
+                ),
+            ),
+            "Python error DTO decoding must not infer descriptor owner-offline from route diagnostic text",
+        )
+    if python_errors_tests.exists():
+        tests = source(python_errors_tests)
+        if "test_from_json_does_not_infer_owner_offline_from_route_text" not in tests:
+            add(
+                "R95_DESCRIPTOR_RESOLVER_BOUNDED_CATALOG",
+                python_errors_tests,
+                1,
+                "Python error DTO decoding must test that route diagnostic text is not a descriptor owner-offline state",
+            )
+
 if python_direct_runtime.exists():
     text = source(python_direct_runtime)
+    if "is_descriptor_owner_offline_message" in text:
+        add(
+            "R95_DESCRIPTOR_RESOLVER_BOUNDED_CATALOG",
+            python_direct_runtime,
+            line_number(text, text.find("is_descriptor_owner_offline_message")),
+            "Python direct runtime must not infer descriptor owner-offline from route diagnostic text",
+        )
+    if "_canonical_error_code_from_message_prefix(message)" not in text:
+        add(
+            "R95_DESCRIPTOR_RESOLVER_BOUNDED_CATALOG",
+            python_direct_runtime,
+            1,
+            "Python direct runtime must consume canonical descriptor owner-offline code text",
+        )
+    if python_direct_runtime_tests.exists():
+        tests = source(python_direct_runtime_tests)
+        if "test_direct_runtime_grpc_does_not_infer_owner_offline_from_route_text" not in tests:
+            add(
+                "R95_DESCRIPTOR_RESOLVER_BOUNDED_CATALOG",
+                python_direct_runtime_tests,
+                1,
+                "Python direct runtime must test that route diagnostic text is not a descriptor owner-offline state",
+            )
     python_direct_cancel_contracts = (
         (
             r"class\s+DirectRuntimeStreamTransport\b.*?def\s+cancel\b.*?_unsupported_direct_cancellation\(.*?capability=\"stream_cancel\"",

@@ -109,13 +109,16 @@ impl<'a> RuntimeFailureFacts<'a> {
     }
 
     pub(crate) fn is_admission_denial_message<'b>(message: &'b str) -> bool {
-        RuntimeFailureFacts::<'b>::new("", message).classify()
-            == RuntimeFailureKind::AdmissionDenied
+        canonical_code_from_message_prefix(message).is_some_and(|code| {
+            RuntimeFailureFacts::new(code, "").classify() == RuntimeFailureKind::AdmissionDenied
+        })
     }
 
     pub(crate) fn is_caller_signer_unavailable_message<'b>(message: &'b str) -> bool {
-        RuntimeFailureFacts::<'b>::new("", message).classify()
-            == RuntimeFailureKind::CallerSignerUnavailable
+        canonical_code_from_message_prefix(message).is_some_and(|code| {
+            RuntimeFailureFacts::new(code, "").classify()
+                == RuntimeFailureKind::CallerSignerUnavailable
+        })
     }
 
     #[cfg(feature = "axon-pb")]
@@ -123,62 +126,33 @@ impl<'a> RuntimeFailureFacts<'a> {
         code: tonic::Code,
         message: &'b str,
     ) -> bool {
-        let code = if code == tonic::Code::Unavailable {
-            "UNAVAILABLE"
-        } else {
-            ""
-        };
-        RuntimeFailureFacts::<'b>::new(code, message).classify()
-            == RuntimeFailureKind::DescriptorOwnerOffline
+        code == tonic::Code::Unavailable
+            && canonical_code_from_message_prefix(message).is_some_and(|code| {
+                RuntimeFailureFacts::new(code, "").classify()
+                    == RuntimeFailureKind::DescriptorOwnerOffline
+            })
     }
 
     fn normalized_code(self) -> String {
         self.code.trim().to_ascii_uppercase()
     }
 
-    fn normalized_detail(self) -> String {
-        self.detail.to_ascii_uppercase()
-    }
-
     fn is_route_unavailable(self, code: &str) -> bool {
-        let detail = self.normalized_detail();
         code == "ROUTE_UNAVAILABLE"
             || code == "RUNTIME_ROUTE_UNAVAILABLE"
             || code == "ROUTE_NEGATIVE"
-            || detail.contains("ROUTE_NEGATIVE")
-            || detail.contains("NEGATIVE_REASON_NXDOMAIN")
-            || detail.contains("OWNER IS NOT ONLINE")
     }
 
     fn is_caller_signer_unavailable(self, code: &str) -> bool {
-        let detail = self.normalized_detail();
         code == "CALLER_SIGNER_UNAVAILABLE"
-            || detail.contains("CALLER_SIGNER_UNAVAILABLE")
-            || detail.contains("CALLER SIGNER UNAVAILABLE")
-            || detail.contains("REQUIRES A CALLER SIGNER")
-            || detail.contains("KEYRING ENTRY NOT FOUND")
-            || detail.contains("SELF-IDENTITY:")
     }
 
     fn is_descriptor_owner_offline(self, code: &str) -> bool {
-        let detail = self.normalized_detail();
-        (code == "DESCRIPTOR_OWNER_OFFLINE"
-            || detail.contains("DESCRIPTOR_OWNER_OFFLINE")
-            || detail.contains("ROUTE_NEGATIVE")
-            || detail.contains("NEGATIVE_REASON_NXDOMAIN")
-            || detail.contains("NEGATIVE_REASON_NOROUTE"))
-            && detail.contains("OWNER IS NOT ONLINE")
+        code == "DESCRIPTOR_OWNER_OFFLINE"
     }
 
     fn is_admission_denial(self, code: &str) -> bool {
-        let detail = self.normalized_detail();
-        detail.contains("POLICY_DENIED")
-            || detail.contains("AUTHORITY_DENIED")
-            || detail.contains("SIGNATURE_DENIED")
-            || detail.contains("AXON_CALLER_SIGNATURE_INVALID")
-            || detail.contains("SIGNED_DESCRIPTOR_REF_")
-            || detail.contains("SIGNED_ENVELOPE_ROUTE_MUTATION")
-            || code == "PERMISSION_DENIED"
+        code == "PERMISSION_DENIED"
             || code.starts_with("AUTHORITY_")
             || code.starts_with("POLICY_")
             || code.starts_with("SIGNATURE_")
@@ -192,6 +166,19 @@ impl<'a> RuntimeFailureFacts<'a> {
                 "ABILITY_FORBIDDEN" | "ABILITY_ROLE_RESTRICTED" | "ABILITY_REALM_RESTRICTED"
             )
     }
+}
+
+fn canonical_code_from_message_prefix(message: &str) -> Option<&str> {
+    let (prefix, _) = message.trim().split_once(':')?;
+    let code = prefix.trim();
+    if code.is_empty()
+        || !code
+            .bytes()
+            .all(|byte| byte.is_ascii_uppercase() || byte == b'_')
+    {
+        return None;
+    }
+    Some(code)
 }
 
 pub(crate) fn canonical_untyped_remote_failure_detail(raw_error: &str) -> String {
@@ -256,9 +243,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn classifies_keyring_detail_as_caller_signer_unavailable() {
+    fn classifies_typed_caller_signer_unavailable() {
         let facts = RuntimeFailureFacts::new(
-            "ABILITY_NOT_FOUND",
+            "CALLER_SIGNER_UNAVAILABLE",
             "easynet_runtime_resolve_descriptor_ref: remote invocation requires a caller signer \
              for `easynet:///r/localhost/user/alice`; load or provision that identity in the \
              local key service: self-identity: keyring rejected request: kind=not_found, \
@@ -277,9 +264,25 @@ mod tests {
     }
 
     #[test]
-    fn classifies_owner_offline_before_not_found() {
+    fn untyped_keyring_detail_does_not_gain_caller_signer_state() {
         let facts = RuntimeFailureFacts::new(
             "ABILITY_NOT_FOUND",
+            "easynet_runtime_resolve_descriptor_ref: remote invocation requires a caller signer \
+             for `easynet:///r/localhost/user/alice`; load or provision that identity in the \
+             local key service: self-identity: keyring rejected request: kind=not_found, \
+             msg=keyring entry not found: easynet:///r/localhost/user/alice",
+        );
+
+        assert_eq!(facts.classify(), RuntimeFailureKind::NotFound);
+        assert!(!facts
+            .canonical_detail()
+            .contains("CALLER_SIGNER_UNAVAILABLE"));
+    }
+
+    #[test]
+    fn classifies_typed_owner_offline_before_not_found() {
+        let facts = RuntimeFailureFacts::new(
+            "DESCRIPTOR_OWNER_OFFLINE",
             "ROUTE_NEGATIVE: namespace.resolve negative: NEGATIVE_REASON_NXDOMAIN: owner is not online",
         );
 
@@ -288,6 +291,38 @@ mod tests {
             facts.canonical_detail(),
             "DESCRIPTOR_OWNER_OFFLINE: descriptor owner is not online"
         );
+    }
+
+    #[test]
+    fn route_text_does_not_gain_descriptor_owner_offline_state() {
+        let facts = RuntimeFailureFacts::new(
+            "ABILITY_NOT_FOUND",
+            "ROUTE_NEGATIVE: namespace.resolve negative: NEGATIVE_REASON_NXDOMAIN: owner is not online",
+        );
+
+        assert_eq!(facts.classify(), RuntimeFailureKind::NotFound);
+        assert!(!facts
+            .canonical_detail()
+            .contains("DESCRIPTOR_OWNER_OFFLINE"));
+    }
+
+    #[cfg(feature = "axon-pb")]
+    #[test]
+    fn status_helpers_require_canonical_code_prefix() {
+        assert!(RuntimeFailureFacts::is_caller_signer_unavailable_message(
+            "CALLER_SIGNER_UNAVAILABLE: remote invocation requires a caller signer"
+        ));
+        assert!(!RuntimeFailureFacts::is_caller_signer_unavailable_message(
+            "remote invocation requires a caller signer"
+        ));
+        assert!(RuntimeFailureFacts::is_descriptor_owner_offline_status(
+            tonic::Code::Unavailable,
+            "DESCRIPTOR_OWNER_OFFLINE: descriptor owner is not online"
+        ));
+        assert!(!RuntimeFailureFacts::is_descriptor_owner_offline_status(
+            tonic::Code::Unavailable,
+            "ROUTE_NEGATIVE: namespace.resolve negative: NEGATIVE_REASON_NXDOMAIN: owner is not online"
+        ));
     }
 
     #[test]

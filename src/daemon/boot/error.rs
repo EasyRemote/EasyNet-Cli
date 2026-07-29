@@ -214,6 +214,20 @@ mod tests {
         let error = DaemonError::InvokeStatus {
             ability: "meta.list_abilities".to_string(),
             code: tonic::Code::Unavailable,
+            message: "DESCRIPTOR_OWNER_OFFLINE: descriptor owner is not online".to_string(),
+        };
+
+        assert_eq!(
+            error.invocation_error_projection(),
+            DaemonInvocationErrorProjection::DescriptorOwnerOffline
+        );
+    }
+
+    #[test]
+    fn route_text_does_not_project_descriptor_owner_offline() {
+        let error = DaemonError::InvokeStatus {
+            ability: "meta.list_abilities".to_string(),
+            code: tonic::Code::Unavailable,
             message: "ROUTE_NEGATIVE: namespace.resolve negative: \
                  NEGATIVE_REASON_NXDOMAIN: owner is not online"
                 .to_string(),
@@ -221,7 +235,7 @@ mod tests {
 
         assert_eq!(
             error.invocation_error_projection(),
-            DaemonInvocationErrorProjection::DescriptorOwnerOffline
+            DaemonInvocationErrorProjection::Status(tonic::Code::Unavailable)
         );
     }
 

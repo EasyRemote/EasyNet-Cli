@@ -429,8 +429,10 @@ remote_required = {
     "facts.canonical_detail()": "remote_projection_not_using_canonical_detail",
     "facts.grpc_status_code()": "remote_projection_not_using_classifier_status",
     "canonical_untyped_remote_failure_detail": "untyped_remote_projection_not_shared",
-    "route_negative_owner_offline_is_route_unavailable_not_ability_absent": "route_negative_test_missing",
-    "caller_signer_readiness_is_not_downgraded_to_ability_absent": "caller_signer_test_missing",
+    "typed_owner_offline_is_route_unavailable_not_ability_absent": "typed_owner_offline_test_missing",
+    "route_text_does_not_gain_owner_offline_state": "route_text_negative_test_missing",
+    "typed_caller_signer_readiness_is_not_downgraded_to_ability_absent": "typed_caller_signer_test_missing",
+    "keyring_text_does_not_gain_caller_signer_state": "keyring_text_negative_test_missing",
 }
 for needle, marker in remote_required.items():
     if needle not in remote:
@@ -442,19 +444,31 @@ classifier_required = {
     "RuntimeFailureKind::RouteUnavailable": "route_unavailable_kind_missing",
     "RuntimeFailureKind::CallerSignerUnavailable": "caller_signer_kind_missing",
     "RuntimeFailureKind::NotFound": "not_found_kind_missing",
-    "detail.contains(\"ROUTE_NEGATIVE\")": "route_negative_detail_missing",
-    "detail.contains(\"NEGATIVE_REASON_NXDOMAIN\")": "nxdomain_detail_missing",
-    "detail.contains(\"OWNER IS NOT ONLINE\")": "owner_offline_detail_missing",
+    "code == \"DESCRIPTOR_OWNER_OFFLINE\"": "descriptor_owner_offline_typed_code_missing",
+    "code == \"CALLER_SIGNER_UNAVAILABLE\"": "caller_signer_typed_code_missing",
+    "code == \"ROUTE_NEGATIVE\"": "route_negative_typed_code_missing",
+    "canonical_code_from_message_prefix": "canonical_prefix_helper_missing",
     "DESCRIPTOR_OWNER_OFFLINE: descriptor owner is not online": "descriptor_owner_offline_projection_missing",
-    "detail.contains(\"REQUIRES A CALLER SIGNER\")": "caller_signer_detail_missing",
-    "detail.contains(\"KEYRING ENTRY NOT FOUND\")": "keyring_not_found_detail_missing",
-    "detail.contains(\"SELF-IDENTITY:\")": "self_identity_detail_missing",
-    "classifies_owner_offline_before_not_found": "owner_offline_classifier_test_missing",
-    "classifies_keyring_detail_as_caller_signer_unavailable": "caller_signer_classifier_test_missing",
+    "classifies_typed_owner_offline_before_not_found": "typed_owner_offline_classifier_test_missing",
+    "route_text_does_not_gain_descriptor_owner_offline_state": "route_text_classifier_negative_missing",
+    "classifies_typed_caller_signer_unavailable": "typed_caller_signer_classifier_test_missing",
+    "untyped_keyring_detail_does_not_gain_caller_signer_state": "keyring_text_classifier_negative_missing",
 }
 for needle, marker in classifier_required.items():
     if needle not in classifier:
         raise SystemExit(f"remote_failure_route_negative:{marker}")
+classifier_semantics = classifier.split("pub(crate) fn canonical_untyped_remote_failure_detail", 1)[0]
+for legacy in (
+    'detail.contains("ROUTE_NEGATIVE")',
+    'detail.contains("NEGATIVE_REASON_NXDOMAIN")',
+    'detail.contains("NEGATIVE_REASON_NOROUTE")',
+    'detail.contains("OWNER IS NOT ONLINE")',
+    'detail.contains("REQUIRES A CALLER SIGNER")',
+    'detail.contains("KEYRING ENTRY NOT FOUND")',
+    'detail.contains("SELF-IDENTITY:")',
+):
+    if legacy in classifier_semantics:
+        raise SystemExit("remote_failure_route_negative:detail_semantic_classifier_present")
 owner_index = classifier.find("self.is_descriptor_owner_offline(&code)")
 route_index = classifier.find("self.is_route_unavailable(&code)")
 signer_index = classifier.find("self.is_caller_signer_unavailable(&code)")
@@ -7809,6 +7823,8 @@ check_sdk_direct_runtime_descriptor_not_found_contract() {
   local go_errors_test="$cli_root/sdk/go/errors_test.go"
   local py_direct="$cli_root/sdk/python/easynet_sdk/providers/runtime/direct.py"
   local py_direct_test="$cli_root/sdk/python/tests/test_direct_runtime.py"
+  local py_errors="$cli_root/sdk/python/easynet_sdk/errors.py"
+  local py_errors_test="$cli_root/sdk/python/tests/test_errors.py"
 
   "$PYTHON_BIN" - \
     "$go_direct" \
@@ -7816,12 +7832,14 @@ check_sdk_direct_runtime_descriptor_not_found_contract() {
     "$go_errors" \
     "$go_errors_test" \
     "$py_direct" \
-    "$py_direct_test" <<'PY'
+    "$py_direct_test" \
+    "$py_errors" \
+    "$py_errors_test" <<'PY'
 import re
 import sys
 from pathlib import Path
 
-go_direct_path, go_direct_test_path, go_errors_path, go_errors_test_path, py_direct_path, py_direct_test_path = map(Path, sys.argv[1:])
+go_direct_path, go_direct_test_path, go_errors_path, go_errors_test_path, py_direct_path, py_direct_test_path, py_errors_path, py_errors_test_path = map(Path, sys.argv[1:])
 
 def read(path: Path) -> str:
     if not path.exists():
@@ -7858,18 +7876,26 @@ if "TestDecodeTransportErrorJSONDoesNotInferOwnerOfflineFromRouteText" not in go
     raise SystemExit("sdk_go_error_json_owner_offline_negative_text_test_missing")
 
 py_direct = read(py_direct_path)
+py_errors = read(py_errors_path)
 py_body = section(py_direct, "def _grpc_error(", "def _direct_error(")
 if re.search(r"grpc\.StatusCode\.NOT_FOUND:\s*\(\s*ErrorCode\.ABILITY_NOT_FOUND", py_body, re.S):
     raise SystemExit("sdk_python_direct_runtime_not_found_legacy_ability_projection")
 if "grpc.StatusCode.NOT_FOUND" not in py_body or "ErrorCode.DESCRIPTOR_NOT_FOUND" not in py_body:
     raise SystemExit("sdk_python_direct_runtime_not_found_descriptor_projection_missing")
-if "is_descriptor_owner_offline_message(message)" not in py_body or "ErrorCode.DESCRIPTOR_OWNER_OFFLINE" not in py_body:
-    raise SystemExit("sdk_python_direct_runtime_owner_offline_projection_missing")
+if "is_descriptor_owner_offline_message" in py_direct or "_is_descriptor_owner_offline_message" in py_errors:
+    raise SystemExit("sdk_python_direct_runtime_owner_offline_message_classifier_retired")
+if "_canonical_error_code_from_message_prefix(message)" not in py_body or "ErrorCode.DESCRIPTOR_OWNER_OFFLINE" not in py_body:
+    raise SystemExit("sdk_python_direct_runtime_owner_offline_typed_prefix_projection_missing")
 py_tests = read(py_direct_test_path)
+py_error_tests = read(py_errors_test_path)
 if "test_direct_runtime_grpc_not_found_projects_descriptor_not_found" not in py_tests:
     raise SystemExit("sdk_python_direct_runtime_not_found_descriptor_test_missing")
 if "test_direct_runtime_grpc_owner_offline_projects_descriptor_owner_offline" not in py_tests:
     raise SystemExit("sdk_python_direct_runtime_owner_offline_descriptor_test_missing")
+if "test_direct_runtime_grpc_does_not_infer_owner_offline_from_route_text" not in py_tests:
+    raise SystemExit("sdk_python_direct_runtime_owner_offline_negative_text_test_missing")
+if "test_from_json_does_not_infer_owner_offline_from_route_text" not in py_error_tests:
+    raise SystemExit("sdk_python_error_json_owner_offline_negative_text_test_missing")
 PY
 }
 
@@ -18241,7 +18267,8 @@ if "format!(\"{context}: {raw_detail}\")" in body or "format!(\"{context}: {deta
 
 test = remote.split("\n#[cfg(test)]", 1)[1] if "\n#[cfg(test)]" in remote else ""
 for required_test in (
-    "caller_signer_readiness_is_not_downgraded_to_ability_absent",
+    "typed_caller_signer_readiness_is_not_downgraded_to_ability_absent",
+    "keyring_text_does_not_gain_caller_signer_state",
     "status.message().contains(\"CALLER_SIGNER_UNAVAILABLE\")",
     "!status.message().contains(\"keyring entry not found\")",
     "!status.message().contains(\"keyring rejected request\")",
@@ -18250,8 +18277,10 @@ for required_test in (
     if required_test not in test:
         raise SystemExit(f"remote_failure_caller_signer_projection:missing_test:{required_test}")
 
-if "classifies_keyring_detail_as_caller_signer_unavailable" not in classifier:
+if "classifies_typed_caller_signer_unavailable" not in classifier:
     raise SystemExit("remote_failure_caller_signer_projection:missing_classifier_test")
+if "untyped_keyring_detail_does_not_gain_caller_signer_state" not in classifier:
+    raise SystemExit("remote_failure_caller_signer_projection:missing_classifier_negative_test")
 if "assert!(status.message().contains(\"keyring entry not found\"))" in remote:
     raise SystemExit("remote_failure_caller_signer_projection:retired_keyring_positive_assertion")
 PY
