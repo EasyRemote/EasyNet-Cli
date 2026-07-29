@@ -14756,7 +14756,7 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/go/",
           "path": "sdk/go/direct_runtime.go",
-          "sha256": "1938645e4f08a20fe8024179843c1428edab242d736cfe78cf29756fc27505bd",
+          "sha256": "c2ba91b18d55b9af53b83bb300b1c0de0fccc63a654cf0c2aafc79cc4abae268",
           "interface": "RuntimeConnector",
           "revision": "ebd2f03ae8b870992ff215b8850dcc6e127d1f99"
         },
@@ -14862,7 +14862,7 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/go/",
           "path": "sdk/go/direct_runtime.go",
-          "sha256": "1938645e4f08a20fe8024179843c1428edab242d736cfe78cf29756fc27505bd",
+          "sha256": "c2ba91b18d55b9af53b83bb300b1c0de0fccc63a654cf0c2aafc79cc4abae268",
           "interface": "RuntimeConnector",
           "revision": "ebd2f03ae8b870992ff215b8850dcc6e127d1f99"
         },
@@ -14948,7 +14948,7 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/go/",
           "path": "sdk/go/direct_runtime.go",
-          "sha256": "1938645e4f08a20fe8024179843c1428edab242d736cfe78cf29756fc27505bd",
+          "sha256": "c2ba91b18d55b9af53b83bb300b1c0de0fccc63a654cf0c2aafc79cc4abae268",
           "interface": "RuntimeConnector",
           "revision": "ebd2f03ae8b870992ff215b8850dcc6e127d1f99"
         },
@@ -15054,7 +15054,7 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/go/",
           "path": "sdk/go/direct_runtime.go",
-          "sha256": "1938645e4f08a20fe8024179843c1428edab242d736cfe78cf29756fc27505bd",
+          "sha256": "c2ba91b18d55b9af53b83bb300b1c0de0fccc63a654cf0c2aafc79cc4abae268",
           "interface": "RuntimeConnector",
           "revision": "ebd2f03ae8b870992ff215b8850dcc6e127d1f99"
         },
@@ -15406,7 +15406,7 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/go/",
           "path": "sdk/go/direct_runtime.go",
-          "sha256": "1938645e4f08a20fe8024179843c1428edab242d736cfe78cf29756fc27505bd",
+          "sha256": "c2ba91b18d55b9af53b83bb300b1c0de0fccc63a654cf0c2aafc79cc4abae268",
           "interface": "RuntimeConnector",
           "revision": "ebd2f03ae8b870992ff215b8850dcc6e127d1f99"
         },
@@ -16064,7 +16064,7 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/go/",
           "path": "sdk/go/direct_runtime.go",
-          "sha256": "1938645e4f08a20fe8024179843c1428edab242d736cfe78cf29756fc27505bd",
+          "sha256": "c2ba91b18d55b9af53b83bb300b1c0de0fccc63a654cf0c2aafc79cc4abae268",
           "interface": "RuntimeConnector",
           "revision": "ebd2f03ae8b870992ff215b8850dcc6e127d1f99"
         },
@@ -23354,7 +23354,7 @@
       "production_owner": "canonical runtime provider",
       "owner_path": "sdk/go/",
       "path": "sdk/go/direct_runtime.go",
-      "sha256": "1938645e4f08a20fe8024179843c1428edab242d736cfe78cf29756fc27505bd",
+      "sha256": "c2ba91b18d55b9af53b83bb300b1c0de0fccc63a654cf0c2aafc79cc4abae268",
       "interface": "RuntimeConnector",
       "interface_path": "sdk/go/connection.go",
       "interface_sha256": "4cc5fe02a425d3a6da0652557f7db968ddd87573c4516dc9a34fb420d3aa9a40",

@@ -7805,19 +7805,23 @@ check_sdk_direct_runtime_descriptor_not_found_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local go_direct="$cli_root/sdk/go/direct_runtime.go"
   local go_direct_test="$cli_root/sdk/go/direct_runtime_test.go"
+  local go_errors="$cli_root/sdk/go/errors.go"
+  local go_errors_test="$cli_root/sdk/go/errors_test.go"
   local py_direct="$cli_root/sdk/python/easynet_sdk/providers/runtime/direct.py"
   local py_direct_test="$cli_root/sdk/python/tests/test_direct_runtime.py"
 
   "$PYTHON_BIN" - \
     "$go_direct" \
     "$go_direct_test" \
+    "$go_errors" \
+    "$go_errors_test" \
     "$py_direct" \
     "$py_direct_test" <<'PY'
 import re
 import sys
 from pathlib import Path
 
-go_direct_path, go_direct_test_path, py_direct_path, py_direct_test_path = map(Path, sys.argv[1:])
+go_direct_path, go_direct_test_path, go_errors_path, go_errors_test_path, py_direct_path, py_direct_test_path = map(Path, sys.argv[1:])
 
 def read(path: Path) -> str:
     if not path.exists():
@@ -7832,18 +7836,26 @@ def section(text: str, start: str, end: str) -> str:
     return text[offset : stop if stop >= 0 else len(text)]
 
 go_direct = read(go_direct_path)
+go_errors = read(go_errors_path)
 go_body = section(go_direct, "func directRuntimeGRPCError(", "func directRuntimeError(")
 if re.search(r"case\s+codes\.NotFound:\s*code,\s*retry,\s*retryable\s*=\s*ErrAbilityNotFound", go_body):
     raise SystemExit("sdk_go_direct_runtime_not_found_legacy_ability_projection")
 if "case codes.NotFound:" not in go_body or "ErrDescriptorNotFound" not in go_body:
     raise SystemExit("sdk_go_direct_runtime_not_found_descriptor_projection_missing")
-if "isDescriptorOwnerOfflineMessage(message)" not in go_body or "ErrDescriptorOwnerOffline" not in go_body:
-    raise SystemExit("sdk_go_direct_runtime_owner_offline_projection_missing")
+if "isDescriptorOwnerOfflineMessage" in go_direct or "isDescriptorOwnerOfflineMessage" in go_errors:
+    raise SystemExit("sdk_go_direct_runtime_owner_offline_message_classifier_retired")
+if "canonicalErrorCodeFromMessagePrefix(message)" not in go_body or "ErrDescriptorOwnerOffline" not in go_body:
+    raise SystemExit("sdk_go_direct_runtime_owner_offline_typed_prefix_projection_missing")
 go_tests = read(go_direct_test_path)
+go_error_tests = read(go_errors_test_path)
 if "TestDirectRuntimeGRPCErrorProjectsProviderNotFoundAsDescriptorNotFound" not in go_tests:
     raise SystemExit("sdk_go_direct_runtime_not_found_descriptor_test_missing")
 if "TestDirectRuntimeGRPCErrorProjectsOwnerOfflineAsDescriptorOwnerOffline" not in go_tests:
     raise SystemExit("sdk_go_direct_runtime_owner_offline_descriptor_test_missing")
+if "TestDirectRuntimeGRPCErrorDoesNotInferOwnerOfflineFromRouteText" not in go_tests:
+    raise SystemExit("sdk_go_direct_runtime_owner_offline_negative_text_test_missing")
+if "TestDecodeTransportErrorJSONDoesNotInferOwnerOfflineFromRouteText" not in go_error_tests:
+    raise SystemExit("sdk_go_error_json_owner_offline_negative_text_test_missing")
 
 py_direct = read(py_direct_path)
 py_body = section(py_direct, "def _grpc_error(", "def _direct_error(")

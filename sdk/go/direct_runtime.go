@@ -1773,7 +1773,7 @@ func directRuntimeGRPCError(err error, endpoint string) error {
 	code, retry := ErrRouteUnavailable, RetryUnknown
 	retryable := false
 	message := statusValue.Message()
-	if isDescriptorOwnerOfflineMessage(message) {
+	if canonicalCode, ok := canonicalErrorCodeFromMessagePrefix(message); ok && canonicalCode == ErrDescriptorOwnerOffline {
 		code, retry, retryable = ErrDescriptorOwnerOffline, RetrySafe, true
 		return &SDKError{
 			Code:      code,
@@ -1812,6 +1812,18 @@ func directRuntimeGRPCError(err error, endpoint string) error {
 		Details:   map[string]any{"endpoint": endpoint, "grpc_status": statusValue.Code().String()},
 		Cause:     err,
 	}
+}
+
+func canonicalErrorCodeFromMessagePrefix(message string) (ErrorCode, bool) {
+	prefix, _, ok := strings.Cut(strings.TrimSpace(message), ":")
+	if !ok {
+		return "", false
+	}
+	code, err := ParseErrorCode(strings.TrimSpace(prefix))
+	if err != nil {
+		return "", false
+	}
+	return code, true
 }
 
 func directRuntimeError(message string, code ErrorCode, retry RetryHint, details map[string]any, cause error) error {

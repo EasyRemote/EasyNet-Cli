@@ -107,12 +107,12 @@ func TestDecodeTransportErrorJSONCanonicalizesCallerSignerCustodyDetail(t *testi
 	}
 }
 
-func TestDecodeTransportErrorJSONCanonicalizesRouteOwnerOffline(t *testing.T) {
+func TestDecodeTransportErrorJSONAcceptsTypedDescriptorOwnerOffline(t *testing.T) {
 	err, decodeErr := decodeRuntimeErrorJSON([]byte(`{
-		"code": "ABILITY_NOT_FOUND",
+		"code": "DESCRIPTOR_OWNER_OFFLINE",
 		"stage": "runtime",
-		"message": "invocation.history.list failed: ROUTE_NEGATIVE: namespace.resolve negative for ` + "`" + `easynet:///r/localhost/ability/device.dev-a.invocation.history.list` + "`" + `: NEGATIVE_REASON_NXDOMAIN: owner is not online",
-		"retry": "never",
+		"message": "DESCRIPTOR_OWNER_OFFLINE: descriptor owner is not online",
+		"retry": "safe",
 		"source": "c_abi",
 		"invocation_id": null,
 		"receipt_ura": null,
@@ -132,6 +132,31 @@ func TestDecodeTransportErrorJSONCanonicalizesRouteOwnerOffline(t *testing.T) {
 	}
 	if err.Class() != ErrorClassRouting {
 		t.Fatalf("class = %s, want %s", err.Class(), ErrorClassRouting)
+	}
+}
+
+func TestDecodeTransportErrorJSONDoesNotInferOwnerOfflineFromRouteText(t *testing.T) {
+	err, decodeErr := decodeRuntimeErrorJSON([]byte(`{
+		"code": "ABILITY_NOT_FOUND",
+		"stage": "runtime",
+		"message": "invocation.history.list failed: ROUTE_NEGATIVE: namespace.resolve negative for ` + "`" + `easynet:///r/localhost/ability/device.dev-a.invocation.history.list` + "`" + `: NEGATIVE_REASON_NXDOMAIN: owner is not online",
+		"retry": "never",
+		"source": "c_abi",
+		"invocation_id": null,
+		"receipt_ura": null,
+		"details": {}
+	}`))
+	if decodeErr != nil {
+		t.Fatalf("decodeRuntimeErrorJSON: %v", decodeErr)
+	}
+	if err == nil {
+		t.Fatalf("decodeRuntimeErrorJSON returned nil")
+	}
+	if err.Code != ErrAbilityNotFound {
+		t.Fatalf("code = %s, want %s", err.Code, ErrAbilityNotFound)
+	}
+	if err.Message == "DESCRIPTOR_OWNER_OFFLINE: descriptor owner is not online" {
+		t.Fatalf("message was rewritten from diagnostic text: %q", err.Message)
 	}
 }
 
