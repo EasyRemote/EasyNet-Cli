@@ -999,8 +999,8 @@ fn authority_binding_summary(
         }),
         Some(Authority::SessionAuthority(value)) => serde_json::json!({
             "kind": "session",
-            "issuer_ura": value.backend_ura,
-            "subject_ura": value.user_ura,
+            "issuer_ura": value.issuer_ura,
+            "subject_ura": value.subject_ura,
             "session_id": value.session_id,
             "scopes": value.scopes,
             "audiences": value.audiences,
@@ -1028,8 +1028,8 @@ mod tests {
             authority: Some(
                 axon_sdk::pb::axon::v1::authority_binding::Authority::SessionAuthority(
                     axon_sdk::pb::axon::v1::SessionAuthority {
-                        backend_ura: "easynet:///r/example/agent/backend".to_string(),
-                        user_ura: "easynet:///r/example/agent/alice".to_string(),
+                        issuer_ura: "easynet:///r/example/agent/backend".to_string(),
+                        subject_ura: "easynet:///r/example/agent/alice".to_string(),
                         session_id: "session-1".to_string(),
                         scopes: vec!["invoke".to_string()],
                         audiences: vec!["easynet:///r/example/device/dev-a".to_string()],

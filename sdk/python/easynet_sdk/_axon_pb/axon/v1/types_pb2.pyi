@@ -874,29 +874,29 @@ global___PolicyGrant = PolicyGrant
 
 @typing.final
 class SessionAuthority(google.protobuf.message.Message):
-    """Session authority is not user delegation. It proves that the
-    trusted backend is acting under an authenticated interactive user
-    session, and is signed by the backend identity. It does not claim
-    that the user private key signed the invocation authority.
+    """Session authority is not user delegation. It proves that a trusted
+    issuer is acting under an authenticated interactive subject session,
+    and is signed by the issuer identity. It does not claim that the
+    subject private key signed the invocation authority.
     """
 
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
 
-    BACKEND_URA_FIELD_NUMBER: builtins.int
-    USER_URA_FIELD_NUMBER: builtins.int
+    ISSUER_URA_FIELD_NUMBER: builtins.int
+    SUBJECT_URA_FIELD_NUMBER: builtins.int
     SESSION_ID_FIELD_NUMBER: builtins.int
     SCOPES_FIELD_NUMBER: builtins.int
     AUDIENCES_FIELD_NUMBER: builtins.int
     ISSUED_AT_MS_FIELD_NUMBER: builtins.int
     EXPIRES_AT_MS_FIELD_NUMBER: builtins.int
     SIGNATURE_FIELD_NUMBER: builtins.int
-    backend_ura: builtins.str
-    user_ura: builtins.str
+    issuer_ura: builtins.str
+    subject_ura: builtins.str
     session_id: builtins.str
     issued_at_ms: builtins.int
     expires_at_ms: builtins.int
     signature: builtins.bytes
-    """ed25519 signature by backend over canonical_session_authority_payload_json."""
+    """ed25519 signature by issuer over canonical_session_authority_payload_json."""
     @property
     def scopes(self) -> google.protobuf.internal.containers.RepeatedScalarFieldContainer[builtins.str]: ...
     @property
@@ -904,8 +904,8 @@ class SessionAuthority(google.protobuf.message.Message):
     def __init__(
         self,
         *,
-        backend_ura: builtins.str = ...,
-        user_ura: builtins.str = ...,
+        issuer_ura: builtins.str = ...,
+        subject_ura: builtins.str = ...,
         session_id: builtins.str = ...,
         scopes: collections.abc.Iterable[builtins.str] | None = ...,
         audiences: collections.abc.Iterable[builtins.str] | None = ...,
@@ -913,7 +913,7 @@ class SessionAuthority(google.protobuf.message.Message):
         expires_at_ms: builtins.int = ...,
         signature: builtins.bytes = ...,
     ) -> None: ...
-    def ClearField(self, field_name: typing.Literal["audiences", b"audiences", "backend_ura", b"backend_ura", "expires_at_ms", b"expires_at_ms", "issued_at_ms", b"issued_at_ms", "scopes", b"scopes", "session_id", b"session_id", "signature", b"signature", "user_ura", b"user_ura"]) -> None: ...
+    def ClearField(self, field_name: typing.Literal["audiences", b"audiences", "expires_at_ms", b"expires_at_ms", "issued_at_ms", b"issued_at_ms", "issuer_ura", b"issuer_ura", "scopes", b"scopes", "session_id", b"session_id", "signature", b"signature", "subject_ura", b"subject_ura"]) -> None: ...
 
 global___SessionAuthority = SessionAuthority
 

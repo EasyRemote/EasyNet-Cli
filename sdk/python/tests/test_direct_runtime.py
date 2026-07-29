@@ -1418,8 +1418,8 @@ class DirectRuntimeTests(unittest.TestCase):
                 "session",
                 types_pb2.AuthorityBinding(
                     session_authority=types_pb2.SessionAuthority(
-                        backend_ura="easynet:///r/example/agent/backend",
-                        user_ura="easynet:///r/example/agent/alice",
+                        issuer_ura="easynet:///r/example/agent/backend",
+                        subject_ura="easynet:///r/example/agent/alice",
                         session_id="session-1",
                         scopes=("invoke",),
                         audiences=(DESCRIPTOR_REF,),

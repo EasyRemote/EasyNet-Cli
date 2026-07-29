@@ -149,8 +149,8 @@ func TestDirectAuthorityBindingProjectsSessionAuthorityToGenericFacadeFields(t *
 	projected := directAuthorityBinding(&axonpb.AuthorityBinding{
 		Authority: &axonpb.AuthorityBinding_SessionAuthority{
 			SessionAuthority: &axonpb.SessionAuthority{
-				BackendUra:  "easynet:///r/example/agent/backend",
-				UserUra:     "easynet:///r/example/agent/alice",
+				IssuerUra:   "easynet:///r/example/agent/backend",
+				SubjectUra:  "easynet:///r/example/agent/alice",
 				SessionId:   "session-1",
 				Scopes:      []string{"invoke"},
 				Audiences:   []string{runtimeTestDescriptorRef},

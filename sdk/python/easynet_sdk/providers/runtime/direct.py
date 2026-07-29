@@ -1327,8 +1327,6 @@ def _stream_chunk_json(chunk: Any) -> bytes:
         "payload_json": _output_json(chunk.payload, content_type),
         "error": error,
     }
-    if chunk.invocation_id:
-        event["invocation_id"] = chunk.invocation_id
     if chunk.elapsed_ms:
         event["elapsed_ms"] = chunk.elapsed_ms
     if chunk.HasField("admission_receipt"):
@@ -1943,7 +1941,7 @@ def _facade_authority_binding_projection(binding: Any) -> dict[str, object]:
         }
     if authority == "session_authority":
         value = binding.session_authority
-        for field_name in ("backend_ura", "user_ura", _AXON_AUTHORITY_LINK_FIELD):
+        for field_name in ("issuer_ura", "subject_ura", _AXON_AUTHORITY_LINK_FIELD):
             _require_receipt_text(
                 getattr(value, field_name),
                 f"authority_binding.session_authority.{field_name}",
@@ -1963,8 +1961,8 @@ def _facade_authority_binding_projection(binding: Any) -> dict[str, object]:
         )
         return {
             "kind": "session",
-            "issuer_ura": value.backend_ura,
-            "subject_ura": value.user_ura,
+            "issuer_ura": value.issuer_ura,
+            "subject_ura": value.subject_ura,
             _AXON_AUTHORITY_LINK_FIELD: getattr(value, _AXON_AUTHORITY_LINK_FIELD),
             "scopes": list(value.scopes),
             "audiences": list(value.audiences),

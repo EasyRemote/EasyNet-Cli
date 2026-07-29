@@ -7874,6 +7874,13 @@ if "stateName, err := directStateName(chunk.GetState(), \"direct_runtime.stream\
     raise SystemExit("sdk_go_direct_runtime_stream_state_not_fallible")
 if "stateName, err := directStateName(receipt.GetState(), stage)" not in go:
     raise SystemExit("sdk_go_direct_runtime_receipt_state_not_fallible")
+go_stream_projection = section(
+    go,
+    r"func directStreamChunkJSONWithAdmission\((?P<body>.*?)\n\}",
+    "go_direct_stream_chunk_projection",
+)
+if '"invocation_id"' in go_stream_projection or "GetInvocationId()" in go_stream_projection:
+    raise SystemExit("sdk_go_direct_runtime_stream_projection_leaks_invocation_id")
 go_tests = read(go_test_path)
 for required in (
     "TestDirectRuntimeUnaryRejectsUnsupportedInvocationState",
@@ -7902,6 +7909,13 @@ for required in (
 ):
     if required not in py:
         raise SystemExit(f"sdk_python_direct_runtime_state_call_missing:{required}")
+py_stream_projection = section(
+    py,
+    r"def _stream_chunk_json\(chunk: Any\) -> bytes:\n(?P<body>.*?)(?=\n\ndef |\Z)",
+    "python_direct_stream_chunk_projection",
+)
+if '"invocation_id"' in py_stream_projection or "chunk.invocation_id" in py_stream_projection:
+    raise SystemExit("sdk_python_direct_runtime_stream_projection_leaks_invocation_id")
 py_tests = read(py_test_path)
 for required in (
     "test_direct_runtime_unary_rejects_unsupported_invocation_state",
@@ -21259,15 +21273,21 @@ check_sdk_session_authority_binding_facade_contract() {
   local java_tests="$cli_root/sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
   local swift_runtime="$cli_root/sdk/swift/Sources/RuntimeSDK/Runtime.swift"
   local swift_tests="$cli_root/sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift"
+  local go_axon_pb="$cli_root/sdk/go/internal/axonpb/types.pb.go"
+  local py_axon_pb="$cli_root/sdk/python/easynet_sdk/_axon_pb/axon/v1/types_pb2.py"
+  local py_axon_pyi="$cli_root/sdk/python/easynet_sdk/_axon_pb/axon/v1/types_pb2.pyi"
+  local daemon_dispatch_client="$cli_root/src/daemon/invocation/dispatch/client.rs"
   for path in "$go_runtime" "$go_direct" "$go_tests" "$py_runtime" "$py_direct" "$py_tests" \
     "$py_direct_tests" "$node_runtime" "$node_tests" "$java_proof" "$java_tests" \
-    "$swift_runtime" "$swift_tests"; do
+    "$swift_runtime" "$swift_tests" "$go_axon_pb" "$py_axon_pb" "$py_axon_pyi" \
+    "$daemon_dispatch_client"; do
     [[ -f "$path" ]] || fail "SDK session authority binding facade file is missing: ${path#$cli_root/}"
   done
 
   "$PYTHON_BIN" - "$go_runtime" "$go_direct" "$go_tests" "$py_runtime" "$py_direct" \
     "$py_tests" "$py_direct_tests" "$node_runtime" "$node_tests" "$java_proof" \
-    "$java_tests" "$swift_runtime" "$swift_tests" <<'PY'
+    "$java_tests" "$swift_runtime" "$swift_tests" "$go_axon_pb" "$py_axon_pb" "$py_axon_pyi" \
+    "$daemon_dispatch_client" <<'PY'
 import sys
 from pathlib import Path
 
@@ -21285,7 +21305,29 @@ from pathlib import Path
     java_tests,
     swift_runtime,
     swift_tests,
+    go_axon_pb,
+    py_axon_pb,
+    py_axon_pyi,
+    daemon_dispatch_client,
 ) = [Path(path).read_text(encoding="utf-8") for path in sys.argv[1:]]
+
+for language, source, forbidden in [
+    (
+        "go-generated",
+        go_axon_pb,
+        ["BackendUra", "UserUra", "GetBackendUra", "GetUserUra", "backend_ura", "user_ura"],
+    ),
+    (
+        "python-generated",
+        py_axon_pb + "\n" + py_axon_pyi,
+        ["BackendUra", "UserUra", "backend_ura", "user_ura"],
+    ),
+]:
+    for fragment in forbidden:
+        if fragment in source:
+            raise SystemExit(
+                f"sdk_session_authority_binding_facade:{language}:retired_generated_field:{fragment}"
+            )
 
 for language, source, forbidden in [
     (
@@ -21389,14 +21431,25 @@ for language, source, required, forbidden in [
     (
         "go-direct",
         go_direct,
-        ['"issuer_ura":       value.GetBackendUra()', '"subject_ura":      value.GetUserUra()'],
-        ['"backend_ura":      value.GetBackendUra()', '"user_ura":         value.GetUserUra()'],
+        ['"issuer_ura":       value.GetIssuerUra()', '"subject_ura":      value.GetSubjectUra()'],
+        [
+            '"backend_ura":      value.GetBackendUra()',
+            '"user_ura":         value.GetUserUra()',
+            '"issuer_ura":       value.GetBackendUra()',
+            '"subject_ura":      value.GetUserUra()',
+        ],
     ),
     (
         "python-direct",
         py_direct,
-        ['"issuer_ura": value.backend_ura', '"subject_ura": value.user_ura'],
-        ['"backend_ura": value.backend_ura', '"user_ura": value.user_ura'],
+        ['"issuer_ura": value.issuer_ura', '"subject_ura": value.subject_ura'],
+        [
+            '"backend_ura": value.backend_ura',
+            '"user_ura": value.user_ura',
+            '"issuer_ura": value.backend_ura',
+            '"subject_ura": value.user_ura',
+            '("backend_ura", "user_ura", _AXON_AUTHORITY_LINK_FIELD)',
+        ],
     ),
 ]:
     for fragment in required:
@@ -21409,6 +21462,26 @@ for language, source, required, forbidden in [
             raise SystemExit(
                 f"sdk_session_authority_binding_facade:{language}:projection_leaks_generated_field:{fragment}"
             )
+
+for fragment in (
+    '"issuer_ura": value.issuer_ura',
+    '"subject_ura": value.subject_ura',
+    "session_authority_summary_uses_public_generic_fields",
+):
+    if fragment not in daemon_dispatch_client:
+        raise SystemExit(
+            f"sdk_session_authority_binding_facade:daemon-dispatch:generic_field_missing:{fragment}"
+        )
+for fragment in (
+    '"issuer_ura": value.backend_ura',
+    '"subject_ura": value.user_ura',
+    "backend_ura: \"easynet",
+    "user_ura: \"easynet",
+):
+    if fragment in daemon_dispatch_client:
+        raise SystemExit(
+            f"sdk_session_authority_binding_facade:daemon-dispatch:retired_generated_field:{fragment}"
+        )
 
 required_tests = {
     "go": (

@@ -1051,9 +1051,6 @@ func directStreamChunkJSONWithAdmission(
 		"payload_json":         directOutputJSON(chunk.GetPayload(), chunk.GetContentType()),
 		"error":                errorValue,
 	}
-	if chunk.GetInvocationId() != "" {
-		value["invocation_id"] = chunk.GetInvocationId()
-	}
 	if chunk.GetElapsedMs() != 0 {
 		value["elapsed_ms"] = chunk.GetElapsedMs()
 	}
@@ -1666,8 +1663,8 @@ func directAuthorityBinding(binding *axonpb.AuthorityBinding) map[string]any {
 		value := authority.SessionAuthority
 		return map[string]any{
 			"kind":             "session",
-			"issuer_ura":       value.GetBackendUra(),
-			"subject_ura":      value.GetUserUra(),
+			"issuer_ura":       value.GetIssuerUra(),
+			"subject_ura":      value.GetSubjectUra(),
 			"session_id":       value.GetSessionId(),
 			"scopes":           append([]string(nil), value.GetScopes()...),
 			"audiences":        append([]string(nil), value.GetAudiences()...),
