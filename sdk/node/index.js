@@ -148,6 +148,45 @@ const INVOCATION_DRAFT_FIELDS = new Set([
   "hasArgs",
   "governanceRead",
 ]);
+const ABILITY_DESCRIPTOR_PROJECTION_FIELDS = new Set([
+  "ability_ura",
+  "descriptor_ref",
+  "name",
+  "owner_ura",
+  "version",
+  "schema_hash",
+  "descriptor_hash",
+  "call_mode",
+  "class",
+  "receipt_semantics",
+  "visibility",
+  "source",
+  "description",
+  "hints",
+  "schema_summary",
+  "input_schema",
+  "metadata",
+]);
+const RUNTIME_DESCRIPTOR_ROW_FIELDS = new Set([
+  "ability_ura",
+  "descriptor_ref",
+  "name",
+  "owner_ura",
+  "descriptor_version",
+  "schema_hash",
+  "descriptor_hash",
+  "call_mode",
+  "class",
+  "receipt_semantics",
+  "visibility",
+  "source",
+  "description",
+  "hints",
+  "schema_summary",
+  "input_schema",
+  "metadata",
+]);
+const ABILITY_DESCRIPTOR_PAGE_FIELDS = new Set(["descriptors"]);
 export const MAX_STREAM_BUFFERED_EVENTS = 1024;
 export const MAX_BIDI_BUFFERED_FRAMES = 1024;
 const RUNTIME_GOVERNANCE_READ_ABILITIES = Object.freeze([
@@ -1103,6 +1142,7 @@ export class RuntimeReceiptProvider {
 export class AbilityDescriptorProjection {
   constructor(fields = {}) {
     const value = objectValue(fields, "ability descriptor");
+    rejectRuntimeProjectionFields(value, ABILITY_DESCRIPTOR_PROJECTION_FIELDS, "ability descriptor");
     this.abilityURA = requiredRuntimeText(value.ability_ura, "ability_ura");
     this.descriptorRef = requiredRuntimeText(value.descriptor_ref, "descriptor_ref");
     this.name = requiredRuntimeText(value.name, "name");
@@ -1193,6 +1233,7 @@ export class AbilityDescriptorGetRequest {
 export class AbilityDescriptorPage {
   constructor(fields) {
     const value = objectValue(fields, "ability descriptor page");
+    rejectRuntimeProjectionFields(value, ABILITY_DESCRIPTOR_PAGE_FIELDS, "ability descriptor page");
     const rawDescriptors = value.descriptors ?? [];
     if (!Array.isArray(rawDescriptors)) {
       throw invalidRuntime("ability descriptor page descriptors must be an array");
@@ -1335,7 +1376,13 @@ function runtimeDescriptorRowObject(row, index) {
   if (!row || typeof row !== "object" || Array.isArray(row)) {
     throw invalidRuntime(`ability descriptor row ${index} must be an object`);
   }
-  return { ...row };
+  const value = { ...row };
+  rejectRuntimeProjectionFields(
+    value,
+    RUNTIME_DESCRIPTOR_ROW_FIELDS,
+    `ability descriptor row ${index}`,
+  );
+  return value;
 }
 
 function runtimeDescriptorRequiredString(row, field, index) {
@@ -3574,6 +3621,14 @@ function rejectNoncanonicalAuthorityFields(value, allowed, label) {
   for (const key of Object.keys(value)) {
     if (!allowed.has(key)) {
       throw invalidAuthority(`${label} contains noncanonical field ${key}`);
+    }
+  }
+}
+
+function rejectRuntimeProjectionFields(value, allowed, label) {
+  for (const key of Object.keys(value)) {
+    if (!allowed.has(key)) {
+      throw invalidRuntime(`${label} contains noncanonical field ${key}`);
     }
   }
 }
