@@ -20,8 +20,8 @@ def verify_runtime_model_contracts() -> None:
         caller_ura="easynet:///r/example/user/alice",
         callee_ura="easynet:///r/example/user/alice",
         subject_ura="easynet:///r/example/user/alice",
-        nonce_base64="bm9uY2U=",
-        causal_context={},
+        nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
+        causal_context={"form": "none"},
     )
     assert_type(RuntimeEventCursor(sequence=1), RuntimeEventCursor)
     assert_type(

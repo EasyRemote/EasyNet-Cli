@@ -363,6 +363,19 @@ def test_runtime_ability_rejects_incomplete_context() -> None:
         )
 
 
+def test_runtime_ability_rejects_non_canonical_nonce_length_at_facade() -> None:
+    client, _ = _client()
+    with pytest.raises(SDKError, match="nonce_base64 must decode to 16 bytes"):
+        client.build(
+            replace(
+                _call(),
+                nonce_base64=base64.b64encode(b"nonce").decode("ascii"),
+            ),
+            "namespace.resolve",
+            {},
+        )
+
+
 def test_runtime_ability_materializes_typed_authority() -> None:
     client, _ = _client()
     call = _call()
