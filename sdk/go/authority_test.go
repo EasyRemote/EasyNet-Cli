@@ -61,6 +61,50 @@ func TestSessionAuthorityFromMetadataProjectsTypedAuthority(t *testing.T) {
 	}
 }
 
+func TestAuthorityMetadataRejectsUnknownWireAndPayloadFields(t *testing.T) {
+	sessionPayload := sessionAuthorityPayloadFixture()
+	sessionPayload["backend_ura"] = "easynet:///r/example/agent/backend"
+	sessionPayload["user_ura"] = "easynet:///r/example/user/alice"
+	sessionValue := authorityMetadataFixture(t, sessionPayload, []byte("session-signature"))
+
+	_, err := NewSessionAuthorityFromMetadata(sessionValue)
+	if err == nil || !strings.Contains(err.Error(), "unknown field") || !strings.Contains(err.Error(), "backend_ura") {
+		t.Fatalf("retired session authority payload fields must fail closed, got %v", err)
+	}
+
+	delegationPayload := map[string]any{
+		"issuer_ura":     "easynet:///r/example/user/alice",
+		"subject_ura":    "easynet:///r/example/user/alice",
+		"caller_ura":     "easynet:///r/example/agent/backend",
+		"audience":       "easynet:///r/example/device/dev-a",
+		"scopes":         []string{"device.observe.*"},
+		"issued_at_ms":   float64(1000),
+		"expires_at_ms":  float64(2000),
+		"legacy_subject": "compat",
+	}
+	delegationValue := authorityMetadataFixture(t, delegationPayload, []byte("delegation-signature"))
+
+	_, err = NewDelegationProofFromMetadata(delegationValue)
+	if err == nil || !strings.Contains(err.Error(), "unknown field") || !strings.Contains(err.Error(), "legacy_subject") {
+		t.Fatalf("unknown delegation payload fields must fail closed, got %v", err)
+	}
+
+	wire := map[string]any{
+		"payload":          sessionAuthorityPayloadFixture(),
+		"signature":        base64.StdEncoding.EncodeToString([]byte("session-signature")),
+		"legacy_signature": "compat",
+	}
+	raw, marshalErr := json.Marshal(wire)
+	if marshalErr != nil {
+		t.Fatalf("marshal wire: %v", marshalErr)
+	}
+
+	_, err = NewSessionAuthorityFromMetadata(base64.StdEncoding.EncodeToString(raw))
+	if err == nil || !strings.Contains(err.Error(), "unknown field") || !strings.Contains(err.Error(), "legacy_signature") {
+		t.Fatalf("unknown session authority wire fields must fail closed, got %v", err)
+	}
+}
+
 func TestSessionAuthorityRejectsAllZeroOwner(t *testing.T) {
 	payload := sessionAuthorityPayloadFixture()
 	payload["session_owner_user_id"] = "00000000-0000-0000-0000-000000000000"

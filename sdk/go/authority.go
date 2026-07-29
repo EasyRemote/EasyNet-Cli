@@ -1,10 +1,12 @@
 package easynet
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 )
 
@@ -679,7 +681,7 @@ func decodeAuthorityMetadata(value string, payload any, label string) ([]byte, e
 		return nil, invalidInvocation(fmt.Sprintf("%s metadata base64 decode failed: %v", label, err), err)
 	}
 	var wire authorityWire
-	if err := json.Unmarshal(wireJSON, &wire); err != nil {
+	if err := decodeStrictJSON(wireJSON, &wire); err != nil {
 		return nil, invalidInvocation(fmt.Sprintf("%s metadata JSON parse failed: %v", label, err), err)
 	}
 	if len(wire.Payload) == 0 {
@@ -688,7 +690,7 @@ func decodeAuthorityMetadata(value string, payload any, label string) ([]byte, e
 	if strings.TrimSpace(wire.Signature) == "" {
 		return nil, invalidInvocation(label+" metadata signature is required", nil)
 	}
-	if err := json.Unmarshal(wire.Payload, payload); err != nil {
+	if err := decodeStrictJSON(wire.Payload, payload); err != nil {
 		return nil, invalidInvocation(fmt.Sprintf("%s metadata payload parse failed: %v", label, err), err)
 	}
 	signature, err := base64.StdEncoding.Strict().DecodeString(wire.Signature)
@@ -699,6 +701,19 @@ func decodeAuthorityMetadata(value string, payload any, label string) ([]byte, e
 		return nil, invalidInvocation(label+" metadata signature is required", nil)
 	}
 	return signature, nil
+}
+
+func decodeStrictJSON(raw []byte, out any) error {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(out); err != nil {
+		return err
+	}
+	var trailing struct{}
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return fmt.Errorf("unexpected trailing JSON value")
+	}
+	return nil
 }
 
 func validateDelegationProof(proof DelegationProof) error {
