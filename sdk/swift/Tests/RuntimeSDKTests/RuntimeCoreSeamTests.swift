@@ -1226,6 +1226,34 @@ final class RuntimeCoreSeamTests: XCTestCase {
         }
     }
 
+    func testRuntimeAbilityPublicPathDescriptorBindsUserSubjects() async throws {
+        let transport = MemoryRuntimeTransport(callee: callee, descriptor: descriptor)
+        let runtime = RuntimeClient(transport: transport)
+        let ability = RuntimeAbilityClient(runtime: runtime)
+        let subject = "easynet:///r/example/user/alice"
+        let call = try RuntimeCallContext(
+            callerURA: caller,
+            calleeURA: callee,
+            subjectURA: subject,
+            nonceBase64: nonce,
+            causalContext: ["form": .string("none")],
+            metadata: ["trace_id": .string("trace-1")]
+        )
+
+        let draft = try await ability.build(
+            call: call,
+            abilityName: "observe.health",
+            arguments: ["probe": .bool(true)]
+        )
+
+        XCTAssertEqual(
+            draft.inspectTuple().subject,
+            "easynet:///r/example/resource/user.alice/invoke/observe.health"
+        )
+        let resolverSubjectField = await transport.lastDescriptorRequestField("subject_ura")
+        XCTAssertEqual(resolverSubjectField, subject)
+    }
+
     func testPreparedInvocationCannotBeSubmitted() async throws {
         let runtime = RuntimeClient(transport: MemoryRuntimeTransport(callee: callee, descriptor: descriptor))
         let prepared = try await runtime.prepare(completeDraft(runtime), options: ["deadline_ms": 1000])

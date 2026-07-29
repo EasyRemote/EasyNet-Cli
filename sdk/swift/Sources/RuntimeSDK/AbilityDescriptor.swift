@@ -248,7 +248,7 @@ public final class RuntimeAbilityClient: @unchecked Sendable {
                 "runtime governance receipt/history/catalogue abilities must use RuntimeReceiptProvider or RuntimeAbilityDescriptorProvider"
             )
         }
-        let subjectURA = try policy.subjectURA(call)
+        let subjectURA = try policy.subjectURA(call, abilityName: ability)
         let descriptorRef = try await runtime.resolveDescriptorRef(
             try RuntimeDescriptorRefRequest(
                 calleeURA: call.calleeURA,
@@ -316,10 +316,10 @@ public final class RuntimeAbilityClient: @unchecked Sendable {
             descriptorProvider: RuntimeDescriptorRefRequest.abilityDescriptorProvider
         )
 
-        func subjectURA(_ call: RuntimeCallContext) throws -> String {
+        func subjectURA(_ call: RuntimeCallContext, abilityName: String) throws -> String {
             switch subjectPolicy {
             case .descriptorBound:
-                return call.subjectURA
+                return try RuntimeSubjects.descriptorBoundSubjectURA(call.subjectURA, abilityName: abilityName)
             case .runtimeOwner:
                 return call.calleeURA
             }

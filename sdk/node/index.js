@@ -1707,7 +1707,7 @@ export class RuntimeAbilityClient {
         "runtime governance receipt/history/catalogue abilities must use RuntimeReceiptProvider or RuntimeAbilityDescriptorProvider",
       );
     }
-    const subjectURA = runtimeAbilitySubjectURA(context, policy);
+    const subjectURA = runtimeAbilitySubjectURA(context, ability, policy);
     const descriptorRef = await this.runtime.resolveDescriptorRef({
       callee_ura: context.calleeURA,
       ability,
@@ -4652,10 +4652,43 @@ function validateRuntimeAbilityCallContext(call) {
   }
 }
 
-function runtimeAbilitySubjectURA(call, policy) {
+function descriptorBoundRuntimeSubjectURA(subjectURA, abilityName) {
+  const subject = String(subjectURA ?? "").trim();
+  if (!subject) {
+    throw invalidInvocation("subject_ura is required");
+  }
+  const parsed = parseCanonicalURANullable(subject);
+  if (!parsed) {
+    throw invalidInvocation("subject_ura is not a valid URA");
+  }
+  const { realm, path } = parsed;
+  if (path === "authority") {
+    const ability = requiredRuntimeText(abilityName, "ability name");
+    return `easynet:///r/${realm}/resource/authority/invoke/${ability}`;
+  }
+  if (path.startsWith("user/")) {
+    const userID = path.slice("user/".length).trim();
+    if (!userID || userID.includes("/") || userID.includes("?") || userID.includes("#")) {
+      throw invalidInvocation("subject_ura user id is not canonical");
+    }
+    const ability = requiredRuntimeText(abilityName, "ability name");
+    return `easynet:///r/${realm}/resource/user.${userID}/invoke/${ability}`;
+  }
+  if (
+    path.startsWith("agent/") ||
+    path.startsWith("ability/") ||
+    path.startsWith("device/") ||
+    path.startsWith("resource/")
+  ) {
+    return subject;
+  }
+  throw invalidInvocation("subject_ura kind is not descriptor-bound");
+}
+
+function runtimeAbilitySubjectURA(call, abilityName, policy) {
   switch (policy.subjectPolicy) {
     case "descriptor_bound":
-      return call.subjectURA.trim();
+      return descriptorBoundRuntimeSubjectURA(call.subjectURA, abilityName);
     case "runtime_owner":
       return call.calleeURA.trim();
     default:

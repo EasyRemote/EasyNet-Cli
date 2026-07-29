@@ -1757,6 +1757,36 @@ test("runtime ability public path rejects provider-bound governance reads before
   assert.equal(resolverCalls, 0);
 });
 
+test("runtime ability public path descriptor-binds user subjects", async () => {
+  let seenDescriptorRequest = null;
+  const runtime = new sdk.RuntimeClient({
+    invoke: () => {
+      throw new Error("invoke must not run");
+    },
+    resolveDescriptorRef: (requestJSON) => {
+      seenDescriptorRequest = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      return descriptor;
+    },
+  });
+  const ability = new sdk.RuntimeAbilityClient(runtime);
+  const subject = "easynet:///r/example/user/alice";
+
+  const draft = await ability.build(
+    {
+      caller_ura: caller,
+      callee_ura: callee,
+      subject_ura: subject,
+      nonce_base64: nonce,
+      causal_context: { form: "none" },
+    },
+    "observe.health",
+    { probe: true },
+  );
+
+  assert.equal(draft.subjectURA, "easynet:///r/example/resource/user.alice/invoke/observe.health");
+  assert.equal(seenDescriptorRequest.subject_ura, subject);
+});
+
 test("runtime descriptor resolver rejects provider mismatches before transport", async () => {
   const cases = [
     {

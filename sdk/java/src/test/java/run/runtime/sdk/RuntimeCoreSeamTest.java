@@ -32,6 +32,7 @@ public final class RuntimeCoreSeamTest {
           "authorityMetadataIsTypedAndMutuallyExclusive",
           "invocationAuthorityMetadataIsTupleBound",
           "runtimeAbilityProjectionIsCanonical",
+          "runtimeAbilityPublicPathDescriptorBindsUserSubjects",
           "runtimeStateReadSubjectHelperBuildsUserOwnedResourceSubject",
           "authorityMetadataRejectsNoncanonicalFields",
           "authorityMetadataRejectsAllZeroSessionOwners",
@@ -100,6 +101,8 @@ public final class RuntimeCoreSeamTest {
       case "invocationAuthorityMetadataIsTupleBound" ->
           invocationAuthorityMetadataIsTupleBound();
       case "runtimeAbilityProjectionIsCanonical" -> runtimeAbilityProjectionIsCanonical();
+      case "runtimeAbilityPublicPathDescriptorBindsUserSubjects" ->
+          runtimeAbilityPublicPathDescriptorBindsUserSubjects();
       case "runtimeStateReadSubjectHelperBuildsUserOwnedResourceSubject" ->
           runtimeStateReadSubjectHelperBuildsUserOwnedResourceSubject();
       case "authorityMetadataRejectsNoncanonicalFields" ->
@@ -999,6 +1002,30 @@ public final class RuntimeCoreSeamTest {
                 .descriptor("observe.health")
                 .authorityMetadata(proof.metadata())
                 .inspect());
+  }
+
+  private static void runtimeAbilityPublicPathDescriptorBindsUserSubjects() {
+    MemoryRuntimeTransport transport = new MemoryRuntimeTransport();
+    RuntimeAbilityClient ability = new RuntimeAbilityClient(new RuntimeClient(transport));
+    RuntimeCallContext call =
+        new RuntimeCallContext(
+            CALLER,
+            CALLEE,
+            "easynet:///r/example/user/alice",
+            NONCE,
+            Map.of("form", "none"),
+            Map.of("trace_id", "trace-1"));
+
+    InvocationDraft draft = ability.build(call, "observe.health", Map.of("probe", true));
+
+    check(
+        draft.inspectTuple()
+            .subject()
+            .equals("easynet:///r/example/resource/user.alice/invoke/observe.health"),
+        "runtime ability public path must descriptor-bind user subjects");
+    check(
+        transport.seenDescriptorRequest.get("subject_ura").equals("easynet:///r/example/user/alice"),
+        "descriptor resolution must use caller-declared subject before descriptor-bound projection");
   }
 
   private static void runtimeStateReadSubjectHelperBuildsUserOwnedResourceSubject() {
