@@ -1998,9 +1998,6 @@ def _canonical_authority_binding_projection(binding: Any) -> dict[str, object]:
         "self": "self_",
         "delegation": "delegated",
     }.get(kind, kind)
-    if kind == "session":
-        projection["backend_ura"] = projection.pop("issuer_ura")
-        projection["user_ura"] = projection.pop("subject_ura")
     if "issued_at_ms" in projection:
         projection["issued_at_ms"] = str(projection["issued_at_ms"])
     if "expires_at_ms" in projection:

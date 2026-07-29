@@ -163,7 +163,7 @@ func causalContextForInvocationDraft(value map[string]any) (CausalContext, error
 		if err := requireCausalExactKeys(value, "causal_context", "form"); err != nil {
 			return CausalContext{}, err
 		}
-		return CausalNullWithReason(""), nil
+		return CausalRoot(), nil
 	case "scalar":
 		if err := requireCausalExactKeys(value, "causal_context", "form", "receipt_hash_hex", "receipt_ura"); err != nil {
 			return CausalContext{}, err

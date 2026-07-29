@@ -154,7 +154,15 @@ func TestRuntimeSigningTransportRejectsUnsignedDraftForDifferentCaller(t *testin
 }
 
 func TestRuntimeSigningCausalContextRejectsRetiredAliases(t *testing.T) {
-	canonical, err := causalContextForInvocationDraft(map[string]any{
+	root, err := CausalContextFromJSON(map[string]any{"form": "none"})
+	if err != nil {
+		t.Fatalf("canonical root causal context: %v", err)
+	}
+	if root.Kind != CausalContextNull || root.Reason != "" {
+		t.Fatalf("canonical root causal context = %#v", root)
+	}
+
+	canonical, err := CausalContextFromJSON(map[string]any{
 		"form":      "merkle",
 		"root_hex":  strings.Repeat("ab", 32),
 		"proof_ura": "easynet:///r/example/resource/agent.alice/proof/causal",
@@ -172,6 +180,13 @@ func TestRuntimeSigningCausalContextRejectsRetiredAliases(t *testing.T) {
 		name  string
 		value map[string]any
 	}{
+		{
+			name: "retired root reason",
+			value: map[string]any{
+				"form":   "none",
+				"reason": "legacy audit label",
+			},
+		},
 		{
 			name: "retired kind selector",
 			value: map[string]any{
@@ -245,7 +260,7 @@ func TestRuntimeSigningCausalContextRejectsRetiredAliases(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := causalContextForInvocationDraft(test.value)
+			_, err := CausalContextFromJSON(test.value)
 			if !IsCode(err, ErrInvalidArgument) {
 				t.Fatalf("retired causal context alias error = %v, want %s", err, ErrInvalidArgument)
 			}

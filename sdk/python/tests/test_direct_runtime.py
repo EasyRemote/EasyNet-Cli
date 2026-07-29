@@ -1456,6 +1456,18 @@ class DirectRuntimeTests(unittest.TestCase):
                     self.assertNotIn("user_ura", binding_projection)
                 proof = cast(dict[str, object], projection["authority_proof"])
                 self.assertEqual(proof["binding_kind"], kind)
+                if kind == "session":
+                    proof_binding = cast(dict[str, object], proof["binding"])
+                    self.assertEqual(
+                        proof_binding["issuer_ura"],
+                        "easynet:///r/example/agent/backend",
+                    )
+                    self.assertEqual(
+                        proof_binding["subject_ura"],
+                        "easynet:///r/example/agent/alice",
+                    )
+                    self.assertNotIn("backend_ura", proof_binding)
+                    self.assertNotIn("user_ura", proof_binding)
 
                 getattr(receipt.authority_binding, arm).ClearField(required_field)
                 with self.assertRaises(SDKError) as raised:

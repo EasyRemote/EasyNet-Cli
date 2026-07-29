@@ -15,7 +15,7 @@ func TestDescriptorBoundInvocationBytesUseStableAxonEncoding(t *testing.T) {
 		Callee:        AgentRef{URA: "easynet:///r/acme/agent/device.agent"},
 		Subject:       SubjectRef{URA: "easynet:///r/acme/resource/fs/tmp"},
 		Nonce:         []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16},
-		CausalContext: CausalNullWithReason("root does not enter canonical bytes"),
+		CausalContext: CausalRoot(),
 	}, canonicalTestDescriptorRef, []byte(`{"x":1}`))
 	if err != nil {
 		t.Fatalf("canonicalDescriptorBoundInvocationBytes: %v", err)
