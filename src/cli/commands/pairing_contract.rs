@@ -101,6 +101,19 @@ mod tests {
     }
 
     #[test]
+    fn pairing_credential_rejects_null_federated_peers_manifest() {
+        let mut body = canonical_pairing_envelope_json();
+        body["federated_peers"] = serde_json::Value::Null;
+
+        let envelope = serde_json::from_value::<PairingCredentialEnvelope>(body);
+        let err = envelope.expect_err("federated_peers must be a canonical array");
+        assert!(
+            err.to_string().contains("expected a sequence"),
+            "schema error should reject nullable peer manifests: {err}"
+        );
+    }
+
+    #[test]
     fn pairing_credential_carries_immutable_user_binding() {
         let envelope =
             serde_json::from_value::<PairingCredentialEnvelope>(canonical_pairing_envelope_json())
