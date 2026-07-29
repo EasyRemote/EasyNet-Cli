@@ -1798,23 +1798,10 @@ fn validate_pairing_token(
         }
     };
 
-    // The Hub's pairing endpoint is a versioned REST contract (see the
-    // Hub's OpenAPI spec under /api/v1/devices/pairing). If `into_json`
-    // fails, the bytes we got back are either not JSON at all (a proxy
-    // inserted an HTML error page, a middlebox rewrote the response) or
-    // the JSON shape no longer matches the product pairing contract
-    // (the CLI and Hub are on incompatible versions). Either way, the underlying
-    // serde error is noise to an operator — they need to know *what to
-    // do*, not which field's tag didn't match. We keep the raw cause in
-    // the error chain via `context`, so `--verbose` / log scrapers still
-    // surface the full detail, while the top-line stays operator-friendly.
-    let envelope: PairingCredentialEnvelope = resp.into_json().map_err(|e| {
-        anyhow::Error::from(e).context(
-            "Hub returned an unreadable pairing response — the Hub is likely on an \
-             incompatible version, or a proxy rewrote the response. Verify the Hub URL \
-             and that CLI + Hub versions match; re-run with a fresh pairing token if so.",
-        )
-    })?;
+    let body = resp
+        .into_string()
+        .context("read Hub pairing response body")?;
+    let envelope = decode_pairing_credential_response(&body)?;
 
     let envelope = validate_pairing_response(envelope, device_public_key)?;
     if envelope.node_id != preflight.node_id {
@@ -1841,6 +1828,52 @@ fn validate_pairing_token(
     creds.hub_pubkey_b64 = Some(preflight.hub_public_key_b64.clone());
     creds.hub_tls_ca_pem_b64 = preflight.hub_tls_ca_pem_b64.clone();
     Ok(creds)
+}
+
+fn decode_pairing_credential_response(raw: &str) -> anyhow::Result<PairingCredentialEnvelope> {
+    let value: serde_json::Value = serde_json::from_str(raw).map_err(|error| {
+        anyhow::Error::from(error).context(
+            "Hub returned an unreadable pairing response — the Hub returned invalid JSON. \
+             Verify the Hub URL and that no proxy rewrote the response.",
+        )
+    })?;
+    validate_pairing_credential_wire_value(&value)?;
+    serde_json::from_value(value).map_err(|error| {
+        anyhow::Error::from(error).context(
+            "Hub returned an unreadable pairing response — the Hub is likely on an \
+             incompatible version, or a proxy rewrote the response. Verify the Hub URL \
+             and that CLI + Hub versions match; re-run with a fresh pairing token if so.",
+        )
+    })
+}
+
+fn validate_pairing_credential_wire_value(value: &serde_json::Value) -> anyhow::Result<()> {
+    let Some(object) = value.as_object() else {
+        anyhow::bail!("Hub pairing credential contract violation: response must be a JSON object");
+    };
+    for field in [
+        "state_code",
+        "transition_id",
+        "interrupted_transition",
+        "failure",
+        "resolve_unavailable",
+    ] {
+        if object.contains_key(field) {
+            anyhow::bail!(
+                "Hub pairing credential contract violation: response leaked device read-model field `{field}`"
+            );
+        }
+    }
+    match object.get("federated_peers") {
+        Some(serde_json::Value::Array(_)) => {}
+        Some(_) => anyhow::bail!(
+            "Hub pairing credential contract violation: federated_peers must be a JSON array"
+        ),
+        None => anyhow::bail!(
+            "Hub pairing credential contract violation: response missing federated_peers"
+        ),
+    }
+    Ok(())
 }
 
 fn build_validate_pairing_payload(

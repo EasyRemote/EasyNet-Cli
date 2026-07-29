@@ -84,6 +84,8 @@ struct FakeAuthHub {
 }
 
 impl FakeAuthHub {
+    const HUB_PUBLIC_KEY_B64: &'static str = "ERERERERERERERERERERERERERERERERERERERERERE=";
+
     fn login_once() -> Self {
         Self::scripted(vec![ExpectedRequest::json(
             "POST /api/v1/auth/login ",
@@ -94,18 +96,17 @@ impl FakeAuthHub {
     }
 
     fn one_step_join_once() -> Self {
+        Self::one_step_join_with_validate_body_once(canonical_pairing_credential_response(
+            "${device_public_key}",
+            false,
+            false,
+        ))
+    }
+
+    fn one_step_join_with_validate_body_once(validate_body: String) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind fake auth hub");
         let endpoint = format!("http://{}", listener.local_addr().expect("local addr"));
-        let validate_body = format!(
-            r#"{{
-  "node_id": "dev-one",
-  "credential_token": "credential-token-1",
-  "hub_endpoint": "{endpoint}",
-  "realm": "acme",
-  "username": "silan",
-  "user_id": "usr_silan"
-}}"#
-        );
+        let validate_body = validate_body.replace("${endpoint}", &endpoint);
         let steps = vec![
             ExpectedRequest::json(
                 "POST /api/v1/auth/login ",
@@ -123,7 +124,16 @@ impl FakeAuthHub {
                 "GET /api/v1/devices/pairing/token_1234/preflight",
                 Vec::new(),
                 200,
-                r#"{"realm":"acme","node_id":"dev-one"}"#,
+                format!(
+                    r#"{{
+  "realm": "acme",
+  "node_id": "dev-one",
+  "hub_public_key_b64": "{}",
+  "hub_tls_ca_pem_b64": null,
+  "hub_agent_ura": "easynet:///r/acme/authority"
+}}"#,
+                    Self::HUB_PUBLIC_KEY_B64
+                ),
             ),
             ExpectedRequest::json(
                 "POST /api/v1/devices/pairing/token_1234/validate ",
@@ -137,6 +147,22 @@ impl FakeAuthHub {
             endpoint,
             handle: Some(handle),
         }
+    }
+
+    fn one_step_join_leaks_read_model_field_once() -> Self {
+        Self::one_step_join_with_validate_body_once(canonical_pairing_credential_response(
+            "${device_public_key}",
+            true,
+            false,
+        ))
+    }
+
+    fn one_step_join_nullable_federated_peers_once() -> Self {
+        Self::one_step_join_with_validate_body_once(canonical_pairing_credential_response(
+            "${device_public_key}",
+            false,
+            true,
+        ))
     }
 
     fn one_step_join_preflight_failure_once() -> Self {
@@ -218,8 +244,28 @@ fn run_expected_requests(listener: TcpListener, steps: Vec<ExpectedRequest>) {
                 "request missing {expected:?}, got:\n{request}"
             );
         }
-        write_json_status_response(&mut stream, step.status, &step.body);
+        let body = render_response_body(&step.body, &request);
+        write_json_status_response(&mut stream, step.status, &body);
     }
+}
+
+fn render_response_body(template: &str, request: &str) -> String {
+    if !template.contains("${device_public_key}") {
+        return template.to_string();
+    }
+    let device_public_key = request_json_body(request)
+        .and_then(|body| {
+            body.get("device_public_key")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+        })
+        .expect("validate request body carries device_public_key");
+    template.replace("${device_public_key}", &device_public_key)
+}
+
+fn request_json_body(request: &str) -> Option<Value> {
+    let (_, body) = request.split_once("\r\n\r\n")?;
+    serde_json::from_str(body).ok()
 }
 
 fn login_response(token: &str, refresh_token: &str, user_id: &str, username: &str) -> String {
@@ -232,6 +278,49 @@ fn login_response(token: &str, refresh_token: &str, user_id: &str, username: &st
     "nickname": "{username}",
     "username": "{username}"
   }}
+}}"#
+    )
+}
+
+fn canonical_pairing_credential_response(
+    device_public_key: &str,
+    leak_state_code: bool,
+    nullable_federated_peers: bool,
+) -> String {
+    let read_model_leak = if leak_state_code {
+        r#",
+  "state_code": "J200""#
+    } else {
+        ""
+    };
+    let federated_peers = if nullable_federated_peers {
+        "null"
+    } else {
+        "[]"
+    };
+    format!(
+        r#"{{
+  "node_id": "dev-one",
+  "display_name": "Workstation",
+  "state": "joining",
+  "trust_level": "trusted",
+  "device_group": "default",
+  "os": "darwin",
+  "arch": "arm64",
+  "auth_binding": "credential_token",
+  "credential_provisioned": true,
+  "public_key_registered": true,
+  "device_public_key": "{device_public_key}",
+  "device_public_key_fingerprint": "sha256:fake-device-key",
+  "credential_token": "credential-token-1",
+  "hub_endpoint": "https://hub.acme.internal:50443",
+  "realm": "acme",
+  "username": "silan",
+  "user_id": "usr_silan",
+  "deploy_signature": "deploy-signature",
+  "federated_peers": {federated_peers},
+  "ura": "easynet:///r/acme/device/dev-one",
+  "last_seen_unix_ms": 42{read_model_leak}
 }}"#
     )
 }
@@ -383,6 +472,82 @@ fn one_step_join_logs_in_enrolls_device_and_marks_profile_enrolled() {
     assert!(
         profile.get("refresh_token").is_none(),
         "profile JSON must not store refresh tokens"
+    );
+}
+
+#[test]
+fn one_step_join_rejects_pairing_credential_read_model_leak() {
+    let home = tempfile::tempdir().expect("temp HOME");
+    let hub = FakeAuthHub::one_step_join_leaks_read_model_field_once();
+
+    let output = run_failure(
+        home.path(),
+        &[
+            "join",
+            "silan@acme",
+            "--hub",
+            hub.endpoint.as_str(),
+            "--password",
+            "secret",
+            "--boot",
+            "no",
+            "--yes",
+        ],
+    );
+    let combined = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        combined.contains("Hub pairing credential contract violation"),
+        "{combined}"
+    );
+    assert!(
+        combined.contains("state_code"),
+        "operator error chain must identify the leaked read-model field: {combined}"
+    );
+    assert!(
+        !home.path().join(".easynet/credentials.json").exists(),
+        "contract violation must not persist device credentials"
+    );
+}
+
+#[test]
+fn one_step_join_rejects_nullable_pairing_federated_peers() {
+    let home = tempfile::tempdir().expect("temp HOME");
+    let hub = FakeAuthHub::one_step_join_nullable_federated_peers_once();
+
+    let output = run_failure(
+        home.path(),
+        &[
+            "join",
+            "silan@acme",
+            "--hub",
+            hub.endpoint.as_str(),
+            "--password",
+            "secret",
+            "--boot",
+            "no",
+            "--yes",
+        ],
+    );
+    let combined = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        combined.contains("Hub pairing credential contract violation"),
+        "{combined}"
+    );
+    assert!(
+        combined.contains("federated_peers must be a JSON array"),
+        "operator error chain must identify nullable federated_peers: {combined}"
+    );
+    assert!(
+        !home.path().join(".easynet/credentials.json").exists(),
+        "contract violation must not persist device credentials"
     );
 }
 
