@@ -445,30 +445,6 @@ pub unsafe extern "C" fn runtime_resolve_descriptor_ref(
 fn descriptor_resolution_abi_projection(
     error: &DescriptorResolutionError,
 ) -> (i32, ErrorProjection) {
-    match error.runtime_failure_kind() {
-        crate::daemon::runtime_failure::RuntimeFailureKind::CallerSignerUnavailable => {
-            return (
-                ERR_PERMISSION_DENIED,
-                ErrorProjection {
-                    code: CALLER_SIGNER_UNAVAILABLE_CODE,
-                    stage: "caller_identity",
-                    retry: "never",
-                },
-            );
-        }
-        crate::daemon::runtime_failure::RuntimeFailureKind::DescriptorOwnerOffline
-        | crate::daemon::runtime_failure::RuntimeFailureKind::RouteUnavailable => {
-            return (
-                ERR_DAEMON_DOWN,
-                ErrorProjection {
-                    code: "DESCRIPTOR_OWNER_OFFLINE",
-                    stage: "routing",
-                    retry: "safe",
-                },
-            );
-        }
-        _ => {}
-    }
     match error {
         DescriptorResolutionError::InvalidRequest(_)
         | DescriptorResolutionError::OwnerMismatch(_) => (
@@ -493,6 +469,14 @@ fn descriptor_resolution_abi_projection(
                 code: CALLER_SIGNER_UNAVAILABLE_CODE,
                 stage: "caller_identity",
                 retry: "never",
+            },
+        ),
+        DescriptorResolutionError::OwnerOffline(_) => (
+            ERR_DAEMON_DOWN,
+            ErrorProjection {
+                code: "DESCRIPTOR_OWNER_OFFLINE",
+                stage: "routing",
+                retry: "safe",
             },
         ),
         DescriptorResolutionError::DescriptorNotFound(_) => (
@@ -10186,10 +10170,8 @@ mod tests {
             "descriptor resolver must not expose signer custody internals: {message}"
         );
 
-        let leaked_remote_probe = DescriptorResolutionError::DescriptorNotFound(
-            "easynet_runtime_resolve_descriptor_ref: remote invocation requires a caller signer \
-             for `easynet:///r/localhost/user/alice`; load or provision that identity in the \
-             local key service: self-identity: keyring rejected request: kind=not_found, \
+        let leaked_remote_probe = DescriptorResolutionError::RuntimeOwnerUnavailable(
+            "self-identity: keyring rejected request: kind=not_found, \
              msg=keyring entry not found: easynet:///r/localhost/user/alice"
                 .to_string(),
         );
@@ -10202,7 +10184,6 @@ mod tests {
             leaked_remote_probe.canonical_detail()
         );
         assert!(message.contains(CALLER_SIGNER_UNAVAILABLE_CODE));
-        assert!(message.contains("easynet:///r/localhost/user/alice"));
         assert!(
             !message.contains("keyring entry not found")
                 && !message.contains("keyring rejected request")
@@ -10210,7 +10191,7 @@ mod tests {
             "descriptor resolver must sanitize leaked signer custody detail: {message}"
         );
 
-        let owner_offline = DescriptorResolutionError::DescriptorNotFound(
+        let owner_offline = DescriptorResolutionError::owner_offline(
             "ROUTE_NEGATIVE: namespace.resolve negative for \
              `easynet:///r/localhost/ability/device.dev-a.meta.list_abilities`: \
              NEGATIVE_REASON_NXDOMAIN: owner is not online"
@@ -10223,6 +10204,22 @@ mod tests {
         assert_eq!(
             owner_offline.canonical_detail(),
             "DESCRIPTOR_OWNER_OFFLINE: descriptor owner is not online"
+        );
+
+        let not_found_with_route_words = DescriptorResolutionError::DescriptorNotFound(
+            "descriptor_ref not found in remote runtime catalog; previous route detail said owner is not online"
+                .to_string(),
+        );
+        let (abi_code, projection) =
+            descriptor_resolution_abi_projection(&not_found_with_route_words);
+        assert_eq!(abi_code, ERR_NOT_FOUND);
+        assert_eq!(projection.code, "DESCRIPTOR_NOT_FOUND");
+        assert_eq!(projection.stage, "routing");
+        assert!(
+            !not_found_with_route_words
+                .canonical_detail()
+                .contains("DESCRIPTOR_OWNER_OFFLINE"),
+            "DescriptorNotFound must not be reclassified by message text"
         );
 
         let invalid_catalog_payload = DescriptorResolutionError::InvalidCatalogPayload(

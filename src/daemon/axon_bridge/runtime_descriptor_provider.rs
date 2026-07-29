@@ -9,7 +9,7 @@
 
 use serde_json::Value;
 
-use crate::daemon::runtime_failure::{RuntimeFailureFacts, RuntimeFailureKind};
+use crate::daemon::runtime_failure::RuntimeFailureFacts;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum DescriptorResolutionError {
@@ -17,6 +17,7 @@ pub(crate) enum DescriptorResolutionError {
     InvalidCatalogPayload(String),
     RuntimeOwnerUnavailable(String),
     DescriptorNotFound(String),
+    OwnerOffline(String),
     OwnerMismatch(String),
     CallModeUnsupported(String),
 }
@@ -42,6 +43,10 @@ impl DescriptorResolutionError {
         Self::DescriptorNotFound(message.into())
     }
 
+    pub(crate) fn owner_offline(message: impl Into<String>) -> Self {
+        Self::OwnerOffline(message.into())
+    }
+
     fn owner_mismatch(message: impl Into<String>) -> Self {
         Self::OwnerMismatch(message.into())
     }
@@ -56,17 +61,19 @@ impl DescriptorResolutionError {
             | Self::InvalidCatalogPayload(message)
             | Self::RuntimeOwnerUnavailable(message)
             | Self::DescriptorNotFound(message)
+            | Self::OwnerOffline(message)
             | Self::OwnerMismatch(message)
             | Self::CallModeUnsupported(message) => message,
         }
     }
 
-    pub(crate) fn runtime_failure_kind(&self) -> RuntimeFailureKind {
-        self.runtime_failure_facts().classify()
-    }
-
     pub(crate) fn canonical_detail(&self) -> String {
-        self.runtime_failure_facts().canonical_detail()
+        match self {
+            Self::RuntimeOwnerUnavailable(_) | Self::OwnerOffline(_) => {
+                self.runtime_failure_facts().canonical_detail()
+            }
+            _ => self.message().trim().to_string(),
+        }
     }
 
     fn runtime_failure_facts(&self) -> RuntimeFailureFacts<'_> {
@@ -78,6 +85,7 @@ impl DescriptorResolutionError {
             Self::InvalidRequest(_) | Self::OwnerMismatch(_) => "INVALID_ARGUMENT",
             Self::InvalidCatalogPayload(_) => "INVALID_CATALOG_PAYLOAD",
             Self::RuntimeOwnerUnavailable(_) => "CALLER_SIGNER_UNAVAILABLE",
+            Self::OwnerOffline(_) => "DESCRIPTOR_OWNER_OFFLINE",
             Self::DescriptorNotFound(_) | Self::CallModeUnsupported(_) => "ABILITY_NOT_FOUND",
         }
     }
@@ -86,6 +94,26 @@ impl DescriptorResolutionError {
 impl std::fmt::Display for DescriptorResolutionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.message())
+    }
+}
+
+impl From<crate::daemon::invocation::routing::route_resolver::ResolveRouteFailure>
+    for DescriptorResolutionError
+{
+    fn from(
+        error: crate::daemon::invocation::routing::route_resolver::ResolveRouteFailure,
+    ) -> Self {
+        if error.is_owner_offline() {
+            Self::owner_offline(format!(
+                "descriptor owner is offline for {}: {}",
+                error.query_name, error.detail
+            ))
+        } else {
+            Self::descriptor_not_found(format!(
+                "descriptor route resolution failed for {}: {}",
+                error.query_name, error.detail
+            ))
+        }
     }
 }
 
@@ -738,5 +766,45 @@ mod tests {
             catalog["diagnostics"][0],
             "control discovery missing daemon_identity"
         );
+    }
+
+    #[test]
+    fn route_negative_owner_offline_maps_to_descriptor_owner_offline() {
+        let route_failure =
+            crate::daemon::invocation::routing::route_resolver::ResolveRouteFailure::owner_offline(
+                "easynet:///r/localhost/ability/device.dev-a.meta.list_abilities",
+                crate::daemon::federation::resolver_contract::NegativeReason::Nxdomain,
+            );
+
+        let descriptor_error = DescriptorResolutionError::from(route_failure);
+
+        assert!(matches!(
+            descriptor_error,
+            DescriptorResolutionError::OwnerOffline(_)
+        ));
+        assert_eq!(
+            descriptor_error.canonical_detail(),
+            "DESCRIPTOR_OWNER_OFFLINE: descriptor owner is not online"
+        );
+    }
+
+    #[test]
+    fn route_negative_generic_maps_to_descriptor_not_found() {
+        let route_failure =
+            crate::daemon::invocation::routing::route_resolver::ResolveRouteFailure::new(
+                "easynet:///r/localhost/ability/device.dev-a.custom.missing",
+                crate::daemon::federation::resolver_contract::NegativeReason::Nxdomain,
+                "ability label is not published",
+            );
+
+        let descriptor_error = DescriptorResolutionError::from(route_failure);
+
+        assert!(matches!(
+            descriptor_error,
+            DescriptorResolutionError::DescriptorNotFound(_)
+        ));
+        assert!(!descriptor_error
+            .canonical_detail()
+            .contains("DESCRIPTOR_OWNER_OFFLINE"));
     }
 }

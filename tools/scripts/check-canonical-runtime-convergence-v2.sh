@@ -14471,8 +14471,9 @@ for retired in (
     'contains("ROUTE_NEGATIVE")',
     'contains("requires a caller signer")',
     "Self::CallerSignerUnavailable(",
-    "Self::OwnerOffline(",
     "Self::RuntimeOffline(",
+    "error.runtime_failure_kind()",
+    "RuntimeFailureKind::DescriptorOwnerOffline",
 ):
     if retired in production:
         raise SystemExit(f"ffi_descriptor_runtime_owner:retired_remote_probe_classifier:{retired}")
@@ -14480,18 +14481,17 @@ for required in (
     "enum DescriptorResolutionError",
     "RuntimeOwnerUnavailable(String)",
     "DescriptorNotFound(String)",
-    "use crate::daemon::runtime_failure::{RuntimeFailureFacts, RuntimeFailureKind};",
-    "pub(crate) fn runtime_failure_kind(&self) -> RuntimeFailureKind",
+    "OwnerOffline(String)",
+    "use crate::daemon::runtime_failure::RuntimeFailureFacts;",
     "pub(crate) fn canonical_detail(&self) -> String",
     "RuntimeFailureFacts::new(self.runtime_failure_code(), self.message())",
     "descriptor resolution requires a caller signer",
     "fn descriptor_resolution_abi_projection(",
-    "error.runtime_failure_kind()",
-    "RuntimeFailureKind::CallerSignerUnavailable",
-    "RuntimeFailureKind::DescriptorOwnerOffline",
+    "DescriptorResolutionError::OwnerOffline(_)",
     'code: CALLER_SIGNER_UNAVAILABLE_CODE',
     'code: "DESCRIPTOR_NOT_FOUND"',
     'code: "DESCRIPTOR_OWNER_OFFLINE"',
+    "DescriptorNotFound must not be reclassified by message text",
     "descriptor_resolution_abi_projection(&error)",
 ):
     if required not in text and required not in provider:
@@ -14553,7 +14553,6 @@ resolver = provider_production[resolver_start:resolver_end]
 for retired in (
     "fn from_remote_probe_rejection(",
     "RemoteInvocationFailure::",
-    "Self::OwnerOffline(",
 ):
     if retired in production or retired in provider_production:
         raise SystemExit(f"ffi_descriptor_probe_not_found_vocabulary:retired_remote_probe_classifier:{retired}")

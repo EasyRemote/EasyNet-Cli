@@ -9393,12 +9393,12 @@ if ffi_invocation.exists() or runtime_descriptor_provider.exists():
             "descriptor resolver must not classify remote invocation failures",
         ),
         (
-            "Self::CallerSignerUnavailable(",
-            "descriptor resolver must not expose signer failures as catalog lookup state",
+            "error.runtime_failure_kind()",
+            "descriptor resolver ABI projection must be enum-driven, not message-classifier-driven",
         ),
         (
-            "Self::OwnerOffline(",
-            "descriptor resolver must not expose owner-offline failures as catalog lookup state",
+            "Self::CallerSignerUnavailable(",
+            "descriptor resolver must not expose signer failures as catalog lookup state",
         ),
         (
             "Self::RuntimeOffline(",
@@ -9418,6 +9418,10 @@ if ffi_invocation.exists() or runtime_descriptor_provider.exists():
         (
             "enum DescriptorResolutionError",
             "descriptor resolver must expose typed failure states",
+        ),
+        (
+            "OwnerOffline(String)",
+            "descriptor resolver must expose owner offline as a typed provider state",
         ),
         (
             "fn descriptor_resolution_abi_projection(",
