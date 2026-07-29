@@ -23,7 +23,7 @@ public record RuntimeCallContext(
     callerURA = requiredPrincipal(callerURA, "caller_ura");
     calleeURA = requiredPrincipal(calleeURA, "callee_ura");
     subjectURA = requiredPrincipal(subjectURA, "subject_ura");
-    nonceBase64 = InvocationNonce.requiredBase64(nonceBase64);
+    nonceBase64 = InvocationTuple.requiredNonceBase64(nonceBase64);
     causalContext = copyRequiredObject(causalContext, "causal_context");
     metadata = copyObject(metadata, "metadata");
   }

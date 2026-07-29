@@ -581,6 +581,9 @@ func (p *RuntimeAccessControlProvider) Explain(ctx context.Context, request Acce
 }
 
 func accessControlGrantArgs(request AccessControlGrantRequest) (AccessControlGrantRequest, map[string]any, error) {
+	if err := validateRuntimeCallContext(request.Call); err != nil {
+		return AccessControlGrantRequest{}, nil, err
+	}
 	grant, err := normalizeAccessControlGrant(request.Grant, request.OwnerURA, request.PrincipalURA)
 	if err != nil {
 		return AccessControlGrantRequest{}, nil, err
@@ -597,6 +600,9 @@ func accessControlGrantArgs(request AccessControlGrantRequest) (AccessControlGra
 }
 
 func accessControlRevokeArgs(request AccessControlRevokeRequest) (AccessControlRevokeRequest, map[string]any, error) {
+	if err := validateRuntimeCallContext(request.Call); err != nil {
+		return AccessControlRevokeRequest{}, nil, err
+	}
 	ownerURA := strings.TrimSpace(request.OwnerURA)
 	if ownerURA == "" {
 		return AccessControlRevokeRequest{}, nil, invalidAccessControl("owner_ura is required", nil)
@@ -625,6 +631,9 @@ func accessControlRevokeArgs(request AccessControlRevokeRequest) (AccessControlR
 }
 
 func accessControlListArgs(request AccessControlListRequest) (AccessControlListRequest, map[string]any, error) {
+	if err := validateRuntimeCallContext(request.Call); err != nil {
+		return AccessControlListRequest{}, nil, err
+	}
 	ownerURA := strings.TrimSpace(request.OwnerURA)
 	if ownerURA == "" {
 		return AccessControlListRequest{}, nil, invalidAccessControl("owner_ura is required", nil)
@@ -664,6 +673,9 @@ func accessControlListArgs(request AccessControlListRequest) (AccessControlListR
 }
 
 func accessControlCheckArgs(request AccessControlCheckRequest) (AccessControlCheckRequest, map[string]any, error) {
+	if err := validateRuntimeCallContext(request.Call); err != nil {
+		return AccessControlCheckRequest{}, nil, err
+	}
 	ownerURA := strings.TrimSpace(request.OwnerURA)
 	if ownerURA == "" {
 		return AccessControlCheckRequest{}, nil, invalidAccessControl("owner_ura is required", nil)
@@ -717,6 +729,9 @@ func accessControlCheckArgs(request AccessControlCheckRequest) (AccessControlChe
 }
 
 func accessControlPermissionRequestCreateArgs(request AccessControlPermissionRequestCreateRequest) (AccessControlPermissionRequestCreateRequest, map[string]any, error) {
+	if err := validateRuntimeCallContext(request.Call); err != nil {
+		return AccessControlPermissionRequestCreateRequest{}, nil, err
+	}
 	projected, err := normalizeAccessControlPermissionRequest(request.Request, request.OwnerURA, request.PrincipalURA)
 	if err != nil {
 		return AccessControlPermissionRequestCreateRequest{}, nil, err
@@ -736,6 +751,9 @@ func accessControlPermissionRequestCreateArgs(request AccessControlPermissionReq
 }
 
 func accessControlPermissionRequestResolveArgs(request AccessControlPermissionRequestResolveRequest) (AccessControlPermissionRequestResolveRequest, map[string]any, error) {
+	if err := validateRuntimeCallContext(request.Call); err != nil {
+		return AccessControlPermissionRequestResolveRequest{}, nil, err
+	}
 	projected, err := normalizeAccessControlPermissionRequest(request.Request, request.OwnerURA, request.PrincipalURA)
 	if err != nil {
 		return AccessControlPermissionRequestResolveRequest{}, nil, err
@@ -775,6 +793,9 @@ func accessControlPermissionRequestResolveArgs(request AccessControlPermissionRe
 }
 
 func accessControlPermissionRequestListArgs(request AccessControlPermissionRequestListRequest) (AccessControlPermissionRequestListRequest, map[string]any, error) {
+	if err := validateRuntimeCallContext(request.Call); err != nil {
+		return AccessControlPermissionRequestListRequest{}, nil, err
+	}
 	ownerURA := strings.TrimSpace(request.OwnerURA)
 	if ownerURA == "" {
 		return AccessControlPermissionRequestListRequest{}, nil, invalidAccessControl("owner_ura is required", nil)
@@ -801,6 +822,9 @@ func accessControlPermissionRequestListArgs(request AccessControlPermissionReque
 }
 
 func accessControlAdmissionExplainArgs(request AccessControlAdmissionExplainRequest) (AccessControlAdmissionExplainRequest, map[string]any, error) {
+	if err := validateRuntimeCallContext(request.Call); err != nil {
+		return AccessControlAdmissionExplainRequest{}, nil, err
+	}
 	observerURA := strings.TrimSpace(request.ObserverURA)
 	if observerURA == "" {
 		return AccessControlAdmissionExplainRequest{}, nil, invalidAccessControl("observer_ura is required", nil)

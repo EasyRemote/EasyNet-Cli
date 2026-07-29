@@ -389,6 +389,9 @@ func NewRuntimePrincipalProvider(ability principalAbilityInvoker, call RuntimeCa
 	if strings.TrimSpace(call.CallerURA) == "" || strings.TrimSpace(call.CalleeURA) == "" || strings.TrimSpace(call.SubjectURA) == "" {
 		return nil, invalidPrincipal("runtime call context requires caller_ura, callee_ura and subject_ura", nil)
 	}
+	if err := validateRuntimeCallContext(call); err != nil {
+		return nil, err
+	}
 	return &RuntimePrincipalProvider{ability: ability, call: call}, nil
 }
 

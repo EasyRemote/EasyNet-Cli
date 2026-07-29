@@ -32,7 +32,7 @@ from ._principal_routes import (
     _ABILITY_SUSPEND,
     _PROFILE,
 )
-from .runtime_ability import RuntimeCallContext
+from .runtime_ability import RuntimeCallContext, _validate_call
 
 __all__ = [
     "AuthorizationGrant",
@@ -330,6 +330,7 @@ class RuntimePrincipalProvider:
             raise _invalid("runtime ability client is required")
         if not (call.caller_ura.strip() and call.callee_ura.strip() and call.subject_ura.strip()):
             raise _invalid("runtime call context requires caller_ura, callee_ura and subject_ura")
+        _validate_call(call)
         self._ability = ability
         self._call = call
 

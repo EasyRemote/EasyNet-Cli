@@ -15808,7 +15808,7 @@
           "identity": "ability_invocation_facade",
           "owner_path": "sdk/go/",
           "path": "sdk/go/runtime_ability.go",
-          "sha256": "0c1b099c8239b05503275af7207b023beeb4d3d97fff5a2f0c2cb67d2d72432c",
+          "sha256": "c73193d46510d47474f6a2f7b13723ee495ccd9132b70baadeff26f64f81207b",
           "interface": "RuntimeAbilityClient",
           "revision": "ebd2f03ae8b870992ff215b8850dcc6e127d1f99"
         },
@@ -20505,7 +20505,7 @@
       "RuntimeLifecycleTransport.start": "15ae61186e97f44a16eb1a685b3d9b06e6112e583cc7f382ddf9092fd854c840",
       "RuntimeLifecycleTransport.status": "b960b78fd587d76611317ac17f9e7d306f59b012b37384bc4159d55d4fc82da0",
       "RuntimeLifecycleTransport.stop": "f150e8a3b4ed2aa3e1f0d031a6b0e34b7aedba1fcaa334449ef497efb195c13c",
-      "RuntimePrincipalProvider": "1cc5e1e3fa858f6f99615294acf3754b279d662011aadaf2ba0145c0cf313a34",
+      "RuntimePrincipalProvider": "f428bc1309f1782364ef4ebe34ef598710d49d49707442751ed7e0244156aab9",
       "RuntimePrincipalProvider.add_key": "55a58936fce14f1385651ede98d95488705b1f4f78f0169807311d42665ac7b7",
       "RuntimePrincipalProvider.bind_first_key": "77bf5ecd6dfbe9b700926a635a437ee07a673ca070025344bb29f36d0a3e13f6",
       "RuntimePrincipalProvider.configure_recovery": "289d6edac00401f1380a6525d12964dc1d270142a8e096339cde3e2500ef4a6c",
@@ -23426,10 +23426,10 @@
       "production_owner": "canonical runtime provider",
       "owner_path": "sdk/go/",
       "path": "sdk/go/runtime_ability.go",
-      "sha256": "0c1b099c8239b05503275af7207b023beeb4d3d97fff5a2f0c2cb67d2d72432c",
+      "sha256": "c73193d46510d47474f6a2f7b13723ee495ccd9132b70baadeff26f64f81207b",
       "interface": "RuntimeAbilityClient",
       "interface_path": "sdk/go/runtime_ability.go",
-      "interface_sha256": "0c1b099c8239b05503275af7207b023beeb4d3d97fff5a2f0c2cb67d2d72432c",
+      "interface_sha256": "c73193d46510d47474f6a2f7b13723ee495ccd9132b70baadeff26f64f81207b",
       "capability_ids": [
         "ability_invocation_facade"
       ],

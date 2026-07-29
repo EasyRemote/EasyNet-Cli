@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -178,6 +179,29 @@ func TestRuntimeAccessControlProviderGrantsWithCanonicalPrincipalURAs(t *testing
 	}
 	if _, ok := transport.args["backend_account_id"]; ok {
 		t.Fatalf("product account field leaked into SDK args: %#v", transport.args)
+	}
+}
+
+func TestRuntimeAccessControlProviderRejectsShortNonceBeforeInvoke(t *testing.T) {
+	transport := &memoryAccessControlAbility{}
+	provider, err := NewRuntimeAccessControlProvider(transport)
+	if err != nil {
+		t.Fatalf("NewRuntimeAccessControlProvider: %v", err)
+	}
+	request := AccessControlGrantRequest{
+		Call:         accessControlCallFixture(),
+		Grant:        AccessControlGrant{GrantID: "grant-1", PrincipalKind: AccessControlPrincipalUser, PrincipalURA: "easynet:///r/example/user/bob", Actions: []string{"invoke"}, CreatedBy: "easynet:///r/example/user/alice"},
+		OwnerURA:     "easynet:///r/example/user/alice",
+		PrincipalURA: "easynet:///r/example/user/bob",
+		ActorURA:     "easynet:///r/example/user/alice",
+	}
+	request.Call.NonceBase64 = "bm9uY2U="
+	_, err = provider.Grant(context.Background(), request)
+	if err == nil || !strings.Contains(err.Error(), "nonce_base64 must decode to 16 bytes") {
+		t.Fatalf("expected canonical nonce rejection, got %v", err)
+	}
+	if transport.ability != "" {
+		t.Fatalf("invalid call reached ability invoker: %s", transport.ability)
 	}
 }
 
@@ -527,7 +551,7 @@ func accessControlCallFixture() RuntimeCallContext {
 		CallerURA:     "easynet:///r/example/user/alice",
 		CalleeURA:     "easynet:///r/example/device/dev-a",
 		SubjectURA:    "easynet:///r/example/resource/user.alice/access-control",
-		NonceBase64:   "bm9uY2U=",
+		NonceBase64:   "AQIDBAUGBwgJCgsMDQ4PEA==",
 		CausalContext: map[string]any{"form": "none"},
 	}
 }

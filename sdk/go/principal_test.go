@@ -203,6 +203,15 @@ func TestRuntimePrincipalProviderLowersLifecycleTransitions(t *testing.T) {
 	}
 }
 
+func TestRuntimePrincipalProviderRejectsShortNonce(t *testing.T) {
+	call := principalCallFixture()
+	call.NonceBase64 = "bm9uY2U="
+	_, err := NewRuntimePrincipalProvider(&memoryPrincipalAbility{}, call)
+	if err == nil || !strings.Contains(err.Error(), "nonce_base64 must decode to 16 bytes") {
+		t.Fatalf("expected canonical nonce rejection, got %v", err)
+	}
+}
+
 func TestRuntimePrincipalProviderLowersEnrollmentAuthority(t *testing.T) {
 	transport := &memoryPrincipalAbility{}
 	provider, err := NewRuntimePrincipalProvider(transport, principalCallFixture())
@@ -425,7 +434,7 @@ func principalCallFixture() RuntimeCallContext {
 		CallerURA:     "easynet:///r/example/user/admin",
 		CalleeURA:     "easynet:///r/example/authority",
 		SubjectURA:    "easynet:///r/example/user/alice",
-		NonceBase64:   "bm9uY2U=",
+		NonceBase64:   "AQIDBAUGBwgJCgsMDQ4PEA==",
 		CausalContext: map[string]any{"form": "none"},
 	}
 }

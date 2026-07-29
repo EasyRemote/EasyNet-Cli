@@ -433,6 +433,9 @@ func validateRuntimeCallContext(call RuntimeCallContext) error {
 			return invalidRuntimePayload(field.name+" must not be all-zero", nil)
 		}
 	}
+	if err := validateInvocationNonceBase64(call.NonceBase64); err != nil {
+		return err
+	}
 	if call.CausalContext == nil {
 		return invalidRuntimePayload("causal_context is required", nil)
 	}

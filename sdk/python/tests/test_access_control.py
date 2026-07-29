@@ -195,6 +195,30 @@ class AccessControlTests(unittest.TestCase):
         self.assertTrue(result.idempotent_replay)
         self.assertNotIn("backend_account_id", ability.arguments)
 
+    def test_runtime_call_context_rejects_missing_causal_context(self) -> None:
+        provider = RuntimeAccessControlProvider(_MemoryAbility())
+        with self.assertRaisesRegex(SDKError, "causal_context is required"):
+            provider.grant(
+                AccessControlGrantRequest(
+                    call=RuntimeCallContext(
+                        caller_ura=_call().caller_ura,
+                        callee_ura=_call().callee_ura,
+                        subject_ura=_call().subject_ura,
+                        nonce_base64=_call().nonce_base64,
+                        causal_context=None,  # type: ignore[arg-type]
+                    ),
+                    grant=AccessControlGrant(
+                        grant_id="grant-1",
+                        owner_ura="easynet:///r/example/user/alice",
+                        principal_kind=AccessControlPrincipalKind.USER,
+                        principal_ura="easynet:///r/example/user/bob",
+                        actions=("invoke",),
+                        created_by="easynet:///r/example/user/alice",
+                        lifetime="session",
+                    ),
+                )
+            )
+
     def test_runtime_provider_lists_and_checks_canonical_policy(self) -> None:
         ability = _MemoryAbility()
         provider = RuntimeAccessControlProvider(ability)
@@ -467,7 +491,7 @@ def _call() -> RuntimeCallContext:
         caller_ura="easynet:///r/example/user/alice",
         callee_ura="easynet:///r/example/device/dev-a",
         subject_ura="easynet:///r/example/resource/user.alice/access-control",
-        nonce_base64="bm9uY2U=",
+        nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
         causal_context={"form": "none"},
     )
 

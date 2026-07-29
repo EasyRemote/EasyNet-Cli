@@ -1,6 +1,7 @@
 package run.runtime.sdk;
 
 import java.nio.charset.StandardCharsets;
+import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -29,10 +30,27 @@ public record InvocationTuple(
     callee = requiredPrincipal(callee, "callee");
     descriptor = required(descriptor, "descriptor");
     subject = requiredPrincipal(subject, "subject");
-    nonce = InvocationNonce.requiredBase64(nonce);
+    nonce = requiredNonceBase64(nonce);
     causalContext = required(causalContext, "causalContext");
     argsJson = required(argsJson, "argsJson");
     metadata = copyObject(metadata);
+  }
+
+  static String requiredNonceBase64(String value) {
+    String clean = value == null ? "" : value.trim();
+    if (clean.isBlank()) {
+      throw SDKError.validation("invocation", "nonce_base64 is required");
+    }
+    byte[] decoded;
+    try {
+      decoded = Base64.getDecoder().decode(clean);
+    } catch (IllegalArgumentException error) {
+      throw SDKError.validation("invocation", "nonce_base64 must be canonical base64");
+    }
+    if (decoded.length != 16) {
+      throw SDKError.validation("invocation", "nonce_base64 must decode to 16 bytes");
+    }
+    return clean;
   }
 
   Map<String, Object> toWireObject() {
