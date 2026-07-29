@@ -65,6 +65,15 @@ impl AdmissionPolicyGate {
             context.trusted_role,
             context.action,
         );
+        let authority_self_stream = authority_self_stream_scope(
+            &caller_ura,
+            &callee_ura,
+            &subject_ura,
+            &ability_ura,
+            context.daemon_ura,
+            context.trusted_role,
+            context.action,
+        );
         let realm_authority_public_read = realm_authority_public_read_scope(
             &caller_ura,
             &callee_ura,
@@ -148,6 +157,7 @@ impl AdmissionPolicyGate {
             safe_read: context.safe_read,
             authority_self_read,
             authority_self_manage,
+            authority_self_stream,
             realm_authority_public_read,
             device_self_publication_manage,
             device_self_session_stream,
@@ -406,6 +416,33 @@ fn authority_self_manage_scope(
     ura_is_in_realm(subject_ura, &callee.realm)
 }
 
+fn authority_self_stream_scope(
+    caller_ura: &str,
+    callee_ura: &str,
+    subject_ura: &str,
+    ability_ura: &str,
+    daemon_ura: Option<&str>,
+    trusted_role: TrustedAgentRole,
+    action: AccessAction,
+) -> bool {
+    if action != AccessAction::Stream || trusted_role != TrustedAgentRole::Hub {
+        return false;
+    }
+    if Some(callee_ura) != daemon_ura || caller_ura != callee_ura {
+        return false;
+    }
+    let Ok(callee) = parse_ura(callee_ura) else {
+        return false;
+    };
+    if callee.kind != URAKind::Authority {
+        return false;
+    }
+    if !is_authority_owned_ura_in_realm(ability_ura, &callee.realm) {
+        return false;
+    }
+    subject_ura == callee_ura || is_authority_resource_subject_in_realm(subject_ura, &callee.realm)
+}
+
 fn realm_authority_public_read_scope(
     caller_ura: &str,
     callee_ura: &str,
@@ -538,6 +575,17 @@ fn is_authority_owned_ura_in_realm(ura: &str, realm: &str) -> bool {
         && parsed
             .ability()
             .is_some_and(|ability| ability.owner == AbilityOwner::Authority)
+}
+
+fn is_authority_resource_subject_in_realm(ura: &str, realm: &str) -> bool {
+    let Ok(parsed) = parse_ura(ura) else {
+        return false;
+    };
+    parsed.realm == realm
+        && parsed.kind == URAKind::Resource
+        && parsed
+            .resource_owner_id()
+            .is_some_and(|owner| owner == "authority")
 }
 
 fn ura_is_in_realm(ura: &str, realm: &str) -> bool {
@@ -1038,6 +1086,50 @@ mod tests {
         assert_eq!(
             decision.ability_ura,
             "easynet:///r/hub/ability/authority.federation.discover"
+        );
+    }
+
+    #[test]
+    fn local_authority_self_stream_enters_policy_without_user_session_authority() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let stores = AccessControlStoreRegistry::ephemeral();
+        let authority = "easynet:///r/test/authority";
+        let subject = crate::core::ura::resource_dot_ura(
+            "test",
+            "authority",
+            "invoke/federation.subscribe_directory_v2",
+        );
+        let envelope = Envelope {
+            caller: Some(identity(authority)),
+            callee: Some(identity(authority)),
+            subject: Some(SubjectIdentity {
+                ura: subject,
+                profile: String::new(),
+            }),
+            ..Envelope::default()
+        };
+        let decision = AdmissionPolicyGate::verify(AdmissionPolicyContext {
+            envelope: &envelope,
+            ability: "federation.subscribe_directory_v2",
+            action: AccessAction::Stream,
+            safe_read: false,
+            trusted_role: TrustedAgentRole::Hub,
+            daemon_ura: Some(authority),
+            trust_anchor: &empty_anchor(),
+            access_control_stores: &stores,
+            canonical_hash: Some("sha256:test".to_string()),
+            signature_key_id: None,
+            verified_authority_id: None,
+            rejector_ura: Some(authority.to_string()),
+        })
+        .expect("local authority must stream its own directory events without a user authority");
+
+        assert_eq!(decision.decision, PolicyDecisionOutcome::Allow);
+        assert_eq!(decision.reason, PolicyDecisionReason::ExplicitGrantAllow);
+        assert!(decision.owner_user_id.is_none());
+        assert_eq!(
+            decision.ability_ura,
+            "easynet:///r/test/ability/authority.federation.subscribe_directory_v2"
         );
     }
 

@@ -27,6 +27,7 @@ pub struct PolicyInput {
     pub safe_read: bool,
     pub authority_self_read: bool,
     pub authority_self_manage: bool,
+    pub authority_self_stream: bool,
     pub realm_authority_public_read: bool,
     pub device_self_publication_manage: bool,
     pub device_self_session_stream: bool,
@@ -62,6 +63,14 @@ impl PolicyEngine {
             );
         }
         if input.action == AccessAction::Stream && input.device_self_session_stream {
+            return decision(
+                &input,
+                PolicyDecisionOutcome::Allow,
+                PolicyDecisionReason::ExplicitGrantAllow,
+                None,
+            );
+        }
+        if input.action == AccessAction::Stream && input.authority_self_stream {
             return decision(
                 &input,
                 PolicyDecisionOutcome::Allow,
@@ -270,6 +279,7 @@ mod tests {
             safe_read: true,
             authority_self_read: false,
             authority_self_manage: false,
+            authority_self_stream: false,
             realm_authority_public_read: false,
             device_self_publication_manage: false,
             device_self_session_stream: false,
@@ -428,6 +438,33 @@ mod tests {
         assert_eq!(got.decision, PolicyDecisionOutcome::Allow);
         assert_eq!(got.reason, PolicyDecisionReason::ExplicitGrantAllow);
         assert_eq!(got.owner_user_id.as_deref(), Some("alice"));
+    }
+
+    #[test]
+    fn authority_self_stream_allows_realm_authority_before_owner_resolution() {
+        let mut input = base_input();
+        input.owner.owner_user_id = None;
+        input.owner.owner_ura = Some("easynet:///r/test/authority".to_string());
+        input.owner.owner_source = OwnerSource::Unresolved;
+        input.caller_ura = "easynet:///r/test/authority".to_string();
+        input.principal_kind = PrincipalKind::Token;
+        input.principal_id = "easynet:///r/test/authority".to_string();
+        input.token_id = Some("easynet:///r/test/authority".to_string());
+        input.token_class = Some(TokenClass::HubLink);
+        input.callee_ura = "easynet:///r/test/authority".to_string();
+        input.subject_ura =
+            "easynet:///r/test/resource/authority/invoke/federation.subscribe_directory_v2"
+                .to_string();
+        input.ability_ura =
+            "easynet:///r/test/ability/authority.federation.subscribe_directory_v2".to_string();
+        input.action = AccessAction::Stream;
+        input.safe_read = false;
+        input.authority_self_stream = true;
+
+        let got = PolicyEngine::check(input);
+        assert_eq!(got.decision, PolicyDecisionOutcome::Allow);
+        assert_eq!(got.reason, PolicyDecisionReason::ExplicitGrantAllow);
+        assert!(got.owner_user_id.is_none());
     }
 
     #[test]
