@@ -122,6 +122,9 @@ func NewStreamHandleFromJSON(transport StreamTransport, raw []byte) (*StreamHand
 		if err := json.Unmarshal(raw, &dto); err != nil {
 			return nil, invalidRuntimePayload(fmt.Sprintf("decode stream open JSON: %v", err), err)
 		}
+		if err := rejectUnknownRuntimeProjectionFields(raw, "stream open", "stream_id", "state", "max_buffered_events"); err != nil {
+			return nil, err
+		}
 	}
 	if dto.StreamID == "" {
 		return nil, invalidRuntimePayload("stream_id is required", nil)
@@ -587,6 +590,24 @@ func NewStreamEventFromJSON(raw []byte) (StreamEvent, error) {
 	if err := json.Unmarshal(raw, &dto); err != nil {
 		return StreamEvent{}, invalidRuntimePayload(fmt.Sprintf("decode stream event JSON: %v", err), err)
 	}
+	if err := rejectUnknownRuntimeProjectionFields(
+		raw,
+		"stream event",
+		"sequence",
+		"kind",
+		"state",
+		"terminal",
+		"transport_terminal",
+		"payload_content_type",
+		"payload_base64",
+		"payload_json",
+		"elapsed_ms",
+		"error",
+		"admission_receipt",
+		"terminal_receipt",
+	); err != nil {
+		return StreamEvent{}, err
+	}
 	if err := rejectRetiredTopLevelReceiptAlias(raw, "stream event"); err != nil {
 		return StreamEvent{}, err
 	}
@@ -645,6 +666,9 @@ func NewStreamCancelFromJSON(raw []byte) (StreamCancel, error) {
 	}
 	if err := json.Unmarshal(raw, &dto); err != nil {
 		return StreamCancel{}, invalidRuntimePayload(fmt.Sprintf("decode stream cancel JSON: %v", err), err)
+	}
+	if err := rejectUnknownRuntimeProjectionFields(raw, "stream cancel", "stream_id", "cancelled", "state", "terminal"); err != nil {
+		return StreamCancel{}, err
 	}
 	if dto.StreamID == "" {
 		return StreamCancel{}, invalidRuntimePayload("stream_id is required", nil)

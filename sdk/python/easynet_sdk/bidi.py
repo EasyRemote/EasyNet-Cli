@@ -92,6 +92,21 @@ class BidiFrame:
             raise _invalid_bidi(f"decode bidi frame JSON: {exc}", exc) from exc
         if not isinstance(decoded, dict):
             raise _invalid_bidi("bidi frame JSON must be an object")
+        _reject_unknown_bidi_fields(
+            decoded,
+            "bidi frame",
+            "sequence",
+            "kind",
+            "stream_id",
+            "terminal",
+            "transport_terminal",
+            "payload_content_type",
+            "payload_base64",
+            "payload_json",
+            "error",
+            "admission_receipt",
+            "terminal_receipt",
+        )
         reject_retired_top_level_receipt_alias(decoded, "bidi frame", stage="bidi")
         kind = _optional_string(decoded.get("kind"), "kind")
         if not kind:
@@ -203,6 +218,14 @@ class BidiOutcome:
             raise _invalid_bidi(f"decode bidi outcome JSON: {exc}", exc) from exc
         if not isinstance(decoded, dict):
             raise _invalid_bidi("bidi outcome JSON must be an object")
+        _reject_unknown_bidi_fields(
+            decoded,
+            "bidi outcome",
+            "session_id",
+            "state",
+            "terminal",
+            "reason",
+        )
         state = _bidi_state(_required_string(decoded, "state"))
         if state not in {
             BidiState.CANCEL_REQUESTED,
@@ -282,6 +305,13 @@ class BidiSession:
             raise _invalid_bidi(f"decode bidi open JSON: {exc}", exc) from exc
         if not isinstance(decoded, dict):
             raise _invalid_bidi("bidi open JSON must be an object")
+        _reject_unknown_bidi_fields(
+            decoded,
+            "bidi open",
+            "session_id",
+            "state",
+            "max_buffered_frames",
+        )
         state = _bidi_state(
             _optional_string(decoded.get("state"), "state") or "Opening"
         )
@@ -594,6 +624,15 @@ def _required_positive_int(decoded: dict[str, object], field_name: str) -> int:
     if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
         raise _invalid_bidi(f"{field_name} is required")
     return value
+
+
+def _reject_unknown_bidi_fields(
+    decoded: dict[str, object], projection: str, *allowed_fields: str
+) -> None:
+    allowed = set(allowed_fields)
+    for field in decoded:
+        if field not in allowed:
+            raise _invalid_bidi(f"{projection} contains noncanonical field {field}")
 
 
 def _optional_non_negative_int(value: object, field_name: str) -> int:

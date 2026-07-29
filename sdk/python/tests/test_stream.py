@@ -6,6 +6,7 @@ from easynet_sdk import (
     ErrorCode,
     RetryHint,
     SDKError,
+    StreamCancel,
     StreamEvent,
     StreamHandle,
     StreamState,
@@ -135,12 +136,47 @@ class StreamTests(unittest.TestCase):
         self.assertEqual(stream.state, StreamState.CLOSED)
         self.assertEqual(stream.runtime_state, StreamState.TERMINAL_FRAME_SEEN)
 
-    def test_stream_event_does_not_accept_legacy_content_type_alias(self) -> None:
-        event = StreamEvent.from_json(
-            b'{"sequence":1,"kind":"data","content_type":"application/json"}'
+    def test_stream_event_rejects_legacy_content_type_alias(self) -> None:
+        with self.assertRaises(SDKError) as caught:
+            StreamEvent.from_json(
+                b'{"sequence":1,"kind":"data","content_type":"application/json"}'
+            )
+
+        self.assertIn(
+            "stream event contains noncanonical field content_type",
+            str(caught.exception),
         )
 
-        self.assertEqual(event.payload_content_type, "")
+    def test_stream_projections_reject_product_state_code(self) -> None:
+        with self.assertRaises(SDKError) as open_caught:
+            StreamHandle.from_json(
+                MemoryStreamTransport(),
+                b'{"stream_id":"stream-1","state":"Open",'
+                b'"max_buffered_events":4,"state_code":"S200"}',
+            )
+        self.assertIn(
+            "stream open contains noncanonical field state_code",
+            str(open_caught.exception),
+        )
+        with self.assertRaises(SDKError) as event_caught:
+            StreamEvent.from_json(
+                b'{"sequence":1,"kind":"data","state":"Open",'
+                b'"terminal":false,"state_code":"S200"}'
+            )
+        self.assertIn(
+            "stream event contains noncanonical field state_code",
+            str(event_caught.exception),
+        )
+        with self.assertRaises(SDKError) as cancel_caught:
+            StreamCancel.from_json(
+                b'{"stream_id":"stream-1","cancelled":false,'
+                b'"state":"CancelRequested","terminal":false,'
+                b'"state_code":"S200"}'
+            )
+        self.assertIn(
+            "stream cancel contains noncanonical field state_code",
+            str(cancel_caught.exception),
+        )
 
     def test_stream_event_rejects_legacy_chunk_kind(self) -> None:
         with self.assertRaises(SDKError) as ctx:

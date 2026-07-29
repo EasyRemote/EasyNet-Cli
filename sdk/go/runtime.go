@@ -2714,7 +2714,7 @@ func newInvocationCancelFromJSON(raw []byte, expectedControl *InvocationControlC
 	if err := json.Unmarshal(raw, &dto); err != nil {
 		return InvocationCancel{}, invalidRuntimePayload(fmt.Sprintf("decode invocation cancel JSON: %v", err), err)
 	}
-	if err := rejectUnknownInvocationCancelFields(raw); err != nil {
+	if err := rejectUnknownRuntimeProjectionFields(raw, "invocation cancel", "handle_id", "request_accepted", "deduplicated", "cancelled", "state", "terminal"); err != nil {
 		return InvocationCancel{}, err
 	}
 	if dto.HandleID == 0 {
@@ -2750,27 +2750,6 @@ func newInvocationCancelFromJSON(raw []byte, expectedControl *InvocationControlC
 		state:           dto.State,
 		terminal:        dto.Terminal,
 	}, nil
-}
-
-func rejectUnknownInvocationCancelFields(raw []byte) error {
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &fields); err != nil {
-		return invalidRuntimePayload(fmt.Sprintf("decode invocation cancel JSON: %v", err), err)
-	}
-	allowed := map[string]struct{}{
-		"handle_id":        {},
-		"request_accepted": {},
-		"deduplicated":     {},
-		"cancelled":        {},
-		"state":            {},
-		"terminal":         {},
-	}
-	for field := range fields {
-		if _, ok := allowed[field]; !ok {
-			return invalidRuntimePayload("invocation cancel contains noncanonical field "+field, nil)
-		}
-	}
-	return nil
 }
 
 // InvocationHandle is the submitted invocation observation handle projection.

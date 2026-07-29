@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -238,6 +239,18 @@ func TestBidiFrameRejectsLegacyEventAlias(t *testing.T) {
 	}
 	if !IsCode(err, ErrInvalidArgument) {
 		t.Fatalf("error = %v, want %s", err, ErrInvalidArgument)
+	}
+}
+
+func TestBidiProjectionsRejectProductStateCode(t *testing.T) {
+	if _, err := NewBidiSessionFromJSON(&memoryBidiTransport{}, []byte(`{"session_id":"bidi-1","state":"Open","max_buffered_frames":4,"state_code":"B200"}`)); err == nil || !strings.Contains(err.Error(), "bidi open contains noncanonical field state_code") {
+		t.Fatalf("NewBidiSessionFromJSON accepted product state_code: %v", err)
+	}
+	if _, err := NewBidiFrameFromJSON([]byte(`{"sequence":1,"kind":"data","stream_id":1,"terminal":false,"state_code":"B200"}`)); err == nil || !strings.Contains(err.Error(), "bidi frame contains noncanonical field state_code") {
+		t.Fatalf("NewBidiFrameFromJSON accepted product state_code: %v", err)
+	}
+	if _, err := NewBidiOutcomeFromJSON([]byte(`{"session_id":"bidi-1","state":"CancelRequested","terminal":false,"reason":"stop","state_code":"B200"}`)); err == nil || !strings.Contains(err.Error(), "bidi outcome contains noncanonical field state_code") {
+		t.Fatalf("NewBidiOutcomeFromJSON accepted product state_code: %v", err)
 	}
 }
 

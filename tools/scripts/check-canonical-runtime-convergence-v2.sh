@@ -6432,6 +6432,96 @@ for required in (
 PY
 }
 
+check_sdk_stream_bidi_projection_strict_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local go_projection="$cli_root/sdk/go/runtime_projection.go"
+  local go_stream="$cli_root/sdk/go/stream.go"
+  local go_bidi="$cli_root/sdk/go/bidi.go"
+  local go_stream_test="$cli_root/sdk/go/stream_test.go"
+  local go_bidi_test="$cli_root/sdk/go/bidi_test.go"
+  local py_stream="$cli_root/sdk/python/easynet_sdk/stream.py"
+  local py_bidi="$cli_root/sdk/python/easynet_sdk/bidi.py"
+  local py_stream_test="$cli_root/sdk/python/tests/test_stream.py"
+  local py_bidi_test="$cli_root/sdk/python/tests/test_bidi.py"
+  local node="$cli_root/sdk/node/index.js"
+  local node_test="$cli_root/sdk/node/test/runtime-core.test.mjs"
+  [[ -f "$go_projection" ]] || fail "Go runtime projection helper is missing: ${go_projection#$cli_root/}"
+  [[ -f "$go_stream" ]] || fail "Go stream source is missing: ${go_stream#$cli_root/}"
+  [[ -f "$go_bidi" ]] || fail "Go bidi source is missing: ${go_bidi#$cli_root/}"
+  [[ -f "$go_stream_test" ]] || fail "Go stream tests are missing: ${go_stream_test#$cli_root/}"
+  [[ -f "$go_bidi_test" ]] || fail "Go bidi tests are missing: ${go_bidi_test#$cli_root/}"
+  [[ -f "$py_stream" ]] || fail "Python stream source is missing: ${py_stream#$cli_root/}"
+  [[ -f "$py_bidi" ]] || fail "Python bidi source is missing: ${py_bidi#$cli_root/}"
+  [[ -f "$py_stream_test" ]] || fail "Python stream tests are missing: ${py_stream_test#$cli_root/}"
+  [[ -f "$py_bidi_test" ]] || fail "Python bidi tests are missing: ${py_bidi_test#$cli_root/}"
+  [[ -f "$node" ]] || fail "Node SDK source is missing: ${node#$cli_root/}"
+  [[ -f "$node_test" ]] || fail "Node SDK runtime-core tests are missing: ${node_test#$cli_root/}"
+
+  "$PYTHON_BIN" - "$go_projection" "$go_stream" "$go_bidi" "$go_stream_test" "$go_bidi_test" "$py_stream" "$py_bidi" "$py_stream_test" "$py_bidi_test" "$node" "$node_test" <<'PY'
+import sys
+from pathlib import Path
+
+(
+    go_projection,
+    go_stream,
+    go_bidi,
+    go_stream_test,
+    go_bidi_test,
+    py_stream,
+    py_bidi,
+    py_stream_test,
+    py_bidi_test,
+    node,
+    node_test,
+) = [Path(path).read_text(encoding="utf-8") for path in sys.argv[1:]]
+
+for fragment, source, label in (
+    ("func rejectUnknownRuntimeProjectionFields", go_projection, "go_projection_helper_missing"),
+    ("projection+\" contains noncanonical field \"+field", go_projection, "go_projection_error_missing"),
+    ("rejectUnknownRuntimeProjectionFields(raw, \"stream open\"", go_stream, "go_stream_open_not_strict"),
+    ("rejectUnknownRuntimeProjectionFields(\n\t\traw,\n\t\t\"stream event\"", go_stream, "go_stream_event_not_strict"),
+    ("rejectUnknownRuntimeProjectionFields(raw, \"stream cancel\"", go_stream, "go_stream_cancel_not_strict"),
+    ("rejectUnknownRuntimeProjectionFields(raw, \"bidi open\"", go_bidi, "go_bidi_open_not_strict"),
+    ("rejectUnknownRuntimeProjectionFields(\n\t\traw,\n\t\t\"bidi frame\"", go_bidi, "go_bidi_frame_not_strict"),
+    ("rejectUnknownRuntimeProjectionFields(raw, \"bidi outcome\"", go_bidi, "go_bidi_outcome_not_strict"),
+    ("_reject_unknown_stream_fields(", py_stream, "python_stream_helper_missing"),
+    ("stream event contains noncanonical field", py_stream_test, "python_stream_event_test_missing"),
+    ("stream open contains noncanonical field state_code", py_stream_test, "python_stream_open_test_missing"),
+    ("stream cancel contains noncanonical field state_code", py_stream_test, "python_stream_cancel_test_missing"),
+    ("_reject_unknown_bidi_fields(", py_bidi, "python_bidi_helper_missing"),
+    ("bidi open contains noncanonical field state_code", py_bidi_test, "python_bidi_open_test_missing"),
+    ("bidi frame contains noncanonical field state_code", py_bidi_test, "python_bidi_frame_test_missing"),
+    ("bidi outcome contains noncanonical field state_code", py_bidi_test, "python_bidi_outcome_test_missing"),
+    ("function rejectRuntimeProjectionFields", node, "node_projection_helper_missing"),
+    ("stream open contains noncanonical field", node_test, "node_stream_open_test_missing"),
+    ("stream event contains noncanonical field state_code", node_test, "node_stream_event_test_missing"),
+    ("stream event contains noncanonical field frame_type", node_test, "node_stream_alias_test_missing"),
+    ("bidi open contains noncanonical field", node_test, "node_bidi_open_test_missing"),
+    ("bidi frame contains noncanonical field state_code", node_test, "node_bidi_frame_test_missing"),
+    ("bidi frame contains noncanonical field event_type", node_test, "node_bidi_alias_test_missing"),
+):
+    if fragment not in source:
+        raise SystemExit(f"sdk_stream_bidi_projection_strict:{label}")
+
+for source, label in (
+    (go_stream_test, "go_stream_tests"),
+    (go_bidi_test, "go_bidi_tests"),
+):
+    for fragment in ("contains noncanonical field state_code", "accepted product state_code"):
+        if fragment not in source:
+            raise SystemExit(f"sdk_stream_bidi_projection_strict:{label}:missing:{fragment}")
+
+for forbidden, source, label in (
+    ("DoesNotAcceptLegacyContentTypeAlias", go_stream_test, "go_legacy_content_type_acceptance_test"),
+    ("payload_content_type, \"\"", py_stream_test, "python_legacy_content_type_acceptance_test"),
+    ("aliasStreamEvent.frame_type", node_test, "node_stream_frame_type_alias_acceptance"),
+    ("aliasBidiFrame.event_type", node_test, "node_bidi_event_type_alias_acceptance"),
+):
+    if forbidden in source:
+        raise SystemExit(f"sdk_stream_bidi_projection_strict:{label}")
+PY
+}
+
 check_sdk_prepared_descriptor_ref_required_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local go_src="$cli_root/sdk/go/signing.go"
@@ -20894,6 +20984,7 @@ check_sdk_invocation_cancel_projection_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local java_cancel="$cli_root/sdk/java/src/main/java/run/runtime/sdk/InvocationCancel.java"
   local java_tests="$cli_root/sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
+  local go_projection="$cli_root/sdk/go/runtime_projection.go"
   local go_runtime="$cli_root/sdk/go/runtime.go"
   local go_tests="$cli_root/sdk/go/runtime_test.go"
   local py_runtime="$cli_root/sdk/python/easynet_sdk/runtime.py"
@@ -20904,6 +20995,7 @@ check_sdk_invocation_cancel_projection_contract() {
   local swift_tests="$cli_root/sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift"
   [[ -f "$java_cancel" ]] || fail "Java InvocationCancel source is missing: ${java_cancel#$cli_root/}"
   [[ -f "$java_tests" ]] || fail "Java runtime seam tests are missing: ${java_tests#$cli_root/}"
+  [[ -f "$go_projection" ]] || fail "Go runtime projection helper is missing: ${go_projection#$cli_root/}"
   [[ -f "$go_runtime" ]] || fail "Go Runtime source is missing: ${go_runtime#$cli_root/}"
   [[ -f "$go_tests" ]] || fail "Go runtime tests are missing: ${go_tests#$cli_root/}"
   [[ -f "$py_runtime" ]] || fail "Python Runtime source is missing: ${py_runtime#$cli_root/}"
@@ -20913,13 +21005,14 @@ check_sdk_invocation_cancel_projection_contract() {
   [[ -f "$swift_runtime" ]] || fail "Swift runtime source is missing: ${swift_runtime#$cli_root/}"
   [[ -f "$swift_tests" ]] || fail "Swift runtime tests are missing: ${swift_tests#$cli_root/}"
 
-  "$PYTHON_BIN" - "$java_cancel" "$java_tests" "$go_runtime" "$go_tests" "$py_runtime" "$py_tests" "$node_runtime" "$node_tests" "$swift_runtime" "$swift_tests" <<'PY'
+  "$PYTHON_BIN" - "$java_cancel" "$java_tests" "$go_projection" "$go_runtime" "$go_tests" "$py_runtime" "$py_tests" "$node_runtime" "$node_tests" "$swift_runtime" "$swift_tests" <<'PY'
 import sys
 from pathlib import Path
 
 (
     java_cancel,
     java_tests,
+    go_projection,
     go_runtime,
     go_tests,
     py_runtime,
@@ -20954,9 +21047,9 @@ for field in canonical_fields:
 for fragment, label, source in (
     ("rejectUnknown(fields", "java_exact_schema_guard_missing", java_cancel),
     ("invocation cancel contains noncanonical field", "java_unknown_field_error_missing", java_cancel),
-    ("rejectUnknownInvocationCancelFields(raw)", "go_exact_schema_guard_missing", go_runtime),
-    ("func rejectUnknownInvocationCancelFields", "go_exact_schema_helper_missing", go_runtime),
-    ("invocation cancel contains noncanonical field", "go_unknown_field_error_missing", go_runtime),
+    ("rejectUnknownRuntimeProjectionFields(raw, \"invocation cancel\"", "go_exact_schema_guard_missing", go_runtime),
+    ("func rejectUnknownRuntimeProjectionFields", "go_exact_schema_helper_missing", go_projection),
+    ("contains noncanonical field", "go_unknown_field_error_missing", go_projection),
     ("_require_runtime_exact_keys(", "python_exact_schema_guard_missing", py_runtime),
     ("contains noncanonical field {key}", "python_unknown_field_error_missing", py_runtime),
     ("rejectRuntimeFields(value, [", "node_exact_schema_guard_missing", node_runtime),
@@ -29811,6 +29904,7 @@ EOF
   check_sdk_go_python_history_public_route_cutover_contract
   check_sdk_cross_language_history_public_ingress_cutover_contract
   check_sdk_node_stream_bidi_explicit_terminality_contract
+  check_sdk_stream_bidi_projection_strict_contract
 	  check_sdk_descriptor_resolution_error_vocabulary_contract
 	  check_sdk_runtime_client_provider_readiness_contract
 	  check_sdk_ability_descriptor_not_found_vocabulary_contract
@@ -30088,6 +30182,7 @@ check_sdk_go_python_history_public_route_cutover_contract
 check_sdk_cross_language_history_public_ingress_cutover_contract
 check_sdk_runtime_ability_descriptor_bound_subject_parity_contract
 check_sdk_node_stream_bidi_explicit_terminality_contract
+check_sdk_stream_bidi_projection_strict_contract
 check_sdk_prepared_descriptor_ref_required_contract
 check_sdk_descriptor_resolution_error_vocabulary_contract
 check_sdk_runtime_client_provider_readiness_contract

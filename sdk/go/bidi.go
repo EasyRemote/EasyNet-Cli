@@ -153,6 +153,9 @@ func NewBidiSessionFromJSON(transport BidiTransport, raw []byte) (*BidiSession, 
 	if err := json.Unmarshal(raw, &dto); err != nil {
 		return nil, invalidRuntimePayload(fmt.Sprintf("decode bidi open JSON: %v", err), err)
 	}
+	if err := rejectUnknownRuntimeProjectionFields(raw, "bidi open", "session_id", "state", "max_buffered_frames"); err != nil {
+		return nil, err
+	}
 	if dto.SessionID == "" {
 		return nil, invalidRuntimePayload("session_id is required", nil)
 	}
@@ -826,6 +829,23 @@ func NewBidiFrameFromJSON(raw []byte) (BidiFrame, error) {
 	if err := json.Unmarshal(raw, &dto); err != nil {
 		return BidiFrame{}, invalidRuntimePayload(fmt.Sprintf("decode bidi frame JSON: %v", err), err)
 	}
+	if err := rejectUnknownRuntimeProjectionFields(
+		raw,
+		"bidi frame",
+		"sequence",
+		"kind",
+		"stream_id",
+		"terminal",
+		"transport_terminal",
+		"payload_content_type",
+		"payload_base64",
+		"payload_json",
+		"error",
+		"admission_receipt",
+		"terminal_receipt",
+	); err != nil {
+		return BidiFrame{}, err
+	}
 	if err := rejectRetiredTopLevelReceiptAlias(raw, "bidi frame"); err != nil {
 		return BidiFrame{}, err
 	}
@@ -870,6 +890,9 @@ func NewBidiOutcomeFromJSON(raw []byte) (BidiOutcome, error) {
 	}
 	if err := json.Unmarshal(raw, &dto); err != nil {
 		return BidiOutcome{}, invalidRuntimePayload(fmt.Sprintf("decode bidi outcome JSON: %v", err), err)
+	}
+	if err := rejectUnknownRuntimeProjectionFields(raw, "bidi outcome", "session_id", "state", "terminal", "reason"); err != nil {
+		return BidiOutcome{}, err
 	}
 	if dto.SessionID == "" {
 		return BidiOutcome{}, invalidRuntimePayload("session_id is required", nil)

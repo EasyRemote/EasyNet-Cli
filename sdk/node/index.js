@@ -2202,6 +2202,11 @@ export class StreamHandle {
     }
     this.transport = transport;
     this.open = objectValue(open, "stream open");
+    rejectRuntimeProjectionFields(this.open, new Set([
+      "stream_id",
+      "state",
+      "max_buffered_events",
+    ]), "stream open");
     this.maxBufferedEvents = boundedRuntimeLimit(
       this.open.max_buffered_events,
       "max_buffered_events",
@@ -2226,6 +2231,20 @@ export class StreamHandle {
       ),
       "stream event",
     );
+    rejectRuntimeProjectionFields(event, new Set([
+      "sequence",
+      "kind",
+      "state",
+      "terminal",
+      "transport_terminal",
+      "payload_content_type",
+      "payload_base64",
+      "payload_json",
+      "elapsed_ms",
+      "error",
+      "admission_receipt",
+      "terminal_receipt",
+    ]), "stream event");
     if (isTerminalFrame(event)) {
       this.terminal = true;
     }
@@ -2290,6 +2309,11 @@ export class BidiSession {
     }
     this.transport = transport;
     this.open = objectValue(open, "bidi open");
+    rejectRuntimeProjectionFields(this.open, new Set([
+      "session_id",
+      "state",
+      "max_buffered_frames",
+    ]), "bidi open");
     this.maxBufferedFrames = boundedRuntimeLimit(
       this.open.max_buffered_frames,
       "max_buffered_frames",
@@ -2332,6 +2356,19 @@ export class BidiSession {
       ),
       "bidi frame",
     );
+    rejectRuntimeProjectionFields(frame, new Set([
+      "sequence",
+      "kind",
+      "stream_id",
+      "terminal",
+      "transport_terminal",
+      "payload_content_type",
+      "payload_base64",
+      "payload_json",
+      "error",
+      "admission_receipt",
+      "terminal_receipt",
+    ]), "bidi frame");
     if (isTerminalFrame(frame)) {
       this.terminal = true;
     }

@@ -5,6 +5,7 @@ from collections.abc import Callable
 
 from easynet_sdk import (
     BidiFrame,
+    BidiOutcome,
     BidiSession,
     BidiState,
     BidiTerminalFrame,
@@ -204,6 +205,36 @@ class BidiTests(unittest.TestCase):
             BidiFrame.from_json(b'{"sequence":1,"event":"data","stream_id":1}')
 
         self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+
+    def test_bidi_projections_reject_product_state_code(self) -> None:
+        with self.assertRaises(SDKError) as open_caught:
+            BidiSession.from_json(
+                MemoryBidiTransport(),
+                b'{"session_id":"bidi-1","state":"Open",'
+                b'"max_buffered_frames":4,"state_code":"B200"}',
+            )
+        self.assertIn(
+            "bidi open contains noncanonical field state_code",
+            str(open_caught.exception),
+        )
+        with self.assertRaises(SDKError) as frame_caught:
+            BidiFrame.from_json(
+                b'{"sequence":1,"kind":"data","stream_id":1,'
+                b'"terminal":false,"state_code":"B200"}'
+            )
+        self.assertIn(
+            "bidi frame contains noncanonical field state_code",
+            str(frame_caught.exception),
+        )
+        with self.assertRaises(SDKError) as outcome_caught:
+            BidiOutcome.from_json(
+                b'{"session_id":"bidi-1","state":"CancelRequested",'
+                b'"terminal":false,"reason":"stop","state_code":"B200"}'
+            )
+        self.assertIn(
+            "bidi outcome contains noncanonical field state_code",
+            str(outcome_caught.exception),
+        )
 
     def test_transport_terminal_fails_session_without_runtime_terminal(self) -> None:
         transport = MemoryBidiTransport(

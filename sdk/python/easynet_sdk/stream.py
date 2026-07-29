@@ -66,6 +66,22 @@ class StreamEvent:
             raise _invalid_stream(f"decode stream event JSON: {exc}", exc) from exc
         if not isinstance(decoded, dict):
             raise _invalid_stream("stream event JSON must be an object")
+        _reject_unknown_stream_fields(
+            decoded,
+            "stream event",
+            "sequence",
+            "kind",
+            "state",
+            "terminal",
+            "transport_terminal",
+            "payload_content_type",
+            "payload_base64",
+            "payload_json",
+            "elapsed_ms",
+            "error",
+            "admission_receipt",
+            "terminal_receipt",
+        )
         reject_retired_top_level_receipt_alias(
             decoded, "stream event", stage="stream"
         )
@@ -181,6 +197,14 @@ class StreamCancel:
             raise _invalid_stream(f"decode stream cancel JSON: {exc}", exc) from exc
         if not isinstance(decoded, dict):
             raise _invalid_stream("stream cancel JSON must be an object")
+        _reject_unknown_stream_fields(
+            decoded,
+            "stream cancel",
+            "stream_id",
+            "cancelled",
+            "state",
+            "terminal",
+        )
         state = _stream_state(_required_string(decoded, "state"))
         if state not in {
             StreamState.CANCEL_REQUESTED,
@@ -244,6 +268,13 @@ class StreamHandle:
             raise _invalid_stream(f"decode stream open JSON: {exc}", exc) from exc
         if not isinstance(decoded, dict):
             raise _invalid_stream("stream open JSON must be an object")
+        _reject_unknown_stream_fields(
+            decoded,
+            "stream open",
+            "stream_id",
+            "state",
+            "max_buffered_events",
+        )
         state = _stream_state(
             _optional_string(decoded.get("state"), "state") or "Opening"
         )
@@ -443,6 +474,15 @@ def _required_positive_int(decoded: dict[str, object], field_name: str) -> int:
     if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
         raise _invalid_stream(f"{field_name} is required")
     return value
+
+
+def _reject_unknown_stream_fields(
+    decoded: dict[str, object], projection: str, *allowed_fields: str
+) -> None:
+    allowed = set(allowed_fields)
+    for field in decoded:
+        if field not in allowed:
+            raise _invalid_stream(f"{projection} contains noncanonical field {field}")
 
 
 def _stream_state(value: str) -> StreamState:

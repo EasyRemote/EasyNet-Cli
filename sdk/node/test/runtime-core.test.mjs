@@ -2881,12 +2881,11 @@ test("stream and bidi state machines retain bounded history", async () => {
 
 test("stream and bidi terminality is explicit and ignores event-kind aliases", async () => {
   const streamFrames = [
-    { sequence: 1, frame_type: "terminal", state: "Running", terminal: false },
-    { sequence: 2, kind: "terminal", state: "Completed", terminal: false },
-    { sequence: 3, kind: "completed", state: "Completed", terminal: false },
-    { sequence: 4, kind: "closed", state: "Completed", terminal: false },
-    { sequence: 5, kind: "done", state: "Completed", terminal: false },
-    { sequence: 6, kind: "terminal", state: "Completed", terminal: true },
+    { sequence: 1, kind: "terminal", state: "Completed", terminal: false },
+    { sequence: 2, kind: "completed", state: "Completed", terminal: false },
+    { sequence: 3, kind: "closed", state: "Completed", terminal: false },
+    { sequence: 4, kind: "done", state: "Completed", terminal: false },
+    { sequence: 5, kind: "terminal", state: "Completed", terminal: true },
   ];
   const stream = new sdk.StreamHandle(
     {
@@ -2895,12 +2894,10 @@ test("stream and bidi terminality is explicit and ignores event-kind aliases", a
     { stream_id: "stream-alias-cutover", max_buffered_events: 8 },
   );
 
-  const aliasStreamEvent = await stream.receive();
-  assert.equal(aliasStreamEvent.frame_type, "terminal");
+  await stream.receive();
   assert.equal(stream.terminal, false);
   assert.equal(stream.terminalEvent(), null);
 
-  await stream.receive();
   await stream.receive();
   await stream.receive();
   await stream.receive();
@@ -2910,14 +2907,13 @@ test("stream and bidi terminality is explicit and ignores event-kind aliases", a
   const streamTerminal = await stream.receive();
   assert.equal(streamTerminal.terminal, true);
   assert.equal(stream.terminal, true);
-  assert.equal(stream.terminalEvent().sequence, 6);
+  assert.equal(stream.terminalEvent().sequence, 5);
 
   const bidiFrames = [
-    { sequence: 1, event_type: "terminal", state: "Running", terminal: false },
-    { sequence: 2, kind: "completed", state: "Completed", terminal: false },
-    { sequence: 3, kind: "cancelled", state: "Cancelled", terminal: false },
-    { sequence: 4, kind: "timedout", state: "TimedOut", terminal: false },
-    { sequence: 5, kind: "terminal", state: "Completed", terminal: true },
+    { sequence: 1, kind: "completed", terminal: false },
+    { sequence: 2, kind: "cancelled", terminal: false },
+    { sequence: 3, kind: "timedout", terminal: false },
+    { sequence: 4, kind: "terminal", terminal: true },
   ];
   const bidi = new sdk.BidiSession(
     {
@@ -2927,12 +2923,10 @@ test("stream and bidi terminality is explicit and ignores event-kind aliases", a
     { session_id: "bidi-alias-cutover", max_buffered_frames: 8 },
   );
 
-  const aliasBidiFrame = await bidi.receive();
-  assert.equal(aliasBidiFrame.event_type, "terminal");
+  await bidi.receive();
   assert.equal(bidi.terminal, false);
   assert.equal(bidi.terminalFrame(), null);
 
-  await bidi.receive();
   await bidi.receive();
   await bidi.receive();
   assert.equal(bidi.terminal, false);
@@ -2941,7 +2935,57 @@ test("stream and bidi terminality is explicit and ignores event-kind aliases", a
   const bidiTerminal = await bidi.receive();
   assert.equal(bidiTerminal.terminal, true);
   assert.equal(bidi.terminal, true);
-  assert.equal(bidi.terminalFrame().sequence, 5);
+  assert.equal(bidi.terminalFrame().sequence, 4);
+});
+
+test("stream and bidi runtime projections reject noncanonical fields", async () => {
+  assert.throws(
+    () => new sdk.StreamHandle({ receive: () => "{}" }, { stream_id: "stream-1", state_code: "S200" }),
+    /stream open contains noncanonical field state_code/,
+  );
+  assert.throws(
+    () => new sdk.BidiSession(
+      { send: () => {}, receive: () => "{}" },
+      { session_id: "bidi-1", state_code: "B200" },
+    ),
+    /bidi open contains noncanonical field state_code/,
+  );
+
+  const stream = new sdk.StreamHandle(
+    { receive: () => JSON.stringify({ sequence: 1, kind: "data", terminal: false, state_code: "S200" }) },
+    { stream_id: "stream-1" },
+  );
+  await assert.rejects(
+    () => stream.receive(),
+    /stream event contains noncanonical field state_code/,
+  );
+
+  const aliasStream = new sdk.StreamHandle(
+    { receive: () => JSON.stringify({ sequence: 1, frame_type: "terminal", terminal: false }) },
+    { stream_id: "stream-2" },
+  );
+  await assert.rejects(
+    () => aliasStream.receive(),
+    /stream event contains noncanonical field frame_type/,
+  );
+
+  const bidi = new sdk.BidiSession(
+    { send: () => {}, receive: () => JSON.stringify({ sequence: 1, kind: "data", terminal: false, state_code: "B200" }) },
+    { session_id: "bidi-1" },
+  );
+  await assert.rejects(
+    () => bidi.receive(),
+    /bidi frame contains noncanonical field state_code/,
+  );
+
+  const aliasBidi = new sdk.BidiSession(
+    { send: () => {}, receive: () => JSON.stringify({ sequence: 1, event_type: "terminal", terminal: false }) },
+    { session_id: "bidi-2" },
+  );
+  await assert.rejects(
+    () => aliasBidi.receive(),
+    /bidi frame contains noncanonical field event_type/,
+  );
 });
 
 test("typed errors preserve stable categories and source refs", () => {
