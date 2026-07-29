@@ -56,6 +56,8 @@
 
 use std::path::Path;
 
+use axon_sdk::pb::axon::v1::Envelope;
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use serde::Deserialize;
 use tonic::Status;
 
@@ -161,6 +163,105 @@ impl RegisterPubkeyIntent {
     }
 }
 
+/// Verified first-key bootstrap claim for user self-registration.
+///
+/// This is the only `identity.register_pubkey` form that may be admitted with
+/// a request-scoped bootstrap candidate key. It covers the cold-start case
+/// where the user key is necessarily presented by the request being admitted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RegisterPubkeyBootstrapClaim {
+    principal_ura: String,
+    public_key: [u8; 32],
+}
+
+impl RegisterPubkeyBootstrapClaim {
+    pub(crate) fn principal_ura(&self) -> &str {
+        &self.principal_ura
+    }
+
+    pub(crate) fn public_key(&self) -> [u8; 32] {
+        self.public_key
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RegisterPubkeyBootstrapTuple {
+    caller_ura: String,
+}
+
+impl RegisterPubkeyBootstrapTuple {
+    pub(crate) fn from_envelope(envelope: &Envelope) -> Result<Self, Status> {
+        let caller_ura = envelope
+            .caller
+            .as_ref()
+            .map(|caller| caller.ura.trim())
+            .filter(|ura| !ura.is_empty())
+            .ok_or_else(|| Status::invalid_argument("identity.register_pubkey missing caller"))?;
+        let callee_ura = envelope
+            .callee
+            .as_ref()
+            .map(|callee| callee.ura.trim())
+            .filter(|ura| !ura.is_empty())
+            .ok_or_else(|| {
+                Status::invalid_argument("identity.register_pubkey missing authority callee")
+            })?;
+        let subject_ura = envelope
+            .subject
+            .as_ref()
+            .map(|subject| subject.ura.trim())
+            .filter(|ura| !ura.is_empty())
+            .ok_or_else(|| Status::invalid_argument("identity.register_pubkey missing subject"))?;
+
+        let caller = crate::core::ura::parse_ura(caller_ura).map_err(|err| {
+            Status::invalid_argument(format!(
+                "identity.register_pubkey caller is not a user URA: {err}"
+            ))
+        })?;
+        if caller.kind != crate::core::ura::URAKind::User {
+            return Err(Status::invalid_argument(format!(
+                "identity.register_pubkey bootstrap caller must identify a user, got {:?}",
+                caller.kind
+            )));
+        }
+        let callee = crate::core::ura::parse_ura(callee_ura).map_err(|err| {
+            Status::invalid_argument(format!(
+                "identity.register_pubkey callee is not an authority URA: {err}"
+            ))
+        })?;
+        if callee.kind != crate::core::ura::URAKind::Authority {
+            return Err(Status::invalid_argument(format!(
+                "identity.register_pubkey bootstrap callee must identify an authority, got {:?}",
+                callee.kind
+            )));
+        }
+        if caller.realm != callee.realm {
+            return Err(Status::invalid_argument(format!(
+                "identity.register_pubkey bootstrap realm mismatch: caller={}, callee={}",
+                caller.realm, callee.realm
+            )));
+        }
+        let descriptor_subject =
+            crate::core::ura::owner_ability_ura(callee_ura, ABILITY_IDENTITY_REGISTER_PUBKEY);
+        if subject_ura != caller_ura && descriptor_subject.as_deref() != Some(subject_ura) {
+            return Err(Status::invalid_argument(
+                "identity.register_pubkey bootstrap subject must be the user principal or the authority-owned ability URA",
+            ));
+        }
+
+        Ok(Self {
+            caller_ura: caller_ura.to_string(),
+        })
+    }
+
+    pub(crate) fn matches(envelope: &Envelope) -> bool {
+        Self::from_envelope(envelope).is_ok()
+    }
+
+    pub(crate) fn caller_ura(&self) -> &str {
+        &self.caller_ura
+    }
+}
+
 /// Outputs returned to the caller. Currently a `{ok: true}` ack —
 /// PR-7 deliberately keeps this minimal so the caller's contract
 /// is "ability did or did not succeed". Richer telemetry (e.g.
@@ -221,6 +322,50 @@ pub(crate) fn parse_register_pubkey_intent(
     Ok(RegisterPubkeyIntent {
         principal_ura: args.principal_ura,
         role,
+    })
+}
+
+pub(crate) fn verify_user_register_pubkey_bootstrap_claim(
+    envelope: &Envelope,
+    arguments: &[u8],
+) -> Result<RegisterPubkeyBootstrapClaim, Status> {
+    let (args, role) = decode_register_args(arguments)?;
+    if role != TrustedAgentRole::User {
+        return Err(Status::permission_denied(
+            "identity.register_pubkey bootstrap is restricted to user role",
+        ));
+    }
+    if args.principal_owner_ura.is_some() {
+        return Err(Status::permission_denied(
+            "identity.register_pubkey bootstrap user self-registration must not bind a separate owner",
+        ));
+    }
+
+    let tuple = RegisterPubkeyBootstrapTuple::from_envelope(envelope)?;
+
+    if args.principal_ura != tuple.caller_ura() {
+        return Err(Status::invalid_argument(
+            "identity.register_pubkey bootstrap principal_ura must match envelope caller",
+        ));
+    }
+
+    let public_key_bytes = BASE64_STANDARD
+        .decode(args.public_key_b64.trim())
+        .map_err(|err| {
+            Status::invalid_argument(format!(
+                "identity.register_pubkey public_key_b64 is not base64: {err}"
+            ))
+        })?;
+    let public_key: [u8; 32] = public_key_bytes.try_into().map_err(|bytes: Vec<u8>| {
+        Status::invalid_argument(format!(
+            "identity.register_pubkey public_key_b64 must decode to 32 bytes, got {}",
+            bytes.len()
+        ))
+    })?;
+
+    Ok(RegisterPubkeyBootstrapClaim {
+        principal_ura: args.principal_ura,
+        public_key,
     })
 }
 
@@ -311,7 +456,6 @@ fn role_wire(role: TrustedAgentRole) -> &'static str {
 mod tests {
     use super::*;
     use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgent};
-    use base64::prelude::*;
     use ed25519_dalek::SigningKey;
     use serde_json::json;
     use std::sync::Arc;

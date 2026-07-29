@@ -120,7 +120,9 @@ use crate::daemon::invocation::admission::principal_lifecycle::{
     ABILITY_PRINCIPAL_REVOKE_GRANT, ABILITY_PRINCIPAL_REVOKE_KEY, ABILITY_PRINCIPAL_ROTATE_KEY,
     ABILITY_PRINCIPAL_SUSPEND,
 };
-use crate::daemon::invocation::admission::register_device_pubkey::ABILITY_IDENTITY_REGISTER_PUBKEY;
+use crate::daemon::invocation::admission::register_device_pubkey::{
+    RegisterPubkeyBootstrapTuple, ABILITY_IDENTITY_REGISTER_PUBKEY,
+};
 use crate::daemon::invocation::admission::revoke_user_pubkey::ABILITY_IDENTITY_REVOKE_USER_PUBKEY;
 use crate::daemon::invocation::admission::target_gate::TargetGate;
 use crate::daemon::invocation::bidi::bidi_dispatcher::{
@@ -954,7 +956,7 @@ impl DaemonInvocationService {
         if route == DaemonUnaryRoute::FederationJoin
             && FederationJoinBootstrapTuple::matches(envelope)
         {
-            let proof = crate::daemon::invocation::dispatch::daemon_route_runtime::BootstrapJoinProof::verify(
+            let proof = crate::daemon::invocation::dispatch::daemon_route_runtime::BootstrapCandidateProof::verify(
                 route, request,
             )?;
             let key_provider = self
@@ -963,6 +965,26 @@ impl DaemonInvocationService {
                 .ok_or_else(|| {
                     Status::failed_precondition(
                         "federation.join bootstrap requires the LocalRuntime admission resolver",
+                    )
+                })?
+                .bootstrap_candidate_provider();
+            return Ok(DaemonRouteIngress::Bootstrap {
+                proof,
+                key_provider,
+            });
+        }
+        if route == DaemonUnaryRoute::IdentityRegisterPubkey
+            && RegisterPubkeyBootstrapTuple::matches(envelope)
+        {
+            let proof = crate::daemon::invocation::dispatch::daemon_route_runtime::BootstrapCandidateProof::verify(
+                route, request,
+            )?;
+            let key_provider = self
+                .runtime
+                .daemon_admission_graph()
+                .ok_or_else(|| {
+                    Status::failed_precondition(
+                        "identity.register_pubkey bootstrap requires the LocalRuntime admission resolver",
                     )
                 })?
                 .bootstrap_candidate_provider();

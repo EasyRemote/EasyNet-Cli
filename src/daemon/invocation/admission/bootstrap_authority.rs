@@ -288,6 +288,7 @@ fn verify_bootstrap_resolve_key(args: &[u8], authority_ura: &str, owner_ura: &st
 /// mutation: a device cannot author another user, a device key, or an authority key.
 fn verify_bootstrap_owner_user_key(args: &[u8], owner_ura: &str) -> Option<()> {
     #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
     struct UserKeyRegistration {
         principal_ura: String,
         public_key_b64: String,
@@ -819,6 +820,38 @@ mod tests {
             Some("easynet:///r/test/authority"),
         );
         assert_eq!(rejected, BootstrapAuthorityDecision::NotApplicable);
+    }
+
+    #[test]
+    fn paired_device_user_key_bootstrap_rejects_explicit_owner_binding() {
+        let key = ed25519_dalek::SigningKey::from_bytes(&[0x12; 32]);
+        let args = serde_json::to_vec(&serde_json::json!({
+            "principal_ura": "easynet:///r/test/user/alice",
+            "public_key_b64": BASE64_STANDARD.encode(key.verifying_key().to_bytes()),
+            "role": "user",
+            "principal_owner_ura": "easynet:///r/test/user/alice",
+        }))
+        .expect("args");
+        let subject = crate::core::ura::owner_ability_ura(
+            "easynet:///r/test/authority",
+            ABILITY_IDENTITY_REGISTER_PUBKEY,
+        )
+        .expect("subject");
+        let got = BootstrapAuthorityVerifier::verify(
+            &envelope(
+                "easynet:///r/test/device/dev-1",
+                "easynet:///r/test/authority",
+                &subject,
+            ),
+            ABILITY_IDENTITY_REGISTER_PUBKEY,
+            AccessAction::Manage,
+            &args,
+            &anchor(),
+            TrustedAgentRole::Device,
+            Some("easynet:///r/test/authority"),
+        );
+
+        assert_eq!(got, BootstrapAuthorityDecision::NotApplicable);
     }
 
     #[test]

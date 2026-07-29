@@ -74,7 +74,9 @@ use crate::daemon::invocation::admission::policy_gate::{
 use crate::daemon::invocation::admission::principal_lifecycle::{
     PrincipalAdmissionState, PrincipalLifecycleReader,
 };
-use crate::daemon::invocation::admission::register_device_pubkey::ABILITY_IDENTITY_REGISTER_PUBKEY;
+use crate::daemon::invocation::admission::register_device_pubkey::{
+    verify_user_register_pubkey_bootstrap_claim, ABILITY_IDENTITY_REGISTER_PUBKEY,
+};
 use crate::daemon::invocation::admission::revoke_user_pubkey::ABILITY_IDENTITY_REVOKE_USER_PUBKEY;
 use crate::daemon::invocation::admission::usage_quota::{
     QuotaDenyReason, QuotaReservation, SharedUsageQuotaGate,
@@ -1034,7 +1036,7 @@ impl AdmissionFacade {
                 );
             }
             RuntimeAdmissionIngress::BootstrapCandidate => {
-                Self::verify_bootstrap_federation_join(
+                Self::verify_bootstrap_candidate(
                     &input.envelope,
                     &input.ability,
                     &input.arguments,
@@ -1384,20 +1386,27 @@ impl AdmissionFacade {
         }
     }
 
-    fn verify_bootstrap_federation_join(
+    fn verify_bootstrap_candidate(
         envelope: &Envelope,
         ability: &str,
         args: &[u8],
     ) -> Result<(), Status> {
-        if ability != ABILITY_FEDERATION_JOIN {
-            return Err(permission_denied_unknown_caller(
+        match ability {
+            ABILITY_FEDERATION_JOIN => Self::verify_bootstrap_federation_join(envelope, args),
+            ABILITY_IDENTITY_REGISTER_PUBKEY => {
+                Self::verify_bootstrap_identity_register_pubkey(envelope, args)
+            }
+            _ => Err(permission_denied_unknown_caller(
                 envelope
                     .caller
                     .as_ref()
                     .map(|caller| caller.ura.as_str())
                     .unwrap_or("<missing>"),
-            ));
+            )),
         }
+    }
+
+    fn verify_bootstrap_federation_join(envelope: &Envelope, args: &[u8]) -> Result<(), Status> {
         let caller = caller_ura_required(envelope)?;
         let callee_ura = envelope
             .callee
@@ -1475,6 +1484,13 @@ impl AdmissionFacade {
             )));
         }
         Ok(())
+    }
+
+    fn verify_bootstrap_identity_register_pubkey(
+        envelope: &Envelope,
+        args: &[u8],
+    ) -> Result<(), Status> {
+        verify_user_register_pubkey_bootstrap_claim(envelope, args).map(|_| ())
     }
 
     fn accepts_local_self_caller(&self, caller_ura: &str) -> bool {

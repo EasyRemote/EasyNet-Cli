@@ -149,12 +149,12 @@ struct BootstrapCandidateState {
     candidates: HashMap<String, (u64, VerifyingKey)>,
 }
 
-/// Bounded, request-scoped key source for the first signed federation join.
+/// Bounded, request-scoped key source for first-key bootstrap invocations.
 ///
-/// A candidate can be installed only for a canonical membership Device URA
-/// after the federation.join bootstrap proof has bound that URA to the
-/// presented public key. The returned lease removes it after canonical Axon
-/// admission has verified the descriptor-bound caller signature.
+/// A candidate can be installed only after an exact-route bootstrap proof has
+/// bound the caller URA to the presented public key and immutable payload.
+/// The returned lease removes it after canonical Axon admission has verified
+/// the descriptor-bound caller signature.
 #[derive(Default)]
 pub(crate) struct BootstrapCandidateKeyProvider {
     next_lease_id: AtomicU64,
@@ -172,9 +172,12 @@ impl BootstrapCandidateKeyProvider {
                 "bootstrap_candidate_key_caller_ura_invalid:{error}"
             ))
         })?;
-        if parsed.kind != crate::core::ura::URAKind::Device {
+        if !matches!(
+            parsed.kind,
+            crate::core::ura::URAKind::Device | crate::core::ura::URAKind::User
+        ) {
             return Err(AxonError::permission_denied(
-                "bootstrap_candidate_key_requires_device_caller",
+                "bootstrap_candidate_key_requires_device_or_user_caller",
             ));
         }
         let lease_id = self.next_lease_id.fetch_add(1, Ordering::Relaxed);
@@ -457,13 +460,19 @@ mod tests {
     }
 
     #[test]
-    fn bootstrap_candidate_key_lease_requires_device_caller_and_removes_on_drop() {
+    fn bootstrap_candidate_key_lease_requires_device_or_user_caller_and_removes_on_drop() {
         let provider = Arc::new(BootstrapCandidateKeyProvider::default());
         let key = SigningKey::from_bytes(&[7; 32]).verifying_key();
-        let caller = "easynet:///r/test/device/dev-a";
-        let lease = provider.lease_candidate(&caller, key).unwrap();
-        assert_eq!(provider.resolve(&caller).unwrap(), key);
-        drop(lease);
-        assert!(provider.resolve(&caller).is_err());
+        for caller in [
+            "easynet:///r/test/device/dev-a",
+            "easynet:///r/test/user/user-a",
+        ] {
+            let lease = provider.lease_candidate(caller, key).unwrap();
+            assert_eq!(provider.resolve(caller).unwrap(), key);
+            drop(lease);
+            assert!(provider.resolve(caller).is_err());
+        }
+        let agent = "easynet:///r/test/agent/user-a.worker";
+        assert!(provider.lease_candidate(agent, key).is_err());
     }
 }
