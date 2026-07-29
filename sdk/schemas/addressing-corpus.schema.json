@@ -28,10 +28,20 @@
       "additionalProperties": false,
       "required": ["raw", "components"],
       "properties": {
-        "raw": {"type": "string", "pattern": "^easynet:///r/.+@[0-9]+\\.[0-9]+\\.[0-9]+$"},
+        "raw": {
+          "type": "string",
+          "pattern": "^easynet:///r/.+@[0-9]+\\.[0-9]+\\.[0-9]+#[0-9a-f]{64}![a-z_]+$"
+        },
         "components": {
           "type": "object",
-          "required": ["ability_ura", "descriptor_version", "owner_ura", "public_name"]
+          "required": [
+            "ability_ura",
+            "descriptor_version",
+            "descriptor_hash",
+            "action",
+            "owner_ura",
+            "public_name"
+          ]
         }
       }
     },
