@@ -2,16 +2,16 @@
 // ===========
 //
 // File: src/cli/commands/invoke.rs
-// Description: `easynet ability invoke <ability-ura> [--args JSON] [--timeout SECS]`.
+// Description: `easynet ability invoke <ability-ura> --subject URA
+//              --nonce-hex HEX --causal-* [--args JSON] [--timeout SECS]`.
 //
 // Routing model after the AXON-RFC-001 P1.5 federation cull:
 //
-//   easynet ability invoke <ability-ura>        # Local Axon dispatch.
-//                                               # Derives the daemon
-//                                               # registry key from the
-//                                               # canonical Ability URA.
+//   easynet ability invoke <ability-ura>        # Local Axon dispatch with an
+//     --subject S --nonce-hex N --causal-root   # explicit public tuple.
 //
 //   easynet ability invoke <ability-ura> --node N
+//     --subject S --nonce-hex N --causal-root
 //                                               # Remote dispatch. The
 //                                               # ability argument is already
 //                                               # a canonical Ability URA; the

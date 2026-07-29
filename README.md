@@ -2,10 +2,14 @@
   <a href="https://github.com/EasyRemote"><img src="https://avatars.githubusercontent.com/u/213722898?s=200&v=4" width="200" height="200" alt="EasyRemote"></a>
 </p>
 
-<h1 align="center">easynet</h1>
+<h1 align="center">EasyNet Runtime</h1>
 
 <p align="center">
-  Open-world capability runtime for AI-era execution: publish, invoke, audit, and orchestrate abilities across owners, devices, models, tools, and services.
+  Open capability runtime for AI agents: publish, invoke, audit, and orchestrate governed abilities across owners, devices, models, tools, and services.
+</p>
+
+<p align="center">
+  EasyNet is not a VPN, an ISP, or a generic networking tool. It is the runtime layer that turns private capabilities into addressable, policy-governed, receipt-backed network objects.
 </p>
 
 <p align="center">
@@ -20,26 +24,27 @@
 
 ---
 
-## Why EasyNet exists
+## Why EasyNet Runtime exists
 
 The next software runtime is no longer made only of deterministic APIs,
 database operators, and scheduled jobs. Production workflows now call LLMs,
 agents, MCP tools, external SaaS services, private models, local devices, and
 human-in-the-loop systems. These capabilities are powerful, but they are
-scattered across owners, machines, networks, and trust boundaries.
+scattered across owners, machines, accounts, networks, and trust boundaries.
 
 Today, a capability usually lives behind one framework, one API key, one
 server, or one agent session. It has no stable network identity, no portable
 execution contract, no verifiable receipt, and no durable execution history
 that can be optimized over time.
 
-EasyNet gives every capability a network address and an execution contract.
+EasyNet Runtime gives every capability a routable identity, a governed
+execution contract, and a receipt-backed invocation path.
 
 A capability can stay where it belongs: on the owner's machine, inside the
 owner's model runtime, behind the owner's SaaS account, or attached to the
-owner's device. Other software can discover and invoke it through a signed,
-auditable protocol call. The caller receives a result and a receipt, not the
-underlying model, code, credential, or data source.
+owner's device. Other software can discover and invoke it through a complete,
+signed, auditable protocol call. The caller receives a result and a receipt,
+not the underlying model, code, credential, or data source.
 
 > A research workflow needs protein-folding inference but has no local GPU. A
 > remote owner publishes a fold capability from their own GPU box. The workflow
@@ -47,7 +52,7 @@ underlying model, code, credential, or data source.
 > keeps a receipt for audit and settlement. The model weights never leave the
 > owner's machine.
 
-**In open-world execution, the missing layer is capability management:**
+**In open-world agent execution, the missing layer is a capability runtime:**
 
 | Problem | EasyNet's answer |
 |---|---|
@@ -57,13 +62,28 @@ underlying model, code, credential, or data source.
 | Similar workflows repeatedly re-plan from scratch | Execution traces become reusable optimization material |
 | Private models and devices sit behind NAT or local trust boundaries | The capability stays with its owner; EasyNet routes the call |
 
-**One line:** EasyNet is the open-world capability network: a protocol and
-runtime stack for publishing, invoking, auditing, and eventually optimizing
-AI-era capabilities across ownership and network boundaries.
+**One line:** EasyNet Runtime is the open capability runtime for AI agents:
+publish governed abilities, invoke them across ownership boundaries, and close
+every execution with a verifiable receipt.
+
+## Core hypothesis
+
+If AI remains chat, EasyNet is unnecessary.
+
+EasyNet exists for the moment AI becomes an actor across resources it does not
+own: private devices, private models, local context, SaaS accounts, enterprise
+networks, and human-controlled systems.
+
+At that boundary, tool access is not enough. The system must know who called,
+which capability was invoked, what subject it acted on, which authority admitted
+it, what actually executed, and which receipt closes the action.
+
+EasyNet turns that boundary into a runtime model: Ability, Invocation,
+Admission, and Receipt.
 
 ## What is this?
 
-`easynet` is the device runtime and operator CLI for EasyNet. It starts
+`easynet` is the operator CLI for EasyNet Runtime. It starts
 `easynet-daemon`, joins an Axon Hub, publishes local capabilities as governed
 Abilities, dispatches complete signed Invocations, and records execution facts
 as receipts.
@@ -74,30 +94,30 @@ as receipts.
    product runtime that owns device lifecycle, local policy, plugins, ability
    registration, dispatch, and receipt projection.
 
-2. **CLI**: `easynet devices`, `easynet exec gpu-rig -- nvidia-smi`,
-   `easynet deploy ./skill --to edge-cam`, and `easynet invoke ...` provide
-   direct control over devices and abilities.
+2. **CLI**: `easynet device ...`, `easynet ability ...`,
+   `easynet plugin ...`, and `easynet invocation ...` expose the operator
+   surface for devices, abilities, plugins, and audit records.
 
 3. **EAL compiler**: EAL (EasyNet Ability Language) is a DSL for distributed
    ability orchestration. Write a `.eal` file, and the compiler infers a
    dependency DAG from variable references, partitions it into parallel phases,
    and compiles it to **Mission IR v2**, a serializable execution plan.
 
-4. **MCP server**: `easynet mcp-server` exposes Hub-level tools over stdio, so
-   local AI development environments can discover devices, deploy abilities,
-   run commands, and orchestrate missions without leaving the IDE.
+4. **MCP server**: `easynet mcp serve` exposes the local runtime over stdio so
+   a co-located AI development environment can call governed EasyNet abilities
+   through the daemon.
 
 **Why this matters:** EasyNet does not treat a capability as a local tool
-hidden inside one agent session. It treats the capability as a network object:
-addressable by URA, invoked through Axon, governed by daemon policy, and
-closed by a receipt.
+hidden inside one agent session. It treats the capability as a runtime object:
+addressable by URA, invoked through Axon, governed by daemon policy, and closed
+by a receipt.
 
 ## System layers
 
 | Layer | Repository | Responsibility |
 |---|---|---|
 | Protocol | [EasyNet-Axon](https://github.com/EasyRemote/EasyNet-Axon) | URA, Ability, Invocation, Receipt, stream/bidi, runtime semantics, SDK conformance |
-| Runtime | [EasyNet-Cli](https://github.com/EasyRemote/EasyNet-Cli) | `easynet-daemon`, device lifecycle, plugins, local execution, EAL/Mission, CLI, MCP |
+| Runtime | [EasyNet-Cli](https://github.com/EasyRemote/EasyNet-Cli) | EasyNet Runtime: `easynet-daemon`, device lifecycle, plugins, local execution, EAL/Mission, CLI, MCP |
 | Product | [EasyNet](https://github.com/EasyRemote/EasyNet) | Web platform, federation backend, operator console, dashboards, product workflows |
 | Optimization | IntentDB (research direction) | Learn reusable hybrid execution plans from receipt-backed traces |
 
@@ -121,77 +141,64 @@ cargo install --path .
 
 > **Note:** `easynet runtime start` launches `easynet-daemon`, which embeds the Axon Invocation runtime and joins the Hub. Product/device paths should target the daemon, not a standalone Axon reference runtime.
 
-## Quick Start
-
-### Join a Hub
+## Operator flow
 
 ```bash
-easynet runtime start --hub axon://hub.easynet.run:50084 --tenant myteam --foreground
-# ✓ easynet-daemon started
-# ✓ Joined hub.easynet.run as alice-macbook
+easynet login
+easynet device join <pairing-token>
+easynet runtime start
+easynet status
+easynet device list
+easynet ability list
 ```
 
-### Explore the fleet
+Invoke a local ability by canonical Ability URA. Public ingress requires the
+caller-controlled tuple fields; the CLI does not invent the subject, nonce, or
+causal placement:
 
 ```bash
-easynet devices
-# ┌───┬──────────────┬─────────┬──────────────┬──────────┐
-# │   │ NODE         │ STATE   │ OS           │ TRUST    │
-# ├───┼──────────────┼─────────┼──────────────┼──────────┤
-# │ ● │ home-server  │ HEALTHY │ linux/amd64  │ TRUSTED  │
-# │ ● │ gpu-rig      │ HEALTHY │ linux/arm64  │ TRUSTED  │
-# │ ○ │ rpi-lab      │ OFFLINE │ linux/arm    │ PROBATION│
-# └───┴──────────────┴─────────┴──────────────┴──────────┘
-
-easynet abilities
-# ┌─────────────────┬──────────────┬─────────┬────────┐
-# │ ABILITY         │ NODE         │ VERSION │ STATUS │
-# ├─────────────────┼──────────────┼─────────┼────────┤
-# │ photo.capture   │ edge-cam-01  │ 1.2.0   │ ACTIVE │
-# │ model.inference │ gpu-rig      │ 3.1.0   │ ACTIVE │
-# └─────────────────┴──────────────┴─────────┴────────┘
+easynet ability invoke <ability-ura> \
+  --subject <resource-ura> \
+  --nonce-hex <32-hex-chars> \
+  --causal-root \
+  --args '{"key":"value"}'
 ```
 
-### Remote execution
+Remote invocation uses the same tuple contract and additionally pins the
+target runtime owner:
 
 ```bash
-easynet exec gpu-rig -- nvidia-smi --query-gpu=name,memory.used --format=csv
-# ┌ tunnel via hub.easynet.run (E2E encrypted)
-# name, memory.used [MiB]
-# NVIDIA A100-SXM4-80GB, 12453 MiB
-# ✓ done
+easynet ability invoke <ability-ura> \
+  --node <device-ura> \
+  --subject <resource-ura> \
+  --nonce-hex <32-hex-chars> \
+  --causal-root \
+  --args '{"key":"value"}'
 ```
 
-### Deploy an ability
+Run an ad-hoc command through the ability surface:
 
 ```bash
-easynet deploy ./skills/photo-capture --to edge-cam-01
-#   publishing photo.capture@1.2.0 ... ✓
-#   installed (install_id: inst-7x8k)
-# ✓ activated — photo.capture is live
+easynet ability exec <node-id> -- uname -a
 ```
 
-### Run an EAL mission
+Create and install a local plugin package:
 
 ```bash
-easynet mission run examples/daily-report.eal
-# mission: daily-report (6 steps, 4 nodes, 3 phases)
-#
-# phase 0 (parallel):
-#   [1/6] photo.capture      edge-cam-01    ✓ 1.2s  → $photo
-#   [2/6] config.fetch       coordinator    ✓ 0.3s  → $config
-#   [3/6] metrics.ping       monitor        ✓ 0.1s
-#
-# phase 1:
-#   [4/6] model.inference    gpu-rig        ✓ 3.8s  → $result  (← $photo, $config)
-#
-# phase 2:
-#   [5/6] data.collect       home-server    ✓ 0.9s  → $report  (← $result)
-#
-# ✓ Mission completed — 6.3s across 4 nodes (3 phases)
+easynet plugin init ./hello-plugin --language python
+easynet plugin install ./hello-plugin
+easynet plugin status <package-id>
 ```
 
-## EAL (EasyNet Ability Language)
+Expose the local runtime to an MCP-capable client:
+
+```bash
+easynet mcp status
+easynet mcp install codex --name easynet --tenant myteam
+easynet mcp serve --tenant myteam
+```
+
+## EAL
 
 EAL is a DSL for distributed ability orchestration. It separates **what to execute** from **how to schedule it** — you write the data flow, the compiler figures out the parallelism.
 
@@ -221,137 +228,37 @@ mission "daily-report" {
 }
 ```
 
-### Compiler pipeline
-
-```
-.eal source → Lexer → Parser → Analyzer → Planner → Mission IR v2 → Interpreter
-```
-
-| Stage | Responsibility |
-|-------|---------------|
-| **Lexer** | Tokenizes keywords, literals, identifiers, comments |
-| **Parser** | Recursive descent → `EalProgram` AST |
-| **Analyzer** | Symbol table, VarRef validation, cycle detection (DFS), retry policy enforcement |
-| **Planner** | Topological layering → phase partitioning. Dependencies **inferred** from variable references |
-| **IR** | Mission IR v2 — serializable JSON with `input_refs` + `output_binding` per step |
-| **Interpreter** | Parallel dispatch (`std::thread::scope`), retry with exponential backoff, structured `ExecutionTrace` |
-
-### Key design decisions
-
-- **Dependencies are inferred, not declared.** Write `input = photo.output` and the compiler builds the DAG. No `depends_on` arrays.
-- **Phase partitioning is optimal.** Steps land in the earliest possible phase where all dependencies are resolved. Independent steps always run in parallel.
-- **Mission IR v2 is the contract.** The IR is serializable, inspectable (`--emit-ir`), and backend-agnostic. Today it runs on a client-side interpreter; tomorrow on server-side MissionControl v2.
-- **Retry is deterministic.** Exponential backoff with SHA-256-based jitter seeded by `(step_id, attempt)` — reproducible across runs.
-- **Every execution produces an audit trail.** `ExecutionTrace` captures per-step timestamps, result SHA-256 hashes, retry history, and phase structure. Output via `--trace`.
-
-### Inspection
+Compile or run an EAL mission:
 
 ```bash
-# Compile to IR without executing
-easynet mission run examples/diamond.eal --emit-ir
-
-# Execute with full audit trace
+easynet mission compile examples/diamond.eal --emit-ir
 easynet mission run examples/daily-report.eal --trace
 ```
-
-## Language Layering
-
-```
-┌──────────────────────────────────────────────┐
-│  AAL (Agent Assembly Language)               │  future — agent behavior
-│  goals, planning, memory, decisions          │
-├──────────────────────────────────────────────┤
-│  EAL (EasyNet Ability Language)              │  this project
-│  call, let, data flow, failure policy        │
-│  compiles to Mission IR v2                   │
-├──────────────────────────────────────────────┤
-│  Mission IR v2                               │  serializable execution plan
-│  steps + input_refs + output_binding         │
-├──────────┬───────────────────────────────────┤
-│ Client   │  MissionControl v2 (future)       │
-│ Interp.  │  server-side, stateful,           │
-│ (current)│  checkpoint, resume               │
-├──────────┴───────────────────────────────────┤
-│  Axon Runtime + Federation + Hub             │  existing infrastructure
-└──────────────────────────────────────────────┘
-```
-
-EAL describes **distributed ability execution**. AAL (future) will describe **agent behavior** — goals, planning, memory — and emit EAL programs as its execution substrate.
-
-## MCP Server
-
-`easynet mcp-server` runs a Hub-level MCP server on stdio. Configure Claude Code:
-
-```json
-{
-  "mcpServers": {
-    "easynet": {
-      "command": "easynet",
-      "args": ["mcp-server", "--tenant", "myteam"]
-    }
-  }
-}
-```
-
-### Install for Claude / Codex
-
-Instead of editing config by hand, use:
-
-```bash
-# Claude Code: updates ~/.claude/settings.json
-easynet mcp-install claude --name easynet --tenant myteam
-
-# Bind a server to a single device (node_id); run twice for two devices/agents
-easynet mcp-install claude --name easynet-edge-a --tenant myteam --bound-node edge-a --agent agent-a
-easynet mcp-install claude --name easynet-edge-b --tenant myteam --bound-node edge-b --agent agent-b
-```
-
-### Available tools
-
-| Tool | Description |
-|------|------------|
-| `hub_status` | Hub connection, node/ability counts |
-| `list_devices` | All devices across federation |
-| `get_device_detail` | Device info + installed abilities |
-| `list_all_abilities` | Abilities across all nodes |
-| `search_abilities` | Find by name pattern |
-| `list_a2a_agents` | List A2A agents in tenant |
-| `get_a2a_agent_card` | Fetch A2A agent card |
-| `send_a2a_task` | Send an A2A skill task to an agent |
-| `deploy_ability` | Publish → install → activate pipeline |
-| `execute_command` | One-shot command on remote device |
-| `invoke_ability` | Invoke ability on any federated node |
-| `run_mission` | Compile + execute EAL program |
-| `manage_device` | Drain / disconnect device |
-| `uninstall_ability` | Remove ability from device |
 
 ## CLI Reference
 
 ```
-easynet runtime start   --hub <endpoint> [--tenant T] [--label L] [--token T] [--foreground]
-easynet runtime stop
+easynet login
+easynet device join <pairing-token>
+easynet runtime start [--hub ENDPOINT] [--tenant T] [--label L] [--foreground]
+easynet runtime stop | status | logs
 easynet status
-easynet devices  [--state online|offline] [--format table|json]
-easynet abilities [--node N] [--format table|json]
-easynet exec     <node> -- <command...>
-easynet deploy   <path> --to <node>
-easynet invoke   <node> <ability> [--args JSON]
-easynet mission  run <file.eal> [--emit-ir] [--trace]
-easynet mcp-server [--endpoint URL] [--tenant T] [--bound-node N] [--agent A]
-easynet mcp-install <claude|codex> [--name NAME] [--tenant T] [--bound-node N] [--agent A]
+easynet device list | show <node-id> | remove <node-id>
+easynet ability list | search <intent> | show <ability-ura>
+easynet ability deploy <path> --node <node-id>
+easynet ability invoke <ability-ura> --subject <resource-ura> --nonce-hex <32-hex> --causal-root [--args JSON]
+easynet ability invoke <ability-ura> --node <device-ura> --subject <resource-ura> --nonce-hex <32-hex> --causal-root [--args JSON]
+easynet ability stream <ability-ura> [--args JSON]
+easynet ability bidi <ability-ura> [--args JSON]
+easynet ability exec <node-id> -- <command...>
+easynet plugin init <path> [--language python|node|go|rust|java]
+easynet plugin install <path> | update <path> | remove <package-id> <version>
+easynet mission compile <file.eal> [--emit-ir]
+easynet mission run <file.eal> [--trace]
+easynet mission list | show <run-id> | cancel <run-id>
+easynet mcp status | install <claude|codex> | serve
+easynet invocation list | show <request-id> | trace <request-id>
 ```
-
-## Examples
-
-See [`examples/`](./examples/) for EAL programs:
-
-| File | Pattern | Phases |
-|------|---------|--------|
-| `hello.eal` | Single step | 1 |
-| `parallel.eal` | Independent steps | 1 (all parallel) |
-| `pipeline.eal` | Linear chain A → B → C | 3 (fully sequential) |
-| `diamond.eal` | Diamond: A → B, A → C, B+C → D | 3 (B∥C in phase 1) |
-| `daily-report.eal` | Full multi-node orchestration | 3 (4 parallel in phase 0) |
 
 ## License
 
