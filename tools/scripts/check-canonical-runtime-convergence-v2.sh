@@ -10496,10 +10496,14 @@ helper_end = text.find("\nasync fn advertise_hosted_agent_entry", helper_start)
 helper_body = text[helper_start : helper_end if helper_end >= 0 else len(text)]
 for required in (
     "load_credentials_optional()",
-    "pages_user_from_env_or_credentials(",
-    "no user-root Pages identity is bound",
+    "runtime_user_binding()",
+    "RuntimeUserBinding::Bound",
+    "RuntimeUserBinding::Unbound",
+    "parse_ura(&user_ura)",
+    "URAKind::User",
+    ".user_id()",
     "SessionError::HostedAgentPreludeFailed",
-    "project username for hosted-agent owner projection",
+    "project runtime user binding for hosted-agent owner projection",
 ):
     if required not in helper_body:
         raise SystemExit(f"session_prelude_hosted_agent_owner_projector_missing:{required}")
@@ -10511,9 +10515,8 @@ for retired in (
     if retired in helper_body:
         raise SystemExit(f"session_prelude_hosted_agent_owner_projector_not_shared:{retired}")
 for test in (
-    "hosted_agent_owner_segment_accepts_explicit_dev_override",
     "hosted_agent_owner_segment_reads_valid_paired_credentials",
-    "hosted_agent_owner_segment_rejects_federation_native_credentials_without_username",
+    "hosted_agent_owner_segment_rejects_federation_native_credentials_without_user_binding",
 ):
     if test not in text:
         raise SystemExit(f"missing_session_prelude_hosted_agent_owner_test:{test}")

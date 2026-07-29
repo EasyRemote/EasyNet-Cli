@@ -9,7 +9,6 @@ use super::heartbeat::spawn_federation_heartbeat;
 use super::supervisor::{DeviceSessionPhase, PreludeStep, SessionPhaseTracker};
 use super::tasks::AbortOnDrop;
 use super::SessionError;
-use crate::daemon::ability::builtins::resources::pages::identity::pages_user_from_env_or_credentials;
 use crate::daemon::ability::descriptors::AbilityDescriptor;
 use crate::daemon::federation::read_model::authority_published_abilities::AuthorityPublishedAbilityStore;
 use crate::daemon::identity::self_identity::CanonicalSigner;
@@ -309,13 +308,6 @@ async fn run_hosted_agent_advertise_prelude(
         );
         return Ok(());
     }
-    // The agent owner-prefix is the USERNAME slug (`<username>.<agent>`, e.g.
-    // `dev.pages`), NOT the user UUID. This is the §15.1-3 dual grammar: subject
-    // URAs anchor on the stable UUID, but owner-prefixed agent/resource URAs keep
-    // the username slug. The backend resolves these owners via
-    // `svc.UsernameForUID` (username), so advertising under the UUID
-    // (`<uuid>.pages`) lands a directory entry the resolver never queries →
-    // `namespace.resolve NXDOMAIN: owner is not online` on `project_list`/etc.
     let user_segment = resolve_hosted_agent_user_segment(hub_endpoint)?;
 
     let hosted_identity =
@@ -379,22 +371,60 @@ async fn run_hosted_agent_advertise_prelude(
 }
 
 fn resolve_hosted_agent_user_segment(hub_endpoint: &str) -> Result<String, SessionError> {
-    let credentials =
-        crate::daemon::persistence::config::load_credentials_optional().map_err(|error| {
-            SessionError::HostedAgentPreludeFailed {
+    let Some(credentials) = crate::daemon::persistence::config::load_credentials_optional()
+        .map_err(|error| SessionError::HostedAgentPreludeFailed {
+            endpoint: hub_endpoint.to_string(),
+            reason: format!("load credentials for hosted-agent owner projection: {error}"),
+        })?
+    else {
+        return Err(SessionError::HostedAgentPreludeFailed {
+            endpoint: hub_endpoint.to_string(),
+            reason: "project runtime user binding for hosted-agent owner projection: no paired credentials are available".to_string(),
+        });
+    };
+    let user_ura = match credentials.runtime_user_binding().map_err(|error| {
+        SessionError::HostedAgentPreludeFailed {
+            endpoint: hub_endpoint.to_string(),
+            reason: format!(
+                "project runtime user binding for hosted-agent owner projection: {error}"
+            ),
+        }
+    })? {
+        crate::daemon::persistence::config::RuntimeUserBinding::Bound { user_ura } => user_ura,
+        crate::daemon::persistence::config::RuntimeUserBinding::Unbound { reason } => {
+            return Err(SessionError::HostedAgentPreludeFailed {
                 endpoint: hub_endpoint.to_string(),
-                reason: format!("load credentials for hosted-agent owner projection: {error}"),
-            }
-        })?;
-    pages_user_from_env_or_credentials(credentials.as_ref())
-    .map_err(|error| SessionError::HostedAgentPreludeFailed {
-        endpoint: hub_endpoint.to_string(),
-        reason: format!("project username for hosted-agent owner projection: {error}"),
-    })?
-    .ok_or_else(|| SessionError::HostedAgentPreludeFailed {
-        endpoint: hub_endpoint.to_string(),
-        reason: "project username for hosted-agent owner projection: no user-root Pages identity is bound".to_string(),
-    })
+                reason: format!(
+                    "project runtime user binding for hosted-agent owner projection: {reason}"
+                ),
+            });
+        }
+    };
+    let parsed = crate::core::ura::parse_ura(&user_ura).map_err(|error| {
+        SessionError::HostedAgentPreludeFailed {
+            endpoint: hub_endpoint.to_string(),
+            reason: format!(
+                "project runtime user binding for hosted-agent owner projection: invalid user URA `{user_ura}`: {error}"
+            ),
+        }
+    })?;
+    if parsed.kind != crate::core::ura::URAKind::User {
+        return Err(SessionError::HostedAgentPreludeFailed {
+            endpoint: hub_endpoint.to_string(),
+            reason: format!(
+                "project runtime user binding for hosted-agent owner projection: expected User URA, got `{user_ura}`"
+            ),
+        });
+    }
+    parsed
+        .user_id()
+        .map(str::to_string)
+        .ok_or_else(|| SessionError::HostedAgentPreludeFailed {
+            endpoint: hub_endpoint.to_string(),
+            reason: format!(
+                "project runtime user binding for hosted-agent owner projection: user URA `{user_ura}` has no user id"
+            ),
+        })
 }
 
 async fn advertise_hosted_agent_entry(
@@ -1436,17 +1466,6 @@ mod tests {
     }
 
     #[test]
-    fn hosted_agent_owner_segment_accepts_explicit_dev_override() {
-        let _home = crate::cli::commands::test_support::HomeGuard::new();
-        std::env::set_var("EASYNET_PAGES_USER", " dev ");
-
-        let user_segment =
-            resolve_hosted_agent_user_segment("https://hub:50443").expect("env user segment");
-
-        assert_eq!(user_segment, "dev");
-    }
-
-    #[test]
     fn hosted_agent_owner_segment_reads_valid_paired_credentials() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
         save_credentials(&paired_credentials(Some("dev"))).expect("save credentials");
@@ -1454,17 +1473,17 @@ mod tests {
         let user_segment = resolve_hosted_agent_user_segment("https://hub:50443")
             .expect("credential user segment");
 
-        assert_eq!(user_segment, "dev");
+        assert_eq!(user_segment, "user-dev");
     }
 
     #[test]
-    fn hosted_agent_owner_segment_rejects_federation_native_credentials_without_username() {
+    fn hosted_agent_owner_segment_rejects_federation_native_credentials_without_user_binding() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
         save_credentials(&federation_native_credentials_without_user_binding())
             .expect("save federation-native device credential");
 
         let error = resolve_hosted_agent_user_segment("https://hub:50443")
-            .expect_err("missing username must fail hosted-agent prelude");
+            .expect_err("missing user binding must fail hosted-agent prelude");
 
         match error {
             crate::daemon::invocation::bidi::session_initiator::SessionError::HostedAgentPreludeFailed {
@@ -1472,10 +1491,10 @@ mod tests {
                 ..
             } => {
                 assert!(
-                    reason.contains("project username for hosted-agent owner projection"),
+                    reason.contains("project runtime user binding for hosted-agent owner projection"),
                     "{reason}"
                 );
-                assert!(reason.contains("no user-root Pages identity is bound"), "{reason}");
+                assert!(reason.contains("not bound"), "{reason}");
             }
             other => panic!("expected hosted-agent credential projection failure, got {other:?}"),
         }

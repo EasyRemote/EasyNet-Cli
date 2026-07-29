@@ -490,24 +490,20 @@ fn build_bootstrap_plan(
     creds: &config::Credentials,
 ) -> anyhow::Result<crate::daemon::ability::catalog::profiles::bootstrap::BootstrapPlan> {
     let user_id = creds.user_id()?;
-    let username = creds.username_slug()?;
-    build_bootstrap_plan_from(&creds.realm, &creds.node_id, user_id, username)
+    build_bootstrap_plan_from(&creds.realm, &creds.node_id, user_id)
 }
 
 /// Variant that takes the inputs directly. Public so `agent.rs`'s
-/// publish path can construct the plan from a `(realm, node_id,
-/// user_id, username)` tuple already in scope without re-loading
-/// credentials. `user_id` (UUID) is the immutable subject anchor for
-/// `user/` trust URAs; `username` (slug) is the owner-prefix for
-/// `agent/<username>.<id>` URAs (§15.1-3 dual grammar).
+/// publish path can construct the plan from a `(realm, node_id, user_id)`
+/// tuple already in scope without re-loading credentials. `user_id` is the
+/// immutable authority owner for both user trust URAs and hosted Agent URAs.
 pub(crate) fn build_bootstrap_plan_from(
     realm: &str,
     node_id: &str,
     user_id: &str,
-    username: &str,
 ) -> anyhow::Result<crate::daemon::ability::catalog::profiles::bootstrap::BootstrapPlan> {
     crate::daemon::ability::catalog::profiles::bootstrap::build_plan_from_registry(
-        realm, node_id, user_id, username,
+        realm, node_id, user_id,
     )
 }
 
@@ -1542,11 +1538,10 @@ mod tests {
         // for downstream Hub-tier signing — that wrapping is exactly
         // what the federation Invoke surface consumes, so the test
         // pins the wrapped form rather than the raw bare id.
-        let plan = build_bootstrap_plan_from("tenant-test", "node-test", "user-test", "alice")
+        let plan = build_bootstrap_plan_from("tenant-test", "node-test", "user-test")
             .expect("plan must build");
         assert_eq!(plan.realm, "tenant-test");
         assert_eq!(plan.user_id, "user-test");
-        assert_eq!(plan.username, "alice");
         assert_eq!(
             plan.host_device_ura,
             "easynet:///r/tenant-test/device/node-test"

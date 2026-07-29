@@ -3033,7 +3033,6 @@ fn hosted_agent_bootstrap_plan(registry: &AgentRegistry) -> anyhow::Result<Boots
     })?;
     let realm = credentials.realm.trim().to_string();
     let node_id = credentials.node_id.trim().to_string();
-    let username = credentials.username_slug()?.to_string();
     if realm.is_empty() || node_id.is_empty() {
         anyhow::bail!(
             "agent.start requires joined credentials with non-empty realm and Device node id"
@@ -3051,7 +3050,6 @@ fn hosted_agent_bootstrap_plan(registry: &AgentRegistry) -> anyhow::Result<Boots
     Ok(BootstrapPlan {
         realm,
         user_id,
-        username,
         host_device_ura,
         consent: true,
         mcp: false,
@@ -3313,7 +3311,6 @@ mod tests {
             let plan = BootstrapPlan {
                 realm: "local".to_string(),
                 user_id: "user-dev".to_string(),
-                username: "dev".to_string(),
                 host_device_ura: crate::core::ura::device_ura("local", "dev-1"),
                 consent: false,
                 mcp: false,
@@ -3864,7 +3861,7 @@ mod tests {
             )
             .unwrap();
 
-            let expected_ura = crate::core::ura::agent_ura("localhost", "dev", "anthropic");
+            let expected_ura = crate::core::ura::agent_ura("localhost", "user-dev", "anthropic");
             assert_eq!(resp["agent_ura"], json!(expected_ura));
             assert_eq!(
                 local_agents::lookup_hosted_ura(&local_agents::load().unwrap(), "llm", "anthropic"),
@@ -3989,7 +3986,7 @@ mod tests {
                     .enrolled_hot_agent_authority_root("rollback-worker"),
                 None
             );
-            let agent_ura = crate::core::ura::agent_ura("localhost", "dev", "rollback-worker");
+            let agent_ura = crate::core::ura::agent_ura("localhost", "user-dev", "rollback-worker");
             let chat_key = hosted_runtime_key(&agent_ura, "rollback-worker.chat");
             assert!(!block_on_hot_registrar(
                 fixture.runtime.has_ability(&chat_key)
@@ -4052,7 +4049,7 @@ mod tests {
         )
         .unwrap();
 
-        let expected_ura = crate::core::ura::agent_ura("localhost", "dev", "anthropic");
+        let expected_ura = crate::core::ura::agent_ura("localhost", "user-dev", "anthropic");
         assert_eq!(resp["hub_advertised"], true);
         assert_eq!(resp["hub_advertise_error"], Value::Null);
         assert_eq!(
@@ -5594,7 +5591,7 @@ mod tests {
             )
             .unwrap();
 
-            let agent_ura = crate::core::ura::agent_ura("localhost", "dev", "anthropic");
+            let agent_ura = crate::core::ura::agent_ura("localhost", "user-dev", "anthropic");
             assert_eq!(
                 local_agents::lookup_hosted_ura(&local_agents::load().unwrap(), "llm", "anthropic"),
                 Some(agent_ura.clone())
@@ -5636,7 +5633,7 @@ mod tests {
                 &ready_hot_registrar(),
             )
             .unwrap();
-            let agent_ura = crate::core::ura::agent_ura("localhost", "dev", "claude");
+            let agent_ura = crate::core::ura::agent_ura("localhost", "user-dev", "claude");
             let resp = stop_agent_handler(json!({"agent_ura": agent_ura}), &ready_hot_registrar())
                 .unwrap();
             assert_eq!(resp["ack"], true);
