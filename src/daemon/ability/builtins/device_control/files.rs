@@ -158,9 +158,6 @@ pub fn register(reg: &mut AxonAbilityCatalog) {
 // ── fs.read ──────────────────────────────────────────────────────
 
 fn handler_read(args: Value) -> Result<Value> {
-    let resolved = filesystem::resolve_filesystem_path(&args, FilesystemResourceCapability::Read)?;
-    let path = resolved.local_path.as_path();
-    let path_label = resolved.display_path.as_str();
     let max_bytes = args
         .get("max_bytes")
         .and_then(Value::as_u64)
@@ -174,6 +171,11 @@ fn handler_read(args: Value) -> Result<Value> {
         .get("encoding")
         .and_then(Value::as_str)
         .unwrap_or("binary");
+    if !matches!(encoding, "binary" | "utf8") {
+        return Err(anyhow!(
+            "fs.read: unknown encoding {encoding:?}; expected \"binary\" or \"utf8\""
+        ));
+    }
 
     // Optional line-mode parameters. Both default to "no
     // line-mode" (use byte cap only). When either is set we
@@ -188,6 +190,10 @@ fn handler_read(args: Value) -> Result<Value> {
             "fs.read: offset_lines/limit_lines require encoding=\"utf8\""
         ));
     }
+
+    let resolved = filesystem::resolve_filesystem_path(&args, FilesystemResourceCapability::Read)?;
+    let path = resolved.local_path.as_path();
+    let path_label = resolved.display_path.as_str();
 
     if is_blocked_read_path(path) {
         return Err(anyhow!(
@@ -236,11 +242,7 @@ fn handler_read(args: Value) -> Result<Value> {
             }
         }
         "binary" => json!(BASE64_STANDARD.encode(&content)),
-        other => {
-            return Err(anyhow!(
-                "fs.read: unknown encoding {other:?}; expected \"binary\" or \"utf8\""
-            ));
-        }
+        _ => unreachable!("fs.read encoding was validated before filesystem resolution"),
     };
 
     Ok(json!({
@@ -910,17 +912,11 @@ mod tests {
 
     #[test]
     fn read_rejects_unknown_encoding() {
-        let dir = temp_dir();
-        let path = dir.join("x.txt");
-        std::fs::write(&path, "x").unwrap();
-
         let err = handler_read(json!({
-            "resource_ref": local_ref(&path, FilesystemResourceCapability::Read),
             "encoding": "rot13",
         }))
         .unwrap_err();
         assert!(err.to_string().contains("unknown encoding"));
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     // ─── fs.read hardening (slice 10a) ───────────────────────

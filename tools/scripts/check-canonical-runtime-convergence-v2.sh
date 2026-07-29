@@ -10299,27 +10299,37 @@ PY
 check_admission_authority_raw_wire_strict_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local facade="$cli_root/src/daemon/invocation/admission/admission_facade.rs"
+  local authority_metadata="$cli_root/src/daemon/invocation/admission/authority_metadata.rs"
   local authority="$cli_root/src/daemon/ability/authority/mod.rs"
   [[ -f "$facade" ]] || fail "admission facade source is missing: ${facade#$cli_root/}"
+  [[ -f "$authority_metadata" ]] || fail "authority metadata source is missing: ${authority_metadata#$cli_root/}"
   [[ -f "$authority" ]] || fail "authority source is missing: ${authority#$cli_root/}"
 
-  "$PYTHON_BIN" - "$facade" "$authority" <<'PY'
+  "$PYTHON_BIN" - "$facade" "$authority_metadata" "$authority" <<'PY'
 import re
 import sys
 from pathlib import Path
 
 text = Path(sys.argv[1]).read_text(encoding="utf-8")
-authority = Path(sys.argv[2]).read_text(encoding="utf-8")
+metadata = Path(sys.argv[2]).read_text(encoding="utf-8")
+authority = Path(sys.argv[3]).read_text(encoding="utf-8")
 
-for struct_name in ("DelegationProofRaw", "SessionAuthorityRaw"):
+for retired in ("DelegationProofRaw", "SessionAuthorityRaw"):
+    if re.search(rf"\bstruct {retired}\b", text):
+        raise SystemExit(f"admission_authority_raw_wire_strict:duplicate_raw_wire:{retired}")
+
+for struct_name in ("RawDelegationAuthorityWire", "RawSessionAuthorityWire"):
     match = re.search(
         rf"struct {struct_name} \{{(?P<body>.*?)\n\}}",
-        text,
+        metadata,
         re.S,
     )
     if match is None:
         raise SystemExit(f"admission_authority_raw_wire_strict:missing:{struct_name}")
+    prefix = metadata[max(0, match.start() - 160):match.start()]
     body = match.group("body")
+    if "deny_unknown_fields" not in prefix:
+        raise SystemExit(f"admission_authority_raw_wire_strict:missing_deny_unknown_fields:{struct_name}")
     if "#[serde(default)]" in body:
         raise SystemExit(f"admission_authority_raw_wire_strict:serde_default_retired:{struct_name}")
     for required in ("payload:", "signature:"):
@@ -10327,7 +10337,26 @@ for struct_name in ("DelegationProofRaw", "SessionAuthorityRaw"):
             raise SystemExit(f"admission_authority_raw_wire_strict:field_missing:{struct_name}:{required}")
 
 for required in (
+    "decode_delegation_authority_wire(",
+    "decode_session_authority_wire(",
+    "delegation authority JSON parse failed",
+    "session authority JSON parse failed",
+    "delegation authority payload parse failed",
+    "session authority payload parse failed",
+):
+    if required not in metadata:
+        raise SystemExit(f"admission_authority_raw_wire_strict:decoder_missing:{required}")
+
+for required in (
+    "authority_metadata::decode_delegation_authority_wire(raw_proof)",
+    "authority_metadata::decode_session_authority_wire(raw_authority)",
+):
+    if required not in text:
+        raise SystemExit(f"admission_authority_raw_wire_strict:facade_decoder_missing:{required}")
+
+for required in (
     "admission_authority_raw_wire_requires_payload_and_signature",
+    "assert_raw_authority_wire_unknown_field_error",
     "missing raw fields must not be reinterpreted as payload/signature defaults",
     "parse_and_verify_delegation_proof(",
     "parse_and_verify_session_authority(",
@@ -26616,6 +26645,22 @@ struct SessionAuthorityRaw {
 fn parse_and_verify_delegation_proof() {}
 fn parse_and_verify_session_authority() {}
 fn admission_authority_raw_wire_requires_payload_and_signature() {}
+EOF
+  cat >"$tmp/admission-authority-raw-default-legacy/src/daemon/invocation/admission/authority_metadata.rs" <<'EOF'
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawDelegationAuthorityWire {
+    payload: serde_json::Value,
+    signature: String,
+}
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawSessionAuthorityWire {
+    payload: serde_json::Value,
+    signature: String,
+}
+fn decode_delegation_authority_wire() {}
+fn decode_session_authority_wire() {}
 EOF
   if ( check_admission_authority_raw_wire_strict_contract "$tmp/admission-authority-raw-default-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected admission authority raw wire default gate to fail"

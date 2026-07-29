@@ -3422,7 +3422,8 @@ impl CanonicalCancellationCommandSubmitter for RuntimeCancellationCommandSubmitt
 }
 
 #[cfg(feature = "axon-pb")]
-#[derive(serde::Deserialize)]
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ProviderCancellationAcknowledgement {
     accepted: bool,
 }
@@ -6698,6 +6699,21 @@ mod tests {
                 "non-canonical terminal state must fail closed: {state}"
             );
         }
+    }
+
+    #[test]
+    fn provider_cancellation_acknowledgement_rejects_unknown_fields() {
+        let error =
+            serde_json::from_value::<ProviderCancellationAcknowledgement>(serde_json::json!({
+                "accepted": true,
+                "state_code": "legacy"
+            }))
+            .expect_err("provider cancellation acknowledgement must reject read-model drift");
+
+        assert!(
+            error.to_string().contains("state_code"),
+            "decode error should name the noncanonical field: {error}"
+        );
     }
 
     struct AcceptingCancellationCommandSubmitter;

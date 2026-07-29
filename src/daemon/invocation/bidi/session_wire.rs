@@ -52,6 +52,7 @@ pub(crate) fn require_canonical_dispatch_session(
 /// bidirectional-stream frames. Canonical unary dispatch carries Axon's
 /// protobuf `ContentEnvelope` directly inside `InvokeRequest`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct SessionContentEnvelope {
     pub content_type: String,
     pub encoding: String,
@@ -101,7 +102,7 @@ impl SessionContentEnvelope {
 /// `DispatchResult`; they must never be reintroduced into this JSON control
 /// envelope.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum SessionDispatch {
     /// Hub → target device. One incremental input frame for a
     /// previously-opened remote bidi session. `payload` carries raw
@@ -140,7 +141,7 @@ pub enum SessionDispatch {
 /// discriminator is structural — a malformed wire frame can't
 /// produce an ambiguous "empty bytes plus empty error" state.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
-#[serde(tag = "outcome", rename_all = "snake_case")]
+#[serde(tag = "outcome", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RequestOutcome {
     /// Hub resolved the target and returned bytes.
     Ok { result_bytes: Vec<u8> },
@@ -152,7 +153,7 @@ pub enum RequestOutcome {
 
 /// Why a reverse session request failed on the hub side.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum SessionRequestError {
     /// Hub's presence registry has no entry for the target URA.
     TargetOffline,
@@ -297,5 +298,74 @@ mod tests {
             assert_eq!(session.session_id, registration.session_id);
             assert_eq!(session.contract_version, CANONICAL_SESSION_CARRIER_VERSION);
         }
+    }
+
+    #[test]
+    fn session_dispatch_rejects_unknown_top_level_fields() {
+        let frame = serde_json::json!({
+            "type": "bidi_input",
+            "call_id": 7,
+            "payload": [],
+            "eof": false,
+            "backend_ura": "easynet:///r/realm/backend"
+        });
+
+        let error = serde_json::from_value::<SessionDispatch>(frame)
+            .expect_err("session dispatch wire must reject noncanonical fields");
+
+        assert!(
+            error.to_string().contains("backend_ura"),
+            "decode error should name the noncanonical field: {error}"
+        );
+    }
+
+    #[test]
+    fn session_dispatch_rejects_unknown_nested_content_envelope_fields() {
+        let frame = serde_json::json!({
+            "type": "request",
+            "call_id": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+            "ability_ura": "easynet:///r/realm/ability/device.target.echo",
+            "args": [],
+            "args_content_envelope": {
+                "content_type": "application/json",
+                "encoding": "identity",
+                "schema_ura": "",
+                "encryption": 0,
+                "key_id": "",
+                "legacy_schema_ref": "retired"
+            }
+        });
+
+        let error = serde_json::from_value::<SessionDispatch>(frame)
+            .expect_err("session dispatch nested wire must reject noncanonical fields");
+
+        assert!(
+            error.to_string().contains("legacy_schema_ref"),
+            "decode error should name the retired terminology field: {error}"
+        );
+    }
+
+    #[test]
+    fn session_dispatch_rejects_unknown_nested_error_fields() {
+        let frame = serde_json::json!({
+            "type": "request_result",
+            "call_id": [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2],
+            "outcome": {
+                "outcome": "err",
+                "error": {
+                    "kind": "permission_denied",
+                    "reason": "denied",
+                    "state_code": "legacy"
+                }
+            }
+        });
+
+        let error = serde_json::from_value::<SessionDispatch>(frame)
+            .expect_err("session dispatch error wire must reject read-model drift");
+
+        assert!(
+            error.to_string().contains("state_code"),
+            "decode error should name the read-model field: {error}"
+        );
     }
 }

@@ -1,7 +1,7 @@
 schema_version = "2"
 name = "node.describe"
 descriptor_version = "1.0.0"
-description = "Describe one node by id from the same live federation-backed view used by node.list. Accepts `local`, this device's actual node id, or any resolved peer node id."
+description = "Describe one node by id from the same live federation-backed view used by federation.discover. Accepts `local`, this device's actual node id, or any resolved peer node id."
 call_mode = "rpc"
 capability_state = "cutover_ready"
 admission_action = "read"

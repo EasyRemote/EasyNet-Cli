@@ -91,15 +91,29 @@ pub(crate) struct SessionAuthorityPayload {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct SignedSessionAuthorityWire {
-    payload: SessionAuthorityPayload,
+pub(crate) struct SignedSessionAuthorityWire {
+    pub(crate) payload: SessionAuthorityPayload,
+    pub(crate) signature: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SignedDelegationAuthorityWire {
+    pub(crate) payload: DelegationPayload,
+    pub(crate) signature: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawSessionAuthorityWire {
+    payload: serde_json::Value,
     signature: String,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct SignedDelegationAuthorityWire {
-    payload: DelegationPayload,
+struct RawDelegationAuthorityWire {
+    payload: serde_json::Value,
     signature: String,
 }
 
@@ -144,54 +158,87 @@ pub(crate) fn project_invocation_authority_metadata_shape(
 fn project_delegation_authority_shape(
     raw: &str,
 ) -> Result<DelegationPayload, AuthorityMetadataError> {
+    let wire = decode_delegation_authority_wire(raw)?;
+    let now_ms = current_unix_epoch_millis()?;
+    validate_delegation_payload_shape(&wire.payload, Some(now_ms))?;
+    Ok(wire.payload)
+}
+
+pub(crate) fn decode_delegation_authority_wire(
+    raw: &str,
+) -> Result<SignedDelegationAuthorityWire, AuthorityMetadataError> {
     let wire_bytes = BASE64_STANDARD.decode(raw).map_err(|err| {
         AuthorityMetadataError::new(
             REASON_AUTHORITY_FORMAT_INVALID,
             format!("delegation authority base64 decode failed: {err}"),
         )
     })?;
-    let wire: SignedDelegationAuthorityWire =
+    let raw_wire: RawDelegationAuthorityWire =
         serde_json::from_slice(&wire_bytes).map_err(|err| {
             AuthorityMetadataError::new(
                 REASON_AUTHORITY_FORMAT_INVALID,
                 format!("delegation authority JSON parse failed: {err}"),
             )
         })?;
-    if wire.signature.trim().is_empty() {
+    if raw_wire.signature.trim().is_empty() {
         return Err(AuthorityMetadataError::new(
             REASON_AUTHORITY_FORMAT_INVALID,
             "delegation authority signature is empty",
         ));
     }
-    let now_ms = current_unix_epoch_millis()?;
-    validate_delegation_payload_shape(&wire.payload, Some(now_ms))?;
-    Ok(wire.payload)
+    let payload: DelegationPayload = serde_json::from_value(raw_wire.payload).map_err(|err| {
+        AuthorityMetadataError::new(
+            REASON_AUTHORITY_FORMAT_INVALID,
+            format!("delegation authority payload parse failed: {err}"),
+        )
+    })?;
+    Ok(SignedDelegationAuthorityWire {
+        payload,
+        signature: raw_wire.signature,
+    })
 }
 
 fn project_session_authority_shape(
     raw: &str,
 ) -> Result<SessionAuthorityPayload, AuthorityMetadataError> {
+    let wire = decode_session_authority_wire(raw)?;
+    let now_ms = current_unix_epoch_millis()?;
+    validate_session_authority_payload_shape(&wire.payload, Some(now_ms))?;
+    Ok(wire.payload)
+}
+
+pub(crate) fn decode_session_authority_wire(
+    raw: &str,
+) -> Result<SignedSessionAuthorityWire, AuthorityMetadataError> {
     let wire_bytes = BASE64_STANDARD.decode(raw).map_err(|err| {
         AuthorityMetadataError::new(
             REASON_AUTHORITY_FORMAT_INVALID,
             format!("session authority base64 decode failed: {err}"),
         )
     })?;
-    let wire: SignedSessionAuthorityWire = serde_json::from_slice(&wire_bytes).map_err(|err| {
+    let raw_wire: RawSessionAuthorityWire = serde_json::from_slice(&wire_bytes).map_err(|err| {
         AuthorityMetadataError::new(
             REASON_AUTHORITY_FORMAT_INVALID,
             format!("session authority JSON parse failed: {err}"),
         )
     })?;
-    if wire.signature.trim().is_empty() {
+    if raw_wire.signature.trim().is_empty() {
         return Err(AuthorityMetadataError::new(
             REASON_AUTHORITY_FORMAT_INVALID,
             "session authority signature is empty",
         ));
     }
-    let now_ms = current_unix_epoch_millis()?;
-    validate_session_authority_payload_shape(&wire.payload, Some(now_ms))?;
-    Ok(wire.payload)
+    let payload: SessionAuthorityPayload =
+        serde_json::from_value(raw_wire.payload).map_err(|err| {
+            AuthorityMetadataError::new(
+                REASON_AUTHORITY_FORMAT_INVALID,
+                format!("session authority payload parse failed: {err}"),
+            )
+        })?;
+    Ok(SignedSessionAuthorityWire {
+        payload,
+        signature: raw_wire.signature,
+    })
 }
 
 /// Project an authority that has already passed the transport admission gate

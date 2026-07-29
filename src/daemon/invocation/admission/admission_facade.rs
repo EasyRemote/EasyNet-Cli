@@ -27,7 +27,6 @@ use std::sync::{Arc, Mutex};
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use chrono::{DateTime, Utc};
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
-use serde::Deserialize;
 use sha2::Digest;
 use tonic::{Code, Status};
 
@@ -2169,18 +2168,6 @@ fn public_ability_name_from_route_for_owner(owner_ura: &str, ability: &str) -> S
         .unwrap_or_else(|_| crate::core::ura::owner_local_ability_name(owner_ura, trimmed))
 }
 
-#[derive(Debug, Deserialize)]
-struct DelegationProofRaw {
-    payload: serde_json::Value,
-    signature: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct SessionAuthorityRaw {
-    payload: serde_json::Value,
-    signature: String,
-}
-
 fn verify_delegation_metadata(
     envelope: &Envelope,
     ability: &str,
@@ -2234,29 +2221,15 @@ fn parse_and_verify_session_authority(
     trust_anchor: &RealmTrustAnchor,
     now_ms: i64,
 ) -> Result<VerifiedSignedAuthority<SessionAuthorityPayload>, Status> {
-    let wire = BASE64_STANDARD.decode(raw_authority).map_err(|err| {
-        Status::invalid_argument(format!(
-            "{REASON_AUTHORITY_FORMAT_INVALID}: session authority base64 decode failed: {err}"
-        ))
-    })?;
-
-    let raw: SessionAuthorityRaw = serde_json::from_slice(&wire).map_err(|err| {
-        Status::invalid_argument(format!(
-            "{REASON_AUTHORITY_FORMAT_INVALID}: raw session authority JSON parse failed: {err}"
-        ))
-    })?;
-
-    let payload: SessionAuthorityPayload = serde_json::from_value(raw.payload).map_err(|err| {
-        Status::invalid_argument(format!(
-            "{REASON_AUTHORITY_FORMAT_INVALID}: session authority payload parse failed: {err}"
-        ))
-    })?;
+    let wire = authority_metadata::decode_session_authority_wire(raw_authority)
+        .map_err(authority_metadata_error_status)?;
+    let payload = wire.payload;
     authority_metadata::validate_session_authority_payload_shape(&payload, Some(now_ms))
         .map_err(authority_metadata_error_status)?;
 
     let payload_bytes = authority_metadata::canonical_authority_payload_bytes(&payload)
         .map_err(authority_metadata_error_status)?;
-    let signature = BASE64_STANDARD.decode(&raw.signature).map_err(|err| {
+    let signature = BASE64_STANDARD.decode(&wire.signature).map_err(|err| {
         Status::invalid_argument(format!(
             "{REASON_AUTHORITY_FORMAT_INVALID}: session authority signature base64 decode failed: {err}"
         ))
@@ -2445,29 +2418,15 @@ fn parse_and_verify_delegation_proof(
     trust_anchor: &RealmTrustAnchor,
     now_ms: i64,
 ) -> Result<VerifiedSignedAuthority<DelegationPayload>, Status> {
-    let wire = BASE64_STANDARD.decode(raw_proof).map_err(|err| {
-        Status::invalid_argument(format!(
-            "{REASON_AUTHORITY_FORMAT_INVALID}: metadata base64 decode failed: {err}"
-        ))
-    })?;
-
-    let raw: DelegationProofRaw = serde_json::from_slice(&wire).map_err(|err| {
-        Status::invalid_argument(format!(
-            "{REASON_AUTHORITY_FORMAT_INVALID}: raw proof JSON parse failed: {err}"
-        ))
-    })?;
-
-    let payload: DelegationPayload = serde_json::from_value(raw.payload).map_err(|err| {
-        Status::invalid_argument(format!(
-            "{REASON_AUTHORITY_FORMAT_INVALID}: authority payload parse failed: {err}"
-        ))
-    })?;
+    let wire = authority_metadata::decode_delegation_authority_wire(raw_proof)
+        .map_err(authority_metadata_error_status)?;
+    let payload = wire.payload;
     authority_metadata::validate_delegation_payload_shape(&payload, Some(now_ms))
         .map_err(authority_metadata_error_status)?;
 
     let payload_bytes = authority_metadata::canonical_authority_payload_bytes(&payload)
         .map_err(authority_metadata_error_status)?;
-    let signature = BASE64_STANDARD.decode(&raw.signature).map_err(|err| {
+    let signature = BASE64_STANDARD.decode(&wire.signature).map_err(|err| {
         Status::invalid_argument(format!(
             "{REASON_AUTHORITY_FORMAT_INVALID}: authority signature base64 decode failed: {err}"
         ))
@@ -2906,6 +2865,23 @@ mod tests {
         );
     }
 
+    fn assert_raw_authority_wire_unknown_field_error(error: Status, unknown_field: &str) {
+        assert_eq!(error.code(), Code::InvalidArgument);
+        assert!(
+            error.message().contains(REASON_AUTHORITY_FORMAT_INVALID)
+                && error.message().contains("JSON parse failed")
+                && error
+                    .message()
+                    .contains(&format!("unknown field `{unknown_field}`")),
+            "authority raw wire error must reject unknown fields at wire decode: {error}"
+        );
+        assert!(
+            !error.message().contains("payload parse failed")
+                && !error.message().contains("signature base64 decode failed"),
+            "unknown raw fields must not be reinterpreted as payload/signature defaults: {error}"
+        );
+    }
+
     fn require_delegation_parse_error(
         raw: &str,
         trust_anchor: &RealmTrustAnchor,
@@ -2977,6 +2953,28 @@ mod tests {
             now_ms,
         );
         assert_raw_authority_wire_error(err, "signature");
+
+        let err = require_delegation_parse_error(
+            &raw_authority_metadata(json!({
+                "payload": {},
+                "signature": "AA==",
+                "retired_signature_carrier": "compat"
+            })),
+            &trust_anchor,
+            now_ms,
+        );
+        assert_raw_authority_wire_unknown_field_error(err, "retired_signature_carrier");
+
+        let err = require_session_parse_error(
+            &raw_authority_metadata(json!({
+                "payload": {},
+                "signature": "AA==",
+                "retired_signature_carrier": "compat"
+            })),
+            &trust_anchor,
+            now_ms,
+        );
+        assert_raw_authority_wire_unknown_field_error(err, "retired_signature_carrier");
     }
 
     fn assert_complete_non_self_policy(
