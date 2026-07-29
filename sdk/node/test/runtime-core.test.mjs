@@ -1376,6 +1376,91 @@ test("authority metadata rejects noncanonical wire and payload fields", () => {
   );
 });
 
+test("authority DTO constructors reject noncanonical product fields", () => {
+  assert.throws(
+    () =>
+      new sdk.AuthorityMetadata({
+        kind: "delegation",
+        key: sdk.DELEGATION_METADATA_KEY,
+        value: delegationValue(),
+        backend_ura: caller,
+      }),
+    /authority metadata contains noncanonical field backend_ura/,
+  );
+
+  assert.throws(
+    () =>
+      new sdk.DelegationProof({
+        issuer_ura: "easynet:///r/example/user/alice",
+        subject_ura: callee,
+        caller_ura: caller,
+        audience: callee,
+        scopes: ["observe.health"],
+        issued_at_ms: 10,
+        expires_at_ms: 20,
+        signature_base64: Buffer.from("signature").toString("base64"),
+        legacy_subject: callee,
+      }),
+    /delegation proof contains noncanonical field legacy_subject/,
+  );
+
+  assert.throws(
+    () =>
+      new sdk.SessionAuthority({
+        issuer_ura: caller,
+        session_id: "session-1",
+        session_owner_user_id: "alice",
+        creator_principal_id: caller,
+        callee_ura: callee,
+        subject_ura: "easynet:///r/example/user/alice",
+        audience: callee,
+        scopes: ["invoke"],
+        allowed_actions: ["invoke"],
+        allowed_followup_abilities: ["observe.health"],
+        issued_at_ms: 10,
+        expires_at_ms: 20,
+        signature_base64: Buffer.from("signature").toString("base64"),
+        backend_ura: caller,
+      }),
+    /session authority contains noncanonical field backend_ura/,
+  );
+
+  assert.throws(
+    () =>
+      new sdk.DelegationRequest({
+        issuer_ura: "easynet:///r/example/user/alice",
+        subject_ura: callee,
+        caller_ura: caller,
+        audience: callee,
+        scopes: ["observe.health"],
+        issued_at_ms: 10,
+        expires_at_ms: 20,
+        user_ura: "easynet:///r/example/user/alice",
+      }),
+    /delegation request contains noncanonical field user_ura/,
+  );
+
+  assert.throws(
+    () =>
+      new sdk.SessionAuthorityRequest({
+        issuer_ura: caller,
+        session_id: "session-1",
+        session_owner_user_id: "alice",
+        creator_principal_id: caller,
+        callee_ura: callee,
+        subject_ura: "easynet:///r/example/user/alice",
+        audience: callee,
+        scopes: ["invoke"],
+        allowed_actions: ["invoke"],
+        allowed_followup_abilities: ["observe.health"],
+        issued_at_ms: 10,
+        expires_at_ms: 20,
+        backend_ura: caller,
+      }),
+    /session authority request contains noncanonical field backend_ura/,
+  );
+});
+
 test("authority metadata rejects all-zero session owners", () => {
   assert.throws(
     () => sdk.SessionAuthority.fromMetadata(

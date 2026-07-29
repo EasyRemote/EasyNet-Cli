@@ -86,6 +86,7 @@ export const HEALTH_PROFILE = "health";
 export const AUTHORITY_PROFILE = "authority";
 export const DELEGATION_METADATA_KEY = "x-runtime-delegation";
 export const SESSION_AUTHORITY_METADATA_KEY = "x-runtime-session-authority";
+const AUTHORITY_METADATA_FIELDS = new Set(["kind", "key", "value"]);
 const AUTHORITY_WIRE_FIELDS = new Set(["payload", "signature"]);
 const DELEGATION_AUTHORITY_PAYLOAD_FIELDS = new Set([
   "issuer_ura",
@@ -95,6 +96,11 @@ const DELEGATION_AUTHORITY_PAYLOAD_FIELDS = new Set([
   "scopes",
   "issued_at_ms",
   "expires_at_ms",
+]);
+const DELEGATION_PROOF_FIELDS = new Set([
+  ...DELEGATION_AUTHORITY_PAYLOAD_FIELDS,
+  "signature_base64",
+  "metadata_value",
 ]);
 const SESSION_AUTHORITY_PAYLOAD_FIELDS = new Set([
   "issuer_ura",
@@ -109,6 +115,23 @@ const SESSION_AUTHORITY_PAYLOAD_FIELDS = new Set([
   "allowed_followup_abilities",
   "issued_at_ms",
   "expires_at_ms",
+]);
+const SESSION_AUTHORITY_FIELDS = new Set([
+  ...SESSION_AUTHORITY_PAYLOAD_FIELDS,
+  "session_owner_ura",
+  "creator_principal_ura",
+  "signature_base64",
+  "metadata_value",
+]);
+const DELEGATION_REQUEST_FIELDS = new Set([
+  ...DELEGATION_AUTHORITY_PAYLOAD_FIELDS,
+  "metadata",
+]);
+const SESSION_AUTHORITY_REQUEST_FIELDS = new Set([
+  ...SESSION_AUTHORITY_PAYLOAD_FIELDS,
+  "session_owner_ura",
+  "creator_principal_ura",
+  "metadata",
 ]);
 export const MAX_STREAM_BUFFERED_EVENTS = 1024;
 export const MAX_BIDI_BUFFERED_FRAMES = 1024;
@@ -421,6 +444,7 @@ export class HealthClient {
 export class AuthorityMetadata {
   constructor(fields) {
     const value = objectValue(fields, "authority metadata");
+    rejectNoncanonicalAuthorityFields(value, AUTHORITY_METADATA_FIELDS, "authority metadata");
     this.kind = requiredAuthorityString(value.kind, "kind");
     this.key = requiredAuthorityString(value.key, "key");
     this.value = requiredAuthorityString(value.value, "value");
@@ -442,6 +466,7 @@ export class AuthorityMetadata {
 export class DelegationProof {
   constructor(fields) {
     const value = objectValue(fields, "delegation proof");
+    rejectNoncanonicalAuthorityFields(value, DELEGATION_PROOF_FIELDS, "delegation proof");
     this.issuerURA = requiredAuthorityString(value.issuer_ura, "issuer_ura");
     this.subjectURA = requiredAuthorityString(value.subject_ura, "subject_ura");
     this.callerURA = requiredAuthorityString(value.caller_ura, "caller_ura");
@@ -497,6 +522,7 @@ export class DelegationProof {
 export class SessionAuthority {
   constructor(fields) {
     const value = objectValue(fields, "session authority");
+    rejectNoncanonicalAuthorityFields(value, SESSION_AUTHORITY_FIELDS, "session authority");
     const normalized = normalizeSessionAuthorityPrincipals({
       sessionOwnerUserID: authorityOptionalString(value.session_owner_user_id, "session_owner_user_id") ?? "",
       sessionOwnerURA: authorityOptionalString(value.session_owner_ura, "session_owner_ura") ?? "",
@@ -576,6 +602,7 @@ export class SessionAuthority {
 export class DelegationRequest {
   constructor(fields) {
     const value = objectValue(fields, "delegation request");
+    rejectNoncanonicalAuthorityFields(value, DELEGATION_REQUEST_FIELDS, "delegation request");
     this.issuerURA = requiredAuthorityString(value.issuer_ura, "issuer_ura");
     this.subjectURA = requiredAuthorityString(value.subject_ura, "subject_ura");
     this.callerURA = requiredAuthorityString(value.caller_ura, "caller_ura");
@@ -604,6 +631,7 @@ export class DelegationRequest {
 export class SessionAuthorityRequest {
   constructor(fields) {
     const value = objectValue(fields, "session authority request");
+    rejectNoncanonicalAuthorityFields(value, SESSION_AUTHORITY_REQUEST_FIELDS, "session authority request");
     const normalized = normalizeSessionAuthorityPrincipals({
       sessionOwnerUserID: authorityOptionalString(value.session_owner_user_id, "session_owner_user_id") ?? "",
       sessionOwnerURA: authorityOptionalString(value.session_owner_ura, "session_owner_ura") ?? "",
