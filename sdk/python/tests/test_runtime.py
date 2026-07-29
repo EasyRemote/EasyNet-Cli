@@ -1463,7 +1463,7 @@ class RuntimeTests(unittest.TestCase):
             RuntimeReceipt.from_mapping(retired)
         self.assertTrue(is_code(raised.exception, ErrorCode.INVALID_ARGUMENT))
         self.assertIn(
-            "authority_binding contains noncanonical field",
+            "authority_binding contains noncanonical field backend_ura",
             raised.exception.message,
         )
 

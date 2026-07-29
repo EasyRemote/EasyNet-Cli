@@ -505,8 +505,15 @@ class RuntimeReceipt:
     parent_receipts: tuple[RuntimeReceiptRef, ...] = field(default_factory=tuple)
 
     def __post_init__(self) -> None:
+        raw = _immutable_runtime_receipt_projection(
+            _canonical_runtime_receipt_projection(
+                _mutable_runtime_receipt_projection(self.raw)
+            ),
+            "runtime receipt",
+        )
+        object.__setattr__(self, "raw", raw)
         decoded = _decode_runtime_receipt_mapping(
-            _mutable_runtime_receipt_projection(self.raw)
+            _mutable_runtime_receipt_projection(raw)
         )
         for decoded_field in fields(_DecodedRuntimeReceipt):
             name = decoded_field.name
@@ -520,6 +527,7 @@ class RuntimeReceipt:
     def from_mapping(cls, decoded: Mapping[str, object]) -> "RuntimeReceipt":
         """Decode the only accepted canonical runtime receipt projection."""
 
+        decoded = _canonical_runtime_receipt_projection(decoded)
         raw = _immutable_runtime_receipt_projection(decoded, "runtime receipt")
         projection = _decode_runtime_receipt_mapping(
             _mutable_runtime_receipt_projection(raw)
@@ -725,6 +733,12 @@ def _mutable_runtime_receipt_value(value: object) -> object:
     if isinstance(value, (list, tuple)):
         return [_mutable_runtime_receipt_value(item) for item in value]
     return value
+
+
+def _canonical_runtime_receipt_projection(
+    decoded: Mapping[str, object],
+) -> dict[str, object]:
+    return _mutable_runtime_receipt_projection(decoded)
 
 
 @dataclass(frozen=True)

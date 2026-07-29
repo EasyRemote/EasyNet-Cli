@@ -999,8 +999,8 @@ fn authority_binding_summary(
         }),
         Some(Authority::SessionAuthority(value)) => serde_json::json!({
             "kind": "session",
-            "backend_ura": value.backend_ura,
-            "user_ura": value.user_ura,
+            "issuer_ura": value.backend_ura,
+            "subject_ura": value.user_ura,
             "session_id": value.session_id,
             "scopes": value.scopes,
             "audiences": value.audiences,
@@ -1015,6 +1015,45 @@ fn authority_binding_summary(
             "ability": value.ability,
         }),
         None => serde_json::Value::Null,
+    }
+}
+
+#[cfg(all(test, feature = "axon-pb"))]
+mod tests {
+    use super::authority_binding_summary;
+
+    #[test]
+    fn session_authority_summary_uses_public_generic_fields() {
+        let binding = axon_sdk::pb::axon::v1::AuthorityBinding {
+            authority: Some(
+                axon_sdk::pb::axon::v1::authority_binding::Authority::SessionAuthority(
+                    axon_sdk::pb::axon::v1::SessionAuthority {
+                        backend_ura: "easynet:///r/example/agent/backend".to_string(),
+                        user_ura: "easynet:///r/example/agent/alice".to_string(),
+                        session_id: "session-1".to_string(),
+                        scopes: vec!["invoke".to_string()],
+                        audiences: vec!["easynet:///r/example/device/dev-a".to_string()],
+                        issued_at_ms: 1,
+                        expires_at_ms: 2,
+                        signature: vec![0x73; 64],
+                    },
+                ),
+            ),
+        };
+
+        let projection = authority_binding_summary(Some(&binding));
+
+        assert_eq!(projection["kind"], "session");
+        assert_eq!(
+            projection["issuer_ura"],
+            "easynet:///r/example/agent/backend"
+        );
+        assert_eq!(
+            projection["subject_ura"],
+            "easynet:///r/example/agent/alice"
+        );
+        assert!(projection.get("backend_ura").is_none());
+        assert!(projection.get("user_ura").is_none());
     }
 }
 
