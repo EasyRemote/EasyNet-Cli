@@ -48,7 +48,9 @@ public final class RuntimeCoreSeamTest {
           "preparedInvocationRequiresExplicitExpiryFact",
           "preparedInvocationRejectsRequestIDOnlyAlias",
           "completeTupleRejectsMissingCaller",
+          "completeTupleRejectsNonCanonicalNonce",
           "completeTupleRejectsAllZeroPrincipals",
+          "runtimeCallContextRejectsMissingCausalContext",
           "completeTupleRejectsNoncanonicalSessionSubjectAuthorityCarrier",
           "completeTupleRejectsReceiptHistoryPublicInvocation",
           "completeTupleRejectsCatalogueReadPublicInvocation",
@@ -122,7 +124,10 @@ public final class RuntimeCoreSeamTest {
       case "preparedInvocationRejectsRequestIDOnlyAlias" ->
           preparedInvocationRejectsRequestIDOnlyAlias();
       case "completeTupleRejectsMissingCaller" -> completeTupleRejectsMissingCaller();
+      case "completeTupleRejectsNonCanonicalNonce" -> completeTupleRejectsNonCanonicalNonce();
       case "completeTupleRejectsAllZeroPrincipals" -> completeTupleRejectsAllZeroPrincipals();
+      case "runtimeCallContextRejectsMissingCausalContext" ->
+          runtimeCallContextRejectsMissingCausalContext();
       case "completeTupleRejectsNoncanonicalSessionSubjectAuthorityCarrier" ->
           completeTupleRejectsNoncanonicalSessionSubjectAuthorityCarrier();
       case "completeTupleRejectsReceiptHistoryPublicInvocation" ->
@@ -1309,6 +1314,17 @@ public final class RuntimeCoreSeamTest {
     expectSDKError(ErrorCode.INVALID_ARGUMENT, () -> new InvocationBuilder().callee(CALLEE).descriptor(DESCRIPTOR).subject(CALLEE).nonce(NONCE).causalContext("{\"form\":\"none\"}").argsJson("{}").inspect());
   }
 
+  private static void completeTupleRejectsNonCanonicalNonce() {
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        "nonce_base64 must decode to 16 bytes",
+        () -> completeBuilder().nonce(Base64.getEncoder().encodeToString("nonce".getBytes(StandardCharsets.UTF_8))).inspect());
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        "nonce_base64 must be canonical base64",
+        () -> completeBuilder().nonce("not-base64").inspect());
+  }
+
   private static void completeTupleRejectsAllZeroPrincipals() {
     String placeholder =
         "easynet:///r/example/resource/user.00000000-0000-0000-0000-000000000000/session/invocation_history";
@@ -1321,6 +1337,13 @@ public final class RuntimeCoreSeamTest {
     expectSDKError(
         ErrorCode.INVALID_ARGUMENT,
         () -> completeBuilder().subject(placeholder).inspect());
+  }
+
+  private static void runtimeCallContextRejectsMissingCausalContext() {
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        "causal_context is required",
+        () -> new RuntimeCallContext(CALLER, CALLEE, CALLEE, NONCE, null));
   }
 
   private static void completeTupleRejectsNoncanonicalSessionSubjectAuthorityCarrier() {

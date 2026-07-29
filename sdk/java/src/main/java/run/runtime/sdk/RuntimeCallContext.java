@@ -23,9 +23,16 @@ public record RuntimeCallContext(
     callerURA = requiredPrincipal(callerURA, "caller_ura");
     calleeURA = requiredPrincipal(calleeURA, "callee_ura");
     subjectURA = requiredPrincipal(subjectURA, "subject_ura");
-    nonceBase64 = required(nonceBase64, "nonce_base64");
-    causalContext = copyObject(causalContext, "causal_context");
+    nonceBase64 = InvocationNonce.requiredBase64(nonceBase64);
+    causalContext = copyRequiredObject(causalContext, "causal_context");
     metadata = copyObject(metadata, "metadata");
+  }
+
+  private static Map<String, Object> copyRequiredObject(Map<String, Object> value, String field) {
+    if (value == null) {
+      throw SDKError.validation("runtime", field + " is required");
+    }
+    return copyObject(value, field);
   }
 
   private static Map<String, Object> copyObject(Map<String, Object> value, String field) {

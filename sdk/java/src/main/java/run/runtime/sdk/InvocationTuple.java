@@ -29,7 +29,7 @@ public record InvocationTuple(
     callee = requiredPrincipal(callee, "callee");
     descriptor = required(descriptor, "descriptor");
     subject = requiredPrincipal(subject, "subject");
-    nonce = required(nonce, "nonce");
+    nonce = InvocationNonce.requiredBase64(nonce);
     causalContext = required(causalContext, "causalContext");
     argsJson = required(argsJson, "argsJson");
     metadata = copyObject(metadata);
