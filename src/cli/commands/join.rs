@@ -1157,9 +1157,17 @@ fn persist_join_credentials(
         source,
     ));
 
-    renderer.set_active("refresh-runtime");
-    refresh_running_runtime_after_join(&creds);
-    renderer.stage_ok("refresh-runtime");
+    run_required_join_stage(&mut renderer, "refresh-runtime", || {
+        match refresh_running_runtime_after_join(&creds)? {
+            JoinRuntimeRefreshOutcome::NoLiveRuntime => {}
+            JoinRuntimeRefreshOutcome::StoppedForIdentityEpoch => {
+                output::info(
+                    "Stopped existing easynet-daemon so the next start can load the joined identity epoch.",
+                );
+            }
+        }
+        Ok(())
+    })?;
 
     renderer.finish();
     Ok(creds)
@@ -1188,15 +1196,121 @@ where
     }
 }
 
-/// A running daemon loaded identity and authority state before this join.
-/// Restart is the single supported transition into the newly paired state.
-fn refresh_running_runtime_after_join(_creds: &config::Credentials) {
-    if config::load().is_ok() {
-        output::warn(
-            "paired successfully, but a local easynet-daemon is already running. \
-             Restart it with `easynet runtime stop && easynet runtime start` so it picks up the new credentials.",
+/// Outcome of reconciling the local runtime after join mutates credentials.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum JoinRuntimeRefreshOutcome {
+    /// No daemon process facts were visible, so autostart can cleanly boot.
+    NoLiveRuntime,
+    /// A live or partially-live daemon was stopped because it belonged to the
+    /// pre-join identity epoch.
+    StoppedForIdentityEpoch,
+}
+
+/// Pure decision for the post-join runtime refresh state machine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum JoinRuntimeRefreshDecision {
+    NoDaemonFacts,
+    StopForIdentityEpoch,
+}
+
+impl JoinRuntimeRefreshDecision {
+    fn from_status(
+        creds: &config::Credentials,
+        report: &crate::daemon::lifecycle::RuntimeStatusReport,
+    ) -> anyhow::Result<Self> {
+        // Validate that the newly persisted credentials can be interpreted as a
+        // runtime identity epoch before mutating local process state. Both
+        // bound-user and federation-native device credentials are legitimate;
+        // malformed credentials must fail the refresh stage instead of falling
+        // through to autostart.
+        let _ = creds.runtime_user_binding()?;
+        if report.daemon().has_daemon_fact() {
+            Ok(Self::StopForIdentityEpoch)
+        } else {
+            Ok(Self::NoDaemonFacts)
+        }
+    }
+}
+
+/// A running daemon loaded identity, trust, authority state, and Ready
+/// capabilities before this join. Stopping it is the single supported
+/// transition into the newly joined identity epoch; warning-only refresh leaves
+/// autostart stuck behind the fail-closed `paired_user_runtime_signer` gate.
+fn refresh_running_runtime_after_join(
+    creds: &config::Credentials,
+) -> anyhow::Result<JoinRuntimeRefreshOutcome> {
+    refresh_running_runtime_after_join_with(creds, &LifecycleJoinRuntimeRefresh)
+}
+
+trait JoinRuntimeRefresh {
+    fn refresh(&self, creds: &config::Credentials) -> anyhow::Result<JoinRuntimeRefreshOutcome>;
+}
+
+struct LifecycleJoinRuntimeRefresh;
+
+impl JoinRuntimeRefresh for LifecycleJoinRuntimeRefresh {
+    fn refresh(&self, creds: &config::Credentials) -> anyhow::Result<JoinRuntimeRefreshOutcome> {
+        let service = crate::daemon::lifecycle::RuntimeLifecycleService::new();
+        let report = service
+            .status()
+            .context("observe runtime lifecycle after join")?;
+        match JoinRuntimeRefreshDecision::from_status(creds, &report)? {
+            JoinRuntimeRefreshDecision::NoDaemonFacts => {
+                if report.projection().is_some() {
+                    config::remove().context("remove stale runtime projection after join")?;
+                }
+                Ok(JoinRuntimeRefreshOutcome::NoLiveRuntime)
+            }
+            JoinRuntimeRefreshDecision::StopForIdentityEpoch => {
+                stop_join_identity_epoch_runtime(&report)?;
+                Ok(JoinRuntimeRefreshOutcome::StoppedForIdentityEpoch)
+            }
+        }
+    }
+}
+
+fn refresh_running_runtime_after_join_with(
+    creds: &config::Credentials,
+    refresh: &dyn JoinRuntimeRefresh,
+) -> anyhow::Result<JoinRuntimeRefreshOutcome> {
+    refresh.refresh(creds)
+}
+
+fn stop_join_identity_epoch_runtime(
+    report: &crate::daemon::lifecycle::RuntimeStatusReport,
+) -> anyhow::Result<()> {
+    use crate::daemon::lifecycle::{
+        LiveProcessStopOutcome, PidfileStopOutcome, RuntimeStopPlan, RuntimeStopProcessController,
+    };
+
+    let plan = RuntimeStopPlan::from_report(report);
+    let controller = RuntimeStopProcessController::new();
+    let pidfile_outcome = controller.stop_pidfile_process(&config::easynet_daemon_pid_path());
+    if let PidfileStopOutcome::TimedOut { pid } = pidfile_outcome {
+        anyhow::bail!("stop pre-join daemon pid {pid} timed out");
+    }
+    if let Some(pid) = plan.discovery_pid() {
+        if let LiveProcessStopOutcome::TimedOut { pid } =
+            controller.stop_discovered_daemon_process(pid)
+        {
+            anyhow::bail!("stop discovered pre-join daemon pid {pid} timed out");
+        }
+    }
+    let post = crate::daemon::lifecycle::RuntimeLifecycleService::new()
+        .status()
+        .context("observe runtime lifecycle after join stop")?;
+    if post.daemon().has_daemon_fact() {
+        anyhow::bail!(
+            "pre-join easynet-daemon still has live facts after refresh stop (status={})",
+            post.status().as_wire_str()
         );
     }
+    if let Ok(path) = crate::daemon::control::discovery::try_default_path() {
+        crate::daemon::control::discovery::remove(&path)
+            .with_context(|| format!("remove stale daemon discovery {}", path.display()))?;
+    }
+    config::remove().context("remove stale runtime projection after join")?;
+    Ok(())
 }
 
 /// Ensure every runtime identity implied by joined credentials exists in the
@@ -1861,6 +1975,35 @@ mod tests {
         }
     }
 
+    fn join_refresh_test_endpoints() -> crate::daemon::boot::DaemonEndpoints {
+        crate::daemon::boot::DaemonEndpoints {
+            control: PathBuf::from("/tmp/easynet-join-refresh-control.sock"),
+            invocation: PathBuf::from("/tmp/easynet-join-refresh-daemon.sock"),
+        }
+    }
+
+    fn join_refresh_test_discovery(
+        capability_flags: Vec<String>,
+    ) -> crate::daemon::control::discovery::ControlDiscovery {
+        crate::daemon::control::discovery::ControlDiscovery {
+            socket_path: Some(PathBuf::from("/tmp/easynet-join-refresh-control.sock")),
+            pipe_name: None,
+            invocation_endpoint: Some(PathBuf::from("/tmp/easynet-join-refresh-daemon.sock")),
+            daemon_identity: Some(crate::daemon::control::discovery::DaemonIdentity {
+                mode: "device".to_string(),
+                realm: "acme".to_string(),
+                node_id: Some("dev-one".to_string()),
+            }),
+            pid: std::process::id(),
+            daemon_version: env!("CARGO_PKG_VERSION").to_string(),
+            supported_ipc_versions: crate::daemon::control::discovery::IpcVersionRange::single(
+                crate::daemon::control::discovery::IPC_VERSION_V1,
+            ),
+            capability_flags,
+            pages_port: Some(8787),
+        }
+    }
+
     #[test]
     fn token_format_accepts_alnum_dash_underscore() {
         for token in ["abc12345", "A_B-C_99", "token_2026_04"] {
@@ -1934,6 +2077,50 @@ mod tests {
             custody.users.borrow().as_slice(),
             &["easynet:///r/acme/user/usr_silan".to_string()]
         );
+    }
+
+    #[test]
+    fn join_refresh_restarts_live_daemon_missing_paired_user_signer_flag() {
+        let creds = join_identity_test_credentials(Some("usr_silan"), None);
+        let daemon = crate::daemon::lifecycle::DaemonDiscoverySnapshot::from_parts(
+            Some(join_refresh_test_discovery(vec![
+                crate::daemon::control::discovery::flags::BOOT_STATUS.to_string(),
+            ])),
+            Some(std::process::id()),
+            true,
+            true,
+            true,
+            join_refresh_test_endpoints(),
+        );
+        let report = crate::daemon::lifecycle::RuntimeStatusReport::from_parts(None, daemon);
+
+        let decision = JoinRuntimeRefreshDecision::from_status(&creds, &report)
+            .expect("bound user credentials are valid");
+
+        assert_eq!(
+            decision,
+            JoinRuntimeRefreshDecision::StopForIdentityEpoch,
+            "join must restart a live pre-join daemon instead of letting autostart attach to Ready flags that cannot prove paired User signer custody"
+        );
+    }
+
+    #[test]
+    fn join_refresh_allows_clean_autostart_when_no_daemon_facts_exist() {
+        let creds = join_identity_test_credentials(Some("usr_silan"), None);
+        let daemon = crate::daemon::lifecycle::DaemonDiscoverySnapshot::from_parts(
+            None,
+            None,
+            false,
+            false,
+            false,
+            join_refresh_test_endpoints(),
+        );
+        let report = crate::daemon::lifecycle::RuntimeStatusReport::from_parts(None, daemon);
+
+        let decision = JoinRuntimeRefreshDecision::from_status(&creds, &report)
+            .expect("bound user credentials are valid");
+
+        assert_eq!(decision, JoinRuntimeRefreshDecision::NoDaemonFacts);
     }
 
     #[test]
