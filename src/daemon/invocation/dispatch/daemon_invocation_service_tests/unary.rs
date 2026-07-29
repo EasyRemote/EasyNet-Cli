@@ -1238,6 +1238,83 @@ async fn identity_register_pubkey_rejects_device_caller_for_user_role_before_wri
 }
 
 #[tokio::test]
+async fn identity_register_pubkey_bootstraps_user_caller_before_trust_anchor_contains_user_key() {
+    use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+
+    let realm = "local";
+    let hub_ura = crate::core::ura::hub_ura(realm);
+    let user_ura = format!("easynet:///r/{realm}/user/user-bootstrap");
+    let user_key = ed25519_dalek::SigningKey::from_bytes(&[0x57; 32]);
+    let user_pubkey_b64 = BASE64_STANDARD.encode(user_key.verifying_key().to_bytes());
+    let cell = SharedTrustAnchor::new(Arc::new(
+        RealmTrustAnchor::from_entries(Vec::new()).expect("empty trust anchor"),
+    ));
+    let runtime_assembly = test_runtime_assembly(cell.clone());
+    let trust_dir = tempfile::tempdir().expect("trust tempdir");
+    let trust_path = trust_dir.path().join("realm-trust.toml");
+    let svc = register_test_daemon_routes(
+        make_unregistered_service_for_route_owner_and_runtime_trust(
+            &hub_ura,
+            runtime_assembly,
+            cell.clone(),
+        )
+        .with_register_pubkey(realm, trust_path.clone(), cell.clone())
+        .with_session_realm(realm),
+        &hub_ura,
+    );
+
+    let arguments = serde_json::to_vec(&serde_json::json!({
+        "principal_ura": user_ura,
+        "public_key_b64": user_pubkey_b64,
+        "role": "user",
+    }))
+    .expect("register args");
+    let function_name = ABILITY_IDENTITY_REGISTER_PUBKEY;
+    let descriptor_ref = test_descriptor_ref(&hub_ura, function_name);
+    let subject_ura = crate::core::ura::owner_ability_ura(&hub_ura, function_name)
+        .expect("identity.register_pubkey descriptor subject");
+    let envelope = signed_test_envelope(
+        &user_ura,
+        &hub_ura,
+        &subject_ura,
+        function_name,
+        &arguments,
+        &user_key,
+    );
+    assert!(
+        crate::daemon::invocation::admission::register_device_pubkey::RegisterPubkeyBootstrapTuple::matches(&envelope),
+        "test fixture must enter the bootstrap candidate ingress branch"
+    );
+    let req = Request::new(InvokeRequest {
+        envelope: Some(envelope),
+        target: Some(
+            wire_invocation_target(descriptor_ref, function_name).expect("typed descriptor target"),
+        ),
+        arguments,
+        ..InvokeRequest::default()
+    });
+
+    let response = svc
+        .invoke(req)
+        .await
+        .expect("user self-registration bootstrap is transport-admitted")
+        .into_inner();
+    assert!(
+        response.error.is_none(),
+        "user self-registration bootstrap must pass Axon admission before trust write, got {:?}",
+        response.error
+    );
+    let snapshot = cell.snapshot();
+    let registered = snapshot.lookup_user_all(&user_ura);
+    assert_eq!(registered.len(), 1);
+    assert_eq!(registered[0].public_key_b64, user_pubkey_b64);
+    assert!(
+        trust_path.exists(),
+        "successful user bootstrap must persist realm trust anchor"
+    );
+}
+
+#[tokio::test]
 async fn identity_revoke_user_pubkey_rejects_device_caller_before_write() {
     use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 
@@ -2531,6 +2608,76 @@ async fn invoke_dispatches_federation_resolve_key_returns_pubkey_when_present() 
     assert_eq!(
         body.public_key_b64,
         "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+    );
+}
+
+#[tokio::test]
+async fn paired_user_resolve_key_bootstrap_reaches_authority_before_owner_binding() {
+    use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+
+    let realm = "bootstrap-realm";
+    let hub_ura = crate::core::ura::hub_ura(realm);
+    let user_ura = format!("easynet:///r/{realm}/user/user-bootstrap");
+    let user_key = ed25519_dalek::SigningKey::from_bytes(&[0x58; 32]);
+    let user_pubkey_b64 = BASE64_STANDARD.encode(user_key.verifying_key().to_bytes());
+    let user_entry = TrustedAgent {
+        agent_ura: user_ura.clone(),
+        public_key_b64: user_pubkey_b64.clone(),
+        role: TrustedAgentRole::User,
+        added_at_unix_ms: 1_700_000_000_000,
+        origin_realm: None,
+        hub_endpoint: None,
+        tls_ca_pem_path: None,
+    };
+    let anchor = Arc::new(test_trust_anchor_with_entries(vec![user_entry]));
+    assert!(
+        anchor.lookup_principal_owner(&user_ura).is_none(),
+        "regression fixture must not rely on a user owner projection"
+    );
+    let cell = SharedTrustAnchor::new(anchor);
+    let runtime_assembly = test_runtime_assembly(cell.clone());
+    let svc = register_test_daemon_routes(
+        make_unregistered_service_for_route_owner_and_runtime_trust(
+            &hub_ura,
+            runtime_assembly,
+            cell,
+        )
+        .with_session_realm(realm),
+        &hub_ura,
+    );
+
+    let arguments = serde_json::to_vec(&serde_json::json!({
+        "agent_ura": user_ura.clone(),
+        "presented_pubkey_b64": user_pubkey_b64.clone(),
+    }))
+    .expect("resolve_key args");
+    let descriptor_ref = test_descriptor_ref(&hub_ura, ABILITY_FEDERATION_RESOLVE_KEY);
+    let envelope = signed_test_envelope(
+        &user_ura,
+        &hub_ura,
+        &crate::core::ura::owner_ability_ura(&hub_ura, ABILITY_FEDERATION_RESOLVE_KEY)
+            .expect("resolve_key descriptor subject"),
+        ABILITY_FEDERATION_RESOLVE_KEY,
+        &arguments,
+        &user_key,
+    );
+    let response = svc
+        .invoke(Request::new(InvokeRequest {
+            envelope: Some(envelope),
+            target: Some(
+                wire_invocation_target(&descriptor_ref, ABILITY_FEDERATION_RESOLVE_KEY)
+                    .expect("typed resolve_key descriptor target"),
+            ),
+            arguments,
+            ..InvokeRequest::default()
+        }))
+        .await
+        .expect("paired User resolve_key bootstrap must be admitted before owner binding");
+    let body: federation_wrappers::ResolveKeyResponse = parse_response_body(response);
+    assert_eq!(body.public_key_b64, user_pubkey_b64);
+    assert!(
+        body.public_keys_b64.contains(&user_pubkey_b64),
+        "multi-key user response must include the resolved bootstrap key"
     );
 }
 

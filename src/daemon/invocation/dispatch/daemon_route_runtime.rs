@@ -230,6 +230,10 @@ impl BootstrapCandidateProof {
         }
         Ok(())
     }
+
+    pub(crate) fn public_key(&self) -> [u8; 32] {
+        self.public_key
+    }
 }
 
 impl DaemonRouteRuntimeAdapter {

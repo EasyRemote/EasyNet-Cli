@@ -53,8 +53,11 @@ use crate::daemon::invocation::admission::owner_projection_publication::OwnerPro
 use crate::daemon::invocation::admission::peer_envelope_signer::{
     PeerInvocationSubject, PeerInvokeRequest,
 };
-use crate::daemon::invocation::admission::register_device_pubkey::handle as handle_register_device_pubkey;
-use crate::daemon::invocation::admission::register_device_pubkey::parse_register_pubkey_intent;
+use crate::daemon::invocation::admission::register_device_pubkey::{
+    handle as handle_register_device_pubkey, parse_register_pubkey_intent,
+    verify_user_register_pubkey_bootstrap_claim, RegisterPubkeyBootstrapTuple,
+    ABILITY_IDENTITY_REGISTER_PUBKEY,
+};
 use crate::daemon::invocation::admission::revoke_user_pubkey::{
     handle_with_outcome as handle_revoke_user_pubkey_with_outcome, parse_revoke_user_pubkey_intent,
 };
@@ -71,7 +74,9 @@ use crate::daemon::invocation::bidi::session_wire::{
 };
 use crate::daemon::invocation::bidi::state::pending_dispatch::DispatchResult;
 use crate::daemon::invocation::dispatch::daemon_invocation_service::DaemonUnaryRoute;
-use crate::daemon::invocation::dispatch::daemon_route_runtime::runtime_status_to_axon_error;
+use crate::daemon::invocation::dispatch::daemon_route_runtime::{
+    runtime_status_to_axon_error, BootstrapCandidateProof,
+};
 use crate::daemon::invocation::dispatch::deps::{
     DirectoryPlane, FederationDial, IdentityPlane, RuntimePlane, SessionPlane,
 };
@@ -396,9 +401,15 @@ impl DaemonUnaryRouteProvider {
             DaemonUnaryRoute::FederationRevoke => {
                 self.dispatcher.dispatch_federation_revoke(arguments)
             }
-            DaemonUnaryRoute::IdentityRegisterPubkey => self
-                .dispatcher
-                .dispatch_register_device_pubkey(Some(&envelope), arguments),
+            DaemonUnaryRoute::IdentityRegisterPubkey => {
+                self.dispatcher.dispatch_register_device_pubkey(
+                    Some(&envelope),
+                    arguments,
+                    identity_register_user_self_bootstrap(&envelope, arguments)
+                        .map_err(runtime_status_to_axon_error)?
+                        .as_ref(),
+                )
+            }
             DaemonUnaryRoute::IdentityRevokeUserPubkey => self
                 .dispatcher
                 .dispatch_revoke_user_pubkey(Some(&envelope), arguments),
@@ -439,6 +450,24 @@ fn runtime_context_envelope(context: &AbilityContext) -> Result<Envelope, AxonEr
             ..axon_sdk::invocation::WireEnvelopeMetadata::default()
         },
     )
+}
+
+fn identity_register_user_self_bootstrap(
+    envelope: &Envelope,
+    arguments: &[u8],
+) -> Result<
+    Option<crate::daemon::invocation::admission::identity_write_gate::UserSelfRegisterBootstrap>,
+    Status,
+> {
+    if !RegisterPubkeyBootstrapTuple::matches(envelope) {
+        return Ok(None);
+    }
+    let claim = verify_user_register_pubkey_bootstrap_claim(envelope, arguments)?;
+    Ok(Some(
+        crate::daemon::invocation::admission::identity_write_gate::UserSelfRegisterBootstrap::new(
+            claim.principal_ura(),
+        ),
+    ))
 }
 
 impl UnaryDispatcher {
@@ -851,6 +880,56 @@ impl UnaryDispatcher {
                     metadata,
                 )
             }
+            Some(envelope)
+                if ability == ABILITY_IDENTITY_REGISTER_PUBKEY
+                    && call_mode == CallMode::Rpc
+                    && RegisterPubkeyBootstrapTuple::matches(&envelope) =>
+            {
+                let proof = match BootstrapCandidateProof::verify(
+                    DaemonUnaryRoute::IdentityRegisterPubkey,
+                    request,
+                ) {
+                    Ok(proof) => proof,
+                    Err(status) => return (Err(status), false),
+                };
+                let metadata = match HostedAgentDelegationIssuer::materialize_request_metadata(
+                    &request.metadata,
+                    &envelope,
+                    HostedAgentDelegationIngress::BootstrapCandidate,
+                    ability,
+                ) {
+                    Ok(metadata) => metadata,
+                    Err(status) => return (Err(status), false),
+                };
+                let signed_descriptor_ref = match bound_ability.signed_descriptor_ref_from_target(
+                    "Invoke",
+                    &selected_route.callee_ura,
+                    call_mode,
+                    request.target.as_ref(),
+                ) {
+                    Ok(ref_) => ref_.into_descriptor_ref(),
+                    Err(status) => return (Err(status), false),
+                };
+                let key_provider = match self.runtime.daemon_admission_graph() {
+                    Some(graph) => graph.bootstrap_candidate_provider(),
+                    None => {
+                        return (
+                            Err(Status::failed_precondition(
+                                "identity.register_pubkey bootstrap requires the LocalRuntime admission resolver",
+                            )),
+                            false,
+                        )
+                    }
+                };
+                crate::daemon::axon_bridge::descriptor_bound_dispatch::bootstrap_candidate_from_wire_parts(
+                    envelope,
+                    signed_descriptor_ref,
+                    arguments.to_vec(),
+                    metadata,
+                    proof.public_key(),
+                    &key_provider,
+                )
+            }
             Some(envelope) => {
                 let metadata = match HostedAgentDelegationIssuer::materialize_request_metadata(
                     &request.metadata,
@@ -918,6 +997,9 @@ impl UnaryDispatcher {
         &self,
         caller_envelope: Option<&Envelope>,
         arguments: &[u8],
+        bootstrap: Option<
+            &crate::daemon::invocation::admission::identity_write_gate::UserSelfRegisterBootstrap,
+        >,
     ) -> Result<Vec<u8>, Status> {
         let ctx = self.identity.runtime_trust.as_ref().ok_or_else(|| {
             Status::failed_precondition(
@@ -934,7 +1016,7 @@ impl UnaryDispatcher {
                 self.admission.transport_boundary(),
                 ctx.daemon_realm.clone(),
             );
-        write_gate.authorize_register_pubkey(caller_envelope, &intent)?;
+        write_gate.authorize_register_pubkey(caller_envelope, &intent, bootstrap)?;
         let body = handle_register_device_pubkey(
             arguments,
             &ctx.daemon_realm,

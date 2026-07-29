@@ -75,6 +75,18 @@ impl BootstrapAuthorityVerifier {
             );
         }
 
+        if trusted_role == TrustedAgentRole::User {
+            return verify_user_resolve_key_bootstrap_authority(
+                caller_ura,
+                callee_ura,
+                subject_ura,
+                ability,
+                action,
+                args,
+                daemon_ura,
+            );
+        }
+
         if trusted_role != TrustedAgentRole::Device || !is_device_ura(caller_ura) {
             return BootstrapAuthorityDecision::NotApplicable;
         }
@@ -206,6 +218,33 @@ fn verify_hub_link_authority(
     }
 }
 
+fn verify_user_resolve_key_bootstrap_authority(
+    caller_ura: &str,
+    callee_ura: &str,
+    subject_ura: &str,
+    ability: &str,
+    action: AccessAction,
+    args: &[u8],
+    daemon_ura: Option<&str>,
+) -> BootstrapAuthorityDecision {
+    if ability != ABILITY_FEDERATION_RESOLVE_KEY || action != AccessAction::Read {
+        return BootstrapAuthorityDecision::NotApplicable;
+    }
+    if !is_user_ura(caller_ura) || !callee_is_selected_authority(callee_ura, caller_ura, daemon_ura)
+    {
+        return BootstrapAuthorityDecision::NotApplicable;
+    }
+    let Some(agent_ura) = verify_user_bootstrap_resolve_key(args, caller_ura, callee_ura) else {
+        return BootstrapAuthorityDecision::NotApplicable;
+    };
+    if !user_resolve_key_bootstrap_subject_matches(subject_ura, callee_ura, ability, &agent_ura) {
+        return BootstrapAuthorityDecision::NotApplicable;
+    }
+    BootstrapAuthorityDecision::Verified {
+        authority_id: user_resolve_key_bootstrap_authority_id(caller_ura, callee_ura, &agent_ura),
+    }
+}
+
 fn verify_device_authority_key_bootstrap_authority(
     caller_ura: &str,
     callee_ura: &str,
@@ -283,6 +322,42 @@ fn verify_bootstrap_resolve_key(args: &[u8], authority_ura: &str, owner_ura: &st
     None
 }
 
+fn verify_user_bootstrap_resolve_key(
+    args: &[u8],
+    caller_ura: &str,
+    authority_ura: &str,
+) -> Option<String> {
+    let request = serde_json::from_slice::<ResolveKeyRequest>(args).ok()?;
+    let agent_ura = request.agent_ura.trim();
+    if agent_ura != caller_ura && agent_ura != authority_ura {
+        return None;
+    }
+    if let Some(pin) = request
+        .presented_pubkey_b64
+        .as_deref()
+        .map(str::trim)
+        .filter(|pin| !pin.is_empty())
+    {
+        let public_key = BASE64_STANDARD.decode(pin).ok()?;
+        if public_key.len() != 32 {
+            return None;
+        }
+    }
+    Some(agent_ura.to_string())
+}
+
+fn user_resolve_key_bootstrap_subject_matches(
+    subject_ura: &str,
+    authority_ura: &str,
+    ability: &str,
+    agent_ura: &str,
+) -> bool {
+    if subject_ura == agent_ura {
+        return true;
+    }
+    crate::core::ura::owner_ability_ura(authority_ura, ability).as_deref() == Some(subject_ura)
+}
+
 /// Pairing bootstrap may seed exactly the paired owner's user signing key at
 /// the selected authority. It is intentionally narrower than general identity
 /// mutation: a device cannot author another user, a device key, or an authority key.
@@ -322,6 +397,12 @@ fn verify_hub_link_resolve_key(args: &[u8], hub_ura: &str) -> Option<()> {
 fn is_device_ura(ura: &str) -> bool {
     parse_ura(ura)
         .map(|parsed| parsed.kind == URAKind::Device && parsed.device_id().is_some())
+        .unwrap_or(false)
+}
+
+fn is_user_ura(ura: &str) -> bool {
+    parse_ura(ura)
+        .map(|parsed| parsed.kind == URAKind::User && parsed.user_id().is_some())
         .unwrap_or(false)
 }
 
@@ -392,6 +473,23 @@ fn device_hub_key_bootstrap_authority_id(caller_ura: &str, hub_ura: &str, abilit
     hasher.update(ability.as_bytes());
     format!(
         "device_hub_key_bootstrap_authority:sha256:{}",
+        hex::encode(hasher.finalize())
+    )
+}
+
+fn user_resolve_key_bootstrap_authority_id(
+    caller_ura: &str,
+    hub_ura: &str,
+    agent_ura: &str,
+) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(caller_ura.as_bytes());
+    hasher.update([0]);
+    hasher.update(hub_ura.as_bytes());
+    hasher.update([0]);
+    hasher.update(agent_ura.as_bytes());
+    format!(
+        "user_resolve_key_bootstrap_authority:sha256:{}",
         hex::encode(hasher.finalize())
     )
 }
@@ -767,6 +865,127 @@ mod tests {
         );
 
         assert!(matches!(got, BootstrapAuthorityDecision::Verified { .. }));
+    }
+
+    #[test]
+    fn paired_user_can_resolve_own_key_during_trust_bootstrap() {
+        let args = serde_json::to_vec(&serde_json::json!({
+            "agent_ura": "easynet:///r/test/user/alice",
+            "presented_pubkey_b64": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        }))
+        .expect("args");
+
+        let got = BootstrapAuthorityVerifier::verify(
+            &envelope(
+                "easynet:///r/test/user/alice",
+                "easynet:///r/test/authority",
+                "easynet:///r/test/user/alice",
+            ),
+            ABILITY_FEDERATION_RESOLVE_KEY,
+            AccessAction::Read,
+            &args,
+            &RealmTrustAnchor::default(),
+            TrustedAgentRole::User,
+            Some("easynet:///r/test/authority"),
+        );
+
+        assert!(matches!(got, BootstrapAuthorityDecision::Verified { .. }));
+    }
+
+    #[test]
+    fn paired_user_can_resolve_selected_authority_key_during_trust_bootstrap() {
+        let args = serde_json::to_vec(&serde_json::json!({
+            "agent_ura": "easynet:///r/test/authority",
+        }))
+        .expect("args");
+
+        let got = BootstrapAuthorityVerifier::verify(
+            &envelope(
+                "easynet:///r/test/user/alice",
+                "easynet:///r/test/authority",
+                "easynet:///r/test/authority",
+            ),
+            ABILITY_FEDERATION_RESOLVE_KEY,
+            AccessAction::Read,
+            &args,
+            &RealmTrustAnchor::default(),
+            TrustedAgentRole::User,
+            Some("easynet:///r/test/authority"),
+        );
+
+        assert!(matches!(got, BootstrapAuthorityDecision::Verified { .. }));
+    }
+
+    #[test]
+    fn paired_user_can_resolve_own_key_through_descriptor_subject_during_trust_bootstrap() {
+        let args = serde_json::to_vec(&serde_json::json!({
+            "agent_ura": "easynet:///r/test/user/alice",
+            "presented_pubkey_b64": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        }))
+        .expect("args");
+        let hub = "easynet:///r/test/authority";
+        let subject = crate::core::ura::owner_ability_ura(hub, ABILITY_FEDERATION_RESOLVE_KEY)
+            .expect("resolve_key ability subject");
+
+        let got = BootstrapAuthorityVerifier::verify(
+            &envelope("easynet:///r/test/user/alice", hub, &subject),
+            ABILITY_FEDERATION_RESOLVE_KEY,
+            AccessAction::Read,
+            &args,
+            &RealmTrustAnchor::default(),
+            TrustedAgentRole::User,
+            Some(hub),
+        );
+
+        assert!(matches!(got, BootstrapAuthorityDecision::Verified { .. }));
+    }
+
+    #[test]
+    fn paired_user_resolve_key_bootstrap_binds_subject_to_requested_agent() {
+        let args = serde_json::to_vec(&serde_json::json!({
+            "agent_ura": "easynet:///r/test/user/alice",
+        }))
+        .expect("args");
+
+        let got = BootstrapAuthorityVerifier::verify(
+            &envelope(
+                "easynet:///r/test/user/alice",
+                "easynet:///r/test/authority",
+                "easynet:///r/test/authority",
+            ),
+            ABILITY_FEDERATION_RESOLVE_KEY,
+            AccessAction::Read,
+            &args,
+            &RealmTrustAnchor::default(),
+            TrustedAgentRole::User,
+            Some("easynet:///r/test/authority"),
+        );
+
+        assert_eq!(got, BootstrapAuthorityDecision::NotApplicable);
+    }
+
+    #[test]
+    fn paired_user_resolve_key_bootstrap_cannot_read_other_users() {
+        let args = serde_json::to_vec(&serde_json::json!({
+            "agent_ura": "easynet:///r/test/user/bob",
+        }))
+        .expect("args");
+
+        let got = BootstrapAuthorityVerifier::verify(
+            &envelope(
+                "easynet:///r/test/user/alice",
+                "easynet:///r/test/authority",
+                "easynet:///r/test/user/bob",
+            ),
+            ABILITY_FEDERATION_RESOLVE_KEY,
+            AccessAction::Read,
+            &args,
+            &RealmTrustAnchor::default(),
+            TrustedAgentRole::User,
+            Some("easynet:///r/test/authority"),
+        );
+
+        assert_eq!(got, BootstrapAuthorityDecision::NotApplicable);
     }
 
     #[test]

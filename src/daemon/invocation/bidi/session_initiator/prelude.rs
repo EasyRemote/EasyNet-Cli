@@ -1363,9 +1363,9 @@ mod tests {
     use super::{
         apply_federation_join_receipt, paired_user_resolve_key_args, paired_user_trust_present,
         resolve_hosted_agent_user_segment, resolved_public_keys,
-        run_hosted_agent_advertise_prelude, sync_paired_user_trust_prelude,
-        HostedAgentPreludePublicationPlan, PairedUserTrustSigner, UserTrustBootstrapError,
-        UserTrustBootstrapOutcome, UserTrustSync,
+        run_hosted_agent_advertise_prelude, signed_prelude_request, sync_paired_user_trust_prelude,
+        HostedAgentPreludePublicationPlan, PairedUserTrustSigner, RegisterPubkeyRequest,
+        UserTrustBootstrapError, UserTrustBootstrapOutcome, UserTrustSync,
     };
     use crate::daemon::ability::descriptors::{AbilityDescriptor, AdmissionAction, Visibility};
     use crate::daemon::federation::client::ability_contract::AuthorityAbilityEntry;
@@ -1375,6 +1375,7 @@ mod tests {
     use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
     use crate::daemon::trust::cell::SharedTrustAnchor;
     use axon_sdk::pb::axon::v1::invocation_client::InvocationClient;
+    use base64::Engine as _;
     use std::sync::Arc;
     use tonic::transport::Channel;
 
@@ -1662,6 +1663,40 @@ mod tests {
             }
             other => panic!("expected credential unavailable state, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn paired_user_register_pubkey_prelude_is_bootstrap_candidate_tuple() {
+        let user_ura = "easynet:///r/realm/user/user-dev";
+        let signer = TestCanonicalSigner::new(user_ura, [0x33; 32]);
+        let public_key_b64 = base64::engine::general_purpose::STANDARD.encode(
+            ed25519_dalek::SigningKey::from_bytes(&[0x33; 32])
+                .verifying_key()
+                .to_bytes(),
+        );
+        let args = RegisterPubkeyRequest::new(user_ura, public_key_b64, TrustedAgentRole::User)
+            .to_arguments_bytes()
+            .expect("identity.register_pubkey user args");
+
+        let request = signed_prelude_request(
+            &signer,
+            user_ura,
+            crate::daemon::invocation::admission::register_device_pubkey::ABILITY_IDENTITY_REGISTER_PUBKEY,
+            args,
+        )
+        .await
+        .expect("signed identity.register_pubkey prelude request");
+        let envelope = request.envelope.as_ref().expect("prelude envelope");
+
+        assert!(
+            crate::daemon::invocation::admission::register_device_pubkey::RegisterPubkeyBootstrapTuple::matches(envelope),
+            "paired user trust prelude must be classified as a bootstrap candidate before Axon caller-key resolution"
+        );
+        crate::daemon::invocation::admission::register_device_pubkey::verify_user_register_pubkey_bootstrap_claim(
+            envelope,
+            &request.arguments,
+        )
+        .expect("prelude arguments must bind the presented user key");
     }
 
     #[test]

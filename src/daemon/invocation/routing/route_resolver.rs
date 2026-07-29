@@ -1782,6 +1782,7 @@ fn local_authority_route_kind(local_authority_ura: &str) -> SelectedRouteKind {
 fn id_record(name: &str, now_unix_ms: i64) -> Value {
     json!({
         "name": name,
+        "kind": RecordType::Id.as_str_name(),
         "record_type": RecordType::Id.as_str_name(),
         "authority": authority_for_query(name),
         "ttl_ms": 0,
@@ -1831,6 +1832,7 @@ fn hosted_by_record(
 ) -> Value {
     json!({
         "name": hosted_ura,
+        "kind": RecordType::HostedBy.as_str_name(),
         "record_type": RecordType::HostedBy.as_str_name(),
         "authority": authority_for_query(hosted_ura),
         "ttl_ms": 0,
@@ -1892,6 +1894,7 @@ fn ability_record_from_summary(summary: &Value, now_unix_ms: i64) -> Result<Valu
     };
     Ok(json!({
         "name": ability_ura,
+        "kind": RecordType::Ability.as_str_name(),
         "record_type": RecordType::Ability.as_str_name(),
         "authority": authority_for_query(ability_ura),
         "ttl_ms": 0,
@@ -1936,6 +1939,7 @@ fn device_local_ability_record(
         .map_or(("", public_name), |(ns, local)| (ns, local));
     json!({
         "name": ability_ura,
+        "kind": RecordType::Ability.as_str_name(),
         "record_type": RecordType::Ability.as_str_name(),
         "authority": authority_for_query(ability_ura),
         "ttl_ms": 0,
@@ -1969,6 +1973,7 @@ fn route_record(
 ) -> Value {
     json!({
         "name": route_ura,
+        "kind": RecordType::Route.as_str_name(),
         "record_type": RecordType::Route.as_str_name(),
         "authority": authority_for_query(route_ura),
         "ttl_ms": 0,
@@ -3526,6 +3531,39 @@ mod tests {
             route_value["dispatch_name"],
             selected.dispatch_name.as_str()
         );
+    }
+
+    #[test]
+    fn directory_listing_records_carry_canonical_kind() {
+        let registry = PresenceRegistry::new();
+        let catalog = AbilityCatalogStore::new();
+        let owner_ura = device_owner_ura();
+        mark_online(&registry, &owner_ura);
+        publish_ability(&catalog, &owner_ura, &owner_ura, "agent", "list");
+
+        let answer = DaemonRouteResolver::new(&registry, None, &catalog)
+            .at(TEST_NOW_MS)
+            .resolve_query_json(&json!({
+                "qtype": ResolveType::DirectoryListing.as_str_name(),
+                "query_name": owner_ura,
+            }));
+
+        let records = answer["records"].as_array().expect("records array");
+        assert!(
+            !records.is_empty(),
+            "directory listing must expose typed records"
+        );
+        for record in records {
+            let kind = record["kind"].as_str().expect("directory record kind");
+            let record_type = record["record_type"]
+                .as_str()
+                .expect("directory record record_type");
+            assert_eq!(kind, record_type);
+            assert!(
+                RecordType::from_str_name(kind).is_some(),
+                "directory record kind must be a canonical RecordType"
+            );
+        }
     }
 
     #[test]
