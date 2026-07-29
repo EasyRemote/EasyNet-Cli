@@ -87,6 +87,20 @@ mod tests {
     }
 
     #[test]
+    fn pairing_credential_rejects_connection_state_projection_fields() {
+        let mut body = canonical_pairing_envelope_json();
+        body["state_code"] = serde_json::json!("J200");
+
+        let envelope = serde_json::from_value::<PairingCredentialEnvelope>(body);
+        let err =
+            envelope.expect_err("pairing credential envelope must not carry connection state");
+        assert!(
+            err.to_string().contains("state_code"),
+            "schema error should name the leaked connection-state field: {err}"
+        );
+    }
+
+    #[test]
     fn pairing_credential_carries_immutable_user_binding() {
         let envelope =
             serde_json::from_value::<PairingCredentialEnvelope>(canonical_pairing_envelope_json())
