@@ -20413,20 +20413,23 @@ PY
 check_java_sdk_runtime_receipt_projection_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local result="$cli_root/sdk/java/src/main/java/run/runtime/sdk/InvocationResult.java"
+  local runtime_client="$cli_root/sdk/java/src/main/java/run/runtime/sdk/RuntimeClient.java"
   local receipt="$cli_root/sdk/java/src/main/java/run/runtime/sdk/RuntimeReceipt.java"
   local proof="$cli_root/sdk/java/src/main/java/run/runtime/sdk/RuntimeReceiptProofFacts.java"
   local tests="$cli_root/sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
   [[ -f "$result" ]] || fail "Java InvocationResult source is missing: ${result#$cli_root/}"
+  [[ -f "$runtime_client" ]] || fail "Java RuntimeClient source is missing: ${runtime_client#$cli_root/}"
   [[ -f "$receipt" ]] || fail "Java RuntimeReceipt source is missing: ${receipt#$cli_root/}"
   [[ -f "$proof" ]] || fail "Java RuntimeReceiptProofFacts source is missing: ${proof#$cli_root/}"
   [[ -f "$tests" ]] || fail "Java runtime seam tests are missing: ${tests#$cli_root/}"
 
-  "$PYTHON_BIN" - "$result" "$receipt" "$proof" "$tests" <<'PY'
+  "$PYTHON_BIN" - "$result" "$runtime_client" "$receipt" "$proof" "$tests" <<'PY'
 import sys
 from pathlib import Path
 
-result_path, receipt_path, proof_path, tests_path = map(Path, sys.argv[1:])
+result_path, runtime_client_path, receipt_path, proof_path, tests_path = map(Path, sys.argv[1:])
 result = result_path.read_text(encoding="utf-8")
+runtime_client = runtime_client_path.read_text(encoding="utf-8")
 receipt = receipt_path.read_text(encoding="utf-8")
 proof = proof_path.read_text(encoding="utf-8")
 tests = tests_path.read_text(encoding="utf-8")
@@ -20499,6 +20502,12 @@ if 'requireExactKeys(fields, "ok", "terminal_state", "output_json", "terminal_re
     raise SystemExit("java_runtime_receipt_projection:invocation_result_wire_schema_not_exact")
 if "invocation result contains noncanonical field" not in result:
     raise SystemExit("java_runtime_receipt_projection:invocation_result_unknown_field_error_missing")
+if "requireExactDescriptorResolverResponse(response)" not in runtime_client:
+    raise SystemExit("java_runtime_receipt_projection:descriptor_resolver_response_not_exact")
+if 'Set.of("descriptor_ref")' not in runtime_client:
+    raise SystemExit("java_runtime_receipt_projection:descriptor_resolver_response_allowed_set_missing")
+if "descriptor resolver response contains noncanonical field" not in runtime_client:
+    raise SystemExit("java_runtime_receipt_projection:descriptor_resolver_response_unknown_field_error_missing")
 legacy_patterns = {
     "terminalReceiptValue instanceof Map<?, ?> map ? copyStringMap(map) : Map.of()": "malformed_terminal_receipt_downgrade",
     "optionalReceipt(fields, \"terminal_receipt\")": "optional_terminal_receipt_decoder",
@@ -20551,6 +20560,8 @@ for required_test in (
     "terminal_receipt is required",
     "retired receipt alias",
     "invocation result contains noncanonical field state_code",
+    "runtimeDescriptorResolverRejectsNoncanonicalResponseFields",
+    "descriptor resolver response contains noncanonical field state_code",
 ):
     if required_test not in tests:
         raise SystemExit(f"java_runtime_receipt_projection:missing_test:{required_test}")

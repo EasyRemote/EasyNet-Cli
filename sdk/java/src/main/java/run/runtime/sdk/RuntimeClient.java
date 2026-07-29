@@ -2,6 +2,7 @@ package run.runtime.sdk;
 
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 public final class RuntimeClient implements AutoCloseable {
   private final RuntimeTransport transport;
@@ -40,6 +41,7 @@ public final class RuntimeClient implements AutoCloseable {
         transport.resolveDescriptorRef(
             JsonValueWriter.object(Objects.requireNonNull(request, "request").toWireObject()));
     Map<String, Object> response = JsonValueReader.object(raw, "descriptor resolver response");
+    requireExactDescriptorResolverResponse(response);
     Object descriptor = response.get("descriptor_ref");
     if (!(descriptor instanceof String value) || value.isBlank()) {
       throw SDKError.validation("runtime", "descriptor resolver response missing descriptor_ref");
@@ -110,6 +112,17 @@ public final class RuntimeClient implements AutoCloseable {
   private void requireOpen() {
     if (closed) {
       throw SDKError.closed("runtime");
+    }
+  }
+
+  private static void requireExactDescriptorResolverResponse(Map<String, Object> response) {
+    Set<String> allowed = Set.of("descriptor_ref");
+    for (String key : response.keySet()) {
+      if (!allowed.contains(key)) {
+        throw SDKError.validation(
+            "runtime",
+            "descriptor resolver response contains noncanonical field " + key);
+      }
     }
   }
 

@@ -57,6 +57,7 @@ public final class RuntimeCoreSeamTest {
           "completeTupleRejectsReceiptHistoryPublicInvocation",
           "completeTupleRejectsCatalogueReadPublicInvocation",
           "runtimeDescriptorProviderSubjectValidationUsesRuntimeGovernanceSubjects",
+          "runtimeDescriptorResolverRejectsNoncanonicalResponseFields",
           "runtimeAbilityDescriptorProviderUsesCatalogueProvider",
           "runtimeAbilityClientRejectsCatalogueReadPublicBuild",
           "preparedInvocationCannotBeSubmitted",
@@ -142,6 +143,8 @@ public final class RuntimeCoreSeamTest {
           completeTupleRejectsCatalogueReadPublicInvocation();
       case "runtimeDescriptorProviderSubjectValidationUsesRuntimeGovernanceSubjects" ->
           runtimeDescriptorProviderSubjectValidationUsesRuntimeGovernanceSubjects();
+      case "runtimeDescriptorResolverRejectsNoncanonicalResponseFields" ->
+          runtimeDescriptorResolverRejectsNoncanonicalResponseFields();
       case "runtimeAbilityDescriptorProviderUsesCatalogueProvider" ->
           runtimeAbilityDescriptorProviderUsesCatalogueProvider();
       case "runtimeAbilityClientRejectsCatalogueReadPublicBuild" ->
@@ -1575,6 +1578,16 @@ public final class RuntimeCoreSeamTest {
                 RuntimeDescriptorRefRequest.ABILITY_DESCRIPTOR_PROVIDER));
   }
 
+  private static void runtimeDescriptorResolverRejectsNoncanonicalResponseFields() {
+    MemoryRuntimeTransport transport = new MemoryRuntimeTransport();
+    transport.leakDescriptorResolverStateCode = true;
+    RuntimeClient runtime = new RuntimeClient(transport);
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        "descriptor resolver response contains noncanonical field state_code",
+        () -> runtime.resolveDescriptorRef(descriptorRequest()));
+  }
+
   private static void runtimeAbilityDescriptorProviderUsesCatalogueProvider() {
     MemoryRuntimeTransport transport = new MemoryRuntimeTransport();
     String catalogueDescriptor =
@@ -1715,6 +1728,16 @@ public final class RuntimeCoreSeamTest {
         NONCE,
         Map.of("form", "none"),
         Map.of("trace_id", "trace-1"));
+  }
+
+  private static RuntimeDescriptorRefRequest descriptorRequest() {
+    return new RuntimeDescriptorRefRequest(
+        CALLEE,
+        "meta.list_abilities",
+        "rpc",
+        CALLER,
+        CALLEE,
+        RuntimeDescriptorRefRequest.ABILITY_DESCRIPTOR_PROVIDER);
   }
 
   private static InvocationDraft complete(InvocationBuilder builder) {
@@ -1891,6 +1914,7 @@ public final class RuntimeCoreSeamTest {
     private Map<String, Object> seenDescriptorRequest = Map.of();
     private InvocationTuple seenInvokeTuple = null;
     private Map<String, Object> nextOutput = Map.of("ok", true);
+    private boolean leakDescriptorResolverStateCode = false;
     private long eventHandleId = 7;
     private int openedBidi = 0;
 
@@ -1909,6 +1933,10 @@ public final class RuntimeCoreSeamTest {
     @Override
     public byte[] resolveDescriptorRef(byte[] requestJson) {
       seenDescriptorRequest = JsonValueReader.object(requestJson, "descriptor request");
+      if (leakDescriptorResolverStateCode) {
+        return JsonValueWriter.object(
+            Map.of("descriptor_ref", resolvedDescriptorRef, "state_code", "J200"));
+      }
       return JsonValueWriter.object(Map.of("descriptor_ref", resolvedDescriptorRef));
     }
 
