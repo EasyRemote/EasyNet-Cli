@@ -24,7 +24,7 @@ public struct InvocationTuple: Sendable, Equatable {
         self.callee = try InvocationTuple.requiredPrincipal(callee, "callee")
         self.descriptorRef = try InvocationTuple.required(descriptorRef, "descriptorRef")
         self.subject = try InvocationTuple.requiredPrincipal(subject, "subject")
-        self.nonce = try InvocationTuple.required(nonce, "nonce")
+        self.nonce = try requiredInvocationNonceBase64(nonce, stage: "invocation")
         self.causalContext = try InvocationTuple.required(causalContext, "causalContext")
         self.argsJSON = try InvocationTuple.required(argsJSON, "argsJSON")
         self.metadata = metadata
@@ -71,6 +71,20 @@ public struct InvocationTuple: Sendable, Equatable {
             metadata: try invocationMetadataObject(object["metadata"])
         )
     }
+}
+
+func requiredInvocationNonceBase64(_ value: String?, stage: String) throws -> String {
+    let clean = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    guard !clean.isEmpty else {
+        throw SDKError.validation(stage, "nonce_base64 is required")
+    }
+    guard let decoded = Data(base64Encoded: clean) else {
+        throw SDKError.validation(stage, "nonce_base64 must be base64")
+    }
+    guard decoded.count == 16 else {
+        throw SDKError.validation(stage, "nonce_base64 must decode to 16 bytes")
+    }
+    return clean
 }
 
 public struct InvocationDraft: Sendable, Equatable {

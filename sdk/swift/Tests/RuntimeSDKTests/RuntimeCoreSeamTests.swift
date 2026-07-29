@@ -960,6 +960,34 @@ final class RuntimeCoreSeamTests: XCTestCase {
         }
     }
 
+    func testInvocationTupleRejectsNonCanonicalNonceLength() {
+        expectSyncSDKError(.invalidArgument) {
+            _ = try completeBuilder()
+                .withNonce("bm9uY2U=")
+                .inspect()
+        }
+    }
+
+    func testInvocationTupleRejectsMalformedNonceBase64() {
+        expectSyncSDKError(.invalidArgument) {
+            _ = try completeBuilder()
+                .withNonce("not-base64!")
+                .inspect()
+        }
+    }
+
+    func testRuntimeCallContextRejectsNonCanonicalNonceLength() {
+        expectSyncSDKError(.invalidArgument) {
+            _ = try RuntimeCallContext(
+                callerURA: caller,
+                calleeURA: callee,
+                subjectURA: callee,
+                nonceBase64: "bm9uY2U=",
+                causalContext: ["form": .string("none")]
+            )
+        }
+    }
+
     func testCompleteTupleRejectsNoncanonicalSessionSubjectAuthorityCarrier() throws {
         let noncanonicalSessionSubject = "easynet:///r/example/resource/user.alice/session/invocation_history"
         let metadata = try authorityMetadataValue([

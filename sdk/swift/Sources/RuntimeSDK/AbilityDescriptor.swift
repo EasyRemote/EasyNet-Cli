@@ -151,7 +151,7 @@ public struct RuntimeCallContext: Sendable, Equatable {
         self.callerURA = try Self.requiredPrincipal(callerURA, "caller_ura")
         self.calleeURA = try Self.requiredPrincipal(calleeURA, "callee_ura")
         self.subjectURA = try Self.requiredPrincipal(subjectURA, "subject_ura")
-        self.nonceBase64 = try Self.required(nonceBase64, "nonce_base64")
+        self.nonceBase64 = try requiredInvocationNonceBase64(nonceBase64, stage: "runtime")
         self.causalContext = try Self.copyObject(causalContext, "causal_context")
         self.metadata = try Self.copyObject(metadata, "metadata")
     }
