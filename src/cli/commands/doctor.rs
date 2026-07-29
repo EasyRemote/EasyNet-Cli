@@ -144,10 +144,12 @@ fn check_connection_state(snapshot: &join_connection_state::JoinConnectionSnapsh
     };
     let status = if snapshot.state_code.starts_with('F') && snapshot.state_code != "F560" {
         CheckStatus::Fail
+    } else if snapshot.state == "FRONTEND_CONNECTED" {
+        CheckStatus::Ok
     } else if snapshot.state_code == "F560" || snapshot.state_code == "C440" {
         CheckStatus::Warn
     } else {
-        CheckStatus::Ok
+        CheckStatus::Warn
     };
     Check {
         name: "connection state".to_string(),
@@ -554,6 +556,40 @@ mod tests {
             timeout_secs: None,
             root_exists: None,
         }
+    }
+
+    fn connection_snapshot(
+        state: &str,
+        state_code: &str,
+    ) -> join_connection_state::JoinConnectionSnapshot {
+        join_connection_state::JoinConnectionSnapshot {
+            state: state.to_string(),
+            state_code: state_code.to_string(),
+            transition_id: Some("T09_OPEN_SELF_SESSION".to_string()),
+            interrupted_transition: None,
+            failure: None,
+            realm: "localhost".to_string(),
+            node_id: "device-a".to_string(),
+            device_ura: "easynet:///r/localhost/device/device-a".to_string(),
+            hub_endpoint: Some("https://127.0.0.1:50443".to_string()),
+            source: "test".to_string(),
+            observed_at_unix_ms: 0,
+        }
+    }
+
+    #[test]
+    fn degraded_j800_connection_state_is_warn_not_ok() {
+        let check = check_connection_state(&connection_snapshot("DEGRADED", "J800"));
+
+        assert_eq!(check.status, CheckStatus::Warn);
+        assert!(check.detail.contains("DEGRADED [J800]"));
+    }
+
+    #[test]
+    fn frontend_connected_is_the_only_ok_product_connection_state() {
+        let check = check_connection_state(&connection_snapshot("FRONTEND_CONNECTED", "J800"));
+
+        assert_eq!(check.status, CheckStatus::Ok);
     }
 
     #[test]

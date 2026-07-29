@@ -289,13 +289,13 @@ fn verify_bootstrap_resolve_key(args: &[u8], authority_ura: &str, owner_ura: &st
 fn verify_bootstrap_owner_user_key(args: &[u8], owner_ura: &str) -> Option<()> {
     #[derive(serde::Deserialize)]
     struct UserKeyRegistration {
-        agent_ura: String,
+        principal_ura: String,
         public_key_b64: String,
         role: String,
     }
 
     let request = serde_json::from_slice::<UserKeyRegistration>(args).ok()?;
-    if request.role.trim() != "user" || request.agent_ura.trim() != owner_ura {
+    if request.role.trim() != "user" || request.principal_ura.trim() != owner_ura {
         return None;
     }
     let public_key = BASE64_STANDARD.decode(request.public_key_b64.trim()).ok()?;
@@ -399,6 +399,7 @@ fn device_hub_key_bootstrap_authority_id(caller_ura: &str, hub_ura: &str, abilit
 mod tests {
     use super::*;
     use crate::cli::commands::test_support::HomeGuard;
+    use crate::daemon::invocation::admission::register_device_pubkey::RegisterPubkeyRequest;
     use crate::daemon::persistence::config::state_dir;
     use crate::daemon::trust::anchor::TrustedPrincipalOwner;
     use axon_sdk::pb::axon::v1::{AgentIdentity, SubjectIdentity};
@@ -770,11 +771,12 @@ mod tests {
     #[test]
     fn paired_device_can_seed_only_its_owner_user_key_during_bootstrap() {
         let key = ed25519_dalek::SigningKey::from_bytes(&[0x11; 32]);
-        let args = serde_json::to_vec(&serde_json::json!({
-            "agent_ura": "easynet:///r/test/user/alice",
-            "public_key_b64": BASE64_STANDARD.encode(key.verifying_key().to_bytes()),
-            "role": "user",
-        }))
+        let args = RegisterPubkeyRequest::new(
+            "easynet:///r/test/user/alice",
+            BASE64_STANDARD.encode(key.verifying_key().to_bytes()),
+            TrustedAgentRole::User,
+        )
+        .to_arguments_bytes()
         .expect("args");
         let subject = crate::core::ura::owner_ability_ura(
             "easynet:///r/test/authority",
@@ -796,11 +798,12 @@ mod tests {
         );
         assert!(matches!(got, BootstrapAuthorityDecision::Verified { .. }));
 
-        let other_args = serde_json::to_vec(&serde_json::json!({
-            "agent_ura": "easynet:///r/test/user/bob",
-            "public_key_b64": BASE64_STANDARD.encode(key.verifying_key().to_bytes()),
-            "role": "user",
-        }))
+        let other_args = RegisterPubkeyRequest::new(
+            "easynet:///r/test/user/bob",
+            BASE64_STANDARD.encode(key.verifying_key().to_bytes()),
+            TrustedAgentRole::User,
+        )
+        .to_arguments_bytes()
         .expect("args");
         let rejected = BootstrapAuthorityVerifier::verify(
             &envelope(
