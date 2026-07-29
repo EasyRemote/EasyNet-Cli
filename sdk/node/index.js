@@ -1064,7 +1064,7 @@ export class ReceiptHistoryPage {
     this.records = value.records.map((record, index) => objectValue(record, `records[${index}]`));
     this.nextCursor = optionalRuntimeString(value.next_cursor, "next_cursor") ?? "";
     this.limit = boundedRuntimeLimit(value.limit, "limit", 50);
-    this.source = requiredRuntimeString(value.source, "source");
+    this.source = requiredHistoryLedgerURA(value.source, "source");
   }
 
   static fromJSON(raw) {
@@ -4780,15 +4780,21 @@ function historyOutputRecords(output) {
 }
 
 function receiptLedgerSource(output) {
-  const source = output.source;
-  if (typeof source === "string" && source.trim()) {
-    return source.trim();
+  if (Object.hasOwn(output, "source")) {
+    throw invalidHistory("receipt history output contains noncanonical field source");
   }
-  const ledgerURA = output.ledger_ura;
-  if (typeof ledgerURA === "string" && ledgerURA.trim()) {
-    return ledgerURA.trim();
+  return requiredHistoryLedgerURA(output.ledger_ura, "ledger_ura");
+}
+
+function requiredHistoryLedgerURA(value, field) {
+  if (typeof value !== "string" || value.trim() === "") {
+    throw invalidHistory(`${field} is required`);
   }
-  return "invocation.history.list";
+  const ledgerURA = value.trim();
+  if (!canonicalResourceSubject(ledgerURA)) {
+    throw invalidHistory(`${field} must be a canonical Resource URA`);
+  }
+  return ledgerURA;
 }
 
 function authorityMetadataValue(metadata, key) {

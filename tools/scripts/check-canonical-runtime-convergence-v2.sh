@@ -2060,10 +2060,14 @@ check_invocation_history_ledger_ura_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local history="$cli_root/src/daemon/ability/builtins/governance/invocation_history.rs"
   local cli_history="$cli_root/src/cli/commands/groups/invocation.rs"
+  local node_sdk="$cli_root/sdk/node/index.js"
+  local node_tests="$cli_root/sdk/node/test/runtime-core.test.mjs"
   [[ -f "$history" ]] || return 0
   [[ -f "$cli_history" ]] || return 0
+  [[ -f "$node_sdk" ]] || return 0
+  [[ -f "$node_tests" ]] || return 0
 
-  "$PYTHON_BIN" - "$history" "$cli_history" <<'PY'
+  "$PYTHON_BIN" - "$history" "$cli_history" "$node_sdk" "$node_tests" <<'PY'
 import re
 import sys
 from pathlib import Path
@@ -2074,6 +2078,10 @@ production = text.split("#[cfg(test)]", 1)[0]
 cli_path = Path(sys.argv[2])
 cli_text = cli_path.read_text()
 cli_production = cli_text.split("#[cfg(test)]", 1)[0]
+node_path = Path(sys.argv[3])
+node_text = node_path.read_text()
+node_test_path = Path(sys.argv[4])
+node_tests = node_test_path.read_text()
 
 ledger = re.search(
     r"fn ledger_resource_ura\(\) -> (?P<ret>[^\{]+)\{(?P<body>.*?)\n\}\n\nfn ledger_resource_ura_from_host_device_agent_ura",
@@ -2143,6 +2151,62 @@ for required in (
 
 if "HistoryListResponse {\n            ledger_path: None" in cli_text:
     raise SystemExit("invocation_history_cli_limit_zero_synthesizes_legacy_response")
+
+node_receipt = re.search(
+    r"function receiptLedgerSource\(output\) \{(?P<body>.*?)\n\}\n\nfunction requiredHistoryLedgerURA",
+    node_text,
+    re.S,
+)
+if node_receipt is None:
+    raise SystemExit("invocation_history_node_receipt_ledger_source_not_found")
+node_receipt_body = node_receipt.group("body")
+for forbidden in (
+    "const source = output.source",
+    "return \"invocation.history.list\";",
+):
+    if forbidden in node_receipt_body:
+        raise SystemExit(f"invocation_history_node_legacy_ledger_source_fallback:{forbidden}")
+for required in (
+    'Object.hasOwn(output, "source")',
+    "noncanonical field source",
+    'output.ledger_ura, "ledger_ura"',
+):
+    if required not in node_receipt_body:
+        raise SystemExit(f"invocation_history_node_ledger_source_contract_missing:{required}")
+
+node_validator = re.search(
+    r"function requiredHistoryLedgerURA\(value, field\) \{(?P<body>.*?)\n\}\n\nfunction authorityMetadataValue",
+    node_text,
+    re.S,
+)
+if node_validator is None:
+    raise SystemExit("invocation_history_node_ledger_ura_validator_not_found")
+node_validator_body = node_validator.group("body")
+for required in (
+    "field} is required",
+    "canonicalResourceSubject(ledgerURA)",
+    "canonical Resource URA",
+):
+    if required not in node_validator_body:
+        raise SystemExit(f"invocation_history_node_ledger_ura_validator_missing:{required}")
+
+node_page = re.search(
+    r"export class ReceiptHistoryPage \{(?P<body>.*?)\n\}\n\nexport class SessionHistoryOperations",
+    node_text,
+    re.S,
+)
+if node_page is None:
+    raise SystemExit("invocation_history_node_page_not_found")
+if 'requiredHistoryLedgerURA(value.source, "source")' not in node_page.group("body"):
+    raise SystemExit("invocation_history_node_page_source_not_canonical_ledger_ura")
+
+for required in (
+    "runtime receipt provider rejects legacy history source field",
+    "runtime receipt provider requires canonical ledger_ura",
+    "receiptLedgerURA",
+):
+    if required not in node_tests:
+        raise SystemExit(f"invocation_history_node_ledger_ura_test_missing:{required}")
 PY
 }
 

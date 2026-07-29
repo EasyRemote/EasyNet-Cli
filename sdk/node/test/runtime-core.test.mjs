@@ -94,6 +94,8 @@ const completeDraft = () =>
     .withMetadata({ trace_id: "trace-1" })
     .build();
 
+const receiptLedgerURA = "easynet:///r/example/resource/device.dev-a/billing/invocations";
+
 const authorityValue = (payload, wire = {}) =>
   Buffer.from(
     JSON.stringify({
@@ -2270,7 +2272,7 @@ test("runtime receipt provider uses governance descriptor provider and complete 
         output: {
           records: [{ request_id: "req-1" }],
           next_cursor: "",
-          ledger_ura: "easynet:///r/example/resource/device.dev-a/billing/invocations",
+          ledger_ura: receiptLedgerURA,
         },
         terminal_receipt: canonicalRuntimeReceipt("inv-history", "completed", "Completed", 1),
       });
@@ -2295,7 +2297,7 @@ test("runtime receipt provider uses governance descriptor provider and complete 
   });
 
   assert.equal(page.records.length, 1);
-  assert.equal(page.source, "easynet:///r/example/resource/device.dev-a/billing/invocations");
+  assert.equal(page.source, receiptLedgerURA);
   assert.deepEqual(calls[0], [
     "resolve",
     {
@@ -2340,7 +2342,7 @@ test("receipt read call context derives session runtime-state subject from autho
       return JSON.stringify({
         ok: true,
         terminal_state: "Completed",
-        output: { records: [], next_cursor: "", source: "invocation.history.list" },
+        output: { records: [], next_cursor: "", ledger_ura: receiptLedgerURA },
         terminal_receipt: canonicalRuntimeReceipt("inv-history-derived", "completed", "Completed", 1),
       });
     },
@@ -2398,7 +2400,7 @@ test("session history preflight rejects authority subject mismatch before receip
         records: [],
         next_cursor: "",
         limit: 50,
-        source: "invocation.history.list",
+        source: receiptLedgerURA,
       };
     },
   });
@@ -2464,7 +2466,7 @@ test("session history preflight rejects path-substring owner subject before rece
         records: [],
         next_cursor: "",
         limit: 50,
-        source: "invocation.history.list",
+        source: receiptLedgerURA,
       };
     },
   });
@@ -2503,7 +2505,7 @@ test("session history preflight rejects retired session subject before receipt p
         records: [],
         next_cursor: "",
         limit: 50,
-        source: "invocation.history.list",
+        source: receiptLedgerURA,
       };
     },
   });
@@ -2542,7 +2544,7 @@ test("session history preflight accepts exact runtime-owner subject with delegat
         records: [],
         next_cursor: "",
         limit: 50,
-        source: "invocation.history.list",
+        source: receiptLedgerURA,
       };
     },
   });
@@ -2563,7 +2565,7 @@ test("session history preflight accepts exact runtime-owner subject with delegat
   });
 
   assert.equal(seenRequest.call.subjectURA, deviceSubject);
-  assert.equal(page.source, "invocation.history.list");
+  assert.equal(page.source, receiptLedgerURA);
 });
 
 test("session history preflight rejects non-callee runtime-owner subject before provider", async () => {
@@ -2575,7 +2577,7 @@ test("session history preflight rejects non-callee runtime-owner subject before 
         records: [],
         next_cursor: "",
         limit: 50,
-        source: "invocation.history.list",
+        source: receiptLedgerURA,
       };
     },
   });
@@ -2613,7 +2615,7 @@ test("session history preflight rejects runtime-owner subject with session autho
         records: [],
         next_cursor: "",
         limit: 50,
-        source: "invocation.history.list",
+        source: receiptLedgerURA,
       };
     },
   });
@@ -2651,7 +2653,7 @@ test("session history keeps subject filters as ledger predicates", async () => {
         records: [{ receipt_ura: "easynet:///r/example/resource/runtime/invocation/i1/receipt/1" }],
         next_cursor: "",
         limit: 25,
-        source: "invocation.history.list",
+        source: receiptLedgerURA,
       });
     },
   });
@@ -2676,8 +2678,92 @@ test("session history keeps subject filters as ledger predicates", async () => {
   });
 
   assert.equal(seenRequest.filter.subjectURA, callee);
-  assert.equal(page.source, "invocation.history.list");
+  assert.equal(page.source, receiptLedgerURA);
   assert.equal(page.records.length, 1);
+});
+
+test("runtime receipt provider rejects legacy history source field", async () => {
+  const runtime = new sdk.RuntimeClient({
+    resolveDescriptorRef: () =>
+      JSON.stringify({
+        descriptor_ref:
+          "easynet:///r/example/ability/device.dev-a.invocation.history.list@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read",
+      }),
+    invoke: () =>
+      JSON.stringify({
+        ok: true,
+        terminal_state: "Completed",
+        output: { records: [], next_cursor: "", source: "invocation.history.list" },
+        terminal_receipt: canonicalRuntimeReceipt("legacy-history-source", "completed", "Completed", 1),
+      }),
+  });
+  const history = new sdk.SessionHistoryOperations(
+    new sdk.RuntimeReceiptProvider(new sdk.RuntimeAbilityClient(runtime)),
+  );
+
+  await assert.rejects(
+    () =>
+      history.list({
+        call: {
+          caller_ura: caller,
+          callee_ura: callee,
+          subject_ura: callee,
+          nonce_base64: nonce,
+          causal_context: { form: "none" },
+          metadata: {
+            [sdk.DELEGATION_METADATA_KEY]: delegationValue(["invocation.history.*"]),
+          },
+        },
+        limit: 5,
+      }),
+    (error) =>
+      error instanceof sdk.SDKError &&
+      error.code === sdk.ErrorCode.INVALID_INVOCATION &&
+      error.stage === "history" &&
+      /noncanonical field source/.test(error.message),
+  );
+});
+
+test("runtime receipt provider requires canonical ledger_ura", async () => {
+  const runtime = new sdk.RuntimeClient({
+    resolveDescriptorRef: () =>
+      JSON.stringify({
+        descriptor_ref:
+          "easynet:///r/example/ability/device.dev-a.invocation.history.list@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read",
+      }),
+    invoke: () =>
+      JSON.stringify({
+        ok: true,
+        terminal_state: "Completed",
+        output: { records: [], next_cursor: "", ledger_ura: "https://example.invalid/invocations" },
+        terminal_receipt: canonicalRuntimeReceipt("bad-history-ledger", "completed", "Completed", 1),
+      }),
+  });
+  const history = new sdk.SessionHistoryOperations(
+    new sdk.RuntimeReceiptProvider(new sdk.RuntimeAbilityClient(runtime)),
+  );
+
+  await assert.rejects(
+    () =>
+      history.list({
+        call: {
+          caller_ura: caller,
+          callee_ura: callee,
+          subject_ura: callee,
+          nonce_base64: nonce,
+          causal_context: { form: "none" },
+          metadata: {
+            [sdk.DELEGATION_METADATA_KEY]: delegationValue(["invocation.history.*"]),
+          },
+        },
+        limit: 5,
+      }),
+    (error) =>
+      error instanceof sdk.SDKError &&
+      error.code === sdk.ErrorCode.INVALID_INVOCATION &&
+      error.stage === "history" &&
+      /ledger_ura must be a canonical Resource URA/.test(error.message),
+  );
 });
 
 test("receipt filter rejects retired agent_ura alias", () => {
