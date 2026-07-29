@@ -501,8 +501,7 @@ mod tests {
     }
 
     fn local_callee() -> String {
-        crate::daemon::identity::local_invocation::local_device_ura()
-            .expect("test local device identity")
+        CALLEE.to_string()
     }
 
     fn route_manifest(ability: &str) -> crate::daemon::ability::manifest::AbilityManifest {

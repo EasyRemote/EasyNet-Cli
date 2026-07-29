@@ -36,7 +36,7 @@ class RuntimeTransportFake:
         request = json.loads(request_json)
         self.descriptor_requests.append(request)
         action = {
-            "bidi": "bidi",
+            "bidi": "stream",
             "rpc": "read",
             "stream": "stream",
         }[request["call_mode"]]
@@ -283,7 +283,7 @@ def test_runtime_ability_bidi_resolves_bidi_descriptor() -> None:
         (BidiStreamDescriptor(stream_id=1, content_type="application/json"),),
     )
     assert session.session_id == "bidi-1"
-    assert transport.seen_bidi["descriptor_ref"].endswith("!bidi")
+    assert transport.seen_bidi["descriptor_ref"].endswith("!stream")
     assert transport.seen_streams == [
         {"content_type": "application/json", "stream_id": 1}
     ]

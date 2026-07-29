@@ -2353,11 +2353,11 @@ def _runtime_receipt_authority_binding(
     if kind == "session":
         return _AxonAuthorityBinding.session(
             _AxonSessionAuthorityBody(
-                backend_ura=_required_receipt_text(
+                issuer_ura=_required_receipt_text(
                     value.get("issuer_ura"),
                     f"{field_name}.issuer_ura",
                 ),
-                user_ura=_required_receipt_text(
+                subject_ura=_required_receipt_text(
                     value.get("subject_ura"),
                     f"{field_name}.subject_ura",
                 ),
