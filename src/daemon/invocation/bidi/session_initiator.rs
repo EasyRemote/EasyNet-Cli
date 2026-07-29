@@ -112,7 +112,9 @@ use frame_loop::{run_live_session, LiveSessionRun};
 #[cfg(test)]
 use prelude::committed_owner_ability_descriptors;
 use prelude::{run_session_preludes, SessionPreludeChannels, SessionPreludeRun};
-pub use prelude::{SessionPreludeInputs, UserTrustBootstrapError, UserTrustSync};
+pub use prelude::{
+    PairedUserTrustSigner, SessionPreludeInputs, UserTrustBootstrapError, UserTrustSync,
+};
 pub use supervisor::SessionCloseStats;
 use supervisor::{
     backoff_after_clean_close, full_jitter, next_backoff, DeviceSessionPhase, SessionPhaseTracker,
@@ -1322,8 +1324,20 @@ mod tests {
             request: Request<InvokeRequest>,
         ) -> Result<Response<InvokeResponse>, Status> {
             let request = request.into_inner();
-            let body: Value = serde_json::from_slice(&request.arguments)
+            let mut body: Value = serde_json::from_slice(&request.arguments)
                 .map_err(|e| Status::invalid_argument(format!("invalid json args: {e}")))?;
+            let caller_ura = request
+                .envelope
+                .as_ref()
+                .and_then(|envelope| envelope.caller.as_ref())
+                .map(|caller| caller.ura.as_str())
+                .unwrap_or("<missing>");
+            if let Some(object) = body.as_object_mut() {
+                object.insert(
+                    "__caller_ura".to_string(),
+                    Value::String(caller_ura.to_string()),
+                );
+            }
             let function_name =
                 crate::daemon::invocation::dispatch::invocation_wire::function_name_from_invocation_target(
                     "recording prelude",
@@ -1951,6 +1965,9 @@ mod tests {
             daemon_realm: "realm".to_string(),
             trust_anchor_path: trust_dir.path().join("realm-trust.toml"),
             cell: crate::daemon::trust::cell::SharedTrustAnchor::default(),
+            user_signer: super::prelude::PairedUserTrustSigner::fixed(TestSessionSigner::random(
+                "easynet:///r/realm/user/user-dev",
+            )),
         };
 
         let result = dial_and_run_session_with_idle_timeout(
@@ -1988,6 +2005,8 @@ mod tests {
                 .iter()
                 .any(|(name, body)| name == "federation.resolve_key"
                     && body.get("agent_ura").and_then(Value::as_str)
+                        == Some("easynet:///r/realm/user/user-dev")
+                    && body.get("__caller_ura").and_then(Value::as_str)
                         == Some("easynet:///r/realm/user/user-dev")),
             "prelude must explicitly resolve paired user key before session.open: {calls:#?}"
         );
@@ -2034,6 +2053,9 @@ mod tests {
             daemon_realm: "realm".to_string(),
             trust_anchor_path: trust_dir.path().join("realm-trust.toml"),
             cell: crate::daemon::trust::cell::SharedTrustAnchor::new(Arc::new(user_anchor)),
+            user_signer: super::prelude::PairedUserTrustSigner::fixed(TestSessionSigner::random(
+                user_ura,
+            )),
         };
 
         let result = dial_and_run_session_with_idle_timeout(
@@ -2069,8 +2091,9 @@ mod tests {
                 .iter()
                 .any(|(name, body)| name == "identity.register_pubkey"
                     && body.get("principal_ura").and_then(Value::as_str) == Some(user_ura)
-                    && body.get("public_key_b64").and_then(Value::as_str) == Some(user_pubkey_b64)),
-            "prelude must publish the paired user key before resolving it: {calls:#?}"
+                    && body.get("public_key_b64").and_then(Value::as_str) == Some(user_pubkey_b64)
+                    && body.get("__caller_ura").and_then(Value::as_str) == Some(user_ura)),
+            "prelude must publish the paired user key as the paired User before resolving it: {calls:#?}"
         );
         assert!(
             calls
@@ -2078,8 +2101,9 @@ mod tests {
                 .any(|(name, body)| name == "federation.resolve_key"
                     && body.get("agent_ura").and_then(Value::as_str) == Some(user_ura)
                     && body.get("presented_pubkey_b64").and_then(Value::as_str)
-                        == Some(user_pubkey_b64)),
-            "paired user resolve_key must pin the presented public key: {calls:#?}"
+                        == Some(user_pubkey_b64)
+                    && body.get("__caller_ura").and_then(Value::as_str) == Some(user_ura)),
+            "paired user resolve_key must pin the presented public key as the paired User: {calls:#?}"
         );
     }
 

@@ -895,6 +895,8 @@ pub fn start_daemon_invocation_transport(
                     daemon_realm: config.realm().to_string(),
                     trust_anchor_path: trust_anchor_path.clone(),
                     cell: trust_anchor_cell.clone(),
+                    user_signer:
+                        crate::daemon::invocation::bidi::session_initiator::PairedUserTrustSigner::runtime_caller(),
                 };
             session_shutdown = spawn_session_supervisor(SessionSupervisorConfig {
                 hub_endpoint,

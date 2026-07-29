@@ -10429,13 +10429,15 @@ PY
 check_session_prelude_credentials_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local prelude="$cli_root/src/daemon/invocation/bidi/session_initiator/prelude.rs"
+  local initiator="$cli_root/src/daemon/invocation/bidi/session_initiator.rs"
   [[ -f "$prelude" ]] || return 0
 
-  "$PYTHON_BIN" - "$prelude" <<'PY'
+  "$PYTHON_BIN" - "$prelude" "$initiator" <<'PY'
 import sys
 from pathlib import Path
 
 text = Path(sys.argv[1]).read_text()
+initiator = Path(sys.argv[2]).read_text() if Path(sys.argv[2]).exists() else ""
 start = text.find("async fn sync_paired_user_trust_prelude(")
 if start < 0:
     raise SystemExit("session_prelude_user_trust_sync_missing")
@@ -10448,6 +10450,8 @@ for retired in (
     "load_credentials().ok()",
     "load_credentials().ok()?",
     "user_ura().ok()",
+    "signer: &dyn CanonicalSigner",
+    "publish_paired_user_keys_prelude(client, signer",
 ):
     if retired in body:
         raise SystemExit(f"session_prelude_credentials_retired_fallback:{retired}")
@@ -10457,10 +10461,24 @@ required = (
     "UserTrustBootstrapError::CredentialsUnavailable",
     "load paired credentials",
     "project runtime user binding",
+    "sync.user_signer",
+    "UserTrustBootstrapError::SignerUnavailable",
+    "publish_paired_user_keys_prelude(",
+    "user_signer.as_ref()",
 )
 for token in required:
     if token not in body:
         raise SystemExit(f"session_prelude_credentials_missing_fail_closed_path:{token}")
+
+for token in (
+    "pub struct PairedUserTrustSigner",
+    "enum PairedUserTrustSignerSource",
+    "pub fn runtime_caller()",
+    "load_runtime_caller_signer(user_ura)",
+    "fixed paired user signer owner",
+):
+    if token not in text:
+        raise SystemExit(f"session_prelude_user_signer_source_missing:{token}")
 
 not_required_count = body.count("return Ok(UserTrustBootstrapOutcome::NotRequired);")
 if not_required_count != 3:
@@ -10473,6 +10491,14 @@ for test in (
 ):
     if test not in text:
         raise SystemExit(f"missing_session_prelude_credentials_test:{test}")
+
+for token in (
+    "__caller_ura",
+    "prelude must publish the paired user key as the paired User",
+    "paired user resolve_key must pin the presented public key as the paired User",
+):
+    if token not in initiator:
+        raise SystemExit(f"missing_session_prelude_user_signer_caller_assertion:{token}")
 
 advertise_start = text.find("async fn run_hosted_agent_advertise_prelude(")
 if advertise_start < 0:

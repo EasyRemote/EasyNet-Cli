@@ -8580,6 +8580,51 @@ if session_prelude.exists():
         sync_body = rust_method_body(text, "sync_paired_user_trust_prelude")
         if sync_body is not None:
             offset, body = sync_body
+            for pattern, detail in (
+                (
+                    "signer: &dyn CanonicalSigner",
+                    "paired user trust sync must not reuse the session Device signer",
+                ),
+                (
+                    "publish_paired_user_keys_prelude(client, signer",
+                    "paired user key publication must be signed by the paired User signer",
+                ),
+            ):
+                if pattern in body:
+                    add(
+                        "R93_SESSION_PRELUDE_RESOLVE_KEY_SCHEMA",
+                        session_prelude,
+                        line_number(text, offset + body.find(pattern)),
+                        detail,
+                    )
+            for token, detail in (
+                (
+                    "sync.user_signer",
+                    "paired user trust sync must load an explicit paired User signer source",
+                ),
+                (
+                    "UserTrustBootstrapError::SignerUnavailable",
+                    "missing paired User signer custody must be a typed prelude failure",
+                ),
+                (
+                    "user_signer.as_ref()",
+                    "paired user trust operations must sign with the paired User signer",
+                ),
+            ):
+                if token not in body:
+                    add(
+                        "R93_SESSION_PRELUDE_RESOLVE_KEY_SCHEMA",
+                        session_prelude,
+                        line_number(text, offset),
+                        detail,
+                    )
+            if "load_runtime_caller_signer(user_ura)" not in text:
+                add(
+                    "R93_SESSION_PRELUDE_RESOLVE_KEY_SCHEMA",
+                    session_prelude,
+                    line_number(text, offset),
+                    "paired user signer source must load the runtime caller signer for the paired User URA",
+                )
             if "paired_user_resolve_key_args(&user_ura, presented_pubkey_b64)" not in body:
                 add(
                     "R93_SESSION_PRELUDE_RESOLVE_KEY_SCHEMA",
@@ -8634,6 +8679,31 @@ if session_prelude.exists():
                         "R93_SESSION_PRELUDE_RESOLVE_KEY_SCHEMA",
                         session_prelude,
                         line_number(text, offset),
+                        detail,
+                    )
+
+        session_initiator = cli_root / "src/daemon/invocation/bidi/session_initiator.rs"
+        if session_initiator.exists():
+            initiator_text = session_initiator.read_text(encoding="utf-8", errors="replace")
+            for token, detail in (
+                (
+                    "__caller_ura",
+                    "session prelude tests must capture the signed envelope caller",
+                ),
+                (
+                    "prelude must publish the paired user key as the paired User",
+                    "session prelude tests must prove identity.register_pubkey is signed as the paired User",
+                ),
+                (
+                    "paired user resolve_key must pin the presented public key as the paired User",
+                    "session prelude tests must prove federation.resolve_key is signed as the paired User",
+                ),
+            ):
+                if token not in initiator_text:
+                    add(
+                        "R93_SESSION_PRELUDE_RESOLVE_KEY_SCHEMA",
+                        session_initiator,
+                        1,
                         detail,
                     )
 

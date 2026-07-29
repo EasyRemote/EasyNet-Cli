@@ -11,7 +11,7 @@ use super::tasks::AbortOnDrop;
 use super::SessionError;
 use crate::daemon::ability::descriptors::AbilityDescriptor;
 use crate::daemon::federation::read_model::authority_published_abilities::AuthorityPublishedAbilityStore;
-use crate::daemon::identity::self_identity::CanonicalSigner;
+use crate::daemon::identity::self_identity::{CanonicalSigner, SelfIdentityError};
 use crate::daemon::invocation::admission::register_device_pubkey::RegisterPubkeyRequest;
 use crate::daemon::persistence::agent_aggregate::{
     AgentAggregateRepository, AgentHostedAdvertiseEntry,
@@ -251,7 +251,7 @@ async fn run_user_trust_bootstrap_and_spawn_resync(
         "owner_projection_published",
     );
     sync_realm_hub_trust_prelude(client, signer.as_ref(), sync).await;
-    let outcome = sync_paired_user_trust_prelude(client, signer.as_ref(), sync).await?;
+    let outcome = sync_paired_user_trust_prelude(client, sync).await?;
     log_user_trust_bootstrap_outcome(&outcome);
     let sync = sync.clone();
     Ok(Some(AbortOnDrop(tokio::spawn(async move {
@@ -259,9 +259,7 @@ async fn run_user_trust_bootstrap_and_spawn_resync(
         loop {
             tokio::time::sleep(USER_TRUST_RESYNC_INTERVAL).await;
             sync_realm_hub_trust_prelude(&mut resync_client, signer.as_ref(), &sync).await;
-            if let Err(err) =
-                sync_paired_user_trust_prelude(&mut resync_client, signer.as_ref(), &sync).await
-            {
+            if let Err(err) = sync_paired_user_trust_prelude(&mut resync_client, &sync).await {
                 let error = err.to_string();
                 crate::op_event!(
                     component = session,
@@ -801,6 +799,72 @@ pub struct UserTrustSync {
     pub daemon_realm: String,
     pub trust_anchor_path: PathBuf,
     pub cell: crate::daemon::trust::cell::SharedTrustAnchor,
+    pub user_signer: PairedUserTrustSigner,
+}
+
+/// Narrow signer source for paired User trust bootstrap.
+///
+/// Device session preludes normally sign as the Device. User trust publication
+/// is different: `identity.register_pubkey` for a User trust row must be
+/// authored by the User caller. Keeping this as a small source object avoids
+/// leaking the key-service port into the whole session supervisor while making
+/// tests inject an explicit User signer.
+#[derive(Clone)]
+pub struct PairedUserTrustSigner {
+    source: PairedUserTrustSignerSource,
+}
+
+#[derive(Clone)]
+enum PairedUserTrustSignerSource {
+    RuntimeCaller,
+    #[cfg(test)]
+    Fixed(Arc<dyn CanonicalSigner>),
+}
+
+impl PairedUserTrustSigner {
+    #[must_use]
+    pub fn runtime_caller() -> Self {
+        Self {
+            source: PairedUserTrustSignerSource::RuntimeCaller,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fixed(signer: Arc<dyn CanonicalSigner>) -> Self {
+        Self {
+            source: PairedUserTrustSignerSource::Fixed(signer),
+        }
+    }
+
+    async fn load(&self, user_ura: &str) -> Result<Arc<dyn CanonicalSigner>, SelfIdentityError> {
+        match &self.source {
+            PairedUserTrustSignerSource::RuntimeCaller => {
+                let user_ura = user_ura.to_string();
+                tokio::task::spawn_blocking(move || {
+                    crate::daemon::identity::self_identity::load_runtime_caller_signer(user_ura)
+                })
+                .await
+                .map_err(|error| {
+                    SelfIdentityError::Transport(format!(
+                        "paired user signer loader task failed: {error}"
+                    ))
+                })?
+            }
+            #[cfg(test)]
+            PairedUserTrustSignerSource::Fixed(signer) => {
+                if signer.owner_ura() != user_ura {
+                    return Err(SelfIdentityError::Rejected {
+                        kind: "policy".into(),
+                        message: format!(
+                            "fixed paired user signer owner `{}` does not match `{user_ura}`",
+                            signer.owner_ura()
+                        ),
+                    });
+                }
+                Ok(Arc::clone(signer))
+            }
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -813,6 +877,9 @@ pub enum UserTrustBootstrapError {
         user_ura: String,
         status: tonic::Status,
     },
+
+    #[error("paired user runtime signer for `{user_ura}` is unavailable: {message}")]
+    SignerUnavailable { user_ura: String, message: String },
 
     #[error("paired user `{user_ura}` has no public key registered at the Hub")]
     MissingAtHub { user_ura: String },
@@ -973,7 +1040,6 @@ async fn sync_realm_hub_trust_prelude(
 
 async fn sync_paired_user_trust_prelude(
     client: &mut InvocationClient<Channel>,
-    signer: &dyn CanonicalSigner,
     sync: &UserTrustSync,
 ) -> Result<UserTrustBootstrapOutcome, UserTrustBootstrapError> {
     let Some(creds) =
@@ -999,9 +1065,21 @@ async fn sync_paired_user_trust_prelude(
     if realm != sync.daemon_realm {
         return Ok(UserTrustBootstrapOutcome::NotRequired);
     }
+    let user_signer = sync.user_signer.load(&user_ura).await.map_err(|error| {
+        UserTrustBootstrapError::SignerUnavailable {
+            user_ura: user_ura.clone(),
+            message: error.to_string(),
+        }
+    })?;
     let local_public_keys = paired_user_public_keys(sync, &user_ura);
     if !local_public_keys.is_empty() {
-        publish_paired_user_keys_prelude(client, signer, &user_ura, &local_public_keys).await?;
+        publish_paired_user_keys_prelude(
+            client,
+            user_signer.as_ref(),
+            &user_ura,
+            &local_public_keys,
+        )
+        .await?;
     }
 
     let mut resolve_inputs: Vec<Option<&str>> = local_public_keys
@@ -1023,7 +1101,7 @@ async fn sync_paired_user_trust_prelude(
                 }
             })?;
         let request = match signed_prelude_request(
-            signer,
+            user_signer.as_ref(),
             &user_ura,
             crate::daemon::invocation::dispatch::federation_wrappers::ABILITY_FEDERATION_RESOLVE_KEY,
             args,
@@ -1286,8 +1364,8 @@ mod tests {
         apply_federation_join_receipt, paired_user_resolve_key_args, paired_user_trust_present,
         resolve_hosted_agent_user_segment, resolved_public_keys,
         run_hosted_agent_advertise_prelude, sync_paired_user_trust_prelude,
-        HostedAgentPreludePublicationPlan, UserTrustBootstrapError, UserTrustBootstrapOutcome,
-        UserTrustSync,
+        HostedAgentPreludePublicationPlan, PairedUserTrustSigner, UserTrustBootstrapError,
+        UserTrustBootstrapOutcome, UserTrustSync,
     };
     use crate::daemon::ability::descriptors::{AbilityDescriptor, AdmissionAction, Visibility};
     use crate::daemon::federation::client::ability_contract::AuthorityAbilityEntry;
@@ -1430,6 +1508,9 @@ mod tests {
                 }])
                 .expect("user anchor"),
             )),
+            user_signer: PairedUserTrustSigner::fixed(Arc::new(TestCanonicalSigner::new(
+                user_ura, [0x22; 32],
+            ))),
         }
     }
 
@@ -1518,9 +1599,8 @@ mod tests {
         let sync = user_trust_sync_with_key("easynet:///r/realm/user/user-dev");
         let mut client =
             InvocationClient::new(Channel::from_static("http://127.0.0.1:1").connect_lazy());
-        let signer = TestCanonicalSigner::new("easynet:///r/realm/device/n1", [0x11; 32]);
 
-        let outcome = sync_paired_user_trust_prelude(&mut client, &signer, &sync)
+        let outcome = sync_paired_user_trust_prelude(&mut client, &sync)
             .await
             .expect("missing credentials are the only not-required local state");
         assert_eq!(outcome, UserTrustBootstrapOutcome::NotRequired);
@@ -1534,9 +1614,8 @@ mod tests {
         let sync = user_trust_sync_with_key("easynet:///r/realm/user/user-dev");
         let mut client =
             InvocationClient::new(Channel::from_static("http://127.0.0.1:1").connect_lazy());
-        let signer = TestCanonicalSigner::new("easynet:///r/realm/device/n1", [0x11; 32]);
 
-        let outcome = sync_paired_user_trust_prelude(&mut client, &signer, &sync)
+        let outcome = sync_paired_user_trust_prelude(&mut client, &sync)
             .await
             .expect("device-only runtime has no paired-user trust prelude");
         assert_eq!(outcome, UserTrustBootstrapOutcome::NotRequired);
@@ -1572,9 +1651,8 @@ mod tests {
         let sync = user_trust_sync_with_key("easynet:///r/realm/user/user-dev");
         let mut client =
             InvocationClient::new(Channel::from_static("http://127.0.0.1:1").connect_lazy());
-        let signer = TestCanonicalSigner::new("easynet:///r/realm/device/n1", [0x11; 32]);
 
-        let err = sync_paired_user_trust_prelude(&mut client, &signer, &sync)
+        let err = sync_paired_user_trust_prelude(&mut client, &sync)
             .await
             .expect_err("malformed credentials must fail prelude, not project NotRequired");
         match err {
