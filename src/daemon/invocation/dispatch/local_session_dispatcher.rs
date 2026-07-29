@@ -21,7 +21,7 @@ use serde_json::{json, Value};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use super::descriptor_binding::RuntimeBoundAbility;
+use super::descriptor_binding::{signed_call_mode_from_target, RuntimeBoundAbility};
 use super::invocation_wire::{callee_ura_from_envelope, FEDERATION_RESULT_CONTENT_TYPE};
 #[cfg(test)]
 use crate::daemon::axon_bridge::proof_owner::descriptor_bound_canonical_bytes;
@@ -364,12 +364,21 @@ impl LocalAxonSessionDispatcher {
                 .await;
             }
         };
-        let carrier_v1_stream = bound_ability.supports_mode(axon_sdk::invocation::CallMode::Stream)
-            && !bound_ability.supports_mode(axon_sdk::invocation::CallMode::Rpc);
-        let call_mode = if carrier_v1_stream {
-            axon_sdk::invocation::CallMode::Stream
-        } else {
-            axon_sdk::invocation::CallMode::Rpc
+        let call_mode = match signed_call_mode_from_target(
+            "carrier-v1 DispatchCall",
+            &target_ura,
+            request.target.as_ref(),
+        ) {
+            Ok(call_mode) => call_mode,
+            Err(status) => {
+                return Self::send_carrier_v1_control_failure(
+                    outbound,
+                    call_id,
+                    "DESCRIPTOR_BINDING_FAILED",
+                    status.message(),
+                )
+                .await;
+            }
         };
         let descriptor_ref = match bound_ability.signed_descriptor_ref_from_target(
             "carrier-v1 DispatchCall",
@@ -427,7 +436,7 @@ impl LocalAxonSessionDispatcher {
         // typed `DispatchResult` chunks.
         // Carrier-v1 preserves caller identity through the descriptor-bound
         // signature.
-        if carrier_v1_stream {
+        if matches!(call_mode, axon_sdk::invocation::CallMode::Stream) {
             return self
                 .handle_carrier_v1_stream_open(call_id, wire, runtime_admission, outbound)
                 .await;
@@ -1998,10 +2007,17 @@ mod tests {
     }
 
     fn descriptor_binding_for_version(descriptor_version: &str) -> String {
+        descriptor_binding_for_version_and_action(descriptor_version, "invoke")
+    }
+
+    fn descriptor_binding_for_version_and_action(
+        descriptor_version: &str,
+        admission_action: &str,
+    ) -> String {
         crate::daemon::axon_bridge::descriptor_ref::descriptor_binding_for_wire(
             descriptor_version,
             TEST_DESCRIPTOR_HASH,
-            "invoke",
+            admission_action,
         )
         .expect("test descriptor binding")
     }
@@ -2031,15 +2047,16 @@ mod tests {
         .expect("test ability must resolve through canonical catalog descriptor authority")
     }
 
-    fn explicit_test_descriptor_ref(
+    fn explicit_test_descriptor_ref_with_action(
         callee_ura: &str,
         ability: &str,
         descriptor_version: &str,
+        admission_action: &str,
     ) -> String {
         crate::daemon::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
             callee_ura,
             ability,
-            &descriptor_binding_for_version(descriptor_version),
+            &descriptor_binding_for_version_and_action(descriptor_version, admission_action),
         )
         .expect("explicit proof-bound test descriptor ref")
     }
@@ -2073,11 +2090,37 @@ mod tests {
         AbilityOptions::streaming().with_mode_descriptor_proof(
             CallMode::Stream,
             TEST_DESCRIPTOR_VERSION,
-            "invoke",
+            crate::daemon::ability::descriptors::AdmissionAction::Stream.as_str(),
             TEST_DESCRIPTOR_HASH,
             TEST_SCHEMA_HASH,
             TEST_IMPL_HASH,
         )
+    }
+
+    fn proof_bound_rpc_stream_options() -> axon_sdk::invocation::AbilityOptions {
+        use axon_sdk::invocation::{AbilityCallModes, AbilityOptions, CallMode};
+        AbilityOptions::default()
+            .with_modes(AbilityCallModes {
+                rpc: true,
+                stream: true,
+                bidi: false,
+            })
+            .with_mode_descriptor_proof(
+                CallMode::Rpc,
+                TEST_DESCRIPTOR_VERSION,
+                "invoke",
+                TEST_DESCRIPTOR_HASH,
+                TEST_SCHEMA_HASH,
+                TEST_IMPL_HASH,
+            )
+            .with_mode_descriptor_proof(
+                CallMode::Stream,
+                TEST_DESCRIPTOR_VERSION,
+                crate::daemon::ability::descriptors::AdmissionAction::Stream.as_str(),
+                TEST_DESCRIPTOR_HASH,
+                TEST_SCHEMA_HASH,
+                TEST_IMPL_HASH,
+            )
     }
 
     async fn register_test_rpc(
@@ -2143,8 +2186,18 @@ mod tests {
         args: Vec<u8>,
         mode: axon_sdk::invocation::CallMode,
     ) -> InvokeBidiDown {
-        let descriptor_ref =
-            explicit_test_descriptor_ref(TEST_DEVICE_URA, ability, TEST_DESCRIPTOR_VERSION);
+        let admission_action = match mode {
+            axon_sdk::invocation::CallMode::Stream => {
+                crate::daemon::ability::descriptors::AdmissionAction::Stream.as_str()
+            }
+            axon_sdk::invocation::CallMode::Rpc | axon_sdk::invocation::CallMode::Bidi => "invoke",
+        };
+        let descriptor_ref = explicit_test_descriptor_ref_with_action(
+            TEST_DEVICE_URA,
+            ability,
+            TEST_DESCRIPTOR_VERSION,
+            admission_action,
+        );
         carrier_v1_call_signed_as_with_mode(call_id, ability, &descriptor_ref, args, mode)
     }
 
@@ -2675,6 +2728,73 @@ mod tests {
                 .contains_invocation_id(&receipt.invocation_id),
             "carrier-v1 stream lifecycle must remain registered for invocation.cancel"
         );
+    }
+
+    #[tokio::test]
+    async fn carrier_v1_stream_descriptor_selects_stream_even_when_rpc_is_supported() {
+        use axon_sdk::invocation::make_ability;
+
+        let rt = executable_runtime();
+        register_test_ability_with_options(
+            &rt,
+            "mixed.subscribe",
+            make_ability(|ctx| async move {
+                ctx.emit_progress(
+                    serde_json::to_vec(&json!({"kind": "progress"})).unwrap(),
+                    "application/json",
+                )
+                .await?;
+                Ok(serde_json::to_vec(&json!({"kind": "done"})).unwrap())
+            }),
+            proof_bound_rpc_stream_options(),
+        )
+        .await;
+        let disp = LocalAxonSessionDispatcher::new().with_local_runtime(Arc::clone(&rt));
+        let (tx, mut rx) = mpsc::channel::<InvokeBidiUp>(8);
+        let session_tx = SessionUpSender::new(tx);
+        session_tx.set_negotiated_contract(1);
+
+        disp.handle_down(
+            carrier_v1_explicit_test_call_with_mode(
+                21,
+                "mixed.subscribe",
+                b"{}".to_vec(),
+                axon_sdk::invocation::CallMode::Stream,
+            ),
+            &session_tx,
+        )
+        .await
+        .expect("mixed-mode stream dispatch opens asynchronously");
+
+        let admission = tokio::time::timeout(Duration::from_secs(3), rx.recv())
+            .await
+            .expect("admission reply within 3s")
+            .expect("admission reply produced");
+        let admission = match admission.payload {
+            Some(UpPayload::DispatchResult(result)) => result,
+            other => panic!("expected carrier-v1 stream admission result, got: {other:?}"),
+        };
+        assert_eq!(admission.call_id, 21);
+        assert!(
+            !admission.terminal,
+            "signed !stream descriptor must not be collapsed into an RPC terminal"
+        );
+        assert!(admission.admission_receipt.is_some());
+        assert!(admission.terminal_receipt.is_none());
+
+        let progress = tokio::time::timeout(Duration::from_secs(3), rx.recv())
+            .await
+            .expect("progress reply within 3s")
+            .expect("progress reply produced");
+        let progress = match progress.payload {
+            Some(UpPayload::DispatchResult(result)) => result,
+            other => panic!("expected carrier-v1 stream progress result, got: {other:?}"),
+        };
+        assert_eq!(progress.call_id, 21);
+        assert!(!progress.terminal);
+        let payload: serde_json::Value =
+            serde_json::from_slice(&progress.payload).expect("progress payload is JSON");
+        assert_eq!(payload["kind"], "progress");
     }
 
     #[tokio::test]

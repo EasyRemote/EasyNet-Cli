@@ -323,6 +323,25 @@ impl RuntimeBoundAbility {
     }
 }
 
+pub(crate) fn signed_call_mode_from_target(
+    surface: &'static str,
+    callee_ura: &str,
+    target: Option<&InvocationTarget>,
+) -> Result<CallMode, Status> {
+    let descriptor_ref = descriptor_ref_from_invocation_target(surface, callee_ura, target)?;
+    let action = axon_sdk::invocation::admission_action_from_descriptor_ref(&descriptor_ref)
+        .map_err(|err| {
+            Status::invalid_argument(format!(
+                "{surface}: signed descriptor ref `{descriptor_ref}` has invalid admission action: {err}"
+            ))
+        })?;
+    if action == crate::daemon::ability::descriptors::AdmissionAction::Stream.as_str() {
+        Ok(CallMode::Stream)
+    } else {
+        Ok(CallMode::Rpc)
+    }
+}
+
 fn ability_options_supports_mode(options: &AbilityOptions, mode: CallMode) -> bool {
     match mode {
         CallMode::Rpc => options.modes.rpc,
