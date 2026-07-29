@@ -33,6 +33,7 @@ public final class RuntimeCoreSeamTest {
           "invocationAuthorityMetadataIsTupleBound",
           "runtimeAbilityProjectionIsCanonical",
           "runtimeStateReadSubjectHelperBuildsUserOwnedResourceSubject",
+          "authorityMetadataRejectsNoncanonicalFields",
           "authorityMetadataRejectsAllZeroSessionOwners",
           "authorityMetadataBindsSessionAuthoritySubjects",
           "streamAndBidiLifecyclesAreBounded",
@@ -101,6 +102,8 @@ public final class RuntimeCoreSeamTest {
       case "runtimeAbilityProjectionIsCanonical" -> runtimeAbilityProjectionIsCanonical();
       case "runtimeStateReadSubjectHelperBuildsUserOwnedResourceSubject" ->
           runtimeStateReadSubjectHelperBuildsUserOwnedResourceSubject();
+      case "authorityMetadataRejectsNoncanonicalFields" ->
+          authorityMetadataRejectsNoncanonicalFields();
       case "authorityMetadataRejectsAllZeroSessionOwners" ->
           authorityMetadataRejectsAllZeroSessionOwners();
       case "authorityMetadataBindsSessionAuthoritySubjects" ->
@@ -1011,6 +1014,50 @@ public final class RuntimeCoreSeamTest {
                 "example", "00000000-0000-0000-0000-000000000000"));
   }
 
+  private static void authorityMetadataRejectsNoncanonicalFields() {
+    Map<String, Object> delegationPayload = new LinkedHashMap<>();
+    delegationPayload.put("issuer_ura", "easynet:///r/example/user/alice");
+    delegationPayload.put("subject_ura", CALLEE);
+    delegationPayload.put("caller_ura", CALLER);
+    delegationPayload.put("audience", CALLEE);
+    delegationPayload.put("scopes", List.of("observe.health"));
+    delegationPayload.put("issued_at_ms", 10);
+    delegationPayload.put("expires_at_ms", 20);
+
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        "delegation contains noncanonical field legacy_signature",
+        () ->
+            DelegationProof.fromMetadata(
+                authorityMetadataWireValue(delegationPayload, Map.of("legacy_signature", "opaque"))));
+
+    Map<String, Object> legacyDelegationPayload = new LinkedHashMap<>(delegationPayload);
+    legacyDelegationPayload.put("legacy_subject", CALLEE);
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        "delegation metadata payload contains noncanonical field legacy_subject",
+        () -> DelegationProof.fromMetadata(authorityMetadataValue(legacyDelegationPayload)));
+
+    Map<String, Object> sessionPayload = new LinkedHashMap<>();
+    sessionPayload.put("issuer_ura", CALLER);
+    sessionPayload.put("session_id", "session-1");
+    sessionPayload.put("session_owner_user_id", "alice");
+    sessionPayload.put("creator_principal_id", CALLER);
+    sessionPayload.put("callee_ura", CALLEE);
+    sessionPayload.put("subject_ura", "easynet:///r/example/user/alice");
+    sessionPayload.put("audience", CALLEE);
+    sessionPayload.put("scopes", List.of("invoke"));
+    sessionPayload.put("allowed_actions", List.of("invoke"));
+    sessionPayload.put("allowed_followup_abilities", List.of("observe.health"));
+    sessionPayload.put("issued_at_ms", 10);
+    sessionPayload.put("expires_at_ms", 20);
+    sessionPayload.put("backend_ura", CALLER);
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        "session authority metadata payload contains noncanonical field backend_ura",
+        () -> SessionAuthority.fromMetadata(authorityMetadataValue(sessionPayload)));
+  }
+
   private static void authorityMetadataRejectsAllZeroSessionOwners() {
     Map<String, Object> payload = new LinkedHashMap<>();
     payload.put("issuer_ura", CALLER);
@@ -1655,8 +1702,17 @@ public final class RuntimeCoreSeamTest {
   }
 
   private static String authorityMetadataValue(Map<String, Object> payload) {
+    return authorityMetadataWireValue(payload, Map.of());
+  }
+
+  private static String authorityMetadataWireValue(
+      Map<String, Object> payload, Map<String, Object> wireExtra) {
     String signature = Base64.getEncoder().encodeToString("signature".getBytes(StandardCharsets.UTF_8));
-    byte[] wire = JsonValueWriter.object(Map.of("payload", payload, "signature", signature));
+    Map<String, Object> wireObject = new LinkedHashMap<>();
+    wireObject.put("payload", payload);
+    wireObject.put("signature", signature);
+    wireObject.putAll(wireExtra);
+    byte[] wire = JsonValueWriter.object(wireObject);
     return Base64.getEncoder().encodeToString(wire);
   }
 

@@ -38,7 +38,9 @@ public record SessionAuthority(
   }
 
   public static SessionAuthority fromMetadata(String value) {
-    AuthoritySupport.DecodedAuthority decoded = AuthoritySupport.decodeAuthorityMetadata(value, "session authority");
+    AuthoritySupport.DecodedAuthority decoded =
+        AuthoritySupport.decodeAuthorityMetadata(
+            value, "session authority", AuthoritySupport.SESSION_AUTHORITY_PAYLOAD_FIELDS);
     Map<String, Object> payload = decoded.payload();
     return new SessionAuthority(
         AuthoritySupport.requiredString(payload.get("issuer_ura"), "issuer_ura"),

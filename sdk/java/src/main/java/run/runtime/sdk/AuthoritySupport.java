@@ -5,12 +5,37 @@ import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 final class AuthoritySupport {
   static final String DELEGATION_METADATA_KEY = "x-runtime-delegation";
   static final String SESSION_AUTHORITY_METADATA_KEY = "x-runtime-session-authority";
   static final String DELEGATION_KIND = "delegation";
   static final String SESSION_AUTHORITY_KIND = "session_authority";
+  static final Set<String> AUTHORITY_WIRE_FIELDS = Set.of("payload", "signature");
+  static final Set<String> DELEGATION_AUTHORITY_PAYLOAD_FIELDS =
+      Set.of(
+          "issuer_ura",
+          "subject_ura",
+          "caller_ura",
+          "audience",
+          "scopes",
+          "issued_at_ms",
+          "expires_at_ms");
+  static final Set<String> SESSION_AUTHORITY_PAYLOAD_FIELDS =
+      Set.of(
+          "issuer_ura",
+          "session_id",
+          "session_owner_user_id",
+          "creator_principal_id",
+          "callee_ura",
+          "subject_ura",
+          "audience",
+          "scopes",
+          "allowed_actions",
+          "allowed_followup_abilities",
+          "issued_at_ms",
+          "expires_at_ms");
 
   private AuthoritySupport() {}
 
@@ -67,7 +92,8 @@ final class AuthoritySupport {
     throw invalid(label + " metadata projection missing metadata_value");
   }
 
-  static DecodedAuthority decodeAuthorityMetadata(String value, String label) {
+  static DecodedAuthority decodeAuthorityMetadata(
+      String value, String label, Set<String> payloadFields) {
     String cleaned = requiredString(value, "metadata_value");
     byte[] decoded;
     try {
@@ -79,9 +105,20 @@ final class AuthoritySupport {
       throw invalid(label + " metadata must be canonical base64 JSON");
     }
     Map<String, Object> wire = JsonValueReader.object(decoded, label + " authority metadata");
+    rejectNoncanonicalAuthorityFields(wire, AUTHORITY_WIRE_FIELDS, label);
     Map<String, Object> payload = requiredObject(wire.get("payload"), "payload");
+    rejectNoncanonicalAuthorityFields(payload, payloadFields, label + " metadata payload");
     String signature = requiredBase64(requiredString(wire.get("signature"), "signature"), "signature");
     return new DecodedAuthority(payload, signature);
+  }
+
+  static void rejectNoncanonicalAuthorityFields(
+      Map<String, Object> value, Set<String> allowed, String label) {
+    for (String key : value.keySet()) {
+      if (!allowed.contains(key)) {
+        throw invalid(label + " contains noncanonical field " + key);
+      }
+    }
   }
 
   static SDKError invalid(String message) {

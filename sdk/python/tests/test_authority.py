@@ -105,6 +105,55 @@ class AuthorityTests(unittest.TestCase):
         self.assertEqual(metadata.key, SESSION_AUTHORITY_METADATA_KEY)
         self.assertEqual(metadata.value, value)
 
+    def test_authority_metadata_rejects_noncanonical_fields(self) -> None:
+        with self.assertRaisesRegex(
+            SDKError, "delegation contains noncanonical field legacy_signature"
+        ):
+            DelegationProof.from_metadata(
+                _authority_metadata(
+                    {
+                        "issuer_ura": "easynet:///r/example/user/alice",
+                        "subject_ura": "easynet:///r/example/user/alice",
+                        "caller_ura": "easynet:///r/example/agent/backend",
+                        "audience": "easynet:///r/example/device/dev-a",
+                        "scopes": ["device.observe.*"],
+                        "issued_at_ms": 1000,
+                        "expires_at_ms": 2000,
+                    },
+                    b"delegation-signature",
+                    wire_extra={"legacy_signature": "opaque"},
+                )
+            )
+
+        delegation_payload = {
+            "issuer_ura": "easynet:///r/example/user/alice",
+            "subject_ura": "easynet:///r/example/user/alice",
+            "caller_ura": "easynet:///r/example/agent/backend",
+            "audience": "easynet:///r/example/device/dev-a",
+            "scopes": ["device.observe.*"],
+            "issued_at_ms": 1000,
+            "expires_at_ms": 2000,
+            "legacy_subject": "easynet:///r/example/user/alice",
+        }
+        with self.assertRaisesRegex(
+            SDKError,
+            "delegation metadata payload contains noncanonical field legacy_subject",
+        ):
+            DelegationProof.from_metadata(
+                _authority_metadata(delegation_payload, b"delegation-signature")
+            )
+
+        session_payload = _session_authority_payload()
+        session_payload["backend_ura"] = "easynet:///r/example/agent/backend"
+        session_payload["user_ura"] = "easynet:///r/example/user/alice"
+        with self.assertRaisesRegex(
+            SDKError,
+            "session authority metadata payload contains noncanonical field backend_ura",
+        ):
+            SessionAuthority.from_metadata(
+                _authority_metadata(session_payload, b"session-signature")
+            )
+
     def test_session_authority_rejects_all_zero_owner(self) -> None:
         payload = _session_authority_payload()
         payload["session_owner_user_id"] = "00000000-0000-0000-0000-000000000000"
@@ -441,12 +490,20 @@ class AuthorityTests(unittest.TestCase):
         self.assertEqual(transport.session_calls, 0)
 
 
-def _authority_metadata(payload: dict[str, object], signature: bytes) -> str:
+def _authority_metadata(
+    payload: dict[str, object],
+    signature: bytes,
+    *,
+    wire_extra: dict[str, object] | None = None,
+) -> str:
+    wire_object = {
+        "payload": payload,
+        "signature": base64.b64encode(signature).decode("ascii"),
+    }
+    if wire_extra:
+        wire_object.update(wire_extra)
     wire = json.dumps(
-        {
-            "payload": payload,
-            "signature": base64.b64encode(signature).decode("ascii"),
-        },
+        wire_object,
         separators=(",", ":"),
     ).encode("utf-8")
     return base64.b64encode(wire).decode("ascii")

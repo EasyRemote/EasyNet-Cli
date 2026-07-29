@@ -94,11 +94,12 @@ const completeDraft = () =>
     .withMetadata({ trace_id: "trace-1" })
     .build();
 
-const authorityValue = (payload) =>
+const authorityValue = (payload, wire = {}) =>
   Buffer.from(
     JSON.stringify({
       payload,
       signature: Buffer.from("signature").toString("base64"),
+      ...wire,
     }),
   ).toString("base64");
 
@@ -1312,6 +1313,67 @@ test("authority client rejects conflicting canonical principal URAs", () => {
   );
 
   authority.close();
+});
+
+test("authority metadata rejects noncanonical wire and payload fields", () => {
+  assert.throws(
+    () =>
+      sdk.DelegationProof.fromMetadata(
+        authorityValue(
+          {
+            issuer_ura: "easynet:///r/example/user/alice",
+            subject_ura: callee,
+            caller_ura: caller,
+            audience: callee,
+            scopes: ["observe.health"],
+            issued_at_ms: 10,
+            expires_at_ms: 20,
+          },
+          { legacy_signature: "opaque" },
+        ),
+      ),
+    /delegation contains noncanonical field legacy_signature/,
+  );
+
+  assert.throws(
+    () =>
+      sdk.DelegationProof.fromMetadata(
+        authorityValue({
+          issuer_ura: "easynet:///r/example/user/alice",
+          subject_ura: callee,
+          caller_ura: caller,
+          audience: callee,
+          scopes: ["observe.health"],
+          issued_at_ms: 10,
+          expires_at_ms: 20,
+          legacy_subject: callee,
+        }),
+      ),
+    /delegation metadata payload contains noncanonical field legacy_subject/,
+  );
+
+  assert.throws(
+    () =>
+      sdk.SessionAuthority.fromMetadata(
+        authorityValue({
+          issuer_ura: caller,
+          session_id: "session-1",
+          session_owner_user_id: "alice",
+          creator_principal_id: caller,
+          callee_ura: callee,
+          subject_ura: "easynet:///r/example/user/alice",
+          audience: callee,
+          scopes: ["invoke"],
+          allowed_actions: ["invoke"],
+          allowed_followup_abilities: ["observe.health"],
+          issued_at_ms: 10,
+          expires_at_ms: 20,
+          backend_ura: caller,
+          user_ura: "easynet:///r/example/user/alice",
+        }),
+      ),
+    /session authority metadata payload contains noncanonical field backend_ura/,
+  );
 });
 
 test("authority metadata rejects all-zero session owners", () => {

@@ -724,6 +724,50 @@ final class RuntimeCoreSeamTests: XCTestCase {
         }
     }
 
+    func testAuthorityMetadataRejectsNoncanonicalFields() throws {
+        let delegationPayload: [String: Any] = [
+            "issuer_ura": "easynet:///r/example/user/alice",
+            "subject_ura": callee,
+            "caller_ura": caller,
+            "audience": callee,
+            "scopes": ["observe.health"],
+            "issued_at_ms": 10,
+            "expires_at_ms": 20,
+        ]
+
+        expectSyncSDKError(.invalidArgument, "delegation contains noncanonical field legacy_signature") {
+            _ = try DelegationProof.fromMetadata(
+                authorityMetadataValue(delegationPayload, wireExtra: ["legacy_signature": "opaque"])
+            )
+        }
+
+        var legacyDelegationPayload = delegationPayload
+        legacyDelegationPayload["legacy_subject"] = callee
+        expectSyncSDKError(.invalidArgument, "delegation metadata payload contains noncanonical field legacy_subject") {
+            _ = try DelegationProof.fromMetadata(authorityMetadataValue(legacyDelegationPayload))
+        }
+
+        var sessionPayload: [String: Any] = [
+            "issuer_ura": caller,
+            "session_id": "session-1",
+            "session_owner_user_id": "alice",
+            "creator_principal_id": caller,
+            "callee_ura": callee,
+            "subject_ura": "easynet:///r/example/user/alice",
+            "audience": callee,
+            "scopes": ["invoke"],
+            "allowed_actions": ["invoke"],
+            "allowed_followup_abilities": ["observe.health"],
+            "issued_at_ms": 10,
+            "expires_at_ms": 20,
+        ]
+        sessionPayload["backend_ura"] = caller
+        sessionPayload["user_ura"] = "easynet:///r/example/user/alice"
+        expectSyncSDKError(.invalidArgument, "session authority metadata payload contains noncanonical field") {
+            _ = try SessionAuthority.fromMetadata(authorityMetadataValue(sessionPayload))
+        }
+    }
+
     func testAuthorityMetadataRejectsAllZeroSessionOwners() throws {
         let value = try authorityMetadataValue([
             "issuer_ura": caller,
@@ -1313,10 +1357,14 @@ final class RuntimeCoreSeamTests: XCTestCase {
         ])
     }
 
-    private func authorityMetadataValue(_ payload: [String: Any]) throws -> String {
+    private func authorityMetadataValue(_ payload: [String: Any], wireExtra: [String: Any] = [:]) throws -> String {
         let signature = Data("signature".utf8).base64EncodedString()
+        var wire: [String: Any] = ["payload": payload, "signature": signature]
+        for (key, value) in wireExtra {
+            wire[key] = value
+        }
         let data = try JSONSerialization.data(
-            withJSONObject: ["payload": payload, "signature": signature],
+            withJSONObject: wire,
             options: [.sortedKeys]
         )
         return data.base64EncodedString()

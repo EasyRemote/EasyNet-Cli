@@ -86,6 +86,30 @@ export const HEALTH_PROFILE = "health";
 export const AUTHORITY_PROFILE = "authority";
 export const DELEGATION_METADATA_KEY = "x-runtime-delegation";
 export const SESSION_AUTHORITY_METADATA_KEY = "x-runtime-session-authority";
+const AUTHORITY_WIRE_FIELDS = new Set(["payload", "signature"]);
+const DELEGATION_AUTHORITY_PAYLOAD_FIELDS = new Set([
+  "issuer_ura",
+  "subject_ura",
+  "caller_ura",
+  "audience",
+  "scopes",
+  "issued_at_ms",
+  "expires_at_ms",
+]);
+const SESSION_AUTHORITY_PAYLOAD_FIELDS = new Set([
+  "issuer_ura",
+  "session_id",
+  "session_owner_user_id",
+  "creator_principal_id",
+  "callee_ura",
+  "subject_ura",
+  "audience",
+  "scopes",
+  "allowed_actions",
+  "allowed_followup_abilities",
+  "issued_at_ms",
+  "expires_at_ms",
+]);
 export const MAX_STREAM_BUFFERED_EVENTS = 1024;
 export const MAX_BIDI_BUFFERED_FRAMES = 1024;
 const RUNTIME_GOVERNANCE_READ_ABILITIES = Object.freeze([
@@ -432,7 +456,11 @@ export class DelegationProof {
   }
 
   static fromMetadata(value) {
-    const { payload, signatureBase64 } = decodeAuthorityMetadata(value, "delegation");
+    const { payload, signatureBase64 } = decodeAuthorityMetadata(
+      value,
+      "delegation",
+      DELEGATION_AUTHORITY_PAYLOAD_FIELDS,
+    );
     return new DelegationProof({
       ...payload,
       signature_base64: signatureBase64,
@@ -500,7 +528,11 @@ export class SessionAuthority {
   }
 
   static fromMetadata(value) {
-    const { payload, signatureBase64 } = decodeAuthorityMetadata(value, "session authority");
+    const { payload, signatureBase64 } = decodeAuthorityMetadata(
+      value,
+      "session authority",
+      SESSION_AUTHORITY_PAYLOAD_FIELDS,
+    );
     return new SessionAuthority({
       ...payload,
       signature_base64: signatureBase64,
@@ -3474,7 +3506,7 @@ function decodeAuthorityBase64(value, field) {
   return decoded;
 }
 
-function decodeAuthorityMetadata(value, label) {
+function decodeAuthorityMetadata(value, label, payloadFields) {
   const text = requiredAuthorityString(value, `${label} metadata value`);
   const decoded = decodeAuthorityBase64(text, `${label} metadata`);
   let wire;
@@ -3486,9 +3518,19 @@ function decodeAuthorityMetadata(value, label) {
     }
     throw invalidAuthority(`${label} metadata JSON parse failed`, { cause: cause.message });
   }
+  rejectNoncanonicalAuthorityFields(wire, AUTHORITY_WIRE_FIELDS, label);
   const payload = objectValue(wire.payload, `${label} metadata payload`);
+  rejectNoncanonicalAuthorityFields(payload, payloadFields, `${label} metadata payload`);
   const signatureBase64 = requiredAuthorityBase64(wire.signature, `${label} metadata signature`);
   return { payload, signatureBase64 };
+}
+
+function rejectNoncanonicalAuthorityFields(value, allowed, label) {
+  for (const key of Object.keys(value)) {
+    if (!allowed.has(key)) {
+      throw invalidAuthority(`${label} contains noncanonical field ${key}`);
+    }
+  }
 }
 
 function decodeAuthorityMetadataProjection(raw, metadataKey, label) {

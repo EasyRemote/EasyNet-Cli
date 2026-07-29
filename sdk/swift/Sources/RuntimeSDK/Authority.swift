@@ -3,6 +3,30 @@ import Foundation
 public let authorityProfile = "authority"
 public let delegationMetadataKey = "x-runtime-delegation"
 public let sessionAuthorityMetadataKey = "x-runtime-session-authority"
+private let authorityWireFields: Set<String> = ["payload", "signature"]
+private let delegationAuthorityPayloadFields: Set<String> = [
+    "issuer_ura",
+    "subject_ura",
+    "caller_ura",
+    "audience",
+    "scopes",
+    "issued_at_ms",
+    "expires_at_ms",
+]
+private let sessionAuthorityPayloadFields: Set<String> = [
+    "issuer_ura",
+    "session_id",
+    "session_owner_user_id",
+    "creator_principal_id",
+    "callee_ura",
+    "subject_ura",
+    "audience",
+    "scopes",
+    "allowed_actions",
+    "allowed_followup_abilities",
+    "issued_at_ms",
+    "expires_at_ms",
+]
 
 public func runtimeStateReadSubjectURA(realm: String, userID: String) throws -> String {
     try RuntimeSubjects.runtimeStateReadSubjectURA(realm: realm, userID: userID)
@@ -69,7 +93,11 @@ public struct DelegationProof: Sendable, Equatable {
     }
 
     public static func fromMetadata(_ value: String) throws -> DelegationProof {
-        let decoded = try decodeAuthorityMetadata(value, label: "delegation")
+        let decoded = try decodeAuthorityMetadata(
+            value,
+            label: "delegation",
+            payloadFields: delegationAuthorityPayloadFields
+        )
         let payload = decoded.payload
         return try DelegationProof(
             issuerURA: requiredAuthorityString(payload, "issuer_ura"),
@@ -142,7 +170,11 @@ public struct SessionAuthority: Sendable, Equatable {
     }
 
     public static func fromMetadata(_ value: String) throws -> SessionAuthority {
-        let decoded = try decodeAuthorityMetadata(value, label: "session authority")
+        let decoded = try decodeAuthorityMetadata(
+            value,
+            label: "session authority",
+            payloadFields: sessionAuthorityPayloadFields
+        )
         let payload = decoded.payload
         return try SessionAuthority(
             issuerURA: requiredAuthorityString(payload, "issuer_ura"),
@@ -379,7 +411,11 @@ private struct DecodedAuthority {
     let signatureBase64: String
 }
 
-private func decodeAuthorityMetadata(_ value: String, label: String) throws -> DecodedAuthority {
+private func decodeAuthorityMetadata(
+    _ value: String,
+    label: String,
+    payloadFields: Set<String>
+) throws -> DecodedAuthority {
     let cleaned = try requiredAuthorityString(value, "metadata_value")
     let data: Data
     do {
@@ -391,9 +427,27 @@ private func decodeAuthorityMetadata(_ value: String, label: String) throws -> D
         throw invalidAuthority("\(label) metadata must be base64 JSON")
     }
     let object = try decodeObject(data, label: "\(label) authority metadata")
+    try rejectNoncanonicalAuthorityFields(object, allowed: authorityWireFields, label: label)
     let payload = try requiredAuthorityObject(object, "payload")
+    try rejectNoncanonicalAuthorityFields(
+        payload,
+        allowed: payloadFields,
+        label: "\(label) metadata payload"
+    )
     let signature = try requiredAuthorityBase64(requiredAuthorityString(object, "signature"), "signature")
     return DecodedAuthority(payload: payload, signatureBase64: signature)
+}
+
+private func rejectNoncanonicalAuthorityFields(
+    _ value: [String: JSONValue],
+    allowed: Set<String>,
+    label: String
+) throws {
+    for key in value.keys {
+        if !allowed.contains(key) {
+            throw invalidAuthority("\(label) contains noncanonical field \(key)")
+        }
+    }
 }
 
 private func validateAuthorityMetadataEnvelope(kind: String, key: String) throws {
