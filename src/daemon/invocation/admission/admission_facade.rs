@@ -261,8 +261,8 @@ impl VerifiedRuntimeAuthority {
         Ok(Self {
             authority_id: Some(verified_session_authority_id(&verified.payload)),
             binding: AuthorityBinding::Session(SessionAuthorityBody {
-                backend_ura: verified.payload.issuer_ura,
-                user_ura,
+                issuer_ura: verified.payload.issuer_ura,
+                subject_ura: user_ura,
                 session_id: verified.payload.session_id,
                 scopes: verified.payload.scopes,
                 audiences: vec![verified.payload.audience],
