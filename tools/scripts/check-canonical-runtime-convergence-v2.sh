@@ -20495,6 +20495,10 @@ if "terminal_receipt state does not match invocation terminal_state" not in resu
     raise SystemExit("java_runtime_receipt_projection:terminal_state_topology_missing")
 if 'fields.containsKey("receipt")' not in result or "retired receipt alias is not accepted" not in result:
     raise SystemExit("java_runtime_receipt_projection:retired_receipt_alias_not_rejected")
+if 'requireExactKeys(fields, "ok", "terminal_state", "output_json", "terminal_receipt")' not in result:
+    raise SystemExit("java_runtime_receipt_projection:invocation_result_wire_schema_not_exact")
+if "invocation result contains noncanonical field" not in result:
+    raise SystemExit("java_runtime_receipt_projection:invocation_result_unknown_field_error_missing")
 legacy_patterns = {
     "terminalReceiptValue instanceof Map<?, ?> map ? copyStringMap(map) : Map.of()": "malformed_terminal_receipt_downgrade",
     "optionalReceipt(fields, \"terminal_receipt\")": "optional_terminal_receipt_decoder",
@@ -20546,6 +20550,7 @@ for required_test in (
     "authority-proof-key",
     "terminal_receipt is required",
     "retired receipt alias",
+    "invocation result contains noncanonical field state_code",
 ):
     if required_test not in tests:
         raise SystemExit(f"java_runtime_receipt_projection:missing_test:{required_test}")

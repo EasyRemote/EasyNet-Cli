@@ -378,6 +378,22 @@ public final class RuntimeCoreSeamTest {
 
     expectSDKError(
         ErrorCode.INVALID_ARGUMENT,
+        "invocation result contains noncanonical field state_code",
+        () ->
+            InvocationResult.fromJSON(
+                JsonValueWriter.object(
+                    Map.of(
+                        "ok",
+                        true,
+                        "terminal_state",
+                        "Completed",
+                        "terminal_receipt",
+                        terminal,
+                        "state_code",
+                        "J200"))));
+
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
         "unknown terminal state BackpressureTerminated",
         () ->
             InvocationResult.fromJSON(

@@ -1,6 +1,7 @@
 package run.runtime.sdk;
 
 import java.util.Map;
+import java.util.Set;
 
 public record InvocationResult(
     boolean ok,
@@ -32,6 +33,7 @@ public record InvocationResult(
           "invocation_result",
           "invocation result must use terminal_receipt; retired receipt alias is not accepted");
     }
+    requireExactKeys(fields, "ok", "terminal_state", "output_json", "terminal_receipt");
     boolean ok = bool(fields, "ok");
     String state = string(fields, "terminal_state");
     Object output = fields.get("output_json");
@@ -108,6 +110,17 @@ public record InvocationResult(
       }
     }
     return Map.copyOf(out);
+  }
+
+  private static void requireExactKeys(Map<String, Object> fields, String... allowedKeys) {
+    Set<String> allowed = Set.of(allowedKeys);
+    for (String key : fields.keySet()) {
+      if (!allowed.contains(key)) {
+        throw SDKError.validation(
+            "invocation_result",
+            "invocation result contains noncanonical field " + key);
+      }
+    }
   }
 
   private static String camelEnum(String state) {
