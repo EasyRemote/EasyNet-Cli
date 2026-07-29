@@ -2002,9 +2002,9 @@ def _canonical_authority_binding_projection(binding: Any) -> dict[str, object]:
     if "expires_at_ms" in projection:
         projection["expires_at_ms"] = str(projection["expires_at_ms"])
     if "signature_base64" in projection:
-        projection["signature_hex"] = base64.b64decode(
-            str(projection.pop("signature_base64")),
-            validate=True,
+        signature_base64 = str(projection.pop("signature_base64"))
+        projection["signature_hex"] = _base64_decode(
+            signature_base64, "signature_base64"
         ).hex()
     return projection
 
@@ -2475,7 +2475,7 @@ def _decode_object(raw: bytes, name: str) -> dict[str, object]:
 
 def _base64_decode(value: str, field_name: str) -> bytes:
     try:
-        return base64.b64decode(value.encode("ascii"), validate=True)
+        decoded = base64.b64decode(value.encode("ascii"), validate=True)
     except (binascii.Error, UnicodeEncodeError) as exc:
         raise _direct_error(
             f"{field_name} must be base64: {exc}",
@@ -2483,6 +2483,13 @@ def _base64_decode(value: str, field_name: str) -> bytes:
             retry=RetryHint.NEVER,
             cause=exc,
         ) from exc
+    if base64.b64encode(decoded).decode("ascii") != value:
+        raise _direct_error(
+            f"{field_name} must be canonical base64",
+            code=ErrorCode.INVALID_INVOCATION,
+            retry=RetryHint.NEVER,
+        )
+    return decoded
 
 
 def _hex_decode(value: str, field_name: str) -> bytes:

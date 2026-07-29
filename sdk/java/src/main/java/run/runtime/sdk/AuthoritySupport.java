@@ -75,6 +75,9 @@ final class AuthoritySupport {
     } catch (IllegalArgumentException error) {
       throw invalid(label + " metadata must be base64 JSON");
     }
+    if (!Base64.getEncoder().encodeToString(decoded).equals(cleaned)) {
+      throw invalid(label + " metadata must be canonical base64 JSON");
+    }
     Map<String, Object> wire = JsonValueReader.object(decoded, label + " authority metadata");
     Map<String, Object> payload = requiredObject(wire.get("payload"), "payload");
     String signature = requiredBase64(requiredString(wire.get("signature"), "signature"), "signature");
@@ -165,10 +168,14 @@ final class AuthoritySupport {
 
   static String requiredBase64(String value, String field) {
     String cleaned = requiredString(value, field);
+    byte[] decoded;
     try {
-      Base64.getDecoder().decode(cleaned);
+      decoded = Base64.getDecoder().decode(cleaned);
     } catch (IllegalArgumentException error) {
       throw invalid(field + " must be base64");
+    }
+    if (!Base64.getEncoder().encodeToString(decoded).equals(cleaned)) {
+      throw invalid(field + " must be canonical base64");
     }
     return cleaned;
   }

@@ -81,10 +81,23 @@ func requiredInvocationNonceBase64(_ value: String?, stage: String) throws -> St
     guard let decoded = Data(base64Encoded: clean) else {
         throw SDKError.validation(stage, "nonce_base64 must be base64")
     }
+    guard decoded.base64EncodedString() == clean else {
+        throw SDKError.validation(stage, "nonce_base64 must be canonical base64")
+    }
     guard decoded.count == 16 else {
         throw SDKError.validation(stage, "nonce_base64 must decode to 16 bytes")
     }
     return clean
+}
+
+func canonicalBase64Data(_ value: String, stage: String, field: String) throws -> Data {
+    guard let decoded = Data(base64Encoded: value) else {
+        throw SDKError.validation(stage, "\(field) must be base64")
+    }
+    guard decoded.base64EncodedString() == value else {
+        throw SDKError.validation(stage, "\(field) must be canonical base64")
+    }
+    return decoded
 }
 
 public struct InvocationDraft: Sendable, Equatable {

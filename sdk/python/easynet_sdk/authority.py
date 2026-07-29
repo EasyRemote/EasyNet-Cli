@@ -920,6 +920,8 @@ def _decode_base64(value: str, label: str) -> bytes:
         decoded = base64.b64decode(value, validate=True)
     except binascii.Error as exc:
         raise _invalid_authority(f"{label} base64 decode failed: {exc}", exc) from exc
+    if base64.b64encode(decoded).decode("ascii") != value:
+        raise _invalid_authority(f"{label} must be canonical base64")
     if not decoded:
         raise _invalid_authority(f"{label} is required")
     return decoded

@@ -336,6 +336,8 @@ def _validate_base64_field(value: str, field_name: str) -> bytes:
         raw = base64.b64decode(value, validate=True)
     except binascii.Error as exc:
         raise _invalid_invocation(f"{field_name} must be base64", exc) from exc
+    if base64.b64encode(raw).decode("ascii") != value:
+        raise _invalid_invocation(f"{field_name} must be canonical base64")
     return raw
 
 

@@ -381,7 +381,13 @@ private struct DecodedAuthority {
 
 private func decodeAuthorityMetadata(_ value: String, label: String) throws -> DecodedAuthority {
     let cleaned = try requiredAuthorityString(value, "metadata_value")
-    guard let data = Data(base64Encoded: cleaned) else {
+    let data: Data
+    do {
+        data = try canonicalBase64Data(cleaned, stage: "authority", field: "\(label) metadata")
+    } catch let error as SDKError {
+        if error.message.contains("canonical base64") {
+            throw invalidAuthority("\(label) metadata must be canonical base64 JSON")
+        }
         throw invalidAuthority("\(label) metadata must be base64 JSON")
     }
     let object = try decodeObject(data, label: "\(label) authority metadata")
@@ -668,7 +674,12 @@ private func scopeMatches(_ pattern: String, _ value: String) -> Bool {
 
 private func requiredAuthorityBase64(_ value: String, _ field: String) throws -> String {
     let cleaned = try requiredAuthorityString(value, field)
-    guard Data(base64Encoded: cleaned) != nil else {
+    do {
+        _ = try canonicalBase64Data(cleaned, stage: "authority", field: field)
+    } catch let error as SDKError {
+        if error.message.contains("canonical base64") {
+            throw invalidAuthority("\(field) must be canonical base64")
+        }
         throw invalidAuthority("\(field) must be base64")
     }
     return cleaned

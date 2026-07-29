@@ -337,6 +337,8 @@ def _validate_call(call: RuntimeCallContext) -> None:
         decoded = base64.b64decode(nonce, validate=True)
     except (ValueError, binascii.Error) as error:
         raise _invalid("nonce_base64 must be canonical base64", error) from error
+    if base64.b64encode(decoded).decode("ascii") != nonce:
+        raise _invalid("nonce_base64 must be canonical base64")
     if len(decoded) != 16:
         raise _invalid("nonce_base64 must decode to 16 bytes")
 

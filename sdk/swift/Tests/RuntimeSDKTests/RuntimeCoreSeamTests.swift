@@ -250,6 +250,20 @@ final class RuntimeCoreSeamTests: XCTestCase {
             )
         }
 
+        var noncanonicalProofPayload = terminal
+        var noncanonicalProof = noncanonicalProofPayload["authority_proof"] as! [String: Any]
+        noncanonicalProof["proof_payload_base64"] = "AQIDBAUGBwgJCgsMDQ4PEB=="
+        noncanonicalProofPayload["authority_proof"] = noncanonicalProof
+        expectSyncSDKError(.invalidArgument, "authority_proof.proof_payload_base64 must be canonical base64") {
+            _ = try InvocationResult.fromJSON(
+                jsonData([
+                    "ok": true,
+                    "terminal_state": "Completed",
+                    "terminal_receipt": noncanonicalProofPayload,
+                ])
+            )
+        }
+
         for missingField in ["payload_base64", "payload_content_type", "host_attestation_base64", "usage"] {
             var missingTopLevelFact = terminal
             missingTopLevelFact.removeValue(forKey: missingField)
@@ -972,6 +986,14 @@ final class RuntimeCoreSeamTests: XCTestCase {
         expectSyncSDKError(.invalidArgument) {
             _ = try completeBuilder()
                 .withNonce("not-base64!")
+                .inspect()
+        }
+    }
+
+    func testInvocationTupleRejectsNonCanonicalNonceBase64() {
+        expectSyncSDKError(.invalidArgument, "nonce_base64 must be canonical base64") {
+            _ = try completeBuilder()
+                .withNonce("AQIDBAUGBwgJCgsMDQ4PEB==")
                 .inspect()
         }
     }

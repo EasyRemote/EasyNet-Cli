@@ -467,7 +467,7 @@ func newAuthoritySigningMaterial(raw []byte, wantKey string, wantKind AuthorityK
 		material.Payload == nil {
 		return AuthoritySigningMaterial{}, invalidProfilePayload(authorityProfile, "invalid authority signing material projection", nil)
 	}
-	if _, err := base64.StdEncoding.DecodeString(material.CanonicalBytesBase64); err != nil {
+	if _, err := base64.StdEncoding.Strict().DecodeString(material.CanonicalBytesBase64); err != nil {
 		return AuthoritySigningMaterial{}, invalidProfilePayload(authorityProfile, fmt.Sprintf("authority canonical bytes base64 decode failed: %v", err), err)
 	}
 	return material, nil
@@ -477,7 +477,7 @@ func authoritySignatureJSON(signature AuthoritySignature) ([]byte, error) {
 	if strings.TrimSpace(signature.SignatureBase64) == "" {
 		return nil, invalidProfilePayload(authorityProfile, "authority signature_base64 is required", nil)
 	}
-	if _, err := base64.StdEncoding.DecodeString(signature.SignatureBase64); err != nil {
+	if _, err := base64.StdEncoding.Strict().DecodeString(signature.SignatureBase64); err != nil {
 		return nil, invalidProfilePayload(authorityProfile, fmt.Sprintf("authority signature base64 decode failed: %v", err), err)
 	}
 	raw, err := json.Marshal(signature)
@@ -674,7 +674,7 @@ func decodeAuthorityMetadata(value string, payload any, label string) ([]byte, e
 	if value == "" {
 		return nil, invalidInvocation(label+" metadata value is required", nil)
 	}
-	wireJSON, err := base64.StdEncoding.DecodeString(value)
+	wireJSON, err := base64.StdEncoding.Strict().DecodeString(value)
 	if err != nil {
 		return nil, invalidInvocation(fmt.Sprintf("%s metadata base64 decode failed: %v", label, err), err)
 	}
@@ -691,7 +691,7 @@ func decodeAuthorityMetadata(value string, payload any, label string) ([]byte, e
 	if err := json.Unmarshal(wire.Payload, payload); err != nil {
 		return nil, invalidInvocation(fmt.Sprintf("%s metadata payload parse failed: %v", label, err), err)
 	}
-	signature, err := base64.StdEncoding.DecodeString(wire.Signature)
+	signature, err := base64.StdEncoding.Strict().DecodeString(wire.Signature)
 	if err != nil {
 		return nil, invalidInvocation(fmt.Sprintf("%s metadata signature base64 decode failed: %v", label, err), err)
 	}

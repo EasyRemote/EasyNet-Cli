@@ -205,7 +205,7 @@ func TestInvocationBuilderRejectsDualArgumentCarriers(t *testing.T) {
 }
 
 func TestInvocationBuilderRejectsMalformedNonce(t *testing.T) {
-	for _, nonce := range []string{"not base64", "AQIDBA=="} {
+	for _, nonce := range []string{"not base64", "AQIDBA==", "AQIDBAUGBwgJCgsMDQ4PEB=="} {
 		_, err := NewInvocationBuilder().
 			WithCallerURA("easynet:///r/example/agent/alice.sdk").
 			WithCalleeURA("easynet:///r/example/device/dev-a").

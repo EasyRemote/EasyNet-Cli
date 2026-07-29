@@ -1014,9 +1014,7 @@ private func runtimeBase64(
     expectedLength: Int?,
     allowEmpty: Bool
 ) throws -> Data {
-    guard let data = Data(base64Encoded: value) else {
-        throw SDKError.validation("runtime_receipt", "\(field) must be base64")
-    }
+    let data = try canonicalBase64Data(value, stage: "runtime_receipt", field: field)
     if data.isEmpty, !allowEmpty {
         throw SDKError.validation("runtime_receipt", "\(field) must decode to non-empty bytes")
     }

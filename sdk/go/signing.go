@@ -568,7 +568,7 @@ func decodeBase64Field(value string, fieldName string) ([]byte, error) {
 	if strings.TrimSpace(value) == "" {
 		return nil, invalidInvocation(fmt.Sprintf("%s is required", fieldName), nil)
 	}
-	decoded, err := base64.StdEncoding.DecodeString(value)
+	decoded, err := base64.StdEncoding.Strict().DecodeString(value)
 	if err != nil {
 		return nil, invalidInvocation(fmt.Sprintf("%s must be base64", fieldName), err)
 	}

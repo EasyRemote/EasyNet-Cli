@@ -235,7 +235,7 @@ func UnmarshalRawSessionAuthority(data []byte) (*SessionAuthority, error) {
 	if err := json.Unmarshal(raw.Payload, &payload); err != nil {
 		return nil, err
 	}
-	signature, err := base64.StdEncoding.DecodeString(raw.Signature)
+	signature, err := base64.StdEncoding.Strict().DecodeString(raw.Signature)
 	if err != nil {
 		return nil, err
 	}

@@ -1106,7 +1106,7 @@ func directBidiFrameToUp(frame BidiFrame) (*axonpb.InvokeBidiUp, error) {
 
 func directBidiPayloadBytes(frame BidiFrame) ([]byte, error) {
 	if frame.PayloadBase64() != "" {
-		decoded, err := base64.StdEncoding.DecodeString(frame.PayloadBase64())
+		decoded, err := base64.StdEncoding.Strict().DecodeString(frame.PayloadBase64())
 		if err != nil {
 			return nil, invalidRuntimePayload(fmt.Sprintf("decode payload_base64: %v", err), err)
 		}

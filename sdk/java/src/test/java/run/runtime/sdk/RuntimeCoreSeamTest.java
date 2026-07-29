@@ -530,6 +530,15 @@ public final class RuntimeCoreSeamTest {
         "proof_payload_base64",
         () -> RuntimeReceipt.fromMap(missingProofPayloadReceipt));
 
+    Map<String, Object> noncanonicalProofPayloadReceipt = new LinkedHashMap<>(complete);
+    Map<String, Object> noncanonicalProofPayload =
+        mutableAuthorityProof(noncanonicalProofPayloadReceipt);
+    noncanonicalProofPayload.put("proof_payload_base64", "AQIDBAUGBwgJCgsMDQ4PEB==");
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        "authority_proof.proof_payload_base64 must be canonical base64",
+        () -> RuntimeReceipt.fromMap(noncanonicalProofPayloadReceipt));
+
     Map<String, Object> legacyProofIssuerReceipt = new LinkedHashMap<>(complete);
     Map<String, Object> legacyProofIssuer = mutableAuthorityProof(legacyProofIssuerReceipt);
     Map<String, Object> issuer = new LinkedHashMap<>(agentBinding(CALLEE));
@@ -1323,6 +1332,10 @@ public final class RuntimeCoreSeamTest {
         ErrorCode.INVALID_ARGUMENT,
         "nonce_base64 must be canonical base64",
         () -> completeBuilder().nonce("not-base64").inspect());
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        "nonce_base64 must be canonical base64",
+        () -> completeBuilder().nonce("AQIDBAUGBwgJCgsMDQ4PEB==").inspect());
   }
 
   private static void completeTupleRejectsAllZeroPrincipals() {

@@ -1021,7 +1021,7 @@ func requiredPrincipalPublicKey(raw map[string]any, key string, path string) (ed
 	if err != nil {
 		return nil, err
 	}
-	decoded, err := base64.StdEncoding.DecodeString(encoded)
+	decoded, err := base64.StdEncoding.Strict().DecodeString(encoded)
 	if err != nil {
 		return nil, invalidPrincipal(path+" base64 decode failed", err)
 	}

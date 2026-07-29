@@ -47,6 +47,9 @@ public record InvocationTuple(
     } catch (IllegalArgumentException error) {
       throw SDKError.validation("invocation", "nonce_base64 must be canonical base64");
     }
+    if (!Base64.getEncoder().encodeToString(decoded).equals(clean)) {
+      throw SDKError.validation("invocation", "nonce_base64 must be canonical base64");
+    }
     if (decoded.length != 16) {
       throw SDKError.validation("invocation", "nonce_base64 must decode to 16 bytes");
     }

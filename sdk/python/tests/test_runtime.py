@@ -961,6 +961,17 @@ class RuntimeTests(unittest.TestCase):
         receipt = canonical_runtime_receipt("inv-1", "completed", "Completed", 1)
         proof = receipt["authority_proof"]
         assert isinstance(proof, dict)
+        proof["proof_payload_base64"] = "AQIDBAUGBwgJCgsMDQ4PEB=="
+        with self.assertRaises(SDKError) as raised:
+            RuntimeReceipt.from_mapping(receipt)
+        self.assertIn(
+            "authority_proof.proof_payload_base64 must be canonical base64",
+            raised.exception.message,
+        )
+
+        receipt = canonical_runtime_receipt("inv-1", "completed", "Completed", 1)
+        proof = receipt["authority_proof"]
+        assert isinstance(proof, dict)
         issuer = proof["issuer"]
         assert isinstance(issuer, dict)
         proof["issuer"] = {**issuer, "legacy_profile": "opaque"}

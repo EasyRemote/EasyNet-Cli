@@ -389,9 +389,12 @@ def _decode_base64_field(value: str, field_name: str) -> bytes:
     if not isinstance(value, str) or value.strip() == "":
         raise _invalid_prepared(f"{field_name} is required")
     try:
-        return base64.b64decode(value, validate=True)
+        decoded = base64.b64decode(value, validate=True)
     except binascii.Error as exc:
         raise _invalid_prepared(f"{field_name} must be base64", exc) from exc
+    if base64.b64encode(decoded).decode("ascii") != value:
+        raise _invalid_prepared(f"{field_name} must be canonical base64")
+    return decoded
 
 
 def _required_object(decoded: Mapping[str, object], field_name: str) -> Mapping[str, object]:

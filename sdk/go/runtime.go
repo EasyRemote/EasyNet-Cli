@@ -2361,7 +2361,7 @@ func normalizedInvocationOutputJSON(
 	if !runtimeResultContentTypeIsJSON(outputContentType) || strings.TrimSpace(outputBase64) == "" {
 		return append(json.RawMessage(nil), raw...), nil
 	}
-	payload, err := base64.StdEncoding.DecodeString(strings.TrimSpace(outputBase64))
+	payload, err := base64.StdEncoding.Strict().DecodeString(strings.TrimSpace(outputBase64))
 	if err != nil {
 		return nil, invalidRuntimePayload("output_base64 must be valid base64 for JSON invocation output", err)
 	}

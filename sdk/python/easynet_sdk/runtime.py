@@ -1783,6 +1783,8 @@ def _runtime_receipt_base64(
         decoded = base64.b64decode(text, validate=True)
     except (ValueError, TypeError) as error:
         raise _invalid_runtime(f"{field_name} must be valid base64", error) from error
+    if base64.b64encode(decoded).decode("ascii") != text:
+        raise _invalid_runtime(f"{field_name} must be canonical base64")
     if not decoded and not allow_empty:
         raise _invalid_runtime(f"{field_name} must decode to non-empty bytes")
     if expected_length is not None and len(decoded) != expected_length:
