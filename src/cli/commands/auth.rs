@@ -242,6 +242,7 @@ pub struct LoginArgs {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct AuthResp {
     token: String,
     #[serde(default)]
@@ -250,6 +251,7 @@ struct AuthResp {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct UserResp {
     id: String,
     #[serde(default)]
@@ -258,6 +260,7 @@ struct UserResp {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RefreshResp {
     token: String,
     #[serde(default)]
@@ -480,6 +483,7 @@ pub struct PairArgs {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct PairingResp {
     pub pairing_token: String,
     #[serde(default)]
@@ -580,12 +584,14 @@ pub struct DevicesArgs {
     pub json: bool,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct DeviceListResp {
     items: Vec<DeviceItem>,
 }
 
 #[derive(Deserialize, Debug)]
+#[serde(deny_unknown_fields)]
 struct DeviceItem {
     node_id: String,
     #[serde(default)]
@@ -648,12 +654,14 @@ pub struct AbilitiesArgs {
     pub json: bool,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct AbilityListResp {
     items: Vec<AbilityItem>,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct AbilityItem {
     #[serde(default)]
     name: Option<String>,
@@ -844,7 +852,8 @@ pub struct AgentsArgs {
     pub json: bool,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct AgentListResp {
     items: Vec<serde_json::Value>,
 }
@@ -1296,6 +1305,38 @@ mod tests {
     }
 
     #[test]
+    fn login_response_rejects_unknown_product_fields() {
+        let top_level = serde_json::from_value::<AuthResp>(serde_json::json!({
+            "token": "token",
+            "refresh_token": "refresh",
+            "user": {
+                "id": "user-alice",
+                "username": "alice"
+            },
+            "state_code": "J200"
+        }))
+        .expect_err("login response envelope must reject read-model drift");
+        assert!(
+            top_level.to_string().contains("state_code"),
+            "schema error should name the noncanonical field: {top_level}"
+        );
+
+        let nested = serde_json::from_value::<AuthResp>(serde_json::json!({
+            "token": "token",
+            "user": {
+                "id": "user-alice",
+                "username": "alice",
+                "user_ura": "easynet:///r/acme/user/user-alice"
+            }
+        }))
+        .expect_err("login user projection must reject retired owner aliases");
+        assert!(
+            nested.to_string().contains("user_ura"),
+            "schema error should name the retired alias: {nested}"
+        );
+    }
+
+    #[test]
     fn refresh_response_does_not_require_user_owner_facts() {
         let response = serde_json::from_value::<RefreshResp>(serde_json::json!({
             "token": "new-token"
@@ -1304,5 +1345,94 @@ mod tests {
 
         assert_eq!(response.token, "new-token");
         assert!(response.refresh_token.is_none());
+    }
+
+    #[test]
+    fn refresh_response_rejects_unknown_product_fields() {
+        let error = serde_json::from_value::<RefreshResp>(serde_json::json!({
+            "token": "new-token",
+            "state_code": "J200"
+        }))
+        .expect_err("refresh response must reject read-model drift");
+
+        assert!(
+            error.to_string().contains("state_code"),
+            "schema error should name the noncanonical field: {error}"
+        );
+    }
+
+    #[test]
+    fn pairing_token_response_rejects_unknown_product_fields() {
+        let error = serde_json::from_value::<PairingResp>(serde_json::json!({
+            "pairing_token": "token_123",
+            "realm": "acme",
+            "state_code": "J200"
+        }))
+        .expect_err("pairing token response must reject read-model drift");
+
+        assert!(
+            error.to_string().contains("state_code"),
+            "schema error should name the noncanonical field: {error}"
+        );
+    }
+
+    #[test]
+    fn device_list_response_rejects_unknown_product_fields() {
+        let top_level = serde_json::from_value::<DeviceListResp>(serde_json::json!({
+            "items": [],
+            "cursor": "legacy"
+        }))
+        .expect_err("device list envelope must reject uncontracted fields");
+        assert!(
+            top_level.to_string().contains("cursor"),
+            "schema error should name the noncanonical field: {top_level}"
+        );
+
+        let item = serde_json::from_value::<DeviceListResp>(serde_json::json!({
+            "items": [{
+                "node_id": "dev-1",
+                "display_name": "Device",
+                "state": "online",
+                "state_code": "J200"
+            }]
+        }))
+        .expect_err("device list rows must reject read-model drift");
+        assert!(
+            item.to_string().contains("state_code"),
+            "schema error should name the noncanonical field: {item}"
+        );
+    }
+
+    #[test]
+    fn ability_list_response_rejects_unknown_product_fields() {
+        let error = serde_json::from_value::<AbilityListResp>(serde_json::json!({
+            "items": [{
+                "name": "browser.open_session",
+                "ability_ura": "easynet:///r/acme/ability/device.dev-1.browser.open_session",
+                "version": "1.0.0",
+                "state": "available",
+                "descriptor_ref": "legacy"
+            }]
+        }))
+        .expect_err("ability list rows must reject descriptor projection drift");
+
+        assert!(
+            error.to_string().contains("descriptor_ref"),
+            "schema error should name the noncanonical field: {error}"
+        );
+    }
+
+    #[test]
+    fn agent_list_response_rejects_unknown_envelope_fields() {
+        let error = serde_json::from_value::<AgentListResp>(serde_json::json!({
+            "items": [],
+            "state_code": "J200"
+        }))
+        .expect_err("agent list envelope must reject read-model drift");
+
+        assert!(
+            error.to_string().contains("state_code"),
+            "schema error should name the noncanonical field: {error}"
+        );
     }
 }
