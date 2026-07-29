@@ -1091,6 +1091,16 @@ def _invocation_cancel_from_json(
         raise _invalid_runtime(f"decode invocation cancel JSON: {exc}", exc) from exc
     if not isinstance(decoded, dict):
         raise _invalid_runtime("invocation cancel JSON must be an object")
+    _require_runtime_exact_keys(
+        decoded,
+        "invocation cancel",
+        "handle_id",
+        "request_accepted",
+        "deduplicated",
+        "cancelled",
+        "state",
+        "terminal",
+    )
     handle_id = _required_positive_int(decoded, "handle_id")
     if expected_control is not None:
         if expected_control._adapter_handle_id() != handle_id:
@@ -1469,6 +1479,17 @@ def _required_mapping(
     if not isinstance(value, dict):
         raise _invalid_runtime(f"{field_name} must be an object")
     return value
+
+
+def _require_runtime_exact_keys(
+    value: Mapping[str, object],
+    field_name: str,
+    *allowed_keys: str,
+) -> None:
+    allowed = set(allowed_keys)
+    for key in value:
+        if key not in allowed:
+            raise _invalid_runtime(f"{field_name} contains noncanonical field {key}")
 
 
 def _required_positive_int(decoded: Mapping[str, object], field_name: str) -> int:

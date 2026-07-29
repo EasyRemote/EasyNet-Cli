@@ -132,6 +132,13 @@ final class RuntimeCoreSeamTests: XCTestCase {
         let cancelled = try await runtime.cancel(handle, reason: "done")
         XCTAssertTrue(cancelled.requestAccepted)
         XCTAssertTrue(cancelled.terminal)
+        expectSyncSDKError(.invalidArgument, "invocation cancel contains noncanonical field state_code") {
+            _ = try InvocationCancel.fromJSON(
+                Data(
+                    #"{"handle_id":7,"request_accepted":true,"deduplicated":false,"cancelled":true,"state":"Cancelled","terminal":true,"state_code":"C440"}"#.utf8
+                )
+            )
+        }
         let events = try await runtime.events(handle)
         XCTAssertTrue(events.terminal)
         try await runtime.closeHandle(handle)

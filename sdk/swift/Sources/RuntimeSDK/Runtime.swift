@@ -420,6 +420,19 @@ public struct InvocationCancel: Sendable {
 
     static func fromJSON(_ raw: Data, expectedControl: InvocationControlCapability?) throws -> InvocationCancel {
         let object = try runtimeJSONObject(raw, "invocation_cancel")
+        try runtimeRequireExactProjectionKeys(
+            object,
+            "invocation cancel",
+            [
+                "handle_id",
+                "request_accepted",
+                "deduplicated",
+                "cancelled",
+                "state",
+                "terminal",
+            ],
+            "invocation_cancel"
+        )
         let handleId = try runtimeRequiredInt64(object, "handle_id", "invocation_cancel")
         let control: InvocationControlCapability
         if let expectedControl {
@@ -865,6 +878,17 @@ private func runtimeRequireExactKeys(
 ) throws {
     for key in object.keys.sorted() where !allowedKeys.contains(key) {
         throw SDKError.validation("runtime_receipt", "\(field) contains noncanonical field \(key)")
+    }
+}
+
+private func runtimeRequireExactProjectionKeys(
+    _ object: [String: Any],
+    _ field: String,
+    _ allowedKeys: Set<String>,
+    _ stage: String
+) throws {
+    for key in object.keys.sorted() where !allowedKeys.contains(key) {
+        throw SDKError.validation(stage, "\(field) contains noncanonical field \(key)")
     }
 }
 

@@ -1638,6 +1638,16 @@ class RuntimeTests(unittest.TestCase):
             "runtime-bound invocation control capability is required",
             str(caught.exception),
         )
+        with self.assertRaises(SDKError) as drift:
+            InvocationCancel.from_json(
+                b'{"handle_id":7,"request_accepted":false,"deduplicated":true,'
+                b'"cancelled":false,"state":"Completed","terminal":true,'
+                b'"state_code":"C440"}'
+            )
+        self.assertIn(
+            "invocation cancel contains noncanonical field state_code",
+            str(drift.exception),
+        )
 
     def test_bound_object_graph_delegates_full_lifecycle(self) -> None:
         transport = MemoryRuntimeTransport()

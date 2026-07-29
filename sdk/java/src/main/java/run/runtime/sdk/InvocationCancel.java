@@ -1,6 +1,7 @@
 package run.runtime.sdk;
 
 import java.util.Map;
+import java.util.Set;
 
 public record InvocationCancel(
     InvocationControlCapability control,
@@ -29,6 +30,7 @@ public record InvocationCancel(
   private static InvocationCancel fromJSON(
       byte[] raw, InvocationControlCapability expectedControl) {
     Map<String, Object> fields = JsonValueReader.object(raw, "invocation cancel");
+    rejectUnknown(fields, "handle_id", "request_accepted", "deduplicated", "cancelled", "state", "terminal");
     long handleId = InvocationHandle.positiveLong(fields, "handle_id");
     InvocationControlCapability control;
     if (expectedControl != null) {
@@ -55,5 +57,15 @@ public record InvocationCancel(
       throw SDKError.validation("invocation_cancel", field + " must be a boolean");
     }
     return bool;
+  }
+
+  private static void rejectUnknown(Map<String, Object> fields, String... allowedKeys) {
+    Set<String> allowed = Set.of(allowedKeys);
+    for (String key : fields.keySet()) {
+      if (!allowed.contains(key)) {
+        throw SDKError.validation(
+            "invocation_cancel", "invocation cancel contains noncanonical field " + key);
+      }
+    }
   }
 }

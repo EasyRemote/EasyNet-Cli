@@ -223,6 +223,11 @@ func TestPublicInvocationCancelJSONDoesNotGrantControlAuthority(t *testing.T) {
 	if cancel.ControlCapability().valid() {
 		t.Fatalf("public cancel snapshot created runtime-bound control")
 	}
+
+	_, err = NewInvocationCancelFromJSON([]byte(`{"handle_id": 7, "request_accepted": false, "deduplicated": true, "cancelled": false, "state": "Completed", "terminal": true, "state_code": "C440"}`))
+	if err == nil || !strings.Contains(err.Error(), "invocation cancel contains noncanonical field state_code") {
+		t.Fatalf("invocation cancel accepted product state_code drift: %v", err)
+	}
 }
 
 func TestRuntimeClientRestartRecoveryProviderContract(t *testing.T) {

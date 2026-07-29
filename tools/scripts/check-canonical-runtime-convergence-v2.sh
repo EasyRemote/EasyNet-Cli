@@ -20890,6 +20890,98 @@ for required_test in (
 PY
 }
 
+check_sdk_invocation_cancel_projection_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local java_cancel="$cli_root/sdk/java/src/main/java/run/runtime/sdk/InvocationCancel.java"
+  local java_tests="$cli_root/sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
+  local go_runtime="$cli_root/sdk/go/runtime.go"
+  local go_tests="$cli_root/sdk/go/runtime_test.go"
+  local py_runtime="$cli_root/sdk/python/easynet_sdk/runtime.py"
+  local py_tests="$cli_root/sdk/python/tests/test_runtime.py"
+  local node_runtime="$cli_root/sdk/node/index.js"
+  local node_tests="$cli_root/sdk/node/test/runtime-core.test.mjs"
+  local swift_runtime="$cli_root/sdk/swift/Sources/RuntimeSDK/Runtime.swift"
+  local swift_tests="$cli_root/sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift"
+  [[ -f "$java_cancel" ]] || fail "Java InvocationCancel source is missing: ${java_cancel#$cli_root/}"
+  [[ -f "$java_tests" ]] || fail "Java runtime seam tests are missing: ${java_tests#$cli_root/}"
+  [[ -f "$go_runtime" ]] || fail "Go Runtime source is missing: ${go_runtime#$cli_root/}"
+  [[ -f "$go_tests" ]] || fail "Go runtime tests are missing: ${go_tests#$cli_root/}"
+  [[ -f "$py_runtime" ]] || fail "Python Runtime source is missing: ${py_runtime#$cli_root/}"
+  [[ -f "$py_tests" ]] || fail "Python runtime tests are missing: ${py_tests#$cli_root/}"
+  [[ -f "$node_runtime" ]] || fail "Node runtime source is missing: ${node_runtime#$cli_root/}"
+  [[ -f "$node_tests" ]] || fail "Node runtime tests are missing: ${node_tests#$cli_root/}"
+  [[ -f "$swift_runtime" ]] || fail "Swift runtime source is missing: ${swift_runtime#$cli_root/}"
+  [[ -f "$swift_tests" ]] || fail "Swift runtime tests are missing: ${swift_tests#$cli_root/}"
+
+  "$PYTHON_BIN" - "$java_cancel" "$java_tests" "$go_runtime" "$go_tests" "$py_runtime" "$py_tests" "$node_runtime" "$node_tests" "$swift_runtime" "$swift_tests" <<'PY'
+import sys
+from pathlib import Path
+
+(
+    java_cancel,
+    java_tests,
+    go_runtime,
+    go_tests,
+    py_runtime,
+    py_tests,
+    node_runtime,
+    node_tests,
+    swift_runtime,
+    swift_tests,
+) = [Path(path).read_text(encoding="utf-8") for path in sys.argv[1:]]
+
+canonical_fields = (
+    "handle_id",
+    "request_accepted",
+    "deduplicated",
+    "cancelled",
+    "state",
+    "terminal",
+)
+
+for field in canonical_fields:
+    if f'"{field}"' not in java_cancel:
+        raise SystemExit(f"sdk_invocation_cancel_projection:java_missing_field:{field}")
+    if f'"{field}"' not in go_runtime:
+        raise SystemExit(f"sdk_invocation_cancel_projection:go_missing_field:{field}")
+    if f'"{field}"' not in py_runtime:
+        raise SystemExit(f"sdk_invocation_cancel_projection:python_missing_field:{field}")
+    if f'"{field}"' not in node_runtime:
+        raise SystemExit(f"sdk_invocation_cancel_projection:node_missing_field:{field}")
+    if f'"{field}"' not in swift_runtime:
+        raise SystemExit(f"sdk_invocation_cancel_projection:swift_missing_field:{field}")
+
+for fragment, label, source in (
+    ("rejectUnknown(fields", "java_exact_schema_guard_missing", java_cancel),
+    ("invocation cancel contains noncanonical field", "java_unknown_field_error_missing", java_cancel),
+    ("rejectUnknownInvocationCancelFields(raw)", "go_exact_schema_guard_missing", go_runtime),
+    ("func rejectUnknownInvocationCancelFields", "go_exact_schema_helper_missing", go_runtime),
+    ("invocation cancel contains noncanonical field", "go_unknown_field_error_missing", go_runtime),
+    ("_require_runtime_exact_keys(", "python_exact_schema_guard_missing", py_runtime),
+    ("contains noncanonical field {key}", "python_unknown_field_error_missing", py_runtime),
+    ("rejectRuntimeFields(value, [", "node_exact_schema_guard_missing", node_runtime),
+    ("runtimeRequireExactProjectionKeys(", "swift_exact_schema_guard_missing", swift_runtime),
+    ("contains noncanonical field \\(key)", "swift_unknown_field_error_missing", swift_runtime),
+):
+    if fragment not in source:
+        raise SystemExit(f"sdk_invocation_cancel_projection:{label}")
+
+for tests, language in (
+    (java_tests, "java"),
+    (go_tests, "go"),
+    (py_tests, "python"),
+    (swift_tests, "swift"),
+):
+    if "state_code" not in tests:
+        raise SystemExit(f"sdk_invocation_cancel_projection:{language}_state_code_negative_test_missing")
+    if "invocation cancel contains noncanonical field state_code" not in tests:
+        raise SystemExit(f"sdk_invocation_cancel_projection:{language}_unknown_field_negative_test_missing")
+
+if "InvocationCancel" not in node_tests:
+    raise SystemExit("sdk_invocation_cancel_projection:node_cancel_test_coverage_missing")
+PY
+}
+
 check_swift_sdk_runtime_receipt_projection_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local runtime="$cli_root/sdk/swift/Sources/RuntimeSDK/Runtime.swift"
@@ -29896,6 +29988,7 @@ EOF
   check_go_sdk_runtime_receipt_projection_contract
   check_python_sdk_runtime_receipt_projection_contract
   check_node_sdk_runtime_receipt_projection_contract
+  check_sdk_invocation_cancel_projection_contract
   check_swift_sdk_runtime_receipt_projection_contract
   check_sdk_receipt_profile_convergence_contract
   check_sdk_session_authority_binding_facade_contract
@@ -30196,6 +30289,7 @@ check_java_sdk_runtime_receipt_seam_tests_execute_contract
 check_go_sdk_runtime_receipt_projection_contract
 check_python_sdk_runtime_receipt_projection_contract
 check_node_sdk_runtime_receipt_projection_contract
+check_sdk_invocation_cancel_projection_contract
 check_swift_sdk_runtime_receipt_projection_contract
 check_catalog_schema_projection_boundary_contract
 check_catalog_description_projection_boundary_contract

@@ -258,6 +258,20 @@ public final class RuntimeCoreSeamTest {
             InvocationCancel.fromJSON(
                 "{\"handle_id\":7,\"cancelled\":true,\"state\":\"Cancelled\",\"terminal\":true}"
                     .getBytes(StandardCharsets.UTF_8)));
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        "invocation cancel contains noncanonical field state_code",
+        () ->
+            InvocationCancel.fromJSON(
+                JsonValueWriter.object(
+                    Map.of(
+                        "handle_id", 7,
+                        "request_accepted", true,
+                        "deduplicated", false,
+                        "cancelled", true,
+                        "state", "Cancelled",
+                        "terminal", true,
+                        "state_code", "C440"))));
     InvocationHandle events = runtime.events(handle);
     check(events.terminal(), "invocation events snapshot");
     runtime.closeHandle(handle);
