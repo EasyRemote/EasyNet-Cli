@@ -1,6 +1,6 @@
 {
   "name": "@runtime/sdk",
-  "version": "0.0.0-seam",
+  "version": "0.117.20",
   "private": true,
   "type": "module",
   "main": "./index.js",

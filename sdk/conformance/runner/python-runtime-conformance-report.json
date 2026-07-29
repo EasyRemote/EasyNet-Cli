@@ -471,7 +471,7 @@
         {
           "kind": "python_test",
           "ref_path": "sdk/python/tests/test_direct_runtime.py",
-          "sha256": "1c536dff2f08998b6c0af53be8a3915d689e4fb2ba2a1a0cabd7b3f540383787"
+          "sha256": "3bdc571a23caf1101233c99721cbbd52c212a1ff55eb89300c597913dece4f10"
         }
       ]
     },

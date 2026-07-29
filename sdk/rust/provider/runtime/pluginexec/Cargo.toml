@@ -1,6 +1,6 @@
 [package]
 name = "runtime-provider-pluginexec"
-version = "0.1.0"
+version = "0.117.20"
 edition = "2021"
 description = "Canonical runtime SDK provider-scoped declarative exec plugin sidecar helper"
 license = "Apache-2.0"
