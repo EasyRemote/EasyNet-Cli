@@ -548,6 +548,7 @@ impl AbilityConflictPolicy {
 }
 
 #[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct AgentAbilityCommitOutcome {
     pub(crate) root_path: PathBuf,
     pub(crate) written: Vec<String>,
@@ -1027,6 +1028,23 @@ mod tests {
             }
             other => panic!("expected http exec, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn agent_ability_commit_outcome_rejects_unknown_fields() {
+        let err = serde_json::from_value::<AgentAbilityCommitOutcome>(json!({
+            "root_path": "/tmp/easynet-agent",
+            "written": [],
+            "skipped": [],
+            "publication": [],
+            "state_code": "J200"
+        }))
+        .expect_err("agent ability commit outcome must reject read-model drift");
+
+        assert!(
+            err.to_string().contains("state_code"),
+            "schema error should name the noncanonical field: {err}"
+        );
     }
 
     #[test]

@@ -518,6 +518,7 @@ impl FollowEngine {
 
 /// `{trace_id, nodes}` subset of the `invocation.trace.get` response.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct TraceSnapshot {
     trace_id: String,
     #[serde(default)]
@@ -1127,6 +1128,21 @@ mod tests {
         assert!(
             !WatchEngine::all_terminal(std::iter::empty()),
             "an empty trace is pending, not terminal"
+        );
+    }
+
+    #[test]
+    fn trace_snapshot_rejects_unknown_envelope_fields() {
+        let err = serde_json::from_value::<TraceSnapshot>(json!({
+            "trace_id": "trace-1",
+            "nodes": [],
+            "state_code": "J200"
+        }))
+        .expect_err("watch trace snapshot must reject read-model drift");
+
+        assert!(
+            err.to_string().contains("state_code"),
+            "schema error should name the noncanonical field: {err}"
         );
     }
 

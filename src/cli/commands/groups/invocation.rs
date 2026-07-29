@@ -342,6 +342,7 @@ fn print_trace_edges(edges: &[TraceEdge]) {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct HistoryListResponse {
     ledger_path: Option<String>,
     #[serde(default)]
@@ -349,12 +350,14 @@ struct HistoryListResponse {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct HistoryGetResponse {
     ledger_path: Option<String>,
     record: Option<InvocationRecord>,
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct TraceGetResponse {
     ledger_path: Option<String>,
     trace_id: String,
@@ -375,6 +378,7 @@ impl TraceGetResponse {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct HistoryPathResponse {
     ledger_path: String,
 }
@@ -817,6 +821,54 @@ mod tests {
 
         assert_eq!(body["limit"], 25);
         assert!(body.get("filter").is_none());
+    }
+
+    #[test]
+    fn invocation_history_responses_reject_unknown_envelope_fields() {
+        let list = serde_json::from_value::<HistoryListResponse>(json!({
+            "ledger_path": "/tmp/ledger",
+            "records": [],
+            "state_code": "J200"
+        }))
+        .expect_err("history list response must reject read-model drift");
+        assert!(
+            list.to_string().contains("state_code"),
+            "schema error should name the noncanonical field: {list}"
+        );
+
+        let get = serde_json::from_value::<HistoryGetResponse>(json!({
+            "ledger_path": "/tmp/ledger",
+            "record": null,
+            "legacy_subject": "subject"
+        }))
+        .expect_err("history get response must reject retired aliases");
+        assert!(
+            get.to_string().contains("legacy_subject"),
+            "schema error should name the noncanonical field: {get}"
+        );
+
+        let trace = serde_json::from_value::<TraceGetResponse>(json!({
+            "ledger_path": "/tmp/ledger",
+            "trace_id": "trace-1",
+            "nodes": [],
+            "edges": [],
+            "cursor": "legacy"
+        }))
+        .expect_err("trace response must reject uncontracted fields");
+        assert!(
+            trace.to_string().contains("cursor"),
+            "schema error should name the noncanonical field: {trace}"
+        );
+
+        let path = serde_json::from_value::<HistoryPathResponse>(json!({
+            "ledger_path": "/tmp/ledger",
+            "state_code": "J200"
+        }))
+        .expect_err("history path response must reject read-model drift");
+        assert!(
+            path.to_string().contains("state_code"),
+            "schema error should name the noncanonical field: {path}"
+        );
     }
 
     #[test]
