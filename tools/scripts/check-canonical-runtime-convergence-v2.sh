@@ -2059,9 +2059,11 @@ PY
 check_invocation_history_ledger_ura_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local history="$cli_root/src/daemon/ability/builtins/governance/invocation_history.rs"
+  local cli_history="$cli_root/src/cli/commands/groups/invocation.rs"
   [[ -f "$history" ]] || return 0
+  [[ -f "$cli_history" ]] || return 0
 
-  "$PYTHON_BIN" - "$history" <<'PY'
+  "$PYTHON_BIN" - "$history" "$cli_history" <<'PY'
 import re
 import sys
 from pathlib import Path
@@ -2069,6 +2071,9 @@ from pathlib import Path
 path = Path(sys.argv[1])
 text = path.read_text()
 production = text.split("#[cfg(test)]", 1)[0]
+cli_path = Path(sys.argv[2])
+cli_text = cli_path.read_text()
+cli_production = cli_text.split("#[cfg(test)]", 1)[0]
 
 ledger = re.search(
     r"fn ledger_resource_ura\(\) -> (?P<ret>[^\{]+)\{(?P<body>.*?)\n\}\n\nfn ledger_resource_ura_from_host_device_agent_ura",
@@ -2107,6 +2112,37 @@ if ".ok()?" in projection_body or "parse_ura(host_device_agent_ura).ok()" in pro
 
 if "ledger_resource_ura_projection_distinguishes_unjoined_from_invalid_identity" not in text:
     raise SystemExit("missing_invocation_history_ledger_ura_projection_test")
+
+for response in (
+    "HistoryListResponse",
+    "HistoryGetResponse",
+    "TraceGetResponse",
+    "HistoryPathResponse",
+):
+    match = re.search(
+        rf"struct {response} \{{(?P<body>.*?)\n\}}",
+        cli_production,
+        re.S,
+    )
+    if match is None:
+        raise SystemExit(f"invocation_history_cli_response_missing:{response}")
+    if "ledger_ura: String" not in match.group("body"):
+        raise SystemExit(f"invocation_history_cli_response_missing_ledger_ura:{response}")
+
+for required in (
+    "trait InvocationHistoryResponse",
+    "fn validate_history_ledger_ura",
+    "parse_ura(trimmed)",
+    "URAKind::Resource",
+    "T: DeserializeOwned + InvocationHistoryResponse",
+    "response.validate_response(operation)?",
+    "invocation_history_responses_require_canonical_ledger_ura",
+):
+    if required not in cli_text:
+        raise SystemExit(f"invocation_history_cli_ledger_ura_contract_missing:{required}")
+
+if "HistoryListResponse {\n            ledger_path: None" in cli_text:
+    raise SystemExit("invocation_history_cli_limit_zero_synthesizes_legacy_response")
 PY
 }
 

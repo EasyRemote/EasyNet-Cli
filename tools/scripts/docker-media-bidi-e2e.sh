@@ -132,6 +132,17 @@ ensure_runtime_dirs() {
 
 if [[ "$SELF_TEST" == "1" ]]; then
   bash -n "$0"
+  python3 - "$0" <<'PY'
+import ast
+import pathlib
+import re
+import sys
+
+script = pathlib.Path(sys.argv[1])
+text = script.read_text()
+for index, match in enumerate(re.finditer(r"<<'PY'\n(.*?)\nPY", text, re.S), 1):
+    ast.parse(match.group(1), filename=f"{script}#python-heredoc-{index}")
+PY
   grep -q "synthetic media stream and bidirectional multimodal transfer" "$0"
   grep -q "kind = \"sidecar\"" "$0"
   grep -q "media.synthetic_stream" "$0"
