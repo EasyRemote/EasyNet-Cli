@@ -619,6 +619,8 @@ pub struct DevicesArgs {
 #[serde(deny_unknown_fields)]
 struct DeviceListResp {
     items: Vec<DeviceItem>,
+    #[serde(default)]
+    resolve_unavailable: Vec<ResolveUnavailable>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -635,6 +637,83 @@ struct DeviceItem {
     arch: Option<String>,
     #[serde(default)]
     realm: Option<String>,
+    #[serde(default)]
+    trust_level: Option<String>,
+    #[serde(default)]
+    device_group: Option<String>,
+    #[serde(default)]
+    auth_binding: Option<String>,
+    #[serde(default)]
+    credential_provisioned: Option<bool>,
+    #[serde(default)]
+    public_key_registered: Option<bool>,
+    #[serde(default)]
+    device_public_key: Option<String>,
+    #[serde(default)]
+    device_public_key_fingerprint: Option<String>,
+    #[serde(default)]
+    credential_token: Option<String>,
+    #[serde(default)]
+    hub_endpoint: Option<String>,
+    #[serde(default)]
+    username: Option<String>,
+    #[serde(default)]
+    user_id: Option<String>,
+    #[serde(default)]
+    deploy_signature: Option<String>,
+    #[serde(default)]
+    federated_peers: Vec<FederatedPeerEntry>,
+    #[serde(default)]
+    ura: Option<String>,
+    #[serde(default)]
+    last_seen_unix_ms: Option<i64>,
+    #[serde(default)]
+    resolve_unavailable: Vec<ResolveUnavailable>,
+    #[serde(default)]
+    state_code: Option<String>,
+    #[serde(default)]
+    transition_id: Option<String>,
+    #[serde(default)]
+    interrupted_transition: Option<String>,
+    #[serde(default)]
+    failure: Option<ConnectionFailure>,
+}
+
+#[derive(Deserialize, Debug, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+struct FederatedPeerEntry {
+    realm: String,
+    peer_hub_url: String,
+    #[serde(default)]
+    peer_hub_pubkey: Option<String>,
+}
+
+#[derive(Deserialize, Debug, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+struct ResolveUnavailable {
+    source: String,
+    reason: String,
+    #[serde(default)]
+    query_name: Option<String>,
+    #[serde(default)]
+    message: Option<String>,
+    #[serde(default)]
+    code: Option<String>,
+    #[serde(default)]
+    stage: Option<String>,
+    #[serde(default)]
+    retryable: Option<bool>,
+    #[serde(default)]
+    retry_after_unix_ms: Option<i64>,
+}
+
+#[derive(Deserialize, Debug, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+struct ConnectionFailure {
+    code: String,
+    message: String,
+    stage: String,
+    retryable: bool,
 }
 
 pub fn run_devices(args: DevicesArgs) -> anyhow::Result<()> {
@@ -647,10 +726,31 @@ pub fn run_devices(args: DevicesArgs) -> anyhow::Result<()> {
                     "node_id": d.node_id,
                     "display_name": d.display_name,
                     "state": d.state,
+                    "trust_level": d.trust_level,
+                    "device_group": d.device_group,
                     "os": d.os,
                     "arch": d.arch,
                     "realm": d.realm,
-                })).collect::<Vec<_>>()
+                    "auth_binding": d.auth_binding,
+                    "credential_provisioned": d.credential_provisioned,
+                    "public_key_registered": d.public_key_registered,
+                    "device_public_key": d.device_public_key,
+                    "device_public_key_fingerprint": d.device_public_key_fingerprint,
+                    "credential_token": d.credential_token,
+                    "hub_endpoint": d.hub_endpoint,
+                    "username": d.username,
+                    "user_id": d.user_id,
+                    "deploy_signature": d.deploy_signature,
+                    "ura": d.ura,
+                    "last_seen_unix_ms": d.last_seen_unix_ms,
+                    "state_code": d.state_code,
+                    "transition_id": d.transition_id,
+                    "interrupted_transition": d.interrupted_transition,
+                    "failure": d.failure,
+                    "resolve_unavailable": d.resolve_unavailable,
+                    "federated_peers": d.federated_peers,
+                })).collect::<Vec<_>>(),
+                "resolve_unavailable": resp.resolve_unavailable,
             }))?
         );
         return Ok(());
@@ -689,19 +789,33 @@ pub struct AbilitiesArgs {
 #[serde(deny_unknown_fields)]
 struct AbilityListResp {
     items: Vec<AbilityItem>,
+    #[serde(default)]
+    resolve_unavailable: Vec<ResolveUnavailable>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct AbilityItem {
     #[serde(default)]
+    ura: Option<String>,
+    #[serde(default)]
     name: Option<String>,
+    #[serde(default)]
+    tool_name: Option<String>,
     #[serde(default)]
     ability_ura: Option<String>,
     #[serde(default)]
     version: Option<String>,
     #[serde(default)]
+    category: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
     state: Option<String>,
+    #[serde(default)]
+    install_id: Option<String>,
+    #[serde(default)]
+    owner_ura: Option<String>,
 }
 
 pub fn run_abilities(args: AbilitiesArgs) -> anyhow::Result<()> {
@@ -712,11 +826,18 @@ pub fn run_abilities(args: AbilitiesArgs) -> anyhow::Result<()> {
             "{}",
             serde_json::to_string_pretty(&serde_json::json!({
                 "items": resp.items.iter().map(|a| serde_json::json!({
+                    "ura": a.ura,
                     "name": a.name,
+                    "tool_name": a.tool_name,
                     "ability_ura": a.ability_ura,
                     "version": a.version,
+                    "category": a.category,
+                    "description": a.description,
                     "state": a.state,
-                })).collect::<Vec<_>>()
+                    "install_id": a.install_id,
+                    "owner_ura": a.owner_ura,
+                })).collect::<Vec<_>>(),
+                "resolve_unavailable": resp.resolve_unavailable,
             }))?
         );
         return Ok(());
@@ -1434,7 +1555,54 @@ mod tests {
     }
 
     #[test]
-    fn device_list_response_rejects_unknown_product_fields() {
+    fn device_list_response_accepts_backend_read_model_contract() {
+        let response = serde_json::from_value::<DeviceListResp>(serde_json::json!({
+            "items": [{
+                "node_id": "dev-1",
+                "display_name": "Device",
+                "state": "online",
+                "trust_level": "",
+                "device_group": "",
+                "os": "darwin",
+                "arch": "arm64",
+                "realm": "acme",
+                "ura": "easynet:///r/acme/device/dev-1",
+                "last_seen_unix_ms": 42,
+                "resolve_unavailable": [],
+                "state_code": "J800",
+                "transition_id": "T11_REFETCH_READ_MODEL",
+                "interrupted_transition": "T11_REFETCH_READ_MODEL",
+                "failure": {
+                    "code": "RESOLVE_UNAVAILABLE",
+                    "message": "namespace resolver unavailable",
+                    "stage": "resolve",
+                    "retryable": true
+                }
+            }],
+            "resolve_unavailable": [{
+                "source": "backend_namespace_resolve",
+                "reason": "NOT_FOUND",
+                "query_name": "easynet:///r/acme/device/dev-1",
+                "message": "owner is not online",
+                "code": "ROUTE_NEGATIVE",
+                "stage": "resolve",
+                "retryable": true,
+                "retry_after_unix_ms": 1000
+            }]
+        }))
+        .expect(
+            "operator-mode device list must accept backend public DeviceResp read-model fields",
+        );
+
+        assert_eq!(response.items[0].state_code.as_deref(), Some("J800"));
+        assert_eq!(
+            response.resolve_unavailable[0].source,
+            "backend_namespace_resolve"
+        );
+    }
+
+    #[test]
+    fn device_list_response_rejects_uncontracted_fields() {
         let top_level = serde_json::from_value::<DeviceListResp>(serde_json::json!({
             "items": [],
             "cursor": "legacy"
@@ -1450,18 +1618,43 @@ mod tests {
                 "node_id": "dev-1",
                 "display_name": "Device",
                 "state": "online",
-                "state_code": "J200"
+                "legacy_state_code": "J200"
             }]
         }))
-        .expect_err("device list rows must reject read-model drift");
+        .expect_err("device list rows must reject uncontracted drift");
         assert!(
-            item.to_string().contains("state_code"),
+            item.to_string().contains("legacy_state_code"),
             "schema error should name the noncanonical field: {item}"
         );
     }
 
     #[test]
-    fn ability_list_response_rejects_unknown_product_fields() {
+    fn ability_list_response_accepts_backend_public_contract() {
+        let response = serde_json::from_value::<AbilityListResp>(serde_json::json!({
+            "items": [{
+                "ura": "easynet:///r/acme/ability/device.dev-1.browser.open_session",
+                "name": "browser.open_session",
+                "tool_name": "browser.open_session",
+                "ability_ura": "easynet:///r/acme/ability/device.dev-1.browser.open_session",
+                "version": "1.0.0",
+                "category": "browser",
+                "description": "Open a browser session",
+                "state": "available",
+                "install_id": "install-1",
+                "owner_ura": "easynet:///r/acme/device/dev-1"
+            }],
+            "resolve_unavailable": []
+        }))
+        .expect("operator-mode ability list must accept backend public AbilityResp fields");
+
+        assert_eq!(
+            response.items[0].owner_ura.as_deref(),
+            Some("easynet:///r/acme/device/dev-1")
+        );
+    }
+
+    #[test]
+    fn ability_list_response_rejects_uncontracted_fields() {
         let error = serde_json::from_value::<AbilityListResp>(serde_json::json!({
             "items": [{
                 "name": "browser.open_session",
