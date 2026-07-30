@@ -1720,14 +1720,51 @@ fn preflight_pairing_token(token: &str, hub_base: &str) -> anyhow::Result<Pairin
         }
     };
 
-    let preflight: PairingPreflight = resp.into_json().map_err(|e| {
+    let raw = resp.into_string().map_err(|e| {
         anyhow::Error::from(e).context(
+            "Hub returned an unreadable pairing preflight response — the Hub response body \
+             could not be read. Verify the Hub URL and that no proxy rewrote the response.",
+        )
+    })?;
+    let preflight = decode_pairing_preflight_response(&raw)?;
+    validate_pairing_preflight(preflight)
+}
+
+fn decode_pairing_preflight_response(raw: &str) -> anyhow::Result<PairingPreflight> {
+    let value: serde_json::Value = serde_json::from_str(raw).map_err(|error| {
+        anyhow::Error::from(error).context(
+            "Hub returned an unreadable pairing preflight response — the Hub returned invalid \
+             JSON. Verify the Hub URL and that no proxy rewrote the response.",
+        )
+    })?;
+    validate_pairing_preflight_wire_value(&value)?;
+    serde_json::from_value(value).map_err(|error| {
+        anyhow::Error::from(error).context(
             "Hub returned an unreadable pairing preflight response — the Hub is likely on an \
              incompatible version, or a proxy rewrote the response. Verify the Hub URL and \
              that CLI + Hub versions match; re-run with a fresh pairing token if so.",
         )
-    })?;
-    validate_pairing_preflight(preflight)
+    })
+}
+
+fn validate_pairing_preflight_wire_value(value: &serde_json::Value) -> anyhow::Result<()> {
+    let Some(object) = value.as_object() else {
+        anyhow::bail!("Hub pairing preflight contract violation: response must be a JSON object");
+    };
+    for field in [
+        "state_code",
+        "transition_id",
+        "interrupted_transition",
+        "failure",
+        "resolve_unavailable",
+    ] {
+        if object.contains_key(field) {
+            anyhow::bail!(
+                "Hub pairing preflight contract violation: response leaked device read-model field `{field}`"
+            );
+        }
+    }
+    Ok(())
 }
 
 fn validate_pairing_preflight(mut preflight: PairingPreflight) -> anyhow::Result<PairingPreflight> {
@@ -1983,6 +2020,16 @@ mod tests {
 
     fn test_hub_public_key_b64() -> String {
         base64::engine::general_purpose::STANDARD.encode([0x11u8; 32])
+    }
+
+    fn canonical_pairing_preflight_json() -> serde_json::Value {
+        serde_json::json!({
+            "realm": "tenant-a",
+            "node_id": "en-test-node",
+            "hub_public_key_b64": test_hub_public_key_b64(),
+            "hub_tls_ca_pem_b64": "",
+            "hub_agent_ura": crate::core::ura::hub_ura("tenant-a")
+        })
     }
 
     fn join_identity_test_credentials(
@@ -2604,14 +2651,15 @@ mod tests {
 
     #[test]
     fn pairing_preflight_accepts_current_realm_schema() {
-        let preflight: PairingPreflight = serde_json::from_value(serde_json::json!({
-            "realm": " tenant-a ",
-            "node_id": " en-test-node ",
-            "hub_public_key_b64": test_hub_public_key_b64(),
-            "hub_tls_ca_pem_b64": "  ",
-            "hub_agent_ura": format!(" {} ", crate::core::ura::hub_ura("tenant-a"))
-        }))
-        .expect("current preflight schema");
+        let mut body = canonical_pairing_preflight_json();
+        body["realm"] = serde_json::json!(" tenant-a ");
+        body["node_id"] = serde_json::json!(" en-test-node ");
+        body["hub_tls_ca_pem_b64"] = serde_json::json!("  ");
+        body["hub_agent_ura"] =
+            serde_json::json!(format!(" {} ", crate::core::ura::hub_ura("tenant-a")));
+
+        let preflight: PairingPreflight =
+            serde_json::from_value(body).expect("current preflight schema");
         let preflight = validate_pairing_preflight(preflight).expect("valid preflight facts");
 
         assert_eq!(preflight.realm, "tenant-a");
@@ -2626,16 +2674,63 @@ mod tests {
 
     #[test]
     fn pairing_preflight_rejects_retired_tenant_id_alias() {
-        let err = serde_json::from_value::<PairingPreflight>(serde_json::json!({
-            "realm": "tenant-a",
-            "tenant_id": "tenant-a",
-            "node_id": "en-test-node"
-        }))
-        .expect_err("retired tenant_id must not be accepted");
+        let mut body = canonical_pairing_preflight_json();
+        body["tenant_id"] = serde_json::json!("tenant-a");
+
+        let err = serde_json::from_value::<PairingPreflight>(body)
+            .expect_err("retired tenant_id must not be accepted");
 
         assert!(
             err.to_string().contains("tenant_id"),
             "error should name the retired field: {err}"
+        );
+    }
+
+    #[test]
+    fn decode_pairing_preflight_response_rejects_read_model_state_before_serde() {
+        let mut body = canonical_pairing_preflight_json();
+        body["state_code"] = serde_json::json!("J100");
+        let raw = serde_json::to_string(&body).expect("raw JSON");
+
+        let err = decode_pairing_preflight_response(&raw)
+            .expect_err("device read-model fields must fail at preflight contract ingress");
+        let message = err.to_string();
+
+        assert!(
+            message.contains(
+                "Hub pairing preflight contract violation: response leaked device read-model field `state_code`"
+            ),
+            "error should identify product DTO drift before serde decode: {message}"
+        );
+        assert!(
+            !message.contains("unknown field"),
+            "contract drift should not surface as a generic serde unknown-field error: {message}"
+        );
+    }
+
+    #[test]
+    fn decode_pairing_preflight_response_rejects_non_object_before_serde() {
+        let err = decode_pairing_preflight_response("[]")
+            .expect_err("preflight response must be an object");
+        let message = err.to_string();
+
+        assert!(
+            message.contains(
+                "Hub pairing preflight contract violation: response must be a JSON object"
+            ),
+            "error should identify malformed preflight envelope: {message}"
+        );
+    }
+
+    #[test]
+    fn decode_pairing_preflight_response_reports_invalid_json() {
+        let err = decode_pairing_preflight_response("{not-json")
+            .expect_err("invalid JSON should fail at the JSON boundary");
+        let message = err.to_string();
+
+        assert!(
+            message.contains("Hub returned an unreadable pairing preflight response"),
+            "error should retain operator-facing preflight context: {message}"
         );
     }
 
