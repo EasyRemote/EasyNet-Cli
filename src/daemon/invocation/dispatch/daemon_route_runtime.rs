@@ -56,6 +56,7 @@ use crate::daemon::invocation::dispatch::daemon_invocation_service::{
 };
 use crate::daemon::invocation::dispatch::descriptor_binding::RuntimeBoundAbility;
 use crate::daemon::invocation::dispatch::invocation_wire::status_from_axon_invoke_error;
+use crate::daemon::invocation::dispatch::transport_stream::TransportDropNotifyStream;
 use crate::daemon::invocation::dispatch::unary_dispatcher::{
     rpc_dispatch_outcome_response, DaemonUnaryRouteProvider,
 };
@@ -705,8 +706,12 @@ impl DaemonRouteRuntimeAdapter {
         };
         let (runtime_input, mut runtime_output) = handle.split();
         let (down_tx, down_rx) = tokio::sync::mpsc::channel::<Result<InvokeBidiDown, Status>>(16);
+        let (transport_closed_tx, mut transport_closed_rx) =
+            tokio::sync::mpsc::channel::<String>(2);
 
+        let transport_closed_tx_for_input = transport_closed_tx.clone();
         let input_bridge = tokio::spawn(async move {
+            let mut close_reason = "InvokeBidi transport input closed".to_string();
             while let Some(frame_result) = up.next().await {
                 match frame_result {
                     Ok(frame) => {
@@ -719,10 +724,12 @@ impl DaemonRouteRuntimeAdapter {
                             .await
                             .is_err()
                         {
+                            close_reason = "InvokeBidi runtime input channel closed".to_string();
                             break;
                         }
                     }
                     Err(status) => {
+                        close_reason = format!("InvokeBidi transport input error: {status}");
                         let _ = runtime_input
                             .send(
                                 BidiInputFrame::new(status.to_string().into_bytes())
@@ -736,14 +743,37 @@ impl DaemonRouteRuntimeAdapter {
                 }
             }
             let _ = runtime_input.close_input().await;
+            let _ = transport_closed_tx_for_input.send(close_reason).await;
         });
 
         tokio::spawn(async move {
             let mut admission_pending = Some(admission_frame);
             let mut terminal_authority_observed = false;
-            while let Some(frame_result) = runtime_output.next_frame().await {
+            loop {
+                let frame_result = tokio::select! {
+                    biased;
+                    close_reason = transport_closed_rx.recv() => {
+                        let reason = close_reason.unwrap_or_else(|| {
+                            "InvokeBidi transport input bridge closed".to_string()
+                        });
+                        let projected = crate::daemon::invocation::bidi::bidi_dispatcher::cancel_registered_bidi(
+                            &lifecycle,
+                            reason.clone(),
+                        )
+                        .await
+                        .map_err(|status| Status::internal(format!("{reason}; {status}")));
+                        terminal_authority_observed = true;
+                        if send_pending_bidi_admission(&down_tx, &mut admission_pending).await {
+                            let _ = down_tx.send(projected).await;
+                        }
+                        break;
+                    }
+                    frame_result = runtime_output.next_frame() => frame_result,
+                };
+
                 match frame_result {
-                    Ok(frame) if frame.terminal => {
+                    None => break,
+                    Some(Ok(frame)) if frame.terminal => {
                         let projected =
                             crate::daemon::invocation::bidi::bidi_dispatcher::project_registered_finalized_bidi_receipt(
                                 &lifecycle,
@@ -755,7 +785,7 @@ impl DaemonRouteRuntimeAdapter {
                         }
                         break;
                     }
-                    Ok(frame) => {
+                    Some(Ok(frame)) => {
                         if frame.content_type
                             != crate::daemon::invocation::bidi::bidi_dispatcher::SESSION_RUNTIME_FRAME_CONTENT_TYPE
                         {
@@ -817,7 +847,7 @@ impl DaemonRouteRuntimeAdapter {
                             break;
                         }
                     }
-                    Err(error) => {
+                    Some(Err(error)) => {
                         let projected =
                             crate::daemon::invocation::bidi::bidi_dispatcher::project_registered_finalized_bidi_receipt(
                                 &lifecycle,
@@ -848,8 +878,11 @@ impl DaemonRouteRuntimeAdapter {
             input_bridge.abort();
         });
 
-        let stream =
-            crate::daemon::invocation::bidi::bidi_dispatcher::LocalBidiDownStream::new(down_rx);
+        let stream = TransportDropNotifyStream::new(
+            crate::daemon::invocation::bidi::bidi_dispatcher::LocalBidiDownStream::new(down_rx),
+            transport_closed_tx,
+            "InvokeBidi response stream dropped",
+        );
         Ok(Response::new(Box::pin(stream)))
     }
 }

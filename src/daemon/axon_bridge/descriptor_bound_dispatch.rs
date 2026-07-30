@@ -345,6 +345,9 @@ async fn dispatch_rpc(
     cancellations: &crate::daemon::invocation::dispatch::cancellation::InvocationCancellationRegistry,
 ) -> RpcDispatchOutcome {
     let lifecycle_envelope = wire.envelope.clone();
+    let dispatch_ability = lifecycle_envelope.envelope().ability.clone();
+    let dispatch_callee = lifecycle_envelope.envelope().callee.ura.clone();
+    let dispatch_caller = lifecycle_envelope.envelope().caller.ura.clone();
     let prepared = match request_for_wire_dispatch(AxonInvocationCallMode::Rpc, wire) {
         Ok(prepared) => prepared,
         Err(err) => {
@@ -364,11 +367,26 @@ async fn dispatch_rpc(
             };
         }
     };
+    crate::op_event!(
+        component = daemon_invocation,
+        kind = axon_rpc_descriptor_bound_invoke_started,
+        ability = dispatch_ability.as_str(),
+        callee_ura = dispatch_callee.as_str(),
+        caller_ura = dispatch_caller.as_str(),
+    );
     let result = runtime
         .invoke_descriptor_bound_request_async(prepared.request)
         .await;
     match result {
         Ok((handle, _signed)) => {
+            crate::op_event!(
+                component = daemon_invocation,
+                kind = axon_rpc_descriptor_bound_admitted,
+                ability = dispatch_ability.as_str(),
+                callee_ura = dispatch_callee.as_str(),
+                caller_ura = dispatch_caller.as_str(),
+                invocation_id = handle.invocation_id(),
+            );
             let lifecycle = match RegisteredInvocationLifecycle::register(
                 cancellations.clone(),
                 &lifecycle_envelope,
@@ -381,7 +399,25 @@ async fn dispatch_rpc(
                     return cancellation_error_outcome(err);
                 }
             };
+            crate::op_event!(
+                component = daemon_invocation,
+                kind = axon_rpc_descriptor_bound_finalization_wait_started,
+                ability = dispatch_ability.as_str(),
+                callee_ura = dispatch_callee.as_str(),
+                caller_ura = dispatch_caller.as_str(),
+                invocation_id = handle.invocation_id(),
+            );
             let outcome = drain_to_outcome(handle.clone()).await;
+            crate::op_event!(
+                component = daemon_invocation,
+                kind = axon_rpc_descriptor_bound_finalization_completed,
+                ability = dispatch_ability.as_str(),
+                callee_ura = dispatch_callee.as_str(),
+                caller_ura = dispatch_caller.as_str(),
+                invocation_id = handle.invocation_id(),
+                state = format!("{:?}", outcome.state),
+                has_error = outcome.error.is_some(),
+            );
             // The lifecycle token is the only authority allowed to retain the
             // canonical terminal transition in the cancellation registry.
             let _ = lifecycle.finalized().await;

@@ -1346,6 +1346,36 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
+/// Presence side-effect policy for `federation.revoke`.
+///
+/// The ordinary administrative path removes the target presence immediately.
+/// A device revoking its own runtime over `session.open` is different: the same
+/// session is the only carrier for the canonical response. Destroying that
+/// transport before Axon returns the terminal checkpoint wedges the caller.
+/// In that self-revoke case the durable/read-model rows are still removed, and
+/// the session reverse-dispatch lifecycle removes presence after it has queued
+/// the canonical response frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RevokePresenceMode<'a> {
+    Immediate,
+    DeferCurrentCaller { caller_ura: &'a str },
+}
+
+impl<'a> RevokePresenceMode<'a> {
+    #[must_use]
+    pub(crate) fn defer_current_caller(caller_ura: &'a str) -> Self {
+        Self::DeferCurrentCaller { caller_ura }
+    }
+
+    #[must_use]
+    fn should_remove_presence(self, target_ura: &str) -> bool {
+        match self {
+            Self::Immediate => true,
+            Self::DeferCurrentCaller { caller_ura } => caller_ura != target_ura,
+        }
+    }
+}
+
 /// Handle a `federation.revoke` invocation. Forces removal of the
 /// target session and records whether the target was online at
 /// revoke time so the caller can distinguish a real revoke from a
@@ -1355,6 +1385,22 @@ pub fn handle_revoke(
     registry: &PresenceRegistry,
     advertised_agents: Option<&AdvertisedAgentStore>,
     ability_catalog: &AbilityCatalogStore,
+) -> anyhow::Result<RevokeResponse> {
+    handle_revoke_with_presence_mode(
+        request,
+        registry,
+        advertised_agents,
+        ability_catalog,
+        RevokePresenceMode::Immediate,
+    )
+}
+
+pub(crate) fn handle_revoke_with_presence_mode(
+    request: &RevokeRequest,
+    registry: &PresenceRegistry,
+    advertised_agents: Option<&AdvertisedAgentStore>,
+    ability_catalog: &AbilityCatalogStore,
+    presence_mode: RevokePresenceMode<'_>,
 ) -> anyhow::Result<RevokeResponse> {
     let intent = request.resolve_intent()?;
     let target_ura = intent.target_ura().to_string();
@@ -1385,7 +1431,9 @@ pub fn handle_revoke(
         ..
     } = intent
     else {
-        let _displaced = registry.force_revoke(&target_ura);
+        if presence_mode.should_remove_presence(&target_ura) {
+            let _displaced = registry.force_revoke(&target_ura);
+        }
         if let Some(store) = advertised_agents {
             let _removed = store.remove(&target_ura);
         }
@@ -1441,12 +1489,14 @@ pub fn handle_revoke(
             let _removed = store.remove_generation(&target_ura, generation);
         }
         let _removed = ability_catalog.remove_generation(&target_ura, generation);
-        if let Some(session_id) = outcome.presence_session_id {
+        if presence_mode.should_remove_presence(&target_ura) {
+            if let Some(session_id) = outcome.presence_session_id {
             let _removed = registry.remove_if_session(
                 &target_ura,
                 session_id,
                 crate::daemon::invocation::bidi::state::presence::OfflineReason::AdminRevoked,
             );
+            }
         }
     }
     Ok(RevokeResponse {
@@ -3011,6 +3061,43 @@ mod tests {
         assert!(resp.ack);
         assert!(resp.was_active);
         assert!(!registry.contains(&ura), "must be removed");
+    }
+
+    #[test]
+    fn self_revoke_defers_presence_removal_until_response_carrier_closes() {
+        let registry = PresenceRegistry::new();
+        let catalog = AbilityCatalogStore::new();
+        let ura = "easynet:///r/realm/device/n1".to_string();
+        insert_presence(&registry, ura.clone());
+        catalog.upsert_projection(projection_row_for(&ura, Vec::new()));
+
+        let resp = handle_revoke_with_presence_mode(
+            &RevokeRequest {
+                agent_ura: ura.clone(),
+                purge_transaction_id: None,
+                generation: None,
+                reason: None,
+                authority_ura: None,
+                protocol_version: None,
+                delivery_fence: None,
+            },
+            &registry,
+            None,
+            &catalog,
+            RevokePresenceMode::defer_current_caller(&ura),
+        )
+        .unwrap();
+
+        assert!(resp.ack);
+        assert!(resp.was_active);
+        assert!(
+            registry.contains(&ura),
+            "self-revoke must not destroy the session carrying its own response"
+        );
+        assert!(
+            catalog.get(&ura).is_none(),
+            "self-revoke still removes the advertised ability owner projection"
+        );
     }
 
     #[test]

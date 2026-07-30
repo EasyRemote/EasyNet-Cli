@@ -389,13 +389,14 @@ impl StreamDispatcher {
             ..axon_sdk::pb::axon::v1::InvokeRequest::default()
         };
         let forwarded_binding = ForwardedInvocationBinding::from_request(&forwarded_request)?;
+        let receipt_resolver = self.admission.receipt_key_resolver();
         ensure_forwarded_receipt_signer_key(
+            receipt_resolver.as_ref(),
             self.sessions.device_trust_sync.as_ref(),
             &selected_route.execution_host_ura,
             "InvokeStream",
         )
         .await?;
-        let receipt_resolver = self.admission.receipt_key_resolver();
         let dispatch_frame = build_carrier_v1_dispatch_frame(
             call_id,
             forwarded_request,

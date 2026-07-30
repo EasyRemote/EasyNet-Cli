@@ -58,6 +58,7 @@ pub fn seed_default_device_resources(realm: &str, owner_agent: &str) -> anyhow::
 
     let mut file = resources::load()?;
     let discovered = discover_default_resources();
+    prune_retired_local_device_owner_rows(&mut file, owner_agent);
     if discovered.screen_target_discovery.permits_stale_prune() {
         prune_stale_auto_screen_targets(&mut file, realm, owner_agent, &discovered.resources);
     }
@@ -66,6 +67,12 @@ pub fn seed_default_device_resources(realm: &str, owner_agent: &str) -> anyhow::
     }
     resources::save(&file)?;
     Ok(file.resources.len())
+}
+
+fn prune_retired_local_device_owner_rows(file: &mut ResourcesFile, owner_agent: &str) {
+    file.resources.retain(|resource| {
+        resource.binding != ResourceBinding::LocalDevice || resource.owner_agent == owner_agent
+    });
 }
 
 fn prune_stale_auto_screen_targets(
@@ -922,6 +929,44 @@ mod tests {
                 "bootstrap must not persist speculative camera resources"
             );
         }
+    }
+
+    #[test]
+    fn prune_retired_local_device_owner_rows_removes_previous_device_projection() {
+        let mut file = ResourcesFile::default();
+        apply_discovered_resource(
+            &mut file,
+            "acme",
+            "easynet:///r/acme/device/old-device",
+            DiscoveredResource {
+                kind: ResourceType::Mic,
+                hardware_id: "mic:cpal:default".into(),
+                display_name: "Old mic".into(),
+                metadata: json!({"backend": "cpal"}),
+            },
+        )
+        .expect("seed old device mic");
+        apply_discovered_resource(
+            &mut file,
+            "acme",
+            "easynet:///r/acme/device/current-device",
+            DiscoveredResource {
+                kind: ResourceType::Camera,
+                hardware_id: "camera:nokhwa:index:0".into(),
+                display_name: "Current camera".into(),
+                metadata: json!({"backend": "nokhwa"}),
+            },
+        )
+        .expect("seed current device camera");
+
+        prune_retired_local_device_owner_rows(&mut file, "easynet:///r/acme/device/current-device");
+
+        assert_eq!(file.resources.len(), 1);
+        assert_eq!(
+            file.resources[0].owner_agent,
+            "easynet:///r/acme/device/current-device"
+        );
+        assert_eq!(file.resources[0].hardware_id, "camera:nokhwa:index:0");
     }
 
     #[test]

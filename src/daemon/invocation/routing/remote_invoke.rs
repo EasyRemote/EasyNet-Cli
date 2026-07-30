@@ -44,6 +44,8 @@ use axon_sdk::invocation::CausalContext;
 use axon_sdk::pb::axon::v1::invocation_client::InvocationClient;
 use axon_sdk::pb::axon::v1::{InvocationState as WireInvocationState, InvokeResponse};
 
+const FEDERATION_REVOKE_TIMEOUT: Duration = Duration::from_secs(10);
+
 pub(crate) type RemoteInvocationCallerSigner =
     Arc<dyn crate::daemon::identity::self_identity::CanonicalSigner>;
 
@@ -1551,10 +1553,7 @@ pub fn invoke_federation_revoke(
 
     let local_daemon_ura = crate::daemon::identity::local_invocation::local_daemon_ura()?;
     let caller_ura = canonical_federation_revoke_caller(caller_ura, &local_daemon_ura)?;
-    let target = RemoteAbilityInvocationTarget::for_target_owned_selector(
-        &local_daemon_ura,
-        "federation.revoke",
-    )?;
+    let target = federation_revoke_authority_target(&local_daemon_ura)?;
     let signer = load_federation_caller_signer(&caller_ura, "federation.revoke")?;
     let request_envelope = ProtoEnvelope::from_target(
         caller_ura.as_str(),
@@ -1569,7 +1568,7 @@ pub fn invoke_federation_revoke(
         .context("build tokio runtime for federation.revoke")?;
 
     runtime.block_on(async move {
-        let request = request_envelope
+        let mut request = request_envelope
             .signed_descriptor_ref_invoke_request_with_signer(
                 target.route_function_name(),
                 target.descriptor_ref(),
@@ -1578,21 +1577,27 @@ pub fn invoke_federation_revoke(
             )
             .await
             .context("build descriptor-bound federation.revoke request")?;
+        request.timeout_seconds = i32::try_from(FEDERATION_REVOKE_TIMEOUT.as_secs())
+            .unwrap_or(i32::MAX)
+            .max(1);
         let channel = crate::support::platform::local_daemon_grpc::connect_channel(
             socket_path.clone(),
-            Duration::from_secs(10),
+            FEDERATION_REVOKE_TIMEOUT,
             Duration::from_secs(5),
         )
         .await
         .context("connect to local daemon gRPC endpoint")?;
         let mut client = InvocationClient::new(channel);
-        let response = client.invoke(request).await.map_err(|status| {
-            anyhow!(
-                "daemon rejected federation.revoke: code={:?} message={}",
-                status.code(),
-                status.message()
-            )
-        })?;
+        let response = tokio::time::timeout(FEDERATION_REVOKE_TIMEOUT, client.invoke(request))
+            .await
+            .map_err(|_| anyhow!("daemon federation.revoke timed out after 10s"))?
+            .map_err(|status| {
+                anyhow!(
+                    "daemon rejected federation.revoke: code={:?} message={}",
+                    status.code(),
+                    status.message()
+                )
+            })?;
         ensure_completed_invoke_response("federation.revoke", &response.into_inner())?;
         Ok::<_, anyhow::Error>(())
     })
@@ -1622,6 +1627,15 @@ fn canonical_federation_revoke_caller(
         );
     }
     Ok(caller)
+}
+
+fn federation_revoke_authority_target(
+    local_daemon_ura: &str,
+) -> anyhow::Result<RemoteAbilityInvocationTarget> {
+    let parsed = crate::core::ura::parse_ura(local_daemon_ura)
+        .map_err(|error| anyhow!("federation.revoke local daemon is not canonical: {error}"))?;
+    let authority_ura = crate::core::ura::authority_ura(&parsed.realm);
+    RemoteAbilityInvocationTarget::for_target_owned_selector(&authority_ura, "federation.revoke")
 }
 
 #[cfg(test)]
@@ -1690,6 +1704,22 @@ mod tests {
                 "descriptor ref must include descriptor version"
             );
         }
+    }
+
+    #[test]
+    fn federation_revoke_targets_realm_authority_not_local_device_registry() {
+        let target = federation_revoke_authority_target("easynet:///r/realm/device/local-device")
+            .expect("target");
+
+        assert_eq!(target.callee_ura(), "easynet:///r/realm/authority");
+        assert_eq!(target.route_function_name(), "federation.revoke");
+        assert!(
+            target
+                .descriptor_ref()
+                .contains("easynet:///r/realm/ability/authority.federation.revoke"),
+            "descriptor ref must bind authority-owned federation.revoke, got {}",
+            target.descriptor_ref()
+        );
     }
 
     #[test]

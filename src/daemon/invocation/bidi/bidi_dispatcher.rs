@@ -78,6 +78,7 @@ use crate::daemon::invocation::dispatch::governance_read_route::require_selected
 use crate::daemon::invocation::dispatch::invocation_wire::{
     callee_ura_from_envelope, status_from_axon_invoke_error, BoxedDownStream,
 };
+use crate::daemon::invocation::dispatch::transport_stream::TransportDropNotifyStream;
 use crate::daemon::invocation::dispatch::unary_dispatcher::UnaryDispatcher;
 use crate::daemon::invocation::routing::route_resolver::{
     CanonicalRouteDispatch, CanonicalRouteSelection, SelectedInvokeRoute,
@@ -813,13 +814,14 @@ impl BidiDispatcher {
         let forwarded_request =
             remote_bidi_forwarded_request(selected_route, envelope_open, call_mode)?;
         let forwarded_binding = ForwardedInvocationBinding::from_request(&forwarded_request)?;
+        let receipt_resolver = self.admission.receipt_key_resolver();
         ensure_forwarded_receipt_signer_key(
+            receipt_resolver.as_ref(),
             self.sessions.device_trust_sync.as_ref(),
             &selected_route.execution_host_ura,
             "InvokeBidi",
         )
         .await?;
-        let receipt_resolver = self.admission.receipt_key_resolver();
         let open_frame = build_carrier_v1_dispatch_frame(call_id, forwarded_request, true);
         match sender.try_send(Ok(open_frame)) {
             Ok(()) => {}
@@ -1293,11 +1295,30 @@ impl BidiDispatcher {
         // Down-stream: handler-emitted JSON → InvokeBidiDown frames.
         // Capacity 16 bounds per-session dispatch backpressure.
         let (down_tx, down_rx) = tokio::sync::mpsc::channel::<Result<InvokeBidiDown, Status>>(16);
+        let (transport_closed_tx, mut transport_closed_rx) =
+            tokio::sync::mpsc::channel::<String>(2);
 
         let down_tx_for_handler = down_tx.clone();
         tokio::spawn(async move {
             let mut terminal_authority_observed = false;
-            while let Some(frame_result) = handler_out_rx.next_frame().await {
+            loop {
+                let frame_result = tokio::select! {
+                    biased;
+                    close_reason = transport_closed_rx.recv() => {
+                        let reason = close_reason
+                            .unwrap_or_else(|| "InvokeBidi transport response dropped".to_string());
+                        let projected = cancel_registered_bidi(&lifecycle, reason.clone())
+                            .await
+                            .map_err(|status| Status::internal(format!("{reason}; {status}")));
+                        terminal_authority_observed = true;
+                        let _ = down_tx_for_handler.send(projected).await;
+                        break;
+                    }
+                    frame_result = handler_out_rx.next_frame() => frame_result,
+                };
+                let Some(frame_result) = frame_result else {
+                    break;
+                };
                 let frame = match frame_result {
                     Ok(frame) => frame,
                     Err(err) => {
@@ -1419,7 +1440,11 @@ impl BidiDispatcher {
             let _ = handler_in_tx.close_input().await;
         });
 
-        let stream = LocalBidiDownStream::with_admission(down_rx, admission_frame);
+        let stream = TransportDropNotifyStream::new(
+            LocalBidiDownStream::with_admission(down_rx, admission_frame),
+            transport_closed_tx,
+            "InvokeBidi transport response dropped",
+        );
         Ok(Response::new(
             Box::pin(stream) as BoxedDownStream<InvokeBidiDown>
         ))
@@ -1993,6 +2018,7 @@ pub(crate) fn map_local_bidi_handler_frame(
 struct SessionProviderDownStream {
     down_rx: tokio::sync::mpsc::Receiver<Result<DispatchFrame, Status>>,
     pending_normal_frames: VecDeque<Result<DispatchFrame, Status>>,
+    next_sequence: u64,
     next_heartbeat: Pin<Box<tokio::time::Sleep>>,
     /// Set to `Some(control)` at construction; first `poll_next`
     /// yields it and clears the slot. Subsequent polls follow the
@@ -2069,6 +2095,7 @@ impl SessionProviderDownStream {
         Self {
             down_rx,
             pending_normal_frames: VecDeque::new(),
+            next_sequence: 0,
             next_heartbeat: Box::pin(tokio::time::sleep(SESSION_DOWN_HEARTBEAT_INTERVAL)),
             pending_initial_control: Some(initial_control),
         }
@@ -2078,6 +2105,10 @@ impl SessionProviderDownStream {
         self.next_heartbeat
             .as_mut()
             .reset(tokio::time::Instant::now() + SESSION_DOWN_HEARTBEAT_INTERVAL);
+    }
+
+    fn stamp_sequence(&mut self, frame: InvokeBidiDown) -> InvokeBidiDown {
+        stamp_bidi_down_sequence(&mut self.next_sequence, frame)
     }
 
     fn poll_dispatch_frame(
@@ -2116,13 +2147,13 @@ impl Stream for SessionProviderDownStream {
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         if let Some(control) = self.pending_initial_control.take() {
             self.reset_heartbeat();
-            return Poll::Ready(Some(Ok(control)));
+            return Poll::Ready(Some(Ok(self.stamp_sequence(control))));
         }
 
         match self.poll_dispatch_frame(cx) {
             Poll::Ready(Some(Ok(frame))) => {
                 self.reset_heartbeat();
-                return Poll::Ready(Some(Ok(frame.frame)));
+                return Poll::Ready(Some(Ok(self.stamp_sequence(frame.frame))));
             }
             Poll::Ready(Some(Err(status))) => {
                 self.reset_heartbeat();
@@ -2135,7 +2166,8 @@ impl Stream for SessionProviderDownStream {
         match self.next_heartbeat.as_mut().poll(cx) {
             Poll::Ready(()) => {
                 self.reset_heartbeat();
-                Poll::Ready(Some(Ok(build_session_down_keepalive_frame().frame)))
+                let frame = build_session_down_keepalive_frame().frame;
+                Poll::Ready(Some(Ok(self.stamp_sequence(frame))))
             }
             Poll::Pending => Poll::Pending,
         }
@@ -2387,7 +2419,7 @@ pub(crate) fn push_session_request_result(
     caller_ura: &str,
     id_hex: &str,
     frame: crate::daemon::invocation::bidi::state::presence::DispatchFrame,
-) {
+) -> SessionRequestResultPush {
     let Some((session_id, sender)) = presence.lookup_tracked(caller_ura) else {
         crate::op_event!(
             component = session_accept,
@@ -2396,10 +2428,10 @@ pub(crate) fn push_session_request_result(
             call_id = id_hex,
             reason = "device_disconnected_mid_dispatch",
         );
-        return;
+        return SessionRequestResultPush::NoPresence;
     };
     match sender.try_send(Ok(frame)) {
-        Ok(()) => {}
+        Ok(()) => SessionRequestResultPush::Queued { session_id },
         Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
             // Full = device is slow, not dead: drop this one frame
             // (the device-side waiter times out and retries) instead
@@ -2411,6 +2443,7 @@ pub(crate) fn push_session_request_result(
                 call_id = id_hex,
                 reason = "channel_full_dropped",
             );
+            SessionRequestResultPush::DroppedBusy { session_id }
         }
         Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
             let _ = presence.remove_if_session(caller_ura, session_id, OfflineReason::StreamClosed);
@@ -2422,8 +2455,77 @@ pub(crate) fn push_session_request_result(
                 reason = "down_channel_closed",
                 offline_reason = "StreamClosed",
             );
+            SessionRequestResultPush::Closed { session_id }
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SessionRequestResultPush {
+    Queued {
+        session_id: crate::daemon::invocation::bidi::state::presence::PresenceSessionId,
+    },
+    DroppedBusy {
+        session_id: crate::daemon::invocation::bidi::state::presence::PresenceSessionId,
+    },
+    Closed {
+        session_id: crate::daemon::invocation::bidi::state::presence::PresenceSessionId,
+    },
+    NoPresence,
+}
+
+impl SessionRequestResultPush {
+    fn session_id(
+        self,
+    ) -> Option<crate::daemon::invocation::bidi::state::presence::PresenceSessionId> {
+        match self {
+            Self::Queued { session_id }
+            | Self::DroppedBusy { session_id }
+            | Self::Closed { session_id } => Some(session_id),
+            Self::NoPresence => None,
+        }
+    }
+}
+
+fn self_revoke_target_for_reverse_dispatch(
+    caller_ura: &str,
+    ability: &str,
+    request: &axon_sdk::pb::axon::v1::InvokeRequest,
+) -> Option<String> {
+    if ability
+        != crate::daemon::invocation::dispatch::federation_wrappers::ABILITY_FEDERATION_REVOKE
+    {
+        return None;
+    }
+    let revoke: crate::daemon::invocation::dispatch::federation_wrappers::RevokeRequest =
+        serde_json::from_slice(&request.arguments).ok()?;
+    let target_ura = revoke.agent_ura.trim();
+    if target_ura == caller_ura {
+        Some(target_ura.to_string())
+    } else {
+        None
+    }
+}
+
+fn remove_deferred_self_revoke_presence(
+    presence: &Arc<PresenceRegistry>,
+    caller_ura: &str,
+    id_hex: &str,
+    push: SessionRequestResultPush,
+) {
+    let Some(session_id) = push.session_id() else {
+        return;
+    };
+    let removed = presence
+        .remove_if_session(caller_ura, session_id, OfflineReason::AdminRevoked)
+        .is_some();
+    crate::op_event!(
+        component = session_accept,
+        kind = self_revoke_presence_removed_after_result,
+        caller = caller_ura,
+        call_id = id_hex,
+        removed = removed,
+    );
 }
 
 /// Map a canonical typed failure into the session-plane projection used by
@@ -2460,6 +2562,15 @@ fn classify_carrier_v1_result(
     let call_id = result.call_id;
     let protocol_failure =
         |reason: &str, code: &str| (call_id, failed_dispatch_result(reason, code, false));
+
+    if !result.terminal
+        && result.failure.is_some()
+        && result.admission_receipt.is_none()
+        && result.terminal_receipt.is_none()
+        && result.payload.is_empty()
+    {
+        return Err((call_id, pending_result_from_carrier_v1(&result)));
+    }
 
     // Pending unary and stream dispatches intentionally occupy disjoint
     // session-wide namespaces. The carrier lifecycle therefore has one
@@ -3153,12 +3264,13 @@ async fn drain_session_runtime_up_stream(
                     );
                     continue;
                 };
+                let ability = ability.to_string();
                 let id_hex = call_id_hex(&call_id);
                 crate::op_event!(
                     component = daemon_invocation,
                     kind = session_accept_request_frame,
                     call_id = id_hex,
-                    ability = ability,
+                    ability = ability.as_str(),
                 );
                 // Same off-drain dispatch discipline as the JSON
                 // Request arm: a slow inner call must not stall
@@ -3259,16 +3371,30 @@ async fn drain_session_runtime_up_stream(
                             }
                         }
                     } else {
+                        let deferred_self_revoke = self_revoke_target_for_reverse_dispatch(
+                            &caller_ura_for_reply,
+                            ability.as_str(),
+                            &request,
+                        );
                         let outcome = dispatcher_for_request
                             .dispatch_canonical_session_invoke(request)
                             .await;
+                        let remove_after_result = deferred_self_revoke.is_some() && outcome.is_ok();
                         let frame = build_reverse_dispatch_result_frame(call_id, outcome);
-                        push_session_request_result(
+                        let push = push_session_request_result(
                             &presence_for_reply,
                             &caller_ura_for_reply,
                             &id_hex,
                             frame,
                         );
+                        if remove_after_result {
+                            remove_deferred_self_revoke_presence(
+                                &presence_for_reply,
+                                &caller_ura_for_reply,
+                                &id_hex,
+                                push,
+                            );
+                        }
                     }
                 });
                 continue;
@@ -3736,6 +3862,43 @@ mod tests {
     }
 
     #[test]
+    fn deferred_self_revoke_detection_requires_exact_caller_target() {
+        let caller = "easynet:///r/realm/device/dev-a";
+        let mut request = axon_sdk::pb::axon::v1::InvokeRequest {
+            arguments: serde_json::to_vec(
+                &serde_json::json!({"agent_ura": "easynet:///r/realm/device/dev-a"}),
+            )
+            .expect("encode revoke request"),
+            ..axon_sdk::pb::axon::v1::InvokeRequest::default()
+        };
+
+        assert_eq!(
+            self_revoke_target_for_reverse_dispatch(
+                caller,
+                crate::daemon::invocation::dispatch::federation_wrappers::ABILITY_FEDERATION_REVOKE,
+                &request,
+            )
+            .as_deref(),
+            Some(caller)
+        );
+
+        request.arguments = serde_json::to_vec(
+            &serde_json::json!({"agent_ura": "easynet:///r/realm/device/dev-b"}),
+        )
+        .expect("encode revoke request");
+        assert!(self_revoke_target_for_reverse_dispatch(
+            caller,
+            crate::daemon::invocation::dispatch::federation_wrappers::ABILITY_FEDERATION_REVOKE,
+            &request,
+        )
+        .is_none());
+        assert!(
+            self_revoke_target_for_reverse_dispatch(caller, "meta.list_abilities", &request)
+                .is_none()
+        );
+    }
+
+    #[test]
     fn runtime_metadata_decodes_the_canonical_session_contract() {
         let extension = SessionOpenExt {
             contract_version: CANONICAL_SESSION_CARRIER_VERSION,
@@ -3833,6 +3996,52 @@ mod tests {
         assert_eq!(failure.code, "TARGET_OFFLINE");
         assert!(failure.retryable);
         assert!(mapped.request_id.is_none());
+    }
+
+    #[test]
+    fn carrier_v1_unary_control_failure_settles_without_terminal_claim() {
+        let pb = axon_sdk::pb::axon::v1::DispatchResult {
+            call_id: 8,
+            terminal: false,
+            failure: Some(axon_sdk::pb::axon::v1::Error {
+                code: "ABILITY_RESOLUTION_FAILED".into(),
+                message: "descriptor missing".into(),
+                retryable: false,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let (_, failure) = classify_carrier_v1_result(pb)
+            .expect_err("control failure settles the waiter without lifecycle terminality");
+        assert_eq!(
+            failure.failure.as_ref().map(|value| value.code.as_str()),
+            Some("ABILITY_RESOLUTION_FAILED")
+        );
+        assert!(failure.admission_receipt.is_none());
+        assert!(failure.terminal_receipt.is_none());
+    }
+
+    #[test]
+    fn carrier_v1_stream_control_failure_settles_without_terminal_claim() {
+        let pb = axon_sdk::pb::axon::v1::DispatchResult {
+            call_id: 9,
+            terminal: false,
+            failure: Some(axon_sdk::pb::axon::v1::Error {
+                code: "STREAM_OPEN_FAILED".into(),
+                message: "target rejected stream open".into(),
+                retryable: false,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let (_, failure) = classify_carrier_v1_result(pb)
+            .expect_err("stream control failure settles the waiter without terminal receipt");
+        assert_eq!(
+            failure.failure.as_ref().map(|value| value.code.as_str()),
+            Some("STREAM_OPEN_FAILED")
+        );
+        assert!(failure.admission_receipt.is_none());
+        assert!(failure.terminal_receipt.is_none());
     }
 
     #[test]
@@ -4029,6 +4238,7 @@ mod tests {
             matches!(first.payload, Some(DownPayload::Control(_))),
             "frame 0 is typed session control"
         );
+        assert_eq!(first.sequence, 0);
 
         tx.send(Ok(DispatchFrame::normal(InvokeBidiDown {
             payload: Some(DownPayload::BinaryChunk(BinaryChunk {
@@ -4059,18 +4269,21 @@ mod tests {
         .expect("control queued");
 
         let prioritized = stream.next().await.expect("prioritized frame").expect("ok");
+        assert_eq!(prioritized.sequence, 1);
         let Some(DownPayload::BinaryChunk(chunk)) = prioritized.payload else {
             panic!("expected prioritized BinaryChunk");
         };
         assert_eq!(chunk.data, b"control");
 
         let normal_a = stream.next().await.expect("normal-a").expect("ok");
+        assert_eq!(normal_a.sequence, 2);
         let Some(DownPayload::BinaryChunk(chunk)) = normal_a.payload else {
             panic!("expected normal-a BinaryChunk");
         };
         assert_eq!(chunk.data, b"normal-a");
 
         let normal_b = stream.next().await.expect("normal-b").expect("ok");
+        assert_eq!(normal_b.sequence, 3);
         let Some(DownPayload::BinaryChunk(chunk)) = normal_b.payload else {
             panic!("expected normal-b BinaryChunk");
         };

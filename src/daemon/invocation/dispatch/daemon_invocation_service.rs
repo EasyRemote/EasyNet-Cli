@@ -933,6 +933,38 @@ impl DaemonInvocationService {
             .await
     }
 
+    fn daemon_unary_route_for_request(
+        &self,
+        route_function: &str,
+        request: &InvokeRequest,
+    ) -> Result<Option<DaemonUnaryRoute>, Status> {
+        let Some(route) = DaemonUnaryRoute::from_function(route_function) else {
+            return Ok(None);
+        };
+        let Some(registered_owners) = self.daemon_unary_route_registration.get() else {
+            return Ok(Some(route));
+        };
+        let registered_owners = registered_owners.as_ref().map_err(|error| {
+            Status::failed_precondition(format!("daemon unary route registration failed: {error}"))
+        })?;
+        let callee_ura = request
+            .envelope
+            .as_ref()
+            .and_then(|envelope| envelope.callee.as_ref())
+            .map(|callee| callee.ura.trim())
+            .filter(|callee| !callee.is_empty())
+            .ok_or_else(|| {
+                Status::invalid_argument(format!(
+                    "{route_function}: envelope callee is required for exact route owner selection"
+                ))
+            })?;
+        if registered_owners.iter().any(|owner| owner == callee_ura) {
+            Ok(Some(route))
+        } else {
+            Ok(None)
+        }
+    }
+
     fn daemon_route_ingress(
         &self,
         route: DaemonUnaryRoute,
@@ -1487,7 +1519,15 @@ impl Invocation for DaemonInvocationService {
                     return Err(status);
                 }
             };
-        let daemon_route = DaemonUnaryRoute::from_function(&route_function);
+        let daemon_route = match self.daemon_unary_route_for_request(&route_function, &inner) {
+            Ok(route) => route,
+            Err(status) => {
+                attempt
+                    .reject_status("daemon_route_owner_selection", &status)
+                    .map_err(invocation_attempt_audit_status)?;
+                return Err(status);
+            }
+        };
         let daemon_route_ingress = match daemon_route
             .map(|route| self.daemon_route_ingress(route, &inner))
             .transpose()

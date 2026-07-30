@@ -442,12 +442,31 @@ impl LocalAxonSessionDispatcher {
                 .await;
         }
 
+        crate::op_event!(
+            component = local_session_dispatcher,
+            kind = carrier_v1_rpc_dispatch_started,
+            call_id = call_id,
+            ability = function_name.as_str(),
+            call_mode = "rpc",
+        );
         let outcome = crate::daemon::axon_bridge::descriptor_bound_dispatch::dispatch_rpc_admitted(
             &runtime,
             wire,
             &self.lifecycle_cancellations,
         )
         .await;
+        crate::op_event!(
+            component = local_session_dispatcher,
+            kind = carrier_v1_rpc_dispatch_completed,
+            call_id = call_id,
+            ability = function_name.as_str(),
+            invocation_id = outcome.invocation_id.as_deref().unwrap_or(""),
+            state = format!("{:?}", outcome.state),
+            payload_bytes = outcome.payload_bytes.len(),
+            has_error = outcome.error.is_some(),
+            has_admission_receipt = outcome.admission_receipt.is_some(),
+            has_terminal_receipt = outcome.terminal_receipt.is_some(),
+        );
         if outcome.invocation_id.is_some() {
             Self::commit_runtime_admission(runtime_admission)?;
         }
@@ -479,6 +498,12 @@ impl LocalAxonSessionDispatcher {
             .send_payload(UpPayload::DispatchResult(reply))
             .await
             .map_err(|_| SessionDispatchError::Other("session up channel closed".to_string()))?;
+        crate::op_event!(
+            component = local_session_dispatcher,
+            kind = carrier_v1_rpc_dispatch_result_sent,
+            call_id = call_id,
+            ability = function_name.as_str(),
+        );
         Ok(())
     }
 
@@ -1890,7 +1915,7 @@ mod tests {
     const TEST_DEVICE_URA: &str = "easynet:///r/t/device/d1";
 
     #[test]
-    fn carrier_v1_control_failure_is_not_lifecycle_terminal() {
+    fn carrier_v1_stream_control_failure_is_not_lifecycle_terminal() {
         let result =
             carrier_v1_control_failure(9, "STREAM_OPEN_FAILED", "target rejected stream open");
         assert_eq!(result.call_id, 9);
@@ -1905,6 +1930,32 @@ mod tests {
         assert_eq!(
             result.failure.as_ref().map(|failure| failure.code.as_str()),
             Some("STREAM_OPEN_FAILED")
+        );
+    }
+
+    #[test]
+    fn carrier_v1_unary_control_failure_is_not_lifecycle_terminal() {
+        let result =
+            carrier_v1_control_failure(10, "ABILITY_RESOLUTION_FAILED", "descriptor missing");
+        assert_eq!(result.call_id, 10);
+        assert!(
+            !result.terminal,
+            "synthetic unary control failures must not claim canonical terminality"
+        );
+        assert!(
+            result.terminal_receipt.is_none(),
+            "control failures must not synthesize terminal receipts"
+        );
+        assert_eq!(
+            result.failure.as_ref().map(|failure| failure.code.as_str()),
+            Some("ABILITY_RESOLUTION_FAILED")
+        );
+        assert_eq!(
+            result
+                .failure
+                .as_ref()
+                .map(|failure| failure.message.as_str()),
+            Some("descriptor missing")
         );
     }
 

@@ -398,9 +398,9 @@ impl DaemonUnaryRouteProvider {
                     .dispatch_namespace_proxy_resolve(Some(&envelope), arguments)
                     .await
             }
-            DaemonUnaryRoute::FederationRevoke => {
-                self.dispatcher.dispatch_federation_revoke(arguments)
-            }
+            DaemonUnaryRoute::FederationRevoke => self
+                .dispatcher
+                .dispatch_federation_revoke(Some(&envelope), arguments),
             DaemonUnaryRoute::IdentityRegisterPubkey => {
                 self.dispatcher.dispatch_register_device_pubkey(
                     Some(&envelope),
@@ -1655,13 +1655,25 @@ impl UnaryDispatcher {
         ))
     }
 
-    pub(crate) fn dispatch_federation_revoke(&self, arguments: &[u8]) -> Result<Vec<u8>, Status> {
+    pub(crate) fn dispatch_federation_revoke(
+        &self,
+        caller_envelope: Option<&Envelope>,
+        arguments: &[u8],
+    ) -> Result<Vec<u8>, Status> {
         let request: federation_wrappers::RevokeRequest = parse_json_args(arguments)?;
-        let response = federation_wrappers::handle_revoke(
+        let caller_ura = caller_envelope
+            .and_then(|envelope| envelope.caller.as_ref())
+            .map(|caller| caller.ura.trim())
+            .filter(|caller| !caller.is_empty());
+        let presence_mode = caller_ura
+            .map(federation_wrappers::RevokePresenceMode::defer_current_caller)
+            .unwrap_or(federation_wrappers::RevokePresenceMode::Immediate);
+        let response = federation_wrappers::handle_revoke_with_presence_mode(
             &request,
             &self.directory.presence,
             Some(self.directory.advertised_agents.as_ref()),
             self.directory.ability_catalog.as_ref(),
+            presence_mode,
         )
         .map_err(|error| {
             Status::failed_precondition(format!(
@@ -1840,6 +1852,7 @@ impl UnaryDispatcher {
         match client.invoke(&endpoint, request.clone()).await {
             Ok(response) => {
                 ensure_forwarded_response_receipt_signer_keys(
+                    receipt_resolver.as_ref(),
                     self.sessions.device_trust_sync.as_ref(),
                     &response,
                     "remote Invoke peer delegation",
@@ -1881,6 +1894,7 @@ impl UnaryDispatcher {
         match handle.escalate_invoke(request.clone()).await {
             Ok(response) => {
                 ensure_forwarded_response_receipt_signer_keys(
+                    receipt_resolver.as_ref(),
                     self.sessions.device_trust_sync.as_ref(),
                     &response,
                     "remote Invoke session escalation",
@@ -1940,13 +1954,14 @@ impl UnaryDispatcher {
             &request.arguments,
         )?;
         let forwarded_binding = ForwardedInvocationBinding::from_request(request)?;
+        let receipt_resolver = self.admission.receipt_key_resolver();
         ensure_forwarded_receipt_signer_key(
+            receipt_resolver.as_ref(),
             self.sessions.device_trust_sync.as_ref(),
             &selected_route.execution_host_ura,
             "Invoke",
         )
         .await?;
-        let receipt_resolver = self.admission.receipt_key_resolver();
         self.reject_self_presence_host(selected_route, "Invoke")?;
         let (_call_id, dispatch_result, carrier_version) = self
             .dispatch_frame_to_presence(selected_route, "Invoke", |call_id| {

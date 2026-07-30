@@ -30,6 +30,9 @@ ADMIN_URA="easynet:///r/${REALM}/user/admin"
 USER_URA="easynet:///r/${REALM}/user/alice"
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 OUT_DIR="${EASYNET_E2E_OUT_DIR:-$REPO_ROOT/target/e2e/docker-media-bidi/$TIMESTAMP}"
+CLI_TIMEOUT_SECONDS="${EASYNET_E2E_CLI_TIMEOUT_SECONDS:-60}"
+ABILITY_WAIT_ATTEMPTS="${EASYNET_E2E_ABILITY_WAIT_ATTEMPTS:-30}"
+ABILITY_LIST_TIMEOUT_SECONDS="${EASYNET_E2E_ABILITY_LIST_TIMEOUT_SECONDS:-8}"
 KEEP=0
 SKIP_BUILD=0
 SELF_TEST=0
@@ -55,6 +58,14 @@ Environment:
                              unset, this E2E builds one with cargo zigbuild
                              before Docker image assembly.
   EASYNET_BACKEND_ROOT       Sibling EasyNet repo used to build images.
+  EASYNET_E2E_CLI_TIMEOUT_SECONDS
+                             Hard timeout for ordinary in-container CLI calls.
+                             Defaults to 60.
+  EASYNET_E2E_ABILITY_WAIT_ATTEMPTS
+                             Maximum catalog polling attempts. Defaults to 30.
+  EASYNET_E2E_ABILITY_LIST_TIMEOUT_SECONDS
+                             Per-attempt timeout for ability catalog polling.
+                             Defaults to 8.
 USAGE
 }
 
@@ -77,6 +88,12 @@ die() {
 
 need_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "missing command: $1"
+}
+
+require_positive_integer() {
+  local name="$1"
+  local value="$2"
+  [[ "$value" =~ ^[1-9][0-9]*$ ]] || die "$name must be a positive integer, got: $value"
 }
 
 resolve_docker() {
@@ -169,6 +186,9 @@ PY
   grep -q "resolve_docker" "$0"
   grep -q "extend_tool_path" "$0"
   grep -q "ensure_runtime_dirs" "$0"
+  grep -q "run_cli_for_wait" "$0"
+  grep -q "ABILITY_LIST_TIMEOUT_SECONDS" "$0"
+  grep -q "ABILITY_WAIT_ATTEMPTS" "$0"
   grep -q "random_nonce_hex" "$0"
   grep -q "headless-media" "$SELF_DIR/build-linux-cli-artifact-bundle.sh"
   grep -q "wait_device_online provider /home/provider" "$0"
@@ -182,6 +202,9 @@ extend_tool_path
 need_cmd jq
 need_cmd openssl
 need_cmd python3
+require_positive_integer EASYNET_E2E_CLI_TIMEOUT_SECONDS "$CLI_TIMEOUT_SECONDS"
+require_positive_integer EASYNET_E2E_ABILITY_WAIT_ATTEMPTS "$ABILITY_WAIT_ATTEMPTS"
+require_positive_integer EASYNET_E2E_ABILITY_LIST_TIMEOUT_SECONDS "$ABILITY_LIST_TIMEOUT_SECONDS"
 require_paths
 "$DOCKER_BIN" info >/dev/null 2>&1 || die "Docker engine is not available"
 
@@ -242,19 +265,28 @@ service_exec() {
   compose exec -T "$service" sh -lc "$command"
 }
 
+runtime_cli_command() {
+  local home="$1"
+  local timeout_seconds="$2"
+  shift 2
+  [[ $# -gt 0 ]] || die "runtime_cli_command requires a command"
+  printf "HOME='%s' EASYNET_CLI_LIB=/usr/local/lib/libeasynet_cli.so timeout '%ss' easynet %s" \
+    "$home" "$timeout_seconds" "${*:-}"
+}
+
 hub_cli() {
   [[ $# -gt 0 ]] || die "hub_cli requires a command"
-  service_exec hub "HOME=/srv/easynet EASYNET_CLI_LIB=/usr/local/lib/libeasynet_cli.so easynet ${*:-}"
+  service_exec hub "$(runtime_cli_command /srv/easynet "$CLI_TIMEOUT_SECONDS" "${*:-}")"
 }
 
 provider_cli() {
   [[ $# -gt 0 ]] || die "provider_cli requires a command"
-  service_exec provider "HOME=/home/provider EASYNET_CLI_LIB=/usr/local/lib/libeasynet_cli.so easynet ${*:-}"
+  service_exec provider "$(runtime_cli_command /home/provider "$CLI_TIMEOUT_SECONDS" "${*:-}")"
 }
 
 caller_cli() {
   [[ $# -gt 0 ]] || die "caller_cli requires a command"
-  service_exec caller "HOME=/home/caller EASYNET_CLI_LIB=/usr/local/lib/libeasynet_cli.so easynet ${*:-}"
+  service_exec caller "$(runtime_cli_command /home/caller "$CLI_TIMEOUT_SECONDS" "${*:-}")"
 }
 
 caller_cli_must_fail() {
@@ -273,6 +305,34 @@ caller_cli_must_fail() {
     cat "$stderr" >&2 2>/dev/null || true
     die "expected caller CLI command to fail after plugin removal: easynet ${command}"
   fi
+}
+
+run_cli_for_wait() {
+  [[ $# -eq 5 ]] || die "run_cli_for_wait requires <cli-func> <command> <stdout> <stderr> <label>"
+  local cli_func="$1"
+  local command="$2"
+  local stdout="$3"
+  local stderr="$4"
+  local label="$5"
+  local service=""
+  local home=""
+  case "$cli_func" in
+    hub_cli) service="hub"; home="/srv/easynet" ;;
+    provider_cli) service="provider"; home="/home/provider" ;;
+    caller_cli) service="caller"; home="/home/caller" ;;
+    *) die "unsupported CLI function for wait: $cli_func" ;;
+  esac
+  set +e
+  service_exec "$service" "$(runtime_cli_command "$home" "$ABILITY_LIST_TIMEOUT_SECONDS" "$command")" \
+    >"$stdout" 2>"$stderr"
+  local status=$?
+  set -e
+  printf '%s\n' "$status" >"${stderr}.exit_code"
+  if [[ "$status" -eq 124 ]]; then
+    printf '[WARN] timed out waiting for %s via %s after %ss: easynet %s\n' \
+      "$label" "$cli_func" "$ABILITY_LIST_TIMEOUT_SECONDS" "$command" >&2
+  fi
+  return "$status"
 }
 
 dump_logs() {
@@ -456,12 +516,15 @@ wait_ability_name() {
   local out="$OUT_DIR/${stem}.json"
   local err="$OUT_DIR/${stem}.err"
   local ability_ura=""
-  for _ in $(seq 1 120); do
+  local command=""
+  local attempt
+  for attempt in $(seq 1 "$ABILITY_WAIT_ATTEMPTS"); do
     if [[ -n "$node_arg" ]]; then
-      "$cli_func" "ability list --node '$node_arg' --format json" >"$out" 2>"$err" || true
+      command="ability list --node '$node_arg' --format json"
     else
-      "$cli_func" "ability list --format json" >"$out" 2>"$err" || true
+      command="ability list --format json"
     fi
+    run_cli_for_wait "$cli_func" "$command" "$out" "$err" "$ability_name" || true
     if [[ -s "$out" ]]; then
       ability_ura="$(extract_ability_ura_by_name "$out" "$ability_name")"
       if [[ -n "$ability_ura" ]]; then
@@ -471,6 +534,8 @@ wait_ability_name() {
     fi
     sleep 0.5
   done
+  printf '[FAIL] ability %s was not visible after %s attempts via %s\n' \
+    "$ability_name" "$ABILITY_WAIT_ATTEMPTS" "$cli_func" >&2
   cat "$out" >&2 2>/dev/null || true
   cat "$err" >&2 2>/dev/null || true
   return 1
@@ -485,12 +550,15 @@ wait_ability_descriptor_ref() {
   local out="$OUT_DIR/${stem}.json"
   local err="$OUT_DIR/${stem}.err"
   local descriptor_ref=""
-  for _ in $(seq 1 120); do
+  local command=""
+  local attempt
+  for attempt in $(seq 1 "$ABILITY_WAIT_ATTEMPTS"); do
     if [[ -n "$node_arg" ]]; then
-      "$cli_func" "ability list --node '$node_arg' --format json" >"$out" 2>"$err" || true
+      command="ability list --node '$node_arg' --format json"
     else
-      "$cli_func" "ability list --format json" >"$out" 2>"$err" || true
+      command="ability list --format json"
     fi
+    run_cli_for_wait "$cli_func" "$command" "$out" "$err" "$ability_name descriptor_ref" || true
     if [[ -s "$out" ]]; then
       descriptor_ref="$(extract_ability_descriptor_ref_by_name "$out" "$ability_name" "$action")"
       if [[ -n "$descriptor_ref" ]]; then
@@ -500,6 +568,8 @@ wait_ability_descriptor_ref() {
     fi
     sleep 0.5
   done
+  printf '[FAIL] descriptor_ref for ability %s was not visible after %s attempts via %s\n' \
+    "$ability_name" "$ABILITY_WAIT_ATTEMPTS" "$cli_func" >&2
   cat "$out" >&2 2>/dev/null || true
   cat "$err" >&2 2>/dev/null || true
   return 1

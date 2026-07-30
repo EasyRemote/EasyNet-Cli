@@ -7,7 +7,7 @@
 //! Protocol Responsibility:
 //! - Select daemon, projection, and process cleanup shapes from one lifecycle
 //!   authority.
-//! - Own pidfile/discovery/sweep process-stop transitions for runtime stop.
+//! - Own pidfile/discovery process-stop transitions for runtime stop.
 //!
 //! Implementation Approach:
 //! - Derives a side-effect-free plan from `RuntimeStatusReport`.
@@ -63,8 +63,8 @@ pub struct RuntimeStopPlan {
 /// Runtime process-stop authority used by `easynet runtime stop`.
 ///
 /// This controller owns the OS-facing lifecycle transitions that are specific
-/// to the EasyNet daemon process: pidfile stop, discovery-pid stop, and final
-/// daemon sweep. CLI code consumes the typed outcomes only for presentation.
+/// to the current EasyNet runtime: pidfile stop and discovery-pid stop. CLI
+/// code consumes the typed outcomes only for presentation.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct RuntimeStopProcessController;
 
@@ -114,34 +114,6 @@ impl RuntimeStopProcessController {
         } else {
             LiveProcessStopOutcome::TimedOut { pid }
         }
-    }
-
-    /// Sweep alive `easynet-daemon` processes other than this CLI process.
-    /// Returns the PIDs that were successfully signalled, in pgrep iteration
-    /// order. Best-effort: skips PIDs that fail the easynet-process guard or
-    /// that do not exit within the bounded wait.
-    pub fn sweep_stray_easynet_daemons(&self) -> Vec<u32> {
-        let output_res = std::process::Command::new("pgrep")
-            .args(["-f", "easynet-daemon"])
-            .output();
-        let candidates: Vec<u32> = match output_res {
-            Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout)
-                .lines()
-                .filter_map(|line| line.trim().parse::<u32>().ok())
-                .filter(|pid| *pid != std::process::id())
-                .collect(),
-            _ => return Vec::new(),
-        };
-        let mut swept = Vec::new();
-        for pid in candidates {
-            if !net::is_pid_alive(pid) || !net::is_easynet_process(pid) {
-                continue;
-            }
-            if net::kill_and_wait(pid, DEFAULT_STOP_TIMEOUT) {
-                swept.push(pid);
-            }
-        }
-        swept
     }
 }
 

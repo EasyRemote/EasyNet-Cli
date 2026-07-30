@@ -158,6 +158,43 @@ async fn daemon_exact_route_family_registers_one_atomic_multi_authority_set() {
     }
 }
 
+#[test]
+fn device_exact_route_owner_does_not_capture_authority_revoke() {
+    let service = make_service();
+    let authority_ura = crate::core::ura::authority_ura("test-realm");
+    let arguments = serde_json::to_vec(&serde_json::json!({
+        "agent_ura": TEST_DAEMON_URA,
+        "reason": "shutdown",
+    }))
+    .expect("encode revoke args");
+    let envelope = ProtoEnvelope::from_target(
+        TEST_DAEMON_URA,
+        &authority_ura,
+        TEST_DAEMON_URA,
+        InvocationDerivationPolicy::Explicit {
+            invocation_nonce: [0x55; 16],
+            causal_context: axon_sdk::invocation::CausalContext::None,
+        },
+    )
+    .expect("authority revoke envelope")
+    .into_inner(DaemonUnaryRoute::FederationRevoke.name(), &arguments)
+    .expect("signed tuple");
+    let request = InvokeRequest {
+        envelope: Some(envelope),
+        arguments,
+        ..InvokeRequest::default()
+    };
+
+    let selected = service
+        .daemon_unary_route_for_request(DaemonUnaryRoute::FederationRevoke.name(), &request)
+        .expect("route owner selection must be decidable");
+
+    assert_eq!(
+        selected, None,
+        "authority-owned federation.revoke must fall through to resolver/session routing when only the device owner exact routes are registered"
+    );
+}
+
 #[tokio::test]
 async fn invoke_dispatches_federation_join_to_wrapper() {
     let cell = SharedTrustAnchor::new(Arc::new(RealmTrustAnchor::default()));
