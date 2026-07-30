@@ -241,22 +241,53 @@ pub struct LoginArgs {
     pub nickname: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct AuthResp {
     token: String,
     #[serde(default)]
     refresh_token: Option<String>,
+    #[serde(default)]
+    expires_in: Option<i64>,
     user: UserResp,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct UserResp {
     id: String,
     #[serde(default)]
+    account_key: Option<String>,
+    #[serde(default)]
+    ura: Option<String>,
+    #[serde(default)]
+    email: Option<String>,
+    #[serde(default)]
+    phone: Option<String>,
+    #[serde(default)]
     nickname: Option<String>,
     username: String,
+    #[serde(default)]
+    avatar: Option<String>,
+    #[serde(default)]
+    passkey_public_key_count: Option<i64>,
+    #[serde(default)]
+    account_public_keys: Option<Vec<AccountPublicKeyResp>>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AccountPublicKeyResp {
+    id: String,
+    name: String,
+    credential_id: String,
+    public_key: String,
+    fingerprint: String,
+    backed_up: bool,
+    created_at: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1302,6 +1333,32 @@ mod tests {
                 .contains("missing field `username`"),
             "unexpected error: {missing_username}"
         );
+    }
+
+    #[test]
+    fn login_response_accepts_backend_public_user_projection() {
+        let response = serde_json::from_value::<AuthResp>(serde_json::json!({
+            "token": "token",
+            "refresh_token": "refresh",
+            "expires_in": 3600,
+            "user": {
+                "id": "user-alice",
+                "account_key": "user-alice",
+                "ura": "easynet:///r/acme/user/user-alice",
+                "username": "alice",
+                "email": "alice@example.test",
+                "phone": "",
+                "nickname": "Alice",
+                "avatar": "",
+                "passkey_public_key_count": 0,
+                "account_public_keys": []
+            }
+        }))
+        .expect("CLI auth response DTO must accept the backend public UserResp contract");
+
+        assert_eq!(response.user.id, "user-alice");
+        assert_eq!(response.user.username, "alice");
+        assert_eq!(response.user.nickname.as_deref(), Some("Alice"));
     }
 
     #[test]
