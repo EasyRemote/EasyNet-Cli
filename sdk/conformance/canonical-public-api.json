@@ -15814,7 +15814,7 @@
           "identity": "ability_invocation_facade",
           "owner_path": "sdk/go/",
           "path": "sdk/go/runtime_ability.go",
-          "sha256": "c693c66f6eafae5dbcd418163702db000798e9a600f88b85c01fce422e5de4e8",
+          "sha256": "796cf93883c887ad6e9fd25946acf29ae0ed911fcb27e4bf59140a67b2a16dc9",
           "interface": "RuntimeAbilityClient",
           "revision": "6a24fe67ea523c059f77043774a4209eb50f4279"
         },
@@ -23435,10 +23435,10 @@
       "production_owner": "canonical runtime provider",
       "owner_path": "sdk/go/",
       "path": "sdk/go/runtime_ability.go",
-      "sha256": "c693c66f6eafae5dbcd418163702db000798e9a600f88b85c01fce422e5de4e8",
+      "sha256": "796cf93883c887ad6e9fd25946acf29ae0ed911fcb27e4bf59140a67b2a16dc9",
       "interface": "RuntimeAbilityClient",
       "interface_path": "sdk/go/runtime_ability.go",
-      "interface_sha256": "c693c66f6eafae5dbcd418163702db000798e9a600f88b85c01fce422e5de4e8",
+      "interface_sha256": "796cf93883c887ad6e9fd25946acf29ae0ed911fcb27e4bf59140a67b2a16dc9",
       "capability_ids": [
         "ability_invocation_facade"
       ],

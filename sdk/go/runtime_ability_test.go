@@ -729,6 +729,33 @@ func TestRuntimeAbilityClientFailsClosedOnIncompleteContext(t *testing.T) {
 	}
 }
 
+func TestRuntimeAbilityClientRejectsNoncanonicalCausalContextBeforeDescriptorResolve(t *testing.T) {
+	resolverCalls := 0
+	runtime, err := NewRuntimeClient(RuntimeTransportFunc{
+		ResolveDescriptorRefFunc: func(ctx context.Context, requestJSON []byte) ([]byte, error) {
+			resolverCalls++
+			return testResolveDescriptorRef(t)(ctx, requestJSON)
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
+	}
+	client, err := NewRuntimeAbilityClient(runtime, NewCanonicalAddressing())
+	if err != nil {
+		t.Fatalf("NewRuntimeAbilityClient: %v", err)
+	}
+	call := runtimeAbilityTestContext()
+	call.CausalContext = map[string]any{"form": "none", "reason": "legacy audit label"}
+
+	_, err = client.Build(context.Background(), call, "namespace.resolve", map[string]any{})
+	if err == nil || !strings.Contains(err.Error(), "causal_context contains unsupported field reason") {
+		t.Fatalf("Build error = %v, want canonical causal_context rejection", err)
+	}
+	if resolverCalls != 0 {
+		t.Fatalf("descriptor resolver calls = %d, want 0", resolverCalls)
+	}
+}
+
 func TestRuntimeAbilityClientMaterializesTypedAuthorityIntoCanonicalDraft(t *testing.T) {
 	runtime, err := NewRuntimeClient(RuntimeTransportFunc{
 		ResolveDescriptorRefFunc: testResolveDescriptorRef(t),

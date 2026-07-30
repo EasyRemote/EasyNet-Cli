@@ -340,6 +340,9 @@ func (b *InvocationBuilder) inspectDraft() (InvocationDraft, error) {
 	if b.causalContext == nil {
 		return InvocationDraft{}, invalidInvocation("causal_context is required", nil)
 	}
+	if _, err := CausalContextFromJSON(b.causalContext); err != nil {
+		return InvocationDraft{}, err
+	}
 	if err := validateInvocationNonceBase64(b.nonceBase64); err != nil {
 		return InvocationDraft{}, err
 	}

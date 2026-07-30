@@ -443,6 +443,9 @@ func validateRuntimeCallContext(call RuntimeCallContext) error {
 	if call.CausalContext == nil {
 		return invalidRuntimePayload("causal_context is required", nil)
 	}
+	if _, err := CausalContextFromJSON(call.CausalContext); err != nil {
+		return err
+	}
 	return nil
 }
 

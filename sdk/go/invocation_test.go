@@ -144,6 +144,49 @@ func TestInvocationBuilderRejectsMissingTupleField(t *testing.T) {
 	}
 }
 
+func TestInvocationBuilderRejectsNoncanonicalCausalContext(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		value  map[string]any
+		errMsg string
+	}{
+		{
+			name:   "root reason",
+			value:  map[string]any{"form": "none", "reason": "legacy audit label"},
+			errMsg: "causal_context contains unsupported field reason",
+		},
+		{
+			name:   "retired vector form",
+			value:  map[string]any{"form": "vector", "vector": []any{}},
+			errMsg: "unknown causal_context form",
+		},
+		{
+			name: "scalar alias",
+			value: map[string]any{
+				"form":     "scalar",
+				"hash_hex": strings.Repeat("ab", 32),
+				"ura":      "easynet:///r/example/resource/receipt/1",
+			},
+			errMsg: "causal_context missing required field receipt_hash_hex",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := completeInvocationBuilder().
+				WithCausalContext(tc.value).
+				Build()
+			if err == nil {
+				t.Fatal("Build succeeded, want invalid causal_context")
+			}
+			if !IsCode(err, ErrInvalidArgument) {
+				t.Fatalf("error code = %v, want %s", err, ErrInvalidArgument)
+			}
+			if !strings.Contains(err.Error(), tc.errMsg) {
+				t.Fatalf("error = %v, want substring %q", err, tc.errMsg)
+			}
+		})
+	}
+}
+
 func TestInvocationBuilderRejectsAllZeroPrincipals(t *testing.T) {
 	placeholder := "easynet:///r/example/resource/user.00000000-0000-0000-0000-000000000000/runtime-state/read"
 	for _, tc := range []struct {

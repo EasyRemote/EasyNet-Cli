@@ -184,7 +184,7 @@ func causalContextForInvocationDraft(value map[string]any) (CausalContext, error
 		if err := requireCausalExactKeys(value, "causal_context", "form", "receipt_hash_hex", "receipt_ura"); err != nil {
 			return CausalContext{}, err
 		}
-		ref, err := causalReceiptRefFromValue(value)
+		ref, err := causalReceiptRefFromFields(value, "causal_context")
 		if err != nil {
 			return CausalContext{}, err
 		}
@@ -231,10 +231,14 @@ func causalReceiptRefFromValue(value any) (CausalReceiptRef, error) {
 	if err := requireCausalExactKeys(item, "causal receipt ref", "receipt_hash_hex", "receipt_ura"); err != nil {
 		return CausalReceiptRef{}, err
 	}
-	ura := causalString(item, "receipt_ura")
-	hashHex := causalString(item, "receipt_hash_hex")
+	return causalReceiptRefFromFields(item, "causal receipt ref")
+}
+
+func causalReceiptRefFromFields(value map[string]any, label string) (CausalReceiptRef, error) {
+	ura := causalString(value, "receipt_ura")
+	hashHex := causalString(value, "receipt_hash_hex")
 	if ura == "" || hashHex == "" {
-		return CausalReceiptRef{}, invalidRuntimePayload("causal receipt ref requires receipt_ura and receipt_hash_hex", nil)
+		return CausalReceiptRef{}, invalidRuntimePayload(label+" requires receipt_ura and receipt_hash_hex", nil)
 	}
 	return CausalReceiptRef{URA: ura, HashHex: hashHex}, nil
 }
