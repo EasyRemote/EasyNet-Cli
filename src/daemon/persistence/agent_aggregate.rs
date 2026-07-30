@@ -502,6 +502,9 @@ impl AgentHostedIdentitySnapshot {
             if agent_ura.is_empty() || agent_ura.contains("<unjoined>") {
                 continue;
             }
+            if !hosted_agent_belongs_to_runtime_user(agent_ura, realm, user_segment) {
+                continue;
+            }
             if seen.insert(agent_ura.to_string()) {
                 entries.push(AgentHostedAdvertiseEntry::new(agent_ura));
             }
@@ -699,6 +702,21 @@ fn hosted_agent_short_label(agent_ura: &str) -> String {
                 .map(|(user_id, agent_id)| format!("{user_id}.{agent_id}"))
         })
         .unwrap_or_else(|| agent_ura.to_string())
+}
+
+fn hosted_agent_belongs_to_runtime_user(agent_ura: &str, realm: &str, user_segment: &str) -> bool {
+    if realm.is_empty() || user_segment.is_empty() {
+        return false;
+    }
+    let Ok(parsed) = crate::core::ura::parse_ura(agent_ura) else {
+        return false;
+    };
+    if parsed.kind != crate::core::ura::URAKind::Agent || parsed.realm != realm {
+        return false;
+    }
+    parsed
+        .agent_ids()
+        .is_some_and(|(owner_user_segment, _)| owner_user_segment == user_segment)
 }
 
 fn trimmed_nonempty(value: &str) -> Option<&str> {
@@ -1379,6 +1397,9 @@ mod tests {
             hosted_agents: vec![
                 hosted_agent("llm", "claude", "easynet:///r/acme/agent/u1.claude"),
                 hosted_agent("llm", "duplicate", "easynet:///r/acme/agent/u1.claude"),
+                hosted_agent("llm", "other-user", "easynet:///r/acme/agent/u2.other"),
+                hosted_agent("llm", "other-realm", "easynet:///r/other/agent/u1.other"),
+                hosted_agent("llm", "device", "easynet:///r/acme/device/dev-2"),
                 hosted_agent("llm", "pending", "<unjoined>"),
                 hosted_agent("mcp", "blank", "   "),
             ],
@@ -1411,9 +1432,9 @@ mod tests {
             )],
         });
 
-        assert_eq!(snapshot.hosted_advertise_entries("acme", "self").len(), 1);
-        assert_eq!(snapshot.hosted_advertise_entries("", "u1").len(), 1);
-        assert_eq!(snapshot.hosted_advertise_entries("acme", "").len(), 1);
+        assert!(snapshot.hosted_advertise_entries("acme", "self").is_empty());
+        assert!(snapshot.hosted_advertise_entries("", "u1").is_empty());
+        assert!(snapshot.hosted_advertise_entries("acme", "").is_empty());
     }
 
     #[test]

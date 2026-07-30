@@ -2190,7 +2190,7 @@ mod tests {
         let dispatcher = Arc::new(RecordingDispatcher::default());
         let (addr, invokes, _server) = spawn_recording_prelude_hub().await;
         let device_ura = "easynet:///r/realm/device/n1";
-        let agent_ura = "easynet:///r/realm/agent/dev.anthropic";
+        let agent_ura = "easynet:///r/realm/agent/user-dev.anthropic";
         crate::daemon::persistence::config::save_credentials(
             &crate::daemon::persistence::config::Credentials {
                 node_id: "n1".to_string(),
