@@ -630,9 +630,11 @@ def _reject_unknown_bidi_fields(
     decoded: dict[str, object], projection: str, *allowed_fields: str
 ) -> None:
     allowed = set(allowed_fields)
-    for field in decoded:
-        if field not in allowed:
-            raise _invalid_bidi(f"{projection} contains noncanonical field {field}")
+    for field_name in decoded:
+        if field_name not in allowed:
+            raise _invalid_bidi(
+                f"{projection} contains noncanonical field {field_name}"
+            )
 
 
 def _optional_non_negative_int(value: object, field_name: str) -> int:
