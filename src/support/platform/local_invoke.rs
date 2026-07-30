@@ -770,6 +770,57 @@ enum LocalRuntimeOwnerReadAttachment {
 }
 
 impl LocalRuntimeOwnerReadAttachment {
+    #[cfg(test)]
+    fn runtime_owner_from_discovery(
+        discovery: &crate::daemon::control::discovery::ControlDiscovery,
+        error_prefix: &'static str,
+    ) -> anyhow::Result<Self> {
+        let identity = discovery.daemon_identity.as_ref().ok_or_else(|| {
+            anyhow::anyhow!("{error_prefix}: daemon Ready discovery has no runtime identity")
+        })?;
+        match identity.mode.trim() {
+            "hub" => {
+                let realm = identity.realm.trim();
+                if realm.is_empty() {
+                    anyhow::bail!("{error_prefix}: hub daemon identity has empty realm");
+                }
+                let authority = crate::core::ura::hub_ura(realm);
+                crate::core::identity::RuntimeGovernanceReadSubject::parse_for_callee(
+                    &authority, &authority,
+                )
+                .map_err(|error| {
+                    anyhow::anyhow!("runtime governance read subject is invalid: {error}")
+                })?;
+                Ok(Self::RuntimeOwner {
+                    subject_ura: authority,
+                })
+            }
+            "device" | "both" => {
+                let credentials = crate::daemon::persistence::config::load_credentials()
+                    .map_err(|error| anyhow::anyhow!("{error_prefix}: {error}"))?;
+                let identity = LocalRuntimeAttachmentIdentity::from_credentials_discovery(
+                    &credentials,
+                    discovery,
+                    error_prefix,
+                )?;
+                let device_ura = crate::core::ura::device_ura(&identity.realm, &identity.node_id);
+                crate::core::identity::RuntimeGovernanceReadSubject::parse_for_callee(
+                    &device_ura,
+                    &device_ura,
+                )
+                .map_err(|error| {
+                    anyhow::anyhow!("runtime governance read subject is invalid: {error}")
+                })?;
+                Ok(Self::RuntimeOwner {
+                    subject_ura: device_ura,
+                })
+            }
+            other => {
+                anyhow::bail!("{error_prefix}: daemon mode {other:?} cannot own runtime reads")
+            }
+        }
+    }
+
     fn from_discovery_file(
         signer_custody: &dyn RuntimeStateReadSignerCustody,
         error_prefix: &'static str,
@@ -1000,7 +1051,11 @@ pub struct LocalRuntimeCatalogueReadIssuer;
 
 impl LocalRuntimeCatalogueReadIssuer {
     pub fn list_abilities(args: Value) -> anyhow::Result<Value> {
-        Self::list_abilities_timeout(args, std::time::Duration::from_secs(30))
+        Self::list_abilities_timeout(
+            args,
+            crate::support::platform::timeouts::catalogue_read_transport_guard(0)
+                .map_err(anyhow::Error::msg)?,
+        )
     }
 
     pub fn list_abilities_timeout(
@@ -1015,7 +1070,11 @@ impl LocalRuntimeCatalogueReadIssuer {
     }
 
     pub fn list_resources(args: Value) -> anyhow::Result<Value> {
-        Self::list_resources_timeout(args, std::time::Duration::from_secs(30))
+        Self::list_resources_timeout(
+            args,
+            crate::support::platform::timeouts::catalogue_read_transport_guard(0)
+                .map_err(anyhow::Error::msg)?,
+        )
     }
 
     pub fn list_resources_timeout(
@@ -1680,6 +1739,23 @@ mod tests {
             "runtime governance read subject unavailable",
         )
         .expect("device-only governance read subject must not require paired user signer custody")
+        .into_subject_ura()
+        .expect("device runtime-owner subject");
+
+        assert_eq!(subject, "easynet:///r/acme/device/dev-a");
+    }
+
+    #[test]
+    fn runtime_owner_read_subject_uses_device_owner_for_bound_device_credentials() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        crate::daemon::persistence::config::save_credentials(&runtime_state_read_credentials())
+            .expect("save bound device credentials");
+
+        let subject = LocalRuntimeOwnerReadAttachment::runtime_owner_from_discovery(
+            &runtime_state_read_discovery("acme", Some("dev-a"), vec![]),
+            "runtime agent inventory read subject unavailable",
+        )
+        .expect("runtime-owner read subject must not require paired user signer custody")
         .into_subject_ura()
         .expect("device runtime-owner subject");
 

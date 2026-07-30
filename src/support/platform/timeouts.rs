@@ -34,6 +34,14 @@
 //                                      autonomous loop. Each cycle is
 //                                      one think + one action; it shares the
 //                                      same one-hour invocation budget.
+//     - [`CATALOGUE_READ_DEFAULT_SECS`]
+//                                    — metadata/catalogue reads. These are
+//                                      discovery operations, not long-running
+//                                      tool executions, so they use a short
+//                                      bounded deadline.
+//     - [`REMOTE_SYSTEM_DEFAULT_SECS`]
+//                                    — target-owned daemon system abilities
+//                                      such as node.describe and voice control.
 //
 // The number `0` is interpreted by a named [`TimeoutPolicy`]. Payload
 // deadlines may preserve `0` as "inherit the runtime default". Transport
@@ -76,6 +84,21 @@ pub const INVOKE_DEFAULT_SECS: u64 = 3600;
 /// Same rationale as `INVOKE_DEFAULT_SECS`: tool-using agents can
 /// legitimately run for tens of minutes without being stuck.
 pub const AGENT_SEND_DEFAULT_SECS: u64 = 3600;
+
+/// Default deadline for metadata/catalogue reads such as
+/// `meta.list_abilities` and `meta.list_resources`, in seconds.
+///
+/// Catalogue reads are runtime discovery operations. They must fail quickly
+/// with a typed route/deadline error instead of behaving like long-running
+/// ability execution.
+pub const CATALOGUE_READ_DEFAULT_SECS: u64 = 30;
+
+/// Default deadline for target-owned daemon system abilities, in seconds.
+///
+/// These are control-plane operations, not LLM/tool execution. Keep them
+/// short and explicit, but separate from catalogue reads so ownership remains
+/// visible at call sites.
+pub const REMOTE_SYSTEM_DEFAULT_SECS: u64 = 30;
 
 /// Default per-cycle deadline for `easynet think`, in seconds.
 /// Test-only today — `easynet think` is not yet wired through this
@@ -144,6 +167,10 @@ pub const INVOCATION_TRANSPORT_TIMEOUT: TimeoutPolicy =
     TimeoutPolicy::transport_guard_default(INVOKE_DEFAULT_SECS);
 pub const RUNTIME_REQUEST_TIMEOUT: TimeoutPolicy =
     TimeoutPolicy::runtime_request_default(INVOKE_DEFAULT_SECS);
+pub const CATALOGUE_READ_TRANSPORT_TIMEOUT: TimeoutPolicy =
+    TimeoutPolicy::transport_guard_default(CATALOGUE_READ_DEFAULT_SECS);
+pub const REMOTE_SYSTEM_TRANSPORT_TIMEOUT: TimeoutPolicy =
+    TimeoutPolicy::transport_guard_default(REMOTE_SYSTEM_DEFAULT_SECS);
 
 /// Convert a user-facing seconds value (from a `--timeout <N>` flag) to
 /// the `Option<Duration>`-in-milliseconds shape used by request payloads.
@@ -172,6 +199,14 @@ pub fn runtime_request_timeout_ms(secs: u64) -> Result<Option<u64>, &'static str
     RUNTIME_REQUEST_TIMEOUT.request_timeout_ms(secs)
 }
 
+pub fn catalogue_read_transport_guard(secs: u64) -> Result<Duration, &'static str> {
+    CATALOGUE_READ_TRANSPORT_TIMEOUT.transport_guard(secs)
+}
+
+pub fn remote_system_transport_guard(secs: u64) -> Result<Duration, &'static str> {
+    REMOTE_SYSTEM_TRANSPORT_TIMEOUT.transport_guard(secs)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -190,6 +225,8 @@ mod tests {
         // the floor here.
         assert_eq!(effective_ms(INVOKE_DEFAULT_SECS), Ok(Some(3_600_000)));
         assert_eq!(effective_ms(AGENT_SEND_DEFAULT_SECS), Ok(Some(3_600_000)));
+        assert_eq!(effective_ms(CATALOGUE_READ_DEFAULT_SECS), Ok(Some(30_000)));
+        assert_eq!(effective_ms(REMOTE_SYSTEM_DEFAULT_SECS), Ok(Some(30_000)));
         assert_eq!(effective_ms(THINK_DEFAULT_SECS), Ok(Some(3_600_000)));
     }
 
@@ -204,6 +241,22 @@ mod tests {
     #[test]
     fn runtime_request_timeout_preserves_zero_as_runtime_default() {
         assert_eq!(runtime_request_timeout_ms(0), Ok(None));
+    }
+
+    #[test]
+    fn catalogue_read_transport_guard_uses_short_default_for_zero() {
+        assert_eq!(
+            catalogue_read_transport_guard(0),
+            Ok(Duration::from_secs(CATALOGUE_READ_DEFAULT_SECS))
+        );
+    }
+
+    #[test]
+    fn remote_system_transport_guard_uses_short_default_for_zero() {
+        assert_eq!(
+            remote_system_transport_guard(0),
+            Ok(Duration::from_secs(REMOTE_SYSTEM_DEFAULT_SECS))
+        );
     }
 
     #[test]

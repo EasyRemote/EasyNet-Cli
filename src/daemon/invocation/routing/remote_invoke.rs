@@ -850,14 +850,23 @@ fn invoke_remote_target_on_ready_socket_typed(
         })?;
 
         let mut client = InvocationClient::new(channel);
-        let response = client.invoke(request).await.map_err(|status| {
-            RemoteInvocationFailure::DaemonRejected {
+        let response = tokio::time::timeout(timeout, client.invoke(request))
+            .await
+            .map_err(|_| {
+                RemoteInvocationFailure::Transport(format!(
+                    "canonical remote invocation `{}` for target `{}` timed out after {} ms \
+                     waiting for the local daemon Invoke reply",
+                    target.as_str(),
+                    target.execution_target_ura(),
+                    timeout.as_millis()
+                ))
+            })?
+            .map_err(|status| RemoteInvocationFailure::DaemonRejected {
                 target_ura: target.as_str().to_string(),
                 execution_target_ura: target.execution_target_ura().to_string(),
                 code: status.code(),
                 message: status.message().to_string(),
-            }
-        })?;
+            })?;
         let body = response.into_inner();
         // The local daemon owns remote dispatch and has already verified the
         // forwarded admission/terminal receipt chain against its live

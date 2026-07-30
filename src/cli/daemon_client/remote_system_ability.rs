@@ -263,13 +263,15 @@ where
     A: TargetOwnedRemoteSystemAbilityName,
 {
     let selector = ability.remote_system_ability_name();
+    let timeout = crate::support::platform::timeouts::remote_system_transport_guard(0)
+        .map_err(anyhow::Error::msg)?;
     let target_call =
         RemoteAbilityInvocationTarget::for_target_owned_selector(execution_target_ura, selector)?;
     let request = RemoteSystemInvocationIssuer::target_owned_root_plan(
         &target_call,
         caller_ura,
         args,
-        std::time::Duration::from_secs(30),
+        timeout,
     )?
     .into_request()?;
     remote_invoke::invoke_remote_target(request)
@@ -281,14 +283,12 @@ fn invoke_remote_catalogue_read_for_target(
     args: Value,
     caller_ura: &str,
 ) -> anyhow::Result<Value> {
+    let timeout = crate::support::platform::timeouts::catalogue_read_transport_guard(0)
+        .map_err(anyhow::Error::msg)?;
     let target_call = RemoteAbilityInvocationTarget::for_catalogue_read(execution_target_ura)?;
-    let request = RemoteCatalogueReadIssuer::catalogue_read_plan(
-        &target_call,
-        caller_ura,
-        args,
-        std::time::Duration::from_secs(30),
-    )?
-    .into_request()?;
+    let request =
+        RemoteCatalogueReadIssuer::catalogue_read_plan(&target_call, caller_ura, args, timeout)?
+            .into_request()?;
     remote_invoke::invoke_remote_target(request)
 }
 

@@ -88,6 +88,8 @@ use crate::daemon::invocation::admission::federated_key_resolver::{
 use crate::daemon::invocation::admission::principal_lifecycle::{
     principal_lifecycle_store_path_for_trust_anchor, PrincipalLifecycleReader,
 };
+
+const BACKGROUND_PUBLICATION_ESCALATION_TIMEOUT: Duration = Duration::from_secs(5);
 use crate::daemon::invocation::admission::runtime_trust::RuntimeTrustContext;
 use crate::daemon::invocation::admission::usage_quota::SharedUsageQuotaGate;
 use crate::daemon::invocation::bidi::session_initiator::{
@@ -975,29 +977,100 @@ fn register_dynamic_owner_projection_republisher(
         dyn crate::daemon::invocation::bidi::session_initiator::SessionConnectionStateSink,
     >,
 ) {
-    let schedule: Arc<dyn Fn() + Send + Sync> = Arc::new({
-        let catalog = Arc::clone(&catalog);
-        let escalation = Arc::clone(&escalation);
-        let owner_ura = owner_ura.clone();
-        let connection_state_sink = Arc::clone(&connection_state_sink);
-        move || {
-            let catalog = Arc::clone(&catalog);
-            let escalation = Arc::clone(&escalation);
-            let owner_ura = owner_ura.clone();
-            let connection_state_sink = Arc::clone(&connection_state_sink);
-            tokio::spawn(async move {
-                publish_dynamic_owner_projection(
-                    catalog,
-                    escalation,
-                    owner_ura,
-                    connection_state_sink,
-                )
-                .await;
-            });
-        }
+    let republisher = Arc::new(DynamicOwnerProjectionRepublisher::new(
+        Arc::clone(&catalog),
+        escalation,
+        owner_ura,
+        connection_state_sink,
+    ));
+    let schedule: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+        republisher.schedule();
     });
     catalog.register_dynamic_publication_hook(Arc::clone(&schedule));
     outbox.register_ready_hook(schedule);
+}
+
+struct DynamicOwnerProjectionRepublisher {
+    catalog: Arc<crate::daemon::ability::dispatch::AxonAbilityCatalog>,
+    escalation: Arc<crate::daemon::invocation::bidi::session_escalation::SessionEscalationHandle>,
+    owner_ura: String,
+    connection_state_sink:
+        Arc<dyn crate::daemon::invocation::bidi::session_initiator::SessionConnectionStateSink>,
+    state: std::sync::Mutex<DynamicOwnerProjectionRepublisherState>,
+}
+
+#[derive(Default)]
+struct DynamicOwnerProjectionRepublisherState {
+    running: bool,
+    dirty: bool,
+}
+
+impl DynamicOwnerProjectionRepublisher {
+    fn new(
+        catalog: Arc<crate::daemon::ability::dispatch::AxonAbilityCatalog>,
+        escalation: Arc<
+            crate::daemon::invocation::bidi::session_escalation::SessionEscalationHandle,
+        >,
+        owner_ura: String,
+        connection_state_sink: Arc<
+            dyn crate::daemon::invocation::bidi::session_initiator::SessionConnectionStateSink,
+        >,
+    ) -> Self {
+        Self {
+            catalog,
+            escalation,
+            owner_ura,
+            connection_state_sink,
+            state: std::sync::Mutex::new(DynamicOwnerProjectionRepublisherState::default()),
+        }
+    }
+
+    fn schedule(self: &Arc<Self>) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.dirty = true;
+        if state.running {
+            crate::op_event!(
+                component = daemon_invocation,
+                kind = dynamic_owner_projection_publish_coalesced,
+                owner_ura = self.owner_ura.as_str(),
+            );
+            return;
+        }
+        state.running = true;
+        drop(state);
+
+        let worker = Arc::clone(self);
+        tokio::spawn(async move {
+            worker.run().await;
+        });
+    }
+
+    async fn run(self: Arc<Self>) {
+        loop {
+            {
+                let mut state = self
+                    .state
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                if !state.dirty {
+                    state.running = false;
+                    return;
+                }
+                state.dirty = false;
+            }
+
+            publish_dynamic_owner_projection(
+                Arc::clone(&self.catalog),
+                Arc::clone(&self.escalation),
+                self.owner_ura.clone(),
+                Arc::clone(&self.connection_state_sink),
+            )
+            .await;
+        }
+    }
 }
 
 async fn publish_dynamic_owner_projection(
@@ -1062,7 +1135,7 @@ async fn publish_dynamic_owner_projection(
         .escalate_with_timeout(
             "federation.advertise_abilities".to_string(),
             args,
-            Duration::from_secs(5),
+            BACKGROUND_PUBLICATION_ESCALATION_TIMEOUT,
         )
         .await
     {
@@ -1286,39 +1359,42 @@ impl HotAgentAdvertiser for SessionHotAgentAdvertiser {
         // advertise is best-effort and reported via the outcome error.
         let abilities_payload = request.abilities_payload;
         let escalation = Arc::clone(&self.escalation);
-        let Some(outcome) = crate::support::async_bridge::try_run_blocking_in_tokio(async move {
-            let agent_outcome = escalation
-                .escalate_with_timeout(
-                    "federation.advertise_agent".to_string(),
-                    args,
-                    Duration::from_secs(5),
-                )
-                .await;
-            // Only advertise abilities if the identity advertise landed —
-            // an abilities projection for an unknown agent is rejected.
-            // `escalate_with_timeout` builds the hub ability URA from the
-            // ability name + session realm, so no resource URA is needed.
-            if matches!(agent_outcome, RequestOutcome::Ok { .. }) {
-                if let Some(payload) = abilities_payload {
-                    let abilities_outcome = escalation
-                        .escalate_with_timeout(
-                            "federation.advertise_abilities".to_string(),
-                            payload,
-                            Duration::from_secs(5),
-                        )
-                        .await;
-                    if let RequestOutcome::Err { error } = abilities_outcome {
-                        // Identity is up; abilities will reconcile on the
-                        // next heartbeat refresh. Surface the soft error.
-                        return RequestOutcome::Err { error };
+        let outcome = match crate::support::async_bridge::try_run_blocking(
+            async move {
+                let agent_outcome = escalation
+                    .escalate_with_timeout(
+                        "federation.advertise_agent".to_string(),
+                        args,
+                        BACKGROUND_PUBLICATION_ESCALATION_TIMEOUT,
+                    )
+                    .await;
+                // Only advertise abilities if the identity advertise landed —
+                // an abilities projection for an unknown agent is rejected.
+                // `escalate_with_timeout` builds the hub ability URA from the
+                // ability name + session realm, so no resource URA is needed.
+                if matches!(agent_outcome, RequestOutcome::Ok { .. }) {
+                    if let Some(payload) = abilities_payload {
+                        let abilities_outcome = escalation
+                            .escalate_with_timeout(
+                                "federation.advertise_abilities".to_string(),
+                                payload,
+                                BACKGROUND_PUBLICATION_ESCALATION_TIMEOUT,
+                            )
+                            .await;
+                        if let RequestOutcome::Err { error } = abilities_outcome {
+                            // Identity is up; abilities will reconcile on the
+                            // next heartbeat refresh. Surface the soft error.
+                            return RequestOutcome::Err { error };
+                        }
                     }
                 }
-            }
-            agent_outcome
-        }) else {
-            return HotAgentAdvertiseOutcome::failed(
-                "no tokio runtime available for hot federation.advertise_agent",
-            );
+                agent_outcome
+            },
+            crate::support::async_bridge::SyncBridgeRuntimePolicy::BuildCurrentThreadTokio,
+            "hot federation.advertise_agent",
+        ) {
+            Ok(outcome) => outcome,
+            Err(error) => return HotAgentAdvertiseOutcome::failed(error),
         };
         match outcome {
             RequestOutcome::Ok { .. } => HotAgentAdvertiseOutcome::succeeded(),
@@ -1334,18 +1410,21 @@ impl HotAgentAdvertiser for SessionHotAgentAdvertiser {
     ) -> HotAgentAdvertiseOutcome {
         let escalation = Arc::clone(&self.escalation);
         let payload = request.abilities_payload;
-        let Some(outcome) = crate::support::async_bridge::try_run_blocking_in_tokio(async move {
-            escalation
-                .escalate_with_timeout(
-                    "federation.advertise_abilities".to_string(),
-                    payload,
-                    Duration::from_secs(5),
-                )
-                .await
-        }) else {
-            return HotAgentAdvertiseOutcome::failed(
-                "no tokio runtime available for owner projection publication",
-            );
+        let outcome = match crate::support::async_bridge::try_run_blocking(
+            async move {
+                escalation
+                    .escalate_with_timeout(
+                        "federation.advertise_abilities".to_string(),
+                        payload,
+                        BACKGROUND_PUBLICATION_ESCALATION_TIMEOUT,
+                    )
+                    .await
+            },
+            crate::support::async_bridge::SyncBridgeRuntimePolicy::BuildCurrentThreadTokio,
+            "hot owner projection publication",
+        ) {
+            Ok(outcome) => outcome,
+            Err(error) => return HotAgentAdvertiseOutcome::failed(error),
         };
         match outcome {
             RequestOutcome::Ok { .. } => HotAgentAdvertiseOutcome::succeeded(),
@@ -1380,18 +1459,21 @@ impl HotAgentAdvertiser for SessionHotAgentAdvertiser {
             }
         };
         let escalation = Arc::clone(&self.escalation);
-        let Some(outcome) = crate::support::async_bridge::try_run_blocking_in_tokio(async move {
-            escalation
-                .escalate_with_timeout(
-                    "federation.revoke".to_string(),
-                    args,
-                    Duration::from_secs(5),
-                )
-                .await
-        }) else {
-            return HotAgentAdvertiseOutcome::failed(
-                "no tokio runtime available for hot federation.revoke",
-            );
+        let outcome = match crate::support::async_bridge::try_run_blocking(
+            async move {
+                escalation
+                    .escalate_with_timeout(
+                        "federation.revoke".to_string(),
+                        args,
+                        BACKGROUND_PUBLICATION_ESCALATION_TIMEOUT,
+                    )
+                    .await
+            },
+            crate::support::async_bridge::SyncBridgeRuntimePolicy::BuildCurrentThreadTokio,
+            "hot federation.revoke",
+        ) {
+            Ok(outcome) => outcome,
+            Err(error) => return HotAgentAdvertiseOutcome::failed(error),
         };
         match outcome {
             RequestOutcome::Ok { .. } => HotAgentAdvertiseOutcome::succeeded(),

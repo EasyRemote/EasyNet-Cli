@@ -61,6 +61,7 @@
 
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use serde_json::{json, Value};
 
@@ -69,8 +70,8 @@ use crate::core::agent::spec::{AgentSpec, RuntimeKind};
 use crate::daemon::ability::catalog::profiles::bootstrap::{self, BootstrapPlan, UuidMinter};
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 use crate::daemon::axon_bridge::hot_agent_registrar::{
-    block_on_hot_registrar, HotAgentAdvertiseRequest, HotAgentAdvertiseState, HotAgentRegistrar,
-    HotAgentRegistrarError,
+    block_on_hot_registrar, HotAgentAdvertiseRequest, HotAgentAdvertiseState, HotAgentAdvertiser,
+    HotAgentProjectionRequest, HotAgentRegistrar, HotAgentRegistrarError, HotAgentRevokeRequest,
 };
 use crate::daemon::execution::mission::directory::{AgentDirectory, Location};
 use crate::daemon::persistence::agent_lifecycle::{
@@ -764,7 +765,7 @@ fn start_agent_handler(
         recover_pending_purge_local_locked(hot_registrar)?;
         start_agent_locked(args, hot_registrar)?
     };
-    drain_scheduled_purge_publications(hot_registrar)?;
+    schedule_scheduled_purge_publications(hot_registrar)?;
     Ok(response)
 }
 
@@ -1190,26 +1191,31 @@ fn start_agent_locked(
         }
     }
 
-    let hub_advertise_outcome = registrar.hot_agent_advertiser().and_then(|advertiser| {
-        let generation = owner_generation?;
-        Some(advertiser.advertise_hosted_agent(HotAgentAdvertiseRequest {
-            agent_ura: agent_ura.clone(),
-            generation,
-            abilities_payload: abilities_payload.clone(),
-        }))
-    });
-    if let Some(outcome) = hub_advertise_outcome.as_ref() {
-        if let Some(err) = outcome.error() {
-            crate::op_event!(
-                component = agent_lifecycle,
-                kind = hot_agent_hub_advertise_soft_failed,
-                agent_name = name.as_str(),
-                agent_ura = agent_ura.as_str(),
-                error = err,
-                message = "agent registered locally but hub advertise failed; \
-                           frontend remote invokes may need a session reconnect",
+    let hub_advertise_scheduled = match (registrar.hot_agent_advertiser(), owner_generation) {
+        (Some(advertiser), Some(generation)) => {
+            let request = HotAgentAdvertiseRequest {
+                agent_ura: agent_ura.clone(),
+                generation,
+                abilities_payload: abilities_payload.clone(),
+            };
+            schedule_hot_agent_advertise_retry(
+                advertiser,
+                request,
+                name.clone(),
+                agent_ura.clone(),
             );
+            true
         }
+        _ => false,
+    };
+    if hub_advertise_scheduled {
+        crate::op_event!(
+            component = agent_lifecycle,
+            kind = hot_agent_hub_advertise_scheduled,
+            agent_name = name.as_str(),
+            agent_ura = agent_ura.as_str(),
+            message = "agent registered locally; hub advertise will run through the session publication worker",
+        );
     }
 
     Ok(json!({
@@ -1221,18 +1227,9 @@ fn start_agent_locked(
         "runtime_removed": runtime_removed,
         "runtime_not_ready": runtime_not_ready,
         "runtime_catalog_not_ready": runtime_catalog_not_ready,
-        "hub_advertised": hub_advertise_outcome
-            .as_ref()
-            .map(|outcome| outcome.advertised())
-            .unwrap_or(false),
-        "hub_advertise_state": match hub_advertise_outcome.as_ref() {
-            None => "not_configured",
-            Some(outcome) if outcome.state() == HotAgentAdvertiseState::Succeeded => "succeeded",
-            Some(_) => "failed",
-        },
-        "hub_advertise_error": hub_advertise_outcome
-            .as_ref()
-            .and_then(|outcome| outcome.error().map(str::to_string)),
+        "hub_advertised": false,
+        "hub_advertise_state": if hub_advertise_scheduled { "scheduled" } else { "not_configured" },
+        "hub_advertise_error": Value::Null,
         "owner_projection_state": owner_projection_state,
         "owner_projection_error": owner_projection_error,
         "created_directory": created_directory,
@@ -1248,6 +1245,210 @@ fn start_agent_locked(
 
 fn runtime_kind_from(t: AgentType) -> RuntimeKind {
     t.runtime_kind()
+}
+
+#[cfg(not(test))]
+const HOT_AGENT_ADVERTISE_RETRY_DELAYS_MS: &[u64] = &[500, 1_000, 2_000, 5_000, 10_000];
+
+#[cfg(test)]
+const HOT_AGENT_ADVERTISE_RETRY_DELAYS_MS: &[u64] = &[0, 0, 0];
+
+fn schedule_hot_agent_advertise_retry(
+    advertiser: Arc<dyn HotAgentAdvertiser>,
+    request: HotAgentAdvertiseRequest,
+    agent_name: String,
+    agent_ura: String,
+) {
+    let retry_agent_name = agent_name.clone();
+    let retry_agent_ura = agent_ura.clone();
+    let spawn_result = std::thread::Builder::new()
+        .name(format!("easynet-hot-agent-advertise-{agent_name}"))
+        .spawn(move || {
+            let mut last_error = String::new();
+            for (index, delay_ms) in HOT_AGENT_ADVERTISE_RETRY_DELAYS_MS.iter().enumerate() {
+                if *delay_ms > 0 {
+                    std::thread::sleep(Duration::from_millis(*delay_ms));
+                }
+                let attempt = index + 1;
+                let outcome = advertiser.advertise_hosted_agent(request.clone());
+                if outcome.advertised() {
+                    crate::op_event!(
+                        component = agent_lifecycle,
+                        kind = hot_agent_hub_advertise_retry_succeeded,
+                        agent_name = retry_agent_name.as_str(),
+                        agent_ura = retry_agent_ura.as_str(),
+                        attempt = attempt,
+                    );
+                    return;
+                }
+                last_error = outcome.error().unwrap_or("unknown advertise failure").to_string();
+                crate::op_event!(
+                    component = agent_lifecycle,
+                    kind = hot_agent_hub_advertise_retry_failed,
+                    level = "warn",
+                    agent_name = retry_agent_name.as_str(),
+                    agent_ura = retry_agent_ura.as_str(),
+                    attempt = attempt,
+                    error = last_error.as_str(),
+                );
+            }
+            crate::op_event!(
+                component = agent_lifecycle,
+                kind = hot_agent_hub_advertise_retry_exhausted,
+                level = "warn",
+                agent_name = retry_agent_name.as_str(),
+                agent_ura = retry_agent_ura.as_str(),
+                attempts = HOT_AGENT_ADVERTISE_RETRY_DELAYS_MS.len(),
+                error = last_error.as_str(),
+                message = "agent remains locally registered; hub discovery will recover on the next successful explicit advertise",
+            );
+        });
+
+    if let Err(error) = spawn_result {
+        let error = error.to_string();
+        crate::op_event!(
+            component = agent_lifecycle,
+            kind = hot_agent_hub_advertise_retry_spawn_failed,
+            level = "warn",
+            agent_name = agent_name.as_str(),
+            agent_ura = agent_ura.as_str(),
+            error = error.as_str(),
+        );
+    }
+}
+
+fn schedule_hot_agent_projection_publication(
+    advertiser: Arc<dyn HotAgentAdvertiser>,
+    request: HotAgentProjectionRequest,
+    agent_name: String,
+    agent_ura: String,
+) {
+    let worker_agent_name = agent_name.clone();
+    let worker_agent_ura = agent_ura.clone();
+    let spawn_result = std::thread::Builder::new()
+        .name(format!("easynet-hot-agent-project-{agent_name}"))
+        .spawn(move || {
+            let mut last_error = String::new();
+            for (index, delay_ms) in HOT_AGENT_ADVERTISE_RETRY_DELAYS_MS.iter().enumerate() {
+                if *delay_ms > 0 {
+                    std::thread::sleep(Duration::from_millis(*delay_ms));
+                }
+                let attempt = index + 1;
+                let outcome = advertiser.publish_owner_projection(request.clone());
+                if outcome.advertised() {
+                    crate::op_event!(
+                        component = agent_lifecycle,
+                        kind = hot_agent_projection_publication_succeeded,
+                        agent_name = worker_agent_name.as_str(),
+                        agent_ura = worker_agent_ura.as_str(),
+                        attempt = attempt,
+                    );
+                    return;
+                }
+                last_error = outcome
+                    .error()
+                    .unwrap_or("unknown projection publication failure")
+                    .to_string();
+                crate::op_event!(
+                    component = agent_lifecycle,
+                    kind = hot_agent_projection_publication_failed,
+                    level = "warn",
+                    agent_name = worker_agent_name.as_str(),
+                    agent_ura = worker_agent_ura.as_str(),
+                    attempt = attempt,
+                    error = last_error.as_str(),
+                );
+            }
+            crate::op_event!(
+                component = agent_lifecycle,
+                kind = hot_agent_projection_publication_exhausted,
+                level = "warn",
+                agent_name = worker_agent_name.as_str(),
+                agent_ura = worker_agent_ura.as_str(),
+                attempts = HOT_AGENT_ADVERTISE_RETRY_DELAYS_MS.len(),
+                error = last_error.as_str(),
+                message = "agent lifecycle completed locally; hub projection publication remains pending reconciliation",
+            );
+        });
+
+    if let Err(error) = spawn_result {
+        let error = error.to_string();
+        crate::op_event!(
+            component = agent_lifecycle,
+            kind = hot_agent_projection_publication_spawn_failed,
+            level = "warn",
+            agent_name = agent_name.as_str(),
+            agent_ura = agent_ura.as_str(),
+            error = error.as_str(),
+        );
+    }
+}
+
+fn schedule_hot_agent_revoke_publication(
+    advertiser: Arc<dyn HotAgentAdvertiser>,
+    request: HotAgentRevokeRequest,
+    agent_name: String,
+    agent_ura: String,
+) {
+    let worker_agent_name = agent_name.clone();
+    let worker_agent_ura = agent_ura.clone();
+    let spawn_result = std::thread::Builder::new()
+        .name(format!("easynet-hot-agent-revoke-{agent_name}"))
+        .spawn(move || {
+            let mut last_error = String::new();
+            for (index, delay_ms) in HOT_AGENT_ADVERTISE_RETRY_DELAYS_MS.iter().enumerate() {
+                if *delay_ms > 0 {
+                    std::thread::sleep(Duration::from_millis(*delay_ms));
+                }
+                let attempt = index + 1;
+                let outcome = advertiser.revoke_hosted_agent(request.clone());
+                if outcome.advertised() {
+                    crate::op_event!(
+                        component = agent_lifecycle,
+                        kind = hot_agent_revoke_publication_succeeded,
+                        agent_name = worker_agent_name.as_str(),
+                        agent_ura = worker_agent_ura.as_str(),
+                        attempt = attempt,
+                    );
+                    return;
+                }
+                last_error = outcome
+                    .error()
+                    .unwrap_or("unknown revoke publication failure")
+                    .to_string();
+                crate::op_event!(
+                    component = agent_lifecycle,
+                    kind = hot_agent_revoke_publication_failed,
+                    level = "warn",
+                    agent_name = worker_agent_name.as_str(),
+                    agent_ura = worker_agent_ura.as_str(),
+                    attempt = attempt,
+                    error = last_error.as_str(),
+                );
+            }
+            crate::op_event!(
+                component = agent_lifecycle,
+                kind = hot_agent_revoke_publication_exhausted,
+                level = "warn",
+                agent_name = worker_agent_name.as_str(),
+                agent_ura = worker_agent_ura.as_str(),
+                attempts = HOT_AGENT_ADVERTISE_RETRY_DELAYS_MS.len(),
+                error = last_error.as_str(),
+                message = "agent lifecycle completed locally; hub identity revoke remains pending reconciliation",
+            );
+        });
+
+    if let Err(error) = spawn_result {
+        let error = error.to_string();
+        crate::op_event!(
+            component = agent_lifecycle,
+            kind = hot_agent_revoke_publication_spawn_failed,
+            level = "warn",
+            agent_name = agent_name.as_str(),
+            agent_ura = agent_ura.as_str(),
+            error = error.as_str(),
+        );
+    }
 }
 
 fn normalize_v2_entry(entry: &mut AgentEntry) {
@@ -1669,24 +1870,99 @@ fn publication_recovery_status(
     }
 }
 
-fn drain_scheduled_purge_publications(
+#[cfg(not(test))]
+fn schedule_scheduled_purge_publications(
     hot_registrar: &SharedHotRegistrarCell,
 ) -> anyhow::Result<()> {
-    if let PurgeRecoveryStatus::PublicationPending(reason) =
-        publication_recovery_status(hot_registrar, PurgePublicationRetryTrigger::Scheduled)?
-    {
+    let pending = lifecycle_store::load_publication_outbox()?;
+    if pending.entries.is_empty() {
+        return Ok(());
+    }
+    let registrar = match require_hot_registrar(hot_registrar, "agent.purge.publish.schedule") {
+        Ok(registrar) => registrar,
+        Err(error) => {
+            let error = error.to_string();
+            crate::op_event!(
+                component = agent_lifecycle,
+                kind = purge_publication_schedule_deferred,
+                level = "warn",
+                error = error.as_str(),
+                outbox = lifecycle_store::publication_outbox_path()
+                    .display()
+                    .to_string()
+                    .as_str(),
+                message = "local lifecycle mutation completed; purge publication remains queued until a publisher is available",
+            );
+            return Ok(());
+        }
+    };
+    let spawn_result = std::thread::Builder::new()
+        .name("easynet-agent-purge-publication-drain".to_string())
+        .spawn(move || {
+            let worker_cell = SharedHotRegistrarCell::new();
+            if worker_cell.set(registrar).is_err() {
+                crate::op_event!(
+                    component = agent_lifecycle,
+                    kind = purge_publication_schedule_failed,
+                    level = "warn",
+                    message = "failed to bind scheduled purge publication worker registrar",
+                );
+                return;
+            }
+            match publication_recovery_status(&worker_cell, PurgePublicationRetryTrigger::Scheduled)
+            {
+                Ok(PurgeRecoveryStatus::Complete) => crate::op_event!(
+                    component = agent_lifecycle,
+                    kind = purge_publication_scheduled_drain_completed,
+                ),
+                Ok(PurgeRecoveryStatus::PublicationPending(reason)) => crate::op_event!(
+                    component = agent_lifecycle,
+                    kind = purge_publication_scheduled_drain_pending,
+                    level = "warn",
+                    error = reason.as_str(),
+                    outbox = lifecycle_store::publication_outbox_path()
+                        .display()
+                        .to_string()
+                        .as_str(),
+                    message = "local lifecycle mutation completed; purge publication remains queued for the next recovery trigger",
+                ),
+                Err(error) => {
+                    let error = error.to_string();
+                    crate::op_event!(
+                        component = agent_lifecycle,
+                        kind = purge_publication_scheduled_drain_failed,
+                        level = "warn",
+                        error = error.as_str(),
+                        outbox = lifecycle_store::publication_outbox_path()
+                            .display()
+                            .to_string()
+                            .as_str(),
+                        message = "local lifecycle mutation completed; purge publication remains queued for the next recovery trigger",
+                    );
+                }
+            }
+        });
+    if let Err(error) = spawn_result {
+        let error = error.to_string();
         crate::op_event!(
             component = agent_lifecycle,
-            kind = purge_publication_deferred,
+            kind = purge_publication_schedule_spawn_failed,
             level = "warn",
-            error = reason.as_str(),
+            error = error.as_str(),
             outbox = lifecycle_store::publication_outbox_path()
                 .display()
                 .to_string()
                 .as_str(),
-            message = "local lifecycle mutations remain available while publication retries",
+            message = "local lifecycle mutation completed; purge publication remains queued for the next recovery trigger",
         );
     }
+    Ok(())
+}
+
+#[cfg(test)]
+fn schedule_scheduled_purge_publications(
+    _hot_registrar: &SharedHotRegistrarCell,
+) -> anyhow::Result<()> {
     Ok(())
 }
 
@@ -2408,8 +2684,8 @@ fn purge_agent_handler(
         purge_agent_locked(args, hot_registrar)?
     };
     if committed.transaction_id.is_some() {
-        drain_purge_publication_outbox(hot_registrar, PurgePublicationRetryTrigger::Scheduled)?;
         decorate_purge_publication_response(&mut committed)?;
+        schedule_scheduled_purge_publications(hot_registrar)?;
     }
     Ok(committed.response)
 }
@@ -2607,7 +2883,7 @@ fn stop_agent_handler(
         recover_pending_purge_local_locked(hot_registrar)?;
         stop_agent_locked(args, hot_registrar, "agent.stop", None)?
     };
-    drain_scheduled_purge_publications(hot_registrar)?;
+    schedule_scheduled_purge_publications(hot_registrar)?;
     Ok(response)
 }
 
@@ -2783,30 +3059,19 @@ fn stop_agent_locked(
                             .as_deref()
                             .map(|journal| journal.transaction_id.clone())
                             .unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string());
-                        let outcome = advertiser.publish_owner_projection(
-                            crate::daemon::axon_bridge::hot_agent_registrar::HotAgentProjectionRequest {
-                            agent_ura: agent_ura.clone(),
-                            generation: publication.generation,
-                            transaction_id,
-                            delivery_fence: 1,
-                            abilities_payload: payload,
-                        });
-                        if let Some(err) = outcome.error() {
-                            publication_state = "reconciliation_required";
-                            publication_error = Some(err.to_string());
-                            crate::op_event!(
-                                component = agent_lifecycle,
-                                kind = hot_agent_stop_tombstone_soft_failed,
-                                agent_name = name.as_str(),
-                                agent_ura = agent_ura.as_str(),
-                                error = err,
-                                message = "agent stopped locally but hub ability \
-                                               tombstone advertise failed; hub reconciles \
-                                               on next heartbeat refresh",
-                            );
-                        } else if outcome.state() == HotAgentAdvertiseState::Succeeded {
-                            publication_state = "pending";
-                        }
+                        schedule_hot_agent_projection_publication(
+	                            Arc::clone(advertiser),
+	                            crate::daemon::axon_bridge::hot_agent_registrar::HotAgentProjectionRequest {
+	                                agent_ura: agent_ura.clone(),
+	                                generation: publication.generation,
+	                                transaction_id,
+	                                delivery_fence: 1,
+	                                abilities_payload: payload,
+	                            },
+	                            name.clone(),
+	                            agent_ura.clone(),
+	                        );
+                        publication_state = "pending";
                     }
                     (Ok(_), None) => {
                         publication_state = "pending";
@@ -2839,7 +3104,8 @@ fn stop_agent_locked(
         // catalogue after stop (with lease cancelled it would not age
         // out on its own). ISS-002.
         if let (Some(advertiser), Some(generation)) = (advertiser.as_ref(), revoke_generation) {
-            let outcome = advertiser.revoke_hosted_agent(
+            schedule_hot_agent_revoke_publication(
+                Arc::clone(advertiser),
                 crate::daemon::axon_bridge::hot_agent_registrar::HotAgentRevokeRequest {
                     agent_ura: agent_ura.clone(),
                     generation,
@@ -2852,24 +3118,11 @@ fn stop_agent_locked(
                         crate::daemon::persistence::federation_revoke::REVOKE_PROTOCOL_VERSION,
                     delivery_fence: 1,
                 },
+                name.clone(),
+                agent_ura.clone(),
             );
-            if let Some(err) = outcome.error() {
-                publication_state = "reconciliation_required";
-                publication_error = Some(err.to_string());
-                crate::op_event!(
-                    component = agent_lifecycle,
-                    kind = hot_agent_stop_revoke_soft_failed,
-                    agent_name = name.as_str(),
-                    agent_ura = agent_ura.as_str(),
-                    error = err,
-                    message = "agent stopped locally but hub identity revoke \
-                                   failed; the agent record may linger in the hub \
-                                   directory until operator revoke or hub restart",
-                );
-            } else if outcome.state() == HotAgentAdvertiseState::Succeeded
-                && publication_state != "reconciliation_required"
-            {
-                publication_state = "published";
+            if publication_state != "reconciliation_required" {
+                publication_state = "pending";
             }
         }
     }
@@ -2901,7 +3154,7 @@ fn refresh_agents_handler(
         recover_pending_purge_local_locked(hot_registrar)?;
         refresh_agents_locked(args, hot_registrar)?
     };
-    drain_scheduled_purge_publications(hot_registrar)?;
+    schedule_scheduled_purge_publications(hot_registrar)?;
     Ok(response)
 }
 
@@ -3443,6 +3696,73 @@ mod tests {
             self.revokes.lock().unwrap().push(request.agent_ura);
             crate::daemon::axon_bridge::hot_agent_registrar::HotAgentAdvertiseOutcome::succeeded()
         }
+    }
+
+    struct FailOnceHotAdvertiser {
+        attempts: std::sync::atomic::AtomicUsize,
+        succeeded: std::sync::Mutex<std::sync::mpsc::Sender<usize>>,
+    }
+
+    impl crate::daemon::axon_bridge::hot_agent_registrar::HotAgentAdvertiser for FailOnceHotAdvertiser {
+        fn advertise_hosted_agent(
+            &self,
+            _request: crate::daemon::axon_bridge::hot_agent_registrar::HotAgentAdvertiseRequest,
+        ) -> crate::daemon::axon_bridge::hot_agent_registrar::HotAgentAdvertiseOutcome {
+            let attempt = self
+                .attempts
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                + 1;
+            if attempt == 1 {
+                return crate::daemon::axon_bridge::hot_agent_registrar::HotAgentAdvertiseOutcome::failed(
+                    "injected first advertise timeout",
+                );
+            }
+            self.succeeded.lock().unwrap().send(attempt).unwrap();
+            crate::daemon::axon_bridge::hot_agent_registrar::HotAgentAdvertiseOutcome::succeeded()
+        }
+
+        fn publish_owner_projection(
+            &self,
+            _request: crate::daemon::axon_bridge::hot_agent_registrar::HotAgentProjectionRequest,
+        ) -> crate::daemon::axon_bridge::hot_agent_registrar::HotAgentAdvertiseOutcome {
+            crate::daemon::axon_bridge::hot_agent_registrar::HotAgentAdvertiseOutcome::succeeded()
+        }
+
+        fn revoke_hosted_agent(
+            &self,
+            _request: crate::daemon::axon_bridge::hot_agent_registrar::HotAgentRevokeRequest,
+        ) -> crate::daemon::axon_bridge::hot_agent_registrar::HotAgentAdvertiseOutcome {
+            crate::daemon::axon_bridge::hot_agent_registrar::HotAgentAdvertiseOutcome::succeeded()
+        }
+    }
+
+    #[test]
+    fn hot_agent_advertise_retry_replays_failed_publication() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let advertiser = Arc::new(FailOnceHotAdvertiser {
+            attempts: std::sync::atomic::AtomicUsize::new(0),
+            succeeded: std::sync::Mutex::new(tx),
+        });
+        let agent_ura = "easynet:///r/test/agent/alice.retry".to_string();
+
+        schedule_hot_agent_advertise_retry(
+            advertiser,
+            crate::daemon::axon_bridge::hot_agent_registrar::HotAgentAdvertiseRequest {
+                agent_ura: agent_ura.clone(),
+                generation: 1,
+                abilities_payload: Some(
+                    br#"{"owner_ura":"easynet:///r/test/agent/alice.retry"}"#.to_vec(),
+                ),
+            },
+            "retry".to_string(),
+            agent_ura,
+        );
+
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(1))
+                .expect("retry should reach success"),
+            2
+        );
     }
 
     #[derive(Default)]
@@ -4050,12 +4370,19 @@ mod tests {
         .unwrap();
 
         let expected_ura = crate::core::ura::agent_ura("localhost", "user-dev", "anthropic");
-        assert_eq!(resp["hub_advertised"], true);
+        assert_eq!(resp["hub_advertised"], false);
+        assert_eq!(resp["hub_advertise_state"], "scheduled");
         assert_eq!(resp["hub_advertise_error"], Value::Null);
+        for _ in 0..50 {
+            if !advertiser.requests.lock().unwrap().is_empty() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
         assert_eq!(
             advertiser.requests.lock().unwrap().as_slice(),
             [expected_ura.as_str()],
-            "hot-added agent must be advertised to the hub immediately"
+            "hot-added agent must be advertised by the session publication worker"
         );
     }
 

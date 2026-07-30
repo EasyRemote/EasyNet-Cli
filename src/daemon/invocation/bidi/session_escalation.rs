@@ -65,6 +65,18 @@ use crate::daemon::invocation::bidi::state::session_failure::SessionFailure;
 /// matches the canonical remote invocation deadline.
 pub const DEFAULT_ESCALATION_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Deadline for inserting one already-built escalation frame into the live
+/// `session.open` up-channel.
+///
+/// This protects the canonical session relay from a stale or backpressured
+/// up-channel. Without this guard, the single consumer task can block forever
+/// while holding the escalation queue, and unrelated product reads such as
+/// `meta.list_abilities` then hang behind a dead session writer.
+#[cfg(not(test))]
+pub const ESCALATION_UP_SEND_TIMEOUT: Duration = Duration::from_secs(5);
+#[cfg(test)]
+pub const ESCALATION_UP_SEND_TIMEOUT: Duration = Duration::from_millis(50);
+
 /// Capacity of the dispatch-side mpsc the dispatch handler pushes
 /// `EscalationRequest` items into. Sized matching
 /// `SESSION_UP_CHANNEL_CAPACITY` in `session_initiator` so the
@@ -201,15 +213,15 @@ impl EscalatedBidiHandle {
     }
 
     async fn send_input(&self, input: EscalatedBidiInput) -> Result<(), SessionRequestError> {
-        self.submit
-            .send(EscalationCommand::BidiInput(EscalationBidiInput {
+        submit_escalation_bidi_input(
+            &self.submit,
+            EscalationBidiInput {
                 call_id: self.call_id,
                 input,
-            }))
-            .await
-            .map_err(|_| SessionRequestError::UpstreamFailure {
-                reason: "session escalation consumer task is gone (daemon shutdown?)".to_string(),
-            })
+            },
+            DEFAULT_ESCALATION_TIMEOUT,
+        )
+        .await
     }
 }
 
@@ -241,15 +253,15 @@ impl EscalatedBidiInputSender {
     }
 
     async fn send_input(&self, input: EscalatedBidiInput) -> Result<(), SessionRequestError> {
-        self.submit
-            .send(EscalationCommand::BidiInput(EscalationBidiInput {
+        submit_escalation_bidi_input(
+            &self.submit,
+            EscalationBidiInput {
                 call_id: self.call_id,
                 input,
-            }))
-            .await
-            .map_err(|_| SessionRequestError::UpstreamFailure {
-                reason: "session escalation consumer task is gone (daemon shutdown?)".to_string(),
-            })
+            },
+            DEFAULT_ESCALATION_TIMEOUT,
+        )
+        .await
     }
 }
 
@@ -313,15 +325,10 @@ impl SessionEscalationHandle {
                 accepted: accepted_tx,
             },
         };
-        if self
-            .submit
-            .send(EscalationCommand::Request(request))
-            .await
-            .is_err()
+        if let Err(error) =
+            submit_escalation_request(&self.submit, request, DEFAULT_ESCALATION_TIMEOUT).await
         {
-            return Err(SessionRequestError::UpstreamFailure {
-                reason: "session escalation consumer task is gone (daemon shutdown?)".to_string(),
-            });
+            return Err(error);
         }
         match tokio::time::timeout(DEFAULT_ESCALATION_TIMEOUT, accepted_rx).await {
             Ok(Ok(Ok(()))) => Ok(EscalatedStreamHandle {
@@ -369,15 +376,10 @@ impl SessionEscalationHandle {
                 accepted: accepted_tx,
             },
         };
-        if self
-            .submit
-            .send(EscalationCommand::Request(request))
-            .await
-            .is_err()
+        if let Err(error) =
+            submit_escalation_request(&self.submit, request, DEFAULT_ESCALATION_TIMEOUT).await
         {
-            return Err(SessionRequestError::UpstreamFailure {
-                reason: "session escalation consumer task is gone (daemon shutdown?)".to_string(),
-            });
+            return Err(error);
         }
         match tokio::time::timeout(DEFAULT_ESCALATION_TIMEOUT, accepted_rx).await {
             Ok(Ok(Ok(()))) => Ok(EscalatedBidiHandle {
@@ -470,19 +472,12 @@ impl SessionEscalationHandle {
             reply: EscalationReplySink::Unary(reply_tx),
         };
 
-        if self
-            .submit
-            .send(EscalationCommand::Request(request))
-            .await
-            .is_err()
-        {
+        if let Err(error) = submit_escalation_request(&self.submit, request, timeout).await {
             // The consumer task dropped its receiver — most likely
             // the daemon is shutting down. Surface a typed
             // upstream-failure outcome so the dispatch handler
             // doesn't pretend the call succeeded.
-            return EscalationReply::Error(SessionRequestError::UpstreamFailure {
-                reason: "session escalation consumer task is gone (daemon shutdown?)".to_string(),
-            });
+            return EscalationReply::Error(error);
         }
 
         match tokio::time::timeout(timeout, reply_rx).await {
@@ -495,6 +490,34 @@ impl SessionEscalationHandle {
                 EscalationReply::Error(SessionRequestError::UpstreamTimeout)
             }
         }
+    }
+}
+
+async fn submit_escalation_request(
+    submit: &mpsc::Sender<EscalationCommand>,
+    request: EscalationRequest,
+    timeout: Duration,
+) -> Result<(), SessionRequestError> {
+    match tokio::time::timeout(timeout, submit.send(EscalationCommand::Request(request))).await {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(_)) => Err(SessionRequestError::UpstreamFailure {
+            reason: "session escalation consumer task is gone (daemon shutdown?)".to_string(),
+        }),
+        Err(_) => Err(SessionRequestError::UpstreamTimeout),
+    }
+}
+
+async fn submit_escalation_bidi_input(
+    submit: &mpsc::Sender<EscalationCommand>,
+    input: EscalationBidiInput,
+    timeout: Duration,
+) -> Result<(), SessionRequestError> {
+    match tokio::time::timeout(timeout, submit.send(EscalationCommand::BidiInput(input))).await {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(_)) => Err(SessionRequestError::UpstreamFailure {
+            reason: "session escalation consumer task is gone (daemon shutdown?)".to_string(),
+        }),
+        Err(_) => Err(SessionRequestError::UpstreamTimeout),
     }
 }
 
@@ -996,7 +1019,9 @@ pub fn spawn_escalation_consumer_with_outbox(
                     let Some(up_tx) = outbox.snapshot() else {
                         continue;
                     };
-                    let _ = send_escalation_bidi_input(&up_tx, input).await;
+                    if send_escalation_bidi_input(&up_tx, input).await.is_err() {
+                        outbox.clear();
+                    }
                     continue;
                 }
             };
@@ -1023,6 +1048,7 @@ pub fn spawn_escalation_consumer_with_outbox(
             register_reply(&correlation, call_id, reply);
 
             if let Err(err) = send_escalation_request(&up_tx, call_id, invocation).await {
+                outbox.clear();
                 let mut guard = match correlation.inner.lock() {
                     Ok(g) => g,
                     Err(poisoned) => poisoned.into_inner(),
@@ -1032,7 +1058,7 @@ pub fn spawn_escalation_consumer_with_outbox(
                         pending,
                         SessionRequestError::UpstreamFailure {
                             reason: format!(
-                                "session up-channel closed mid-push (mid-reconnect?): {err}"
+                                "session up-channel unavailable mid-push (mid-reconnect?): {err}"
                             ),
                         },
                     );
@@ -1112,6 +1138,25 @@ async fn send_escalation_request(
     call_id: [u8; 16],
     invocation: EscalationInvocation,
 ) -> Result<(), String> {
+    match tokio::time::timeout(
+        ESCALATION_UP_SEND_TIMEOUT,
+        send_escalation_request_inner(up_tx, call_id, invocation),
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(_) => Err(format!(
+            "session up-channel send timed out after {}ms",
+            ESCALATION_UP_SEND_TIMEOUT.as_millis()
+        )),
+    }
+}
+
+async fn send_escalation_request_inner(
+    up_tx: &SessionUpSender,
+    call_id: [u8; 16],
+    invocation: EscalationInvocation,
+) -> Result<(), String> {
     match invocation {
         EscalationInvocation::Canonical(request) => {
             use axon_sdk::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
@@ -1170,6 +1215,24 @@ async fn send_escalation_request(
 }
 
 async fn send_escalation_bidi_input(
+    up_tx: &SessionUpSender,
+    input: EscalationBidiInput,
+) -> Result<(), String> {
+    match tokio::time::timeout(
+        ESCALATION_UP_SEND_TIMEOUT,
+        send_escalation_bidi_input_inner(up_tx, input),
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(_) => Err(format!(
+            "session up-channel bidi input send timed out after {}ms",
+            ESCALATION_UP_SEND_TIMEOUT.as_millis()
+        )),
+    }
+}
+
+async fn send_escalation_bidi_input_inner(
     up_tx: &SessionUpSender,
     input: EscalationBidiInput,
 ) -> Result<(), String> {
@@ -1558,6 +1621,62 @@ mod tests {
             }
             other => panic!("expected UpstreamFailure, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn submit_escalation_request_times_out_when_queue_is_full() {
+        let (submit, _rx_held) = mpsc::channel::<EscalationCommand>(1);
+        submit
+            .send(EscalationCommand::BidiInput(EscalationBidiInput {
+                call_id: [0x11; 16],
+                input: EscalatedBidiInput::Control(axon_sdk::pb::axon::v1::BidiControl::default()),
+            }))
+            .await
+            .expect("prefill submit queue");
+
+        let (reply, _reply_rx) = oneshot::channel();
+        let result = submit_escalation_request(
+            &submit,
+            EscalationRequest {
+                call_id: [0x22; 16],
+                invocation: EscalationInvocation::DaemonControl {
+                    ability_ura: "easynet:///r/test/ability/authority.federation.resolve_key"
+                        .to_string(),
+                    args: b"{}".to_vec(),
+                },
+                reply: EscalationReplySink::Unary(reply),
+            },
+            Duration::from_millis(20),
+        )
+        .await;
+
+        assert!(matches!(result, Err(SessionRequestError::UpstreamTimeout)));
+    }
+
+    #[tokio::test]
+    async fn send_escalation_request_times_out_when_up_channel_is_full() {
+        let (up_tx, _up_rx_held) = mpsc::channel::<InvokeBidiUp>(1);
+        up_tx
+            .send(InvokeBidiUp::default())
+            .await
+            .expect("prefill session up-channel");
+        let sender = SessionUpSender::new(up_tx);
+
+        let result = send_escalation_request(
+            &sender,
+            [0x33; 16],
+            EscalationInvocation::DaemonControl {
+                ability_ura: "easynet:///r/test/ability/authority.federation.resolve_key"
+                    .to_string(),
+                args: b"{}".to_vec(),
+            },
+        )
+        .await;
+
+        assert!(
+            matches!(result, Err(ref reason) if reason.contains("timed out")),
+            "full up-channel must be bounded, got {result:?}",
+        );
     }
 
     #[tokio::test]

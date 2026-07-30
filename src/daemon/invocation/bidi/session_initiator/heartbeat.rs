@@ -140,14 +140,13 @@ async fn send_federation_heartbeat(
 }
 
 fn heartbeat_refresh_owner_uras_for_caller(caller_ura: &str) -> Result<Vec<String>, tonic::Status> {
-    let mut refresh_owner_uras =
-        crate::daemon::federation::read_model::owner_projection::heartbeat_refresh_owner_uras()
-            .map_err(|error| {
-                tonic::Status::failed_precondition(format!(
-                    "federation.heartbeat owner projection cursor unavailable: {error}"
-                ))
-            })?;
-    refresh_owner_uras.retain(|owner_ura| owner_ura.trim() == caller_ura);
+    let mut refresh_owner_uras = crate::daemon::federation::read_model::owner_projection::
+        heartbeat_refresh_owner_uras_for_host(caller_ura)
+        .map_err(|error| {
+            tonic::Status::failed_precondition(format!(
+                "federation.heartbeat owner projection cursor unavailable: {error}"
+            ))
+        })?;
     refresh_owner_uras.truncate(MAX_HEARTBEAT_LEASE_REFRESH_OWNERS);
     Ok(refresh_owner_uras)
 }
@@ -289,9 +288,10 @@ mod tests {
     }
 
     #[test]
-    fn heartbeat_refresh_owner_uras_filters_to_caller_owner() {
+    fn heartbeat_refresh_owner_uras_filters_to_caller_hosted_owners() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
         let caller_ura = "easynet:///r/realm/device/n1";
+        let hosted_agent_ura = "easynet:///r/realm/agent/alice.worker";
         owner_projections::replace(&OwnerProjectionCursorFile {
             schema_version: 2,
             projections: vec![
@@ -301,13 +301,18 @@ mod tests {
                     OwnerProjectionCursorLifecycle::Active,
                 ),
                 cursor(
+                    hosted_agent_ura,
+                    "easynet:///r/realm/device/n1",
+                    OwnerProjectionCursorLifecycle::Active,
+                ),
+                cursor(
                     "easynet:///r/realm/device/other",
                     "easynet:///r/realm/device/other",
                     OwnerProjectionCursorLifecycle::Active,
                 ),
                 cursor(
-                    "easynet:///r/realm/device/retired",
-                    "easynet:///r/realm/device/retired",
+                    "easynet:///r/realm/agent/alice.retired",
+                    "easynet:///r/realm/device/n1",
                     OwnerProjectionCursorLifecycle::Retired,
                 ),
             ],
@@ -317,7 +322,10 @@ mod tests {
         let refresh = heartbeat_refresh_owner_uras_for_caller(caller_ura)
             .expect("valid cursor store filters by caller");
 
-        assert_eq!(refresh, vec![caller_ura.to_string()]);
+        assert_eq!(
+            refresh,
+            vec![hosted_agent_ura.to_string(), caller_ura.to_string()]
+        );
     }
 
     fn cursor(

@@ -370,10 +370,15 @@ pub(crate) fn retire_removal_cursor(
     .map_err(|e| format!("retire owner projection tombstone cursor failed: {e}"))
 }
 
-pub(crate) fn heartbeat_refresh_owner_uras() -> Result<Vec<String>, String> {
+pub(crate) fn heartbeat_refresh_owner_uras_for_host(
+    host_device_ura: &str,
+) -> Result<Vec<String>, String> {
     let file = owner_projections::load()
         .map_err(|e| format!("load owner projection cursor failed: {e}"))?;
-    Ok(heartbeat_refresh_owner_uras_from_file(&file))
+    Ok(heartbeat_refresh_owner_uras_for_host_from_file(
+        &file,
+        host_device_ura,
+    ))
 }
 
 fn prepare_at(
@@ -469,11 +474,30 @@ fn prepare_at(
     })
 }
 
+#[cfg(test)]
 fn heartbeat_refresh_owner_uras_from_file(file: &OwnerProjectionCursorFile) -> Vec<String> {
     let owners = file
         .projections
         .iter()
         .filter(|cursor| cursor.lifecycle == OwnerProjectionCursorLifecycle::Active)
+        .map(|cursor| cursor.owner_ura.clone())
+        .collect::<BTreeSet<_>>();
+    owners
+        .into_iter()
+        .take(OWNER_PROJECTION_HEARTBEAT_REFRESH_LIMIT)
+        .collect()
+}
+
+fn heartbeat_refresh_owner_uras_for_host_from_file(
+    file: &OwnerProjectionCursorFile,
+    host_device_ura: &str,
+) -> Vec<String> {
+    let host_device_ura = host_device_ura.trim();
+    let owners = file
+        .projections
+        .iter()
+        .filter(|cursor| cursor.lifecycle == OwnerProjectionCursorLifecycle::Active)
+        .filter(|cursor| cursor.host_device_ura.trim() == host_device_ura)
         .map(|cursor| cursor.owner_ura.clone())
         .collect::<BTreeSet<_>>();
     owners
@@ -1886,6 +1910,31 @@ mod tests {
         assert_eq!(owners[0], "easynet:///r/acme/device/m");
         assert!(owners.iter().all(|owner| !owner.trim().is_empty()));
         assert!(owners.windows(2).all(|pair| pair[0] < pair[1]));
+    }
+
+    #[test]
+    fn heartbeat_refresh_owner_uras_for_host_includes_hosted_agent_owners() {
+        let mut file = OwnerProjectionCursorFile::default();
+        let host = "easynet:///r/acme/device/dev-a";
+        file.upsert(cursor(host, host, 1));
+        file.upsert(cursor("easynet:///r/acme/agent/alice.bot", host, 1));
+        file.upsert(cursor("easynet:///r/acme/agent/alice.retired", host, 2));
+        file.upsert(cursor(
+            "easynet:///r/acme/agent/bob.other",
+            "easynet:///r/acme/device/dev-b",
+            1,
+        ));
+        file.retire("easynet:///r/acme/agent/alice.retired");
+
+        let owners = heartbeat_refresh_owner_uras_for_host_from_file(&file, host);
+
+        assert_eq!(
+            owners,
+            vec![
+                "easynet:///r/acme/agent/alice.bot".to_string(),
+                host.to_string()
+            ]
+        );
     }
 
     #[test]
