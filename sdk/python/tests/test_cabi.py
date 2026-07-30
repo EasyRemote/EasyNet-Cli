@@ -54,12 +54,10 @@ class CABIEventProjectionTests(unittest.TestCase):
         self.assertEqual(
             json.loads(projected),
             {
-                "code": "REMOTE_FAILED",
                 "error": {
                     "code": "REMOTE_FAILED",
                     "message": "dispatch failed",
                 },
-                "message": "dispatch failed",
                 "sequence": 7,
             },
         )

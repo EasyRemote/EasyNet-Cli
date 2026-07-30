@@ -1219,6 +1219,7 @@ class _CABIStreamTransport:
             self.inbox.recv(timeout),
             self._allocate_sequence,
             use_observed_sequence=True,
+            include_state=True,
         )
 
     def cancel(self, reason: str) -> bytes:
@@ -1230,7 +1231,6 @@ class _CABIStreamTransport:
         return _json_bytes(
             {
                 "stream_id": str(self.stream_id),
-                "cancel_requested": True,
                 "cancelled": False,
                 "state": "CancelRequested",
                 "terminal": False,
@@ -1285,6 +1285,7 @@ class _CABIBidiTransport:
             self.inbox.recv(timeout),
             self._allocate_sequence,
             use_observed_sequence=False,
+            include_state=False,
         )
 
     def close_send(self) -> bytes:
@@ -1342,6 +1343,7 @@ def _project_cabi_ordered_event(
     allocate_sequence: Callable[[int | None], int],
     *,
     use_observed_sequence: bool,
+    include_state: bool = True,
 ) -> bytes:
     try:
         event = _json_object(raw, "C ABI callback frame")
@@ -1357,13 +1359,19 @@ def _project_cabi_ordered_event(
     )
     event["sequence"] = allocate_sequence(sequence)
     state = event.get("state")
-    if isinstance(state, int) and not isinstance(state, bool):
-        event["state"] = _axon_invocation_state_name(state)
+    if include_state:
+        if isinstance(state, int) and not isinstance(state, bool):
+            event["state"] = _axon_invocation_state_name(state)
+    else:
+        event.pop("state", None)
     if "error" not in event and ("code" in event or "message" in event):
         event["error"] = {
             "code": _string_or_empty(event.get("code")),
             "message": _string_or_empty(event.get("message")),
         }
+    event.pop("ok", None)
+    event.pop("code", None)
+    event.pop("message", None)
     return _json_bytes(event)
 
 

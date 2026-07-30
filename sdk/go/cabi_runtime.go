@@ -1069,7 +1069,7 @@ func (s *cabiStreamTransport) Recv(ctx context.Context) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return projectCABIOrderedEvent(raw, s.allocateSequence, true)
+	return projectCABIOrderedEvent(raw, s.allocateSequence, true, true)
 }
 
 func (s *cabiStreamTransport) Cancel(ctx context.Context, reason string) ([]byte, error) {
@@ -1081,7 +1081,7 @@ func (s *cabiStreamTransport) Cancel(ctx context.Context, reason string) ([]byte
 	if err := s.cancelWithHandle(handle); err != nil {
 		return nil, err
 	}
-	return []byte(fmt.Sprintf(`{"stream_id":%q,"cancel_requested":true,"cancelled":false,"state":"CancelRequested","terminal":false}`, strconv.FormatUint(s.streamID, 10))), nil
+	return []byte(fmt.Sprintf(`{"stream_id":%q,"cancelled":false,"state":"CancelRequested","terminal":false}`, strconv.FormatUint(s.streamID, 10))), nil
 }
 
 func (s *cabiStreamTransport) Close(ctx context.Context) error {
@@ -1228,7 +1228,7 @@ func (b *cabiBidiTransport) Recv(ctx context.Context) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return projectCABIOrderedEvent(raw, b.allocateSequence, false)
+	return projectCABIOrderedEvent(raw, b.allocateSequence, false, false)
 }
 
 func (b *cabiBidiTransport) CloseSend(ctx context.Context) ([]byte, error) {
@@ -1369,7 +1369,7 @@ func (b *cabiBidiTransport) allocateSequence(observed *uint64) uint64 {
 	return sequence
 }
 
-func projectCABIOrderedEvent(raw []byte, allocateSequence func(*uint64) uint64, useObservedSequence bool) ([]byte, error) {
+func projectCABIOrderedEvent(raw []byte, allocateSequence func(*uint64) uint64, useObservedSequence bool, includeState bool) ([]byte, error) {
 	var event map[string]any
 	if err := json.Unmarshal(raw, &event); err != nil {
 		return raw, nil
@@ -1381,8 +1381,12 @@ func projectCABIOrderedEvent(raw []byte, allocateSequence func(*uint64) uint64, 
 		}
 	}
 	event["sequence"] = allocateSequence(observed)
-	if state, ok := cabiJSONInteger(event["state"]); ok {
-		event["state"] = cabiInvocationStateName(state)
+	if includeState {
+		if state, ok := cabiJSONInteger(event["state"]); ok {
+			event["state"] = cabiInvocationStateName(state)
+		}
+	} else {
+		delete(event, "state")
 	}
 	if _, ok := event["error"]; !ok {
 		if _, hasCode := event["code"]; hasCode {
@@ -1391,6 +1395,9 @@ func projectCABIOrderedEvent(raw []byte, allocateSequence func(*uint64) uint64, 
 			event["error"] = cabiCallbackError(event)
 		}
 	}
+	delete(event, "ok")
+	delete(event, "code")
+	delete(event, "message")
 	projected, err := json.Marshal(event)
 	if err != nil {
 		return nil, invalidRuntimePayload(fmt.Sprintf("encode projected C ABI callback frame: %v", err), err)

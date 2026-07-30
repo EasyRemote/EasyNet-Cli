@@ -115,7 +115,7 @@ func TestProjectCABIOrderedEventKeepsCanonicalBidiReceipts(t *testing.T) {
 		}
 		next = *observed
 		return *observed
-	}, true)
+	}, true, false)
 	if err != nil {
 		t.Fatalf("projectCABIOrderedEvent: %v", err)
 	}
@@ -185,7 +185,7 @@ func TestProjectCABIOrderedEventKeepsCanonicalDataFrame(t *testing.T) {
 		}
 		next = *observed
 		return *observed
-	}, true)
+	}, true, false)
 	if err != nil {
 		t.Fatalf("projectCABIOrderedEvent: %v", err)
 	}
@@ -212,6 +212,7 @@ func TestProjectCABIOrderedEventDoesNotSynthesizeKindFromLegacyEvent(t *testing.
 	projected, err := projectCABIOrderedEvent(
 		[]byte(`{"event":"receipt","terminal":false}`),
 		func(*uint64) uint64 { return 1 },
+		false,
 		false,
 	)
 	if err != nil {
