@@ -393,7 +393,7 @@ if [[ "${1:-}" == "--self-test" ]]; then
   rm -f "$injected"
   injected="$tmp/sdk/python/easynet_sdk/_cabi.py"
   mkdir -p "$(dirname "$injected")"
-  printf 'class CLILibrary:\n    """Typed binding for the generic EasyNet-Cli C ABI v6 surface."""\n' >"$injected"
+  printf 'class CLILibrary:\n    """Typed binding for the generic EasyNet-Cli C ABI v7 surface."""\n' >"$injected"
   if ! python_cabi_product_adapter_name_violations "$injected" >/dev/null; then
     fail "self-test failed to detect product C ABI adapter naming in Python SDK"
   fi

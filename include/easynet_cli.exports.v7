@@ -2,6 +2,7 @@ runtime_abi_version
 runtime_diagnostics
 runtime_error_json
 runtime_feature_discovery
+runtime_governance_read
 runtime_health
 runtime_host_attach
 runtime_host_detach

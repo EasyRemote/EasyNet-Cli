@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# Exact contract gate for the generic libeasynet_cli C ABI v6 surface.
+# Exact contract gate for the generic libeasynet_cli C ABI v7 surface.
 
 set -euo pipefail
 
-ROOT="${CHECK_FFI_ABI_V6_HEADER_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+ROOT="${CHECK_FFI_ABI_V7_HEADER_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 cd "$ROOT"
 
 HEADER="include/easynet_cli.h"
-ALLOWLIST="include/easynet_cli.exports.v6"
-SPEC="docs/spec/ffi-abi-v6.md"
-EXPECTED_COUNT=55
+ALLOWLIST="include/easynet_cli.exports.v7"
+SPEC="docs/spec/ffi-abi-v7.md"
+EXPECTED_COUNT=56
 violations=0
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
@@ -111,7 +111,7 @@ compare_exact() {
     local label="$1"
     local actual="$2"
     if ! diff -u "$ALLOWLIST" "$actual" >"$tmp/$label.diff"; then
-        record_violation "$label differs from exact v6 allowlist" "$(cat "$tmp/$label.diff")"
+        record_violation "$label differs from exact v7 allowlist" "$(cat "$tmp/$label.diff")"
     fi
 }
 
@@ -147,27 +147,27 @@ product_prefixed_exported_symbols() {
 
 if require_file "$ALLOWLIST"; then
     if ! LC_ALL=C sort -c "$ALLOWLIST" 2>/dev/null; then
-        record_violation "v6 allowlist must be sorted" "$ALLOWLIST"
+        record_violation "v7 allowlist must be sorted" "$ALLOWLIST"
     fi
     allowlist_count="$(wc -l <"$ALLOWLIST" | tr -d ' ')"
     unique_count="$(sort -u "$ALLOWLIST" | wc -l | tr -d ' ')"
     if [[ "$allowlist_count" != "$EXPECTED_COUNT" || "$unique_count" != "$EXPECTED_COUNT" ]]; then
-        record_violation "v6 allowlist must contain exactly $EXPECTED_COUNT unique symbols" \
+        record_violation "v7 allowlist must contain exactly $EXPECTED_COUNT unique symbols" \
             "lines=$allowlist_count unique=$unique_count"
     fi
     if grep -Ev '^runtime_[a-z0-9_]+$' "$ALLOWLIST" >"$tmp/invalid-allowlist"; then
-        record_violation "v6 allowlist contains invalid symbol names" "$(cat "$tmp/invalid-allowlist")"
+        record_violation "v7 allowlist contains invalid symbol names" "$(cat "$tmp/invalid-allowlist")"
     fi
     if grep -E '^easynet_' "$ALLOWLIST" >"$tmp/product-allowlist"; then
-        record_violation "v6 allowlist must not contain product-prefixed symbols" "$(cat "$tmp/product-allowlist")"
+        record_violation "v7 allowlist must not contain product-prefixed symbols" "$(cat "$tmp/product-allowlist")"
     fi
 fi
 
 if require_file "$HEADER"; then
-    require_literal "$HEADER" "#define RUNTIME_ABI_VERSION 6u"
+    require_literal "$HEADER" "#define RUNTIME_ABI_VERSION 7u"
     if command -v cc >/dev/null 2>&1; then
         if ! printf '#include "include/easynet_cli.h"\n' | cc -I. -x c -fsyntax-only - >/dev/null 2>&1; then
-            record_violation "C compiler rejects v6 header" "$HEADER"
+            record_violation "C compiler rejects v7 header" "$HEADER"
         fi
     else
         record_violation "C compiler unavailable" "cc is required"
@@ -176,17 +176,17 @@ if require_file "$HEADER"; then
     compare_exact "header declarations" "$tmp/header.symbols"
     extract_product_prefixed_header_symbols "$HEADER" | LC_ALL=C sort >"$tmp/header.product-symbols"
     if [[ -s "$tmp/header.product-symbols" ]]; then
-        record_violation "v6 header must not declare product-prefixed C ABI symbols" "$(cat "$tmp/header.product-symbols")"
+        record_violation "v7 header must not declare product-prefixed C ABI symbols" "$(cat "$tmp/header.product-symbols")"
     fi
 fi
 
 if require_file "src/ffi/mod.rs"; then
-    require_literal "src/ffi/mod.rs" "pub const RUNTIME_ABI_VERSION: u32 = 6;"
+    require_literal "src/ffi/mod.rs" "pub const RUNTIME_ABI_VERSION: u32 = 7;"
     extract_source_symbols | LC_ALL=C sort >"$tmp/source.symbols"
     compare_exact "Rust exported source symbols" "$tmp/source.symbols"
     extract_product_prefixed_source_symbols | LC_ALL=C sort >"$tmp/source.product-symbols"
     if [[ -s "$tmp/source.product-symbols" ]]; then
-        record_violation "v6 Rust exports must not include product-prefixed C ABI symbols" "$(cat "$tmp/source.product-symbols")"
+        record_violation "v7 Rust exports must not include product-prefixed C ABI symbols" "$(cat "$tmp/source.product-symbols")"
     fi
 fi
 
@@ -215,9 +215,9 @@ done
 
 if require_file "$SPEC"; then
     require_literal "$SPEC" "include/easynet_cli.h"
-    require_literal "$SPEC" "include/easynet_cli.exports.v6"
-    require_literal "$SPEC" 'exactly `55`'
-    require_literal "$SPEC" 'ABI version: `6`'
+    require_literal "$SPEC" "include/easynet_cli.exports.v7"
+    require_literal "$SPEC" 'exactly `56`'
+    require_literal "$SPEC" 'ABI version: `7`'
 fi
 
 lib="${EASYNET_FFI_DYLIB:-}"
@@ -244,8 +244,8 @@ elif [[ "${EASYNET_FFI_REQUIRE_DYLIB:-0}" == "1" ]]; then
 fi
 
 if [[ "$violations" -ne 0 ]]; then
-    echo "FAILED: $violations v6 ABI contract violation(s)." >&2
+    echo "FAILED: $violations v7 ABI contract violation(s)." >&2
     exit 1
 fi
 
-echo "ok (generic C ABI v6: exactly $EXPECTED_COUNT symbols)"
+echo "ok (generic C ABI v7: exactly $EXPECTED_COUNT symbols)"

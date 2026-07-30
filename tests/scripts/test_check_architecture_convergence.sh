@@ -2801,8 +2801,8 @@ class RuntimeClient:
 class _MissionFixture:
     pass
 EOF
-  cat >"$CLI/docs/spec/ffi-abi-v6.md" <<'EOF'
-# EasyNet Generic C ABI v6
+  cat >"$CLI/docs/spec/ffi-abi-v7.md" <<'EOF'
+# EasyNet Generic C ABI v7
 
 ## Ownership state machines
 
@@ -5114,8 +5114,8 @@ expect_fail \
   "R19_VOICE_PROVIDER_BOUNDARY_FORK"
 
 make_good_fixture
-cat >"$CLI/docs/spec/ffi-abi-v6.md" <<'EOF'
-# EasyNet Generic C ABI v6
+cat >"$CLI/docs/spec/ffi-abi-v7.md" <<'EOF'
+# EasyNet Generic C ABI v7
 
 ## Ownership state machines
 

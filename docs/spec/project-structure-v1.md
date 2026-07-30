@@ -37,7 +37,7 @@ EasyNet-Cli/
 ├─ build.rs
 ├─ include/
 │  ├─ easynet_cli.h
-│  └─ easynet_cli.exports.v6
+│  └─ easynet_cli.exports.v7
 ├─ src/
 │  ├─ lib.rs
 │  ├─ bin/
@@ -125,6 +125,7 @@ EasyNet-Cli/
 │  ├─ node/
 │  ├─ java/
 │  ├─ swift/
+│  ├─ rust/
 │  ├─ schemas/
 │  └─ conformance/
 │     ├─ cases/
@@ -182,8 +183,9 @@ EasyNet-Cli/
 3. `src/runtime/` is not a final source namespace.
 4. `src/services/` is not a final source namespace.
 5. `src/facade/` is not a final source namespace.
-6. `sdk/rust/` is not part of this final tree. Rust-facing daemon APIs remain
-   in the main Rust package unless a later SDK spec adds a separate Rust SDK.
+6. `sdk/rust/` is limited to provider/runtime SDK packages. Rust-facing daemon
+   APIs remain in the main Rust package; `sdk/rust/` must not own product
+   daemon lifecycle, route policy, or receipt authority.
 7. Ability dispatch remains flat: `ability_name -> handler`. Product grouping
    is source organization, not a registry tree.
 8. Ability wire names remain byte-identical unless a dedicated semantic-change
@@ -334,7 +336,7 @@ Rust/C ABI projection over daemon control and generic Invocation submission:
 - `strings/`: allocation and string ownership ABI.
 
 The stable model is the exact generic daemon/Invocation boundary in
-`include/easynet_cli.exports.v6`. Identity, Directory, Receipt, Publication,
+`include/easynet_cli.exports.v7`. Identity, Directory, Receipt, Publication,
 Host Binding, Mission, Events, Admin/Gateway, Surface, Compatibility, Wrappers,
 and companion control remain language-SDK provider responsibilities and must
 not grow corresponding FFI directories or exports.
@@ -566,8 +568,10 @@ Final structure:
 3. `include/easynet_cli.h` exists.
 4. `tools/` exists and owns maintainer/audit/generator tooling.
 5. `packaging/docker/` and `packaging/release/` exist.
-6. `sdk/go/`, `sdk/python/`, `sdk/node/`, `sdk/java/`, and `sdk/swift/` exist.
-7. No `sdk/rust/` exists unless a later SDK spec supersedes this spec.
+6. `sdk/go/`, `sdk/python/`, `sdk/node/`, `sdk/java/`, `sdk/swift/`, and
+   `sdk/rust/` exist.
+7. `sdk/rust/` contains only provider/runtime SDK packages; it does not own
+   EasyNet product daemon behavior.
 8. No top-level `engineering/`, `scripts/`, `demos/`, or `crates/` exists.
 9. No `src/runtime/`, `src/services/`, or `src/facade/` exists.
 10. `.github/workflows/` remains at repository root.

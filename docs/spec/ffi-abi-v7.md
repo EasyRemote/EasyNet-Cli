@@ -1,8 +1,8 @@
-# EasyNet Generic C ABI v6
+# EasyNet Generic C ABI v7
 
 Status: current release contract.
 
-The v6 ABI is a capability-neutral runtime boundary. It exposes daemon
+The v7 ABI is a capability-neutral runtime boundary. It exposes daemon
 lifecycle, complete generic Invocation lifecycle, stream/bidi control, and
 stable runtime/error JSON DTOs. Authority, Identity, Directory, Receipt,
 Publication, Host Binding, Mission, Events, Admin/Gateway, Surface,
@@ -12,9 +12,9 @@ must not be exported from `libeasynet_cli`.
 ## Canonical surface
 
 - Header: `include/easynet_cli.h`
-- Exact export allowlist: `include/easynet_cli.exports.v6`
-- ABI version: `6`
-- Export count: exactly `55`
+- Exact export allowlist: `include/easynet_cli.exports.v7`
+- ABI version: `7`
+- Export count: exactly `56`
 
 Release and CI checks compare both header declarations and normalized dynamic
 library exports against the allowlist. Missing and unexpected symbols are ABI
@@ -51,7 +51,7 @@ duration.
 
 All fallible operations return an integer error code. Bindings use
 `runtime_last_error_json` or `runtime_error_json`; the legacy borrowed
-`runtime_last_error` pointer is not part of v6.
+`runtime_last_error` pointer is not part of v7.
 
 `runtime_feature_discovery` advertises only the `runtime_core` C profile and
 generic runtime symbols. Language SDK capability state is maintained separately

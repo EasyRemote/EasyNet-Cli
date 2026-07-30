@@ -28,14 +28,16 @@ The current SDK stage contains:
 - `sdk/conformance/cases/`
 - `sdk/conformance/fixtures/`
 - `sdk/conformance/runner/`
-- `sdk/go/`, `sdk/python/`, `sdk/node/`, `sdk/java/`, `sdk/swift/`
+- `sdk/go/`, `sdk/python/`, `sdk/node/`, `sdk/java/`, `sdk/swift/`, `sdk/rust/`
 
-`sdk/rust/` and `sdk/c/` remain migration targets, not active roots. Native
-Rust product behavior and product-specific projections live with their semantic
-owners under `src/daemon/`; generic C ABI projection lives under `src/ffi/`.
+`sdk/rust/` is limited to provider/runtime SDK packages and must not own
+EasyNet product behavior or daemon lifecycle. `sdk/c/` remains a migration
+target, not an active root. Native Rust product behavior and product-specific
+projections live with their semantic owners under `src/daemon/`; generic C ABI
+projection lives under `src/ffi/`.
 The C binding contract lives in `include/easynet_cli.h` and
-`docs/spec/ffi-abi-v6.md` and the exact export allowlist
-`include/easynet_cli.exports.v6`.
+`docs/spec/ffi-abi-v7.md` and the exact export allowlist
+`include/easynet_cli.exports.v7`.
 
 ## Structural Rules
 

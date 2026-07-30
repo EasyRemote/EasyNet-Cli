@@ -3,7 +3,7 @@
 # ==================================================================
 #
 # Boots `easynet-daemon`, then loads `libeasynet_cli` via Python
-# ctypes and exercises the generic ABI v6 surface: init/shutdown, daemon
+# ctypes and exercises the generic ABI v7 surface: init/shutdown, daemon
 # lifecycle preflight, and complete Invocation unary/stream/bidi
 # argument validation.
 #
