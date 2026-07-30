@@ -73,7 +73,7 @@ use crate::ffi::strings::{alloc_output_cstring, read_cstr};
 /// health, and prepare/sign/submit handles.
 /// v5 = 5. Generic-only C surface: daemon lifecycle, Runtime/Invocation,
 /// stream/bidi, and stable runtime/error DTOs. Domain profile exports removed.
-pub const RUNTIME_ABI_VERSION: u32 = 6;
+pub const RUNTIME_ABI_VERSION: u32 = 7;
 
 /// Report the ABI version of this library build. Client bindings
 /// call this first thing at dlopen time and refuse to proceed when

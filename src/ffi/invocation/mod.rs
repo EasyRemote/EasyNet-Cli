@@ -257,6 +257,79 @@ pub unsafe extern "C" fn runtime_invocation_invoke(
     }
 }
 
+/// Submit a runtime governance-read tuple through the canonical read ingress.
+///
+/// This ABI is intentionally separate from `runtime_invocation_invoke`.
+/// Receipt-history and catalogue reads are runtime governance observations, not
+/// product/public actions. The input shape is the same complete Invocation JSON
+/// draft, but the parser only admits governance-read descriptors with a
+/// runtime governance read subject.
+///
+/// # Safety
+/// - `handle` must be a valid handle from `runtime_init`.
+/// - `invocation_json` must be a valid UTF-8 C string.
+/// - `out_result_json` must be a non-null pointer to a `*mut c_char`.
+#[no_mangle]
+pub unsafe extern "C" fn runtime_governance_read(
+    handle: RuntimeHandle,
+    invocation_json: *const c_char,
+    out_result_json: *mut *mut c_char,
+) -> i32 {
+    if out_result_json.is_null() {
+        return record_invocation_error(
+            ERR_NULL_POINTER,
+            "runtime_governance_read: out_result_json pointer is null",
+        );
+    }
+    unsafe { *out_result_json = std::ptr::null_mut() };
+
+    let session = match get(handle) {
+        Some(session) => session,
+        None => {
+            return record_invocation_error(
+                ERR_INVALID_HANDLE,
+                format!("runtime_governance_read: handle {handle} is not registered"),
+            );
+        }
+    };
+
+    let raw = match read_cstr(invocation_json) {
+        Ok(value) => value,
+        Err(StringError::Null) => {
+            return record_invocation_error(
+                ERR_NULL_POINTER,
+                "runtime_governance_read: invocation_json pointer is null",
+            );
+        }
+        Err(StringError::NotUtf8) => {
+            return record_invocation_error(
+                ERR_INVALID_UTF8,
+                "runtime_governance_read: invocation_json is not valid UTF-8",
+            );
+        }
+    };
+
+    #[cfg(not(feature = "axon-pb"))]
+    {
+        let _ = (session, raw);
+        record_invocation_error(
+            ERR_NOT_IMPLEMENTED,
+            "runtime_governance_read: axon-pb feature is not enabled in this build",
+        )
+    }
+
+    #[cfg(feature = "axon-pb")]
+    {
+        invoke_with_axon_pb_policy(
+            "runtime_governance_read",
+            InvocationTuplePolicy::GovernanceRead,
+            session,
+            raw,
+            out_result_json,
+        )
+    }
+}
+
 /// Return typed runtime readiness for an Invocation-capable client
 /// handle.
 ///
@@ -2303,38 +2376,46 @@ fn invoke_with_axon_pb(
     raw: &str,
     out_receipt_json: *mut *mut c_char,
 ) -> i32 {
-    let spec = match InvocationJson::parse(raw) {
+    invoke_with_axon_pb_policy(
+        "runtime_invocation_invoke",
+        InvocationTuplePolicy::Public,
+        session,
+        raw,
+        out_receipt_json,
+    )
+}
+
+#[cfg(feature = "axon-pb")]
+fn invoke_with_axon_pb_policy(
+    context: &'static str,
+    policy: InvocationTuplePolicy,
+    session: std::sync::Arc<crate::ffi::client::handle::ClientSession>,
+    raw: &str,
+    out_receipt_json: *mut *mut c_char,
+) -> i32 {
+    let spec = match InvocationJson::parse_with_policy(raw, policy) {
         Ok(spec) => spec,
         Err(err) => {
-            return record_invocation_error(
-                ERR_INVALID_ARG,
-                format!("runtime_invocation_invoke: {err}"),
-            );
+            return record_invocation_error(ERR_INVALID_ARG, format!("{context}: {err}"));
         }
     };
 
     let invocation = match spec.into_daemon_invocation() {
         Ok(invocation) => invocation,
         Err(err) => {
-            return record_invocation_error(
-                ERR_INVALID_ARG,
-                format!("runtime_invocation_invoke: {err}"),
-            );
+            return record_invocation_error(ERR_INVALID_ARG, format!("{context}: {err}"));
         }
     };
     let rt = match lib_runtime() {
         Ok(rt) => rt,
         Err(err) => {
-            return record_invocation_error(
-                ERR_GENERIC,
-                format!("runtime_invocation_invoke: {err}"),
-            );
+            return record_invocation_error(ERR_GENERIC, format!("{context}: {err}"));
         }
     };
 
     let invocation_endpoint = match invocation_endpoint_for_session(session.as_ref()) {
         Ok(endpoint) => endpoint,
-        Err(err) => return ffi_daemon_error("runtime_invocation_invoke", err),
+        Err(err) => return ffi_daemon_error(context, err),
     };
     let (response, tuple, tuple_json) = match rt.block_on(async {
         let signed = SessionInvocationAuthority::new(session.as_ref())
@@ -2347,7 +2428,7 @@ fn invoke_with_axon_pb(
         Ok::<_, crate::daemon::DaemonError>((response, tuple, tuple_json))
     }) {
         Ok(bound) => bound,
-        Err(err) => return ffi_daemon_error("runtime_invocation_invoke", err),
+        Err(err) => return ffi_daemon_error(context, err),
     };
     let receipt_resolver =
         crate::support::platform::local_daemon_grpc::CanonicalRuntimeReceiptResolver::for_daemon_endpoint(
@@ -2360,15 +2441,12 @@ fn invoke_with_axon_pb(
         &receipt_resolver,
     ) {
         Ok(outcome) => outcome,
-        Err(error) => return ffi_daemon_error("runtime_invocation_invoke", error),
+        Err(error) => return ffi_daemon_error(context, error),
     };
     let output = match invocation_outcome_json_with_tuple(outcome, tuple_json) {
         Ok(output) => output,
         Err(message) => {
-            return record_invocation_error(
-                ERR_PROTOCOL,
-                format!("runtime_invocation_invoke: {message}"),
-            );
+            return record_invocation_error(ERR_PROTOCOL, format!("{context}: {message}"));
         }
     };
     let json = match serde_json::to_string(&output) {
@@ -2376,7 +2454,7 @@ fn invoke_with_axon_pb(
         Err(err) => {
             return record_invocation_error(
                 ERR_GENERIC,
-                format!("runtime_invocation_invoke: encode response JSON failed: {err}"),
+                format!("{context}: encode response JSON failed: {err}"),
             );
         }
     };
@@ -2384,7 +2462,7 @@ fn invoke_with_axon_pb(
     if ptr.is_null() {
         return record_invocation_error(
             ERR_GENERIC,
-            "runtime_invocation_invoke: out-of-memory allocating response string",
+            format!("{context}: out-of-memory allocating response string"),
         );
     }
     unsafe { *out_receipt_json = ptr };
@@ -4988,8 +5066,22 @@ struct InvocationJson {
 }
 
 #[cfg(feature = "axon-pb")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InvocationTuplePolicy {
+    Public,
+    GovernanceRead,
+}
+
+#[cfg(feature = "axon-pb")]
 impl InvocationJson {
     fn parse(raw: &str) -> Result<Self, InvocationJsonError> {
+        Self::parse_with_policy(raw, InvocationTuplePolicy::Public)
+    }
+
+    fn parse_with_policy(
+        raw: &str,
+        policy: InvocationTuplePolicy,
+    ) -> Result<Self, InvocationJsonError> {
         let value: serde_json::Value = serde_json::from_str(raw)?;
         let obj = value
             .as_object()
@@ -5006,13 +5098,22 @@ impl InvocationJson {
         )?;
         let (args, content_type) = parse_arguments(obj)?;
         let metadata = parse_metadata(obj)?;
-        validate_public_invocation_tuple(
-            &caller_ura,
-            &callee_ura,
-            &descriptor_ref,
-            &subject_ura,
-            &metadata,
-        )?;
+        match policy {
+            InvocationTuplePolicy::Public => validate_public_invocation_tuple(
+                &caller_ura,
+                &callee_ura,
+                &descriptor_ref,
+                &subject_ura,
+                &metadata,
+            )?,
+            InvocationTuplePolicy::GovernanceRead => validate_governance_read_tuple(
+                &caller_ura,
+                &callee_ura,
+                &descriptor_ref,
+                &subject_ura,
+                &metadata,
+            )?,
+        }
         let caller_signature = parse_caller_signature(obj)?;
         let bidi_streams = parse_bidi_streams(obj)?;
         let timeout_seconds = parse_timeout_seconds(obj)?;
@@ -5096,6 +5197,10 @@ enum InvocationJsonError {
         "receipt history ability `{0}` is not a public invocation action; use the canonical invocation history read path"
     )]
     ReceiptHistoryReadDescriptor(String),
+    #[error("descriptor `{0}` is not a runtime governance read ability")]
+    NonGovernanceReadDescriptor(String),
+    #[error("governance read subject_ura is invalid: {0}")]
+    InvalidGovernanceReadSubject(String),
     #[error("field `{0}` must not contain the all-zero principal placeholder")]
     AllZeroPrincipal(&'static str),
     #[error("field `{0}` uses a noncanonical session subject")]
@@ -5768,6 +5873,32 @@ fn validate_public_invocation_tuple(
     validate_public_tuple_ura("callee_ura", callee_ura)?;
     validate_public_tuple_ura("subject_ura", subject_ura)?;
     validate_public_invocation_descriptor_ref(descriptor_ref)?;
+    validate_public_authority_binding(caller_ura, callee_ura, subject_ura, metadata)
+}
+
+#[cfg(feature = "axon-pb")]
+fn validate_governance_read_tuple(
+    caller_ura: &str,
+    callee_ura: &str,
+    descriptor_ref: &str,
+    subject_ura: &str,
+    metadata: &std::collections::HashMap<String, String>,
+) -> Result<(), InvocationJsonError> {
+    validate_public_tuple_ura("caller_ura", caller_ura)?;
+    validate_public_tuple_ura("callee_ura", callee_ura)?;
+    validate_public_tuple_ura("subject_ura", subject_ura)?;
+    let public_ability =
+        crate::daemon::ability::public_route_ability_from_descriptor_ref(descriptor_ref)
+            .map_err(|error| InvocationJsonError::InvalidDescriptorRef(error.to_string()))?;
+    if !crate::daemon::ability::names::governance::is_invocation_history_read(&public_ability)
+        && !crate::daemon::ability::names::governance::is_runtime_catalogue_read(&public_ability)
+    {
+        return Err(InvocationJsonError::NonGovernanceReadDescriptor(
+            public_ability,
+        ));
+    }
+    crate::core::identity::RuntimeGovernanceReadSubject::parse_for_callee(subject_ura, callee_ura)
+        .map_err(|error| InvocationJsonError::InvalidGovernanceReadSubject(error.to_string()))?;
     validate_public_authority_binding(caller_ura, callee_ura, subject_ura, metadata)
 }
 
@@ -7032,15 +7163,7 @@ mod tests {
     #[test]
     fn parse_invocation_json_rejects_receipt_history_descriptor_before_daemon_io() {
         let callee_ura = "easynet:///r/acme/device/dev-a";
-        let history_descriptor_ref = format!(
-            "{}@1.0.0#{}!read",
-            crate::core::ura::owner_ability_ura(
-                callee_ura,
-                crate::daemon::ability::names::governance::INVOCATION_HISTORY_LIST
-            )
-            .expect("history ability URA"),
-            "aa".repeat(32)
-        );
+        let history_descriptor_ref = history_descriptor_ref(callee_ura);
 
         let err = InvocationJson::parse(&canonical_invocation_json(serde_json::json!({
             "descriptor_ref": history_descriptor_ref,
@@ -7056,6 +7179,40 @@ mod tests {
             err.to_string()
                 .contains("canonical invocation history read path"),
             "error should direct callers to the canonical read path: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_governance_read_accepts_receipt_history_descriptor() {
+        let callee_ura = "easynet:///r/acme/device/dev-a";
+        let history_descriptor_ref = history_descriptor_ref(callee_ura);
+
+        let parsed = InvocationJson::parse_with_policy(
+            &canonical_invocation_json(serde_json::json!({
+                "descriptor_ref": history_descriptor_ref,
+                "subject_ura": "easynet:///r/acme/resource/user.alice/runtime-state/read"
+            })),
+            InvocationTuplePolicy::GovernanceRead,
+        )
+        .expect("canonical governance read ingress should accept receipt history");
+
+        assert_eq!(
+            parsed.subject_ura,
+            "easynet:///r/acme/resource/user.alice/runtime-state/read"
+        );
+    }
+
+    #[test]
+    fn parse_governance_read_rejects_public_action_descriptor() {
+        let err = InvocationJson::parse_with_policy(
+            &canonical_invocation_json(serde_json::json!({})),
+            InvocationTuplePolicy::GovernanceRead,
+        )
+        .expect_err("governance read ingress must reject product actions");
+
+        assert!(
+            matches!(&err, InvocationJsonError::NonGovernanceReadDescriptor(name) if name == "observe.health"),
+            "unexpected non-governance descriptor rejection: {err}"
         );
     }
 
@@ -7108,6 +7265,18 @@ mod tests {
                 .contains("does not admit invocation subject"),
             "error should name subject-admission mismatch: {err}"
         );
+    }
+
+    fn history_descriptor_ref(callee_ura: &str) -> String {
+        format!(
+            "{}@1.0.0#{}!read",
+            crate::core::ura::owner_ability_ura(
+                callee_ura,
+                crate::daemon::ability::names::governance::INVOCATION_HISTORY_LIST
+            )
+            .expect("history ability URA"),
+            "aa".repeat(32)
+        )
     }
 
     /// Canonical URA invocation JSON for tests that go past parse into

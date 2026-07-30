@@ -17,7 +17,7 @@ import (
 	"unsafe"
 )
 
-const expectedCABIABIVersion uint32 = 6
+const expectedCABIABIVersion uint32 = 7
 
 func openCABIDynamicLibrary(path string) (unsafe.Pointer, string, error) {
 	candidates := cabiLibraryCandidates(path)

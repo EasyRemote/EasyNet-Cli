@@ -126,6 +126,7 @@ fn run_list(args: ListArgs) -> anyhow::Result<()> {
         )
     } else {
         let response = fetch_history_list(&args)?;
+        let _next_cursor = response.next_cursor;
         (
             ledger_source_label(&response.ledger_ura, response.ledger_path.as_deref()),
             response.records,
@@ -348,6 +349,7 @@ fn print_trace_edges(edges: &[TraceEdge]) {
 struct HistoryListResponse {
     ledger_ura: String,
     ledger_path: Option<String>,
+    next_cursor: Option<String>,
     #[serde(default)]
     records: Vec<InvocationRecord>,
 }
@@ -883,6 +885,18 @@ mod tests {
 
     #[test]
     fn invocation_history_responses_reject_unknown_envelope_fields() {
+        let paged_list = serde_json::from_value::<HistoryListResponse>(json!({
+            "ledger_ura": "easynet:///r/test/resource/device.callee/billing/invocations",
+            "ledger_path": "/tmp/ledger",
+            "next_cursor": "receipt-history:v1:abc",
+            "records": []
+        }))
+        .expect("history list response must admit canonical pagination cursor");
+        assert_eq!(
+            paged_list.next_cursor.as_deref(),
+            Some("receipt-history:v1:abc")
+        );
+
         let list = serde_json::from_value::<HistoryListResponse>(json!({
             "ledger_ura": "easynet:///r/test/resource/device.callee/billing/invocations",
             "ledger_path": "/tmp/ledger",

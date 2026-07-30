@@ -41,6 +41,22 @@ func (t *RuntimeSigningTransport) Invoke(ctx context.Context, draftJSON []byte) 
 	return next.Invoke(ctx, raw)
 }
 
+func (t *RuntimeSigningTransport) GovernanceRead(ctx context.Context, draftJSON []byte) ([]byte, error) {
+	next, err := t.nextTransport()
+	if err != nil {
+		return nil, err
+	}
+	governance, ok := next.(governanceReadTransport)
+	if !ok {
+		return nil, invalidRuntimeClient("runtime transport does not expose governance read")
+	}
+	raw, err := t.signDraftJSON(draftJSON)
+	if err != nil {
+		return nil, err
+	}
+	return governance.GovernanceRead(ctx, raw)
+}
+
 func (t *RuntimeSigningTransport) OpenStream(ctx context.Context, draftJSON []byte) (StreamTransport, []byte, error) {
 	next, err := t.nextTransport()
 	if err != nil {

@@ -115,6 +115,49 @@ func TestRuntimeSigningTransportPreservesPresignedDraft(t *testing.T) {
 	}
 }
 
+func TestRuntimeSigningTransportForwardsGovernanceReadCapability(t *testing.T) {
+	provider := &memorySignatureProvider{}
+	signer, err := NewSigner(signerHandle(""), provider)
+	if err != nil {
+		t.Fatalf("NewSigner: %v", err)
+	}
+
+	var seen map[string]any
+	transport, err := NewRuntimeSigningTransport(RuntimeTransportFunc{
+		InvokeFunc: func(context.Context, []byte) ([]byte, error) {
+			t.Fatalf("governance read must not delegate through public Invoke")
+			return nil, nil
+		},
+		GovernanceReadFunc: func(ctx context.Context, draftJSON []byte) ([]byte, error) {
+			if err := json.Unmarshal(draftJSON, &seen); err != nil {
+				t.Fatalf("decode signed governance draft: %v", err)
+			}
+			return runtimeSigningResult(seen, "inv-governance-signing-1"), nil
+		},
+	}, signer)
+	if err != nil {
+		t.Fatalf("NewRuntimeSigningTransport: %v", err)
+	}
+
+	result, err := NewRuntimeClientMust(t, transport).governanceRead(context.Background(), completeDraftForRuntimeTest(t))
+	if err != nil {
+		t.Fatalf("governanceRead: %v", err)
+	}
+	if !result.OK() {
+		t.Fatalf("result not ok: %#v", result)
+	}
+	assertRuntimeSigningSignature(t, seen)
+	if provider.material.DescriptorRef() != runtimeTestDescriptorRef {
+		t.Fatalf("provider material descriptor = %q", provider.material.DescriptorRef())
+	}
+	if provider.material.CanonicalBytesBase64() == "" {
+		t.Fatal("provider did not receive canonical bytes")
+	}
+	if provider.material.CanonicalHashHex() == "" {
+		t.Fatal("provider did not receive canonical commitment")
+	}
+}
+
 func TestRuntimeSigningTransportRejectsUnsignedDraftForDifferentCaller(t *testing.T) {
 	provider := &memorySignatureProvider{}
 	signer, err := NewSigner(signerHandle(""), provider)

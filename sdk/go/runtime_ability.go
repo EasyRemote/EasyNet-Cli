@@ -295,7 +295,7 @@ func (c *RuntimeAbilityClient) invokeGovernanceRead(ctx context.Context, call Ru
 	if err != nil {
 		return nil, err
 	}
-	result, err := c.runtime.Invoke(ctx, draft)
+	result, err := c.runtime.governanceRead(ctx, draft)
 	if err != nil {
 		return nil, err
 	}

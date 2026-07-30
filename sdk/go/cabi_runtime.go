@@ -23,6 +23,7 @@ typedef int32_t (*runtime_health_fn)(uint64_t handle, char **out_health_json);
 typedef int32_t (*runtime_diagnostics_fn)(uint64_t handle, char **out_diagnostics_json);
 typedef int32_t (*runtime_resolve_descriptor_ref_fn)(uint64_t handle, const char *request_json, char **out_descriptor_json);
 typedef int32_t (*runtime_invocation_invoke_fn)(uint64_t handle, const char *invocation_json, char **out_result_json);
+typedef int32_t (*runtime_governance_read_fn)(uint64_t handle, const char *invocation_json, char **out_result_json);
 typedef int32_t (*runtime_invocation_prepare_fn)(uint64_t handle, const char *invocation_json, const char *options_json, uint64_t *out_prepared_id, char **out_prepared_json);
 typedef int32_t (*runtime_invocation_sign_prepared_fn)(uint64_t prepared_id, const char *signature_json, uint64_t *out_signed_id, char **out_signed_json);
 typedef int32_t (*runtime_invocation_sign_prepared_local_fn)(uint64_t prepared_id, uint64_t *out_signed_id, char **out_signed_json);
@@ -105,6 +106,10 @@ static int32_t runtime_cabi_call_resolve_descriptor_ref(void *fn, uint64_t handl
 
 static int32_t runtime_cabi_call_invoke(void *fn, uint64_t handle, const char *invocation_json, char **out_result_json) {
 	return ((runtime_invocation_invoke_fn)fn)(handle, invocation_json, out_result_json);
+}
+
+static int32_t runtime_cabi_call_governance_read(void *fn, uint64_t handle, const char *invocation_json, char **out_result_json) {
+	return ((runtime_governance_read_fn)fn)(handle, invocation_json, out_result_json);
 }
 
 static int32_t runtime_cabi_call_prepare(void *fn, uint64_t handle, const char *invocation_json, const char *options_json, uint64_t *out_prepared_id, char **out_prepared_json) {
@@ -209,6 +214,7 @@ type cabiRuntimeSymbols struct {
 	runtimeDiagnostics    unsafe.Pointer
 	resolveDescriptor     unsafe.Pointer
 	invocationInvoke      unsafe.Pointer
+	governanceRead        unsafe.Pointer
 	invocationPrepare     unsafe.Pointer
 	signPrepared          unsafe.Pointer
 	signPreparedLocal     unsafe.Pointer
@@ -715,6 +721,21 @@ func (t *cabiRuntimeTransport) Invoke(ctx context.Context, draftJSON []byte) ([]
 	}))
 	if code != 0 {
 		return nil, t.lastErrorOrCode(code, "C ABI invocation invoke failed")
+	}
+	return cabiTakeCString(t.symbols.stringFree, out), nil
+}
+
+func (t *cabiRuntimeTransport) GovernanceRead(ctx context.Context, draftJSON []byte) ([]byte, error) {
+	handle, err := t.requireOpen(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var out *C.char
+	code := int32(cabiWithCString(draftJSON, func(cDraft *C.char) C.int32_t {
+		return C.runtime_cabi_call_governance_read(t.symbols.governanceRead, C.uint64_t(handle), cDraft, &out)
+	}))
+	if code != 0 {
+		return nil, t.lastErrorOrCode(code, "C ABI runtime governance read failed")
 	}
 	return cabiTakeCString(t.symbols.stringFree, out), nil
 }
@@ -1492,6 +1513,7 @@ func bindCABIRuntimeSymbols(library unsafe.Pointer) (cabiRuntimeSymbols, error) 
 		{"runtime_diagnostics", &symbols.runtimeDiagnostics},
 		{"runtime_resolve_descriptor_ref", &symbols.resolveDescriptor},
 		{"runtime_invocation_invoke", &symbols.invocationInvoke},
+		{"runtime_governance_read", &symbols.governanceRead},
 		{"runtime_invocation_prepare", &symbols.invocationPrepare},
 		{"runtime_invocation_sign_prepared", &symbols.signPrepared},
 		{"runtime_invocation_sign_prepared_local", &symbols.signPreparedLocal},

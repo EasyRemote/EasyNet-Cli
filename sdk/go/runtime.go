@@ -89,6 +89,13 @@ type DescriptorResolverTransport interface {
 	ResolveDescriptorRef(ctx context.Context, requestJSON []byte) ([]byte, error)
 }
 
+// governanceReadTransport is the provider-backed seam for runtime governance
+// read abilities. It intentionally sits outside RuntimeTransport so public
+// product actions cannot accidentally reuse this ingress.
+type governanceReadTransport interface {
+	GovernanceRead(ctx context.Context, draftJSON []byte) ([]byte, error)
+}
+
 // RuntimeDescriptorRefRequest selects one runtime-owned ability descriptor.
 type RuntimeDescriptorRefRequest struct {
 	CalleeURA  string `json:"callee_ura"`
@@ -112,6 +119,7 @@ type RuntimeTransportFunc struct {
 	FreeHandleFunc           func(ctx context.Context, control InvocationControlCapability) error
 	RecoverFunc              func(ctx context.Context, requestJSON []byte) ([]byte, error)
 	ResolveDescriptorRefFunc func(ctx context.Context, requestJSON []byte) ([]byte, error)
+	GovernanceReadFunc       func(ctx context.Context, draftJSON []byte) ([]byte, error)
 	CloseFunc                func(ctx context.Context) error
 }
 
@@ -214,6 +222,13 @@ func (f RuntimeTransportFunc) ResolveDescriptorRef(ctx context.Context, requestJ
 		return nil, invalidRuntimeClient("runtime descriptor resolver transport function is required")
 	}
 	return f.ResolveDescriptorRefFunc(ctx, requestJSON)
+}
+
+func (f RuntimeTransportFunc) GovernanceRead(ctx context.Context, draftJSON []byte) ([]byte, error) {
+	if f.GovernanceReadFunc == nil {
+		return nil, invalidRuntimeClient("runtime governance read transport function is required")
+	}
+	return f.GovernanceReadFunc(ctx, draftJSON)
 }
 
 func (f RuntimeTransportFunc) Close(ctx context.Context) error {
@@ -444,6 +459,32 @@ func (c *RuntimeClient) Invoke(ctx context.Context, draft InvocationDraft) (Invo
 			return InvocationResult{}, sdkErr
 		}
 		return InvocationResult{}, transportRuntimeError("invoke transport failed", err)
+	}
+	return NewInvocationResultFromJSON(raw)
+}
+
+// governanceRead submits a complete runtime governance-read tuple through the
+// provider-backed governance ingress. It is not a public action path.
+func (c *RuntimeClient) governanceRead(ctx context.Context, draft InvocationDraft) (InvocationResult, error) {
+	transport, err := c.runtimeTransport(ctx)
+	if err != nil {
+		return InvocationResult{}, err
+	}
+	governance, ok := transport.(governanceReadTransport)
+	if !ok {
+		return InvocationResult{}, invalidRuntimeClient("runtime transport does not expose governance read")
+	}
+	draftJSON, err := json.Marshal(draft)
+	if err != nil {
+		return InvocationResult{}, invalidRuntimePayload(fmt.Sprintf("encode governance read draft: %v", err), err)
+	}
+	raw, err := governance.GovernanceRead(ctx, draftJSON)
+	if err != nil {
+		var sdkErr *SDKError
+		if errors.As(err, &sdkErr) {
+			return InvocationResult{}, sdkErr
+		}
+		return InvocationResult{}, transportRuntimeError("governance read transport failed", err)
 	}
 	return NewInvocationResultFromJSON(raw)
 }

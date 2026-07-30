@@ -39,7 +39,10 @@ func TestReceiptRoutesGeneratedFromManifest(t *testing.T) {
 func TestRuntimeReceiptProviderUsesCanonicalHistoryAndTraceAbilities(t *testing.T) {
 	var invocations []map[string]any
 	var descriptorRequests []RuntimeDescriptorRefRequest
-	transport := RuntimeTransportFunc{InvokeFunc: func(_ context.Context, raw []byte) ([]byte, error) {
+	transport := RuntimeTransportFunc{InvokeFunc: func(context.Context, []byte) ([]byte, error) {
+		t.Fatal("receipt provider must not use generic runtime Invoke")
+		return nil, nil
+	}, GovernanceReadFunc: func(_ context.Context, raw []byte) ([]byte, error) {
 		var draft map[string]any
 		if err := json.Unmarshal(raw, &draft); err != nil {
 			return nil, err
@@ -160,7 +163,7 @@ func TestRuntimeReceiptProviderRejectsWrongDeviceOwnerSubjectBeforeDescriptorRes
 
 func TestRuntimeReceiptProviderAcceptsMatchingDeviceOwnerSubject(t *testing.T) {
 	var descriptorRequests []RuntimeDescriptorRefRequest
-	transport := RuntimeTransportFunc{InvokeFunc: func(_ context.Context, raw []byte) ([]byte, error) {
+	transport := RuntimeTransportFunc{GovernanceReadFunc: func(_ context.Context, raw []byte) ([]byte, error) {
 		output := map[string]any{
 			"ledger_ura": "easynet:///r/example/resource/device.dev-a/billing/invocations",
 			"records":    []any{},
@@ -366,7 +369,7 @@ func TestReceiptReferenceFromRuntimeReceiptUsesSummaryAnchor(t *testing.T) {
 
 func TestRuntimeReceiptProviderForwardsAndValidatesCursor(t *testing.T) {
 	var arguments map[string]any
-	transport := RuntimeTransportFunc{InvokeFunc: func(_ context.Context, raw []byte) ([]byte, error) {
+	transport := RuntimeTransportFunc{GovernanceReadFunc: func(_ context.Context, raw []byte) ([]byte, error) {
 		var draft map[string]any
 		if err := json.Unmarshal(raw, &draft); err != nil {
 			return nil, err
@@ -423,7 +426,7 @@ func TestRuntimeReceiptProviderForwardsAndValidatesCursor(t *testing.T) {
 
 func TestRuntimeReceiptProviderProjectsMultipleAbilityURAsAsOneSet(t *testing.T) {
 	var arguments map[string]any
-	transport := RuntimeTransportFunc{InvokeFunc: func(_ context.Context, raw []byte) ([]byte, error) {
+	transport := RuntimeTransportFunc{GovernanceReadFunc: func(_ context.Context, raw []byte) ([]byte, error) {
 		var draft map[string]any
 		if err := json.Unmarshal(raw, &draft); err != nil {
 			return nil, err
@@ -512,7 +515,7 @@ func TestRuntimeReceiptProviderRequiresCanonicalLedgerSource(t *testing.T) {
 
 func runtimeReceiptProviderWithOutput(t *testing.T, output map[string]any) *RuntimeReceiptProvider {
 	t.Helper()
-	transport := RuntimeTransportFunc{InvokeFunc: func(_ context.Context, _ []byte) ([]byte, error) {
+	transport := RuntimeTransportFunc{GovernanceReadFunc: func(_ context.Context, _ []byte) ([]byte, error) {
 		encoded, err := json.Marshal(output)
 		if err != nil {
 			return nil, err
