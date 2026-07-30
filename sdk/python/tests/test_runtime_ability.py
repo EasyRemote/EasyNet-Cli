@@ -6,6 +6,7 @@ from dataclasses import replace
 
 import pytest
 
+import easynet_sdk
 import easynet_sdk.runtime_ability as runtime_ability_module
 from easynet_sdk.axon_addressing import AddressingClient, AxonAddressingTransport
 from easynet_sdk.authority import SESSION_AUTHORITY_METADATA_KEY, SessionAuthority
@@ -218,23 +219,30 @@ def test_runtime_ability_descriptor_binds_authority_subject() -> None:
     )
 
 
-def test_runtime_ability_catalogue_read_resolves_descriptor_with_runtime_owner_subject() -> None:
+def test_runtime_ability_catalogue_read_resolves_descriptor_with_governance_read_subject() -> None:
     client, transport = _client()
     call = replace(
         _call(),
         callee_ura="easynet:///r/example/device/device-1",
-        subject_ura="easynet:///r/example/device/device-1",
+        subject_ura="easynet:///r/example/user/alice",
     )
 
     draft = client._build_catalogue_read(call, "meta.list_abilities", {})
 
-    assert draft.subject_ura == "easynet:///r/example/device/device-1"
+    assert draft.subject_ura == "easynet:///r/example/resource/user.alice/runtime-state/read"
     assert transport.descriptor_requests[-1]["subject_ura"] == (
-        "easynet:///r/example/device/device-1"
+        "easynet:///r/example/resource/user.alice/runtime-state/read"
     )
     assert transport.descriptor_requests[-1]["callee_ura"] == (
         "easynet:///r/example/device/device-1"
     )
+
+
+def test_runtime_governance_read_subject_public_helper_projects_user_subject() -> None:
+    assert easynet_sdk.runtime_governance_read_subject_ura(
+        "easynet:///r/example/user/alice",
+        "easynet:///r/example/device/device-1",
+    ) == "easynet:///r/example/resource/user.alice/runtime-state/read"
 
 
 def test_runtime_ability_rejects_all_zero_runtime_call_principal_before_descriptor_resolution() -> None:

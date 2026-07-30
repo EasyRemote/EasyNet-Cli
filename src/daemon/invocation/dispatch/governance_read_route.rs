@@ -103,16 +103,18 @@ fn require_catalogue_read_subject(
                 "{surface} catalogue read envelope is missing runtime-read subject"
             ))
         })?;
-    if subject_ura == route.callee_ura {
-        return Ok(());
-    }
-
-    Err(Status::failed_precondition(format!(
-        "CANONICAL_CATALOGUE_READ_REQUIRED: {surface} remote catalogue ability \
-         `{catalogue_ability}` must use runtime-read subject `{}`; use the canonical remote \
-         catalogue read path",
-        route.callee_ura
-    )))
+    crate::core::identity::RuntimeGovernanceReadSubject::parse_for_callee(
+        subject_ura,
+        &route.callee_ura,
+    )
+    .map(|_| ())
+    .map_err(|err| {
+        Status::failed_precondition(format!(
+            "CANONICAL_CATALOGUE_READ_REQUIRED: {surface} remote catalogue ability \
+             `{catalogue_ability}` must use a runtime governance read subject; \
+             use the canonical remote catalogue read path: {err}"
+        ))
+    })
 }
 
 fn selected_route_public_ability(route: &SelectedInvokeRoute) -> Option<String> {

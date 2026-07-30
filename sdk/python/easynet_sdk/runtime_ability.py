@@ -27,6 +27,7 @@ from ._runtime_governance import (
     RECEIPT_HISTORY_PROVIDER,
     is_runtime_governance_read_ability,
 )
+from ._runtime_subjects import runtime_governance_read_subject_ura
 from .runtime import (
     InvocationCancel,
     InvocationHandle,
@@ -63,7 +64,7 @@ _GOVERNANCE_READ_POLICY = _RuntimeAbilityDispatchPolicy(
 )
 _CATALOGUE_READ_POLICY = _RuntimeAbilityDispatchPolicy(
     allow_governance_read=True,
-    subject_policy="runtime_owner",
+    subject_policy="runtime_governance_read",
     descriptor_provider=ABILITY_DESCRIPTOR_PROVIDER,
 )
 
@@ -267,6 +268,11 @@ class RuntimeAbilityClient:
     ) -> str:
         if policy.subject_policy == "runtime_owner":
             return call.callee_ura.strip()
+        if policy.subject_policy == "runtime_governance_read":
+            return runtime_governance_read_subject_ura(
+                call.subject_ura,
+                call.callee_ura,
+            )
         if policy.subject_policy != "descriptor_bound":
             raise _invalid("runtime ability subject policy is unsupported")
         subject = self._addressing.parse_ura(call.subject_ura.strip())
@@ -285,7 +291,7 @@ class RuntimeAbilityClient:
         policy: _RuntimeAbilityDispatchPolicy,
     ) -> str:
         if policy.descriptor_provider == ABILITY_DESCRIPTOR_PROVIDER:
-            if policy.subject_policy == "runtime_owner":
+            if policy.subject_policy in {"runtime_owner", "runtime_governance_read"}:
                 return selected_subject_ura.strip()
             return call.subject_ura.strip()
         if policy.subject_policy == "runtime_owner":

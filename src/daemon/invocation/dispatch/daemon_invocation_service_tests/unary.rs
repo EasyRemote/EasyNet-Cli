@@ -3438,7 +3438,7 @@ async fn dispatch_remote_rpc_rejects_catalogue_read_with_public_action_subject()
     assert!(
         err.message().contains("CANONICAL_CATALOGUE_READ_REQUIRED")
             && err.message().contains(CATALOGUE_READ)
-            && err.message().contains(REMOTE_DEVICE_URA)
+            && err.message().contains("runtime governance read subject")
             && err
                 .message()
                 .contains("canonical remote catalogue read path"),
@@ -3491,7 +3491,7 @@ async fn dispatch_remote_rpc_rejects_resource_catalogue_read_with_public_action_
     assert!(
         err.message().contains("CANONICAL_CATALOGUE_READ_REQUIRED")
             && err.message().contains(RESOURCE_CATALOGUE_READ)
-            && err.message().contains(REMOTE_DEVICE_URA)
+            && err.message().contains("runtime governance read subject")
             && err
                 .message()
                 .contains("canonical remote catalogue read path"),
@@ -3509,6 +3509,7 @@ async fn dispatch_remote_rpc_rejects_resource_catalogue_read_with_public_action_
 async fn dispatch_remote_rpc_allows_catalogue_read_with_runtime_read_subject() {
     const REMOTE_DEVICE_URA: &str = "easynet:///r/test-realm/device/remote-device";
     const CATALOGUE_READ: &str = crate::daemon::ability::names::governance::META_LIST_ABILITIES;
+    const READ_SUBJECT_URA: &str = "easynet:///r/test-realm/resource/user.alice/runtime-state/read";
 
     let pending = Arc::new(PendingDispatchMap::new());
     let svc = make_service().with_pending(Arc::clone(&pending));
@@ -3537,7 +3538,7 @@ async fn dispatch_remote_rpc_allows_catalogue_read_with_runtime_read_subject() {
     let request = signed_invoke_request(
         TEST_DAEMON_URA,
         REMOTE_DEVICE_URA,
-        REMOTE_DEVICE_URA,
+        READ_SUBJECT_URA,
         CATALOGUE_READ,
         r#"{"scope":"local"}"#,
         &test_device_signing_key(),
@@ -3570,7 +3571,7 @@ async fn dispatch_remote_rpc_allows_catalogue_read_with_runtime_read_subject() {
             .as_ref()
             .and_then(|envelope| envelope.subject.as_ref())
             .map(|subject| subject.ura.as_str()),
-        Some(REMOTE_DEVICE_URA)
+        Some(READ_SUBJECT_URA)
     );
 }
 

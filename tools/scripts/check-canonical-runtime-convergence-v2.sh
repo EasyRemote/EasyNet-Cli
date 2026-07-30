@@ -5880,6 +5880,7 @@ for required in (
     "func runtimeAbilityGovernanceReadPolicy() runtimeAbilityDispatchPolicy",
     "func runtimeAbilityCatalogueReadPolicy() runtimeAbilityDispatchPolicy",
     "runtimeAbilitySubjectRuntimeOwner",
+    "runtimeAbilitySubjectRuntimeGovernanceRead",
     "func (c *RuntimeAbilityClient) buildGovernanceRead(",
     "func (c *RuntimeAbilityClient) buildCatalogueRead(",
     "func (c *RuntimeAbilityClient) buildWithCallModePolicy(",
@@ -5942,7 +5943,7 @@ if "TestRuntimeAbilityClientRejectsCatalogueReadPublicRouteBeforeDescriptorResol
     raise SystemExit("sdk_history_public_route_cutover:go_catalogue_public_rejection_test_missing")
 if '"meta.list_resources"' not in go_test:
     raise SystemExit("sdk_history_public_route_cutover:go_resource_catalogue_read_test_missing")
-if 'seen["subject_ura"] != "easynet:///r/example/authority"' not in go_descriptor_test:
+if 'seen["subject_ura"] != "easynet:///r/example/resource/user.alice/runtime-state/read"' not in go_descriptor_test:
     raise SystemExit("sdk_history_public_route_cutover:go_catalogue_subject_test_missing")
 if 'Provider:   policy.descriptorProvider' not in go_runtime:
     raise SystemExit("sdk_history_public_route_cutover:go_descriptor_provider_not_forwarded")
@@ -6036,7 +6037,7 @@ if "test_generic_invocation_rejects_governance_read_descriptor_ref" not in py_ab
     raise SystemExit("sdk_history_public_route_cutover:py_generic_descriptor_rejection_test_missing")
 if "test_tuple_ability_selector_delegates_to_addressing_projection" not in py_ability_invocation_test:
     raise SystemExit("sdk_history_public_route_cutover:py_tuple_selector_addressing_projection_test_missing")
-if 'transport.seen["subject_ura"] == "easynet:///r/example/authority"' not in py_descriptor_test:
+if '== "easynet:///r/example/resource/user.alice/runtime-state/read"' not in py_descriptor_test:
     raise SystemExit("sdk_history_public_route_cutover:py_catalogue_subject_test_missing")
 if 'transport.descriptor_requests[-1]["provider"] == "ability_descriptor"' not in py_descriptor_test:
     raise SystemExit("sdk_history_public_route_cutover:py_descriptor_provider_test_missing")
@@ -12780,7 +12781,9 @@ for required in (
     "is_runtime_catalogue_read(ability)",
     'surface != "Invoke"',
     "catalogue read envelope is missing runtime-read subject",
-    "subject_ura == route.callee_ura",
+    "RuntimeGovernanceReadSubject::parse_for_callee(",
+    "&route.callee_ura",
+    "must use a runtime governance read subject",
     "canonical unary Invoke catalogue read path",
     "canonical remote",
     "catalogue read path",

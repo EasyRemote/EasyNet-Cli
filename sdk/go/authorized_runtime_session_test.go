@@ -377,6 +377,32 @@ func TestRuntimeStateReadSubjectURABuildsUserOwnedResourceSubject(t *testing.T) 
 	}
 }
 
+func TestRuntimeGovernanceReadSubjectURAProjectsUserBusinessSubject(t *testing.T) {
+	subject, err := RuntimeGovernanceReadSubjectURA(
+		"easynet:///r/example/user/alice",
+		"easynet:///r/example/device/dev-a",
+	)
+	if err != nil {
+		t.Fatalf("RuntimeGovernanceReadSubjectURA error = %v", err)
+	}
+	if subject != "easynet:///r/example/resource/user.alice/runtime-state/read" {
+		t.Fatalf("subject = %q", subject)
+	}
+}
+
+func TestRuntimeGovernanceReadSubjectURAAdmitsMatchingRuntimeOwner(t *testing.T) {
+	subject, err := RuntimeGovernanceReadSubjectURA(
+		"easynet:///r/example/device/dev-a",
+		"easynet:///r/example/device/dev-a",
+	)
+	if err != nil {
+		t.Fatalf("RuntimeGovernanceReadSubjectURA error = %v", err)
+	}
+	if subject != "easynet:///r/example/device/dev-a" {
+		t.Fatalf("subject = %q", subject)
+	}
+}
+
 func TestRuntimeStateReadSubjectURARejectsAllZeroUserBeforeDeviceFallback(t *testing.T) {
 	_, err := RuntimeStateReadSubjectURA("example", "00000000-0000-0000-0000-000000000000")
 	if err == nil || !strings.Contains(err.Error(), "user_id must not be all-zero") {

@@ -132,7 +132,10 @@ def test_runtime_ability_descriptor_provider_lists_runtime_descriptors() -> None
         "easynet:///r/example/ability/authority.meta.list_abilities@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
     )
     assert transport.descriptor_requests[-1]["provider"] == "ability_descriptor"
-    assert transport.seen["subject_ura"] == "easynet:///r/example/authority"
+    assert (
+        transport.seen["subject_ura"]
+        == "easynet:///r/example/resource/user.alice/runtime-state/read"
+    )
     assert transport.seen["args"] == {
         "scope": "realm",
         "owner_ura": "easynet:///r/example/authority",

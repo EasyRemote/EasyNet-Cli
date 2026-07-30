@@ -69,6 +69,58 @@ def is_runtime_governance_read_subject_ura(subject_ura: str, callee_ura: str) ->
     )
 
 
+def runtime_governance_read_subject_ura(subject_ura: str, callee_ura: str) -> str:
+    """Project a business subject into the canonical governance-read subject."""
+
+    clean_subject = str(subject_ura).strip()
+    clean_callee = str(callee_ura).strip()
+    if not clean_subject:
+        _invalid_runtime_state_subject("runtime governance read subject_ura is required")
+    if is_runtime_governance_read_subject_ura(clean_subject, clean_callee):
+        return clean_subject
+    try:
+        subject = parse_ura(clean_subject)
+    except SDKError as error:
+        _invalid_runtime_state_subject(
+            "runtime governance read subject_ura must be canonical", error
+        )
+    if subject.kind in {"user", "agent", "ability"}:
+        user_id = _subject_user_id(subject)
+        if user_id:
+            return runtime_state_read_subject_ura(subject.realm, user_id)
+    if subject.kind == "resource":
+        owner_id = subject.components.get("owner_id")
+        if isinstance(owner_id, str) and owner_id.startswith("user."):
+            user_id = owner_id.removeprefix("user.")
+            if user_id.strip() and "." not in user_id and "/" not in user_id:
+                return runtime_state_read_subject_ura(subject.realm, user_id)
+    _invalid_runtime_state_subject(
+        "runtime governance read subject_ura must be a runtime owner or user-owned runtime-state read subject"
+    )
+
+
+def _subject_user_id(subject: object) -> str:
+    user_id = getattr(subject, "user_id", "")
+    if isinstance(user_id, str) and user_id.strip():
+        return user_id.strip()
+    components = getattr(subject, "components", {})
+    if not isinstance(components, dict):
+        return ""
+    for key in ("user_id", "owner_user_id"):
+        value = components.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    owner = components.get("owner")
+    if isinstance(owner, dict):
+        value = owner.get("user_id")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    owner_id = components.get("owner_id")
+    if isinstance(owner_id, str) and owner_id.startswith("user."):
+        return owner_id.removeprefix("user.").strip()
+    return ""
+
+
 def _invalid_runtime_state_subject(message: str, cause: Exception | None = None) -> None:
     raise SDKError(
         code="INVALID_INVOCATION",

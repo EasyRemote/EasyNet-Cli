@@ -410,7 +410,7 @@ func TestRuntimeAbilityClientBuildsCompleteCanonicalDraft(t *testing.T) {
 	}
 }
 
-func TestRuntimeAbilityClientCatalogueReadResolvesDescriptorWithRuntimeOwnerSubject(t *testing.T) {
+func TestRuntimeAbilityClientCatalogueReadResolvesDescriptorWithGovernanceReadSubject(t *testing.T) {
 	var seen RuntimeDescriptorRefRequest
 	runtime, err := NewRuntimeClient(RuntimeTransportFunc{
 		ResolveDescriptorRefFunc: func(ctx context.Context, requestJSON []byte) ([]byte, error) {
@@ -429,7 +429,7 @@ func TestRuntimeAbilityClientCatalogueReadResolvesDescriptorWithRuntimeOwnerSubj
 	}
 	call := runtimeAbilityTestContext()
 	call.CalleeURA = "easynet:///r/example/device/device-1"
-	call.SubjectURA = call.CalleeURA
+	call.SubjectURA = "easynet:///r/example/user/alice"
 
 	draft, err := client.buildWithCallModePolicy(
 		context.Background(),
@@ -443,11 +443,11 @@ func TestRuntimeAbilityClientCatalogueReadResolvesDescriptorWithRuntimeOwnerSubj
 		t.Fatalf("buildWithCallModePolicy: %v", err)
 	}
 
-	if draft.SubjectURA() != "easynet:///r/example/device/device-1" {
-		t.Fatalf("draft subject_ura = %q, want runtime owner", draft.SubjectURA())
+	if draft.SubjectURA() != "easynet:///r/example/resource/user.alice/runtime-state/read" {
+		t.Fatalf("draft subject_ura = %q, want user-owned governance read subject", draft.SubjectURA())
 	}
-	if seen.SubjectURA != "easynet:///r/example/device/device-1" {
-		t.Fatalf("descriptor request subject_ura = %q, want runtime owner", seen.SubjectURA)
+	if seen.SubjectURA != "easynet:///r/example/resource/user.alice/runtime-state/read" {
+		t.Fatalf("descriptor request subject_ura = %q, want user-owned governance read subject", seen.SubjectURA)
 	}
 	if seen.Provider != runtimeAbilityDescriptorProvider {
 		t.Fatalf("descriptor provider = %q, want %q", seen.Provider, runtimeAbilityDescriptorProvider)

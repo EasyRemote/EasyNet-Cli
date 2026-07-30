@@ -61,7 +61,7 @@ func runtimeAbilityGovernanceReadPolicy() runtimeAbilityDispatchPolicy {
 func runtimeAbilityCatalogueReadPolicy() runtimeAbilityDispatchPolicy {
 	return runtimeAbilityDispatchPolicy{
 		allowGovernanceRead: true,
-		subjectPolicy:       runtimeAbilitySubjectRuntimeOwner,
+		subjectPolicy:       runtimeAbilitySubjectRuntimeGovernanceRead,
 		descriptorProvider:  runtimeAbilityDescriptorProvider,
 	}
 }
@@ -71,6 +71,7 @@ type runtimeAbilitySubjectPolicy int
 const (
 	runtimeAbilitySubjectDescriptorBound runtimeAbilitySubjectPolicy = iota
 	runtimeAbilitySubjectRuntimeOwner
+	runtimeAbilitySubjectRuntimeGovernanceRead
 )
 
 func (policy runtimeAbilityDispatchPolicy) subjectURA(ctx context.Context, addressing Addressing, call RuntimeCallContext, abilityName string) (string, error) {
@@ -79,6 +80,8 @@ func (policy runtimeAbilityDispatchPolicy) subjectURA(ctx context.Context, addre
 		return descriptorBoundSubjectURA(ctx, addressing, call.SubjectURA, abilityName)
 	case runtimeAbilitySubjectRuntimeOwner:
 		return strings.TrimSpace(call.CalleeURA), nil
+	case runtimeAbilitySubjectRuntimeGovernanceRead:
+		return runtimeGovernanceReadSubjectURA(call.SubjectURA, call.CalleeURA)
 	default:
 		return "", invalidRuntimePayload("runtime ability subject policy is unsupported", nil)
 	}
@@ -86,7 +89,8 @@ func (policy runtimeAbilityDispatchPolicy) subjectURA(ctx context.Context, addre
 
 func (policy runtimeAbilityDispatchPolicy) descriptorResolutionSubjectURA(call RuntimeCallContext, selectedSubjectURA string) (string, error) {
 	if strings.TrimSpace(policy.descriptorProvider) == runtimeAbilityDescriptorProvider {
-		if policy.subjectPolicy == runtimeAbilitySubjectRuntimeOwner {
+		if policy.subjectPolicy == runtimeAbilitySubjectRuntimeOwner ||
+			policy.subjectPolicy == runtimeAbilitySubjectRuntimeGovernanceRead {
 			return strings.TrimSpace(selectedSubjectURA), nil
 		}
 		return strings.TrimSpace(call.SubjectURA), nil
