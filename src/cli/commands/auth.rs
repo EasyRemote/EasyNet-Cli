@@ -1007,7 +1007,45 @@ pub struct AgentsArgs {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct AgentListResp {
-    items: Vec<serde_json::Value>,
+    items: Vec<AgentItem>,
+    #[serde(default)]
+    resolve_unavailable: Vec<ResolveUnavailable>,
+}
+
+#[derive(Debug, Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+struct AgentItem {
+    agent_id: String,
+    display_name: String,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    runtime: Option<String>,
+    #[serde(default)]
+    base_runtime: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    base_model: Option<String>,
+    tags: Vec<String>,
+    node_id: String,
+    #[serde(default)]
+    host_device_ura: Option<String>,
+    #[serde(default)]
+    skills: Vec<SkillInfo>,
+}
+
+#[derive(Debug, Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+struct SkillInfo {
+    skill_id: String,
+    name: String,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    tags: Vec<String>,
+    #[serde(default)]
+    state: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1019,24 +1057,14 @@ struct AgentTableProjection {
 }
 
 impl AgentTableProjection {
-    fn from_backend_row(row: &serde_json::Value) -> Self {
+    fn from_backend_row(row: &AgentItem) -> Self {
         Self {
-            agent_id: canonical_agent_row_string(row, "agent_id").to_string(),
-            display_name: canonical_agent_row_string(row, "display_name").to_string(),
-            node_id: canonical_agent_row_string(row, "node_id").to_string(),
-            skill_count: row
-                .get("skills")
-                .and_then(serde_json::Value::as_array)
-                .map(Vec::len)
-                .unwrap_or(0),
+            agent_id: row.agent_id.clone(),
+            display_name: row.display_name.clone(),
+            node_id: row.node_id.clone(),
+            skill_count: row.skills.len(),
         }
     }
-}
-
-fn canonical_agent_row_string<'a>(row: &'a serde_json::Value, field: &'static str) -> &'a str {
-    row.get(field)
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("-")
 }
 
 pub fn run_agents(args: AgentsArgs) -> anyhow::Result<()> {
@@ -1046,6 +1074,7 @@ pub fn run_agents(args: AgentsArgs) -> anyhow::Result<()> {
             "{}",
             serde_json::to_string_pretty(&serde_json::json!({
                 "items": resp.items,
+                "resolve_unavailable": resp.resolve_unavailable,
             }))?
         );
         return Ok(());
@@ -1301,15 +1330,20 @@ mod tests {
 
     #[test]
     fn auth_agents_table_uses_canonical_backend_fields() {
-        let row = AgentTableProjection::from_backend_row(&serde_json::json!({
+        let response = serde_json::from_value::<AgentListResp>(serde_json::json!({
+            "items": [{
             "agent_id": "agent-1",
             "display_name": "Agent One",
+            "tags": [],
             "node_id": "device-1",
             "skills": [
-                { "name": "shell.run" },
-                { "name": "terminal.create" }
-            ]
-        }));
+                    { "skill_id": "skill-1", "name": "shell.run" },
+                    { "skill_id": "skill-2", "name": "terminal.create" }
+                ]
+            }]
+        }))
+        .expect("agent list row should decode through the typed backend contract");
+        let row = AgentTableProjection::from_backend_row(&response.items[0]);
 
         assert_eq!(
             row,
@@ -1324,17 +1358,21 @@ mod tests {
 
     #[test]
     fn auth_agents_table_rejects_legacy_row_aliases() {
-        let row = AgentTableProjection::from_backend_row(&serde_json::json!({
-            "ura": "easynet:///r/test/agent/legacy",
-            "name": "Legacy Agent",
-            "node_id": "device-1",
-            "skills": []
-        }));
+        let error = serde_json::from_value::<AgentListResp>(serde_json::json!({
+            "items": [{
+                "ura": "easynet:///r/test/agent/legacy",
+                "name": "Legacy Agent",
+                "tags": [],
+                "node_id": "device-1",
+                "skills": []
+            }]
+        }))
+        .expect_err("agent list rows must reject retired aliases at schema ingress");
 
-        assert_eq!(row.agent_id, "-");
-        assert_eq!(row.display_name, "-");
-        assert_eq!(row.node_id, "device-1");
-        assert_eq!(row.skill_count, 0);
+        assert!(
+            error.to_string().contains("ura"),
+            "schema error should name the retired alias: {error}"
+        );
     }
 
     #[test]
@@ -1682,6 +1720,56 @@ mod tests {
 
         assert!(
             error.to_string().contains("state_code"),
+            "schema error should name the noncanonical field: {error}"
+        );
+    }
+
+    #[test]
+    fn agent_list_response_accepts_backend_public_contract() {
+        let response = serde_json::from_value::<AgentListResp>(serde_json::json!({
+            "items": [{
+                "agent_id": "easynet:///r/acme/agent/alice.claude",
+                "display_name": "Claude",
+                "description": "Agent roster row",
+                "runtime": "claude-code",
+                "base_runtime": "claude-code",
+                "model": "sonnet",
+                "base_model": "sonnet",
+                "tags": [],
+                "node_id": "dev-1",
+                "host_device_ura": "easynet:///r/acme/device/dev-1",
+                "skills": [{
+                    "skill_id": "skill-1",
+                    "name": "read",
+                    "description": "Read files",
+                    "tags": ["files"],
+                    "state": "enabled"
+                }]
+            }],
+            "resolve_unavailable": []
+        }))
+        .expect("operator-mode agent list must accept backend public AgentResp fields");
+
+        let row = AgentTableProjection::from_backend_row(&response.items[0]);
+        assert_eq!(row.agent_id, "easynet:///r/acme/agent/alice.claude");
+        assert_eq!(row.skill_count, 1);
+    }
+
+    #[test]
+    fn agent_list_response_rejects_uncontracted_row_fields() {
+        let error = serde_json::from_value::<AgentListResp>(serde_json::json!({
+            "items": [{
+                "agent_id": "easynet:///r/acme/agent/alice.claude",
+                "display_name": "Claude",
+                "tags": [],
+                "node_id": "dev-1",
+                "legacy_agent_id": "alice"
+            }]
+        }))
+        .expect_err("agent list rows must reject uncontracted drift");
+
+        assert!(
+            error.to_string().contains("legacy_agent_id"),
             "schema error should name the noncanonical field: {error}"
         );
     }

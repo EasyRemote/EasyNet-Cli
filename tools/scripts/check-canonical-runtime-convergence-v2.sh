@@ -8605,6 +8605,16 @@ for retired in (
         raise SystemExit(f"auth_agents_retired_row_alias:{retired}")
 if "AgentTableProjection::from_backend_row" not in body:
     raise SystemExit("auth_agents_table_projection_not_used")
+if "items: Vec<serde_json::Value>" in text:
+    raise SystemExit("auth_agents_row_schema_uses_untyped_json_value")
+for required in (
+    "struct AgentItem",
+    "#[serde(deny_unknown_fields)]\nstruct AgentItem",
+    "items: Vec<AgentItem>",
+    "resolve_unavailable: Vec<ResolveUnavailable>",
+):
+    if required not in text:
+        raise SystemExit(f"auth_agents_typed_response_missing:{required}")
 projection = re.search(
     r"impl AgentTableProjection \{(?P<body>.*?)\n\}",
     text,
@@ -8614,19 +8624,21 @@ if projection is None:
     raise SystemExit("auth_agents_table_projection_missing")
 projection_body = projection.group("body")
 for required in (
-    '"agent_id"',
-    '"display_name"',
-    '"node_id"',
-    '"skills"',
+    "row.agent_id.clone()",
+    "row.display_name.clone()",
+    "row.node_id.clone()",
+    "row.skills.len()",
 ):
     if required not in projection_body:
         raise SystemExit(f"auth_agents_projection_missing:{required}")
-for retired in ('"ura"', '"name"'):
+for retired in ('"ura"', '"name"', "canonical_agent_row_string"):
     if retired in projection_body:
         raise SystemExit(f"auth_agents_projection_uses_retired_alias:{retired}")
 for test in (
     "auth_agents_table_uses_canonical_backend_fields",
     "auth_agents_table_rejects_legacy_row_aliases",
+    "agent_list_response_accepts_backend_public_contract",
+    "agent_list_response_rejects_uncontracted_row_fields",
 ):
     if test not in text:
         raise SystemExit(f"missing_auth_agents_projection_test:{test}")
