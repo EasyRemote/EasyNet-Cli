@@ -85,9 +85,6 @@ pub(super) async fn run_live_session<D: SessionFrameDispatcher>(
         probe.admitted();
     }
 
-    if let Some(outbox) = escalation_outbox {
-        outbox.set(outbound_tx.clone());
-    }
     let _outbox_guard = OutboxGuard::new(escalation_outbox.cloned());
     let _up_heartbeat = SessionUpHeartbeatTask::spawn(
         outbound_tx.clone(),
@@ -95,6 +92,7 @@ pub(super) async fn run_live_session<D: SessionFrameDispatcher>(
         caller_ura.clone(),
     );
     let mut expected_down_sequence = 0_u64;
+    let mut session_contract_established = false;
 
     loop {
         let frame_result = match tokio::time::timeout(idle_timeout, down_stream.next()).await {
@@ -119,12 +117,18 @@ pub(super) async fn run_live_session<D: SessionFrameDispatcher>(
                     });
                 }
                 expected_down_sequence = expected_down_sequence.saturating_add(1);
-                apply_session_contract(
+                if apply_session_contract(
                     &frame,
                     &outbound_tx,
                     &hub_endpoint,
                     connection_state_sink.as_ref(),
-                );
+                ) && !session_contract_established
+                {
+                    session_contract_established = true;
+                    if let Some(outbox) = escalation_outbox {
+                        outbox.set(outbound_tx.clone());
+                    }
+                }
                 if let Err(err) = dispatcher.handle_down(frame, &outbound_tx).await {
                     let err_msg = format!("{err}");
                     crate::op_event!(
@@ -155,13 +159,13 @@ fn apply_session_contract(
     outbound: &SessionUpSender,
     hub_endpoint: &str,
     connection_state_sink: &dyn SessionConnectionStateSink,
-) {
+) -> bool {
     use axon_sdk::pb::axon::v1::{bidi_control, invoke_bidi_down::Payload};
     let Some(Payload::Control(control)) = frame.payload.as_ref() else {
-        return;
+        return false;
     };
     let Some(bidi_control::Control::SessionEstablished(contract)) = control.control.as_ref() else {
-        return;
+        return false;
     };
     let negotiated = contract
         .contract_version
@@ -175,18 +179,18 @@ fn apply_session_contract(
         version = negotiated,
         displaced_prior = displaced_prior,
     );
-    // The hub accepted `session.open` and returned the session contract — this
-    // is the FIRST moment presence is truly admitted on the hub. Promote the
-    // connection snapshot to ConnectedOnline here, not at daemon boot: `cli.start`
-    // records the honest "self-session opening" (J500) state, and only this
-    // hub-confirmed contract earns FRONTEND_CONNECTED. Without this, `doctor`
-    // would under-report a healthy session as still "opening".
+    // The hub accepted `session.open` and returned the session contract. This
+    // proves the transport is admitted, but product read models can still be
+    // missing the daemon's owner/ability projection. Keep the public product
+    // state suspect until the dynamic owner projection publishes and the T11
+    // read-model gate promotes the snapshot to FRONTEND_CONNECTED.
     project_connection_state(
         connection_state_sink,
-        crate::daemon::boot::join_connection_state::JoinConnectionState::ConnectedOnline,
+        crate::daemon::boot::join_connection_state::JoinConnectionState::ConnectedSuspect,
         crate::daemon::boot::join_connection_state::JoinTransition::AdmitPresence,
         "session.contract_negotiated",
     );
+    true
 }
 
 struct OutboxGuard {
@@ -235,7 +239,7 @@ mod tests {
     }
 
     #[test]
-    fn session_contract_projection_promotes_connection_snapshot() {
+    fn session_contract_projection_waits_for_owner_projection() {
         let _home = HomeGuard::new();
         let credentials = credentials();
         record_snapshot(JoinConnectionSnapshot::from_credentials(
@@ -247,13 +251,13 @@ mod tests {
 
         assert!(project_connection_state(
             &super::super::PersistentSessionConnectionStateSink,
-            JoinConnectionState::ConnectedOnline,
+            JoinConnectionState::ConnectedSuspect,
             JoinTransition::AdmitPresence,
             "session.contract_negotiated",
         ));
 
         let snapshot = load_snapshot().expect("snapshot");
-        assert_eq!(snapshot.state, "FRONTEND_CONNECTED");
+        assert_eq!(snapshot.state, "DEGRADED");
         assert_eq!(snapshot.state_code, "J800");
         assert_eq!(
             snapshot.transition_id.as_deref(),

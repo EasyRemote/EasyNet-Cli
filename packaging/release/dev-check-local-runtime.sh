@@ -523,6 +523,20 @@ def self_discover_record(facts):
     return None
 
 
+def device_inventory_ready(node):
+    if not isinstance(node, dict):
+        return False
+    state = str(node.get("state") or "").strip().upper()
+    return node.get("online") is True and state in {"HEALTHY", "ONLINE", "ACTIVE"}
+
+
+def federation_inventory_ready(entry):
+    if not isinstance(entry, dict):
+        return False
+    status = str(entry.get("status") or "").strip().lower()
+    return status == "active"
+
+
 def doctor_check(facts, name):
     data = facts["doctor"].get("data")
     checks = data.get("checks") if isinstance(data, dict) else None
@@ -558,6 +572,11 @@ def diagnose(facts):
     state_code = connection.get("state_code") if isinstance(connection, dict) else None
     transition = connection.get("transition_id") if isinstance(connection, dict) else None
     source = connection.get("source") if isinstance(connection, dict) else None
+    daemon_ready = (
+        isinstance(daemon, dict)
+        and daemon.get("control_accepting") is True
+        and daemon.get("invocation_accepting") is True
+    )
 
     if not joined:
         add_issue(
@@ -649,6 +668,11 @@ def diagnose(facts):
 
     user_key_check = doctor_check(facts, "user signing key")
     if isinstance(user_key_check, dict) and user_key_check.get("status") != "ok":
+        user_key_detail = user_key_check.get("detail") or "User signing key check is not ok."
+        stale_daemon_probe = daemon_ready and "daemon unreachable" in user_key_detail
+        if stale_daemon_probe:
+            user_key_check = None
+    if isinstance(user_key_check, dict) and user_key_check.get("status") != "ok":
         add_issue(
             issues,
             "warn",
@@ -679,6 +703,47 @@ def diagnose(facts):
             "Federation discover has an active self entry while product session is not admitted.",
             "The read model can be stale or weaker than the session admission gate.",
         )
+
+    if session_admitted is True:
+        if self_node is None:
+            detail = facts["device_list"].get("stderr", "").strip()
+            if facts["device_list"].get("parse_error"):
+                detail = f"JSON parse error: {facts['device_list']['parse_error']}"
+            add_issue(
+                issues,
+                "fail",
+                "DEVICE_LIST_SELF_MISSING",
+                "`device list` does not contain the currently joined device.",
+                detail or "Wait for owner projection to publish, or inspect device list/read-model propagation.",
+            )
+        elif not device_inventory_ready(self_node):
+            add_issue(
+                issues,
+                "fail",
+                "DEVICE_LIST_SELF_NOT_READY",
+                f"`device list` self row is not ready: online={self_node.get('online')} state={self_node.get('state')}.",
+                "The product UI can still render the device as disconnected until this row is online/healthy.",
+            )
+
+        if self_entry is None:
+            detail = facts["federation_discover"].get("stderr", "").strip()
+            if facts["federation_discover"].get("parse_error"):
+                detail = f"JSON parse error: {facts['federation_discover']['parse_error']}"
+            add_issue(
+                issues,
+                "fail",
+                "FEDERATION_SELF_MISSING",
+                "`federation discover` does not contain the currently joined device.",
+                detail or "Wait for federation projection to publish, or inspect Hub directory propagation.",
+            )
+        elif not federation_inventory_ready(self_entry):
+            add_issue(
+                issues,
+                "fail",
+                "FEDERATION_SELF_NOT_ACTIVE",
+                f"`federation discover` self row is not active: status={self_entry.get('status')}.",
+                "The product UI can still render the device as disconnected until federation discovery is active.",
+            )
 
     listener = facts.get("hub_listener")
     pairing_contract = facts.get("hub_pairing_contract")
@@ -749,6 +814,8 @@ def diagnose(facts):
         and daemon.get("invocation_accepting") is True
         and session_admitted is True
         and connection_state == "FRONTEND_CONNECTED"
+        and device_inventory_ready(self_node)
+        and federation_inventory_ready(self_entry)
     )
     return {
         "true_online": connected,

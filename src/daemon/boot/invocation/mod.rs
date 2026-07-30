@@ -755,6 +755,12 @@ pub fn start_daemon_invocation_transport(
     // Hub mode leaves `escalation_state = None`. Both mode is rejected by the
     // capability contract above until it owns an explicit local publication
     // recovery adapter.
+    let connection_state_sink: Arc<
+        dyn crate::daemon::invocation::bidi::session_initiator::SessionConnectionStateSink,
+    > = Arc::new(
+        crate::daemon::invocation::bidi::session_initiator::PersistentSessionConnectionStateSink,
+    );
+
     let escalation_state = if capabilities.owns_upstream_session() {
         let correlation =
             crate::daemon::invocation::bidi::session_escalation::EscalationCorrelation::new();
@@ -776,6 +782,7 @@ pub fn start_daemon_invocation_transport(
                 Arc::clone(&handle),
                 &outbox,
                 identity.caller_ura.clone(),
+                Arc::clone(&connection_state_sink),
             );
         }
         register_purge_recovery_on_outbox_ready(&outbox, Arc::clone(&hot_agent_registrar_cell));
@@ -798,6 +805,7 @@ pub fn start_daemon_invocation_transport(
             correlation,
             outbox,
             device_trust_sync,
+            connection_state_sink,
         })
     } else {
         None
@@ -963,17 +971,28 @@ fn register_dynamic_owner_projection_republisher(
     escalation: Arc<crate::daemon::invocation::bidi::session_escalation::SessionEscalationHandle>,
     outbox: &crate::daemon::invocation::bidi::session_escalation::SharedSessionOutbox,
     owner_ura: String,
+    connection_state_sink: Arc<
+        dyn crate::daemon::invocation::bidi::session_initiator::SessionConnectionStateSink,
+    >,
 ) {
     let schedule: Arc<dyn Fn() + Send + Sync> = Arc::new({
         let catalog = Arc::clone(&catalog);
         let escalation = Arc::clone(&escalation);
         let owner_ura = owner_ura.clone();
+        let connection_state_sink = Arc::clone(&connection_state_sink);
         move || {
             let catalog = Arc::clone(&catalog);
             let escalation = Arc::clone(&escalation);
             let owner_ura = owner_ura.clone();
+            let connection_state_sink = Arc::clone(&connection_state_sink);
             tokio::spawn(async move {
-                publish_dynamic_owner_projection(catalog, escalation, owner_ura).await;
+                publish_dynamic_owner_projection(
+                    catalog,
+                    escalation,
+                    owner_ura,
+                    connection_state_sink,
+                )
+                .await;
             });
         }
     });
@@ -985,6 +1004,9 @@ async fn publish_dynamic_owner_projection(
     catalog: Arc<crate::daemon::ability::dispatch::AxonAbilityCatalog>,
     escalation: Arc<crate::daemon::invocation::bidi::session_escalation::SessionEscalationHandle>,
     owner_ura: String,
+    connection_state_sink: Arc<
+        dyn crate::daemon::invocation::bidi::session_initiator::SessionConnectionStateSink,
+    >,
 ) {
     let snapshot =
         crate::daemon::ability::catalog::LocalAbilityPublicationSnapshot::capture(catalog.as_ref());
@@ -1056,6 +1078,9 @@ async fn publish_dynamic_owner_projection(
                         owner_ura = owner_ura.as_str(),
                         ability_count = ability_count,
                     );
+                    project_dynamic_owner_projection_published_connection_state(
+                        connection_state_sink.as_ref(),
+                    );
                 }
                 Ok(response) => {
                     crate::op_event!(
@@ -1089,6 +1114,17 @@ async fn publish_dynamic_owner_projection(
             );
         }
     }
+}
+
+fn project_dynamic_owner_projection_published_connection_state(
+    connection_state_sink: &dyn crate::daemon::invocation::bidi::session_initiator::SessionConnectionStateSink,
+) -> bool {
+    crate::daemon::invocation::bidi::session_initiator::project_connection_state(
+        connection_state_sink,
+        crate::daemon::boot::join_connection_state::JoinConnectionState::ConnectedOnline,
+        crate::daemon::boot::join_connection_state::JoinTransition::RefetchReadModel,
+        "dynamic_owner_projection_published",
+    )
 }
 
 fn register_paired_user_runtime_signer_if_bound(
@@ -1394,6 +1430,8 @@ struct DeviceEscalationState {
     outbox: crate::daemon::invocation::bidi::session_escalation::SharedSessionOutbox,
     device_trust_sync:
         Arc<crate::daemon::invocation::admission::device_trust_sync::DeviceTrustSync>,
+    connection_state_sink:
+        Arc<dyn crate::daemon::invocation::bidi::session_initiator::SessionConnectionStateSink>,
 }
 
 struct SessionSupervisorConfig {
@@ -1457,13 +1495,21 @@ fn spawn_session_supervisor(config: SessionSupervisorConfig) -> anyhow::Result<S
     // RequestResult frames complete the matching pending entry,
     // and forward the SharedSessionOutbox to the supervisor so it
     // publishes the active up_tx on every successful dial.
-    let (correlation, outbox, device_trust_sync) = match escalation_state {
+    let (correlation, outbox, device_trust_sync, connection_state_sink) = match escalation_state {
         Some(state) => (
             Some(state.correlation),
             Some(state.outbox),
             Some(state.device_trust_sync),
+            state.connection_state_sink,
         ),
-        None => (None, None, None),
+        None => {
+            let sink: Arc<
+                dyn crate::daemon::invocation::bidi::session_initiator::SessionConnectionStateSink,
+            > = Arc::new(
+                crate::daemon::invocation::bidi::session_initiator::PersistentSessionConnectionStateSink,
+            );
+            (None, None, None, sink)
+        }
     };
     let mut local_dispatcher = LocalAxonSessionDispatcher::new();
     if let Some(correlation) = correlation {
@@ -1500,9 +1546,7 @@ fn spawn_session_supervisor(config: SessionSupervisorConfig) -> anyhow::Result<S
             authority_published_abilities,
             initial_admission: Some(initial_admission),
             user_trust_sync: Some(user_trust_sync),
-            connection_state_sink: Arc::new(
-                crate::daemon::invocation::bidi::session_initiator::PersistentSessionConnectionStateSink,
-            ),
+            connection_state_sink,
             cancel: cancel_rx,
         },
     ));
@@ -1786,10 +1830,14 @@ fn spawn_federated_directory_streaming_supervisor(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     use super::SessionShutdown;
+    use crate::daemon::boot::join_connection_state::{JoinConnectionState, JoinTransition};
     use crate::daemon::identity::self_identity::{CanonicalSigner, TestCanonicalSigner};
+    use crate::daemon::invocation::bidi::session_initiator::{
+        SessionConnectionStateChange, SessionConnectionStateSink,
+    };
     use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
     use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
     use ed25519_dalek::SigningKey;
@@ -1801,6 +1849,36 @@ mod tests {
     fn test_daemon_identity(owner_ura: &str) -> DaemonIdentity {
         DaemonIdentity::bind(owner_ura.to_string(), test_signer(owner_ura, [0x33; 32]))
             .expect("bind test daemon identity")
+    }
+
+    #[derive(Default)]
+    struct InMemoryConnectionStateSink {
+        changes: Mutex<Vec<SessionConnectionStateChange>>,
+    }
+
+    impl SessionConnectionStateSink for InMemoryConnectionStateSink {
+        fn record(&self, change: SessionConnectionStateChange) -> anyhow::Result<()> {
+            self.changes
+                .lock()
+                .expect("connection state lock")
+                .push(change);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn dynamic_owner_projection_publication_promotes_read_model_ready_state() {
+        let sink = InMemoryConnectionStateSink::default();
+
+        assert!(project_dynamic_owner_projection_published_connection_state(
+            &sink
+        ));
+
+        let changes = sink.changes.lock().expect("connection state lock");
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].state, JoinConnectionState::ConnectedOnline);
+        assert_eq!(changes[0].transition, JoinTransition::RefetchReadModel);
+        assert_eq!(changes[0].source, "dynamic_owner_projection_published");
     }
 
     #[tokio::test]

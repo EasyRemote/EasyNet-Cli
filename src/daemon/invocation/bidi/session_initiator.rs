@@ -101,11 +101,10 @@ mod supervisor;
 mod tasks;
 mod transport;
 
-use connection_state::project_connection_state;
 #[cfg(test)]
-use connection_state::SessionConnectionStateChange;
+pub(crate) use connection_state::SessionConnectionStateChange;
 pub(crate) use connection_state::{
-    PersistentSessionConnectionStateSink, SessionConnectionStateSink,
+    project_connection_state, PersistentSessionConnectionStateSink, SessionConnectionStateSink,
 };
 pub use envelope::build_session_envelope_open;
 use frame_loop::{run_live_session, LiveSessionRun};
