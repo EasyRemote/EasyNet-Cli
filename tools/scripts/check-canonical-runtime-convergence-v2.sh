@@ -12030,7 +12030,7 @@ if "dial_failed" not in tests or "no trust-anchor entry" not in tests:
     raise SystemExit("forwarded_finalization_receipt_resolver:test_not_load_bearing")
 
 for path in map(Path, sys.argv[2:]):
-    text = path.read_text(encoding="utf-8", errors="replace").split("\n#[cfg(test)]", 1)[0]
+    text = path.read_text(encoding="utf-8", errors="replace")
     if "RealmTrustAnchorKeyResolver::new" in text:
         raise SystemExit(
             "forwarded_finalization_receipt_resolver:dispatcher_constructs_local_resolver:"
@@ -25168,7 +25168,9 @@ EOF
   if ( check_invocation_history_get_key_contract "$tmp/invocation-history-attempt-key" ) >/dev/null 2>&1; then
     fail "self-test expected invocation.history.get attempt_id key gate to fail"
   fi
-  mkdir -p "$tmp/invocation-history-ledger-ura-legacy/src/daemon/ability/builtins/governance"
+  mkdir -p "$tmp/invocation-history-ledger-ura-legacy/src/daemon/ability/builtins/governance" \
+    "$tmp/invocation-history-ledger-ura-legacy/src/cli/commands/groups" \
+    "$tmp/invocation-history-ledger-ura-legacy/sdk/node/test"
   cat >"$tmp/invocation-history-ledger-ura-legacy/src/daemon/ability/builtins/governance/invocation_history.rs" <<'EOF'
 fn ledger_resource_ura() -> Option<String> {
     let hosted_identity = AgentAggregateRepository::load_hosted_identity_status().ok()?;
@@ -25184,6 +25186,47 @@ fn history_key_schema_excludes_attempt_id() {}
 
 #[test]
 fn get_history_rejects_attempt_id_key() {}
+EOF
+  cat >"$tmp/invocation-history-ledger-ura-legacy/src/cli/commands/groups/invocation.rs" <<'EOF'
+struct HistoryListResponse { ledger_ura: String }
+struct HistoryGetResponse { ledger_ura: String }
+struct TraceGetResponse { ledger_ura: String }
+struct HistoryPathResponse { ledger_ura: String }
+trait InvocationHistoryResponse {}
+fn validate_history_ledger_ura(value: &str) {
+    let trimmed = value.trim();
+    let parsed = parse_ura(trimmed);
+    let _ = URAKind::Resource;
+}
+fn invocation_history_responses_require_canonical_ledger_ura() {}
+EOF
+  cat >"$tmp/invocation-history-ledger-ura-legacy/sdk/node/index.js" <<'EOF'
+function receiptLedgerSource(output) {
+  const source = output.source;
+  return source || "invocation.history.list";
+}
+
+function requiredHistoryLedgerURA(value, field) {
+  if (!value) throw new Error(`${field} is required`);
+  const ledgerURA = value.trim();
+  if (!canonicalResourceSubject(ledgerURA)) throw new Error("ledger_ura must be a canonical Resource URA");
+  return ledgerURA;
+}
+
+function authorityMetadataValue() {}
+
+export class ReceiptHistoryPage {
+  constructor(value) {
+    this.source = requiredHistoryLedgerURA(value.source, "source");
+  }
+}
+
+export class SessionHistoryOperations {}
+EOF
+  cat >"$tmp/invocation-history-ledger-ura-legacy/sdk/node/test/runtime-core.test.mjs" <<'EOF'
+test("runtime receipt provider rejects legacy history source field", () => {});
+test("runtime receipt provider requires canonical ledger_ura", () => {});
+const receiptLedgerURA = "easynet:///r/example/resource/user.alice/runtime/invocation-history";
 EOF
   if ( check_invocation_history_ledger_ura_contract "$tmp/invocation-history-ledger-ura-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected invocation.history ledger_ura projection fallback gate to fail"
