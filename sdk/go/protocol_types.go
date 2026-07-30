@@ -48,17 +48,11 @@ type CausalReceiptRef struct {
 type CausalContext struct {
 	Kind CausalContextKind
 
-	Reason string
-
 	Scalar CausalReceiptRef
 	Vector []CausalReceiptRef
 
 	DAGRootHex  string
 	DAGProofURA string
-}
-
-func CausalNullWithReason(reason string) CausalContext {
-	return CausalContext{Kind: CausalContextNull, Reason: reason}
 }
 
 func CausalRoot() CausalContext {

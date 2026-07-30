@@ -201,7 +201,7 @@ func TestRuntimeSigningCausalContextRejectsRetiredAliases(t *testing.T) {
 	if err != nil {
 		t.Fatalf("canonical root causal context: %v", err)
 	}
-	if root.Kind != CausalContextNull || root.Reason != "" {
+	if root.Kind != CausalContextNull {
 		t.Fatalf("canonical root causal context = %#v", root)
 	}
 

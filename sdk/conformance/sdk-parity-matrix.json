@@ -95656,7 +95656,7 @@
         },
         {
           "item": "CausalContext",
-          "sha256": "ca5779910d1859649e5d86095ddf9ad18f77ceef205390b704e04d748dea54fc"
+          "sha256": "9796da363785d63cb3cea8dd3d9b512e6878bdd921bdb1f14bdec4999630490e"
         },
         {
           "item": "CausalContextDAG",
@@ -95685,10 +95685,6 @@
         {
           "item": "CausalDAGRoot",
           "sha256": "4ad92f2ac8cd838f9e9f7892dbc47a88e532babff9b4438a386015b4125e76e1"
-        },
-        {
-          "item": "CausalNullWithReason",
-          "sha256": "a71584a07923a8d06504903a0511b4d218d75d6b1286672c11daf2554f70eee7"
         },
         {
           "item": "CausalReceiptRef",
@@ -95825,10 +95821,6 @@
         {
           "item": "CausalContext.Kind",
           "sha256": "17224e38c500e4665be7f32f78734f21441e7d20c0a558745c7d2ec81de30665"
-        },
-        {
-          "item": "CausalContext.Reason",
-          "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
         },
         {
           "item": "CausalContext.Scalar",
@@ -96231,7 +96223,7 @@
             },
             {
               "item": "CausalContext",
-              "sha256": "ca5779910d1859649e5d86095ddf9ad18f77ceef205390b704e04d748dea54fc"
+              "sha256": "9796da363785d63cb3cea8dd3d9b512e6878bdd921bdb1f14bdec4999630490e"
             },
             {
               "item": "CausalContextDAG",
@@ -96260,10 +96252,6 @@
             {
               "item": "CausalDAGRoot",
               "sha256": "4ad92f2ac8cd838f9e9f7892dbc47a88e532babff9b4438a386015b4125e76e1"
-            },
-            {
-              "item": "CausalNullWithReason",
-              "sha256": "a71584a07923a8d06504903a0511b4d218d75d6b1286672c11daf2554f70eee7"
             },
             {
               "item": "CausalReceiptRef",
@@ -96400,10 +96388,6 @@
             {
               "item": "CausalContext.Kind",
               "sha256": "17224e38c500e4665be7f32f78734f21441e7d20c0a558745c7d2ec81de30665"
-            },
-            {
-              "item": "CausalContext.Reason",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "CausalContext.Scalar",
@@ -96806,7 +96790,7 @@
             },
             {
               "item": "CausalContext",
-              "sha256": "ca5779910d1859649e5d86095ddf9ad18f77ceef205390b704e04d748dea54fc"
+              "sha256": "9796da363785d63cb3cea8dd3d9b512e6878bdd921bdb1f14bdec4999630490e"
             },
             {
               "item": "CausalContextDAG",
@@ -96835,10 +96819,6 @@
             {
               "item": "CausalDAGRoot",
               "sha256": "4ad92f2ac8cd838f9e9f7892dbc47a88e532babff9b4438a386015b4125e76e1"
-            },
-            {
-              "item": "CausalNullWithReason",
-              "sha256": "a71584a07923a8d06504903a0511b4d218d75d6b1286672c11daf2554f70eee7"
             },
             {
               "item": "CausalReceiptRef",
@@ -96975,10 +96955,6 @@
             {
               "item": "CausalContext.Kind",
               "sha256": "17224e38c500e4665be7f32f78734f21441e7d20c0a558745c7d2ec81de30665"
-            },
-            {
-              "item": "CausalContext.Reason",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "CausalContext.Scalar",
@@ -97381,7 +97357,7 @@
             },
             {
               "item": "CausalContext",
-              "sha256": "ca5779910d1859649e5d86095ddf9ad18f77ceef205390b704e04d748dea54fc"
+              "sha256": "9796da363785d63cb3cea8dd3d9b512e6878bdd921bdb1f14bdec4999630490e"
             },
             {
               "item": "CausalContextDAG",
@@ -97410,10 +97386,6 @@
             {
               "item": "CausalDAGRoot",
               "sha256": "4ad92f2ac8cd838f9e9f7892dbc47a88e532babff9b4438a386015b4125e76e1"
-            },
-            {
-              "item": "CausalNullWithReason",
-              "sha256": "a71584a07923a8d06504903a0511b4d218d75d6b1286672c11daf2554f70eee7"
             },
             {
               "item": "CausalReceiptRef",
@@ -97550,10 +97522,6 @@
             {
               "item": "CausalContext.Kind",
               "sha256": "17224e38c500e4665be7f32f78734f21441e7d20c0a558745c7d2ec81de30665"
-            },
-            {
-              "item": "CausalContext.Reason",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "CausalContext.Scalar",
@@ -97956,7 +97924,7 @@
             },
             {
               "item": "CausalContext",
-              "sha256": "ca5779910d1859649e5d86095ddf9ad18f77ceef205390b704e04d748dea54fc"
+              "sha256": "9796da363785d63cb3cea8dd3d9b512e6878bdd921bdb1f14bdec4999630490e"
             },
             {
               "item": "CausalContextDAG",
@@ -97985,10 +97953,6 @@
             {
               "item": "CausalDAGRoot",
               "sha256": "4ad92f2ac8cd838f9e9f7892dbc47a88e532babff9b4438a386015b4125e76e1"
-            },
-            {
-              "item": "CausalNullWithReason",
-              "sha256": "a71584a07923a8d06504903a0511b4d218d75d6b1286672c11daf2554f70eee7"
             },
             {
               "item": "CausalReceiptRef",
@@ -98125,10 +98089,6 @@
             {
               "item": "CausalContext.Kind",
               "sha256": "17224e38c500e4665be7f32f78734f21441e7d20c0a558745c7d2ec81de30665"
-            },
-            {
-              "item": "CausalContext.Reason",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "CausalContext.Scalar",
@@ -98531,7 +98491,7 @@
             },
             {
               "item": "CausalContext",
-              "sha256": "ca5779910d1859649e5d86095ddf9ad18f77ceef205390b704e04d748dea54fc"
+              "sha256": "9796da363785d63cb3cea8dd3d9b512e6878bdd921bdb1f14bdec4999630490e"
             },
             {
               "item": "CausalContextDAG",
@@ -98560,10 +98520,6 @@
             {
               "item": "CausalDAGRoot",
               "sha256": "4ad92f2ac8cd838f9e9f7892dbc47a88e532babff9b4438a386015b4125e76e1"
-            },
-            {
-              "item": "CausalNullWithReason",
-              "sha256": "a71584a07923a8d06504903a0511b4d218d75d6b1286672c11daf2554f70eee7"
             },
             {
               "item": "CausalReceiptRef",
@@ -98700,10 +98656,6 @@
             {
               "item": "CausalContext.Kind",
               "sha256": "17224e38c500e4665be7f32f78734f21441e7d20c0a558745c7d2ec81de30665"
-            },
-            {
-              "item": "CausalContext.Reason",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "CausalContext.Scalar",
@@ -99106,7 +99058,7 @@
             },
             {
               "item": "CausalContext",
-              "sha256": "ca5779910d1859649e5d86095ddf9ad18f77ceef205390b704e04d748dea54fc"
+              "sha256": "9796da363785d63cb3cea8dd3d9b512e6878bdd921bdb1f14bdec4999630490e"
             },
             {
               "item": "CausalContextDAG",
@@ -99135,10 +99087,6 @@
             {
               "item": "CausalDAGRoot",
               "sha256": "4ad92f2ac8cd838f9e9f7892dbc47a88e532babff9b4438a386015b4125e76e1"
-            },
-            {
-              "item": "CausalNullWithReason",
-              "sha256": "a71584a07923a8d06504903a0511b4d218d75d6b1286672c11daf2554f70eee7"
             },
             {
               "item": "CausalReceiptRef",
@@ -99275,10 +99223,6 @@
             {
               "item": "CausalContext.Kind",
               "sha256": "17224e38c500e4665be7f32f78734f21441e7d20c0a558745c7d2ec81de30665"
-            },
-            {
-              "item": "CausalContext.Reason",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "CausalContext.Scalar",
@@ -99681,7 +99625,7 @@
             },
             {
               "item": "CausalContext",
-              "sha256": "ca5779910d1859649e5d86095ddf9ad18f77ceef205390b704e04d748dea54fc"
+              "sha256": "9796da363785d63cb3cea8dd3d9b512e6878bdd921bdb1f14bdec4999630490e"
             },
             {
               "item": "CausalContextDAG",
@@ -99710,10 +99654,6 @@
             {
               "item": "CausalDAGRoot",
               "sha256": "4ad92f2ac8cd838f9e9f7892dbc47a88e532babff9b4438a386015b4125e76e1"
-            },
-            {
-              "item": "CausalNullWithReason",
-              "sha256": "a71584a07923a8d06504903a0511b4d218d75d6b1286672c11daf2554f70eee7"
             },
             {
               "item": "CausalReceiptRef",
@@ -99850,10 +99790,6 @@
             {
               "item": "CausalContext.Kind",
               "sha256": "17224e38c500e4665be7f32f78734f21441e7d20c0a558745c7d2ec81de30665"
-            },
-            {
-              "item": "CausalContext.Reason",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "CausalContext.Scalar",
@@ -100256,7 +100192,7 @@
             },
             {
               "item": "CausalContext",
-              "sha256": "ca5779910d1859649e5d86095ddf9ad18f77ceef205390b704e04d748dea54fc"
+              "sha256": "9796da363785d63cb3cea8dd3d9b512e6878bdd921bdb1f14bdec4999630490e"
             },
             {
               "item": "CausalContextDAG",
@@ -100285,10 +100221,6 @@
             {
               "item": "CausalDAGRoot",
               "sha256": "4ad92f2ac8cd838f9e9f7892dbc47a88e532babff9b4438a386015b4125e76e1"
-            },
-            {
-              "item": "CausalNullWithReason",
-              "sha256": "a71584a07923a8d06504903a0511b4d218d75d6b1286672c11daf2554f70eee7"
             },
             {
               "item": "CausalReceiptRef",
@@ -100425,10 +100357,6 @@
             {
               "item": "CausalContext.Kind",
               "sha256": "17224e38c500e4665be7f32f78734f21441e7d20c0a558745c7d2ec81de30665"
-            },
-            {
-              "item": "CausalContext.Reason",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "CausalContext.Scalar",
@@ -100831,7 +100759,7 @@
             },
             {
               "item": "CausalContext",
-              "sha256": "ca5779910d1859649e5d86095ddf9ad18f77ceef205390b704e04d748dea54fc"
+              "sha256": "9796da363785d63cb3cea8dd3d9b512e6878bdd921bdb1f14bdec4999630490e"
             },
             {
               "item": "CausalContextDAG",
@@ -100860,10 +100788,6 @@
             {
               "item": "CausalDAGRoot",
               "sha256": "4ad92f2ac8cd838f9e9f7892dbc47a88e532babff9b4438a386015b4125e76e1"
-            },
-            {
-              "item": "CausalNullWithReason",
-              "sha256": "a71584a07923a8d06504903a0511b4d218d75d6b1286672c11daf2554f70eee7"
             },
             {
               "item": "CausalReceiptRef",
@@ -101000,10 +100924,6 @@
             {
               "item": "CausalContext.Kind",
               "sha256": "17224e38c500e4665be7f32f78734f21441e7d20c0a558745c7d2ec81de30665"
-            },
-            {
-              "item": "CausalContext.Reason",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "CausalContext.Scalar",
@@ -101406,7 +101326,7 @@
             },
             {
               "item": "CausalContext",
-              "sha256": "ca5779910d1859649e5d86095ddf9ad18f77ceef205390b704e04d748dea54fc"
+              "sha256": "9796da363785d63cb3cea8dd3d9b512e6878bdd921bdb1f14bdec4999630490e"
             },
             {
               "item": "CausalContextDAG",
@@ -101435,10 +101355,6 @@
             {
               "item": "CausalDAGRoot",
               "sha256": "4ad92f2ac8cd838f9e9f7892dbc47a88e532babff9b4438a386015b4125e76e1"
-            },
-            {
-              "item": "CausalNullWithReason",
-              "sha256": "a71584a07923a8d06504903a0511b4d218d75d6b1286672c11daf2554f70eee7"
             },
             {
               "item": "CausalReceiptRef",
@@ -101575,10 +101491,6 @@
             {
               "item": "CausalContext.Kind",
               "sha256": "17224e38c500e4665be7f32f78734f21441e7d20c0a558745c7d2ec81de30665"
-            },
-            {
-              "item": "CausalContext.Reason",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "CausalContext.Scalar",
@@ -101981,7 +101893,7 @@
             },
             {
               "item": "CausalContext",
-              "sha256": "ca5779910d1859649e5d86095ddf9ad18f77ceef205390b704e04d748dea54fc"
+              "sha256": "9796da363785d63cb3cea8dd3d9b512e6878bdd921bdb1f14bdec4999630490e"
             },
             {
               "item": "CausalContextDAG",
@@ -102010,10 +101922,6 @@
             {
               "item": "CausalDAGRoot",
               "sha256": "4ad92f2ac8cd838f9e9f7892dbc47a88e532babff9b4438a386015b4125e76e1"
-            },
-            {
-              "item": "CausalNullWithReason",
-              "sha256": "a71584a07923a8d06504903a0511b4d218d75d6b1286672c11daf2554f70eee7"
             },
             {
               "item": "CausalReceiptRef",
@@ -102150,10 +102058,6 @@
             {
               "item": "CausalContext.Kind",
               "sha256": "17224e38c500e4665be7f32f78734f21441e7d20c0a558745c7d2ec81de30665"
-            },
-            {
-              "item": "CausalContext.Reason",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "CausalContext.Scalar",
@@ -102556,7 +102460,7 @@
             },
             {
               "item": "CausalContext",
-              "sha256": "ca5779910d1859649e5d86095ddf9ad18f77ceef205390b704e04d748dea54fc"
+              "sha256": "9796da363785d63cb3cea8dd3d9b512e6878bdd921bdb1f14bdec4999630490e"
             },
             {
               "item": "CausalContextDAG",
@@ -102585,10 +102489,6 @@
             {
               "item": "CausalDAGRoot",
               "sha256": "4ad92f2ac8cd838f9e9f7892dbc47a88e532babff9b4438a386015b4125e76e1"
-            },
-            {
-              "item": "CausalNullWithReason",
-              "sha256": "a71584a07923a8d06504903a0511b4d218d75d6b1286672c11daf2554f70eee7"
             },
             {
               "item": "CausalReceiptRef",
@@ -102725,10 +102625,6 @@
             {
               "item": "CausalContext.Kind",
               "sha256": "17224e38c500e4665be7f32f78734f21441e7d20c0a558745c7d2ec81de30665"
-            },
-            {
-              "item": "CausalContext.Reason",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "CausalContext.Scalar",
@@ -103131,7 +103027,7 @@
             },
             {
               "item": "CausalContext",
-              "sha256": "ca5779910d1859649e5d86095ddf9ad18f77ceef205390b704e04d748dea54fc"
+              "sha256": "9796da363785d63cb3cea8dd3d9b512e6878bdd921bdb1f14bdec4999630490e"
             },
             {
               "item": "CausalContextDAG",
@@ -103160,10 +103056,6 @@
             {
               "item": "CausalDAGRoot",
               "sha256": "4ad92f2ac8cd838f9e9f7892dbc47a88e532babff9b4438a386015b4125e76e1"
-            },
-            {
-              "item": "CausalNullWithReason",
-              "sha256": "a71584a07923a8d06504903a0511b4d218d75d6b1286672c11daf2554f70eee7"
             },
             {
               "item": "CausalReceiptRef",
@@ -103300,10 +103192,6 @@
             {
               "item": "CausalContext.Kind",
               "sha256": "17224e38c500e4665be7f32f78734f21441e7d20c0a558745c7d2ec81de30665"
-            },
-            {
-              "item": "CausalContext.Reason",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "CausalContext.Scalar",
@@ -103706,7 +103594,7 @@
             },
             {
               "item": "CausalContext",
-              "sha256": "ca5779910d1859649e5d86095ddf9ad18f77ceef205390b704e04d748dea54fc"
+              "sha256": "9796da363785d63cb3cea8dd3d9b512e6878bdd921bdb1f14bdec4999630490e"
             },
             {
               "item": "CausalContextDAG",
@@ -103735,10 +103623,6 @@
             {
               "item": "CausalDAGRoot",
               "sha256": "4ad92f2ac8cd838f9e9f7892dbc47a88e532babff9b4438a386015b4125e76e1"
-            },
-            {
-              "item": "CausalNullWithReason",
-              "sha256": "a71584a07923a8d06504903a0511b4d218d75d6b1286672c11daf2554f70eee7"
             },
             {
               "item": "CausalReceiptRef",
@@ -103875,10 +103759,6 @@
             {
               "item": "CausalContext.Kind",
               "sha256": "17224e38c500e4665be7f32f78734f21441e7d20c0a558745c7d2ec81de30665"
-            },
-            {
-              "item": "CausalContext.Reason",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "CausalContext.Scalar",
@@ -104281,7 +104161,7 @@
             },
             {
               "item": "CausalContext",
-              "sha256": "ca5779910d1859649e5d86095ddf9ad18f77ceef205390b704e04d748dea54fc"
+              "sha256": "9796da363785d63cb3cea8dd3d9b512e6878bdd921bdb1f14bdec4999630490e"
             },
             {
               "item": "CausalContextDAG",
@@ -104310,10 +104190,6 @@
             {
               "item": "CausalDAGRoot",
               "sha256": "4ad92f2ac8cd838f9e9f7892dbc47a88e532babff9b4438a386015b4125e76e1"
-            },
-            {
-              "item": "CausalNullWithReason",
-              "sha256": "a71584a07923a8d06504903a0511b4d218d75d6b1286672c11daf2554f70eee7"
             },
             {
               "item": "CausalReceiptRef",
@@ -104450,10 +104326,6 @@
             {
               "item": "CausalContext.Kind",
               "sha256": "17224e38c500e4665be7f32f78734f21441e7d20c0a558745c7d2ec81de30665"
-            },
-            {
-              "item": "CausalContext.Reason",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "CausalContext.Scalar",
@@ -104856,7 +104728,7 @@
             },
             {
               "item": "CausalContext",
-              "sha256": "ca5779910d1859649e5d86095ddf9ad18f77ceef205390b704e04d748dea54fc"
+              "sha256": "9796da363785d63cb3cea8dd3d9b512e6878bdd921bdb1f14bdec4999630490e"
             },
             {
               "item": "CausalContextDAG",
@@ -104885,10 +104757,6 @@
             {
               "item": "CausalDAGRoot",
               "sha256": "4ad92f2ac8cd838f9e9f7892dbc47a88e532babff9b4438a386015b4125e76e1"
-            },
-            {
-              "item": "CausalNullWithReason",
-              "sha256": "a71584a07923a8d06504903a0511b4d218d75d6b1286672c11daf2554f70eee7"
             },
             {
               "item": "CausalReceiptRef",
@@ -105025,10 +104893,6 @@
             {
               "item": "CausalContext.Kind",
               "sha256": "17224e38c500e4665be7f32f78734f21441e7d20c0a558745c7d2ec81de30665"
-            },
-            {
-              "item": "CausalContext.Reason",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "CausalContext.Scalar",
@@ -105431,7 +105295,7 @@
             },
             {
               "item": "CausalContext",
-              "sha256": "ca5779910d1859649e5d86095ddf9ad18f77ceef205390b704e04d748dea54fc"
+              "sha256": "9796da363785d63cb3cea8dd3d9b512e6878bdd921bdb1f14bdec4999630490e"
             },
             {
               "item": "CausalContextDAG",
@@ -105460,10 +105324,6 @@
             {
               "item": "CausalDAGRoot",
               "sha256": "4ad92f2ac8cd838f9e9f7892dbc47a88e532babff9b4438a386015b4125e76e1"
-            },
-            {
-              "item": "CausalNullWithReason",
-              "sha256": "a71584a07923a8d06504903a0511b4d218d75d6b1286672c11daf2554f70eee7"
             },
             {
               "item": "CausalReceiptRef",
@@ -105600,10 +105460,6 @@
             {
               "item": "CausalContext.Kind",
               "sha256": "17224e38c500e4665be7f32f78734f21441e7d20c0a558745c7d2ec81de30665"
-            },
-            {
-              "item": "CausalContext.Reason",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "CausalContext.Scalar",
@@ -106006,7 +105862,7 @@
             },
             {
               "item": "CausalContext",
-              "sha256": "ca5779910d1859649e5d86095ddf9ad18f77ceef205390b704e04d748dea54fc"
+              "sha256": "9796da363785d63cb3cea8dd3d9b512e6878bdd921bdb1f14bdec4999630490e"
             },
             {
               "item": "CausalContextDAG",
@@ -106035,10 +105891,6 @@
             {
               "item": "CausalDAGRoot",
               "sha256": "4ad92f2ac8cd838f9e9f7892dbc47a88e532babff9b4438a386015b4125e76e1"
-            },
-            {
-              "item": "CausalNullWithReason",
-              "sha256": "a71584a07923a8d06504903a0511b4d218d75d6b1286672c11daf2554f70eee7"
             },
             {
               "item": "CausalReceiptRef",
@@ -106175,10 +106027,6 @@
             {
               "item": "CausalContext.Kind",
               "sha256": "17224e38c500e4665be7f32f78734f21441e7d20c0a558745c7d2ec81de30665"
-            },
-            {
-              "item": "CausalContext.Reason",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "CausalContext.Scalar",
@@ -106581,7 +106429,7 @@
             },
             {
               "item": "CausalContext",
-              "sha256": "ca5779910d1859649e5d86095ddf9ad18f77ceef205390b704e04d748dea54fc"
+              "sha256": "9796da363785d63cb3cea8dd3d9b512e6878bdd921bdb1f14bdec4999630490e"
             },
             {
               "item": "CausalContextDAG",
@@ -106610,10 +106458,6 @@
             {
               "item": "CausalDAGRoot",
               "sha256": "4ad92f2ac8cd838f9e9f7892dbc47a88e532babff9b4438a386015b4125e76e1"
-            },
-            {
-              "item": "CausalNullWithReason",
-              "sha256": "a71584a07923a8d06504903a0511b4d218d75d6b1286672c11daf2554f70eee7"
             },
             {
               "item": "CausalReceiptRef",
@@ -106750,10 +106594,6 @@
             {
               "item": "CausalContext.Kind",
               "sha256": "17224e38c500e4665be7f32f78734f21441e7d20c0a558745c7d2ec81de30665"
-            },
-            {
-              "item": "CausalContext.Reason",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "CausalContext.Scalar",
@@ -107156,7 +106996,7 @@
             },
             {
               "item": "CausalContext",
-              "sha256": "ca5779910d1859649e5d86095ddf9ad18f77ceef205390b704e04d748dea54fc"
+              "sha256": "9796da363785d63cb3cea8dd3d9b512e6878bdd921bdb1f14bdec4999630490e"
             },
             {
               "item": "CausalContextDAG",
@@ -107185,10 +107025,6 @@
             {
               "item": "CausalDAGRoot",
               "sha256": "4ad92f2ac8cd838f9e9f7892dbc47a88e532babff9b4438a386015b4125e76e1"
-            },
-            {
-              "item": "CausalNullWithReason",
-              "sha256": "a71584a07923a8d06504903a0511b4d218d75d6b1286672c11daf2554f70eee7"
             },
             {
               "item": "CausalReceiptRef",
@@ -107325,10 +107161,6 @@
             {
               "item": "CausalContext.Kind",
               "sha256": "17224e38c500e4665be7f32f78734f21441e7d20c0a558745c7d2ec81de30665"
-            },
-            {
-              "item": "CausalContext.Reason",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "CausalContext.Scalar",
