@@ -95,14 +95,21 @@ pub(super) async fn run_live_session<D: SessionFrameDispatcher>(
     let mut session_contract_established = false;
 
     loop {
-        let frame_result = match tokio::time::timeout(idle_timeout, down_stream.next()).await {
-            Ok(Some(frame_result)) => frame_result,
-            Ok(None) => break,
-            Err(_elapsed) => {
-                return Err(SessionError::IdleTimeout {
-                    endpoint: hub_endpoint,
-                    timeout: idle_timeout,
-                });
+        let frame_result = if session_contract_established {
+            match down_stream.next().await {
+                Some(frame_result) => frame_result,
+                None => break,
+            }
+        } else {
+            match tokio::time::timeout(idle_timeout, down_stream.next()).await {
+                Ok(Some(frame_result)) => frame_result,
+                Ok(None) => break,
+                Err(_elapsed) => {
+                    return Err(SessionError::IdleTimeout {
+                        endpoint: hub_endpoint,
+                        timeout: idle_timeout,
+                    });
+                }
             }
         };
 

@@ -211,8 +211,8 @@ pub const SESSION_BACKOFF_INITIAL: Duration = Duration::from_millis(250);
 /// configures for federation_client.
 pub const SESSION_BACKOFF_MAX: Duration = Duration::from_secs(30);
 
-/// Maximum silence window on the down-stream before the device
-/// declares the session dead and forces a reconnect.
+/// Maximum silence window on the down-stream before the device has received
+/// the hub's `SessionEstablished` control frame.
 ///
 /// Why this exists in addition to transport-level HTTP/2 PING:
 /// the observed Docker failure mode was asymmetric — the hub-side
@@ -220,18 +220,14 @@ pub const SESSION_BACKOFF_MAX: Duration = Duration::from_secs(30);
 /// connection`, removed presence immediately, but the device-side
 /// `down_stream.next()` sometimes remained parked inside tonic's
 /// body machinery instead of surfacing EOF/reset promptly. A
-/// bounded inactivity watchdog closes that gap: if the hub stops
-/// sending *anything* (real dispatches, receipts, or no-op
-/// keepalives) for 15 s, the device tears the bidi down and the
-/// supervisor redials.
+/// bounded admission watchdog closes that gap without treating ordinary
+/// post-admission business-frame silence as a dead device. Once the hub sends
+/// `SessionEstablished`, liveness is stream membership: EOF/reset, the
+/// device→hub heartbeat path, or dispatch send failure owns teardown.
 ///
-/// Paired with the hub-side no-op control keepalive every 5 s
-/// (`daemon_invocation_service::SESSION_DOWN_HEARTBEAT_INTERVAL`);
-/// 15 s = three missed keepalive windows, which is conservative
-/// enough to avoid false positives on a briefly busy runtime but
-/// fast enough to self-heal the session well before the old
-/// "hang forever in client.invoke_bidi" failure mode becomes
-/// user-visible.
+/// The hub may still emit down-stream no-op controls as transport keepalives,
+/// but the device must not require them after admission; otherwise an idle UI
+/// page creates periodic presence gaps and `TARGET_OFFLINE` false negatives.
 pub const SESSION_IDLE_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Device → hub application-level heartbeat cadence for the
@@ -1082,6 +1078,8 @@ mod tests {
         reject_unary_prelude: bool,
     }
 
+    struct EstablishedThenSilentSessionHub;
+
     #[derive(Clone)]
     struct NotifyingSessionHub {
         opened: Arc<std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>>,
@@ -1133,6 +1131,67 @@ mod tests {
             Ok(Response::new(
                 Box::pin(stream::pending()) as Self::InvokeBidiStream
             ))
+        }
+    }
+
+    #[tonic::async_trait]
+    impl Invocation for EstablishedThenSilentSessionHub {
+        type InvokeStreamStream = TestInvokeStream;
+        type InvokeBidiStream = TestInvokeBidiStream;
+
+        async fn invoke(
+            &self,
+            _request: Request<InvokeRequest>,
+        ) -> Result<Response<InvokeResponse>, Status> {
+            Ok(accepted_prelude_response())
+        }
+
+        async fn invoke_stream(
+            &self,
+            _request: Request<InvokeServerStreamRequest>,
+        ) -> Result<Response<Self::InvokeStreamStream>, Status> {
+            Err(Status::unimplemented("test hub only wires InvokeBidi"))
+        }
+
+        async fn invoke_bidi(
+            &self,
+            request: Request<tonic::Streaming<InvokeBidiUp>>,
+        ) -> Result<Response<Self::InvokeBidiStream>, Status> {
+            let mut up = request.into_inner();
+            let frame0 = up
+                .next()
+                .await
+                .ok_or_else(|| Status::invalid_argument("expected frame 0"))?
+                .map_err(|status| Status::internal(format!("frame 0 recv: {status}")))?;
+            let UpPayload::EnvelopeOpen(_) = frame0.payload.ok_or_else(|| {
+                Status::invalid_argument("frame 0 must carry EnvelopeOpen payload")
+            })?
+            else {
+                return Err(Status::invalid_argument("frame 0 must be EnvelopeOpen"));
+            };
+
+            let established = InvokeBidiDown {
+                sequence: 0,
+                payload: Some(axon_sdk::pb::axon::v1::invoke_bidi_down::Payload::Control(
+                    BidiControl {
+                        control: Some(
+                            axon_sdk::pb::axon::v1::bidi_control::Control::SessionEstablished(
+                                axon_sdk::pb::axon::v1::BidiSessionEstablished {
+                                    contract_version: DEVICE_DISPATCH_CONTRACT_VERSION,
+                                    dispatch_encoding: "proto".to_string(),
+                                    session_id: 1,
+                                    displaced_prior: false,
+                                },
+                            ),
+                        ),
+                    },
+                )),
+                ..InvokeBidiDown::default()
+            };
+
+            Ok(Response::new(Box::pin(
+                stream::once(async move { Ok(established) }).chain(stream::pending()),
+            ) as Self::InvokeBidiStream))
         }
     }
 
@@ -1388,6 +1447,25 @@ mod tests {
 
     async fn spawn_silent_session_hub() -> (SocketAddr, super::tasks::AbortOnDrop) {
         spawn_silent_session_hub_with_prelude(false).await
+    }
+
+    async fn spawn_established_then_silent_session_hub() -> (SocketAddr, super::tasks::AbortOnDrop)
+    {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind established-then-silent session hub");
+        let addr = listener
+            .local_addr()
+            .expect("established-then-silent hub local addr");
+        let incoming = TcpListenerStream::new(listener);
+        let handle = tokio::spawn(async move {
+            tonic::transport::Server::builder()
+                .add_service(InvocationServer::new(EstablishedThenSilentSessionHub))
+                .serve_with_incoming(incoming)
+                .await
+                .expect("established-then-silent session hub server");
+        });
+        (addr, super::tasks::AbortOnDrop(handle))
     }
 
     async fn spawn_silent_session_hub_with_prelude(
@@ -2553,6 +2631,39 @@ mod tests {
             }
             other => panic!("expected IdleTimeout, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn established_session_silence_does_not_trigger_idle_timeout() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        seed_session_credentials();
+        let dispatcher = Arc::new(RecordingDispatcher::default());
+        let (addr, _server) = spawn_established_then_silent_session_hub().await;
+
+        let result = tokio::time::timeout(
+            Duration::from_millis(220),
+            dial_and_run_session_with_idle_timeout(
+                SessionDialAttempt {
+                    hub_endpoint: format!("http://{addr}"),
+                    signer: TestSessionSigner::random("easynet:///r/realm/device/n1"),
+                    hub_ca_pem_path: None,
+                    dispatcher,
+                    escalation_outbox: None,
+                    preludes: SessionPreludeInputs::new(&[], authority_store()),
+                    idle_timeout: Duration::from_millis(80),
+                    initial_admission: None,
+                    user_trust_sync: None,
+                    connection_state_sink: isolated_connection_state_sink(),
+                },
+                &mut SessionPhaseTracker::new(),
+            ),
+        )
+        .await;
+
+        assert!(
+            result.is_err(),
+            "post-contract silence is valid stream membership and must not complete as idle timeout"
+        );
     }
 
     #[tokio::test]
