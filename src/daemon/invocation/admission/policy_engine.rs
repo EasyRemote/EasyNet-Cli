@@ -28,6 +28,7 @@ pub struct PolicyInput {
     pub authority_self_read: bool,
     pub authority_self_manage: bool,
     pub authority_self_stream: bool,
+    pub authority_peer_directory_stream: bool,
     pub realm_authority_public_read: bool,
     pub device_self_publication_manage: bool,
     pub device_self_session_stream: bool,
@@ -71,6 +72,14 @@ impl PolicyEngine {
             );
         }
         if input.action == AccessAction::Stream && input.authority_self_stream {
+            return decision(
+                &input,
+                PolicyDecisionOutcome::Allow,
+                PolicyDecisionReason::ExplicitGrantAllow,
+                None,
+            );
+        }
+        if input.action == AccessAction::Stream && input.authority_peer_directory_stream {
             return decision(
                 &input,
                 PolicyDecisionOutcome::Allow,
@@ -280,6 +289,7 @@ mod tests {
             authority_self_read: false,
             authority_self_manage: false,
             authority_self_stream: false,
+            authority_peer_directory_stream: false,
             realm_authority_public_read: false,
             device_self_publication_manage: false,
             device_self_session_stream: false,
@@ -460,6 +470,33 @@ mod tests {
         input.action = AccessAction::Stream;
         input.safe_read = false;
         input.authority_self_stream = true;
+
+        let got = PolicyEngine::check(input);
+        assert_eq!(got.decision, PolicyDecisionOutcome::Allow);
+        assert_eq!(got.reason, PolicyDecisionReason::ExplicitGrantAllow);
+        assert!(got.owner_user_id.is_none());
+    }
+
+    #[test]
+    fn authority_peer_directory_stream_allows_hub_link_without_user_owner() {
+        let mut input = base_input();
+        input.owner.owner_user_id = None;
+        input.owner.owner_ura = Some("easynet:///r/hub-b.local/authority".to_string());
+        input.owner.owner_source = OwnerSource::Unresolved;
+        input.caller_ura = "easynet:///r/hub-a.local/authority".to_string();
+        input.principal_kind = PrincipalKind::Token;
+        input.principal_id = "easynet:///r/hub-a.local/authority".to_string();
+        input.token_id = Some("easynet:///r/hub-a.local/authority".to_string());
+        input.token_class = Some(TokenClass::HubLink);
+        input.callee_ura = "easynet:///r/hub-b.local/authority".to_string();
+        input.subject_ura =
+            "easynet:///r/hub-a.local/resource/hub.federation/directory/hub-b.local".to_string();
+        input.ability_ura =
+            "easynet:///r/hub-b.local/ability/authority.federation.subscribe_directory_v2"
+                .to_string();
+        input.action = AccessAction::Stream;
+        input.safe_read = false;
+        input.authority_peer_directory_stream = true;
 
         let got = PolicyEngine::check(input);
         assert_eq!(got.decision, PolicyDecisionOutcome::Allow);

@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 #[cfg(feature = "axon-pb")]
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 #[cfg(feature = "axon-pb")]
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -832,6 +832,52 @@ fn invoke_local_daemon_ability_with_tuple_plan(
     })
 }
 
+#[cfg(feature = "axon-pb")]
+fn invoke_local_daemon_ability_with_tuple_plan_at_verified(
+    socket_path: PathBuf,
+    tuple_plan: LocalDaemonSystemTuplePlan,
+) -> anyhow::Result<serde_json::Value> {
+    use anyhow::{anyhow, Context};
+
+    let timeout = tuple_plan.timeout;
+    let invocation = local_daemon_system_invocation_from_tuple_plan(tuple_plan)?;
+    let function_name = invocation.function_name().to_string();
+    let request = invocation.invoke_request()?;
+    let submitted = SubmittedInvocationProjection::from_request(&request, &function_name)?;
+    let thread_name = format!("easynet-receipt-key-resolve-{function_name}");
+    let response = std::thread::Builder::new()
+        .name(thread_name)
+        .spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .context("build tokio runtime for daemon delegated receipt key resolution")?;
+            runtime.block_on(async move {
+                let channel =
+                    connect_channel(socket_path.clone(), timeout, Duration::from_secs(10))
+                        .await
+                        .map_err(|source| local_daemon_connect_error(&socket_path, source))?;
+                let mut client =
+                    axon_sdk::pb::axon::v1::invocation_client::InvocationClient::new(channel);
+                let (value, response) =
+                    invoke_local_daemon_json(&mut client, request, &function_name).await?;
+                Ok::<_, anyhow::Error>((value, response, function_name))
+            })
+        })
+        .map_err(|error| anyhow!("spawn daemon delegated receipt key resolver failed: {error}"))?
+        .join()
+        .map_err(|_| anyhow!("daemon delegated receipt key resolver panicked"))??;
+    let (value, response, function_name) = response;
+    let terminal = UnverifiedTerminalInvocationProjection::from_response(
+        &response,
+        &submitted,
+        &function_name,
+    )?
+    .verify(&LocalKeyServiceReceiptResolver::new(), &function_name)?;
+    record_verified_causal_anchor(&terminal.causal_anchor)?;
+    Ok(value)
+}
+
 pub(crate) struct LocalDaemonTargetedInvocationMetaRequest<'a> {
     pub(crate) function_name: &'a str,
     pub(crate) payload_json: serde_json::Value,
@@ -1027,6 +1073,14 @@ impl axon_sdk::invocation::KeyResolver for LocalKeyServiceReceiptResolver {
 pub(crate) struct CanonicalRuntimeReceiptResolver {
     realm_trust: RealmReceiptTrustSource,
     local_self_identity: LocalKeyServiceReceiptResolver,
+    daemon_federated_trust: Option<Arc<dyn axon_sdk::invocation::KeyResolver>>,
+}
+
+#[cfg(feature = "axon-pb")]
+struct DaemonFederatedReceiptResolver {
+    endpoint: PathBuf,
+    timeout: Duration,
+    cache: Mutex<HashMap<String, Vec<ed25519_dalek::VerifyingKey>>>,
 }
 
 #[cfg(feature = "axon-pb")]
@@ -1079,17 +1133,238 @@ impl RealmReceiptTrustSource {
             )),
         }
     }
+
+    fn resolve_all(
+        &self,
+        signer_ura: &str,
+    ) -> Result<Vec<ed25519_dalek::VerifyingKey>, axon_sdk::invocation::AxonError> {
+        match self {
+            Self::Loaded(resolver) => {
+                axon_sdk::invocation::KeyResolver::resolve_all(resolver, signer_ura)
+            }
+            source => {
+                let detail = source
+                    .unavailable_detail()
+                    .expect("non-loaded realm trust source must explain unavailability");
+                Err(axon_sdk::invocation::AxonError::permission_denied(
+                    "runtime_receipt_realm_trust_unavailable",
+                )
+                .with_message(detail))
+            }
+        }
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+impl DaemonFederatedReceiptResolver {
+    fn new(endpoint: PathBuf) -> Self {
+        Self {
+            endpoint,
+            timeout: Duration::from_secs(10),
+            cache: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn resolve_keyset(
+        &self,
+        signer_ura: &str,
+    ) -> Result<Vec<ed25519_dalek::VerifyingKey>, axon_sdk::invocation::AxonError> {
+        let signer_ura = crate::core::identity::RuntimeIdentityUra::parse(signer_ura)
+            .map(crate::core::identity::RuntimeIdentityUra::into_string)
+            .map_err(|error| {
+                delegated_receipt_key_error(signer_ura, format!("invalid signer URA: {error}"))
+            })?;
+        if let Some(keys) = self
+            .cache
+            .lock()
+            .map_err(|_| {
+                delegated_receipt_key_error(&signer_ura, "daemon receipt key cache is poisoned")
+            })?
+            .get(&signer_ura)
+            .cloned()
+        {
+            return Ok(keys);
+        }
+
+        let keys = self.resolve_keyset_uncached(&signer_ura)?;
+        self.cache
+            .lock()
+            .map_err(|_| {
+                delegated_receipt_key_error(&signer_ura, "daemon receipt key cache is poisoned")
+            })?
+            .insert(signer_ura, keys.clone());
+        Ok(keys)
+    }
+
+    fn resolve_keyset_uncached(
+        &self,
+        signer_ura: &str,
+    ) -> Result<Vec<ed25519_dalek::VerifyingKey>, axon_sdk::invocation::AxonError> {
+        let function_name = crate::daemon::ability::conformance::ABILITY_FEDERATION_RESOLVE_KEY;
+        let callee_ura = local_daemon_identity_ura().map_err(|error| {
+            delegated_receipt_key_error(
+                signer_ura,
+                format!("resolve local daemon identity: {error}"),
+            )
+        })?;
+        let subject_ura = crate::core::ura::owner_ability_ura(&callee_ura, function_name)
+            .ok_or_else(|| {
+                delegated_receipt_key_error(
+                    signer_ura,
+                    format!("derive {function_name} subject for {callee_ura}"),
+                )
+            })?;
+        let request = crate::daemon::federation::wire_contract::ResolveKeyRequest::new(signer_ura);
+        let payload_json = serde_json::to_value(&request).map_err(|error| {
+            delegated_receipt_key_error(signer_ura, format!("encode resolve_key request: {error}"))
+        })?;
+        let tuple_plan = LocalDaemonSystemTuplePlan::targeted_root_for_subject(
+            function_name,
+            payload_json,
+            &callee_ura,
+            &subject_ura,
+            self.timeout,
+        )
+        .map_err(|error| {
+            delegated_receipt_key_error(
+                signer_ura,
+                format!("build daemon delegated receipt key invocation: {error}"),
+            )
+        })?;
+        let endpoint = self.endpoint.clone();
+        let value = invoke_local_daemon_ability_with_tuple_plan_at_verified(endpoint, tuple_plan)
+            .map_err(|error| {
+            delegated_receipt_key_error(
+                signer_ura,
+                format!("daemon delegated {function_name} failed: {error:#}"),
+            )
+        })?;
+        let response: crate::daemon::federation::wire_contract::ResolveKeyResponse =
+            serde_json::from_value(value).map_err(|error| {
+                delegated_receipt_key_error(
+                    signer_ura,
+                    format!("daemon delegated resolve_key response schema invalid: {error}"),
+                )
+            })?;
+        let mut keys = Vec::new();
+        for (index, public_key_b64) in response
+            .public_keys_b64
+            .iter()
+            .take(axon_sdk::invocation::MAX_KEYS_PER_AGENT_URA)
+            .enumerate()
+        {
+            keys.push(decode_delegated_receipt_pubkey(
+                signer_ura,
+                public_key_b64,
+                index,
+            )?);
+        }
+        if keys.is_empty() {
+            keys.push(decode_delegated_receipt_pubkey(
+                signer_ura,
+                &response.public_key_b64,
+                0,
+            )?);
+        }
+        Ok(keys)
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+impl axon_sdk::invocation::KeyResolver for DaemonFederatedReceiptResolver {
+    fn resolve(
+        &self,
+        signer_ura: &str,
+    ) -> Result<ed25519_dalek::VerifyingKey, axon_sdk::invocation::AxonError> {
+        self.resolve_keyset(signer_ura)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| {
+                delegated_receipt_key_error(signer_ura, "daemon returned no receipt signer keys")
+            })
+    }
+
+    fn resolve_all(
+        &self,
+        signer_ura: &str,
+    ) -> Result<Vec<ed25519_dalek::VerifyingKey>, axon_sdk::invocation::AxonError> {
+        self.resolve_keyset(signer_ura)
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+fn delegated_receipt_key_error(
+    signer_ura: &str,
+    detail: impl Into<String>,
+) -> axon_sdk::invocation::AxonError {
+    axon_sdk::invocation::AxonError::permission_denied("runtime_receipt_signer_key_untrusted")
+        .with_message(format!(
+            "daemon delegated receipt trust cannot resolve signer {signer_ura:?}: {}",
+            detail.into()
+        ))
+}
+
+#[cfg(feature = "axon-pb")]
+fn decode_delegated_receipt_pubkey(
+    signer_ura: &str,
+    public_key_b64: &str,
+    index: usize,
+) -> Result<ed25519_dalek::VerifyingKey, axon_sdk::invocation::AxonError> {
+    use base64::{engine::general_purpose::STANDARD as B64_STANDARD, Engine as _};
+
+    let raw = B64_STANDARD
+        .decode(public_key_b64.as_bytes())
+        .map_err(|error| {
+            delegated_receipt_key_error(
+                signer_ura,
+                format!("public_keys_b64[{index}] base64 invalid: {error}"),
+            )
+        })?;
+    let bytes: [u8; 32] = raw.as_slice().try_into().map_err(|_| {
+        delegated_receipt_key_error(
+            signer_ura,
+            format!(
+                "public_keys_b64[{index}] is {} bytes; expected 32",
+                raw.len()
+            ),
+        )
+    })?;
+    ed25519_dalek::VerifyingKey::from_bytes(&bytes).map_err(|error| {
+        delegated_receipt_key_error(
+            signer_ura,
+            format!("public_keys_b64[{index}] is not a valid Ed25519 point: {error}"),
+        )
+    })
 }
 
 #[cfg(feature = "axon-pb")]
 impl CanonicalRuntimeReceiptResolver {
+    #[cfg(test)]
     pub(crate) fn new() -> Self {
+        Self::with_daemon_federated_trust(None)
+    }
+
+    pub(crate) fn for_daemon_endpoint(endpoint: PathBuf) -> Self {
+        Self::with_daemon_federated_trust(Some(Arc::new(DaemonFederatedReceiptResolver::new(
+            endpoint,
+        ))))
+    }
+
+    fn with_daemon_federated_trust(
+        daemon_federated_trust: Option<Arc<dyn axon_sdk::invocation::KeyResolver>>,
+    ) -> Self {
         let trust_anchor_path =
             crate::daemon::trust::anchor::trust_anchor_path_from_env_or_default();
         Self {
             realm_trust: RealmReceiptTrustSource::load(trust_anchor_path),
             local_self_identity: LocalKeyServiceReceiptResolver::new(),
+            daemon_federated_trust,
         }
+    }
+
+    #[cfg(test)]
+    fn with_test_delegated_trust(delegated: Arc<dyn axon_sdk::invocation::KeyResolver>) -> Self {
+        Self::with_daemon_federated_trust(Some(delegated))
     }
 }
 
@@ -1099,38 +1374,68 @@ impl axon_sdk::invocation::KeyResolver for CanonicalRuntimeReceiptResolver {
         &self,
         signer_ura: &str,
     ) -> Result<ed25519_dalek::VerifyingKey, axon_sdk::invocation::AxonError> {
-        let local_error =
-            match axon_sdk::invocation::KeyResolver::resolve(&self.local_self_identity, signer_ura)
-            {
-                Ok(key) => return Ok(key),
-                Err(error) => error.to_string(),
-            };
-        match &self.realm_trust {
-            RealmReceiptTrustSource::Loaded(resolver) => {
-                match axon_sdk::invocation::KeyResolver::resolve(resolver, signer_ura) {
-                    Ok(key) => return Ok(key),
-                    Err(realm_error) => Err(axon_sdk::invocation::AxonError::permission_denied(
+        self.resolve_all(signer_ura)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| {
+                delegated_receipt_key_error(
+                    signer_ura,
+                    "canonical runtime trust returned no signer keys",
+                )
+            })
+    }
+
+    fn resolve_all(
+        &self,
+        signer_ura: &str,
+    ) -> Result<Vec<ed25519_dalek::VerifyingKey>, axon_sdk::invocation::AxonError> {
+        let local_error = match axon_sdk::invocation::KeyResolver::resolve_all(
+            &self.local_self_identity,
+            signer_ura,
+        ) {
+            Ok(keys) if !keys.is_empty() => return Ok(keys),
+            Ok(_) => "local self identity returned no signer keys".to_string(),
+            Err(error) => error.to_string(),
+        };
+        let realm_error = match self.realm_trust.resolve_all(signer_ura) {
+            Ok(keys) if !keys.is_empty() => return Ok(keys),
+            Ok(_) => "realm trust anchor returned no signer keys".to_string(),
+            Err(error) => error.to_string(),
+        };
+        if let Some(daemon_federated_trust) = self.daemon_federated_trust.as_ref() {
+            match daemon_federated_trust.resolve_all(signer_ura) {
+                Ok(keys) if !keys.is_empty() => return Ok(keys),
+                Ok(_) => {
+                    let daemon_error = "daemon delegated trust returned no signer keys";
+                    return Err(axon_sdk::invocation::AxonError::permission_denied(
                         "runtime_receipt_signer_key_untrusted",
                     )
                     .with_message(format!(
                         "canonical runtime trust cannot resolve receipt signer {signer_ura:?}: \
-                         local_self_identity={local_error}; realm_trust={realm_error}"
-                    ))),
+                         local_self_identity={local_error}; realm_trust={realm_error}; \
+                         daemon_federated_trust={daemon_error}"
+                    )));
+                }
+                Err(daemon_error) => {
+                    return Err(axon_sdk::invocation::AxonError::permission_denied(
+                        "runtime_receipt_signer_key_untrusted",
+                    )
+                    .with_message(format!(
+                        "canonical runtime trust cannot resolve receipt signer {signer_ura:?}: \
+                         local_self_identity={local_error}; realm_trust={realm_error}; \
+                         daemon_federated_trust={daemon_error}"
+                    )));
                 }
             }
-            source => {
-                let realm_detail = source
-                    .unavailable_detail()
-                    .expect("non-loaded realm trust source must explain unavailability");
-                Err(axon_sdk::invocation::AxonError::permission_denied(
-                    "runtime_receipt_signer_key_untrusted",
-                )
-                .with_message(format!(
-                    "canonical runtime trust cannot resolve receipt signer {signer_ura:?}: \
-                     local_self_identity={local_error}; realm_trust={realm_detail}"
-                )))
-            }
         }
+        Err(axon_sdk::invocation::AxonError::permission_denied(
+            "runtime_receipt_signer_key_untrusted",
+        )
+        .with_message(format!(
+            "canonical runtime trust cannot resolve receipt signer {signer_ura:?}: \
+             local_self_identity={local_error}; realm_trust={realm_error}; \
+             daemon_federated_trust=not configured"
+        )))
     }
 }
 
@@ -1807,6 +2112,29 @@ mod tests {
     };
     use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
     use std::sync::Arc;
+
+    struct StaticDelegatedReceiptResolver {
+        signer_ura: String,
+        keys: Vec<VerifyingKey>,
+    }
+
+    impl axon_sdk::invocation::KeyResolver for StaticDelegatedReceiptResolver {
+        fn resolve(&self, signer_ura: &str) -> Result<VerifyingKey, AxonError> {
+            self.resolve_all(signer_ura)?
+                .into_iter()
+                .next()
+                .ok_or_else(|| AxonError::permission_denied("static_delegated_receipt_key_empty"))
+        }
+
+        fn resolve_all(&self, signer_ura: &str) -> Result<Vec<VerifyingKey>, AxonError> {
+            if signer_ura == self.signer_ura {
+                return Ok(self.keys.clone());
+            }
+            Err(AxonError::permission_denied(
+                "static_delegated_receipt_key_not_found",
+            ))
+        }
+    }
 
     #[test]
     fn local_system_invoke_request_does_not_pre_resolve_descriptor_ref() {
@@ -2500,6 +2828,33 @@ added_at_unix_ms = 1
             !message.contains("empty or unavailable"),
             "missing trust source must not collapse to legacy availability wording: {message}"
         );
+    }
+
+    #[test]
+    fn canonical_receipt_resolver_uses_delegated_trust_after_local_and_realm_miss() {
+        let _guard = crate::cli::commands::test_support::env_lock();
+        let previous = std::env::var_os("EASYNET_REALM_TRUST_PATH");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let missing = dir.path().join("missing-realm-trust.toml");
+        std::env::set_var("EASYNET_REALM_TRUST_PATH", &missing);
+        let signer_ura = "easynet:///r/peer/device/dev-1".to_string();
+        let key_a = SigningKey::from_bytes(&[7u8; 32]).verifying_key();
+        let key_b = SigningKey::from_bytes(&[8u8; 32]).verifying_key();
+        let delegated = Arc::new(StaticDelegatedReceiptResolver {
+            signer_ura: signer_ura.clone(),
+            keys: vec![key_a, key_b],
+        });
+        let resolver = CanonicalRuntimeReceiptResolver::with_test_delegated_trust(delegated);
+
+        let resolved = axon_sdk::invocation::KeyResolver::resolve_all(&resolver, &signer_ura)
+            .expect("delegated receipt trust should resolve remote signer keyset");
+
+        match previous {
+            Some(value) => std::env::set_var("EASYNET_REALM_TRUST_PATH", value),
+            None => std::env::remove_var("EASYNET_REALM_TRUST_PATH"),
+        }
+
+        assert_eq!(resolved, vec![key_a, key_b]);
     }
 
     #[test]

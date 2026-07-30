@@ -353,11 +353,10 @@ impl RuntimeClient {
         }
         let tuple = signed.prepared().tuple();
         let response = self.inner.invoke(signed).await?;
-        let outcome = InvocationOutcome::from_invoke_response(
-            tuple,
-            response,
-            &local_daemon_grpc::CanonicalRuntimeReceiptResolver::new(),
-        )?;
+        let resolver = local_daemon_grpc::CanonicalRuntimeReceiptResolver::for_daemon_endpoint(
+            self.inner.endpoint().to_path_buf(),
+        );
+        let outcome = InvocationOutcome::from_invoke_response(tuple, response, &resolver)?;
         Ok(InvocationHandle { outcome })
     }
 
@@ -385,11 +384,10 @@ impl RuntimeClient {
         let signed_cancel = authority.sign(prepared).await?;
         let tuple = signed_cancel.prepared().tuple();
         let response = self.inner.invoke(signed_cancel).await?;
-        let outcome = InvocationOutcome::from_invoke_response(
-            tuple,
-            response,
-            &local_daemon_grpc::CanonicalRuntimeReceiptResolver::new(),
-        )?;
+        let resolver = local_daemon_grpc::CanonicalRuntimeReceiptResolver::for_daemon_endpoint(
+            self.inner.endpoint().to_path_buf(),
+        );
+        let outcome = InvocationOutcome::from_invoke_response(tuple, response, &resolver)?;
         Ok(InvocationHandle { outcome })
     }
 

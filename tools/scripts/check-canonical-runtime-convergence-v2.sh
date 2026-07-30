@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 AXON_ROOT="${EASYNET_AXON_ROOT:-$ROOT/../EasyNet-Axon}"
+EASYNET_BACKEND_ROOT="${EASYNET_BACKEND_ROOT:-$ROOT/../EasyNet}"
 CANONICAL_LIFECYCLE_AXON_ROOT="$AXON_ROOT"
 source "$ROOT/sdk/conformance/toolchain_path.sh"
 source "$ROOT/sdk/conformance/python_toolchain.sh"
@@ -39,6 +40,18 @@ check_static_registration_manifest_boundary_contract() {
 
 check_remote_public_governance_read_boundary_contract() {
   bash "$ROOT/tools/scripts/check-remote-public-governance-read-boundary.sh" >/dev/null
+}
+
+check_backend_product_dto_drift_contract() {
+  local backend_root="$EASYNET_BACKEND_ROOT"
+  local drift_gate="$backend_root/scripts/check-canonical-runtime-product-drift.sh"
+  if [[ ! -d "$backend_root" ]]; then
+    return 0
+  fi
+  if [[ ! -f "$drift_gate" ]]; then
+    fail "sibling EasyNet backend exists but product drift gate is missing: $drift_gate"
+  fi
+  bash "$drift_gate" >/dev/null
 }
 
 check_mcp_reflection_async_bridge_contract() {
@@ -582,11 +595,11 @@ if legacy in production:
 required = {
     "struct CallbackFrameProjection": "projection_value_object_missing",
     "enum CallbackFrameLifecycle": "projection_lifecycle_state_missing",
-    "CallbackFrameLifecycle::CanonicalTerminal": "canonical_terminal_state_missing",
-    "fn is_canonical_terminal(&self) -> bool": "terminal_accessor_missing",
+    "CallbackFrameLifecycle::StopAfterFrame": "stop_after_frame_state_missing",
+    "fn should_stop_after_frame(&self) -> bool": "terminal_accessor_missing",
     "fn into_json_bytes(self) -> Vec<u8>": "json_serialization_boundary_missing",
-    "projection.is_canonical_terminal()": "reader_terminal_accessor_missing",
-    "callback_frame_projection_terminality_is_not_inferred_from_json_shape": "json_independence_test_missing",
+    "projection.should_stop_after_frame()": "reader_terminal_accessor_missing",
+    "callback_frame_projection_lifecycle_is_not_inferred_from_json_shape": "json_independence_test_missing",
 }
 for needle, label in required.items():
     if needle not in text:
@@ -599,7 +612,7 @@ for fn_name in ("run_stream_reader", "run_bidi_down_reader"):
     body = match.group(0)
     if 'projection["terminal"]' in body or ".as_bool().unwrap_or(false)" in body:
         raise SystemExit(f"ffi_callback_terminal_projection:{fn_name}_json_terminal_lookup")
-    if "projection.is_canonical_terminal()" not in body:
+    if "projection.should_stop_after_frame()" not in body:
         raise SystemExit(f"ffi_callback_terminal_projection:{fn_name}_typed_terminal_missing")
     if "projection.into_json_bytes()" not in body:
         raise SystemExit(f"ffi_callback_terminal_projection:{fn_name}_json_boundary_missing")
@@ -7830,13 +7843,15 @@ check_sdk_direct_runtime_state_projection_contract() {
   local go_direct_test="$cli_root/sdk/go/direct_runtime_codec_test.go"
   local py_direct="$cli_root/sdk/python/easynet_sdk/providers/runtime/direct.py"
   local py_direct_test="$cli_root/sdk/python/tests/test_direct_runtime.py"
+  local ffi_invocation="$cli_root/src/ffi/invocation/mod.rs"
+  local ffi_backpressure="$cli_root/src/ffi/invocation/backpressure.rs"
 
-  "$PYTHON_BIN" - "$go_direct" "$go_direct_test" "$py_direct" "$py_direct_test" <<'PY'
+  "$PYTHON_BIN" - "$go_direct" "$go_direct_test" "$py_direct" "$py_direct_test" "$ffi_invocation" "$ffi_backpressure" <<'PY'
 import re
 import sys
 from pathlib import Path
 
-go_path, go_test_path, py_path, py_test_path = map(Path, sys.argv[1:])
+go_path, go_test_path, py_path, py_test_path, ffi_path, ffi_backpressure_path = map(Path, sys.argv[1:])
 
 def read(path: Path) -> str:
     if not path.exists():
@@ -7916,6 +7931,61 @@ py_stream_projection = section(
 )
 if '"invocation_id"' in py_stream_projection or "chunk.invocation_id" in py_stream_projection:
     raise SystemExit("sdk_python_direct_runtime_stream_projection_leaks_invocation_id")
+ffi = read(ffi_path)
+ffi_stream_projection = section(
+    ffi,
+    r"fn stream_chunk_json\((?P<body>.*?)\n\}",
+    "ffi_stream_chunk_projection",
+)
+for retired in ('"ok"', '"invocation_id"', '"proof_error"'):
+    if retired in ffi_stream_projection:
+        raise SystemExit(f"ffi_stream_projection_leaks_retired_field:{retired}")
+if '"transport_terminal": error.is_some() && !proven_terminal' not in ffi_stream_projection:
+    raise SystemExit("ffi_stream_projection_missing_transport_terminal_error_boundary")
+if "sdk_callback_event_sequence(chunk.sequence)" not in ffi_stream_projection:
+    raise SystemExit("ffi_stream_projection_missing_proto_to_sdk_sequence_boundary")
+if "fn sdk_callback_event_sequence(protobuf_sequence: u64) -> u64" not in ffi or "protobuf_sequence.saturating_add(1)" not in ffi:
+    raise SystemExit("ffi_stream_projection_sequence_boundary_not_explicit")
+ffi_bidi_projection = section(
+    ffi,
+    r"fn bidi_down_frame_json\((?P<body>.*?)\n\}",
+    "ffi_bidi_down_projection",
+)
+if "sdk_callback_event_sequence(frame.sequence)" not in ffi_bidi_projection:
+    raise SystemExit("ffi_bidi_projection_missing_proto_to_sdk_sequence_boundary")
+if re.search(r'"sequence":\s*frame\.sequence', ffi_bidi_projection):
+    raise SystemExit("ffi_bidi_projection_leaks_proto_sequence")
+ffi_stream_status = section(
+    ffi,
+    r"fn stream_status_error_json\((?P<body>.*?)\n\}",
+    "ffi_stream_status_error_projection",
+)
+for retired in ("ok", "code", "message"):
+    if re.search(rf'\n\s{{8}}"{retired}"\s*:', ffi_stream_status):
+        raise SystemExit(f"ffi_stream_status_error_leaks_retired_top_level:{retired}")
+if '"error": {' not in ffi_stream_status or '"stage": "stream_transport"' not in ffi_stream_status:
+    raise SystemExit("ffi_stream_status_error_missing_canonical_error")
+ffi_receipt_error = section(
+    ffi,
+    r"fn stream_receipt_verification_error_json\((?P<body>.*?)\n\}",
+    "ffi_stream_receipt_verification_error_projection",
+)
+for retired in ("ok", "message"):
+    if re.search(rf'\n\s{{8}}"{retired}"\s*:', ffi_receipt_error):
+        raise SystemExit(f"ffi_stream_receipt_error_leaks_retired_top_level:{retired}")
+if '"kind": "error"' not in ffi_receipt_error or '"stage": "receipt_verification"' not in ffi_receipt_error:
+    raise SystemExit("ffi_stream_receipt_error_missing_canonical_error")
+ffi_backpressure = read(ffi_backpressure_path)
+ffi_stream_backpressure = section(
+    ffi_backpressure,
+    r"fn stream_callback_backpressure_event\((?P<body>.*?)\n\}",
+    "ffi_stream_backpressure_projection",
+)
+for retired in ('"ok"', '"code"', '"message"'):
+    if retired in ffi_stream_backpressure:
+        raise SystemExit(f"ffi_stream_backpressure_leaks_retired_top_level:{retired}")
+if '"error": runtime_backpressure_error("stream", sequence, queue_capacity)' not in ffi_stream_backpressure:
+    raise SystemExit("ffi_stream_backpressure_missing_canonical_error")
 py_tests = read(py_test_path)
 for required in (
     "test_direct_runtime_unary_rejects_unsupported_invocation_state",
@@ -11866,6 +11936,9 @@ for required in (
 
 for required in (
     "fn resolve_local_all(",
+    "Some(pk) if Self::is_user_ura(agent_ura)",
+    "fn local_pubkey_matches_presented(",
+    "local_trust_anchor_presented_pubkey_mismatch",
     "self.is_same_realm_user(agent_ura)",
     "lookup_user_all(agent_ura)",
     "resolve_principal_lifecycle_local_public_keys(agent_ura)",
@@ -11886,9 +11959,70 @@ tests = text.split("\n#[cfg(test)]\nmod tests", 1)[1] if "\n#[cfg(test)]\nmod te
 for required_test in (
     "same_realm_user_resolve_all_returns_all_trust_anchor_keys_without_dial",
     "same_realm_principal_lifecycle_resolve_all_returns_all_active_user_keys_without_dial",
+    "presented_pubkey_local_hub_authority_resolves_exact_row_without_federation_client",
 ):
     if required_test not in tests:
         raise SystemExit(f"federated_key_resolver_user_keyset:test_missing:{required_test}")
+PY
+}
+
+check_forwarded_finalization_federated_receipt_resolver_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local facade="$cli_root/src/daemon/invocation/admission/admission_facade.rs"
+  local unary="$cli_root/src/daemon/invocation/dispatch/unary_dispatcher.rs"
+  local stream="$cli_root/src/daemon/invocation/streams/stream_dispatcher.rs"
+  local bidi="$cli_root/src/daemon/invocation/bidi/bidi_dispatcher.rs"
+  [[ -f "$facade" ]] || fail "admission facade source is missing: ${facade#$cli_root/}"
+  [[ -f "$unary" ]] || fail "unary dispatcher source is missing: ${unary#$cli_root/}"
+  [[ -f "$stream" ]] || fail "stream dispatcher source is missing: ${stream#$cli_root/}"
+  [[ -f "$bidi" ]] || fail "bidi dispatcher source is missing: ${bidi#$cli_root/}"
+
+  "$PYTHON_BIN" - "$facade" "$unary" "$stream" "$bidi" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+facade = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+production = facade.split("\n#[cfg(test)]\nmod tests", 1)[0]
+match = re.search(
+    r"pub\(crate\) fn receipt_key_resolver\(&self\) -> Arc<dyn axon_sdk::invocation::KeyResolver> \{(?P<body>.*?)\n    \}",
+    production,
+    re.S,
+)
+if not match:
+    raise SystemExit("forwarded_finalization_receipt_resolver:method_missing")
+body = match.group("body")
+
+for required in (
+    "if let Some(resolver) = self.federated_keys.as_ref()",
+    "let resolver: Arc<dyn axon_sdk::invocation::KeyResolver> = resolver.clone();",
+    "return resolver;",
+    "RealmTrustAnchorKeyResolver::new",
+):
+    if required not in body:
+        raise SystemExit(f"forwarded_finalization_receipt_resolver:missing:{required}")
+
+if body.find("federated_keys") > body.find("RealmTrustAnchorKeyResolver::new"):
+    raise SystemExit("forwarded_finalization_receipt_resolver:local_resolver_precedes_federated_provider")
+
+tests = facade.split("\n#[cfg(test)]\nmod tests", 1)[1] if "\n#[cfg(test)]\nmod tests" in facade else ""
+if "receipt_key_resolver_reuses_federated_authority_for_cross_realm_signers" not in tests:
+    raise SystemExit("forwarded_finalization_receipt_resolver:test_missing")
+if "dial_failed" not in tests or "no trust-anchor entry" not in tests:
+    raise SystemExit("forwarded_finalization_receipt_resolver:test_not_load_bearing")
+
+for path in map(Path, sys.argv[2:]):
+    text = path.read_text(encoding="utf-8", errors="replace").split("\n#[cfg(test)]", 1)[0]
+    if "RealmTrustAnchorKeyResolver::new" in text:
+        raise SystemExit(
+            "forwarded_finalization_receipt_resolver:dispatcher_constructs_local_resolver:"
+            + path.name
+        )
+    if "receipt_key_resolver()" not in text:
+        raise SystemExit(
+            "forwarded_finalization_receipt_resolver:dispatcher_not_using_facade_provider:"
+            + path.name
+        )
 PY
 }
 
@@ -18023,15 +18157,22 @@ PY
 check_canonical_receipt_resolver_trust_source_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local grpc="$cli_root/src/support/platform/local_daemon_grpc.rs"
+  local ffi="$cli_root/src/ffi/invocation/mod.rs"
+  local client="$cli_root/src/daemon/invocation/dispatch/client.rs"
   [[ -f "$grpc" ]] || fail "local daemon gRPC source is missing: ${grpc#$cli_root/}"
+  [[ -f "$ffi" ]] || fail "FFI invocation source is missing: ${ffi#$cli_root/}"
+  [[ -f "$client" ]] || fail "daemon invocation client source is missing: ${client#$cli_root/}"
 
-  "$PYTHON_BIN" - "$grpc" <<'PY'
+  "$PYTHON_BIN" - "$grpc" "$ffi" "$client" <<'PY'
 import re
 import sys
 from pathlib import Path
 
 text = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+ffi_text = Path(sys.argv[2]).read_text(encoding="utf-8", errors="replace")
+client_text = Path(sys.argv[3]).read_text(encoding="utf-8", errors="replace")
 production = text.split("\n#[cfg(all(test, feature = \"axon-pb\"))]", 1)[0]
+ffi_production = ffi_text.split("\n#[cfg(test)]", 1)[0]
 
 for required in (
     "enum RealmReceiptTrustSource",
@@ -18040,12 +18181,21 @@ for required in (
     "Missing { path: PathBuf }",
     "LoadFailed { path: PathBuf, error: String }",
     "fn unavailable_detail(&self) -> Option<String>",
+    "fn resolve_all(",
     "realm_trust: RealmReceiptTrustSource",
+    "daemon_federated_trust: Option<Arc<dyn axon_sdk::invocation::KeyResolver>>",
+    "struct DaemonFederatedReceiptResolver",
+    "impl axon_sdk::invocation::KeyResolver for DaemonFederatedReceiptResolver",
+    "ResolveKeyRequest::new(signer_ura)",
+    "ResolveKeyResponse",
+    "invoke_local_daemon_ability_with_tuple_plan_at_verified",
+    "record_verified_causal_anchor(&terminal.causal_anchor)",
+    "pub(crate) fn for_daemon_endpoint(endpoint: PathBuf) -> Self",
     "RealmReceiptTrustSource::load(trust_anchor_path)",
-    "RealmReceiptTrustSource::Loaded(resolver)",
     "realm trust anchor at {} is empty",
     "realm trust anchor at {} is missing",
     "realm trust anchor at {} failed to load: {error}",
+    "daemon_federated_trust=not configured",
 ):
     if required not in production:
         raise SystemExit(f"canonical_receipt_resolver_trust_source:missing:{required}")
@@ -18060,6 +18210,26 @@ for retired in (
     if retired in production:
         raise SystemExit(f"canonical_receipt_resolver_trust_source:retired:{retired}")
 
+for source_name, source_text in (
+    ("ffi", ffi_production),
+    ("daemon_client", client_text),
+):
+    for match in re.finditer(r"CanonicalRuntimeReceiptResolver::new\(\)", source_text):
+        prefix = source_text[max(0, match.start() - 160):match.start()]
+        if "#[cfg(test)]" not in prefix:
+            raise SystemExit(f"canonical_receipt_resolver_trust_source:{source_name}:production_local_only_resolver")
+    if "CanonicalRuntimeReceiptResolver::for_daemon_endpoint" not in source_text:
+        raise SystemExit(f"canonical_receipt_resolver_trust_source:{source_name}:missing_endpoint_bound_resolver")
+
+for required in (
+    "InboundReceiptCheckpointVerifier::for_daemon_endpoint(endpoint)",
+    "stream_endpoint",
+    "bidi_endpoint",
+    "run_bidi_down_reader(",
+):
+    if required not in ffi_production:
+        raise SystemExit(f"canonical_receipt_resolver_trust_source:ffi_stream_bidi_missing:{required}")
+
 if "canonical_receipt_resolver_preserves_malformed_realm_trust_source" not in text:
     raise SystemExit("canonical_receipt_resolver_trust_source:missing_malformed_source_test")
 if "not_a_role" not in text or "!message.contains(\"empty or unavailable\")" not in text:
@@ -18068,6 +18238,10 @@ if "canonical_receipt_resolver_preserves_missing_realm_trust_source" not in text
     raise SystemExit("canonical_receipt_resolver_trust_source:missing_missing_source_test")
 if "message.contains(\"is missing\")" not in text:
     raise SystemExit("canonical_receipt_resolver_trust_source:missing_test_not_load_bearing")
+if "canonical_receipt_resolver_uses_delegated_trust_after_local_and_realm_miss" not in text:
+    raise SystemExit("canonical_receipt_resolver_trust_source:missing_delegated_trust_test")
+if "resolve_all(&resolver, &signer_ura)" not in text:
+    raise SystemExit("canonical_receipt_resolver_trust_source:delegated_trust_test_must_cover_keyset")
 PY
 }
 
@@ -30040,11 +30214,12 @@ EOF
   check_pairing_response_strict_schema_contract
   check_runtime_bootstrap_self_identity_ingress_contract
   check_federation_receipt_facts_strict_contract
-  check_federation_revoke_ingress_strict_contract
-  check_federation_discover_caller_scope_contract
-  check_federated_key_resolver_user_keyset_contract
-  check_admission_facade_user_role_projection_contract
-  check_invocation_boot_federated_bindings_store_contract
+	  check_federation_revoke_ingress_strict_contract
+	  check_federation_discover_caller_scope_contract
+	  check_federated_key_resolver_user_keyset_contract
+	  check_forwarded_finalization_federated_receipt_resolver_contract
+	  check_admission_facade_user_role_projection_contract
+	  check_invocation_boot_federated_bindings_store_contract
   check_device_settings_loader_contract
   check_mission_traditional_target_conflict_contract
   check_mission_ability_strict_ingress_contract
@@ -30465,6 +30640,7 @@ check_control_plane_manifest_materialization_boundary_contract
 check_daemon_invocation_contract_metadata_boundary_contract
 check_static_registration_manifest_boundary_contract
 check_remote_public_governance_read_boundary_contract
+check_backend_product_dto_drift_contract
 check_sdk_receipt_profile_convergence_contract
 check_sdk_session_authority_binding_facade_contract
 check_sdk_provider_managed_signing_custody_contract

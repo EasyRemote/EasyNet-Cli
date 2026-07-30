@@ -82,7 +82,8 @@ impl TargetGate {
             &self.directory.presence,
             Some(self.directory.advertised_agents.as_ref()),
             self.directory.ability_catalog.as_ref(),
-        );
+        )
+        .with_federated_directory(&self.directory.federated_directory);
         if let Some(local_realm) = self
             .identity
             .session_realm

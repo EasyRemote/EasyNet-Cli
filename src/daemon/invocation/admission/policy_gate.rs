@@ -74,6 +74,16 @@ impl AdmissionPolicyGate {
             context.trusted_role,
             context.action,
         );
+        let authority_peer_directory_stream = authority_peer_directory_stream_scope(
+            &caller_ura,
+            &callee_ura,
+            &subject_ura,
+            &ability_ura,
+            context.daemon_ura,
+            context.trusted_role,
+            context.action,
+            context.trust_anchor,
+        );
         let realm_authority_public_read = realm_authority_public_read_scope(
             &caller_ura,
             &callee_ura,
@@ -158,6 +168,7 @@ impl AdmissionPolicyGate {
             authority_self_read,
             authority_self_manage,
             authority_self_stream,
+            authority_peer_directory_stream,
             realm_authority_public_read,
             device_self_publication_manage,
             device_self_session_stream,
@@ -443,6 +454,56 @@ fn authority_self_stream_scope(
     subject_ura == callee_ura || is_authority_resource_subject_in_realm(subject_ura, &callee.realm)
 }
 
+fn authority_peer_directory_stream_scope(
+    caller_ura: &str,
+    callee_ura: &str,
+    subject_ura: &str,
+    ability_ura: &str,
+    daemon_ura: Option<&str>,
+    trusted_role: TrustedAgentRole,
+    action: AccessAction,
+    trust_anchor: &RealmTrustAnchor,
+) -> bool {
+    if action != AccessAction::Stream || trusted_role != TrustedAgentRole::Hub {
+        return false;
+    }
+    if Some(callee_ura) != daemon_ura || caller_ura == callee_ura {
+        return false;
+    }
+    let Ok(caller) = parse_ura(caller_ura) else {
+        return false;
+    };
+    let Ok(callee) = parse_ura(callee_ura) else {
+        return false;
+    };
+    if caller.kind != URAKind::Authority
+        || callee.kind != URAKind::Authority
+        || caller.realm == callee.realm
+    {
+        return false;
+    }
+    if !trust_anchor.has_federation_peer_for_realm(&caller.realm) {
+        return false;
+    }
+    if ability_ura
+        != crate::core::ura::owner_ability_ura(
+            callee_ura,
+            crate::daemon::invocation::dispatch::federation_wrappers::ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2,
+        )
+        .unwrap_or_default()
+    {
+        return false;
+    }
+    let Ok(subject) = parse_ura(subject_ura) else {
+        return false;
+    };
+    let expected_subject_path = format!("directory/{}", callee.realm);
+    subject.kind == URAKind::Resource
+        && subject.realm == caller.realm
+        && subject.resource_owner_id() == Some("hub.federation")
+        && subject.resource_path() == Some(expected_subject_path.as_str())
+}
+
 fn realm_authority_public_read_scope(
     caller_ura: &str,
     callee_ura: &str,
@@ -692,6 +753,23 @@ mod tests {
             Vec::new(),
         )
         .expect("peer anchor")
+    }
+
+    fn anchor_with_hub_a_peer() -> RealmTrustAnchor {
+        RealmTrustAnchor::from_parts_with_principal_owners(
+            vec![TrustedAgent {
+                agent_ura: "easynet:///r/hub-a.local/authority".to_string(),
+                public_key_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
+                role: TrustedAgentRole::Hub,
+                added_at_unix_ms: 1,
+                origin_realm: Some("hub-a.local".to_string()),
+                hub_endpoint: Some("https://hub-a:50443".to_string()),
+                tls_ca_pem_path: Some(PathBuf::from("/tmp/hub-a-ca.pem")),
+            }],
+            Vec::new(),
+            Vec::new(),
+        )
+        .expect("hub-a peer anchor")
     }
 
     #[test]
@@ -1130,6 +1208,47 @@ mod tests {
         assert_eq!(
             decision.ability_ura,
             "easynet:///r/test/ability/authority.federation.subscribe_directory_v2"
+        );
+    }
+
+    #[test]
+    fn trusted_peer_authority_can_stream_federation_directory_without_user_owner() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let stores = AccessControlStoreRegistry::ephemeral();
+        let local_authority = "easynet:///r/hub-b.local/authority";
+        let peer_authority = "easynet:///r/hub-a.local/authority";
+        let envelope = Envelope {
+            caller: Some(identity(peer_authority)),
+            callee: Some(identity(local_authority)),
+            subject: Some(SubjectIdentity {
+                ura: "easynet:///r/hub-a.local/resource/hub.federation/directory/hub-b.local"
+                    .to_string(),
+                profile: String::new(),
+            }),
+            ..Envelope::default()
+        };
+        let decision = AdmissionPolicyGate::verify(AdmissionPolicyContext {
+            envelope: &envelope,
+            ability: "federation.subscribe_directory_v2",
+            action: AccessAction::Stream,
+            safe_read: false,
+            trusted_role: TrustedAgentRole::Hub,
+            daemon_ura: Some(local_authority),
+            trust_anchor: &anchor_with_hub_a_peer(),
+            access_control_stores: &stores,
+            canonical_hash: Some("sha256:test".to_string()),
+            signature_key_id: None,
+            verified_authority_id: None,
+            rejector_ura: Some(local_authority.to_string()),
+        })
+        .expect("trusted peer authority should stream federation directory");
+
+        assert_eq!(decision.decision, PolicyDecisionOutcome::Allow);
+        assert_eq!(decision.reason, PolicyDecisionReason::ExplicitGrantAllow);
+        assert!(decision.owner_user_id.is_none());
+        assert_eq!(
+            decision.ability_ura,
+            "easynet:///r/hub-b.local/ability/authority.federation.subscribe_directory_v2"
         );
     }
 

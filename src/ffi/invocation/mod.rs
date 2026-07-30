@@ -2332,26 +2332,32 @@ fn invoke_with_axon_pb(
         }
     };
 
+    let invocation_endpoint = match invocation_endpoint_for_session(session.as_ref()) {
+        Ok(endpoint) => endpoint,
+        Err(err) => return ffi_daemon_error("runtime_invocation_invoke", err),
+    };
     let (response, tuple, tuple_json) = match rt.block_on(async {
         let signed = SessionInvocationAuthority::new(session.as_ref())
             .bind(invocation)
             .await?;
         let tuple = signed.prepared().tuple();
         let tuple_json = invocation_json(&signed.clone().into_daemon_invocation());
-        let client = crate::daemon::DaemonClient::connect(invocation_endpoint_for_session(
-            session.as_ref(),
-        )?)?;
+        let client = crate::daemon::DaemonClient::connect(invocation_endpoint.clone())?;
         let response = client.invoke(signed).await?;
         Ok::<_, crate::daemon::DaemonError>((response, tuple, tuple_json))
     }) {
         Ok(bound) => bound,
         Err(err) => return ffi_daemon_error("runtime_invocation_invoke", err),
     };
+    let receipt_resolver =
+        crate::support::platform::local_daemon_grpc::CanonicalRuntimeReceiptResolver::for_daemon_endpoint(
+            invocation_endpoint,
+        );
 
     let outcome = match crate::daemon::InvocationOutcome::from_invoke_response(
         tuple,
         response,
-        &crate::support::platform::local_daemon_grpc::CanonicalRuntimeReceiptResolver::new(),
+        &receipt_resolver,
     ) {
         Ok(outcome) => outcome,
         Err(error) => return ffi_daemon_error("runtime_invocation_invoke", error),
@@ -2935,7 +2941,7 @@ fn stream_open_with_axon_pb(
         }
     };
 
-    let (stream, cancellation) = match rt.block_on(async {
+    let (stream, stream_endpoint, cancellation) = match rt.block_on(async {
         let (signed, cancellation_authority) = SessionInvocationAuthority::new(session.as_ref())
             .bind_cancellable(invocation)
             .await?;
@@ -2944,6 +2950,7 @@ fn stream_open_with_axon_pb(
         let stream = client.invoke_stream(signed.clone()).await?;
         Ok::<_, crate::daemon::DaemonError>((
             stream,
+            endpoint.clone(),
             Arc::new(ProviderCancellationControl::runtime(
                 endpoint,
                 signed,
@@ -2974,7 +2981,13 @@ fn stream_open_with_axon_pb(
         cancel.clone(),
         cancellation,
     ));
-    rt.spawn(run_stream_reader(stream_id, stream, cancel, tx));
+    rt.spawn(run_stream_reader(
+        stream_id,
+        stream_endpoint,
+        stream,
+        cancel,
+        tx,
+    ));
     drop(registration);
 
     unsafe { *out_stream_id = stream_id };
@@ -3037,7 +3050,7 @@ fn bidi_open_with_axon_pb(
         }
     };
 
-    let (session, cancellation) = match rt.block_on(async {
+    let (session, bidi_endpoint, cancellation) = match rt.block_on(async {
         let (signed, cancellation_authority) = SessionInvocationAuthority::new(session.as_ref())
             .bind_cancellable(invocation)
             .await?;
@@ -3046,6 +3059,7 @@ fn bidi_open_with_axon_pb(
         let bidi = client.invoke_bidi(signed.clone(), streams).await?;
         Ok::<_, crate::daemon::DaemonError>((
             bidi,
+            endpoint.clone(),
             Arc::new(ProviderCancellationControl::runtime(
                 endpoint,
                 signed,
@@ -3080,7 +3094,13 @@ fn bidi_open_with_axon_pb(
         cancel.clone(),
         cancellation,
     ));
-    rt.spawn(run_bidi_down_reader(bidi_id, down, cancel, callback_tx));
+    rt.spawn(run_bidi_down_reader(
+        bidi_id,
+        bidi_endpoint,
+        down,
+        cancel,
+        callback_tx,
+    ));
     drop(registration);
 
     unsafe { *out_bidi_id = bidi_id };
@@ -4818,33 +4838,34 @@ fn dispatch_bidi_callbacks(
 #[cfg(feature = "axon-pb")]
 async fn run_stream_reader(
     stream_id: InvocationStreamId,
+    endpoint: PathBuf,
     mut stream: tonic::Streaming<axon_sdk::pb::axon::v1::InvokeStreamChunk>,
     cancel: tokio_util::sync::CancellationToken,
     tx: tokio::sync::mpsc::Sender<Vec<u8>>,
 ) {
     let mut next_error_sequence = 1;
-    let mut receipt_verifier = InboundReceiptCheckpointVerifier::new();
+    let mut receipt_verifier = InboundReceiptCheckpointVerifier::for_daemon_endpoint(endpoint);
     loop {
         tokio::select! {
             _ = cancel.cancelled() => break,
             message = stream.message() => match message {
                 Ok(Some(chunk)) => {
-                    let sequence = chunk.sequence;
-                    next_error_sequence = sequence.saturating_add(1).max(1);
+                    let sequence = sdk_callback_event_sequence(chunk.sequence);
+                    next_error_sequence = sequence.saturating_add(1);
                     let projection = match stream_chunk_json(&mut receipt_verifier, chunk) {
                         Ok(projection) => projection,
                         Err(message) => {
-                            let _ = tx.send(serde_json::json!({
-                                "ok": false,
-                                "kind": "receipt_verification_error",
-                                "sequence": sequence,
-                                "message": message,
-                                "terminal": false,
-                            }).to_string().into_bytes()).await;
+                            let _ = tx
+                                .send(
+                                    stream_receipt_verification_error_json(sequence, message)
+                                        .to_string()
+                                        .into_bytes(),
+                                )
+                                .await;
                             break;
                         }
                     };
-                    let terminal = projection.is_canonical_terminal();
+                    let terminal = projection.should_stop_after_frame();
                     let bytes = projection.into_json_bytes();
                     let sent = send_callback_frame_or_backpressure(
                         &tx,
@@ -4873,19 +4894,20 @@ async fn run_stream_reader(
 #[cfg(feature = "axon-pb")]
 async fn run_bidi_down_reader(
     bidi_id: InvocationBidiId,
+    endpoint: PathBuf,
     mut down: tonic::Streaming<axon_sdk::pb::axon::v1::InvokeBidiDown>,
     cancel: tokio_util::sync::CancellationToken,
     tx: tokio::sync::mpsc::Sender<Vec<u8>>,
 ) {
     let mut next_error_sequence = 1;
-    let mut receipt_verifier = InboundReceiptCheckpointVerifier::new();
+    let mut receipt_verifier = InboundReceiptCheckpointVerifier::for_daemon_endpoint(endpoint);
     loop {
         tokio::select! {
             _ = cancel.cancelled() => break,
             message = down.message() => match message {
                 Ok(Some(frame)) => {
-                    let sequence = frame.sequence;
-                    next_error_sequence = sequence.saturating_add(1).max(1);
+                    let sequence = sdk_callback_event_sequence(frame.sequence);
+                    next_error_sequence = sequence.saturating_add(1);
                     let projection = match bidi_down_frame_json(&mut receipt_verifier, frame) {
                         Ok(projection) => projection,
                         Err(error) => {
@@ -4895,7 +4917,7 @@ async fn run_bidi_down_reader(
                             break;
                         }
                     };
-                    let terminal = projection.is_canonical_terminal();
+                    let terminal = projection.should_stop_after_frame();
                     let bytes = projection.into_json_bytes();
                     let sent = send_callback_frame_or_backpressure(
                         &tx,
@@ -6358,7 +6380,7 @@ impl CallbackFrameProjectionError {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CallbackFrameLifecycle {
     Continue,
-    CanonicalTerminal,
+    StopAfterFrame,
 }
 
 #[cfg(feature = "axon-pb")]
@@ -6370,8 +6392,8 @@ impl CallbackFrameProjection {
         }
     }
 
-    fn is_canonical_terminal(&self) -> bool {
-        self.lifecycle == CallbackFrameLifecycle::CanonicalTerminal
+    fn should_stop_after_frame(&self) -> bool {
+        self.lifecycle == CallbackFrameLifecycle::StopAfterFrame
     }
 
     #[cfg(test)]
@@ -6402,42 +6424,83 @@ fn stream_chunk_json(
         .map(|receipt| verifier.verify_terminal(receipt))
         .transpose()?;
     let proven_terminal = terminal_receipt.is_some();
-    let lifecycle = if proven_terminal {
-        CallbackFrameLifecycle::CanonicalTerminal
+    let error = chunk
+        .error
+        .as_ref()
+        .or(chunk.proof_error.as_ref())
+        .map(protocol_error_json);
+    let should_stop = proven_terminal || error.is_some();
+    let lifecycle = if should_stop {
+        CallbackFrameLifecycle::StopAfterFrame
     } else {
         CallbackFrameLifecycle::Continue
     };
+    let kind = if error.is_some() {
+        "error"
+    } else if proven_terminal {
+        "terminal"
+    } else {
+        "data"
+    };
+    let sequence = sdk_callback_event_sequence(chunk.sequence);
     Ok(CallbackFrameProjection::new(
         serde_json::json!({
-            "ok": chunk.error.is_none(),
-            "kind": if proven_terminal { "terminal" } else { "data" },
-            "invocation_id": chunk.invocation_id,
+            "kind": kind,
             "state": chunk.state,
-            "sequence": chunk.sequence,
+            "sequence": sequence,
             "terminal": proven_terminal,
+            "transport_terminal": error.is_some() && !proven_terminal,
             "elapsed_ms": chunk.elapsed_ms,
             "payload_content_type": chunk.content_type,
             "payload_base64": payload_base64,
             "payload_json": payload_json,
             "admission_receipt": admission_receipt,
             "terminal_receipt": terminal_receipt,
-            "proof_error": chunk.proof_error.as_ref().map(protocol_error_json),
-            "error": chunk.error.as_ref().map(protocol_error_json),
+            "error": error,
         }),
         lifecycle,
     ))
 }
 
 #[cfg(feature = "axon-pb")]
+fn sdk_callback_event_sequence(protobuf_sequence: u64) -> u64 {
+    protobuf_sequence.saturating_add(1)
+}
+
+#[cfg(feature = "axon-pb")]
 fn stream_status_error_json(status: tonic::Status, sequence: u64) -> serde_json::Value {
     serde_json::json!({
-        "ok": false,
         "kind": "error",
+        "state": "Failed",
         "sequence": sequence.max(1),
-        "code": format!("{:?}", status.code()),
-        "message": status.message(),
         "terminal": false,
         "transport_terminal": true,
+        "error": {
+            "code": format!("{:?}", status.code()),
+            "stage": "stream_transport",
+            "message": status.message(),
+            "retryable": false,
+        },
+    })
+}
+
+#[cfg(feature = "axon-pb")]
+fn stream_receipt_verification_error_json(
+    sequence: u64,
+    message: impl Into<String>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "error",
+        "state": "Failed",
+        "sequence": sequence.max(1),
+        "terminal": false,
+        "transport_terminal": true,
+        "error": {
+            "code": "RECEIPT_VERIFICATION_FAILED",
+            "stage": "receipt_verification",
+            "message": message.into(),
+            "retryable": false,
+        },
     })
 }
 
@@ -6448,6 +6511,7 @@ fn bidi_down_frame_json(
 ) -> Result<CallbackFrameProjection, CallbackFrameProjectionError> {
     use axon_sdk::pb::axon::v1::invoke_bidi_down::Payload;
     use base64::Engine;
+    let sequence = sdk_callback_event_sequence(frame.sequence);
     let mac_base64 = base64::engine::general_purpose::STANDARD.encode(&frame.mac);
     match frame.payload {
         Some(Payload::Receipt(receipt)) => {
@@ -6481,7 +6545,7 @@ fn bidi_down_frame_json(
                 ));
             };
             let lifecycle = if is_terminal {
-                CallbackFrameLifecycle::CanonicalTerminal
+                CallbackFrameLifecycle::StopAfterFrame
             } else {
                 CallbackFrameLifecycle::Continue
             };
@@ -6489,7 +6553,7 @@ fn bidi_down_frame_json(
                 serde_json::json!({
                     "ok": true,
                     "kind": "receipt",
-                    "sequence": frame.sequence,
+                    "sequence": sequence,
                     "mac_base64": mac_base64,
                     "admission_receipt": is_admission.then(|| summary.clone()),
                     "terminal_receipt": is_terminal.then(|| summary.clone()),
@@ -6504,7 +6568,7 @@ fn bidi_down_frame_json(
                 serde_json::json!({
                     "ok": true,
                     "kind": "data",
-                    "sequence": frame.sequence,
+                    "sequence": sequence,
                     "mac_base64": mac_base64,
                     "stream_id": chunk.stream_id,
                     "payload_base64": payload_base64,
@@ -6519,7 +6583,7 @@ fn bidi_down_frame_json(
                 serde_json::json!({
                     "ok": true,
                     "kind": "control",
-                    "sequence": frame.sequence,
+                    "sequence": sequence,
                     "mac_base64": mac_base64,
                     "control": bidi_control_json(control),
                     // A down-direction EOF is a remote half-close signal, not the
@@ -6593,10 +6657,19 @@ struct InboundReceiptCheckpointVerifier {
 
 #[cfg(feature = "axon-pb")]
 impl InboundReceiptCheckpointVerifier {
+    #[cfg(test)]
     fn new() -> Self {
         Self {
             resolver:
                 crate::support::platform::local_daemon_grpc::CanonicalRuntimeReceiptResolver::new(),
+            admission: None,
+        }
+    }
+
+    fn for_daemon_endpoint(endpoint: PathBuf) -> Self {
+        Self {
+            resolver:
+                crate::support::platform::local_daemon_grpc::CanonicalRuntimeReceiptResolver::for_daemon_endpoint(endpoint),
             admission: None,
         }
     }
@@ -11596,15 +11669,35 @@ mod tests {
         let projection =
             stream_chunk_json(&mut InboundReceiptCheckpointVerifier::new(), chunk).unwrap();
         let value = projection.json();
-        assert!(!projection.is_canonical_terminal());
-        assert_eq!(value["ok"], true);
+        assert!(!projection.should_stop_after_frame());
+        assert!(value.get("ok").is_none());
+        assert!(value.get("invocation_id").is_none());
+        assert!(value.get("proof_error").is_none());
         assert_eq!(value["kind"], "data");
-        assert_eq!(value["sequence"], 7);
+        assert_eq!(value["sequence"], 8);
         assert_eq!(value["terminal"], false);
         assert_eq!(value["payload_content_type"], "application/json");
         assert!(value.get("content_type").is_none());
         assert_eq!(value["payload_json"]["ready"], true);
         assert_eq!(value["payload_base64"], "eyJyZWFkeSI6dHJ1ZX0=");
+    }
+
+    #[test]
+    fn stream_chunk_json_projects_proto_zero_sequence_to_sdk_first_event() {
+        let chunk = axon_sdk::pb::axon::v1::InvokeStreamChunk {
+            invocation_id: "inv-1".to_string(),
+            state: 2,
+            payload: br#"{"ready":true}"#.to_vec(),
+            content_type: "application/json".to_string(),
+            sequence: 0,
+            terminal: false,
+            ..axon_sdk::pb::axon::v1::InvokeStreamChunk::default()
+        };
+
+        let projection =
+            stream_chunk_json(&mut InboundReceiptCheckpointVerifier::new(), chunk).unwrap();
+
+        assert_eq!(projection.json()["sequence"], 1);
     }
 
     #[test]
@@ -11647,16 +11740,16 @@ mod tests {
     }
 
     #[test]
-    fn callback_frame_projection_terminality_is_not_inferred_from_json_shape() {
+    fn callback_frame_projection_lifecycle_is_not_inferred_from_json_shape() {
         let projection = CallbackFrameProjection::new(
             serde_json::json!({
                 "kind": "data",
                 "terminal": false
             }),
-            CallbackFrameLifecycle::CanonicalTerminal,
+            CallbackFrameLifecycle::StopAfterFrame,
         );
 
-        assert!(projection.is_canonical_terminal());
+        assert!(projection.should_stop_after_frame());
         assert_eq!(projection.json()["terminal"], false);
     }
 
@@ -11665,13 +11758,17 @@ mod tests {
         let value =
             stream_status_error_json(tonic::Status::unavailable("stream transport closed"), 4);
 
-        assert_eq!(value["ok"], false);
+        assert!(value.get("ok").is_none());
+        assert!(value.get("code").is_none());
+        assert!(value.get("message").is_none());
         assert_eq!(value["kind"], "error");
+        assert_eq!(value["state"], "Failed");
         assert_eq!(value["sequence"], 4);
-        assert_eq!(value["code"], "Unavailable");
-        assert_eq!(value["message"], "stream transport closed");
         assert_eq!(value["terminal"], false);
         assert_eq!(value["transport_terminal"], true);
+        assert_eq!(value["error"]["code"], "Unavailable");
+        assert_eq!(value["error"]["stage"], "stream_transport");
+        assert_eq!(value["error"]["message"], "stream transport closed");
     }
 
     #[test]
@@ -11707,6 +11804,9 @@ mod tests {
             assert_eq!(value["sequence"], 2);
             assert_eq!(value["terminal"], false);
             assert_eq!(value["transport_terminal"], true);
+            assert!(value.get("ok").is_none());
+            assert!(value.get("code").is_none());
+            assert!(value.get("message").is_none());
             assert_eq!(
                 value["error"]["details"]["reason"],
                 "callback_queue_overflow"
@@ -11733,10 +11833,10 @@ mod tests {
         let projection =
             bidi_down_frame_json(&mut InboundReceiptCheckpointVerifier::new(), frame).unwrap();
         let value = projection.json();
-        assert!(!projection.is_canonical_terminal());
+        assert!(!projection.should_stop_after_frame());
         assert_eq!(value["ok"], true);
         assert_eq!(value["kind"], "data");
-        assert_eq!(value["sequence"], 3);
+        assert_eq!(value["sequence"], 4);
         assert_eq!(value["stream_id"], 1);
         assert_eq!(value["payload_base64"], "aGVsbG8=");
         assert!(value.get("data_base64").is_none());
@@ -11757,10 +11857,10 @@ mod tests {
         let projection =
             bidi_down_frame_json(&mut InboundReceiptCheckpointVerifier::new(), frame).unwrap();
         let value = projection.json();
-        assert!(!projection.is_canonical_terminal());
+        assert!(!projection.should_stop_after_frame());
         assert_eq!(value["ok"], true);
         assert_eq!(value["kind"], "control");
-        assert_eq!(value["sequence"], 4);
+        assert_eq!(value["sequence"], 5);
         assert_eq!(value["control"]["eof"], true);
         assert_eq!(value["terminal"], false);
     }

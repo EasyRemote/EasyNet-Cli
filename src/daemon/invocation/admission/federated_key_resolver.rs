@@ -349,10 +349,34 @@ impl FederatedKeyResolver {
     /// so existing single-realm setups behave identically.
     fn resolve_local(&self, agent_ura: &str) -> Result<VerifyingKey, LocalKeyResolutionError> {
         let trust_anchor = self.trust_anchor.snapshot();
-        if let Some(entry) = match self.presented_pubkey_b64.as_deref() {
-            Some(pk) => trust_anchor.lookup_user_by_pubkey(agent_ura, pk),
+        let entry = match self.presented_pubkey_b64.as_deref() {
+            Some(pk) if Self::is_user_ura(agent_ura) => {
+                trust_anchor.lookup_user_by_pubkey(agent_ura, pk)
+            }
+            Some(pk) => match trust_anchor.lookup(agent_ura) {
+                Some(entry)
+                    if Self::local_pubkey_matches_presented(
+                        agent_ura,
+                        &entry.public_key_b64,
+                        pk,
+                    )? =>
+                {
+                    Some(entry)
+                }
+                Some(_) => {
+                    return Err(LocalKeyResolutionError::InvalidAuthority(
+                        caller_key_not_found(
+                            agent_ura,
+                            "local_trust_anchor_presented_pubkey_mismatch",
+                        )
+                        .with_context("authority_source", "local_trust_anchor"),
+                    ));
+                }
+                None => None,
+            },
             None => trust_anchor.lookup(agent_ura),
-        } {
+        };
+        if let Some(entry) = entry {
             return Self::decode_local_public_key_b64(
                 agent_ura,
                 &entry.public_key_b64,
@@ -423,6 +447,30 @@ impl FederatedKeyResolver {
             return false;
         };
         agent.kind == URAKind::User && agent.realm == self_realm
+    }
+
+    fn is_user_ura(agent_ura: &str) -> bool {
+        parse_ura(agent_ura).is_ok_and(|agent| agent.kind == URAKind::User)
+    }
+
+    fn local_pubkey_matches_presented(
+        agent_ura: &str,
+        local_pubkey_b64: &str,
+        presented_pubkey_b64: &str,
+    ) -> Result<bool, LocalKeyResolutionError> {
+        let invalid_authority = |detail: String| {
+            LocalKeyResolutionError::InvalidAuthority(
+                caller_key_not_found(agent_ura, detail.as_str())
+                    .with_context("authority_source", "local_trust_anchor"),
+            )
+        };
+        let local = BASE64_STANDARD.decode(local_pubkey_b64).map_err(|error| {
+            invalid_authority(format!("local_public_key_b64_decode_failed:{error}"))
+        })?;
+        let presented = BASE64_STANDARD
+            .decode(presented_pubkey_b64)
+            .map_err(|error| invalid_authority(format!("presented_pubkey_b64_decode:{error}")))?;
+        Ok(local == presented)
     }
 
     fn resolve_principal_lifecycle_local_key(
@@ -785,6 +833,18 @@ mod tests {
             added_at_unix_ms: 1_700_000_000_000,
             origin_realm: None,
             hub_endpoint: None,
+            tls_ca_pem_path: None,
+        }
+    }
+
+    fn hub_entry(ura: &str, pk_b64: &str, origin_realm: Option<&str>) -> TrustedAgent {
+        TrustedAgent {
+            agent_ura: ura.to_string(),
+            public_key_b64: pk_b64.to_string(),
+            role: TrustedAgentRole::Hub,
+            added_at_unix_ms: 1_700_000_000_000,
+            origin_realm: origin_realm.map(ToOwned::to_owned),
+            hub_endpoint: Some("https://peer-hub:50443".to_string()),
             tls_ca_pem_path: None,
         }
     }
@@ -1280,6 +1340,32 @@ mod tests {
             0,
             "an invalid claimed local authority must not be replaced by a federated key"
         );
+    }
+
+    #[test]
+    fn presented_pubkey_local_hub_authority_resolves_exact_row_without_federation_client() {
+        let (_signing, pk_b64) = ed25519_pubkey_b64();
+        let peer_hub_ura = "easynet:///r/realm-b/authority";
+        let anchor = Arc::new(
+            RealmTrustAnchor::from_entries(vec![hub_entry(peer_hub_ura, &pk_b64, Some("realm-b"))])
+                .expect("peer hub authority row"),
+        );
+        let resolver = test_resolver(
+            anchor,
+            None,
+            Arc::new(BTreeMap::from([(
+                "realm-b".to_string(),
+                "https://hub-b:50443".to_string(),
+            )])),
+            Some("realm-a".to_string()),
+        )
+        .request_scoped_with_presented_pubkey_b64(pk_b64.clone());
+
+        let key = resolver
+            .resolve(peer_hub_ura)
+            .expect("presented non-User authority key must match the exact local row");
+
+        assert_eq!(BASE64_STANDARD.encode(key.to_bytes()), pk_b64);
     }
 
     struct EchoPresentedPubkeyClient {

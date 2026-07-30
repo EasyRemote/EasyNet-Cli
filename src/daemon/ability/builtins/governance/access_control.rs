@@ -233,6 +233,7 @@ fn check_handler(args: Value, stores: &AccessControlStoreRegistry) -> anyhow::Re
         authority_self_read: false,
         authority_self_manage: false,
         authority_self_stream: false,
+        authority_peer_directory_stream: false,
         realm_authority_public_read: false,
         device_self_publication_manage: false,
         device_self_session_stream: false,

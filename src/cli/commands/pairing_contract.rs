@@ -37,7 +37,6 @@ pub(crate) struct PairingCredentialEnvelope {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub user_id: Option<String>,
     pub deploy_signature: String,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub federated_peers: Vec<FederatedPeerEntry>,
     pub ura: String,
     pub last_seen_unix_ms: i64,
@@ -111,6 +110,17 @@ mod tests {
             err.to_string().contains("expected a sequence"),
             "schema error should reject nullable peer manifests: {err}"
         );
+    }
+
+    #[test]
+    fn pairing_credential_serializes_empty_federated_peers_as_canonical_array() {
+        let envelope =
+            serde_json::from_value::<PairingCredentialEnvelope>(canonical_pairing_envelope_json())
+                .unwrap();
+
+        let value = serde_json::to_value(envelope).expect("serialize canonical pairing envelope");
+
+        assert_eq!(value["federated_peers"], serde_json::json!([]));
     }
 
     #[test]

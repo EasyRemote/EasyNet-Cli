@@ -32,6 +32,7 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use serde_json::{json, Value};
 
 use crate::daemon::ability::catalog::publication::LocalAbilityPublicationSnapshot;
+use crate::daemon::federation::directory::{DirectoryEntry, SharedFederatedDirectoryView};
 use crate::daemon::federation::peers::SharedFederatedPeers;
 use crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore;
 use crate::daemon::federation::read_model::advertised_agents::AdvertisedAgentStore;
@@ -562,6 +563,7 @@ pub(crate) struct DaemonRouteResolver<'a> {
     advertised_agents: Option<&'a AdvertisedAgentStore>,
     catalog: &'a AbilityCatalogStore,
     peer_delegation: Option<PeerDelegationSource<'a>>,
+    federated_directory: Option<&'a SharedFederatedDirectoryView>,
     device_local: Option<LocalNamespaceAuthoritySource>,
     now_unix_ms: i64,
 }
@@ -711,6 +713,7 @@ impl<'a> DaemonRouteResolver<'a> {
             advertised_agents,
             catalog,
             peer_delegation: None,
+            federated_directory: None,
             device_local: None,
             now_unix_ms: crate::daemon::federation::directory::now_unix_ms(),
         }
@@ -763,6 +766,22 @@ impl<'a> DaemonRouteResolver<'a> {
             local_realm,
             federated_peers,
         });
+        self
+    }
+
+    /// Attach the daemon-wide federated directory snapshot used by
+    /// `federation.discover`.
+    ///
+    /// Directory entries are read-model observations only. They may enrich
+    /// `namespace.resolve` DirectoryListing with peer identity records; they
+    /// must not manufacture ROUTE records or bypass peer delegation for
+    /// executable dispatch.
+    #[must_use]
+    pub(crate) fn with_federated_directory(
+        mut self,
+        federated_directory: &'a SharedFederatedDirectoryView,
+    ) -> Self {
+        self.federated_directory = Some(federated_directory);
         self
     }
 
@@ -1258,7 +1277,7 @@ impl<'a> DaemonRouteResolver<'a> {
         };
         let mut records = Vec::new();
         for agent in &directory.agents {
-            records.push(id_record(&agent.ura, self.now_unix_ms));
+            records.push(directory_identity_record_for_agent(agent, self.now_unix_ms));
             match hosted_by_record_for_agent(agent, self.now_unix_ms) {
                 Ok(Some(record)) => records.push(record),
                 Ok(None) => {}
@@ -1297,6 +1316,33 @@ impl<'a> DaemonRouteResolver<'a> {
                     continue;
                 };
                 records.push(selected.route_record(self.now_unix_ms));
+            }
+        }
+        if let Some(federated_directory) = self.federated_directory {
+            for entry in
+                crate::daemon::federation::directory::flatten_federated_view(federated_directory)
+                    .into_iter()
+                    .filter(|entry| federated_directory_entry_matches_query(entry, query_name))
+            {
+                let record = match federated_directory_identity_record(&entry, self.now_unix_ms) {
+                    Ok(record) => record,
+                    Err(detail) => {
+                        return negative_answer_json(
+                            query_name,
+                            NegativeReason::Refused,
+                            Some(&detail),
+                        )
+                    }
+                };
+                let Some(record_key) = directory_record_cursor_key(&record) else {
+                    continue;
+                };
+                if records.iter().any(|existing| {
+                    directory_record_cursor_key(existing).as_deref() == Some(&record_key)
+                }) {
+                    continue;
+                }
+                records.push(record);
             }
         }
         if let Err(detail) = apply_directory_cursor(&mut records, cursor_anchor.as_deref()) {
@@ -1782,8 +1828,9 @@ fn local_authority_route_kind(local_authority_ura: &str) -> SelectedRouteKind {
 fn id_record(name: &str, now_unix_ms: i64) -> Value {
     json!({
         "name": name,
-        "kind": RecordType::Id.as_str_name(),
+        "kind": directory_identity_kind(name),
         "record_type": RecordType::Id.as_str_name(),
+        "ura": name,
         "authority": authority_for_query(name),
         "ttl_ms": 0,
         "expires_unix_ms": 0,
@@ -1795,6 +1842,95 @@ fn id_record(name: &str, now_unix_ms: i64) -> Value {
             }
         }
     })
+}
+
+fn directory_identity_record_for_agent(agent: &ResolveAgentSummary, now_unix_ms: i64) -> Value {
+    let mut record = id_record(&agent.ura, now_unix_ms);
+    if let Some(object) = record.as_object_mut() {
+        if crate::core::ura::parse_ura(&agent.ura)
+            .ok()
+            .is_some_and(|parsed| parsed.kind == crate::core::ura::URAKind::Device)
+        {
+            object.insert("kind".to_string(), Value::String("device".to_string()));
+            object.insert("agent_ura".to_string(), Value::String(agent.ura.clone()));
+            if let Some(node_id) = device_id_from_device_ura(&agent.ura) {
+                object.insert("node_id".to_string(), Value::String(node_id));
+            }
+            object.insert("status".to_string(), Value::String(agent.status.clone()));
+        }
+    }
+    record
+}
+
+fn federated_directory_entry_matches_query(entry: &DirectoryEntry, query_name: &str) -> bool {
+    let query_name = query_name.trim();
+    !query_name.is_empty()
+        && (entry.agent_ura == query_name || entry.agent_ura.starts_with(query_name))
+}
+
+fn federated_directory_identity_record(
+    entry: &DirectoryEntry,
+    now_unix_ms: i64,
+) -> Result<Value, String> {
+    let parsed = crate::core::ura::parse_ura(&entry.agent_ura)
+        .map_err(|err| format!("federated directory entry URA is invalid: {err}"))?;
+    if parsed.kind != crate::core::ura::URAKind::Device {
+        return Err(format!(
+            "federated directory entry must identify a Device URA, got {}",
+            parsed.kind
+        ));
+    }
+    let node_id = parsed
+        .device_id()
+        .map(str::trim)
+        .filter(|node_id| !node_id.is_empty())
+        .ok_or_else(|| "federated directory Device URA is missing node id".to_string())?;
+    if entry.node_id.trim() != node_id {
+        return Err(format!(
+            "federated directory node_id `{}` does not match Device URA `{}`",
+            entry.node_id, entry.agent_ura
+        ));
+    }
+
+    let mut record = id_record(&entry.agent_ura, now_unix_ms);
+    if let Some(object) = record.as_object_mut() {
+        object.insert("kind".to_string(), Value::String("device".to_string()));
+        object.insert(
+            "agent_ura".to_string(),
+            Value::String(entry.agent_ura.clone()),
+        );
+        object.insert("node_id".to_string(), Value::String(node_id.to_string()));
+        object.insert("status".to_string(), Value::String(entry.status.clone()));
+        if let Some(origin_realm) = entry.origin_realm.as_deref() {
+            object.insert(
+                "origin_realm".to_string(),
+                Value::String(origin_realm.to_string()),
+            );
+        }
+        if let Some(hub_endpoint) = entry.hub_endpoint.as_deref() {
+            object.insert(
+                "hub_endpoint".to_string(),
+                Value::String(hub_endpoint.to_string()),
+            );
+        }
+        if let Some(last_seen_unix_ms) = entry.last_seen_unix_ms {
+            object.insert(
+                "last_seen_unix_ms".to_string(),
+                Value::Number(serde_json::Number::from(last_seen_unix_ms)),
+            );
+        }
+    }
+    Ok(record)
+}
+
+fn directory_identity_kind(ura: &str) -> &'static str {
+    match crate::core::ura::parse_ura(ura).map(|parsed| parsed.kind) {
+        Ok(crate::core::ura::URAKind::Device) => "device",
+        Ok(crate::core::ura::URAKind::Agent) => "agent",
+        Ok(crate::core::ura::URAKind::User) => "user",
+        Ok(crate::core::ura::URAKind::Authority) => "authority",
+        _ => "identity",
+    }
 }
 
 fn hosted_by_record_for_agent(
@@ -1832,8 +1968,10 @@ fn hosted_by_record(
 ) -> Value {
     json!({
         "name": hosted_ura,
-        "kind": RecordType::HostedBy.as_str_name(),
+        "kind": "hosted_by",
         "record_type": RecordType::HostedBy.as_str_name(),
+        "ura": hosted_ura,
+        "owner_ura": host_ura,
         "authority": authority_for_query(hosted_ura),
         "ttl_ms": 0,
         "expires_unix_ms": 0,
@@ -1894,8 +2032,10 @@ fn ability_record_from_summary(summary: &Value, now_unix_ms: i64) -> Result<Valu
     };
     Ok(json!({
         "name": ability_ura,
-        "kind": RecordType::Ability.as_str_name(),
+        "kind": "ability",
         "record_type": RecordType::Ability.as_str_name(),
+        "ability_ura": ability_ura,
+        "owner_ura": owner_ura,
         "authority": authority_for_query(ability_ura),
         "ttl_ms": 0,
         "expires_unix_ms": 0,
@@ -1939,8 +2079,10 @@ fn device_local_ability_record(
         .map_or(("", public_name), |(ns, local)| (ns, local));
     json!({
         "name": ability_ura,
-        "kind": RecordType::Ability.as_str_name(),
+        "kind": "ability",
         "record_type": RecordType::Ability.as_str_name(),
+        "ability_ura": ability_ura,
+        "owner_ura": owner_ura,
         "authority": authority_for_query(ability_ura),
         "ttl_ms": 0,
         "expires_unix_ms": 0,
@@ -1973,8 +2115,11 @@ fn route_record(
 ) -> Value {
     json!({
         "name": route_ura,
-        "kind": RecordType::Route.as_str_name(),
+        "kind": "route",
         "record_type": RecordType::Route.as_str_name(),
+        "route_ura": route_ura,
+        "ability_ura": ability_ura,
+        "owner_ura": owner_ura,
         "authority": authority_for_query(route_ura),
         "ttl_ms": 0,
         "expires_unix_ms": 0,
@@ -2093,7 +2238,11 @@ mod tests {
     use crate::daemon::persistence::agent_aggregate::AgentHostedPlacement;
 
     use std::collections::BTreeMap;
+    use std::sync::Arc;
 
+    use crate::daemon::federation::directory::{
+        DirectoryEntry, DirectoryView, SharedFederatedDirectoryView,
+    };
     use crate::daemon::federation::peers::SharedFederatedPeers;
     use crate::daemon::federation::read_model::ability_catalog::{
         AbilityCatalogStore, OwnerAbilityProjectionRow,
@@ -3558,12 +3707,30 @@ mod tests {
             let record_type = record["record_type"]
                 .as_str()
                 .expect("directory record record_type");
-            assert_eq!(kind, record_type);
             assert!(
-                RecordType::from_str_name(kind).is_some(),
-                "directory record kind must be a canonical RecordType"
+                !kind.trim().is_empty(),
+                "directory record kind must be a public read-model kind"
+            );
+            assert!(
+                RecordType::from_str_name(record_type).is_some(),
+                "directory record_type must remain a canonical RecordType"
+            );
+            assert!(
+                record.get("ura").is_some()
+                    || record.get("owner_ura").is_some()
+                    || record.get("ability_ura").is_some()
+                    || record.get("route_ura").is_some(),
+                "directory record must carry at least one top-level canonical URA fact: {record:#?}"
             );
         }
+        let device = records
+            .iter()
+            .find(|record| record["kind"] == "device")
+            .expect("device directory listing must expose a device record");
+        assert_eq!(device["ura"], owner_ura);
+        assert_eq!(device["agent_ura"], owner_ura);
+        assert_eq!(device["node_id"], "test-daemon");
+        assert_eq!(device["status"], "active");
     }
 
     #[test]
@@ -3601,6 +3768,60 @@ mod tests {
             .collect();
         assert!(names.contains(&owner_a.as_str()));
         assert!(names.contains(&owner_b));
+    }
+
+    #[test]
+    fn directory_listing_includes_federated_directory_device_identity_without_routes() {
+        let registry = PresenceRegistry::new();
+        let catalog = AbilityCatalogStore::new();
+        let peer_device_ura = "easynet:///r/peer-realm/device/peer-device";
+        let mut peer_view = DirectoryView::new("peer-realm".to_string());
+        peer_view.replace_entries(vec![DirectoryEntry {
+            agent_ura: peer_device_ura.to_string(),
+            node_id: "peer-device".to_string(),
+            display_name: Some("Peer Device".to_string()),
+            status: "active".to_string(),
+            origin_realm: None,
+            hub_endpoint: Some("https://peer.example".to_string()),
+            last_seen_unix_ms: Some(TEST_NOW_MS),
+        }]);
+        let federated_directory = SharedFederatedDirectoryView::new(BTreeMap::from([(
+            "peer-realm".to_string(),
+            Arc::new(peer_view),
+        )]));
+
+        let answer = DaemonRouteResolver::new(&registry, None, &catalog)
+            .with_federated_directory(&federated_directory)
+            .at(TEST_NOW_MS)
+            .resolve_query_json(&json!({
+                "qtype": ResolveType::DirectoryListing.as_str_name(),
+                "query_name": "easynet:///r/peer-realm/device/",
+                "include_abilities": true,
+            }));
+
+        assert_eq!(
+            answer["answer_kind"],
+            ResolveAnswerKind::NonDispatchable.as_str_name()
+        );
+        let records = answer["records"].as_array().expect("records array");
+        let device = records
+            .iter()
+            .find(|record| {
+                record["record_type"] == RecordType::Id.as_str_name()
+                    && record["ura"] == peer_device_ura
+            })
+            .expect("peer device ID record should be projected from federated directory");
+        assert_eq!(device["kind"], "device");
+        assert_eq!(device["agent_ura"], peer_device_ura);
+        assert_eq!(device["node_id"], "peer-device");
+        assert_eq!(device["origin_realm"], "peer-realm");
+        assert_eq!(device["hub_endpoint"], "https://peer.example");
+        assert!(
+            records
+                .iter()
+                .all(|record| record["record_type"] != RecordType::Route.as_str_name()),
+            "federated directory observations must not become executable route records: {records:#?}"
+        );
     }
 
     #[test]

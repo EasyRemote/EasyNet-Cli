@@ -870,6 +870,10 @@ impl AdmissionFacade {
     /// this to authenticate remote callee/host receipt signatures; they must
     /// not construct a transport-local key table.
     pub(crate) fn receipt_key_resolver(&self) -> Arc<dyn axon_sdk::invocation::KeyResolver> {
+        if let Some(resolver) = self.federated_keys.as_ref() {
+            let resolver: Arc<dyn axon_sdk::invocation::KeyResolver> = resolver.clone();
+            return resolver;
+        }
         Arc::new(
             crate::daemon::trust::key_resolver::RealmTrustAnchorKeyResolver::new(
                 self.trust_anchor.clone(),
@@ -3208,17 +3212,52 @@ mod tests {
             "https://peer-realm.example:50443".to_string(),
         );
         let trust = SharedTrustAnchor::new(Arc::new(RealmTrustAnchor::default()));
-        let resolver = Arc::new(FederatedKeyResolver::new(
-            trust.clone(),
-            Some(Arc::new(RejectingFederationClient)),
-            SharedFederatedPeers::new(peers),
-            Some("self-realm".to_string()),
-        ));
+        let resolver = Arc::new(
+            FederatedKeyResolver::new(
+                trust.clone(),
+                Some(Arc::new(RejectingFederationClient)),
+                SharedFederatedPeers::new(peers),
+                Some("self-realm".to_string()),
+            )
+            .with_hub_signer(Arc::new(
+                crate::daemon::identity::self_identity::TestCanonicalSigner::new(
+                    crate::core::ura::hub_ura("self-realm"),
+                    [0x54; 32],
+                ),
+            )),
+        );
         AdmissionFacade::with_trust_anchor_cell(
             trust,
             Some(crate::core::ura::hub_ura("self-realm")),
         )
         .with_federated_key_resolver(resolver)
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn receipt_key_resolver_reuses_federated_authority_for_cross_realm_signers() {
+        let resolver = federated_facade().receipt_key_resolver();
+        let peer_device = "easynet:///r/peer-realm/device/peer-device";
+
+        let error = resolver
+            .resolve(peer_device)
+            .expect_err("peer-realm receipt signer should use federated resolution");
+
+        assert_eq!(
+            error.reason,
+            axon_sdk::invocation::ErrorCode::CallerKeyNotFound.as_str()
+        );
+        assert!(
+            error.message.contains("dial_failed")
+                && error
+                    .message
+                    .contains("admission classification test does not perform network I/O"),
+            "cross-realm receipt verifier must reach the federated provider, got {error:?}"
+        );
+        assert!(
+            !error.message.contains("realm_trust_anchor")
+                && !error.message.contains("no trust-anchor entry"),
+            "cross-realm receipt verifier must not fall back to the local-only trust-anchor adapter: {error:?}"
+        );
     }
 
     #[test]

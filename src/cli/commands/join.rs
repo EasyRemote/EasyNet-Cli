@@ -2404,6 +2404,70 @@ mod tests {
     }
 
     #[test]
+    fn decode_pairing_credential_response_rejects_read_model_state_before_serde() {
+        let mut body = serde_json::to_value(pairing_envelope_fixture()).expect("fixture JSON");
+        body["state_code"] = serde_json::json!("J200");
+        let raw = serde_json::to_string(&body).expect("raw JSON");
+
+        let err = decode_pairing_credential_response(&raw)
+            .expect_err("device read-model fields must fail at pairing contract ingress");
+        let message = err.to_string();
+
+        assert!(
+            message.contains(
+                "Hub pairing credential contract violation: response leaked device read-model field `state_code`"
+            ),
+            "error should identify product DTO drift before serde decode: {message}"
+        );
+        assert!(
+            !message.contains("unknown field"),
+            "contract drift should not surface as a generic serde unknown-field error: {message}"
+        );
+    }
+
+    #[test]
+    fn decode_pairing_credential_response_rejects_null_federated_peers_before_serde() {
+        let mut body = serde_json::to_value(pairing_envelope_fixture()).expect("fixture JSON");
+        body["federated_peers"] = serde_json::Value::Null;
+        let raw = serde_json::to_string(&body).expect("raw JSON");
+
+        let err = decode_pairing_credential_response(&raw)
+            .expect_err("nullable peer manifest must fail at pairing contract ingress");
+        let message = err.to_string();
+
+        assert!(
+            message.contains(
+                "Hub pairing credential contract violation: federated_peers must be a JSON array"
+            ),
+            "error should identify nullable peer manifest contract drift: {message}"
+        );
+        assert!(
+            !message.contains("expected a sequence"),
+            "contract drift should not surface as a generic serde sequence error: {message}"
+        );
+    }
+
+    #[test]
+    fn decode_pairing_credential_response_rejects_missing_federated_peers_before_serde() {
+        let mut body = serde_json::to_value(pairing_envelope_fixture()).expect("fixture JSON");
+        body.as_object_mut()
+            .expect("object")
+            .remove("federated_peers");
+        let raw = serde_json::to_string(&body).expect("raw JSON");
+
+        let err = decode_pairing_credential_response(&raw)
+            .expect_err("missing peer manifest must fail at pairing contract ingress");
+        let message = err.to_string();
+
+        assert!(
+            message.contains(
+                "Hub pairing credential contract violation: response missing federated_peers"
+            ),
+            "error should identify omitted peer manifest contract drift: {message}"
+        );
+    }
+
+    #[test]
     fn pick_validate_base_prefers_hub_api_when_set() {
         let chosen = pick_validate_base("https://easynet.run", Some("http://localhost:18080"));
         assert_eq!(chosen, "http://localhost:18080");

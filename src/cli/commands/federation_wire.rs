@@ -490,11 +490,8 @@ fn persist_hub_tls_ca_pem_for_join(
 
 /// TOML edit: insert-or-update a `[[trusted_agent]]` row whose
 /// `agent_ura` matches the joining device. Preserves every other
-/// row + comment via `toml_edit`. Idempotent when the row already
-/// has the same `public_key_b64` (the deterministic derivation
-/// from `(realm, node_id)` should always produce the same
-/// pubkey for the same identity, so a re-run of `easynet device join`
-/// against the same credentials is a no-op).
+/// row + comment via `toml_edit`. Idempotent when the row already has the same
+/// daemon key-service public projection for the joined device identity.
 fn upsert_self_trusted_agent(
     raw: &str,
     agent_ura: &str,
