@@ -14,7 +14,7 @@ use anyhow::Context as _;
 
 use crate::daemon::identity::self_identity::{KeyringClient, SelfIdentityError};
 
-use super::{home_relative, try_default_socket_path};
+use super::{home_relative, try_default_owner_path, try_default_socket_path};
 
 // A fresh vault performs the production Argon2id derivation before binding its
 // socket. Debug builds and contended edge devices can legitimately cross five
@@ -335,7 +335,34 @@ impl KeyServiceManager {
                     state.phase = KeyServiceManagerPhase::Running;
                     return Ok(KeyServiceStartup::Attached);
                 }
-                Ok(false) => state.terminate_owned_child()?,
+                Ok(false) => {
+                    // A live owned custody process can transiently refuse the
+                    // UDS health probe while the listener is rebinding or the
+                    // accept loop is saturated. Treat that as a bounded
+                    // recovery window, not as proof that the child is dead.
+                    //
+                    // Killing immediately here races foreground daemon boot:
+                    // `daemon-key-service` can report ready, the supervisor can
+                    // observe one missed probe, and `daemon-invocation-transport`
+                    // then sees `Connection refused` while the supervisor
+                    // restarts the signer service. The process state machine
+                    // must instead distinguish:
+                    //
+                    //   Running -> Restarting (transient, owned child alive)
+                    //   Restarting -> Running (health restored)
+                    //   Restarting -> Failed (child exits or readiness times out)
+                    state.phase = KeyServiceManagerPhase::Restarting { attempt };
+                    let readiness_deadline = Instant::now() + self.lifecycle.ready_timeout;
+                    if let Err(readiness_error) =
+                        self.lifecycle
+                            .wait_ready(state, &client, readiness_deadline)
+                    {
+                        let cleanup = state.terminate_owned_child().err();
+                        return Err(combine_lifecycle_errors(readiness_error, cleanup));
+                    }
+                    state.phase = KeyServiceManagerPhase::Running;
+                    return Ok(KeyServiceStartup::Attached);
+                }
                 Err(probe_error) => {
                     let cleanup = state.terminate_owned_child().err();
                     return Err(combine_lifecycle_errors(
@@ -418,6 +445,7 @@ struct KeyServiceLifecycle {
     binary_path: PathBuf,
     log_path: PathBuf,
     lease_path: PathBuf,
+    owner_path: PathBuf,
     ready_timeout: Duration,
 }
 
@@ -428,6 +456,7 @@ impl KeyServiceLifecycle {
             binary_path: resolve_key_service_binary(),
             log_path: home_relative(".easynet/logs/easynet-keyring.log")?,
             lease_path: home_relative(".easynet/keyring.start.lock")?,
+            owner_path: try_default_owner_path()?,
             ready_timeout: DEFAULT_READY_TIMEOUT,
         })
     }
@@ -439,6 +468,7 @@ impl KeyServiceLifecycle {
             binary_path: PathBuf::from("easynet-keyring"),
             log_path: super::home_relative_from(".easynet/logs/easynet-keyring.log", home)?,
             lease_path: super::home_relative_from(".easynet/keyring.start.lock", home)?,
+            owner_path: super::home_relative_from(".easynet/keyring.owner.json", home)?,
             ready_timeout: DEFAULT_READY_TIMEOUT,
         })
     }
@@ -449,7 +479,10 @@ impl KeyServiceLifecycle {
     ) -> anyhow::Result<KeyServiceStartup> {
         let client = KeyringClient::new(&self.socket_path).with_timeout(Duration::from_secs(2));
         if probe_ready(&client)? {
-            return Ok(KeyServiceStartup::Attached);
+            if self.ready_service_is_current_owner()? {
+                return Ok(KeyServiceStartup::Attached);
+            }
+            self.retire_foreign_ready_service()?;
         }
 
         reap_stale_lease(&self.lease_path)?;
@@ -460,7 +493,10 @@ impl KeyServiceLifecycle {
                     // A preceding process can become ready between our first
                     // probe and lease acquisition.
                     if probe_ready(&client)? {
-                        return Ok(KeyServiceStartup::Attached);
+                        if self.ready_service_is_current_owner()? {
+                            return Ok(KeyServiceStartup::Attached);
+                        }
+                        self.retire_foreign_ready_service()?;
                     }
                     anyhow::ensure!(
                         state.child.is_none(),
@@ -481,7 +517,12 @@ impl KeyServiceLifecycle {
                     }
                     return Ok(KeyServiceStartup::Spawned);
                 }
-                None if probe_ready(&client)? => return Ok(KeyServiceStartup::Attached),
+                None if probe_ready(&client)? => {
+                    if self.ready_service_is_current_owner()? {
+                        return Ok(KeyServiceStartup::Attached);
+                    }
+                    self.retire_foreign_ready_service()?;
+                }
                 None if Instant::now() >= lease_wait_deadline => {
                     anyhow::bail!(
                         "daemon key service startup lease remained busy at {}",
@@ -491,6 +532,30 @@ impl KeyServiceLifecycle {
                 None => std::thread::sleep(PROBE_INTERVAL),
             }
         }
+    }
+
+    fn ready_service_is_current_owner(&self) -> anyhow::Result<bool> {
+        let Some(owner) = load_key_service_owner_fact(&self.owner_path)? else {
+            return Ok(true);
+        };
+        Ok(owner.owner_pid == std::process::id())
+    }
+
+    fn retire_foreign_ready_service(&self) -> anyhow::Result<()> {
+        let owner = load_key_service_owner_fact(&self.owner_path)?.ok_or_else(|| {
+            anyhow::anyhow!(
+                "daemon key service at {} is ready but has no owner fact",
+                self.socket_path.display()
+            )
+        })?;
+        terminate_foreign_key_service(owner.key_service_pid).with_context(|| {
+            format!(
+                "terminate foreign key service pid={} owner_pid={} before daemon-owned restart",
+                owner.key_service_pid, owner.owner_pid
+            )
+        })?;
+        let _ = std::fs::remove_file(&self.owner_path);
+        self.remove_stale_transport()
     }
 
     fn remove_stale_transport(&self) -> anyhow::Result<()> {
@@ -521,8 +586,8 @@ impl KeyServiceLifecycle {
         let mut command = Command::new(&self.binary_path);
         // The child is session-detached so arbitrary daemon descendants never
         // inherit it. It still has one lifecycle owner: this daemon process.
-        // The keyring watches that parent and exits if a crash bypasses the
-        // daemon's orderly shutdown guard.
+        // The keyring watches that explicit owner PID and exits if a crash
+        // bypasses the daemon's orderly shutdown guard.
         command.env(KEY_SERVICE_OWNER_PID_ENV, std::process::id().to_string());
         command.stdin(Stdio::null());
         if let Ok(stdout) = log.try_clone() {
@@ -584,6 +649,75 @@ impl KeyServiceLifecycle {
             std::thread::sleep(PROBE_INTERVAL);
         }
     }
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct KeyServiceOwnerFact {
+    protocol_version: u32,
+    key_service_pid: u32,
+    owner_pid: u32,
+}
+
+fn load_key_service_owner_fact(path: &Path) -> anyhow::Result<Option<KeyServiceOwnerFact>> {
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("read key service owner fact {}", path.display()));
+        }
+    };
+    let fact: KeyServiceOwnerFact = serde_json::from_slice(&bytes)
+        .with_context(|| format!("decode key service owner fact {}", path.display()))?;
+    anyhow::ensure!(
+        fact.protocol_version == 1,
+        "unsupported key service owner fact version {} at {}",
+        fact.protocol_version,
+        path.display()
+    );
+    anyhow::ensure!(
+        fact.key_service_pid > 1 && fact.owner_pid > 1,
+        "invalid key service owner fact at {}",
+        path.display()
+    );
+    Ok(Some(fact))
+}
+
+#[cfg(unix)]
+fn terminate_foreign_key_service(pid: u32) -> anyhow::Result<()> {
+    let pid = libc::pid_t::try_from(pid)
+        .map_err(|_| anyhow::anyhow!("key service pid is not representable as pid_t: {pid}"))?;
+    if unsafe { libc::kill(pid, libc::SIGTERM) } == -1 {
+        let error = std::io::Error::last_os_error();
+        if !matches!(error.raw_os_error(), Some(libc::ESRCH)) {
+            return Err(error).context("send SIGTERM to foreign key service");
+        }
+        return Ok(());
+    }
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < deadline {
+        if unsafe { libc::kill(pid, 0) } == -1
+            && matches!(
+                std::io::Error::last_os_error().raw_os_error(),
+                Some(libc::ESRCH)
+            )
+        {
+            return Ok(());
+        }
+        std::thread::sleep(PROBE_INTERVAL);
+    }
+    if unsafe { libc::kill(pid, libc::SIGKILL) } == -1 {
+        let error = std::io::Error::last_os_error();
+        if !matches!(error.raw_os_error(), Some(libc::ESRCH)) {
+            return Err(error).context("send SIGKILL to foreign key service");
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn terminate_foreign_key_service(_pid: u32) -> anyhow::Result<()> {
+    anyhow::bail!("foreign key-service retirement is unsupported on this platform")
 }
 
 fn supervisor_backoff(attempt: u32) -> Duration {
@@ -814,6 +948,7 @@ mod tests {
                 binary_path: PathBuf::from("unused"),
                 log_path: directory.path().join("key-service.log"),
                 lease_path: directory.path().join("key-service.start.lock"),
+                owner_path: directory.path().join("key-service.owner.json"),
                 ready_timeout: Duration::from_secs(1),
             },
             state: Mutex::new(KeyServiceManagerState {
@@ -852,6 +987,7 @@ mod tests {
                 binary_path: PathBuf::from("unused"),
                 log_path: directory.path().join("key-service.log"),
                 lease_path: directory.path().join("key-service.start.lock"),
+                owner_path: directory.path().join("key-service.owner.json"),
                 ready_timeout: Duration::from_secs(1),
             },
             state: Mutex::new(KeyServiceManagerState {
@@ -890,6 +1026,7 @@ mod tests {
                 binary_path: PathBuf::from("unused"),
                 log_path: directory.path().join("key-service.log"),
                 lease_path: directory.path().join("key-service.start.lock"),
+                owner_path: directory.path().join("key-service.owner.json"),
                 ready_timeout: Duration::from_secs(1),
             },
             state: Mutex::new(KeyServiceManagerState::default()),
@@ -948,6 +1085,7 @@ mod tests {
                 binary_path: PathBuf::from("unused"),
                 log_path: directory.path().join("unused.log"),
                 lease_path: directory.path().join("unused.lock"),
+                owner_path: directory.path().join("unused.owner.json"),
                 ready_timeout: Duration::from_secs(1),
             },
             state: Mutex::new(KeyServiceManagerState::default()),
@@ -981,6 +1119,7 @@ mod tests {
             binary_path: PathBuf::from("unused"),
             log_path: directory.path().join("key-service.log"),
             lease_path: directory.path().join("key-service.start.lock"),
+            owner_path: directory.path().join("key-service.owner.json"),
             ready_timeout: Duration::from_secs(5),
         };
         let child = Command::new("sh")

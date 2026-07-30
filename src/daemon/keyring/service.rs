@@ -23,9 +23,10 @@ use super::passphrase::PassphraseStore;
 #[cfg(test)]
 use super::ManagedSigningKeyProjection;
 use super::{
-    try_default_passphrase_path, try_default_socket_path, try_default_vault_path,
-    vault_error_to_response, KeyringRequest, KeyringResponse, MasterKeySource, Vault,
-    KEY_SERVICE_PROTOCOL_VERSION, MAX_KEY_SERVICE_CANONICAL_BYTES, MAX_KEY_SERVICE_FRAME_BYTES,
+    try_default_owner_path, try_default_passphrase_path, try_default_socket_path,
+    try_default_vault_path, vault_error_to_response, KeyringRequest, KeyringResponse,
+    MasterKeySource, Vault, KEY_SERVICE_PROTOCOL_VERSION, MAX_KEY_SERVICE_CANONICAL_BYTES,
+    MAX_KEY_SERVICE_FRAME_BYTES,
 };
 use crate::daemon::persistence::file_lock::ExclusiveFileLock;
 
@@ -35,8 +36,48 @@ const KEY_SERVICE_FRAME_DEADLINE: Duration = Duration::from_secs(30);
 const KEY_SERVICE_TERMINAL_CLOSE_GRACE: Duration = Duration::from_millis(100);
 #[cfg(unix)]
 const KEY_SERVICE_OWNER_PID_ENV: &str = "EASYNET_KEYRING_OWNER_PID";
+
 #[cfg(unix)]
-const OWNER_LIVENESS_POLL_INTERVAL: Duration = Duration::from_secs(1);
+#[derive(serde::Serialize)]
+struct KeyServiceOwnerFact {
+    protocol_version: u32,
+    key_service_pid: u32,
+    owner_pid: u32,
+}
+
+#[cfg(unix)]
+struct KeyServiceOwnerFactGuard {
+    path: std::path::PathBuf,
+}
+
+#[cfg(unix)]
+impl KeyServiceOwnerFactGuard {
+    fn publish(path: std::path::PathBuf) -> Result<Option<Self>, Box<dyn std::error::Error>> {
+        let Some(owner_pid) = daemon_owner_pid() else {
+            return Ok(None);
+        };
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let fact = KeyServiceOwnerFact {
+            protocol_version: 1,
+            key_service_pid: std::process::id(),
+            owner_pid: u32::try_from(owner_pid).map_err(|_| {
+                format!("[easynet-keyring] owner PID is not representable as u32: {owner_pid}")
+            })?,
+        };
+        let bytes = serde_json::to_vec_pretty(&fact)?;
+        std::fs::write(&path, bytes)?;
+        Ok(Some(Self { path }))
+    }
+}
+
+#[cfg(unix)]
+impl Drop for KeyServiceOwnerFactGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
 
 #[derive(Clone, Copy, Debug)]
 struct ConnectionPolicy {
@@ -464,6 +505,8 @@ pub async fn run_default_key_service() -> Result<(), Box<dyn std::error::Error>>
         );
         listener
     };
+    #[cfg(unix)]
+    let _owner_fact_guard = KeyServiceOwnerFactGuard::publish(try_default_owner_path()?)?;
 
     #[cfg(windows)]
     let mut listener = {
@@ -477,18 +520,10 @@ pub async fn run_default_key_service() -> Result<(), Box<dyn std::error::Error>>
     install_signal_cleanup();
     let connection_limit = Arc::new(Semaphore::new(MAX_CONCURRENT_KEY_SERVICE_CONNECTIONS));
     let mut fail_stop_rx = runtime.fail_stop_receiver();
-    #[cfg(unix)]
-    let mut owner_liveness = tokio::time::interval(OWNER_LIVENESS_POLL_INTERVAL);
 
     #[cfg(unix)]
     loop {
         tokio::select! {
-            _ = owner_liveness.tick() => {
-                if daemon_owner_exited() {
-                    eprintln!("[easynet-keyring] daemon owner exited, shutting down");
-                    return Ok(());
-                }
-            }
             changed = fail_stop_rx.changed() => {
                 let reason = match changed {
                     Ok(()) => fail_stop_rx
@@ -563,26 +598,12 @@ pub async fn run_default_key_service() -> Result<(), Box<dyn std::error::Error>>
     }
 }
 
-/// A service launched by daemon lifecycle must not survive a daemon crash.
-/// Standalone test/service invocations omit the owner PID and retain their
-/// existing explicit signal lifecycle.
-fn daemon_owner_exited() -> bool {
-    let owner_pid = std::env::var_os(KEY_SERVICE_OWNER_PID_ENV)
+#[cfg(unix)]
+fn daemon_owner_pid() -> Option<libc::pid_t> {
+    std::env::var_os(KEY_SERVICE_OWNER_PID_ENV)
         .and_then(|raw| raw.into_string().ok())
         .and_then(|raw| raw.parse::<libc::pid_t>().ok())
-        .filter(|pid| *pid > 1);
-
-    // A child is reparented to launchd/init after its daemon exits. Comparing
-    // the direct parent avoids any PID-reuse ambiguity from kill(pid, 0).
-    daemon_owner_exited_for_parent(owner_pid, unsafe { libc::getppid() })
-}
-
-#[cfg(unix)]
-fn daemon_owner_exited_for_parent(
-    owner_pid: Option<libc::pid_t>,
-    observed_parent_pid: libc::pid_t,
-) -> bool {
-    owner_pid.is_some_and(|owner_pid| owner_pid != observed_parent_pid)
+        .filter(|pid| *pid > 1)
 }
 
 /// Run a bounded real key-service instance for cross-module tests.
@@ -803,14 +824,6 @@ mod tests {
     fn test_runtime(home: &tempfile::TempDir) -> KeyServiceRuntime {
         KeyServiceRuntime::open(home.path().join("key-service.enc"), "test-passphrase")
             .expect("test key-service runtime")
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn owner_liveness_exits_only_after_daemon_reparenting() {
-        assert!(!daemon_owner_exited_for_parent(Some(42), 42));
-        assert!(daemon_owner_exited_for_parent(Some(42), 1));
-        assert!(!daemon_owner_exited_for_parent(None, 1));
     }
 
     fn framed(request: &KeyringRequest) -> Vec<u8> {
