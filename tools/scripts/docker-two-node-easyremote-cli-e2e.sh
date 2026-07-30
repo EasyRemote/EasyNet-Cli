@@ -32,6 +32,8 @@ OUT_DIR="${EASYNET_E2E_OUT_DIR:-$REPO_ROOT/target/e2e/docker-two-node-easyremote
 KEEP=0
 SKIP_BUILD=0
 SELF_TEST=0
+CLI_WATCHDOG_SECS="${EASYNET_E2E_CLI_WATCHDOG_SECS:-120}"
+CLI_PROBE_SECS="${EASYNET_E2E_CLI_PROBE_SECS:-10}"
 
 usage() {
   cat <<'USAGE'
@@ -240,15 +242,19 @@ service_exec() {
 }
 
 hub_cli() {
-  service_exec hub "HOME=/srv/easynet EASYNET_CLI_LIB=/usr/local/lib/libeasynet_cli.so easynet $*"
+  service_exec hub "HOME=/srv/easynet EASYNET_CLI_LIB=/usr/local/lib/libeasynet_cli.so timeout '${CLI_WATCHDOG_SECS}s' easynet $*"
 }
 
 provider_cli() {
-  service_exec provider "HOME=/home/provider EASYNET_CLI_LIB=/usr/local/lib/libeasynet_cli.so easynet $*"
+  service_exec provider "HOME=/home/provider EASYNET_CLI_LIB=/usr/local/lib/libeasynet_cli.so timeout '${CLI_WATCHDOG_SECS}s' easynet $*"
 }
 
 caller_cli() {
-  service_exec caller "HOME=/home/caller EASYNET_CLI_LIB=/usr/local/lib/libeasynet_cli.so easynet $*"
+  service_exec caller "HOME=/home/caller EASYNET_CLI_LIB=/usr/local/lib/libeasynet_cli.so timeout '${CLI_WATCHDOG_SECS}s' easynet $*"
+}
+
+caller_cli_probe() {
+  service_exec caller "HOME=/home/caller EASYNET_CLI_LIB=/usr/local/lib/libeasynet_cli.so timeout '${CLI_PROBE_SECS}s' easynet $*"
 }
 
 dump_logs() {
@@ -316,7 +322,7 @@ wait_caller_remote_ability_list() {
   local out="$OUT_DIR/caller-ability-list-provider.json"
   local err="$OUT_DIR/caller-ability-list-provider.err"
   for _ in $(seq 1 120); do
-    if caller_cli "ability list --node '$provider_node' --format json" >"$out" 2>"$err"; then
+    if caller_cli_probe "ability list --node '$provider_node' --format json" >"$out" 2>"$err"; then
       if jq -e 'if type == "array" then length >= 1 else (.abilities // []) | length >= 1 end' "$out" >/dev/null; then
         return 0
       fi
@@ -423,7 +429,7 @@ wait_caller_ability_name() {
   local err="$OUT_DIR/${stem}.err"
   local ability_ura=""
   for _ in $(seq 1 120); do
-    if caller_cli "ability list --node '$provider_node' --format json" >"$out" 2>"$err"; then
+    if caller_cli_probe "ability list --node '$provider_node' --format json" >"$out" 2>"$err"; then
       ability_ura="$(extract_ability_ura_by_name "$out" "$ability_name")"
       if [[ -n "$ability_ura" ]]; then
         printf '%s\n' "$ability_ura"
@@ -445,7 +451,7 @@ wait_caller_ability_absent() {
   local err="$OUT_DIR/${stem}.err"
   local ability_ura=""
   for _ in $(seq 1 120); do
-    if caller_cli "ability list --node '$provider_node' --format json" >"$out" 2>"$err"; then
+    if caller_cli_probe "ability list --node '$provider_node' --format json" >"$out" 2>"$err"; then
       ability_ura="$(extract_ability_ura_by_name "$out" "$ability_name")"
       if [[ -z "$ability_ura" ]]; then
         return 0
