@@ -8609,12 +8609,15 @@ if "items: Vec<serde_json::Value>" in text:
     raise SystemExit("auth_agents_row_schema_uses_untyped_json_value")
 for required in (
     "struct AgentItem",
-    "#[serde(deny_unknown_fields)]\nstruct AgentItem",
     "items: Vec<AgentItem>",
     "resolve_unavailable: Vec<ResolveUnavailable>",
+    "not canonical runtime contracts",
 ):
     if required not in text:
         raise SystemExit(f"auth_agents_typed_response_missing:{required}")
+for read_model in ("AuthResp", "UserResp", "DeviceListResp", "DeviceItem", "AbilityListResp", "AbilityItem", "AgentListResp", "AgentItem", "SkillInfo"):
+    if re.search(r"#\[serde\(deny_unknown_fields\)\]\s*struct\s+" + re.escape(read_model) + r"\b", text):
+        raise SystemExit(f"auth_backend_read_model_overstrict:{read_model}")
 projection = re.search(
     r"impl AgentTableProjection \{(?P<body>.*?)\n\}",
     text,
@@ -8636,9 +8639,11 @@ for retired in ('"ura"', '"name"', "canonical_agent_row_string"):
         raise SystemExit(f"auth_agents_projection_uses_retired_alias:{retired}")
 for test in (
     "auth_agents_table_uses_canonical_backend_fields",
-    "auth_agents_table_rejects_legacy_row_aliases",
+    "auth_agents_table_rejects_rows_missing_canonical_identity_fields",
     "agent_list_response_accepts_backend_public_contract",
-    "agent_list_response_rejects_uncontracted_row_fields",
+    "agent_list_response_ignores_additive_envelope_fields",
+    "agent_list_response_ignores_additive_row_fields",
+    "agent_list_response_rejects_null_collections",
 ):
     if test not in text:
         raise SystemExit(f"missing_auth_agents_projection_test:{test}")

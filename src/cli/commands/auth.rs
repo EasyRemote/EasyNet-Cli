@@ -243,7 +243,6 @@ pub struct LoginArgs {
 
 #[allow(dead_code)]
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct AuthResp {
     token: String,
     #[serde(default)]
@@ -255,7 +254,6 @@ struct AuthResp {
 
 #[allow(dead_code)]
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct UserResp {
     id: String,
     #[serde(default)]
@@ -279,7 +277,6 @@ struct UserResp {
 
 #[allow(dead_code)]
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct AccountPublicKeyResp {
     id: String,
     name: String,
@@ -291,7 +288,6 @@ struct AccountPublicKeyResp {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct RefreshResp {
     token: String,
     #[serde(default)]
@@ -514,7 +510,6 @@ pub struct PairArgs {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub(crate) struct PairingResp {
     pub pairing_token: String,
     #[serde(default)]
@@ -578,6 +573,13 @@ pub fn run_pair(args: PairArgs) -> anyhow::Result<()> {
 // the realm, viewed as the logged-in user?". Keeping the two
 // surfaces separate avoids overloading verbs that already have a
 // well-known meaning.
+//
+// These response DTOs are presentation projections over backend read-models,
+// not canonical runtime contracts. They intentionally validate required facts
+// and collection shapes while ignoring additive backend fields. Strict schema
+// rejection belongs at canonical boundaries such as persisted credentials,
+// pairing credential envelopes, daemon control frames, and Invocation/Receipt
+// wire objects.
 
 fn auth_get_json<T: for<'de> Deserialize<'de>>(path: &str) -> anyhow::Result<T> {
     let mut session = authenticated_session()?;
@@ -616,7 +618,6 @@ pub struct DevicesArgs {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct DeviceListResp {
     items: Vec<DeviceItem>,
     #[serde(default)]
@@ -624,7 +625,6 @@ struct DeviceListResp {
 }
 
 #[derive(Deserialize, Debug)]
-#[serde(deny_unknown_fields)]
 struct DeviceItem {
     node_id: String,
     #[serde(default)]
@@ -680,7 +680,6 @@ struct DeviceItem {
 }
 
 #[derive(Deserialize, Debug, serde::Serialize)]
-#[serde(deny_unknown_fields)]
 struct FederatedPeerEntry {
     realm: String,
     peer_hub_url: String,
@@ -689,7 +688,6 @@ struct FederatedPeerEntry {
 }
 
 #[derive(Deserialize, Debug, serde::Serialize)]
-#[serde(deny_unknown_fields)]
 struct ResolveUnavailable {
     source: String,
     reason: String,
@@ -708,7 +706,6 @@ struct ResolveUnavailable {
 }
 
 #[derive(Deserialize, Debug, serde::Serialize)]
-#[serde(deny_unknown_fields)]
 struct ConnectionFailure {
     code: String,
     message: String,
@@ -786,7 +783,6 @@ pub struct AbilitiesArgs {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct AbilityListResp {
     items: Vec<AbilityItem>,
     #[serde(default)]
@@ -794,7 +790,6 @@ struct AbilityListResp {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct AbilityItem {
     #[serde(default)]
     ura: Option<String>,
@@ -1005,7 +1000,6 @@ pub struct AgentsArgs {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct AgentListResp {
     items: Vec<AgentItem>,
     #[serde(default)]
@@ -1013,7 +1007,6 @@ struct AgentListResp {
 }
 
 #[derive(Debug, Deserialize, serde::Serialize)]
-#[serde(deny_unknown_fields)]
 struct AgentItem {
     agent_id: String,
     display_name: String,
@@ -1036,7 +1029,6 @@ struct AgentItem {
 }
 
 #[derive(Debug, Deserialize, serde::Serialize)]
-#[serde(deny_unknown_fields)]
 struct SkillInfo {
     skill_id: String,
     name: String,
@@ -1357,7 +1349,7 @@ mod tests {
     }
 
     #[test]
-    fn auth_agents_table_rejects_legacy_row_aliases() {
+    fn auth_agents_table_rejects_rows_missing_canonical_identity_fields() {
         let error = serde_json::from_value::<AgentListResp>(serde_json::json!({
             "items": [{
                 "ura": "easynet:///r/test/agent/legacy",
@@ -1367,11 +1359,11 @@ mod tests {
                 "skills": []
             }]
         }))
-        .expect_err("agent list rows must reject retired aliases at schema ingress");
+        .expect_err("agent list rows must require canonical backend identity fields");
 
         assert!(
-            error.to_string().contains("ura"),
-            "schema error should name the retired alias: {error}"
+            error.to_string().contains("agent_id"),
+            "schema error should name the missing canonical field: {error}"
         );
     }
 
@@ -1521,34 +1513,36 @@ mod tests {
     }
 
     #[test]
-    fn login_response_rejects_unknown_product_fields() {
-        let top_level = serde_json::from_value::<AuthResp>(serde_json::json!({
+    fn login_response_ignores_additive_backend_fields() {
+        let response = serde_json::from_value::<AuthResp>(serde_json::json!({
             "token": "token",
             "refresh_token": "refresh",
             "user": {
                 "id": "user-alice",
-                "username": "alice"
+                "username": "alice",
+                "user_ura": "easynet:///r/acme/user/user-alice",
+                "account_public_keys": []
             },
             "state_code": "J200"
         }))
-        .expect_err("login response envelope must reject read-model drift");
-        assert!(
-            top_level.to_string().contains("state_code"),
-            "schema error should name the noncanonical field: {top_level}"
-        );
+        .expect("auth facade must ignore additive backend fields it does not consume");
 
+        assert_eq!(response.user.id, "user-alice");
+        assert_eq!(response.user.username, "alice");
+    }
+
+    #[test]
+    fn login_response_rejects_rows_missing_canonical_user_fields() {
         let nested = serde_json::from_value::<AuthResp>(serde_json::json!({
             "token": "token",
             "user": {
-                "id": "user-alice",
-                "username": "alice",
                 "user_ura": "easynet:///r/acme/user/user-alice"
             }
         }))
-        .expect_err("login user projection must reject retired owner aliases");
+        .expect_err("login user projection must require canonical owner facts");
         assert!(
-            nested.to_string().contains("user_ura"),
-            "schema error should name the retired alias: {nested}"
+            nested.to_string().contains("id"),
+            "schema error should name the missing canonical field: {nested}"
         );
     }
 
@@ -1564,32 +1558,26 @@ mod tests {
     }
 
     #[test]
-    fn refresh_response_rejects_unknown_product_fields() {
-        let error = serde_json::from_value::<RefreshResp>(serde_json::json!({
+    fn refresh_response_ignores_additive_backend_fields() {
+        let response = serde_json::from_value::<RefreshResp>(serde_json::json!({
             "token": "new-token",
             "state_code": "J200"
         }))
-        .expect_err("refresh response must reject read-model drift");
+        .expect("refresh facade must ignore additive backend fields it does not consume");
 
-        assert!(
-            error.to_string().contains("state_code"),
-            "schema error should name the noncanonical field: {error}"
-        );
+        assert_eq!(response.token, "new-token");
     }
 
     #[test]
-    fn pairing_token_response_rejects_unknown_product_fields() {
-        let error = serde_json::from_value::<PairingResp>(serde_json::json!({
+    fn pairing_token_response_ignores_additive_backend_fields() {
+        let response = serde_json::from_value::<PairingResp>(serde_json::json!({
             "pairing_token": "token_123",
             "realm": "acme",
             "state_code": "J200"
         }))
-        .expect_err("pairing token response must reject read-model drift");
+        .expect("pairing-token mint facade must ignore additive backend fields");
 
-        assert!(
-            error.to_string().contains("state_code"),
-            "schema error should name the noncanonical field: {error}"
-        );
+        assert_eq!(response.pairing_token, "token_123");
     }
 
     #[test]
@@ -1640,16 +1628,14 @@ mod tests {
     }
 
     #[test]
-    fn device_list_response_rejects_uncontracted_fields() {
-        let top_level = serde_json::from_value::<DeviceListResp>(serde_json::json!({
+    fn device_list_response_ignores_additive_backend_fields() {
+        let response = serde_json::from_value::<DeviceListResp>(serde_json::json!({
             "items": [],
             "cursor": "legacy"
         }))
-        .expect_err("device list envelope must reject uncontracted fields");
-        assert!(
-            top_level.to_string().contains("cursor"),
-            "schema error should name the noncanonical field: {top_level}"
-        );
+        .expect("operator-mode device list must ignore additive envelope fields");
+
+        assert!(response.items.is_empty());
 
         let item = serde_json::from_value::<DeviceListResp>(serde_json::json!({
             "items": [{
@@ -1659,10 +1645,32 @@ mod tests {
                 "legacy_state_code": "J200"
             }]
         }))
-        .expect_err("device list rows must reject uncontracted drift");
+        .expect("operator-mode device rows must ignore additive row fields");
+
+        assert_eq!(item.items[0].node_id, "dev-1");
+    }
+
+    #[test]
+    fn device_list_response_rejects_null_collections() {
+        let top_level = serde_json::from_value::<DeviceListResp>(serde_json::json!({
+            "items": null
+        }))
+        .expect_err("device list items must be a canonical JSON array");
         assert!(
-            item.to_string().contains("legacy_state_code"),
-            "schema error should name the noncanonical field: {item}"
+            top_level.to_string().contains("sequence"),
+            "schema error should reject null list collections: {top_level}"
+        );
+
+        let nested = serde_json::from_value::<DeviceListResp>(serde_json::json!({
+            "items": [{
+                "node_id": "dev-1",
+                "federated_peers": null
+            }]
+        }))
+        .expect_err("device row federated_peers must be a canonical JSON array when present");
+        assert!(
+            nested.to_string().contains("sequence"),
+            "schema error should reject null nested collections: {nested}"
         );
     }
 
@@ -1692,8 +1700,8 @@ mod tests {
     }
 
     #[test]
-    fn ability_list_response_rejects_uncontracted_fields() {
-        let error = serde_json::from_value::<AbilityListResp>(serde_json::json!({
+    fn ability_list_response_ignores_additive_backend_fields() {
+        let response = serde_json::from_value::<AbilityListResp>(serde_json::json!({
             "items": [{
                 "name": "browser.open_session",
                 "ability_ura": "easynet:///r/acme/ability/device.dev-1.browser.open_session",
@@ -1702,26 +1710,36 @@ mod tests {
                 "descriptor_ref": "legacy"
             }]
         }))
-        .expect_err("ability list rows must reject descriptor projection drift");
+        .expect("operator-mode ability rows must ignore additive backend fields");
 
-        assert!(
-            error.to_string().contains("descriptor_ref"),
-            "schema error should name the noncanonical field: {error}"
+        assert_eq!(
+            response.items[0].name.as_deref(),
+            Some("browser.open_session")
         );
     }
 
     #[test]
-    fn agent_list_response_rejects_unknown_envelope_fields() {
-        let error = serde_json::from_value::<AgentListResp>(serde_json::json!({
+    fn ability_list_response_rejects_null_collections() {
+        let error = serde_json::from_value::<AbilityListResp>(serde_json::json!({
+            "items": null
+        }))
+        .expect_err("ability list items must be a canonical JSON array");
+
+        assert!(
+            error.to_string().contains("sequence"),
+            "schema error should reject null ability collections: {error}"
+        );
+    }
+
+    #[test]
+    fn agent_list_response_ignores_additive_envelope_fields() {
+        let response = serde_json::from_value::<AgentListResp>(serde_json::json!({
             "items": [],
             "state_code": "J200"
         }))
-        .expect_err("agent list envelope must reject read-model drift");
+        .expect("operator-mode agent list must ignore additive envelope fields");
 
-        assert!(
-            error.to_string().contains("state_code"),
-            "schema error should name the noncanonical field: {error}"
-        );
+        assert!(response.items.is_empty());
     }
 
     #[test]
@@ -1756,8 +1774,8 @@ mod tests {
     }
 
     #[test]
-    fn agent_list_response_rejects_uncontracted_row_fields() {
-        let error = serde_json::from_value::<AgentListResp>(serde_json::json!({
+    fn agent_list_response_ignores_additive_row_fields() {
+        let response = serde_json::from_value::<AgentListResp>(serde_json::json!({
             "items": [{
                 "agent_id": "easynet:///r/acme/agent/alice.claude",
                 "display_name": "Claude",
@@ -1766,11 +1784,38 @@ mod tests {
                 "legacy_agent_id": "alice"
             }]
         }))
-        .expect_err("agent list rows must reject uncontracted drift");
+        .expect("operator-mode agent rows must ignore additive backend fields");
 
+        assert_eq!(
+            response.items[0].agent_id,
+            "easynet:///r/acme/agent/alice.claude"
+        );
+    }
+
+    #[test]
+    fn agent_list_response_rejects_null_collections() {
+        let top_level = serde_json::from_value::<AgentListResp>(serde_json::json!({
+            "items": null
+        }))
+        .expect_err("agent list items must be a canonical JSON array");
         assert!(
-            error.to_string().contains("legacy_agent_id"),
-            "schema error should name the noncanonical field: {error}"
+            top_level.to_string().contains("sequence"),
+            "schema error should reject null agent collections: {top_level}"
+        );
+
+        let nested = serde_json::from_value::<AgentListResp>(serde_json::json!({
+            "items": [{
+                "agent_id": "easynet:///r/acme/agent/alice.claude",
+                "display_name": "Claude",
+                "tags": null,
+                "node_id": "dev-1",
+                "skills": []
+            }]
+        }))
+        .expect_err("agent row tags must be a canonical JSON array");
+        assert!(
+            nested.to_string().contains("sequence"),
+            "schema error should reject null nested agent collections: {nested}"
         );
     }
 }
