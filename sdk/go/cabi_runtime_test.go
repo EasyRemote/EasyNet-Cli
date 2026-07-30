@@ -1118,7 +1118,7 @@ static char *dup_json(const char *s) {
 	return out;
 }
 
-uint32_t runtime_abi_version(void) { return 6u; }
+uint32_t runtime_abi_version(void) { return 7u; }
 void runtime_string_free(char *s) { free(s); }
 int32_t runtime_last_error_json(char **out_error_json) {
 	*out_error_json = dup_json(last_error_json);
@@ -1173,6 +1173,10 @@ int32_t runtime_resolve_descriptor_ref(uint64_t handle, const char *request_json
 	return 0;
 }
 int32_t runtime_invocation_invoke(uint64_t handle, const char *invocation_json, char **out_result_json) {
+	(void)handle; (void)invocation_json; (void)out_result_json;
+	return 10;
+}
+int32_t runtime_governance_read(uint64_t handle, const char *invocation_json, char **out_result_json) {
 	(void)handle; (void)invocation_json; (void)out_result_json;
 	return 10;
 }

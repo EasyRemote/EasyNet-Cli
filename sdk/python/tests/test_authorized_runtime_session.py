@@ -11,6 +11,7 @@ from easynet_sdk import (
     AuthorizedRuntimeSession,
     CallerIdentityRef,
     DescriptorResolution,
+    DescriptorResolutionRequest,
     DescriptorResolutionState,
     ErrorCode,
     InvocationIntent,
@@ -436,6 +437,108 @@ class AuthorizedRuntimeSessionTests(unittest.TestCase):
         with self.assertRaises(SDKError) as descriptor_error:
             RuntimeClientDescriptorProvider(None)  # type: ignore[arg-type]
         self.assertTrue(is_code(descriptor_error.exception, ErrorCode.PROVIDER_UNAVAILABLE))
+
+    def test_runtime_client_descriptor_provider_uses_ability_descriptor_provider_for_catalogue_ability_ura(
+        self,
+    ) -> None:
+        class Transport:
+            def __init__(self) -> None:
+                self.descriptor_requests: list[dict[str, object]] = []
+
+            def resolve_descriptor_ref(self, request_json: bytes) -> bytes:
+                request = json.loads(request_json.decode("utf-8"))
+                self.descriptor_requests.append(request)
+                return json.dumps(
+                    {
+                        "descriptor_ref": (
+                            "easynet:///r/example/ability/device.dev-a.meta.list_resources"
+                            "@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read"
+                        )
+                    }
+                ).encode("utf-8")
+
+        transport = Transport()
+        provider = RuntimeClientDescriptorProvider(RuntimeClient(transport))  # type: ignore[arg-type]
+
+        resolution = provider.resolve_descriptor(
+            DescriptorResolutionRequest(
+                caller_identity=CallerIdentityRef(
+                    PrincipalRef("easynet:///r/example/user/alice")
+                ),
+                acting_principal=ActingPrincipalRef(
+                    PrincipalRef("easynet:///r/example/user/alice")
+                ),
+                target=RuntimeTargetRef("easynet:///r/example/device/dev-a"),
+                ability=AbilityRef(
+                    "easynet:///r/example/ability/device.dev-a.meta.list_resources"
+                ),
+                subject=SubjectRef("easynet:///r/example/user/alice"),
+                call_mode="rpc",
+                deadline_unix_ms=0,
+                idempotency_key="",
+                causal_context={},
+            )
+        )
+
+        self.assertEqual(resolution.state, DescriptorResolutionState.RESOLVED)
+        self.assertEqual(
+            transport.descriptor_requests[-1]["provider"],
+            "ability_descriptor",
+        )
+        self.assertEqual(
+            transport.descriptor_requests[-1]["subject_ura"],
+            "easynet:///r/example/resource/user.alice/runtime-state/read",
+        )
+
+    def test_runtime_client_descriptor_provider_uses_governance_subject_for_receipt_history_provider(
+        self,
+    ) -> None:
+        class Transport:
+            def __init__(self) -> None:
+                self.descriptor_requests: list[dict[str, object]] = []
+
+            def resolve_descriptor_ref(self, request_json: bytes) -> bytes:
+                request = json.loads(request_json.decode("utf-8"))
+                self.descriptor_requests.append(request)
+                return json.dumps(
+                    {
+                        "descriptor_ref": (
+                            "easynet:///r/example/ability/device.dev-a.invocation.history.list"
+                            "@1.0.0#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb!read"
+                        )
+                    }
+                ).encode("utf-8")
+
+        transport = Transport()
+        provider = RuntimeClientDescriptorProvider(RuntimeClient(transport))  # type: ignore[arg-type]
+
+        resolution = provider.resolve_descriptor(
+            DescriptorResolutionRequest(
+                caller_identity=CallerIdentityRef(
+                    PrincipalRef("easynet:///r/example/user/alice")
+                ),
+                acting_principal=ActingPrincipalRef(
+                    PrincipalRef("easynet:///r/example/user/alice")
+                ),
+                target=RuntimeTargetRef("easynet:///r/example/device/dev-a"),
+                ability=AbilityRef("invocation.history.list"),
+                subject=SubjectRef("easynet:///r/example/user/alice"),
+                call_mode="rpc",
+                deadline_unix_ms=0,
+                idempotency_key="",
+                causal_context={},
+            )
+        )
+
+        self.assertEqual(resolution.state, DescriptorResolutionState.RESOLVED)
+        self.assertEqual(
+            transport.descriptor_requests[-1]["provider"],
+            "receipt_history",
+        )
+        self.assertEqual(
+            transport.descriptor_requests[-1]["subject_ura"],
+            "easynet:///r/example/resource/user.alice/runtime-state/read",
+        )
 
 
 class _SessionFixture:

@@ -11,14 +11,14 @@ required_for:
 description: SdkEnvironment and Runtime Core clients decode one canonical SDK feature-discovery catalog before opening runtime traffic.
 steps:
   - action: load_fixture
-    fixture: feature-discovery.v6.json
+    fixture: feature-discovery.v7.json
   - action: decode_feature_discovery
   - action: inspect_profiles
   - action: inspect_symbols
 expect:
   result: ok
   schema: feature-discovery.schema.json
-  abi_version: 6
+  abi_version: 7
   sdk_version_required: true
   runtime_core_profile: provider-backed
   authority_profile: absent

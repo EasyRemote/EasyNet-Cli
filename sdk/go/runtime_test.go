@@ -1043,6 +1043,12 @@ func TestInvocationResultSeparatesAdmissionAndTerminalReceipts(t *testing.T) {
 	if !strings.Contains(string(result.TerminalReceipt()), `"index":1`) {
 		t.Fatalf("terminal receipt = %s", result.TerminalReceipt())
 	}
+	if !strings.Contains(string(result.AdmissionReceipt()), `"receipt_id":"inv-1:0"`) {
+		t.Fatalf("admission receipt omitted derived receipt_id: %s", result.AdmissionReceipt())
+	}
+	if !strings.Contains(string(result.TerminalReceipt()), `"receipt_id":"inv-1:1"`) {
+		t.Fatalf("terminal receipt omitted derived receipt_id: %s", result.TerminalReceipt())
+	}
 	if summary := result.TerminalReceiptSummary(); summary == nil || summary.Index != 1 || summary.State != "Completed" {
 		t.Fatalf("terminal receipt summary = %#v", summary)
 	}

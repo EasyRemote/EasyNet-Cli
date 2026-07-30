@@ -1124,6 +1124,14 @@ func decodeRuntimeReceiptProjectionFromJSON(raw []byte) (RuntimeReceipt, error) 
 	if err := json.Unmarshal(raw, &rawMap); err != nil || rawMap == nil {
 		return RuntimeReceipt{}, invalidRuntimePayload("runtime receipt must be an object", err)
 	}
+	if strings.TrimSpace(dto.ReceiptID) == "" {
+		receiptID, err := runtimeReceiptID(dto.InvocationID, uint64(dto.Index))
+		if err != nil {
+			return RuntimeReceipt{}, err
+		}
+		dto.ReceiptID = receiptID
+		rawMap["receipt_id"] = dto.ReceiptID
+	}
 	return RuntimeReceipt{
 		Raw:                   rawMap,
 		ReceiptID:             dto.ReceiptID,
@@ -1163,6 +1171,17 @@ func decodeRuntimeReceiptProjectionFromJSON(raw []byte) (RuntimeReceipt, error) 
 		OutputHashHex:         dto.OutputHashHex,
 		ParentReceipts:        dto.ParentReceipts,
 	}, nil
+}
+
+func runtimeReceiptID(invocationID string, index uint64) (string, error) {
+	invocationID = strings.TrimSpace(invocationID)
+	if invocationID == "" {
+		return "", invalidRuntimePayload("runtime receipt summary is missing invocation_id", nil)
+	}
+	if strings.Contains(invocationID, "/") {
+		return "", invalidRuntimePayload("runtime receipt invocation_id must be owner-local for receipt_id", nil)
+	}
+	return fmt.Sprintf("%s:%d", invocationID, index), nil
 }
 
 func (r RuntimeReceipt) HasCausalAnchor() bool {
@@ -2353,7 +2372,15 @@ func NewInvocationResultFromJSON(raw []byte) (InvocationResult, error) {
 	if err != nil {
 		return InvocationResult{}, err
 	}
+	admissionReceipt, err = runtimeReceiptSummaryJSON(admissionReceiptSummary)
+	if err != nil {
+		return InvocationResult{}, err
+	}
 	terminalReceiptSummary, err := decodeRuntimeReceiptSummary(terminalReceipt)
+	if err != nil {
+		return InvocationResult{}, err
+	}
+	terminalReceipt, err = runtimeReceiptSummaryJSON(terminalReceiptSummary)
 	if err != nil {
 		return InvocationResult{}, err
 	}
@@ -2630,6 +2657,18 @@ func decodeRuntimeReceiptSummary(raw json.RawMessage) (*RuntimeReceipt, error) {
 		return nil, err
 	}
 	return &receipt, nil
+}
+
+func runtimeReceiptSummaryJSON(receipt *RuntimeReceipt) (json.RawMessage, error) {
+	if receipt == nil {
+		return nil, nil
+	}
+	raw := receipt.RawProjection()
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		return nil, invalidRuntimePayload("encode runtime receipt canonical projection", err)
+	}
+	return json.RawMessage(encoded), nil
 }
 
 func cloneRuntimeReceipt(receipt *RuntimeReceipt) *RuntimeReceipt {

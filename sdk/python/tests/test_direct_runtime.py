@@ -1249,7 +1249,10 @@ class DirectRuntimeTests(unittest.TestCase):
 
         result = json.loads(raw.decode("utf-8"))
         self.assertNotIn("receipt", result)
+        admission = cast(dict[str, object], result["admission_receipt"])
         receipt = cast(dict[str, object], result["terminal_receipt"])
+        self.assertEqual(admission["receipt_id"], "inv-direct:0")
+        self.assertEqual(receipt["receipt_id"], "inv-direct:1")
         self.assertEqual(receipt["invocation_id"], "inv-direct")
         _assert_complete_receipt_projection(self, receipt)
 

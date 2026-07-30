@@ -738,7 +738,21 @@ def _mutable_runtime_receipt_value(value: object) -> object:
 def _canonical_runtime_receipt_projection(
     decoded: Mapping[str, object],
 ) -> dict[str, object]:
-    return _mutable_runtime_receipt_projection(decoded)
+    projection = _mutable_runtime_receipt_projection(decoded)
+    receipt_id = _optional_string(projection.get("receipt_id"), "receipt_id") or ""
+    if not receipt_id:
+        invocation_id = (
+            _optional_string(projection.get("invocation_id"), "invocation_id") or ""
+        ).strip()
+        if not invocation_id:
+            raise _invalid_runtime("runtime receipt summary is missing invocation_id")
+        if "/" in invocation_id:
+            raise _invalid_runtime(
+                "runtime receipt invocation_id must be owner-local for receipt_id"
+            )
+        index = _optional_non_negative_int(projection.get("index"), "index")
+        projection["receipt_id"] = f"{invocation_id}:{index}"
+    return projection
 
 
 @dataclass(frozen=True)
@@ -848,11 +862,15 @@ class InvocationResult:
             if admission_receipt is not None
             else None
         )
+        if admission_receipt_summary is not None:
+            admission_receipt = admission_receipt_summary.to_json_dict()
         terminal_receipt_summary = (
             RuntimeReceipt.from_mapping(terminal_receipt)
             if terminal_receipt is not None
             else None
         )
+        if terminal_receipt_summary is not None:
+            terminal_receipt = terminal_receipt_summary.to_json_dict()
         invocation_id = (
             _optional_string(decoded.get("invocation_id"), "invocation_id") or ""
         )

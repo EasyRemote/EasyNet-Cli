@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-// TestGoSDKLiveDaemonSmoke proves the generic C ABI v6 boundary through the
+// TestGoSDKLiveDaemonSmoke proves the generic C ABI v7 boundary through the
 // public Go facade. Product/profile helpers are deliberately absent: complete
 // Invocation descriptors are supplied to Runtime Core directly.
 func TestGoSDKLiveDaemonSmoke(t *testing.T) {

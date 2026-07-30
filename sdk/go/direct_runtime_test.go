@@ -367,6 +367,17 @@ func TestDirectRuntimeTransportInvokesOverUnixSocket(t *testing.T) {
 	if got := string(result.OutputJSON()); got != `{"ok":true}` {
 		t.Fatalf("OutputJSON = %s", got)
 	}
+	var admission map[string]any
+	if err := json.Unmarshal(result.AdmissionReceipt(), &admission); err != nil {
+		t.Fatalf("admission receipt JSON: %v", err)
+	}
+	var terminal map[string]any
+	if err := json.Unmarshal(result.TerminalReceipt(), &terminal); err != nil {
+		t.Fatalf("terminal receipt JSON: %v", err)
+	}
+	if admission["receipt_id"] != "inv-1:1" || terminal["receipt_id"] != "inv-1:7" {
+		t.Fatalf("receipt ids = admission %#v terminal %#v", admission["receipt_id"], terminal["receipt_id"])
+	}
 	if daemon.seenInvoke == nil || daemon.seenInvoke.GetEnvelope().GetCaller().GetUra() != "easynet:///r/example/agent/alice" {
 		t.Fatalf("daemon did not receive caller envelope: %#v", daemon.seenInvoke)
 	}

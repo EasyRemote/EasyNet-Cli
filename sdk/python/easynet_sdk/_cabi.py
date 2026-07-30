@@ -1,4 +1,4 @@
-"""Private generic C ABI v6 transport adapter.
+"""Private generic C ABI v7 transport adapter.
 
 This module is intentionally the only Python SDK file that imports ``ctypes``.
 Public facade modules depend on narrow transport protocols and never expose
@@ -19,7 +19,7 @@ from typing import Any, Callable
 from .errors import ErrorCode, RetryHint, SDKError, retryable_for_hint
 from .runtime import InvocationControlCapability
 
-EXPECTED_ABI_VERSION = 6
+EXPECTED_ABI_VERSION = 7
 RUNTIME_OK = 0
 MAX_CABI_CALLBACK_QUEUE = 1024
 
@@ -31,7 +31,7 @@ _NEXT_CALLBACK_TOKEN = 1
 
 
 class RuntimeCABILibrary:
-    """Typed binding for the generic runtime C ABI v6 surface."""
+    """Typed binding for the generic runtime C ABI v7 surface."""
 
     def __init__(self, raw: Any) -> None:
         self._raw = raw
@@ -70,7 +70,7 @@ class RuntimeCABILibrary:
                     ) from exc
                 errors.append(f"{candidate}: {exc}")
         raise _transport_error(
-            "no usable libeasynet_cli C ABI v6 library found: " + "; ".join(errors)
+            "no usable libeasynet_cli C ABI v7 library found: " + "; ".join(errors)
         )
 
     def require_abi(self, expected: int = EXPECTED_ABI_VERSION) -> None:
@@ -594,7 +594,7 @@ class RuntimeCABILibrary:
 
 @dataclass
 class CABIDiscoveryTransport:
-    """Feature discovery transport backed by C ABI v6."""
+    """Feature discovery transport backed by C ABI v7."""
 
     lib: RuntimeCABILibrary
     _closed: bool = False
@@ -610,7 +610,7 @@ class CABIDiscoveryTransport:
 
 @dataclass
 class CABIRuntimeLifecycleTransport:
-    """Runtime host lifecycle transport backed by generic C ABI v6."""
+    """Runtime host lifecycle transport backed by generic C ABI v7."""
 
     lib: RuntimeCABILibrary
     _handles: dict[str, int] = field(default_factory=dict)
@@ -692,7 +692,7 @@ class CABIRuntimeLifecycleTransport:
         )
 
     def open_profile(self, handle_id: str, profile: str, options_json: bytes) -> object:
-        """Open only the generic Runtime profile exposed by C ABI v6."""
+        """Open only the generic Runtime profile exposed by C ABI v7."""
 
         if profile == "runtime":
             return self.open_runtime_transport(handle_id, options_json)
@@ -859,7 +859,7 @@ class _CABIPreparedHandleRegistry:
 
 @dataclass
 class CABIRuntimeTransport:
-    """Runtime Core and Health transport backed by C ABI v6."""
+    """Runtime Core and Health transport backed by C ABI v7."""
 
     lib: RuntimeCABILibrary
     handle: int

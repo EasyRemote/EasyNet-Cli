@@ -596,15 +596,15 @@ class CABITransportTests(unittest.TestCase):
         self.assertEqual(len(candidates), 1)
         self.assertFalse(any("target/" in candidate for candidate in candidates))
 
-    def test_library_binds_only_generic_v6_symbols(self) -> None:
+    def test_library_binds_only_generic_v7_symbols(self) -> None:
         raw = FakeRawCABI()
         library = RuntimeCABILibrary(raw)
 
         library.require_abi()
         features = json.loads(library.feature_discovery())
 
-        self.assertEqual(EXPECTED_ABI_VERSION, 6)
-        self.assertEqual(features["abi_version"], 6)
+        self.assertEqual(EXPECTED_ABI_VERSION, 7)
+        self.assertEqual(features["abi_version"], 7)
         self.assertEqual(features["profiles"], {"runtime_core": "provider-backed"})
 
     def test_library_exposes_runtime_host_not_daemon_lifecycle_methods(self) -> None:

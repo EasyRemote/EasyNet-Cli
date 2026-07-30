@@ -1399,11 +1399,16 @@ func directReceipt(receipt *axonpb.InvocationReceipt, stage string) (map[string]
 	if err != nil {
 		return nil, err
 	}
+	receiptID, err := directReceiptID(receipt)
+	if err != nil {
+		return nil, err
+	}
 	receiptURA, err := directReceiptURA(receipt)
 	if err != nil {
 		return nil, err
 	}
 	value := map[string]any{
+		"receipt_id":              receiptID,
 		"receipt_ura":             receiptURA,
 		"index":                   receipt.GetIndex(),
 		"invocation_id":           receipt.GetInvocationId(),
@@ -1454,6 +1459,17 @@ func directReceipt(receipt *axonpb.InvocationReceipt, stage string) (map[string]
 		}
 	}
 	return value, nil
+}
+
+func directReceiptID(receipt *axonpb.InvocationReceipt) (string, error) {
+	if receipt == nil {
+		return "", invalidRuntimePayload("direct runtime receipt is missing", nil)
+	}
+	invocationID := strings.TrimSpace(receipt.GetInvocationId())
+	if invocationID == "" || strings.Contains(invocationID, "/") {
+		return "", invalidRuntimePayload("direct runtime receipt invocation_id must be owner-local for receipt id", nil)
+	}
+	return fmt.Sprintf("%s:%d", invocationID, receipt.GetIndex()), nil
 }
 
 func directReceiptURA(receipt *axonpb.InvocationReceipt) (string, error) {

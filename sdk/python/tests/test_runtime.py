@@ -712,10 +712,15 @@ class RuntimeTests(unittest.TestCase):
         }
         result = InvocationResult.from_json(json.dumps(payload))
 
-        self.assertEqual(result.admission_receipt, admission)
+        expected_admission = dict(admission)
+        expected_terminal = dict(terminal)
+        expected_admission["receipt_id"] = "inv-1:0"
+        expected_terminal["receipt_id"] = "inv-1:1"
+        self.assertEqual(result.admission_receipt, expected_admission)
         assert result.terminal_receipt_summary is not None
         self.assertEqual(result.terminal_receipt_summary.index, 1)
-        self.assertEqual(result.terminal_receipt, terminal)
+        self.assertEqual(result.terminal_receipt_summary.receipt_id, "inv-1:1")
+        self.assertEqual(result.terminal_receipt, expected_terminal)
 
         payload.pop("terminal_receipt")
         payload["receipt"] = {"index": 1, "state": "Completed"}

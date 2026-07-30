@@ -8,7 +8,7 @@
         {
           "kind": "rust_test",
           "ref_path": "src/ffi/invocation/mod.rs",
-          "sha256": "90e32eb05a26a16aeed6f482b15637ab9737f0d4db7240328332f48d197b2cab"
+          "sha256": "27ebc85a2b802964c4370b34e7ae2e5ae7bfa647b1c5ae3153ec4ccb94f6cba3"
         }
       ],
       "profile": "runtime_core"
@@ -19,7 +19,7 @@
         {
           "kind": "rust_test",
           "ref_path": "src/ffi/invocation/mod.rs",
-          "sha256": "90e32eb05a26a16aeed6f482b15637ab9737f0d4db7240328332f48d197b2cab"
+          "sha256": "27ebc85a2b802964c4370b34e7ae2e5ae7bfa647b1c5ae3153ec4ccb94f6cba3"
         }
       ],
       "profile": "runtime_core"
@@ -30,7 +30,7 @@
         {
           "kind": "rust_test",
           "ref_path": "src/ffi/mod.rs",
-          "sha256": "cdae1b1506a3bd4933843c2ead2780167536c4ca8b72bcd0d3b47b657888dcac"
+          "sha256": "3e9268684d513b0778a60269c5bc5a1a2545cd207f2889b5c3efecb3bd22bb89"
         }
       ],
       "profile": "runtime_core"
@@ -74,7 +74,7 @@
         {
           "kind": "rust_test",
           "ref_path": "src/ffi/invocation/mod.rs",
-          "sha256": "90e32eb05a26a16aeed6f482b15637ab9737f0d4db7240328332f48d197b2cab"
+          "sha256": "27ebc85a2b802964c4370b34e7ae2e5ae7bfa647b1c5ae3153ec4ccb94f6cba3"
         }
       ],
       "profile": "health"
@@ -85,7 +85,7 @@
         {
           "kind": "rust_test",
           "ref_path": "src/ffi/invocation/mod.rs",
-          "sha256": "90e32eb05a26a16aeed6f482b15637ab9737f0d4db7240328332f48d197b2cab"
+          "sha256": "27ebc85a2b802964c4370b34e7ae2e5ae7bfa647b1c5ae3153ec4ccb94f6cba3"
         }
       ],
       "profile": "runtime_core"
@@ -107,7 +107,7 @@
         {
           "kind": "rust_test",
           "ref_path": "src/ffi/invocation/mod.rs",
-          "sha256": "90e32eb05a26a16aeed6f482b15637ab9737f0d4db7240328332f48d197b2cab"
+          "sha256": "27ebc85a2b802964c4370b34e7ae2e5ae7bfa647b1c5ae3153ec4ccb94f6cba3"
         }
       ],
       "profile": "runtime_core"
@@ -129,7 +129,7 @@
         {
           "kind": "rust_test",
           "ref_path": "src/ffi/invocation/mod.rs",
-          "sha256": "90e32eb05a26a16aeed6f482b15637ab9737f0d4db7240328332f48d197b2cab"
+          "sha256": "27ebc85a2b802964c4370b34e7ae2e5ae7bfa647b1c5ae3153ec4ccb94f6cba3"
         }
       ],
       "profile": "runtime_core"
@@ -151,7 +151,7 @@
         {
           "kind": "rust_test",
           "ref_path": "src/ffi/invocation/mod.rs",
-          "sha256": "90e32eb05a26a16aeed6f482b15637ab9737f0d4db7240328332f48d197b2cab"
+          "sha256": "27ebc85a2b802964c4370b34e7ae2e5ae7bfa647b1c5ae3153ec4ccb94f6cba3"
         }
       ],
       "profile": "runtime_core"
@@ -162,7 +162,7 @@
         {
           "kind": "rust_test",
           "ref_path": "src/ffi/features/mod.rs",
-          "sha256": "88097efc8c277722d640bac4268a38fc6c0c1515877a0365b8b387d8a57c4158"
+          "sha256": "4208662aa98621f4ce3b4d8bd3c9514f771d1dff52787612411f32b7b14dffcb"
         }
       ],
       "profile": "runtime_core"
@@ -173,7 +173,7 @@
         {
           "kind": "rust_test",
           "ref_path": "src/ffi/invocation/mod.rs",
-          "sha256": "90e32eb05a26a16aeed6f482b15637ab9737f0d4db7240328332f48d197b2cab"
+          "sha256": "27ebc85a2b802964c4370b34e7ae2e5ae7bfa647b1c5ae3153ec4ccb94f6cba3"
         }
       ],
       "profile": "runtime_core"
@@ -184,7 +184,7 @@
         {
           "kind": "rust_test",
           "ref_path": "src/ffi/mod.rs",
-          "sha256": "cdae1b1506a3bd4933843c2ead2780167536c4ca8b72bcd0d3b47b657888dcac"
+          "sha256": "3e9268684d513b0778a60269c5bc5a1a2545cd207f2889b5c3efecb3bd22bb89"
         }
       ],
       "profile": "runtime_core"
@@ -195,7 +195,7 @@
         {
           "kind": "rust_test",
           "ref_path": "src/ffi/mod.rs",
-          "sha256": "cdae1b1506a3bd4933843c2ead2780167536c4ca8b72bcd0d3b47b657888dcac"
+          "sha256": "3e9268684d513b0778a60269c5bc5a1a2545cd207f2889b5c3efecb3bd22bb89"
         }
       ],
       "profile": "runtime_core"

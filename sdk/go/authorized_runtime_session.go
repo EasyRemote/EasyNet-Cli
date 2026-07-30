@@ -644,12 +644,25 @@ func (p RuntimeClientDescriptorProvider) ResolveDescriptor(ctx context.Context, 
 	if readyErr != nil {
 		return DescriptorResolution{State: DescriptorUnavailable, Reason: readyErr.Error()}, nil
 	}
+	provider := runtimeGovernanceDescriptorProviderForAbility(request.Ability.Name)
+	subjectURA := request.Subject.URA
+	if strings.TrimSpace(provider) != "" {
+		var err error
+		subjectURA, err = RuntimeGovernanceReadSubjectURA(subjectURA, request.Target.URA)
+		if err != nil {
+			return DescriptorResolution{
+				State:  DescriptorUnavailable,
+				Reason: fmt.Sprintf("descriptor_ref provider subject_ura: %v", err),
+			}, nil
+		}
+	}
 	ref, err := client.ResolveDescriptorRef(ctx, RuntimeDescriptorRefRequest{
 		CalleeURA:  request.Target.URA,
 		Ability:    request.Ability.Name,
 		CallMode:   request.CallMode,
 		CallerURA:  request.CallerIdentity.Principal.URA,
-		SubjectURA: request.Subject.URA,
+		SubjectURA: subjectURA,
+		Provider:   provider,
 	})
 	if err != nil {
 		return descriptorResolutionFromError(err), nil

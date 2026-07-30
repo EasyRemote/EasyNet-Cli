@@ -1641,6 +1641,7 @@ def _canonical_receipt_projection(receipt: Any) -> dict[str, object]:
     proof_binding_kind = _authority_binding_kind(proof.binding)
     proof_binding = _facade_authority_binding_projection(proof.binding)
     projection: dict[str, object] = {
+        "receipt_id": _receipt_id(receipt),
         "receipt_ura": _receipt_ura(receipt),
         "index": int(receipt.index),
         "invocation_id": receipt.invocation_id,
@@ -1755,6 +1756,7 @@ def _canonical_receipt_document(receipt: Any) -> dict[str, object]:
             "authority_proof.binding does not match authority_binding"
         )
     return {
+        "receipt_id": _receipt_id(receipt),
         "receipt_ura": _receipt_ura(receipt),
         "index": str(int(receipt.index)),
         "invocation_id": receipt.invocation_id,
@@ -1803,6 +1805,13 @@ def _receipt_ref_projection(receipt: Any) -> dict[str, object]:
         "receipt_hash_hex": receipt.receipt_hash.hex(),
         "receipt_ura": receipt.receipt_ura,
     }
+
+
+def _receipt_id(receipt: Any) -> str:
+    invocation_id = receipt.invocation_id.strip()
+    if not invocation_id or "/" in invocation_id:
+        raise _receipt_protocol_error("invocation_id must be owner-local for receipt id")
+    return f"{invocation_id}:{int(receipt.index)}"
 
 
 def _receipt_ura(receipt: Any) -> str:
