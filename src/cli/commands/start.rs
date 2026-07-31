@@ -579,11 +579,11 @@ where
         output::info(
             "Hub URA join lineage detected; skipping backend HTTP credential verification.",
         );
-        return Ok((creds, true));
+        return Ok((*creds, true));
     }
 
     match verify(&creds) {
-        CredentialCheck::Valid => Ok((creds, true)),
+        CredentialCheck::Valid => Ok((*creds, true)),
         CredentialCheck::NetworkUnavailable => {
             record_snapshot(JoinConnectionSnapshot::failed_from_credentials(
                 JoinFailureCode::StartFailedCredentialVerify,
@@ -637,7 +637,7 @@ where
 
 #[derive(Debug)]
 enum StartCredentialReadiness {
-    Ready(config::Credentials),
+    Ready(Box<config::Credentials>),
     Missing,
     Invalid { reason: String },
 }
@@ -649,7 +649,7 @@ impl StartCredentialReadiness {
 
     fn from_credentials_result(result: anyhow::Result<Option<config::Credentials>>) -> Self {
         match result {
-            Ok(Some(credentials)) => Self::Ready(credentials),
+            Ok(Some(credentials)) => Self::Ready(Box::new(credentials)),
             Ok(None) => Self::Missing,
             Err(error) => Self::Invalid {
                 reason: format!("{error:#}"),

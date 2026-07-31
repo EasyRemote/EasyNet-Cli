@@ -273,6 +273,10 @@ pub(crate) struct AgentPurgeJournal {
 }
 
 impl AgentPurgeJournal {
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a purge journal atomically snapshots every recovery-critical pre-mutation fact"
+    )]
     pub(crate) fn new(
         transaction_id: String,
         name: String,

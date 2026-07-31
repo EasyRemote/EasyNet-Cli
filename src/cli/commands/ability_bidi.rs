@@ -109,7 +109,7 @@ pub fn run(args: BidiArgs) -> anyhow::Result<()> {
         .map(|raw| serde_json::from_str(raw).context("parse --input JSON"))
         .collect::<anyhow::Result<Vec<Value>>>()?;
     let timeout = timeouts::invocation_transport_guard(args.timeout).map_err(anyhow::Error::msg)?;
-    let target = LocalAbilityTarget::from_selector(&ability_selector);
+    let target = LocalAbilityTarget::from_selector(ability_selector);
     let frames = match node_ura.as_deref() {
         #[cfg(feature = "axon-pb")]
         Some(remote_node) => {

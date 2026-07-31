@@ -55,7 +55,7 @@ def connect_direct_invocation_transport(
             retryable=False,
             message=(
                 "direct runtime requires an explicit Addressing provider; "
-                "generic C ABI v7 does not export identity grammar"
+                "generic C ABI v8 does not export identity grammar"
             ),
         )
 

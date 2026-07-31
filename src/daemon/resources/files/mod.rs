@@ -138,13 +138,37 @@ pub fn resource_ref_for_local_path(
     capability: FilesystemResourceCapability,
 ) -> Result<Value> {
     let mapped = map_local_path_to_virtual_resource(path)?;
+    let owner_ura = crate::daemon::identity::local_invocation::local_device_ura()
+        .map_err(|error| anyhow!("resource_ref: local device owner unavailable: {error}"))?;
     let expires_unix_ms = now_unix_ms().saturating_add(DEFAULT_LOCAL_RESOURCE_REF_TTL_MS);
-    Ok(resource_ref_value(
+    resource_ref_value_owned_by(
         &mapped.virtual_root,
         &mapped.relative_path,
         capability,
         expires_unix_ms,
-    )?)
+        &owner_ura,
+    )
+}
+
+/// Create a filesystem ResourceRef bound to an already-resolved Device owner.
+///
+/// Internal invocation assembly uses this seam when the canonical callee is
+/// already known, avoiding a second lookup through ambient process identity.
+#[cfg(test)]
+pub(crate) fn resource_ref_for_local_path_owned_by(
+    path: &Path,
+    capability: FilesystemResourceCapability,
+    owner_ura: &str,
+) -> Result<Value> {
+    let mapped = map_local_path_to_virtual_resource(path)?;
+    let expires_unix_ms = now_unix_ms().saturating_add(DEFAULT_LOCAL_RESOURCE_REF_TTL_MS);
+    resource_ref_value_owned_by(
+        &mapped.virtual_root,
+        &mapped.relative_path,
+        capability,
+        expires_unix_ms,
+        owner_ura,
+    )
 }
 
 /// Resolve and revalidate the `resource_ref` field from ability args.
@@ -251,6 +275,7 @@ fn resolve_resource_ref(
     })
 }
 
+#[cfg(test)]
 fn resource_ref_value(
     virtual_root: &str,
     relative_path: &str,
@@ -259,7 +284,23 @@ fn resource_ref_value(
 ) -> Result<Value> {
     let owner_ura = crate::daemon::identity::local_invocation::local_device_ura()
         .map_err(|error| anyhow!("resource_ref: local device owner unavailable: {error}"))?;
-    let parsed_owner = crate::core::ura::parse_ura(&owner_ura)
+    resource_ref_value_owned_by(
+        virtual_root,
+        relative_path,
+        capability,
+        expires_unix_ms,
+        &owner_ura,
+    )
+}
+
+fn resource_ref_value_owned_by(
+    virtual_root: &str,
+    relative_path: &str,
+    capability: FilesystemResourceCapability,
+    expires_unix_ms: i64,
+    owner_ura: &str,
+) -> Result<Value> {
+    let parsed_owner = crate::core::ura::parse_ura(owner_ura)
         .map_err(|error| anyhow!("resource_ref: local device owner is invalid: {error}"))?;
     if parsed_owner.kind != crate::core::ura::URAKind::Device {
         return Err(anyhow!(

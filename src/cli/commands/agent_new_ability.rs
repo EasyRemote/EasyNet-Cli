@@ -550,9 +550,16 @@ impl AbilityConflictPolicy {
 #[derive(Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct AgentAbilityCommitOutcome {
+    ok: bool,
+    state: String,
+    agent_name: String,
+    owner_ura: String,
     pub(crate) root_path: PathBuf,
     pub(crate) written: Vec<String>,
     pub(crate) skipped: Vec<String>,
+    runtime_registered: usize,
+    runtime_replaced: usize,
+    runtime_removed: usize,
     pub(crate) publication: Vec<Value>,
 }
 
@@ -579,13 +586,48 @@ pub(crate) fn commit_ability_manifests(
             "conflict_policy": conflict_policy.as_wire_str(),
         }),
     )?;
-    if response.get("ok").and_then(Value::as_bool) != Some(true)
-        || response.get("state").and_then(Value::as_str) != Some("committed")
-    {
-        anyhow::bail!("agent.ability.put returned a non-committed outcome: {response}");
+    let outcome: AgentAbilityCommitOutcome = serde_json::from_value(response)
+        .map_err(|error| anyhow::anyhow!("agent.ability.put returned invalid payload: {error}"))?;
+    if !outcome.ok || outcome.state != "committed" {
+        anyhow::bail!(
+            "agent.ability.put returned a non-committed outcome for {:?}: state={:?}",
+            outcome.agent_name,
+            outcome.state
+        );
     }
-    serde_json::from_value(response)
-        .map_err(|error| anyhow::anyhow!("agent.ability.put returned invalid payload: {error}"))
+    if outcome.agent_name != agent_name {
+        anyhow::bail!(
+            "agent.ability.put committed agent {:?}, expected {:?}",
+            outcome.agent_name,
+            agent_name
+        );
+    }
+    let parsed_owner = crate::core::ura::parse_ura(&outcome.owner_ura).map_err(|error| {
+        anyhow::anyhow!(
+            "agent.ability.put returned invalid owner_ura {:?}: {error}",
+            outcome.owner_ura
+        )
+    })?;
+    if parsed_owner.kind != crate::core::ura::URAKind::Agent
+        || parsed_owner.agent_ids().map(|(_, id)| id) != Some(agent_name)
+    {
+        anyhow::bail!(
+            "agent.ability.put returned owner_ura {:?} for a different Agent",
+            outcome.owner_ura
+        );
+    }
+    let synchronized = outcome.runtime_registered + outcome.runtime_replaced;
+    if synchronized < outcome.written.len() {
+        anyhow::bail!(
+            "agent.ability.put returned inconsistent runtime synchronization counts: registered={}, replaced={}, removed={}, written={}, publication={}",
+            outcome.runtime_registered,
+            outcome.runtime_replaced,
+            outcome.runtime_removed,
+            outcome.written.len(),
+            outcome.publication.len()
+        );
+    }
+    Ok(outcome)
 }
 
 fn parse_headers(items: &[String]) -> anyhow::Result<BTreeMap<String, String>> {
@@ -1033,9 +1075,16 @@ mod tests {
     #[test]
     fn agent_ability_commit_outcome_rejects_unknown_fields() {
         let err = serde_json::from_value::<AgentAbilityCommitOutcome>(json!({
+            "ok": true,
+            "state": "committed",
+            "agent_name": "codex",
+            "owner_ura": "easynet:///r/localhost/agent/dev.codex",
             "root_path": "/tmp/easynet-agent",
             "written": [],
             "skipped": [],
+            "runtime_registered": 0,
+            "runtime_replaced": 0,
+            "runtime_removed": 0,
             "publication": [],
             "state_code": "J200"
         }))

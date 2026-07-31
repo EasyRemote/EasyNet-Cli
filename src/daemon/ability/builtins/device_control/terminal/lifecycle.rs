@@ -366,7 +366,7 @@ fn require_lifecycle_args<'a>(
         .as_object()
         .ok_or_else(|| anyhow::anyhow!("{ability}: args must be an object"))?;
     for key in object.keys() {
-        if !allowed_keys.iter().any(|allowed| *allowed == key.as_str()) {
+        if !allowed_keys.contains(&key.as_str()) {
             anyhow::bail!("{ability}: unknown argument `{key}`");
         }
     }

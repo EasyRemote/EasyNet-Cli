@@ -329,7 +329,9 @@ mod tests {
             None,
         );
         agent.root_path = Some(agent_root);
-        registry.agents.insert(agent_name.to_string(), agent);
+        registry
+            .agents
+            .insert(format!("default/{agent_name}"), agent);
         crate::daemon::persistence::agent_registry::save_agents(&registry).expect("save registry");
 
         let response = remove_handler(json!({

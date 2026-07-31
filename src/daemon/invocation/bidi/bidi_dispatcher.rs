@@ -166,9 +166,9 @@ struct SessionOpenPolicy {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SessionControlRequestKind {
-    FederationAdvertiseAgent,
-    FederationAdvertiseAbilities,
-    FederationResolveKey,
+    AdvertiseAgent,
+    AdvertiseAbilities,
+    ResolveKey,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -248,27 +248,25 @@ impl SessionOpenPolicy {
 impl SessionControlRequestKind {
     fn from_public_ability(ability: &str) -> Option<Self> {
         match ability {
-            ABILITY_FEDERATION_ADVERTISE_AGENT => Some(Self::FederationAdvertiseAgent),
-            ABILITY_FEDERATION_ADVERTISE_ABILITIES => Some(Self::FederationAdvertiseAbilities),
-            federation_wrappers::ABILITY_FEDERATION_RESOLVE_KEY => Some(Self::FederationResolveKey),
+            ABILITY_FEDERATION_ADVERTISE_AGENT => Some(Self::AdvertiseAgent),
+            ABILITY_FEDERATION_ADVERTISE_ABILITIES => Some(Self::AdvertiseAbilities),
+            federation_wrappers::ABILITY_FEDERATION_RESOLVE_KEY => Some(Self::ResolveKey),
             _ => None,
         }
     }
 
     fn public_ability(self) -> &'static str {
         match self {
-            Self::FederationAdvertiseAgent => ABILITY_FEDERATION_ADVERTISE_AGENT,
-            Self::FederationAdvertiseAbilities => ABILITY_FEDERATION_ADVERTISE_ABILITIES,
-            Self::FederationResolveKey => federation_wrappers::ABILITY_FEDERATION_RESOLVE_KEY,
+            Self::AdvertiseAgent => ABILITY_FEDERATION_ADVERTISE_AGENT,
+            Self::AdvertiseAbilities => ABILITY_FEDERATION_ADVERTISE_ABILITIES,
+            Self::ResolveKey => federation_wrappers::ABILITY_FEDERATION_RESOLVE_KEY,
         }
     }
 
     fn scheduling(self) -> SessionControlScheduling {
         match self {
-            Self::FederationResolveKey => SessionControlScheduling::InlineDrain,
-            Self::FederationAdvertiseAgent | Self::FederationAdvertiseAbilities => {
-                SessionControlScheduling::SpawnTask
-            }
+            Self::ResolveKey => SessionControlScheduling::InlineDrain,
+            Self::AdvertiseAgent | Self::AdvertiseAbilities => SessionControlScheduling::SpawnTask,
         }
     }
 }
@@ -2262,19 +2260,19 @@ impl BidiDispatcher {
         request: &SessionControlRequest,
     ) -> RequestOutcome {
         let result = match request.kind {
-            SessionControlRequestKind::FederationAdvertiseAgent => {
+            SessionControlRequestKind::AdvertiseAgent => {
                 self.unary.dispatch_federation_advertise_agent_from_session(
                     &request.args,
                     &request.caller_device_ura,
                 )
             }
-            SessionControlRequestKind::FederationAdvertiseAbilities => self
+            SessionControlRequestKind::AdvertiseAbilities => self
                 .unary
                 .dispatch_federation_advertise_abilities_from_session(
                     &request.args,
                     &request.caller_device_ura,
                 ),
-            SessionControlRequestKind::FederationResolveKey => {
+            SessionControlRequestKind::ResolveKey => {
                 self.unary.dispatch_federation_resolve_key(&request.args)
             }
         };

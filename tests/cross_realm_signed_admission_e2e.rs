@@ -300,7 +300,6 @@ fn signed_request(
                 ability_name: ability_ref.to_string(),
                 function_name: ability.to_string(),
             })),
-            ..InvocationTarget::default()
         }),
         arguments: args.to_vec(),
         ..InvokeRequest::default()

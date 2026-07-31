@@ -453,7 +453,7 @@ enum StepExecResult {
         retry_count: u32,
         retry_history: Vec<RetryRecord>,
         /// Seven-tuple invocation record from the daemon lowering path.
-        invocation: ChildInvocationRecord,
+        invocation: Box<ChildInvocationRecord>,
     },
     Error {
         message: String,

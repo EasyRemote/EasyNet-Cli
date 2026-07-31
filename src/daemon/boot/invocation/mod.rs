@@ -67,7 +67,7 @@
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -1202,7 +1202,7 @@ fn project_dynamic_owner_projection_published_connection_state(
 
 fn register_paired_user_runtime_signer_if_bound(
     config: &DaemonConfig,
-    trust_anchor_path: &PathBuf,
+    trust_anchor_path: &Path,
     trust_anchor_cell: &SharedTrustAnchor,
 ) -> anyhow::Result<bool> {
     if config.mode() == DaemonMode::Hub {
@@ -1243,7 +1243,7 @@ fn register_paired_user_runtime_signer_if_bound(
     })?;
     let runtime_trust = RuntimeTrustContext {
         daemon_realm: config.realm().to_string(),
-        trust_anchor_path: trust_anchor_path.clone(),
+        trust_anchor_path: trust_anchor_path.to_path_buf(),
         cell: trust_anchor_cell.clone(),
     };
     runtime_trust

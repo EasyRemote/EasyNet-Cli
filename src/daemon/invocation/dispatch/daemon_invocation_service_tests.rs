@@ -259,7 +259,7 @@ fn test_attempt_ledger(
 fn test_trust_anchor() -> RealmTrustAnchor {
     use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 
-    let devices = vec![
+    let devices = [
         (
             TEST_DAEMON_URA,
             test_device_signing_key().verifying_key().to_bytes(),
@@ -906,7 +906,7 @@ fn bind_invoke_request_to_descriptor_ref(
 
 fn test_invocation_target(function_name: &str) -> axon_sdk::pb::axon::v1::InvocationTarget {
     wire_invocation_target(
-        &test_descriptor_ref(TEST_DAEMON_URA, function_name),
+        test_descriptor_ref(TEST_DAEMON_URA, function_name),
         function_name,
     )
     .expect("test descriptor target")

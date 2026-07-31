@@ -79,17 +79,12 @@ pub trait PermissionBroker: Send + Sync {
 ///
 /// The policy is deliberately explicit because headless daemon
 /// operation is a product state, not a compatibility path.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum UnobservedPermissionPolicy {
     /// Keep unattended daemon execution non-blocking when no human
     /// observer exists to make a decision.
+    #[default]
     Allow,
-}
-
-impl Default for UnobservedPermissionPolicy {
-    fn default() -> Self {
-        Self::Allow
-    }
 }
 
 impl UnobservedPermissionPolicy {

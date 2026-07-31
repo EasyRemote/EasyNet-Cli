@@ -146,8 +146,6 @@ fn check_connection_state(snapshot: &join_connection_state::JoinConnectionSnapsh
         CheckStatus::Fail
     } else if snapshot.state == "FRONTEND_CONNECTED" {
         CheckStatus::Ok
-    } else if snapshot.state_code == "F560" || snapshot.state_code == "C440" {
-        CheckStatus::Warn
     } else {
         CheckStatus::Warn
     };

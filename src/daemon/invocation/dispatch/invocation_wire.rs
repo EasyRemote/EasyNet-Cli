@@ -569,7 +569,6 @@ pub(crate) fn wire_invocation_target(
             ability_name: ability_binding.to_string(),
             function_name,
         })),
-        ..InvocationTarget::default()
     })
 }
 

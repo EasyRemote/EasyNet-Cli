@@ -309,7 +309,11 @@ fn materialise_skill_fixture(
         .unwrap_or(0);
     let owner = format!("real-skill-{tag}-{pid}-{nanos}");
     let root = crate::daemon::persistence::config::agents_root().join(&owner);
-    let skill_dir = root.join("skills").join(skill_name);
+    let skill_dir = crate::daemon::resources::skills::store::managed_skill_dir_for(
+        &root,
+        crate::daemon::persistence::agent_aggregate::AgentSkillLayout::Codex,
+    )
+    .join(skill_name);
     std::fs::create_dir_all(&skill_dir).expect("create skill fixture dir");
     crate::daemon::persistence::config::atomic_write(&skill_dir.join("SKILL.md"), body.as_bytes())
         .expect("write skill fixture body");
@@ -766,7 +770,10 @@ fn real_device_node_remove_refuses_to_remove_self() {
 fn real_device_ability_deploy_validates_resource_ref_argument() {
     let (reg, _g) = registry_with_joined_device_home();
     let err = dispatcher_for(reg)
-        .execute_rpc(target("ability.deploy", json!({})))
+        .execute_rpc(target(
+            "ability.deploy",
+            json!({ "target_ura": authority_fixture_device_ura() }),
+        ))
         .expect_err("ability.deploy must require `resource_ref`");
     assert!(format!("{err}").contains("resource_ref"));
 }
@@ -778,8 +785,8 @@ fn real_device_ability_uninstall_refuses_unwired_runtime() {
         .execute_rpc(target(
             "ability.uninstall",
             json!({
-                "ability_ura": "easynet:///r/localhost/ability/alice.claude.weather",
-                "node_id": "local"
+                "ability_ura": "easynet:///r/localhost/ability/device.dev-1.weather",
+                "target_ura": authority_fixture_device_ura()
             }),
         ))
         .expect_err("unwired registrar must not report REMOVED");
@@ -930,8 +937,18 @@ fn real_voice_end_call_is_idempotent() {
     let (reg, _g, _voice) = registry_with_voice_temp_home();
     let cid = unique_call_id("end");
     invoke_voice(&reg, "voice.create_call", json!({"call_id": cid.clone()})).expect("create");
-    invoke_voice(&reg, "voice.end_call", json!({"call_id": cid.clone()})).expect("first end");
-    let r2 = invoke_voice(&reg, "voice.end_call", json!({"call_id": cid})).expect("second end");
+    invoke_voice(
+        &reg,
+        "voice.end_call",
+        json!({"call_id": cid.clone(), "end_reason": 1}),
+    )
+    .expect("first end");
+    let r2 = invoke_voice(
+        &reg,
+        "voice.end_call",
+        json!({"call_id": cid, "end_reason": 1}),
+    )
+    .expect("second end");
     assert_eq!(r2.get("already_ended"), Some(&json!(true)));
 }
 
@@ -2432,13 +2449,15 @@ fn real_authority_binding_grant_list_check_and_revoke_round_trip() {
     let d = dispatcher_for(reg);
     let actor_ura = "easynet:///r/test/user/rfc014-owner";
     let owner_ura = actor_ura;
+    let subject_ura =
+        "easynet:///r/test/resource/user.rfc014-owner/session/authority-binding-round-trip";
     let grant = json!({
         "grant_id": "grant-real-001",
         "principal_kind": "token",
         "token_id": "token-1",
         "token_class": "hub_link",
         "callee_ura": "easynet:///r/test/device/dev",
-        "subject_ura_pattern": "easynet:///r/test/device/dev",
+        "subject_ura_pattern": subject_ura,
         "ability_ura_pattern": "meta.describe",
         "actions": ["read"],
         "effect": "allow",
@@ -2470,12 +2489,13 @@ fn real_authority_binding_grant_list_check_and_revoke_round_trip() {
             "authority.binding.check",
             json!({
                 "owner_ura": owner_ura,
+                "owner_source": "subject",
                 "caller_ura": "easynet:///r/test/authority",
                 "principal_kind": "token",
                 "token_id": "token-1",
                 "token_class": "hub_link",
                 "callee_ura": "easynet:///r/test/device/dev",
-                "subject_ura": "easynet:///r/test/device/dev",
+                "subject_ura": subject_ura,
                 "ability_ura": "meta.describe",
                 "action": "read"
             }),
@@ -2608,7 +2628,7 @@ fn every_published_ability_has_a_real_invoke_test() {
     let source = include_str!("real_invoke_tests.rs");
     let daemon_invocation_surface: std::collections::BTreeSet<&'static str> =
         HubBaseline::required_abilities()
-            .into_iter()
+            .iter()
             .filter(|ability| ability.surface == BaselineSurface::DaemonInvocation)
             .map(|ability| ability.name)
             .collect();
@@ -3254,7 +3274,11 @@ fn real_remote_desktop_permission_status_reports_contract() {
     let reg = build_registry_for_test_execution().expect("build executable test registry");
     let d = dispatcher_for(reg);
     let status = d
-        .execute_rpc(target("remote_desktop.permission_status", json!({})))
+        .execute_rpc(target_for_subject(
+            "remote_desktop.permission_status",
+            json!({}),
+            crate::core::ura::LOCAL_SYSTEM_AGENT_URA,
+        ))
         .expect("remote_desktop.permission_status must dispatch");
     assert_eq!(
         status["permission"], "screen_capture",
@@ -3269,7 +3293,11 @@ fn real_remote_desktop_request_permission_reports_contract() {
     let reg = build_registry_for_test_execution().expect("build executable test registry");
     let d = dispatcher_for(reg);
     let status = d
-        .execute_rpc(target("remote_desktop.request_permission", json!({})))
+        .execute_rpc(target_for_subject(
+            "remote_desktop.request_permission",
+            json!({}),
+            crate::core::ura::LOCAL_SYSTEM_AGENT_URA,
+        ))
         .expect("remote_desktop.request_permission must dispatch");
     assert_eq!(
         status["permission"], "screen_capture",

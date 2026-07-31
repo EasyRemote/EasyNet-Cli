@@ -363,22 +363,13 @@ impl RuntimeLifecycleService {
 }
 EOF
   cat >"$CLI/src/daemon/ability/builtins/agents/discover.rs" <<'EOF'
-use crate::daemon::persistence::agent_aggregate::{AgentAggregateRepository, AgentHostedIdentitySnapshot};
+use crate::daemon::persistence::agent_aggregate::AgentAggregateSnapshot;
 
-struct LocalAgentAbilityOwners {
-    snapshot: AgentHostedIdentitySnapshot,
-}
+type AgentDirectoryProvider =
+    std::sync::Arc<dyn Fn() -> anyhow::Result<AgentAggregateSnapshot> + Send + Sync>;
 
-impl LocalAgentAbilityOwners {
-    fn load() -> anyhow::Result<Self> {
-        Ok(Self {
-            snapshot: AgentAggregateRepository::load_hosted_identity_snapshot()?,
-        })
-    }
-
-    fn owner_ura_for(&self, agent_name: &str) -> Option<String> {
-        self.snapshot.hosted_llm_agent_ura(agent_name).map(str::to_string)
-    }
+fn owner_ura_for(directory: &AgentAggregateSnapshot, peer_name: &str) -> Option<String> {
+    directory.hosted_llm_agent_ura(peer_name).map(str::to_string)
 }
 EOF
   cat >"$CLI/src/daemon/ability/catalog/profiles/mod.rs" <<'EOF'
@@ -1809,7 +1800,6 @@ fn build_registry(shared_stores: RegistrySharedStores, hosts_hub_authority: bool
 	        &mut reg,
 	        || {
 	            crate::daemon::persistence::agent_aggregate::AgentAggregateRepository::load_snapshot()
-	                .map(|snapshot| snapshot.registered_agent_registry_projection())
 	        },
 	        Arc::clone(&local_registry_handle),
 	        Arc::clone(&discover_federation_resolver),
@@ -3175,6 +3165,26 @@ impl HotAgentRegistrar {
     }
 }
 EOF
+
+  # Keep the canonical baseline aligned with the production ownership
+  # boundaries. Mutation cases below replace individual files explicitly;
+  # copying these high-churn boundary owners avoids duplicating their entire
+  # positive contract in this shell fixture.
+  local canonical_file
+  for canonical_file in \
+    src/daemon/ability/catalog/build.rs \
+    src/daemon/ability/dispatch.rs \
+    src/daemon/ability/builtins/governance/access_control.rs \
+    src/daemon/ability/builtins/governance/invocation_history.rs \
+    src/daemon/persistence/agent_aggregate.rs \
+    src/daemon/invocation/routing/route_resolver.rs \
+    src/daemon/invocation/bidi/bidi_dispatcher.rs \
+    src/daemon/invocation/dispatch/local_session_dispatcher.rs \
+    src/daemon/invocation/dispatch/attempt_audit.rs \
+    src/daemon/invocation/bidi/session_initiator/prelude.rs
+  do
+    cp "$ROOT/$canonical_file" "$CLI/$canonical_file"
+  done
 }
 
 bash -n "$CHECK"
@@ -3860,11 +3870,11 @@ import sys
 path = Path(sys.argv[1])
 text = path.read_text()
 text = text.replace(
-    "struct SessionOpenProvider {\n    policy: SessionOpenPolicy,\n}",
+    "struct SessionOpenProvider {\n    presence:",
     "struct SessionOpenProvider {\n"
     "    admission: AdmissionFacade,\n"
     "    session_realm: Option<String>,\n"
-    "}",
+    "    presence:",
 )
 path.write_text(text)
 PY

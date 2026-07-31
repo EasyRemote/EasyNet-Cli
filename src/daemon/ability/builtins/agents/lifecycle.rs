@@ -381,14 +381,14 @@ impl AgentLifecycleProjectionStore {
     }
 
     fn restore_registry_snapshot(&self, registry: &AgentRegistry) -> anyhow::Result<()> {
-        agents::save_agents(registry).map_err(Into::into)
+        agents::save_agents(registry)
     }
 
     fn restore_identity_snapshot(
         &self,
         identities: &local_agents::LocalAgentsFile,
     ) -> anyhow::Result<()> {
-        local_agents::save(identities).map_err(Into::into)
+        local_agents::save(identities)
     }
 
     fn restore_uncommitted_purge_snapshots(
@@ -1480,13 +1480,18 @@ fn maybe_inject_purge_crash(_stage: AgentPurgeStage) -> anyhow::Result<()> {
 }
 
 #[cfg(test)]
+type PurgePathHook = Option<Box<dyn FnOnce(&std::path::Path)>>;
+#[cfg(test)]
+type PurgeChildEntryHook = Option<Box<dyn FnMut(&std::ffi::OsStr) -> bool>>;
+
+#[cfg(test)]
 thread_local! {
     static PURGE_CRASH_STAGE: std::cell::Cell<Option<AgentPurgeStage>> = const { std::cell::Cell::new(None) };
-    static PURGE_PRE_RENAME_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce(&std::path::Path)>>> =
+    static PURGE_PRE_RENAME_HOOK: std::cell::RefCell<PurgePathHook> =
         std::cell::RefCell::new(None);
-    static PURGE_PRE_FINALIZE_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce(&std::path::Path)>>> =
+    static PURGE_PRE_FINALIZE_HOOK: std::cell::RefCell<PurgePathHook> =
         std::cell::RefCell::new(None);
-    static PURGE_CHILD_ENTRY_HOOK: std::cell::RefCell<Option<Box<dyn FnMut(&std::ffi::OsStr) -> bool>>> =
+    static PURGE_CHILD_ENTRY_HOOK: std::cell::RefCell<PurgeChildEntryHook> =
         std::cell::RefCell::new(None);
     static PURGE_AFTER_TOMBSTONE_PUBLISH_CRASH: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static PURGE_AFTER_REVOKE_PUBLISH_CRASH: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -1803,7 +1808,7 @@ pub(crate) fn bootstrap_local_agent_projection(
     let mut identities = local_agents::load_for_fresh_host_projection()
         .map_err(|error| anyhow::anyhow!("agent.bootstrap: load hosted identities: {error:#}"))?;
     let outcomes = bootstrap::bootstrap_local_agents(plan, &mut identities, &UuidMinter);
-    AgentLifecycleProjectionStore::default()
+    AgentLifecycleProjectionStore
         .persist_identities(&identities)
         .map_err(|error| {
             anyhow::anyhow!("agent.bootstrap: persist hosted identities: {error:#}")
@@ -1972,7 +1977,7 @@ fn rollback_uncommitted_purge(
 ) -> anyhow::Result<()> {
     let registrar = require_hot_registrar(hot_registrar, "agent.purge.recover")?;
     restore_uncommitted_purge_root(journal)?;
-    AgentLifecycleProjectionStore::default().restore_uncommitted_purge_snapshots(journal)?;
+    AgentLifecycleProjectionStore.restore_uncommitted_purge_snapshots(journal)?;
     let registrar_for_restore = Arc::clone(&registrar);
     let name = journal.name.clone();
     let entry = journal.removed_entry.clone();
@@ -2152,14 +2157,14 @@ impl UnixDirectoryEntryIdentity {
     fn from_stat(stat: &rustix::fs::Stat) -> Self {
         Self {
             device: stat.st_dev as u64,
-            inode: stat.st_ino as u64,
+            inode: stat.st_ino,
             file_type: stat.st_mode as u32 & libc::S_IFMT as u32,
         }
     }
 
     fn matches_stat(self, stat: &rustix::fs::Stat) -> bool {
         self.device == stat.st_dev as u64
-            && self.inode == stat.st_ino as u64
+            && self.inode == stat.st_ino
             && self.file_type == (stat.st_mode as u32 & libc::S_IFMT as u32)
     }
 
@@ -3558,6 +3563,15 @@ mod tests {
         .expect("seed joined credentials");
     }
 
+    fn registry_contains_agent(name: &str) -> bool {
+        let key = canonical_agent_registry_key(name, "agent lifecycle test")
+            .expect("test Agent name has a canonical registry key");
+        agents::load_agents()
+            .unwrap_or_default()
+            .agents
+            .contains_key(&key)
+    }
+
     #[test]
     fn startup_bootstrap_projection_persists_through_lifecycle_owner() {
         with_isolated_home(|| {
@@ -4100,10 +4114,7 @@ mod tests {
                     "error names the reserved-owner semantics: {msg}"
                 );
                 assert!(
-                    !agents::load_agents()
-                        .unwrap_or_default()
-                        .agents
-                        .contains_key(name),
+                    agents::load_agents().unwrap_or_default().agents.is_empty(),
                     "rejected name must not persist an agents.json row"
                 );
             }
@@ -4128,10 +4139,7 @@ mod tests {
                 "error should surface credentials prerequisite: {err}"
             );
             assert!(
-                !agents::load_agents()
-                    .unwrap_or_default()
-                    .agents
-                    .contains_key("claude"),
+                agents::load_agents().unwrap_or_default().agents.is_empty(),
                 "unjoined failure must not persist a half-valid hosted agent row"
             );
         });
@@ -4155,10 +4163,7 @@ mod tests {
                 "error should name required explicit model_present intent: {err}"
             );
             assert!(
-                !agents::load_agents()
-                    .unwrap_or_default()
-                    .agents
-                    .contains_key("claude"),
+                agents::load_agents().unwrap_or_default().agents.is_empty(),
                 "rejected ambiguous model write must not persist an agent row"
             );
         });
@@ -4608,7 +4613,7 @@ mod tests {
             let resp =
                 stop_agent_handler(json!({"name": "claude"}), &ready_hot_registrar()).unwrap();
             assert_eq!(resp["ack"], true);
-            assert!(!agents::load_agents().unwrap().agents.contains_key("claude"));
+            assert!(!registry_contains_agent("claude"));
             assert_eq!(
                 local_agents::lookup_hosted_ura(&local_agents::load().unwrap(), "llm", "claude"),
                 None,
@@ -4640,7 +4645,7 @@ mod tests {
             assert_eq!(response["purge_state"], "purged");
             assert_eq!(response["purged_path"], root.to_string_lossy().as_ref());
             assert!(!root.exists());
-            assert!(!agents::load_agents().unwrap().agents.contains_key("claude"));
+            assert!(!registry_contains_agent("claude"));
         });
     }
 
@@ -4665,10 +4670,7 @@ mod tests {
                 .expect_err("unsupported targets must reject before quarantine");
             assert!(error.downcast_ref::<PurgePlatformUnsupported>().is_some());
             assert!(root.exists());
-            assert!(agents::load_agents()
-                .unwrap()
-                .agents
-                .contains_key("platform-gate"));
+            assert!(registry_contains_agent("platform-gate"));
             assert!(lifecycle_store::load_purge_journal().unwrap().is_none());
         });
     }
@@ -4692,8 +4694,11 @@ mod tests {
             let identity_advertisements = advertiser.requests.lock().unwrap().len();
 
             PURGE_AFTER_TOMBSTONE_PUBLISH_CRASH.with(|slot| slot.set(true));
-            let error = purge_agent_handler(json!({"name": "restartable"}), &first)
-                .expect_err("publication-window crash must leave committed journal");
+            let response = purge_agent_handler(json!({"name": "restartable"}), &first)
+                .expect("local purge commits before asynchronous publication");
+            assert_eq!(response["publication_state"], "pending");
+            let error = recover_pending_purge_on_boot(&first)
+                .expect_err("publication-window crash must leave a durable outbox transaction");
             PURGE_AFTER_TOMBSTONE_PUBLISH_CRASH.with(|slot| slot.set(false));
             assert!(error
                 .to_string()
@@ -4781,8 +4786,11 @@ mod tests {
             .unwrap();
 
             PURGE_AFTER_REVOKE_PUBLISH_CRASH.with(|slot| slot.set(true));
-            let error = purge_agent_handler(json!({"name": "revoke-crash"}), &fixture)
-                .expect_err("remote revoke success before local deletion is crash-replayable");
+            let response = purge_agent_handler(json!({"name": "revoke-crash"}), &fixture)
+                .expect("local purge commits before asynchronous publication");
+            assert_eq!(response["publication_state"], "pending");
+            let error = recover_pending_purge_on_boot(&fixture)
+                .expect_err("remote revoke success before outbox retirement is crash-replayable");
             PURGE_AFTER_REVOKE_PUBLISH_CRASH.with(|slot| slot.set(false));
             assert!(error.to_string().contains("after Hub revoke publication"));
 
@@ -4894,10 +4902,14 @@ mod tests {
             assert!(poison["publication_error"]
                 .as_str()
                 .unwrap()
-                .contains("poisoned revoke"));
+                .contains("durably queued"));
             let healthy = purge_agent_handler(json!({"name": "healthy-later"}), &fixture.cell)
                 .expect("later transaction must publish independently");
-            assert_eq!(healthy["publication_state"], "published");
+            assert_eq!(healthy["publication_state"], "pending");
+            assert!(
+                !recover_pending_purge_on_boot(&fixture.cell).unwrap(),
+                "the poison remains queued while the independent transaction drains"
+            );
 
             let outbox = lifecycle_store::load_publication_outbox().unwrap();
             assert_eq!(outbox.entries.len(), 1);
@@ -4966,9 +4978,9 @@ mod tests {
             assert_eq!(outbox.entries.len(), 1);
             let poison = &outbox.entries[0];
             assert_eq!(poison.agent_ura, poison_ura);
-            assert_eq!(poison.retry.attempts, 2);
+            assert_eq!(poison.retry.attempts, 1);
             let evidence = poison.retry.last_failure.as_ref().unwrap();
-            assert_eq!(evidence.attempt, 2);
+            assert_eq!(evidence.attempt, 1);
             assert!(evidence.error.contains("poisoned tombstone"));
             assert!(advertiser
                 .recording
@@ -5009,7 +5021,7 @@ mod tests {
             advertiser.fail_tombstone_for(&identity);
 
             purge_agent_handler(json!({"name": "dead-letter"}), &fixture.cell).unwrap();
-            for _ in 1..lifecycle_store::PUBLICATION_MAX_ATTEMPTS_PER_STAGE {
+            for _ in 0..lifecycle_store::PUBLICATION_MAX_ATTEMPTS_PER_STAGE {
                 assert!(!recover_pending_purge_on_boot(&fixture.cell).unwrap());
             }
 
@@ -5220,7 +5232,27 @@ mod tests {
             let response = purge_agent_handler(json!({"name": "credential-wait"}), &fixture)
                 .expect("cursor-owned host identity makes purge independent of credentials");
             assert_eq!(response["purge_state"], "purged");
+            assert_eq!(response["publication_state"], "pending");
+            let transaction_id = lifecycle_store::load_publication_outbox()
+                .unwrap()
+                .entries
+                .first()
+                .expect("purge queues one durable publication transaction")
+                .transaction_id
+                .clone();
+            assert!(
+                recover_pending_purge_on_boot(&fixture).unwrap(),
+                "durable publication replay must not reread corrupt membership credentials"
+            );
+            let mut completed = CommittedPurgeResponse {
+                response,
+                transaction_id: Some(transaction_id),
+                publication_required: true,
+            };
+            decorate_purge_publication_response(&mut completed).unwrap();
+            let response = completed.response;
             assert_eq!(response["publication_state"], "published");
+            assert_eq!(response["publication_error"], Value::Null);
             assert!(lifecycle_store::load_purge_journal().unwrap().is_none());
             assert!(lifecycle_store::load_publication_outbox()
                 .unwrap()
@@ -5410,7 +5442,7 @@ mod tests {
             assert!(error
                 .to_string()
                 .contains("has no `root_path`; refusing to infer"));
-            assert!(agents::load_agents().unwrap().agents.contains_key("claude"));
+            assert!(registry_contains_agent("claude"));
             assert!(local_agents::lookup_hosted_ura(
                 &local_agents::load().unwrap(),
                 "llm",
@@ -5445,7 +5477,7 @@ mod tests {
 
             assert_eq!(purged["purge_state"], "purged");
             assert!(!registered_root.exists());
-            assert!(!agents::load_agents().unwrap().agents.contains_key("claude"));
+            assert!(!registry_contains_agent("claude"));
         });
     }
 
@@ -5469,7 +5501,7 @@ mod tests {
 
             assert!(error.to_string().contains("invoke `agent.purge`"));
             assert!(root.join("agent.toml").exists());
-            assert!(agents::load_agents().unwrap().agents.contains_key("claude"));
+            assert!(registry_contains_agent("claude"));
         });
     }
 
@@ -5784,7 +5816,7 @@ mod tests {
             start.join().unwrap().unwrap();
             stop.join().unwrap().unwrap();
 
-            let registered = agents::load_agents().unwrap().agents.contains_key("same");
+            let registered = registry_contains_agent("same");
             let mapped =
                 local_agents::lookup_hosted_ura(&local_agents::load().unwrap(), "llm", "same")
                     .is_some();
@@ -5827,7 +5859,7 @@ mod tests {
 
             assert_eq!(acknowledgements, vec![false, true]);
             assert!(!root.exists());
-            assert!(!agents::load_agents().unwrap().agents.contains_key("claude"));
+            assert!(!registry_contains_agent("claude"));
             assert!(lifecycle_store::load_purge_journal().unwrap().is_none());
         });
     }
@@ -5892,7 +5924,7 @@ mod tests {
                 refresh_agents_handler(json!({}), &registrar).unwrap();
                 assert!(lifecycle_store::load_purge_journal().unwrap().is_none());
                 assert!(!journal.quarantine_path.exists());
-                let registered = agents::load_agents().unwrap().agents.contains_key(&name);
+                let registered = registry_contains_agent(&name);
                 if stage.is_committed() {
                     assert!(!registered);
                     assert!(!root.exists());
@@ -5927,10 +5959,7 @@ mod tests {
             let resp = stop_agent_handler(json!({"agent_ura": agent_ura}), &ready_hot_registrar())
                 .unwrap();
             assert_eq!(resp["ack"], true);
-            assert!(!agents::load_agents()
-                .unwrap()
-                .agents
-                .contains_key("anthropic"));
+            assert!(!registry_contains_agent("anthropic"));
             assert_eq!(
                 local_agents::lookup_hosted_ura(&local_agents::load().unwrap(), "llm", "anthropic"),
                 None
@@ -5964,7 +5993,7 @@ mod tests {
             let resp = stop_agent_handler(json!({"agent_ura": agent_ura}), &ready_hot_registrar())
                 .unwrap();
             assert_eq!(resp["ack"], true);
-            assert!(!agents::load_agents().unwrap().agents.contains_key("claude"));
+            assert!(!registry_contains_agent("claude"));
         });
     }
 

@@ -588,7 +588,7 @@ fn skill_description_from_markdown(path: &std::path::Path) -> Option<String> {
 }
 
 fn skill_description_from_markdown_content(content: &str) -> String {
-    if let Some(frontmatter) = skill_md_frontmatter(&content) {
+    if let Some(frontmatter) = skill_md_frontmatter(content) {
         if let Some(description) = frontmatter_field(frontmatter, "description") {
             return description;
         }
@@ -1023,7 +1023,7 @@ mod tests {
         let mut entry = agents::AgentEntry::new(agents::AgentType::ClaudeCode, None);
         entry.root_path = Some(root.clone());
         let mut registry = agents::AgentRegistry::default();
-        registry.agents.insert("alice".to_string(), entry);
+        registry.agents.insert("default/alice".to_string(), entry);
         agents::save_agents(&registry).expect("save registry");
 
         let workspace =

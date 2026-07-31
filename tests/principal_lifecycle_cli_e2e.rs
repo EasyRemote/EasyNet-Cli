@@ -30,6 +30,8 @@ fn principal_cli_facades_run_through_real_daemon() {
         "bootstrap",
         "--principal-ura",
         ADMIN,
+        "--proof-ref",
+        "cli-admin-bootstrap",
         "--create-idempotency-key",
         "cli-admin-create",
         "--bind-idempotency-key",

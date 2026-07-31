@@ -309,8 +309,8 @@ fn scan() -> anyhow::Result<ScanPlan> {
                 continue;
             }
             let qualified = manifest.qualified_name(agent_name);
-            let public_name = crate::core::ura::owner_local_ability_name(&owner_ura, &qualified);
-            let Some(ability_ura) = crate::core::ura::owner_ability_ura(&owner_ura, &public_name)
+            let public_name = crate::core::ura::owner_local_ability_name(owner_ura, &qualified);
+            let Some(ability_ura) = crate::core::ura::owner_ability_ura(owner_ura, &public_name)
             else {
                 continue;
             };

@@ -660,11 +660,13 @@ fn project_failure(
     let Ok(value) = serde_json::from_str::<Value>(encoded) else {
         return FailureProjection::default();
     };
-    let mut projection = FailureProjection::default();
-    projection.rejector_ura = value
-        .get("rejector_ura")
-        .and_then(Value::as_str)
-        .map(str::to_string);
+    let mut projection = FailureProjection {
+        rejector_ura: value
+            .get("rejector_ura")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        ..FailureProjection::default()
+    };
 
     if prefix == "POLICY_DENIED" {
         if let Ok(policy) = serde_json::from_value::<PolicyDecision>(value.clone()) {

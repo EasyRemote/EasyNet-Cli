@@ -12,7 +12,7 @@ fail() {
 SB="$(mktemp -d)"
 trap 'rm -rf "$SB"' EXIT
 
-mkdir -p "$SB/tools/scripts" "$SB/src/eal/interpreter"
+mkdir -p "$SB/tools/scripts" "$SB/src/eal/interpreter" "$SB/src/eal/parser" "$SB/src/eal/runtime"
 cp "$SCRIPT" "$SB/tools/scripts/check-eal-interpreter-flat-call-boundary.sh"
 
 cat >"$SB/src/eal/interpreter/mod.rs" <<'RS'
@@ -49,6 +49,19 @@ use crate::eal::runtime::ir::{IrCall, IrFailurePolicy};
 fn fixture() {
     let step = IrCall {};
 }
+RS
+
+cat >"$SB/src/eal/parser/ast.rs" <<'RS'
+pub enum TargetKind { Device, Agent }
+RS
+
+cat >"$SB/src/eal/parser/mod.rs" <<'RS'
+#[test]
+fn traditional_call_requires_explicit_device_target() {}
+RS
+
+cat >"$SB/src/eal/runtime/planner.rs" <<'RS'
+pub fn plan() {}
 RS
 
 (

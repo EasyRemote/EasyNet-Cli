@@ -34,6 +34,10 @@ pub enum ProviderSidecarHelperState {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[expect(
+    clippy::enum_variant_names,
+    reason = "the Exec prefix distinguishes provider-sidecar frames from canonical invocation call modes"
+)]
 pub enum ProviderSidecarCallMode {
     ExecInvoke,
     ExecStream,
@@ -1082,7 +1086,8 @@ mod tests {
             assert!(std::ptr::eq(profile.capability, capability));
             assert_eq!(Some(profile.helper_package()), capability.helper_package);
         }
-        for language in ["c/c++"] {
+        {
+            let language = "c/c++";
             let capability = rows
                 .get(&(language, ProviderSidecarCallMode::ExecInvoke))
                 .unwrap_or_else(|| panic!("missing sidecar helper matrix row for {language}"));

@@ -228,6 +228,27 @@ pub(crate) fn management_agent_ura(realm: &str, user: &str) -> String {
     crate::core::ura::agent_ura(realm, user, "pages")
 }
 
+/// Register only the static Pages management descriptor family.
+///
+/// Descriptor-resolution providers use this path to materialize the canonical
+/// control-plane rows for `<user>.pages` without restoring project state or
+/// opening the runtime-facing publish/unpublish overlay.
+pub(crate) fn register_management_ability_descriptors(
+    reg: &mut AxonAbilityCatalog,
+    realm: &str,
+    user: &str,
+) {
+    register_management_abilities(
+        reg,
+        &PagesConfig {
+            user: user.to_string(),
+            realm: realm.to_string(),
+            listener_port: 8787,
+        },
+        Arc::new(std::sync::OnceLock::new()),
+    );
+}
+
 fn register_management_rpc(
     reg: &mut AxonAbilityCatalog,
     ability: &'static str,

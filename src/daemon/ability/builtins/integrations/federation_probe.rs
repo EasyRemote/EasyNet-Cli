@@ -651,7 +651,7 @@ mod tests {
     }
 
     #[test]
-    fn device_profile_detection_requires_health_plus_device_surface() {
+    fn device_profile_detection_requires_health_plus_network_health() {
         let device_ura = "easynet:///r/acme/device/dev-a";
         let device = ResolvedAgent {
             ura: device_ura.into(),
@@ -659,7 +659,7 @@ mod tests {
             host_node_id: None,
             ability_summaries: vec![
                 ability_summary(device_ura, "observe", "health"),
-                ability_summary(device_ura, "node", "list"),
+                ability_summary(device_ura, "observe", "network_health"),
             ],
         };
         let hosted_ura = "easynet:///r/acme/agent/u1.01LLM";
@@ -724,7 +724,11 @@ mod tests {
                 host_node_id: None,
                 ability_summaries: vec![
                     ability_summary("easynet:///r/acme/device/remote-node", "observe", "health"),
-                    ability_summary("easynet:///r/acme/device/remote-node", "node", "list"),
+                    ability_summary(
+                        "easynet:///r/acme/device/remote-node",
+                        "observe",
+                        "network_health",
+                    ),
                 ],
             }],
         };
@@ -757,7 +761,11 @@ mod tests {
                 host_node_id: None,
                 ability_summaries: vec![
                     ability_summary("easynet:///r/acme/device/remote-node", "observe", "health"),
-                    ability_summary("easynet:///r/acme/device/remote-node", "node", "list"),
+                    ability_summary(
+                        "easynet:///r/acme/device/remote-node",
+                        "observe",
+                        "network_health",
+                    ),
                     ability_summary(
                         "easynet:///r/acme/device/remote-node",
                         "browser",
@@ -849,7 +857,7 @@ mod tests {
             host_node_id: None,
             ability_summaries: vec![
                 ability_summary(other_device_ura, "observe", "health"),
-                ability_summary(other_device_ura, "node", "list"),
+                ability_summary(other_device_ura, "observe", "network_health"),
             ],
         };
 
@@ -865,7 +873,10 @@ mod tests {
             ura: device_ura.into(),
             status: "active".into(),
             host_node_id: None,
-            ability_summaries: vec![health, ability_summary(device_ura, "node", "list")],
+            ability_summaries: vec![
+                health,
+                ability_summary(device_ura, "observe", "network_health"),
+            ],
         };
 
         assert!(!is_device_profile_agent(&device));

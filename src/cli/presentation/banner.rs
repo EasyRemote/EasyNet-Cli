@@ -307,7 +307,7 @@ fn write_runtime_status(buf: &mut String, style: ColourMode) {
 
 #[derive(Debug)]
 enum BannerCredentialsObservation {
-    Paired(config::Credentials),
+    Paired(Box<config::Credentials>),
     Unpaired,
     Invalid(String),
 }
@@ -315,7 +315,7 @@ enum BannerCredentialsObservation {
 impl BannerCredentialsObservation {
     fn load() -> Self {
         match config::load_credentials_optional() {
-            Ok(Some(credentials)) => Self::Paired(credentials),
+            Ok(Some(credentials)) => Self::Paired(Box::new(credentials)),
             Ok(None) => Self::Unpaired,
             Err(error) => Self::Invalid(error.to_string()),
         }

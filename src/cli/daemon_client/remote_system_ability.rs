@@ -35,44 +35,44 @@ impl RemoteDeviceSystemAbility {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RemoteDeviceSessionAbility {
-    TerminalInput,
-    TerminalRead,
-    TerminalResize,
-    TerminalClose,
+    Input,
+    Read,
+    Resize,
+    Close,
 }
 
 impl RemoteDeviceSessionAbility {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
-            Self::TerminalInput => "terminal.input",
-            Self::TerminalRead => "terminal.read",
-            Self::TerminalResize => "terminal.resize",
-            Self::TerminalClose => "terminal.close",
+            Self::Input => "terminal.input",
+            Self::Read => "terminal.read",
+            Self::Resize => "terminal.resize",
+            Self::Close => "terminal.close",
         }
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RealmHubSystemAbility {
-    VoiceCreateCall,
-    VoiceShowCall,
-    VoiceJoinCall,
-    VoiceLeaveCall,
-    VoiceEndCall,
-    VoiceWatchCall,
-    VoiceReportMetrics,
+    CreateCall,
+    ShowCall,
+    JoinCall,
+    LeaveCall,
+    EndCall,
+    WatchCall,
+    ReportMetrics,
 }
 
 impl RealmHubSystemAbility {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
-            Self::VoiceCreateCall => "voice.create_call",
-            Self::VoiceShowCall => "voice.show_call",
-            Self::VoiceJoinCall => "voice.join_call",
-            Self::VoiceLeaveCall => "voice.leave_call",
-            Self::VoiceEndCall => "voice.end_call",
-            Self::VoiceWatchCall => "voice.watch_call",
-            Self::VoiceReportMetrics => "voice.report_metrics",
+            Self::CreateCall => "voice.create_call",
+            Self::ShowCall => "voice.show_call",
+            Self::JoinCall => "voice.join_call",
+            Self::LeaveCall => "voice.leave_call",
+            Self::EndCall => "voice.end_call",
+            Self::WatchCall => "voice.watch_call",
+            Self::ReportMetrics => "voice.report_metrics",
         }
     }
 }
@@ -358,13 +358,13 @@ mod tests {
             RemoteDeviceSystemAbility::TerminalCreate,
         ];
         let realm_hub_abilities = [
-            RealmHubSystemAbility::VoiceCreateCall,
-            RealmHubSystemAbility::VoiceShowCall,
-            RealmHubSystemAbility::VoiceJoinCall,
-            RealmHubSystemAbility::VoiceLeaveCall,
-            RealmHubSystemAbility::VoiceEndCall,
-            RealmHubSystemAbility::VoiceWatchCall,
-            RealmHubSystemAbility::VoiceReportMetrics,
+            RealmHubSystemAbility::CreateCall,
+            RealmHubSystemAbility::ShowCall,
+            RealmHubSystemAbility::JoinCall,
+            RealmHubSystemAbility::LeaveCall,
+            RealmHubSystemAbility::EndCall,
+            RealmHubSystemAbility::WatchCall,
+            RealmHubSystemAbility::ReportMetrics,
         ];
 
         assert!(remote_device_abilities

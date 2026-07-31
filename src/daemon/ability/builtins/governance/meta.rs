@@ -967,6 +967,7 @@ mod tests {
     fn combined_runtime_projects_disjoint_device_and_hub_views_from_callee() {
         use crate::daemon::ability::dispatch::AbilityAuthorityContext;
 
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
         let device_ura = crate::core::ura::device_ura("both-view", "dev-1");
         let hub_ura = crate::core::ura::hub_ura("both-view");
         let registry = authority_bound_meta_registry(
@@ -1146,7 +1147,7 @@ mod tests {
                         descriptor: serde_json::to_value(
                             AbilityDescriptor::new(
                                 "test.scope",
-                                &crate::core::ura::hub_ura("test"),
+                                crate::core::ura::hub_ura("test"),
                                 Visibility::Public,
                                 AdmissionAction::Read,
                             )
@@ -1827,6 +1828,7 @@ mod tests {
 
     #[test]
     fn describe_buckets_abilities_by_namespace() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
         let mut reg = metadata_test_catalog();
         register(
             &mut reg,
@@ -1853,6 +1855,7 @@ mod tests {
 
     #[test]
     fn describe_handles_empty_catalog() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
         let mut reg = metadata_test_catalog();
         register(&mut reg, Vec::new, empty_registry_handle());
         let resp = invoke_describe(&reg, "easynet:///r/test/device/01DEV").unwrap();

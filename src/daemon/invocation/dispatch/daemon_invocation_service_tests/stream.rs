@@ -273,7 +273,10 @@ async fn invoke_stream_dispatches_registered_local_stream_ability() {
 
     let mut stream = resp.into_inner();
     let first = stream.next().await.expect("one frame").expect("frame Ok");
-    assert_eq!(first.content_type, FEDERATION_RESULT_CONTENT_TYPE);
+    assert_eq!(
+        first.content_type, "application/octet-stream",
+        "generic runtime bytes remain octet-stream unless the provider explicitly declares a content type"
+    );
     assert_eq!(
         first
             .header
@@ -585,7 +588,10 @@ async fn invoke_stream_projects_empty_payload_terminal_frame_for_registry_snapsh
         .expect("empty terminal frame arrives within 2s")
         .expect("empty terminal frame is projected")
         .expect("empty terminal frame is Ok");
-    assert_eq!(second.content_type, FEDERATION_RESULT_CONTENT_TYPE);
+    assert_eq!(
+        second.content_type, "application/octet-stream",
+        "the empty terminal carries the runtime handler's explicit binary result contract, not the preceding progress-frame codec"
+    );
     assert!(
         second.terminal,
         "daemon projection must preserve terminal=true even when payload is empty"
@@ -998,9 +1004,10 @@ async fn external_signed_bidi_file_transfer_download_emits_business_frames() {
 
     let args = serde_json::to_vec(&serde_json::json!({
         "mode": "download",
-        "resource_ref": crate::daemon::resources::files::resource_ref_for_local_path(
+        "resource_ref": crate::daemon::resources::files::resource_ref_for_local_path_owned_by(
             &path,
             crate::daemon::resources::files::FilesystemResourceCapability::Read,
+            TEST_DAEMON_URA,
         )
         .expect("local fs ResourceRef"),
     }))

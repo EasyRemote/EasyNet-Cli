@@ -197,7 +197,7 @@ fn run_create(args: CreateArgs) -> anyhow::Result<()> {
     let participant_identity = CallParticipantIdentity::resolve_paired_device()?;
     let participant_id = participant_identity.participant_id();
     body["participant_id"] = json!(participant_id);
-    let result = invoke_call_signaling(RealmHubSystemAbility::VoiceCreateCall, body)?;
+    let result = invoke_call_signaling(RealmHubSystemAbility::CreateCall, body)?;
     if args.format == OutputFormat::Json {
         println!("{}", serde_json::to_string_pretty(&result)?);
     } else {
@@ -246,6 +246,128 @@ impl CallParticipantIdentity {
     fn participant_id(&self) -> &str {
         &self.node_id
     }
+}
+
+fn run_show(args: ShowArgs) -> anyhow::Result<()> {
+    let result = invoke_call_signaling(
+        RealmHubSystemAbility::ShowCall,
+        json!({"call_id": args.call_id}),
+    )?;
+    if args.format == OutputFormat::Json {
+        println!("{}", serde_json::to_string_pretty(&result)?);
+        return Ok(());
+    }
+    let state = result.get("state").and_then(Value::as_str).unwrap_or("?");
+    output::detail("call_id", &args.call_id);
+    output::detail("state", state);
+    if let Some(participants) = result.get("participants").and_then(Value::as_array) {
+        output::detail("participants", &format!("{}", participants.len()));
+        for p in participants {
+            let pid = p
+                .get("participant_id")
+                .and_then(Value::as_str)
+                .unwrap_or("?");
+            output::step(&format!("  {pid}"));
+        }
+    }
+    Ok(())
+}
+
+fn run_join(args: JoinArgs) -> anyhow::Result<()> {
+    let pid = args.participant_id.map(Ok).unwrap_or_else(|| {
+        CallParticipantIdentity::resolve_paired_device()
+            .map(|identity| identity.participant_id().to_string())
+    })?;
+    let result = invoke_call_signaling(
+        RealmHubSystemAbility::JoinCall,
+        json!({"call_id": args.call_id, "participant_id": pid}),
+    )?;
+    output::success(&format!("Joined call {} as {pid}", args.call_id));
+    if let Some(state) = result.get("state").and_then(Value::as_str) {
+        output::detail("state", state);
+    }
+    Ok(())
+}
+
+fn run_leave(args: LeaveArgs) -> anyhow::Result<()> {
+    invoke_call_signaling(
+        RealmHubSystemAbility::LeaveCall,
+        json!({
+            "call_id": args.call_id,
+            "participant_id": args.participant_id,
+            "reason": args.reason,
+        }),
+    )?;
+    output::success(&format!(
+        "{} left call {}",
+        args.participant_id, args.call_id
+    ));
+    Ok(())
+}
+
+fn run_end(args: EndArgs) -> anyhow::Result<()> {
+    let call_id = args.call_id.clone();
+    let result = invoke_call_signaling(RealmHubSystemAbility::EndCall, end_call_args(args)?)?;
+    output::success(&format!("Call {call_id} ended"));
+    if let Some(state) = result.get("state").and_then(Value::as_str) {
+        output::detail("terminal_state", state);
+    }
+    if let Some(reason) = result.get("end_reason").and_then(Value::as_str) {
+        output::detail("end_reason", reason);
+    }
+    if let Some(code) = result.get("end_reason_code").and_then(Value::as_i64) {
+        output::detail("end_reason_code", &code.to_string());
+    }
+    Ok(())
+}
+
+fn end_call_args(args: EndArgs) -> anyhow::Result<Value> {
+    let end_reason = VoiceEndReason::from_cli_token(&args.reason)?;
+    Ok(json!({
+        "call_id": args.call_id,
+        "end_reason": end_reason.to_wire_i32(),
+    }))
+}
+
+fn run_watch(args: WatchArgs) -> anyhow::Result<()> {
+    let result = invoke_call_signaling(
+        RealmHubSystemAbility::WatchCall,
+        json!({"call_id": args.call_id}),
+    )?;
+    let events = result.get("events").and_then(Value::as_array);
+    let mut count = 0;
+    if let Some(events) = events {
+        for evt in events
+            .iter()
+            .skip(args.from as usize)
+            .take(args.max_events as usize)
+        {
+            let etype = evt.get("type").and_then(Value::as_str).unwrap_or("?");
+            let at = evt.get("at_ms").and_then(Value::as_i64).unwrap_or(0);
+            println!("  {etype:<20} at_ms={at}");
+            count += 1;
+        }
+    }
+    output::detail("events", &format!("{count}"));
+    Ok(())
+}
+
+fn run_metrics(args: MetricsArgs) -> anyhow::Result<()> {
+    let metrics = json!({
+        "rtt_ms": args.rtt_ms,
+        "jitter_ms": args.jitter_ms,
+        "packet_loss_ratio": args.loss,
+    });
+    let _ = invoke_call_signaling(
+        RealmHubSystemAbility::ReportMetrics,
+        json!({
+            "call_id":        args.call_id,
+            "participant_id": args.participant_id,
+            "metrics":        metrics,
+        }),
+    )?;
+    output::success("Metrics reported");
+    Ok(())
 }
 
 #[cfg(test)]
@@ -367,126 +489,4 @@ mod tests {
             "unexpected error: {error}"
         );
     }
-}
-
-fn run_show(args: ShowArgs) -> anyhow::Result<()> {
-    let result = invoke_call_signaling(
-        RealmHubSystemAbility::VoiceShowCall,
-        json!({"call_id": args.call_id}),
-    )?;
-    if args.format == OutputFormat::Json {
-        println!("{}", serde_json::to_string_pretty(&result)?);
-        return Ok(());
-    }
-    let state = result.get("state").and_then(Value::as_str).unwrap_or("?");
-    output::detail("call_id", &args.call_id);
-    output::detail("state", state);
-    if let Some(participants) = result.get("participants").and_then(Value::as_array) {
-        output::detail("participants", &format!("{}", participants.len()));
-        for p in participants {
-            let pid = p
-                .get("participant_id")
-                .and_then(Value::as_str)
-                .unwrap_or("?");
-            output::step(&format!("  {pid}"));
-        }
-    }
-    Ok(())
-}
-
-fn run_join(args: JoinArgs) -> anyhow::Result<()> {
-    let pid = args.participant_id.map(Ok).unwrap_or_else(|| {
-        CallParticipantIdentity::resolve_paired_device()
-            .map(|identity| identity.participant_id().to_string())
-    })?;
-    let result = invoke_call_signaling(
-        RealmHubSystemAbility::VoiceJoinCall,
-        json!({"call_id": args.call_id, "participant_id": pid}),
-    )?;
-    output::success(&format!("Joined call {} as {pid}", args.call_id));
-    if let Some(state) = result.get("state").and_then(Value::as_str) {
-        output::detail("state", state);
-    }
-    Ok(())
-}
-
-fn run_leave(args: LeaveArgs) -> anyhow::Result<()> {
-    invoke_call_signaling(
-        RealmHubSystemAbility::VoiceLeaveCall,
-        json!({
-            "call_id": args.call_id,
-            "participant_id": args.participant_id,
-            "reason": args.reason,
-        }),
-    )?;
-    output::success(&format!(
-        "{} left call {}",
-        args.participant_id, args.call_id
-    ));
-    Ok(())
-}
-
-fn run_end(args: EndArgs) -> anyhow::Result<()> {
-    let call_id = args.call_id.clone();
-    let result = invoke_call_signaling(RealmHubSystemAbility::VoiceEndCall, end_call_args(args)?)?;
-    output::success(&format!("Call {call_id} ended"));
-    if let Some(state) = result.get("state").and_then(Value::as_str) {
-        output::detail("terminal_state", state);
-    }
-    if let Some(reason) = result.get("end_reason").and_then(Value::as_str) {
-        output::detail("end_reason", reason);
-    }
-    if let Some(code) = result.get("end_reason_code").and_then(Value::as_i64) {
-        output::detail("end_reason_code", &code.to_string());
-    }
-    Ok(())
-}
-
-fn end_call_args(args: EndArgs) -> anyhow::Result<Value> {
-    let end_reason = VoiceEndReason::from_cli_token(&args.reason)?;
-    Ok(json!({
-        "call_id": args.call_id,
-        "end_reason": end_reason.to_wire_i32(),
-    }))
-}
-
-fn run_watch(args: WatchArgs) -> anyhow::Result<()> {
-    let result = invoke_call_signaling(
-        RealmHubSystemAbility::VoiceWatchCall,
-        json!({"call_id": args.call_id}),
-    )?;
-    let events = result.get("events").and_then(Value::as_array);
-    let mut count = 0;
-    if let Some(events) = events {
-        for evt in events
-            .iter()
-            .skip(args.from as usize)
-            .take(args.max_events as usize)
-        {
-            let etype = evt.get("type").and_then(Value::as_str).unwrap_or("?");
-            let at = evt.get("at_ms").and_then(Value::as_i64).unwrap_or(0);
-            println!("  {etype:<20} at_ms={at}");
-            count += 1;
-        }
-    }
-    output::detail("events", &format!("{count}"));
-    Ok(())
-}
-
-fn run_metrics(args: MetricsArgs) -> anyhow::Result<()> {
-    let metrics = json!({
-        "rtt_ms": args.rtt_ms,
-        "jitter_ms": args.jitter_ms,
-        "packet_loss_ratio": args.loss,
-    });
-    let _ = invoke_call_signaling(
-        RealmHubSystemAbility::VoiceReportMetrics,
-        json!({
-            "call_id":        args.call_id,
-            "participant_id": args.participant_id,
-            "metrics":        metrics,
-        }),
-    )?;
-    output::success("Metrics reported");
-    Ok(())
 }

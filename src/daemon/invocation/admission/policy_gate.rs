@@ -454,6 +454,10 @@ fn authority_self_stream_scope(
     subject_ura == callee_ura || is_authority_resource_subject_in_realm(subject_ura, &callee.realm)
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "policy evaluation requires each canonical identity, action, role, and trust fact explicitly"
+)]
 fn authority_peer_directory_stream_scope(
     caller_ura: &str,
     callee_ura: &str,
@@ -504,6 +508,10 @@ fn authority_peer_directory_stream_scope(
         && subject.resource_path() == Some(expected_subject_path.as_str())
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "policy evaluation requires each canonical identity, action, role, and safety fact explicitly"
+)]
 fn realm_authority_public_read_scope(
     caller_ura: &str,
     callee_ura: &str,

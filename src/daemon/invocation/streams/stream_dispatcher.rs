@@ -766,23 +766,27 @@ async fn project_local_runtime_stream(
 }
 
 enum LocalRuntimeStreamChunkProjection {
-    Progress {
-        invocation_id: String,
-        sequence: u64,
-        payload: Vec<u8>,
-        content_type: String,
-        admission_receipt: Option<WireInvocationReceipt>,
-    },
-    Terminal {
-        invocation_id: String,
-        sequence: u64,
-        state: InvocationState,
-        payload: Vec<u8>,
-        content_type: String,
-        admission_receipt: Option<WireInvocationReceipt>,
-        terminal_receipt: WireInvocationReceipt,
-        error: Option<Error>,
-    },
+    Progress(Box<ProgressStreamChunkProjection>),
+    Terminal(Box<TerminalStreamChunkProjection>),
+}
+
+struct ProgressStreamChunkProjection {
+    invocation_id: String,
+    sequence: u64,
+    payload: Vec<u8>,
+    content_type: String,
+    admission_receipt: Option<WireInvocationReceipt>,
+}
+
+struct TerminalStreamChunkProjection {
+    invocation_id: String,
+    sequence: u64,
+    state: InvocationState,
+    payload: Vec<u8>,
+    content_type: String,
+    admission_receipt: Option<WireInvocationReceipt>,
+    terminal_receipt: WireInvocationReceipt,
+    error: Option<Error>,
 }
 
 impl LocalRuntimeStreamChunkProjection {
@@ -793,13 +797,13 @@ impl LocalRuntimeStreamChunkProjection {
         content_type: String,
         admission_receipt: Option<WireInvocationReceipt>,
     ) -> Self {
-        Self::Progress {
+        Self::Progress(Box::new(ProgressStreamChunkProjection {
             invocation_id,
             sequence,
             payload,
             content_type: default_stream_content_type(content_type),
             admission_receipt,
-        }
+        }))
     }
 
     fn successful_terminal(
@@ -826,7 +830,7 @@ impl LocalRuntimeStreamChunkProjection {
         } else {
             frame_content_type
         };
-        Ok(Self::Terminal {
+        Ok(Self::Terminal(Box::new(TerminalStreamChunkProjection {
             invocation_id,
             sequence,
             state: finalized.terminal_state,
@@ -835,7 +839,7 @@ impl LocalRuntimeStreamChunkProjection {
             admission_receipt,
             terminal_receipt,
             error: None,
-        })
+        })))
     }
 
     fn failed_terminal(
@@ -847,7 +851,7 @@ impl LocalRuntimeStreamChunkProjection {
     ) -> Result<Self, Status> {
         let terminal_receipt = terminal_receipt_to_wire(&finalized)?;
         let terminal_error = finalized.failure.as_ref().unwrap_or(frame_error);
-        Ok(Self::Terminal {
+        Ok(Self::Terminal(Box::new(TerminalStreamChunkProjection {
             invocation_id,
             sequence,
             state: finalized.terminal_state,
@@ -856,48 +860,54 @@ impl LocalRuntimeStreamChunkProjection {
             admission_receipt,
             terminal_receipt,
             error: Some(axon_sdk::invocation::wire::error_to_wire(terminal_error)),
-        })
+        })))
     }
 
     fn into_chunk(self) -> InvokeStreamChunk {
         match self {
-            Self::Progress {
-                invocation_id,
-                sequence,
-                payload,
-                content_type,
-                admission_receipt,
-            } => local_runtime_stream_chunk(LocalRuntimeStreamChunkParts {
-                invocation_id,
-                state: InvocationState::Running,
-                payload,
-                content_type,
-                sequence,
-                terminal: false,
-                admission_receipt,
-                terminal_receipt: None,
-                error: None,
-            }),
-            Self::Terminal {
-                invocation_id,
-                sequence,
-                state,
-                payload,
-                content_type,
-                admission_receipt,
-                terminal_receipt,
-                error,
-            } => local_runtime_stream_chunk(LocalRuntimeStreamChunkParts {
-                invocation_id,
-                state,
-                payload,
-                content_type,
-                sequence,
-                terminal: true,
-                admission_receipt,
-                terminal_receipt: Some(terminal_receipt),
-                error,
-            }),
+            Self::Progress(progress) => {
+                let ProgressStreamChunkProjection {
+                    invocation_id,
+                    sequence,
+                    payload,
+                    content_type,
+                    admission_receipt,
+                } = *progress;
+                local_runtime_stream_chunk(LocalRuntimeStreamChunkParts {
+                    invocation_id,
+                    state: InvocationState::Running,
+                    payload,
+                    content_type,
+                    sequence,
+                    terminal: false,
+                    admission_receipt,
+                    terminal_receipt: None,
+                    error: None,
+                })
+            }
+            Self::Terminal(terminal) => {
+                let TerminalStreamChunkProjection {
+                    invocation_id,
+                    sequence,
+                    state,
+                    payload,
+                    content_type,
+                    admission_receipt,
+                    terminal_receipt,
+                    error,
+                } = *terminal;
+                local_runtime_stream_chunk(LocalRuntimeStreamChunkParts {
+                    invocation_id,
+                    state,
+                    payload,
+                    content_type,
+                    sequence,
+                    terminal: true,
+                    admission_receipt,
+                    terminal_receipt: Some(terminal_receipt),
+                    error,
+                })
+            }
         }
     }
 }

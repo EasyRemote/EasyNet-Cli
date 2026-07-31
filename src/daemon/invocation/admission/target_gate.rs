@@ -213,17 +213,14 @@ struct LocalCredentialIdentity {
     user_id: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 enum LocalCredentialIdentityState {
     Available(LocalCredentialIdentity),
+    #[default]
     Unpaired,
-    Unavailable { reason: String },
-}
-
-impl Default for LocalCredentialIdentityState {
-    fn default() -> Self {
-        Self::Unpaired
-    }
+    Unavailable {
+        reason: String,
+    },
 }
 
 #[derive(Debug, Clone, Default)]

@@ -289,8 +289,8 @@ impl SevenAxesHome {
 
         let loopback_caller = easynet_cli::core::ura::device_ura("cli", "local");
         let hub_ura = easynet_cli::core::ura::hub_ura("cli");
-        let testbot_ura = easynet_cli::core::ura::agent_ura("cli", "local", "testbot");
-        let zlearner_ura = easynet_cli::core::ura::agent_ura("cli", "local", "zlearner");
+        let testbot_ura = easynet_cli::core::ura::agent_ura("cli", "user-local", "testbot");
+        let zlearner_ura = easynet_cli::core::ura::agent_ura("cli", "user-local", "zlearner");
         let descriptor_refs = Arc::new(RwLock::new(BTreeMap::new()));
         let (keyring, trusted_public_key_b64) = start_test_keyring(loopback_caller.clone());
         std::fs::write(
@@ -455,22 +455,13 @@ added_at_unix_ms = 0
         );
 
         let mut record = Value::Null;
-        let history_descriptor_ref = require_descriptor_ref(
-            &self.descriptor_refs,
-            &self.loopback_caller,
-            "invocation.record.get",
-        );
         for _ in 0..10 {
-            let (history, _, _) = invoke_daemon_ability(
-                &self.socket_path,
-                &self.loopback_caller,
-                &self.loopback_caller,
-                &self.loopback_caller,
-                "invocation.record.get",
-                history_descriptor_ref.as_str(),
-                json!({ "request_id": request_id }),
-            );
-            record = history.get("record").cloned().unwrap_or(Value::Null);
+            record = self
+                .ledger
+                .get_by_request(&request_id)
+                .expect("read canonical invocation ledger")
+                .map(|record| serde_json::to_value(record).expect("serialize invocation record"))
+                .unwrap_or(Value::Null);
             if !record.is_null() {
                 break;
             }
@@ -948,6 +939,10 @@ fn advertise_hosted_agent_projection(
     );
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the multi-node daemon fixture exposes each topology and trust input explicitly"
+)]
 fn start_daemon_at(
     socket_path: &Path,
     trust_path: &Path,
@@ -965,6 +960,10 @@ fn start_daemon_at(
         agents.agents.contains_key("default/testbot"),
         "fixture must load the seeded agent through the production path"
     );
+    let hosted_projection_agent_ura = hosted_agent_uras
+        .first()
+        .cloned()
+        .expect("seven-axes fixture requires the canonical testbot Agent URA");
 
     let trust_anchor =
         Arc::new(RealmTrustAnchor::try_load_strict(trust_path).expect("load test trust anchor"));
@@ -1148,7 +1147,7 @@ fn start_daemon_at(
             &daemon_ura,
             &hub_ura,
             &daemon_ura,
-            &easynet_cli::core::ura::agent_ura("cli", "local", "testbot"),
+            &hosted_projection_agent_ura,
             &descriptor_refs,
         );
     }

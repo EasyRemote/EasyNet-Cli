@@ -108,13 +108,13 @@ impl<'a> RuntimeFailureFacts<'a> {
         }
     }
 
-    pub(crate) fn is_admission_denial_message<'b>(message: &'b str) -> bool {
+    pub(crate) fn is_admission_denial_message(message: &str) -> bool {
         canonical_code_from_message_prefix(message).is_some_and(|code| {
             RuntimeFailureFacts::new(code, "").classify() == RuntimeFailureKind::AdmissionDenied
         })
     }
 
-    pub(crate) fn is_caller_signer_unavailable_message<'b>(message: &'b str) -> bool {
+    pub(crate) fn is_caller_signer_unavailable_message(message: &str) -> bool {
         canonical_code_from_message_prefix(message).is_some_and(|code| {
             RuntimeFailureFacts::new(code, "").classify()
                 == RuntimeFailureKind::CallerSignerUnavailable
@@ -122,10 +122,7 @@ impl<'a> RuntimeFailureFacts<'a> {
     }
 
     #[cfg(feature = "axon-pb")]
-    pub(crate) fn is_descriptor_owner_offline_status<'b>(
-        code: tonic::Code,
-        message: &'b str,
-    ) -> bool {
+    pub(crate) fn is_descriptor_owner_offline_status(code: tonic::Code, message: &str) -> bool {
         code == tonic::Code::Unavailable
             && canonical_code_from_message_prefix(message).is_some_and(|code| {
                 RuntimeFailureFacts::new(code, "").classify()

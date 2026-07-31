@@ -247,6 +247,10 @@ impl DaemonDiscoverySnapshot {
     }
 
     #[cfg(test)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the discovery fixture exposes every independent liveness observation"
+    )]
     pub(crate) fn from_parts_with_pid_match(
         control_discovery: Option<ControlDiscovery>,
         control_discovery_error: Option<String>,

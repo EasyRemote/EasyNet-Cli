@@ -339,6 +339,18 @@ fn descriptor_subject_ura_for(
     subject_ura: &str,
     ability: &str,
 ) -> anyhow::Result<String> {
+    let subject_kind = crate::core::ura::parse_ura(subject_ura)?.kind;
+    if matches!(
+        subject_kind,
+        crate::core::ura::URAKind::Authority | crate::core::ura::URAKind::User
+    ) {
+        return crate::core::ura::owner_ability_ura(callee_ura, ability).ok_or_else(|| {
+            anyhow::anyhow!(
+                "provenance subject `{subject_ura}` requires a descriptor-bound subject, but \
+                 callee `{callee_ura}` cannot own ability `{ability}`"
+            )
+        });
+    }
     if try_entity_ref(subject_ura.to_string()).is_ok() {
         return Ok(subject_ura.to_string());
     }

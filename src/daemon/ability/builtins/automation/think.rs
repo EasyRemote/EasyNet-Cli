@@ -2058,6 +2058,7 @@ This skill does X.\n";
 
     #[test]
     fn curator_attempts_publish_when_verdict_qualifies() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
         // Stub a 3-call sequence:
         //   call 0 (worker cycle 1):   "did the work"
         //   call 1 (judge cycle 1):    sinkable verdict, terminate=true

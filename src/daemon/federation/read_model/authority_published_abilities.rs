@@ -202,7 +202,7 @@ mod tests {
     fn descriptor(name: &str) -> AbilityDescriptor {
         AbilityDescriptor::new(
             name,
-            &crate::core::ura::hub_ura("test"),
+            crate::core::ura::hub_ura("test"),
             Visibility::Public,
             AdmissionAction::Read,
         )

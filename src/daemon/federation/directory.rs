@@ -168,7 +168,6 @@ pub fn now_unix_ms() -> i64 {
 /// outbound frames carry the `DirectoryEvent` wire shape rather
 /// than the older presence `AgentSummary` shape.
 #[cfg(feature = "axon-pb")]
-#[must_use]
 pub fn presence_event_to_directory_event(
     event: &crate::daemon::invocation::bidi::state::presence::PresenceEvent,
 ) -> Result<DirectoryEvent, String> {

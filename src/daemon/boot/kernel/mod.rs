@@ -216,6 +216,10 @@ impl Kernel {
 
     /// Dispatch an already-complete SDK request through LocalRuntime and
     /// project its canonical lifecycle into the daemon session read model.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the canonical request, tuple projection, payload, and permission decision are independent audited facts"
+    )]
     fn dispatch_via_local_runtime(
         &self,
         request: DescriptorBoundInvocationRequest,

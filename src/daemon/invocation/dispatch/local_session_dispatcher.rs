@@ -2423,9 +2423,10 @@ mod tests {
 
         let args = serde_json::to_vec(&json!({
             "mode": "upload",
-            "resource_ref": crate::daemon::resources::files::resource_ref_for_local_path(
+            "resource_ref": crate::daemon::resources::files::resource_ref_for_local_path_owned_by(
                 &target,
                 crate::daemon::resources::files::FilesystemResourceCapability::Write,
+                TEST_DEVICE_URA,
             )
             .expect("local fs ResourceRef"),
         }))
@@ -3060,9 +3061,10 @@ mod tests {
         let session_tx = SessionUpSender::new(tx);
 
         let args = serde_json::json!({
-            "resource_ref": crate::daemon::resources::files::resource_ref_for_local_path(
+            "resource_ref": crate::daemon::resources::files::resource_ref_for_local_path_owned_by(
                 &target,
                 crate::daemon::resources::files::FilesystemResourceCapability::Read,
+                TEST_DEVICE_URA,
             )
             .expect("local fs ResourceRef"),
             "encoding": "utf8",

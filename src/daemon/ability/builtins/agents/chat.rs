@@ -506,10 +506,9 @@ pub(crate) fn build_discover_handler_for(
     // AxonAbilityCatalog`, which we don't have here). The handler
     // re-loads agents on every call so a brand-new peer is visible
     // immediately — same hot-add story as the chat handler.
-    let provider: crate::daemon::ability::builtins::agents::discover::AgentRegistryProvider =
+    let provider: crate::daemon::ability::builtins::agents::discover::AgentDirectoryProvider =
         Arc::new(|| {
             AgentAggregateRepository::load_snapshot()
-                .map(|snapshot| snapshot.registered_agent_registry_projection())
                 .map_err(|error| anyhow::anyhow!("load discover Agent aggregate: {error:#}"))
         });
     Arc::new(move |args: Value| {
@@ -825,6 +824,7 @@ pub(crate) fn invoke_direct_with_progress(
         "reply": resp.content,
         "skills_loaded": skills_loaded,
         "tool_calls": tool_calls_json,
+        "timeline": resp.timeline,
         "context_used": Value::Array(context_used),
         "usage": usage_value,
         "elapsed_ms": elapsed_ms,
@@ -848,7 +848,7 @@ pub(crate) fn invoke_direct_with_progress(
 ///       both lists would be empty) but always present when
 ///       either has content.
 ///
-///   `{"type": "done", "reply": "...", "tool_calls": [...], "context_used": [...], "usage": {...}, "elapsed_ms": N, "session_id": "..."}`
+///   `{"type": "done", "reply": "...", "tool_calls": [...], "timeline": [...], "context_used": [...], "usage": {...}, "elapsed_ms": N, "session_id": "..."}`
 ///       Terminal happy-path frame. Carries the same payload the
 ///       RPC handler returns, so a subscriber that only reads the
 ///       last frame is equivalent to an RPC caller.
@@ -1105,6 +1105,7 @@ fn stream_handler(
                         "reply": resp.content,
                         "skills_loaded": skills_loaded_for_thread,
                         "tool_calls": tool_calls_json,
+                        "timeline": resp.timeline,
                         "context_used": context_used_for_thread,
                         "usage": usage_value,
                         "elapsed_ms": elapsed_ms,

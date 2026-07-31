@@ -872,7 +872,6 @@ fn all_user_keys_b64(
 /// for wrapping that as `Status::not_found` so the FederatedKey-
 /// Resolver can distinguish "URA is not in this hub's trust set"
 /// from a network-level failure.
-#[must_use]
 pub fn handle_resolve_key(
     request: &ResolveKeyRequest,
     trust_anchor: &crate::daemon::trust::anchor::RealmTrustAnchor,
@@ -1113,7 +1112,6 @@ impl<'de> Deserialize<'de> for ExplicitOptionalAbilityName {
 ///   surfaced here.
 /// - Real agent-profile URAs (`.../agent/<user>.<agent>`) are not
 ///   device sessions and are ignored here.
-#[must_use]
 pub fn handle_list_user_devices(
     request: &ListUserDevicesRequest,
     registry: &PresenceRegistry,
@@ -1533,7 +1531,6 @@ fn checked_revoke_now_unix_ms() -> anyhow::Result<u64> {
 /// Each in-registry URA projects to a `DirectoryAgentSummary` via
 /// the pure-data adapter; sorted iteration keeps deterministic bytes
 /// for deterministic state.
-#[must_use]
 pub fn build_subscribe_directory_v2_snapshot(
     registry: &PresenceRegistry,
 ) -> Result<crate::daemon::federation::directory::DirectoryEvent, String> {

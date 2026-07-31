@@ -444,8 +444,8 @@ async fn invoke_dispatches_federation_advertise_agent() {
         }],
         vec![crate::daemon::trust::anchor::TrustedPrincipalOwner {
             principal_ura: caller_ura.to_string(),
-            owner_user_id: "user-dev".to_string(),
-            owner_ura: "easynet:///r/realm/user/user-dev".to_string(),
+            owner_user_id: "dev".to_string(),
+            owner_ura: "easynet:///r/realm/user/dev".to_string(),
             added_at_unix_ms: 1,
         }],
         Vec::new(),
@@ -1264,7 +1264,7 @@ async fn invoke_dispatches_federation_list_user_devices_rejects_non_hub_caller()
 }
 
 #[tokio::test]
-async fn identity_register_pubkey_rejects_device_caller_for_user_role_before_write() {
+async fn identity_register_pubkey_rejects_device_caller_without_authority_before_write() {
     use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 
     let device_caller_ura = "easynet:///r/local/device/device-writer";
@@ -1330,8 +1330,8 @@ async fn identity_register_pubkey_rejects_device_caller_for_user_role_before_wri
         "device caller must not write user trust row",
     );
     assert!(
-        error.message.contains("role `device`") && error.message.contains("`user` trust row"),
-        "rejection should identify caller role and target role; got: {}",
+        error.message.contains("OWNER_UNRESOLVED"),
+        "a non-bootstrap identity mutation must fail at descriptor-bound authority admission; got: {}",
         error.message
     );
     assert!(
@@ -1350,7 +1350,7 @@ async fn identity_register_pubkey_bootstraps_user_caller_before_trust_anchor_con
 
     let realm = "local";
     let hub_ura = crate::core::ura::hub_ura(realm);
-    let user_ura = format!("easynet:///r/{realm}/user/user-bootstrap");
+    let user_ura = crate::core::ura::user_ura(realm, "user-bootstrap");
     let user_key = ed25519_dalek::SigningKey::from_bytes(&[0x57; 32]);
     let user_pubkey_b64 = BASE64_STANDARD.encode(user_key.verifying_key().to_bytes());
     let cell = SharedTrustAnchor::new(Arc::new(
@@ -2727,7 +2727,7 @@ async fn paired_user_resolve_key_bootstrap_reaches_authority_before_owner_bindin
 
     let realm = "bootstrap-realm";
     let hub_ura = crate::core::ura::hub_ura(realm);
-    let user_ura = format!("easynet:///r/{realm}/user/user-bootstrap");
+    let user_ura = crate::core::ura::user_ura(realm, "user-bootstrap");
     let user_key = ed25519_dalek::SigningKey::from_bytes(&[0x58; 32]);
     let user_pubkey_b64 = BASE64_STANDARD.encode(user_key.verifying_key().to_bytes());
     let user_entry = TrustedAgent {
@@ -3196,7 +3196,7 @@ async fn dispatch_remote_rpc_times_out_when_target_never_replies() {
     // PRESENCE_DISPATCH_REPLY_TIMEOUT elapses instead of parking the
     // caller for the life of the connection. Paused clock: tokio
     // advances straight to the deadline once the waiter is idle.
-    const WEDGED_DEVICE_URA: &str = "easynet:///r/test-realm/device/wedged-device";
+    const WEDGED_DEVICE_URA: &str = "easynet:///r/test-realm/device/client-1";
 
     let pending = Arc::new(PendingDispatchMap::new());
     let svc = make_service().with_pending(Arc::clone(&pending));
@@ -3446,7 +3446,7 @@ async fn dispatch_remote_rpc_rejects_receipt_history_with_generic_resource_subje
 
 #[tokio::test]
 async fn dispatch_remote_rpc_allows_receipt_history_with_runtime_state_read_subject() {
-    const REMOTE_DEVICE_URA: &str = "easynet:///r/test-realm/device/remote-device";
+    const REMOTE_DEVICE_URA: &str = "easynet:///r/test-realm/device/client-1";
     const HISTORY_READ: &str = crate::daemon::ability::names::governance::INVOCATION_HISTORY_LIST;
     const READ_SUBJECT_URA: &str = "easynet:///r/test-realm/resource/user.alice/runtime-state/read";
 
@@ -3485,17 +3485,20 @@ async fn dispatch_remote_rpc_allows_receipt_history_with_runtime_state_read_subj
     .into_inner();
 
     let dispatcher = svc.unary_dispatcher();
-    let dispatch_task = tokio::spawn(async move {
+    let mut dispatch_task = tokio::spawn(async move {
         dispatcher
             .dispatch_remote_rpc_selected_route(&request, &selected_route, CallMode::Rpc)
             .await
     });
-    let frame = remote_rx
-        .recv()
-        .await
-        .expect("receipt-history read carrier frame delivered to v1 presence target")
-        .expect("presence dispatch frame ok")
-        .frame;
+    let frame = tokio::select! {
+        frame = remote_rx.recv() => frame
+            .expect("receipt-history read carrier frame delivered to v1 presence target")
+            .expect("presence dispatch frame ok")
+            .frame,
+        outcome = &mut dispatch_task => {
+            panic!("receipt-history dispatch completed before publishing its carrier frame: {outcome:?}")
+        }
+    };
     dispatch_task.abort();
 
     let call = match frame.payload {
@@ -3617,7 +3620,7 @@ async fn dispatch_remote_rpc_rejects_resource_catalogue_read_with_public_action_
 
 #[tokio::test]
 async fn dispatch_remote_rpc_allows_catalogue_read_with_runtime_read_subject() {
-    const REMOTE_DEVICE_URA: &str = "easynet:///r/test-realm/device/remote-device";
+    const REMOTE_DEVICE_URA: &str = "easynet:///r/test-realm/device/client-1";
     const CATALOGUE_READ: &str = crate::daemon::ability::names::governance::META_LIST_ABILITIES;
     const READ_SUBJECT_URA: &str = "easynet:///r/test-realm/resource/user.alice/runtime-state/read";
 
@@ -3656,17 +3659,20 @@ async fn dispatch_remote_rpc_allows_catalogue_read_with_runtime_read_subject() {
     .into_inner();
 
     let dispatcher = svc.unary_dispatcher();
-    let dispatch_task = tokio::spawn(async move {
+    let mut dispatch_task = tokio::spawn(async move {
         dispatcher
             .dispatch_remote_rpc_selected_route(&request, &selected_route, CallMode::Rpc)
             .await
     });
-    let frame = remote_rx
-        .recv()
-        .await
-        .expect("catalogue read carrier frame delivered to v1 presence target")
-        .expect("presence dispatch frame ok")
-        .frame;
+    let frame = tokio::select! {
+        frame = remote_rx.recv() => frame
+            .expect("catalogue read carrier frame delivered to v1 presence target")
+            .expect("presence dispatch frame ok")
+            .frame,
+        outcome = &mut dispatch_task => {
+            panic!("catalogue dispatch completed before publishing its carrier frame: {outcome:?}")
+        }
+    };
     dispatch_task.abort();
 
     let call = match frame.payload {

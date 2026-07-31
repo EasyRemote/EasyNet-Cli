@@ -138,6 +138,7 @@ check_local_runtime_stream_chunk_projection_contract() {
   [[ -f "$stream" ]] || fail "stream dispatcher source is missing: ${stream#$cli_root/}"
 
   "$PYTHON_BIN" - "$stream" <<'PY'
+import re
 import sys
 from pathlib import Path
 
@@ -9897,6 +9898,7 @@ check_target_gate_credential_state_contract() {
   [[ -f "$target_gate" ]] || return 0
 
   "$PYTHON_BIN" - "$target_gate" <<'PY'
+import re
 import sys
 from pathlib import Path
 
@@ -9913,7 +9915,6 @@ for required in (
     "enum LocalCredentialIdentityState",
     "Available(LocalCredentialIdentity)",
     "Unpaired",
-    "Unavailable { reason: String }",
     "load_credentials_optional()?",
     "creds.user_id()?",
     "target_gate_credential_identity_load_failed",
@@ -9922,6 +9923,8 @@ for required in (
 ):
     if required not in text:
         raise SystemExit(f"target_gate_credential_state_missing:{required}")
+if re.search(r"Unavailable\s*\{\s*reason:\s*String,?\s*\}", text) is None:
+    raise SystemExit("target_gate_credential_state_missing:Unavailable { reason: String }")
 
 start = text.find("fn local_runtime_authority_ura(")
 end = text.find("// ── Route-outcome wire mapping", start)
@@ -9946,6 +9949,7 @@ check_runtime_trust_revoke_credentials_contract() {
   [[ -f "$invalidator" ]] || return 0
 
   "$PYTHON_BIN" - "$invalidator" "$dispatcher" <<'PY'
+import re
 import re
 import sys
 from pathlib import Path
@@ -12422,6 +12426,7 @@ check_eal_device_target_identity_contract() {
   [[ -f "$dispatch" ]] || fail "EAL dispatch source is missing: ${dispatch#$cli_root/}"
 
   "$PYTHON_BIN" - "$dispatch" <<'PY'
+import re
 import sys
 from pathlib import Path
 
@@ -12439,13 +12444,14 @@ for required in (
     "enum EalLocalNodeIdentity",
     "Known(String)",
     "Unpaired",
-    "Unavailable { reason: String }",
     "load_credentials_optional()",
     "load local credentials for EAL device target resolution",
     "fn matches_node(&self, node_id: &str) -> Result<bool, EalError>",
 ):
     if required not in production:
         raise SystemExit(f"eal_device_target_identity:missing:{required}")
+if re.search(r"Unavailable\s*\{\s*reason:\s*String,?\s*\}", production) is None:
+    raise SystemExit("eal_device_target_identity:missing:Unavailable { reason: String }")
 
 for test in (
     "device_request_rejects_malformed_credentials_before_remote_guess",
@@ -25401,6 +25407,7 @@ EOF
     fail "self-test expected invocation.history.get attempt_id key gate to fail"
   fi
   mkdir -p "$tmp/invocation-history-ledger-ura-legacy/src/daemon/ability/builtins/governance" \
+    "$tmp/invocation-history-ledger-ura-legacy/src/daemon/ability" \
     "$tmp/invocation-history-ledger-ura-legacy/src/cli/commands/groups" \
     "$tmp/invocation-history-ledger-ura-legacy/sdk/node/test"
   cat >"$tmp/invocation-history-ledger-ura-legacy/src/daemon/ability/builtins/governance/invocation_history.rs" <<'EOF'
@@ -25419,6 +25426,8 @@ fn history_key_schema_excludes_attempt_id() {}
 #[test]
 fn get_history_rejects_attempt_id_key() {}
 EOF
+  printf '%s\n' 'struct LedgerGovernanceAuthority;' \
+    > "$tmp/invocation-history-ledger-ura-legacy/src/daemon/ability/dispatch.rs"
   cat >"$tmp/invocation-history-ledger-ura-legacy/src/cli/commands/groups/invocation.rs" <<'EOF'
 struct HistoryListResponse { ledger_ura: String }
 struct HistoryGetResponse { ledger_ura: String }
@@ -25460,7 +25469,7 @@ test("runtime receipt provider rejects legacy history source field", () => {});
 test("runtime receipt provider requires canonical ledger_ura", () => {});
 const receiptLedgerURA = "easynet:///r/example/resource/user.alice/runtime/invocation-history";
 EOF
-  if ( check_invocation_history_ledger_ura_contract "$tmp/invocation-history-ledger-ura-legacy" ) >/dev/null 2>&1; then
+  if ( AXON_ROOT="$CANONICAL_LIFECYCLE_AXON_ROOT"; check_invocation_history_ledger_ura_contract "$tmp/invocation-history-ledger-ura-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected invocation.history ledger_ura projection fallback gate to fail"
   fi
   mkdir -p "$tmp/core-ura-realm-projection-legacy/src/core/ura" \
@@ -30390,6 +30399,7 @@ EOF
   if ( CLI_ROOT="$tmp/runtime-bootstrap-legacy-tenant"; check_runtime_bootstrap_self_identity_ingress_contract ) >/dev/null 2>&1; then
     fail "self-test expected runtime bootstrap tenant/display_name gate to fail"
   fi
+  AXON_ROOT="$CANONICAL_LIFECYCLE_AXON_ROOT"
   check_mcp_reflection_async_bridge_contract
   check_runtime_session_projection_accessor_contract
   check_ffi_runtime_sizing_policy_contract

@@ -689,16 +689,13 @@ impl LocalHostedAgentPlacements {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 enum HostedPlacementProjectionState {
+    #[default]
     Available,
-    Unavailable { reason: String },
-}
-
-impl Default for HostedPlacementProjectionState {
-    fn default() -> Self {
-        Self::Available
-    }
+    Unavailable {
+        reason: String,
+    },
 }
 
 impl<'a> DaemonRouteResolver<'a> {

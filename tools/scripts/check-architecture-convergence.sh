@@ -5262,30 +5262,34 @@ hosted_owner_lookup_surfaces = (
     (
         cli_root / "src/cli/commands/abilities.rs",
         "CLI abilities --agent resolution",
+        (
+            "AgentAggregateRepository::load_hosted_identity_snapshot()",
+            "hosted_llm_agent_ura(",
+        ),
     ),
     (
         cli_root / "src/daemon/ability/builtins/agents/discover.rs",
         "agent discover local owner projection",
+        (
+            "AgentDirectoryProvider",
+            "AgentAggregateSnapshot",
+            "hosted_llm_agent_ura(peer_name)",
+        ),
     ),
 )
-for hosted_owner_surface, surface_label in hosted_owner_lookup_surfaces:
+for hosted_owner_surface, surface_label, required_tokens in hosted_owner_lookup_surfaces:
     if not hosted_owner_surface.exists():
         continue
     text = source(hosted_owner_surface)
     production_text = text.split("#[cfg(test)]", 1)[0]
-    hosted_owner_requirements = (
-        (
-            "AgentAggregateRepository::load_hosted_identity_snapshot()",
-            f"{surface_label} must load hosted owner state through the hosted identity aggregate projection",
-        ),
-        (
-            "hosted_llm_agent_ura(",
-            f"{surface_label} must use the aggregate hosted LLM owner projection",
-        ),
-    )
-    for token, detail in hosted_owner_requirements:
+    for token in required_tokens:
         if token not in production_text:
-            add("R42_HOSTED_OWNER_LOOKUP_AGENT_AGGREGATE_FORK", hosted_owner_surface, 1, detail)
+            add(
+                "R42_HOSTED_OWNER_LOOKUP_AGENT_AGGREGATE_FORK",
+                hosted_owner_surface,
+                1,
+                f"{surface_label} must consume hosted owner identity from its Agent aggregate boundary ({token})",
+            )
     for token, detail in (
         (
             "local_agents::load",
@@ -5294,10 +5298,6 @@ for hosted_owner_surface, surface_label in hosted_owner_lookup_surfaces:
         (
             "lookup_hosted_ura",
             f"{surface_label} must not bypass aggregate hosted owner lookup",
-        ),
-        (
-            "AgentAggregateRepository::load_snapshot()",
-            f"{surface_label} must not require registry readability for hosted owner lookup",
         ),
     ):
         if token in production_text:
@@ -5898,17 +5898,28 @@ if catalog_build.exists():
                 f"{label} registration block is missing",
             )
             continue
-        block = production_text[start : start + 650]
-        for required, detail in (
+        block_end = start + 650
+        if token == "discover_ability::register_device_aggregate_with_resolver(":
+            next_registration = production_text.find(
+                "a2a_bridge_ability::register(", start + len(token)
+            )
+            if next_registration >= 0:
+                block_end = next_registration
+        block = production_text[start:block_end]
+        required_tokens = [
             (
                 "AgentAggregateRepository::load_snapshot()",
                 f"{label} must load through the Agent aggregate snapshot",
-            ),
-            (
-                ".registered_agent_registry_projection()",
-                f"{label} must project registry rows from the Agent aggregate",
-            ),
-        ):
+            )
+        ]
+        if token == "a2a_bridge_ability::register(":
+            required_tokens.append(
+                (
+                    ".registered_agent_registry_projection()",
+                    f"{label} must project registry rows from the Agent aggregate",
+                )
+            )
+        for required, detail in required_tokens:
             if required not in block:
                 add(
                     "R50_BOOT_DISCOVERY_AGENT_AGGREGATE_PROVIDER_FORK",
@@ -5933,6 +5944,16 @@ if catalog_build.exists():
                     line_number(production_text, start),
                     detail,
                 )
+        if (
+            token == "discover_ability::register_device_aggregate_with_resolver("
+            and ".registered_agent_registry_projection()" in block
+        ):
+            add(
+                "R50_BOOT_DISCOVERY_AGENT_AGGREGATE_PROVIDER_FORK",
+                catalog_build,
+                line_number(production_text, start),
+                "agent.discover must receive the complete Agent aggregate instead of discarding hosted identity before dispatch",
+            )
 
 # Rule 51: daemon-native Hub URA join credentials must not be forced through
 # backend HTTP token verification. Token-paired credentials still use the

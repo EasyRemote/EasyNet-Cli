@@ -720,7 +720,7 @@ impl InvocationHistoryFilter {
         Self::insert_arg_value(&mut filter, "caller_ura", self.caller_ura);
         Self::insert_arg_value(&mut filter, "callee_ura", self.callee_ura);
         Self::insert_arg_value(&mut filter, "subject_ura", self.subject_ura);
-        (!filter.is_empty()).then(|| Value::Object(filter))
+        (!filter.is_empty()).then_some(Value::Object(filter))
     }
 
     fn insert_arg_value(filter: &mut Map<String, Value>, key: &str, value: Option<String>) {
@@ -750,7 +750,7 @@ fn canonical_history_ability_filter(value: Option<&str>) -> anyhow::Result<Optio
         return Ok(None);
     };
     let selector = crate::core::ura::AbilitySelector::parse(value)
-        .with_context(|| format!("`--ability-ura` must be a canonical Ability URA"))?;
+        .with_context(|| "`--ability-ura` must be a canonical Ability URA".to_string())?;
     Ok(Some(selector.ability_ura().to_string()))
 }
 

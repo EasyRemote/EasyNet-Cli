@@ -527,6 +527,10 @@ pub(crate) fn invoke_local_daemon_system_ability_targeted_stream_root(
 }
 
 #[cfg(feature = "axon-pb")]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "stable facade preserves the complete explicit invocation tuple for existing callers"
+)]
 pub(crate) fn invoke_local_daemon_ability_targeted_stream_explicit_causal(
     function_name: &str,
     payload_json: serde_json::Value,
@@ -808,6 +812,10 @@ pub(crate) fn invoke_local_daemon_system_ability_targeted_stream_root(
 }
 
 #[cfg(not(feature = "axon-pb"))]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "feature-disabled facade must retain the same stable signature as the enabled implementation"
+)]
 pub(crate) fn invoke_local_daemon_ability_targeted_stream_explicit_causal(
     function_name: &str,
     _payload_json: serde_json::Value,

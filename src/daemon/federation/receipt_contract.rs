@@ -81,6 +81,17 @@ pub struct AuthorityAbilitiesDiff {
     pub removed: Vec<String>,
 }
 
+impl AuthorityAbilitiesDiff {
+    #[must_use]
+    pub fn empty_at(revision: u64) -> Self {
+        Self {
+            revision,
+            added: Vec::new(),
+            removed: Vec::new(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -142,16 +153,5 @@ mod tests {
         .expect_err("authority ability diffs must reject retired revision aliases");
 
         assert!(err.to_string().contains("legacy_revision"), "{err}");
-    }
-}
-
-impl AuthorityAbilitiesDiff {
-    #[must_use]
-    pub fn empty_at(revision: u64) -> Self {
-        Self {
-            revision,
-            added: Vec::new(),
-            removed: Vec::new(),
-        }
     }
 }

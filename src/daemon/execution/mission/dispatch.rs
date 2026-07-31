@@ -145,6 +145,11 @@ pub struct AgentResponse {
     /// expose tool-call observability (codex today) leave this empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tool_calls: Vec<ToolCall>,
+    /// Compact driver progress timeline captured from the same stream
+    /// that powers `easynet agent send` live output. Each entry carries
+    /// local elapsed time plus the driver's raw progress payload.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub timeline: Vec<serde_json::Value>,
     /// Driver-assigned conversation id. Set by drivers whose backing
     /// CLI/runtime persists multi-turn state under a stable id (codex
     /// emits `thread.started` with a UUIDv7; claude-code does not yet
@@ -861,6 +866,11 @@ pub fn send_to_agent_with_depth_and_progress(
     }
     let output = run_result?;
 
+    let timeline = session
+        .writer()
+        .progress_projection()
+        .map_err(|error| anyhow::anyhow!("project durable agent progress timeline: {error}"))?;
+
     Ok(AgentResponse {
         agent: agent_name.to_string(),
         content: output.content,
@@ -872,6 +882,7 @@ pub fn send_to_agent_with_depth_and_progress(
         usage: output.usage,
         run_dir: Some(run_dir.path().to_path_buf()),
         tool_calls: output.tool_calls,
+        timeline,
         thread_id: output.thread_id,
     })
 }

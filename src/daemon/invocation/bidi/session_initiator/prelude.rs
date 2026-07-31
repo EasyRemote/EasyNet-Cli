@@ -1385,7 +1385,7 @@ mod tests {
             descriptor: serde_json::to_value(
                 AbilityDescriptor::new(
                     name,
-                    &crate::core::ura::hub_ura("realm"),
+                    crate::core::ura::hub_ura("realm"),
                     Visibility::Public,
                     AdmissionAction::Read,
                 )

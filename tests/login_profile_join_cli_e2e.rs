@@ -6,9 +6,10 @@
 //              directories to pin the product login/profile command surface.
 //
 // Protocol Responsibility:
-// - `login` owns account session/profile projection only.
-// - `join` remains compatible with token/Hub-URA forms while accepting the
-//   profile-oriented product façade.
+// - `login` owns account session/profile projection and reconciles the current
+//   device into the selected profile by default.
+// - `join` remains the explicit token/Hub-URA and profile recovery surface; it
+//   delegates to the same device-membership transition used by `login`.
 // - Realm discovery fails closed for unconfigured bare aliases.
 //
 // Implementation Approach:
@@ -17,8 +18,9 @@
 // - Exercise profile/realm/hub commands as user-facing subprocesses.
 //
 // Usage Contract:
-// - These tests do not simulate daemon admission. The existing Hub URA TLS
-//   join E2E covers real device membership and PrincipalLifecycle admission.
+// - These tests pin account and device-membership orchestration while skipping
+//   daemon boot. The Hub URA TLS join E2E covers live PrincipalLifecycle
+//   admission.
 //
 // Architectural Position:
 // - Product-layer E2E above the existing auth and join providers.
@@ -85,15 +87,6 @@ struct FakeAuthHub {
 
 impl FakeAuthHub {
     const HUB_PUBLIC_KEY_B64: &'static str = "ERERERERERERERERERERERERERERERERERERERERERE=";
-
-    fn login_once() -> Self {
-        Self::scripted(vec![ExpectedRequest::json(
-            "POST /api/v1/auth/login ",
-            vec![r#""email":"silan""#],
-            200,
-            login_response("access-token-1", "refresh-token-1", "usr_silan", "silan"),
-        )])
-    }
 
     fn one_step_join_once() -> Self {
         Self::one_step_join_with_validate_body_once(canonical_pairing_credential_response(
@@ -188,16 +181,6 @@ impl FakeAuthHub {
                 r#"{"error":"expired"}"#,
             ),
         ];
-        let handle = thread::spawn(move || run_expected_requests(listener, steps));
-        Self {
-            endpoint,
-            handle: Some(handle),
-        }
-    }
-
-    fn scripted(steps: Vec<ExpectedRequest>) -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind fake auth hub");
-        let endpoint = format!("http://{}", listener.local_addr().expect("local addr"));
         let handle = thread::spawn(move || run_expected_requests(listener, steps));
         Self {
             endpoint,
@@ -374,7 +357,7 @@ fn write_json_status_response(stream: &mut TcpStream, status: u16, body: &str) {
     };
     let response = format!(
         "HTTP/1.1 {status} {reason}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
-        body.as_bytes().len(),
+        body.len(),
         body
     );
     stream
@@ -383,9 +366,9 @@ fn write_json_status_response(stream: &mut TcpStream, status: u16, body: &str) {
 }
 
 #[test]
-fn login_user_at_realm_creates_auth_session_and_profile_projection() {
+fn login_user_at_realm_authenticates_and_onboards_current_device() {
     let home = tempfile::tempdir().expect("temp HOME");
-    let hub = FakeAuthHub::login_once();
+    let hub = FakeAuthHub::one_step_join_once();
 
     let output = run_success(
         home.path(),
@@ -396,17 +379,29 @@ fn login_user_at_realm_creates_auth_session_and_profile_projection() {
             hub.endpoint.as_str(),
             "--password",
             "secret",
+            "--no-start",
         ],
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("profile: silan@acme"), "{stdout}");
-    assert!(stdout.contains("easynet join"), "{stdout}");
+    assert!(
+        stdout.contains("easynet:///r/acme/device/dev-one"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("easynet status"), "{stdout}");
 
     let state_dir = home.path().join(".easynet");
     let auth = read_json(&state_dir.join("auth.json"));
     assert_eq!(auth["email"], "silan");
     assert_eq!(auth["hub_url"], hub.endpoint);
     assert_eq!(auth["user_id"], "usr_silan");
+
+    let credentials = read_json(&state_dir.join("credentials.json"));
+    assert_eq!(credentials["realm"], "acme");
+    assert_eq!(credentials["node_id"], "dev-one");
+    assert_eq!(credentials["username"], "silan");
+    assert_eq!(credentials["user_id"], "usr_silan");
+    assert_eq!(credentials["hub_api_base"], hub.endpoint);
 
     let profiles = read_json(&state_dir.join("profiles.json"));
     assert_eq!(profiles["current_profile"], "silan@acme");
@@ -417,13 +412,13 @@ fn login_user_at_realm_creates_auth_session_and_profile_projection() {
     assert_eq!(profile["login_hint"], "silan");
     assert_eq!(profile["subject"], "usr_silan");
     assert_eq!(profile["account_session"], "authenticated");
-    assert_eq!(profile["device_membership"], "not_enrolled");
+    assert_eq!(profile["device_membership"], "enrolled");
 
     let show = run_success(home.path(), &["profile", "show"]);
     let show_stdout = String::from_utf8_lossy(&show.stdout);
     assert!(show_stdout.contains("profile"), "{show_stdout}");
     assert!(show_stdout.contains("silan@acme"), "{show_stdout}");
-    assert!(show_stdout.contains("not_enrolled"), "{show_stdout}");
+    assert!(show_stdout.contains("enrolled"), "{show_stdout}");
 
     let list = run_success(home.path(), &["profile", "list"]);
     let list_stdout = String::from_utf8_lossy(&list.stdout);

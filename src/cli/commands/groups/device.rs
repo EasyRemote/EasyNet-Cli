@@ -57,7 +57,7 @@ pub struct DeviceArgs {
 #[derive(Debug, Subcommand)]
 pub enum DeviceAction {
     /// Pair this host as a hosting substrate (registers credentials).
-    Join(join::JoinArgs),
+    Join(Box<join::JoinArgs>),
     /// Un-pair this host (delete local credentials and state).
     Reset(reset::ResetArgs),
     /// Show or update local runtime settings (will move to `runtime config` in a future release).
@@ -132,7 +132,7 @@ pub struct RemoveArgs {
 
 pub fn run(args: DeviceArgs) -> anyhow::Result<()> {
     match args.action {
-        DeviceAction::Join(a) => join::run(a),
+        DeviceAction::Join(a) => join::run(*a),
         DeviceAction::Reset(a) => reset::run(a),
         DeviceAction::Config(a) => config_cmd::run(a),
         DeviceAction::List(a) => devices::run(a),

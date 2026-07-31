@@ -1600,6 +1600,21 @@ pub fn default_chat_manifest() -> AbilityManifest {
                     "required": ["ability"]
                 }
             },
+            "timeline": {
+                "type": "array",
+                "description": "Ordered driver progress events captured during this turn. \
+                                Each event carries local elapsed time and the driver's raw \
+                                progress payload.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "elapsed_ms": {"type": "integer", "minimum": 0},
+                        "type": {"type": "string"},
+                        "payload": {}
+                    },
+                    "required": ["elapsed_ms", "type", "payload"]
+                }
+            },
             "context_used": {
                 "type": "array",
                 "description": "Per-loader contribution: which context loaders ran and how \

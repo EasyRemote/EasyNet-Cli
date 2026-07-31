@@ -234,7 +234,7 @@ fn probe_runtime_health(print_success: bool) -> anyhow::Result<bool> {
 
 #[derive(Debug)]
 enum StatusPairingState {
-    Paired(config::Credentials),
+    Paired(Box<config::Credentials>),
     Unpaired,
     Invalid { reason: String },
 }
@@ -246,7 +246,7 @@ impl StatusPairingState {
 
     fn from_credentials_result(result: anyhow::Result<Option<config::Credentials>>) -> Self {
         match result {
-            Ok(Some(credentials)) => Self::Paired(credentials),
+            Ok(Some(credentials)) => Self::Paired(Box::new(credentials)),
             Ok(None) => Self::Unpaired,
             Err(error) => Self::Invalid {
                 reason: format!("{error:#}"),

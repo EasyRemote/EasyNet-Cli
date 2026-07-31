@@ -178,7 +178,7 @@ fn record_invocation_feature_disabled(function: &str) -> i32 {
 /// {
 ///   "caller_ura": "...",
 ///   "callee_ura": "...",
-///   "descriptor_ref": "easynet:///r/acme/device/dev-a/ability/observe.health@2.4.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
+///   "descriptor_ref": "easynet:///r/acme/ability/device.dev-a.observe.health@2.4.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
 ///   "subject_ura": "...",
 ///   "nonce_base64": "<16 bytes, base64>",
 ///   "causal_context": {"form": "none"},
@@ -7134,7 +7134,7 @@ mod tests {
             r#"{
                 "caller_ura": "easynet:///r/acme/device/dev-a",
                 "callee_ura": "easynet:///r/acme/device/dev-a",
-                "descriptor_ref": "easynet:///r/acme/device/dev-a/ability/observe.health@2.4.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
+                "descriptor_ref": "easynet:///r/acme/ability/device.dev-a.observe.health@2.4.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
                 "subject_ura": "easynet:///r/acme/device/dev-a",
                 "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
                 "args": {}
@@ -8351,7 +8351,7 @@ mod tests {
                 r#"{{
                     "caller_ura": "easynet:///r/acme/device/dev-a",
                     "callee_ura": "easynet:///r/acme/device/dev-a",
-                    "descriptor_ref": "easynet:///r/acme/device/dev-a/ability/observe.health@2.4.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
+                    "descriptor_ref": "easynet:///r/acme/ability/device.dev-a.observe.health@2.4.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
                     "subject_ura": "easynet:///r/acme/device/dev-a",
                     "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
                     "causal_context": {{"form": "none"}},
@@ -9517,7 +9517,7 @@ mod tests {
             r#"{
                 "caller_ura": "easynet:///r/acme/device/dev-a",
                 "callee_ura": "easynet:///r/acme/device/dev-a",
-                "descriptor_ref": "easynet:///r/acme/device/dev-a/ability/observe.health@2.4.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
+                "descriptor_ref": "easynet:///r/acme/ability/device.dev-a.observe.health@2.4.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
                 "subject_ura": "easynet:///r/acme/device/dev-a",
                 "nonce_base64": "AAAAAAAAAAAAAAAAAAAAAA==",
                 "causal_context": {"form": "none"},
@@ -9537,7 +9537,7 @@ mod tests {
             r#"{
                 "caller_ura": "easynet:///r/acme/device/dev-a",
                 "callee_ura": "easynet:///r/acme/device/dev-a",
-                "descriptor_ref": "easynet:///r/acme/device/dev-a/ability/observe.health@2.4.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
+                "descriptor_ref": "easynet:///r/acme/ability/device.dev-a.observe.health@2.4.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
                 "subject_ura": "easynet:///r/acme/device/dev-a",
                 "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
                 "causal_context": {"form": "none"},
@@ -11331,7 +11331,10 @@ mod tests {
             unsafe { runtime_invocation_bidi_close(handle, bidi_id) },
             RUNTIME_OK
         );
-        assert_bidi_eof_frame(up_rx.try_recv().expect("local close EOF"), 1);
+        assert!(matches!(
+            up_rx.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected)
+        ));
         assert!(reader_cancel.is_cancelled());
         assert!(get_bidi_for_handle(owner, bidi_id).unwrap().is_none());
         crate::ffi::client::handle::release(handle);
@@ -11747,10 +11750,7 @@ mod tests {
             crate::daemon::DaemonError::InvokeStatus {
                 ability: "meta.list_abilities".to_string(),
                 code: tonic::Code::Unavailable,
-                message: "ROUTE_NEGATIVE: namespace.resolve negative for \
-                     `easynet:///r/localhost/ability/device.dev-a.meta.list_abilities`: \
-                     NEGATIVE_REASON_NXDOMAIN: owner is not online"
-                    .to_string(),
+                message: "DESCRIPTOR_OWNER_OFFLINE: descriptor owner is not online".to_string(),
             },
         );
 

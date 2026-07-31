@@ -58,6 +58,10 @@ pub(crate) enum MissionInvocationTarget {
 /// receipts. Implementations stage only runtime admission that cannot be encoded
 /// in the canonical descriptor-bound envelope.
 pub(crate) trait MissionChildAdmissionProvider: Send + Sync {
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the provider stages the complete descriptor-bound child invocation tuple without defaults"
+    )]
     fn stage_child(
         &self,
         descriptor_bound: &axon_sdk::invocation::DescriptorBoundEnvelope,
@@ -1114,6 +1118,10 @@ mod tests {
             .expect("register Mission test ability");
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the test fixture makes every signed parent-invocation fact explicit"
+    )]
     async fn invoke_parent(
         runtime: &Arc<LocalRuntime>,
         caller: &AgentIdentity,

@@ -386,6 +386,10 @@ fn runtime_descriptor_catalog_entries(owner_ura: &str) -> RuntimeDescriptorCatal
         Ok(mut system_entries) => entries.append(&mut system_entries),
         Err(error) => diagnostics.push(error),
     }
+    match runtime_daemon_native_agent_descriptor_catalog_entries(owner_ura) {
+        Ok(mut native_agent_entries) => entries.append(&mut native_agent_entries),
+        Err(error) => diagnostics.push(error),
+    }
     match dedupe_descriptor_catalog_entries(entries) {
         Ok(entries) => RuntimeDescriptorCatalog {
             entries,
@@ -399,6 +403,46 @@ fn runtime_descriptor_catalog_entries(owner_ura: &str) -> RuntimeDescriptorCatal
             }
         }
     }
+}
+
+fn runtime_daemon_native_agent_descriptor_catalog_entries(
+    owner_ura: &str,
+) -> std::result::Result<Vec<Value>, String> {
+    let parsed = crate::core::ura::parse_ura(owner_ura).map_err(|error| error.to_string())?;
+    if parsed.kind != crate::core::ura::URAKind::Agent {
+        return Ok(Vec::new());
+    }
+    let Some((user_id, agent_id)) = parsed.agent_ids() else {
+        return Ok(Vec::new());
+    };
+    if agent_id != "pages" {
+        return Ok(Vec::new());
+    }
+
+    let device_ura = crate::core::ura::device_ura(&parsed.realm, "runtime-descriptor-catalog");
+    let authority_context =
+        crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root(
+            device_ura,
+        )
+        .map_err(|error| error.to_string())?
+        .with_declared_agent_authority_root(owner_ura)
+        .map_err(|error| error.to_string())?;
+    let mut catalog =
+        crate::daemon::ability::dispatch::AxonAbilityCatalog::new_metadata_only_with_authority_context(
+            authority_context,
+        );
+    crate::daemon::ability::builtins::resources::pages::register_management_ability_descriptors(
+        &mut catalog,
+        &parsed.realm,
+        user_id,
+    );
+
+    catalog
+        .authority_ability_catalog_snapshot()
+        .into_iter()
+        .filter(|row| row.descriptor.owner_ura.as_str() == owner_ura)
+        .map(|row| descriptor_catalog_entry_from_descriptor(row.descriptor))
+        .collect()
 }
 
 fn runtime_resolve_descriptor_ref_json(
@@ -766,6 +810,38 @@ mod tests {
             catalog["diagnostics"][0],
             "control discovery missing daemon_identity"
         );
+    }
+
+    #[test]
+    fn runtime_descriptor_resolver_resolves_pages_project_list_for_pages_agent() {
+        let local_device_ura = crate::core::ura::device_ura("localhost", "local-runtime-node");
+        let pages_agent_ura = crate::core::ura::agent_ura("localhost", "dev", "pages");
+        let ability_ura = "easynet:///r/localhost/ability/dev.pages.project_list";
+
+        let resolved = RuntimeDescriptorResolutionProvider::resolve_json(
+            &serde_json::json!({
+                "callee_ura": pages_agent_ura.as_str(),
+                "caller_ura": local_device_ura.as_str(),
+                "subject_ura": "easynet:///r/localhost/agent/dev.pages",
+                "ability": "project_list",
+                "call_mode": "rpc",
+            })
+            .to_string(),
+            || Ok(local_device_ura.clone()),
+        )
+        .expect("Pages project_list descriptor must resolve for the Pages Agent");
+
+        assert_eq!(resolved["ability_ura"], ability_ura);
+        assert_eq!(resolved["owner_ura"], pages_agent_ura);
+        assert_eq!(resolved["name"], "project_list");
+        assert_eq!(resolved["call_mode"], "rpc");
+        assert_eq!(resolved["source"], "runtime_remote_descriptor_catalog");
+        assert!(resolved["descriptor_ref"]
+            .as_str()
+            .is_some_and(
+                |descriptor_ref| descriptor_ref.starts_with(&format!("{ability_ura}@"))
+                    && descriptor_ref.ends_with("!read")
+            ));
     }
 
     #[test]

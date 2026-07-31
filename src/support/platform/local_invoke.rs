@@ -1164,6 +1164,10 @@ pub fn invoke_local_target_stream_explicit_causal(
 
 /// Open a canonical local Ability URA target as an InvokeBidi JSON-frame
 /// session and drain a bounded number of down frames.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "public facade preserves the complete explicit invocation tuple for API compatibility"
+)]
 pub fn invoke_local_target_bidi_json_frames_explicit_causal(
     target: &LocalAbilityTarget,
     args: Value,

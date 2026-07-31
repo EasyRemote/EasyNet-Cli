@@ -1099,6 +1099,85 @@ impl RuntimeErrorSummary {
     }
 }
 
+/// Active SDK-owned InvokeBidi session.
+///
+/// Invariants:
+/// 1. Frame 0 has already been sent before construction.
+/// 2. Public convenience send helpers fail closed until a frame-chain-aware
+///    sender can attach canonical N≥1 MACs.
+/// 3. Dropping the session closes the up-direction stream. It does
+///    not synthesize protocol EOF; callers that need graceful close
+///    must use a frame-chain-aware sender.
+#[cfg(feature = "axon-pb")]
+pub struct DaemonBidiSession {
+    ability: String,
+    up_tx: tokio::sync::mpsc::Sender<axon_sdk::pb::axon::v1::InvokeBidiUp>,
+    down: tonic::Streaming<axon_sdk::pb::axon::v1::InvokeBidiDown>,
+}
+
+#[cfg(feature = "axon-pb")]
+impl DaemonBidiSession {
+    /// Ability name this bidi session opened.
+    pub fn ability(&self) -> &str {
+        &self.ability
+    }
+
+    /// Split the session into its raw transport halves for crate
+    /// internal adapters that must drive read and write tasks
+    /// independently, such as the C ABI registry.
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        String,
+        tokio::sync::mpsc::Sender<axon_sdk::pb::axon::v1::InvokeBidiUp>,
+        tonic::Streaming<axon_sdk::pb::axon::v1::InvokeBidiDown>,
+    ) {
+        (self.ability, self.up_tx, self.down)
+    }
+
+    /// Read the next down-direction frame.
+    pub async fn next_down(&mut self) -> Result<Option<axon_sdk::pb::axon::v1::InvokeBidiDown>> {
+        self.down
+            .message()
+            .await
+            .map_err(|status| DaemonError::InvokeBidiStatus {
+                ability: self.ability.clone(),
+                code: status.code(),
+                message: status.message().to_string(),
+            })
+    }
+
+    /// Send a binary chunk on the up direction.
+    pub async fn send_binary_chunk(
+        &mut self,
+        _chunk: axon_sdk::pb::axon::v1::BinaryChunk,
+    ) -> Result<()> {
+        Err(DaemonError::InvalidInvocation(
+            "bidi binary send requires an explicit frame-chain MAC; use a frame-chain aware sender"
+                .to_string(),
+        ))
+    }
+
+    /// Send a control frame on the up direction.
+    pub async fn send_control(
+        &mut self,
+        _control: axon_sdk::pb::axon::v1::BidiControl,
+    ) -> Result<()> {
+        Err(DaemonError::InvalidInvocation(
+            "bidi control send requires an explicit frame-chain MAC; use a frame-chain aware sender"
+                .to_string(),
+        ))
+    }
+
+    /// Send a graceful EOF control frame.
+    pub async fn send_eof(&mut self) -> Result<()> {
+        Err(DaemonError::InvalidInvocation(
+            "bidi EOF send requires an explicit frame-chain MAC; use a frame-chain aware sender"
+                .to_string(),
+        ))
+    }
+}
+
 #[cfg(test)]
 mod invocation_outcome_tests {
     use std::collections::HashMap;
@@ -1221,84 +1300,5 @@ mod invocation_outcome_tests {
         assert!(error
             .to_string()
             .contains("partial receipt checkpoint chain"));
-    }
-}
-
-/// Active SDK-owned InvokeBidi session.
-///
-/// Invariants:
-/// 1. Frame 0 has already been sent before construction.
-/// 2. Public convenience send helpers fail closed until a frame-chain-aware
-///    sender can attach canonical N≥1 MACs.
-/// 3. Dropping the session closes the up-direction stream. It does
-///    not synthesize protocol EOF; callers that need graceful close
-///    must use a frame-chain-aware sender.
-#[cfg(feature = "axon-pb")]
-pub struct DaemonBidiSession {
-    ability: String,
-    up_tx: tokio::sync::mpsc::Sender<axon_sdk::pb::axon::v1::InvokeBidiUp>,
-    down: tonic::Streaming<axon_sdk::pb::axon::v1::InvokeBidiDown>,
-}
-
-#[cfg(feature = "axon-pb")]
-impl DaemonBidiSession {
-    /// Ability name this bidi session opened.
-    pub fn ability(&self) -> &str {
-        &self.ability
-    }
-
-    /// Split the session into its raw transport halves for crate
-    /// internal adapters that must drive read and write tasks
-    /// independently, such as the C ABI registry.
-    pub(crate) fn into_parts(
-        self,
-    ) -> (
-        String,
-        tokio::sync::mpsc::Sender<axon_sdk::pb::axon::v1::InvokeBidiUp>,
-        tonic::Streaming<axon_sdk::pb::axon::v1::InvokeBidiDown>,
-    ) {
-        (self.ability, self.up_tx, self.down)
-    }
-
-    /// Read the next down-direction frame.
-    pub async fn next_down(&mut self) -> Result<Option<axon_sdk::pb::axon::v1::InvokeBidiDown>> {
-        self.down
-            .message()
-            .await
-            .map_err(|status| DaemonError::InvokeBidiStatus {
-                ability: self.ability.clone(),
-                code: status.code(),
-                message: status.message().to_string(),
-            })
-    }
-
-    /// Send a binary chunk on the up direction.
-    pub async fn send_binary_chunk(
-        &mut self,
-        _chunk: axon_sdk::pb::axon::v1::BinaryChunk,
-    ) -> Result<()> {
-        Err(DaemonError::InvalidInvocation(
-            "bidi binary send requires an explicit frame-chain MAC; use a frame-chain aware sender"
-                .to_string(),
-        ))
-    }
-
-    /// Send a control frame on the up direction.
-    pub async fn send_control(
-        &mut self,
-        _control: axon_sdk::pb::axon::v1::BidiControl,
-    ) -> Result<()> {
-        Err(DaemonError::InvalidInvocation(
-            "bidi control send requires an explicit frame-chain MAC; use a frame-chain aware sender"
-                .to_string(),
-        ))
-    }
-
-    /// Send a graceful EOF control frame.
-    pub async fn send_eof(&mut self) -> Result<()> {
-        Err(DaemonError::InvalidInvocation(
-            "bidi EOF send requires an explicit frame-chain MAC; use a frame-chain aware sender"
-                .to_string(),
-        ))
     }
 }

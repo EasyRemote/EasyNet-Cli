@@ -22,7 +22,7 @@ pub(super) fn run_publish(args: PublishArgs) -> anyhow::Result<()> {
         .and_then(Value::as_array)
         .cloned()
         .ok_or_else(|| anyhow::anyhow!("meta.list_abilities returned no `abilities` array"))?;
-    abilities.sort_by(|left, right| descriptor_sort_key(left).cmp(&descriptor_sort_key(right)));
+    abilities.sort_by_key(descriptor_sort_key);
 
     eprintln!();
     eprintln!(

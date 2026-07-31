@@ -73,6 +73,7 @@ use crate::daemon::ability::manifest::{AbilityManifest, ManifestAccessScope};
 use crate::daemon::invocation::routing::target::{
     CallMode, InvocationTarget, PublicInvocationTargetIssuer,
 };
+use crate::daemon::persistence::agent_aggregate::AgentAggregateSnapshot;
 use crate::daemon::persistence::agent_registry::{AgentEntry, AgentRegistry};
 
 /// Verb portion of the per-agent discover ability. Combined with the
@@ -309,36 +310,55 @@ fn local_resolve_prefix(
 /// `agent_registry_provider` is invoked at handler-call time so that
 /// hot-added or hot-removed peer agents are reflected on the next
 /// discover call without re-registration.
-pub type AgentRegistryProvider = Arc<dyn Fn() -> anyhow::Result<AgentRegistry> + Send + Sync>;
+pub(crate) type AgentDirectoryProvider =
+    Arc<dyn Fn() -> anyhow::Result<AgentAggregateSnapshot> + Send + Sync>;
 
 /// Adapter for infallible in-memory fixtures and fallible durable providers.
 /// Production providers return `anyhow::Result`; the infallible implementation
 /// keeps deterministic unit fixtures concise without introducing a runtime
 /// fallback.
-pub trait IntoAgentRegistryLoadResult {
-    fn into_agent_registry_load_result(self) -> anyhow::Result<AgentRegistry>;
+pub(crate) trait IntoAgentDirectoryLoadResult {
+    fn into_agent_directory_load_result(self) -> anyhow::Result<AgentAggregateSnapshot>;
 }
 
-impl IntoAgentRegistryLoadResult for AgentRegistry {
-    fn into_agent_registry_load_result(self) -> anyhow::Result<AgentRegistry> {
+#[cfg(test)]
+impl IntoAgentDirectoryLoadResult for AgentRegistry {
+    fn into_agent_directory_load_result(self) -> anyhow::Result<AgentAggregateSnapshot> {
+        Ok(AgentAggregateSnapshot::new(
+            self,
+            crate::daemon::persistence::local_agents::load_for_fresh_host_projection()?,
+        ))
+    }
+}
+
+#[cfg(test)]
+impl IntoAgentDirectoryLoadResult for anyhow::Result<AgentRegistry> {
+    fn into_agent_directory_load_result(self) -> anyhow::Result<AgentAggregateSnapshot> {
+        self?.into_agent_directory_load_result()
+    }
+}
+
+impl IntoAgentDirectoryLoadResult for AgentAggregateSnapshot {
+    fn into_agent_directory_load_result(self) -> anyhow::Result<AgentAggregateSnapshot> {
         Ok(self)
     }
 }
 
-impl IntoAgentRegistryLoadResult for anyhow::Result<AgentRegistry> {
-    fn into_agent_registry_load_result(self) -> anyhow::Result<AgentRegistry> {
+impl IntoAgentDirectoryLoadResult for anyhow::Result<AgentAggregateSnapshot> {
+    fn into_agent_directory_load_result(self) -> anyhow::Result<AgentAggregateSnapshot> {
         self
     }
 }
 
-pub fn register_for_agent<F, R>(
+#[cfg(test)]
+pub(crate) fn register_for_agent<F, R>(
     reg: &mut AxonAbilityCatalog,
     agent_name: String,
     agent_registry_provider: F,
     dispatch_registry_handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
 ) where
     F: Fn() -> R + Send + Sync + 'static,
-    R: IntoAgentRegistryLoadResult,
+    R: IntoAgentDirectoryLoadResult,
 {
     register_for_agent_with_resolver(
         reg,
@@ -351,7 +371,8 @@ pub fn register_for_agent<F, R>(
 
 /// Same as [`register_for_agent`] with an explicit federation
 /// resolver dependency.
-pub fn register_for_agent_with_resolver<F, R>(
+#[cfg(test)]
+pub(crate) fn register_for_agent_with_resolver<F, R>(
     reg: &mut AxonAbilityCatalog,
     agent_name: String,
     agent_registry_provider: F,
@@ -359,11 +380,11 @@ pub fn register_for_agent_with_resolver<F, R>(
     federation_resolver: SharedDiscoverFederationResolver,
 ) where
     F: Fn() -> R + Send + Sync + 'static,
-    R: IntoAgentRegistryLoadResult,
+    R: IntoAgentDirectoryLoadResult,
 {
     use crate::daemon::ability::dispatch::OwnerKind;
-    let provider: AgentRegistryProvider =
-        Arc::new(move || agent_registry_provider().into_agent_registry_load_result());
+    let provider: AgentDirectoryProvider =
+        Arc::new(move || agent_registry_provider().into_agent_directory_load_result());
     let qualified = format!("{agent_name}.{ABILITY_VERB}");
     let agent = agent_name.clone();
     reg.register_rpc_with_spec_and_action(
@@ -390,18 +411,18 @@ pub fn register_for_agent_with_resolver<F, R>(
 /// fan-in has no self tier: `visibility = self` helpers stay hidden and the
 /// top-level CLI sees the device aggregate without choosing an arbitrary
 /// first agent as caller identity.
-pub fn register_device_aggregate_with_resolver<F, R>(
+pub(crate) fn register_device_aggregate_with_resolver<F, R>(
     reg: &mut AxonAbilityCatalog,
     agent_registry_provider: F,
     dispatch_registry_handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
     federation_resolver: SharedDiscoverFederationResolver,
 ) where
     F: Fn() -> R + Send + Sync + 'static,
-    R: IntoAgentRegistryLoadResult,
+    R: IntoAgentDirectoryLoadResult,
 {
     use crate::daemon::ability::dispatch::OwnerKind;
-    let provider: AgentRegistryProvider =
-        Arc::new(move || agent_registry_provider().into_agent_registry_load_result());
+    let provider: AgentDirectoryProvider =
+        Arc::new(move || agent_registry_provider().into_agent_directory_load_result());
     reg.register_rpc_with_spec_and_action(
         DEVICE_DISCOVER_ABILITY,
         OwnerKind::Device,
@@ -435,9 +456,9 @@ pub fn register_device_aggregate_with_resolver<F, R>(
 /// hot-added agent and materialise it in LocalRuntime without
 /// re-running this module's `register_for_agent` (which requires
 /// `&mut AxonAbilityCatalog`).
-pub fn dispatch(
+pub(crate) fn dispatch(
     self_agent: &str,
-    agent_registry_provider: &AgentRegistryProvider,
+    agent_registry_provider: &AgentDirectoryProvider,
     dispatch_registry_handle: &Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
     federation_resolver: &dyn DiscoverFederationResolver,
     args: Value,
@@ -490,34 +511,23 @@ pub fn dispatch(
         return resolve_via_federation(federation_resolver, scope, query.as_deref(), source_window);
     }
 
-    let agents = agent_registry_provider()
-        .map_err(|error| anyhow::anyhow!("discover: load agent registry: {error:#}"))?;
-    let local_agent_uras = match LocalAgentAbilityOwners::load() {
-        Ok(owners) => owners,
-        Err(error) => {
-            return Ok(error_envelope(
-                "local_agents_unavailable",
-                &format!("cannot read local agent identity projection: {error}"),
-                scope,
-                query.as_deref(),
-            ));
-        }
-    };
+    let directory = agent_registry_provider()
+        .map_err(|error| anyhow::anyhow!("discover: load Agent directory: {error:#}"))?;
     let mut rows: Vec<Candidate> = Vec::new();
-    for (peer_name, peer_entry) in agents.agents.iter() {
+    for (registry_key, peer_entry) in directory.registry.agents.iter() {
+        let peer_id = crate::core::agent::id::AgentId::parse(registry_key).map_err(|error| {
+            anyhow::anyhow!(
+                "discover: registered Agent key {registry_key:?} is not canonical: {error}"
+            )
+        })?;
         let manifests =
             crate::daemon::execution::mission::agent_ability_specs::manifests_for_shared(
-                peer_name, peer_entry,
+                registry_key,
+                peer_entry,
             );
         for m in manifests.iter() {
             push_candidate(
-                &mut rows,
-                &local_agent_uras,
-                self_agent,
-                peer_name,
-                peer_entry,
-                m,
-                scope,
+                &mut rows, &directory, self_agent, &peer_id, peer_entry, m, scope,
             );
         }
     }
@@ -562,20 +572,20 @@ pub fn dispatch(
 /// recursion-trigger.
 fn delegate_to_provider(
     provider_name: &str,
-    agent_registry_provider: &AgentRegistryProvider,
+    agent_registry_provider: &AgentDirectoryProvider,
     dispatch_registry_handle: &Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
     args: Value,
 ) -> anyhow::Result<Value> {
     DiscoverProviderName::parse(provider_name)?;
-    let agents = agent_registry_provider()
-        .map_err(|error| anyhow::anyhow!("discover: load agent registry: {error:#}"))?;
+    let directory = agent_registry_provider()
+        .map_err(|error| anyhow::anyhow!("discover: load Agent directory: {error:#}"))?;
     let registry = dispatch_registry_handle.get().ok_or_else(|| {
         anyhow::anyhow!(
             "internal_error: dispatch registry handle not yet set; \
              discover provider routing requires the daemon's live registry"
         )
     })?;
-    let provider = DiscoverProviderTarget::resolve(provider_name, &agents, registry)?;
+    let provider = DiscoverProviderTarget::resolve(provider_name, &directory.registry, registry)?;
     let provider_registry_name = provider.registry_name().to_string();
     let provider_target = provider.into_invocation_target(args)?;
     registry
@@ -1014,31 +1024,6 @@ struct Candidate {
     diagnostic: Option<String>,
 }
 
-#[derive(Debug, Clone)]
-struct LocalAgentAbilityOwners {
-    snapshot: crate::daemon::persistence::agent_aggregate::AgentHostedIdentitySnapshot,
-}
-
-impl LocalAgentAbilityOwners {
-    fn load() -> anyhow::Result<Self> {
-        Ok(Self {
-            snapshot:
-                crate::daemon::persistence::agent_aggregate::AgentAggregateRepository::load_hosted_identity_snapshot()?,
-        })
-    }
-
-    fn owner_ura_for(&self, agent_name: &str) -> Option<String> {
-        self.snapshot
-            .hosted_llm_agent_ura(agent_name)
-            .map(str::to_string)
-    }
-
-    fn ability_ura_for(&self, agent_name: &str, public_name: &str) -> Option<String> {
-        let owner_ura = self.owner_ura_for(agent_name)?;
-        crate::core::ura::owner_ability_ura(&owner_ura, public_name)
-    }
-}
-
 impl Candidate {
     fn is_callable(&self) -> bool {
         self.identity_state == "minted" && self.fulfilled_by != Some("unbound_manifest")
@@ -1103,13 +1088,14 @@ fn candidate_from_federated_summary(
 /// the ability's own `[access]` policy, then push a row.
 fn push_candidate(
     out: &mut Vec<Candidate>,
-    local_agent_uras: &LocalAgentAbilityOwners,
+    directory: &AgentAggregateSnapshot,
     self_agent: &str,
-    peer_name: &str,
+    peer_id: &crate::core::agent::id::AgentId,
     _peer_entry: &AgentEntry,
     manifest: &crate::daemon::ability::manifest::AbilityManifest,
     scope: Scope,
 ) {
+    let peer_name = peer_id.name.as_str();
     let access = manifest.access();
     let visibility = access.visibility;
 
@@ -1143,18 +1129,20 @@ fn push_candidate(
         return;
     }
 
-    let (qualified_name, identity_state, mut diagnostic) =
-        match local_agent_uras.ability_ura_for(peer_name, manifest.name()) {
-            Some(qualified_name) => (qualified_name, "minted", None),
-            None => (
-                String::new(),
-                "identity_not_minted",
-                Some(format!(
-                    "agent {peer_name:?} has no hosted URA in local-agents.json; \
+    let (qualified_name, identity_state, mut diagnostic) = match directory
+        .hosted_llm_agent_ura(peer_name)
+        .and_then(|owner_ura| crate::core::ura::owner_ability_ura(owner_ura, manifest.name()))
+    {
+        Some(qualified_name) => (qualified_name, "minted", None),
+        None => (
+            String::new(),
+            "identity_not_minted",
+            Some(format!(
+                "agent {peer_name:?} has no hosted URA in local-agents.json; \
                      ability exists on disk but is not invocable until identity minting completes"
-                )),
-            ),
-        };
+            )),
+        ),
+    };
     let fulfilled_by = classify_fulfilled_by(manifest);
     if fulfilled_by == Some("unbound_manifest") && diagnostic.is_none() {
         diagnostic = Some(format!(
@@ -1535,7 +1523,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("discover: load agent registry: corrupt agents.json"),
+                .contains("discover: load Agent directory: corrupt agents.json"),
             "{error:#}"
         );
     }

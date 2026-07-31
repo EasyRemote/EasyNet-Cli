@@ -970,7 +970,6 @@ fn build_registry_with_services_result_inner(
         &mut reg,
         || {
             crate::daemon::persistence::agent_aggregate::AgentAggregateRepository::load_snapshot()
-                .map(|snapshot| snapshot.registered_agent_registry_projection())
                 .map_err(|error| anyhow::anyhow!("load discover Agent aggregate: {error:#}"))
         },
         Arc::clone(&local_registry_handle),

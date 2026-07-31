@@ -232,31 +232,31 @@ pub(crate) fn parse_video_constraints(
     let empty = Map::new();
     let raw = raw.unwrap_or(&empty);
     validate_video_keys(raw)?;
-    let max_width = parse_video_u32(&raw, "max_width", 1920, 1, MAX_VIDEO_DIMENSION)?;
-    let max_height = parse_video_u32(&raw, "max_height", 1080, 1, MAX_VIDEO_DIMENSION)?;
+    let max_width = parse_video_u32(raw, "max_width", 1920, 1, MAX_VIDEO_DIMENSION)?;
+    let max_height = parse_video_u32(raw, "max_height", 1080, 1, MAX_VIDEO_DIMENSION)?;
     let max_fps = parse_video_u32(
-        &raw,
+        raw,
         "max_fps",
         DEFAULT_TARGET_FPS,
         MIN_ATTACH_FPS as u64,
         MAX_ATTACH_FPS as u64,
     )?;
     let max_bitrate_kbps = parse_video_u32(
-        &raw,
+        raw,
         "max_bitrate_kbps",
         DEFAULT_TARGET_BITRATE_KBPS,
         1,
         250_000,
     )?;
     let target_latency_ms = parse_video_u32(
-        &raw,
+        raw,
         "target_latency_ms",
         DEFAULT_GLASS_TO_GLASS_LATENCY_MS,
         1,
         1000,
     )?;
     let max_frame_queue_depth = parse_video_u32(
-        &raw,
+        raw,
         "max_frame_queue_depth",
         DEFAULT_FRAME_QUEUE_DEPTH,
         1,

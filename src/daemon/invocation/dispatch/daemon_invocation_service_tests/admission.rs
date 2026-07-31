@@ -244,9 +244,15 @@ async fn canonical_signature_and_runtime_admission_precede_handler_mutation_for_
         let policy_error = invoke_staged_wire(&service, geometry, external_wire(geometry, false))
             .await
             .expect_err("daemon runtime admission must reject unresolved owner authority");
+        assert_eq!(
+            policy_error.reason, "ABILITY_FORBIDDEN",
+            "{} policy rejection must preserve the canonical outer taxonomy",
+            geometry.ability
+        );
         assert!(
-            policy_error.reason.contains("POLICY_DENIED"),
-            "{} policy denial must come from the provider-backed admission seam: {policy_error}",
+            policy_error.message.contains("POLICY_DENIED")
+                && policy_error.message.contains("OWNER_UNRESOLVED"),
+            "{} policy detail must come from the provider-backed admission seam: {policy_error}",
             geometry.ability
         );
         assert_eq!(

@@ -51,9 +51,10 @@ use crate::daemon::persistence::agent_registry::AgentEntry;
 /// the durable registry shape. The runtime seam converts it into
 /// this enum exactly once so drivers never infer behavior from an
 /// empty-string sentinel.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum DriverCommand {
     /// Use the driver-owned canonical executable.
+    #[default]
     Default,
     /// Spawn the operator-provided executable.
     Explicit(String),
@@ -94,12 +95,6 @@ impl DriverCommand {
             Self::Default => None,
             Self::Explicit(command) => Some(command.as_str()),
         }
-    }
-}
-
-impl Default for DriverCommand {
-    fn default() -> Self {
-        Self::Default
     }
 }
 
@@ -265,6 +260,7 @@ pub(super) fn finalize_response(
         usage,
         run_dir: run_dir_path,
         tool_calls: Vec::new(),
+        timeline: Vec::new(),
         thread_id: None,
     }
 }

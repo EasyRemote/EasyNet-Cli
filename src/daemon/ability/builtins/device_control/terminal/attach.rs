@@ -445,7 +445,7 @@ fn terminal_attach_reject_unknown_frame_fields(
 ) -> anyhow::Result<()> {
     let mut unknown = frame
         .keys()
-        .filter(|key| !allowed_keys.iter().any(|allowed| *allowed == key.as_str()))
+        .filter(|key| !allowed_keys.contains(&key.as_str()))
         .map(String::as_str)
         .collect::<Vec<_>>();
     if !unknown.is_empty() {

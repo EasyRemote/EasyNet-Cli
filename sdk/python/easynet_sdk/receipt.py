@@ -388,8 +388,6 @@ class RuntimeReceiptProvider:
         except Exception as error:
             raise _invalid("invalid Axon invocation trace projection", error) from error
         return ReceiptTraceResult(source=_project_source(output), graph=graph)
-
-
 def _query_arguments(
     lookup: ReceiptLookup | None,
     receipt_filter: ReceiptFilter | None,

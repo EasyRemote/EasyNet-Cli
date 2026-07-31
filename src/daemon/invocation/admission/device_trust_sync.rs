@@ -15,11 +15,12 @@
 //! consults the network — the anchor is just kept warm.
 //!
 //! Hygiene: syncs are serialized (single-flight — a burst of frames
-//! from one unknown caller triggers one resolve), and a hub that does
-//! not know the caller is remembered briefly so repeated probes from
-//! an unregistered device cannot turn into a resolve storm. Every
-//! failure leaves the dispatch path to fail closed with the precise
-//! admission error.
+//! from one unknown caller triggers one resolve), and only an
+//! authoritative hub "no keys" answer is remembered briefly so
+//! repeated probes from an unregistered caller cannot turn into a
+//! resolve storm. Transport, schema, and local import failures are
+//! repairable state, not negative trust facts. Every failure leaves
+//! the dispatch path to fail closed with the precise admission error.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -41,9 +42,9 @@ pub struct DeviceTrustSync {
     daemon_realm: String,
     trust_anchor_path: PathBuf,
     cell: SharedTrustAnchor,
-    /// Single-flight + negative cache. Holding the lock across the
-    /// resolve serializes concurrent misses; entries record the last
-    /// failed resolve per caller URA.
+    /// Single-flight + authoritative negative cache. Holding the lock across
+    /// the resolve serializes concurrent misses; entries record only explicit
+    /// hub "no keys" answers per caller cache key.
     state: tokio::sync::Mutex<HashMap<String, Instant>>,
     /// Where hub-attested keys come from. Production uses the
     /// `session.open` escalation channel — the SAME authenticated
@@ -273,7 +274,6 @@ impl DeviceTrustSync {
                     caller_ura = caller_ura,
                     error = diagnostic,
                 );
-                state.insert(cache_key, Instant::now());
                 return DeviceTrustSyncStatus::ResolveFailed(diagnostic);
             }
         };
@@ -289,7 +289,6 @@ impl DeviceTrustSync {
             );
             DeviceTrustSyncStatus::Synced
         } else {
-            state.insert(cache_key, Instant::now());
             DeviceTrustSyncStatus::ImportDidNotTrust
         }
     }
@@ -335,7 +334,7 @@ impl DeviceTrustSync {
             } => anchor.lookup_user_by_pubkey(caller_ura, pk).is_some(),
             SyncableCaller::User {
                 presented_pubkey_b64: None,
-            } => false,
+            } => !anchor.lookup_user_all(caller_ura).is_empty(),
         }
     }
 
@@ -634,6 +633,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn resolve_failure_fails_closed_without_negative_cache() {
+        fn resolver(_ura: &str) -> anyhow::Result<Vec<String>> {
+            anyhow::bail!("temporary hub channel unavailable")
+        }
+        let dir = tempfile::tempdir().expect("tmp");
+        let sync = sync_with(resolver, &dir);
+        let ura = "easynet:///r/test-realm/device/transient";
+
+        let status = sync.ensure_caller_key_status(ura, None).await;
+
+        match status {
+            DeviceTrustSyncStatus::ResolveFailed(message) => {
+                assert!(
+                    message.contains("temporary hub channel unavailable"),
+                    "resolve diagnostic must preserve root error: {message}"
+                );
+            }
+            other => panic!("transient resolve failure must stay typed, got {other:?}"),
+        }
+        assert!(
+            !sync
+                .state
+                .lock()
+                .await
+                .contains_key(&format!("device:{ura}:*")),
+            "transient resolve failures must not activate negative cache"
+        );
+    }
+
+    #[tokio::test]
+    async fn import_rejection_fails_closed_without_negative_cache() {
+        fn resolver(_ura: &str) -> anyhow::Result<Vec<String>> {
+            Ok(vec!["not-base64".to_string()])
+        }
+        let dir = tempfile::tempdir().expect("tmp");
+        let sync = sync_with(resolver, &dir);
+        let ura = "easynet:///r/test-realm/device/bad-key";
+
+        let status = sync.ensure_caller_key_status(ura, None).await;
+
+        assert_eq!(status, DeviceTrustSyncStatus::ImportDidNotTrust);
+        assert!(
+            !sync
+                .state
+                .lock()
+                .await
+                .contains_key(&format!("device:{ura}:*")),
+            "corrupt/import-rejected authority data must not activate negative cache"
+        );
+    }
+
+    #[tokio::test]
     async fn same_realm_device_existing_different_key_syncs_presented_key() {
         fn resolver(_ura: &str) -> anyhow::Result<Vec<String>> {
             Ok(vec![B64.encode(
@@ -715,6 +766,33 @@ mod tests {
             .snapshot()
             .lookup_user_by_pubkey(user_ura, &presented)
             .is_some());
+    }
+
+    #[tokio::test]
+    async fn same_realm_user_without_presented_key_warms_all_hub_attested_keys() {
+        fn resolver(_ura: &str) -> anyhow::Result<Vec<String>> {
+            Ok(vec![B64.encode(
+                SigningKey::from_bytes(&[0x52; 32])
+                    .verifying_key()
+                    .to_bytes(),
+            )])
+        }
+        let dir = tempfile::tempdir().expect("tmp");
+        let sync = sync_with(resolver, &dir);
+        let user_ura = "easynet:///r/test-realm/user/alice";
+
+        let status = sync.ensure_caller_key_status(user_ura, None).await;
+
+        assert_eq!(status, DeviceTrustSyncStatus::Synced);
+        assert_eq!(sync.cell.snapshot().lookup_user_all(user_ura).len(), 1);
+        assert!(
+            !sync
+                .state
+                .lock()
+                .await
+                .contains_key(&format!("user:{user_ura}:*")),
+            "successful user warmup must not leave a negative cache row"
+        );
     }
 
     #[tokio::test]

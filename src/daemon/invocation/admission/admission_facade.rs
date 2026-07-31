@@ -74,7 +74,8 @@ use crate::daemon::invocation::admission::principal_lifecycle::{
     PrincipalAdmissionState, PrincipalLifecycleReader,
 };
 use crate::daemon::invocation::admission::register_device_pubkey::{
-    verify_user_register_pubkey_bootstrap_claim, ABILITY_IDENTITY_REGISTER_PUBKEY,
+    verify_user_register_pubkey_bootstrap_claim, RegisterPubkeyBootstrapTuple,
+    ABILITY_IDENTITY_REGISTER_PUBKEY,
 };
 use crate::daemon::invocation::admission::revoke_user_pubkey::ABILITY_IDENTITY_REVOKE_USER_PUBKEY;
 use crate::daemon::invocation::admission::usage_quota::{
@@ -452,6 +453,10 @@ impl DaemonRuntimeAdmissionCoordinator {
         )
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "staging consumes the complete canonical ingress tuple and does not permit defaulted security facts"
+    )]
     fn stage_canonical(
         self: &Arc<Self>,
         facade: &AdmissionFacade,
@@ -465,7 +470,7 @@ impl DaemonRuntimeAdmissionCoordinator {
         ingress: RuntimeAdmissionIngress,
     ) -> Result<DaemonRuntimeAdmissionLease, Status> {
         let envelope_key =
-            axon_sdk::invocation::sha256(&descriptor_bound_canonical_bytes(&descriptor_bound));
+            axon_sdk::invocation::sha256(&descriptor_bound_canonical_bytes(descriptor_bound));
         let envelope =
             runtime_admission_envelope(descriptor_bound.envelope(), caller_signature, request_id)?;
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
@@ -502,6 +507,10 @@ impl DaemonRuntimeAdmissionCoordinator {
         })
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "derived staging binds the complete signed child tuple and does not permit defaulted security facts"
+    )]
     fn stage_derived(
         self: &Arc<Self>,
         facade: &AdmissionFacade,
@@ -519,7 +528,7 @@ impl DaemonRuntimeAdmissionCoordinator {
                     "derived runtime admission signed envelope is not descriptor-bound: {error}"
                 ))
             })?;
-        if descriptor_bound_canonical_bytes(&descriptor_bound)
+        if descriptor_bound_canonical_bytes(descriptor_bound)
             != descriptor_bound_canonical_bytes(&signed_descriptor_bound)
         {
             return Err(Status::invalid_argument(
@@ -544,7 +553,7 @@ impl DaemonRuntimeAdmissionCoordinator {
         envelope: &DescriptorBoundEnvelope,
     ) -> Result<VerifiedAdmissionPolicy, InvocationError> {
         let envelope_key =
-            axon_sdk::invocation::sha256(&descriptor_bound_canonical_bytes(&envelope));
+            axon_sdk::invocation::sha256(&descriptor_bound_canonical_bytes(envelope));
         let selected = {
             let mut registry = self.registry.lock().map_err(|_| {
                 InvocationError::internal(
@@ -1008,7 +1017,7 @@ impl AdmissionFacade {
         .map_err(axon_error_to_status)
         .map_err(|status| self.signature_denied_status(&input.envelope, &input.ability, status))?;
         if descriptor_bound_canonical_bytes(&descriptor_bound.envelope)
-            != descriptor_bound_canonical_bytes(&admitted_envelope)
+            != descriptor_bound_canonical_bytes(admitted_envelope)
         {
             return Err(self.signature_denied_status(
                 &input.envelope,
@@ -1255,7 +1264,7 @@ impl AdmissionFacade {
     ) -> Result<VerifiedRuntimeAuthority, Status> {
         self.enforce_principal_lifecycle_admission(envelope, ability, trusted_role)
             .map_err(|status| self.authority_denied_status(envelope, ability, status))?;
-        if bootstrap_authority_ability(ability) {
+        if uses_bootstrap_authority(envelope, ability) {
             reject_unverified_runtime_authority_metadata(metadata, "bootstrap-authority admission")
                 .map_err(|status| self.authority_denied_status(envelope, ability, status))?;
             return VerifiedRuntimeAuthority::bootstrap(descriptor_bound.envelope.envelope(), None);
@@ -1701,6 +1710,10 @@ impl DaemonDerivedInvocationAdmission {
         }
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the admission seam preserves the complete signed child tuple at the provider boundary"
+    )]
     pub(crate) fn stage(
         &self,
         descriptor_bound: &DescriptorBoundEnvelope,
@@ -2160,17 +2173,9 @@ fn ability_ura_for_diagnostic(envelope: &Envelope, ability: &str) -> String {
         .unwrap_or_else(|_| ability.to_string())
 }
 
-/// **PR-N2 commit 1/N**. Parse the realm component from a canonical
-/// EasyNet URA (`easynet:///r/<realm>/...`). Returns the realm slice
-/// when the shape matches, `None` otherwise. Shared by
-/// `is_federated_caller` and the cross-realm gate.
-///
-/// Important: federated callers are not uniformly `.../agent/...`;
-/// peer hubs use Axon's canonical hub identity shape and device sessions
-/// register under `.../device/<id>`. Realm projection goes through the
-/// core URA facade so all canonical role tails stay accepted and retired
-/// aliases stay rejected.
-
+// Parse the realm component from a canonical EasyNet URA. Federated callers
+// are not uniformly agents: authorities, users, and devices are distinct
+// trusted roles, so classification must go through the canonical URA facade.
 fn federated_caller_role(caller_ura: &str) -> Option<TrustedAgentRole> {
     let parsed = parse_ura(caller_ura).ok()?;
     match parsed.kind {
@@ -2187,14 +2192,19 @@ fn federated_caller_role(caller_ura: &str) -> Option<TrustedAgentRole> {
 /// They still require the caller to pass strict admission above; this
 /// gate only keeps trust-anchor bootstrap out of normal user-delegation
 /// semantics so stale backend issuer keys cannot deadlock key repair.
-fn bootstrap_authority_ability(ability: &str) -> bool {
-    matches!(
-        ability,
-        ABILITY_IDENTITY_REGISTER_PUBKEY
-            | ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY
-            | ABILITY_IDENTITY_LIST_USER_PUBKEYS
-            | ABILITY_IDENTITY_REVOKE_USER_PUBKEY
-    )
+fn uses_bootstrap_authority(envelope: &Envelope, ability: &str) -> bool {
+    match ability {
+        // First-key User self-registration is the only register-pubkey tuple
+        // whose authority is proven by the presented bootstrap key itself.
+        // A trusted realm Authority registering a Device key is a normal
+        // caller-signed identity mutation and must verify its supplied
+        // authority metadata instead of being reclassified as bootstrap.
+        ABILITY_IDENTITY_REGISTER_PUBKEY => RegisterPubkeyBootstrapTuple::matches(envelope),
+        ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY
+        | ABILITY_IDENTITY_LIST_USER_PUBKEYS
+        | ABILITY_IDENTITY_REVOKE_USER_PUBKEY => true,
+        _ => false,
+    }
 }
 
 fn public_ability_name_from_route_for_owner(owner_ura: &str, ability: &str) -> String {
@@ -3609,6 +3619,36 @@ mod tests {
                 Some("easynet:///r/test/device/daemon"),
                 crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
             )
+        );
+    }
+
+    #[test]
+    fn register_pubkey_bootstrap_authority_is_selected_only_for_user_self_registration() {
+        let authority = crate::core::ura::hub_ura("test");
+        let ability_subject =
+            crate::core::ura::owner_ability_ura(&authority, ABILITY_IDENTITY_REGISTER_PUBKEY)
+                .expect("identity register ability subject");
+        let user = crate::core::ura::user_ura("test", "alice");
+        let user_bootstrap =
+            authority_wire_envelope(Some(&user), Some(&authority), Some(&ability_subject));
+        assert!(uses_bootstrap_authority(
+            &user_bootstrap,
+            ABILITY_IDENTITY_REGISTER_PUBKEY
+        ));
+
+        let authority_device_registration = authority_wire_envelope(
+            Some(&authority),
+            Some(&authority),
+            Some(&format!(
+                "easynet:///r/test/resource/user.alice/invoke/{ABILITY_IDENTITY_REGISTER_PUBKEY}"
+            )),
+        );
+        assert!(
+            !uses_bootstrap_authority(
+                &authority_device_registration,
+                ABILITY_IDENTITY_REGISTER_PUBKEY
+            ),
+            "realm-authority device registration must verify normal caller-signed authority metadata"
         );
     }
 

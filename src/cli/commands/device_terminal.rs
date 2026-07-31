@@ -55,6 +55,10 @@ use crate::support::platform::local_invoke::{
 
 const AUTHORITY_LEASE_MILLIS: i64 = 5 * 60 * 1_000;
 const AUTHORITY_RENEWAL_MARGIN_MILLIS: i64 = 30 * 1_000;
+
+fn authority_renewal_deadline(expires_at_ms: i64) -> i64 {
+    expires_at_ms.saturating_sub(AUTHORITY_RENEWAL_MARGIN_MILLIS)
+}
 const TERMINAL_INVOKE_TIMEOUT: Duration = Duration::from_secs(30);
 const TERMINAL_READ_TIMEOUT_SECONDS: f64 = 0.10;
 const TERMINAL_INPUT_BATCH_BYTES: usize = 16 * 1024;
@@ -325,10 +329,7 @@ impl TerminalSession {
     }
 
     fn ensure_authority(&mut self) -> anyhow::Result<()> {
-        let renewal_at = self
-            .authority
-            .expires_at_ms
-            .saturating_sub(AUTHORITY_RENEWAL_MARGIN_MILLIS);
+        let renewal_at = authority_renewal_deadline(self.authority.expires_at_ms);
         if unix_epoch_millis()? < renewal_at {
             return Ok(());
         }
@@ -360,7 +361,7 @@ impl TerminalSession {
         let mut stdout = io::stdout().lock();
         loop {
             let response = self.invoke(
-                RemoteDeviceSessionAbility::TerminalRead,
+                RemoteDeviceSessionAbility::Read,
                 json!({
                     "session_id": self.session_id,
                     "timeout": TERMINAL_READ_TIMEOUT_SECONDS,
@@ -393,7 +394,7 @@ impl TerminalSession {
                     Event::Resize(cols, rows) => {
                         self.flush_input(&mut pending_input)?;
                         self.invoke(
-                            RemoteDeviceSessionAbility::TerminalResize,
+                            RemoteDeviceSessionAbility::Resize,
                             json!({
                                 "session_id": self.session_id,
                                 "cols": cols.max(1),
@@ -432,7 +433,7 @@ impl TerminalSession {
         }
         let bytes = std::mem::take(pending);
         self.invoke(
-            RemoteDeviceSessionAbility::TerminalInput,
+            RemoteDeviceSessionAbility::Input,
             json!({
                 "session_id": self.session_id,
                 "data": BASE64_STANDARD.encode(bytes),
@@ -446,7 +447,7 @@ impl TerminalSession {
             return Ok(());
         }
         let response = self.invoke(
-            RemoteDeviceSessionAbility::TerminalClose,
+            RemoteDeviceSessionAbility::Close,
             json!({"session_id": self.session_id}),
         )?;
         self.closed = true;
@@ -538,8 +539,11 @@ mod tests {
 
     #[test]
     fn authority_lease_is_short_lived_and_renewed_before_expiry() {
-        assert!(AUTHORITY_LEASE_MILLIS > AUTHORITY_RENEWAL_MARGIN_MILLIS);
-        assert!(AUTHORITY_RENEWAL_MARGIN_MILLIS >= 1_000);
+        let issued_at_ms = unix_epoch_millis().expect("clock");
+        let expires_at_ms = issued_at_ms + AUTHORITY_LEASE_MILLIS;
+        let renewal_at_ms = authority_renewal_deadline(expires_at_ms);
+        assert!(renewal_at_ms > issued_at_ms);
+        assert!(renewal_at_ms < expires_at_ms);
     }
 
     #[test]

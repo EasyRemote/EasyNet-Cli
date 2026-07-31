@@ -70,7 +70,8 @@ class RuntimeCABILibrary:
                     ) from exc
                 errors.append(f"{candidate}: {exc}")
         raise _transport_error(
-            "no usable libeasynet_cli C ABI v7 library found: " + "; ".join(errors)
+            f"no usable libeasynet_cli C ABI v{EXPECTED_ABI_VERSION} library found: "
+            + "; ".join(errors)
         )
 
     def require_abi(self, expected: int = EXPECTED_ABI_VERSION) -> None:

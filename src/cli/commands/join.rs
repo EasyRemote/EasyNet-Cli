@@ -170,10 +170,32 @@ pub enum JoinBoot {
     No,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ProfileJoinOptions {
+    pub boot: JoinBoot,
+    pub allow_replace_existing: bool,
+}
+
+impl ProfileJoinOptions {
+    pub(crate) fn quickstart_login(boot: JoinBoot) -> Self {
+        Self {
+            boot,
+            allow_replace_existing: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum CurrentProfileMembership {
+    AlreadyJoined(config::Credentials),
+    JoinedNow(config::Credentials),
+    BlockedByDifferentDevice(config::Credentials),
+}
+
 enum ResolvedJoinTarget {
     Direct(String),
     Profile {
-        profile: profile::ProfileEntry,
+        profile: Box<profile::ProfileEntry>,
         token: Option<String>,
         login_recovery: bool,
     },
@@ -211,10 +233,12 @@ fn resolve_join_target(args: &JoinArgs) -> anyhow::Result<ResolvedJoinTarget> {
             password: args.password.clone(),
             register_if_missing: args.register_if_missing,
             nickname: args.nickname.clone(),
+            no_join: true,
+            no_start: true,
         })?;
         login::render_login_outcome(&outcome);
         return Ok(ResolvedJoinTarget::Profile {
-            profile: outcome.profile,
+            profile: Box::new(outcome.profile),
             token: None,
             login_recovery: true,
         });
@@ -226,7 +250,7 @@ fn resolve_join_target(args: &JoinArgs) -> anyhow::Result<ResolvedJoinTarget> {
 
     let profile = profile::selected_profile(args.profile.as_deref())?;
     Ok(ResolvedJoinTarget::Profile {
-        profile,
+        profile: Box::new(profile),
         token: None,
         login_recovery: false,
     })
@@ -273,6 +297,63 @@ pub fn run(args: JoinArgs) -> anyhow::Result<()> {
             err
         }
     })
+}
+
+pub(crate) fn reconcile_current_profile_membership(
+    profile: profile::ProfileEntry,
+    options: ProfileJoinOptions,
+) -> anyhow::Result<CurrentProfileMembership> {
+    let existing = config::load_credentials_optional()
+        .context("load current device credentials before login onboarding")?;
+    let was_already_joined = existing
+        .as_ref()
+        .is_some_and(|credentials| existing_credentials_match_profile(credentials, &profile));
+
+    if let Some(credentials) = existing.as_ref() {
+        if !was_already_joined && !options.allow_replace_existing {
+            return Ok(CurrentProfileMembership::BlockedByDifferentDevice(
+                credentials.clone(),
+            ));
+        }
+    }
+
+    let args = JoinArgs {
+        target: None,
+        profile: Some(profile.profile_name.clone()),
+        user: None,
+        realm: None,
+        hub: profile.issuer.clone(),
+        hub_api: None,
+        password: None,
+        register_if_missing: false,
+        nickname: None,
+        peer_hub: None,
+        hub_ca: None,
+        hub_port: None,
+        principal_ura: None,
+        principal_enrollment_id: None,
+        principal_proof_kind: None,
+        principal_proof_ref: None,
+        yes: options.allow_replace_existing,
+        boot: options.boot,
+    };
+
+    run_resolved(
+        args,
+        ResolvedJoinTarget::Profile {
+            profile: Box::new(profile),
+            token: None,
+            login_recovery: false,
+        },
+    )?;
+
+    let credentials =
+        config::load_credentials().context("load current device credentials after onboarding")?;
+    if was_already_joined {
+        Ok(CurrentProfileMembership::AlreadyJoined(credentials))
+    } else {
+        Ok(CurrentProfileMembership::JoinedNow(credentials))
+    }
 }
 
 fn run_resolved(args: JoinArgs, target: ResolvedJoinTarget) -> anyhow::Result<()> {
@@ -2279,6 +2360,41 @@ mod tests {
             &existing,
             &admin_profile
         ));
+    }
+
+    #[test]
+    fn login_onboarding_never_overwrites_a_different_device_membership() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let existing = join_identity_test_credentials(Some("usr_existing"), None);
+        config::save_credentials(&existing).expect("save existing device credentials");
+        let profile = profile::ProfileEntry {
+            profile_name: "next@acme".to_string(),
+            realm_alias: "acme".to_string(),
+            realm_id: None,
+            issuer: "https://hub.acme.internal".to_string(),
+            login_hint: Some("next".to_string()),
+            subject: Some("usr_next".to_string()),
+            credential_ref: None,
+            trust_anchor: None,
+            account_session: profile::ProfileAccountSessionState::Authenticated,
+            device_membership: "none".to_string(),
+        };
+
+        let outcome = reconcile_current_profile_membership(
+            profile,
+            ProfileJoinOptions::quickstart_login(JoinBoot::No),
+        )
+        .expect("mismatched membership is a typed non-mutating outcome");
+
+        let CurrentProfileMembership::BlockedByDifferentDevice(blocking) = outcome else {
+            panic!("login onboarding must not replace another membership without consent");
+        };
+        assert_eq!(blocking.node_id, existing.node_id);
+        assert_eq!(
+            config::load_credentials().unwrap().user_id,
+            existing.user_id,
+            "the existing device membership remains authoritative"
+        );
     }
 
     #[test]

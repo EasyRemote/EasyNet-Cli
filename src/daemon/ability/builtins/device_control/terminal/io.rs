@@ -679,7 +679,7 @@ fn terminal_io_args_object<'a>(
         .ok_or_else(|| anyhow::anyhow!("{ability}: args must be an object"))?;
     let mut unknown = object
         .keys()
-        .filter(|key| !allowed_keys.iter().any(|allowed| *allowed == key.as_str()))
+        .filter(|key| !allowed_keys.contains(&key.as_str()))
         .map(String::as_str)
         .collect::<Vec<_>>();
     if !unknown.is_empty() {

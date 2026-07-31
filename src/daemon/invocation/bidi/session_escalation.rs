@@ -313,11 +313,7 @@ impl SessionEscalationHandle {
                 accepted: accepted_tx,
             },
         };
-        if let Err(error) =
-            submit_escalation_request(&self.submit, request, DEFAULT_ESCALATION_TIMEOUT).await
-        {
-            return Err(error);
-        }
+        submit_escalation_request(&self.submit, request, DEFAULT_ESCALATION_TIMEOUT).await?;
         match tokio::time::timeout(DEFAULT_ESCALATION_TIMEOUT, accepted_rx).await {
             Ok(Ok(Ok(()))) => Ok(EscalatedStreamHandle {
                 call_id,
@@ -364,11 +360,7 @@ impl SessionEscalationHandle {
                 accepted: accepted_tx,
             },
         };
-        if let Err(error) =
-            submit_escalation_request(&self.submit, request, DEFAULT_ESCALATION_TIMEOUT).await
-        {
-            return Err(error);
-        }
+        submit_escalation_request(&self.submit, request, DEFAULT_ESCALATION_TIMEOUT).await?;
         match tokio::time::timeout(DEFAULT_ESCALATION_TIMEOUT, accepted_rx).await {
             Ok(Ok(Ok(()))) => Ok(EscalatedBidiHandle {
                 call_id,

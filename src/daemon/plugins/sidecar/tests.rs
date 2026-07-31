@@ -323,10 +323,7 @@ fn sidecar_stderr_capture_reports_reader_failure() {
     impl Read for FailingReader {
         fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
             if self.emitted {
-                return Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    "synthetic stderr failure",
-                ));
+                return Err(io::Error::other("synthetic stderr failure"));
             }
             self.emitted = true;
             let bytes = b"partial diagnostic";

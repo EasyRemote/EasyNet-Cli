@@ -15313,7 +15313,7 @@
           "identity": "cabi_runtime_provider",
           "owner_path": "sdk/python/easynet_sdk/",
           "path": "sdk/python/easynet_sdk/_cabi.py",
-          "sha256": "5bba4f0df6691a70550448f27532e202dc22c67ccad4d30eac99f6b6cdfd828c",
+          "sha256": "c086e881821048681cb82b0a95b001f79116a5c780c31325c6b5e6f5d0ab0a67",
           "interface": "CABIRuntimeTransport",
           "revision": "ef624531827f3f0e96657d2f2fc0040775913de3"
         },
@@ -15690,7 +15690,7 @@
           "identity": "cabi_runtime_provider",
           "owner_path": "sdk/python/easynet_sdk/",
           "path": "sdk/python/easynet_sdk/_cabi.py",
-          "sha256": "5bba4f0df6691a70550448f27532e202dc22c67ccad4d30eac99f6b6cdfd828c",
+          "sha256": "c086e881821048681cb82b0a95b001f79116a5c780c31325c6b5e6f5d0ab0a67",
           "interface": "CABIRuntimeTransport",
           "revision": "ef624531827f3f0e96657d2f2fc0040775913de3"
         },
@@ -23386,7 +23386,7 @@
       "sha256": "80e84c90a6d4a27b64d282e55400423de51c7aef2b39f8d5737c4d1c4fc56b6a",
       "interface": "RuntimeConnector",
       "interface_path": "sdk/python/easynet_sdk/connection.py",
-      "interface_sha256": "ed36f14f7805acbf3eaa5d01a4bd08e41971c0985cfbf6e718fa207a4e6b1e45",
+      "interface_sha256": "e6dcc9913700b63d533098eded9ce599e6b304d63867bb6e72176353e76c9614",
       "capability_ids": [
         "native_runtime",
         "runtime_environment",
@@ -23419,10 +23419,10 @@
       "production_owner": "canonical runtime provider",
       "owner_path": "sdk/python/easynet_sdk/",
       "path": "sdk/python/easynet_sdk/_cabi.py",
-      "sha256": "5bba4f0df6691a70550448f27532e202dc22c67ccad4d30eac99f6b6cdfd828c",
+      "sha256": "c086e881821048681cb82b0a95b001f79116a5c780c31325c6b5e6f5d0ab0a67",
       "interface": "CABIRuntimeTransport",
       "interface_path": "sdk/python/easynet_sdk/_cabi.py",
-      "interface_sha256": "5bba4f0df6691a70550448f27532e202dc22c67ccad4d30eac99f6b6cdfd828c",
+      "interface_sha256": "c086e881821048681cb82b0a95b001f79116a5c780c31325c6b5e6f5d0ab0a67",
       "capability_ids": [
         "stream",
         "bidi"

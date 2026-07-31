@@ -20,7 +20,6 @@ cp "$SCRIPT" "$SB/tools/scripts/check-mcp-cost-metadata-projection-boundary.sh"
 cat >"$SB/src/daemon/ability/catalog/profiles/mcp.rs" <<'RS'
 enum CostMetadataProjection {
     Declared { kind: String, label: String },
-    UndeclaredKnownLlm,
     Undeclared,
 }
 
@@ -32,7 +31,6 @@ impl CostMetadataProjection {
     fn kind(&self) -> &str {
         match self {
             Self::Declared { kind, .. } => kind.as_str(),
-            Self::UndeclaredKnownLlm => "llm_metered",
             Self::Undeclared => "unknown",
         }
     }
@@ -40,7 +38,6 @@ impl CostMetadataProjection {
     fn label(&self) -> &str {
         match self {
             Self::Declared { label, .. } => label.as_str(),
-            Self::UndeclaredKnownLlm => "LLM token billing may apply",
             Self::Undeclared => "cost not declared",
         }
     }
@@ -48,10 +45,9 @@ impl CostMetadataProjection {
 
 fn tool_spec_from_descriptor_with_name(descriptor: &AbilityDescriptor) {
     let cost = CostMetadataProjection::from_descriptor(descriptor);
-    let _ = json!({
-        "cost_kind": cost.kind(),
-        "cost_label": cost.label(),
-    });
+    let mut extension = serde_json::Map::new();
+    extension.insert("cost_kind".to_string(), cost.kind().into());
+    extension.insert("cost_label".to_string(), cost.label().into());
 }
 RS
 
@@ -66,4 +62,3 @@ RS
 if ( cd "$SB" && bash tools/scripts/check-mcp-cost-metadata-projection-boundary.sh ) >/dev/null 2>&1; then
   fail "self-test expected inferred cost helper to fail"
 fi
-

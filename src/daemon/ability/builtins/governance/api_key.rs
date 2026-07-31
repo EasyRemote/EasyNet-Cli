@@ -290,7 +290,7 @@ pub fn write_local_default_token(token: &str) -> anyhow::Result<()> {
     let dir = path
         .parent()
         .ok_or_else(|| anyhow::anyhow!("local API key cache path has no parent"))?;
-    fs::create_dir_all(&dir)?;
+    fs::create_dir_all(dir)?;
     let text = format!("default_token = \"{token}\"\n");
     fs::write(&path, text)?;
     // tighten perms — best effort

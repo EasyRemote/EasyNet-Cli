@@ -64,7 +64,7 @@ async fn exact_bidi_route_registration_rejects_device_owner() {
 
 fn forwarded_binary_chunk(frame: LocalBidiHandlerFrame) -> BinaryChunk {
     match frame {
-        LocalBidiHandlerFrame::Forward(frame) => match (*frame).payload {
+        LocalBidiHandlerFrame::Forward(frame) => match frame.payload {
             Some(DownPayload::BinaryChunk(chunk)) => chunk,
             other => panic!("expected forwarded BinaryChunk, got {other:?}"),
         },

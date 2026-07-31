@@ -1900,7 +1900,7 @@ mod tests {
             2,
         ));
         for idx in 0..70 {
-            let owner = format!("easynet:///r/acme/device/owner-{idx:02}");
+            let owner = crate::core::ura::device_ura("acme", &format!("owner-{idx:02}"));
             file.upsert(cursor(&owner, &owner, 1));
         }
 

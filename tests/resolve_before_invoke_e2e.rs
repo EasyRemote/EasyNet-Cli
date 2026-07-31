@@ -54,7 +54,9 @@ use easynet_cli::daemon::identity::self_identity::{SelfIdentity, SelfIdentityErr
 use easynet_cli::daemon::invocation::admission::admission_facade::{
     AdmissionFacade, AdmissionTransportBoundary,
 };
-use easynet_cli::daemon::invocation::bidi::state::presence::{PresenceRegistry, SessionContract};
+use easynet_cli::daemon::invocation::bidi::state::presence::{
+    PresenceRegistry, SessionContract, CANONICAL_SESSION_CARRIER_VERSION,
+};
 use easynet_cli::daemon::invocation::dispatch::daemon_invocation_service::DaemonInvocationService;
 use easynet_cli::daemon::invocation::dispatch::invocation_wire::{
     InvocationDerivationPolicy, ProtoEnvelope,
@@ -268,10 +270,7 @@ fn mark_owner_online(presence: &PresenceRegistry) {
         .insert_negotiated(
             DEVICE_URA.to_string(),
             tx,
-            SessionContract {
-                version: 1,
-                claimant_boot_nonce: vec![0xA1; 16],
-            },
+            SessionContract::new(CANONICAL_SESSION_CARRIER_VERSION, vec![0xA1; 16]),
         )
         .expect("canonical presence key");
 }
@@ -523,8 +522,8 @@ async fn invoke_surfaces_typed_nxdomain_when_owner_offline() {
 
     assert_eq!(
         status.code(),
-        tonic::Code::NotFound,
-        "offline owner must surface NXDOMAIN as NOT_FOUND, got: {status}"
+        tonic::Code::Unavailable,
+        "offline owner is a route availability failure, not ability absence: {status}"
     );
     assert!(
         status.message().contains("ROUTE_NEGATIVE")

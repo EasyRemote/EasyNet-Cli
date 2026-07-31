@@ -1285,11 +1285,9 @@ pub enum OwnerKind {
     Device,
     /// Hosted by the realm Authority plane.
     ///
-    /// Product packages may still use product-prefixed ability names such as
-    /// `hub.openai.chat_completions`, but the canonical owner root is the
-    /// realm Authority URA. The control-plane projection string is
-    /// `"authority"`; product Hub vocabulary must not enter this runtime owner
-    /// state.
+    /// Ability names remain owner-local; the realm Authority URA carries the
+    /// ownership fact, so a duplicated `hub.*` prefix is invalid. The
+    /// control-plane projection string is `"authority"`.
     RealmAuthority,
     /// Hosted by a sub-agent on this device. The contained string is
     /// the sub-agent's `agent_id` (e.g. `"codex"`, `"web-builder"`,
@@ -7918,7 +7916,7 @@ mod tests {
         register_test_rpc(&mut reg, "fs.read", OwnerKind::Device, ok_handler());
         register_test_rpc(
             &mut reg,
-            "hub.openai.list_models",
+            "federation.discover",
             OwnerKind::RealmAuthority,
             ok_handler(),
         );
@@ -7937,7 +7935,7 @@ mod tests {
 
         for (ability, expected) in [
             ("fs.read", OwnerKind::Device),
-            ("hub.openai.list_models", OwnerKind::RealmAuthority),
+            ("federation.discover", OwnerKind::RealmAuthority),
             ("codex.weather", OwnerKind::Agent("codex".to_string())),
             ("codex.chat", OwnerKind::Agent("codex".to_string())),
         ] {
@@ -8349,7 +8347,7 @@ mod tests {
         register_test_rpc(&mut reg, "fs.read", OwnerKind::Device, ok_handler());
         register_test_rpc(
             &mut reg,
-            "hub.openai.chat_completions",
+            "federation.resolve_key",
             OwnerKind::RealmAuthority,
             ok_handler(),
         );
@@ -8368,7 +8366,7 @@ mod tests {
 
         assert_eq!(reg.control_plane_owner("fs.read"), Some(OwnerKind::Device));
         assert_eq!(
-            reg.control_plane_owner("hub.openai.chat_completions"),
+            reg.control_plane_owner("federation.resolve_key"),
             Some(OwnerKind::RealmAuthority)
         );
         assert_eq!(
@@ -8512,20 +8510,20 @@ mod tests {
         let mut reg = combined_catalog();
         register_test_rpc(
             &mut reg,
-            "hub.openai.chat_completions",
+            "federation.discover",
             OwnerKind::RealmAuthority,
             Arc::new(|_args: Value| Ok(json!({}))),
         );
-        // Canonical lookup returns Hub.
+        // Canonical owner-local lookup returns the realm Authority.
         assert_eq!(
-            reg.control_plane_owner("hub.openai.chat_completions"),
+            reg.control_plane_owner("federation.discover"),
             Some(OwnerKind::RealmAuthority)
         );
-        // Post-M3 legacy lookup returns None (alias retired).
+        // A duplicated Hub alias is not registered.
         assert_eq!(
-            reg.control_plane_owner("01HUB.openai.chat_completions"),
+            reg.control_plane_owner("hub.federation.discover"),
             None,
-            "post-M3 legacy name must not be in the owner table"
+            "retired Hub aliases must not be in the owner table"
         );
     }
 

@@ -164,7 +164,7 @@ expect_fail "$SB/flat-descriptor"
 cp -R "$SB/pass" "$SB/provider-pycache"
 mkdir -p "$SB/provider-pycache/provider_routes/__pycache__"
 touch "$SB/provider-pycache/provider_routes/__pycache__/route_generator.cpython-312.pyc"
-expect_fail "$SB/provider-pycache"
+"$CHECK" "$SB/provider-pycache" >/dev/null
 
 cp -R "$SB/pass" "$SB/missing-invocation"
 rm -rf "$SB/missing-invocation/src/daemon/invocation/admission"

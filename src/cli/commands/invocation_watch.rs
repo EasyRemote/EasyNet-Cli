@@ -516,13 +516,25 @@ impl FollowEngine {
     }
 }
 
-/// `{trace_id, nodes}` subset of the `invocation.trace.get` response.
+/// Exact `invocation.trace.get` response contract.
+///
+/// Watch currently projects state from the canonical Axon records. It still
+/// decodes the source and edge fields so daemon/CLI schema drift fails closed
+/// instead of being silently ignored.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct TraceSnapshot {
+    #[serde(rename = "ledger_ura")]
+    _ledger_ura: String,
+    #[serde(rename = "ledger_path")]
+    _ledger_path: String,
     trace_id: String,
     #[serde(default)]
     nodes: Vec<Record>,
+    #[serde(default, rename = "edges")]
+    _edges: Vec<axon_sdk::invocation::InvocationTraceEdge>,
+    #[serde(rename = "edge_semantics")]
+    _edge_semantics: String,
 }
 
 /// What one watch entry resolves to: a trace id and the records of

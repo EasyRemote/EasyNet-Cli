@@ -498,7 +498,7 @@ fn every_published_ability_resolves_to_a_handler() {
     let reg = build_registry();
     let daemon_invocation_surface: std::collections::BTreeSet<&'static str> =
         crate::daemon::ability::conformance::HubBaseline::required_abilities()
-            .into_iter()
+            .iter()
             .filter(|ability| {
                 ability.surface
                     == crate::daemon::ability::conformance::BaselineSurface::DaemonInvocation
