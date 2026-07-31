@@ -19,6 +19,7 @@ receipt_semantics = "operational"
 type = "object"
 required = ["observer_ura"]
 additionalProperties = false
+oneOf = [{ required = ["invocation_id"] }, { required = ["request_id"] }, { required = ["trace_id"] }, { required = ["root_id"] }]
 
 [input_schema.properties.invocation_id]
 type = "string"

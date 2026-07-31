@@ -1152,6 +1152,12 @@ pub fn input_schema_for(name: &str) -> Value {
         ADMISSION_EXPLAIN => json!({
             "type": "object",
             "required": ["observer_ura"],
+            "oneOf": [
+                {"required": ["invocation_id"]},
+                {"required": ["request_id"]},
+                {"required": ["trace_id"]},
+                {"required": ["root_id"]}
+            ],
             "properties": {
                 "observer_ura": {"type": "string"},
                 "invocation_id": {"type": "string"},
@@ -1240,6 +1246,24 @@ mod tests {
         ] {
             assert!(reg.get_rpc(ability).is_some(), "{ability} missing");
         }
+    }
+
+    #[test]
+    fn registration_publishes_admission_explain_selector_contract() {
+        let mut reg = AxonAbilityCatalog::new_test_metadata_for_device_authority(
+            "easynet:///r/test/device/access-control",
+        );
+        register(&mut reg);
+
+        let record = reg
+            .control_plane_record_for_mode(ADMISSION_EXPLAIN, crate::daemon::ability::CallMode::Rpc)
+            .expect("control-plane lookup")
+            .expect("admission explain control-plane record");
+        let selector_contract = record.descriptor().input_schema()["oneOf"]
+            .as_array()
+            .expect("descriptor must publish exact-one selector contract");
+
+        assert_eq!(selector_contract.len(), 4);
     }
 
     #[test]
@@ -1356,6 +1380,30 @@ mod tests {
         let schema = input_schema_for(AUTHORITY_BINDING_CHECK);
         let required = schema["required"].as_array().expect("required array");
         assert!(required.iter().any(|item| item == "owner_source"));
+    }
+
+    #[test]
+    fn admission_explain_schema_requires_exactly_one_ledger_selector() {
+        let schema = input_schema_for(ADMISSION_EXPLAIN);
+        let required = schema["required"].as_array().expect("required array");
+        assert!(required.iter().any(|item| item == "observer_ura"));
+
+        let selectors = schema["oneOf"].as_array().expect("oneOf selector array");
+        let selector_fields = selectors
+            .iter()
+            .map(|branch| {
+                branch["required"]
+                    .as_array()
+                    .and_then(|required| required.first())
+                    .and_then(|field| field.as_str())
+                    .expect("selector branch must require one field")
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            selector_fields,
+            vec!["invocation_id", "request_id", "trace_id", "root_id"]
+        );
     }
 
     #[test]
