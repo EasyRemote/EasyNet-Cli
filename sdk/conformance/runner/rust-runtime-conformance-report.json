@@ -41,7 +41,7 @@
         {
           "kind": "rust_test",
           "ref_path": "src/daemon/invocation/dispatch/daemon_invocation_service_tests/unary.rs",
-          "sha256": "1c32f6272472d3f8274a95007983573d4a9ea418a7435f831b6865daed4e67ce"
+          "sha256": "fff9a2821d042889572cf5d68acc5e5f07e8e25b413f0217b3c3487d305e7f18"
         }
       ],
       "profile": "runtime_core"
