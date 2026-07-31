@@ -143943,6 +143943,10 @@
           "sha256": "7203e9cc5593b866631b644305983bdd618542c5568e8f7d2a4297d45cfdd40d"
         },
         {
+          "item": "SignedInvocation.InvocationDraft",
+          "sha256": "6594adc11694142f1438bc12b720cf0c59b9cc95aae2ed6458a23490e0151f32"
+        },
+        {
           "item": "SignedInvocation.Policy",
           "sha256": "f6f24de5b0dbcf37f95b4d7140b12b365b3959b4bf68919dbea480116e3c902a"
         },
@@ -144530,6 +144534,10 @@
               "sha256": "7203e9cc5593b866631b644305983bdd618542c5568e8f7d2a4297d45cfdd40d"
             },
             {
+              "item": "SignedInvocation.InvocationDraft",
+              "sha256": "6594adc11694142f1438bc12b720cf0c59b9cc95aae2ed6458a23490e0151f32"
+            },
+            {
               "item": "SignedInvocation.Policy",
               "sha256": "f6f24de5b0dbcf37f95b4d7140b12b365b3959b4bf68919dbea480116e3c902a"
             },
@@ -145115,6 +145123,10 @@
             {
               "item": "SignatureProvider.Sign",
               "sha256": "7203e9cc5593b866631b644305983bdd618542c5568e8f7d2a4297d45cfdd40d"
+            },
+            {
+              "item": "SignedInvocation.InvocationDraft",
+              "sha256": "6594adc11694142f1438bc12b720cf0c59b9cc95aae2ed6458a23490e0151f32"
             },
             {
               "item": "SignedInvocation.Policy",
@@ -145704,6 +145716,10 @@
               "sha256": "7203e9cc5593b866631b644305983bdd618542c5568e8f7d2a4297d45cfdd40d"
             },
             {
+              "item": "SignedInvocation.InvocationDraft",
+              "sha256": "6594adc11694142f1438bc12b720cf0c59b9cc95aae2ed6458a23490e0151f32"
+            },
+            {
               "item": "SignedInvocation.Policy",
               "sha256": "f6f24de5b0dbcf37f95b4d7140b12b365b3959b4bf68919dbea480116e3c902a"
             },
@@ -146289,6 +146305,10 @@
             {
               "item": "SignatureProvider.Sign",
               "sha256": "7203e9cc5593b866631b644305983bdd618542c5568e8f7d2a4297d45cfdd40d"
+            },
+            {
+              "item": "SignedInvocation.InvocationDraft",
+              "sha256": "6594adc11694142f1438bc12b720cf0c59b9cc95aae2ed6458a23490e0151f32"
             },
             {
               "item": "SignedInvocation.Policy",
@@ -146878,6 +146898,10 @@
               "sha256": "7203e9cc5593b866631b644305983bdd618542c5568e8f7d2a4297d45cfdd40d"
             },
             {
+              "item": "SignedInvocation.InvocationDraft",
+              "sha256": "6594adc11694142f1438bc12b720cf0c59b9cc95aae2ed6458a23490e0151f32"
+            },
+            {
               "item": "SignedInvocation.Policy",
               "sha256": "f6f24de5b0dbcf37f95b4d7140b12b365b3959b4bf68919dbea480116e3c902a"
             },
@@ -147463,6 +147487,10 @@
             {
               "item": "SignatureProvider.Sign",
               "sha256": "7203e9cc5593b866631b644305983bdd618542c5568e8f7d2a4297d45cfdd40d"
+            },
+            {
+              "item": "SignedInvocation.InvocationDraft",
+              "sha256": "6594adc11694142f1438bc12b720cf0c59b9cc95aae2ed6458a23490e0151f32"
             },
             {
               "item": "SignedInvocation.Policy",
@@ -148052,6 +148080,10 @@
               "sha256": "7203e9cc5593b866631b644305983bdd618542c5568e8f7d2a4297d45cfdd40d"
             },
             {
+              "item": "SignedInvocation.InvocationDraft",
+              "sha256": "6594adc11694142f1438bc12b720cf0c59b9cc95aae2ed6458a23490e0151f32"
+            },
+            {
               "item": "SignedInvocation.Policy",
               "sha256": "f6f24de5b0dbcf37f95b4d7140b12b365b3959b4bf68919dbea480116e3c902a"
             },
@@ -148639,6 +148671,10 @@
               "sha256": "7203e9cc5593b866631b644305983bdd618542c5568e8f7d2a4297d45cfdd40d"
             },
             {
+              "item": "SignedInvocation.InvocationDraft",
+              "sha256": "6594adc11694142f1438bc12b720cf0c59b9cc95aae2ed6458a23490e0151f32"
+            },
+            {
               "item": "SignedInvocation.Policy",
               "sha256": "f6f24de5b0dbcf37f95b4d7140b12b365b3959b4bf68919dbea480116e3c902a"
             },
@@ -148831,7 +148867,7 @@
         },
         {
           "item": "SignedInvocation",
-          "sha256": "c6aa01b0147eeae5f6b52b700a85d5431d447832311cb15fc4508cb8ba6132d9"
+          "sha256": "698893011b29da697fa3ac5a596f2fc16eb66d73f8b94d50eff83e4c182750f4"
         },
         {
           "item": "SignedInvocationState",
@@ -149094,6 +149130,10 @@
           "sha256": "e6075089ec4a99ffb9bce4cc564acd5038452394e6238964449bfcbce74f93c7"
         },
         {
+          "item": "SignedInvocation.to_invocation_draft",
+          "sha256": "15f9df2af55d4d085b14dfa88bdb167785b911687b9208ef98f3dfdd4d711da3"
+        },
+        {
           "item": "SignedInvocation.to_json_dict",
           "sha256": "d325fda2586c6ac3333af3e5e415b2417ec40dcbf287abfcde742757c8af646e"
         },
@@ -149230,7 +149270,7 @@
             },
             {
               "item": "SignedInvocation",
-              "sha256": "c6aa01b0147eeae5f6b52b700a85d5431d447832311cb15fc4508cb8ba6132d9"
+              "sha256": "698893011b29da697fa3ac5a596f2fc16eb66d73f8b94d50eff83e4c182750f4"
             },
             {
               "item": "SignedInvocationState",
@@ -149491,6 +149531,10 @@
             {
               "item": "SignedInvocation.submit_ready",
               "sha256": "e6075089ec4a99ffb9bce4cc564acd5038452394e6238964449bfcbce74f93c7"
+            },
+            {
+              "item": "SignedInvocation.to_invocation_draft",
+              "sha256": "15f9df2af55d4d085b14dfa88bdb167785b911687b9208ef98f3dfdd4d711da3"
             },
             {
               "item": "SignedInvocation.to_json_dict",
@@ -149629,7 +149673,7 @@
             },
             {
               "item": "SignedInvocation",
-              "sha256": "c6aa01b0147eeae5f6b52b700a85d5431d447832311cb15fc4508cb8ba6132d9"
+              "sha256": "698893011b29da697fa3ac5a596f2fc16eb66d73f8b94d50eff83e4c182750f4"
             },
             {
               "item": "SignedInvocationState",
@@ -149890,6 +149934,10 @@
             {
               "item": "SignedInvocation.submit_ready",
               "sha256": "e6075089ec4a99ffb9bce4cc564acd5038452394e6238964449bfcbce74f93c7"
+            },
+            {
+              "item": "SignedInvocation.to_invocation_draft",
+              "sha256": "15f9df2af55d4d085b14dfa88bdb167785b911687b9208ef98f3dfdd4d711da3"
             },
             {
               "item": "SignedInvocation.to_json_dict",
@@ -150028,7 +150076,7 @@
             },
             {
               "item": "SignedInvocation",
-              "sha256": "c6aa01b0147eeae5f6b52b700a85d5431d447832311cb15fc4508cb8ba6132d9"
+              "sha256": "698893011b29da697fa3ac5a596f2fc16eb66d73f8b94d50eff83e4c182750f4"
             },
             {
               "item": "SignedInvocationState",
@@ -150289,6 +150337,10 @@
             {
               "item": "SignedInvocation.submit_ready",
               "sha256": "e6075089ec4a99ffb9bce4cc564acd5038452394e6238964449bfcbce74f93c7"
+            },
+            {
+              "item": "SignedInvocation.to_invocation_draft",
+              "sha256": "15f9df2af55d4d085b14dfa88bdb167785b911687b9208ef98f3dfdd4d711da3"
             },
             {
               "item": "SignedInvocation.to_json_dict",
@@ -150427,7 +150479,7 @@
             },
             {
               "item": "SignedInvocation",
-              "sha256": "c6aa01b0147eeae5f6b52b700a85d5431d447832311cb15fc4508cb8ba6132d9"
+              "sha256": "698893011b29da697fa3ac5a596f2fc16eb66d73f8b94d50eff83e4c182750f4"
             },
             {
               "item": "SignedInvocationState",
@@ -150688,6 +150740,10 @@
             {
               "item": "SignedInvocation.submit_ready",
               "sha256": "e6075089ec4a99ffb9bce4cc564acd5038452394e6238964449bfcbce74f93c7"
+            },
+            {
+              "item": "SignedInvocation.to_invocation_draft",
+              "sha256": "15f9df2af55d4d085b14dfa88bdb167785b911687b9208ef98f3dfdd4d711da3"
             },
             {
               "item": "SignedInvocation.to_json_dict",
@@ -150826,7 +150882,7 @@
             },
             {
               "item": "SignedInvocation",
-              "sha256": "c6aa01b0147eeae5f6b52b700a85d5431d447832311cb15fc4508cb8ba6132d9"
+              "sha256": "698893011b29da697fa3ac5a596f2fc16eb66d73f8b94d50eff83e4c182750f4"
             },
             {
               "item": "SignedInvocationState",
@@ -151087,6 +151143,10 @@
             {
               "item": "SignedInvocation.submit_ready",
               "sha256": "e6075089ec4a99ffb9bce4cc564acd5038452394e6238964449bfcbce74f93c7"
+            },
+            {
+              "item": "SignedInvocation.to_invocation_draft",
+              "sha256": "15f9df2af55d4d085b14dfa88bdb167785b911687b9208ef98f3dfdd4d711da3"
             },
             {
               "item": "SignedInvocation.to_json_dict",
@@ -151225,7 +151285,7 @@
             },
             {
               "item": "SignedInvocation",
-              "sha256": "c6aa01b0147eeae5f6b52b700a85d5431d447832311cb15fc4508cb8ba6132d9"
+              "sha256": "698893011b29da697fa3ac5a596f2fc16eb66d73f8b94d50eff83e4c182750f4"
             },
             {
               "item": "SignedInvocationState",
@@ -151486,6 +151546,10 @@
             {
               "item": "SignedInvocation.submit_ready",
               "sha256": "e6075089ec4a99ffb9bce4cc564acd5038452394e6238964449bfcbce74f93c7"
+            },
+            {
+              "item": "SignedInvocation.to_invocation_draft",
+              "sha256": "15f9df2af55d4d085b14dfa88bdb167785b911687b9208ef98f3dfdd4d711da3"
             },
             {
               "item": "SignedInvocation.to_json_dict",
@@ -151624,7 +151688,7 @@
             },
             {
               "item": "SignedInvocation",
-              "sha256": "c6aa01b0147eeae5f6b52b700a85d5431d447832311cb15fc4508cb8ba6132d9"
+              "sha256": "698893011b29da697fa3ac5a596f2fc16eb66d73f8b94d50eff83e4c182750f4"
             },
             {
               "item": "SignedInvocationState",
@@ -151885,6 +151949,10 @@
             {
               "item": "SignedInvocation.submit_ready",
               "sha256": "e6075089ec4a99ffb9bce4cc564acd5038452394e6238964449bfcbce74f93c7"
+            },
+            {
+              "item": "SignedInvocation.to_invocation_draft",
+              "sha256": "15f9df2af55d4d085b14dfa88bdb167785b911687b9208ef98f3dfdd4d711da3"
             },
             {
               "item": "SignedInvocation.to_json_dict",
@@ -152023,7 +152091,7 @@
             },
             {
               "item": "SignedInvocation",
-              "sha256": "c6aa01b0147eeae5f6b52b700a85d5431d447832311cb15fc4508cb8ba6132d9"
+              "sha256": "698893011b29da697fa3ac5a596f2fc16eb66d73f8b94d50eff83e4c182750f4"
             },
             {
               "item": "SignedInvocationState",
@@ -152284,6 +152352,10 @@
             {
               "item": "SignedInvocation.submit_ready",
               "sha256": "e6075089ec4a99ffb9bce4cc564acd5038452394e6238964449bfcbce74f93c7"
+            },
+            {
+              "item": "SignedInvocation.to_invocation_draft",
+              "sha256": "15f9df2af55d4d085b14dfa88bdb167785b911687b9208ef98f3dfdd4d711da3"
             },
             {
               "item": "SignedInvocation.to_json_dict",
@@ -286108,7 +286180,7 @@
         },
         {
           "item": "RuntimeClient",
-          "sha256": "94847ec49401414ac9bd9c38e472a4b241610da741b39b5c08c339c8f60ad937"
+          "sha256": "bc5d5b7f559e2f24ccac4a9e456e4e18c02fd3137bb9d4ba8cca8d9c4c15f3c8"
         },
         {
           "item": "RuntimeTransport",
@@ -286428,11 +286500,11 @@
         },
         {
           "item": "RuntimeClient.open_signed_bidi",
-          "sha256": "36b222286270c05ae70a2441d539cb72e8edcc6c7d77230d4fec0789b47e0cb2"
+          "sha256": "e1c22c1109c27ae02d694bbce7c9e4d9a82416c0c7fcfb7668b927aa2b5352fd"
         },
         {
           "item": "RuntimeClient.open_signed_stream",
-          "sha256": "6c45a5c2fc10de3fa8bedbfc328cfbeed75972498f9eb094371cc17cb6de3a65"
+          "sha256": "6d034697a7183544a3872bc28875e7ea2679d01dfa978dde92f874be7a64c2d3"
         },
         {
           "item": "RuntimeClient.recover",
@@ -286547,7 +286619,7 @@
             },
             {
               "item": "RuntimeClient",
-              "sha256": "94847ec49401414ac9bd9c38e472a4b241610da741b39b5c08c339c8f60ad937"
+              "sha256": "bc5d5b7f559e2f24ccac4a9e456e4e18c02fd3137bb9d4ba8cca8d9c4c15f3c8"
             },
             {
               "item": "RuntimeTransport",
@@ -286867,11 +286939,11 @@
             },
             {
               "item": "RuntimeClient.open_signed_bidi",
-              "sha256": "36b222286270c05ae70a2441d539cb72e8edcc6c7d77230d4fec0789b47e0cb2"
+              "sha256": "e1c22c1109c27ae02d694bbce7c9e4d9a82416c0c7fcfb7668b927aa2b5352fd"
             },
             {
               "item": "RuntimeClient.open_signed_stream",
-              "sha256": "6c45a5c2fc10de3fa8bedbfc328cfbeed75972498f9eb094371cc17cb6de3a65"
+              "sha256": "6d034697a7183544a3872bc28875e7ea2679d01dfa978dde92f874be7a64c2d3"
             },
             {
               "item": "RuntimeClient.recover",
@@ -286986,7 +287058,7 @@
             },
             {
               "item": "RuntimeClient",
-              "sha256": "94847ec49401414ac9bd9c38e472a4b241610da741b39b5c08c339c8f60ad937"
+              "sha256": "bc5d5b7f559e2f24ccac4a9e456e4e18c02fd3137bb9d4ba8cca8d9c4c15f3c8"
             },
             {
               "item": "RuntimeTransport",
@@ -287306,11 +287378,11 @@
             },
             {
               "item": "RuntimeClient.open_signed_bidi",
-              "sha256": "36b222286270c05ae70a2441d539cb72e8edcc6c7d77230d4fec0789b47e0cb2"
+              "sha256": "e1c22c1109c27ae02d694bbce7c9e4d9a82416c0c7fcfb7668b927aa2b5352fd"
             },
             {
               "item": "RuntimeClient.open_signed_stream",
-              "sha256": "6c45a5c2fc10de3fa8bedbfc328cfbeed75972498f9eb094371cc17cb6de3a65"
+              "sha256": "6d034697a7183544a3872bc28875e7ea2679d01dfa978dde92f874be7a64c2d3"
             },
             {
               "item": "RuntimeClient.recover",
@@ -287425,7 +287497,7 @@
             },
             {
               "item": "RuntimeClient",
-              "sha256": "94847ec49401414ac9bd9c38e472a4b241610da741b39b5c08c339c8f60ad937"
+              "sha256": "bc5d5b7f559e2f24ccac4a9e456e4e18c02fd3137bb9d4ba8cca8d9c4c15f3c8"
             },
             {
               "item": "RuntimeTransport",
@@ -287745,11 +287817,11 @@
             },
             {
               "item": "RuntimeClient.open_signed_bidi",
-              "sha256": "36b222286270c05ae70a2441d539cb72e8edcc6c7d77230d4fec0789b47e0cb2"
+              "sha256": "e1c22c1109c27ae02d694bbce7c9e4d9a82416c0c7fcfb7668b927aa2b5352fd"
             },
             {
               "item": "RuntimeClient.open_signed_stream",
-              "sha256": "6c45a5c2fc10de3fa8bedbfc328cfbeed75972498f9eb094371cc17cb6de3a65"
+              "sha256": "6d034697a7183544a3872bc28875e7ea2679d01dfa978dde92f874be7a64c2d3"
             },
             {
               "item": "RuntimeClient.recover",
@@ -287864,7 +287936,7 @@
             },
             {
               "item": "RuntimeClient",
-              "sha256": "94847ec49401414ac9bd9c38e472a4b241610da741b39b5c08c339c8f60ad937"
+              "sha256": "bc5d5b7f559e2f24ccac4a9e456e4e18c02fd3137bb9d4ba8cca8d9c4c15f3c8"
             },
             {
               "item": "RuntimeTransport",
@@ -288184,11 +288256,11 @@
             },
             {
               "item": "RuntimeClient.open_signed_bidi",
-              "sha256": "36b222286270c05ae70a2441d539cb72e8edcc6c7d77230d4fec0789b47e0cb2"
+              "sha256": "e1c22c1109c27ae02d694bbce7c9e4d9a82416c0c7fcfb7668b927aa2b5352fd"
             },
             {
               "item": "RuntimeClient.open_signed_stream",
-              "sha256": "6c45a5c2fc10de3fa8bedbfc328cfbeed75972498f9eb094371cc17cb6de3a65"
+              "sha256": "6d034697a7183544a3872bc28875e7ea2679d01dfa978dde92f874be7a64c2d3"
             },
             {
               "item": "RuntimeClient.recover",
@@ -288303,7 +288375,7 @@
             },
             {
               "item": "RuntimeClient",
-              "sha256": "94847ec49401414ac9bd9c38e472a4b241610da741b39b5c08c339c8f60ad937"
+              "sha256": "bc5d5b7f559e2f24ccac4a9e456e4e18c02fd3137bb9d4ba8cca8d9c4c15f3c8"
             },
             {
               "item": "RuntimeTransport",
@@ -288623,11 +288695,11 @@
             },
             {
               "item": "RuntimeClient.open_signed_bidi",
-              "sha256": "36b222286270c05ae70a2441d539cb72e8edcc6c7d77230d4fec0789b47e0cb2"
+              "sha256": "e1c22c1109c27ae02d694bbce7c9e4d9a82416c0c7fcfb7668b927aa2b5352fd"
             },
             {
               "item": "RuntimeClient.open_signed_stream",
-              "sha256": "6c45a5c2fc10de3fa8bedbfc328cfbeed75972498f9eb094371cc17cb6de3a65"
+              "sha256": "6d034697a7183544a3872bc28875e7ea2679d01dfa978dde92f874be7a64c2d3"
             },
             {
               "item": "RuntimeClient.recover",
@@ -288742,7 +288814,7 @@
             },
             {
               "item": "RuntimeClient",
-              "sha256": "94847ec49401414ac9bd9c38e472a4b241610da741b39b5c08c339c8f60ad937"
+              "sha256": "bc5d5b7f559e2f24ccac4a9e456e4e18c02fd3137bb9d4ba8cca8d9c4c15f3c8"
             },
             {
               "item": "RuntimeTransport",
@@ -289062,11 +289134,11 @@
             },
             {
               "item": "RuntimeClient.open_signed_bidi",
-              "sha256": "36b222286270c05ae70a2441d539cb72e8edcc6c7d77230d4fec0789b47e0cb2"
+              "sha256": "e1c22c1109c27ae02d694bbce7c9e4d9a82416c0c7fcfb7668b927aa2b5352fd"
             },
             {
               "item": "RuntimeClient.open_signed_stream",
-              "sha256": "6c45a5c2fc10de3fa8bedbfc328cfbeed75972498f9eb094371cc17cb6de3a65"
+              "sha256": "6d034697a7183544a3872bc28875e7ea2679d01dfa978dde92f874be7a64c2d3"
             },
             {
               "item": "RuntimeClient.recover",
@@ -289181,7 +289253,7 @@
             },
             {
               "item": "RuntimeClient",
-              "sha256": "94847ec49401414ac9bd9c38e472a4b241610da741b39b5c08c339c8f60ad937"
+              "sha256": "bc5d5b7f559e2f24ccac4a9e456e4e18c02fd3137bb9d4ba8cca8d9c4c15f3c8"
             },
             {
               "item": "RuntimeTransport",
@@ -289501,11 +289573,11 @@
             },
             {
               "item": "RuntimeClient.open_signed_bidi",
-              "sha256": "36b222286270c05ae70a2441d539cb72e8edcc6c7d77230d4fec0789b47e0cb2"
+              "sha256": "e1c22c1109c27ae02d694bbce7c9e4d9a82416c0c7fcfb7668b927aa2b5352fd"
             },
             {
               "item": "RuntimeClient.open_signed_stream",
-              "sha256": "6c45a5c2fc10de3fa8bedbfc328cfbeed75972498f9eb094371cc17cb6de3a65"
+              "sha256": "6d034697a7183544a3872bc28875e7ea2679d01dfa978dde92f874be7a64c2d3"
             },
             {
               "item": "RuntimeClient.recover",
@@ -289620,7 +289692,7 @@
             },
             {
               "item": "RuntimeClient",
-              "sha256": "94847ec49401414ac9bd9c38e472a4b241610da741b39b5c08c339c8f60ad937"
+              "sha256": "bc5d5b7f559e2f24ccac4a9e456e4e18c02fd3137bb9d4ba8cca8d9c4c15f3c8"
             },
             {
               "item": "RuntimeTransport",
@@ -289940,11 +290012,11 @@
             },
             {
               "item": "RuntimeClient.open_signed_bidi",
-              "sha256": "36b222286270c05ae70a2441d539cb72e8edcc6c7d77230d4fec0789b47e0cb2"
+              "sha256": "e1c22c1109c27ae02d694bbce7c9e4d9a82416c0c7fcfb7668b927aa2b5352fd"
             },
             {
               "item": "RuntimeClient.open_signed_stream",
-              "sha256": "6c45a5c2fc10de3fa8bedbfc328cfbeed75972498f9eb094371cc17cb6de3a65"
+              "sha256": "6d034697a7183544a3872bc28875e7ea2679d01dfa978dde92f874be7a64c2d3"
             },
             {
               "item": "RuntimeClient.recover",
@@ -290059,7 +290131,7 @@
             },
             {
               "item": "RuntimeClient",
-              "sha256": "94847ec49401414ac9bd9c38e472a4b241610da741b39b5c08c339c8f60ad937"
+              "sha256": "bc5d5b7f559e2f24ccac4a9e456e4e18c02fd3137bb9d4ba8cca8d9c4c15f3c8"
             },
             {
               "item": "RuntimeTransport",
@@ -290379,11 +290451,11 @@
             },
             {
               "item": "RuntimeClient.open_signed_bidi",
-              "sha256": "36b222286270c05ae70a2441d539cb72e8edcc6c7d77230d4fec0789b47e0cb2"
+              "sha256": "e1c22c1109c27ae02d694bbce7c9e4d9a82416c0c7fcfb7668b927aa2b5352fd"
             },
             {
               "item": "RuntimeClient.open_signed_stream",
-              "sha256": "6c45a5c2fc10de3fa8bedbfc328cfbeed75972498f9eb094371cc17cb6de3a65"
+              "sha256": "6d034697a7183544a3872bc28875e7ea2679d01dfa978dde92f874be7a64c2d3"
             },
             {
               "item": "RuntimeClient.recover",
@@ -290498,7 +290570,7 @@
             },
             {
               "item": "RuntimeClient",
-              "sha256": "94847ec49401414ac9bd9c38e472a4b241610da741b39b5c08c339c8f60ad937"
+              "sha256": "bc5d5b7f559e2f24ccac4a9e456e4e18c02fd3137bb9d4ba8cca8d9c4c15f3c8"
             },
             {
               "item": "RuntimeTransport",
@@ -290818,11 +290890,11 @@
             },
             {
               "item": "RuntimeClient.open_signed_bidi",
-              "sha256": "36b222286270c05ae70a2441d539cb72e8edcc6c7d77230d4fec0789b47e0cb2"
+              "sha256": "e1c22c1109c27ae02d694bbce7c9e4d9a82416c0c7fcfb7668b927aa2b5352fd"
             },
             {
               "item": "RuntimeClient.open_signed_stream",
-              "sha256": "6c45a5c2fc10de3fa8bedbfc328cfbeed75972498f9eb094371cc17cb6de3a65"
+              "sha256": "6d034697a7183544a3872bc28875e7ea2679d01dfa978dde92f874be7a64c2d3"
             },
             {
               "item": "RuntimeClient.recover",
@@ -290937,7 +291009,7 @@
             },
             {
               "item": "RuntimeClient",
-              "sha256": "94847ec49401414ac9bd9c38e472a4b241610da741b39b5c08c339c8f60ad937"
+              "sha256": "bc5d5b7f559e2f24ccac4a9e456e4e18c02fd3137bb9d4ba8cca8d9c4c15f3c8"
             },
             {
               "item": "RuntimeTransport",
@@ -291257,11 +291329,11 @@
             },
             {
               "item": "RuntimeClient.open_signed_bidi",
-              "sha256": "36b222286270c05ae70a2441d539cb72e8edcc6c7d77230d4fec0789b47e0cb2"
+              "sha256": "e1c22c1109c27ae02d694bbce7c9e4d9a82416c0c7fcfb7668b927aa2b5352fd"
             },
             {
               "item": "RuntimeClient.open_signed_stream",
-              "sha256": "6c45a5c2fc10de3fa8bedbfc328cfbeed75972498f9eb094371cc17cb6de3a65"
+              "sha256": "6d034697a7183544a3872bc28875e7ea2679d01dfa978dde92f874be7a64c2d3"
             },
             {
               "item": "RuntimeClient.recover",
@@ -291376,7 +291448,7 @@
             },
             {
               "item": "RuntimeClient",
-              "sha256": "94847ec49401414ac9bd9c38e472a4b241610da741b39b5c08c339c8f60ad937"
+              "sha256": "bc5d5b7f559e2f24ccac4a9e456e4e18c02fd3137bb9d4ba8cca8d9c4c15f3c8"
             },
             {
               "item": "RuntimeTransport",
@@ -291696,11 +291768,11 @@
             },
             {
               "item": "RuntimeClient.open_signed_bidi",
-              "sha256": "36b222286270c05ae70a2441d539cb72e8edcc6c7d77230d4fec0789b47e0cb2"
+              "sha256": "e1c22c1109c27ae02d694bbce7c9e4d9a82416c0c7fcfb7668b927aa2b5352fd"
             },
             {
               "item": "RuntimeClient.open_signed_stream",
-              "sha256": "6c45a5c2fc10de3fa8bedbfc328cfbeed75972498f9eb094371cc17cb6de3a65"
+              "sha256": "6d034697a7183544a3872bc28875e7ea2679d01dfa978dde92f874be7a64c2d3"
             },
             {
               "item": "RuntimeClient.recover",
@@ -291815,7 +291887,7 @@
             },
             {
               "item": "RuntimeClient",
-              "sha256": "94847ec49401414ac9bd9c38e472a4b241610da741b39b5c08c339c8f60ad937"
+              "sha256": "bc5d5b7f559e2f24ccac4a9e456e4e18c02fd3137bb9d4ba8cca8d9c4c15f3c8"
             },
             {
               "item": "RuntimeTransport",
@@ -292135,11 +292207,11 @@
             },
             {
               "item": "RuntimeClient.open_signed_bidi",
-              "sha256": "36b222286270c05ae70a2441d539cb72e8edcc6c7d77230d4fec0789b47e0cb2"
+              "sha256": "e1c22c1109c27ae02d694bbce7c9e4d9a82416c0c7fcfb7668b927aa2b5352fd"
             },
             {
               "item": "RuntimeClient.open_signed_stream",
-              "sha256": "6c45a5c2fc10de3fa8bedbfc328cfbeed75972498f9eb094371cc17cb6de3a65"
+              "sha256": "6d034697a7183544a3872bc28875e7ea2679d01dfa978dde92f874be7a64c2d3"
             },
             {
               "item": "RuntimeClient.recover",

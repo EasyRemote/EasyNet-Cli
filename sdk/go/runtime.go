@@ -519,11 +519,15 @@ func (c *RuntimeClient) OpenSignedStream(ctx context.Context, signed SignedInvoc
 	if !signed.SubmitReady() {
 		return nil, invalidRuntimePayload("signed invocation is not submit-ready", nil)
 	}
-	signedJSON, err := json.Marshal(signed)
+	draft, err := signed.InvocationDraft()
 	if err != nil {
-		return nil, invalidRuntimePayload(fmt.Sprintf("encode signed invocation: %v", err), err)
+		return nil, err
 	}
-	streamTransport, rawOpen, err := transport.OpenStream(ctx, signedJSON)
+	draftJSON, err := json.Marshal(draft)
+	if err != nil {
+		return nil, invalidRuntimePayload(fmt.Sprintf("encode signed invocation draft: %v", err), err)
+	}
+	streamTransport, rawOpen, err := transport.OpenStream(ctx, draftJSON)
 	if err != nil {
 		var sdkErr *SDKError
 		if errors.As(err, &sdkErr) {
@@ -568,15 +572,19 @@ func (c *RuntimeClient) OpenSignedBidi(ctx context.Context, signed SignedInvocat
 	if !signed.SubmitReady() {
 		return nil, invalidRuntimePayload("signed invocation is not submit-ready", nil)
 	}
-	signedJSON, err := json.Marshal(signed)
+	draft, err := signed.InvocationDraft()
 	if err != nil {
-		return nil, invalidRuntimePayload(fmt.Sprintf("encode signed invocation: %v", err), err)
+		return nil, err
+	}
+	draftJSON, err := json.Marshal(draft)
+	if err != nil {
+		return nil, invalidRuntimePayload(fmt.Sprintf("encode signed invocation draft: %v", err), err)
 	}
 	streamsJSON, err := json.Marshal(streams)
 	if err != nil {
 		return nil, invalidRuntimePayload(fmt.Sprintf("encode bidi stream descriptors: %v", err), err)
 	}
-	bidiTransport, rawOpen, err := transport.OpenBidi(ctx, signedJSON, streamsJSON)
+	bidiTransport, rawOpen, err := transport.OpenBidi(ctx, draftJSON, streamsJSON)
 	if err != nil {
 		var sdkErr *SDKError
 		if errors.As(err, &sdkErr) {

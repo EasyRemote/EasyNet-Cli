@@ -177,6 +177,19 @@ class SignedInvocation:
     def to_json(self) -> str:
         return json.dumps(self.to_json_dict(), separators=(",", ":"), sort_keys=True)
 
+    def to_invocation_draft(self) -> InvocationDraft:
+        """Project the signed workflow envelope to the canonical Invocation DTO.
+
+        Submit keeps the complete signed envelope for handle/audit admission.
+        Stream and bidi transports accept only the invocation tuple with
+        caller_signature attached, so signer policy and prepared-workflow
+        fields must not cross that boundary.
+        """
+
+        if not self.submit_ready():
+            raise _invalid_prepared("signed invocation is not submit-ready")
+        return replace(self.prepared.tuple, caller_signature=self.signature)
+
     def submit(self) -> "InvocationHandle":
         """Submit this signed Invocation through its bound RuntimeClient."""
 

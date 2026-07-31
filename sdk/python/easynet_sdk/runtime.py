@@ -1252,7 +1252,7 @@ class RuntimeClient:
             raise _invalid_runtime("signed invocation is not submit-ready")
         try:
             stream_transport, open_json = transport.open_stream(
-                signed.to_json().encode("utf-8")
+                signed.to_invocation_draft().to_json().encode("utf-8")
             )
         except SDKError:
             raise
@@ -1297,7 +1297,7 @@ class RuntimeClient:
                 sort_keys=True,
             ).encode("utf-8")
             bidi_transport, open_json = transport.open_bidi(
-                signed.to_json().encode("utf-8"),
+                signed.to_invocation_draft().to_json().encode("utf-8"),
                 streams_json,
             )
         except SDKError:

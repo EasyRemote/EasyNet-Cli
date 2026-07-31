@@ -299,6 +299,7 @@ impl Fixture {
         });
         handle_publish(
             &self.user,
+            &self.user,
             self.listener_port,
             &self.realm,
             self.registry.clone(),
@@ -480,6 +481,7 @@ fn u8_duplicate_publish_rejected() {
     // second call with same (user, project_id)
     let result = handle_publish(
         &f.user,
+        &f.user,
         f.listener_port,
         &f.realm,
         f.registry.clone(),
@@ -607,6 +609,7 @@ fn u14_pages_management_abilities_are_in_local_runtime() {
         &mut reg,
         PagesConfig {
             user: user.to_string(),
+            owner_user_id: user.to_string(),
             realm: "easynet.run".to_string(),
             listener_port: 8787,
         },
@@ -627,7 +630,7 @@ fn u14_pages_management_abilities_are_in_local_runtime() {
         .runtime_binding_facts_for_mode(&ability, easynet_cli::daemon::ability::CallMode::Rpc)
         .expect("runtime facts lookup")
         .expect("project_list runtime facts");
-    assert_eq!(facts.authority_owner_projection, "user:alice-runtime");
+    assert_eq!(facts.authority_owner_projection, "agent:pages");
     assert_eq!(facts.authority_root, pages_agent);
     let public_name = ura::owner_local_ability_name(&facts.authority_root, "project_list");
     let runtime_ability = ura::owner_ability_ura(&facts.authority_root, &public_name)

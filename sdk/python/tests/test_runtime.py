@@ -1557,6 +1557,69 @@ class RuntimeTests(unittest.TestCase):
             ],
         )
 
+    def test_open_signed_stream_projects_canonical_invocation(self) -> None:
+        transport = MemoryRuntimeTransport()
+        client = RuntimeClient(transport)
+
+        stream = client.open_signed_stream(signed_fixture())
+
+        self.assertEqual(stream.stream_id, "stream-1")
+        assert transport.seen_draft is not None
+        self.assertEqual(
+            transport.seen_draft["caller_ura"],
+            "easynet:///r/example/agent/alice.sdk",
+        )
+        self.assertEqual(
+            transport.seen_draft["caller_signature"],
+            {
+                "algorithm": "ed25519",
+                "key_id_hint": "caller-key",
+                "signature_base64": "c2lnbmF0dXJl",
+            },
+        )
+        self.assertNotIn("policy", transport.seen_draft)
+        self.assertNotIn("prepared", transport.seen_draft)
+        self.assertNotIn("signature", transport.seen_draft)
+
+    def test_open_signed_bidi_projects_canonical_invocation_and_streams(self) -> None:
+        transport = MemoryRuntimeTransport()
+        client = RuntimeClient(transport)
+
+        session = client.open_signed_bidi(
+            signed_fixture(),
+            (
+                BidiStreamDescriptor(
+                    stream_id=9,
+                    content_type="application/json",
+                    ordering="ordered",
+                ),
+            ),
+        )
+
+        self.assertEqual(session.session_id, "bidi-1")
+        assert transport.seen_draft is not None
+        self.assertEqual(
+            transport.seen_draft["caller_signature"],
+            {
+                "algorithm": "ed25519",
+                "key_id_hint": "caller-key",
+                "signature_base64": "c2lnbmF0dXJl",
+            },
+        )
+        self.assertNotIn("policy", transport.seen_draft)
+        self.assertNotIn("prepared", transport.seen_draft)
+        self.assertNotIn("signature", transport.seen_draft)
+        self.assertEqual(
+            transport.seen_streams,
+            [
+                {
+                    "content_type": "application/json",
+                    "ordering": "ordered",
+                    "stream_id": 9,
+                }
+            ],
+        )
+
     def test_prepare_delegates_to_transport(self) -> None:
         transport = MemoryRuntimeTransport()
         client = RuntimeClient(transport)

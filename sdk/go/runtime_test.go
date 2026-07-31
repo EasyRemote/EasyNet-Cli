@@ -812,12 +812,12 @@ func TestRuntimeClientSubmitSignedPreservesSignature(t *testing.T) {
 	}
 }
 
-func TestRuntimeClientOpenSignedStreamPreservesSignature(t *testing.T) {
-	var seenSigned map[string]any
+func TestRuntimeClientOpenSignedStreamProjectsCanonicalInvocation(t *testing.T) {
+	var seenDraft map[string]any
 	client, err := NewRuntimeClient(RuntimeTransportFunc{
-		OpenStreamFunc: func(ctx context.Context, signedJSON []byte) (StreamTransport, []byte, error) {
-			if err := json.Unmarshal(signedJSON, &seenSigned); err != nil {
-				t.Fatalf("signed stream JSON: %v", err)
+		OpenStreamFunc: func(ctx context.Context, draftJSON []byte) (StreamTransport, []byte, error) {
+			if err := json.Unmarshal(draftJSON, &seenDraft); err != nil {
+				t.Fatalf("signed stream draft JSON: %v", err)
 			}
 			return StreamTransportFunc{
 				RecvFunc: func(context.Context) ([]byte, error) {
@@ -837,19 +837,28 @@ func TestRuntimeClientOpenSignedStreamPreservesSignature(t *testing.T) {
 	if stream.StreamID() != "stream-signed-1" || stream.State() != StreamOpen {
 		t.Fatalf("unexpected stream: id=%q state=%s", stream.StreamID(), stream.State())
 	}
-	signature := seenSigned["signature"].(map[string]any)
+	signature := seenDraft["caller_signature"].(map[string]any)
 	if signature["signature_base64"] != "c2lnbmF0dXJl" {
-		t.Fatalf("signature not preserved: %#v", seenSigned)
+		t.Fatalf("caller signature not preserved: %#v", seenDraft)
+	}
+	if _, ok := seenDraft["policy"]; ok {
+		t.Fatalf("signed workflow policy leaked into stream invocation draft: %#v", seenDraft)
+	}
+	if _, ok := seenDraft["prepared"]; ok {
+		t.Fatalf("signed workflow prepared state leaked into stream invocation draft: %#v", seenDraft)
+	}
+	if _, ok := seenDraft["signature"]; ok {
+		t.Fatalf("signed workflow signature leaked as top-level stream field: %#v", seenDraft)
 	}
 }
 
-func TestRuntimeClientOpenSignedBidiPreservesSignatureAndStreams(t *testing.T) {
-	var seenSigned map[string]any
+func TestRuntimeClientOpenSignedBidiProjectsCanonicalInvocationAndStreams(t *testing.T) {
+	var seenDraft map[string]any
 	var seenStreams []map[string]any
 	client, err := NewRuntimeClient(RuntimeTransportFunc{
-		OpenBidiFunc: func(ctx context.Context, signedJSON []byte, streamsJSON []byte) (BidiTransport, []byte, error) {
-			if err := json.Unmarshal(signedJSON, &seenSigned); err != nil {
-				t.Fatalf("signed bidi JSON: %v", err)
+		OpenBidiFunc: func(ctx context.Context, draftJSON []byte, streamsJSON []byte) (BidiTransport, []byte, error) {
+			if err := json.Unmarshal(draftJSON, &seenDraft); err != nil {
+				t.Fatalf("signed bidi draft JSON: %v", err)
 			}
 			if err := json.Unmarshal(streamsJSON, &seenStreams); err != nil {
 				t.Fatalf("streams JSON: %v", err)
@@ -870,9 +879,18 @@ func TestRuntimeClientOpenSignedBidiPreservesSignatureAndStreams(t *testing.T) {
 	if session.SessionID() != "bidi-signed-1" || session.State() != BidiOpen {
 		t.Fatalf("unexpected bidi session: id=%q state=%s", session.SessionID(), session.State())
 	}
-	signature := seenSigned["signature"].(map[string]any)
+	signature := seenDraft["caller_signature"].(map[string]any)
 	if signature["signature_base64"] != "c2lnbmF0dXJl" {
-		t.Fatalf("signature not preserved: %#v", seenSigned)
+		t.Fatalf("caller signature not preserved: %#v", seenDraft)
+	}
+	if _, ok := seenDraft["policy"]; ok {
+		t.Fatalf("signed workflow policy leaked into bidi invocation draft: %#v", seenDraft)
+	}
+	if _, ok := seenDraft["prepared"]; ok {
+		t.Fatalf("signed workflow prepared state leaked into bidi invocation draft: %#v", seenDraft)
+	}
+	if _, ok := seenDraft["signature"]; ok {
+		t.Fatalf("signed workflow signature leaked as top-level bidi field: %#v", seenDraft)
 	}
 	if len(seenStreams) != 1 || seenStreams[0]["stream_id"] != float64(9) {
 		t.Fatalf("streams not preserved: %#v", seenStreams)

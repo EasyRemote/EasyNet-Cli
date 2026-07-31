@@ -2043,16 +2043,21 @@ impl<'a> SessionInvocationAuthority<'a> {
     async fn bind_cancellable(
         &self,
         invocation: crate::daemon::DaemonInvocation,
-    ) -> crate::daemon::Result<(
-        crate::daemon::SignedInvocation,
-        crate::daemon::InvocationCancellationAuthority,
-    )> {
+    ) -> crate::daemon::Result<(crate::daemon::SignedInvocation, InvocationCancellationGate)> {
+        if let Some(signature) = invocation.caller_signature().cloned() {
+            let signed = Self::bind_caller_signature(invocation, signature)?;
+            let cancellation_gate = self.cancellation_authority_for_signed(&signed).await;
+            return Ok((signed, cancellation_gate));
+        }
+
         let caller_ura = invocation.caller_ura().to_string();
         let signer = self.owner_signer(&caller_ura).await?;
         let signed = Self::bind_with_owner_signer(invocation, Arc::clone(&signer)).await?;
         Ok((
             signed,
-            crate::daemon::InvocationCancellationAuthority::new(signer),
+            InvocationCancellationGate::Available(
+                crate::daemon::InvocationCancellationAuthority::new(signer),
+            ),
         ))
     }
 
@@ -3020,7 +3025,7 @@ fn stream_open_with_axon_pb(
     };
 
     let (stream, stream_endpoint, cancellation) = match rt.block_on(async {
-        let (signed, cancellation_authority) = SessionInvocationAuthority::new(session.as_ref())
+        let (signed, cancellation_gate) = SessionInvocationAuthority::new(session.as_ref())
             .bind_cancellable(invocation)
             .await?;
         let endpoint = invocation_endpoint_for_session(session.as_ref())?;
@@ -3029,10 +3034,10 @@ fn stream_open_with_axon_pb(
         Ok::<_, crate::daemon::DaemonError>((
             stream,
             endpoint.clone(),
-            Arc::new(ProviderCancellationControl::runtime(
+            Arc::new(ProviderCancellationControl::from_gate(
                 endpoint,
                 signed,
-                cancellation_authority,
+                cancellation_gate,
             )),
         ))
     }) {
@@ -3129,7 +3134,7 @@ fn bidi_open_with_axon_pb(
     };
 
     let (session, bidi_endpoint, cancellation) = match rt.block_on(async {
-        let (signed, cancellation_authority) = SessionInvocationAuthority::new(session.as_ref())
+        let (signed, cancellation_gate) = SessionInvocationAuthority::new(session.as_ref())
             .bind_cancellable(invocation)
             .await?;
         let endpoint = invocation_endpoint_for_session(session.as_ref())?;
@@ -3138,10 +3143,10 @@ fn bidi_open_with_axon_pb(
         Ok::<_, crate::daemon::DaemonError>((
             bidi,
             endpoint.clone(),
-            Arc::new(ProviderCancellationControl::runtime(
+            Arc::new(ProviderCancellationControl::from_gate(
                 endpoint,
                 signed,
-                cancellation_authority,
+                cancellation_gate,
             )),
         ))
     }) {
@@ -3478,6 +3483,11 @@ struct RuntimeCancellationCommandSubmitter {
 }
 
 #[cfg(feature = "axon-pb")]
+struct UnavailableCancellationCommandSubmitter {
+    reason: String,
+}
+
+#[cfg(feature = "axon-pb")]
 impl CanonicalCancellationCommandSubmitter for RuntimeCancellationCommandSubmitter {
     fn submit(&self, reason: &str) -> Result<(), ProviderCancellationError> {
         let runtime = lib_runtime()
@@ -3516,6 +3526,15 @@ impl CanonicalCancellationCommandSubmitter for RuntimeCancellationCommandSubmitt
             ));
         }
         Ok(())
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+impl CanonicalCancellationCommandSubmitter for UnavailableCancellationCommandSubmitter {
+    fn submit(&self, _reason: &str) -> Result<(), ProviderCancellationError> {
+        Err(ProviderCancellationError::CommandRejected(
+            self.reason.clone(),
+        ))
     }
 }
 
@@ -3570,6 +3589,19 @@ struct ProviderCancellationControl {
 
 #[cfg(feature = "axon-pb")]
 impl ProviderCancellationControl {
+    fn from_gate(
+        endpoint: PathBuf,
+        signed_invocation: crate::daemon::SignedInvocation,
+        gate: InvocationCancellationGate,
+    ) -> Self {
+        match gate {
+            InvocationCancellationGate::Available(authority) => {
+                Self::runtime(endpoint, signed_invocation, authority)
+            }
+            InvocationCancellationGate::Unavailable { reason } => Self::unavailable(reason),
+        }
+    }
+
     fn runtime(
         endpoint: PathBuf,
         signed_invocation: crate::daemon::SignedInvocation,
@@ -3580,6 +3612,10 @@ impl ProviderCancellationControl {
             signed_invocation,
             authority,
         }))
+    }
+
+    fn unavailable(reason: String) -> Self {
+        Self::with_submitter(Arc::new(UnavailableCancellationCommandSubmitter { reason }))
     }
 
     fn with_submitter(submitter: Arc<dyn CanonicalCancellationCommandSubmitter>) -> Self {
@@ -7424,10 +7460,16 @@ mod tests {
                 .canonical_bytes()
                 .to_vec();
 
-            let (bound, cancellation_authority) = lib_runtime()
+            let (bound, cancellation_gate) = lib_runtime()
                 .expect("library runtime")
                 .block_on(SessionInvocationAuthority::new(&session).bind_cancellable(invocation))
                 .expect("session owner invocation must bind");
+            let cancellation_authority = match cancellation_gate {
+                InvocationCancellationGate::Available(authority) => authority,
+                InvocationCancellationGate::Unavailable { reason } => {
+                    panic!("session owner cancellation authority unavailable: {reason}")
+                }
+            };
             assert_eq!(
                 cancellation_authority.owner_ura(),
                 "easynet:///r/acme/device/dev-a"
@@ -7519,12 +7561,18 @@ mod tests {
                     .canonical_bytes()
                     .to_vec();
 
-                let (bound, cancellation_authority) = lib_runtime()
+                let (bound, cancellation_gate) = lib_runtime()
                     .expect("library runtime")
                     .block_on(
                         SessionInvocationAuthority::new(&session).bind_cancellable(invocation),
                     )
                     .expect("Ready-proven paired user invocation must bind");
+                let cancellation_authority = match cancellation_gate {
+                    InvocationCancellationGate::Available(authority) => authority,
+                    InvocationCancellationGate::Unavailable { reason } => {
+                        panic!("paired user cancellation authority unavailable: {reason}")
+                    }
+                };
                 assert_eq!(cancellation_authority.owner_ura(), user_ura);
                 let signature = bound.signature();
                 assert_eq!(signature.algorithm, "ed25519");
@@ -7601,7 +7649,7 @@ mod tests {
     }
 
     #[test]
-    fn session_invocation_authority_rejects_foreign_cancellation_authority() {
+    fn session_invocation_authority_external_signature_opens_without_cancellation_authority() {
         let directory = tempfile::tempdir().expect("runtime discovery directory");
         let control_path =
             write_runtime_discovery(directory.path(), "device", "acme", Some("dev-a"));
@@ -7621,17 +7669,23 @@ mod tests {
         .into_daemon_invocation()
         .expect("build daemon invocation");
 
-        let error = lib_runtime()
+        let (bound, cancellation_gate) = lib_runtime()
             .expect("library runtime")
             .block_on(SessionInvocationAuthority::new(&session).bind_cancellable(invocation))
-            .expect_err("foreign caller must not inherit the session cancellation authority");
+            .expect("external caller signature must bind without native session owner authority");
 
+        let signature = bound.signature();
+        assert_eq!(signature.algorithm, "ed25519");
+        assert_eq!(signature.signature, vec![7; 64]);
+        assert_eq!(signature.key_id_hint, "external-caller-key");
+        let reason = cancellation_gate
+            .unavailable_reason()
+            .expect("foreign caller must not inherit cancellation authority");
         assert!(
-            error.to_string().contains(
-                "caller `easynet:///r/acme/device/dev-b` is not admitted by session authority \
-                     owner `easynet:///r/acme/device/dev-a`",
+            reason.contains(
+                "signed invocation caller `easynet:///r/acme/device/dev-b` is not admitted by session authority",
             ),
-            "unexpected cancellation authority error: {error}"
+            "unexpected cancellation authority reason: {reason}"
         );
     }
 

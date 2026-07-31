@@ -423,6 +423,21 @@ func (s SignedInvocation) SubmitReady() bool {
 		strings.TrimSpace(s.prepared.SigningMaterial().CanonicalBytesBase64()) != ""
 }
 
+// InvocationDraft projects the signed workflow envelope back to the canonical
+// Invocation DTO used by stream and bidi transports. SubmitSigned keeps the
+// full signed envelope for audit/handle admission; streaming ingress accepts
+// only the invocation tuple plus caller_signature and must not receive signer
+// policy or prepared-workflow fields.
+func (s SignedInvocation) InvocationDraft() (InvocationDraft, error) {
+	if !s.SubmitReady() {
+		return InvocationDraft{}, invalidInvocation("signed invocation is not submit-ready", nil)
+	}
+	draft := s.prepared.Tuple()
+	signature := s.signature
+	draft.callerSignature = &signature
+	return draft, nil
+}
+
 // MarshalJSON emits the runtime signed-invocation envelope shape.
 func (s SignedInvocation) MarshalJSON() ([]byte, error) {
 	if !s.SubmitReady() {
