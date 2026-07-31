@@ -136,8 +136,8 @@ fn assert_daemon_baseline_conformance(
 fn ensure_daemon_runtime_identity(config: &DaemonConfig) -> anyhow::Result<()> {
     use easynet_cli::daemon::identity::self_identity::KeyringClient;
 
-    easynet_cli::daemon::keyring::lifecycle::ensure_key_service_running()
-        .context("start or attach daemon key service")?;
+    easynet_cli::daemon::keyring::lifecycle::ensure_daemon_key_service_running()
+        .context("establish daemon-owned key service")?;
     let client = KeyringClient::default_path();
 
     // `_system.local` is the daemon's internal caller identity. It uses the

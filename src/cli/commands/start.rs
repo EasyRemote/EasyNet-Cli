@@ -282,10 +282,16 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
     preflight_runtime_start(&start_request)?;
     crate::daemon::persistence::daemon_config::ensure_minimal_device_config(&creds)
         .context("ensure daemon-config.toml for device mode")?;
+    let bootstrap_key_service =
+        crate::daemon::keyring::lifecycle::KeyServiceBootstrapLease::acquire()
+            .context("acquire bootstrap key-service custody for runtime preflight")?;
     super::federation_wire::auto_wire_self_realm_trust_from_credentials(&creds)
         .context("wire local realm trust for device mode")?;
     bootstrap_local_agent_projection(&creds, &runtime_user_binding)
         .context("sync local agent owner projection")?;
+    bootstrap_key_service
+        .release()
+        .context("release bootstrap key-service custody before daemon start")?;
 
     record_snapshot(JoinConnectionSnapshot::from_credentials(
         JoinConnectionState::RuntimeStarting,

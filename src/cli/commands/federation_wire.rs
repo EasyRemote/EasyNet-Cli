@@ -305,11 +305,11 @@ pub fn auto_wire_self_realm_trust_from_credentials(creds: &Credentials) -> anyho
         anyhow::bail!("pairing credentials missing hub_public_key_b64");
     }
     use crate::daemon::identity::self_identity::load_runtime_caller_signer;
-    use crate::daemon::keyring::lifecycle::ensure_key_service_running;
+    use crate::daemon::keyring::lifecycle::ensure_bootstrap_key_service_running;
     use base64::Engine as _;
 
     let agent_ura = facts.device_ura();
-    ensure_key_service_running()
+    ensure_bootstrap_key_service_running()
         .context("ensure key service for joined Device runtime identity")?;
     let identity = load_runtime_caller_signer(agent_ura.clone())
         .map_err(|error| anyhow::anyhow!("resolve joined Device runtime identity: {error}"))?;

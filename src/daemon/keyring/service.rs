@@ -36,6 +36,8 @@ const KEY_SERVICE_FRAME_DEADLINE: Duration = Duration::from_secs(30);
 const KEY_SERVICE_TERMINAL_CLOSE_GRACE: Duration = Duration::from_millis(100);
 #[cfg(unix)]
 const KEY_SERVICE_OWNER_PID_ENV: &str = "EASYNET_KEYRING_OWNER_PID";
+#[cfg(unix)]
+const KEY_SERVICE_OWNER_PROBE_INTERVAL: Duration = Duration::from_millis(500);
 
 #[cfg(unix)]
 #[derive(serde::Serialize)]
@@ -520,10 +522,18 @@ pub async fn run_default_key_service() -> Result<(), Box<dyn std::error::Error>>
     install_signal_cleanup();
     let connection_limit = Arc::new(Semaphore::new(MAX_CONCURRENT_KEY_SERVICE_CONNECTIONS));
     let mut fail_stop_rx = runtime.fail_stop_receiver();
+    #[cfg(unix)]
+    let mut owner_exit = Box::pin(wait_for_owner_exit(daemon_owner_pid()));
 
     #[cfg(unix)]
     loop {
         tokio::select! {
+            owner_pid = &mut owner_exit => {
+                eprintln!(
+                    "[easynet-keyring] lifecycle owner pid={owner_pid} exited, shutting down"
+                );
+                return Ok(());
+            }
             changed = fail_stop_rx.changed() => {
                 let reason = match changed {
                     Ok(()) => fail_stop_rx
@@ -604,6 +614,31 @@ fn daemon_owner_pid() -> Option<libc::pid_t> {
         .and_then(|raw| raw.into_string().ok())
         .and_then(|raw| raw.parse::<libc::pid_t>().ok())
         .filter(|pid| *pid > 1)
+}
+
+#[cfg(unix)]
+async fn wait_for_owner_exit(owner_pid: Option<libc::pid_t>) -> libc::pid_t {
+    let Some(owner_pid) = owner_pid else {
+        std::future::pending::<()>().await;
+        unreachable!("ownerless key service monitor never completes");
+    };
+    loop {
+        if !process_is_alive(owner_pid) {
+            return owner_pid;
+        }
+        tokio::time::sleep(KEY_SERVICE_OWNER_PROBE_INTERVAL).await;
+    }
+}
+
+#[cfg(unix)]
+fn process_is_alive(pid: libc::pid_t) -> bool {
+    if unsafe { libc::kill(pid, 0) } == 0 {
+        return true;
+    }
+    matches!(
+        std::io::Error::last_os_error().raw_os_error(),
+        Some(libc::EPERM)
+    )
 }
 
 /// Run a bounded real key-service instance for cross-module tests.

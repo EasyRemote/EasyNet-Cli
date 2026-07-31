@@ -139,13 +139,7 @@ pub(crate) fn system_verifying_key() -> Result<VerifyingKey, super::self_identit
 #[cfg(not(test))]
 fn ensure_key_service_ready_for_local_system_identity(
 ) -> Result<(), super::self_identity::SelfIdentityError> {
-    crate::daemon::keyring::lifecycle::ensure_key_service_running().map_err(|error| {
-        super::self_identity::SelfIdentityError::Rejected {
-            kind: "key_service_lifecycle".to_string(),
-            message: format!("ensure daemon-local key service before system signing: {error:#}"),
-        }
-    })?;
-    Ok(())
+    super::self_identity::KeyringClient::default_path().health()
 }
 
 /// Device URA used by local daemon clients when a real local device identity
