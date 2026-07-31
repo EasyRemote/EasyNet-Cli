@@ -21,6 +21,7 @@ from test_runtime import canonical_runtime_receipt_pair
 class RuntimeTransportFake:
     def __init__(self) -> None:
         self.seen: dict[str, object] = {}
+        self.seen_governance_read: dict[str, object] = {}
         self.seen_stream: dict[str, object] = {}
         self.seen_bidi: dict[str, object] = {}
         self.seen_streams: list[dict[str, object]] = []
@@ -59,6 +60,24 @@ class RuntimeTransportFake:
                 "ok": True,
                 "tuple": self.seen,
                 "invocation_id": "inv-1",
+                "terminal_state": "Completed",
+                "output_content_type": "application/json",
+                "output_json": self.output_json,
+                "elapsed_ms": 1,
+                "admission_receipt": admission,
+                "terminal_receipt": terminal,
+                "error": None,
+            }
+        ).encode()
+
+    def governance_read(self, draft_json: bytes) -> bytes:
+        self.seen_governance_read = json.loads(draft_json)
+        admission, terminal = canonical_runtime_receipt_pair("inv-governance")
+        return json.dumps(
+            {
+                "ok": True,
+                "tuple": self.seen_governance_read,
+                "invocation_id": "inv-governance",
                 "terminal_state": "Completed",
                 "output_content_type": "application/json",
                 "output_json": self.output_json,

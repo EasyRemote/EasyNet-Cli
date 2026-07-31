@@ -243,7 +243,7 @@ class RuntimeAbilityClient:
     def _invoke_governance_read(
         self, call: RuntimeCallContext, ability_name: str, arguments: object
     ) -> dict[str, object]:
-        result = self._runtime.invoke(
+        result = self._runtime._governance_read(
             self._build_governance_read(call, ability_name, arguments)
         )
         if not result.ok:

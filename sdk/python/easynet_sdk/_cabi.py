@@ -197,6 +197,13 @@ class RuntimeCABILibrary:
             ctypes.c_char_p(invocation_json),
         )
 
+    def governance_read(self, handle: int, invocation_json: bytes) -> bytes:
+        return self._call_output(
+            self._raw.runtime_governance_read,
+            ctypes.c_uint64(handle),
+            ctypes.c_char_p(invocation_json),
+        )
+
     def invocation_prepare(
         self, handle: int, invocation_json: bytes, options_json: bytes
     ) -> tuple[int, bytes]:
@@ -440,6 +447,12 @@ class RuntimeCABILibrary:
             ctypes.POINTER(ctypes.c_void_p),
         ]
         self._raw.runtime_invocation_invoke.restype = ctypes.c_int32
+        self._raw.runtime_governance_read.argtypes = [
+            ctypes.c_uint64,
+            ctypes.c_char_p,
+            ctypes.POINTER(ctypes.c_void_p),
+        ]
+        self._raw.runtime_governance_read.restype = ctypes.c_int32
         self._raw.runtime_invocation_prepare.argtypes = [
             ctypes.c_uint64,
             ctypes.c_char_p,
@@ -883,6 +896,9 @@ class CABIRuntimeTransport:
 
     def invoke(self, draft_json: bytes) -> bytes:
         return self.lib.invocation_invoke(self._require_open(), draft_json)
+
+    def governance_read(self, draft_json: bytes) -> bytes:
+        return self.lib.governance_read(self._require_open(), draft_json)
 
     def open_stream(self, draft_json: bytes) -> tuple[Any, bytes]:
         inbox = _CallbackInbox(MAX_CABI_CALLBACK_QUEUE)

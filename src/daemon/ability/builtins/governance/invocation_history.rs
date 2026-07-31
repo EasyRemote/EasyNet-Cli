@@ -28,7 +28,6 @@ use crate::daemon::ability::dispatch::{AxonAbilityCatalog, OwnerKind};
 use crate::daemon::invocation::dispatch::attempt_audit::{
     attempt_ledger_path, InvocationAttemptLedger, InvocationAttemptRecord,
 };
-use crate::daemon::persistence::agent_aggregate::AgentAggregateRepository;
 use crate::daemon::persistence::daemon_config::{
     default_config_path, default_ledger_dir, DaemonConfig,
 };
@@ -45,6 +44,9 @@ pub const ABILITY_HISTORY_PATH: &str =
     crate::daemon::ability::names::governance::INVOCATION_HISTORY_PATH;
 pub const ABILITY_INVOCATION_RECORD_GET: &str =
     crate::daemon::ability::names::governance::INVOCATION_RECORD_GET;
+
+const LEDGER_OWNER_BINDING_INVARIANT: &str =
+    "catalog ledger governance authority must project to a canonical ledger resource";
 
 fn record_query_from_args(args: &Value) -> anyhow::Result<InvocationLedgerQuery> {
     if let Some(request_id) = args.get("request_id").and_then(non_empty_str) {
@@ -65,8 +67,12 @@ const HISTORY_CURSOR_PREFIX: &str = "receipt-history:v1:";
 const MAX_HISTORY_CURSOR_LEN: usize = 4096;
 
 pub fn register(reg: &mut AxonAbilityCatalog, ledger: Option<Arc<InvocationLedger>>) {
-    let reader = Arc::new(InvocationLedgerReader::new(ledger));
-    register_for_owner(reg, reg.ledger_governance_owner(), reader);
+    let governance = reg.ledger_governance_authority();
+    let reader = Arc::new(
+        InvocationLedgerReader::new(ledger, governance.runtime_owner_ura())
+            .expect(LEDGER_OWNER_BINDING_INVARIANT),
+    );
+    register_for_owner(reg, governance.owner().clone(), reader);
 }
 
 fn register_for_owner(
@@ -133,11 +139,15 @@ fn register_for_owner(
 
 struct InvocationLedgerReader {
     shared: Option<Arc<InvocationLedger>>,
+    ledger_ura: String,
 }
 
 impl InvocationLedgerReader {
-    fn new(shared: Option<Arc<InvocationLedger>>) -> Self {
-        Self { shared }
+    fn new(shared: Option<Arc<InvocationLedger>>, runtime_owner_ura: &str) -> anyhow::Result<Self> {
+        Ok(Self {
+            shared,
+            ledger_ura: ledger_resource_ura_from_runtime_owner_ura(runtime_owner_ura)?,
+        })
     }
 
     fn list_history(&self, args: Value) -> anyhow::Result<Value> {
@@ -183,7 +193,7 @@ impl InvocationLedgerReader {
             json!(records)
         };
         let mut response = json!({
-            "ledger_ura": ledger_resource_ura()?,
+            "ledger_ura": self.ledger_ura.as_str(),
             "ledger_path": path.display().to_string(),
             "records": records,
         });
@@ -207,7 +217,7 @@ impl InvocationLedgerReader {
         let path = ledger_path_from_config();
         let record = self.fetch_one(&path, query)?;
         Ok(json!({
-            "ledger_ura": ledger_resource_ura()?,
+            "ledger_ura": self.ledger_ura.as_str(),
             "ledger_path": path.display().to_string(),
             "record": record,
         }))
@@ -238,7 +248,7 @@ impl InvocationLedgerReader {
         let graph = self.trace_graph(&path, &trace_id)?;
 
         Ok(json!({
-            "ledger_ura": ledger_resource_ura()?,
+            "ledger_ura": self.ledger_ura.as_str(),
             "ledger_path": path.display().to_string(),
             "trace_id": graph.trace_id,
             "nodes": graph.records,
@@ -250,7 +260,7 @@ impl InvocationLedgerReader {
     fn get_path(&self, _args: Value) -> anyhow::Result<Value> {
         let path = ledger_path_from_config();
         Ok(json!({
-            "ledger_ura": ledger_resource_ura()?,
+            "ledger_ura": self.ledger_ura.as_str(),
             "ledger_path": path.display().to_string(),
         }))
     }
@@ -820,34 +830,21 @@ fn attempt_state_matches(expected: Option<&str>, attempt: &InvocationAttemptReco
             ))
 }
 
-fn ledger_resource_ura() -> anyhow::Result<String> {
-    let hosted_identity =
-        AgentAggregateRepository::load_hosted_identity_status().map_err(|error| {
-            anyhow::anyhow!("invocation.history ledger owner projection unavailable: {error:#}")
-        })?;
-    ledger_resource_ura_from_host_device_agent_ura(hosted_identity.host_device_agent_ura())
-}
-
-fn ledger_resource_ura_from_host_device_agent_ura(
-    host_device_agent_ura: Option<&str>,
-) -> anyhow::Result<String> {
-    let Some(host_device_agent_ura) = host_device_agent_ura
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
-        anyhow::bail!(
-            "invocation.history ledger owner projection requires a joined runtime identity"
-        );
-    };
-    crate::core::ura::parse_ura(host_device_agent_ura).map_err(|error| {
+fn ledger_resource_ura_from_runtime_owner_ura(runtime_owner_ura: &str) -> anyhow::Result<String> {
+    let runtime_owner_ura = runtime_owner_ura.trim();
+    if runtime_owner_ura.is_empty() {
+        anyhow::bail!("invocation.history ledger governance authority must not be empty");
+    }
+    crate::core::ura::parse_ura(runtime_owner_ura).map_err(|error| {
         anyhow::anyhow!(
-            "invocation.history ledger owner projection has invalid host_device_agent_ura {host_device_agent_ura:?}: {error}"
+            "invocation.history ledger governance authority is not a canonical runtime owner \
+             {runtime_owner_ura:?}: {error}"
         )
     })?;
-    crate::core::ura::invocation_ledger_resource_ura(host_device_agent_ura).ok_or_else(|| {
+    crate::core::ura::invocation_ledger_resource_ura(runtime_owner_ura).ok_or_else(|| {
         anyhow::anyhow!(
-            "invocation.history ledger owner projection does not support runtime identity \
-             {host_device_agent_ura:?}"
+            "invocation.history ledger governance authority does not support runtime owner \
+             {runtime_owner_ura:?}"
         )
     })
 }
@@ -1031,10 +1028,17 @@ fn filter_schema() -> Value {
 mod tests {
     use super::*;
 
+    const TEST_RUNTIME_OWNER_URA: &str = "easynet:///r/test/device/invocation-history";
+
     fn invocation_history_test_catalog() -> AxonAbilityCatalog {
-        AxonAbilityCatalog::new_test_metadata_for_device_authority(
-            "easynet:///r/test/device/invocation-history",
-        )
+        AxonAbilityCatalog::new_test_metadata_for_device_authority(TEST_RUNTIME_OWNER_URA)
+    }
+
+    fn invocation_history_test_reader(
+        ledger: Option<Arc<InvocationLedger>>,
+    ) -> InvocationLedgerReader {
+        InvocationLedgerReader::new(ledger, TEST_RUNTIME_OWNER_URA)
+            .expect("test runtime owner must project to a ledger resource")
     }
 
     #[test]
@@ -1138,6 +1142,40 @@ mod tests {
     }
 
     #[test]
+    fn authority_runtime_binds_history_reader_to_authority_ledger() {
+        let authority_ura = crate::core::ura::hub_ura("history-test");
+        let authority =
+            crate::daemon::ability::dispatch::AbilityAuthorityContext::for_realm_authority_root(
+                &authority_ura,
+            )
+            .expect("realm authority context");
+        let runtime = crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+            crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+            None,
+        );
+        let mut reg =
+            AxonAbilityCatalog::new_with_runtime_and_authority_context(runtime, authority);
+
+        register(&mut reg, None);
+
+        let response = reg
+            .get_rpc(ABILITY_HISTORY_PATH)
+            .expect("history path handler")(json!({}))
+        .expect("authority ledger path response");
+        assert_eq!(
+            response["ledger_ura"],
+            "easynet:///r/history-test/resource/authority.invocations/billing/invocations"
+        );
+        let rows = reg
+            .authority_ability_catalog_snapshot()
+            .into_iter()
+            .filter(|row| row.name == ABILITY_HISTORY_PATH)
+            .collect::<Vec<_>>();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].owner, OwnerKind::RealmAuthority);
+    }
+
+    #[test]
     fn list_history_schema_exposes_opaque_cursor() {
         let schema = list_history_input_schema();
         let cursor = schema
@@ -1172,7 +1210,7 @@ mod tests {
 
     #[test]
     fn get_history_rejects_attempt_id_key() {
-        let reader = InvocationLedgerReader::new(None);
+        let reader = invocation_history_test_reader(None);
         let err = reader
             .get_history(json!({ "key": { "attempt_id": "att-retired" } }))
             .expect_err("attempt_id must not route into the attempt ledger");
@@ -1222,7 +1260,7 @@ mod tests {
         let record = sample_record("req-shared");
         ledger.put(&record).unwrap();
 
-        let reader = InvocationLedgerReader::new(Some(Arc::clone(&ledger)));
+        let reader = invocation_history_test_reader(Some(Arc::clone(&ledger)));
         let fetched = reader
             .fetch_one(
                 &path,
@@ -1242,7 +1280,7 @@ mod tests {
         let ledger = Arc::new(axon_sdk::invocation::InvocationLedger::open(&path).unwrap());
         ledger.put(&sample_record("req-list-json")).unwrap();
 
-        let reader = InvocationLedgerReader::new(Some(Arc::clone(&ledger)));
+        let reader = invocation_history_test_reader(Some(Arc::clone(&ledger)));
         let value = reader.list_history(json!({ "limit": 5 })).unwrap();
         assert!(value.get("ledger_ura").is_some());
         let records = value
@@ -1258,51 +1296,43 @@ mod tests {
     }
 
     #[test]
-    fn ledger_resource_ura_projection_requires_supported_runtime_identity() {
-        let missing = ledger_resource_ura_from_host_device_agent_ura(None)
-            .expect_err("unjoined runtime has no ledger owner");
-        assert!(missing.to_string().contains("joined runtime identity"));
-        let blank = ledger_resource_ura_from_host_device_agent_ura(Some("   "))
-            .expect_err("blank runtime identity has no ledger owner");
-        assert!(blank.to_string().contains("joined runtime identity"));
+    fn ledger_resource_ura_projection_requires_canonical_runtime_owner() {
+        let blank = ledger_resource_ura_from_runtime_owner_ura("   ")
+            .expect_err("blank governance authority has no ledger owner");
+        assert!(blank.to_string().contains("must not be empty"));
 
-        let device =
-            ledger_resource_ura_from_host_device_agent_ura(Some("easynet:///r/test/device/dev-1"))
-                .expect("device ledger URA");
+        let device = ledger_resource_ura_from_runtime_owner_ura("easynet:///r/test/device/dev-1")
+            .expect("device ledger URA");
         assert_eq!(
             device,
             "easynet:///r/test/resource/device.dev-1/billing/invocations"
         );
 
-        let user =
-            ledger_resource_ura_from_host_device_agent_ura(Some("easynet:///r/test/user/alice"))
-                .expect("user ledger URA");
+        let user = ledger_resource_ura_from_runtime_owner_ura("easynet:///r/test/user/alice")
+            .expect("user ledger URA");
         assert_eq!(
             user,
             "easynet:///r/test/resource/alice.invocations/billing/invocations"
         );
 
-        let agent = ledger_resource_ura_from_host_device_agent_ura(Some(
-            "easynet:///r/test/agent/alice.ops",
-        ))
-        .expect("agent ledger URA");
+        let agent = ledger_resource_ura_from_runtime_owner_ura("easynet:///r/test/agent/alice.ops")
+            .expect("agent ledger URA");
         assert_eq!(
             agent,
             "easynet:///r/test/resource/alice.invocations/billing/invocations"
         );
 
-        let authority =
-            ledger_resource_ura_from_host_device_agent_ura(Some("easynet:///r/test/authority"))
-                .expect("authority ledger URA");
+        let authority = ledger_resource_ura_from_runtime_owner_ura("easynet:///r/test/authority")
+            .expect("authority ledger URA");
         assert_eq!(
             authority,
             "easynet:///r/test/resource/authority.invocations/billing/invocations"
         );
 
-        let error = ledger_resource_ura_from_host_device_agent_ura(Some("not-a-ura"))
-            .expect_err("malformed hosted identity must fail closed");
+        let error = ledger_resource_ura_from_runtime_owner_ura("not-a-ura")
+            .expect_err("malformed runtime owner must fail closed");
         assert!(
-            error.to_string().contains("invalid host_device_agent_ura"),
+            error.to_string().contains("not a canonical runtime owner"),
             "unexpected error: {error}"
         );
     }
@@ -1389,7 +1419,7 @@ mod tests {
         ledger.put(&noisy).unwrap();
         ledger.put(&wanted).unwrap();
 
-        let reader = InvocationLedgerReader::new(Some(Arc::clone(&ledger)));
+        let reader = invocation_history_test_reader(Some(Arc::clone(&ledger)));
         let value = reader
             .list_history(json!({
                 "limit": 1,
@@ -1424,7 +1454,7 @@ mod tests {
         ledger.put(&newest).unwrap();
         ledger.put(&middle).unwrap();
 
-        let reader = InvocationLedgerReader::new(Some(Arc::clone(&ledger)));
+        let reader = invocation_history_test_reader(Some(Arc::clone(&ledger)));
         let first = reader.list_history(json!({ "limit": 1 })).unwrap();
         let first_records = first["records"].as_array().expect("first records");
         assert_eq!(first_records.len(), 1);
@@ -1471,7 +1501,7 @@ mod tests {
         ledger.put(&kept).unwrap();
         ledger.put(&excluded).unwrap();
 
-        let reader = InvocationLedgerReader::new(Some(Arc::clone(&ledger)));
+        let reader = invocation_history_test_reader(Some(Arc::clone(&ledger)));
         let err = reader
             .list_history(json!({
                 "limit": 1,
@@ -1490,7 +1520,7 @@ mod tests {
 
     #[test]
     fn list_history_rejects_malformed_cursor() {
-        let reader = InvocationLedgerReader::new(None);
+        let reader = invocation_history_test_reader(None);
         let err = reader
             .list_history(json!({
                 "cursor": "not-a-receipt-history-cursor"
@@ -1678,7 +1708,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("invocations.redb");
         let ledger = Arc::new(axon_sdk::invocation::InvocationLedger::open(&path).unwrap());
-        let reader = InvocationLedgerReader::new(Some(ledger));
+        let reader = invocation_history_test_reader(Some(ledger));
 
         let err = reader
             .list_history(json!({
@@ -1880,7 +1910,7 @@ mod tests {
                 "easynet:///r/test/ability/device.dev.observe.health",
             ))
             .unwrap();
-        let reader = InvocationLedgerReader::new(Some(Arc::new(ledger)));
+        let reader = invocation_history_test_reader(Some(Arc::new(ledger)));
 
         // ONE request carrying canonical Ability URAs; local registry names
         // are not query authority.

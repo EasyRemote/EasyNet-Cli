@@ -31,6 +31,7 @@ from test_signing import PREPARED_FIXTURE, signer_with_signature
 class MemoryRuntimeTransport:
     def __init__(self) -> None:
         self.seen_draft: dict[str, object] | None = None
+        self.seen_governance_read: dict[str, object] | None = None
         self.seen_options: dict[str, object] | None = None
         self.seen_signed: dict[str, object] | None = None
         self.seen_streams: list[dict[str, object]] | None = None
@@ -62,6 +63,26 @@ class MemoryRuntimeTransport:
                 "output_base64": "eyJyZWFkeSI6dHJ1ZX0=",
                 "output_json": {"ready": True},
                 "elapsed_ms": 12,
+                "admission_receipt": admission,
+                "terminal_receipt": terminal,
+                "error": None,
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+
+    def governance_read(self, draft_json: bytes) -> bytes:
+        self.seen_governance_read = json.loads(draft_json.decode("utf-8"))
+        admission, terminal = canonical_runtime_receipt_pair("inv-governance")
+        return json.dumps(
+            {
+                "ok": True,
+                "tuple": self.seen_governance_read,
+                "invocation_id": "inv-governance",
+                "terminal_state": "Completed",
+                "output_content_type": "application/json",
+                "output_json": {"ready": True},
+                "elapsed_ms": 1,
                 "admission_receipt": admission,
                 "terminal_receipt": terminal,
                 "error": None,

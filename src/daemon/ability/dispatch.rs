@@ -1305,6 +1305,28 @@ pub enum OwnerKind {
     User(String),
 }
 
+/// Canonical authority selected to govern the daemon-process invocation
+/// ledger.
+///
+/// Owner projection and runtime root travel as one value so governance
+/// registration cannot select a descriptor owner from the catalog while
+/// independently rediscovering the ledger root from ambient product state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LedgerGovernanceAuthority {
+    owner: OwnerKind,
+    runtime_owner_ura: String,
+}
+
+impl LedgerGovernanceAuthority {
+    pub(crate) fn owner(&self) -> &OwnerKind {
+        &self.owner
+    }
+
+    pub(crate) fn runtime_owner_ura(&self) -> &str {
+        &self.runtime_owner_ura
+    }
+}
+
 impl OwnerKind {
     fn authority_projection(&self) -> String {
         match self {
@@ -2063,6 +2085,17 @@ impl AbilityAuthorityContext {
             AbilityAuthoritySet::Device { .. }
             | AbilityAuthoritySet::DeviceAndRealmAuthority { .. } => OwnerKind::Device,
             AbilityAuthoritySet::RealmAuthority { .. } => OwnerKind::RealmAuthority,
+        }
+    }
+
+    fn ledger_governance_authority(&self) -> LedgerGovernanceAuthority {
+        let owner = self.ledger_governance_owner();
+        let authority_scope = self
+            .authority_scope_for(&owner)
+            .expect("ledger governance owner must belong to the configured authority set");
+        LedgerGovernanceAuthority {
+            owner,
+            runtime_owner_ura: authority_scope.authority_root().to_string(),
         }
     }
 
@@ -5565,14 +5598,13 @@ impl AxonAbilityCatalog {
             .collect()
     }
 
-    /// Single authority plane for daemon-local ledger governance.
+    /// Atomic owner/root binding for the process-local invocation ledger.
     ///
-    /// The invocation ledger is one daemon-process fact source. Unlike generic
-    /// local runtime introspection, it must not be duplicated under every
-    /// hosted authority root in combined mode because that creates a second
-    /// governance route to the same mutable audit state.
-    pub(crate) fn ledger_governance_owner(&self) -> OwnerKind {
-        self.authority_context.ledger_governance_owner()
+    /// Governance providers receive this binding during catalog assembly;
+    /// request handlers therefore never consult product credentials to infer
+    /// the authority that already constructed the catalog.
+    pub(crate) fn ledger_governance_authority(&self) -> LedgerGovernanceAuthority {
+        self.authority_context.ledger_governance_authority()
     }
 
     /// Resolve the unique descriptor for a protocol-visible ability identity.

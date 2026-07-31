@@ -5111,7 +5111,10 @@ for governance_status_surface, surface_label in governance_status_surfaces:
         continue
     text = source(governance_status_surface)
     production_text = text.split("#[cfg(test)]", 1)[0]
-    if "AgentAggregateRepository::load_hosted_identity_status()" not in production_text:
+    if (
+        surface_label != "invocation history"
+        and "AgentAggregateRepository::load_hosted_identity_status()" not in production_text
+    ):
         add(
             "R40_GOVERNANCE_STATUS_AGENT_AGGREGATE_FORK",
             governance_status_surface,
@@ -5139,12 +5142,33 @@ for governance_status_surface, surface_label in governance_status_surfaces:
         if token in production_text:
             add("R40_GOVERNANCE_STATUS_AGENT_AGGREGATE_FORK", governance_status_surface, 1, detail)
     if surface_label == "invocation history":
-        if "ledger_governance_owner()" not in production_text:
+        for retired, detail in (
+            (
+                "AgentAggregateRepository",
+                "invocation history must not infer ledger governance from product Agent state",
+            ),
+            (
+                "load_hosted_identity_status",
+                "invocation history must not read ambient identity state during request handling",
+            ),
+            (
+                "host_device_agent_ura",
+                "invocation history must not bind a generic runtime ledger to a product identity shape",
+            ),
+        ):
+            if retired in production_text:
+                add(
+                    "R40_GOVERNANCE_STATUS_AGENT_AGGREGATE_FORK",
+                    governance_status_surface,
+                    line_number(production_text, production_text.find(retired)),
+                    detail,
+                )
+        if "ledger_governance_authority()" not in production_text:
             add(
                 "R40_GOVERNANCE_STATUS_AGENT_AGGREGATE_FORK",
                 governance_status_surface,
                 1,
-                "invocation history must register through the single ledger governance owner",
+                "invocation history must register through one catalog-owned ledger governance authority",
             )
         if "local_runtime_owners()" in production_text:
             add(
@@ -5153,13 +5177,15 @@ for governance_status_surface, surface_label in governance_status_surfaces:
                 1,
                 "invocation history must not fan out one daemon ledger across all runtime owners",
             )
-        ledger_body = rust_method_body(production_text, "ledger_resource_ura")
+        ledger_body = rust_method_body(
+            production_text, "ledger_resource_ura_from_runtime_owner_ura"
+        )
         if ledger_body is None:
             add(
                 "R40_GOVERNANCE_STATUS_AGENT_AGGREGATE_FORK",
                 governance_status_surface,
                 1,
-                "invocation history ledger URA projection must remain inspectable",
+                "invocation history ledger URA projection must accept the catalog runtime owner",
             )
         else:
             offset, body = ledger_body
@@ -5169,25 +5195,25 @@ for governance_status_surface, surface_label in governance_status_surfaces:
                     "R40_GOVERNANCE_STATUS_AGENT_AGGREGATE_FORK",
                     governance_status_surface,
                     line_number(production_text, offset),
-                    "invocation history ledger URA projection must require a canonical owner while preserving hosted-identity load failures",
+                    "invocation history ledger URA projection must require a canonical runtime owner",
                 )
-            for token, detail in (
-                (
-                    "load_hosted_identity_status().ok()",
-                    "invocation history ledger URA projection must not collapse aggregate load failure into null",
-                ),
-                (
-                    "parse_ura(",
-                    "invocation history ledger URA parsing must live in the fallible projection helper",
-                ),
-            ):
-                if token in body:
-                    add(
-                        "R40_GOVERNANCE_STATUS_AGENT_AGGREGATE_FORK",
-                        governance_status_surface,
-                        line_number(production_text, offset + body.find(token)),
-                        detail,
-                    )
+            if "AgentAggregateRepository" in body:
+                add(
+                    "R40_GOVERNANCE_STATUS_AGENT_AGGREGATE_FORK",
+                    governance_status_surface,
+                    line_number(
+                        production_text,
+                        offset + body.find("AgentAggregateRepository"),
+                    ),
+                    "invocation history ledger URA projection must not depend on product repositories",
+                )
+            if "parse_ura(" not in body:
+                add(
+                    "R40_GOVERNANCE_STATUS_AGENT_AGGREGATE_FORK",
+                    governance_status_surface,
+                    line_number(production_text, offset),
+                    "invocation history ledger URA parsing must remain in the fallible projection helper",
+                )
             if "invocation_ledger_resource_ura(" not in production_text:
                 add(
                     "R40_GOVERNANCE_STATUS_AGENT_AGGREGATE_FORK",
@@ -5195,16 +5221,6 @@ for governance_status_surface, surface_label in governance_status_surfaces:
                     line_number(production_text, offset),
                     "invocation history ledger URA projection must use Axon's canonical owner-kind projection",
                 )
-        projection_body = rust_method_body(
-            production_text, "ledger_resource_ura_from_host_device_agent_ura"
-        )
-        if projection_body is None:
-            add(
-                "R40_GOVERNANCE_STATUS_AGENT_AGGREGATE_FORK",
-                governance_status_surface,
-                1,
-                "invocation history ledger URA projection must isolate host identity parsing",
-            )
 
 # Rule 41: EAL agent dispatch consumes the Agent repository-owned registered
 # Agent registry projection. EAL member calls are execution paths; constructing

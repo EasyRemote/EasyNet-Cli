@@ -167,6 +167,7 @@ class FakeRawCABI:
             self._runtime_resolve_descriptor_ref
         )
         self.runtime_invocation_invoke = FakeSymbol(self._invocation_invoke)
+        self.runtime_governance_read = FakeSymbol(self._governance_read)
         self.runtime_invocation_prepare = FakeSymbol(self._invocation_prepare)
         self.runtime_invocation_sign_prepared = FakeSymbol(
             self._invocation_sign_prepared
@@ -352,6 +353,27 @@ class FakeRawCABI:
                     "invocation_id": "inv-cabi",
                     "terminal_state": "Completed",
                     "output_json": {"ready": True},
+                    "admission_receipt": admission,
+                    "terminal_receipt": terminal,
+                },
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8"),
+        )
+
+    def _governance_read(self, handle, raw, out_ptr) -> int:
+        draft = json.loads(raw.value.decode("utf-8"))
+        self.runtime_requests.append(("governance_read", draft))
+        admission, terminal = canonical_runtime_receipt_pair("inv-cabi-governance")
+        return self._write(
+            out_ptr,
+            json.dumps(
+                {
+                    "ok": True,
+                    "tuple": draft,
+                    "invocation_id": "inv-cabi-governance",
+                    "terminal_state": "Completed",
+                    "output_json": {"governance": True},
                     "admission_receipt": admission,
                     "terminal_receipt": terminal,
                 },
@@ -657,6 +679,19 @@ class CABITransportTests(unittest.TestCase):
         self.assertEqual(result.output_json, {"ready": True})
         self.assertEqual(raw.runtime_host_open_clients, [606])
         self.assertEqual(raw.runtime_host_starts[0]["mode"], "edge")
+
+    def test_runtime_host_uses_governance_read_for_receipt_history(self) -> None:
+        raw = FakeRawCABI()
+        runtime = RuntimeClient(
+            CABIRuntimeTransport(RuntimeCABILibrary(raw), 42, owns_handle=False)
+        )
+        self.addCleanup(runtime.close)
+
+        result = runtime._governance_read(complete_draft())
+
+        self.assertTrue(result.ok)
+        self.assertEqual(result.output_json, {"governance": True})
+        self.assertEqual(raw.runtime_requests[-1][0], "governance_read")
 
     def test_runtime_host_start_rejects_retired_product_mode_input(self) -> None:
         for mode in ("device", "hub", "both"):

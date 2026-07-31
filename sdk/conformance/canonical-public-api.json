@@ -14764,7 +14764,7 @@
           "path": "sdk/go/direct_runtime.go",
           "sha256": "b103071fe4e1f7160d855f001979ce35d5ca8fb7972e4b7d4de2d10ce48ecb6e",
           "interface": "RuntimeConnector",
-          "revision": "6a24fe67ea523c059f77043774a4209eb50f4279"
+          "revision": "ef624531827f3f0e96657d2f2fc0040775913de3"
         },
         "step_evidence": [
           {
@@ -14816,7 +14816,7 @@
           "path": "sdk/python/easynet_sdk/providers/runtime/direct.py",
           "sha256": "80e84c90a6d4a27b64d282e55400423de51c7aef2b39f8d5737c4d1c4fc56b6a",
           "interface": "RuntimeConnector",
-          "revision": "6a24fe67ea523c059f77043774a4209eb50f4279"
+          "revision": "ef624531827f3f0e96657d2f2fc0040775913de3"
         },
         "step_evidence": [
           {
@@ -14870,7 +14870,7 @@
           "path": "sdk/go/direct_runtime.go",
           "sha256": "b103071fe4e1f7160d855f001979ce35d5ca8fb7972e4b7d4de2d10ce48ecb6e",
           "interface": "RuntimeConnector",
-          "revision": "6a24fe67ea523c059f77043774a4209eb50f4279"
+          "revision": "ef624531827f3f0e96657d2f2fc0040775913de3"
         },
         "step_evidence": [
           {
@@ -14912,7 +14912,7 @@
           "path": "sdk/python/easynet_sdk/providers/runtime/direct.py",
           "sha256": "80e84c90a6d4a27b64d282e55400423de51c7aef2b39f8d5737c4d1c4fc56b6a",
           "interface": "RuntimeConnector",
-          "revision": "6a24fe67ea523c059f77043774a4209eb50f4279"
+          "revision": "ef624531827f3f0e96657d2f2fc0040775913de3"
         },
         "step_evidence": [
           {
@@ -14956,7 +14956,7 @@
           "path": "sdk/go/direct_runtime.go",
           "sha256": "b103071fe4e1f7160d855f001979ce35d5ca8fb7972e4b7d4de2d10ce48ecb6e",
           "interface": "RuntimeConnector",
-          "revision": "6a24fe67ea523c059f77043774a4209eb50f4279"
+          "revision": "ef624531827f3f0e96657d2f2fc0040775913de3"
         },
         "step_evidence": [
           {
@@ -15008,7 +15008,7 @@
           "path": "sdk/python/easynet_sdk/providers/runtime/direct.py",
           "sha256": "80e84c90a6d4a27b64d282e55400423de51c7aef2b39f8d5737c4d1c4fc56b6a",
           "interface": "RuntimeConnector",
-          "revision": "6a24fe67ea523c059f77043774a4209eb50f4279"
+          "revision": "ef624531827f3f0e96657d2f2fc0040775913de3"
         },
         "step_evidence": [
           {
@@ -15062,7 +15062,7 @@
           "path": "sdk/go/direct_runtime.go",
           "sha256": "b103071fe4e1f7160d855f001979ce35d5ca8fb7972e4b7d4de2d10ce48ecb6e",
           "interface": "RuntimeConnector",
-          "revision": "6a24fe67ea523c059f77043774a4209eb50f4279"
+          "revision": "ef624531827f3f0e96657d2f2fc0040775913de3"
         },
         "step_evidence": [
           {
@@ -15139,7 +15139,7 @@
           "path": "sdk/python/easynet_sdk/providers/runtime/direct.py",
           "sha256": "80e84c90a6d4a27b64d282e55400423de51c7aef2b39f8d5737c4d1c4fc56b6a",
           "interface": "RuntimeConnector",
-          "revision": "6a24fe67ea523c059f77043774a4209eb50f4279"
+          "revision": "ef624531827f3f0e96657d2f2fc0040775913de3"
         },
         "step_evidence": [
           {
@@ -15218,7 +15218,7 @@
           "path": "sdk/go/cabi_runtime.go",
           "sha256": "cbe09e9b1d5bd6e0c47b66702763d28831b24dbec3493660a8410aa536170f0e",
           "interface": "RuntimeTransport",
-          "revision": "6a24fe67ea523c059f77043774a4209eb50f4279"
+          "revision": "ef624531827f3f0e96657d2f2fc0040775913de3"
         },
         "step_evidence": [
           {
@@ -15313,9 +15313,9 @@
           "identity": "cabi_runtime_provider",
           "owner_path": "sdk/python/easynet_sdk/",
           "path": "sdk/python/easynet_sdk/_cabi.py",
-          "sha256": "c7ed30bbc03f3e7d58f7957df3b7789112d1044c38ff77f789f4e5eb9d536876",
+          "sha256": "5bba4f0df6691a70550448f27532e202dc22c67ccad4d30eac99f6b6cdfd828c",
           "interface": "CABIRuntimeTransport",
-          "revision": "6a24fe67ea523c059f77043774a4209eb50f4279"
+          "revision": "ef624531827f3f0e96657d2f2fc0040775913de3"
         },
         "step_evidence": [
           {
@@ -15414,7 +15414,7 @@
           "path": "sdk/go/direct_runtime.go",
           "sha256": "b103071fe4e1f7160d855f001979ce35d5ca8fb7972e4b7d4de2d10ce48ecb6e",
           "interface": "RuntimeConnector",
-          "revision": "6a24fe67ea523c059f77043774a4209eb50f4279"
+          "revision": "ef624531827f3f0e96657d2f2fc0040775913de3"
         },
         "step_evidence": [
           {
@@ -15491,7 +15491,7 @@
           "path": "sdk/python/easynet_sdk/providers/runtime/direct.py",
           "sha256": "80e84c90a6d4a27b64d282e55400423de51c7aef2b39f8d5737c4d1c4fc56b6a",
           "interface": "RuntimeConnector",
-          "revision": "6a24fe67ea523c059f77043774a4209eb50f4279"
+          "revision": "ef624531827f3f0e96657d2f2fc0040775913de3"
         },
         "step_evidence": [
           {
@@ -15570,7 +15570,7 @@
           "path": "sdk/go/cabi_runtime.go",
           "sha256": "cbe09e9b1d5bd6e0c47b66702763d28831b24dbec3493660a8410aa536170f0e",
           "interface": "RuntimeTransport",
-          "revision": "6a24fe67ea523c059f77043774a4209eb50f4279"
+          "revision": "ef624531827f3f0e96657d2f2fc0040775913de3"
         },
         "step_evidence": [
           {
@@ -15690,9 +15690,9 @@
           "identity": "cabi_runtime_provider",
           "owner_path": "sdk/python/easynet_sdk/",
           "path": "sdk/python/easynet_sdk/_cabi.py",
-          "sha256": "c7ed30bbc03f3e7d58f7957df3b7789112d1044c38ff77f789f4e5eb9d536876",
+          "sha256": "5bba4f0df6691a70550448f27532e202dc22c67ccad4d30eac99f6b6cdfd828c",
           "interface": "CABIRuntimeTransport",
-          "revision": "6a24fe67ea523c059f77043774a4209eb50f4279"
+          "revision": "ef624531827f3f0e96657d2f2fc0040775913de3"
         },
         "step_evidence": [
           {
@@ -15816,7 +15816,7 @@
           "path": "sdk/go/runtime_ability.go",
           "sha256": "796cf93883c887ad6e9fd25946acf29ae0ed911fcb27e4bf59140a67b2a16dc9",
           "interface": "RuntimeAbilityClient",
-          "revision": "6a24fe67ea523c059f77043774a4209eb50f4279"
+          "revision": "ef624531827f3f0e96657d2f2fc0040775913de3"
         },
         "step_evidence": [
           {
@@ -15943,7 +15943,7 @@
           "path": "sdk/python/easynet_sdk/ability_invocation.py",
           "sha256": "11780406d28b1086b065fb9a38856e3b66666814b6b938164176b808c153f028",
           "interface": "AbilityInvocationClient",
-          "revision": "6a24fe67ea523c059f77043774a4209eb50f4279"
+          "revision": "ef624531827f3f0e96657d2f2fc0040775913de3"
         },
         "step_evidence": [
           {
@@ -16072,7 +16072,7 @@
           "path": "sdk/go/direct_runtime.go",
           "sha256": "b103071fe4e1f7160d855f001979ce35d5ca8fb7972e4b7d4de2d10ce48ecb6e",
           "interface": "RuntimeConnector",
-          "revision": "6a24fe67ea523c059f77043774a4209eb50f4279"
+          "revision": "ef624531827f3f0e96657d2f2fc0040775913de3"
         },
         "step_evidence": [
           {
@@ -16114,7 +16114,7 @@
           "path": "sdk/python/easynet_sdk/providers/runtime/direct.py",
           "sha256": "80e84c90a6d4a27b64d282e55400423de51c7aef2b39f8d5737c4d1c4fc56b6a",
           "interface": "RuntimeConnector",
-          "revision": "6a24fe67ea523c059f77043774a4209eb50f4279"
+          "revision": "ef624531827f3f0e96657d2f2fc0040775913de3"
         },
         "step_evidence": [
           {
@@ -20246,7 +20246,7 @@
       "RotatePrincipalKeyRequest.command": "2a7eb00639ba9b5d88f0c748b5502d8db1c99dd2f18641baedfdee4d55974b1c",
       "RotatePrincipalKeyRequest.principal_ura": "4bb3bb8f0394d8fd3b826b391ab9cf57c98a4daed72f82a5bce1518a3593aff7",
       "RotatePrincipalKeyRequest.replacement": "c59f920234088b53e9f54c134505c6f01222a0c6d7de1fdc0b2e7d294436240a",
-      "RuntimeAbilityClient": "fe602c95e601981c286072bafbfe4abd7b1c97c6449c60cbf729d9d075938dca",
+      "RuntimeAbilityClient": "6fa9ca7122fca73f4ab820f23b37ce84bcab4fb85bccd396157823f93c7d05f1",
       "RuntimeAbilityClient.await_result": "c24f91cdaf2e1391f583015307f694a74688998ed98c83baa59367826f6b2c36",
       "RuntimeAbilityClient.build": "f4964e82331e4ec224b518a3a4b23163946d1549e82cf41b26a8b118695bc038",
       "RuntimeAbilityClient.cancel": "94a3aa890b237a5b9a67496ae4af74f6109ab571363a20aa7d4b584d6405eae5",
@@ -20322,7 +20322,7 @@
       "RuntimeCallContext.metadata": "0ad0e67ef1c600046ee4194ff5d839dc18d771ca6ac839b7ea49a758f4bf40d7",
       "RuntimeCallContext.nonce_base64": "cf0c0c0f47cfa53840c15b356b18269df71b9332d26e49b9f67ff16e23622a32",
       "RuntimeCallContext.subject_ura": "458a4d776e207c5e7d5a8c08f8fdd9afd1fe9913615163f64d844cae217c125e",
-      "RuntimeClient": "596ef47da1d564d1dc21b7d985a3d200847a92218647cdb28ec71f98f1711fae",
+      "RuntimeClient": "94847ec49401414ac9bd9c38e472a4b241610da741b39b5c08c339c8f60ad937",
       "RuntimeClient.await_result": "9e481030b40c76ff5ced6194296e15397e42699d49b06189ba81fa0ba2a8c029",
       "RuntimeClient.cancel": "16c480b3b8f4ad270e41dd1baf7f5e39f544e6b8884666c97f4d6d83ab91495f",
       "RuntimeClient.close": "e642c1e6fa2ce1f3747235293b5d914191a13fcdac8b0e1d34efb38179e11e24",
@@ -23354,7 +23354,7 @@
     }
   ],
   "dependency_revisions": {
-    "axon_sdk": "6a24fe67ea523c059f77043774a4209eb50f4279"
+    "axon_sdk": "ef624531827f3f0e96657d2f2fc0040775913de3"
   },
   "provider_implementations": [
     {
@@ -23375,7 +23375,7 @@
         "terminal_receipt_facts",
         "unary_invoke"
       ],
-      "axon_revision": "6a24fe67ea523c059f77043774a4209eb50f4279"
+      "axon_revision": "ef624531827f3f0e96657d2f2fc0040775913de3"
     },
     {
       "language": "python",
@@ -23395,7 +23395,7 @@
         "terminal_receipt_facts",
         "unary_invoke"
       ],
-      "axon_revision": "6a24fe67ea523c059f77043774a4209eb50f4279"
+      "axon_revision": "ef624531827f3f0e96657d2f2fc0040775913de3"
     },
     {
       "language": "go",
@@ -23411,7 +23411,7 @@
         "stream",
         "bidi"
       ],
-      "axon_revision": "6a24fe67ea523c059f77043774a4209eb50f4279"
+      "axon_revision": "ef624531827f3f0e96657d2f2fc0040775913de3"
     },
     {
       "language": "python",
@@ -23419,15 +23419,15 @@
       "production_owner": "canonical runtime provider",
       "owner_path": "sdk/python/easynet_sdk/",
       "path": "sdk/python/easynet_sdk/_cabi.py",
-      "sha256": "c7ed30bbc03f3e7d58f7957df3b7789112d1044c38ff77f789f4e5eb9d536876",
+      "sha256": "5bba4f0df6691a70550448f27532e202dc22c67ccad4d30eac99f6b6cdfd828c",
       "interface": "CABIRuntimeTransport",
       "interface_path": "sdk/python/easynet_sdk/_cabi.py",
-      "interface_sha256": "c7ed30bbc03f3e7d58f7957df3b7789112d1044c38ff77f789f4e5eb9d536876",
+      "interface_sha256": "5bba4f0df6691a70550448f27532e202dc22c67ccad4d30eac99f6b6cdfd828c",
       "capability_ids": [
         "stream",
         "bidi"
       ],
-      "axon_revision": "6a24fe67ea523c059f77043774a4209eb50f4279"
+      "axon_revision": "ef624531827f3f0e96657d2f2fc0040775913de3"
     },
     {
       "language": "go",
@@ -23442,7 +23442,7 @@
       "capability_ids": [
         "ability_invocation_facade"
       ],
-      "axon_revision": "6a24fe67ea523c059f77043774a4209eb50f4279"
+      "axon_revision": "ef624531827f3f0e96657d2f2fc0040775913de3"
     },
     {
       "language": "python",
@@ -23457,14 +23457,14 @@
       "capability_ids": [
         "ability_invocation_facade"
       ],
-      "axon_revision": "6a24fe67ea523c059f77043774a4209eb50f4279"
+      "axon_revision": "ef624531827f3f0e96657d2f2fc0040775913de3"
     }
   ],
   "inventory_source_revisions": {
-    "rust": "6a24fe67ea523c059f77043774a4209eb50f4279",
+    "rust": "ef624531827f3f0e96657d2f2fc0040775913de3",
     "c_abi": "current_checkout",
     "go": "current_checkout",
-    "python": "6a24fe67ea523c059f77043774a4209eb50f4279",
+    "python": "ef624531827f3f0e96657d2f2fc0040775913de3",
     "node": "current_checkout",
     "java": "current_checkout",
     "swift": "current_checkout"

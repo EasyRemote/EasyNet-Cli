@@ -76,6 +76,13 @@ class RuntimeTransport(Protocol):
 
 
 @runtime_checkable
+class _GovernanceReadTransport(Protocol):
+    """Provider-backed seam for runtime governance observations."""
+
+    def governance_read(self, draft_json: bytes) -> bytes: ...
+
+
+@runtime_checkable
 class RuntimeRecoveryTransport(Protocol):
     """Optional provider seam for bounded restart recovery."""
 
@@ -1203,6 +1210,18 @@ class RuntimeClient:
             raise
         except Exception as exc:
             raise _transport_error("invoke transport failed", exc) from exc
+        return InvocationResult.from_json(raw)
+
+    def _governance_read(self, draft: InvocationDraft) -> InvocationResult:
+        transport = self._require_open()
+        if not isinstance(transport, _GovernanceReadTransport):
+            raise _invalid_runtime("runtime transport does not expose governance read")
+        try:
+            raw = transport.governance_read(draft.to_json().encode("utf-8"))
+        except SDKError:
+            raise
+        except Exception as exc:
+            raise _transport_error("governance read transport failed", exc) from exc
         return InvocationResult.from_json(raw)
 
     def invoke_builder(self, builder: InvocationBuilder) -> InvocationResult:

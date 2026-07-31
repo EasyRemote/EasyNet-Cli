@@ -286,7 +286,8 @@ def test_runtime_receipt_list_projects_typed_query_and_axon_record() -> None:
     assert page.records[0].receipt_chain.anchors == ()
     assert transport.descriptor_requests[-1]["provider"] == "receipt_history"
     assert transport.descriptor_requests[-1]["subject_ura"] == call.subject_ura
-    assert transport.seen["args"] == {
+    assert transport.seen == {}
+    assert transport.seen_governance_read["args"] == {
         "key": {"trace_id": "trace-1"},
         "filter": {
             "caller_ura": "easynet:///r/example/user/alice",
@@ -434,7 +435,8 @@ def test_runtime_receipt_list_accepts_maximum_bound() -> None:
         ReceiptListRequest(call=_history_call(), limit=MAX_RECEIPT_PAGE_LIMIT)
     )
     assert page.limit == 500
-    assert transport.seen["args"] == {"limit": 500}
+    assert transport.seen == {}
+    assert transport.seen_governance_read["args"] == {"limit": 500}
 
 
 def test_runtime_receipt_list_projects_multiple_ability_uras_as_one_set() -> None:
@@ -451,7 +453,8 @@ def test_runtime_receipt_list_projects_multiple_ability_uras_as_one_set() -> Non
             ),
         )
     )
-    assert transport.seen["args"]["filter"]["ability_uras"] == [
+    assert transport.seen == {}
+    assert transport.seen_governance_read["args"]["filter"]["ability_uras"] == [
         "easynet:///r/example/ability/alice.worker.docs.read",
         "easynet:///r/example/ability/alice.worker.docs.write",
     ]
@@ -474,7 +477,8 @@ def test_runtime_receipt_list_forwards_and_validates_cursor() -> None:
             limit=2,
         )
     )
-    assert transport.seen["args"] == {
+    assert transport.seen == {}
+    assert transport.seen_governance_read["args"] == {
         "limit": 2,
         "cursor": "receipt-history:v1:cursor-1",
     }
@@ -556,7 +560,8 @@ def test_runtime_receipt_get_preserves_explicit_not_found_result() -> None:
     )
     assert result.record is None
     assert result.source.ledger_ura == LEDGER_URA
-    assert transport.seen["args"] == {"key": {"request_id": "request-1"}}
+    assert transport.seen == {}
+    assert transport.seen_governance_read["args"] == {"key": {"request_id": "request-1"}}
 
 
 def test_runtime_receipt_get_rejects_missing_record_projection() -> None:
@@ -594,8 +599,12 @@ def test_runtime_receipt_trace_normalizes_daemon_nodes_through_axon_parser() -> 
     assert result.graph.trace_id == "trace-1"
     assert len(result.graph.records) == 1
     assert result.graph.records[0].request_id == "request-1"
+    assert transport.seen == {}
+    assert transport.seen_governance_read["descriptor_ref"].endswith("!read")
     assert result.graph.edges == ()
-    assert transport.seen["args"] == {"key": {"ura": _record()["invocation_ura"]}}
+    assert transport.seen_governance_read["args"] == {
+        "key": {"ura": _record()["invocation_ura"]}
+    }
 
 
 def test_runtime_receipt_rejects_malformed_axon_record() -> None:
