@@ -378,12 +378,8 @@ fn run_resolved(args: JoinArgs, target: ResolvedJoinTarget) -> anyhow::Result<()
                 "principal enrollment proof is supported only for hub URA joins; use easynet:///r/<realm>/authority"
             );
         }
-        let hub_api_override = args
-            .hub_api
-            .as_ref()
-            .map(|s| s.trim_end_matches('/').to_string());
-        let has_explicit_hub_api_override = hub_api_override.is_some();
-        let validate_base = pick_validate_base(&args.hub, hub_api_override.as_deref());
+        let validation_base = resolve_pairing_validation_base(&args);
+        let validate_base = validation_base.base;
         if let Err(err) = validate_token_format(&target) {
             record_snapshot(JoinConnectionSnapshot::failed_from_parts(
                 JoinFailureParts {
@@ -403,7 +399,7 @@ fn run_resolved(args: JoinArgs, target: ResolvedJoinTarget) -> anyhow::Result<()
         run_join_stages(
             &target,
             &validate_base,
-            has_explicit_hub_api_override,
+            validation_base.explicit_api_override,
             peer_hub,
         )?
     };
@@ -1568,18 +1564,71 @@ fn credentials_from_pairing_contract(envelope: PairingCredentialEnvelope) -> con
     }
 }
 
-/// Pick the REST-API base URL the pairing-token validation call
-/// should hit. Operators commonly run a self-hosted Hub where the
-/// user-facing portal (`--hub`) and the REST API (`--hub-api`)
-/// live on different hosts/ports — e.g. portal at
-/// `https://easynet.run`, REST API at `http://localhost:18080`.
-/// Without preferring `--hub-api` when set, the validation call
-/// hits the portal URL, gets a 404, and surfaces as "pairing
-/// token expired or already used" — a misleading error mode.
-fn pick_validate_base(hub: &str, hub_api_override: Option<&str>) -> String {
-    hub_api_override
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| hub.to_string())
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PairingValidationBase {
+    base: String,
+    explicit_api_override: bool,
+}
+
+/// Pick the REST-API base URL the pairing-token validation call should hit.
+///
+/// Pairing tokens are minted by the authenticated account Hub, while token
+/// joins historically defaulted to the public product Hub. That made
+/// `easynet auth pair` followed by the printed `easynet device join <token>`
+/// fail for local/self-hosted realms. Keep the states separate, but converge
+/// endpoint ownership: explicit CLI endpoints win; otherwise the authenticated
+/// session Hub owns the token; only unauthenticated direct token joins use the
+/// product default.
+fn resolve_pairing_validation_base(args: &JoinArgs) -> PairingValidationBase {
+    let session_hub = auth::load_session()
+        .ok()
+        .flatten()
+        .map(|session| session.hub_url);
+    pick_validate_base_with_session(&args.hub, args.hub_api.as_deref(), session_hub.as_deref())
+}
+
+fn pick_validate_base_with_session(
+    hub: &str,
+    hub_api_override: Option<&str>,
+    session_hub: Option<&str>,
+) -> PairingValidationBase {
+    if let Some(api) = normalize_endpoint_override(hub_api_override) {
+        return PairingValidationBase {
+            base: api,
+            explicit_api_override: true,
+        };
+    }
+
+    let requested_hub = normalize_endpoint(hub);
+    let default_hub = format!("https://{}", config::DEFAULT_HUB_HOST);
+    if requested_hub != default_hub {
+        return PairingValidationBase {
+            base: requested_hub,
+            explicit_api_override: false,
+        };
+    }
+
+    if let Some(session_hub) = normalize_endpoint_override(session_hub) {
+        return PairingValidationBase {
+            base: session_hub,
+            explicit_api_override: false,
+        };
+    }
+
+    PairingValidationBase {
+        base: requested_hub,
+        explicit_api_override: false,
+    }
+}
+
+fn normalize_endpoint(value: &str) -> String {
+    value.trim().trim_end_matches('/').to_string()
+}
+
+fn normalize_endpoint_override(value: Option<&str>) -> Option<String> {
+    value
+        .map(normalize_endpoint)
+        .filter(|value| !value.is_empty())
 }
 
 fn persisted_hub_api_base_for_pairing(
@@ -2516,14 +2565,68 @@ mod tests {
 
     #[test]
     fn pick_validate_base_prefers_hub_api_when_set() {
-        let chosen = pick_validate_base("https://easynet.run", Some("http://localhost:18080"));
-        assert_eq!(chosen, "http://localhost:18080");
+        let chosen = pick_validate_base_with_session(
+            "https://easynet.run",
+            Some("http://localhost:18080"),
+            None,
+        );
+        assert_eq!(chosen.base, "http://localhost:18080");
+        assert!(chosen.explicit_api_override);
+    }
+
+    #[test]
+    fn pick_validate_base_prefers_hub_api_over_session_hub() {
+        let chosen = pick_validate_base_with_session(
+            "https://easynet.run",
+            Some("http://localhost:18080/"),
+            Some("http://127.0.0.1:8080"),
+        );
+        assert_eq!(
+            chosen,
+            PairingValidationBase {
+                base: "http://localhost:18080".into(),
+                explicit_api_override: true,
+            }
+        );
+    }
+
+    #[test]
+    fn pick_validate_base_prefers_explicit_hub_over_session_hub() {
+        let chosen = pick_validate_base_with_session(
+            "http://hub.internal:8080/",
+            None,
+            Some("http://127.0.0.1:8080"),
+        );
+        assert_eq!(
+            chosen,
+            PairingValidationBase {
+                base: "http://hub.internal:8080".into(),
+                explicit_api_override: false,
+            }
+        );
+    }
+
+    #[test]
+    fn pick_validate_base_uses_session_hub_for_default_token_join() {
+        let chosen = pick_validate_base_with_session(
+            "https://easynet.run",
+            None,
+            Some("http://127.0.0.1:8080/"),
+        );
+        assert_eq!(
+            chosen,
+            PairingValidationBase {
+                base: "http://127.0.0.1:8080".into(),
+                explicit_api_override: false,
+            }
+        );
     }
 
     #[test]
     fn pick_validate_base_falls_back_to_hub_when_api_unset() {
-        let chosen = pick_validate_base("https://easynet.run", None);
-        assert_eq!(chosen, "https://easynet.run");
+        let chosen = pick_validate_base_with_session("https://easynet.run", None, None);
+        assert_eq!(chosen.base, "https://easynet.run");
+        assert!(!chosen.explicit_api_override);
     }
 
     #[test]

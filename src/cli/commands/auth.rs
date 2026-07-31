@@ -532,6 +532,9 @@ pub(crate) fn mint_pairing_token() -> anyhow::Result<PairingResp> {
 
 pub fn run_pair(args: PairArgs) -> anyhow::Result<()> {
     let resp = mint_pairing_token()?;
+    let session_hub = load_session()?
+        .map(|session| session.hub_url.trim_end_matches('/').to_string())
+        .filter(|hub| !hub.is_empty());
 
     if args.quiet {
         println!("{}", resp.pairing_token);
@@ -554,7 +557,10 @@ pub fn run_pair(args: PairArgs) -> anyhow::Result<()> {
     }
     println!();
     println!("Next:");
-    println!("  easynet device join {}", resp.pairing_token);
+    match session_hub {
+        Some(hub) => println!("  easynet device join {} --hub {}", resp.pairing_token, hub),
+        None => println!("  easynet device join {}", resp.pairing_token),
+    }
     Ok(())
 }
 
