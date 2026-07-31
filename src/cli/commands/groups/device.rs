@@ -2,17 +2,14 @@
 // ==========================
 //
 // File: src/cli/groups/device.rs
-// Description: `easynet device …` — manage *hosting substrates*.
+// Description: `easynet device …` — manage and invoke Device runtimes.
 //
-// Ontology note (interpretation C, see ARCHITECTURE.md §6):
+// Runtime model
 //
-//   A device is NOT a network first-class entity. The only network
-//   first-class objects are Agents (network actors) and Abilities (their
-//   public methods). A device is the *physical substrate* on which agents
-//   are hosted — analogous to an OS to a process. Devices are visible to
-//   the CLI for diagnostic and lifecycle reasons (pairing, hardware
-//   inventory, capacity), but they are NOT addressable as the "to" of an
-//   ability call from outside.
+//   A Device is a canonical runtime owner and execution target. Network
+//   operations still address a descriptor-bound Ability URA; device commands
+//   are typed sugar that derives those Ability URAs and submits the complete
+//   invocation tuple through the shared runtime.
 //
 // Verbs:
 //   join <token>      Pair THIS host as a substrate                       (-> cli::join)
@@ -24,7 +21,7 @@
 //   show <id>         Inspect one substrate (hardware, hosted abilities)
 //   abilities <id>    List a substrate's invocation-backed ability catalog
 //   exec <id> -- cmd  Execute process.exec through canonical invocation
-//   terminal <id>     Reserved for session-authority-backed PTY lifecycle
+//   terminal <id>     Interactive session-authority-backed PTY lifecycle
 //   remove <id>       Drain + deregister a remote substrate
 //
 // Verbs DELIBERATELY ABSENT:
@@ -73,7 +70,7 @@ pub enum DeviceAction {
     Abilities(DeviceAbilitiesArgs),
     /// Run a one-shot command through process.exec on a device.
     Exec(exec::ExecArgs),
-    /// Reserved for session-authority-backed PTY lifecycle.
+    /// Open an interactive invocation-backed PTY session.
     Terminal(TerminalArgs),
     /// Drain in-flight work on a remote substrate, then deregister it
     /// from the federation (the device disappears from
@@ -159,15 +156,7 @@ fn run_abilities(args: DeviceAbilitiesArgs) -> anyhow::Result<()> {
 }
 
 fn run_terminal(args: TerminalArgs) -> anyhow::Result<()> {
-    let _target = resolve_device_catalog_target_arg(&args.node_id)?;
-    bail!(
-        "device terminal is not cut over yet: terminal follow-up abilities require \
-         x-runtime-session-authority metadata, and the CLI invocation issuer does not \
-         yet mint and attach that authority. Use `easynet device abilities {}` to \
-         inspect terminal.* availability; PTY lifecycle will be enabled only after \
-         the session-authority-backed issuer lands.",
-        args.node_id
-    )
+    crate::cli::commands::device_terminal::run(&args.node_id)
 }
 
 fn resolve_device_catalog_target_arg(raw_target: &str) -> anyhow::Result<String> {
@@ -661,23 +650,6 @@ mod tests {
         assert!(
             message.contains("easynet:///r/<realm>/device/<id>"),
             "wrong recovery guidance: {message}"
-        );
-    }
-
-    #[test]
-    fn device_terminal_is_explicit_session_authority_seam() {
-        let error = run_terminal(TerminalArgs {
-            node_id: "local".to_string(),
-        })
-        .expect_err("terminal must not create a PTY without session authority metadata");
-        let message = error.to_string();
-        assert!(
-            message.contains("not cut over yet"),
-            "wrong terminal seam error: {message}"
-        );
-        assert!(
-            message.contains("x-runtime-session-authority"),
-            "terminal seam must name missing authority metadata: {message}"
         );
     }
 

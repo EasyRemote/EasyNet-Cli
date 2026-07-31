@@ -237,7 +237,7 @@ const HELP_TEMPLATE: &str = "\
     \x1b[1mprincipal\x1b[0m            Manage runtime principals and enrollment capabilities
 
   \x1b[1;36m[Network]\x1b[0m
-    \x1b[1mdevice\x1b[0m               Manage remote devices — pair, list, abilities, exec
+    \x1b[1mdevice\x1b[0m               Manage remote devices — pair, list, abilities, exec, terminal
     \x1b[1magent\x1b[0m                Manage agents — network actors that expose abilities
     \x1b[1mability\x1b[0m              Manage abilities — deploy, invoke, list public endpoints
     \x1b[1mcall\x1b[0m                 Voice/video calls — create, join, leave conferences
@@ -343,7 +343,7 @@ pub enum Command {
     Stop(stop::StopArgs),
 
     // ── Network (20-29) ──────────────────────────────────────────────────
-    /// Manage remote devices — pair, list, abilities, exec.
+    /// Manage remote devices — pair, list, abilities, exec, terminal.
     #[command(display_order = 21)]
     Device(groups::device::DeviceArgs),
 

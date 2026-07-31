@@ -139,7 +139,6 @@ pub fn register(reg: &mut AxonAbilityCatalog, pty: Arc<PtyService>) {
             &env,
             attach_args.session_id(),
             "terminal.attach",
-            "stream",
         )?;
         attach_session(&pty_for_attach, attach_args)
     });

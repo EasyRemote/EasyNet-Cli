@@ -28,6 +28,7 @@ pub(crate) const SESSION_AUTHORITY_METADATA_KEY: &str = "x-runtime-session-autho
 pub(crate) const REASON_AUTHORITY_FORMAT_INVALID: &str = "AUTHORITY_FORMAT_INVALID";
 pub(crate) const REASON_AUTHORITY_EXPIRED: &str = "AUTHORITY_EXPIRED";
 pub(crate) const REASON_AUTHORITY_CLOCK_UNAVAILABLE: &str = "AUTHORITY_CLOCK_UNAVAILABLE";
+pub(crate) const REASON_AUTHORITY_SIGNING_FAILED: &str = "AUTHORITY_SIGNING_FAILED";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AuthorityMetadataError {
@@ -87,6 +88,149 @@ pub(crate) struct SessionAuthorityPayload {
     pub(crate) allowed_followup_abilities: Vec<String>,
     pub(crate) issued_at_ms: i64,
     pub(crate) expires_at_ms: i64,
+}
+
+/// Generic request for one canonical session-authority metadata value.
+///
+/// This is the Rust implementation of the same runtime model exposed by the
+/// Go/Python SDKs. Product code supplies only runtime facts; key custody is an
+/// injected signing capability.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SessionAuthorityRequest {
+    pub(crate) issuer_ura: String,
+    pub(crate) session_id: String,
+    pub(crate) session_owner_user_id: String,
+    pub(crate) creator_principal_id: String,
+    pub(crate) callee_ura: String,
+    pub(crate) subject_ura: String,
+    pub(crate) audience: String,
+    pub(crate) scopes: Vec<String>,
+    pub(crate) allowed_actions: Vec<String>,
+    pub(crate) allowed_followup_abilities: Vec<String>,
+    pub(crate) issued_at_ms: i64,
+    pub(crate) expires_at_ms: i64,
+}
+
+impl From<SessionAuthorityRequest> for SessionAuthorityPayload {
+    fn from(request: SessionAuthorityRequest) -> Self {
+        Self {
+            issuer_ura: request.issuer_ura,
+            session_id: request.session_id,
+            session_owner_user_id: request.session_owner_user_id,
+            creator_principal_id: request.creator_principal_id,
+            callee_ura: request.callee_ura,
+            subject_ura: request.subject_ura,
+            audience: request.audience,
+            scopes: request.scopes,
+            allowed_actions: request.allowed_actions,
+            allowed_followup_abilities: request.allowed_followup_abilities,
+            issued_at_ms: request.issued_at_ms,
+            expires_at_ms: request.expires_at_ms,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct IssuedAuthorityMetadata {
+    key: &'static str,
+    value: String,
+}
+
+impl IssuedAuthorityMetadata {
+    pub(crate) fn key(&self) -> &'static str {
+        self.key
+    }
+
+    pub(crate) fn value(&self) -> &str {
+        &self.value
+    }
+
+    pub(crate) fn into_map(self) -> HashMap<String, String> {
+        HashMap::from([(self.key.to_string(), self.value)])
+    }
+}
+
+/// SDK-aligned canonical authority provider.
+///
+/// The provider owns validation, canonical bytes, and wire projection. The
+/// supplied closure is the only key-custody seam and must already be bound to
+/// `signer_ura`; raw private key material never crosses this API.
+pub(crate) struct CanonicalSessionAuthorityIssuer;
+
+impl CanonicalSessionAuthorityIssuer {
+    pub(crate) fn prepare(
+        request: SessionAuthorityRequest,
+        signer_ura: &str,
+    ) -> Result<PreparedSessionAuthority, AuthorityMetadataError> {
+        let payload = SessionAuthorityPayload::from(request);
+        let signer_ura = signer_ura.trim();
+        if signer_ura.is_empty() || payload.issuer_ura != signer_ura {
+            return Err(AuthorityMetadataError::new(
+                REASON_AUTHORITY_FORMAT_INVALID,
+                "session authority issuer must match the bound signer owner",
+            ));
+        }
+        validate_session_authority_payload_shape(&payload, None)?;
+        let canonical_payload = canonical_authority_payload_bytes(&payload)?;
+        Ok(PreparedSessionAuthority {
+            payload,
+            canonical_payload,
+        })
+    }
+
+    pub(crate) fn issue<E>(
+        request: SessionAuthorityRequest,
+        signer_ura: &str,
+        sign: impl FnOnce(&[u8]) -> Result<Vec<u8>, E>,
+    ) -> Result<IssuedAuthorityMetadata, AuthorityMetadataError>
+    where
+        E: std::fmt::Display,
+    {
+        let prepared = Self::prepare(request, signer_ura)?;
+        let signature = sign(prepared.canonical_payload()).map_err(|error| {
+            AuthorityMetadataError::new(
+                REASON_AUTHORITY_SIGNING_FAILED,
+                format!("session authority signer rejected canonical payload: {error}"),
+            )
+        })?;
+        prepared.seal(signature)
+    }
+}
+
+/// Validated, canonical authority payload awaiting an opaque signer.
+///
+/// Keeping this as an explicit state prevents async/remote signers from
+/// rebuilding the payload after signature generation.
+pub(crate) struct PreparedSessionAuthority {
+    payload: SessionAuthorityPayload,
+    canonical_payload: Vec<u8>,
+}
+
+impl PreparedSessionAuthority {
+    pub(crate) fn canonical_payload(&self) -> &[u8] {
+        &self.canonical_payload
+    }
+
+    pub(crate) fn seal(
+        self,
+        signature: Vec<u8>,
+    ) -> Result<IssuedAuthorityMetadata, AuthorityMetadataError> {
+        if signature.is_empty() {
+            return Err(AuthorityMetadataError::new(
+                REASON_AUTHORITY_SIGNING_FAILED,
+                "session authority signer returned an empty signature",
+            ));
+        }
+        let wire = serde_json::json!({
+            "payload": self.payload,
+            "signature": BASE64_STANDARD.encode(signature),
+        });
+        let wire_bytes = canonical_json_bytes(&wire);
+        Ok(IssuedAuthorityMetadata {
+            key: SESSION_AUTHORITY_METADATA_KEY,
+            value: BASE64_STANDARD.encode(wire_bytes),
+        })
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -597,6 +741,73 @@ mod tests {
 
     fn encode_authority_wire(wire: serde_json::Value) -> String {
         BASE64_STANDARD.encode(serde_json::to_vec(&wire).expect("authority wire serializes"))
+    }
+
+    #[test]
+    fn canonical_session_authority_issuer_matches_sdk_wire_contract() {
+        let payload = session_payload();
+        let expected = payload.clone();
+        let signer_ura = payload.issuer_ura.clone();
+        let issued = CanonicalSessionAuthorityIssuer::issue(
+            SessionAuthorityRequest {
+                issuer_ura: payload.issuer_ura,
+                session_id: payload.session_id,
+                session_owner_user_id: payload.session_owner_user_id,
+                creator_principal_id: payload.creator_principal_id,
+                callee_ura: payload.callee_ura,
+                subject_ura: payload.subject_ura,
+                audience: payload.audience,
+                scopes: payload.scopes,
+                allowed_actions: payload.allowed_actions,
+                allowed_followup_abilities: payload.allowed_followup_abilities,
+                issued_at_ms: payload.issued_at_ms,
+                expires_at_ms: payload.expires_at_ms,
+            },
+            &signer_ura,
+            |canonical| {
+                assert_eq!(
+                    canonical_authority_payload_bytes(&expected).unwrap(),
+                    canonical
+                );
+                Ok::<_, std::convert::Infallible>(vec![0x5a; 64])
+            },
+        )
+        .expect("issue canonical session authority");
+
+        assert_eq!(issued.key(), SESSION_AUTHORITY_METADATA_KEY);
+        let decoded = decode_session_authority_wire(issued.value()).expect("decode issued wire");
+        assert_eq!(decoded.payload, expected);
+        assert_eq!(
+            BASE64_STANDARD.decode(decoded.signature).unwrap(),
+            vec![0x5a; 64]
+        );
+    }
+
+    #[test]
+    fn canonical_session_authority_issuer_rejects_signer_owner_mismatch() {
+        let payload = session_payload();
+        let error = CanonicalSessionAuthorityIssuer::issue(
+            SessionAuthorityRequest {
+                issuer_ura: payload.issuer_ura,
+                session_id: payload.session_id,
+                session_owner_user_id: payload.session_owner_user_id,
+                creator_principal_id: payload.creator_principal_id,
+                callee_ura: payload.callee_ura,
+                subject_ura: payload.subject_ura,
+                audience: payload.audience,
+                scopes: payload.scopes,
+                allowed_actions: payload.allowed_actions,
+                allowed_followup_abilities: payload.allowed_followup_abilities,
+                issued_at_ms: payload.issued_at_ms,
+                expires_at_ms: payload.expires_at_ms,
+            },
+            "easynet:///r/example/agent/other",
+            |_| Ok::<_, std::convert::Infallible>(vec![0x5a; 64]),
+        )
+        .expect_err("issuer and signer owner must be identical");
+
+        assert_eq!(error.reason(), REASON_AUTHORITY_FORMAT_INVALID);
+        assert!(error.to_string().contains("bound signer owner"));
     }
 
     #[test]

@@ -10,7 +10,6 @@ pub(crate) fn require_session_authority(
     env: &EnvelopeContext,
     session_id: &str,
     ability: &str,
-    action: &str,
 ) -> anyhow::Result<()> {
     let authority = env.session_authority().ok_or_else(|| {
         anyhow::anyhow!(
@@ -29,13 +28,11 @@ pub(crate) fn require_session_authority(
     if authority.callee_ura != env.callee() {
         anyhow::bail!("{ability}: session authority callee does not match envelope callee");
     }
-    if !authority
-        .allowed_actions
-        .iter()
-        .any(|candidate| candidate.trim() == action)
-    {
-        anyhow::bail!("{ability}: session authority does not allow action `{action}`");
-    }
+    // The canonical admission descriptor has already checked
+    // `allowed_actions` against the descriptor-bound action. Re-evaluating a
+    // product-defined action name here would create a second authority model
+    // and can disagree with the signed descriptor (for example unary
+    // terminal I/O is `invoke`, not a locally invented `stream` action).
     if !authority
         .allowed_followup_abilities
         .iter()
@@ -72,7 +69,7 @@ mod tests {
             "terminal.read",
             "easynet:///r/test/device/node",
         );
-        let err = require_session_authority(&env, "session-1", "terminal.read", "stream")
+        let err = require_session_authority(&env, "session-1", "terminal.read")
             .expect_err("missing authority must fail closed");
         assert!(err
             .to_string()

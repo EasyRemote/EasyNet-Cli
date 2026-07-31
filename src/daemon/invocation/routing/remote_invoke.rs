@@ -28,7 +28,7 @@
 // Author: Silan.Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use std::{sync::Arc, time::Duration};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use anyhow::{anyhow, bail, Context};
 use serde_json::{json, Value};
@@ -405,6 +405,7 @@ pub(crate) struct RemoteInvocationRequest<'a> {
     invocation_nonce: [u8; 16],
     causal_context: CausalContext,
     args: Value,
+    request_metadata: HashMap<String, String>,
     timeout: Duration,
 }
 
@@ -632,6 +633,36 @@ impl RemoteCatalogueReadIssuer {
     }
 }
 
+/// Issuer for descriptor-bound remote session follow-up roots.
+///
+/// Session authority metadata carries the continuation capability, while this
+/// issuer owns the complete invocation tuple policy: caller-declared session
+/// subject, fresh nonce, explicit root placement, arguments, and timeout.
+/// Product facades must not mint or patch those fields independently.
+pub(crate) struct RemoteSessionInvocationIssuer;
+
+impl RemoteSessionInvocationIssuer {
+    pub(crate) fn followup_root_plan<'a>(
+        target: &'a RemoteAbilityInvocationTarget,
+        caller_ura: impl Into<String>,
+        subject_ura: impl Into<String>,
+        args: Value,
+        timeout: Duration,
+    ) -> anyhow::Result<RemoteInvocationTuplePlan<'a>> {
+        RemotePublicAbilityAdmission::evaluate(target.public_ability())
+            .require(target.public_ability())?;
+        RemoteInvocationTuplePlan::with_explicit_nonce(
+            target,
+            caller_ura,
+            RemoteInvocationSubject::CallerDeclared(subject_ura.into()),
+            axon_sdk::invocation::fresh_nonce(),
+            CausalContext::None,
+            args,
+            timeout,
+        )
+    }
+}
+
 fn target_owned_remote_system_subject(
     target: &RemoteAbilityInvocationTarget,
 ) -> anyhow::Result<RemoteInvocationSubject> {
@@ -700,13 +731,36 @@ impl<'a> RemoteInvocationRequest<'a> {
             invocation_nonce,
             causal_context,
             args,
+            request_metadata: HashMap::new(),
             timeout,
         })
+    }
+
+    pub(crate) fn with_authority_metadata(
+        mut self,
+        authority_metadata: crate::daemon::invocation::admission::authority_metadata::IssuedAuthorityMetadata,
+    ) -> Self {
+        self.request_metadata = authority_metadata.into_map();
+        self
     }
 }
 
 pub(crate) fn invoke_remote_target(request: RemoteInvocationRequest<'_>) -> anyhow::Result<Value> {
     let signer = load_remote_invocation_caller_signer(request.caller_ura.as_str())?;
+    invoke_remote_target_with_signer(request, signer)
+}
+
+pub(crate) fn invoke_remote_target_with_signer(
+    request: RemoteInvocationRequest<'_>,
+    signer: RemoteInvocationCallerSigner,
+) -> anyhow::Result<Value> {
+    if signer.owner_ura() != request.caller_ura {
+        anyhow::bail!(
+            "remote invocation signer owner `{}` does not match request caller `{}`",
+            signer.owner_ura(),
+            request.caller_ura
+        );
+    }
     let socket_path = daemon_config::resolved_local_uds_path_with_env_override();
     ensure_remote_invocation_daemon_accepting(&socket_path)?;
     invoke_remote_target_on_ready_socket(request, signer, socket_path)
@@ -784,6 +838,7 @@ fn invoke_remote_target_on_ready_socket_typed(
         invocation_nonce,
         causal_context,
         args,
+        request_metadata,
         timeout,
     } = request;
     let arguments = serde_json::to_vec(&args).map_err(|error| {
@@ -836,6 +891,7 @@ fn invoke_remote_target_on_ready_socket_typed(
             ..axon_sdk::pb::axon::v1::ContentEnvelope::default()
         });
         request.timeout_seconds = timeout_seconds;
+        request.metadata = request_metadata;
         let channel = crate::support::platform::local_daemon_grpc::connect_channel(
             socket_path.clone(),
             timeout,
@@ -890,6 +946,7 @@ pub(crate) fn invoke_remote_target_stream(
         invocation_nonce,
         causal_context,
         args,
+        request_metadata,
         timeout,
     } = request;
     if max_frames == Some(0) {
@@ -939,6 +996,7 @@ pub(crate) fn invoke_remote_target_stream(
             ..axon_sdk::pb::axon::v1::ContentEnvelope::default()
         });
         stream_request.timeout_seconds = timeout_seconds;
+        stream_request.metadata = request_metadata;
 
         let channel = crate::support::platform::local_daemon_grpc::connect_channel(
             socket_path.clone(),
@@ -1012,6 +1070,7 @@ pub(crate) fn invoke_remote_target_bidi_json_frames(
         invocation_nonce,
         causal_context,
         args,
+        request_metadata,
         timeout,
     } = request;
     if max_frames == Some(0) {
@@ -1037,7 +1096,7 @@ pub(crate) fn invoke_remote_target_bidi_json_frames(
         .context("build tokio runtime for remote InvokeBidi")?;
 
     runtime.block_on(async move {
-        let envelope_open = ProtoEnvelope::from_target(
+        let mut envelope_open = ProtoEnvelope::from_target(
             caller_ura.clone(),
             target.callee_ura.clone(),
             subject_ura,
@@ -1053,6 +1112,7 @@ pub(crate) fn invoke_remote_target_bidi_json_frames(
             signer.as_ref(),
         )
         .await?;
+        envelope_open.metadata = request_metadata;
         let mac = remote_bidi_frame_chain_mac(&envelope_open)?;
 
         let channel = crate::support::platform::local_daemon_grpc::connect_channel(

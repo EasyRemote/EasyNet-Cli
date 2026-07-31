@@ -17,6 +17,7 @@ pub(crate) mod config_cmd;
 pub(crate) mod connect;
 pub(crate) mod context;
 pub(crate) mod deploy;
+pub(crate) mod device_terminal;
 pub(crate) mod devices;
 pub mod discover;
 pub(crate) mod discuss;

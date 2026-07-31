@@ -15,8 +15,10 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use anyhow::anyhow;
-use anyhow::Context;
+use anyhow::{anyhow, Context};
+
+use crate::core::identity::RuntimeIdentityUra;
+use crate::core::ura::URAKind;
 
 /// Resolve the explicit signing identity for a CLI-originated remote request.
 ///
@@ -43,7 +45,7 @@ pub(crate) fn caller_device_ura(
     Ok(crate::core::ura::device_ura(realm, node_id))
 }
 
-/// Resolve a CLI remote target argument into a canonical Device or Authority URA.
+/// Resolve a CLI remote target argument into a canonical Device URA.
 ///
 /// Public remote invocation ingress is URA-only. Bare node ids and product
 /// directory aliases are rejected before descriptor resolution so the caller
@@ -54,12 +56,19 @@ pub(crate) fn resolve_target_device_ura(node: &str) -> anyhow::Result<String> {
     if trimmed.is_empty() {
         anyhow::bail!("remote device target must not be empty; pass a canonical Device URA");
     }
-    if crate::core::ura::parse_ura(trimmed).is_err() {
+    let identity = RuntimeIdentityUra::parse(trimmed).map_err(|error| {
+        anyhow!(
+            "remote device target {trimmed:?} is not a canonical URA: {error}; \
+             pass `easynet:///r/<realm>/device/<id>`"
+        )
+    })?;
+    if identity.kind() != URAKind::Device {
         anyhow::bail!(
-            "remote device target {trimmed:?} is not a canonical URA; pass `easynet:///r/<realm>/device/<id>`"
+            "remote device target {trimmed:?} has kind {}; expected a canonical Device URA",
+            identity.kind()
         );
     }
-    crate::daemon::invocation::routing::remote_invoke::parse_node_ura(trimmed)
+    Ok(identity.into_string())
 }
 
 /// Resolve a CLI device-target flag into a canonical Device URA.
@@ -108,6 +117,16 @@ mod tests {
         assert!(
             msg.contains("easynet:///r/<realm>/device/<id>"),
             "error must explain the canonical recovery path, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn authority_ura_is_not_a_device_target() {
+        let err = resolve_target_device_ura("easynet:///r/peer/authority")
+            .expect_err("device-specific ingress must reject an Authority URA");
+        assert!(
+            err.to_string().contains("expected a canonical Device URA"),
+            "unexpected target-kind error: {err}"
         );
     }
 

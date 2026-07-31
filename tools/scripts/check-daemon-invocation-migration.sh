@@ -355,6 +355,7 @@ for path in sorted((root / "src").rglob("*.rs")):
             ("src/support/platform/local_invoke.rs", "root_context"),
             ("src/daemon/invocation/routing/remote_invoke.rs", "target_owned_root_plan"),
             ("src/daemon/invocation/routing/remote_invoke.rs", "catalogue_read_plan"),
+            ("src/daemon/invocation/routing/remote_invoke.rs", "followup_root_plan"),
             ("src/daemon/invocation/routing/remote_invoke.rs", "child_plan"),
         }:
             violations.append(

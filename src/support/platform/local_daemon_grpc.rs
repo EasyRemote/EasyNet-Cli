@@ -17,11 +17,13 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
 
 #[cfg(feature = "axon-pb")]
 use std::collections::{HashMap, HashSet, VecDeque};
+#[cfg(feature = "axon-pb")]
+use std::path::PathBuf;
 #[cfg(feature = "axon-pb")]
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -163,6 +165,8 @@ struct LocalDaemonSystemTuplePlan {
     callee_policy: LocalDaemonSystemCalleePolicy,
     subject_policy: LocalDaemonSystemSubjectPolicy,
     derivation_policy: LocalDaemonSystemDerivationPolicy,
+    authority_metadata:
+        Option<crate::daemon::invocation::admission::authority_metadata::IssuedAuthorityMetadata>,
     timeout: Duration,
 }
 
@@ -334,8 +338,17 @@ impl LocalDaemonSystemTuplePlan {
             callee_policy,
             subject_policy,
             derivation_policy,
+            authority_metadata: None,
             timeout,
         })
+    }
+
+    fn with_authority_metadata(
+        mut self,
+        authority_metadata: crate::daemon::invocation::admission::authority_metadata::IssuedAuthorityMetadata,
+    ) -> Self {
+        self.authority_metadata = Some(authority_metadata);
+        self
     }
 
     fn into_invocation(self) -> anyhow::Result<LocalDaemonSystemInvocation> {
@@ -442,6 +455,26 @@ pub(crate) fn invoke_local_daemon_system_ability_targeted_root_timeout(
         subject_ura,
         timeout,
     )?;
+    invoke_local_daemon_ability_with_tuple_plan(tuple_plan)
+}
+
+#[cfg(feature = "axon-pb")]
+pub(crate) fn invoke_local_daemon_system_ability_targeted_root_with_authority_timeout(
+    function_name: &str,
+    payload_json: serde_json::Value,
+    callee_ura: &str,
+    subject_ura: &str,
+    authority_metadata: crate::daemon::invocation::admission::authority_metadata::IssuedAuthorityMetadata,
+    timeout: Duration,
+) -> anyhow::Result<serde_json::Value> {
+    let tuple_plan = LocalDaemonSystemTuplePlan::targeted_root_for_subject(
+        function_name,
+        payload_json,
+        callee_ura,
+        subject_ura,
+        timeout,
+    )?
+    .with_authority_metadata(authority_metadata);
     invoke_local_daemon_ability_with_tuple_plan(tuple_plan)
 }
 
@@ -813,9 +846,16 @@ fn invoke_local_daemon_ability_with_tuple_plan(
 
     let socket_path = ensure_local_daemon_accepting()?;
 
+    let authority_metadata = tuple_plan.authority_metadata.clone();
     let invocation = local_daemon_system_invocation_from_tuple_plan(tuple_plan)?;
     let function_name = invocation.function_name().to_string();
-    let request = invocation.invoke_request()?;
+    let mut request = invocation.invoke_request()?;
+    if let Some(authority_metadata) = authority_metadata {
+        request.metadata.insert(
+            authority_metadata.key().to_string(),
+            authority_metadata.value().to_string(),
+        );
+    }
 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -2059,7 +2099,7 @@ pub(crate) fn invoke_local_daemon_system_ability_root_for_subject_timeout(
 #[cfg(not(feature = "axon-pb"))]
 pub(crate) fn invoke_local_daemon_system_ability_targeted_root_timeout(
     function_name: &str,
-    payload_json: serde_json::Value,
+    _payload_json: serde_json::Value,
     _callee_ura: &str,
     _subject_ura: &str,
     _timeout: Duration,
@@ -2067,6 +2107,23 @@ pub(crate) fn invoke_local_daemon_system_ability_targeted_root_timeout(
     Err(anyhow::Error::new(
         crate::support::platform::local_invoke::LocalInvokeFailure::DaemonOffline(format!(
             "invoking targeted `{function_name}` through the local daemon Invocation endpoint requires the \
+             `axon-pb` feature; rebuild with `cargo build --features axon-pb`"
+        )),
+    ))
+}
+
+#[cfg(not(feature = "axon-pb"))]
+pub(crate) fn invoke_local_daemon_system_ability_targeted_root_with_authority_timeout(
+    function_name: &str,
+    _payload_json: serde_json::Value,
+    _callee_ura: &str,
+    _subject_ura: &str,
+    _authority_metadata: crate::daemon::invocation::admission::authority_metadata::IssuedAuthorityMetadata,
+    _timeout: Duration,
+) -> anyhow::Result<serde_json::Value> {
+    Err(anyhow::Error::new(
+        crate::support::platform::local_invoke::LocalInvokeFailure::DaemonOffline(format!(
+            "invoking authority-bound `{function_name}` through the local daemon Invocation endpoint requires the \
              `axon-pb` feature; rebuild with `cargo build --features axon-pb`"
         )),
     ))

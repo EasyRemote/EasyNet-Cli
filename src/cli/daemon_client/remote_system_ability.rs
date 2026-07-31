@@ -12,13 +12,15 @@ use anyhow::Context;
 
 #[cfg(feature = "axon-pb")]
 use crate::daemon::invocation::routing::remote_invoke::{
-    self, RemoteAbilityInvocationTarget, RemoteCatalogueReadIssuer, RemoteSystemInvocationIssuer,
+    self, RemoteAbilityInvocationTarget, RemoteCatalogueReadIssuer, RemoteSessionInvocationIssuer,
+    RemoteSystemInvocationIssuer,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RemoteDeviceSystemAbility {
     NodeDescribe,
     ProcessExec,
+    TerminalCreate,
 }
 
 impl RemoteDeviceSystemAbility {
@@ -26,6 +28,26 @@ impl RemoteDeviceSystemAbility {
         match self {
             Self::NodeDescribe => "node.describe",
             Self::ProcessExec => "process.exec",
+            Self::TerminalCreate => "terminal.create",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RemoteDeviceSessionAbility {
+    TerminalInput,
+    TerminalRead,
+    TerminalResize,
+    TerminalClose,
+}
+
+impl RemoteDeviceSessionAbility {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::TerminalInput => "terminal.input",
+            Self::TerminalRead => "terminal.read",
+            Self::TerminalResize => "terminal.resize",
+            Self::TerminalClose => "terminal.close",
         }
     }
 }
@@ -101,6 +123,38 @@ pub(crate) fn invoke_remote_device_system_ability_as_caller(
     let selector = ability.as_str();
     invoke_target_owned_system_ability(&target_ura, ability, args, caller_ura)
         .with_context(|| format!("forward {selector} to remote device target={target_ura}"))
+}
+
+#[cfg(feature = "axon-pb")]
+pub(crate) fn invoke_remote_device_session_ability(
+    target_ura: &str,
+    caller_ura: &str,
+    subject_ura: &str,
+    ability: RemoteDeviceSessionAbility,
+    args: Value,
+    authority_metadata: crate::daemon::invocation::admission::authority_metadata::IssuedAuthorityMetadata,
+    signer: crate::daemon::invocation::routing::remote_invoke::RemoteInvocationCallerSigner,
+) -> anyhow::Result<Value> {
+    let target_ura = remote_invoke::parse_node_ura(target_ura)?;
+    let timeout = crate::support::platform::timeouts::remote_system_transport_guard(0)
+        .map_err(anyhow::Error::msg)?;
+    let target_call =
+        RemoteAbilityInvocationTarget::for_target_owned_selector(&target_ura, ability.as_str())?;
+    let request = RemoteSessionInvocationIssuer::followup_root_plan(
+        &target_call,
+        caller_ura,
+        subject_ura,
+        args,
+        timeout,
+    )?
+    .into_request()?
+    .with_authority_metadata(authority_metadata);
+    remote_invoke::invoke_remote_target_with_signer(request, signer).with_context(|| {
+        format!(
+            "forward {} to remote device target={target_ura}",
+            ability.as_str()
+        )
+    })
 }
 
 #[cfg(feature = "axon-pb")]
@@ -301,6 +355,7 @@ mod tests {
         let remote_device_abilities = [
             RemoteDeviceSystemAbility::NodeDescribe,
             RemoteDeviceSystemAbility::ProcessExec,
+            RemoteDeviceSystemAbility::TerminalCreate,
         ];
         let realm_hub_abilities = [
             RealmHubSystemAbility::VoiceCreateCall,
@@ -325,6 +380,7 @@ mod tests {
         let remote_device_abilities = [
             RemoteDeviceSystemAbility::NodeDescribe,
             RemoteDeviceSystemAbility::ProcessExec,
+            RemoteDeviceSystemAbility::TerminalCreate,
         ];
 
         assert!(remote_device_abilities

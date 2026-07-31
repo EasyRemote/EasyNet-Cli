@@ -148,7 +148,6 @@ pub fn register(
             &env,
             close_args.session_id(),
             "terminal.close",
-            "manage",
         )?;
         close_session(&pty_for_close, io.as_ref(), close_args)
     });

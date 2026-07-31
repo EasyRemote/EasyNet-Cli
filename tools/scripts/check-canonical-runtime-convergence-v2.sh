@@ -12344,9 +12344,12 @@ for retired in (
 
 for required in (
     "remote invocation ingress is URA-only",
-    "parse_node_ura(trimmed)",
+    "RuntimeIdentityUra::parse(trimmed)",
+    "identity.kind() != URAKind::Device",
+    "expected a canonical Device URA",
     "not a canonical URA",
     "bare_node_id_is_rejected_before_directory_lookup",
+    "authority_ura_is_not_a_device_target",
     "empty_target_rejects_before_remote_dispatch",
 ):
     if required not in remote:

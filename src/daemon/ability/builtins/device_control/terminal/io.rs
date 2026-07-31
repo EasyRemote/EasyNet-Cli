@@ -344,7 +344,6 @@ pub fn register(reg: &mut AxonAbilityCatalog, pty: Arc<PtyService>, io: PtyIoSer
                 &env,
                 input_args.session_id(),
                 "terminal.input",
-                "stream",
             )?;
             input_session(&pty, &io, input_args)
         });
@@ -359,7 +358,6 @@ pub fn register(reg: &mut AxonAbilityCatalog, pty: Arc<PtyService>, io: PtyIoSer
                 &env,
                 read_args.session_id(),
                 "terminal.read",
-                "stream",
             )?;
             read_session(&pty, &io, read_args)
         });
@@ -373,7 +371,6 @@ pub fn register(reg: &mut AxonAbilityCatalog, pty: Arc<PtyService>, io: PtyIoSer
                 &env,
                 resize_args.session_id(),
                 "terminal.resize",
-                "stream",
             )?;
             resize_session(&pty, resize_args)
         });

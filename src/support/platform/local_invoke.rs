@@ -382,6 +382,23 @@ impl LocalDaemonSystemAbilityIssuer {
         )
     }
 
+    pub(crate) fn invoke_target_root_with_authority_timeout(
+        target: &LocalAbilityTarget,
+        args: Value,
+        subject_ura: &str,
+        authority_metadata: crate::daemon::invocation::admission::authority_metadata::IssuedAuthorityMetadata,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<Value> {
+        crate::support::platform::local_daemon_grpc::invoke_local_daemon_system_ability_targeted_root_with_authority_timeout(
+            target.dispatch_name(),
+            args,
+            target.callee_ura(),
+            subject_ura,
+            authority_metadata,
+            timeout,
+        )
+    }
+
     pub fn invoke_issued_target_root_timeout(
         invocation: &LocalTargetRootInvocation,
         timeout: std::time::Duration,
@@ -415,6 +432,30 @@ impl LocalDaemonSystemAbilityIssuer {
             timeout,
             max_frames,
         )
+    }
+}
+
+/// Key-service-backed canonical authority provider for daemon-local runtime
+/// callers.
+///
+/// This is the Rust peer of the Go/Python canonical authority transports. It
+/// owns no terminal or product semantics and never exposes private key bytes.
+pub(crate) struct LocalRuntimeAuthorityIssuer;
+
+impl LocalRuntimeAuthorityIssuer {
+    pub(crate) fn issue_session_authority(
+        request: crate::daemon::invocation::admission::authority_metadata::SessionAuthorityRequest,
+    ) -> anyhow::Result<
+        crate::daemon::invocation::admission::authority_metadata::IssuedAuthorityMetadata,
+    > {
+        use crate::daemon::invocation::admission::authority_metadata::CanonicalSessionAuthorityIssuer;
+
+        let issuer_ura = crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA;
+        CanonicalSessionAuthorityIssuer::issue(request, issuer_ura, |canonical| {
+            crate::daemon::identity::local_invocation::sign_system_canonical(canonical)
+                .map(|signature| signature.to_bytes().to_vec())
+        })
+        .map_err(anyhow::Error::new)
     }
 }
 

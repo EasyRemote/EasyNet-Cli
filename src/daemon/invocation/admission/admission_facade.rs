@@ -1032,6 +1032,36 @@ impl AdmissionFacade {
                         "trusted local-system admission requires exact `_system.local` caller",
                     ));
                 }
+                let metadata_authority = verify_local_system_authority_metadata(
+                    &input.envelope,
+                    &input.ability,
+                    descriptor.action,
+                    Some(&input.metadata),
+                    current_unix_ms(),
+                )
+                .map_err(|status| {
+                    self.authority_denied_status(&input.envelope, &input.ability, status)
+                })?;
+                if let Some(authority) = metadata_authority {
+                    let carries_authority_proof = input
+                        .metadata
+                        .get(AUTHORITY_PROOF_METADATA_KEY)
+                        .is_some_and(|value| !value.trim().is_empty());
+                    if carries_authority_proof {
+                        return Err(self.authority_denied_status(
+                            &input.envelope,
+                            &input.ability,
+                            Status::invalid_argument(format!(
+                                "{REASON_AUTHORITY_FORMAT_INVALID}: invocation carries multiple independent authority proofs"
+                            )),
+                        ));
+                    }
+                    return runtime_admission_decision(
+                        admitted_envelope,
+                        authority,
+                        RuntimeAdmissionReservation { quota: None },
+                    );
+                }
                 return runtime_admission_decision(
                     admitted_envelope,
                     VerifiedRuntimeAuthority::self_authority(caller_ura),
@@ -1045,6 +1075,10 @@ impl AdmissionFacade {
                     &input.arguments,
                 )?;
                 reject_public_hosted_agent_delegation_metadata(Some(&input.metadata))?;
+                reject_unverified_runtime_authority_metadata(
+                    Some(&input.metadata),
+                    "bootstrap-candidate admission",
+                )?;
                 if descriptor.action != AccessAction::Manage {
                     return Err(self.authority_denied_status(
                         &input.envelope,
@@ -1222,6 +1256,8 @@ impl AdmissionFacade {
         self.enforce_principal_lifecycle_admission(envelope, ability, trusted_role)
             .map_err(|status| self.authority_denied_status(envelope, ability, status))?;
         if bootstrap_authority_ability(ability) {
+            reject_unverified_runtime_authority_metadata(metadata, "bootstrap-authority admission")
+                .map_err(|status| self.authority_denied_status(envelope, ability, status))?;
             return VerifiedRuntimeAuthority::bootstrap(descriptor_bound.envelope.envelope(), None);
         }
         let metadata_authority = verify_delegation_metadata(
@@ -2180,6 +2216,87 @@ fn verify_delegation_metadata(
     trust_anchor: &RealmTrustAnchor,
     now_ms: i64,
 ) -> Result<Option<VerifiedRuntimeAuthority>, Status> {
+    verify_authority_metadata_with_issuer_key(
+        envelope,
+        ability,
+        action,
+        metadata,
+        now_ms,
+        &|issuer_ura| {
+            trust_anchor
+                .lookup(issuer_ura)
+                .map(|issuer| issuer.public_key_b64.clone())
+                .ok_or_else(|| {
+                    Status::permission_denied(format!(
+                        "{REASON_AUTHORITY_ISSUER_UNKNOWN}: authority issuer `{issuer_ura}` is not in the realm trust anchor"
+                    ))
+                })
+        },
+    )
+}
+
+fn reject_unverified_runtime_authority_metadata(
+    metadata: Option<&HashMap<String, String>>,
+    ingress: &str,
+) -> Result<(), Status> {
+    let carries_runtime_authority = metadata.is_some_and(|metadata| {
+        [DELEGATION_METADATA_KEY, SESSION_AUTHORITY_METADATA_KEY]
+            .iter()
+            .any(|key| {
+                metadata
+                    .get(*key)
+                    .is_some_and(|value| !value.trim().is_empty())
+            })
+    });
+    if carries_runtime_authority {
+        return Err(Status::invalid_argument(format!(
+            "{REASON_AUTHORITY_FORMAT_INVALID}: {ingress} cannot carry authority metadata that this ingress does not verify"
+        )));
+    }
+    Ok(())
+}
+
+fn verify_local_system_authority_metadata(
+    envelope: &Envelope,
+    ability: &str,
+    action: AccessAction,
+    metadata: Option<&HashMap<String, String>>,
+    now_ms: i64,
+) -> Result<Option<VerifiedRuntimeAuthority>, Status> {
+    verify_authority_metadata_with_issuer_key(
+        envelope,
+        ability,
+        action,
+        metadata,
+        now_ms,
+        &|issuer_ura| {
+            if issuer_ura != crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA {
+                return Err(Status::permission_denied(format!(
+                    "{REASON_AUTHORITY_ISSUER_UNKNOWN}: local-system authority issuer must be exact `{}`",
+                    crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA
+                )));
+            }
+            let verifying_key =
+                crate::daemon::identity::local_invocation::system_verifying_key().map_err(
+                    |error| {
+                        Status::failed_precondition(format!(
+                            "{REASON_AUTHORITY_ISSUER_KEY_NOT_FOUND}: local-system authority key unavailable: {error}"
+                        ))
+                    },
+                )?;
+            Ok(BASE64_STANDARD.encode(verifying_key.to_bytes()))
+        },
+    )
+}
+
+fn verify_authority_metadata_with_issuer_key(
+    envelope: &Envelope,
+    ability: &str,
+    action: AccessAction,
+    metadata: Option<&HashMap<String, String>>,
+    now_ms: i64,
+    resolve_issuer_key_b64: &dyn Fn(&str) -> Result<String, Status>,
+) -> Result<Option<VerifiedRuntimeAuthority>, Status> {
     let raw_delegation = metadata.and_then(|m| {
         m.get(DELEGATION_METADATA_KEY)
             .map(String::as_str)
@@ -2197,14 +2314,20 @@ fn verify_delegation_metadata(
                  and `{SESSION_AUTHORITY_METADATA_KEY}`"
         ))),
         (Some(raw_proof), None) => {
-            let verified =
-                parse_and_verify_delegation_proof(raw_proof, trust_anchor, now_ms)?;
+            let verified = parse_and_verify_delegation_proof_with_issuer_key(
+                raw_proof,
+                now_ms,
+                resolve_issuer_key_b64,
+            )?;
             verify_delegation_bindings(&verified.payload, envelope, ability)?;
             VerifiedRuntimeAuthority::delegated(verified).map(Some)
         }
         (None, Some(raw_session)) => {
-            let verified =
-                parse_and_verify_session_authority(raw_session, trust_anchor, now_ms)?;
+            let verified = parse_and_verify_session_authority_with_issuer_key(
+                raw_session,
+                now_ms,
+                resolve_issuer_key_b64,
+            )?;
             verify_session_authority_bindings(&verified.payload, envelope, ability, action)?;
             VerifiedRuntimeAuthority::session(verified).map(Some)
         }
@@ -2220,10 +2343,28 @@ fn verify_delegation_metadata(
     }
 }
 
+#[cfg(test)]
 fn parse_and_verify_session_authority(
     raw_authority: &str,
     trust_anchor: &RealmTrustAnchor,
     now_ms: i64,
+) -> Result<VerifiedSignedAuthority<SessionAuthorityPayload>, Status> {
+    parse_and_verify_session_authority_with_issuer_key(raw_authority, now_ms, &|issuer_ura| {
+        trust_anchor
+                .lookup(issuer_ura)
+                .map(|issuer| issuer.public_key_b64.clone())
+                .ok_or_else(|| {
+                    Status::permission_denied(format!(
+                        "{REASON_AUTHORITY_ISSUER_UNKNOWN}: session authority issuer `{issuer_ura}` is not in the realm trust anchor"
+                    ))
+                })
+    })
+}
+
+fn parse_and_verify_session_authority_with_issuer_key(
+    raw_authority: &str,
+    now_ms: i64,
+    resolve_issuer_key_b64: &dyn Fn(&str) -> Result<String, Status>,
 ) -> Result<VerifiedSignedAuthority<SessionAuthorityPayload>, Status> {
     let wire = authority_metadata::decode_session_authority_wire(raw_authority)
         .map_err(authority_metadata_error_status)?;
@@ -2239,14 +2380,8 @@ fn parse_and_verify_session_authority(
         ))
     })?;
 
-    let issuer = trust_anchor.lookup(&payload.issuer_ura).ok_or_else(|| {
-        Status::permission_denied(format!(
-            "{REASON_AUTHORITY_ISSUER_UNKNOWN}: session authority issuer `{}` is not in the realm \
-             trust anchor",
-            payload.issuer_ura
-        ))
-    })?;
-    verify_delegation_signature(&issuer.public_key_b64, &payload_bytes, &signature)?;
+    let issuer_public_key_b64 = resolve_issuer_key_b64(&payload.issuer_ura)?;
+    verify_delegation_signature(&issuer_public_key_b64, &payload_bytes, &signature)?;
 
     Ok(VerifiedSignedAuthority {
         payload,
@@ -2417,10 +2552,28 @@ fn verified_delegation_authority_id(payload: &DelegationPayload) -> Result<Strin
     ))
 }
 
+#[cfg(test)]
 fn parse_and_verify_delegation_proof(
     raw_proof: &str,
     trust_anchor: &RealmTrustAnchor,
     now_ms: i64,
+) -> Result<VerifiedSignedAuthority<DelegationPayload>, Status> {
+    parse_and_verify_delegation_proof_with_issuer_key(raw_proof, now_ms, &|issuer_ura| {
+        trust_anchor
+                .lookup(issuer_ura)
+                .map(|issuer| issuer.public_key_b64.clone())
+                .ok_or_else(|| {
+                    Status::permission_denied(format!(
+                        "{REASON_AUTHORITY_ISSUER_UNKNOWN}: authority issuer `{issuer_ura}` is not in the realm trust anchor"
+                    ))
+                })
+    })
+}
+
+fn parse_and_verify_delegation_proof_with_issuer_key(
+    raw_proof: &str,
+    now_ms: i64,
+    resolve_issuer_key_b64: &dyn Fn(&str) -> Result<String, Status>,
 ) -> Result<VerifiedSignedAuthority<DelegationPayload>, Status> {
     let wire = authority_metadata::decode_delegation_authority_wire(raw_proof)
         .map_err(authority_metadata_error_status)?;
@@ -2436,14 +2589,8 @@ fn parse_and_verify_delegation_proof(
         ))
     })?;
 
-    let issuer = trust_anchor.lookup(&payload.issuer_ura).ok_or_else(|| {
-        Status::permission_denied(format!(
-            "{REASON_AUTHORITY_ISSUER_UNKNOWN}: authority issuer `{}` is not in the realm \
-             trust anchor",
-            payload.issuer_ura
-        ))
-    })?;
-    verify_delegation_signature(&issuer.public_key_b64, &payload_bytes, &signature)?;
+    let issuer_public_key_b64 = resolve_issuer_key_b64(&payload.issuer_ura)?;
+    verify_delegation_signature(&issuer_public_key_b64, &payload_bytes, &signature)?;
 
     Ok(VerifiedSignedAuthority {
         payload,
@@ -2846,6 +2993,99 @@ mod tests {
             }),
             ..Envelope::default()
         }
+    }
+
+    fn local_system_terminal_authority_request(
+        now_ms: i64,
+    ) -> authority_metadata::SessionAuthorityRequest {
+        let issuer = crate::core::ura::LOCAL_SYSTEM_AGENT_URA;
+        authority_metadata::SessionAuthorityRequest {
+            issuer_ura: issuer.to_string(),
+            session_id: "session-1".to_string(),
+            session_owner_user_id: "alice".to_string(),
+            creator_principal_id: issuer.to_string(),
+            callee_ura: "easynet:///r/example/device/dev-a".to_string(),
+            subject_ura: "easynet:///r/example/resource/user.alice/session/session-1".to_string(),
+            audience: "easynet:///r/example/device/dev-a".to_string(),
+            scopes: vec!["terminal.*".to_string()],
+            allowed_actions: vec!["invoke".to_string()],
+            allowed_followup_abilities: vec!["terminal.read".to_string()],
+            issued_at_ms: now_ms - 1_000,
+            expires_at_ms: now_ms + 60_000,
+        }
+    }
+
+    #[test]
+    fn trusted_local_system_verifies_session_authority_before_runtime_projection() {
+        let now_ms = current_unix_ms();
+        let request = local_system_terminal_authority_request(now_ms);
+        let issued = authority_metadata::CanonicalSessionAuthorityIssuer::issue(
+            request.clone(),
+            crate::core::ura::LOCAL_SYSTEM_AGENT_URA,
+            |canonical| {
+                crate::daemon::identity::local_invocation::sign_system_canonical(canonical)
+                    .map(|signature| signature.to_bytes().to_vec())
+            },
+        )
+        .expect("issue local-system session authority");
+        let metadata = issued.into_map();
+        let envelope = authority_wire_envelope(
+            Some(crate::core::ura::LOCAL_SYSTEM_AGENT_URA),
+            Some(&request.callee_ura),
+            Some(&request.subject_ura),
+        );
+
+        let authority = verify_local_system_authority_metadata(
+            &envelope,
+            "terminal.read",
+            AccessAction::Invoke,
+            Some(&metadata),
+            now_ms,
+        )
+        .expect("local-system authority must verify")
+        .expect("session authority must be projected");
+
+        assert_eq!(
+            authority.authority_id(),
+            Some("session_authority:session-1")
+        );
+        assert_eq!(authority.binding.form(), "session");
+    }
+
+    #[test]
+    fn trusted_local_system_rejects_unverified_session_authority() {
+        let now_ms = current_unix_ms();
+        let request = local_system_terminal_authority_request(now_ms);
+        let issued = authority_metadata::CanonicalSessionAuthorityIssuer::prepare(
+            request.clone(),
+            crate::core::ura::LOCAL_SYSTEM_AGENT_URA,
+        )
+        .expect("prepare authority")
+        .seal(vec![0x00; ed25519_dalek::SIGNATURE_LENGTH])
+        .expect("encode invalid authority fixture");
+        let metadata = issued.into_map();
+        let envelope = authority_wire_envelope(
+            Some(crate::core::ura::LOCAL_SYSTEM_AGENT_URA),
+            Some(&request.callee_ura),
+            Some(&request.subject_ura),
+        );
+
+        let error = match verify_local_system_authority_metadata(
+            &envelope,
+            "terminal.read",
+            AccessAction::Invoke,
+            Some(&metadata),
+            now_ms,
+        ) {
+            Ok(_) => panic!("unverified local-system authority must fail closed"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error.code(), Code::PermissionDenied);
+        assert!(
+            error.message().contains(REASON_AUTHORITY_SIGNATURE_INVALID),
+            "{error}"
+        );
     }
 
     fn raw_authority_metadata(value: serde_json::Value) -> String {
