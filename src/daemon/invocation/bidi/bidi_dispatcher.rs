@@ -22,16 +22,12 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+use futures::Stream;
+use prost::Message as _;
 use std::collections::{HashMap, VecDeque};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
-use std::time::Duration;
-
-use std::future::Future;
-
-use futures::Stream;
-use prost::Message as _;
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 use tonic::{Response, Status, Streaming};
@@ -544,24 +540,6 @@ impl BidiDispatcher {
 pub(crate) const REASON_BIDI_FIRST_FRAME_SEQUENCE: &str = "AXON_BIDI_FIRST_FRAME_SEQUENCE";
 pub(crate) const REASON_BIDI_NON_STRICT_ORDERING: &str = "AXON_BIDI_NON_STRICT_ORDERING";
 const REASON_BIDI_FRAME_SEQUENCE: &str = "AXON_BIDI_FRAME_SEQUENCE";
-/// Application-level heartbeat cadence for `session.open` down
-/// streams.
-///
-/// Why we need this in addition to tonic/h2 keepalive PING:
-/// transport keepalive only proves the TCP/TLS/HTTP2 stack is still
-/// exchanging frames; it does not guarantee tonic surfaces a
-/// half-broken bidi back to the device task promptly. The observed
-/// failure mode was: hub-side reader noticed reset and removed the
-/// device from PresenceRegistry immediately, but the device-side
-/// `down_stream.next()` could remain parked and therefore never
-/// trigger the reconnect supervisor. A no-op application heartbeat
-/// every 5 s gives the device a concrete "the hub is still pushing
-/// session frames" signal it can watchdog against.
-///
-/// The frame is `BidiControl::default()` — a wire shape current
-/// readers already ignore as a non-business frame, so we add liveness
-/// without perturbing dispatch semantics.
-const SESSION_DOWN_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 
 /// Pull the `EnvelopeOpen` payload out of frame 0 of an
 /// `InvokeBidi` up stream. Returns `Status::invalid_argument` for
@@ -1639,11 +1617,13 @@ impl Drop for SessionPresenceLease {
     }
 }
 
-/// Build a no-op down-stream control frame suitable for session
-/// liveness probing. Current readers treat `Control` frames as
-/// non-business metadata and ignore them, so this is wire-compatible
-/// with every existing `session.open` consumer.
-fn build_session_down_keepalive_frame() -> DispatchFrame {
+/// Build the acknowledgement for one device-originated session heartbeat.
+///
+/// The acknowledgement is intentionally emitted only after the Hub has
+/// drained an up-stream control frame. It therefore proves end-to-end
+/// progress in both directions; an independently scheduled Hub keepalive
+/// would hide a half-open device-to-Hub request stream.
+fn build_session_heartbeat_ack_frame() -> DispatchFrame {
     DispatchFrame::control(InvokeBidiDown {
         payload: Some(DownPayload::Control(BidiControl::default())),
         ..InvokeBidiDown::default()
@@ -2003,27 +1983,26 @@ pub(crate) fn map_local_bidi_handler_frame(
     }
 }
 
-/// Down-stream wrapper that:
-///   1. Emits a typed session-established control as down frame 0.
-///   2. After frame 0, injects a no-op `BidiControl` heartbeat frame
-///      whenever no business frame has been queued for
-///      `SESSION_DOWN_HEARTBEAT_INTERVAL`.
+/// Down-stream wrapper that emits a typed session-established control as
+/// frame 0, then prioritizes control/result frames over normal payload
+/// backlog.
 ///
-/// Crucially this wrapper owns NO extra `DispatchSender`. That keeps
+/// Session heartbeat acknowledgements enter through the same
+/// `DispatchSender` after the Hub has drained the corresponding up-stream
+/// heartbeat. This wrapper never invents an independent keepalive: doing so
+/// would make a broken device-to-Hub half-channel look healthy.
+///
+/// Crucially this wrapper owns no extra `DispatchSender`. That keeps
 /// `PresenceRegistry` displacement semantics intact: when a same-URA
 /// second session is admitted, dropping the displaced sender still
-/// closes the old response stream immediately. A background
-/// keepalive task that cloned the sender would accidentally keep the
-/// displaced stream open, which is exactly the class of lifecycle
-/// bug we are trying to eliminate here.
+/// closes the old response stream immediately.
 struct SessionProviderDownStream {
     down_rx: tokio::sync::mpsc::Receiver<Result<DispatchFrame, Status>>,
     pending_normal_frames: VecDeque<Result<DispatchFrame, Status>>,
     next_sequence: u64,
-    next_heartbeat: Pin<Box<tokio::time::Sleep>>,
     /// Set to `Some(control)` at construction; first `poll_next`
     /// yields it and clears the slot. Subsequent polls follow the
-    /// recv-then-heartbeat path.
+    /// priority receive path.
     pending_initial_control: Option<InvokeBidiDown>,
 }
 
@@ -2097,15 +2076,8 @@ impl SessionProviderDownStream {
             down_rx,
             pending_normal_frames: VecDeque::new(),
             next_sequence: 0,
-            next_heartbeat: Box::pin(tokio::time::sleep(SESSION_DOWN_HEARTBEAT_INTERVAL)),
             pending_initial_control: Some(initial_control),
         }
-    }
-
-    fn reset_heartbeat(&mut self) {
-        self.next_heartbeat
-            .as_mut()
-            .reset(tokio::time::Instant::now() + SESSION_DOWN_HEARTBEAT_INTERVAL);
     }
 
     fn stamp_sequence(&mut self, frame: InvokeBidiDown) -> InvokeBidiDown {
@@ -2147,29 +2119,13 @@ impl Stream for SessionProviderDownStream {
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         if let Some(control) = self.pending_initial_control.take() {
-            self.reset_heartbeat();
             return Poll::Ready(Some(Ok(self.stamp_sequence(control))));
         }
 
         match self.poll_dispatch_frame(cx) {
-            Poll::Ready(Some(Ok(frame))) => {
-                self.reset_heartbeat();
-                return Poll::Ready(Some(Ok(self.stamp_sequence(frame.frame))));
-            }
-            Poll::Ready(Some(Err(status))) => {
-                self.reset_heartbeat();
-                return Poll::Ready(Some(Err(status)));
-            }
-            Poll::Ready(None) => return Poll::Ready(None),
-            Poll::Pending => {}
-        }
-
-        match self.next_heartbeat.as_mut().poll(cx) {
-            Poll::Ready(()) => {
-                self.reset_heartbeat();
-                let frame = build_session_down_keepalive_frame().frame;
-                Poll::Ready(Some(Ok(self.stamp_sequence(frame))))
-            }
+            Poll::Ready(Some(Ok(frame))) => Poll::Ready(Some(Ok(self.stamp_sequence(frame.frame)))),
+            Poll::Ready(Some(Err(status))) => Poll::Ready(Some(Err(status))),
+            Poll::Ready(None) => Poll::Ready(None),
             Poll::Pending => Poll::Pending,
         }
     }
@@ -2405,49 +2361,67 @@ pub(crate) fn build_session_request_result_frame(
     })
 }
 
+/// Insert one frame into the exact currently-admitted session generation.
+///
+/// This is the single bounded-backpressure authority for Hub → device session
+/// traffic. A full result queue is a carrier failure, not a license to drop a
+/// terminal frame while presence remains Online.
+fn push_session_down_frame(
+    presence: &Arc<PresenceRegistry>,
+    caller_ura: &str,
+    frame: crate::daemon::invocation::bidi::state::presence::DispatchFrame,
+) -> SessionDownPush {
+    let Some((session_id, sender)) = presence.lookup_tracked(caller_ura) else {
+        return SessionDownPush::NoPresence;
+    };
+    match sender.try_send(Ok(frame)) {
+        Ok(()) => SessionDownPush::Queued { session_id },
+        Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+            let _ = presence.remove_if_session(caller_ura, session_id, OfflineReason::SendFailed);
+            SessionDownPush::RetiredBackpressured { session_id }
+        }
+        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+            let _ = presence.remove_if_session(caller_ura, session_id, OfflineReason::StreamClosed);
+            SessionDownPush::Closed { session_id }
+        }
+    }
+}
+
 /// Push a `RequestResult` frame back down the device's bidi via
 /// the same PresenceRegistry-keyed `DispatchSender` the device's
 /// session-accept handler registered. The device drains the down
 /// stream in `session_initiator::dial_and_run_session` and routes
 /// `RequestResult` frames to the `oneshot::Receiver` matching
-/// `call_id` (per PR-N6 spec §"Concurrent multiplexing"). Lookup
-/// failure means the device disconnected between issuing the
-/// Request and the hub finishing dispatch — log + drop, which is
-/// the same shape PR-N1's `try_push_canonical_invoke_frame` uses for
-/// the symmetric race.
+/// `call_id` (per PR-N6 spec §"Concurrent multiplexing").
 pub(crate) fn push_session_request_result(
     presence: &Arc<PresenceRegistry>,
     caller_ura: &str,
     id_hex: &str,
     frame: crate::daemon::invocation::bidi::state::presence::DispatchFrame,
-) -> SessionRequestResultPush {
-    let Some((session_id, sender)) = presence.lookup_tracked(caller_ura) else {
-        crate::op_event!(
-            component = session_accept,
-            kind = request_result_drop_no_presence,
-            caller = caller_ura,
-            call_id = id_hex,
-            reason = "device_disconnected_mid_dispatch",
-        );
-        return SessionRequestResultPush::NoPresence;
-    };
-    match sender.try_send(Ok(frame)) {
-        Ok(()) => SessionRequestResultPush::Queued { session_id },
-        Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-            // Full = device is slow, not dead: drop this one frame
-            // (the device-side waiter times out and retries) instead
-            // of evicting the whole session.
+) -> SessionDownPush {
+    let push = push_session_down_frame(presence, caller_ura, frame);
+    match push {
+        SessionDownPush::Queued { .. } => {}
+        SessionDownPush::NoPresence => {
+            crate::op_event!(
+                component = session_accept,
+                kind = request_result_drop_no_presence,
+                caller = caller_ura,
+                call_id = id_hex,
+                reason = "device_disconnected_mid_dispatch",
+            );
+        }
+        SessionDownPush::RetiredBackpressured { .. } => {
             crate::op_event!(
                 component = session_accept,
                 kind = request_result_push_failed,
                 caller = caller_ura,
                 call_id = id_hex,
-                reason = "channel_full_dropped",
+                reason = "down_channel_backpressured_session_retired",
+                offline_reason = "SendFailed",
             );
-            SessionRequestResultPush::DroppedBusy { session_id }
         }
-        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
-            let _ = presence.remove_if_session(caller_ura, session_id, OfflineReason::StreamClosed);
+        SessionDownPush::Closed { .. } => {
             crate::op_event!(
                 component = session_accept,
                 kind = request_result_push_failed,
@@ -2456,9 +2430,25 @@ pub(crate) fn push_session_request_result(
                 reason = "down_channel_closed",
                 offline_reason = "StreamClosed",
             );
-            SessionRequestResultPush::Closed { session_id }
         }
     }
+    push
+}
+
+fn acknowledge_session_heartbeat(
+    presence: &Arc<PresenceRegistry>,
+    caller_ura: &str,
+) -> SessionDownPush {
+    let push = push_session_down_frame(presence, caller_ura, build_session_heartbeat_ack_frame());
+    if !matches!(push, SessionDownPush::Queued { .. }) {
+        crate::op_event!(
+            component = session_accept,
+            kind = heartbeat_ack_push_failed,
+            caller = caller_ura,
+            outcome = push.as_wire_str(),
+        );
+    }
+    push
 }
 
 fn reject_reverse_dispatch_call(
@@ -2488,11 +2478,11 @@ fn reject_reverse_dispatch_call(
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SessionRequestResultPush {
+pub(crate) enum SessionDownPush {
     Queued {
         session_id: crate::daemon::invocation::bidi::state::presence::PresenceSessionId,
     },
-    DroppedBusy {
+    RetiredBackpressured {
         session_id: crate::daemon::invocation::bidi::state::presence::PresenceSessionId,
     },
     Closed {
@@ -2501,13 +2491,22 @@ pub(crate) enum SessionRequestResultPush {
     NoPresence,
 }
 
-impl SessionRequestResultPush {
+impl SessionDownPush {
+    fn as_wire_str(self) -> &'static str {
+        match self {
+            Self::Queued { .. } => "queued",
+            Self::RetiredBackpressured { .. } => "retired_backpressured",
+            Self::Closed { .. } => "closed",
+            Self::NoPresence => "no_presence",
+        }
+    }
+
     fn session_id(
         self,
     ) -> Option<crate::daemon::invocation::bidi::state::presence::PresenceSessionId> {
         match self {
             Self::Queued { session_id }
-            | Self::DroppedBusy { session_id }
+            | Self::RetiredBackpressured { session_id }
             | Self::Closed { session_id } => Some(session_id),
             Self::NoPresence => None,
         }
@@ -2538,7 +2537,7 @@ fn remove_deferred_self_revoke_presence(
     presence: &Arc<PresenceRegistry>,
     caller_ura: &str,
     id_hex: &str,
-    push: SessionRequestResultPush,
+    push: SessionDownPush,
 ) {
     let Some(session_id) = push.session_id() else {
         return;
@@ -3132,6 +3131,17 @@ async fn drain_session_runtime_up_stream(
                         kind = up_heartbeat_projection_lease_refreshed,
                         caller = caller_ura,
                     );
+                }
+                match acknowledge_session_heartbeat(&presence, &caller_ura) {
+                    SessionDownPush::Queued { .. } => {}
+                    SessionDownPush::RetiredBackpressured { .. } => {
+                        close_reason = OfflineReason::SendFailed;
+                        break;
+                    }
+                    SessionDownPush::Closed { .. } | SessionDownPush::NoPresence => {
+                        close_reason = OfflineReason::StreamClosed;
+                        break;
+                    }
                 }
                 continue;
             }
@@ -3841,6 +3851,7 @@ pub(crate) fn remote_bidi_target_ura(envelope_open: &EnvelopeOpen) -> Option<Str
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::daemon::invocation::bidi::state::presence::PresenceEvent;
     use axon_sdk::pb::axon::v1::SessionOpenExt;
 
     #[test]
@@ -3908,6 +3919,99 @@ mod tests {
         let failure = result.failure.expect("typed failure");
         assert_eq!(failure.code, "INVALID_ARGUMENT");
         assert!(!failure.retryable);
+    }
+
+    #[tokio::test]
+    async fn terminal_result_backpressure_retires_session_instead_of_dropping_result() {
+        let presence = Arc::new(PresenceRegistry::new());
+        let mut events = presence.subscribe_events();
+        let caller = "easynet:///r/test/device/backpressured-caller";
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+        let registration = presence
+            .insert_negotiated(
+                caller.to_string(),
+                sender,
+                SessionContract::new(CANONICAL_SESSION_CARRIER_VERSION, vec![7; 16]),
+            )
+            .expect("canonical presence");
+        let online = events.recv().await.expect("online event");
+        assert!(matches!(online, PresenceEvent::Online { .. }));
+
+        presence
+            .lookup(caller)
+            .expect("live sender")
+            .try_send(Ok(DispatchFrame::control(InvokeBidiDown::default())))
+            .expect("prefill down channel");
+        let result = push_session_request_result(
+            &presence,
+            caller,
+            "terminal-call",
+            DispatchFrame::control(InvokeBidiDown::default()),
+        );
+
+        assert_eq!(
+            result,
+            SessionDownPush::RetiredBackpressured {
+                session_id: registration.session_id,
+            }
+        );
+        assert!(
+            presence.lookup(caller).is_none(),
+            "backpressured result channel must not remain publicly online"
+        );
+        let offline = events.recv().await.expect("offline event");
+        assert!(matches!(
+            offline,
+            PresenceEvent::Offline {
+                reason: OfflineReason::SendFailed,
+                ..
+            }
+        ));
+        receiver
+            .recv()
+            .await
+            .expect("prefilled frame")
+            .expect("frame");
+        assert!(
+            receiver.recv().await.is_none(),
+            "retiring the presence sender must close the carrier down channel"
+        );
+    }
+
+    #[tokio::test]
+    async fn heartbeat_ack_is_emitted_only_for_the_live_session_generation() {
+        let presence = Arc::new(PresenceRegistry::new());
+        let caller = "easynet:///r/test/device/heartbeat-caller";
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+        let registration = presence
+            .insert_negotiated(
+                caller.to_string(),
+                sender,
+                SessionContract::new(CANONICAL_SESSION_CARRIER_VERSION, vec![8; 16]),
+            )
+            .expect("canonical presence");
+
+        assert_eq!(
+            acknowledge_session_heartbeat(&presence, caller),
+            SessionDownPush::Queued {
+                session_id: registration.session_id,
+            }
+        );
+        let ack = receiver
+            .recv()
+            .await
+            .expect("heartbeat acknowledgement")
+            .expect("dispatch frame");
+        assert!(matches!(ack.frame.payload, Some(DownPayload::Control(_))));
+
+        assert!(presence
+            .remove_if_session(caller, registration.session_id, OfflineReason::StreamClosed,)
+            .is_some());
+        assert_eq!(
+            acknowledge_session_heartbeat(&presence, caller),
+            SessionDownPush::NoPresence,
+            "a retired generation cannot receive a synthetic acknowledgement"
+        );
     }
 
     #[test]

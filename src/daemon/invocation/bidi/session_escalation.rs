@@ -65,18 +65,6 @@ use crate::daemon::invocation::bidi::state::session_failure::SessionFailure;
 /// matches the canonical remote invocation deadline.
 pub const DEFAULT_ESCALATION_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Deadline for inserting one already-built escalation frame into the live
-/// `session.open` up-channel.
-///
-/// This protects the canonical session relay from a stale or backpressured
-/// up-channel. Without this guard, the single consumer task can block forever
-/// while holding the escalation queue, and unrelated product reads such as
-/// `meta.list_abilities` then hang behind a dead session writer.
-#[cfg(not(test))]
-pub const ESCALATION_UP_SEND_TIMEOUT: Duration = Duration::from_secs(5);
-#[cfg(test)]
-pub const ESCALATION_UP_SEND_TIMEOUT: Duration = Duration::from_millis(50);
-
 /// Capacity of the dispatch-side mpsc the dispatch handler pushes
 /// `EscalationRequest` items into. Sized matching
 /// `SESSION_UP_CHANNEL_CAPACITY` in `session_initiator` so the
@@ -1138,18 +1126,7 @@ async fn send_escalation_request(
     call_id: [u8; 16],
     invocation: EscalationInvocation,
 ) -> Result<(), String> {
-    match tokio::time::timeout(
-        ESCALATION_UP_SEND_TIMEOUT,
-        send_escalation_request_inner(up_tx, call_id, invocation),
-    )
-    .await
-    {
-        Ok(result) => result,
-        Err(_) => Err(format!(
-            "session up-channel send timed out after {}ms",
-            ESCALATION_UP_SEND_TIMEOUT.as_millis()
-        )),
-    }
+    send_escalation_request_inner(up_tx, call_id, invocation).await
 }
 
 async fn send_escalation_request_inner(
@@ -1225,18 +1202,7 @@ async fn send_escalation_bidi_input(
     up_tx: &SessionUpSender,
     input: EscalationBidiInput,
 ) -> Result<(), String> {
-    match tokio::time::timeout(
-        ESCALATION_UP_SEND_TIMEOUT,
-        send_escalation_bidi_input_inner(up_tx, input),
-    )
-    .await
-    {
-        Ok(result) => result,
-        Err(_) => Err(format!(
-            "session up-channel bidi input send timed out after {}ms",
-            ESCALATION_UP_SEND_TIMEOUT.as_millis()
-        )),
-    }
+    send_escalation_bidi_input_inner(up_tx, input).await
 }
 
 async fn send_escalation_bidi_input_inner(
@@ -1661,7 +1627,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn send_escalation_request_times_out_when_up_channel_is_full() {
+    async fn send_escalation_request_faults_when_up_channel_stalls() {
         let (up_tx, _up_rx_held) = mpsc::channel::<InvokeBidiUp>(1);
         up_tx
             .send(InvokeBidiUp::default())
@@ -1681,8 +1647,46 @@ mod tests {
         .await;
 
         assert!(
-            matches!(result, Err(ref reason) if reason.contains("timed out")),
+            matches!(result, Err(ref reason) if reason.contains("made no progress")),
             "full up-channel must be bounded, got {result:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn outbox_consumer_retires_stalled_session_sender() {
+        let correlation = EscalationCorrelation::new();
+        let outbox = SharedSessionOutbox::new();
+        let handle = spawn_escalation_consumer_with_outbox(
+            Arc::clone(&correlation),
+            outbox.clone(),
+            "test-realm",
+        );
+        let (up_tx, _up_rx_held) = mpsc::channel::<InvokeBidiUp>(1);
+        up_tx
+            .send(InvokeBidiUp::default())
+            .await
+            .expect("prefill session up-channel");
+        outbox.set(SessionUpSender::new(up_tx));
+
+        let outcome = handle
+            .escalate_with_timeout(
+                "federation.resolve_key".into(),
+                b"{}".to_vec(),
+                Duration::from_secs(2),
+            )
+            .await;
+        match outcome {
+            RequestOutcome::Err {
+                error: SessionRequestError::UpstreamFailure { reason },
+            } => assert!(
+                reason.contains("made no progress"),
+                "stalled carrier reason must remain typed: {reason}"
+            ),
+            other => panic!("expected stalled-session failure, got {other:?}"),
+        }
+        assert!(
+            outbox.snapshot().is_none(),
+            "a stalled session sender must be retired before the next request"
         );
     }
 

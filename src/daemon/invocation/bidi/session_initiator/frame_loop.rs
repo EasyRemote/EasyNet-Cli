@@ -25,7 +25,7 @@ pub(super) struct LiveSessionRun<'a, D: SessionFrameDispatcher> {
     pub(super) dispatcher: Arc<D>,
     pub(super) escalation_outbox:
         Option<&'a crate::daemon::invocation::bidi::session_escalation::SharedSessionOutbox>,
-    pub(super) idle_timeout: Duration,
+    pub(super) liveness_timeout: Duration,
     pub(super) initial_admission: Option<InitialSessionAdmissionProbe>,
     pub(super) connection_state_sink: Arc<dyn SessionConnectionStateSink>,
 }
@@ -40,7 +40,7 @@ pub(super) async fn run_live_session<D: SessionFrameDispatcher>(
         signer,
         dispatcher,
         escalation_outbox,
-        idle_timeout,
+        liveness_timeout,
         initial_admission,
         connection_state_sink,
     } = request;
@@ -95,22 +95,23 @@ pub(super) async fn run_live_session<D: SessionFrameDispatcher>(
     let mut session_contract_established = false;
 
     loop {
-        let frame_result = if session_contract_established {
-            match down_stream.next().await {
-                Some(frame_result) => frame_result,
-                None => break,
+        let frame_result = tokio::select! {
+            fault = outbound_tx.wait_for_fault() => {
+                return Err(SessionError::UpChannelFault {
+                    endpoint: hub_endpoint,
+                    source: fault,
+                });
             }
-        } else {
-            match tokio::time::timeout(idle_timeout, down_stream.next()).await {
+            frame = tokio::time::timeout(liveness_timeout, down_stream.next()) => match frame {
                 Ok(Some(frame_result)) => frame_result,
                 Ok(None) => break,
                 Err(_elapsed) => {
-                    return Err(SessionError::IdleTimeout {
+                    return Err(SessionError::LivenessTimeout {
                         endpoint: hub_endpoint,
-                        timeout: idle_timeout,
+                        timeout: liveness_timeout,
                     });
                 }
-            }
+            },
         };
 
         match frame_result {

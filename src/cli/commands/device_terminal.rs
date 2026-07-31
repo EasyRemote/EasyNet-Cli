@@ -57,6 +57,7 @@ const AUTHORITY_LEASE_MILLIS: i64 = 5 * 60 * 1_000;
 const AUTHORITY_RENEWAL_MARGIN_MILLIS: i64 = 30 * 1_000;
 const TERMINAL_INVOKE_TIMEOUT: Duration = Duration::from_secs(30);
 const TERMINAL_READ_TIMEOUT_SECONDS: f64 = 0.10;
+const TERMINAL_INPUT_BATCH_BYTES: usize = 16 * 1024;
 const TERMINAL_SESSION_ALLOWED_ACTIONS: [&str; 2] = ["stream", "manage"];
 
 pub(crate) fn run(raw_target: &str) -> anyhow::Result<()> {
@@ -378,15 +379,19 @@ impl TerminalSession {
                 return Ok(());
             }
 
+            let mut pending_input = Vec::with_capacity(TERMINAL_INPUT_BATCH_BYTES);
             while event::poll(Duration::ZERO)? {
                 match event::read()? {
                     Event::Key(key) if key.kind != KeyEventKind::Release => {
                         if let Some(bytes) = key_event_bytes(key) {
-                            self.write_input(bytes)?;
+                            self.buffer_input(&mut pending_input, &bytes)?;
                         }
                     }
-                    Event::Paste(text) => self.write_input(text.into_bytes())?,
+                    Event::Paste(text) => {
+                        self.buffer_input(&mut pending_input, text.as_bytes())?;
+                    }
                     Event::Resize(cols, rows) => {
+                        self.flush_input(&mut pending_input)?;
                         self.invoke(
                             RemoteDeviceSessionAbility::TerminalResize,
                             json!({
@@ -399,13 +404,33 @@ impl TerminalSession {
                     _ => {}
                 }
             }
+            self.flush_input(&mut pending_input)?;
         }
     }
 
-    fn write_input(&mut self, bytes: Vec<u8>) -> anyhow::Result<()> {
-        if bytes.is_empty() {
+    fn buffer_input(&mut self, pending: &mut Vec<u8>, bytes: &[u8]) -> anyhow::Result<()> {
+        let mut remaining = bytes;
+        while !remaining.is_empty() {
+            let available = TERMINAL_INPUT_BATCH_BYTES.saturating_sub(pending.len());
+            if available == 0 {
+                self.flush_input(pending)?;
+                continue;
+            }
+            let take = available.min(remaining.len());
+            pending.extend_from_slice(&remaining[..take]);
+            remaining = &remaining[take..];
+            if pending.len() == TERMINAL_INPUT_BATCH_BYTES {
+                self.flush_input(pending)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn flush_input(&mut self, pending: &mut Vec<u8>) -> anyhow::Result<()> {
+        if pending.is_empty() {
             return Ok(());
         }
+        let bytes = std::mem::take(pending);
         self.invoke(
             RemoteDeviceSessionAbility::TerminalInput,
             json!({

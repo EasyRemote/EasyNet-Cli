@@ -86,6 +86,7 @@ use std::time::Duration;
 
 use futures::Stream;
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 use tonic::Status;
 
 use crate::daemon::ability::descriptors::AbilityDescriptor;
@@ -147,6 +148,19 @@ pub const SESSION_STREAM_ID: u32 = 0;
 /// the hub side and device side use symmetric backpressure
 /// budgets.
 const SESSION_UP_CHANNEL_CAPACITY: usize = 256;
+
+/// Maximum time a live session writer may wait for one slot in the
+/// device-to-hub request stream.
+///
+/// A full bounded queue is healthy backpressure only while the gRPC request
+/// stream continues to drain it. Once no slot opens within this window, the
+/// carrier is half-open: keeping its public session state alive would make
+/// presence and directory reads lie. The sender therefore faults the entire
+/// session attempt and lets the supervisor reconnect.
+#[cfg(not(test))]
+const SESSION_UP_SEND_TIMEOUT: Duration = Duration::from_secs(5);
+#[cfg(test)]
+const SESSION_UP_SEND_TIMEOUT: Duration = Duration::from_millis(50);
 
 /// One-shot notification used by daemon boot to distinguish "the
 /// supervisor task was spawned" from "Hub admitted this device into
@@ -211,24 +225,22 @@ pub const SESSION_BACKOFF_INITIAL: Duration = Duration::from_millis(250);
 /// configures for federation_client.
 pub const SESSION_BACKOFF_MAX: Duration = Duration::from_secs(30);
 
-/// Maximum silence window on the down-stream before the device has received
-/// the hub's `SessionEstablished` control frame.
+/// Maximum silence window on the down-stream for one live session attempt.
 ///
 /// Why this exists in addition to transport-level HTTP/2 PING:
 /// the observed Docker failure mode was asymmetric — the hub-side
 /// reader saw `h2 protocol error: error reading a body from
 /// connection`, removed presence immediately, but the device-side
 /// `down_stream.next()` sometimes remained parked inside tonic's
-/// body machinery instead of surfacing EOF/reset promptly. A
-/// bounded admission watchdog closes that gap without treating ordinary
-/// post-admission business-frame silence as a dead device. Once the hub sends
-/// `SessionEstablished`, liveness is stream membership: EOF/reset, the
-/// device→hub heartbeat path, or dispatch send failure owns teardown.
+/// body machinery instead of surfacing EOF/reset promptly.
 ///
-/// The hub may still emit down-stream no-op controls as transport keepalives,
-/// but the device must not require them after admission; otherwise an idle UI
-/// page creates periodic presence gaps and `TARGET_OFFLINE` false negatives.
-pub const SESSION_IDLE_TIMEOUT: Duration = Duration::from_secs(15);
+/// The device sends an application heartbeat every 5 seconds. The Hub emits
+/// an acknowledgement only after its request-stream reader has consumed that
+/// heartbeat. Requiring some Hub-originated down activity within this deadline
+/// therefore proves end-to-end progress through both halves of the bidi. The
+/// deadline applies before and after `SessionEstablished`; a half-open carrier
+/// may never remain publicly Online indefinitely.
+pub const SESSION_LIVENESS_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Device → hub application-level heartbeat cadence for the
 /// `session.open` up-stream.
@@ -242,9 +254,9 @@ pub const SESSION_IDLE_TIMEOUT: Duration = Duration::from_secs(15);
 /// connection-level PING alone. Emitting a no-op control frame
 /// every 5 s keeps the request body observably alive.
 ///
-/// Paired with the hub-side `SESSION_DOWN_HEARTBEAT_INTERVAL` and
-/// the device-side `SESSION_IDLE_TIMEOUT`. Together they make the
-/// bidi liveness story symmetric in both directions.
+/// The Hub acknowledges this frame only after draining it, and the device-side
+/// `SESSION_LIVENESS_TIMEOUT` requires that acknowledgement (or other down
+/// activity) to arrive. Together they make the bidi liveness proof symmetric.
 pub const SESSION_UP_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 
 const REASON_BIDI_DOWN_SEQUENCE: &str = "AXON_BIDI_DOWN_SEQUENCE";
@@ -321,6 +333,27 @@ pub struct SessionUpSender {
     /// supervisor writes it once after session admission; dispatch is
     /// unavailable until a canonical carrier version is present.
     negotiated_contract: Arc<std::sync::atomic::AtomicU32>,
+    lifecycle: Arc<SessionUpLifecycle>,
+}
+
+#[derive(Debug)]
+struct SessionUpLifecycle {
+    faulted: CancellationToken,
+    fault: Mutex<Option<SessionUpSendError>>,
+}
+
+/// Terminal reason for one `session.open` up-channel attempt.
+///
+/// This is deliberately session-scoped rather than request-scoped. Once a
+/// writer observes a closed or non-progressing request stream, every clone of
+/// that sender is stale and the carrier must reconnect before accepting more
+/// work.
+#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
+pub enum SessionUpSendError {
+    #[error("session up-channel is closed")]
+    Closed,
+    #[error("session up-channel made no progress for {timeout_ms}ms")]
+    Stalled { timeout_ms: u64 },
 }
 
 impl SessionUpSender {
@@ -332,6 +365,10 @@ impl SessionUpSender {
             // therefore owns sequence = 1.
             sequence_gate: Arc::new(tokio::sync::Mutex::new(1)),
             negotiated_contract: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            lifecycle: Arc::new(SessionUpLifecycle {
+                faulted: CancellationToken::new(),
+                fault: Mutex::new(None),
+            }),
         }
     }
 
@@ -352,51 +389,80 @@ impl SessionUpSender {
     /// Stamp the next sequence number and enqueue under the
     /// single-writer gate, so channel order always equals sequence
     /// order even with concurrent reply producers.
-    async fn send_sequenced(
-        &self,
-        payload: UpPayload,
-    ) -> Result<(), tokio::sync::mpsc::error::SendError<InvokeBidiUp>> {
-        let mut next = self.sequence_gate.lock().await;
-        let sequence = *next;
-        let sent = self
-            .tx
-            .send(InvokeBidiUp {
-                sequence,
-                payload: Some(payload),
-                ..InvokeBidiUp::default()
-            })
-            .await;
-        if sent.is_ok() {
-            *next += 1;
+    async fn send_sequenced(&self, payload: UpPayload) -> Result<(), SessionUpSendError> {
+        if let Some(fault) = self.fault() {
+            return Err(fault);
         }
-        sent
+        let mut next = self.sequence_gate.lock().await;
+        if let Some(fault) = self.fault() {
+            return Err(fault);
+        }
+        let sequence = *next;
+        let permit = match tokio::time::timeout(SESSION_UP_SEND_TIMEOUT, self.tx.reserve()).await {
+            Ok(Ok(permit)) => permit,
+            Ok(Err(_closed)) => return Err(self.record_fault(SessionUpSendError::Closed)),
+            Err(_elapsed) => {
+                return Err(self.record_fault(SessionUpSendError::Stalled {
+                    timeout_ms: SESSION_UP_SEND_TIMEOUT.as_millis() as u64,
+                }));
+            }
+        };
+        permit.send(InvokeBidiUp {
+            sequence,
+            payload: Some(payload),
+            ..InvokeBidiUp::default()
+        });
+        *next += 1;
+        Ok(())
+    }
+
+    fn record_fault(&self, candidate: SessionUpSendError) -> SessionUpSendError {
+        let fault = {
+            let mut guard = match self.lifecycle.fault.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            guard.get_or_insert(candidate).clone()
+        };
+        self.lifecycle.faulted.cancel();
+        fault
+    }
+
+    fn fault(&self) -> Option<SessionUpSendError> {
+        let guard = match self.lifecycle.fault.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        guard.clone()
+    }
+
+    /// Wait until any producer proves that this session attempt can no longer
+    /// make forward progress.
+    pub async fn wait_for_fault(&self) -> SessionUpSendError {
+        loop {
+            if let Some(fault) = self.fault() {
+                return fault;
+            }
+            self.lifecycle.faulted.cancelled().await;
+        }
     }
 
     /// Send a BinaryChunk on the live session, stamping the next
     /// monotonic up-direction sequence number.
-    pub async fn send_binary_chunk(
-        &self,
-        chunk: BinaryChunk,
-    ) -> Result<(), tokio::sync::mpsc::error::SendError<InvokeBidiUp>> {
+    pub async fn send_binary_chunk(&self, chunk: BinaryChunk) -> Result<(), SessionUpSendError> {
         self.send_sequenced(UpPayload::BinaryChunk(chunk)).await
     }
 
     /// Send any up-direction payload on the live session, stamping
     /// the next monotonic sequence number. Canonical carrier reply frames
     /// (DispatchResult / ReverseDispatchCall) ride this.
-    pub async fn send_payload(
-        &self,
-        payload: UpPayload,
-    ) -> Result<(), tokio::sync::mpsc::error::SendError<InvokeBidiUp>> {
+    pub async fn send_payload(&self, payload: UpPayload) -> Result<(), SessionUpSendError> {
         self.send_sequenced(payload).await
     }
 
     /// Send a control frame on the live session, stamping the next
     /// monotonic up-direction sequence number.
-    pub async fn send_control(
-        &self,
-        control: BidiControl,
-    ) -> Result<(), tokio::sync::mpsc::error::SendError<InvokeBidiUp>> {
+    pub async fn send_control(&self, control: BidiControl) -> Result<(), SessionUpSendError> {
         self.send_sequenced(UpPayload::Control(control)).await
     }
 }
@@ -417,7 +483,7 @@ struct SessionDialAttempt<'a, D: SessionFrameDispatcher> {
     escalation_outbox:
         Option<&'a crate::daemon::invocation::bidi::session_escalation::SharedSessionOutbox>,
     preludes: SessionPreludeInputs<'a>,
-    idle_timeout: Duration,
+    liveness_timeout: Duration,
     initial_admission: Option<InitialSessionAdmissionProbe>,
     user_trust_sync: Option<&'a UserTrustSync>,
     connection_state_sink: Arc<dyn SessionConnectionStateSink>,
@@ -507,7 +573,7 @@ pub async fn dial_and_run_session<D: SessionFrameDispatcher>(
     // scoped to this call's private tracker.
     let mut phase = SessionPhaseTracker::new();
     phase.begin_attempt();
-    dial_and_run_session_with_idle_timeout(
+    dial_and_run_session_with_liveness_timeout(
         SessionDialAttempt {
             hub_endpoint,
             signer,
@@ -515,7 +581,7 @@ pub async fn dial_and_run_session<D: SessionFrameDispatcher>(
             dispatcher,
             escalation_outbox,
             preludes,
-            idle_timeout: SESSION_IDLE_TIMEOUT,
+            liveness_timeout: SESSION_LIVENESS_TIMEOUT,
             initial_admission: None,
             user_trust_sync: None,
             connection_state_sink: Arc::new(PersistentSessionConnectionStateSink),
@@ -525,7 +591,7 @@ pub async fn dial_and_run_session<D: SessionFrameDispatcher>(
     .await
 }
 
-async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
+async fn dial_and_run_session_with_liveness_timeout<D: SessionFrameDispatcher>(
     attempt: SessionDialAttempt<'_, D>,
     phase: &mut SessionPhaseTracker,
 ) -> Result<SessionCloseStats, SessionError> {
@@ -536,7 +602,7 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
         dispatcher,
         escalation_outbox,
         preludes,
-        idle_timeout,
+        liveness_timeout,
         initial_admission,
         user_trust_sync,
         connection_state_sink,
@@ -582,7 +648,7 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
             signer,
             dispatcher,
             escalation_outbox,
-            idle_timeout,
+            liveness_timeout,
             initial_admission,
             connection_state_sink,
         },
@@ -630,7 +696,7 @@ pub(crate) async fn run_session_supervisor<D: SessionFrameDispatcher>(
         // future is out of scope.
         let outcome = tokio::select! {
             _ = &mut cancel => None,
-            result = dial_and_run_session_with_idle_timeout(
+            result = dial_and_run_session_with_liveness_timeout(
                 SessionDialAttempt {
                     hub_endpoint: hub_endpoint.clone(),
                     signer: Arc::clone(&signer),
@@ -641,7 +707,7 @@ pub(crate) async fn run_session_supervisor<D: SessionFrameDispatcher>(
                         &ability_descriptors,
                         Arc::clone(&authority_published_abilities),
                     ),
-                    idle_timeout: SESSION_IDLE_TIMEOUT,
+                    liveness_timeout: SESSION_LIVENESS_TIMEOUT,
                     initial_admission: initial_admission.clone(),
                     user_trust_sync: user_trust_sync.as_ref(),
                     connection_state_sink: Arc::clone(&connection_state_sink),
@@ -778,6 +844,13 @@ pub enum SessionError {
     #[error("hub `{endpoint}` sent error frame on down stream: {status}")]
     DownStreamError { endpoint: String, status: Status },
 
+    #[error("hub `{endpoint}` session up-channel faulted: {source}")]
+    UpChannelFault {
+        endpoint: String,
+        #[source]
+        source: SessionUpSendError,
+    },
+
     #[error("hub `{endpoint}` rejected owner projection publish: {status}")]
     OwnerProjectionFailed { endpoint: String, status: Status },
 
@@ -803,7 +876,7 @@ pub enum SessionError {
         "hub `{endpoint}` sent no down-stream activity for {:?}; forcing reconnect",
         timeout
     )]
-    IdleTimeout { endpoint: String, timeout: Duration },
+    LivenessTimeout { endpoint: String, timeout: Duration },
 
     #[error("internal: failed to enqueue {0} for hub send")]
     SendFailed(&'static str),
@@ -1692,6 +1765,43 @@ mod tests {
         assert_eq!(second.sequence, 2);
     }
 
+    #[tokio::test]
+    async fn session_up_sender_stall_is_terminal_for_every_clone() {
+        let (tx, mut rx) = mpsc::channel::<InvokeBidiUp>(1);
+        tx.send(InvokeBidiUp::default())
+            .await
+            .expect("prefill session up-channel");
+        let sender = SessionUpSender::new(tx);
+        let observer = sender.clone();
+
+        let send_error = sender
+            .send_control(BidiControl::default())
+            .await
+            .expect_err("saturated carrier must fault");
+        assert_eq!(
+            send_error,
+            SessionUpSendError::Stalled {
+                timeout_ms: SESSION_UP_SEND_TIMEOUT.as_millis() as u64,
+            }
+        );
+        assert_eq!(observer.wait_for_fault().await, send_error);
+
+        // Draining the queue after the deadline cannot resurrect a stale
+        // session attempt. Only the supervisor may publish a fresh sender.
+        let _ = rx.recv().await;
+        assert_eq!(
+            observer
+                .send_control(BidiControl::default())
+                .await
+                .expect_err("faulted carrier cannot be reused"),
+            send_error,
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "terminal sender must not enqueue a post-fault frame"
+        );
+    }
+
     #[test]
     fn full_jitter_stays_within_bound_and_curve_is_unchanged() {
         // The deterministic curve must be untouched by jitter: the
@@ -1990,7 +2100,7 @@ mod tests {
         )
         .expect("test descriptor")];
 
-        let result = dial_and_run_session_with_idle_timeout(
+        let result = dial_and_run_session_with_liveness_timeout(
             SessionDialAttempt {
                 hub_endpoint: format!("http://{addr}"),
                 signer: TestSessionSigner::random(owner),
@@ -1998,7 +2108,7 @@ mod tests {
                 dispatcher,
                 escalation_outbox: None,
                 preludes: SessionPreludeInputs::new(&descriptors, authority_store()),
-                idle_timeout: Duration::from_millis(80),
+                liveness_timeout: Duration::from_millis(80),
                 initial_admission: None,
                 user_trust_sync: None, // not exercised here
                 connection_state_sink: isolated_connection_state_sink(),
@@ -2048,7 +2158,7 @@ mod tests {
             )),
         };
 
-        let result = dial_and_run_session_with_idle_timeout(
+        let result = dial_and_run_session_with_liveness_timeout(
             SessionDialAttempt {
                 hub_endpoint: format!("http://{addr}"),
                 signer: TestSessionSigner::random(device_ura),
@@ -2056,7 +2166,7 @@ mod tests {
                 dispatcher,
                 escalation_outbox: None,
                 preludes: SessionPreludeInputs::new(&[], authority_store()),
-                idle_timeout: Duration::from_millis(80),
+                liveness_timeout: Duration::from_millis(80),
                 initial_admission: None,
                 user_trust_sync: Some(&user_trust_sync),
                 connection_state_sink: isolated_connection_state_sink(),
@@ -2136,7 +2246,7 @@ mod tests {
             )),
         };
 
-        let result = dial_and_run_session_with_idle_timeout(
+        let result = dial_and_run_session_with_liveness_timeout(
             SessionDialAttempt {
                 hub_endpoint: format!("http://{addr}"),
                 signer: TestSessionSigner::random(device_ura),
@@ -2144,7 +2254,7 @@ mod tests {
                 dispatcher,
                 escalation_outbox: None,
                 preludes: SessionPreludeInputs::new(&[], authority_store()),
-                idle_timeout: Duration::from_millis(80),
+                liveness_timeout: Duration::from_millis(80),
                 initial_admission: None,
                 user_trust_sync: Some(&user_trust_sync),
                 connection_state_sink: isolated_connection_state_sink(),
@@ -2244,7 +2354,7 @@ mod tests {
                 .expect("test signer public key")
                 .to_bytes(),
         );
-        let result = dial_and_run_session_with_idle_timeout(
+        let result = dial_and_run_session_with_liveness_timeout(
             SessionDialAttempt {
                 hub_endpoint: format!("http://{addr}"),
                 signer,
@@ -2252,7 +2362,7 @@ mod tests {
                 dispatcher,
                 escalation_outbox: None,
                 preludes: SessionPreludeInputs::new(&descriptors, authority_store()),
-                idle_timeout: Duration::from_millis(80),
+                liveness_timeout: Duration::from_millis(80),
                 initial_admission: None,
                 user_trust_sync: None, // not exercised here
                 connection_state_sink: isolated_connection_state_sink(),
@@ -2261,7 +2371,7 @@ mod tests {
         )
         .await;
         assert!(
-            matches!(result, Err(SessionError::IdleTimeout { .. })),
+            matches!(result, Err(SessionError::LivenessTimeout { .. })),
             "preludes should complete before the silent hub triggers idle timeout: {result:?}"
         );
 
@@ -2602,13 +2712,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn silent_hub_triggers_idle_timeout_reconnect_error() {
+    async fn silent_hub_triggers_liveness_timeout_reconnect_error() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
         seed_session_credentials();
         let dispatcher = Arc::new(RecordingDispatcher::default());
         let (addr, _server) = spawn_silent_session_hub().await;
 
-        let result = dial_and_run_session_with_idle_timeout(
+        let result = dial_and_run_session_with_liveness_timeout(
             SessionDialAttempt {
                 hub_endpoint: format!("http://{addr}"),
                 signer: TestSessionSigner::random("easynet:///r/realm/device/n1"),
@@ -2616,7 +2726,7 @@ mod tests {
                 dispatcher,
                 escalation_outbox: None,
                 preludes: SessionPreludeInputs::new(&[], authority_store()),
-                idle_timeout: Duration::from_millis(80),
+                liveness_timeout: Duration::from_millis(80),
                 initial_admission: None,
                 user_trust_sync: None, // not exercised here
                 connection_state_sink: isolated_connection_state_sink(),
@@ -2626,44 +2736,41 @@ mod tests {
         .await;
 
         match result {
-            Err(SessionError::IdleTimeout { endpoint, timeout }) => {
+            Err(SessionError::LivenessTimeout { endpoint, timeout }) => {
                 assert_eq!(endpoint, format!("http://{addr}"));
                 assert_eq!(timeout, Duration::from_millis(80));
             }
-            other => panic!("expected IdleTimeout, got {other:?}"),
+            other => panic!("expected LivenessTimeout, got {other:?}"),
         }
     }
 
     #[tokio::test]
-    async fn established_session_silence_does_not_trigger_idle_timeout() {
+    async fn established_session_without_heartbeat_ack_triggers_liveness_timeout() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
         seed_session_credentials();
         let dispatcher = Arc::new(RecordingDispatcher::default());
         let (addr, _server) = spawn_established_then_silent_session_hub().await;
 
-        let result = tokio::time::timeout(
-            Duration::from_millis(220),
-            dial_and_run_session_with_idle_timeout(
-                SessionDialAttempt {
-                    hub_endpoint: format!("http://{addr}"),
-                    signer: TestSessionSigner::random("easynet:///r/realm/device/n1"),
-                    hub_ca_pem_path: None,
-                    dispatcher,
-                    escalation_outbox: None,
-                    preludes: SessionPreludeInputs::new(&[], authority_store()),
-                    idle_timeout: Duration::from_millis(80),
-                    initial_admission: None,
-                    user_trust_sync: None,
-                    connection_state_sink: isolated_connection_state_sink(),
-                },
-                &mut SessionPhaseTracker::new(),
-            ),
+        let result = dial_and_run_session_with_liveness_timeout(
+            SessionDialAttempt {
+                hub_endpoint: format!("http://{addr}"),
+                signer: TestSessionSigner::random("easynet:///r/realm/device/n1"),
+                hub_ca_pem_path: None,
+                dispatcher,
+                escalation_outbox: None,
+                preludes: SessionPreludeInputs::new(&[], authority_store()),
+                liveness_timeout: Duration::from_millis(80),
+                initial_admission: None,
+                user_trust_sync: None,
+                connection_state_sink: isolated_connection_state_sink(),
+            },
+            &mut SessionPhaseTracker::new(),
         )
         .await;
 
         assert!(
-            result.is_err(),
-            "post-contract silence is valid stream membership and must not complete as idle timeout"
+            matches!(result, Err(SessionError::LivenessTimeout { .. })),
+            "an admitted session without Hub heartbeat acknowledgements must terminate, got {result:?}"
         );
     }
 
@@ -2674,7 +2781,7 @@ mod tests {
         let dispatcher = Arc::new(RecordingDispatcher::default());
         let (addr, _server) = spawn_out_of_sequence_session_hub().await;
 
-        let result = dial_and_run_session_with_idle_timeout(
+        let result = dial_and_run_session_with_liveness_timeout(
             SessionDialAttempt {
                 hub_endpoint: format!("http://{addr}"),
                 signer: TestSessionSigner::random("easynet:///r/realm/device/n1"),
@@ -2682,7 +2789,7 @@ mod tests {
                 dispatcher,
                 escalation_outbox: None,
                 preludes: SessionPreludeInputs::new(&[], authority_store()),
-                idle_timeout: Duration::from_secs(1),
+                liveness_timeout: Duration::from_secs(1),
                 initial_admission: None,
                 user_trust_sync: None, // not exercised here
                 connection_state_sink: isolated_connection_state_sink(),
