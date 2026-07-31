@@ -271,9 +271,9 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
     eprintln!(
         "  {}",
         style(
-            "Reminder: this substrate is not network-addressable on its own. \
-             Network calls always target an agent's published ability; the \
-             substrate is the place where that ability happens to run."
+            "Network calls bind a published Ability descriptor to this Device \
+             runtime; the Device is the execution target, while the Ability URA \
+             identifies the callable contract."
         )
         .dim()
     );

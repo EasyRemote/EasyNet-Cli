@@ -170,6 +170,13 @@ if [[ "$SELF_TEST" == "1" ]]; then
   grep -q "provider-hosted user external Agent" "$0"
   grep -q "caller_invoked_user_agent_chat_through_canonical_invoke" "$0"
   grep -q "caller_observed_user_agent_chat_removed" "$0"
+  grep -q "caller_device_list_saw_provider" "$0"
+  grep -q "caller_device_abilities_saw_system_routes" "$0"
+  grep -q "caller_device_exec_one_verified_receipt_chain" "$0"
+  grep -q "caller_device_terminal_session_completed" "$0"
+  grep -q "caller_device_terminal_create_one_verified_receipt_chain" "$0"
+  grep -q "device exec" "$0"
+  grep -q "device terminal" "$0"
   grep -q "ability list --node" "$0"
   grep -q "ability stream" "$0"
   grep -q "invocation list --ability-ura" "$0"
@@ -317,12 +324,27 @@ wait_hub_device() {
   return 1
 }
 
+wait_caller_device() {
+  local node_id="$1"
+  for _ in $(seq 1 120); do
+    if caller_cli_probe "device list --state all --format json" >"$OUT_DIR/caller-device-list.json" 2>"$OUT_DIR/caller-device-list.err"; then
+      if jq -e --arg node "$node_id" '(.nodes // []) | any(.node_id == $node)' "$OUT_DIR/caller-device-list.json" >/dev/null; then
+        return 0
+      fi
+    fi
+    sleep 0.5
+  done
+  cat "$OUT_DIR/caller-device-list.json" >&2 2>/dev/null || true
+  cat "$OUT_DIR/caller-device-list.err" >&2 2>/dev/null || true
+  return 1
+}
+
 wait_caller_remote_ability_list() {
   local provider_node="$1"
-  local out="$OUT_DIR/caller-ability-list-provider.json"
-  local err="$OUT_DIR/caller-ability-list-provider.err"
+  local out="$OUT_DIR/caller-device-abilities-provider.json"
+  local err="$OUT_DIR/caller-device-abilities-provider.err"
   for _ in $(seq 1 120); do
-    if caller_cli_probe "ability list --node '$provider_node' --format json" >"$out" 2>"$err"; then
+    if caller_cli_probe "device abilities '$provider_node' --format json" >"$out" 2>"$err"; then
       if jq -e 'if type == "array" then length >= 1 else (.abilities // []) | length >= 1 end' "$out" >/dev/null; then
         return 0
       fi
@@ -642,6 +664,72 @@ project_sdk_runtime_identity provider /home/provider
 project_sdk_runtime_identity caller /home/caller
 wait_hub_device "$PROVIDER_NODE"
 wait_hub_device "$CALLER_NODE"
+wait_caller_device "$PROVIDER_NODE"
+
+echo "==> exercising caller device list/abilities/exec/terminal public contract"
+wait_caller_remote_ability_list "$PROVIDER_URA"
+PROCESS_EXEC_URA="$(extract_ability_ura_by_name "$OUT_DIR/caller-device-abilities-provider.json" "process.exec")"
+TERMINAL_CREATE_URA="$(extract_ability_ura_by_name "$OUT_DIR/caller-device-abilities-provider.json" "terminal.create")"
+[[ "$PROCESS_EXEC_URA" == easynet://* ]] || die "device abilities did not expose process.exec"
+[[ "$TERMINAL_CREATE_URA" == easynet://* ]] || die "device abilities did not expose terminal.create"
+caller_cli "device exec '$PROVIDER_URA' -- /usr/bin/printf DEVICE_EXEC_CANONICAL_OK" \
+  >"$OUT_DIR/caller-device-exec-provider.txt" 2>"$OUT_DIR/caller-device-exec-provider.err"
+provider_cli "invocation list --ability-ura '$PROCESS_EXEC_URA' --format json" \
+  >"$OUT_DIR/provider-invocation-list-device-exec.json" 2>"$OUT_DIR/provider-invocation-list-device-exec.err"
+
+cat >"$SHARED_DIR/device_terminal_probe.py" <<'PY'
+import os
+import pty
+import select
+import signal
+import sys
+import time
+
+target = sys.argv[1]
+expected = b"device-terminal-canonical-ok"
+pid, fd = pty.fork()
+if pid == 0:
+    os.execvpe("easynet", ["easynet", "device", "terminal", target], os.environ)
+
+output = bytearray()
+sent = False
+status = None
+deadline = time.monotonic() + 45.0
+while time.monotonic() < deadline:
+    if not sent and time.monotonic() > deadline - 43.0:
+        os.write(fd, b"printf 'DEVICE-TERMINAL-CANONICAL-OK' | tr 'A-Z' 'a-z'\rexit\r")
+        sent = True
+    ready, _, _ = select.select([fd], [], [], 0.1)
+    if ready:
+        try:
+            chunk = os.read(fd, 65536)
+        except OSError:
+            chunk = b""
+        if chunk:
+            output.extend(chunk)
+    waited, child_status = os.waitpid(pid, os.WNOHANG)
+    if waited == pid:
+        status = child_status
+        break
+
+if status is None:
+    os.kill(pid, signal.SIGTERM)
+    time.sleep(0.2)
+    waited, status = os.waitpid(pid, os.WNOHANG)
+    if waited == 0:
+        os.kill(pid, signal.SIGKILL)
+        _, status = os.waitpid(pid, 0)
+
+sys.stdout.buffer.write(output)
+if expected not in output:
+    raise SystemExit("terminal output did not contain transformed probe result")
+if not os.WIFEXITED(status) or os.WEXITSTATUS(status) != 0:
+    raise SystemExit(f"terminal CLI exited abnormally: status={status}")
+PY
+service_exec caller "HOME=/home/caller EASYNET_CLI_LIB=/usr/local/lib/libeasynet_cli.so python3 /shared/device_terminal_probe.py '$PROVIDER_URA'" \
+  >"$OUT_DIR/caller-device-terminal-provider.txt" 2>"$OUT_DIR/caller-device-terminal-provider.err"
+provider_cli "invocation list --ability-ura '$TERMINAL_CREATE_URA' --format json" \
+  >"$OUT_DIR/provider-invocation-list-terminal-create.json" 2>"$OUT_DIR/provider-invocation-list-terminal-create.err"
 
 echo "==> exercising custom caller-side CLI agent CRUD"
 cat >"$SHARED_DIR/fake-agent.sh" <<'EOF'
@@ -949,6 +1037,7 @@ done
 
 echo "==> querying provider abilities from caller device via CLI"
 wait_caller_remote_ability_list "$PROVIDER_URA"
+cp "$OUT_DIR/caller-device-abilities-provider.json" "$OUT_DIR/caller-ability-list-provider.json"
 caller_cli "ability show '$ADD_URA' --node '$PROVIDER_URA' --format json" \
   >"$OUT_DIR/caller-ability-show-add.json" 2>"$OUT_DIR/caller-ability-show-add.err"
 caller_cli "ability show '$NATIVE_ABILITY_URA' --node '$PROVIDER_URA' --format json" \
@@ -1239,6 +1328,19 @@ cli_add_records = ability_invocation_records(
 native_records = ability_invocation_records(
     "provider-invocation-list-native-after-easyremote.json"
 )
+device_exec_records = ability_invocation_records(
+    "provider-invocation-list-device-exec.json"
+)
+terminal_create_records = ability_invocation_records(
+    "provider-invocation-list-terminal-create.json"
+)
+caller_device_list = load("caller-device-list.json") or {}
+caller_device_rows = (
+    caller_device_list.get("nodes") or []
+    if isinstance(caller_device_list, dict)
+    else []
+)
+caller_device_ability_rows = ability_rows("caller-device-abilities-provider.json")
 provider_agent_rows = ability_rows("caller-ability-list-provider-agent.json")
 provider_agent_rows_after_remove = ability_rows("caller-ability-list-provider-after-agent-remove.json")
 user_plugin_rows = ability_rows("caller-ability-list-provider-plugin.json")
@@ -1317,6 +1419,20 @@ def verified_completed_receipt_chain(record) -> bool:
         and isinstance(record["receipt_chain"].get("anchors"), list)
         and len(record["receipt_chain"]["anchors"]) > 0
     )
+
+device_exec_receipt_chain_verified = (
+    len(device_exec_records) == 1
+    and verified_completed_receipt_chain(device_exec_records[0])
+)
+terminal_create_receipt_chain_verified = (
+    len(terminal_create_records) == 1
+    and verified_completed_receipt_chain(terminal_create_records[0])
+)
+caller_device_ability_names = {
+    str(row.get("name") or "")
+    for row in caller_device_ability_rows
+    if isinstance(row, dict)
+}
 
 provider_agent_owner_ura = ""
 if isinstance(provider_agent_show, dict):
@@ -1446,6 +1562,36 @@ report = {
     "assertions": {
         "hub_saw_provider_device": contains("hub-device-list.json", provider_node),
         "hub_saw_caller_device": contains("hub-device-list.json", caller_node),
+        "caller_device_list_saw_provider": any(
+            isinstance(row, dict)
+            and row.get("node_id") == provider_node
+            and row.get("agent_ura") == provider_ura
+            for row in caller_device_rows
+        ),
+        "caller_device_abilities_saw_system_routes": {
+            "process.exec",
+            "terminal.create",
+            "terminal.input",
+            "terminal.read",
+            "terminal.resize",
+            "terminal.close",
+        }.issubset(caller_device_ability_names),
+        "caller_device_exec_completed": contains(
+            "caller-device-exec-provider.txt", "DEVICE_EXEC_CANONICAL_OK"
+        ),
+        "caller_device_exec_one_verified_receipt_chain": (
+            device_exec_receipt_chain_verified
+            and device_exec_records[0].get("caller_ura") == caller_ura
+            and device_exec_records[0].get("subject_ura") == provider_ura
+        ),
+        "caller_device_terminal_session_completed": contains(
+            "caller-device-terminal-provider.txt", "device-terminal-canonical-ok"
+        ),
+        "caller_device_terminal_create_one_verified_receipt_chain": (
+            terminal_create_receipt_chain_verified
+            and terminal_create_records[0].get("caller_ura") == caller_ura
+            and terminal_create_records[0].get("subject_ura") == provider_ura
+        ),
         "agent_created_and_listed_on_caller": cli_contains("agent-list", agent_name),
         "agent_updated_on_caller": cli_contains("agent-set", "updated") or cli_contains("agent-set", agent_name),
         "agent_invoked_on_caller": contains("agent-send.txt", f"docker-easyremote-agent[{agent_name}]"),
@@ -1638,6 +1784,8 @@ report = {
     "caller_cli_add_stream_frames": cli_stream,
     "provider_cli_add_invocation_records": cli_add_records,
     "provider_native_runtime_invocation_records": native_records,
+    "provider_device_exec_invocation_records": device_exec_records,
+    "provider_terminal_create_invocation_records": terminal_create_records,
 }
 print(json.dumps(report, indent=2, sort_keys=True))
 PY
@@ -1645,6 +1793,12 @@ PY
 jq -e '
   .assertions.hub_saw_provider_device
   and .assertions.hub_saw_caller_device
+  and .assertions.caller_device_list_saw_provider
+  and .assertions.caller_device_abilities_saw_system_routes
+  and .assertions.caller_device_exec_completed
+  and .assertions.caller_device_exec_one_verified_receipt_chain
+  and .assertions.caller_device_terminal_session_completed
+  and .assertions.caller_device_terminal_create_one_verified_receipt_chain
   and .assertions.agent_created_and_listed_on_caller
   and .assertions.agent_updated_on_caller
   and .assertions.agent_invoked_on_caller

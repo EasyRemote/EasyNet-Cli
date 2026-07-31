@@ -29,12 +29,11 @@
 //     Invoke against the appropriate Agent ability
 //
 // regardless of `--node`. The replacement: invoke the daemon-hosted
-// metadata ability through Axon's local Invocation gRPC path, the
-// same route `easynet ability invoke` uses for local calls. One
-// Axon runtime; one source of truth for the catalogue. The `--node`
-// flag is reserved for a future federation-Invoke entry; passing a
-// remote node id today returns a precise error rather than silently
-// auto-routing local.
+// metadata ability through the canonical Invocation path, the same
+// route `easynet ability invoke` uses. Local targets enter the local
+// runtime; canonical remote Device URAs are resolved and dispatched
+// to the target runtime. One runtime model; one source of truth for
+// the catalogue.
 //
 // Filtering model
 // ---------------
@@ -75,7 +74,7 @@ pub struct AbilitiesArgs {
     /// Catalogue scope URA. Owner URAs filter by owner; Ability URAs filter to one canonical ability.
     #[arg(long = "subject-ura", value_name = "URA")]
     pub subject_ura: Option<String>,
-    /// Reserved for federation routing — only the local node is accepted today; remote listing ships post-AXON-RFC-001 P1.5.
+    /// Target runtime: `local` or a canonical remote Device URA.
     #[arg(long, short = 'n', value_name = "NODE_ID")]
     pub node: Option<String>,
     /// Glob pattern to filter by ability name (e.g. fs.*, claude.*, *.health). Empty pattern is equivalent to omitting the flag.
@@ -842,7 +841,7 @@ mod tests {
             agent: None,
             agent_ura: None,
             subject_ura: None,
-            node: Some("some-remote-node".into()),
+            node: Some("easynet:///r/test/device/remote-node".into()),
             pattern: String::new(),
             format: OutputFormat::Table,
         })
@@ -868,7 +867,7 @@ mod tests {
             agent: None,
             agent_ura: None,
             subject_ura: None,
-            node: Some("some-remote-node".into()),
+            node: Some("easynet:///r/test/device/remote-node".into()),
             pattern: String::new(),
             format: OutputFormat::Table,
         })
