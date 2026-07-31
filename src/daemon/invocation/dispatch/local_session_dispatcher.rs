@@ -923,12 +923,7 @@ impl LocalAxonSessionDispatcher {
         if status.trusted() {
             return Ok(());
         }
-        let diagnostic = status
-            .diagnostic()
-            .unwrap_or_else(|| "trust sync did not produce a trusted key".to_string());
-        Err(SessionDispatchError::Other(format!(
-            "canonical carrier external signed caller `{caller_ura}` is not trusted after resolve_key sync: {diagnostic}"
-        )))
+        Err(external_caller_key_sync_error(caller_ura, &status))
     }
 
     /// Builder seam: attach a device-mode escalation correlation
@@ -1787,6 +1782,21 @@ impl LocalAxonSessionDispatcher {
     }
 }
 
+fn external_caller_key_sync_error(
+    caller_ura: &str,
+    status: &crate::daemon::invocation::admission::device_trust_sync::DeviceTrustSyncStatus,
+) -> SessionDispatchError {
+    let diagnostic = status
+        .diagnostic()
+        .unwrap_or_else(|| "trust sync did not produce a trusted key".to_string());
+    let reason =
+        crate::daemon::invocation::admission::decision::SignatureDecisionReason::CallerKeyNotFound
+            .as_str();
+    SessionDispatchError::Other(format!(
+        "{reason}: canonical carrier external signed caller `{caller_ura}` is not trusted after resolve_key sync: {diagnostic}"
+    ))
+}
+
 impl Default for LocalAxonSessionDispatcher {
     fn default() -> Self {
         Self::new()
@@ -1929,6 +1939,25 @@ mod tests {
     use std::time::Duration;
 
     const TEST_DEVICE_URA: &str = "easynet:///r/t/device/d1";
+
+    #[test]
+    fn caller_key_sync_failure_starts_with_canonical_admission_reason() {
+        let error = external_caller_key_sync_error(
+            "easynet:///r/t/user/alice",
+            &crate::daemon::invocation::admission::device_trust_sync::DeviceTrustSyncStatus::ResolveFailed(
+                "authority has no matching presented key".to_string(),
+            ),
+        );
+        match error {
+            SessionDispatchError::Other(message) => {
+                assert!(
+                    message.starts_with("CALLER_KEY_NOT_FOUND:"),
+                    "machine consumers require the canonical admission reason; got: {message}"
+                );
+                assert!(message.contains("easynet:///r/t/user/alice"));
+            }
+        }
+    }
 
     #[test]
     fn canonical_carrier_stream_control_failure_is_not_lifecycle_terminal() {
