@@ -911,8 +911,8 @@ USER_PLUGIN_DESCRIPTOR_REF="$(jq -r '
 ' "$OUT_DIR/caller-ability-show-user-plugin.json")"
 [[ "$USER_PLUGIN_DESCRIPTOR_REF" == easynet://*@*#*!* ]] || die "caller ability show did not expose descriptor-bound user plugin ref"
 USER_PLUGIN_NONCE_HEX="$(random_nonce_hex)"
-caller_cli "ability stream '$USER_PLUGIN_DESCRIPTOR_REF' --node '$PROVIDER_URA' --subject 'easynet:///r/${REALM}/resource/e2e/user-plugin/echo' --nonce-hex '$USER_PLUGIN_NONCE_HEX' --causal-root --args '$(json_arg plugin_echo "$USER_PLUGIN_MESSAGE")' --format json --raw" \
-  >"$OUT_DIR/caller-cli-user-plugin-stream.json" 2>"$OUT_DIR/caller-cli-user-plugin-stream.err"
+caller_cli "ability invoke '$USER_PLUGIN_DESCRIPTOR_REF' --node '$PROVIDER_URA' --subject 'easynet:///r/${REALM}/resource/e2e/user-plugin/echo' --nonce-hex '$USER_PLUGIN_NONCE_HEX' --causal-root --args '$(json_arg plugin_echo "$USER_PLUGIN_MESSAGE")'" \
+  >"$OUT_DIR/caller-cli-user-plugin-invoke.json" 2>"$OUT_DIR/caller-cli-user-plugin-invoke.err"
 provider_cli "invocation list --ability-ura '$USER_PLUGIN_ABILITY_URA' --format json" \
   >"$OUT_DIR/provider-invocation-list-user-plugin-after-cli.json" 2>"$OUT_DIR/provider-invocation-list-user-plugin-after-cli.err"
 provider_cli "plugin remove '$USER_PLUGIN_ID' '$USER_PLUGIN_VERSION'" >"$OUT_DIR/provider-plugin-remove-user-plugin.txt" 2>"$OUT_DIR/provider-plugin-remove-user-plugin.err"
@@ -1312,7 +1312,7 @@ provider_agent_invoke = load("caller-cli-provider-agent-chat-invoke.json") or {}
 provider_agent_show = load("caller-ability-show-provider-agent-chat.json") or {}
 user_plugin_list_after_install = load("provider-plugin-list-after-user-plugin-install.json") or {}
 user_plugin_status = load("provider-plugin-status-user-plugin.json") or {}
-user_plugin_stream = load("caller-cli-user-plugin-stream.json") or []
+user_plugin_invoke = load("caller-cli-user-plugin-invoke.json") or {}
 user_plugin_show = load("caller-ability-show-user-plugin.json") or {}
 remote_results = load("easyremote-remote-results.json") or {}
 cli_stream = load("caller-cli-add-stream.json") or []
@@ -1552,7 +1552,7 @@ report = {
         "ability": user_plugin_ability,
         "ability_ura": user_plugin_ability_ura,
         "status": user_plugin_status,
-        "stream_frames": user_plugin_stream,
+        "invoke_result": user_plugin_invoke,
     },
     "easyremote": {
         "provider_ready": ready,
@@ -1630,10 +1630,10 @@ report = {
             and user_plugin_show.get("ability_ura") == user_plugin_ability_ura
             and user_plugin_show.get("owner_ura") == provider_ura
         ),
-        "caller_cli_stream_called_user_plugin": (
-            payload_contains(user_plugin_stream, "hello-plugin")
-            and payload_contains(user_plugin_stream, user_plugin_message)
-            and payload_has_field(user_plugin_stream, "invocation_nonce_len", 16)
+        "caller_cli_invoked_user_plugin": (
+            payload_contains(user_plugin_invoke, "hello-plugin")
+            and payload_contains(user_plugin_invoke, user_plugin_message)
+            and payload_has_field(user_plugin_invoke, "invocation_nonce_len", 16)
         ),
         "user_plugin_one_invocation_record": (
             len(user_plugin_records) == 1
@@ -1811,7 +1811,7 @@ jq -e '
   and .assertions.user_plugin_package_loaded_in_daemon
   and .assertions.user_plugin_ability_loaded_in_daemon
   and .assertions.caller_cli_discovered_user_plugin_ability
-  and .assertions.caller_cli_stream_called_user_plugin
+  and .assertions.caller_cli_invoked_user_plugin
   and .assertions.user_plugin_one_invocation_record
   and .assertions.user_plugin_receipt_chain_projected
   and .assertions.caller_observed_user_plugin_ability_removed
