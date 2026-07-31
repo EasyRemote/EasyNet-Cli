@@ -905,16 +905,15 @@ async fn invoke_discover_with_user_id_filters_unbound_cross_realm_entries() {
     let bindings = Arc::new(FederatedBindingsStore::in_memory());
     let svc = register_test_daemon_routes(
         make_unregistered_service_for_route_owner(TEST_DAEMON_URA)
-            .with_session_realm("realm-b")
+            .with_session_realm("test-realm")
             .with_federated_directory_cell(cell)
             .with_federated_bindings_store(bindings),
         TEST_DAEMON_URA,
     );
 
     let resp = svc
-        .invoke(invoke_request(
-            ABILITY_FEDERATION_DISCOVER,
-            r#"{"local_user_id":"user-on-b"}"#,
+        .invoke(user_scoped_discover_request(
+            r#"{"local_user_id":"test-user"}"#,
         ))
         .await
         .expect("dispatch returns Ok");
@@ -946,8 +945,7 @@ async fn invoke_discover_with_user_id_filters_local_presence_by_canonical_owner(
     let svc = register_test_daemon_routes(svc, TEST_DAEMON_URA);
 
     let resp = svc
-        .invoke(invoke_request(
-            ABILITY_FEDERATION_DISCOVER,
+        .invoke(user_scoped_discover_request(
             r#"{"local_user_id":"test-user"}"#,
         ))
         .await
@@ -964,6 +962,39 @@ async fn invoke_discover_with_user_id_filters_local_presence_by_canonical_owner(
         vec!["easynet:///r/test-realm/device/client-1", TEST_DAEMON_URA,],
         "user-scoped local discovery must include only principals bound to the canonical owner"
     );
+}
+
+#[tokio::test]
+async fn invoke_discover_user_scope_rejects_unbound_or_missing_user_filter() {
+    use crate::daemon::keyring::federated_bindings::FederatedBindingsStore;
+
+    let svc = register_test_daemon_routes(
+        make_unregistered_service_for_route_owner(TEST_DAEMON_URA)
+            .with_session_realm("test-realm")
+            .with_federated_bindings_store(Arc::new(FederatedBindingsStore::in_memory())),
+        TEST_DAEMON_URA,
+    );
+
+    for (arguments, expected) in [
+        (
+            r#"{"local_user_id":"another-user"}"#,
+            "does not admit caller",
+        ),
+        (r#"{}"#, "unfiltered operator/audit scope"),
+    ] {
+        let response = svc
+            .invoke(user_scoped_discover_request(arguments))
+            .await
+            .expect("dispatcher failures are canonical in-band InvokeResponse failures")
+            .into_inner();
+        let error = response
+            .error
+            .expect("scope violation must carry error facts");
+        assert!(
+            error.message.contains(expected),
+            "unexpected discover scope error for {arguments}: {error:?}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -1013,14 +1044,13 @@ async fn invoke_discover_without_user_id_does_not_filter() {
 #[tokio::test]
 async fn invoke_discover_with_user_id_rejects_missing_filter_state() {
     let svc = register_test_daemon_routes(
-        make_unregistered_service_for_route_owner(TEST_DAEMON_URA).with_session_realm("realm-b"),
+        make_unregistered_service_for_route_owner(TEST_DAEMON_URA).with_session_realm("test-realm"),
         TEST_DAEMON_URA,
     );
 
     let response = svc
-        .invoke(invoke_request(
-            ABILITY_FEDERATION_DISCOVER,
-            r#"{"local_user_id":"user-on-b"}"#,
+        .invoke(user_scoped_discover_request(
+            r#"{"local_user_id":"test-user"}"#,
         ))
         .await
         .expect("dispatcher failures are canonical in-band InvokeResponse failures");
@@ -1070,7 +1100,7 @@ async fn invoke_discover_with_user_id_keeps_bound_entry() {
                 source_realm: "realm-a".to_string(),
                 source_user_ura: "easynet:///r/realm-a/user/bound-user".to_string(),
                 source_user_pubkey_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
-                local_user_id: "user-on-b".to_string(),
+                local_user_id: "test-user".to_string(),
                 bound_at_unix_ms: 1_714_500_000_000,
             },
             "n".to_string(),
@@ -1079,16 +1109,15 @@ async fn invoke_discover_with_user_id_keeps_bound_entry() {
 
     let svc = register_test_daemon_routes(
         make_unregistered_service_for_route_owner(TEST_DAEMON_URA)
-            .with_session_realm("realm-b")
+            .with_session_realm("test-realm")
             .with_federated_directory_cell(cell)
             .with_federated_bindings_store(bindings),
         TEST_DAEMON_URA,
     );
 
     let resp = svc
-        .invoke(invoke_request(
-            ABILITY_FEDERATION_DISCOVER,
-            r#"{"local_user_id":"user-on-b"}"#,
+        .invoke(user_scoped_discover_request(
+            r#"{"local_user_id":"test-user"}"#,
         ))
         .await
         .expect("dispatch returns Ok");

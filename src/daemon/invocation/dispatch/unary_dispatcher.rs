@@ -109,16 +109,86 @@ use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgentRole, TrustedPr
 /// who may observe that principal. The realm trust anchor owns the canonical
 /// principal-to-user fact, so user-scoped discovery must satisfy both immutable
 /// owner fields before merging an online principal into the response.
-struct PrincipalOwnerFilter<'a> {
-    owner_user_id: &'a str,
+struct PrincipalOwnerFilter {
+    owner_user_id: String,
     owner_ura: String,
     trust_anchor: Arc<RealmTrustAnchor>,
 }
 
-impl<'a> PrincipalOwnerFilter<'a> {
-    fn new(realm: &str, owner_user_id: &'a str, trust_anchor: Arc<RealmTrustAnchor>) -> Self {
-        Self {
+enum FederationDiscoverReadScope {
+    OperatorAudit,
+    User(PrincipalOwnerFilter),
+}
+
+impl FederationDiscoverReadScope {
+    fn resolve(
+        request: &federation_wrappers::DiscoverRequest,
+        envelope: &Envelope,
+        session_realm: Option<&str>,
+        local_daemon_ura: Option<&str>,
+        trust_anchor: Arc<RealmTrustAnchor>,
+    ) -> Result<Self, Status> {
+        let caller_ura = envelope
+            .caller
+            .as_ref()
+            .map(|caller| caller.ura.trim())
+            .filter(|caller| !caller.is_empty())
+            .ok_or_else(|| {
+                Status::invalid_argument(
+                    "federation.discover requires canonical envelope.caller.ura",
+                )
+            })?;
+
+        let Some(owner_user_id) = request.local_user_id.as_deref() else {
+            if Some(caller_ura) != local_daemon_ura {
+                return Err(Status::permission_denied(
+                    "federation.discover unfiltered operator/audit scope requires the local daemon principal",
+                ));
+            }
+            return Ok(Self::OperatorAudit);
+        };
+
+        let realm = session_realm
+            .map(str::trim)
+            .filter(|realm| !realm.is_empty())
+            .ok_or_else(|| {
+                Status::failed_precondition(
+                    "federation.discover user scope requires a session realm",
+                )
+            })?;
+        let caller = crate::core::ura::parse_ura(caller_ura).map_err(|error| {
+            Status::permission_denied(format!(
+                "federation.discover user scope requires a canonical User caller: {error}"
+            ))
+        })?;
+        if caller.kind != crate::core::ura::URAKind::User
+            || caller.realm != realm
+            || caller.user_id() != Some(owner_user_id)
+        {
+            return Err(Status::permission_denied(format!(
+                "federation.discover user scope does not admit caller `{caller_ura}` for local_user_id `{owner_user_id}`"
+            )));
+        }
+
+        Ok(Self::User(PrincipalOwnerFilter::new(
+            realm,
             owner_user_id,
+            trust_anchor,
+        )))
+    }
+
+    fn owner_filter(&self) -> Option<&PrincipalOwnerFilter> {
+        match self {
+            Self::OperatorAudit => None,
+            Self::User(filter) => Some(filter),
+        }
+    }
+}
+
+impl PrincipalOwnerFilter {
+    fn new(realm: &str, owner_user_id: &str, trust_anchor: Arc<RealmTrustAnchor>) -> Self {
+        Self {
+            owner_user_id: owner_user_id.to_string(),
             owner_ura: crate::core::ura::user_ura(realm, owner_user_id),
             trust_anchor,
         }
@@ -412,9 +482,9 @@ impl DaemonUnaryRouteProvider {
             DaemonUnaryRoute::FederationResolveKey => {
                 self.dispatcher.dispatch_federation_resolve_key(arguments)
             }
-            DaemonUnaryRoute::FederationDiscover => {
-                self.dispatcher.dispatch_federation_discover(arguments)
-            }
+            DaemonUnaryRoute::FederationDiscover => self
+                .dispatcher
+                .dispatch_federation_discover(arguments, &envelope),
             DaemonUnaryRoute::FederationListUserDevices => self
                 .dispatcher
                 .dispatch_federation_list_user_devices(Some(&envelope), arguments),
@@ -1252,8 +1322,19 @@ impl UnaryDispatcher {
     /// Pure read; no I/O — single-realm daemons that haven't
     /// accumulated any peer views just return an empty
     /// response, gracefully degrading to local-only behaviour.
-    pub(crate) fn dispatch_federation_discover(&self, arguments: &[u8]) -> Result<Vec<u8>, Status> {
+    pub(crate) fn dispatch_federation_discover(
+        &self,
+        arguments: &[u8],
+        envelope: &Envelope,
+    ) -> Result<Vec<u8>, Status> {
         let request: federation_wrappers::DiscoverRequest = parse_json_args(arguments)?;
+        let read_scope = FederationDiscoverReadScope::resolve(
+            &request,
+            envelope,
+            self.identity.session_realm.as_deref(),
+            self.admission.daemon_ura(),
+            self.admission.trust_anchor_snapshot(),
+        )?;
         let federated_response = match request.local_user_id.as_deref() {
             Some(_user_id) => {
                 let bindings = self.directory.federated_bindings.as_ref().ok_or_else(|| {
@@ -1280,14 +1361,18 @@ impl UnaryDispatcher {
                 federation_wrappers::handle_discover(&request, &self.directory.federated_directory)
             }
         };
-        let response =
-            self.merge_local_presence_into_discover_response(&request, federated_response)?;
+        let response = self.merge_local_presence_into_discover_response(
+            &request,
+            &read_scope,
+            federated_response,
+        )?;
         encode_json_payload(&response)
     }
 
     fn merge_local_presence_into_discover_response(
         &self,
         request: &federation_wrappers::DiscoverRequest,
+        read_scope: &FederationDiscoverReadScope,
         federated_response: federation_wrappers::DiscoverResponse,
     ) -> Result<federation_wrappers::DiscoverResponse, Status> {
         let mut by_agent_ura = BTreeMap::new();
@@ -1304,9 +1389,6 @@ impl UnaryDispatcher {
                 &self.directory.presence,
             )
             .map_err(Status::failed_precondition)?;
-            let owner_filter = request.local_user_id.as_deref().map(|user_id| {
-                PrincipalOwnerFilter::new(realm, user_id, self.admission.trust_anchor_snapshot())
-            });
             for entry in local.devices {
                 if request
                     .agent_ura
@@ -1315,8 +1397,8 @@ impl UnaryDispatcher {
                 {
                     continue;
                 }
-                if owner_filter
-                    .as_ref()
+                if read_scope
+                    .owner_filter()
                     .is_some_and(|filter| !filter.admits(&entry.agent_ura))
                 {
                     continue;

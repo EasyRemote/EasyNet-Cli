@@ -63,8 +63,10 @@ use axon_sdk::pb::axon::v1::{AgentIdentity, CallerSignature, Envelope, SubjectId
 // `agent/<bare-id>` device aliases at the request boundary.
 const TEST_DAEMON_URA: &str = "easynet:///r/test-realm/device/test-daemon";
 const TEST_BOOTSTRAP_CALLER_URA: &str = "easynet:///r/test-realm/device/bootstrap-caller";
+const TEST_DISCOVER_USER_URA: &str = "easynet:///r/test-realm/user/test-user";
 const TEST_DEVICE_SIGNING_SEED: [u8; 32] = [0x33; 32];
 const TEST_BOOTSTRAP_CALLER_SIGNING_SEED: [u8; 32] = [0x44; 32];
+const TEST_DISCOVER_USER_SIGNING_SEED: [u8; 32] = [0x55; 32];
 
 fn test_hub_signer(realm: &str) -> Arc<dyn CanonicalSigner> {
     test_hub_signer_with_seed(realm, [0x11; 32])
@@ -273,7 +275,7 @@ fn test_trust_anchor() -> RealmTrustAnchor {
                 .to_bytes(),
         ),
     ];
-    let entries = devices
+    let mut entries = devices
         .iter()
         .map(|(agent_ura, public_key)| TrustedAgent {
             agent_ura: (*agent_ura).to_string(),
@@ -284,7 +286,17 @@ fn test_trust_anchor() -> RealmTrustAnchor {
             hub_endpoint: None,
             tls_ca_pem_path: None,
         })
-        .collect();
+        .collect::<Vec<_>>();
+    entries.push(TrustedAgent {
+        agent_ura: TEST_DISCOVER_USER_URA.to_string(),
+        public_key_b64: BASE64_STANDARD
+            .encode(test_discover_user_signing_key().verifying_key().to_bytes()),
+        role: TrustedAgentRole::User,
+        added_at_unix_ms: 1_700_000_000_001,
+        origin_realm: None,
+        hub_endpoint: None,
+        tls_ca_pem_path: None,
+    });
     let principal_owners = devices
         .iter()
         .map(|(principal_ura, _)| TrustedPrincipalOwner {
@@ -798,6 +810,10 @@ fn test_bootstrap_caller_signing_key() -> ed25519_dalek::SigningKey {
     ed25519_dalek::SigningKey::from_bytes(&TEST_BOOTSTRAP_CALLER_SIGNING_SEED)
 }
 
+fn test_discover_user_signing_key() -> ed25519_dalek::SigningKey {
+    ed25519_dalek::SigningKey::from_bytes(&TEST_DISCOVER_USER_SIGNING_SEED)
+}
+
 fn next_test_invocation_nonce() -> [u8; 16] {
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -1052,6 +1068,17 @@ fn signed_test_envelope_with_descriptor_ref(
 
 fn invoke_request(function_name: &str, args_json: &str) -> Request<InvokeRequest> {
     invoke_request_for_callee(TEST_DAEMON_URA, function_name, args_json)
+}
+
+fn user_scoped_discover_request(args_json: &str) -> Request<InvokeRequest> {
+    signed_invoke_request(
+        TEST_DISCOVER_USER_URA,
+        TEST_DAEMON_URA,
+        &crate::core::ura::resource_dot_ura("test-realm", "user.test-user", "directory/devices"),
+        ABILITY_FEDERATION_DISCOVER,
+        args_json,
+        &test_discover_user_signing_key(),
+    )
 }
 
 fn invoke_request_for_callee(

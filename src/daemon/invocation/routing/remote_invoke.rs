@@ -1439,6 +1439,7 @@ pub fn invoke_federation_discover_for_user(
 struct FederationDiscoverScope {
     query_target_ura: String,
     caller_ura: String,
+    subject_ura: String,
     local_user_id_filter: Option<String>,
 }
 
@@ -1450,6 +1451,7 @@ impl FederationDiscoverScope {
         Ok(Self {
             query_target_ura: local_daemon_ura.to_string(),
             caller_ura: local_daemon_ura.to_string(),
+            subject_ura: federation_discover_authority_subject_ura(local_daemon_ura)?,
             local_user_id_filter: None,
         })
     }
@@ -1459,9 +1461,15 @@ impl FederationDiscoverScope {
             validate_federation_discover_local_user_id(local_user_id_filter)?;
         let parsed_daemon = crate::core::ura::parse_ura(local_daemon_ura)
             .map_err(|err| anyhow!("parse local daemon URA for federation.discover: {err}"))?;
+        let caller_ura = crate::core::ura::user_ura(&parsed_daemon.realm, local_user_id_filter);
         Ok(Self {
             query_target_ura: crate::core::ura::authority_ura(&parsed_daemon.realm),
-            caller_ura: crate::core::ura::user_ura(&parsed_daemon.realm, local_user_id_filter),
+            caller_ura,
+            subject_ura: crate::core::ura::resource_dot_ura(
+                &parsed_daemon.realm,
+                &format!("user.{local_user_id_filter}"),
+                "directory/devices",
+            ),
             local_user_id_filter: Some(local_user_id_filter.to_string()),
         })
     }
@@ -1472,6 +1480,10 @@ impl FederationDiscoverScope {
 
     fn caller_ura(&self) -> &str {
         &self.caller_ura
+    }
+
+    fn subject_ura(&self) -> &str {
+        &self.subject_ura
     }
 
     fn write_request_args(&self, req_args: &mut Value) {
@@ -1507,7 +1519,6 @@ fn invoke_federation_discover_with_scope(
         scope.query_target_ura(),
         "federation.discover",
     )?;
-    let subject_ura = federation_discover_subject_ura(scope.query_target_ura())?;
     let signer = load_federation_caller_signer(scope.caller_ura(), "federation.discover")?;
     let socket_path = daemon_config::resolved_local_uds_path_with_env_override();
     if !crate::support::platform::local_daemon_grpc::probe_accepting(&socket_path) {
@@ -1520,7 +1531,7 @@ fn invoke_federation_discover_with_scope(
     let request_envelope = ProtoEnvelope::from_target(
         scope.caller_ura(),
         target.callee_ura(),
-        subject_ura.as_str(),
+        scope.subject_ura(),
         RootInvocationDerivationIssuer::fresh_root(),
     )?;
 
@@ -1570,7 +1581,7 @@ fn invoke_federation_discover_with_scope(
         .unwrap_or_default())
 }
 
-fn federation_discover_subject_ura(callee_ura: &str) -> anyhow::Result<String> {
+fn federation_discover_authority_subject_ura(callee_ura: &str) -> anyhow::Result<String> {
     let parsed = crate::core::ura::parse_ura(callee_ura)?;
     if parsed.kind == crate::core::ura::URAKind::Authority {
         return crate::core::ura::owner_ability_ura(callee_ura, "federation.discover").ok_or_else(
@@ -2260,6 +2271,11 @@ mod tests {
             crate::core::ura::user_ura("acme", "user-a")
         );
         assert_eq!(
+            scope.subject_ura(),
+            crate::core::ura::resource_dot_ura("acme", "user.user-a", "directory/devices"),
+            "user-scoped discovery must act on the caller-owned directory projection"
+        );
+        assert_eq!(
             scope.local_user_id_filter.as_deref(),
             Some("user-a"),
             "user-scoped discover must carry the same local user filter"
@@ -2278,6 +2294,11 @@ mod tests {
             .expect("operator/audit scope");
 
         assert_eq!(scope.caller_ura(), local_daemon_ura);
+        assert_eq!(
+            scope.subject_ura(),
+            crate::core::ura::owner_ability_ura(&local_daemon_ura, "federation.discover")
+                .expect("Authority discover subject")
+        );
         assert_eq!(
             scope.query_target_ura(),
             local_daemon_ura,
@@ -2476,17 +2497,17 @@ mod tests {
     }
 
     #[test]
-    fn federation_discover_subject_uses_realm_authority_ability_subject_and_device_self_subject() {
+    fn federation_discover_authority_subject_uses_ability_subject_and_device_self_subject() {
         let hub = crate::core::ura::hub_ura("acme");
         assert_eq!(
-            federation_discover_subject_ura(&hub).expect("hub subject"),
+            federation_discover_authority_subject_ura(&hub).expect("hub subject"),
             crate::core::ura::owner_ability_ura(&hub, "federation.discover")
                 .expect("realm Authority ability subject")
         );
 
         let device = crate::core::ura::device_ura("acme", "device-a");
         assert_eq!(
-            federation_discover_subject_ura(&device).expect("device subject"),
+            federation_discover_authority_subject_ura(&device).expect("device subject"),
             device
         );
     }
