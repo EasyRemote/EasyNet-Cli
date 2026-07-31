@@ -595,6 +595,15 @@ struct AbilityDescriptorWire {
     source: String,
     #[serde(default)]
     schema_summary: AbilitySchemaSummary,
+    /// Canonical public SDK projection of `schema_summary.input`.
+    ///
+    /// This is a serialize-only field: descriptor governance and hashing own
+    /// schema state through `schema_summary`, while SDK consumers read the
+    /// product-facing `input_schema` field without reverse-mapping retired
+    /// aliases. Deserialization deliberately ignores this projection so a
+    /// caller cannot create a second schema authority.
+    #[serde(default, skip_deserializing)]
+    input_schema: Value,
     #[serde(default)]
     hints: AbilityDescriptorWireHints,
     #[serde(default)]
@@ -644,6 +653,7 @@ impl AbilityDescriptorWire {
             description: d.description.clone(),
             source: d.source.clone(),
             schema_summary: d.schema_summary.clone(),
+            input_schema: d.schema_summary.input.clone(),
             hints: AbilityDescriptorWireHints::from_hints_and_call_mode(&d.hints, d.call_mode),
             metadata: d.metadata.clone(),
         })
@@ -1882,6 +1892,34 @@ mod tests {
         assert_eq!(back.call_mode(), d.call_mode());
         assert_eq!(back.receipt_semantics(), d.receipt_semantics());
         assert_eq!(back.canonical_ability_ura(), d.canonical_ability_ura());
+    }
+
+    #[test]
+    fn wire_projects_input_schema_without_making_it_deserialization_authority() {
+        let descriptor = must(
+            "admission.explain",
+            "easynet:///r/acme/device/device-a",
+            Visibility::Scoped,
+        )
+        .with_input_schema(serde_json::json!({
+            "type": "object",
+            "required": ["observer_ura"],
+            "properties": {"observer_ura": {"type": "string"}},
+            "additionalProperties": false
+        }));
+        let mut wire = serde_json::to_value(&descriptor).unwrap();
+        assert_eq!(
+            wire["input_schema"], descriptor.schema_summary.input,
+            "public descriptor wire must expose the SDK-owned input_schema projection"
+        );
+
+        wire["input_schema"] = serde_json::json!({"type": "string"});
+        let parsed: AbilityDescriptor = serde_json::from_value(wire).unwrap();
+        assert_eq!(
+            parsed.schema_summary.input,
+            descriptor.schema_summary.input,
+            "input_schema is a serialize-only projection; schema_summary remains the sole descriptor authority"
+        );
     }
 
     #[test]
