@@ -2072,17 +2072,19 @@ PY
 check_invocation_history_ledger_ura_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local history="$cli_root/src/daemon/ability/builtins/governance/invocation_history.rs"
+  local dispatch="$cli_root/src/daemon/ability/dispatch.rs"
   local cli_history="$cli_root/src/cli/commands/groups/invocation.rs"
   local node_sdk="$cli_root/sdk/node/index.js"
   local node_tests="$cli_root/sdk/node/test/runtime-core.test.mjs"
   local axon_ura="$AXON_ROOT/core/ura-rs/src/lib.rs"
   [[ -f "$history" ]] || return 0
+  [[ -f "$dispatch" ]] || return 0
   [[ -f "$cli_history" ]] || return 0
   [[ -f "$node_sdk" ]] || return 0
   [[ -f "$node_tests" ]] || return 0
   [[ -f "$axon_ura" ]] || fail "Axon URA source is missing: ${axon_ura#$AXON_ROOT/}"
 
-  "$PYTHON_BIN" - "$history" "$cli_history" "$node_sdk" "$node_tests" "$axon_ura" <<'PY'
+  "$PYTHON_BIN" - "$history" "$dispatch" "$cli_history" "$node_sdk" "$node_tests" "$axon_ura" <<'PY'
 import re
 import sys
 from pathlib import Path
@@ -2090,14 +2092,15 @@ from pathlib import Path
 path = Path(sys.argv[1])
 text = path.read_text()
 production = text.split("#[cfg(test)]", 1)[0]
-cli_path = Path(sys.argv[2])
+dispatch = Path(sys.argv[2]).read_text()
+cli_path = Path(sys.argv[3])
 cli_text = cli_path.read_text()
 cli_production = cli_text.split("#[cfg(test)]", 1)[0]
-node_path = Path(sys.argv[3])
+node_path = Path(sys.argv[4])
 node_text = node_path.read_text()
-node_test_path = Path(sys.argv[4])
+node_test_path = Path(sys.argv[5])
 node_tests = node_test_path.read_text()
-axon_ura = Path(sys.argv[5]).read_text()
+axon_ura = Path(sys.argv[6]).read_text()
 
 for required in (
     "pub fn invocation_ledger_resource_ura(owner_ura: &str) -> Option<String>",
@@ -2108,23 +2111,36 @@ for required in (
     if required not in axon_ura:
         raise SystemExit(f"invocation_history_ledger_ura_axon_owner_model_missing:{required}")
 
-ledger = re.search(
-    r"fn ledger_resource_ura\(\) -> (?P<ret>[^\{]+)\{(?P<body>.*?)\n\}\n\nfn ledger_resource_ura_from_host_device_agent_ura",
-    production,
-    re.S,
-)
-if ledger is None:
-    raise SystemExit("invocation_history_ledger_ura_function_not_found")
-if "anyhow::Result<String>" not in ledger.group("ret"):
-    raise SystemExit("invocation_history_ledger_ura_not_required_and_fallible")
-ledger_body = ledger.group("body")
-if "load_hosted_identity_status().ok()" in ledger_body:
-    raise SystemExit("invocation_history_ledger_ura_aggregate_load_collapsed")
-if "invocation.history ledger owner projection unavailable" not in ledger_body:
-    raise SystemExit("invocation_history_ledger_ura_missing_projection_context")
+for retired in (
+    "AgentAggregateRepository",
+    "load_hosted_identity_status",
+    "host_device_agent_ura",
+    "ledger_resource_ura()",
+):
+    if retired in production:
+        raise SystemExit(f"invocation_history_ledger_ura_ambient_owner_path_present:{retired}")
+
+for required in (
+    "reg.ledger_governance_authority()",
+    "governance.runtime_owner_ura()",
+    "governance.owner().clone()",
+    "ledger_ura: String",
+):
+    if required not in production:
+        raise SystemExit(f"invocation_history_ledger_ura_catalog_binding_missing:{required}")
+
+for required in (
+    "struct LedgerGovernanceAuthority",
+    "owner: OwnerKind",
+    "runtime_owner_ura: String",
+    "fn ledger_governance_authority(&self) -> LedgerGovernanceAuthority",
+    "authority_scope.authority_root().to_string()",
+):
+    if required not in dispatch:
+        raise SystemExit(f"invocation_history_ledger_governance_domain_missing:{required}")
 
 projection = re.search(
-    r"fn ledger_resource_ura_from_host_device_agent_ura\([^)]*\) -> (?P<ret>[^\{]+)\{(?P<body>.*?)\n\}\n\nfn fetch_records_from_path",
+    r"fn ledger_resource_ura_from_runtime_owner_ura\([^)]*\) -> (?P<ret>[^\{]+)\{(?P<body>.*?)\n\}\n\nfn fetch_records_from_path",
     production,
     re.S,
 )
@@ -2134,14 +2150,14 @@ if "anyhow::Result<String>" not in projection.group("ret"):
     raise SystemExit("invocation_history_ledger_ura_projection_helper_not_required_and_fallible")
 projection_body = projection.group("body")
 for required in (
-    "invalid host_device_agent_ura",
-    "requires a joined runtime identity",
-    "invocation_ledger_resource_ura(host_device_agent_ura)",
-    "does not support runtime identity",
+    "must not be empty",
+    "not a canonical runtime owner",
+    "invocation_ledger_resource_ura(runtime_owner_ura)",
+    "does not support runtime owner",
 ):
     if required not in projection_body:
         raise SystemExit(f"invocation_history_ledger_ura_projection_missing:{required}")
-if ".ok()?" in projection_body or "parse_ura(host_device_agent_ura).ok()" in projection_body:
+if ".ok()?" in projection_body or "parse_ura(runtime_owner_ura).ok()" in projection_body:
     raise SystemExit("invocation_history_ledger_ura_parse_collapsed")
 for retired in (
     "return Ok(None);",
@@ -2155,12 +2171,12 @@ for retired in (
             f"invocation_history_ledger_ura_projection_duplicates_protocol_owner_mapping:{retired}"
         )
 
-if "ledger_resource_ura_projection_requires_supported_runtime_identity" not in text:
+if "ledger_resource_ura_projection_requires_canonical_runtime_owner" not in text:
     raise SystemExit("missing_invocation_history_ledger_ura_projection_test")
 for required in (
     "easynet:///r/test/authority",
     "easynet:///r/test/resource/authority.invocations/billing/invocations",
-    "unjoined runtime has no ledger owner",
+    "authority_runtime_binds_history_reader_to_authority_ledger",
 ):
     if required not in text:
         raise SystemExit(f"missing_invocation_history_ledger_ura_authority_test:{required}")
@@ -2251,6 +2267,75 @@ for required in (
 ):
     if required not in node_tests:
         raise SystemExit(f"invocation_history_node_ledger_ura_test_missing:{required}")
+PY
+}
+
+check_sdk_governance_read_single_ingress_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local ffi="$cli_root/src/ffi/invocation/mod.rs"
+  local runtime="$cli_root/sdk/python/easynet_sdk/runtime.py"
+  local runtime_ability="$cli_root/sdk/python/easynet_sdk/runtime_ability.py"
+  local cabi="$cli_root/sdk/python/easynet_sdk/_cabi.py"
+  local direct="$cli_root/sdk/python/easynet_sdk/providers/runtime/direct.py"
+  [[ -f "$ffi" ]] || return 0
+  [[ -f "$runtime" ]] || return 0
+  [[ -f "$runtime_ability" ]] || return 0
+  [[ -f "$cabi" ]] || return 0
+  [[ -f "$direct" ]] || return 0
+
+  "$PYTHON_BIN" - "$ffi" "$runtime" "$runtime_ability" "$cabi" "$direct" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+ffi, runtime, runtime_ability, cabi, direct = (
+    Path(path).read_text() for path in sys.argv[1:]
+)
+
+for retired in (
+    "runtime_local_governance_read",
+    "local_governance_read_with_axon_pb",
+    "LocalRuntimeGovernanceReadIssuer",
+):
+    if retired in ffi or retired in cabi:
+        raise SystemExit(f"sdk_governance_read_second_ingress_present:{retired}")
+
+for required in (
+    'pub unsafe extern "C" fn runtime_governance_read(',
+    "InvocationTuplePolicy::GovernanceRead",
+    "invoke_with_axon_pb_policy(",
+):
+    if required not in ffi:
+        raise SystemExit(f"sdk_governance_read_canonical_ffi_missing:{required}")
+
+for required in (
+    "class _GovernanceReadTransport(Protocol):",
+    "def _governance_read(self, draft: InvocationDraft) -> InvocationResult:",
+    "isinstance(transport, _GovernanceReadTransport)",
+    "return InvocationResult.from_json(raw)",
+):
+    if required not in runtime:
+        raise SystemExit(f"sdk_python_governance_read_optional_seam_missing:{required}")
+
+runtime_transport = re.search(
+    r"class RuntimeTransport\(Protocol\):(?P<body>.*?)\n\n@runtime_checkable",
+    runtime,
+    re.S,
+)
+if runtime_transport is None:
+    raise SystemExit("sdk_python_runtime_transport_protocol_not_found")
+if "governance_read" in runtime_transport.group("body"):
+    raise SystemExit("sdk_python_governance_read_forced_into_base_transport")
+if "def governance_read(" in direct:
+    raise SystemExit("sdk_python_direct_provider_fake_governance_capability_present")
+if "self._runtime._governance_read(" not in runtime_ability:
+    raise SystemExit("sdk_python_runtime_ability_not_using_governance_seam")
+for required in (
+    "self._raw.runtime_governance_read",
+    "return self.lib.governance_read(self._require_open(), draft_json)",
+):
+    if required not in cabi:
+        raise SystemExit(f"sdk_python_cabi_governance_read_missing:{required}")
 PY
 }
 
@@ -10186,9 +10271,28 @@ for expected in (
     "provider-invocation-list-user-plugin-after-cli.json",
     "provider-invocation-list-add-after-cli.json",
     "provider-invocation-list-native-after-easyremote.json",
+    "hub-invocation-list-directory-before-device-list.json",
+    "caller-device-list-single-submit.json",
+    "hub-invocation-list-directory-after-device-list.json",
 ):
     if expected not in script:
         raise SystemExit(f"product_e2e_invocation_history_exact_scope:missing_exact_artifact:{expected}")
+
+for required in (
+    'DIRECTORY_DISCOVER_URA="easynet:///r/${REALM}/ability/authority.federation.discover"',
+    'caller_cli "device list --state all --format json"',
+    "directory_before_request_ids",
+    "directory_after_request_ids",
+    "directory_device_list_delta",
+    "len(directory_device_list_delta) == 1",
+    "verified_completed_receipt_chain(directory_device_list_delta[0])",
+    'directory_device_list_delta[0].get("caller_ura") == user_ura',
+    'directory_device_list_delta[0].get("callee_ura") == hub_ura',
+    'directory_device_list_delta[0].get("subject_ura") == user_directory_subject_ura',
+    "caller_device_list_one_verified_receipt_chain",
+):
+    if required not in script:
+        raise SystemExit(f"product_e2e_invocation_history_exact_scope:device_list_proof_missing:{required}")
 PY
 }
 
@@ -10214,6 +10318,8 @@ for required in (
     "caller_media_bidi_descriptor_ref",
     "caller_remote_media_stream_succeeded",
     "caller_remote_media_bidi_succeeded",
+    "canonical_carrier_reverse_bidi_opened",
+    "canonical_carrier_reverse_bidi_input",
     "media_stream_unique_invocation_records",
     "media_bidi_unique_invocation_records",
     "media_product_operations_have_verified_single_terminal_receipt_chains",
@@ -10224,6 +10330,8 @@ for required in (
         raise SystemExit(f"product_media_bidi_e2e:missing:{required}")
 if ("fallback_" + "transport") in script:
     raise SystemExit("product_media_bidi_e2e:retired_fallback_transport")
+if "carrier_v1_reverse_" + "bidi_" in script:
+    raise SystemExit("product_media_bidi_e2e:retired_reverse_bidi_marker")
 PY
   then
     return 1
@@ -30328,6 +30436,7 @@ EOF
   check_agent_start_model_intent_contract
   check_invocation_history_get_key_contract
   check_invocation_history_ledger_ura_contract
+  check_sdk_governance_read_single_ingress_contract
   check_core_ura_realm_projection_contract
   check_resolve_key_request_dto_contract
   check_join_authority_wiring_required_contract
@@ -30608,6 +30717,7 @@ check_advertise_agent_ingress_contract
 check_agent_start_model_intent_contract
 check_invocation_history_get_key_contract
 check_invocation_history_ledger_ura_contract
+check_sdk_governance_read_single_ingress_contract
 check_core_ura_realm_projection_contract
 check_resolve_key_request_dto_contract
 check_join_authority_wiring_required_contract

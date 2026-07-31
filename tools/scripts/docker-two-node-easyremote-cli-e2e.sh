@@ -27,6 +27,8 @@ REALM="${EASYNET_E2E_REALM:-hub}"
 HUB_URA="easynet:///r/${REALM}/authority"
 ADMIN_URA="easynet:///r/${REALM}/user/admin"
 USER_URA="easynet:///r/${REALM}/user/alice"
+DIRECTORY_DISCOVER_URA="easynet:///r/${REALM}/ability/authority.federation.discover"
+USER_DIRECTORY_SUBJECT_URA="easynet:///r/${REALM}/resource/user.alice/directory/devices"
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 OUT_DIR="${EASYNET_E2E_OUT_DIR:-$REPO_ROOT/target/e2e/docker-two-node-easyremote-cli/$TIMESTAMP}"
 KEEP=0
@@ -171,6 +173,7 @@ if [[ "$SELF_TEST" == "1" ]]; then
   grep -q "caller_invoked_user_agent_chat_through_canonical_invoke" "$0"
   grep -q "caller_observed_user_agent_chat_removed" "$0"
   grep -q "caller_device_list_saw_provider" "$0"
+  grep -q "caller_device_list_one_verified_receipt_chain" "$0"
   grep -q "caller_device_abilities_saw_system_routes" "$0"
   grep -q "caller_device_exec_one_verified_receipt_chain" "$0"
   grep -q "caller_device_terminal_session_completed" "$0"
@@ -665,6 +668,16 @@ project_sdk_runtime_identity caller /home/caller
 wait_hub_device "$PROVIDER_NODE"
 wait_hub_device "$CALLER_NODE"
 wait_caller_device "$PROVIDER_NODE"
+
+hub_cli "invocation list --ability-ura '$DIRECTORY_DISCOVER_URA' --limit 500 --format json" \
+  >"$OUT_DIR/hub-invocation-list-directory-before-device-list.json" \
+  2>"$OUT_DIR/hub-invocation-list-directory-before-device-list.err"
+caller_cli "device list --state all --format json" \
+  >"$OUT_DIR/caller-device-list-single-submit.json" \
+  2>"$OUT_DIR/caller-device-list-single-submit.err"
+hub_cli "invocation list --ability-ura '$DIRECTORY_DISCOVER_URA' --limit 500 --format json" \
+  >"$OUT_DIR/hub-invocation-list-directory-after-device-list.json" \
+  2>"$OUT_DIR/hub-invocation-list-directory-after-device-list.err"
 
 echo "==> exercising caller device list/abilities/exec/terminal public contract"
 wait_caller_remote_ability_list "$PROVIDER_URA"
@@ -1223,7 +1236,8 @@ caller_cli "ability list --node '$PROVIDER_URA' --format json" \
 python3 - "$OUT_DIR" "$PROVIDER_NODE" "$CALLER_NODE" "$PROVIDER_URA" "$CALLER_URA" "$AGENT_NAME" "$TMP_AGENT" "$HUB_URA" \
   "$PROVIDER_AGENT_NAME" "$PROVIDER_AGENT_CHAT_ABILITY" "$PROVIDER_AGENT_CHAT_URA" "$PROVIDER_AGENT_PROMPT" \
   "$USER_PLUGIN_ID" "$USER_PLUGIN_VERSION" "$USER_PLUGIN_ABILITY" "$USER_PLUGIN_ABILITY_URA" "$USER_PLUGIN_MESSAGE" \
-  "$NATIVE_ABILITY_URA" "$ADD_URA" "$TOTAL_URA" "$MERGE_URA" "$DEFAULTED_URA" "$SUMMARIZE_URA" "$BUNDLE_URA" "$COUNTDOWN_URA" "$WHOAMI_URA" <<'PY' >"$OUT_DIR/report.json"
+  "$NATIVE_ABILITY_URA" "$ADD_URA" "$TOTAL_URA" "$MERGE_URA" "$DEFAULTED_URA" "$SUMMARIZE_URA" "$BUNDLE_URA" "$COUNTDOWN_URA" "$WHOAMI_URA" \
+  "$DIRECTORY_DISCOVER_URA" "$USER_DIRECTORY_SUBJECT_URA" "$USER_URA" <<'PY' >"$OUT_DIR/report.json"
 import json
 import sys
 from pathlib import Path
@@ -1243,6 +1257,9 @@ ability_uras = {
     "countdown": sys.argv[25],
     "whoami": sys.argv[26],
 }
+directory_discover_ura = sys.argv[27]
+user_directory_subject_ura = sys.argv[28]
+user_ura = sys.argv[29]
 
 def text(name: str) -> str:
     path = out / name
@@ -1334,7 +1351,30 @@ device_exec_records = ability_invocation_records(
 terminal_create_records = ability_invocation_records(
     "provider-invocation-list-terminal-create.json"
 )
-caller_device_list = load("caller-device-list.json") or {}
+directory_before_records = ability_invocation_records(
+    "hub-invocation-list-directory-before-device-list.json"
+)
+directory_after_records = ability_invocation_records(
+    "hub-invocation-list-directory-after-device-list.json"
+)
+directory_before_request_ids = {
+    str(record.get("request_id") or "")
+    for record in directory_before_records
+    if isinstance(record, dict) and record.get("request_id")
+}
+directory_after_request_ids = {
+    str(record.get("request_id") or "")
+    for record in directory_after_records
+    if isinstance(record, dict) and record.get("request_id")
+}
+directory_device_list_delta = [
+    record
+    for record in directory_after_records
+    if isinstance(record, dict)
+    and record.get("request_id")
+    and str(record["request_id"]) not in directory_before_request_ids
+]
+caller_device_list = load("caller-device-list-single-submit.json") or {}
 caller_device_rows = (
     caller_device_list.get("nodes") or []
     if isinstance(caller_device_list, dict)
@@ -1568,6 +1608,15 @@ report = {
             and row.get("agent_ura") == provider_ura
             for row in caller_device_rows
         ),
+        "caller_device_list_one_verified_receipt_chain": (
+            directory_before_request_ids.issubset(directory_after_request_ids)
+            and len(directory_device_list_delta) == 1
+            and verified_completed_receipt_chain(directory_device_list_delta[0])
+            and directory_device_list_delta[0].get("ability_ura") == directory_discover_ura
+            and directory_device_list_delta[0].get("caller_ura") == user_ura
+            and directory_device_list_delta[0].get("callee_ura") == hub_ura
+            and directory_device_list_delta[0].get("subject_ura") == user_directory_subject_ura
+        ),
         "caller_device_abilities_saw_system_routes": {
             "process.exec",
             "terminal.create",
@@ -1786,6 +1835,7 @@ report = {
     "provider_native_runtime_invocation_records": native_records,
     "provider_device_exec_invocation_records": device_exec_records,
     "provider_terminal_create_invocation_records": terminal_create_records,
+    "hub_directory_device_list_invocation_delta": directory_device_list_delta,
 }
 print(json.dumps(report, indent=2, sort_keys=True))
 PY
@@ -1794,6 +1844,7 @@ jq -e '
   .assertions.hub_saw_provider_device
   and .assertions.hub_saw_caller_device
   and .assertions.caller_device_list_saw_provider
+  and .assertions.caller_device_list_one_verified_receipt_chain
   and .assertions.caller_device_abilities_saw_system_routes
   and .assertions.caller_device_exec_completed
   and .assertions.caller_device_exec_one_verified_receipt_chain

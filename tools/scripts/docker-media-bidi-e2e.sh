@@ -170,6 +170,8 @@ PY
   grep -q "ability bidi" "$0"
   grep -q "caller_remote_media_stream_succeeded" "$0"
   grep -q "caller_remote_media_bidi_succeeded" "$0"
+  grep -q "canonical_carrier_reverse_bidi_opened" "$0"
+  grep -q "canonical_carrier_reverse_bidi_input" "$0"
   grep -q "caller_media_bidi_descriptor_ref" "$0"
   grep -q "media_stream_unique_invocation_records" "$0"
   grep -q "media_bidi_unique_invocation_records" "$0"
@@ -1272,8 +1274,8 @@ assertions = {
     ),
     "caller_remote_media_bidi_single_terminal": terminal_count(caller_remote_bidi_frames) == 1,
     "caller_remote_media_bidi_used_invoke_bidi_cli": "canonical InvokeBidi" in caller_remote_bidi_stderr,
-    "hub_observed_reverse_bidi_open": "carrier_v1_reverse_bidi_opened" in hub_daemon_log,
-    "hub_observed_reverse_bidi_input": "carrier_v1_reverse_bidi_input" in hub_daemon_log,
+    "hub_observed_reverse_bidi_open": "canonical_carrier_reverse_bidi_opened" in hub_daemon_log,
+    "hub_observed_reverse_bidi_input": "canonical_carrier_reverse_bidi_input" in hub_daemon_log,
     "media_stream_two_operations_two_receipt_chains": len(stream_records) == 2,
     "media_bidi_two_operations_two_receipt_chains": len(bidi_records) == 2,
     "media_stream_unique_invocation_records": stream_chain_facts["record_count"] == 2
