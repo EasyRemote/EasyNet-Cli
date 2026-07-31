@@ -149,7 +149,9 @@ impl RuntimeDescriptorProviderKind {
     fn require_ability(self, ability: &str) -> Result<(), DescriptorResolutionError> {
         match self {
             Self::Generic
-                if crate::daemon::ability::names::governance::is_runtime_catalogue_read(ability) =>
+                if crate::daemon::ability::names::governance::is_runtime_catalogue_read(
+                    ability,
+                ) =>
             {
                 Err(DescriptorResolutionError::invalid_request(format!(
                     "descriptor_ref generic provider cannot resolve runtime catalogue read ability {ability:?}; use provider \"ability_descriptor\""
@@ -166,7 +168,9 @@ impl RuntimeDescriptorProviderKind {
             }
             Self::Generic => Ok(()),
             Self::AbilityDescriptor
-                if crate::daemon::ability::names::governance::is_runtime_catalogue_read(ability) =>
+                if crate::daemon::ability::names::governance::is_runtime_catalogue_read(
+                    ability,
+                ) =>
             {
                 Ok(())
             }
@@ -560,12 +564,17 @@ fn descriptor_resolution_or_not_found(
 ) -> Result<Value, DescriptorResolutionError> {
     match resolution {
         CatalogResolution::Resolved(value) => Ok(value),
-        CatalogResolution::NotFound => Err(DescriptorResolutionError::descriptor_not_found(not_found)),
-        CatalogResolution::CallModeUnsupported { ability_ura, call_mode, available_modes, source } => {
-            Err(DescriptorResolutionError::call_mode_unsupported(format!(
-                "descriptor_ref call_mode {call_mode:?} is not supported for ability {ability_ura:?} in {source}; available_call_modes={available_modes:?}"
-            )))
+        CatalogResolution::NotFound => {
+            Err(DescriptorResolutionError::descriptor_not_found(not_found))
         }
+        CatalogResolution::CallModeUnsupported {
+            ability_ura,
+            call_mode,
+            available_modes,
+            source,
+        } => Err(DescriptorResolutionError::call_mode_unsupported(format!(
+            "descriptor_ref call_mode {call_mode:?} is not supported for ability {ability_ura:?} in {source}; available_call_modes={available_modes:?}"
+        ))),
     }
 }
 
@@ -815,14 +824,14 @@ mod tests {
     #[test]
     fn runtime_descriptor_resolver_resolves_pages_project_list_for_pages_agent() {
         let local_device_ura = crate::core::ura::device_ura("localhost", "local-runtime-node");
-        let pages_agent_ura = crate::core::ura::agent_ura("localhost", "dev", "pages");
-        let ability_ura = "easynet:///r/localhost/ability/dev.pages.project_list";
+        let pages_agent_ura = crate::core::ura::agent_ura("localhost", "descriptor-user", "pages");
+        let ability_ura = "easynet:///r/localhost/ability/descriptor-user.pages.project_list";
 
         let resolved = RuntimeDescriptorResolutionProvider::resolve_json(
             &serde_json::json!({
                 "callee_ura": pages_agent_ura.as_str(),
                 "caller_ura": local_device_ura.as_str(),
-                "subject_ura": "easynet:///r/localhost/agent/dev.pages",
+                "subject_ura": pages_agent_ura.as_str(),
                 "ability": "project_list",
                 "call_mode": "rpc",
             })
@@ -842,6 +851,32 @@ mod tests {
                 |descriptor_ref| descriptor_ref.starts_with(&format!("{ability_ura}@"))
                     && descriptor_ref.ends_with("!read")
             ));
+    }
+
+    #[test]
+    fn runtime_descriptor_resolver_resolves_pages_project_list_full_ability_ura() {
+        let local_device_ura = crate::core::ura::device_ura("localhost", "local-runtime-node");
+        let pages_agent_ura = crate::core::ura::agent_ura("localhost", "descriptor-user", "pages");
+        let ability_ura = "easynet:///r/localhost/ability/descriptor-user.pages.project_list";
+
+        let resolved = RuntimeDescriptorResolutionProvider::resolve_json(
+            &serde_json::json!({
+                "callee_ura": pages_agent_ura.as_str(),
+                "caller_ura": local_device_ura.as_str(),
+                "subject_ura": pages_agent_ura.as_str(),
+                "ability": ability_ura,
+                "call_mode": "rpc",
+            })
+            .to_string(),
+            || Ok(local_device_ura.clone()),
+        )
+        .expect("Pages project_list descriptor must resolve from a canonical Ability URA");
+
+        assert_eq!(resolved["ability_ura"], ability_ura);
+        assert_eq!(resolved["owner_ura"], pages_agent_ura);
+        assert_eq!(resolved["name"], "project_list");
+        assert_eq!(resolved["call_mode"], "rpc");
+        assert_eq!(resolved["source"], "runtime_remote_descriptor_catalog");
     }
 
     #[test]

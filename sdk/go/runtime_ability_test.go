@@ -454,6 +454,52 @@ func TestRuntimeAbilityClientCatalogueReadResolvesDescriptorWithGovernanceReadSu
 	}
 }
 
+func TestRuntimeAbilityClientCatalogueReadUsesSessionOwnerForGovernanceSubject(t *testing.T) {
+	var seen RuntimeDescriptorRefRequest
+	runtime, err := NewRuntimeClient(RuntimeTransportFunc{
+		ResolveDescriptorRefFunc: func(ctx context.Context, requestJSON []byte) ([]byte, error) {
+			if err := json.Unmarshal(requestJSON, &seen); err != nil {
+				return nil, err
+			}
+			return testResolveDescriptorRef(t)(ctx, requestJSON)
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
+	}
+	client, err := NewRuntimeAbilityClient(runtime, NewCanonicalAddressing())
+	if err != nil {
+		t.Fatalf("NewRuntimeAbilityClient: %v", err)
+	}
+	call := runtimeAbilityTestContext()
+	call.CalleeURA = "easynet:///r/example/device/device-1"
+	call.SubjectURA = "easynet:///r/example/user/alice"
+	authority := runtimeAbilitySessionAuthority(t, call, "c658f249-e5b5-4126-8a5e-79d1d2322885")
+	authority.Scopes = []string{"meta.list_resources"}
+	authority.AllowedFollowupAbilities = []string{"meta.list_resources"}
+	call.Authority = &authority
+
+	draft, err := client.buildWithCallModePolicy(
+		context.Background(),
+		call,
+		"meta.list_resources",
+		map[string]any{},
+		"rpc",
+		runtimeAbilityCatalogueReadPolicy(),
+	)
+	if err != nil {
+		t.Fatalf("buildWithCallModePolicy: %v", err)
+	}
+
+	wantSubject := "easynet:///r/example/resource/user.c658f249-e5b5-4126-8a5e-79d1d2322885/runtime-state/read"
+	if draft.SubjectURA() != wantSubject {
+		t.Fatalf("draft subject_ura = %q, want %q", draft.SubjectURA(), wantSubject)
+	}
+	if seen.SubjectURA != wantSubject {
+		t.Fatalf("descriptor request subject_ura = %q, want %q", seen.SubjectURA, wantSubject)
+	}
+}
+
 func TestRuntimeAbilityClientInvokesObjectResult(t *testing.T) {
 	var seen map[string]any
 	transport := RuntimeTransportFunc{InvokeFunc: func(_ context.Context, raw []byte) ([]byte, error) {

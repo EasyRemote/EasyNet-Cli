@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import ctypes
 import ctypes.util
+import base64
+import hashlib
 import json
 import queue as queue_module
 import sys
@@ -22,6 +24,44 @@ from .runtime import InvocationControlCapability
 EXPECTED_ABI_VERSION = 7
 RUNTIME_OK = 0
 MAX_CABI_CALLBACK_QUEUE = 1024
+
+_CABI_ERROR_METADATA: dict[int, tuple[ErrorCode, str, RetryHint, str]] = {
+    2: (ErrorCode.NULL_POINTER, "sdk", RetryHint.NEVER, "ERR_NULL_POINTER"),
+    3: (ErrorCode.INVALID_UTF8, "sdk", RetryHint.NEVER, "ERR_INVALID_UTF8"),
+    4: (ErrorCode.INVALID_HANDLE, "sdk", RetryHint.NEVER, "ERR_INVALID_HANDLE"),
+    5: (ErrorCode.NOT_INITIALIZED, "sdk", RetryHint.NEVER, "ERR_NOT_INITIALIZED"),
+    6: (ErrorCode.ALREADY_INIT, "sdk", RetryHint.NEVER, "ERR_ALREADY_INIT"),
+    7: (
+        ErrorCode.RUNTIME_OFFLINE,
+        "transport",
+        RetryHint.AFTER_BACKOFF,
+        "ERR_DAEMON_DOWN",
+    ),
+    8: (
+        ErrorCode.VERSION_MISMATCH,
+        "sdk",
+        RetryHint.NEVER,
+        "ERR_VERSION_INCOMPATIBLE",
+    ),
+    9: (ErrorCode.ADMISSION_DENIED, "runtime", RetryHint.UNKNOWN, "ERR_ABILITY_FAILED"),
+    10: (ErrorCode.NOT_IMPLEMENTED, "sdk", RetryHint.NEVER, "ERR_NOT_IMPLEMENTED"),
+    11: (ErrorCode.INVALID_ARGUMENT, "sdk", RetryHint.NEVER, "ERR_INVALID_ARG"),
+    12: (
+        ErrorCode.PERMISSION_DENIED,
+        "runtime",
+        RetryHint.NEVER,
+        "ERR_PERMISSION_DENIED",
+    ),
+    13: (ErrorCode.ABILITY_NOT_FOUND, "runtime", RetryHint.NEVER, "ERR_NOT_FOUND"),
+    14: (ErrorCode.CANCELLED, "client", RetryHint.NEVER, "ERR_CANCELLED"),
+    15: (
+        ErrorCode.PROTOCOL_MISMATCH,
+        "protocol",
+        RetryHint.NEVER,
+        "ERR_PROTOCOL",
+    ),
+    16: (ErrorCode.TIMEOUT, "transport", RetryHint.SAFE, "ERR_TIMEOUT"),
+}
 
 _StreamCallback = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p)
 _BidiCallback = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p)
@@ -587,12 +627,15 @@ class RuntimeCABILibrary:
         error = self._last_error_json()
         if error is not None:
             raise error
+        mapped_code, stage, retry, abi_symbol = _cabi_error_metadata(code)
         raise SDKError(
-            code=ErrorCode.GENERIC,
-            stage="cabi",
-            retry=RetryHint.UNKNOWN,
-            retryable=retryable_for_hint(RetryHint.UNKNOWN),
+            code=mapped_code,
+            stage=stage,
+            retry=retry,
+            retryable=retryable_for_hint(retry),
             message=f"C ABI call failed with code {code}",
+            source="c_abi",
+            details={"abi_code": code, "abi_symbol": abi_symbol},
         )
 
     def _last_error_json(self) -> SDKError | None:
@@ -604,6 +647,12 @@ class RuntimeCABILibrary:
             return SDKError.from_json(ctypes.string_at(out.value))
         finally:
             self._raw.runtime_string_free(out)
+
+
+def _cabi_error_metadata(code: int) -> tuple[ErrorCode, str, RetryHint, str]:
+    return _CABI_ERROR_METADATA.get(
+        code, (ErrorCode.GENERIC, "sdk", RetryHint.UNKNOWN, "ERR_GENERIC")
+    )
 
 
 @dataclass
@@ -1277,21 +1326,104 @@ class _CABIStreamTransport:
         return sequence
 
 
+class _CABIBidiFrameChainMAC:
+    def __init__(self, bidi_id: int) -> None:
+        self._lock = threading.Lock()
+        self._previous = hashlib.sha256(
+            f"easynet-cabi-bidi-frame-chain:v1:{bidi_id}".encode("utf-8")
+        ).digest()
+
+    def attach(self, wire_frame: dict[str, object]) -> bytes:
+        if "mac_base64" in wire_frame:
+            raise _invalid_cabi_payload(
+                "C ABI bidi wire frame already contains mac_base64"
+            )
+        wire_json = _json_bytes(wire_frame)
+        with self._lock:
+            self._previous = hashlib.sha256(
+                self._previous + b"\x00" + wire_json
+            ).digest()
+            tagged = dict(wire_frame)
+            tagged["mac_base64"] = base64.b64encode(self._previous).decode("ascii")
+            return _json_bytes(tagged)
+
+
+def _cabi_bidi_frame_json(
+    frame_json: bytes,
+    frame_mac: _CABIBidiFrameChainMAC,
+) -> bytes:
+    frame = _json_object(frame_json, "bidi frame")
+    kind = _string_or_empty(frame.get("kind"))
+    if not kind:
+        raise _invalid_cabi_payload("bidi frame kind is required")
+
+    if kind in {"data", "binary_chunk", "chunk"}:
+        wire: dict[str, object] = {
+            "type": "binary_chunk",
+            "stream_id": _positive_int_or_zero(frame.get("stream_id")),
+            "pts": _positive_int_or_zero(frame.get("sequence")),
+            "data_base64": _bidi_payload_base64(frame),
+        }
+        return frame_mac.attach(wire)
+
+    if kind in {"eof", "close_send"}:
+        return frame_mac.attach({"type": "control", "eof": True})
+
+    if kind == "control":
+        wire = {"type": "control"}
+        payload = frame.get("payload_json")
+        if payload is not None:
+            if not isinstance(payload, dict):
+                raise _invalid_cabi_payload("bidi control payload_json must be an object")
+            wire.update(payload)
+        return frame_mac.attach(wire)
+
+    raise _invalid_cabi_payload(f"unsupported C ABI bidi frame kind: {kind}")
+
+
+def _bidi_payload_base64(frame: dict[str, object]) -> str:
+    payload_base64 = frame.get("payload_base64")
+    if isinstance(payload_base64, str):
+        return payload_base64
+    if "payload_json" in frame and frame["payload_json"] is not None:
+        return base64.b64encode(_json_bytes(frame["payload_json"])).decode("ascii")
+    return ""
+
+
+def _positive_int_or_zero(value: object) -> int:
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else 0
+
+
+def _invalid_cabi_payload(message: str) -> SDKError:
+    return SDKError(
+        code=ErrorCode.INVALID_ARGUMENT,
+        message=message,
+        stage="sdk",
+        retry=RetryHint.NEVER,
+    )
+
+
 @dataclass
 class _CABIBidiTransport:
     owner: CABIRuntimeTransport
     bidi_id: int
     callback_token: int
     inbox: "_CallbackInbox"
+    frame_mac: "_CABIBidiFrameChainMAC" = field(init=False)
     _terminal_action_done: bool = False
     _cancel_sent: bool = False
     _next_sequence: int = 1
+
+    def __post_init__(self) -> None:
+        self.frame_mac = _CABIBidiFrameChainMAC(self.bidi_id)
 
     def send(self, frame_json: bytes) -> bytes:
         if self._terminal_action_done:
             raise _closed_error("bidi transport is closed")
         self.owner.lib.invocation_bidi_send(
-            self.owner._handle_if_open(), self.bidi_id, frame_json
+            self.owner._handle_if_open(),
+            self.bidi_id,
+            _cabi_bidi_frame_json(frame_json, self.frame_mac),
         )
         return frame_json
 
@@ -1308,8 +1440,13 @@ class _CABIBidiTransport:
     def close_send(self) -> bytes:
         if self._terminal_action_done:
             raise _closed_error("bidi transport is closed")
-        self.owner.lib.invocation_bidi_close_send(
-            self.owner._handle_if_open(), self.bidi_id
+        self.owner.lib.invocation_bidi_send(
+            self.owner._handle_if_open(),
+            self.bidi_id,
+            _cabi_bidi_frame_json(
+                b'{"sequence":1,"kind":"close_send"}',
+                self.frame_mac,
+            ),
         )
         return _json_bytes(
             {
@@ -1389,6 +1526,8 @@ def _project_cabi_ordered_event(
     event.pop("ok", None)
     event.pop("code", None)
     event.pop("message", None)
+    event.pop("mac_base64", None)
+    event.pop("pts", None)
     return _json_bytes(event)
 
 

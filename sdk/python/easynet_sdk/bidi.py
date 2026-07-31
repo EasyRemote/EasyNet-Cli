@@ -67,6 +67,18 @@ class BidiTransport(Protocol):
     def cancel(self, reason: str) -> bytes: ...
 
 
+_BIDI_LIFECYCLE_RECEIVE_FRAME = "receive_frame"
+_BIDI_LIFECYCLE_CLOSE_SEND_OUTCOME = "close_send_outcome"
+_BIDI_LIFECYCLE_CANCEL_OUTCOME = "cancel_outcome"
+
+
+@dataclass(frozen=True)
+class _BidiLifecycleEvent:
+    kind: str
+    frame: Optional["BidiFrame"] = None
+    outcome: Optional["BidiOutcome"] = None
+
+
 @dataclass(frozen=True)
 class BidiFrame:
     """SDK bidi frame projection."""
@@ -429,12 +441,12 @@ class BidiSession:
             raise
         with self._lock:
             self._receiving = False
-            if self._is_runtime_terminal_locked():
-                raise _invalid_bidi(
-                    "bidi session became terminal while receive was in progress"
+            self._apply_lifecycle_event_locked(
+                _BidiLifecycleEvent(
+                    kind=_BIDI_LIFECYCLE_RECEIVE_FRAME,
+                    frame=frame,
                 )
-            self._record_received_locked(frame)
-            self._apply_received_state_locked(frame)
+            )
         return frame
 
     def close_send(self) -> BidiOutcome:
@@ -476,19 +488,12 @@ class BidiSession:
             raise
         with self._lock:
             self._sending = False
-            if outcome.state != BidiState.HALF_CLOSED_LOCAL or outcome.terminal:
-                self._set_runtime_state_locked(BidiState.FAILED)
-                raise _invalid_bidi(
-                    "bidi close-send transport must return "
-                    "HalfClosedLocal with terminal=false"
+            self._apply_lifecycle_event_locked(
+                _BidiLifecycleEvent(
+                    kind=_BIDI_LIFECYCLE_CLOSE_SEND_OUTCOME,
+                    outcome=outcome,
                 )
-            if (
-                self._is_runtime_terminal_locked()
-                or self._runtime_state == BidiState.CANCEL_REQUESTED
-            ):
-                return outcome
-            self._local_half_close = True
-            self._set_runtime_state_locked(BidiState.HALF_CLOSED_LOCAL)
+            )
         return outcome
 
     def cancel(self, reason: str = "") -> BidiOutcome:
@@ -525,13 +530,12 @@ class BidiSession:
                 "bidi cancel transport must return CancelRequested with terminal=false"
             )
         with self._lock:
-            if self._runtime_state == BidiState.TERMINAL:
-                return outcome
-            if self._runtime_state == BidiState.FAILED:
-                raise _invalid_bidi(
-                    "bidi session failed while cancellation was in flight"
+            self._apply_lifecycle_event_locked(
+                _BidiLifecycleEvent(
+                    kind=_BIDI_LIFECYCLE_CANCEL_OUTCOME,
+                    outcome=outcome,
                 )
-            self._set_runtime_state_locked(outcome.state)
+            )
         return outcome
 
     def close(self) -> None:
@@ -583,6 +587,60 @@ class BidiSession:
             raise _invalid_bidi("bidi receive buffer limit exceeded")
         self._last_recv_sequence = frame.sequence
         self.received_frames.append(frame)
+
+    def _apply_lifecycle_event_locked(self, event: _BidiLifecycleEvent) -> None:
+        if event.kind == _BIDI_LIFECYCLE_RECEIVE_FRAME:
+            if event.frame is None:
+                self._set_runtime_state_locked(BidiState.FAILED)
+                raise _invalid_bidi("bidi receive lifecycle event is missing frame")
+            self._apply_receive_frame_locked(event.frame)
+            return
+        if event.kind == _BIDI_LIFECYCLE_CLOSE_SEND_OUTCOME:
+            if event.outcome is None:
+                self._set_runtime_state_locked(BidiState.FAILED)
+                raise _invalid_bidi(
+                    "bidi close-send lifecycle event is missing outcome"
+                )
+            self._apply_close_send_outcome_locked(event.outcome)
+            return
+        if event.kind == _BIDI_LIFECYCLE_CANCEL_OUTCOME:
+            if event.outcome is None:
+                self._set_runtime_state_locked(BidiState.FAILED)
+                raise _invalid_bidi("bidi cancel lifecycle event is missing outcome")
+            self._apply_cancel_outcome_locked(event.outcome)
+            return
+        self._set_runtime_state_locked(BidiState.FAILED)
+        raise _invalid_bidi("unknown bidi lifecycle event")
+
+    def _apply_receive_frame_locked(self, frame: BidiFrame) -> None:
+        if self._is_runtime_terminal_locked() and not frame.terminal:
+            raise _invalid_bidi(
+                "bidi session became terminal while receive was in progress"
+            )
+        self._record_received_locked(frame)
+        self._apply_received_state_locked(frame)
+
+    def _apply_close_send_outcome_locked(self, outcome: BidiOutcome) -> None:
+        if outcome.state != BidiState.HALF_CLOSED_LOCAL or outcome.terminal:
+            self._set_runtime_state_locked(BidiState.FAILED)
+            raise _invalid_bidi(
+                "bidi close-send transport must return "
+                "HalfClosedLocal with terminal=false"
+            )
+        if (
+            self._is_runtime_terminal_locked()
+            or self._runtime_state == BidiState.CANCEL_REQUESTED
+        ):
+            return
+        self._local_half_close = True
+        self._set_runtime_state_locked(BidiState.HALF_CLOSED_LOCAL)
+
+    def _apply_cancel_outcome_locked(self, outcome: BidiOutcome) -> None:
+        if self._runtime_state == BidiState.TERMINAL:
+            return
+        if self._runtime_state == BidiState.FAILED:
+            raise _invalid_bidi("bidi session failed while cancellation was in flight")
+        self._set_runtime_state_locked(outcome.state)
 
     def _apply_received_state_locked(self, frame: BidiFrame) -> None:
         if frame.transport_terminal:

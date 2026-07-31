@@ -335,7 +335,7 @@ class StreamHandle:
             raise
         with self._lock:
             self._receiving = False
-            if self._is_runtime_terminal_locked():
+            if self._is_runtime_terminal_locked() and not event.terminal:
                 raise _invalid_stream(
                     "stream became terminal while receive was in progress"
                 )

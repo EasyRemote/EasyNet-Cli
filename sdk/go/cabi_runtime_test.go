@@ -56,6 +56,9 @@ func TestCABIBidiFrameJSONProjectsSDKFramesToFFIWire(t *testing.T) {
 	if binaryWire["type"] != "binary_chunk" || binaryWire["data_base64"] != base64.StdEncoding.EncodeToString([]byte("hello")) {
 		t.Fatalf("unexpected binary wire: %#v", binaryWire)
 	}
+	if binaryWire["pts"] != float64(1) {
+		t.Fatalf("binary wire did not derive C ABI pts from SDK sequence: %#v", binaryWire)
+	}
 
 	control, err := NewBidiJSONFrame(2, "control", 7, json.RawMessage(`{"pty_resize":{"cols":120,"rows":40}}`))
 	if err != nil {
@@ -81,6 +84,55 @@ func TestCABIBidiFrameJSONProjectsSDKFramesToFFIWire(t *testing.T) {
 	}
 }
 
+func TestCABIBidiFrameChainMACTagsFFIWireWithoutPollutingSDKProjection(t *testing.T) {
+	binary, err := NewBidiBinaryFrame(1, 7, []byte("hello"), "application/octet-stream")
+	if err != nil {
+		t.Fatalf("NewBidiBinaryFrame: %v", err)
+	}
+	raw, err := json.Marshal(binary)
+	if err != nil {
+		t.Fatalf("Marshal binary frame: %v", err)
+	}
+
+	chain := newCABIBidiFrameChainMAC(42)
+	wire, err := chain.attach(mustCABIBidiFrameJSON(t, raw))
+	if err != nil {
+		t.Fatalf("attach MAC: %v", err)
+	}
+	var tagged map[string]any
+	if err := json.Unmarshal(wire, &tagged); err != nil {
+		t.Fatalf("decode tagged wire: %v", err)
+	}
+	mac, ok := tagged["mac_base64"].(string)
+	if !ok || mac == "" {
+		t.Fatalf("tagged wire omitted mac_base64: %#v", tagged)
+	}
+	decoded, err := base64.StdEncoding.DecodeString(mac)
+	if err != nil {
+		t.Fatalf("decode mac_base64: %v", err)
+	}
+	if len(decoded) != 32 {
+		t.Fatalf("mac length = %d, want 32", len(decoded))
+	}
+
+	projected, err := NewBidiFrameFromJSON(raw)
+	if err != nil {
+		t.Fatalf("SDK projection polluted by transport MAC: %v", err)
+	}
+	if projected.Kind() != "data" {
+		t.Fatalf("projection kind = %q, want data", projected.Kind())
+	}
+}
+
+func mustCABIBidiFrameJSON(t *testing.T, raw []byte) []byte {
+	t.Helper()
+	wire, err := cabiBidiFrameJSON(raw)
+	if err != nil {
+		t.Fatalf("cabiBidiFrameJSON: %v", err)
+	}
+	return wire
+}
+
 func TestCABIBidiFrameJSONRejectsLegacyBinaryChunkKind(t *testing.T) {
 	_, err := cabiBidiFrameJSON([]byte(`{"sequence":1,"kind":"binary_chunk","stream_id":1,"payload_base64":"aGVsbG8="}`))
 	if err == nil {
@@ -97,6 +149,7 @@ func TestProjectCABIOrderedEventKeepsCanonicalBidiReceipts(t *testing.T) {
 		"ok": true,
 		"kind": "receipt",
 		"sequence": 17,
+		"mac_base64": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
 		"terminal": true,
 		"payload_json": {"sha256":"abc123"},
 		"payload_base64": "eyJzaGEyNTYiOiJhYmMxMjMifQ==",
@@ -131,6 +184,9 @@ func TestProjectCABIOrderedEventKeepsCanonicalBidiReceipts(t *testing.T) {
 	}
 	if _, ok := projectedJSON["terminal_receipt"]; !ok {
 		t.Fatalf("terminal_receipt omitted: %s", projected)
+	}
+	if _, hasMAC := projectedJSON["mac_base64"]; hasMAC {
+		t.Fatalf("transport mac_base64 was preserved in receipt projection: %#v", projectedJSON)
 	}
 	frame, err := NewBidiFrameFromJSON(projected)
 	if err != nil {
@@ -175,6 +231,8 @@ func TestProjectCABIOrderedEventKeepsCanonicalDataFrame(t *testing.T) {
 		"ok": true,
 		"kind": "data",
 		"sequence": 5,
+		"mac_base64": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+		"pts": 99,
 		"stream_id": 1,
 		"payload_base64": "aGVsbG8=",
 		"terminal": false
@@ -198,6 +256,12 @@ func TestProjectCABIOrderedEventKeepsCanonicalDataFrame(t *testing.T) {
 	}
 	if _, hasLegacyData := projectedJSON["data_base64"]; hasLegacyData {
 		t.Fatalf("legacy data_base64 was preserved in SDK projection: %#v", projectedJSON)
+	}
+	if _, hasMAC := projectedJSON["mac_base64"]; hasMAC {
+		t.Fatalf("transport mac_base64 was preserved in SDK projection: %#v", projectedJSON)
+	}
+	if _, hasPTS := projectedJSON["pts"]; hasPTS {
+		t.Fatalf("transport pts was preserved in SDK projection: %#v", projectedJSON)
 	}
 	frame, err := NewBidiFrameFromJSON(projected)
 	if err != nil {
@@ -983,9 +1047,12 @@ func TestCABIRuntimeProviderResolvesDescriptorRefThroughNativeProvider(t *testin
 	client := openFakeCABIRuntime(t)
 
 	descriptorRef, err := client.ResolveDescriptorRef(context.Background(), RuntimeDescriptorRefRequest{
-		CalleeURA: "easynet:///r/example/device/dev-a",
-		Ability:   "meta.list_resources",
-		CallMode:  "rpc",
+		CalleeURA:  "easynet:///r/example/device/dev-a",
+		Ability:    "meta.list_resources",
+		CallMode:   "rpc",
+		CallerURA:  "easynet:///r/example/device/caller",
+		SubjectURA: "easynet:///r/example/device/dev-a",
+		Provider:   "ability_descriptor",
 	})
 
 	if err != nil {
@@ -1019,7 +1086,7 @@ func TestCABIRuntimeProviderProjectsDescriptorResolverLastError(t *testing.T) {
 	if sdkErr.Stage != "routing" {
 		t.Fatalf("descriptor resolver stage = %q, want routing", sdkErr.Stage)
 	}
-	if sdkErr.Message == "" || sdkErr.Message == "C ABI runtime descriptor_ref resolver failed with code 4" {
+	if sdkErr.Message == "" || strings.Contains(sdkErr.Message, "with code ") {
 		t.Fatalf("descriptor resolver kept generic C ABI failure message: %#v", sdkErr)
 	}
 }

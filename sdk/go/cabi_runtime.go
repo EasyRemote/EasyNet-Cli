@@ -188,6 +188,7 @@ import "C"
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -808,6 +809,7 @@ func (t *cabiRuntimeTransport) OpenBidi(ctx context.Context, draftJSON []byte, s
 		bidiID:       bidiID,
 		registration: registration,
 		inbox:        inbox,
+		frameMAC:     newCABIBidiFrameChainMAC(bidiID),
 		nextRecvSeq:  1,
 	}
 	t.mu.Lock()
@@ -1169,6 +1171,7 @@ type cabiBidiTransport struct {
 	bidiID       uint64
 	registration *cabiCallbackRegistration
 	inbox        *cabiCallbackInbox
+	frameMAC     *cabiBidiFrameChainMAC
 	nextRecvSeq  uint64
 	closed       bool
 	cancelSent   bool
@@ -1183,7 +1186,7 @@ func (b *cabiBidiTransport) Send(ctx context.Context, frameJSON []byte) ([]byte,
 	if err := b.requireOpen(); err != nil {
 		return nil, err
 	}
-	wireJSON, err := cabiBidiFrameJSON(frameJSON)
+	wireJSON, err := b.cabiBidiFrameJSON(frameJSON)
 	if err != nil {
 		return nil, err
 	}
@@ -1196,6 +1199,17 @@ func (b *cabiBidiTransport) Send(ctx context.Context, frameJSON []byte) ([]byte,
 	return append([]byte(nil), frameJSON...), nil
 }
 
+func (b *cabiBidiTransport) cabiBidiFrameJSON(frameJSON []byte) ([]byte, error) {
+	if b == nil || b.frameMAC == nil {
+		return nil, invalidRuntimeClient("C ABI bidi frame MAC state is not initialized")
+	}
+	wireJSON, err := cabiBidiFrameJSON(frameJSON)
+	if err != nil {
+		return nil, err
+	}
+	return b.frameMAC.attach(wireJSON)
+}
+
 func cabiBidiFrameJSON(frameJSON []byte) ([]byte, error) {
 	frame, err := NewBidiFrameFromJSON(frameJSON)
 	if err != nil {
@@ -1206,6 +1220,7 @@ func cabiBidiFrameJSON(frameJSON []byte) ([]byte, error) {
 		wire := map[string]any{
 			"type":      "binary_chunk",
 			"stream_id": frame.StreamID(),
+			"pts":       frame.Sequence(),
 		}
 		if payload := frame.PayloadBase64(); payload != "" {
 			wire["data_base64"] = payload
@@ -1238,6 +1253,44 @@ func cabiBidiFrameJSON(frameJSON []byte) ([]byte, error) {
 	}
 }
 
+type cabiBidiFrameChainMAC struct {
+	mu       sync.Mutex
+	previous [32]byte
+}
+
+func newCABIBidiFrameChainMAC(bidiID uint64) *cabiBidiFrameChainMAC {
+	return &cabiBidiFrameChainMAC{
+		previous: sha256.Sum256([]byte(fmt.Sprintf("easynet-cabi-bidi-frame-chain:v1:%d", bidiID))),
+	}
+}
+
+func (m *cabiBidiFrameChainMAC) attach(wireJSON []byte) ([]byte, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var wire map[string]any
+	if err := json.Unmarshal(wireJSON, &wire); err != nil {
+		return nil, invalidRuntimePayload(fmt.Sprintf("decode C ABI bidi wire frame: %v", err), err)
+	}
+	if _, exists := wire["mac_base64"]; exists {
+		return nil, invalidRuntimePayload("C ABI bidi wire frame already contains mac_base64", nil)
+	}
+
+	digest := sha256.New()
+	digest.Write(m.previous[:])
+	digest.Write([]byte{0})
+	digest.Write(wireJSON)
+	next := digest.Sum(nil)
+	copy(m.previous[:], next)
+	wire["mac_base64"] = base64.StdEncoding.EncodeToString(m.previous[:])
+
+	out, err := json.Marshal(wire)
+	if err != nil {
+		return nil, invalidRuntimePayload(fmt.Sprintf("encode C ABI bidi wire frame: %v", err), err)
+	}
+	return out, nil
+}
+
 func (b *cabiBidiTransport) Recv(ctx context.Context) ([]byte, error) {
 	if ctx == nil {
 		return nil, invalidRuntimeClient("context is required")
@@ -1260,7 +1313,13 @@ func (b *cabiBidiTransport) CloseSend(ctx context.Context) ([]byte, error) {
 	if err := b.requireOpen(); err != nil {
 		return nil, err
 	}
-	code := int32(C.runtime_cabi_call_bidi_close_send(b.owner.symbols.bidiCloseSend, C.uint64_t(handle), C.uint64_t(b.bidiID)))
+	wireJSON, err := b.cabiBidiFrameJSON([]byte(`{"sequence":1,"kind":"close_send"}`))
+	if err != nil {
+		return nil, err
+	}
+	code := int32(cabiWithCString(wireJSON, func(cFrame *C.char) C.int32_t {
+		return C.runtime_cabi_call_bidi_send(b.owner.symbols.bidiSend, C.uint64_t(handle), C.uint64_t(b.bidiID), cFrame)
+	}))
 	if code != 0 {
 		return nil, b.owner.lastErrorOrCode(code, "C ABI invocation bidi close-send failed")
 	}
@@ -1419,6 +1478,8 @@ func projectCABIOrderedEvent(raw []byte, allocateSequence func(*uint64) uint64, 
 	delete(event, "ok")
 	delete(event, "code")
 	delete(event, "message")
+	delete(event, "mac_base64")
+	delete(event, "pts")
 	projected, err := json.Marshal(event)
 	if err != nil {
 		return nil, invalidRuntimePayload(fmt.Sprintf("encode projected C ABI callback frame: %v", err), err)

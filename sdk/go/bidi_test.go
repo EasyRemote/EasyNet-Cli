@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 )
 
 type memoryBidiTransport struct {
@@ -36,6 +37,7 @@ type concurrentCancelBidiTransport struct {
 	memoryBidiTransport
 	recvStarted chan struct{}
 	releaseRecv chan struct{}
+	recvFrame   string
 }
 
 func (*unsupportedCancelBidiTransport) Cancel(context.Context, string) ([]byte, error) {
@@ -76,13 +78,14 @@ func newConcurrentCancelBidiTransport() *concurrentCancelBidiTransport {
 	return &concurrentCancelBidiTransport{
 		recvStarted: make(chan struct{}),
 		releaseRecv: make(chan struct{}),
+		recvFrame:   `{"sequence":1,"kind":"terminal","stream_id":1,"terminal":true,"terminal_receipt":{"receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/r1/receipt"}}`,
 	}
 }
 
 func (t *concurrentCancelBidiTransport) Recv(context.Context) ([]byte, error) {
 	close(t.recvStarted)
 	<-t.releaseRecv
-	return []byte(`{"sequence":1,"kind":"terminal","stream_id":1,"terminal":true,"terminal_receipt":{"receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/r1/receipt"}}`), nil
+	return []byte(t.recvFrame), nil
 }
 
 func (m *memoryBidiTransport) Send(ctx context.Context, frameJSON []byte) ([]byte, error) {
@@ -248,6 +251,9 @@ func TestBidiProjectionsRejectProductStateCode(t *testing.T) {
 	}
 	if _, err := NewBidiFrameFromJSON([]byte(`{"sequence":1,"kind":"data","stream_id":1,"terminal":false,"state_code":"B200"}`)); err == nil || !strings.Contains(err.Error(), "bidi frame contains noncanonical field state_code") {
 		t.Fatalf("NewBidiFrameFromJSON accepted product state_code: %v", err)
+	}
+	if _, err := NewBidiFrameFromJSON([]byte(`{"sequence":1,"kind":"data","stream_id":1,"terminal":false,"mac_base64":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}`)); err == nil || !strings.Contains(err.Error(), "bidi frame contains noncanonical field mac_base64") {
+		t.Fatalf("NewBidiFrameFromJSON accepted transport mac_base64: %v", err)
 	}
 	if _, err := NewBidiOutcomeFromJSON([]byte(`{"session_id":"bidi-1","state":"CancelRequested","terminal":false,"reason":"stop","state_code":"B200"}`)); err == nil || !strings.Contains(err.Error(), "bidi outcome contains noncanonical field state_code") {
 		t.Fatalf("NewBidiOutcomeFromJSON accepted product state_code: %v", err)
@@ -493,6 +499,67 @@ func TestBidiCancelWhileReceivingWaitsForCanonicalTerminal(t *testing.T) {
 	}
 	if _, err := session.TerminalFrame(); err != nil {
 		t.Fatalf("TerminalFrame after cancel drain: %v", err)
+	}
+}
+
+func TestBidiReceiveReturnsTerminalFrameWhenSessionAlreadyTerminalInFlight(t *testing.T) {
+	transport := newConcurrentCancelBidiTransport()
+	session := newTestBidiSession(t, transport)
+
+	received := make(chan BidiFrame, 1)
+	receiveErrors := make(chan error, 1)
+	go func() {
+		frame, receiveErr := session.Receive(context.Background())
+		if receiveErr != nil {
+			receiveErrors <- receiveErr
+			return
+		}
+		received <- frame
+	}()
+	<-transport.recvStarted
+
+	session.mu.Lock()
+	session.runtimeState = BidiTerminal
+	session.mu.Unlock()
+	close(transport.releaseRecv)
+
+	select {
+	case receiveErr := <-receiveErrors:
+		t.Fatalf("Receive rejected in-flight terminal frame: %v", receiveErr)
+	case frame := <-received:
+		if !frame.Terminal() {
+			t.Fatalf("received frame is not terminal: %#v", frame)
+		}
+	}
+	if session.State() != BidiTerminal {
+		t.Fatalf("state = %s, want Terminal", session.State())
+	}
+}
+
+func TestBidiReceiveRejectsNonTerminalFrameWhenSessionAlreadyTerminalInFlight(t *testing.T) {
+	transport := newConcurrentCancelBidiTransport()
+	transport.recvFrame = `{"sequence":1,"kind":"data","stream_id":1,"payload_json":{"late":true}}`
+	session := newTestBidiSession(t, transport)
+
+	receiveErrors := make(chan error, 1)
+	go func() {
+		_, receiveErr := session.Receive(context.Background())
+		receiveErrors <- receiveErr
+	}()
+	<-transport.recvStarted
+
+	session.mu.Lock()
+	session.runtimeState = BidiTerminal
+	session.mu.Unlock()
+	close(transport.releaseRecv)
+
+	select {
+	case receiveErr := <-receiveErrors:
+		if receiveErr == nil || !strings.Contains(receiveErr.Error(), "became terminal") {
+			t.Fatalf("Receive error = %v, want terminal race rejection", receiveErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Receive did not complete")
 	}
 }
 

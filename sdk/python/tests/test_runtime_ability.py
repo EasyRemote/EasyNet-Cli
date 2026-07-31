@@ -257,6 +257,51 @@ def test_runtime_ability_catalogue_read_resolves_descriptor_with_governance_read
     )
 
 
+def test_runtime_ability_catalogue_read_uses_session_owner_for_governance_subject() -> None:
+    class CatalogueDescriptorTransport(RuntimeTransportFake):
+        def resolve_descriptor_ref(self, request_json: bytes) -> bytes:
+            request = json.loads(request_json)
+            self.descriptor_requests.append(request)
+            return json.dumps(
+                {
+                    "descriptor_ref": (
+                        "easynet:///r/example/ability/device.device-1.meta.list_resources@1.0.0#"
+                        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                        "!read"
+                    )
+                }
+            ).encode()
+
+    transport = CatalogueDescriptorTransport()
+    client = RuntimeAbilityClient(
+        RuntimeClient(transport),  # type: ignore[arg-type]
+        AddressingClient(AxonAddressingTransport()),
+    )
+    call = replace(
+        _call(),
+        callee_ura="easynet:///r/example/device/device-1",
+        subject_ura="easynet:///r/example/user/alice",
+    )
+    authority = replace(
+        _runtime_session_authority(
+            call, "c658f249-e5b5-4126-8a5e-79d1d2322885"
+        ),
+        scopes=("meta.list_resources",),
+        allowed_followup_abilities=("meta.list_resources",),
+    )
+
+    draft = client._build_catalogue_read(
+        replace(call, authority=authority), "meta.list_resources", {}
+    )
+
+    want_subject = (
+        "easynet:///r/example/resource/"
+        "user.c658f249-e5b5-4126-8a5e-79d1d2322885/runtime-state/read"
+    )
+    assert draft.subject_ura == want_subject
+    assert transport.descriptor_requests[-1]["subject_ura"] == want_subject
+
+
 def test_runtime_governance_read_subject_public_helper_projects_user_subject() -> None:
     assert easynet_sdk.runtime_governance_read_subject_ura(
         "easynet:///r/example/user/alice",

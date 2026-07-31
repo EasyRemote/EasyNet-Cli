@@ -53,6 +53,20 @@ type BidiTransportFunc struct {
 	CancelFunc    func(ctx context.Context, reason string) ([]byte, error)
 }
 
+type bidiLifecycleEventKind uint8
+
+const (
+	bidiLifecycleReceiveFrame bidiLifecycleEventKind = iota + 1
+	bidiLifecycleCloseSendOutcome
+	bidiLifecycleCancelOutcome
+)
+
+type bidiLifecycleEvent struct {
+	kind    bidiLifecycleEventKind
+	frame   BidiFrame
+	outcome BidiOutcome
+}
+
 func (f BidiTransportFunc) Send(ctx context.Context, frameJSON []byte) ([]byte, error) {
 	if f.SendFunc == nil {
 		return nil, invalidRuntimeClient("bidi send transport function is required")
@@ -389,15 +403,10 @@ func (s *BidiSession) Receive(ctx context.Context) (BidiFrame, error) {
 		s.mu.Unlock()
 		return BidiFrame{}, err
 	}
-	if s.isRuntimeTerminalLocked() {
-		s.mu.Unlock()
-		return BidiFrame{}, invalidRuntimePayload("bidi session became terminal while receive was in progress", nil)
-	}
-	if err := s.recordReceivedLocked(frame); err != nil {
-		s.mu.Unlock()
-		return BidiFrame{}, err
-	}
-	if err := s.applyReceivedStateLocked(frame); err != nil {
+	if err := s.applyLifecycleEventLocked(bidiLifecycleEvent{
+		kind:  bidiLifecycleReceiveFrame,
+		frame: frame,
+	}); err != nil {
 		s.mu.Unlock()
 		return BidiFrame{}, err
 	}
@@ -455,17 +464,13 @@ func (s *BidiSession) CloseSend(ctx context.Context) (BidiOutcome, error) {
 		s.mu.Unlock()
 		return BidiOutcome{}, err
 	}
-	if outcome.state != BidiHalfClosedLocal || outcome.terminal {
-		s.runtimeState = BidiFailed
+	if err := s.applyLifecycleEventLocked(bidiLifecycleEvent{
+		kind:    bidiLifecycleCloseSendOutcome,
+		outcome: outcome,
+	}); err != nil {
 		s.mu.Unlock()
-		return BidiOutcome{}, invalidRuntimePayload("bidi close-send transport must not claim canonical terminality", nil)
+		return BidiOutcome{}, err
 	}
-	if s.isRuntimeTerminalLocked() || s.runtimeState == BidiCancelRequested {
-		s.mu.Unlock()
-		return outcome, nil
-	}
-	s.localHalfClose = true
-	s.runtimeState = BidiHalfClosedLocal
 	s.mu.Unlock()
 	return outcome, nil
 }
@@ -526,13 +531,12 @@ func (s *BidiSession) Cancel(ctx context.Context, reason string) (BidiOutcome, e
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.runtimeState == BidiTerminal {
-		return outcome, nil
+	if err := s.applyLifecycleEventLocked(bidiLifecycleEvent{
+		kind:    bidiLifecycleCancelOutcome,
+		outcome: outcome,
+	}); err != nil {
+		return BidiOutcome{}, err
 	}
-	if s.runtimeState == BidiFailed {
-		return BidiOutcome{}, invalidRuntimePayload("bidi session failed while cancellation was in flight", nil)
-	}
-	s.runtimeState = outcome.state
 	return outcome, nil
 }
 
@@ -605,6 +609,54 @@ func (s *BidiSession) recordReceivedLocked(frame BidiFrame) error {
 	}
 	s.lastRecvSeq = frame.sequence
 	s.receivedFrames = append(s.receivedFrames, frame)
+	return nil
+}
+
+func (s *BidiSession) applyLifecycleEventLocked(event bidiLifecycleEvent) error {
+	switch event.kind {
+	case bidiLifecycleReceiveFrame:
+		return s.applyReceiveFrameLocked(event.frame)
+	case bidiLifecycleCloseSendOutcome:
+		return s.applyCloseSendOutcomeLocked(event.outcome)
+	case bidiLifecycleCancelOutcome:
+		return s.applyCancelOutcomeLocked(event.outcome)
+	default:
+		s.runtimeState = BidiFailed
+		return invalidRuntimePayload("unknown bidi lifecycle event", nil)
+	}
+}
+
+func (s *BidiSession) applyReceiveFrameLocked(frame BidiFrame) error {
+	if s.isRuntimeTerminalLocked() && !frame.terminal {
+		return invalidRuntimePayload("bidi session became terminal while receive was in progress", nil)
+	}
+	if err := s.recordReceivedLocked(frame); err != nil {
+		return err
+	}
+	return s.applyReceivedStateLocked(frame)
+}
+
+func (s *BidiSession) applyCloseSendOutcomeLocked(outcome BidiOutcome) error {
+	if outcome.state != BidiHalfClosedLocal || outcome.terminal {
+		s.runtimeState = BidiFailed
+		return invalidRuntimePayload("bidi close-send transport must not claim canonical terminality", nil)
+	}
+	if s.isRuntimeTerminalLocked() || s.runtimeState == BidiCancelRequested {
+		return nil
+	}
+	s.localHalfClose = true
+	s.runtimeState = BidiHalfClosedLocal
+	return nil
+}
+
+func (s *BidiSession) applyCancelOutcomeLocked(outcome BidiOutcome) error {
+	if s.runtimeState == BidiTerminal {
+		return nil
+	}
+	if s.runtimeState == BidiFailed {
+		return invalidRuntimePayload("bidi session failed while cancellation was in flight", nil)
+	}
+	s.runtimeState = outcome.state
 	return nil
 }
 

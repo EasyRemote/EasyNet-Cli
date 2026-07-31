@@ -90,15 +90,16 @@ class ConcurrentCancelBidiTransport(MemoryBidiTransport):
         super().__init__()
         self.recv_started = threading.Event()
         self.terminal_ready = threading.Event()
+        self.recv_frame = (
+            b'{"sequence":1,"kind":"terminal","stream_id":1,"terminal":true,'
+            b'"terminal_receipt":{"receipt_id":"cancelled-1"}}'
+        )
 
     def recv(self, timeout: float | None = None) -> bytes:
         self.recv_started.set()
         if not self.terminal_ready.wait(timeout=timeout or 1.0):
             raise TimeoutError("terminal frame was not released")
-        return (
-            b'{"sequence":1,"kind":"terminal","stream_id":1,"terminal":true,'
-            b'"terminal_receipt":{"receipt_id":"cancelled-1"}}'
-        )
+        return self.recv_frame
 
     def cancel(self, reason: str) -> bytes:
         self.cancel_reason = reason
@@ -225,6 +226,16 @@ class BidiTests(unittest.TestCase):
         self.assertIn(
             "bidi frame contains noncanonical field state_code",
             str(frame_caught.exception),
+        )
+        with self.assertRaises(SDKError) as mac_caught:
+            BidiFrame.from_json(
+                b'{"sequence":1,"kind":"data","stream_id":1,'
+                b'"terminal":false,'
+                b'"mac_base64":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}'
+            )
+        self.assertIn(
+            "bidi frame contains noncanonical field mac_base64",
+            str(mac_caught.exception),
         )
         with self.assertRaises(SDKError) as outcome_caught:
             BidiOutcome.from_json(
@@ -398,6 +409,57 @@ class BidiTests(unittest.TestCase):
             session.terminal_frame().terminal_receipt,
             {"receipt_id": "cancelled-1"},
         )
+
+    def test_receive_returns_terminal_frame_when_session_already_terminal_in_flight(
+        self,
+    ) -> None:
+        transport = ConcurrentCancelBidiTransport()
+        session = new_session(transport)
+        received: list[BidiFrame] = []
+        errors: list[BaseException] = []
+        receiver = threading.Thread(
+            target=lambda: _capture_result(session.receive, received, errors),
+            daemon=True,
+        )
+        receiver.start()
+        self.assertTrue(transport.recv_started.wait(timeout=1.0))
+
+        with session._lock:
+            session._set_runtime_state_locked(BidiState.TERMINAL)
+        transport.terminal_ready.set()
+        receiver.join(timeout=1.0)
+
+        self.assertFalse(receiver.is_alive())
+        self.assertEqual(errors, [])
+        self.assertEqual(len(received), 1)
+        self.assertTrue(received[0].terminal)
+        self.assertEqual(session.state, BidiState.TERMINAL)
+
+    def test_receive_rejects_non_terminal_frame_when_session_already_terminal_in_flight(
+        self,
+    ) -> None:
+        transport = ConcurrentCancelBidiTransport()
+        transport.recv_frame = (
+            b'{"sequence":1,"kind":"data","stream_id":1,'
+            b'"payload_json":{"late":true}}'
+        )
+        session = new_session(transport)
+        errors: list[BaseException] = []
+        receiver = threading.Thread(
+            target=lambda: _capture_result(session.receive, [], errors),
+            daemon=True,
+        )
+        receiver.start()
+        self.assertTrue(transport.recv_started.wait(timeout=1.0))
+
+        with session._lock:
+            session._set_runtime_state_locked(BidiState.TERMINAL)
+        transport.terminal_ready.set()
+        receiver.join(timeout=1.0)
+
+        self.assertFalse(receiver.is_alive())
+        self.assertEqual(len(errors), 1)
+        self.assertIn("became terminal", str(errors[0]))
 
     def test_second_concurrent_receiver_is_rejected(self) -> None:
         transport = ConcurrentCancelBidiTransport()

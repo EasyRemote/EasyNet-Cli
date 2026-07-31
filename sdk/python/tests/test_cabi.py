@@ -1,4 +1,5 @@
 import ctypes
+import base64
 import json
 import unittest
 
@@ -19,7 +20,9 @@ from easynet_sdk._cabi import (
     RuntimeCABILibrary,
     EXPECTED_ABI_VERSION,
     MAX_CABI_CALLBACK_QUEUE,
+    _CABIBidiFrameChainMAC,
     _CABIStreamTransport,
+    _cabi_bidi_frame_json,
     _platform_library_candidates,
     _project_cabi_ordered_event,
     _runtime_status_from_cabi,
@@ -64,7 +67,9 @@ class CABIEventProjectionTests(unittest.TestCase):
 
     def test_bidi_event_projection_keeps_canonical_data_frame(self) -> None:
         projected = _project_cabi_ordered_event(
-            b'{"kind":"data","payload_base64":"aGVsbG8="}',
+            b'{"kind":"data","payload_base64":"aGVsbG8=",'
+            b'"mac_base64":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",'
+            b'"pts":99}',
             lambda observed: observed or 1,
             use_observed_sequence=True,
         )
@@ -76,6 +81,41 @@ class CABIEventProjectionTests(unittest.TestCase):
                 "payload_base64": "aGVsbG8=",
                 "sequence": 1,
             },
+        )
+        self.assertNotIn("pts", json.loads(projected))
+        BidiFrame.from_json(projected)
+
+    def test_bidi_event_projection_strips_transport_mac_from_receipts(self) -> None:
+        projected = _project_cabi_ordered_event(
+            b'{"kind":"receipt","sequence":2,"terminal":true,'
+            b'"terminal_receipt":{"state":"Completed"},'
+            b'"mac_base64":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}',
+            lambda observed: observed or 1,
+            use_observed_sequence=True,
+        )
+
+        decoded = json.loads(projected)
+        self.assertNotIn("mac_base64", decoded)
+        self.assertEqual(decoded["terminal_receipt"], {"state": "Completed"})
+        BidiFrame.from_json(projected)
+
+    def test_bidi_send_projection_adds_transport_mac_without_polluting_sdk_frame(self) -> None:
+        chain = _CABIBidiFrameChainMAC(42)
+        wire = json.loads(
+            _cabi_bidi_frame_json(
+                b'{"sequence":1,"kind":"data","stream_id":7,"payload_base64":"aGVsbG8="}',
+                chain,
+            )
+        )
+
+        self.assertEqual(wire["type"], "binary_chunk")
+        self.assertEqual(wire["data_base64"], "aGVsbG8=")
+        self.assertEqual(wire["pts"], 1)
+        mac = base64.b64decode(wire["mac_base64"])
+        self.assertEqual(len(mac), 32)
+
+        BidiFrame.from_json(
+            b'{"sequence":1,"kind":"data","stream_id":7,"payload_base64":"aGVsbG8="}'
         )
 
     def test_error_frame_rejects_non_string_fields_without_crashing(self) -> None:
@@ -854,6 +894,36 @@ class CABITransportTests(unittest.TestCase):
         self.assertEqual(raised.exception.stage, "routing")
         self.assertNotIn("C ABI", raised.exception.message)
 
+    def test_descriptor_resolution_fallback_projects_abi_not_found(self) -> None:
+        class MissingLastErrorRaw(FakeRawCABI):
+            def _runtime_resolve_descriptor_ref(
+                self, handle, request_json, out_ptr
+            ) -> int:
+                _ = handle, request_json, out_ptr
+                self.last_error_json = b"null"
+                return 13
+
+        transport = CABIRuntimeTransport(
+            RuntimeCABILibrary(MissingLastErrorRaw()), 42, owns_handle=False
+        )
+
+        with self.assertRaises(SDKError) as raised:
+            transport.resolve_descriptor_ref(
+                json.dumps(
+                    {
+                        "callee_ura": "easynet:///r/acme/device/provider",
+                        "ability": "missing.descriptor",
+                        "call_mode": "rpc",
+                    },
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ).encode("utf-8")
+            )
+
+        self.assertEqual(raised.exception.code, ErrorCode.ABILITY_NOT_FOUND)
+        self.assertEqual(raised.exception.stage, "runtime")
+        self.assertEqual(raised.exception.details["abi_symbol"], "ERR_NOT_FOUND")
+
     def test_prepare_uses_opaque_c_handle_when_request_id_repeats(self) -> None:
         raw = FakeRawCABI()
         transport = CABIRuntimeTransport(RuntimeCABILibrary(raw), 42, owns_handle=False)
@@ -1226,7 +1296,10 @@ class CABITransportTests(unittest.TestCase):
         self.assertFalse(outcome.terminal)
         self.assertEqual(outcome.state, BidiState.HALF_CLOSED_LOCAL)
         self.assertEqual(session.runtime_state, BidiState.HALF_CLOSED_LOCAL)
-        self.assertEqual(raw.bidi_close_sends, [5001])
+        self.assertEqual(raw.bidi_close_sends, [])
+        self.assertEqual(raw.bidi_sends[-1]["type"], "control")
+        self.assertEqual(raw.bidi_sends[-1]["eof"], True)
+        self.assertEqual(len(base64.b64decode(raw.bidi_sends[-1]["mac_base64"])), 32)
         self.assertEqual(raw.bidi_cancels, [])
         self.assertFalse(session.receive().terminal)
         with self.assertRaises(SDKError) as send_after_close:

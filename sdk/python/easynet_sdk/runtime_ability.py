@@ -269,6 +269,15 @@ class RuntimeAbilityClient:
         if policy.subject_policy == "runtime_owner":
             return call.callee_ura.strip()
         if policy.subject_policy == "runtime_governance_read":
+            authority = _runtime_session_authority_from_call(call)
+            if authority is not None:
+                subject = self._addressing.parse_ura(call.subject_ura.strip())
+                return runtime_governance_read_subject_ura(
+                    self._addressing.user_ura(
+                        subject.realm, authority.session_owner_user_id.strip()
+                    ),
+                    call.callee_ura,
+                )
             return runtime_governance_read_subject_ura(
                 call.subject_ura,
                 call.callee_ura,
@@ -410,6 +419,19 @@ def _runtime_authority_from_metadata(
     if isinstance(delegation, str) and delegation.strip():
         return DelegationProof.from_metadata(delegation)
     session = metadata.get(SESSION_AUTHORITY_METADATA_KEY)
+    if isinstance(session, str) and session.strip():
+        return SessionAuthority.from_metadata(session)
+    return None
+
+
+def _runtime_session_authority_from_call(
+    call: RuntimeCallContext,
+) -> SessionAuthority | None:
+    if isinstance(call.authority, SessionAuthority):
+        return call.authority
+    if call.authority is not None:
+        return None
+    session = call.metadata.get(SESSION_AUTHORITY_METADATA_KEY)
     if isinstance(session, str) and session.strip():
         return SessionAuthority.from_metadata(session)
     return None

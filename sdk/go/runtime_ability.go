@@ -81,10 +81,43 @@ func (policy runtimeAbilityDispatchPolicy) subjectURA(ctx context.Context, addre
 	case runtimeAbilitySubjectRuntimeOwner:
 		return strings.TrimSpace(call.CalleeURA), nil
 	case runtimeAbilitySubjectRuntimeGovernanceRead:
+		if authority, err := runtimeSessionAuthorityFromCall(call); err != nil {
+			return "", err
+		} else if authority != nil {
+			parts, err := ParseURAParts(strings.TrimSpace(call.SubjectURA))
+			if err != nil {
+				return "", invalidInvocation("runtime governance read subject_ura must be canonical", err)
+			}
+			return RuntimeStateReadSubjectURA(parts.Realm, authority.SessionOwnerUserID)
+		}
 		return runtimeGovernanceReadSubjectURA(call.SubjectURA, call.CalleeURA)
 	default:
 		return "", invalidRuntimePayload("runtime ability subject policy is unsupported", nil)
 	}
+}
+
+func runtimeSessionAuthorityFromCall(call RuntimeCallContext) (*SessionAuthority, error) {
+	switch typed := call.Authority.(type) {
+	case SessionAuthority:
+		return &typed, nil
+	case *SessionAuthority:
+		return typed, nil
+	case nil:
+	default:
+		return nil, nil
+	}
+	session, err := authorityMetadataValue(cloneAbilityMetadata(call.Metadata), SessionAuthorityMetadataKey)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(session) == "" {
+		return nil, nil
+	}
+	authority, err := NewSessionAuthorityFromMetadata(session)
+	if err != nil {
+		return nil, err
+	}
+	return &authority, nil
 }
 
 func (policy runtimeAbilityDispatchPolicy) descriptorResolutionSubjectURA(call RuntimeCallContext, selectedSubjectURA string) (string, error) {
