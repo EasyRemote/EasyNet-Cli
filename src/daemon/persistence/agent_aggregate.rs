@@ -714,6 +714,9 @@ fn hosted_agent_belongs_to_runtime_user(agent_ura: &str, realm: &str, user_segme
     if parsed.kind != crate::core::ura::URAKind::Agent || parsed.realm != realm {
         return false;
     }
+    if parsed.device_agent_ids().is_some() {
+        return false;
+    }
     parsed
         .agent_ids()
         .is_some_and(|(owner_user_segment, _)| owner_user_segment == user_segment)
@@ -1399,6 +1402,11 @@ mod tests {
                 hosted_agent("llm", "duplicate", "easynet:///r/acme/agent/u1.claude"),
                 hosted_agent("llm", "other-user", "easynet:///r/acme/agent/u2.other"),
                 hosted_agent("llm", "other-realm", "easynet:///r/other/agent/u1.other"),
+                hosted_agent(
+                    "mcp",
+                    "device-sponsored",
+                    "easynet:///r/acme/agent/device.dev-1.mcp-default",
+                ),
                 hosted_agent("llm", "device", "easynet:///r/acme/device/dev-2"),
                 hosted_agent("llm", "pending", "<unjoined>"),
                 hosted_agent("mcp", "blank", "   "),

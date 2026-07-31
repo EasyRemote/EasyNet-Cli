@@ -54,7 +54,7 @@ impl PagesAbilityVerb {
     }
 }
 
-/// Typed local selector for user-owned Pages abilities.
+/// Typed local selector for user-scoped Pages abilities.
 ///
 /// Invariant 1: `user` is non-empty and comes from the daemon's
 /// paired identity or `EASYNET_PAGES_USER` dev override.

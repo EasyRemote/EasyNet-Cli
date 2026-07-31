@@ -38,14 +38,16 @@ use crate::daemon::ability::dispatch::{
 
 pub use identity::{PagesIdentity, PagesUserRootIdentity};
 
-/// Installation parameters for the Pages reference system. Carry
-/// the daemon's user identity (the `<user>` segment in every
-/// pages-rooted URA), the realm, and the in-daemon Hub listener
-/// port (only used to format the dev-only listener URL surfaced
-/// from `pages.get`).
+/// Installation parameters for the Pages reference system.
+///
+/// `user` is the product-facing slug used in URLs and local project storage.
+/// `owner_user_id` is the immutable runtime owner segment used by canonical
+/// Agent URAs and Hub admission. Keeping them separate prevents display names
+/// from entering the runtime authority model.
 #[derive(Debug, Clone)]
 pub struct PagesConfig {
     pub user: String,
+    pub owner_user_id: String,
     pub realm: String,
     pub listener_port: u16,
 }
@@ -118,7 +120,7 @@ pub fn register(
         Ok(_) => {}
         Err(err) => return Err(err).context("restore published Pages projects"),
     }
-    register_restored_project_abilities(reg, &config.realm, &config.user)
+    register_restored_project_abilities(reg, &config.realm, &config.owner_user_id, &config.user)
         .context("register restored Pages project abilities")?;
     Ok(())
 }
@@ -128,13 +130,15 @@ fn register_management_abilities(
     config: &PagesConfig,
     dispatch_handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
 ) {
-    // Pages transitions are accountable to the user. The `pages` Agent is an
-    // execution host declared in the daemon authority inventory, not a second
-    // product ownership root.
-    let owner = OwnerKind::User(config.user.clone());
-    let authority_scope = pages_authority_scope(&config.realm, &config.user);
+    // Pages runtime abilities are owned by the canonical daemon-native Pages
+    // Agent. Product resources and URLs remain user/display-user scoped, but
+    // descriptor-bound invocation has no raw User owner branch; admission must
+    // resolve the same hosted-Agent owner that appears on the wire.
+    let owner = OwnerKind::Agent("pages".to_string());
+    let authority_scope = pages_authority_scope(&config.realm, &config.owner_user_id);
 
     let user = config.user.clone();
+    let owner_user_id = config.owner_user_id.clone();
     let realm = config.realm.clone();
     let listener_port = config.listener_port;
     let publish_handle = Arc::clone(&dispatch_handle);
@@ -143,7 +147,7 @@ fn register_management_abilities(
             .get()
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("pages registry handle not initialised"))?;
-        publish::handle_publish(&user, listener_port, &realm, registry, args)
+        publish::handle_publish(&owner_user_id, &user, listener_port, &realm, registry, args)
     });
     register_management_rpc(
         reg,
@@ -215,15 +219,14 @@ fn register_management_abilities(
 }
 
 fn pages_authority_scope(realm: &str, user: &str) -> AuthorityScope {
-    AuthorityScope::new(format!("user:{user}"), management_agent_ura(realm, user))
+    AuthorityScope::new("agent:pages", management_agent_ura(realm, user))
         .expect("Pages authority scope is well-formed")
 }
 
-/// Execution host for the user-owned Pages management family.
+/// Execution host for the user-scoped Pages management family.
 ///
-/// The root is intentionally separate from the control-plane owner:
-/// `user:<user>` remains accountable for Pages transitions, while this Agent
-/// identifies the daemon-hosted executor that serves the descriptor.
+/// Runtime ownership is the daemon-native `pages` Agent. The `user` segment is
+/// the immutable user id that scopes the hosted Agent URA.
 pub(crate) fn management_agent_ura(realm: &str, user: &str) -> String {
     crate::core::ura::agent_ura(realm, user, "pages")
 }
@@ -231,7 +234,7 @@ pub(crate) fn management_agent_ura(realm: &str, user: &str) -> String {
 /// Register only the static Pages management descriptor family.
 ///
 /// Descriptor-resolution providers use this path to materialize the canonical
-/// control-plane rows for `<user>.pages` without restoring project state or
+/// control-plane rows for `agent/<user>.pages` without restoring project state or
 /// opening the runtime-facing publish/unpublish overlay.
 pub(crate) fn register_management_ability_descriptors(
     reg: &mut AxonAbilityCatalog,
@@ -242,6 +245,7 @@ pub(crate) fn register_management_ability_descriptors(
         reg,
         &PagesConfig {
             user: user.to_string(),
+            owner_user_id: user.to_string(),
             realm: realm.to_string(),
             listener_port: 8787,
         },
@@ -397,12 +401,25 @@ pub(crate) fn pages_verb_tail(relative_name: &str) -> &str {
 pub(crate) fn register_project_abilities(
     reg: &AxonAbilityCatalog,
     realm: &str,
+    owner_user_id: &str,
     user: &str,
     project_id: &str,
 ) -> anyhow::Result<usize> {
-    let authority_scope = pages_authority_scope(realm, user);
-    fetch::register_fetch_ability(reg, user, project_id, authority_scope.clone())?;
-    Ok(1 + api::register_api_abilities_for_project(reg, user, project_id, authority_scope)?)
+    let authority_scope = pages_authority_scope(realm, owner_user_id);
+    fetch::register_fetch_ability(
+        reg,
+        owner_user_id,
+        user,
+        project_id,
+        authority_scope.clone(),
+    )?;
+    Ok(1 + api::register_api_abilities_for_project(
+        reg,
+        owner_user_id,
+        user,
+        project_id,
+        authority_scope,
+    )?)
 }
 
 pub(crate) fn registered_project_ability_names(
@@ -438,6 +455,7 @@ pub(crate) fn unregister_project_abilities(
 fn register_restored_project_abilities(
     reg: &AxonAbilityCatalog,
     realm: &str,
+    owner_user_id: &str,
     user: &str,
 ) -> anyhow::Result<usize> {
     let mut project_ids: Vec<String> = state::PUBLISHED_PROJECTS
@@ -450,7 +468,7 @@ fn register_restored_project_abilities(
     project_ids.sort();
     let mut registered = 0;
     for project_id in project_ids {
-        registered += register_project_abilities(reg, realm, user, &project_id)
+        registered += register_project_abilities(reg, realm, owner_user_id, user, &project_id)
             .with_context(|| format!("register restored Pages project {user}/{project_id}"))?;
     }
     Ok(registered)

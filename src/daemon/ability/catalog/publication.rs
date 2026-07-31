@@ -115,6 +115,31 @@ impl LocalAbilityPublicationSnapshot {
         descriptors
     }
 
+    /// Return every committed local owner that is itself a hosted Agent.
+    ///
+    /// This is the publication-side authority for session reconnect recovery:
+    /// if the committed LocalRuntime catalog contains routable descriptors for
+    /// an Agent owner, the federation publisher must re-advertise that owner
+    /// identity and its complete ability projection after the upstream Hub
+    /// session becomes ready. Product-specific agents such as Pages, Files, or
+    /// MCP must not maintain separate recovery paths.
+    #[must_use]
+    pub(crate) fn hosted_agent_owner_uras(&self) -> Vec<String> {
+        self.descriptors_by_owner
+            .keys()
+            .filter(|owner_ura| {
+                crate::core::ura::parse_ura(owner_ura)
+                    .ok()
+                    .is_some_and(|parsed| {
+                        parsed.kind == crate::core::ura::URAKind::Agent
+                            && parsed.device_agent_ids().is_none()
+                            && parsed.agent_ids().is_some()
+                    })
+            })
+            .cloned()
+            .collect()
+    }
+
     #[must_use]
     pub(crate) fn all_descriptors(&self) -> Vec<AbilityDescriptor> {
         self.descriptors_by_owner
@@ -259,6 +284,37 @@ mod tests {
         assert!(projected
             .iter()
             .all(|descriptor| descriptor.owner_ura == alice));
+    }
+
+    #[test]
+    fn hosted_agent_owner_uras_are_canonical_agent_owners_only() {
+        let device = crate::core::ura::device_ura("acme", "device-1");
+        let device_agent = crate::core::ura::agent_ura("acme", "device.device-1", "mcp-default");
+        let alice = crate::core::ura::agent_ura("acme", "user-1", "alice");
+        let bob = crate::core::ura::agent_ura("acme", "user-1", "bob");
+        let mut snapshot =
+            LocalAbilityPublicationSnapshot::from_owner_public_names(&device, &["device.echo"]);
+        snapshot.descriptors_by_owner.extend(
+            LocalAbilityPublicationSnapshot::from_owner_public_names(
+                &device_agent,
+                &["mcp-default.search"],
+            )
+            .descriptors_by_owner,
+        );
+        snapshot.descriptors_by_owner.extend(
+            LocalAbilityPublicationSnapshot::from_owner_public_names(&bob, &["chat"])
+                .descriptors_by_owner,
+        );
+        snapshot.descriptors_by_owner.extend(
+            LocalAbilityPublicationSnapshot::from_owner_public_names(&alice, &["chat"])
+                .descriptors_by_owner,
+        );
+        snapshot
+            .descriptors_by_owner
+            .entry("not-a-ura".to_string())
+            .or_default();
+
+        assert_eq!(snapshot.hosted_agent_owner_uras(), vec![alice, bob]);
     }
 
     #[test]

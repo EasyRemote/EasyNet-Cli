@@ -864,18 +864,20 @@ fn build_registry_with_services_result_inner(
     // deterministic user without reaching into the keyring resolver.
     // Listener port comes from `EASYNET_PAGES_PORT` (default 8787).
     {
-        // User-rooted ability families (`<user>.api_key.*`,
-        // `<user>.pages.*`, `<user>.files.*`). Identity sourced
-        // explicitly from the `pages_identity` argument — no
-        // env-var read here.
+        // User-scoped ability families. Runtime descriptors for Pages and
+        // Files are owned by daemon-native hosted Agents
+        // (`agent/<user-id>.pages`, `agent/<user-id>.files`); product URLs and
+        // storage may still use the display user slug. Identity is sourced
+        // explicitly from the `pages_identity` argument — no env-var read here.
         //
-        // The user-rooted family has no placeholder owner. An unpaired
+        // The user-scoped family has no placeholder owner. An unpaired
         // daemon (`pages_identity.user` is None) skips the family entirely. The
         // ability surface returns once pairing completes and the
         // supervisor rebuilds the registry with a populated
         // identity.
         if let Some(identity) = pages_identity.user_root_identity()? {
             let user = identity.user;
+            let owner_user_id = identity.owner_user_id;
             let realm = identity.realm;
             let listener_port = pages_identity.listener_port.unwrap_or(8787);
             let pages_realm = realm.clone();
@@ -883,6 +885,7 @@ fn build_registry_with_services_result_inner(
                 &mut reg,
                 pages::PagesConfig {
                     user: user.clone(),
+                    owner_user_id: owner_user_id.clone(),
                     realm,
                     listener_port,
                 },
@@ -891,19 +894,19 @@ fn build_registry_with_services_result_inner(
             .context("register Pages reference system")?;
             // Files reference system: content-addressed blob store
             // serving `/v1/files{,/<id>/content}` + chat-multimodal
-            // URA dereferences. Same `<user>` identity as pages so
-            // one user owns both surface families.
+            // URA dereferences. Same immutable user id as pages so the hosted
+            // Files Agent and hosted Pages Agent share the same account scope.
             files::register(
                 &mut reg,
                 files::FilesConfig {
-                    user: user.clone(),
+                    user: owner_user_id.clone(),
                     realm: pages_realm.clone(),
                 },
             );
             // RFC-006-C v0.1 — API key abilities. Register under the
-            // same `user` identity pages used so a single user owns
-            // both surface families on this daemon.
-            api_key_ability::register(&mut reg, &user, &pages_realm);
+            // same immutable user id pages used so account-scoped secrets
+            // share the same paired identity on this daemon.
+            api_key_ability::register(&mut reg, &owner_user_id, &pages_realm);
         }
         // RFC-006-C v0.1 — device-local OpenAI shim. Device-owned,
         // no `<user>` slot — registers regardless of pairing state.
@@ -1084,7 +1087,12 @@ fn build_registry_with_services_result_inner(
         let user_root_identity = pages_identity.user_root_identity()?;
         let (reflection_user, reflection_realm) = user_root_identity
             .as_ref()
-            .map(|identity| (Some(identity.user.as_str()), identity.realm.as_str()))
+            .map(|identity| {
+                (
+                    Some(identity.owner_user_id.as_str()),
+                    identity.realm.as_str(),
+                )
+            })
             .unwrap_or((None, ""));
         crate::daemon::ability::builtins::integrations::mcp::reflective_registry::PostArcReflection::plan(
             crate::daemon::ability::builtins::integrations::mcp::reflective_registry::McpReflectionMode::from_env()
@@ -1263,7 +1271,7 @@ fn build_registry_with_services_result_inner(
 /// while reflected MCP tools execute through `<user>.mcp`. Static eager
 /// registration and post-boot dynamic overlays therefore pass the same
 /// immutable authority gate.
-fn declare_daemon_native_agent_authorities(
+pub fn declare_daemon_native_agent_authorities(
     mut authority_context: AbilityAuthorityContext,
     identity: &PagesIdentity,
 ) -> anyhow::Result<AbilityAuthorityContext> {
@@ -1275,7 +1283,7 @@ fn declare_daemon_native_agent_authorities(
         return Ok(authority_context);
     };
     let realm = user_root_identity.realm.as_str();
-    let user = user_root_identity.user.as_str();
+    let user = user_root_identity.owner_user_id.as_str();
     let declared_roots = [
         ("Pages", pages::management_agent_ura(realm, user)),
         ("Files", files::management_agent_ura(realm, user)),
@@ -1403,6 +1411,7 @@ mod daemon_native_authority_tests {
         let device_ura = crate::core::ura::device_ura("native-authority", "dev-1");
         let identity = PagesIdentity {
             user: Some("alice".to_string()),
+            owner_user_id: Some("user-alice".to_string()),
             realm: Some("native-authority".to_string()),
             listener_port: None,
         };
@@ -1412,6 +1421,21 @@ mod daemon_native_authority_tests {
             &identity,
         )
         .expect("declare daemon-native Agent authorities");
+        let mcp_root = axon_sdk::ura::agent_ura("native-authority", "user-alice", "mcp");
+        let pages_root = axon_sdk::ura::agent_ura("native-authority", "user-alice", "pages");
+        let signing_inventory = authority_context
+            .hosted_agent_signing_inventory()
+            .expect("declared daemon-native Agent roots must enter signing inventory");
+        assert!(
+            signing_inventory
+                .resolve_signing_lease(&pages_root)
+                .is_some(),
+            "declared Pages Agent must be receipt-signing visible"
+        );
+        assert!(
+            signing_inventory.resolve_signing_lease(&mcp_root).is_some(),
+            "declared MCP Agent must be receipt-signing visible"
+        );
         let registry = AxonAbilityCatalog::new_with_runtime_and_authority_context(
             crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
                 crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
@@ -1419,7 +1443,6 @@ mod daemon_native_authority_tests {
             ),
             authority_context,
         );
-        let mcp_root = axon_sdk::ura::agent_ura("native-authority", "alice", "mcp");
         let handler = Arc::new(|_args| {
             let (_tx, rx) = tokio::sync::broadcast::channel(1);
             Ok(StreamSource::Live(rx))

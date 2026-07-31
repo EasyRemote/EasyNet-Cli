@@ -291,6 +291,7 @@ mod tests {
 
         crate::daemon::ability::builtins::resources::pages::publish::handle_publish(
             user,
+            user,
             8787,
             "easynet.run",
             pages_registry("easynet.run", user),
@@ -335,6 +336,7 @@ mod tests {
         fs::write(folder.path().join("index.html"), "<h1>gone</h1>").unwrap();
 
         crate::daemon::ability::builtins::resources::pages::publish::handle_publish(
+            user,
             user,
             8787,
             "easynet.run",

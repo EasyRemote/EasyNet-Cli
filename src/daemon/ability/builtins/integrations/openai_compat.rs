@@ -126,7 +126,7 @@ impl OpenAICompatRuntime {
 impl OpenAICompatIdentity {
     fn from_pages_identity(identity: PagesIdentity) -> anyhow::Result<Option<Self>> {
         Ok(identity.user_root_identity()?.map(|identity| Self {
-            user: Some(identity.user),
+            user: Some(identity.owner_user_id),
             realm: identity.realm,
         }))
     }
@@ -1232,6 +1232,7 @@ mod tests {
             handle,
             PagesIdentity {
                 user: Some("alice".into()),
+                owner_user_id: Some("alice".into()),
                 realm: None,
                 listener_port: None,
             },
@@ -1370,6 +1371,7 @@ mod tests {
             Arc::clone(&handle),
             PagesIdentity {
                 user: Some("alice".into()),
+                owner_user_id: Some("alice".into()),
                 realm: Some("example".into()),
                 listener_port: None,
             },

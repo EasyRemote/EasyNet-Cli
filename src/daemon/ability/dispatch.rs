@@ -1669,6 +1669,39 @@ impl HotAgentAuthorityInventory {
             .map(|entry| entry.authority_root.clone())
     }
 
+    fn declare_static_root(
+        &self,
+        agent: &str,
+        authority_root: &str,
+    ) -> Result<(), HotAgentAuthorityInventoryError> {
+        let mut state =
+            self.state
+                .write()
+                .map_err(|_| HotAgentAuthorityInventoryError::InventoryPoisoned {
+                    agent: agent.to_string(),
+                })?;
+        match state.roots.get(agent) {
+            Some(existing) if existing.authority_root == authority_root => Ok(()),
+            Some(existing) => Err(HotAgentAuthorityInventoryError::AuthorityConflict {
+                agent: agent.to_string(),
+                enrolled: existing.authority_root.clone(),
+                requested: authority_root.to_string(),
+            }),
+            None => {
+                state.advance_generation(agent)?;
+                let incarnation = state.allocate_incarnation(agent)?;
+                state.roots.insert(
+                    agent.to_string(),
+                    HotAgentAuthorityEntry {
+                        authority_root: authority_root.to_string(),
+                        incarnation,
+                    },
+                );
+                Ok(())
+            }
+        }
+    }
+
     fn enroll_persisted(
         &self,
         agent: &str,
@@ -2064,8 +2097,52 @@ impl AbilityAuthorityContext {
                 return Err(AbilityControlPlaneError::InvalidAuthorityRoot { authority_root });
             }
         }
+        self.declare_agent_authority_root_in_signing_inventory(&agent_id, &authority_root)?;
         self.declared_agent_roots.insert(agent_id, authority_root);
         Ok(self)
+    }
+
+    fn declare_agent_authority_root_in_signing_inventory(
+        &mut self,
+        agent_id: &str,
+        authority_root: &str,
+    ) -> Result<(), AbilityControlPlaneError> {
+        match &mut self.authorities {
+            AbilityAuthoritySet::Device {
+                device,
+                subordinate_source,
+            }
+            | AbilityAuthoritySet::DeviceAndRealmAuthority {
+                device,
+                subordinate_source,
+                ..
+            } => match subordinate_source {
+                DeviceSubordinateAuthoritySource::ExplicitHostedAgentRoots(inventory) => inventory
+                    .declare_static_root(agent_id, authority_root)
+                    .map_err(|_| AbilityControlPlaneError::InvalidAuthorityRoot {
+                        authority_root: authority_root.to_string(),
+                    }),
+                DeviceSubordinateAuthoritySource::DeviceScoped => {
+                    *subordinate_source =
+                        DeviceSubordinateAuthoritySource::ExplicitHostedAgentRoots(
+                            HotAgentAuthorityInventory::new(
+                                device.clone(),
+                                BTreeMap::from([(
+                                    agent_id.to_string(),
+                                    authority_root.to_string(),
+                                )]),
+                            ),
+                        );
+                    Ok(())
+                }
+            },
+            AbilityAuthoritySet::RealmAuthority { .. } => {
+                Err(AbilityControlPlaneError::UnsupportedOwnerForAuthoritySet {
+                    owner_projection: format!("agent:{agent_id}"),
+                    authority_set: self.authorities.label(),
+                })
+            }
+        }
     }
 
     pub(crate) fn local_runtime_owners(&self) -> Vec<OwnerKind> {

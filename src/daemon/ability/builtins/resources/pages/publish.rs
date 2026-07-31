@@ -62,6 +62,7 @@ use super::state::{
 /// is dev-only and is only surfaced by `pages.get` for
 /// debugging.
 pub fn handle_publish(
+    owner_user_id: &str,
     user: &str,
     // The publish surface no longer depends on the daemon's
     // in-process listener — `url_root` is built from `realm` via
@@ -131,7 +132,7 @@ pub fn handle_publish(
     // Register per-project fetch/API abilities into the live
     // daemon-hosted Axon runtime so Hub remote/session dispatch
     // can find them without any legacy resolver path.
-    super::register_project_abilities(registry.as_ref(), realm, user, project_id)
+    super::register_project_abilities(registry.as_ref(), realm, owner_user_id, user, project_id)
         .context("register pages project abilities")?;
 
     let project_ura =
@@ -215,6 +216,7 @@ mod tests {
             .expect("write test page");
 
         let published = handle_publish(
+            user,
             user,
             8787,
             realm,

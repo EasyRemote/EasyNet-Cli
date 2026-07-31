@@ -114,12 +114,13 @@ fn fetch_ability_manifest() -> crate::daemon::ability::manifest::AbilityManifest
 /// `pages::register` after restart restore.
 pub fn register_fetch_ability(
     registry: &AxonAbilityCatalog,
+    _owner_user_id: &str,
     user: &str,
     project_id: &str,
     authority_scope: AuthorityScope,
 ) -> anyhow::Result<()> {
     let ability = fetch_ability_name(user, project_id);
-    let owner = OwnerKind::User(user.to_string());
+    let owner = OwnerKind::Agent("pages".to_string());
     let user = user.to_string();
     let project_id = project_id.to_string();
     registry.hot_register_rpc_with_spec_and_authority_scope(

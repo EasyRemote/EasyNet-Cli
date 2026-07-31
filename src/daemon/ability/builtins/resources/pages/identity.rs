@@ -4,27 +4,28 @@
 // Resolved once at daemon boot and fed explicitly into registry assembly.
 
 /// Identity + configuration the registry build needs to mint
-/// user-rooted ability families (pages, files, api_key). The
-/// `<user>` slot is sourced explicitly so the registry build is
-/// pure — no global env-var reads, no thread-locals, no implicit
-/// dependence on credentials.json. Production callers
+/// user-scoped ability families (pages, files, api_key). The display
+/// user slug and the canonical owner id are deliberately separate:
+/// Pages URLs/storage may use a stable user-facing slug, while runtime
+/// Agent owner URAs must use the immutable product user id that Hub
+/// admission binds to the caller Device owner. Production callers
 /// (`bin/easynet-daemon.rs`, supervisor reboots) read
-/// EASYNET_PAGES_USER + credentials.json once at boot and pass
-/// the resolved value here. Missing credentials is the unpaired
-/// daemon state; malformed credentials is unavailable boot
-/// identity state and fails before registry assembly. Tests that
-/// exercise the user-rooted surface pass a fixed username;
-/// unpaired-daemon tests pass `None` and the family stays
-/// unregistered.
+/// EASYNET_PAGES_USER + credentials.json once at boot and pass the
+/// resolved value here. Missing credentials is the unpaired daemon
+/// state; malformed credentials is unavailable boot identity state and
+/// fails before registry assembly.
 #[derive(Debug, Clone, Default)]
 pub struct PagesIdentity {
-    /// Username segment for `<user>.api_key.*` / `<user>.pages.*` /
-    /// `<user>.files.*`. `None` means "this daemon isn't paired
-    /// yet" — the user-rooted families are skipped (no
-    /// `self.api_key.*` placeholder leak).
+    /// User-facing slug for Pages URLs/storage and legacy product display.
+    /// This is not a canonical runtime owner id.
     pub user: Option<String>,
-    /// Realm the user-rooted handlers stamp into URAs. `None` is valid only
-    /// when `user` is also `None` (unpaired daemon). Paired user-rooted
+    /// Immutable product user id used in canonical runtime owner URAs such as
+    /// `agent/<owner_user_id>.pages` and `agent/<owner_user_id>.files`.
+    /// `None` means "this daemon isn't paired yet" — the user-scoped families
+    /// are skipped.
+    pub owner_user_id: Option<String>,
+    /// Realm the user-scoped handlers stamp into URAs. `None` is valid only
+    /// when `user` is also `None` (unpaired daemon). Paired user-scoped
     /// surfaces must carry an explicit realm; callers must not fabricate the
     /// product default at registration time.
     pub realm: Option<String>,
@@ -35,6 +36,7 @@ pub struct PagesIdentity {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PagesUserRootIdentity {
+    pub owner_user_id: String,
     pub user: String,
     pub realm: String,
 }
@@ -51,12 +53,21 @@ impl PagesIdentity {
             .as_deref()
             .map(str::trim)
             .filter(|v| !v.is_empty());
-        match (user, realm) {
-            (None, _) => Ok(None),
-            (Some(_), None) => {
+        let owner_user_id = self
+            .owner_user_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty());
+        match (user, owner_user_id, realm) {
+            (None, _, _) => Ok(None),
+            (Some(_), _, None) => {
                 anyhow::bail!("PagesIdentity user-root identity requires an explicit realm")
             }
-            (Some(user), Some(realm)) => Ok(Some(PagesUserRootIdentity {
+            (Some(_), None, Some(_)) => {
+                anyhow::bail!("PagesIdentity user-root identity requires an explicit owner_user_id")
+            }
+            (Some(user), Some(owner_user_id), Some(realm)) => Ok(Some(PagesUserRootIdentity {
+                owner_user_id: owner_user_id.to_string(),
                 user: user.to_string(),
                 realm: realm.to_string(),
             })),
@@ -72,6 +83,7 @@ impl PagesIdentity {
         let credentials = crate::daemon::persistence::config::load_credentials_optional()?;
         Ok(Self {
             user: pages_user_from_env_or_credentials(credentials.as_ref())?,
+            owner_user_id: pages_owner_user_id_from_credentials(credentials.as_ref())?,
             // Follow the daemon's actual realm before the public
             // default: EASYNET_PAGES_REALM override → credentials
             // realm → None for unpaired state.
@@ -82,6 +94,20 @@ impl PagesIdentity {
             listener_port: pages_listener_port_from_env()?,
         })
     }
+}
+
+fn pages_owner_user_id_from_credentials(
+    credentials: Option<&crate::daemon::persistence::config::Credentials>,
+) -> anyhow::Result<Option<String>> {
+    let Some(credentials) = credentials else {
+        return Ok(None);
+    };
+    if credentials.username.is_none() && credentials.join_receipt_hash().is_some() {
+        return Ok(None);
+    }
+    credentials
+        .user_id()
+        .map(|user_id| Some(user_id.to_string()))
 }
 
 pub(crate) fn pages_user_from_env_or_credentials(
@@ -216,6 +242,7 @@ mod tests {
         let identity = PagesIdentity::try_from_env().expect("missing credentials is unpaired");
 
         assert_eq!(identity.user, None);
+        assert_eq!(identity.owner_user_id, None);
         assert_eq!(identity.realm, None);
         assert_eq!(identity.listener_port, None);
     }
@@ -226,10 +253,13 @@ mod tests {
         let _user = EnvGuard::set("EASYNET_PAGES_USER", " alice ");
         let _realm = EnvGuard::set("EASYNET_PAGES_REALM", " localhost ");
         let _port = EnvGuard::remove("EASYNET_PAGES_PORT");
+        config::save_credentials(&credentials("credential-user", "ignored-realm"))
+            .expect("save credentials");
 
         let identity = PagesIdentity::try_from_env().expect("env identity");
 
         assert_eq!(identity.user.as_deref(), Some("alice"));
+        assert_eq!(identity.owner_user_id.as_deref(), Some("user-alice"));
         assert_eq!(identity.realm.as_deref(), Some("localhost"));
     }
 
@@ -243,6 +273,7 @@ mod tests {
         let identity = PagesIdentity::try_from_env().expect("credentials identity");
 
         assert_eq!(identity.user.as_deref(), Some("alice"));
+        assert_eq!(identity.owner_user_id.as_deref(), Some("user-alice"));
         assert_eq!(identity.realm.as_deref(), Some("localhost"));
     }
 
@@ -258,13 +289,14 @@ mod tests {
         let identity = PagesIdentity::try_from_env().expect("device-only identity");
 
         assert_eq!(identity.user, None);
+        assert_eq!(identity.owner_user_id, None);
         assert_eq!(identity.realm.as_deref(), Some("localhost"));
         assert!(
             identity
                 .user_root_identity()
                 .expect("device-only projection")
                 .is_none(),
-            "device-only credentials must not register user-rooted Pages surfaces"
+            "device-only credentials must not register user-scoped Pages surfaces"
         );
     }
 
@@ -290,6 +322,7 @@ mod tests {
     fn pages_identity_user_root_projection_requires_realm() {
         let identity = PagesIdentity {
             user: Some("alice".to_string()),
+            owner_user_id: Some("user-alice".to_string()),
             realm: None,
             listener_port: None,
         };
@@ -308,6 +341,7 @@ mod tests {
     fn pages_identity_user_root_projection_accepts_complete_identity() {
         let identity = PagesIdentity {
             user: Some("alice".to_string()),
+            owner_user_id: Some("user-alice".to_string()),
             realm: Some("localhost".to_string()),
             listener_port: None,
         };
@@ -317,6 +351,7 @@ mod tests {
             .expect("complete identity")
             .expect("paired identity");
 
+        assert_eq!(projected.owner_user_id, "user-alice");
         assert_eq!(projected.user, "alice");
         assert_eq!(projected.realm, "localhost");
     }

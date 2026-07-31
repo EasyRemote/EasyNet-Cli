@@ -1318,10 +1318,10 @@ if python_cabi.exists():
 
 # Rule 31: file-resource ownership has one authority split. Host filesystem
 # abilities are Device-owned `fs.*`; user blob resources are owner-local
-# `files.*` abilities executed by the daemon-native `<user>.files` Agent. The
-# OpenAI facade may project `openai.files.*`, but must invoke the user-owned
-# file surface through that explicit authority root instead of reviving
-# `<user>.files.get`-style dispatch names.
+# `files.*` abilities owned and executed by the daemon-native
+# `agent/<user-id>.files` runtime owner. The OpenAI facade may project
+# `openai.files.*`, but must invoke the files surface through that explicit
+# authority root instead of reviving `<user>.files.get`-style dispatch names.
 files_store = cli_root / "src/daemon/ability/builtins/resources/files_store/mod.rs"
 if files_store.exists():
     text = source(files_store)
@@ -1331,8 +1331,8 @@ if files_store.exists():
             "Files resource surface must declare an explicit daemon-native files executor root",
         ),
         (
-            "OwnerKind::User(config.user.clone())",
-            "files.put/get/list must be user-owned resource abilities, not Device system abilities",
+            'OwnerKind::Agent("files".to_string())',
+            "files.put/get/list must be hosted-Agent resource abilities, not Device system abilities",
         ),
         (
             "ControlPlaneImplementation::native_daemon()",

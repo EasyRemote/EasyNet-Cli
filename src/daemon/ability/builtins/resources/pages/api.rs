@@ -351,12 +351,13 @@ pub(crate) fn api_ability_names_for_project(
 
 pub(crate) fn register_api_abilities_for_project(
     registry: &AxonAbilityCatalog,
+    _owner_user_id: &str,
     user: &str,
     project_id: &str,
     authority_scope: AuthorityScope,
 ) -> anyhow::Result<usize> {
     let names = api_ability_names_for_project(user, project_id)?;
-    let owner = OwnerKind::User(user.to_string());
+    let owner = OwnerKind::Agent("pages".to_string());
     for name in &names {
         let Some(verb) = name.rsplit_once(".api.").map(|(_prefix, verb)| verb) else {
             continue;

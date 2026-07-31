@@ -3714,6 +3714,7 @@ fn real_device_openai_files_upload_retrieve_delete_round_trip() {
             Arc::clone(&handle),
             crate::daemon::ability::builtins::resources::pages::PagesIdentity {
                 user: Some("test".to_string()),
+                owner_user_id: Some("test".to_string()),
                 realm: Some("default".to_string()),
                 listener_port: None,
             },

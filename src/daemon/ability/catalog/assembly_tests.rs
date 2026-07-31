@@ -966,11 +966,12 @@ fn unqualified_voice_repository_is_rejected_before_registry_assembly() {
 }
 
 #[test]
-fn pages_management_is_user_owned_and_runs_on_the_declared_pages_agent() {
+fn pages_management_is_owned_by_the_declared_pages_agent() {
     let _home = crate::cli::commands::test_support::HomeGuard::new();
     let agents = AgentRegistry::default();
     let device_ura = crate::core::ura::device_ura("pages-owner", "dev-1");
-    let pages_agent = crate::core::ura::agent_ura("pages-owner", "alice", "pages");
+    let owner_user_id = "user-alice";
+    let pages_agent = crate::core::ura::agent_ura("pages-owner", owner_user_id, "pages");
     let authority_context =
         crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root(
             device_ura,
@@ -979,6 +980,7 @@ fn pages_management_is_user_owned_and_runs_on_the_declared_pages_agent() {
     let mut config = registry_config_for_agents_with_authority(&agents, authority_context);
     config.pages_identity = crate::daemon::ability::builtins::resources::pages::PagesIdentity {
         user: Some("alice".to_string()),
+        owner_user_id: Some(owner_user_id.to_string()),
         realm: Some("pages-owner".to_string()),
         listener_port: Some(8787),
     };
@@ -994,12 +996,13 @@ fn pages_management_is_user_owned_and_runs_on_the_declared_pages_agent() {
         )
         .expect("Pages control-plane lookup")
         .expect("Pages publish must be registered under its declared execution Agent");
-    assert_eq!(record.authority().scope().owner_projection(), "user:alice");
+    assert_eq!(record.authority().scope().owner_projection(), "agent:pages");
     assert_eq!(record.authority().scope().authority_root(), pages_agent);
 
     crate::daemon::ability::builtins::resources::pages::register_project_abilities(
         &registry,
         "pages-owner",
+        owner_user_id,
         "alice",
         "portfolio",
     )
@@ -1014,7 +1017,7 @@ fn pages_management_is_user_owned_and_runs_on_the_declared_pages_agent() {
         .expect("page.fetch must use the same declared Pages execution Agent");
     assert_eq!(
         fetch_record.authority().scope().owner_projection(),
-        "user:alice"
+        "agent:pages"
     );
     assert_eq!(
         fetch_record.authority().scope().authority_root(),
@@ -1029,6 +1032,7 @@ fn user_rooted_registry_rejects_paired_identity_without_realm() {
     let mut config = registry_config_for_agents(&agents);
     config.pages_identity = crate::daemon::ability::builtins::resources::pages::PagesIdentity {
         user: Some("alice".to_string()),
+        owner_user_id: Some("user-alice".to_string()),
         realm: None,
         listener_port: Some(8787),
     };

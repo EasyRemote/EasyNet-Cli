@@ -8849,7 +8849,7 @@ for test in (
 if build:
     for required in (
         "pages_identity.user_root_identity()?",
-        "api_key_ability::register(&mut reg, &user, &pages_realm)",
+        "api_key_ability::register(&mut reg, &owner_user_id, &pages_realm)",
         "openai_compat_ability::set_identity(pages_identity.clone())?",
     ):
         if required not in build:

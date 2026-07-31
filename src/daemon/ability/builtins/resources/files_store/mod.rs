@@ -2,10 +2,10 @@
 // =====================================================================
 //
 // File: src/daemon/ability/builtins/resources/files_store/mod.rs
-// Description: registration entry point for the user-rooted files
+// Description: registration entry point for the user-scoped files
 //              namespace, complement to Pages (RFC-006-B v0.6).
 //              Registers owner-local `files.<verb>` abilities under the
-//              daemon-native `<user>.files` executor root.
+//              daemon-native `agent/<user>.files` executor root.
 //
 // What this is for:
 //   `/v1/chat/completions` accepts OpenAI-shape multimodal messages
@@ -136,15 +136,14 @@ fn list_input_schema() -> Value {
 }
 
 fn files_authority_scope(realm: &str, user: &str) -> AuthorityScope {
-    AuthorityScope::new(format!("user:{user}"), management_agent_ura(realm, user))
+    AuthorityScope::new("agent:files", management_agent_ura(realm, user))
         .expect("Files authority scope is well-formed")
 }
 
-/// Execution host for the user-owned content-addressed Files family.
+/// Execution host for the user-scoped content-addressed Files family.
 ///
-/// The user remains the accountable owner projection. This Agent URA only names
-/// the daemon-native executor that serves `files.put/get/list`, matching the
-/// Pages management split.
+/// Runtime ownership is the daemon-native `files` Agent. The `user` segment is
+/// the immutable user id that scopes the hosted Agent URA.
 pub(crate) fn management_agent_ura(realm: &str, user: &str) -> String {
     crate::core::ura::agent_ura(realm, user, "files")
 }
@@ -184,7 +183,7 @@ pub fn register(reg: &mut AxonAbilityCatalog, config: FilesConfig) {
             return;
         }
     };
-    let owner = OwnerKind::User(config.user.clone());
+    let owner = OwnerKind::Agent("files".to_string());
     let authority_scope = files_authority_scope(&config.realm, &config.user);
 
     let user = config.user.clone();

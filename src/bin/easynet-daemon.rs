@@ -343,7 +343,7 @@ async fn main() -> anyhow::Result<()> {
     // we pass None. A test or the standalone MCP server that
     // wants chat without any context injection passes
     // Some(Arc::new(Vec::new())) instead.
-    // Resolve user-rooted ability identity ONCE at daemon boot.
+    // Resolve user-scoped ability identity ONCE at daemon boot.
     // EASYNET_PAGES_USER + credentials.json get read here and
     // never again — the resolved value flows through to
     // build_registry_for_daemon as an explicit argument so the
@@ -406,6 +406,11 @@ async fn main() -> anyhow::Result<()> {
             }
         }
     };
+    let authority_context =
+        easynet_cli::daemon::ability::catalog::declare_daemon_native_agent_authorities(
+            authority_context,
+            &pages_identity,
+        )?;
     let mut receipt_authority_config =
         easynet_cli::daemon::axon_bridge::runtime_factory::ProductionReceiptAuthorityConfig::new(
             receipt_owner_uras,

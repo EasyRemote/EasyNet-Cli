@@ -637,23 +637,13 @@ async fn send_advertise_agent_prelude(
     signer: &dyn CanonicalSigner,
 ) -> Result<(), tonic::Status> {
     let caller_ura = signer.owner_ura();
-    let mut body = serde_json::json!({
-        "agent_ura": agent_ura,
-        "generation": generation,
-        "signing_authority": {
-            "kind": "hosted_by",
-            "host_ura": caller_ura,
-        },
-    });
-    if let Some(node_id) = host_node_id {
-        if let Some(map) = body.as_object_mut() {
-            map.insert(
-                "host_node_id".to_string(),
-                serde_json::Value::String(node_id.to_string()),
-            );
-        }
-    }
-    let arguments = serde_json::to_vec(&body).map_err(|e| {
+    let arguments = crate::daemon::federation::advertise::advertise_agent_payload_bytes(
+        agent_ura,
+        caller_ura,
+        generation,
+        host_node_id,
+    )
+    .map_err(|e| {
         tonic::Status::internal(format!("federation.advertise_agent prelude serialize: {e}"))
     })?;
 

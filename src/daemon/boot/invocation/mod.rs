@@ -779,7 +779,7 @@ pub fn start_daemon_invocation_transport(
             hot_agent_registrar.set_hot_agent_advertiser(Arc::new(
                 SessionHotAgentAdvertiser::new(Arc::clone(&handle), identity.caller_ura.clone()),
             ))?;
-            register_dynamic_owner_projection_republisher(
+            register_local_runtime_federation_republisher(
                 Arc::clone(&local_ability_catalog),
                 Arc::clone(&handle),
                 &outbox,
@@ -968,19 +968,19 @@ pub(crate) fn register_purge_recovery_on_outbox_ready(
     }));
 }
 
-fn register_dynamic_owner_projection_republisher(
+fn register_local_runtime_federation_republisher(
     catalog: Arc<crate::daemon::ability::dispatch::AxonAbilityCatalog>,
     escalation: Arc<crate::daemon::invocation::bidi::session_escalation::SessionEscalationHandle>,
     outbox: &crate::daemon::invocation::bidi::session_escalation::SharedSessionOutbox,
-    owner_ura: String,
+    host_device_ura: String,
     connection_state_sink: Arc<
         dyn crate::daemon::invocation::bidi::session_initiator::SessionConnectionStateSink,
     >,
 ) {
-    let republisher = Arc::new(DynamicOwnerProjectionRepublisher::new(
+    let republisher = Arc::new(LocalRuntimeFederationRepublisher::new(
         Arc::clone(&catalog),
         escalation,
-        owner_ura,
+        host_device_ura,
         connection_state_sink,
     ));
     let schedule: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
@@ -990,28 +990,28 @@ fn register_dynamic_owner_projection_republisher(
     outbox.register_ready_hook(schedule);
 }
 
-struct DynamicOwnerProjectionRepublisher {
+struct LocalRuntimeFederationRepublisher {
     catalog: Arc<crate::daemon::ability::dispatch::AxonAbilityCatalog>,
     escalation: Arc<crate::daemon::invocation::bidi::session_escalation::SessionEscalationHandle>,
-    owner_ura: String,
+    host_device_ura: String,
     connection_state_sink:
         Arc<dyn crate::daemon::invocation::bidi::session_initiator::SessionConnectionStateSink>,
-    state: std::sync::Mutex<DynamicOwnerProjectionRepublisherState>,
+    state: std::sync::Mutex<LocalRuntimeFederationRepublisherState>,
 }
 
 #[derive(Default)]
-struct DynamicOwnerProjectionRepublisherState {
+struct LocalRuntimeFederationRepublisherState {
     running: bool,
     dirty: bool,
 }
 
-impl DynamicOwnerProjectionRepublisher {
+impl LocalRuntimeFederationRepublisher {
     fn new(
         catalog: Arc<crate::daemon::ability::dispatch::AxonAbilityCatalog>,
         escalation: Arc<
             crate::daemon::invocation::bidi::session_escalation::SessionEscalationHandle,
         >,
-        owner_ura: String,
+        host_device_ura: String,
         connection_state_sink: Arc<
             dyn crate::daemon::invocation::bidi::session_initiator::SessionConnectionStateSink,
         >,
@@ -1019,9 +1019,9 @@ impl DynamicOwnerProjectionRepublisher {
         Self {
             catalog,
             escalation,
-            owner_ura,
+            host_device_ura,
             connection_state_sink,
-            state: std::sync::Mutex::new(DynamicOwnerProjectionRepublisherState::default()),
+            state: std::sync::Mutex::new(LocalRuntimeFederationRepublisherState::default()),
         }
     }
 
@@ -1034,8 +1034,8 @@ impl DynamicOwnerProjectionRepublisher {
         if state.running {
             crate::op_event!(
                 component = daemon_invocation,
-                kind = dynamic_owner_projection_publish_coalesced,
-                owner_ura = self.owner_ura.as_str(),
+                kind = local_runtime_federation_publish_coalesced,
+                host_device_ura = self.host_device_ura.as_str(),
             );
             return;
         }
@@ -1062,10 +1062,10 @@ impl DynamicOwnerProjectionRepublisher {
                 state.dirty = false;
             }
 
-            publish_dynamic_owner_projection(
+            publish_local_runtime_federation(
                 Arc::clone(&self.catalog),
                 Arc::clone(&self.escalation),
-                self.owner_ura.clone(),
+                self.host_device_ura.clone(),
                 Arc::clone(&self.connection_state_sink),
             )
             .await;
@@ -1073,68 +1073,94 @@ impl DynamicOwnerProjectionRepublisher {
     }
 }
 
-async fn publish_dynamic_owner_projection(
+async fn publish_local_runtime_federation(
     catalog: Arc<crate::daemon::ability::dispatch::AxonAbilityCatalog>,
     escalation: Arc<crate::daemon::invocation::bidi::session_escalation::SessionEscalationHandle>,
-    owner_ura: String,
+    host_device_ura: String,
     connection_state_sink: Arc<
         dyn crate::daemon::invocation::bidi::session_initiator::SessionConnectionStateSink,
     >,
 ) {
     let snapshot =
         crate::daemon::ability::catalog::LocalAbilityPublicationSnapshot::capture(catalog.as_ref());
-    let descriptors = snapshot.owner_descriptors(&owner_ura);
-    let projection =
-        match crate::daemon::federation::read_model::owner_projection::prepare_and_persist(
-            &owner_ura,
-            &owner_ura,
-            &descriptors,
-        ) {
-            Ok(projection) => projection,
+    publish_owner_projection_from_snapshot(
+        &snapshot,
+        Arc::clone(&escalation),
+        &host_device_ura,
+        &host_device_ura,
+        Arc::clone(&connection_state_sink),
+    )
+    .await;
+
+    for agent_ura in snapshot.hosted_agent_owner_uras() {
+        publish_hosted_agent_from_snapshot(
+            &snapshot,
+            Arc::clone(&escalation),
+            &agent_ura,
+            &host_device_ura,
+            Arc::clone(&connection_state_sink),
+        )
+        .await;
+    }
+}
+
+struct PreparedOwnerProjectionAdvertisement {
+    owner_ura: String,
+    generation: u64,
+    ability_count: usize,
+    abilities_args: Vec<u8>,
+}
+
+fn prepare_owner_projection_advertisement(
+    snapshot: &crate::daemon::ability::catalog::LocalAbilityPublicationSnapshot,
+    owner_ura: &str,
+    host_device_ura: &str,
+) -> Result<PreparedOwnerProjectionAdvertisement, String> {
+    let descriptors = snapshot.owner_descriptors(owner_ura);
+    let projection = crate::daemon::federation::read_model::owner_projection::prepare_and_persist(
+        owner_ura,
+        host_device_ura,
+        &descriptors,
+    )?;
+    let payload =
+        crate::daemon::federation::advertise::advertise_abilities_payload(owner_ura, &projection)?;
+    let abilities_args = serde_json::to_vec(&payload)
+        .map_err(|error| format!("serialize advertise_abilities args: {error}"))?;
+    Ok(PreparedOwnerProjectionAdvertisement {
+        owner_ura: owner_ura.to_string(),
+        generation: projection.generation,
+        ability_count: descriptors.len(),
+        abilities_args,
+    })
+}
+
+async fn publish_owner_projection_from_snapshot(
+    snapshot: &crate::daemon::ability::catalog::LocalAbilityPublicationSnapshot,
+    escalation: Arc<crate::daemon::invocation::bidi::session_escalation::SessionEscalationHandle>,
+    owner_ura: &str,
+    host_device_ura: &str,
+    connection_state_sink: Arc<
+        dyn crate::daemon::invocation::bidi::session_initiator::SessionConnectionStateSink,
+    >,
+) {
+    let prepared =
+        match prepare_owner_projection_advertisement(snapshot, owner_ura, host_device_ura) {
+            Ok(prepared) => prepared,
             Err(error) => {
-                let error = error.to_string();
                 crate::op_event!(
                     component = daemon_invocation,
-                    kind = dynamic_owner_projection_prepare_failed,
-                    owner_ura = owner_ura.as_str(),
+                    kind = local_runtime_owner_projection_prepare_failed,
+                    owner_ura = owner_ura,
+                    host_device_ura = host_device_ura,
                     error = error.as_str(),
                 );
                 return;
             }
         };
-    let payload = match crate::daemon::federation::advertise::advertise_abilities_payload(
-        &owner_ura,
-        &projection,
-    ) {
-        Ok(payload) => payload,
-        Err(error) => {
-            crate::op_event!(
-                component = daemon_invocation,
-                kind = dynamic_owner_projection_payload_failed,
-                owner_ura = owner_ura.as_str(),
-                error = error.as_str(),
-            );
-            return;
-        }
-    };
-    let args = match serde_json::to_vec(&payload) {
-        Ok(args) => args,
-        Err(error) => {
-            let error = error.to_string();
-            crate::op_event!(
-                component = daemon_invocation,
-                kind = dynamic_owner_projection_payload_serialize_failed,
-                owner_ura = owner_ura.as_str(),
-                error = error.as_str(),
-            );
-            return;
-        }
-    };
-    let ability_count = descriptors.len();
     match escalation
         .escalate_with_timeout(
             "federation.advertise_abilities".to_string(),
-            args,
+            prepared.abilities_args,
             BACKGROUND_PUBLICATION_ESCALATION_TIMEOUT,
         )
         .await
@@ -1147,20 +1173,20 @@ async fn publish_dynamic_owner_projection(
                 Ok(response) if response.ack => {
                     crate::op_event!(
                         component = daemon_invocation,
-                        kind = dynamic_owner_projection_published,
-                        owner_ura = owner_ura.as_str(),
-                        ability_count = ability_count,
+                        kind = local_runtime_owner_projection_published,
+                        owner_ura = prepared.owner_ura.as_str(),
+                        ability_count = prepared.ability_count,
                     );
-                    project_dynamic_owner_projection_published_connection_state(
+                    project_local_runtime_federation_published_connection_state(
                         connection_state_sink.as_ref(),
                     );
                 }
                 Ok(response) => {
                     crate::op_event!(
                         component = daemon_invocation,
-                        kind = dynamic_owner_projection_rejected,
-                        owner_ura = owner_ura.as_str(),
-                        ability_count = ability_count,
+                        kind = local_runtime_owner_projection_rejected,
+                        owner_ura = prepared.owner_ura.as_str(),
+                        ability_count = prepared.ability_count,
                         accepted_count = response.count,
                     );
                 }
@@ -1168,9 +1194,9 @@ async fn publish_dynamic_owner_projection(
                     let error = error.to_string();
                     crate::op_event!(
                         component = daemon_invocation,
-                        kind = dynamic_owner_projection_response_decode_failed,
-                        owner_ura = owner_ura.as_str(),
-                        ability_count = ability_count,
+                        kind = local_runtime_owner_projection_response_decode_failed,
+                        owner_ura = prepared.owner_ura.as_str(),
+                        ability_count = prepared.ability_count,
                         error = error.as_str(),
                     );
                 }
@@ -1180,23 +1206,158 @@ async fn publish_dynamic_owner_projection(
             let error = format!("{error:?}");
             crate::op_event!(
                 component = daemon_invocation,
-                kind = dynamic_owner_projection_publish_failed,
-                owner_ura = owner_ura.as_str(),
-                ability_count = ability_count,
+                kind = local_runtime_owner_projection_publish_failed,
+                owner_ura = prepared.owner_ura.as_str(),
+                ability_count = prepared.ability_count,
                 error = error.as_str(),
             );
         }
     }
 }
 
-fn project_dynamic_owner_projection_published_connection_state(
+async fn publish_hosted_agent_from_snapshot(
+    snapshot: &crate::daemon::ability::catalog::LocalAbilityPublicationSnapshot,
+    escalation: Arc<crate::daemon::invocation::bidi::session_escalation::SessionEscalationHandle>,
+    agent_ura: &str,
+    host_device_ura: &str,
+    connection_state_sink: Arc<
+        dyn crate::daemon::invocation::bidi::session_initiator::SessionConnectionStateSink,
+    >,
+) {
+    let prepared =
+        match prepare_owner_projection_advertisement(snapshot, agent_ura, host_device_ura) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                crate::op_event!(
+                    component = daemon_invocation,
+                    kind = local_runtime_hosted_agent_projection_prepare_failed,
+                    agent_ura = agent_ura,
+                    host_device_ura = host_device_ura,
+                    error = error.as_str(),
+                );
+                return;
+            }
+        };
+    let host_node_id = host_node_id_from_device_ura(host_device_ura);
+    let advertise_agent_args =
+        match crate::daemon::federation::advertise::advertise_agent_payload_bytes(
+            agent_ura,
+            host_device_ura,
+            prepared.generation,
+            host_node_id.as_deref(),
+        ) {
+            Ok(args) => args,
+            Err(error) => {
+                crate::op_event!(
+                    component = daemon_invocation,
+                    kind = local_runtime_hosted_agent_payload_failed,
+                    agent_ura = agent_ura,
+                    host_device_ura = host_device_ura,
+                    error = error.as_str(),
+                );
+                return;
+            }
+        };
+
+    match escalation
+        .escalate_with_timeout(
+            "federation.advertise_agent".to_string(),
+            advertise_agent_args,
+            BACKGROUND_PUBLICATION_ESCALATION_TIMEOUT,
+        )
+        .await
+    {
+        crate::daemon::invocation::bidi::session_wire::RequestOutcome::Ok { .. } => {}
+        crate::daemon::invocation::bidi::session_wire::RequestOutcome::Err { error } => {
+            let error = format!("{error:?}");
+            crate::op_event!(
+                component = daemon_invocation,
+                kind = local_runtime_hosted_agent_identity_publish_failed,
+                agent_ura = agent_ura,
+                generation = prepared.generation,
+                error = error.as_str(),
+            );
+            return;
+        }
+    }
+
+    match escalation
+        .escalate_with_timeout(
+            "federation.advertise_abilities".to_string(),
+            prepared.abilities_args,
+            BACKGROUND_PUBLICATION_ESCALATION_TIMEOUT,
+        )
+        .await
+    {
+        crate::daemon::invocation::bidi::session_wire::RequestOutcome::Ok { result_bytes } => {
+            match serde_json::from_slice::<
+                crate::daemon::invocation::dispatch::federation_wrappers::AdvertiseAbilitiesResponse,
+            >(&result_bytes)
+            {
+                Ok(response) if response.ack => {
+                    crate::op_event!(
+                        component = daemon_invocation,
+                        kind = local_runtime_hosted_agent_published,
+                        agent_ura = prepared.owner_ura.as_str(),
+                        generation = prepared.generation,
+                        ability_count = prepared.ability_count,
+                    );
+                    project_local_runtime_federation_published_connection_state(
+                        connection_state_sink.as_ref(),
+                    );
+                }
+                Ok(response) => {
+                    crate::op_event!(
+                        component = daemon_invocation,
+                        kind = local_runtime_hosted_agent_projection_rejected,
+                        agent_ura = prepared.owner_ura.as_str(),
+                        generation = prepared.generation,
+                        ability_count = prepared.ability_count,
+                        accepted_count = response.count,
+                    );
+                }
+                Err(error) => {
+                    let error = error.to_string();
+                    crate::op_event!(
+                        component = daemon_invocation,
+                        kind = local_runtime_hosted_agent_projection_response_decode_failed,
+                        agent_ura = prepared.owner_ura.as_str(),
+                        generation = prepared.generation,
+                        ability_count = prepared.ability_count,
+                        error = error.as_str(),
+                    );
+                }
+            }
+        }
+        crate::daemon::invocation::bidi::session_wire::RequestOutcome::Err { error } => {
+            let error = format!("{error:?}");
+            crate::op_event!(
+                component = daemon_invocation,
+                kind = local_runtime_hosted_agent_projection_publish_failed,
+                agent_ura = prepared.owner_ura.as_str(),
+                generation = prepared.generation,
+                ability_count = prepared.ability_count,
+                error = error.as_str(),
+            );
+        }
+    }
+}
+
+fn host_node_id_from_device_ura(host_device_ura: &str) -> Option<String> {
+    crate::core::ura::parse_ura(host_device_ura)
+        .ok()
+        .filter(|parsed| parsed.kind == crate::core::ura::URAKind::Device)
+        .and_then(|parsed| parsed.device_id().map(str::to_string))
+}
+
+fn project_local_runtime_federation_published_connection_state(
     connection_state_sink: &dyn crate::daemon::invocation::bidi::session_initiator::SessionConnectionStateSink,
 ) -> bool {
     crate::daemon::invocation::bidi::session_initiator::project_connection_state(
         connection_state_sink,
         crate::daemon::boot::join_connection_state::JoinConnectionState::ConnectedOnline,
         crate::daemon::boot::join_connection_state::JoinTransition::RefetchReadModel,
-        "dynamic_owner_projection_published",
+        "local_runtime_federation_published",
     )
 }
 
@@ -1327,23 +1488,12 @@ impl HotAgentAdvertiser for SessionHotAgentAdvertiser {
         &self,
         request: HotAgentAdvertiseRequest,
     ) -> HotAgentAdvertiseOutcome {
-        let mut body = serde_json::json!({
-            "agent_ura": request.agent_ura,
-            "generation": request.generation,
-            "signing_authority": {
-                "kind": "hosted_by",
-                "host_ura": self.caller_ura,
-            },
-        });
-        if let Some(node_id) = self.host_node_id.as_ref() {
-            if let Some(map) = body.as_object_mut() {
-                map.insert(
-                    "host_node_id".to_string(),
-                    serde_json::Value::String(node_id.clone()),
-                );
-            }
-        }
-        let args = match serde_json::to_vec(&body) {
+        let args = match crate::daemon::federation::advertise::advertise_agent_payload_bytes(
+            &request.agent_ura,
+            &self.caller_ura,
+            request.generation,
+            self.host_node_id.as_deref(),
+        ) {
             Ok(args) => args,
             Err(err) => {
                 return HotAgentAdvertiseOutcome::failed(format!(
@@ -1949,10 +2099,10 @@ mod tests {
     }
 
     #[test]
-    fn dynamic_owner_projection_publication_promotes_read_model_ready_state() {
+    fn local_runtime_federation_publication_promotes_read_model_ready_state() {
         let sink = InMemoryConnectionStateSink::default();
 
-        assert!(project_dynamic_owner_projection_published_connection_state(
+        assert!(project_local_runtime_federation_published_connection_state(
             &sink
         ));
 
@@ -1960,7 +2110,38 @@ mod tests {
         assert_eq!(changes.len(), 1);
         assert_eq!(changes[0].state, JoinConnectionState::ConnectedOnline);
         assert_eq!(changes[0].transition, JoinTransition::RefetchReadModel);
-        assert_eq!(changes[0].source, "dynamic_owner_projection_published");
+        assert_eq!(changes[0].source, "local_runtime_federation_published");
+    }
+
+    #[test]
+    fn hosted_agent_republish_plan_binds_identity_and_projection_to_one_generation() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let host_device_ura = crate::core::ura::device_ura("localhost", "device-1");
+        let agent_ura = crate::core::ura::agent_ura("localhost", "dev", "pages");
+        let snapshot =
+            crate::daemon::ability::catalog::LocalAbilityPublicationSnapshot::from_owner_public_names(
+                &agent_ura,
+                &["project_list"],
+            );
+
+        let prepared =
+            prepare_owner_projection_advertisement(&snapshot, &agent_ura, &host_device_ura)
+                .expect("hosted agent projection advertisement");
+        let projection: serde_json::Value =
+            serde_json::from_slice(&prepared.abilities_args).expect("projection payload is JSON");
+        let identity = crate::daemon::federation::advertise::advertise_agent_payload(
+            &agent_ura,
+            &host_device_ura,
+            prepared.generation,
+            Some("device-1"),
+        )
+        .expect("identity payload is JSON");
+
+        assert_eq!(projection["owner_ura"], agent_ura);
+        assert_eq!(projection["host_device_ura"], host_device_ura);
+        assert_eq!(projection["generation"], identity["generation"]);
+        assert_eq!(identity["agent_ura"], agent_ura);
+        assert_eq!(identity["signing_authority"]["host_ura"], host_device_ura);
     }
 
     #[tokio::test]

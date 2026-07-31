@@ -11,6 +11,53 @@ use crate::daemon::federation::read_model::owner_projection::{
 };
 
 #[derive(Debug, Serialize)]
+struct AdvertiseAgentArgs<'a> {
+    agent_ura: &'a str,
+    generation: u64,
+    signing_authority: HostedSigningAuthorityArgs<'a>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    host_node_id: Option<&'a str>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum HostedSigningAuthorityArgs<'a> {
+    HostedBy { host_ura: &'a str },
+}
+
+pub(crate) fn advertise_agent_payload(
+    agent_ura: &str,
+    host_device_ura: &str,
+    generation: u64,
+    host_node_id: Option<&str>,
+) -> Result<Value, String> {
+    serde_json::to_value(AdvertiseAgentArgs {
+        agent_ura,
+        generation,
+        signing_authority: HostedSigningAuthorityArgs::HostedBy {
+            host_ura: host_device_ura,
+        },
+        host_node_id,
+    })
+    .map_err(|error| format!("encode advertise_agent args: {error}"))
+}
+
+pub(crate) fn advertise_agent_payload_bytes(
+    agent_ura: &str,
+    host_device_ura: &str,
+    generation: u64,
+    host_node_id: Option<&str>,
+) -> Result<Vec<u8>, String> {
+    serde_json::to_vec(&advertise_agent_payload(
+        agent_ura,
+        host_device_ura,
+        generation,
+        host_node_id,
+    )?)
+    .map_err(|error| format!("serialize advertise_agent args: {error}"))
+}
+
+#[derive(Debug, Serialize)]
 struct AdvertiseAbilitiesArgs<'a> {
     agent_ura: &'a str,
     owner_ura: &'a str,
@@ -45,6 +92,29 @@ mod tests {
     use crate::daemon::federation::read_model::owner_projection::{
         AbilityCallableSummary, PurgeProjectionDelivery,
     };
+
+    #[test]
+    fn advertise_agent_payload_carries_hosted_identity_fields() {
+        let payload = advertise_agent_payload(
+            "easynet:///r/localhost/agent/dev.pages",
+            "easynet:///r/localhost/device/dev-1",
+            11,
+            Some("dev-1"),
+        )
+        .expect("hosted agent advertise payload");
+
+        assert_eq!(
+            payload["agent_ura"],
+            "easynet:///r/localhost/agent/dev.pages"
+        );
+        assert_eq!(payload["generation"], 11);
+        assert_eq!(payload["signing_authority"]["kind"], "hosted_by");
+        assert_eq!(
+            payload["signing_authority"]["host_ura"],
+            "easynet:///r/localhost/device/dev-1"
+        );
+        assert_eq!(payload["host_node_id"], "dev-1");
+    }
 
     #[test]
     fn advertise_abilities_payload_carries_generation() {
