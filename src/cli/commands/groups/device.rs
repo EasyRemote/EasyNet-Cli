@@ -21,8 +21,11 @@
 //                     (semantically belongs to `runtime config`; physical
 //                      command stays here for now — see ARCHITECTURE.md §8 #6)
 //   list              List substrates known to the federation             (-> cli::devices)
-//   show <id>         Inspect one substrate (hardware, hosted abilities)  (NEW)
-//   remove <id>       Drain + deregister a remote substrate               (NEW)
+//   show <id>         Inspect one substrate (hardware, hosted abilities)
+//   abilities <id>    List a substrate's invocation-backed ability catalog
+//   exec <id> -- cmd  Execute process.exec through canonical invocation
+//   terminal <id>     Reserved for session-authority-backed PTY lifecycle
+//   remove <id>       Drain + deregister a remote substrate
 //
 // Verbs DELIBERATELY ABSENT:
 //
@@ -40,7 +43,7 @@ use console::style;
 use serde_json::{json, Value};
 
 use crate::cli::commands::ability_catalog_row::AbilityCatalogueRow;
-use crate::cli::commands::{config_cmd, devices, join, reset};
+use crate::cli::commands::{abilities, config_cmd, devices, exec, join, reset};
 use crate::cli::daemon_client::remote_system_ability::{
     invoke_remote_device_system_ability, invoke_remote_device_system_ability_as_caller,
     RemoteDeviceSystemAbility,
@@ -66,6 +69,12 @@ pub enum DeviceAction {
     List(devices::DevicesArgs),
     /// Show one substrate's hardware and hosted abilities.
     Show(ShowArgs),
+    /// List a substrate's invocation-backed ability catalog.
+    Abilities(DeviceAbilitiesArgs),
+    /// Run a one-shot command through process.exec on a device.
+    Exec(exec::ExecArgs),
+    /// Reserved for session-authority-backed PTY lifecycle.
+    Terminal(TerminalArgs),
     /// Drain in-flight work on a remote substrate, then deregister it
     /// from the federation (the device disappears from
     /// `device list`). Irreversible without a fresh pairing token —
@@ -86,6 +95,26 @@ pub struct ShowArgs {
     /// every other list/show command — see 'support::output::OutputFormat'.
     #[arg(long, value_enum, default_value_t = OutputFormat::Table)]
     pub format: OutputFormat,
+}
+
+#[derive(Debug, Args)]
+pub struct DeviceAbilitiesArgs {
+    /// Target substrate: `local`, this device's node id, this device's URA,
+    /// or a canonical remote Device URA.
+    pub node_id: String,
+    /// Glob pattern to filter by ability name.
+    #[arg(long, default_value = "")]
+    pub pattern: String,
+    /// Output format — table (human, default) or json.
+    #[arg(long, value_enum, default_value_t = OutputFormat::Table)]
+    pub format: OutputFormat,
+}
+
+#[derive(Debug, Args)]
+pub struct TerminalArgs {
+    /// Target substrate: `local`, this device's node id, this device's URA,
+    /// or a canonical remote Device URA.
+    pub node_id: String,
 }
 
 #[derive(Debug, Args)]
@@ -111,8 +140,52 @@ pub fn run(args: DeviceArgs) -> anyhow::Result<()> {
         DeviceAction::Config(a) => config_cmd::run(a),
         DeviceAction::List(a) => devices::run(a),
         DeviceAction::Show(a) => run_show(a),
+        DeviceAction::Abilities(a) => run_abilities(a),
+        DeviceAction::Exec(a) => exec::run(a),
+        DeviceAction::Terminal(a) => run_terminal(a),
         DeviceAction::Remove(a) => run_remove(a),
     }
+}
+
+fn run_abilities(args: DeviceAbilitiesArgs) -> anyhow::Result<()> {
+    abilities::run(abilities::AbilitiesArgs {
+        agent: None,
+        agent_ura: None,
+        subject_ura: None,
+        node: Some(resolve_device_catalog_target_arg(&args.node_id)?),
+        pattern: args.pattern,
+        format: args.format,
+    })
+}
+
+fn run_terminal(args: TerminalArgs) -> anyhow::Result<()> {
+    let _target = resolve_device_catalog_target_arg(&args.node_id)?;
+    bail!(
+        "device terminal is not cut over yet: terminal follow-up abilities require \
+         x-runtime-session-authority metadata, and the CLI invocation issuer does not \
+         yet mint and attach that authority. Use `easynet device abilities {}` to \
+         inspect terminal.* availability; PTY lifecycle will be enabled only after \
+         the session-authority-backed issuer lands.",
+        args.node_id
+    )
+}
+
+fn resolve_device_catalog_target_arg(raw_target: &str) -> anyhow::Result<String> {
+    if is_local_device_target(raw_target) {
+        Ok("local".to_string())
+    } else {
+        crate::support::platform::remote_device::resolve_target_device_ura(raw_target)
+    }
+}
+
+fn is_local_device_target(raw_target: &str) -> bool {
+    let target = raw_target.trim();
+    if target.is_empty() || target.eq_ignore_ascii_case("local") {
+        return true;
+    }
+    load_local_device_identity("device target")
+        .map(|identity| target == identity.node_id || target == identity.device_ura())
+        .unwrap_or(false)
 }
 
 fn run_show(args: ShowArgs) -> anyhow::Result<()> {
@@ -568,6 +641,43 @@ mod tests {
         assert!(
             message.contains("easynet:///r/<realm>/device/<id>"),
             "wrong error: {message}"
+        );
+    }
+
+    #[test]
+    fn device_catalog_target_preserves_local_selector_and_rejects_bare_remote_id() {
+        assert_eq!(
+            resolve_device_catalog_target_arg("local").expect("local catalogue target"),
+            "local"
+        );
+
+        let error = resolve_device_catalog_target_arg("386b1258-3c89-494a-90a2-2321c29bf992")
+            .expect_err("bare remote ids must not be repaired from directory state");
+        let message = error.to_string();
+        assert!(
+            message.contains("not a canonical URA"),
+            "wrong error: {message}"
+        );
+        assert!(
+            message.contains("easynet:///r/<realm>/device/<id>"),
+            "wrong recovery guidance: {message}"
+        );
+    }
+
+    #[test]
+    fn device_terminal_is_explicit_session_authority_seam() {
+        let error = run_terminal(TerminalArgs {
+            node_id: "local".to_string(),
+        })
+        .expect_err("terminal must not create a PTY without session authority metadata");
+        let message = error.to_string();
+        assert!(
+            message.contains("not cut over yet"),
+            "wrong terminal seam error: {message}"
+        );
+        assert!(
+            message.contains("x-runtime-session-authority"),
+            "terminal seam must name missing authority metadata: {message}"
         );
     }
 
