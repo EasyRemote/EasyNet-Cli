@@ -274,7 +274,7 @@ mod tests {
     }
 
     #[test]
-    fn session_contract_control_enables_carrier_v1_independent_of_sequence() {
+    fn session_contract_control_enables_canonical_carrier_independent_of_sequence() {
         let _home = HomeGuard::new();
         let credentials = credentials();
         record_snapshot(JoinConnectionSnapshot::from_credentials(
@@ -311,6 +311,6 @@ mod tests {
             &super::super::PersistentSessionConnectionStateSink,
         );
 
-        assert!(outbound.carrier_v1());
+        assert!(outbound.canonical_carrier());
     }
 }

@@ -182,20 +182,47 @@ pub fn call_id_hex(call_id: &[u8; 16]) -> String {
 
 /// Build a canonical session dispatch. The complete `InvokeRequest`
 /// rides the wire unchanged; no inner JSON envelope is created.
-pub(crate) fn build_carrier_v1_dispatch_frame(
+pub(crate) fn build_canonical_dispatch_frame(
     call_id: u64,
     request: axon_sdk::pb::axon::v1::InvokeRequest,
-    open_bidi: bool,
+    call_mode: axon_sdk::invocation::CallMode,
 ) -> DispatchFrame {
     use axon_sdk::pb::axon::v1::DispatchCall;
     DispatchFrame::normal(InvokeBidiDown {
         payload: Some(DownPayload::DispatchCall(DispatchCall {
             call_id,
             request: Some(request),
-            open_bidi,
+            call_mode: canonical_call_mode_wire(call_mode),
         })),
         ..InvokeBidiDown::default()
     })
+}
+
+pub(crate) fn canonical_call_mode_wire(call_mode: axon_sdk::invocation::CallMode) -> i32 {
+    use axon_sdk::pb::axon::v1::InvocationCallMode;
+    match call_mode {
+        axon_sdk::invocation::CallMode::Rpc => InvocationCallMode::Rpc,
+        axon_sdk::invocation::CallMode::Stream => InvocationCallMode::Stream,
+        axon_sdk::invocation::CallMode::Bidi => InvocationCallMode::Bidi,
+    }
+    .into()
+}
+
+pub(crate) fn canonical_dispatch_call_mode(
+    raw_call_mode: i32,
+) -> Result<axon_sdk::invocation::CallMode, String> {
+    use axon_sdk::pb::axon::v1::InvocationCallMode;
+    match InvocationCallMode::try_from(raw_call_mode) {
+        Ok(InvocationCallMode::Rpc) => Ok(axon_sdk::invocation::CallMode::Rpc),
+        Ok(InvocationCallMode::Stream) => Ok(axon_sdk::invocation::CallMode::Stream),
+        Ok(InvocationCallMode::Bidi) => Ok(axon_sdk::invocation::CallMode::Bidi),
+        Ok(InvocationCallMode::Unspecified) => {
+            Err("canonical DispatchCall requires an explicit call_mode".to_string())
+        }
+        Err(_) => Err(format!(
+            "canonical DispatchCall contains unknown call_mode {raw_call_mode}"
+        )),
+    }
 }
 
 #[cfg(test)]
@@ -242,13 +269,36 @@ mod tests {
             ..InvokeRequest::default()
         };
         let expected_wire = request.encode_to_vec();
-        let frame = build_carrier_v1_dispatch_frame(42, request, false);
+        let frame =
+            build_canonical_dispatch_frame(42, request, axon_sdk::invocation::CallMode::Rpc);
         let Some(Payload::DispatchCall(call)) = frame.frame.payload else {
             panic!("expected DispatchCall");
         };
         assert_eq!(call.call_id, 42);
         let relayed = call.request.expect("relayed request");
         assert_eq!(relayed.encode_to_vec(), expected_wire);
+    }
+
+    #[test]
+    fn canonical_carrier_round_trips_each_explicit_call_mode() {
+        for mode in [
+            axon_sdk::invocation::CallMode::Rpc,
+            axon_sdk::invocation::CallMode::Stream,
+            axon_sdk::invocation::CallMode::Bidi,
+        ] {
+            let raw = canonical_call_mode_wire(mode);
+            assert_eq!(canonical_dispatch_call_mode(raw), Ok(mode));
+        }
+    }
+
+    #[test]
+    fn canonical_carrier_rejects_missing_or_unknown_call_mode() {
+        assert!(canonical_dispatch_call_mode(0)
+            .expect_err("UNSPECIFIED must fail closed")
+            .contains("explicit call_mode"));
+        assert!(canonical_dispatch_call_mode(i32::MAX)
+            .expect_err("unknown mode must fail closed")
+            .contains("unknown call_mode"));
     }
 
     #[test]
@@ -280,11 +330,11 @@ mod tests {
         let presence = PresenceRegistry::new();
         let host = "easynet:///r/realm/device/target";
 
-        let (v1_sender, _v1_receiver) = tokio::sync::mpsc::channel(1);
+        let (canonical_sender, _canonical_receiver) = tokio::sync::mpsc::channel(1);
         let registration = presence
             .insert_negotiated(
                 host.to_string(),
-                v1_sender,
+                canonical_sender,
                 SessionContract {
                     version: CANONICAL_SESSION_CARRIER_VERSION,
                     claimant_boot_nonce: vec![2; 16],
@@ -294,7 +344,7 @@ mod tests {
         for surface in ["Invoke", "InvokeStream", "InvokeBidi"] {
             let session =
                 require_canonical_dispatch_session(&presence, host, "route-ref::test", surface)
-                    .expect("v1 session is canonical for every carrier");
+                    .expect("canonical session is canonical for every carrier");
             assert_eq!(session.session_id, registration.session_id);
             assert_eq!(session.contract_version, CANONICAL_SESSION_CARRIER_VERSION);
         }

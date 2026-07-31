@@ -21,7 +21,7 @@ use serde_json::{json, Value};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use super::descriptor_binding::{signed_call_mode_from_target, RuntimeBoundAbility};
+use super::descriptor_binding::RuntimeBoundAbility;
 use super::invocation_wire::{callee_ura_from_envelope, FEDERATION_RESULT_CONTENT_TYPE};
 #[cfg(test)]
 use crate::daemon::axon_bridge::proof_owner::descriptor_bound_canonical_bytes;
@@ -29,7 +29,9 @@ use crate::daemon::invocation::admission::admission_facade::AdmissionFacade;
 use crate::daemon::invocation::bidi::session_initiator::{
     SessionDispatchError, SessionFrameDispatcher, SessionUpSender,
 };
-use crate::daemon::invocation::bidi::session_wire::{call_id_hex, SessionDispatch};
+use crate::daemon::invocation::bidi::session_wire::{
+    call_id_hex, canonical_dispatch_call_mode, SessionDispatch,
+};
 use crate::daemon::invocation::bidi::state::session_failure::SessionFailure;
 use crate::daemon::invocation::dispatch::cancellation::RegisteredInvocationLifecycle;
 use axon_sdk::pb::axon::v1::invoke_bidi_down::Payload as DownPayload;
@@ -236,7 +238,7 @@ fn required_handler_error_text(
     Ok(trimmed.to_string())
 }
 
-fn carrier_v1_control_failure(
+fn canonical_carrier_control_failure(
     call_id: u64,
     code: &'static str,
     message: impl Into<String>,
@@ -258,7 +260,7 @@ fn carrier_v1_control_failure(
 impl LocalAxonSessionDispatcher {
     /// Canonical dispatch: the frame already is the invocation, so neither
     /// caller identity nor request fields are reconstructed at this hop.
-    async fn handle_carrier_v1_dispatch(
+    async fn handle_canonical_carrier_dispatch(
         &self,
         call: axon_sdk::pb::axon::v1::DispatchCall,
         outbound: &SessionUpSender,
@@ -266,28 +268,40 @@ impl LocalAxonSessionDispatcher {
         use axon_sdk::pb::axon::v1::DispatchResult as PbDispatchResult;
 
         let call_id = call.call_id;
-        if !outbound.carrier_v1() {
+        if !outbound.canonical_carrier() {
             return Err(SessionDispatchError::Other(
-                "DispatchCall requires negotiated session carrier v1".to_string(),
+                "DispatchCall requires negotiated session canonical carrier".to_string(),
             ));
         }
         let Some(request) = call.request else {
             return Err(SessionDispatchError::Other(
-                "carrier-v1 DispatchCall without request".to_string(),
+                "canonical carrier DispatchCall without request".to_string(),
             ));
         };
-        if call.open_bidi {
+        let call_mode = match canonical_dispatch_call_mode(call.call_mode) {
+            Ok(call_mode) => call_mode,
+            Err(message) => {
+                return Self::send_canonical_carrier_control_failure(
+                    outbound,
+                    call_id,
+                    "CALL_MODE_INVALID",
+                    message,
+                )
+                .await;
+            }
+        };
+        if matches!(call_mode, axon_sdk::invocation::CallMode::Bidi) {
             return self
-                .handle_carrier_v1_bidi_open(call_id, request, outbound)
+                .handle_canonical_carrier_bidi_open(call_id, request, outbound)
                 .await;
         }
         let function_name = match crate::daemon::invocation::dispatch::invocation_wire::function_name_from_invocation_target(
-                "carrier-v1 DispatchCall",
+                "canonical carrier DispatchCall",
                 request.target.as_ref(),
             ) {
             Ok(function_name) => function_name.to_string(),
             Err(status) => {
-                return Self::send_carrier_v1_control_failure(
+                return Self::send_canonical_carrier_control_failure(
                     outbound,
                     call_id,
                     "CARRIER_TARGET_INVALID",
@@ -298,23 +312,23 @@ impl LocalAxonSessionDispatcher {
         };
         crate::op_event!(
             component = local_session_dispatcher,
-            kind = received_carrier_v1_dispatch,
+            kind = received_canonical_carrier_dispatch,
             call_id = call_id,
             ability = function_name,
         );
         let Some(envelope) = request.envelope else {
-            return Self::send_carrier_v1_control_failure(
+            return Self::send_canonical_carrier_control_failure(
                 outbound,
                 call_id,
                 "ENVELOPE_INCOMPLETE",
-                "carrier-v1 DispatchCall request missing envelope",
+                "canonical carrier DispatchCall request missing envelope",
             )
             .await;
         };
-        let runtime = match self.require_local_runtime("carrier-v1 dispatch") {
+        let runtime = match self.require_local_runtime("canonical carrier dispatch") {
             Ok(runtime) => runtime,
             Err(error) => {
-                return Self::send_carrier_v1_control_failure(
+                return Self::send_canonical_carrier_control_failure(
                     outbound,
                     call_id,
                     "RUNTIME_UNAVAILABLE",
@@ -323,21 +337,21 @@ impl LocalAxonSessionDispatcher {
                 .await;
             }
         };
-        let target_ura = match callee_ura_from_envelope(Some(&envelope), "carrier-v1 DispatchCall")
-        {
-            Ok(target_ura) => target_ura,
-            Err(status) => {
-                return Self::send_carrier_v1_control_failure(
-                    outbound,
-                    call_id,
-                    "ENVELOPE_INCOMPLETE",
-                    status.message(),
-                )
-                .await;
-            }
-        };
+        let target_ura =
+            match callee_ura_from_envelope(Some(&envelope), "canonical carrier DispatchCall") {
+                Ok(target_ura) => target_ura,
+                Err(status) => {
+                    return Self::send_canonical_carrier_control_failure(
+                        outbound,
+                        call_id,
+                        "ENVELOPE_INCOMPLETE",
+                        status.message(),
+                    )
+                    .await;
+                }
+            };
         if let Err(error) = self.sync_external_signed_caller_key(&envelope).await {
-            return Self::send_carrier_v1_control_failure(
+            return Self::send_canonical_carrier_control_failure(
                 outbound,
                 call_id,
                 "CALLER_KEY_SYNC_FAILED",
@@ -346,7 +360,7 @@ impl LocalAxonSessionDispatcher {
             .await;
         }
         let bound_ability = match RuntimeBoundAbility::from_wire_target(
-            "carrier-v1 DispatchCall",
+            "canonical carrier DispatchCall",
             &runtime,
             &target_ura,
             &function_name,
@@ -355,7 +369,7 @@ impl LocalAxonSessionDispatcher {
         {
             Ok(bound_ability) => bound_ability,
             Err(status) => {
-                return Self::send_carrier_v1_control_failure(
+                return Self::send_canonical_carrier_control_failure(
                     outbound,
                     call_id,
                     "ABILITY_RESOLUTION_FAILED",
@@ -364,31 +378,15 @@ impl LocalAxonSessionDispatcher {
                 .await;
             }
         };
-        let call_mode = match signed_call_mode_from_target(
-            "carrier-v1 DispatchCall",
-            &target_ura,
-            request.target.as_ref(),
-        ) {
-            Ok(call_mode) => call_mode,
-            Err(status) => {
-                return Self::send_carrier_v1_control_failure(
-                    outbound,
-                    call_id,
-                    "DESCRIPTOR_BINDING_FAILED",
-                    status.message(),
-                )
-                .await;
-            }
-        };
         let descriptor_ref = match bound_ability.signed_descriptor_ref_from_target(
-            "carrier-v1 DispatchCall",
+            "canonical carrier DispatchCall",
             &target_ura,
             call_mode,
             request.target.as_ref(),
         ) {
             Ok(descriptor_ref) => descriptor_ref,
             Err(status) => {
-                return Self::send_carrier_v1_control_failure(
+                return Self::send_canonical_carrier_control_failure(
                     outbound,
                     call_id,
                     "DESCRIPTOR_BINDING_FAILED",
@@ -405,11 +403,11 @@ impl LocalAxonSessionDispatcher {
             ) {
             Ok(wire) => wire,
             Err(error) => {
-                return Self::send_carrier_v1_control_failure(
+                return Self::send_canonical_carrier_control_failure(
                     outbound,
                     call_id,
                     "DISPATCH_WIRE_INVALID",
-                    format!("build carrier-v1 signed dispatch: {error}"),
+                    format!("build canonical carrier signed dispatch: {error}"),
                 )
                 .await;
             }
@@ -418,7 +416,7 @@ impl LocalAxonSessionDispatcher {
         {
             Ok(runtime_admission) => runtime_admission,
             Err(error) => {
-                return Self::send_carrier_v1_control_failure(
+                return Self::send_canonical_carrier_control_failure(
                     outbound,
                     call_id,
                     "RUNTIME_ADMISSION_FAILED",
@@ -434,17 +432,17 @@ impl LocalAxonSessionDispatcher {
         // would collapse the stream to a single terminal DispatchResult.
         // Open the stream and hand the handle to a forwarder that chains
         // typed `DispatchResult` chunks.
-        // Carrier-v1 preserves caller identity through the descriptor-bound
+        // Canonical carrier preserves caller identity through the descriptor-bound
         // signature.
         if matches!(call_mode, axon_sdk::invocation::CallMode::Stream) {
             return self
-                .handle_carrier_v1_stream_open(call_id, wire, runtime_admission, outbound)
+                .handle_canonical_carrier_stream_open(call_id, wire, runtime_admission, outbound)
                 .await;
         }
 
         crate::op_event!(
             component = local_session_dispatcher,
-            kind = carrier_v1_rpc_dispatch_started,
+            kind = canonical_carrier_rpc_dispatch_started,
             call_id = call_id,
             ability = function_name.as_str(),
             call_mode = "rpc",
@@ -457,7 +455,7 @@ impl LocalAxonSessionDispatcher {
         .await;
         crate::op_event!(
             component = local_session_dispatcher,
-            kind = carrier_v1_rpc_dispatch_completed,
+            kind = canonical_carrier_rpc_dispatch_completed,
             call_id = call_id,
             ability = function_name.as_str(),
             invocation_id = outcome.invocation_id.as_deref().unwrap_or(""),
@@ -500,19 +498,19 @@ impl LocalAxonSessionDispatcher {
             .map_err(|_| SessionDispatchError::Other("session up channel closed".to_string()))?;
         crate::op_event!(
             component = local_session_dispatcher,
-            kind = carrier_v1_rpc_dispatch_result_sent,
+            kind = canonical_carrier_rpc_dispatch_result_sent,
             call_id = call_id,
             ability = function_name.as_str(),
         );
         Ok(())
     }
 
-    /// step-3c — open a server-stream ability over the carrier-v1
+    /// step-3c — open a server-stream ability over the canonical carrier
     /// transport and forward its frames as a chain of `DispatchResult`
     /// chunks. Product policy is staged with `wire` and evaluated by the
     /// runtime's receipt-provider boundary; an open failure is reported as a
     /// non-terminal carrier control failure.
-    async fn handle_carrier_v1_stream_open(
+    async fn handle_canonical_carrier_stream_open(
         &self,
         call_id: u64,
         wire: crate::daemon::axon_bridge::descriptor_bound_dispatch::WireDispatch,
@@ -521,7 +519,7 @@ impl LocalAxonSessionDispatcher {
         >,
         outbound: &SessionUpSender,
     ) -> Result<(), SessionDispatchError> {
-        let runtime = self.require_local_runtime("carrier-v1 stream")?;
+        let runtime = self.require_local_runtime("canonical carrier stream")?;
         let lifecycle_envelope = wire.envelope.clone();
         let handle =
             match crate::daemon::axon_bridge::descriptor_bound_dispatch::open_stream_admitted(
@@ -531,8 +529,11 @@ impl LocalAxonSessionDispatcher {
             {
                 Ok(handle) => handle,
                 Err(err) => {
-                    let reply =
-                        carrier_v1_control_failure(call_id, "STREAM_OPEN_FAILED", err.to_string());
+                    let reply = canonical_carrier_control_failure(
+                        call_id,
+                        "STREAM_OPEN_FAILED",
+                        err.to_string(),
+                    );
                     outbound
                         .send_payload(UpPayload::DispatchResult(reply))
                         .await
@@ -553,7 +554,7 @@ impl LocalAxonSessionDispatcher {
                     .cancel("lifecycle cancellation registration failed")
                     .await;
                 let _ = handle.finalized().await;
-                let reply = carrier_v1_control_failure(
+                let reply = canonical_carrier_control_failure(
                     call_id,
                     "CANONICAL_CANCELLATION_REGISTRATION_FAILED",
                     err.to_string(),
@@ -574,7 +575,7 @@ impl LocalAxonSessionDispatcher {
             return Err(error);
         }
 
-        Self::spawn_carrier_v1_stream_forwarder(
+        Self::spawn_canonical_carrier_stream_forwarder(
             call_id,
             handle,
             outbound.clone(),
@@ -590,7 +591,7 @@ impl LocalAxonSessionDispatcher {
     /// (`DispatchResult.terminal_receipt` is REQUIRED on terminal frames), pulled
     /// from the streaming handle the same way the unary arm projects
     /// `terminal_receipt`.
-    fn spawn_carrier_v1_stream_forwarder(
+    fn spawn_canonical_carrier_stream_forwarder(
         call_id: u64,
         mut handle: axon_sdk::invocation::StreamingInvocationHandle,
         outbound: SessionUpSender,
@@ -615,11 +616,13 @@ impl LocalAxonSessionDispatcher {
                 Err(error) => {
                     let _ = lifecycle.finalized().await;
                     let _ = outbound
-                        .send_payload(UpPayload::DispatchResult(carrier_v1_control_failure(
-                            call_id,
-                            "CANONICAL_ADMISSION_REQUIRED",
-                            error.to_string(),
-                        )))
+                        .send_payload(UpPayload::DispatchResult(
+                            canonical_carrier_control_failure(
+                                call_id,
+                                "CANONICAL_ADMISSION_REQUIRED",
+                                error.to_string(),
+                            ),
+                        ))
                         .await;
                     return;
                 }
@@ -631,11 +634,13 @@ impl LocalAxonSessionDispatcher {
                         .cancel_and_finalize("canonical admission projection failed")
                         .await;
                     let _ = outbound
-                        .send_payload(UpPayload::DispatchResult(carrier_v1_control_failure(
-                            call_id,
-                            "CANONICAL_ADMISSION_PROJECTION_FAILED",
-                            error.to_string(),
-                        )))
+                        .send_payload(UpPayload::DispatchResult(
+                            canonical_carrier_control_failure(
+                                call_id,
+                                "CANONICAL_ADMISSION_PROJECTION_FAILED",
+                                error.to_string(),
+                            ),
+                        ))
                         .await;
                     return;
                 }
@@ -673,7 +678,7 @@ impl LocalAxonSessionDispatcher {
                         let terminal = frame.terminal;
                         crate::op_event!(
                             component = local_session_dispatcher,
-                            kind = forwarding_stream_frame_up_carrier_v1,
+                            kind = forwarding_stream_frame_up_canonical_carrier,
                             call_id = call_id,
                             payload_bytes = frame.payload.len(),
                             terminal = terminal,
@@ -685,7 +690,7 @@ impl LocalAxonSessionDispatcher {
                                 Err(error) => {
                                     let _ = outbound
                                         .send_payload(UpPayload::DispatchResult(
-                                            carrier_v1_control_failure(
+                                            canonical_carrier_control_failure(
                                                 call_id,
                                                 "CANONICAL_FINALIZATION_REQUIRED",
                                                 error.to_string(),
@@ -704,7 +709,7 @@ impl LocalAxonSessionDispatcher {
                                 Err(error) => {
                                     let _ = outbound
                                         .send_payload(UpPayload::DispatchResult(
-                                            carrier_v1_control_failure(
+                                            canonical_carrier_control_failure(
                                                 call_id,
                                                 "CANONICAL_TERMINAL_PROJECTION_FAILED",
                                                 error.to_string(),
@@ -742,7 +747,7 @@ impl LocalAxonSessionDispatcher {
                             Err(error) => {
                                 let _ = outbound
                                     .send_payload(UpPayload::DispatchResult(
-                                        carrier_v1_control_failure(
+                                        canonical_carrier_control_failure(
                                             call_id,
                                             "CANONICAL_FINALIZATION_REQUIRED",
                                             format!(
@@ -760,7 +765,7 @@ impl LocalAxonSessionDispatcher {
                                 Err(error) => {
                                     let _ = outbound
                                         .send_payload(UpPayload::DispatchResult(
-                                            carrier_v1_control_failure(
+                                            canonical_carrier_control_failure(
                                                 call_id,
                                                 "CANONICAL_TERMINAL_PROJECTION_FAILED",
                                                 error.to_string(),
@@ -792,8 +797,11 @@ impl LocalAxonSessionDispatcher {
             }
             if !sent_terminal && !cancelled {
                 let message = "stream ended without terminal frame";
-                let reply =
-                    carrier_v1_control_failure(call_id, "STREAM_ENDED_WITHOUT_TERMINAL", message);
+                let reply = canonical_carrier_control_failure(
+                    call_id,
+                    "STREAM_ENDED_WITHOUT_TERMINAL",
+                    message,
+                );
                 let _ = outbound
                     .send_payload(UpPayload::DispatchResult(reply))
                     .await;
@@ -900,7 +908,7 @@ impl LocalAxonSessionDispatcher {
         }
         let Some(sync) = self.device_trust_sync.as_ref() else {
             return Err(canonical_runtime_assembly_unavailable(
-                &format!("carrier-v1 external signed caller `{caller_ura}` trust sync"),
+                &format!("canonical carrier external signed caller `{caller_ura}` trust sync"),
                 "DeviceTrustSync",
             ));
         };
@@ -919,7 +927,7 @@ impl LocalAxonSessionDispatcher {
             .diagnostic()
             .unwrap_or_else(|| "trust sync did not produce a trusted key".to_string());
         Err(SessionDispatchError::Other(format!(
-            "carrier-v1 external signed caller `{caller_ura}` is not trusted after resolve_key sync: {diagnostic}"
+            "canonical carrier external signed caller `{caller_ura}` is not trusted after resolve_key sync: {diagnostic}"
         )))
     }
 
@@ -987,7 +995,7 @@ impl LocalAxonSessionDispatcher {
                 .map(Some)
                 .map_err(|status| {
                     SessionDispatchError::Other(format!(
-                        "carrier-v1 destination runtime admission staging failed: {status}"
+                        "canonical carrier destination runtime admission staging failed: {status}"
                     ))
                 }),
             _ => {
@@ -999,7 +1007,7 @@ impl LocalAxonSessionDispatcher {
                     return Ok(None);
                 }
                 Err(SessionDispatchError::Other(
-                    "carrier-v1 destination dispatch requires canonical runtime admission graph"
+                    "canonical carrier destination dispatch requires canonical runtime admission graph"
                         .to_string(),
                 ))
             }
@@ -1016,7 +1024,7 @@ impl LocalAxonSessionDispatcher {
         };
         admission.commit().map(|_| ()).map_err(|status| {
             SessionDispatchError::Other(format!(
-                "carrier-v1 destination runtime admission commit failed: {status}"
+                "canonical carrier destination runtime admission commit failed: {status}"
             ))
         })
     }
@@ -1145,9 +1153,9 @@ impl LocalAxonSessionDispatcher {
         Self::map_remote_file_transfer_output(call_id, value)
     }
 
-    /// Carrier-v1 bidi open: the request is the complete signed Invocation, so
+    /// Canonical carrier bidi open: the request is the complete signed Invocation, so
     /// the open enters the same descriptor-bound runtime path as unary calls.
-    async fn handle_carrier_v1_bidi_open(
+    async fn handle_canonical_carrier_bidi_open(
         &self,
         call_id: u64,
         request: axon_sdk::pb::axon::v1::InvokeRequest,
@@ -1155,14 +1163,14 @@ impl LocalAxonSessionDispatcher {
     ) -> Result<(), SessionDispatchError> {
         let ability =
             crate::daemon::invocation::dispatch::invocation_wire::function_name_from_invocation_target(
-                "carrier-v1 bidi open",
+                "canonical carrier bidi open",
                 request.target.as_ref(),
             )
             .map_err(|status| SessionDispatchError::Other(status.message().to_string()))?
             .to_string();
         crate::op_event!(
             component = local_session_dispatcher,
-            kind = received_carrier_v1_bidi_open,
+            kind = received_canonical_carrier_bidi_open,
             call_id = call_id,
             ability = ability,
         );
@@ -1172,7 +1180,7 @@ impl LocalAxonSessionDispatcher {
                 call_id,
                 "ABILITY_BIDI_NOT_SUPPORTED",
                 format!(
-                    "remote bidi ability `{ability}` is not published for session.open carrier-v1"
+                    "remote bidi ability `{ability}` is not published for session.open canonical carrier"
                 ),
             )
             .await;
@@ -1182,7 +1190,7 @@ impl LocalAxonSessionDispatcher {
                 outbound,
                 call_id,
                 "ENVELOPE_INCOMPLETE",
-                "carrier-v1 bidi open missing envelope",
+                "canonical carrier bidi open missing envelope",
             )
             .await;
         };
@@ -1198,18 +1206,19 @@ impl LocalAxonSessionDispatcher {
                 .await;
             }
         };
-        let target_ura = match callee_ura_from_envelope(Some(&envelope), "carrier-v1 BidiOpen") {
-            Ok(target_ura) => target_ura,
-            Err(status) => {
-                return Self::send_bidi_control_failure(
-                    outbound,
-                    call_id,
-                    "ENVELOPE_INCOMPLETE",
-                    status.message(),
-                )
-                .await;
-            }
-        };
+        let target_ura =
+            match callee_ura_from_envelope(Some(&envelope), "canonical carrier BidiOpen") {
+                Ok(target_ura) => target_ura,
+                Err(status) => {
+                    return Self::send_bidi_control_failure(
+                        outbound,
+                        call_id,
+                        "ENVELOPE_INCOMPLETE",
+                        status.message(),
+                    )
+                    .await;
+                }
+            };
         if let Err(err) = self.sync_external_signed_caller_key(&envelope).await {
             return Self::send_bidi_control_failure(
                 outbound,
@@ -1220,7 +1229,7 @@ impl LocalAxonSessionDispatcher {
             .await;
         }
         let bound_ability = match RuntimeBoundAbility::from_wire_target(
-            "carrier-v1 BidiOpen",
+            "canonical carrier BidiOpen",
             &runtime,
             &target_ura,
             &ability,
@@ -1239,7 +1248,7 @@ impl LocalAxonSessionDispatcher {
             }
         };
         let descriptor_ref = match bound_ability.signed_descriptor_ref_from_target(
-            "carrier-v1 BidiOpen",
+            "canonical carrier BidiOpen",
             &target_ura,
             axon_sdk::invocation::CallMode::Bidi,
             request.target.as_ref(),
@@ -1267,7 +1276,7 @@ impl LocalAxonSessionDispatcher {
                     outbound,
                     call_id,
                     "INVOCATION_WIRE_INVALID",
-                    format!("build carrier-v1 admitted bidi open: {err}"),
+                    format!("build canonical carrier admitted bidi open: {err}"),
                 )
                 .await;
             }
@@ -1319,13 +1328,14 @@ impl LocalAxonSessionDispatcher {
             .await
     }
 
-    async fn send_carrier_v1_dispatch_result(
+    async fn send_canonical_carrier_dispatch_result(
         outbound: &SessionUpSender,
         result: axon_sdk::pb::axon::v1::DispatchResult,
     ) -> Result<(), SessionDispatchError> {
-        if !outbound.carrier_v1() {
+        if !outbound.canonical_carrier() {
             return Err(SessionDispatchError::Other(
-                "canonical dispatch result requires negotiated session carrier v1".to_string(),
+                "canonical dispatch result requires negotiated session canonical carrier"
+                    .to_string(),
             ));
         }
         outbound
@@ -1334,15 +1344,15 @@ impl LocalAxonSessionDispatcher {
             .map_err(|_| SessionDispatchError::Other("session up channel closed".to_string()))
     }
 
-    async fn send_carrier_v1_control_failure(
+    async fn send_canonical_carrier_control_failure(
         outbound: &SessionUpSender,
         call_id: u64,
         code: &'static str,
         message: impl Into<String>,
     ) -> Result<(), SessionDispatchError> {
-        Self::send_carrier_v1_dispatch_result(
+        Self::send_canonical_carrier_dispatch_result(
             outbound,
-            carrier_v1_control_failure(call_id, code, message),
+            canonical_carrier_control_failure(call_id, code, message),
         )
         .await
     }
@@ -1353,7 +1363,7 @@ impl LocalAxonSessionDispatcher {
         code: &'static str,
         message: impl Into<String>,
     ) -> Result<(), SessionDispatchError> {
-        Self::send_carrier_v1_control_failure(outbound, call_id, code, message).await
+        Self::send_canonical_carrier_control_failure(outbound, call_id, code, message).await
     }
 
     async fn send_bidi_admission(
@@ -1361,7 +1371,7 @@ impl LocalAxonSessionDispatcher {
         call_id: u64,
         receipt: &axon_sdk::invocation::SignedInvocationReceipt,
     ) -> Result<(), SessionDispatchError> {
-        Self::send_carrier_v1_dispatch_result(
+        Self::send_canonical_carrier_dispatch_result(
             outbound,
             axon_sdk::pb::axon::v1::DispatchResult {
                 call_id,
@@ -1384,7 +1394,7 @@ impl LocalAxonSessionDispatcher {
                 retryable: failure.retryable,
                 ..Default::default()
             });
-        Self::send_carrier_v1_dispatch_result(
+        Self::send_canonical_carrier_dispatch_result(
             outbound,
             axon_sdk::pb::axon::v1::DispatchResult {
                 call_id: projection.call_id,
@@ -1401,7 +1411,7 @@ impl LocalAxonSessionDispatcher {
         call_id: u64,
         finalized: &axon_sdk::invocation::FinalizedInvocation,
     ) -> Result<(), SessionDispatchError> {
-        Self::send_carrier_v1_dispatch_result(
+        Self::send_canonical_carrier_dispatch_result(
             outbound,
             axon_sdk::pb::axon::v1::DispatchResult {
                 call_id,
@@ -1809,19 +1819,25 @@ impl SessionFrameDispatcher for LocalAxonSessionDispatcher {
         // DispatchCall carries the complete canonical InvokeRequest and is
         // dispatched without a product-side request projection.
         if let Some(DownPayload::DispatchCall(call)) = frame.payload.as_ref() {
-            if call.open_bidi {
+            if matches!(
+                canonical_dispatch_call_mode(call.call_mode),
+                Ok(axon_sdk::invocation::CallMode::Bidi)
+            ) {
                 return self
-                    .handle_carrier_v1_dispatch(call.clone(), outbound)
+                    .handle_canonical_carrier_dispatch(call.clone(), outbound)
                     .await;
             }
             let dispatcher = self.clone();
             let outbound = outbound.clone();
             let call = call.clone();
             tokio::spawn(async move {
-                if let Err(err) = dispatcher.handle_carrier_v1_dispatch(call, &outbound).await {
+                if let Err(err) = dispatcher
+                    .handle_canonical_carrier_dispatch(call, &outbound)
+                    .await
+                {
                     crate::op_event!(
                         component = local_session_dispatcher,
-                        kind = carrier_v1_dispatch_task_failed,
+                        kind = canonical_carrier_dispatch_task_failed,
                         error = err.to_string(),
                     );
                 }
@@ -1915,9 +1931,12 @@ mod tests {
     const TEST_DEVICE_URA: &str = "easynet:///r/t/device/d1";
 
     #[test]
-    fn carrier_v1_stream_control_failure_is_not_lifecycle_terminal() {
-        let result =
-            carrier_v1_control_failure(9, "STREAM_OPEN_FAILED", "target rejected stream open");
+    fn canonical_carrier_stream_control_failure_is_not_lifecycle_terminal() {
+        let result = canonical_carrier_control_failure(
+            9,
+            "STREAM_OPEN_FAILED",
+            "target rejected stream open",
+        );
         assert_eq!(result.call_id, 9);
         assert!(
             !result.terminal,
@@ -1934,9 +1953,12 @@ mod tests {
     }
 
     #[test]
-    fn carrier_v1_unary_control_failure_is_not_lifecycle_terminal() {
-        let result =
-            carrier_v1_control_failure(10, "ABILITY_RESOLUTION_FAILED", "descriptor missing");
+    fn canonical_carrier_unary_control_failure_is_not_lifecycle_terminal() {
+        let result = canonical_carrier_control_failure(
+            10,
+            "ABILITY_RESOLUTION_FAILED",
+            "descriptor missing",
+        );
         assert_eq!(result.call_id, 10);
         assert!(
             !result.terminal,
@@ -2048,7 +2070,7 @@ mod tests {
         }
     }
 
-    fn carrier_v1_signing_key() -> ed25519_dalek::SigningKey {
+    fn canonical_carrier_signing_key() -> ed25519_dalek::SigningKey {
         ed25519_dalek::SigningKey::from_bytes(&[0x4Du8; 32])
     }
 
@@ -2201,7 +2223,9 @@ mod tests {
 
     fn executable_runtime() -> Arc<axon_sdk::invocation::LocalRuntime> {
         crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
-            Arc::new(FixedCarrierKey(carrier_v1_signing_key().verifying_key())),
+            Arc::new(FixedCarrierKey(
+                canonical_carrier_signing_key().verifying_key(),
+            )),
             None,
         )
     }
@@ -2218,12 +2242,16 @@ mod tests {
         }
     }
 
-    fn carrier_v1_call(call_id: u64, ability: &str, args: Vec<u8>) -> InvokeBidiDown {
-        carrier_v1_call_signed_as(call_id, ability, ability, args)
+    fn canonical_carrier_call(call_id: u64, ability: &str, args: Vec<u8>) -> InvokeBidiDown {
+        canonical_carrier_call_signed_as(call_id, ability, ability, args)
     }
 
-    fn carrier_v1_explicit_test_call(call_id: u64, ability: &str, args: Vec<u8>) -> InvokeBidiDown {
-        carrier_v1_explicit_test_call_with_mode(
+    fn canonical_carrier_explicit_test_call(
+        call_id: u64,
+        ability: &str,
+        args: Vec<u8>,
+    ) -> InvokeBidiDown {
+        canonical_carrier_explicit_test_call_with_mode(
             call_id,
             ability,
             args,
@@ -2231,7 +2259,7 @@ mod tests {
         )
     }
 
-    fn carrier_v1_explicit_test_call_with_mode(
+    fn canonical_carrier_explicit_test_call_with_mode(
         call_id: u64,
         ability: &str,
         args: Vec<u8>,
@@ -2249,16 +2277,16 @@ mod tests {
             TEST_DESCRIPTOR_VERSION,
             admission_action,
         );
-        carrier_v1_call_signed_as_with_mode(call_id, ability, &descriptor_ref, args, mode)
+        canonical_carrier_call_signed_as_with_mode(call_id, ability, &descriptor_ref, args, mode)
     }
 
-    fn carrier_v1_call_signed_as(
+    fn canonical_carrier_call_signed_as(
         call_id: u64,
         request_ability: &str,
         signed_ability: &str,
         args: Vec<u8>,
     ) -> InvokeBidiDown {
-        carrier_v1_call_signed_as_with_mode(
+        canonical_carrier_call_signed_as_with_mode(
             call_id,
             request_ability,
             signed_ability,
@@ -2267,7 +2295,7 @@ mod tests {
         )
     }
 
-    fn carrier_v1_call_signed_as_with_mode(
+    fn canonical_carrier_call_signed_as_with_mode(
         call_id: u64,
         request_ability: &str,
         signed_ability: &str,
@@ -2277,7 +2305,7 @@ mod tests {
         use axon_sdk::pb::axon::v1::{DispatchCall, InvokeRequest};
         use ed25519_dalek::Signer as _;
 
-        let signing_key = carrier_v1_signing_key();
+        let signing_key = canonical_carrier_signing_key();
         let signed_descriptor_ref =
             descriptor_ref_for_call_mode(TEST_DEVICE_URA, signed_ability, mode);
         let mut envelope = crate::daemon::invocation::ProtoEnvelope::from_target(
@@ -2286,16 +2314,16 @@ mod tests {
             "easynet:///r/t/device/d1",
             crate::daemon::invocation::InvocationDerivationPolicy::FreshRoot,
         )
-        .expect("valid carrier-v1 envelope")
+        .expect("valid canonical carrier envelope")
         .into_inner(&signed_descriptor_ref, &args)
-        .expect("complete carrier-v1 tuple");
+        .expect("complete canonical carrier tuple");
         let descriptor_bound =
             crate::daemon::axon_bridge::wire_descriptor::descriptor_bound_from_wire_parts(
                 envelope.clone(),
                 signed_descriptor_ref.clone(),
                 &args,
             )
-            .expect("descriptor-bound carrier-v1 envelope");
+            .expect("descriptor-bound canonical carrier envelope");
         let signature = signing_key.sign(&descriptor_bound_canonical_bytes(
             &descriptor_bound.envelope,
         ));
@@ -2312,7 +2340,7 @@ mod tests {
                     &signed_descriptor_ref,
                     request_ability,
                 )
-                .expect("carrier-v1 typed target"),
+                .expect("canonical carrier typed target"),
             ),
             arguments: args,
             ..Default::default()
@@ -2322,14 +2350,16 @@ mod tests {
             payload: Some(DownPayload::DispatchCall(DispatchCall {
                 call_id,
                 request: Some(request),
-                open_bidi: false,
+                call_mode: crate::daemon::invocation::bidi::session_wire::canonical_call_mode_wire(
+                    mode,
+                ),
             })),
             ..InvokeBidiDown::default()
         }
     }
 
-    fn carrier_v1_bidi_open(call_id: u64, ability: &str, args: Vec<u8>) -> InvokeBidiDown {
-        let mut frame = carrier_v1_call_signed_as_with_mode(
+    fn canonical_carrier_bidi_open(call_id: u64, ability: &str, args: Vec<u8>) -> InvokeBidiDown {
+        let mut frame = canonical_carrier_call_signed_as_with_mode(
             call_id,
             ability,
             ability,
@@ -2337,44 +2367,59 @@ mod tests {
             axon_sdk::invocation::CallMode::Bidi,
         );
         if let Some(DownPayload::DispatchCall(call)) = frame.payload.as_mut() {
-            call.open_bidi = true;
+            call.call_mode =
+                crate::daemon::invocation::bidi::session_wire::canonical_call_mode_wire(
+                    axon_sdk::invocation::CallMode::Bidi,
+                );
         }
         frame
     }
 
-    fn carrier_v1_explicit_test_bidi_open(
+    fn canonical_carrier_explicit_test_bidi_open(
         call_id: u64,
         ability: &str,
         args: Vec<u8>,
     ) -> InvokeBidiDown {
-        let mut frame = carrier_v1_explicit_test_call_with_mode(
+        let mut frame = canonical_carrier_explicit_test_call_with_mode(
             call_id,
             ability,
             args,
             axon_sdk::invocation::CallMode::Bidi,
         );
         if let Some(DownPayload::DispatchCall(call)) = frame.payload.as_mut() {
-            call.open_bidi = true;
+            call.call_mode =
+                crate::daemon::invocation::bidi::session_wire::canonical_call_mode_wire(
+                    axon_sdk::invocation::CallMode::Bidi,
+                );
         }
         frame
     }
 
-    /// Quadrant [new hub, new device] for step-3b: a carrier-v1 bidi
+    /// Quadrant [new hub, new device] for step-3b: a canonical carrier bidi
     /// open admits through the canonical wire-parts path, streams
     /// over the same byte channel, and the terminal frame replies as
     /// a proto DispatchResult.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn carrier_v1_bidi_open_round_trips_and_replies_proto_on_v1_session() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let target = tmp.path().join("upload-from-hub-v1.bin");
-        let bytes = b"carrier-v1-bidi-over-session";
+    #[test]
+    fn canonical_carrier_bidi_open_round_trips_and_replies_proto_on_canonical_session() {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .thread_stack_size(32 * 1024 * 1024)
+            .enable_all()
+            .build()
+            .expect("test runtime");
+        let test = runtime.spawn(async {
+            let tmp = tempfile::tempdir().expect("tempdir");
+            let target = tmp.path().join("upload-from-hub-canonical.bin");
+            let bytes = b"canonical carrier-bidi-over-session";
 
         let rt = executable_runtime();
         let _registry = build_real_daemon_registry_with_runtime(Some(Arc::clone(&rt)));
         let disp = LocalAxonSessionDispatcher::new().with_local_runtime(rt);
         let (tx, mut rx) = mpsc::channel::<InvokeBidiUp>(8);
         let session_tx = SessionUpSender::new(tx);
-        session_tx.set_negotiated_contract(1);
+        session_tx.set_negotiated_contract(
+            crate::daemon::invocation::bidi::state::presence::CANONICAL_SESSION_CARRIER_VERSION,
+        );
 
         let args = serde_json::to_vec(&json!({
             "mode": "upload",
@@ -2386,7 +2431,7 @@ mod tests {
         }))
         .expect("encode args");
         disp.handle_down(
-            carrier_v1_bidi_open(
+            canonical_carrier_bidi_open(
                 77,
                 crate::daemon::ability::builtins::device_control::file_transfer::ABILITY_FILE_TRANSFER,
                 args,
@@ -2394,7 +2439,7 @@ mod tests {
             &session_tx,
         )
         .await
-        .expect("v1 bidi open succeeds");
+        .expect("canonical bidi open succeeds");
 
         disp.handle_down(
             session_frame(SessionDispatch::BidiInput {
@@ -2423,12 +2468,14 @@ mod tests {
             .expect("admission reply produced");
         let admission = match admission.payload {
             Some(UpPayload::DispatchResult(result)) => result,
-            other => panic!("expected admission DispatchResult on a v1 session, got: {other:?}"),
+            other => {
+                panic!("expected admission DispatchResult on a canonical session, got: {other:?}")
+            }
         };
         assert_eq!(admission.call_id, 77);
         assert!(
             !admission.terminal,
-            "first carrier-v1 bidi frame must be admission, got {admission:?}"
+            "first canonical carrier bidi frame must be admission, got {admission:?}"
         );
         assert_eq!(
             admission
@@ -2444,7 +2491,9 @@ mod tests {
             .expect("progress reply produced");
         let progress = match progress.payload {
             Some(UpPayload::DispatchResult(result)) => result,
-            other => panic!("expected progress DispatchResult on a v1 session, got: {other:?}"),
+            other => {
+                panic!("expected progress DispatchResult on a canonical session, got: {other:?}")
+            }
         };
         assert_eq!(progress.call_id, 77);
         assert!(!progress.terminal);
@@ -2457,7 +2506,7 @@ mod tests {
             .expect("reply produced");
         let result = match reply.payload {
             Some(UpPayload::DispatchResult(r)) => r,
-            other => panic!("expected proto DispatchResult on a v1 session, got: {other:?}"),
+            other => panic!("expected proto DispatchResult on a canonical session, got: {other:?}"),
         };
         assert_eq!(result.call_id, 77);
         assert!(result.terminal, "upload reply must be terminal");
@@ -2477,27 +2526,33 @@ mod tests {
         assert!(
             disp.lifecycle_cancellations
                 .contains_invocation_id(&receipt.invocation_id),
-            "carrier-v1 bidi lifecycle must remain registered for invocation.cancel"
+            "canonical carrier bidi lifecycle must remain registered for invocation.cancel"
         );
-        assert_eq!(
-            std::fs::read(&target).expect("uploaded file exists"),
-            bytes,
-            "payload bytes must land on the device-side filesystem"
-        );
+            assert_eq!(
+                std::fs::read(&target).expect("uploaded file exists"),
+                bytes,
+                "payload bytes must land on the device-side filesystem"
+            );
+        });
+        runtime
+            .block_on(test)
+            .expect("canonical bidi carrier test task");
     }
 
     /// step-3b open errors are frames, not transport errors: an
-    /// unwired ability on a v1 session replies a typed proto failure.
+    /// unwired ability on a canonical session replies a typed proto failure.
     #[tokio::test]
-    async fn carrier_v1_bidi_open_of_unwired_ability_fails_proto_on_v1_session() {
+    async fn canonical_carrier_bidi_open_of_unwired_ability_fails_proto_on_canonical_session() {
         let rt = executable_runtime();
         let disp = LocalAxonSessionDispatcher::new().with_local_runtime(rt);
         let (tx, mut rx) = mpsc::channel::<InvokeBidiUp>(4);
         let session_tx = SessionUpSender::new(tx);
-        session_tx.set_negotiated_contract(1);
+        session_tx.set_negotiated_contract(
+            crate::daemon::invocation::bidi::state::presence::CANONICAL_SESSION_CARRIER_VERSION,
+        );
 
         disp.handle_down(
-            carrier_v1_explicit_test_bidi_open(9, "test.echo", b"{}".to_vec()),
+            canonical_carrier_explicit_test_bidi_open(9, "test.echo", b"{}".to_vec()),
             &session_tx,
         )
         .await
@@ -2522,15 +2577,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn carrier_v1_stream_dispatch_of_unpublished_ability_fails_proto_without_timeout() {
+    async fn canonical_carrier_stream_dispatch_of_unpublished_ability_fails_proto_without_timeout()
+    {
         let rt = executable_runtime();
         let disp = LocalAxonSessionDispatcher::new().with_local_runtime(rt);
         let (tx, mut rx) = mpsc::channel::<InvokeBidiUp>(4);
         let session_tx = SessionUpSender::new(tx);
-        session_tx.set_negotiated_contract(1);
+        session_tx.set_negotiated_contract(
+            crate::daemon::invocation::bidi::state::presence::CANONICAL_SESSION_CARRIER_VERSION,
+        );
 
         disp.handle_down(
-            carrier_v1_explicit_test_call_with_mode(
+            canonical_carrier_explicit_test_call_with_mode(
                 17,
                 "screen.removed",
                 b"{}".to_vec(),
@@ -2569,7 +2627,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn carrier_v1_dispatch_executes_and_replies_proto_on_v1_session() {
+    async fn canonical_carrier_dispatch_executes_and_replies_proto_on_canonical_session() {
         let rt = executable_runtime();
         register_test_rpc(
             &rt,
@@ -2580,14 +2638,20 @@ mod tests {
         let disp = LocalAxonSessionDispatcher::new().with_local_runtime(Arc::clone(&rt));
         let (tx, mut rx) = mpsc::channel::<InvokeBidiUp>(4);
         let session_tx = SessionUpSender::new(tx);
-        session_tx.set_negotiated_contract(1);
+        session_tx.set_negotiated_contract(
+            crate::daemon::invocation::bidi::state::presence::CANONICAL_SESSION_CARRIER_VERSION,
+        );
 
         disp.handle_down(
-            carrier_v1_explicit_test_call(7, "test.echo", br#"{"hello":"v1"}"#.to_vec()),
+            canonical_carrier_explicit_test_call(
+                7,
+                "test.echo",
+                br#"{"hello":"canonical"}"#.to_vec(),
+            ),
             &session_tx,
         )
         .await
-        .expect("carrier-v1 dispatch succeeds");
+        .expect("canonical carrier dispatch succeeds");
 
         let reply = tokio::time::timeout(Duration::from_secs(3), rx.recv())
             .await
@@ -2595,7 +2659,7 @@ mod tests {
             .expect("reply produced");
         let Some(UpPayload::DispatchResult(result)) = reply.payload else {
             panic!(
-                "v1 session must reply DispatchResult, got {:?}",
+                "canonical session must reply DispatchResult, got {:?}",
                 reply.payload
             );
         };
@@ -2603,10 +2667,10 @@ mod tests {
         assert!(result.terminal);
         assert!(
             result.failure.is_none(),
-            "carrier-v1 dispatch failed: {:?}",
+            "canonical carrier dispatch failed: {:?}",
             result.failure
         );
-        assert_eq!(result.payload, br#"{"hello":"v1"}"#);
+        assert_eq!(result.payload, br#"{"hello":"canonical"}"#);
         let admission = result
             .admission_receipt
             .expect("successful unary carrier reply carries admission checkpoint");
@@ -2625,7 +2689,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn carrier_v1_dispatch_preserves_non_default_descriptor_version() {
+    async fn canonical_carrier_dispatch_preserves_non_default_descriptor_version() {
         let rt = executable_runtime();
         register_test_ability_with_options(
             &rt,
@@ -2637,17 +2701,19 @@ mod tests {
         let disp = LocalAxonSessionDispatcher::new().with_local_runtime(Arc::clone(&rt));
         let (tx, mut rx) = mpsc::channel::<InvokeBidiUp>(4);
         let session_tx = SessionUpSender::new(tx);
-        session_tx.set_negotiated_contract(1);
+        session_tx.set_negotiated_contract(
+            crate::daemon::invocation::bidi::state::presence::CANONICAL_SESSION_CARRIER_VERSION,
+        );
         let signed_ability =
             crate::daemon::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
                 TEST_DEVICE_URA,
                 "test.echo",
                 &descriptor_binding_for_version(TEST_DESCRIPTOR_VERSION_V2),
             )
-            .expect("versioned carrier-v1 descriptor ref");
+            .expect("versioned canonical carrier descriptor ref");
 
         disp.handle_down(
-            carrier_v1_call_signed_as(
+            canonical_carrier_call_signed_as(
                 19,
                 "test.echo",
                 &signed_ability,
@@ -2656,7 +2722,7 @@ mod tests {
             &session_tx,
         )
         .await
-        .expect("carrier-v1 dispatch succeeds with non-default descriptor version");
+        .expect("canonical carrier dispatch succeeds with non-default descriptor version");
 
         let reply = tokio::time::timeout(Duration::from_secs(3), rx.recv())
             .await
@@ -2664,7 +2730,7 @@ mod tests {
             .expect("reply produced");
         let Some(UpPayload::DispatchResult(result)) = reply.payload else {
             panic!(
-                "v1 session must reply DispatchResult, got {:?}",
+                "canonical session must reply DispatchResult, got {:?}",
                 reply.payload
             );
         };
@@ -2672,14 +2738,14 @@ mod tests {
         assert!(result.terminal);
         assert!(
             result.failure.is_none(),
-            "carrier-v1 dispatch failed: {:?}",
+            "canonical carrier dispatch failed: {:?}",
             result.failure
         );
         assert_eq!(result.payload, br#"{"hello":"v2"}"#);
     }
 
     #[tokio::test]
-    async fn carrier_v1_stream_terminal_frame_carries_receipt() {
+    async fn canonical_carrier_stream_terminal_frame_carries_receipt() {
         use axon_sdk::invocation::make_ability;
 
         let rt = executable_runtime();
@@ -2700,10 +2766,12 @@ mod tests {
         let disp = LocalAxonSessionDispatcher::new().with_local_runtime(Arc::clone(&rt));
         let (tx, mut rx) = mpsc::channel::<InvokeBidiUp>(8);
         let session_tx = SessionUpSender::new(tx);
-        session_tx.set_negotiated_contract(1);
+        session_tx.set_negotiated_contract(
+            crate::daemon::invocation::bidi::state::presence::CANONICAL_SESSION_CARRIER_VERSION,
+        );
 
         disp.handle_down(
-            carrier_v1_explicit_test_call_with_mode(
+            canonical_carrier_explicit_test_call_with_mode(
                 18,
                 "screen.subscribe",
                 b"{}".to_vec(),
@@ -2712,7 +2780,7 @@ mod tests {
             &session_tx,
         )
         .await
-        .expect("carrier-v1 stream dispatch opens and forwards asynchronously");
+        .expect("canonical carrier stream dispatch opens and forwards asynchronously");
 
         let admission = tokio::time::timeout(Duration::from_secs(3), rx.recv())
             .await
@@ -2720,7 +2788,7 @@ mod tests {
             .expect("admission reply produced");
         let admission = match admission.payload {
             Some(UpPayload::DispatchResult(result)) => result,
-            other => panic!("expected carrier-v1 admission result, got: {other:?}"),
+            other => panic!("expected canonical carrier admission result, got: {other:?}"),
         };
         assert_eq!(admission.call_id, 18);
         assert!(!admission.terminal);
@@ -2743,7 +2811,7 @@ mod tests {
             .expect("progress reply produced");
         let progress = match progress.payload {
             Some(UpPayload::DispatchResult(result)) => result,
-            other => panic!("expected carrier-v1 progress result, got: {other:?}"),
+            other => panic!("expected canonical carrier progress result, got: {other:?}"),
         };
         assert_eq!(progress.call_id, 18);
         assert!(!progress.terminal, "first stream frame is progress");
@@ -2758,7 +2826,7 @@ mod tests {
             .expect("terminal reply produced");
         let terminal = match terminal.payload {
             Some(UpPayload::DispatchResult(result)) => result,
-            other => panic!("expected carrier-v1 terminal result, got: {other:?}"),
+            other => panic!("expected canonical carrier terminal result, got: {other:?}"),
         };
         assert_eq!(terminal.call_id, 18);
         assert!(terminal.terminal);
@@ -2769,7 +2837,7 @@ mod tests {
         );
         let receipt = terminal
             .terminal_receipt
-            .expect("carrier-v1 terminal stream result must carry receipt");
+            .expect("canonical carrier terminal stream result must carry receipt");
         assert_eq!(
             receipt.state,
             axon_sdk::invocation::InvocationState::Completed.to_wire_i32()
@@ -2777,12 +2845,12 @@ mod tests {
         assert!(
             disp.lifecycle_cancellations
                 .contains_invocation_id(&receipt.invocation_id),
-            "carrier-v1 stream lifecycle must remain registered for invocation.cancel"
+            "canonical carrier stream lifecycle must remain registered for invocation.cancel"
         );
     }
 
     #[tokio::test]
-    async fn carrier_v1_stream_descriptor_selects_stream_even_when_rpc_is_supported() {
+    async fn canonical_carrier_stream_descriptor_selects_stream_even_when_rpc_is_supported() {
         use axon_sdk::invocation::make_ability;
 
         let rt = executable_runtime();
@@ -2803,10 +2871,12 @@ mod tests {
         let disp = LocalAxonSessionDispatcher::new().with_local_runtime(Arc::clone(&rt));
         let (tx, mut rx) = mpsc::channel::<InvokeBidiUp>(8);
         let session_tx = SessionUpSender::new(tx);
-        session_tx.set_negotiated_contract(1);
+        session_tx.set_negotiated_contract(
+            crate::daemon::invocation::bidi::state::presence::CANONICAL_SESSION_CARRIER_VERSION,
+        );
 
         disp.handle_down(
-            carrier_v1_explicit_test_call_with_mode(
+            canonical_carrier_explicit_test_call_with_mode(
                 21,
                 "mixed.subscribe",
                 b"{}".to_vec(),
@@ -2823,7 +2893,7 @@ mod tests {
             .expect("admission reply produced");
         let admission = match admission.payload {
             Some(UpPayload::DispatchResult(result)) => result,
-            other => panic!("expected carrier-v1 stream admission result, got: {other:?}"),
+            other => panic!("expected canonical carrier stream admission result, got: {other:?}"),
         };
         assert_eq!(admission.call_id, 21);
         assert!(
@@ -2839,13 +2909,75 @@ mod tests {
             .expect("progress reply produced");
         let progress = match progress.payload {
             Some(UpPayload::DispatchResult(result)) => result,
-            other => panic!("expected carrier-v1 stream progress result, got: {other:?}"),
+            other => panic!("expected canonical carrier stream progress result, got: {other:?}"),
         };
         assert_eq!(progress.call_id, 21);
         assert!(!progress.terminal);
         let payload: serde_json::Value =
             serde_json::from_slice(&progress.payload).expect("progress payload is JSON");
         assert_eq!(payload["kind"], "progress");
+    }
+
+    #[tokio::test]
+    async fn canonical_rpc_call_mode_is_independent_from_stream_admission_action() {
+        use axon_sdk::invocation::{make_ability, AbilityCallModes, AbilityOptions, CallMode};
+
+        let rt = executable_runtime();
+        let options = AbilityOptions::default()
+            .with_modes(AbilityCallModes::RPC)
+            .with_mode_descriptor_proof(
+                CallMode::Rpc,
+                TEST_DESCRIPTOR_VERSION,
+                crate::daemon::ability::descriptors::AdmissionAction::Stream.as_str(),
+                TEST_DESCRIPTOR_HASH,
+                TEST_SCHEMA_HASH,
+                TEST_IMPL_HASH,
+            );
+        register_test_ability_with_options(
+            &rt,
+            "terminal.create",
+            make_ability(|_| async { Ok(br#"{"created":true}"#.to_vec()) }),
+            options,
+        )
+        .await;
+
+        let descriptor_ref = explicit_test_descriptor_ref_with_action(
+            TEST_DEVICE_URA,
+            "terminal.create",
+            TEST_DESCRIPTOR_VERSION,
+            crate::daemon::ability::descriptors::AdmissionAction::Stream.as_str(),
+        );
+        let frame = canonical_carrier_call_signed_as_with_mode(
+            22,
+            "terminal.create",
+            &descriptor_ref,
+            b"{}".to_vec(),
+            CallMode::Rpc,
+        );
+        let dispatcher = LocalAxonSessionDispatcher::new().with_local_runtime(Arc::clone(&rt));
+        let (tx, mut rx) = mpsc::channel::<InvokeBidiUp>(4);
+        let outbound = SessionUpSender::new(tx);
+        outbound.set_negotiated_contract(
+            crate::daemon::invocation::bidi::state::presence::CANONICAL_SESSION_CARRIER_VERSION,
+        );
+
+        dispatcher
+            .handle_down(frame, &outbound)
+            .await
+            .expect("RPC dispatch accepted");
+
+        let result = tokio::time::timeout(Duration::from_secs(3), rx.recv())
+            .await
+            .expect("RPC result within timeout")
+            .expect("RPC result produced");
+        let Some(UpPayload::DispatchResult(result)) = result.payload else {
+            panic!("expected canonical DispatchResult");
+        };
+        assert!(result.terminal, "explicit RPC mode must stay unary");
+        assert_eq!(result.payload, br#"{"created":true}"#);
+        assert!(result.failure.is_none());
+        assert!(result.admission_receipt.is_some());
+        assert!(result.terminal_receipt.is_some());
     }
 
     #[tokio::test]
@@ -2879,7 +3011,7 @@ mod tests {
 
     // ── Device-mode boot wiring exposes baseline locomotion ───────────────
     //
-    // This test uses the canonical carrier-v1 DispatchCall/DispatchResult
+    // This test uses the canonical canonical carrier DispatchCall/DispatchResult
     // path. The retired JSON Dispatch frame must not reappear merely to keep
     // a device-mode test alive.
 
@@ -2935,12 +3067,14 @@ mod tests {
             .expect("local fs ResourceRef"),
             "encoding": "utf8",
         });
-        let frame = carrier_v1_call(
+        let frame = canonical_carrier_call(
             42,
             "fs.read",
             serde_json::to_vec(&args).expect("encode args"),
         );
-        session_tx.set_negotiated_contract(1);
+        session_tx.set_negotiated_contract(
+            crate::daemon::invocation::bidi::state::presence::CANONICAL_SESSION_CARRIER_VERSION,
+        );
 
         disp.handle_down(frame, &session_tx)
             .await

@@ -32,10 +32,55 @@ import builtins
 import collections.abc
 import google.protobuf.descriptor
 import google.protobuf.internal.containers
+import google.protobuf.internal.enum_type_wrapper
 import google.protobuf.message
+import sys
 import typing
 
+if sys.version_info >= (3, 10):
+    import typing as typing_extensions
+else:
+    import typing_extensions
+
 DESCRIPTOR: google.protobuf.descriptor.FileDescriptor
+
+class _InvocationCallMode:
+    ValueType = typing.NewType("ValueType", builtins.int)
+    V: typing_extensions.TypeAlias = ValueType
+
+class _InvocationCallModeEnumTypeWrapper(google.protobuf.internal.enum_type_wrapper._EnumTypeWrapper[_InvocationCallMode.ValueType], builtins.type):
+    DESCRIPTOR: google.protobuf.descriptor.EnumDescriptor
+    INVOCATION_CALL_MODE_UNSPECIFIED: _InvocationCallMode.ValueType  # 0
+    INVOCATION_CALL_MODE_RPC: _InvocationCallMode.ValueType  # 1
+    INVOCATION_CALL_MODE_STREAM: _InvocationCallMode.ValueType  # 2
+    INVOCATION_CALL_MODE_BIDI: _InvocationCallMode.ValueType  # 3
+
+class InvocationCallMode(_InvocationCallMode, metaclass=_InvocationCallModeEnumTypeWrapper):
+    """── Carrier-unified session dispatch frames (mini-RFC, T2.1) ──────
+
+    The session channel's business frames in canonical protocol shape.
+    DispatchCall carries the ORIGINAL caller's Envelope verbatim — the
+    authority forwards, never mints or rewrites (a rewrite would destroy the
+    caller signature). DispatchResult closes the receipt chain at the
+    authority hop: the terminal frame carries the callee-signed execution
+    receipt. DEC-F004 fixed the three review points: the authority stays OFF
+    the receipt chain (forwarding fact goes to the authority-local ledger),
+    reverse call_ids stay 16-byte nonces (they cross authority boundaries),
+    and failures reuse axon.v1.Error single-track.
+
+    Transport method used to submit a canonical Invocation.
+
+    This is deliberately independent from the descriptor-bound admission
+    action. For example, an RPC may require the `stream` permission without
+    becoming a server-streaming transport call. Session carriers cannot infer
+    one fact from the other.
+    """
+
+INVOCATION_CALL_MODE_UNSPECIFIED: InvocationCallMode.ValueType  # 0
+INVOCATION_CALL_MODE_RPC: InvocationCallMode.ValueType  # 1
+INVOCATION_CALL_MODE_STREAM: InvocationCallMode.ValueType  # 2
+INVOCATION_CALL_MODE_BIDI: InvocationCallMode.ValueType  # 3
+global___InvocationCallMode = InvocationCallMode
 
 @typing.final
 class InvokeRequest(google.protobuf.message.Message):
@@ -866,19 +911,7 @@ global___MediaTimestamp = MediaTimestamp
 
 @typing.final
 class DispatchCall(google.protobuf.message.Message):
-    """── Carrier-unified session dispatch frames (mini-RFC, T2.1) ──────
-
-    The session channel's business frames in canonical protocol shape.
-    DispatchCall carries the ORIGINAL caller's Envelope verbatim — the
-    authority forwards, never mints or rewrites (a rewrite would destroy the
-    caller signature). DispatchResult closes the receipt chain at the
-    authority hop: the terminal frame carries the callee-signed execution
-    receipt. DEC-F004 fixed the three review points: the authority stays OFF
-    the receipt chain (forwarding fact goes to the authority-local ledger),
-    reverse call_ids stay 16-byte nonces (they cross authority boundaries),
-    and failures reuse axon.v1.Error single-track.
-
-    Authority → device: run one complete Invocation on the target.
+    """Authority → device: run one complete Invocation on the target.
 
     Erratum 2 (DEC-F004 landing audit): the RFC draft mapped
     `Dispatch.ability → envelope.ability`, but the Envelope does not
@@ -895,13 +928,15 @@ class DispatchCall(google.protobuf.message.Message):
 
     CALL_ID_FIELD_NUMBER: builtins.int
     REQUEST_FIELD_NUMBER: builtins.int
-    OPEN_BIDI_FIELD_NUMBER: builtins.int
+    CALL_MODE_FIELD_NUMBER: builtins.int
     call_id: builtins.int
     """Session-local routing correlation (not protocol identity; never
     part of signed bytes).
     """
-    open_bidi: builtins.bool
-    """true = long-lived local bidi semantics (the former BidiOpen)."""
+    call_mode: global___InvocationCallMode.ValueType
+    """Explicit transport method. Receivers reject UNSPECIFIED and must not
+    derive this value from descriptor admission_action.
+    """
     @property
     def request(self) -> global___InvokeRequest:
         """The complete canonical invocation, forwarded verbatim."""
@@ -911,10 +946,10 @@ class DispatchCall(google.protobuf.message.Message):
         *,
         call_id: builtins.int = ...,
         request: global___InvokeRequest | None = ...,
-        open_bidi: builtins.bool = ...,
+        call_mode: global___InvocationCallMode.ValueType = ...,
     ) -> None: ...
     def HasField(self, field_name: typing.Literal["request", b"request"]) -> builtins.bool: ...
-    def ClearField(self, field_name: typing.Literal["call_id", b"call_id", "open_bidi", b"open_bidi", "request", b"request"]) -> None: ...
+    def ClearField(self, field_name: typing.Literal["call_id", b"call_id", "call_mode", b"call_mode", "request", b"request"]) -> None: ...
 
 global___DispatchCall = DispatchCall
 
@@ -987,10 +1022,10 @@ class ReverseDispatchCall(google.protobuf.message.Message):
 
     CALL_ID_FIELD_NUMBER: builtins.int
     REQUEST_FIELD_NUMBER: builtins.int
-    OPEN_BIDI_FIELD_NUMBER: builtins.int
+    CALL_MODE_FIELD_NUMBER: builtins.int
     call_id: builtins.bytes
-    open_bidi: builtins.bool
-    """true = the reverse request opens long-lived bidi semantics."""
+    call_mode: global___InvocationCallMode.ValueType
+    """Explicit transport method, independent from descriptor admission_action."""
     @property
     def request(self) -> global___InvokeRequest:
         """Complete canonical invocation, same rationale as DispatchCall."""
@@ -1000,18 +1035,19 @@ class ReverseDispatchCall(google.protobuf.message.Message):
         *,
         call_id: builtins.bytes = ...,
         request: global___InvokeRequest | None = ...,
-        open_bidi: builtins.bool = ...,
+        call_mode: global___InvocationCallMode.ValueType = ...,
     ) -> None: ...
     def HasField(self, field_name: typing.Literal["request", b"request"]) -> builtins.bool: ...
-    def ClearField(self, field_name: typing.Literal["call_id", b"call_id", "open_bidi", b"open_bidi", "request", b"request"]) -> None: ...
+    def ClearField(self, field_name: typing.Literal["call_id", b"call_id", "call_mode", b"call_mode", "request", b"request"]) -> None: ...
 
 global___ReverseDispatchCall = ReverseDispatchCall
 
 @typing.final
 class ReverseBidiInput(google.protobuf.message.Message):
     """Device → authority input for a reverse bidi request opened by
-    ReverseDispatchCall.open_bidi. The 16-byte call_id is the reverse
-    request nonce, not the authority→callee session-local call id.
+    ReverseDispatchCall.call_mode = INVOCATION_CALL_MODE_BIDI. The 16-byte
+    call_id is the reverse request nonce, not the authority→callee session-local
+    call id.
     """
 
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
@@ -1092,8 +1128,9 @@ class SessionOpenExt(google.protobuf.message.Message):
     CONTRACT_VERSION_FIELD_NUMBER: builtins.int
     CLAIMANT_BOOT_NONCE_FIELD_NUMBER: builtins.int
     contract_version: builtins.int
-    """Dispatch-frame contract version. This RFC = 1. Receivers reject
-    0/absent because those values cannot carry canonical Invocation frames.
+    """Dispatch-frame contract version. Version 2 carries explicit call_mode.
+    Receivers reject older values because they cannot distinguish transport
+    mode from descriptor-bound admission action.
     """
     claimant_boot_nonce: builtins.bytes
     """T1.2: random 16 bytes per process boot — the session slot

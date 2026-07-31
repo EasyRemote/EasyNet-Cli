@@ -18060,7 +18060,10 @@ for required, code in (
     ("fn require_local_runtime(", "local_runtime_requirement_helper_missing"),
     ("requires canonical destination runtime assembly", "assembly_diagnostic_missing"),
     ("requires canonical runtime admission graph", "admission_graph_requirement_missing"),
-    ("not published for session.open carrier-v1", "bidi_publication_requirement_missing"),
+    (
+        "not published for session.open canonical carrier",
+        "bidi_publication_requirement_missing",
+    ),
 ):
     if required not in text:
         raise SystemExit(f"local_session_runtime_assembly:{code}")

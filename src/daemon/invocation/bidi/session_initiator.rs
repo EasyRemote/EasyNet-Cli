@@ -257,7 +257,8 @@ const REASON_BIDI_DOWN_SEQUENCE: &str = "AXON_BIDI_DOWN_SEQUENCE";
 /// drives whatever response shape it needs through the supplied
 /// `outbound` sender.
 /// Highest dispatch-frame contract this device speaks (DEC-F004).
-pub const DEVICE_DISPATCH_CONTRACT_VERSION: u32 = 1;
+pub const DEVICE_DISPATCH_CONTRACT_VERSION: u32 =
+    crate::daemon::invocation::bidi::state::presence::CANONICAL_SESSION_CARRIER_VERSION;
 
 /// T1.2 claimant fingerprint: one random 16-byte nonce per process
 /// boot. Lets the hub distinguish a same-device restart (same URA,
@@ -340,12 +341,12 @@ impl SessionUpSender {
             .store(version, std::sync::atomic::Ordering::Release);
     }
 
-    /// True when this session speaks carrier-v1 dispatch frames.
+    /// True when this session speaks canonical carrier dispatch frames.
     #[must_use]
-    pub fn carrier_v1(&self) -> bool {
+    pub fn canonical_carrier(&self) -> bool {
         self.negotiated_contract
             .load(std::sync::atomic::Ordering::Acquire)
-            >= 1
+            >= DEVICE_DISPATCH_CONTRACT_VERSION
     }
 
     /// Stamp the next sequence number and enqueue under the
@@ -381,7 +382,7 @@ impl SessionUpSender {
     }
 
     /// Send any up-direction payload on the live session, stamping
-    /// the next monotonic sequence number. Carrier-v1 reply frames
+    /// the next monotonic sequence number. Canonical carrier reply frames
     /// (DispatchResult / ReverseDispatchCall) ride this.
     pub async fn send_payload(
         &self,

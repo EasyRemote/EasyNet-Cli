@@ -825,7 +825,7 @@ async fn invoke_stream_dispatches_remote_selected_route_over_presence_session() 
             TARGET_DEVICE_URA.to_string(),
             target_tx,
             crate::daemon::invocation::bidi::state::presence::SessionContract {
-                version: 1,
+                version: crate::daemon::invocation::bidi::state::presence::CANONICAL_SESSION_CARRIER_VERSION,
                 claimant_boot_nonce: vec![1; 16],
             },
         )

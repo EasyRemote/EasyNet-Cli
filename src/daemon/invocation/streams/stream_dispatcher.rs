@@ -44,7 +44,7 @@ use crate::daemon::invocation::admission::target_gate::{
     TargetGate,
 };
 use crate::daemon::invocation::bidi::session_wire::{
-    build_carrier_v1_dispatch_frame, require_canonical_dispatch_session,
+    build_canonical_dispatch_frame, require_canonical_dispatch_session,
 };
 use crate::daemon::invocation::bidi::state::pending_dispatch::{
     DispatchResult, DispatchStreamEvent, PendingStreamHandle,
@@ -397,11 +397,7 @@ impl StreamDispatcher {
             "InvokeStream",
         )
         .await?;
-        let dispatch_frame = build_carrier_v1_dispatch_frame(
-            call_id,
-            forwarded_request,
-            matches!(call_mode, CallMode::Bidi),
-        );
+        let dispatch_frame = build_canonical_dispatch_frame(call_id, forwarded_request, call_mode);
         match sender.try_send(Ok(dispatch_frame)) {
             Ok(()) => {}
             Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {

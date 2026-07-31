@@ -1556,7 +1556,10 @@ async fn identity_revoke_user_pubkey_removes_matching_presence_after_write() {
         .insert_negotiated_with_trust(
             user_ura.to_string(),
             tx,
-            crate::daemon::invocation::bidi::state::presence::SessionContract::new(1, vec![1; 16]),
+            crate::daemon::invocation::bidi::state::presence::SessionContract::new(
+                crate::daemon::invocation::bidi::state::presence::CANONICAL_SESSION_CARRIER_VERSION,
+                vec![1; 16],
+            ),
             crate::daemon::invocation::bidi::state::presence::SessionTrustContext::user_pubkey(
                 user_pubkey_b64.clone(),
             ),
@@ -3204,7 +3207,7 @@ async fn dispatch_remote_rpc_times_out_when_target_never_replies() {
             WEDGED_DEVICE_URA.to_string(),
             wedged_tx,
             crate::daemon::invocation::bidi::state::presence::SessionContract {
-                version: 1,
+                version: crate::daemon::invocation::bidi::state::presence::CANONICAL_SESSION_CARRIER_VERSION,
                 claimant_boot_nonce: vec![7; 16],
             },
         )
@@ -3386,7 +3389,7 @@ async fn dispatch_remote_rpc_rejects_receipt_history_with_generic_resource_subje
             REMOTE_DEVICE_URA.to_string(),
             remote_tx,
             crate::daemon::invocation::bidi::state::presence::SessionContract {
-                version: 1,
+                version: crate::daemon::invocation::bidi::state::presence::CANONICAL_SESSION_CARRIER_VERSION,
                 claimant_boot_nonce: vec![13; 16],
             },
         )
@@ -3456,7 +3459,7 @@ async fn dispatch_remote_rpc_allows_receipt_history_with_runtime_state_read_subj
             REMOTE_DEVICE_URA.to_string(),
             remote_tx,
             crate::daemon::invocation::bidi::state::presence::SessionContract {
-                version: 1,
+                version: crate::daemon::invocation::bidi::state::presence::CANONICAL_SESSION_CARRIER_VERSION,
                 claimant_boot_nonce: vec![17; 16],
             },
         )
@@ -3497,9 +3500,9 @@ async fn dispatch_remote_rpc_allows_receipt_history_with_runtime_state_read_subj
 
     let call = match frame.payload {
         Some(axon_sdk::pb::axon::v1::invoke_bidi_down::Payload::DispatchCall(call)) => call,
-        other => panic!("expected carrier-v1 DispatchCall, got {other:?}"),
+        other => panic!("expected canonical carrier DispatchCall, got {other:?}"),
     };
-    let request = call.request.expect("carrier-v1 request");
+    let request = call.request.expect("canonical carrier request");
     assert_eq!(invocation_function_name(&request), HISTORY_READ);
     assert_eq!(
         request
@@ -3627,7 +3630,7 @@ async fn dispatch_remote_rpc_allows_catalogue_read_with_runtime_read_subject() {
             REMOTE_DEVICE_URA.to_string(),
             remote_tx,
             crate::daemon::invocation::bidi::state::presence::SessionContract {
-                version: 1,
+                version: crate::daemon::invocation::bidi::state::presence::CANONICAL_SESSION_CARRIER_VERSION,
                 claimant_boot_nonce: vec![11; 16],
             },
         )
@@ -3668,9 +3671,9 @@ async fn dispatch_remote_rpc_allows_catalogue_read_with_runtime_read_subject() {
 
     let call = match frame.payload {
         Some(axon_sdk::pb::axon::v1::invoke_bidi_down::Payload::DispatchCall(call)) => call,
-        other => panic!("expected carrier-v1 DispatchCall, got {other:?}"),
+        other => panic!("expected canonical carrier DispatchCall, got {other:?}"),
     };
-    let request = call.request.expect("carrier-v1 request");
+    let request = call.request.expect("canonical carrier request");
     assert_eq!(invocation_function_name(&request), CATALOGUE_READ);
     assert_eq!(
         request
@@ -3683,10 +3686,10 @@ async fn dispatch_remote_rpc_allows_catalogue_read_with_runtime_read_subject() {
 }
 
 #[tokio::test]
-async fn dispatch_remote_rpc_carrier_v1_preserves_signed_canonical_material() {
+async fn dispatch_remote_rpc_canonical_carrier_preserves_signed_canonical_material() {
     use ed25519_dalek::Verifier as _;
 
-    const REMOTE_DEVICE_URA: &str = "easynet:///r/test-realm/device/remote-device";
+    const REMOTE_DEVICE_URA: &str = "easynet:///r/test-realm/device/client-1";
 
     let pending = Arc::new(PendingDispatchMap::new());
     let svc = make_service().with_pending(Arc::clone(&pending));
@@ -3697,7 +3700,7 @@ async fn dispatch_remote_rpc_carrier_v1_preserves_signed_canonical_material() {
             REMOTE_DEVICE_URA.to_string(),
             remote_tx,
             crate::daemon::invocation::bidi::state::presence::SessionContract {
-                version: 1,
+                version: crate::daemon::invocation::bidi::state::presence::CANONICAL_SESSION_CARRIER_VERSION,
                 claimant_boot_nonce: vec![9; 16],
             },
         )
@@ -3718,24 +3721,32 @@ async fn dispatch_remote_rpc_carrier_v1_preserves_signed_canonical_material() {
             .into_inner();
 
     let dispatcher = svc.unary_dispatcher();
-    let dispatch_task = tokio::spawn(async move {
+    let mut dispatch_task = tokio::spawn(async move {
         dispatcher
             .dispatch_remote_rpc_selected_route(&request, &selected_route, CallMode::Rpc)
             .await
     });
-    let frame = remote_rx
-        .recv()
-        .await
-        .expect("carrier frame delivered to v1 presence target")
-        .expect("presence dispatch frame ok")
-        .frame;
+    let frame = tokio::select! {
+        frame = remote_rx.recv() => frame
+            .expect("carrier frame delivered to canonical presence target")
+            .expect("presence dispatch frame ok")
+            .frame,
+        outcome = &mut dispatch_task => {
+            panic!("dispatch completed before publishing its canonical carrier frame: {outcome:?}")
+        }
+    };
     dispatch_task.abort();
 
     let call = match frame.payload {
         Some(axon_sdk::pb::axon::v1::invoke_bidi_down::Payload::DispatchCall(call)) => call,
-        other => panic!("expected carrier-v1 DispatchCall, got {other:?}"),
+        other => panic!("expected canonical carrier DispatchCall, got {other:?}"),
     };
-    let request = call.request.expect("carrier-v1 request");
+    let request = call.request.expect("canonical carrier request");
+    assert_eq!(
+        crate::daemon::invocation::bidi::session_wire::canonical_dispatch_call_mode(call.call_mode),
+        Ok(CallMode::Rpc),
+        "remote Invoke must carry its explicit transport method"
+    );
     assert_eq!(invocation_function_name(&request), "shell.run");
     assert_eq!(
         crate::daemon::invocation::dispatch::invocation_wire::descriptor_ref_from_invocation_target(
@@ -3746,7 +3757,7 @@ async fn dispatch_remote_rpc_carrier_v1_preserves_signed_canonical_material() {
         .unwrap(),
         descriptor_ref
     );
-    let envelope = request.envelope.expect("carrier-v1 envelope");
+    let envelope = request.envelope.expect("canonical carrier envelope");
     let signature = envelope
         .caller_signature
         .as_ref()

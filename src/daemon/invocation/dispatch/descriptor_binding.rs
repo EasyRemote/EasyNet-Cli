@@ -6,7 +6,7 @@
 //              descriptor-bound ability reference that Axon admission must
 //              verify for a specific call mode.
 //
-// This module exists so unary, stream, bidi, and carrier-v1 session ingress
+// This module exists so unary, stream, bidi, and canonical session ingress
 // cannot drift on descriptor-version binding. Product routing selects the
 // owner/callee/ability. Axon runtime registration selects the descriptor proof
 // version. This boundary joins the two and returns the only string that may be
@@ -320,25 +320,6 @@ impl RuntimeBoundAbility {
             )));
         }
         Ok(DescriptorBoundAbilityRef { descriptor_ref })
-    }
-}
-
-pub(crate) fn signed_call_mode_from_target(
-    surface: &'static str,
-    callee_ura: &str,
-    target: Option<&InvocationTarget>,
-) -> Result<CallMode, Status> {
-    let descriptor_ref = descriptor_ref_from_invocation_target(surface, callee_ura, target)?;
-    let action = axon_sdk::invocation::admission_action_from_descriptor_ref(&descriptor_ref)
-        .map_err(|err| {
-            Status::invalid_argument(format!(
-                "{surface}: signed descriptor ref `{descriptor_ref}` has invalid admission action: {err}"
-            ))
-        })?;
-    if action == crate::daemon::ability::descriptors::AdmissionAction::Stream.as_str() {
-        Ok(CallMode::Stream)
-    } else {
-        Ok(CallMode::Rpc)
     }
 }
 
@@ -844,7 +825,7 @@ mod tests {
 
         let got = bound("terminal.list")
             .signed_descriptor_ref_from_target(
-                "test carrier-v1",
+                "test canonical carrier",
                 CALLEE,
                 CallMode::Rpc,
                 Some(&target),
@@ -868,7 +849,7 @@ mod tests {
 
         let err = bound("terminal.list")
             .signed_descriptor_ref_from_target(
-                "test carrier-v1",
+                "test canonical carrier",
                 CALLEE,
                 CallMode::Rpc,
                 Some(&target),

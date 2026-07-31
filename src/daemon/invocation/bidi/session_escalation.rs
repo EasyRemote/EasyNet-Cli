@@ -349,7 +349,7 @@ impl SessionEscalationHandle {
 
     /// Relay one already-signed canonical bidi invocation through the
     /// device-owned session. This is the reverse-channel equivalent of
-    /// `InvokeBidi`: open is a `ReverseDispatchCall(open_bidi=true)`, input is
+    /// `InvokeBidi`: open is a `ReverseDispatchCall(call_mode=BIDI)`, input is
     /// `ReverseBidiInput`, and output returns as `ReverseDispatchResult`.
     pub async fn escalate_bidi(
         &self,
@@ -591,7 +591,7 @@ impl EscalationCorrelation {
 
     /// Deliver one protobuf reverse-dispatch result frame. Unary reverse
     /// dispatch must be terminal and complete a one-shot waiter. Stream reverse
-    /// dispatch follows the same checkpoint geometry as normal carrier-v1
+    /// dispatch follows the same checkpoint geometry as normal canonical carrier
     /// streams: admission-only, zero or more data chunks, then terminal.
     pub fn deliver_reverse_dispatch_result(
         &self,
@@ -1161,11 +1161,13 @@ async fn send_escalation_request_inner(
         EscalationInvocation::Canonical(request) => {
             use axon_sdk::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
             use axon_sdk::pb::axon::v1::ReverseDispatchCall;
+            let call_mode =
+                super::session_wire::canonical_call_mode_wire(axon_sdk::invocation::CallMode::Rpc);
             up_tx
                 .send_payload(UpPayload::ReverseDispatchCall(ReverseDispatchCall {
                     call_id: call_id.to_vec(),
                     request: Some(*request),
-                    open_bidi: false,
+                    call_mode,
                 }))
                 .await
                 .map_err(|err| err.to_string())
@@ -1173,6 +1175,9 @@ async fn send_escalation_request_inner(
         EscalationInvocation::CanonicalStream(request) => {
             use axon_sdk::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
             use axon_sdk::pb::axon::v1::{InvokeRequest, ReverseDispatchCall};
+            let call_mode = super::session_wire::canonical_call_mode_wire(
+                axon_sdk::invocation::CallMode::Stream,
+            );
             let request = InvokeRequest {
                 envelope: request.envelope,
                 target: request.target,
@@ -1187,7 +1192,7 @@ async fn send_escalation_request_inner(
                 .send_payload(UpPayload::ReverseDispatchCall(ReverseDispatchCall {
                     call_id: call_id.to_vec(),
                     request: Some(request),
-                    open_bidi: false,
+                    call_mode,
                 }))
                 .await
                 .map_err(|err| err.to_string())
@@ -1195,11 +1200,13 @@ async fn send_escalation_request_inner(
         EscalationInvocation::CanonicalBidi(request) => {
             use axon_sdk::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
             use axon_sdk::pb::axon::v1::ReverseDispatchCall;
+            let call_mode =
+                super::session_wire::canonical_call_mode_wire(axon_sdk::invocation::CallMode::Bidi);
             up_tx
                 .send_payload(UpPayload::ReverseDispatchCall(ReverseDispatchCall {
                     call_id: call_id.to_vec(),
                     request: Some(*request),
-                    open_bidi: true,
+                    call_mode,
                 }))
                 .await
                 .map_err(|err| err.to_string())
@@ -1758,7 +1765,13 @@ mod tests {
             .expect("open frame present");
         let call_id = match open.payload {
             Some(axon_sdk::pb::axon::v1::invoke_bidi_up::Payload::ReverseDispatchCall(call)) => {
-                assert!(call.open_bidi, "reverse bidi open must set open_bidi");
+                assert_eq!(
+                    crate::daemon::invocation::bidi::session_wire::canonical_dispatch_call_mode(
+                        call.call_mode,
+                    ),
+                    Ok(axon_sdk::invocation::CallMode::Bidi),
+                    "reverse bidi open must carry bidi call_mode"
+                );
                 assert_eq!(call.call_id.len(), 16);
                 call.call_id
             }

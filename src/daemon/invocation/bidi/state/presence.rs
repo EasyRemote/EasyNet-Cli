@@ -326,7 +326,7 @@ impl PresenceSlot {
 /// dispatch contract version the claimant declared plus its per-boot
 /// claimant fingerprint (T1.2). One value object so registration
 /// sites cannot pass half the negotiation.
-pub const CANONICAL_SESSION_CARRIER_VERSION: u32 = 1;
+pub const CANONICAL_SESSION_CARRIER_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionContract {
@@ -759,7 +759,7 @@ mod tests {
                 "easynet:///r/t/device/d1".into(),
                 tx1,
                 SessionContract {
-                    version: 1,
+                    version: CANONICAL_SESSION_CARRIER_VERSION,
                     claimant_boot_nonce: vec![1; 16],
                 },
             )
@@ -769,7 +769,7 @@ mod tests {
         assert_eq!(
             reg.lookup_dispatch_session("easynet:///r/t/device/d1")
                 .map(|session| session.contract_version),
-            Some(1)
+            Some(CANONICAL_SESSION_CARRIER_VERSION)
         );
 
         // A different claimant displacing the slot surfaces the prior

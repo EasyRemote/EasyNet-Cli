@@ -418,7 +418,7 @@ enum SessionDispatch {
 }
 EOF
   cat >"$CLI/src/daemon/invocation/dispatch/local_session_dispatcher.rs" <<'EOF'
-fn carrier_v1_control_failure(call_id: u64) -> DispatchResult {
+fn canonical_carrier_control_failure(call_id: u64) -> DispatchResult {
     DispatchResult {
         call_id,
         terminal: false,

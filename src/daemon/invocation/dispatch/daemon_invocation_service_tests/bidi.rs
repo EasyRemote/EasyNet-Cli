@@ -596,7 +596,13 @@ async fn remote_bidi_open_frame_is_canonical_and_fail_closed() {
     match frame.frame.payload.expect("payload") {
         axon_sdk::pb::axon::v1::invoke_bidi_down::Payload::DispatchCall(call) => {
             assert_eq!(call.call_id, 7);
-            assert!(call.open_bidi, "bidi open must set open_bidi");
+            assert_eq!(
+                crate::daemon::invocation::bidi::session_wire::canonical_dispatch_call_mode(
+                    call.call_mode
+                ),
+                Ok(CallMode::Bidi),
+                "bidi open must carry bidi call_mode"
+            );
             let request = call
                 .request
                 .expect("complete InvokeRequest rides the frame");

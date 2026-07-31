@@ -7601,7 +7601,7 @@ if local_session_dispatcher.exists():
         if token not in text:
             add("R64_SESSION_CANONICAL_CARRIER_FORK", local_session_dispatcher, 1, detail)
 
-    control_failure = rust_method_body(text, "carrier_v1_control_failure")
+    control_failure = rust_method_body(text, "canonical_carrier_control_failure")
     if control_failure is None:
         add(
             "R64_SESSION_CANONICAL_CARRIER_FORK",
@@ -7661,7 +7661,7 @@ if bidi_dispatcher.exists():
             1,
             "hub dispatch must not dual-read the retired JSON invocation result",
         )
-    if "fn classify_carrier_v1_result" not in text:
+    if "fn classify_canonical_carrier_result" not in text:
         add(
             "R64_SESSION_CANONICAL_CARRIER_FORK",
             bidi_dispatcher,

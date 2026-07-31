@@ -52,8 +52,9 @@ use crate::daemon::invocation::admission::target_gate::{
     TargetGate,
 };
 use crate::daemon::invocation::bidi::session_wire::{
-    build_carrier_v1_dispatch_frame, call_id_hex, require_canonical_dispatch_session,
-    RequestOutcome, SessionContentEnvelope, SessionDispatch, SessionRequestError,
+    build_canonical_dispatch_frame, call_id_hex, canonical_dispatch_call_mode,
+    require_canonical_dispatch_session, RequestOutcome, SessionContentEnvelope, SessionDispatch,
+    SessionRequestError,
 };
 use crate::daemon::invocation::bidi::state::presence::CANONICAL_SESSION_CARRIER_VERSION;
 use crate::daemon::invocation::dispatch::cancellation::RegisteredInvocationLifecycle;
@@ -822,7 +823,7 @@ impl BidiDispatcher {
             "InvokeBidi",
         )
         .await?;
-        let open_frame = build_carrier_v1_dispatch_frame(call_id, forwarded_request, true);
+        let open_frame = build_canonical_dispatch_frame(call_id, forwarded_request, CallMode::Bidi);
         match sender.try_send(Ok(open_frame)) {
             Ok(()) => {}
             Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
@@ -1014,7 +1015,7 @@ impl BidiDispatcher {
                     UpPayload::Control(_) | UpPayload::EnvelopeOpen(_) => continue,
                     // Direction discipline: dispatch results flow
                     // device→hub on the device's own session, never on
-                    // the caller's up stream — a carrier-v1 frame here
+                    // the caller's up stream — a canonical carrier frame here
                     // is a peer bug, not a negotiation gap.
                     UpPayload::DispatchResult(_)
                     | UpPayload::ReverseDispatchCall(_)
@@ -1822,7 +1823,7 @@ pub(crate) fn map_local_bidi_up_payload(
             _ => LocalBidiUpFrame::Ignore,
         },
         (LocalBidiWireKind::Pty, UpPayload::Control(_)) => LocalBidiUpFrame::Ignore,
-        // Carrier-v1 frames (DEC-F004): not local-bidi wire traffic.
+        // Canonical carrier frames (DEC-F004): not local-bidi wire traffic.
         (_, UpPayload::DispatchResult(_))
         | (_, UpPayload::ReverseDispatchCall(_))
         | (_, UpPayload::ReverseBidiInput(_)) => LocalBidiUpFrame::Ignore,
@@ -2217,7 +2218,7 @@ impl BidiDispatcher {
         let envelope_open = invoke_request_to_bidi_open(request)?;
         let ability =
             crate::daemon::invocation::dispatch::invocation_wire::function_name_from_invocation_target(
-                "carrier-v1 reverse bidi call",
+                "canonical carrier reverse bidi call",
                 envelope_open.target.as_ref(),
             )?;
         let selection = self.resolve_bidi_route(&envelope_open).await?;
@@ -2460,6 +2461,32 @@ pub(crate) fn push_session_request_result(
     }
 }
 
+fn reject_reverse_dispatch_call(
+    presence: &Arc<PresenceRegistry>,
+    caller_ura: &str,
+    call_id: [u8; 16],
+    reason: impl Into<String>,
+) {
+    use axon_sdk::pb::axon::v1::ReverseDispatchResult;
+
+    let id_hex = call_id_hex(&call_id);
+    let frame = DispatchFrame::control(InvokeBidiDown {
+        payload: Some(DownPayload::ReverseDispatchResult(ReverseDispatchResult {
+            call_id: call_id.to_vec(),
+            terminal: true,
+            failure: Some(axon_sdk::pb::axon::v1::Error {
+                code: "INVALID_ARGUMENT".to_string(),
+                message: reason.into(),
+                retryable: false,
+                ..Default::default()
+            }),
+            ..Default::default()
+        })),
+        ..Default::default()
+    });
+    let _ = push_session_request_result(presence, caller_ura, &id_hex, frame);
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SessionRequestResultPush {
     Queued {
@@ -2531,7 +2558,7 @@ fn remove_deferred_self_revoke_presence(
 /// Map a canonical typed failure into the session-plane projection used by
 /// pending callers. `error` is the human-readable projection; `failure`
 /// preserves the typed class.
-pub(crate) fn pending_result_from_carrier_v1(
+pub(crate) fn pending_result_from_canonical_carrier(
     result: &axon_sdk::pb::axon::v1::DispatchResult,
 ) -> DispatchResult {
     DispatchResult {
@@ -2556,7 +2583,7 @@ enum CarrierDispatchEvent {
     Terminal(Box<DispatchResult>),
 }
 
-fn classify_carrier_v1_result(
+fn classify_canonical_carrier_result(
     result: axon_sdk::pb::axon::v1::DispatchResult,
 ) -> Result<(u64, CarrierDispatchEvent), (u64, DispatchResult)> {
     let call_id = result.call_id;
@@ -2569,7 +2596,7 @@ fn classify_carrier_v1_result(
         && result.terminal_receipt.is_none()
         && result.payload.is_empty()
     {
-        return Err((call_id, pending_result_from_carrier_v1(&result)));
+        return Err((call_id, pending_result_from_canonical_carrier(&result)));
     }
 
     // Pending unary and stream dispatches intentionally occupy disjoint
@@ -2598,7 +2625,9 @@ fn classify_carrier_v1_result(
         }
         return Ok((
             call_id,
-            CarrierDispatchEvent::Terminal(Box::new(pending_result_from_carrier_v1(&result))),
+            CarrierDispatchEvent::Terminal(Box::new(pending_result_from_canonical_carrier(
+                &result,
+            ))),
         ));
     }
 
@@ -2617,7 +2646,9 @@ fn classify_carrier_v1_result(
         }
         return Ok((
             call_id,
-            CarrierDispatchEvent::Terminal(Box::new(pending_result_from_carrier_v1(&result))),
+            CarrierDispatchEvent::Terminal(Box::new(pending_result_from_canonical_carrier(
+                &result,
+            ))),
         ));
     }
 
@@ -2646,7 +2677,7 @@ fn classify_carrier_v1_result(
         ));
     }
     if result.failure.is_some() {
-        return Err((call_id, pending_result_from_carrier_v1(&result)));
+        return Err((call_id, pending_result_from_canonical_carrier(&result)));
     }
     Ok((call_id, CarrierDispatchEvent::Chunk(result.payload)))
 }
@@ -2665,7 +2696,7 @@ pub(crate) fn session_failure_from_axon_error(
     )
 }
 
-/// Hub → device reply for a carrier-v1 reverse request. Failures ride
+/// Hub → device reply for a canonical carrier reverse request. Failures ride
 /// the single-track typed Error (DEC-F004 point 3).
 pub(crate) fn build_reverse_dispatch_result_frame(
     call_id: [u8; 16],
@@ -2737,24 +2768,6 @@ pub(crate) fn build_reverse_dispatch_result_frame(
         })),
         ..InvokeBidiDown::default()
     })
-}
-
-fn reverse_dispatch_request_is_stream(request: &axon_sdk::pb::axon::v1::InvokeRequest) -> bool {
-    crate::daemon::invocation::dispatch::invocation_wire::ability_binding_from_invocation_target(
-        "carrier-v1 reverse call",
-        request.target.as_ref(),
-    )
-    .ok()
-    .and_then(|binding| {
-        axon_sdk::invocation::canonical_ability_descriptor_ref(binding)
-            .ok()
-            .and_then(|canonical| {
-                canonical
-                    .rsplit_once('!')
-                    .map(|(_, action)| action == "stream")
-            })
-    })
-    .unwrap_or(false)
 }
 
 async fn forward_reverse_dispatch_stream_results(
@@ -2918,7 +2931,7 @@ fn reverse_dispatch_frame_is_terminal(frame: &DispatchFrame) -> bool {
 }
 
 /// Terminal-result settlement shared by the JSON `Result` arm and the
-/// carrier-v1 `DispatchResult` arm: streaming map first, then unary map,
+/// canonical carrier `DispatchResult` arm: streaming map first, then unary map,
 /// every miss surfaced (DEC-F004 — one settle path, not two).
 ///
 /// Deliberately non-blocking: this runs on the session drain — the
@@ -3131,15 +3144,15 @@ async fn drain_session_runtime_up_stream(
                 );
                 continue;
             }
-            // Carrier-v1 has one checkpoint geometry per call mode. The
+            // Canonical carrier has one checkpoint geometry per call mode. The
             // even/odd pending-call namespaces make mode classification exact.
             Some(UpPayload::DispatchResult(result)) => {
-                match classify_carrier_v1_result(result) {
+                match classify_canonical_carrier_result(result) {
                     Ok((call_id, CarrierDispatchEvent::Admission(receipt))) => {
                         let receipt = *receipt;
                         crate::op_event!(
                             component = session_accept,
-                            kind = carrier_v1_admission_receipt_received,
+                            kind = canonical_carrier_admission_receipt_received,
                             caller = caller_ura,
                             call_id = call_id,
                             receipt_state = receipt.state,
@@ -3188,7 +3201,7 @@ async fn drain_session_runtime_up_stream(
                 let Ok(call_id) = <[u8; 16]>::try_from(input.call_id.as_slice()) else {
                     crate::op_event!(
                         component = session_accept,
-                        kind = carrier_v1_reverse_bidi_input_bad_id,
+                        kind = canonical_carrier_reverse_bidi_input_bad_id,
                         caller = caller_ura,
                         id_len = input.call_id.len(),
                     );
@@ -3202,7 +3215,7 @@ async fn drain_session_runtime_up_stream(
                     let Some(ingress) = guard.get_mut(&call_id) else {
                         crate::op_event!(
                             component = session_accept,
-                            kind = carrier_v1_reverse_bidi_input_no_open,
+                            kind = canonical_carrier_reverse_bidi_input_no_open,
                             caller = caller_ura,
                             call_id = call_id_hex(&call_id),
                         );
@@ -3217,7 +3230,7 @@ async fn drain_session_runtime_up_stream(
                 };
                 crate::op_event!(
                     component = session_accept,
-                    kind = carrier_v1_reverse_bidi_input,
+                    kind = canonical_carrier_reverse_bidi_input,
                     caller = caller_ura,
                     call_id = call_id_hex(&call_id),
                     sequence = sequence,
@@ -3235,7 +3248,7 @@ async fn drain_session_runtime_up_stream(
                 let Ok(call_id) = <[u8; 16]>::try_from(call.call_id.as_slice()) else {
                     crate::op_event!(
                         component = session_accept,
-                        kind = carrier_v1_reverse_call_bad_id,
+                        kind = canonical_carrier_reverse_call_bad_id,
                         caller = caller_ura,
                         id_len = call.call_id.len(),
                     );
@@ -3244,27 +3257,61 @@ async fn drain_session_runtime_up_stream(
                 let Some(request) = call.request else {
                     crate::op_event!(
                         component = session_accept,
-                        kind = carrier_v1_reverse_call_missing_request,
+                        kind = canonical_carrier_reverse_call_missing_request,
                         caller = caller_ura,
                         call_id = call_id_hex(&call_id),
                     );
+                    reject_reverse_dispatch_call(
+                        &presence,
+                        &caller_ura,
+                        call_id,
+                        "canonical ReverseDispatchCall requires a complete InvokeRequest",
+                    );
                     continue;
                 };
-                let Ok(ability) =
+                let call_mode = match canonical_dispatch_call_mode(call.call_mode) {
+                    Ok(call_mode) => call_mode,
+                    Err(error) => {
+                        crate::op_event!(
+                            component = session_accept,
+                            kind = canonical_reverse_call_invalid_mode,
+                            caller = caller_ura,
+                            call_id = call_id_hex(&call_id),
+                            error = error,
+                        );
+                        reject_reverse_dispatch_call(
+                            &presence,
+                            &caller_ura,
+                            call_id,
+                            format!("canonical ReverseDispatchCall call_mode invalid: {error}"),
+                        );
+                        continue;
+                    }
+                };
+                let ability =
+                    match
                     crate::daemon::invocation::dispatch::invocation_wire::function_name_from_invocation_target(
-                        "carrier-v1 reverse call",
+                        "canonical carrier reverse call",
                         request.target.as_ref(),
                     )
-                else {
-                    crate::op_event!(
-                        component = session_accept,
-                        kind = carrier_v1_reverse_call_missing_typed_target,
-                        caller = caller_ura,
-                        call_id = call_id_hex(&call_id),
-                    );
-                    continue;
-                };
-                let ability = ability.to_string();
+                    {
+                        Ok(ability) => ability.to_string(),
+                        Err(status) => {
+                            crate::op_event!(
+                                component = session_accept,
+                                kind = canonical_carrier_reverse_call_missing_typed_target,
+                                caller = caller_ura,
+                                call_id = call_id_hex(&call_id),
+                            );
+                            reject_reverse_dispatch_call(
+                                &presence,
+                                &caller_ura,
+                                call_id,
+                                status.message(),
+                            );
+                            continue;
+                        }
+                    };
                 let id_hex = call_id_hex(&call_id);
                 crate::op_event!(
                     component = daemon_invocation,
@@ -3278,10 +3325,10 @@ async fn drain_session_runtime_up_stream(
                 let dispatcher_for_request = dispatcher.clone();
                 let presence_for_reply = Arc::clone(&presence);
                 let caller_ura_for_reply = caller_ura.clone();
-                if call.open_bidi {
+                if matches!(call_mode, CallMode::Bidi) {
                     crate::op_event!(
                         component = session_accept,
-                        kind = carrier_v1_reverse_bidi_opened,
+                        kind = canonical_carrier_reverse_bidi_opened,
                         caller = caller_ura,
                         call_id = id_hex,
                         ability = ability,
@@ -3342,7 +3389,7 @@ async fn drain_session_runtime_up_stream(
                     continue;
                 }
                 tokio::spawn(async move {
-                    if reverse_dispatch_request_is_stream(&request) {
+                    if matches!(call_mode, CallMode::Stream) {
                         match dispatcher_for_request
                             .dispatch_canonical_session_stream(request)
                             .await
@@ -3642,7 +3689,11 @@ pub(crate) fn build_remote_bidi_open_frame(
     call_mode: CallMode,
 ) -> Result<DispatchFrame, Status> {
     let request = remote_bidi_forwarded_request(selected_route, envelope_open, call_mode)?;
-    Ok(build_carrier_v1_dispatch_frame(call_id, request, true))
+    Ok(build_canonical_dispatch_frame(
+        call_id,
+        request,
+        CallMode::Bidi,
+    ))
 }
 
 fn remote_bidi_forwarded_request(
@@ -3813,12 +3864,60 @@ mod tests {
     }
 
     #[test]
-    fn v1_ext_negotiates_proto_and_caps_at_hub_version() {
+    fn legacy_implicit_call_mode_contract_is_rejected() {
+        let ext = SessionOpenExt {
+            contract_version: 1,
+            claimant_boot_nonce: vec![3; 16],
+        };
+        let err = session_contract_from_ext(Some(&ext))
+            .expect_err("contract v1 cannot carry explicit transport call_mode");
+        assert_eq!(err.code(), tonic::Code::FailedPrecondition);
+        assert!(err.message().contains("v2 or newer is required"));
+    }
+
+    #[test]
+    fn invalid_reverse_dispatch_is_settled_with_typed_terminal_failure() {
+        let presence = Arc::new(PresenceRegistry::new());
+        let caller = "easynet:///r/test/device/caller";
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+        presence
+            .insert_negotiated(
+                caller.to_string(),
+                sender,
+                SessionContract::new(CANONICAL_SESSION_CARRIER_VERSION, vec![7; 16]),
+            )
+            .expect("canonical presence");
+        let call_id = [9; 16];
+
+        reject_reverse_dispatch_call(
+            &presence,
+            caller,
+            call_id,
+            "canonical ReverseDispatchCall requires a complete InvokeRequest",
+        );
+
+        let frame = receiver
+            .try_recv()
+            .expect("typed rejection must settle the reverse caller")
+            .expect("dispatch frame");
+        let Some(DownPayload::ReverseDispatchResult(result)) = frame.frame.payload else {
+            panic!("expected ReverseDispatchResult");
+        };
+        assert_eq!(result.call_id, call_id);
+        assert!(result.terminal);
+        let failure = result.failure.expect("typed failure");
+        assert_eq!(failure.code, "INVALID_ARGUMENT");
+        assert!(!failure.retryable);
+    }
+
+    #[test]
+    fn future_ext_negotiates_proto_and_caps_at_hub_version() {
         let ext = SessionOpenExt {
             contract_version: 7, // future device, older hub
             claimant_boot_nonce: vec![3; 16],
         };
-        let c = session_contract_from_ext(Some(&ext)).expect("v1+ carrier negotiates");
+        let c =
+            session_contract_from_ext(Some(&ext)).expect("canonical carrier version negotiates");
         assert_eq!(
             c.version.min(CANONICAL_SESSION_CARRIER_VERSION),
             CANONICAL_SESSION_CARRIER_VERSION
@@ -3827,7 +3926,7 @@ mod tests {
     }
 
     #[test]
-    fn v1_ext_rejects_missing_claimant_fingerprint() {
+    fn canonical_ext_rejects_missing_claimant_fingerprint() {
         let ext = SessionOpenExt {
             contract_version: CANONICAL_SESSION_CARRIER_VERSION,
             claimant_boot_nonce: Vec::new(),
@@ -3976,7 +4075,7 @@ mod tests {
     }
 
     #[test]
-    fn carrier_v1_failure_maps_to_single_track_projection() {
+    fn canonical_carrier_failure_maps_to_single_track_projection() {
         let pb = axon_sdk::pb::axon::v1::DispatchResult {
             call_id: 7,
             payload: b"partial".to_vec(),
@@ -3989,7 +4088,7 @@ mod tests {
             }),
             ..Default::default()
         };
-        let mapped = pending_result_from_carrier_v1(&pb);
+        let mapped = pending_result_from_canonical_carrier(&pb);
         assert_eq!(mapped.payload, b"partial");
         assert_eq!(mapped.error.as_deref(), Some("device went away"));
         let failure = mapped.failure.expect("typed failure carried");
@@ -3999,7 +4098,7 @@ mod tests {
     }
 
     #[test]
-    fn carrier_v1_unary_control_failure_settles_without_terminal_claim() {
+    fn canonical_carrier_unary_control_failure_settles_without_terminal_claim() {
         let pb = axon_sdk::pb::axon::v1::DispatchResult {
             call_id: 8,
             terminal: false,
@@ -4011,7 +4110,7 @@ mod tests {
             }),
             ..Default::default()
         };
-        let (_, failure) = classify_carrier_v1_result(pb)
+        let (_, failure) = classify_canonical_carrier_result(pb)
             .expect_err("control failure settles the waiter without lifecycle terminality");
         assert_eq!(
             failure.failure.as_ref().map(|value| value.code.as_str()),
@@ -4022,7 +4121,7 @@ mod tests {
     }
 
     #[test]
-    fn carrier_v1_stream_control_failure_settles_without_terminal_claim() {
+    fn canonical_carrier_stream_control_failure_settles_without_terminal_claim() {
         let pb = axon_sdk::pb::axon::v1::DispatchResult {
             call_id: 9,
             terminal: false,
@@ -4034,7 +4133,7 @@ mod tests {
             }),
             ..Default::default()
         };
-        let (_, failure) = classify_carrier_v1_result(pb)
+        let (_, failure) = classify_canonical_carrier_result(pb)
             .expect_err("stream control failure settles the waiter without terminal receipt");
         assert_eq!(
             failure.failure.as_ref().map(|value| value.code.as_str()),
@@ -4045,7 +4144,7 @@ mod tests {
     }
 
     #[test]
-    fn carrier_v1_unary_success_without_checkpoints_is_rejected() {
+    fn canonical_carrier_unary_success_without_checkpoints_is_rejected() {
         let pb = axon_sdk::pb::axon::v1::DispatchResult {
             call_id: 8,
             payload: b"ok".to_vec(),
@@ -4053,7 +4152,7 @@ mod tests {
             failure: None,
             ..Default::default()
         };
-        let (_, failure) = classify_carrier_v1_result(pb)
+        let (_, failure) = classify_canonical_carrier_result(pb)
             .expect_err("successful unary result without checkpoints must fail closed");
         assert_eq!(
             failure.failure.as_ref().map(|value| value.code.as_str()),
@@ -4062,7 +4161,7 @@ mod tests {
     }
 
     #[test]
-    fn carrier_v1_unary_success_requires_both_checkpoints() {
+    fn canonical_carrier_unary_success_requires_both_checkpoints() {
         let pb = axon_sdk::pb::axon::v1::DispatchResult {
             call_id: 8,
             payload: b"ok".to_vec(),
@@ -4078,7 +4177,7 @@ mod tests {
             ..Default::default()
         };
         let (_, CarrierDispatchEvent::Terminal(mapped)) =
-            classify_carrier_v1_result(pb).expect("paired unary checkpoints are accepted")
+            classify_canonical_carrier_result(pb).expect("paired unary checkpoints are accepted")
         else {
             panic!("unary result must classify as terminal");
         };
@@ -4089,7 +4188,7 @@ mod tests {
     }
 
     #[test]
-    fn carrier_v1_stream_terminal_cannot_repeat_admission_checkpoint() {
+    fn canonical_carrier_stream_terminal_cannot_repeat_admission_checkpoint() {
         let pb = axon_sdk::pb::axon::v1::DispatchResult {
             call_id: 9,
             terminal: true,
@@ -4103,7 +4202,7 @@ mod tests {
             }),
             ..Default::default()
         };
-        let (_, failure) = classify_carrier_v1_result(pb)
+        let (_, failure) = classify_canonical_carrier_result(pb)
             .expect_err("stream admission and terminal checkpoints use distinct frames");
         assert_eq!(
             failure.failure.as_ref().map(|value| value.code.as_str()),
@@ -4112,7 +4211,7 @@ mod tests {
     }
 
     #[test]
-    fn carrier_v1_stream_terminal_failure_requires_terminal_checkpoint() {
+    fn canonical_carrier_stream_terminal_failure_requires_terminal_checkpoint() {
         let pb = axon_sdk::pb::axon::v1::DispatchResult {
             call_id: 9,
             terminal: true,
@@ -4124,7 +4223,7 @@ mod tests {
             }),
             ..Default::default()
         };
-        let (_, failure) = classify_carrier_v1_result(pb)
+        let (_, failure) = classify_canonical_carrier_result(pb)
             .expect_err("failed stream terminal without receipt must fail closed");
         assert_eq!(
             failure.failure.as_ref().map(|value| value.code.as_str()),

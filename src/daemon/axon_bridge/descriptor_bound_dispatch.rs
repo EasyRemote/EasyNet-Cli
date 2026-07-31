@@ -280,7 +280,7 @@ pub struct RpcDispatchOutcome {
     /// when admission reached the runtime.
     pub admission_receipt: Option<axon_sdk::invocation::SignedInvocationReceipt>,
     /// Terminal execution receipt, when the runtime minted one —
-    /// carried back to the hub on carrier-v1 sessions (DEC-F004).
+    /// carried back to the hub on canonical sessions (DEC-F004).
     pub terminal_receipt: Option<axon_sdk::invocation::SignedInvocationReceipt>,
 }
 

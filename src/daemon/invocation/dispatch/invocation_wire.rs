@@ -754,7 +754,7 @@ pub(crate) type BoxedDownStream<T> =
 ///
 /// Route selection is bound to the explicit callee tuple field. Caller identity
 /// is authority/proof input and must never be substituted as a route target.
-/// Shared by unary, server-stream, bidi, and carrier-v1 local dispatch paths.
+/// Shared by unary, server-stream, bidi, and canonical carrier local dispatch paths.
 pub(crate) fn callee_ura_from_envelope(
     envelope: Option<&Envelope>,
     label: &str,

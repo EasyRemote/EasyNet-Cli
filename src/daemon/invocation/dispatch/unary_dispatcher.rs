@@ -70,7 +70,7 @@ use crate::daemon::invocation::admission::target_gate::{
     TargetGate,
 };
 use crate::daemon::invocation::bidi::session_wire::{
-    build_carrier_v1_dispatch_frame, require_canonical_dispatch_session, SessionRequestError,
+    build_canonical_dispatch_frame, require_canonical_dispatch_session, SessionRequestError,
 };
 use crate::daemon::invocation::bidi::state::pending_dispatch::DispatchResult;
 use crate::daemon::invocation::dispatch::daemon_invocation_service::DaemonUnaryRoute;
@@ -2086,10 +2086,10 @@ impl UnaryDispatcher {
         self.reject_self_presence_host(selected_route, "Invoke")?;
         let (_call_id, dispatch_result, carrier_version) = self
             .dispatch_frame_to_presence(selected_route, "Invoke", |call_id| {
-                Ok(build_carrier_v1_dispatch_frame(
+                Ok(build_canonical_dispatch_frame(
                     call_id,
                     request.clone(),
-                    matches!(call_mode, CallMode::Bidi),
+                    call_mode,
                 ))
             })
             .await?;
