@@ -926,6 +926,47 @@ async fn invoke_discover_with_user_id_filters_unbound_cross_realm_entries() {
 }
 
 #[tokio::test]
+async fn invoke_discover_with_user_id_filters_local_presence_by_canonical_owner() {
+    use crate::daemon::keyring::federated_bindings::FederatedBindingsStore;
+
+    let presence = Arc::new(PresenceRegistry::new());
+    for device_ura in [
+        TEST_DAEMON_URA.to_string(),
+        "easynet:///r/test-realm/device/client-1".to_string(),
+        "easynet:///r/test-realm/device/unowned".to_string(),
+    ] {
+        insert_test_dispatch_presence(&presence, device_ura, tokio::sync::mpsc::channel(8).0)
+            .expect("canonical presence key");
+    }
+
+    let mut svc = make_unregistered_service_for_route_owner(TEST_DAEMON_URA)
+        .with_session_realm("test-realm")
+        .with_federated_bindings_store(Arc::new(FederatedBindingsStore::in_memory()));
+    svc.directory.presence = presence;
+    let svc = register_test_daemon_routes(svc, TEST_DAEMON_URA);
+
+    let resp = svc
+        .invoke(invoke_request(
+            ABILITY_FEDERATION_DISCOVER,
+            r#"{"local_user_id":"test-user"}"#,
+        ))
+        .await
+        .expect("dispatch returns Ok");
+    let body: federation_wrappers::DiscoverResponse = parse_response_body(resp);
+    let device_uras = body
+        .entries
+        .iter()
+        .map(|entry| entry.agent_ura.as_str())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        device_uras,
+        vec!["easynet:///r/test-realm/device/client-1", TEST_DAEMON_URA,],
+        "user-scoped local discovery must include only principals bound to the canonical owner"
+    );
+}
+
+#[tokio::test]
 async fn invoke_discover_without_user_id_does_not_filter() {
     // Same setup as above but no local_user_id ⇒ unfiltered
     // path. Cross-realm unbound entries surface (operator /

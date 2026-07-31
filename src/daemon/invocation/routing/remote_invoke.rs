@@ -1418,7 +1418,7 @@ pub fn invoke_federation_discover_for_operator_audit(
 ) -> anyhow::Result<Vec<Value>> {
     let local_daemon_ura = crate::daemon::identity::local_invocation::local_daemon_ura()?;
     let scope = FederationDiscoverScope::operator_audit(&local_daemon_ura)?;
-    invoke_federation_discover_with_scope(agent_ura_filter, &local_daemon_ura, scope)
+    invoke_federation_discover_with_scope(agent_ura_filter, scope)
 }
 
 /// User-scoped cross-realm directory query. Product surfaces use this path so
@@ -1432,11 +1432,12 @@ pub fn invoke_federation_discover_for_user(
     let local_user_id_filter = validate_federation_discover_local_user_id(local_user_id_filter)?;
     let local_daemon_ura = crate::daemon::identity::local_invocation::local_daemon_ura()?;
     let scope = FederationDiscoverScope::user(&local_daemon_ura, local_user_id_filter)?;
-    invoke_federation_discover_with_scope(agent_ura_filter, &local_daemon_ura, scope)
+    invoke_federation_discover_with_scope(agent_ura_filter, scope)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct FederationDiscoverScope {
+    query_target_ura: String,
     caller_ura: String,
     local_user_id_filter: Option<String>,
 }
@@ -1447,6 +1448,7 @@ impl FederationDiscoverScope {
             anyhow::bail!("federation.discover operator/audit scope requires local daemon URA");
         }
         Ok(Self {
+            query_target_ura: local_daemon_ura.to_string(),
             caller_ura: local_daemon_ura.to_string(),
             local_user_id_filter: None,
         })
@@ -1458,9 +1460,14 @@ impl FederationDiscoverScope {
         let parsed_daemon = crate::core::ura::parse_ura(local_daemon_ura)
             .map_err(|err| anyhow!("parse local daemon URA for federation.discover: {err}"))?;
         Ok(Self {
+            query_target_ura: crate::core::ura::authority_ura(&parsed_daemon.realm),
             caller_ura: crate::core::ura::user_ura(&parsed_daemon.realm, local_user_id_filter),
             local_user_id_filter: Some(local_user_id_filter.to_string()),
         })
+    }
+
+    fn query_target_ura(&self) -> &str {
+        &self.query_target_ura
     }
 
     fn caller_ura(&self) -> &str {
@@ -1487,7 +1494,6 @@ fn validate_federation_discover_local_user_id(local_user_id: &str) -> anyhow::Re
 
 fn invoke_federation_discover_with_scope(
     agent_ura_filter: Option<&str>,
-    local_daemon_ura: &str,
     scope: FederationDiscoverScope,
 ) -> anyhow::Result<Vec<Value>> {
     let mut req_args = json!({});
@@ -1498,10 +1504,10 @@ fn invoke_federation_discover_with_scope(
     let arg_bytes = serde_json::to_vec(&req_args).context("encode discover args")?;
 
     let target = RemoteAbilityInvocationTarget::for_target_owned_selector(
-        local_daemon_ura,
+        scope.query_target_ura(),
         "federation.discover",
     )?;
-    let subject_ura = federation_discover_subject_ura(local_daemon_ura)?;
+    let subject_ura = federation_discover_subject_ura(scope.query_target_ura())?;
     let signer = load_federation_caller_signer(scope.caller_ura(), "federation.discover")?;
     let socket_path = daemon_config::resolved_local_uds_path_with_env_override();
     if !crate::support::platform::local_daemon_grpc::probe_accepting(&socket_path) {
@@ -2245,6 +2251,11 @@ mod tests {
         let scope = FederationDiscoverScope::user(&local_daemon_ura, "user-a").expect("user scope");
 
         assert_eq!(
+            scope.query_target_ura(),
+            crate::core::ura::authority_ura("acme"),
+            "user-scoped directory reads must target the realm Authority"
+        );
+        assert_eq!(
             scope.caller_ura(),
             crate::core::ura::user_ura("acme", "user-a")
         );
@@ -2267,6 +2278,11 @@ mod tests {
             .expect("operator/audit scope");
 
         assert_eq!(scope.caller_ura(), local_daemon_ura);
+        assert_eq!(
+            scope.query_target_ura(),
+            local_daemon_ura,
+            "operator/audit reads remain local to their explicitly selected Authority"
+        );
         assert_eq!(scope.local_user_id_filter, None);
     }
 

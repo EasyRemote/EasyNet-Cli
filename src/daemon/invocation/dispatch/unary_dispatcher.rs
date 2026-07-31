@@ -101,7 +101,37 @@ use crate::daemon::invocation::dispatch::remote_failure::{
 use crate::daemon::invocation::routing::route_resolver::{
     CanonicalRouteDispatch, CanonicalRouteSelection, DelegatedInvokeRoute, SelectedInvokeRoute,
 };
-use crate::daemon::trust::anchor::{TrustedAgentRole, TrustedPrincipalOwner};
+use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgentRole, TrustedPrincipalOwner};
+
+/// Fail-closed ownership predicate for user-scoped directory projections.
+///
+/// Presence answers whether a runtime principal is online; it does not answer
+/// who may observe that principal. The realm trust anchor owns the canonical
+/// principal-to-user fact, so user-scoped discovery must satisfy both immutable
+/// owner fields before merging an online principal into the response.
+struct PrincipalOwnerFilter<'a> {
+    owner_user_id: &'a str,
+    owner_ura: String,
+    trust_anchor: Arc<RealmTrustAnchor>,
+}
+
+impl<'a> PrincipalOwnerFilter<'a> {
+    fn new(realm: &str, owner_user_id: &'a str, trust_anchor: Arc<RealmTrustAnchor>) -> Self {
+        Self {
+            owner_user_id,
+            owner_ura: crate::core::ura::user_ura(realm, owner_user_id),
+            trust_anchor,
+        }
+    }
+
+    fn admits(&self, principal_ura: &str) -> bool {
+        self.trust_anchor
+            .lookup_principal_owner(principal_ura)
+            .is_some_and(|owner| {
+                owner.owner_user_id == self.owner_user_id && owner.owner_ura == self.owner_ura
+            })
+    }
+}
 
 pub(crate) fn rpc_dispatch_outcome_response(
     outcome: crate::daemon::axon_bridge::descriptor_bound_dispatch::RpcDispatchOutcome,
@@ -1274,11 +1304,20 @@ impl UnaryDispatcher {
                 &self.directory.presence,
             )
             .map_err(Status::failed_precondition)?;
+            let owner_filter = request.local_user_id.as_deref().map(|user_id| {
+                PrincipalOwnerFilter::new(realm, user_id, self.admission.trust_anchor_snapshot())
+            });
             for entry in local.devices {
                 if request
                     .agent_ura
                     .as_deref()
                     .is_some_and(|filter| filter != entry.agent_ura)
+                {
+                    continue;
+                }
+                if owner_filter
+                    .as_ref()
+                    .is_some_and(|filter| !filter.admits(&entry.agent_ura))
                 {
                     continue;
                 }
