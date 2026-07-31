@@ -909,7 +909,19 @@ impl BidiDispatcher {
         });
 
         let execution_host_ura_owned = selected_route.execution_host_ura.clone();
-        let ability_owned = selected_route.dispatch_name.clone();
+        let wire_kind = self
+            .runtime
+            .ability_wire
+            .bidi_wire_kind_for(&selected_route.dispatch_name)
+            .ok_or_else(|| {
+                Status::unimplemented(format!(
+                    "InvokeBidi selected remote route `{}` for ability `{}`, but \
+                     dispatch ability `{}` has no daemon bidi wire adapter",
+                    selected_route.route_ura,
+                    selected_route.query_name,
+                    selected_route.dispatch_name,
+                ))
+            })?;
         let presence_for_up = Arc::clone(&self.directory.presence);
         let pending_for_up = Arc::clone(pending);
         tokio::spawn(async move {
@@ -947,55 +959,17 @@ impl BidiDispatcher {
                 let Some(payload) = frame.payload else {
                     continue;
                 };
-                let bridge_frame_result = match payload {
-                    UpPayload::BinaryChunk(chunk) => build_remote_bidi_input_frame_for_ability(
-                        call_id,
-                        &ability_owned,
-                        &chunk.data,
-                        None,
-                        false,
-                    ),
-                    UpPayload::Control(control)
-                        if matches!(
-                            control.control,
-                            Some(axon_sdk::pb::axon::v1::bidi_control::Control::Eof(true))
-                        ) =>
-                    {
-                        eof_sent = true;
-                        build_remote_bidi_input_frame_for_ability(
-                            call_id,
-                            &ability_owned,
-                            &[],
-                            None,
-                            true,
-                        )
-                    }
-                    UpPayload::Control(control)
-                        if ability_owned
-                            == crate::daemon::ability::builtins::device_control::terminal::attach::ABILITY_TERMINAL_ATTACH =>
-                    {
-                        let Some(axon_sdk::pb::axon::v1::bidi_control::Control::PtyResize(
-                            resize,
-                        )) = control.control
-                        else {
-                            continue;
-                        };
-                        build_remote_bidi_input_frame_for_ability(
-                            call_id,
-                            &ability_owned,
-                            &[],
-                            Some((resize.cols, resize.rows)),
-                            false,
-                        )
-                    }
-                    UpPayload::Control(_) | UpPayload::EnvelopeOpen(_) => continue,
-                    // Direction discipline: dispatch results flow
-                    // device→hub on the device's own session, never on
-                    // the caller's up stream — a canonical carrier frame here
-                    // is a peer bug, not a negotiation gap.
-                    UpPayload::DispatchResult(_)
-                    | UpPayload::ReverseDispatchCall(_)
-                    | UpPayload::ReverseBidiInput(_) => continue,
+                let mapped = map_local_bidi_up_payload(wire_kind, payload);
+                if matches!(
+                    mapped,
+                    LocalBidiUpFrame::Close | LocalBidiUpFrame::ForwardAndClose(_)
+                ) {
+                    eof_sent = true;
+                }
+                let Some(bridge_frame_result) =
+                    build_remote_bidi_input_frame_from_mapped(call_id, mapped)
+                else {
+                    continue;
                 };
                 let bridge_frame = match bridge_frame_result {
                     Ok(frame) => frame,
@@ -3806,33 +3780,31 @@ fn build_remote_bidi_input_dispatch_frame(
     })
 }
 
-fn build_remote_bidi_input_frame_for_ability(
+fn build_remote_bidi_input_frame_from_mapped(
     call_id: u64,
-    ability: &str,
-    payload: &[u8],
-    pty_resize: Option<(u32, u32)>,
-    eof: bool,
-) -> Result<DispatchFrame, Status> {
-    if eof {
-        return Ok(build_remote_bidi_input_dispatch_frame(call_id, &[], true));
+    mapped: LocalBidiUpFrame,
+) -> Option<Result<DispatchFrame, Status>> {
+    match mapped {
+        LocalBidiUpFrame::Forward(value) | LocalBidiUpFrame::ForwardAndClose(value) => {
+            let bytes = match serde_json::to_vec(&value) {
+                Ok(bytes) => bytes,
+                Err(err) => {
+                    return Some(Err(Status::internal(format!(
+                        "InvokeBidi remote bidi: encode mapped input frame: {err}"
+                    ))));
+                }
+            };
+            Some(Ok(build_remote_bidi_input_dispatch_frame(
+                call_id, &bytes, false,
+            )))
+        }
+        LocalBidiUpFrame::Close => Some(Ok(build_remote_bidi_input_dispatch_frame(
+            call_id,
+            &[],
+            true,
+        ))),
+        LocalBidiUpFrame::Ignore => None,
     }
-    if ability == crate::daemon::ability::builtins::device_control::terminal::attach::ABILITY_TERMINAL_ATTACH {
-        use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
-        let frame = if let Some((cols, rows)) = pty_resize {
-            serde_json::json!({"type": "resize", "cols": cols, "rows": rows})
-        } else {
-            serde_json::json!({"type": "stdin", "data": B64.encode(payload)})
-        };
-        let bytes = serde_json::to_vec(&frame).map_err(|err| {
-            Status::internal(format!("InvokeBidi remote pty: encode input frame: {err}"))
-        })?;
-        return Ok(build_remote_bidi_input_dispatch_frame(
-            call_id, &bytes, false,
-        ));
-    }
-    Ok(build_remote_bidi_input_dispatch_frame(
-        call_id, payload, false,
-    ))
 }
 
 #[cfg(test)]
@@ -4010,6 +3982,95 @@ mod tests {
             SessionDownPush::NoPresence,
             "a retired generation cannot receive a synthetic acknowledgement"
         );
+    }
+
+    #[test]
+    fn remote_bidi_input_reuses_pty_wire_mapper_for_stdin() {
+        use base64::Engine as _;
+
+        let mapped = map_local_bidi_up_payload(
+            LocalBidiWireKind::Pty,
+            UpPayload::BinaryChunk(BinaryChunk {
+                data: b"whoami\n".to_vec(),
+                ..BinaryChunk::default()
+            }),
+        );
+        let frame = build_remote_bidi_input_frame_from_mapped(42, mapped)
+            .expect("mapped pty stdin frame is forwarded")
+            .expect("mapped pty stdin frame builds");
+        let payload = decode_remote_bidi_input_payload(frame);
+        let value: serde_json::Value =
+            serde_json::from_slice(&payload).expect("terminal stdin JSON");
+
+        assert_eq!(value["type"], "stdin");
+        assert!(
+            value.get("mac_base64").is_none(),
+            "transport MAC must not enter the terminal.attach business frame"
+        );
+        let data = value["data"].as_str().expect("stdin data is string");
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(data)
+            .expect("stdin data is base64");
+        assert_eq!(decoded, b"whoami\n");
+    }
+
+    #[test]
+    fn remote_bidi_input_reuses_pty_wire_mapper_for_resize_and_eof() {
+        let mapped = map_local_bidi_up_payload(
+            LocalBidiWireKind::Pty,
+            UpPayload::Control(BidiControl {
+                control: Some(axon_sdk::pb::axon::v1::bidi_control::Control::PtyResize(
+                    axon_sdk::pb::axon::v1::PtyResize {
+                        cols: 120,
+                        rows: 40,
+                    },
+                )),
+            }),
+        );
+        let frame = build_remote_bidi_input_frame_from_mapped(43, mapped)
+            .expect("mapped pty resize frame is forwarded")
+            .expect("mapped pty resize frame builds");
+        let payload = decode_remote_bidi_input_payload(frame);
+        let value: serde_json::Value =
+            serde_json::from_slice(&payload).expect("terminal resize JSON");
+        assert_eq!(value["type"], "resize");
+        assert_eq!(value["cols"], 120);
+        assert_eq!(value["rows"], 40);
+
+        let eof_mapped = map_local_bidi_up_payload(
+            LocalBidiWireKind::Pty,
+            UpPayload::Control(BidiControl {
+                control: Some(axon_sdk::pb::axon::v1::bidi_control::Control::Eof(true)),
+            }),
+        );
+        let eof = build_remote_bidi_input_frame_from_mapped(44, eof_mapped)
+            .expect("mapped pty eof frame is forwarded")
+            .expect("mapped pty eof frame builds");
+        let dispatch = decode_remote_bidi_input(eof);
+        match dispatch {
+            SessionDispatch::BidiInput { payload, eof, .. } => {
+                assert!(eof);
+                assert!(payload.is_empty());
+            }
+            other => panic!("expected remote BidiInput EOF, got {other:?}"),
+        }
+    }
+
+    fn decode_remote_bidi_input_payload(frame: DispatchFrame) -> Vec<u8> {
+        match decode_remote_bidi_input(frame) {
+            SessionDispatch::BidiInput { payload, eof, .. } => {
+                assert!(!eof, "test helper expected a data input frame");
+                payload
+            }
+            other => panic!("expected remote BidiInput, got {other:?}"),
+        }
+    }
+
+    fn decode_remote_bidi_input(frame: DispatchFrame) -> SessionDispatch {
+        let Some(DownPayload::BinaryChunk(chunk)) = frame.frame.payload else {
+            panic!("expected session BinaryChunk dispatch frame");
+        };
+        SessionDispatch::decode_frame(&chunk.data).expect("session dispatch frame decodes")
     }
 
     #[test]
