@@ -2075,12 +2075,14 @@ check_invocation_history_ledger_ura_contract() {
   local cli_history="$cli_root/src/cli/commands/groups/invocation.rs"
   local node_sdk="$cli_root/sdk/node/index.js"
   local node_tests="$cli_root/sdk/node/test/runtime-core.test.mjs"
+  local axon_ura="$AXON_ROOT/core/ura-rs/src/lib.rs"
   [[ -f "$history" ]] || return 0
   [[ -f "$cli_history" ]] || return 0
   [[ -f "$node_sdk" ]] || return 0
   [[ -f "$node_tests" ]] || return 0
+  [[ -f "$axon_ura" ]] || fail "Axon URA source is missing: ${axon_ura#$AXON_ROOT/}"
 
-  "$PYTHON_BIN" - "$history" "$cli_history" "$node_sdk" "$node_tests" <<'PY'
+  "$PYTHON_BIN" - "$history" "$cli_history" "$node_sdk" "$node_tests" "$axon_ura" <<'PY'
 import re
 import sys
 from pathlib import Path
@@ -2095,6 +2097,16 @@ node_path = Path(sys.argv[3])
 node_text = node_path.read_text()
 node_test_path = Path(sys.argv[4])
 node_tests = node_test_path.read_text()
+axon_ura = Path(sys.argv[5]).read_text()
+
+for required in (
+    "pub fn invocation_ledger_resource_ura(owner_ura: &str) -> Option<String>",
+    'URAKind::Authority => "authority.invocations".to_string()',
+    '"billing/invocations"',
+    "invocation_ledger_resource_owner_is_canonical_for_every_runtime_owner_kind",
+):
+    if required not in axon_ura:
+        raise SystemExit(f"invocation_history_ledger_ura_axon_owner_model_missing:{required}")
 
 ledger = re.search(
     r"fn ledger_resource_ura\(\) -> (?P<ret>[^\{]+)\{(?P<body>.*?)\n\}\n\nfn ledger_resource_ura_from_host_device_agent_ura",
@@ -2103,8 +2115,8 @@ ledger = re.search(
 )
 if ledger is None:
     raise SystemExit("invocation_history_ledger_ura_function_not_found")
-if "anyhow::Result<Option<String>>" not in ledger.group("ret"):
-    raise SystemExit("invocation_history_ledger_ura_not_fallible")
+if "anyhow::Result<String>" not in ledger.group("ret"):
+    raise SystemExit("invocation_history_ledger_ura_not_required_and_fallible")
 ledger_body = ledger.group("body")
 if "load_hosted_identity_status().ok()" in ledger_body:
     raise SystemExit("invocation_history_ledger_ura_aggregate_load_collapsed")
@@ -2118,21 +2130,40 @@ projection = re.search(
 )
 if projection is None:
     raise SystemExit("invocation_history_ledger_ura_projection_helper_not_found")
-if "anyhow::Result<Option<String>>" not in projection.group("ret"):
-    raise SystemExit("invocation_history_ledger_ura_projection_helper_not_fallible")
+if "anyhow::Result<String>" not in projection.group("ret"):
+    raise SystemExit("invocation_history_ledger_ura_projection_helper_not_required_and_fallible")
 projection_body = projection.group("body")
 for required in (
     "invalid host_device_agent_ura",
-    "return Ok(None);",
-    "resource_dot_ura",
+    "requires a joined runtime identity",
+    "invocation_ledger_resource_ura(host_device_agent_ura)",
+    "does not support runtime identity",
 ):
     if required not in projection_body:
         raise SystemExit(f"invocation_history_ledger_ura_projection_missing:{required}")
 if ".ok()?" in projection_body or "parse_ura(host_device_agent_ura).ok()" in projection_body:
     raise SystemExit("invocation_history_ledger_ura_parse_collapsed")
+for retired in (
+    "return Ok(None);",
+    "resource_dot_ura(",
+    "URAKind::Device",
+    "URAKind::User",
+    "URAKind::Agent",
+):
+    if retired in projection_body:
+        raise SystemExit(
+            f"invocation_history_ledger_ura_projection_duplicates_protocol_owner_mapping:{retired}"
+        )
 
-if "ledger_resource_ura_projection_distinguishes_unjoined_from_invalid_identity" not in text:
+if "ledger_resource_ura_projection_requires_supported_runtime_identity" not in text:
     raise SystemExit("missing_invocation_history_ledger_ura_projection_test")
+for required in (
+    "easynet:///r/test/authority",
+    "easynet:///r/test/resource/authority.invocations/billing/invocations",
+    "unjoined runtime has no ledger owner",
+):
+    if required not in text:
+        raise SystemExit(f"missing_invocation_history_ledger_ura_authority_test:{required}")
 
 for response in (
     "HistoryListResponse",
@@ -17858,6 +17889,93 @@ for required in (
 PY
 }
 
+check_cli_network_device_invocation_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local device_group="$cli_root/src/cli/commands/groups/device.rs"
+  local devices="$cli_root/src/cli/commands/devices.rs"
+  local directory_reader="$cli_root/src/daemon/federation/directory_reader.rs"
+  local remote_invoke="$cli_root/src/daemon/invocation/routing/remote_invoke.rs"
+  for path in "$device_group" "$devices" "$directory_reader" "$remote_invoke"; do
+    [[ -f "$path" ]] || fail "CLI Network device invocation source is missing: ${path#$cli_root/}"
+  done
+
+  "$PYTHON_BIN" - "$device_group" "$devices" "$directory_reader" "$remote_invoke" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+device_group, devices, directory_reader, remote_invoke = [
+    Path(path).read_text(encoding="utf-8", errors="replace")
+    for path in sys.argv[1:]
+]
+group_production = device_group.split("\n#[cfg(test)]", 1)[0]
+devices_production = devices.split("\n#[cfg(test)]", 1)[0]
+reader_production = directory_reader
+remote_production = remote_invoke.split("\n#[cfg(test)]", 1)[0]
+
+if "DeviceAction::List(a) => devices::run(a)" not in group_production:
+    raise SystemExit("cli_network_device_invocation:list_not_owned_by_device_directory_command")
+
+for required in (
+    "read_federated_directory_for_user(",
+    "read_federated_directory_for_operator_audit(",
+):
+    if required not in devices_production:
+        raise SystemExit(f"cli_network_device_invocation:device_list_missing:{required}")
+
+for retired in (
+    "auth_get_json(",
+    "auth_post_json(",
+    "ureq::",
+    "/api/v1/devices",
+    "load_device_inventory_summary(",
+):
+    if retired in devices_production:
+        raise SystemExit(
+            f"cli_network_device_invocation:device_list_backend_bypass:{retired}"
+        )
+
+for required in (
+    "invoke_federation_discover_for_user(",
+    "invoke_federation_discover_for_operator_audit(",
+):
+    if required not in reader_production:
+        raise SystemExit(f"cli_network_device_invocation:directory_reader_missing:{required}")
+
+scope_body = re.search(
+    r"fn invoke_federation_discover_with_scope\((?P<body>.*?)\n\}",
+    remote_production,
+    re.S,
+)
+if scope_body is None:
+    raise SystemExit("cli_network_device_invocation:canonical_discover_issuer_missing")
+body = scope_body.group("body")
+for required in (
+    "RemoteAbilityInvocationTarget::for_target_owned_selector(",
+    '"federation.discover"',
+    "ProtoEnvelope::from_target(",
+    ".signed_descriptor_ref_invoke_request_with_signer(",
+    "InvocationClient::new(channel)",
+    "client.invoke(request)",
+    'ensure_completed_invoke_response("federation.discover", &response)',
+):
+    if required not in body:
+        raise SystemExit(
+            f"cli_network_device_invocation:canonical_discover_issuer_incomplete:{required}"
+        )
+for retired in (
+    "ureq::",
+    "/api/v1/devices",
+    "auth_get_json(",
+    "auth_post_json(",
+):
+    if retired in body:
+        raise SystemExit(
+            f"cli_network_device_invocation:canonical_discover_issuer_backend_bypass:{retired}"
+        )
+PY
+}
+
 check_cli_device_show_projection_error_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local device_group="$cli_root/src/cli/commands/groups/device.rs"
@@ -28587,6 +28705,44 @@ EOF
   if ( CLI_ROOT="$tmp/cli-device-directory-alias-legacy"; check_cli_device_directory_projection_contract ) >/dev/null 2>&1; then
     fail "self-test expected CLI device directory alias gate to fail"
   fi
+  mkdir -p "$tmp/cli-network-device-backend-bypass/src/cli/commands/groups" \
+    "$tmp/cli-network-device-backend-bypass/src/cli/commands" \
+    "$tmp/cli-network-device-backend-bypass/src/daemon/federation" \
+    "$tmp/cli-network-device-backend-bypass/src/daemon/invocation/routing"
+  cat >"$tmp/cli-network-device-backend-bypass/src/cli/commands/groups/device.rs" <<'EOF'
+fn run(action: DeviceAction) {
+    match action {
+        DeviceAction::List(a) => devices::run(a),
+    }
+}
+EOF
+  cat >"$tmp/cli-network-device-backend-bypass/src/cli/commands/devices.rs" <<'EOF'
+fn fetch_directory_entries() {
+    let _ = auth_get_json("/api/v1/devices");
+}
+EOF
+  cat >"$tmp/cli-network-device-backend-bypass/src/daemon/federation/directory_reader.rs" <<'EOF'
+fn read() {
+    invoke_federation_discover_for_user(None, "user");
+    invoke_federation_discover_for_operator_audit(None);
+}
+EOF
+  cat >"$tmp/cli-network-device-backend-bypass/src/daemon/invocation/routing/remote_invoke.rs" <<'EOF'
+fn invoke_federation_discover_with_scope() {
+    let _ = RemoteAbilityInvocationTarget::for_target_owned_selector(
+        scope.query_target_ura(),
+        "federation.discover",
+    );
+    let request_envelope = ProtoEnvelope::from_target();
+    request_envelope.signed_descriptor_ref_invoke_request_with_signer();
+    let mut client = InvocationClient::new(channel);
+    client.invoke(request);
+    ensure_completed_invoke_response("federation.discover", &response);
+}
+EOF
+  if ( CLI_ROOT="$tmp/cli-network-device-backend-bypass"; check_cli_network_device_invocation_contract ) >/dev/null 2>&1; then
+    fail "self-test expected CLI Network device backend bypass gate to fail"
+  fi
   mkdir -p "$tmp/cli-device-show-projection-error-legacy/src/cli/commands/groups"
   cat >"$tmp/cli-device-show-projection-error-legacy/src/cli/commands/groups/device.rs" <<'EOF'
 fn device_show_abilities() {
@@ -30345,6 +30501,7 @@ EOF
   check_catalog_exact_runtime_key_contract
   check_federation_directory_device_projection_contract
   check_cli_device_directory_projection_contract
+  check_cli_network_device_invocation_contract
   check_cli_device_show_projection_error_contract
   check_plugin_sidecar_helper_matrix_contract
   check_plugin_schema_rejection_vocabulary_contract
@@ -30636,6 +30793,7 @@ check_runtime_plane_requirement_contract
 check_catalog_exact_runtime_key_contract
 check_federation_directory_device_projection_contract
 check_cli_device_directory_projection_contract
+check_cli_network_device_invocation_contract
 check_cli_device_show_projection_error_contract
 check_plugin_sidecar_helper_matrix_contract
 check_plugin_schema_rejection_vocabulary_contract

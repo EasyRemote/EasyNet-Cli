@@ -820,7 +820,7 @@ fn attempt_state_matches(expected: Option<&str>, attempt: &InvocationAttemptReco
             ))
 }
 
-fn ledger_resource_ura() -> anyhow::Result<Option<String>> {
+fn ledger_resource_ura() -> anyhow::Result<String> {
     let hosted_identity =
         AgentAggregateRepository::load_hosted_identity_status().map_err(|error| {
             anyhow::anyhow!("invocation.history ledger owner projection unavailable: {error:#}")
@@ -830,53 +830,26 @@ fn ledger_resource_ura() -> anyhow::Result<Option<String>> {
 
 fn ledger_resource_ura_from_host_device_agent_ura(
     host_device_agent_ura: Option<&str>,
-) -> anyhow::Result<Option<String>> {
+) -> anyhow::Result<String> {
     let Some(host_device_agent_ura) = host_device_agent_ura
         .map(str::trim)
         .filter(|value| !value.is_empty())
     else {
-        return Ok(None);
+        anyhow::bail!(
+            "invocation.history ledger owner projection requires a joined runtime identity"
+        );
     };
-    let parsed = crate::core::ura::parse_ura(host_device_agent_ura).map_err(|error| {
+    crate::core::ura::parse_ura(host_device_agent_ura).map_err(|error| {
         anyhow::anyhow!(
             "invocation.history ledger owner projection has invalid host_device_agent_ura {host_device_agent_ura:?}: {error}"
         )
     })?;
-    let owner = match parsed.kind {
-        crate::core::ura::URAKind::Device => {
-            let device_id = parsed.device_id().ok_or_else(|| {
-                anyhow::anyhow!(
-                    "invocation.history ledger owner projection device URA missing device id"
-                )
-            })?;
-            format!("device.{device_id}")
-        }
-        crate::core::ura::URAKind::User => {
-            let user_id = parsed.user_id().ok_or_else(|| {
-                anyhow::anyhow!(
-                    "invocation.history ledger owner projection user URA missing user id"
-                )
-            })?;
-            format!("{user_id}.invocations")
-        }
-        crate::core::ura::URAKind::Agent => {
-            // DEC-F048 / RFC gap: `agent_ids()` is None for
-            // device-sponsored System Agents, and that None is the
-            // declared outcome — no resource_dot owner shape exists
-            // for them yet, and we do not invent one (RFC-007/008
-            // agenda; F-047 verdict).
-            let Some((user_id, _)) = parsed.agent_ids() else {
-                return Ok(None);
-            };
-            format!("{user_id}.invocations")
-        }
-        _ => return Ok(None),
-    };
-    Ok(Some(crate::core::ura::resource_dot_ura(
-        &parsed.realm,
-        &owner,
-        "billing/invocations",
-    )))
+    crate::core::ura::invocation_ledger_resource_ura(host_device_agent_ura).ok_or_else(|| {
+        anyhow::anyhow!(
+            "invocation.history ledger owner projection does not support runtime identity \
+             {host_device_agent_ura:?}"
+        )
+    })
 }
 
 fn fetch_records_from_path(
@@ -1285,20 +1258,17 @@ mod tests {
     }
 
     #[test]
-    fn ledger_resource_ura_projection_distinguishes_unjoined_from_invalid_identity() {
-        assert_eq!(
-            ledger_resource_ura_from_host_device_agent_ura(None).expect("unjoined state"),
-            None
-        );
-        assert_eq!(
-            ledger_resource_ura_from_host_device_agent_ura(Some("   ")).expect("blank state"),
-            None
-        );
+    fn ledger_resource_ura_projection_requires_supported_runtime_identity() {
+        let missing = ledger_resource_ura_from_host_device_agent_ura(None)
+            .expect_err("unjoined runtime has no ledger owner");
+        assert!(missing.to_string().contains("joined runtime identity"));
+        let blank = ledger_resource_ura_from_host_device_agent_ura(Some("   "))
+            .expect_err("blank runtime identity has no ledger owner");
+        assert!(blank.to_string().contains("joined runtime identity"));
 
         let device =
             ledger_resource_ura_from_host_device_agent_ura(Some("easynet:///r/test/device/dev-1"))
-                .expect("device ledger URA")
-                .expect("joined device ledger URA");
+                .expect("device ledger URA");
         assert_eq!(
             device,
             "easynet:///r/test/resource/device.dev-1/billing/invocations"
@@ -1306,8 +1276,7 @@ mod tests {
 
         let user =
             ledger_resource_ura_from_host_device_agent_ura(Some("easynet:///r/test/user/alice"))
-                .expect("user ledger URA")
-                .expect("joined user ledger URA");
+                .expect("user ledger URA");
         assert_eq!(
             user,
             "easynet:///r/test/resource/alice.invocations/billing/invocations"
@@ -1316,11 +1285,18 @@ mod tests {
         let agent = ledger_resource_ura_from_host_device_agent_ura(Some(
             "easynet:///r/test/agent/alice.ops",
         ))
-        .expect("agent ledger URA")
-        .expect("joined agent ledger URA");
+        .expect("agent ledger URA");
         assert_eq!(
             agent,
             "easynet:///r/test/resource/alice.invocations/billing/invocations"
+        );
+
+        let authority =
+            ledger_resource_ura_from_host_device_agent_ura(Some("easynet:///r/test/authority"))
+                .expect("authority ledger URA");
+        assert_eq!(
+            authority,
+            "easynet:///r/test/resource/authority.invocations/billing/invocations"
         );
 
         let error = ledger_resource_ura_from_host_device_agent_ura(Some("not-a-ura"))

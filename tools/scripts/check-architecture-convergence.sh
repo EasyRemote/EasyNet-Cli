@@ -5164,12 +5164,12 @@ for governance_status_surface, surface_label in governance_status_surfaces:
         else:
             offset, body = ledger_body
             signature = production_text[offset : production_text.find("{", offset)]
-            if "anyhow::Result<Option<String>>" not in signature:
+            if "anyhow::Result<String>" not in signature:
                 add(
                     "R40_GOVERNANCE_STATUS_AGENT_AGGREGATE_FORK",
                     governance_status_surface,
                     line_number(production_text, offset),
-                    "invocation history ledger URA projection must preserve hosted-identity load failures",
+                    "invocation history ledger URA projection must require a canonical owner while preserving hosted-identity load failures",
                 )
             for token, detail in (
                 (
@@ -5188,6 +5188,13 @@ for governance_status_surface, surface_label in governance_status_surfaces:
                         line_number(production_text, offset + body.find(token)),
                         detail,
                     )
+            if "invocation_ledger_resource_ura(" not in production_text:
+                add(
+                    "R40_GOVERNANCE_STATUS_AGENT_AGGREGATE_FORK",
+                    governance_status_surface,
+                    line_number(production_text, offset),
+                    "invocation history ledger URA projection must use Axon's canonical owner-kind projection",
+                )
         projection_body = rust_method_body(
             production_text, "ledger_resource_ura_from_host_device_agent_ura"
         )
