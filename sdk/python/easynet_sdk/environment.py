@@ -24,6 +24,7 @@ from .runtime import RuntimeClient
 from .runtime_ability import RuntimeAbilityClient
 from .runtime_environment import (
     RuntimeIdentityProjection,
+    read_runtime_control_discovery,
     read_runtime_identity_projection,
     runtime_credentials_path,
     runtime_state_root,
@@ -375,11 +376,35 @@ class SdkEnvironment:
         self,
         credentials_path: str | Path = "",
     ) -> RuntimeIdentityProjection:
-        """Read the paired runtime identity projection for this environment."""
+        """Read this environment's public runtime identity.
 
-        return read_runtime_identity_projection(
-            credentials_path,
-            control_path=self.resolved_control_path(),
+        An explicit path is a strict standalone projection document. Without
+        one, the running daemon's control discovery is the identity authority;
+        its secret-bearing credentials store is never decoded as a public DTO.
+        """
+
+        if credentials_path:
+            return read_runtime_identity_projection(
+                credentials_path,
+                control_path=self.resolved_control_path(),
+            )
+        discovery = read_runtime_control_discovery(self.resolved_control_path())
+        identity = discovery.runtime_host_identity
+        if (
+            identity is None
+            or not identity.realm.strip()
+            or not identity.runtime_instance_id.strip()
+        ):
+            raise SDKError(
+                code=ErrorCode.CALLER_IDENTITY_UNAVAILABLE,
+                stage="runtime_environment",
+                retry=RetryHint.NEVER,
+                retryable=False,
+                message="runtime control discovery has no complete runtime host identity",
+            )
+        return RuntimeIdentityProjection(
+            realm=identity.realm,
+            runtime_instance_id=identity.runtime_instance_id,
         )
 
     def _connect_options(self, options: ConnectOptions) -> ConnectOptions:
