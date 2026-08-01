@@ -559,7 +559,6 @@ impl DaemonMissionInvocationGateway {
         trace_id: Option<&str>,
     ) -> anyhow::Result<(Value, String, u64, [u8; 32])> {
         use axon_sdk::invocation::{project_wire_envelope, WireEnvelopeMetadata};
-        use axon_sdk::pb::axon::v1::invocation_client::InvocationClient;
         use axon_sdk::pb::axon::v1::{ContentEnvelope, InvokeRequest};
 
         let descriptor_ref = signed_child.envelope.ability.clone();
@@ -636,7 +635,7 @@ impl DaemonMissionInvocationGateway {
                 anyhow::bail!("Mission parent deadline elapsed while remote child {ability} was connecting")
             }
         };
-        let mut client = InvocationClient::new(channel);
+        let mut client = crate::daemon::invocation::transport::invocation_client(channel);
         let response = tokio::select! {
             response = client.invoke(request) => response
                 .map_err(|status| anyhow::anyhow!(

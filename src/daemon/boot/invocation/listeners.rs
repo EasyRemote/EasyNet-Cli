@@ -15,8 +15,8 @@ use tonic::transport::server::Connected;
 #[cfg(unix)]
 use super::local_peer::{LocalPeerGate, PeerGateError};
 use super::paths::expand_home;
-use super::MAX_INVOCATION_GRPC_MESSAGE_BYTES;
 use crate::daemon::invocation::dispatch::daemon_invocation_service::DaemonInvocationService;
+use crate::daemon::invocation::transport::MAX_INVOCATION_GRPC_MESSAGE_BYTES;
 use crate::daemon::persistence::daemon_config::DaemonConfig;
 #[cfg(windows)]
 use crate::support::platform::named_pipe::PipeListener;

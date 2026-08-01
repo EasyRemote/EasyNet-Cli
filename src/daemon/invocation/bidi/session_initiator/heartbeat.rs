@@ -68,8 +68,7 @@ pub(super) fn spawn_federation_heartbeat(
     authority_published_abilities: Arc<AuthorityPublishedAbilityStore>,
 ) -> AbortOnDrop {
     AbortOnDrop(tokio::spawn(async move {
-        let mut heartbeat_client =
-            axon_sdk::pb::axon::v1::invocation_client::InvocationClient::new(channel);
+        let mut heartbeat_client = crate::daemon::invocation::transport::invocation_client(channel);
         let mut last_error: Option<String> = None;
         loop {
             tokio::time::sleep(FEDERATION_HEARTBEAT_INTERVAL).await;

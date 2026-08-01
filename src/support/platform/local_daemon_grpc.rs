@@ -609,7 +609,7 @@ fn invoke_local_daemon_ability_stream_with_tuple_plan(
         let channel = connect_channel(socket_path.clone(), timeout, Duration::from_secs(10))
             .await
             .map_err(|source| local_daemon_connect_error(&socket_path, source))?;
-        let mut client = axon_sdk::pb::axon::v1::invocation_client::InvocationClient::new(channel);
+        let mut client = crate::daemon::invocation::transport::invocation_client(channel);
         let mut stream = client
             .invoke_stream(request)
             .await
@@ -696,13 +696,7 @@ fn invoke_local_daemon_ability_bidi_json_frames_with_tuple_plan(
         let channel = connect_channel(socket_path.clone(), timeout, Duration::from_secs(10))
             .await
             .map_err(|source| local_daemon_connect_error(&socket_path, source))?;
-        let mut client = axon_sdk::pb::axon::v1::invocation_client::InvocationClient::new(channel)
-            .max_decoding_message_size(
-                crate::daemon::boot::invocation::MAX_INVOCATION_GRPC_MESSAGE_BYTES,
-            )
-            .max_encoding_message_size(
-                crate::daemon::boot::invocation::MAX_INVOCATION_GRPC_MESSAGE_BYTES,
-            );
+        let mut client = crate::daemon::invocation::transport::invocation_client(channel);
 
         let (up_tx, up_rx) = mpsc::channel::<InvokeBidiUp>(16);
         up_tx
@@ -874,7 +868,7 @@ fn invoke_local_daemon_ability_with_tuple_plan(
         let channel = connect_channel(socket_path.clone(), timeout, Duration::from_secs(10))
             .await
             .map_err(|source| local_daemon_connect_error(&socket_path, source))?;
-        let mut client = axon_sdk::pb::axon::v1::invocation_client::InvocationClient::new(channel);
+        let mut client = crate::daemon::invocation::transport::invocation_client(channel);
         let (value, _) = invoke_local_daemon_json(&mut client, request, &function_name).await?;
         Ok(value)
     })
@@ -905,8 +899,7 @@ fn invoke_local_daemon_ability_with_tuple_plan_at_verified(
                     connect_channel(socket_path.clone(), timeout, Duration::from_secs(10))
                         .await
                         .map_err(|source| local_daemon_connect_error(&socket_path, source))?;
-                let mut client =
-                    axon_sdk::pb::axon::v1::invocation_client::InvocationClient::new(channel);
+                let mut client = crate::daemon::invocation::transport::invocation_client(channel);
                 let (value, response) =
                     invoke_local_daemon_json(&mut client, request, &function_name).await?;
                 Ok::<_, anyhow::Error>((value, response, function_name))

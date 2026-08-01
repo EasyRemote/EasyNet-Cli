@@ -82,7 +82,7 @@ impl DaemonClient {
             endpoint: self.endpoint.clone(),
             source,
         })?;
-        let mut client = axon_sdk::pb::axon::v1::invocation_client::InvocationClient::new(channel);
+        let mut client = crate::daemon::invocation::transport::invocation_client(channel);
         client
             .invoke(request)
             .await
@@ -114,7 +114,7 @@ impl DaemonClient {
             endpoint: self.endpoint.clone(),
             source,
         })?;
-        let mut client = axon_sdk::pb::axon::v1::invocation_client::InvocationClient::new(channel);
+        let mut client = crate::daemon::invocation::transport::invocation_client(channel);
         client
             .invoke_stream(request)
             .await
@@ -150,7 +150,7 @@ impl DaemonClient {
             endpoint: self.endpoint.clone(),
             source,
         })?;
-        let mut client = axon_sdk::pb::axon::v1::invocation_client::InvocationClient::new(channel);
+        let mut client = crate::daemon::invocation::transport::invocation_client(channel);
         let (up_tx, up_rx) = tokio::sync::mpsc::channel(64);
         up_tx
             .send(frame0)

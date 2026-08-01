@@ -41,7 +41,6 @@ use crate::daemon::invocation::{
 };
 use crate::daemon::persistence::daemon_config;
 use axon_sdk::invocation::CausalContext;
-use axon_sdk::pb::axon::v1::invocation_client::InvocationClient;
 use axon_sdk::pb::axon::v1::{InvocationState as WireInvocationState, InvokeResponse};
 
 const FEDERATION_REVOKE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -905,7 +904,7 @@ fn invoke_remote_target_on_ready_socket_typed(
             ))
         })?;
 
-        let mut client = InvocationClient::new(channel);
+        let mut client = crate::daemon::invocation::transport::invocation_client(channel);
         let response = tokio::time::timeout(timeout, client.invoke(request))
             .await
             .map_err(|_| {
@@ -1005,7 +1004,7 @@ pub(crate) fn invoke_remote_target_stream(
         )
         .await
         .context("connect to local daemon gRPC endpoint")?;
-        let mut client = InvocationClient::new(channel);
+        let mut client = crate::daemon::invocation::transport::invocation_client(channel);
         let mut stream = client
             .invoke_stream(stream_request)
             .await
@@ -1122,13 +1121,7 @@ pub(crate) fn invoke_remote_target_bidi_json_frames(
         )
         .await
         .context("connect to local daemon gRPC endpoint")?;
-        let mut client = InvocationClient::new(channel)
-            .max_decoding_message_size(
-                crate::daemon::boot::invocation::MAX_INVOCATION_GRPC_MESSAGE_BYTES,
-            )
-            .max_encoding_message_size(
-                crate::daemon::boot::invocation::MAX_INVOCATION_GRPC_MESSAGE_BYTES,
-            );
+        let mut client = crate::daemon::invocation::transport::invocation_client(channel);
 
         let mut up_frames = vec![InvokeBidiUp {
             sequence: 0,
@@ -1558,7 +1551,7 @@ fn invoke_federation_discover_with_scope(
             )
             .await
             .context("connect to local daemon gRPC endpoint")?;
-            let mut client = InvocationClient::new(channel);
+            let mut client = crate::daemon::invocation::transport::invocation_client(channel);
             let resp = client.invoke(request).await.map_err(|status| {
                 anyhow!(
                     "daemon rejected federation.discover: code={:?} message={}",
@@ -1673,7 +1666,7 @@ pub fn invoke_federation_revoke(
         )
         .await
         .context("connect to local daemon gRPC endpoint")?;
-        let mut client = InvocationClient::new(channel);
+        let mut client = crate::daemon::invocation::transport::invocation_client(channel);
         let response = tokio::time::timeout(FEDERATION_REVOKE_TIMEOUT, client.invoke(request))
             .await
             .map_err(|_| anyhow!("daemon federation.revoke timed out after 10s"))?

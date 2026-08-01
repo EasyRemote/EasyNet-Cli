@@ -58,7 +58,6 @@ use tonic::transport::{Channel, Endpoint};
 #[cfg(test)]
 use crate::daemon::trust::anchor::RealmTrustAnchor;
 use crate::daemon::trust::cell::SharedTrustAnchor;
-use axon_sdk::pb::axon::v1::invocation_client::InvocationClient;
 use axon_sdk::pb::axon::v1::{InvokeRequest, InvokeResponse, InvokeServerStreamRequest};
 
 // Cross-hub peer trust source:
@@ -653,7 +652,7 @@ impl FederationClient for CrossHubDialer {
         };
 
         // ── 4. Inner Invoke wrapped in timeout (commit 4/N) ──
-        let mut client = InvocationClient::new(channel);
+        let mut client = crate::daemon::invocation::transport::invocation_client(channel);
         let outcome = tokio::time::timeout(self.invoke_timeout, client.invoke(request)).await;
 
         match outcome {
@@ -737,7 +736,7 @@ impl FederationClient for CrossHubDialer {
         };
 
         // ── 4. Open the server-stream. ──────────────────────
-        let mut client = InvocationClient::new(channel);
+        let mut client = crate::daemon::invocation::transport::invocation_client(channel);
         let target_hub_endpoint_owned = target_hub_endpoint.clone();
         let outcome =
             tokio::time::timeout(self.invoke_timeout, client.invoke_stream(request)).await;

@@ -897,10 +897,8 @@ async fn do_federation_join_and_resolve_hub_key_async(
         crate::daemon::federation::client::ability_contract::PrincipalEnrollmentProof,
     >,
 ) -> anyhow::Result<UraJoinResult> {
-    use axon_sdk::pb::axon::v1::invocation_client::InvocationClient;
-
     let channel = connect_hub_invocation_channel(&target.hub_endpoint, hub_ca).await?;
-    let mut client = InvocationClient::new(channel);
+    let mut client = crate::daemon::invocation::transport::invocation_client(channel);
 
     let public_key = hex::decode(public_key_hex).context("decode device public key hex")?;
     let public_key_bytes: [u8; 32] = public_key

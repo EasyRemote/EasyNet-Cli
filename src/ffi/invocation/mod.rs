@@ -120,6 +120,8 @@ const PROVIDER_CANCEL_REASON: &str = "consumer_request";
 const CALLER_SIGNER_UNAVAILABLE_CODE: &str = "CALLER_SIGNER_UNAVAILABLE";
 #[cfg(feature = "axon-pb")]
 const DESCRIPTOR_OWNER_OFFLINE_CODE: &str = "DESCRIPTOR_OWNER_OFFLINE";
+#[cfg(feature = "axon-pb")]
+const TRANSPORT_ENVELOPE_EXCEEDED_CODE: &str = "TRANSPORT_ENVELOPE_EXCEEDED";
 
 fn record_invocation_error(code: i32, message: impl Into<String>) -> i32 {
     set_last_error_code(code, message);
@@ -157,6 +159,19 @@ fn record_descriptor_owner_offline_error(message: impl Into<String>) -> i32 {
             code: DESCRIPTOR_OWNER_OFFLINE_CODE,
             stage: "routing",
             retry: "safe",
+        },
+        message,
+    )
+}
+
+#[cfg(feature = "axon-pb")]
+fn record_transport_envelope_exceeded_error(message: impl Into<String>) -> i32 {
+    record_invocation_projected_error(
+        ERR_ABILITY_FAILED,
+        ErrorProjection {
+            code: TRANSPORT_ENVELOPE_EXCEEDED_CODE,
+            stage: "transport",
+            retry: "never",
         },
         message,
     )
@@ -4857,6 +4872,9 @@ fn ffi_daemon_error(context: &str, err: crate::daemon::DaemonError) -> i32 {
         crate::daemon::DaemonInvocationErrorProjection::DescriptorOwnerOffline => {
             record_descriptor_owner_offline_error(message)
         }
+        crate::daemon::DaemonInvocationErrorProjection::TransportEnvelopeExceeded => {
+            record_transport_envelope_exceeded_error(message)
+        }
         _ => record_invocation_error(code, message),
     }
 }
@@ -4875,6 +4893,9 @@ fn ffi_code_for_daemon_error_projection(
         | crate::daemon::DaemonInvocationErrorProjection::DescriptorOwnerOffline => ERR_DAEMON_DOWN,
         crate::daemon::DaemonInvocationErrorProjection::CallerSignerUnavailable => {
             ERR_PERMISSION_DENIED
+        }
+        crate::daemon::DaemonInvocationErrorProjection::TransportEnvelopeExceeded => {
+            ERR_ABILITY_FAILED
         }
         crate::daemon::DaemonInvocationErrorProjection::Status(code) => {
             ffi_status_code_to_error(code)
@@ -11775,6 +11796,25 @@ mod tests {
         assert_eq!(error["retry"], "after_backoff");
         assert_eq!(error["details"]["abi_code"], ERR_DAEMON_DOWN);
         assert_eq!(error["details"]["abi_symbol"], "ERR_DAEMON_DOWN");
+    }
+
+    #[test]
+    fn daemon_message_capacity_error_is_not_reported_as_invalid_argument() {
+        let code = ffi_daemon_error(
+            "runtime_governance_read",
+            crate::daemon::DaemonError::InvokeStatus {
+                ability: "invocation.history.list".to_string(),
+                code: tonic::Code::OutOfRange,
+                message: "Error, decoded message length too large: found 6607756 bytes, the limit is: 4194304 bytes".to_string(),
+            },
+        );
+
+        assert_eq!(code, ERR_ABILITY_FAILED);
+        let error = read_last_error_json();
+        assert_eq!(error["code"], TRANSPORT_ENVELOPE_EXCEEDED_CODE);
+        assert_eq!(error["stage"], "transport");
+        assert_eq!(error["retry"], "never");
+        assert_eq!(error["details"]["abi_symbol"], "ERR_ABILITY_FAILED");
     }
 
     #[test]

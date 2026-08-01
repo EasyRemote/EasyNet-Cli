@@ -256,7 +256,8 @@ async fn run_user_trust_bootstrap_and_spawn_resync(
     log_user_trust_bootstrap_outcome(&outcome);
     let sync = sync.clone();
     Ok(Some(AbortOnDrop(tokio::spawn(async move {
-        let mut resync_client = InvocationClient::new(resync_channel);
+        let mut resync_client =
+            crate::daemon::invocation::transport::invocation_client(resync_channel);
         loop {
             tokio::time::sleep(USER_TRUST_RESYNC_INTERVAL).await;
             sync_realm_hub_trust_prelude(&mut resync_client, signer.as_ref(), &sync).await;

@@ -235,18 +235,6 @@ pub fn build_invocation_federation_runtime(
     })
 }
 
-/// Maximum decoded gRPC message size for InvocationServer/Client on
-/// both directions. tonic's default cap is 4 MiB which aborted
-/// `session.open` the moment any frame envelope grew past it (real
-/// trigger: file-transfer uploads ≥ 1 MB whose accumulated down
-/// frames cross 4 MiB). 64 MiB is deliberately a transport-envelope
-/// cap, not an ability payload cap: large files and snapshots must be
-/// chunked above gRPC instead of granting every peer a near-unbounded
-/// single-message allocation. Exposed `pub` because the **client** side
-/// (`session_initiator`, `session_wire`) must apply the
-/// same cap as the server side; without that the asymmetry triggers
-/// `OutOfRange: decoded message length too large` mid-stream.
-pub const MAX_INVOCATION_GRPC_MESSAGE_BYTES: usize = 64 * 1024 * 1024;
 const INITIAL_SESSION_ADMISSION_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

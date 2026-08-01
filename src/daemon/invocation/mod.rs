@@ -80,6 +80,7 @@ pub mod receipts;
 pub mod routing;
 #[cfg(feature = "axon-pb")]
 pub mod streams;
+pub(crate) mod transport;
 
 #[cfg(feature = "axon-pb")]
 pub use crate::daemon::boot::invocation::{
