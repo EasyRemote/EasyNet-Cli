@@ -1162,26 +1162,6 @@ pub fn invoke_local_target_stream_explicit_causal(
     )
 }
 
-/// Stream a canonical local target with tuple freshness and timeout issued by
-/// [`LocalSystemInvocationIssuer`]. Product adapters must use this boundary so
-/// system callers cannot mint independent nonce facts at the edge.
-pub fn invoke_local_target_stream_with_invocation_context(
-    target: &LocalAbilityTarget,
-    args: Value,
-    context: LocalSystemInvocationContext<'_>,
-    max_frames: Option<usize>,
-) -> anyhow::Result<Vec<LocalStreamFrame>> {
-    invoke_local_target_stream_explicit_causal(
-        target,
-        args,
-        &context.subject_ura,
-        context.invocation_nonce,
-        axon_sdk::invocation::CausalContext::None,
-        context.step_timeout,
-        max_frames,
-    )
-}
-
 /// Open a canonical local Ability URA target as an InvokeBidi JSON-frame
 /// session and drain a bounded number of down frames.
 #[expect(
