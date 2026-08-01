@@ -349,6 +349,7 @@ fn descriptor_is_mcp_callable(
     descriptor: &crate::daemon::ability::descriptors::AbilityDescriptor,
 ) -> bool {
     descriptor.call_mode() == crate::daemon::ability::descriptors::CallMode::Rpc
+        && McpDescriptorMetadataProjection::from_descriptor(descriptor).is_ok()
 }
 
 /// Convert a canonical EasyNet ability name into a client-safe MCP
