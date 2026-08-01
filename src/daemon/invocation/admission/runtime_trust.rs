@@ -44,6 +44,8 @@ use base64::prelude::*;
 use ed25519_dalek::VerifyingKey;
 use tonic::Status;
 
+use axon_sdk::invocation::MAX_KEYS_PER_AGENT_URA;
+
 use crate::daemon::persistence::file_lock::ExclusiveFileLock;
 use crate::daemon::trust::anchor::{
     RealmTrustAnchor, RealmTrustError, TrustedAgent, TrustedAgentRole, TrustedPrincipalOwner,
@@ -199,6 +201,11 @@ impl<'a> RuntimeTrust<'a> {
                     changed = true;
                 }
                 TrustedAgentRole::User if !user_key_already_present => {
+                    Self::enforce_user_key_cap_before_append(
+                        next_anchor,
+                        &principal_ura,
+                        now_unix_ms(),
+                    )?;
                     next_anchor.append_agent(entry)?;
                     changed = true;
                 }
@@ -210,6 +217,29 @@ impl<'a> RuntimeTrust<'a> {
             }
             Ok(((), changed))
         })
+    }
+
+    fn enforce_user_key_cap_before_append(
+        anchor: &mut RealmTrustAnchor,
+        user_ura: &str,
+        now_ms: u64,
+    ) -> Result<(), RealmTrustError> {
+        while anchor.lookup_user_all(user_ura).len() >= MAX_KEYS_PER_AGENT_URA {
+            let Some(oldest_key) = anchor
+                .lookup_user_all(user_ura)
+                .iter()
+                .min_by(|left, right| {
+                    left.added_at_unix_ms
+                        .cmp(&right.added_at_unix_ms)
+                        .then_with(|| left.public_key_b64.cmp(&right.public_key_b64))
+                })
+                .map(|entry| entry.public_key_b64.clone())
+            else {
+                break;
+            };
+            anchor.revoke_user_pubkey(user_ura, &oldest_key, now_ms)?;
+        }
+        Ok(())
     }
 
     /// Persist one authenticated runtime-principal ownership fact.
@@ -508,6 +538,37 @@ mod tests {
         let from_disk =
             RealmTrustAnchor::try_load_strict(&ctx.trust_anchor_path).expect("disk load");
         assert_eq!(from_disk.lookup_user_all(&user_ura).len(), 1);
+    }
+
+    #[test]
+    fn register_user_prunes_oldest_key_before_sdk_verifier_cap_is_exceeded() {
+        let (_dir, ctx) = context();
+        let user_ura = "easynet:///r/realm/user/alice".to_string();
+        let oldest = b64_pubkey(1);
+        let newest = b64_pubkey(9);
+
+        for seed in 1..=9u8 {
+            ctx.writer()
+                .register_pubkey(user_ura.clone(), b64_pubkey(seed), TrustedAgentRole::User)
+                .expect("register user key");
+        }
+
+        let snapshot = ctx.reader().user_snapshot(&user_ura);
+        assert_eq!(
+            snapshot.keys.len(),
+            axon_sdk::invocation::MAX_KEYS_PER_AGENT_URA
+        );
+        assert_eq!(snapshot.revoked_key_count, 1);
+        assert_eq!(snapshot.rotation_epoch, 1);
+        let from_disk =
+            RealmTrustAnchor::try_load_strict(&ctx.trust_anchor_path).expect("disk load");
+        assert!(from_disk
+            .lookup_user_by_pubkey(&user_ura, &oldest)
+            .is_none());
+        assert!(from_disk
+            .lookup_user_by_pubkey(&user_ura, &newest)
+            .is_some());
+        assert!(from_disk.is_user_pubkey_revoked(&user_ura, &oldest));
     }
 
     #[test]
