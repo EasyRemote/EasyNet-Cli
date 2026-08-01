@@ -5029,9 +5029,10 @@ if local_agents_identity_file.exists():
         )
 
 # Rule 39: chat hot-added Agent providers consume Agent aggregate projections.
-# Chat is an invocation-facing surface: hot-added discover/invoke handlers and
+# Chat is an invocation-facing surface: hot-added discover handlers and
 # peer-skill hints must not revive registry-only reads after the Agent aggregate
-# became the read owner for registered + hosted Agent state.
+# became the read owner for registered + hosted Agent state. The retired
+# `<agent>.invoke` handler must not be reintroduced merely to satisfy this gate.
 agent_chat = cli_root / "src/daemon/ability/builtins/agents/chat.rs"
 if agent_chat.exists():
     text = source(agent_chat)
@@ -5040,10 +5041,6 @@ if agent_chat.exists():
         (
             "AgentAggregateRepository::load_snapshot()",
             "Agent chat provider reads must load through the Agent aggregate repository",
-        ),
-        (
-            "registered_agent_registry_projection()",
-            "Agent chat hot providers must clone registry state through an aggregate projection",
         ),
         (
             "snapshot.registered_agents()",

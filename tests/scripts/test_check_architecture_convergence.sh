@@ -476,13 +476,7 @@ fn handler(binding: &ChatImplementationBinding) {
 }
 
 fn build_discover_handler_for() {
-    AgentAggregateRepository::load_snapshot()
-        .map(|snapshot| snapshot.registered_agent_registry_projection());
-}
-
-fn build_invoke_handler_for() {
-    AgentAggregateRepository::load_snapshot()
-        .map(|snapshot| snapshot.registered_agent_registry_projection());
+    AgentAggregateRepository::load_snapshot();
 }
 
 fn enumerate_other_agent_specs() -> anyhow::Result<Vec<AgentAbilitySpec>> {

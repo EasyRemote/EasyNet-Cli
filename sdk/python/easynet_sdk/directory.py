@@ -8,6 +8,7 @@ from typing import Mapping, Protocol
 
 from .errors import ErrorCode, RetryHint, SDKError
 from .core.directory import DirectoryResolveKind
+from .invocation import new_invocation_nonce_base64
 from .runtime_ability import RuntimeCallContext
 from .stream import StreamHandle
 
@@ -193,6 +194,14 @@ class DirectoryClient:
         records: list[DirectoryRecord] = []
         first: DirectoryResolution | None = None
         for page_number in range(1, max_pages + 1):
+            if page_number > 1:
+                normalized = replace(
+                    normalized,
+                    call=replace(
+                        normalized.call,
+                        nonce_base64=new_invocation_nonce_base64(),
+                    ),
+                )
             page = self._provider.resolve(normalized)
             if first is None:
                 first = page

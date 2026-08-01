@@ -1478,7 +1478,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn register_agent_lands_chat_discover_invoke_into_runtime_after_set_runtime() {
+    async fn register_agent_lands_chat_and_discover_without_invoke_wrapper() {
         // **Phase 5c invariant pin.**
         //
         // After `set_runtime`, calling `register_agent("liangbing", entry)`

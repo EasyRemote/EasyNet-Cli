@@ -84,10 +84,6 @@ type DirectoryPage struct {
 type DirectoryScanOptions struct {
 	MaxPages   uint32 `json:"max_pages,omitempty"`
 	MaxRecords uint32 `json:"max_records,omitempty"`
-	// NextPageCall issues a fresh Invocation context for every continuation
-	// page. The SDK owns the cursor walk, while the product remains the issuer
-	// of nonce and causal authority for each canonical Invocation.
-	NextPageCall func(context.Context, uint32, RuntimeCallContext) (RuntimeCallContext, error) `json:"-"`
 }
 
 // DirectorySnapshot is returned only after the continuation cursor reaches a
@@ -210,10 +206,10 @@ func (c *DirectoryClient) Scan(ctx context.Context, request DirectoryResolveRequ
 	}
 	var snapshot DirectoryResolution
 	for pageNumber := uint32(1); pageNumber <= maxPages; pageNumber++ {
-		if pageNumber > 1 && options.NextPageCall != nil {
-			normalized.Call, err = options.NextPageCall(ctx, pageNumber, normalized.Call)
+		if pageNumber > 1 {
+			normalized.Call.NonceBase64, err = NewInvocationNonceBase64()
 			if err != nil {
-				return DirectorySnapshot{}, invalidDirectory("Directory scan could not issue the next page call", err)
+				return DirectorySnapshot{}, invalidDirectory("Directory scan could not issue a fresh continuation nonce", err)
 			}
 		}
 		page, resolveErr := c.provider.Resolve(ctx, normalized)

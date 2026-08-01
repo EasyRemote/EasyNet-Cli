@@ -79,13 +79,6 @@ func TestDirectoryClientScanCollectsEveryPage(t *testing.T) {
 	}, DirectoryScanOptions{
 		MaxPages:   4,
 		MaxRecords: 60,
-		NextPageCall: func(_ context.Context, pageNumber uint32, previous RuntimeCallContext) (RuntimeCallContext, error) {
-			previous.NonceBase64 = "AgIDBAUGBwgJCgsMDQ4PEA=="
-			if pageNumber != 2 {
-				t.Fatalf("next page callback page = %d", pageNumber)
-			}
-			return previous, nil
-		},
 	})
 	if err != nil {
 		t.Fatalf("Scan: %v", err)

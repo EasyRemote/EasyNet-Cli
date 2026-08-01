@@ -234,13 +234,6 @@ fn cli_flat_command_boundary_script_holds() {
 }
 
 #[test]
-fn invoke_ability_ura_input_script_contract_holds() {
-    // Pins <agent>.invoke to canonical ability_ura input only. The
-    // retired target/ability request fields must stay rejected.
-    run_bash_script("tests/scripts/test_check_invoke_ability_ura_input.sh");
-}
-
-#[test]
 fn cli_ability_invoke_ura_script_contract_holds() {
     // Pins the human CLI ability-invoke front door to canonical
     // Ability URA selectors, not retired bare registry names.

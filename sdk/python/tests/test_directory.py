@@ -121,6 +121,7 @@ def test_directory_client_scan_collects_every_page() -> None:
     assert snapshot.resolution.records[-1].ability_ura.endswith("observe.health")
     assert provider.requests[1].cursor == "page-2"
     assert provider.requests[1].limit == 50
+    assert provider.requests[0].call.nonce_base64 != provider.requests[1].call.nonce_base64
 
 
 def test_directory_client_scan_rejects_repeated_cursor_and_record_bound() -> None:
