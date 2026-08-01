@@ -9,6 +9,7 @@ use crate::daemon::persistence::daemon_config::{
     self, DaemonConfig, DaemonMode as PersistedDaemonMode, DEFAULT_DAEMON_CONFIG_PATH,
     DEFAULT_DAEMON_UDS_PATH,
 };
+use crate::daemon::persistence::file_lock::ExclusiveFileLock;
 use crate::support::platform::{local_daemon_grpc, net};
 
 use super::identity_fact::DeviceNodeIdFact;
@@ -32,6 +33,9 @@ const STOP_POLL_INTERVAL: Duration = Duration::from_millis(100);
 ///    is accepting but `daemon.sock` is not, startup returns
 ///    `ControlAliveInvocationDown` so callers do not persist a broken
 ///    Invocation endpoint.
+/// 4. A live PID without accepting endpoints is a non-terminal daemon state,
+///    not permission to spawn a replacement. The child process additionally
+///    holds an OS-level lease for the full lifetime of the state root.
 #[derive(Debug, Clone)]
 pub struct DaemonStartConfig {
     mode: DaemonStartMode,
@@ -168,6 +172,7 @@ impl DaemonStartConfig {
                 pid_path: paths.pid_path,
             });
         }
+        refuse_live_daemon_without_endpoints(&paths)?;
 
         let binary = self.resolve_daemon_bin();
         let log_path = paths.log_path.clone();
@@ -382,6 +387,98 @@ impl DaemonStartConfig {
             source,
         })
     }
+}
+
+/// Process-lifetime ownership of one local daemon state root.
+///
+/// The lease is acquired before any daemon-owned listener or background
+/// service starts and is retained until process shutdown. Endpoint files are
+/// therefore safe to replace only after this lease has been obtained: a
+/// second daemon cannot unlink a live process's `control.sock` or
+/// `daemon.sock` and create two competing runtime authorities for one HOME.
+pub struct DaemonProcessLease {
+    _lock: ExclusiveFileLock,
+    pid_path: PathBuf,
+    pid: u32,
+}
+
+impl DaemonProcessLease {
+    /// Acquire the process lease for the current daemon state root and publish
+    /// this process as its sole PID owner.
+    pub fn acquire_current() -> Result<Self> {
+        let pid_path = config::try_easynet_daemon_pid_path().map_err(|source| {
+            DaemonError::DaemonStateRootUnavailable {
+                context: "daemon process lease",
+                source,
+            }
+        })?;
+        Self::acquire_at(pid_path)
+    }
+
+    fn acquire_at(pid_path: PathBuf) -> Result<Self> {
+        let lock = ExclusiveFileLock::try_acquire_for_data_path(&pid_path).map_err(|source| {
+            DaemonError::AcquireProcessLease {
+                path: pid_path.clone(),
+                source,
+            }
+        })?;
+        let Some(lock) = lock else {
+            let owner = read_daemon_pid_at(&pid_path)
+                .map(|pid| format!("pid {pid}"))
+                .unwrap_or_else(|| "another daemon process".to_string());
+            return Err(DaemonError::ProcessLeaseHeld {
+                path: pid_path,
+                owner,
+            });
+        };
+
+        let pid = std::process::id();
+        if let Some(existing_pid) = read_daemon_pid_at(&pid_path)
+            .filter(|existing_pid| *existing_pid != pid)
+            .filter(|existing_pid| net::is_pid_alive(*existing_pid))
+        {
+            if !net::is_easynet_process(existing_pid) {
+                return Err(DaemonError::PidReuseRefused { pid: existing_pid });
+            }
+            return Err(DaemonError::ProcessLeaseHeld {
+                path: pid_path,
+                owner: format!("legacy daemon pid {existing_pid}"),
+            });
+        }
+
+        write_daemon_pid_at(&pid_path, pid)?;
+        Ok(Self {
+            _lock: lock,
+            pid_path,
+            pid,
+        })
+    }
+}
+
+impl Drop for DaemonProcessLease {
+    fn drop(&mut self) {
+        if read_daemon_pid_at(&self.pid_path) == Some(self.pid) {
+            let _ = std::fs::remove_file(&self.pid_path);
+        }
+    }
+}
+
+fn refuse_live_daemon_without_endpoints(paths: &DaemonLaunchPaths) -> Result<()> {
+    let Some(pid) = read_daemon_pid_at(&paths.pid_path) else {
+        return Ok(());
+    };
+    if !net::is_pid_alive(pid) {
+        let _ = std::fs::remove_file(&paths.pid_path);
+        return Ok(());
+    }
+    if !net::is_easynet_process(pid) {
+        return Err(DaemonError::PidReuseRefused { pid });
+    }
+    Err(DaemonError::ProcessAliveEndpointsDown {
+        pid,
+        control: paths.endpoints.control.clone(),
+        invocation: paths.endpoints.invocation.clone(),
+    })
 }
 
 fn validate_effective_home(context: &'static str, path: PathBuf) -> Result<PathBuf> {
@@ -950,6 +1047,61 @@ mod tests {
             None,
             "stale pidfile must not fall back to global process-name discovery"
         );
+    }
+
+    #[test]
+    fn daemon_process_lease_is_exclusive_and_cleans_its_pid() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let pid_path = temp.path().join("easynet-daemon.pid");
+        let lease = DaemonProcessLease::acquire_at(pid_path.clone()).expect("first lease");
+
+        assert_eq!(read_daemon_pid_at(&pid_path), Some(std::process::id()));
+        let error = DaemonProcessLease::acquire_at(pid_path.clone())
+            .err()
+            .expect("second process lease must fail without blocking");
+        assert!(matches!(error, DaemonError::ProcessLeaseHeld { .. }));
+
+        drop(lease);
+        assert!(
+            !pid_path.exists(),
+            "the process that owns the pid projection must remove it on shutdown"
+        );
+    }
+
+    #[test]
+    fn daemon_process_lease_does_not_remove_a_reassigned_pid_projection() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let pid_path = temp.path().join("easynet-daemon.pid");
+        let lease = DaemonProcessLease::acquire_at(pid_path.clone()).expect("process lease");
+        std::fs::write(&pid_path, "424242").expect("simulate reassigned pid projection");
+
+        drop(lease);
+
+        assert_eq!(read_daemon_pid_at(&pid_path), Some(424242));
+    }
+
+    #[test]
+    fn daemon_start_refuses_live_pid_when_endpoints_are_down() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let paths = DaemonLaunchPaths {
+            endpoints: DaemonEndpoints {
+                control: temp.path().join("control.sock"),
+                invocation: temp.path().join("daemon.sock"),
+            },
+            discovery_path: temp.path().join("control.json"),
+            pid_path: temp.path().join("easynet-daemon.pid"),
+            log_path: temp.path().join("daemon.log"),
+        };
+        std::fs::write(&paths.pid_path, std::process::id().to_string())
+            .expect("write live daemon pid");
+
+        let error = refuse_live_daemon_without_endpoints(&paths)
+            .expect_err("a live pid must block replacement even before endpoints are ready");
+
+        assert!(matches!(
+            error,
+            DaemonError::ProcessAliveEndpointsDown { pid, .. } if pid == std::process::id()
+        ));
     }
 
     #[test]

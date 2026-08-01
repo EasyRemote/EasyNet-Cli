@@ -50,6 +50,21 @@ pub enum DaemonError {
         path: PathBuf,
         source: std::io::Error,
     },
+    #[error("failed to acquire daemon process lease at {path}: {source}")]
+    AcquireProcessLease {
+        path: PathBuf,
+        source: anyhow::Error,
+    },
+    #[error("daemon process lease at {path} is already held by {owner}")]
+    ProcessLeaseHeld { path: PathBuf, owner: String },
+    #[error(
+        "daemon pid {pid} is alive while runtime endpoints are unavailable: control={control}, invocation={invocation}"
+    )]
+    ProcessAliveEndpointsDown {
+        pid: u32,
+        control: PathBuf,
+        invocation: PathBuf,
+    },
     #[error("failed to probe daemon child pid {pid}: {source}")]
     ProbeChild { pid: u32, source: std::io::Error },
     #[error(

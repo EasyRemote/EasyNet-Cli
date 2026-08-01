@@ -136,11 +136,11 @@ pub fn try_default_socket_path() -> anyhow::Result<PathBuf> {
 /// On Unix:
 /// - Ensures the parent directory exists (mode is left as-is; the
 ///   user is responsible for `~/.easynet/` permissions).
-/// - Removes any stale socket file at the path. v1 does not
-///   probe-for-liveness against an existing socket; the daemon
-///   process supervisor (`easynet self control start`) is expected
-///   to have already detected and cleaned a stale daemon. Returning
-///   an `EADDRINUSE` here would be a worse UX than a forced unlink.
+/// - Removes the prior socket file only after daemon boot has acquired the
+///   state root's process-lifetime `DaemonProcessLease`. The lease, rather
+///   than the path's continued existence, distinguishes a stale inode from a
+///   live daemon and prevents a second process from unlinking the active
+///   listener.
 /// - Binds a `tokio::net::UnixListener`.
 /// - Sets the socket file mode to 0600 so other users on the host
 ///   physically cannot connect.
@@ -161,8 +161,8 @@ pub(crate) fn bind_at(path: &Path) -> anyhow::Result<(ControlListener, ControlAd
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        // Remove stale socket file. See doc comment on bind_default
-        // for why we don't try to probe liveness here.
+        // The process-lifetime daemon lease makes this path stale by
+        // construction. See the bind_default contract above.
         if path.exists() {
             std::fs::remove_file(path)?;
         }
