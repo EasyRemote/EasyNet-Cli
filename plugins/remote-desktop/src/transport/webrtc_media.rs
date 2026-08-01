@@ -12,14 +12,16 @@ use webrtc::media_stream::track_local::static_sample::TrackLocalStaticSample;
 use webrtc::media_stream::Track;
 use webrtc::peer_connection::PeerConnection;
 
-use crate::daemon::ability::builtins::resources::media::screen_snapshot::{
-    open_display_recorder_with_xcap, ScreenCaptureOptions,
-};
+#[cfg(feature = "native-media")]
+use crate::daemon::ability::builtins::resources::media::screen_snapshot::open_display_recorder_with_xcap;
+use crate::daemon::ability::builtins::resources::media::screen_snapshot::ScreenCaptureOptions;
 use crate::daemon::persistence::resources::ResourceEntry;
 use crate::daemon::plugins::remote_desktop::media::encode::BuiltinH264Config;
 use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
+#[cfg(feature = "native-media")]
+use crate::daemon::plugins::remote_desktop::transport::webrtc_baseline_media::run_direct_webrtc_recorder_stream;
 use crate::daemon::plugins::remote_desktop::transport::webrtc_baseline_media::{
-    run_direct_webrtc_polling_stream, run_direct_webrtc_recorder_stream, BaselineMediaInputs,
+    run_direct_webrtc_polling_stream, BaselineMediaInputs,
 };
 #[cfg(target_os = "macos")]
 use crate::daemon::plugins::remote_desktop::transport::webrtc_native_media::{
@@ -117,18 +119,26 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_media_
         options: &options,
         config: &config,
     };
-    let result = if let Ok((recorder, rx)) = open_display_recorder_with_xcap(&entry) {
-        run_direct_webrtc_recorder_stream(
-            &baseline_inputs,
-            recorder,
-            rx,
-            &mut done_rx,
-            &mut stop_rx,
-        )
-        .await
-    } else {
-        run_direct_webrtc_polling_stream(&baseline_inputs, &entry, &mut done_rx, &mut stop_rx).await
+    #[cfg(feature = "native-media")]
+    let result = {
+        if let Ok((recorder, rx)) = open_display_recorder_with_xcap(&entry) {
+            run_direct_webrtc_recorder_stream(
+                &baseline_inputs,
+                recorder,
+                rx,
+                &mut done_rx,
+                &mut stop_rx,
+            )
+            .await
+        } else {
+            run_direct_webrtc_polling_stream(&baseline_inputs, &entry, &mut done_rx, &mut stop_rx)
+                .await
+        }
     };
+    #[cfg(not(feature = "native-media"))]
+    let result =
+        run_direct_webrtc_polling_stream(&baseline_inputs, &entry, &mut done_rx, &mut stop_rx)
+            .await;
     if let Err(err) = result {
         sessions.mark_direct_webrtc_failed(
             &session_id,

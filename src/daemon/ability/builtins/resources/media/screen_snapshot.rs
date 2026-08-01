@@ -241,6 +241,18 @@ pub fn capture_rgb_with_xcap(
     }
 }
 
+#[cfg(not(feature = "native-media"))]
+pub fn capture_rgb_with_xcap(
+    entry: &ResourceEntry,
+    _options: &ScreenCaptureOptions,
+) -> anyhow::Result<RawRgbFrame> {
+    anyhow::bail!(
+        "{ABILITY_SCREEN_SNAPSHOT}: native xcap screen capture is not compiled for subject type {}; \
+         reason={REASON_RESOURCE_UNAVAILABLE}",
+        entry.kind.as_str()
+    )
+}
+
 #[cfg(feature = "native-media")]
 fn capture_display_rgb_with_xcap(
     entry: &ResourceEntry,
@@ -1048,6 +1060,7 @@ mod tests {
         ); // EOI
     }
 
+    #[cfg(feature = "native-media")]
     #[test]
     fn display_monitor_selector_prefers_platform_monitor_id() {
         let mut file = ResourcesFile::default();
@@ -1064,6 +1077,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "native-media")]
     #[test]
     fn display_monitor_selector_uses_index_only_without_monitor_id() {
         let mut file = ResourcesFile::default();
@@ -1079,6 +1093,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "native-media")]
     #[test]
     fn display_monitor_selector_allows_primary_only_for_unpinned_resource() {
         let mut file = ResourcesFile::default();
@@ -1090,6 +1105,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "native-media")]
     #[test]
     fn display_monitor_selector_rejects_malformed_metadata_instead_of_primary_fallback() {
         let mut file = ResourcesFile::default();

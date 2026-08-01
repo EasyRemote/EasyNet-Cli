@@ -5,6 +5,7 @@
 // Description: Stable ability names, reason codes, and runtime defaults.
 
 pub const ABILITY_CREATE_SESSION: &str = "remote_desktop.create_session";
+pub const ABILITY_GRANT_CONSENT: &str = "remote_desktop.grant_consent";
 pub const ABILITY_SHOW_SESSION: &str = "remote_desktop.show_session";
 pub const ABILITY_SET_DESCRIPTION: &str = "remote_desktop.set_description";
 pub const ABILITY_ADD_ICE_CANDIDATE: &str = "remote_desktop.add_ice_candidate";

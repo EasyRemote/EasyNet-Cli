@@ -17,6 +17,25 @@ use super::constants::{
     NATIVE_MAX_BITRATE_KBPS,
 };
 
+/// Human-readable contract for `remote_desktop.grant_consent`.
+pub fn grant_consent_description() -> &'static str {
+    "Record explicit local-user consent for creating a remote desktop session \
+     on the selected display/window/application resource. The terminal receipt \
+     of this invocation must be supplied as causal_context to \
+     remote_desktop.create_session."
+}
+
+/// JSON input schema for `remote_desktop.grant_consent`.
+pub fn grant_consent_input_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "intent": { "type": "string", "enum": ["remote_desktop_session"] }
+        }
+    })
+}
+
 /// Human-readable contract for `remote_desktop.create_session`.
 pub fn create_session_description() -> &'static str {
     "Create a remote desktop control session for a display/window/application \

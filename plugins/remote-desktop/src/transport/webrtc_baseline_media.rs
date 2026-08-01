@@ -4,6 +4,7 @@
 // File: plugins/remote-desktop/src/transport/webrtc_baseline_media.rs
 // Description: xcap-backed baseline capture strategies for direct WebRTC.
 
+#[cfg(feature = "native-media")]
 use std::sync::mpsc::RecvTimeoutError;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -11,15 +12,19 @@ use std::time::{Duration, Instant};
 use tokio::sync::watch;
 use webrtc::media_stream::track_local::static_sample::TrackLocalStaticSample;
 
+#[cfg(feature = "native-media")]
+use crate::daemon::ability::builtins::resources::media::screen_snapshot::rgba_bytes_to_rgb_frame;
 use crate::daemon::ability::builtins::resources::media::screen_snapshot::{
-    capture_rgb_with_xcap, rgba_bytes_to_rgb_frame, ScreenCaptureOptions,
+    capture_rgb_with_xcap, ScreenCaptureOptions,
 };
 use crate::daemon::persistence::resources::ResourceEntry;
+#[cfg(feature = "native-media")]
+use crate::daemon::plugins::remote_desktop::media::encode::latest_recorder_frame;
 use crate::daemon::plugins::remote_desktop::media::encode::{
-    build_openh264_encoder, even_rgb_frame, latest_recorder_frame, write_h264_sample,
-    BuiltinH264Config,
+    build_openh264_encoder, even_rgb_frame, write_h264_sample, BuiltinH264Config,
 };
 
+#[cfg(feature = "native-media")]
 const RECORDER_FRAME_TIMEOUT_MS: u64 = 250;
 
 /// Immutable inputs shared by xcap-backed WebRTC baseline streams.
@@ -34,6 +39,7 @@ pub(in crate::daemon::plugins::remote_desktop) struct BaselineMediaInputs<'a> {
     pub(in crate::daemon::plugins::remote_desktop) config: &'a BuiltinH264Config,
 }
 
+#[cfg(feature = "native-media")]
 pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_recorder_stream(
     inputs: &BaselineMediaInputs<'_>,
     recorder: xcap::VideoRecorder,

@@ -8,6 +8,7 @@ pub(in crate::daemon::plugins::remote_desktop) mod add_ice_candidate;
 pub(in crate::daemon::plugins::remote_desktop) mod attach;
 pub(in crate::daemon::plugins::remote_desktop) mod create_session;
 pub(in crate::daemon::plugins::remote_desktop) mod end_session;
+pub(in crate::daemon::plugins::remote_desktop) mod grant_consent;
 pub(in crate::daemon::plugins::remote_desktop) mod permission_status;
 pub(in crate::daemon::plugins::remote_desktop) mod refresh_lease;
 pub(in crate::daemon::plugins::remote_desktop) mod request_permission;

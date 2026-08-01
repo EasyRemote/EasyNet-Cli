@@ -26,6 +26,7 @@ kind = "screen"
 modes = ["subscribe", "record"]
 transport = "webrtc"
 activation_abilities = [
+  "remote_desktop.grant_consent",
   "remote_desktop.create_session",
   "remote_desktop.set_description",
   "remote_desktop.add_ice_candidate",
@@ -45,6 +46,11 @@ resources = [
   "application",
 ]
 quick_add = true
+
+[[ability_metadata]]
+name = "remote_desktop.grant_consent"
+layer = "control"
+call_mode = "rpc"
 
 [[ability_metadata]]
 name = "remote_desktop.create_session"

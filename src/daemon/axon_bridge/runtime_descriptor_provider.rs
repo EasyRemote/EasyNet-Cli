@@ -588,6 +588,15 @@ fn runtime_system_descriptor_catalog_entries(
         crate::daemon::ability::dispatch::OwnerKind::RealmAuthority
     ) {
         crate::daemon::ability::catalog::build_system_registry_for_authority_owner(owner_ura)?
+    } else if matches!(owner, crate::daemon::ability::dispatch::OwnerKind::Device) {
+        // Device runtime publication is broader than system descriptor
+        // generation: builtin plugin abilities are registered into the
+        // canonical daemon registry and must resolve descriptor_refs through
+        // the same AbilityDescriptor rows as ordinary device abilities.
+        // `build_system_registry()` deliberately excludes plugin packages for
+        // file generation; using it here splits discovery from invocation and
+        // makes resource-backed plugin abilities fail before admission.
+        crate::daemon::ability::catalog::build_registry()
     } else {
         crate::daemon::ability::catalog::build_system_registry()
     };
@@ -877,6 +886,39 @@ mod tests {
         assert_eq!(resolved["name"], "project_list");
         assert_eq!(resolved["call_mode"], "rpc");
         assert_eq!(resolved["source"], "runtime_remote_descriptor_catalog");
+    }
+
+    #[test]
+    #[cfg(feature = "remote-desktop")]
+    fn runtime_descriptor_resolver_resolves_device_remote_desktop_create_session() {
+        let device_ura = crate::core::ura::device_ura("localhost", "local-runtime-node");
+        let ability_ura =
+            "easynet:///r/localhost/ability/device.local-runtime-node.remote_desktop.create_session";
+
+        let resolved = RuntimeDescriptorResolutionProvider::resolve_json(
+            &serde_json::json!({
+                "callee_ura": device_ura.as_str(),
+                "caller_ura": "easynet:///r/localhost/user/operator",
+                "subject_ura": device_ura.as_str(),
+                "ability": "remote_desktop.create_session",
+                "call_mode": "rpc",
+            })
+            .to_string(),
+            || Ok(device_ura.clone()),
+        )
+        .expect("device remote_desktop.create_session descriptor must resolve");
+
+        assert_eq!(resolved["ability_ura"], ability_ura);
+        assert_eq!(resolved["owner_ura"], device_ura);
+        assert_eq!(resolved["name"], "remote_desktop.create_session");
+        assert_eq!(resolved["call_mode"], "rpc");
+        assert_eq!(resolved["source"], "runtime_local_descriptor_catalog");
+        assert!(resolved["descriptor_ref"]
+            .as_str()
+            .is_some_and(
+                |descriptor_ref| descriptor_ref.starts_with(&format!("{ability_ura}@"))
+                    && descriptor_ref.ends_with("!manage")
+            ));
     }
 
     #[test]

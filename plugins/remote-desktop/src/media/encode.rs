@@ -4,7 +4,6 @@
 // File: plugins/remote-desktop/src/media/encode.rs
 // Description: OpenH264/Annex-B media encoding paths for remote desktop.
 
-use std::sync::mpsc::{RecvTimeoutError, TryRecvError};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -16,12 +15,17 @@ use openh264::encoder::{
 use openh264::formats::{RgbSliceU8, YUVBuffer};
 use openh264::{OpenH264API, Timestamp};
 use serde_json::json;
+#[cfg(feature = "native-media")]
+use std::sync::mpsc::{RecvTimeoutError, TryRecvError};
 use tokio::sync::{mpsc, watch};
 use webrtc::media_stream::track_local::static_sample::TrackLocalStaticSample;
 
+#[cfg(feature = "native-media")]
+use crate::daemon::ability::builtins::resources::media::screen_snapshot::open_display_recorder_with_xcap;
+#[cfg(feature = "native-media")]
+use crate::daemon::ability::builtins::resources::media::screen_snapshot::rgba_bytes_to_rgb_frame;
 use crate::daemon::ability::builtins::resources::media::screen_snapshot::{
-    capture_rgb_with_xcap, open_display_recorder_with_xcap, rgba_bytes_to_rgb_frame, RawRgbFrame,
-    ScreenCaptureOptions,
+    capture_rgb_with_xcap, RawRgbFrame, ScreenCaptureOptions,
 };
 use crate::daemon::ability::dispatch::BidiOutputFrame;
 use crate::daemon::persistence::resources::ResourceEntry;
@@ -39,6 +43,7 @@ use crate::daemon::plugins::remote_desktop::transport::BidiTerminalGuard;
 
 const H264_ANNEX_B_CONTENT_TYPE: &str = "video/h264; stream-format=annexb";
 pub(in crate::daemon::plugins::remote_desktop) const DIAGNOSTIC_RELAY_GOP_MAX_FRAMES: u32 = 15;
+#[cfg(feature = "native-media")]
 const RECORDER_FRAME_TIMEOUT_MS: u64 = 250;
 
 /// Runtime H.264 stream configuration selected from local media backends.
@@ -161,15 +166,18 @@ fn run_builtin_h264_stream(
     stop_rx: watch::Receiver<bool>,
     terminal_guard: BidiTerminalGuard,
 ) -> BuiltinH264StreamTerminal {
-    if let Some(terminal) = run_builtin_h264_recorder_stream(
-        &entry,
-        &options,
-        &config,
-        to_client.clone(),
-        stop_rx.clone(),
-        terminal_guard.clone(),
-    ) {
-        return terminal;
+    #[cfg(feature = "native-media")]
+    {
+        if let Some(terminal) = run_builtin_h264_recorder_stream(
+            &entry,
+            &options,
+            &config,
+            to_client.clone(),
+            stop_rx.clone(),
+            terminal_guard.clone(),
+        ) {
+            return terminal;
+        }
     }
     run_builtin_h264_polling_stream(entry, options, config, to_client, stop_rx, terminal_guard)
 }
@@ -187,6 +195,7 @@ fn h264_failure(
     }
 }
 
+#[cfg(feature = "native-media")]
 fn run_builtin_h264_recorder_stream(
     entry: &ResourceEntry,
     options: &ScreenCaptureOptions,
@@ -297,6 +306,7 @@ fn run_builtin_h264_recorder_stream(
     Some(terminal)
 }
 
+#[cfg(feature = "native-media")]
 pub(in crate::daemon::plugins::remote_desktop) fn latest_recorder_frame(
     rx: &std::sync::mpsc::Receiver<xcap::Frame>,
     mut frame: xcap::Frame,

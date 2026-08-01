@@ -24,17 +24,20 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
-use crate::daemon::ability::builtins::resources::media::screen_snapshot::{
-    ScreenSnapshotBackend, XcapBackend,
-};
+use crate::daemon::ability::builtins::resources::media::screen_snapshot::ScreenSnapshotBackend;
+#[cfg(all(not(feature = "native-media"), feature = "headless-media"))]
+use crate::daemon::ability::builtins::resources::media::screen_snapshot::SyntheticScreenBackend;
+#[cfg(feature = "native-media")]
+use crate::daemon::ability::builtins::resources::media::screen_snapshot::XcapBackend;
 use crate::daemon::ability::descriptors::AdmissionAction;
 use crate::daemon::ability::dispatch::{BidiSource, EnvelopeContext, StreamSource};
 use crate::daemon::ability::{AbilityImplSource, CallMode};
 use crate::daemon::plugins::package::BuiltinPluginAbilitySpec;
 use crate::daemon::plugins::remote_desktop::constants::{
     ABILITY_ADD_ICE_CANDIDATE, ABILITY_ATTACH_SESSION, ABILITY_CREATE_SESSION, ABILITY_END_SESSION,
-    ABILITY_PERMISSION_STATUS, ABILITY_REFRESH_LEASE, ABILITY_REQUEST_PERMISSION,
-    ABILITY_SET_DESCRIPTION, ABILITY_SHOW_SESSION, ABILITY_WATCH_EVENTS,
+    ABILITY_GRANT_CONSENT, ABILITY_PERMISSION_STATUS, ABILITY_REFRESH_LEASE,
+    ABILITY_REQUEST_PERMISSION, ABILITY_SET_DESCRIPTION, ABILITY_SHOW_SESSION,
+    ABILITY_WATCH_EVENTS,
 };
 use crate::daemon::plugins::remote_desktop::handlers;
 use crate::daemon::plugins::remote_desktop::runtime::RemoteDesktopPlugin;
@@ -124,6 +127,20 @@ impl RemoteDesktopAbilityBinding {
 /// Single runtime-side source for every exported remote desktop ability.
 pub(crate) fn compiled_ability_bindings() -> &'static [RemoteDesktopCompiledAbilityBinding] {
     &[
+        RemoteDesktopCompiledAbilityBinding {
+            spec: BuiltinPluginAbilitySpec {
+                name: ABILITY_GRANT_CONSENT,
+                layer: PluginAbilityLayer::Control,
+                call_mode: CallMode::Rpc,
+                admission_action: AdmissionAction::Manage,
+                bidi_wire_kind: None,
+                description: schema::grant_consent_description,
+                input_schema: schema::grant_consent_input_schema,
+            },
+            handler: RemoteDesktopAbilityBinding::StatelessRpc {
+                handler: handlers::grant_consent::handle,
+            },
+        },
         RemoteDesktopCompiledAbilityBinding {
             spec: BuiltinPluginAbilitySpec {
                 name: ABILITY_CREATE_SESSION,
@@ -280,7 +297,22 @@ pub fn contribute(
     builder: &mut PluginContributionBuilder,
     limits: PluginRuntimeLimits,
 ) -> Result<()> {
-    contribute_with_screen_backend(builder, Arc::new(XcapBackend), limits)
+    #[cfg(feature = "native-media")]
+    {
+        return contribute_with_screen_backend(builder, Arc::new(XcapBackend), limits);
+    }
+    #[cfg(all(not(feature = "native-media"), feature = "headless-media"))]
+    {
+        return contribute_with_screen_backend(builder, Arc::new(SyntheticScreenBackend), limits);
+    }
+    #[cfg(not(any(feature = "native-media", feature = "headless-media")))]
+    {
+        let _ = builder;
+        let _ = limits;
+        return anyhow::bail!(
+            "remote-desktop requires either native-media or headless-media provider support"
+        );
+    }
 }
 
 /// Contribute the remote desktop plugin with an injected screen backend.
