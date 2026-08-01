@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 const (
@@ -30,6 +31,7 @@ type controlDiscovery struct {
 	socketPath           string
 	pipeName             string
 	invocationEndpoint   string
+	runtimeHostIdentity  *controlRuntimeHostIdentityProjection
 	pid                  int
 	runtimeHostVersion   string
 	supportedIPCVersions IpcVersionRange
@@ -56,6 +58,25 @@ type controlRuntimeHostIdentityProjection struct {
 	Mode              string  `json:"mode"`
 	Realm             string  `json:"realm"`
 	RuntimeInstanceID *string `json:"node_id,omitempty"`
+}
+
+func (p *controlRuntimeHostIdentityProjection) validate() error {
+	if p == nil {
+		return nil
+	}
+	if strings.TrimSpace(p.Mode) == "" {
+		return fmt.Errorf("runtime host identity projection missing mode")
+	}
+	if strings.TrimSpace(p.Realm) == "" {
+		return fmt.Errorf("runtime host identity projection missing realm")
+	}
+	if p.RuntimeInstanceID != nil {
+		value := strings.TrimSpace(*p.RuntimeInstanceID)
+		*p.RuntimeInstanceID = value
+	}
+	p.Mode = strings.TrimSpace(p.Mode)
+	p.Realm = strings.TrimSpace(p.Realm)
+	return nil
 }
 
 func (d *controlDiscovery) UnmarshalJSON(raw []byte) error {
@@ -94,6 +115,13 @@ func (d *controlDiscovery) UnmarshalJSON(raw []byte) error {
 	d.socketPath = stringPointerValue(wire.SocketPath)
 	d.pipeName = stringPointerValue(wire.PipeName)
 	d.invocationEndpoint = stringPointerValue(wire.InvocationEndpoint)
+	if err := wire.RuntimeHostIdentity.validate(); err != nil {
+		return err
+	}
+	if wire.RuntimeHostIdentity != nil {
+		identity := *wire.RuntimeHostIdentity
+		d.runtimeHostIdentity = &identity
+	}
 	d.pid = *wire.PID
 	d.runtimeHostVersion = *wire.RuntimeHostVersion
 	d.supportedIPCVersions = *wire.SupportedIPCVersions

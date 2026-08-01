@@ -47,8 +47,8 @@ func RuntimeCredentialsPath(controlPath string) (string, error) {
 	return filepath.Join(root, runtimeCredentialsFilename), nil
 }
 
-// ReadRuntimeIdentityProjection reads and validates the paired runtime identity
-// projection. If credentialsPath is empty it is derived from controlPath.
+// ReadRuntimeIdentityProjection reads the standalone identity projection.
+// An empty credentialsPath is derived from controlPath for compatibility.
 func ReadRuntimeIdentityProjection(ctx context.Context, credentialsPath string, controlPath string) (RuntimeIdentityProjection, error) {
 	if ctx == nil {
 		return RuntimeIdentityProjection{}, invalidRuntimeEnvironment("context is required", nil)
@@ -83,6 +83,25 @@ func ReadRuntimeIdentityProjection(ctx context.Context, credentialsPath string, 
 		return RuntimeIdentityProjection{}, err
 	}
 	return projection, nil
+}
+
+func runtimeIdentityProjectionFromControlDiscovery(discovery controlDiscovery, controlPath string) (RuntimeIdentityProjection, error) {
+	identity := discovery.runtimeHostIdentity
+	if identity == nil || strings.TrimSpace(identity.Realm) == "" ||
+		(identity.RuntimeInstanceID == nil || strings.TrimSpace(*identity.RuntimeInstanceID) == "") {
+		return RuntimeIdentityProjection{}, &SDKError{
+			Code:      ErrCallerIdentityUnavailable,
+			Stage:     "runtime_environment",
+			Retry:     RetryNever,
+			Retryable: false,
+			Message:   "runtime control discovery has no complete runtime host identity",
+			Details:   map[string]any{"control_path": controlPath},
+		}
+	}
+	return RuntimeIdentityProjection{
+		Realm:             identity.Realm,
+		RuntimeInstanceID: strings.TrimSpace(*identity.RuntimeInstanceID),
+	}, nil
 }
 
 // NewRuntimeIdentityProjectionFromJSON decodes a credentials projection.
@@ -138,11 +157,24 @@ func (e *SdkEnvironment) RuntimeCredentialsPath() (string, error) {
 	return RuntimeCredentialsPath(e.options.Discover.ControlPath)
 }
 
-// ReadRuntimeIdentityProjection reads the environment's paired identity
-// projection unless an explicit credentialsPath is supplied.
+// ReadRuntimeIdentityProjection reads the environment's control-discovery
+// identity unless an explicit credentialsPath is supplied.
 func (e *SdkEnvironment) ReadRuntimeIdentityProjection(ctx context.Context, credentialsPath string) (RuntimeIdentityProjection, error) {
 	if e == nil {
 		return RuntimeIdentityProjection{}, invalidRuntimeEnvironment("sdk environment is not initialized", nil)
+	}
+	if strings.TrimSpace(credentialsPath) == "" {
+		discovery, err := fileControlDiscoveryReader{}.readControlDiscovery(
+			ctx,
+			e.options.Discover.ControlPath,
+		)
+		if err != nil {
+			return RuntimeIdentityProjection{}, err
+		}
+		return runtimeIdentityProjectionFromControlDiscovery(
+			discovery,
+			e.options.Discover.ControlPath,
+		)
 	}
 	return ReadRuntimeIdentityProjection(ctx, credentialsPath, e.options.Discover.ControlPath)
 }
