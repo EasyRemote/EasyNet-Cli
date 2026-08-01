@@ -63,10 +63,11 @@ fn device_ability_replay_fatal_message(
     {
         return Some(format!(
             "device ability replay failed before daemon start: runtime_not_ready={}, \
-             store_unreadable={}, stale={}, quarantined={}, errored={}, outcomes={}",
+             store_unreadable={}, stale={}, lease_pending={}, quarantined={}, errored={}, outcomes={}",
             report.runtime_not_ready,
             report.store_unreadable,
             report.stale,
+            report.lease_pending,
             report.quarantined,
             report.errored,
             report.outcomes_json()
@@ -82,9 +83,10 @@ fn report_device_ability_replay(
         anyhow::bail!(message);
     }
     eprintln!(
-        "[device-ability] replay: {} registered, {} stale, {} quarantined, {} errored, \
+        "[device-ability] replay: {} registered, {} lease-pending, {} stale, {} quarantined, {} errored, \
          runtime_not_ready={}, store_unreadable={}, outcomes={}",
         report.registered,
+        report.lease_pending,
         report.stale,
         report.quarantined,
         report.errored,

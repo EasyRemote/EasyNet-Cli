@@ -89,7 +89,9 @@ use crate::daemon::ability::catalog::{
 };
 use crate::daemon::ability::conformance::{BaselineSurface, HubBaseline};
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
-use crate::daemon::invocation::routing::target::{CallMode, InvocationTarget};
+use crate::daemon::invocation::routing::target::{
+    CallMode, InvocationTarget, SystemInvocationTargetIssuer,
+};
 
 // ── Helpers ──────────────────────────────────────────────────────
 
@@ -3999,13 +4001,16 @@ fn real_context_folders_and_fs_list_browse_a_mapped_dir() {
 }
 
 #[test]
-fn real_context_captures_record_list_get() {
+fn real_context_captures_record_list_get_and_stream_read() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
     // Seed one artifact the way a media handler does, then read it
     // back through both abilities.
     let entry = crate::daemon::persistence::context_store::record_capture(
         crate::daemon::persistence::context_store::CaptureRecord {
-            device: "easynet:///r/test/device/d1",
+            device: &crate::core::ura::device_ura(
+                crate::core::ura::REALM_EASYNET,
+                "ability-catalog-snapshot",
+            ),
             ability: "screen.snapshot",
             ext: "jpg",
             bytes: b"\xff\xd8jpegbytes",
@@ -4025,12 +4030,25 @@ fn real_context_captures_record_list_get() {
     assert_eq!(listed["abilities"], json!(["screen.snapshot"]));
     assert_eq!(listed["entries"][0]["id"], json!(entry.id.clone()));
 
-    let got = invoke("context.captures.get", json!({"id": entry.id}));
+    let got = invoke("context.captures.get", json!({"id": entry.id.clone()}));
     assert_eq!(got["content_type"], json!("image/jpeg"));
     assert!(
-        got["data_base64"].as_str().is_some_and(|s| !s.is_empty()),
-        "payload inlined as base64"
+        got.get("data_base64").is_none(),
+        "payload must not be inlined"
     );
+
+    let registry = build_registry_for_test_execution().expect("build executable test registry");
+    let stream = dispatcher_for(registry)
+        .execute_stream(SystemInvocationTargetIssuer::local_root(
+            "context.captures.read",
+            json!({"id": entry.id}),
+            CallMode::Stream,
+        ))
+        .expect("stream capture through LocalRuntime");
+    let frames = stream.into_snapshot();
+    assert_eq!(frames.len(), 2, "one payload chunk plus completion");
+    assert_eq!(frames[0]["kind"], "chunk");
+    assert_eq!(frames[1]["kind"], "complete");
 }
 
 #[test]

@@ -233,6 +233,9 @@ pub struct CanonicalAdmissionKeyResolver {
     bootstrap_candidate:
         Arc<crate::daemon::axon_bridge::runtime_admin::BootstrapCandidateKeyProvider>,
     receipt_signers: Arc<dyn CanonicalReceiptProvider>,
+    invocation_verification_keys: Option<
+        Arc<dyn crate::daemon::identity::receipt_signing::InvocationVerificationKeyProvider>,
+    >,
 }
 
 impl CanonicalAdmissionKeyResolver {
@@ -251,7 +254,18 @@ impl CanonicalAdmissionKeyResolver {
             bootstrap_identities,
             bootstrap_candidate,
             receipt_signers,
+            invocation_verification_keys: None,
         }
+    }
+
+    pub(crate) fn with_invocation_verification_keys(
+        mut self,
+        provider: Arc<
+            dyn crate::daemon::identity::receipt_signing::InvocationVerificationKeyProvider,
+        >,
+    ) -> Self {
+        self.invocation_verification_keys = Some(provider);
+        self
     }
 
     pub(crate) fn bootstrap_identity_provider(
@@ -303,6 +317,11 @@ impl KeyResolver for CanonicalAdmissionKeyResolver {
         let mut keys = Vec::new();
         if let Some(key) = self.receipt_signers.resolve_signer_key(agent_ura)? {
             Self::append_unique(&mut keys, key);
+        }
+        if let Some(provider) = self.invocation_verification_keys.as_ref() {
+            if let Some(key) = provider.resolve_invocation_verifying_key(agent_ura)? {
+                Self::append_unique(&mut keys, key);
+            }
         }
         if let Some(bootstrap_keys) = self.bootstrap_identities.keys_for(agent_ura)? {
             for key in bootstrap_keys {

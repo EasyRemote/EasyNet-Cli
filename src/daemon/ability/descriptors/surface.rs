@@ -914,6 +914,9 @@ impl AbilityDescriptor {
         if let Some(output_schema) = manifest.output_schema() {
             descriptor = descriptor.with_output_schema(output_schema.clone());
         }
+        if let Some(exposure) = manifest.exposure() {
+            descriptor = descriptor.with_metadata_entry("exposure", exposure.as_str());
+        }
         Ok(descriptor)
     }
 
@@ -1514,6 +1517,8 @@ mod tests {
         .unwrap()
         .with_descriptor_version("2.0.0")
         .unwrap()
+        .with_exposure(crate::daemon::ability::manifest::AbilityExposure::Task)
+        .unwrap()
         .with_output_schema(serde_json::json!({"type":"object"}))
         .unwrap()
         .with_access(crate::daemon::ability::manifest::AccessPolicy {
@@ -1535,6 +1540,7 @@ mod tests {
         assert_eq!(descriptor.version, "2.0.0");
         assert_eq!(descriptor.call_mode(), CallMode::Stream);
         assert_eq!(descriptor.description, "emit a quote");
+        assert_eq!(descriptor.metadata["exposure"], "task");
         assert_eq!(descriptor.denied_agents(), &["mallory"]);
         assert_eq!(
             descriptor.scope_agents,

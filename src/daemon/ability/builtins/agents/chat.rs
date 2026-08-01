@@ -162,11 +162,10 @@ pub fn register(
     for (agent_name, entry) in &agents.agents {
         register_for_agent(reg, agent_name.clone(), entry.clone(), Arc::clone(&loaders));
     }
-    // The owner-namespaced `<agent>.discover` and `<agent>.invoke`
-    // self-bundle abilities live in their own modules — see
+    // The owner-namespaced `<agent>.discover` self-bundle ability lives in
+    // its own module — see
     // `daemon::ability::catalog::build_registry_with_services` (called after
-    // the dispatch handle is in scope, since `<agent>.invoke` needs
-    // to resolve through the live registry).
+    // the dispatch handle is in scope).
     //
     // No lookup-miss fallback is installed here. Post-boot agent
     // additions flow through HotAgentRegistrar, which materialises
@@ -519,29 +518,6 @@ pub(crate) fn build_discover_handler_for(
             &provider,
             &dispatch_handle,
             federation_resolver.as_ref(),
-            args,
-        )
-    })
-}
-
-/// Synthesise an `<agent>.invoke` handler for a hot-added agent.
-/// Routes through the same builtin invoke entry the boot-time
-/// registration uses.
-pub(crate) fn build_invoke_handler_for(
-    agent_name: String,
-    dispatch_handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
-) -> crate::daemon::ability::dispatch::LocalRpcHandler {
-    Arc::new(move |args: Value| {
-        let registry = AgentAggregateRepository::load_snapshot()
-            .map(|snapshot| snapshot.registered_agent_registry_projection())
-            .map_err(|error| anyhow::anyhow!("load invoke Agent aggregate: {error:#}"))?;
-        let provider: Arc<
-            dyn Fn() -> crate::daemon::persistence::agent_registry::AgentRegistry + Send + Sync,
-        > = Arc::new(move || registry.clone());
-        crate::daemon::ability::builtins::agents::invoke::dispatch(
-            &agent_name,
-            &provider,
-            &dispatch_handle,
             args,
         )
     })

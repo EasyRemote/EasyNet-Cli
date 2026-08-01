@@ -138,6 +138,9 @@ impl CanonicalReceiptProvider for RuntimeAdmissionCanonicalReceiptProvider {
 pub struct DaemonRuntimeAssembly {
     runtime: Arc<LocalRuntime>,
     admission_graph: Arc<DaemonRuntimeAdmissionGraph>,
+    invocation_verification_keys: Option<
+        Arc<dyn crate::daemon::identity::receipt_signing::InvocationVerificationKeyProvider>,
+    >,
 }
 
 #[cfg(feature = "axon-pb")]
@@ -150,6 +153,13 @@ impl DaemonRuntimeAssembly {
     #[must_use]
     pub(crate) fn admission_graph(&self) -> Arc<DaemonRuntimeAdmissionGraph> {
         Arc::clone(&self.admission_graph)
+    }
+
+    pub(crate) fn invocation_verification_keys(
+        &self,
+    ) -> Option<Arc<dyn crate::daemon::identity::receipt_signing::InvocationVerificationKeyProvider>>
+    {
+        self.invocation_verification_keys.clone()
     }
 
     /// Bind the daemon's completed runtime admission facade to the handlers
@@ -186,6 +196,7 @@ pub fn build_production_local_runtime(
         trusted_identities,
         providers.receipt,
         Some(providers.invocation),
+        Some(providers.invocation_verification),
         None,
     ))
 }
@@ -204,7 +215,13 @@ pub fn build_daemon_runtime_with_receipt_provider(
     canonical_receipt_provider: Arc<dyn CanonicalReceiptProvider>,
     ledger: Option<Arc<InvocationLedger>>,
 ) -> DaemonRuntimeAssembly {
-    assemble_daemon_runtime(trusted_identities, canonical_receipt_provider, None, ledger)
+    assemble_daemon_runtime(
+        trusted_identities,
+        canonical_receipt_provider,
+        None,
+        None,
+        ledger,
+    )
 }
 
 #[cfg(feature = "axon-pb")]
@@ -213,6 +230,9 @@ fn assemble_daemon_runtime(
     canonical_receipt_provider: Arc<dyn CanonicalReceiptProvider>,
     invocation_authority_provider: Option<
         Arc<dyn axon_sdk::invocation::InvocationSigningAuthorityProvider>,
+    >,
+    invocation_verification_keys: Option<
+        Arc<dyn crate::daemon::identity::receipt_signing::InvocationVerificationKeyProvider>,
     >,
     ledger: Option<Arc<InvocationLedger>>,
 ) -> DaemonRuntimeAssembly {
@@ -230,12 +250,17 @@ fn assemble_daemon_runtime(
     let bootstrap_candidate = Arc::new(
         crate::daemon::axon_bridge::runtime_admin::BootstrapCandidateKeyProvider::default(),
     );
-    let admission_key_resolver = Arc::new(CanonicalAdmissionKeyResolver::new(
+    let mut admission_key_resolver = CanonicalAdmissionKeyResolver::new(
         trusted_identities,
         bootstrap_identities,
         bootstrap_candidate,
         Arc::clone(&receipt_provider),
-    ));
+    );
+    if let Some(provider) = invocation_verification_keys.as_ref() {
+        admission_key_resolver =
+            admission_key_resolver.with_invocation_verification_keys(Arc::clone(provider));
+    }
+    let admission_key_resolver = Arc::new(admission_key_resolver);
     let admission_graph = Arc::new(DaemonRuntimeAdmissionGraph::new(
         admission_key_resolver,
         runtime_admission,
@@ -250,6 +275,7 @@ fn assemble_daemon_runtime(
     DaemonRuntimeAssembly {
         runtime,
         admission_graph,
+        invocation_verification_keys,
     }
 }
 

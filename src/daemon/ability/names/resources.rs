@@ -10,6 +10,7 @@ pub const CONTEXT_FAVORITES_ADD: &str = "context.favorites.add";
 pub const CONTEXT_FAVORITES_REMOVE: &str = "context.favorites.remove";
 pub const CONTEXT_CAPTURES_LIST: &str = "context.captures.list";
 pub const CONTEXT_CAPTURES_GET: &str = "context.captures.get";
+pub const CONTEXT_CAPTURES_READ: &str = "context.captures.read";
 
 pub const MEDIA_MIC_SUBSCRIBE: &str = "mic.subscribe";
 pub const MEDIA_CAMERA_SUBSCRIBE: &str = "camera.subscribe";

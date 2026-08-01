@@ -469,7 +469,49 @@ fn receipt_identity_error(error: impl std::fmt::Display) -> AxonError {
 
 pub(crate) struct RuntimeSigningAuthorityProviders {
     pub invocation: Arc<dyn InvocationSigningAuthorityProvider>,
+    pub invocation_verification: Arc<dyn InvocationVerificationKeyProvider>,
     pub receipt: Arc<dyn CanonicalReceiptProvider>,
+}
+
+/// Synchronous public-key projection for invocation callers whose signing key
+/// is held by another locally owned principal, such as a hosted Agent signed
+/// by its host Device. Admission consumes this projection without gaining a
+/// signing capability.
+pub(crate) trait InvocationVerificationKeyProvider: Send + Sync {
+    fn resolve_invocation_verifying_key(
+        &self,
+        caller_ura: &str,
+    ) -> Result<Option<VerifyingKey>, AxonError>;
+}
+
+impl InvocationVerificationKeyProvider for KeyServiceReceiptAuthorityProvider {
+    fn resolve_invocation_verifying_key(
+        &self,
+        caller_ura: &str,
+    ) -> Result<Option<VerifyingKey>, AxonError> {
+        if let Some(signer) = self.signer_capabilities.get(caller_ura) {
+            return signer
+                .signing_public_key()
+                .map(Some)
+                .map_err(receipt_identity_error);
+        }
+        let Some(inventory) = self.hosted_agent_inventory.as_ref() else {
+            return Ok(None);
+        };
+        if inventory.resolve_signing_lease(caller_ura).is_none() {
+            return Ok(None);
+        }
+        let device = self.hosted_agent_device.as_ref().ok_or_else(|| {
+            AxonError::internal("daemon_invocation_hosted_inventory_missing_device")
+        })?;
+        axon_sdk::invocation::validate_hosted_attestation_authority(caller_ura, &device.ura)?;
+        self.signer_capabilities
+            .get(&device.ura)
+            .ok_or_else(|| AxonError::internal("daemon_invocation_host_signer_missing"))?
+            .signing_public_key()
+            .map(Some)
+            .map_err(receipt_identity_error)
+    }
 }
 
 pub(crate) fn load_runtime_signing_authority_providers(
@@ -477,9 +519,11 @@ pub(crate) fn load_runtime_signing_authority_providers(
 ) -> Result<RuntimeSigningAuthorityProviders, AxonError> {
     let provider = Arc::new(KeyServiceReceiptAuthorityProvider::load(config)?);
     let invocation: Arc<dyn InvocationSigningAuthorityProvider> = provider.clone();
+    let invocation_verification: Arc<dyn InvocationVerificationKeyProvider> = provider.clone();
     let receipt: Arc<dyn CanonicalReceiptProvider> = provider;
     Ok(RuntimeSigningAuthorityProviders {
         invocation,
+        invocation_verification,
         receipt,
     })
 }
@@ -608,6 +652,29 @@ mod tests {
         let canonical = b"daemon-production-receipt";
         let signature = authority.sign_and_verify(canonical).await.unwrap();
         verify_authority_signature(authority.as_ref(), canonical, &signature).unwrap();
+    }
+
+    #[test]
+    fn hosted_invocation_verification_key_tracks_active_inventory_lease() {
+        let (provider, inventory) = test_device_provider_with_inventory();
+        let agent_ura = "easynet:///r/acme/agent/alice.worker";
+        let device_ura = "easynet:///r/acme/device/edge-01";
+
+        let agent_key = provider
+            .resolve_invocation_verifying_key(agent_ura)
+            .unwrap()
+            .expect("hosted Agent verification key");
+        let device_key = provider
+            .resolve_invocation_verifying_key(device_ura)
+            .unwrap()
+            .expect("host Device verification key");
+        assert_eq!(agent_key, device_key);
+
+        inventory.revoke(agent_ura);
+        assert!(provider
+            .resolve_invocation_verifying_key(agent_ura)
+            .unwrap()
+            .is_none());
     }
 
     #[tokio::test]

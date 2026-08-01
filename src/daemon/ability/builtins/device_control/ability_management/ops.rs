@@ -521,6 +521,12 @@ fn deploy_ability_handler_with_clock(
     // Operator-facing store timestamp. The cryptographic execution
     // timeline remains the Axon receipt chain; this field is for deploy
     // listing, replay diagnostics, and deterministic sorting.
+    let binding_lease_ms = match args.get("binding_lease_ms") {
+        Some(value) => Some(value.as_u64().ok_or_else(|| {
+            anyhow::anyhow!("ability.deploy: `binding_lease_ms` must be a positive integer")
+        })?),
+        None => None,
+    };
     let install = DeviceAbilityInstall::new(
         key.clone(),
         bundle.namespace.as_str(),
@@ -529,7 +535,8 @@ fn deploy_ability_handler_with_clock(
         bundle.manifest_bytes.clone(),
         bundle.manifest.clone(),
         clock.now_unix_ms(),
-    )?;
+    )?
+    .with_binding_lease_ms(binding_lease_ms)?;
 
     // ── runtime binding + route check + durable commit (transaction) ─
     let state = block_on_install(registrar, install)?;
@@ -542,6 +549,7 @@ fn deploy_ability_handler_with_clock(
         "target_ura": owner_ura,
         "mutated_by": mutated_by,
         "install_id": install_id,
+        "binding_lease_ms": binding_lease_ms,
         "bundle": bundle.display_path,
         // ACTIVE iff route resolver confirms the key is routable with
         // the expected call mode AND the durable commit succeeded.
@@ -694,7 +702,8 @@ pub fn deploy_ability_input_schema() -> Value {
         "required": ["resource_ref", "target_ura"],
         "properties": {
             "resource_ref": filesystem::resource_ref_schema(),
-            "target_ura": { "type": "string" }
+            "target_ura": { "type": "string" },
+            "binding_lease_ms": { "type": "integer", "minimum": 1000, "maximum": 300000 }
         }
     })
 }

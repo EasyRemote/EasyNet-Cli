@@ -1110,6 +1110,7 @@ pub(crate) fn classify_ability(name: &str) -> Option<AbilityLayer> {
         | "context.favorites.list"
         | "context.captures.list"
         | "context.captures.get"
+        | "context.captures.read"
         | resource_names::VOICE_SHOW_CALL
         | resource_names::VOICE_WATCH_CALL
         | resource_names::VOICE_LIST_CALLS => Some(AbilityLayer::Introspection),

@@ -535,6 +535,11 @@ pub type LocalRpcHandlerWithEnvelope =
 ///     mid-flight needs to see currently-pending requests AND new
 ///     ones; a Discuss room view shows past turns AND new posts.
 ///
+///   * `Finite(rx)` — bounded, backpressured finite production. The
+///     producer may surface a terminal error through the channel. Used
+///     for disk-backed or computed results that must not be materialised
+///     as one in-memory snapshot and must not use lossy broadcast.
+///
 /// The `From` impls let handlers return either a `Vec<Value>` or a
 /// `broadcast::Receiver<Value>` directly via `.into()`.
 #[derive(Debug)]
@@ -542,6 +547,7 @@ pub enum StreamSource {
     Snapshot(Vec<Value>),
     Live(broadcast::Receiver<Value>),
     SnapshotThenLive(Vec<Value>, broadcast::Receiver<Value>),
+    Finite(tokio::sync::mpsc::Receiver<anyhow::Result<Value>>),
 }
 
 impl From<Vec<Value>> for StreamSource {
@@ -573,12 +579,13 @@ impl StreamSource {
             StreamSource::Snapshot(v) => v,
             StreamSource::Live(_) => Vec::new(),
             StreamSource::SnapshotThenLive(s, _) => s,
+            StreamSource::Finite(_) => Vec::new(),
         }
     }
 }
 
-/// One in-process stream handler. Returns either an eager snapshot
-/// or a live broadcast::Receiver — see `StreamSource` for the
+/// One in-process stream handler. Returns an eager snapshot, a live
+/// broadcast, or a bounded finite producer — see `StreamSource` for the
 /// contract.
 pub type LocalStreamHandler = Arc<dyn Fn(Value) -> anyhow::Result<StreamSource> + Send + Sync>;
 
@@ -1043,6 +1050,16 @@ async fn emit_stream_source(
                         )));
                     }
                 }
+            }
+        }
+        StreamSource::Finite(mut rx) => {
+            while let Some(frame) = rx.recv().await {
+                let frame = frame.map_err(|err| {
+                    AxonError::internal(format!(
+                        "local_runtime_adapter: finite stream producer failed: {err:#}"
+                    ))
+                })?;
+                emit_json_progress(&ctx, frame).await?;
             }
         }
     }
@@ -5021,6 +5038,25 @@ impl AxonAbilityCatalog {
             manifest,
             ReceiptSemantics::Operational,
             handler,
+        );
+    }
+
+    pub fn register_rpc_with_envelope_spec_and_action(
+        &mut self,
+        ability: impl Into<String>,
+        owner: OwnerKind,
+        action: crate::daemon::ability::descriptors::AdmissionAction,
+        manifest: crate::daemon::ability::manifest::AbilityManifest,
+        handler: LocalRpcHandlerWithEnvelope,
+    ) {
+        self.register_static_or_panic(
+            StaticRegistration::new(
+                ability,
+                owner,
+                StaticRegistrationHandler::RpcWithEnvelope(handler),
+            )
+            .with_admission_action(action)
+            .with_manifest(manifest),
         );
     }
 

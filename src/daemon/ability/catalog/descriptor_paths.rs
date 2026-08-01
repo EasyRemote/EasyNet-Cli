@@ -118,6 +118,7 @@ impl SystemAbilityDescriptorGroup {
             | resources::CONTEXT_FAVORITES_REMOVE
             | resources::CONTEXT_CAPTURES_LIST
             | resources::CONTEXT_CAPTURES_GET
+            | resources::CONTEXT_CAPTURES_READ
             | resources::MEDIA_MIC_SUBSCRIBE
             | resources::MEDIA_CAMERA_SUBSCRIBE
             | resources::MEDIA_CAMERA_SNAPSHOT

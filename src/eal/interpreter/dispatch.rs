@@ -163,7 +163,7 @@ fn device_request(
             "cannot resolve EAL device target {node_id:?}: no tenant in scope"
         )));
     };
-    MissionInvocationRequest::remote_node(target, ability, arguments)
+    MissionInvocationRequest::remote_owner(target, ability, arguments)
         .map_err(|error| EalError::Validation(format!("parse device target: {error}")))
 }
 

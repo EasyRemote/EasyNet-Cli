@@ -256,7 +256,7 @@ fn deterministic_snapshot_build_config_for_profile<'a>(
 /// at boot; tests construct a fresh registry per case.
 ///
 /// `agents` and `loaders` feed hosted-agent dynamic replay:
-/// `<agent>.chat`, `<agent>.discover`, `<agent>.invoke`, and
+/// `<agent>.chat`, `<agent>.discover`, and
 /// executable TOML abilities are not static catalogue rows. They are
 /// installed through `HotAgentRegistrar` after the catalogue is wrapped
 /// in `Arc`, so boot replay, `agent.start`, `agent.refresh`, and
@@ -966,8 +966,8 @@ fn build_registry_with_services_result_inner(
     // The device-owned aggregate `agent.discover` owns the top-level view and
     // reloads the Agent aggregate per call, so it never chooses a random first
     // agent as a synthetic self or splits registry reads from hosted identity
-    // reads. Per-agent `<agent>.discover` /
-    // `<agent>.invoke` are hosted-agent lifecycle rows; they are replayed
+    // reads. Per-agent `<agent>.discover` rows are hosted-agent lifecycle rows;
+    // they are replayed
     // through HotAgentRegistrar after `Arc::new(reg)` below.
     discover_ability::register_device_aggregate_with_resolver(
         &mut reg,

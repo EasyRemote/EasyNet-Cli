@@ -26,7 +26,7 @@ use axon_sdk::invocation::LocalRuntime;
 
 use crate::daemon::ability::builtins::agents::chat::{
     build_agent_ability_handler, build_chat_handler_for, build_chat_stream_handler_for,
-    build_discover_handler_for, build_host_stream_handler, build_invoke_handler_for, ContextLoader,
+    build_discover_handler_for, build_host_stream_handler, ContextLoader,
 };
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, OwnerKind};
 use crate::daemon::persistence::agent_registry::AgentEntry;
@@ -731,23 +731,6 @@ impl HotAgentRegistrar {
             .await
             {
                 synced.insert(discover_ability);
-            }
-
-            // ── invoke
-            let invoke_handler =
-                build_invoke_handler_for(name.to_string(), Arc::clone(&self.dispatch_handle));
-            let invoke_ability = format!("{name}.invoke");
-            if Self::register_rpc_with_spec(
-                &mut sync_ctx,
-                &invoke_ability,
-                owner.clone(),
-                crate::daemon::ability::builtins::agents::invoke::manifest(),
-                crate::daemon::ability::descriptors::AdmissionAction::Invoke,
-                invoke_handler,
-            )
-            .await
-            {
-                synced.insert(invoke_ability);
             }
 
             // ── TOML-declared executor-bound abilities. Manifests without
@@ -1528,8 +1511,8 @@ mod tests {
             .expect("register succeeds");
 
         assert!(
-            outcome.registered >= 3,
-            "chat/discover/invoke triple must land (plus any TOML), got {outcome:?}"
+            outcome.registered >= 2,
+            "chat/discover abilities must land (plus any TOML), got {outcome:?}"
         );
         assert_eq!(outcome.failed, 0);
         assert_eq!(outcome.replaced, 0);
@@ -1555,7 +1538,7 @@ mod tests {
                 .await
         );
         assert!(
-            rt.has_ability(&runtime_key("liangbing", "liangbing.invoke"))
+            !rt.has_ability(&runtime_key("liangbing", "liangbing.invoke"))
                 .await
         );
     }
@@ -1583,7 +1566,7 @@ mod tests {
             .register_agent("liangbing", &first_entry)
             .await
             .expect("initial register succeeds");
-        assert!(first.registered >= 3, "initial register must land rows");
+        assert!(first.registered >= 2, "initial register must land rows");
         assert_eq!(first.replaced, 0);
         assert_eq!(first.failed, 0);
 
@@ -1598,8 +1581,8 @@ mod tests {
             "refreshing an existing agent should not create duplicate rows"
         );
         assert!(
-            second.replaced >= 3,
-            "chat/discover/invoke triple must be replaced, got {second:?}"
+            second.replaced >= 2,
+            "chat/discover abilities must be replaced, got {second:?}"
         );
         assert_eq!(
             second.failed, 0,
@@ -1608,7 +1591,6 @@ mod tests {
 
         let expected_chat = runtime_key("liangbing", "liangbing.chat");
         let expected_discover = runtime_key("liangbing", "liangbing.discover");
-        let expected_invoke = runtime_key("liangbing", "liangbing.invoke");
         let mut replaced = std::collections::BTreeSet::new();
         for _ in 0..16 {
             let Ok(event) =
@@ -1619,18 +1601,13 @@ mod tests {
             if let Ok(AbilityChangeEvent::Replaced { name, .. }) = event {
                 replaced.insert(name);
             }
-            if replaced.contains(&expected_chat)
-                && replaced.contains(&expected_discover)
-                && replaced.contains(&expected_invoke)
-            {
+            if replaced.contains(&expected_chat) && replaced.contains(&expected_discover) {
                 break;
             }
         }
         assert!(
-            replaced.contains(&expected_chat)
-                && replaced.contains(&expected_discover)
-                && replaced.contains(&expected_invoke),
-            "runtime must broadcast replacement for the canonical agent triple, got {replaced:?}"
+            replaced.contains(&expected_chat) && replaced.contains(&expected_discover),
+            "runtime must broadcast replacement for chat/discover, got {replaced:?}"
         );
     }
 
@@ -1681,8 +1658,8 @@ mod tests {
             .expect("unregister succeeds");
         let removed = removal.outcome().removed;
         assert!(
-            removed >= 3,
-            "chat/discover/invoke triple must be removed, got {removed}"
+            removed >= 2,
+            "chat/discover abilities must be removed, got {removed}"
         );
         assert!(
             !rt.has_ability(&runtime_key("liangbing", "liangbing.chat"))

@@ -536,6 +536,9 @@ pub fn start_daemon_invocation_transport(
     admission = admission.with_ability_catalog(Arc::clone(&local_ability_catalog));
     admission = admission.with_principal_lifecycle_reader(principal_lifecycle_reader);
     admission = admission.with_federated_key_resolver(federation_runtime.resolver());
+    if let Some(provider) = daemon_runtime.invocation_verification_keys() {
+        admission = admission.with_invocation_verification_keys(provider);
+    }
     // #185: one hot-swappable quota gate is shared by both listeners.
     // The gate exists even when quota starts disabled so SIGHUP can
     // enable, disable, or retune `[daemon.quota]` without rebuilding

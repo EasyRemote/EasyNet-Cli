@@ -468,7 +468,7 @@ mod tests {
     #[test]
     fn uuid_minter_keeps_llm_names_bare_and_prefixes_system_profiles() {
         // The dispatch registry registers `<agent>.chat` /
-        // `<agent>.invoke` / `<agent>.discover` under the raw
+        // `<agent>.discover` under the raw
         // `agents.json::keys` (i.e. the operator's
         // `easynet agent add <name>` argument). The friendly URA
         // minted into `local-agents.json` MUST agree with that

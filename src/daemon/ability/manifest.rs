@@ -212,6 +212,10 @@ pub struct AbilityManifest {
     admission_action: Option<String>,
     name: String,
     description: String,
+    /// Product display lane. This is descriptive catalog metadata only and
+    /// never grants invocation authority.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    exposure: Option<AbilityExposure>,
     #[serde(skip_serializing_if = "Option::is_none")]
     timeout_seconds: Option<u64>,
     input_schema: Value,
@@ -224,7 +228,7 @@ pub struct AbilityManifest {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     exec: Option<AbilityExec>,
     /// Optional access policy. Drives `<agent>.discover` filtering and
-    /// the `<agent>.invoke` permission check. Absence is treated as the
+    /// canonical child-Invocation admission. Absence is treated as the
     /// default policy (`AccessPolicy::default()`), which sets
     /// `visibility = "device"` — the same trust boundary as "agents
     /// running on the same physical device under one user".
@@ -264,6 +268,24 @@ pub struct AbilityManifest {
     /// than silently presented as invocable.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     health: Option<HealthSpec>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AbilityExposure {
+    Task,
+    Operator,
+    Internal,
+}
+
+impl AbilityExposure {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Task => "task",
+            Self::Operator => "operator",
+            Self::Internal => "internal",
+        }
+    }
 }
 
 /// Per-ability cost declaration, written to disk under the `[cost]`
@@ -771,6 +793,7 @@ impl AbilityManifest {
             admission_action: None,
             name: name.into(),
             description: description.into(),
+            exposure: None,
             timeout_seconds: None,
             input_schema,
             output_schema: None,
@@ -860,6 +883,14 @@ impl AbilityManifest {
         Ok(self)
     }
 
+    /// Set the product catalog lane. Exposure is descriptive metadata and
+    /// does not alter the manifest's access policy or admission action.
+    pub fn with_exposure(mut self, exposure: AbilityExposure) -> anyhow::Result<Self> {
+        self.exposure = Some(exposure);
+        self.validate()?;
+        Ok(self)
+    }
+
     /// Override the default `None` timeout. Returns `self` for the
     /// builder-style chain a caller of `new(...)` might use.
     pub fn with_timeout_seconds(mut self, seconds: u64) -> anyhow::Result<Self> {
@@ -922,6 +953,10 @@ impl AbilityManifest {
     /// Human-readable blurb. Not a protocol field.
     pub fn description(&self) -> &str {
         &self.description
+    }
+
+    pub fn exposure(&self) -> Option<AbilityExposure> {
+        self.exposure
     }
 
     /// Effective governed interface version. Absent manifest field means the
@@ -1705,7 +1740,30 @@ mod tests {
         assert_eq!(m.descriptor_version(), DEFAULT_DESCRIPTOR_VERSION);
         assert!(m.input_schema().is_object());
         assert!(m.output_schema().is_none());
+        assert_eq!(m.exposure(), None);
         assert_eq!(m.timeout_seconds(), None);
+    }
+
+    #[test]
+    fn exposure_round_trips_as_descriptive_catalog_metadata() {
+        let manifest = AbilityManifest::new("infer", "run inference", object_schema())
+            .unwrap()
+            .with_exposure(AbilityExposure::Task)
+            .unwrap()
+            .with_access(AccessPolicy {
+                visibility: ManifestAccessScope::Device,
+                allow_callers: None,
+                deny_callers: None,
+            })
+            .unwrap();
+
+        let wire = manifest.to_toml_string().unwrap();
+        assert!(wire.contains("exposure = \"task\""));
+        assert_eq!(
+            AbilityManifest::from_toml_str(&wire).unwrap().exposure(),
+            Some(AbilityExposure::Task)
+        );
+        assert_eq!(manifest.access().visibility, ManifestAccessScope::Device);
     }
 
     #[test]

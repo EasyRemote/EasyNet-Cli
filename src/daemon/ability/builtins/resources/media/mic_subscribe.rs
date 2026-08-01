@@ -600,6 +600,7 @@ mod tests {
                 assert_eq!(frames.len(), 1);
                 frames.remove(0)
             }
+            StreamSource::Finite(_) => panic!("mic.subscribe must not return a finite stream"),
         };
         assert!(
             frame.get("samples_b64").is_some(),
@@ -748,6 +749,7 @@ mod tests {
         let deadline = std::time::Instant::now() + Duration::from_secs(2);
         loop {
             let captures = crate::daemon::persistence::context_store::list_captures(
+                "easynet:///r/acme/device/01DEV",
                 Some(ABILITY_MIC_SUBSCRIBE),
                 10,
             )

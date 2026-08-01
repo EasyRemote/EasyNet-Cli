@@ -123,6 +123,9 @@ pub struct AdmissionFacade {
     /// `federation.resolve_key` handler may delegate to it, but neither owns a
     /// second signature-verification path.
     federated_keys: Option<Arc<FederatedKeyResolver>>,
+    invocation_verification_keys: Option<
+        Arc<dyn crate::daemon::identity::receipt_signing::InvocationVerificationKeyProvider>,
+    >,
     /// Explicit transport authority for local self admission. The daemon
     /// serves the same Invocation service over local-only IPC and off-box
     /// TCP/TLS; this state prevents a caller that can reach TCP and spoof the
@@ -753,6 +756,7 @@ impl AdmissionFacade {
             daemon_ura,
             ability_catalog: None,
             federated_keys: None,
+            invocation_verification_keys: None,
             transport_boundary: AdmissionTransportBoundary::LocalOnlyIpc,
             quota: SharedUsageQuotaGate::disabled(),
             access_control_stores: default_access_control_stores(),
@@ -1169,6 +1173,17 @@ impl AdmissionFacade {
         self
     }
 
+    #[must_use]
+    pub(crate) fn with_invocation_verification_keys(
+        mut self,
+        provider: Arc<
+            dyn crate::daemon::identity::receipt_signing::InvocationVerificationKeyProvider,
+        >,
+    ) -> Self {
+        self.invocation_verification_keys = Some(provider);
+        self
+    }
+
     fn trusted_role_for_caller(
         &self,
         caller_ura: &str,
@@ -1182,6 +1197,19 @@ impl AdmissionFacade {
         }
         if let Some(role) = self.principal_lifecycle_role_for_caller(caller_ura)? {
             return Ok(role);
+        }
+        if let Some(provider) = self.invocation_verification_keys.as_ref() {
+            let hosted = provider
+                .resolve_invocation_verifying_key(caller_ura)
+                .map_err(|error| {
+                    Status::internal(format!(
+                        "resolve local invocation verification key for {caller_ura}: {error}"
+                    ))
+                })?
+                .is_some();
+            if hosted {
+                return Ok(TrustedAgentRole::Device);
+            }
         }
         if self.is_federated_caller(caller_ura) {
             return federated_caller_role(caller_ura)

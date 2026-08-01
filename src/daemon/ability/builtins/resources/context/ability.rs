@@ -21,6 +21,9 @@
 //   * `context.favorites.list`   — favorites
 //   * `context.favorites.add`    — star a clip / file / folder
 //   * `context.favorites.remove` — unstar
+//   * `context.captures.list`    — device-scoped capture metadata
+//   * `context.captures.get`     — one device-scoped metadata record
+//   * `context.captures.read`    — bounded finite capture byte stream
 //
 // Owner is Device: the clipboard and the folder mappings are
 // per-device state, captured/served by whichever daemon hosts them —
@@ -33,10 +36,15 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+use std::io::Read as _;
+
 use base64::Engine as _;
 use serde_json::{json, Value};
+use sha2::{Digest as _, Sha256};
 
-use crate::daemon::ability::dispatch::{AxonAbilityCatalog, OwnerKind};
+use crate::daemon::ability::dispatch::{
+    AxonAbilityCatalog, EnvelopeContext, OwnerKind, StreamSource,
+};
 use crate::daemon::persistence::context_store;
 
 pub const ABILITY_CLIPBOARD_LIST: &str =
@@ -61,6 +69,12 @@ pub const ABILITY_CAPTURES_LIST: &str =
     crate::daemon::ability::names::resources::CONTEXT_CAPTURES_LIST;
 pub const ABILITY_CAPTURES_GET: &str =
     crate::daemon::ability::names::resources::CONTEXT_CAPTURES_GET;
+pub const ABILITY_CAPTURES_READ: &str =
+    crate::daemon::ability::names::resources::CONTEXT_CAPTURES_READ;
+
+const CAPTURE_STREAM_CHUNK_BYTES: usize = 48 * 1024;
+const CAPTURE_STREAM_CHANNEL_BOUND: usize = 8;
+const CAPTURE_STREAM_MAX_BYTES: u64 = 256 * 1024 * 1024;
 
 /// Register every context ability. Called from
 /// `daemon::ability::catalog::build_registry`.
@@ -85,7 +99,7 @@ pub fn register(reg: &mut AxonAbilityCatalog) {
         OwnerKind::Device,
         std::sync::Arc::new(clipboard_remove_handler),
     );
-    reg.register_rpc_with_owner(
+    reg.register_rpc_with_envelope_and_owner(
         ABILITY_CATALOG,
         OwnerKind::Device,
         std::sync::Arc::new(catalog_handler),
@@ -115,15 +129,25 @@ pub fn register(reg: &mut AxonAbilityCatalog) {
         OwnerKind::Device,
         std::sync::Arc::new(favorites_remove_handler),
     );
-    reg.register_rpc_with_owner(
+    reg.register_rpc_with_envelope_and_owner(
         ABILITY_CAPTURES_LIST,
         OwnerKind::Device,
         std::sync::Arc::new(captures_list_handler),
     );
-    reg.register_rpc_with_owner(
+    reg.register_rpc_with_envelope_and_owner(
         ABILITY_CAPTURES_GET,
         OwnerKind::Device,
         std::sync::Arc::new(captures_get_handler),
+    );
+    reg.register_stream_with_envelope_and_spec(
+        ABILITY_CAPTURES_READ,
+        OwnerKind::Device,
+        crate::daemon::ability::catalog::system_manifest::registry_manifest(
+            ABILITY_CAPTURES_READ,
+            description_for(ABILITY_CAPTURES_READ).expect("capture read description"),
+            input_schema_for(ABILITY_CAPTURES_READ).expect("capture read input schema"),
+        ),
+        std::sync::Arc::new(captures_read_handler),
     );
 }
 
@@ -131,33 +155,123 @@ pub fn register(reg: &mut AxonAbilityCatalog) {
 /// filter narrows to one folder; the response always carries the
 /// distinct folder list so the Context page can render the per-device
 /// directory level from one call.
-fn captures_list_handler(args: Value) -> anyhow::Result<Value> {
+fn captures_list_handler(env: EnvelopeContext, args: Value) -> anyhow::Result<Value> {
     let limit = args
         .get("limit")
         .and_then(Value::as_u64)
         .unwrap_or(100)
         .max(1) as usize;
     let ability = args.get("ability").and_then(Value::as_str);
-    let entries: Vec<Value> = context_store::list_captures(ability, limit)?
+    let entries: Vec<Value> = context_store::list_captures(env.callee(), ability, limit)?
         .iter()
         .map(|e| serde_json::to_value(e).unwrap_or(Value::Null))
         .collect();
     Ok(json!({
-        "abilities": context_store::list_capture_abilities()?,
+        "abilities": context_store::list_capture_abilities(env.callee())?,
         "entries": entries,
     }))
 }
 
-/// Fetch one artifact's bytes inline (base64). Mirrors the
-/// clipboard.get shape so the frontend's lazy-loader pattern reuses.
-fn captures_get_handler(args: Value) -> anyhow::Result<Value> {
+/// Fetch one artifact's bounded metadata. Payload bytes are available only
+/// through `context.captures.read`, whose finite stream preserves transport
+/// and receipt bounds for large recordings.
+fn captures_get_handler(env: EnvelopeContext, args: Value) -> anyhow::Result<Value> {
     let id = require_str(&args, "id", "context.captures.get")?;
-    let (path, entry) = context_store::capture_abs_path(&id)?
+    let (_, entry) = context_store::capture_abs_path(env.callee(), &id)?
         .ok_or_else(|| anyhow::anyhow!("context.captures.get: no capture {id}"))?;
-    let bytes = std::fs::read(path)?;
-    let mut out = serde_json::to_value(&entry)?;
-    out["data_base64"] = json!(base64::engine::general_purpose::STANDARD.encode(bytes));
-    Ok(out)
+    Ok(serde_json::to_value(entry)?)
+}
+
+fn captures_read_handler(env: EnvelopeContext, args: Value) -> anyhow::Result<StreamSource> {
+    let id = require_str(&args, "id", ABILITY_CAPTURES_READ)?;
+    let (path, entry) = context_store::capture_abs_path(env.callee(), &id)?
+        .ok_or_else(|| anyhow::anyhow!("{ABILITY_CAPTURES_READ}: no capture {id}"))?;
+    let file = std::fs::File::open(&path)
+        .map_err(|error| anyhow::anyhow!("{ABILITY_CAPTURES_READ}: open capture {id}: {error}"))?;
+    let actual_bytes = file
+        .metadata()
+        .map_err(|error| anyhow::anyhow!("{ABILITY_CAPTURES_READ}: stat capture {id}: {error}"))?
+        .len();
+    if actual_bytes != entry.byte_size {
+        anyhow::bail!(
+            "{ABILITY_CAPTURES_READ}: capture {id} size changed: indexed={} actual={actual_bytes}",
+            entry.byte_size
+        );
+    }
+    if actual_bytes > CAPTURE_STREAM_MAX_BYTES {
+        anyhow::bail!(
+            "{ABILITY_CAPTURES_READ}: capture {id} exceeds bounded read limit: {actual_bytes} > {CAPTURE_STREAM_MAX_BYTES}"
+        );
+    }
+
+    let (sender, receiver) = tokio::sync::mpsc::channel(CAPTURE_STREAM_CHANNEL_BOUND);
+    std::thread::Builder::new()
+        .name("easynet-capture-read".into())
+        .spawn(move || {
+            if let Err(error) = stream_capture_file(file, &entry, &sender) {
+                let _ = sender.blocking_send(Err(error));
+            }
+        })
+        .map_err(|error| anyhow::anyhow!("{ABILITY_CAPTURES_READ}: spawn reader: {error}"))?;
+    Ok(StreamSource::Finite(receiver))
+}
+
+fn stream_capture_file(
+    file: std::fs::File,
+    entry: &context_store::CaptureEntry,
+    sender: &tokio::sync::mpsc::Sender<anyhow::Result<Value>>,
+) -> anyhow::Result<()> {
+    let mut reader = std::io::BufReader::new(file);
+    let mut buffer = vec![0_u8; CAPTURE_STREAM_CHUNK_BYTES];
+    let mut offset = 0_u64;
+    let mut sequence = 0_u64;
+    let mut digest = Sha256::new();
+
+    loop {
+        let read = reader
+            .read(&mut buffer)
+            .map_err(|error| anyhow::anyhow!("read capture {}: {error}", entry.id))?;
+        if read == 0 {
+            break;
+        }
+        let next_offset = offset.saturating_add(read as u64);
+        if next_offset > entry.byte_size {
+            anyhow::bail!("capture {} grew while streaming", entry.id);
+        }
+        let chunk = &buffer[..read];
+        digest.update(chunk);
+        let frame = json!({
+            "kind": "chunk",
+            "capture_id": entry.id,
+            "sequence": sequence,
+            "offset": offset,
+            "byte_size": read,
+            "total_bytes": entry.byte_size,
+            "data_base64": base64::engine::general_purpose::STANDARD.encode(chunk),
+        });
+        if sender.blocking_send(Ok(frame)).is_err() {
+            return Ok(());
+        }
+        offset = next_offset;
+        sequence += 1;
+    }
+
+    if offset != entry.byte_size {
+        anyhow::bail!(
+            "capture {} truncated while streaming: expected={} actual={offset}",
+            entry.id,
+            entry.byte_size
+        );
+    }
+    let complete = json!({
+        "kind": "complete",
+        "capture_id": entry.id,
+        "chunks": sequence,
+        "total_bytes": offset,
+        "sha256": format!("sha256:{}", hex::encode(digest.finalize())),
+    });
+    let _ = sender.blocking_send(Ok(complete));
+    Ok(())
 }
 
 fn clipboard_list_handler(args: Value) -> anyhow::Result<Value> {
@@ -208,7 +322,7 @@ fn clipboard_remove_handler(args: Value) -> anyhow::Result<Value> {
     Ok(serde_json::to_value(removed)?)
 }
 
-fn catalog_handler(args: Value) -> anyhow::Result<Value> {
+fn catalog_handler(env: EnvelopeContext, args: Value) -> anyhow::Result<Value> {
     let limit = args
         .get("limit")
         .and_then(Value::as_u64)
@@ -252,7 +366,7 @@ fn catalog_handler(args: Value) -> anyhow::Result<Value> {
             },
         }));
     }
-    for capture in context_store::list_captures(None, limit)? {
+    for capture in context_store::list_captures(env.callee(), None, limit)? {
         items.push(json!({
             "id": format!("capture:{}", capture.id),
             "kind": "capture",
@@ -400,7 +514,10 @@ pub fn description_for(name: &str) -> Option<&'static str> {
              newest first, with the distinct ability folder names."
         }
         ABILITY_CAPTURES_GET => {
-            "Read one persisted media artifact inline (base64) with its content type."
+            "Read bounded metadata for one persisted media artifact."
+        }
+        ABILITY_CAPTURES_READ => {
+            "Stream one persisted media artifact as ordered, bounded chunks."
         }
         _ => return None,
     })
@@ -454,7 +571,7 @@ pub fn input_schema_for(name: &str) -> Option<Value> {
             },
             "additionalProperties": false,
         }),
-        ABILITY_CAPTURES_GET => json!({
+        ABILITY_CAPTURES_GET | ABILITY_CAPTURES_READ => json!({
             "type": "object",
             "properties": {
                 "id": {"type": "string", "description": "Capture id from context.captures.list."}
@@ -505,7 +622,7 @@ pub fn input_schema_for(name: &str) -> Option<Value> {
 }
 
 /// Every context ability name, for registration loops/tests.
-pub const ALL: [&str; 12] = [
+pub const ALL: [&str; 13] = [
     ABILITY_CLIPBOARD_LIST,
     ABILITY_CLIPBOARD_GET,
     ABILITY_CLIPBOARD_TRACK,
@@ -518,11 +635,21 @@ pub const ALL: [&str; 12] = [
     ABILITY_FAVORITES_REMOVE,
     ABILITY_CAPTURES_LIST,
     ABILITY_CAPTURES_GET,
+    ABILITY_CAPTURES_READ,
 ];
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn envelope(ability: &str, device_ura: &str) -> EnvelopeContext {
+        EnvelopeContext::for_test_targeted_ability(
+            "easynet:///r/localhost/user/test",
+            device_ura,
+            ability,
+            "easynet:///r/localhost/user/test",
+        )
+    }
 
     #[test]
     fn track_toggle_then_list_reflects_state() {
@@ -658,7 +785,11 @@ mod tests {
         )
         .unwrap();
 
-        let out = catalog_handler(json!({"limit": 10})).unwrap();
+        let out = catalog_handler(
+            envelope(ABILITY_CATALOG, "easynet:///r/localhost/device/d1"),
+            json!({"limit": 10}),
+        )
+        .unwrap();
         let items = out["items"].as_array().unwrap();
         assert!(items.iter().any(|item| item["id"] == "clipboard:clip-1"));
         assert!(items
@@ -674,5 +805,117 @@ mod tests {
             .as_str()
             .unwrap()
             .starts_with("easynet-context://context.clipboard.get?args="));
+    }
+
+    #[test]
+    fn captures_are_device_scoped_and_payload_uses_bounded_finite_stream() {
+        let _guard = crate::cli::commands::test_support::HomeGuard::new();
+        let device_one = "easynet:///r/localhost/device/d1";
+        let device_two = "easynet:///r/localhost/device/d2";
+        let payload = vec![0x5a; CAPTURE_STREAM_CHUNK_BYTES + 17];
+        let owned = context_store::record_capture(context_store::CaptureRecord {
+            device: device_one,
+            ability: "mic.subscribe",
+            ext: "wav",
+            bytes: &payload,
+            content_type: "audio/wav",
+            width: None,
+            height: None,
+            duration_ms: Some(500),
+            preview: "Recording 0.5s".into(),
+        })
+        .unwrap();
+        let foreign = context_store::record_capture(context_store::CaptureRecord {
+            device: device_two,
+            ability: "mic.subscribe",
+            ext: "wav",
+            bytes: b"foreign",
+            content_type: "audio/wav",
+            width: None,
+            height: None,
+            duration_ms: Some(1),
+            preview: "Foreign recording".into(),
+        })
+        .unwrap();
+
+        let listed = captures_list_handler(
+            envelope(ABILITY_CAPTURES_LIST, device_one),
+            json!({"ability": "mic.subscribe", "limit": 10}),
+        )
+        .unwrap();
+        assert_eq!(listed["entries"].as_array().unwrap().len(), 1);
+        assert_eq!(listed["entries"][0]["id"], owned.id);
+        assert!(captures_get_handler(
+            envelope(ABILITY_CAPTURES_GET, device_one),
+            json!({"id": foreign.id}),
+        )
+        .is_err());
+        assert!(captures_read_handler(
+            envelope(ABILITY_CAPTURES_READ, device_one),
+            json!({"id": foreign.id}),
+        )
+        .is_err());
+        let metadata = captures_get_handler(
+            envelope(ABILITY_CAPTURES_GET, device_one),
+            json!({"id": owned.id}),
+        )
+        .unwrap();
+        assert!(metadata.get("data_base64").is_none());
+
+        let source = captures_read_handler(
+            envelope(ABILITY_CAPTURES_READ, device_one),
+            json!({"id": owned.id}),
+        )
+        .unwrap();
+        let StreamSource::Finite(mut receiver) = source else {
+            panic!("capture read must use a bounded finite stream");
+        };
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let frames = runtime.block_on(async move {
+            let mut frames = Vec::new();
+            while let Some(frame) = receiver.recv().await {
+                frames.push(frame.unwrap());
+            }
+            frames
+        });
+        assert_eq!(frames.len(), 3, "two chunks plus completion");
+        let mut restored = Vec::new();
+        for (sequence, frame) in frames[..2].iter().enumerate() {
+            assert_eq!(frame["kind"], "chunk");
+            assert_eq!(frame["sequence"], sequence as u64);
+            assert!(frame["byte_size"].as_u64().unwrap() <= CAPTURE_STREAM_CHUNK_BYTES as u64);
+            restored.extend(
+                base64::engine::general_purpose::STANDARD
+                    .decode(frame["data_base64"].as_str().unwrap())
+                    .unwrap(),
+            );
+        }
+        assert_eq!(restored, payload);
+        assert_eq!(frames[2]["kind"], "complete");
+        assert_eq!(frames[2]["total_bytes"], payload.len() as u64);
+        assert_eq!(
+            frames[2]["sha256"],
+            format!("sha256:{}", hex::encode(Sha256::digest(&payload)))
+        );
+
+        let (cancel_path, cancel_entry) = context_store::capture_abs_path(device_one, &owned.id)
+            .unwrap()
+            .unwrap();
+        let cancel_file = std::fs::File::open(cancel_path).unwrap();
+        let (cancel_sender, cancel_receiver) = tokio::sync::mpsc::channel(1);
+        drop(cancel_receiver);
+        stream_capture_file(cancel_file, &cancel_entry, &cancel_sender)
+            .expect("a disconnected consumer must stop finite production cleanly");
+
+        let (path, _) = context_store::capture_abs_path(device_one, &owned.id)
+            .unwrap()
+            .unwrap();
+        std::fs::write(path, b"mutated after indexing").unwrap();
+        let error = captures_read_handler(
+            envelope(ABILITY_CAPTURES_READ, device_one),
+            json!({"id": owned.id}),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("size changed"));
     }
 }

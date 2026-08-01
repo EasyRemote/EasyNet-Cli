@@ -890,35 +890,54 @@ mod tests {
 
     #[test]
     #[cfg(feature = "remote-desktop")]
-    fn runtime_descriptor_resolver_resolves_device_remote_desktop_create_session() {
+    fn runtime_descriptor_resolver_resolves_every_device_remote_desktop_descriptor() {
         let device_ura = crate::core::ura::device_ura("localhost", "local-runtime-node");
-        let ability_ura =
-            "easynet:///r/localhost/ability/device.local-runtime-node.remote_desktop.create_session";
+        for (ability, call_mode, action) in [
+            ("remote_desktop.add_ice_candidate", "rpc", "manage"),
+            ("remote_desktop.attach", "bidi", "stream"),
+            ("remote_desktop.create_session", "rpc", "manage"),
+            ("remote_desktop.end_session", "rpc", "manage"),
+            ("remote_desktop.grant_consent", "rpc", "manage"),
+            ("remote_desktop.permission_status", "rpc", "read"),
+            ("remote_desktop.refresh_lease", "rpc", "manage"),
+            ("remote_desktop.request_permission", "rpc", "manage"),
+            ("remote_desktop.set_description", "rpc", "manage"),
+            ("remote_desktop.show_session", "rpc", "read"),
+            ("remote_desktop.watch_events", "stream", "stream"),
+        ] {
+            let ability_ura =
+                format!("easynet:///r/localhost/ability/device.local-runtime-node.{ability}");
+            let resolved = RuntimeDescriptorResolutionProvider::resolve_json(
+                &serde_json::json!({
+                    "callee_ura": device_ura.as_str(),
+                    "caller_ura": "easynet:///r/localhost/user/operator",
+                    "subject_ura": device_ura.as_str(),
+                    "ability": ability,
+                    "call_mode": call_mode,
+                })
+                .to_string(),
+                || Ok(device_ura.clone()),
+            )
+            .unwrap_or_else(|error| panic!("device {ability} descriptor must resolve: {error}"));
 
-        let resolved = RuntimeDescriptorResolutionProvider::resolve_json(
-            &serde_json::json!({
-                "callee_ura": device_ura.as_str(),
-                "caller_ura": "easynet:///r/localhost/user/operator",
-                "subject_ura": device_ura.as_str(),
-                "ability": "remote_desktop.create_session",
-                "call_mode": "rpc",
-            })
-            .to_string(),
-            || Ok(device_ura.clone()),
-        )
-        .expect("device remote_desktop.create_session descriptor must resolve");
-
-        assert_eq!(resolved["ability_ura"], ability_ura);
-        assert_eq!(resolved["owner_ura"], device_ura);
-        assert_eq!(resolved["name"], "remote_desktop.create_session");
-        assert_eq!(resolved["call_mode"], "rpc");
-        assert_eq!(resolved["source"], "runtime_local_descriptor_catalog");
-        assert!(resolved["descriptor_ref"]
-            .as_str()
-            .is_some_and(
-                |descriptor_ref| descriptor_ref.starts_with(&format!("{ability_ura}@"))
-                    && descriptor_ref.ends_with("!manage")
-            ));
+            assert_eq!(resolved["ability_ura"], ability_ura, "{ability}");
+            assert_eq!(resolved["owner_ura"], device_ura, "{ability}");
+            assert_eq!(resolved["name"], ability, "{ability}");
+            assert_eq!(resolved["call_mode"], call_mode, "{ability}");
+            assert_eq!(
+                resolved["source"], "runtime_local_descriptor_catalog",
+                "{ability}"
+            );
+            assert!(
+                resolved["descriptor_ref"]
+                    .as_str()
+                    .is_some_and(|descriptor_ref| {
+                        descriptor_ref.starts_with(&format!("{ability_ura}@"))
+                            && descriptor_ref.ends_with(&format!("!{action}"))
+                    }),
+                "{ability} must resolve to its exact action-bound descriptor_ref"
+            );
+        }
     }
 
     #[test]

@@ -13,8 +13,9 @@
 //
 // Without it, a hot-registered device ability is "live but not
 // durable" — it vanishes on the next daemon restart, leaving catalog /
-// route / runtime inconsistent. At boot the registrar replays this
-// store back into the live runtime.
+// route / runtime inconsistent. At boot the registrar replays durable
+// implementations; process-owned bindings remain inactive until their host
+// renews the recorded lease.
 //
 // Invariants this file owns:
 //   * install_id is STABLE — derived from
@@ -74,6 +75,11 @@ pub struct DeviceAbilityRecord {
     /// Unix epoch ms when this row was written. Caller-supplied (the
     /// runtime forbids ambient clock reads); 0 if unknown.
     installed_at_unix_ms: u64,
+    /// A host-owned implementation is callable only while this lease is
+    /// renewed. The descriptor/install remains durable after expiry, but
+    /// boot replay must not recreate the process-local binding.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    binding_lease_ms: Option<u64>,
 }
 
 /// Durable lifecycle for a device ability row.
@@ -124,6 +130,7 @@ impl DeviceAbilityRecord {
             manifest_hash,
             manifest_snapshot_b64: base64::engine::general_purpose::STANDARD.encode(manifest_bytes),
             installed_at_unix_ms,
+            binding_lease_ms: None,
         }
     }
 
@@ -205,6 +212,17 @@ impl DeviceAbilityRecord {
     #[must_use]
     pub fn installed_at_unix_ms(&self) -> u64 {
         self.installed_at_unix_ms
+    }
+
+    #[must_use]
+    pub fn binding_lease_ms(&self) -> Option<u64> {
+        self.binding_lease_ms
+    }
+
+    #[must_use]
+    pub fn with_binding_lease_ms(mut self, binding_lease_ms: Option<u64>) -> Self {
+        self.binding_lease_ms = binding_lease_ms;
+        self
     }
 
     #[must_use]

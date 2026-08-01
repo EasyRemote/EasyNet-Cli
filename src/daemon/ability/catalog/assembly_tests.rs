@@ -194,8 +194,17 @@ fn build_registry_publishes_canonical_descriptors_for_device_media_and_remote_de
         "camera.subscribe",
         "screen.snapshot",
         "screen.subscribe",
-        "remote_desktop.create_session",
+        "remote_desktop.add_ice_candidate",
         "remote_desktop.attach",
+        "remote_desktop.create_session",
+        "remote_desktop.end_session",
+        "remote_desktop.grant_consent",
+        "remote_desktop.permission_status",
+        "remote_desktop.refresh_lease",
+        "remote_desktop.request_permission",
+        "remote_desktop.set_description",
+        "remote_desktop.show_session",
+        "remote_desktop.watch_events",
     ] {
         let row = rows
             .iter()

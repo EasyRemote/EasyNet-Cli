@@ -25,9 +25,12 @@
 // Author: Silan.Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+use std::collections::HashMap;
 #[cfg(test)]
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, OnceLock, Weak};
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
+use std::time::Duration;
 
 use anyhow::Context;
 use axon_sdk::invocation::{
@@ -86,7 +89,12 @@ pub struct DeviceAbilityInstall {
     manifest: AbilityManifest,
     /// Caller-supplied install timestamp (runtime forbids ambient clock).
     installed_at_unix_ms: u64,
+    /// Process-owned implementations must renew this lease to remain routed.
+    binding_lease_ms: Option<u64>,
 }
+
+const MIN_BINDING_LEASE_MS: u64 = 1_000;
+const MAX_BINDING_LEASE_MS: u64 = 300_000;
 
 impl DeviceAbilityInstall {
     pub fn new(
@@ -118,7 +126,20 @@ impl DeviceAbilityInstall {
             manifest_bytes,
             manifest,
             installed_at_unix_ms,
+            binding_lease_ms: None,
         })
+    }
+
+    pub fn with_binding_lease_ms(mut self, binding_lease_ms: Option<u64>) -> anyhow::Result<Self> {
+        if let Some(duration) = binding_lease_ms {
+            if !(MIN_BINDING_LEASE_MS..=MAX_BINDING_LEASE_MS).contains(&duration) {
+                anyhow::bail!(
+                    "ability.deploy: binding_lease_ms must be between {MIN_BINDING_LEASE_MS} and {MAX_BINDING_LEASE_MS}"
+                );
+            }
+        }
+        self.binding_lease_ms = binding_lease_ms;
+        Ok(self)
     }
 
     fn validate(
@@ -202,6 +223,10 @@ impl DeviceAbilityInstall {
 
     pub fn installed_at_unix_ms(&self) -> u64 {
         self.installed_at_unix_ms
+    }
+
+    pub fn binding_lease_ms(&self) -> Option<u64> {
+        self.binding_lease_ms
     }
 }
 
@@ -438,6 +463,9 @@ pub struct DeviceAbilityRegistrar {
     runtime: OnceLock<Arc<LocalRuntime>>,
     control_plane_catalog: OnceLock<Weak<AxonAbilityCatalog>>,
     store: DeviceAbilityStore,
+    lifecycle: tokio::sync::Mutex<()>,
+    active_leases: Mutex<HashMap<String, u64>>,
+    next_lease_generation: AtomicU64,
     #[cfg(test)]
     fail_next_runtime_replace: AtomicBool,
 }
@@ -449,6 +477,9 @@ impl DeviceAbilityRegistrar {
             control_plane_catalog: OnceLock::new(),
             store: DeviceAbilityStore::try_open_default()
                 .context("open canonical device ability store")?,
+            lifecycle: tokio::sync::Mutex::new(()),
+            active_leases: Mutex::new(HashMap::new()),
+            next_lease_generation: AtomicU64::new(1),
             #[cfg(test)]
             fail_next_runtime_replace: AtomicBool::new(false),
         }))
@@ -461,6 +492,9 @@ impl DeviceAbilityRegistrar {
             runtime: OnceLock::new(),
             control_plane_catalog: OnceLock::new(),
             store,
+            lifecycle: tokio::sync::Mutex::new(()),
+            active_leases: Mutex::new(HashMap::new()),
+            next_lease_generation: AtomicU64::new(1),
             #[cfg(test)]
             fail_next_runtime_replace: AtomicBool::new(false),
         })
@@ -527,6 +561,130 @@ impl DeviceAbilityRegistrar {
             })
     }
 
+    async fn binding_is_current(
+        &self,
+        candidate: &DeviceAbilityRecord,
+        runtime: &LocalRuntime,
+        catalog: &AxonAbilityCatalog,
+        key: &DeviceAbilityControlPlaneKey,
+        want: AbilityCallModes,
+    ) -> anyhow::Result<bool> {
+        let Some(installed) = self
+            .store
+            .load()?
+            .into_iter()
+            .find(|row| row.install_id() == candidate.install_id())
+        else {
+            return Ok(false);
+        };
+        if installed.binding_lease_ms() != candidate.binding_lease_ms()
+            || installed.ability_ura() != candidate.ability_ura()
+            || installed.manifest_hash() != candidate.manifest_hash()
+        {
+            return Ok(false);
+        }
+        let Some(control_plane_record) = catalog.control_plane_record_for_authority_mode(
+            key.authority_root(),
+            key.public_name(),
+            key.call_mode(),
+        )?
+        else {
+            return Ok(false);
+        };
+        let Some(descriptor) = runtime.ability_descriptor(candidate.ability_ura()).await else {
+            return Ok(false);
+        };
+        Ok(runtime_descriptor_matches_bound(
+            &descriptor,
+            candidate.ability_ura(),
+            want,
+            DeviceAbilityCallModeResolution::from_descriptor_mode(key.call_mode()).axon_mode(),
+            &control_plane_record,
+        ))
+    }
+
+    fn configure_binding_lease(self: &Arc<Self>, install_id: &str, binding_lease_ms: Option<u64>) {
+        let Some(binding_lease_ms) = binding_lease_ms else {
+            self.active_leases
+                .lock()
+                .expect("device ability lease mutex poisoned")
+                .remove(install_id);
+            return;
+        };
+        let generation = self.next_lease_generation.fetch_add(1, Ordering::Relaxed);
+        self.active_leases
+            .lock()
+            .expect("device ability lease mutex poisoned")
+            .insert(install_id.to_string(), generation);
+
+        let registrar = Arc::downgrade(self);
+        let install_id = install_id.to_string();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(binding_lease_ms)).await;
+            let Some(registrar) = registrar.upgrade() else {
+                return;
+            };
+            if let Err(error) = registrar
+                .expire_binding_lease(&install_id, generation)
+                .await
+            {
+                eprintln!(
+                    "[device-ability] failed to expire implementation binding {install_id}: {error:#}"
+                );
+            }
+        });
+    }
+
+    fn cancel_binding_leases(&self, install_ids: &[String]) {
+        let mut leases = self
+            .active_leases
+            .lock()
+            .expect("device ability lease mutex poisoned");
+        for install_id in install_ids {
+            leases.remove(install_id);
+        }
+    }
+
+    async fn expire_binding_lease(&self, install_id: &str, generation: u64) -> anyhow::Result<()> {
+        let _lifecycle = self.lifecycle.lock().await;
+        {
+            let mut leases = self
+                .active_leases
+                .lock()
+                .expect("device ability lease mutex poisoned");
+            if leases.get(install_id).copied() != Some(generation) {
+                return Ok(());
+            }
+            leases.remove(install_id);
+        }
+
+        let Some(row) = self
+            .store
+            .load()?
+            .into_iter()
+            .find(|row| row.install_id() == install_id)
+        else {
+            return Ok(());
+        };
+        if row.binding_lease_ms().is_none() {
+            return Ok(());
+        }
+
+        let runtime = self.runtime()?.clone();
+        let catalog = self.control_plane_catalog("device ability binding lease expiry")?;
+        let control_plane_keys = Self::control_plane_removal_keys(std::slice::from_ref(&row))?;
+        let _ = runtime.unregister_ability(row.ability_ura()).await;
+        for key in control_plane_keys {
+            catalog.remove_control_plane_record_for_authority_mode(
+                key.authority_root(),
+                key.public_name(),
+                key.call_mode(),
+            );
+        }
+        catalog.notify_dynamic_publication_hooks();
+        Ok(())
+    }
+
     /// The full deploy transaction (plan §1e), in order:
     ///   build handler → fsync store → replace_ability → route+mode check.
     ///
@@ -537,7 +695,11 @@ impl DeviceAbilityRegistrar {
     /// same-name ability. Writing the durable intent first preserves the old
     /// live binding on commit failure; if runtime replacement fails, the new
     /// store row is removed.
-    pub async fn install(&self, install: DeviceAbilityInstall) -> anyhow::Result<InstallState> {
+    pub async fn install(
+        self: &Arc<Self>,
+        install: DeviceAbilityInstall,
+    ) -> anyhow::Result<InstallState> {
+        let _lifecycle = self.lifecycle.lock().await;
         let runtime = self.runtime()?.clone();
         let catalog = self.control_plane_catalog("ability.deploy")?;
         let key = install.key().to_string();
@@ -548,8 +710,9 @@ impl DeviceAbilityRegistrar {
             );
         }
 
-        let call_mode =
-            DeviceAbilityCallModeResolution::from_manifest(install.manifest())?.descriptor_mode();
+        let mode_resolution = DeviceAbilityCallModeResolution::from_manifest(install.manifest())?;
+        let call_mode = mode_resolution.descriptor_mode();
+        let want = mode_resolution.ability_modes();
         let control_plane_key = DeviceAbilityControlPlaneKey::from_install(&install, call_mode)?;
 
         // ── durable installing intent (hidden from boot replay) ─────
@@ -560,7 +723,16 @@ impl DeviceAbilityRegistrar {
             install.manifest_path().to_string(),
             install.manifest_bytes(),
             install.installed_at_unix_ms(),
-        );
+        )
+        .with_binding_lease_ms(install.binding_lease_ms());
+
+        if self
+            .binding_is_current(&record, &runtime, &catalog, &control_plane_key, want)
+            .await?
+        {
+            self.configure_binding_lease(record.install_id(), install.binding_lease_ms());
+            return Ok(InstallState::Active);
+        }
         let overwritten =
             self.store
                 .stage_install_record(record.clone())
@@ -623,7 +795,7 @@ impl DeviceAbilityRegistrar {
                 ));
             }
         };
-        let want = binding.modes();
+        debug_assert_eq!(binding.modes(), want);
         let axon_call_mode = binding.axon_call_mode;
         let (runtime_key, ability_fn, options) = binding.into_parts();
 
@@ -693,6 +865,7 @@ impl DeviceAbilityRegistrar {
         }
         control_plane_txn.commit();
         catalog.notify_dynamic_publication_hooks();
+        self.configure_binding_lease(record.install_id(), install.binding_lease_ms());
         Ok(state)
     }
 
@@ -702,9 +875,10 @@ impl DeviceAbilityRegistrar {
     /// REMOVED while any of those three legs still advertises the
     /// binding.
     pub async fn uninstall(
-        &self,
+        self: &Arc<Self>,
         uninstall: DeviceAbilityUninstall,
     ) -> anyhow::Result<DeviceAbilityUninstallOutcome> {
+        let _lifecycle = self.lifecycle.lock().await;
         let runtime = self.runtime()?.clone();
         let catalog = self.control_plane_catalog("ability.uninstall")?;
         let removal_plan = self
@@ -825,6 +999,7 @@ impl DeviceAbilityRegistrar {
             );
         }
         transaction.advance(DeviceAbilityUninstallStep::StoreCommitted);
+        self.cancel_binding_leases(&transaction.install_ids);
         catalog.notify_dynamic_publication_hooks();
 
         Ok(transaction.outcome())
@@ -911,8 +1086,9 @@ impl DeviceAbilityRegistrar {
     }
 
     /// Boot replay (invariant 7): recover uncommitted install intents,
-    /// then re-register every committed durable row into the live runtime
-    /// from its embedded manifest snapshot.
+    /// then re-register every non-leased committed row into the live runtime
+    /// from its embedded manifest snapshot. Leased process bindings remain
+    /// inactive until the owning host renews through `ability.deploy`.
     /// A mismatch or a register failure is reported as a `stale`/`error`
     /// row rather than silently skipped.
     pub async fn replay_from_store(&self) -> ReplayReport {
@@ -1018,6 +1194,13 @@ impl DeviceAbilityRegistrar {
             );
         }
         for row in rows {
+            if row.binding_lease_ms().is_some() {
+                report.push_lease_pending(
+                    &row,
+                    "leased implementation is inactive after daemon boot until its host renews",
+                );
+                continue;
+            }
             // Re-read embedded manifest material and verify hash. A corrupt
             // snapshot must NOT be registered under the recorded binding.
             let bytes = match row.manifest_bytes() {
@@ -1168,6 +1351,9 @@ pub struct ReplayReport {
     /// remain the replay authority until `commit_installed` succeeds.
     pub recovered_installing: usize,
     pub registered: usize,
+    /// Durable descriptors whose process-owned implementation must renew
+    /// before the daemon publishes a callable route.
+    pub lease_pending: usize,
     /// Manifest gone or hash drifted — row not registered.
     pub stale: usize,
     /// Valid rows owned by a previous device authority — hidden from replay.
@@ -1193,6 +1379,15 @@ impl ReplayReport {
         self.stale += 1;
         self.outcomes
             .push(ReplayOutcome::new(row, ReplayOutcomeStatus::Stale, detail));
+    }
+
+    fn push_lease_pending(&mut self, row: &DeviceAbilityRecord, detail: impl Into<String>) {
+        self.lease_pending += 1;
+        self.outcomes.push(ReplayOutcome::new(
+            row,
+            ReplayOutcomeStatus::LeasePending,
+            detail,
+        ));
     }
 
     fn push_quarantined(&mut self, row: &DeviceAbilityRecord, detail: impl Into<String>) {
@@ -1249,6 +1444,7 @@ impl ReplayOutcome {
 #[serde(rename_all = "snake_case")]
 pub enum ReplayOutcomeStatus {
     Registered,
+    LeasePending,
     Stale,
     Quarantined,
     Errored,
@@ -1357,6 +1553,14 @@ impl DeviceAbilityCallModeResolution {
             Self::Rpc => AxonCallMode::Rpc,
             Self::Stream => AxonCallMode::Stream,
             Self::Bidi => AxonCallMode::Bidi,
+        }
+    }
+
+    fn ability_modes(self) -> AbilityCallModes {
+        AbilityCallModes {
+            rpc: self == Self::Rpc,
+            stream: self == Self::Stream,
+            bidi: self == Self::Bidi,
         }
     }
 }
@@ -2241,6 +2445,91 @@ mod tests {
                 .all(|row| row.install_id() != previous_row.install_id()),
             "quarantined rows must be hidden from boot replay"
         );
+    }
+
+    #[tokio::test]
+    async fn leased_binding_expiry_removes_route_but_preserves_durable_descriptor() {
+        let dir = tempfile::tempdir().unwrap();
+        let store_path = dir.path().join("device-abilities.json");
+        let (registrar, runtime, catalog) =
+            wired_registrar(DeviceAbilityStore::open_at(store_path.clone()));
+        let install = host_stream_install(dir.path(), "/tmp/leased-host.sock")
+            .with_binding_lease_ms(Some(MIN_BINDING_LEASE_MS))
+            .unwrap();
+
+        registrar.install(install).await.unwrap();
+        assert!(runtime.has_ability(er_generate_runtime_key()).await);
+        assert_eq!(
+            stream_control_plane_record(&catalog).ability(),
+            "er.generate"
+        );
+
+        tokio::time::sleep(Duration::from_millis(MIN_BINDING_LEASE_MS + 150)).await;
+
+        assert!(!runtime.has_ability(er_generate_runtime_key()).await);
+        assert!(catalog
+            .control_plane_record_for_mode("er.generate", DescriptorCallMode::Stream)
+            .unwrap()
+            .is_none());
+        let rows = DeviceAbilityStore::open_at(store_path).load().unwrap();
+        assert_eq!(
+            rows.len(),
+            1,
+            "lease expiry must not delete the descriptor install"
+        );
+        assert_eq!(rows[0].binding_lease_ms(), Some(MIN_BINDING_LEASE_MS));
+    }
+
+    #[tokio::test]
+    async fn redeploy_renews_lease_generation_without_premature_expiry() {
+        let dir = tempfile::tempdir().unwrap();
+        let (registrar, runtime, _catalog) = wired_registrar(DeviceAbilityStore::open_at(
+            dir.path().join("device-abilities.json"),
+        ));
+        let leased_install = || {
+            host_stream_install(dir.path(), "/tmp/leased-host.sock")
+                .with_binding_lease_ms(Some(MIN_BINDING_LEASE_MS))
+                .unwrap()
+        };
+
+        registrar.install(leased_install()).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(650)).await;
+        registrar.install(leased_install()).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        assert!(
+            runtime.has_ability(er_generate_runtime_key()).await,
+            "the superseded lease timer must not revoke a renewed binding"
+        );
+        tokio::time::sleep(Duration::from_millis(650)).await;
+        assert!(!runtime.has_ability(er_generate_runtime_key()).await);
+    }
+
+    #[tokio::test]
+    async fn boot_replay_keeps_leased_implementation_inactive_until_host_renews() {
+        let dir = tempfile::tempdir().unwrap();
+        let store_path = dir.path().join("device-abilities.json");
+        {
+            let (registrar, _runtime, _catalog) =
+                wired_registrar(DeviceAbilityStore::open_at(store_path.clone()));
+            registrar
+                .install(
+                    host_stream_install(dir.path(), "/tmp/leased-host.sock")
+                        .with_binding_lease_ms(Some(MAX_BINDING_LEASE_MS))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+        }
+
+        let (replayed, runtime, catalog) = wired_registrar(DeviceAbilityStore::open_at(store_path));
+        let report = replayed.replay_from_store().await;
+
+        assert_eq!(report.registered, 0);
+        assert_eq!(report.lease_pending, 1);
+        assert_eq!(report.outcomes[0].status, ReplayOutcomeStatus::LeasePending);
+        assert!(!runtime.has_ability(er_generate_runtime_key()).await);
+        assert!(catalog.authority_ability_catalog_snapshot().is_empty());
     }
 
     #[test]

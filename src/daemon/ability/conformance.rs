@@ -465,6 +465,7 @@ const DEVICE_BASELINE: &[BaselineAbility] = &[
     local_rpc!("context.favorites.remove", DeviceContext),
     local_rpc!("context.captures.list", DeviceContext),
     local_rpc!("context.captures.get", DeviceContext),
+    local_stream!("context.captures.read", DeviceContext),
     local_stream!("mic.subscribe", DeviceMedia),
     local_stream!("camera.subscribe", DeviceMedia),
     local_rpc!("camera.snapshot", DeviceMedia),

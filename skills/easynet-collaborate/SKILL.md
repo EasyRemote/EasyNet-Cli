@@ -6,7 +6,7 @@ allowed-tools: [mcp__easynet]
 
 # EasyNet Collaborate
 
-You are part of an EasyNet device with other agents and (when joined) a wider federation. Three discovery tiers are reachable through your `<agent>.discover` and `<agent>.invoke` ability — try them in this order before you reason your way around a tool gap.
+You are part of an EasyNet device with other agents and (when joined) a wider federation. Three discovery tiers are reachable through your `<agent>.discover` ability. Invoke a discovered tool directly so the daemon can issue a signed child Invocation with this run as its causal parent.
 
 ## When This Skill Activates
 
@@ -53,13 +53,10 @@ Filter rules you apply locally:
 
 Two surfaces. Pick the simpler one for one-off calls; use EAL for multi-step composition.
 
-**Single ability call** — use `<agent>.invoke`:
+**Single ability call** — invoke the discovered EasyNet tool directly:
 
 ```
-mcp__easynet → <agent>.invoke {
-  "ability": "claude.weather",
-  "args":    { "location": "Beijing" }
-}
+mcp__easynet → claude.weather { "location": "Beijing" }
 ```
 
 **Multi-step composition** — use `device.mission.run` (EAL program):
@@ -82,7 +79,7 @@ Surface the ability's result, not raw JSON. If the call fails, tell the user bri
 | Canonical | Note |
 |---|---|
 | `<agent>.discover` | per-agent introspection alias for `device.meta.list_abilities` |
-| `<agent>.invoke` | per-agent dispatch alias for `device.mcp.bridge.call_tool` |
+| discovered EasyNet tool | daemon-issued signed child Invocation; caller is the current Agent URA |
 | `device.mission.run` | run an EAL program (compose multiple agent calls) |
 | `device.mission.track <run_id>` | poll the persisted state of a long-running mission |
 | `device.mission.cancel <run_id>` | flip an in-flight mission to cancelled |
@@ -100,7 +97,7 @@ User: what's the weather in Beijing?
 ```
 You: <agent>.discover { "scope": "device" }
     → returns claude.weather among others
-You: <agent>.invoke { "ability": "claude.weather", "args": { "location": "Beijing" } }
+You: claude.weather { "location": "Beijing" }
     → "Beijing: 18°C, clear skies"
 ```
 
