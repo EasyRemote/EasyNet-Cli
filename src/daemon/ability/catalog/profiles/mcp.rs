@@ -696,7 +696,6 @@ impl LocalInvoker for DaemonLocalInvoker {
             Some(InvocationToolTrace::from_daemon_meta(&meta, mcp_tool)),
         ))
     }
-
 }
 
 /// Production InvokeMcpProvider — what `easynet mcp_server` and
@@ -741,7 +740,6 @@ impl<I: LocalInvoker> InvokeMcpProvider<I> {
     pub fn descriptor_count(&self) -> usize {
         self.routes.len()
     }
-
 }
 
 /// Configuration for `build_stdio_server` — the single entry point
@@ -1227,7 +1225,6 @@ mod tests {
             *self.last_args.borrow_mut() = Some(args);
             self.reply.clone()
         }
-
     }
 
     #[test]
