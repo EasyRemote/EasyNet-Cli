@@ -530,15 +530,13 @@ pub enum AbilityExec {
     /// CLI. It preserves the MCP `tools/call` response shape and
     /// avoids routing through shell or chat translation.
     Mcp(McpExec),
-    /// Stream frames from an external warm host over a Unix socket.
-    /// The daemon opens `host_socket`, sends one request line, then
-    /// reads many JSON frame lines until an explicit terminal — letting
-    /// an external resident process (e.g. an easyremote Python host
-    /// running a generator) stream frames without re-spawning per
-    /// frame. Unlike `Shell` (one bounded result, RPC-only), this is
-    /// the sole external-process *server-stream* path: an ability with
-    /// this exec registers as stream-mode. The wire protocol is the
-    /// single source of truth in `HostStreamExec`'s doc comment.
+    /// Invoke an external warm host over a framed Unix-socket transport.
+    /// The daemon opens `host_socket`, sends one request line, then reads
+    /// JSON frames until an explicit terminal. `admission_action` selects
+    /// the canonical call geometry: `invoke` requires exactly one result
+    /// frame and `stream` preserves the complete server-stream. The wire
+    /// protocol is the single source of truth in `HostStreamExec`'s doc
+    /// comment.
     HostStream(HostStreamExec),
 }
 

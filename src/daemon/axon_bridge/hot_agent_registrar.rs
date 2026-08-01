@@ -26,7 +26,7 @@ use axon_sdk::invocation::LocalRuntime;
 
 use crate::daemon::ability::builtins::agents::chat::{
     build_agent_ability_handler, build_chat_handler_for, build_chat_stream_handler_for,
-    build_discover_handler_for, build_host_stream_handler, ContextLoader,
+    build_discover_handler_for, build_host_rpc_handler, build_host_stream_handler, ContextLoader,
 };
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, OwnerKind};
 use crate::daemon::persistence::agent_registry::AgentEntry;
@@ -759,18 +759,34 @@ impl HotAgentRegistrar {
                 };
                 match exec {
                     crate::daemon::ability::manifest::AbilityExec::HostStream(stream_spec) => {
-                        let h = build_host_stream_handler(stream_spec.clone());
-                        if Self::register_stream_with_envelope_and_spec(
-                            &mut sync_ctx,
-                            &ability_name,
-                            owner.clone(),
-                            manifest.clone(),
-                            crate::daemon::ability::descriptors::AdmissionAction::Stream,
-                            h,
-                        )
-                        .await
-                        {
-                            synced.insert(ability_name);
+                        if manifest.admission_action() == Some("invoke") {
+                            let h = build_host_rpc_handler(stream_spec.clone());
+                            if Self::register_rpc_with_envelope_and_spec(
+                                &mut sync_ctx,
+                                &ability_name,
+                                owner.clone(),
+                                manifest.clone(),
+                                crate::daemon::ability::descriptors::AdmissionAction::Invoke,
+                                h,
+                            )
+                            .await
+                            {
+                                synced.insert(ability_name);
+                            }
+                        } else {
+                            let h = build_host_stream_handler(stream_spec.clone());
+                            if Self::register_stream_with_envelope_and_spec(
+                                &mut sync_ctx,
+                                &ability_name,
+                                owner.clone(),
+                                manifest.clone(),
+                                crate::daemon::ability::descriptors::AdmissionAction::Stream,
+                                h,
+                            )
+                            .await
+                            {
+                                synced.insert(ability_name);
+                            }
                         }
                     }
                     _ => {

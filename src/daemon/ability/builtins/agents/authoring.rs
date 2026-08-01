@@ -95,7 +95,11 @@ struct ExpectedPublication {
 
 impl ExpectedPublication {
     fn from_manifest(manifest: &AbilityManifest) -> Self {
-        let call_mode = if matches!(manifest.exec(), Some(AbilityExec::HostStream(_))) {
+        let call_mode = if manifest.admission_action() == Some("invoke") {
+            CallMode::Rpc
+        } else if manifest.admission_action() == Some("stream") {
+            CallMode::Stream
+        } else if matches!(manifest.exec(), Some(AbilityExec::HostStream(_))) {
             CallMode::Stream
         } else {
             CallMode::Rpc

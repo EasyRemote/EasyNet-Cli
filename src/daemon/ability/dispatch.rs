@@ -985,14 +985,14 @@ async fn envelope_context_from_axon(
 
 fn rpc_env_handler_to_ability_fn(
     handler: LocalRpcHandlerWithEnvelope,
-    runtime_host: RuntimeHandlerContext,
+    runtime_host: Option<RuntimeHandlerContext>,
 ) -> AbilityFn {
     make_ability(move |ctx| {
         let handler = Arc::clone(&handler);
         let runtime_host = runtime_host.clone();
         async move {
             let value = payload_to_json_value(&ctx.payload).map_err(|e| *e)?;
-            let env = envelope_context_from_axon(&ctx, Some(runtime_host)).await?;
+            let env = envelope_context_from_axon(&ctx, runtime_host).await?;
             let result = tokio::task::spawn_blocking(move || handler(env, value))
                 .await
                 .map_err(|err| {
@@ -1008,6 +1008,25 @@ fn rpc_env_handler_to_ability_fn(
             json_value_to_payload(&result).map_err(|e| *e)
         }
     })
+}
+
+/// Project an envelope-aware unary handler into the `(AbilityFn,
+/// AbilityOptions)` pair used by registrars that own their runtime
+/// transaction. The runtime invocation envelope remains the authority for
+/// caller, callee, subject, nonce, and causal context; no adapter fields are
+/// synthesized here.
+pub(crate) fn rpc_env_ability_with_options(
+    handler: LocalRpcHandlerWithEnvelope,
+) -> (AbilityFn, AbilityOptions) {
+    let modes = AbilityCallModes {
+        rpc: true,
+        stream: false,
+        bidi: false,
+    };
+    (
+        rpc_env_handler_to_ability_fn(handler, None),
+        AbilityOptions::default().with_modes(modes),
+    )
 }
 
 async fn emit_json_progress(ctx: &Arc<AbilityContext>, value: Value) -> Result<(), AxonError> {
@@ -1240,7 +1259,7 @@ fn runtime_handler_set_to_ability_fn(
     let bidi_fn = handlers.bidi.map(bidi_handler_to_ability_fn);
     let rpc_env_fn = handlers
         .rpc_with_env
-        .map(|handler| rpc_env_handler_to_ability_fn(handler, runtime_host.clone()));
+        .map(|handler| rpc_env_handler_to_ability_fn(handler, Some(runtime_host.clone())));
     let stream_env_fn = handlers
         .stream_with_env
         .map(|handler| stream_env_handler_to_ability_fn(handler, Some(runtime_host.clone())));

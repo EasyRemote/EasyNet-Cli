@@ -18,9 +18,9 @@
 // `set_runtime` once. Mirrors `HotAgentRegistrar`.
 //
 // Device call-mode resolution is an explicit registrar value object, not a
-// manifest field and not duplicated install/uninstall/replay branching.
-// `host_stream` resolves to server-stream (the only external-process stream
-// path). Unsupported exec kinds fail closed before runtime binding.
+// duplicated install/uninstall/replay branch. `host_stream` is transport;
+// its manifest admission action selects the runtime geometry. Unsupported
+// exec kinds fail closed before runtime binding.
 //
 // Author: Silan.Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -39,13 +39,15 @@ use axon_sdk::invocation::{
 };
 use serde::Serialize;
 
-use crate::daemon::ability::builtins::agents::chat::build_host_stream_handler;
+use crate::daemon::ability::builtins::agents::chat::{
+    build_host_rpc_handler, build_host_stream_handler,
+};
 use crate::daemon::ability::builtins::device_control::ability_management::store::{
     manifest_digest, DeviceAbilityRecord, DeviceAbilityStore,
 };
 use crate::daemon::ability::dispatch::{
-    stream_env_ability_with_options, AxonAbilityCatalog, ControlPlaneAuthorityModeTxn,
-    ControlPlaneAuthorityRebind, ControlPlaneImplementation,
+    rpc_env_ability_with_options, stream_env_ability_with_options, AxonAbilityCatalog,
+    ControlPlaneAuthorityModeTxn, ControlPlaneAuthorityRebind, ControlPlaneImplementation,
 };
 use crate::daemon::ability::manifest::{AbilityExec, AbilityManifest};
 use crate::daemon::ability::{
@@ -1451,7 +1453,8 @@ pub enum ReplayOutcomeStatus {
 }
 
 /// Build the `(AbilityFn, AbilityOptions)` for a device ability from its
-/// manifest's exec kind. host_stream → stream-mode. Shell exec is
+/// manifest's exec kind. host_stream is the external host transport; its
+/// explicit admission action selects RPC or stream geometry. Shell exec is
 /// rejected until a permission broker and receipt-audited operator
 /// approval path exist; `ability.deploy` must not become an arbitrary
 /// host-command surface without that broker.
@@ -1485,8 +1488,14 @@ impl<'a> DeployableExec<'a> {
         }
     }
 
-    fn call_mode_resolution(&self) -> DeviceAbilityCallModeResolution {
+    fn call_mode_resolution(
+        &self,
+        admission_action: Option<&str>,
+    ) -> DeviceAbilityCallModeResolution {
         match self {
+            Self::HostStream(_) if admission_action == Some("invoke") => {
+                DeviceAbilityCallModeResolution::Rpc
+            }
             Self::HostStream(_) => DeviceAbilityCallModeResolution::Stream,
         }
     }
@@ -1494,6 +1503,10 @@ impl<'a> DeployableExec<'a> {
 
 fn build_binding(manifest: &AbilityManifest) -> anyhow::Result<(AbilityFn, AbilityOptions)> {
     match DeployableExec::classify(manifest)? {
+        DeployableExec::HostStream(spec) if manifest.admission_action() == Some("invoke") => {
+            let handler = build_host_rpc_handler(spec.clone());
+            Ok(rpc_env_ability_with_options(handler))
+        }
         DeployableExec::HostStream(spec) => {
             let handler = build_host_stream_handler(spec.clone());
             Ok(stream_env_ability_with_options(handler))
@@ -1519,7 +1532,8 @@ enum DeviceAbilityCallModeResolution {
 
 impl DeviceAbilityCallModeResolution {
     fn from_manifest(manifest: &AbilityManifest) -> anyhow::Result<Self> {
-        Ok(DeployableExec::classify(manifest)?.call_mode_resolution())
+        let exec = DeployableExec::classify(manifest)?;
+        Ok(exec.call_mode_resolution(manifest.admission_action()))
     }
 
     fn from_runtime_modes(modes: AbilityCallModes) -> Self {
@@ -1697,13 +1711,21 @@ mod tests {
     use crate::daemon::ability::manifest::{AbilityExec, HostStreamExec, ShellExec};
 
     fn host_stream_manifest(socket: &str, function: &str) -> AbilityManifest {
+        host_stream_manifest_with_action(socket, function, "stream")
+    }
+
+    fn host_stream_manifest_with_action(
+        socket: &str,
+        function: &str,
+        action: &str,
+    ) -> AbilityManifest {
         AbilityManifest::new(
             "generate",
             "stream gen",
             serde_json::json!({"type": "object"}),
         )
         .unwrap()
-        .with_admission_action("stream")
+        .with_admission_action(action)
         .unwrap()
         .with_exec(AbilityExec::HostStream(HostStreamExec {
             host_socket: socket.to_string(),
@@ -1788,7 +1810,7 @@ mod tests {
     }
 
     #[test]
-    fn device_ability_call_mode_resolution_maps_manifest_to_stream() {
+    fn device_ability_call_mode_resolution_maps_manifest_geometry() {
         let manifest = host_stream_manifest("/tmp/er-host.sock", "er.generate");
         let resolution =
             DeviceAbilityCallModeResolution::from_manifest(&manifest).expect("host_stream mode");
@@ -1796,6 +1818,17 @@ mod tests {
         assert_eq!(resolution, DeviceAbilityCallModeResolution::Stream);
         assert_eq!(resolution.descriptor_mode(), DescriptorCallMode::Stream);
         assert_eq!(resolution.axon_mode(), AxonCallMode::Stream);
+
+        let unary =
+            host_stream_manifest_with_action("/tmp/er-host.sock", "er.ai_inference", "invoke");
+        let resolution =
+            DeviceAbilityCallModeResolution::from_manifest(&unary).expect("host_stream RPC mode");
+        assert_eq!(resolution, DeviceAbilityCallModeResolution::Rpc);
+        assert_eq!(resolution.descriptor_mode(), DescriptorCallMode::Rpc);
+        assert_eq!(resolution.axon_mode(), AxonCallMode::Rpc);
+
+        let (_, options) = build_binding(&unary).expect("host_stream RPC binding");
+        assert_eq!(options.modes, rpc_only());
     }
 
     #[test]

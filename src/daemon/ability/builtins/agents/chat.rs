@@ -249,19 +249,35 @@ pub fn register_for_agent(
         };
         match exec {
             crate::daemon::ability::manifest::AbilityExec::HostStream(stream_spec) => {
-                let h = build_host_stream_handler(stream_spec.clone());
-                let manifest = manifest
-                    .clone()
-                    .with_admission_action(
-                        crate::daemon::ability::descriptors::AdmissionAction::Stream.as_str(),
-                    )
-                    .expect("agent host_stream manifest accepts stream admission_action");
-                reg.register_stream_with_envelope_and_spec(
-                    &ability_name,
-                    owner.clone(),
-                    manifest,
-                    h,
-                );
+                if manifest.admission_action() == Some("invoke") {
+                    let h = build_host_rpc_handler(stream_spec.clone());
+                    let manifest = manifest
+                        .clone()
+                        .with_admission_action(
+                            crate::daemon::ability::descriptors::AdmissionAction::Invoke.as_str(),
+                        )
+                        .expect("agent host_stream manifest accepts invoke admission_action");
+                    reg.register_rpc_with_envelope_and_spec(
+                        &ability_name,
+                        owner.clone(),
+                        manifest,
+                        h,
+                    );
+                } else {
+                    let h = build_host_stream_handler(stream_spec.clone());
+                    let manifest = manifest
+                        .clone()
+                        .with_admission_action(
+                            crate::daemon::ability::descriptors::AdmissionAction::Stream.as_str(),
+                        )
+                        .expect("agent host_stream manifest accepts stream admission_action");
+                    reg.register_stream_with_envelope_and_spec(
+                        &ability_name,
+                        owner.clone(),
+                        manifest,
+                        h,
+                    );
+                }
             }
             _ => {
                 let h = build_agent_ability_handler(
@@ -316,6 +332,23 @@ pub(crate) fn build_host_stream_handler(
             let call_id = env.invocation_id().to_string();
             let caller = env.caller().to_string();
             crate::daemon::execution::mission::executors::host_stream::run_host_stream(
+                &spec, &args, &call_id, &caller,
+            )
+        },
+    )
+}
+
+/// Build the unary adapter for a `host_stream` transport whose manifest
+/// declares `admission_action=invoke`. The external host still uses framed
+/// transport, while the canonical runtime exposes one RPC result.
+pub(crate) fn build_host_rpc_handler(
+    spec: crate::daemon::ability::manifest::HostStreamExec,
+) -> crate::daemon::ability::dispatch::LocalRpcHandlerWithEnvelope {
+    Arc::new(
+        move |env: crate::daemon::ability::dispatch::EnvelopeContext, args: Value| {
+            let call_id = env.invocation_id().to_string();
+            let caller = env.caller().to_string();
+            crate::daemon::execution::mission::executors::host_stream::run_host_stream_unary(
                 &spec, &args, &call_id, &caller,
             )
         },
@@ -389,15 +422,14 @@ pub(crate) fn build_agent_ability_handler(
                         )
                     }
                     crate::daemon::ability::manifest::AbilityExec::HostStream(_) => {
-                        // host_stream registers as a stream-mode ability
-                        // (see register_for_agent): it is dispatched
-                        // through the stream handler, never this unary RPC
-                        // adapter. Reaching here means the ability was
-                        // mis-registered as RPC — fail loudly rather than
-                        // silently collapsing the stream to one value.
+                        // host_stream is registered through either the RPC
+                        // or stream adapter according to admission_action.
+                        // This executor is only for non-host manifests, so
+                        // reaching here means the catalogue and handler
+                        // registration disagree.
                         Err(anyhow::anyhow!(
-                            "host_stream ability '{bare_ability}' reached the unary \
-                             RPC path; it must be invoked as a server-stream"
+                            "host_stream ability '{bare_ability}' reached the generic agent \
+                             executor; host transport registration is inconsistent"
                         ))
                     }
                 };
