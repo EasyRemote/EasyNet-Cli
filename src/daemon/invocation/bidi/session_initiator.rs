@@ -1207,6 +1207,37 @@ mod tests {
         .expect("seed session test credentials");
     }
 
+    /// Minimal committed catalog surface for the daemon-native Agent roots
+    /// projected for every paired runtime. Session tests that seed a paired
+    /// user must carry the same owner invariants as production boot; an empty
+    /// inventory would ask the prelude to advertise owner identities without
+    /// any executable LocalRuntime descriptors.
+    fn paired_session_ability_descriptors() -> Vec<AbilityDescriptor> {
+        [
+            (
+                "health",
+                "pages",
+                crate::daemon::ability::descriptors::AdmissionAction::Read,
+            ),
+            (
+                "list",
+                "files",
+                crate::daemon::ability::descriptors::AdmissionAction::Read,
+            ),
+        ]
+        .into_iter()
+        .map(|(ability, agent, action)| {
+            AbilityDescriptor::new(
+                ability,
+                crate::core::ura::agent_ura("realm", "user-dev", agent),
+                crate::daemon::ability::descriptors::Visibility::Scoped,
+                action,
+            )
+            .expect("paired session descriptor")
+        })
+        .collect()
+    }
+
     #[derive(Default)]
     struct SilentSessionHub {
         reject_unary_prelude: bool,
@@ -2022,6 +2053,7 @@ mod tests {
     async fn clean_close_reports_uptime_and_frame_count_stats() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
         seed_session_credentials();
+        let ability_descriptors = paired_session_ability_descriptors();
         // Device-side fingerprint contract for hub-side close
         // diagnosis (incident 2026-06-11: hub logs lost, device
         // stats are the only surviving evidence). A hub that admits
@@ -2038,7 +2070,7 @@ mod tests {
                 None,
                 Arc::clone(&dispatcher),
                 None,
-                SessionPreludeInputs::new(&[], authority_store()),
+                SessionPreludeInputs::new(&ability_descriptors, authority_store()),
             ),
         )
         .await
@@ -2083,7 +2115,9 @@ mod tests {
             hub_ca_pem_path: None,
             dispatcher: Arc::new(RecordingDispatcher::default()),
             escalation_outbox: None,
-            ability_inventory: SessionAbilityDescriptorInventory::fixed(Vec::new()),
+            ability_inventory: SessionAbilityDescriptorInventory::fixed(
+                paired_session_ability_descriptors(),
+            ),
             authority_published_abilities: authority_store(),
             initial_admission: None,
             user_trust_sync: None,
@@ -2449,6 +2483,20 @@ mod tests {
                 crate::daemon::ability::descriptors::AdmissionAction::Invoke,
             )
             .expect("committed hosted-agent descriptor"),
+            AbilityDescriptor::new(
+                "health",
+                crate::core::ura::agent_ura("realm", "user-dev", "pages"),
+                crate::daemon::ability::descriptors::Visibility::Scoped,
+                crate::daemon::ability::descriptors::AdmissionAction::Read,
+            )
+            .expect("committed Pages descriptor"),
+            AbilityDescriptor::new(
+                "list",
+                crate::core::ura::agent_ura("realm", "user-dev", "files"),
+                crate::daemon::ability::descriptors::Visibility::Scoped,
+                crate::daemon::ability::descriptors::AdmissionAction::Read,
+            )
+            .expect("committed Files descriptor"),
         ];
         let signer = TestSessionSigner::random(device_ura);
         let expected_public_key_hex = hex::encode(
@@ -2747,7 +2795,9 @@ mod tests {
             hub_ca_pem_path: None,
             dispatcher,
             escalation_outbox: None,
-            ability_inventory: SessionAbilityDescriptorInventory::fixed(Vec::new()),
+            ability_inventory: SessionAbilityDescriptorInventory::fixed(
+                paired_session_ability_descriptors(),
+            ),
             authority_published_abilities: authority_store(),
             initial_admission: Some(probe),
             user_trust_sync: None,
@@ -2794,7 +2844,9 @@ mod tests {
             hub_ca_pem_path: None,
             dispatcher,
             escalation_outbox: None,
-            ability_inventory: SessionAbilityDescriptorInventory::fixed(Vec::new()),
+            ability_inventory: SessionAbilityDescriptorInventory::fixed(
+                paired_session_ability_descriptors(),
+            ),
             authority_published_abilities: authority_store(),
             initial_admission: Some(probe),
             user_trust_sync: None,
@@ -2820,6 +2872,7 @@ mod tests {
         seed_session_credentials();
         let dispatcher = Arc::new(RecordingDispatcher::default());
         let (addr, _server) = spawn_silent_session_hub().await;
+        let ability_descriptors = paired_session_ability_descriptors();
 
         let result = dial_and_run_session_with_liveness_timeout(
             SessionDialAttempt {
@@ -2828,7 +2881,7 @@ mod tests {
                 hub_ca_pem_path: None,
                 dispatcher,
                 escalation_outbox: None,
-                preludes: SessionPreludeInputs::new(&[], authority_store()),
+                preludes: SessionPreludeInputs::new(&ability_descriptors, authority_store()),
                 liveness_timeout: Duration::from_millis(80),
                 initial_admission: None,
                 user_trust_sync: None, // not exercised here
@@ -2853,6 +2906,7 @@ mod tests {
         seed_session_credentials();
         let dispatcher = Arc::new(RecordingDispatcher::default());
         let (addr, _server) = spawn_established_then_silent_session_hub().await;
+        let ability_descriptors = paired_session_ability_descriptors();
 
         let result = dial_and_run_session_with_liveness_timeout(
             SessionDialAttempt {
@@ -2861,7 +2915,7 @@ mod tests {
                 hub_ca_pem_path: None,
                 dispatcher,
                 escalation_outbox: None,
-                preludes: SessionPreludeInputs::new(&[], authority_store()),
+                preludes: SessionPreludeInputs::new(&ability_descriptors, authority_store()),
                 liveness_timeout: Duration::from_millis(80),
                 initial_admission: None,
                 user_trust_sync: None,
@@ -2883,6 +2937,7 @@ mod tests {
         seed_session_credentials();
         let dispatcher = Arc::new(RecordingDispatcher::default());
         let (addr, _server) = spawn_out_of_sequence_session_hub().await;
+        let ability_descriptors = paired_session_ability_descriptors();
 
         let result = dial_and_run_session_with_liveness_timeout(
             SessionDialAttempt {
@@ -2891,7 +2946,7 @@ mod tests {
                 hub_ca_pem_path: None,
                 dispatcher,
                 escalation_outbox: None,
-                preludes: SessionPreludeInputs::new(&[], authority_store()),
+                preludes: SessionPreludeInputs::new(&ability_descriptors, authority_store()),
                 liveness_timeout: Duration::from_secs(1),
                 initial_admission: None,
                 user_trust_sync: None, // not exercised here

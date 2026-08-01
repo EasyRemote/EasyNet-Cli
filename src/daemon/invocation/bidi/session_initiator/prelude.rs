@@ -482,6 +482,11 @@ impl HostedAgentPreludePublicationPlan {
     ) -> Result<Self, String> {
         let descriptors =
             committed_owner_ability_descriptors(ability_descriptors, agent_ura, host_node_id);
+        if descriptors.is_empty() {
+            return Err(format!(
+                "hosted Agent `{agent_ura}` has no committed LocalRuntime descriptors; refusing to publish an empty owner projection"
+            ));
+        }
         let publication =
             crate::daemon::federation::read_model::owner_projection::prepare_and_persist(
                 agent_ura,
@@ -1766,6 +1771,27 @@ mod tests {
             ),
             vec![signer_key, stale_or_browser_key],
             "non-signer local user keys may be resolved/imported, but must not be signer-published"
+        );
+    }
+
+    #[test]
+    fn hosted_agent_prelude_plan_rejects_empty_runtime_projection() {
+        let owner = "easynet:///r/realm/agent/dev.pages";
+        let result = HostedAgentPreludePublicationPlan::prepare(
+            owner,
+            "easynet:///r/realm/device/n1",
+            Some("n1"),
+            &[],
+        );
+        let error = match result {
+            Ok(_) => panic!("an empty hosted owner must not be published as online"),
+            Err(error) => error,
+        };
+
+        assert!(error.contains(owner), "{error}");
+        assert!(
+            error.contains("no committed LocalRuntime descriptors"),
+            "{error}"
         );
     }
 
