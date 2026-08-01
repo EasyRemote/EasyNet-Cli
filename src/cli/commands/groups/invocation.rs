@@ -11,7 +11,7 @@
 use anyhow::Context;
 use clap::{Args, Subcommand};
 use serde::de::DeserializeOwned;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
 use crate::cli::commands::receipt_verification::CliReceiptChainVerification;
@@ -160,7 +160,7 @@ fn run_list(args: ListArgs) -> anyhow::Result<()> {
         table.add_row(vec![
             record.request_id.clone(),
             record.state.clone(),
-            public_ability_label(record),
+            public_ability_label(&record.callee_ura, &record.ability_ura),
             caller,
             callee,
             age,
@@ -206,7 +206,7 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
     let ledger_reported_receipt_chain_verified =
         ledger_reported_receipt_chain_verified(&record).to_string();
     let cli_receipt_chain_verification = cli_receipt_chain_verification().to_string();
-    let ability = public_ability_label(&record);
+    let ability = public_ability_label(&record.callee_ura, &record.ability_ura);
     output::kv_section_stdout(&[
         ("invocation_ura", record.invocation_ura.as_str()),
         ("request_id", record.request_id.as_str()),
@@ -324,7 +324,7 @@ fn print_trace_table(records: &[InvocationRecord]) {
             record.request_id.clone(),
             record.span_id.clone(),
             record.state.clone(),
-            public_ability_label(record),
+            public_ability_label(&record.callee_ura, &record.ability_ura),
             started,
             elapsed,
         ]);
@@ -351,7 +351,44 @@ struct HistoryListResponse {
     ledger_path: Option<String>,
     next_cursor: Option<String>,
     #[serde(default)]
-    records: Vec<InvocationRecord>,
+    records: Vec<InvocationHistorySummary>,
+}
+
+/// Bounded navigation DTO returned by `invocation.history.list`.
+///
+/// The list surface intentionally excludes ledger payloads, diagnostics,
+/// causal links, visibility, and receipt chains. Those proof-bearing fields
+/// belong to `invocation.history.get`; decoding a list row as the complete
+/// ledger record couples the CLI to data the provider is forbidden to expose
+/// on this bounded read model.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct InvocationHistorySummary {
+    invocation_ura: String,
+    request_id: String,
+    trace_id: String,
+    span_id: String,
+    caller_ura: String,
+    callee_ura: String,
+    subject_ura: String,
+    ability_ura: String,
+    ability_name: String,
+    state: String,
+    started_unix_ms: i64,
+    completed_unix_ms: Option<i64>,
+    elapsed_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<InvocationHistoryErrorSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct InvocationHistoryErrorSummary {
+    source: String,
+    code: String,
+    message: String,
+    retryable: bool,
+    truncated: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -521,7 +558,7 @@ struct AbilityStat {
     failed: usize,
 }
 
-fn summarize(records: &[InvocationRecord]) -> StatsSummary {
+fn summarize(records: &[InvocationHistorySummary]) -> StatsSummary {
     use std::collections::BTreeMap;
 
     let mut states: BTreeMap<String, usize> = BTreeMap::new();
@@ -788,9 +825,9 @@ impl InvocationHistoryKey {
     }
 }
 
-fn public_ability_label(record: &InvocationRecord) -> String {
-    crate::core::ura::public_ability_name_from_ability_ura(&record.callee_ura, &record.ability_ura)
-        .unwrap_or_else(|| record.ability_ura.clone())
+fn public_ability_label(callee_ura: &str, ability_ura: &str) -> String {
+    crate::core::ura::public_ability_name_from_ability_ura(callee_ura, ability_ura)
+        .unwrap_or_else(|| ability_ura.to_string())
 }
 
 fn short_ura(ura: &str) -> String {
@@ -944,6 +981,46 @@ mod tests {
         assert!(
             path.to_string().contains("state_code"),
             "schema error should name the noncanonical field: {path}"
+        );
+    }
+
+    #[test]
+    fn invocation_history_list_decodes_bounded_summary_without_full_ledger_payloads() {
+        let response = serde_json::from_value::<HistoryListResponse>(json!({
+            "ledger_ura": "easynet:///r/test/resource/device.callee/billing/invocations",
+            "records": [{
+                "invocation_ura": "easynet:///r/test/resource/invocation.i-1",
+                "request_id": "req-1",
+                "trace_id": "trace-1",
+                "span_id": "span-1",
+                "caller_ura": "easynet:///r/test/device/caller",
+                "callee_ura": "easynet:///r/test/device/callee",
+                "subject_ura": "easynet:///r/test/resource/device.callee/item",
+                "ability_ura": "easynet:///r/test/ability/device.callee.fs.read",
+                "ability_name": "fs.read",
+                "state": "cancelled",
+                "started_unix_ms": 1_700_000_000_000_i64,
+                "completed_unix_ms": 1_700_000_000_100_i64,
+                "elapsed_ms": 100,
+                "error": {
+                    "source": "runtime",
+                    "code": "CANCELLED",
+                    "message": "consumer disconnected",
+                    "retryable": false,
+                    "truncated": false
+                }
+            }]
+        }))
+        .expect("bounded invocation history summary must not require full record fields");
+
+        assert_eq!(response.records.len(), 1);
+        assert_eq!(response.records[0].state, "cancelled");
+        assert_eq!(
+            response.records[0]
+                .error
+                .as_ref()
+                .map(|error| error.code.as_str()),
+            Some("CANCELLED")
         );
     }
 
@@ -1214,7 +1291,7 @@ mod tests {
         state: &str,
         error_code: Option<&str>,
         elapsed_ms: Option<u64>,
-    ) -> InvocationRecord {
+    ) -> InvocationHistorySummary {
         let mut b = test_record_builder(ability, state);
         if let Some(code) = error_code {
             b = b.error(axon_sdk::invocation::LedgerErrorRecord {
@@ -1228,7 +1305,29 @@ mod tests {
         if let Some(ms) = elapsed_ms {
             b = b.elapsed_ms(ms);
         }
-        b.build().expect("stats test record")
+        let record = b.build().expect("stats test record");
+        InvocationHistorySummary {
+            invocation_ura: record.invocation_ura,
+            request_id: record.request_id,
+            trace_id: record.trace_id,
+            span_id: record.span_id,
+            caller_ura: record.caller_ura,
+            callee_ura: record.callee_ura,
+            subject_ura: record.subject_ura,
+            ability_ura: record.ability_ura,
+            ability_name: record.ability_name,
+            state: record.state,
+            started_unix_ms: record.started_unix_ms,
+            completed_unix_ms: record.completed_unix_ms,
+            elapsed_ms: record.elapsed_ms,
+            error: record.error.map(|error| InvocationHistoryErrorSummary {
+                source: error.source,
+                code: error.code,
+                message: error.message,
+                retryable: error.retryable,
+                truncated: !error.context.is_empty(),
+            }),
+        }
     }
 
     #[test]
@@ -1296,7 +1395,7 @@ mod tests {
     fn summarize_latency_excludes_failures_and_uses_nearest_rank() {
         // A failed call's elapsed time is recovery noise, not service
         // latency — it must not pollute the percentiles.
-        let mut records: Vec<InvocationRecord> = (1..=100)
+        let mut records: Vec<InvocationHistorySummary> = (1..=100)
             .map(|i| stats_record("x.call", "completed", None, Some(i)))
             .collect();
         records.push(stats_record(
