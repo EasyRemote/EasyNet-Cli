@@ -30,7 +30,7 @@ func TestConformanceSevenLanguageCapabilityMatrix(t *testing.T) {
 	runRepositoryGate(t, "check-sdk-parity-matrix.sh", "--self-test")
 }
 
-func TestConformanceStreamAndBidiBackpressureBounds(t *testing.T) {
+func TestConformanceStreamBackpressureAndBidiObservationBounds(t *testing.T) {
 	streamTransport := &memoryStreamTransport{events: []string{
 		`{"sequence":1,"kind":"data","state":"Open","terminal":false}`,
 		`{"sequence":2,"kind":"data","state":"Open","terminal":false}`,
@@ -57,8 +57,12 @@ func TestConformanceStreamAndBidiBackpressureBounds(t *testing.T) {
 	if _, err = bidi.Receive(context.Background()); err != nil {
 		t.Fatalf("first bidi frame: %v", err)
 	}
-	if _, err = bidi.Receive(context.Background()); !IsCode(err, ErrInvalidArgument) || bidi.State() != BidiFailed {
-		t.Fatalf("bidi overflow = %v state=%s", err, bidi.State())
+	if _, err = bidi.Receive(context.Background()); err != nil {
+		t.Fatalf("second bidi frame: %v", err)
+	}
+	history := bidi.ReceivedFrames()
+	if len(history) != 1 || history[0].Sequence() != 2 || bidi.State() != BidiOpen {
+		t.Fatalf("bidi rolling observation history = %#v state=%s", history, bidi.State())
 	}
 }
 

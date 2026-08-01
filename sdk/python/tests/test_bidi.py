@@ -107,6 +107,17 @@ class ConcurrentCancelBidiTransport(MemoryBidiTransport):
         return self.cancel_reply
 
 
+class FailedSendConcurrentBidiTransport(ConcurrentCancelBidiTransport):
+    def send(self, frame_json: bytes) -> bytes:
+        del frame_json
+        raise SDKError(
+            code=ErrorCode.TRANSPORT,
+            stage="test",
+            retry=RetryHint.SAFE,
+            message="carrier send failed",
+        )
+
+
 def _capture_result(
     operation: Callable[[], BidiFrame],
     results: list[BidiFrame],
@@ -461,6 +472,36 @@ class BidiTests(unittest.TestCase):
         self.assertEqual(len(errors), 1)
         self.assertIn("became terminal", str(errors[0]))
 
+    def test_in_flight_receive_drains_after_carrier_send_failure(self) -> None:
+        transport = FailedSendConcurrentBidiTransport()
+        transport.recv_frame = (
+            b'{"sequence":1,"kind":"data","stream_id":1,'
+            b'"payload_json":{"ready":true}}'
+        )
+        session = new_session(transport)
+        received: list[BidiFrame] = []
+        errors: list[BaseException] = []
+        receiver = threading.Thread(
+            target=lambda: _capture_result(session.receive, received, errors),
+            daemon=True,
+        )
+        receiver.start()
+        self.assertTrue(transport.recv_started.wait(timeout=1.0))
+
+        with self.assertRaises(SDKError) as caught:
+            session.send(BidiFrame(sequence=1, kind="data", stream_id=1))
+        self.assertTrue(is_code(caught.exception, ErrorCode.TRANSPORT))
+        self.assertEqual(session.state, BidiState.FAILED)
+        self.assertEqual(session.runtime_state, BidiState.OPEN)
+
+        transport.terminal_ready.set()
+        receiver.join(timeout=1.0)
+        self.assertFalse(receiver.is_alive())
+        self.assertEqual(errors, [])
+        self.assertEqual([frame.sequence for frame in received], [1])
+        with self.assertRaises(SDKError):
+            session.receive()
+
     def test_second_concurrent_receiver_is_rejected(self) -> None:
         transport = ConcurrentCancelBidiTransport()
         session = new_session(transport)
@@ -482,7 +523,7 @@ class BidiTests(unittest.TestCase):
         self.assertEqual(errors, [])
         self.assertEqual(len(received), 1)
 
-    def test_receive_buffer_bound(self) -> None:
+    def test_receive_history_is_bounded_rolling_window(self) -> None:
         transport = MemoryBidiTransport(
             [
                 b'{"sequence":1,"kind":"data","stream_id":1}',
@@ -495,11 +536,23 @@ class BidiTests(unittest.TestCase):
         )
 
         session.receive()
-        with self.assertRaises(SDKError) as caught:
-            session.receive()
+        session.receive()
 
-        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
-        self.assertEqual(session.state, BidiState.FAILED)
+        self.assertEqual([frame.sequence for frame in session.received_frames], [2])
+        self.assertEqual(session.state, BidiState.OPEN)
+        self.assertEqual(session.runtime_state, BidiState.OPEN)
+
+    def test_send_history_is_bounded_rolling_window(self) -> None:
+        session = BidiSession.from_json(
+            MemoryBidiTransport(),
+            b'{"session_id":"bidi-1","state":"Open","max_buffered_frames":1}',
+        )
+
+        session.send(BidiFrame(sequence=1, kind="data", stream_id=1))
+        session.send(BidiFrame(sequence=2, kind="data", stream_id=1))
+
+        self.assertEqual([frame.sequence for frame in session.sent_frames], [2])
+        self.assertEqual(session.state, BidiState.OPEN)
 
 
 if __name__ == "__main__":

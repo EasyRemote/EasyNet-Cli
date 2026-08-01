@@ -513,7 +513,7 @@ func TestRuntimeClientSessionRuntimeProviderOpensSignedStreamAndBidi(t *testing.
 	if stream.StreamID() != "provider-stream-1" {
 		t.Fatalf("stream id = %q", stream.StreamID())
 	}
-	if streamSigned["signer_id"] != "caller-key" {
+	if callerSignatureKeyID(streamSigned) != "caller-key" {
 		t.Fatalf("stream signed envelope not forwarded: %#v", streamSigned)
 	}
 
@@ -524,9 +524,15 @@ func TestRuntimeClientSessionRuntimeProviderOpensSignedStreamAndBidi(t *testing.
 	if session.SessionID() != "provider-bidi-1" {
 		t.Fatalf("bidi session id = %q", session.SessionID())
 	}
-	if bidiSigned["signer_id"] != "caller-key" {
+	if callerSignatureKeyID(bidiSigned) != "caller-key" {
 		t.Fatalf("bidi signed envelope not forwarded: %#v", bidiSigned)
 	}
+}
+
+func callerSignatureKeyID(invocation map[string]any) string {
+	signature, _ := invocation["caller_signature"].(map[string]any)
+	keyID, _ := signature["key_id_hint"].(string)
+	return keyID
 }
 
 func TestRuntimeClientSessionRuntimeProviderRejectsNilClientBeforeDereference(t *testing.T) {

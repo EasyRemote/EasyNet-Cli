@@ -419,15 +419,19 @@ class AuthorizedRuntimeSessionTests(unittest.TestCase):
         stream = provider.open_stream(signed)
         self.assertEqual(stream.stream_id, "stream-1")
         assert transport.seen_draft is not None
-        self.assertEqual(transport.seen_draft["signer_id"], "caller-key")
+        self.assertEqual(
+            transport.seen_draft["caller_signature"]["key_id_hint"],
+            "caller-key",
+        )
 
         bidi = provider.open_bidi(signed, ())
         self.assertEqual(bidi.session_id, "bidi-1")
         assert transport.seen_draft is not None
         self.assertEqual(
-            transport.seen_draft["signature"]["signature_base64"],
+            transport.seen_draft["caller_signature"]["signature_base64"],
             "c2lnbmF0dXJl",
         )
+        self.assertNotIn("signature", transport.seen_draft)
 
     def test_runtime_client_providers_reject_missing_client_at_construction(self) -> None:
         with self.assertRaises(SDKError) as runtime_error:

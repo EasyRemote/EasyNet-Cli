@@ -306,11 +306,6 @@ func (s *BidiSession) Send(ctx context.Context, frame BidiFrame) (BidiFrame, err
 		s.mu.Unlock()
 		return BidiFrame{}, invalidRuntimePayload("bidi send path is closed", nil)
 	}
-	if s.maxBuffered > 0 && len(s.sentFrames) >= s.maxBuffered {
-		s.runtimeState = BidiFailed
-		s.mu.Unlock()
-		return BidiFrame{}, invalidRuntimePayload("bidi send buffer limit exceeded", nil)
-	}
 	if s.sending {
 		s.mu.Unlock()
 		return BidiFrame{}, invalidRuntimePayload("bidi send is already in progress", nil)
@@ -323,8 +318,8 @@ func (s *BidiSession) Send(ctx context.Context, frame BidiFrame) (BidiFrame, err
 	if err != nil {
 		s.mu.Lock()
 		s.sending = false
-		if s.carrierState.open() && !isLocalCarrierInterruption(err) {
-			s.runtimeState = BidiFailed
+		if !isLocalCarrierInterruption(err) {
+			s.failCarrierLocked()
 		}
 		s.mu.Unlock()
 		var sdkErr *SDKError
@@ -337,7 +332,7 @@ func (s *BidiSession) Send(ctx context.Context, frame BidiFrame) (BidiFrame, err
 	s.mu.Lock()
 	s.sending = false
 	if err != nil {
-		s.runtimeState = BidiFailed
+		s.failCarrierLocked()
 		s.mu.Unlock()
 		return BidiFrame{}, err
 	}
@@ -385,8 +380,8 @@ func (s *BidiSession) Receive(ctx context.Context) (BidiFrame, error) {
 	if err != nil {
 		s.mu.Lock()
 		s.receiving = false
-		if s.carrierState.open() && !isLocalCarrierInterruption(err) {
-			s.runtimeState = BidiFailed
+		if !isLocalCarrierInterruption(err) {
+			s.failCarrierLocked()
 		}
 		s.mu.Unlock()
 		var sdkErr *SDKError
@@ -399,7 +394,7 @@ func (s *BidiSession) Receive(ctx context.Context) (BidiFrame, error) {
 	s.mu.Lock()
 	s.receiving = false
 	if err != nil {
-		s.runtimeState = BidiFailed
+		s.failCarrierLocked()
 		s.mu.Unlock()
 		return BidiFrame{}, err
 	}
@@ -446,8 +441,8 @@ func (s *BidiSession) CloseSend(ctx context.Context) (BidiOutcome, error) {
 	if err != nil {
 		s.mu.Lock()
 		s.sending = false
-		if s.carrierState.open() && !isLocalCarrierInterruption(err) {
-			s.runtimeState = BidiFailed
+		if !isLocalCarrierInterruption(err) {
+			s.failCarrierLocked()
 		}
 		s.mu.Unlock()
 		var sdkErr *SDKError
@@ -460,7 +455,7 @@ func (s *BidiSession) CloseSend(ctx context.Context) (BidiOutcome, error) {
 	s.mu.Lock()
 	s.sending = false
 	if err != nil {
-		s.runtimeState = BidiFailed
+		s.failCarrierLocked()
 		s.mu.Unlock()
 		return BidiOutcome{}, err
 	}
@@ -504,14 +499,14 @@ func (s *BidiSession) Cancel(ctx context.Context, reason string) (BidiOutcome, e
 		if errors.As(err, &sdkErr) {
 			if sdkErr.Code != ErrNotImplemented && !isLocalCarrierInterruption(sdkErr) {
 				s.mu.Lock()
-				s.runtimeState = BidiFailed
+				s.failCarrierLocked()
 				s.mu.Unlock()
 			}
 			return BidiOutcome{}, sdkErr
 		}
 		if !isLocalCarrierInterruption(err) {
 			s.mu.Lock()
-			s.runtimeState = BidiFailed
+			s.failCarrierLocked()
 			s.mu.Unlock()
 		}
 		return BidiOutcome{}, transportRuntimeError("bidi cancel transport failed", err)
@@ -519,13 +514,13 @@ func (s *BidiSession) Cancel(ctx context.Context, reason string) (BidiOutcome, e
 	outcome, err := NewBidiOutcomeFromJSON(raw)
 	if err != nil {
 		s.mu.Lock()
-		s.runtimeState = BidiFailed
+		s.failCarrierLocked()
 		s.mu.Unlock()
 		return BidiOutcome{}, err
 	}
 	if outcome.state != BidiCancelRequested || outcome.terminal {
 		s.mu.Lock()
-		s.runtimeState = BidiFailed
+		s.failCarrierLocked()
 		s.mu.Unlock()
 		return BidiOutcome{}, invalidRuntimePayload("bidi cancel transport must return CancelRequested with terminal=false", nil)
 	}
@@ -582,34 +577,51 @@ func (s *BidiSession) Close(ctx context.Context) error {
 
 func (s *BidiSession) recordSentLocked(frame BidiFrame) error {
 	if frame.sequence == 0 {
-		s.runtimeState = BidiFailed
+		s.failCarrierLocked()
 		return invalidRuntimePayload("bidi sent frame sequence is required", nil)
 	}
 	if frame.sequence <= s.lastSendSeq {
-		s.runtimeState = BidiFailed
+		s.failCarrierLocked()
 		return invalidRuntimePayload("bidi sent frames must be strictly ordered", nil)
 	}
 	s.lastSendSeq = frame.sequence
-	s.sentFrames = append(s.sentFrames, frame)
+	s.sentFrames = retainBidiFrame(s.sentFrames, frame, s.maxBuffered)
 	return nil
 }
 
 func (s *BidiSession) recordReceivedLocked(frame BidiFrame) error {
 	if frame.sequence == 0 {
-		s.runtimeState = BidiFailed
+		s.failCarrierLocked()
 		return invalidRuntimePayload("bidi received frame sequence is required", nil)
 	}
 	if frame.sequence <= s.lastRecvSeq {
-		s.runtimeState = BidiFailed
+		s.failCarrierLocked()
 		return invalidRuntimePayload("bidi received frames must be strictly ordered", nil)
 	}
-	if s.maxBuffered > 0 && len(s.receivedFrames) >= s.maxBuffered {
-		s.runtimeState = BidiFailed
-		return invalidRuntimePayload("bidi receive buffer limit exceeded", nil)
-	}
 	s.lastRecvSeq = frame.sequence
-	s.receivedFrames = append(s.receivedFrames, frame)
+	s.receivedFrames = retainBidiFrame(s.receivedFrames, frame, s.maxBuffered)
 	return nil
+}
+
+// retainBidiFrame keeps a bounded diagnostic window. Provider callback queues
+// enforce transport backpressure; this facade history must never become a
+// second queue that terminalizes a healthy long-running session.
+func retainBidiFrame(history []BidiFrame, frame BidiFrame, limit int) []BidiFrame {
+	if limit <= 0 || len(history) < limit {
+		return append(history, frame)
+	}
+	copy(history, history[len(history)-limit+1:])
+	history[limit-1] = frame
+	return history[:limit]
+}
+
+// failCarrierLocked records loss of the local provider transport without
+// fabricating a provider runtime transition. An already in-flight Receive may
+// still drain its ordered frame; future operations fail the carrier-open gate.
+func (s *BidiSession) failCarrierLocked() {
+	if s.carrierState.open() {
+		s.carrierState = carrierFailed
+	}
 }
 
 func (s *BidiSession) applyLifecycleEventLocked(event bidiLifecycleEvent) error {
@@ -621,7 +633,7 @@ func (s *BidiSession) applyLifecycleEventLocked(event bidiLifecycleEvent) error 
 	case bidiLifecycleCancelOutcome:
 		return s.applyCancelOutcomeLocked(event.outcome)
 	default:
-		s.runtimeState = BidiFailed
+		s.failCarrierLocked()
 		return invalidRuntimePayload("unknown bidi lifecycle event", nil)
 	}
 }
@@ -638,7 +650,7 @@ func (s *BidiSession) applyReceiveFrameLocked(frame BidiFrame) error {
 
 func (s *BidiSession) applyCloseSendOutcomeLocked(outcome BidiOutcome) error {
 	if outcome.state != BidiHalfClosedLocal || outcome.terminal {
-		s.runtimeState = BidiFailed
+		s.failCarrierLocked()
 		return invalidRuntimePayload("bidi close-send transport must not claim canonical terminality", nil)
 	}
 	if s.isRuntimeTerminalLocked() || s.runtimeState == BidiCancelRequested {
@@ -675,7 +687,7 @@ func (s *BidiSession) applyReceivedStateLocked(frame BidiFrame) error {
 	case frame.terminal:
 		terminal, err := NewBidiTerminalFrame(s.sessionID, frame)
 		if err != nil {
-			s.runtimeState = BidiFailed
+			s.failCarrierLocked()
 			return err
 		}
 		s.terminalFrame = &terminal

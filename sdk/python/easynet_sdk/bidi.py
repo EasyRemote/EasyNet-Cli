@@ -358,12 +358,6 @@ class BidiSession:
                 BidiState.HALF_CLOSED_REMOTE,
             }:
                 raise _invalid_bidi("bidi send path is closed")
-            if (
-                self.max_buffered_frames > 0
-                and len(self.sent_frames) >= self.max_buffered_frames
-            ):
-                self._set_runtime_state_locked(BidiState.FAILED)
-                raise _invalid_bidi("bidi send buffer limit exceeded")
             if self._sending:
                 raise _invalid_bidi("bidi send is already in progress")
             self._sending = True
@@ -373,25 +367,21 @@ class BidiSession:
         except SDKError as exc:
             with self._lock:
                 self._sending = False
-                if self._carrier_state.is_open and not is_local_carrier_interruption(
-                    exc
-                ):
-                    self._set_runtime_state_locked(BidiState.FAILED)
+                if not is_local_carrier_interruption(exc):
+                    self._fail_carrier_locked()
             raise
         except Exception as exc:
             with self._lock:
                 self._sending = False
-                if self._carrier_state.is_open and not is_local_carrier_interruption(
-                    exc
-                ):
-                    self._set_runtime_state_locked(BidiState.FAILED)
+                if not is_local_carrier_interruption(exc):
+                    self._fail_carrier_locked()
             raise _transport_error("bidi send transport failed", exc) from exc
         try:
             ack = BidiFrame.from_json(raw)
         except SDKError:
             with self._lock:
                 self._sending = False
-                self._set_runtime_state_locked(BidiState.FAILED)
+                self._fail_carrier_locked()
             raise
         with self._lock:
             self._sending = False
@@ -417,10 +407,8 @@ class BidiSession:
         except SDKError as exc:
             with self._lock:
                 self._receiving = False
-                if self._carrier_state.is_open and not is_local_carrier_interruption(
-                    exc
-                ):
-                    self._set_runtime_state_locked(BidiState.FAILED)
+                if not is_local_carrier_interruption(exc):
+                    self._fail_carrier_locked()
             raise
         except TimeoutError:
             with self._lock:
@@ -429,15 +417,14 @@ class BidiSession:
         except Exception as exc:
             with self._lock:
                 self._receiving = False
-                if self._carrier_state.is_open:
-                    self._set_runtime_state_locked(BidiState.FAILED)
+                self._fail_carrier_locked()
             raise _transport_error("bidi recv transport failed", exc) from exc
         try:
             frame = BidiFrame.from_json(raw)
         except SDKError:
             with self._lock:
                 self._receiving = False
-                self._set_runtime_state_locked(BidiState.FAILED)
+                self._fail_carrier_locked()
             raise
         with self._lock:
             self._receiving = False
@@ -466,25 +453,21 @@ class BidiSession:
         except SDKError as exc:
             with self._lock:
                 self._sending = False
-                if self._carrier_state.is_open and not is_local_carrier_interruption(
-                    exc
-                ):
-                    self._set_runtime_state_locked(BidiState.FAILED)
+                if not is_local_carrier_interruption(exc):
+                    self._fail_carrier_locked()
             raise
         except Exception as exc:
             with self._lock:
                 self._sending = False
-                if self._carrier_state.is_open and not is_local_carrier_interruption(
-                    exc
-                ):
-                    self._set_runtime_state_locked(BidiState.FAILED)
+                if not is_local_carrier_interruption(exc):
+                    self._fail_carrier_locked()
             raise _transport_error("bidi close-send transport failed", exc) from exc
         try:
             outcome = BidiOutcome.from_json(raw)
         except SDKError:
             with self._lock:
                 self._sending = False
-                self._set_runtime_state_locked(BidiState.FAILED)
+                self._fail_carrier_locked()
             raise
         with self._lock:
             self._sending = False
@@ -510,22 +493,22 @@ class BidiSession:
                 and not is_local_carrier_interruption(exc)
             ):
                 with self._lock:
-                    self._set_runtime_state_locked(BidiState.FAILED)
+                    self._fail_carrier_locked()
             raise
         except Exception as exc:
             if not is_local_carrier_interruption(exc):
                 with self._lock:
-                    self._set_runtime_state_locked(BidiState.FAILED)
+                    self._fail_carrier_locked()
             raise _transport_error("bidi cancel transport failed", exc) from exc
         try:
             outcome = BidiOutcome.from_json(raw)
         except SDKError:
             with self._lock:
-                self._set_runtime_state_locked(BidiState.FAILED)
+                self._fail_carrier_locked()
             raise
         if outcome.state != BidiState.CANCEL_REQUESTED or outcome.terminal:
             with self._lock:
-                self._set_runtime_state_locked(BidiState.FAILED)
+                self._fail_carrier_locked()
             raise _invalid_bidi(
                 "bidi cancel transport must return CancelRequested with terminal=false"
             )
@@ -570,34 +553,28 @@ class BidiSession:
 
     def _record_sent_locked(self, frame: BidiFrame) -> None:
         if frame.sequence <= self._last_send_sequence:
-            self._set_runtime_state_locked(BidiState.FAILED)
+            self._fail_carrier_locked()
             raise _invalid_bidi("bidi sent frames must be strictly ordered")
         self._last_send_sequence = frame.sequence
-        self.sent_frames.append(frame)
+        _retain_bidi_frame(self.sent_frames, frame, self.max_buffered_frames)
 
     def _record_received_locked(self, frame: BidiFrame) -> None:
         if frame.sequence <= self._last_recv_sequence:
-            self._set_runtime_state_locked(BidiState.FAILED)
+            self._fail_carrier_locked()
             raise _invalid_bidi("bidi received frames must be strictly ordered")
-        if (
-            self.max_buffered_frames > 0
-            and len(self.received_frames) >= self.max_buffered_frames
-        ):
-            self._set_runtime_state_locked(BidiState.FAILED)
-            raise _invalid_bidi("bidi receive buffer limit exceeded")
         self._last_recv_sequence = frame.sequence
-        self.received_frames.append(frame)
+        _retain_bidi_frame(self.received_frames, frame, self.max_buffered_frames)
 
     def _apply_lifecycle_event_locked(self, event: _BidiLifecycleEvent) -> None:
         if event.kind == _BIDI_LIFECYCLE_RECEIVE_FRAME:
             if event.frame is None:
-                self._set_runtime_state_locked(BidiState.FAILED)
+                self._fail_carrier_locked()
                 raise _invalid_bidi("bidi receive lifecycle event is missing frame")
             self._apply_receive_frame_locked(event.frame)
             return
         if event.kind == _BIDI_LIFECYCLE_CLOSE_SEND_OUTCOME:
             if event.outcome is None:
-                self._set_runtime_state_locked(BidiState.FAILED)
+                self._fail_carrier_locked()
                 raise _invalid_bidi(
                     "bidi close-send lifecycle event is missing outcome"
                 )
@@ -605,11 +582,11 @@ class BidiSession:
             return
         if event.kind == _BIDI_LIFECYCLE_CANCEL_OUTCOME:
             if event.outcome is None:
-                self._set_runtime_state_locked(BidiState.FAILED)
+                self._fail_carrier_locked()
                 raise _invalid_bidi("bidi cancel lifecycle event is missing outcome")
             self._apply_cancel_outcome_locked(event.outcome)
             return
-        self._set_runtime_state_locked(BidiState.FAILED)
+        self._fail_carrier_locked()
         raise _invalid_bidi("unknown bidi lifecycle event")
 
     def _apply_receive_frame_locked(self, frame: BidiFrame) -> None:
@@ -622,7 +599,7 @@ class BidiSession:
 
     def _apply_close_send_outcome_locked(self, outcome: BidiOutcome) -> None:
         if outcome.state != BidiState.HALF_CLOSED_LOCAL or outcome.terminal:
-            self._set_runtime_state_locked(BidiState.FAILED)
+            self._fail_carrier_locked()
             raise _invalid_bidi(
                 "bidi close-send transport must return "
                 "HalfClosedLocal with terminal=false"
@@ -648,8 +625,7 @@ class BidiSession:
                 self._terminal_frame = BidiTerminalFrame.from_frame(
                     self.session_id, frame
                 )
-            self._carrier_state = CarrierState.FAILED
-            self.state = BidiState.FAILED
+            self._fail_carrier_locked()
         elif frame.terminal:
             self._terminal_frame = BidiTerminalFrame.from_frame(self.session_id, frame)
             self._set_runtime_state_locked(BidiState.TERMINAL)
@@ -665,6 +641,13 @@ class BidiSession:
         if self._carrier_state.is_open:
             self.state = state
 
+    def _fail_carrier_locked(self) -> None:
+        """Fail the local carrier without fabricating provider lifecycle."""
+
+        if self._carrier_state.is_open:
+            self._carrier_state = CarrierState.FAILED
+            self.state = BidiState.FAILED
+
     def _require_carrier_open_locked(self) -> None:
         if not self._carrier_state.is_open:
             raise _invalid_bidi("bidi carrier is closed")
@@ -675,6 +658,16 @@ class BidiSession:
             BidiState.CANCELLED,
             BidiState.FAILED,
         }
+
+
+def _retain_bidi_frame(
+    history: list[BidiFrame], frame: BidiFrame, limit: int
+) -> None:
+    """Retain a bounded diagnostic window without acting as a second queue."""
+
+    if limit > 0 and len(history) >= limit:
+        del history[: len(history) - limit + 1]
+    history.append(frame)
 
 
 def _required_positive_int(decoded: dict[str, object], field_name: str) -> int:
