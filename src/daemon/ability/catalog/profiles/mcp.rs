@@ -631,6 +631,17 @@ pub trait LocalInvoker {
         args: serde_json::Value,
     ) -> Result<serde_json::Value, String>;
 
+    /// Drain a finite server-stream invocation into ordered business payloads.
+    /// MCP `tools/call` has one terminal response, so the edge adapter owns the
+    /// stream-to-response projection while Axon remains the transport authority.
+    fn invoke_stream_sync(
+        &self,
+        _target: &crate::daemon::invocation::routing::target::LocalAbilityTarget,
+        _args: serde_json::Value,
+    ) -> Result<Vec<serde_json::Value>, String> {
+        Err("stream invocation is not supported by this local invoker".to_string())
+    }
+
     /// Invoke and additionally surface the invocation identity trace.
     /// The default implementation carries no trace; the production daemon
     /// adapter overrides it so tool results can echo the ledger identity.
@@ -696,6 +707,28 @@ impl LocalInvoker for DaemonLocalInvoker {
             Some(InvocationToolTrace::from_daemon_meta(&meta, mcp_tool)),
         ))
     }
+
+    fn invoke_stream_sync(
+        &self,
+        target: &crate::daemon::invocation::routing::target::LocalAbilityTarget,
+        args: serde_json::Value,
+    ) -> Result<Vec<serde_json::Value>, String> {
+        let context = crate::support::platform::local_invoke::LocalSystemInvocationIssuer::root_context_for_target(
+            target,
+            &[],
+            std::time::Duration::from_secs(30),
+            None,
+        )
+        .map_err(|error| error.to_string())?;
+        crate::support::platform::local_invoke::invoke_local_target_stream_with_invocation_context(
+            target,
+            args,
+            context,
+            None,
+        )
+        .map(|frames| frames.into_iter().map(|frame| frame.payload).collect())
+        .map_err(|error| error.to_string())
+    }
 }
 
 /// Production InvokeMcpProvider — what `easynet mcp_server` and
@@ -725,9 +758,7 @@ impl<I: LocalInvoker> InvokeMcpProvider<I> {
     ) -> Self {
         let descriptors = descriptors
             .into_iter()
-            .filter(|descriptor| {
-                McpDescriptorMetadataProjection::from_descriptor(descriptor).is_ok()
-            })
+            .filter(|descriptor| descriptor_is_mcp_callable(descriptor))
             .collect::<Vec<_>>();
         let routes = McpToolRouteTable::from_descriptors(&descriptors);
         Self {
@@ -741,6 +772,71 @@ impl<I: LocalInvoker> InvokeMcpProvider<I> {
     /// Used by tests + by `easynet mcp_server`'s startup banner.
     pub fn descriptor_count(&self) -> usize {
         self.routes.len()
+    }
+
+    fn handle_tool_call_inner(
+        &self,
+        name: &str,
+        args: &serde_json::Map<String, serde_json::Value>,
+        mut progress: Option<&mut dyn ProgressSink>,
+    ) -> ToolResult {
+        let Some(descriptor_index) = self.routes.descriptor_index_for_tool(name) else {
+            return ToolResult {
+                payload: serde_json::json!({
+                    "error": format!("unknown tool: `{name}`")
+                }),
+                is_error: true,
+            };
+        };
+        let target = self
+            .routes
+            .target_for_tool(name)
+            .expect("descriptor index and target are projected from the same route");
+        let args_value = serde_json::Value::Object(args.clone());
+
+        if self.descriptors[descriptor_index].call_mode()
+            == crate::daemon::ability::descriptors::CallMode::Stream
+        {
+            return match self.invoker.invoke_stream_sync(target, args_value) {
+                Ok(frames) => {
+                    let frame_count = frames.len();
+                    if let Some(sink) = progress.as_mut() {
+                        for (offset, _) in frames.iter().enumerate() {
+                            let completed = offset + 1;
+                            let _ = sink.report(
+                                completed as f64 / (frame_count + 1) as f64,
+                                Some(1.0),
+                                Some("stream frame"),
+                            );
+                        }
+                    }
+                    let payload = match frames.len() {
+                        0 => serde_json::Value::Null,
+                        1 => frames.into_iter().next().unwrap_or(serde_json::Value::Null),
+                        _ => serde_json::Value::Array(frames),
+                    };
+                    ToolResult {
+                        payload,
+                        is_error: false,
+                    }
+                }
+                Err(message) => ToolResult {
+                    payload: serde_json::json!({"error": message}),
+                    is_error: true,
+                },
+            };
+        }
+
+        match self.invoker.invoke_traced(target, name, args_value) {
+            Ok((value, trace)) => ToolResult {
+                payload: fold_invocation_trace(value, trace),
+                is_error: false,
+            },
+            Err(message) => ToolResult {
+                payload: serde_json::json!({"error": message}),
+                is_error: true,
+            },
+        }
     }
 }
 
@@ -882,46 +978,11 @@ impl<I: LocalInvoker> McpToolProvider for InvokeMcpProvider<I> {
         name: &str,
         args: &serde_json::Map<String, serde_json::Value>,
     ) -> ToolResult {
-        let target = self.routes.target_for_tool(name);
-
-        // Reject calls for tools we don't advertise. The descriptor
-        // list is the single source of truth — if a name isn't
-        // there, this is a caller-side bug, not a transient.
-        let Some(target) = target else {
-            return ToolResult {
-                payload: serde_json::json!({
-                    "error": format!("unknown tool: `{name}`")
-                }),
-                is_error: true,
-            };
-        };
-        let args_value = serde_json::Value::Object(args.clone());
-        match self.invoker.invoke_traced(target, name, args_value) {
-            Ok((value, trace)) => ToolResult {
-                payload: fold_invocation_trace(value, trace),
-                is_error: false,
-            },
-            Err(msg) => ToolResult {
-                payload: serde_json::json!({"error": msg}),
-                is_error: true,
-            },
-        }
+        self.handle_tool_call_inner(name, args, None)
     }
 
-    /// Progress-aware variant. v1 (round-2 of the plan, slice B2a):
-    /// emits at least one progress notification BEFORE diving into
-    /// the unary `handle_tool_call` path — gives the client a
-    /// "received, working on it" signal even when the underlying
-    /// ability is unary. Real stream-ability projection (drive
-    /// InvokeStream chunks → progress notifications, terminal
-    /// chunk → response) is plan slice B2b, which lands once the
-    /// `LocalInvoker` trait gains a stream-aware method.
-    ///
-    /// The wire shape is spec-correct today: client sees N progress
-    /// notifications (currently N=1) + one terminal tools/call
-    /// response carrying the full payload. The contract is forward-
-    /// compatible — providers calling `handle_tool_call_with_progress`
-    /// won't break when B2b lifts the progress count to per-chunk.
+    /// Progress-aware variant. Stream frames become monotonic progress
+    /// notifications and the drained payload becomes the terminal response.
     fn handle_tool_call_with_progress(
         &self,
         name: &str,
@@ -935,7 +996,7 @@ impl<I: LocalInvoker> McpToolProvider for InvokeMcpProvider<I> {
         // strict-increase check against the terminal 1.0 passes
         // regardless of float precision.
         let _ = sink.report(f64::EPSILON, Some(1.0), Some("dispatched"));
-        let result = self.handle_tool_call(name, args);
+        let result = self.handle_tool_call_inner(name, args, Some(sink));
         // Terminal "complete" pulse, monotonically increasing past
         // the start. Spec REQUIRES strict increase.
         let _ = sink.report(1.0, Some(1.0), Some("complete"));
@@ -1227,6 +1288,17 @@ mod tests {
             *self.last_args.borrow_mut() = Some(args);
             self.reply.clone()
         }
+
+        fn invoke_stream_sync(
+            &self,
+            target: &crate::daemon::invocation::routing::target::LocalAbilityTarget,
+            args: serde_json::Value,
+        ) -> Result<Vec<serde_json::Value>, String> {
+            *self.last_ability.borrow_mut() = Some(target.dispatch_name().to_string());
+            *self.last_callee_ura.borrow_mut() = Some(target.callee_ura().to_string());
+            *self.last_args.borrow_mut() = Some(args);
+            self.reply.clone().map(|value| vec![value])
+        }
     }
 
     #[test]
@@ -1257,11 +1329,9 @@ mod tests {
         assert_eq!(provider.descriptor_count(), 1);
         assert_eq!(specs.len(), 1);
         assert_eq!(specs[0]["x-easynet"]["ability"], "observe.health");
-        assert!(
-            provider
-                .handle_tool_call("consent_subscribe", &serde_json::Map::new())
-                .is_error
-        );
+        assert!(provider
+            .handle_tool_call("consent_subscribe", &serde_json::Map::new())
+            .is_error);
         assert!(
             provider
                 .handle_tool_call("voice_session", &serde_json::Map::new())
