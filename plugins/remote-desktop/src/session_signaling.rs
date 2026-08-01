@@ -99,6 +99,7 @@ impl RemoteDesktopNegotiatedCodec {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RemoteDesktopWebRtcDiagnostic {
     ice_connection_state: Option<String>,
+    peer_connection_state: Option<String>,
     error: Option<String>,
 }
 
@@ -110,8 +111,15 @@ impl RemoteDesktopWebRtcDiagnostic {
             .map(str::trim)
             .filter(|state| !state.is_empty())
             .map(str::to_string);
+        let peer_connection_state = payload
+            .get("peer_connection_state")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|state| !state.is_empty())
+            .map(str::to_string);
         Self {
             ice_connection_state,
+            peer_connection_state,
             error,
         }
     }
@@ -128,6 +136,7 @@ pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopSignalingStat
     remote_ice_candidates: Vec<RemoteDesktopIceCandidate>,
     local_ice_candidates: Vec<RemoteDesktopIceCandidate>,
     webrtc_ice_state: Option<String>,
+    webrtc_peer_state: Option<String>,
     webrtc_error: Option<String>,
     negotiated_codec: Option<RemoteDesktopNegotiatedCodec>,
 }
@@ -140,6 +149,7 @@ impl RemoteDesktopSignalingState {
             remote_ice_candidates: Vec::new(),
             local_ice_candidates: Vec::new(),
             webrtc_ice_state: None,
+            webrtc_peer_state: None,
             webrtc_error: None,
             negotiated_codec: None,
         }
@@ -173,6 +183,10 @@ impl RemoteDesktopSignalingState {
 
     pub(in crate::daemon::plugins::remote_desktop) fn webrtc_ice_state(&self) -> Option<&str> {
         self.webrtc_ice_state.as_deref()
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn webrtc_peer_state(&self) -> Option<&str> {
+        self.webrtc_peer_state.as_deref()
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn webrtc_error(&self) -> Option<&str> {
@@ -255,6 +269,9 @@ impl RemoteDesktopSignalingState {
         if let Some(state) = diagnostic.ice_connection_state {
             self.webrtc_ice_state = Some(state);
         }
+        if let Some(state) = diagnostic.peer_connection_state {
+            self.webrtc_peer_state = Some(state);
+        }
         if let Some(error) = diagnostic.error {
             self.webrtc_error = Some(error);
         }
@@ -314,5 +331,19 @@ mod tests {
 
         assert_eq!(signaling.webrtc_ice_state(), Some("connected"));
         assert_eq!(signaling.webrtc_error(), Some("second"));
+    }
+
+    #[test]
+    fn remote_desktop_signaling_records_peer_connection_state() {
+        let mut signaling = RemoteDesktopSignalingState::new();
+
+        signaling.record_webrtc_diagnostic(
+            None,
+            &json!({
+                "peer_connection_state": "connected",
+            }),
+        );
+
+        assert_eq!(signaling.webrtc_peer_state(), Some("connected"));
     }
 }

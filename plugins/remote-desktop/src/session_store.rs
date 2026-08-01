@@ -49,12 +49,12 @@ impl RemoteDesktopSessionStore {
         f(&mut sessions)
     }
 
-    /// Mark a direct WebRTC endpoint connected for one non-terminal session.
+    /// Mark a direct WebRTC media plane ready for one non-terminal session.
     ///
     /// This is a store-level boundary helper: transport code supplies the
     /// session id, while the session model owns the terminal and duplicate
-    /// connection checks.
-    pub(in crate::daemon::plugins::remote_desktop) fn mark_direct_webrtc_connected(
+    /// media-ready checks.
+    pub(in crate::daemon::plugins::remote_desktop) fn mark_direct_webrtc_media_ready(
         &self,
         session_id: &str,
     ) {
@@ -62,7 +62,7 @@ impl RemoteDesktopSessionStore {
         let Some(session) = sessions.get_mut(session_id) else {
             return;
         };
-        session.mark_webrtc_connected(format!("{DIRECT_WEBRTC_ENDPOINT_PREFIX}{session_id}"));
+        session.mark_webrtc_media_ready(format!("{DIRECT_WEBRTC_ENDPOINT_PREFIX}{session_id}"));
     }
 
     /// Mark a direct WebRTC endpoint failed for one non-terminal session.
@@ -238,6 +238,48 @@ mod tests {
                 candidates[0]["candidate"],
                 json!("candidate:1 1 UDP 2122252543 abc.local 54400 typ host")
             );
+        });
+    }
+
+    #[test]
+    fn direct_webrtc_media_ready_is_idempotent() {
+        let store = RemoteDesktopSessionStore::new();
+        insert_test_session(&store, "rd-media-ready");
+
+        store.mark_direct_webrtc_media_ready("rd-media-ready");
+        store.mark_direct_webrtc_media_ready("rd-media-ready");
+
+        store.with_sessions(|sessions| {
+            let session = sessions.get("rd-media-ready").unwrap();
+            assert!(session.media_transport_ready());
+            let connected_events = session
+                .events()
+                .into_iter()
+                .filter(|event| event["event_type"] == json!("TRANSPORT_CONNECTED"))
+                .count();
+            assert_eq!(connected_events, 1);
+        });
+    }
+
+    #[test]
+    fn peer_connection_diagnostic_does_not_mark_media_ready() {
+        let store = RemoteDesktopSessionStore::new();
+        insert_test_session(&store, "rd-peer-connected-only");
+
+        store.record_webrtc_diagnostic(
+            "rd-peer-connected-only",
+            "PEER_CONNECTION_STATE_CHANGED",
+            None,
+            json!({ "peer_connection_state": "connected" }),
+        );
+
+        store.with_sessions(|sessions| {
+            let session = sessions.get("rd-peer-connected-only").unwrap();
+            assert!(!session.media_transport_ready());
+            assert!(session
+                .events()
+                .iter()
+                .any(|event| event["event_type"] == json!("PEER_CONNECTION_STATE_CHANGED")));
         });
     }
 }

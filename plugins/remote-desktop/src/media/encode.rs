@@ -502,24 +502,25 @@ pub(in crate::daemon::plugins::remote_desktop) fn even_rgb_frame(
 pub(in crate::daemon::plugins::remote_desktop) async fn write_h264_sample(
     track: &TrackLocalStaticSample,
     ssrc: u32,
+    payload_type: u8,
     encoder: &mut Encoder,
     frame: &RawRgbFrame,
     seq: u64,
     fps: u32,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<bool> {
     let bytes = encode_openh264_frame(encoder, frame, seq, fps)?;
     if bytes.is_empty() {
-        return Ok(());
+        return Ok(false);
     }
     track
-        .sample_writer(ssrc)
+        .sample_writer(ssrc, payload_type)
         .write_sample(&rtc::media::Sample {
             data: Bytes::from(bytes),
             duration: Duration::from_secs_f64(1.0 / fps.max(1) as f64),
             ..Default::default()
         })
         .await?;
-    Ok(())
+    Ok(true)
 }
 
 #[cfg(test)]

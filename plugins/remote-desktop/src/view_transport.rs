@@ -122,6 +122,8 @@ fn transport_unavailable_reason(session: &RemoteDesktopSession) -> Value {
         json!(error)
     } else if session.webrtc_ice_state() == Some("failed") {
         json!("webrtc_ice_failed")
+    } else if session.webrtc_peer_state() == Some("connected") {
+        json!("webrtc_media_first_frame_pending")
     } else if session.local_description().is_some() {
         json!("webrtc_ice_connecting")
     } else {
@@ -138,9 +140,50 @@ fn transport_message(session: &RemoteDesktopSession) -> &'static str {
         "Native ScreenCaptureKit/VideoToolbox media pipeline failed before producing frames; check the session failure event for the platform error."
     } else if session.webrtc_error() == Some("webrtc_transport_backend_unavailable") {
         "Direct WebRTC RTP/SRTP is blocked because this capture subject has no available device-side WebRTC backend; InvokeBidi remains an explicit diagnostic transport."
+    } else if session.webrtc_peer_state() == Some("connected") {
+        "Direct device-side WebRTC is connected and waiting for the first encoded media frame."
     } else if session.local_description().is_some() {
         "Direct device-side WebRTC endpoint is negotiating ICE/DTLS; InvokeBidi and preview_stream remain diagnostic-only transports."
     } else {
         "WebRTC endpoint requires a browser SDP offer; InvokeBidi and preview_stream are diagnostic-only transports until negotiation completes."
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::RemoteDesktopTransportView;
+    use crate::daemon::plugins::remote_desktop::constants::TRANSPORT_WEBRTC;
+    use crate::daemon::plugins::remote_desktop::session::RemoteDesktopSession;
+    use crate::daemon::plugins::remote_desktop::test_support::test_session_init;
+
+    #[test]
+    fn peer_connected_without_media_reports_first_frame_pending() {
+        let mut session = RemoteDesktopSession::new(test_session_init(
+            "rd-first-frame-pending",
+            "easynet:///r/acme/resource/display.01",
+            vec![TRANSPORT_WEBRTC.to_string()],
+        ));
+        session.set_local_webrtc_answer(
+            json!({ "type": "answer", "sdp": "v=0" }),
+            "native",
+            true,
+            "webrtc://direct/rd-first-frame-pending".to_string(),
+        );
+        session.record_webrtc_diagnostic(
+            "PEER_CONNECTION_STATE_CHANGED",
+            None,
+            json!({ "peer_connection_state": "connected" }),
+        );
+
+        let view = RemoteDesktopTransportView::from_session(&session);
+        let summary = view.summary(&session);
+
+        assert_eq!(
+            summary["unavailable_reason"],
+            json!("webrtc_media_first_frame_pending")
+        );
+        assert_eq!(summary["primary_ready"], json!(false));
     }
 }

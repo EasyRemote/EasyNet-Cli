@@ -7,6 +7,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use rtc::rtp_transceiver::PayloadType;
 use tokio::sync::watch;
 use webrtc::media_stream::track_local::static_sample::TrackLocalStaticSample;
 use webrtc::media_stream::Track;
@@ -38,6 +39,8 @@ pub(in crate::daemon::plugins::remote_desktop) struct DirectWebRtcSession {
     pub(in crate::daemon::plugins::remote_desktop) session_id: String,
     pub(in crate::daemon::plugins::remote_desktop) peer_connection: Arc<dyn PeerConnection>,
     pub(in crate::daemon::plugins::remote_desktop) track: Arc<TrackLocalStaticSample>,
+    /// Payload type selected by the completed offer/answer negotiation.
+    pub(in crate::daemon::plugins::remote_desktop) payload_type: PayloadType,
     pub(in crate::daemon::plugins::remote_desktop) entry: ResourceEntry,
     pub(in crate::daemon::plugins::remote_desktop) options: ScreenCaptureOptions,
     pub(in crate::daemon::plugins::remote_desktop) config: BuiltinH264Config,
@@ -54,6 +57,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_media_
         session_id,
         peer_connection,
         track,
+        payload_type,
         entry,
         options,
         config,
@@ -79,7 +83,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_media_
     };
     #[cfg(target_os = "macos")]
     if config.backend.production_ready() {
-        let native_inputs = NativeMediaInputs::new(&track, ssrc, &options, &config);
+        let native_inputs = NativeMediaInputs::new(&track, ssrc, payload_type, &options, &config);
         match run_direct_webrtc_native_stream(
             &sessions,
             &peer_connection,
@@ -116,6 +120,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_media_
     let baseline_inputs = BaselineMediaInputs {
         track: &track,
         ssrc,
+        payload_type,
         options: &options,
         config: &config,
     };
@@ -123,6 +128,8 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_media_
     let result = {
         if let Ok((recorder, rx)) = open_display_recorder_with_xcap(&entry) {
             run_direct_webrtc_recorder_stream(
+                &sessions,
+                &session_id,
                 &baseline_inputs,
                 recorder,
                 rx,
@@ -131,14 +138,27 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_media_
             )
             .await
         } else {
-            run_direct_webrtc_polling_stream(&baseline_inputs, &entry, &mut done_rx, &mut stop_rx)
-                .await
+            run_direct_webrtc_polling_stream(
+                &sessions,
+                &session_id,
+                &baseline_inputs,
+                &entry,
+                &mut done_rx,
+                &mut stop_rx,
+            )
+            .await
         }
     };
     #[cfg(not(feature = "native-media"))]
-    let result =
-        run_direct_webrtc_polling_stream(&baseline_inputs, &entry, &mut done_rx, &mut stop_rx)
-            .await;
+    let result = run_direct_webrtc_polling_stream(
+        &sessions,
+        &session_id,
+        &baseline_inputs,
+        &entry,
+        &mut done_rx,
+        &mut stop_rx,
+    )
+    .await;
     if let Err(err) = result {
         sessions.mark_direct_webrtc_failed(
             &session_id,

@@ -70,6 +70,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn serialize_session(
             "local_ice_candidate_count": local_ice_candidates.len(),
             "local_ice_candidates": local_ice_candidates,
             "webrtc_ice_state": session.webrtc_ice_state(),
+            "webrtc_peer_state": session.webrtc_peer_state(),
             "webrtc_error": session.webrtc_error(),
         },
         "events": session.events(),

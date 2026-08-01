@@ -191,6 +191,11 @@ impl RemoteDesktopSession {
         self.signaling.webrtc_ice_state()
     }
 
+    /// Latest peer-connection state reported by the WebRTC backend.
+    pub(in crate::daemon::plugins::remote_desktop) fn webrtc_peer_state(&self) -> Option<&str> {
+        self.signaling.webrtc_peer_state()
+    }
+
     /// Latest transport/backend error reason.
     pub(in crate::daemon::plugins::remote_desktop) fn webrtc_error(&self) -> Option<&str> {
         self.signaling.webrtc_error()
@@ -501,8 +506,8 @@ impl RemoteDesktopSession {
         ));
     }
 
-    /// Mark the production WebRTC media plane connected.
-    pub(in crate::daemon::plugins::remote_desktop) fn mark_webrtc_connected(
+    /// Mark the production WebRTC media plane ready.
+    pub(in crate::daemon::plugins::remote_desktop) fn mark_webrtc_media_ready(
         &mut self,
         endpoint_ura: String,
     ) {

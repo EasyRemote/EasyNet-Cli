@@ -18,6 +18,7 @@ use rtc::rtp_transceiver::rtp_sender::{
     RTCRtpCodec, RTCRtpCodecParameters, RTCRtpCodingParameters, RTCRtpEncodingParameters,
     RtpCodecKind,
 };
+use rtc::rtp_transceiver::PayloadType;
 use serde_json::{json, Value};
 use tokio::sync::watch;
 use webrtc::media_stream::track_local::static_sample::TrackLocalStaticSample;
@@ -30,8 +31,8 @@ use webrtc::runtime::{channel, default_runtime};
 use crate::daemon::ability::builtins::resources::media::screen_snapshot::ScreenCaptureOptions;
 use crate::daemon::persistence::resources::ResourceEntry;
 use crate::daemon::plugins::remote_desktop::constants::{
-    ABILITY_SET_DESCRIPTION, DIRECT_WEBRTC_ENDPOINT_PREFIX, REASON_RESOURCE_TYPE_MISMATCH,
-    TRANSPORT_WEBRTC,
+    ABILITY_SET_DESCRIPTION, DIRECT_WEBRTC_ENDPOINT_PREFIX,
+    DIRECT_WEBRTC_H264_PREFERRED_PAYLOAD_TYPE, REASON_RESOURCE_TYPE_MISMATCH, TRANSPORT_WEBRTC,
 };
 use crate::daemon::plugins::remote_desktop::media::encode::build_direct_webrtc_h264_config;
 use crate::daemon::plugins::remote_desktop::network::direct_webrtc_udp_addrs;
@@ -143,7 +144,7 @@ async fn create_direct_webrtc_endpoint(
                 .to_owned(),
             rtcp_feedback: vec![],
         },
-        payload_type: 102,
+        payload_type: DIRECT_WEBRTC_H264_PREFERRED_PAYLOAD_TYPE,
     };
     media_engine.register_codec(video_codec.clone(), RtpCodecKind::Video)?;
     let registry = register_default_interceptors(Registry::new(), &mut media_engine)?;
@@ -205,7 +206,7 @@ async fn create_direct_webrtc_endpoint(
             ..Default::default()
         }],
     ))?);
-    peer_connection
+    let rtp_sender = peer_connection
         .add_track(Arc::clone(&track) as Arc<dyn TrackLocal>)
         .await?;
 
@@ -225,9 +226,17 @@ async fn create_direct_webrtc_endpoint(
         .local_description()
         .await
         .ok_or_else(|| anyhow::anyhow!("direct WebRTC local description missing"))?;
+    let payload_type: PayloadType = rtp_sender
+        .get_parameters()
+        .await?
+        .rtp_parameters
+        .codecs
+        .first()
+        .map(|codec| codec.payload_type)
+        .ok_or_else(|| anyhow::anyhow!("direct WebRTC sender has no negotiated codec"))?;
     let answer_sdp = normalize_browser_answer_sdp(&local.sdp);
     eprintln!(
-        "[remote-desktop-webrtc] answer_candidate_lines={}",
+        "[remote-desktop-webrtc] answer_candidate_lines={} negotiated_payload_type={payload_type}",
         answer_sdp
             .lines()
             .filter(|line| line.starts_with("a=candidate:"))
@@ -255,6 +264,7 @@ async fn create_direct_webrtc_endpoint(
                     session_id,
                     peer_connection,
                     track,
+                    payload_type,
                     entry: endpoint_config.entry,
                     options: endpoint_config.options,
                     config: media_config,

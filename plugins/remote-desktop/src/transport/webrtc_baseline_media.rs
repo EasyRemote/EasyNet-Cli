@@ -23,6 +23,7 @@ use crate::daemon::plugins::remote_desktop::media::encode::latest_recorder_frame
 use crate::daemon::plugins::remote_desktop::media::encode::{
     build_openh264_encoder, even_rgb_frame, write_h264_sample, BuiltinH264Config,
 };
+use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
 
 #[cfg(feature = "native-media")]
 const RECORDER_FRAME_TIMEOUT_MS: u64 = 250;
@@ -35,12 +36,15 @@ const RECORDER_FRAME_TIMEOUT_MS: u64 = 250;
 pub(in crate::daemon::plugins::remote_desktop) struct BaselineMediaInputs<'a> {
     pub(in crate::daemon::plugins::remote_desktop) track: &'a Arc<TrackLocalStaticSample>,
     pub(in crate::daemon::plugins::remote_desktop) ssrc: u32,
+    pub(in crate::daemon::plugins::remote_desktop) payload_type: u8,
     pub(in crate::daemon::plugins::remote_desktop) options: &'a ScreenCaptureOptions,
     pub(in crate::daemon::plugins::remote_desktop) config: &'a BuiltinH264Config,
 }
 
 #[cfg(feature = "native-media")]
 pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_recorder_stream(
+    sessions: &RemoteDesktopSessionStore,
+    session_id: &str,
     inputs: &BaselineMediaInputs<'_>,
     recorder: xcap::VideoRecorder,
     rx: std::sync::mpsc::Receiver<xcap::Frame>,
@@ -50,12 +54,14 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_record
     let BaselineMediaInputs {
         track,
         ssrc,
+        payload_type,
         options,
         config,
     } = *inputs;
     let mut encoder = build_openh264_encoder(config)?;
     recorder.start()?;
     let mut seq = 0_u64;
+    let mut media_ready_reported = false;
     loop {
         if *stop_rx.borrow() || done_rx.try_recv().is_ok() {
             break;
@@ -65,7 +71,20 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_record
                 let frame = latest_recorder_frame(&rx, frame);
                 let frame = rgba_bytes_to_rgb_frame(frame.raw, frame.width, frame.height, options)
                     .map(even_rgb_frame)?;
-                write_h264_sample(track, ssrc, &mut encoder, &frame, seq, config.fps).await?;
+                let wrote_sample = write_h264_sample(
+                    track,
+                    ssrc,
+                    payload_type,
+                    &mut encoder,
+                    &frame,
+                    seq,
+                    config.fps,
+                )
+                .await?;
+                if wrote_sample && !media_ready_reported {
+                    sessions.mark_direct_webrtc_media_ready(session_id);
+                    media_ready_reported = true;
+                }
                 seq = seq.saturating_add(1);
             }
             Err(RecvTimeoutError::Timeout) => {}
@@ -80,6 +99,8 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_record
 }
 
 pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_polling_stream(
+    sessions: &RemoteDesktopSessionStore,
+    session_id: &str,
     inputs: &BaselineMediaInputs<'_>,
     entry: &ResourceEntry,
     done_rx: &mut webrtc::runtime::Receiver<()>,
@@ -88,19 +109,34 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_pollin
     let BaselineMediaInputs {
         track,
         ssrc,
+        payload_type,
         options,
         config,
     } = *inputs;
     let mut encoder = build_openh264_encoder(config)?;
     let interval = Duration::from_secs_f64(1.0 / config.fps as f64);
     let mut seq = 0_u64;
+    let mut media_ready_reported = false;
     loop {
         if *stop_rx.borrow() || done_rx.try_recv().is_ok() {
             break;
         }
         let started = Instant::now();
         let frame = capture_rgb_with_xcap(entry, options).map(even_rgb_frame)?;
-        write_h264_sample(track, ssrc, &mut encoder, &frame, seq, config.fps).await?;
+        let wrote_sample = write_h264_sample(
+            track,
+            ssrc,
+            payload_type,
+            &mut encoder,
+            &frame,
+            seq,
+            config.fps,
+        )
+        .await?;
+        if wrote_sample && !media_ready_reported {
+            sessions.mark_direct_webrtc_media_ready(session_id);
+            media_ready_reported = true;
+        }
         seq = seq.saturating_add(1);
         if let Some(remaining) = interval.checked_sub(started.elapsed()) {
             std::thread::sleep(remaining);

@@ -132,9 +132,14 @@ impl PeerConnectionEventHandler for DirectWebRtcHandler {
 
     async fn on_connection_state_change(&self, state: RTCPeerConnectionState) {
         eprintln!("[remote-desktop-webrtc] peer_connection_state={state}");
+        self.sessions.record_webrtc_diagnostic(
+            &self.session_id,
+            "PEER_CONNECTION_STATE_CHANGED",
+            None,
+            json!({ "peer_connection_state": state.to_string() }),
+        );
         match state {
             RTCPeerConnectionState::Connected => {
-                self.sessions.mark_direct_webrtc_connected(&self.session_id);
                 let _ = self.connected_tx.try_send(());
             }
             RTCPeerConnectionState::Failed => {

@@ -34,6 +34,11 @@ pub const REASON_PREVIEW_CAPTURE_FAILED: &str = "preview_capture_failed";
 pub(crate) const DEFAULT_LEASE_TTL_MS: u64 = 30_000;
 pub(crate) const MAX_LEASE_TTL_MS: u64 = 300_000;
 pub(crate) const TRANSPORT_WEBRTC: &str = "webrtc";
+/// Preferred dynamic RTP payload type for local H.264 codec registration.
+///
+/// Offer/answer can remap this value. Media writers must use the negotiated
+/// payload type captured from `RtpSender`, never this registration preference.
+pub(crate) const DIRECT_WEBRTC_H264_PREFERRED_PAYLOAD_TYPE: u8 = 102;
 pub(crate) const TRANSPORT_INVOKE_BIDI: &str = "invoke_bidi";
 pub(crate) const TRANSPORT_PREVIEW_STREAM: &str = "preview_stream";
 pub(crate) const MIN_ATTACH_FPS: u32 = 1;

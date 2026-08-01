@@ -37,6 +37,7 @@ use crate::daemon::plugins::remote_desktop::videotoolbox_encoder::VideoToolboxEn
 pub(in crate::daemon::plugins::remote_desktop) struct NativeMediaInputs<'a> {
     track: &'a Arc<TrackLocalStaticSample>,
     ssrc: u32,
+    payload_type: u8,
     options: &'a ScreenCaptureOptions,
     config: &'a BuiltinH264Config,
 }
@@ -46,12 +47,14 @@ impl<'a> NativeMediaInputs<'a> {
     pub(in crate::daemon::plugins::remote_desktop) fn new(
         track: &'a Arc<TrackLocalStaticSample>,
         ssrc: u32,
+        payload_type: u8,
         options: &'a ScreenCaptureOptions,
         config: &'a BuiltinH264Config,
     ) -> Self {
         Self {
             track,
             ssrc,
+            payload_type,
             options,
             config,
         }
@@ -72,6 +75,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_native
     let NativeMediaInputs {
         track,
         ssrc,
+        payload_type,
         options,
         config,
     } = *inputs;
@@ -131,7 +135,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_native
                 native_rtp_sample_duration(last_written_pts_ms, unit.pts_ms, frame_dur);
             let rtp_write_started_ms = now_ms();
             let write_result = track
-                .sample_writer(ssrc)
+                .sample_writer(ssrc, payload_type)
                 .write_sample(&Sample {
                     data: Bytes::from(unit.annexb),
                     duration: sample_duration,
@@ -154,6 +158,9 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_native
                 now_ms(),
             );
             if is_keyframe {
+                if !decoder_primed {
+                    sessions.mark_direct_webrtc_media_ready(session_id);
+                }
                 decoder_primed = true;
             }
             written_units = written_units.saturating_add(1);
