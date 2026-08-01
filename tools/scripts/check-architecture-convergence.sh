@@ -7674,6 +7674,13 @@ if local_session_dispatcher.exists():
     else:
         offset, body = terminal_projection
         signature = text[offset : text.find("{", offset)]
+        terminal_projection_body = body
+        if "canonical_terminal_dispatch_result" in body:
+            shared_terminal_projection = rust_method_body(
+                text, "canonical_terminal_dispatch_result"
+            )
+            if shared_terminal_projection is not None:
+                terminal_projection_body += shared_terminal_projection[1]
         for token, detail in (
             (
                 "FinalizedInvocation",
@@ -7688,7 +7695,11 @@ if local_session_dispatcher.exists():
                 "bidi terminal projection must carry the canonical terminal receipt",
             ),
         ):
-            haystack = signature if token == "FinalizedInvocation" else body
+            haystack = (
+                signature
+                if token == "FinalizedInvocation"
+                else terminal_projection_body
+            )
             if token not in haystack:
                 add(
                     "R64_SESSION_CANONICAL_CARRIER_FORK",

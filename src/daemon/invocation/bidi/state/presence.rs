@@ -326,7 +326,13 @@ impl PresenceSlot {
 /// dispatch contract version the claimant declared plus its per-boot
 /// claimant fingerprint (T1.2). One value object so registration
 /// sites cannot pass half the negotiation.
-pub const CANONICAL_SESSION_CARRIER_VERSION: u32 = 2;
+///
+/// v3 closes the canonical server-stream lifecycle in both carrier
+/// directions: a consumer disconnect is projected as `StreamCancel` or
+/// `ReverseStreamCancel`, and only the execution host emits the terminal
+/// checkpoint. A v2 carrier must fail negotiation instead of silently leaking
+/// a provider lease it cannot cancel.
+pub const CANONICAL_SESSION_CARRIER_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionContract {

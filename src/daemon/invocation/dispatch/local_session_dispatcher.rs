@@ -864,10 +864,10 @@ impl LocalAxonSessionDispatcher {
                             payload_bytes = frame.payload.len(),
                             terminal = terminal,
                         );
-                        sent_terminal = sent_terminal || terminal;
-                        let finalized = if terminal {
-                            match lifecycle.finalized().await {
-                                Ok(finalized) => Some(finalized),
+                        if terminal {
+                            sent_terminal = true;
+                            let finalized = match lifecycle.finalized().await {
+                                Ok(finalized) => finalized,
                                 Err(error) => {
                                     let _ = outbound
                                         .send_payload(UpPayload::DispatchResult(
@@ -880,13 +880,9 @@ impl LocalAxonSessionDispatcher {
                                         .await;
                                     break;
                                 }
-                            }
-                        } else {
-                            None
-                        };
-                        let terminal_receipt = match finalized.as_ref() {
-                            Some(value) => match receipt_to_session_wire(&value.terminal_receipt) {
-                                Ok(receipt) => Some(receipt),
+                            };
+                            match Self::canonical_terminal_dispatch_result(call_id, &finalized) {
+                                Ok(reply) => reply,
                                 Err(error) => {
                                     let _ = outbound
                                         .send_payload(UpPayload::DispatchResult(
@@ -899,26 +895,14 @@ impl LocalAxonSessionDispatcher {
                                         .await;
                                     break;
                                 }
-                            },
-                            None => None,
-                        };
-                        PbDispatchResult {
-                            call_id,
-                            payload: finalized
-                                .as_ref()
-                                .map(|value| value.output().to_vec())
-                                .unwrap_or(frame.payload),
-                            result_content_type: finalized
-                                .as_ref()
-                                .map(|value| value.output_content_type().to_string())
-                                .unwrap_or_else(|| frame.content_type.clone()),
-                            terminal,
-                            terminal_receipt,
-                            failure: finalized
-                                .as_ref()
-                                .and_then(|value| value.failure.as_ref())
-                                .map(axon_sdk::invocation::wire::error_to_wire),
-                            ..PbDispatchResult::default()
+                            }
+                        } else {
+                            PbDispatchResult {
+                                call_id,
+                                payload: frame.payload,
+                                result_content_type: frame.content_type,
+                                ..PbDispatchResult::default()
+                            }
                         }
                     }
                     Err(err) => {
@@ -940,31 +924,20 @@ impl LocalAxonSessionDispatcher {
                                 return;
                             }
                         };
-                        let terminal_receipt =
-                            match receipt_to_session_wire(&finalized.terminal_receipt) {
-                                Ok(receipt) => receipt,
-                                Err(error) => {
-                                    let _ = outbound
-                                        .send_payload(UpPayload::DispatchResult(
-                                            canonical_carrier_control_failure(
-                                                call_id,
-                                                "CANONICAL_TERMINAL_PROJECTION_FAILED",
-                                                error.to_string(),
-                                            ),
-                                        ))
-                                        .await;
-                                    return;
-                                }
-                            };
-                        PbDispatchResult {
-                            call_id,
-                            payload: Vec::new(),
-                            terminal: true,
-                            terminal_receipt: Some(terminal_receipt),
-                            failure: Some(axon_sdk::invocation::wire::error_to_wire(
-                                finalized.failure.as_ref().unwrap_or(&err),
-                            )),
-                            ..PbDispatchResult::default()
+                        match Self::canonical_terminal_dispatch_result(call_id, &finalized) {
+                            Ok(reply) => reply,
+                            Err(error) => {
+                                let _ = outbound
+                                    .send_payload(UpPayload::DispatchResult(
+                                        canonical_carrier_control_failure(
+                                            call_id,
+                                            "CANONICAL_TERMINAL_PROJECTION_FAILED",
+                                            format!("frame_error={err}; projection_error={error}"),
+                                        ),
+                                    ))
+                                    .await;
+                                return;
+                            }
                         }
                     }
                 };
@@ -976,30 +949,46 @@ impl LocalAxonSessionDispatcher {
                     break;
                 }
             }
-            if !sent_terminal && !cancelled {
-                let message = "stream ended without terminal frame";
-                let reply = canonical_carrier_control_failure(
-                    call_id,
-                    "STREAM_ENDED_WITHOUT_TERMINAL",
-                    message,
-                );
-                let _ = outbound
-                    .send_payload(UpPayload::DispatchResult(reply))
-                    .await;
-            }
             // Cancellation must reach the RUNTIME task, not just this
             // forwarder — dropping the handle alone leaves the ability's
             // emit loop alive holding its stream source. cancel() is
             // idempotent and a no-op on already-terminal invocations.
             if !sent_terminal {
-                if let Err(err) = lifecycle.cancel_and_finalize("session stream closed").await {
-                    let err_msg = err.to_string();
-                    crate::op_event!(
-                        component = local_session_dispatcher,
-                        kind = stream_runtime_cancel_failed,
-                        call_id = call_id,
-                        error = err_msg,
-                    );
+                let reason = if cancelled {
+                    "canonical carrier stream cancellation requested"
+                } else {
+                    "canonical carrier stream ended without terminal frame"
+                };
+                match lifecycle.cancel_and_finalize(reason).await {
+                    Ok(finalized) => {
+                        match Self::canonical_terminal_dispatch_result(call_id, &finalized) {
+                            Ok(reply) => {
+                                let _ = outbound
+                                    .send_payload(UpPayload::DispatchResult(reply))
+                                    .await;
+                            }
+                            Err(error) => {
+                                let _ = outbound
+                                    .send_payload(UpPayload::DispatchResult(
+                                        canonical_carrier_control_failure(
+                                            call_id,
+                                            "CANONICAL_TERMINAL_PROJECTION_FAILED",
+                                            error.to_string(),
+                                        ),
+                                    ))
+                                    .await;
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        let err_msg = err.to_string();
+                        crate::op_event!(
+                            component = local_session_dispatcher,
+                            kind = stream_runtime_cancel_failed,
+                            call_id = call_id,
+                            error = err_msg,
+                        );
+                    }
                 }
             }
         });
@@ -1653,20 +1642,27 @@ impl LocalAxonSessionDispatcher {
     ) -> Result<(), SessionDispatchError> {
         Self::send_canonical_carrier_dispatch_result(
             outbound,
-            axon_sdk::pb::axon::v1::DispatchResult {
-                call_id,
-                payload: finalized.output().to_vec(),
-                result_content_type: finalized.output_content_type().to_string(),
-                terminal: true,
-                terminal_receipt: Some(receipt_to_session_wire(&finalized.terminal_receipt)?),
-                failure: finalized
-                    .failure
-                    .as_ref()
-                    .map(axon_sdk::invocation::wire::error_to_wire),
-                ..Default::default()
-            },
+            Self::canonical_terminal_dispatch_result(call_id, finalized)?,
         )
         .await
+    }
+
+    fn canonical_terminal_dispatch_result(
+        call_id: u64,
+        finalized: &axon_sdk::invocation::FinalizedInvocation,
+    ) -> Result<axon_sdk::pb::axon::v1::DispatchResult, SessionDispatchError> {
+        Ok(axon_sdk::pb::axon::v1::DispatchResult {
+            call_id,
+            payload: finalized.output().to_vec(),
+            result_content_type: finalized.output_content_type().to_string(),
+            terminal: true,
+            terminal_receipt: Some(receipt_to_session_wire(&finalized.terminal_receipt)?),
+            failure: finalized
+                .failure
+                .as_ref()
+                .map(axon_sdk::invocation::wire::error_to_wire),
+            ..Default::default()
+        })
     }
 
     fn insert_remote_bidi_opening(
@@ -2352,6 +2348,42 @@ impl SessionFrameDispatcher for LocalAxonSessionDispatcher {
         })?;
 
         match dispatch {
+            SessionDispatch::StreamCancel { call_id, reason } => {
+                let key = CarrierCallKey {
+                    scope_id: outbound.scope_id(),
+                    call_id,
+                };
+                let cancel = {
+                    let mut guard = match self.carrier_sessions.lock() {
+                        Ok(guard) => guard,
+                        Err(poisoned) => poisoned.into_inner(),
+                    };
+                    guard
+                        .sessions
+                        .get_mut(&key.scope_id)
+                        .and_then(|session| session.streams.remove(&key.call_id))
+                };
+                let Some(cancel) = cancel else {
+                    return Self::send_bidi_control_failure(
+                        outbound,
+                        call_id,
+                        "STREAM_SESSION_NOT_OPEN",
+                        format!(
+                            "canonical stream call_id={call_id} is not open in carrier scope {}",
+                            key.scope_id
+                        ),
+                    )
+                    .await;
+                };
+                crate::op_event!(
+                    component = local_session_dispatcher,
+                    kind = canonical_carrier_stream_cancel_requested,
+                    call_id = call_id,
+                    reason = reason,
+                );
+                cancel.cancel();
+                return Ok(());
+            }
             SessionDispatch::BidiInput {
                 call_id,
                 payload,
@@ -2392,6 +2424,15 @@ impl SessionFrameDispatcher for LocalAxonSessionDispatcher {
                     );
                 }
                 return Ok(());
+            }
+            SessionDispatch::ReverseStreamCancel { call_id, .. } => {
+                crate::op_event!(
+                    component = local_session_dispatcher,
+                    kind = unexpected_downstream_frame,
+                    frame_kind = "ReverseStreamCancel",
+                    call_id = call_id_hex(&call_id),
+                );
+                Ok(())
             }
             SessionDispatch::Request { .. } => Ok(()),
         }
@@ -3467,6 +3508,78 @@ mod tests {
             disp.lifecycle_cancellations
                 .contains_invocation_id(&receipt.invocation_id),
             "canonical carrier stream lifecycle must remain registered for invocation.cancel"
+        );
+    }
+
+    #[tokio::test]
+    async fn canonical_carrier_stream_cancel_finalizes_and_returns_terminal_receipt() {
+        use axon_sdk::invocation::make_ability;
+
+        let rt = executable_runtime();
+        register_test_ability_with_options(
+            &rt,
+            "camera.subscribe",
+            make_ability(|ctx| async move {
+                ctx.emit_progress(br#"{"frame":1}"#.to_vec(), "application/json")
+                    .await?;
+                ctx.wait_for_cancel().await;
+                Ok(Vec::new())
+            }),
+            proof_bound_stream_options(),
+        )
+        .await;
+        let disp =
+            LocalAxonSessionDispatcher::new(Default::default()).with_local_runtime(Arc::clone(&rt));
+        let (tx, mut rx) = mpsc::channel::<InvokeBidiUp>(8);
+        let session_tx = start_test_carrier(&disp, tx);
+
+        disp.handle_down(
+            canonical_carrier_explicit_test_call_with_mode(
+                31,
+                "camera.subscribe",
+                b"{}".to_vec(),
+                axon_sdk::invocation::CallMode::Stream,
+            ),
+            &session_tx,
+        )
+        .await
+        .expect("camera stream opens");
+
+        let admission = rx.recv().await.expect("admission frame");
+        assert!(matches!(
+            admission.payload,
+            Some(UpPayload::DispatchResult(ref result)) if !result.terminal
+        ));
+        let progress = rx.recv().await.expect("progress frame");
+        assert!(matches!(
+            progress.payload,
+            Some(UpPayload::DispatchResult(ref result)) if !result.terminal && !result.payload.is_empty()
+        ));
+
+        disp.handle_down(
+            session_frame(SessionDispatch::StreamCancel {
+                call_id: 31,
+                reason: "browser camera window closed".to_string(),
+            }),
+            &session_tx,
+        )
+        .await
+        .expect("carrier stream cancellation is admitted");
+
+        let terminal = tokio::time::timeout(Duration::from_secs(3), rx.recv())
+            .await
+            .expect("cancelled stream finalizes promptly")
+            .expect("terminal frame exists");
+        let Some(UpPayload::DispatchResult(terminal)) = terminal.payload else {
+            panic!("cancelled stream must return canonical DispatchResult terminal");
+        };
+        assert!(terminal.terminal);
+        let receipt = terminal
+            .terminal_receipt
+            .expect("cancelled stream carries a signed terminal receipt");
+        assert_eq!(
+            receipt.state,
+            axon_sdk::invocation::InvocationState::Cancelled.to_wire_i32()
         );
     }
 

@@ -423,14 +423,21 @@ async fn send_bidi_terminal(
     call_id: u64,
     finalized: &FinalizedInvocation,
 ) {
-    outbound.send(DispatchResult {
+    outbound.send(canonical_terminal_dispatch_result(call_id, finalized));
+}
+
+fn canonical_terminal_dispatch_result(
+    call_id: u64,
+    finalized: &FinalizedInvocation,
+) -> DispatchResult {
+    DispatchResult {
         call_id,
         terminal: true,
         terminal_receipt: Some(receipt_to_session_wire(
             &finalized.terminal_receipt,
         )),
         ..Default::default()
-    });
+    }
 }
 
 fn callee_ura_from_envelope(envelope: &Envelope) -> anyhow::Result<String> {

@@ -30,6 +30,7 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
+use tokio_util::sync::CancellationToken;
 use tonic::{Response, Status, Streaming};
 
 use axon_sdk::pb::axon::v1::{
@@ -1750,9 +1751,9 @@ fn build_session_heartbeat_ack_frame() -> DispatchFrame {
 }
 
 /// Admit frame-0 carrier negotiation only when the peer can preserve a
-/// complete canonical Invocation. Contract v0 and absent negotiation are
-/// retired; accepting either would create a live session that can only carry
-/// the removed JSON projection.
+/// complete canonical Invocation and its streaming lifecycle. Contract v0-v2
+/// and absent negotiation are retired; accepting them would create a live
+/// session that cannot preserve the current carrier contract.
 pub(crate) fn session_contract_from_ext(
     ext: Option<&axon_sdk::pb::axon::v1::SessionOpenExt>,
 ) -> Result<SessionContract, Status> {
@@ -2902,8 +2903,24 @@ async fn forward_reverse_dispatch_stream_results(
     caller_ura: &str,
     id_hex: &str,
     call_id: [u8; 16],
+    cancel: CancellationToken,
 ) {
-    while let Some(next) = stream.next().await {
+    loop {
+        let next = tokio::select! {
+            () = cancel.cancelled() => {
+                crate::op_event!(
+                    component = session_accept,
+                    kind = canonical_carrier_reverse_stream_cancelled,
+                    caller = caller_ura,
+                    call_id = id_hex,
+                );
+                return;
+            }
+            next = stream.next() => next,
+        };
+        let Some(next) = next else {
+            break;
+        };
         let frame = match next {
             Ok(chunk) => build_reverse_dispatch_stream_chunk_frame(call_id, chunk),
             Err(status) => build_reverse_dispatch_stream_failure_frame(
@@ -3176,6 +3193,64 @@ struct ReverseBidiIngress {
     next_sequence: u64,
 }
 
+/// Owns the lifecycle projection for server streams opened in the reverse
+/// direction of `session.open`. A token exists from open acceptance until the
+/// forwarding task observes terminal or cancellation; session retirement
+/// cancels every remaining token atomically.
+#[derive(Default)]
+struct ReverseStreamCancellations {
+    inner: Mutex<HashMap<[u8; 16], CancellationToken>>,
+}
+
+impl ReverseStreamCancellations {
+    fn open(&self, call_id: [u8; 16]) -> CancellationToken {
+        let token = CancellationToken::new();
+        let mut guard = match self.inner.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if let Some(previous) = guard.insert(call_id, token.clone()) {
+            previous.cancel();
+        }
+        token
+    }
+
+    fn cancel(&self, call_id: &[u8; 16]) -> bool {
+        let token = {
+            let guard = match self.inner.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            guard.get(call_id).cloned()
+        };
+        token.is_some_and(|token| {
+            token.cancel();
+            true
+        })
+    }
+
+    fn retire(&self, call_id: &[u8; 16]) {
+        let mut guard = match self.inner.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        guard.remove(call_id);
+    }
+
+    fn retire_all(&self) {
+        let tokens = {
+            let mut guard = match self.inner.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            guard.drain().map(|(_, token)| token).collect::<Vec<_>>()
+        };
+        for token in tokens {
+            token.cancel();
+        }
+    }
+}
+
 fn reverse_bidi_input_to_up_frame(
     input: axon_sdk::pb::axon::v1::ReverseBidiInput,
     sequence: u64,
@@ -3213,6 +3288,7 @@ async fn drain_session_runtime_up_stream(
     let mut expected_up_sequence = 1_u64;
     let reverse_bidi_inputs: Arc<Mutex<HashMap<[u8; 16], ReverseBidiIngress>>> =
         Arc::new(Mutex::new(HashMap::new()));
+    let reverse_stream_cancellations = Arc::new(ReverseStreamCancellations::default());
 
     while let Some(message) = context.recv_message(None).await {
         if message.content_type == SESSION_RUNTIME_TRANSPORT_ERROR_CONTENT_TYPE {
@@ -3502,6 +3578,8 @@ async fn drain_session_runtime_up_stream(
                 let dispatcher_for_request = dispatcher.clone();
                 let presence_for_reply = Arc::clone(&presence);
                 let caller_ura_for_reply = caller_ura.clone();
+                let reverse_stream_cancellations_for_request =
+                    Arc::clone(&reverse_stream_cancellations);
                 if matches!(call_mode, CallMode::Bidi) {
                     crate::op_event!(
                         component = session_accept,
@@ -3567,6 +3645,9 @@ async fn drain_session_runtime_up_stream(
                 }
                 tokio::spawn(async move {
                     if matches!(call_mode, CallMode::Stream) {
+                        let cancel = reverse_stream_cancellations_for_request.open(call_id);
+                        let reverse_stream_cancellations_for_task =
+                            Arc::clone(&reverse_stream_cancellations_for_request);
                         match dispatcher_for_request
                             .dispatch_canonical_session_stream(request)
                             .await
@@ -3578,6 +3659,7 @@ async fn drain_session_runtime_up_stream(
                                     &caller_ura_for_reply,
                                     &id_hex,
                                     call_id,
+                                    cancel,
                                 )
                                 .await;
                             }
@@ -3594,6 +3676,7 @@ async fn drain_session_runtime_up_stream(
                                 );
                             }
                         }
+                        reverse_stream_cancellations_for_task.retire(&call_id);
                     } else {
                         let deferred_self_revoke = self_revoke_target_for_reverse_dispatch(
                             &caller_ura_for_reply,
@@ -3644,6 +3727,33 @@ async fn drain_session_runtime_up_stream(
         };
 
         match dispatch {
+            SessionDispatch::StreamCancel { call_id, .. } => {
+                crate::op_event!(
+                    component = session_accept,
+                    kind = unexpected_upstream_frame,
+                    caller = caller_ura,
+                    frame_kind = "StreamCancel",
+                    call_id = call_id,
+                );
+            }
+            SessionDispatch::ReverseStreamCancel { call_id, reason } => {
+                if reverse_stream_cancellations.cancel(&call_id) {
+                    crate::op_event!(
+                        component = session_accept,
+                        kind = canonical_carrier_reverse_stream_cancel_requested,
+                        caller = caller_ura,
+                        call_id = call_id_hex(&call_id),
+                        reason = reason,
+                    );
+                } else {
+                    crate::op_event!(
+                        component = session_accept,
+                        kind = canonical_carrier_reverse_stream_cancel_no_open,
+                        caller = caller_ura,
+                        call_id = call_id_hex(&call_id),
+                    );
+                }
+            }
             SessionDispatch::BidiInput { call_id, eof, .. } => {
                 crate::op_event!(
                     component = session_accept,
@@ -3761,6 +3871,8 @@ async fn drain_session_runtime_up_stream(
             }
         }
     }
+
+    reverse_stream_cancellations.retire_all();
 
     close_reason
 }
@@ -4067,6 +4179,26 @@ mod tests {
     use axon_sdk::pb::axon::v1::SessionOpenExt;
 
     #[test]
+    fn reverse_stream_cancellation_registry_owns_open_cancel_and_retirement() {
+        let registry = ReverseStreamCancellations::default();
+        let first_id = [0x11; 16];
+        let second_id = [0x22; 16];
+        let first = registry.open(first_id);
+        let second = registry.open(second_id);
+
+        assert!(registry.cancel(&first_id));
+        assert!(first.is_cancelled());
+        assert!(!second.is_cancelled());
+
+        registry.retire(&first_id);
+        assert!(!registry.cancel(&first_id));
+
+        registry.retire_all();
+        assert!(second.is_cancelled());
+        assert!(!registry.cancel(&second_id));
+    }
+
+    #[test]
     fn absent_ext_fails_closed_without_canonical_carrier() {
         let err = session_contract_from_ext(None)
             .expect_err("missing carrier negotiation must reject session.open");
@@ -4095,7 +4227,20 @@ mod tests {
         let err = session_contract_from_ext(Some(&ext))
             .expect_err("contract v1 cannot carry explicit transport call_mode");
         assert_eq!(err.code(), tonic::Code::FailedPrecondition);
-        assert!(err.message().contains("v2 or newer is required"));
+        assert!(err.message().contains("v3 or newer is required"));
+    }
+
+    #[test]
+    fn v2_carrier_without_canonical_stream_cancellation_is_rejected() {
+        let ext = SessionOpenExt {
+            contract_version: 2,
+            claimant_boot_nonce: vec![3; 16],
+        };
+        let err = session_contract_from_ext(Some(&ext))
+            .expect_err("v2 carrier cannot own provider-backed stream lifecycle");
+        assert_eq!(err.code(), tonic::Code::FailedPrecondition);
+        assert!(err.message().contains("carrier v2"));
+        assert!(err.message().contains("v3 or newer is required"));
     }
 
     #[test]

@@ -104,6 +104,18 @@ impl SessionContentEnvelope {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum SessionDispatch {
+    /// Hub → target device. Explicitly cancel one canonical server-stream
+    /// call owned by the current carrier scope. This is transport lifecycle
+    /// control, not an Invocation tuple field: the target dispatcher turns it
+    /// into Axon's single cancellation/finalization transition and returns the
+    /// signed terminal checkpoint through the ordinary `DispatchResult` path.
+    StreamCancel { call_id: u64, reason: String },
+    /// Device → hub. Explicitly cancel one reverse-dispatched canonical
+    /// server stream identified by its 16-byte reverse-call nonce. The hub
+    /// owns only the transport projection: dropping the downstream response
+    /// propagates cancellation to the selected execution host, whose
+    /// LocalRuntime remains the sole terminal-finalization authority.
+    ReverseStreamCancel { call_id: [u8; 16], reason: String },
     /// Hub → target device. One incremental input frame for a
     /// previously-opened remote bidi session. `payload` carries raw
     /// bytes; `eof=true` closes the input side after this frame.
@@ -193,6 +205,33 @@ pub(crate) fn build_canonical_dispatch_frame(
             call_id,
             request: Some(request),
             call_mode: canonical_call_mode_wire(call_mode),
+        })),
+        ..InvokeBidiDown::default()
+    })
+}
+
+/// Build the carrier control frame that terminates one remote canonical
+/// server stream. Keeping this codec beside the dispatch-open codec makes the
+/// carrier lifecycle a closed pair instead of asking callers to manufacture a
+/// JSON `BinaryChunk` ad hoc.
+pub(crate) fn build_canonical_stream_cancel_frame(
+    call_id: u64,
+    reason: impl Into<String>,
+) -> DispatchFrame {
+    use axon_sdk::pb::axon::v1::BinaryChunk;
+
+    let control = SessionDispatch::StreamCancel {
+        call_id,
+        reason: reason.into(),
+    };
+    let data = control
+        .encode_frame()
+        .expect("SessionDispatch::StreamCancel is statically encodable");
+    DispatchFrame::control(InvokeBidiDown {
+        payload: Some(DownPayload::BinaryChunk(BinaryChunk {
+            stream_id: crate::daemon::invocation::bidi::session_initiator::SESSION_STREAM_ID,
+            data,
+            ..BinaryChunk::default()
         })),
         ..InvokeBidiDown::default()
     })

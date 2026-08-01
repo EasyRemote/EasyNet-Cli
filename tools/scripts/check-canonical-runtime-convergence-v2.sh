@@ -18140,7 +18140,7 @@ for required in (
     '"federation.discover"',
     "ProtoEnvelope::from_target(",
     ".signed_descriptor_ref_invoke_request_with_signer(",
-    "InvocationClient::new(channel)",
+    "crate::daemon::invocation::transport::invocation_client(channel)",
     "client.invoke(request)",
     'ensure_completed_invoke_response("federation.discover", &response)',
 ):
@@ -28923,7 +28923,7 @@ fn invoke_federation_discover_with_scope() {
     );
     let request_envelope = ProtoEnvelope::from_target();
     request_envelope.signed_descriptor_ref_invoke_request_with_signer();
-    let mut client = InvocationClient::new(channel);
+    let mut client = crate::daemon::invocation::transport::invocation_client(channel);
     client.invoke(request);
     ensure_completed_invoke_response("federation.discover", &response);
 }
