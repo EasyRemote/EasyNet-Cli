@@ -13,8 +13,9 @@
 // - Every returned identity field is copied from the Axon ledger
 //   record: invocation_ura, caller_ura, callee_ura, subject_ura,
 //   ability_ura. This module does not build URAs.
-// - Payload bodies remain digest-or-sealed records. The history
-//   surface never unwraps encrypted event content.
+// - List returns a bounded summary only. Digest/sealed payload metadata,
+//   diagnostics, causal links, visibility, and receipt facts remain on the
+//   complete record returned by invocation.history.get.
 // - Missing ledger file is a valid empty history state.
 
 use std::collections::HashSet;
@@ -22,6 +23,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use serde::Serialize;
 use serde_json::{json, Value};
 
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, OwnerKind};
@@ -65,6 +67,44 @@ const DEFAULT_LIMIT: usize = 50;
 const MAX_LIMIT: usize = 500;
 const HISTORY_CURSOR_PREFIX: &str = "receipt-history:v1:";
 const MAX_HISTORY_CURSOR_LEN: usize = 4096;
+// A list is a navigation read model, not a ledger export. Keep the complete
+// JSON result comfortably below the unary transport envelope after the
+// canonical terminal receipt binds the same output. Full records are fetched
+// individually through invocation.history.get.
+const MAX_HISTORY_LIST_RESPONSE_BYTES: usize = 256 * 1024;
+const MAX_HISTORY_SUMMARY_IDENTITY_BYTES: usize = 4096;
+const MAX_HISTORY_SUMMARY_NAME_BYTES: usize = 512;
+const MAX_HISTORY_ERROR_SOURCE_BYTES: usize = 128;
+const MAX_HISTORY_ERROR_CODE_BYTES: usize = 128;
+const MAX_HISTORY_ERROR_MESSAGE_BYTES: usize = 1024;
+
+#[derive(Debug, Serialize)]
+struct InvocationHistorySummary {
+    invocation_ura: String,
+    request_id: String,
+    trace_id: String,
+    span_id: String,
+    caller_ura: String,
+    callee_ura: String,
+    subject_ura: String,
+    ability_ura: String,
+    ability_name: String,
+    state: String,
+    started_unix_ms: i64,
+    completed_unix_ms: Option<i64>,
+    elapsed_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<InvocationHistoryErrorSummary>,
+}
+
+#[derive(Debug, Serialize)]
+struct InvocationHistoryErrorSummary {
+    source: String,
+    code: String,
+    message: String,
+    retryable: bool,
+    truncated: bool,
+}
 
 pub fn register(reg: &mut AxonAbilityCatalog, ledger: Option<Arc<InvocationLedger>>) {
     let governance = reg.ledger_governance_authority();
@@ -160,7 +200,10 @@ impl InvocationLedgerReader {
         // applied. The SDK treats the cursor as opaque; only this provider
         // decodes the anchor and decides the next page boundary.
         let query = query_from_args(&args)?.limit(0);
-        let compact = args
+        // `compact` remains accepted at the public input boundary, but list is
+        // now always a bounded summary surface. Callers requiring the complete
+        // canonical record must use invocation.history.get.
+        let _compact_requested = args
             .get("compact")
             .and_then(Value::as_bool)
             .unwrap_or(false);
@@ -172,39 +215,29 @@ impl InvocationLedgerReader {
         let mut records = self.fetch_records(&path, query)?;
         retain_by_ability_ura_sets(&mut records, &include_ability_uras, &exclude_ability_uras);
         apply_history_cursor(&mut records, cursor_anchor.as_deref())?;
-        let next_cursor = next_history_cursor(&mut records, requested_limit);
+        let (summary_records, next_cursor) =
+            history_summary_page(self.ledger_ura.as_str(), &records, requested_limit)?;
         let diagnostic_records = if include_attempts {
             let attempts = filtered_attempt_records(&args, requested_limit)?;
             Some(merged_diagnostic_records(
-                &records,
+                &records[..summary_records.len()],
                 &attempts,
                 requested_limit,
             )?)
         } else {
             None
         };
-        let records = if compact && include_attempts {
-            diagnostic_records
-                .clone()
-                .unwrap_or_else(|| Value::Array(Vec::new()))
-        } else if compact {
-            compact_records(&records)?
-        } else {
-            json!(records)
-        };
         let mut response = json!({
             "ledger_ura": self.ledger_ura.as_str(),
-            "ledger_path": path.display().to_string(),
-            "records": records,
+            "records": summary_records,
         });
         if let Some(diagnostics) = diagnostic_records {
             response["diagnostic_records"] = diagnostics;
-            response["attempt_ledger_path"] =
-                Value::String(attempt_ledger_path_from_config().display().to_string());
         }
         if let Some(cursor) = next_cursor {
             response["next_cursor"] = Value::String(cursor);
         }
+        enforce_history_response_budget(&mut response)?;
         Ok(response)
     }
 
@@ -351,54 +384,156 @@ fn apply_history_cursor(
     Ok(())
 }
 
-fn next_history_cursor(
-    records: &mut Vec<InvocationLedgerRecord>,
+fn history_summary_page(
+    ledger_ura: &str,
+    records: &[InvocationLedgerRecord],
     requested_limit: usize,
-) -> Option<String> {
-    if records.len() <= requested_limit {
-        return None;
+) -> anyhow::Result<(Vec<Value>, Option<String>)> {
+    let count_limit = requested_limit.min(records.len());
+    let mut summaries = Vec::with_capacity(count_limit);
+
+    for record in records.iter().take(count_limit) {
+        summaries.push(serde_json::to_value(history_summary(record)?)?);
+        let has_more = records.len() > summaries.len();
+        let cursor = has_more.then(|| history_cursor_for(record));
+        let candidate = history_list_response_value(ledger_ura, &summaries, cursor.as_deref());
+        if serde_json::to_vec(&candidate)?.len() > MAX_HISTORY_LIST_RESPONSE_BYTES {
+            summaries.pop();
+            break;
+        }
     }
-    let next = records
-        .get(requested_limit.saturating_sub(1))
-        .map(history_cursor_for);
-    records.truncate(requested_limit);
-    next
+
+    if summaries.is_empty() && !records.is_empty() {
+        anyhow::bail!(
+            "invocation.history.list summary exceeds the {} byte response budget",
+            MAX_HISTORY_LIST_RESPONSE_BYTES
+        );
+    }
+    let next_cursor = (records.len() > summaries.len())
+        .then(|| history_cursor_for(&records[summaries.len().saturating_sub(1)]));
+    Ok((summaries, next_cursor))
 }
 
-fn compact_records(records: &[InvocationLedgerRecord]) -> anyhow::Result<Value> {
-    let mut out = Vec::with_capacity(records.len());
-    for record in records {
-        let value = serde_json::to_value(record)?;
-        out.push(compact_record_value(value));
+fn history_list_response_value(
+    ledger_ura: &str,
+    records: &[Value],
+    next_cursor: Option<&str>,
+) -> Value {
+    let mut response = json!({
+        "ledger_ura": ledger_ura,
+        "records": records,
+    });
+    if let Some(cursor) = next_cursor {
+        response["next_cursor"] = Value::String(cursor.to_string());
     }
-    Ok(Value::Array(out))
+    response
 }
 
-fn compact_record_value(mut value: Value) -> Value {
-    if let Some(object) = value.as_object_mut() {
-        // List views only need routing, timing, state, and error
-        // summaries. Full payload envelopes, diagnostics, causal links,
-        // receipt-chain, and privacy metadata remain available through
-        // invocation.history.get for a single record, avoiding
-        // multi-megabyte list payloads on active nodes.
-        object.remove("args");
-        object.remove("result");
-        object.remove("diagnostics");
-        object.remove("causal_links");
-        object.remove("receipt_chain");
-        object.remove("visibility");
+fn history_summary(record: &InvocationLedgerRecord) -> anyhow::Result<InvocationHistorySummary> {
+    let error = record.error.as_ref().map(|error| {
+        let (source, source_truncated) =
+            truncate_history_text(&error.source, MAX_HISTORY_ERROR_SOURCE_BYTES);
+        let (code, code_truncated) =
+            truncate_history_text(&error.code, MAX_HISTORY_ERROR_CODE_BYTES);
+        let (message, message_truncated) =
+            truncate_history_text(&error.message, MAX_HISTORY_ERROR_MESSAGE_BYTES);
+        InvocationHistoryErrorSummary {
+            source,
+            code,
+            message,
+            retryable: error.retryable,
+            truncated: source_truncated
+                || code_truncated
+                || message_truncated
+                || !error.context.is_empty(),
+        }
+    });
+    Ok(InvocationHistorySummary {
+        invocation_ura: bounded_history_identity("invocation_ura", &record.invocation_ura)?,
+        request_id: bounded_history_identity("request_id", &record.request_id)?,
+        trace_id: bounded_history_identity("trace_id", &record.trace_id)?,
+        span_id: bounded_history_identity("span_id", &record.span_id)?,
+        caller_ura: bounded_history_identity("caller_ura", &record.caller_ura)?,
+        callee_ura: bounded_history_identity("callee_ura", &record.callee_ura)?,
+        subject_ura: bounded_history_identity("subject_ura", &record.subject_ura)?,
+        ability_ura: bounded_history_identity("ability_ura", &record.ability_ura)?,
+        ability_name: bounded_history_name("ability_name", &record.ability_name)?,
+        state: bounded_history_name("state", &record.state)?,
+        started_unix_ms: record.started_unix_ms,
+        completed_unix_ms: record.completed_unix_ms,
+        elapsed_ms: record.elapsed_ms,
+        error,
+    })
+}
+
+fn bounded_history_identity(field: &str, value: &str) -> anyhow::Result<String> {
+    bounded_history_field(field, value, MAX_HISTORY_SUMMARY_IDENTITY_BYTES)
+}
+
+fn bounded_history_name(field: &str, value: &str) -> anyhow::Result<String> {
+    bounded_history_field(field, value, MAX_HISTORY_SUMMARY_NAME_BYTES)
+}
+
+fn bounded_history_field(field: &str, value: &str, max_bytes: usize) -> anyhow::Result<String> {
+    if value.len() > max_bytes {
+        anyhow::bail!(
+            "invocation.history.list ledger field `{field}` exceeds the {max_bytes} byte summary bound"
+        );
     }
-    value
+    Ok(value.to_string())
+}
+
+fn truncate_history_text(value: &str, max_bytes: usize) -> (String, bool) {
+    if value.len() <= max_bytes {
+        return (value.to_string(), false);
+    }
+    const MARKER: &str = "…[truncated]";
+    let content_limit = max_bytes.saturating_sub(MARKER.len());
+    let mut boundary = content_limit.min(value.len());
+    while boundary > 0 && !value.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    (format!("{}{}", &value[..boundary], MARKER), true)
+}
+
+fn enforce_history_response_budget(response: &mut Value) -> anyhow::Result<()> {
+    // Attempt diagnostics are optional supplementary rows. Trim them first so
+    // the canonical invocation summaries and their cursor remain authoritative.
+    loop {
+        if serde_json::to_vec(response)?.len() <= MAX_HISTORY_LIST_RESPONSE_BYTES {
+            return Ok(());
+        }
+        let Some(diagnostics) = response
+            .get_mut("diagnostic_records")
+            .and_then(Value::as_array_mut)
+        else {
+            anyhow::bail!(
+                "invocation.history.list response exceeds the {} byte budget",
+                MAX_HISTORY_LIST_RESPONSE_BYTES
+            );
+        };
+        diagnostics.pop();
+        if diagnostics.is_empty() {
+            response
+                .as_object_mut()
+                .ok_or_else(|| {
+                    anyhow::anyhow!("invocation.history.list response must be an object")
+                })?
+                .remove("diagnostic_records");
+        }
+    }
 }
 
 fn canonical_diagnostic_record(record: &InvocationLedgerRecord) -> anyhow::Result<Value> {
-    let mut value = compact_record_value(serde_json::to_value(record)?);
+    let mut value = serde_json::to_value(history_summary(record)?)?;
+    let raw_summary = record
+        .error
+        .as_ref()
+        .map(|error| error.message.as_str())
+        .unwrap_or_else(|| record.state.as_str());
+    let summary = truncate_history_text(raw_summary, MAX_HISTORY_ERROR_MESSAGE_BYTES).0;
     let diagnostic = json!({
-        "summary": record
-            .error
-            .as_ref()
-            .map(|error| error.message.clone())
-            .unwrap_or_else(|| format!("Invocation {}.", record.state)),
+        "summary": summary,
         "suggested_action": canonical_suggested_action(record),
         "route_ura": Value::Null,
         "execution_host_ura": Value::Null,
@@ -883,9 +1018,9 @@ fn trace_graph_from_path(
 }
 
 pub fn list_history_description() -> &'static str {
-    "List recent invocation ledger records for this device. Returns \
-     complete URAs from the persisted envelope plus digest/sealed \
-     payload metadata for audit and billing."
+    "List bounded summaries of recent invocation ledger records for this \
+     runtime owner. Fetch one record through invocation.history.get for \
+     payload, diagnostic, causal, visibility, and receipt details."
 }
 
 pub fn get_history_description() -> &'static str {
@@ -918,7 +1053,11 @@ pub fn list_history_input_schema() -> Value {
                 "maxLength": MAX_HISTORY_CURSOR_LEN,
                 "description": "Opaque receipt history cursor returned by the previous invocation.history.list page."
             },
-            "compact": { "type": "boolean" },
+            "compact": {
+                "type": "boolean",
+                "deprecated": true,
+                "description": "Accepted for request compatibility. List records are always bounded summaries; use invocation.history.get for complete records."
+            },
             "include_attempts": {
                 "type": "boolean",
                 "description": "When true, include pre-runtime invocation attempts and row diagnostics for UI history views."
@@ -1283,6 +1422,8 @@ mod tests {
         let reader = invocation_history_test_reader(Some(Arc::clone(&ledger)));
         let value = reader.list_history(json!({ "limit": 5 })).unwrap();
         assert!(value.get("ledger_ura").is_some());
+        assert!(value.get("ledger_path").is_none());
+        assert!(value.get("attempt_ledger_path").is_none());
         let records = value
             .get("records")
             .and_then(Value::as_array)
@@ -1338,22 +1479,105 @@ mod tests {
     }
 
     #[test]
-    fn compact_record_value_removes_heavy_list_only_fields() {
-        let value = compact_record_value(json!({
-            "invocation_ura": "easynet:///r/test/resource/alice.invocations/req",
-            "request_id": "req",
-            "args": { "kind": "digest" },
-            "result": { "kind": "digest" },
-            "receipt_chain": { "anchors": [] },
-            "visibility": { "args": { "policy": "digest_only" } }
-        }));
+    fn history_summary_omits_details_and_bounds_error_diagnostics() {
+        let mut record = sample_record("req-summary");
+        record.error = Some(axon_sdk::invocation::LedgerErrorRecord {
+            source: "runtime".repeat(64),
+            code: "ABILITY_FAILED".repeat(32),
+            message: "remote failure diagnostic ".repeat(256),
+            retryable: false,
+            context: [(
+                "upstream_response".to_string(),
+                "large private diagnostic".repeat(1024),
+            )]
+            .into_iter()
+            .collect(),
+        });
 
-        assert!(value.get("invocation_ura").is_some());
-        assert!(value.get("request_id").is_some());
-        assert!(value.get("args").is_none());
-        assert!(value.get("result").is_none());
-        assert!(value.get("receipt_chain").is_none());
-        assert!(value.get("visibility").is_none());
+        let value = serde_json::to_value(history_summary(&record).expect("summary projection"))
+            .expect("summary JSON");
+
+        for detail_field in [
+            "args",
+            "result",
+            "diagnostics",
+            "causal_links",
+            "receipt_chain",
+            "visibility",
+        ] {
+            assert!(
+                value.get(detail_field).is_none(),
+                "{detail_field} belongs to invocation.history.get"
+            );
+        }
+        let error = value.get("error").expect("bounded error summary");
+        assert!(error.get("context").is_none());
+        assert_eq!(error.get("truncated").and_then(Value::as_bool), Some(true));
+        assert!(
+            error
+                .get("message")
+                .and_then(Value::as_str)
+                .expect("error message")
+                .len()
+                <= MAX_HISTORY_ERROR_MESSAGE_BYTES
+        );
+    }
+
+    #[test]
+    fn history_summary_page_is_bounded_by_encoded_bytes_and_resumable() {
+        let records = (0..MAX_LIMIT)
+            .map(|index| {
+                let mut record = sample_record(&format!("req-summary-{index:04}"));
+                record.error = Some(axon_sdk::invocation::LedgerErrorRecord {
+                    source: "runtime".to_string(),
+                    code: "ABILITY_FAILED".to_string(),
+                    message: "bounded diagnostic ".repeat(256),
+                    retryable: false,
+                    context: Default::default(),
+                });
+                record
+            })
+            .collect::<Vec<_>>();
+        let (summaries, next_cursor) = history_summary_page(
+            "easynet:///r/test/resource/alice.invocations/billing/invocations",
+            &records,
+            MAX_LIMIT,
+        )
+        .expect("bounded summary page");
+
+        assert!(!summaries.is_empty());
+        assert!(summaries.len() < records.len());
+        let next_cursor = next_cursor.expect("remaining records require a cursor");
+        let response = history_list_response_value(
+            "easynet:///r/test/resource/alice.invocations/billing/invocations",
+            &summaries,
+            Some(&next_cursor),
+        );
+        assert!(
+            serde_json::to_vec(&response)
+                .expect("encoded response")
+                .len()
+                <= MAX_HISTORY_LIST_RESPONSE_BYTES
+        );
+    }
+
+    #[test]
+    fn supplementary_diagnostics_are_removed_before_summary_budget_fails() {
+        let mut response = json!({
+            "ledger_ura": "easynet:///r/test/resource/alice.invocations/billing/invocations",
+            "records": [],
+            "diagnostic_records": ["x".repeat(MAX_HISTORY_LIST_RESPONSE_BYTES)],
+        });
+
+        enforce_history_response_budget(&mut response).expect("trim supplementary diagnostics");
+
+        assert!(response.get("diagnostic_records").is_none());
+        assert!(
+            serde_json::to_vec(&response)
+                .expect("encoded response")
+                .len()
+                <= MAX_HISTORY_LIST_RESPONSE_BYTES
+        );
     }
 
     #[test]
